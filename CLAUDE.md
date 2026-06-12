@@ -15,10 +15,20 @@ multicall binary is planned, not primary.
 This repo is OSS (MIT) and is consumed by other OSS repos. Two hard rules:
 
 1. **Never port GNU source.** GNU coreutils is GPLv3. Implement behavior
-   from the GNU manual / POSIX documentation only.
+   from the GNU manual / POSIX documentation, or adapt code from the
+   permissive prior-art clones below — never from GPL code.
 2. **Never shell out.** No `os/exec` anywhere. If pure Go can't do it, the
    tool returns a clear error naming what's unsupported. Partial flag
    coverage is fine — silent approximation is not.
+3. **Upstream semantics are immutable.** Every flag, option, and argument
+   a tool accepts means exactly what the original command's official
+   documentation says it means — same spelling, same default, same
+   interaction with other flags, same output shape. There are two states
+   only: supported-as-documented, or a clear "not supported" error.
+   Never repurpose a flag, never approximate, never invent a
+   different-but-similar behavior under an upstream name. (New
+   capabilities that don't exist upstream are possible, but under
+   clearly non-upstream spellings and documented as extensions.)
 
 ## The agent contract
 
@@ -26,6 +36,44 @@ Every tool: deterministic output (`LC_ALL=C` semantics, no locale/color/
 terminal variance), GNU exit-code conventions (0 ok, 1 failure, 2 usage),
 unsupported flags fail loudly naming the flag. This is documented in
 README.md and is the review bar for every PR.
+
+## Prior art (`priorart/`, gitignored)
+
+Local clones of permissive open-source reimplementations, for studying
+and — where the license allows — adapting. **Conformance is judged
+against the original command's official documentation, never against
+prior art**: these projects have their own gaps and deviations (u-root
+is deliberately flag-partial; aict changes output formats), so anything
+copied must be verified against the GNU manual / POSIX and covered by
+tests before it counts as supported.
+
+| Clone | Project | Lang | License | Policy |
+|---|---|---|---|---|
+| `priorart/aict` | aict (agent-oriented coreutils, XML/JSON output) | Go | MIT | copy/adapt |
+| `priorart/guonaihong-coreutils` | guonaihong/coreutils | Go | Apache-2.0 | copy/adapt |
+| `priorart/u-root` | u-root/u-root (`cmds/core/…`) | Go | BSD-3-Clause | copy/adapt |
+| `priorart/coreutils` | microsoft/coreutils | Rust | MIT | reference only |
+| `priorart/uutils-coretuils` | uutils/coreutils | Rust | MIT | reference only (best GNU-fidelity reference) |
+
+When adapting code from a copy/adapt clone:
+
+- Keep a provenance header on the file: source repo, path, license.
+- Add the source to `THIRD_PARTY_LICENSES.md` (license text included).
+  Apache-2.0 sources (guonaihong) additionally require stating changes.
+- Strip anything that violates the agent contract while adapting —
+  Linux-only assumptions (u-root), non-GNU output modes (aict's
+  XML/JSON), locale-dependent behavior.
+- aict's XML/JSON output idea is explicitly NOT adopted as default
+  behavior — upstream tools don't do it, and rule 3 forbids changing
+  output shapes under upstream names. If structured output ever lands,
+  it will be an explicitly documented extension flag.
+
+The Rust clones are semantic references: uutils is the most
+GNU-faithful reimplementation in existence and is often the fastest way
+to resolve "what does GNU actually do here" questions — but code flows
+from it only as understanding, never as translation (reference-only by
+policy to keep provenance simple, even though its license would allow
+more).
 
 ## Build & test
 

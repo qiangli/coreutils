@@ -26,8 +26,12 @@ Every tool in this repo follows the same rules:
   color, or terminal-width variance by default.
 - **GNU-compatible where implemented.** Behavior follows the
   [GNU coreutils manual](https://www.gnu.org/software/coreutils/manual/)
-  and POSIX — implemented from the documentation, never from GPL
-  sources.
+  and POSIX — implemented from the documentation (or adapted from
+  permissively-licensed reimplementations, see
+  `THIRD_PARTY_LICENSES.md`), never from GPL sources. A supported flag
+  means exactly what the upstream documentation says — same spelling,
+  same defaults, same output; meanings are never changed or
+  approximated.
 - **Clear errors for the rest.** Not every flag is supported. An
   unsupported flag or mode fails loudly, naming the flag, with exit
   code 2 — never silently ignored, never silently approximated.
