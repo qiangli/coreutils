@@ -50,11 +50,23 @@ Every tool in this repo follows the same rules:
   design. Even local-path remotes use go-git's in-process server
   transport — `git-upload-pack` is never spawned.
 
-Planned (see the roadmap in CLAUDE.md): the file/text tier of GNU
-coreutils (`ls`, `cat`, `cp`, `mv`, `rm`, `sort`, `head`, `tail`, …),
-the agent-critical siblings that live outside coreutils proper
-(`grep`, `find`, `sed`, `xargs`, `diff`, `tar`), a busybox-style
-multicall binary, and the `mvdan.cc/sh/v3` `ExecHandler` adapter.
+- `cmds/` — the userland: 74 commands (Phase A of
+  [docs/commands.md](docs/commands.md)) covering file operations
+  (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),
+  text (cat, head, tail, wc, sort, uniq, cut, tr, grep, diff, …),
+  system info (date, uname, id, …), checksums (md5/sha\*sum,
+  base64/32), and archives (tar, gzip). Each command is its own
+  importable package registered into `tool/`'s registry; `cmds/all`
+  pulls in everything.
+- `tool/` — the framework: registry + per-invocation RunContext
+  (stdio, working directory, environment — tools never touch process
+  globals) + strict GNU-style flags with automatic `--help`/`--version`.
+- `cmd/coreutils` — busybox-style multicall binary (`coreutils ls …`,
+  or symlink a tool name to the binary for argv[0] dispatch).
+
+Planned next (see docs/commands.md): Phase B — the rest of the GNU
+manual (printf, test, expr, od, dd, …) — then sed/xargs/ps and the
+`mvdan.cc/sh/v3` `ExecHandler` adapter.
 
 ## Consumers
 

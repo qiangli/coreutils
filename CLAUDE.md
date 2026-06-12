@@ -152,19 +152,32 @@ typed layer and its tests from outpost. ycode's e2e suite
 (`git_e2e_test.go`) stayed in ycode and exercises this package through
 ycode's executor — run it after changing argv-handler behavior.
 
+## Architecture: tool/ + cmds/
+
+`tool/` is the framework (see package docs): Tool registry,
+RunContext (tools NEVER read os.Stdin/Getwd/Environ — the embedding
+shell owns those; every fs operand goes through rc.Path), pflag-based
+strict GNU flags, automatic --help/--version, and the contract error
+helpers (UsageError, NotSupported). `cmds/<name>/` is one package per
+command (`package <name>cmd`), init-registered; `cmds/all` blank-
+imports the full set; `cmds/internal/hashenc` is the shared
+checksum/encoding engine. `cmd/coreutils` is the multicall binary
+(argv[0] dispatch + `coreutils <tool>`). Conventions every new tool
+follows: the basename exemplar's shape (cmd.Run wired in init to avoid
+init cycles), table tests with output captured after Run, unix-only
+behavior behind build tags with clear Windows errors, GNU flags with
+no long form pre-parsed manually (never invent long names), numeric
+shorthands (-NUM) pre-scanned before pflag. Repo convention: usage
+errors exit 2 even where GNU uses 1 (documented deviation).
+
 ## Roadmap (agreed 2026-06)
 
 1. ~~git relocation~~ (done — this package).
-2. `tool/` framework: Tool interface + registry + strict-getopt helper
-   (combined short flags, `--long`, unknown flag → exit 2 with the flag
-   named), then the Tier-1 file/text tools (~30: ls, cat, cp, mv, rm,
-   mkdir, touch, ln, chmod, head, tail, wc, sort, uniq, cut, tr, tee,
-   basename, dirname, realpath, stat, du, df, mktemp, date, sleep, seq,
-   env, uname, whoami, hostname, base64, sha256sum, timeout, truncate,
-   split).
-3. Agent-critical non-coreutils tools: grep, find, sed, xargs, diff, tar
-   (decided in-scope — agents use these more than half of coreutils
-   proper).
+2. ~~`tool/` framework + Phase A userland~~ (done — 74 commands per
+   docs/commands.md Phase A, incl. the grep/find/diff/cmp/tar/gzip/
+   strings/hexdump/which extensions; sed/xargs/ps remain Phase C).
+3. Phase B: the GNU-manual complement (printf, test, expr, od, dd, …
+   per docs/commands.md).
 4. `shell/` adapter: `interp.ExecHandler` for `mvdan.cc/sh/v3` wiring the
    registry into outpost's matrix shell and ycode's shell runner.
    Precedence: **pure-Go first**, real binaries only via an explicit

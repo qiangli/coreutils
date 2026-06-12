@@ -1,0 +1,170 @@
+package lncmd
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/qiangli/coreutils/tool"
+)
+
+// runTool is the canonical test harness shape for cmds packages.
+func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	code = cmd.Run(rc, args)
+	return out.String(), errb.String(), code
+}
+
+// requireSymlinks skips on platforms where the test user cannot create
+// symlinks (Windows without Developer Mode).
+func requireSymlinks(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Symlink("probe-target", filepath.Join(dir, "probe")); err != nil {
+		t.Skipf("symlinks not available: %v", err)
+	}
+}
+
+func write(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLnHard(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a.txt"), "hello")
+	_, errb, code := runTool(t, dir, "a.txt", "b.txt")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln a b: code=%d err=%q", code, errb)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "b.txt"))
+	if err != nil || string(got) != "hello" {
+		t.Errorf("link content=%q err=%v", got, err)
+	}
+}
+
+func TestLnSymbolic(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a.txt"), "hello")
+	_, errb, code := runTool(t, dir, "-s", "a.txt", "l")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -s: code=%d err=%q", code, errb)
+	}
+	// The link stores the target verbatim.
+	target, err := os.Readlink(filepath.Join(dir, "l"))
+	if err != nil || target != "a.txt" {
+		t.Errorf("readlink=%q err=%v", target, err)
+	}
+}
+
+func TestLnSingleOperand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "sub", "a.txt"), "x")
+	_, errb, code := runTool(t, dir, "sub/a.txt")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln TARGET: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
+		t.Errorf("basename link missing: %v", err)
+	}
+}
+
+func TestLnIntoDirectory(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a1"), "1")
+	write(t, filepath.Join(dir, "a2"), "2")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "a1", "a2", "d")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln a1 a2 d: code=%d err=%q", code, errb)
+	}
+	for _, n := range []string{"a1", "a2"} {
+		if _, err := os.Stat(filepath.Join(dir, "d", n)); err != nil {
+			t.Errorf("d/%s missing: %v", n, err)
+		}
+	}
+}
+
+func TestLnForce(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a")
+	write(t, filepath.Join(dir, "b"), "b")
+	// Without -f: destination exists -> failure.
+	_, errb, code := runTool(t, dir, "a", "b")
+	if code != 1 || !strings.Contains(errb, "failed to create hard link") {
+		t.Errorf("no -f: code=%d err=%q", code, errb)
+	}
+	// With -f: replaced.
+	_, errb, code = runTool(t, dir, "-f", "a", "b")
+	if code != 0 || errb != "" {
+		t.Fatalf("-f: code=%d err=%q", code, errb)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "b"))
+	if string(got) != "a" {
+		t.Errorf("after -f content=%q", got)
+	}
+}
+
+func TestLnVerbose(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a")
+	out, _, code := runTool(t, dir, "-v", "a", "b")
+	if code != 0 || out != "'b' => 'a'\n" {
+		t.Errorf("hard -v: code=%d out=%q", code, out)
+	}
+	requireSymlinks(t)
+	out, _, code = runTool(t, dir, "-sv", "a", "l")
+	if code != 0 || out != "'l' -> 'a'\n" {
+		t.Errorf("sym -v: code=%d out=%q", code, out)
+	}
+}
+
+func TestLnErrors(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir)
+	if code != 2 || !strings.Contains(errb, "missing file operand") {
+		t.Errorf("no args: code=%d err=%q", code, errb)
+	}
+	write(t, filepath.Join(dir, "a"), "a")
+	write(t, filepath.Join(dir, "b"), "b")
+	_, errb, code = runTool(t, dir, "a", "b", "nodir")
+	if code != 1 || !strings.Contains(errb, "is not a directory") {
+		t.Errorf("last not dir: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "missing-target", "x")
+	if code != 1 || !strings.Contains(errb, "failed to create hard link") {
+		t.Errorf("missing target: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "--frobnicate", "a", "b")
+	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
+		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+}
+
+func TestLnHelpAndVersion(t *testing.T) {
+	out, _, code := runTool(t, t.TempDir(), "--help")
+	if code != 0 || !strings.Contains(out, "Usage: ln") {
+		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, t.TempDir(), "--version")
+	if code != 0 || !strings.Contains(out, "ln") {
+		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}

@@ -16,7 +16,7 @@ reinvention, so prior-art coverage is what sequences the work. Phase B
 is everything else we want that must be written fresh. Conformance is
 still judged against official docs, never against the prior art.
 
-## Phase A — adapted from Go prior art (in progress)
+## Phase A — adapted from Go prior art (SHIPPED 2026-06)
 
 File operations:
 
@@ -46,7 +46,7 @@ Listing and filesystem info:
 | pwd | aict, guonaihong, u-root | -L, -P |
 | realpath | aict, guonaihong, u-root | -e, -m, -s, --relative-to |
 | readlink | u-root | -f, -e, -m, -n |
-| basename | all three | exemplar — already in tree |
+| basename | all three | exemplar |
 | dirname | all three | -z |
 | sync | u-root | fsync named files; bare sync unix-only |
 | which | u-root | PATH search (reports real binaries; the in-shell story is the ExecHandler's) |
