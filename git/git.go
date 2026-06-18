@@ -18,11 +18,13 @@
 //     ErrUnsupported for anything it does not implement so callers can
 //     fall back (ycode's 3-tier git tool) or report a clear error.
 //
-// Pull and merge integrate fast-forwards only (preserving local
-// changes that don't conflict, like real git); histories that need
-// conflict resolution are an error by design. Still out of scope:
-// rebase beyond Exec's linear replay, stash, submodules, worktrees,
-// reflog, bisect.
+// Pull integrates fast-forwards only (preserving local changes that
+// don't conflict, like real git). Merge goes further: it fast-forwards
+// when it can and otherwise performs a real 3-way merge (with a
+// line-level diff3 for both-sides edits), returning a *ConflictError
+// without mutating anything when paths can't be reconciled. Still out
+// of scope: rebase beyond Exec's linear replay, stash, submodules,
+// worktrees, reflog, bisect.
 package git
 
 import (
@@ -629,12 +631,20 @@ func Pull(opts PullOptions) (*Result, error) {
 // FetchOptions configures a Fetch call.
 type FetchOptions struct {
 	RepoPath string
+	// Remote is either a configured remote name ("origin") or, when no
+	// such remote exists, a URL or local filesystem path fetched
+	// anonymously. The local-path form (with RefSpecs) is what weave's
+	// `git fetch --no-tags <sandbox> branch:branch` needs.
 	Remote   string
+	RefSpecs []string // e.g. "branch:branch"; bare branch names are expanded to refs/heads/
+	NoTags   bool
 	Auth     AuthConfig
 }
 
 // Fetch fetches refs from opts.Remote without updating the working
-// tree.
+// tree. When opts.Remote is not a configured remote it is treated as a
+// URL/path and fetched through an anonymous remote, so a local sandbox
+// clone can be fetched by path with an explicit refspec.
 func Fetch(opts FetchOptions) (*Result, error) {
 	if opts.RepoPath == "" {
 		opts.RepoPath = "."
@@ -650,10 +660,27 @@ func Fetch(opts FetchOptions) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build auth: %w", err)
 	}
-	err = r.Fetch(&gogit.FetchOptions{
-		RemoteName: opts.Remote,
-		Auth:       auth,
-	})
+
+	fo := &gogit.FetchOptions{Auth: auth}
+	if opts.NoTags {
+		fo.Tags = gogit.NoTags
+	}
+	for _, rs := range opts.RefSpecs {
+		fo.RefSpecs = append(fo.RefSpecs, config.RefSpec(normalizeFetchRefSpec(rs)))
+	}
+
+	// A configured remote name fetches through it; anything else is
+	// fetched anonymously by URL/path.
+	if _, rerr := r.Remote(opts.Remote); rerr == nil {
+		fo.RemoteName = opts.Remote
+		err = r.Fetch(fo)
+	} else {
+		rem := gogit.NewRemote(r.Storer, &config.RemoteConfig{
+			Name: "anonymous",
+			URLs: []string{opts.Remote},
+		})
+		err = rem.Fetch(fo)
+	}
 	if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return &Result{Success: true, Message: "Already up to date."}, nil
 	}
@@ -663,12 +690,42 @@ func Fetch(opts FetchOptions) (*Result, error) {
 	return &Result{Success: true, Message: fmt.Sprintf("Fetched from %s", opts.Remote)}, nil
 }
 
+// normalizeFetchRefSpec expands a git-style refspec into the fully-
+// qualified form go-git's config.RefSpec requires. A bare branch name
+// on either side gains a refs/heads/ prefix; an existing refs/ prefix
+// (or a leading "+" force marker) is preserved. "a:b" → "refs/heads/a:
+// refs/heads/b"; "a" → "refs/heads/a:refs/heads/a".
+func normalizeFetchRefSpec(rs string) string {
+	force := strings.HasPrefix(rs, "+")
+	body := strings.TrimPrefix(rs, "+")
+	src, dst, hasColon := strings.Cut(body, ":")
+	expand := func(ref string) string {
+		if ref == "" || strings.HasPrefix(ref, "refs/") {
+			return ref
+		}
+		return "refs/heads/" + ref
+	}
+	src = expand(src)
+	if hasColon {
+		dst = expand(dst)
+	} else {
+		dst = src
+	}
+	out := src + ":" + dst
+	if force {
+		out = "+" + out
+	}
+	return out
+}
+
 // BranchOptions configures a Branch call.
 type BranchOptions struct {
 	RepoPath string
 	Name     string
 	Delete   bool
-	Force    bool
+	// Force distinguishes `branch -D` (Force) from `branch -d`: a plain
+	// -d refuses to delete a branch not fully merged into HEAD.
+	Force bool
 }
 
 // Branch lists branches when Name is empty, creates a new branch when
@@ -704,9 +761,34 @@ func Branch(opts BranchOptions) (*Result, []string, error) {
 		return &Result{Success: true}, branches, nil
 	}
 	if opts.Delete {
-		if err := r.Storer.RemoveReference(plumbing.NewBranchReferenceName(opts.Name)); err != nil {
+		branchRef := plumbing.NewBranchReferenceName(opts.Name)
+		ref, err := r.Reference(branchRef, false)
+		if err != nil {
+			return nil, nil, fmt.Errorf("branch %q not found: %w", opts.Name, err)
+		}
+		if !opts.Force {
+			// `git branch -d` refuses a branch not fully merged into HEAD,
+			// and refuses to delete the currently checked-out branch.
+			head, err := r.Head()
+			if err != nil {
+				return nil, nil, fmt.Errorf("HEAD: %w", err)
+			}
+			if head.Name() == branchRef {
+				return nil, nil, fmt.Errorf("cannot delete branch %q checked out at HEAD", opts.Name)
+			}
+			merged, err := isAncestor(r, ref.Hash(), head.Hash())
+			if err != nil {
+				return nil, nil, err
+			}
+			if !merged {
+				return nil, nil, fmt.Errorf("the branch %q is not fully merged — use force (-D) to delete", opts.Name)
+			}
+		}
+		if err := r.Storer.RemoveReference(branchRef); err != nil {
 			return nil, nil, fmt.Errorf("delete branch: %w", err)
 		}
+		// Best-effort: also drop any branch config (upstream tracking).
+		_ = r.DeleteBranch(opts.Name)
 		return &Result{Success: true, Message: fmt.Sprintf("Deleted branch %s", opts.Name)}, nil, nil
 	}
 	headRef, err := r.Head()
@@ -724,11 +806,13 @@ func Branch(opts BranchOptions) (*Result, []string, error) {
 type CheckoutOptions struct {
 	RepoPath string
 	Branch   string
-	Create   bool
+	Create   bool // -b: create the branch (errors if it already exists)
+	Force    bool // -B: create the branch, or reset it to HEAD if it exists
 }
 
 // Checkout switches the working tree to opts.Branch, optionally
-// creating it first when Create is set.
+// creating it first when Create is set, or creating-or-resetting it to
+// HEAD when Force is set (the -B form).
 func Checkout(opts CheckoutOptions) (*Result, error) {
 	if opts.RepoPath == "" {
 		opts.RepoPath = "."
@@ -740,6 +824,20 @@ func Checkout(opts CheckoutOptions) (*Result, error) {
 	w, err := r.Worktree()
 	if err != nil {
 		return nil, fmt.Errorf("worktree: %w", err)
+	}
+	if opts.Force {
+		headRef, err := r.Head()
+		if err != nil {
+			return nil, fmt.Errorf("HEAD: %w", err)
+		}
+		ref := plumbing.NewHashReference(plumbing.NewBranchReferenceName(opts.Branch), headRef.Hash())
+		if err := r.Storer.SetReference(ref); err != nil {
+			return nil, fmt.Errorf("reset branch: %w", err)
+		}
+		if err := w.Checkout(&gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(opts.Branch)}); err != nil {
+			return nil, fmt.Errorf("checkout: %w", err)
+		}
+		return &Result{Success: true, Message: fmt.Sprintf("Reset branch '%s'", opts.Branch)}, nil
 	}
 	if opts.Create {
 		headRef, err := r.Head()
@@ -768,6 +866,42 @@ func Checkout(opts CheckoutOptions) (*Result, error) {
 		return nil, fmt.Errorf("checkout: %w", err)
 	}
 	return &Result{Success: true, Message: fmt.Sprintf("Switched to branch '%s'", opts.Branch)}, nil
+}
+
+// RemoteRemove removes the named remote (`git remote remove <name>`).
+// weave uses this to strip `origin` from a sandbox clone so an escaped
+// agent can't follow it back to the user's real repo.
+func RemoteRemove(repoPath, name string) (*Result, error) {
+	if repoPath == "" {
+		repoPath = "."
+	}
+	r, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("not a git repository: %w", err)
+	}
+	if err := r.DeleteRemote(name); err != nil {
+		return nil, fmt.Errorf("remove remote %q: %w", name, err)
+	}
+	return &Result{Success: true, Message: fmt.Sprintf("Removed remote %s", name)}, nil
+}
+
+// RepoRoot returns the absolute worktree root that contains path — the
+// `git rev-parse --show-toplevel` answer — discovered via go-git's
+// dot-git detection, so it works from any subdirectory without a system
+// git binary.
+func RepoRoot(path string) (string, error) {
+	if path == "" {
+		path = "."
+	}
+	r, err := gogit.PlainOpenWithOptions(path, &gogit.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return "", fmt.Errorf("not a git repository: %w", err)
+	}
+	w, err := r.Worktree()
+	if err != nil {
+		return "", fmt.Errorf("worktree: %w", err)
+	}
+	return w.Filesystem.Root(), nil
 }
 
 // RemoteEntry is one configured remote.

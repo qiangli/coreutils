@@ -20,6 +20,19 @@ func isolateGlobalConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 }
 
+// setLocalIdentity writes a repo-local user.name/user.email so merge
+// commits (which need a committer identity) work hermetically without
+// touching the developer's global git config.
+func setLocalIdentity(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := ConfigSet(dir, "user.name", "Merge Tester", false, false); err != nil {
+		t.Fatalf("set user.name: %v", err)
+	}
+	if _, err := ConfigSet(dir, "user.email", "merge@test.local", false, false); err != nil {
+		t.Fatalf("set user.email: %v", err)
+	}
+}
+
 // makeTwoCommitRepo seeds a repo with two commits on the default
 // branch: a.txt at "line1\n" then "line1\nline2\n".
 func makeTwoCommitRepo(t *testing.T) string {
@@ -146,23 +159,66 @@ func TestMergeNoFF(t *testing.T) {
 	}
 }
 
+// TestMergeDiverged covers the disjoint-file divergence: each side adds
+// a different file. This is a clean 3-way merge — both files survive and
+// the result is a merge commit with two parents.
 func TestMergeDiverged(t *testing.T) {
 	dir := makeTwoCommitRepo(t)
+	setLocalIdentity(t, dir)
 	main := currentBranch(t, dir)
 
 	if _, err := Checkout(CheckoutOptions{RepoPath: dir, Branch: "feature", Create: true}); err != nil {
 		t.Fatalf("checkout -b: %v", err)
 	}
 	commitFiles(t, dir, map[string]string{"feat.txt": "feature\n"}, "feature work")
+	featTip, err := RevParse(RevParseOptions{RepoPath: dir})
+	if err != nil {
+		t.Fatalf("rev-parse feature: %v", err)
+	}
 	if _, err := Checkout(CheckoutOptions{RepoPath: dir, Branch: main}); err != nil {
 		t.Fatalf("checkout: %v", err)
 	}
 	commitFiles(t, dir, map[string]string{"main.txt": "main\n"}, "main work")
+	mainTip, err := RevParse(RevParseOptions{RepoPath: dir})
+	if err != nil {
+		t.Fatalf("rev-parse main: %v", err)
+	}
 
-	if _, err := Merge(MergeOptions{RepoPath: dir, Ref: "feature"}); err == nil {
-		t.Fatalf("expected divergence error")
-	} else if !strings.Contains(err.Error(), "diverged") {
-		t.Errorf("expected diverged in error, got %v", err)
+	res, err := Merge(MergeOptions{RepoPath: dir, Ref: "feature"})
+	if err != nil {
+		t.Fatalf("expected clean 3-way merge, got error: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("merge not successful: %+v", res)
+	}
+
+	// Both sides' files must be present after the merge.
+	if got := readFile(t, dir, "feat.txt"); got != "feature\n" {
+		t.Errorf("feat.txt = %q, want %q", got, "feature\n")
+	}
+	if got := readFile(t, dir, "main.txt"); got != "main\n" {
+		t.Errorf("main.txt = %q, want %q", got, "main\n")
+	}
+
+	// The merge commit must have both tips as parents.
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	mc, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if mc.NumParents() != 2 {
+		t.Fatalf("merge commit has %d parents, want 2", mc.NumParents())
+	}
+	parents := map[string]bool{mc.ParentHashes[0].String(): true, mc.ParentHashes[1].String(): true}
+	if !parents[mainTip.Hash] || !parents[featTip.Hash] {
+		t.Errorf("parents %v don't match main=%s feature=%s", parents, mainTip.Hash, featTip.Hash)
 	}
 }
 

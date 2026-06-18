@@ -58,6 +58,29 @@ func MergeBase(repoPath, revA, revB string) ([]string, error) {
 	return out, nil
 }
 
+// IsAncestor reports whether revA is an ancestor of (or equal to) revB
+// — the `git merge-base --is-ancestor A B` predicate. git signals the
+// answer through exit status (0 = ancestor, 1 = not); this returns the
+// boolean directly and reserves error for "couldn't resolve a revision".
+func IsAncestor(repoPath, revA, revB string) (bool, error) {
+	if repoPath == "" {
+		repoPath = "."
+	}
+	r, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return false, fmt.Errorf("not a git repository: %w", err)
+	}
+	ca, err := resolveCommit(r, revA)
+	if err != nil {
+		return false, err
+	}
+	cb, err := resolveCommit(r, revB)
+	if err != nil {
+		return false, err
+	}
+	return isAncestor(r, ca.Hash, cb.Hash)
+}
+
 // countRange counts commits reachable from "to" but not from "from" —
 // the `git rev-list --count from..to` number. Shallow-clone walks that
 // hit the depth boundary count what's reachable locally.

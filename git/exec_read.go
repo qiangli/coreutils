@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -265,16 +266,43 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 	// Parse flags
 	cached := false
 	stat := false
+	quiet := false
 	for _, arg := range args {
 		switch arg {
 		case "--cached", "--staged":
 			cached = true
 		case "--stat":
 			stat = true
+		case "--quiet":
+			quiet = true
 		default:
 			// Path specs, commit ranges, etc. — fall through
 			return nil, ErrUnsupported
 		}
+	}
+
+	// --quiet reports only via exit status: 0 = no differences, 1 =
+	// differences. Combined with --cached this is the "are there staged
+	// changes?" predicate loom uses to skip empty commits.
+	if quiet {
+		status, err := wt.Status()
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		for _, fs := range status {
+			if cached {
+				// Staged column: index vs HEAD.
+				if fs.Staging != gogit.Unmodified && fs.Staging != gogit.Untracked {
+					return &ExecResult{ExitCode: 1}, nil
+				}
+			} else {
+				// Unstaged column: worktree vs index.
+				if fs.Worktree != gogit.Unmodified && fs.Worktree != gogit.Untracked {
+					return &ExecResult{ExitCode: 1}, nil
+				}
+			}
+		}
+		return &ExecResult{ExitCode: 0}, nil
 	}
 
 	_ = stat // stat formatting is complex; fall through for now
@@ -303,7 +331,20 @@ func nativeDiff(_ context.Context, dir string, args []string) (*ExecResult, erro
 }
 
 func nativeMergeBase(_ context.Context, dir string, args []string) (*ExecResult, error) {
-	if len(args) < 2 {
+	isAncestorMode := false
+	var pos []string
+	for _, a := range args {
+		switch a {
+		case "--is-ancestor":
+			isAncestorMode = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				return nil, ErrUnsupported
+			}
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) != 2 {
 		return nil, ErrUnsupported
 	}
 
@@ -312,14 +353,27 @@ func nativeMergeBase(_ context.Context, dir string, args []string) (*ExecResult,
 		return nil, ErrUnsupported
 	}
 
-	hash1, err := repo.ResolveRevision(plumbing.Revision(args[0]))
+	hash1, err := repo.ResolveRevision(plumbing.Revision(pos[0]))
 	if err != nil {
 		return nil, ErrUnsupported
 	}
 
-	hash2, err := repo.ResolveRevision(plumbing.Revision(args[1]))
+	hash2, err := repo.ResolveRevision(plumbing.Revision(pos[1]))
 	if err != nil {
 		return nil, ErrUnsupported
+	}
+
+	// --is-ancestor reports the answer through exit status only: 0 when
+	// hash1 is an ancestor of (or equal to) hash2, 1 otherwise.
+	if isAncestorMode {
+		anc, err := isAncestor(repo, *hash1, *hash2)
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		if anc {
+			return &ExecResult{ExitCode: 0}, nil
+		}
+		return &ExecResult{ExitCode: 1}, nil
 	}
 
 	commit1, err := repo.CommitObject(*hash1)
@@ -696,22 +750,44 @@ func nativeBranch(_ context.Context, dir string, args []string) (*ExecResult, er
 		return &ExecResult{Stdout: b.String()}, nil
 	}
 
-	// Delete branch
+	// Delete branch: -D forces, -d refuses an unmerged branch.
 	if args[0] == "-D" || args[0] == "-d" {
 		if len(args) < 2 {
 			return nil, ErrUnsupported
 		}
 		branchName := args[1]
-		err := repo.DeleteBranch(branchName)
+		force := args[0] == "-D"
+		refName := plumbing.NewBranchReferenceName(branchName)
+		ref, err := repo.Reference(refName, false)
 		if err != nil {
 			return &ExecResult{
 				Stderr:   fmt.Sprintf("error: branch '%s' not found.\n", branchName),
 				ExitCode: 1,
 			}, nil
 		}
-		// Also delete the reference
-		refName := plumbing.NewBranchReferenceName(branchName)
-		_ = repo.Storer.RemoveReference(refName)
+		if !force {
+			if head, herr := repo.Head(); herr == nil {
+				if head.Name() == refName {
+					return &ExecResult{
+						Stderr:   fmt.Sprintf("error: cannot delete branch '%s' used by worktree\n", branchName),
+						ExitCode: 1,
+					}, nil
+				}
+				if merged, aerr := isAncestor(repo, ref.Hash(), head.Hash()); aerr == nil && !merged {
+					return &ExecResult{
+						Stderr:   fmt.Sprintf("error: the branch '%s' is not fully merged.\n", branchName),
+						ExitCode: 1,
+					}, nil
+				}
+			}
+		}
+		if err := repo.Storer.RemoveReference(refName); err != nil {
+			return &ExecResult{
+				Stderr:   fmt.Sprintf("error: branch '%s' not found.\n", branchName),
+				ExitCode: 1,
+			}, nil
+		}
+		_ = repo.DeleteBranch(branchName) // best-effort config cleanup
 		return &ExecResult{Stdout: fmt.Sprintf("Deleted branch %s\n", branchName)}, nil
 	}
 
@@ -766,6 +842,29 @@ func nativeCheckout(_ context.Context, dir string, args []string) (*ExecResult, 
 		}, nil
 	}
 
+	// Handle -B (create the branch, or reset it to HEAD if it exists,
+	// then switch to it). This is what loom's reference-clone setup uses.
+	if args[0] == "-B" {
+		if len(args) < 2 {
+			return nil, ErrUnsupported
+		}
+		branchName := args[1]
+		head, err := repo.Head()
+		if err != nil {
+			return nil, ErrUnsupported
+		}
+		ref := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), head.Hash())
+		if err := repo.Storer.SetReference(ref); err != nil {
+			return nil, ErrUnsupported
+		}
+		if err := wt.Checkout(&gogit.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branchName)}); err != nil {
+			return nil, ErrUnsupported
+		}
+		return &ExecResult{
+			Stdout: fmt.Sprintf("Reset branch '%s'\n", branchName),
+		}, nil
+	}
+
 	// Checkout existing branch
 	if len(args) == 1 && !strings.HasPrefix(args[0], "-") {
 		branchName := args[0]
@@ -788,31 +887,39 @@ func nativeRemote(_ context.Context, dir string, args []string) (*ExecResult, er
 		return nil, ErrUnsupported
 	}
 
-	// Handle "get-url <remote>"
-	if args[0] != "get-url" {
-		return nil, ErrUnsupported
-	}
-
 	repo, err := openRepo(dir)
 	if err != nil {
 		return nil, ErrUnsupported
 	}
-
 	remoteName := args[1]
-	remote, err := repo.Remote(remoteName)
-	if err != nil {
-		return &ExecResult{
-			Stderr:   fmt.Sprintf("fatal: No such remote '%s'\n", remoteName),
-			ExitCode: 2,
-		}, nil
-	}
 
-	urls := remote.Config().URLs
-	if len(urls) == 0 {
-		return &ExecResult{ExitCode: 1}, nil
-	}
+	switch args[0] {
+	case "get-url":
+		remote, err := repo.Remote(remoteName)
+		if err != nil {
+			return &ExecResult{
+				Stderr:   fmt.Sprintf("fatal: No such remote '%s'\n", remoteName),
+				ExitCode: 2,
+			}, nil
+		}
+		urls := remote.Config().URLs
+		if len(urls) == 0 {
+			return &ExecResult{ExitCode: 1}, nil
+		}
+		return &ExecResult{Stdout: urls[0] + "\n"}, nil
 
-	return &ExecResult{Stdout: urls[0] + "\n"}, nil
+	case "remove", "rm":
+		if err := repo.DeleteRemote(remoteName); err != nil {
+			return &ExecResult{
+				Stderr:   fmt.Sprintf("fatal: No such remote: '%s'\n", remoteName),
+				ExitCode: 2,
+			}, nil
+		}
+		return &ExecResult{Stdout: ""}, nil
+
+	default:
+		return nil, ErrUnsupported
+	}
 }
 
 func nativeForEachRef(_ context.Context, _ string, _ []string) (*ExecResult, error) {
@@ -1017,105 +1124,26 @@ func nativeMerge(_ context.Context, dir string, args []string) (*ExecResult, err
 		return nil, ErrUnsupported
 	}
 
-	repo, err := openRepo(dir)
+	// Delegate to the typed Merge: fast-forward, --no-ff merge commit,
+	// and real diverged 3-way merge all share that one code path. A
+	// conflict comes back as *ConflictError, which we render git-style
+	// with exit 1 and no mutation (the all-or-nothing contract).
+	res, err := Merge(MergeOptions{RepoPath: dir, Ref: targetBranch, NoFF: noFF})
 	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	// Resolve target branch ref
-	targetHash, err := repo.ResolveRevision(plumbing.Revision(targetBranch))
-	if err != nil {
-		return &ExecResult{
-			Stderr:   fmt.Sprintf("merge: '%s' - not something we can merge\n", targetBranch),
-			ExitCode: 1,
-		}, nil
-	}
-
-	head, err := repo.Head()
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	headCommit, err := repo.CommitObject(head.Hash())
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	targetCommit, err := repo.CommitObject(*targetHash)
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	// Check if already up to date
-	if head.Hash() == *targetHash {
-		return &ExecResult{Stdout: "Already up to date.\n"}, nil
-	}
-
-	// Check if HEAD is an ancestor of target (fast-forward possible)
-	bases, err := headCommit.MergeBase(targetCommit)
-	if err != nil {
-		return nil, ErrUnsupported
-	}
-
-	isAncestor := false
-	for _, base := range bases {
-		if base.Hash == head.Hash() {
-			isAncestor = true
-			break
-		}
-	}
-
-	if isAncestor && !noFF {
-		// Fast-forward merge: just update HEAD to target
-		err = wt.Checkout(&gogit.CheckoutOptions{
-			Hash: *targetHash,
-		})
-		if err != nil {
-			return nil, ErrUnsupported
-		}
-		// Update branch reference
-		if head.Name().IsBranch() {
-			ref := plumbing.NewHashReference(head.Name(), *targetHash)
-			if err := repo.Storer.SetReference(ref); err != nil {
-				return nil, ErrUnsupported
+		var ce *ConflictError
+		if errors.As(err, &ce) {
+			var b strings.Builder
+			for _, f := range ce.Files {
+				fmt.Fprintf(&b, "CONFLICT (content): Merge conflict in %s\n", f)
 			}
-			// Re-checkout branch so HEAD points to branch
-			_ = wt.Checkout(&gogit.CheckoutOptions{
-				Branch: head.Name(),
-			})
+			b.WriteString("Automatic merge failed; fix conflicts and then commit the result.\n")
+			return &ExecResult{Stdout: b.String(), ExitCode: 1}, nil
 		}
-		short := targetHash.String()[:7]
-		return &ExecResult{
-			Stdout: fmt.Sprintf("Updating %s..%s\nFast-forward\n", head.Hash().String()[:7], short),
-		}, nil
+		// Unresolvable revision, dirty tree, missing identity, etc. —
+		// fall through to host git, which has the full toolset.
+		return nil, ErrUnsupported
 	}
-
-	if isAncestor && noFF {
-		// Create merge commit even though ff is possible
-		mergeMsg := fmt.Sprintf("Merge branch '%s'", targetBranch)
-		mergeOpts := &gogit.CommitOptions{
-			Parents: []plumbing.Hash{head.Hash(), *targetHash},
-		}
-		if sig := resolveAuthor(repo); sig != nil {
-			mergeOpts.Author = sig
-		}
-		hash, err := wt.Commit(mergeMsg, mergeOpts)
-		if err != nil {
-			return nil, ErrUnsupported
-		}
-		short := hash.String()[:7]
-		return &ExecResult{
-			Stdout: fmt.Sprintf("Merge made by the 'ort' strategy.\n %s\n", short),
-		}, nil
-	}
-
-	// Non-fast-forward case with diverged histories — too complex, fallback
-	return nil, ErrUnsupported
+	return &ExecResult{Stdout: res.Message + "\n"}, nil
 }
 
 func nativeTag(_ context.Context, dir string, args []string) (*ExecResult, error) {
@@ -1250,19 +1278,22 @@ func nativeFetch(_ context.Context, dir string, args []string) (*ExecResult, err
 	}
 
 	fetchAll := false
-	remoteName := "origin"
+	noTags := false
+	var positionals []string
 
 	for _, arg := range args {
 		switch arg {
 		case "--all":
 			fetchAll = true
+		case "--no-tags":
+			noTags = true
 		case "--tags", "--prune":
 			// Accept common flags
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return nil, ErrUnsupported
 			}
-			remoteName = arg
+			positionals = append(positionals, arg)
 		}
 	}
 
@@ -1282,23 +1313,24 @@ func nativeFetch(_ context.Context, dir string, args []string) (*ExecResult, err
 		return &ExecResult{Stdout: ""}, nil
 	}
 
-	remote, err := repo.Remote(remoteName)
-	if err != nil {
-		return &ExecResult{
-			Stderr:   fmt.Sprintf("fatal: '%s' does not appear to be a git repository\n", remoteName),
-			ExitCode: 128,
-		}, nil
+	// positionals: [<remote-or-path> [<refspec>...]]. A second-or-later
+	// positional is an explicit refspec; the remote may be a configured
+	// name or a local path / URL (typed Fetch routes accordingly).
+	remote := "origin"
+	var refSpecs []string
+	if len(positionals) >= 1 {
+		remote = positionals[0]
+	}
+	if len(positionals) >= 2 {
+		refSpecs = positionals[1:]
 	}
 
-	err = remote.Fetch(&gogit.FetchOptions{})
-	if err == gogit.NoErrAlreadyUpToDate {
-		return &ExecResult{Stdout: ""}, nil
-	}
+	res, err := Fetch(FetchOptions{RepoPath: dir, Remote: remote, RefSpecs: refSpecs, NoTags: noTags})
 	if err != nil {
-		// Auth errors, network issues — fall through to host git
+		// Auth errors, network issues, bad remote — fall through to host git.
 		return nil, ErrUnsupported
 	}
-
+	_ = res
 	return &ExecResult{Stdout: ""}, nil
 }
 

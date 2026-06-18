@@ -220,6 +220,12 @@ func writeBlobToWorktree(r *gogit.Repository, root, name string, te object.TreeE
 	if err := f.Close(); err != nil {
 		return 0, fmt.Errorf("close %s: %w", name, err)
 	}
+	// O_TRUNC reuses an existing file's permissions, so a mode-only
+	// change (e.g. adding the exec bit) would be lost on the worktree.
+	// Chmod explicitly to honor the target tree entry's mode.
+	if err := os.Chmod(full, mode.Perm()); err != nil {
+		return 0, fmt.Errorf("chmod %s: %w", name, err)
+	}
 	return blob.Size, nil
 }
 
@@ -245,9 +251,9 @@ type MergeOptions struct {
 
 // Merge integrates opts.Ref into the current branch. Fast-forward
 // merges (the target is a descendant of HEAD) are fully supported,
-// including --no-ff merge commits. Truly diverged histories need
-// conflict resolution, which this package does not implement — those
-// return an error directing the user to reconcile another way.
+// including --no-ff merge commits. Diverged histories perform a real
+// 3-way merge via threeWayMerge; unreconcilable paths come back as a
+// *ConflictError with the repository left untouched.
 func Merge(opts MergeOptions) (*Result, error) {
 	if opts.RepoPath == "" {
 		opts.RepoPath = "."
@@ -286,7 +292,20 @@ func Merge(opts MergeOptions) (*Result, error) {
 		return nil, err
 	}
 	if !ff {
-		return nil, fmt.Errorf("merge: %q and HEAD have diverged — merges that need conflict resolution are not implemented; push/pull to reconcile, or use full git", opts.Ref)
+		// Diverged histories: a genuine 3-way merge. threeWayMerge is
+		// all-or-nothing — it returns a *ConflictError without mutating
+		// anything when paths can't be reconciled, so no separate
+		// --abort step is needed. A real merge always records a merge
+		// commit, so NoFF is implied here.
+		sig, err := commitSignature(r)
+		if err != nil {
+			return nil, err
+		}
+		msg := opts.Message
+		if msg == "" {
+			msg = fmt.Sprintf("Merge %s into %s", opts.Ref, headRef.Name().Short())
+		}
+		return threeWayMerge(r, w, headHash, *targetHash, msg, sig)
 	}
 
 	if !opts.NoFF {
@@ -339,7 +358,10 @@ func Merge(opts MergeOptions) (*Result, error) {
 // (repo then global). Errors with a how-to-fix hint when absent —
 // callers use this to fail fast before mutating any ref.
 func commitSignature(r *gogit.Repository) (*object.Signature, error) {
-	cfg, err := r.ConfigScoped(config.GlobalScope)
+	// LocalScope merges system + global + repo-local config, so a
+	// repo-local `git config user.name` takes precedence over global —
+	// matching real git's identity resolution.
+	cfg, err := r.ConfigScoped(config.LocalScope)
 	if err != nil || cfg.User.Name == "" || cfg.User.Email == "" {
 		return nil, fmt.Errorf("user identity not configured — run %q and %q first", CLIName+" config user.name <name>", CLIName+" config user.email <email>")
 	}
