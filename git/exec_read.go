@@ -1124,6 +1124,18 @@ func nativeMerge(_ context.Context, dir string, args []string) (*ExecResult, err
 		return nil, ErrUnsupported
 	}
 
+	// An unresolvable target is a user error (exit 1, git's "not
+	// something we can merge"), not a fall-back-to-host-git case —
+	// resolve it up front so the message matches git.
+	if repo, err := openRepo(dir); err == nil {
+		if _, rerr := repo.ResolveRevision(plumbing.Revision(targetBranch)); rerr != nil {
+			return &ExecResult{
+				Stderr:   fmt.Sprintf("merge: '%s' - not something we can merge\n", targetBranch),
+				ExitCode: 1,
+			}, nil
+		}
+	}
+
 	// Delegate to the typed Merge: fast-forward, --no-ff merge commit,
 	// and real diverged 3-way merge all share that one code path. A
 	// conflict comes back as *ConflictError, which we render git-style
