@@ -227,6 +227,19 @@ func weaveBaseBranch(root string) string {
 	return "HEAD"
 }
 
+// weaveStateRoot is the AgentOS weave state directory (~/.bashy/weave).
+// weave was re-homed out of ycode into the hub and is driven by the AgentOS
+// shell (`bashy weave`), so it gets its own top-level dotdir rather than
+// living under ycode's. weaveLegacyStateRoots are pre-re-home locations,
+// consulted only as one-time migration sources (newest-rename first).
+func weaveStateRoot(home string) string { return filepath.Join(home, ".bashy", "weave") }
+func weaveLegacyStateRoots(home string) []string {
+	return []string{
+		filepath.Join(home, ".agents", "weave"),          // interim host-agnostic root
+		filepath.Join(home, ".agents", "ycode", "weave"), // original ycode-hosted root
+	}
+}
+
 func weaveQueueDir(repoRoot string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -240,18 +253,26 @@ func weaveQueueDir(repoRoot string) (string, error) {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(repoRoot))
 	tag := fmt.Sprintf("%s-%08x", filepath.Base(repoRoot), h.Sum32())
-	dir := filepath.Join(home, ".agents", "ycode", "weave", tag)
-	// One-time migration from the legacy path-mangled tag so existing
-	// queues (history, logs) carry over.
+	dir := filepath.Join(weaveStateRoot(home), tag)
+	// One-time migration from a legacy root — both the same tag and the older
+	// path-mangled tag — so existing queues (history, logs, sandboxes) carry
+	// over. Newest legacy root wins.
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		r := strings.NewReplacer(string(filepath.Separator), "_", ":", "_")
 		legacy := r.Replace(strings.TrimPrefix(repoRoot, string(filepath.Separator)))
 		if len(legacy) > 120 {
 			legacy = legacy[len(legacy)-120:]
 		}
-		legacyDir := filepath.Join(home, ".agents", "ycode", "weave", legacy)
-		if st, err := os.Stat(legacyDir); err == nil && st.IsDir() {
-			_ = os.Rename(legacyDir, dir)
+	migrate:
+		for _, root := range weaveLegacyStateRoots(home) {
+			for _, name := range []string{tag, legacy} {
+				src := filepath.Join(root, name)
+				if st, err := os.Stat(src); err == nil && st.IsDir() {
+					_ = os.MkdirAll(weaveStateRoot(home), 0o755)
+					_ = os.Rename(src, dir)
+					break migrate
+				}
+			}
 		}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -731,15 +752,18 @@ func weaveAllQueueDirs() []string {
 	if err != nil {
 		return nil
 	}
-	base := filepath.Join(home, ".agents", "ycode", "weave")
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return nil
-	}
+	// Enumerate the current root and the legacy ones, so queues that haven't
+	// been touched (hence not yet migrated) still show up in listings.
 	var dirs []string
-	for _, e := range entries {
-		if e.IsDir() {
-			dirs = append(dirs, filepath.Join(base, e.Name()))
+	for _, base := range append([]string{weaveStateRoot(home)}, weaveLegacyStateRoots(home)...) {
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				dirs = append(dirs, filepath.Join(base, e.Name()))
+			}
 		}
 	}
 	return dirs

@@ -3,8 +3,9 @@
 // issues out to parallel agent CLIs (claude, codex, opencode, gemini, …),
 // each in an isolated git-clone sandbox, then converges with verification.
 //
-// The engine is pure-filesystem (a per-repo `.ycode/weave` queue + git
-// sandboxes); it depends only on weavecli, cobra, and a PTY — no Gitea, no
+// The engine is pure-filesystem (a per-repo queue + git-clone sandboxes
+// under ~/.bashy/weave); it depends only on weavecli, cobra, and a PTY — no
+// Gitea, no
 // loom service, no agent-specific coupling. The AgentOS shell `bashy` mounts
 // it as `bashy weave`; ycode's `ycode weave` is deprecated in favor of it.
 package weave
