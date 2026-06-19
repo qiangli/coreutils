@@ -178,16 +178,50 @@ errors exit 2 even where GNU uses 1 (documented deviation).
    strings/hexdump/which extensions; sed/xargs/ps remain Phase C).
 3. Phase B: the GNU-manual complement (printf, test, expr, od, dd, …
    per docs/commands.md).
-4. `shell/` adapter: `interp.ExecHandler` for `mvdan.cc/sh/v3` wiring the
-   registry into outpost's matrix shell and ycode's shell runner.
-   Precedence: **pure-Go first**, real binaries only via an explicit
-   escape hatch — uniformity is the product. The adapter imports sh; sh
-   never imports coreutils.
-5. `cmd/coreutils/` multicall binary (busybox-style).
+4. ~~`shell/` adapter~~ (done — `shell/Handler()` / `HandlerFunc()` is an
+   `interp.ExecHandler` middleware for `mvdan.cc/sh/v3` that dispatches any
+   argv[0] naming a registered `tool.Tool` to `Tool.Run`, else falls through
+   to PATH. Precedence is **pure-Go first**; a host opts out by simply not
+   wiring it — that is how `bashy`'s AgentOS shell turns it on while the
+   `bash` drop-in leaves it off. The adapter imports sh; sh never imports
+   coreutils.)
+5. ~~`cmd/coreutils/` multicall binary~~ (done — busybox-style; the
+   `multicall/` package factors out Resolve/Dispatch/Main so bashy and any
+   other front-end reuse the same argv[0] dispatch).
 
 Skip-with-clear-error tier (don't implement): chroot, mkfifo/mknod,
 who/users/pinky, dircolors, ptx, csplit, tsort, factor, stdbuf, nice,
 chcon/runcon.
+
+## AgentOS hub
+
+Beyond the GNU userland, coreutils is the shared **AgentOS tool hub**: one
+registry, three consumption surfaces, imported by bashy/ycode/outpost.
+
+- `shell/` — the `interp.ExecHandler` adapter above (in-process; the fast
+  lane for Go hosts).
+- `multicall/` — busybox argv[0] dispatch (any non-Go agent execs
+  `coreutils <tool>` / a symlinked name).
+- `mcp/` — an MCP server (`NewServer` / `ServeStdio`, over
+  `github.com/modelcontextprotocol/go-sdk`) exposing the registry to non-Go
+  agents via generic `list_tools` / `run_tool` meta-tools; `coreutils mcp`
+  starts it over stdio.
+- `pkg/` — importable pure-Go engines relocated from ycode so one
+  implementation serves every host: `pkg/treesitter` (AST symbols/search,
+  gotreesitter, no cgo), `pkg/repomap` (token-budgeted file→symbol map),
+  `pkg/codegraph` (gfy-backed graph — only its importer pulls gfy's
+  document-parsing deps; the bare binary stays free of them), and
+  `pkg/weave` + `pkg/weavecli` (the filesystem-based multi-agent workspace
+  orchestrator — pure-filesystem, depends only on weavecli/cobra/pty, no
+  Gitea/loom; `NewWeaveCmd()` is the host-agnostic entry point).
+- `cmds/yc` — the `yc` code-intelligence command (symbols / search-symbols /
+  refs / repomap) over those engines, reachable through all three surfaces.
+
+Hosts: `bashy` (the AgentOS shell binary) wires `shell.Handler()` so the
+whole userland + `yc` run in-process, and mounts `pkg/weave` as `bashy weave`
+(`ycode weave` is now a deprecation stub pointing here). ycode's loom MCP
+substrate (`pkg/loom`, gitea backend — separate from `pkg/weave`) routes its
+client-side git through `coreutils/git` (pure-Go-first, host-git fallback).
 
 ## Conventions
 
@@ -198,5 +232,10 @@ chcon/runcon.
 - New tools land with: implementation + table tests + a `--help` text +
   README catalog line. Cross-platform CI (ubuntu/macos/windows) must pass —
   the windows leg is the product, not an afterthought.
-- Dependency budget is deliberately tight: go-git (for `git/`) and the
-  stdlib. Adding a dependency needs a written justification in the PR.
+- Dependency budget is deliberately tight: go-git (for `git/`), pflag, and
+  the stdlib for the userland core. The AgentOS hub adds, used only by the
+  packages that need them: `mvdan.cc/sh/v3` (`shell/`),
+  `github.com/modelcontextprotocol/go-sdk` (`mcp/`), `gotreesitter`
+  (`pkg/treesitter`, pure Go), and `gfy` (`pkg/codegraph` only — kept out of
+  the bare binary by per-import compilation). Adding a dependency needs a
+  written justification in the PR.
