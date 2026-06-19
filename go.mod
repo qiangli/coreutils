@@ -7,7 +7,13 @@ require (
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/sys v0.46.0
+	mvdan.cc/sh/v3 v3.13.1
 )
+
+// Sibling-path replace: ../sh resolves to the sh submodule inside the dhnt
+// umbrella, and to a flat sibling clone in a standalone checkout. Same
+// convention as ycode/outpost/bashy.
+replace mvdan.cc/sh/v3 => ../sh
 
 require (
 	dario.cat/mergo v1.0.0 // indirect
@@ -27,5 +33,7 @@ require (
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/term v0.42.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
