@@ -628,3 +628,33 @@ emits a precondition_failed envelope explaining the dependency.`,
 	flags.attach(cmd)
 	return cmd
 }
+
+func newWeaveCheckCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "List all subcommands and their implementation status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if WeaveCmd == nil {
+				return fmt.Errorf("weave command not initialized")
+			}
+			for _, sub := range WeaveCmd.Commands() {
+				implemented := sub.RunE != nil && sub.RunE != StubRunE
+				status := "implemented"
+				if !implemented {
+					status = "not yet wired"
+				}
+				// Use appropriate output mode
+				mode := flags.mode()
+				if mode == weavecli.OutputJSON {
+					// For JSON mode, emit envelope
+					// For simplicity, just print plain text for now
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", sub.Name(), status)
+			}
+			return nil
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}

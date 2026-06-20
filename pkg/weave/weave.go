@@ -8,6 +8,25 @@ import (
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
+// WeaveCmd holds the top-level weave command for introspection.
+var WeaveCmd *cobra.Command
+
+// StubRunE is the placeholder RunE used for subcommands that are not yet wired.
+var StubRunE func(cmd *cobra.Command, args []string) error = stubRunE
+
+// stubRunE is the default RunE for subverbs whose orchestration body lands in a later N+1 PR.
+func stubRunE(cmd *cobra.Command, args []string) error {
+	mode := weavecli.ResolveOutputMode(false, false, false) // default plain
+	code := weavecli.EmitError(cmd.ErrOrStderr(), mode, cmd.Name(), weavecli.ExitPrecondFail,
+		fmt.Errorf("not yet wired in this build (see N+1 group B/C/D in docs/loom-v2-implementation.md)"))
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	if code != weavecli.ExitOK {
+		return &exitCodeError{code: code}
+	}
+	return nil
+}
+
 // newWeaveCmd builds the `bashy weave ...` top-level group — the v2
 // human-facing front door per docs/loom-v2-plan.md. Subverbs
 // dispatch through the agent-friendly envelope conventions in
@@ -65,7 +84,9 @@ See docs/loom-v2-plan.md for the full design.`,
 	cmd.AddCommand(newWeaveResetCmd())
 	cmd.AddCommand(newWeaveInitBoardCmd())
 	cmd.AddCommand(newWeaveWaitCmd())
+	cmd.AddCommand(newWeaveCheckCmd())
 
+	WeaveCmd = cmd
 	return cmd
 }
 
@@ -92,26 +113,6 @@ func (f *weaveOutputFlags) attach(cmd *cobra.Command) {
 
 func (f *weaveOutputFlags) mode() weavecli.OutputMode {
 	return weavecli.ResolveOutputMode(f.jsonF, f.plainF, f.quietF)
-}
-
-// unimplementedStub is the default RunE for subverbs whose
-// orchestration body lands in a later N+1 PR. Emits a clean precond-
-// failed envelope so agent callers see a stable error shape rather
-// than a panic; humans see a one-line note.
-func unimplementedStub(command string, flags *weaveOutputFlags) func(cmd *cobra.Command, args []string) error {
-	return func(cmd *cobra.Command, args []string) error {
-		mode := flags.mode()
-		code := weavecli.EmitError(cmd.ErrOrStderr(), mode, command, weavecli.ExitPrecondFail,
-			fmt.Errorf("not yet wired in this build (see N+1 group B/C/D in docs/loom-v2-implementation.md)"))
-		// Cobra-friendly: returning a sentinel cobra error here would
-		// double-print; using SilenceErrors instead.
-		cmd.SilenceErrors = true
-		cmd.SilenceUsage = true
-		if code != weavecli.ExitOK {
-			return &exitCodeError{code: code}
-		}
-		return nil
-	}
 }
 
 // exitCodeError lets RunE propagate a specific exit code while cobra
