@@ -491,6 +491,89 @@ func weaveMeasureDirtiness(sandbox string) (dirty bool, dirtyFiles, untrackedFil
 // weave, not asserted by agents. A timeout or signal death surfaces
 // as a non-zero exit; the decision about what to do with a failing
 // verify belongs to `weave pull`, never to this function.
+// weaveSiblingReplaceDirs scans a repo's go.mod for relative replace targets
+// (`replace … => ../NAME`) and returns the distinct relative paths. Empty when
+// there is no go.mod or no relative replaces (the generic, non-Go case is a
+// no-op). Handles both the single-line and `replace ( … )` block forms.
+func weaveSiblingReplaceDirs(root string) []string {
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		idx := strings.Index(line, "=>")
+		if idx < 0 {
+			continue
+		}
+		rhs := strings.TrimSpace(line[idx+2:])
+		// rhs is "../path" or "../path version"; take the first field.
+		if sp := strings.IndexAny(rhs, " \t"); sp >= 0 {
+			rhs = rhs[:sp]
+		}
+		if strings.HasPrefix(rhs, "../") && !seen[rhs] {
+			seen[rhs] = true
+			dirs = append(dirs, rhs)
+		}
+	}
+	return dirs
+}
+
+// weaveSyncSiblingDeps provisions the target repo's `replace … => ../X` sibling
+// dependencies for the sandbox: each is a SHARED clone placed at
+// <sandboxes>/<name> (the path `../<name>` resolves to from every issue
+// sandbox), re-synced to the original sibling's current HEAD. No symlinks
+// (Windows-safe); the user's real repo is never edited (it's a clone). Returns
+// the names successfully synced and any that failed (so the caller can warn).
+func weaveSyncSiblingDeps(root, sandbox string) (synced, failed []string) {
+	rels := weaveSiblingReplaceDirs(root)
+	if len(rels) == 0 {
+		return nil, nil
+	}
+	sandboxParent := filepath.Dir(sandbox) // <queueDir>/sandboxes
+	for _, rel := range rels {
+		name := filepath.Base(rel)
+		orig := filepath.Clean(filepath.Join(root, rel))
+		if fi, err := os.Stat(orig); err != nil || !fi.IsDir() {
+			continue // sibling not present next to the source; skip quietly
+		}
+		dst := filepath.Join(sandboxParent, name)
+		if err := weaveEnsureSyncedClone(orig, dst); err != nil {
+			failed = append(failed, name)
+			continue
+		}
+		synced = append(synced, name)
+	}
+	return synced, failed
+}
+
+// weaveEnsureSyncedClone makes dst a local clone of the git repo at orig, reset
+// to orig's current HEAD (and cleaned of any stray edits a prior worker left,
+// so the shared clone is always a faithful copy of the source). Clones on first
+// use; otherwise fetches + hard-resets — cheap for a `--local` clone.
+func weaveEnsureSyncedClone(orig, dst string) error {
+	head, err := exec.Command("git", "-C", orig, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return fmt.Errorf("resolve HEAD of %s: %w", orig, err)
+	}
+	sha := strings.TrimSpace(string(head))
+	gitDir := filepath.Join(dst, ".git")
+	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
+		_ = os.RemoveAll(dst)
+		if out, err := exec.Command("git", "clone", "--local", "--no-hardlinks", orig, dst).CombinedOutput(); err != nil {
+			return fmt.Errorf("clone sibling %s: %w: %s", orig, err, out)
+		}
+	}
+	// Bring orig's latest objects over and pin dst to orig's HEAD.
+	_ = exec.Command("git", "-C", dst, "fetch", "--quiet", orig).Run()
+	if out, err := exec.Command("git", "-C", dst, "reset", "--hard", "--quiet", sha).CombinedOutput(); err != nil {
+		return fmt.Errorf("sync sibling %s to %.12s: %w: %s", dst, sha, err, out)
+	}
+	_ = exec.Command("git", "-C", dst, "clean", "-qfdx").Run()
+	return nil
+}
+
 func weaveRunVerify(sandbox, command string) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -1549,6 +1632,26 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// was gone. git recreates reflogs as the agent works;
 			// only the clone-time entries carry the origin path.
 			_ = os.RemoveAll(filepath.Join(sandbox, ".git", "logs"))
+		}
+		// Faithful, fast, Windows-safe sibling-dep view. A clone of the target
+		// alone can't build when its go.mod has `replace … => ../X` directives
+		// (sh/coreutils/readline in this umbrella). We provide each such sibling
+		// as a SHARED clone placed directly at <sandboxes>/<name> — exactly
+		// where `../<name>` resolves from every issue sandbox, so NO symlinks
+		// are needed (symlinks require admin/Developer Mode on Windows). It is a
+		// clone (the user's real repo is never edited), shared across the
+		// queue's sandboxes (cloned once), and re-synced to the source's
+		// current HEAD on every start — fixing the prior staleness where a
+		// sandbox built against an old sibling SHA (the #1 weave friction).
+		// Nested replaces resolve too: <sandboxes>/coreutils's own `../sh` lands
+		// on <sandboxes>/sh, which we also provision.
+		if synced, failed := weaveSyncSiblingDeps(root, sandbox); len(synced) > 0 || len(failed) > 0 {
+			if len(synced) > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave: sibling deps synced to source HEAD: %s\n", strings.Join(synced, ", "))
+			}
+			for _, f := range failed {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave: WARNING could not provision sibling dep %q — the build may fail; ask the orchestrator for help\n", f)
+			}
 		}
 		for _, kv := range [][2]string{
 			{"user.name", fmt.Sprintf("agent-weave-issue-%d", it.ID)},
@@ -3456,7 +3559,72 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 // route other than `weave pull`) is flipped to "done" and swept in the
 // same pass — without this, such an item is stranded forever (prune
 // refuses it, leaving only the data-loss-flavored `abandon`).
-func runWeavePrune(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error {
+// runWeaveSalvage merges the committed work of a KILLED (or failed) item that
+// `weave pull` won't auto-merge, without the manual fetch+cherry-pick dance.
+// It is not a blind force: it promotes the item to "submitted" only after
+// confirming it has commits ahead of base and a clean tree, then delegates to
+// runWeavePull — so pull's dirty / verify-exit gates still apply. This is the
+// supported path for "the agent did good work but its TUI was killed, so it
+// landed in `killed` state."
+func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64) error {
+	mode := flags.mode()
+	cwd, _ := os.Getwd()
+	root, err := weaveRepoRoot(cwd)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave salvage",
+			weavecli.ExitPrecondFail, err))
+	}
+	dir, _ := weaveQueueDir(root)
+	base := weaveBaseBranch(root)
+	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, issueID)
+		if it == nil {
+			return fmt.Errorf("issue #%d not found%s", issueID, weaveOtherActiveQueuesHintSuffix(dir))
+		}
+		switch it.State {
+		case "submitted", "working":
+			return nil // already a normal pull target; let pull handle it
+		case "killed", "failed":
+			// promotable below
+		default:
+			return fmt.Errorf("issue #%d is %q — salvage applies to killed/failed items holding committed work (done/abandoned/allocated have nothing to merge)", issueID, it.State)
+		}
+		if it.Sandbox == "" {
+			return fmt.Errorf("issue #%d has no sandbox to salvage from", issueID)
+		}
+		if dirty, _, _ := weaveMeasureDirtiness(it.Sandbox); dirty {
+			return fmt.Errorf("issue #%d sandbox has uncommitted changes — commit them in the sandbox (`weave shell %d`) first, then salvage", issueID, issueID)
+		}
+		ahead, head := weaveMeasureBranch(it.Sandbox, base)
+		if ahead <= 0 {
+			return fmt.Errorf("issue #%d has 0 commits ahead of %s — nothing to salvage", issueID, base)
+		}
+		it.State = "submitted"
+		it.Body = fmt.Sprintf("[salvaged: promoted from killed/failed to submitted at %.12s (%d commit(s) ahead); merging via pull's verify gate]\n\n", head, ahead) + it.Body
+		return nil
+	})
+	if lockErr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave salvage",
+			weavecli.ExitInvalidArg, lockErr))
+	}
+	// Delegate to pull: re-acquires the lock and runs the full verify + merge
+	// path on the now-"submitted" item.
+	return runWeavePull(cmd, flags, issueID, true)
+}
+
+// weavePrunableForSweep reports whether `weave prune` (optionally --stale)
+// should sweep an item. The base set is the terminal states (isPrunableState);
+// --stale additionally sweeps orphaned "allocated" items — a sandbox was
+// created but the tool never launched / died before any commit, so there is no
+// work to lose. Items holding commits (submitted/working) are never swept here.
+func weavePrunableForSweep(state string, stale bool) bool {
+	if isPrunableState(state) {
+		return true
+	}
+	return stale && state == "allocated"
+}
+
+func runWeavePrune(cmd *cobra.Command, yes, stale bool, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -3477,7 +3645,7 @@ func runWeavePrune(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 	weaveReconcileMerged(root, base, q)
 	pendingCount := 0
 	for _, it := range q.Items {
-		if isPrunableState(it.State) {
+		if weavePrunableForSweep(it.State, stale) {
 			pendingCount++
 		}
 	}
@@ -3513,7 +3681,7 @@ func runWeavePrune(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 		// Re-reconcile under the lock so the flip persists to disk.
 		weaveReconcileMerged(root, base, q)
 		for _, it := range q.Items {
-			if !isPrunableState(it.State) {
+			if !weavePrunableForSweep(it.State, stale) {
 				continue
 			}
 			swept++

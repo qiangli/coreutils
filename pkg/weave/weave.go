@@ -60,6 +60,7 @@ Common-case usage:
 	cmd.AddCommand(newWeaveLogCmd())
 	cmd.AddCommand(newWeaveSayCmd())
 	cmd.AddCommand(newWeavePullCmd())
+	cmd.AddCommand(newWeaveSalvageCmd())
 	cmd.AddCommand(newWeavePruneCmd())
 	cmd.AddCommand(newWeaveAbandonCmd())
 	cmd.AddCommand(newWeaveKillCmd())

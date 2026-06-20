@@ -421,9 +421,38 @@ func newWeavePullCmd() *cobra.Command {
 	return cmd
 }
 
+func newWeaveSalvageCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "salvage <issue>",
+		Short: "Merge the committed work of a killed/failed item (via pull's verify gate)",
+		Long: `salvage rescues an item whose committed work weave pull won't auto-merge
+because its tool's (TUI) session was killed, leaving it in 'killed' state.
+
+It promotes the item to 'submitted' only after confirming it has commits ahead
+of the base branch and a clean working tree, then runs the normal pull merge —
+so the dirty and verify-exit gates still apply. It is not a blind force.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave salvage",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected exactly one issue argument")))
+			}
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil || id <= 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave salvage",
+					weavecli.ExitInvalidArg, fmt.Errorf("invalid issue %q", args[0])))
+			}
+			return runWeaveSalvage(cmd, &flags, id)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
 func newWeavePruneCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var yes bool
+	var stale bool
 	cmd := &cobra.Command{
 		Use:   "prune",
 		Short: "Remove sandbox directories and merged branches for terminal items",
@@ -434,11 +463,12 @@ func newWeavePruneCmd() *cobra.Command {
 Use --yes to skip the confirmation prompt. This is safe: branches are only
 deleted with -d (lowercase), which refuses if not fully merged.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeavePrune(cmd, yes, &flags)
+			return runWeavePrune(cmd, yes, stale, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
+	cmd.Flags().BoolVar(&stale, "stale", false, "Also sweep orphaned 'allocated' items (sandbox created but never launched / launched-and-died with no commits) — clears leftover clutter from prior sessions; never touches items with committed work")
 	return cmd
 }
 
