@@ -23,8 +23,9 @@ import (
 // external dependency the local backend lacks — the forge backend
 // (started by `ycode serve`) or an LLM provider. Those are tagged
 // with weaveStatusAnnotation so `weave check` can report them; see
-// init-board (fully forge-gated), open (forge pages; --issue works
-// locally), and prio (--auto needs an LLM).
+// open (forge pages; --issue works locally) and prio (--auto needs an
+// LLM). Subverbs that only ever work against the forge (e.g. the
+// kanban board bootstrap) are not registered here at all.
 
 // weaveStatusAnnotation is the cobra annotation key a subverb sets to
 // override the default "implemented" status reported by `weave check`.
@@ -563,7 +564,7 @@ func newWeaveOpenCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&issues, "issues", false, "Open the label-filtered issue list (default dashboard)")
 	cmd.Flags().Int64Var(&issue, "issue", 0, "Open a specific issue page (or, in the local backend, surface the sandbox file:// URL)")
 	cmd.Flags().BoolVar(&prFlag, "pr", false, "Open the PR for the issue named in --issue")
-	cmd.Flags().BoolVar(&board, "board", false, "Open the kanban (requires 'weave init-board' first)")
+	cmd.Flags().BoolVar(&board, "board", false, "Open the kanban project board (forge backend only)")
 	return cmd
 }
 
@@ -612,32 +613,6 @@ Default timeout is 1h. On timeout, exits with precondition_failed
 	cmd.Flags().Int64Var(&issue, "issue", 0, "Wait on a specific issue ID")
 	cmd.Flags().BoolVar(&all, "all", false, "Wait until no `working` items remain")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "Maximum wait duration (e.g. 30m, 1h)")
-	return cmd
-}
-
-func newWeaveInitBoardCmd() *cobra.Command {
-	var flags weaveOutputFlags
-	cmd := &cobra.Command{
-		Use:         "init-board",
-		Short:       "(Optional) Create a Loom kanban project board on the forge",
-		Annotations: map[string]string{weaveStatusAnnotation: "requires the forge backend (run `ycode serve`)"},
-		Long: `init-board is an opt-in one-time bootstrap that creates a forge
-project board with state-mapped columns. The default dashboard is
-the label-filtered issue list; the board is decoration, not load-
-bearing — loom does not auto-sync card positions.
-
-Implementation note: the embedded forge's kanban routes are HTML
-web-routes with CSRF + session-cookie auth (not v1 REST). This
-subverb pulls those in only when invoked; everything else in
-'weave' speaks stable v1 REST.
-
-In the local-only backend (no ` + "`" + `ycode serve` + "`" + ` running), this command
-emits a precondition_failed envelope explaining the dependency.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeaveInitBoard(cmd, &flags)
-		},
-	}
-	flags.attach(cmd)
 	return cmd
 }
 

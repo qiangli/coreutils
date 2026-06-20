@@ -2906,15 +2906,6 @@ func runWeaveOpen(cmd *cobra.Command, issuesFlag, boardFlag, prFlag bool, issueI
 		weavecli.ExitDepUnhealthy, fmt.Errorf("requires the forge backend (run `ycode serve` first); the local backend has no web pages to open")))
 }
 
-// runWeaveInitBoard would create a Gitea kanban project board, but
-// the local backend has no Gitea instance. Emit a clean dependency-
-// unhealthy envelope so callers know to start `ycode serve`.
-func runWeaveInitBoard(cmd *cobra.Command, flags *weaveOutputFlags) error {
-	mode := flags.mode()
-	return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave init-board",
-		weavecli.ExitDepUnhealthy, fmt.Errorf("requires the forge backend (run `ycode serve` first); the local backend has no board to initialize")))
-}
-
 // addFromFile parses a markdown checklist or a JSON list and bulk-
 // adds each entry to the queue. Returns the IDs created.
 //

@@ -39,8 +39,7 @@ Common-case usage:
   bashy weave list                           # what's in flight
   bashy weave pull                           # absorb merged work
 
-The kanban project board is opt-in via 'bashy weave init-board';
-the default dashboard is the forge's label-filtered issue list view.
+The default dashboard is the forge's label-filtered issue list view.
 See docs/loom-v2-plan.md for the full design.`,
 	}
 
@@ -69,7 +68,6 @@ See docs/loom-v2-plan.md for the full design.`,
 	cmd.AddCommand(newWeaveShellCmd())
 	cmd.AddCommand(newWeaveOpenCmd())
 	cmd.AddCommand(newWeaveResetCmd())
-	cmd.AddCommand(newWeaveInitBoardCmd())
 	cmd.AddCommand(newWeaveWaitCmd())
 	cmd.AddCommand(newWeaveCheckCmd())
 
