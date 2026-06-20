@@ -18,19 +18,16 @@ import (
 // envelope and propagates an *exitCodeError carrying a stable
 // weavecli exit code.
 //
-// All subverbs are wired against the local filesystem backend. A few
-// degrade to a dependency_unhealthy envelope for paths that need an
-// external dependency the local backend lacks — the forge backend
-// (started by `ycode serve`) or an LLM provider. Those are tagged
-// with weaveStatusAnnotation so `weave check` can report them; see
-// open (forge pages; --issue works locally) and prio (--auto needs an
-// LLM). Subverbs that only ever work against the forge (e.g. the
-// kanban board bootstrap) are not registered here at all.
+// Every subverb runs entirely on the local filesystem. The lone
+// exception is `prio --auto`, which delegates queue ranking to an LLM
+// provider and degrades to a dependency_unhealthy envelope when none is
+// configured; it carries weaveStatusAnnotation so `weave check` can
+// report the dependency.
 
 // weaveStatusAnnotation is the cobra annotation key a subverb sets to
 // override the default "implemented" status reported by `weave check`.
-// Subverbs that work fully in the local filesystem backend leave it
-// unset; the forge/LLM-gated ones set it to name their dependency.
+// Subverbs that work fully on the local filesystem leave it unset; the
+// LLM-gated path sets it to name its dependency.
 const weaveStatusAnnotation = "weave_status"
 
 func newWeaveAddCmd() *cobra.Command {
@@ -84,7 +81,7 @@ func newWeaveStartCmd() *cobra.Command {
 		Short: "Allocate a workspace and launch an agentic tool",
 		Long: `start atomically claims the top of the loom:todo queue (or the
 issue specified with --issue), allocates a sandbox, and launches the
-named tool inside it with YCODE_LOOM_* env vars set.
+named tool inside it with WEAVE_* env vars set.
 
 The trailing '-- <tool>' form is the human-natural shape; --tool is
 the programmatic alternative.
@@ -549,22 +546,23 @@ func newWeaveShellCmd() *cobra.Command {
 
 func newWeaveOpenCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var issues, board bool
-	var issue int64
-	var prFlag bool
 	cmd := &cobra.Command{
-		Use:         "open [--issues | --issue N | --pr | --board]",
-		Short:       "Open the relevant forge page in a browser",
-		Annotations: map[string]string{weaveStatusAnnotation: "implemented; forge pages require `ycode serve` (--issue resolves locally)"},
+		Use:   "open <issue>",
+		Short: "Surface an issue's sandbox path (file:// URL)",
+		Long: `open prints the file:// URL of an issue's sandbox worktree so you
+can jump straight to the files an agent produced. weave is local-only —
+there is no remote page to open — so this resolves entirely on the
+local filesystem.`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeaveOpen(cmd, issues, board, prFlag, issue, &flags)
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("issue must be an integer: %q", args[0])
+			}
+			return runWeaveOpen(cmd, id, &flags)
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().BoolVar(&issues, "issues", false, "Open the label-filtered issue list (default dashboard)")
-	cmd.Flags().Int64Var(&issue, "issue", 0, "Open a specific issue page (or, in the local backend, surface the sandbox file:// URL)")
-	cmd.Flags().BoolVar(&prFlag, "pr", false, "Open the PR for the issue named in --issue")
-	cmd.Flags().BoolVar(&board, "board", false, "Open the kanban project board (forge backend only)")
 	return cmd
 }
 
@@ -622,11 +620,10 @@ func newWeaveCheckCmd() *cobra.Command {
 		Use:   "check",
 		Short: "List every subcommand and its implementation status",
 		Long: `check enumerates the weave subverbs and reports, for each, whether
-it is fully implemented against the local filesystem backend or
-degrades for paths that need an external dependency — the forge
-backend (started by ` + "`ycode serve`" + `) or an LLM provider. It is a
-non-mutating introspection aid for agents and humans auditing the
-surface.`,
+it is fully implemented on the local filesystem or degrades for a
+path that needs an external dependency (today only ` + "`prio --auto`" + `,
+which needs an LLM provider). It is a non-mutating introspection aid
+for agents and humans auditing the surface.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mode := flags.mode()
 			parent := cmd.Parent()

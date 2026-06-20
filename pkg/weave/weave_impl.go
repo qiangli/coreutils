@@ -690,7 +690,7 @@ func runWeaveAddWithPoints(cmd *cobra.Command, title, body, priority, verify, su
 }
 
 func weaveTestPauseInsideAddLock() {
-	pause := os.Getenv("YCODE_WEAVE_TEST_ADD_INSIDE_LOCK_FILE")
+	pause := os.Getenv("WEAVE_TEST_ADD_INSIDE_LOCK_FILE")
 	if pause == "" {
 		return
 	}
@@ -1637,12 +1637,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	}
 	env = append(env, "PWD="+sandbox)
 	env = append(env,
-		fmt.Sprintf("YCODE_LOOM_ID=weave-issue-%d", it.ID),
-		fmt.Sprintf("YCODE_LOOM_BRANCH=%s", branch),
-		fmt.Sprintf("YCODE_LOOM_BASE=%s", base),
-		fmt.Sprintf("YCODE_LOOM_ISSUE=%d", it.ID),
-		fmt.Sprintf("YCODE_LOOM_ISSUE_TITLE=%s", it.Title),
-		fmt.Sprintf("YCODE_LOOM_ISSUE_BODY=%s", it.Body),
+		fmt.Sprintf("WEAVE_ID=weave-issue-%d", it.ID),
+		fmt.Sprintf("WEAVE_BRANCH=%s", branch),
+		fmt.Sprintf("WEAVE_BASE=%s", base),
+		fmt.Sprintf("WEAVE_ISSUE=%d", it.ID),
+		fmt.Sprintf("WEAVE_ISSUE_TITLE=%s", it.Title),
+		fmt.Sprintf("WEAVE_ISSUE_BODY=%s", it.Body),
 	)
 	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
 	tool.Dir = sandbox
@@ -2400,7 +2400,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 }
 
 func weaveTestPauseAfterPullLoad() {
-	pause := os.Getenv("YCODE_WEAVE_TEST_PULL_AFTER_LOAD_FILE")
+	pause := os.Getenv("WEAVE_TEST_PULL_AFTER_LOAD_FILE")
 	if pause == "" {
 		return
 	}
@@ -2690,7 +2690,7 @@ func runWeavePrio(cmd *cobra.Command, id int64, tier string, auto bool, flags *w
 	mode := flags.mode()
 	if auto {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prio",
-			weavecli.ExitDepUnhealthy, fmt.Errorf("--auto requires an LLM provider; not available in the local backend (run `ycode serve` for the forge backend)")))
+			weavecli.ExitDepUnhealthy, fmt.Errorf("--auto requires an LLM provider; none is configured")))
 	}
 	if !isValidPriority(tier) {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prio",
@@ -2783,10 +2783,10 @@ func runWeaveShell(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error 
 	sh := exec.Command(shell)
 	sh.Dir = it.Sandbox
 	sh.Env = append(os.Environ(),
-		fmt.Sprintf("YCODE_LOOM_ID=weave-issue-%d", it.ID),
-		fmt.Sprintf("YCODE_LOOM_ISSUE=%d", it.ID),
-		fmt.Sprintf("YCODE_LOOM_BRANCH=%s", it.Branch),
-		fmt.Sprintf("YCODE_LOOM_ISSUE_TITLE=%s", it.Title),
+		fmt.Sprintf("WEAVE_ID=weave-issue-%d", it.ID),
+		fmt.Sprintf("WEAVE_ISSUE=%d", it.ID),
+		fmt.Sprintf("WEAVE_BRANCH=%s", it.Branch),
+		fmt.Sprintf("WEAVE_ISSUE_TITLE=%s", it.Title),
 	)
 	sh.Stdin = os.Stdin
 	sh.Stdout = os.Stdout
@@ -2868,12 +2868,11 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 	return nil
 }
 
-// runWeaveOpen opens a Gitea page in the browser. Requires a running
-// Gitea backend (`ycode serve`); in the local-only backend we emit a
-// precondition_failed envelope explaining the dependency. The
-// --issue N variant ALSO surfaces a file:// URL to the sandbox dir
-// as a useful local-only fallback.
-func runWeaveOpen(cmd *cobra.Command, issuesFlag, boardFlag, prFlag bool, issueID int64, flags *weaveOutputFlags) error {
+// runWeaveOpen surfaces an issue's sandbox worktree as a file:// URL so
+// you can jump straight to the files an agent produced. weave is
+// local-only — there is no remote page to open — so this resolves
+// entirely on the local filesystem.
+func runWeaveOpen(cmd *cobra.Command, issueID int64, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -2881,29 +2880,27 @@ func runWeaveOpen(cmd *cobra.Command, issuesFlag, boardFlag, prFlag bool, issueI
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave open",
 			weavecli.ExitPrecondFail, err))
 	}
-	// Local-fallback only: if --issue N points at a live sandbox, surface
-	// its file:// URL even though the Gitea page itself isn't available.
-	if issueID > 0 && !prFlag {
-		dir, _ := weaveQueueDir(root)
-		q, _ := loadWeaveQueue(dir)
-		if it := findWeaveItem(q, issueID); it != nil && it.Sandbox != "" {
-			fileURL := "file://" + it.Sandbox
-			if mode == weavecli.OutputJSON {
-				return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave open", map[string]any{
-					"issue":       it.ID,
-					"sandbox_url": fileURL,
-					"forge_url":   nil,
-					"backend":     "local",
-					"note":        "forge-backed pages require `ycode serve`; surfacing sandbox path only.",
-				}))
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "weave open: issue #%d sandbox %s\n", it.ID, fileURL)
-			return nil
-		}
+	dir, _ := weaveQueueDir(root)
+	q, _ := loadWeaveQueue(dir)
+	it := findWeaveItem(q, issueID)
+	if it == nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave open",
+			weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", issueID, weaveOtherActiveQueuesHintSuffix(dir))))
 	}
-	_, _, _ = issuesFlag, boardFlag, prFlag
-	return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave open",
-		weavecli.ExitDepUnhealthy, fmt.Errorf("requires the forge backend (run `ycode serve` first); the local backend has no web pages to open")))
+	if it.Sandbox == "" {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave open",
+			weavecli.ExitPrecondFail, fmt.Errorf("issue #%d has no sandbox yet (run `weave start` first)", issueID)))
+	}
+	fileURL := "file://" + it.Sandbox
+	if mode == weavecli.OutputJSON {
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave open", map[string]any{
+			"issue":       it.ID,
+			"sandbox":     it.Sandbox,
+			"sandbox_url": fileURL,
+		}))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "weave open: issue #%d sandbox %s\n", it.ID, fileURL)
+	return nil
 }
 
 // addFromFile parses a markdown checklist or a JSON list and bulk-

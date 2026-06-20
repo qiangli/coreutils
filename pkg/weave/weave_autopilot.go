@@ -470,7 +470,7 @@ func (weaveExecAutopilotRunner) Run(ctx context.Context, tool, prompt, queueDir 
 		}
 		env = append(env, kv)
 	}
-	cmd.Env = append(env, "PWD="+queueDir, "YCODE_WEAVE_ORCHESTRATOR=1", "YCODE_WEAVE_QUEUE_DIR="+queueDir)
+	cmd.Env = append(env, "PWD="+queueDir, "WEAVE_ORCHESTRATOR=1", "WEAVE_QUEUE_DIR="+queueDir)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
