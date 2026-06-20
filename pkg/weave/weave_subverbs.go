@@ -2,6 +2,7 @@ package weave
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -11,17 +12,25 @@ import (
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
-// Per-subverb constructors. Each registers its flags + RunE; the
-// orchestration bodies arrive in subsequent N+1 PRs as the related
-// substrate operations land (Service.Claim, weavesetup.Run,
-// weaveapi.* helpers, etc.).
+// Per-subverb constructors. Each registers its flags + RunE and
+// dispatches to a runWeave* body in weave_impl.go (or
+// weave_autopilot.go). Every subverb emits its own structured
+// envelope and propagates an *exitCodeError carrying a stable
+// weavecli exit code.
 //
-// Today every subverb returns ExitPrecondFail with a clear
-// "not yet wired" envelope. The skeleton confirms the surface shape
-// — `bashy weave --help` lists every verb, `bashy weave start --json`
-// produces a parseable envelope on stderr, etc. — so downstream
-// tooling (foreign agents, scripts) can be written and tested
-// against the contract before the inner machinery exists.
+// All subverbs are wired against the local filesystem backend. A few
+// degrade to a dependency_unhealthy envelope for paths that need an
+// external dependency the local backend lacks — the forge backend
+// (started by `ycode serve`) or an LLM provider. Those are tagged
+// with weaveStatusAnnotation so `weave check` can report them; see
+// init-board (fully forge-gated), open (forge pages; --issue works
+// locally), and prio (--auto needs an LLM).
+
+// weaveStatusAnnotation is the cobra annotation key a subverb sets to
+// override the default "implemented" status reported by `weave check`.
+// Subverbs that work fully in the local filesystem backend leave it
+// unset; the forge/LLM-gated ones set it to name their dependency.
+const weaveStatusAnnotation = "weave_status"
 
 func newWeaveAddCmd() *cobra.Command {
 	var flags weaveOutputFlags
@@ -130,8 +139,9 @@ func newWeavePrioCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var auto bool
 	cmd := &cobra.Command{
-		Use:   "prio <issue> p0|p1|p2|p3",
-		Short: "Set an issue's priority tier (or --auto to LLM-rank the queue)",
+		Use:         "prio <issue> p0|p1|p2|p3",
+		Short:       "Set an issue's priority tier (or --auto to LLM-rank the queue)",
+		Annotations: map[string]string{weaveStatusAnnotation: "implemented; --auto requires an LLM provider"},
 		Args: func(cmd *cobra.Command, args []string) error {
 			if auto && len(args) == 0 {
 				return nil
@@ -542,8 +552,9 @@ func newWeaveOpenCmd() *cobra.Command {
 	var issue int64
 	var prFlag bool
 	cmd := &cobra.Command{
-		Use:   "open [--issues | --issue N | --pr | --board]",
-		Short: "Open the relevant forge page in a browser",
+		Use:         "open [--issues | --issue N | --pr | --board]",
+		Short:       "Open the relevant forge page in a browser",
+		Annotations: map[string]string{weaveStatusAnnotation: "implemented; forge pages require `ycode serve` (--issue resolves locally)"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWeaveOpen(cmd, issues, board, prFlag, issue, &flags)
 		},
@@ -607,8 +618,9 @@ Default timeout is 1h. On timeout, exits with precondition_failed
 func newWeaveInitBoardCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
-		Use:   "init-board",
-		Short: "(Optional) Create a Loom kanban project board on the forge",
+		Use:         "init-board",
+		Short:       "(Optional) Create a Loom kanban project board on the forge",
+		Annotations: map[string]string{weaveStatusAnnotation: "requires the forge backend (run `ycode serve`)"},
 		Long: `init-board is an opt-in one-time bootstrap that creates a forge
 project board with state-mapped columns. The default dashboard is
 the label-filtered issue list; the board is decoration, not load-
@@ -633,26 +645,52 @@ func newWeaveCheckCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
 		Use:   "check",
-		Short: "List all subcommands and their implementation status",
+		Short: "List every subcommand and its implementation status",
+		Long: `check enumerates the weave subverbs and reports, for each, whether
+it is fully implemented against the local filesystem backend or
+degrades for paths that need an external dependency — the forge
+backend (started by ` + "`ycode serve`" + `) or an LLM provider. It is a
+non-mutating introspection aid for agents and humans auditing the
+surface.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if WeaveCmd == nil {
-				return fmt.Errorf("weave command not initialized")
+			mode := flags.mode()
+			parent := cmd.Parent()
+			if parent == nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave check",
+					weavecli.ExitGenericFail, fmt.Errorf("weave command tree not initialized")))
 			}
-			for _, sub := range WeaveCmd.Commands() {
-				implemented := sub.RunE != nil && sub.RunE != StubRunE
+			type subStatus struct {
+				Name   string `json:"name"`
+				Status string `json:"status"`
+			}
+			var rows []subStatus
+			for _, sub := range parent.Commands() {
+				// Skip self and any cobra-injected helper (help, and the
+				// completion command on hosts that don't disable it).
+				if sub == cmd || sub.Name() == "help" || sub.Name() == "completion" || !sub.IsAvailableCommand() {
+					continue
+				}
 				status := "implemented"
-				if !implemented {
-					status = "not yet wired"
+				if s := sub.Annotations[weaveStatusAnnotation]; s != "" {
+					status = s
 				}
-				// Use appropriate output mode
-				mode := flags.mode()
-				if mode == weavecli.OutputJSON {
-					// For JSON mode, emit envelope
-					// For simplicity, just print plain text for now
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", sub.Name(), status)
+				rows = append(rows, subStatus{Name: sub.Name(), Status: status})
 			}
-			return nil
+			sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+
+			if mode == weavecli.OutputJSON {
+				subs := make([]map[string]any, len(rows))
+				for i, r := range rows {
+					subs[i] = map[string]any{"name": r.Name, "status": r.Status}
+				}
+				return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave check", map[string]any{
+					"subcommands": subs,
+				}))
+			}
+			for _, r := range rows {
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s %s\n", r.Name, r.Status)
+			}
+			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave check", nil))
 		},
 	}
 	flags.attach(cmd)

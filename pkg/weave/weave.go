@@ -8,25 +8,6 @@ import (
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
-// WeaveCmd holds the top-level weave command for introspection.
-var WeaveCmd *cobra.Command
-
-// StubRunE is the placeholder RunE used for subcommands that are not yet wired.
-var StubRunE func(cmd *cobra.Command, args []string) error = stubRunE
-
-// stubRunE is the default RunE for subverbs whose orchestration body lands in a later N+1 PR.
-func stubRunE(cmd *cobra.Command, args []string) error {
-	mode := weavecli.ResolveOutputMode(false, false, false) // default plain
-	code := weavecli.EmitError(cmd.ErrOrStderr(), mode, cmd.Name(), weavecli.ExitPrecondFail,
-		fmt.Errorf("not yet wired in this build (see N+1 group B/C/D in docs/loom-v2-implementation.md)"))
-	cmd.SilenceErrors = true
-	cmd.SilenceUsage = true
-	if code != weavecli.ExitOK {
-		return &exitCodeError{code: code}
-	}
-	return nil
-}
-
 // newWeaveCmd builds the `bashy weave ...` top-level group — the v2
 // human-facing front door per docs/loom-v2-plan.md. Subverbs
 // dispatch through the agent-friendly envelope conventions in
@@ -63,6 +44,12 @@ the default dashboard is the forge's label-filtered issue list view.
 See docs/loom-v2-plan.md for the full design.`,
 	}
 
+	// weave is an agent/orchestrator surface, not an interactive human
+	// shell — the cobra-generated `completion` subverb (and its hidden
+	// `__complete` helper) only add noise to `weave --help` and don't
+	// fit the structured-envelope contract. Drop them.
+	cmd.CompletionOptions.DisableDefaultCmd = true
+
 	cmd.AddCommand(newWeaveAddCmd())
 	cmd.AddCommand(newWeaveStartCmd())
 	cmd.AddCommand(newWeaveNextCmd())
@@ -86,7 +73,6 @@ See docs/loom-v2-plan.md for the full design.`,
 	cmd.AddCommand(newWeaveWaitCmd())
 	cmd.AddCommand(newWeaveCheckCmd())
 
-	WeaveCmd = cmd
 	return cmd
 }
 
