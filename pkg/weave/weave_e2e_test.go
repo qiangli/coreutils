@@ -166,6 +166,14 @@ func TestWeaveQueueLifecycleE2E(t *testing.T) {
 	if out, code := runWeave(t, "prio", "--auto", "--json"); code == 0 || !strings.Contains(out, "dependency_unhealthy") {
 		t.Fatalf("prio --auto should degrade: exit=%d out=%s", code, out)
 	}
+	// invalid combo: `prio <issue> --auto` must emit a structured
+	// invalid_arg envelope, not silently exit non-zero with no message.
+	if out, code := runWeave(t, "prio", "1", "--auto", "--json"); code == 0 || !strings.Contains(out, "invalid_arg") {
+		t.Fatalf("prio <issue> --auto should be invalid_arg: exit=%d out=%s", code, out)
+	}
+	if out, code := runWeave(t, "prio", "1", "--auto"); code == 0 || strings.TrimSpace(out) == "" {
+		t.Fatalf("prio <issue> --auto must print an error, not exit silently: exit=%d out=%q", code, out)
+	}
 
 	// allocate a sandbox for issue 1 without spawning a tool
 	if out, code := runWeave(t, "start", "--issue", "1", "--no-spawn", "--json"); code != 0 || !strings.Contains(out, `"status": "ok"`) {

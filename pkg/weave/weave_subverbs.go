@@ -140,22 +140,27 @@ func newWeavePrioCmd() *cobra.Command {
 		Use:         "prio <issue> p0|p1|p2|p3",
 		Short:       "Set an issue's priority tier (or --auto to LLM-rank the queue)",
 		Annotations: map[string]string{weaveStatusAnnotation: "implemented; --auto requires an LLM provider"},
-		Args: func(cmd *cobra.Command, args []string) error {
-			if auto && len(args) == 0 {
-				return nil
+		// Validate inside RunE (not Args) so bad input emits a structured
+		// invalid_arg envelope. The leaf's SilenceErrors would otherwise
+		// swallow an Args-returned error, leaving a bare non-zero exit
+		// with no message (the silent `prio <issue> --auto` foot-gun).
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mode := flags.mode()
+			if auto {
+				if len(args) != 0 {
+					return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prio",
+						weavecli.ExitInvalidArg, fmt.Errorf("--auto re-ranks the whole queue and takes no arguments (got %d); use `weave prio <issue> p0|p1|p2|p3` to set a single issue", len(args))))
+				}
+				return runWeavePrio(cmd, 0, "", true, &flags)
 			}
 			if len(args) != 2 {
-				return fmt.Errorf("expected: weave prio <issue> p0|p1|p2|p3")
-			}
-			return nil
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if auto {
-				return runWeavePrio(cmd, 0, "", true, &flags)
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prio",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected: weave prio <issue> p0|p1|p2|p3 (or --auto to LLM-rank the queue)")))
 			}
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("issue must be an integer: %q", args[0])
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prio",
+					weavecli.ExitInvalidArg, fmt.Errorf("issue must be an integer: %q", args[0])))
 			}
 			return runWeavePrio(cmd, id, args[1], false, &flags)
 		},
