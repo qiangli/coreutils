@@ -42,7 +42,7 @@ func newWeaveAddCmd() *cobra.Command {
 	var points int
 	cmd := &cobra.Command{
 		Use:   `add "<title>"`,
-		Short: "Seed an issue into the loom queue",
+		Short: "Seed an issue into the queue",
 		Long: `Files a new issue into the local queue, tags it loom:todo, and
 applies priority + source labels. The next 'weave start' picks it up
 according to the priority sort order.`,

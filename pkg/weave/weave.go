@@ -25,10 +25,11 @@ func newWeaveCmd() *cobra.Command {
 		// silence both at the parent level — subverbs inherit.
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Long: `weave is the v2 human/orchestrator front door over the Loom
-substrate. Use it to seed a queue of issues, fan agentic tools out
-across them in parallel without clobbering each other, and pull
-the converged work back into your repo.
+		Long: `weave is a local, filesystem-based orchestrator for running
+agentic CLIs (codex, claude, opencode, ...) in parallel. Seed a queue
+of issues, fan tools out across them in isolated sandboxes so they
+never clobber each other, then pull the converged work back into your
+repo. It runs entirely on the local filesystem — no server, no forge.
 
 Common-case usage:
 
@@ -37,10 +38,7 @@ Common-case usage:
   bashy weave start -- codex                 # claims top of queue
   bashy weave start -- opencode              # claims next
   bashy weave list                           # what's in flight
-  bashy weave pull                           # absorb merged work
-
-The default dashboard is the forge's label-filtered issue list view.
-See docs/loom-v2-plan.md for the full design.`,
+  bashy weave pull                           # absorb merged work`,
 	}
 
 	// weave is an agent/orchestrator surface, not an interactive human
