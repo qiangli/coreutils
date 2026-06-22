@@ -132,7 +132,7 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, refresh, noCache
 		cachePath = cacheFile()
 	}
 	if cachePath != "" && !noCache && !refresh {
-		if data, ok := freshCache(cachePath, cacheTTL()); ok {
+		if data, ok := freshCache(cachePath, tmplPath, cacheTTL()); ok {
 			_, _ = out.Write(data)
 			return nil
 		}
@@ -525,7 +525,7 @@ func cacheTTL() time.Duration {
 	return time.Hour
 }
 
-func freshCache(path string, ttl time.Duration) ([]byte, bool) {
+func freshCache(path, tmplPath string, ttl time.Duration) ([]byte, bool) {
 	if path == "" {
 		return nil, false
 	}
@@ -535,6 +535,14 @@ func freshCache(path string, ttl time.Duration) ([]byte, bool) {
 	}
 	if fileAge(fi.ModTime()) > ttl {
 		return nil, false
+	}
+	// Invalidate when the binding template has been edited since the cache
+	// was written — otherwise a secrets.map change wouldn't take effect
+	// until the TTL lapsed.
+	if tmplPath != "" {
+		if tfi, terr := os.Stat(tmplPath); terr == nil && tfi.ModTime().After(fi.ModTime()) {
+			return nil, false
+		}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

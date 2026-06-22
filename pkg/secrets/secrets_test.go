@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeVault is an in-memory stand-in for cloudbox's /api/v1/secrets.
@@ -212,6 +213,58 @@ func TestEnvCacheFallbackWhenServerDown(t *testing.T) {
 	}
 	if !strings.Contains(out2.String(), "served from cache") {
 		t.Fatalf("env(2) should note cache fallback: %q", out2.String())
+	}
+}
+
+// TestEnvCacheInvalidatedOnTemplateEdit: editing secrets.map must take
+// effect immediately, not after the TTL — the cache is invalidated when the
+// template is newer than the cache file.
+func TestEnvCacheInvalidatedOnTemplateEdit(t *testing.T) {
+	fv := newFakeVault(t)
+	fv.data["dragon-openai"] = "sk-a"
+	fv.data["dragon-deepseek"] = "sk-b"
+
+	cfgdir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgdir)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("BASHY_SECRETS_TOKEN", "")
+	t.Setenv("DHNT_API_KEY", "")
+	t.Setenv("DHNT_BASE_URL", "")
+	t.Setenv("BASHY_CLOUDBOX_URL", "")
+	mapPath := filepath.Join(cfgdir, "bashy", "secrets.map")
+	if err := os.MkdirAll(filepath.Dir(mapPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mapPath, []byte("OPENAI_API_KEY=@dragon-openai\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runEnvCmd := func() string {
+		cmd := newSecretsCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetArgs([]string{"--url", fv.server.URL, "--token", "test-token", "env"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("env: %v", err)
+		}
+		return out.String()
+	}
+
+	if got := runEnvCmd(); !strings.Contains(got, "export OPENAI_API_KEY='sk-a'") {
+		t.Fatalf("first env = %q", got)
+	}
+
+	// Edit the template (add a binding) and stamp it newer than the cache.
+	if err := os.WriteFile(mapPath, []byte("OPENAI_API_KEY=@dragon-openai\nDEEPSEEK_API_KEY=@dragon-deepseek\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(mapPath, future, future); err != nil {
+		t.Fatal(err)
+	}
+	got := runEnvCmd()
+	if !strings.Contains(got, "export DEEPSEEK_API_KEY='sk-b'") {
+		t.Fatalf("edited template not picked up (stale cache?): %q", got)
 	}
 }
 
