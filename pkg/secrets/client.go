@@ -41,11 +41,13 @@ type Config struct {
 //
 //	URL:   --url flag  >  $BASHY_CLOUDBOX_URL  >  $DHNT_BASE_URL (minus /v1)  >  https://ai.dhnt.io
 //	Token: --token flag > $BASHY_SECRETS_TOKEN > $DHNT_SECRETS_TOKEN
-//	         > ~/.kg/cloudbox-token (the file ycode + kg already share)
+//	         > ~/.config/bashy/secrets-token (XDG-aware, bashy-owned)
 //	         > $DHNT_API_KEY
 //
-// Reusing ~/.kg/cloudbox-token means a user who re-mints that token with the
-// secrets:read scope gets `bashy secrets` working with zero extra config.
+// The on-disk fallback is a dedicated, bashy-owned file so the secrets
+// credential stays separate from the broader LLM-gateway token (and can be
+// minted read-only). $BASHY_SECRETS_TOKEN (env / Keychain) is the preferred
+// primary; the file is just a no-config convenience.
 func (c Config) Resolve() (Client, error) {
 	base := c.URL
 	if base == "" {
@@ -72,7 +74,7 @@ func (c Config) Resolve() (Client, error) {
 		tok = os.Getenv("DHNT_API_KEY")
 	}
 	if tok == "" {
-		return Client{}, fmt.Errorf("no cloudbox token: set --token, $BASHY_SECRETS_TOKEN, ~/.kg/cloudbox-token, or $DHNT_API_KEY (token must carry the secrets:read scope)")
+		return Client{}, fmt.Errorf("no cloudbox token: set --token, $BASHY_SECRETS_TOKEN, ~/.config/bashy/secrets-token, or $DHNT_API_KEY (token must carry the secrets:read scope)")
 	}
 	return Client{
 		BaseURL: base,
@@ -81,12 +83,25 @@ func (c Config) Resolve() (Client, error) {
 	}, nil
 }
 
-func readTokenFile() string {
+// tokenFilePath is the bashy-owned on-disk secrets-token location:
+// $XDG_CONFIG_HOME/bashy/secrets-token, else ~/.config/bashy/secrets-token.
+func tokenFilePath() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "bashy", "secrets-token")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	b, err := os.ReadFile(filepath.Join(home, ".kg", "cloudbox-token"))
+	return filepath.Join(home, ".config", "bashy", "secrets-token")
+}
+
+func readTokenFile() string {
+	p := tokenFilePath()
+	if p == "" {
+		return ""
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return ""
 	}

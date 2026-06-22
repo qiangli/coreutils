@@ -293,6 +293,33 @@ func TestResolveTokenPrecedence(t *testing.T) {
 	}
 }
 
+func TestResolveTokenFromFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("BASHY_SECRETS_TOKEN", "")
+	t.Setenv("DHNT_SECRETS_TOKEN", "")
+	t.Setenv("DHNT_API_KEY", "")
+	if err := os.MkdirAll(filepath.Join(dir, "bashy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bashy", "secrets-token"), []byte("file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Config{URL: "http://x"}.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Token != "file-token" {
+		t.Fatalf("token = %q, want file-token (trimmed) from ~/.config/bashy/secrets-token", c.Token)
+	}
+	// $BASHY_SECRETS_TOKEN must still win over the file.
+	t.Setenv("BASHY_SECRETS_TOKEN", "env-token")
+	c, _ = Config{URL: "http://x"}.Resolve()
+	if c.Token != "env-token" {
+		t.Fatalf("token = %q, want env-token (env beats file)", c.Token)
+	}
+}
+
 func TestResolveURLFromDHNT(t *testing.T) {
 	t.Setenv("BASHY_CLOUDBOX_URL", "")
 	t.Setenv("DHNT_BASE_URL", "https://ai.dhnt.io/v1")
