@@ -68,18 +68,38 @@ func newEnvCmd(cfg *Config) *cobra.Command {
 	var refresh, noCache bool
 	cmd := &cobra.Command{
 		Use:   "env",
-		Short: "Print 'export NAME=VALUE' lines for eval in your shell rc",
-		Long: `Print the vault as shell export statements, intended for:
+		Short: "Resolve a local binding template into 'export NAME=VALUE' lines for eval",
+		Long: `Resolve a LOCAL binding template into shell export statements, for:
 
   eval "$(bashy secrets env)"
 
-Results are cached (mode 0600) under $XDG_CACHE_HOME/bashy and reused for
-the TTL ($BASHY_SECRETS_TTL, default 1h). If cloudbox is unreachable the
-last good cache is printed instead, so 'env' never breaks shell startup —
+Each line is LOCAL_NAME=RHS. An RHS beginning with '@' is a cloudbox secret
+REFERENCE (@name, or @{name}) resolved from the vault; any other RHS is a
+literal value. The template contains NO secrets, so it is safe to commit:
+
+  # ~/.config/bashy/secrets.map
+  OPENAI_API_KEY=@dragon-aider-openai
+  DEEPSEEK_API_KEY=@dragon-aider-deepseek
+  ANTHROPIC_API_KEY=@monkey-opencode-anthropic
+  EDITOR=vim                      # a bare literal, not a reference
+
+env fetches each referenced value from cloudbox and emits
+'export OPENAI_API_KEY=<real value>'. The TOOL owns the env-var name and
+casing; cloudbox only resolves @ref -> value. Only the references you list
+are materialized — nothing else in the vault leaks into your shell.
+
+Default template: $XDG_CONFIG_HOME/bashy/secrets.map (else
+~/.config/bashy/secrets.map); pass a path to override. Output is cached
+(mode 0600, TTL $BASHY_SECRETS_TTL, default 1h) and the last good cache is
+reused when cloudbox is unreachable, so env never breaks shell startup —
 it always exits 0 and prints a leading comment on degraded paths.`,
-		Args: cobra.NoArgs,
-		RunE: func(c *cobra.Command, _ []string) error {
-			return runEnv(c.OutOrStdout(), c.ErrOrStderr(), *cfg, refresh, noCache)
+		Args: cobra.RangeArgs(0, 1),
+		RunE: func(c *cobra.Command, args []string) error {
+			tmpl := ""
+			if len(args) == 1 {
+				tmpl = args[0]
+			}
+			return runEnv(c.OutOrStdout(), c.ErrOrStderr(), *cfg, tmpl, refresh, noCache)
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "ignore the cache and fetch fresh")
@@ -87,15 +107,47 @@ it always exits 0 and prints a leading comment on degraded paths.`,
 	return cmd
 }
 
-func runEnv(out, errOut io.Writer, cfg Config, refresh, noCache bool) error {
+// binding is one template line: a local env-var NAME mapped to either a
+// cloudbox secret REFERENCE ($ref / ${ref}, resolved from the vault) or a
+// LITERAL value (bare RHS, passed through verbatim).
+type binding struct {
+	local   string
+	ref     string // vault reference name, when isRef
+	literal string // literal value, when !isRef
+	isRef   bool
+}
+
+func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, refresh, noCache bool) error {
 	// env must never break shell startup: on any error fall back to cache,
 	// and if even that fails emit a harmless comment and exit 0.
-	cachePath := cacheFile()
-	if !noCache && !refresh {
+	usingDefault := tmplPath == ""
+	if usingDefault {
+		tmplPath = defaultTemplatePath()
+	}
+
+	// Cache only the default-template render (a custom path is an ad-hoc
+	// invocation; caching it under the shared key would poison the default).
+	cachePath := ""
+	if usingDefault {
+		cachePath = cacheFile()
+	}
+	if cachePath != "" && !noCache && !refresh {
 		if data, ok := freshCache(cachePath, cacheTTL()); ok {
 			_, _ = out.Write(data)
 			return nil
 		}
+	}
+
+	bindings, terr := readTemplate(tmplPath)
+	if terr != nil {
+		// No template yet (or unreadable) — guide the user, don't break.
+		fmt.Fprintf(errOut, "bashy secrets: %v\n", terr)
+		fmt.Fprintf(out, "# bashy secrets: no binding template (%v)\n# create %s with lines like ENV_NAME=@<cloudbox secret name>\n", terr, tmplPath)
+		return nil
+	}
+	if len(bindings) == 0 {
+		fmt.Fprintf(out, "# bashy secrets: template %s has no ENV_NAME=ref bindings\n", tmplPath)
+		return nil
 	}
 
 	client, err := cfg.Resolve()
@@ -103,8 +155,11 @@ func runEnv(out, errOut io.Writer, cfg Config, refresh, noCache bool) error {
 		var items []Item
 		items, err = client.List()
 		if err == nil {
-			rendered := renderEnv(items)
-			if !noCache {
+			rendered, missing := renderEnv(bindings, items)
+			for _, m := range missing {
+				fmt.Fprintf(errOut, "bashy secrets: %q -> %q not found in vault; skipped\n", m.local, m.ref)
+			}
+			if cachePath != "" && !noCache {
 				_ = writeCache(cachePath, rendered)
 			}
 			_, _ = out.Write(rendered)
@@ -112,8 +167,8 @@ func runEnv(out, errOut io.Writer, cfg Config, refresh, noCache bool) error {
 		}
 	}
 
-	// Degraded: try any cache regardless of age.
-	if !noCache {
+	// Degraded: try any cache regardless of age (default template only).
+	if cachePath != "" && !noCache {
 		if data, e := os.ReadFile(cachePath); e == nil {
 			fmt.Fprintf(errOut, "bashy secrets: cloudbox unreachable (%v); using cached values\n", err)
 			fmt.Fprintf(out, "# bashy secrets: served from cache (cloudbox unreachable: %v)\n", err)
@@ -126,14 +181,94 @@ func runEnv(out, errOut io.Writer, cfg Config, refresh, noCache bool) error {
 	return nil
 }
 
-// renderEnv turns secrets into deterministic, safely-quoted export lines.
-func renderEnv(items []Item) []byte {
-	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-	var b strings.Builder
-	for _, it := range items {
-		fmt.Fprintf(&b, "export %s=%s\n", it.Name, shellSingleQuote(it.Value))
+// readTemplate parses a binding template: 'LOCAL_NAME=RHS' lines. A RHS that
+// starts with '@' is a cloudbox secret REFERENCE (@name or @{name}) resolved
+// from the vault; any other RHS is a LITERAL value passed through verbatim.
+// Comments (#) and blank lines are skipped; the local name must be a valid
+// env identifier; ref names may contain dashes (e.g. host-app-provider).
+func readTemplate(path string) ([]binding, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
-	return []byte(b.String())
+	defer f.Close()
+	var out []binding
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		eq := strings.IndexByte(line, '=')
+		if eq <= 0 {
+			continue
+		}
+		local := strings.TrimSpace(line[:eq])
+		if !validName(local) {
+			continue
+		}
+		// Detect the '@' ref sigil on the RAW RHS (before unquoting), so a
+		// quoted literal like '@foo' stays a literal.
+		raw := strings.TrimSpace(line[eq+1:])
+		if strings.HasPrefix(raw, "@") {
+			ref := strings.TrimSpace(stripInlineComment(raw))
+			ref = strings.TrimPrefix(ref, "@")
+			ref = strings.TrimSuffix(strings.TrimPrefix(ref, "{"), "}") // @{name}
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			out = append(out, binding{local: local, ref: ref, isRef: true})
+			continue
+		}
+		out = append(out, binding{local: local, literal: unquote(stripInlineComment(raw)), isRef: false})
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// renderEnv resolves each binding against the fetched vault items and emits
+// deterministic, safely-quoted export lines. Literal bindings pass through;
+// references absent from the vault are returned in `missing` (and omitted)
+// rather than failing the whole render.
+func renderEnv(bindings []binding, items []Item) (out []byte, missing []binding) {
+	byName := make(map[string]string, len(items))
+	for _, it := range items {
+		byName[it.Name] = it.Value
+	}
+	sorted := append([]binding(nil), bindings...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].local < sorted[j].local })
+	var b strings.Builder
+	for _, bd := range sorted {
+		val := bd.literal
+		if bd.isRef {
+			v, ok := byName[bd.ref]
+			if !ok {
+				missing = append(missing, bd)
+				continue
+			}
+			val = v
+		}
+		fmt.Fprintf(&b, "export %s=%s\n", bd.local, shellSingleQuote(val))
+	}
+	return []byte(b.String()), missing
+}
+
+// defaultTemplatePath is the XDG-aware default binding template:
+// $XDG_CONFIG_HOME/bashy/secrets.map, else ~/.config/bashy/secrets.map.
+func defaultTemplatePath() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "bashy", "secrets.map")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "secrets.map"
+	}
+	return filepath.Join(home, ".config", "bashy", "secrets.map")
 }
 
 // shellSingleQuote wraps s in single quotes, the only POSIX-safe way to

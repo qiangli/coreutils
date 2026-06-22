@@ -81,6 +81,7 @@ func run(t *testing.T, cfg Config, args ...string) (string, string, error) {
 	t.Helper()
 	cache := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	// Neutralize ambient token/url discovery so tests are hermetic.
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
 	t.Setenv("DHNT_SECRETS_TOKEN", "")
@@ -125,13 +126,42 @@ KIMI_API_KEY="sk-quoted"
 		t.Fatalf("quoted value = %q, want sk-quoted", fv.data["KIMI_API_KEY"])
 	}
 
-	out, _, err = run(t, fv.cfg(), "env")
+	// A binding template maps LOCAL env names to vault REFERENCES (the
+	// tool owns naming/casing; GH_TOKEN renamed to prove the indirection).
+	tmpl := filepath.Join(t.TempDir(), "secrets.map")
+	if err := os.WriteFile(tmpl, []byte("# binding\nOPENAI_API_KEY=@OPENAI_API_KEY\nGH_TOKEN=@GITHUB_TOKEN\nKIMI=@{KIMI_API_KEY}\nEDITOR=vim\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = run(t, fv.cfg(), "env", tmpl)
 	if err != nil {
 		t.Fatalf("env: %v", err)
 	}
-	want := "export GITHUB_TOKEN='ghp_xyz'\nexport KIMI_API_KEY='sk-quoted'\nexport OPENAI_API_KEY='sk-proj-abc'\n"
+	// @refs resolve from the vault; bare EDITOR=vim passes through literal;
+	// @{KIMI_API_KEY} brace form works too. Sorted by local name.
+	want := "export EDITOR='vim'\nexport GH_TOKEN='ghp_xyz'\nexport KIMI='sk-quoted'\nexport OPENAI_API_KEY='sk-proj-abc'\n"
 	if out != want {
 		t.Fatalf("env out =\n%q\nwant\n%q", out, want)
+	}
+}
+
+// TestEnvMissingRefSkipped: a template ref not present in the vault is
+// skipped (with a stderr note), not fatal.
+func TestEnvMissingRefSkipped(t *testing.T) {
+	fv := newFakeVault(t)
+	fv.data["OPENAI_API_KEY"] = "sk-ok"
+	tmpl := filepath.Join(t.TempDir(), "secrets.map")
+	if err := os.WriteFile(tmpl, []byte("OPENAI_API_KEY=@OPENAI_API_KEY\nGHOST=@does-not-exist\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, err := run(t, fv.cfg(), "env", tmpl)
+	if err != nil {
+		t.Fatalf("env: %v", err)
+	}
+	if out != "export OPENAI_API_KEY='sk-ok'\n" {
+		t.Fatalf("env out = %q", out)
+	}
+	if !strings.Contains(errOut, "GHOST") || !strings.Contains(errOut, "not found") {
+		t.Fatalf("missing-ref should warn on stderr, got %q", errOut)
 	}
 }
 
@@ -141,6 +171,15 @@ func TestEnvCacheFallbackWhenServerDown(t *testing.T) {
 
 	cache := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", cache)
+	// Default template lives under XDG_CONFIG_HOME/bashy/secrets.map.
+	cfgdir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgdir)
+	if err := os.MkdirAll(filepath.Join(cfgdir, "bashy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgdir, "bashy", "secrets.map"), []byte("DEEPSEEK_API_KEY=@DEEPSEEK_API_KEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
 	t.Setenv("DHNT_API_KEY", "")
 	t.Setenv("DHNT_BASE_URL", "")
