@@ -48,44 +48,44 @@ func weaveTestRepo(t *testing.T) string {
 }
 
 func TestMaybeAutoCommitCommitsDirtyTrackedAndUntrackedChanges(t *testing.T) {
-	sandbox := weaveTestRepo(t)
-	weaveTestGit(t, sandbox, "checkout", "-qb", "agent/weave-issue-1")
-	if err := os.WriteFile(filepath.Join(sandbox, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+	workspace := weaveTestRepo(t)
+	weaveTestGit(t, workspace, "checkout", "-qb", "agent/weave-issue-1")
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sandbox, "new.txt"), []byte("new\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "new.txt"), []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	ev := weaveCollectTerminalEvidence(sandbox, "main", "", false)
+	ev := weaveCollectTerminalEvidence(workspace, "main", "", false)
 	if !ev.Dirty || ev.UntrackedFiles != 1 || ev.CommitsAhead != 0 {
 		t.Fatalf("pre auto-commit evidence = %+v, want dirty tracked changes, 1 untracked, 0 ahead", ev)
 	}
 
-	committed, err := maybeAutoCommit(sandbox, "weave(auto): issue 1 — test")
+	committed, err := maybeAutoCommit(workspace, "weave(auto): issue 1 — test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !committed {
 		t.Fatal("maybeAutoCommit reported no commit")
 	}
-	ev = weaveCollectTerminalEvidence(sandbox, "main", "", false)
+	ev = weaveCollectTerminalEvidence(workspace, "main", "", false)
 	if ev.Dirty || ev.UntrackedFiles != 0 || ev.CommitsAhead != 1 {
 		t.Fatalf("post auto-commit evidence = %+v, want clean with 1 commit ahead", ev)
 	}
 }
 
-func TestAutoCommitOffLeavesDirtySandboxUncommitted(t *testing.T) {
-	sandbox := weaveTestRepo(t)
-	weaveTestGit(t, sandbox, "checkout", "-qb", "agent/weave-issue-1")
-	if err := os.WriteFile(filepath.Join(sandbox, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+func TestAutoCommitOffLeavesDirtyWorkspaceUncommitted(t *testing.T) {
+	workspace := weaveTestRepo(t)
+	weaveTestGit(t, workspace, "checkout", "-qb", "agent/weave-issue-1")
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sandbox, "new.txt"), []byte("new\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "new.txt"), []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	ev := weaveCollectTerminalEvidence(sandbox, "main", "", false)
+	ev := weaveCollectTerminalEvidence(workspace, "main", "", false)
 	if !ev.Dirty || ev.UntrackedFiles != 1 || ev.CommitsAhead != 0 {
 		t.Fatalf("auto-commit off evidence = %+v, want dirty tracked changes, 1 untracked, 0 ahead", ev)
 	}
@@ -100,17 +100,17 @@ func TestRunWeaveReverifyRefreshesManualCommitAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox := filepath.Join(dir, "sandboxes", "issue-1")
-	if err := os.MkdirAll(filepath.Dir(sandbox), 0o755); err != nil {
+	workspace := filepath.Join(dir, "workspaces", "issue-1")
+	if err := os.MkdirAll(filepath.Dir(workspace), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	weaveTestGit(t, root, "clone", "--local", "--no-hardlinks", root, sandbox)
-	weaveTestGit(t, sandbox, "checkout", "-qb", "agent/weave-issue-1")
-	if err := os.WriteFile(filepath.Join(sandbox, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+	weaveTestGit(t, root, "clone", "--local", "--no-hardlinks", root, workspace)
+	weaveTestGit(t, workspace, "checkout", "-qb", "agent/weave-issue-1")
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	weaveTestGit(t, sandbox, "add", ".")
-	weaveTestGit(t, sandbox, "commit", "-qm", "manual")
+	weaveTestGit(t, workspace, "add", ".")
+	weaveTestGit(t, workspace, "commit", "-qm", "manual")
 
 	dirtyExit := 0
 	q := &weaveQueue{
@@ -120,7 +120,7 @@ func TestRunWeaveReverifyRefreshesManualCommitAttestation(t *testing.T) {
 			ID:            1,
 			Title:         "manual residue",
 			State:         "submitted",
-			Sandbox:       sandbox,
+			Workspace:     workspace,
 			Branch:        "agent/weave-issue-1",
 			Created:       time.Now().UTC(),
 			VerifyCommand: "printf rerun > verify.log",
@@ -163,7 +163,7 @@ func TestRunWeaveReverifyRefreshesManualCommitAttestation(t *testing.T) {
 	if got.Dirty || got.DirtyFiles != 0 || got.CommitsAhead != 1 || got.VerifyExit == nil || *got.VerifyExit != 0 || got.VerifyTree != "head" {
 		t.Fatalf("reverified item = %+v, want clean, 1 ahead, verify exit 0 on head", got)
 	}
-	if b, err := os.ReadFile(filepath.Join(sandbox, "verify.log")); err != nil || string(b) != "rerun" {
+	if b, err := os.ReadFile(filepath.Join(workspace, "verify.log")); err != nil || string(b) != "rerun" {
 		t.Fatalf("verify command did not rerun: %q err=%v", b, err)
 	}
 }

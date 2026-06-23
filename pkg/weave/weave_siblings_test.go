@@ -35,18 +35,18 @@ func TestWeaveSyncSiblingDeps(t *testing.T) {
 	target := filepath.Join(tmp, "bashy")
 	gitInitCommit(t, target, "go.mod", "module x\n\nrequire mvdan.cc/sh/v3 v3.0.0\n\nreplace mvdan.cc/sh/v3 => ../sh\n")
 
-	// sandbox layout: <queue>/sandboxes/issue-1 ; ../sh resolves to <queue>/sandboxes/sh
-	sandbox := filepath.Join(tmp, "queue", "sandboxes", "issue-1")
-	os.MkdirAll(sandbox, 0o755)
+	// workspace layout: <queue>/workspaces/issue-1 ; ../sh resolves to <queue>/workspaces/sh
+	workspace := filepath.Join(tmp, "queue", "workspaces", "issue-1")
+	os.MkdirAll(workspace, 0o755)
 
-	synced, failed := weaveSyncSiblingDeps(target, sandbox)
+	synced, failed := weaveSyncSiblingDeps(target, workspace)
 	if len(failed) != 0 {
 		t.Fatalf("unexpected failures: %v", failed)
 	}
 	if len(synced) != 1 || synced[0] != "sh" {
 		t.Fatalf("synced = %v, want [sh]", synced)
 	}
-	dst := filepath.Join(tmp, "queue", "sandboxes", "sh")
+	dst := filepath.Join(tmp, "queue", "workspaces", "sh")
 	if fi, err := os.Stat(filepath.Join(dst, ".git")); err != nil || !fi.IsDir() {
 		t.Fatalf("expected git clone at %s", dst)
 	}
@@ -59,7 +59,7 @@ func TestWeaveSyncSiblingDeps(t *testing.T) {
 	// staleness fix) and discard any stray edit a prior worker left.
 	headV2 := gitInitCommit(t, sh, "v.txt", "v2")
 	os.WriteFile(filepath.Join(dst, "stray.txt"), []byte("worker junk"), 0o644)
-	synced, _ = weaveSyncSiblingDeps(target, sandbox)
+	synced, _ = weaveSyncSiblingDeps(target, workspace)
 	if len(synced) != 1 {
 		t.Fatalf("re-sync synced = %v", synced)
 	}

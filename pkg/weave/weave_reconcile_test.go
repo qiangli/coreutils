@@ -66,49 +66,49 @@ func gitT(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// setupMergeFixture builds a user repo (main + seed) and a sandbox clone
-// with one extra commit, returning (root, sandbox, sandboxHeadSha). The
-// sandbox commit is NOT yet present in root — the caller decides whether
+// setupMergeFixture builds a user repo (main + seed) and a workspace clone
+// with one extra commit, returning (root, workspace, workspaceHeadSha). The
+// workspace commit is NOT yet present in root — the caller decides whether
 // to merge it, exercising both arms of weaveItemMerged.
-func setupMergeFixture(t *testing.T) (root, sandbox, sha string) {
+func setupMergeFixture(t *testing.T) (root, workspace, sha string) {
 	t.Helper()
 	root = t.TempDir()
 	gitT(t, root, "init", "-q", "-b", "main")
 	gitT(t, root, "commit", "--allow-empty", "-qm", "seed")
 
-	sandbox = t.TempDir()
-	gitT(t, sandbox, "clone", "-q", root, ".")
-	gitT(t, sandbox, "checkout", "-q", "-b", "agent/weave-issue-1")
-	gitT(t, sandbox, "commit", "--allow-empty", "-qm", "agent work")
-	sha = gitT(t, sandbox, "rev-parse", "HEAD")
-	return root, sandbox, sha
+	workspace = t.TempDir()
+	gitT(t, workspace, "clone", "-q", root, ".")
+	gitT(t, workspace, "checkout", "-q", "-b", "agent/weave-issue-1")
+	gitT(t, workspace, "commit", "--allow-empty", "-qm", "agent work")
+	sha = gitT(t, workspace, "rev-parse", "HEAD")
+	return root, workspace, sha
 }
 
 func TestWeaveItemMerged(t *testing.T) {
-	root, sandbox, sha := setupMergeFixture(t)
+	root, workspace, sha := setupMergeFixture(t)
 
-	// Before merge: the agent commit lives only in the sandbox clone, so
+	// Before merge: the agent commit lives only in the workspace clone, so
 	// the sha is not reachable from main in root — not merged. This is
 	// the exact bug case `git branch -d` could never detect (the branch
 	// was never fetched into the user repo).
-	it := &weaveItem{State: "submitted", Head: sha, Sandbox: sandbox, Branch: "agent/weave-issue-1", CommitsAhead: 1}
+	it := &weaveItem{State: "submitted", Head: sha, Workspace: workspace, Branch: "agent/weave-issue-1", CommitsAhead: 1}
 	if weaveItemMerged(root, "main", it) {
-		t.Fatalf("expected not-merged before the sandbox commit lands in main")
+		t.Fatalf("expected not-merged before the workspace commit lands in main")
 	}
 
 	// Merge the agent branch into root's main (simulating an out-of-band
 	// merge / a prior `weave pull`).
-	gitT(t, root, "fetch", "-q", sandbox, "agent/weave-issue-1:agent/weave-issue-1")
+	gitT(t, root, "fetch", "-q", workspace, "agent/weave-issue-1:agent/weave-issue-1")
 	gitT(t, root, "merge", "-q", "--no-ff", "-m", "merge issue 1", "agent/weave-issue-1")
 
 	if !weaveItemMerged(root, "main", it) {
-		t.Fatalf("expected merged after the sandbox commit is an ancestor of main")
+		t.Fatalf("expected merged after the workspace commit is an ancestor of main")
 	}
 
-	// No HEAD and no sandbox → conservatively not-merged.
+	// No HEAD and no workspace → conservatively not-merged.
 	empty := &weaveItem{State: "submitted"}
 	if weaveItemMerged(root, "main", empty) {
-		t.Fatalf("expected not-merged with no recorded head and no sandbox")
+		t.Fatalf("expected not-merged with no recorded head and no workspace")
 	}
 
 	// Zero commits ahead: HEAD equals the base commit, a trivial
@@ -123,28 +123,28 @@ func TestWeaveItemMerged(t *testing.T) {
 	}
 }
 
-func TestWeaveItemMergedFallsBackToSandboxHead(t *testing.T) {
-	root, sandbox, sha := setupMergeFixture(t)
-	gitT(t, root, "fetch", "-q", sandbox, "agent/weave-issue-1:agent/weave-issue-1")
+func TestWeaveItemMergedFallsBackToWorkspaceHead(t *testing.T) {
+	root, workspace, sha := setupMergeFixture(t)
+	gitT(t, root, "fetch", "-q", workspace, "agent/weave-issue-1:agent/weave-issue-1")
 	gitT(t, root, "merge", "-q", "--no-ff", "-m", "merge issue 1", "agent/weave-issue-1")
 
-	// Head unset on the item: weaveItemMerged should read the sandbox's
+	// Head unset on the item: weaveItemMerged should read the workspace's
 	// live HEAD as a fallback and still resolve the merge state.
-	it := &weaveItem{State: "submitted", Sandbox: sandbox, CommitsAhead: 1}
+	it := &weaveItem{State: "submitted", Workspace: workspace, CommitsAhead: 1}
 	if !weaveItemMerged(root, "main", it) {
-		t.Fatalf("expected merged via sandbox-HEAD fallback (sha %s)", sha[:7])
+		t.Fatalf("expected merged via workspace-HEAD fallback (sha %s)", sha[:7])
 	}
 }
 
 func TestWeaveReconcileMerged(t *testing.T) {
-	root, sandbox, sha := setupMergeFixture(t)
-	gitT(t, root, "fetch", "-q", sandbox, "agent/weave-issue-1:agent/weave-issue-1")
+	root, workspace, sha := setupMergeFixture(t)
+	gitT(t, root, "fetch", "-q", workspace, "agent/weave-issue-1:agent/weave-issue-1")
 	gitT(t, root, "merge", "-q", "--no-ff", "-m", "merge issue 1", "agent/weave-issue-1")
 
 	q := &weaveQueue{Items: []*weaveItem{
-		{ID: 1, State: "submitted", Head: sha, Sandbox: sandbox, CommitsAhead: 1}, // merged → flip
-		{ID: 2, State: "submitted", Head: "deadbeef" + sha[8:], CommitsAhead: 1},  // bogus/unmerged → keep
-		{ID: 3, State: "working", Head: sha, CommitsAhead: 1},                     // not submitted → keep
+		{ID: 1, State: "submitted", Head: sha, Workspace: workspace, CommitsAhead: 1}, // merged → flip
+		{ID: 2, State: "submitted", Head: "deadbeef" + sha[8:], CommitsAhead: 1},      // bogus/unmerged → keep
+		{ID: 3, State: "working", Head: sha, CommitsAhead: 1},                         // not submitted → keep
 	}}
 	n := weaveReconcileMerged(root, "main", q)
 	if n != 1 {

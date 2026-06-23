@@ -425,8 +425,8 @@ func buildWeaveAutopilotPrompt(repoRoot, queueDir, brief string) (string, error)
 		if it.Tool != "" {
 			fmt.Fprintf(&b, " tool=%s", it.Tool)
 		}
-		if it.Sandbox != "" {
-			fmt.Fprintf(&b, " sandbox=%s", it.Sandbox)
+		if it.Workspace != "" {
+			fmt.Fprintf(&b, " workspace=%s", it.Workspace)
 		}
 		b.WriteByte('\n')
 	}

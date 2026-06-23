@@ -634,7 +634,7 @@ type FetchOptions struct {
 	// Remote is either a configured remote name ("origin") or, when no
 	// such remote exists, a URL or local filesystem path fetched
 	// anonymously. The local-path form (with RefSpecs) is what weave's
-	// `git fetch --no-tags <sandbox> branch:branch` needs.
+	// `git fetch --no-tags <workspace> branch:branch` needs.
 	Remote   string
 	RefSpecs []string // e.g. "branch:branch"; bare branch names are expanded to refs/heads/
 	NoTags   bool
@@ -643,7 +643,7 @@ type FetchOptions struct {
 
 // Fetch fetches refs from opts.Remote without updating the working
 // tree. When opts.Remote is not a configured remote it is treated as a
-// URL/path and fetched through an anonymous remote, so a local sandbox
+// URL/path and fetched through an anonymous remote, so a local workspace
 // clone can be fetched by path with an explicit refspec.
 func Fetch(opts FetchOptions) (*Result, error) {
 	if opts.RepoPath == "" {
@@ -869,7 +869,7 @@ func Checkout(opts CheckoutOptions) (*Result, error) {
 }
 
 // RemoteRemove removes the named remote (`git remote remove <name>`).
-// weave uses this to strip `origin` from a sandbox clone so an escaped
+// weave uses this to strip `origin` from a workspace clone so an escaped
 // agent can't follow it back to the user's real repo.
 func RemoteRemove(repoPath, name string) (*Result, error) {
 	if repoPath == "" {

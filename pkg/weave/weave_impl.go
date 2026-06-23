@@ -105,14 +105,21 @@ type weaveItem struct {
 	// Tool is the short (argv[0] basename) name of the CLI working
 	// the issue — codex, claude, gemini, opencode, bash — recorded
 	// at claim time, updated on resume.
-	Tool       string    `json:"tool,omitempty"`
-	Sandbox    string    `json:"sandbox,omitempty"`
-	Branch     string    `json:"branch,omitempty"`
-	Created    time.Time `json:"created"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	FinishedAt time.Time `json:"finished_at,omitempty"`
+	Tool      string `json:"tool,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	// legacyWorkspace reads the pre-rename queue.json key. The on-disk
+	// isolation dir + this field were called "sandbox" before the
+	// userland/workspace/sandbox/cluster taxonomy reserved "sandbox" for
+	// podman/OCI containers. loadWeaveQueue migrates it into Workspace on
+	// load (then it stops being written — omitempty), so existing queues
+	// keep their stored clone paths without a migration step.
+	LegacyWorkspace string    `json:"sandbox,omitempty"`
+	Branch          string    `json:"branch,omitempty"`
+	Created         time.Time `json:"created"`
+	StartedAt       time.Time `json:"started_at,omitempty"`
+	FinishedAt      time.Time `json:"finished_at,omitempty"`
 	// CommitsAhead and Head are the wrapper's own git measurement of
-	// the sandbox branch at terminal time (rev-list count over base,
+	// the workspace branch at terminal time (rev-list count over base,
 	// plus HEAD). They are the EVIDENCE behind a submitted state for
 	// a run that did not exit 0: state never says submitted unless
 	// the substrate itself verified shippable commits, and the exit
@@ -122,7 +129,7 @@ type weaveItem struct {
 	Head         string `json:"head,omitempty"`
 	// VerifyCommand is the substrate-verified outcome hook, supplied
 	// at `weave add --verify "<cmd>"`. The WRAPPER runs it via
-	// `bash -c` inside the sandbox at terminal time — when the tool
+	// `bash -c` inside the workspace at terminal time — when the tool
 	// exited 0 or left commits ahead — and records VerifyExit and
 	// VerifyOutput (last 2000 bytes) as evidence. Verify never changes
 	// the terminal state itself; `weave pull` refuses to merge
@@ -160,7 +167,7 @@ type weaveItem struct {
 	// cleared on terminal state.
 	CtlSock string `json:"ctl_sock,omitempty"`
 	// LaunchSpec is the durable command/watchdog recipe needed to
-	// relaunch the same worker in the same sandbox after `weave pause`.
+	// relaunch the same worker in the same workspace after `weave pause`.
 	LaunchSpec *weaveLaunchSpec `json:"launch_spec,omitempty"`
 }
 
@@ -200,7 +207,7 @@ func isTerminalState(s string) bool {
 }
 
 // isPrunableState reports whether `weave prune` will sweep an item in
-// this state: the terminal states that leave a reclaimable sandbox
+// this state: the terminal states that leave a reclaimable workspace
 // behind. "submitted" is excluded — it's awaiting `weave pull` — unless
 // reconciliation has already flipped it to "done" (see
 // weaveReconcileMerged).
@@ -248,7 +255,7 @@ func weaveQueueDir(repoRoot string) (string, error) {
 		return "", err
 	}
 	// Containment: the tag must NOT spell out the repo path — the
-	// sandbox lives under this dir, so a path-mangled tag hands every
+	// workspace lives under this dir, so a path-mangled tag hands every
 	// subagent the origin location (one escape decoded exactly that).
 	// basename keeps the dir human-navigable; the hash disambiguates
 	// same-named repos without revealing where they live.
@@ -257,7 +264,7 @@ func weaveQueueDir(repoRoot string) (string, error) {
 	tag := fmt.Sprintf("%s-%08x", filepath.Base(repoRoot), h.Sum32())
 	dir := filepath.Join(weaveStateRoot(home), tag)
 	// One-time migration from a legacy root — both the same tag and the older
-	// path-mangled tag — so existing queues (history, logs, sandboxes) carry
+	// path-mangled tag — so existing queues (history, logs, workspaces) carry
 	// over. Newest legacy root wins.
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		r := strings.NewReplacer(string(filepath.Separator), "_", ":", "_")
@@ -297,6 +304,16 @@ func loadWeaveQueue(dir string) (*weaveQueue, error) {
 	}
 	if q.NextID == 0 {
 		q.NextID = 1
+	}
+	// Back-compat: migrate the pre-rename "sandbox" key into Workspace for
+	// queues written before the sandbox→workspace taxonomy rename. The
+	// stored clone path is absolute, so old items keep working; clearing
+	// the legacy field means it stops being written on the next save.
+	for i := range q.Items {
+		if q.Items[i].Workspace == "" && q.Items[i].LegacyWorkspace != "" {
+			q.Items[i].Workspace = q.Items[i].LegacyWorkspace
+		}
+		q.Items[i].LegacyWorkspace = ""
 	}
 	return &q, nil
 }
@@ -384,24 +401,24 @@ func weaveDurationCol(it *weaveItem) string {
 }
 
 // weaveMeasureBranch is the wrapper's first-hand git interrogation of
-// a sandbox at terminal time: commits ahead of base and the HEAD sha.
+// a workspace at terminal time: commits ahead of base and the HEAD sha.
 // This — not the tool's exit code, and never an agent's claim — is
 // what qualifies a non-zero exit for the submitted state.
-func weaveMeasureBranch(sandbox, base string) (ahead int, head string) {
-	if sandbox == "" {
+func weaveMeasureBranch(workspace, base string) (ahead int, head string) {
+	if workspace == "" {
 		return 0, ""
 	}
-	if out, err := exec.Command("git", "-C", sandbox, "rev-list", "--count", base+"..HEAD").Output(); err == nil {
+	if out, err := exec.Command("git", "-C", workspace, "rev-list", "--count", base+"..HEAD").Output(); err == nil {
 		ahead, _ = strconv.Atoi(strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("git", "-C", sandbox, "rev-parse", "HEAD").Output(); err == nil {
+	if out, err := exec.Command("git", "-C", workspace, "rev-parse", "HEAD").Output(); err == nil {
 		head = strings.TrimSpace(string(out))
 	}
 	return ahead, head
 }
 
 // weaveItemMerged reports whether an item's work is already contained
-// in the base branch — its recorded terminal HEAD sha (or the sandbox's
+// in the base branch — its recorded terminal HEAD sha (or the workspace's
 // live HEAD, as a fallback) is an ancestor of base in the USER repo.
 // This is git's own truth, independent of the recorded queue State, and
 // is what lets the lifecycle verbs detect a "submitted" item that landed
@@ -412,8 +429,8 @@ func weaveMeasureBranch(sandbox, base string) (ahead int, head string) {
 // commit object is reachable from base in the user repo. A branch that
 // was never fetched (its commits absent from the user repo) reads as
 // not-merged — the safe answer, since nothing has actually landed. We
-// check the sandbox HEAD, never `git branch -d` against the user repo:
-// agent branches live only in the sandbox clone and are never fetched
+// check the workspace HEAD, never `git branch -d` against the user repo:
+// agent branches live only in the workspace clone and are never fetched
 // unless `weave pull` ran, so a branch-name check is a near-permanent
 // no-op (the bug this replaces).
 func weaveItemMerged(root, base string, it *weaveItem) bool {
@@ -431,8 +448,8 @@ func weaveItemMerged(root, base string, it *weaveItem) bool {
 		return false
 	}
 	sha := it.Head
-	if sha == "" && it.Sandbox != "" {
-		if out, err := exec.Command("git", "-C", it.Sandbox, "rev-parse", "HEAD").Output(); err == nil {
+	if sha == "" && it.Workspace != "" {
+		if out, err := exec.Command("git", "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
 			sha = strings.TrimSpace(string(out))
 		}
 	}
@@ -465,11 +482,11 @@ func weaveReconcileMerged(root, base string, q *weaveQueue) int {
 // separately from untracked litter. The pull safety gate cares about
 // tracked changes because they can make verify attest bytes that HEAD
 // will not merge; untracked files are preserved as context only.
-func weaveMeasureDirtiness(sandbox string) (dirty bool, dirtyFiles, untrackedFiles int) {
-	if sandbox == "" {
+func weaveMeasureDirtiness(workspace string) (dirty bool, dirtyFiles, untrackedFiles int) {
+	if workspace == "" {
 		return false, 0, 0
 	}
-	out, err := exec.Command("git", "-C", sandbox, "status", "--porcelain", "--untracked-files=all").Output()
+	out, err := exec.Command("git", "-C", workspace, "status", "--porcelain", "--untracked-files=all").Output()
 	if err != nil {
 		return false, 0, 0
 	}
@@ -487,7 +504,7 @@ func weaveMeasureDirtiness(sandbox string) (dirty bool, dirtyFiles, untrackedFil
 }
 
 // weaveRunVerify executes an item's verify command via `bash -c` in
-// the sandbox with a 10-minute ceiling, returning the exit code and
+// the workspace with a 10-minute ceiling, returning the exit code and
 // the last 2000 bytes of combined output. Like weaveMeasureBranch,
 // this is the wrapper's own measurement — claims are measured by
 // weave, not asserted by agents. A timeout or signal death surfaces
@@ -523,24 +540,24 @@ func weaveSiblingReplaceDirs(root string) []string {
 }
 
 // weaveSyncSiblingDeps provisions the target repo's `replace … => ../X` sibling
-// dependencies for the sandbox: each is a SHARED clone placed at
-// <sandboxes>/<name> (the path `../<name>` resolves to from every issue
-// sandbox), re-synced to the original sibling's current HEAD. No symlinks
+// dependencies for the workspace: each is a SHARED clone placed at
+// <workspaces>/<name> (the path `../<name>` resolves to from every issue
+// workspace), re-synced to the original sibling's current HEAD. No symlinks
 // (Windows-safe); the user's real repo is never edited (it's a clone). Returns
 // the names successfully synced and any that failed (so the caller can warn).
-func weaveSyncSiblingDeps(root, sandbox string) (synced, failed []string) {
+func weaveSyncSiblingDeps(root, workspace string) (synced, failed []string) {
 	rels := weaveSiblingReplaceDirs(root)
 	if len(rels) == 0 {
 		return nil, nil
 	}
-	sandboxParent := filepath.Dir(sandbox) // <queueDir>/sandboxes
+	workspaceParent := filepath.Dir(workspace) // <queueDir>/workspaces
 	for _, rel := range rels {
 		name := filepath.Base(rel)
 		orig := filepath.Clean(filepath.Join(root, rel))
 		if fi, err := os.Stat(orig); err != nil || !fi.IsDir() {
 			continue // sibling not present next to the source; skip quietly
 		}
-		dst := filepath.Join(sandboxParent, name)
+		dst := filepath.Join(workspaceParent, name)
 		if err := weaveEnsureSyncedClone(orig, dst); err != nil {
 			failed = append(failed, name)
 			continue
@@ -576,7 +593,7 @@ func weaveEnsureSyncedClone(orig, dst string) error {
 	return nil
 }
 
-func weaveRunVerify(sandbox, command string) (int, string) {
+func weaveRunVerify(workspace, command string) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	// Hermetic shell: --noprofile --norc keeps the measurement
@@ -584,7 +601,7 @@ func weaveRunVerify(sandbox, command string) (int, string) {
 	// an honest gate in production), and PWD is pinned like the
 	// subagent's own environment.
 	vc := exec.CommandContext(ctx, "bash", "--noprofile", "--norc", "-c", command)
-	vc.Dir = sandbox
+	vc.Dir = workspace
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "PWD=") || strings.HasPrefix(kv, "OLDPWD=") {
@@ -592,7 +609,7 @@ func weaveRunVerify(sandbox, command string) (int, string) {
 		}
 		env = append(env, kv)
 	}
-	vc.Env = append(env, "PWD="+sandbox)
+	vc.Env = append(env, "PWD="+workspace)
 	out, err := vc.CombinedOutput()
 	exit := 0
 	if err != nil {
@@ -617,11 +634,11 @@ func weaveRunVerify(sandbox, command string) (int, string) {
 	return exit, s
 }
 
-func weaveCollectVerifyEvidence(sandbox, command string, dirty bool, dirtyFiles int) (verifyExit *int, verifyOutput, verifyTree string) {
+func weaveCollectVerifyEvidence(workspace, command string, dirty bool, dirtyFiles int) (verifyExit *int, verifyOutput, verifyTree string) {
 	if command == "" {
 		return nil, "", ""
 	}
-	ve, vo := weaveRunVerify(sandbox, command)
+	ve, vo := weaveRunVerify(workspace, command)
 	if dirty {
 		verifyTree = "working-tree-dirty"
 		vo += fmt.Sprintf("\n[weave: VERIFY ATTESTED A DIRTY WORKING TREE: working tree had tracked uncommitted changes in %d file(s); HEAD alone is not the verified tree]", dirtyFiles)
@@ -645,9 +662,9 @@ type weaveTerminalEvidence struct {
 	VerifyTree     string
 }
 
-func weaveCollectTerminalEvidence(sandbox, base, verifyCommand string, runVerify bool) weaveTerminalEvidence {
-	ahead, head := weaveMeasureBranch(sandbox, base)
-	dirty, dirtyFiles, untrackedFiles := weaveMeasureDirtiness(sandbox)
+func weaveCollectTerminalEvidence(workspace, base, verifyCommand string, runVerify bool) weaveTerminalEvidence {
+	ahead, head := weaveMeasureBranch(workspace, base)
+	dirty, dirtyFiles, untrackedFiles := weaveMeasureDirtiness(workspace)
 	ev := weaveTerminalEvidence{
 		CommitsAhead:   ahead,
 		Head:           head,
@@ -656,7 +673,7 @@ func weaveCollectTerminalEvidence(sandbox, base, verifyCommand string, runVerify
 		UntrackedFiles: untrackedFiles,
 	}
 	if runVerify && verifyCommand != "" {
-		ev.VerifyExit, ev.VerifyOutput, ev.VerifyTree = weaveCollectVerifyEvidence(sandbox, verifyCommand, dirty, dirtyFiles)
+		ev.VerifyExit, ev.VerifyOutput, ev.VerifyTree = weaveCollectVerifyEvidence(workspace, verifyCommand, dirty, dirtyFiles)
 	}
 	return ev
 }
@@ -678,16 +695,16 @@ func weaveAutoCommitMessage(it *weaveItem) string {
 	return fmt.Sprintf("weave(auto): issue %d — %s", it.ID, it.Title)
 }
 
-func maybeAutoCommit(sandbox, msg string) (bool, error) {
-	dirty, _, untrackedFiles := weaveMeasureDirtiness(sandbox)
+func maybeAutoCommit(workspace, msg string) (bool, error) {
+	dirty, _, untrackedFiles := weaveMeasureDirtiness(workspace)
 	if !dirty && untrackedFiles == 0 {
 		return false, nil
 	}
-	add := exec.Command("git", "-C", sandbox, "add", "-A")
+	add := exec.Command("git", "-C", workspace, "add", "-A")
 	if out, err := add.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git add -A: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	commit := exec.Command("git", "-C", sandbox, "commit", "-m", msg)
+	commit := exec.Command("git", "-C", workspace, "commit", "-m", msg)
 	if out, err := commit.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -872,7 +889,7 @@ func weaveRenderItemRows(w io.Writer, items []*weaveItem) {
 			pts = strconv.Itoa(it.Points)
 		}
 		fmt.Fprintf(w, "%-4d %-4s %-3s %-10s %-9s %-8s %-8s %-40s %s\n",
-			it.ID, it.Priority, pts, state, toolCol, weaveStartedCol(it), weaveDurationCol(it), title, weaveTildePath(it.Sandbox))
+			it.ID, it.Priority, pts, state, toolCol, weaveStartedCol(it), weaveDurationCol(it), title, weaveTildePath(it.Workspace))
 	}
 }
 
@@ -1030,7 +1047,7 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "%s\n", weaveTildePath(v.Root))
-		fmt.Fprintf(w, "%-4s %-4s %-3s %-10s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "SANDBOX")
+		fmt.Fprintf(w, "%-4s %-4s %-3s %-10s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "WORKSPACE")
 		weaveRenderItemRows(w, v.Items)
 	}
 	return nil
@@ -1069,11 +1086,11 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	anyStale := false
 	reclaimable := 0
 	for _, it := range q.Items {
-		// Terminal items whose sandbox clone still occupies disk are
+		// Terminal items whose workspace clone still occupies disk are
 		// reclaimable via `weave prune` — surfaced in a footer so the
 		// clutter isn't invisible until something trips over it.
-		if isPrunableState(it.State) && it.Sandbox != "" {
-			if st, statErr := os.Stat(it.Sandbox); statErr == nil && st.IsDir() {
+		if isPrunableState(it.State) && it.Workspace != "" {
+			if st, statErr := os.Stat(it.Workspace); statErr == nil && st.IsDir() {
 				reclaimable++
 			}
 		}
@@ -1129,7 +1146,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		weavePrintReclaimableFooter(w, reclaimable)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-3s %-10s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "SANDBOX")
+	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-3s %-10s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "WORKSPACE")
 	weaveRenderItemRows(cmd.OutOrStdout(), items)
 	if anyStale {
 		fmt.Fprintln(cmd.OutOrStdout(), "* wrapper process is dead — re-attach with `weave start --resume --issue N` or `weave abandon N`")
@@ -1204,8 +1221,8 @@ func runWeavePause(cmd *cobra.Command, reason string, flags *weaveOutputFlags) e
 			}
 			alreadyDead := it.WrapperPid > 0 && !pidAlive(it.WrapperPid)
 			head := ""
-			if it.Sandbox != "" {
-				if out, err := exec.Command("git", "-C", it.Sandbox, "rev-parse", "HEAD").Output(); err == nil {
+			if it.Workspace != "" {
+				if out, err := exec.Command("git", "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
 					head = strings.TrimSpace(string(out))
 				}
 			}
@@ -1394,14 +1411,14 @@ func weaveSpawnResumeWrapper(dir string, issueID int64, spec *weaveLaunchSpec) (
 }
 
 // weavePrintReclaimableFooter emits the one-line clutter hint when
-// terminal items still hold sandbox clones on disk.
+// terminal items still hold workspace clones on disk.
 func weavePrintReclaimableFooter(w io.Writer, reclaimable int) {
 	if reclaimable <= 0 {
 		return
 	}
-	noun := "sandbox"
+	noun := "workspace"
 	if reclaimable != 1 {
-		noun = "sandboxes"
+		noun = "workspaces"
 	}
 	fmt.Fprintf(w, "+%d terminal item(s) holding %s on disk — run `weave prune` to reclaim\n", reclaimable, noun)
 }
@@ -1437,9 +1454,9 @@ func runWeaveNext(cmd *cobra.Command, flags *weaveOutputFlags) error {
 
 // weaveStartOptions controls runWeaveStart behavior. noSpawn does
 // every step up to and including state mutation but skips the tool
-// exec. resume reattaches to an existing "working" sandbox without
+// exec. resume reattaches to an existing "working" workspace without
 // rebuilding the worktree — useful when an agent crashed and the
-// user wants to re-launch it inside the same sandbox without losing
+// user wants to re-launch it inside the same workspace without losing
 // in-progress changes. pty controls TTY allocation for the subagent
 // (auto = on, always = on, never = inherit FDs). idleTimeout, when
 // > 0, sends SIGTERM to the subagent if no PTY output appears for
@@ -1580,22 +1597,22 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			weavecli.ExitStateConflict, fmt.Errorf("issue #%d state is %q", it.ID, it.State)))
 	}
 	if opts.resume {
-		// Any state with a preserved sandbox is resumable: "working"
+		// Any state with a preserved workspace is resumable: "working"
 		// (wrapper died), "failed" (weave kill / watchdog kill — the
 		// retry path the kill docs promise), "submitted" (tool exited
 		// but the branch was kicked back, e.g. merge conflict). done
-		// and abandoned were rejected above; their sandboxes are gone.
-		if it.Sandbox == "" {
+		// and abandoned were rejected above; their workspaces are gone.
+		if it.Workspace == "" {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
-				weavecli.ExitStateConflict, fmt.Errorf("--resume: issue #%d has no sandbox to reattach (state=%q)", it.ID, it.State)))
+				weavecli.ExitStateConflict, fmt.Errorf("--resume: issue #%d has no workspace to reattach (state=%q)", it.ID, it.State)))
 		}
-		if _, err := os.Stat(it.Sandbox); err != nil {
+		if _, err := os.Stat(it.Workspace); err != nil {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
-				weavecli.ExitStateConflict, fmt.Errorf("--resume: sandbox missing on disk: %s", it.Sandbox)))
+				weavecli.ExitStateConflict, fmt.Errorf("--resume: workspace missing on disk: %s", it.Workspace)))
 		}
 	}
 	base := weaveBaseBranch(root)
-	sandbox := filepath.Join(dir, "sandboxes", fmt.Sprintf("issue-%d", it.ID))
+	workspace := filepath.Join(dir, "workspaces", fmt.Sprintf("issue-%d", it.ID))
 	branch := fmt.Sprintf("agent/weave-issue-%d", it.ID)
 	// Control socket for `weave say` — only meaningful when the
 	// subagent gets a PTY and we're actually spawning it.
@@ -1604,11 +1621,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		ctlSock = weaveCtlSockPath(dir, it.ID)
 	}
 	if opts.resume {
-		sandbox = it.Sandbox
+		workspace = it.Workspace
 		branch = it.Branch
 		// Re-claim the issue under the queue lock: refuse when a
 		// previous wrapper is still alive (two wrappers in one
-		// sandbox = two agents fighting over the same checkout —
+		// workspace = two agents fighting over the same checkout —
 		// the dogfood OOM had a stale wrapper_pid precisely
 		// because resume skipped this bookkeeping), and record
 		// OUR pid so `weave kill` / `weave abandon` signal the
@@ -1656,20 +1673,20 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 	}
 	if !opts.resume {
-		if _, err := os.Stat(sandbox); err != nil {
-			if err := os.MkdirAll(filepath.Dir(sandbox), 0o755); err != nil {
+		if _, err := os.Stat(workspace); err != nil {
+			if err := os.MkdirAll(filepath.Dir(workspace), 0o755); err != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, err))
 			}
-			// Sandbox isolation: a full local clone, NOT a worktree.
+			// Workspace isolation: a full local clone, NOT a worktree.
 			// git worktree shares `.git/objects` and `.git/refs` with
 			// the source repo — an agent that wandered out of its
-			// sandbox cwd (cd to the source checkout, or `git
+			// workspace cwd (cd to the source checkout, or `git
 			// update-ref`) could mutate the source's branches. With a
-			// clone, the sandbox has its own `.git`; refs and HEAD
+			// clone, the workspace has its own `.git`; refs and HEAD
 			// can't cross the boundary, and a wandering agent hits a
 			// different git repo entirely.
-			gw := exec.Command("git", "clone", "--local", "--no-hardlinks", "--branch", base, root, sandbox)
+			gw := exec.Command("git", "clone", "--local", "--no-hardlinks", "--branch", base, root, workspace)
 			gw.Stdout = cmd.OutOrStdout()
 			gw.Stderr = cmd.ErrOrStderr()
 			if err := gw.Run(); err != nil {
@@ -1677,7 +1694,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 					weavecli.ExitGenericFail, fmt.Errorf("git clone --local --no-hardlinks: %w", err)))
 			}
 			// Check out the per-issue agent branch in the clone.
-			ck := exec.Command("git", "-C", sandbox, "checkout", "-b", branch)
+			ck := exec.Command("git", "-C", workspace, "checkout", "-b", branch)
 			ck.Stdout = cmd.OutOrStdout()
 			ck.Stderr = cmd.ErrOrStderr()
 			if err := ck.Run(); err != nil {
@@ -1686,31 +1703,31 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 			// Remove `origin` from the clone: it points at the user's
 			// real checkout, and in dogfooding a subagent followed it
-			// (`git remote -v`) to escape the sandbox and commit to the
+			// (`git remote -v`) to escape the workspace and commit to the
 			// origin repo's master directly. Nothing in the weave flow
-			// needs the remote — `weave pull` fetches FROM the sandbox
+			// needs the remote — `weave pull` fetches FROM the workspace
 			// path into the user's repo, never the other way around.
-			_ = exec.Command("git", "-C", sandbox, "remote", "remove", "origin").Run()
+			_ = exec.Command("git", "-C", workspace, "remote", "remove", "origin").Run()
 			// Scrub reflogs: `git clone` records "clone: from <abs
 			// origin path>" in .git/logs/HEAD — the breadcrumb the
-			// second sandbox escape had available after the remote
+			// second workspace escape had available after the remote
 			// was gone. git recreates reflogs as the agent works;
 			// only the clone-time entries carry the origin path.
-			_ = os.RemoveAll(filepath.Join(sandbox, ".git", "logs"))
+			_ = os.RemoveAll(filepath.Join(workspace, ".git", "logs"))
 		}
 		// Faithful, fast, Windows-safe sibling-dep view. A clone of the target
 		// alone can't build when its go.mod has `replace … => ../X` directives
 		// (sh/coreutils/readline in this umbrella). We provide each such sibling
-		// as a SHARED clone placed directly at <sandboxes>/<name> — exactly
-		// where `../<name>` resolves from every issue sandbox, so NO symlinks
+		// as a SHARED clone placed directly at <workspaces>/<name> — exactly
+		// where `../<name>` resolves from every issue workspace, so NO symlinks
 		// are needed (symlinks require admin/Developer Mode on Windows). It is a
 		// clone (the user's real repo is never edited), shared across the
-		// queue's sandboxes (cloned once), and re-synced to the source's
+		// queue's workspaces (cloned once), and re-synced to the source's
 		// current HEAD on every start — fixing the prior staleness where a
-		// sandbox built against an old sibling SHA (the #1 weave friction).
-		// Nested replaces resolve too: <sandboxes>/coreutils's own `../sh` lands
-		// on <sandboxes>/sh, which we also provision.
-		if synced, failed := weaveSyncSiblingDeps(root, sandbox); len(synced) > 0 || len(failed) > 0 {
+		// workspace built against an old sibling SHA (the #1 weave friction).
+		// Nested replaces resolve too: <workspaces>/coreutils's own `../sh` lands
+		// on <workspaces>/sh, which we also provision.
+		if synced, failed := weaveSyncSiblingDeps(root, workspace); len(synced) > 0 || len(failed) > 0 {
 			if len(synced) > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "weave: sibling deps synced to source HEAD: %s\n", strings.Join(synced, ", "))
 			}
@@ -1722,7 +1739,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			{"user.name", fmt.Sprintf("agent-weave-issue-%d", it.ID)},
 			{"user.email", fmt.Sprintf("agent-weave-issue-%d@ycode.local", it.ID)},
 		} {
-			_ = exec.Command("git", "-C", sandbox, "config", kv[0], kv[1]).Run()
+			_ = exec.Command("git", "-C", workspace, "config", kv[0], kv[1]).Run()
 		}
 		// Lock around the state=working transition so concurrent
 		// `weave start --issue N` invocations targeting different
@@ -1738,7 +1755,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 					it.ID, freshIt.WrapperPid, it.ID, errWeaveWrapperLive)
 			}
 			freshIt.State = "working"
-			freshIt.Sandbox = sandbox
+			freshIt.Workspace = workspace
 			freshIt.Branch = branch
 			freshIt.WrapperPid = os.Getpid()
 			freshIt.CtlSock = ctlSock
@@ -1759,7 +1776,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 	}
 	if mode != weavecli.OutputJSON {
-		fmt.Fprintf(cmd.OutOrStdout(), "weave start: issue #%d sandbox=%s branch=%s\n", it.ID, sandbox, branch)
+		fmt.Fprintf(cmd.OutOrStdout(), "weave start: issue #%d workspace=%s branch=%s\n", it.ID, workspace, branch)
 		if opts.noSpawn {
 			fmt.Fprintf(cmd.OutOrStdout(), "weave start: --no-spawn (skipping tool exec)\n")
 		} else {
@@ -1769,7 +1786,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if opts.noSpawn {
 		// Allocated, not working: nothing is running, so don't record
 		// a wrapper pid that will immediately read as a dead/stale
-		// worker in `weave list`. The sandbox waits for a later
+		// worker in `weave list`. The workspace waits for a later
 		// `start --resume --issue N -- <tool>` to assign an agent.
 		_ = withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
 			if freshIt := findWeaveItem(freshQ, it.ID); freshIt != nil {
@@ -1783,11 +1800,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		})
 		if mode == weavecli.OutputJSON {
 			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave start", map[string]any{
-				"issue":    it.ID,
-				"sandbox":  sandbox,
-				"branch":   branch,
-				"state":    "allocated",
-				"no_spawn": true,
+				"issue":     it.ID,
+				"workspace": workspace,
+				"branch":    branch,
+				"state":     "allocated",
+				"no_spawn":  true,
 			}))
 		}
 		return nil
@@ -1795,7 +1812,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// Containment: the subagent must not learn the origin repo's
 	// path from its environment. The orchestrator's shell typically
 	// sits in the origin repo, so the inherited PWD/OLDPWD point
-	// straight at it — scrub them and pin PWD to the sandbox.
+	// straight at it — scrub them and pin PWD to the workspace.
 	env := make([]string, 0, len(os.Environ())+8)
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "PWD=") || strings.HasPrefix(kv, "OLDPWD=") {
@@ -1803,7 +1820,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 		env = append(env, kv)
 	}
-	env = append(env, "PWD="+sandbox)
+	env = append(env, "PWD="+workspace)
 	env = append(env,
 		fmt.Sprintf("WEAVE_ID=weave-issue-%d", it.ID),
 		fmt.Sprintf("WEAVE_BRANCH=%s", branch),
@@ -1813,7 +1830,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		fmt.Sprintf("WEAVE_ISSUE_BODY=%s", it.Body),
 	)
 	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
-	tool.Dir = sandbox
+	tool.Dir = workspace
 	tool.Env = env
 
 	// PTY allocation policy:
@@ -1929,20 +1946,20 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// EVIDENCE recorded alongside the terminal state; it never changes
 	// the submitted/killed/failed decision below — `weave pull` is the
 	// consumer that acts on a non-zero verify_exit.
-	ev := weaveCollectTerminalEvidence(sandbox, base, "", false)
+	ev := weaveCollectTerminalEvidence(workspace, base, "", false)
 	if it.VerifyCommand != "" && (exitCode == 0 || ev.CommitsAhead > 0) {
-		ev = weaveCollectTerminalEvidence(sandbox, base, it.VerifyCommand, true)
+		ev = weaveCollectTerminalEvidence(workspace, base, it.VerifyCommand, true)
 	}
 	autoCommitted := false
 	autoCommitErr := ""
 	if opts.autoCommit && exitCode == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) && (ev.Dirty || ev.UntrackedFiles > 0) {
-		committed, err := maybeAutoCommit(sandbox, weaveAutoCommitMessage(it))
+		committed, err := maybeAutoCommit(workspace, weaveAutoCommitMessage(it))
 		autoCommitted = committed
 		if err != nil {
 			autoCommitErr = err.Error()
-			ev = weaveCollectTerminalEvidence(sandbox, base, it.VerifyCommand, it.VerifyCommand != "")
+			ev = weaveCollectTerminalEvidence(workspace, base, it.VerifyCommand, it.VerifyCommand != "")
 		} else if committed {
-			ev = weaveCollectTerminalEvidence(sandbox, base, it.VerifyCommand, true)
+			ev = weaveCollectTerminalEvidence(workspace, base, it.VerifyCommand, true)
 		}
 	}
 	lockErr := withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
@@ -1996,7 +2013,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if mode == weavecli.OutputJSON {
 		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave start", map[string]any{
 			"issue":     it.ID,
-			"sandbox":   sandbox,
+			"workspace": workspace,
 			"branch":    branch,
 			"state":     it.State,
 			"exit_code": exitCode,
@@ -2214,7 +2231,7 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 		fmt.Fprintf(w, "  verify:   %s\n", verdict)
 	}
 	if it.AutoCommitted {
-		fmt.Fprintf(w, "  auto:     committed dirty sandbox changes\n")
+		fmt.Fprintf(w, "  auto:     committed dirty workspace changes\n")
 	} else if it.AutoCommitError != "" {
 		fmt.Fprintf(w, "  auto:     commit failed: %s\n", it.AutoCommitError)
 	}
@@ -2416,9 +2433,9 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// and report it rather than re-fetching a no-op branch.
 			if it.State == "submitted" && weaveItemMerged(root, base, it) {
 				it.State = "done"
-				if it.Sandbox != "" {
-					_ = safeRemoveSandbox(dir, it.Sandbox)
-					it.Sandbox = ""
+				if it.Workspace != "" {
+					_ = safeRemoveWorkspace(dir, it.Workspace)
+					it.Workspace = ""
 				}
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "already-merged",
 					Detail: "work already in " + base + "; marked done"})
@@ -2439,7 +2456,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			}
 			if it.Dirty {
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "dirty",
-					Detail: fmt.Sprintf("verify attested a dirty working tree with %d tracked file(s) uncommitted; resume the agent to commit the work (or commit manually in the sandbox) and re-verify", it.DirtyFiles)})
+					Detail: fmt.Sprintf("verify attested a dirty working tree with %d tracked file(s) uncommitted; resume the agent to commit the work (or commit manually in the workspace) and re-verify", it.DirtyFiles)})
 				continue
 			}
 			// Substrate-verified outcome gate: the wrapper ran the item's
@@ -2452,30 +2469,30 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					Detail: fmt.Sprintf("verify command exited %d — inspect with `weave shell %d`, fix or abandon", *it.VerifyExit, it.ID)})
 				continue
 			}
-			// The agent's branch lives in the sandbox clone, not the
+			// The agent's branch lives in the workspace clone, not the
 			// user's repo. Fetch it across (idempotent — already-present
-			// commits are skipped). If the sandbox is gone (abandoned
+			// commits are skipped). If the workspace is gone (abandoned
 			// mid-pull, disk wiped) we record a skip with the reason.
-			if it.Sandbox == "" {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: "no sandbox recorded"})
+			if it.Workspace == "" {
+				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: "no workspace recorded"})
 				continue
 			}
-			if _, err := os.Stat(it.Sandbox); err != nil {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: fmt.Sprintf("sandbox missing: %v", err)})
+			if _, err := os.Stat(it.Workspace); err != nil {
+				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: fmt.Sprintf("workspace missing: %v", err)})
 				continue
 			}
-			liveDirty, liveDirtyFiles, liveUntrackedFiles := weaveMeasureDirtiness(it.Sandbox)
+			liveDirty, liveDirtyFiles, liveUntrackedFiles := weaveMeasureDirtiness(it.Workspace)
 			if liveDirty {
 				it.Dirty = true
 				it.DirtyFiles = liveDirtyFiles
 				it.UntrackedFiles = liveUntrackedFiles
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "dirty",
-					Detail: fmt.Sprintf("sandbox has %d tracked uncommitted file(s); resume the agent to commit the work (or commit manually in the sandbox) and re-verify", liveDirtyFiles)})
+					Detail: fmt.Sprintf("workspace has %d tracked uncommitted file(s); resume the agent to commit the work (or commit manually in the workspace) and re-verify", liveDirtyFiles)})
 				continue
 			}
 			fetchSpec := fmt.Sprintf("%s:%s", it.Branch, it.Branch)
-			if _, err := gitOut(root, "fetch", "--no-tags", it.Sandbox, fetchSpec); err != nil {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: fmt.Sprintf("fetch from sandbox: %v", err)})
+			if _, err := gitOut(root, "fetch", "--no-tags", it.Workspace, fetchSpec); err != nil {
+				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: fmt.Sprintf("fetch from workspace: %v", err)})
 				continue
 			}
 			cnt, err := gitOut(root, "rev-list", "--count", fmt.Sprintf("HEAD..%s", it.Branch))
@@ -2528,10 +2545,10 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					continue
 				}
 			}
-			// Sandbox is a full clone (not a worktree) — use safeRemoveAll with
+			// Workspace is a full clone (not a worktree) — use safeRemoveAll with
 			// containment check to prevent accidental deletion outside the queue dir.
-			if it.Sandbox != "" {
-				if err := safeRemoveSandbox(dir, it.Sandbox); err != nil {
+			if it.Workspace != "" {
+				if err := safeRemoveWorkspace(dir, it.Workspace); err != nil {
 					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "cleanup-failed", Detail: err.Error()})
 					continue
 				}
@@ -2539,7 +2556,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// Delete the fetched branch from user repo if fully merged (-d, never -D).
 			_ = exec.Command("git", "-C", root, "branch", "-d", it.Branch).Run()
 			it.State = "done"
-			it.Sandbox = ""
+			it.Workspace = ""
 			results = append(results, result{
 				Issue:           it.ID,
 				Branch:          it.Branch,
@@ -2605,7 +2622,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 	}
 	dir, _ := weaveQueueDir(root)
 	if err := weaveConfirmTargeted(cmd, mode,
-		fmt.Sprintf("weave abandon: tears down issue #%d's sandbox + branch; any unmerged work is lost.", id), yes); err != nil {
+		fmt.Sprintf("weave abandon: tears down issue #%d's workspace + branch; any unmerged work is lost.", id), yes); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave abandon",
 			weavecli.ExitInvalidArg, err))
 	}
@@ -2627,12 +2644,12 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 		if it.State == "working" && it.WrapperPid > 0 {
 			weaveStopWrapper(it.WrapperPid)
 		}
-		// Sandbox is a real git clone now (not a worktree); delete the
+		// Workspace is a real git clone now (not a worktree); delete the
 		// directory tree. The agent's branch lives inside that clone —
 		// no separate `git branch -D` against the user's repo because
 		// the branch doesn't exist there unless `weave pull` fetched it.
-		if it.Sandbox != "" {
-			_ = os.RemoveAll(it.Sandbox)
+		if it.Workspace != "" {
+			_ = os.RemoveAll(it.Workspace)
 		}
 		if it.Branch != "" {
 			// Best-effort: drop the branch from the user's repo too, in
@@ -2640,7 +2657,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 			_ = exec.Command("git", "-C", root, "branch", "-D", it.Branch).Run()
 		}
 		it.State = "abandoned"
-		it.Sandbox = ""
+		it.Workspace = ""
 		it.WrapperPid = 0
 		return nil
 	})
@@ -2665,9 +2682,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 
 // runWeaveStatus answers the single most common operator question about
 // an item — "is this already in main?" — directly, instead of forcing a
-// manual `queue.json` → sandbox `git log` → `merge-base --is-ancestor`
+// manual `queue.json` → workspace `git log` → `merge-base --is-ancestor`
 // investigation. Reports the recorded state reconciled against git
-// reality, the branch + sandbox HEAD, merged-into-base, commits ahead,
+// reality, the branch + workspace HEAD, merged-into-base, commits ahead,
 // and the last verify result.
 func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error {
 	mode := flags.mode()
@@ -2700,27 +2717,27 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		reconciledFrom = "submitted"
 	}
 	stale := it.State == "working" && it.WrapperPid > 0 && !pidAlive(it.WrapperPid)
-	sandboxExists := false
-	if it.Sandbox != "" {
-		if st, statErr := os.Stat(it.Sandbox); statErr == nil && st.IsDir() {
-			sandboxExists = true
+	workspaceExists := false
+	if it.Workspace != "" {
+		if st, statErr := os.Stat(it.Workspace); statErr == nil && st.IsDir() {
+			workspaceExists = true
 		}
 	}
 
 	if mode == weavecli.OutputJSON {
 		res := map[string]any{
-			"issue":          it.ID,
-			"title":          it.Title,
-			"state":          displayState,
-			"recorded_state": it.State,
-			"merged":         merged,
-			"base":           base,
-			"commits_ahead":  it.CommitsAhead,
-			"branch":         it.Branch,
-			"sandbox":        it.Sandbox,
-			"sandbox_exists": sandboxExists,
-			"stale":          stale,
-			"dirty":          it.Dirty,
+			"issue":            it.ID,
+			"title":            it.Title,
+			"state":            displayState,
+			"recorded_state":   it.State,
+			"merged":           merged,
+			"base":             base,
+			"commits_ahead":    it.CommitsAhead,
+			"branch":           it.Branch,
+			"workspace":        it.Workspace,
+			"workspace_exists": workspaceExists,
+			"stale":            stale,
+			"dirty":            it.Dirty,
 		}
 		if reconciledFrom != "" {
 			res["reconciled_from"] = reconciledFrom
@@ -2778,19 +2795,19 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		fmt.Fprintf(w, "  verify:   %s\n", verdict)
 	}
 	if it.AutoCommitted {
-		fmt.Fprintf(w, "  auto:     committed dirty sandbox changes\n")
+		fmt.Fprintf(w, "  auto:     committed dirty workspace changes\n")
 	} else if it.AutoCommitError != "" {
 		fmt.Fprintf(w, "  auto:     commit failed: %s\n", it.AutoCommitError)
 	}
 	if it.Dirty {
 		fmt.Fprintf(w, "  dirty:    %d tracked uncommitted file(s)\n", it.DirtyFiles)
 	}
-	if it.Sandbox != "" {
+	if it.Workspace != "" {
 		state := "present"
-		if !sandboxExists {
+		if !workspaceExists {
 			state = "gone on disk"
 		}
-		fmt.Fprintf(w, "  sandbox:  %s (%s)\n", weaveTildePath(it.Sandbox), state)
+		fmt.Fprintf(w, "  workspace:  %s (%s)\n", weaveTildePath(it.Workspace), state)
 	}
 	mergedStr := "no"
 	switch {
@@ -2822,21 +2839,21 @@ func runWeaveReverify(cmd *cobra.Command, id int64, flags *weaveOutputFlags) err
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
 			weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
 	}
-	if it.Sandbox == "" {
+	if it.Workspace == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no sandbox recorded", id)))
+			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no workspace recorded", id)))
 	}
-	if st, err := os.Stat(it.Sandbox); err != nil || !st.IsDir() {
+	if st, err := os.Stat(it.Workspace); err != nil || !st.IsDir() {
 		if err == nil {
 			err = fmt.Errorf("not a directory")
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d sandbox unavailable: %s: %w", id, it.Sandbox, err)))
+			weavecli.ExitStateConflict, fmt.Errorf("issue #%d workspace unavailable: %s: %w", id, it.Workspace, err)))
 	}
 
 	base := weaveBaseBranch(root)
 	verifyCommand := it.VerifyCommand
-	ev := weaveCollectTerminalEvidence(it.Sandbox, base, verifyCommand, verifyCommand != "")
+	ev := weaveCollectTerminalEvidence(it.Workspace, base, verifyCommand, verifyCommand != "")
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		freshIt := findWeaveItem(q, id)
 		if freshIt == nil {
@@ -2892,12 +2909,12 @@ func gitOut(root string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// safeRemoveSandbox removes a sandbox directory safely by verifying
+// safeRemoveWorkspace removes a workspace directory safely by verifying
 // containment: the path must be non-empty and live under the queue
-// directory's sandboxes/ subdirectory (filepath.Rel containment check).
+// directory's workspaces/ subdirectory (filepath.Rel containment check).
 // Returns nil on success or if path is already gone.
-func safeRemoveSandbox(queueDir, sandboxPath string) error {
-	if sandboxPath == "" {
+func safeRemoveWorkspace(queueDir, workspacePath string) error {
+	if workspacePath == "" {
 		return nil
 	}
 	// Resolve to absolute paths for reliable comparison
@@ -2905,48 +2922,60 @@ func safeRemoveSandbox(queueDir, sandboxPath string) error {
 	if err != nil {
 		return err
 	}
-	absSandbox, err := filepath.Abs(sandboxPath)
+	absWorkspace, err := filepath.Abs(workspacePath)
 	if err != nil {
 		return err
 	}
-	// Containment check: sandbox must be under queueDir/sandboxes/
-	expectedParent := filepath.Join(absQueue, "sandboxes")
-	rel, err := filepath.Rel(expectedParent, absSandbox)
-	if err != nil {
-		return fmt.Errorf("sandbox path containment check failed: %w", err)
+	// Containment check: workspace must be under queueDir/workspaces/ — or
+	// the legacy queueDir/sandboxes/ for clones created before the
+	// sandbox→workspace rename (their absolute path is stored in queue.json
+	// and still points at the old dir). Either parent is a safe container.
+	contained := false
+	for _, parent := range []string{
+		filepath.Join(absQueue, "workspaces"),
+		filepath.Join(absQueue, "sandboxes"),
+	} {
+		rel, err := filepath.Rel(parent, absWorkspace)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(rel, "..") && rel != "." {
+			contained = true
+			break
+		}
 	}
-	if strings.HasPrefix(rel, "..") || rel == "." {
-		return fmt.Errorf("sandbox path %q is not contained in %q", absSandbox, expectedParent)
+	if !contained {
+		return fmt.Errorf("workspace path %q is not contained in %q/{workspaces,sandboxes}", absWorkspace, absQueue)
 	}
 	if q, err := loadWeaveQueue(absQueue); err == nil {
 		for _, it := range q.Items {
-			if it.Sandbox == "" || it.State != "working" || it.WrapperPid == 0 || !pidAlive(it.WrapperPid) {
+			if it.Workspace == "" || it.State != "working" || it.WrapperPid == 0 || !pidAlive(it.WrapperPid) {
 				continue
 			}
-			itemSandbox, err := filepath.Abs(it.Sandbox)
+			itemWorkspace, err := filepath.Abs(it.Workspace)
 			if err != nil {
 				continue
 			}
-			if itemSandbox == absSandbox {
-				return fmt.Errorf("refusing to remove sandbox %q: issue #%d has live wrapper pid %d", absSandbox, it.ID, it.WrapperPid)
+			if itemWorkspace == absWorkspace {
+				return fmt.Errorf("refusing to remove workspace %q: issue #%d has live wrapper pid %d", absWorkspace, it.ID, it.WrapperPid)
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("sandbox live-wrapper check failed: %w", err)
+		return fmt.Errorf("workspace live-wrapper check failed: %w", err)
 	}
 	// Additional safety: verify it's a directory before removal
-	if st, err := os.Stat(absSandbox); err != nil {
+	if st, err := os.Stat(absWorkspace); err != nil {
 		if os.IsNotExist(err) {
 			return nil // Already gone
 		}
 		return err
 	} else if !st.IsDir() {
-		return fmt.Errorf("sandbox path %q is not a directory", absSandbox)
+		return fmt.Errorf("workspace path %q is not a directory", absWorkspace)
 	}
-	if dirty, dirtyFiles, _ := weaveMeasureDirtiness(absSandbox); dirty {
-		return fmt.Errorf("refusing to remove sandbox %q: %d tracked file(s) have uncommitted changes", absSandbox, dirtyFiles)
+	if dirty, dirtyFiles, _ := weaveMeasureDirtiness(absWorkspace); dirty {
+		return fmt.Errorf("refusing to remove workspace %q: %d tracked file(s) have uncommitted changes", absWorkspace, dirtyFiles)
 	}
-	return os.RemoveAll(absSandbox)
+	return os.RemoveAll(absWorkspace)
 }
 
 // runWeavePrio sets an issue's priority tier on the local queue.
@@ -3003,7 +3032,7 @@ func runWeavePrio(cmd *cobra.Command, id int64, tier string, auto bool, flags *w
 }
 
 // runWeaveShell drops the user into $SHELL with cwd set to the
-// issue's sandbox so they can poke at the worktree directly.
+// issue's workspace so they can poke at the worktree directly.
 // Inherits stdio; exits with the shell's exit code.
 func runWeaveShell(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error {
 	mode := flags.mode()
@@ -3024,31 +3053,31 @@ func runWeaveShell(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave shell",
 			weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
 	}
-	if it.Sandbox == "" {
+	if it.Workspace == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave shell",
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no sandbox (state=%q) — run `weave start --issue %d --no-spawn` first", it.ID, it.State, it.ID)))
+			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no workspace (state=%q) — run `weave start --issue %d --no-spawn` first", it.ID, it.State, it.ID)))
 	}
-	if _, err := os.Stat(it.Sandbox); err != nil {
+	if _, err := os.Stat(it.Workspace); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave shell",
-			weavecli.ExitStateConflict, fmt.Errorf("sandbox missing on disk: %s", it.Sandbox)))
+			weavecli.ExitStateConflict, fmt.Errorf("workspace missing on disk: %s", it.Workspace)))
 	}
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/bash"
 	}
 	if mode == weavecli.OutputJSON {
-		// Agent mode: return the sandbox + shell info instead of execing
+		// Agent mode: return the workspace + shell info instead of execing
 		// — agents can't drive an interactive shell anyway.
 		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave shell", map[string]any{
-			"issue":   it.ID,
-			"sandbox": it.Sandbox,
-			"branch":  it.Branch,
-			"shell":   shell,
+			"issue":     it.ID,
+			"workspace": it.Workspace,
+			"branch":    it.Branch,
+			"shell":     shell,
 		}))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave shell: issue #%d sandbox=%s (exit shell to return)\n", it.ID, it.Sandbox)
+	fmt.Fprintf(cmd.OutOrStdout(), "weave shell: issue #%d workspace=%s (exit shell to return)\n", it.ID, it.Workspace)
 	sh := exec.Command(shell)
-	sh.Dir = it.Sandbox
+	sh.Dir = it.Workspace
 	sh.Env = append(os.Environ(),
 		fmt.Sprintf("WEAVE_ID=weave-issue-%d", it.ID),
 		fmt.Sprintf("WEAVE_ISSUE=%d", it.ID),
@@ -3082,19 +3111,19 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 	}
 	dir, _ := weaveQueueDir(root)
 	if err := weaveConfirmBatch(cmd, mode, "reset",
-		"weave reset: this removes every sandbox + branch for this repo and clears the queue.", yes); err != nil {
+		"weave reset: this removes every workspace + branch for this repo and clears the queue.", yes); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reset",
 			weavecli.ExitInvalidArg, err))
 	}
 	type tear struct {
-		Issue   int64  `json:"issue"`
-		Branch  string `json:"branch,omitempty"`
-		Sandbox string `json:"sandbox,omitempty"`
+		Issue     int64  `json:"issue"`
+		Branch    string `json:"branch,omitempty"`
+		Workspace string `json:"workspace,omitempty"`
 	}
 	var teardowns []tear
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		for _, it := range q.Items {
-			if it.Sandbox == "" && it.Branch == "" && it.WrapperPid == 0 {
+			if it.Workspace == "" && it.Branch == "" && it.WrapperPid == 0 {
 				continue
 			}
 			// Stop any still-running wrapper precisely (PID + setsid
@@ -3103,16 +3132,16 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 			if it.WrapperPid > 0 {
 				weaveStopWrapper(it.WrapperPid)
 			}
-			// Sandboxes are independent git clones — rm -rf is right.
-			if it.Sandbox != "" {
-				_ = os.RemoveAll(it.Sandbox)
+			// Workspaces are independent git clones — rm -rf is right.
+			if it.Workspace != "" {
+				_ = os.RemoveAll(it.Workspace)
 			}
 			if it.Branch != "" {
 				// Best-effort: drop the branch from the user's repo if
 				// `weave pull` fetched it earlier.
 				_ = exec.Command("git", "-C", root, "branch", "-D", it.Branch).Run()
 			}
-			teardowns = append(teardowns, tear{Issue: it.ID, Branch: it.Branch, Sandbox: it.Sandbox})
+			teardowns = append(teardowns, tear{Issue: it.ID, Branch: it.Branch, Workspace: it.Workspace})
 		}
 		q.Items = nil
 		q.NextID = 1
@@ -3122,8 +3151,10 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reset",
 			weavecli.ExitGenericFail, lockErr))
 	}
-	// Best-effort: also remove the sandboxes/ tree in case the
-	// individual removals left empty dirs behind.
+	// Best-effort: also remove the workspaces/ tree (+ the legacy
+	// sandboxes/ tree from before the rename) in case the individual
+	// removals left empty dirs behind.
+	_ = os.RemoveAll(filepath.Join(dir, "workspaces"))
 	_ = os.RemoveAll(filepath.Join(dir, "sandboxes"))
 	if mode == weavecli.OutputJSON {
 		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave reset", map[string]any{
@@ -3135,7 +3166,7 @@ func runWeaveReset(cmd *cobra.Command, yes bool, flags *weaveOutputFlags) error 
 	return nil
 }
 
-// runWeaveOpen surfaces an issue's sandbox worktree as a file:// URL so
+// runWeaveOpen surfaces an issue's workspace worktree as a file:// URL so
 // you can jump straight to the files an agent produced. weave is
 // local-only — there is no remote page to open — so this resolves
 // entirely on the local filesystem.
@@ -3154,19 +3185,19 @@ func runWeaveOpen(cmd *cobra.Command, issueID int64, flags *weaveOutputFlags) er
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave open",
 			weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", issueID, weaveOtherActiveQueuesHintSuffix(dir))))
 	}
-	if it.Sandbox == "" {
+	if it.Workspace == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave open",
-			weavecli.ExitPrecondFail, fmt.Errorf("issue #%d has no sandbox yet (run `weave start` first)", issueID)))
+			weavecli.ExitPrecondFail, fmt.Errorf("issue #%d has no workspace yet (run `weave start` first)", issueID)))
 	}
-	fileURL := "file://" + it.Sandbox
+	fileURL := "file://" + it.Workspace
 	if mode == weavecli.OutputJSON {
 		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave open", map[string]any{
-			"issue":       it.ID,
-			"sandbox":     it.Sandbox,
-			"sandbox_url": fileURL,
+			"issue":         it.ID,
+			"workspace":     it.Workspace,
+			"workspace_url": fileURL,
 		}))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave open: issue #%d sandbox %s\n", it.ID, fileURL)
+	fmt.Fprintf(cmd.OutOrStdout(), "weave open: issue #%d workspace %s\n", it.ID, fileURL)
 	return nil
 }
 
@@ -3523,7 +3554,7 @@ func weaveConfirmTargeted(cmd *cobra.Command, mode weavecli.OutputMode, prompt s
 }
 
 // runWeaveKill stops the running wrapper for an issue WITHOUT
-// tearing down its sandbox or branch. Use when a subagent has gone
+// tearing down its workspace or branch. Use when a subagent has gone
 // stuck (no output for a long time, runaway iteration, etc.) and
 // the orchestrator wants the partial work preserved for inspection
 // or for a `weave start --resume` retry.
@@ -3545,7 +3576,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	}
 	dir, _ := weaveQueueDir(root)
 	if err := weaveConfirmTargeted(cmd, mode,
-		fmt.Sprintf("weave kill: stops the running subagent for issue #%d (sandbox + branch preserved).", id), yes); err != nil {
+		fmt.Sprintf("weave kill: stops the running subagent for issue #%d (workspace + branch preserved).", id), yes); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill",
 			weavecli.ExitInvalidArg, err))
 	}
@@ -3598,7 +3629,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	var killed bool
 	var wrapperPid int
 	var finalState string
-	var sandbox string
+	var workspace string
 	var verifyCommand string
 	notFoundHint := weaveOtherActiveQueuesHintSuffix(dir)
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
@@ -3610,7 +3641,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 			return fmt.Errorf("issue #%d state is %q (kill requires working)", id, it.State)
 		}
 		wrapperPid = it.WrapperPid
-		sandbox = it.Sandbox
+		workspace = it.Workspace
 		verifyCommand = it.VerifyCommand
 		return nil
 	})
@@ -3625,13 +3656,13 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	// Like the normal terminal path, expensive substrate evidence is
 	// collected outside the queue lock and attached during the final
 	// locked write.
-	ahead, head := weaveMeasureBranch(sandbox, base)
-	dirty, dirtyFiles, untrackedFiles := weaveMeasureDirtiness(sandbox)
+	ahead, head := weaveMeasureBranch(workspace, base)
+	dirty, dirtyFiles, untrackedFiles := weaveMeasureDirtiness(workspace)
 	var verifyExit *int
 	var verifyOutput string
 	var verifyTree string
 	if lockErr == nil && verifyCommand != "" && (ahead > 0 || dirty) {
-		verifyExit, verifyOutput, verifyTree = weaveCollectVerifyEvidence(sandbox, verifyCommand, dirty, dirtyFiles)
+		verifyExit, verifyOutput, verifyTree = weaveCollectVerifyEvidence(workspace, verifyCommand, dirty, dirtyFiles)
 	}
 
 	if lockErr == nil {
@@ -3713,7 +3744,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	return nil
 }
 
-// runWeavePrune removes sandbox directories for terminal items (done,
+// runWeavePrune removes workspace directories for terminal items (done,
 // abandoned, failed, killed) and deletes their agent/weave-issue-N branches
 // from the user repo if fully merged (git branch -d, never -D). Prints a
 // per-item line + summary; --yes skips confirmation.
@@ -3753,13 +3784,13 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 		default:
 			return fmt.Errorf("issue #%d is %q — salvage applies to killed/failed items holding committed work (done/abandoned/allocated have nothing to merge)", issueID, it.State)
 		}
-		if it.Sandbox == "" {
-			return fmt.Errorf("issue #%d has no sandbox to salvage from", issueID)
+		if it.Workspace == "" {
+			return fmt.Errorf("issue #%d has no workspace to salvage from", issueID)
 		}
-		if dirty, _, _ := weaveMeasureDirtiness(it.Sandbox); dirty {
-			return fmt.Errorf("issue #%d sandbox has uncommitted changes — commit them in the sandbox (`weave shell %d`) first, then salvage", issueID, issueID)
+		if dirty, _, _ := weaveMeasureDirtiness(it.Workspace); dirty {
+			return fmt.Errorf("issue #%d workspace has uncommitted changes — commit them in the workspace (`weave shell %d`) first, then salvage", issueID, issueID)
 		}
-		ahead, head := weaveMeasureBranch(it.Sandbox, base)
+		ahead, head := weaveMeasureBranch(it.Workspace, base)
 		if ahead <= 0 {
 			return fmt.Errorf("issue #%d has 0 commits ahead of %s — nothing to salvage", issueID, base)
 		}
@@ -3778,7 +3809,7 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 
 // weavePrunableForSweep reports whether `weave prune` (optionally --stale)
 // should sweep an item. The base set is the terminal states (isPrunableState);
-// --stale additionally sweeps orphaned "allocated" items — a sandbox was
+// --stale additionally sweeps orphaned "allocated" items — a workspace was
 // created but the tool never launched / died before any commit, so there is no
 // work to lose. Items holding commits (submitted/working) are never swept here.
 func weavePrunableForSweep(state string, stale bool) bool {
@@ -3825,18 +3856,18 @@ func runWeavePrune(cmd *cobra.Command, yes, stale bool, flags *weaveOutputFlags)
 	}
 
 	if err := weaveConfirmBatch(cmd, mode, "prune",
-		fmt.Sprintf("weave prune: will clean up %d terminal item(s) (sandbox + merged branches).", pendingCount), yes); err != nil {
+		fmt.Sprintf("weave prune: will clean up %d terminal item(s) (workspace + merged branches).", pendingCount), yes); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prune",
 			weavecli.ExitInvalidArg, err))
 	}
 
 	type pruneResult struct {
-		Issue   int64  `json:"issue"`
-		State   string `json:"state"`
-		Sandbox string `json:"sandbox,omitempty"`
-		Branch  string `json:"branch,omitempty"`
-		Merged  bool   `json:"merged"`
-		Action  string `json:"action"` // "removed", "skipped", "branch_deleted", "failed: ..."
+		Issue     int64  `json:"issue"`
+		State     string `json:"state"`
+		Workspace string `json:"workspace,omitempty"`
+		Branch    string `json:"branch,omitempty"`
+		Merged    bool   `json:"merged"`
+		Action    string `json:"action"` // "removed", "skipped", "branch_deleted", "failed: ..."
 	}
 
 	var results []pruneResult
@@ -3850,20 +3881,20 @@ func runWeavePrune(cmd *cobra.Command, yes, stale bool, flags *weaveOutputFlags)
 			}
 			swept++
 			// Whether the work landed in base — git's truth, checked via
-			// the sandbox HEAD sha (recorded at terminal time), NOT a
+			// the workspace HEAD sha (recorded at terminal time), NOT a
 			// user-repo branch lookup that's a no-op for unfetched
-			// agent branches. Read before the sandbox is removed.
+			// agent branches. Read before the workspace is removed.
 			merged := weaveItemMerged(root, base, it)
-			if it.Sandbox != "" {
-				if _, statErr := os.Stat(it.Sandbox); statErr == nil {
-					if rmErr := safeRemoveSandbox(dir, it.Sandbox); rmErr == nil {
-						results = append(results, pruneResult{Issue: it.ID, State: it.State, Sandbox: it.Sandbox, Merged: merged, Action: "removed"})
-						it.Sandbox = "" // stale path must not linger in the queue
+			if it.Workspace != "" {
+				if _, statErr := os.Stat(it.Workspace); statErr == nil {
+					if rmErr := safeRemoveWorkspace(dir, it.Workspace); rmErr == nil {
+						results = append(results, pruneResult{Issue: it.ID, State: it.State, Workspace: it.Workspace, Merged: merged, Action: "removed"})
+						it.Workspace = "" // stale path must not linger in the queue
 					} else {
-						results = append(results, pruneResult{Issue: it.ID, State: it.State, Sandbox: it.Sandbox, Merged: merged, Action: "failed: " + rmErr.Error()})
+						results = append(results, pruneResult{Issue: it.ID, State: it.State, Workspace: it.Workspace, Merged: merged, Action: "failed: " + rmErr.Error()})
 					}
 				} else {
-					it.Sandbox = "" // already gone on disk; drop the dead pointer
+					it.Workspace = "" // already gone on disk; drop the dead pointer
 				}
 			}
 			// Best-effort: drop the branch from the user repo if `weave
@@ -3896,7 +3927,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale bool, flags *weaveOutputFlags)
 			if !r.Merged {
 				merged = " (NOT merged into " + base + ")"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  issue #%d (%s): removed sandbox%s\n", r.Issue, r.State, merged)
+			fmt.Fprintf(cmd.OutOrStdout(), "  issue #%d (%s): removed workspace%s\n", r.Issue, r.State, merged)
 		case r.Action == "branch_deleted":
 			fmt.Fprintf(cmd.OutOrStdout(), "  issue #%d (%s): deleted merged branch %s\n", r.Issue, r.State, r.Branch)
 		case strings.HasPrefix(r.Action, "failed:"):

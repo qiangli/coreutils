@@ -61,7 +61,7 @@ according to the priority sort order.`,
 	cmd.Flags().StringVar(&priority, "priority", "", "Priority tier: p0|p1|p2|p3 (default p2)")
 	cmd.Flags().IntVar(&points, "points", 0, "Story points (1,2,3,5,8; 8 = ~30m cap — split bigger work)")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "Bulk seed: markdown (`- [ ] title`) or JSON list of {title,body,priority}")
-	cmd.Flags().StringVar(&verify, "verify", "", "Verify command the wrapper runs (`bash -c`) in the sandbox at terminal time; verify_exit/verify_output recorded on the item, non-zero blocks `weave pull`")
+	cmd.Flags().StringVar(&verify, "verify", "", "Verify command the wrapper runs (`bash -c`) in the workspace at terminal time; verify_exit/verify_output recorded on the item, non-zero blocks `weave pull`")
 	cmd.Flags().StringVar(&suiteGate, "suite-gate", "", "Integration suite command run (`bash -c`) at the base repo root after merge; non-zero resets the merge and records suite_gate_exit/suite_gate_output")
 	return cmd
 }
@@ -81,7 +81,7 @@ func newWeaveStartCmd() *cobra.Command {
 		Use:   "start [-- <tool> [args...]]",
 		Short: "Allocate a workspace and launch an agentic tool",
 		Long: `start atomically claims the top of the loom:todo queue (or the
-issue specified with --issue), allocates a sandbox, and launches the
+issue specified with --issue), allocates a workspace, and launches the
 named tool inside it with WEAVE_* env vars set.
 
 The trailing '-- <tool>' form is the human-natural shape; --tool is
@@ -115,7 +115,7 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().StringVar(&tool, "tool", "", "Tool name (alternative to trailing -- <tool>)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Reattach to an existing lease for the given issue")
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
-	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "After a clean run and passing verify, commit dirty sandbox changes before recording terminal state")
+	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "After a clean run and passing verify, commit dirty workspace changes before recording terminal state")
 	cmd.Flags().StringVar(&ptyMode, "pty", "auto", "PTY allocation: auto (default) | always | never")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "Kill the subagent tree if no PTY output for this long (e.g. 5m); default off — caught the claude-TUI stuck case in the dogfood")
 	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling for the subagent (e.g. 30m); unlike --idle-timeout it cannot be reset by spinner output; default off")
@@ -428,10 +428,10 @@ func newWeaveReverifyCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
 		Use:   "reverify <issue>",
-		Short: "Refresh an issue's git and verify attestation from its sandbox",
-		Long: `reverify re-reads an issue's sandbox git state and reruns its recorded
+		Short: "Refresh an issue's git and verify attestation from its workspace",
+		Long: `reverify re-reads an issue's workspace git state and reruns its recorded
 verify command, then updates the persisted attestation used by weave pull.
-Use this after committing late/manual sandbox residue so pull sees the fresh
+Use this after committing late/manual workspace residue so pull sees the fresh
 clean HEAD instead of the stale terminal-time dirty record.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
@@ -484,9 +484,9 @@ func newWeavePruneCmd() *cobra.Command {
 	var stale bool
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Remove sandbox directories and merged branches for terminal items",
+		Short: "Remove workspace directories and merged branches for terminal items",
 		Long: `prune cleans up after terminal queue items:
-- Removes lingering sandbox directories for done, abandoned, failed, and killed items
+- Removes lingering workspace directories for done, abandoned, failed, and killed items
 - Deletes agent/weave-issue-N branches from the user repo if fully merged
 
 Use --yes to skip the confirmation prompt. This is safe: branches are only
@@ -497,7 +497,7 @@ deleted with -d (lowercase), which refuses if not fully merged.`,
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
-	cmd.Flags().BoolVar(&stale, "stale", false, "Also sweep orphaned 'allocated' items (sandbox created but never launched / launched-and-died with no commits) — clears leftover clutter from prior sessions; never touches items with committed work")
+	cmd.Flags().BoolVar(&stale, "stale", false, "Also sweep orphaned 'allocated' items (workspace created but never launched / launched-and-died with no commits) — clears leftover clutter from prior sessions; never touches items with committed work")
 	return cmd
 }
 
@@ -507,8 +507,8 @@ func newWeaveAbandonCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "abandon <issue>",
-		Short: "Tear down a weave (sandbox + branch + any running wrapper)",
-		Long: `abandon stops the running wrapper (if any) AND removes the sandbox
+		Short: "Tear down a weave (workspace + branch + any running wrapper)",
+		Long: `abandon stops the running wrapper (if any) AND removes the workspace
 + branch. Use this when giving up on an issue entirely.
 
 For "stop the runaway but keep the partial work for inspection",
@@ -539,7 +539,7 @@ func newWeaveStatusCmd() *cobra.Command {
 		Long: `status answers "where does this issue stand?" without a manual git
 investigation: it reports the recorded state reconciled against git
 (a "submitted" item already in base reads as done), the branch +
-sandbox HEAD, whether the work is merged into the base branch, how
+workspace HEAD, whether the work is merged into the base branch, how
 many commits it is ahead, and the last substrate-verified result.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -560,13 +560,13 @@ func newWeaveKillCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "kill <issue>",
-		Short: "Stop the running wrapper precisely, preserve sandbox + branch",
+		Short: "Stop the running wrapper precisely, preserve workspace + branch",
 		Long: `kill SIGTERMs the recorded wrapper PID for the issue and flips the
-queue item to state=failed. The sandbox + branch + any commits the
+queue item to state=failed. The workspace + branch + any commits the
 subagent already made are preserved — the orchestrator can:
 
   - ` + "`weave shell <issue>`" + ` to inspect the partial work
-  - ` + "`weave start --resume --issue N -- <tool>`" + ` to retry inside the same sandbox
+  - ` + "`weave start --resume --issue N -- <tool>`" + ` to retry inside the same workspace
   - ` + "`weave abandon <issue>`" + ` to throw it all away
 
 IMPORTANT for orchestrator agents: never shell out to ` + "`pkill`" + ` /
@@ -594,7 +594,7 @@ func newWeaveShellCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
 		Use:   "shell <issue>",
-		Short: "Drop into a shell inside the issue's sandbox",
+		Short: "Drop into a shell inside the issue's workspace",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
@@ -612,8 +612,8 @@ func newWeaveOpenCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
 		Use:   "open <issue>",
-		Short: "Surface an issue's sandbox path (file:// URL)",
-		Long: `open prints the file:// URL of an issue's sandbox worktree so you
+		Short: "Surface an issue's workspace path (file:// URL)",
+		Long: `open prints the file:// URL of an issue's workspace worktree so you
 can jump straight to the files an agent produced. weave is local-only —
 there is no remote page to open — so this resolves entirely on the
 local filesystem.`,

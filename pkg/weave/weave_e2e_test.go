@@ -116,7 +116,7 @@ func TestWeaveCheckReportsStatus(t *testing.T) {
 
 // TestWeaveQueueLifecycleE2E exercises the real command tree end-to-end
 // against an isolated HOME and a throwaway git repo: seed -> inspect ->
-// reprioritize -> allocate a sandbox -> open (local-only file:// URL) ->
+// reprioritize -> allocate a workspace -> open (local-only file:// URL) ->
 // error paths -> prune. weave shells out to system git, so this skips
 // cleanly where git is absent (e.g. the hermetic Windows leg).
 func TestWeaveQueueLifecycleE2E(t *testing.T) {
@@ -176,13 +176,13 @@ func TestWeaveQueueLifecycleE2E(t *testing.T) {
 		t.Fatalf("prio <issue> --auto must print an error, not exit silently: exit=%d out=%q", code, out)
 	}
 
-	// allocate a sandbox for issue 1 without spawning a tool
+	// allocate a workspace for issue 1 without spawning a tool
 	if out, code := runWeave(t, "start", "--issue", "1", "--no-spawn", "--json"); code != 0 || !strings.Contains(out, `"status": "ok"`) {
 		t.Fatalf("start --no-spawn: exit=%d out=%s", code, out)
 	}
-	// open is local-only: a file:// sandbox URL, never a forge field
+	// open is local-only: a file:// workspace URL, never a forge field
 	out, code := runWeave(t, "open", "1", "--json")
-	if code != 0 || !strings.Contains(out, `"sandbox_url": "file://`) {
+	if code != 0 || !strings.Contains(out, `"workspace_url": "file://`) {
 		t.Fatalf("open 1: exit=%d out=%s", code, out)
 	}
 	if strings.Contains(out, "forge") {
@@ -196,7 +196,7 @@ func TestWeaveQueueLifecycleE2E(t *testing.T) {
 		t.Error("open with no issue arg should fail (usage)")
 	}
 
-	// prune terminal/sandbox state without error
+	// prune terminal/workspace state without error
 	if _, code := runWeave(t, "prune", "--yes"); code != 0 {
 		t.Errorf("prune exit=%d", code)
 	}

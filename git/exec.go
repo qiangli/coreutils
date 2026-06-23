@@ -159,7 +159,7 @@ func nativeClone(_ context.Context, dir string, args []string) (*ExecResult, err
 			// Local-path clone optimizations. go-git always copies objects
 			// into the new repo's own store (no hardlinks, no shared
 			// alternates), so these are effective no-ops — accept them so
-			// `git clone --local --no-hardlinks <path>` (weave's sandbox
+			// `git clone --local --no-hardlinks <path>` (weave's workspace
 			// allocation) doesn't fall back to host git.
 		case strings.HasPrefix(args[i], "-"):
 			return nil, ErrUnsupported

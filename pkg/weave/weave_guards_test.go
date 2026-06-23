@@ -114,17 +114,17 @@ func TestWeaveDurationCol(t *testing.T) {
 	}
 }
 
-func TestSafeRemoveSandboxRefusesLiveWrapper(t *testing.T) {
+func TestSafeRemoveWorkspaceRefusesLiveWrapper(t *testing.T) {
 	queueDir := filepath.Join(t.TempDir(), "queue")
-	sandbox := filepath.Join(queueDir, "sandboxes", "issue-1")
-	if err := os.MkdirAll(sandbox, 0o755); err != nil {
-		t.Fatalf("mkdir sandbox: %v", err)
+	workspace := filepath.Join(queueDir, "workspaces", "issue-1")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
 	}
 	q := &weaveQueue{NextID: 2, Items: []*weaveItem{{
 		ID:         1,
 		Title:      "live",
 		State:      "working",
-		Sandbox:    sandbox,
+		Workspace:  workspace,
 		WrapperPid: os.Getpid(),
 		Created:    time.Now(),
 	}}}
@@ -134,14 +134,14 @@ func TestSafeRemoveSandboxRefusesLiveWrapper(t *testing.T) {
 	if err := saveWeaveQueue(queueDir, q); err != nil {
 		t.Fatalf("save queue: %v", err)
 	}
-	err := safeRemoveSandbox(queueDir, sandbox)
+	err := safeRemoveWorkspace(queueDir, workspace)
 	if err == nil {
 		t.Fatalf("expected live-wrapper refusal")
 	}
 	if !strings.Contains(err.Error(), "live wrapper pid") {
 		t.Fatalf("expected live-wrapper error, got %v", err)
 	}
-	if _, statErr := os.Stat(sandbox); statErr != nil {
-		t.Fatalf("sandbox should remain: %v", statErr)
+	if _, statErr := os.Stat(workspace); statErr != nil {
+		t.Fatalf("workspace should remain: %v", statErr)
 	}
 }

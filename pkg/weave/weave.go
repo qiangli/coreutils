@@ -27,7 +27,7 @@ func newWeaveCmd() *cobra.Command {
 		SilenceUsage:  true,
 		Long: `weave is a local, filesystem-based orchestrator for running
 agentic CLIs (codex, claude, opencode, ...) in parallel. Seed a queue
-of issues, fan tools out across them in isolated sandboxes so they
+of issues, fan tools out across them in isolated workspaces so they
 never clobber each other, then pull the converged work back into your
 repo. It runs entirely on the local filesystem — no server, no forge.
 
