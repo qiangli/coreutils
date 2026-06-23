@@ -649,6 +649,145 @@ Default timeout is 1h. On timeout, exits with precondition_failed
 	return cmd
 }
 
+func newWeaveSessionsCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "sessions",
+		Short: "List Cloudbox shared session tasks",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave sessions",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected no arguments")))
+			}
+			return runWeaveSessions(cmd, &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
+func newWeaveJoinCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var observer bool
+	var once bool
+	cmd := &cobra.Command{
+		Use:   "join [task-id]",
+		Short: "Join a Cloudbox shared session and follow its event feed",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 1 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave join",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected at most one task id")))
+			}
+			taskID := ""
+			if len(args) == 1 {
+				taskID = args[0]
+			}
+			return runWeaveJoin(cmd, taskID, observer, once, &flags)
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().BoolVar(&observer, "observer", false, "Join with observer role instead of contributor")
+	cmd.Flags().BoolVar(&once, "once", false, "Print the current continuity record and exit")
+	return cmd
+}
+
+func newWeaveNoteCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   `note "<text>"`,
+		Short: "Append a note to the joined shared session",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave note",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected exactly one note argument")))
+			}
+			return runWeaveNote(cmd, args[0], &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
+func newWeaveSteerCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   `steer <run> "<text>"`,
+		Short: "Append a session-scoped directive for a run",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 2 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave steer",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected: weave steer <run> \"<text>\"")))
+			}
+			return runWeaveSteer(cmd, args[0], args[1], &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
+func newWeaveTakeCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var holder string
+	var force bool
+	var ttl time.Duration
+	cmd := &cobra.Command{
+		Use:   "take",
+		Short: "Claim the lease for the joined shared session",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave take",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected no arguments")))
+			}
+			return runWeaveTake(cmd, holder, force, ttl, &flags)
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().StringVar(&holder, "as", "", "Lease holder name (default USER@hostname)")
+	cmd.Flags().BoolVar(&force, "force", false, "Force-claim a lease held by someone else")
+	cmd.Flags().DurationVar(&ttl, "ttl", 0, "Optional lease TTL (for example 30s, 5m)")
+	return cmd
+}
+
+func newWeaveHandoffCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var to string
+	cmd := &cobra.Command{
+		Use:   "handoff --to <holder>",
+		Short: "Record a manual handoff and release the session lease",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave handoff",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected no arguments")))
+			}
+			if to == "" {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave handoff",
+					weavecli.ExitInvalidArg, fmt.Errorf("--to is required")))
+			}
+			return runWeaveHandoff(cmd, to, &flags)
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().StringVar(&to, "to", "", "Successor lease holder")
+	return cmd
+}
+
+func newWeaveRosterCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "roster",
+		Short: "Show the joined session's current holder and recent participants",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave roster",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected no arguments")))
+			}
+			return runWeaveRoster(cmd, &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
 func newWeaveCheckCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{

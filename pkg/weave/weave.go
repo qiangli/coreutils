@@ -69,6 +69,13 @@ Common-case usage:
 	cmd.AddCommand(newWeaveResetCmd())
 	cmd.AddCommand(newWeaveWaitCmd())
 	cmd.AddCommand(newWeaveCheckCmd())
+	cmd.AddCommand(newWeaveSessionsCmd())
+	cmd.AddCommand(newWeaveJoinCmd())
+	cmd.AddCommand(newWeaveNoteCmd())
+	cmd.AddCommand(newWeaveSteerCmd())
+	cmd.AddCommand(newWeaveTakeCmd())
+	cmd.AddCommand(newWeaveHandoffCmd())
+	cmd.AddCommand(newWeaveRosterCmd())
 
 	return cmd
 }
