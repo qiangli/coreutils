@@ -72,6 +72,7 @@ func newWeaveStartCmd() *cobra.Command {
 	var tool string
 	var resume bool
 	var noSpawn bool
+	var autoCommit bool
 	var ptyMode string
 	var idleTimeout time.Duration
 	var maxRuntime time.Duration
@@ -101,6 +102,7 @@ blocks until N reaches a terminal state.`,
 			return runWeaveStart(cmd, issue, tool, args, weaveStartOptions{
 				noSpawn:     noSpawn,
 				resume:      resume,
+				autoCommit:  autoCommit,
 				pty:         ptyMode,
 				idleTimeout: idleTimeout,
 				maxRuntime:  maxRuntime,
@@ -113,6 +115,7 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().StringVar(&tool, "tool", "", "Tool name (alternative to trailing -- <tool>)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Reattach to an existing lease for the given issue")
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
+	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "After a clean run and passing verify, commit dirty sandbox changes before recording terminal state")
 	cmd.Flags().StringVar(&ptyMode, "pty", "auto", "PTY allocation: auto (default) | always | never")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "Kill the subagent tree if no PTY output for this long (e.g. 5m); default off — caught the claude-TUI stuck case in the dogfood")
 	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling for the subagent (e.g. 30m); unlike --idle-timeout it cannot be reset by spinner output; default off")
@@ -418,6 +421,32 @@ func newWeavePullCmd() *cobra.Command {
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&watch, "watch", false, "Daemonize: fast-forward whenever a PR merges")
+	return cmd
+}
+
+func newWeaveReverifyCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "reverify <issue>",
+		Short: "Refresh an issue's git and verify attestation from its sandbox",
+		Long: `reverify re-reads an issue's sandbox git state and reruns its recorded
+verify command, then updates the persisted attestation used by weave pull.
+Use this after committing late/manual sandbox residue so pull sees the fresh
+clean HEAD instead of the stale terminal-time dirty record.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave reverify",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected exactly one issue argument")))
+			}
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil || id <= 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave reverify",
+					weavecli.ExitInvalidArg, fmt.Errorf("invalid issue %q", args[0])))
+			}
+			return runWeaveReverify(cmd, id, &flags)
+		},
+	}
+	flags.attach(cmd)
 	return cmd
 }
 

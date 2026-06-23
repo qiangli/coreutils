@@ -137,6 +137,8 @@ type weaveItem struct {
 	Dirty           bool   `json:"dirty"`
 	DirtyFiles      int    `json:"dirty_files,omitempty"`
 	UntrackedFiles  int    `json:"untracked_files,omitempty"`
+	AutoCommitted   bool   `json:"auto_committed,omitempty"`
+	AutoCommitError string `json:"auto_commit_error,omitempty"`
 	ExitCode        *int   `json:"exit_code,omitempty"`
 	KilledBy        string `json:"killed_by,omitempty"`
 	LogPath         string `json:"log_path,omitempty"`
@@ -630,6 +632,66 @@ func weaveCollectVerifyEvidence(sandbox, command string, dirty bool, dirtyFiles 
 		vo = vo[len(vo)-2000:]
 	}
 	return &ve, vo, verifyTree
+}
+
+type weaveTerminalEvidence struct {
+	CommitsAhead   int
+	Head           string
+	Dirty          bool
+	DirtyFiles     int
+	UntrackedFiles int
+	VerifyExit     *int
+	VerifyOutput   string
+	VerifyTree     string
+}
+
+func weaveCollectTerminalEvidence(sandbox, base, verifyCommand string, runVerify bool) weaveTerminalEvidence {
+	ahead, head := weaveMeasureBranch(sandbox, base)
+	dirty, dirtyFiles, untrackedFiles := weaveMeasureDirtiness(sandbox)
+	ev := weaveTerminalEvidence{
+		CommitsAhead:   ahead,
+		Head:           head,
+		Dirty:          dirty,
+		DirtyFiles:     dirtyFiles,
+		UntrackedFiles: untrackedFiles,
+	}
+	if runVerify && verifyCommand != "" {
+		ev.VerifyExit, ev.VerifyOutput, ev.VerifyTree = weaveCollectVerifyEvidence(sandbox, verifyCommand, dirty, dirtyFiles)
+	}
+	return ev
+}
+
+func weaveApplyTerminalEvidence(it *weaveItem, ev weaveTerminalEvidence) {
+	it.CommitsAhead = ev.CommitsAhead
+	it.Head = ev.Head
+	it.Dirty = ev.Dirty
+	it.DirtyFiles = ev.DirtyFiles
+	it.UntrackedFiles = ev.UntrackedFiles
+	if ev.VerifyExit != nil {
+		it.VerifyExit = ev.VerifyExit
+		it.VerifyOutput = ev.VerifyOutput
+		it.VerifyTree = ev.VerifyTree
+	}
+}
+
+func weaveAutoCommitMessage(it *weaveItem) string {
+	return fmt.Sprintf("weave(auto): issue %d — %s", it.ID, it.Title)
+}
+
+func maybeAutoCommit(sandbox, msg string) (bool, error) {
+	dirty, _, untrackedFiles := weaveMeasureDirtiness(sandbox)
+	if !dirty && untrackedFiles == 0 {
+		return false, nil
+	}
+	add := exec.Command("git", "-C", sandbox, "add", "-A")
+	if out, err := add.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git add -A: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	commit := exec.Command("git", "-C", sandbox, "commit", "-m", msg)
+	if out, err := commit.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git commit: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return true, nil
 }
 
 func weaveSuiteGateCommand(root string, it *weaveItem) string {
@@ -1387,6 +1449,7 @@ func runWeaveNext(cmd *cobra.Command, flags *weaveOutputFlags) error {
 type weaveStartOptions struct {
 	noSpawn     bool
 	resume      bool
+	autoCommit  bool
 	pty         string // "auto" (default), "always", "never"
 	idleTimeout time.Duration
 	maxRuntime  time.Duration
@@ -1575,6 +1638,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.Dirty = false
 			freshIt.DirtyFiles = 0
 			freshIt.UntrackedFiles = 0
+			freshIt.AutoCommitted = false
+			freshIt.AutoCommitError = ""
 			if len(toolArgs) > 0 {
 				freshIt.Tool = filepath.Base(toolArgs[0])
 				freshIt.LaunchSpec = launchSpec
@@ -1851,26 +1916,34 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// We re-load inside the lock to pick up any updates that
 	// landed while the tool was running.
 	finishedAt := time.Now().UTC()
-	// Measure the branch ONCE, outside the lock: this is the
-	// substrate evidence for the terminal state. A non-zero exit
-	// (crash, watchdog, kill) with verified commits ahead is still
-	// shippable work — record it as submitted WITH the exit code and
-	// measurement preserved, so `weave pull` picks it up and the
-	// audit trail shows exactly how the run ended. No commits, no
-	// submitted: nothing is taken on faith.
-	ahead, head := weaveMeasureBranch(sandbox, base)
-	dirty, dirtyFiles, untrackedFiles := weaveMeasureDirtiness(sandbox)
+	// Measure the branch outside the lock: this is the substrate
+	// evidence for the terminal state. A non-zero exit (crash,
+	// watchdog, kill) with verified commits ahead is still shippable
+	// work — record it as submitted WITH the exit code and measurement
+	// preserved, so `weave pull` picks it up and the audit trail shows
+	// exactly how the run ended. No commits, no submitted: nothing is
+	// taken on faith.
 	// Verify command (from `weave add --verify`): run it now, outside
 	// the lock — it can take up to 10 minutes. Only when there is
 	// something to verify (clean exit or commits ahead). The result is
 	// EVIDENCE recorded alongside the terminal state; it never changes
 	// the submitted/killed/failed decision below — `weave pull` is the
 	// consumer that acts on a non-zero verify_exit.
-	var verifyExit *int
-	var verifyOutput string
-	var verifyTree string
-	if it.VerifyCommand != "" && (exitCode == 0 || ahead > 0) {
-		verifyExit, verifyOutput, verifyTree = weaveCollectVerifyEvidence(sandbox, it.VerifyCommand, dirty, dirtyFiles)
+	ev := weaveCollectTerminalEvidence(sandbox, base, "", false)
+	if it.VerifyCommand != "" && (exitCode == 0 || ev.CommitsAhead > 0) {
+		ev = weaveCollectTerminalEvidence(sandbox, base, it.VerifyCommand, true)
+	}
+	autoCommitted := false
+	autoCommitErr := ""
+	if opts.autoCommit && exitCode == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) && (ev.Dirty || ev.UntrackedFiles > 0) {
+		committed, err := maybeAutoCommit(sandbox, weaveAutoCommitMessage(it))
+		autoCommitted = committed
+		if err != nil {
+			autoCommitErr = err.Error()
+			ev = weaveCollectTerminalEvidence(sandbox, base, it.VerifyCommand, it.VerifyCommand != "")
+		} else if committed {
+			ev = weaveCollectTerminalEvidence(sandbox, base, it.VerifyCommand, true)
+		}
 	}
 	lockErr := withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
 		freshIt := findWeaveItem(freshQ, it.ID)
@@ -1882,16 +1955,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		freshIt.KilledBy = killReason
 		freshIt.WrapperPid = 0
 		freshIt.CtlSock = ""
-		freshIt.CommitsAhead = ahead
-		freshIt.Head = head
-		freshIt.Dirty = dirty
-		freshIt.DirtyFiles = dirtyFiles
-		freshIt.UntrackedFiles = untrackedFiles
-		if verifyExit != nil {
-			freshIt.VerifyExit = verifyExit
-			freshIt.VerifyOutput = verifyOutput
-			freshIt.VerifyTree = verifyTree
-		}
+		weaveApplyTerminalEvidence(freshIt, ev)
+		freshIt.AutoCommitted = autoCommitted
+		freshIt.AutoCommitError = autoCommitErr
 		if logPath != "" {
 			freshIt.LogPath = logPath
 		}
@@ -1905,9 +1971,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// The wrapper-measured evidence travels with the item so
 			// the orchestrator can verify and decide.
 			freshIt.State = "killed"
-			if ahead > 0 {
+			if ev.CommitsAhead > 0 {
 				freshIt.Body = fmt.Sprintf("[killed exit %d with %d wrapper-verified commit(s) ahead at %.12s — inspect, then resume or merge deliberately]\n\n",
-					exitCode, ahead, head) + freshIt.Body
+					exitCode, ev.CommitsAhead, ev.Head) + freshIt.Body
 			}
 		default:
 			freshIt.State = "failed"
@@ -2118,6 +2184,10 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 		if it.VerifyExit != nil {
 			res["verify_exit"] = *it.VerifyExit
 		}
+		res["auto_committed"] = it.AutoCommitted
+		if it.AutoCommitError != "" {
+			res["auto_commit_error"] = it.AutoCommitError
+		}
 		if it.KilledBy != "" {
 			res["killed_by"] = it.KilledBy
 		}
@@ -2142,6 +2212,11 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 			verdict = fmt.Sprintf("FAILED (exit %d)", *it.VerifyExit)
 		}
 		fmt.Fprintf(w, "  verify:   %s\n", verdict)
+	}
+	if it.AutoCommitted {
+		fmt.Fprintf(w, "  auto:     committed dirty sandbox changes\n")
+	} else if it.AutoCommitError != "" {
+		fmt.Fprintf(w, "  auto:     commit failed: %s\n", it.AutoCommitError)
 	}
 	branchInfo := fmt.Sprintf("%d commit(s) ahead of %s", it.CommitsAhead, base)
 	if len(it.Head) >= 12 {
@@ -2659,6 +2734,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		if it.VerifyExit != nil {
 			res["verify_exit"] = *it.VerifyExit
 		}
+		res["auto_committed"] = it.AutoCommitted
+		if it.AutoCommitError != "" {
+			res["auto_commit_error"] = it.AutoCommitError
+		}
 		if it.KilledBy != "" {
 			res["killed_by"] = it.KilledBy
 		}
@@ -2698,6 +2777,11 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		}
 		fmt.Fprintf(w, "  verify:   %s\n", verdict)
 	}
+	if it.AutoCommitted {
+		fmt.Fprintf(w, "  auto:     committed dirty sandbox changes\n")
+	} else if it.AutoCommitError != "" {
+		fmt.Fprintf(w, "  auto:     commit failed: %s\n", it.AutoCommitError)
+	}
 	if it.Dirty {
 		fmt.Fprintf(w, "  dirty:    %d tracked uncommitted file(s)\n", it.DirtyFiles)
 	}
@@ -2716,6 +2800,86 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		mergedStr = "no — `weave pull` to merge"
 	}
 	fmt.Fprintf(w, "  merged:   %s\n", mergedStr)
+	return nil
+}
+
+func runWeaveReverify(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error {
+	mode := flags.mode()
+	cwd, _ := os.Getwd()
+	root, err := weaveRepoRoot(cwd)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
+			weavecli.ExitPrecondFail, err))
+	}
+	dir, _ := weaveQueueDir(root)
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
+			weavecli.ExitGenericFail, err))
+	}
+	it := findWeaveItem(q, id)
+	if it == nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
+			weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
+	}
+	if it.Sandbox == "" {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
+			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no sandbox recorded", id)))
+	}
+	if st, err := os.Stat(it.Sandbox); err != nil || !st.IsDir() {
+		if err == nil {
+			err = fmt.Errorf("not a directory")
+		}
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
+			weavecli.ExitStateConflict, fmt.Errorf("issue #%d sandbox unavailable: %s: %w", id, it.Sandbox, err)))
+	}
+
+	base := weaveBaseBranch(root)
+	verifyCommand := it.VerifyCommand
+	ev := weaveCollectTerminalEvidence(it.Sandbox, base, verifyCommand, verifyCommand != "")
+	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		freshIt := findWeaveItem(q, id)
+		if freshIt == nil {
+			return fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))
+		}
+		weaveApplyTerminalEvidence(freshIt, ev)
+		if verifyCommand == "" {
+			freshIt.VerifyExit = nil
+			freshIt.VerifyOutput = ""
+			freshIt.VerifyTree = ""
+		}
+		freshIt.AutoCommitError = ""
+		return nil
+	})
+	if lockErr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
+			weavecli.ExitGenericFail, lockErr))
+	}
+	if mode == weavecli.OutputJSON {
+		res := map[string]any{
+			"issue":           id,
+			"commits_ahead":   ev.CommitsAhead,
+			"head":            ev.Head,
+			"dirty":           ev.Dirty,
+			"dirty_files":     ev.DirtyFiles,
+			"untracked_files": ev.UntrackedFiles,
+			"verify_rerun":    verifyCommand != "",
+		}
+		if ev.VerifyExit != nil {
+			res["verify_exit"] = *ev.VerifyExit
+			res["verify_tree"] = ev.VerifyTree
+		}
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave reverify", res))
+	}
+	if verifyCommand == "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "weave reverify: issue #%d remeasured (no verify command recorded): %d commit(s) ahead, dirty=%v\n", id, ev.CommitsAhead, ev.Dirty)
+		return nil
+	}
+	verifyExit := 0
+	if ev.VerifyExit != nil {
+		verifyExit = *ev.VerifyExit
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "weave reverify: issue #%d verify_exit=%d commits_ahead=%d dirty=%v\n", id, verifyExit, ev.CommitsAhead, ev.Dirty)
 	return nil
 }
 
