@@ -64,6 +64,98 @@ func TestEngineDependencyChain(t *testing.T) {
 	}
 }
 
+func TestEngineIncrementalSkip(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in.txt"), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	md := "## Tasks\n\n### gen\nSources: in.txt\nGenerates: out.txt\n" +
+		block("bash", "cat in.txt > out.txt")
+	cache := &Cache{Hashes: map[string]string{}}
+	cache.path = filepath.Join(dir, "cache.json")
+	newEng := func() *Engine {
+		g, err := BuildGraph(doc(t, md))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &Engine{Graph: g, Dir: dir, Env: os.Environ(), Concurrency: 1,
+			FailFast: true, Cache: cache, Stdout: new(bytes.Buffer), Stderr: new(bytes.Buffer)}
+	}
+	status := func(r RunReport) Status { return r.Results[0].Status }
+
+	r1, _ := newEng().Run(context.Background(), "gen")
+	if status(r1) != StatusDone {
+		t.Fatalf("first run: want done, got %s", status(r1))
+	}
+	r2, _ := newEng().Run(context.Background(), "gen")
+	if status(r2) != StatusUpToDate {
+		t.Errorf("unchanged rerun: want up-to-date, got %s", status(r2))
+	}
+	// Change the source → fingerprint changes → rebuild.
+	if err := os.WriteFile(filepath.Join(dir, "in.txt"), []byte("v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r3, _ := newEng().Run(context.Background(), "gen")
+	if status(r3) != StatusDone {
+		t.Errorf("changed source: want done, got %s", status(r3))
+	}
+	// --force ignores the cache.
+	eng := newEng()
+	eng.Force = true
+	r4, _ := eng.Run(context.Background(), "gen")
+	if status(r4) != StatusDone {
+		t.Errorf("force: want done, got %s", status(r4))
+	}
+}
+
+func TestEngineParallelDiamond(t *testing.T) {
+	dir := t.TempDir()
+	// a -> {b, c} -> d. Each target asserts its deps ran (their .done files
+	// exist) before touching its own, so a scheduling bug fails the target.
+	md := "## Tasks\n\n" +
+		"### a\n" + block("bash", "touch a.done") +
+		"### b\nRequires: a\n" + block("bash", "test -f a.done && touch b.done") +
+		"### c\nRequires: a\n" + block("bash", "test -f a.done && touch c.done") +
+		"### d\nRequires: b, c\n" + block("bash", "test -f b.done && test -f c.done && touch d.done")
+	g, err := BuildGraph(doc(t, md))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &Engine{Graph: g, Dir: dir, Env: os.Environ(), Concurrency: 4,
+		FailFast: true, Stdout: new(bytes.Buffer), Stderr: new(bytes.Buffer)}
+	report, err := eng.Run(context.Background(), "d")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Failed {
+		t.Fatalf("parallel diamond failed: %+v", report.Results)
+	}
+	if len(report.Results) != 4 {
+		t.Fatalf("want 4 results, got %d", len(report.Results))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "d.done")); err != nil {
+		t.Errorf("d.done missing — dependency ordering not respected under -j")
+	}
+}
+
+func TestEnginePerTargetEnv(t *testing.T) {
+	dir := t.TempDir()
+	md := "## Tasks\n\n### e\nEnv: GREETING=hi\n" + block("bash", "echo \"${GREETING:-none}\"")
+	g, err := BuildGraph(doc(t, md))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &Engine{Graph: g, Dir: dir, Env: os.Environ(), Concurrency: 1, FailFast: true,
+		Capture: true, Stdout: new(bytes.Buffer), Stderr: new(bytes.Buffer)}
+	report, err := eng.Run(context.Background(), "e")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(report.Results[0].Stdout, "hi") {
+		t.Errorf("per-target Env not applied; stdout=%q", report.Results[0].Stdout)
+	}
+}
+
 func TestEngineFailurePropagates(t *testing.T) {
 	dir := t.TempDir()
 	md := "## Tasks\n\n" +

@@ -4,6 +4,8 @@
 package dag
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -109,6 +111,31 @@ func TestParseFrontmatter(t *testing.T) {
 	}
 	if len(doc.Tasks) != 1 || doc.Tasks[0].Name != "t" {
 		t.Errorf("tasks = %+v", doc.Tasks)
+	}
+}
+
+func TestParseFileIncludes(t *testing.T) {
+	dir := t.TempDir()
+	// lib.md defines `compile`; DAG.md includes it and a `build` that requires it.
+	if err := os.WriteFile(filepath.Join(dir, "lib.md"),
+		[]byte("## Tasks\n\n### compile\n"+block("bash", "echo compile")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	main := "---\ninclude: lib.md\n---\n\n## Tasks\n\n### build\nRequires: compile\n" +
+		block("bash", "echo build")
+	if err := os.WriteFile(filepath.Join(dir, "DAG.md"), []byte(main), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ParseFile(filepath.Join(dir, "DAG.md"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if _, ok := doc.Lookup("compile"); !ok {
+		t.Fatalf("included target 'compile' not merged; order=%v", doc.Order)
+	}
+	// The graph resolves a cross-file dependency edge.
+	if _, err := BuildGraph(doc); err != nil {
+		t.Errorf("BuildGraph across include: %v", err)
 	}
 }
 

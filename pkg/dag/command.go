@@ -21,8 +21,9 @@ import (
 // follows the weavecli envelope convention (DHNT_AGENT=1 forces --json).
 func newDagCmd() *cobra.Command {
 	var (
-		listF, jsonF, plainF, quietF, keepGoing bool
-		fileArg                                 string
+		listF, jsonF, plainF, quietF, keepGoing, forceF bool
+		fileArg                                         string
+		jobs                                            int
 	)
 	cmd := &cobra.Command{
 		Use:   "dag [flags] [target ...]",
@@ -85,13 +86,19 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				targets = []string{d}
 			}
 
+			concurrency := jobs
+			if concurrency < 1 {
+				concurrency = 1
+			}
 			absPath, _ := filepath.Abs(path)
 			eng := &Engine{
 				Graph:       g,
 				Dir:         filepath.Dir(absPath),
 				Env:         append(os.Environ(), overrides...),
-				Concurrency: 1,
+				Concurrency: concurrency,
 				FailFast:    !keepGoing,
+				Force:       forceF,
+				Cache:       LoadCache(absPath),
 				Verbose:     mode == weavecli.OutputAuto || mode == weavecli.OutputPlain,
 				Capture:     mode == weavecli.OutputJSON,
 				Stdout:      out,
@@ -110,6 +117,8 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&plainF, "plain", false, "Plain-text output, no banners")
 	cmd.Flags().BoolVar(&quietF, "quiet", false, "Suppress banners; final result only")
 	cmd.Flags().BoolVarP(&keepGoing, "keep-going", "k", false, "Continue past a failed target")
+	cmd.Flags().IntVarP(&jobs, "jobs", "j", 1, "Run up to N targets in parallel (dependency-respecting)")
+	cmd.Flags().BoolVarP(&forceF, "force", "B", false, "Ignore the fingerprint cache; run every target")
 	cmd.Flags().StringVarP(&fileArg, "file", "f", "", "DAG markdown file (default: discover DAG.md)")
 	return cmd
 }

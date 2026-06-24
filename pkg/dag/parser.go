@@ -25,6 +25,7 @@ type Task struct {
 	Inputs    []string
 	Sources   []string
 	Generates []string
+	Env       []string // per-target KEY=VALUE overrides (make's target-specific vars)
 
 	// P2 (parsed-and-ignored in P1, so a contract-bearing file parses today).
 	Ensure  []string
@@ -35,12 +36,13 @@ type Task struct {
 
 // Document is a parsed DAG markdown file.
 type Document struct {
-	Path    string
-	Name    string // optional file-level frontmatter `name`
-	Desc    string // optional file-level frontmatter `description`
-	Default string // optional frontmatter `default` — make's .DEFAULT_GOAL
-	Tasks   []*Task
-	Order   []string // task names in declaration order (deterministic listing)
+	Path     string
+	Name     string   // optional file-level frontmatter `name`
+	Desc     string   // optional file-level frontmatter `description`
+	Default  string   // optional frontmatter `default` — make's .DEFAULT_GOAL
+	Includes []string // optional frontmatter `include` — files merged in (make's `include`)
+	Tasks    []*Task
+	Order    []string // task names in declaration order (deterministic listing)
 
 	byName map[string]*Task
 }
@@ -53,7 +55,7 @@ func (d *Document) Lookup(name string) (*Task, bool) {
 
 var metaKeys = map[string]bool{
 	"requires": true, "inputs": true, "sources": true,
-	"generates": true, "ensure": true, "effects": true,
+	"generates": true, "env": true, "ensure": true, "effects": true,
 }
 
 // Parse reads a DAG markdown document. The format:
@@ -84,6 +86,8 @@ func Parse(r io.Reader, path string) (*Document, error) {
 					doc.Desc = v
 				case "default", "default_goal":
 					doc.Default = v
+				case "include", "includes":
+					doc.Includes = append(doc.Includes, splitList(v)...)
 				}
 			}
 			j++
@@ -170,14 +174,54 @@ func Parse(r io.Reader, path string) (*Document, error) {
 	return doc, nil
 }
 
-// ParseFile parses the DAG markdown at path.
+// ParseFile parses the DAG markdown at path, resolving any frontmatter
+// `include:` files (paths relative to the including file). Like make's
+// `include`, included targets are merged in; the including file (and an
+// earlier-listed include) wins a name collision. A file is parsed at most once,
+// so diamonds and include cycles terminate safely.
 func ParseFile(path string) (*Document, error) {
+	return parseFileSeen(path, map[string]bool{})
+}
+
+func parseFileSeen(path string, seen map[string]bool) (*Document, error) {
+	abs, _ := filepath.Abs(path)
+	seen[abs] = true
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, errf(weavecli.ExitInvalidArg, "%v", err)
 	}
-	defer f.Close()
-	return Parse(f, path)
+	doc, err := Parse(f, path)
+	f.Close()
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(path)
+	for _, inc := range doc.Includes {
+		incPath := filepath.Join(dir, inc)
+		if cabs, _ := filepath.Abs(incPath); seen[cabs] {
+			continue // already merged (dedupe + cycle break)
+		}
+		child, err := parseFileSeen(incPath, seen)
+		if err != nil {
+			return nil, err
+		}
+		doc.mergeFrom(child)
+	}
+	return doc, nil
+}
+
+// mergeFrom adds child's targets that aren't already defined (this document and
+// earlier includes win name collisions).
+func (d *Document) mergeFrom(child *Document) {
+	for _, name := range child.Order {
+		if _, exists := d.byName[name]; exists {
+			continue
+		}
+		t := child.byName[name]
+		d.byName[name] = t
+		d.Tasks = append(d.Tasks, t)
+		d.Order = append(d.Order, name)
+	}
 }
 
 // Discover locates the task file in dir: DAG.md if present, else the first
@@ -252,6 +296,8 @@ func (t *Task) absorb(lines []string) {
 				t.Sources = append(t.Sources, splitList(v)...)
 			case "generates":
 				t.Generates = append(t.Generates, splitList(v)...)
+			case "env":
+				t.Env = append(t.Env, splitList(v)...)
 			case "ensure":
 				if s := strings.TrimSpace(v); s != "" {
 					t.Ensure = append(t.Ensure, s)
