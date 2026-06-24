@@ -74,6 +74,7 @@ Common-case usage:
 	cmd.AddCommand(newWeaveJoinCmd())
 	cmd.AddCommand(newWeaveNoteCmd())
 	cmd.AddCommand(newWeaveSteerCmd())
+	cmd.AddCommand(newWeaveConductCmd())
 	cmd.AddCommand(newWeaveTakeCmd())
 	cmd.AddCommand(newWeaveHandoffCmd())
 	cmd.AddCommand(newWeaveRosterCmd())

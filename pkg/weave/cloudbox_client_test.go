@@ -1,9 +1,11 @@
 package weave
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,7 +13,7 @@ import (
 )
 
 func TestHTTPSessionClientMethods(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestHTTPSessionClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.Header.Get("Authorization"), "Bearer test-token"; got != want {
 			t.Errorf("Authorization = %q, want %q", got, want)
 		}
@@ -80,9 +82,6 @@ func TestHTTPSessionClientMethods(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 	}))
-	defer ts.Close()
-
-	c := NewHTTPSessionClient(ts.URL+"/", "test-token")
 	ctx := context.Background()
 
 	tasks, err := c.ListTasks(ctx)
@@ -137,16 +136,14 @@ func TestHTTPSessionClientMethods(t *testing.T) {
 }
 
 func TestHTTPSessionClientStaleEpoch(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestHTTPSessionClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/tasks/task-1/events" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusConflict)
 		_, _ = w.Write([]byte(`{"error":{"code":"stale_epoch"}}`))
 	}))
-	defer ts.Close()
 
-	c := NewHTTPSessionClient(ts.URL, "test-token")
 	_, err := c.AppendEvent(context.Background(), "task-1", AppendEventReq{Kind: "note"})
 	if !errors.Is(err, ErrStaleEpoch) {
 		t.Fatalf("err = %v, want ErrStaleEpoch", err)
@@ -154,18 +151,37 @@ func TestHTTPSessionClientStaleEpoch(t *testing.T) {
 }
 
 func TestHTTPSessionClientLeaseHeld(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestHTTPSessionClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/tasks/task-1/lease" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusConflict)
 		_, _ = w.Write([]byte(`{"error":{"code":"lease_held"}}`))
 	}))
-	defer ts.Close()
 
-	c := NewHTTPSessionClient(ts.URL, "test-token")
 	_, err := c.Lease(context.Background(), "task-1", LeaseReq{Action: "claim", Holder: "codex@host"})
 	if !errors.Is(err, ErrLeaseHeld) {
 		t.Fatalf("err = %v, want ErrLeaseHeld", err)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func newTestHTTPSessionClient(t *testing.T, h http.Handler) *httpSessionClient {
+	t.Helper()
+	c := NewHTTPSessionClient("https://cloudbox.test/", "test-token")
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		resp := rec.Result()
+		if resp.Body == nil {
+			resp.Body = io.NopCloser(bytes.NewReader(nil))
+		}
+		return resp, nil
+	})}
+	return c
 }
