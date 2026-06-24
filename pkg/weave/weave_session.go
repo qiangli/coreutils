@@ -245,6 +245,79 @@ func runWeaveRoster(cmd *cobra.Command, flags *weaveOutputFlags) error {
 	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
+func runWeaveShare(cmd *cobra.Command, email, role string, flags *weaveOutputFlags) error {
+	const verb = "weave share"
+	mode := flags.mode()
+	if role == "" {
+		role = "observer"
+	}
+	if role != "observer" && role != "contributor" {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitInvalidArg, fmt.Errorf("--role must be observer or contributor")))
+	}
+	sc, err := sessionClientForRepo()
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
+	}
+	taskID, err := joinedTaskID(sc.pointer)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
+	}
+	share, err := sc.client.GrantShare(cmd.Context(), taskID, GrantShareReq{ShareeEmail: email, Role: role})
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+	}
+	if mode == weavecli.OutputJSON {
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, share))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "shared session with %s as %s\n", email, role)
+	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+}
+
+func runWeaveShares(cmd *cobra.Command, flags *weaveOutputFlags) error {
+	const verb = "weave shares"
+	mode := flags.mode()
+	sc, err := sessionClientForRepo()
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
+	}
+	taskID, err := joinedTaskID(sc.pointer)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
+	}
+	shares, err := sc.client.ListShares(cmd.Context(), taskID)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+	}
+	if mode == weavecli.OutputJSON {
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, shares))
+	}
+	for _, share := range shares {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s  %s\n", share.ShareeEmail, share.Role)
+	}
+	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+}
+
+func runWeaveUnshare(cmd *cobra.Command, email string, flags *weaveOutputFlags) error {
+	const verb = "weave unshare"
+	mode := flags.mode()
+	sc, err := sessionClientForRepo()
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
+	}
+	taskID, err := joinedTaskID(sc.pointer)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitPrecondFail, err))
+	}
+	if err := sc.client.RevokeShare(cmd.Context(), taskID, email); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
+	}
+	if mode == weavecli.OutputJSON {
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "revoked %s\n", email)
+	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+}
+
 func resolveJoinTaskID(ctx context.Context, client SessionClient, explicit string, pointer *SessionPointer) (string, error) {
 	if explicit != "" {
 		return explicit, nil
