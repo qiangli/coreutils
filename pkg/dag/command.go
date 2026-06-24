@@ -21,9 +21,9 @@ import (
 // follows the weavecli envelope convention (DHNT_AGENT=1 forces --json).
 func newDagCmd() *cobra.Command {
 	var (
-		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF bool
-		fileArg                                                                       string
-		jobs                                                                          int
+		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF bool
+		fileArg                                                                               string
+		jobs                                                                                  int
 	)
 	cmd := &cobra.Command{
 		Use:   "dag [flags] [target ...]",
@@ -87,6 +87,9 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				return emitErr(errOut, mode, err)
 			}
 
+			if checkF {
+				return runCheck(out, errOut, mode, doc, g)
+			}
 			if listF {
 				return runList(out, mode, doc)
 			}
@@ -155,8 +158,47 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&explainF, "explain", false, "Explain per target whether it would run or is up-to-date (runs nothing)")
 	cmd.Flags().BoolVarP(&dryRunF, "dry-run", "n", false, "Print the ordered plan without running any target body")
 	cmd.Flags().BoolVar(&outGroupF, "output-group", false, "Fold each target's output in GitHub ::group::/::endgroup:: markers (auto-on under GITHUB_ACTIONS)")
+	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")
 	cmd.Flags().StringVarP(&fileArg, "file", "f", "", "DAG markdown file (default: discover DAG.md)")
 	return cmd
+}
+
+// checkResult is the --check envelope payload.
+type checkResult struct {
+	File     string   `json:"file"`
+	Targets  int      `json:"targets"`
+	Ok       bool     `json:"ok"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// runCheck statically validates a parsed + built graph: parse, include
+// resolution, var/matrix expansion, unknown/self deps, and unknown effects are
+// already enforced by ParseFile/BuildGraph (errors surface before here); this
+// adds a full-graph topological sort to catch cycles regardless of any target,
+// plus non-fatal lint warnings. It runs no target bodies.
+func runCheck(out, errOut io.Writer, mode weavecli.OutputMode, doc *Document, g *Graph) error {
+	if _, err := g.TopoSort(); err != nil { // full-graph cycle detection
+		return emitErr(errOut, mode, err)
+	}
+	res := checkResult{File: doc.Path, Targets: len(doc.Order), Ok: true}
+	// Lint (non-fatal): targets whose Sources/Generates name a path that does
+	// not exist yet are common and fine, so we only warn on empty bodies that
+	// also declare no Requires (a no-op target that can never do anything).
+	for _, name := range doc.Order {
+		t, _ := doc.Lookup(name)
+		if strings.TrimSpace(t.Body) == "" && len(t.Requires) == 0 {
+			res.Warnings = append(res.Warnings, "target "+name+" has no body and no requires (no-op)")
+		}
+	}
+	if mode == weavecli.OutputJSON {
+		emitOK(out, res)
+		return nil
+	}
+	fmt.Fprintf(out, "ok: %s — %d targets\n", doc.Path, res.Targets)
+	for _, w := range res.Warnings {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
+	return nil
 }
 
 // defaultTarget resolves the goal for a no-argument invocation: the frontmatter

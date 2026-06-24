@@ -256,6 +256,39 @@ func TestCommandOutputGroup(t *testing.T) {
 	}
 }
 
+func TestCommandCheck(t *testing.T) {
+	// Valid file: --check reports ok and runs nothing.
+	path := writeDAG(t, "## Tasks\n\n### a\n"+block("bash", "echo a > ran.txt")+
+		"### b\nRequires: a\n"+block("bash", "echo b"))
+	cmd := NewDagCmd()
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--check", "--file", path})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("check valid: %v", err)
+	}
+	if !strings.Contains(out.String(), "ok:") {
+		t.Errorf("check should report ok; got %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "ran.txt")); err == nil {
+		t.Errorf("--check executed a body")
+	}
+
+	// Cyclic file: --check fails with the state-conflict code.
+	cyc := writeDAG(t, "## Tasks\n\n### x\nRequires: y\n"+block("bash", "echo x")+
+		"### y\nRequires: x\n"+block("bash", "echo y"))
+	cmd2 := NewDagCmd()
+	cmd2.SetOut(new(bytes.Buffer))
+	cmd2.SetErr(new(bytes.Buffer))
+	cmd2.SetArgs([]string{"--check", "--file", cyc})
+	if err := cmd2.Execute(); err == nil {
+		t.Fatal("check should fail on a cycle")
+	} else if ExitCodeOf(err) != 4 {
+		t.Errorf("want exit 4 (state conflict), got %d", ExitCodeOf(err))
+	}
+}
+
 func TestCommandUnknownTarget(t *testing.T) {
 	path := writeDAG(t, "## Tasks\n\n### a\n"+block("bash", "echo a"))
 	cmd := NewDagCmd()
