@@ -58,6 +58,7 @@ Common-case usage:
 	cmd.AddCommand(newWeaveAutopilotCmd())
 	cmd.AddCommand(newWeaveStatusCmd())
 	cmd.AddCommand(newWeaveLogCmd())
+	cmd.AddCommand(newWeaveAttachCmd())
 	cmd.AddCommand(newWeaveSayCmd())
 	cmd.AddCommand(newWeavePullCmd())
 	cmd.AddCommand(newWeaveReverifyCmd())

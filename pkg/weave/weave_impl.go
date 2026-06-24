@@ -2342,16 +2342,29 @@ func runWeaveLog(cmd *cobra.Command, id int64, follow bool, tailN int, summary b
 	if !follow {
 		return nil
 	}
+	if err := weaveFollowLog(context.Background(), out, f, dir, id); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave log",
+			weavecli.ExitGenericFail, err))
+	}
+	return nil
+}
+
+func weaveFollowLog(ctx context.Context, out io.Writer, f *os.File, dir string, id int64) error {
 	// Follow: poll for appended bytes (regular files don't support
 	// blocking reads past EOF). Stop once the issue is terminal AND
 	// the file is drained — terminal-then-drain, not drain-then-
 	// terminal, so the final flush after exit is never truncated.
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 	for {
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
 		n, err := io.Copy(out, f)
 		if err != nil {
-			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave log",
-				weavecli.ExitGenericFail, err))
+			return err
 		}
 		if n > 0 {
 			continue
