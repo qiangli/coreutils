@@ -154,12 +154,37 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	// Wall-clock watchdog: --idle-timeout is useless against a
 	// runaway TUI whose spinner keeps emitting output; this one
 	// cannot be reset by activity.
+	//
+	// Uses a REAL wall-clock deadline (time.Now().Unix()), NOT
+	// time.After/a monotonic timer. Monotonic timers PAUSE while the
+	// host is asleep (laptop suspend), so a run that spans a sleep
+	// would never hit its "hard wall-clock ceiling" in real elapsed
+	// time — the dogfood hit exactly this: a 35m ceiling went
+	// unenforced across an overnight suspend (the subagent sat
+	// "working" for 40m+ of wall clock having accrued only minutes of
+	// awake time). The poll ticker also pauses during sleep, but on
+	// wake it re-checks within `interval` and catches the overrun, so
+	// the ceiling fires within `interval` of the true deadline even
+	// across a suspend.
 	if guards.maxRuntime > 0 {
 		go func() {
-			select {
-			case <-watchdogStop:
-			case <-time.After(guards.maxRuntime):
-				killTree(fmt.Sprintf("runtime exceeds --max-runtime %s", guards.maxRuntime), 10*time.Second)
+			deadlineUnix := time.Now().Add(guards.maxRuntime).Unix()
+			interval := guards.maxRuntime / 10
+			if interval <= 0 || interval > 30*time.Second {
+				interval = 30 * time.Second
+			}
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-watchdogStop:
+					return
+				case <-ticker.C:
+					if time.Now().Unix() >= deadlineUnix {
+						killTree(fmt.Sprintf("runtime exceeds --max-runtime %s (wall-clock)", guards.maxRuntime), 10*time.Second)
+						return
+					}
+				}
 			}
 		}()
 	}

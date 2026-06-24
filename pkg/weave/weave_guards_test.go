@@ -1,12 +1,54 @@
 package weave
 
 import (
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+// The --max-runtime watchdog must kill a hung subagent after the ceiling.
+// Regression for the dogfood miss where a 35m ceiling went unenforced
+// across a laptop suspend: the guard used a monotonic timer (time.After)
+// that pauses during system sleep; it now polls a real wall-clock deadline.
+// (This test doesn't simulate sleep — it just pins that the guard fires.)
+func TestRunWeaveToolPTYMaxRuntimeFires(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PTY watchdog is unix-only")
+	}
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not on PATH")
+	}
+	cmd := exec.Command("sleep", "60")
+	type res struct {
+		exit   int
+		reason string
+		err    error
+	}
+	done := make(chan res, 1)
+	go func() {
+		exit, reason, err := runWeaveToolPTY(cmd, io.Discard, weaveGuards{maxRuntime: time.Second})
+		done <- res{exit, reason, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("runWeaveToolPTY: %v", r.err)
+		}
+		if r.exit == 0 {
+			t.Errorf("want non-zero exit after watchdog kill, got 0")
+		}
+		if !strings.Contains(r.reason, "max-runtime") {
+			t.Errorf("kill reason = %q, want it to mention max-runtime", r.reason)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("max-runtime guard did not fire within 20s for a 1s ceiling on a 60s sleep")
+	}
+}
 
 func TestParseWeaveMemLimit(t *testing.T) {
 	cases := []struct {
