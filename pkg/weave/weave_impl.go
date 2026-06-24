@@ -135,23 +135,29 @@ type weaveItem struct {
 	// VerifyOutput (last 2000 bytes) as evidence. Verify never changes
 	// the terminal state itself; `weave pull` refuses to merge
 	// submitted items whose VerifyExit is set and non-zero.
-	VerifyCommand   string `json:"verify_command,omitempty"`
-	VerifyExit      *int   `json:"verify_exit,omitempty"`
-	VerifyOutput    string `json:"verify_output,omitempty"`
-	VerifyTree      string `json:"verify_tree,omitempty"`
-	SuiteGate       string `json:"suite_gate,omitempty"`
-	SuiteGateExit   *int   `json:"suite_gate_exit,omitempty"`
-	SuiteGateOutput string `json:"suite_gate_output,omitempty"`
-	Dirty           bool   `json:"dirty"`
-	DirtyFiles      int    `json:"dirty_files,omitempty"`
-	UntrackedFiles  int    `json:"untracked_files,omitempty"`
-	AutoCommitted   bool   `json:"auto_committed,omitempty"`
-	AutoCommitError string `json:"auto_commit_error,omitempty"`
-	ExitCode        *int   `json:"exit_code,omitempty"`
-	KilledBy        string `json:"killed_by,omitempty"`
-	LogPath         string `json:"log_path,omitempty"`
-	Throttled       bool   `json:"throttled,omitempty"`
-	ThrottleSignal  string `json:"throttle_signal,omitempty"`
+	VerifyCommand   string    `json:"verify_command,omitempty"`
+	VerifyExit      *int      `json:"verify_exit,omitempty"`
+	VerifyOutput    string    `json:"verify_output,omitempty"`
+	VerifyTree      string    `json:"verify_tree,omitempty"`
+	ReviewVerdict   string    `json:"review_verdict,omitempty"`
+	ReviewBlocking  bool      `json:"review_blocking,omitempty"`
+	ReviewNotes     string    `json:"review_notes,omitempty"`
+	ReviewExit      int       `json:"review_exit,omitempty"`
+	ReviewBy        string    `json:"review_by,omitempty"`
+	ReviewAt        time.Time `json:"review_at,omitempty"`
+	SuiteGate       string    `json:"suite_gate,omitempty"`
+	SuiteGateExit   *int      `json:"suite_gate_exit,omitempty"`
+	SuiteGateOutput string    `json:"suite_gate_output,omitempty"`
+	Dirty           bool      `json:"dirty"`
+	DirtyFiles      int       `json:"dirty_files,omitempty"`
+	UntrackedFiles  int       `json:"untracked_files,omitempty"`
+	AutoCommitted   bool      `json:"auto_committed,omitempty"`
+	AutoCommitError string    `json:"auto_commit_error,omitempty"`
+	ExitCode        *int      `json:"exit_code,omitempty"`
+	KilledBy        string    `json:"killed_by,omitempty"`
+	LogPath         string    `json:"log_path,omitempty"`
+	Throttled       bool      `json:"throttled,omitempty"`
+	ThrottleSignal  string    `json:"throttle_signal,omitempty"`
 	// WrapperPid is the PID of the `bashy weave start` process
 	// supervising this item (NOT the subagent's PID — the wrapper
 	// is the session leader after auto-setsid and signals propagate
@@ -2602,7 +2608,17 @@ func tailOffset(f *os.File, n int) (int64, error) {
 	return 0, nil
 }
 
-func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, issueSpecified bool) error {
+func weaveRequireReviewGate(it *weaveItem) error {
+	if it == nil {
+		return fmt.Errorf("issue has no passing review; run `weave review`")
+	}
+	if it.ReviewVerdict != "pass" || it.ReviewBlocking {
+		return fmt.Errorf("issue #%d has no passing review; run `weave review %d`", it.ID, it.ID)
+	}
+	return nil
+}
+
+func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, issueSpecified bool, requireReview bool) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -2650,6 +2666,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// done is already merged, abandoned was torn down.
 			if it.State != "working" && it.State != "submitted" {
 				continue
+			}
+			if requireReview {
+				if err := weaveRequireReviewGate(it); err != nil {
+					return err
+				}
 			}
 			if it.State == "working" && it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "running",
@@ -2773,6 +2794,8 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		code := weavecli.ExitGenericFail
 		if strings.Contains(lockErr.Error(), "not found") {
 			code = weavecli.ExitInvalidArg
+		} else if strings.Contains(lockErr.Error(), "has no passing review") {
+			code = weavecli.ExitStateConflict
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave pull",
 			code, lockErr))
@@ -4006,7 +4029,7 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 	}
 	// Delegate to pull: re-acquires the lock and runs the full verify + merge
 	// path on the now-"submitted" item.
-	return runWeavePull(cmd, flags, issueID, true)
+	return runWeavePull(cmd, flags, issueID, true, false)
 }
 
 // weavePrunableForSweep reports whether `weave prune` (optionally --stale)
