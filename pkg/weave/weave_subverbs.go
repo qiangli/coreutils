@@ -488,6 +488,7 @@ Wrappers started by an older ycode have no control socket.`,
 func newWeavePullCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var watch bool
+	var requireReview bool
 	cmd := &cobra.Command{
 		Use:   "pull [issue]",
 		Short: "Fast-forward your local main with the merged agent branches",
@@ -508,11 +509,37 @@ func newWeavePullCmd() *cobra.Command {
 				issueID = id
 				issueSpecified = true
 			}
-			return runWeavePull(cmd, &flags, issueID, issueSpecified)
+			return runWeavePull(cmd, &flags, issueID, issueSpecified, requireReview)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&watch, "watch", false, "Daemonize: fast-forward whenever a PR merges")
+	cmd.Flags().BoolVar(&requireReview, "require-review", false, "Require a passing `weave review` verdict before merging")
+	return cmd
+}
+
+func newWeaveReviewCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "review <issue>",
+		Short: "Re-verify submitted work in a fresh clean-room checkout",
+		Long: `review re-derives an issue's evidence in a fresh local clone of the
+submitted branch, reruns the recorded verify command, and persists a structured
+local verdict used by pull --require-review.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave review",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected exactly one issue argument")))
+			}
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil || id <= 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave review",
+					weavecli.ExitInvalidArg, fmt.Errorf("invalid issue %q", args[0])))
+			}
+			return runWeaveReview(cmd, id, &flags)
+		},
+	}
+	flags.attach(cmd)
 	return cmd
 }
 
