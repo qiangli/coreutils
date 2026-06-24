@@ -50,7 +50,7 @@ func TestWeaveCommandSurface(t *testing.T) {
 	}
 	for _, n := range []string{
 		"add", "start", "next", "prio", "point", "list", "pause", "resume",
-		"autopilot", "status", "log", "attach", "say", "pull", "reverify", "prune", "abandon",
+		"autopilot", "status", "log", "remember", "recall", "memory", "attach", "say", "pull", "reverify", "prune", "abandon",
 		"kill", "shell", "open", "reset", "wait", "check",
 		"sessions", "join", "note", "steer", "take", "handoff", "roster",
 		"share", "shares", "unshare",
