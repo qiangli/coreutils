@@ -2227,6 +2227,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	}
 	autoCommitted := false
 	autoCommitErr := ""
+	// throttleLogTail carries the matched throttle log chunk out of the
+	// queue lock so the cooldown reset can be parsed + recorded after the
+	// state write (best-effort, mirroring memory/reporter below).
+	throttleLogTail := ""
 	if opts.autoCommit && exitCode == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) && (ev.Dirty || ev.UntrackedFiles > 0) {
 		committed, err := maybeAutoCommit(workspace, weaveAutoCommitMessageWithContext(it, ev))
 		autoCommitted = committed
@@ -2250,10 +2254,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		freshIt.Throttled = false
 		freshIt.ThrottleSignal = ""
 		if logPath != "" {
-			throttled, signal := weaveClassifyThrottle(it.Tool, exitCode, weaveReadThrottleLogTail(logPath))
+			logTail := weaveReadThrottleLogTail(logPath)
+			throttled, signal := weaveClassifyThrottle(it.Tool, exitCode, logTail)
 			if throttled {
 				freshIt.Throttled = true
 				freshIt.ThrottleSignal = signal
+				throttleLogTail = logTail
 			}
 		}
 		weaveApplyTerminalEvidence(freshIt, ev)
@@ -2290,6 +2296,23 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 		if err := weaveReportTerminal(context.Background(), root, it, ev); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: reporter: terminal report failed (continuing): %v\n", err)
+		}
+		// Throttle-aware cooldown: when the run terminated as a throttle and
+		// a reset time is parseable, record the underlying tool on cooldown
+		// so the orchestrator (`weave fleet`) fails over now and re-engages
+		// it after the reset. Best-effort — a cooldown error never fails the
+		// run, matching the memory/reporter calls above.
+		if it.Throttled && throttleLogTail != "" {
+			msg := throttleLogTail
+			if it.ThrottleSignal != "" {
+				msg = it.ThrottleSignal + "\n" + msg
+			}
+			if reset, ok := parseThrottleReset(msg, time.Now()); ok {
+				coolTool := weaveThrottleToolFromSignal(it.Tool, throttleLogTail)
+				if err := recordToolCooldown(dir, coolTool, reset); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "weave start: cooldown record failed (continuing): %v\n", err)
+				}
+			}
 		}
 	}
 

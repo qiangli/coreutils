@@ -56,6 +56,7 @@ Common-case usage:
 	cmd.AddCommand(newWeavePauseCmd())
 	cmd.AddCommand(newWeaveResumeCmd())
 	cmd.AddCommand(newWeaveAutopilotCmd())
+	cmd.AddCommand(newWeaveFleetCmd())
 	cmd.AddCommand(newWeaveStatusCmd())
 	cmd.AddCommand(newWeaveLogCmd())
 	cmd.AddCommand(newWeaveRememberCmd())
