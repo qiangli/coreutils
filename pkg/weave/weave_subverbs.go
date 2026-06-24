@@ -817,6 +817,59 @@ func newWeaveRosterCmd() *cobra.Command {
 	return cmd
 }
 
+func newWeaveShareCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var role string
+	cmd := &cobra.Command{
+		Use:   "share <email>",
+		Short: "Share the joined session with another user",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave share",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected exactly one email argument")))
+			}
+			return runWeaveShare(cmd, args[0], role, &flags)
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().StringVar(&role, "role", "observer", "Share role: observer or contributor")
+	return cmd
+}
+
+func newWeaveSharesCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "shares",
+		Short: "List users shared into the joined session",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave shares",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected no arguments")))
+			}
+			return runWeaveShares(cmd, &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
+func newWeaveUnshareCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "unshare <email>",
+		Short: "Revoke a user's share on the joined session",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave unshare",
+					weavecli.ExitInvalidArg, fmt.Errorf("expected exactly one email argument")))
+			}
+			return runWeaveUnshare(cmd, args[0], &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
 func newWeaveCheckCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{

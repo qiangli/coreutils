@@ -18,6 +18,8 @@ type fakeSessionClient struct {
 	joins       []JoinReq
 	appends     []AppendEventReq
 	leases      []LeaseReq
+	shares      []GrantShareReq
+	revokes     []string
 	leaseErr    error
 }
 
@@ -50,6 +52,20 @@ func (f *fakeSessionClient) Lease(ctx context.Context, taskID string, req LeaseR
 		return LeaseResponse{}, f.leaseErr
 	}
 	return LeaseResponse{LeaseHolder: &req.Holder, LeaseEpoch: len(f.leases)}, nil
+}
+
+func (f *fakeSessionClient) GrantShare(ctx context.Context, taskID string, req GrantShareReq) (TaskShare, error) {
+	f.shares = append(f.shares, req)
+	return TaskShare{ID: "share-1", TaskID: taskID, ShareeEmail: req.ShareeEmail, Role: req.Role}, nil
+}
+
+func (f *fakeSessionClient) ListShares(ctx context.Context, taskID string) ([]TaskShare, error) {
+	return []TaskShare{{ID: "share-1", TaskID: taskID, ShareeEmail: "a@example.com", Role: "observer"}}, nil
+}
+
+func (f *fakeSessionClient) RevokeShare(ctx context.Context, taskID, sharee string) error {
+	f.revokes = append(f.revokes, sharee)
+	return nil
 }
 
 func TestResolveJoinTaskID(t *testing.T) {

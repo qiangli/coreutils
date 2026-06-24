@@ -25,6 +25,9 @@ type SessionClient interface {
 	AppendEvent(ctx context.Context, taskID string, req AppendEventReq) (Event, error)
 	Join(ctx context.Context, taskID string, req JoinReq) (JoinResponse, error)
 	Lease(ctx context.Context, taskID string, req LeaseReq) (LeaseResponse, error)
+	GrantShare(ctx context.Context, taskID string, req GrantShareReq) (TaskShare, error)
+	ListShares(ctx context.Context, taskID string) ([]TaskShare, error)
+	RevokeShare(ctx context.Context, taskID, sharee string) error
 }
 
 type httpSessionClient struct {
@@ -124,6 +127,23 @@ type LeaseResponse struct {
 	LeaseExpires time.Time `json:"lease_expires"`
 }
 
+type GrantShareReq struct {
+	ShareeEmail string `json:"sharee_email"`
+	Role        string `json:"role,omitempty"`
+}
+
+type TaskShare struct {
+	ID          string `json:"id"`
+	TaskID      string `json:"task_id"`
+	ShareeEmail string `json:"sharee_email"`
+	Role        string `json:"role"`
+	Created     string `json:"created"`
+}
+
+type ListSharesResponse struct {
+	Shares []TaskShare `json:"shares"`
+}
+
 func (c *httpSessionClient) ListTasks(ctx context.Context) ([]TaskSummary, error) {
 	var out ListTasksResponse
 	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/tasks", nil, &out); err != nil {
@@ -174,6 +194,26 @@ func (c *httpSessionClient) Lease(ctx context.Context, taskID string, req LeaseR
 		return LeaseResponse{}, err
 	}
 	return out, nil
+}
+
+func (c *httpSessionClient) GrantShare(ctx context.Context, taskID string, req GrantShareReq) (TaskShare, error) {
+	var out TaskShare
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks/"+url.PathEscape(taskID)+"/shares", req, &out); err != nil {
+		return TaskShare{}, err
+	}
+	return out, nil
+}
+
+func (c *httpSessionClient) ListShares(ctx context.Context, taskID string) ([]TaskShare, error) {
+	var out ListSharesResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/tasks/"+url.PathEscape(taskID)+"/shares", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Shares, nil
+}
+
+func (c *httpSessionClient) RevokeShare(ctx context.Context, taskID, sharee string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/api/v1/tasks/"+url.PathEscape(taskID)+"/shares/"+url.PathEscape(sharee), nil, nil)
 }
 
 func (c *httpSessionClient) doJSON(ctx context.Context, method, path string, body any, out any) error {

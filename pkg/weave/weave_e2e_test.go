@@ -53,6 +53,7 @@ func TestWeaveCommandSurface(t *testing.T) {
 		"autopilot", "status", "log", "say", "pull", "reverify", "prune", "abandon",
 		"kill", "shell", "open", "reset", "wait", "check",
 		"sessions", "join", "note", "steer", "take", "handoff", "roster",
+		"share", "shares", "unshare",
 	} {
 		if !have[n] {
 			t.Errorf("missing subverb %q", n)

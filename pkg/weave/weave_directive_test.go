@@ -35,6 +35,18 @@ func (m *directiveMockSessionClient) Lease(ctx context.Context, taskID string, r
 	return LeaseResponse{}, nil
 }
 
+func (m *directiveMockSessionClient) GrantShare(ctx context.Context, taskID string, req GrantShareReq) (TaskShare, error) {
+	return TaskShare{}, nil
+}
+
+func (m *directiveMockSessionClient) ListShares(ctx context.Context, taskID string) ([]TaskShare, error) {
+	return nil, nil
+}
+
+func (m *directiveMockSessionClient) RevokeShare(ctx context.Context, taskID, sharee string) error {
+	return nil
+}
+
 func TestConsumeDirectivesAppliesAndAcks(t *testing.T) {
 	tests := []struct {
 		name   string
