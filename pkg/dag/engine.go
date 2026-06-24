@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
 // Engine executes a graph. Concurrency==1 runs targets in topological serial
@@ -102,6 +104,9 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 		if res.Status == StatusFailed {
 			if e.Verbose {
 				fmt.Fprintf(e.Stderr, "==> %s FAILED (exit %d)\n", node.Task.Name, res.ExitCode)
+				if res.Err != nil {
+					fmt.Fprintf(e.Stderr, "    %s\n", res.Err)
+				}
 			}
 			if e.FailFast {
 				return report
@@ -254,6 +259,9 @@ func (e *Engine) flushBanner(n *Node, r TaskResult) {
 	}
 	if r.Status == StatusFailed {
 		fmt.Fprintf(e.Stderr, "==> %s FAILED (exit %d)\n", n.Task.Name, r.ExitCode)
+		if r.Err != nil {
+			fmt.Fprintf(e.Stderr, "    %s\n", r.Err)
+		}
 	}
 }
 
@@ -278,6 +286,18 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResul
 	})
 	if capture {
 		res.Stdout, res.Stderr = ob.String(), eb.String()
+	}
+
+	// P2 contract: a clean exit is necessary but not sufficient — the target's
+	// Ensure postconditions must hold. A failed postcondition fails the target
+	// with ExitPrecondFail even though the body returned 0.
+	if att := attest(ctx, node.Task, e.Dir, e.envFor(node), res.Status == StatusDone); att != nil {
+		res.Attestation = att
+		if !att.Valid && res.Status == StatusDone {
+			res.Status = StatusFailed
+			res.ExitCode = weavecli.ExitPrecondFail
+			res.Err = firstFailedCheck(att)
+		}
 	}
 	return res
 }

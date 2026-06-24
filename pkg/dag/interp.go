@@ -24,14 +24,15 @@ type TaskIO struct {
 // only when the engine runs in capture mode (e.g. --json), so a machine reader
 // gets a single clean envelope on stdout instead of interleaved task output.
 type TaskResult struct {
-	Name     string
-	Status   Status
-	ExitCode int
-	Duration time.Duration
-	Err      error
-	Stdout   string
-	Stderr   string
-	UpToDate bool // reserved for P1.5 fingerprint skip
+	Name        string
+	Status      Status
+	ExitCode    int
+	Duration    time.Duration
+	Err         error
+	Stdout      string
+	Stderr      string
+	UpToDate    bool         // P1.5 fingerprint skip
+	Attestation *Attestation // P2 contract verdict (nil when no Ensure/Effects)
 }
 
 // Interpreter runs a target's body. Implementations register themselves by

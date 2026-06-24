@@ -181,13 +181,14 @@ type listResult struct {
 }
 
 type runItem struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	ExitCode   int    `json:"exit_code"`
-	DurationMS int64  `json:"duration_ms"`
-	Stdout     string `json:"stdout,omitempty"`
-	Stderr     string `json:"stderr,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Name        string       `json:"name"`
+	Status      string       `json:"status"`
+	ExitCode    int          `json:"exit_code"`
+	DurationMS  int64        `json:"duration_ms"`
+	Stdout      string       `json:"stdout,omitempty"`
+	Stderr      string       `json:"stderr,omitempty"`
+	Error       string       `json:"error,omitempty"`
+	Attestation *Attestation `json:"attestation,omitempty"`
 }
 
 type runResult struct {
@@ -229,7 +230,7 @@ func runReport(out, errOut io.Writer, mode weavecli.OutputMode, path string, tar
 		item := runItem{
 			Name: r.Name, Status: r.Status.String(),
 			ExitCode: r.ExitCode, DurationMS: r.Duration.Milliseconds(),
-			Stdout: r.Stdout, Stderr: r.Stderr,
+			Stdout: r.Stdout, Stderr: r.Stderr, Attestation: r.Attestation,
 		}
 		if r.Err != nil {
 			item.Error = r.Err.Error()
