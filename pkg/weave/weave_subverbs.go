@@ -334,6 +334,31 @@ callers read the file themselves.`,
 	return cmd
 }
 
+func newWeaveAttachCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "attach <issue>",
+		Short: "Interactively watch and steer a running subagent",
+		Long: `attach streams the per-issue PTY capture while reading lines from
+stdin and sending them to the running subagent's terminal. It is a
+line-oriented same-host session: type instructions, then /detach (or
+/quit) to leave. Detaching does not stop or kill the subagent.
+
+The issue must be state=working with a live wrapper, a control socket,
+and a PTY capture log.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("issue must be an integer: %q", args[0])
+			}
+			return runWeaveAttach(cmd, id, &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
 func newWeaveSayCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var tab, enter bool
