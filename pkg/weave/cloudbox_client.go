@@ -23,6 +23,8 @@ type SessionClient interface {
 	ListTasks(ctx context.Context) ([]TaskSummary, error)
 	GetEvents(ctx context.Context, taskID, since string, limit int) (EventsResponse, error)
 	AppendEvent(ctx context.Context, taskID string, req AppendEventReq) (Event, error)
+	CreateSprint(ctx context.Context, req CreateSprintReq) (SprintSummary, error)
+	UpsertRun(ctx context.Context, sprintID string, req UpsertRunReq) (RunSummary, error)
 	Join(ctx context.Context, taskID string, req JoinReq) (JoinResponse, error)
 	Lease(ctx context.Context, taskID string, req LeaseReq) (LeaseResponse, error)
 	GrantShare(ctx context.Context, taskID string, req GrantShareReq) (TaskShare, error)
@@ -82,6 +84,65 @@ type AppendEventReq struct {
 	Summary    string          `json:"summary"`
 	Detail     json.RawMessage `json:"detail"`
 	LeaseEpoch *int            `json:"lease_epoch"`
+}
+
+type CreateSprintReq struct {
+	TargetRepo string   `json:"target_repo"`
+	Gate       string   `json:"gate"`
+	TaskID     string   `json:"task_id"`
+	Fleet      []string `json:"fleet,omitempty"`
+}
+
+type SprintSummary struct {
+	ID         string   `json:"id"`
+	TargetRepo string   `json:"target_repo,omitempty"`
+	Gate       string   `json:"gate,omitempty"`
+	TaskID     string   `json:"task_id,omitempty"`
+	Fleet      []string `json:"fleet,omitempty"`
+}
+
+type UpsertRunReq struct {
+	Issue        string  `json:"issue"`
+	Agent        string  `json:"agent"`
+	Host         string  `json:"host,omitempty"`
+	Branch       string  `json:"branch,omitempty"`
+	Sandbox      string  `json:"sandbox,omitempty"`
+	Status       string  `json:"status"`
+	CommitsAhead int     `json:"commits_ahead"`
+	Exit         int     `json:"exit"`
+	Verdict      string  `json:"verdict,omitempty"`
+	GateOutput   string  `json:"gate_output,omitempty"`
+	LogTail      string  `json:"log_tail,omitempty"`
+	TraceID      string  `json:"trace_id,omitempty"`
+	TokensIn     int     `json:"tokens_in,omitempty"`
+	TokensOut    int     `json:"tokens_out,omitempty"`
+	Cost         float64 `json:"cost,omitempty"`
+	Tool         string  `json:"tool,omitempty"`
+	Model        string  `json:"model,omitempty"`
+	Provider     string  `json:"provider,omitempty"`
+}
+
+type RunSummary struct {
+	ID           string  `json:"id"`
+	SprintID     string  `json:"sprint_id,omitempty"`
+	Issue        string  `json:"issue"`
+	Agent        string  `json:"agent,omitempty"`
+	Host         string  `json:"host,omitempty"`
+	Branch       string  `json:"branch,omitempty"`
+	Sandbox      string  `json:"sandbox,omitempty"`
+	Status       string  `json:"status,omitempty"`
+	CommitsAhead int     `json:"commits_ahead,omitempty"`
+	Exit         int     `json:"exit,omitempty"`
+	Verdict      string  `json:"verdict,omitempty"`
+	GateOutput   string  `json:"gate_output,omitempty"`
+	LogTail      string  `json:"log_tail,omitempty"`
+	TraceID      string  `json:"trace_id,omitempty"`
+	TokensIn     int     `json:"tokens_in,omitempty"`
+	TokensOut    int     `json:"tokens_out,omitempty"`
+	Cost         float64 `json:"cost,omitempty"`
+	Tool         string  `json:"tool,omitempty"`
+	Model        string  `json:"model,omitempty"`
+	Provider     string  `json:"provider,omitempty"`
 }
 
 type JoinReq struct {
@@ -176,6 +237,22 @@ func (c *httpSessionClient) AppendEvent(ctx context.Context, taskID string, req 
 	var out Event
 	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/tasks/"+url.PathEscape(taskID)+"/events", req, &out); err != nil {
 		return Event{}, err
+	}
+	return out, nil
+}
+
+func (c *httpSessionClient) CreateSprint(ctx context.Context, req CreateSprintReq) (SprintSummary, error) {
+	var out SprintSummary
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/sprints", req, &out); err != nil {
+		return SprintSummary{}, err
+	}
+	return out, nil
+}
+
+func (c *httpSessionClient) UpsertRun(ctx context.Context, sprintID string, req UpsertRunReq) (RunSummary, error) {
+	var out RunSummary
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/sprints/"+url.PathEscape(sprintID)+"/runs", req, &out); err != nil {
+		return RunSummary{}, err
 	}
 	return out, nil
 }

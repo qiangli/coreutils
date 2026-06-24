@@ -54,6 +54,30 @@ func TestHTTPSessionClientMethods(t *testing.T) {
 				t.Errorf("detail = %s", req.Detail)
 			}
 			_, _ = w.Write([]byte(`{"id":"ev-2","kind":"note","summary":"hello","detail":{"x":1},"created":"2026-06-23T04:05:06Z","lease_epoch":3}`))
+		case "/api/v1/sprints":
+			if r.Method != http.MethodPost {
+				t.Errorf("create sprint method = %s", r.Method)
+			}
+			var req CreateSprintReq
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			if req.TargetRepo != "/repo" || req.Gate != "go test ./..." || req.TaskID != "task-1" || len(req.Fleet) != 1 || req.Fleet[0] != "codex" {
+				t.Errorf("create sprint req = %+v", req)
+			}
+			_, _ = w.Write([]byte(`{"id":"sprint-1","target_repo":"/repo","gate":"go test ./...","task_id":"task-1","fleet":["codex"]}`))
+		case "/api/v1/sprints/sprint-1/runs":
+			if r.Method != http.MethodPost {
+				t.Errorf("upsert run method = %s", r.Method)
+			}
+			var req UpsertRunReq
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			if req.Issue != "#1 title" || req.Agent != "codex" || req.Sandbox != "/repo/work" || req.Status != "verified" || req.CommitsAhead != 2 || req.Exit != 0 {
+				t.Errorf("upsert run req = %+v", req)
+			}
+			_, _ = w.Write([]byte(`{"id":"run-1","sprint_id":"sprint-1","issue":"#1 title","status":"verified"}`))
 		case "/api/v1/tasks/task-1/join":
 			if r.Method != http.MethodPost {
 				t.Errorf("join method = %s", r.Method)
@@ -115,6 +139,22 @@ func TestHTTPSessionClientMethods(t *testing.T) {
 	}
 	if ev.ID != "ev-2" || ev.LeaseEpoch != 3 {
 		t.Fatalf("event = %+v", ev)
+	}
+
+	sprint, err := c.CreateSprint(ctx, CreateSprintReq{TargetRepo: "/repo", Gate: "go test ./...", TaskID: "task-1", Fleet: []string{"codex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sprint.ID != "sprint-1" || sprint.TaskID != "task-1" {
+		t.Fatalf("sprint = %+v", sprint)
+	}
+
+	run, err := c.UpsertRun(ctx, "sprint-1", UpsertRunReq{Issue: "#1 title", Agent: "codex", Sandbox: "/repo/work", Status: "verified", CommitsAhead: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.ID != "run-1" || run.SprintID != "sprint-1" {
+		t.Fatalf("run = %+v", run)
 	}
 
 	join, err := c.Join(ctx, "task-1", JoinReq{Participant: "tool@host", Host: "host", Tool: "codex", Role: "contributor"})

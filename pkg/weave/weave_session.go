@@ -34,7 +34,11 @@ type sessionRepoClient struct {
 
 func sessionClientForRepo() (*sessionRepoClient, error) {
 	cwd, _ := os.Getwd()
-	p, err := ReadSessionPointer(cwd)
+	return sessionClientForRepoRoot(cwd)
+}
+
+func sessionClientForRepoRoot(repoRoot string) (*sessionRepoClient, error) {
+	p, err := ReadSessionPointer(repoRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +57,7 @@ func sessionClientForRepo() (*sessionRepoClient, error) {
 		return nil, fmt.Errorf("session token env %s is not set", tokenRef)
 	}
 	return &sessionRepoClient{
-		repoRoot: cwd,
+		repoRoot: repoRoot,
 		pointer:  p,
 		client:   newSessionClient(p.CloudboxBase, token),
 	}, nil

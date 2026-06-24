@@ -9,6 +9,7 @@ import (
 
 type SessionPointer struct {
 	TaskID       string `json:"task_id"`
+	SprintID     string `json:"sprint_id,omitempty"`
 	CloudboxBase string `json:"cloudbox_base"`
 	TokenRef     string `json:"token_ref"`
 }

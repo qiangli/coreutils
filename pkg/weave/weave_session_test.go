@@ -17,6 +17,10 @@ type fakeSessionClient struct {
 	eventsPolls []EventsResponse
 	joins       []JoinReq
 	appends     []AppendEventReq
+	appendTasks []string
+	sprints     []CreateSprintReq
+	runs        []UpsertRunReq
+	runSprints  []string
 	leases      []LeaseReq
 	shares      []GrantShareReq
 	revokes     []string
@@ -38,7 +42,19 @@ func (f *fakeSessionClient) GetEvents(ctx context.Context, taskID, since string,
 
 func (f *fakeSessionClient) AppendEvent(ctx context.Context, taskID string, req AppendEventReq) (Event, error) {
 	f.appends = append(f.appends, req)
+	f.appendTasks = append(f.appendTasks, taskID)
 	return Event{ID: "ev-" + req.Kind, Kind: req.Kind, Summary: req.Summary, Detail: req.Detail}, nil
+}
+
+func (f *fakeSessionClient) CreateSprint(ctx context.Context, req CreateSprintReq) (SprintSummary, error) {
+	f.sprints = append(f.sprints, req)
+	return SprintSummary{ID: "sprint-1", TargetRepo: req.TargetRepo, Gate: req.Gate, TaskID: req.TaskID}, nil
+}
+
+func (f *fakeSessionClient) UpsertRun(ctx context.Context, sprintID string, req UpsertRunReq) (RunSummary, error) {
+	f.runs = append(f.runs, req)
+	f.runSprints = append(f.runSprints, sprintID)
+	return RunSummary{ID: "run-1", SprintID: sprintID, Issue: req.Issue, Status: req.Status}, nil
 }
 
 func (f *fakeSessionClient) Join(ctx context.Context, taskID string, req JoinReq) (JoinResponse, error) {
