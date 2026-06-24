@@ -27,6 +27,14 @@ func (m *directiveMockSessionClient) AppendEvent(ctx context.Context, taskID str
 	return Event{ID: "ack"}, nil
 }
 
+func (m *directiveMockSessionClient) CreateSprint(ctx context.Context, req CreateSprintReq) (SprintSummary, error) {
+	return SprintSummary{}, nil
+}
+
+func (m *directiveMockSessionClient) UpsertRun(ctx context.Context, sprintID string, req UpsertRunReq) (RunSummary, error) {
+	return RunSummary{}, nil
+}
+
 func (m *directiveMockSessionClient) Join(ctx context.Context, taskID string, req JoinReq) (JoinResponse, error) {
 	return JoinResponse{}, nil
 }

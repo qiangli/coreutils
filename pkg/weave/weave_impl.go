@@ -2284,8 +2284,13 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	})
 	if lockErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed after tool exit: %v\n", lockErr)
-	} else if err := weaveRememberObservation(dir, it, ev); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory capture failed (continuing): %v\n", err)
+	} else {
+		if err := weaveRememberObservation(dir, it, ev); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory capture failed (continuing): %v\n", err)
+		}
+		if err := weaveReportTerminal(context.Background(), root, it, ev); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: reporter: terminal report failed (continuing): %v\n", err)
+		}
 	}
 
 	if runErr != nil {
@@ -2728,6 +2733,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		SuiteGateOutput string `json:"suite_gate_output,omitempty"`
 	}
 	var results []result
+	var mergedReports []*weaveItem
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		weaveTestPauseAfterPullLoad()
 		if issueSpecified && findWeaveItem(q, issueID) == nil {
@@ -2867,10 +2873,13 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					continue
 				}
 			}
+			reportIt := *it
 			// Delete the fetched branch from user repo if fully merged (-d, never -D).
 			_ = exec.Command("git", "-C", root, "branch", "-d", it.Branch).Run()
 			it.State = "done"
 			it.Workspace = ""
+			reportIt.State = "done"
+			mergedReports = append(mergedReports, &reportIt)
 			results = append(results, result{
 				Issue:           it.ID,
 				Branch:          it.Branch,
@@ -2890,6 +2899,21 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave pull",
 			code, lockErr))
+	}
+	for _, it := range mergedReports {
+		ev := weaveTerminalEvidence{
+			CommitsAhead: it.CommitsAhead,
+			Head:         it.Head,
+			VerifyExit:   it.VerifyExit,
+			VerifyOutput: it.VerifyOutput,
+			VerifyTree:   it.VerifyTree,
+		}
+		if it.SuiteGateOutput != "" {
+			ev.VerifyOutput = it.SuiteGateOutput
+		}
+		if err := weaveReportTerminal(context.Background(), root, it, ev); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave pull: reporter: merge report failed (continuing): %v\n", err)
+		}
 	}
 	if mode == weavecli.OutputJSON {
 		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave pull", map[string]any{
