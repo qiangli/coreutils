@@ -805,6 +805,10 @@ func weaveRememberObservation(dir string, it *weaveItem, ev weaveTerminalEvidenc
 }
 
 func weaveInjectMemoryFile(dir, workspace string, it *weaveItem) error {
+	return weaveInjectMemoryFileWithPrefix(dir, workspace, it, "")
+}
+
+func weaveInjectMemoryFileWithPrefix(dir, workspace string, it *weaveItem, prefix string) error {
 	if it == nil || workspace == "" {
 		return nil
 	}
@@ -821,28 +825,35 @@ func weaveInjectMemoryFile(dir, workspace string, it *weaveItem) error {
 	if err != nil {
 		return err
 	}
-	if len(obs) == 0 {
+	prefix = strings.TrimSpace(prefix)
+	if len(obs) == 0 && prefix == "" {
 		_ = os.Remove(filepath.Join(workspace, "WEAVE_MEMORY.md"))
 		return nil
 	}
 	var b strings.Builder
 	b.WriteString("# WEAVE_MEMORY\n\n")
-	b.WriteString("## Prior runs on related work\n\n")
-	for _, o := range obs {
-		files := "-"
-		if len(o.FilesTouched) > 0 {
-			files = strings.Join(o.FilesTouched, ", ")
-			if len(files) > 160 {
-				files = files[:157] + "..."
-			}
-		}
-		summary := strings.TrimSpace(o.Summary)
-		if summary == "" {
-			summary = o.Title
-		}
-		fmt.Fprintf(&b, "- issue #%d: %s; files: %s; %s\n", o.IssueID, o.Outcome, files, weaveTruncate(summary, 160))
+	if prefix != "" {
+		b.WriteString(prefix)
+		b.WriteString("\n\n")
 	}
-	b.WriteString("\nRun `weave recall <q>` for detail.\n")
+	if len(obs) > 0 {
+		b.WriteString("## Prior runs on related work\n\n")
+		for _, o := range obs {
+			files := "-"
+			if len(o.FilesTouched) > 0 {
+				files = strings.Join(o.FilesTouched, ", ")
+				if len(files) > 160 {
+					files = files[:157] + "..."
+				}
+			}
+			summary := strings.TrimSpace(o.Summary)
+			if summary == "" {
+				summary = o.Title
+			}
+			fmt.Fprintf(&b, "- issue #%d: %s; files: %s; %s\n", o.IssueID, o.Outcome, files, weaveTruncate(summary, 160))
+		}
+		b.WriteString("\nRun `weave recall <q>` for detail.\n")
+	}
 	if err := os.WriteFile(filepath.Join(workspace, "WEAVE_MEMORY.md"), []byte(b.String()), 0o644); err != nil {
 		return err
 	}
@@ -874,6 +885,82 @@ func weaveExcludeWorkspaceMemory(workspace string) error {
 
 func weaveAutoCommitMessage(it *weaveItem) string {
 	return fmt.Sprintf("weave(auto): issue %d — %s", it.ID, it.Title)
+}
+
+func weaveAutoCommitMessageWithContext(it *weaveItem, ev weaveTerminalEvidence) string {
+	trailer := weaveContextTrailer(it, ev)
+	if trailer == "" {
+		return weaveAutoCommitMessage(it)
+	}
+	return weaveAutoCommitMessage(it) + "\n\n" + trailer
+}
+
+func weaveContextTrailer(it *weaveItem, ev weaveTerminalEvidence) string {
+	if it == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[weave-context]\n")
+	fmt.Fprintf(&b, "issue: #%d %s\n", it.ID, strings.TrimSpace(it.Title))
+	files := ev.FilesTouched
+	if len(files) > 10 {
+		files = files[:10]
+	}
+	if len(files) == 0 {
+		b.WriteString("files: -\n")
+	} else {
+		fmt.Fprintf(&b, "files: %s\n", strings.Join(files, ", "))
+	}
+	fmt.Fprintf(&b, "commits-ahead: %d\n", ev.CommitsAhead)
+	if ev.VerifyExit == nil {
+		b.WriteString("verify: n/a\n")
+	} else {
+		fmt.Fprintf(&b, "verify: exit=%d\n", *ev.VerifyExit)
+	}
+	if it.Throttled && strings.TrimSpace(it.ThrottleSignal) != "" {
+		fmt.Fprintf(&b, "throttled: %s\n", strings.TrimSpace(it.ThrottleSignal))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func parseWeaveContextTrailer(commitMsg string) (string, bool) {
+	commitMsg = strings.ReplaceAll(commitMsg, "\r\n", "\n")
+	lines := strings.Split(commitMsg, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "[weave-context]" {
+			start = i
+		}
+	}
+	if start < 0 {
+		return "", false
+	}
+	out := []string{strings.TrimSpace(lines[start])}
+	for _, line := range lines[start+1:] {
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		if !strings.Contains(line, ":") {
+			break
+		}
+		out = append(out, strings.TrimRight(line, " \t"))
+	}
+	if len(out) == 1 {
+		return "", false
+	}
+	return strings.Join(out, "\n"), true
+}
+
+func weaveResumeMemoryPrefix(workspace string) string {
+	out, err := exec.Command("git", "-C", workspace, "log", "-1", "--format=%B").Output()
+	if err != nil {
+		return ""
+	}
+	trailer, ok := parseWeaveContextTrailer(string(out))
+	if !ok {
+		return ""
+	}
+	return "## Resuming — last context\n\n```text\n" + trailer + "\n```"
 }
 
 func maybeAutoCommit(workspace, msg string) (bool, error) {
@@ -1956,7 +2043,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed (continuing): %v\n", lockErr)
 		}
 	}
-	if err := weaveInjectMemoryFile(dir, workspace, it); err != nil {
+	memoryPrefix := ""
+	if opts.resume {
+		memoryPrefix = weaveResumeMemoryPrefix(workspace)
+	}
+	if err := weaveInjectMemoryFileWithPrefix(dir, workspace, it, memoryPrefix); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory inject failed (continuing): %v\n", err)
 	}
 	if mode != weavecli.OutputJSON {
@@ -2137,7 +2228,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	autoCommitted := false
 	autoCommitErr := ""
 	if opts.autoCommit && exitCode == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) && (ev.Dirty || ev.UntrackedFiles > 0) {
-		committed, err := maybeAutoCommit(workspace, weaveAutoCommitMessage(it))
+		committed, err := maybeAutoCommit(workspace, weaveAutoCommitMessageWithContext(it, ev))
 		autoCommitted = committed
 		if err != nil {
 			autoCommitErr = err.Error()
