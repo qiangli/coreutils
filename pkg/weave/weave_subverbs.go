@@ -334,6 +334,73 @@ callers read the file themselves.`,
 	return cmd
 }
 
+func newWeaveRememberCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var issue int64
+	var tags []string
+	cmd := &cobra.Command{
+		Use:   `remember "<text>"`,
+		Short: "Append a manual persistent memory observation",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWeaveRemember(cmd, args[0], issue, tags, &flags)
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().Int64Var(&issue, "issue", 0, "Associate the note with an issue")
+	cmd.Flags().StringArrayVar(&tags, "tag", nil, "Tag for recall scoring (repeatable; comma-separated accepted)")
+	return cmd
+}
+
+func newWeaveRecallCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var issue int64
+	var files string
+	cmd := &cobra.Command{
+		Use:   "recall <query>",
+		Short: "Recall persistent memory observations related to a query",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWeaveRecall(cmd, args[0], issue, files, &flags)
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().Int64Var(&issue, "issue", 0, "Boost observations for an issue")
+	cmd.Flags().StringVar(&files, "files", "", "Comma-separated file paths for overlap scoring")
+	return cmd
+}
+
+func newWeaveMemoryCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "memory list|show <issue>|export",
+		Short: "Inspect or export persistent weave memory",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 && (args[0] == "list" || args[0] == "export") {
+				return nil
+			}
+			if len(args) == 2 && args[0] == "show" {
+				_, err := parseMemoryIssueArg(args[1])
+				return err
+			}
+			return fmt.Errorf("expected: weave memory list|show <issue>|export")
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var issue int64
+			if len(args) == 2 {
+				var err error
+				issue, err = parseMemoryIssueArg(args[1])
+				if err != nil {
+					return err
+				}
+			}
+			return runWeaveMemory(cmd, args[0], issue, &flags)
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
 func newWeaveAttachCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{

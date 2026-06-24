@@ -26,6 +26,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/weave/memory"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -656,6 +657,7 @@ func weaveCollectVerifyEvidence(workspace, command string, dirty bool, dirtyFile
 type weaveTerminalEvidence struct {
 	CommitsAhead   int
 	Head           string
+	FilesTouched   []string
 	Dirty          bool
 	DirtyFiles     int
 	UntrackedFiles int
@@ -670,6 +672,7 @@ func weaveCollectTerminalEvidence(workspace, base, verifyCommand string, runVeri
 	ev := weaveTerminalEvidence{
 		CommitsAhead:   ahead,
 		Head:           head,
+		FilesTouched:   weaveCollectFilesTouched(workspace, base),
 		Dirty:          dirty,
 		DirtyFiles:     dirtyFiles,
 		UntrackedFiles: untrackedFiles,
@@ -678,6 +681,33 @@ func weaveCollectTerminalEvidence(workspace, base, verifyCommand string, runVeri
 		ev.VerifyExit, ev.VerifyOutput, ev.VerifyTree = weaveCollectVerifyEvidence(workspace, verifyCommand, dirty, dirtyFiles)
 	}
 	return ev
+}
+
+func weaveCollectFilesTouched(workspace, base string) []string {
+	seen := map[string]bool{}
+	addLines := func(out []byte) {
+		for _, ln := range strings.Split(string(out), "\n") {
+			ln = strings.TrimSpace(ln)
+			if ln != "" {
+				seen[ln] = true
+			}
+		}
+	}
+	if out, err := exec.Command("git", "-C", workspace, "diff", "--name-only", base+"...HEAD").Output(); err == nil {
+		addLines(out)
+	}
+	if out, err := exec.Command("git", "-C", workspace, "diff", "--name-only").Output(); err == nil {
+		addLines(out)
+	}
+	if out, err := exec.Command("git", "-C", workspace, "ls-files", "--others", "--exclude-standard").Output(); err == nil {
+		addLines(out)
+	}
+	files := make([]string, 0, len(seen))
+	for f := range seen {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	return files
 }
 
 func weaveApplyTerminalEvidence(it *weaveItem, ev weaveTerminalEvidence) {
@@ -691,6 +721,149 @@ func weaveApplyTerminalEvidence(it *weaveItem, ev weaveTerminalEvidence) {
 		it.VerifyOutput = ev.VerifyOutput
 		it.VerifyTree = ev.VerifyTree
 	}
+}
+
+func weaveIssueMemoryFiles(it *weaveItem) []string {
+	if it == nil {
+		return nil
+	}
+	text := it.Title + "\n" + it.Body
+	seen := map[string]bool{}
+	for _, raw := range strings.FieldsFunc(text, func(r rune) bool {
+		switch r {
+		case ' ', '\n', '\t', '\r', ',', ';', ':', '"', '\'', '`', '(', ')', '[', ']', '{', '}':
+			return true
+		}
+		return false
+	}) {
+		tok := strings.Trim(raw, "./")
+		if tok == "" || strings.Contains(tok, "://") {
+			continue
+		}
+		if strings.Contains(tok, "/") || strings.Contains(filepath.Base(tok), ".") {
+			seen[tok] = true
+		}
+	}
+	files := make([]string, 0, len(seen))
+	for f := range seen {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	return files
+}
+
+func weaveRememberObservation(dir string, it *weaveItem, ev weaveTerminalEvidence) error {
+	if it == nil {
+		return nil
+	}
+	outcome := it.State
+	if outcome == "done" {
+		outcome = "merged"
+	}
+	if outcome != "submitted" && outcome != "failed" && outcome != "killed" && outcome != "merged" {
+		return nil
+	}
+	verifyExit := 0
+	if it.VerifyExit != nil {
+		verifyExit = *it.VerifyExit
+	}
+	gateExit := 0
+	if it.SuiteGateExit != nil {
+		gateExit = *it.SuiteGateExit
+	}
+	tags := []string{}
+	if it.Throttled {
+		tags = append(tags, "throttled")
+		if it.ThrottleSignal != "" {
+			tags = append(tags, it.ThrottleSignal)
+		}
+	}
+	st, _, err := memory.Open(dir, memory.Prefs{})
+	if err != nil {
+		return err
+	}
+	return st.Remember(context.Background(), memory.Observation{
+		IssueID:      it.ID,
+		Title:        it.Title,
+		Tool:         it.Tool,
+		Outcome:      outcome,
+		FilesTouched: ev.FilesTouched,
+		Commits:      it.CommitsAhead,
+		VerifyExit:   verifyExit,
+		GateExit:     gateExit,
+		KilledBy:     it.KilledBy,
+		Summary:      strings.TrimSpace(fmt.Sprintf("%s: %s", it.State, it.Title)),
+		Tags:         tags,
+		CreatedAt:    time.Now().UTC(),
+	})
+}
+
+func weaveInjectMemoryFile(dir, workspace string, it *weaveItem) error {
+	if it == nil || workspace == "" {
+		return nil
+	}
+	st, _, err := memory.Open(dir, memory.Prefs{})
+	if err != nil {
+		return err
+	}
+	obs, err := st.Recall(context.Background(), memory.Query{
+		Files:   weaveIssueMemoryFiles(it),
+		Title:   it.Title,
+		IssueID: it.ID,
+		Limit:   10,
+	})
+	if err != nil {
+		return err
+	}
+	if len(obs) == 0 {
+		_ = os.Remove(filepath.Join(workspace, "WEAVE_MEMORY.md"))
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("# WEAVE_MEMORY\n\n")
+	b.WriteString("## Prior runs on related work\n\n")
+	for _, o := range obs {
+		files := "-"
+		if len(o.FilesTouched) > 0 {
+			files = strings.Join(o.FilesTouched, ", ")
+			if len(files) > 160 {
+				files = files[:157] + "..."
+			}
+		}
+		summary := strings.TrimSpace(o.Summary)
+		if summary == "" {
+			summary = o.Title
+		}
+		fmt.Fprintf(&b, "- issue #%d: %s; files: %s; %s\n", o.IssueID, o.Outcome, files, weaveTruncate(summary, 160))
+	}
+	b.WriteString("\nRun `weave recall <q>` for detail.\n")
+	if err := os.WriteFile(filepath.Join(workspace, "WEAVE_MEMORY.md"), []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	return weaveExcludeWorkspaceMemory(workspace)
+}
+
+func weaveExcludeWorkspaceMemory(workspace string) error {
+	exclude := filepath.Join(workspace, ".git", "info", "exclude")
+	b, err := os.ReadFile(exclude)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if strings.Contains(string(b), "\nWEAVE_MEMORY.md\n") || strings.HasSuffix(string(b), "\nWEAVE_MEMORY.md") || strings.HasPrefix(string(b), "WEAVE_MEMORY.md\n") {
+		return nil
+	}
+	f, err := os.OpenFile(exclude, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if len(b) > 0 && !strings.HasSuffix(string(b), "\n") {
+		if _, err := f.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+	_, err = f.WriteString("WEAVE_MEMORY.md\n")
+	return err
 }
 
 func weaveAutoCommitMessage(it *weaveItem) string {
@@ -1777,6 +1950,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed (continuing): %v\n", lockErr)
 		}
 	}
+	if err := weaveInjectMemoryFile(dir, workspace, it); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory inject failed (continuing): %v\n", err)
+	}
 	if mode != weavecli.OutputJSON {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave start: issue #%d workspace=%s branch=%s\n", it.ID, workspace, branch)
 		if opts.noSpawn {
@@ -2011,6 +2187,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	})
 	if lockErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed after tool exit: %v\n", lockErr)
+	} else if err := weaveRememberObservation(dir, it, ev); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory capture failed (continuing): %v\n", err)
 	}
 
 	if runErr != nil {
