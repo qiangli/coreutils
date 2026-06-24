@@ -40,7 +40,9 @@ dependency failed is skipped.
   dag build                  # run "build" and its dependencies
   dag test lint              # run several targets and their closures
   dag build VERSION=v1.2     # make-style KEY=VALUE variable overrides
-  dag --file pipeline.md ci  # use an explicit file
+  dag pipeline.md            # run a dag file by path (no -f needed)
+  dag pipeline.md ci         # ...with a target
+  dag --file pipeline.md ci  # explicit --file is equivalent
 
 With no target, dag runs the file's default goal — the frontmatter
 "default:" key, or a target named "default" — and otherwise lists the
@@ -51,7 +53,19 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			mode := weavecli.ResolveOutputMode(jsonF, plainF, quietF)
 			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
+			// make-style invocation: KEY=VALUE args are variable overrides
+			// (injected into every target's environment), the rest are targets.
+			targets, overrides := splitOverrides(args)
+
+			// Convenience: `bashy dag path/to/file.md [target...]` — a leading
+			// positional that names an existing file is treated as --file, so a
+			// dag file can be run by path without -f. An explicit --file wins.
 			path := fileArg
+			if path == "" && len(targets) > 0 {
+				if fi, statErr := os.Stat(targets[0]); statErr == nil && !fi.IsDir() {
+					path, targets = targets[0], targets[1:]
+				}
+			}
 			if path == "" {
 				p, err := Discover(".")
 				if err != nil {
@@ -71,10 +85,6 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			if listF {
 				return runList(out, mode, doc)
 			}
-
-			// make-style invocation: KEY=VALUE args are variable overrides
-			// (injected into every target's environment), the rest are targets.
-			targets, overrides := splitOverrides(args)
 
 			if len(targets) == 0 {
 				d := defaultTarget(doc)
