@@ -17,8 +17,9 @@ const (
 	StatusRunning
 	StatusDone
 	StatusFailed
-	StatusSkipped // a dependency did not succeed
-	StatusUpToDate
+	StatusSkipped          // a dependency did not succeed
+	StatusUpToDate         //
+	StatusConditionSkipped // P1 #10 — a `When:` condition was false (NOT a failure)
 )
 
 func (s Status) String() string {
@@ -35,6 +36,8 @@ func (s Status) String() string {
 		return "skipped"
 	case StatusUpToDate:
 		return "up-to-date"
+	case StatusConditionSkipped:
+		return "condition-skipped"
 	default:
 		return "unknown"
 	}

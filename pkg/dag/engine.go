@@ -6,10 +6,12 @@ package dag
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -211,6 +213,14 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 			report.add(res)
 			continue
 		}
+		if e.conditionFalse(ctx, node) {
+			res := e.markConditionSkipped(node)
+			if e.OutputGroup {
+				e.flushGroup(node, res)
+			}
+			report.add(res)
+			continue
+		}
 		if e.upToDate(node, fp) {
 			node.Status = StatusUpToDate
 			res := TaskResult{Name: node.Task.Name, Status: StatusUpToDate, UpToDate: true}
@@ -306,7 +316,9 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 				defer wg.Done()
 				sem <- struct{}{}
 				var r TaskResult
-				if e.upToDate(node, fp) {
+				if e.conditionFalse(ctx, node) {
+					r = TaskResult{Name: node.Task.Name, Status: StatusConditionSkipped}
+				} else if e.upToDate(node, fp) {
 					r = TaskResult{Name: node.Task.Name, Status: StatusUpToDate, UpToDate: true}
 				} else {
 					r = e.runOne(ctx, node, true)
@@ -388,6 +400,8 @@ func (e *Engine) flushGroup(n *Node, r TaskResult) {
 		fmt.Fprintln(e.Stdout, "(up to date)")
 	case StatusSkipped:
 		fmt.Fprintln(e.Stdout, "(skipped: dependency did not succeed)")
+	case StatusConditionSkipped:
+		fmt.Fprintln(e.Stdout, "(skipped: condition false)")
 	}
 	if r.Stdout != "" {
 		io.WriteString(e.Stdout, r.Stdout)
@@ -411,6 +425,9 @@ func (e *Engine) flushBanner(n *Node, r TaskResult) {
 		return
 	case StatusSkipped:
 		fmt.Fprintf(e.Stderr, "==> %s (skipped: dependency did not succeed)\n", n.Task.Name)
+		return
+	case StatusConditionSkipped:
+		fmt.Fprintf(e.Stderr, "==> %s (skipped: condition false)\n", n.Task.Name)
 		return
 	}
 	fmt.Fprintf(e.Stderr, "==> %s\n", n.Task.Name)
@@ -439,6 +456,12 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResul
 		return TaskResult{Name: node.Task.Name, Status: StatusFailed, ExitCode: 2, Err: err}
 	}
 
+	// P1 #7 — resolve declared secret VALUES so they can be redacted from the
+	// captured output. A target with secrets is always captured (even when the
+	// engine isn't) so the values never reach the real stdout unredacted.
+	secretVals := e.secretValues(node.Task)
+	captureRun := capture || len(secretVals) > 0
+
 	attempts := node.Task.Retries + 1
 	if attempts < 1 {
 		attempts = 1
@@ -451,13 +474,34 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResul
 			case <-ctx.Done():
 			}
 		}
-		res = e.runAttempt(ctx, ip, node, capture)
+		res = e.runAttempt(ctx, ip, node, captureRun)
 		if res.Status == StatusDone {
 			break
 		}
 		if ctx.Err() != nil {
 			break // parent cancelled — don't burn remaining attempts
 		}
+	}
+
+	if len(secretVals) > 0 {
+		res.Stdout = redactSecrets(res.Stdout, secretVals)
+		res.Stderr = redactSecrets(res.Stderr, secretVals)
+		if res.Err != nil {
+			res.Err = errors.New(redactSecrets(res.Err.Error(), secretVals))
+		}
+		// If the engine wasn't capturing, we captured only to redact: emit the
+		// now-redacted output and drop it from the result so it is neither
+		// streamed twice nor surfaced where a plain run would not show it.
+		if !capture {
+			io.WriteString(e.Stdout, res.Stdout)
+			io.WriteString(e.Stderr, res.Stderr)
+			res.Stdout, res.Stderr = "", ""
+		}
+	}
+
+	// P1 #8 — record declared artifacts that exist after a successful body.
+	if res.Status == StatusDone {
+		res.Artifacts = e.collectArtifacts(node.Task)
 	}
 
 	// P2 contract: a clean exit is necessary but not sufficient — the target's
@@ -507,13 +551,114 @@ func (e *Engine) runAttempt(ctx context.Context, ip Interpreter, node *Node, cap
 	return res
 }
 
-// envFor builds the environment for a node: the base env plus any per-target
-// Env overrides (make's target-specific variables).
+// envFor builds the environment for a node: the base env, any per-target Env
+// overrides (make's target-specific variables), and the resolved values of any
+// declared Secrets (P1 #7), so the body sees $NAME for each secret.
 func (e *Engine) envFor(node *Node) []string {
-	if len(node.Task.Env) == 0 {
+	secrets := e.secretEnv(node.Task)
+	if len(node.Task.Env) == 0 && len(secrets) == 0 {
 		return e.Env
 	}
-	return append(append([]string{}, e.Env...), node.Task.Env...)
+	out := append(append([]string{}, e.Env...), node.Task.Env...)
+	return append(out, secrets...)
+}
+
+// secretEnv resolves each declared secret to a NAME=value entry. Resolution is
+// process-env first (the base env, which already carries CLI overrides). A
+// cloudbox-vault hook (`bashy secrets get <name>`) is the documented future
+// source; this runner never shells out, so an unresolved secret is simply
+// absent (the body sees an empty $NAME).
+func (e *Engine) secretEnv(t *Task) []string {
+	if len(t.Secrets) == 0 {
+		return nil
+	}
+	base := envMap(e.Env)
+	var out []string
+	for _, name := range t.Secrets {
+		if v, ok := base[name]; ok {
+			out = append(out, name+"="+v)
+		}
+	}
+	return out
+}
+
+// secretValues returns the (non-empty) resolved values of a target's secrets,
+// for redaction from its captured output.
+func (e *Engine) secretValues(t *Task) []string {
+	if len(t.Secrets) == 0 {
+		return nil
+	}
+	base := envMap(e.Env)
+	var out []string
+	for _, name := range t.Secrets {
+		if v := base[name]; v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// redactSecrets replaces every occurrence of each secret value in s with "***".
+func redactSecrets(s string, values []string) string {
+	for _, v := range values {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, "***")
+		}
+	}
+	return s
+}
+
+// collectArtifacts resolves a target's declared Artifacts (paths/globs, relative
+// to the engine's Dir) to the relative paths that exist after the body ran, and
+// — when $DAG_ARTIFACTS_DIR is set — copies each into that directory preserving
+// its relative path. Returns the recorded relative paths in sorted order.
+func (e *Engine) collectArtifacts(t *Task) []string {
+	if len(t.Artifacts) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var rels []string
+	for _, pat := range t.Artifacts {
+		matches, err := filepath.Glob(filepath.Join(e.Dir, pat))
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			rel, err := filepath.Rel(e.Dir, m)
+			if err != nil {
+				rel = m
+			}
+			if !seen[rel] {
+				seen[rel] = true
+				rels = append(rels, rel)
+			}
+		}
+	}
+	sort.Strings(rels)
+
+	if adir := envMap(e.Env)["DAG_ARTIFACTS_DIR"]; adir != "" {
+		for _, rel := range rels {
+			copyArtifact(filepath.Join(e.Dir, rel), filepath.Join(adir, rel))
+		}
+	}
+	return rels
+}
+
+// copyArtifact best-effort copies src to dst, creating parent directories. A
+// failure is silent: artifact collection must never fail an otherwise-good run.
+func copyArtifact(src, dst string) {
+	fi, err := os.Stat(src)
+	if err != nil || fi.IsDir() {
+		return
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(dst, data, 0o644)
 }
 
 func (e *Engine) upToDate(node *Node, fp map[string]string) bool {
@@ -526,6 +671,31 @@ func (e *Engine) markSkipped(node *Node, blocker string) TaskResult {
 	node.Result = &res
 	if e.Verbose && !e.OutputGroup {
 		fmt.Fprintf(e.Stderr, "==> skip %s (dependency %s did not succeed)\n", node.Task.Name, blocker)
+	}
+	return res
+}
+
+// conditionFalse reports whether a target's `When:` condition (P1 #10) is
+// present and evaluates false (non-zero exit) through the in-process shell. A
+// target with no When always runs. A false condition is a clean skip — it does
+// NOT fail the run and does NOT block dependents (unlike a dependency-failure
+// skip); dependents see the target as a satisfied no-op and run normally.
+func (e *Engine) conditionFalse(ctx context.Context, node *Node) bool {
+	cond := strings.TrimSpace(node.Task.When)
+	if cond == "" {
+		return false
+	}
+	return !shellCheck(ctx, e.Dir, e.envFor(node), cond, cond).Pass
+}
+
+// markConditionSkipped records a `When:`-false skip — a non-failing status that
+// keeps the run green.
+func (e *Engine) markConditionSkipped(node *Node) TaskResult {
+	node.Status = StatusConditionSkipped
+	res := TaskResult{Name: node.Task.Name, Status: StatusConditionSkipped}
+	node.Result = &res
+	if e.Verbose && !e.OutputGroup {
+		fmt.Fprintf(e.Stderr, "==> %s (skipped: condition false)\n", node.Task.Name)
 	}
 	return res
 }

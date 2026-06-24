@@ -77,6 +77,11 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			if err != nil {
 				return emitErr(errOut, mode, err)
 			}
+			// P1 expansion passes (after parse, before BuildGraph):
+			// ${NAME} metadata substitution (CLI KEY=VALUE wins), then the
+			// matrix fan-out into one concrete node per combination.
+			doc.expandVars(os.Environ(), overrides)
+			doc.expandMatrix()
 			g, err := BuildGraph(doc)
 			if err != nil {
 				return emitErr(errOut, mode, err)
@@ -222,6 +227,7 @@ type runItem struct {
 	Stderr      string       `json:"stderr,omitempty"`
 	Error       string       `json:"error,omitempty"`
 	Attestation *Attestation `json:"attestation,omitempty"`
+	Artifacts   []string     `json:"artifacts,omitempty"` // P1 #8 declared outputs recorded after success
 }
 
 type runResult struct {
@@ -347,6 +353,7 @@ func runReport(out, errOut io.Writer, mode weavecli.OutputMode, path string, tar
 			Name: r.Name, Status: r.Status.String(),
 			ExitCode: r.ExitCode, DurationMS: r.Duration.Milliseconds(),
 			Stdout: r.Stdout, Stderr: r.Stderr, Attestation: r.Attestation,
+			Artifacts: r.Artifacts,
 		}
 		if r.Err != nil {
 			item.Error = r.Err.Error()

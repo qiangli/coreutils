@@ -33,6 +33,7 @@ type TaskResult struct {
 	Stderr      string
 	UpToDate    bool         // P1.5 fingerprint skip
 	Attestation *Attestation // P2 contract verdict (nil when no Ensure/Effects)
+	Artifacts   []string     // P1 #8 declared outputs that exist after success
 }
 
 // Interpreter runs a target's body. Implementations register themselves by

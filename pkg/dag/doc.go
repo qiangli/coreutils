@@ -50,6 +50,41 @@
 // matches the freshly computed one. A target with no Generates is phony and
 // always runs. `--force` (-B) ignores the cache entirely; `--explain` prints,
 // per target, whether it would run or is up-to-date and why, running nothing.
+//
+// # Ensure: postcondition vocabulary
+//
+// A target's `Ensure:` line is a postcondition the engine evaluates AFTER the
+// body exits 0 (P2 contract): a clean exit is necessary but not sufficient — if
+// any Ensure check fails the target fails with the precondition exit code, even
+// though make would have called it done. A target may carry more than one
+// `Ensure:` line; all must pass. The recognized predicate forms are:
+//
+//   - file-exists <path>   — the path exists (relative to the DAG-file dir).
+//     Example: `Ensure: file-exists dist/app` (also `file-exists path=dist/app`).
+//   - file-absent <path>   — the path does NOT exist (e.g. a clean target removed
+//     it). Example: `Ensure: file-absent dist/stale.tmp`.
+//   - http-ok <url>        — an HTTP GET returns 2xx (a readiness probe).
+//     Example: `Ensure: http-ok http://localhost:8080/healthz`.
+//   - cmd <shell...>       — an explicit shell command; exit 0 = pass.
+//     Example: `Ensure: cmd test "$(cat VERSION)" = 1.2.0`.
+//   - <bare shell command> — anything not matching the forms above is run as a
+//     shell command through the in-process userland; exit 0 = pass.
+//     Example: `Ensure: test -s dist/app && ./dist/app --version`.
+//
+// The `file-exists`/`file-absent`/`http-ok` sugar also accepts the explicit
+// `key=value` spelling (`path=`, `url=`). See contract.go for the evaluator.
+//
+// # dag-v1 schema stability
+//
+// Every dag envelope stamps schema_version = "dag-v1" (see [SchemaVersion]).
+// The compatibility policy is additive-only: new fields may be added to the
+// envelope, the list/run/plan results, the attestation, or a target's metadata
+// without bumping the version — agents MUST ignore unknown fields rather than
+// reject them. schema_version bumps only on a breaking change: removing or
+// renaming a field, changing a field's type, or altering the meaning of an
+// existing value. New target metadata keys (Matrix/Secrets/Artifacts/When and
+// future additions) and new Ensure predicate forms are additive and do not bump
+// the version; a reader that does not understand one simply does not act on it.
 package dag
 
 // SchemaVersion is stamped into every dag envelope's schema_version field.

@@ -29,6 +29,23 @@ type Task struct {
 	Generates []string
 	Env       []string // per-target KEY=VALUE overrides (make's target-specific vars)
 
+	// P1 #5 — Matrix: parameterized target. `Matrix: os=linux,darwin arch=amd64`
+	// is space-separated key=csv pairs; expandMatrix replaces this target with one
+	// concrete node per combination (see expand.go). Empty on a non-matrix target.
+	Matrix map[string][]string
+
+	// P1 #7 — Secrets: names resolved (process env first) and injected into the
+	// target's env, with their VALUES redacted from captured output (see engine.go).
+	Secrets []string
+
+	// P1 #8 — Artifacts: declared output paths/globs recorded in the result after
+	// the target succeeds (and copied to $DAG_ARTIFACTS_DIR when set).
+	Artifacts []string
+
+	// P1 #10 — When: a shell condition; the engine skips the target (not a failure)
+	// when it exits non-zero (see engine.go).
+	When string
+
 	// P0 #2 — per-target execution policy enforced by the engine.
 	Timeout time.Duration // `Timeout: 90s` — 0 means no deadline
 	Retries int           // `Retries: 3` — extra attempts after the first on failure
@@ -51,7 +68,21 @@ type Document struct {
 	Tasks    []*Task
 	Order    []string // task names in declaration order (deterministic listing)
 
+	// P1 #6 — frontmatter `vars:` block of NAME=value defaults, in declaration
+	// order. expandVars resolves these (CLI KEY=VALUE wins) and substitutes
+	// ${NAME} in metadata before BuildGraph (see expand.go).
+	Vars []DocVar
+
 	byName map[string]*Task
+}
+
+// DocVar is one frontmatter `vars:` entry. Op is the assignment operator:
+// "=" / ":=" set a default value (overriding the process env), "?=" sets it
+// only when the name is not already defined.
+type DocVar struct {
+	Name  string
+	Op    string
+	Value string
 }
 
 // Lookup returns the named task and whether it exists.
@@ -64,6 +95,8 @@ var metaKeys = map[string]bool{
 	"requires": true, "inputs": true, "sources": true,
 	"generates": true, "env": true, "ensure": true, "effects": true,
 	"timeout": true, "retries": true,
+	// P1 metadata.
+	"matrix": true, "secrets": true, "artifacts": true, "when": true,
 }
 
 // Parse reads a DAG markdown document. The format:
@@ -85,8 +118,22 @@ func Parse(r io.Reader, path string) (*Document, error) {
 	start := 0
 	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
 		j := 1
+		inVars := false
 		for j < len(lines) && strings.TrimSpace(lines[j]) != "---" {
-			if k, v, ok := frontmatterKV(lines[j]); ok {
+			ln := lines[j]
+			// A `vars:` block: indented `NAME = value` lines until the next
+			// non-indented key. Parsed case-sensitively (var names keep their case).
+			if inVars {
+				if indented(ln) && strings.TrimSpace(ln) != "" {
+					if name, op, val, ok := parseVarLine(ln); ok {
+						doc.Vars = append(doc.Vars, DocVar{Name: name, Op: op, Value: val})
+					}
+					j++
+					continue
+				}
+				inVars = false // dedent (or blank handled below) ends the block
+			}
+			if k, v, ok := frontmatterKV(ln); ok {
 				switch k {
 				case "name":
 					doc.Name = v
@@ -96,6 +143,14 @@ func Parse(r io.Reader, path string) (*Document, error) {
 					doc.Default = v
 				case "include", "includes":
 					doc.Includes = append(doc.Includes, splitList(v)...)
+				case "vars", "variables":
+					inVars = true
+					// Allow an inline form too: `vars: A=1 B=2`.
+					for _, f := range strings.Fields(v) {
+						if name, op, val, ok := parseVarLine(f); ok {
+							doc.Vars = append(doc.Vars, DocVar{Name: name, Op: op, Value: val})
+						}
+					}
 				}
 			}
 			j++
@@ -312,6 +367,30 @@ func (t *Task) absorb(lines []string) {
 				}
 			case "effects":
 				t.Effects = append(t.Effects, splitList(v)...)
+			case "matrix":
+				// `Matrix: os=linux,darwin arch=amd64,arm64` — space-separated
+				// key=csv pairs, each value list comma-separated.
+				if t.Matrix == nil {
+					t.Matrix = map[string][]string{}
+				}
+				for _, f := range strings.Fields(v) {
+					if i := strings.IndexByte(f, '='); i > 0 {
+						key := strings.TrimSpace(f[:i])
+						for _, val := range strings.Split(f[i+1:], ",") {
+							if val = strings.TrimSpace(val); val != "" {
+								t.Matrix[key] = append(t.Matrix[key], val)
+							}
+						}
+					}
+				}
+			case "secrets":
+				t.Secrets = append(t.Secrets, splitList(v)...)
+			case "artifacts":
+				t.Artifacts = append(t.Artifacts, splitList(v)...)
+			case "when":
+				if s := strings.TrimSpace(v); s != "" {
+					t.When = s
+				}
 			case "timeout":
 				if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
 					t.Timeout = d
@@ -401,4 +480,48 @@ func splitList(v string) []string {
 	return strings.FieldsFunc(v, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
 	})
+}
+
+// indented reports whether a line begins with a space or tab.
+func indented(line string) bool {
+	return len(line) > 0 && (line[0] == ' ' || line[0] == '\t')
+}
+
+// parseVarLine parses one `vars:` entry. Accepted forms (most specific first):
+//
+//	NAME ?= value   default-if-unset
+//	NAME := value   immediate
+//	NAME = value    set
+//	NAME: value     set (YAML-style)
+//
+// The name keeps its original case; the value is trimmed.
+func parseVarLine(line string) (name, op, value string, ok bool) {
+	s := strings.TrimSpace(line)
+	for _, o := range []string{"?=", ":="} {
+		if i := strings.Index(s, o); i > 0 {
+			return strings.TrimSpace(s[:i]), o, strings.TrimSpace(s[i+len(o):]), true
+		}
+	}
+	if i := strings.IndexAny(s, "=:"); i > 0 {
+		return strings.TrimSpace(s[:i]), "=", strings.TrimSpace(s[i+1:]), true
+	}
+	return "", "", "", false
+}
+
+// clone returns a deep-enough copy of a task for matrix expansion: scalar fields
+// copied, slices duplicated so a per-combination Env append cannot alias the
+// original. Matrix is intentionally left nil on the copy (the clone is concrete).
+func (t *Task) clone() *Task {
+	c := *t
+	c.Matrix = nil
+	c.Requires = append([]string(nil), t.Requires...)
+	c.Inputs = append([]string(nil), t.Inputs...)
+	c.Sources = append([]string(nil), t.Sources...)
+	c.Generates = append([]string(nil), t.Generates...)
+	c.Env = append([]string(nil), t.Env...)
+	c.Secrets = append([]string(nil), t.Secrets...)
+	c.Artifacts = append([]string(nil), t.Artifacts...)
+	c.Ensure = append([]string(nil), t.Ensure...)
+	c.Effects = append([]string(nil), t.Effects...)
+	return &c
 }
