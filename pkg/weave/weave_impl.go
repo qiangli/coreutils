@@ -1926,7 +1926,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.AutoCommitted = false
 			freshIt.AutoCommitError = ""
 			if len(toolArgs) > 0 {
-				freshIt.Tool = filepath.Base(toolArgs[0])
+				freshIt.Tool = weaveToolDisplayName(toolArgs)
 				freshIt.LaunchSpec = launchSpec
 			}
 			it = freshIt
@@ -2029,7 +2029,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.CtlSock = ctlSock
 			freshIt.StartedAt = time.Now().UTC()
 			if len(toolArgs) > 0 {
-				freshIt.Tool = filepath.Base(toolArgs[0])
+				freshIt.Tool = weaveToolDisplayName(toolArgs)
 				freshIt.LaunchSpec = launchSpec
 			}
 			it = freshIt

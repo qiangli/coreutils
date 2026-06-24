@@ -149,3 +149,17 @@ func weaveThrottleToolFromSignal(tool, logTail string) string {
 	}
 	return norm
 }
+
+// weaveToolDisplayName infers the underlying fleet tool from the launch argv
+// so `weave list` shows "codex"/"claude"/"opencode"/... instead of the "bash"
+// wrapper. Tools are launched as `bash -c '<tool> ...'` (or `bash <tool>-launch.sh`),
+// so the argv[0] basename is usually "bash"; this scans the whole argv for a
+// known fleet name, falling back to the argv[0] basename. (Heuristic — an
+// explicit label would be authoritative; see the TODO on
+// weaveThrottleToolFromSignal.)
+func weaveToolDisplayName(toolArgs []string) string {
+	if len(toolArgs) == 0 {
+		return ""
+	}
+	return weaveThrottleToolFromSignal(toolArgs[0], strings.Join(toolArgs, " "))
+}

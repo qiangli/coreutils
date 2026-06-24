@@ -237,3 +237,27 @@ func contains(s []string, v string) bool {
 func writeTestFile(dir, name, content string) error {
 	return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
 }
+
+func TestWeaveToolDisplayName(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"bash -c inline codex", []string{"bash", "-c", `codex exec --skip-git-repo-check "$WEAVE_ISSUE_BODY"`}, "codex"},
+		{"bash -c inline claude", []string{"bash", "-c", `claude --dangerously-skip-permissions -p "$WEAVE_ISSUE_BODY"`}, "claude"},
+		{"bash launcher with tool in path", []string{"bash", "/tmp/opencode-launch.sh"}, "opencode"},
+		{"bash aider launcher", []string{"bash", "/tmp/aider-launch.sh"}, "aider"},
+		{"direct codex", []string{"codex", "exec", "..."}, "codex"},
+		{"direct claude path", []string{"/usr/local/bin/claude", "-p", "x"}, "claude"},
+		{"unknown wrapper", []string{"bash", "-c", "mytool run"}, "bash"},
+		{"empty", []string{}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := weaveToolDisplayName(c.args); got != c.want {
+				t.Fatalf("weaveToolDisplayName(%v) = %q, want %q", c.args, got, c.want)
+			}
+		})
+	}
+}
