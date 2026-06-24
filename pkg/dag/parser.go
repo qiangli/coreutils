@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
@@ -26,6 +28,11 @@ type Task struct {
 	Sources   []string
 	Generates []string
 	Env       []string // per-target KEY=VALUE overrides (make's target-specific vars)
+
+	// P0 #2 — per-target execution policy enforced by the engine.
+	Timeout time.Duration // `Timeout: 90s` — 0 means no deadline
+	Retries int           // `Retries: 3` — extra attempts after the first on failure
+	Backoff time.Duration // optional `Retries: 3 backoff=2s` — sleep between attempts
 
 	// P2 (parsed-and-ignored in P1, so a contract-bearing file parses today).
 	Ensure  []string
@@ -56,6 +63,7 @@ func (d *Document) Lookup(name string) (*Task, bool) {
 var metaKeys = map[string]bool{
 	"requires": true, "inputs": true, "sources": true,
 	"generates": true, "env": true, "ensure": true, "effects": true,
+	"timeout": true, "retries": true,
 }
 
 // Parse reads a DAG markdown document. The format:
@@ -304,6 +312,24 @@ func (t *Task) absorb(lines []string) {
 				}
 			case "effects":
 				t.Effects = append(t.Effects, splitList(v)...)
+			case "timeout":
+				if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
+					t.Timeout = d
+				}
+			case "retries":
+				// `Retries: 3` or `Retries: 3 backoff=2s` — first bare number is
+				// the retry count, an optional backoff=<dur> sets the inter-attempt sleep.
+				for _, f := range strings.Fields(v) {
+					if rest, ok := strings.CutPrefix(f, "backoff="); ok {
+						if d, err := time.ParseDuration(rest); err == nil {
+							t.Backoff = d
+						}
+						continue
+					}
+					if n, err := strconv.Atoi(f); err == nil {
+						t.Retries = n
+					}
+				}
 			}
 			continue
 		}

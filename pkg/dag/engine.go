@@ -8,7 +8,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -27,16 +31,31 @@ type Engine struct {
 	Verbose     bool   // print "==> target" banners
 	Capture     bool   // buffer each target's output into its TaskResult (JSON)
 	Force       bool   // ignore the fingerprint cache (make's unconditional run)
+	DryRun      bool   // build the plan and short-circuit: run no bodies, mutate nothing
+	OutputGroup bool   // wrap each target's captured output in CI ::group:: markers
 	Cache       *Cache // nil = no incremental skip
 
 	Stdout io.Writer
 	Stderr io.Writer
 }
 
-// RunReport aggregates per-target results.
+// RunReport aggregates per-target results. In dry-run mode Results is empty and
+// Plan carries the ordered would-run/up-to-date plan instead.
 type RunReport struct {
 	Results []TaskResult
 	Failed  bool
+	Plan    []PlanItem // populated only in DryRun mode
+}
+
+// PlanItem is one target's entry in a dry-run plan: its topological position,
+// the cache decision (would-run vs up-to-date) and why, declared effects, and
+// the first body line that would execute.
+type PlanItem struct {
+	Name     string
+	WouldRun bool
+	Reason   string
+	Effects  []string
+	Command  string
 }
 
 // Run executes the transitive closure of targets (or the whole graph if none
@@ -64,6 +83,12 @@ func (e *Engine) Run(ctx context.Context, targets ...string) (RunReport, error) 
 		}
 	}
 
+	// Dry-run: compute and return the plan without running any body or touching
+	// the cache (no Save below — dry-run mutates nothing).
+	if e.DryRun {
+		return RunReport{Plan: e.planFor(order, fp)}, nil
+	}
+
 	var report RunReport
 	if e.Concurrency > 1 {
 		report = e.runParallel(ctx, order, fp)
@@ -76,11 +101,114 @@ func (e *Engine) Run(ctx context.Context, targets ...string) (RunReport, error) 
 	return report, nil
 }
 
+// ExplainItem is one target's would-run/up-to-date decision and the reason,
+// as produced by Explain without running any body.
+type ExplainItem struct {
+	Name     string
+	WouldRun bool
+	Reason   string
+}
+
+// Explain computes, for the transitive closure of targets in topological order,
+// whether each target WOULD run or is already up-to-date and why — without
+// executing any body. It reuses the exact fingerprint/up-to-date logic that
+// Run does, so the explanation matches what a real run would decide.
+func (e *Engine) Explain(targets ...string) ([]ExplainItem, error) {
+	sub := e.Graph
+	if len(targets) > 0 {
+		var err error
+		if sub, err = e.Graph.Subgraph(targets...); err != nil {
+			return nil, err
+		}
+	}
+	order, err := sub.TopoSort()
+	if err != nil {
+		return nil, err
+	}
+	fp := map[string]string{}
+	if e.Cache != nil {
+		for _, n := range order {
+			fp[n.Task.Name] = e.Cache.Fingerprint(n, e.Dir, fp)
+		}
+	}
+	items := make([]ExplainItem, 0, len(order))
+	for _, n := range order {
+		run, reason := e.explainOne(n, fp[n.Task.Name])
+		items = append(items, ExplainItem{Name: n.Task.Name, WouldRun: run, Reason: reason})
+	}
+	return items, nil
+}
+
+// explainOne decides, for a single node, whether it would run and the most
+// specific reason available — mirroring Cache.UpToDate's checks so a "skip"
+// here means upToDate would return true on a real run.
+func (e *Engine) explainOne(n *Node, fp string) (wouldRun bool, reason string) {
+	if e.Force {
+		return true, "forced (--force ignores the cache)"
+	}
+	if e.Cache == nil {
+		return true, "no cache configured"
+	}
+	if len(n.Task.Generates) == 0 {
+		return true, "no declared outputs (phony target always runs)"
+	}
+	stored, ok := e.Cache.Hashes[n.Task.Name]
+	if !ok {
+		return true, "no cache entry (never recorded)"
+	}
+	for _, g := range n.Task.Generates {
+		if _, err := os.Stat(filepath.Join(e.Dir, g)); err != nil {
+			return true, "missing output: " + g
+		}
+	}
+	if stored != fp {
+		return true, "fingerprint changed (body or sources differ from cache)"
+	}
+	return false, "up to date"
+}
+
+// planFor builds the dry-run plan for an already-ordered, fingerprinted set of
+// nodes, reusing the same decision logic the real run uses.
+func (e *Engine) planFor(order []*Node, fp map[string]string) []PlanItem {
+	plan := make([]PlanItem, 0, len(order))
+	for _, n := range order {
+		run, reason := e.explainOne(n, fp[n.Task.Name])
+		plan = append(plan, PlanItem{
+			Name:     n.Task.Name,
+			WouldRun: run,
+			Reason:   reason,
+			Effects:  n.Task.Effects,
+			Command:  firstBodyLine(n.Task.Body),
+		})
+	}
+	return plan
+}
+
+// firstBodyLine returns the first non-blank, non-comment line of a body — the
+// representative command shown in a plan listing.
+func firstBodyLine(body string) string {
+	for _, ln := range strings.Split(body, "\n") {
+		s := strings.TrimSpace(ln)
+		if s == "" || strings.HasPrefix(s, "#") {
+			continue
+		}
+		return s
+	}
+	return ""
+}
+
 func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]string) RunReport {
 	var report RunReport
+	// Under --output-group, capture each target's output even in serial so it can
+	// be flushed wrapped in ::group:: markers (mirrors the parallel scheduler).
+	capture := e.Capture || e.OutputGroup
 	for _, node := range order {
 		if blocker, blocked := firstUnmetDep(node); blocked {
-			report.add(e.markSkipped(node, blocker))
+			res := e.markSkipped(node, blocker)
+			if e.OutputGroup {
+				e.flushGroup(node, res)
+			}
+			report.add(res)
 			continue
 		}
 		if e.upToDate(node, fp) {
@@ -88,21 +216,26 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 			res := TaskResult{Name: node.Task.Name, Status: StatusUpToDate, UpToDate: true}
 			node.Result = &res
 			report.add(res)
-			if e.Verbose {
+			if e.OutputGroup {
+				e.flushGroup(node, res)
+			} else if e.Verbose {
 				fmt.Fprintf(e.Stderr, "==> %s (up to date)\n", node.Task.Name)
 			}
 			continue
 		}
-		if e.Verbose {
+		if e.Verbose && !e.OutputGroup {
 			fmt.Fprintf(e.Stderr, "==> %s\n", node.Task.Name)
 		}
 		node.Status = StatusRunning
-		res := e.runOne(ctx, node, e.Capture)
+		res := e.runOne(ctx, node, capture)
 		node.Status = res.Status
 		node.Result = &res
 		report.add(res)
+		if e.OutputGroup {
+			e.flushGroup(node, res)
+		}
 		if res.Status == StatusFailed {
-			if e.Verbose {
+			if e.Verbose && !e.OutputGroup {
 				fmt.Fprintf(e.Stderr, "==> %s FAILED (exit %d)\n", node.Task.Name, res.ExitCode)
 				if res.Err != nil {
 					fmt.Fprintf(e.Stderr, "    %s\n", res.Err)
@@ -233,12 +366,42 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 		if r == nil {
 			continue
 		}
-		if e.Verbose {
+		if e.OutputGroup {
+			e.flushGroup(n, *r)
+		} else if e.Verbose {
 			e.flushBanner(n, *r)
 		}
 		report.Results = append(report.Results, *r)
 	}
 	return report
+}
+
+// flushGroup writes one target's captured output wrapped in GitHub Actions log
+// folding markers (::group::<target> … ::endgroup::), emitted in topological
+// order so that -j N output folds cleanly in CI logs instead of interleaving.
+// stderr is folded into the same stream as stdout so the markers bracket the
+// whole of a target's output.
+func (e *Engine) flushGroup(n *Node, r TaskResult) {
+	fmt.Fprintf(e.Stdout, "::group::%s\n", n.Task.Name)
+	switch r.Status {
+	case StatusUpToDate:
+		fmt.Fprintln(e.Stdout, "(up to date)")
+	case StatusSkipped:
+		fmt.Fprintln(e.Stdout, "(skipped: dependency did not succeed)")
+	}
+	if r.Stdout != "" {
+		io.WriteString(e.Stdout, r.Stdout)
+	}
+	if r.Stderr != "" {
+		io.WriteString(e.Stdout, r.Stderr)
+	}
+	if r.Status == StatusFailed {
+		fmt.Fprintf(e.Stdout, "==> %s FAILED (exit %d)\n", n.Task.Name, r.ExitCode)
+		if r.Err != nil {
+			fmt.Fprintf(e.Stdout, "    %s\n", r.Err)
+		}
+	}
+	fmt.Fprintln(e.Stdout, "::endgroup::")
 }
 
 func (e *Engine) flushBanner(n *Node, r TaskResult) {
@@ -265,27 +428,36 @@ func (e *Engine) flushBanner(n *Node, r TaskResult) {
 	}
 }
 
-// runOne executes a single node's body through its interpreter. When capture is
-// set, stdout/stderr are buffered into the result instead of streamed.
+// runOne executes a single node's body through its interpreter, applying the
+// target's P0 execution policy: a per-attempt Timeout (deadline hit =>
+// StatusFailed, ExitCode 124, "timeout") and up to Retries extra attempts on
+// failure (with an optional Backoff sleep between). When capture is set,
+// stdout/stderr are buffered into the result instead of streamed.
 func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResult {
 	ip, err := interpFor(node.Task.Lang)
 	if err != nil {
 		return TaskResult{Name: node.Task.Name, Status: StatusFailed, ExitCode: 2, Err: err}
 	}
-	stdout, stderr := e.Stdout, e.Stderr
-	var ob, eb *bytes.Buffer
-	if capture {
-		ob, eb = new(bytes.Buffer), new(bytes.Buffer)
-		stdout, stderr = ob, eb
+
+	attempts := node.Task.Retries + 1
+	if attempts < 1 {
+		attempts = 1
 	}
-	res := ip.Run(ctx, node.Task, TaskIO{
-		Dir:    e.Dir,
-		Env:    e.envFor(node),
-		Stdout: stdout,
-		Stderr: stderr,
-	})
-	if capture {
-		res.Stdout, res.Stderr = ob.String(), eb.String()
+	var res TaskResult
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 && node.Task.Backoff > 0 {
+			select {
+			case <-time.After(node.Task.Backoff):
+			case <-ctx.Done():
+			}
+		}
+		res = e.runAttempt(ctx, ip, node, capture)
+		if res.Status == StatusDone {
+			break
+		}
+		if ctx.Err() != nil {
+			break // parent cancelled — don't burn remaining attempts
+		}
 	}
 
 	// P2 contract: a clean exit is necessary but not sufficient — the target's
@@ -298,6 +470,39 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResul
 			res.ExitCode = weavecli.ExitPrecondFail
 			res.Err = firstFailedCheck(att)
 		}
+	}
+	return res
+}
+
+// runAttempt runs the body once, wrapping it in a context.WithTimeout when the
+// target declares a Timeout. A deadline hit is reported as exit 124 "timeout".
+func (e *Engine) runAttempt(ctx context.Context, ip Interpreter, node *Node, capture bool) TaskResult {
+	runCtx := ctx
+	if node.Task.Timeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, node.Task.Timeout)
+		defer cancel()
+	}
+	stdout, stderr := e.Stdout, e.Stderr
+	var ob, eb *bytes.Buffer
+	if capture {
+		ob, eb = new(bytes.Buffer), new(bytes.Buffer)
+		stdout, stderr = ob, eb
+	}
+	res := ip.Run(runCtx, node.Task, TaskIO{
+		Dir:    e.Dir,
+		Env:    e.envFor(node),
+		Stdout: stdout,
+		Stderr: stderr,
+	})
+	if capture {
+		res.Stdout, res.Stderr = ob.String(), eb.String()
+	}
+	// A per-target deadline that fired (not a parent cancellation) is a timeout.
+	if node.Task.Timeout > 0 && ctx.Err() == nil && runCtx.Err() == context.DeadlineExceeded {
+		res.Status = StatusFailed
+		res.ExitCode = 124
+		res.Err = fmt.Errorf("timeout after %s", node.Task.Timeout)
 	}
 	return res
 }
@@ -319,7 +524,7 @@ func (e *Engine) markSkipped(node *Node, blocker string) TaskResult {
 	node.Status = StatusSkipped
 	res := TaskResult{Name: node.Task.Name, Status: StatusSkipped}
 	node.Result = &res
-	if e.Verbose {
+	if e.Verbose && !e.OutputGroup {
 		fmt.Fprintf(e.Stderr, "==> skip %s (dependency %s did not succeed)\n", node.Task.Name, blocker)
 	}
 	return res

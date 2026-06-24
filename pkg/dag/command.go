@@ -21,9 +21,9 @@ import (
 // follows the weavecli envelope convention (DHNT_AGENT=1 forces --json).
 func newDagCmd() *cobra.Command {
 	var (
-		listF, jsonF, plainF, quietF, keepGoing, forceF bool
-		fileArg                                         string
-		jobs                                            int
+		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF bool
+		fileArg                                                                       string
+		jobs                                                                          int
 	)
 	cmd := &cobra.Command{
 		Use:   "dag [flags] [target ...]",
@@ -100,6 +100,10 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			if concurrency < 1 {
 				concurrency = 1
 			}
+			// CI log grouping: explicit --output-group, or auto-on under GitHub
+			// Actions. Suppressed in JSON mode, which emits a single envelope.
+			outputGroup := (outGroupF || os.Getenv("GITHUB_ACTIONS") == "true") &&
+				mode != weavecli.OutputJSON
 			absPath, _ := filepath.Abs(path)
 			eng := &Engine{
 				Graph:       g,
@@ -108,15 +112,29 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				Concurrency: concurrency,
 				FailFast:    !keepGoing,
 				Force:       forceF,
+				DryRun:      dryRunF,
+				OutputGroup: outputGroup,
 				Cache:       LoadCache(absPath),
 				Verbose:     mode == weavecli.OutputAuto || mode == weavecli.OutputPlain,
 				Capture:     mode == weavecli.OutputJSON,
 				Stdout:      out,
 				Stderr:      errOut,
 			}
+
+			if explainF {
+				items, err := eng.Explain(targets...)
+				if err != nil {
+					return emitErr(errOut, mode, err)
+				}
+				return runExplain(out, mode, path, targets, items)
+			}
+
 			report, err := eng.Run(cmd.Context(), targets...)
 			if err != nil {
 				return emitErr(errOut, mode, err)
+			}
+			if dryRunF {
+				return runPlan(out, mode, path, targets, report.Plan)
 			}
 			return runReport(out, errOut, mode, path, targets, report)
 		},
@@ -129,6 +147,9 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVarP(&keepGoing, "keep-going", "k", false, "Continue past a failed target")
 	cmd.Flags().IntVarP(&jobs, "jobs", "j", 1, "Run up to N targets in parallel (dependency-respecting)")
 	cmd.Flags().BoolVarP(&forceF, "force", "B", false, "Ignore the fingerprint cache; run every target")
+	cmd.Flags().BoolVar(&explainF, "explain", false, "Explain per target whether it would run or is up-to-date (runs nothing)")
+	cmd.Flags().BoolVarP(&dryRunF, "dry-run", "n", false, "Print the ordered plan without running any target body")
+	cmd.Flags().BoolVar(&outGroupF, "output-group", false, "Fold each target's output in GitHub ::group::/::endgroup:: markers (auto-on under GITHUB_ACTIONS)")
 	cmd.Flags().StringVarP(&fileArg, "file", "f", "", "DAG markdown file (default: discover DAG.md)")
 	return cmd
 }
@@ -183,6 +204,8 @@ type taskSummary struct {
 	Sources   []string `json:"sources,omitempty"`
 	Generates []string `json:"generates,omitempty"`
 	Lang      string   `json:"lang,omitempty"`
+	Timeout   string   `json:"timeout,omitempty"`
+	Retries   int      `json:"retries,omitempty"`
 }
 
 type listResult struct {
@@ -208,14 +231,97 @@ type runResult struct {
 	Failed  bool      `json:"failed"`
 }
 
+type explainItem struct {
+	Name     string `json:"name"`
+	WouldRun bool   `json:"would_run"`
+	Reason   string `json:"reason"`
+}
+
+type explainResult struct {
+	File    string        `json:"file"`
+	Targets []string      `json:"targets"`
+	Plan    []explainItem `json:"plan"`
+}
+
+// runExplain prints the per-target run/skip decision computed by Engine.Explain
+// without running anything. JSON mode emits a dag envelope carrying the plan.
+func runExplain(out io.Writer, mode weavecli.OutputMode, path string, targets []string, items []ExplainItem) error {
+	res := explainResult{File: path, Targets: targets}
+	for _, it := range items {
+		res.Plan = append(res.Plan, explainItem{Name: it.Name, WouldRun: it.WouldRun, Reason: it.Reason})
+	}
+	if mode == weavecli.OutputJSON {
+		emitOK(out, res)
+		return nil
+	}
+	for _, it := range items {
+		decision := "up-to-date"
+		if it.WouldRun {
+			decision = "run"
+		}
+		fmt.Fprintf(out, "%-10s %-24s %s\n", decision, it.Name, it.Reason)
+	}
+	return nil
+}
+
+type planItem struct {
+	Name     string   `json:"name"`
+	WouldRun bool     `json:"would_run"`
+	Reason   string   `json:"reason"`
+	Effects  []string `json:"effects,omitempty"`
+	Command  string   `json:"command,omitempty"`
+}
+
+type planResult struct {
+	File    string     `json:"file"`
+	Targets []string   `json:"targets"`
+	Plan    []planItem `json:"plan"`
+}
+
+// runPlan prints the dry-run plan (ordered targets + decision + command) and
+// runs nothing. JSON mode emits a dag envelope carrying the plan.
+func runPlan(out io.Writer, mode weavecli.OutputMode, path string, targets []string, items []PlanItem) error {
+	res := planResult{File: path, Targets: targets}
+	for _, it := range items {
+		res.Plan = append(res.Plan, planItem{
+			Name: it.Name, WouldRun: it.WouldRun, Reason: it.Reason,
+			Effects: it.Effects, Command: it.Command,
+		})
+	}
+	if mode == weavecli.OutputJSON {
+		emitOK(out, res)
+		return nil
+	}
+	fmt.Fprintf(out, "dag: dry-run plan (%d target(s), running nothing)\n", len(items))
+	for i, it := range items {
+		decision := "up-to-date"
+		if it.WouldRun {
+			decision = "run"
+		}
+		fmt.Fprintf(out, "%2d. %-10s %-24s %s\n", i+1, decision, it.Name, it.Reason)
+		if it.Command != "" {
+			fmt.Fprintf(out, "    $ %s\n", it.Command)
+		}
+		if len(it.Effects) > 0 {
+			fmt.Fprintf(out, "    effects: %s\n", strings.Join(it.Effects, ", "))
+		}
+	}
+	return nil
+}
+
 func runList(out io.Writer, mode weavecli.OutputMode, doc *Document) error {
 	res := listResult{File: doc.Path}
 	for _, name := range doc.Order {
 		t, _ := doc.Lookup(name)
-		res.Tasks = append(res.Tasks, taskSummary{
+		summary := taskSummary{
 			Name: t.Name, Desc: t.Desc, Requires: t.Requires,
 			Inputs: t.Inputs, Sources: t.Sources, Generates: t.Generates, Lang: t.Lang,
-		})
+			Retries: t.Retries,
+		}
+		if t.Timeout > 0 {
+			summary.Timeout = t.Timeout.String()
+		}
+		res.Tasks = append(res.Tasks, summary)
 	}
 	if mode == weavecli.OutputJSON {
 		emitOK(out, res)

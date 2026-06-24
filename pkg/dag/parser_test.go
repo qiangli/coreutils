@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fence builds a fenced code block. Double-quoted strings may contain
@@ -96,6 +97,27 @@ func TestParseUnknownKeyAndContractMeta(t *testing.T) {
 	}
 	if !strings.Contains(got.Desc, "Note: this line is prose") {
 		t.Errorf("unknown key should be prose; desc = %q", got.Desc)
+	}
+}
+
+func TestParseTimeoutRetries(t *testing.T) {
+	md := "## Tasks\n\n### flaky\n" +
+		"Timeout: 90s\n" +
+		"Retries: 3 backoff=2s\n" +
+		block("bash", "echo go")
+	doc, err := Parse(strings.NewReader(md), "DAG.md")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := doc.Tasks[0]
+	if got.Timeout != 90*time.Second {
+		t.Errorf("timeout = %s", got.Timeout)
+	}
+	if got.Retries != 3 {
+		t.Errorf("retries = %d", got.Retries)
+	}
+	if got.Backoff != 2*time.Second {
+		t.Errorf("backoff = %s", got.Backoff)
 	}
 }
 

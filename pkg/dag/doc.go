@@ -26,6 +26,30 @@
 // `Ensure:` postcondition and an `Effects:` cap), and multi-interpreter bodies
 // (P3 — go/python/starlark via RegisterInterpreter). The `Ensure:`/`Effects:`
 // metadata is already parsed-and-ignored here so a P2 file parses cleanly today.
+//
+// # Incremental fingerprint cache
+//
+// dag's up-to-date skip is content-hashed, not mtime-based (make's prerequisite
+// model): a touched-but-unchanged source does not force a rebuild. The store is
+// one JSON file per DAG document (see [Cache] / [LoadCache]):
+//
+//   - Cache key (the JSON file name): sha256(absolute DAG-file path) hex-encoded.
+//     One document → one cache file, so two checkouts of the same pipeline at
+//     different paths never collide.
+//   - Location: os.UserCacheDir()/bashy/dag/<key>.json — on Linux that is
+//     ~/.cache/bashy/dag/, on macOS ~/Library/Caches/bashy/dag/, on Windows
+//     %LocalAppData%\bashy\dag\. Writes are atomic (tmp + rename).
+//
+// Inside the file, Hashes maps a target name to its last successful
+// fingerprint. A target's fingerprint (see [Cache.Fingerprint]) folds, in
+// order: its body, then each dependency's already-computed fingerprint (so an
+// upstream change invalidates everything downstream), then the content hash of
+// every Sources/Inputs path (a file's bytes, or a directory's recursive file
+// contents). A target is up-to-date — and is skipped — iff it declares
+// Generates, all of those outputs exist on disk, AND its recorded fingerprint
+// matches the freshly computed one. A target with no Generates is phony and
+// always runs. `--force` (-B) ignores the cache entirely; `--explain` prints,
+// per target, whether it would run or is up-to-date and why, running nothing.
 package dag
 
 // SchemaVersion is stamped into every dag envelope's schema_version field.

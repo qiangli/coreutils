@@ -118,6 +118,144 @@ func TestCommandVarOverride(t *testing.T) {
 	}
 }
 
+func TestCommandExplain(t *testing.T) {
+	// A target with no cache entry should be reported as "would run"; --explain
+	// must not execute the body (no side-effect file appears).
+	dir := t.TempDir()
+	p := filepath.Join(dir, "DAG.md")
+	md := "## Tasks\n\n### gen\nGenerates: out.txt\n" + block("bash", "echo hi > ran.txt")
+	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewDagCmd()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"--explain", "--json", "--file", p, "gen"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+	}
+
+	var env struct {
+		Status string `json:"status"`
+		Result struct {
+			Plan []struct {
+				Name     string `json:"name"`
+				WouldRun bool   `json:"would_run"`
+				Reason   string `json:"reason"`
+			} `json:"plan"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out.String())
+	}
+	if env.Status != "ok" || len(env.Result.Plan) != 1 {
+		t.Fatalf("plan = %+v", env.Result)
+	}
+	if !env.Result.Plan[0].WouldRun || env.Result.Plan[0].Reason == "" {
+		t.Errorf("want would_run with a reason, got %+v", env.Result.Plan[0])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ran.txt")); err == nil {
+		t.Errorf("--explain executed the body (ran.txt created)")
+	}
+}
+
+func TestCommandDryRun(t *testing.T) {
+	// -n must print the ordered plan and run NO body (the side-effect file
+	// must not appear).
+	dir := t.TempDir()
+	p := filepath.Join(dir, "DAG.md")
+	md := "## Tasks\n\n" +
+		"### prep\n" + block("bash", "echo prep > prep.txt") +
+		"### build\nRequires: prep\nEffects: write\n" + block("bash", "echo build > build.txt")
+	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewDagCmd()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"-n", "--json", "--file", p, "build"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+	}
+
+	var env struct {
+		Status string `json:"status"`
+		Result struct {
+			Plan []struct {
+				Name    string   `json:"name"`
+				Command string   `json:"command"`
+				Effects []string `json:"effects"`
+			} `json:"plan"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out.String())
+	}
+	if env.Status != "ok" || len(env.Result.Plan) != 2 {
+		t.Fatalf("plan = %+v", env.Result.Plan)
+	}
+	// Topological order: prep before build.
+	if env.Result.Plan[0].Name != "prep" || env.Result.Plan[1].Name != "build" {
+		t.Errorf("plan order = %s, %s", env.Result.Plan[0].Name, env.Result.Plan[1].Name)
+	}
+	if env.Result.Plan[1].Command == "" {
+		t.Errorf("plan should carry the first body line")
+	}
+	// Ran nothing: neither output file exists.
+	for _, f := range []string{"prep.txt", "build.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			t.Errorf("-n executed a body (%s created)", f)
+		}
+	}
+}
+
+func TestCommandOutputGroup(t *testing.T) {
+	// --output-group -j N must emit exactly one ::group::/::endgroup:: pair per
+	// target with that target's output between the markers.
+	dir := t.TempDir()
+	p := filepath.Join(dir, "DAG.md")
+	md := "## Tasks\n\n" +
+		"### a\n" + block("bash", "echo OUT-A") +
+		"### b\nRequires: a\n" + block("bash", "echo OUT-B")
+	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewDagCmd()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"--output-group", "-j", "4", "--plain", "--file", p, "b"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+	}
+
+	s := out.String()
+	if g := strings.Count(s, "::group::"); g != 2 {
+		t.Errorf("want 2 ::group:: markers, got %d\n%s", g, s)
+	}
+	if e := strings.Count(s, "::endgroup::"); e != 2 {
+		t.Errorf("want 2 ::endgroup:: markers, got %d\n%s", e, s)
+	}
+	// Each group's output sits between its markers: a's output appears after
+	// "::group::a" and before the next "::endgroup::".
+	ga := strings.Index(s, "::group::a")
+	gb := strings.Index(s, "::group::b")
+	if ga < 0 || gb < 0 || ga > gb {
+		t.Fatalf("groups not in topological order: a@%d b@%d\n%s", ga, gb, s)
+	}
+	if oa := strings.Index(s, "OUT-A"); oa < ga {
+		t.Errorf("OUT-A not inside group a\n%s", s)
+	}
+	if ob := strings.Index(s, "OUT-B"); ob < gb {
+		t.Errorf("OUT-B not inside group b\n%s", s)
+	}
+}
+
 func TestCommandUnknownTarget(t *testing.T) {
 	path := writeDAG(t, "## Tasks\n\n### a\n"+block("bash", "echo a"))
 	cmd := NewDagCmd()

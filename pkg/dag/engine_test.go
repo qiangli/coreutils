@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	// Register the coreutils userland so a body's `cat` resolves in-process
 	// through shell.Handler() — proving hermetic, pure-Go execution.
@@ -153,6 +154,43 @@ func TestEnginePerTargetEnv(t *testing.T) {
 	}
 	if !strings.Contains(report.Results[0].Stdout, "hi") {
 		t.Errorf("per-target Env not applied; stdout=%q", report.Results[0].Stdout)
+	}
+}
+
+func TestEngineTimeout(t *testing.T) {
+	dir := t.TempDir()
+	md := "## Tasks\n\n### slow\nTimeout: 1s\n" + block("bash", "sleep 5")
+	eng := engineFor(t, dir, md)
+
+	start := time.Now()
+	report, err := eng.Run(context.Background(), "slow")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	r := report.Results[0]
+	if r.Status != StatusFailed || r.ExitCode != 124 {
+		t.Errorf("want failed/124, got %s/%d (err=%v)", r.Status, r.ExitCode, r.Err)
+	}
+	if elapsed > 4*time.Second {
+		t.Errorf("timeout did not interrupt the body in ~1s; took %s", elapsed)
+	}
+}
+
+func TestEngineRetries(t *testing.T) {
+	dir := t.TempDir()
+	// Flaky body: fails the first attempt (no marker yet), succeeds the second.
+	// Retries: 2 => up to 3 attempts, so it must end StatusDone.
+	body := "if [ -f attempt.marker ]; then exit 0; fi\ntouch attempt.marker\nexit 1"
+	md := "## Tasks\n\n### flaky\nRetries: 2\n" + block("bash", body)
+	eng := engineFor(t, dir, md)
+
+	report, err := eng.Run(context.Background(), "flaky")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Failed || report.Results[0].Status != StatusDone {
+		t.Errorf("flaky should succeed on retry, got %s (failed=%v)", report.Results[0].Status, report.Failed)
 	}
 }
 
