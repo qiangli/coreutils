@@ -149,6 +149,8 @@ type weaveItem struct {
 	ExitCode        *int   `json:"exit_code,omitempty"`
 	KilledBy        string `json:"killed_by,omitempty"`
 	LogPath         string `json:"log_path,omitempty"`
+	Throttled       bool   `json:"throttled,omitempty"`
+	ThrottleSignal  string `json:"throttle_signal,omitempty"`
 	// WrapperPid is the PID of the `bashy weave start` process
 	// supervising this item (NOT the subagent's PID — the wrapper
 	// is the session leader after auto-setsid and signals propagate
@@ -1972,6 +1974,15 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		freshIt.KilledBy = killReason
 		freshIt.WrapperPid = 0
 		freshIt.CtlSock = ""
+		freshIt.Throttled = false
+		freshIt.ThrottleSignal = ""
+		if logPath != "" {
+			throttled, signal := weaveClassifyThrottle(it.Tool, exitCode, weaveReadThrottleLogTail(logPath))
+			if throttled {
+				freshIt.Throttled = true
+				freshIt.ThrottleSignal = signal
+			}
+		}
 		weaveApplyTerminalEvidence(freshIt, ev)
 		freshIt.AutoCommitted = autoCommitted
 		freshIt.AutoCommitError = autoCommitErr
