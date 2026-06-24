@@ -23,10 +23,26 @@ func TestIsAgent(t *testing.T) {
 		{"anything", true},
 	}
 	for _, tc := range cases {
+		t.Setenv("DHNT_AGENT", "") // unset wins -> falls through to the alias
 		t.Setenv("YCODE_AGENT", tc.val)
 		if got := IsAgent(); got != tc.want {
 			t.Errorf("IsAgent with YCODE_AGENT=%q got %v want %v", tc.val, got, tc.want)
 		}
+	}
+}
+
+func TestIsAgent_DHNTAgent(t *testing.T) {
+	// The family-neutral DHNT_AGENT flips agent mode on its own.
+	t.Setenv("YCODE_AGENT", "")
+	t.Setenv("DHNT_AGENT", "1")
+	if !IsAgent() {
+		t.Error("DHNT_AGENT=1 should enable agent mode")
+	}
+	// DHNT_AGENT wins over the legacy alias when both are set.
+	t.Setenv("DHNT_AGENT", "0")
+	t.Setenv("YCODE_AGENT", "1")
+	if IsAgent() {
+		t.Error("DHNT_AGENT=0 should override YCODE_AGENT=1")
 	}
 }
 

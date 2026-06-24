@@ -67,10 +67,24 @@ const (
 	OutputQuiet                   // --quiet: final result line only
 )
 
-// IsAgent reports whether YCODE_AGENT in the environment requests
-// agent defaults (forces --json + --plain + no prompts + no spinners).
+// IsAgent reports whether the environment requests agent defaults (forces
+// --json + --plain + no prompts + no spinners). The signal is the
+// family-neutral DHNT_AGENT; the ycode-branded YCODE_AGENT is kept as a
+// back-compat alias so existing ycode callers keep working. DHNT_AGENT wins
+// when both are set.
 func IsAgent() bool {
-	v := os.Getenv("YCODE_AGENT")
+	// A non-empty DHNT_AGENT decides (including an explicit off like "0").
+	// Empty/unset defers to the legacy YCODE_AGENT alias.
+	if v := os.Getenv("DHNT_AGENT"); v != "" {
+		return truthyAgent(v)
+	}
+	if v := os.Getenv("YCODE_AGENT"); v != "" {
+		return truthyAgent(v)
+	}
+	return false
+}
+
+func truthyAgent(v string) bool {
 	switch v {
 	case "", "0", "false", "no":
 		return false

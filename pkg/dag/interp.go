@@ -1,0 +1,64 @@
+// Copyright (c) 2025 qiangli
+// See LICENSE for licensing information
+
+package dag
+
+import (
+	"context"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/weavecli"
+)
+
+// TaskIO is the execution environment handed to an interpreter for one target.
+type TaskIO struct {
+	Dir    string
+	Env    []string // os.Environ() shape
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+// TaskResult is the outcome of running one target. Stdout/Stderr are populated
+// only when the engine runs in capture mode (e.g. --json), so a machine reader
+// gets a single clean envelope on stdout instead of interleaved task output.
+type TaskResult struct {
+	Name     string
+	Status   Status
+	ExitCode int
+	Duration time.Duration
+	Err      error
+	Stdout   string
+	Stderr   string
+	UpToDate bool // reserved for P1.5 fingerprint skip
+}
+
+// Interpreter runs a target's body. Implementations register themselves by
+// language tag via RegisterInterpreter; the bash interpreter is the default.
+type Interpreter interface {
+	Run(ctx context.Context, t *Task, io TaskIO) TaskResult
+}
+
+var (
+	interpMu sync.RWMutex
+	interps  = map[string]Interpreter{}
+)
+
+// RegisterInterpreter associates an interpreter with a fenced-code lang tag.
+// "" registers the default (used when a body has no info string). Later phases
+// add "go" (yaegi), "python" (gpython), "starlark".
+func RegisterInterpreter(lang string, i Interpreter) {
+	interpMu.Lock()
+	defer interpMu.Unlock()
+	interps[lang] = i
+}
+
+func interpFor(lang string) (Interpreter, error) {
+	interpMu.RLock()
+	defer interpMu.RUnlock()
+	if i, ok := interps[lang]; ok {
+		return i, nil
+	}
+	return nil, errf(weavecli.ExitInvalidArg, "no interpreter for language %q", lang)
+}
