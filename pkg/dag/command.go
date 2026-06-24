@@ -38,9 +38,12 @@ dependency failed is skipped.
   dag --list                 # show targets (add --json for machine output)
   dag build                  # run "build" and its dependencies
   dag test lint              # run several targets and their closures
+  dag build VERSION=v1.2     # make-style KEY=VALUE variable overrides
   dag --file pipeline.md ci  # use an explicit file
 
-With no target, the first declared target (or one named "default") runs.`,
+With no target, dag runs the file's default goal — the frontmatter
+"default:" key, or a target named "default" — and otherwise lists the
+targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -68,21 +71,25 @@ With no target, the first declared target (or one named "default") runs.`,
 				return runList(out, mode, doc)
 			}
 
-			targets := args
+			// make-style invocation: KEY=VALUE args are variable overrides
+			// (injected into every target's environment), the rest are targets.
+			targets, overrides := splitOverrides(args)
+
 			if len(targets) == 0 {
-				if d := defaultTarget(doc); d != "" {
-					targets = []string{d}
-				} else {
-					return emitErr(errOut, mode,
-						errf(weavecli.ExitInvalidArg, "no targets defined in %s", path))
+				d := defaultTarget(doc)
+				if d == "" {
+					// No configured default goal — list targets, like a
+					// Makefile whose .DEFAULT_GOAL is `help`.
+					return runList(out, mode, doc)
 				}
+				targets = []string{d}
 			}
 
 			absPath, _ := filepath.Abs(path)
 			eng := &Engine{
 				Graph:       g,
 				Dir:         filepath.Dir(absPath),
-				Env:         os.Environ(),
+				Env:         append(os.Environ(), overrides...),
 				Concurrency: 1,
 				FailFast:    !keepGoing,
 				Verbose:     mode == weavecli.OutputAuto || mode == weavecli.OutputPlain,
@@ -107,14 +114,44 @@ With no target, the first declared target (or one named "default") runs.`,
 	return cmd
 }
 
+// defaultTarget resolves the goal for a no-argument invocation: the frontmatter
+// `default:` key (make's .DEFAULT_GOAL) wins, then a target literally named
+// "default". Empty means "no default" — the caller lists targets instead of
+// guessing one to run.
 func defaultTarget(doc *Document) string {
+	if doc.Default != "" {
+		return doc.Default
+	}
 	if _, ok := doc.Lookup("default"); ok {
 		return "default"
 	}
-	if len(doc.Order) > 0 {
-		return doc.Order[0]
-	}
 	return ""
+}
+
+// splitOverrides separates make-style `KEY=VALUE` variable overrides from target
+// names. KEY must be a valid shell identifier; everything else is a target.
+func splitOverrides(args []string) (targets, overrides []string) {
+	for _, a := range args {
+		if i := strings.IndexByte(a, '='); i > 0 && isVarName(a[:i]) {
+			overrides = append(overrides, a)
+		} else {
+			targets = append(targets, a)
+		}
+	}
+	return targets, overrides
+}
+
+func isVarName(s string) bool {
+	for i, r := range s {
+		switch {
+		case r == '_':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return s != ""
 }
 
 // --- result shapes (envelope Result payloads) ---

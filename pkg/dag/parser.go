@@ -35,11 +35,12 @@ type Task struct {
 
 // Document is a parsed DAG markdown file.
 type Document struct {
-	Path  string
-	Name  string // optional file-level frontmatter `name`
-	Desc  string // optional file-level frontmatter `description`
-	Tasks []*Task
-	Order []string // task names in declaration order (deterministic listing)
+	Path    string
+	Name    string // optional file-level frontmatter `name`
+	Desc    string // optional file-level frontmatter `description`
+	Default string // optional frontmatter `default` — make's .DEFAULT_GOAL
+	Tasks   []*Task
+	Order   []string // task names in declaration order (deterministic listing)
 
 	byName map[string]*Task
 }
@@ -81,6 +82,8 @@ func Parse(r io.Reader, path string) (*Document, error) {
 					doc.Name = v
 				case "description":
 					doc.Desc = v
+				case "default", "default_goal":
+					doc.Default = v
 				}
 			}
 			j++
