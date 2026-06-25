@@ -19,7 +19,11 @@ import (
 // env and overrides are os.Environ()-shaped ("KEY=VALUE"). It is a no-op when
 // the document declares no vars (the common case), so existing pipelines that
 // never use ${NAME} are unaffected.
-func (d *Document) expandVars(env, overrides []string) {
+// Returns the resolved values of the document's own `vars:` (name→value), so the
+// caller can also inject them into target bodies' environment — frontmatter vars
+// are available to bodies, not just metadata. CLI overrides are NOT included
+// (the engine already passes those through os.Environ()+overrides).
+func (d *Document) expandVars(env, overrides []string) map[string]string {
 	vals := envMap(env)
 
 	// Apply vars in declaration order. A value may itself reference earlier
@@ -41,8 +45,14 @@ func (d *Document) expandVars(env, overrides []string) {
 		vals[k] = v
 	}
 
+	// Resolved doc vars to hand back for body-env injection (declared vars only).
+	resolved := make(map[string]string, len(d.Vars))
+	for _, v := range d.Vars {
+		resolved[v.Name] = vals[v.Name]
+	}
+
 	if len(d.Vars) == 0 && len(overrides) == 0 {
-		return // nothing could change
+		return resolved // nothing could change in metadata
 	}
 	for _, t := range d.Tasks {
 		substSlice(t.Requires, vals)
@@ -51,9 +61,11 @@ func (d *Document) expandVars(env, overrides []string) {
 		substSlice(t.Generates, vals)
 		substSlice(t.Env, vals)
 		substSlice(t.Ensure, vals)
+		substSlice(t.Tools, vals)
 		t.Host = substVars(t.Host, vals) // placement (e.g. Host: ${HOST})
 		t.When = substVars(t.When, vals) // condition (e.g. When: test -n "${HOST}")
 	}
+	return resolved
 }
 
 // expandMatrix replaces every target that declares a Matrix with one concrete

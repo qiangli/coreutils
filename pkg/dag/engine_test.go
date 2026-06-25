@@ -289,6 +289,28 @@ func TestEngineExecutorSeamReceivesHost(t *testing.T) {
 	}
 }
 
+func TestEngineToolsPreflight(t *testing.T) {
+	dir := t.TempDir()
+	// A present tool (sh is on PATH) lets the body run.
+	okEng := engineFor(t, dir, "## Tasks\n\n### needs\nTools: sh\n"+block("bash", "echo body-ran"))
+	okEng.Capture = true
+	r, _ := okEng.Run(context.Background(), "needs")
+	if r.Results[0].Status != StatusDone || !strings.Contains(r.Results[0].Stdout, "body-ran") {
+		t.Fatalf("present tool should run body: %+v", r.Results[0])
+	}
+	// A missing tool fails the target (exit 3) before the body runs.
+	missEng := engineFor(t, dir, "## Tasks\n\n### needs\nTools: definitely-not-a-real-tool-xyz\n"+
+		block("bash", "echo SHOULD-NOT-RUN"))
+	missEng.Capture = true
+	r2, _ := missEng.Run(context.Background(), "needs")
+	if r2.Results[0].Status != StatusFailed || r2.Results[0].ExitCode != 3 {
+		t.Errorf("missing tool should fail exit 3: %+v", r2.Results[0])
+	}
+	if strings.Contains(r2.Results[0].Stdout, "SHOULD-NOT-RUN") {
+		t.Errorf("body ran despite missing tool")
+	}
+}
+
 func TestEngineFailurePropagates(t *testing.T) {
 	dir := t.TempDir()
 	md := "## Tasks\n\n" +

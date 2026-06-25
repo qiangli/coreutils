@@ -84,7 +84,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			// P1 expansion passes (after parse, before BuildGraph):
 			// ${NAME} metadata substitution (CLI KEY=VALUE wins), then the
 			// matrix fan-out into one concrete node per combination.
-			doc.expandVars(os.Environ(), overrides)
+			docVars := doc.expandVars(os.Environ(), overrides)
 			doc.expandMatrix()
 			g, err := BuildGraph(doc)
 			if err != nil {
@@ -123,10 +123,17 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 					return emitErr(errOut, mode, errf(weavecli.ExitInvalidArg, "cache import: %v", err))
 				}
 			}
+			// Body env: process env, then frontmatter vars (so ${HOST} etc. are
+			// available to bodies, not just metadata), then CLI overrides (win).
+			bodyEnv := os.Environ()
+			for k, v := range docVars {
+				bodyEnv = append(bodyEnv, k+"="+v)
+			}
+			bodyEnv = append(bodyEnv, overrides...)
 			eng := &Engine{
 				Graph:       g,
 				Dir:         filepath.Dir(absPath),
-				Env:         append(os.Environ(), overrides...),
+				Env:         bodyEnv,
 				Concurrency: concurrency,
 				FailFast:    !keepGoing,
 				Force:       forceF,

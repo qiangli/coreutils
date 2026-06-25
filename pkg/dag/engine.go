@@ -563,7 +563,15 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool) TaskR
 		ob, eb = new(bytes.Buffer), new(bytes.Buffer)
 		stdout, stderr = ob, eb
 	}
-	res := e.executor().Execute(runCtx, node.Task, TaskIO{
+	// Builtin Tools: preflight — prepend a presence + version check to the body
+	// so it runs wherever the body runs (local, remote via --mesh, or sandbox).
+	task := node.Task
+	if len(task.Tools) > 0 {
+		cp := *task
+		cp.Body = toolPreamble(task.Tools) + task.Body
+		task = &cp
+	}
+	res := e.executor().Execute(runCtx, task, TaskIO{
 		Dir:    e.Dir,
 		Env:    e.envFor(node),
 		Stdout: stdout,

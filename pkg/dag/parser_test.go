@@ -178,6 +178,25 @@ func TestParseFileIncludes(t *testing.T) {
 	}
 }
 
+func TestParseBodyCommentNotHeading(t *testing.T) {
+	// Regression: a `#`/`##` shell comment INSIDE a fenced body must not be read
+	// as a markdown heading (it used to flush the target early and drop the rest).
+	md := "## Tasks\n\n" +
+		"### a\n```bash\n# a shell comment\n## still a comment, not a heading\necho a\n```\n" +
+		"### b\nRequires: a\n" + block("bash", "echo b")
+	d, err := Parse(strings.NewReader(md), "DAG.md")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !reflect.DeepEqual(d.Order, []string{"a", "b"}) {
+		t.Fatalf("want [a b], got %v (a body comment broke target boundaries)", d.Order)
+	}
+	ta, _ := d.Lookup("a")
+	if !strings.Contains(ta.Body, "# a shell comment") {
+		t.Errorf("comment lost from body: %q", ta.Body)
+	}
+}
+
 func TestParseDuplicateTarget(t *testing.T) {
 	md := "## Tasks\n\n### a\n" + block("", "echo 1") + "### a\n" + block("", "echo 2")
 	if _, err := Parse(strings.NewReader(md), "DAG.md"); err == nil {

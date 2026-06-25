@@ -60,6 +60,7 @@ type Task struct {
 	// P2 (parsed-and-ignored in P1, so a contract-bearing file parses today).
 	Ensure  []string
 	Effects []string
+	Tools   []string // builtin tool preflight: `Tools: git go:1.25 podman`
 
 	Line int // 1-based source line of the heading, for error messages
 }
@@ -99,7 +100,7 @@ func (d *Document) Lookup(name string) (*Task, bool) {
 
 var metaKeys = map[string]bool{
 	"requires": true, "inputs": true, "sources": true,
-	"generates": true, "env": true, "ensure": true, "effects": true,
+	"generates": true, "env": true, "ensure": true, "effects": true, "tools": true,
 	"timeout": true, "retries": true,
 	// P1 metadata.
 	"matrix": true, "secrets": true, "artifacts": true, "when": true,
@@ -204,8 +205,30 @@ func Parse(r io.Reader, path string) (*Document, error) {
 		cur, curLines = nil, nil
 	}
 
+	// inFence tracks whether we're inside a target's fenced code block, so a
+	// shell `#`/`##` comment (or any ```-info line) inside a body is never
+	// mistaken for a markdown heading.
+	inFence := false
+	fenceMarker := ""
 	for idx := start; idx < len(lines); idx++ {
 		ln := lines[idx]
+		if marker, info, ok := fenceOpen(ln); ok {
+			if !inFence {
+				inFence, fenceMarker = true, marker
+			} else if marker == fenceMarker && info == "" {
+				inFence = false
+			}
+			if cur != nil {
+				curLines = append(curLines, ln)
+			}
+			continue
+		}
+		if inFence {
+			if cur != nil {
+				curLines = append(curLines, ln)
+			}
+			continue
+		}
 		if lvl, text, ok := parseHeading(ln); ok {
 			if nested {
 				if lvl == 2 && strings.EqualFold(text, "Tasks") {
@@ -375,6 +398,8 @@ func (t *Task) absorb(lines []string) {
 				}
 			case "effects":
 				t.Effects = append(t.Effects, splitList(v)...)
+			case "tools":
+				t.Tools = append(t.Tools, splitList(v)...)
 			case "matrix":
 				// `Matrix: os=linux,darwin arch=amd64,arm64` — space-separated
 				// key=csv pairs, each value list comma-separated.
