@@ -189,7 +189,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().IntVarP(&jobs, "jobs", "j", 1, "Run up to N targets in parallel (dependency-respecting)")
 	cmd.Flags().BoolVarP(&forceF, "force", "B", false, "Ignore the fingerprint cache; run every target")
 	cmd.Flags().BoolVar(&explainF, "explain", false, "Explain per target whether it would run or is up-to-date (runs nothing)")
-	cmd.Flags().BoolVarP(&dryRunF, "dry-run", "n", false, "Print the ordered plan without running any target body")
+	cmd.Flags().BoolVarP(&dryRunF, "dryrun", "n", false, "Print the ordered plan without running any target body")
 	cmd.Flags().BoolVar(&outGroupF, "output-group", false, "Fold each target's output in GitHub ::group::/::endgroup:: markers (auto-on under GITHUB_ACTIONS)")
 	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")
 	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
