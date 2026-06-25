@@ -336,7 +336,9 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		if logSink == nil {
 			logSink = io.Discard
 		}
-		_, _ = io.Copy(tap(logSink), ptmx)
+		streamJSONLog := newWeaveStreamJSONLogWriter(logSink)
+		_, _ = io.Copy(tap(streamJSONLog), ptmx)
+		_ = streamJSONLog.Flush()
 	}
 
 	waitErr := cmd.Wait()
