@@ -38,6 +38,8 @@ type Engine struct {
 	OutputGroup bool   // wrap each target's captured output in CI ::group:: markers
 	Sandbox     bool   // wrap target bodies in SandboxCmd/DAG_SANDBOX_CMD
 	SandboxCmd  string // shell-split wrapper command; default is DAG_SANDBOX_CMD
+	Mesh        bool   // dispatch Host:-tagged targets to another machine
+	RemoteCmd   string // remote-exec command for mesh; default "ssh" / DAG_REMOTE_EXEC
 	Executor    Executor
 	Cache       *Cache // nil = no incremental skip
 
@@ -590,7 +592,26 @@ func (e *Engine) executor() Executor {
 	if e.Executor != nil {
 		return e.Executor
 	}
+	if e.meshEnabled() {
+		return meshExecutor{Remote: e.remoteCommand()}
+	}
 	return localExecutor{}
+}
+
+// meshEnabled requires an explicit opt-in (--mesh or --remote) so a stray
+// DAG_REMOTE_EXEC in the environment never silently sends bodies off-box.
+func (e *Engine) meshEnabled() bool {
+	return e.Mesh || e.RemoteCmd != ""
+}
+
+func (e *Engine) remoteCommand() string {
+	if e.RemoteCmd != "" {
+		return e.RemoteCmd
+	}
+	if v := os.Getenv("DAG_REMOTE_EXEC"); v != "" {
+		return v
+	}
+	return "ssh"
 }
 
 func (e *Engine) sandboxCommand() string {

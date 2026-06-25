@@ -24,9 +24,9 @@ import (
 func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
-		sandboxF                                                                                      bool
+		sandboxF, meshF                                                                               bool
 		fileArg                                                                                       string
-		cacheDir, cacheExport, cacheImport                                                            string
+		cacheDir, cacheExport, cacheImport, remoteCmd                                                 string
 		jobs                                                                                          int
 	)
 	cmd := &cobra.Command{
@@ -133,6 +133,8 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				DryRun:      dryRunF,
 				OutputGroup: outputGroup,
 				Sandbox:     sandboxF,
+				Mesh:        meshF,
+				RemoteCmd:   remoteCmd,
 				Cache:       cache,
 				Verbose:     mode == weavecli.OutputAuto || mode == weavecli.OutputPlain,
 				Capture:     mode == weavecli.OutputJSON,
@@ -185,6 +187,8 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")
 	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
 	cmd.Flags().BoolVar(&sandboxF, "sandbox", false, "Run target bodies through DAG_SANDBOX_CMD wrapper constraints")
+	cmd.Flags().BoolVar(&meshF, "mesh", false, "Dispatch Host:-tagged targets to another machine (control plane only; body fetches its own code/data)")
+	cmd.Flags().StringVar(&remoteCmd, "remote", "", "Remote-exec command for --mesh (default: ssh or DAG_REMOTE_EXEC)")
 	cmd.Flags().StringVarP(&fileArg, "file", "f", "", "DAG markdown file (default: discover DAG.md)")
 	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "Fingerprint cache directory (default: DAG_CACHE_DIR or user cache)")
 	cmd.Flags().StringVar(&cacheExport, "cache-export", "", "Copy this DAG's fingerprint cache file to DIR after the run")
