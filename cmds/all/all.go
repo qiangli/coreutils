@@ -7,6 +7,7 @@
 package all
 
 import (
+	_ "github.com/qiangli/coreutils/cmds/awk"
 	_ "github.com/qiangli/coreutils/cmds/base32"
 	_ "github.com/qiangli/coreutils/cmds/base64"
 	_ "github.com/qiangli/coreutils/cmds/basename"
