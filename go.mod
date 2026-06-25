@@ -3,6 +3,7 @@ module github.com/qiangli/coreutils
 go 1.25.0
 
 require (
+	github.com/benhoyt/goawk v1.31.0
 	github.com/creack/pty/v2 v2.0.1
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.1
