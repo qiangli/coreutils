@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -21,9 +23,11 @@ import (
 // follows the weavecli envelope convention (DHNT_AGENT=1 forces --json).
 func newDagCmd() *cobra.Command {
 	var (
-		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF bool
-		fileArg                                                                               string
-		jobs                                                                                  int
+		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
+		sandboxF                                                                                      bool
+		fileArg                                                                                       string
+		cacheDir, cacheExport, cacheImport                                                            string
+		jobs                                                                                          int
 	)
 	cmd := &cobra.Command{
 		Use:   "dag [flags] [target ...]",
@@ -113,6 +117,12 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			outputGroup := (outGroupF || os.Getenv("GITHUB_ACTIONS") == "true") &&
 				mode != weavecli.OutputJSON
 			absPath, _ := filepath.Abs(path)
+			cache := LoadCache(absPath, cacheDir)
+			if cacheImport != "" {
+				if err := cache.ImportFromDir(cacheImport); err != nil {
+					return emitErr(errOut, mode, errf(weavecli.ExitInvalidArg, "cache import: %v", err))
+				}
+			}
 			eng := &Engine{
 				Graph:       g,
 				Dir:         filepath.Dir(absPath),
@@ -122,7 +132,8 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				Force:       forceF,
 				DryRun:      dryRunF,
 				OutputGroup: outputGroup,
-				Cache:       LoadCache(absPath),
+				Sandbox:     sandboxF,
+				Cache:       cache,
 				Verbose:     mode == weavecli.OutputAuto || mode == weavecli.OutputPlain,
 				Capture:     mode == weavecli.OutputJSON,
 				Stdout:      out,
@@ -141,10 +152,23 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			if err != nil {
 				return emitErr(errOut, mode, err)
 			}
+			if cacheExport != "" {
+				if err := cache.ExportToDir(cacheExport); err != nil {
+					return emitErr(errOut, mode, errf(weavecli.ExitInvalidArg, "cache export: %v", err))
+				}
+			}
 			if dryRunF {
 				return runPlan(out, mode, path, targets, report.Plan)
 			}
-			return runReport(out, errOut, mode, path, targets, report)
+			if err := runReport(out, errOut, mode, path, targets, report); err != nil {
+				return err
+			}
+			if watchF {
+				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				return runWatch(ctx, out, eng, targets)
+			}
+			return nil
 		},
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
@@ -159,7 +183,12 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVarP(&dryRunF, "dry-run", "n", false, "Print the ordered plan without running any target body")
 	cmd.Flags().BoolVar(&outGroupF, "output-group", false, "Fold each target's output in GitHub ::group::/::endgroup:: markers (auto-on under GITHUB_ACTIONS)")
 	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")
+	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
+	cmd.Flags().BoolVar(&sandboxF, "sandbox", false, "Run target bodies through DAG_SANDBOX_CMD wrapper constraints")
 	cmd.Flags().StringVarP(&fileArg, "file", "f", "", "DAG markdown file (default: discover DAG.md)")
+	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "Fingerprint cache directory (default: DAG_CACHE_DIR or user cache)")
+	cmd.Flags().StringVar(&cacheExport, "cache-export", "", "Copy this DAG's fingerprint cache file to DIR after the run")
+	cmd.Flags().StringVar(&cacheImport, "cache-import", "", "Copy this DAG's fingerprint cache file from DIR before the run")
 	return cmd
 }
 
@@ -253,6 +282,7 @@ type taskSummary struct {
 	Lang      string   `json:"lang,omitempty"`
 	Timeout   string   `json:"timeout,omitempty"`
 	Retries   int      `json:"retries,omitempty"`
+	Host      string   `json:"host,omitempty"`
 }
 
 type listResult struct {
@@ -262,6 +292,7 @@ type listResult struct {
 
 type runItem struct {
 	Name        string       `json:"name"`
+	Host        string       `json:"host"`
 	Status      string       `json:"status"`
 	ExitCode    int          `json:"exit_code"`
 	DurationMS  int64        `json:"duration_ms"`
@@ -364,7 +395,7 @@ func runList(out io.Writer, mode weavecli.OutputMode, doc *Document) error {
 		summary := taskSummary{
 			Name: t.Name, Desc: t.Desc, Requires: t.Requires,
 			Inputs: t.Inputs, Sources: t.Sources, Generates: t.Generates, Lang: t.Lang,
-			Retries: t.Retries,
+			Retries: t.Retries, Host: t.Host,
 		}
 		if t.Timeout > 0 {
 			summary.Timeout = t.Timeout.String()
@@ -392,7 +423,7 @@ func runReport(out, errOut io.Writer, mode weavecli.OutputMode, path string, tar
 	res := runResult{File: path, Targets: targets, Failed: report.Failed}
 	for _, r := range report.Results {
 		item := runItem{
-			Name: r.Name, Status: r.Status.String(),
+			Name: r.Name, Host: r.Host, Status: r.Status.String(),
 			ExitCode: r.ExitCode, DurationMS: r.Duration.Milliseconds(),
 			Stdout: r.Stdout, Stderr: r.Stderr, Attestation: r.Attestation,
 			Artifacts: r.Artifacts,

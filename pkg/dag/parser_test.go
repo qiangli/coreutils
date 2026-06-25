@@ -121,6 +121,23 @@ func TestParseTimeoutRetries(t *testing.T) {
 	}
 }
 
+func TestParseExitCodes(t *testing.T) {
+	md := "## Tasks\n\n### classify\nExitCodes: 0=ok 75=skip 2=retry 9=fail\nHost: dragon\n" +
+		block("bash", "exit 75")
+	doc, err := Parse(strings.NewReader(md), "DAG.md")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := doc.Tasks[0].ExitCodes
+	want := map[int]string{0: "ok", 75: "skip", 2: "retry", 9: "fail"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("exit codes = %#v, want %#v", got, want)
+	}
+	if doc.Tasks[0].Host != "dragon" {
+		t.Errorf("host = %q", doc.Tasks[0].Host)
+	}
+}
+
 func TestParseFrontmatter(t *testing.T) {
 	md := "---\nname: demo\ndescription: A demo pipeline\n---\n\n" +
 		"## Tasks\n\n### t\n" + block("", "echo t")

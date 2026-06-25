@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -191,6 +192,100 @@ func TestEngineRetries(t *testing.T) {
 	}
 	if report.Failed || report.Results[0].Status != StatusDone {
 		t.Errorf("flaky should succeed on retry, got %s (failed=%v)", report.Results[0].Status, report.Failed)
+	}
+}
+
+func TestEngineExitCodesSkip(t *testing.T) {
+	dir := t.TempDir()
+	md := "## Tasks\n\n### maybe\nExitCodes: 75=skip\n" + block("bash", "exit 75")
+	eng := engineFor(t, dir, md)
+
+	report, err := eng.Run(context.Background(), "maybe")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Failed {
+		t.Fatalf("mapped skip should keep run green: %+v", report.Results)
+	}
+	r := report.Results[0]
+	if r.Status != StatusConditionSkipped || r.ExitCode != 75 {
+		t.Errorf("want condition-skipped/75, got %s/%d", r.Status, r.ExitCode)
+	}
+}
+
+func TestEngineExitCodesRetry(t *testing.T) {
+	dir := t.TempDir()
+	body := "if [ -f attempt.marker ]; then exit 0; fi\ntouch attempt.marker\nexit 2"
+	md := "## Tasks\n\n### flaky\nExitCodes: 2=retry\nRetries: 1\n" + block("bash", body)
+	eng := engineFor(t, dir, md)
+
+	report, err := eng.Run(context.Background(), "flaky")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Failed || report.Results[0].Status != StatusDone {
+		t.Errorf("retry-classified exit should succeed on retry, got %s (failed=%v)",
+			report.Results[0].Status, report.Failed)
+	}
+}
+
+func TestSandboxArgsFromEffects(t *testing.T) {
+	if got := sandboxArgs(nil); !reflect.DeepEqual(got, []string{"--network=none", "--read-only"}) {
+		t.Fatalf("sandboxArgs(nil) = %v", got)
+	}
+	if got := sandboxArgs([]string{"net"}); !reflect.DeepEqual(got, []string{"--read-only"}) {
+		t.Fatalf("sandboxArgs(net) = %v", got)
+	}
+	if got := sandboxArgs([]string{"write"}); !reflect.DeepEqual(got, []string{"--network=none"}) {
+		t.Fatalf("sandboxArgs(write) = %v", got)
+	}
+	if got := sandboxArgs([]string{"net", "write"}); len(got) != 0 {
+		t.Fatalf("sandboxArgs(net,write) = %v", got)
+	}
+}
+
+func TestSandboxCommandArgs(t *testing.T) {
+	name, args := sandboxCommandArgs("bashy podman run", []string{"read"}, "echo hi")
+	if name != "bashy" {
+		t.Fatalf("name = %q", name)
+	}
+	want := []string{"podman", "run", "--network=none", "--read-only", "bash", "-c", "echo hi"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+	// DAG_SANDBOX_IMAGE pins/overrides the image.
+	t.Setenv("DAG_SANDBOX_IMAGE", "docker.io/library/bash:5.2")
+	_, args = sandboxCommandArgs("bashy podman run", nil, "echo hi")
+	if args[len(args)-3] != "docker.io/library/bash:5.2" {
+		t.Fatalf("image override not applied: %v", args)
+	}
+}
+
+type recordingExecutor struct {
+	hosts []string
+}
+
+func (x *recordingExecutor) Execute(ctx context.Context, t *Task, tio TaskIO) TaskResult {
+	x.hosts = append(x.hosts, t.Host)
+	return TaskResult{Name: t.Name, Host: t.Host, Status: StatusDone}
+}
+
+func TestEngineExecutorSeamReceivesHost(t *testing.T) {
+	dir := t.TempDir()
+	md := "## Tasks\n\n### remote\nHost: dragon\n" + block("bash", "echo remote")
+	eng := engineFor(t, dir, md)
+	rec := &recordingExecutor{}
+	eng.Executor = rec
+
+	report, err := eng.Run(context.Background(), "remote")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if report.Failed || report.Results[0].Host != "dragon" {
+		t.Fatalf("host not carried through executor/report: %+v", report.Results)
+	}
+	if !reflect.DeepEqual(rec.hosts, []string{"dragon"}) {
+		t.Fatalf("executor hosts = %v", rec.hosts)
 	}
 }
 

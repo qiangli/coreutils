@@ -16,31 +16,81 @@ import (
 // Cache is the fingerprint store backing dag's incremental up-to-date skip —
 // the agent-first answer to make's mtime prerequisites, but content-hashed
 // (a touched-but-unchanged file does not force a rebuild). One JSON file per
-// DAG document under ~/.cache/bashy/dag/, atomic tmp+rename writes.
+// DAG document under the configured cache dir, atomic tmp+rename writes.
 type Cache struct {
 	path   string
 	Hashes map[string]string `json:"hashes"`
 }
 
-// LoadCache opens (or starts) the fingerprint cache for docPath. A read error
-// yields an empty cache rather than failing — a missing/garbage cache just
-// means "everything is out of date".
-func LoadCache(docPath string) *Cache {
+// LoadCache opens (or starts) the fingerprint cache for docPath. cacheDir wins,
+// then DAG_CACHE_DIR, then os.UserCacheDir()/bashy/dag. A read error yields an
+// empty cache rather than failing — a missing/garbage cache just means
+// "everything is out of date".
+func LoadCache(docPath, cacheDir string) *Cache {
 	c := &Cache{Hashes: map[string]string{}}
 	abs, _ := filepath.Abs(docPath)
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		return c // no cache dir -> always-run cache
+	dir := cacheDir
+	if dir == "" {
+		dir = os.Getenv("DAG_CACHE_DIR")
+	}
+	if dir == "" {
+		ucd, err := os.UserCacheDir()
+		if err != nil {
+			return c // no cache dir -> always-run cache
+		}
+		dir = filepath.Join(ucd, "bashy", "dag")
 	}
 	sum := sha256.Sum256([]byte(abs))
-	c.path = filepath.Join(dir, "bashy", "dag", hex.EncodeToString(sum[:])+".json")
+	c.path = filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
+	c.load()
+	return c
+}
+
+func (c *Cache) load() {
 	if data, err := os.ReadFile(c.path); err == nil {
 		_ = json.Unmarshal(data, c)
 		if c.Hashes == nil {
 			c.Hashes = map[string]string{}
 		}
 	}
-	return c
+}
+
+// ImportFromDir copies this document's cache file from dir into the active
+// cache location, then reloads it. The local-dir copy is the seam future S3/GCS
+// backends can satisfy without changing Engine.
+func (c *Cache) ImportFromDir(dir string) error {
+	if c.path == "" || dir == "" {
+		return nil
+	}
+	src := filepath.Join(dir, filepath.Base(c.path))
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(c.path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(c.path, data, 0o644); err != nil {
+		return err
+	}
+	c.Hashes = map[string]string{}
+	c.load()
+	return nil
+}
+
+// ExportToDir copies this document's cache file to dir.
+func (c *Cache) ExportToDir(dir string) error {
+	if c.path == "" || dir == "" {
+		return nil
+	}
+	data, err := os.ReadFile(c.path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, filepath.Base(c.path)), data, 0o644)
 }
 
 // Fingerprint computes a node's content hash: its body + the hashes of its

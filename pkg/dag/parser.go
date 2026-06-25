@@ -46,6 +46,12 @@ type Task struct {
 	// when it exits non-zero (see engine.go).
 	When string
 
+	// P2 #15 — ExitCodes maps a body exit code to ok|skip|retry|fail.
+	ExitCodes map[int]string
+
+	// P2 #13 — Host is placement intent for a future remote executor.
+	Host string
+
 	// P0 #2 — per-target execution policy enforced by the engine.
 	Timeout time.Duration // `Timeout: 90s` — 0 means no deadline
 	Retries int           // `Retries: 3` — extra attempts after the first on failure
@@ -97,6 +103,8 @@ var metaKeys = map[string]bool{
 	"timeout": true, "retries": true,
 	// P1 metadata.
 	"matrix": true, "secrets": true, "artifacts": true, "when": true,
+	// P2 metadata.
+	"exitcodes": true, "host": true,
 }
 
 // Parse reads a DAG markdown document. The format:
@@ -391,6 +399,10 @@ func (t *Task) absorb(lines []string) {
 				if s := strings.TrimSpace(v); s != "" {
 					t.When = s
 				}
+			case "exitcodes":
+				t.ExitCodes = parseExitCodes(v)
+			case "host":
+				t.Host = strings.TrimSpace(v)
 			case "timeout":
 				if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
 					t.Timeout = d
@@ -523,5 +535,34 @@ func (t *Task) clone() *Task {
 	c.Artifacts = append([]string(nil), t.Artifacts...)
 	c.Ensure = append([]string(nil), t.Ensure...)
 	c.Effects = append([]string(nil), t.Effects...)
+	if t.ExitCodes != nil {
+		c.ExitCodes = make(map[int]string, len(t.ExitCodes))
+		for k, v := range t.ExitCodes {
+			c.ExitCodes[k] = v
+		}
+	}
 	return &c
+}
+
+func parseExitCodes(v string) map[int]string {
+	out := map[int]string{}
+	for _, f := range strings.Fields(v) {
+		codeS, action, ok := strings.Cut(f, "=")
+		if !ok {
+			continue
+		}
+		code, err := strconv.Atoi(strings.TrimSpace(codeS))
+		if err != nil {
+			continue
+		}
+		action = strings.ToLower(strings.TrimSpace(action))
+		switch action {
+		case "ok", "skip", "retry", "fail":
+			out[code] = action
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

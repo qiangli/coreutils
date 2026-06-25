@@ -83,6 +83,23 @@ func TestCommandNoArgListsByDefault(t *testing.T) {
 	}
 }
 
+func TestCommandHelpMentionsWatchAndSandbox(t *testing.T) {
+	cmd := NewDagCmd()
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out.String(), "--watch") {
+		t.Fatalf("--help should mention --watch:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "--sandbox") {
+		t.Fatalf("--help should mention --sandbox:\n%s", out.String())
+	}
+}
+
 func TestCommandDefaultGoalFrontmatter(t *testing.T) {
 	md := "---\ndefault: greet\n---\n\n## Tasks\n\n" +
 		"### greet\n" + block("bash", "echo hello-default") +
@@ -115,6 +132,35 @@ func TestCommandVarOverride(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "hi world") {
 		t.Errorf("variable override not applied; out=%q", out.String())
+	}
+}
+
+func TestCommandRunJSONSurfacesHost(t *testing.T) {
+	md := "## Tasks\n\n### remote\nHost: dragon\n" + block("bash", "echo ok")
+	path := writeDAG(t, md)
+
+	cmd := NewDagCmd()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"--json", "--file", path, "remote"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+	}
+
+	var env struct {
+		Result struct {
+			Tasks []struct {
+				Name string `json:"name"`
+				Host string `json:"host"`
+			} `json:"tasks"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out.String())
+	}
+	if len(env.Result.Tasks) != 1 || env.Result.Tasks[0].Host != "dragon" {
+		t.Fatalf("host not surfaced: %+v", env.Result.Tasks)
 	}
 }
 
@@ -158,6 +204,55 @@ func TestCommandExplain(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ran.txt")); err == nil {
 		t.Errorf("--explain executed the body (ran.txt created)")
+	}
+}
+
+func TestCommandCachePortableImportExport(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "DAG.md")
+	md := "## Tasks\n\n### gen\nSources: in.txt\nGenerates: out.txt\n" +
+		block("bash", "cat in.txt > out.txt")
+	if err := os.WriteFile(filepath.Join(dir, "in.txt"), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(dir, "cache")
+	exportDir := filepath.Join(dir, "export")
+
+	cmd := NewDagCmd()
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--json", "--cache-dir", cacheDir, "--cache-export", exportDir, "--file", p, "gen"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	if err := os.RemoveAll(cacheDir); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd = NewDagCmd()
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"--json", "--cache-dir", cacheDir, "--cache-import", exportDir, "--file", p, "gen"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("second Execute: %v (stderr=%s)", err, errOut.String())
+	}
+	var env struct {
+		Result struct {
+			Tasks []struct {
+				Name   string `json:"name"`
+				Status string `json:"status"`
+			} `json:"tasks"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, out.String())
+	}
+	if len(env.Result.Tasks) != 1 || env.Result.Tasks[0].Status != StatusUpToDate.String() {
+		t.Fatalf("want imported cache to skip gen, got %+v", env.Result.Tasks)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,6 +36,9 @@ type Engine struct {
 	Force       bool   // ignore the fingerprint cache (make's unconditional run)
 	DryRun      bool   // build the plan and short-circuit: run no bodies, mutate nothing
 	OutputGroup bool   // wrap each target's captured output in CI ::group:: markers
+	Sandbox     bool   // wrap target bodies in SandboxCmd/DAG_SANDBOX_CMD
+	SandboxCmd  string // shell-split wrapper command; default is DAG_SANDBOX_CMD
+	Executor    Executor
 	Cache       *Cache // nil = no incremental skip
 
 	Stdout io.Writer
@@ -223,7 +227,7 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 		}
 		if e.upToDate(node, fp) {
 			node.Status = StatusUpToDate
-			res := TaskResult{Name: node.Task.Name, Status: StatusUpToDate, UpToDate: true}
+			res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusUpToDate, UpToDate: true}
 			node.Result = &res
 			report.add(res)
 			if e.OutputGroup {
@@ -291,7 +295,7 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 
 	pushSkipped := func(n *Node, status Status) {
 		queued[n.Task.Name] = true
-		r := TaskResult{Name: n.Task.Name, Status: status}
+		r := TaskResult{Name: n.Task.Name, Host: n.Task.Host, Status: status}
 		n.Status, n.Result, results[n.Task.Name] = status, &r, &r
 		go func() { done <- n }()
 	}
@@ -317,9 +321,9 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 				sem <- struct{}{}
 				var r TaskResult
 				if e.conditionFalse(ctx, node) {
-					r = TaskResult{Name: node.Task.Name, Status: StatusConditionSkipped}
+					r = TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusConditionSkipped}
 				} else if e.upToDate(node, fp) {
-					r = TaskResult{Name: node.Task.Name, Status: StatusUpToDate, UpToDate: true}
+					r = TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusUpToDate, UpToDate: true}
 				} else {
 					r = e.runOne(ctx, node, true)
 				}
@@ -451,11 +455,6 @@ func (e *Engine) flushBanner(n *Node, r TaskResult) {
 // failure (with an optional Backoff sleep between). When capture is set,
 // stdout/stderr are buffered into the result instead of streamed.
 func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResult {
-	ip, err := interpFor(node.Task.Lang)
-	if err != nil {
-		return TaskResult{Name: node.Task.Name, Status: StatusFailed, ExitCode: 2, Err: err}
-	}
-
 	// P1 #7 — resolve declared secret VALUES so they can be redacted from the
 	// captured output. A target with secrets is always captured (even when the
 	// engine isn't) so the values never reach the real stdout unredacted.
@@ -474,8 +473,12 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResul
 			case <-ctx.Done():
 			}
 		}
-		res = e.runAttempt(ctx, ip, node, captureRun)
+		res = e.runAttempt(ctx, node, captureRun)
+		res = applyExitContract(node.Task, res)
 		if res.Status == StatusDone {
+			break
+		}
+		if res.Status == StatusConditionSkipped {
 			break
 		}
 		if ctx.Err() != nil {
@@ -515,12 +518,37 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResul
 			res.Err = firstFailedCheck(att)
 		}
 	}
+	res.Host = node.Task.Host
+	return res
+}
+
+func applyExitContract(t *Task, res TaskResult) TaskResult {
+	if len(t.ExitCodes) == 0 {
+		return res
+	}
+	action, ok := t.ExitCodes[res.ExitCode]
+	if !ok {
+		return res
+	}
+	switch action {
+	case "ok":
+		res.Status, res.Err = StatusDone, nil
+	case "skip":
+		res.Status, res.Err = StatusConditionSkipped, nil
+	case "retry":
+		res.Status = StatusFailed
+	case "fail":
+		res.Status = StatusFailed
+		if res.Err == nil {
+			res.Err = fmt.Errorf("exit %d classified as fail", res.ExitCode)
+		}
+	}
 	return res
 }
 
 // runAttempt runs the body once, wrapping it in a context.WithTimeout when the
 // target declares a Timeout. A deadline hit is reported as exit 124 "timeout".
-func (e *Engine) runAttempt(ctx context.Context, ip Interpreter, node *Node, capture bool) TaskResult {
+func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool) TaskResult {
 	runCtx := ctx
 	if node.Task.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -533,7 +561,7 @@ func (e *Engine) runAttempt(ctx context.Context, ip Interpreter, node *Node, cap
 		ob, eb = new(bytes.Buffer), new(bytes.Buffer)
 		stdout, stderr = ob, eb
 	}
-	res := ip.Run(runCtx, node.Task, TaskIO{
+	res := e.executor().Execute(runCtx, node.Task, TaskIO{
 		Dir:    e.Dir,
 		Env:    e.envFor(node),
 		Stdout: stdout,
@@ -549,6 +577,112 @@ func (e *Engine) runAttempt(ctx context.Context, ip Interpreter, node *Node, cap
 		res.Err = fmt.Errorf("timeout after %s", node.Task.Timeout)
 	}
 	return res
+}
+
+func (e *Engine) sandboxEnabled() bool {
+	return e.Sandbox || e.SandboxCmd != "" || os.Getenv("DAG_SANDBOX_CMD") != ""
+}
+
+func (e *Engine) executor() Executor {
+	if e.sandboxEnabled() {
+		return sandboxExecutor{Command: e.sandboxCommand()}
+	}
+	if e.Executor != nil {
+		return e.Executor
+	}
+	return localExecutor{}
+}
+
+func (e *Engine) sandboxCommand() string {
+	if e.SandboxCmd != "" {
+		return e.SandboxCmd
+	}
+	if v := os.Getenv("DAG_SANDBOX_CMD"); v != "" {
+		return v
+	}
+	return "bashy podman run"
+}
+
+type localExecutor struct{}
+
+func (localExecutor) Execute(ctx context.Context, t *Task, tio TaskIO) TaskResult {
+	ip, err := interpFor(t.Lang)
+	if err != nil {
+		return TaskResult{Name: t.Name, Host: t.Host, Status: StatusFailed, ExitCode: 2, Err: err}
+	}
+	return ip.Run(ctx, t, tio)
+}
+
+type sandboxExecutor struct {
+	Command string
+}
+
+func (x sandboxExecutor) Execute(ctx context.Context, t *Task, tio TaskIO) TaskResult {
+	start := time.Now()
+	res := TaskResult{Name: t.Name, Host: t.Host}
+	name, args := sandboxCommandArgs(x.Command, t.Effects, t.Body)
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = tio.Dir
+	cmd.Env = tio.Env
+	cmd.Stdout = tio.Stdout
+	cmd.Stderr = tio.Stderr
+	err := cmd.Run()
+	res.Duration = time.Since(start)
+	res.ExitCode, res.Err = exitCodeFromExecErr(err)
+	if res.ExitCode == 0 {
+		res.Status = StatusDone
+	} else {
+		res.Status = StatusFailed
+	}
+	return res
+}
+
+func sandboxCommandArgs(wrapper string, effects []string, body string) (string, []string) {
+	parts := strings.Fields(wrapper)
+	if len(parts) == 0 {
+		parts = []string{"bashy", "podman", "run"}
+	}
+	args := append([]string{}, parts[1:]...)
+	args = append(args, sandboxArgs(effects)...)
+	// The container image is configurable + pinnable via DAG_SANDBOX_IMAGE
+	// (default "bash"); avoid silently pulling an unpinned public :latest in CI.
+	image := os.Getenv("DAG_SANDBOX_IMAGE")
+	if image == "" {
+		image = "bash"
+	}
+	args = append(args, image, "-c", body)
+	return parts[0], args
+}
+
+func sandboxArgs(effects []string) []string {
+	var args []string
+	if !hasEffect(effects, "net") {
+		args = append(args, "--network=none")
+	}
+	if !hasEffect(effects, "write") {
+		args = append(args, "--read-only")
+	}
+	return args
+}
+
+func hasEffect(effects []string, want string) bool {
+	for _, ef := range effects {
+		if ef == want {
+			return true
+		}
+	}
+	return false
+}
+
+func exitCodeFromExecErr(err error) (int, error) {
+	if err == nil {
+		return 0, nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), nil
+	}
+	return 1, err
 }
 
 // envFor builds the environment for a node: the base env, any per-target Env
@@ -667,7 +801,7 @@ func (e *Engine) upToDate(node *Node, fp map[string]string) bool {
 
 func (e *Engine) markSkipped(node *Node, blocker string) TaskResult {
 	node.Status = StatusSkipped
-	res := TaskResult{Name: node.Task.Name, Status: StatusSkipped}
+	res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusSkipped}
 	node.Result = &res
 	if e.Verbose && !e.OutputGroup {
 		fmt.Fprintf(e.Stderr, "==> skip %s (dependency %s did not succeed)\n", node.Task.Name, blocker)
@@ -692,7 +826,7 @@ func (e *Engine) conditionFalse(ctx context.Context, node *Node) bool {
 // keeps the run green.
 func (e *Engine) markConditionSkipped(node *Node) TaskResult {
 	node.Status = StatusConditionSkipped
-	res := TaskResult{Name: node.Task.Name, Status: StatusConditionSkipped}
+	res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusConditionSkipped}
 	node.Result = &res
 	if e.Verbose && !e.OutputGroup {
 		fmt.Fprintf(e.Stderr, "==> %s (skipped: condition false)\n", node.Task.Name)

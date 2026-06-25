@@ -25,6 +25,7 @@ type TaskIO struct {
 // gets a single clean envelope on stdout instead of interleaved task output.
 type TaskResult struct {
 	Name        string
+	Host        string
 	Status      Status
 	ExitCode    int
 	Duration    time.Duration
@@ -40,6 +41,13 @@ type TaskResult struct {
 // language tag via RegisterInterpreter; the bash interpreter is the default.
 type Interpreter interface {
 	Run(ctx context.Context, t *Task, io TaskIO) TaskResult
+}
+
+// Executor is the placement seam above interpreters. The default executor runs
+// locally through the registered in-process interpreter; a future outpost-mesh
+// dispatcher can plug in here and honor Task.Host.
+type Executor interface {
+	Execute(ctx context.Context, t *Task, io TaskIO) TaskResult
 }
 
 var (
