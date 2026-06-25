@@ -10,7 +10,8 @@ import (
 
 // expandVars resolves the document's frontmatter `vars:` against the process
 // env and CLI KEY=VALUE overrides, then substitutes ${NAME} in every target's
-// metadata (Requires/Inputs/Sources/Generates/Env) before the graph is built.
+// metadata (Requires/Inputs/Sources/Generates/Env/Ensure + Host/When) before
+// the graph is built.
 // Precedence, highest first: CLI overrides > `vars:` (`=`/`:=`) > process env >
 // `vars:` (`?=` default-if-unset). Target bodies are left untouched — the shell
 // expands ${VAR} there at run time; this pass is metadata-only.
@@ -49,6 +50,9 @@ func (d *Document) expandVars(env, overrides []string) {
 		substSlice(t.Sources, vals)
 		substSlice(t.Generates, vals)
 		substSlice(t.Env, vals)
+		substSlice(t.Ensure, vals)
+		t.Host = substVars(t.Host, vals) // placement (e.g. Host: ${HOST})
+		t.When = substVars(t.When, vals) // condition (e.g. When: test -n "${HOST}")
 	}
 }
 

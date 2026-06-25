@@ -80,6 +80,28 @@ func TestVarsExpandMetadata(t *testing.T) {
 	}
 }
 
+func TestVarsExpandHostWhenEnsure(t *testing.T) {
+	// ${NAME} expands in Host (placement), When (condition), and Ensure
+	// (postconditions) — not just the slice metadata.
+	md := "## Tasks\n\n### remote\n" +
+		"Host: ${HOST}\n" +
+		"When: test -n \"${HOST}\"\n" +
+		"Ensure: file-exists ${HOST}.done\n" +
+		block("bash", "true")
+	d := doc(t, md)
+	d.expandVars(nil, []string{"HOST=bigbox"})
+	got, _ := d.Lookup("remote")
+	if got.Host != "bigbox" {
+		t.Errorf("Host = %q, want bigbox", got.Host)
+	}
+	if got.When != `test -n "bigbox"` {
+		t.Errorf("When = %q", got.When)
+	}
+	if !reflect.DeepEqual(got.Ensure, []string{"file-exists bigbox.done"}) {
+		t.Errorf("Ensure = %v", got.Ensure)
+	}
+}
+
 func TestVarsCLIOverridesWin(t *testing.T) {
 	md := "---\nvars:\n  BIN: app\n---\n\n## Tasks\n\n### t\nGenerates: bin/${BIN}\n" +
 		block("bash", "true")
