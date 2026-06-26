@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,6 +12,9 @@ import (
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 
+	_ "github.com/qiangli/coreutils/cmds/cat"
+	_ "github.com/qiangli/coreutils/cmds/head"
+	_ "github.com/qiangli/coreutils/cmds/tr"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -108,5 +112,24 @@ func TestHandlerFuncPredicateSkips(t *testing.T) {
 	_, _, _ = runScript(t, "probe one", t.TempDir(), HandlerFunc(intercept))
 	if !called {
 		t.Fatal("predicate was never consulted")
+	}
+}
+
+func TestHandlerCoreutilsPipelineEarlyHeadClose(t *testing.T) {
+	dir := t.TempDir()
+	input := strings.Repeat("alpha\n", 20000)
+	if err := os.WriteFile(dir+"/input.txt", []byte(input), 0o644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	out, errb, err := runScript(t, "cat input.txt | tr 'a-z' 'A-Z' | head -n 1", dir, Handler())
+	if err != nil {
+		t.Fatalf("unexpected run error: %v\nstderr:\n%s", err, errb)
+	}
+	if out != "ALPHA\n" {
+		t.Fatalf("out=%q, want %q", out, "ALPHA\n")
+	}
+	if strings.Contains(strings.ToLower(errb), "file already closed") {
+		t.Fatalf("stderr contains Windows closed-file pipe failure: %q", errb)
 	}
 }
