@@ -113,11 +113,6 @@ var seededLaunchContracts = map[string]ToolProfile{
 		SupportsSay:  false, SupportsGracefulQuit: true,
 		Notes: "headless `run`; judge by committed artifacts, not exit code.",
 	},
-	"aider": {
-		HeadlessArgs: []string{"--yes-always", "--no-check-update", "--message"},
-		SupportsSay:  false, SupportsGracefulQuit: true,
-		Notes: "headless; auto-commits. Shares opencode's DeepSeek backend — NOT an independent vote.",
-	},
 }
 
 func weaveToolsDir() (string, error) {

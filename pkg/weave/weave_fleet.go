@@ -18,7 +18,7 @@ import (
 // weaveDefaultFleet is the canonical agent CLI roster used when --fleet is
 // not given. It matches the autopilot/orchestrator fleet documented in the
 // weave skill.
-var weaveDefaultFleet = []string{"claude", "codex", "opencode", "aider", "agy"}
+var weaveDefaultFleet = []string{"claude", "codex", "opencode", "agy"}
 
 // fleetProbeTTL bounds how long a cached --probe capability result is trusted
 // before re-probing. Existence (PATH lookup) is cheap and never cached.
@@ -56,7 +56,7 @@ with --fleet claude,codex,...`,
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated tool roster (default claude,codex,opencode,aider)")
+	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated tool roster (default claude,codex,opencode,agy)")
 	cmd.Flags().BoolVar(&probe, "probe", false, "Also probe capability (`<tool> --version`, 3s timeout) and cache it")
 	cmd.AddCommand(newWeaveFleetInterviewCmd())
 	cmd.AddCommand(newWeaveFleetReviewCmd())

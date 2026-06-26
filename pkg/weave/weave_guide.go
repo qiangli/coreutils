@@ -110,7 +110,6 @@ merging, not just the exit code. Keep issues ≤3 points; split bigger work.
      codex     -- codex exec --skip-git-repo-check --sandbox workspace-write "<body>"
      agy       -- agy --dangerously-skip-permissions --print-timeout 40m -p "<body>"
      opencode  -- opencode run "<body>"
-     aider     -- aider --yes-always --no-check-update --message "<body>"
    Rails: --idle-timeout 15m --max-runtime 40m --mem-limit 8g --auto-commit.
    Background each (` + "`&`" + `) and ` + "`bashy weave wait --all`" + `.
 4. MONITOR — ` + "`bashy weave list`" + `, ` + "`bashy weave log <N> -f`" + `. Steer with
