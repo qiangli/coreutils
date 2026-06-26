@@ -209,6 +209,7 @@ exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
 		newWeaveStoryMoveCmd(),
 		newWeaveStoryTakeCmd(),
 		newWeaveStoryHandoffCmd(),
+		newSprintAbortCmd(),
 		newWeaveStoryCommentCmd(),
 		newWeaveStoryLinkCmd(),
 		newWeaveCheckpointCmd(),
@@ -484,6 +485,78 @@ untouched — they survive in the queue for the successor.`,
 	cmd.Flags().StringVarP(&message, "message", "m", "", "final continuity brief (resume instructions for the successor)")
 	flags.attach(cmd)
 	return cmd
+}
+
+func newSprintAbortCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "abort <sprint>",
+		Short: "Emergency stop: kill every linked run, clear the conductor lease, park the sprint",
+		Long: `abort is the hard stop for a sprint gone wrong (a runaway or misdirected
+conductor). It KILLS every linked weave run (stops the agent wrapper,
+preserves the workspace — run weave prune later), clears the conductor
+lease, and parks the sprint in backlog. Unlike handoff (graceful — leaves
+in-flight runs intact for a successor) abort tears the work down.
+
+The conductor PROCESS itself is not killed (the lease is heartbeat-based,
+not pid-tracked) — but with no lease and no runs it can do nothing; kill it
+at the OS level if it is still polling.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
+			}
+			who := weaveConductorName("")
+			return runWeaveStoryMutate(cmd, id, "sprint abort", &flags, func(s *weaveStory) (string, error) {
+				var killed, failed []string
+				for _, r := range s.Runs {
+					qd, derr := weaveQueueDirForRepo(r.Repo)
+					if derr != nil {
+						failed = append(failed, fmt.Sprintf("%s#%d (%v)", r.Repo, r.ID, derr))
+						continue
+					}
+					if kerr := applyDirectiveKill(qd, r.ID, "sprint abort"); kerr != nil {
+						failed = append(failed, fmt.Sprintf("%s#%d (%v)", r.Repo, r.ID, kerr))
+						continue
+					}
+					killed = append(killed, fmt.Sprintf("%s#%d", r.Repo, r.ID))
+				}
+				s.Lease = nil
+				s.Column = "backlog"
+				weaveStoryAppend(s, who, "system", fmt.Sprintf("ABORTED — killed %d run(s), cleared lease, parked in backlog", len(killed)))
+				msg := fmt.Sprintf("sprint #%d ABORTED — killed [%s]; lease cleared; parked in backlog", id, strings.Join(killed, " "))
+				if len(s.Runs) == 0 {
+					msg = fmt.Sprintf("sprint #%d ABORTED — no linked runs; lease cleared; parked in backlog", id)
+				}
+				if len(failed) > 0 {
+					msg += "\n  could not kill (do it manually): " + strings.Join(failed, ", ")
+				}
+				return msg, nil
+			})
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
+
+// weaveQueueDirForRepo resolves a repo NAME (e.g. "outpost") to its weave queue
+// dir by matching <name>-<hash> under the weave state root. A sprintRun carries
+// only the repo name (sprints are cross-repo + user-global), so abort needs this
+// to reach the right per-repo queue. Returns the first match that has a queue.
+func weaveQueueDirForRepo(repo string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	root := weaveStateRoot(home)
+	matches, _ := filepath.Glob(filepath.Join(root, repo+"-*"))
+	for _, m := range matches {
+		if fi, statErr := os.Stat(filepath.Join(m, "queue.json")); statErr == nil && !fi.IsDir() {
+			return m, nil
+		}
+	}
+	return "", fmt.Errorf("no weave queue for repo %q under %s", repo, root)
 }
 
 func newWeaveStoryCommentCmd() *cobra.Command {
