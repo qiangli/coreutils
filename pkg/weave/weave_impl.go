@@ -106,7 +106,14 @@ type weaveItem struct {
 	// Tool is the short (argv[0] basename) name of the CLI working
 	// the issue — codex, claude, gemini, opencode, bash — recorded
 	// at claim time, updated on resume.
-	Tool      string `json:"tool,omitempty"`
+	Tool string `json:"tool,omitempty"`
+	// Owner is the named agent INSTANCE working the issue, distinct
+	// from Tool (the CLI). Two agents on the same tool get distinct
+	// owners (e.g. "codex-a", "claude-b") so the comment thread and
+	// commit attribution stay legible and the conductor can address a
+	// specific "who". Assigned at claim time (weaveAgentName); handed to
+	// the subagent as $WEAVE_AGENT so it signs its own comments.
+	Owner     string `json:"owner,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
 	// legacyWorkspace reads the pre-rename queue.json key. The on-disk
 	// isolation dir + this field were called "sandbox" before the
@@ -115,7 +122,14 @@ type weaveItem struct {
 	// load (then it stops being written — omitempty), so existing queues
 	// keep their stored clone paths without a migration step.
 	LegacyWorkspace string    `json:"sandbox,omitempty"`
-	Branch          string    `json:"branch,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	// BaseSHA is the base-branch commit captured in the WORKSPACE at
+	// clone time. weaveMeasureBranch counts commits ahead against this
+	// immutable sha rather than the base branch NAME — the workspace's
+	// local "main" ref drifts (origin is removed; the root branch may
+	// advance after clone), which is what made `weave status` miscount
+	// "0 commits ahead" when the branch actually had a commit.
+	BaseSHA         string    `json:"base_sha,omitempty"`
 	Created         time.Time `json:"created"`
 	StartedAt       time.Time `json:"started_at,omitempty"`
 	FinishedAt      time.Time `json:"finished_at,omitempty"`
@@ -178,6 +192,27 @@ type weaveItem struct {
 	// LaunchSpec is the durable command/watchdog recipe needed to
 	// relaunch the same worker in the same workspace after `weave pause`.
 	LaunchSpec *weaveLaunchSpec `json:"launch_spec,omitempty"`
+	// Comments is the append-only history thread on the issue: handoff
+	// references, agent progress/decisions/blockers, conductor review
+	// notes, and auto-recorded lifecycle events. It is what lets the
+	// conductor reference a handoff doc in the issue and have the agent
+	// append feedback to the thread instead of a human relaying notes.
+	Comments []weaveComment `json:"comments,omitempty"`
+	// Blocked is computed at read time (never persisted): the newest
+	// comment is kind "blocker" and the item is still active — surfaces
+	// "agent is waiting on input/decision" so it isn't mistaken for slow
+	// progress. Cleared when a later non-blocker comment is appended.
+	Blocked bool `json:"blocked,omitempty"`
+}
+
+// weaveComment is one entry in an issue's history thread. Append-only;
+// Author is the agent Owner name, "conductor", or "human"; Kind is one
+// of note|progress|blocker|decision|review|system.
+type weaveComment struct {
+	At     time.Time `json:"at"`
+	Author string    `json:"author,omitempty"`
+	Kind   string    `json:"kind,omitempty"`
+	Body   string    `json:"body"`
 }
 
 type weaveLaunchSpec struct {
@@ -187,6 +222,52 @@ type weaveLaunchSpec struct {
 	MemLimit    string        `json:"mem_limit,omitempty"`
 	IdleTimeout time.Duration `json:"idle_timeout,omitempty"`
 	PTY         string        `json:"pty,omitempty"`
+}
+
+// weaveAppendComment appends one entry to an issue's history thread.
+// Empty body is a no-op. Kind defaults to "note", author to "conductor".
+func weaveAppendComment(it *weaveItem, author, kind, body string) {
+	body = strings.TrimSpace(body)
+	if it == nil || body == "" {
+		return
+	}
+	if kind == "" {
+		kind = "note"
+	}
+	if author == "" {
+		author = "conductor"
+	}
+	it.Comments = append(it.Comments, weaveComment{
+		At:     time.Now().UTC(),
+		Author: author,
+		Kind:   kind,
+		Body:   body,
+	})
+}
+
+// weaveComputeBlocked sets it.Blocked when the newest comment is a
+// "blocker" and the item is still active (not terminal). Read-time only.
+func weaveComputeBlocked(it *weaveItem) {
+	it.Blocked = false
+	if isTerminalState(it.State) || len(it.Comments) == 0 {
+		return
+	}
+	if it.Comments[len(it.Comments)-1].Kind == "blocker" {
+		it.Blocked = true
+	}
+}
+
+// weaveAgentName derives the named agent INSTANCE handle for an issue:
+// the tool's display name plus a short per-issue suffix (a..z by id),
+// e.g. "codex-a", "claude-c". Distinguishes multiple agents on the same
+// tool in the thread + commit attribution; handed over as $WEAVE_AGENT.
+func weaveAgentName(tool string, id int64) string {
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		tool = "agent"
+	}
+	suffix := string(rune('a' + int((id-1+26)%26)))
+	return tool + "-" + suffix
 }
 
 // weaveCtlSockPath returns the per-issue control socket path,
@@ -409,10 +490,23 @@ func weaveDurationCol(it *weaveItem) string {
 	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
+// weaveCountRef picks the ref to count commits-ahead against: the
+// item's immutable BaseSHA (captured at clone) when available, else the
+// base branch name. Using the sha is what fixes the "0 commits ahead"
+// miscount — the workspace's local base branch ref can drift, but the
+// clone-point sha is fixed and the agent's commits always descend from it.
+func weaveCountRef(it *weaveItem, base string) string {
+	if it != nil && it.BaseSHA != "" {
+		return it.BaseSHA
+	}
+	return base
+}
+
 // weaveMeasureBranch is the wrapper's first-hand git interrogation of
 // a workspace at terminal time: commits ahead of base and the HEAD sha.
 // This — not the tool's exit code, and never an agent's claim — is
-// what qualifies a non-zero exit for the submitted state.
+// what qualifies a non-zero exit for the submitted state. `base` may be
+// a branch name OR a commit sha (see weaveCountRef).
 func weaveMeasureBranch(workspace, base string) (ahead int, head string) {
 	if workspace == "" {
 		return 0, ""
@@ -2022,15 +2116,38 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				return fmt.Errorf("issue #%d already has a live wrapper (pid %d); run `bashy weave kill --issue %d` first: %w",
 					it.ID, freshIt.WrapperPid, it.ID, errWeaveWrapperLive)
 			}
+			prevOwner := freshIt.Owner
 			freshIt.State = "working"
 			freshIt.Workspace = workspace
 			freshIt.Branch = branch
 			freshIt.WrapperPid = os.Getpid()
 			freshIt.CtlSock = ctlSock
 			freshIt.StartedAt = time.Now().UTC()
+			// Capture the immutable base commit the workspace was cloned
+			// at — the local `base` ref is untouched by the agent (it
+			// works on its own branch), so this is the true fork point.
+			// weaveMeasureBranch counts against this, not the base NAME,
+			// which can drift and read "0 commits ahead" falsely.
+			if freshIt.BaseSHA == "" {
+				if out, gerr := exec.Command("git", "-C", workspace, "rev-parse", base).Output(); gerr == nil {
+					freshIt.BaseSHA = strings.TrimSpace(string(out))
+				}
+			}
 			if len(toolArgs) > 0 {
 				freshIt.Tool = weaveToolDisplayName(toolArgs)
+				freshIt.Owner = weaveAgentName(freshIt.Tool, freshIt.ID)
 				freshIt.LaunchSpec = launchSpec
+			}
+			// Record assignment / formal reassignment in the task thread.
+			// A reassignment (prevOwner set and different) is how a task
+			// moves from a failed/killed/incapable agent to a new one.
+			switch {
+			case prevOwner == "" && freshIt.Owner != "":
+				weaveAppendComment(freshIt, "conductor", "system",
+					fmt.Sprintf("assigned to %s", freshIt.Owner))
+			case prevOwner != "" && prevOwner != freshIt.Owner:
+				weaveAppendComment(freshIt, "conductor", "system",
+					fmt.Sprintf("reassigned %s → %s", prevOwner, freshIt.Owner))
 			}
 			it = freshIt
 			return nil
@@ -2103,6 +2220,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		fmt.Sprintf("WEAVE_ISSUE=%d", it.ID),
 		fmt.Sprintf("WEAVE_ISSUE_TITLE=%s", it.Title),
 		fmt.Sprintf("WEAVE_ISSUE_BODY=%s", it.Body),
+		// The agent's own name. The skill prelude opens with
+		// "You are $WEAVE_AGENT" so it signs its thread comments and
+		// commit trailers, making reassignment + attribution legible.
+		fmt.Sprintf("WEAVE_AGENT=%s", it.Owner),
+		fmt.Sprintf("WEAVE_OWNER=%s", it.Owner),
 	)
 	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
 	tool.Dir = workspace
@@ -2221,9 +2343,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// EVIDENCE recorded alongside the terminal state; it never changes
 	// the submitted/killed/failed decision below — `weave pull` is the
 	// consumer that acts on a non-zero verify_exit.
-	ev := weaveCollectTerminalEvidence(workspace, base, "", false)
+	ev := weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), "", false)
 	if it.VerifyCommand != "" && (exitCode == 0 || ev.CommitsAhead > 0) {
-		ev = weaveCollectTerminalEvidence(workspace, base, it.VerifyCommand, true)
+		ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), it.VerifyCommand, true)
 	}
 	autoCommitted := false
 	autoCommitErr := ""
@@ -2236,9 +2358,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		autoCommitted = committed
 		if err != nil {
 			autoCommitErr = err.Error()
-			ev = weaveCollectTerminalEvidence(workspace, base, it.VerifyCommand, it.VerifyCommand != "")
+			ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), it.VerifyCommand, it.VerifyCommand != "")
 		} else if committed {
-			ev = weaveCollectTerminalEvidence(workspace, base, it.VerifyCommand, true)
+			ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), it.VerifyCommand, true)
 		}
 	}
 	lockErr := withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
@@ -2498,10 +2620,14 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 	base := weaveBaseBranch(root)
 	merged := weaveItemMerged(root, base, it)
 	if mode == weavecli.OutputJSON {
+		weaveComputeBlocked(it)
 		res := map[string]any{
 			"issue":         it.ID,
 			"state":         it.State,
 			"tool":          it.Tool,
+			"owner":         it.Owner,
+			"blocked":       it.Blocked,
+			"comments":      len(it.Comments),
 			"duration":      weaveDurationCol(it),
 			"commits_ahead": it.CommitsAhead,
 			"merged":        merged,
@@ -2529,8 +2655,19 @@ func weaveLogSummary(cmd *cobra.Command, mode weavecli.OutputMode, root string, 
 	if tool == "" {
 		tool = "-"
 	}
+	owner := it.Owner
+	if owner == "" {
+		owner = "-"
+	}
+	weaveComputeBlocked(it)
 	fmt.Fprintf(w, "issue #%d — %s\n", it.ID, weaveTruncate(it.Title, 72))
-	fmt.Fprintf(w, "  state:    %s   tool: %s   dur: %s\n", it.State, tool, weaveDurationCol(it))
+	fmt.Fprintf(w, "  state:    %s   tool: %s   owner: %s   dur: %s\n", it.State, tool, owner, weaveDurationCol(it))
+	if it.Blocked {
+		fmt.Fprintf(w, "  blocked:  awaiting input — newest comment is a blocker (weave comments %d)\n", it.ID)
+	}
+	if n := len(it.Comments); n > 0 {
+		fmt.Fprintf(w, "  comments: %d (weave comments %d)\n", n, it.ID)
+	}
 	if it.ExitCode != nil {
 		fmt.Fprintf(w, "  exit:     %d\n", *it.ExitCode)
 	}
@@ -3216,7 +3353,7 @@ func runWeaveReverify(cmd *cobra.Command, id int64, flags *weaveOutputFlags) err
 
 	base := weaveBaseBranch(root)
 	verifyCommand := it.VerifyCommand
-	ev := weaveCollectTerminalEvidence(it.Workspace, base, verifyCommand, verifyCommand != "")
+	ev := weaveCollectTerminalEvidence(it.Workspace, weaveCountRef(it, base), verifyCommand, verifyCommand != "")
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		freshIt := findWeaveItem(q, id)
 		if freshIt == nil {
@@ -4153,7 +4290,7 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 		if dirty, _, _ := weaveMeasureDirtiness(it.Workspace); dirty {
 			return fmt.Errorf("issue #%d workspace has uncommitted changes — commit them in the workspace (`weave shell %d`) first, then salvage", issueID, issueID)
 		}
-		ahead, head := weaveMeasureBranch(it.Workspace, base)
+		ahead, head := weaveMeasureBranch(it.Workspace, weaveCountRef(it, base))
 		if ahead <= 0 {
 			return fmt.Errorf("issue #%d has 0 commits ahead of %s — nothing to salvage", issueID, base)
 		}
