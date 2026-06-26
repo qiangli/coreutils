@@ -127,6 +127,11 @@ the queue is enough to pick up without reading code or docs.
 
 ## Hard rules (learned the hard way)
 - Bare launch = hang. Always headless flags + body-as-prompt (step 3).
+- NEVER ` + "`git rebase`" + ` a weave agent branch — it conflicts and leaves the repo
+  stuck mid-rebase. Integrate ONLY via ` + "`bashy weave pull <N>`" + ` (conflict-free
+  ff/merge; it refuses rather than half-apply).
+- Gate GREEN before every merge: ` + "`go test ./interp/ ./syntax/ ./expand/ -skip Confirm`" + `
+  (or the issue's --verify) must pass. Merging a red gate is how master breaks.
 - Disjoint scope per issue; serialize merges that touch the same file.
 - Submodule workflow: commit + push INSIDE the submodule first, THEN bump the
   umbrella pin. Editing a submodule file and committing from the umbrella root
