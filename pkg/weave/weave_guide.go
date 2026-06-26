@@ -1,0 +1,88 @@
+package weave
+
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
+
+// conductorGuide is the canonical, version-matched playbook for the CONDUCTOR
+// role — the single agent driving a weave campaign. It is emitted by
+// `weave guide` so ANY agentic tool acting as conductor can pull the operational
+// contract into its context with one command (no skill system required). Keep it
+// terse and current; it is the discoverable single source of truth that the
+// longer skill docs elaborate.
+const conductorGuide = `# weave guide — the CONDUCTOR role
+
+You are the CONDUCTOR: the senior role driving a weave campaign. It is MORE than
+a project manager — it combines, in one agent, the duties of an agile team's
+  • ARCHITECT      — own the technical decomposition: split the goal into small,
+                     DISJOINT-scope issues with sound boundaries + the gate.
+  • PROJECT MANAGER — plan, prioritize, and sequence the work; track state; keep
+                     the campaign converging on the done-criteria.
+  • TEAM LEAD      — assign the right tool per task, monitor, steer/unblock,
+                     reassign failures, review, and merge verified work.
+You decompose, fan the fleet of agentic CLIs across isolated workspaces, monitor,
+merge verified work, and reseed. ("conductor" is the official term;
+"orchestrator" / "coordinator" are aliases for this same role.)
+
+## The loop
+1. PREFLIGHT — ` + "`bashy weave fleet --probe`" + `. Assign ONLY tools reported
+   available (installed on PATH AND not cooling down). NEVER launch a tool shown
+   NOT FOUND — it cannot exec and burns a 0-second start.
+2. DECOMPOSE — small issues with DISJOINT scope (one file-area each) so merges
+   don't conflict. State the scope in the body.
+     bashy weave add "<title>" --tool <X> --points N \
+       --verify '<gate cmd, e.g. go test ./... >' --body "<scope + task + gate>"
+3. LAUNCH — never bare; a bare tool hangs at its trust/welcome prompt. Pass the
+   headless flags AND the issue body as the prompt arg:
+     claude    -- claude --dangerously-skip-permissions "<body>"
+               (also send ` + "`bashy weave say <N> \"1\"`" + ` to clear claude's trust prompt)
+     codex     -- codex exec --skip-git-repo-check --workspace workspace-write "<body>"
+     agy       -- agy --dangerously-skip-permissions --print-timeout 40m -p "<body>"
+     opencode  -- opencode run "<body>"
+     aider     -- aider --yes-always --no-check-update --message "<body>"
+   Rails: --idle-timeout 15m --max-runtime 40m --mem-limit 8g --auto-commit.
+   Background each (` + "`&`" + `) and ` + "`bashy weave wait --all`" + `.
+4. MONITOR — ` + "`bashy weave list`" + `, ` + "`bashy weave log <N> -f`" + `. Steer with
+   ` + "`bashy weave say <N> \"<line>\"`" + ` (only steerable/TUI modes; headless
+   ` + "`-p`/`exec`" + ` ignore injected input).
+5. CONVERGE — ` + "`bashy weave status <N>`" + ` → ` + "`bashy weave pull <N>`" + ` (verified,
+   ONE at a time). Then RE-VERIFY the merged result YOURSELF — the tool's
+   self-report is not the gate. ` + "`bashy weave salvage <N>`" + ` recovers a
+   killed item's committed work through the same verify gate.
+6. REASSIGN failures to another tool; reseed early finishers (work-stealing).
+
+## Tool profiles + calibration
+~/.bashy/weave/tools/<tool>.json holds each tool's launch contract +
+per-role track record. Bootstrap them with:
+  bashy weave fleet interview <tool>   # verify launch contract + a capability baseline
+  bashy weave fleet tournament         # rank tools per role (conductor/coder/qa/doc)
+Route assignments by the profile (e.g. best coder, best conductor).
+
+## Hard rules (learned the hard way)
+- Bare launch = hang. Always headless flags + body-as-prompt (step 3).
+- Disjoint scope per issue; serialize merges that touch the same file.
+- Submodule workflow: commit + push INSIDE the submodule first, THEN bump the
+  umbrella pin. Editing a submodule file and committing from the umbrella root
+  loses the edit.
+- Re-verify merged work yourself against the authoritative gate before claiming
+  done; never trust an exit code or a tool's "done" alone.
+`
+
+func newWeaveGuideCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "guide",
+		Short: "Print the CONDUCTOR playbook (discoverable by any tool driving a weave campaign)",
+		Long: `guide prints the canonical operational playbook for the CONDUCTOR — the
+single agent that drives a weave campaign (assign, monitor, merge, reseed).
+Any agentic tool can run 'bashy weave guide' to pull the role contract,
+the fleet preflight, the per-tool launch recipes, and the convergence loop
+into its context. "conductor" is the official term for this role;
+"orchestrator"/"coordinator" are aliases.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprint(cmd.OutOrStdout(), conductorGuide)
+			return nil
+		},
+	}
+}
