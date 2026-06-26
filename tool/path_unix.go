@@ -19,3 +19,9 @@ func pathextFromEnv(_ []string) []string {
 func resolveExecutable(rc *RunContext, name string) string {
 	return rc.Path(name)
 }
+
+func toOSPath(p string) string { return p }
+
+func fromOSPath(p string) string { return p }
+
+func systemDrive() string { return "/" }

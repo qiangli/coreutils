@@ -12,11 +12,6 @@ func isAbsPath(p string) bool {
 	if filepath.IsAbs(p) {
 		return true
 	}
-	// On Windows, /foo is drive-relative: every Windows API (GetFullPathName,
-	// CreateFileW, etc.) treats it as root-on-current-drive, e.g. C:\foo.
-	// Go's filepath.IsAbs returns false for these by design (POSIX semantics).
-	// We accept them as absolute so that rc.Path("/foo") returns \foo rather
-	// than incorrectly joining it with the working directory.
 	return len(p) > 0 && p[0] == '/' && p[1] != '/'
 }
 
@@ -50,7 +45,6 @@ func pathextFromEnv(env []string) []string {
 
 func resolveExecutable(rc *RunContext, name string) string {
 	p := rc.Path(name)
-	// If name already carries an extension, try the exact path.
 	if filepath.Ext(name) != "" {
 		return p
 	}
@@ -66,4 +60,34 @@ func resolveExecutable(rc *RunContext, name string) string {
 func isRegularFile(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.Mode().IsRegular()
+}
+
+func systemDrive() string {
+	sd := os.Getenv("SystemDrive")
+	if sd == "" {
+		sd = "C:"
+	}
+	return sd + `\`
+}
+
+func toOSPath(p string) string {
+	if len(p) > 0 && p[0] == '/' && (len(p) < 2 || p[1] != '/') {
+		return systemDrive() + filepath.FromSlash(p[1:])
+	}
+	return normalizePath(p)
+}
+
+func fromOSPath(p string) string {
+	drv := systemDrive()
+	drvLen := len(drv)
+	if len(p) >= drvLen && strings.EqualFold(p[:drvLen], drv) {
+		if rest := p[drvLen:]; rest != "" {
+			return "/" + filepath.ToSlash(rest)
+		}
+		return "/"
+	}
+	if len(p) > 0 && p[0] == '\\' && (len(p) < 2 || p[1] != '\\') {
+		return "/" + filepath.ToSlash(p[1:])
+	}
+	return filepath.ToSlash(p)
 }

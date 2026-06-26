@@ -318,16 +318,306 @@ func TestResolveExecutableSubdir(t *testing.T) {
 		Env: []string{"PATHEXT=.EXE"},
 	}
 
-	// Path separator in name should work.
 	got := rc.ResolveExecutable("bin\\tool")
 	want := filepath.Join(dir, "bin", "tool.exe")
 	if !strings.EqualFold(got, want) {
 		t.Errorf("ResolveExecutable(%q) = %q, want %q", "bin\\tool", got, want)
 	}
 
-	// Forward slash variant.
 	got2 := rc.ResolveExecutable("bin/tool")
 	if !strings.EqualFold(got2, want) {
 		t.Errorf("ResolveExecutable(%q) = %q, want %q", "bin/tool", got2, want)
+	}
+}
+
+func TestSystemDrive(t *testing.T) {
+	got := systemDrive()
+	if runtime.GOOS == "windows" {
+		// Must end with \, e.g. C:\
+		if len(got) < 3 || got[len(got)-1] != '\\' {
+			t.Errorf("systemDrive() = %q, want a drive root ending with \\", got)
+		}
+	} else {
+		if got != "/" {
+			t.Errorf("systemDrive() = %q, want /", got)
+		}
+	}
+}
+
+func TestToOSPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		sd := systemDrive()
+		tests := []struct {
+			path string
+			want string
+		}{
+			{"/foo/bar", sd + "foo\\bar"},
+			{"/", sd},
+			{"/usr/bin", sd + "usr\\bin"},
+			{`C:\foo`, `C:\foo`},
+			{`C:/foo`, `C:\foo`},
+			{`\\server\share\path`, `\\server\share\path`},
+			{`//server/share/path`, `\\server\share\path`},
+			{`foo/bar/baz`, `foo\bar\baz`},
+			{``, ``},
+		}
+		for _, tt := range tests {
+			got := toOSPath(tt.path)
+			if got != tt.want {
+				t.Errorf("toOSPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		}
+	} else {
+		tests := []string{"/foo/bar", "foo/bar", "/", "/usr/bin", "", "a/b/c"}
+		for _, p := range tests {
+			if got := toOSPath(p); got != p {
+				t.Errorf("toOSPath(%q) = %q, want %q (identity on Unix)", p, got, p)
+			}
+		}
+	}
+}
+
+func TestFromOSPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		sd := systemDrive()
+		tests := []struct {
+			path string
+			want string
+		}{
+			{sd + "foo\\bar", "/foo/bar"},
+			{sd, "/"},
+			{sd + "Users\\Alice", "/Users/Alice"},
+			{`\foo\bar`, `/foo/bar`},
+			{`\`, `/`},
+			{`C:\foo\bar`, `/foo/bar`},
+			{`c:\Foo\BAR`, `/Foo/BAR`}, // case-insensitive drive match
+			{`\\server\share\path`, `//server/share/path`},
+			{`foo\bar\baz`, `foo/bar/baz`},
+			{``, ``},
+		}
+		for _, tt := range tests {
+			got := fromOSPath(tt.path)
+			if got != tt.want {
+				t.Errorf("fromOSPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		}
+	} else {
+		tests := []string{"/foo/bar", "foo/bar", "/", "/usr/bin", "", "a/b/c"}
+		for _, p := range tests {
+			if got := fromOSPath(p); got != p {
+				t.Errorf("fromOSPath(%q) = %q, want %q (identity on Unix)", p, got, p)
+			}
+		}
+	}
+}
+
+func TestLocalFSToOSFromOSRoundtrip(t *testing.T) {
+	fs := NewLocalFS()
+	paths := []string{
+		"/",
+		"/foo",
+		"/foo/bar",
+		"/Users/Alice",
+		"relative/path",
+		"",
+	}
+	for _, p := range paths {
+		osPath := fs.ToOS(p)
+		back := fs.FromOS(osPath)
+		if back != p {
+			t.Errorf("roundtrip %q: ToOS=%q FromOS=%q, want %q", p, osPath, back, p)
+		}
+	}
+}
+
+func TestLocalFSSysDrive(t *testing.T) {
+	fs := NewLocalFS()
+	sd := fs.SysDrive()
+	if sd == "" {
+		t.Error("SysDrive() returned empty string")
+	}
+	if runtime.GOOS == "windows" {
+		if len(sd) < 3 || sd[len(sd)-1] != '\\' {
+			t.Errorf("SysDrive() = %q, want a drive root ending with \\", sd)
+		}
+	} else {
+		if sd != "/" {
+			t.Errorf("SysDrive() = %q, want /", sd)
+		}
+	}
+}
+
+func TestLocalFSPassthrough(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewLocalFS()
+
+	err := fs.MkdirAll(dir, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello world"), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Stat through VFS.
+	fi, err := fs.Stat(dir + "/test.txt")
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if fi.Name() != "test.txt" {
+		t.Errorf("Stat name = %q, want test.txt", fi.Name())
+	}
+	if fi.Size() != 11 {
+		t.Errorf("Stat size = %d, want 11", fi.Size())
+	}
+
+	// ReadFile through VFS.
+	data, err := fs.ReadFile(dir + "/test.txt")
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "hello world" {
+		t.Errorf("ReadFile = %q, want hello world", string(data))
+	}
+
+	// Open through VFS.
+	f, err := fs.Open(dir + "/test.txt")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	buf := make([]byte, 100)
+	n, err := f.Read(buf)
+	if err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	if string(buf[:n]) != "hello world" {
+		t.Errorf("Open/Read = %q, want hello world", string(buf[:n]))
+	}
+
+	// ReadDir through VFS.
+	ents, err := fs.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(ents) != 1 {
+		t.Fatalf("ReadDir count = %d, want 1", len(ents))
+	}
+	if ents[0].Name() != "test.txt" {
+		t.Errorf("ReadDir[0].Name() = %q, want test.txt", ents[0].Name())
+	}
+
+	// Remove through VFS.
+	sub := filepath.Join(dir, "subdir")
+	err = fs.Mkdir(sub, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fs.Remove(sub)
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(sub); !os.IsNotExist(err) {
+		t.Errorf("subdir still exists after Remove")
+	}
+
+	// RemoveAll through VFS.
+	sub2 := filepath.Join(dir, "sub2")
+	if err := os.Mkdir(sub2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub2, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = fs.RemoveAll(sub2)
+	if err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if _, err := os.Stat(sub2); !os.IsNotExist(err) {
+		t.Errorf("sub2 still exists after RemoveAll")
+	}
+
+	// Rename through VFS.
+	src := filepath.Join(dir, "src.txt")
+	dst := filepath.Join(dir, "dst.txt")
+	if err := os.WriteFile(src, []byte("renamed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = fs.Rename(src, dst)
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("src still exists after Rename")
+	}
+	data, err = os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "renamed" {
+		t.Errorf("dst content = %q, want renamed", string(data))
+	}
+}
+
+func TestLocalFSCreateAndOpenFile(t *testing.T) {
+	dir := t.TempDir()
+	fs := NewLocalFS()
+
+	// Create a file through VFS.
+	fp := filepath.Join(dir, "created.txt")
+	f, err := fs.Create(fp)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	n, err := f.Write([]byte("created content"))
+	if err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if n != 15 {
+		t.Errorf("Write wrote %d bytes, want 15", n)
+	}
+	f.Close()
+
+	// Verify it exists via OS.
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "created content" {
+		t.Errorf("content = %q, want created content", string(data))
+	}
+
+	// OpenFile through VFS for append.
+	f2, err := fs.OpenFile(fp, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	_, err = f2.Write([]byte(" more"))
+	if err != nil {
+		f2.Close()
+		t.Fatal(err)
+	}
+	f2.Close()
+
+	data, err = os.ReadFile(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "created content more" {
+		t.Errorf("content = %q, want created content more", string(data))
+	}
+}
+
+func TestRunContextHasFS(t *testing.T) {
+	rc := &RunContext{Ctx: context.Background(), FS: NewLocalFS()}
+	if rc.FS == nil {
+		t.Fatal("FS is nil, want initialized LocalFS")
+	}
+	if rc.FS.SysDrive() == "" {
+		t.Error("FS.SysDrive() is empty")
 	}
 }

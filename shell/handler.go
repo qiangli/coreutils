@@ -53,6 +53,7 @@ func HandlerFunc(intercept func(name string) bool) func(interp.ExecHandlerFunc) 
 				Ctx: ctx,
 				Dir: hc.Dir,
 				Env: envSlice(hc.Env),
+				FS:  tool.NewLocalFS(),
 				Stdio: tool.Stdio{
 					In:  hc.Stdin,
 					Out: hc.Stdout,
