@@ -244,9 +244,17 @@ func run(rc *tool.RunContext, args []string) int {
 			continue
 		}
 		lastOut = int(b)
-		out.WriteByte(b)
+		if err := out.WriteByte(b); err != nil {
+			if tool.IsClosedPipeError(err) {
+				return 0
+			}
+			return fail(fmt.Sprintf("write error: %v", err))
+		}
 	}
 	if err := out.Flush(); err != nil {
+		if tool.IsClosedPipeError(err) {
+			return 0
+		}
 		return fail(fmt.Sprintf("write error: %v", err))
 	}
 	return 0

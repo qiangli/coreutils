@@ -109,6 +109,12 @@ func run(rc *tool.RunContext, args []string) int {
 			closer = f
 		}
 		if err := catStream(r, w, o, st); err != nil {
+			if tool.IsClosedPipeError(err) {
+				if closer != nil {
+					closer.Close()
+				}
+				return 0
+			}
 			fmt.Fprintf(rc.Err, "cat: %s: %v\n", name, sysErr(err))
 			exit = 1
 		}
@@ -117,6 +123,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if err := w.Flush(); err != nil {
+		if tool.IsClosedPipeError(err) {
+			return 0
+		}
 		fmt.Fprintf(rc.Err, "cat: write error: %v\n", err)
 		return 1
 	}
