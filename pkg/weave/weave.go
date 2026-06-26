@@ -77,6 +77,7 @@ Common-case usage:
 	cmd.AddCommand(newWeaveWaitCmd())
 	cmd.AddCommand(newWeaveCheckCmd())
 	cmd.AddCommand(newWeaveGuideCmd())
+	cmd.AddCommand(newWeaveBatonCmd())
 	cmd.AddCommand(newWeaveSessionsCmd())
 	cmd.AddCommand(newWeaveJoinCmd())
 	cmd.AddCommand(newWeaveNoteCmd())

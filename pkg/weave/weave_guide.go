@@ -60,6 +60,21 @@ per-role track record. Bootstrap them with:
   bashy weave fleet tournament         # rank tools per role (conductor/coder/qa/doc)
 Route assignments by the profile (e.g. best coder, best conductor).
 
+## Handoff — passing the baton (so another conductor can take over)
+Like a PM going on vacation (planned) or off sick (unexpected), the conductor
+job must transfer cleanly. Write the handoff note with ` + "`bashy weave baton write`" + `
+and read it with ` + "`bashy weave baton`" + `. It carries the intent + strategy + next
+moves the queue does NOT (goal, plan, done, next, lessons, routing).
+- PLANNED (end of sprint, stepping away): write a COMPLETE baton at a stable
+  point — goal, current stage, what merged, the next actions, tool routing.
+- UNEXPECTED (ratelimit / token overuse / crash): you may not get to write a
+  fresh one — so write the baton OFTEN (each stage + before risky merges). The
+  successor reconciles the (possibly stale) baton against live ` + "`weave list`" + ` +
+  ` + "`weave fleet --probe`" + ` + the tool profiles + this guide, and resumes. A monitor
+  can detect a stalled conductor and hand the baton to a fresh tool.
+The baton always ends with the live-state commands, so even a stale note plus
+the queue is enough to pick up without reading code or docs.
+
 ## Hard rules (learned the hard way)
 - Bare launch = hang. Always headless flags + body-as-prompt (step 3).
 - Disjoint scope per issue; serialize merges that touch the same file.
