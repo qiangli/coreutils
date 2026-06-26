@@ -186,7 +186,7 @@ func newWeaveBatonCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
 		Use:   "baton",
-		Short: "Show the conductor handoff note (intent + next moves) for picking up a campaign",
+		Short: "Show THIS repo's single-driver lock + campaign handoff note (cross-repo handoff: `bashy sprint`)",
 		Long: `baton is the CONDUCTOR handoff note for THIS campaign. The current
 conductor writes it ('weave baton write …') at each handoff stage — mid-sprint
 when it must drop (ratelimit / token overuse / failure) or at end-of-sprint — so

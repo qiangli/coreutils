@@ -257,7 +257,7 @@ func newWeaveAutopilotCmd() *cobra.Command {
 	var leaseTTL, heartbeat, backoff time.Duration
 	cmd := &cobra.Command{
 		Use:   "autopilot --orchestrator-fleet claude,codex[,gemini...]",
-		Short: "Run a failover-capable weave orchestrator loop",
+		Short: "Autonomously drive THIS repo's run queue (claim→launch→verify→merge) with tool failover",
 		Long: `autopilot holds a queue-scoped orchestration lease and launches one
 agent CLI from the configured fleet as the active orchestrator. If the
 orchestrator exits non-zero or emits overload/rate-limit output,
