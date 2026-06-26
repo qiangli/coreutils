@@ -53,6 +53,27 @@ merge verified work, and reseed. ("conductor" is the official term;
    killed item's committed work through the same verify gate.
 6. REASSIGN failures to another tool; reseed early finishers (work-stealing).
 
+## Active supervision — do NOT fire-and-forget
+After ` + "`weave start`" + `, the conductor MUST poll each running tool every few
+minutes (` + "`weave list`" + ` for state, ` + "`weave log <N> -f`" + ` for the live PTY) and
+ACT — unattended agents stall, block on questions, or finish and idle. Fire-and-
+forget is why a run comes back empty.
+1. STALLED — no progress / idle output. Nudge with ` + "`weave say <N> \"<hint>\"`" + `,
+   or let --idle-timeout kill it and then reassign.
+2. ASKING — the tool is BLOCKED on a permission prompt, a clarification, or a
+   question. It will sit forever. ANSWER it: ` + "`weave say <N> \"<answer>\"`" + ` (e.g.
+   "1" for a trust/yes prompt; a path; a decision). Steering blocked agents is
+   the conductor's core duty — an unanswered question is a wasted run.
+3. ABORTED / failed / killed — reassign to another tool
+   (` + "`weave start --issue N -- <other-tool> …`" + `) or recover committed partial work
+   with ` + "`weave salvage <N>`" + `.
+4. COMPLETED — verify + merge (loop step 5); if todo issues remain, assign the
+   freed tool the next one (work-stealing) — keep the fleet busy.
+After EVERY such action, UPDATE THE BATON (` + "`weave baton write …`" + `). This is the
+most important habit: monitoring you don't record is lost the moment YOU drop —
+a fresh baton after each event means any handoff (planned or sudden) resumes
+cleanly. Supervise → act → record.
+
 ## Tool profiles + calibration
 ~/.bashy/weave/tools/<tool>.json holds each tool's launch contract +
 per-role track record. Bootstrap them with:
