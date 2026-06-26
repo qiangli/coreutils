@@ -1,6 +1,8 @@
 package weave
 
 import (
+	"os"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -11,7 +13,7 @@ import (
 // trust/welcome prompt.
 func TestInterviewToolSeedsContract(t *testing.T) {
 	dir := t.TempDir()
-	p, err := interviewTool(dir, "claude", time.Now())
+	p, err := interviewTool(dir, "claude", time.Now(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,5 +46,26 @@ func TestRecordToolOutcome(t *testing.T) {
 	r := p.Roles["coder"]
 	if r == nil || r.Runs != 2 || r.Passed != 1 || r.Failed != 1 {
 		t.Fatalf("coder record = %+v, want runs=2 passed=1 failed=1", r)
+	}
+}
+
+// TestLiveProbeContractDetectsStaleFlag is the regression for the codex
+// --workspace→--sandbox drift: a flag the tool rejects must be caught as STALE,
+// while an accepted flag (tool echoes the PROBE_OK prompt) reads as OK.
+func TestLiveProbeContractDetectsStaleFlag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh fake-tool")
+	}
+	dir := t.TempDir()
+	script := dir + "/faketool"
+	body := "#!/bin/sh\ncase \"$1\" in --bad) echo \"error: unexpected argument '--bad'\" >&2; exit 2;; esac\necho \"$2\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if ok, note := liveProbeContract(script, []string{"--bad"}, time.Now()); ok {
+		t.Fatalf("stale flag --bad should be caught, got ok: %s", note)
+	}
+	if ok, _ := liveProbeContract(script, []string{"--good"}, time.Now()); !ok {
+		t.Fatal("accepted flag --good should read OK")
 	}
 }

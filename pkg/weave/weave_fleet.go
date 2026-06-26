@@ -112,10 +112,10 @@ func newWeaveFleetReviewCmd() *cobra.Command {
 // campaign never bare-launches a tool into its trust/welcome prompt.
 func newWeaveFleetInterviewCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var all bool
+	var all, live bool
 	cmd := &cobra.Command{
 		Use:   "interview [tool...]",
-		Short: "Calibrate tool profiles (launch contract + version) into the profile store",
+		Short: "Calibrate tool profiles (launch contract + version); --live verifies the contract still parses",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mode := flags.mode()
 			dir, err := weaveToolsDir()
@@ -130,7 +130,7 @@ func newWeaveFleetInterviewCmd() *cobra.Command {
 			now := time.Now()
 			profiles := make([]map[string]any, 0, len(tools))
 			for _, tool := range tools {
-				p, ierr := interviewTool(dir, tool, now)
+				p, ierr := interviewTool(dir, tool, now, live)
 				if ierr != nil {
 					return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave fleet interview",
 						weavecli.ExitGenericFail, ierr))
@@ -146,6 +146,13 @@ func newWeaveFleetInterviewCmd() *cobra.Command {
 						fmt.Fprintf(cmd.OutOrStdout(), "  trust:   %s\n", p.TrustClear)
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "  steer:   say=%v  graceful-quit=%v\n", p.SupportsSay, p.SupportsGracefulQuit)
+					if p.ContractOK != nil {
+						status := "OK"
+						if !*p.ContractOK {
+							status = "STALE ⚠"
+						}
+						fmt.Fprintf(cmd.OutOrStdout(), "  contract:%s — %s\n", status, p.ContractNote)
+					}
 					if p.Notes != "" {
 						fmt.Fprintf(cmd.OutOrStdout(), "  notes:   %s\n", p.Notes)
 					}
@@ -169,6 +176,7 @@ func newWeaveFleetInterviewCmd() *cobra.Command {
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&all, "all", false, "Interview the whole default fleet")
+	cmd.Flags().BoolVar(&live, "live", false, "Live-probe the launch contract (run the tool with its flags; catch stale/drifted contracts)")
 	return cmd
 }
 

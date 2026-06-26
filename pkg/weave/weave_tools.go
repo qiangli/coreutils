@@ -32,6 +32,15 @@ type ToolProfile struct {
 	SupportsGracefulQuit bool     `json:"supports_graceful_quit"`
 	Notes                string   `json:"notes,omitempty"`
 
+	// Contract verification — set by `fleet interview --live`, which runs the
+	// tool with its HeadlessArgs on a trivial prompt and watches for a flag-parse
+	// error (the signature of a STALE contract: e.g. codex 0.141.0 renamed
+	// --workspace to --sandbox and exits 2 with "unexpected argument"). This is
+	// what turns a silent campaign-time failure into a caught preflight failure.
+	ContractOK        *bool     `json:"contract_ok,omitempty"` // nil=unchecked, true=parses, false=STALE
+	ContractNote      string    `json:"contract_note,omitempty"`
+	ContractCheckedAt time.Time `json:"contract_checked_at,omitempty"`
+
 	// Track record — accrued per role (conductor, coder, qa, doc, …).
 	Roles         map[string]*RoleRecord `json:"roles,omitempty"`
 	InterviewedAt time.Time              `json:"interviewed_at,omitempty"`
@@ -153,7 +162,7 @@ func saveToolProfile(dir string, p *ToolProfile) error {
 // discoverable. (A deeper live capability run — launch on a fixed micro-task and
 // gate-verify the result — is the next layer, and `fleet tournament` will rank
 // tools per role using the same RoleRecord.)
-func interviewTool(dir, tool string, now time.Time) (*ToolProfile, error) {
+func interviewTool(dir, tool string, now time.Time, live bool) (*ToolProfile, error) {
 	p, ok := loadToolProfile(dir, tool)
 	if !ok {
 		seed := seededLaunchContracts[tool] // zero value if unknown
@@ -170,11 +179,69 @@ func interviewTool(dir, tool string, now time.Time) (*ToolProfile, error) {
 		}
 		cancel()
 	}
+	if live && p.Bin != "" && len(p.HeadlessArgs) > 0 {
+		okc, note := liveProbeContract(tool, p.HeadlessArgs, now)
+		if !okc {
+			// Self-heal: the recorded contract is stale, but the maintained seed
+			// contract may already carry the fixed flags (codex --sandbox). Probe
+			// the seed; if it parses, adopt it.
+			if seed, has := seededLaunchContracts[tool]; has && !sameArgs(seed.HeadlessArgs, p.HeadlessArgs) {
+				if sok, snote := liveProbeContract(tool, seed.HeadlessArgs, now); sok {
+					p.HeadlessArgs = seed.HeadlessArgs
+					if seed.Notes != "" {
+						p.Notes = seed.Notes
+					}
+					okc, note = true, "auto-healed from seed (recorded contract was stale): "+snote
+				}
+			}
+		}
+		p.ContractOK = &okc
+		p.ContractNote = note
+		p.ContractCheckedAt = now
+	}
 	p.InterviewedAt = now
 	if err := saveToolProfile(dir, p); err != nil {
 		return nil, err
 	}
 	return p, nil
+}
+
+// contractErrSignatures are stderr/stdout markers that mean the tool REJECTED a
+// flag — i.e. the recorded launch contract no longer matches the installed CLI.
+var contractErrSignatures = []string{
+	"unexpected argument", "unknown option", "unknown flag", "invalid option",
+	"unrecognized option", "unrecognized argument", "Usage:", "USAGE:",
+}
+
+// liveProbeContract runs the tool with its headless contract on a trivial prompt
+// and watches for a flag-parse error — the signature of a STALE launch contract
+// (e.g. codex 0.141.0 renamed --workspace to --sandbox, exiting 2 with
+// "unexpected argument"). A flag error surfaces in the first second; if the tool
+// is still running at the probe deadline, the flags parsed fine. This turns a
+// silent campaign-time failure into a caught preflight failure.
+func liveProbeContract(tool string, args []string, now time.Time) (bool, string) {
+	full := append(append([]string{}, args...), "Reply with exactly PROBE_OK and do nothing else.")
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, tool, full...)
+	if d, err := os.MkdirTemp("", "weave-contract-probe-"); err == nil {
+		cmd.Dir = d
+		defer os.RemoveAll(d)
+	}
+	out, _ := cmd.CombinedOutput()
+	s := string(out)
+	for _, sig := range contractErrSignatures {
+		if strings.Contains(s, sig) {
+			return false, "STALE contract — tool rejected a flag (" + strings.TrimSpace(sig) + "); re-check its CLI args"
+		}
+	}
+	if strings.Contains(s, "PROBE_OK") {
+		return true, "verified end-to-end (flags parse + tool responded)"
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return true, "flags parse (tool ran past the 25s probe without a flag error)"
+	}
+	return true, "flags parse"
 }
 
 // recordToolOutcome appends a role outcome to a tool's track record (used by the
@@ -216,4 +283,16 @@ func sortedRoleNames(p *ToolProfile) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func sameArgs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
