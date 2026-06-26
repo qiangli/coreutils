@@ -40,6 +40,12 @@ type weaveQueue struct {
 	// PausedOrchestratorLease preserves the autopilot lease across a
 	// campaign pause so resume can restore the same holder/tool lease.
 	PausedOrchestratorLease *weaveOrchestratorLease `json:"paused_orchestrator_lease,omitempty"`
+	// NextStoryID / Stories hold the STORY board — the epic/story
+	// kanban above the task queue. A story is the durable unit a
+	// conductor owns and hands off (lease + continuity record); the
+	// task Items are its ephemeral workers. See weave_story.go.
+	NextStoryID int64         `json:"next_story_id,omitempty"`
+	Stories     []*weaveStory `json:"stories,omitempty"`
 }
 
 // weaveOtherActiveQueues scans sibling queue dirs for queues with

@@ -54,6 +54,45 @@ successor can ` + "`take`" + ` it normally; use ` + "`--force`" + ` only when yo
 holder is gone. ` + "`weave baton release`" + ` drops it on a clean handoff. Always
 ` + "`take`" + ` before you start driving, and ` + "`weave baton`" + ` shows who currently holds it.
 
+## The STORY board (epic/story above tasks) — what you hand off
+Tasks (` + "`weave list`" + `) are EPHEMERAL workers; you never hand those off. The durable
+unit you own and transfer is the STORY — one shippable increment. ` + "`weave board`" + `
+is the kanban (backlog/doing/review/done) you read on pickup, NOT the task list.
+Each story card carries: a SPEC-REF (the handoff/spec doc), ACCEPTANCE criteria,
+a CONTINUITY record (the resume brief), a conductor LEASE, and links to its tasks.
+  • ` + "`weave story add \"<title>\" --epic E --spec docs/X.md --acceptance \"...\"`" + `
+  • ` + "`weave story move <id> doing|review|done`" + ` · ` + "`weave story link <id> --task N`" + `
+  • ` + "`weave story show <id>`" + ` — spec + acceptance + continuity + thread + tasks
+
+## Conductor DURABILITY (survive Ctrl+C / SIGKILL / token exhaustion)
+A conductor is replaceable; the STORY is what persists. So:
+  • CHECKPOINT often — ` + "`weave checkpoint <id> -m \"<resume brief>\"`" + ` after each
+    meaningful step. It updates the continuity record AND refreshes the story
+    lease heartbeat. If you die between checkpoints you lose only that delta.
+  • GRACEFUL exit (Ctrl+C, planned switch, low context) — ` + "`weave story handoff <id> -m \"...\"`" + `:
+    record a final brief and RELEASE the lease. In-flight tasks are left intact
+    for the successor (their wrappers outlive you).
+  • HARD death (SIGKILL/OOM/ratelimit) — no checkpoint runs; the lease goes
+    STALE on its own. A successor recovers from the durable continuity record.
+  • PICK UP a story — ` + "`weave story take <id> --as <you>`" + ` (takes a free or STALE
+    lease; ` + "`--force`" + ` for a fresh one), then ` + "`weave story show <id>`" + ` and resume
+    from the continuity brief. This is the human-directed conductor switch.
+
+## Naming + per-task threads
+Each task agent gets a name (` + "`$WEAVE_AGENT`" + `, e.g. codex-a) — open your prompt to it
+with "You are $WEAVE_AGENT". Reference the story's spec in the issue body; the
+agent appends progress/decisions/blockers with ` + "`weave comment $WEAVE_ID -m ...`" + `
+(it auto-signs). Read a task's thread with ` + "`weave comments <id>`" + `; a newest
+` + "`--kind blocker`" + ` surfaces as BLOCKED in ` + "`weave status`" + `. Reassigning a failed/killed
+task to another agent (` + "`weave start --issue N -- <tool>`" + `) changes its OWNER and is
+recorded in the thread — the formal task transfer.
+
+## Issue template (put this in --body; "known traps" earns its keep)
+GOAL · FILES likely touched · VERIFY cmd (--verify) · MERGE criteria · KNOWN TRAPS.
+Always list repo-specific traps (e.g. "submodule: bump the umbrella pin separately
+after pushing"; "native access gate must stay fail-closed"). Review the DIFF before
+merging, not just the exit code. Keep issues ≤3 points; split bigger work.
+
 ## The loop
 1. PREFLIGHT — ` + "`bashy weave fleet --probe`" + `. Assign ONLY tools reported
    available (installed on PATH AND not cooling down). NEVER launch a tool shown
