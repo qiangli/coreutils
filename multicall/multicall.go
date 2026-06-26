@@ -69,6 +69,7 @@ func Main(selfNames ...string) {
 		Ctx: context.Background(),
 		Dir: dir,
 		Env: os.Environ(),
+		FS:  tool.NewLocalFS(),
 		Stdio: tool.Stdio{
 			In:  os.Stdin,
 			Out: os.Stdout,

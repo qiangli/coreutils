@@ -134,6 +134,7 @@ func runToolHandler(ctx context.Context, _ *mcpsdk.CallToolRequest, in RunToolIn
 		Ctx: ctx,
 		Dir: in.Dir,
 		Env: envSlice(in.Env),
+		FS:  tool.NewLocalFS(),
 		Stdio: tool.Stdio{
 			In:  strings.NewReader(in.Stdin),
 			Out: &out,

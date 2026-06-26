@@ -35,6 +35,7 @@ type RunContext struct {
 	Ctx context.Context
 	Dir string   // working directory; resolve every relative operand against it
 	Env []string // os.Environ() shape ("KEY=VALUE"); nil = empty environment
+	FS  *LocalFS // local OS filesystem with path translation; never nil in practice
 	Stdio
 }
 

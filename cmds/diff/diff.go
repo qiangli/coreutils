@@ -94,6 +94,7 @@ func run(rc *tool.RunContext, args []string) int {
 	// Buffer diff output (it is often large and emitted line by line).
 	bw := bufio.NewWriter(rc.Out)
 	brc := &tool.RunContext{Ctx: rc.Ctx, Dir: rc.Dir, Env: rc.Env,
+		FS:    rc.FS,
 		Stdio: tool.Stdio{In: rc.In, Out: bw, Err: rc.Err}}
 	status := dispatch(brc, &opts, operands[0], operands[1])
 	bw.Flush()
