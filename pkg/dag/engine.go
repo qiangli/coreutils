@@ -40,6 +40,7 @@ type Engine struct {
 	SandboxCmd  string // shell-split wrapper command; default is DAG_SANDBOX_CMD
 	Mesh        bool   // dispatch Host:-tagged targets to another machine
 	RemoteCmd   string // remote-exec command for mesh; default "ssh" / DAG_REMOTE_EXEC
+	RemoteShell string // shell argv appended after host; default "bash -s"; "none" feeds stdin directly
 	Executor    Executor
 	Cache       *Cache // nil = no incremental skip
 
@@ -601,7 +602,7 @@ func (e *Engine) executor() Executor {
 		return e.Executor
 	}
 	if e.meshEnabled() {
-		return meshExecutor{Remote: e.remoteCommand()}
+		return meshExecutor{Remote: e.remoteCommand(), RemoteShell: e.RemoteShell}
 	}
 	return localExecutor{}
 }
