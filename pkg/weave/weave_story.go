@@ -3,6 +3,7 @@ package weave
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,14 +14,14 @@ import (
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
-// weaveStory is the epic/story layer above the task queue: the DURABLE
+// weaveStory is the epic/sprint layer above the task queue: the DURABLE
 // unit a conductor owns and hands off. Tasks (weaveItem) are its
-// ephemeral workers; the story carries the spec, acceptance, kanban
+// ephemeral workers; the sprint carries the spec, acceptance, kanban
 // position, a continuity record (the resume brief a fresh conductor
 // reads after an interruption), a thread, and a conductor lease. This
 // is what makes conductor switches — graceful handoff OR recovery from
 // a SIGKILL/token-exhaustion death — work: the successor reconstructs
-// state from the story, never from the dead conductor's memory.
+// state from the sprint, never from the dead conductor's memory.
 type weaveStory struct {
 	ID         int64            `json:"id"`
 	Title      string           `json:"title"`
@@ -30,13 +31,21 @@ type weaveStory struct {
 	Column     string           `json:"column"`               // backlog|doing|review|done
 	Continuity string           `json:"continuity,omitempty"` // the resume brief
 	Lease      *weaveStoryLease `json:"lease,omitempty"`      // current conductor + heartbeat
-	Thread     []weaveComment   `json:"thread,omitempty"`     // story-level history
-	TaskIDs    []int64          `json:"task_ids,omitempty"`   // linked task issue IDs
+	Thread     []weaveComment   `json:"thread,omitempty"`     // sprint-level history
+	Runs       []sprintRun      `json:"runs,omitempty"`       // linked weave runs, CROSS-REPO
 	Created    time.Time        `json:"created"`
 	UpdatedAt  time.Time        `json:"updated_at,omitempty"`
 }
 
-// weaveStoryLease is the conductor lease on a story. Liveness is a
+// sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
+// A sprint spans repos (sh/bashy/outpost/…); each repo keeps its own
+// per-repo weave queue, so a link is (repo, id) — e.g. {outpost, 11}.
+type sprintRun struct {
+	Repo string `json:"repo"`
+	ID   int64  `json:"id"`
+}
+
+// weaveStoryLease is the conductor lease on a sprint. Liveness is a
 // HEARTBEAT, not a PID: an LLM conductor invokes weave commands
 // ephemerally (no stable process), so a lease goes stale when its
 // holder stops checkpointing (death by SIGKILL / token exhaustion /
@@ -46,7 +55,7 @@ type weaveStoryLease struct {
 	At     time.Time `json:"at"`
 }
 
-const storyLeaseTTL = 30 * time.Minute
+const sprintLeaseTTL = 30 * time.Minute
 
 var weaveStoryColumns = []string{"backlog", "doing", "review", "done"}
 
@@ -68,13 +77,13 @@ func findWeaveStory(q *weaveQueue, id int64) *weaveStory {
 	return nil
 }
 
-// weaveStoryLeaseState returns a short human marker for a story's lease:
-// holder + fresh/STALE/free. Stale = heartbeat older than storyLeaseTTL.
+// weaveStoryLeaseState returns a short human marker for a sprint's lease:
+// holder + fresh/STALE/free. Stale = heartbeat older than sprintLeaseTTL.
 func weaveStoryLeaseState(s *weaveStory) (holder string, stale bool, free bool) {
 	if s.Lease == nil || s.Lease.Holder == "" {
 		return "", false, true
 	}
-	return s.Lease.Holder, time.Since(s.Lease.At) > storyLeaseTTL, false
+	return s.Lease.Holder, time.Since(s.Lease.At) > sprintLeaseTTL, false
 }
 
 // weaveConductorName resolves the acting conductor's name: --as flag >
@@ -95,10 +104,10 @@ func newWeaveBoardCmd() *cobra.Command {
 	var epic string
 	cmd := &cobra.Command{
 		Use:   "board",
-		Short: "Show the story kanban (the conductor's epic/story board)",
-		Long: `board renders the STORY kanban — the epic/story layer above the task
+		Short: "Show the sprint kanban (the conductor's epic/sprint board)",
+		Long: `board renders the SPRINT kanban — the epic/sprint layer above the task
 queue. This is what a conductor reads on pickup (NOT 'weave list', which
-is the ephemeral tasks). Each story shows its column, conductor lease
+is the ephemeral tasks). Each sprint shows its column, conductor lease
 holder (and whether the lease is STALE — the previous conductor died
 without handing off), and a one-line continuity pointer.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -112,13 +121,13 @@ without handing off), and a one-line continuity pointer.`,
 
 func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) error {
 	mode := flags.mode()
-	dir, err := weaveStoryDir(cmd, mode, "weave board")
+	dir, err := weaveStoryDir(cmd, mode, "sprint board")
 	if err != nil {
 		return err
 	}
 	q, lerr := loadWeaveQueue(dir)
 	if lerr != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave board", weavecli.ExitGenericFail, lerr))
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint board", weavecli.ExitGenericFail, lerr))
 	}
 	stories := make([]*weaveStory, 0, len(q.Stories))
 	for _, s := range q.Stories {
@@ -128,14 +137,14 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 	}
 	sort.Slice(stories, func(i, j int) bool { return stories[i].ID < stories[j].ID })
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave board", map[string]any{"stories": stories}))
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "sprint board", map[string]any{"stories": stories}))
 	}
 	out := cmd.OutOrStdout()
 	if len(stories) == 0 {
-		fmt.Fprintln(out, "story board is empty — `weave story add \"<title>\" --spec <doc>`")
+		fmt.Fprintln(out, "sprint board is empty — `sprint add \"<title>\" --spec <doc>`")
 		return nil
 	}
-	fmt.Fprintln(out, "STORY BOARD")
+	fmt.Fprintln(out, "SPRINT BOARD")
 	for _, col := range weaveStoryColumns {
 		fmt.Fprintf(out, "%s:\n", col)
 		any := false
@@ -165,12 +174,35 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 	return nil
 }
 
-func newWeaveStoryCmd() *cobra.Command {
+// NewSprintCmd is the PLAN/HANDOFF surface — peer to `bashy weave`. A
+// SPRINT spans repos/teams (e.g. "ollama feature" across sh/bashy/
+// outpost; like an agile sprint across frontend/backend/cicd/qa); its
+// board is USER-GLOBAL. `bashy weave` is the per-repo EXECUTION engine
+// for the runs a sprint links. `bashy sprint` with no subcommand shows
+// the board.
+func NewSprintCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var epic string
 	cmd := &cobra.Command{
-		Use:   "story",
-		Short: "Manage the epic/story board (add/show/move/take/handoff/checkpoint/comment/link)",
+		Use:   "sprint",
+		Short: "Plan/handoff: the cross-repo sprint kanban above weave's per-repo runs",
+		Long: `sprint is the conductor's PLAN/HANDOFF layer — the cross-repo/cross-team
+kanban above weave. A sprint (e.g. "ollama feature") spans repos
+(sh/bashy/outpost/…); its runs are executed per-repo by ` + "`bashy weave`" + `.
+The board is user-global; ` + "`bashy sprint`" + ` (no subcommand) shows it.
+
+Each sprint card carries a spec-ref, acceptance, a kanban column, a
+CONTINUITY record (the resume brief), a conductor LEASE, and cross-repo
+run links {repo, id}. Durability (survive Ctrl+C / SIGKILL / token
+exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWeaveBoard(cmd, epic, &flags) // default = board
+		},
 	}
+	cmd.Flags().StringVar(&epic, "epic", "", "filter to one epic")
+	flags.attach(cmd)
 	cmd.AddCommand(
+		newWeaveBoardCmd(),
 		newWeaveStoryAddCmd(),
 		newWeaveStoryShowCmd(),
 		newWeaveStoryMoveCmd(),
@@ -178,6 +210,7 @@ func newWeaveStoryCmd() *cobra.Command {
 		newWeaveStoryHandoffCmd(),
 		newWeaveStoryCommentCmd(),
 		newWeaveStoryLinkCmd(),
+		newWeaveCheckpointCmd(),
 	)
 	return cmd
 }
@@ -187,7 +220,7 @@ func newWeaveStoryAddCmd() *cobra.Command {
 	var epic, spec, acceptance, column string
 	cmd := &cobra.Command{
 		Use:   `add "<title>"`,
-		Short: "Create a story card on the board",
+		Short: "Create a sprint card on the board",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if column == "" {
@@ -209,7 +242,7 @@ func newWeaveStoryAddCmd() *cobra.Command {
 
 func runWeaveStoryAdd(cmd *cobra.Command, title, epic, spec, acceptance, column string, flags *weaveOutputFlags) error {
 	mode := flags.mode()
-	dir, err := weaveStoryDir(cmd, mode, "weave story add")
+	dir, err := weaveStoryDir(cmd, mode, "sprint add")
 	if err != nil {
 		return err
 	}
@@ -230,25 +263,25 @@ func runWeaveStoryAdd(cmd *cobra.Command, title, epic, spec, acceptance, column 
 		return nil
 	})
 	if lockErr != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave story add", weavecli.ExitGenericFail, lockErr))
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint add", weavecli.ExitGenericFail, lockErr))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave story add", map[string]any{"story": newID, "column": column}))
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "sprint add", map[string]any{"sprint": newID, "column": column}))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave story add: story #%d in %s\n", newID, column)
+	fmt.Fprintf(cmd.OutOrStdout(), "sprint add: sprint #%d in %s\n", newID, column)
 	return nil
 }
 
 func newWeaveStoryShowCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
-		Use:   "show <story>",
-		Short: "Show a story card: spec, acceptance, continuity, lease, thread, tasks",
+		Use:   "show <sprint>",
+		Short: "Show a sprint card: spec, acceptance, continuity, lease, thread, tasks",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("story must be an integer: %q", args[0])
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			return runWeaveStoryShow(cmd, id, &flags)
 		},
@@ -259,24 +292,24 @@ func newWeaveStoryShowCmd() *cobra.Command {
 
 func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error {
 	mode := flags.mode()
-	dir, err := weaveStoryDir(cmd, mode, "weave story show")
+	dir, err := weaveStoryDir(cmd, mode, "sprint show")
 	if err != nil {
 		return err
 	}
 	q, lerr := loadWeaveQueue(dir)
 	if lerr != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave story show", weavecli.ExitGenericFail, lerr))
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint show", weavecli.ExitGenericFail, lerr))
 	}
 	s := findWeaveStory(q, id)
 	if s == nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave story show", weavecli.ExitInvalidArg,
-			fmt.Errorf("story #%d not found", id)))
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint show", weavecli.ExitInvalidArg,
+			fmt.Errorf("sprint #%d not found", id)))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave story show", map[string]any{"story": s}))
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "sprint show", map[string]any{"sprint": s}))
 	}
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "story #%d [%s] — %s\n", s.ID, s.Column, s.Title)
+	fmt.Fprintf(out, "sprint #%d [%s] — %s\n", s.ID, s.Column, s.Title)
 	if s.Epic != "" {
 		fmt.Fprintf(out, "  epic:       %s\n", s.Epic)
 	}
@@ -293,18 +326,18 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 		}
 		fmt.Fprintf(out, "  conductor:  %s (%s)\n", h, st)
 	} else {
-		fmt.Fprintf(out, "  conductor:  (unclaimed — `weave story take %d`)\n", s.ID)
+		fmt.Fprintf(out, "  conductor:  (unclaimed — `sprint take %d`)\n", s.ID)
 	}
-	if len(s.TaskIDs) > 0 {
-		strs := make([]string, len(s.TaskIDs))
-		for i, t := range s.TaskIDs {
-			strs[i] = "#" + strconv.FormatInt(t, 10)
+	if len(s.Runs) > 0 {
+		strs := make([]string, len(s.Runs))
+		for i, r := range s.Runs {
+			strs[i] = fmt.Sprintf("%s#%d", r.Repo, r.ID)
 		}
-		fmt.Fprintf(out, "  tasks:      %s\n", strings.Join(strs, " "))
+		fmt.Fprintf(out, "  runs:       %s\n", strings.Join(strs, " "))
 	}
 	fmt.Fprintln(out, "  ── continuity (resume brief) ──")
 	if strings.TrimSpace(s.Continuity) == "" {
-		fmt.Fprintln(out, "  (none yet — conductor: `weave checkpoint` after each step)")
+		fmt.Fprintln(out, "  (none yet — conductor: `sprint checkpoint` after each step)")
 	} else {
 		for _, line := range strings.Split(s.Continuity, "\n") {
 			fmt.Fprintf(out, "  %s\n", line)
@@ -322,23 +355,23 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 func newWeaveStoryMoveCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
-		Use:   "move <story> <backlog|doing|review|done>",
-		Short: "Move a story to a kanban column",
+		Use:   "move <sprint> <backlog|doing|review|done>",
+		Short: "Move a sprint to a kanban column",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("story must be an integer: %q", args[0])
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			col := strings.ToLower(strings.TrimSpace(args[1]))
 			if !isValidColumn(col) {
 				return fmt.Errorf("column must be one of %s", strings.Join(weaveStoryColumns, "|"))
 			}
-			return runWeaveStoryMutate(cmd, id, "weave story move", &flags, func(s *weaveStory) (string, error) {
+			return runWeaveStoryMutate(cmd, id, "sprint move", &flags, func(s *weaveStory) (string, error) {
 				from := s.Column
 				s.Column = col
 				weaveStoryAppend(s, weaveConductorName(""), "system", fmt.Sprintf("moved %s → %s", from, col))
-				return fmt.Sprintf("story #%d %s → %s", id, from, col), nil
+				return fmt.Sprintf("sprint #%d %s → %s", id, from, col), nil
 			})
 		},
 	}
@@ -351,24 +384,24 @@ func newWeaveStoryTakeCmd() *cobra.Command {
 	var as string
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "take <story>",
-		Short: "Claim the conductor lease on a story (takes over a STALE/dead conductor)",
-		Long: `take claims the conductor lease so a new conductor can pick up a story —
+		Use:   "take <sprint>",
+		Short: "Claim the conductor lease on a sprint (takes over a STALE/dead conductor)",
+		Long: `take claims the conductor lease so a new conductor can pick up a sprint —
 the human-directed switch, or recovery after the previous conductor died
 (SIGKILL / token exhaustion). A free or STALE lease is taken directly; a
 FRESH lease requires --force (and is recorded). After taking, read the
-continuity record (weave story show) and resume.`,
+continuity record (sprint show) and resume.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("story must be an integer: %q", args[0])
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			who := weaveConductorName(as)
-			return runWeaveStoryMutate(cmd, id, "weave story take", &flags, func(s *weaveStory) (string, error) {
+			return runWeaveStoryMutate(cmd, id, "sprint take", &flags, func(s *weaveStory) (string, error) {
 				prev, stale, free := weaveStoryLeaseState(s)
 				if !free && !stale && prev != who && !force {
-					return "", fmt.Errorf("story #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
+					return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
 				switch {
@@ -379,7 +412,7 @@ continuity record (weave story show) and resume.`,
 				default:
 					weaveStoryAppend(s, who, "system", fmt.Sprintf("force-took conductor lease from %s", prev))
 				}
-				return fmt.Sprintf("story #%d: %s is now conductor — read the continuity record (weave story show %d)", id, who, id), nil
+				return fmt.Sprintf("sprint #%d: %s is now conductor — read the continuity record (sprint show %d)", id, who, id), nil
 			})
 		},
 	}
@@ -393,7 +426,7 @@ func newWeaveStoryHandoffCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var message string
 	cmd := &cobra.Command{
-		Use:   "handoff <story>",
+		Use:   "handoff <sprint>",
 		Short: "Graceful handoff: checkpoint continuity + release the conductor lease",
 		Long: `handoff is the graceful conductor exit (e.g. on Ctrl+C, planned switch,
 or running low on context): record a final continuity brief and RELEASE
@@ -403,16 +436,16 @@ untouched — they survive in the queue for the successor.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("story must be an integer: %q", args[0])
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			return runWeaveStoryMutate(cmd, id, "weave story handoff", &flags, func(s *weaveStory) (string, error) {
+			return runWeaveStoryMutate(cmd, id, "sprint handoff", &flags, func(s *weaveStory) (string, error) {
 				who := weaveConductorName("")
 				if strings.TrimSpace(message) != "" {
 					s.Continuity = message
 				}
 				weaveStoryAppend(s, who, "system", "handed off — released conductor lease")
 				s.Lease = nil
-				return fmt.Sprintf("story #%d: lease released; continuity recorded for the next conductor", id), nil
+				return fmt.Sprintf("sprint #%d: lease released; continuity recorded for the next conductor", id), nil
 			})
 		},
 	}
@@ -425,13 +458,13 @@ func newWeaveStoryCommentCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var kind, author, message string
 	cmd := &cobra.Command{
-		Use:   `comment <story> ["<text>"]`,
-		Short: "Append to a story's history thread",
+		Use:   `comment <sprint> ["<text>"]`,
+		Short: "Append to a sprint's history thread",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("story must be an integer: %q", args[0])
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			body := message
 			if body == "" {
@@ -444,9 +477,9 @@ func newWeaveStoryCommentCmd() *cobra.Command {
 			if who == "" {
 				who = weaveConductorName("")
 			}
-			return runWeaveStoryMutate(cmd, id, "weave story comment", &flags, func(s *weaveStory) (string, error) {
+			return runWeaveStoryMutate(cmd, id, "sprint comment", &flags, func(s *weaveStory) (string, error) {
 				weaveStoryAppend(s, who, kind, body)
-				return fmt.Sprintf("story #%d +comment", id), nil
+				return fmt.Sprintf("sprint #%d +comment", id), nil
 			})
 		},
 	}
@@ -460,30 +493,32 @@ func newWeaveStoryCommentCmd() *cobra.Command {
 func newWeaveStoryLinkCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var task int64
+	var repo string
 	cmd := &cobra.Command{
-		Use:   "link <story> --task <issue>",
-		Short: "Link a task (weave issue) to a story",
+		Use:   "link <sprint> --repo <name> --task <issue>",
+		Short: "Link a weave run (repo + issue) to a sprint — runs are cross-repo",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("story must be an integer: %q", args[0])
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
-			if task <= 0 {
-				return fmt.Errorf("--task <issue> required")
+			if task <= 0 || strings.TrimSpace(repo) == "" {
+				return fmt.Errorf("--repo <name> and --task <issue> required (a run lives in a specific repo)")
 			}
-			return runWeaveStoryMutate(cmd, id, "weave story link", &flags, func(s *weaveStory) (string, error) {
-				for _, t := range s.TaskIDs {
-					if t == task {
-						return fmt.Sprintf("story #%d already links task #%d", id, task), nil
+			return runWeaveStoryMutate(cmd, id, "sprint link", &flags, func(s *weaveStory) (string, error) {
+				for _, r := range s.Runs {
+					if r.Repo == repo && r.ID == task {
+						return fmt.Sprintf("sprint #%d already links %s#%d", id, repo, task), nil
 					}
 				}
-				s.TaskIDs = append(s.TaskIDs, task)
-				return fmt.Sprintf("story #%d linked task #%d", id, task), nil
+				s.Runs = append(s.Runs, sprintRun{Repo: repo, ID: task})
+				return fmt.Sprintf("sprint #%d linked %s#%d", id, repo, task), nil
 			})
 		},
 	}
-	cmd.Flags().Int64Var(&task, "task", 0, "task issue id to link")
+	cmd.Flags().StringVar(&repo, "repo", "", "repo the run lives in (e.g. outpost, bashy, sh)")
+	cmd.Flags().Int64Var(&task, "task", 0, "weave run/issue id in that repo")
 	flags.attach(cmd)
 	return cmd
 }
@@ -497,31 +532,31 @@ func newWeaveCheckpointCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var message string
 	cmd := &cobra.Command{
-		Use:   "checkpoint <story>",
-		Short: "Update a story's continuity record + refresh the conductor lease",
+		Use:   "checkpoint <sprint>",
+		Short: "Update a sprint's continuity record + refresh the conductor lease",
 		Long: `checkpoint writes the resume brief a fresh conductor reads to continue,
 and refreshes the lease heartbeat. Run it frequently — it is the
 durability mechanism: a conductor that dies between checkpoints loses
 only the work since the last one, and its lease goes stale so a
 successor can take over.
 
-  bashy weave checkpoint 3 -m "P3: LWS manifest drafted (task #11 doing);
+  bashy sprint checkpoint 3 -m "P3: LWS manifest drafted (task #11 doing);
   next: wire clusterCanHold; blocker: none"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("story must be an integer: %q", args[0])
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			if strings.TrimSpace(message) == "" {
 				return fmt.Errorf("-m <resume brief> required")
 			}
 			who := weaveConductorName("")
-			return runWeaveStoryMutate(cmd, id, "weave checkpoint", &flags, func(s *weaveStory) (string, error) {
+			return runWeaveStoryMutate(cmd, id, "sprint checkpoint", &flags, func(s *weaveStory) (string, error) {
 				s.Continuity = message
 				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
 				weaveStoryAppend(s, who, "progress", "checkpoint")
-				return fmt.Sprintf("story #%d: continuity updated, lease refreshed (%s)", id, who), nil
+				return fmt.Sprintf("sprint #%d: continuity updated, lease refreshed (%s)", id, who), nil
 			})
 		},
 	}
@@ -547,18 +582,25 @@ func weaveStoryAppend(s *weaveStory, author, kind, body string) {
 	s.UpdatedAt = time.Now().UTC()
 }
 
+// weaveStoryDir resolves the USER-GLOBAL sprint board dir
+// (~/.bashy/sprint) — NOT a per-repo queue. A sprint spans repos, so its
+// board lives above any one repo; the board reuses the weaveQueue store
+// (only its Sprints field) + the same flock, just at a repo-less dir. No
+// git repo is required to manage the board.
 func weaveStoryDir(cmd *cobra.Command, mode weavecli.OutputMode, op string) (string, error) {
-	cwd, _ := os.Getwd()
-	root, err := weaveRepoRoot(cwd)
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitPrecondFail, err))
+		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
 	}
-	dir, _ := weaveQueueDir(root)
+	dir := filepath.Join(home, ".bashy", "sprint")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
+	}
 	return dir, nil
 }
 
 // runWeaveStoryMutate is the lock→find→mutate→emit skeleton shared by
-// the story mutators. mut returns a success line (text mode) or an error.
+// the sprint mutators. mut returns a success line (text mode) or an error.
 func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOutputFlags, mut func(*weaveStory) (string, error)) error {
 	mode := flags.mode()
 	dir, err := weaveStoryDir(cmd, mode, op)
@@ -569,7 +611,7 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		s := findWeaveStory(q, id)
 		if s == nil {
-			return fmt.Errorf("story #%d not found", id)
+			return fmt.Errorf("sprint #%d not found", id)
 		}
 		msg, merr := mut(s)
 		if merr != nil {
@@ -586,7 +628,7 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, code, lockErr))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, op, map[string]any{"story": id, "ok": true}))
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, op, map[string]any{"sprint": id, "ok": true}))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", op, line)
 	return nil

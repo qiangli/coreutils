@@ -54,28 +54,30 @@ successor can ` + "`take`" + ` it normally; use ` + "`--force`" + ` only when yo
 holder is gone. ` + "`weave baton release`" + ` drops it on a clean handoff. Always
 ` + "`take`" + ` before you start driving, and ` + "`weave baton`" + ` shows who currently holds it.
 
-## The STORY board (epic/story above tasks) — what you hand off
-Tasks (` + "`weave list`" + `) are EPHEMERAL workers; you never hand those off. The durable
-unit you own and transfer is the STORY — one shippable increment. ` + "`weave board`" + `
-is the kanban (backlog/doing/review/done) you read on pickup, NOT the task list.
-Each story card carries: a SPEC-REF (the handoff/spec doc), ACCEPTANCE criteria,
-a CONTINUITY record (the resume brief), a conductor LEASE, and links to its tasks.
-  • ` + "`weave story add \"<title>\" --epic E --spec docs/X.md --acceptance \"...\"`" + `
-  • ` + "`weave story move <id> doing|review|done`" + ` · ` + "`weave story link <id> --task N`" + `
-  • ` + "`weave story show <id>`" + ` — spec + acceptance + continuity + thread + tasks
+## The SPRINT board (` + "`bashy sprint`" + ` — peer to ` + "`weave`" + `, CROSS-REPO)
+Two surfaces: ` + "`weave`" + ` = per-repo EXECUTION (runs in workspaces of ONE repo);
+` + "`sprint`" + ` = PLAN/HANDOFF, a CROSS-REPO kanban above weave (a sprint like
+"ollama feature" spans sh/bashy/outpost — like an agile sprint across
+frontend/backend/cicd/qa). The board is USER-GLOBAL. weave runs (per repo)
+are EPHEMERAL; the durable unit you own/hand off is the SPRINT. Each card:
+SPEC-REF, ACCEPTANCE, column, CONTINUITY (resume brief), conductor LEASE,
+and cross-repo run links {repo, id}.
+  • ` + "`sprint add \"<title>\" --epic E --spec docs/X.md --acceptance \"...\"`" + `
+  • ` + "`sprint move <id> doing|review|done`" + ` · ` + "`sprint link <id> --repo outpost --task N`" + `
+  • ` + "`sprint show <id>`" + ` — spec + acceptance + continuity + thread + runs
 
 ## Conductor DURABILITY (survive Ctrl+C / SIGKILL / token exhaustion)
 A conductor is replaceable; the STORY is what persists. So:
-  • CHECKPOINT often — ` + "`weave checkpoint <id> -m \"<resume brief>\"`" + ` after each
+  • CHECKPOINT often — ` + "`sprint checkpoint <id> -m \"<resume brief>\"`" + ` after each
     meaningful step. It updates the continuity record AND refreshes the story
     lease heartbeat. If you die between checkpoints you lose only that delta.
-  • GRACEFUL exit (Ctrl+C, planned switch, low context) — ` + "`weave story handoff <id> -m \"...\"`" + `:
+  • GRACEFUL exit (Ctrl+C, planned switch, low context) — ` + "`sprint handoff <id> -m \"...\"`" + `:
     record a final brief and RELEASE the lease. In-flight tasks are left intact
     for the successor (their wrappers outlive you).
   • HARD death (SIGKILL/OOM/ratelimit) — no checkpoint runs; the lease goes
     STALE on its own. A successor recovers from the durable continuity record.
-  • PICK UP a story — ` + "`weave story take <id> --as <you>`" + ` (takes a free or STALE
-    lease; ` + "`--force`" + ` for a fresh one), then ` + "`weave story show <id>`" + ` and resume
+  • PICK UP a story — ` + "`sprint take <id> --as <you>`" + ` (takes a free or STALE
+    lease; ` + "`--force`" + ` for a fresh one), then ` + "`sprint show <id>`" + ` and resume
     from the continuity brief. This is the human-directed conductor switch.
 
 ## Naming + per-task threads
