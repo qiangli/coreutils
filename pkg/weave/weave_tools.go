@@ -38,12 +38,46 @@ type ToolProfile struct {
 	UpdatedAt     time.Time              `json:"updated_at"`
 }
 
-// RoleRecord is one tool's accrued performance in one role.
+// RoleRecord is one tool's accrued performance in one role, plus a qualitative
+// conductor/operator review (rating + one-line verdict + rationale notes).
 type RoleRecord struct {
-	Runs   int      `json:"runs"`
-	Passed int      `json:"passed"`
-	Failed int      `json:"failed"`
-	Notes  []string `json:"notes,omitempty"` // brief outcome notes (capped at 10)
+	Runs       int       `json:"runs"`
+	Passed     int       `json:"passed"`
+	Failed     int       `json:"failed"`
+	Rating     int       `json:"rating,omitempty"`  // 0–5 suitability for this role
+	Verdict    string    `json:"verdict,omitempty"` // one-line review
+	Notes      []string  `json:"notes,omitempty"`   // rationale / outcome notes (capped at 10)
+	ReviewedAt time.Time `json:"reviewed_at,omitempty"`
+}
+
+// setRoleReview records (or updates) a qualitative review of a tool's fitness
+// for a role into its persistent profile — the system-wide track record a
+// conductor consults when routing. Preserves accrued run counts.
+func setRoleReview(dir, tool, role string, rating int, verdict string, notes []string, now time.Time) error {
+	p, ok := loadToolProfile(dir, tool)
+	if !ok {
+		seed := seededLaunchContracts[tool]
+		p = &seed
+		p.Tool = tool
+	}
+	if p.Roles == nil {
+		p.Roles = map[string]*RoleRecord{}
+	}
+	r := p.Roles[role]
+	if r == nil {
+		r = &RoleRecord{}
+		p.Roles[role] = r
+	}
+	r.Rating, r.Verdict, r.ReviewedAt = rating, verdict, now
+	for _, n := range notes {
+		if n != "" {
+			r.Notes = append(r.Notes, n)
+		}
+	}
+	if len(r.Notes) > 10 {
+		r.Notes = r.Notes[len(r.Notes)-10:]
+	}
+	return saveToolProfile(dir, p)
 }
 
 // seededLaunchContracts are the known-good headless invocations, kept in sync

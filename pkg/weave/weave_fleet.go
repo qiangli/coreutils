@@ -59,6 +59,48 @@ with --fleet claude,codex,...`,
 	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated tool roster (default claude,codex,opencode,aider)")
 	cmd.Flags().BoolVar(&probe, "probe", false, "Also probe capability (`<tool> --version`, 3s timeout) and cache it")
 	cmd.AddCommand(newWeaveFleetInterviewCmd())
+	cmd.AddCommand(newWeaveFleetReviewCmd())
+	return cmd
+}
+
+// newWeaveFleetReviewCmd implements
+// `weave fleet review <tool> --role <role> --rating <0-5> --verdict "…" [--note …]`:
+// records a qualitative suitability review for a role into the system-wide
+// profile store, so the conductor's routing decisions are documented + tracked.
+func newWeaveFleetReviewCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var role, verdict string
+	var rating int
+	var notes []string
+	cmd := &cobra.Command{
+		Use:   "review <tool>",
+		Short: "Record a role-suitability review (rating + verdict) into the profile store",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mode := flags.mode()
+			dir, err := weaveToolsDir()
+			if err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave fleet review", weavecli.ExitGenericFail, err))
+			}
+			if role == "" {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave fleet review", weavecli.ExitGenericFail,
+					fmt.Errorf("--role is required")))
+			}
+			if err := setRoleReview(dir, args[0], role, rating, verdict, notes, time.Now()); err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave fleet review", weavecli.ExitGenericFail, err))
+			}
+			if mode != weavecli.OutputJSON {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s as %s: %d/5 — %s\n", args[0], role, rating, verdict)
+			}
+			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet review",
+				map[string]any{"tool": args[0], "role": role, "rating": rating, "verdict": verdict}))
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().StringVar(&role, "role", "", "Role being reviewed (conductor|coder|qa|doc|…)")
+	cmd.Flags().IntVar(&rating, "rating", 0, "Suitability rating 0–5")
+	cmd.Flags().StringVar(&verdict, "verdict", "", "One-line verdict")
+	cmd.Flags().StringArrayVar(&notes, "note", nil, "Rationale note (repeatable)")
 	return cmd
 }
 
@@ -109,7 +151,11 @@ func newWeaveFleetInterviewCmd() *cobra.Command {
 					}
 					for _, role := range sortedRoleNames(p) {
 						r := p.Roles[role]
-						fmt.Fprintf(cmd.OutOrStdout(), "  role %-9s %d/%d pass\n", role, r.Passed, r.Runs)
+						if r.Verdict != "" {
+							fmt.Fprintf(cmd.OutOrStdout(), "  role %-9s %d/5 — %s\n", role, r.Rating, r.Verdict)
+						} else {
+							fmt.Fprintf(cmd.OutOrStdout(), "  role %-9s %d/%d pass\n", role, r.Passed, r.Runs)
+						}
 					}
 				}
 				profiles = append(profiles, map[string]any{
