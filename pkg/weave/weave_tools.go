@@ -90,9 +90,9 @@ var seededLaunchContracts = map[string]ToolProfile{
 		Notes: "TUI is steerable; per-dir trust prompt needs `weave say <N> \"1\"` (or pre-seed ~/.claude.json).",
 	},
 	"codex": {
-		HeadlessArgs: []string{"exec", "--skip-git-repo-check", "--workspace", "workspace-write"},
+		HeadlessArgs: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"},
 		SupportsSay:  false, SupportsGracefulQuit: true,
-		Notes: "headless `exec`; --full-auto is deprecated and fails 'not a trusted dir'. Not steerable.",
+		Notes: "headless `exec`; the sandbox flag is `-s/--sandbox workspace-write` (codex 0.141.0 — NOT `--workspace`, which errors 'unexpected argument' and exits 2). --full-auto is deprecated. Not steerable.",
 	},
 	"agy": {
 		HeadlessArgs: []string{"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},

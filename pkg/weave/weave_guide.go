@@ -66,7 +66,7 @@ holder is gone. ` + "`weave baton release`" + ` drops it on a clean handoff. Alw
    headless flags AND the issue body as the prompt arg:
      claude    -- claude --dangerously-skip-permissions "<body>"
                (also send ` + "`bashy weave say <N> \"1\"`" + ` to clear claude's trust prompt)
-     codex     -- codex exec --skip-git-repo-check --workspace workspace-write "<body>"
+     codex     -- codex exec --skip-git-repo-check --sandbox workspace-write "<body>"
      agy       -- agy --dangerously-skip-permissions --print-timeout 40m -p "<body>"
      opencode  -- opencode run "<body>"
      aider     -- aider --yes-always --no-check-update --message "<body>"

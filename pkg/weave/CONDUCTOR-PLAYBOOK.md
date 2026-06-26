@@ -117,7 +117,7 @@ self-orchestration is safe). From a user goal:
 Tool cheat-sheet (details + caveats in Phase 3):
 
     claude    claude --dangerously-skip-permissions "<body>"        # TUI; pre-seed trust in ~/.claude.json (see Per tool) or say N "1"
-    codex     codex exec --skip-git-repo-check --workspace workspace-write "<body>"   # headless; --full-auto is deprecated AND fails "not a trusted dir"
+    codex     codex exec --skip-git-repo-check --sandbox workspace-write "<body>"   # headless; -s/--sandbox workspace-write (codex 0.141.0; --workspace errors+exits 2)
     gemini    gemini --yolo --skip-trust -i "<body>"                # TUI; no trust dialog
     opencode  opencode run "<body>"                                 # headless; check artifacts, not exit code
     aider     aider --yes-always --no-check-update --message "<body>"  # headless; auto-commits; model from ~/.aider.conf.yml
