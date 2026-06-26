@@ -129,7 +129,7 @@ func TestHandlerCoreutilsPipelineEarlyHeadClose(t *testing.T) {
 	if out != "ALPHA\n" {
 		t.Fatalf("out=%q, want %q", out, "ALPHA\n")
 	}
-	if strings.Contains(strings.ToLower(errb), "file already closed") {
-		t.Fatalf("stderr contains Windows closed-file pipe failure: %q", errb)
+	if errb != "" {
+		t.Fatalf("stderr=%q, want empty", errb)
 	}
 }
