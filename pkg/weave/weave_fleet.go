@@ -18,7 +18,7 @@ import (
 // weaveDefaultFleet is the canonical agent CLI roster used when --fleet is
 // not given. It matches the autopilot/orchestrator fleet documented in the
 // weave skill.
-var weaveDefaultFleet = []string{"claude", "codex", "opencode", "aider"}
+var weaveDefaultFleet = []string{"claude", "codex", "opencode", "aider", "agy"}
 
 // fleetProbeTTL bounds how long a cached --probe capability result is trusted
 // before re-probing. Existence (PATH lookup) is cheap and never cached.
@@ -58,6 +58,71 @@ with --fleet claude,codex,...`,
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated tool roster (default claude,codex,opencode,aider)")
 	cmd.Flags().BoolVar(&probe, "probe", false, "Also probe capability (`<tool> --version`, 3s timeout) and cache it")
+	cmd.AddCommand(newWeaveFleetInterviewCmd())
+	return cmd
+}
+
+// newWeaveFleetInterviewCmd implements `weave fleet interview [tool…|--all]`:
+// the conductor's one-on-one calibration. It resolves each tool's binary +
+// version and records its unattended launch contract into a persistent profile
+// (~/.bashy/weave/tools/<tool>.json), seeding a first interview from the known
+// contracts. This makes the headless launch recipe explicit + discoverable so a
+// campaign never bare-launches a tool into its trust/welcome prompt.
+func newWeaveFleetInterviewCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "interview [tool...]",
+		Short: "Calibrate tool profiles (launch contract + version) into the profile store",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mode := flags.mode()
+			dir, err := weaveToolsDir()
+			if err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave fleet interview",
+					weavecli.ExitGenericFail, err))
+			}
+			tools := args
+			if all || len(tools) == 0 {
+				tools = append([]string(nil), weaveDefaultFleet...)
+			}
+			now := time.Now()
+			profiles := make([]map[string]any, 0, len(tools))
+			for _, tool := range tools {
+				p, ierr := interviewTool(dir, tool, now)
+				if ierr != nil {
+					return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave fleet interview",
+						weavecli.ExitGenericFail, ierr))
+				}
+				if mode != weavecli.OutputJSON {
+					found := "NOT FOUND"
+					if p.Bin != "" {
+						found = p.Bin
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "%-10s %s  %s\n", p.Tool, found, p.Version)
+					fmt.Fprintf(cmd.OutOrStdout(), "  launch:  %s %s \"<body>\"\n", p.Tool, strings.Join(p.HeadlessArgs, " "))
+					if p.TrustClear != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  trust:   %s\n", p.TrustClear)
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "  steer:   say=%v  graceful-quit=%v\n", p.SupportsSay, p.SupportsGracefulQuit)
+					if p.Notes != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  notes:   %s\n", p.Notes)
+					}
+					for _, role := range sortedRoleNames(p) {
+						r := p.Roles[role]
+						fmt.Fprintf(cmd.OutOrStdout(), "  role %-9s %d/%d pass\n", role, r.Passed, r.Runs)
+					}
+				}
+				profiles = append(profiles, map[string]any{
+					"tool": p.Tool, "bin": p.Bin, "version": p.Version,
+					"headless_args": p.HeadlessArgs, "trust_clear": p.TrustClear,
+					"supports_say": p.SupportsSay, "supports_graceful_quit": p.SupportsGracefulQuit,
+				})
+			}
+			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet interview", map[string]any{"profiles": profiles}))
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().BoolVar(&all, "all", false, "Interview the whole default fleet")
 	return cmd
 }
 
