@@ -27,10 +27,21 @@ merge verified work, and reseed. ("conductor" is the official term;
 "orchestrator" / "coordinator" are aliases for this same role.)
 
 ## Summon (the standard one-liner to put a tool in the chair)
-> You are the weave CONDUCTOR — run ` + "`bashy weave baton`" + ` for where the campaign
-> stands and ` + "`bashy weave guide`" + ` for how to run it, reconcile against
-> ` + "`bashy weave list`" + `, then resume: supervise the fleet, merge ONLY self-verified
-> work, and rewrite the baton after every action.
+> You are the weave CONDUCTOR — claim the single-driver lock with
+> ` + "`bashy weave baton take --as <you>`" + ` (it shows the handoff baton), read
+> ` + "`bashy weave guide`" + ` for the playbook, reconcile against ` + "`bashy weave list`" + `,
+> then resume: supervise the fleet, merge ONLY self-verified work, rewrite the
+> baton after every action, and ` + "`bashy weave baton release`" + ` when you hand off.
+
+## Single-driver lock (never two conductors at once)
+The campaign has ONE conductor lock. ` + "`weave baton take --as <you>`" + ` claims it and
+prints the baton; it REFUSES if another conductor's lock is live (heartbeat
+within 30m), so two tools never double-drive one queue. Writing the baton
+heartbeats the lock — so the "supervise → act → record" rhythm keeps it alive.
+If a conductor crashes/ratelimits, its lock goes STALE (no heartbeat) and a
+successor can ` + "`take`" + ` it normally; use ` + "`--force`" + ` only when you are certain the
+holder is gone. ` + "`weave baton release`" + ` drops it on a clean handoff. Always
+` + "`take`" + ` before you start driving, and ` + "`weave baton`" + ` shows who currently holds it.
 
 ## The loop
 1. PREFLIGHT — ` + "`bashy weave fleet --probe`" + `. Assign ONLY tools reported
@@ -93,7 +104,8 @@ job must transfer cleanly. Write the handoff note with ` + "`bashy weave baton w
 and read it with ` + "`bashy weave baton`" + `. It carries the intent + strategy + next
 moves the queue does NOT (goal, plan, done, next, lessons, routing).
 - PLANNED (end of sprint, stepping away): write a COMPLETE baton at a stable
-  point — goal, current stage, what merged, the next actions, tool routing.
+  point — goal, current stage, what merged, the next actions, tool routing —
+  then ` + "`bashy weave baton release`" + `; the successor ` + "`take`" + `s it cleanly.
 - UNEXPECTED (ratelimit / token overuse / crash): you may not get to write a
   fresh one — so write the baton OFTEN (each stage + before risky merges). The
   successor reconciles the (possibly stale) baton against live ` + "`weave list`" + ` +

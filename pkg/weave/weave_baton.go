@@ -32,6 +32,89 @@ type Baton struct {
 
 func batonPath(queueDir string) string { return filepath.Join(queueDir, "baton.json") }
 
+// conductorLockTTL bounds how long a lock survives without a heartbeat. A live
+// conductor refreshes it on every baton write/take; if it goes stale (crash,
+// ratelimit drop), a successor may take over without --force.
+const conductorLockTTL = 30 * time.Minute
+
+// ConductorLock is the single-driver guard for a campaign: only its holder
+// should drive the sprint, so two conductors never double-drive one queue.
+// Stored at <queueDir>/conductor.lock. Epoch is a monotonically increasing
+// fencing token bumped on each take — a stale-epoch holder (an old conductor
+// that resumed after a takeover) can be detected and refused.
+type ConductorLock struct {
+	Holder      string    `json:"holder"`
+	Epoch       int       `json:"epoch"`
+	AcquiredAt  time.Time `json:"acquired_at"`
+	HeartbeatAt time.Time `json:"heartbeat_at"`
+}
+
+func conductorLockPath(queueDir string) string { return filepath.Join(queueDir, "conductor.lock") }
+
+func loadConductorLock(queueDir string) (*ConductorLock, bool) {
+	b, err := os.ReadFile(conductorLockPath(queueDir))
+	if err != nil {
+		return nil, false
+	}
+	var l ConductorLock
+	if json.Unmarshal(b, &l) != nil {
+		return nil, false
+	}
+	return &l, true
+}
+
+func saveConductorLock(queueDir string, l *ConductorLock) error {
+	b, err := json.MarshalIndent(l, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(conductorLockPath(queueDir), b, 0o644)
+}
+
+func (l *ConductorLock) stale(now time.Time) bool {
+	return now.Sub(l.HeartbeatAt) > conductorLockTTL
+}
+
+// acquireConductorLock claims the lock for holder. It succeeds if the lock is
+// free, held by holder already, stale (heartbeat older than the TTL), or force
+// is set — bumping the fencing epoch on a real change of holder. It returns the
+// resulting lock and whether the claim succeeded; on refusal the current holder
+// is returned so the caller can report who is already driving.
+func acquireConductorLock(queueDir, holder string, force bool, now time.Time) (*ConductorLock, bool) {
+	cur, ok := loadConductorLock(queueDir)
+	if ok && cur.Holder != "" && cur.Holder != holder && !cur.stale(now) && !force {
+		return cur, false // someone else is actively driving
+	}
+	epoch := 1
+	if ok {
+		epoch = cur.Epoch
+		if cur.Holder != holder { // a real handoff bumps the fencing token
+			epoch++
+		}
+	}
+	l := &ConductorLock{Holder: holder, Epoch: epoch, AcquiredAt: now, HeartbeatAt: now}
+	if ok && cur.Holder == holder && !cur.AcquiredAt.IsZero() {
+		l.AcquiredAt = cur.AcquiredAt
+	}
+	_ = saveConductorLock(queueDir, l)
+	return l, true
+}
+
+func heartbeatConductorLock(queueDir, holder string, now time.Time) {
+	cur, ok := loadConductorLock(queueDir)
+	if ok && cur.Holder == holder {
+		cur.HeartbeatAt = now
+		_ = saveConductorLock(queueDir, cur)
+	}
+}
+
+func releaseConductorLock(queueDir, holder string) {
+	cur, ok := loadConductorLock(queueDir)
+	if ok && (holder == "" || cur.Holder == holder) {
+		_ = os.Remove(conductorLockPath(queueDir))
+	}
+}
+
 func loadBaton(queueDir string) (*Baton, bool) {
 	b, err := os.ReadFile(batonPath(queueDir))
 	if err != nil {
@@ -116,7 +199,93 @@ cloudbox shared-session lease handoff, see 'weave handoff'.)`,
 	}
 	flags.attach(cmd)
 	cmd.AddCommand(newWeaveBatonWriteCmd())
+	cmd.AddCommand(newWeaveBatonTakeCmd())
+	cmd.AddCommand(newWeaveBatonReleaseCmd())
 	return cmd
+}
+
+// newWeaveBatonTakeCmd: `weave baton take --as <name> [--force]` — claim the
+// conductor lock so no two conductors drive the same campaign. Refuses if
+// another conductor is actively holding it (heartbeat within the TTL) unless
+// --force. Prints the baton on success so the new conductor picks up at once.
+func newWeaveBatonTakeCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var as string
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "take",
+		Short: "Claim the conductor lock (single-driver guard) and show the baton",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mode := flags.mode()
+			if as == "" {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton take", weavecli.ExitGenericFail,
+					fmt.Errorf("--as <conductor-name> is required")))
+			}
+			dir, err := weaveQueueDirForCwd()
+			if err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton take", weavecli.ExitGenericFail, err))
+			}
+			l, okk := acquireConductorLock(dir, as, force, time.Now())
+			if !okk {
+				if mode != weavecli.OutputJSON {
+					fmt.Fprintf(cmd.OutOrStdout(), "REFUSED — %s is conducting (last heartbeat %s). Use --force only if they are truly gone.\n",
+						l.Holder, l.HeartbeatAt.Local().Format("15:04:05"))
+				}
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton take", weavecli.ExitPrecondFail,
+					fmt.Errorf("conductor lock held by %s", l.Holder)))
+			}
+			if mode != weavecli.OutputJSON {
+				fmt.Fprintf(cmd.OutOrStdout(), "conductor lock acquired by %s (epoch %d)\n\n", l.Holder, l.Epoch)
+				if bt, ok := loadBaton(dir); ok {
+					fmt.Fprint(cmd.OutOrStdout(), renderBaton(bt))
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "no baton yet — write one with `weave baton write` as you go.")
+				}
+			}
+			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton take",
+				map[string]any{"holder": l.Holder, "epoch": l.Epoch}))
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().StringVar(&as, "as", "", "Conductor name claiming the lock")
+	cmd.Flags().BoolVar(&force, "force", false, "Take over even if another conductor holds a live lock")
+	return cmd
+}
+
+// newWeaveBatonReleaseCmd: `weave baton release [--as <name>]` — drop the
+// conductor lock on a clean handoff.
+func newWeaveBatonReleaseCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var as string
+	cmd := &cobra.Command{
+		Use:   "release",
+		Short: "Release the conductor lock (clean handoff)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mode := flags.mode()
+			dir, err := weaveQueueDirForCwd()
+			if err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton release", weavecli.ExitGenericFail, err))
+			}
+			releaseConductorLock(dir, as)
+			if mode != weavecli.OutputJSON {
+				fmt.Fprintln(cmd.OutOrStdout(), "conductor lock released")
+			}
+			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton release", nil))
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().StringVar(&as, "as", "", "Conductor name releasing (only releases if it matches the holder)")
+	return cmd
+}
+
+// weaveQueueDirForCwd resolves the queue dir for the current repo.
+func weaveQueueDirForCwd() (string, error) {
+	cwd, _ := os.Getwd()
+	root, err := weaveRepoRoot(cwd)
+	if err != nil {
+		return "", err
+	}
+	return weaveQueueDir(root)
 }
 
 func runWeaveBatonShow(cmd *cobra.Command, flags *weaveOutputFlags) error {
@@ -130,18 +299,34 @@ func runWeaveBatonShow(cmd *cobra.Command, flags *weaveOutputFlags) error {
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton", weavecli.ExitGenericFail, err))
 	}
-	bt, ok := loadBaton(dir)
-	if !ok {
-		if mode == weavecli.OutputJSON {
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton", map[string]any{"baton": nil}))
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "no baton yet — the conductor writes one with `weave baton write …`")
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton", nil))
-	}
+	bt, hasBaton := loadBaton(dir)
+	lock, hasLock := loadConductorLock(dir)
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton", map[string]any{"baton": bt}))
+		out := map[string]any{"baton": nil}
+		if hasBaton {
+			out["baton"] = bt
+		}
+		if hasLock {
+			out["conductor"] = lock
+		}
+		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton", out))
 	}
-	fmt.Fprint(cmd.OutOrStdout(), renderBaton(bt))
+	now := time.Now()
+	if hasLock && lock.Holder != "" {
+		st := "active"
+		if lock.stale(now) {
+			st = "STALE — takeable without --force"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Conductor: %s (epoch %d, %s; last heartbeat %s)\n\n",
+			lock.Holder, lock.Epoch, st, lock.HeartbeatAt.Local().Format("15:04:05"))
+	} else {
+		fmt.Fprint(cmd.OutOrStdout(), "Conductor: none — `weave baton take --as <name>` to claim\n\n")
+	}
+	if hasBaton {
+		fmt.Fprint(cmd.OutOrStdout(), renderBaton(bt))
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "no baton yet — the conductor writes one with `weave baton write …`")
+	}
 	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton", nil))
 }
 
@@ -194,6 +379,12 @@ func newWeaveBatonWriteCmd() *cobra.Command {
 			}
 			if err := saveBaton(dir, cur); err != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave baton write", weavecli.ExitGenericFail, err))
+			}
+			// Writing the baton is a heartbeat — it refreshes the conductor lock
+			// so the holder's lock doesn't go stale while they are actively
+			// driving (and supervising → recording is the rhythm).
+			if cur.WrittenBy != "" {
+				heartbeatConductorLock(dir, cur.WrittenBy, time.Now())
 			}
 			if mode != weavecli.OutputJSON {
 				fmt.Fprintln(cmd.OutOrStdout(), "baton written — next conductor: `bashy weave baton`")
