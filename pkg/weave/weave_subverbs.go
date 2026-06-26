@@ -800,7 +800,7 @@ Default timeout is 1h. On timeout, exits with precondition_failed
 func newWeaveSessionsCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{
-		Use:   "sessions",
+		Use:   "list",
 		Short: "List Cloudbox shared session tasks",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 0 {

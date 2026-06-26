@@ -36,6 +36,34 @@ func runWeave(t *testing.T, args ...string) (string, int) {
 	return buf.String(), code
 }
 
+// runSprint drives `bashy sprint` (the plan/handoff command), where the
+// cloudbox shared-session verbs now live under `sprint session`.
+func runSprint(t *testing.T, args ...string) (string, int) {
+	t.Helper()
+	cmd := NewSprintCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	code := 0
+	if err != nil {
+		var ec interface{ ExitCode() int }
+		if errors.As(err, &ec) {
+			code = ec.ExitCode()
+		} else {
+			code = 1
+		}
+	}
+	return buf.String(), code
+}
+
+// runSprintSession runs a `sprint session <args>` invocation.
+func runSprintSession(t *testing.T, args ...string) (string, int) {
+	t.Helper()
+	return runSprint(t, append([]string{"session"}, args...)...)
+}
+
 // TestWeaveCommandSurface locks in the post-migration command surface:
 // the forge-only init-board is gone, cobra's completion subverb is
 // disabled, the local-only open + the check introspection verb are
@@ -51,12 +79,17 @@ func TestWeaveCommandSurface(t *testing.T) {
 	for _, n := range []string{
 		"add", "start", "next", "prio", "point", "list", "pause", "resume",
 		"autopilot", "status", "log", "remember", "recall", "memory", "attach", "say", "pull", "reverify", "prune", "abandon",
-		"kill", "shell", "open", "reset", "wait", "check",
-		"sessions", "join", "note", "steer", "take", "handoff", "roster",
-		"share", "shares", "unshare",
+		"kill", "shell", "open", "reset", "wait", "check", "baton",
 	} {
 		if !have[n] {
 			t.Errorf("missing subverb %q", n)
+		}
+	}
+	// The conductor-coordination verbs moved to `bashy sprint` (plan
+	// layer) — weave is execution-only now. They must NOT be here.
+	for _, n := range []string{"sessions", "join", "note", "steer", "take", "handoff", "roster", "share", "shares", "unshare", "conduct"} {
+		if have[n] {
+			t.Errorf("subverb %q should have moved to `sprint`", n)
 		}
 	}
 	if have["init-board"] {

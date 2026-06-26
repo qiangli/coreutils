@@ -194,10 +194,10 @@ func TestSessionArgValidationExitCodes(t *testing.T) {
 		{name: "note missing", args: []string{"note", "--json"}},
 		{name: "steer missing", args: []string{"steer", "run", "--json"}},
 		{name: "handoff missing to", args: []string{"handoff", "--json"}},
-		{name: "sessions extra", args: []string{"sessions", "x", "--json"}},
+		{name: "list extra", args: []string{"list", "x", "--json"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, code := runWeave(t, tc.args...)
+			out, code := runSprintSession(t, tc.args...)
 			if code != weavecli.ExitInvalidArg {
 				t.Fatalf("code=%d want %d out=%s", code, weavecli.ExitInvalidArg, out)
 			}

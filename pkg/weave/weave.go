@@ -25,19 +25,21 @@ func newWeaveCmd() *cobra.Command {
 		// silence both at the parent level — subverbs inherit.
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Long: `weave is a local, filesystem-based orchestrator for running
-agentic CLIs (codex, claude, agy, opencode, ...) in parallel. Seed a queue
-of issues, fan tools out across them in isolated workspaces so they
-never clobber each other, then pull the converged work back into your
-repo. It runs entirely on the local filesystem — no server, no forge.
+		Long: `weave is the per-repo EXECUTION engine: a local, filesystem-based
+orchestrator that runs agentic CLIs (codex, claude, agy, opencode, ...)
+in parallel over ONE repo. Seed a queue of issues (runs), fan tools out
+across them in isolated git-clone workspaces so they never clobber each
+other, then pull the converged work back into the repo. Entirely local —
+no server, no forge.
+
+For the CROSS-REPO plan/handoff layer above weave — the sprint kanban,
+conductor lease, continuity record, and checkpoints — see ` + "`bashy sprint`" + `.
 
 Common-case usage:
 
   bashy weave add "fix null deref in cache" --priority p0
-  bashy weave add "refactor user service"
-  bashy weave start -- codex                 # claims top of queue
-  bashy weave start -- opencode              # claims next
-  bashy weave list                           # what's in flight
+  bashy weave start -- codex --dangerously-skip-permissions "<body>"
+  bashy weave list                           # runs in flight
   bashy weave pull                           # absorb merged work`,
 	}
 
@@ -79,18 +81,11 @@ Common-case usage:
 	cmd.AddCommand(newWeaveWaitCmd())
 	cmd.AddCommand(newWeaveCheckCmd())
 	cmd.AddCommand(newWeaveGuideCmd())
+	// baton = the per-repo campaign single-driver lock (execution
+	// coordination for THIS repo's queue) — stays in weave. The
+	// cross-repo conductor-coordination verbs (cloudbox shared sessions
+	// + conduct) moved to `bashy sprint` (the plan/handoff layer).
 	cmd.AddCommand(newWeaveBatonCmd())
-	cmd.AddCommand(newWeaveSessionsCmd())
-	cmd.AddCommand(newWeaveJoinCmd())
-	cmd.AddCommand(newWeaveNoteCmd())
-	cmd.AddCommand(newWeaveSteerCmd())
-	cmd.AddCommand(newWeaveConductCmd())
-	cmd.AddCommand(newWeaveTakeCmd())
-	cmd.AddCommand(newWeaveHandoffCmd())
-	cmd.AddCommand(newWeaveRosterCmd())
-	cmd.AddCommand(newWeaveShareCmd())
-	cmd.AddCommand(newWeaveSharesCmd())
-	cmd.AddCommand(newWeaveUnshareCmd())
 
 	return cmd
 }

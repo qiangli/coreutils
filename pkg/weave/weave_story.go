@@ -197,6 +197,9 @@ exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
 			return runWeaveBoard(cmd, epic, &flags) // default = board
 		},
 	}
+	// Drop cobra's auto `completion` subcommand — sprint is an agentic
+	// surface, not an interactive human shell (mirrors NewWeaveCmd).
+	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().StringVar(&epic, "epic", "", "filter to one epic")
 	flags.attach(cmd)
 	cmd.AddCommand(
@@ -209,6 +212,37 @@ exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
 		newWeaveStoryCommentCmd(),
 		newWeaveStoryLinkCmd(),
 		newWeaveCheckpointCmd(),
+		// Conductor-coordination, moved here from `weave` (plan layer,
+		// not per-repo execution): the cloudbox shared-session group and
+		// the conductor director.
+		newSprintSessionCmd(),
+		newWeaveConductCmd(),
+	)
+	return cmd
+}
+
+// newSprintSessionCmd groups the Cloudbox shared-session verbs (live
+// multi-host collaboration on a sprint) under `sprint session`. They
+// were scattered at weave's top level, where `take`/`handoff` collided
+// with sprint's own board lease verbs; nesting them disambiguates
+// (`sprint take` = local board lease, `sprint session take` = shared
+// cloudbox session lease) and keeps `weave` execution-only.
+func newSprintSessionCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "session",
+		Short: "Cloudbox shared sessions (live multi-host collaboration on a sprint)",
+	}
+	cmd.AddCommand(
+		newWeaveSessionsCmd(), // `session list`
+		newWeaveJoinCmd(),
+		newWeaveTakeCmd(),
+		newWeaveHandoffCmd(),
+		newWeaveNoteCmd(),
+		newWeaveSteerCmd(),
+		newWeaveRosterCmd(),
+		newWeaveShareCmd(),
+		newWeaveSharesCmd(),
+		newWeaveUnshareCmd(),
 	)
 	return cmd
 }

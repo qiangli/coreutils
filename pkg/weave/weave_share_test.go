@@ -30,7 +30,7 @@ func TestWeaveSharePostsDefaultObserver(t *testing.T) {
 	}))
 	writeSharePointer(t, repo)
 
-	out, code := runWeave(t, "share", "teammate@example.com", "--json")
+	out, code := runSprintSession(t, "share", "teammate@example.com", "--json")
 	if code != 0 {
 		t.Fatalf("share exit=%d out=%s", code, out)
 	}
@@ -59,7 +59,7 @@ func TestWeaveShareBadRoleDoesNotCallHTTP(t *testing.T) {
 	}))
 	writeSharePointer(t, repo)
 
-	out, code := runWeave(t, "share", "teammate@example.com", "--role", "admin", "--json")
+	out, code := runSprintSession(t, "share", "teammate@example.com", "--role", "admin", "--json")
 	if code != weavecli.ExitInvalidArg {
 		t.Fatalf("code=%d want %d out=%s", code, weavecli.ExitInvalidArg, out)
 	}
@@ -81,7 +81,7 @@ func TestWeaveSharesGetsEnvelope(t *testing.T) {
 	}))
 	writeSharePointer(t, repo)
 
-	out, code := runWeave(t, "shares", "--json")
+	out, code := runSprintSession(t, "shares", "--json")
 	if code != 0 {
 		t.Fatalf("shares exit=%d out=%s", code, out)
 	}
@@ -108,7 +108,7 @@ func TestWeaveUnshareDeletesEscapedEmail(t *testing.T) {
 	}))
 	writeSharePointer(t, repo)
 
-	out, code := runWeave(t, "unshare", "person/tag@example.com", "--json")
+	out, code := runSprintSession(t, "unshare", "person/tag@example.com", "--json")
 	if code != 0 {
 		t.Fatalf("unshare exit=%d out=%s", code, out)
 	}
