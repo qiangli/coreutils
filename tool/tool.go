@@ -51,13 +51,27 @@ func (rc *RunContext) Getenv(key string) string {
 }
 
 // Path resolves operand against the invocation working directory.
-// Absolute operands pass through. Tools must route every file-system
-// operand through this (or equivalent) — never through process cwd.
+// Absolute operands pass through (after separator normalization on
+// Windows). Tools must route every file-system operand through this
+// (or equivalent) — never through process cwd.
+//
+// On Windows, both / and \ separators are accepted, and /foo (no drive
+// letter) is recognised as drive-relative absolute (matching the
+// behaviour of every Windows API, which treats it as root on the
+// current drive).
 func (rc *RunContext) Path(operand string) string {
-	if filepath.IsAbs(operand) || rc.Dir == "" {
-		return operand
+	if isAbsPath(operand) || rc.Dir == "" {
+		return normalizePath(operand)
 	}
-	return filepath.Join(rc.Dir, operand)
+	return normalizePath(filepath.Join(rc.Dir, operand))
+}
+
+// ResolveExecutable resolves name as an executable file against the
+// working directory. On Windows this tries PATHEXT suffixes (.exe,
+// .com, .bat, .cmd) in order; on other platforms it returns
+// rc.Path(name).
+func (rc *RunContext) ResolveExecutable(name string) string {
+	return resolveExecutable(rc, name)
 }
 
 // Tool is one command.
