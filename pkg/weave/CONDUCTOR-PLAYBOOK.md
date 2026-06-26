@@ -51,6 +51,28 @@ evidence — the queue, the workspaces, the workers, the verification
 gates, and the merged checkout. If any two disagree, stop and
 diagnose before continuing.
 
+## Conductor lock + baton handoff (single-driver — `bashy weave guide` is authoritative)
+
+Two conductors must NEVER drive one campaign at once. Before driving, claim the
+lock: `bashy weave baton take --as <you>` — it prints the handoff baton and
+REFUSES if another conductor's lock is live (heartbeat < 30m TTL). Writing the
+baton heartbeats the lock.
+
+Handoff (like a PM on vacation vs off sick):
+- PLANNED: `bashy weave baton write --goal/--stage/--done/--next/--lesson …` at a
+  stable point, then `bashy weave baton release`; the successor `take`s it.
+- UNEXPECTED (ratelimit/crash): write the baton OFTEN (each stage + before risky
+  merges); a crashed holder's lock goes STALE and a successor `take`s it
+  (`--force` only if certainly gone), reconciling the baton against live
+  `bashy weave list`.
+
+Active supervision: after `weave start`, poll every few minutes and ACT —
+STALLED → nudge/reassign; ASKING (permission/clarification) → answer via
+`weave say <N> "<answer>"`; ABORTED → reassign/salvage; COMPLETED → verify+merge,
+assign next. Update the baton after EVERY action. Run `bashy weave guide` for the
+full, always-current playbook.
+
+
 ## Authoring --verify commands
 
 The wrapper runs them with a hermetic `bash --noprofile --norc -c`
