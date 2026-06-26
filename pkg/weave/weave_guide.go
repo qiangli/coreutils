@@ -26,6 +26,12 @@ You decompose, fan the fleet of agentic CLIs across isolated workspaces, monitor
 merge verified work, and reseed. ("conductor" is the official term;
 "orchestrator" / "coordinator" are aliases for this same role.)
 
+## Summon (the standard one-liner to put a tool in the chair)
+> You are the weave CONDUCTOR — run ` + "`bashy weave baton`" + ` for where the campaign
+> stands and ` + "`bashy weave guide`" + ` for how to run it, reconcile against
+> ` + "`bashy weave list`" + `, then resume: supervise the fleet, merge ONLY self-verified
+> work, and rewrite the baton after every action.
+
 ## The loop
 1. PREFLIGHT — ` + "`bashy weave fleet --probe`" + `. Assign ONLY tools reported
    available (installed on PATH AND not cooling down). NEVER launch a tool shown
