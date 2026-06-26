@@ -1,0 +1,3 @@
+[submodule "external/ollama/src"]
+	path = external/ollama/src
+	url = https://github.com/qiangli/ollama.git

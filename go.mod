@@ -24,7 +24,7 @@ require (
 // convention as ycode/outpost/bashy.
 replace mvdan.cc/sh/v3 => ../sh
 
-replace github.com/ollama/ollama => ../ycode/external/ollama
+replace github.com/ollama/ollama => ./external/ollama/src
 
 require (
 	dario.cat/mergo v1.0.0 // indirect
