@@ -26,12 +26,23 @@ You decompose, fan the fleet of agentic CLIs across isolated workspaces, monitor
 merge verified work, and reseed. ("conductor" is the official term;
 "orchestrator" / "coordinator" are aliases for this same role.)
 
-## Summon (the standard one-liner to put a tool in the chair)
-> You are the weave CONDUCTOR — claim the single-driver lock with
-> ` + "`bashy weave baton take --as <you>`" + ` (it shows the handoff baton), read
-> ` + "`bashy weave guide`" + ` for the playbook, reconcile against ` + "`bashy weave list`" + `,
-> then resume: supervise the fleet, merge ONLY self-verified work, rewrite the
-> baton after every action, and ` + "`bashy weave baton release`" + ` when you hand off.
+## Taking over (cold-start — DO THIS FIRST)
+If a human said "you are the weave CONDUCTOR, resume the campaign," do exactly this —
+no other instructions are needed:
+1. ` + "`bashy weave baton take --as <you>`" + ` — claims the single-driver lock AND prints
+   the handoff baton (campaign goal, current stage, what's done, and your NEXT ACTIONS).
+   If it REFUSES, another conductor is live — stop unless told to ` + "`--force`" + `.
+2. Read the rest of this guide (` + "`bashy weave docs`" + `) for HOW to run the loop.
+3. ` + "`bashy weave list`" + ` — reconcile the baton against live issue state (the queue is truth).
+4. RESUME: execute the baton's "Next actions", supervise the fleet, merge ONLY
+   self-verified work, rewrite the baton after every action, and
+   ` + "`bashy weave baton release`" + ` when you hand off.
+The split: the BATON carries the task-specific to-do (what to do next); this GUIDE
+carries the how. The human never needs to spell out these steps.
+
+## Summon (the minimal human one-liner)
+A human only needs to say:
+> You are the weave CONDUCTOR. Resume the campaign in this repo — see ` + "`bashy weave docs`" + `.
 
 ## Single-driver lock (never two conductors at once)
 The campaign has ONE conductor lock. ` + "`weave baton take --as <you>`" + ` claims it and
@@ -126,8 +137,9 @@ the queue is enough to pick up without reading code or docs.
 
 func newWeaveGuideCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "guide",
-		Short: "Print the CONDUCTOR playbook (discoverable by any tool driving a weave campaign)",
+		Use:     "guide",
+		Aliases: []string{"docs"},
+		Short:   "Print the CONDUCTOR playbook (a.k.a. `weave docs`) — how to take over + run a campaign",
 		Long: `guide prints the canonical operational playbook for the CONDUCTOR — the
 single agent that drives a weave campaign (assign, monitor, merge, reseed).
 Any agentic tool can run 'bashy weave guide' to pull the role contract,
