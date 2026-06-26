@@ -38,8 +38,8 @@ type weaveStory struct {
 }
 
 // sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
-// A sprint spans repos (sh/bashy/outpost/…); each repo keeps its own
-// per-repo weave queue, so a link is (repo, id) — e.g. {outpost, 11}.
+// A sprint spans multiple repos; each repo keeps its own per-repo weave
+// queue, so a link is (repo, id) — e.g. {repo-name, 11}.
 type sprintRun struct {
 	Repo string `json:"repo"`
 	ID   int64  `json:"id"`
@@ -175,21 +175,19 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 }
 
 // NewSprintCmd is the PLAN/HANDOFF surface — peer to `bashy weave`. A
-// SPRINT spans repos/teams (e.g. "ollama feature" across sh/bashy/
-// outpost; like an agile sprint across frontend/backend/cicd/qa); its
-// board is USER-GLOBAL. `bashy weave` is the per-repo EXECUTION engine
-// for the runs a sprint links. `bashy sprint` with no subcommand shows
-// the board.
+// SPRINT is one initiative that spans multiple repos; its board is
+// USER-GLOBAL. `bashy weave` is the per-repo EXECUTION engine for the
+// runs a sprint links. `bashy sprint` with no subcommand shows the board.
 func NewSprintCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var epic string
 	cmd := &cobra.Command{
 		Use:   "sprint",
 		Short: "Plan/handoff: the cross-repo sprint kanban above weave's per-repo runs",
-		Long: `sprint is the conductor's PLAN/HANDOFF layer — the cross-repo/cross-team
-kanban above weave. A sprint (e.g. "ollama feature") spans repos
-(sh/bashy/outpost/…); its runs are executed per-repo by ` + "`bashy weave`" + `.
-The board is user-global; ` + "`bashy sprint`" + ` (no subcommand) shows it.
+		Long: `sprint is the conductor's PLAN/HANDOFF layer — the cross-repo kanban
+above weave. A sprint is one initiative that spans multiple repos; its
+runs are executed per-repo by ` + "`bashy weave`" + `. The board is user-global;
+` + "`bashy sprint`" + ` (no subcommand) shows it.
 
 Each sprint card carries a spec-ref, acceptance, a kanban column, a
 CONTINUITY record (the resume brief), a conductor LEASE, and cross-repo
@@ -517,7 +515,7 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&repo, "repo", "", "repo the run lives in (e.g. outpost, bashy, sh)")
+	cmd.Flags().StringVar(&repo, "repo", "", "repo the run lives in")
 	cmd.Flags().Int64Var(&task, "task", 0, "weave run/issue id in that repo")
 	flags.attach(cmd)
 	return cmd

@@ -56,14 +56,14 @@ holder is gone. ` + "`weave baton release`" + ` drops it on a clean handoff. Alw
 
 ## The SPRINT board (` + "`bashy sprint`" + ` — peer to ` + "`weave`" + `, CROSS-REPO)
 Two surfaces: ` + "`weave`" + ` = per-repo EXECUTION (runs in workspaces of ONE repo);
-` + "`sprint`" + ` = PLAN/HANDOFF, a CROSS-REPO kanban above weave (a sprint like
-"ollama feature" spans sh/bashy/outpost — like an agile sprint across
-frontend/backend/cicd/qa). The board is USER-GLOBAL. weave runs (per repo)
-are EPHEMERAL; the durable unit you own/hand off is the SPRINT. Each card:
+` + "`sprint`" + ` = PLAN/HANDOFF, a CROSS-REPO kanban above weave (one
+initiative spanning multiple repos — like an agile sprint spanning
+several teams). The board is USER-GLOBAL. weave runs (per repo) are
+EPHEMERAL; the durable unit you own/hand off is the SPRINT. Each card:
 SPEC-REF, ACCEPTANCE, column, CONTINUITY (resume brief), conductor LEASE,
 and cross-repo run links {repo, id}.
   • ` + "`sprint add \"<title>\" --epic E --spec docs/X.md --acceptance \"...\"`" + `
-  • ` + "`sprint move <id> doing|review|done`" + ` · ` + "`sprint link <id> --repo outpost --task N`" + `
+  • ` + "`sprint move <id> doing|review|done`" + ` · ` + "`sprint link <id> --repo <name> --task N`" + `
   • ` + "`sprint show <id>`" + ` — spec + acceptance + continuity + thread + runs
 
 ## Conductor DURABILITY (survive Ctrl+C / SIGKILL / token exhaustion)
