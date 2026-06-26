@@ -23,7 +23,8 @@ import (
 // host today (ssh) and a future outpost-tunnel dispatcher can replace it without
 // touching the engine — the Executor seam is the stable boundary.
 type meshExecutor struct {
-	Remote string // e.g. "ssh" or "ssh -p 2222 -i key"; empty => "ssh"
+	Remote      string // e.g. "ssh" or "ssh -p 2222 -i key"; empty => "ssh"
+	RemoteShell string // e.g. "bash -s"; "none" => feed body directly to remote command
 }
 
 func (x meshExecutor) Execute(ctx context.Context, t *Task, tio TaskIO) TaskResult {
@@ -32,9 +33,9 @@ func (x meshExecutor) Execute(ctx context.Context, t *Task, tio TaskIO) TaskResu
 	}
 	start := time.Now()
 	res := TaskResult{Name: t.Name, Host: t.Host}
-	name, args := meshCommandArgs(x.Remote, t.Host)
+	name, args := meshCommandArgs(x.Remote, t.Host, x.RemoteShell)
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdin = strings.NewReader(t.Body) // body runs on the remote bash -s
+	cmd.Stdin = strings.NewReader(t.Body) // body runs via remote shell, or directly when disabled
 	cmd.Env = tio.Env
 	cmd.Stdout = tio.Stdout
 	cmd.Stderr = tio.Stderr
@@ -49,15 +50,24 @@ func (x meshExecutor) Execute(ctx context.Context, t *Task, tio TaskIO) TaskResu
 	return res
 }
 
-// meshCommandArgs builds the argv to run a body on host via a remote `bash -s`.
-// remote is shell-split ("ssh" or "ssh -i key -p 2222"); the body arrives on
-// stdin so it is never exposed on a command line.
-func meshCommandArgs(remote, host string) (string, []string) {
+// meshCommandArgs builds the argv to run a body on host via a remote shell.
+// remote and remoteShell are shell-split ("ssh -i key -p 2222", "bash -s");
+// the body arrives on stdin so it is never exposed on a command line. A
+// remoteShell value of "none" omits the shell argv for outposts that consume
+// stdin themselves and do not have bash.
+func meshCommandArgs(remote, host, remoteShell string) (string, []string) {
 	parts := strings.Fields(remote)
 	if len(parts) == 0 {
 		parts = []string{"ssh"}
 	}
 	args := append([]string{}, parts[1:]...)
-	args = append(args, host, "bash", "-s")
+	args = append(args, host)
+	shell := strings.TrimSpace(remoteShell)
+	if shell == "" {
+		shell = "bash -s"
+	}
+	if !strings.EqualFold(shell, "none") {
+		args = append(args, strings.Fields(shell)...)
+	}
 	return parts[0], args
 }

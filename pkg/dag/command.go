@@ -26,7 +26,7 @@ func newDagCmd() *cobra.Command {
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
 		sandboxF, meshF                                                                               bool
 		fileArg                                                                                       string
-		cacheDir, cacheExport, cacheImport, remoteCmd                                                 string
+		cacheDir, cacheExport, cacheImport, remoteCmd, remoteShell                                    string
 		jobs                                                                                          int
 	)
 	cmd := &cobra.Command{
@@ -142,6 +142,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				Sandbox:     sandboxF,
 				Mesh:        meshF,
 				RemoteCmd:   remoteCmd,
+				RemoteShell: remoteShell,
 				Cache:       cache,
 				Verbose:     mode == weavecli.OutputAuto || mode == weavecli.OutputPlain,
 				Capture:     mode == weavecli.OutputJSON,
@@ -196,6 +197,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&sandboxF, "sandbox", false, "Run target bodies through DAG_SANDBOX_CMD wrapper constraints")
 	cmd.Flags().BoolVar(&meshF, "mesh", false, "Dispatch Host:-tagged targets to another machine (control plane only; body fetches its own code/data)")
 	cmd.Flags().StringVar(&remoteCmd, "remote", "", "Remote-exec command for --mesh (default: ssh or DAG_REMOTE_EXEC)")
+	cmd.Flags().StringVar(&remoteShell, "remote-shell", "", "Remote shell argv for --mesh (default: bash -s; use none to feed stdin directly)")
 	cmd.Flags().StringVarP(&fileArg, "file", "f", "", "DAG markdown file (default: discover DAG.md)")
 	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "Fingerprint cache directory (default: DAG_CACHE_DIR or user cache)")
 	cmd.Flags().StringVar(&cacheExport, "cache-export", "", "Copy this DAG's fingerprint cache file to DIR after the run")
