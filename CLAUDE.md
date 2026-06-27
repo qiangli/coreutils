@@ -245,5 +245,25 @@ client-side git through `coreutils/git` (pure-Go-first, host-git fallback).
   packages that need them: `mvdan.cc/sh/v3` (`shell/`),
   `github.com/modelcontextprotocol/go-sdk` (`mcp/`), `gotreesitter`
   (`pkg/treesitter`, pure Go), and `gfy` (`pkg/codegraph` only — kept out of
-  the bare binary by per-import compilation). Adding a dependency needs a
-  written justification in the PR.
+  the bare binary by per-import compilation), and `github.com/rjeczalik/notify`
+  (`pkg/mirror` only — **MIT**, cgo-free, native-recursive cross-platform fs
+  watching; the third-party lib Syncthing forked, used here directly, no
+  Syncthing code). Adding a dependency needs a written justification in the PR.
+  **License rule (bashy+coreutils ship as a bundled barebone "OS"):** compiled-in
+  deps must be **permissive (MIT/BSD/Apache)** — anything whose license would
+  *propagate* to the project (GPL/MPL copyleft) is out. External tools we only
+  download+run (not link) sit outside this — they're separate binaries on their
+  own license. cgo is avoided in core (releases are `CGO_ENABLED=0`) but can be
+  relaxed case-by-case for non-core/external pieces when no pure-Go option exists.
+
+## pkg/mirror + external/rclone — the directory mirror
+
+`pkg/mirror` is a continuous one-way directory mirror (node B keeps a live replica
+of a dir on node A). It reuses Syncthing's *architecture* — a recursive fs watcher
++ a periodic full-scan backstop + delta transfer — from **all-permissive parts and
+no Syncthing code**: `rjeczalik/notify` (MIT) for the recursive watch, a
+binmgr-managed `rclone` (MIT, `external/rclone`) for `rclone sync` (delta + mirror
+semantics), and our own debounce/backstop/lifecycle orchestration. `bashy mirror
+--source <dir> --dest <rclone-target>`; over the mesh, the replica runs `bashy
+rclone serve webdav <dir>` exposed as a mesh service and the source points `--dest`
+at it. `external/rclone` is also a transparent passthrough (`bashy rclone …`).
