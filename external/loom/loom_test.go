@@ -9,7 +9,7 @@ import (
 
 func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	cfg, err := ensureConfig(dir, "127.0.0.1", 3000)
+	cfg, err := ensureConfig(dir, "127.0.0.1", 3000, true)
 	if err != nil {
 		t.Fatalf("ensureConfig: %v", err)
 	}
@@ -25,13 +25,16 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 		"HTTP_PORT = 3000",
 		"SECRET_KEY = ",
 		"DISABLE_REGISTRATION = true",
+		"[actions]",         // local CI control plane
+		"ENABLED = true",    // act_runner registers against it
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("seeded config missing %q", want)
 		}
 	}
-	// Second call must not overwrite (stable secret across restarts).
-	if _, err := ensureConfig(dir, "127.0.0.1", 3000); err != nil {
+	// Second call must not overwrite (stable secret across restarts), with the
+	// same actions toggle.
+	if _, err := ensureConfig(dir, "127.0.0.1", 3000, true); err != nil {
 		t.Fatal(err)
 	}
 	if b2, _ := os.ReadFile(cfg); string(b2) != s {

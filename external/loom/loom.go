@@ -58,8 +58,27 @@ type Options struct {
 	DataDir string // work-path (default DefaultDataDir)
 	Addr    string // HTTP bind addr (default 127.0.0.1 — loopback for the mesh)
 	Port    int    // HTTP port (default 3000)
+	// Actions toggles Gitea's built-in GitHub-Actions-compatible CI. nil = the
+	// default (on, unless $LOOM_ACTIONS is "0"/"false"). This is what makes loom
+	// a local CI control plane: act_runner registers against it and dials out
+	// over the mesh. See dhnt/docs/local-p2p-cicd.md.
+	Actions *bool
 	Stdout  io.Writer
 	Stderr  io.Writer
+}
+
+// actionsOn resolves the effective Actions toggle: an explicit Options.Actions
+// wins; otherwise on unless $LOOM_ACTIONS is "0"/"false"/"no"/"off".
+func (o *Options) actionsOn() bool {
+	if o.Actions != nil {
+		return *o.Actions
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOOM_ACTIONS"))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func (o *Options) defaults() {
@@ -114,7 +133,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loom: fetch gitea: %w", err)
 	}
-	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port)
+	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.actionsOn())
 	if err != nil {
 		return nil, err
 	}
@@ -155,36 +174,86 @@ func Serve(ctx context.Context, o Options) error {
 }
 
 // ensureConfig writes a minimal Gitea app.ini on first run and returns its path.
-func ensureConfig(dataDir, addr string, port int) (string, error) {
+// On an existing app.ini it reuses it, but ensures the [actions] section matches
+// the requested toggle — so an already-initialized data dir lights up (or drops)
+// Actions on the next serve without a manual edit.
+func ensureConfig(dataDir, addr string, port int, actions bool) (string, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", err
 	}
 	cfgPath := filepath.Join(dataDir, "app.ini")
-	if _, err := os.Stat(cfgPath); err == nil {
-		return cfgPath, nil // already configured — reuse
+	if existing, err := os.ReadFile(cfgPath); err == nil {
+		merged := ensureActionsSection(string(existing), actions)
+		if merged != string(existing) {
+			if err := os.WriteFile(cfgPath, []byte(merged), 0o600); err != nil {
+				return "", err
+			}
+		}
+		return cfgPath, nil // already configured — reuse (with actions reconciled)
 	}
 	secret, err := randomHex(32)
 	if err != nil {
 		return "", err
 	}
-	ini := renderConfig(dataDir, addr, port, secret)
+	ini := renderConfig(dataDir, addr, port, secret, actions)
 	if err := os.WriteFile(cfgPath, []byte(ini), 0o600); err != nil {
 		return "", err
 	}
 	return cfgPath, nil
 }
 
+// ensureActionsSection reconciles the [actions] ENABLED key in an existing
+// app.ini to want. It rewrites an existing key, or appends the section if absent.
+// Minimal INI surgery — Gitea owns the rest of the file, we touch only this key.
+func ensureActionsSection(ini string, want bool) string {
+	val := "false"
+	if want {
+		val = "true"
+	}
+	lines := strings.Split(ini, "\n")
+	inActions := false
+	for i, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+			inActions = t == "[actions]"
+			continue
+		}
+		if inActions {
+			k := strings.TrimSpace(strings.SplitN(t, "=", 2)[0])
+			if strings.EqualFold(k, "ENABLED") {
+				lines[i] = "ENABLED = " + val
+				return strings.Join(lines, "\n")
+			}
+		}
+	}
+	// No [actions] ENABLED found — append a fresh section.
+	suffix := "\n[actions]\nENABLED = " + val + "\n"
+	if strings.HasSuffix(ini, "\n") {
+		return ini + suffix[1:]
+	}
+	return ini + suffix
+}
+
 // renderConfig is the minimal app.ini: INSTALL_LOCK so it boots ready, SQLite so
 // there's no external DB, loopback bind so only the mesh reaches it. Gitea
 // auto-generates + persists INTERNAL_TOKEN on first run when it's absent.
-func renderConfig(dataDir, addr string, port int, secret string) string {
+func renderConfig(dataDir, addr string, port int, secret string, actions bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "APP_NAME = loom\nRUN_MODE = prod\n\n")
 	fmt.Fprintf(&b, "[server]\nHTTP_ADDR = %s\nHTTP_PORT = %d\nROOT_URL = http://%s:%d/\nDISABLE_SSH = true\n\n", addr, port, addr, port)
 	fmt.Fprintf(&b, "[database]\nDB_TYPE = sqlite3\nPATH = %s\n\n", filepath.Join(dataDir, "gitea.db"))
 	fmt.Fprintf(&b, "[repository]\nROOT = %s\n\n", filepath.Join(dataDir, "repositories"))
 	fmt.Fprintf(&b, "[security]\nINSTALL_LOCK = true\nSECRET_KEY = %s\n\n", secret)
-	fmt.Fprintf(&b, "[service]\nDISABLE_REGISTRATION = true\n")
+	fmt.Fprintf(&b, "[service]\nDISABLE_REGISTRATION = true\n\n")
+	// [actions] turns loom into a local CI control plane: act_runner registers
+	// against it and dials out over the mesh. DEFAULT_ACTIONS_URL = github lets
+	// workflows reference `uses: actions/checkout` at setup; a mesh-local mirror
+	// is a follow-up (docs/local-p2p-cicd.md).
+	enabled := "false"
+	if actions {
+		enabled = "true"
+	}
+	fmt.Fprintf(&b, "[actions]\nENABLED = %s\nDEFAULT_ACTIONS_URL = github\n", enabled)
 	return b.String()
 }
 
@@ -205,10 +274,14 @@ func NewLoomCmd() *cobra.Command {
 compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.`,
 	}
 	var o Options
+	var actions bool
 	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Download (if needed) + run gitea web on a loopback port",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("actions") {
+				o.Actions = &actions
+			}
 			return Serve(cmd.Context(), o)
 		},
 	}
@@ -216,6 +289,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	serve.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
 	serve.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
 	serve.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
+	serve.Flags().BoolVar(&actions, "actions", true, "enable Gitea Actions (local CI; $LOOM_ACTIONS=0 to disable)")
 
 	pathCmd := &cobra.Command{
 		Use:   "path",
