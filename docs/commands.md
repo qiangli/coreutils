@@ -114,6 +114,7 @@ Extensions (beyond coreutils, prior art in tree):
 | grep | aict, u-root | -r, -i, -l, -n, -v, -E, -F, -c, -q, -m, --include/--exclude |
 | find | aict, u-root | -name, -type, -maxdepth, -mtime, -size, -path, -prune, -print0; **-exec is NO** |
 | diff | aict | -u, -r, -q (unified output) |
+| jq | gojq | pure-Go JSON filters; initial flags -c, -e, -n, -r |
 | tar | u-root | -c, -x, -t, -z, -f (archive/tar + compress/gzip) |
 | gzip / gunzip | u-root | -d, -k, -c, -1..-9 |
 | git | — | done (`git/` package) |

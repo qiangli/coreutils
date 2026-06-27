@@ -35,6 +35,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/hostname"
 	_ "github.com/qiangli/coreutils/cmds/id"
 	_ "github.com/qiangli/coreutils/cmds/join"
+	_ "github.com/qiangli/coreutils/cmds/jq"
 	_ "github.com/qiangli/coreutils/cmds/link"
 	_ "github.com/qiangli/coreutils/cmds/ln"
 	_ "github.com/qiangli/coreutils/cmds/ls"

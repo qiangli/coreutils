@@ -9,6 +9,7 @@ GPL code is ever copied into this repository.
 | Source | License | Used in |
 |---|---|---|
 | [benhoyt/goawk](https://github.com/benhoyt/goawk) | MIT | cmds/awk |
+| [itchyny/gojq](https://github.com/itchyny/gojq) | MIT | cmds/jq |
 | [u-root/u-root](https://github.com/u-root/u-root) | BSD-3-Clause | cmds/: tar, gzip (incl. gunzip/zcat), sync, which, touch, ln, mktemp, truncate, chmod, cp, mv, rm, mkdir, du, df (linux probe), yes, printenv, date, sleep, seq, uname, hostname, tty, uptime, strings, tee, uniq; cmds/internal/hashenc (base64 structure) |
 | [guonaihong/coreutils](https://github.com/guonaihong/coreutils) | Apache-2.0 | cmds/: link, unlink, chown, chgrp, cat (show-nonprinting table), cut, echo, env, seq, uname; cmds/internal/hashenc (engine idea from basecore/hashcore). Changes are stated per-file in provenance headers, as Apache-2.0 §4(b) requires. |
 | [synseqack/aict](https://github.com/synseqack/aict) | MIT | cmds/df (windows probe) |
@@ -26,6 +27,32 @@ consulted as semantic references only; no code flows from them.
 MIT License
 
 Copyright (c) 2022 Ben Hoyt
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### itchyny/gojq - MIT
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2019-2026 itchyny
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
