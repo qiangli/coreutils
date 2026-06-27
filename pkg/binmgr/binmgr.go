@@ -16,6 +16,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -31,9 +32,14 @@ import (
 type Asset struct {
 	// URL is the download URL (a raw binary, or a .tar.gz/.tgz/.zip archive).
 	URL string `json:"url"`
-	// SHA256 is the expected hex digest of the downloaded file. Empty skips the
-	// check (discouraged — the verify is the trust boundary).
+	// SHA256 is the expected hex digest of the downloaded file (preferred). Empty
+	// skips the sha check.
 	SHA256 string `json:"sha256"`
+	// MD5 is the expected hex md5 digest — the fallback integrity check for tools
+	// that publish only .md5 sidecars (e.g. SeaweedFS). Used when SHA256 is empty.
+	// One of SHA256/MD5 must be set; an empty Asset skips verification entirely
+	// (discouraged — the verify is the trust boundary).
+	MD5 string `json:"md5,omitempty"`
 	// Binary is the path to the executable WITHIN an archive (e.g.
 	// "gitea/gitea"); empty means the download is itself the raw binary.
 	Binary string `json:"binary,omitempty"`
@@ -101,13 +107,19 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 
-	sum, derr := download(ctx, asset.URL, tmp)
+	sum, md5sum, derr := download(ctx, asset.URL, tmp)
 	_ = tmp.Close()
 	if derr != nil {
 		return "", derr
 	}
-	if want := strings.ToLower(strings.TrimSpace(asset.SHA256)); want != "" && want != sum {
-		return "", fmt.Errorf("binmgr: %s %s sha256 mismatch: got %s, want %s", t.Name, t.Version, sum, want)
+	if want := strings.ToLower(strings.TrimSpace(asset.SHA256)); want != "" {
+		if want != sum {
+			return "", fmt.Errorf("binmgr: %s %s sha256 mismatch: got %s, want %s", t.Name, t.Version, sum, want)
+		}
+	} else if want := strings.ToLower(strings.TrimSpace(asset.MD5)); want != "" {
+		if want != md5sum {
+			return "", fmt.Errorf("binmgr: %s %s md5 mismatch: got %s, want %s", t.Name, t.Version, md5sum, want)
+		}
 	}
 
 	if asset.Binary != "" {
@@ -128,24 +140,25 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	return dest, nil
 }
 
-func download(ctx context.Context, url string, w io.Writer) (sha string, err error) {
+func download(ctx context.Context, url string, w io.Writer) (sha, md5sum string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("binmgr: GET %s: HTTP %d", url, resp.StatusCode)
+		return "", "", fmt.Errorf("binmgr: GET %s: HTTP %d", url, resp.StatusCode)
 	}
-	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(w, h), resp.Body); err != nil {
-		return "", err
+	sh := sha256.New()
+	mh := md5.New()
+	if _, err := io.Copy(io.MultiWriter(w, sh, mh), resp.Body); err != nil {
+		return "", "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(sh.Sum(nil)), hex.EncodeToString(mh.Sum(nil)), nil
 }
 
 func extract(archivePath, url, member, dest string) error {

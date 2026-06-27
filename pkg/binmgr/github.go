@@ -72,7 +72,7 @@ func ResolveGitHub(ctx context.Context, spec GitHubSpec) (Tool, error) {
 	if asset.URL == "" {
 		return Tool{}, fmt.Errorf("binmgr: %s %s has no asset for %s", spec.Repo, rel.TagName, Platform())
 	}
-	sha, err := resolveSHA(ctx, rel, asset)
+	sha, md5sum, err := resolveChecksum(ctx, rel, asset)
 	if err != nil {
 		return Tool{}, err
 	}
@@ -80,7 +80,7 @@ func ResolveGitHub(ctx context.Context, spec GitHubSpec) (Tool, error) {
 		Name:    spec.Name,
 		Version: rel.TagName,
 		Assets: map[string]Asset{
-			Platform(): {URL: asset.URL, SHA256: sha, Binary: spec.Member},
+			Platform(): {URL: asset.URL, SHA256: sha, MD5: md5sum, Binary: spec.Member},
 		},
 	}, nil
 }
@@ -150,7 +150,7 @@ func assetUsable(name, member string) bool {
 }
 
 func isSidecar(n string) bool {
-	for _, s := range []string{".sha256", ".sha512", ".asc", ".sig", ".pem", ".cert", ".sbom", ".json", ".txt"} {
+	for _, s := range []string{".sha256", ".sha512", ".md5", ".asc", ".sig", ".pem", ".cert", ".sbom", ".json", ".txt"} {
 		if strings.HasSuffix(n, s) {
 			return true
 		}
@@ -158,14 +158,19 @@ func isSidecar(n string) bool {
 	return false
 }
 
-var hex64 = regexp.MustCompile(`[a-fA-F0-9]{64}`)
+var (
+	hex64 = regexp.MustCompile(`[a-fA-F0-9]{64}`)
+	hex32 = regexp.MustCompile(`[a-fA-F0-9]{32}`)
+)
 
-// resolveSHA finds the asset's sha256: a per-asset .sha256 sidecar first, then a
-// checksums file listing the asset.
-func resolveSHA(ctx context.Context, rel *ghRelease, asset ghAsset) (string, error) {
-	if body, err := httpGetBody(ctx, asset.URL+".sha256", ""); err == nil {
+// resolveChecksum finds the asset's checksum, preferring sha256 (a per-asset
+// .sha256 sidecar, then a checksums file) and falling back to a .md5 sidecar for
+// tools that publish only md5 (e.g. SeaweedFS). Returns (sha256, md5) — exactly
+// one is non-empty.
+func resolveChecksum(ctx context.Context, rel *ghRelease, asset ghAsset) (sha, md5sum string, err error) {
+	if body, e := httpGetBody(ctx, asset.URL+".sha256", ""); e == nil {
 		if h := hex64.FindString(string(body)); h != "" {
-			return strings.ToLower(h), nil
+			return strings.ToLower(h), "", nil
 		}
 	}
 	for _, a := range rel.Assets {
@@ -173,22 +178,29 @@ func resolveSHA(ctx context.Context, rel *ghRelease, asset ghAsset) (string, err
 		if !strings.Contains(ln, "checksum") && ln != "sha256sums" && !strings.HasSuffix(ln, ".sha256sum") {
 			continue
 		}
-		body, err := httpGetBody(ctx, a.URL, "")
-		if err != nil {
+		body, e := httpGetBody(ctx, a.URL, "")
+		if e != nil {
 			continue
 		}
-		if h := shaForFile(string(body), asset.Name); h != "" {
-			return h, nil
+		if h := digestForFile(string(body), asset.Name, hex64); h != "" {
+			return h, "", nil
 		}
 	}
-	return "", fmt.Errorf("binmgr: no sha256 found for %s", asset.Name)
+	// Fallback: a per-asset .md5 sidecar (the only integrity check some tools ship).
+	if body, e := httpGetBody(ctx, asset.URL+".md5", ""); e == nil {
+		if h := hex32.FindString(string(body)); h != "" {
+			return "", strings.ToLower(h), nil
+		}
+	}
+	return "", "", fmt.Errorf("binmgr: no checksum (sha256/md5) found for %s", asset.Name)
 }
 
-// shaForFile finds the checksum line naming filename in a `sha256  filename` list.
-func shaForFile(checksums, filename string) string {
+// digestForFile finds the checksum line naming filename in a `<digest>  filename`
+// list and extracts the digest matching re.
+func digestForFile(checksums, filename string, re *regexp.Regexp) string {
 	for line := range strings.SplitSeq(checksums, "\n") {
 		if strings.Contains(line, filename) {
-			if h := hex64.FindString(line); h != "" {
+			if h := re.FindString(line); h != "" {
 				return strings.ToLower(h)
 			}
 		}
