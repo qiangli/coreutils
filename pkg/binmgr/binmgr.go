@@ -179,7 +179,7 @@ func extractTarGz(archivePath, member, dest string) error {
 		if err != nil {
 			return err
 		}
-		if filepath.Clean(hdr.Name) == filepath.Clean(member) {
+		if matchMember(hdr.Name, member) {
 			return writeFrom(tr, dest)
 		}
 	}
@@ -192,7 +192,7 @@ func extractZip(archivePath, member, dest string) error {
 	}
 	defer zr.Close()
 	for _, zf := range zr.File {
-		if filepath.Clean(zf.Name) == filepath.Clean(member) {
+		if matchMember(zf.Name, member) {
 			rc, err := zf.Open()
 			if err != nil {
 				return err
@@ -202,6 +202,13 @@ func extractZip(archivePath, member, dest string) error {
 		}
 	}
 	return fmt.Errorf("binmgr: %q not found in archive", member)
+}
+
+// matchMember matches an archive entry against the requested member by full
+// cleaned path OR by basename — so a Member like "kopia" finds both a root-level
+// "kopia" and a nested "kopia-0.18-linux-x64/kopia" without knowing the version.
+func matchMember(entryName, member string) bool {
+	return filepath.Clean(entryName) == filepath.Clean(member) || filepath.Base(entryName) == member
 }
 
 func writeFrom(r io.Reader, dest string) error {

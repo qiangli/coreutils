@@ -122,3 +122,37 @@ func TestEnsure_ExtractTarGz(t *testing.T) {
 		t.Fatalf("extracted content mismatch: %q", got)
 	}
 }
+
+// Member matches by basename: the binary is nested in a versioned subdir
+// (Kopia's layout), and Member "kopia" finds it without knowing the version.
+func TestEnsure_ExtractTarGz_NestedMember(t *testing.T) {
+	bin := []byte("kopia-binary")
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	_ = tw.WriteHeader(&tar.Header{Name: "kopia-0.18.0-linux-x64/LICENSE", Mode: 0o644, Size: 3})
+	_, _ = tw.Write([]byte("MIT"))
+	_ = tw.WriteHeader(&tar.Header{Name: "kopia-0.18.0-linux-x64/kopia", Mode: 0o755, Size: int64(len(bin))})
+	_, _ = tw.Write(bin)
+	_ = tw.Close()
+	_ = gz.Close()
+	archive := buf.Bytes()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	tool := Tool{
+		Name: "kopia", Version: "0.18.0",
+		Assets: map[string]Asset{Platform(): {URL: srv.URL + "/kopia.tar.gz", SHA256: sha256hex(archive), Binary: "kopia"}},
+	}
+	path, err := Ensure(context.Background(), tool)
+	if err != nil {
+		t.Fatalf("Ensure(nested): %v", err)
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, bin) {
+		t.Fatalf("nested extract mismatch: %q", got)
+	}
+}
