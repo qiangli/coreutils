@@ -24,7 +24,7 @@ func TestAssetMatch_MapsTokens(t *testing.T) {
 		name, goos, goarch string
 		want               bool
 	}{
-		{"kopia-0.18.0-linux-x64.tar.gz", "linux", "amd64", true},   // amd64→x64
+		{"kopia-0.18.0-linux-x64.tar.gz", "linux", "amd64", true},    // amd64→x64
 		{"kopia-0.18.0-macOS-arm64.tar.gz", "darwin", "arm64", true}, // darwin→macOS
 		{"kopia-0.18.0-macOS-x64.tar.gz", "darwin", "amd64", true},
 		{"kopia-0.18.0-windows-x64.zip", "windows", "amd64", true},
