@@ -1,0 +1,212 @@
+// Package loom runs Gitea as a managed external binary (pkg/binmgr) — the git
+// forge for the dhnt mesh. The Gitea binary is downloaded → sha256-verified →
+// cached by binmgr, never compiled in; bashy ("the OS of binaries") launches it
+// via `bashy loom`, and outpost exposes it over the mesh. "loom" keeps ycode's
+// name for the gitea-backed forge. See dhnt/docs/external-binary-builtins.md.
+package loom
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/binmgr"
+)
+
+const (
+	// DefaultVersion pins the Gitea release loom runs. "" / "latest" resolves the
+	// newest release dynamically; pin for reproducibility ($LOOM_GITEA_VERSION
+	// or --gitea-version override). go-gitea/gitea is MIT.
+	DefaultVersion = "latest"
+	DefaultAddr    = "127.0.0.1"
+	DefaultPort    = 3000
+)
+
+// Spec is the binmgr GitHub spec loom resolves the Gitea binary from.
+func Spec(version string) binmgr.GitHubSpec {
+	if version == "" {
+		version = DefaultVersion
+	}
+	return binmgr.GitHubSpec{Name: "loom", Repo: "go-gitea/gitea", Version: version}
+}
+
+// DefaultDataDir is loom's work-path (Gitea data + config + repos).
+func DefaultDataDir() string {
+	if d := os.Getenv("LOOM_DATA_DIR"); d != "" {
+		return d
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "loom")
+	}
+	return filepath.Join(home, ".agents", "bashy", "loom")
+}
+
+// Options configures Serve.
+type Options struct {
+	Version string // Gitea release (default DefaultVersion)
+	DataDir string // work-path (default DefaultDataDir)
+	Addr    string // HTTP bind addr (default 127.0.0.1 — loopback for the mesh)
+	Port    int    // HTTP port (default 3000)
+	Stdout  io.Writer
+	Stderr  io.Writer
+}
+
+func (o *Options) defaults() {
+	if o.Version == "" {
+		o.Version = DefaultVersion
+	}
+	if o.DataDir == "" {
+		o.DataDir = DefaultDataDir()
+	}
+	if o.Addr == "" {
+		o.Addr = DefaultAddr
+	}
+	if o.Port == 0 {
+		o.Port = DefaultPort
+	}
+	if o.Stdout == nil {
+		o.Stdout = os.Stdout
+	}
+	if o.Stderr == nil {
+		o.Stderr = os.Stderr
+	}
+}
+
+// Serve resolves + launches `gitea web` bound to a loopback port, blocking until
+// the context is cancelled or SIGINT/SIGTERM arrives. The config is seeded on
+// first run (INSTALL_LOCK, SQLite, a generated SECRET_KEY) so it comes up ready,
+// not on the /install screen.
+func Serve(ctx context.Context, o Options) error {
+	o.defaults()
+	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
+	if err != nil {
+		return fmt.Errorf("loom: resolve gitea: %w", err)
+	}
+	bin, err := binmgr.Ensure(ctx, tool)
+	if err != nil {
+		return fmt.Errorf("loom: fetch gitea: %w", err)
+	}
+	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	url := fmt.Sprintf("http://%s:%d", o.Addr, o.Port)
+	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
+		Args:       []string{"web", "--config", cfg},
+		Env:        []string{"GITEA_WORK_DIR=" + o.DataDir},
+		Dir:        o.DataDir,
+		Stdout:     o.Stdout,
+		Stderr:     o.Stderr,
+		HealthURL:  url,
+		HealthWait: 60 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("loom: start gitea: %w", err)
+	}
+	fmt.Fprintf(o.Stdout, "loom (gitea %s) serving on %s — work dir %s\n", tool.Version, url, o.DataDir)
+	fmt.Fprintln(o.Stdout, "expose it over the mesh:  outpost mesh service add git "+fmt.Sprintf("%s:%d", o.Addr, o.Port))
+
+	<-ctx.Done()
+	fmt.Fprintln(o.Stdout, "loom: shutting down…")
+	return proc.Stop(10 * time.Second)
+}
+
+// ensureConfig writes a minimal Gitea app.ini on first run and returns its path.
+func ensureConfig(dataDir, addr string, port int) (string, error) {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return "", err
+	}
+	cfgPath := filepath.Join(dataDir, "app.ini")
+	if _, err := os.Stat(cfgPath); err == nil {
+		return cfgPath, nil // already configured — reuse
+	}
+	secret, err := randomHex(32)
+	if err != nil {
+		return "", err
+	}
+	ini := renderConfig(dataDir, addr, port, secret)
+	if err := os.WriteFile(cfgPath, []byte(ini), 0o600); err != nil {
+		return "", err
+	}
+	return cfgPath, nil
+}
+
+// renderConfig is the minimal app.ini: INSTALL_LOCK so it boots ready, SQLite so
+// there's no external DB, loopback bind so only the mesh reaches it. Gitea
+// auto-generates + persists INTERNAL_TOKEN on first run when it's absent.
+func renderConfig(dataDir, addr string, port int, secret string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "APP_NAME = loom\nRUN_MODE = prod\n\n")
+	fmt.Fprintf(&b, "[server]\nHTTP_ADDR = %s\nHTTP_PORT = %d\nROOT_URL = http://%s:%d/\nDISABLE_SSH = true\n\n", addr, port, addr, port)
+	fmt.Fprintf(&b, "[database]\nDB_TYPE = sqlite3\nPATH = %s\n\n", filepath.Join(dataDir, "gitea.db"))
+	fmt.Fprintf(&b, "[repository]\nROOT = %s\n\n", filepath.Join(dataDir, "repositories"))
+	fmt.Fprintf(&b, "[security]\nINSTALL_LOCK = true\nSECRET_KEY = %s\n\n", secret)
+	fmt.Fprintf(&b, "[service]\nDISABLE_REGISTRATION = true\n")
+	return b.String()
+}
+
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// NewLoomCmd builds the `loom` command tree (bashy front-door + any cobra host).
+func NewLoomCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "loom",
+		Short: "Run Gitea (the mesh git forge) as a managed external binary",
+		Long: `loom runs Gitea — downloaded, sha256-verified, and cached by binmgr (not
+compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.`,
+	}
+	var o Options
+	serve := &cobra.Command{
+		Use:   "serve",
+		Short: "Download (if needed) + run gitea web on a loopback port",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return Serve(cmd.Context(), o)
+		},
+	}
+	serve.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: latest)")
+	serve.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
+	serve.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
+	serve.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
+
+	pathCmd := &cobra.Command{
+		Use:   "path",
+		Short: "Print the cached gitea binary path (fetching it if needed)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			tool, err := binmgr.ResolveGitHub(cmd.Context(), Spec(o.Version))
+			if err != nil {
+				return err
+			}
+			p, err := binmgr.Ensure(cmd.Context(), tool)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\t(gitea %s)\n", p, tool.Version)
+			return nil
+		},
+	}
+	pathCmd.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: latest)")
+
+	root.AddCommand(serve, pathCmd)
+	return root
+}
