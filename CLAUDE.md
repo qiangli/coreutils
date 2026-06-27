@@ -217,13 +217,39 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   `pkg/binmgr` (the shared managed-external-binary mechanism: `Ensure(Tool)`
   downloads → sha256-verifies → caches a per-platform release binary, and
   `Start`/`Launch`/`Process.Stop` supervise it with an optional health probe.
-  Stdlib-only. Both bashy — the "OS of binaries" host — and outpost — the lean
-  mesh supervisor — call it in-process to run wrapped tools (loom/Gitea, Zot,
-  SeaweedFS, Kopia) without compiling those heavy binaries into either; it is
-  the download half that complements `external/`'s exec-an-already-present-
-  binary wrappers. See dhnt/docs/external-binary-builtins.md).
+  Stdlib-only. `GitHubSpec` resolves GitHub releases; `URLSpec` resolves
+  non-GitHub vendors (e.g. act_runner on dl.gitea.com). Both bashy — the "OS of
+  binaries" host — and outpost — the lean mesh supervisor — call it in-process to
+  run wrapped tools (loom/Gitea, Zot, SeaweedFS, Kopia, **act_runner** — the
+  Gitea CI executor, `external/actrunner`) without compiling those heavy binaries
+  into either; it is the download half that complements `external/`'s
+  exec-an-already-present-binary wrappers. See
+  dhnt/docs/external-binary-builtins.md).
 - `cmds/yc` — the `yc` code-intelligence command (symbols / search-symbols /
   refs / repomap) over those engines, reachable through all three surfaces.
+
+### Embedded forks: ollama + podman (AgentOS Phase 4, 2026-06-27)
+
+Distinct from the download-and-run tools above, **ollama and podman are embedded
+forks we own** — for version/issue control and identical cross-platform behavior:
+
+- **`external/ollama`** — in-process ollama server + embedded runner; consumes
+  the `qiangli/ollama` fork (`external/ollama/src` submodule, `replace
+  github.com/ollama/ollama => ./external/ollama/src`). `NewManagedOllamaCmd()` is
+  the **isolated** front-door bashy mounts (own bashy-owned port, never 11434;
+  models under `~/.agents/bashy/ollama`).
+- **`external/podman/engine`** — the in-process libpod/buildah engine + machine
+  lifecycle (relocated from ycode's `internal/container`), consuming the
+  `qiangli/podman` fork (`external/podman/src` submodule, `replace
+  go.podman.io/podman/v6 => ./external/podman/src`) and the `pkg/oci` wrapper
+  module (`replace github.com/qiangli/coreutils/pkg/oci => ./pkg/oci`).
+  `engine.NewPodmanCmd()` is the front-door: pass-through to the embedded podman
+  with `CONTAINER_HOST` pinned to an **isolated `bashy` machine** (never the
+  host/ycode engine). `$BASHY_PODMAN_SYSTEM=1` defers to a host podman. The helper
+  binaries (podman/vfkit/gvproxy) build via `scripts/embed-{podman,vfkit,
+  gvproxy}.sh` into gitignored `*_embed/*.gz` blobs, consumed only under the
+  `embed_*` build tags (default build uses the stub → host/PATH fallback).
+  **This pulls the go floor to 1.26.2** (all consumers must match).
 
 Hosts: `bashy` (the AgentOS shell binary) wires `shell.Handler()` so the
 whole userland + `yc` run in-process, and mounts `pkg/weave` as `bashy weave`
