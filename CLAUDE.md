@@ -213,7 +213,15 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   document-parsing deps; the bare binary stays free of them), and
   `pkg/weave` + `pkg/weavecli` (the filesystem-based multi-agent workspace
   orchestrator — pure-filesystem, depends only on weavecli/cobra/pty, no
-  Gitea/loom; `NewWeaveCmd()` is the host-agnostic entry point).
+  Gitea/loom; `NewWeaveCmd()` is the host-agnostic entry point), and
+  `pkg/binmgr` (the shared managed-external-binary mechanism: `Ensure(Tool)`
+  downloads → sha256-verifies → caches a per-platform release binary, and
+  `Start`/`Launch`/`Process.Stop` supervise it with an optional health probe.
+  Stdlib-only. Both bashy — the "OS of binaries" host — and outpost — the lean
+  mesh supervisor — call it in-process to run wrapped tools (loom/Gitea, Zot,
+  SeaweedFS, Kopia) without compiling those heavy binaries into either; it is
+  the download half that complements `external/`'s exec-an-already-present-
+  binary wrappers. See dhnt/docs/external-binary-builtins.md).
 - `cmds/yc` — the `yc` code-intelligence command (symbols / search-symbols /
   refs / repomap) over those engines, reachable through all three surfaces.
 
