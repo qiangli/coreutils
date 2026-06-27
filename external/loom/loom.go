@@ -83,29 +83,43 @@ func (o *Options) defaults() {
 	}
 }
 
-// Serve resolves + launches `gitea web` bound to a loopback port, blocking until
-// the context is cancelled or SIGINT/SIGTERM arrives. The config is seeded on
-// first run (INSTALL_LOCK, SQLite, a generated SECRET_KEY) so it comes up ready,
-// not on the /install screen.
-func Serve(ctx context.Context, o Options) error {
+// Instance is a running loom (Gitea) server.
+type Instance struct {
+	URL     string // http://addr:port it serves on
+	Addr    string // addr:port (for `mesh service add git <addr>`)
+	Version string // resolved Gitea version
+	proc    *binmgr.Process
+}
+
+// Stop terminates the Gitea process gracefully.
+func (i *Instance) Stop() error {
+	if i == nil || i.proc == nil {
+		return nil
+	}
+	return i.proc.Stop(10 * time.Second)
+}
+
+// Start resolves + launches `gitea web` bound to a loopback port (NON-blocking):
+// it returns once the server answers (or errors). The config is seeded on first
+// run (INSTALL_LOCK, SQLite, a generated SECRET_KEY) so it comes up ready, not on
+// the /install screen. The caller owns the returned Instance's lifecycle — this
+// is what outpost's wrap-harness builtin supervises and exposes over the mesh.
+func Start(ctx context.Context, o Options) (*Instance, error) {
 	o.defaults()
 	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
 	if err != nil {
-		return fmt.Errorf("loom: resolve gitea: %w", err)
+		return nil, fmt.Errorf("loom: resolve gitea: %w", err)
 	}
 	bin, err := binmgr.Ensure(ctx, tool)
 	if err != nil {
-		return fmt.Errorf("loom: fetch gitea: %w", err)
+		return nil, fmt.Errorf("loom: fetch gitea: %w", err)
 	}
 	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	url := fmt.Sprintf("http://%s:%d", o.Addr, o.Port)
+	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
+	url := "http://" + addr
 	proc, err := binmgr.Launch(ctx, bin, binmgr.RunSpec{
 		Args:       []string{"web", "--config", cfg},
 		Env:        []string{"GITEA_WORK_DIR=" + o.DataDir},
@@ -116,14 +130,28 @@ func Serve(ctx context.Context, o Options) error {
 		HealthWait: 60 * time.Second,
 	})
 	if err != nil {
-		return fmt.Errorf("loom: start gitea: %w", err)
+		return nil, fmt.Errorf("loom: start gitea: %w", err)
 	}
-	fmt.Fprintf(o.Stdout, "loom (gitea %s) serving on %s — work dir %s\n", tool.Version, url, o.DataDir)
-	fmt.Fprintln(o.Stdout, "expose it over the mesh:  outpost mesh service add git "+fmt.Sprintf("%s:%d", o.Addr, o.Port))
+	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
+}
+
+// Serve runs loom in the foreground, blocking until the context is cancelled or
+// SIGINT/SIGTERM arrives (the `bashy loom serve` path).
+func Serve(ctx context.Context, o Options) error {
+	o.defaults()
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	inst, err := Start(ctx, o)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(o.Stdout, "loom (gitea %s) serving on %s — work dir %s\n", inst.Version, inst.URL, o.DataDir)
+	fmt.Fprintln(o.Stdout, "expose it over the mesh:  outpost mesh service add git "+inst.Addr)
 
 	<-ctx.Done()
 	fmt.Fprintln(o.Stdout, "loom: shutting down…")
-	return proc.Stop(10 * time.Second)
+	return inst.Stop()
 }
 
 // ensureConfig writes a minimal Gitea app.ini on first run and returns its path.
