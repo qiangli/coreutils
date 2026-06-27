@@ -11,13 +11,13 @@ import (
 // captured during today's incident — the 4 GB ycode-default vfkit
 // that survived its machine state being wiped. Used to catch a parser
 // regression against the actual format we'll see in production.
-const realVfkitArgs = `/Users/qiangli/Library/Caches/ycode/bin/vfkit --cpus 2 --memory 4096 --bootloader efi,variable-store=/Users/qiangli/.local/share/containers/podman/machine/applehv/efi-bl-ycode-default,create --device virtio-blk,path=/Users/qiangli/.local/share/containers/podman/machine/applehv/ycode-default-arm64.raw --device virtio-rng --device virtio-vsock,port=1025,socketURL=/var/folders/vg/.../podman/ycode-default.sock,listen --device virtio-serial,logFilePath=/var/folders/vg/.../podman/ycode-default.log --device virtio-net,unixSocketPath=/var/folders/vg/.../podman/ycode-default-gvproxy.sock,mac=5a:94:ef:e4:0c:ee --restful-uri tcp://localhost:62126`
+const realVfkitArgs = `/Users/you/Library/Caches/ycode/bin/vfkit --cpus 2 --memory 4096 --bootloader efi,variable-store=/Users/you/.local/share/containers/podman/machine/applehv/efi-bl-ycode-default,create --device virtio-blk,path=/Users/you/.local/share/containers/podman/machine/applehv/ycode-default-arm64.raw --device virtio-rng --device virtio-vsock,port=1025,socketURL=/var/folders/vg/.../podman/ycode-default.sock,listen --device virtio-serial,logFilePath=/var/folders/vg/.../podman/ycode-default.log --device virtio-net,unixSocketPath=/var/folders/vg/.../podman/ycode-default-gvproxy.sock,mac=5a:94:ef:e4:0c:ee --restful-uri tcp://localhost:62126`
 
-const realGvproxyArgs = `/Users/qiangli/Library/Caches/ycode/bin/gvproxy -mtu 1500 -ssh-port 62114 -listen-vfkit unixgram:///var/folders/vg/.../podman/ycode-default-gvproxy.sock -forward-sock /var/folders/vg/.../podman/ycode-default-api.sock -forward-dest /run/user/501/podman/podman.sock -forward-user core -forward-identity /Users/qiangli/.local/share/containers/podman/machine/machine -pid-file /var/folders/vg/.../podman/gvproxy.pid -log-file /var/folders/vg/.../podman/gvproxy.log`
+const realGvproxyArgs = `/Users/you/Library/Caches/ycode/bin/gvproxy -mtu 1500 -ssh-port 62114 -listen-vfkit unixgram:///var/folders/vg/.../podman/ycode-default-gvproxy.sock -forward-sock /var/folders/vg/.../podman/ycode-default-api.sock -forward-dest /run/user/501/podman/podman.sock -forward-user core -forward-identity /Users/you/.local/share/containers/podman/machine/machine -pid-file /var/folders/vg/.../podman/gvproxy.pid -log-file /var/folders/vg/.../podman/gvproxy.log`
 
 func TestExtractVfkitDiskPath(t *testing.T) {
 	got := extractVfkitDiskPath(realVfkitArgs)
-	want := "/Users/qiangli/.local/share/containers/podman/machine/applehv/ycode-default-arm64.raw"
+	want := "/Users/you/.local/share/containers/podman/machine/applehv/ycode-default-arm64.raw"
 	if got != want {
 		t.Errorf("got %q want %q", got, want)
 	}

@@ -12,7 +12,7 @@ checks the feature landed. Run with no target and the `orchestrate` default hand
 the whole batch to an agent:
 
 ```bash
-cd /Users/qiangli/projects/poc/dhnt/coreutils
+cd /Users/you/projects/poc/dhnt/coreutils
 bashy dag dag-p1.md                  # claude implements all of P1, then gates
 bashy dag dag-p1.md ORCH=codex       # pick: codex|claude|agy|opencode|aider
 bashy dag dag-p1.md --keep-going gate # red/green status of all six items

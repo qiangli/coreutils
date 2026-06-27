@@ -221,8 +221,8 @@ func TestEnvCacheFallbackWhenServerDown(t *testing.T) {
 // template is newer than the cache file.
 func TestEnvCacheInvalidatedOnTemplateEdit(t *testing.T) {
 	fv := newFakeVault(t)
-	fv.data["dragon-openai"] = "sk-a"
-	fv.data["dragon-deepseek"] = "sk-b"
+	fv.data["host-a-openai"] = "sk-a"
+	fv.data["host-a-deepseek"] = "sk-b"
 
 	cfgdir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgdir)
@@ -235,7 +235,7 @@ func TestEnvCacheInvalidatedOnTemplateEdit(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(mapPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(mapPath, []byte("OPENAI_API_KEY=@dragon-openai\n"), 0o600); err != nil {
+	if err := os.WriteFile(mapPath, []byte("OPENAI_API_KEY=@host-a-openai\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -255,7 +255,7 @@ func TestEnvCacheInvalidatedOnTemplateEdit(t *testing.T) {
 	}
 
 	// Edit the template (add a binding) and stamp it newer than the cache.
-	if err := os.WriteFile(mapPath, []byte("OPENAI_API_KEY=@dragon-openai\nDEEPSEEK_API_KEY=@dragon-deepseek\n"), 0o600); err != nil {
+	if err := os.WriteFile(mapPath, []byte("OPENAI_API_KEY=@host-a-openai\nDEEPSEEK_API_KEY=@host-a-deepseek\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	future := time.Now().Add(2 * time.Second)

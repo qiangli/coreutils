@@ -13,7 +13,7 @@ import (
 )
 
 func TestMeshCommandArgs(t *testing.T) {
-	if n, a := meshCommandArgs("ssh", "dragon", ""); n != "ssh" || !reflect.DeepEqual(a, []string{"dragon", "bash", "-s"}) {
+	if n, a := meshCommandArgs("ssh", "host-a", ""); n != "ssh" || !reflect.DeepEqual(a, []string{"host-a", "bash", "-s"}) {
 		t.Fatalf("simple = %q %v", n, a)
 	}
 	if n, a := meshCommandArgs("ssh -p 2222 -i key", "big", ""); n != "ssh" || !reflect.DeepEqual(a, []string{"-p", "2222", "-i", "key", "big", "bash", "-s"}) {
@@ -22,7 +22,7 @@ func TestMeshCommandArgs(t *testing.T) {
 	if n, a := meshCommandArgs("outpost exec", "winbox", "none"); n != "outpost" || !reflect.DeepEqual(a, []string{"exec", "winbox"}) {
 		t.Fatalf("none = %q %v", n, a)
 	}
-	if n, a := meshCommandArgs("ssh", "dragon", "pwsh -NoProfile -Command -"); n != "ssh" || !reflect.DeepEqual(a, []string{"dragon", "pwsh", "-NoProfile", "-Command", "-"}) {
+	if n, a := meshCommandArgs("ssh", "host-a", "pwsh -NoProfile -Command -"); n != "ssh" || !reflect.DeepEqual(a, []string{"host-a", "pwsh", "-NoProfile", "-Command", "-"}) {
 		t.Fatalf("custom shell = %q %v", n, a)
 	}
 	if n, _ := meshCommandArgs("", "h", ""); n != "ssh" {

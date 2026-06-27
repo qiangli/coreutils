@@ -83,10 +83,10 @@ func TestVarsExpandMetadata(t *testing.T) {
 func TestVarsResolvedForBodyEnv(t *testing.T) {
 	// expandVars returns the doc's resolved vars so the command layer can inject
 	// them into body env (frontmatter vars reach bodies, not just metadata).
-	md := "---\nvars:\n  HOST: novicortex\n  REF: main\n---\n## Tasks\n\n### t\n" + block("bash", "true")
+	md := "---\nvars:\n  HOST: host-b\n  REF: main\n---\n## Tasks\n\n### t\n" + block("bash", "true")
 	d := doc(t, md)
 	got := d.expandVars(nil, []string{"REF=dev"}) // CLI override wins
-	if got["HOST"] != "novicortex" {
+	if got["HOST"] != "host-b" {
 		t.Errorf("HOST resolved = %q", got["HOST"])
 	}
 	if got["REF"] != "dev" {

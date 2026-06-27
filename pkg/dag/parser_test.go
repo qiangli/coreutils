@@ -122,7 +122,7 @@ func TestParseTimeoutRetries(t *testing.T) {
 }
 
 func TestParseExitCodes(t *testing.T) {
-	md := "## Tasks\n\n### classify\nExitCodes: 0=ok 75=skip 2=retry 9=fail\nHost: dragon\n" +
+	md := "## Tasks\n\n### classify\nExitCodes: 0=ok 75=skip 2=retry 9=fail\nHost: host-a\n" +
 		block("bash", "exit 75")
 	doc, err := Parse(strings.NewReader(md), "DAG.md")
 	if err != nil {
@@ -133,7 +133,7 @@ func TestParseExitCodes(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("exit codes = %#v, want %#v", got, want)
 	}
-	if doc.Tasks[0].Host != "dragon" {
+	if doc.Tasks[0].Host != "host-a" {
 		t.Errorf("host = %q", doc.Tasks[0].Host)
 	}
 }

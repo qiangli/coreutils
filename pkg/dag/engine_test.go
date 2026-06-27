@@ -272,7 +272,7 @@ func (x *recordingExecutor) Execute(ctx context.Context, t *Task, tio TaskIO) Ta
 
 func TestEngineExecutorSeamReceivesHost(t *testing.T) {
 	dir := t.TempDir()
-	md := "## Tasks\n\n### remote\nHost: dragon\n" + block("bash", "echo remote")
+	md := "## Tasks\n\n### remote\nHost: host-a\n" + block("bash", "echo remote")
 	eng := engineFor(t, dir, md)
 	rec := &recordingExecutor{}
 	eng.Executor = rec
@@ -281,10 +281,10 @@ func TestEngineExecutorSeamReceivesHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if report.Failed || report.Results[0].Host != "dragon" {
+	if report.Failed || report.Results[0].Host != "host-a" {
 		t.Fatalf("host not carried through executor/report: %+v", report.Results)
 	}
-	if !reflect.DeepEqual(rec.hosts, []string{"dragon"}) {
+	if !reflect.DeepEqual(rec.hosts, []string{"host-a"}) {
 		t.Fatalf("executor hosts = %v", rec.hosts)
 	}
 }

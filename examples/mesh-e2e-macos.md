@@ -1,30 +1,31 @@
 ---
-name: mesh-e2e-novicortex
-description: Run a test/e2e suite on novicortex (28 cpu / 96GB), orchestrated locally
+name: mesh-e2e-macos
+description: Run a test/e2e suite on a paired macOS host, orchestrated locally
 default: e2e
 vars:
-  HOST: novicortex
+  HOST: bigbox
 ---
 
-# Mesh e2e on novicortex
+# Mesh e2e on a paired macOS host
 
-Drive the run on this machine; execute the suite on **novicortex** over `--mesh`.
+Drive the run on this machine; execute the suite on the remote host (`${HOST}`)
+over `--mesh`.
 
 ```bash
-bashy dag --mesh examples/mesh-e2e-novicortex.md                 # default goal: e2e
-bashy dag --mesh examples/mesh-e2e-novicortex.md SSH_RETRIES=30  # wait while you set up ssh
-bashy dag --mesh examples/mesh-e2e-novicortex.md HOST=other-box  # override the host
+bashy dag --mesh examples/mesh-e2e-macos.md                 # default goal: e2e
+bashy dag --mesh examples/mesh-e2e-macos.md SSH_RETRIES=30  # wait while you set up ssh
+bashy dag --mesh examples/mesh-e2e-macos.md HOST=other-box  # override the host
 ```
 
 How it works:
-- `bashy` is NOT needed on novicortex — the mesh runs the body in novicortex's
-  own `bash`; only this (orchestrator) host runs `bashy`.
+- `bashy` is NOT needed on the remote host — the mesh runs the body in the
+  remote's own `bash`; only this (orchestrator) host runs `bashy`.
 - Code is pulled from **GitHub directly** by the worker (the data plane); the SSH
   control channel carries only the command + output.
 - `ssh-ready` checks connectivity (locally); the `e2e` target's builtin
-  **`Tools:` preflight** checks `git`/`podman` exist ON novicortex before doing
-  any work — a missing tool fails with `dag: required tool not found: …`.
-- The workspace persists at `~/dag-ws/<repo>` on novicortex (idempotent clone).
+  **`Tools:` preflight** checks `git`/`podman` exist on the remote host before
+  doing any work — a missing tool fails with `dag: required tool not found: …`.
+- The workspace persists at `~/dag-ws/<repo>` on the remote host (idempotent clone).
 - Edit `REPO`/`REF`/`SUITE` in the `e2e` body for your suite.
 
 > `Tools:` runs against the remote's non-login PATH (so `git`, `podman`, system
@@ -70,7 +71,7 @@ export PATH="$HOME/.local/share/mise/shims:/opt/homebrew/bin:$PATH"
 command -v go >/dev/null || { echo "go not found (install: mise use -g go@latest)" >&2; exit 3; }
 
 # --- EDIT for your suite -------------------------------------------------
-REPO="qiangli/coreutils"      # GitHub owner/name
+REPO="you/repo"               # GitHub owner/name
 REF="main"
 SUITE="go test ./..."         # your e2e command
 # ------------------------------------------------------------------------

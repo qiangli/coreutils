@@ -78,9 +78,9 @@ REFERENCE (@name, or @{name}) resolved from the vault; any other RHS is a
 literal value. The template contains NO secrets, so it is safe to commit:
 
   # ~/.config/bashy/secrets.map
-  OPENAI_API_KEY=@dragon-aider-openai
-  DEEPSEEK_API_KEY=@dragon-aider-deepseek
-  ANTHROPIC_API_KEY=@monkey-opencode-anthropic
+  OPENAI_API_KEY=@host-a-aider-openai
+  DEEPSEEK_API_KEY=@host-a-aider-deepseek
+  ANTHROPIC_API_KEY=@host-b-opencode-anthropic
   EDITOR=vim                      # a bare literal, not a reference
 
 env fetches each referenced value from cloudbox and emits

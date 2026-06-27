@@ -12,7 +12,7 @@ even though the real backend (S3/podman/outpost-mesh) is external — implement 
 TEST the seam, document the backend as the consumer.
 
 ```bash
-cd /Users/qiangli/projects/poc/dhnt/coreutils
+cd /Users/you/projects/poc/dhnt/coreutils
 bashy dag dag-p2.md ORCH=codex          # codex implements all of P2, then gates
 bashy dag dag-p2.md --keep-going gate   # red/green status of all five items
 ```
@@ -171,7 +171,7 @@ SPEC:
   in-process bash interpreter; add a no-op/local "executor" abstraction the future
   outpost-mesh dispatcher plugs into. Surface the resolved `host` in the `--json`
   run item (empty = local).
-ACCEPTANCE: a target with `Host: dragon` reports `"host":"dragon"` in `--json`;
+ACCEPTANCE: a target with `Host: host-a` reports `"host":"host-a"` in `--json`;
 with no Host it runs locally exactly as before (all existing tests pass).
 Requires: baseline
 Effects: read

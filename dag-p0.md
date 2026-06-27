@@ -12,7 +12,7 @@ default `orchestrate` goal hands the whole batch to an agentic orchestrator, the
 gates — everything is taken care of automatically:
 
 ```bash
-cd /Users/qiangli/projects/poc/dhnt/coreutils
+cd /Users/you/projects/poc/dhnt/coreutils
 bashy dag dag-p0.md                  # claude orchestrates all of P0, then gates
 bashy dag dag-p0.md ORCH=codex       # pick the orchestrator: codex|claude|agy|opencode|aider
 ```

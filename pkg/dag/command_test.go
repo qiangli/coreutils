@@ -136,7 +136,7 @@ func TestCommandVarOverride(t *testing.T) {
 }
 
 func TestCommandRunJSONSurfacesHost(t *testing.T) {
-	md := "## Tasks\n\n### remote\nHost: dragon\n" + block("bash", "echo ok")
+	md := "## Tasks\n\n### remote\nHost: host-a\n" + block("bash", "echo ok")
 	path := writeDAG(t, md)
 
 	cmd := NewDagCmd()
@@ -159,7 +159,7 @@ func TestCommandRunJSONSurfacesHost(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, out.String())
 	}
-	if len(env.Result.Tasks) != 1 || env.Result.Tasks[0].Host != "dragon" {
+	if len(env.Result.Tasks) != 1 || env.Result.Tasks[0].Host != "host-a" {
 		t.Fatalf("host not surfaced: %+v", env.Result.Tasks)
 	}
 }
