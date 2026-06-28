@@ -256,6 +256,10 @@ func processOperand(rc *tool.RunContext, t *tool.Tool, op string, o opts) int {
 		os.Chmod(outPath, fi.Mode().Perm())
 		os.Chtimes(outPath, fi.ModTime(), fi.ModTime())
 		if !o.keep {
+			// Close the source before removing it: Windows refuses to remove a
+			// file that is still open (unix allows the unlink-while-open). The
+			// deferred in.Close() above then no-ops on the already-closed file.
+			in.Close()
 			if err := os.Remove(path); err != nil {
 				fmt.Fprintf(rc.Err, "%s: %s: %v\n", t.Name, op, err)
 				code = worse(code, exWarning)
