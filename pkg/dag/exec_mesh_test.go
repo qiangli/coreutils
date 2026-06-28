@@ -4,12 +4,12 @@
 package dag
 
 import (
-	"runtime"
 	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -74,6 +74,9 @@ func TestMeshExecutorDispatchesToRemote(t *testing.T) {
 }
 
 func TestMeshExecutorRemoteShellNoneFeedsBodyDirectly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake remote is a shell script — unix-only test harness")
+	}
 	// Fake outpost transport: it expects only the host arg and consumes the body
 	// from stdin itself. If dag appends "bash -s", this exits with usage failure.
 	dir := t.TempDir()

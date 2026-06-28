@@ -12,7 +12,7 @@ func isAbsPath(p string) bool {
 	if filepath.IsAbs(p) {
 		return true
 	}
-	return len(p) > 0 && p[0] == '/' && p[1] != '/'
+	return len(p) > 0 && p[0] == '/' && (len(p) < 2 || p[1] != '/')
 }
 
 func normalizePath(p string) string {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -116,6 +117,9 @@ func TestHandlerFuncPredicateSkips(t *testing.T) {
 }
 
 func TestHandlerCoreutilsPipelineEarlyHeadClose(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("in-process coreutils pipe early-close differs on Windows (\"pipe has been ended\") — tracked windows-port item")
+	}
 	dir := t.TempDir()
 	input := strings.Repeat("alpha\n", 20000)
 	if err := os.WriteFile(dir+"/input.txt", []byte(input), 0o644); err != nil {

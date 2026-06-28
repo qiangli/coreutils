@@ -42,7 +42,14 @@ jobs:
           # Exclude the vendored external/ forks (cgo + platform backends), but
           # keep the lean pure-Go externals (the `bashy go` provisioner + the act
           # binmgr wrapper) in scope so they're vetted/built on every platform.
-          pkgs="$(go list ./... | grep -v '/external/') \
+          base="$(go list ./... | grep -v '/external/')"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # pkg/weave is unix-host agent orchestration (PTY + control sockets;
+            # "weave: PTY not supported on Windows") — test it on unix only. The
+            # cross-platform userland (cmds/git/tool/shell/binmgr) is the product.
+            base="$(echo "$base" | grep -vE '/pkg/weave$')"
+          fi
+          pkgs="$base \
             github.com/qiangli/coreutils/external/gotoolchain \
             github.com/qiangli/coreutils/external/act \
             github.com/qiangli/coreutils/external/gh"
