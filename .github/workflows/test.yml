@@ -28,6 +28,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: Configure git identity (weave tests create real commits)
+        shell: bash
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
       # The vendored external/ forks (ollama, podman) pull cgo + Apple MLX
       # (darwin-only) and are upstream's to test. Vet + test coreutils' OWN
       # packages on every platform — that pure-Go userland is the product.
