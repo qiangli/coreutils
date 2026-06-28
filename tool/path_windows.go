@@ -23,7 +23,17 @@ func isAbsPath(p string) bool {
 	return false
 }
 
+// normalizePath converts a shell-style path into a real Windows path. It is the
+// tool entry point (RunContext.Path resolves operands through it), so the
+// MSYS/Git-Bash drive convention is honored here: /c/foo -> C:\foo, a bare
+// drive-less /foo -> <SystemDrive>\foo, everything else slash-converted.
 func normalizePath(p string) string {
+	if drive, rest, ok := msysDriveSplit(p); ok {
+		return drive + ":" + filepath.FromSlash(rest)
+	}
+	if len(p) > 0 && p[0] == '/' && (len(p) < 2 || p[1] != '/') {
+		return systemDrive() + filepath.FromSlash(p[1:])
+	}
 	return filepath.FromSlash(p)
 }
 
@@ -87,21 +97,34 @@ func systemDrive() string {
 	return sd + `\`
 }
 
-func toOSPath(p string) string {
-	if len(p) > 0 && p[0] == '/' && (len(p) < 2 || p[1] != '/') {
-		return systemDrive() + filepath.FromSlash(p[1:])
+// toOSPath converts a shell path to a Windows path (now identical to
+// normalizePath, which honors the MSYS drive convention).
+func toOSPath(p string) string { return normalizePath(p) }
+
+// msysDriveSplit recognizes the MSYS/Git-Bash drive convention "/c" or "/c/...":
+// a leading slash, one ASCII letter, then end-of-string or another slash. It
+// returns the UPPERCASE drive letter and the remainder beginning with a slash
+// ("/c" -> "C","/"; "/c/Users" -> "C","/Users"). This is the standard way every
+// Windows dev tool spells C:\ as a POSIX path, so a node's scripts are portable.
+func msysDriveSplit(p string) (drive, rest string, ok bool) {
+	if len(p) >= 2 && p[0] == '/' && isASCIILetter(p[1]) && (len(p) == 2 || p[2] == '/') {
+		r := p[2:]
+		if r == "" {
+			r = "/"
+		}
+		return string(p[1] &^ 0x20), r, true // &^0x20 = ASCII upper
 	}
-	return normalizePath(p)
+	return "", "", false
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 func fromOSPath(p string) string {
-	drv := systemDrive()
-	drvLen := len(drv)
-	if len(p) >= drvLen && strings.EqualFold(p[:drvLen], drv) {
-		if rest := p[drvLen:]; rest != "" {
-			return "/" + filepath.ToSlash(rest)
-		}
-		return "/"
+	// C:\foo -> /c/foo (any drive letter; reverse of the MSYS convention).
+	if len(p) >= 2 && isASCIILetter(p[0]) && p[1] == ':' {
+		return "/" + string(p[0]|0x20) + filepath.ToSlash(p[2:]) // |0x20 = ASCII lower
 	}
 	if len(p) > 0 && p[0] == '\\' && (len(p) < 2 || p[1] != '\\') {
 		return "/" + filepath.ToSlash(p[1:])
