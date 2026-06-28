@@ -57,9 +57,18 @@ func resolveExecutable(rc *RunContext, name string) string {
 		return p
 	}
 	exts := pathextFromEnv(rc.Env)
-	for _, e := range exts {
-		if fp := p + e; isRegularFile(fp) {
-			return fp
+	dir, base := filepath.Dir(p), filepath.Base(p)
+	// Resolve to the ACTUAL directory entry (case-preserved): Windows' FS is
+	// case-insensitive, so "myprog"+PATHEXT ".BAT" matches a real "myprog.bat" —
+	// return the file's own case, not the PATHEXT spelling, in PATHEXT priority.
+	if ents, err := os.ReadDir(dir); err == nil {
+		for _, e := range exts {
+			want := base + e
+			for _, ent := range ents {
+				if ent.Type().IsRegular() && strings.EqualFold(ent.Name(), want) {
+					return filepath.Join(dir, ent.Name())
+				}
+			}
 		}
 	}
 	return p
