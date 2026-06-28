@@ -16,8 +16,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # external/ollama/src and external/podman/src are submodules (the
+          # vendored forks); needed so the module graph resolves.
+          submodules: recursive
+      # coreutils resolves the sh engine via `replace mvdan.cc/sh/v3 => ../sh`.
+      # Clone it next door (CI is a standalone clone, not the dhnt umbrella).
+      - name: Clone sibling ../sh
+        shell: bash
+        run: git clone --quiet --depth 1 https://github.com/qiangli/sh.git ../sh
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: go vet ./...
-      - run: go test ./...
+      # The vendored external/ forks (ollama, podman) pull cgo + Apple MLX
+      # (darwin-only) and are upstream's to test. Vet + test coreutils' OWN
+      # packages on every platform — that pure-Go userland is the product.
+      - name: Vet + test (coreutils packages; vendored external/ forks excluded)
+        shell: bash
+        run: |
+          pkgs=$(go list ./... | grep -v '/external/')
+          go vet $pkgs
+          go test $pkgs
