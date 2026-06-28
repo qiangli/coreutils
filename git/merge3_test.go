@@ -1,6 +1,7 @@
 package git
 
 import (
+	"runtime"
 	"errors"
 	"os"
 	"path/filepath"
@@ -257,6 +258,9 @@ func TestMerge_NoSystemGit(t *testing.T) {
 // (exec bit) survives to the worktree — O_TRUNC alone would have kept the
 // old permissions.
 func TestMerge_PreservesTheirsModeChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the executable bit does not exist on Windows, so a mode-only change is a no-op")
+	}
 	dir := t.TempDir()
 	if _, err := Init(InitOptions{Path: dir}); err != nil {
 		t.Fatalf("init: %v", err)

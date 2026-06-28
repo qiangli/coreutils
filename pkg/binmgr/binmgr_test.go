@@ -47,8 +47,8 @@ func TestEnsure_DownloadVerifyCacheHit(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("cached content mismatch")
 	}
-	if info, _ := os.Stat(path); info.Mode()&0o111 == 0 {
-		t.Fatalf("cached binary is not executable: %v", info.Mode())
+	if !isExecutable(path) { // exec-bit on unix; .exe/any-file on Windows
+		t.Fatalf("cached binary is not executable: %s", path)
 	}
 	if hits != 1 {
 		t.Fatalf("expected 1 download, got %d", hits)

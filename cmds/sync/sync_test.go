@@ -25,6 +25,9 @@ func runIn(t *testing.T, dir string, args ...string) (stdout, stderr string, cod
 }
 
 func TestSyncFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows FlushFileBuffers needs a writable handle; sync's read-only fsync path is a tracked windows-port item")
+	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f1"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)

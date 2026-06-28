@@ -4,6 +4,7 @@
 package dag
 
 import (
+	"runtime"
 	"bytes"
 	"context"
 	"os"
@@ -46,6 +47,9 @@ func TestMeshExecutorHostlessRunsLocal(t *testing.T) {
 }
 
 func TestMeshExecutorDispatchesToRemote(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake remote is a #!/bin/sh script — unix-only test harness")
+	}
 	// Fake "remote" transport that runs locally: it drops the host arg and execs
 	// the rest (`bash -s`), so the body — fed on stdin — runs here. This exercises
 	// the full dispatch path (argv build + stdin body + capture) hermetically.
