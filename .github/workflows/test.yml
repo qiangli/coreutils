@@ -39,6 +39,11 @@ jobs:
       - name: Vet + test (coreutils packages; vendored external/ forks excluded)
         shell: bash
         run: |
-          pkgs=$(go list ./... | grep -v '/external/')
+          # Exclude the vendored external/ forks (cgo + platform backends), but
+          # keep the lean pure-Go externals (the `bashy go` provisioner + the act
+          # binmgr wrapper) in scope so they're vetted/built on every platform.
+          pkgs="$(go list ./... | grep -v '/external/') \
+            github.com/qiangli/coreutils/external/gotoolchain \
+            github.com/qiangli/coreutils/external/act"
           go vet $pkgs
           go test $pkgs
