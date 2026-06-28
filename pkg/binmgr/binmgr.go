@@ -245,8 +245,13 @@ func extractZip(archivePath, member, dest string) error {
 // matchMember matches an archive entry against the requested member by full
 // cleaned path OR by basename — so a Member like "kopia" finds both a root-level
 // "kopia" and a nested "kopia-0.18-linux-x64/kopia" without knowing the version.
+// On Windows it also accepts the `.exe` the Member spec omits (e.g. Member "gh"
+// matches "gh_2.62_windows_amd64/bin/gh.exe"), so cross-platform tools resolve.
 func matchMember(entryName, member string) bool {
-	return filepath.Clean(entryName) == filepath.Clean(member) || filepath.Base(entryName) == member
+	if filepath.Clean(entryName) == filepath.Clean(member) || filepath.Base(entryName) == member {
+		return true
+	}
+	return runtime.GOOS == "windows" && filepath.Base(entryName) == member+".exe"
 }
 
 func writeFrom(r io.Reader, dest string) error {
