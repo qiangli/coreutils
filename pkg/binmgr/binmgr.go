@@ -43,6 +43,14 @@ type Asset struct {
 	// Binary is the path to the executable WITHIN an archive (e.g.
 	// "gitea/gitea"); empty means the download is itself the raw binary.
 	Binary string `json:"binary,omitempty"`
+	// Tree requests whole-archive ("recursive") extraction instead of pulling a
+	// single Binary member: the entire .tar.gz/.zip tree is unpacked into the
+	// tool's cache dir, preserving modes and symlinks. Use it for tools that need
+	// their full layout to run (a Go toolchain's bin/+pkg/+src/, an SDK, …).
+	Tree bool `json:"tree,omitempty"`
+	// Entrypoint is the executable's slash-separated path within the extracted
+	// tree (e.g. "go/bin/go"); required when Tree is set, ignored otherwise.
+	Entrypoint string `json:"entrypoint,omitempty"`
 }
 
 // Tool is a managed external binary: a logical name, a version (the cache key),
@@ -93,6 +101,12 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	}
 	dir := filepath.Join(root, t.Name, t.Version)
 	dest := filepath.Join(dir, binaryName(t.Name))
+	if asset.Tree {
+		if asset.Entrypoint == "" {
+			return "", fmt.Errorf("binmgr: %s %s: Tree asset needs an Entrypoint", t.Name, t.Version)
+		}
+		dest = filepath.Join(dir, filepath.FromSlash(asset.Entrypoint))
+	}
 	if isExecutable(dest) {
 		return dest, nil // cache hit — no network
 	}
@@ -122,11 +136,22 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 		}
 	}
 
-	if asset.Binary != "" {
+	switch {
+	case asset.Tree:
+		// Whole-archive extraction into dir/ (preserves the archive's own
+		// layout + modes); dest is dir/<entrypoint>.
+		if err := extractTree(tmpName, asset.URL, dir); err != nil {
+			return "", err
+		}
+		if !isExecutable(dest) {
+			return "", fmt.Errorf("binmgr: %s %s: entrypoint missing after extract: %s", t.Name, t.Version, dest)
+		}
+		return dest, nil
+	case asset.Binary != "":
 		if err := extract(tmpName, asset.URL, asset.Binary, dest); err != nil {
 			return "", err
 		}
-	} else {
+	default:
 		if err := os.Rename(tmpName, dest); err != nil {
 			// cross-device fallback
 			if cerr := copyFile(tmpName, dest); cerr != nil {
@@ -239,6 +264,119 @@ func writeFrom(r io.Reader, dest string) error {
 		return err
 	}
 	return os.Rename(tmp, dest)
+}
+
+// extractTree unpacks an entire .tar.gz/.zip into destDir, preserving the
+// archive's directory layout, file modes, and symlinks. This is the "recursive"
+// counterpart to the single-member extract, for tools that need their whole
+// tree (e.g. a Go toolchain).
+func extractTree(archivePath, url, destDir string) error {
+	switch {
+	case strings.HasSuffix(url, ".zip"):
+		return extractTreeZip(archivePath, destDir)
+	case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".tgz"):
+		return extractTreeTarGz(archivePath, destDir)
+	default:
+		return fmt.Errorf("binmgr: tree extraction needs a .zip/.tar.gz, got %s", url)
+	}
+}
+
+func extractTreeTarGz(archivePath, destDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		target, err := safeJoinTree(destDir, hdr.Name)
+		if err != nil {
+			return err
+		}
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := writeTreeFile(target, tr, os.FileMode(hdr.Mode)); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			_ = os.MkdirAll(filepath.Dir(target), 0o755)
+			_ = os.Remove(target)
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func extractTreeZip(archivePath, destDir string) error {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	for _, zf := range zr.File {
+		target, err := safeJoinTree(destDir, zf.Name)
+		if err != nil {
+			return err
+		}
+		if zf.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		rc, err := zf.Open()
+		if err != nil {
+			return err
+		}
+		err = writeTreeFile(target, rc, zf.Mode())
+		rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeTreeFile(target string, r io.Reader, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode|0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, r); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// safeJoinTree guards against path traversal (zip-slip) in archive entries.
+func safeJoinTree(destDir, name string) (string, error) {
+	target := filepath.Join(destDir, name)
+	clean := filepath.Clean(destDir)
+	if target != clean && !strings.HasPrefix(target, clean+string(os.PathSeparator)) {
+		return "", fmt.Errorf("binmgr: unsafe path in archive: %s", name)
+	}
+	return target, nil
 }
 
 func copyFile(src, dest string) error {

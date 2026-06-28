@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -120,6 +121,55 @@ func TestEnsure_ExtractTarGz(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if !bytes.Equal(got, bin) {
 		t.Fatalf("extracted content mismatch: %q", got)
+	}
+}
+
+// Tree extraction ("recursive" Ensure): the WHOLE archive is unpacked and the
+// Entrypoint is returned — a Go-toolchain-style layout where the binary needs
+// its sibling tree to run.
+func TestEnsure_ExtractTree(t *testing.T) {
+	binv := []byte("go-binary")
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	_ = tw.WriteHeader(&tar.Header{Name: "go/bin/go", Mode: 0o755, Size: int64(len(binv))})
+	_, _ = tw.Write(binv)
+	_ = tw.WriteHeader(&tar.Header{Name: "go/VERSION", Mode: 0o644, Size: 7})
+	_, _ = tw.Write([]byte("go1.2.3"))
+	_ = tw.Close()
+	_ = gz.Close()
+	archive := buf.Bytes()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	tool := Tool{
+		Name: "go", Version: "1.2.3",
+		Assets: map[string]Asset{Platform(): {
+			URL: srv.URL + "/go.tar.gz", SHA256: sha256hex(archive),
+			Tree: true, Entrypoint: "go/bin/go",
+		}},
+	}
+	path, err := Ensure(context.Background(), tool)
+	if err != nil {
+		t.Fatalf("Ensure(tree): %v", err)
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, binv) {
+		t.Fatalf("entrypoint content mismatch: %q", got)
+	}
+	// The sibling tree file proves the whole archive was extracted, not just the
+	// entrypoint member.
+	ver, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(path)), "VERSION"))
+	if err != nil || string(ver) != "go1.2.3" {
+		t.Fatalf("sibling tree file not extracted: %v %q", err, ver)
+	}
+	// Cache hit: a second Ensure resolves with no network (server closed).
+	srv.Close()
+	if path2, err := Ensure(context.Background(), tool); err != nil || path2 != path {
+		t.Fatalf("tree cache-hit failed: %v %q", err, path2)
 	}
 }
 
