@@ -12,7 +12,15 @@ func isAbsPath(p string) bool {
 	if filepath.IsAbs(p) {
 		return true
 	}
-	return len(p) > 0 && p[0] == '/' && (len(p) < 2 || p[1] != '/')
+	if p == "" {
+		return false
+	}
+	// A leading slash OR backslash is a drive-relative absolute path on Windows
+	// (we map it onto the system drive); a doubled separator (UNC) is not.
+	if p[0] == '/' || p[0] == '\\' {
+		return len(p) < 2 || (p[1] != '/' && p[1] != '\\')
+	}
+	return false
 }
 
 func normalizePath(p string) string {
