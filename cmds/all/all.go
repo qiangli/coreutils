@@ -67,6 +67,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/tail"
 	_ "github.com/qiangli/coreutils/cmds/tar"
 	_ "github.com/qiangli/coreutils/cmds/tee"
+	_ "github.com/qiangli/coreutils/cmds/time"
 	_ "github.com/qiangli/coreutils/cmds/touch"
 	_ "github.com/qiangli/coreutils/cmds/tr"
 	_ "github.com/qiangli/coreutils/cmds/true"
