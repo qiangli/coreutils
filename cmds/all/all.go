@@ -50,6 +50,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/realpath"
 	_ "github.com/qiangli/coreutils/cmds/rm"
 	_ "github.com/qiangli/coreutils/cmds/rmdir"
+	_ "github.com/qiangli/coreutils/cmds/sed"
 	_ "github.com/qiangli/coreutils/cmds/seq"
 	_ "github.com/qiangli/coreutils/cmds/sha1sum"
 	_ "github.com/qiangli/coreutils/cmds/sha224sum"

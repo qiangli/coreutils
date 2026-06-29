@@ -39,6 +39,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/pkg/ignore"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -251,12 +252,12 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (*r
 		case fixed:
 			parts = append(parts, regexp.QuoteMeta(p))
 		case extended:
-			if err := validateERE(p); err != nil {
+			if err := bre.ValidateERE(p); err != nil {
 				return nil, err
 			}
 			parts = append(parts, p)
 		default:
-			t, err := breToGo(p)
+			t, err := bre.ToGo(p)
 			if err != nil {
 				return nil, err
 			}

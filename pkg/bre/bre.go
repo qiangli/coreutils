@@ -1,4 +1,7 @@
-// BRE → RE2 translation for grep's default matcher.
+// Package bre translates POSIX Basic Regular Expressions (plus the common GNU
+// extensions) into Go RE2 syntax, shared by the pure-Go tools that default to
+// BRE (grep, sed). RE2 cannot express back-references or word-edge anchors, so
+// those are rejected with a clear error rather than silently mis-matched.
 //
 // Supported BRE constructs (translated to the equivalent Go regexp):
 //
@@ -21,11 +24,10 @@
 //	\<meta>                       escaped metacharacter = literal
 //	( ) { } + ? |                 unescaped = literal (BRE rule)
 //
-// Rejected with a clear error (RE2 cannot express them — never
-// mis-matched): back-references \1..\9, word-edge anchors \< \>,
-// collating symbols [. .], equivalence classes [= =], and any
-// alphanumeric escape with no defined translation.
-package grepcmd
+// Rejected with a clear error: back-references \1..\9, word-edge anchors \< \>,
+// collating symbols [. .], equivalence classes [= =], and any alphanumeric
+// escape with no defined translation.
+package bre
 
 import (
 	"fmt"
@@ -40,9 +42,9 @@ const (
 	posAnchor        // after ^ or $ (quantifier would be literal)
 )
 
-// breToGo translates one POSIX basic regular expression (plus the GNU
-// extensions listed in the package comment) into Go RE2 syntax.
-func breToGo(p string) (string, error) {
+// ToGo translates one POSIX basic regular expression (plus the GNU extensions
+// listed in the package comment) into Go RE2 syntax.
+func ToGo(p string) (string, error) {
 	var b strings.Builder
 	state := posStart
 	i := 0
@@ -92,14 +94,14 @@ func breToGo(p string) (string, error) {
 				b.WriteByte(n)
 				i += 2
 			case n >= '1' && n <= '9':
-				return "", fmt.Errorf("back-reference \\%c is not supported by pure-Go grep (RE2 has no back-references)", n)
+				return "", fmt.Errorf("back-reference \\%c is not supported (RE2 has no back-references)", n)
 			case n == 'w' || n == 'W' || n == 's' || n == 'S' || n == 'b' || n == 'B':
 				b.WriteByte('\\')
 				b.WriteByte(n)
 				state = posAtom
 				i += 2
 			case n == '<' || n == '>':
-				return "", fmt.Errorf("\\%c word-edge anchor is not supported by pure-Go grep (use \\b)", n)
+				return "", fmt.Errorf("\\%c word-edge anchor is not supported (use \\b)", n)
 			case n >= utf8.RuneSelf:
 				r, sz := utf8.DecodeRuneInString(p[i+1:])
 				b.WriteRune(r)
@@ -194,9 +196,9 @@ func normalizeInterval(s string) (string, bool) {
 	return lo + "," + hi, true
 }
 
-// translateBracket converts one POSIX bracket expression (s starts at
-// '[') to RE2 class syntax, returning the translation and the number
-// of input bytes consumed.
+// translateBracket converts one POSIX bracket expression (s starts at '[') to
+// RE2 class syntax, returning the translation and the number of input bytes
+// consumed.
 func translateBracket(s string) (string, int, error) {
 	var b strings.Builder
 	b.WriteByte('[')
@@ -220,7 +222,7 @@ func translateBracket(s string) (string, int, error) {
 			b.WriteString(s[i : i+end+2]) // RE2 supports [:class:] directly
 			i += end + 2
 		case s[i] == '[' && i+1 < len(s) && (s[i+1] == '.' || s[i+1] == '='):
-			return "", 0, fmt.Errorf("collating symbols [. .] / equivalence classes [= =] are not supported by pure-Go grep")
+			return "", 0, fmt.Errorf("collating symbols [. .] / equivalence classes [= =] are not supported")
 		case s[i] == '\\':
 			// backslash is a literal member in POSIX bracket expressions
 			b.WriteString(`\\`)
@@ -238,19 +240,19 @@ func translateBracket(s string) (string, int, error) {
 	return "", 0, fmt.Errorf("unmatched [")
 }
 
-// validateERE rejects the POSIX/GNU ERE constructs RE2 cannot
-// express; everything else passes through to Go regexp unchanged.
-func validateERE(p string) error {
+// ValidateERE rejects the POSIX/GNU ERE constructs RE2 cannot express;
+// everything else passes through to Go regexp unchanged.
+func ValidateERE(p string) error {
 	for i := 0; i+1 < len(p); i++ {
 		if p[i] != '\\' {
 			continue
 		}
 		n := p[i+1]
 		if n >= '1' && n <= '9' {
-			return fmt.Errorf("back-reference \\%c is not supported by pure-Go grep (RE2 has no back-references)", n)
+			return fmt.Errorf("back-reference \\%c is not supported (RE2 has no back-references)", n)
 		}
 		if n == '<' || n == '>' {
-			return fmt.Errorf("\\%c word-edge anchor is not supported by pure-Go grep (use \\b)", n)
+			return fmt.Errorf("\\%c word-edge anchor is not supported (use \\b)", n)
 		}
 		i++
 	}
