@@ -39,6 +39,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/ignore"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -71,6 +72,8 @@ type grepper struct {
 	exclude    []string
 	excludeDir []string
 
+	matcher *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
+
 	anyMatch   bool
 	anyErr     bool
 	listedWout bool
@@ -100,6 +103,7 @@ func run(rc *tool.RunContext, args []string) int {
 	include := fs.StringArray("include", nil, "search only files whose base name matches GLOB")
 	exclude := fs.StringArray("exclude", nil, "skip files whose base name matches GLOB")
 	excludeDir := fs.StringArray("exclude-dir", nil, "skip directories whose base name matches GLOB")
+	agentic := fs.Bool("agentic", false, "opt-in: skip .gitignore'd and noise paths (node_modules, .git, vendor, …) during recursive search")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -163,6 +167,11 @@ func run(rc *tool.RunContext, args []string) int {
 		exclude:    *exclude,
 		excludeDir: *excludeDir,
 	}
+	// --agentic (opt-in): a nil matcher when off skips nothing, so default
+	// behavior is byte-identical; on, it prunes .gitignore'd + noise paths.
+	if *agentic {
+		g.matcher = ignore.New(rc.Dir)
+	}
 	// GNU default: file names are shown when searching more than one
 	// file or recursing; -h suppresses, -H forces.
 	switch {
@@ -208,6 +217,12 @@ func run(rc *tool.RunContext, args []string) int {
 			continue
 		}
 		g.grepPath(full, f)
+	}
+
+	// Transparency: announce what --agentic hid, so a short/empty result is never
+	// silently misleading. stderr only (stdout stays pure matches).
+	if n := g.matcher.Hidden(); n > 0 && !g.quiet {
+		fmt.Fprintf(rc.Err, "%s: --agentic skipped %d ignored path(s) (run without --agentic to include them)\n", cmd.Name, n)
 	}
 
 	switch {
@@ -274,9 +289,15 @@ func (g *grepper) walk(root, display string) {
 			if p != root && matchAnyGlob(g.excludeDir, d.Name()) {
 				return fs.SkipDir
 			}
+			if p != root && g.matcher.Skip(p, true) {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
+			return nil
+		}
+		if g.matcher.Skip(p, false) {
 			return nil
 		}
 		if !g.fileAllowed(d.Name()) {
@@ -317,12 +338,12 @@ func (g *grepper) walkFollow(dir, display string, seen map[string]bool) {
 		}
 		switch {
 		case st.IsDir():
-			if matchAnyGlob(g.excludeDir, e.Name()) {
+			if matchAnyGlob(g.excludeDir, e.Name()) || g.matcher.Skip(p, true) {
 				continue
 			}
 			g.walkFollow(p, disp, seen)
 		case st.Mode().IsRegular():
-			if g.fileAllowed(e.Name()) {
+			if !g.matcher.Skip(p, false) && g.fileAllowed(e.Name()) {
 				g.grepPath(p, disp)
 			}
 		}

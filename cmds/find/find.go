@@ -32,6 +32,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/qiangli/coreutils/pkg/ignore"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -76,6 +77,8 @@ type notSupportedErr struct{ what string }
 func (e *notSupportedErr) Error() string { return e.what }
 
 func run(rc *tool.RunContext, args []string) int {
+	agentic := false
+	kept := args[:0:0]
 	for _, a := range args {
 		if a == "--help" {
 			io.WriteString(rc.Out, helpText)
@@ -85,7 +88,16 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Out, "find (qiangli/coreutils) %s\n", tool.Version)
 			return 0
 		}
+		// --agentic (opt-in): strip it before the path/expression split so the
+		// hand-rolled parser never sees it as an expression token. Default off,
+		// so without it find behaves exactly as before.
+		if a == "--agentic" {
+			agentic = true
+			continue
+		}
+		kept = append(kept, a)
 	}
+	args = kept
 
 	// Start points are everything before the first expression token.
 	i := 0
@@ -112,8 +124,15 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	w := &walker{rc: rc, e: root, maxDepth: p.maxDepth, minDepth: p.minDepth}
+	if agentic {
+		w.matcher = ignore.New(rc.Dir)
+	}
 	for _, sp := range paths {
 		w.walkRoot(sp)
+	}
+	// Transparency: announce what --agentic hid (stderr only).
+	if n := w.matcher.Hidden(); n > 0 {
+		fmt.Fprintf(rc.Err, "%s: --agentic skipped %d ignored path(s) (run without --agentic to include them)\n", cmd.Name, n)
 	}
 	if w.errored {
 		return 1
@@ -547,6 +566,7 @@ type walker struct {
 	maxDepth int // -1 = unlimited
 	minDepth int
 	errored  bool
+	matcher  *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
 }
 
 func (w *walker) reportErr(display string, err error) {
@@ -560,6 +580,13 @@ func (w *walker) walkRoot(operand string) {
 		disp := displayPath(operand, root, p)
 		if err != nil {
 			w.reportErr(disp, err)
+			return nil
+		}
+		// --agentic: prune .gitignore'd / noise paths (never the start point).
+		if p != root && w.matcher.Skip(p, d.IsDir()) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		depth := 0
