@@ -84,7 +84,7 @@ func BuildGraph(d *Document) (*Graph, error) {
 			}
 			dn, ok := g.Nodes[dep]
 			if !ok {
-				return nil, errf(weavecli.ExitInvalidArg,
+				return nil, unknownTargetError(dep, g.Order,
 					"target %q requires unknown target %q", t.Name, dep)
 			}
 			if seen[dep] {
@@ -106,7 +106,7 @@ func (g *Graph) Subgraph(targets ...string) (*Graph, error) {
 	var stack []string
 	for _, t := range targets {
 		if _, ok := g.Nodes[t]; !ok {
-			return nil, errf(weavecli.ExitInvalidArg, "unknown target %q", t)
+			return nil, unknownTargetError(t, g.Order, "unknown target %q", t)
 		}
 		stack = append(stack, t)
 	}
@@ -129,6 +129,62 @@ func (g *Graph) Subgraph(targets ...string) (*Graph, error) {
 		}
 	}
 	return sub, nil
+}
+
+func unknownTargetError(name string, known []string, format string, a ...any) *Error {
+	msg := errf(weavecli.ExitInvalidArg, format, a...).Msg
+	if suggestion := nearestTarget(name, known); suggestion != "" {
+		msg += " (did you mean " + strconvQuote(suggestion) + "?)"
+	}
+	return &Error{Code: weavecli.ExitInvalidArg, Msg: msg}
+}
+
+func nearestTarget(name string, known []string) string {
+	best := ""
+	bestDist := 3
+	for _, candidate := range known {
+		d := editDistance(name, candidate)
+		if d < bestDist {
+			best = candidate
+			bestDist = d
+		}
+	}
+	return best
+}
+
+func editDistance(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	prev := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i, ca := range ar {
+		cur := make([]int, len(br)+1)
+		cur[0] = i + 1
+		for j, cb := range br {
+			cost := 0
+			if ca != cb {
+				cost = 1
+			}
+			cur[j+1] = min3(cur[j]+1, prev[j+1]+1, prev[j]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(br)]
+}
+
+func min3(a, b, c int) int {
+	if b < a {
+		a = b
+	}
+	if c < a {
+		a = c
+	}
+	return a
+}
+
+func strconvQuote(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
 // TopoSort returns a topological ordering (Kahn's algorithm) with ties broken

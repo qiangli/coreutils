@@ -35,6 +35,24 @@ func TestBuildGraphUnknownDep(t *testing.T) {
 	}
 }
 
+func TestSubgraphUnknownTargetSuggestsNearest(t *testing.T) {
+	md := "## Tasks\n\n" +
+		"### build\n" + block("", "echo build") +
+		"### install\n" + block("", "echo install")
+	g, err := BuildGraph(doc(t, md))
+	if err != nil {
+		t.Fatalf("BuildGraph: %v", err)
+	}
+	_, err = g.Subgraph("insall")
+	if err == nil {
+		t.Fatal("want unknown-target error")
+	}
+	if got := err.Error(); !strings.Contains(got, `unknown target "insall"`) ||
+		!strings.Contains(got, `did you mean "install"?`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestTopoSortOrderAndDeterminism(t *testing.T) {
 	// clean -> {compile, docs} -> package (fan-out + fan-in)
 	md := "## Tasks\n\n" +

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -127,6 +128,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			// Body env: process env, then frontmatter vars (so ${HOST} etc. are
 			// available to bodies, not just metadata), then CLI overrides (win).
 			bodyEnv := os.Environ()
+			bodyEnv = append(bodyEnv, bashySelfEnv()...)
 			for k, v := range docVars {
 				bodyEnv = append(bodyEnv, k+"="+v)
 			}
@@ -204,6 +206,36 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().StringVar(&cacheExport, "cache-export", "", "Copy this DAG's fingerprint cache file to DIR after the run")
 	cmd.Flags().StringVar(&cacheImport, "cache-import", "", "Copy this DAG's fingerprint cache file from DIR before the run")
 	return cmd
+}
+
+func bashySelfEnv() []string {
+	exe := resolveArgv0(os.Args[0])
+	if exe == "" {
+		return nil
+	}
+	return []string{
+		"BASHY=" + exe,
+		"BASHY_EXE=" + exe,
+	}
+}
+
+func resolveArgv0(argv0 string) string {
+	if argv0 == "" {
+		return ""
+	}
+	if strings.ContainsRune(argv0, os.PathSeparator) {
+		if abs, err := filepath.Abs(argv0); err == nil {
+			return abs
+		}
+		return argv0
+	}
+	if p, err := exec.LookPath(argv0); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+		return p
+	}
+	return argv0
 }
 
 // checkResult is the --check envelope payload.

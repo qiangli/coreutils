@@ -399,3 +399,20 @@ func TestCommandUnknownTarget(t *testing.T) {
 		t.Errorf("want exit 2, got %d", ExitCodeOf(err))
 	}
 }
+
+func TestCommandInjectsInvokingExecutable(t *testing.T) {
+	path := writeDAG(t, "## Tasks\n\n### self\n"+block("bash", `printf '%s\n' "$BASHY"
+printf '%s\n' "$BASHY_EXE"`))
+	cmd := NewDagCmd()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"--plain", "--force", "--file", path, "self"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("dag self: %v; stderr=%s", err, errOut.String())
+	}
+	exe := resolveArgv0(os.Args[0])
+	if count := strings.Count(out.String(), exe); count != 2 {
+		t.Fatalf("BASHY/BASHY_EXE did not use invoking executable %q in output:\n%s", exe, out.String())
+	}
+}
