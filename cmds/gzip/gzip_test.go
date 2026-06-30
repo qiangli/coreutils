@@ -340,3 +340,97 @@ func TestHelpVersionAndUnknownFlag(t *testing.T) {
 		}
 	}
 }
+
+func TestNoNameAndName(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "f.txt", "data")
+	mtime := time.Date(2025, 4, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(p, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Test compression with -n (no-name)
+	_, _, code := runTool(t, gzipTool, dir, nil, "-n", "-k", "f.txt")
+	if code != 0 {
+		t.Fatal("gzip -n failed")
+	}
+	gzNoName := p + ".gz"
+	fNoName, err := os.Open(gzNoName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zrNoName, err := gzip.NewReader(fNoName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zrNoName.Name != "" {
+		t.Errorf("gzip -n should have empty name, got %q", zrNoName.Name)
+	}
+	if !zrNoName.ModTime.IsZero() {
+		t.Errorf("gzip -n should have zero modtime, got %v", zrNoName.ModTime)
+	}
+	zrNoName.Close()
+	fNoName.Close()
+
+	// Remove f.txt.gz before next test
+	os.Remove(gzNoName)
+
+	// 2. Test compression with -N (name)
+	_, _, code = runTool(t, gzipTool, dir, nil, "-N", "-k", "f.txt")
+	if code != 0 {
+		t.Fatal("gzip -N failed")
+	}
+	gzName := p + ".gz"
+	fName, err := os.Open(gzName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zrName, err := gzip.NewReader(fName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zrName.Name != "f.txt" {
+		t.Errorf("gzip -N should have name f.txt, got %q", zrName.Name)
+	}
+	if !zrName.ModTime.Equal(mtime) {
+		t.Errorf("gzip -N should have modtime %v, got %v", mtime, zrName.ModTime)
+	}
+	zrName.Close()
+	fName.Close()
+
+	// 3. Test decompression with -N (restore name/timestamp)
+	// Rename input .gz so we can test restoring the original name "f.txt" from header
+	renamedGz := filepath.Join(dir, "different.gz")
+	if err := os.Rename(gzName, renamedGz); err != nil {
+		t.Fatal(err)
+	}
+	// Make sure f.txt does not exist
+	os.Remove(p)
+
+	// Decompress with -N
+	_, _, code = runTool(t, gzipTool, dir, nil, "-N", "-d", "different.gz")
+	if code != 0 {
+		t.Fatalf("decompression with -N failed: %d", code)
+	}
+
+	// Verify different.gz is gone
+	if _, err := os.Stat(renamedGz); !os.IsNotExist(err) {
+		t.Errorf("different.gz should be removed after decompression")
+	}
+
+	// Verify name restored to f.txt instead of different
+	restoredPath := filepath.Join(dir, "f.txt")
+	fi, err := os.Stat(restoredPath)
+	if err != nil {
+		t.Fatalf("restored file f.txt missing: %v", err)
+	}
+	if !fi.ModTime().Equal(mtime) {
+		t.Errorf("mtime not restored with -N: got %v want %v", fi.ModTime(), mtime)
+	}
+
+	content, err := os.ReadFile(restoredPath)
+	if err != nil || string(content) != "data" {
+		t.Errorf("restored content mismatch: got %q err %v", content, err)
+	}
+}
+

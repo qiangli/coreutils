@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -87,6 +88,8 @@ func run(rc *tool.RunContext, t *tool.Tool, args []string, aliasDecompress, alia
 	keep := fs.BoolP("keep", "k", false, "keep (don't delete) input files")
 	fast := fs.Bool("fast", false, "compress faster (same as -1)")
 	best := fs.Bool("best", false, "compress better (same as -9)")
+	noName := fs.BoolP("no-name", "n", false, "do not save or restore the original file name and time stamp")
+	name := fs.BoolP("name", "N", false, "save or restore the original file name and time stamp")
 
 	operands, code := tool.Parse(rc, t, fs, args)
 	if code >= 0 {
@@ -107,6 +110,8 @@ func run(rc *tool.RunContext, t *tool.Tool, args []string, aliasDecompress, alia
 		force:      *force,
 		keep:       *keep,
 		level:      level,
+		noName:     *noName,
+		name:       *name,
 	}
 
 	if len(operands) == 0 {
@@ -125,6 +130,8 @@ type opts struct {
 	force      bool
 	keep       bool
 	level      int // 1..9, or -1 = gzip default (6)
+	noName     bool
+	name       bool
 }
 
 // extractLevel pre-scans args for the -1..-9 numeric shorthands (which
@@ -241,7 +248,8 @@ func processOperand(rc *tool.RunContext, t *tool.Tool, op string, o opts) int {
 		out = outFile
 	}
 
-	code := pump(rc, t, op, in, out, o, fi)
+	res := pump(rc, t, op, in, out, o, fi)
+	code := res.code
 
 	if outFile != nil {
 		if err := outFile.Close(); err != nil && code == exOK {
@@ -254,7 +262,32 @@ func processOperand(rc *tool.RunContext, t *tool.Tool, op string, o opts) int {
 		}
 		// gzip preserves the mode and timestamps of the input file.
 		os.Chmod(outPath, fi.Mode().Perm())
-		os.Chtimes(outPath, fi.ModTime(), fi.ModTime())
+
+		mtime := fi.ModTime()
+		if o.decompress && o.name && !res.modTime.IsZero() {
+			mtime = res.modTime
+		}
+		os.Chtimes(outPath, mtime, mtime)
+
+		if o.decompress && o.name && res.name != "" {
+			dir := filepath.Dir(outPath)
+			targetPath := filepath.Join(dir, res.name)
+			if targetPath != outPath {
+				if _, err := os.Lstat(targetPath); err == nil && !o.force {
+					fmt.Fprintf(rc.Err, "%s: %s: file already exists; not restoring name\n", t.Name, res.name)
+					code = worse(code, exWarning)
+				} else {
+					os.Remove(targetPath)
+					if err := os.Rename(outPath, targetPath); err != nil {
+						fmt.Fprintf(rc.Err, "%s: restoring name failed: %v\n", t.Name, err)
+						code = worse(code, exWarning)
+					} else {
+						outPath = targetPath
+					}
+				}
+			}
+		}
+
 		if !o.keep {
 			// Close the source before removing it: Windows refuses to remove a
 			// file that is still open (unix allows the unlink-while-open). The
@@ -275,26 +308,34 @@ func processStream(rc *tool.RunContext, t *tool.Tool, label string, in io.Reader
 		fmt.Fprintf(rc.Err, "%s: no input available\n", t.Name)
 		return exError
 	}
-	return pump(rc, t, label, in, rc.Out, o, nil)
+	return pump(rc, t, label, in, rc.Out, o, nil).code
+}
+
+type pumpResult struct {
+	code    int
+	name    string
+	modTime time.Time
 }
 
 // pump runs one compression or decompression copy. fi is the input
 // file's metadata for the gzip header (nil for streams).
-func pump(rc *tool.RunContext, t *tool.Tool, label string, in io.Reader, out io.Writer, o opts, fi os.FileInfo) int {
+func pump(rc *tool.RunContext, t *tool.Tool, label string, in io.Reader, out io.Writer, o opts, fi os.FileInfo) pumpResult {
 	if o.decompress {
 		zr, err := gzip.NewReader(in)
 		if err != nil {
-			return readErr(rc, t, label, err)
+			return pumpResult{code: readErr(rc, t, label, err)}
 		}
 		// multistream (concatenated members) is the gzip.Reader
 		// default, matching gunzip.
 		if _, err := io.Copy(out, zr); err != nil {
-			return readErr(rc, t, label, err)
+			return pumpResult{code: readErr(rc, t, label, err)}
 		}
+		name := zr.Name
+		modTime := zr.ModTime
 		if err := zr.Close(); err != nil {
-			return readErr(rc, t, label, err)
+			return pumpResult{code: readErr(rc, t, label, err)}
 		}
-		return exOK
+		return pumpResult{code: exOK, name: name, modTime: modTime}
 	}
 
 	level := o.level
@@ -304,22 +345,26 @@ func pump(rc *tool.RunContext, t *tool.Tool, label string, in io.Reader, out io.
 	zw, err := gzip.NewWriterLevel(out, level)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
-		return exError
+		return pumpResult{code: exError}
 	}
-	if fi != nil {
+	saveHeader := true
+	if o.noName && !o.name {
+		saveHeader = false
+	}
+	if fi != nil && saveHeader {
 		// Default --name behavior: store original base name + mtime.
 		zw.Name = filepath.Base(fi.Name())
 		zw.ModTime = fi.ModTime()
 	}
 	if _, err := io.Copy(zw, in); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %s: %v\n", t.Name, label, err)
-		return exError
+		return pumpResult{code: exError}
 	}
 	if err := zw.Close(); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %s: %v\n", t.Name, label, err)
-		return exError
+		return pumpResult{code: exError}
 	}
-	return exOK
+	return pumpResult{code: exOK}
 }
 
 func readErr(rc *tool.RunContext, t *tool.Tool, label string, err error) int {
