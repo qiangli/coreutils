@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -253,13 +254,62 @@ func lookCommand(rc *tool.RunContext, name string) string {
 	if strings.ContainsAny(name, `/\`) {
 		return rc.Path(name)
 	}
-	for _, dir := range filepath.SplitList(rc.Getenv("PATH")) {
+
+	pathVal := rc.Getenv("PATH")
+	isWindows := runtime.GOOS == "windows"
+	var exts []string
+	if isWindows {
+		pathExt := rc.Getenv("PATHEXT")
+		if pathExt == "" {
+			exts = []string{".com", ".exe", ".bat", ".cmd"}
+		} else {
+			for _, e := range filepath.SplitList(pathExt) {
+				if e != "" {
+					exts = append(exts, strings.ToLower(e))
+				}
+			}
+		}
+	}
+
+	hasExt := func(file string) bool {
+		if !isWindows {
+			return true
+		}
+		fileLower := strings.ToLower(file)
+		for _, ext := range exts {
+			if strings.HasSuffix(fileLower, ext) {
+				return true
+			}
+		}
+		return false
+	}
+
+	checkFile := func(path string) bool {
+		fi, err := os.Stat(path)
+		if err != nil || fi.IsDir() {
+			return false
+		}
+		if isWindows {
+			return true
+		}
+		return fi.Mode()&0o111 != 0
+	}
+
+	for _, dir := range filepath.SplitList(pathVal) {
 		if dir == "" {
 			continue
 		}
 		cand := filepath.Join(dir, name)
-		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+		if hasExt(name) && checkFile(cand) {
 			return cand
+		}
+		if isWindows {
+			for _, ext := range exts {
+				candWithExt := cand + ext
+				if checkFile(candWithExt) {
+					return candWithExt
+				}
+			}
 		}
 	}
 	return ""

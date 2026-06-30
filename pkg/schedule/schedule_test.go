@@ -62,7 +62,7 @@ func TestTickFiresDueJobAndReschedules(t *testing.T) {
 	// Due job (NextRun in the past) that creates a marker file when it fires.
 	s.Jobs = append(s.Jobs, &Job{
 		ID: "due", Kind: "every", Spec: "1h",
-		Command: []string{"sh", "-c", "echo $BASHY_SCHEDULE_PROMPT > " + marker},
+		Command: []string{"sh", "-c", "echo $BASHY_SCHEDULE_PROMPT > " + filepath.ToSlash(marker)},
 		Prompt:  "hello-prompt", Enabled: true, CreatedAt: now.Add(-2 * time.Hour),
 		NextRun: now.Add(-time.Minute),
 	})
