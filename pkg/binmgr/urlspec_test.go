@@ -48,7 +48,7 @@ func TestResolveURL_TemplatedAssetAndSidecar(t *testing.T) {
 	}
 
 	// Round-trip through Ensure to prove the verify path accepts it.
-	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	path, err := Ensure(context.Background(), tool)
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)

@@ -39,24 +39,21 @@ type Config struct {
 
 // Resolve determines the cloudbox base URL and Bearer token, in order:
 //
-//	URL:   --url flag  >  $BASHY_CLOUDBOX_URL  >  $DHNT_BASE_URL (minus /v1)  >  https://ai.dhnt.io
-//	Token: --token flag > $BASHY_SECRETS_TOKEN > $DHNT_SECRETS_TOKEN
+//	URL:   --url flag  >  $BASHY_CLOUDBOX_URL  >  https://ai.dhnt.io
+//	Token: --token flag > $BASHY_SECRETS_TOKEN
 //	         > ~/.config/bashy/secrets-token (XDG-aware, bashy-owned)
-//	         > $DHNT_API_KEY
+//	         > $BASHY_API_KEY
 //
-// The on-disk fallback is a dedicated, bashy-owned file so the secrets
-// credential stays separate from the broader LLM-gateway token (and can be
-// minted read-only). $BASHY_SECRETS_TOKEN (env / Keychain) is the preferred
-// primary; the file is just a no-config convenience.
+// The env surface is BASHY_* only: anything driving bashy (the dhnt ecosystem
+// included) sets the BASHY_ vars like any other caller — no special-cased
+// DHNT_ envs. The on-disk fallback is a dedicated, bashy-owned file so the
+// secrets credential stays separate from the broader LLM-gateway token (and
+// can be minted read-only). $BASHY_SECRETS_TOKEN (env / Keychain) is the
+// preferred primary; the file is just a no-config convenience.
 func (c Config) Resolve() (Client, error) {
 	base := c.URL
 	if base == "" {
 		base = os.Getenv("BASHY_CLOUDBOX_URL")
-	}
-	if base == "" {
-		if dhnt := os.Getenv("DHNT_BASE_URL"); dhnt != "" {
-			base = strings.TrimSuffix(strings.TrimRight(dhnt, "/"), "/v1")
-		}
 	}
 	if base == "" {
 		base = "https://ai.dhnt.io"
@@ -65,16 +62,16 @@ func (c Config) Resolve() (Client, error) {
 
 	tok := c.Token
 	if tok == "" {
-		tok = firstNonEmpty(os.Getenv("BASHY_SECRETS_TOKEN"), os.Getenv("DHNT_SECRETS_TOKEN"))
+		tok = os.Getenv("BASHY_SECRETS_TOKEN")
 	}
 	if tok == "" {
 		tok = readTokenFile()
 	}
 	if tok == "" {
-		tok = os.Getenv("DHNT_API_KEY")
+		tok = os.Getenv("BASHY_API_KEY")
 	}
 	if tok == "" {
-		return Client{}, fmt.Errorf("no cloudbox token: set --token, $BASHY_SECRETS_TOKEN, ~/.config/bashy/secrets-token, or $DHNT_API_KEY (token must carry the secrets:read scope)")
+		return Client{}, fmt.Errorf("no cloudbox token: set --token, $BASHY_SECRETS_TOKEN, ~/.config/bashy/secrets-token, or $BASHY_API_KEY (token must carry the secrets:read scope)")
 	}
 	return Client{
 		BaseURL: base,
@@ -106,15 +103,6 @@ func readTokenFile() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
-}
-
-func firstNonEmpty(vs ...string) string {
-	for _, v := range vs {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func (c Client) endpoint(p string) string { return c.BaseURL + "/api/v1/secrets" + p }

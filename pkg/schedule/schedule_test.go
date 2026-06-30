@@ -1,11 +1,44 @@
 package schedule
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestScheduleOutputModeEscape(t *testing.T) {
+	withState(t)
+	t.Setenv("BASHY_AGENTIC", "1")
+
+	// Under agent mode, `list` emits the JSON envelope (consistent with weave/dag).
+	cmd := NewScheduleCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "schema_version") {
+		t.Errorf("BASHY_AGENTIC list should be JSON, got %q", out.String())
+	}
+
+	// --json=false escapes back to prose even under agent mode.
+	cmd = NewScheduleCmd()
+	var out2 bytes.Buffer
+	cmd.SetOut(&out2)
+	cmd.SetErr(&out2)
+	cmd.SetArgs([]string{"list", "--json=false"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out2.String(), "schema_version") {
+		t.Errorf("--json=false should force prose, got %q", out2.String())
+	}
+}
 
 func withState(t *testing.T) string {
 	t.Helper()

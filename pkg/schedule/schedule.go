@@ -25,6 +25,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
 // Job is one scheduled command.
@@ -171,12 +173,14 @@ func (j *Job) fire(w *os.File) error {
 	return c.Run()
 }
 
-func agentMode() bool {
-	switch strings.ToLower(os.Getenv("BASHY_AGENTIC")) {
-	case "", "0", "false", "off", "no":
-		return false
-	}
-	return true
+// scheduleOutputJSON resolves whether to emit the JSON envelope, honoring
+// $BASHY_AGENTIC with an explicit --json / --plain / --json=false override —
+// the same precedence weave and dag use.
+func scheduleOutputJSON(cmd *cobra.Command) bool {
+	jsonF, _ := cmd.Flags().GetBool("json")
+	plainF, _ := cmd.Flags().GetBool("plain")
+	quietF, _ := cmd.Flags().GetBool("quiet")
+	return weavecli.ResolveOutputModeEx(cmd.Flags().Changed("json"), jsonF, plainF, quietF) == weavecli.OutputJSON
 }
 
 // NewScheduleCmd builds the `bashy schedule` command tree.
@@ -185,6 +189,9 @@ func NewScheduleCmd() *cobra.Command {
 		Use:   "schedule",
 		Short: "Modern cron: run commands on a cron/interval/at schedule, with an agentic prompt",
 	}
+	root.PersistentFlags().Bool("json", false, "machine-readable JSON envelope")
+	root.PersistentFlags().Bool("plain", false, "plain-text output (overrides $BASHY_AGENTIC)")
+	root.PersistentFlags().Bool("quiet", false, "minimal output")
 	root.AddCommand(addCmd(), listCmd(), rmCmd(), runCmd(), tickCmd(), daemonCmd())
 	return root
 }
@@ -232,7 +239,7 @@ func addCmd() *cobra.Command {
 			if err := s.save(); err != nil {
 				return err
 			}
-			if agentMode() {
+			if scheduleOutputJSON(cmd) {
 				b, _ := json.Marshal(map[string]any{"schema_version": "bashy-schedule-v1", "kind": "added", "id": j.ID, "next_run": j.NextRun})
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
 			} else {
@@ -259,7 +266,7 @@ func listCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if agentMode() {
+			if scheduleOutputJSON(cmd) {
 				b, _ := json.Marshal(map[string]any{"schema_version": "bashy-schedule-v1", "kind": "list", "jobs": s.Jobs})
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
 				return nil
@@ -347,7 +354,7 @@ func tickCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if agentMode() {
+			if scheduleOutputJSON(cmd) {
 				b, _ := json.Marshal(map[string]any{"schema_version": "bashy-schedule-v1", "kind": "tick", "fired": fired})
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
 			} else {

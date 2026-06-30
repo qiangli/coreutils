@@ -17,6 +17,7 @@ import (
 	gotreesitter "github.com/odvcencio/gotreesitter"
 	"github.com/qiangli/coreutils/pkg/repomap"
 	"github.com/qiangli/coreutils/pkg/treesitter"
+	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -111,12 +112,14 @@ func formatSymbolLine(s treesitter.Symbol) string {
 // --- yc symbols ---
 
 func runSymbols(rc *tool.RunContext, args []string) int {
-	asJSON := false
+	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
 	var target string
 	for _, a := range args {
 		switch a {
-		case "--json":
+		case "--json", "--json=true":
 			asJSON = true
+		case "--json=false", "--plain":
+			asJSON = false
 		default:
 			if target == "" {
 				target = a
@@ -164,12 +167,14 @@ func runSymbols(rc *tool.RunContext, args []string) int {
 // --- yc search-symbols ---
 
 func runSearchSymbols(rc *tool.RunContext, args []string) int {
-	asJSON := false
+	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
 	var pattern, target string
 	for _, a := range args {
 		switch a {
-		case "--json":
+		case "--json", "--json=true":
 			asJSON = true
+		case "--json=false", "--plain":
+			asJSON = false
 		default:
 			if pattern == "" {
 				pattern = a
@@ -228,12 +233,14 @@ func runSearchSymbols(rc *tool.RunContext, args []string) int {
 // --- yc refs ---
 
 func runRefs(rc *tool.RunContext, args []string) int {
-	asJSON := false
+	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
 	var symbol, workspace string
 	for _, a := range args {
 		switch a {
-		case "--json":
+		case "--json", "--json=true":
 			asJSON = true
+		case "--json=false", "--plain":
+			asJSON = false
 		default:
 			if symbol == "" {
 				symbol = a
@@ -279,13 +286,15 @@ func runRefs(rc *tool.RunContext, args []string) int {
 // --- yc repomap ---
 
 func runRepomap(rc *tool.RunContext, args []string) int {
-	asJSON := false
+	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
 	target := ""
 	opts := repomap.DefaultOptions()
 	for _, a := range args {
 		switch {
-		case a == "--json":
+		case a == "--json" || a == "--json=true":
 			asJSON = true
+		case a == "--json=false" || a == "--plain":
+			asJSON = false
 		case strings.HasPrefix(a, "--budget="):
 			n := 0
 			if _, err := fmt.Sscanf(a[len("--budget="):], "%d", &n); err != nil || n <= 0 {
@@ -337,14 +346,16 @@ func runRepomap(rc *tool.RunContext, args []string) int {
 //	yc query --lang go '(function_declaration name: (identifier) @fn)'
 //	yc query --lang python '(call function: (identifier) @c (#eq? @c "eval"))' src/
 func runQuery(rc *tool.RunContext, args []string) int {
-	asJSON := false
+	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
 	lang := ""
 	var queryStr, target string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--json":
+		case a == "--json" || a == "--json=true":
 			asJSON = true
+		case a == "--json=false" || a == "--plain":
+			asJSON = false
 		case a == "--lang" || a == "-l":
 			if i+1 < len(args) {
 				i++

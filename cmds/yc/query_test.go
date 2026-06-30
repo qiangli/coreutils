@@ -74,6 +74,26 @@ func TestYCQueryInferLangFromFile(t *testing.T) {
 	}
 }
 
+func TestYCQueryHonorsAgentMode(t *testing.T) {
+	dir := writeGo(t)
+	t.Setenv("BASHY_AGENTIC", "1")
+	// Default under agent mode → JSON (consistent with weave/dag).
+	out, _, code := runYC(t, dir, "query", "--lang", "go",
+		"(function_declaration name: (identifier) @fn)", ".")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out, `"name"`) {
+		t.Errorf("under BASHY_AGENTIC, yc should default to JSON:\n%s", out)
+	}
+	// --json=false escapes back to text even under agent mode.
+	out, _, _ = runYC(t, dir, "query", "--lang", "go", "--json=false",
+		"(function_declaration name: (identifier) @fn)", ".")
+	if strings.Contains(out, `"name"`) || !strings.Contains(out, "@fn") {
+		t.Errorf("--json=false should force text under agent mode:\n%s", out)
+	}
+}
+
 func TestYCQueryInvalidFailsLoudly(t *testing.T) {
 	dir := writeGo(t)
 	_, errOut, code := runYC(t, dir, "query", "--lang", "go", "(this is not valid", ".")

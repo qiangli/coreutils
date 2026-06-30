@@ -64,17 +64,17 @@ type Tool struct {
 // Platform returns the current "goos/goarch" key.
 func Platform() string { return runtime.GOOS + "/" + runtime.GOARCH }
 
-// CacheDir is the root for downloaded binaries. Override via $DHNT_BIN_CACHE;
-// otherwise <UserCacheDir>/dhnt/bin.
+// CacheDir is the root for downloaded binaries. Override via $BASHY_BIN_CACHE;
+// otherwise <UserCacheDir>/bashy/bin.
 func CacheDir() (string, error) {
-	if d := strings.TrimSpace(os.Getenv("DHNT_BIN_CACHE")); d != "" {
+	if d := strings.TrimSpace(os.Getenv("BASHY_BIN_CACHE")); d != "" {
 		return d, nil
 	}
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "dhnt", "bin"), nil
+	return filepath.Join(base, "bashy", "bin"), nil
 }
 
 func binaryName(name string) string {

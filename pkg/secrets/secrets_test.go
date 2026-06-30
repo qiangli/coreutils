@@ -85,9 +85,7 @@ func run(t *testing.T, cfg Config, args ...string) (string, string, error) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	// Neutralize ambient token/url discovery so tests are hermetic.
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
-	t.Setenv("DHNT_SECRETS_TOKEN", "")
-	t.Setenv("DHNT_API_KEY", "")
-	t.Setenv("DHNT_BASE_URL", "")
+	t.Setenv("BASHY_API_KEY", "")
 	t.Setenv("BASHY_CLOUDBOX_URL", "")
 
 	cmd := newSecretsCmd()
@@ -182,8 +180,7 @@ func TestEnvCacheFallbackWhenServerDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
-	t.Setenv("DHNT_API_KEY", "")
-	t.Setenv("DHNT_BASE_URL", "")
+	t.Setenv("BASHY_API_KEY", "")
 	t.Setenv("BASHY_CLOUDBOX_URL", "")
 
 	// First env populates the cache.
@@ -228,8 +225,7 @@ func TestEnvCacheInvalidatedOnTemplateEdit(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", cfgdir)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
-	t.Setenv("DHNT_API_KEY", "")
-	t.Setenv("DHNT_BASE_URL", "")
+	t.Setenv("BASHY_API_KEY", "")
 	t.Setenv("BASHY_CLOUDBOX_URL", "")
 	mapPath := filepath.Join(cfgdir, "bashy", "secrets.map")
 	if err := os.MkdirAll(filepath.Dir(mapPath), 0o700); err != nil {
@@ -370,7 +366,7 @@ export G=
 
 func TestResolveTokenPrecedence(t *testing.T) {
 	t.Setenv("BASHY_SECRETS_TOKEN", "from-bashy")
-	t.Setenv("DHNT_API_KEY", "from-dhnt")
+	t.Setenv("BASHY_API_KEY", "from-apikey")
 	c, err := Config{URL: "http://x"}.Resolve()
 	if err != nil {
 		t.Fatal(err)
@@ -389,8 +385,7 @@ func TestResolveTokenFromFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("BASHY_SECRETS_TOKEN", "")
-	t.Setenv("DHNT_SECRETS_TOKEN", "")
-	t.Setenv("DHNT_API_KEY", "")
+	t.Setenv("BASHY_API_KEY", "")
 	if err := os.MkdirAll(filepath.Join(dir, "bashy"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -412,15 +407,20 @@ func TestResolveTokenFromFile(t *testing.T) {
 	}
 }
 
-func TestResolveURLFromDHNT(t *testing.T) {
-	t.Setenv("BASHY_CLOUDBOX_URL", "")
-	t.Setenv("DHNT_BASE_URL", "https://ai.dhnt.io/v1")
+func TestResolveURLFromEnv(t *testing.T) {
+	t.Setenv("BASHY_CLOUDBOX_URL", "https://box.example/")
 	c, err := Config{Token: "x"}.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if c.BaseURL != "https://box.example" {
+		t.Fatalf("baseURL = %q, want https://box.example ($BASHY_CLOUDBOX_URL, trailing slash trimmed)", c.BaseURL)
+	}
+	// Default when unset.
+	t.Setenv("BASHY_CLOUDBOX_URL", "")
+	c, _ = Config{Token: "x"}.Resolve()
 	if c.BaseURL != "https://ai.dhnt.io" {
-		t.Fatalf("baseURL = %q, want https://ai.dhnt.io (strip /v1)", c.BaseURL)
+		t.Fatalf("baseURL = %q, want the default https://ai.dhnt.io", c.BaseURL)
 	}
 }
 

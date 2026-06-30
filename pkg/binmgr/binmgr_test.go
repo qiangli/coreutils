@@ -36,7 +36,7 @@ func TestEnsure_DownloadVerifyCacheHit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	tool := toolFor(srv.URL+"/bin", sha256hex(payload), "")
 
 	path, err := Ensure(context.Background(), tool)
@@ -73,7 +73,7 @@ func TestEnsure_ShaMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	tool := toolFor(srv.URL+"/bin", sha256hex([]byte("DIFFERENT")), "")
 
 	if _, err := Ensure(context.Background(), tool); err == nil {
@@ -111,7 +111,7 @@ func TestEnsure_ExtractTarGz(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	tool := toolFor(srv.URL+"/faketool.tar.gz", sha256hex(archive), "faketool/faketool")
 
 	path, err := Ensure(context.Background(), tool)
@@ -145,7 +145,7 @@ func TestEnsure_ExtractTree(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	tool := Tool{
 		Name: "go", Version: "1.2.3",
 		Assets: map[string]Asset{Platform(): {
@@ -193,7 +193,7 @@ func TestEnsure_ExtractTarGz_NestedMember(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 	tool := Tool{
 		Name: "kopia", Version: "0.18.0",
 		Assets: map[string]Asset{Platform(): {URL: srv.URL + "/kopia.tar.gz", SHA256: sha256hex(archive), Binary: "kopia"}},

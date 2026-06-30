@@ -42,7 +42,7 @@ func TestResolveGitHub_RawBinarySidecar(t *testing.T) {
 	old := githubAPI
 	githubAPI = base
 	defer func() { githubAPI = old }()
-	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 
 	tool, err := ResolveGitHub(context.Background(), GitHubSpec{Name: "loom", Repo: "go-gitea/gitea"})
 	if err != nil {
@@ -93,7 +93,7 @@ func TestResolveGitHub_ChecksumsFile(t *testing.T) {
 	old := githubAPI
 	githubAPI = base
 	defer func() { githubAPI = old }()
-	t.Setenv("DHNT_BIN_CACHE", t.TempDir())
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
 
 	tool, err := ResolveGitHub(context.Background(), GitHubSpec{Name: "zot", Repo: "project-zot/zot", Version: "v2.1.0"})
 	if err != nil {

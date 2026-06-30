@@ -50,8 +50,8 @@ so opening a shell never blocks or breaks.`,
 		SilenceErrors: true,
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.PersistentFlags().StringVar(&cfg.URL, "url", "", "cloudbox base URL (default $DHNT_BASE_URL minus /v1, else https://ai.dhnt.io)")
-	cmd.PersistentFlags().StringVar(&cfg.Token, "token", "", "Bearer token (default $BASHY_SECRETS_TOKEN, ~/.config/bashy/secrets-token, or $DHNT_API_KEY)")
+	cmd.PersistentFlags().StringVar(&cfg.URL, "url", "", "cloudbox base URL (default $BASHY_CLOUDBOX_URL, else https://ai.dhnt.io)")
+	cmd.PersistentFlags().StringVar(&cfg.Token, "token", "", "Bearer token (default $BASHY_SECRETS_TOKEN, ~/.config/bashy/secrets-token, or $BASHY_API_KEY)")
 
 	cmd.AddCommand(newEnvCmd(&cfg))
 	cmd.AddCommand(newLsCmd(&cfg))
