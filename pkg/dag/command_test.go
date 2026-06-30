@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -402,7 +403,8 @@ func TestCommandUnknownTarget(t *testing.T) {
 
 func TestCommandInjectsInvokingExecutable(t *testing.T) {
 	path := writeDAG(t, "## Tasks\n\n### self\n"+block("bash", `printf '%s\n' "$BASHY"
-printf '%s\n' "$BASHY_EXE"`))
+printf '%s\n' "$BASHY_EXE"
+printf '%s\n' "$BASHY_ARGV0"`))
 	cmd := NewDagCmd()
 	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
 	cmd.SetOut(out)
@@ -412,7 +414,14 @@ printf '%s\n' "$BASHY_EXE"`))
 		t.Fatalf("dag self: %v; stderr=%s", err, errOut.String())
 	}
 	exe := resolveArgv0(os.Args[0])
-	if count := strings.Count(out.String(), exe); count != 2 {
-		t.Fatalf("BASHY/BASHY_EXE did not use invoking executable %q in output:\n%s", exe, out.String())
+	var got []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if line != "" && !strings.HasPrefix(line, "==> ") && !strings.HasPrefix(line, "dag: ") {
+			got = append(got, line)
+		}
+	}
+	want := []string{exe, exe, os.Args[0]}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("self env mismatch:\n got: %q\nwant: %q\nfull output:\n%s", got, want, out.String())
 	}
 }

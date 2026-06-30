@@ -209,13 +209,15 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 }
 
 func bashySelfEnv() []string {
-	exe := resolveArgv0(os.Args[0])
+	argv0 := os.Args[0]
+	exe := resolveArgv0(argv0)
 	if exe == "" {
 		return nil
 	}
 	return []string{
 		"BASHY=" + exe,
 		"BASHY_EXE=" + exe,
+		"BASHY_ARGV0=" + argv0,
 	}
 }
 
