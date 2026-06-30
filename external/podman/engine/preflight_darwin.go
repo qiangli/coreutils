@@ -26,7 +26,7 @@ import (
 // rather than going through C bindings — no cgo, no platform headers,
 // portable enough for the preflight gate.
 func freeMemoryMB() (free uint64, total uint64, err error) {
-	totalOut, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+	totalOut, err := exec.Command(darwinTool("sysctl", "/usr/sbin/sysctl"), "-n", "hw.memsize").Output()
 	if err != nil {
 		return 0, 0, fmt.Errorf("sysctl hw.memsize: %w", err)
 	}
@@ -35,7 +35,7 @@ func freeMemoryMB() (free uint64, total uint64, err error) {
 		return 0, 0, fmt.Errorf("parse hw.memsize %q: %w", string(totalOut), err)
 	}
 
-	vmOut, err := exec.Command("vm_stat").Output()
+	vmOut, err := exec.Command(darwinTool("vm_stat", "/usr/bin/vm_stat")).Output()
 	if err != nil {
 		return 0, 0, fmt.Errorf("vm_stat: %w", err)
 	}
@@ -44,6 +44,13 @@ func freeMemoryMB() (free uint64, total uint64, err error) {
 		return 0, 0, fmt.Errorf("parse vm_stat: %w", err)
 	}
 	return freeMB, totalBytes / (1024 * 1024), nil
+}
+
+func darwinTool(name, fallback string) string {
+	if path, err := exec.LookPath(name); err == nil {
+		return path
+	}
+	return fallback
 }
 
 // parseVMStatFreeMB lives in preflight.go (platform-agnostic) so the
