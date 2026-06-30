@@ -20,7 +20,7 @@ import (
 
 // newDagCmd builds the `dag` command. It is the agentic front door: a single
 // command that lists targets (--list) or runs them as a dependency DAG. Output
-// follows the weavecli envelope convention (DHNT_AGENT=1 forces --json).
+// follows the weavecli envelope convention (BASHY_AGENTIC=1 forces --json).
 func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
@@ -54,7 +54,8 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mode := weavecli.ResolveOutputMode(jsonF, plainF, quietF)
+			// Changed("json") lets an explicit --json=false override BASHY_AGENTIC.
+			mode := weavecli.ResolveOutputModeEx(cmd.Flags().Changed("json"), jsonF, plainF, quietF)
 			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
 			// make-style invocation: KEY=VALUE args are variable overrides

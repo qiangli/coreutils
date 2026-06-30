@@ -14,7 +14,7 @@
 //     inventory (names, descriptions, requires, sources/generates) so an agent
 //     plans against the real graph instead of scraping `make help`.
 //   - Results are structured: every run emits a weavecli.Envelope with stable
-//     exit codes and per-target status, forced to JSON by DHNT_AGENT=1.
+//     exit codes and per-target status, forced to JSON by BASHY_AGENTIC=1.
 //   - Bodies run hermetically through the in-process mvdan.cc/sh/v3 fork with
 //     the coreutils userland resolved in-process (shell.Handler()) — no PATH
 //     variance, identical on Linux/macOS/Windows.

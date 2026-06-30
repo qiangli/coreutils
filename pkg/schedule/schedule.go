@@ -172,14 +172,11 @@ func (j *Job) fire(w *os.File) error {
 }
 
 func agentMode() bool {
-	for _, k := range []string{"DHNT_AGENT", "YCODE_AGENT"} {
-		switch strings.ToLower(os.Getenv(k)) {
-		case "", "0", "false", "off", "no":
-		default:
-			return true
-		}
+	switch strings.ToLower(os.Getenv("BASHY_AGENTIC")) {
+	case "", "0", "false", "off", "no":
+		return false
 	}
-	return false
+	return true
 }
 
 // NewScheduleCmd builds the `bashy schedule` command tree.

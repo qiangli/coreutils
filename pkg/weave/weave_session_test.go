@@ -185,7 +185,7 @@ func TestSessionActionsProduceClientCalls(t *testing.T) {
 }
 
 func TestSessionArgValidationExitCodes(t *testing.T) {
-	t.Setenv("YCODE_AGENT", "")
+	t.Setenv("BASHY_AGENTIC", "")
 	for _, tc := range []struct {
 		name string
 		args []string

@@ -124,7 +124,7 @@ func TestWeaveCommandSurface(t *testing.T) {
 // LLM-gated path, with no init-board row. check walks the command tree
 // only, so it too needs no git.
 func TestWeaveCheckReportsStatus(t *testing.T) {
-	t.Setenv("YCODE_AGENT", "") // force human rows, not the agent JSON envelope
+	t.Setenv("BASHY_AGENTIC", "") // force human rows, not the agent JSON envelope
 	out, code := runWeave(t, "check")
 	if code != 0 {
 		t.Fatalf("check exit=%d out=%s", code, out)
@@ -160,7 +160,7 @@ func TestWeaveQueueLifecycleE2E(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
-	t.Setenv("YCODE_AGENT", "")
+	t.Setenv("BASHY_AGENTIC", "")
 
 	repo := t.TempDir()
 	gitE2E(t, repo, "init", "-q", "-b", "main")

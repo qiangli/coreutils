@@ -57,7 +57,7 @@ func TestTimeFormatSpecifiers(t *testing.T) {
 
 func TestTimeAgenticBudgetTodo(t *testing.T) {
 	// A zero budget guarantees "over budget" → the TODO fires.
-	env := append(os.Environ(), "DHNT_AGENT=1")
+	env := append(os.Environ(), "BASHY_AGENTIC=1")
 	_, errOut, _ := runTime(t, env, "--budget", "0s", "--todo", "split this step", "true")
 	if !strings.Contains(errOut, `"kind":"todo"`) || !strings.Contains(errOut, "split this step") {
 		t.Errorf("expected an agent-mode TODO line, got %q", errOut)

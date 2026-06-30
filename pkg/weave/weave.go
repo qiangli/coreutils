@@ -95,9 +95,11 @@ Common-case usage:
 // resolve the OutputMode without re-declaring the flags.
 type weaveOutputFlags struct {
 	jsonF, plainF, quietF bool
+	cmd                   *cobra.Command // for Flags().Changed("json") in mode()
 }
 
 func (f *weaveOutputFlags) attach(cmd *cobra.Command) {
+	f.cmd = cmd
 	cmd.Flags().BoolVar(&f.jsonF, "json", false, "Emit machine-readable envelope (versioned schema)")
 	cmd.Flags().BoolVar(&f.plainF, "plain", false, "Plain-text output, no ANSI or spinners")
 	cmd.Flags().BoolVar(&f.quietF, "quiet", false, "Final result line only")
@@ -112,7 +114,8 @@ func (f *weaveOutputFlags) attach(cmd *cobra.Command) {
 }
 
 func (f *weaveOutputFlags) mode() weavecli.OutputMode {
-	return weavecli.ResolveOutputMode(f.jsonF, f.plainF, f.quietF)
+	jsonSet := f.cmd != nil && f.cmd.Flags().Changed("json")
+	return weavecli.ResolveOutputModeEx(jsonSet, f.jsonF, f.plainF, f.quietF)
 }
 
 // exitCodeError lets RunE propagate a specific exit code while cobra

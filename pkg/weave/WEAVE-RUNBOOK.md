@@ -558,7 +558,7 @@ The contract was: three terminals, one command per, walk away, pull, push. Every
 If you're an orchestrator agent instead of a human at a keyboard, the same workflow looks like this (using the agent-friendly CLI conventions from the plan doc):
 
 ```bash
-export YCODE_AGENT=1     # forces --json, no prompts, no colors
+export BASHY_AGENTIC=1     # forces --json, no prompts, no colors
 
 # Phase 1 — seed the queue from a planning step (LLM emitted tasks.json)
 bashy weave add --from-file tasks.json --json

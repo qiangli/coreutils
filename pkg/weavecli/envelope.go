@@ -1,6 +1,6 @@
 // Package weavecli holds the agent-friendly CLI conventions every
 // `ycode weave` subverb shares: versioned-envelope marshaling, stable
-// exit-code constants, tty/agent-mode detection, and the YCODE_AGENT
+// exit-code constants, tty/agent-mode detection, and the BASHY_AGENTIC
 // switch that flips all the user-visible defaults to machine-friendly.
 //
 // Lives outside cmd/ycode so internal callers (autopilot worker,
@@ -68,20 +68,11 @@ const (
 )
 
 // IsAgent reports whether the environment requests agent defaults (forces
-// --json + --plain + no prompts + no spinners). The signal is the
-// family-neutral DHNT_AGENT; the ycode-branded YCODE_AGENT is kept as a
-// back-compat alias so existing ycode callers keep working. DHNT_AGENT wins
-// when both are set.
+// --json + no prompts + no spinners). The single signal is BASHY_AGENTIC
+// (matching the `--agentic` flag family): a truthy value enables agent mode; an
+// off-ish value or unset leaves it off.
 func IsAgent() bool {
-	// A non-empty DHNT_AGENT decides (including an explicit off like "0").
-	// Empty/unset defers to the legacy YCODE_AGENT alias.
-	if v := os.Getenv("DHNT_AGENT"); v != "" {
-		return truthyAgent(v)
-	}
-	if v := os.Getenv("YCODE_AGENT"); v != "" {
-		return truthyAgent(v)
-	}
-	return false
+	return truthyAgent(os.Getenv("BASHY_AGENTIC"))
 }
 
 func truthyAgent(v string) bool {
@@ -93,7 +84,7 @@ func truthyAgent(v string) bool {
 }
 
 // StdoutIsTTY reports whether stdout is a character device (terminal).
-// False for pipes, redirects, capture-by-subprocess, and YCODE_AGENT=1.
+// False for pipes, redirects, capture-by-subprocess, and BASHY_AGENTIC=1.
 func StdoutIsTTY() bool {
 	if IsAgent() {
 		return false
@@ -105,19 +96,44 @@ func StdoutIsTTY() bool {
 	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
-// ResolveOutputMode picks the right OutputMode from the per-call flags
-// + the auto-detection rules. Precedence: --json > --plain > --quiet >
-// auto. YCODE_AGENT=1 forces --json regardless of other flags so
-// agents always get structured output.
+// ResolveOutputMode picks the OutputMode from the per-call flags, with the
+// BASHY_AGENTIC env as the fallback. It cannot express an explicit --json=false
+// (a plain bool can't distinguish "false" from "unset"); for that escape hatch,
+// callers use ResolveOutputModeEx with the flag's Changed bit.
+//
+// Precedence here: --json > --plain > --quiet > BASHY_AGENTIC > auto.
 func ResolveOutputMode(jsonFlag, plainFlag, quietFlag bool) OutputMode {
-	if IsAgent() || jsonFlag {
-		return OutputJSON
+	return ResolveOutputModeEx(jsonFlag, jsonFlag, plainFlag, quietFlag)
+}
+
+// ResolveOutputModeEx is ResolveOutputMode with an explicit-override escape
+// hatch: jsonSet reports whether --json was given at all, so `--json=false`
+// (jsonSet=true, jsonVal=false) can force text output even when BASHY_AGENTIC
+// would otherwise default to JSON — the per-command opt-out for pipelines like
+// `weave list --json=false | grep …`. An explicit --plain / --quiet likewise
+// overrides the env.
+//
+// Precedence: explicit --json(=true/false) > --plain > --quiet > BASHY_AGENTIC
+// (the global agent default) > auto (tty detection).
+func ResolveOutputModeEx(jsonSet, jsonVal, plainFlag, quietFlag bool) OutputMode {
+	if jsonSet {
+		if jsonVal {
+			return OutputJSON
+		}
+		// explicit --json=false: text output, overriding the BASHY_AGENTIC env.
+		if quietFlag {
+			return OutputQuiet
+		}
+		return OutputPlain
 	}
 	if plainFlag {
 		return OutputPlain
 	}
 	if quietFlag {
 		return OutputQuiet
+	}
+	if IsAgent() { // BASHY_AGENTIC: the global default when no explicit flag
+		return OutputJSON
 	}
 	return OutputAuto
 }

@@ -18,7 +18,7 @@ func TestWeaveStartCapturesMemoryObservation(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("YCODE_AGENT", "")
+	t.Setenv("BASHY_AGENTIC", "")
 
 	repo := t.TempDir()
 	initMemoryTestRepo(t, repo)
@@ -66,7 +66,7 @@ func TestWeaveRememberRecallVerbs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("YCODE_AGENT", "")
+	t.Setenv("BASHY_AGENTIC", "")
 
 	repo := t.TempDir()
 	initMemoryTestRepo(t, repo)

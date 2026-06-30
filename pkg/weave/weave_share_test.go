@@ -147,7 +147,7 @@ func setupShareSessionRepo(t *testing.T) string {
 	})
 	t.Setenv("HOME", home)
 	t.Setenv("CLOUDBOX_TOKEN", "test-token")
-	t.Setenv("YCODE_AGENT", "")
+	t.Setenv("BASHY_AGENTIC", "")
 	return cwd
 }
 

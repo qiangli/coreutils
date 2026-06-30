@@ -54,7 +54,7 @@ func TestResumeInjectPrependsLastWeaveContextTrailer(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("YCODE_AGENT", "")
+	t.Setenv("BASHY_AGENTIC", "")
 
 	root := weaveTestRepo(t)
 	t.Chdir(root)

@@ -43,7 +43,7 @@ func TestRunWeaveAttachPreconditionGuards(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("YCODE_AGENT", "")
+	t.Setenv("BASHY_AGENTIC", "")
 
 	root := t.TempDir()
 	runAttachTestGit(t, root, "init", "-q", "-b", "main")

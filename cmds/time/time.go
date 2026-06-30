@@ -10,7 +10,7 @@
 //
 // Agentic twist: `--budget DUR` + `--todo TEXT` turn it into a soft deadline —
 // when the program runs longer than the budget, time emits a one-line TODO
-// (JSON under DHNT_AGENT, prose otherwise) carrying the instruction/context, so
+// (JSON under BASHY_AGENTIC, prose otherwise) carrying the instruction/context, so
 // an agent learns "that took too long; do X next" without the command being
 // killed. It is advisory only.
 package timecmd
@@ -317,14 +317,11 @@ func lookCommand(rc *tool.RunContext, name string) string {
 
 // isAgentMode reports whether the invocation env requests agent (JSON) output.
 func isAgentMode(rc *tool.RunContext) bool {
-	for _, k := range []string{"DHNT_AGENT", "YCODE_AGENT"} {
-		switch strings.ToLower(rc.Getenv(k)) {
-		case "", "0", "false", "off", "no":
-		default:
-			return true
-		}
+	switch strings.ToLower(rc.Getenv("BASHY_AGENTIC")) {
+	case "", "0", "false", "off", "no":
+		return false
 	}
-	return false
+	return true
 }
 
 // parseDuration accepts Go durations ("90s", "5m") and a bare number (seconds).
