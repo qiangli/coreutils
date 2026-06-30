@@ -416,7 +416,12 @@ printf '%s\n' "$BASHY_ARGV0"`))
 	exe := resolveArgv0(os.Args[0])
 	var got []string
 	for _, line := range strings.Split(out.String(), "\n") {
-		if line != "" && !strings.HasPrefix(line, "==> ") && !strings.HasPrefix(line, "dag: ") {
+		if line != "" &&
+			!strings.HasPrefix(line, "==> ") &&
+			!strings.HasPrefix(line, "dag: ") &&
+			!strings.Contains(line, "group::") &&
+			!strings.Contains(line, "[group]") &&
+			!strings.Contains(line, "[endgroup]") {
 			got = append(got, line)
 		}
 	}
