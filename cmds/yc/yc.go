@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	gotreesitter "github.com/odvcencio/gotreesitter"
 	"github.com/qiangli/coreutils/pkg/repomap"
 	"github.com/qiangli/coreutils/pkg/treesitter"
 	"github.com/qiangli/coreutils/tool"
@@ -22,7 +23,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "yc",
 	Synopsis: "AgentOS code intelligence: symbols, search-symbols, refs, repomap",
-	Usage:    "yc <verb> [args...]   (verbs: symbols, search-symbols, refs, repomap)",
+	Usage:    "yc <verb> [args...]   (verbs: symbols, search-symbols, refs, repomap, query)",
 }
 
 func init() {
@@ -45,6 +46,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return runRefs(rc, rest)
 	case "repomap":
 		return runRepomap(rc, rest)
+	case "query":
+		return runQuery(rc, rest)
 	case "help", "--help", "-h":
 		fmt.Fprintln(rc.Out, cmd.Usage)
 		return 0
@@ -320,4 +323,136 @@ func runRepomap(rc *tool.RunContext, args []string) int {
 	}
 	fmt.Fprint(rc.Out, rm.Format())
 	return 0
+}
+
+// --- yc query (structural search via tree-sitter queries) ---
+
+// runQuery runs a tree-sitter query (S-expression pattern with @captures)
+// over the source files of one language and prints each captured node's
+// file:line:col + capture name + (first line of) text. This is structural
+// search — matching the AST, not text — the primitive ast-grep compiles to.
+// Tree-sitter queries are grammar-specific, so a language is required (given by
+// --lang, or inferred from a single-file target).
+//
+//	yc query --lang go '(function_declaration name: (identifier) @fn)'
+//	yc query --lang python '(call function: (identifier) @c (#eq? @c "eval"))' src/
+func runQuery(rc *tool.RunContext, args []string) int {
+	asJSON := false
+	lang := ""
+	var queryStr, target string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--json":
+			asJSON = true
+		case a == "--lang" || a == "-l":
+			if i+1 < len(args) {
+				i++
+				lang = args[i]
+			}
+		case strings.HasPrefix(a, "--lang="):
+			lang = a[len("--lang="):]
+		case strings.HasPrefix(a, "-") && a != "-":
+			fmt.Fprintf(rc.Err, "yc query: unknown option %q\n", a)
+			return 2
+		default:
+			if queryStr == "" {
+				queryStr = a
+			} else if target == "" {
+				target = a
+			}
+		}
+	}
+	if queryStr == "" {
+		fmt.Fprintln(rc.Err, "yc query: missing tree-sitter query (an S-expression pattern)")
+		return 2
+	}
+	if target == "" {
+		target = "."
+	}
+	abs := rc.Path(target)
+
+	// A tree-sitter query references grammar node types, so it targets ONE
+	// language: explicit --lang, else inferred from a single-file target.
+	if lang == "" {
+		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+			lang = languageFromPath(abs)
+		}
+		if lang == "" {
+			fmt.Fprintln(rc.Err, "yc query: specify --lang (a tree-sitter query is grammar-specific)")
+			return 2
+		}
+	}
+	language := treesitter.GetLanguage(lang)
+	if language == nil {
+		fmt.Fprintf(rc.Err, "yc query: unsupported language %q\n", lang)
+		return 2
+	}
+	q, err := gotreesitter.NewQuery(queryStr, language)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "yc query: invalid query: %v\n", err)
+		return 2
+	}
+
+	type hit struct {
+		File string `json:"file"`
+		Line int    `json:"line"`
+		Col  int    `json:"col"`
+		Name string `json:"name"`
+		Text string `json:"text"`
+	}
+	var hits []hit
+	parser := treesitter.NewParser()
+	if err := walkSourceFiles(abs, func(path, fileLang string) error {
+		if fileLang != lang { // only files of the query's grammar
+			return nil
+		}
+		src, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		tree, perr := parser.Parse(rc.Ctx, src, lang)
+		if perr != nil {
+			return nil
+		}
+		for _, m := range q.ExecuteNode(tree.Root, language, src) {
+			for _, c := range m.Captures {
+				if c.Node == nil {
+					continue
+				}
+				p := c.Node.StartPoint()
+				hits = append(hits, hit{
+					File: path, Line: int(p.Row) + 1, Col: int(p.Column) + 1,
+					Name: c.Name, Text: firstLine(c.Text(src)),
+				})
+			}
+		}
+		return nil
+	}); err != nil {
+		fmt.Fprintf(rc.Err, "yc query: %v\n", err)
+		return 1
+	}
+
+	if asJSON {
+		enc := json.NewEncoder(rc.Out)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(hits)
+		return 0
+	}
+	for _, h := range hits {
+		fmt.Fprintf(rc.Out, "%s:%d:%d: @%s %s\n", h.File, h.Line, h.Col, h.Name, h.Text)
+	}
+	if len(hits) == 0 {
+		fmt.Fprintln(rc.Err, "(no matches)")
+	}
+	return 0
+}
+
+// firstLine returns s up to its first newline (with an ellipsis if truncated),
+// so a multi-line captured node stays one grep-style line.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i] + " …"
+	}
+	return s
 }
