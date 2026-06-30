@@ -71,6 +71,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/time"
 	_ "github.com/qiangli/coreutils/cmds/touch"
 	_ "github.com/qiangli/coreutils/cmds/tr"
+	_ "github.com/qiangli/coreutils/cmds/tree"
 	_ "github.com/qiangli/coreutils/cmds/true"
 	_ "github.com/qiangli/coreutils/cmds/truncate"
 	_ "github.com/qiangli/coreutils/cmds/tsort"
