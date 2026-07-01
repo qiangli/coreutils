@@ -460,7 +460,16 @@ func (weaveExecAutopilotRunner) Healthy(ctx context.Context, tool string) bool {
 }
 
 func (weaveExecAutopilotRunner) Run(ctx context.Context, tool, prompt, queueDir string, onOutput func(string)) (int, error) {
-	cmd := exec.CommandContext(ctx, tool)
+	var args []string
+	if toolsDir, err := weaveToolsDir(); err == nil {
+		if p, ok := loadToolProfile(toolsDir, tool); ok {
+			args = append(args, p.HeadlessArgs...)
+		} else if seed, has := seededLaunchContracts[tool]; has {
+			args = append(args, seed.HeadlessArgs...)
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, tool, args...)
 	cmd.Dir = queueDir
 	cmd.Stdin = strings.NewReader(prompt)
 	env := make([]string, 0, len(os.Environ())+4)
