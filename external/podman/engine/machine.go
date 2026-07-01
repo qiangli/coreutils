@@ -379,6 +379,11 @@ func StartMachine(ctx context.Context, name string) error {
 	if err := ociMachine.Start(mc, mp, ociMachine.StartOptions{}, &updateConn); err != nil {
 		return fmt.Errorf("machine start: %w", err)
 	}
+	if socketPath := defaultSocketPath(); socketPath != "" {
+		if err := waitForSocket(socketPath, 30*time.Second); err != nil {
+			return fmt.Errorf("machine start: API socket not ready: %w", err)
+		}
+	}
 	return nil
 }
 
