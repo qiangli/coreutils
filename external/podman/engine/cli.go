@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -16,26 +17,32 @@ import (
 	podman_embed "github.com/qiangli/coreutils/external/podman/engine/podman_embed"
 )
 
-// NewPodmanCmd is the `bashy podman` front-door: a thin pass-through to the
-// embedded upstream podman binary (built from the qiangli/podman fork), with
-// CONTAINER_HOST auto-pointed at the ISOLATED `bashy` machine's socket so images
-// + containers land in bashy's own store — never a host/ycode engine. bashy does
-// NOT reimplement podman's verbs; every upstream flag works. The only owned
-// subcommand is `machine` (the vfkit VM lifecycle). $BASHY_PODMAN_SYSTEM=1 defers
-// to a podman on $PATH instead of the embedded one.
+// NewPodmanCmd is the `bashy podman` front-door: a thin pass-through to Podman,
+// preferring the embedded binary, then a managed binmgr-downloaded remote
+// client, then a host podman. CONTAINER_HOST auto-points at the ISOLATED `bashy`
+// machine's socket when present so images + containers land in bashy's own
+// store. bashy does NOT reimplement podman's verbs; every upstream flag works.
+// $BASHY_PODMAN_SYSTEM=1 forces a podman on $PATH.
 func NewPodmanCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:                "podman [ARGS...]",
-		Aliases:            []string{"docker"},
-		Short:              "Container management — pass-through to the embedded (isolated) Podman",
-		Long: `Thin pass-through to the embedded Podman binary (from the qiangli/podman
-fork). Every upstream verb/flag/output works — bashy does not reimplement them.
-CONTAINER_HOST is auto-set to bashy's own isolated machine socket, so containers
-and images land in bashy's store, distinct from any host or ycode podman.
+		Use:     "podman [ARGS...]",
+		Aliases: []string{"docker"},
+		Short:   "Container management — pass-through to embedded or managed Podman",
+		Long: `Thin pass-through to Podman. Every upstream verb/flag/output works — bashy
+does not reimplement them.
+
+Resolution order:
+  1. embedded Podman, when this bashy build includes it
+  2. managed Podman remote client, downloaded and sha-verified by binmgr
+  3. podman on PATH
+
+CONTAINER_HOST is auto-set to bashy's own isolated machine socket when present,
+so containers and images land in bashy's store, distinct from any host or ycode
+podman.
 
   machine   Manage bashy's embedded vfkit VM (isolated; name "` + DefaultMachineName + `")
 
-$BASHY_PODMAN_SYSTEM=1 defers to a podman on $PATH instead of the embedded one.`,
+$BASHY_PODMAN_SYSTEM=1 forces a podman on $PATH.`,
 		DisableFlagParsing: true,
 		Args:               cobra.ArbitraryArgs,
 		SilenceUsage:       true,
@@ -58,8 +65,8 @@ func systemPodman() bool {
 	}
 }
 
-// ExecManaged resolves the podman binary (embedded, else $PATH) and execs it
-// with args, pointed at bashy's isolated machine socket via CONTAINER_HOST. The
+// ExecManaged resolves the podman binary and execs it with args, pointed at
+// bashy's isolated machine socket via CONTAINER_HOST when one exists. The
 // child's exit code propagates via os.Exit so CI scripts see failures.
 func ExecManaged(ctx context.Context, args []string) error {
 	bin, err := resolvePodmanBinary()
@@ -88,13 +95,30 @@ func buildManagedExec(ctx context.Context, bin, socket string, args []string) *e
 	if socket != "" {
 		env = append(env, "CONTAINER_HOST=unix://"+socket)
 	}
+	if dir := filepath.Dir(bin); dir != "." && dir != "" {
+		env = prependPath(env, dir)
+	}
 	cmd.Env = env
 	return cmd
 }
 
+func prependPath(env []string, dir string) []string {
+	key := "PATH"
+	sep := string(os.PathListSeparator)
+	for i, e := range env {
+		k, v, ok := strings.Cut(e, "=")
+		if ok && strings.EqualFold(k, key) {
+			cp := append([]string(nil), env...)
+			cp[i] = k + "=" + dir + sep + v
+			return cp
+		}
+	}
+	return append(env, key+"="+dir)
+}
+
 // resolvePodmanBinary picks the podman binary: $BASHY_PODMAN_SYSTEM → $PATH;
-// else the embedded binary (extracted + sha256-validated into the per-user
-// cache); else a $PATH fallback; else a clear error.
+// else embedded; else managed binmgr download/cache; else $PATH fallback; else a
+// clear error.
 func resolvePodmanBinary() (string, error) {
 	if systemPodman() {
 		bin, err := exec.LookPath("podman")
@@ -110,10 +134,13 @@ func resolvePodmanBinary() (string, error) {
 		}
 		return bin, nil
 	}
+	if bin, err := ensureManagedPodman(context.Background()); err == nil {
+		return bin, nil
+	}
 	if bin, err := exec.LookPath("podman"); err == nil {
 		return bin, nil
 	}
-	return "", fmt.Errorf("no embedded podman in this build and no podman on PATH — rebuild with the embed_podman tag (the embed blob), or install upstream podman")
+	return "", fmt.Errorf("no embedded podman in this build, managed podman unavailable for %s, and no podman on PATH — rebuild with the embed_podman tag (the embed blob), or install upstream podman", managedPodmanPlatform())
 }
 
 // newPodmanMachineCmd wires the isolated `bashy` machine lifecycle.
@@ -205,9 +232,9 @@ func newMachineStopCmd() *cobra.Command {
 
 func newMachineListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
+		Use:     "list",
 		Aliases: []string{"ls"},
-		Short: "List managed VMs",
+		Short:   "List managed VMs",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			machines, err := ListMachines(cmd.Context())
 			if err != nil {

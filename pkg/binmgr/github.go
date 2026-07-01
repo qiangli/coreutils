@@ -175,7 +175,7 @@ func resolveChecksum(ctx context.Context, rel *ghRelease, asset ghAsset) (sha, m
 	}
 	for _, a := range rel.Assets {
 		ln := strings.ToLower(a.Name)
-		if !strings.Contains(ln, "checksum") && ln != "sha256sums" && !strings.HasSuffix(ln, ".sha256sum") {
+		if !strings.Contains(ln, "checksum") && ln != "sha256sums" && ln != "shasums" && !strings.HasSuffix(ln, ".sha256sum") {
 			continue
 		}
 		body, e := httpGetBody(ctx, a.URL, "")
