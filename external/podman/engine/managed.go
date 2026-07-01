@@ -13,7 +13,7 @@ const managedPodmanVersion = "latest"
 
 func ensureManagedPodman(ctx context.Context) (string, error) {
 	tool, err := binmgr.ResolveGitHub(ctx, binmgr.GitHubSpec{
-		Name:       "podman",
+		Name:       "podman-remote",
 		Repo:       "containers/podman",
 		Version:    managedPodmanVersion,
 		Member:     "podman",

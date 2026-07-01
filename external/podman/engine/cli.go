@@ -134,13 +134,16 @@ func resolvePodmanBinary() (string, error) {
 		}
 		return bin, nil
 	}
+	var managedErr error
 	if bin, err := ensureManagedPodman(context.Background()); err == nil {
 		return bin, nil
+	} else {
+		managedErr = err
 	}
 	if bin, err := exec.LookPath("podman"); err == nil {
 		return bin, nil
 	}
-	return "", fmt.Errorf("no embedded podman in this build, managed podman unavailable for %s, and no podman on PATH — rebuild with the embed_podman tag (the embed blob), or install upstream podman", managedPodmanPlatform())
+	return "", fmt.Errorf("no embedded podman in this build, managed podman unavailable for %s (%v), and no podman on PATH — rebuild with the embed_podman tag (the embed blob), or install upstream podman", managedPodmanPlatform(), managedErr)
 }
 
 // newPodmanMachineCmd wires the isolated `bashy` machine lifecycle.
