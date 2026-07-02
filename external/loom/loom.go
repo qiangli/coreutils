@@ -405,8 +405,7 @@ func ensureCustomUI(dataDir string) error {
 }
 
 const loomHeaderTemplate = `<style>
-#navbar .navbar-left > a.item[target="_blank"][href="https://docs.gitea.com"],
-#navbar .navbar-right > a.item[href$="/user/login"] {
+#navbar .navbar-left > a.item[target="_blank"][href="https://docs.gitea.com"] {
 	display: none !important;
 }
 

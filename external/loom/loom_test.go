@@ -38,10 +38,13 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("custom header: %v", err)
 	}
-	for _, want := range []string{"https://docs.gitea.com", "/user/login", ".page-footer", "p.large", "navbar-logo", "/app/loom/"} {
+	for _, want := range []string{"https://docs.gitea.com", ".page-footer", "p.large", "navbar-logo", "/app/loom/"} {
 		if !strings.Contains(string(header), want) {
 			t.Errorf("custom header missing %q", want)
 		}
+	}
+	if strings.Contains(string(header), "/user/login") {
+		t.Error("custom header should not hide the sign-in link; browser issue filing needs login")
 	}
 	// Second call must not overwrite (stable secret across restarts), with the
 	// same actions toggle.
