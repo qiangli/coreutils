@@ -34,6 +34,15 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 			t.Errorf("seeded config missing %q", want)
 		}
 	}
+	header, err := os.ReadFile(filepath.Join(dir, "custom", "templates", "custom", "header.tmpl"))
+	if err != nil {
+		t.Fatalf("custom header: %v", err)
+	}
+	for _, want := range []string{"https://docs.gitea.com", "/user/login", ".page-footer"} {
+		if !strings.Contains(string(header), want) {
+			t.Errorf("custom header missing %q", want)
+		}
+	}
 	// Second call must not overwrite (stable secret across restarts), with the
 	// same actions toggle.
 	if _, err := ensureConfig(dir, "127.0.0.1", 3000, "https://ai.dhnt.io/matrix/h/dragon/app/loom/", true); err != nil {

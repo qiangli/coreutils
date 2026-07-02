@@ -371,6 +371,9 @@ func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool) 
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", err
 	}
+	if err := ensureCustomUI(dataDir); err != nil {
+		return "", err
+	}
 	cfgPath := filepath.Join(dataDir, "app.ini")
 	if existing, err := os.ReadFile(cfgPath); err == nil {
 		merged := ensureServerSection(string(existing), addr, port, rootURL)
@@ -392,6 +395,26 @@ func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool) 
 	}
 	return cfgPath, nil
 }
+
+func ensureCustomUI(dataDir string) error {
+	headerPath := filepath.Join(dataDir, "custom", "templates", "custom", "header.tmpl")
+	if err := os.MkdirAll(filepath.Dir(headerPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(headerPath, []byte(loomHeaderTemplate), 0o644)
+}
+
+const loomHeaderTemplate = `<style>
+#navbar .navbar-left > a.item[target="_blank"][href="https://docs.gitea.com"],
+#navbar .navbar-right > a.item[href$="/user/login"] {
+	display: none !important;
+}
+
+.page-footer {
+	display: none !important;
+}
+</style>
+`
 
 func ensureServerSection(ini, addr string, port int, rootURL string) string {
 	updates := map[string]string{
