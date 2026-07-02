@@ -396,6 +396,95 @@ func TestApproveResolveAndRolloutLifecycle(t *testing.T) {
 	}
 }
 
+func TestLocalIssueReferenceLifecycleE2E(t *testing.T) {
+	conductor := "/bin/echo"
+	if _, err := os.Stat(conductor); err != nil {
+		t.Skipf("%s is not available", conductor)
+	}
+	runsDir := t.TempDir()
+	ref := runSDLCCmd(t,
+		"--no-config",
+		"--conductor", conductor,
+		"--runs-dir", runsDir,
+		"--issue", "Local reference lifecycle e2e",
+	).ref
+	if ref == "" {
+		t.Fatal("expected delegate output to include sdlc reference")
+	}
+
+	run := runSDLCCmd(t, "approve", ref, "--runs-dir", runsDir, "--note", "UAT passed on local staging")
+	if !strings.Contains(run.out, "approved "+ref) {
+		t.Fatalf("approve output missing reference:\n%s", run.out)
+	}
+
+	run = runSDLCCmd(t,
+		"rollout", ref,
+		"--no-config",
+		"--conductor", conductor,
+		"--runs-dir", runsDir,
+		"--dry-run",
+		"--note", "push approved change to main",
+	)
+	for _, want := range []string{
+		"Production approval granted",
+		ref,
+		"UAT passed on local staging",
+		"push approved change to main",
+	} {
+		if !strings.Contains(run.out, want) {
+			t.Fatalf("rollout output missing %q:\n%s", want, run.out)
+		}
+	}
+
+	run = runSDLCCmd(t, "resolve", ref, "--runs-dir", runsDir, "--status", "resolved", "--note", "production verified")
+	if !strings.Contains(run.out, ref+" resolved") {
+		t.Fatalf("resolve output missing reference:\n%s", run.out)
+	}
+
+	run = runSDLCCmd(t, "runs", "--runs-dir", runsDir)
+	for _, want := range []string{ref, "resolved", "approved=true", "resolved=true"} {
+		if !strings.Contains(run.out, want) {
+			t.Fatalf("runs output missing %q:\n%s", want, run.out)
+		}
+	}
+
+	record, err := LoadRunByID(runsDir, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ReferenceID != ref || record.Approval == nil || record.Resolution == nil {
+		t.Fatalf("reference lifecycle not persisted: %+v", record)
+	}
+}
+
+type sdlcCmdResult struct {
+	out string
+	ref string
+}
+
+func runSDLCCmd(t *testing.T, args ...string) sdlcCmdResult {
+	t.Helper()
+	cmd := NewSDLCCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("sdlc %s failed: %v\n%s", strings.Join(args, " "), err, out.String())
+	}
+	got := out.String()
+	return sdlcCmdResult{out: got, ref: extractSDLCReference(got)}
+}
+
+func extractSDLCReference(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if ref, ok := strings.CutPrefix(strings.TrimSpace(line), "sdlc reference: "); ok {
+			return strings.TrimSpace(ref)
+		}
+	}
+	return ""
+}
+
 func TestVerifyContentFilePresentAbsent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "page.html")
 	if err := os.WriteFile(path, []byte("<h1>Cloudbox</h1><h2>Startups</h2>"), 0o644); err != nil {
