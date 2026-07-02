@@ -413,6 +413,10 @@ const loomHeaderTemplate = `<style>
 .page-footer {
 	display: none !important;
 }
+
+.page-content.home .ui.stackable.middle.very.relaxed.page.grid .column > p.large {
+	display: none !important;
+}
 </style>
 <script>
 document.addEventListener('DOMContentLoaded', () => {

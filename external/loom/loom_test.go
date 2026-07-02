@@ -38,7 +38,7 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("custom header: %v", err)
 	}
-	for _, want := range []string{"https://docs.gitea.com", "/user/login", ".page-footer", "navbar-logo", "/app/loom/"} {
+	for _, want := range []string{"https://docs.gitea.com", "/user/login", ".page-footer", "p.large", "navbar-logo", "/app/loom/"} {
 		if !strings.Contains(string(header), want) {
 			t.Errorf("custom header missing %q", want)
 		}
