@@ -347,7 +347,7 @@ against the exact SDLC reference id:
   bashy sdlc runs
   bashy sdlc qa RUN_ID --status accepted --note "local smoke passed"
   bashy sdlc approve RUN_ID --note "approved for GitHub rollout"
-  bashy sdlc rollout RUN_ID --production github-pages --background
+  bashy sdlc publish github-pages RUN_ID --branch main
   bashy sdlc resolve RUN_ID --status resolved --note "GitHub Pages verified"
 
 This keeps confidential discussion and runtime output local. Only source commits
@@ -625,6 +625,31 @@ type WorkspaceResult struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+type PublishOptions struct {
+	RunsDir string
+	RunID   string
+	Remote  string
+	Repo    string
+	Branch  string
+	Source  string
+	Cwd     string
+	DryRun  bool
+	JSON    bool
+}
+
+type PublishResult struct {
+	SchemaVersion string    `json:"schema_version"`
+	Status        string    `json:"status"`
+	RunID         string    `json:"run_id"`
+	Cwd           string    `json:"cwd"`
+	Target        string    `json:"target"`
+	Source        string    `json:"source"`
+	Branch        string    `json:"branch"`
+	Command       []string  `json:"command"`
+	Output        string    `json:"output,omitempty"`
+	PublishedAt   time.Time `json:"published_at,omitempty"`
+}
+
 // NewSDLCCmd returns the `bashy sdlc` command tree.
 func NewSDLCCmd() *cobra.Command {
 	var opt DelegateOptions
@@ -665,7 +690,7 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(), newQACmd(),
 		newApproveCmd(), newRolloutCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
-		newWorkspaceCmd(), newSuperviseCmd(),
+		newWorkspaceCmd(), newPublishCmd(), newSuperviseCmd(),
 	)
 	return cmd
 }
@@ -1207,6 +1232,49 @@ func newWorkspacePrepareCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opt.Baseline, "baseline", "", "immutable Loom mirror repo URL")
 	cmd.Flags().StringVar(&opt.Upstream, "upstream", "", "optional GitHub upstream URL, configured read-only")
 	cmd.Flags().BoolVar(&opt.AllowGitHubOrigin, "allow-github-origin", false, "allow origin to point at github.com instead of Loom")
+	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print JSON")
+	return cmd
+}
+
+func newPublishCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "publish",
+		Short: "publish approved SDLC results to external targets",
+	}
+	cmd.CompletionOptions.DisableDefaultCmd = true
+	cmd.AddCommand(newPublishGitHubPagesCmd())
+	return cmd
+}
+
+func newPublishGitHubPagesCmd() *cobra.Command {
+	var opt PublishOptions
+	cmd := &cobra.Command{
+		Use:   "github-pages RUN_ID",
+		Short: "push an approved workspace result to a GitHub Pages branch",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opt.RunID = args[0]
+			res, err := PublishGitHubPages(cmd.Context(), opt)
+			if opt.JSON || os.Getenv("BASHY_AGENTIC") != "" {
+				b, _ := json.Marshal(res)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+			} else if err == nil {
+				if opt.DryRun {
+					fmt.Fprintf(cmd.OutOrStdout(), "dry-run publish %s -> %s:%s\n", res.Source, res.Target, res.Branch)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "published %s -> %s:%s\n", res.Source, res.Target, res.Branch)
+				}
+			}
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "workspace directory; defaults to the run cwd or current directory")
+	cmd.Flags().StringVar(&opt.Remote, "remote", "upstream", "git remote containing the GitHub target URL")
+	cmd.Flags().StringVar(&opt.Repo, "repo", "", "GitHub repo owner/name; overrides --remote URL")
+	cmd.Flags().StringVar(&opt.Branch, "branch", "main", "GitHub branch to update")
+	cmd.Flags().StringVar(&opt.Source, "source", "HEAD", "local ref to publish")
+	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the push command without running it")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print JSON")
 	return cmd
 }
@@ -2548,6 +2616,77 @@ func PrepareWorkspace(ctx context.Context, opt WorkspaceOptions) (WorkspaceResul
 		res.Status = "error"
 		return res, err
 	}
+	return res, nil
+}
+
+func PublishGitHubPages(ctx context.Context, opt PublishOptions) (PublishResult, error) {
+	if strings.TrimSpace(opt.Branch) == "" {
+		opt.Branch = "main"
+	}
+	if strings.TrimSpace(opt.Source) == "" {
+		opt.Source = "HEAD"
+	}
+	if strings.TrimSpace(opt.Remote) == "" {
+		opt.Remote = "upstream"
+	}
+	run, err := LoadRunByID(opt.RunsDir, opt.RunID)
+	res := PublishResult{
+		SchemaVersion: schemaVersion,
+		Status:        "error",
+		RunID:         strings.TrimSpace(opt.RunID),
+		Source:        strings.TrimSpace(opt.Source),
+		Branch:        strings.TrimSpace(opt.Branch),
+	}
+	if err != nil {
+		return res, err
+	}
+	if !RunApproved(run) {
+		return res, fmt.Errorf("sdlc: run %s is not approved; run `bashy sdlc approve %s --note ...` first", run.ReferenceID, run.ReferenceID)
+	}
+	cwd := strings.TrimSpace(opt.Cwd)
+	if cwd == "" {
+		cwd = strings.TrimSpace(run.Cwd)
+	}
+	if cwd == "" {
+		var wdErr error
+		cwd, wdErr = os.Getwd()
+		if wdErr != nil {
+			return res, wdErr
+		}
+	}
+	res.Cwd = cwd
+	guard := Guard(cwd, nil)
+	if guard["status"] != "ok" {
+		return res, fmt.Errorf("sdlc: guard failed; run `bashy sdlc guard` in %s", cwd)
+	}
+	target := strings.TrimSpace(opt.Repo)
+	if target != "" {
+		target = "https://github.com/" + strings.TrimSuffix(strings.TrimPrefix(target, "https://github.com/"), ".git") + ".git"
+	} else {
+		target = strings.TrimSpace(runGit(cwd, "remote", "get-url", opt.Remote))
+	}
+	if target == "" {
+		return res, fmt.Errorf("sdlc: no publish target; set --repo owner/repo or configure remote %q", opt.Remote)
+	}
+	if !isGitHubURL(target) {
+		return res, fmt.Errorf("sdlc: publish target is not github.com: %s", target)
+	}
+	res.Target = target
+	args := []string{"push", target, res.Source + ":refs/heads/" + res.Branch}
+	res.Command = append([]string{"git"}, args...)
+	if opt.DryRun {
+		res.Status = "dry-run"
+		return res, nil
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = cwd
+	out, err := cmd.CombinedOutput()
+	res.Output = string(out)
+	if err != nil {
+		return res, fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	res.Status = "published"
+	res.PublishedAt = time.Now().UTC()
 	return res, nil
 }
 

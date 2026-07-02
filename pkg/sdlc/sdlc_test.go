@@ -147,7 +147,7 @@ func TestCommandSurfaceIncludesTriggerEntrypoint(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard", "workspace"} {
+	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard", "workspace", "publish"} {
 		if !have[name] {
 			t.Fatalf("missing subcommand %q", name)
 		}
@@ -170,6 +170,7 @@ func TestGuideIsSelfContainedRuntimeHelp(t *testing.T) {
 		"danger-full-access",
 		"bashy web inspect",
 		"deploy-status",
+		"publish github-pages",
 		"Local Loom-first control plane",
 		"GitHub = public source control",
 		"origin   = writable Loom workspace repo",
@@ -241,6 +242,54 @@ func TestGuardFailsGitHubOrigin(t *testing.T) {
 	res := Guard(repo, nil)
 	if res["status"] != "failed" {
 		t.Fatalf("guard status=%v, want failed: %+v", res["status"], res)
+	}
+}
+
+func TestPublishGitHubPagesRequiresApprovalAndDryRuns(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	runTestGit(t, "", "init", repo)
+	runTestGit(t, repo, "config", "user.email", "test@example.invalid")
+	runTestGit(t, repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repo, "add", "README.md")
+	runTestGit(t, repo, "commit", "-m", "seed")
+	runTestGit(t, "", "init", "--bare", filepath.Join(root, "workspace.git"))
+	runTestGit(t, "", "init", "--bare", filepath.Join(root, "mirror.git"))
+	runTestGit(t, repo, "remote", "add", "origin", filepath.Join(root, "workspace.git"))
+	runTestGit(t, repo, "remote", "add", "baseline", filepath.Join(root, "mirror.git"))
+	runTestGit(t, repo, "remote", "add", "upstream", "https://github.com/example/repo.git")
+	runTestGit(t, repo, "remote", "set-url", "--push", "upstream", "DISABLED")
+	runsDir := filepath.Join(root, "runs")
+	res := DelegateResult{
+		SchemaVersion: schemaVersion,
+		Status:        "ready",
+		Conductor:     "codex",
+		Issue:         Issue{Title: "publish"},
+		Brief:         "brief",
+	}
+	run, err := NewRunRecord(res, DelegateOptions{RunsDir: runsDir, Cwd: repo}, chat.Result{Agent: "codex", Cwd: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = "succeeded"
+	if err := SaveRunRecord(*run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PublishGitHubPages(context.Background(), PublishOptions{RunsDir: runsDir, RunID: run.ReferenceID, DryRun: true}); err == nil {
+		t.Fatal("expected unapproved publish to fail")
+	}
+	if _, err := ApproveRun(runsDir, run.ReferenceID, "ok", "user"); err != nil {
+		t.Fatal(err)
+	}
+	pub, err := PublishGitHubPages(context.Background(), PublishOptions{RunsDir: runsDir, RunID: run.ReferenceID, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub.Status != "dry-run" || !isGitHubURL(pub.Target) || pub.Branch != "main" {
+		t.Fatalf("unexpected publish result: %+v", pub)
 	}
 }
 
