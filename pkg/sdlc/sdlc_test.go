@@ -127,9 +127,33 @@ func TestCommandSurfaceIncludesTriggerEntrypoint(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "verify", "deploy-status", "guard"} {
+	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "verify", "deploy-status", "guard"} {
 		if !have[name] {
 			t.Fatalf("missing subcommand %q", name)
+		}
+	}
+}
+
+func TestGuideIsSelfContainedRuntimeHelp(t *testing.T) {
+	cmd := NewSDLCCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"guide"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"bashy sdlc --issue",
+		"--issue-file",
+		".bashy/sdlc.yaml",
+		"danger-full-access",
+		"bashy web inspect",
+		"deploy-status",
+		"Production gate",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("guide missing %q:\n%s", want, got)
 		}
 	}
 }
@@ -239,6 +263,8 @@ func TestRootCommandAcceptsLocalIssueDryRun(t *testing.T) {
 	if !strings.Contains(got, `"status":"dry-run"`) ||
 		!strings.Contains(got, `"default_config":true`) ||
 		!strings.Contains(got, `"conductor":"codex"`) ||
+		!strings.Contains(got, `--sandbox`) ||
+		!strings.Contains(got, `danger-full-access`) ||
 		!strings.Contains(got, "Add CLI issue intake") {
 		t.Fatalf("unexpected root dry-run output: %s", got)
 	}

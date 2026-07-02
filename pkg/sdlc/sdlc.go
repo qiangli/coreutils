@@ -22,6 +22,212 @@ import (
 
 const schemaVersion = "bashy-sdlc-v1"
 
+const sdlcLongHelp = `
+bashy sdlc is a local-first SDLC coordinator. It accepts an issue/request,
+builds a conductor brief, and delegates implementation to the configured agent.
+SDLC owns intake, routing, validation gates, and deployment status checks; the
+conductor owns architecture, planning, implementation, tests, commits, and pushes.
+
+For interactive use, no config file is required. If .bashy/sdlc.yaml is absent,
+bashy uses embedded defaults: local intake, the active agent as conductor when it
+can be detected, and generic staging/production target names. Use "bashy sdlc
+init" when you want project-specific intake, reviewer, QA, or deployment targets.
+
+Run "bashy sdlc guide" for the full embedded usage guide.
+`
+
+const sdlcGuide = `
+bashy sdlc guide
+
+Purpose
+
+bashy sdlc is the interface between issue intake and deployment targets. It is
+designed to stay small: it captures or receives a request, turns it into a clear
+conductor brief, invokes the implementation conductor agent, and provides simple
+checks for validation and deployment status.
+
+The SDLC command does not try to be the architect or implementer. The conductor
+agent owns planning, coding, tests, source control operations, and iteration. SDLC
+keeps the boundary: issue in, agent delegation, validation gates, deployment
+status, and human approval before production.
+
+Local interactive quick start
+
+  bashy sdlc --issue "Remove the obsolete Miscellaneous section"
+
+For a longer request:
+
+  bashy sdlc --issue-file ./request.md
+
+Run from another checkout or project directory:
+
+  bashy sdlc --issue-file ./request.md --cwd /path/to/project
+
+Print what would be run without invoking the conductor:
+
+  bashy sdlc --issue "Update the landing page" --dry-run
+
+Machine-readable output:
+
+  bashy sdlc --issue "Update the landing page" --json
+
+Issue text format
+
+The first non-empty line becomes the title. The full multi-line text becomes the
+body. This works for humans and tools:
+
+  bashy sdlc --issue "Fix staging deploy"
+
+  cat request.md
+  Fix staging deploy
+
+  The Pages workflow is green but the live page still shows old content.
+  Check deployment status, inspect the live page, and fix the cause.
+
+  bashy sdlc --issue-file request.md
+
+Configuration
+
+For interactive local runs, .bashy/sdlc.yaml is optional. If it is missing, bashy
+uses an embedded default config with:
+
+  intake: local
+  conductor: the detected active agent, or codex as a fallback
+  reviewer: codex
+  qa: codex
+  staging: staging
+  production: production
+
+Inspect the active config/defaults:
+
+  bashy sdlc config explain
+
+Create a project config:
+
+  bashy sdlc init
+
+Validate a project config:
+
+  bashy sdlc doctor
+
+Example .bashy/sdlc.yaml:
+
+  conductor:
+    agent: codex
+  reviewer:
+    agent: codex
+  qa:
+    agent: codex
+  intake:
+    provider: github
+    repository: owner/repo
+    query: is:issue is:open no:assignee
+  deployment:
+    staging:
+      name: pages-staging
+      healthcheck: https://staging.example.com
+    production:
+      name: pages-production
+      healthcheck: https://example.com
+
+Conductor selection
+
+The conductor defaults to the active agent when bashy can detect one. Explicit
+environment overrides are also supported:
+
+  BASHY_SDLC_CONDUCTOR_AGENT=claude bashy sdlc --issue "Fix checkout"
+  BASHY_SDLC_CONDUCTOR_AGENT=opencode bashy sdlc --issue-file request.md
+  BASHY_SDLC_CONDUCTOR_AGENT=codex bashy sdlc --issue "Add docs"
+
+Use this to inspect the active agent context when available:
+
+  bashy agent whoami
+
+Delegation and permissions
+
+SDLC defaults the conductor sandbox to danger-full-access. This is intentional for
+developer workstations where the delegated conductor is expected to edit files,
+run tests, commit, and push. For a restricted run:
+
+  bashy sdlc --issue "Try the change" --sandbox workspace-write
+
+For a dry-run of the exact conductor invocation:
+
+  bashy sdlc delegate --issue-title "Try the change" --dry-run
+
+Local issue records
+
+Record a local issue without delegating it:
+
+  bashy sdlc issue --text "Add a deployment status check"
+  bashy sdlc issue --file ./request.md
+
+Local issue files are written under .bashy/sdlc/issues by default. They are meant
+for local reference and automation handoff.
+
+Briefs and scheduled ticks
+
+Render only the conductor brief:
+
+  bashy sdlc brief --issue-title "Refresh project list"
+
+Run one externally triggered cycle for a single issue:
+
+  bashy sdlc tick --issue-title "Refresh project list"
+
+The tick command is suitable for schedulers or CI jobs that already selected the
+issue to work on. Future intake integrations can select GitHub, Jira, or other
+project-management issues before calling tick/delegate.
+
+Validation helpers
+
+Check that text is present or absent in a URL:
+
+  bashy sdlc verify --url https://example.com --present "Projects"
+  bashy sdlc verify --url https://example.com --absent "Miscellaneous"
+
+Check a local file:
+
+  bashy sdlc verify --file ./index.html --present "Projects"
+
+Inspect a live web page when bashy web is available:
+
+  bashy web inspect https://example.com --contains "Projects"
+
+Check GitHub Actions or Pages deployment status:
+
+  bashy sdlc deploy-status --repo owner/repo --branch main
+
+Run local guard checks before pushing:
+
+  bashy sdlc guard
+  bashy sdlc guard --check "go test ./..."
+
+Common workflows
+
+Local human-triggered change:
+
+  bashy sdlc --issue-file request.md --cwd /path/to/repo --timeout 45m
+  bashy sdlc deploy-status --repo owner/repo --branch main
+  bashy sdlc verify --url https://example.com --absent "Old text"
+
+Background or CI-triggered change:
+
+  bashy sdlc tick --issue-id 123 --issue-url https://github.com/owner/repo/issues/123 \
+    --issue-title "Fix broken deploy" --json --timeout 60m
+
+Incomplete run recovery:
+
+  bashy sdlc status
+  bashy sdlc --issue "Recover the incomplete SDLC run. Inspect current git state, preserve user changes, finish tests, commit, and push only the appropriate changes."
+
+Production gate
+
+SDLC may inspect staging and production status, but production rollout should
+remain gated by explicit human approval unless your project config and operating
+policy say otherwise.
+`
+
 // Config describes SDLC's boundary: intake system, agent roles, and deployment
 // targets. Implementation details stay delegated to conductor/review/QA agents.
 type Config struct {
@@ -76,6 +282,7 @@ type DelegateOptions struct {
 	JSON       bool
 	Timeout    time.Duration
 	Cwd        string
+	Sandbox    string
 }
 
 type DelegateResult struct {
@@ -137,6 +344,16 @@ func NewSDLCCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sdlc [--issue TEXT | --issue-file PATH]",
 		Short: "route intake issues through agentic implementation and deployment gates",
+		Long:  strings.TrimSpace(sdlcLongHelp),
+		Example: strings.TrimSpace(`
+bashy sdlc --issue "Remove the obsolete Miscellaneous section"
+bashy sdlc --issue-file ./request.md --cwd ../site --timeout 45m
+bashy sdlc guide
+bashy sdlc init
+bashy sdlc config explain
+bashy sdlc verify --url https://example.com --absent "Miscellaneous"
+bashy sdlc deploy-status --repo owner/repo --branch main
+`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(opt.IssueText) == "" && strings.TrimSpace(opt.IssueFile) == "" &&
 				strings.TrimSpace(opt.Issue.Title) == "" && strings.TrimSpace(opt.Issue.Body) == "" {
@@ -160,9 +377,22 @@ func NewSDLCCmd() *cobra.Command {
 	bindIssueFlags(cmd, &opt)
 	bindDelegateFlags(cmd, &opt)
 	cmd.AddCommand(
-		newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
+		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
 	)
+	return cmd
+}
+
+func newGuideCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "guide",
+		Short: "print a self-contained SDLC usage guide",
+		Long:  "Prints the embedded SDLC guide. The output is bundled into bashy and does not depend on repo documentation.",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprint(cmd.OutOrStdout(), strings.TrimSpace(sdlcGuide))
+			fmt.Fprintln(cmd.OutOrStdout())
+		},
+	}
 	return cmd
 }
 
@@ -482,6 +712,7 @@ func bindDelegateFlags(cmd *cobra.Command, opt *DelegateOptions) {
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-sdlc-v1 JSON envelope")
 	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "conductor timeout, for example 45m")
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "working directory for the conductor")
+	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "danger-full-access", "conductor sandbox for agents that support it")
 }
 
 func bindIssueFlags(cmd *cobra.Command, opt *DelegateOptions) {
@@ -731,6 +962,7 @@ func Delegate(ctx context.Context, opt DelegateOptions) (DelegateResult, error) 
 		Instruction: res.Brief,
 		Cwd:         opt.Cwd,
 		Timeout:     opt.Timeout,
+		Sandbox:     opt.Sandbox,
 		DryRun:      opt.DryRun,
 	}, nil)
 	res.Chat = chatRes

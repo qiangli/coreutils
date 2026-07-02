@@ -60,3 +60,19 @@ func TestInvokeUsesSeededHeadlessContract(t *testing.T) {
 		t.Fatalf("last arg should be prompt, got %#v", r.args)
 	}
 }
+
+func TestInvokeCanOverrideCodexSandbox(t *testing.T) {
+	r := &fakeRunner{}
+	_, err := Invoke(context.Background(), Options{
+		Agent:       "codex",
+		Instruction: "commit this",
+		Sandbox:     "danger-full-access",
+	}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(r.args, " ")
+	if !strings.Contains(got, "--sandbox danger-full-access") {
+		t.Fatalf("sandbox override missing from args: %#v", r.args)
+	}
+}

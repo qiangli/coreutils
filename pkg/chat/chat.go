@@ -28,6 +28,7 @@ type Options struct {
 	Context     []string
 	Cwd         string
 	Timeout     time.Duration
+	Sandbox     string
 	JSON        bool
 	DryRun      bool
 }
@@ -124,6 +125,7 @@ func NewChatCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opt.Context, "context", nil, "append context text to the instruction")
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "working directory for the agent process")
 	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "agent timeout, for example 30m")
+	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "", "agent sandbox override, for example workspace-write or danger-full-access")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope")
 	cmd.Flags().Bool("plain", false, "force plain output even under BASHY_AGENTIC")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the resolved invocation without running the agent")
@@ -144,8 +146,7 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if err != nil {
 		return Result{SchemaVersion: schemaVersion, Agent: agent, Role: opt.Role, ExitCode: 2}, err
 	}
-	profile := seededProfiles[agent]
-	args := append(append([]string{}, profile.Args...), prompt)
+	args := append(resolveLaunchArgs(agent, opt), prompt)
 	cwd := opt.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -171,6 +172,21 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	out, code, err := runner.Run(ctx, agent, args, cwd)
 	res.Output, res.ExitCode = out, code
 	return res, err
+}
+
+func resolveLaunchArgs(agent string, opt Options) []string {
+	profile := seededProfiles[agent]
+	args := append([]string{}, profile.Args...)
+	if agent == "codex" && strings.TrimSpace(opt.Sandbox) != "" {
+		for i := 0; i < len(args)-1; i++ {
+			if args[i] == "--sandbox" {
+				args[i+1] = strings.TrimSpace(opt.Sandbox)
+				return args
+			}
+		}
+		args = append(args, "--sandbox", strings.TrimSpace(opt.Sandbox))
+	}
+	return args
 }
 
 // ResolveAgent maps either an explicit agent or a workflow role to a command.
