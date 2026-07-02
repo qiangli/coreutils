@@ -41,6 +41,10 @@ const (
 	DefaultAddr      = "127.0.0.1"
 	DefaultPort      = 31880
 	DefaultProxyPort = 31881
+	LoopbackUser     = "admin"
+	LoopbackPassword = "admin"
+	LoopbackEmail    = "admin@localhost"
+	LoopbackName     = "admin"
 )
 
 // Spec is the binmgr GitHub spec loom resolves the Gitea binary from.
@@ -190,6 +194,10 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loom: start gitea: %w", err)
 	}
+	if err := ensureLoopbackAdmin(ctx, bin, cfg, o.DataDir); err != nil {
+		_ = proc.Stop(10 * time.Second)
+		return nil, err
+	}
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
 }
 
@@ -322,6 +330,12 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		StartedAt: time.Now().UTC(),
 	}
 	if err := waitHTTP(ctx, st.URL, 60*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		_ = proxyCmd.Process.Kill()
+		_ = removeState(o.DataDir)
+		return State{}, err
+	}
+	if err := ensureLoopbackAdmin(ctx, bin, cfg, o.DataDir); err != nil {
 		_ = cmd.Process.Kill()
 		_ = proxyCmd.Process.Kill()
 		_ = removeState(o.DataDir)
@@ -595,18 +609,56 @@ func proxyIdentity(req *http.Request) (user, email, name string) {
 	if !isLoopbackRemote(req.RemoteAddr) {
 		return "", "", ""
 	}
-	user = strings.TrimSpace(os.Getenv("USER"))
-	if user == "" {
-		user = strings.TrimSpace(os.Getenv("LOGNAME"))
+	return LoopbackUser, LoopbackEmail, LoopbackName
+}
+
+func ensureLoopbackAdmin(ctx context.Context, bin, cfg, dataDir string) error {
+	args := []string{
+		"--config", cfg,
+		"--work-path", dataDir,
+		"admin", "user", "create",
+		"--username", LoopbackUser,
+		"--password", LoopbackPassword,
+		"--email", LoopbackEmail,
+		"--fullname", LoopbackName,
+		"--admin",
+		"--must-change-password=false",
 	}
-	if user == "" {
-		user = "local"
+	out, err := runGiteaAdmin(ctx, bin, dataDir, args...)
+	if err == nil {
+		return nil
 	}
-	email = user
-	if !strings.Contains(email, "@") {
-		email += "@localhost"
+	msg := string(out)
+	if !strings.Contains(strings.ToLower(msg), "already exists") {
+		return fmt.Errorf("loom: ensure local admin: %w: %s", err, strings.TrimSpace(msg))
 	}
-	return user, email, remoteNameFromEmail(email)
+	list, listErr := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir, "admin", "user", "list", "--admin")
+	if listErr != nil {
+		return fmt.Errorf("loom: check local admin: %w: %s", listErr, strings.TrimSpace(string(list)))
+	}
+	if !adminListContainsUser(string(list), LoopbackUser) {
+		return fmt.Errorf("loom: local user %q already exists but is not an admin", LoopbackUser)
+	}
+	return nil
+}
+
+func runGiteaAdmin(ctx context.Context, bin, dataDir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Dir = dataDir
+	cmd.Env = append(os.Environ(), "GITEA_WORK_DIR="+dataDir)
+	return cmd.CombinedOutput()
+}
+
+func adminListContainsUser(output, user string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		for _, field := range fields {
+			if field == user {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isLoopbackRemote(addr string) bool {
@@ -616,14 +668,6 @@ func isLoopbackRemote(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-func remoteNameFromEmail(s string) string {
-	at := strings.IndexByte(s, '@')
-	if at <= 0 {
-		return ""
-	}
-	return s[:at]
 }
 
 func firstNonEmpty(vals ...string) string {

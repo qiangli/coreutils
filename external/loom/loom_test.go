@@ -145,6 +145,33 @@ func TestProxyTranslatesRemoteIdentityToWebauth(t *testing.T) {
 	}
 }
 
+func TestProxyUsesSharedLoopbackAdminIdentity(t *testing.T) {
+	var gotUser, gotEmail, gotName string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-WEBAUTH-USER")
+		gotEmail = r.Header.Get("X-WEBAUTH-EMAIL")
+		gotName = r.Header.Get("X-WEBAUTH-FULLNAME")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	resp, err := http.Get(proxy.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if gotUser != LoopbackUser || gotEmail != LoopbackEmail || gotName != LoopbackName {
+		t.Fatalf("loopback webauth headers = (%q,%q,%q), want %s/%s/%s", gotUser, gotEmail, gotName, LoopbackUser, LoopbackEmail, LoopbackName)
+	}
+}
+
 func TestProxyStripsPublicPrefix(t *testing.T) {
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -244,6 +271,19 @@ func TestProxyPreservesPublicPrefixForForwardedHTML(t *testing.T) {
 	}
 	if gotAcceptEncoding != "gzip" {
 		t.Fatalf("Accept-Encoding = %q, want preserved for forwarded traffic", gotAcceptEncoding)
+	}
+}
+
+func TestAdminListContainsUser(t *testing.T) {
+	out := `ID   Username Email           IsAdmin
+1    admin    admin@localhost true
+2    alice    alice@test      true
+`
+	if !adminListContainsUser(out, "admin") {
+		t.Fatal("admin user not detected")
+	}
+	if adminListContainsUser(out, "root") {
+		t.Fatal("unexpected root user detected")
 	}
 }
 
