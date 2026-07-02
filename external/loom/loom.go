@@ -6,6 +6,7 @@
 package loom
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -469,6 +470,9 @@ func loomProxyHandler(target, publicPrefix string) (http.Handler, error) {
 		stripPublicPrefix(req.URL, prefix)
 		baseDirector(req)
 		req.Host = targetURL.Host
+		if prefix != "" && req.Header.Get("X-Forwarded-Prefix") == "" {
+			req.Header.Del("Accept-Encoding")
+		}
 		stripWebauthHeaders(req.Header)
 		user, email, name := proxyIdentity(req)
 		if user != "" {
@@ -478,6 +482,29 @@ func loomProxyHandler(target, publicPrefix string) (http.Handler, error) {
 				req.Header.Set("X-WEBAUTH-FULLNAME", name)
 			}
 		}
+	}
+	rp.ModifyResponse = func(resp *http.Response) error {
+		if prefix == "" || resp == nil || resp.Request == nil || resp.Request.Header.Get("X-Forwarded-Prefix") != "" {
+			return nil
+		}
+		if loc := resp.Header.Get("Location"); loc != "" {
+			if stripped := stripPathPrefix(loc, prefix); stripped != loc {
+				resp.Header.Set("Location", stripped)
+			}
+		}
+		if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html") || resp.Body == nil {
+			return nil
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		body = rewriteLocalHTMLPrefix(body, prefix)
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		resp.ContentLength = int64(len(body))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		return nil
 	}
 	return rp, nil
 }
@@ -517,6 +544,39 @@ func stripPublicPrefix(u *url.URL, prefix string) {
 		}
 		u.RawPath = ""
 	}
+}
+
+func stripPathPrefix(pathOrURL, prefix string) string {
+	if prefix == "" || pathOrURL == "" {
+		return pathOrURL
+	}
+	if u, err := url.Parse(pathOrURL); err == nil && u.Scheme != "" {
+		if stripped := stripPathPrefix(u.Path, prefix); stripped != u.Path {
+			u.Path = stripped
+			u.RawPath = ""
+			return u.RequestURI()
+		}
+		return pathOrURL
+	}
+	if pathOrURL == prefix {
+		return "/"
+	}
+	if strings.HasPrefix(pathOrURL, prefix+"/") {
+		return strings.TrimPrefix(pathOrURL, prefix)
+	}
+	return pathOrURL
+}
+
+func rewriteLocalHTMLPrefix(body []byte, prefix string) []byte {
+	if prefix == "" {
+		return body
+	}
+	body = bytes.ReplaceAll(body, []byte(`"`+prefix+`/`), []byte(`"/`))
+	body = bytes.ReplaceAll(body, []byte(`'`+prefix+`/`), []byte(`'/`))
+	body = bytes.ReplaceAll(body, []byte(`=`+prefix+`/`), []byte(`=/`))
+	body = bytes.ReplaceAll(body, []byte(`:`+prefix+`/`), []byte(`:/`))
+	body = bytes.ReplaceAll(body, []byte(prefix+`/`), []byte(`/`))
+	return body
 }
 
 func stripWebauthHeaders(h http.Header) {

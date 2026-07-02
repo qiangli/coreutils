@@ -1,6 +1,7 @@
 package loom
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -170,6 +171,79 @@ func TestProxyStripsPublicPrefix(t *testing.T) {
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/css") {
 		t.Fatalf("content-type = %q, want text/css", ct)
+	}
+}
+
+func TestProxyRewritesPublicPrefixForDirectLocalHTML(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Location", "https://ai.dhnt.io"+prefix+"/user/login?redirect_to=%2F")
+		_, _ = w.Write([]byte(`<meta content="http://127.0.0.1:31880` + prefix + `/avatars/a"><link href="` + prefix + `/assets/css/index.css"><script src="` + prefix + `/assets/js/index.js"></script>`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/loom/repo/issues/new", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), prefix) {
+		t.Fatalf("direct local HTML still contains public prefix:\n%s", body)
+	}
+	for _, want := range []string{`href="/assets/css/index.css"`, `src="/assets/js/index.js"`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("direct local HTML missing %q:\n%s", want, body)
+		}
+	}
+	if got := resp.Header.Get("Location"); got != "/user/login?redirect_to=%2F" {
+		t.Fatalf("Location = %q, want local path", got)
+	}
+}
+
+func TestProxyPreservesPublicPrefixForForwardedHTML(t *testing.T) {
+	const prefix = "/matrix/h/dragon/app/loom"
+	var gotAcceptEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAcceptEncoding = r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<link href="` + prefix + `/assets/css/index.css">`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+prefix+"/loom/repo/issues/new", nil)
+	req.Header.Set("X-Forwarded-Prefix", prefix)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), prefix+"/assets/css/index.css") {
+		t.Fatalf("forwarded HTML lost public prefix:\n%s", body)
+	}
+	if gotAcceptEncoding != "gzip" {
+		t.Fatalf("Accept-Encoding = %q, want preserved for forwarded traffic", gotAcceptEncoding)
 	}
 }
 
