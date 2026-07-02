@@ -122,7 +122,7 @@ func TestProxyTranslatesRemoteIdentityToWebauth(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	handler, err := loomProxyHandler(upstream.URL)
+	handler, err := loomProxyHandler(upstream.URL, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +141,35 @@ func TestProxyTranslatesRemoteIdentityToWebauth(t *testing.T) {
 	_ = resp.Body.Close()
 	if gotUser != "alice@example.com" || gotEmail != "alice@example.com" || gotName != "Alice" {
 		t.Fatalf("webauth headers = (%q,%q,%q), want alice@example.com/alice@example.com/Alice", gotUser, gotEmail, gotName)
+	}
+}
+
+func TestProxyStripsPublicPrefix(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/css")
+		_, _ = w.Write([]byte("body{}"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL, "/matrix/h/dragon/app/loom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	resp, err := http.Get(proxy.URL + "/matrix/h/dragon/app/loom/assets/css/index.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if gotPath != "/assets/css/index.css" {
+		t.Fatalf("upstream path = %q, want /assets/css/index.css", gotPath)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/css") {
+		t.Fatalf("content-type = %q, want text/css", ct)
 	}
 }
 

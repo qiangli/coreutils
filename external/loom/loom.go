@@ -290,7 +290,11 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
 	proxyAddr := fmt.Sprintf("%s:%d", o.Addr, o.ProxyPort)
 	proxyURL := "http://" + proxyAddr
-	proxyCmd := exec.Command(os.Args[0], "loom", "proxy", "--target", "http://"+addr, "--addr", o.Addr, "--port", strconv.Itoa(o.ProxyPort))
+	proxyArgs := []string{"loom", "proxy", "--target", "http://" + addr, "--addr", o.Addr, "--port", strconv.Itoa(o.ProxyPort)}
+	if p := publicPrefix(o.RootURL); p != "" {
+		proxyArgs = append(proxyArgs, "--public-prefix", p)
+	}
+	proxyCmd := exec.Command(os.Args[0], proxyArgs...)
 	proxyCmd.Dir = o.DataDir
 	proxyCmd.Stdout = log
 	proxyCmd.Stderr = log
@@ -413,7 +417,7 @@ func healthy(ctx context.Context, url string, timeout time.Duration) bool {
 	return resp.StatusCode < 500
 }
 
-func runProxy(ctx context.Context, addr string, port int, target string) error {
+func runProxy(ctx context.Context, addr string, port int, target, publicPrefix string) error {
 	if addr == "" {
 		addr = DefaultAddr
 	}
@@ -423,7 +427,7 @@ func runProxy(ctx context.Context, addr string, port int, target string) error {
 	if target == "" {
 		target = fmt.Sprintf("http://127.0.0.1:%d", DefaultPort)
 	}
-	handler, err := loomProxyHandler(target)
+	handler, err := loomProxyHandler(target, publicPrefix)
 	if err != nil {
 		return err
 	}
@@ -450,7 +454,7 @@ func runProxy(ctx context.Context, addr string, port int, target string) error {
 	}
 }
 
-func loomProxyHandler(target string) (http.Handler, error) {
+func loomProxyHandler(target, publicPrefix string) (http.Handler, error) {
 	targetURL, err := url.Parse(target)
 	if err != nil {
 		return nil, fmt.Errorf("loom proxy: target: %w", err)
@@ -459,8 +463,10 @@ func loomProxyHandler(target string) (http.Handler, error) {
 		return nil, fmt.Errorf("loom proxy: target must be absolute (got %q)", target)
 	}
 	rp := httputil.NewSingleHostReverseProxy(targetURL)
+	prefix := cleanPublicPrefix(publicPrefix)
 	baseDirector := rp.Director
 	rp.Director = func(req *http.Request) {
+		stripPublicPrefix(req.URL, prefix)
 		baseDirector(req)
 		req.Host = targetURL.Host
 		stripWebauthHeaders(req.Header)
@@ -474,6 +480,43 @@ func loomProxyHandler(target string) (http.Handler, error) {
 		}
 	}
 	return rp, nil
+}
+
+func publicPrefix(rootURL string) string {
+	u, err := url.Parse(rootURL)
+	if err != nil {
+		return ""
+	}
+	return cleanPublicPrefix(u.Path)
+}
+
+func cleanPublicPrefix(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || p == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return strings.TrimRight(p, "/")
+}
+
+func stripPublicPrefix(u *url.URL, prefix string) {
+	if u == nil || prefix == "" {
+		return
+	}
+	if u.Path == prefix {
+		u.Path = "/"
+		u.RawPath = ""
+		return
+	}
+	if strings.HasPrefix(u.Path, prefix+"/") {
+		u.Path = strings.TrimPrefix(u.Path, prefix)
+		if u.Path == "" {
+			u.Path = "/"
+		}
+		u.RawPath = ""
+	}
 }
 
 func stripWebauthHeaders(h http.Header) {
@@ -787,6 +830,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	var expose bool
 	var service string
 	var proxyTarget string
+	var proxyPublicPrefix string
 	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Download (if needed) + run gitea web on a loopback port",
@@ -949,12 +993,13 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return runProxy(ctx, o.Addr, o.ProxyPort, proxyTarget)
+			return runProxy(ctx, o.Addr, o.ProxyPort, proxyTarget, proxyPublicPrefix)
 		},
 	}
 	proxyCmd.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
 	proxyCmd.Flags().IntVar(&o.ProxyPort, "port", DefaultProxyPort, "HTTP proxy port")
 	proxyCmd.Flags().StringVar(&proxyTarget, "target", "", "backend Gitea URL")
+	proxyCmd.Flags().StringVar(&proxyPublicPrefix, "public-prefix", "", "public URL path prefix to strip before forwarding to Gitea")
 
 	pathCmd := &cobra.Command{
 		Use:   "path",
