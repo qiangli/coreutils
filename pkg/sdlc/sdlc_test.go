@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,6 +50,19 @@ func clearAgentDetectionEnv(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
+}
+
+func runTestGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
 }
 
 func TestLoadConfigValidatesBoundary(t *testing.T) {
@@ -130,7 +144,7 @@ func TestCommandSurfaceIncludesTriggerEntrypoint(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard"} {
+	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard", "workspace"} {
 		if !have[name] {
 			t.Fatalf("missing subcommand %q", name)
 		}
@@ -155,11 +169,72 @@ func TestGuideIsSelfContainedRuntimeHelp(t *testing.T) {
 		"deploy-status",
 		"Local Loom-first control plane",
 		"GitHub = public source control",
+		"origin   = writable Loom workspace repo",
+		"The Loom mirror can still host local/private issues",
 		"Deployment gate",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("guide missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestPrepareWorkspaceSetsGuardedRemotes(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	runTestGit(t, "", "init", src)
+	runTestGit(t, src, "config", "user.email", "test@example.invalid")
+	runTestGit(t, src, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, src, "add", "README.md")
+	runTestGit(t, src, "commit", "-m", "seed")
+	baseline := filepath.Join(root, "mirror.git")
+	origin := filepath.Join(root, "workspace.git")
+	runTestGit(t, "", "clone", "--bare", src, baseline)
+	runTestGit(t, "", "init", "--bare", origin)
+	work := filepath.Join(root, "work")
+	res, err := PrepareWorkspace(context.Background(), WorkspaceOptions{
+		Dir:      work,
+		Baseline: baseline,
+		Origin:   origin,
+		Upstream: "https://github.com/example/repo.git",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "ready" || !res.Created {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if got := strings.TrimSpace(runTestGit(t, work, "remote", "get-url", "origin")); got != origin {
+		t.Fatalf("origin=%q, want %q", got, origin)
+	}
+	if got := strings.TrimSpace(runTestGit(t, work, "remote", "get-url", "baseline")); got != baseline {
+		t.Fatalf("baseline=%q, want %q", got, baseline)
+	}
+	if got := strings.TrimSpace(runTestGit(t, work, "remote", "get-url", "--push", "baseline")); got != "DISABLED" {
+		t.Fatalf("baseline push=%q, want DISABLED", got)
+	}
+	if got := strings.TrimSpace(runTestGit(t, work, "remote", "get-url", "--push", "upstream")); got != "DISABLED" {
+		t.Fatalf("upstream push=%q, want DISABLED", got)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".git", "bashy-sdlc-workspace.json")); err != nil {
+		t.Fatal(err)
+	}
+	if status := strings.TrimSpace(runTestGit(t, work, "status", "--porcelain")); status != "" {
+		t.Fatalf("workspace dirty after prepare:\n%s", status)
+	}
+}
+
+func TestGuardFailsGitHubOrigin(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	runTestGit(t, "", "init", repo)
+	runTestGit(t, repo, "remote", "add", "origin", "https://github.com/example/repo.git")
+	res := Guard(repo, nil)
+	if res["status"] != "failed" {
+		t.Fatalf("guard status=%v, want failed: %+v", res["status"], res)
 	}
 }
 

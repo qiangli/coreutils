@@ -284,10 +284,29 @@ open through cloudbox. This keeps Gitea UI links and clone URLs coherent:
   bashy loom start \
     --root-url https://CLOUDBOX_HOST/matrix/h/HOST/app/loom/
 
-Mirror or clone the GitHub repository into a local workspace, then run SDLC from
-that workspace using the local issue/request pointer:
+Prepare a guarded local workspace, then run SDLC from that workspace using the
+local issue/request pointer:
 
-  git clone https://github.com/owner/repo.git ~/work/repo
+  bashy sdlc workspace prepare \
+    --baseline http://127.0.0.1:3000/loom/owner-repo.git \
+    --origin http://127.0.0.1:3000/loom/owner-repo-sdlc.git \
+    --upstream https://github.com/owner/repo.git \
+    --dir ~/work/repo
+
+This creates the guarded remote layout:
+
+  origin   = writable Loom workspace repo
+  baseline = immutable Loom mirror repo
+  upstream = optional GitHub source repo with push disabled
+
+Agents commit and push only to origin during implementation. The mirror is the
+immutable comparison baseline; GitHub writes happen only during explicit,
+approved rollout.
+
+The Loom mirror can still host local/private issues and comments. Its Git refs
+are immutable to agents, but the issue tracker is a useful intake surface tied
+to the exact mirrored source baseline.
+
   cd ~/work/repo
   bashy sdlc issue --text "Fix the broken link"
   bashy sdlc tick --issue-file .bashy/sdlc/issues/<printed-issue-file>.md \
@@ -563,6 +582,27 @@ type WatchOptions struct {
 	JSON     bool
 }
 
+type WorkspaceOptions struct {
+	Dir               string `json:"dir"`
+	Origin            string `json:"origin"`
+	Baseline          string `json:"baseline"`
+	Upstream          string `json:"upstream,omitempty"`
+	AllowGitHubOrigin bool   `json:"allow_github_origin,omitempty"`
+	JSON              bool   `json:"-"`
+}
+
+type WorkspaceResult struct {
+	SchemaVersion string    `json:"schema_version"`
+	Status        string    `json:"status"`
+	Dir           string    `json:"dir"`
+	Origin        string    `json:"origin"`
+	Baseline      string    `json:"baseline"`
+	Upstream      string    `json:"upstream,omitempty"`
+	MetadataPath  string    `json:"metadata_path"`
+	Created       bool      `json:"created"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 // NewSDLCCmd returns the `bashy sdlc` command tree.
 func NewSDLCCmd() *cobra.Command {
 	var opt DelegateOptions
@@ -603,7 +643,7 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(), newQACmd(),
 		newApproveCmd(), newRolloutCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
-		newSuperviseCmd(),
+		newWorkspaceCmd(), newSuperviseCmd(),
 	)
 	return cmd
 }
@@ -1106,6 +1146,46 @@ func newGuardCmd() *cobra.Command {
 	}
 	cmd.Flags().StringArrayVar(&checks, "check", nil, "command to run as a guard check")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
+func newWorkspaceCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "workspace",
+		Short: "prepare guarded mutable SDLC workspaces",
+	}
+	cmd.CompletionOptions.DisableDefaultCmd = true
+	cmd.AddCommand(newWorkspacePrepareCmd())
+	return cmd
+}
+
+func newWorkspacePrepareCmd() *cobra.Command {
+	var opt WorkspaceOptions
+	cmd := &cobra.Command{
+		Use:   "prepare --baseline MIRROR_URL --origin WORKSPACE_URL --dir PATH",
+		Short: "clone from an immutable mirror and point writes at a mutable Loom workspace",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := PrepareWorkspace(cmd.Context(), opt)
+			if opt.JSON || os.Getenv("BASHY_AGENTIC") != "" {
+				b, _ := json.Marshal(res)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+			} else if err == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "workspace ready: %s\n", res.Dir)
+				fmt.Fprintf(cmd.OutOrStdout(), "  origin   %s\n", res.Origin)
+				fmt.Fprintf(cmd.OutOrStdout(), "  baseline %s\n", res.Baseline)
+				if res.Upstream != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "  upstream %s (push disabled)\n", res.Upstream)
+				}
+			}
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&opt.Dir, "dir", "", "local mutable workspace directory")
+	cmd.Flags().StringVar(&opt.Origin, "origin", "", "writable Loom workspace repo URL")
+	cmd.Flags().StringVar(&opt.Baseline, "baseline", "", "immutable Loom mirror repo URL")
+	cmd.Flags().StringVar(&opt.Upstream, "upstream", "", "optional GitHub upstream URL, configured read-only")
+	cmd.Flags().BoolVar(&opt.AllowGitHubOrigin, "allow-github-origin", false, "allow origin to point at github.com instead of Loom")
+	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print JSON")
 	return cmd
 }
 
@@ -2136,6 +2216,7 @@ func BuildConductorBrief(cfg Config, issue Issue) string {
 	fmt.Fprintf(&b, "Boundary:\n")
 	fmt.Fprintf(&b, "- SDLC owns intake pointers, lifecycle state, validation gates, and deployment routing.\n")
 	fmt.Fprintf(&b, "- You own implementation planning and sprint execution. Use bashy sprint/weave and delegate coding, review, and QA work to the available agent fleet.\n")
+	fmt.Fprintf(&b, "- Source guardrail: work in a mutable workspace whose origin is a local Loom workspace repo; use a baseline remote for the immutable Loom mirror. Do not push to GitHub or any production upstream during implementation.\n")
 	fmt.Fprintf(&b, "- Do not deploy to the configured rollout target without explicit approval when policy requires it.\n\n")
 	fmt.Fprintf(&b, "Issue:\n")
 	if issue.ID != "" {
@@ -2330,6 +2411,13 @@ func Guard(dir string, commands []string) map[string]any {
 	if dirty, _ := git["dirty"].(bool); dirty {
 		gitStatus = "dirty"
 	}
+	if originGitHub, _ := git["origin_github"].(bool); originGitHub {
+		gitStatus = "failed"
+		git["guardrail"] = "origin points at github.com; use a Loom workspace origin and keep GitHub as explicit rollout target"
+	}
+	if _, ok := git["baseline"]; !ok {
+		git["baseline_warning"] = "baseline remote is not configured"
+	}
 	checks = append(checks, map[string]any{"name": "git", "status": gitStatus, "detail": git})
 	secretHits := secretScan(dir)
 	secretStatus := "ok"
@@ -2351,10 +2439,144 @@ func Guard(dir string, commands []string) map[string]any {
 	return map[string]any{"schema_version": schemaVersion, "status": status, "checks": checks}
 }
 
+func PrepareWorkspace(ctx context.Context, opt WorkspaceOptions) (WorkspaceResult, error) {
+	opt.Dir = strings.TrimSpace(opt.Dir)
+	opt.Origin = strings.TrimSpace(opt.Origin)
+	opt.Baseline = strings.TrimSpace(opt.Baseline)
+	opt.Upstream = strings.TrimSpace(opt.Upstream)
+	res := WorkspaceResult{
+		SchemaVersion: schemaVersion,
+		Status:        "error",
+		Dir:           opt.Dir,
+		Origin:        opt.Origin,
+		Baseline:      opt.Baseline,
+		Upstream:      opt.Upstream,
+		UpdatedAt:     time.Now().UTC(),
+	}
+	if opt.Dir == "" {
+		return res, errors.New("sdlc: workspace --dir is required")
+	}
+	if opt.Baseline == "" {
+		return res, errors.New("sdlc: workspace --baseline immutable mirror URL is required")
+	}
+	if opt.Origin == "" {
+		return res, errors.New("sdlc: workspace --origin mutable Loom workspace URL is required")
+	}
+	if isGitHubURL(opt.Origin) && !opt.AllowGitHubOrigin {
+		return res, errors.New("sdlc: refusing github.com as workspace origin; use a writable Loom workspace repo or pass --allow-github-origin")
+	}
+	created, err := ensureWorkspaceClone(ctx, opt.Dir, opt.Baseline)
+	if err != nil {
+		return res, err
+	}
+	res.Created = created
+	if err := setGitRemote(ctx, opt.Dir, "baseline", opt.Baseline); err != nil {
+		return res, err
+	}
+	if err := runGitErr(ctx, opt.Dir, "remote", "set-url", "--push", "baseline", "DISABLED"); err != nil {
+		return res, err
+	}
+	if err := setGitRemote(ctx, opt.Dir, "origin", opt.Origin); err != nil {
+		return res, err
+	}
+	if opt.Upstream != "" {
+		if err := setGitRemote(ctx, opt.Dir, "upstream", opt.Upstream); err != nil {
+			return res, err
+		}
+		if err := runGitErr(ctx, opt.Dir, "remote", "set-url", "--push", "upstream", "DISABLED"); err != nil {
+			return res, err
+		}
+	}
+	if err := runGitErr(ctx, opt.Dir, "fetch", "baseline", "--prune"); err != nil {
+		return res, err
+	}
+	_ = runGitErr(ctx, opt.Dir, "fetch", "origin", "--prune")
+	metaPath := filepath.Join(opt.Dir, ".git", "bashy-sdlc-workspace.json")
+	res.MetadataPath = metaPath
+	res.Status = "ready"
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0o755); err != nil {
+		res.Status = "error"
+		return res, err
+	}
+	b, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		res.Status = "error"
+		return res, err
+	}
+	if err := os.WriteFile(metaPath, append(b, '\n'), 0o644); err != nil {
+		res.Status = "error"
+		return res, err
+	}
+	return res, nil
+}
+
+func ensureWorkspaceClone(ctx context.Context, dir, baseline string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return false, nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if _, err := os.Stat(dir); err == nil {
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			return false, readErr
+		}
+		if len(entries) > 0 {
+			return false, fmt.Errorf("sdlc: workspace dir %s exists but is not a git checkout", dir)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return false, err
+	}
+	if err := runGitErr(ctx, "", "clone", "--origin", "baseline", baseline, dir); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func setGitRemote(ctx context.Context, dir, name, url string) error {
+	if strings.TrimSpace(runGit(dir, "remote", "get-url", name)) == "" {
+		return runGitErr(ctx, dir, "remote", "add", name, url)
+	}
+	return runGitErr(ctx, dir, "remote", "set-url", name, url)
+}
+
+func runGitErr(ctx context.Context, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func isGitHubURL(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.Contains(s, "github.com:") ||
+		strings.Contains(s, "github.com/") ||
+		strings.Contains(s, "@github.com")
+}
+
 func gitSummary(dir string) map[string]any {
 	branch := strings.TrimSpace(runGit(dir, "branch", "--show-current"))
 	status := runGit(dir, "status", "--porcelain=v1", "--branch")
 	out := map[string]any{"branch": branch, "dirty": false, "ahead": false, "behind": false}
+	if origin := strings.TrimSpace(runGit(dir, "remote", "get-url", "origin")); origin != "" {
+		out["origin"] = origin
+		out["origin_github"] = isGitHubURL(origin)
+	}
+	if baseline := strings.TrimSpace(runGit(dir, "remote", "get-url", "baseline")); baseline != "" {
+		out["baseline"] = baseline
+	}
+	if upstream := strings.TrimSpace(runGit(dir, "remote", "get-url", "upstream")); upstream != "" {
+		out["upstream"] = upstream
+		out["upstream_push"] = strings.TrimSpace(runGit(dir, "remote", "get-url", "--push", "upstream"))
+	}
 	for _, line := range strings.Split(status, "\n") {
 		if strings.HasPrefix(line, "## ") {
 			out["ahead"] = strings.Contains(line, "ahead")
