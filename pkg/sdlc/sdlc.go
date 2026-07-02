@@ -145,6 +145,28 @@ Supported routing flags:
   --policy KEY=VALUE
   --agent NAME=AGENT
 
+Zero-config intake policy
+
+For Loom/local intake, labels are optional. A plain open issue should be enough
+to start work in most projects. The default pickup policy is:
+
+  pick open issues unless they are already assigned/in-progress or carry one of
+  the reserved skip labels:
+    sdlc:ignore
+    sdlc:blocked
+    sdlc:in-progress
+    sdlc:qa
+    sdlc:approved
+    sdlc:done
+
+Type and priority labels are useful but not required:
+
+  type:bug, type:enhancement, type:task, type:docs, type:chore
+  priority:p0, priority:p1, priority:p2, priority:p3
+
+Projects may add any custom labels. Only the reserved sdlc:* lifecycle labels
+have built-in control meaning.
+
 Example .bashy/sdlc.yaml:
 
   conductor:
@@ -1502,6 +1524,14 @@ func DefaultConfig() Config {
 			Staging:    TargetConfig{Name: "staging"},
 			Production: TargetConfig{Name: "production"},
 		},
+		Policies: map[string]string{
+			"intake_pickup":          "open-unassigned-unblocked",
+			"intake_labels_required": "false",
+			"reserved_skip_labels":   "sdlc:ignore,sdlc:blocked,sdlc:in-progress,sdlc:qa,sdlc:approved,sdlc:done",
+			"priority_labels":        "priority:p0,priority:p1,priority:p2,priority:p3",
+			"type_labels":            "type:bug,type:enhancement,type:task,type:docs,type:chore",
+			"custom_labels":          "allowed",
+		},
 	}
 }
 
@@ -2248,6 +2278,17 @@ func BuildConductorBrief(cfg Config, issue Issue) string {
 	}
 	if cfg.Deploy.Production.Healthcheck != "" {
 		fmt.Fprintf(&b, "- Rollout healthcheck: %s\n", cfg.Deploy.Production.Healthcheck)
+	}
+	if len(cfg.Policies) > 0 {
+		fmt.Fprintf(&b, "- Policies:\n")
+		keys := make([]string, 0, len(cfg.Policies))
+		for key := range cfg.Policies {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(&b, "  - %s=%s\n", key, cfg.Policies[key])
+		}
 	}
 	fmt.Fprintf(&b, "\nExpected loop:\n")
 	fmt.Fprintf(&b, "1. Analyze priority/risk and create a sprint plan.\n")

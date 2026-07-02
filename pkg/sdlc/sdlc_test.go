@@ -129,6 +129,9 @@ func TestDefaultConfigUsesDetectedConductor(t *testing.T) {
 	if cfg.Conductor.Agent != "agy" {
 		t.Fatalf("default conductor=%q, want agy", cfg.Conductor.Agent)
 	}
+	if cfg.Policies["intake_labels_required"] != "false" || !strings.Contains(cfg.Policies["reserved_skip_labels"], "sdlc:blocked") {
+		t.Fatalf("default intake policies missing: %+v", cfg.Policies)
+	}
 }
 
 func TestLoadConfigStaysStrict(t *testing.T) {
@@ -171,6 +174,9 @@ func TestGuideIsSelfContainedRuntimeHelp(t *testing.T) {
 		"GitHub = public source control",
 		"origin   = writable Loom workspace repo",
 		"The Loom mirror can still host local/private issues",
+		"labels are optional",
+		"sdlc:blocked",
+		"custom labels",
 		"Deployment gate",
 	} {
 		if !strings.Contains(got, want) {
@@ -744,6 +750,10 @@ func TestBuildConductorBriefStatesDelegationBoundary(t *testing.T) {
 		Reviewer:  RoleConfig{Agent: "codex"},
 		QA:        RoleConfig{Agent: "codex"},
 		Intake:    IntakeConfig{Provider: "github", Repository: "owner/repo"},
+		Policies: map[string]string{
+			"intake_labels_required": "false",
+			"reserved_skip_labels":   "sdlc:ignore,sdlc:blocked",
+		},
 		Deploy: DeploymentConfig{
 			Staging:    TargetConfig{Name: "staging"},
 			Production: TargetConfig{Name: "production"},
@@ -757,6 +767,8 @@ func TestBuildConductorBriefStatesDelegationBoundary(t *testing.T) {
 		"Title: Ship SDLC loop",
 		"Review agent: codex",
 		"QA agent: codex",
+		"intake_labels_required=false",
+		"reserved_skip_labels=sdlc:ignore,sdlc:blocked",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Fatalf("brief missing %q:\n%s", want, brief)
