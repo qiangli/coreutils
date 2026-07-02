@@ -130,7 +130,7 @@ func TestCommandSurfaceIncludesTriggerEntrypoint(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "verify", "deploy-status", "guard"} {
+	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "approve", "rollout", "resolve", "verify", "deploy-status", "guard"} {
 		if !have[name] {
 			t.Fatalf("missing subcommand %q", name)
 		}
@@ -325,6 +325,9 @@ func TestRunRecordListAndWatch(t *testing.T) {
 	if strings.Contains(strings.Join(loaded.Command, " "), "prompt text") {
 		t.Fatalf("run command should redact prompt: %+v", loaded.Command)
 	}
+	if loaded.ReferenceID != run.ID {
+		t.Fatalf("reference id=%q, want run id %q", loaded.ReferenceID, run.ID)
+	}
 	runs, err := ListRuns(dir, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -339,6 +342,57 @@ func TestRunRecordListAndWatch(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, run.ID) || !strings.Contains(got, "line 2") || strings.Contains(got, "line 1") {
 		t.Fatalf("unexpected watch output:\n%s", got)
+	}
+}
+
+func TestApproveResolveAndRolloutLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	res := DelegateResult{
+		Conductor: "codex",
+		Issue:     Issue{ID: "external-42", Title: "Ship change", URL: "https://example.test/issues/42"},
+		Brief:     "brief",
+	}
+	run, err := NewRunRecord(res, DelegateOptions{RunsDir: dir, Cwd: dir}, chat.Result{
+		Agent: "codex",
+		Cwd:   dir,
+		Args:  []string{"exec", "prompt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = "succeeded"
+	run.FinishedAt = time.Now().UTC()
+	if err := SaveRunRecord(*run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRunByID(dir, "missing"); err == nil {
+		t.Fatal("expected missing run lookup to fail")
+	}
+	approved, err := ApproveRun(dir, run.ReferenceID, "UAT passed", "qa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !RunApproved(approved) || approved.Status != "approved" || approved.Approval.Note != "UAT passed" {
+		t.Fatalf("unexpected approved run: %+v", approved)
+	}
+	rollout := BuildRolloutInstruction(approved, "push main", "release")
+	for _, want := range []string{
+		"Production approval granted",
+		approved.ReferenceID,
+		"External issue ID: external-42",
+		"UAT passed",
+		"push main",
+	} {
+		if !strings.Contains(rollout, want) {
+			t.Fatalf("rollout instruction missing %q:\n%s", want, rollout)
+		}
+	}
+	resolved, err := ResolveLifecycleRun(dir, run.ReferenceID, "resolved", "deployed", "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Status != "resolved" || resolved.Resolution == nil || resolved.Resolution.Note != "deployed" {
+		t.Fatalf("unexpected resolved run: %+v", resolved)
 	}
 }
 

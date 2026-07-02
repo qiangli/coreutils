@@ -211,6 +211,19 @@ Run records are stored under .bashy/sdlc/runs by default. The conductor log and
 brief can contain request details and agent output, so keep that directory local
 or gitignored when working in repositories that may be published.
 
+Local approval and resolution
+
+Every delegated request creates a local run reference ID. Use that exact ID for
+approval, rollout, and final resolution:
+
+  bashy sdlc runs
+  bashy sdlc approve RUN_ID --note "UAT passed on staging"
+  bashy sdlc rollout RUN_ID --background
+  bashy sdlc resolve RUN_ID --status resolved --note "Production deployed and verified"
+
+Approval requires an explicit RUN_ID. SDLC does not assume only one issue is
+active at a time.
+
 Local issue records
 
 Record a local issue without delegating it:
@@ -391,23 +404,40 @@ type DelegateResult struct {
 }
 
 type RunRecord struct {
-	SchemaVersion string    `json:"schema_version"`
-	ID            string    `json:"id"`
-	Status        string    `json:"status"`
-	PID           int       `json:"pid,omitempty"`
-	IssueTitle    string    `json:"issue_title,omitempty"`
-	IssueID       string    `json:"issue_id,omitempty"`
-	IssueURL      string    `json:"issue_url,omitempty"`
-	Conductor     string    `json:"conductor,omitempty"`
-	Cwd           string    `json:"cwd,omitempty"`
-	Command       []string  `json:"command,omitempty"`
-	RunPath       string    `json:"run_path"`
-	LogPath       string    `json:"log_path"`
-	BriefPath     string    `json:"brief_path"`
-	StartedAt     time.Time `json:"started_at"`
-	FinishedAt    time.Time `json:"finished_at,omitempty"`
-	ExitCode      int       `json:"exit_code,omitempty"`
-	Error         string    `json:"error,omitempty"`
+	SchemaVersion string      `json:"schema_version"`
+	ID            string      `json:"id"`
+	ReferenceID   string      `json:"reference_id"`
+	Status        string      `json:"status"`
+	PID           int         `json:"pid,omitempty"`
+	IssueTitle    string      `json:"issue_title,omitempty"`
+	IssueID       string      `json:"issue_id,omitempty"`
+	IssueURL      string      `json:"issue_url,omitempty"`
+	Conductor     string      `json:"conductor,omitempty"`
+	Cwd           string      `json:"cwd,omitempty"`
+	Command       []string    `json:"command,omitempty"`
+	RunPath       string      `json:"run_path"`
+	LogPath       string      `json:"log_path"`
+	BriefPath     string      `json:"brief_path"`
+	StartedAt     time.Time   `json:"started_at"`
+	FinishedAt    time.Time   `json:"finished_at,omitempty"`
+	ExitCode      int         `json:"exit_code,omitempty"`
+	Error         string      `json:"error,omitempty"`
+	Approval      *Approval   `json:"approval,omitempty"`
+	Resolution    *Resolution `json:"resolution,omitempty"`
+}
+
+type Approval struct {
+	Status     string    `json:"status"`
+	ApprovedAt time.Time `json:"approved_at"`
+	ApprovedBy string    `json:"approved_by,omitempty"`
+	Note       string    `json:"note,omitempty"`
+}
+
+type Resolution struct {
+	Status     string    `json:"status"`
+	ResolvedAt time.Time `json:"resolved_at"`
+	ResolvedBy string    `json:"resolved_by,omitempty"`
+	Note       string    `json:"note,omitempty"`
 }
 
 type ConfigExplanation struct {
@@ -488,11 +518,8 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 			if opt.JSON {
 				b, _ := json.Marshal(res)
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
-			} else if res.Chat.Output != "" {
-				fmt.Fprint(cmd.OutOrStdout(), res.Chat.Output)
-				if !strings.HasSuffix(res.Chat.Output, "\n") {
-					fmt.Fprintln(cmd.OutOrStdout())
-				}
+			} else {
+				printDelegateOutput(cmd.OutOrStdout(), res)
 			}
 			return err
 		},
@@ -503,7 +530,7 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 	cmd.AddCommand(
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(),
-		newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
+		newApproveCmd(), newRolloutCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
 	)
 	return cmd
 }
@@ -733,8 +760,8 @@ func newRunsCmd() *cobra.Command {
 				return nil
 			}
 			for _, run := range runs {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s %s conductor=%s issue=%q log=%s\n",
-					run.ID, run.Status, run.Conductor, run.IssueTitle, run.LogPath)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %s conductor=%s issue=%q approved=%t resolved=%t log=%s\n",
+					run.ReferenceID, run.Status, run.Conductor, run.IssueTitle, RunApproved(run), run.Resolution != nil, run.LogPath)
 			}
 			return nil
 		},
@@ -773,6 +800,102 @@ func newWatchCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&follow, "follow", false, "follow log output until the run exits")
 	cmd.Flags().IntVar(&tail, "tail", 80, "number of log lines to show")
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "follow polling interval")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
+func newApproveCmd() *cobra.Command {
+	var dir, note, by string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "approve RUN_ID",
+		Short: "approve a specific local SDLC run reference",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			run, err := ApproveRun(dir, args[0], note, by)
+			if err != nil {
+				return err
+			}
+			if asJSON || os.Getenv("BASHY_AGENTIC") != "" {
+				b, _ := json.Marshal(run)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "approved %s status=%s note=%q\n", run.ReferenceID, run.Status, note)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&note, "note", "", "approval note")
+	cmd.Flags().StringVar(&by, "by", "", "approver identity")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
+func newRolloutCmd() *cobra.Command {
+	var opt DelegateOptions
+	var note, by string
+	cmd := &cobra.Command{
+		Use:   "rollout RUN_ID",
+		Short: "delegate production rollout for an approved local SDLC run",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			run, err := LoadRunByID(opt.RunsDir, args[0])
+			if err != nil {
+				return err
+			}
+			if !RunApproved(run) {
+				return fmt.Errorf("sdlc: run %s is not approved; run `bashy sdlc approve %s --note ...` first", args[0], args[0])
+			}
+			opt.Issue = Issue{
+				ID:    run.ReferenceID,
+				URL:   run.IssueURL,
+				Title: "Production rollout for " + run.IssueTitle,
+				Body:  BuildRolloutInstruction(run, note, by),
+			}
+			opt.JSON = opt.JSON || os.Getenv("BASHY_AGENTIC") != ""
+			res, err := Delegate(cmd.Context(), opt)
+			if opt.JSON {
+				b, _ := json.Marshal(res)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+			} else {
+				printDelegateOutput(cmd.OutOrStdout(), res)
+			}
+			return err
+		},
+	}
+	bindIssueFlags(cmd, &opt)
+	bindDelegateFlags(cmd, &opt)
+	cmd.Flags().StringVar(&note, "note", "", "rollout note")
+	cmd.Flags().StringVar(&by, "by", "", "operator identity")
+	return cmd
+}
+
+func newResolveCmd() *cobra.Command {
+	var dir, status, note, by string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "resolve RUN_ID",
+		Short: "mark a local SDLC run reference resolved",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			run, err := ResolveLifecycleRun(dir, args[0], status, note, by)
+			if err != nil {
+				return err
+			}
+			if asJSON || os.Getenv("BASHY_AGENTIC") != "" {
+				b, _ := json.Marshal(run)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s note=%q\n", run.ReferenceID, run.Status, note)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&status, "status", "resolved", "resolution status, for example resolved, rejected, rolled-out, failed")
+	cmd.Flags().StringVar(&note, "note", "", "resolution note")
+	cmd.Flags().StringVar(&by, "by", "", "resolver identity")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
 }
@@ -880,11 +1003,8 @@ func newDelegateLikeCmd(use, short string) *cobra.Command {
 			if opt.JSON {
 				b, _ := json.Marshal(res)
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
-			} else if res.Chat.Output != "" {
-				fmt.Fprint(cmd.OutOrStdout(), res.Chat.Output)
-				if !strings.HasSuffix(res.Chat.Output, "\n") {
-					fmt.Fprintln(cmd.OutOrStdout())
-				}
+			} else {
+				printDelegateOutput(cmd.OutOrStdout(), res)
 			}
 			return err
 		},
@@ -892,6 +1012,21 @@ func newDelegateLikeCmd(use, short string) *cobra.Command {
 	bindIssueFlags(cmd, &opt)
 	bindDelegateFlags(cmd, &opt)
 	return cmd
+}
+
+func printDelegateOutput(out io.Writer, res DelegateResult) {
+	if res.Chat.Output != "" {
+		fmt.Fprint(out, res.Chat.Output)
+		if !strings.HasSuffix(res.Chat.Output, "\n") {
+			fmt.Fprintln(out)
+		}
+	}
+	if res.RunID != "" {
+		fmt.Fprintf(out, "sdlc reference: %s\n", res.RunID)
+	}
+	if res.LogPath != "" {
+		fmt.Fprintf(out, "sdlc log: %s\n", res.LogPath)
+	}
 }
 
 func bindDelegateFlags(cmd *cobra.Command, opt *DelegateOptions) {
@@ -1417,14 +1552,23 @@ func NewRunRecord(res DelegateResult, opt DelegateOptions, chatRes chat.Result) 
 		runsDir = ".bashy/sdlc/runs"
 	}
 	started := time.Now().UTC()
-	id := started.Format("20060102T150405Z")
+	baseID := started.Format("20060102T150405Z")
 	if slug := slugify(res.Issue.Title); slug != "" {
-		id += "-" + slug
+		baseID += "-" + slug
 	}
+	id := baseID
 	runDir := filepath.Join(runsDir, id)
+	for i := 2; ; i++ {
+		if _, err := os.Stat(runDir); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		id = fmt.Sprintf("%s-%d", baseID, i)
+		runDir = filepath.Join(runsDir, id)
+	}
 	run := &RunRecord{
 		SchemaVersion: schemaVersion,
 		ID:            id,
+		ReferenceID:   id,
 		Status:        "running",
 		IssueTitle:    res.Issue.Title,
 		IssueID:       res.Issue.ID,
@@ -1487,6 +1631,9 @@ func LoadRun(path string) (RunRecord, error) {
 	if err := json.Unmarshal(data, &run); err != nil {
 		return run, err
 	}
+	if run.ReferenceID == "" {
+		run.ReferenceID = run.ID
+	}
 	return refreshRun(run), nil
 }
 
@@ -1520,6 +1667,118 @@ func ListRuns(dir string, limit int) ([]RunRecord, error) {
 	return runs, nil
 }
 
+func LoadRunByID(dir, id string) (RunRecord, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = ".bashy/sdlc/runs"
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return RunRecord{}, errors.New("sdlc: run id is required")
+	}
+	run, err := LoadRun(filepath.Join(dir, id, "run.json"))
+	if err == nil {
+		return run, nil
+	}
+	runs, listErr := ListRuns(dir, 0)
+	if listErr != nil {
+		return RunRecord{}, listErr
+	}
+	for _, candidate := range runs {
+		if candidate.ID == id || candidate.ReferenceID == id {
+			return candidate, nil
+		}
+	}
+	return RunRecord{}, err
+}
+
+func ApproveRun(dir, id, note, by string) (RunRecord, error) {
+	run, err := LoadRunByID(dir, id)
+	if err != nil {
+		return run, err
+	}
+	run = refreshRun(run)
+	if run.Status == "running" {
+		return run, fmt.Errorf("sdlc: run %s is still running; approve after staging evidence is ready", run.ReferenceID)
+	}
+	run.Status = "approved"
+	run.Approval = &Approval{
+		Status:     "approved",
+		ApprovedAt: time.Now().UTC(),
+		ApprovedBy: strings.TrimSpace(by),
+		Note:       strings.TrimSpace(note),
+	}
+	return run, SaveRunRecord(run)
+}
+
+func RunApproved(run RunRecord) bool {
+	return run.Approval != nil && run.Approval.Status == "approved"
+}
+
+func BuildRolloutInstruction(run RunRecord, note, by string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Production approval granted for SDLC reference %s.\n\n", run.ReferenceID)
+	if run.Approval != nil {
+		fmt.Fprintf(&b, "Approval:\n")
+		if !run.Approval.ApprovedAt.IsZero() {
+			fmt.Fprintf(&b, "- Approved at: %s\n", run.Approval.ApprovedAt.Format(time.RFC3339))
+		}
+		if run.Approval.ApprovedBy != "" {
+			fmt.Fprintf(&b, "- Approved by: %s\n", run.Approval.ApprovedBy)
+		}
+		if run.Approval.Note != "" {
+			fmt.Fprintf(&b, "- Note: %s\n", run.Approval.Note)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+	if strings.TrimSpace(by) != "" || strings.TrimSpace(note) != "" {
+		fmt.Fprintf(&b, "Rollout request:\n")
+		if strings.TrimSpace(by) != "" {
+			fmt.Fprintf(&b, "- Requested by: %s\n", strings.TrimSpace(by))
+		}
+		if strings.TrimSpace(note) != "" {
+			fmt.Fprintf(&b, "- Note: %s\n", strings.TrimSpace(note))
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+	fmt.Fprintf(&b, "Original request:\n")
+	fmt.Fprintf(&b, "- Reference ID: %s\n", run.ReferenceID)
+	if run.IssueID != "" && run.IssueID != run.ReferenceID {
+		fmt.Fprintf(&b, "- External issue ID: %s\n", run.IssueID)
+	}
+	if run.IssueURL != "" {
+		fmt.Fprintf(&b, "- Issue URL: %s\n", run.IssueURL)
+	}
+	fmt.Fprintf(&b, "- Title: %s\n", run.IssueTitle)
+	fmt.Fprintf(&b, "- Original run log: %s\n", run.LogPath)
+	fmt.Fprintf(&b, "- Original conductor brief: %s\n\n", run.BriefPath)
+	fmt.Fprintf(&b, "Proceed with the approved production rollout only for this reference. Preserve unrelated user changes. After rollout, report deployment evidence and verification results, then the scheduler can mark the reference resolved.")
+	return b.String()
+}
+
+func ResolveLifecycleRun(dir, id, status, note, by string) (RunRecord, error) {
+	run, err := LoadRunByID(dir, id)
+	if err != nil {
+		return run, err
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "resolved"
+	}
+	switch status {
+	case "resolved", "rejected", "rolled-out", "failed", "cancelled":
+	default:
+		return run, fmt.Errorf("sdlc: unsupported resolution status %q", status)
+	}
+	run.Status = status
+	run.Resolution = &Resolution{
+		Status:     status,
+		ResolvedAt: time.Now().UTC(),
+		ResolvedBy: strings.TrimSpace(by),
+		Note:       strings.TrimSpace(note),
+	}
+	return run, SaveRunRecord(run)
+}
+
 func WatchRun(ctx context.Context, out io.Writer, opt WatchOptions) error {
 	if opt.RunsDir == "" {
 		opt.RunsDir = ".bashy/sdlc/runs"
@@ -1543,7 +1802,8 @@ func WatchRun(ctx context.Context, out io.Writer, opt WatchOptions) error {
 			fmt.Fprintln(out, string(b))
 		} else {
 			if run.Status != lastStatus {
-				fmt.Fprintf(out, "%s %s conductor=%s pid=%d log=%s\n", run.ID, run.Status, run.Conductor, run.PID, run.LogPath)
+				fmt.Fprintf(out, "%s %s conductor=%s pid=%d approved=%t resolved=%t log=%s\n",
+					run.ReferenceID, run.Status, run.Conductor, run.PID, RunApproved(run), run.Resolution != nil, run.LogPath)
 				lastStatus = run.Status
 			}
 			data, _ := os.ReadFile(run.LogPath)
