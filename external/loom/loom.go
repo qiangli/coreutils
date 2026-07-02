@@ -9,11 +9,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -58,6 +62,7 @@ type Options struct {
 	DataDir string // work-path (default DefaultDataDir)
 	Addr    string // HTTP bind addr (default 127.0.0.1 — loopback for the mesh)
 	Port    int    // HTTP port (default 3000)
+	RootURL string // Gitea public/UI URL (default http://127.0.0.1:<port>/)
 	// Actions toggles Gitea's built-in GitHub-Actions-compatible CI. nil = the
 	// default (on, unless $LOOM_ACTIONS is "0"/"false"). This is what makes loom
 	// a local CI control plane: act_runner registers against it and dials out
@@ -94,6 +99,15 @@ func (o *Options) defaults() {
 	if o.Port == 0 {
 		o.Port = DefaultPort
 	}
+	if o.RootURL == "" {
+		o.RootURL = os.Getenv("LOOM_ROOT_URL")
+	}
+	if o.RootURL == "" {
+		o.RootURL = fmt.Sprintf("http://127.0.0.1:%d/", o.Port)
+	}
+	if !strings.HasSuffix(o.RootURL, "/") {
+		o.RootURL += "/"
+	}
 	if o.Stdout == nil {
 		o.Stdout = os.Stdout
 	}
@@ -108,6 +122,17 @@ type Instance struct {
 	Addr    string // addr:port (for `mesh service add git <addr>`)
 	Version string // resolved Gitea version
 	proc    *binmgr.Process
+}
+
+type State struct {
+	PID       int       `json:"pid"`
+	URL       string    `json:"url"`
+	RootURL   string    `json:"root_url"`
+	Addr      string    `json:"addr"`
+	Version   string    `json:"version"`
+	DataDir   string    `json:"data_dir"`
+	LogPath   string    `json:"log_path"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 // Stop terminates the Gitea process gracefully.
@@ -133,7 +158,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loom: fetch gitea: %w", err)
 	}
-	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.actionsOn())
+	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn())
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +183,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 // SIGINT/SIGTERM arrives (the `bashy loom serve` path).
 func Serve(ctx context.Context, o Options) error {
 	o.defaults()
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	inst, err := Start(ctx, o)
@@ -173,17 +198,179 @@ func Serve(ctx context.Context, o Options) error {
 	return inst.Stop()
 }
 
+func statePath(dataDir string) string { return filepath.Join(dataDir, "loom-state.json") }
+
+func logPath(dataDir string) string { return filepath.Join(dataDir, "loom.log") }
+
+func readState(dataDir string) (State, error) {
+	var st State
+	data, err := os.ReadFile(statePath(dataDir))
+	if err != nil {
+		return st, err
+	}
+	err = json.Unmarshal(data, &st)
+	return st, err
+}
+
+func writeState(st State) error {
+	if err := os.MkdirAll(st.DataDir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(statePath(st.DataDir), append(data, '\n'), 0o600)
+}
+
+func removeState(dataDir string) error {
+	err := os.Remove(statePath(dataDir))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func StartDaemon(ctx context.Context, o Options) (State, error) {
+	o.defaults()
+	if st, err := readState(o.DataDir); err == nil && healthy(ctx, st.URL, 2*time.Second) {
+		return st, nil
+	}
+	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
+	if err != nil {
+		return State{}, fmt.Errorf("loom: resolve gitea: %w", err)
+	}
+	bin, err := binmgr.Ensure(ctx, tool)
+	if err != nil {
+		return State{}, fmt.Errorf("loom: fetch gitea: %w", err)
+	}
+	cfg, err := ensureConfig(o.DataDir, o.Addr, o.Port, o.RootURL, o.actionsOn())
+	if err != nil {
+		return State{}, err
+	}
+	if err := os.MkdirAll(o.DataDir, 0o755); err != nil {
+		return State{}, err
+	}
+	logFile := logPath(o.DataDir)
+	log, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return State{}, err
+	}
+	cmd := exec.Command(bin, "web", "--config", cfg)
+	cmd.Dir = o.DataDir
+	cmd.Env = append(os.Environ(), "GITEA_WORK_DIR="+o.DataDir)
+	cmd.Stdout = log
+	cmd.Stderr = log
+	if err := cmd.Start(); err != nil {
+		_ = log.Close()
+		return State{}, fmt.Errorf("loom: start gitea: %w", err)
+	}
+	go func() {
+		_ = cmd.Wait()
+		_ = log.Close()
+	}()
+	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
+	st := State{
+		PID:       cmd.Process.Pid,
+		URL:       "http://" + addr,
+		RootURL:   o.RootURL,
+		Addr:      addr,
+		Version:   tool.Version,
+		DataDir:   o.DataDir,
+		LogPath:   logFile,
+		StartedAt: time.Now().UTC(),
+	}
+	if err := waitHTTP(ctx, st.URL, 60*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		_ = removeState(o.DataDir)
+		return State{}, err
+	}
+	if err := writeState(st); err != nil {
+		return State{}, err
+	}
+	return st, nil
+}
+
+func StopDaemon(dataDir string, timeout time.Duration) (State, error) {
+	st, err := readState(dataDir)
+	if err != nil {
+		return st, err
+	}
+	proc, err := os.FindProcess(st.PID)
+	if err != nil {
+		return st, err
+	}
+	_ = proc.Signal(os.Interrupt)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !healthy(context.Background(), st.URL, 500*time.Millisecond) {
+			_ = removeState(dataDir)
+			return st, nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	_ = proc.Kill()
+	_ = removeState(dataDir)
+	return st, nil
+}
+
+func ExposeService(ctx context.Context, service, addr string) error {
+	service = strings.TrimSpace(service)
+	addr = strings.TrimSpace(addr)
+	if service == "" {
+		service = "git"
+	}
+	if addr == "" {
+		return fmt.Errorf("loom: no address to expose")
+	}
+	cmd := exec.CommandContext(ctx, "outpost", "mesh", "service", "add", service, addr)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("loom: expose via outpost: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func waitHTTP(ctx context.Context, url string, max time.Duration) error {
+	deadline := time.Now().Add(max)
+	for {
+		if healthy(ctx, url, 2*time.Second) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("loom: %s not healthy after %s", url, max)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+func healthy(ctx context.Context, url string, timeout time.Duration) bool {
+	client := http.Client{Timeout: timeout}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode < 500
+}
+
 // ensureConfig writes a minimal Gitea app.ini on first run and returns its path.
-// On an existing app.ini it reuses it, but ensures the [actions] section matches
-// the requested toggle — so an already-initialized data dir lights up (or drops)
-// Actions on the next serve without a manual edit.
-func ensureConfig(dataDir, addr string, port int, actions bool) (string, error) {
+// On an existing app.ini it reuses it, but reconciles the server URL/listener and
+// actions toggle so an already-initialized data dir can be exposed over the mesh
+// without manual app.ini surgery.
+func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool) (string, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return "", err
 	}
 	cfgPath := filepath.Join(dataDir, "app.ini")
 	if existing, err := os.ReadFile(cfgPath); err == nil {
-		merged := ensureActionsSection(string(existing), actions)
+		merged := ensureServerSection(string(existing), addr, port, rootURL)
+		merged = ensureActionsSection(merged, actions)
 		if merged != string(existing) {
 			if err := os.WriteFile(cfgPath, []byte(merged), 0o600); err != nil {
 				return "", err
@@ -195,11 +382,21 @@ func ensureConfig(dataDir, addr string, port int, actions bool) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	ini := renderConfig(dataDir, addr, port, secret, actions)
+	ini := renderConfig(dataDir, addr, port, rootURL, secret, actions)
 	if err := os.WriteFile(cfgPath, []byte(ini), 0o600); err != nil {
 		return "", err
 	}
 	return cfgPath, nil
+}
+
+func ensureServerSection(ini, addr string, port int, rootURL string) string {
+	updates := map[string]string{
+		"HTTP_ADDR":   addr,
+		"HTTP_PORT":   fmt.Sprintf("%d", port),
+		"ROOT_URL":    rootURL,
+		"DISABLE_SSH": "true",
+	}
+	return ensureSectionKeys(ini, "server", updates)
 }
 
 // ensureActionsSection reconciles the [actions] ENABLED key in an existing
@@ -210,37 +407,84 @@ func ensureActionsSection(ini string, want bool) string {
 	if want {
 		val = "true"
 	}
+	return ensureSectionKeys(ini, "actions", map[string]string{"ENABLED": val})
+}
+
+func ensureSectionKeys(ini, section string, updates map[string]string) string {
 	lines := strings.Split(ini, "\n")
-	inActions := false
+	sectionHeader := "[" + section + "]"
+	inSection := false
+	seenSection := false
+	seenKeys := map[string]bool{}
 	for i, ln := range lines {
 		t := strings.TrimSpace(ln)
 		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
-			inActions = t == "[actions]"
+			if inSection {
+				lines = insertMissingSectionKeys(lines, i, updates, seenKeys)
+				return strings.Join(lines, "\n")
+			}
+			inSection = strings.EqualFold(t, sectionHeader)
+			if inSection {
+				seenSection = true
+			}
 			continue
 		}
-		if inActions {
+		if inSection {
 			k := strings.TrimSpace(strings.SplitN(t, "=", 2)[0])
-			if strings.EqualFold(k, "ENABLED") {
-				lines[i] = "ENABLED = " + val
-				return strings.Join(lines, "\n")
+			for wantKey, wantValue := range updates {
+				if strings.EqualFold(k, wantKey) {
+					lines[i] = wantKey + " = " + wantValue
+					seenKeys[wantKey] = true
+					break
+				}
 			}
 		}
 	}
-	// No [actions] ENABLED found — append a fresh section.
-	suffix := "\n[actions]\nENABLED = " + val + "\n"
-	if strings.HasSuffix(ini, "\n") {
-		return ini + suffix[1:]
+	if inSection {
+		lines = insertMissingSectionKeys(lines, len(lines), updates, seenKeys)
+		return strings.Join(lines, "\n")
 	}
-	return ini + suffix
+	var b strings.Builder
+	if strings.HasSuffix(ini, "\n") {
+		b.WriteString(ini)
+	} else {
+		b.WriteString(ini)
+		b.WriteString("\n")
+	}
+	if seenSection {
+		return b.String()
+	}
+	fmt.Fprintf(&b, "[%s]\n", section)
+	for key, value := range updates {
+		fmt.Fprintf(&b, "%s = %s\n", key, value)
+	}
+	return b.String()
+}
+
+func insertMissingSectionKeys(lines []string, at int, updates map[string]string, seen map[string]bool) []string {
+	var missing []string
+	for key, value := range updates {
+		if !seen[key] {
+			missing = append(missing, key+" = "+value)
+		}
+	}
+	if len(missing) == 0 {
+		return lines
+	}
+	sort.Strings(missing)
+	out := append([]string{}, lines[:at]...)
+	out = append(out, missing...)
+	out = append(out, lines[at:]...)
+	return out
 }
 
 // renderConfig is the minimal app.ini: INSTALL_LOCK so it boots ready, SQLite so
 // there's no external DB, loopback bind so only the mesh reaches it. Gitea
 // auto-generates + persists INTERNAL_TOKEN on first run when it's absent.
-func renderConfig(dataDir, addr string, port int, secret string, actions bool) string {
+func renderConfig(dataDir, addr string, port int, rootURL string, secret string, actions bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "APP_NAME = loom\nRUN_MODE = prod\n\n")
-	fmt.Fprintf(&b, "[server]\nHTTP_ADDR = %s\nHTTP_PORT = %d\nROOT_URL = http://%s:%d/\nDISABLE_SSH = true\n\n", addr, port, addr, port)
+	fmt.Fprintf(&b, "[server]\nHTTP_ADDR = %s\nHTTP_PORT = %d\nROOT_URL = %s\nDISABLE_SSH = true\n\n", addr, port, rootURL)
 	fmt.Fprintf(&b, "[database]\nDB_TYPE = sqlite3\nPATH = %s\n\n", filepath.Join(dataDir, "gitea.db"))
 	fmt.Fprintf(&b, "[repository]\nROOT = %s\n\n", filepath.Join(dataDir, "repositories"))
 	fmt.Fprintf(&b, "[security]\nINSTALL_LOCK = true\nSECRET_KEY = %s\n\n", secret)
@@ -275,6 +519,8 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	}
 	var o Options
 	var actions bool
+	var expose bool
+	var service string
 	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Download (if needed) + run gitea web on a loopback port",
@@ -289,7 +535,129 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	serve.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
 	serve.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
 	serve.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
+	serve.Flags().StringVar(&o.RootURL, "root-url", "", "Gitea ROOT_URL for UI links and clone URLs; use the stable cloudbox HTTPS URL for internet access")
 	serve.Flags().BoolVar(&actions, "actions", true, "enable Gitea Actions (local CI; $LOOM_ACTIONS=0 to disable)")
+
+	start := &cobra.Command{
+		Use:   "start",
+		Short: "Start loom as a detached local service",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("actions") {
+				o.Actions = &actions
+			}
+			st, err := StartDaemon(cmd.Context(), o)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "loom started: %s pid=%d log=%s\n", st.URL, st.PID, st.LogPath)
+			if expose {
+				if err := ExposeService(cmd.Context(), service, st.Addr); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "loom exposed over outpost mesh: service=%s addr=%s\n", serviceName(service), st.Addr)
+				fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s %s\n", st.Addr, serviceName(service))
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "share over outpost mesh: outpost mesh service add git %s\n", st.Addr)
+			}
+			return nil
+		},
+	}
+	start.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: latest)")
+	start.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
+	start.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
+	start.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
+	start.Flags().StringVar(&o.RootURL, "root-url", "", "Gitea ROOT_URL for UI links and clone URLs; use the stable cloudbox HTTPS URL for internet access")
+	start.Flags().BoolVar(&actions, "actions", true, "enable Gitea Actions (local CI; $LOOM_ACTIONS=0 to disable)")
+	start.Flags().BoolVar(&expose, "expose", false, "also publish loom through outpost mesh")
+	start.Flags().StringVar(&service, "service", "git", "outpost mesh service name for --expose")
+
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show loom service status",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			o.defaults()
+			st, err := readState(o.DataDir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Fprintln(cmd.OutOrStdout(), "loom stopped")
+					return nil
+				}
+				return err
+			}
+			state := "stopped"
+			if healthy(cmd.Context(), st.URL, 2*time.Second) {
+				state = "running"
+			}
+			rootURL := st.RootURL
+			if rootURL == "" {
+				rootURL = st.URL + "/"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "loom %s: %s root=%s pid=%d data=%s log=%s\n", state, st.URL, rootURL, st.PID, st.DataDir, st.LogPath)
+			if state == "running" {
+				fmt.Fprintf(cmd.OutOrStdout(), "share over outpost mesh: outpost mesh service add git %s\n", st.Addr)
+				fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s git\n", st.Addr)
+			}
+			return nil
+		},
+	}
+	status.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
+
+	stopCmd := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the detached loom service",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			o.defaults()
+			st, err := StopDaemon(o.DataDir, 10*time.Second)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Fprintln(cmd.OutOrStdout(), "loom already stopped")
+					return nil
+				}
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "loom stopped: %s pid=%d\n", st.URL, st.PID)
+			return nil
+		},
+	}
+	stopCmd.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
+
+	logs := &cobra.Command{
+		Use:   "logs",
+		Short: "Print the loom service log",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			o.defaults()
+			data, err := os.ReadFile(logPath(o.DataDir))
+			if err != nil {
+				return err
+			}
+			_, err = cmd.OutOrStdout().Write(data)
+			return err
+		},
+	}
+	logs.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
+
+	exposeCmd := &cobra.Command{
+		Use:   "expose",
+		Short: "Publish a running loom service through outpost mesh",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			o.defaults()
+			st, err := readState(o.DataDir)
+			if err != nil {
+				return err
+			}
+			if !healthy(cmd.Context(), st.URL, 2*time.Second) {
+				return fmt.Errorf("loom: service is not running at %s", st.URL)
+			}
+			if err := ExposeService(cmd.Context(), service, st.Addr); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "loom exposed over outpost mesh: service=%s addr=%s\n", serviceName(service), st.Addr)
+			fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s %s\n", st.Addr, serviceName(service))
+			return nil
+		},
+	}
+	exposeCmd.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
+	exposeCmd.Flags().StringVar(&service, "service", "git", "outpost mesh service name")
 
 	pathCmd := &cobra.Command{
 		Use:   "path",
@@ -309,6 +677,13 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	}
 	pathCmd.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: latest)")
 
-	root.AddCommand(serve, pathCmd)
+	root.AddCommand(serve, start, status, stopCmd, logs, exposeCmd, pathCmd)
 	return root
+}
+
+func serviceName(service string) string {
+	if strings.TrimSpace(service) == "" {
+		return "git"
+	}
+	return strings.TrimSpace(service)
 }

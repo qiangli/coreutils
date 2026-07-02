@@ -265,7 +265,24 @@ have an explicit security model for it. The safer default is:
 
 Start a local forge/control plane:
 
-  bashy loom serve --addr 127.0.0.1 --port 3000
+  bashy loom start --addr 127.0.0.1 --port 3000
+  bashy loom status
+
+For peer-to-peer access through outpost mesh, keep the UI root URL on a stable
+loopback port and ask remote peers to dial the same local port:
+
+  bashy loom expose
+  outpost mesh dial --local 127.0.0.1:3000 git
+
+Or start and expose in one step:
+
+  bashy loom start --expose
+
+For cloudbox/internet access, start Loom with the stable HTTPS URL users will
+open through cloudbox. This keeps Gitea UI links and clone URLs coherent:
+
+  bashy loom start \
+    --root-url https://CLOUDBOX_HOST/matrix/h/HOST/app/loom/
 
 Mirror or clone the GitHub repository into a local workspace, then run SDLC from
 that workspace using the local issue/request pointer:
