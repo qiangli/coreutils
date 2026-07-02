@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/chat"
@@ -188,6 +189,28 @@ For a dry-run of the exact conductor invocation:
 
   bashy sdlc delegate --issue-title "Try the change" --dry-run
 
+Background runs and monitoring
+
+Start a conductor in the background and write a local run log:
+
+  bashy sdlc --background --issue-file request.md
+
+List local runs:
+
+  bashy sdlc runs
+
+Show the latest run:
+
+  bashy sdlc watch
+
+Follow a run log until the process exits:
+
+  bashy sdlc watch RUN_ID --follow
+
+Run records are stored under .bashy/sdlc/runs by default. The conductor log and
+brief can contain request details and agent output, so keep that directory local
+or gitignored when working in repositories that may be published.
+
 Local issue records
 
 Record a local issue without delegating it:
@@ -240,7 +263,8 @@ Common workflows
 
 Local human-triggered change:
 
-  bashy sdlc --issue-file request.md --cwd /path/to/repo --timeout 45m
+  bashy sdlc --background --issue-file request.md --cwd /path/to/repo --timeout 45m
+  bashy sdlc watch --follow
   bashy sdlc deploy-status --repo owner/repo --branch main
   bashy sdlc verify --url https://example.com --absent "Old text"
 
@@ -317,6 +341,8 @@ type DelegateOptions struct {
 	Timeout    time.Duration
 	Cwd        string
 	Sandbox    string
+	Background bool
+	RunsDir    string
 }
 
 type ConfigOverrides struct {
@@ -356,9 +382,32 @@ type DelegateResult struct {
 	ConfigPath    string      `json:"config_path,omitempty"`
 	DefaultConfig bool        `json:"default_config,omitempty"`
 	Conductor     string      `json:"conductor,omitempty"`
+	RunID         string      `json:"run_id,omitempty"`
+	RunPath       string      `json:"run_path,omitempty"`
+	LogPath       string      `json:"log_path,omitempty"`
 	Issue         Issue       `json:"issue"`
 	Brief         string      `json:"brief,omitempty"`
 	Chat          chat.Result `json:"chat,omitempty"`
+}
+
+type RunRecord struct {
+	SchemaVersion string    `json:"schema_version"`
+	ID            string    `json:"id"`
+	Status        string    `json:"status"`
+	PID           int       `json:"pid,omitempty"`
+	IssueTitle    string    `json:"issue_title,omitempty"`
+	IssueID       string    `json:"issue_id,omitempty"`
+	IssueURL      string    `json:"issue_url,omitempty"`
+	Conductor     string    `json:"conductor,omitempty"`
+	Cwd           string    `json:"cwd,omitempty"`
+	Command       []string  `json:"command,omitempty"`
+	RunPath       string    `json:"run_path"`
+	LogPath       string    `json:"log_path"`
+	BriefPath     string    `json:"brief_path"`
+	StartedAt     time.Time `json:"started_at"`
+	FinishedAt    time.Time `json:"finished_at,omitempty"`
+	ExitCode      int       `json:"exit_code,omitempty"`
+	Error         string    `json:"error,omitempty"`
 }
 
 type ConfigExplanation struct {
@@ -403,6 +452,15 @@ type DeployStatus struct {
 	Title         string `json:"title,omitempty"`
 }
 
+type WatchOptions struct {
+	RunsDir  string
+	RunID    string
+	Follow   bool
+	Tail     int
+	Interval time.Duration
+	JSON     bool
+}
+
 // NewSDLCCmd returns the `bashy sdlc` command tree.
 func NewSDLCCmd() *cobra.Command {
 	var opt DelegateOptions
@@ -444,7 +502,8 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 	bindDelegateFlags(cmd, &opt)
 	cmd.AddCommand(
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
-		newBriefCmd(), newDelegateCmd(), newTickCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
+		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(),
+		newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
 	)
 	return cmd
 }
@@ -656,6 +715,68 @@ func newTickCmd() *cobra.Command {
 	return newDelegateLikeCmd("tick --issue-title TITLE", "run one externally-triggered SDLC cycle for one intake issue")
 }
 
+func newRunsCmd() *cobra.Command {
+	var dir string
+	var asJSON bool
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "runs",
+		Short: "list local SDLC conductor runs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			runs, err := ListRuns(dir, limit)
+			if err != nil {
+				return err
+			}
+			if asJSON || os.Getenv("BASHY_AGENTIC") != "" {
+				b, _ := json.Marshal(map[string]any{"schema_version": schemaVersion, "runs": runs})
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				return nil
+			}
+			for _, run := range runs {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %s conductor=%s issue=%q log=%s\n",
+					run.ID, run.Status, run.Conductor, run.IssueTitle, run.LogPath)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().IntVar(&limit, "limit", 20, "maximum number of runs to list")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
+func newWatchCmd() *cobra.Command {
+	var dir string
+	var follow bool
+	var tail int
+	var interval time.Duration
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "watch [RUN_ID]",
+		Short: "show or follow a local SDLC conductor run",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			runID := ""
+			if len(args) > 0 {
+				runID = args[0]
+			}
+			return WatchRun(cmd.Context(), cmd.OutOrStdout(), WatchOptions{
+				RunsDir:  dir,
+				RunID:    runID,
+				Follow:   follow,
+				Tail:     tail,
+				Interval: interval,
+				JSON:     asJSON || os.Getenv("BASHY_AGENTIC") != "",
+			})
+		},
+	}
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().BoolVar(&follow, "follow", false, "follow log output until the run exits")
+	cmd.Flags().IntVar(&tail, "tail", 80, "number of log lines to show")
+	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "follow polling interval")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
 func newVerifyCmd() *cobra.Command {
 	var target string
 	var absent, present []string
@@ -779,6 +900,8 @@ func bindDelegateFlags(cmd *cobra.Command, opt *DelegateOptions) {
 	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "conductor timeout, for example 45m")
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "working directory for the conductor")
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "danger-full-access", "conductor sandbox for agents that support it")
+	cmd.Flags().BoolVar(&opt.Background, "background", false, "start the conductor in the background and write a local run log")
+	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
 }
 
 func bindIssueFlags(cmd *cobra.Command, opt *DelegateOptions) {
@@ -1177,16 +1300,37 @@ func Delegate(ctx context.Context, opt DelegateOptions) (DelegateResult, error) 
 	if err != nil {
 		return res, err
 	}
-	chatRes, err := chat.Invoke(ctx, chat.Options{
-		Agent:       res.Conductor,
-		Role:        "conductor",
-		Instruction: res.Brief,
-		Cwd:         opt.Cwd,
-		Timeout:     opt.Timeout,
-		Sandbox:     opt.Sandbox,
-		DryRun:      opt.DryRun,
-	}, nil)
+	chatOpt := chatOptionsForDelegate(res, opt)
+	if opt.Background && !opt.DryRun {
+		return StartBackgroundRun(ctx, res, opt, chatOpt)
+	}
+	var run *RunRecord
+	if !opt.DryRun {
+		run, _ = NewRunRecord(res, opt, chat.Result{})
+		if run != nil {
+			_ = SaveRunRecord(*run)
+			res.RunID = run.ID
+			res.RunPath = run.RunPath
+			res.LogPath = run.LogPath
+		}
+	}
+	chatRes, err := chat.Invoke(ctx, chatOpt, nil)
 	res.Chat = chatRes
+	if run != nil {
+		run.Conductor = chatRes.Agent
+		run.Command = redactedCommand(chatRes.Agent, chatRes.Args)
+		run.ExitCode = chatRes.ExitCode
+		run.FinishedAt = time.Now().UTC()
+		run.Status = "succeeded"
+		if err != nil || chatRes.ExitCode != 0 {
+			run.Status = "failed"
+		}
+		if err != nil {
+			run.Error = err.Error()
+		}
+		_ = appendRunLog(*run, chatRes.Output)
+		_ = SaveRunRecord(*run)
+	}
 	if err != nil {
 		res.Status = "error"
 		return res, err
@@ -1196,6 +1340,298 @@ func Delegate(ctx context.Context, opt DelegateOptions) (DelegateResult, error) 
 		res.Status = "dry-run"
 	}
 	return res, nil
+}
+
+func chatOptionsForDelegate(res DelegateResult, opt DelegateOptions) chat.Options {
+	return chat.Options{
+		Agent:       res.Conductor,
+		Role:        "conductor",
+		Instruction: res.Brief,
+		Cwd:         opt.Cwd,
+		Timeout:     opt.Timeout,
+		Sandbox:     opt.Sandbox,
+		DryRun:      opt.DryRun,
+	}
+}
+
+func StartBackgroundRun(ctx context.Context, res DelegateResult, opt DelegateOptions, chatOpt chat.Options) (DelegateResult, error) {
+	dryOpt := chatOpt
+	dryOpt.DryRun = true
+	dryRes, err := chat.Invoke(ctx, dryOpt, nil)
+	if err != nil {
+		res.Status = "error"
+		res.Chat = dryRes
+		return res, err
+	}
+	run, err := NewRunRecord(res, opt, dryRes)
+	if err != nil {
+		res.Status = "error"
+		return res, err
+	}
+	if err := os.MkdirAll(filepath.Dir(run.LogPath), 0o755); err != nil {
+		res.Status = "error"
+		return res, err
+	}
+	logFile, err := os.OpenFile(run.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		res.Status = "error"
+		return res, err
+	}
+	defer logFile.Close()
+	fmt.Fprintf(logFile, "sdlc run %s started %s\n", run.ID, run.StartedAt.Format(time.RFC3339))
+	fmt.Fprintf(logFile, "conductor=%s cwd=%s issue=%q\n\n", dryRes.Agent, dryRes.Cwd, run.IssueTitle)
+	cmd := exec.Command(dryRes.Agent, dryRes.Args...)
+	cmd.Dir = dryRes.Cwd
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		run.Status = "failed"
+		run.Error = err.Error()
+		run.FinishedAt = time.Now().UTC()
+		_ = SaveRunRecord(*run)
+		res.Status = "error"
+		return res, err
+	}
+	run.PID = cmd.Process.Pid
+	run.Status = "running"
+	if err := cmd.Process.Release(); err != nil {
+		run.Error = err.Error()
+	}
+	if err := SaveRunRecord(*run); err != nil {
+		res.Status = "error"
+		return res, err
+	}
+	dryRes.Args = redactedArgs(dryRes.Args)
+	dryRes.Output = fmt.Sprintf("started sdlc run %s pid=%d log=%s\n", run.ID, run.PID, run.LogPath)
+	res.Chat = dryRes
+	res.Status = "background"
+	res.RunID = run.ID
+	res.RunPath = run.RunPath
+	res.LogPath = run.LogPath
+	return res, nil
+}
+
+func NewRunRecord(res DelegateResult, opt DelegateOptions, chatRes chat.Result) (*RunRecord, error) {
+	runsDir := strings.TrimSpace(opt.RunsDir)
+	if runsDir == "" {
+		runsDir = ".bashy/sdlc/runs"
+	}
+	started := time.Now().UTC()
+	id := started.Format("20060102T150405Z")
+	if slug := slugify(res.Issue.Title); slug != "" {
+		id += "-" + slug
+	}
+	runDir := filepath.Join(runsDir, id)
+	run := &RunRecord{
+		SchemaVersion: schemaVersion,
+		ID:            id,
+		Status:        "running",
+		IssueTitle:    res.Issue.Title,
+		IssueID:       res.Issue.ID,
+		IssueURL:      res.Issue.URL,
+		Conductor:     res.Conductor,
+		Cwd:           chatRes.Cwd,
+		Command:       redactedCommand(chatRes.Agent, chatRes.Args),
+		RunPath:       filepath.Join(runDir, "run.json"),
+		LogPath:       filepath.Join(runDir, "conductor.log"),
+		BriefPath:     filepath.Join(runDir, "brief.txt"),
+		StartedAt:     started,
+	}
+	if run.Cwd == "" {
+		if opt.Cwd != "" {
+			run.Cwd = opt.Cwd
+		} else {
+			run.Cwd, _ = os.Getwd()
+		}
+	}
+	if run.Conductor == "" {
+		run.Conductor = chatRes.Agent
+	}
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(run.BriefPath, []byte(res.Brief), 0o600); err != nil {
+		return nil, err
+	}
+	return run, nil
+}
+
+func SaveRunRecord(run RunRecord) error {
+	if err := os.MkdirAll(filepath.Dir(run.RunPath), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(run, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	return os.WriteFile(run.RunPath, b, 0o644)
+}
+
+func appendRunLog(run RunRecord, output string) error {
+	if strings.TrimSpace(output) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(run.LogPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(run.LogPath, []byte(output), 0o644)
+}
+
+func LoadRun(path string) (RunRecord, error) {
+	var run RunRecord
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return run, err
+	}
+	if err := json.Unmarshal(data, &run); err != nil {
+		return run, err
+	}
+	return refreshRun(run), nil
+}
+
+func ListRuns(dir string, limit int) ([]RunRecord, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = ".bashy/sdlc/runs"
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var runs []RunRecord
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		run, err := LoadRun(filepath.Join(dir, entry.Name(), "run.json"))
+		if err == nil {
+			runs = append(runs, run)
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].StartedAt.After(runs[j].StartedAt)
+	})
+	if limit > 0 && len(runs) > limit {
+		runs = runs[:limit]
+	}
+	return runs, nil
+}
+
+func WatchRun(ctx context.Context, out io.Writer, opt WatchOptions) error {
+	if opt.RunsDir == "" {
+		opt.RunsDir = ".bashy/sdlc/runs"
+	}
+	if opt.Tail <= 0 {
+		opt.Tail = 80
+	}
+	if opt.Interval <= 0 {
+		opt.Interval = 2 * time.Second
+	}
+	var seen int
+	lastStatus := ""
+	for {
+		run, err := ResolveRun(opt.RunsDir, opt.RunID)
+		if err != nil {
+			return err
+		}
+		run = refreshRun(run)
+		if opt.JSON {
+			b, _ := json.Marshal(run)
+			fmt.Fprintln(out, string(b))
+		} else {
+			if run.Status != lastStatus {
+				fmt.Fprintf(out, "%s %s conductor=%s pid=%d log=%s\n", run.ID, run.Status, run.Conductor, run.PID, run.LogPath)
+				lastStatus = run.Status
+			}
+			data, _ := os.ReadFile(run.LogPath)
+			if opt.Follow {
+				if seen < len(data) {
+					fmt.Fprint(out, string(data[seen:]))
+					seen = len(data)
+				}
+			} else {
+				fmt.Fprint(out, tailString(string(data), opt.Tail))
+			}
+		}
+		if !opt.Follow || run.Status != "running" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(opt.Interval):
+		}
+	}
+}
+
+func ResolveRun(dir, id string) (RunRecord, error) {
+	if strings.TrimSpace(id) != "" {
+		return LoadRun(filepath.Join(dir, id, "run.json"))
+	}
+	runs, err := ListRuns(dir, 1)
+	if err != nil {
+		return RunRecord{}, err
+	}
+	if len(runs) == 0 {
+		return RunRecord{}, fmt.Errorf("sdlc: no runs found in %s", dir)
+	}
+	return runs[0], nil
+}
+
+func refreshRun(run RunRecord) RunRecord {
+	if run.Status == "running" && run.PID > 0 && !processAlive(run.PID) {
+		run.Status = "exited"
+		run.FinishedAt = time.Now().UTC()
+		_ = SaveRunRecord(run)
+	}
+	return run
+}
+
+func processAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func redactedCommand(agent string, args []string) []string {
+	if agent == "" && len(args) == 0 {
+		return nil
+	}
+	cmd := []string{}
+	if agent != "" {
+		cmd = append(cmd, agent)
+	}
+	cmd = append(cmd, redactedArgs(args)...)
+	return cmd
+}
+
+func redactedArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := append([]string{}, args...)
+	out[len(out)-1] = "<instruction>"
+	return out
+}
+
+func tailString(s string, lines int) string {
+	if lines <= 0 || strings.TrimSpace(s) == "" {
+		return s
+	}
+	parts := strings.SplitAfter(s, "\n")
+	if len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) <= lines {
+		return s
+	}
+	return strings.Join(parts[len(parts)-lines:], "")
 }
 
 func BuildConductorBrief(cfg Config, issue Issue) string {

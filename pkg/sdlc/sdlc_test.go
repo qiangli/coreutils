@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/chat"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -127,7 +130,7 @@ func TestCommandSurfaceIncludesTriggerEntrypoint(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "verify", "deploy-status", "guard"} {
+	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "verify", "deploy-status", "guard"} {
 		if !have[name] {
 			t.Fatalf("missing subcommand %q", name)
 		}
@@ -288,6 +291,54 @@ func TestSaveLocalIssue(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "Add status command") {
 		t.Fatalf("saved issue missing content: %s", data)
+	}
+}
+
+func TestRunRecordListAndWatch(t *testing.T) {
+	dir := t.TempDir()
+	res := DelegateResult{
+		Conductor: "codex",
+		Issue:     Issue{ID: "42", Title: "Add monitor", URL: "https://example.test/42"},
+		Brief:     "sensitive conductor brief",
+	}
+	run, err := NewRunRecord(res, DelegateOptions{RunsDir: dir, Cwd: dir}, chat.Result{
+		Agent: "codex",
+		Cwd:   dir,
+		Args:  []string{"exec", "--sandbox", "danger-full-access", "prompt text"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = "succeeded"
+	run.ExitCode = 0
+	run.FinishedAt = time.Now().UTC()
+	if err := SaveRunRecord(*run); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendRunLog(*run, "line 1\nline 2\n"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadRun(run.RunPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(loaded.Command, " "), "prompt text") {
+		t.Fatalf("run command should redact prompt: %+v", loaded.Command)
+	}
+	runs, err := ListRuns(dir, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].ID != run.ID {
+		t.Fatalf("unexpected runs: %+v", runs)
+	}
+	var out bytes.Buffer
+	if err := WatchRun(context.Background(), &out, WatchOptions{RunsDir: dir, RunID: run.ID, Tail: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, run.ID) || !strings.Contains(got, "line 2") || strings.Contains(got, "line 1") {
+		t.Fatalf("unexpected watch output:\n%s", got)
 	}
 }
 
