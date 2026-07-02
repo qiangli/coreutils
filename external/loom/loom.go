@@ -33,7 +33,7 @@ const (
 	// or --gitea-version override). go-gitea/gitea is MIT.
 	DefaultVersion = "latest"
 	DefaultAddr    = "127.0.0.1"
-	DefaultPort    = 3000
+	DefaultPort    = 13100
 )
 
 // Spec is the binmgr GitHub spec loom resolves the Gitea binary from.
@@ -61,7 +61,7 @@ type Options struct {
 	Version string // Gitea release (default DefaultVersion)
 	DataDir string // work-path (default DefaultDataDir)
 	Addr    string // HTTP bind addr (default 127.0.0.1 — loopback for the mesh)
-	Port    int    // HTTP port (default 3000)
+	Port    int    // HTTP port (default 13100)
 	RootURL string // Gitea public/UI URL (default http://127.0.0.1:<port>/)
 	// Actions toggles Gitea's built-in GitHub-Actions-compatible CI. nil = the
 	// default (on, unless $LOOM_ACTIONS is "0"/"false"). This is what makes loom

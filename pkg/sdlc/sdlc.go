@@ -287,14 +287,14 @@ have an explicit security model for it. The safer default is:
 
 Start a local forge/control plane:
 
-  bashy loom start --addr 127.0.0.1 --port 3000
+  bashy loom start --addr 127.0.0.1 --port 13100
   bashy loom status
 
 For peer-to-peer access through outpost mesh, keep the UI root URL on a stable
 loopback port and ask remote peers to dial the same local port:
 
   bashy loom expose
-  outpost mesh dial --local 127.0.0.1:3000 git
+  outpost mesh dial --local 127.0.0.1:13100 git
 
 Or start and expose in one step:
 
@@ -310,8 +310,8 @@ Prepare a guarded local workspace, then run SDLC from that workspace using the
 local issue/request pointer:
 
   bashy sdlc workspace prepare \
-    --baseline http://127.0.0.1:3000/loom/owner-repo.git \
-    --origin http://127.0.0.1:3000/loom/owner-repo-sdlc.git \
+    --baseline http://127.0.0.1:13100/loom/owner-repo.git \
+    --origin http://127.0.0.1:13100/loom/owner-repo-sdlc.git \
     --upstream https://github.com/owner/repo.git \
     --dir ~/work/repo
 
@@ -1353,7 +1353,7 @@ func newPagesOnceCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&opt.LoomURL, "loom-url", "http://127.0.0.1:3000", "Loom/Gitea base URL")
+	cmd.Flags().StringVar(&opt.LoomURL, "loom-url", "http://127.0.0.1:13100", "Loom/Gitea base URL")
 	cmd.Flags().StringVar(&opt.Token, "token", "", "Loom API token; defaults to BASHY_LOOM_TOKEN or GITEA_TOKEN")
 	cmd.Flags().StringVar(&opt.IntakeRepo, "intake-repo", "", "Loom mirror repo owner/name for issue intake")
 	cmd.Flags().StringVar(&opt.WorkspaceDir, "workspace", "", "guarded local workspace directory")
