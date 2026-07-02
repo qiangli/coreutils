@@ -169,6 +169,111 @@ func TestExplainConfigReportsEmbeddedDefault(t *testing.T) {
 	}
 }
 
+func TestApplyConfigOverridesCoversRoutingFields(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg = ApplyConfigOverrides(cfg, ConfigOverrides{
+		ConductorAgent:        "claude",
+		ReviewerAgent:         "codex",
+		QAAgent:               "opencode",
+		IntakeProvider:        "github",
+		IntakeRepo:            "owner/repo",
+		IntakeQuery:           "is:issue is:open",
+		IntakeLabels:          []string{" bug ", "", "release"},
+		StagingName:           "stage",
+		StagingHost:           "stage.example.test",
+		StagingEnvironment:    "staging",
+		StagingCommand:        "deploy stage",
+		StagingHealthcheck:    "https://stage.example.test/health",
+		StagingRollback:       "rollback stage",
+		ProductionName:        "prod",
+		ProductionHost:        "example.test",
+		ProductionEnvironment: "production",
+		ProductionCommand:     "deploy prod",
+		ProductionHealthcheck: "https://example.test/health",
+		ProductionRollback:    "rollback prod",
+		Metadata:              []string{"team=platform", "ignored", "risk=low"},
+		Policies:              []string{"prod_approval=required"},
+		Agents:                []string{"security=codex", "docs=opencode"},
+	})
+	if cfg.Conductor.Agent != "claude" || cfg.Reviewer.Agent != "codex" || cfg.QA.Agent != "opencode" {
+		t.Fatalf("agent overrides not applied: %+v", cfg)
+	}
+	if cfg.Intake.Provider != "github" || cfg.Intake.Repository != "owner/repo" || cfg.Intake.Query != "is:issue is:open" {
+		t.Fatalf("intake overrides not applied: %+v", cfg.Intake)
+	}
+	if got := strings.Join(cfg.Intake.Labels, ","); got != "bug,release" {
+		t.Fatalf("labels=%q", got)
+	}
+	if cfg.Deploy.Staging.Name != "stage" || cfg.Deploy.Staging.Healthcheck == "" || cfg.Deploy.Staging.Rollback == "" {
+		t.Fatalf("staging overrides not applied: %+v", cfg.Deploy.Staging)
+	}
+	if cfg.Deploy.Production.Name != "prod" || cfg.Deploy.Production.Healthcheck == "" || cfg.Deploy.Production.Rollback == "" {
+		t.Fatalf("production overrides not applied: %+v", cfg.Deploy.Production)
+	}
+	if cfg.Metadata["team"] != "platform" || cfg.Metadata["risk"] != "low" {
+		t.Fatalf("metadata overrides not applied: %+v", cfg.Metadata)
+	}
+	if cfg.Policies["prod_approval"] != "required" {
+		t.Fatalf("policy overrides not applied: %+v", cfg.Policies)
+	}
+	if cfg.Agents["security"].Agent != "codex" || cfg.Agents["docs"].Agent != "opencode" {
+		t.Fatalf("agent map overrides not applied: %+v", cfg.Agents)
+	}
+}
+
+func TestPrepareNoConfigUsesCLIOverrides(t *testing.T) {
+	path := writeConfig(t, `
+conductor:
+  agent: claude
+intake:
+  provider: github
+  repository: from/file
+deployment:
+  staging:
+    name: file-staging
+  production:
+    name: file-production
+`)
+	res, err := Prepare(context.Background(), DelegateOptions{
+		ConfigPath: path,
+		Config: ConfigOverrides{
+			NoConfig:        true,
+			ConductorAgent:  "codex",
+			ReviewerAgent:   "opencode",
+			QAAgent:         "agy",
+			IntakeProvider:  "jira",
+			IntakeRepo:      "TEAM/PROJ",
+			StagingName:     "cli-staging",
+			ProductionName:  "cli-production",
+			StagingHost:     "staging.example.test",
+			ProductionHost:  "example.test",
+			IntakeLabels:    []string{"uat"},
+			StagingRollback: "rollback staging",
+		},
+		Issue: Issue{Title: "Use CLI config"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Review agent: opencode",
+		"QA agent: agy",
+		"Intake provider: jira (TEAM/PROJ)",
+		"Staging target: cli-staging",
+		"Production target: cli-production",
+	} {
+		if !strings.Contains(res.Brief, want) {
+			t.Fatalf("brief missing %q:\n%s", want, res.Brief)
+		}
+	}
+	if strings.Contains(res.Brief, "from/file") || strings.Contains(res.Brief, "file-staging") {
+		t.Fatalf("brief should ignore file config under --no-config:\n%s", res.Brief)
+	}
+	if !res.DefaultConfig || res.Conductor != "codex" {
+		t.Fatalf("unexpected prepare result: %+v", res)
+	}
+}
+
 func TestSaveLocalIssue(t *testing.T) {
 	issue, path, err := SaveLocalIssue("Add status command\n\nDetails", "", t.TempDir())
 	if err != nil {

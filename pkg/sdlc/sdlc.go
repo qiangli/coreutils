@@ -32,6 +32,8 @@ For interactive use, no config file is required. If .bashy/sdlc.yaml is absent,
 bashy uses embedded defaults: local intake, the active agent as conductor when it
 can be detected, and generic staging/production target names. Use "bashy sdlc
 init" when you want project-specific intake, reviewer, QA, or deployment targets.
+Use "--no-config" plus routing flags when a script or human wants to pass the
+whole SDLC boundary on the command line.
 
 Run "bashy sdlc guide" for the full embedded usage guide.
 `
@@ -109,6 +111,37 @@ Create a project config:
 Validate a project config:
 
   bashy sdlc doctor
+
+Skip the config file and supply routing on the command line:
+
+  bashy sdlc --no-config --conductor codex --intake-provider github \
+    --intake-repo owner/repo --staging pages-staging --production pages-prod \
+    --issue "Fix staging deploy"
+
+Supported routing flags:
+
+  --conductor AGENT
+  --reviewer AGENT
+  --qa AGENT
+  --intake-provider PROVIDER
+  --intake-repo OWNER/REPO
+  --intake-query QUERY
+  --intake-label LABEL
+  --staging NAME
+  --staging-host HOST
+  --staging-env ENV
+  --staging-command COMMAND
+  --staging-healthcheck URL
+  --staging-rollback COMMAND
+  --production NAME
+  --production-host HOST
+  --production-env ENV
+  --production-command COMMAND
+  --production-healthcheck URL
+  --production-rollback COMMAND
+  --metadata KEY=VALUE
+  --policy KEY=VALUE
+  --agent NAME=AGENT
 
 Example .bashy/sdlc.yaml:
 
@@ -275,6 +308,7 @@ type Issue struct {
 
 type DelegateOptions struct {
 	ConfigPath string
+	Config     ConfigOverrides
 	Issue      Issue
 	IssueText  string
 	IssueFile  string
@@ -283,6 +317,37 @@ type DelegateOptions struct {
 	Timeout    time.Duration
 	Cwd        string
 	Sandbox    string
+}
+
+type ConfigOverrides struct {
+	NoConfig bool
+
+	ConductorAgent string
+	ReviewerAgent  string
+	QAAgent        string
+
+	IntakeProvider string
+	IntakeRepo     string
+	IntakeQuery    string
+	IntakeLabels   []string
+
+	StagingName        string
+	StagingHost        string
+	StagingEnvironment string
+	StagingCommand     string
+	StagingHealthcheck string
+	StagingRollback    string
+
+	ProductionName        string
+	ProductionHost        string
+	ProductionEnvironment string
+	ProductionCommand     string
+	ProductionHealthcheck string
+	ProductionRollback    string
+
+	Metadata []string
+	Policies []string
+	Agents   []string
 }
 
 type DelegateResult struct {
@@ -348,6 +413,7 @@ func NewSDLCCmd() *cobra.Command {
 		Example: strings.TrimSpace(`
 bashy sdlc --issue "Remove the obsolete Miscellaneous section"
 bashy sdlc --issue-file ./request.md --cwd ../site --timeout 45m
+bashy sdlc --no-config --conductor codex --intake-provider github --intake-repo owner/repo --staging staging --production production --issue "Fix deploy"
 bashy sdlc guide
 bashy sdlc init
 bashy sdlc config explain
@@ -717,6 +783,7 @@ func bindDelegateFlags(cmd *cobra.Command, opt *DelegateOptions) {
 
 func bindIssueFlags(cmd *cobra.Command, opt *DelegateOptions) {
 	cmd.Flags().StringVar(&opt.ConfigPath, "config", ".bashy/sdlc.yaml", "SDLC config file")
+	bindConfigOverrideFlags(cmd, &opt.Config)
 	cmd.Flags().StringVar(&opt.IssueText, "issue", "", "local issue/request text")
 	cmd.Flags().StringVar(&opt.IssueFile, "issue-file", "", "file containing local issue/request text")
 	cmd.Flags().StringVar(&opt.Issue.ID, "issue-id", "", "issue number or external issue id")
@@ -735,6 +802,32 @@ func bindIssueFlags(cmd *cobra.Command, opt *DelegateOptions) {
 		}
 		return ApplyIssueRequest(opt)
 	}
+}
+
+func bindConfigOverrideFlags(cmd *cobra.Command, opt *ConfigOverrides) {
+	cmd.Flags().BoolVar(&opt.NoConfig, "no-config", false, "ignore .bashy/sdlc.yaml and use embedded defaults plus CLI overrides")
+	cmd.Flags().StringVar(&opt.ConductorAgent, "conductor", "", "conductor agent override")
+	cmd.Flags().StringVar(&opt.ReviewerAgent, "reviewer", "", "review agent override")
+	cmd.Flags().StringVar(&opt.QAAgent, "qa", "", "QA agent override")
+	cmd.Flags().StringVar(&opt.IntakeProvider, "intake-provider", "", "intake provider override")
+	cmd.Flags().StringVar(&opt.IntakeRepo, "intake-repo", "", "intake repository override, for example owner/repo")
+	cmd.Flags().StringVar(&opt.IntakeQuery, "intake-query", "", "intake query override")
+	cmd.Flags().StringArrayVar(&opt.IntakeLabels, "intake-label", nil, "intake label override; may be repeated")
+	cmd.Flags().StringVar(&opt.StagingName, "staging", "", "staging target name override")
+	cmd.Flags().StringVar(&opt.StagingHost, "staging-host", "", "staging target host override")
+	cmd.Flags().StringVar(&opt.StagingEnvironment, "staging-env", "", "staging environment override")
+	cmd.Flags().StringVar(&opt.StagingCommand, "staging-command", "", "staging deployment command override")
+	cmd.Flags().StringVar(&opt.StagingHealthcheck, "staging-healthcheck", "", "staging healthcheck override")
+	cmd.Flags().StringVar(&opt.StagingRollback, "staging-rollback", "", "staging rollback command override")
+	cmd.Flags().StringVar(&opt.ProductionName, "production", "", "production target name override")
+	cmd.Flags().StringVar(&opt.ProductionHost, "production-host", "", "production target host override")
+	cmd.Flags().StringVar(&opt.ProductionEnvironment, "production-env", "", "production environment override")
+	cmd.Flags().StringVar(&opt.ProductionCommand, "production-command", "", "production deployment command override")
+	cmd.Flags().StringVar(&opt.ProductionHealthcheck, "production-healthcheck", "", "production healthcheck override")
+	cmd.Flags().StringVar(&opt.ProductionRollback, "production-rollback", "", "production rollback command override")
+	cmd.Flags().StringArrayVar(&opt.Metadata, "metadata", nil, "metadata override as key=value; may be repeated")
+	cmd.Flags().StringArrayVar(&opt.Policies, "policy", nil, "policy override as key=value; may be repeated")
+	cmd.Flags().StringArrayVar(&opt.Agents, "agent", nil, "named agent override as name=agent; may be repeated")
 }
 
 func ApplyIssueRequest(opt *DelegateOptions) error {
@@ -806,6 +899,122 @@ func ExplainConfig(path string) (ConfigExplanation, error) {
 		Staging:       displayTarget(cfg.Deploy.Staging),
 		Production:    displayTarget(cfg.Deploy.Production),
 	}, nil
+}
+
+func ApplyConfigOverrides(cfg Config, opt ConfigOverrides) Config {
+	if strings.TrimSpace(opt.ConductorAgent) != "" {
+		cfg.Conductor.Agent = strings.TrimSpace(opt.ConductorAgent)
+	}
+	if strings.TrimSpace(opt.ReviewerAgent) != "" {
+		cfg.Reviewer.Agent = strings.TrimSpace(opt.ReviewerAgent)
+	}
+	if strings.TrimSpace(opt.QAAgent) != "" {
+		cfg.QA.Agent = strings.TrimSpace(opt.QAAgent)
+	}
+	if strings.TrimSpace(opt.IntakeProvider) != "" {
+		cfg.Intake.Provider = strings.TrimSpace(opt.IntakeProvider)
+	}
+	if strings.TrimSpace(opt.IntakeRepo) != "" {
+		cfg.Intake.Repository = strings.TrimSpace(opt.IntakeRepo)
+	}
+	if strings.TrimSpace(opt.IntakeQuery) != "" {
+		cfg.Intake.Query = strings.TrimSpace(opt.IntakeQuery)
+	}
+	if len(opt.IntakeLabels) > 0 {
+		cfg.Intake.Labels = trimNonEmpty(opt.IntakeLabels)
+	}
+	cfg.Deploy.Staging = applyTargetOverrides(cfg.Deploy.Staging, TargetConfig{
+		Name:        opt.StagingName,
+		Host:        opt.StagingHost,
+		Environment: opt.StagingEnvironment,
+		Command:     opt.StagingCommand,
+		Healthcheck: opt.StagingHealthcheck,
+		Rollback:    opt.StagingRollback,
+	})
+	cfg.Deploy.Production = applyTargetOverrides(cfg.Deploy.Production, TargetConfig{
+		Name:        opt.ProductionName,
+		Host:        opt.ProductionHost,
+		Environment: opt.ProductionEnvironment,
+		Command:     opt.ProductionCommand,
+		Healthcheck: opt.ProductionHealthcheck,
+		Rollback:    opt.ProductionRollback,
+	})
+	if len(opt.Metadata) > 0 {
+		cfg.Metadata = mergeStringMap(cfg.Metadata, parseKeyValueList(opt.Metadata))
+	}
+	if len(opt.Policies) > 0 {
+		cfg.Policies = mergeStringMap(cfg.Policies, parseKeyValueList(opt.Policies))
+	}
+	if len(opt.Agents) > 0 {
+		if cfg.Agents == nil {
+			cfg.Agents = map[string]RoleConfig{}
+		}
+		for key, value := range parseKeyValueList(opt.Agents) {
+			cfg.Agents[key] = RoleConfig{Agent: value}
+		}
+	}
+	return cfg
+}
+
+func applyTargetOverrides(base TargetConfig, overrides TargetConfig) TargetConfig {
+	if strings.TrimSpace(overrides.Name) != "" {
+		base.Name = strings.TrimSpace(overrides.Name)
+	}
+	if strings.TrimSpace(overrides.Host) != "" {
+		base.Host = strings.TrimSpace(overrides.Host)
+	}
+	if strings.TrimSpace(overrides.Environment) != "" {
+		base.Environment = strings.TrimSpace(overrides.Environment)
+	}
+	if strings.TrimSpace(overrides.Command) != "" {
+		base.Command = strings.TrimSpace(overrides.Command)
+	}
+	if strings.TrimSpace(overrides.Healthcheck) != "" {
+		base.Healthcheck = strings.TrimSpace(overrides.Healthcheck)
+	}
+	if strings.TrimSpace(overrides.Rollback) != "" {
+		base.Rollback = strings.TrimSpace(overrides.Rollback)
+	}
+	return base
+}
+
+func trimNonEmpty(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if v := strings.TrimSpace(value); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func parseKeyValueList(values []string) map[string]string {
+	out := map[string]string{}
+	for _, value := range values {
+		key, val, ok := strings.Cut(value, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		if key != "" {
+			out[key] = val
+		}
+	}
+	return out
+}
+
+func mergeStringMap(base, overrides map[string]string) map[string]string {
+	if len(overrides) == 0 {
+		return base
+	}
+	if base == nil {
+		base = map[string]string{}
+	}
+	for key, value := range overrides {
+		base[key] = value
+	}
+	return base
 }
 
 func loadConfig(path string, fallback bool) (Config, bool, error) {
@@ -932,8 +1141,20 @@ func Prepare(ctx context.Context, opt DelegateOptions) (DelegateResult, error) {
 	if err := ApplyIssueRequest(&opt); err != nil {
 		return DelegateResult{SchemaVersion: schemaVersion, Status: "error", ConfigPath: opt.ConfigPath}, err
 	}
-	cfg, usedDefault, err := LoadConfigOrDefault(opt.ConfigPath)
-	if err != nil {
+	var cfg Config
+	var usedDefault bool
+	var err error
+	if opt.Config.NoConfig {
+		cfg = DefaultConfig()
+		usedDefault = true
+	} else {
+		cfg, usedDefault, err = LoadConfigOrDefault(opt.ConfigPath)
+		if err != nil {
+			return DelegateResult{SchemaVersion: schemaVersion, Status: "error", ConfigPath: opt.ConfigPath}, err
+		}
+	}
+	cfg = ApplyConfigOverrides(cfg, opt.Config)
+	if err := cfg.Validate(); err != nil {
 		return DelegateResult{SchemaVersion: schemaVersion, Status: "error", ConfigPath: opt.ConfigPath}, err
 	}
 	if strings.TrimSpace(opt.Issue.Title) == "" {
