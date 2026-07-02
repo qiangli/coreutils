@@ -195,6 +195,9 @@ Start a conductor in the background and write a local run log:
 
   bashy sdlc --background --issue-file request.md
 
+Background runs are supervised. The supervisor streams conductor stdout/stderr
+to the run log and records final status, exit code, and finish time in run.json.
+
 List local runs:
 
   bashy sdlc runs
@@ -531,6 +534,7 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(),
 		newApproveCmd(), newRolloutCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
+		newSuperviseCmd(),
 	)
 	return cmd
 }
@@ -801,6 +805,21 @@ func newWatchCmd() *cobra.Command {
 	cmd.Flags().IntVar(&tail, "tail", 80, "number of log lines to show")
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "follow polling interval")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
+func newSuperviseCmd() *cobra.Command {
+	var dir string
+	cmd := &cobra.Command{
+		Use:    "supervise RUN_ID -- COMMAND [ARG...]",
+		Short:  "internal SDLC background run supervisor",
+		Hidden: true,
+		Args:   cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return SuperviseRun(cmd.Context(), dir, args[0], args[1:])
+		},
+	}
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
 	return cmd
 }
 
@@ -1490,6 +1509,7 @@ func chatOptionsForDelegate(res DelegateResult, opt DelegateOptions) chat.Option
 }
 
 func StartBackgroundRun(ctx context.Context, res DelegateResult, opt DelegateOptions, chatOpt chat.Options) (DelegateResult, error) {
+	opt.RunsDir = runsDirForOption(opt.RunsDir)
 	dryOpt := chatOpt
 	dryOpt.DryRun = true
 	dryRes, err := chat.Invoke(ctx, dryOpt, nil)
@@ -1503,22 +1523,19 @@ func StartBackgroundRun(ctx context.Context, res DelegateResult, opt DelegateOpt
 		res.Status = "error"
 		return res, err
 	}
-	if err := os.MkdirAll(filepath.Dir(run.LogPath), 0o755); err != nil {
+	run.Status = "starting"
+	if err := SaveRunRecord(*run); err != nil {
 		res.Status = "error"
 		return res, err
 	}
-	logFile, err := os.OpenFile(run.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	exe, err := os.Executable()
 	if err != nil {
 		res.Status = "error"
 		return res, err
 	}
-	defer logFile.Close()
-	fmt.Fprintf(logFile, "sdlc run %s started %s\n", run.ID, run.StartedAt.Format(time.RFC3339))
-	fmt.Fprintf(logFile, "conductor=%s cwd=%s issue=%q\n\n", dryRes.Agent, dryRes.Cwd, run.IssueTitle)
-	cmd := exec.Command(dryRes.Agent, dryRes.Args...)
-	cmd.Dir = dryRes.Cwd
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	supervisorArgs := []string{"sdlc", "supervise", "--runs-dir", opt.RunsDir, run.ID, "--", dryRes.Agent}
+	supervisorArgs = append(supervisorArgs, dryRes.Args...)
+	cmd := exec.Command(exe, supervisorArgs...)
 	if err := cmd.Start(); err != nil {
 		run.Status = "failed"
 		run.Error = err.Error()
@@ -1529,6 +1546,7 @@ func StartBackgroundRun(ctx context.Context, res DelegateResult, opt DelegateOpt
 	}
 	run.PID = cmd.Process.Pid
 	run.Status = "running"
+	run.Command = redactedCommand(dryRes.Agent, dryRes.Args)
 	if err := cmd.Process.Release(); err != nil {
 		run.Error = err.Error()
 	}
@@ -1612,6 +1630,68 @@ func SaveRunRecord(run RunRecord) error {
 	return os.WriteFile(run.RunPath, b, 0o644)
 }
 
+func SuperviseRun(ctx context.Context, dir, id string, command []string) error {
+	if len(command) == 0 {
+		return errors.New("sdlc: supervise requires a command")
+	}
+	run, err := LoadRunByID(dir, id)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(run.LogPath), 0o755); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(run.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	fmt.Fprintf(logFile, "sdlc run %s started %s\n", run.ReferenceID, run.StartedAt.Format(time.RFC3339))
+	fmt.Fprintf(logFile, "conductor=%s cwd=%s issue=%q\n\n", run.Conductor, run.Cwd, run.IssueTitle)
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	if run.Cwd != "" {
+		cmd.Dir = run.Cwd
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	run.Status = "running"
+	run.Command = redactedCommand(command[0], command[1:])
+	if err := cmd.Start(); err != nil {
+		run.Status = "failed"
+		run.Error = err.Error()
+		run.FinishedAt = time.Now().UTC()
+		_ = SaveRunRecord(run)
+		return err
+	}
+	run.PID = cmd.Process.Pid
+	if err := SaveRunRecord(run); err != nil {
+		_ = cmd.Process.Kill()
+		return err
+	}
+	err = cmd.Wait()
+	run.FinishedAt = time.Now().UTC()
+	run.ExitCode = 0
+	run.Status = "succeeded"
+	if err != nil {
+		run.Status = "failed"
+		run.Error = err.Error()
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			run.ExitCode = exitErr.ExitCode()
+		} else if ctx.Err() != nil {
+			run.ExitCode = 124
+			run.Error = ctx.Err().Error()
+		} else {
+			run.ExitCode = 127
+		}
+	}
+	fmt.Fprintf(logFile, "\nsdlc run %s finished status=%s exit_code=%d\n", run.ReferenceID, run.Status, run.ExitCode)
+	if saveErr := SaveRunRecord(run); saveErr != nil {
+		return saveErr
+	}
+	return err
+}
+
 func appendRunLog(run RunRecord, output string) error {
 	if strings.TrimSpace(output) == "" {
 		return nil
@@ -1620,6 +1700,17 @@ func appendRunLog(run RunRecord, output string) error {
 		return err
 	}
 	return os.WriteFile(run.LogPath, []byte(output), 0o644)
+}
+
+func runsDirForOption(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		dir = ".bashy/sdlc/runs"
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
 }
 
 func LoadRun(path string) (RunRecord, error) {
@@ -1816,7 +1907,7 @@ func WatchRun(ctx context.Context, out io.Writer, opt WatchOptions) error {
 				fmt.Fprint(out, tailString(string(data), opt.Tail))
 			}
 		}
-		if !opt.Follow || run.Status != "running" {
+		if !opt.Follow || !runActive(run.Status) {
 			return nil
 		}
 		select {
@@ -1842,12 +1933,16 @@ func ResolveRun(dir, id string) (RunRecord, error) {
 }
 
 func refreshRun(run RunRecord) RunRecord {
-	if run.Status == "running" && run.PID > 0 && !processAlive(run.PID) {
+	if runActive(run.Status) && run.PID > 0 && !processAlive(run.PID) {
 		run.Status = "exited"
 		run.FinishedAt = time.Now().UTC()
 		_ = SaveRunRecord(run)
 	}
 	return run
+}
+
+func runActive(status string) bool {
+	return status == "starting" || status == "running"
 }
 
 func processAlive(pid int) bool {

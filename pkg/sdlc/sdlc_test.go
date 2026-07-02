@@ -345,6 +345,84 @@ func TestRunRecordListAndWatch(t *testing.T) {
 	}
 }
 
+func TestSuperviseRunStreamsLogAndRecordsExit(t *testing.T) {
+	shell := "/bin/sh"
+	if _, err := os.Stat(shell); err != nil {
+		t.Skipf("%s is not available", shell)
+	}
+	dir := t.TempDir()
+	res := DelegateResult{
+		Conductor: shell,
+		Issue:     Issue{Title: "Supervise stream"},
+		Brief:     "brief",
+	}
+	run, err := NewRunRecord(res, DelegateOptions{RunsDir: dir, Cwd: dir}, chat.Result{
+		Agent: shell,
+		Cwd:   dir,
+		Args:  []string{"-c", "printf 'one\\n'; printf 'two\\n'"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRunRecord(*run); err != nil {
+		t.Fatal(err)
+	}
+	if err := SuperviseRun(context.Background(), dir, run.ID, []string{shell, "-c", "printf 'one\\n'; printf 'two\\n'"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadRun(run.RunPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != "succeeded" || loaded.ExitCode != 0 || loaded.FinishedAt.IsZero() {
+		t.Fatalf("unexpected supervised run: %+v", loaded)
+	}
+	data, err := os.ReadFile(run.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{"one", "two", "finished status=succeeded exit_code=0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("log missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSuperviseRunRecordsFailure(t *testing.T) {
+	shell := "/bin/sh"
+	if _, err := os.Stat(shell); err != nil {
+		t.Skipf("%s is not available", shell)
+	}
+	dir := t.TempDir()
+	res := DelegateResult{
+		Conductor: shell,
+		Issue:     Issue{Title: "Supervise failure"},
+		Brief:     "brief",
+	}
+	run, err := NewRunRecord(res, DelegateOptions{RunsDir: dir, Cwd: dir}, chat.Result{
+		Agent: shell,
+		Cwd:   dir,
+		Args:  []string{"-c", "exit 7"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRunRecord(*run); err != nil {
+		t.Fatal(err)
+	}
+	if err := SuperviseRun(context.Background(), dir, run.ID, []string{shell, "-c", "exit 7"}); err == nil {
+		t.Fatal("expected supervisor to return child failure")
+	}
+	loaded, err := LoadRun(run.RunPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != "failed" || loaded.ExitCode != 7 {
+		t.Fatalf("unexpected failed run: %+v", loaded)
+	}
+}
+
 func TestApproveResolveAndRolloutLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	res := DelegateResult{
