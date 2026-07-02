@@ -1536,6 +1536,7 @@ func StartBackgroundRun(ctx context.Context, res DelegateResult, opt DelegateOpt
 	supervisorArgs := []string{"sdlc", "supervise", "--runs-dir", opt.RunsDir, run.ID, "--", dryRes.Agent}
 	supervisorArgs = append(supervisorArgs, dryRes.Args...)
 	cmd := exec.Command(exe, supervisorArgs...)
+	applyBackgroundProcAttrs(cmd)
 	if err := cmd.Start(); err != nil {
 		run.Status = "failed"
 		run.Error = err.Error()
