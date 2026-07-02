@@ -377,6 +377,7 @@ func ensureConfig(dataDir, addr string, port int, rootURL string, actions bool) 
 	cfgPath := filepath.Join(dataDir, "app.ini")
 	if existing, err := os.ReadFile(cfgPath); err == nil {
 		merged := ensureServerSection(string(existing), addr, port, rootURL)
+		merged = ensureServiceSection(merged)
 		merged = ensureActionsSection(merged, actions)
 		if merged != string(existing) {
 			if err := os.WriteFile(cfgPath, []byte(merged), 0o600); err != nil {
@@ -450,6 +451,20 @@ func ensureServerSection(ini, addr string, port int, rootURL string) string {
 		"DISABLE_SSH": "true",
 	}
 	return ensureSectionKeys(ini, "server", updates)
+}
+
+func ensureServiceSection(ini string) string {
+	return ensureSectionKeys(ini, "service", map[string]string{
+		"DISABLE_REGISTRATION":                   "true",
+		"ENABLE_REVERSE_PROXY_AUTHENTICATION":    "true",
+		"ENABLE_REVERSE_PROXY_AUTO_REGISTRATION": "true",
+		"ENABLE_REVERSE_PROXY_EMAIL":             "true",
+		"ENABLE_REVERSE_PROXY_FULL_NAME":         "true",
+		"REVERSE_PROXY_AUTHENTICATION_USER":      "X-WEBAUTH-USER",
+		"REVERSE_PROXY_AUTHENTICATION_EMAIL":     "X-WEBAUTH-EMAIL",
+		"REVERSE_PROXY_AUTHENTICATION_FULL_NAME": "X-WEBAUTH-FULLNAME",
+		"REVERSE_PROXY_TRUSTED_PROXIES":          "127.0.0.0/8,::1/128",
+	})
 }
 
 // ensureActionsSection reconciles the [actions] ENABLED key in an existing
@@ -541,7 +556,21 @@ func renderConfig(dataDir, addr string, port int, rootURL string, secret string,
 	fmt.Fprintf(&b, "[database]\nDB_TYPE = sqlite3\nPATH = %s\n\n", filepath.Join(dataDir, "gitea.db"))
 	fmt.Fprintf(&b, "[repository]\nROOT = %s\n\n", filepath.Join(dataDir, "repositories"))
 	fmt.Fprintf(&b, "[security]\nINSTALL_LOCK = true\nSECRET_KEY = %s\n\n", secret)
-	fmt.Fprintf(&b, "[service]\nDISABLE_REGISTRATION = true\n\n")
+	fmt.Fprintf(&b, "[service]\n")
+	for _, key := range []string{
+		"DISABLE_REGISTRATION",
+		"ENABLE_REVERSE_PROXY_AUTHENTICATION",
+		"ENABLE_REVERSE_PROXY_AUTO_REGISTRATION",
+		"ENABLE_REVERSE_PROXY_EMAIL",
+		"ENABLE_REVERSE_PROXY_FULL_NAME",
+		"REVERSE_PROXY_AUTHENTICATION_USER",
+		"REVERSE_PROXY_AUTHENTICATION_EMAIL",
+		"REVERSE_PROXY_AUTHENTICATION_FULL_NAME",
+		"REVERSE_PROXY_TRUSTED_PROXIES",
+	} {
+		fmt.Fprintf(&b, "%s = %s\n", key, serviceDefaults()[key])
+	}
+	fmt.Fprintln(&b)
 	// [actions] turns loom into a local CI control plane: act_runner registers
 	// against it and dials out over the mesh. DEFAULT_ACTIONS_URL = github lets
 	// workflows reference `uses: actions/checkout` at setup; a mesh-local mirror
@@ -552,6 +581,20 @@ func renderConfig(dataDir, addr string, port int, rootURL string, secret string,
 	}
 	fmt.Fprintf(&b, "[actions]\nENABLED = %s\nDEFAULT_ACTIONS_URL = github\n", enabled)
 	return b.String()
+}
+
+func serviceDefaults() map[string]string {
+	return map[string]string{
+		"DISABLE_REGISTRATION":                   "true",
+		"ENABLE_REVERSE_PROXY_AUTHENTICATION":    "true",
+		"ENABLE_REVERSE_PROXY_AUTO_REGISTRATION": "true",
+		"ENABLE_REVERSE_PROXY_EMAIL":             "true",
+		"ENABLE_REVERSE_PROXY_FULL_NAME":         "true",
+		"REVERSE_PROXY_AUTHENTICATION_USER":      "X-WEBAUTH-USER",
+		"REVERSE_PROXY_AUTHENTICATION_EMAIL":     "X-WEBAUTH-EMAIL",
+		"REVERSE_PROXY_AUTHENTICATION_FULL_NAME": "X-WEBAUTH-FULLNAME",
+		"REVERSE_PROXY_TRUSTED_PROXIES":          "127.0.0.0/8,::1/128",
+	}
 }
 
 func randomHex(n int) (string, error) {

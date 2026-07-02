@@ -27,6 +27,10 @@ func TestEnsureConfig_SeedsAndIsIdempotent(t *testing.T) {
 		"ROOT_URL = https://ai.dhnt.io/matrix/h/dragon/app/loom/",
 		"SECRET_KEY = ",
 		"DISABLE_REGISTRATION = true",
+		"ENABLE_REVERSE_PROXY_AUTHENTICATION = true",
+		"ENABLE_REVERSE_PROXY_AUTO_REGISTRATION = true",
+		"REVERSE_PROXY_AUTHENTICATION_USER = X-WEBAUTH-USER",
+		"REVERSE_PROXY_AUTHENTICATION_EMAIL = X-WEBAUTH-EMAIL",
 		"[actions]",      // local CI control plane
 		"ENABLED = true", // act_runner registers against it
 	} {
@@ -71,6 +75,8 @@ func TestEnsureConfig_ReconcilesServerAndActions(t *testing.T) {
 		"HTTP_PORT = 3001",
 		"ROOT_URL = https://ai.dhnt.io/matrix/h/dragon/app/loom/",
 		"ENABLED = false",
+		"ENABLE_REVERSE_PROXY_AUTHENTICATION = true",
+		"REVERSE_PROXY_AUTHENTICATION_USER = X-WEBAUTH-USER",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("reconciled config missing %q:\n%s", want, s)
