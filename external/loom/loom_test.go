@@ -1,6 +1,8 @@
 package loom
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,10 +105,42 @@ func TestCommandSurfaceIncludesLifecycleManagement(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"serve", "start", "status", "stop", "logs", "expose", "path"} {
+	for _, name := range []string{"serve", "start", "status", "stop", "logs", "expose", "path", "proxy"} {
 		if !have[name] {
 			t.Fatalf("missing command %q", name)
 		}
+	}
+}
+
+func TestProxyTranslatesRemoteIdentityToWebauth(t *testing.T) {
+	var gotUser, gotEmail, gotName string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-WEBAUTH-USER")
+		gotEmail = r.Header.Get("X-WEBAUTH-EMAIL")
+		gotName = r.Header.Get("X-WEBAUTH-FULLNAME")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	handler, err := loomProxyHandler(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/", nil)
+	req.Header.Set("Remote-User", "alice@example.com")
+	req.Header.Set("Remote-Email", "alice@example.com")
+	req.Header.Set("Remote-Name", "Alice")
+	req.Header.Set("X-WEBAUTH-USER", "attacker@example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if gotUser != "alice@example.com" || gotEmail != "alice@example.com" || gotName != "Alice" {
+		t.Fatalf("webauth headers = (%q,%q,%q), want alice@example.com/alice@example.com/Alice", gotUser, gotEmail, gotName)
 	}
 }
 

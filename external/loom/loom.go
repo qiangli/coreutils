@@ -10,14 +10,19 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,9 +36,10 @@ const (
 	// DefaultVersion pins the Gitea release loom runs. "" / "latest" resolves the
 	// newest release dynamically; pin for reproducibility ($LOOM_GITEA_VERSION
 	// or --gitea-version override). go-gitea/gitea is MIT.
-	DefaultVersion = "latest"
-	DefaultAddr    = "127.0.0.1"
-	DefaultPort    = 31880
+	DefaultVersion   = "latest"
+	DefaultAddr      = "127.0.0.1"
+	DefaultPort      = 31880
+	DefaultProxyPort = 31881
 )
 
 // Spec is the binmgr GitHub spec loom resolves the Gitea binary from.
@@ -58,11 +64,12 @@ func DefaultDataDir() string {
 
 // Options configures Serve.
 type Options struct {
-	Version string // Gitea release (default DefaultVersion)
-	DataDir string // work-path (default DefaultDataDir)
-	Addr    string // HTTP bind addr (default 127.0.0.1 — loopback for the mesh)
-	Port    int    // HTTP port (default 31880)
-	RootURL string // Gitea public/UI URL (default http://127.0.0.1:<port>/)
+	Version   string // Gitea release (default DefaultVersion)
+	DataDir   string // work-path (default DefaultDataDir)
+	Addr      string // HTTP bind addr (default 127.0.0.1 — loopback for the mesh)
+	Port      int    // HTTP port (default 31880)
+	ProxyPort int    // HTTP reverse-proxy port (default 31881)
+	RootURL   string // Gitea public/UI URL (default http://127.0.0.1:<port>/)
 	// Actions toggles Gitea's built-in GitHub-Actions-compatible CI. nil = the
 	// default (on, unless $LOOM_ACTIONS is "0"/"false"). This is what makes loom
 	// a local CI control plane: act_runner registers against it and dials out
@@ -99,6 +106,9 @@ func (o *Options) defaults() {
 	if o.Port == 0 {
 		o.Port = DefaultPort
 	}
+	if o.ProxyPort == 0 {
+		o.ProxyPort = DefaultProxyPort
+	}
 	if o.RootURL == "" {
 		o.RootURL = os.Getenv("LOOM_ROOT_URL")
 	}
@@ -127,6 +137,9 @@ type Instance struct {
 type State struct {
 	PID       int       `json:"pid"`
 	URL       string    `json:"url"`
+	ProxyPID  int       `json:"proxy_pid,omitempty"`
+	ProxyURL  string    `json:"proxy_url,omitempty"`
+	ProxyAddr string    `json:"proxy_addr,omitempty"`
 	RootURL   string    `json:"root_url"`
 	Addr      string    `json:"addr"`
 	Version   string    `json:"version"`
@@ -234,7 +247,8 @@ func removeState(dataDir string) error {
 func StartDaemon(ctx context.Context, o Options) (State, error) {
 	o.defaults()
 	if st, err := readState(o.DataDir); err == nil && healthy(ctx, st.URL, 2*time.Second) {
-		if st.RootURL == o.RootURL && st.Addr == fmt.Sprintf("%s:%d", o.Addr, o.Port) {
+		proxyOK := st.ProxyURL == "" || healthy(ctx, st.ProxyURL, 2*time.Second)
+		if st.RootURL == o.RootURL && st.Addr == fmt.Sprintf("%s:%d", o.Addr, o.Port) && proxyOK {
 			return st, nil
 		}
 		_, _ = StopDaemon(o.DataDir, 10*time.Second)
@@ -274,9 +288,27 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		_ = log.Close()
 	}()
 	addr := fmt.Sprintf("%s:%d", o.Addr, o.Port)
+	proxyAddr := fmt.Sprintf("%s:%d", o.Addr, o.ProxyPort)
+	proxyURL := "http://" + proxyAddr
+	proxyCmd := exec.Command(os.Args[0], "loom", "proxy", "--target", "http://"+addr, "--addr", o.Addr, "--port", strconv.Itoa(o.ProxyPort))
+	proxyCmd.Dir = o.DataDir
+	proxyCmd.Stdout = log
+	proxyCmd.Stderr = log
+	proxyCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := proxyCmd.Start(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = log.Close()
+		return State{}, fmt.Errorf("loom: start proxy: %w", err)
+	}
+	go func() {
+		_ = proxyCmd.Wait()
+	}()
 	st := State{
 		PID:       cmd.Process.Pid,
 		URL:       "http://" + addr,
+		ProxyPID:  proxyCmd.Process.Pid,
+		ProxyURL:  proxyURL,
+		ProxyAddr: proxyAddr,
 		RootURL:   o.RootURL,
 		Addr:      addr,
 		Version:   tool.Version,
@@ -286,6 +318,13 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	}
 	if err := waitHTTP(ctx, st.URL, 60*time.Second); err != nil {
 		_ = cmd.Process.Kill()
+		_ = proxyCmd.Process.Kill()
+		_ = removeState(o.DataDir)
+		return State{}, err
+	}
+	if err := waitHTTP(ctx, st.ProxyURL, 30*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		_ = proxyCmd.Process.Kill()
 		_ = removeState(o.DataDir)
 		return State{}, err
 	}
@@ -304,14 +343,25 @@ func StopDaemon(dataDir string, timeout time.Duration) (State, error) {
 	if err != nil {
 		return st, err
 	}
+	var proxyProc *os.Process
+	if st.ProxyPID > 0 {
+		proxyProc, _ = os.FindProcess(st.ProxyPID)
+	}
+	if proxyProc != nil {
+		_ = proxyProc.Signal(os.Interrupt)
+	}
 	_ = proc.Signal(os.Interrupt)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if !healthy(context.Background(), st.URL, 500*time.Millisecond) {
+		proxyDead := st.ProxyURL == "" || !healthy(context.Background(), st.ProxyURL, 500*time.Millisecond)
+		if !healthy(context.Background(), st.URL, 500*time.Millisecond) && proxyDead {
 			_ = removeState(dataDir)
 			return st, nil
 		}
 		time.Sleep(250 * time.Millisecond)
+	}
+	if proxyProc != nil {
+		_ = proxyProc.Kill()
 	}
 	_ = proc.Kill()
 	_ = removeState(dataDir)
@@ -361,6 +411,125 @@ func healthy(ctx context.Context, url string, timeout time.Duration) bool {
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode < 500
+}
+
+func runProxy(ctx context.Context, addr string, port int, target string) error {
+	if addr == "" {
+		addr = DefaultAddr
+	}
+	if port == 0 {
+		port = DefaultProxyPort
+	}
+	if target == "" {
+		target = fmt.Sprintf("http://127.0.0.1:%d", DefaultPort)
+	}
+	handler, err := loomProxyHandler(target)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{
+		Addr:              fmt.Sprintf("%s:%d", addr, port),
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+		return nil
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
+}
+
+func loomProxyHandler(target string) (http.Handler, error) {
+	targetURL, err := url.Parse(target)
+	if err != nil {
+		return nil, fmt.Errorf("loom proxy: target: %w", err)
+	}
+	if targetURL.Scheme == "" || targetURL.Host == "" {
+		return nil, fmt.Errorf("loom proxy: target must be absolute (got %q)", target)
+	}
+	rp := httputil.NewSingleHostReverseProxy(targetURL)
+	baseDirector := rp.Director
+	rp.Director = func(req *http.Request) {
+		baseDirector(req)
+		req.Host = targetURL.Host
+		stripWebauthHeaders(req.Header)
+		user, email, name := proxyIdentity(req)
+		if user != "" {
+			req.Header.Set("X-WEBAUTH-USER", user)
+			req.Header.Set("X-WEBAUTH-EMAIL", firstNonEmpty(email, user))
+			if name != "" {
+				req.Header.Set("X-WEBAUTH-FULLNAME", name)
+			}
+		}
+	}
+	return rp, nil
+}
+
+func stripWebauthHeaders(h http.Header) {
+	for _, k := range []string{"X-WEBAUTH-USER", "X-WEBAUTH-EMAIL", "X-WEBAUTH-FULLNAME"} {
+		h.Del(k)
+	}
+}
+
+func proxyIdentity(req *http.Request) (user, email, name string) {
+	user = strings.TrimSpace(req.Header.Get("Remote-User"))
+	email = strings.TrimSpace(req.Header.Get("Remote-Email"))
+	name = strings.TrimSpace(req.Header.Get("Remote-Name"))
+	if user != "" {
+		return user, email, name
+	}
+	if !isLoopbackRemote(req.RemoteAddr) {
+		return "", "", ""
+	}
+	user = strings.TrimSpace(os.Getenv("USER"))
+	if user == "" {
+		user = strings.TrimSpace(os.Getenv("LOGNAME"))
+	}
+	if user == "" {
+		user = "local"
+	}
+	email = user
+	if !strings.Contains(email, "@") {
+		email += "@localhost"
+	}
+	return user, email, remoteNameFromEmail(email)
+}
+
+func isLoopbackRemote(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func remoteNameFromEmail(s string) string {
+	at := strings.IndexByte(s, '@')
+	if at <= 0 {
+		return ""
+	}
+	return s[:at]
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ensureConfig writes a minimal Gitea app.ini on first run and returns its path.
@@ -617,6 +786,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	var actions bool
 	var expose bool
 	var service string
+	var proxyTarget string
 	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Download (if needed) + run gitea web on a loopback port",
@@ -645,15 +815,16 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "loom started: %s pid=%d log=%s\n", st.URL, st.PID, st.LogPath)
+			fmt.Fprintf(cmd.OutOrStdout(), "loom started: %s pid=%d proxy=%s proxy_pid=%d log=%s\n", st.URL, st.PID, st.ProxyURL, st.ProxyPID, st.LogPath)
 			if expose {
-				if err := ExposeService(cmd.Context(), service, st.Addr); err != nil {
+				if err := ExposeService(cmd.Context(), service, st.ProxyAddr); err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "loom exposed over outpost mesh: service=%s addr=%s\n", serviceName(service), st.Addr)
-				fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s %s\n", st.Addr, serviceName(service))
+				fmt.Fprintf(cmd.OutOrStdout(), "loom exposed over outpost mesh: service=%s addr=%s\n", serviceName(service), st.ProxyAddr)
+				fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s %s\n", st.ProxyAddr, serviceName(service))
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "share over outpost mesh: outpost mesh service add git %s\n", st.Addr)
+				fmt.Fprintf(cmd.OutOrStdout(), "point outpost app at: outpost apps add loom --url %s --require-login --trust-cloud-identity\n", st.ProxyURL)
+				fmt.Fprintf(cmd.OutOrStdout(), "share over outpost mesh: outpost mesh service add git %s\n", st.ProxyAddr)
 			}
 			return nil
 		},
@@ -662,6 +833,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	start.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
 	start.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
 	start.Flags().IntVar(&o.Port, "port", DefaultPort, "HTTP port")
+	start.Flags().IntVar(&o.ProxyPort, "proxy-port", DefaultProxyPort, "HTTP proxy port for outpost/custom-app access")
 	start.Flags().StringVar(&o.RootURL, "root-url", "", "Gitea ROOT_URL for UI links and clone URLs; use the stable cloudbox HTTPS URL for internet access")
 	start.Flags().BoolVar(&actions, "actions", true, "enable Gitea Actions (local CI; $LOOM_ACTIONS=0 to disable)")
 	start.Flags().BoolVar(&expose, "expose", false, "also publish loom through outpost mesh")
@@ -688,10 +860,21 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 			if rootURL == "" {
 				rootURL = st.URL + "/"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "loom %s: %s root=%s pid=%d data=%s log=%s\n", state, st.URL, rootURL, st.PID, st.DataDir, st.LogPath)
+			proxyState := "stopped"
+			if st.ProxyURL != "" && healthy(cmd.Context(), st.ProxyURL, 2*time.Second) {
+				proxyState = "running"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "loom %s: %s root=%s pid=%d proxy=%s proxy_state=%s proxy_pid=%d data=%s log=%s\n", state, st.URL, rootURL, st.PID, st.ProxyURL, proxyState, st.ProxyPID, st.DataDir, st.LogPath)
 			if state == "running" {
-				fmt.Fprintf(cmd.OutOrStdout(), "share over outpost mesh: outpost mesh service add git %s\n", st.Addr)
-				fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s git\n", st.Addr)
+				if st.ProxyURL != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "point outpost app at: outpost apps add loom --url %s --require-login --trust-cloud-identity\n", st.ProxyURL)
+				}
+				shareAddr := st.ProxyAddr
+				if shareAddr == "" {
+					shareAddr = st.Addr
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "share over outpost mesh: outpost mesh service add git %s\n", shareAddr)
+				fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s git\n", shareAddr)
 			}
 			return nil
 		},
@@ -744,16 +927,34 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 			if !healthy(cmd.Context(), st.URL, 2*time.Second) {
 				return fmt.Errorf("loom: service is not running at %s", st.URL)
 			}
-			if err := ExposeService(cmd.Context(), service, st.Addr); err != nil {
+			addr := st.ProxyAddr
+			if addr == "" {
+				addr = st.Addr
+			}
+			if err := ExposeService(cmd.Context(), service, addr); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "loom exposed over outpost mesh: service=%s addr=%s\n", serviceName(service), st.Addr)
-			fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s %s\n", st.Addr, serviceName(service))
+			fmt.Fprintf(cmd.OutOrStdout(), "loom exposed over outpost mesh: service=%s addr=%s\n", serviceName(service), addr)
+			fmt.Fprintf(cmd.OutOrStdout(), "remote peers can run: outpost mesh dial --local %s %s\n", addr, serviceName(service))
 			return nil
 		},
 	}
 	exposeCmd.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
 	exposeCmd.Flags().StringVar(&service, "service", "git", "outpost mesh service name")
+
+	proxyCmd := &cobra.Command{
+		Use:    "proxy",
+		Short:  "Run the Loom reverse proxy",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return runProxy(ctx, o.Addr, o.ProxyPort, proxyTarget)
+		},
+	}
+	proxyCmd.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
+	proxyCmd.Flags().IntVar(&o.ProxyPort, "port", DefaultProxyPort, "HTTP proxy port")
+	proxyCmd.Flags().StringVar(&proxyTarget, "target", "", "backend Gitea URL")
 
 	pathCmd := &cobra.Command{
 		Use:   "path",
@@ -773,7 +974,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	}
 	pathCmd.Flags().StringVar(&o.Version, "gitea-version", "", "Gitea release tag (default: latest)")
 
-	root.AddCommand(serve, start, status, stopCmd, logs, exposeCmd, pathCmd)
+	root.AddCommand(serve, start, status, stopCmd, logs, exposeCmd, pathCmd, proxyCmd)
 	return root
 }
 
