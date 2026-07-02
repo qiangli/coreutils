@@ -650,6 +650,48 @@ type PublishResult struct {
 	PublishedAt   time.Time `json:"published_at,omitempty"`
 }
 
+type PagesOnceOptions struct {
+	LoomURL      string
+	Token        string
+	IntakeRepo   string
+	WorkspaceDir string
+	RunsDir      string
+	BuildCommand string
+	PublicURL    string
+	Branch       string
+	Conductor    string
+	Sandbox      string
+	Timeout      time.Duration
+	DryRun       bool
+	JSON         bool
+}
+
+type PagesOnceResult struct {
+	SchemaVersion string        `json:"schema_version"`
+	Status        string        `json:"status"`
+	Issue         *LoomIssue    `json:"issue,omitempty"`
+	RunID         string        `json:"run_id,omitempty"`
+	WorkspaceDir  string        `json:"workspace_dir"`
+	BuildCommand  string        `json:"build_command,omitempty"`
+	BuildOutput   string        `json:"build_output,omitempty"`
+	Publish       PublishResult `json:"publish,omitempty"`
+	Verify        *VerifyResult `json:"verify,omitempty"`
+	Error         string        `json:"error,omitempty"`
+}
+
+type LoomIssue struct {
+	Number int         `json:"number"`
+	Title  string      `json:"title"`
+	Body   string      `json:"body"`
+	HTML   string      `json:"html_url"`
+	State  string      `json:"state"`
+	Labels []LoomLabel `json:"labels"`
+}
+
+type LoomLabel struct {
+	Name string `json:"name"`
+}
+
 // NewSDLCCmd returns the `bashy sdlc` command tree.
 func NewSDLCCmd() *cobra.Command {
 	var opt DelegateOptions
@@ -690,7 +732,7 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(), newQACmd(),
 		newApproveCmd(), newRolloutCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
-		newWorkspaceCmd(), newPublishCmd(), newSuperviseCmd(),
+		newWorkspaceCmd(), newPublishCmd(), newPagesCmd(), newSuperviseCmd(),
 	)
 	return cmd
 }
@@ -1275,6 +1317,54 @@ func newPublishGitHubPagesCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opt.Branch, "branch", "main", "GitHub branch to update")
 	cmd.Flags().StringVar(&opt.Source, "source", "HEAD", "local ref to publish")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the push command without running it")
+	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print JSON")
+	return cmd
+}
+
+func newPagesCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "pages",
+		Short: "run the zero-config personal pages SDLC workflow",
+	}
+	cmd.CompletionOptions.DisableDefaultCmd = true
+	cmd.AddCommand(newPagesOnceCmd())
+	return cmd
+}
+
+func newPagesOnceCmd() *cobra.Command {
+	var opt PagesOnceOptions
+	cmd := &cobra.Command{
+		Use:   "once",
+		Short: "process one eligible Loom issue and publish an approved GitHub Pages update",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			res, err := RunPagesOnce(cmd.Context(), opt)
+			if opt.JSON || os.Getenv("BASHY_AGENTIC") != "" {
+				b, _ := json.Marshal(res)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+			} else if err == nil {
+				if res.Issue != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "processed issue #%d: %s\n", res.Issue.Number, res.Issue.Title)
+				}
+				if res.RunID != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "sdlc reference: %s\n", res.RunID)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "status: %s\n", res.Status)
+			}
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&opt.LoomURL, "loom-url", "http://127.0.0.1:3000", "Loom/Gitea base URL")
+	cmd.Flags().StringVar(&opt.Token, "token", "", "Loom API token; defaults to BASHY_LOOM_TOKEN or GITEA_TOKEN")
+	cmd.Flags().StringVar(&opt.IntakeRepo, "intake-repo", "", "Loom mirror repo owner/name for issue intake")
+	cmd.Flags().StringVar(&opt.WorkspaceDir, "workspace", "", "guarded local workspace directory")
+	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory, relative to workspace when not absolute")
+	cmd.Flags().StringVar(&opt.BuildCommand, "build", "pnpm build", "build/test command to run before publish")
+	cmd.Flags().StringVar(&opt.PublicURL, "public-url", "", "public page URL to verify after publish")
+	cmd.Flags().StringVar(&opt.Branch, "branch", "main", "GitHub Pages source branch")
+	cmd.Flags().StringVar(&opt.Conductor, "conductor", "", "conductor agent override")
+	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "danger-full-access", "conductor sandbox")
+	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "conductor timeout")
+	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "select and brief issue without invoking conductor or publishing")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print JSON")
 	return cmd
 }
@@ -2688,6 +2778,245 @@ func PublishGitHubPages(ctx context.Context, opt PublishOptions) (PublishResult,
 	res.Status = "published"
 	res.PublishedAt = time.Now().UTC()
 	return res, nil
+}
+
+func RunPagesOnce(ctx context.Context, opt PagesOnceOptions) (PagesOnceResult, error) {
+	opt.LoomURL = strings.TrimRight(strings.TrimSpace(opt.LoomURL), "/")
+	opt.Token = strings.TrimSpace(opt.Token)
+	if opt.Token == "" {
+		opt.Token = strings.TrimSpace(os.Getenv("BASHY_LOOM_TOKEN"))
+	}
+	if opt.Token == "" {
+		opt.Token = strings.TrimSpace(os.Getenv("GITEA_TOKEN"))
+	}
+	opt.IntakeRepo = strings.Trim(strings.TrimSpace(opt.IntakeRepo), "/")
+	opt.WorkspaceDir = strings.TrimSpace(opt.WorkspaceDir)
+	if opt.Conductor == "" {
+		opt.Conductor = DefaultConductorAgent()
+	}
+	res := PagesOnceResult{
+		SchemaVersion: schemaVersion,
+		Status:        "error",
+		WorkspaceDir:  opt.WorkspaceDir,
+		BuildCommand:  opt.BuildCommand,
+	}
+	if opt.LoomURL == "" || opt.IntakeRepo == "" || opt.WorkspaceDir == "" {
+		return res, errors.New("sdlc: pages once requires --loom-url, --intake-repo, and --workspace")
+	}
+	issue, err := nextLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo)
+	if err != nil {
+		res.Error = err.Error()
+		return res, err
+	}
+	if issue == nil {
+		res.Status = "idle"
+		return res, nil
+	}
+	res.Issue = issue
+	if opt.DryRun {
+		res.Status = "dry-run"
+		return res, nil
+	}
+	_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC started on local pages workspace.")
+	delegateOpt := DelegateOptions{
+		Config: ConfigOverrides{
+			NoConfig:       true,
+			ConductorAgent: opt.Conductor,
+			IntakeProvider: "loom",
+			IntakeRepo:     opt.IntakeRepo,
+			ProductionName: "github-pages",
+			StagingName:    "local-build",
+			Policies:       []string{"auto_publish_pages=true"},
+			IntakeLabels:   nil,
+		},
+		Issue: Issue{
+			ID:    fmt.Sprintf("%d", issue.Number),
+			URL:   issue.HTML,
+			Title: issue.Title,
+			Body:  issue.Body,
+		},
+		Cwd:     opt.WorkspaceDir,
+		Sandbox: opt.Sandbox,
+		Timeout: opt.Timeout,
+		RunsDir: pagesRunsDir(opt.WorkspaceDir, opt.RunsDir),
+	}
+	delegateRes, err := Delegate(ctx, delegateOpt)
+	res.RunID = delegateRes.RunID
+	if err != nil {
+		res.Error = err.Error()
+		_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC conductor failed: "+err.Error())
+		return res, err
+	}
+	if opt.BuildCommand != "" {
+		out, buildErr := runShellCommand(ctx, opt.WorkspaceDir, opt.BuildCommand)
+		res.BuildOutput = out
+		if buildErr != nil {
+			err := fmt.Errorf("sdlc: pages build failed: %w", buildErr)
+			res.Error = err.Error()
+			_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC build failed:\n\n```text\n"+truncateForComment(out)+"\n```")
+			return res, err
+		}
+	}
+	if res.RunID == "" {
+		err := errors.New("sdlc: conductor did not produce a run id")
+		res.Error = err.Error()
+		return res, err
+	}
+	if _, err := ReviewRun(delegateOpt.RunsDir, res.RunID, "accepted", "pages build passed", "bashy sdlc pages"); err != nil {
+		res.Error = err.Error()
+		return res, err
+	}
+	if _, err := ApproveRun(delegateOpt.RunsDir, res.RunID, "auto-approved for GitHub Pages publish after local build", "bashy sdlc pages"); err != nil {
+		res.Error = err.Error()
+		return res, err
+	}
+	pub, err := PublishGitHubPages(ctx, PublishOptions{
+		RunsDir: delegateOpt.RunsDir,
+		RunID:   res.RunID,
+		Cwd:     opt.WorkspaceDir,
+		Branch:  opt.Branch,
+	})
+	res.Publish = pub
+	if err != nil {
+		res.Error = err.Error()
+		_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC publish failed: "+err.Error())
+		return res, err
+	}
+	if opt.PublicURL != "" {
+		verify, verr := VerifyContent(ctx, VerifyOptions{Target: opt.PublicURL, Timeout: 30 * time.Second})
+		res.Verify = &verify
+		if verr != nil {
+			res.Error = verr.Error()
+			_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC publish completed, but public URL verification failed: "+verr.Error())
+			return res, verr
+		}
+	}
+	res.Status = "published"
+	_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC published the approved change to GitHub Pages. Reference: "+res.RunID)
+	_ = closeLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number)
+	return res, nil
+}
+
+func pagesRunsDir(workspace, runsDir string) string {
+	if filepath.IsAbs(runsDir) {
+		return runsDir
+	}
+	return filepath.Join(workspace, runsDir)
+}
+
+func nextLoomIssue(ctx context.Context, baseURL, token, repo string) (*LoomIssue, error) {
+	var issues []LoomIssue
+	if err := loomJSON(ctx, http.MethodGet, baseURL, token, "/api/v1/repos/"+repo+"/issues?state=open&type=issues", nil, &issues); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(issues, func(i, j int) bool {
+		return issuePriority(issues[i]) < issuePriority(issues[j])
+	})
+	for _, issue := range issues {
+		if eligibleLoomIssue(issue) {
+			issue := issue
+			return &issue, nil
+		}
+	}
+	return nil, nil
+}
+
+func eligibleLoomIssue(issue LoomIssue) bool {
+	if issue.State != "" && issue.State != "open" {
+		return false
+	}
+	for _, label := range issue.Labels {
+		switch strings.ToLower(strings.TrimSpace(label.Name)) {
+		case "sdlc:ignore", "sdlc:blocked", "sdlc:in-progress", "sdlc:qa", "sdlc:approved", "sdlc:done":
+			return false
+		}
+	}
+	return strings.TrimSpace(issue.Title) != ""
+}
+
+func issuePriority(issue LoomIssue) int {
+	score := 100
+	for _, label := range issue.Labels {
+		switch strings.ToLower(strings.TrimSpace(label.Name)) {
+		case "priority:p0":
+			return 0
+		case "priority:p1":
+			score = min(score, 1)
+		case "priority:p2":
+			score = min(score, 2)
+		case "priority:p3":
+			score = min(score, 3)
+		}
+	}
+	return score
+}
+
+func commentLoomIssue(ctx context.Context, baseURL, token, repo string, number int, body string) error {
+	if token == "" {
+		return nil
+	}
+	payload := map[string]string{"body": body}
+	return loomJSON(ctx, http.MethodPost, baseURL, token, fmt.Sprintf("/api/v1/repos/%s/issues/%d/comments", repo, number), payload, nil)
+}
+
+func closeLoomIssue(ctx context.Context, baseURL, token, repo string, number int) error {
+	if token == "" {
+		return nil
+	}
+	payload := map[string]string{"state": "closed"}
+	return loomJSON(ctx, http.MethodPatch, baseURL, token, fmt.Sprintf("/api/v1/repos/%s/issues/%d", repo, number), payload, nil)
+}
+
+func loomJSON(ctx context.Context, method, baseURL, token, path string, body any, out any) error {
+	var r io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		r = strings.NewReader(string(b))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(baseURL, "/")+path, r)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("sdlc: Loom API %s %s: %s\n%s", method, path, resp.Status, strings.TrimSpace(string(data)))
+	}
+	if out != nil && len(data) > 0 {
+		return json.Unmarshal(data, out)
+	}
+	return nil
+}
+
+func runShellCommand(ctx context.Context, dir, command string) (string, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func truncateForComment(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= 4000 {
+		return s
+	}
+	return s[len(s)-4000:]
 }
 
 func ensureWorkspaceClone(ctx context.Context, dir, baseline string) (bool, error) {

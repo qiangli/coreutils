@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -147,7 +148,7 @@ func TestCommandSurfaceIncludesTriggerEntrypoint(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard", "workspace", "publish"} {
+	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard", "workspace", "publish", "pages"} {
 		if !have[name] {
 			t.Fatalf("missing subcommand %q", name)
 		}
@@ -290,6 +291,29 @@ func TestPublishGitHubPagesRequiresApprovalAndDryRuns(t *testing.T) {
 	}
 	if pub.Status != "dry-run" || !isGitHubURL(pub.Target) || pub.Branch != "main" {
 		t.Fatalf("unexpected publish result: %+v", pub)
+	}
+}
+
+func TestEligibleLoomIssueSkipsReservedLifecycleLabels(t *testing.T) {
+	if !eligibleLoomIssue(LoomIssue{Title: "plain open issue", State: "open"}) {
+		t.Fatal("plain open issue should be eligible")
+	}
+	for _, label := range []string{"sdlc:ignore", "sdlc:blocked", "sdlc:in-progress", "sdlc:qa", "sdlc:approved", "sdlc:done"} {
+		if eligibleLoomIssue(LoomIssue{Title: "skip me", State: "open", Labels: []LoomLabel{{Name: label}}}) {
+			t.Fatalf("issue with %s should be skipped", label)
+		}
+	}
+}
+
+func TestIssuePriorityUsesOptionalLabels(t *testing.T) {
+	issues := []LoomIssue{
+		{Title: "default"},
+		{Title: "p2", Labels: []LoomLabel{{Name: "priority:p2"}}},
+		{Title: "p0", Labels: []LoomLabel{{Name: "priority:p0"}}},
+	}
+	sort.SliceStable(issues, func(i, j int) bool { return issuePriority(issues[i]) < issuePriority(issues[j]) })
+	if issues[0].Title != "p0" || issues[1].Title != "p2" {
+		t.Fatalf("unexpected priority order: %+v", issues)
 	}
 }
 
