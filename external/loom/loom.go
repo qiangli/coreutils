@@ -414,6 +414,29 @@ const loomHeaderTemplate = `<style>
 	display: none !important;
 }
 </style>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+	const logo = document.getElementById('navbar-logo');
+	if (!logo) return;
+	const appSubUrl = window.config && window.config.appSubUrl;
+	if (appSubUrl) {
+		logo.href = appSubUrl + '/';
+		return;
+	}
+	const path = window.location.pathname;
+	const appMount = '/app/loom/';
+	const appAt = path.indexOf(appMount);
+	if (appAt >= 0) {
+		logo.href = path.slice(0, appAt + appMount.length);
+		return;
+	}
+	if (path === '/loom' || path.startsWith('/loom/')) {
+		logo.href = '/loom/';
+		return;
+	}
+	logo.href = '/';
+});
+</script>
 `
 
 func ensureServerSection(ini, addr string, port int, rootURL string) string {
