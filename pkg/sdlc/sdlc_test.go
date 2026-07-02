@@ -130,7 +130,7 @@ func TestCommandSurfaceIncludesTriggerEntrypoint(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "approve", "rollout", "resolve", "verify", "deploy-status", "guard"} {
+	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard"} {
 		if !have[name] {
 			t.Fatalf("missing subcommand %q", name)
 		}
@@ -153,7 +153,9 @@ func TestGuideIsSelfContainedRuntimeHelp(t *testing.T) {
 		"danger-full-access",
 		"bashy web inspect",
 		"deploy-status",
-		"Production gate",
+		"Local Loom-first control plane",
+		"GitHub = public source control",
+		"Deployment gate",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("guide missing %q:\n%s", want, got)
@@ -262,8 +264,8 @@ deployment:
 		"Review agent: opencode",
 		"QA agent: agy",
 		"Intake provider: jira (TEAM/PROJ)",
-		"Staging target: cli-staging",
-		"Production target: cli-production",
+		"Validation target: cli-staging",
+		"Rollout target: cli-production",
 	} {
 		if !strings.Contains(res.Brief, want) {
 			t.Fatalf("brief missing %q:\n%s", want, res.Brief)
@@ -446,7 +448,14 @@ func TestApproveResolveAndRolloutLifecycle(t *testing.T) {
 	if _, err := LoadRunByID(dir, "missing"); err == nil {
 		t.Fatal("expected missing run lookup to fail")
 	}
-	approved, err := ApproveRun(dir, run.ReferenceID, "UAT passed", "qa")
+	reviewed, err := ReviewRun(dir, run.ReferenceID, "accepted", "QA passed", "qa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewed.Status != "qa-accepted" || reviewed.QA == nil || reviewed.QA.Note != "QA passed" {
+		t.Fatalf("unexpected reviewed run: %+v", reviewed)
+	}
+	approved, err := ApproveRun(dir, run.ReferenceID, "UAT passed", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,9 +464,10 @@ func TestApproveResolveAndRolloutLifecycle(t *testing.T) {
 	}
 	rollout := BuildRolloutInstruction(approved, "push main", "release")
 	for _, want := range []string{
-		"Production approval granted",
+		"Deployment approval granted",
 		approved.ReferenceID,
 		"External issue ID: external-42",
+		"QA passed",
 		"UAT passed",
 		"push main",
 	} {
@@ -490,7 +500,12 @@ func TestLocalIssueReferenceLifecycleE2E(t *testing.T) {
 		t.Fatal("expected delegate output to include sdlc reference")
 	}
 
-	run := runSDLCCmd(t, "approve", ref, "--runs-dir", runsDir, "--note", "UAT passed on local staging")
+	run := runSDLCCmd(t, "qa", ref, "--runs-dir", runsDir, "--status", "accepted", "--note", "QA passed")
+	if !strings.Contains(run.out, "qa "+ref+" status=accepted") {
+		t.Fatalf("qa output missing reference:\n%s", run.out)
+	}
+
+	run = runSDLCCmd(t, "approve", ref, "--runs-dir", runsDir, "--note", "UAT passed on local staging")
 	if !strings.Contains(run.out, "approved "+ref) {
 		t.Fatalf("approve output missing reference:\n%s", run.out)
 	}
@@ -504,8 +519,9 @@ func TestLocalIssueReferenceLifecycleE2E(t *testing.T) {
 		"--note", "push approved change to main",
 	)
 	for _, want := range []string{
-		"Production approval granted",
+		"Deployment approval granted",
 		ref,
+		"QA passed",
 		"UAT passed on local staging",
 		"push approved change to main",
 	} {
@@ -514,7 +530,7 @@ func TestLocalIssueReferenceLifecycleE2E(t *testing.T) {
 		}
 	}
 
-	run = runSDLCCmd(t, "resolve", ref, "--runs-dir", runsDir, "--status", "resolved", "--note", "production verified")
+	run = runSDLCCmd(t, "resolve", ref, "--runs-dir", runsDir, "--status", "resolved", "--note", "deployment target verified")
 	if !strings.Contains(run.out, ref+" resolved") {
 		t.Fatalf("resolve output missing reference:\n%s", run.out)
 	}
@@ -530,7 +546,7 @@ func TestLocalIssueReferenceLifecycleE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.ReferenceID != ref || record.Approval == nil || record.Resolution == nil {
+	if record.ReferenceID != ref || record.QA == nil || record.Approval == nil || record.Resolution == nil {
 		t.Fatalf("reference lifecycle not persisted: %+v", record)
 	}
 }
@@ -660,9 +676,9 @@ func TestBuildConductorBriefStatesDelegationBoundary(t *testing.T) {
 	}
 	brief := BuildConductorBrief(cfg, Issue{ID: "42", Title: "Ship SDLC loop", Body: "Make it work"})
 	for _, want := range []string{
-		"SDLC owns intake",
+		"SDLC owns intake pointers",
 		"You own implementation planning",
-		"Do not deploy to production without explicit human approval",
+		"Do not deploy to the configured rollout target without explicit approval",
 		"Title: Ship SDLC loop",
 		"Review agent: codex",
 		"QA agent: codex",

@@ -24,14 +24,15 @@ import (
 const schemaVersion = "bashy-sdlc-v1"
 
 const sdlcLongHelp = `
-bashy sdlc is a local-first SDLC coordinator. It accepts an issue/request,
+bashy sdlc is a local-first SDLC coordinator. It accepts an issue/request pointer,
 builds a conductor brief, and delegates implementation to the configured agent.
-SDLC owns intake, routing, validation gates, and deployment status checks; the
-conductor owns architecture, planning, implementation, tests, commits, and pushes.
+SDLC owns intake routing, lifecycle state, validation gates, and deployment target
+checks; the conductor owns architecture, planning, implementation, tests, commits,
+and pushes.
 
 For interactive use, no config file is required. If .bashy/sdlc.yaml is absent,
 bashy uses embedded defaults: local intake, the active agent as conductor when it
-can be detected, and generic staging/production target names. Use "bashy sdlc
+can be detected, and generic validation/rollout target names. Use "bashy sdlc
 init" when you want project-specific intake, reviewer, QA, or deployment targets.
 Use "--no-config" plus routing flags when a script or human wants to pass the
 whole SDLC boundary on the command line.
@@ -44,15 +45,15 @@ bashy sdlc guide
 
 Purpose
 
-bashy sdlc is the interface between issue intake and deployment targets. It is
-designed to stay small: it captures or receives a request, turns it into a clear
-conductor brief, invokes the implementation conductor agent, and provides simple
-checks for validation and deployment status.
+bashy sdlc is the interface between any issue intake source and any deployment
+target. It is designed to stay small: it captures or receives a request pointer,
+turns it into a clear conductor brief, invokes the implementation conductor agent,
+and provides simple checks for validation and deployment status.
 
 The SDLC command does not try to be the architect or implementer. The conductor
 agent owns planning, coding, tests, source control operations, and iteration. SDLC
-keeps the boundary: issue in, agent delegation, validation gates, deployment
-status, and human approval before production.
+keeps the boundary: request in, agent delegation, validation gates, deployment
+status, and explicit approval before rollout when policy requires it.
 
 Local interactive quick start
 
@@ -220,9 +221,10 @@ Every delegated request creates a local run reference ID. Use that exact ID for
 approval, rollout, and final resolution:
 
   bashy sdlc runs
+  bashy sdlc qa RUN_ID --status accepted --note "QA passed"
   bashy sdlc approve RUN_ID --note "UAT passed on staging"
   bashy sdlc rollout RUN_ID --background
-  bashy sdlc resolve RUN_ID --status resolved --note "Production deployed and verified"
+  bashy sdlc resolve RUN_ID --status resolved --note "Deployment target verified"
 
 Approval requires an explicit RUN_ID. SDLC does not assume only one issue is
 active at a time.
@@ -251,6 +253,48 @@ The tick command is suitable for schedulers or CI jobs that already selected the
 issue to work on. Future intake integrations can select GitHub, Jira, or other
 project-management issues before calling tick/delegate.
 
+Local Loom-first control plane
+
+For public repositories, do not put long-lived subscription credentials, private
+work logs, or self-hosted runner authority into public GitHub Actions unless you
+have an explicit security model for it. The safer default is:
+
+  GitHub = public source control and external deployment integration.
+  Loom = local/private issue mirror, comments, CI control plane, and SDLC state.
+  bashy sdlc = the bridge from private intake to conductor, QA, approval, rollout.
+
+Start a local forge/control plane:
+
+  bashy loom serve --addr 127.0.0.1 --port 3000
+
+Mirror or clone the GitHub repository into a local workspace, then run SDLC from
+that workspace using the local issue/request pointer:
+
+  git clone https://github.com/owner/repo.git ~/work/repo
+  cd ~/work/repo
+  bashy sdlc issue --text "Fix the broken link"
+  bashy sdlc tick --issue-file .bashy/sdlc/issues/<printed-issue-file>.md \
+    --intake-provider loom --intake-repo owner/repo \
+    --production github-pages --background
+
+The local scheduler can drive the same command periodically:
+
+  bashy schedule add --every 5m -- \
+    bashy sdlc tick --issue-file .bashy/sdlc/issues/<printed-issue-file>.md \
+      --intake-provider loom --intake-repo owner/repo --background
+
+After the conductor finishes, the trigger or a human records QA and approval
+against the exact SDLC reference id:
+
+  bashy sdlc runs
+  bashy sdlc qa RUN_ID --status accepted --note "local smoke passed"
+  bashy sdlc approve RUN_ID --note "approved for GitHub rollout"
+  bashy sdlc rollout RUN_ID --production github-pages --background
+  bashy sdlc resolve RUN_ID --status resolved --note "GitHub Pages verified"
+
+This keeps confidential discussion and runtime output local. Only source commits
+and intentional external deployment signals are pushed back to GitHub.
+
 Validation helpers
 
 Check that text is present or absent in a URL:
@@ -266,7 +310,7 @@ Inspect a live web page when bashy web is available:
 
   bashy web inspect https://example.com --contains "Projects"
 
-Check GitHub Actions or Pages deployment status:
+Check GitHub Actions or Pages deployment status, for GitHub-backed deployments:
 
   bashy sdlc deploy-status --repo owner/repo --branch main
 
@@ -294,11 +338,11 @@ Incomplete run recovery:
   bashy sdlc status
   bashy sdlc --issue "Recover the incomplete SDLC run. Inspect current git state, preserve user changes, finish tests, commit, and push only the appropriate changes."
 
-Production gate
+Deployment gate
 
-SDLC may inspect staging and production status, but production rollout should
-remain gated by explicit human approval unless your project config and operating
-policy say otherwise.
+SDLC may inspect validation and deployment target status, but rollout should
+remain gated by explicit approval unless your project config and operating policy
+say otherwise.
 `
 
 // Config describes SDLC's boundary: intake system, agent roles, and deployment
@@ -425,8 +469,16 @@ type RunRecord struct {
 	FinishedAt    time.Time   `json:"finished_at,omitempty"`
 	ExitCode      int         `json:"exit_code,omitempty"`
 	Error         string      `json:"error,omitempty"`
+	QA            *GateReview `json:"qa,omitempty"`
 	Approval      *Approval   `json:"approval,omitempty"`
 	Resolution    *Resolution `json:"resolution,omitempty"`
+}
+
+type GateReview struct {
+	Status     string    `json:"status"`
+	ReviewedAt time.Time `json:"reviewed_at"`
+	ReviewedBy string    `json:"reviewed_by,omitempty"`
+	Note       string    `json:"note,omitempty"`
 }
 
 type Approval struct {
@@ -532,7 +584,7 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 	bindDelegateFlags(cmd, &opt)
 	cmd.AddCommand(
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
-		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(),
+		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(), newQACmd(),
 		newApproveCmd(), newRolloutCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
 		newSuperviseCmd(),
 	)
@@ -851,12 +903,41 @@ func newApproveCmd() *cobra.Command {
 	return cmd
 }
 
+func newQACmd() *cobra.Command {
+	var dir, status, note, by string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "qa RUN_ID",
+		Short: "record optional QA accept/reject for a local SDLC run reference",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			run, err := ReviewRun(dir, args[0], status, note, by)
+			if err != nil {
+				return err
+			}
+			if asJSON || os.Getenv("BASHY_AGENTIC") != "" {
+				b, _ := json.Marshal(run)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "qa %s status=%s note=%q\n", run.ReferenceID, run.QA.Status, note)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&status, "status", "accepted", "QA status: accepted or rejected")
+	cmd.Flags().StringVar(&note, "note", "", "QA note")
+	cmd.Flags().StringVar(&by, "by", "", "QA reviewer identity")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
 func newRolloutCmd() *cobra.Command {
 	var opt DelegateOptions
 	var note, by string
 	cmd := &cobra.Command{
 		Use:   "rollout RUN_ID",
-		Short: "delegate production rollout for an approved local SDLC run",
+		Short: "delegate deployment rollout for an approved local SDLC run",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			run, err := LoadRunByID(opt.RunsDir, args[0])
@@ -869,7 +950,7 @@ func newRolloutCmd() *cobra.Command {
 			opt.Issue = Issue{
 				ID:    run.ReferenceID,
 				URL:   run.IssueURL,
-				Title: "Production rollout for " + run.IssueTitle,
+				Title: "Deployment rollout for " + run.IssueTitle,
 				Body:  BuildRolloutInstruction(run, note, by),
 			}
 			opt.JSON = opt.JSON || os.Getenv("BASHY_AGENTIC") != ""
@@ -1802,13 +1883,55 @@ func ApproveRun(dir, id, note, by string) (RunRecord, error) {
 	return run, SaveRunRecord(run)
 }
 
+func ReviewRun(dir, id, status, note, by string) (RunRecord, error) {
+	run, err := LoadRunByID(dir, id)
+	if err != nil {
+		return run, err
+	}
+	run = refreshRun(run)
+	if run.Status == "running" {
+		return run, fmt.Errorf("sdlc: run %s is still running; review after conductor evidence is ready", run.ReferenceID)
+	}
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "" {
+		status = "accepted"
+	}
+	switch status {
+	case "accepted", "rejected":
+	default:
+		return run, fmt.Errorf("sdlc: unsupported QA status %q", status)
+	}
+	run.Status = "qa-" + status
+	run.QA = &GateReview{
+		Status:     status,
+		ReviewedAt: time.Now().UTC(),
+		ReviewedBy: strings.TrimSpace(by),
+		Note:       strings.TrimSpace(note),
+	}
+	return run, SaveRunRecord(run)
+}
+
 func RunApproved(run RunRecord) bool {
 	return run.Approval != nil && run.Approval.Status == "approved"
 }
 
 func BuildRolloutInstruction(run RunRecord, note, by string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Production approval granted for SDLC reference %s.\n\n", run.ReferenceID)
+	fmt.Fprintf(&b, "Deployment approval granted for SDLC reference %s.\n\n", run.ReferenceID)
+	if run.QA != nil {
+		fmt.Fprintf(&b, "QA:\n")
+		if !run.QA.ReviewedAt.IsZero() {
+			fmt.Fprintf(&b, "- Reviewed at: %s\n", run.QA.ReviewedAt.Format(time.RFC3339))
+		}
+		if run.QA.ReviewedBy != "" {
+			fmt.Fprintf(&b, "- Reviewed by: %s\n", run.QA.ReviewedBy)
+		}
+		fmt.Fprintf(&b, "- Status: %s\n", run.QA.Status)
+		if run.QA.Note != "" {
+			fmt.Fprintf(&b, "- Note: %s\n", run.QA.Note)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
 	if run.Approval != nil {
 		fmt.Fprintf(&b, "Approval:\n")
 		if !run.Approval.ApprovedAt.IsZero() {
@@ -1843,7 +1966,7 @@ func BuildRolloutInstruction(run RunRecord, note, by string) string {
 	fmt.Fprintf(&b, "- Title: %s\n", run.IssueTitle)
 	fmt.Fprintf(&b, "- Original run log: %s\n", run.LogPath)
 	fmt.Fprintf(&b, "- Original conductor brief: %s\n\n", run.BriefPath)
-	fmt.Fprintf(&b, "Proceed with the approved production rollout only for this reference. Preserve unrelated user changes. After rollout, report deployment evidence and verification results, then the scheduler can mark the reference resolved.")
+	fmt.Fprintf(&b, "Proceed with the approved deployment rollout only for this reference and configured target. Preserve unrelated user changes. After rollout, report deployment evidence and verification results, then the scheduler can mark the reference resolved.")
 	return b.String()
 }
 
@@ -1994,9 +2117,9 @@ func BuildConductorBrief(cfg Config, issue Issue) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the SDLC conductor for this repository.\n\n")
 	fmt.Fprintf(&b, "Boundary:\n")
-	fmt.Fprintf(&b, "- SDLC owns intake, user approval gates, staging/prod deployment routing, and lifecycle state.\n")
+	fmt.Fprintf(&b, "- SDLC owns intake pointers, lifecycle state, validation gates, and deployment routing.\n")
 	fmt.Fprintf(&b, "- You own implementation planning and sprint execution. Use bashy sprint/weave and delegate coding, review, and QA work to the available agent fleet.\n")
-	fmt.Fprintf(&b, "- Do not deploy to production without explicit human approval.\n\n")
+	fmt.Fprintf(&b, "- Do not deploy to the configured rollout target without explicit approval when policy requires it.\n\n")
 	fmt.Fprintf(&b, "Issue:\n")
 	if issue.ID != "" {
 		fmt.Fprintf(&b, "ID: %s\n", issue.ID)
@@ -2020,20 +2143,20 @@ func BuildConductorBrief(cfg Config, issue Issue) string {
 	if cfg.QA.Agent != "" {
 		fmt.Fprintf(&b, "- QA agent: %s\n", cfg.QA.Agent)
 	}
-	fmt.Fprintf(&b, "- Staging target: %s\n", displayTarget(cfg.Deploy.Staging))
-	fmt.Fprintf(&b, "- Production target: %s\n", displayTarget(cfg.Deploy.Production))
+	fmt.Fprintf(&b, "- Validation target: %s\n", displayTarget(cfg.Deploy.Staging))
+	fmt.Fprintf(&b, "- Rollout target: %s\n", displayTarget(cfg.Deploy.Production))
 	if cfg.Deploy.Staging.Healthcheck != "" {
-		fmt.Fprintf(&b, "- Staging healthcheck: %s\n", cfg.Deploy.Staging.Healthcheck)
+		fmt.Fprintf(&b, "- Validation healthcheck: %s\n", cfg.Deploy.Staging.Healthcheck)
 	}
 	if cfg.Deploy.Production.Healthcheck != "" {
-		fmt.Fprintf(&b, "- Production healthcheck: %s\n", cfg.Deploy.Production.Healthcheck)
+		fmt.Fprintf(&b, "- Rollout healthcheck: %s\n", cfg.Deploy.Production.Healthcheck)
 	}
 	fmt.Fprintf(&b, "\nExpected loop:\n")
 	fmt.Fprintf(&b, "1. Analyze priority/risk and create a sprint plan.\n")
 	fmt.Fprintf(&b, "2. Assign implementation work to agentic tools.\n")
 	fmt.Fprintf(&b, "3. Merge only after tests and review pass.\n")
-	fmt.Fprintf(&b, "4. Prepare staging deployment evidence and request UAT/smoke approval.\n")
-	fmt.Fprintf(&b, "5. Iterate on follow-up issues until approved, then prepare production rollout instructions.\n")
+	fmt.Fprintf(&b, "4. Prepare validation evidence for deterministic smoke checks, optional QA, and optional UAT approval.\n")
+	fmt.Fprintf(&b, "5. Iterate on rejection/failure evidence until accepted, then prepare rollout instructions for the configured deployment target.\n")
 	return b.String()
 }
 
