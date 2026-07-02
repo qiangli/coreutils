@@ -234,7 +234,10 @@ func removeState(dataDir string) error {
 func StartDaemon(ctx context.Context, o Options) (State, error) {
 	o.defaults()
 	if st, err := readState(o.DataDir); err == nil && healthy(ctx, st.URL, 2*time.Second) {
-		return st, nil
+		if st.RootURL == o.RootURL && st.Addr == fmt.Sprintf("%s:%d", o.Addr, o.Port) {
+			return st, nil
+		}
+		_, _ = StopDaemon(o.DataDir, 10*time.Second)
 	}
 	tool, err := binmgr.ResolveGitHub(ctx, Spec(o.Version))
 	if err != nil {
@@ -261,6 +264,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	cmd.Env = append(os.Environ(), "GITEA_WORK_DIR="+o.DataDir)
 	cmd.Stdout = log
 	cmd.Stderr = log
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = log.Close()
 		return State{}, fmt.Errorf("loom: start gitea: %w", err)
