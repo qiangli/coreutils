@@ -1,0 +1,62 @@
+package chat
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+type fakeRunner struct {
+	agent string
+	args  []string
+	cwd   string
+}
+
+func (f *fakeRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+	f.agent, f.args, f.cwd = agent, append([]string{}, args...), cwd
+	return "ok\n", 0, nil
+}
+
+func TestResolveAgentRole(t *testing.T) {
+	got, err := ResolveAgent("", "conductor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "claude" {
+		t.Fatalf("conductor role resolved to %q, want claude", got)
+	}
+}
+
+func TestBuildPromptIncludesContext(t *testing.T) {
+	prompt, err := BuildPrompt(Options{
+		Instruction: "implement the issue",
+		Context:     []string{"deployment target: staging"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "implement the issue") || !strings.Contains(prompt, "deployment target: staging") {
+		t.Fatalf("prompt missing expected content:\n%s", prompt)
+	}
+}
+
+func TestInvokeUsesSeededHeadlessContract(t *testing.T) {
+	r := &fakeRunner{}
+	res, err := Invoke(context.Background(), Options{
+		Agent:       "codex",
+		Instruction: "review this",
+		Cwd:         "/tmp/work",
+	}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 || r.agent != "codex" {
+		t.Fatalf("unexpected result=%+v runner.agent=%q", res, r.agent)
+	}
+	if len(r.args) < 5 || r.args[0] != "exec" || r.args[1] != "--skip-git-repo-check" {
+		t.Fatalf("missing codex headless contract: %#v", r.args)
+	}
+	if r.args[len(r.args)-1] != "review this" {
+		t.Fatalf("last arg should be prompt, got %#v", r.args)
+	}
+}
