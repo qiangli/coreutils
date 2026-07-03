@@ -227,6 +227,17 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   dhnt/docs/external-binary-builtins.md).
 - `cmds/yc` — the code-intelligence verbs (list-symbols / search-symbols /
   find-references / repo-map / ast-query — flat, no yc prefix) over those engines, reachable through all three surfaces.
+- `cmds/graph` — the code-knowledge-graph verbs (graph-build / graph-stats /
+  graph-neighbors / graph-impact / graph-path / graph-hotspots / graph-query —
+  flat, `graph-` stem) over `pkg/codegraph`. Fully structural + model-free (no
+  LLM, no graph DB); a bashy-owned disk cache (`.agents/bashy/graph.json`) with
+  mtime staleness makes repeated calls in a loop cheap. **Deliberately NOT in
+  `cmds/all`**: it pulls gfy's document-parsing deps, which must stay out of the
+  bare `cmd/coreutils` multicall binary (verified: `go list -deps ./cmd/coreutils`
+  has zero gfy pkgs). Blank-imported only by bashy's `internal/agentos`, so the
+  verbs reach the `bashy graph-*` front door + the in-shell ExecHandler while the
+  bare binary and the `bash` drop-in stay gfy-free. See
+  `dhnt/docs/bashy-code-graph-agentic-feature.md`.
 
 ### Embedded forks: ollama + podman (AgentOS Phase 4, 2026-06-27)
 
