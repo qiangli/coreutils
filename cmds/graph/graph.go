@@ -25,6 +25,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -160,21 +161,50 @@ func newestSourceMTime(root string) time.Time {
 	return newest
 }
 
-// graphSHA is a stable content hash over the sorted node and edge sets (gfy's
-// Nodes()/Edges() are sorted), so identical graphs hash identically regardless
-// of build order — the cache key a consumer keys staleness on.
-func graphSHA(gc *codegraph.GraphContext) string {
-	h := sha256.New()
-	for _, id := range gc.Graph.Nodes() {
-		h.Write([]byte(id))
-		h.Write([]byte{0})
+// sourceSHA fingerprints the SOURCE the graph is built from — sorted
+// (relpath|size|mtime) over the code files under root — not the built graph.
+// The graph is a pure function of source (that is the whole caching premise), and
+// gfy's internal node-ids/edge-order are assigned non-deterministically at build
+// time, so a graph-content hash is not reproducible run-to-run. A source
+// fingerprint IS: identical source → identical key (cache hit), any source edit →
+// a new key (staleness). This is exactly what `graph_sha` is for. Uses the same
+// stat-only walk + skip set as cacheFresh, so it is cheap.
+func sourceSHA(root string) string {
+	type fe struct {
+		rel  string
+		size int64
+		mod  int64
 	}
-	h.Write([]byte("|edges|"))
-	for _, e := range gc.Graph.Edges() {
-		h.Write([]byte(e.Source))
-		h.Write([]byte{0})
-		h.Write([]byte(e.Target))
-		h.Write([]byte{1})
+	var files []fe
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".agents", ".weave", "node_modules", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !sourceExt[strings.ToLower(filepath.Ext(p))] {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			rel = p
+		}
+		files = append(files, fe{rel: rel, size: info.Size(), mod: info.ModTime().UnixNano()})
+		return nil
+	})
+	sort.Slice(files, func(i, j int) bool { return files[i].rel < files[j].rel })
+	h := sha256.New()
+	for _, f := range files {
+		fmt.Fprintf(h, "%s\x1f%d\x1f%d\x00", f.rel, f.size, f.mod)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
@@ -251,7 +281,7 @@ func runBuild(rc *tool.RunContext, args []string) int {
 	cp := filepath.Join(root, cacheRel)
 	if asJSON {
 		writeJSON(rc, buildPayload{
-			header:      newHeader(root, graphSHA(gc)),
+			header:      newHeader(root, sourceSHA(root)),
 			Nodes:       gc.Stats.NodeCount,
 			Edges:       gc.Stats.EdgeCount,
 			Communities: gc.Stats.CommunityCount,
@@ -262,7 +292,7 @@ func runBuild(rc *tool.RunContext, args []string) int {
 		return 0
 	}
 	fmt.Fprintln(rc.Out, gc.GetGraphStats())
-	fmt.Fprintf(rc.Out, "cached: %s (graph_sha %s)\n", cp, graphSHA(gc))
+	fmt.Fprintf(rc.Out, "cached: %s (graph_sha %s)\n", cp, sourceSHA(root))
 	return 0
 }
 
@@ -310,7 +340,7 @@ func runStats(rc *tool.RunContext, args []string) int {
 	if asJSON {
 		ex, inf, amb := confidenceCounts(gc)
 		writeJSON(rc, statsPayload{
-			header:      newHeader(root, graphSHA(gc)),
+			header:      newHeader(root, sourceSHA(root)),
 			Nodes:       gc.Stats.NodeCount,
 			Edges:       gc.Stats.EdgeCount,
 			Communities: gc.Stats.CommunityCount,
@@ -413,7 +443,7 @@ func runNeighbors(rc *tool.RunContext, args []string) int {
 	}
 	if asJSON {
 		writeJSON(rc, neighborsPayload{
-			header:    newHeader(root, graphSHA(gc)),
+			header:    newHeader(root, sourceSHA(root)),
 			Node:      nodeLabel(gc.Graph, id),
 			Neighbors: nbrs,
 		})
@@ -511,7 +541,7 @@ func runImpact(rc *tool.RunContext, args []string) int {
 	}
 	if asJSON {
 		writeJSON(rc, impactPayload{
-			header: newHeader(root, graphSHA(gc)),
+			header: newHeader(root, sourceSHA(root)),
 			Node:   nodeLabel(gc.Graph, id),
 			Depth:  depth,
 			Nodes:  nodes,
@@ -590,7 +620,7 @@ func runPath(rc *tool.RunContext, args []string) int {
 	ids := gc.Graph.ShortestPath(src, tgt, maxHops)
 	if ids == nil {
 		if asJSON {
-			writeJSON(rc, pathPayload{header: newHeader(root, graphSHA(gc)), Source: nodeLabel(gc.Graph, src), Target: nodeLabel(gc.Graph, tgt), Hops: -1, Path: []string{}})
+			writeJSON(rc, pathPayload{header: newHeader(root, sourceSHA(root)), Source: nodeLabel(gc.Graph, src), Target: nodeLabel(gc.Graph, tgt), Hops: -1, Path: []string{}})
 			return 0
 		}
 		fmt.Fprintln(rc.Out, "no path found")
@@ -602,7 +632,7 @@ func runPath(rc *tool.RunContext, args []string) int {
 	}
 	if asJSON {
 		writeJSON(rc, pathPayload{
-			header: newHeader(root, graphSHA(gc)),
+			header: newHeader(root, sourceSHA(root)),
 			Source: labels[0],
 			Target: labels[len(labels)-1],
 			Hops:   len(labels) - 1,
@@ -697,7 +727,7 @@ func runHotspots(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if asJSON {
-		writeJSON(rc, hotspotsPayload{header: newHeader(root, graphSHA(gc)), Hotspots: spots})
+		writeJSON(rc, hotspotsPayload{header: newHeader(root, sourceSHA(root)), Hotspots: spots})
 		return 0
 	}
 	if len(spots) == 0 {
@@ -765,7 +795,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 	}
 	if len(results) == 0 {
 		if asJSON {
-			writeJSON(rc, queryPayload{header: newHeader(root, graphSHA(gc)), Question: question, Nodes: []sgNode{}, Edges: []sgEdge{}})
+			writeJSON(rc, queryPayload{header: newHeader(root, sourceSHA(root)), Question: question, Nodes: []sgNode{}, Edges: []sgEdge{}})
 			return 1
 		}
 		fmt.Fprintf(rc.Out, "no matching nodes for: %s\n", question)
@@ -790,7 +820,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 		})
 	}
 	if asJSON {
-		writeJSON(rc, queryPayload{header: newHeader(root, graphSHA(gc)), Question: question, Nodes: nodes, Edges: sgEdges})
+		writeJSON(rc, queryPayload{header: newHeader(root, sourceSHA(root)), Question: question, Nodes: nodes, Edges: sgEdges})
 		return 0
 	}
 	fmt.Fprintf(rc.Out, "subgraph for %q: %d nodes, %d edges\n", question, len(nodes), len(sgEdges))
