@@ -19,7 +19,23 @@ func runYC(t *testing.T, dir string, args ...string) (out, errOut string, code i
 		Dir:   dir,
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &o, Err: &e},
 	}
-	code = cmd.Run(rc, args)
+	verb, rest := args[0], args[1:]
+	var fn func(*tool.RunContext, []string) int
+	switch verb {
+	case "list-symbols", "symbols":
+		fn = runSymbols
+	case "search-symbols":
+		fn = runSearchSymbols
+	case "find-references", "refs":
+		fn = runRefs
+	case "repo-map", "repomap":
+		fn = runRepomap
+	case "ast-query", "query":
+		fn = runQuery
+	default:
+		t.Fatalf("runYC: unknown verb %q", verb)
+	}
+	code = fn(rc, rest)
 	return o.String(), e.String(), code
 }
 

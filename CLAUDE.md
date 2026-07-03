@@ -94,7 +94,7 @@ implementation:
   …) returning `*Result` / typed slices — for CLIs that own their flag
   parsing. outpost's `outpost git` cobra tree consumes these. `CLIName`
   (package var, default `"git"`) is the command prefix used in hint
-  messages; embedders override it at init (`outpost git`, `yc git`).
+  messages; embedders override it at init (`outpost git`, `bashy git`).
 - **`Exec(ctx, dir, args)`** — argv-style dispatch (`args[0]` =
   subcommand) over `execHandlers` covering ~35 porcelain + plumbing
   subcommands. Returns `ErrUnsupported` for unknown subcommands or
@@ -225,8 +225,8 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   into either; it is the download half that complements `external/`'s
   exec-an-already-present-binary wrappers. See
   dhnt/docs/external-binary-builtins.md).
-- `cmds/yc` — the `yc` code-intelligence command (symbols / search-symbols /
-  refs / repomap) over those engines, reachable through all three surfaces.
+- `cmds/yc` — the code-intelligence verbs (list-symbols / search-symbols /
+  find-references / repo-map / ast-query — flat, no yc prefix) over those engines, reachable through all three surfaces.
 
 ### Embedded forks: ollama + podman (AgentOS Phase 4, 2026-06-27)
 
@@ -252,7 +252,7 @@ forks we own** — for version/issue control and identical cross-platform behavi
   **This pulls the go floor to 1.26.2** (all consumers must match).
 
 Hosts: `bashy` (the AgentOS shell binary) wires `shell.Handler()` so the
-whole userland + `yc` run in-process, and mounts `pkg/weave` as `bashy weave`
+whole userland + code-intel verbs run in-process, and mounts `pkg/weave` as `bashy weave`
 (`ycode weave` is now a deprecation stub pointing here). ycode's loom MCP
 substrate (`pkg/loom`, gitea backend — separate from `pkg/weave`) routes its
 client-side git through `coreutils/git` (pure-Go-first, host-git fallback).
