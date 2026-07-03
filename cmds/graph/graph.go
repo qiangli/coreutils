@@ -52,14 +52,14 @@ func init() {
 		"graph-stats [path] [--rebuild] [--json]", runStats)
 	register("graph-neighbors", "direct neighbors (1-hop coupling) of a symbol",
 		"graph-neighbors <symbol> [path] [--relation R] [--json]", runNeighbors)
-	register("graph-impact", "blast radius: symbols coupled to a target within N hops",
-		"graph-impact <file|symbol> [path] [--depth N] [--json]", runImpact)
+	register("graph-impact", "blast radius: symbols coupled to a target (direct by default)",
+		"graph-impact <file|symbol> [path] [--depth N=1] [--limit N=40] [--json]", runImpact)
 	register("graph-path", "shortest path between two symbols in the code graph",
 		"graph-path <a> <b> [path] [--max-hops N] [--json]", runPath)
 	register("graph-hotspots", "most-connected entities (refactor/blast-radius centers)",
 		"graph-hotspots [path] [--top N] [--raw] [--json]", runHotspots)
 	register("graph-query", "keyword question → matching subgraph (model-free)",
-		"graph-query <question> [path] [--depth N] [--json]", runQuery)
+		"graph-query <question> [path] [--depth N=1] [--limit N=40] [--json]", runQuery)
 }
 
 func register(name, synopsis, usage string, run func(*tool.RunContext, []string) int) {
@@ -474,15 +474,27 @@ type sgEdge struct {
 
 type impactPayload struct {
 	header
-	Node  string   `json:"node"`
-	Depth int      `json:"depth"`
-	Nodes []sgNode `json:"nodes"`
-	Edges []sgEdge `json:"edges"`
+	Node      string   `json:"node"`
+	Depth     int      `json:"depth"`
+	Total     int      `json:"total"`               // full blast-radius size before capping
+	Truncated int      `json:"truncated,omitempty"` // nodes omitted by --limit
+	Nodes     []sgNode `json:"nodes"`
+	Edges     []sgEdge `json:"edges"`
 }
+
+// defaultImpactLimit caps the returned node set so a benchmark showed the default
+// query stays agent-lean: an uncapped depth-2 BFS on the undirected graph returned
+// 124 nodes / 28 KB for a single symbol (worse than grep). Nearest-first BFS order
+// means the cap keeps the most-impacted symbols; `total`/`truncated` report the
+// rest. 0 = no cap.
+const defaultImpactLimit = 40
 
 func runImpact(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
-	depth := 2
+	// Default depth 1 = direct coupling (the first-order blast radius). Depth 2+
+	// explodes on the undirected graph (14 → 124 nodes here) and is opt-in.
+	depth := 1
+	limit := defaultImpactLimit
 	var symbol, target string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -498,6 +510,13 @@ func runImpact(rc *tool.RunContext, args []string) int {
 			}
 		case strings.HasPrefix(a, "--depth="):
 			depth = atoiDefault(a[len("--depth="):], depth)
+		case a == "--limit":
+			if i+1 < len(args) {
+				i++
+				limit = atoiDefault(args[i], limit)
+			}
+		case strings.HasPrefix(a, "--limit="):
+			limit = atoiDefault(a[len("--limit="):], limit)
 		case strings.HasPrefix(a, "-") && a != "-":
 			return usageErr(rc, "graph-impact", "unknown option "+a)
 		default:
@@ -526,35 +545,60 @@ func runImpact(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	visited, edges := gc.Graph.BFS([]string{id}, depth)
-	nodes := make([]sgNode, 0, len(visited))
-	for _, nid := range visited {
-		a := gc.Graph.NodeAttrs(nid)
-		nodes = append(nodes, sgNode{Label: edgeStr(a, "label"), FileType: edgeStr(a, "file_type")})
+	total := len(visited)
+	truncated := 0
+	if limit > 0 && len(visited) > limit {
+		truncated = len(visited) - limit
+		visited = visited[:limit] // BFS order = nearest-first, so we keep the most impacted
 	}
-	sgEdges := make([]sgEdge, 0, len(edges))
-	for _, e := range edges {
-		sgEdges = append(sgEdges, sgEdge{
-			Source:   nodeLabel(gc.Graph, e.Source),
-			Target:   nodeLabel(gc.Graph, e.Target),
-			Relation: edgeStr(e.Attrs, "relation"),
-		})
-	}
+	nodes, sgEdges := subgraphView(gc.Graph, visited, edges)
 	if asJSON {
 		writeJSON(rc, impactPayload{
-			header: newHeader(root, sourceSHA(root)),
-			Node:   nodeLabel(gc.Graph, id),
-			Depth:  depth,
-			Nodes:  nodes,
-			Edges:  sgEdges,
+			header:    newHeader(root, sourceSHA(root)),
+			Node:      nodeLabel(gc.Graph, id),
+			Depth:     depth,
+			Total:     total,
+			Truncated: truncated,
+			Nodes:     nodes,
+			Edges:     sgEdges,
 		})
 		return 0
 	}
 	fmt.Fprintf(rc.Out, "blast radius of %q within %d hop(s): %d symbols, %d edges\n",
-		nodeLabel(gc.Graph, id), depth, len(nodes), len(sgEdges))
+		nodeLabel(gc.Graph, id), depth, total, len(sgEdges))
 	for _, n := range nodes {
 		fmt.Fprintf(rc.Out, "- %s (%s)\n", n.Label, n.FileType)
 	}
+	if truncated > 0 {
+		fmt.Fprintf(rc.Out, "… +%d more (raise with --limit N or narrow with --depth 1)\n", truncated)
+	}
 	return 0
+}
+
+// subgraphView builds the node list from visited (kept) ids and only the edges
+// whose BOTH endpoints are kept, so a capped result stays internally consistent.
+func subgraphView(g *gfygraph.Graph, visited []string, edges []gfygraph.EdgeData) ([]sgNode, []sgEdge) {
+	kept := make(map[string]bool, len(visited))
+	for _, id := range visited {
+		kept[id] = true
+	}
+	nodes := make([]sgNode, 0, len(visited))
+	for _, nid := range visited {
+		a := g.NodeAttrs(nid)
+		nodes = append(nodes, sgNode{Label: edgeStr(a, "label"), FileType: edgeStr(a, "file_type")})
+	}
+	sgEdges := make([]sgEdge, 0, len(edges))
+	for _, e := range edges {
+		if !kept[e.Source] || !kept[e.Target] {
+			continue
+		}
+		sgEdges = append(sgEdges, sgEdge{
+			Source:   nodeLabel(g, e.Source),
+			Target:   nodeLabel(g, e.Target),
+			Relation: edgeStr(e.Attrs, "relation"),
+		})
+	}
+	return nodes, sgEdges
 }
 
 // --- graph-path ---
@@ -744,14 +788,17 @@ func runHotspots(rc *tool.RunContext, args []string) int {
 
 type queryPayload struct {
 	header
-	Question string   `json:"question"`
-	Nodes    []sgNode `json:"nodes"`
-	Edges    []sgEdge `json:"edges"`
+	Question  string   `json:"question"`
+	Total     int      `json:"total"`
+	Truncated int      `json:"truncated,omitempty"`
+	Nodes     []sgNode `json:"nodes"`
+	Edges     []sgEdge `json:"edges"`
 }
 
 func runQuery(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
-	depth := 2
+	depth := 1 // depth 1 keeps the subgraph agent-lean; depth 2+ explodes (opt-in)
+	limit := defaultImpactLimit
 	var question, target string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -767,6 +814,13 @@ func runQuery(rc *tool.RunContext, args []string) int {
 			}
 		case strings.HasPrefix(a, "--depth="):
 			depth = atoiDefault(a[len("--depth="):], depth)
+		case a == "--limit":
+			if i+1 < len(args) {
+				i++
+				limit = atoiDefault(args[i], limit)
+			}
+		case strings.HasPrefix(a, "--limit="):
+			limit = atoiDefault(a[len("--limit="):], limit)
 		case strings.HasPrefix(a, "-") && a != "-":
 			return usageErr(rc, "graph-query", "unknown option "+a)
 		default:
@@ -781,7 +835,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 		return usageErr(rc, "graph-query", "missing <question>")
 	}
 	if depth < 1 {
-		depth = 2
+		depth = 1
 	}
 	root := resolveRoot(rc, target)
 	gc, err := loadOrBuild(rc, root, false, asJSON)
@@ -806,26 +860,26 @@ func runQuery(rc *tool.RunContext, args []string) int {
 		startNodes[i] = r.ID
 	}
 	visited, edges := gc.Graph.BFS(startNodes, depth)
-	nodes := make([]sgNode, 0, len(visited))
-	for _, nid := range visited {
-		a := gc.Graph.NodeAttrs(nid)
-		nodes = append(nodes, sgNode{Label: edgeStr(a, "label"), FileType: edgeStr(a, "file_type")})
+	total := len(visited)
+	truncated := 0
+	if limit > 0 && len(visited) > limit {
+		truncated = len(visited) - limit
+		visited = visited[:limit]
 	}
-	sgEdges := make([]sgEdge, 0, len(edges))
-	for _, e := range edges {
-		sgEdges = append(sgEdges, sgEdge{
-			Source:   nodeLabel(gc.Graph, e.Source),
-			Target:   nodeLabel(gc.Graph, e.Target),
-			Relation: edgeStr(e.Attrs, "relation"),
-		})
-	}
+	nodes, sgEdges := subgraphView(gc.Graph, visited, edges)
 	if asJSON {
-		writeJSON(rc, queryPayload{header: newHeader(root, sourceSHA(root)), Question: question, Nodes: nodes, Edges: sgEdges})
+		writeJSON(rc, queryPayload{
+			header: newHeader(root, sourceSHA(root)), Question: question,
+			Total: total, Truncated: truncated, Nodes: nodes, Edges: sgEdges,
+		})
 		return 0
 	}
-	fmt.Fprintf(rc.Out, "subgraph for %q: %d nodes, %d edges\n", question, len(nodes), len(sgEdges))
+	fmt.Fprintf(rc.Out, "subgraph for %q: %d nodes, %d edges\n", question, total, len(sgEdges))
 	for _, n := range nodes {
 		fmt.Fprintf(rc.Out, "- %s (%s)\n", n.Label, n.FileType)
+	}
+	if truncated > 0 {
+		fmt.Fprintf(rc.Out, "… +%d more (raise with --limit N)\n", truncated)
 	}
 	return 0
 }

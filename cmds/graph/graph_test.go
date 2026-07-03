@@ -121,6 +121,40 @@ func TestGraphImpactBlastRadius(t *testing.T) {
 	}
 }
 
+func TestGraphImpactDefaultsToDirectAndCaps(t *testing.T) {
+	dir := fixtureRepo(t)
+	// Default depth is 1 (direct coupling) — a benchmark showed depth-2 on the
+	// undirected graph explodes (124 nodes / 28 KB for one symbol). --limit caps
+	// the returned set and reports the remainder rather than silently dropping.
+	out, _, code := run(t, dir, runImpact, "Alpha", "--depth", "2", "--limit", "1", "--json")
+	if code != 0 {
+		t.Fatalf("graph-impact exit %d", code)
+	}
+	var p impactPayload
+	if err := json.Unmarshal([]byte(out), &p); err != nil {
+		t.Fatalf("bad json: %v\n%s", err, out)
+	}
+	if p.Depth != 2 {
+		t.Errorf("depth should honor the flag, got %d", p.Depth)
+	}
+	if len(p.Nodes) > 1 {
+		t.Errorf("--limit 1 should cap nodes to 1, got %d", len(p.Nodes))
+	}
+	if p.Total <= len(p.Nodes) || p.Truncated != p.Total-len(p.Nodes) {
+		t.Errorf("truncation not reported: total=%d shown=%d truncated=%d", p.Total, len(p.Nodes), p.Truncated)
+	}
+	// Every returned edge must have both endpoints among the shown nodes.
+	shown := map[string]bool{}
+	for _, n := range p.Nodes {
+		shown[n.Label] = true
+	}
+	for _, e := range p.Edges {
+		if !shown[e.Source] || !shown[e.Target] {
+			t.Errorf("capped result has a dangling edge: %s -> %s", e.Source, e.Target)
+		}
+	}
+}
+
 func TestGraphPathBetweenSymbols(t *testing.T) {
 	dir := fixtureRepo(t)
 	out, errOut, code := run(t, dir, runPath, "Gamma", "Beta", "--plain")
