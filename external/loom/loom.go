@@ -287,7 +287,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	cmd.Env = append(os.Environ(), "GITEA_WORK_DIR="+o.DataDir)
 	cmd.Stdout = log
 	cmd.Stderr = log
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setDetached(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = log.Close()
 		return State{}, fmt.Errorf("loom: start gitea: %w", err)
@@ -307,7 +307,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 	proxyCmd.Dir = o.DataDir
 	proxyCmd.Stdout = log
 	proxyCmd.Stderr = log
-	proxyCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setDetached(proxyCmd)
 	if err := proxyCmd.Start(); err != nil {
 		_ = cmd.Process.Kill()
 		_ = log.Close()
