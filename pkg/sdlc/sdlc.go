@@ -654,6 +654,17 @@ type PublishResult struct {
 }
 
 type PagesOnceOptions struct {
+	// Intake: Provider=github|loom selects the next eligible issue; --issue /
+	// --issue-file supply one directly (no forge). Direct intake wins when set.
+	Provider    string // "github" | "loom" | "local" (default: local if Issue* set, else loom)
+	GitHubToken string
+	Issue       Issue
+	IssueText   string
+	IssueFile   string
+	// RequireInitiate gates github intake on the sdlc:go label. Default false for
+	// pages — "file an issue, the site updates" needs no ceremony.
+	RequireInitiate bool
+
 	LoomURL      string
 	Token        string
 	IntakeRepo   string
@@ -662,6 +673,7 @@ type PagesOnceOptions struct {
 	BuildCommand string
 	PublicURL    string
 	Branch       string
+	Repo         string // explicit GitHub publish target owner/repo (else the workspace's upstream remote)
 	Conductor    string
 	Sandbox      string
 	Timeout      time.Duration
@@ -672,7 +684,7 @@ type PagesOnceOptions struct {
 type PagesOnceResult struct {
 	SchemaVersion string        `json:"schema_version"`
 	Status        string        `json:"status"`
-	Issue         *LoomIssue    `json:"issue,omitempty"`
+	Issue         *Issue        `json:"issue,omitempty"`
 	RunID         string        `json:"run_id,omitempty"`
 	WorkspaceDir  string        `json:"workspace_dir"`
 	BuildCommand  string        `json:"build_command,omitempty"`
@@ -1356,7 +1368,7 @@ func newPagesOnceCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
 			} else if err == nil {
 				if res.Issue != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "processed issue #%d: %s\n", res.Issue.Number, res.Issue.Title)
+					fmt.Fprintf(cmd.OutOrStdout(), "processed issue %s: %s\n", res.Issue.ID, res.Issue.Title)
 				}
 				if res.RunID != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "sdlc reference: %s\n", res.RunID)
@@ -1366,14 +1378,23 @@ func newPagesOnceCmd() *cobra.Command {
 			return err
 		},
 	}
+	// Intake (pick one): a provider queue, or a direct issue.
+	cmd.Flags().StringVar(&opt.Provider, "intake-provider", "", "intake provider: github | loom (default loom; ignored when --issue/--issue-file given)")
+	cmd.Flags().StringVar(&opt.IntakeRepo, "intake-repo", "", "issue-intake repo owner/name (github) or Loom mirror repo")
+	cmd.Flags().StringVar(&opt.GitHubToken, "github-token", "", "GitHub token; defaults to GITHUB_TOKEN/GIT_TOKEN")
+	cmd.Flags().BoolVar(&opt.RequireInitiate, "require-initiate", false, "github: only pick issues labelled sdlc:go")
+	cmd.Flags().StringVar(&opt.IssueText, "issue", "", "direct issue/request text (no forge)")
+	cmd.Flags().StringVar(&opt.IssueFile, "issue-file", "", "file containing the issue/request text")
+	// Loom-specific.
 	cmd.Flags().StringVar(&opt.LoomURL, "loom-url", "http://127.0.0.1:31880", "Loom/Gitea base URL")
 	cmd.Flags().StringVar(&opt.Token, "token", "", "Loom API token; defaults to BASHY_LOOM_TOKEN or GITEA_TOKEN")
-	cmd.Flags().StringVar(&opt.IntakeRepo, "intake-repo", "", "Loom mirror repo owner/name for issue intake")
+	// Workspace + publish.
 	cmd.Flags().StringVar(&opt.WorkspaceDir, "workspace", "", "guarded local workspace directory")
 	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory, relative to workspace when not absolute")
-	cmd.Flags().StringVar(&opt.BuildCommand, "build", "pnpm build", "build/test command to run before publish")
+	cmd.Flags().StringVar(&opt.BuildCommand, "build", "", "optional build/test command to run before publish (empty = none)")
 	cmd.Flags().StringVar(&opt.PublicURL, "public-url", "", "public page URL to verify after publish")
 	cmd.Flags().StringVar(&opt.Branch, "branch", "main", "GitHub Pages source branch")
+	cmd.Flags().StringVar(&opt.Repo, "repo", "", "GitHub publish target owner/repo (default: the workspace's upstream remote)")
 	cmd.Flags().StringVar(&opt.Conductor, "conductor", "", "conductor agent override")
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "danger-full-access", "conductor sandbox")
 	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "conductor timeout")
@@ -2821,6 +2842,85 @@ func PublishGitHubPages(ctx context.Context, opt PublishOptions) (PublishResult,
 	return res, nil
 }
 
+// pagesTarget is the notification sink for the pages flow — the forge the intake
+// issue came from (github/loom), or none for direct (--issue) intake.
+type pagesTarget struct {
+	kind    string // "github" | "loom" | "local"
+	repo    string
+	number  int
+	loomURL string
+	token   string
+	ghToken string
+}
+
+func (t pagesTarget) comment(ctx context.Context, msg string) {
+	switch t.kind {
+	case "github":
+		_ = commentGitHubIssue(ctx, t.repo, t.number, msg, t.ghToken)
+	case "loom":
+		_ = commentLoomIssue(ctx, t.loomURL, t.token, t.repo, t.number, msg)
+	}
+}
+
+func (t pagesTarget) close(ctx context.Context) {
+	switch t.kind {
+	case "github":
+		_ = closeGitHubIssue(ctx, t.repo, t.number, t.ghToken)
+	case "loom":
+		_ = closeLoomIssue(ctx, t.loomURL, t.token, t.repo, t.number)
+	}
+}
+
+// resolvePagesIntake selects the issue to work on and the notifier for it. Direct
+// (--issue/--issue-file) intake wins; otherwise it fetches from the provider.
+// Returns (nil, _, nil) when a forge queue is empty (a clean idle no-op).
+func resolvePagesIntake(ctx context.Context, opt *PagesOnceOptions) (*Issue, pagesTarget, error) {
+	// Direct intake — CLI text/file/fields.
+	if strings.TrimSpace(opt.IssueText) != "" || strings.TrimSpace(opt.IssueFile) != "" ||
+		strings.TrimSpace(opt.Issue.Title) != "" || strings.TrimSpace(opt.Issue.Body) != "" {
+		iss := opt.Issue
+		if strings.TrimSpace(iss.Title) == "" && strings.TrimSpace(iss.Body) == "" {
+			text := strings.TrimSpace(opt.IssueText)
+			if strings.TrimSpace(opt.IssueFile) != "" {
+				b, err := os.ReadFile(opt.IssueFile)
+				if err != nil {
+					return nil, pagesTarget{}, fmt.Errorf("sdlc: read issue file: %w", err)
+				}
+				text = strings.TrimSpace(string(b))
+			}
+			iss.Title, iss.Body = splitIssueRequest(text)
+		}
+		return &iss, pagesTarget{kind: "local"}, nil
+	}
+
+	provider := strings.ToLower(strings.TrimSpace(opt.Provider))
+	if provider == "" {
+		provider = "loom"
+	}
+	switch provider {
+	case "github":
+		token := opt.GitHubToken
+		if token == "" {
+			token = GitHubToken()
+		}
+		gi, err := nextGitHubIssue(ctx, opt.IntakeRepo, nil, opt.RequireInitiate, token)
+		if err != nil || gi == nil {
+			return nil, pagesTarget{}, err
+		}
+		return &Issue{ID: fmt.Sprintf("%s#%d", opt.IntakeRepo, gi.Number), URL: gi.HTML, Title: gi.Title, Body: gi.Body},
+			pagesTarget{kind: "github", repo: opt.IntakeRepo, number: gi.Number, ghToken: token}, nil
+	case "loom", "gitea":
+		li, err := nextLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo)
+		if err != nil || li == nil {
+			return nil, pagesTarget{}, err
+		}
+		return &Issue{ID: fmt.Sprintf("%d", li.Number), URL: li.HTML, Title: li.Title, Body: li.Body},
+			pagesTarget{kind: "loom", loomURL: opt.LoomURL, token: opt.Token, repo: opt.IntakeRepo, number: li.Number}, nil
+	default:
+		return nil, pagesTarget{}, fmt.Errorf("sdlc: unknown pages intake provider %q", provider)
+	}
+}
+
 func RunPagesOnce(ctx context.Context, opt PagesOnceOptions) (PagesOnceResult, error) {
 	opt.LoomURL = strings.TrimRight(strings.TrimSpace(opt.LoomURL), "/")
 	opt.Token = strings.TrimSpace(opt.Token)
@@ -2841,10 +2941,10 @@ func RunPagesOnce(ctx context.Context, opt PagesOnceOptions) (PagesOnceResult, e
 		WorkspaceDir:  opt.WorkspaceDir,
 		BuildCommand:  opt.BuildCommand,
 	}
-	if opt.LoomURL == "" || opt.IntakeRepo == "" || opt.WorkspaceDir == "" {
-		return res, errors.New("sdlc: pages once requires --loom-url, --intake-repo, and --workspace")
+	if opt.WorkspaceDir == "" {
+		return res, errors.New("sdlc: pages once requires --workspace")
 	}
-	issue, err := nextLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo)
+	issue, target, err := resolvePagesIntake(ctx, &opt)
 	if err != nil {
 		res.Error = err.Error()
 		return res, err
@@ -2858,24 +2958,18 @@ func RunPagesOnce(ctx context.Context, opt PagesOnceOptions) (PagesOnceResult, e
 		res.Status = "dry-run"
 		return res, nil
 	}
-	_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC started on local pages workspace.")
+	target.comment(ctx, "SDLC started on the pages workspace.")
 	delegateOpt := DelegateOptions{
 		Config: ConfigOverrides{
 			NoConfig:       true,
 			ConductorAgent: opt.Conductor,
-			IntakeProvider: "loom",
+			IntakeProvider: target.kind,
 			IntakeRepo:     opt.IntakeRepo,
 			ProductionName: "github-pages",
 			StagingName:    "local-build",
 			Policies:       []string{"auto_publish_pages=true"},
-			IntakeLabels:   nil,
 		},
-		Issue: Issue{
-			ID:    fmt.Sprintf("%d", issue.Number),
-			URL:   issue.HTML,
-			Title: issue.Title,
-			Body:  issue.Body,
-		},
+		Issue:   *issue,
 		Cwd:     opt.WorkspaceDir,
 		Sandbox: opt.Sandbox,
 		Timeout: opt.Timeout,
@@ -2885,7 +2979,7 @@ func RunPagesOnce(ctx context.Context, opt PagesOnceOptions) (PagesOnceResult, e
 	res.RunID = delegateRes.RunID
 	if err != nil {
 		res.Error = err.Error()
-		_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC conductor failed: "+err.Error())
+		target.comment(ctx, "SDLC conductor failed: "+err.Error())
 		return res, err
 	}
 	if opt.BuildCommand != "" {
@@ -2894,7 +2988,7 @@ func RunPagesOnce(ctx context.Context, opt PagesOnceOptions) (PagesOnceResult, e
 		if buildErr != nil {
 			err := fmt.Errorf("sdlc: pages build failed: %w", buildErr)
 			res.Error = err.Error()
-			_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC build failed:\n\n```text\n"+truncateForComment(out)+"\n```")
+			target.comment(ctx, "SDLC build failed:\n\n```text\n"+truncateForComment(out)+"\n```")
 			return res, err
 		}
 	}
@@ -2916,11 +3010,12 @@ func RunPagesOnce(ctx context.Context, opt PagesOnceOptions) (PagesOnceResult, e
 		RunID:   res.RunID,
 		Cwd:     opt.WorkspaceDir,
 		Branch:  opt.Branch,
+		Repo:    opt.Repo,
 	})
 	res.Publish = pub
 	if err != nil {
 		res.Error = err.Error()
-		_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC publish failed: "+err.Error())
+		target.comment(ctx, "SDLC publish failed: "+err.Error())
 		return res, err
 	}
 	if opt.PublicURL != "" {
@@ -2928,13 +3023,13 @@ func RunPagesOnce(ctx context.Context, opt PagesOnceOptions) (PagesOnceResult, e
 		res.Verify = &verify
 		if verr != nil {
 			res.Error = verr.Error()
-			_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC publish completed, but public URL verification failed: "+verr.Error())
+			target.comment(ctx, "SDLC publish completed, but public URL verification failed: "+verr.Error())
 			return res, verr
 		}
 	}
 	res.Status = "published"
-	_ = commentLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number, "SDLC published the approved change to GitHub Pages. Reference: "+res.RunID)
-	_ = closeLoomIssue(ctx, opt.LoomURL, opt.Token, opt.IntakeRepo, issue.Number)
+	target.comment(ctx, "SDLC published the approved change to GitHub Pages. Reference: "+res.RunID)
+	target.close(ctx)
 	return res, nil
 }
 
