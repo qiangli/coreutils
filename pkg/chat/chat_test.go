@@ -62,17 +62,34 @@ func TestInvokeUsesSeededHeadlessContract(t *testing.T) {
 }
 
 func TestInvokeCanOverrideCodexSandbox(t *testing.T) {
+	// A non-danger sandbox override sets --sandbox <value>.
 	r := &fakeRunner{}
 	_, err := Invoke(context.Background(), Options{
-		Agent:       "codex",
-		Instruction: "commit this",
-		Sandbox:     "danger-full-access",
+		Agent: "codex", Instruction: "commit this", Sandbox: "workspace-write",
+	}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(r.args, " "); !strings.Contains(got, "--sandbox workspace-write") {
+		t.Fatalf("sandbox override missing from args: %#v", r.args)
+	}
+}
+
+func TestInvokeCodexDangerFullAccessIsNonInteractive(t *testing.T) {
+	// danger-full-access → the fully non-interactive bypass flag (no approval/trust
+	// popup that would hang a headless runner), and NOT a plain --sandbox value.
+	r := &fakeRunner{}
+	_, err := Invoke(context.Background(), Options{
+		Agent: "codex", Instruction: "commit this", Sandbox: "danger-full-access",
 	}, r)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Join(r.args, " ")
-	if !strings.Contains(got, "--sandbox danger-full-access") {
-		t.Fatalf("sandbox override missing from args: %#v", r.args)
+	if !strings.Contains(got, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("expected non-interactive bypass flag: %#v", r.args)
+	}
+	if strings.Contains(got, "--sandbox") {
+		t.Fatalf("danger-full-access must not emit --sandbox: %#v", r.args)
 	}
 }

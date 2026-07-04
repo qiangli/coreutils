@@ -177,16 +177,42 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 func resolveLaunchArgs(agent string, opt Options) []string {
 	profile := seededProfiles[agent]
 	args := append([]string{}, profile.Args...)
-	if agent == "codex" && strings.TrimSpace(opt.Sandbox) != "" {
-		for i := 0; i < len(args)-1; i++ {
-			if args[i] == "--sandbox" {
-				args[i+1] = strings.TrimSpace(opt.Sandbox)
-				return args
-			}
+	if agent == "codex" {
+		sb := strings.TrimSpace(opt.Sandbox)
+		// danger-full-access is the conductor's unattended full-access mode. Plain
+		// `--sandbox danger-full-access` STILL shows codex approval/trust prompts —
+		// a GUI popup that hangs a headless runner (act_runner / CI). codex's
+		// --dangerously-bypass-approvals-and-sandbox is the documented fully
+		// non-interactive equivalent, "intended solely for externally sandboxed
+		// environments" (which the owner-gated act_runner is).
+		if sb == "danger-full-access" {
+			return replaceSandboxFlag(args, "--dangerously-bypass-approvals-and-sandbox")
 		}
-		args = append(args, "--sandbox", strings.TrimSpace(opt.Sandbox))
+		if sb != "" {
+			for i := 0; i < len(args)-1; i++ {
+				if args[i] == "--sandbox" {
+					args[i+1] = sb
+					return args
+				}
+			}
+			args = append(args, "--sandbox", sb)
+		}
 	}
 	return args
+}
+
+// replaceSandboxFlag drops any `--sandbox <val>` pair and appends a standalone
+// flag (e.g. --dangerously-bypass-approvals-and-sandbox).
+func replaceSandboxFlag(args []string, flag string) []string {
+	out := make([]string, 0, len(args)+1)
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--sandbox" {
+			i++ // skip its value too
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return append(out, flag)
 }
 
 // ResolveAgent maps either an explicit agent or a workflow role to a command.
