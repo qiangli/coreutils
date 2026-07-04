@@ -506,6 +506,9 @@ type DelegateResult struct {
 	Issue         Issue       `json:"issue"`
 	Brief         string      `json:"brief,omitempty"`
 	Chat          chat.Result `json:"chat,omitempty"`
+	// AutoSelected is true when Issue was picked from the intake provider (github)
+	// rather than passed on the CLI — the signal Delegate uses to claim it.
+	AutoSelected bool `json:"auto_selected,omitempty"`
 }
 
 type RunRecord struct {
@@ -731,8 +734,8 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 	cmd.AddCommand(
 		newGuideCmd(), newInitCmd(), newDoctorCmd(), newConfigCmd(), newStatusCmd(), newIssueCmd(),
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(), newQACmd(),
-		newApproveCmd(), newRolloutCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
-		newWorkspaceCmd(), newPublishCmd(), newPagesCmd(), newSuperviseCmd(),
+		newApproveCmd(), newRolloutCmd(), newPromoteCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
+		newWorkspaceCmd(), newPublishCmd(), newPagesCmd(), newSuperviseCmd(), newServiceCmd(),
 	)
 	return cmd
 }
@@ -1119,7 +1122,7 @@ func newRolloutCmd() *cobra.Command {
 
 func newResolveCmd() *cobra.Command {
 	var dir, status, note, by string
-	var asJSON bool
+	var asJSON, noClose bool
 	cmd := &cobra.Command{
 		Use:   "resolve RUN_ID",
 		Short: "mark a local SDLC run reference resolved",
@@ -1128,6 +1131,15 @@ func newResolveCmd() *cobra.Command {
 			run, err := ResolveLifecycleRun(dir, args[0], status, note, by)
 			if err != nil {
 				return err
+			}
+			// Reflect the resolution on the GitHub issue: clear the claim, apply
+			// sdlc:done, close on success. No-op for non-github/tokenless runs.
+			comment := note
+			if comment == "" && (run.Status == "resolved" || run.Status == "rolled-out") {
+				comment = fmt.Sprintf("SDLC resolved this issue (%s). Reference: %s", run.Status, run.ReferenceID)
+			}
+			if _, serr := SyncGitHubResolution(cmd.Context(), run, run.Status, !noClose, comment, GitHubToken()); serr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: github lifecycle sync failed: %v\n", serr)
 			}
 			if asJSON || os.Getenv("BASHY_AGENTIC") != "" {
 				b, _ := json.Marshal(run)
@@ -1142,6 +1154,7 @@ func newResolveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&status, "status", "resolved", "resolution status, for example resolved, rejected, rolled-out, failed")
 	cmd.Flags().StringVar(&note, "note", "", "resolution note")
 	cmd.Flags().StringVar(&by, "by", "", "resolver identity")
+	cmd.Flags().BoolVar(&noClose, "no-close", false, "do not close the GitHub issue on successful resolution")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
 }
@@ -1800,8 +1813,28 @@ func Prepare(ctx context.Context, opt DelegateOptions) (DelegateResult, error) {
 	if err := cfg.Validate(); err != nil {
 		return DelegateResult{SchemaVersion: schemaVersion, Status: "error", ConfigPath: opt.ConfigPath}, err
 	}
+	autoSelected := false
 	if strings.TrimSpace(opt.Issue.Title) == "" {
-		return DelegateResult{SchemaVersion: schemaVersion, Status: "error", ConfigPath: opt.ConfigPath}, errors.New("sdlc: --issue-title is required")
+		// No explicit issue: try to auto-select from the configured provider
+		// (github). Loom/local providers still require an explicit issue.
+		selected, serr := resolveIntakeIssue(ctx, cfg, &opt)
+		if serr != nil {
+			return DelegateResult{SchemaVersion: schemaVersion, Status: "error", ConfigPath: opt.ConfigPath}, serr
+		}
+		autoSelected = selected
+		if !selected {
+			if strings.EqualFold(strings.TrimSpace(cfg.Intake.Provider), "github") {
+				// Empty queue is a clean no-op for a scheduler, not an error.
+				return DelegateResult{
+					SchemaVersion: schemaVersion,
+					Status:        "idle",
+					ConfigPath:    opt.ConfigPath,
+					DefaultConfig: usedDefault,
+					Conductor:     cfg.Conductor.Agent,
+				}, nil
+			}
+			return DelegateResult{SchemaVersion: schemaVersion, Status: "error", ConfigPath: opt.ConfigPath}, errors.New("sdlc: --issue-title is required")
+		}
 	}
 	brief := BuildConductorBrief(cfg, opt.Issue)
 	return DelegateResult{
@@ -1812,6 +1845,7 @@ func Prepare(ctx context.Context, opt DelegateOptions) (DelegateResult, error) {
 		Conductor:     cfg.Conductor.Agent,
 		Issue:         opt.Issue,
 		Brief:         brief,
+		AutoSelected:  autoSelected,
 	}, nil
 }
 
@@ -1819,6 +1853,13 @@ func Delegate(ctx context.Context, opt DelegateOptions) (DelegateResult, error) 
 	res, err := Prepare(ctx, opt)
 	if err != nil {
 		return res, err
+	}
+	if res.Status == "idle" {
+		return res, nil // empty intake queue — nothing to do this tick
+	}
+	if res.AutoSelected && !opt.DryRun {
+		// Claim the auto-selected github issue so a concurrent tick skips it.
+		_ = claimGitHubIssue(ctx, res.Issue)
 	}
 	chatOpt := chatOptionsForDelegate(res, opt)
 	if opt.Background && !opt.DryRun {
@@ -2921,34 +2962,25 @@ func nextLoomIssue(ctx context.Context, baseURL, token, repo string) (*LoomIssue
 	return nil, nil
 }
 
+func loomLabelNames(labels []LoomLabel) []string {
+	names := make([]string, len(labels))
+	for i, l := range labels {
+		names[i] = l.Name
+	}
+	return names
+}
+
 func eligibleLoomIssue(issue LoomIssue) bool {
 	if issue.State != "" && issue.State != "open" {
 		return false
 	}
-	for _, label := range issue.Labels {
-		switch strings.ToLower(strings.TrimSpace(label.Name)) {
-		case "sdlc:ignore", "sdlc:blocked", "sdlc:in-progress", "sdlc:qa", "sdlc:approved", "sdlc:done":
-			return false
-		}
-	}
-	return strings.TrimSpace(issue.Title) != ""
+	// Loom intake stays open-by-default (requireInitiate=false): a plain open
+	// issue with no reserved skip label is eligible.
+	return eligibleByLabels(loomLabelNames(issue.Labels), issue.Title, false)
 }
 
 func issuePriority(issue LoomIssue) int {
-	score := 100
-	for _, label := range issue.Labels {
-		switch strings.ToLower(strings.TrimSpace(label.Name)) {
-		case "priority:p0":
-			return 0
-		case "priority:p1":
-			score = min(score, 1)
-		case "priority:p2":
-			score = min(score, 2)
-		case "priority:p3":
-			score = min(score, 3)
-		}
-	}
-	return score
+	return priorityByLabels(loomLabelNames(issue.Labels))
 }
 
 func commentLoomIssue(ctx context.Context, baseURL, token, repo string, number int, body string) error {
