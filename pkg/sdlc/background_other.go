@@ -20,3 +20,16 @@ func signalStop(pid int) error {
 	}
 	return proc.Kill()
 }
+
+// processAlive reports whether pid is a live process. On Windows os.FindProcess
+// opens the process handle via OpenProcess and fails for a nonexistent pid, so
+// success (a usable handle) means the process is alive. (signal 0 isn't
+// supported on Windows, so the unix probe can't be reused.)
+func processAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	_ = proc.Release()
+	return true
+}

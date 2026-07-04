@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/chat"
@@ -2414,15 +2413,6 @@ func refreshRun(run RunRecord) RunRecord {
 
 func runActive(status string) bool {
 	return status == "starting" || status == "running"
-}
-
-func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func redactedCommand(agent string, args []string) []string {

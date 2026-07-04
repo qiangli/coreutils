@@ -25,7 +25,7 @@ func writeConfig(t *testing.T, body string) string {
 
 func clearAgentDetectionEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{
+	keys := []string{
 		"BASHY_SDLC_CONDUCTOR_AGENT",
 		"BASHY_CONDUCTOR_AGENT",
 		"BASHY_AGENT_TOOL",
@@ -48,8 +48,30 @@ func clearAgentDetectionEnv(t *testing.T) {
 		"CODEX_HOME",
 		"CODEX_SESSION_ID",
 		"CODEX_CLI",
-	} {
-		t.Setenv(key, "")
+	}
+	upper := make([]string, len(keys))
+	for i, k := range keys {
+		upper[i] = strings.ToUpper(k)
+	}
+	// hasAnyEnv matches a key AND its "<KEY>_…" family (agent runners export e.g.
+	// CLAUDE_CODE_ENTRYPOINT), and hasAnyEnv ignores empty values — so blank every
+	// var currently set that could be detected, not just the exact key names. Any
+	// runner env (the tests run inside an agent session) is thus neutralized.
+	for _, item := range os.Environ() {
+		name, _, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		up := strings.ToUpper(name)
+		for _, k := range upper {
+			if up == k || strings.HasPrefix(up, k+"_") {
+				t.Setenv(name, "")
+				break
+			}
+		}
+	}
+	for _, k := range keys {
+		t.Setenv(k, "")
 	}
 }
 
@@ -799,6 +821,10 @@ func TestApplyIssueRequestFromFile(t *testing.T) {
 }
 
 func TestRootCommandAcceptsLocalIssueDryRun(t *testing.T) {
+	// Hermetic: pin the conductor so the assertion doesn't depend on which agent
+	// happens to be running the tests (DefaultConductorAgent detects the ambient
+	// agent via env — claude/opencode/agy — else defaults to codex).
+	t.Setenv("BASHY_SDLC_CONDUCTOR_AGENT", "codex")
 	cmd := NewSDLCCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -810,8 +836,8 @@ func TestRootCommandAcceptsLocalIssueDryRun(t *testing.T) {
 	if !strings.Contains(got, `"status":"dry-run"`) ||
 		!strings.Contains(got, `"default_config":true`) ||
 		!strings.Contains(got, `"conductor":"codex"`) ||
-		!strings.Contains(got, `--sandbox`) ||
-		!strings.Contains(got, `danger-full-access`) ||
+		!strings.Contains(got, `--dangerously-bypass-approvals-and-sandbox`) ||
+		!strings.Contains(got, `--skip-git-repo-check`) ||
 		!strings.Contains(got, "Add CLI issue intake") {
 		t.Fatalf("unexpected root dry-run output: %s", got)
 	}
