@@ -84,6 +84,35 @@ func binaryName(name string) string {
 	return name
 }
 
+// BinaryName is the on-disk basename Ensure caches a tool under (adds .exe on
+// Windows). Exported so callers can build/inspect cache paths.
+func BinaryName(name string) string { return binaryName(name) }
+
+// CachedBinary returns an already-cached tool binary from a prior Ensure (newest
+// version wins), or "" when none is cached. A hot-path caller uses it to skip
+// version resolution + network entirely: Ensure lays tools out at
+// <CacheDir>/<name>/<version>/<binaryName>. Both raw-binary and Tree entrypoints
+// whose entrypoint basename equals the tool name are found.
+func CachedBinary(name string) string {
+	root, err := CacheDir()
+	if err != nil {
+		return ""
+	}
+	matches, _ := filepath.Glob(filepath.Join(root, name, "*", binaryName(name)))
+	best := ""
+	var bestMod int64
+	for _, m := range matches {
+		fi, err := os.Stat(m)
+		if err != nil || fi.IsDir() {
+			continue
+		}
+		if mt := fi.ModTime().UnixNano(); best == "" || mt > bestMod {
+			best, bestMod = m, mt
+		}
+	}
+	return best
+}
+
 // Ensure resolves the tool's asset for the current platform, downloading +
 // sha256-verifying + caching it if not already present, and returns the path to
 // the executable. Idempotent: a cache hit returns immediately with no network.
