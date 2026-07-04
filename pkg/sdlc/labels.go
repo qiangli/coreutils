@@ -94,6 +94,14 @@ func priorityByLabels(names []string) int {
 	return score
 }
 
+// IsControlLabel reports whether a label is a reserved control label (sdlc:* or
+// deploy:*) — the owner-driven labels the GitHub→loom mirror propagates so the
+// owner can manage the loop from GitHub.
+func IsControlLabel(name string) bool {
+	n := normLabel(name)
+	return strings.HasPrefix(n, "sdlc:") || strings.HasPrefix(n, DeployLabelPrefix)
+}
+
 // DeployLabelForEnv returns the deploy baton label for an environment, e.g.
 // DeployLabelForEnv("qa") == "deploy:qa".
 func DeployLabelForEnv(env string) string { return DeployLabelPrefix + normLabel(env) }
