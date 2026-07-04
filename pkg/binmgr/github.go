@@ -29,6 +29,14 @@ type GitHubSpec struct {
 	// Member is the executable's path within a .tar.gz/.zip asset; "" means the
 	// matched asset is the raw binary (Gitea, Zot).
 	Member string
+	// Tree requests whole-archive extraction (Asset.Tree) instead of pulling a
+	// single Member: the matched .tar.gz/.zip is unpacked in full, for tools that
+	// need their sibling layout to run (e.g. ollama + its ggml runner libs).
+	// Requires Entrypoint; Member is ignored.
+	Tree bool
+	// Entrypoint is the executable's slash path within the extracted tree (e.g.
+	// "ollama"); required when Tree is set.
+	Entrypoint string
 	// AssetMatch overrides the default platform matcher for tools whose asset
 	// names don't carry the standard os/arch tokens.
 	AssetMatch func(assetName, goos, goarch string) bool
@@ -59,9 +67,12 @@ func ResolveGitHub(ctx context.Context, spec GitHubSpec) (Tool, error) {
 	if match == nil {
 		match = defaultAssetMatch
 	}
+	if spec.Tree && spec.Entrypoint == "" {
+		return Tool{}, fmt.Errorf("binmgr: %s: Tree spec needs an Entrypoint", spec.Repo)
+	}
 	var asset ghAsset
 	for _, a := range rel.Assets {
-		if !assetUsable(a.Name, spec.Member) {
+		if !assetUsable(a.Name, spec.Member, spec.Tree) {
 			continue
 		}
 		if match(a.Name, goos, goarch) {
@@ -80,7 +91,7 @@ func ResolveGitHub(ctx context.Context, spec GitHubSpec) (Tool, error) {
 		Name:    spec.Name,
 		Version: rel.TagName,
 		Assets: map[string]Asset{
-			Platform(): {URL: asset.URL, SHA256: sha, MD5: md5sum, Binary: spec.Member},
+			Platform(): {URL: asset.URL, SHA256: sha, MD5: md5sum, Binary: spec.Member, Tree: spec.Tree, Entrypoint: spec.Entrypoint},
 		},
 	}, nil
 }
@@ -135,15 +146,16 @@ func defaultAssetMatch(name, goos, goarch string) bool {
 }
 
 // assetUsable filters out sidecars/signatures and, for a raw-binary tool (no
-// Member), compressed/archived assets; for an archive tool it requires one.
-func assetUsable(name, member string) bool {
+// Member, no Tree), compressed/archived assets; for an archive tool (a Member or
+// a Tree request) it requires an extractable archive.
+func assetUsable(name, member string, tree bool) bool {
 	n := strings.ToLower(name)
 	if isSidecar(n) {
 		return false
 	}
 	archive := strings.HasSuffix(n, ".tar.gz") || strings.HasSuffix(n, ".tgz") || strings.HasSuffix(n, ".zip")
 	compressed := strings.HasSuffix(n, ".xz") || strings.HasSuffix(n, ".gz") || strings.HasSuffix(n, ".bz2")
-	if member == "" {
+	if member == "" && !tree {
 		return !archive && !compressed
 	}
 	return archive
@@ -175,7 +187,7 @@ func resolveChecksum(ctx context.Context, rel *ghRelease, asset ghAsset) (sha, m
 	}
 	for _, a := range rel.Assets {
 		ln := strings.ToLower(a.Name)
-		if !strings.Contains(ln, "checksum") && ln != "sha256sums" && ln != "shasums" && !strings.HasSuffix(ln, ".sha256sum") {
+		if !strings.Contains(ln, "checksum") && !strings.Contains(ln, "sha256sum") && ln != "shasums" && !strings.HasSuffix(ln, ".sha256sum") {
 			continue
 		}
 		body, e := httpGetBody(ctx, a.URL, "")
