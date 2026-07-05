@@ -74,6 +74,11 @@ type grepper struct {
 
 	matcher *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
 
+	useLit bool   // literal fast path: bytes.Index instead of RE2 (literal.go)
+	lit    []byte // the single plain-literal pattern
+	buf    []byte // fast path: reused read buffer
+	ob     []byte // fast path: batched output buffer
+
 	anyMatch   bool
 	anyErr     bool
 	listedWout bool
@@ -166,6 +171,13 @@ func run(rc *tool.RunContext, args []string) int {
 		include:    *include,
 		exclude:    *exclude,
 		excludeDir: *excludeDir,
+	}
+	// Literal fast path: a single metachar-free pattern is plain
+	// substring work — searchStreamLit skips RE2 and per-line string
+	// allocation. Anything it can't serve byte-identically (-i, -w,
+	// multiple patterns, real regex) keeps the RE2 path unchanged.
+	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word); ok {
+		g.lit, g.useLit = lit, true
 	}
 	// --agentic (opt-in): a nil matcher when off skips nothing, so default
 	// behavior is byte-identical; on, it prunes .gitignore'd + noise paths.
@@ -395,6 +407,10 @@ func scanLinesKeepCR(data []byte, atEOF bool) (int, []byte, error) {
 }
 
 func (g *grepper) searchStream(r io.Reader, name string) {
+	if g.useLit {
+		g.searchStreamLit(r, name)
+		return
+	}
 	if r == nil {
 		r = strings.NewReader("")
 	}
