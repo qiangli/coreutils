@@ -17,6 +17,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"sort"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -40,6 +41,7 @@ type cutter struct {
 	delim         byte
 	onlyDelimited bool
 	scratch       []byte
+	buf           []byte
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -102,12 +104,19 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "%s", errMsg)
 	}
 
+	pairs = mergeRanges(pairs)
+	if *complement {
+		pairs = complementRanges(pairs)
+	}
+
 	c := &cutter{
 		pairs:         pairs,
 		complement:    *complement,
 		fieldMode:     fieldMode,
 		delim:         delimByte,
 		onlyDelimited: *onlyDelimited,
+		scratch:       make([]byte, 0, 1024),
+		buf:           make([]byte, 4*1024),
 	}
 
 	if len(operands) == 0 {
@@ -130,7 +139,7 @@ func run(rc *tool.RunContext, args []string) int {
 			r = f
 			closer = f
 		}
-		if err := c.process(bufio.NewReader(r), out); err != nil {
+		if err := c.process(r, out); err != nil {
 			fmt.Fprintf(rc.Err, "cut: %s: %v\n", name, pathErr(err))
 			status = 1
 		}
@@ -237,56 +246,110 @@ func parseList(list string, fieldMode bool) ([]rangePair, string) {
 	}
 }
 
-func (c *cutter) selected(idx int) bool {
-	in := false
-	for _, p := range c.pairs {
-		if idx >= p.lo && idx <= p.hi {
-			in = true
+func mergeRanges(pairs []rangePair) []rangePair {
+	if len(pairs) == 0 {
+		return nil
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].lo == pairs[j].lo {
+			return pairs[i].hi < pairs[j].hi
+		}
+		return pairs[i].lo < pairs[j].lo
+	})
+
+	merged := make([]rangePair, 0, len(pairs))
+	current := pairs[0]
+	for i := 1; i < len(pairs); i++ {
+		next := pairs[i]
+		if next.lo <= current.hi+1 {
+			if next.hi > current.hi {
+				current.hi = next.hi
+			}
+		} else {
+			merged = append(merged, current)
+			current = next
+		}
+	}
+	merged = append(merged, current)
+	return merged
+}
+
+func complementRanges(pairs []rangePair) []rangePair {
+	var comp []rangePair
+	lastHi := 0
+	for _, p := range pairs {
+		if p.lo > lastHi+1 {
+			comp = append(comp, rangePair{lastHi + 1, p.lo - 1})
+		}
+		lastHi = p.hi
+		if lastHi == math.MaxInt {
 			break
 		}
 	}
-	return in != c.complement
+	if lastHi < math.MaxInt {
+		comp = append(comp, rangePair{lastHi + 1, math.MaxInt})
+	}
+	return comp
 }
 
-func (c *cutter) process(in *bufio.Reader, out *bufio.Writer) error {
+func (c *cutter) process(r io.Reader, out *bufio.Writer) error {
+	buf := c.buf
+	head := 0
+	tail := 0
+
 	for {
-		line, err := in.ReadSlice('\n')
-		if err == bufio.ErrBufferFull {
-			c.scratch = append(c.scratch, line...)
-			continue
-		}
-		if len(c.scratch) > 0 {
-			c.scratch = append(c.scratch, line...)
-			line = c.scratch
-		}
-		if len(line) > 0 {
-			hadNL := line[len(line)-1] == '\n'
-			if hadNL {
-				line = line[:len(line)-1]
+		if tail == len(buf) {
+			if head > 0 {
+				copy(buf, buf[head:tail])
+				tail -= head
+				head = 0
+			} else {
+				newBuf := make([]byte, len(buf)*2)
+				copy(newBuf, buf)
+				buf = newBuf
+				c.buf = buf
 			}
-			c.emitLine(line, hadNL, out)
 		}
-		if len(c.scratch) > 0 {
-			c.scratch = c.scratch[:0]
+
+		n, err := r.Read(buf[tail:])
+		tail += n
+
+		for {
+			idx := bytes.IndexByte(buf[head:tail], '\n')
+			if idx < 0 {
+				break
+			}
+			lineEnd := head + idx
+			line := buf[head:lineEnd]
+			c.emitLine(line, true, out)
+			head = lineEnd + 1
 		}
+
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				break
 			}
 			return err
 		}
 	}
+
+	if head < tail {
+		c.emitLine(buf[head:tail], false, out)
+	}
+	return nil
 }
 
 func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 	if c.fieldMode {
 		if bytes.IndexByte(line, c.delim) < 0 {
-			// GNU: a line with no delimiter is printed whole (even with
-			// --complement), unless -s suppresses it.
 			if !c.onlyDelimited {
-				out.Write(line)
+				c.scratch = c.scratch[:0]
+				c.scratch = append(c.scratch, line...)
 				if hadNL {
-					out.WriteByte('\n')
+					c.scratch = append(c.scratch, '\n')
+				}
+				if len(c.scratch) > 0 {
+					out.Write(c.scratch)
 				}
 			}
 			return
@@ -294,38 +357,73 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 		first := true
 		field := 1
 		start := 0
+		pairIdx := 0
+
+		c.scratch = c.scratch[:0]
+
 		for {
+			for pairIdx < len(c.pairs) && field > c.pairs[pairIdx].hi {
+				pairIdx++
+			}
+			if pairIdx >= len(c.pairs) {
+				break
+			}
+
+			if field < c.pairs[pairIdx].lo {
+				for field < c.pairs[pairIdx].lo {
+					rel := bytes.IndexByte(line[start:], c.delim)
+					if rel < 0 {
+						goto done
+					}
+					start = start + rel + 1
+					field++
+				}
+			}
+
 			rel := bytes.IndexByte(line[start:], c.delim)
 			end := len(line)
 			if rel >= 0 {
 				end = start + rel
 			}
-			if c.selected(field) {
-				if !first {
-					out.WriteByte(c.delim)
-				}
-				out.Write(line[start:end])
-				first = false
+
+			if !first {
+				c.scratch = append(c.scratch, c.delim)
 			}
+			c.scratch = append(c.scratch, line[start:end]...)
+			first = false
+
 			if rel < 0 {
 				break
 			}
 			field++
 			start = end + 1
 		}
+	done:
 		if hadNL {
-			out.WriteByte('\n')
+			c.scratch = append(c.scratch, '\n')
+		}
+		if len(c.scratch) > 0 {
+			out.Write(c.scratch)
 		}
 		return
 	}
-	// byte / character mode (GNU: -c is currently the same as -b)
-	for i := range line {
-		if c.selected(i + 1) {
-			out.WriteByte(line[i])
+
+	c.scratch = c.scratch[:0]
+	for _, p := range c.pairs {
+		if p.lo > len(line) {
+			break
 		}
+		end := p.hi
+		if end > len(line) {
+			end = len(line)
+		}
+		c.scratch = append(c.scratch, line[p.lo-1:end]...)
 	}
 	if hadNL {
-		out.WriteByte('\n')
+		c.scratch = append(c.scratch, '\n')
+	}
+	if len(c.scratch) > 0 {
+		out.Write(c.scratch)
 	}
 }
 
