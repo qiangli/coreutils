@@ -10,6 +10,7 @@
 package hashenc
 
 import (
+	"bufio"
 	"encoding/base32"
 	"encoding/base64"
 	"errors"
@@ -94,7 +95,8 @@ func runBase(rc *tool.RunContext, t *tool.Tool, spec BaseSpec, args []string) in
 }
 
 func runBaseEncode(rc *tool.RunContext, t *tool.Tool, src io.Reader, spec BaseSpec, cols int64) int {
-	ww := &wrapWriter{w: rc.Out, cols: cols}
+	bw := bufio.NewWriterSize(rc.Out, 64<<10)
+	ww := &wrapWriter{w: bw, cols: cols}
 	enc := spec.NewEncoder(ww)
 	if _, err := io.Copy(enc, src); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
@@ -108,13 +110,18 @@ func runBaseEncode(rc *tool.RunContext, t *tool.Tool, src io.Reader, spec BaseSp
 		fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
 		return 1
 	}
+	if err := bw.Flush(); err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
+		return 1
+	}
 	return 0
 }
 
 func runBaseDecode(rc *tool.RunContext, t *tool.Tool, spec BaseSpec, src io.Reader, ignoreGarbage bool) int {
+	bw := bufio.NewWriterSize(rc.Out, 64<<10)
 	fr := &filterReader{r: src, inAlphabet: spec.InAlphabet, ignore: ignoreGarbage}
 	dec := spec.NewDecoder(fr)
-	if _, err := io.Copy(rc.Out, dec); err != nil {
+	if _, err := io.Copy(bw, dec); err != nil {
 		var b64 base64.CorruptInputError
 		var b32 base32.CorruptInputError
 		if errors.Is(err, errInvalidInput) || errors.Is(err, io.ErrUnexpectedEOF) ||
@@ -123,6 +130,10 @@ func runBaseDecode(rc *tool.RunContext, t *tool.Tool, spec BaseSpec, src io.Read
 		} else {
 			fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
 		}
+		return 1
+	}
+	if err := bw.Flush(); err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
 		return 1
 	}
 	return 0
