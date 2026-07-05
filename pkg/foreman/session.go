@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/chat"
@@ -25,6 +26,7 @@ type Session struct {
 	state   State
 	runner  chat.Runner
 	history []string
+	mu      sync.Mutex
 }
 
 func Start(ctx context.Context, opt Options) (*Session, error) {
@@ -66,6 +68,8 @@ func Open(root, id string, runner chat.Runner) (*Session, error) {
 }
 
 func (s *Session) State() State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.state
 }
 
@@ -97,6 +101,8 @@ func (s *Session) ProcessPending(ctx context.Context) error {
 }
 
 func (s *Session) Apply(ctx context.Context, cmd Command) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	switch strings.ToLower(strings.TrimSpace(cmd.Verb)) {
 	case CommandTell:
 		if strings.TrimSpace(cmd.Message) == "" {
@@ -138,10 +144,18 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		s.state.Paused = false
 		s.state.Status = StatusIdle
 	case CommandSkip:
-		s.state.CurrentStep = ""
+		if strings.TrimSpace(cmd.Target) != "" {
+			s.state.CurrentStep = "skip:" + strings.TrimSpace(cmd.Target)
+		} else {
+			s.state.CurrentStep = ""
+		}
 		s.state.Status = StatusIdle
 	case CommandPrio:
-		s.state.DriveLease = strings.TrimSpace(cmd.Priority)
+		if strings.TrimSpace(cmd.Target) != "" {
+			s.state.DriveLease = strings.TrimSpace(cmd.Target) + ":" + strings.TrimSpace(cmd.Priority)
+		} else {
+			s.state.DriveLease = strings.TrimSpace(cmd.Priority)
+		}
 	case CommandStop:
 		s.state.Stopped = true
 		s.state.Status = StatusDone

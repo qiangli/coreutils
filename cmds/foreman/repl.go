@@ -81,14 +81,22 @@ func dispatchLine(ctx context.Context, out io.Writer, s *foreman.Session, line s
 			return err
 		}
 	case "skip":
-		if err := s.Apply(ctx, foreman.Command{Verb: foreman.CommandSkip}); err != nil {
+		c := foreman.Command{Verb: foreman.CommandSkip}
+		if len(fields) > 1 {
+			c.Target = fields[1]
+		}
+		if err := s.Apply(ctx, c); err != nil {
 			return err
 		}
 	case "prio":
-		if len(fields) != 2 {
-			return fmt.Errorf("foreman: prio requires priority")
+		if len(fields) < 2 || len(fields) > 3 {
+			return fmt.Errorf("foreman: prio requires [target] priority")
 		}
-		if err := s.Apply(ctx, foreman.Command{Verb: foreman.CommandPrio, Priority: fields[1]}); err != nil {
+		c := foreman.Command{Verb: foreman.CommandPrio, Priority: fields[len(fields)-1]}
+		if len(fields) == 3 {
+			c.Target = fields[1]
+		}
+		if err := s.Apply(ctx, c); err != nil {
 			return err
 		}
 	default:

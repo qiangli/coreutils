@@ -3,6 +3,8 @@ package foremancmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,5 +95,30 @@ func TestScriptedREPL(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "repl\tidle\tscripted") || !strings.Contains(got, "done") {
 		t.Fatalf("repl output = %q", got)
+	}
+}
+
+func TestRunDAGCommand(t *testing.T) {
+	t.Setenv("BASHY_FOREMAN_DIR", t.TempDir())
+	old := runner
+	r := &stubRunner{out: "ack"}
+	runner = r
+	t.Cleanup(func() { runner = old })
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dag.md")
+	if err := os.WriteFile(path, []byte("## Tasks\n\n### a\n```bash\necho a\n```\n\n### b\nRequires: a\n```bash\necho b\n```\n"), 0o600); err != nil {
+		t.Fatalf("write dag: %v", err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	code := run(rc, []string{"run", "--agent", "stub", "dag.md"})
+	if code != 0 {
+		t.Fatalf("code = %d, err = %s", code, errb.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "a\nb" {
+		t.Fatalf("out = %q, want a/b", got)
+	}
+	if len(r.prompts) != 2 || !strings.Contains(r.prompts[0], "DAG target: a") || !strings.Contains(r.prompts[1], "DAG target: b") {
+		t.Fatalf("prompts = %#v, want DAG targets", r.prompts)
 	}
 }

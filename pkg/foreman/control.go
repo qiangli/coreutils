@@ -56,11 +56,11 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 		if err := s.Apply(ctx, cmd); err != nil {
-			_ = s.store.SaveState(s.state)
+			_ = s.store.SaveState(s.State())
 			fmt.Fprintf(conn, `{"ok":false,"error":%q}`+"\n", err.Error())
 			continue
 		}
-		if err := s.store.SaveState(s.state); err != nil {
+		if err := s.store.SaveState(s.State()); err != nil {
 			fmt.Fprintf(conn, `{"ok":false,"error":%q}`+"\n", err.Error())
 			continue
 		}

@@ -58,6 +58,9 @@ func run(rc *tool.RunContext, args []string) int {
 	case "prio":
 		return runPrio(rc, subArgs, jsonOut)
 	case "run":
+		if len(subArgs) > 0 && strings.HasSuffix(strings.ToLower(subArgs[0]), ".md") {
+			return runDAG(rc, subFlags, subArgs, jsonOut)
+		}
 		return runREPLWithFlags(rc, subFlags, subArgs)
 	default:
 		return usage(rc, "unknown subcommand %q", sub)
@@ -178,23 +181,62 @@ func runList(rc *tool.RunContext, jsonOut bool) int {
 }
 
 func runControl(rc *tool.RunContext, verb string, args []string, jsonOut bool) int {
-	if len(args) != 1 {
+	if len(args) < 1 || len(args) > 2 {
 		return usage(rc, "%s requires id", verb)
 	}
-	if err := foreman.SendCommand("", args[0], foreman.Command{Verb: verb}); err != nil {
+	cmd := foreman.Command{Verb: verb}
+	if len(args) == 2 {
+		cmd.Target = args[1]
+	}
+	if err := foreman.SendCommand("", args[0], cmd); err != nil {
 		return fail(rc, jsonOut, err)
 	}
 	return ok(rc, jsonOut, map[string]any{"id": args[0], "verb": verb})
 }
 
 func runPrio(rc *tool.RunContext, args []string, jsonOut bool) int {
-	if len(args) != 2 {
-		return usage(rc, "prio requires id and priority")
+	if len(args) < 2 || len(args) > 3 {
+		return usage(rc, "prio requires id [target] priority")
 	}
-	if err := foreman.SendCommand("", args[0], foreman.Command{Verb: foreman.CommandPrio, Priority: args[1]}); err != nil {
+	c := foreman.Command{Verb: foreman.CommandPrio, Priority: args[len(args)-1]}
+	if len(args) == 3 {
+		c.Target = args[1]
+	}
+	if err := foreman.SendCommand("", args[0], c); err != nil {
 		return fail(rc, jsonOut, err)
 	}
-	return ok(rc, jsonOut, map[string]any{"id": args[0], "priority": args[1]})
+	return ok(rc, jsonOut, map[string]any{"id": args[0], "priority": args[len(args)-1]})
+}
+
+func runDAG(rc *tool.RunContext, flags map[string]string, args []string, jsonOut bool) int {
+	path := rc.Path(args[0])
+	targets := args[1:]
+	goal := flags["goal"]
+	if goal == "" {
+		goal = "run " + args[0]
+	}
+	s, err := foreman.Start(rc.Ctx, foreman.Options{
+		ID:     flags["id"],
+		Goal:   goal,
+		Agent:  flags["agent"],
+		Role:   flags["role"],
+		Cwd:    rc.Dir,
+		Runner: runner,
+	})
+	if err != nil {
+		return fail(rc, jsonOut, err)
+	}
+	report, err := s.RunDAG(rc.Ctx, foreman.DAGOptions{Path: path, Targets: targets})
+	if err != nil {
+		return fail(rc, jsonOut, err)
+	}
+	if jsonOut {
+		return emitJSON(rc, report)
+	}
+	for _, name := range report.Targets {
+		fmt.Fprintln(rc.Out, name)
+	}
+	return 0
 }
 
 func spawnServe(id string) error {
