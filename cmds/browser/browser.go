@@ -12,6 +12,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/browser"
 	"github.com/qiangli/coreutils/pkg/browser/probe"
+	"github.com/qiangli/coreutils/pkg/browser/solo"
 	"github.com/qiangli/coreutils/pkg/browser/wire"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -31,6 +32,9 @@ func run(rc *tool.RunContext, args []string) int {
 	asJSON := fs.Bool("json", false, "emit JSON result envelopes")
 	mode := fs.String("mode", "probe", "browser mode: probe")
 	probeURL := fs.String("probe-url", probe.DefaultURL, "Chrome remote debugging URL for probe mode")
+	chromePath := fs.String("chrome-path", "", "Chrome/Chromium executable path for solo mode")
+	userDataDir := fs.String("user-data-dir", "", "Chrome user-data-dir for solo mode")
+	headed := fs.Bool("headed", false, "run solo Chrome headed instead of headless")
 	successURL := fs.String("success-url", "", "login completion URL substring")
 	tokenSelector := fs.String("token-selector", "", "CSS selector whose value/text is the login token")
 	cookieName := fs.String("cookie", "", "cookie name that indicates login completion")
@@ -50,13 +54,16 @@ func run(rc *tool.RunContext, args []string) int {
 
 	switch operands[0] {
 	case "status":
-		return browserStatus(rc, ctx, *mode, *probeURL, *asJSON)
+		return browserStatus(rc, ctx, *mode, *probeURL, solo.Config{ChromePath: *chromePath, UserDataDir: *userDataDir, Headed: *headed}, *asJSON)
 	case "fetch":
 		return browserFetch(rc, ctx, operands[1:], *asJSON)
 	case "login":
 		return browserLogin(rc, ctx, operands[1:], loginOptions{
 			Mode:          *mode,
 			ProbeURL:      *probeURL,
+			ChromePath:    *chromePath,
+			UserDataDir:   *userDataDir,
+			Headed:        *headed,
 			SuccessURL:    *successURL,
 			TokenSelector: *tokenSelector,
 			Cookie:        *cookieName,
@@ -70,7 +77,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
 	}
-	client, err := clientForMode(ctx, *mode, *probeURL)
+	client, err := clientForMode(ctx, *mode, *probeURL, solo.Config{ChromePath: *chromePath, UserDataDir: *userDataDir, Headed: *headed})
 	if err != nil {
 		return printNoBrowser(rc, *asJSON, *mode, err)
 	}
@@ -85,6 +92,9 @@ func run(rc *tool.RunContext, args []string) int {
 type loginOptions struct {
 	Mode          string
 	ProbeURL      string
+	ChromePath    string
+	UserDataDir   string
+	Headed        bool
 	SuccessURL    string
 	TokenSelector string
 	Cookie        string
@@ -142,7 +152,7 @@ func browserLogin(rc *tool.RunContext, ctx context.Context, args []string, opt l
 		return 0
 	}
 
-	client, err := clientForMode(ctx, opt.Mode, opt.ProbeURL)
+	client, err := clientForMode(ctx, opt.Mode, opt.ProbeURL, solo.Config{ChromePath: opt.ChromePath, UserDataDir: opt.UserDataDir, Headed: opt.Headed})
 	if err != nil {
 		return printNoBrowser(rc, opt.JSON, opt.Mode, err)
 	}
@@ -232,7 +242,7 @@ func domainForURL(raw string) string {
 	return u.Hostname()
 }
 
-func clientForMode(ctx context.Context, mode, probeURL string) (browser.Client, error) {
+func clientForMode(ctx context.Context, mode, probeURL string, soloCfg solo.Config) (browser.Client, error) {
 	switch mode {
 	case "", "probe":
 		c := probe.New(probeURL)
@@ -243,12 +253,21 @@ func clientForMode(ctx context.Context, mode, probeURL string) (browser.Client, 
 			return nil, err
 		}
 		return c, nil
+	case "solo":
+		c := solo.New(soloCfg)
+		if !c.Available(ctx) {
+			return nil, fmt.Errorf("solo Chrome not found")
+		}
+		if err := c.EnsureReady(ctx); err != nil {
+			return nil, err
+		}
+		return c, nil
 	default:
 		return nil, fmt.Errorf("mode %q is not supported", mode)
 	}
 }
 
-func browserStatus(rc *tool.RunContext, ctx context.Context, mode, probeURL string, asJSON bool) int {
+func browserStatus(rc *tool.RunContext, ctx context.Context, mode, probeURL string, soloCfg solo.Config, asJSON bool) int {
 	reachable := false
 	message := ""
 	if mode == "" || mode == "probe" {
@@ -256,6 +275,12 @@ func browserStatus(rc *tool.RunContext, ctx context.Context, mode, probeURL stri
 		reachable = c.Available(ctx)
 		if !reachable {
 			message = noBrowserMessage
+		}
+	} else if mode == "solo" {
+		c := solo.New(soloCfg)
+		reachable = c.Available(ctx)
+		if !reachable {
+			message = "no browser: Chrome or Chromium was not found for solo mode"
 		}
 	} else {
 		message = fmt.Sprintf("mode %q is not supported", mode)
