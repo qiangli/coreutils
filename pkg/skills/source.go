@@ -205,6 +205,7 @@ func (c *Catalog) parse(dirName string, body []byte, src Source) Skill {
 		sk.HasDhnt = true
 		sk.Dhnt = parseDhntInfo(canon)
 	}
+	_, sk.HasTasks = src.File(dirName, "tasks.md")
 	return sk
 }
 

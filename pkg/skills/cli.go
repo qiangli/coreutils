@@ -116,7 +116,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	verify.Flags().BoolVar(&verifyJSON, "json", false, "machine-readable report")
 
 	var runJSON, adapt bool
-	var repairAgent string
+	var repairAgent, target string
 	var attempts int
 	run := &cobra.Command{
 		Use:   "run <name>",
@@ -124,6 +124,12 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 		Long:  "run executes a skill's canonical face through the in-process userland:\ncontract predicates and step primitives resolve their concrete commands from\nSKILL.md metadata (check-*/step-* keys), a static pre-flight audit refuses to\nstart when the declared effect cap cannot cover what the bindings report, and\nevery run emits a re-checkable attestation stored in the host-local store.\nA host that has learned a fixed version of the skill runs it transparently.\nWith --adapt, a failing run asks the repair agent for corrected steps,\nverifies them under the ORIGINAL contract and effect cap, folds the fix into\na guarded environment arm, and saves it to the host overlay — the next run\n(by any agent on this host) reuses it. Command output streams to stderr;\nthe receipt is stdout.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if target != "" && adapt {
+				return fmt.Errorf("skills: --target and --adapt do not combine (adapt repairs canonical steps, not dag targets)")
+			}
+			if target != "" {
+				return runTarget(cmd, cfg, args[0], target, runJSON)
+			}
 			return runRun(cmd, cfg, args[0], runJSON, adapt, repairAgent, attempts)
 		},
 	}
@@ -131,6 +137,7 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	run.Flags().BoolVar(&adapt, "adapt", false, "self-heal: repair, verify, and fold a fix on failure")
 	run.Flags().StringVar(&repairAgent, "repair-agent", "", "headless agent CLI for repair proposals; the prompt is appended as the last argument (e.g. \"claude -p\")")
 	run.Flags().IntVar(&attempts, "attempts", 2, "max repair attempts under --adapt")
+	run.Flags().StringVar(&target, "target", "", "execute this dag target from the skill's tasks.md (contracted skills stay attested)")
 
 	var learnJSON bool
 	learn := &cobra.Command{
@@ -423,6 +430,36 @@ func runRun(cmd *cobra.Command, cfg *config, name string, asJSON, adapt bool, re
 	if err != nil {
 		return err
 	}
+	if !rec.Attest.Valid {
+		return fmt.Errorf("skills: %q contract not satisfied", name)
+	}
+	return nil
+}
+
+func runTarget(cmd *cobra.Command, cfg *config, name, target string, asJSON bool) error {
+	sk, src, ok := cfg.catalog().Get(name)
+	if !ok {
+		return fmt.Errorf("skills: %q not found", name)
+	}
+	ps, _ := cfg.probes(false)
+	rec, attested, err := runTargetSkill(cfg, sk, src, ps, target, cmd.ErrOrStderr())
+	if !attested {
+		// Executable-but-uncontracted rung: plain result, no receipt.
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{
+				"skill": name, "target": target, "ok": true,
+			})
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "skill: %s\ntarget: %s\nok: true\n", name, target)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	renderReceipt(cmd, rec, "target:"+target, asJSON)
 	if !rec.Attest.Valid {
 		return fmt.Errorf("skills: %q contract not satisfied", name)
 	}

@@ -83,10 +83,13 @@ func anyBranch(steps []dhntskills.Step) bool {
 // the contract (and branch conditions) and every step primitive id gets
 // a binding that resolves its concrete command from the skill metadata
 // and runs it through the in-process userland.
-func bindEnv(sk dhntskills.Skill, meta map[string]string, dir string, log io.Writer, probes []dhntskills.EnvProbe) dhntskills.Env {
+func bindEnv(sk dhntskills.Skill, meta map[string]string, dir string, log io.Writer, probes []dhntskills.EnvProbe, prims map[string]dhntskills.PrimitiveFn) dhntskills.Env {
 	env := dhntskills.Env{
 		Primitives: map[string]dhntskills.PrimitiveFn{},
 		Predicates: map[string]dhntskills.PredicateFn{},
+	}
+	for id, fn := range prims {
+		env.Primitives[id] = fn // pre-bound (dag targets); walk() skips bound ids
 	}
 
 	runMeta := func(id, key string, effs []dhntskills.Effect) (bool, []dhntskills.Effect, error) {
@@ -221,6 +224,7 @@ type runPrep struct {
 	probes []dhntskills.EnvProbe
 	ctxKey string
 	tier   string
+	prims  map[string]dhntskills.PrimitiveFn // pre-bound primitives (e.g. the dag target)
 }
 
 // prepareRun runs the shared gate: valid canonical face, applicable
@@ -283,7 +287,7 @@ func runEffective(name string, effective dhntskills.Skill, p runPrep, dir string
 			"skills: pre-flight: bindings report {%s} but the declared effect cap does not cover it — declare `efefecato … fini` (machine-run needs the cap rung)",
 			strings.Join(atoms, " "))
 	}
-	env := bindEnv(effective, p.meta, dir, log, p.probes)
+	env := bindEnv(effective, p.meta, dir, log, p.probes, p.prims)
 	att, err := dhntskills.Run(effective, env, p.tier)
 	if err != nil {
 		return AttestRecord{}, err

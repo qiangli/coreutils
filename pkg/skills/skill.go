@@ -43,6 +43,7 @@ type Skill struct {
 	RequiresErr   string            // non-empty when Meta["requires"] did not parse
 	HasDhnt       bool              // a skill.dhnt sits beside SKILL.md
 	Dhnt          *DhntInfo         // parsed canonical face (nil when absent)
+	HasTasks      bool              // a tasks.md (dag task file) sits beside SKILL.md
 }
 
 // frontmatter is the permissive superset we read; unknown fields are
