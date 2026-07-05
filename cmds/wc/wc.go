@@ -10,6 +10,7 @@ package wccmd
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -70,7 +71,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if in == nil {
 			in = strings.NewReader("")
 		}
-		c, err := countReader(in)
+		c, err := countReader(in, sel)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "wc: %v\n", err)
 			exit = 1
@@ -99,7 +100,7 @@ func run(rc *tool.RunContext, args []string) int {
 			r = f
 			closer = f
 		}
-		c, err := countReader(r)
+		c, err := countReader(r, sel)
 		if closer != nil {
 			closer.Close()
 		}
@@ -126,13 +127,68 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-// countReader makes one pass computing every count. Word boundaries
-// and line-length widths use C-locale rules (ASCII whitespace; only
-// printable ASCII has width 1, tab advances to the next multiple of
-// 8, \r and \f reset the position — matching GNU in the C locale).
-// Characters are counted as UTF-8 runes; each invalid byte counts as
-// one character.
-func countReader(r io.Reader) (counts, error) {
+// countReader makes one pass computing the counts sel needs. Only -m
+// (chars) and -L (max-line-length) require decoding UTF-8 runes; for
+// every other combination, lines/words/bytes are pure byte properties
+// under C-locale rules (all word separators are ASCII whitespace
+// bytes, which never occur inside a multi-byte UTF-8 sequence), so a
+// block-wise byte scan produces identical counts far faster.
+func countReader(r io.Reader, sel selection) (counts, error) {
+	if sel.chars || sel.maxLine {
+		return countRunes(r)
+	}
+	return countBytes(r, sel.words)
+}
+
+// isSpaceByte marks the C-locale whitespace bytes (word separators).
+var isSpaceByte [256]bool
+
+func init() {
+	for _, b := range []byte{' ', '\t', '\n', '\v', '\f', '\r'} {
+		isSpaceByte[b] = true
+	}
+}
+
+// countBytes computes lines, words, and bytes with a block byte scan.
+// Newlines are counted with bytes.Count (vectorized); word boundaries
+// with a byte-indexed table. inWord carries across block boundaries.
+func countBytes(r io.Reader, words bool) (counts, error) {
+	var c counts
+	buf := make([]byte, 64*1024)
+	inWord := false
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			b := buf[:n]
+			c.bytes += int64(n)
+			c.lines += int64(bytes.Count(b, []byte{'\n'}))
+			if words {
+				for _, ch := range b {
+					if isSpaceByte[ch] {
+						inWord = false
+					} else if !inWord {
+						c.words++
+						inWord = true
+					}
+				}
+			}
+		}
+		if err == io.EOF {
+			return c, nil
+		}
+		if err != nil {
+			return c, err
+		}
+	}
+}
+
+// countRunes is the full rune-decoding pass, needed when -m or -L is
+// selected. Word boundaries and line-length widths use C-locale rules
+// (ASCII whitespace; only printable ASCII has width 1, tab advances
+// to the next multiple of 8, \r and \f reset the position — matching
+// GNU in the C locale). Characters are counted as UTF-8 runes; each
+// invalid byte counts as one character.
+func countRunes(r io.Reader) (counts, error) {
 	br := bufio.NewReaderSize(r, 64*1024)
 	var c counts
 	inWord := false
