@@ -192,7 +192,7 @@ func NewScheduleCmd() *cobra.Command {
 	root.PersistentFlags().Bool("json", false, "machine-readable JSON envelope")
 	root.PersistentFlags().Bool("plain", false, "plain-text output (overrides $BASHY_AGENTIC)")
 	root.PersistentFlags().Bool("quiet", false, "minimal output")
-	root.AddCommand(addCmd(), listCmd(), rmCmd(), runCmd(), tickCmd(), daemonCmd())
+	root.AddCommand(addCmd(), listCmd(), rmCmd(), runCmd(), tickCmd(), daemonCmd(), startCmd(), statusCmd(), stopServiceCmd())
 	return root
 }
 
@@ -403,6 +403,16 @@ func daemonCmd() *cobra.Command {
 		Use:   "daemon",
 		Short: "Run a foreground scheduler loop, firing due jobs on an interval",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Own the service pidfile so `schedule status` is accurate even when the
+			// daemon is launched directly (not via `schedule start`), and so a clean
+			// exit removes it. StartService also writes it for race-free readiness.
+			p := servicePidPath()
+			_ = writePid(p, os.Getpid())
+			defer func() {
+				if pid, _ := readPid(p); pid == os.Getpid() {
+					_ = os.Remove(p)
+				}
+			}()
 			fmt.Fprintf(cmd.ErrOrStderr(), "schedule daemon: ticking every %s (state %s)\n", interval, statePath())
 			t := time.NewTicker(interval)
 			defer t.Stop()
