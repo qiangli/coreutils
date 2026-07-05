@@ -61,17 +61,27 @@ func (s fsSource) File(name, rel string) ([]byte, bool) {
 
 // DirSource serves the host-local ring from a directory of skill
 // folders. A missing directory is an empty source, not an error.
-func DirSource(dir string) Source { return dirSource{dir: dir} }
+func DirSource(dir string) Source { return dirSource{dir: dir, ring: RingLocal} }
 
-type dirSource struct{ dir string }
+// SharedDirSource serves a shared catalog directory — any git clone or
+// synced folder of skill folders — as a read-only ring between embedded
+// and local. This is the standalone sharing path ("cloud as a thin
+// replaceable relay"): a team's skills repo cloned to disk IS a catalog;
+// no control plane required. Local installs/learning still shadow it.
+func SharedDirSource(dir string) Source { return dirSource{dir: dir, ring: RingShared} }
 
-func (s dirSource) Ring() Ring { return RingLocal }
+type dirSource struct {
+	dir  string
+	ring Ring
+}
+
+func (s dirSource) Ring() Ring { return s.ring }
 
 func (s dirSource) Names() ([]string, error) {
 	if _, err := os.Stat(s.dir); err != nil {
 		return nil, nil
 	}
-	return fsSource{fsys: os.DirFS(s.dir), ring: RingLocal}.Names()
+	return fsSource{fsys: os.DirFS(s.dir), ring: s.ring}.Names()
 }
 
 func (s dirSource) Body(name string) ([]byte, bool) { return s.File(name, "SKILL.md") }
@@ -80,7 +90,7 @@ func (s dirSource) File(name, rel string) ([]byte, bool) {
 	if _, err := os.Stat(s.dir); err != nil {
 		return nil, false
 	}
-	return fsSource{fsys: os.DirFS(s.dir), ring: RingLocal}.File(name, rel)
+	return fsSource{fsys: os.DirFS(s.dir), ring: s.ring}.File(name, rel)
 }
 
 // Listing is one catalog row: the skill plus its applicability verdict

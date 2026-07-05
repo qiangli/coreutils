@@ -7,21 +7,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Ring names where a skill came from. Higher rings shadow lower ones on
-// a name collision (a host-local override of an embedded skill is
-// deliberate, and reported).
+// Ring names where a skill came from. Later sources shadow earlier ones
+// on a name collision (a host-local override of a shared or embedded
+// skill is deliberate, and reported).
 type Ring int
 
 const (
 	RingEmbedded Ring = iota // compiled into the host binary
+	RingShared               // a shared catalog dir (git clone, synced folder) — read-only
 	RingLocal                // host-local store (installed + learned)
 )
 
 func (r Ring) String() string {
-	if r == RingLocal {
+	switch r {
+	case RingLocal:
 		return "local"
+	case RingShared:
+		return "shared"
+	default:
+		return "embedded"
 	}
-	return "embedded"
 }
 
 // Skill is one catalog entry: a standard Agent Skills folder (SKILL.md

@@ -468,6 +468,55 @@ func mustGetwd() string {
 	return "."
 }
 
+// Advertised is the L1 surface of one applicable skill — what a host
+// injects into an agent's first-hop context (progressive disclosure:
+// names + one-liners here; full bodies via `skills show`).
+type Advertised struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Ring        string `json:"ring,omitempty"`
+	Verified    bool   `json:"verified,omitempty"` // carries a valid canonical face (identity + contract)
+}
+
+// Applicable returns the skills applicable at this host's coordinate,
+// with descriptions truncated to an L1-sized budget. Errors degrade to
+// an empty list — first-hop context must never fail on skills.
+func Applicable(opts ...Option) []Advertised {
+	cfg := &config{statics: map[string]string{}, cacheTTL: 24 * time.Hour}
+	for _, o := range opts {
+		o(cfg)
+	}
+	if cfg.cfgDir == "" {
+		cfg.cfgDir = defaultConfigDir()
+	}
+	ps, _ := cfg.probes(false)
+	rows, err := cfg.catalog().List(ps)
+	if err != nil {
+		return nil
+	}
+	var out []Advertised
+	for _, r := range rows {
+		if !r.Verdict.Applicable {
+			continue
+		}
+		out = append(out, Advertised{
+			Name:        r.Name,
+			Description: truncate(r.Description, 160),
+			Ring:        r.Ring.String(),
+			Verified:    r.Dhnt.Valid(),
+		})
+	}
+	return out
+}
+
+func truncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return strings.TrimSpace(string(runes[:n-1])) + "…"
+}
+
 // ExitCode maps a NewSkillsCmd Execute error to the repo exit
 // convention: 2 for usage errors, 1 otherwise, 0 for nil.
 func ExitCode(err error) int {

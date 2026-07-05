@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -124,5 +125,57 @@ func TestKeyProbes(t *testing.T) {
 	// No requires → coarse {os, arch} only.
 	if kp := KeyProbes(Skill{}); len(kp) != 2 {
 		t.Fatalf("KeyProbes(no requires) = %v", kp)
+	}
+}
+
+func TestSharedRingPrecedence(t *testing.T) {
+	shared := t.TempDir()
+	writeSkill(t, shared, "team-skill", "---\nname: team-skill\ndescription: from the shared catalog\n---")
+	writeSkill(t, shared, "alpha-notes", "---\nname: alpha-notes\ndescription: shared override\n---")
+	local := t.TempDir()
+	writeSkill(t, local, "alpha-notes", "---\nname: alpha-notes\ndescription: local override\n---")
+
+	embedded := fstest.MapFS{
+		"alpha-notes/SKILL.md": {Data: []byte("---\nname: alpha-notes\ndescription: embedded\n---\nbody\n")},
+	}
+	cat := &Catalog{Sources: []Source{
+		EmbedSource(embedded, RingEmbedded),
+		SharedDirSource(shared),
+		DirSource(local),
+	}}
+	ps := testProbes(t, map[string]string{"os": "linux", "arch": "arm64"}, nil)
+	rows, err := cat.List(ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Listing{}
+	for _, r := range rows {
+		byName[r.Name] = r
+	}
+	if r := byName["team-skill"]; r.Ring != RingShared || r.Ring.String() != "shared" {
+		t.Errorf("team-skill: %+v", r)
+	}
+	// local > shared > embedded on collisions.
+	if r := byName["alpha-notes"]; r.Ring != RingLocal || r.Description != "local override" || !r.Shadows {
+		t.Errorf("alpha-notes: %+v", r)
+	}
+	// A missing shared dir is an empty source, not an error.
+	cat2 := &Catalog{Sources: []Source{SharedDirSource(filepath.Join(shared, "missing"))}}
+	if rows, err := cat2.List(ps); err != nil || len(rows) != 0 {
+		t.Errorf("missing shared dir: %v %v", rows, err)
+	}
+}
+
+func TestApplicableAdvertisement(t *testing.T) {
+	shared := t.TempDir()
+	long := strings.Repeat("very long description ", 20)
+	writeSkill(t, shared, "team-skill", "---\nname: team-skill\ndescription: "+long+"\n---")
+	writeSkill(t, shared, "elsewhere", "---\nname: elsewhere\ndescription: x\nmetadata:\n  requires: \"os=plan9\"\n---")
+	ads := Applicable(WithSource(SharedDirSource(shared)), WithConfigDir(t.TempDir()))
+	if len(ads) != 1 || ads[0].Name != "team-skill" || ads[0].Ring != "shared" || ads[0].Verified {
+		t.Fatalf("ads = %+v", ads)
+	}
+	if len([]rune(ads[0].Description)) > 160 {
+		t.Fatalf("description not truncated: %d runes", len([]rune(ads[0].Description)))
 	}
 }
