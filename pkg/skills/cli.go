@@ -95,7 +95,27 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	}
 	show.Flags().BoolVarP(&ref, "reference", "r", false, "print the deep-companion reference.md")
 
-	root.AddCommand(list, probe, show)
+	var force, addJSON bool
+	add := &cobra.Command{
+		Use:   "add <dir>",
+		Short: "install a skill folder into the host-local store (verified admission)",
+		Long:  "add installs a skill folder (SKILL.md + optional reference.md/skill.dhnt)\ninto the host-local store after a verified-admission gate: frontmatter must\nparse with name+description, metadata.requires must parse, and a skill.dhnt\ncanonical face must be valid (transpilable, content-addressed). Inapplicable-\nhere is reported, not refused — a skill may be installed for a tool you have\nnot provisioned yet.",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return runAdd(cmd, cfg, args[0], force, addJSON) },
+	}
+	add.Flags().BoolVar(&force, "force", false, "replace an already-installed skill of the same name")
+	add.Flags().BoolVar(&addJSON, "json", false, "machine-readable admission report")
+
+	var verifyJSON bool
+	verify := &cobra.Command{
+		Use:   "verify <name>",
+		Short: "dry gate: structural validity + applicability at this coordinate (exit 0 iff both)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return runVerify(cmd, cfg, args[0], verifyJSON) },
+	}
+	verify.Flags().BoolVar(&verifyJSON, "json", false, "machine-readable report")
+
+	root.AddCommand(list, probe, show, add, verify)
 	return root
 }
 
@@ -139,6 +159,7 @@ func runList(cmd *cobra.Command, cfg *config, all, asJSON bool) error {
 			Unchecked   string `json:"unchecked_compat,omitempty"`
 			Shadows     bool   `json:"shadows,omitempty"`
 			HasDhnt     bool   `json:"dhnt,omitempty"`
+			Identity    string `json:"identity,omitempty"`
 			Warning     string `json:"warning,omitempty"`
 		}
 		out := make([]row, 0, len(rows))
@@ -146,8 +167,12 @@ func runList(cmd *cobra.Command, cfg *config, all, asJSON bool) error {
 			if !all && !r.Verdict.Applicable {
 				continue
 			}
+			var id string
+			if r.Dhnt.Valid() {
+				id = r.Dhnt.Identity
+			}
 			out = append(out, row{r.Name, r.Description, r.Ring.String(), r.Verdict.Applicable,
-				r.Verdict.Failing, r.Verdict.Unchecked, r.Shadows, r.HasDhnt, r.Warning})
+				r.Verdict.Failing, r.Verdict.Unchecked, r.Shadows, r.HasDhnt, id, r.Warning})
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(out)
 	}
@@ -217,10 +242,68 @@ func runShow(cmd *cobra.Command, cfg *config, name string, ref bool) error {
 			status = "inapplicable: " + v.Failing
 		}
 		dhnt := "absent"
-		if sk.HasDhnt {
-			dhnt = "present"
+		if sk.Dhnt.Valid() {
+			dhnt = sk.Dhnt.Identity[:13] // content-address prefix
+		} else if sk.HasDhnt {
+			dhnt = "invalid"
 		}
 		fmt.Fprintf(cmd.ErrOrStderr(), "skills: %s — ring=%s dhnt=%s %s\n", sk.Name, sk.Ring, dhnt, status)
+	}
+	return nil
+}
+
+func runAdd(cmd *cobra.Command, cfg *config, dir string, force, asJSON bool) error {
+	if strings.Contains(dir, "://") {
+		return fmt.Errorf("skills: url sources are not supported yet — pass a local skill directory")
+	}
+	if cfg.cfgDir == "" {
+		return fmt.Errorf("skills: no host-local store directory configured")
+	}
+	sk, err := loadSkillDir(dir)
+	if err != nil {
+		return err
+	}
+	ps, _ := cfg.probes(false)
+	a := admit(sk, ps)
+	if asJSON {
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(a); err != nil {
+			return err
+		}
+	} else {
+		renderAdmission(cmd.OutOrStdout(), a)
+	}
+	if !a.Valid {
+		return fmt.Errorf("skills: %q failed the admission gate", sk.Name)
+	}
+	dst, err := installSkill(dir, cfg.cfgDir, sk.Name, force)
+	if err != nil {
+		return err
+	}
+	if !asJSON {
+		fmt.Fprintf(cmd.OutOrStdout(), "installed: %s\n", dst)
+	}
+	if !a.Applicable {
+		fmt.Fprintf(cmd.ErrOrStderr(), "skills: %s installed but not applicable here (%s)\n", sk.Name, a.Failing)
+	}
+	return nil
+}
+
+func runVerify(cmd *cobra.Command, cfg *config, name string, asJSON bool) error {
+	sk, _, ok := cfg.catalog().Get(name)
+	if !ok {
+		return fmt.Errorf("skills: %q not found", name)
+	}
+	ps, _ := cfg.probes(false)
+	a := admit(sk, ps)
+	if asJSON {
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(a); err != nil {
+			return err
+		}
+	} else {
+		renderAdmission(cmd.OutOrStdout(), a)
+	}
+	if !a.Valid || !a.Applicable {
+		return fmt.Errorf("skills: %q did not verify (valid=%v applicable=%v)", name, a.Valid, a.Applicable)
 	}
 	return nil
 }

@@ -158,7 +158,10 @@ func (c *Catalog) parse(dirName string, body []byte, src Source) Skill {
 	if ds, ok := src.(dirSource); ok {
 		sk.Dir = filepath.Join(ds.dir, dirName)
 	}
-	_, sk.HasDhnt = src.File(dirName, "skill.dhnt")
+	if canon, ok := src.File(dirName, "skill.dhnt"); ok {
+		sk.HasDhnt = true
+		sk.Dhnt = parseDhntInfo(canon)
+	}
 	return sk
 }
 

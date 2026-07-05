@@ -37,6 +37,7 @@ type Skill struct {
 	Requires      *Requires         // parsed Meta["requires"]; nil = none
 	RequiresErr   string            // non-empty when Meta["requires"] did not parse
 	HasDhnt       bool              // a skill.dhnt sits beside SKILL.md
+	Dhnt          *DhntInfo         // parsed canonical face (nil when absent)
 }
 
 // frontmatter is the permissive superset we read; unknown fields are
