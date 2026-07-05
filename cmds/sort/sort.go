@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"unsafe"
 
@@ -128,14 +127,14 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	if s.canUsePreparedNumeric() {
-		var nlines numericLineSet
+		nlines := numericLineSet{allInt: true}
 		for _, op := range operands {
 			if err := nlines.read(rc, op); err != nil {
 				fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
 				return 2
 			}
 		}
-		slices.SortStableFunc(nlines.lines, s.compareNumericLines)
+		s.sortNumericLines(nlines.lines, nlines.allInt)
 		if s.unique {
 			out := nlines.lines[:0]
 			for i, l := range nlines.lines {
@@ -161,7 +160,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
-	slices.SortStableFunc(lines.lines, s.compare)
+	s.sortLines(lines.lines)
 
 	if s.unique {
 		out := lines.lines[:0]
@@ -290,11 +289,13 @@ type numericKey struct {
 type numericLine struct {
 	text string
 	num  numericKey
+	val  int64 // exact key value when the whole set is integer (allInt)
 }
 
 type numericLineSet struct {
 	buffers [][]byte
 	lines   []numericLine
+	allInt  bool // every key so far is an int64-representable integer
 }
 
 func (ls *numericLineSet) read(rc *tool.RunContext, operand string) error {
@@ -303,7 +304,9 @@ func (ls *numericLineSet) read(rc *tool.RunContext, operand string) error {
 		return err
 	}
 	ls.buffers = append(ls.buffers, data)
-	splitNumericLines(data, &ls.lines)
+	if !splitNumericLines(data, &ls.lines) {
+		ls.allInt = false
+	}
 	return nil
 }
 
@@ -458,16 +461,20 @@ func splitLines(data []byte, lines *[]string) {
 	}
 }
 
-func splitNumericLines(data []byte, lines *[]numericLine) {
+// splitNumericLines splits data into numericLines and reports whether
+// every parsed key is an int64-representable integer (see intKeyVal),
+// which enables the radix-sort fast path.
+func splitNumericLines(data []byte, lines *[]numericLine) bool {
+	allInt := true
 	if len(data) == 0 {
-		return
+		return allInt
 	}
 	if data[len(data)-1] == '\n' {
 		data = data[:len(data)-1]
 	}
 	if len(data) == 0 {
 		*lines = append(*lines, numericLine{})
-		return
+		return allInt
 	}
 	n := bytes.Count(data, []byte{'\n'}) + 1
 	old := len(*lines)
@@ -476,15 +483,21 @@ func splitNumericLines(data []byte, lines *[]numericLine) {
 		copy(next, *lines)
 		*lines = next
 	}
+	appendLine := func(l string) {
+		num := parseNumericKey(l)
+		val, ok := intKeyVal(l, num)
+		if !ok {
+			allInt = false
+		}
+		*lines = append(*lines, numericLine{text: l, num: num, val: val})
+	}
 	for {
 		i := bytes.IndexByte(data, '\n')
 		if i < 0 {
-			l := bytesString(data)
-			*lines = append(*lines, numericLine{text: l, num: parseNumericKey(l)})
-			return
+			appendLine(bytesString(data))
+			return allInt
 		}
-		l := bytesString(data[:i])
-		*lines = append(*lines, numericLine{text: l, num: parseNumericKey(l)})
+		appendLine(bytesString(data[:i]))
 		data = data[i+1:]
 	}
 }
