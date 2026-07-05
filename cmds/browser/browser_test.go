@@ -110,3 +110,67 @@ func TestActionFromArgs(t *testing.T) {
 		t.Fatalf("unexpected action: %#v", a)
 	}
 }
+
+func TestLoginCompletionDetector(t *testing.T) {
+	tests := []struct {
+		name  string
+		spec  loginSpec
+		state loginState
+		want  string
+		value string
+	}{
+		{
+			name:  "redirect",
+			spec:  loginSpec{SuccessURL: "/done"},
+			state: loginState{URL: "https://example.test/oauth/done?code=1"},
+			want:  "redirect",
+			value: "https://example.test/oauth/done?code=1",
+		},
+		{
+			name:  "token",
+			spec:  loginSpec{TokenSelector: "#token"},
+			state: loginState{Token: " abc "},
+			want:  "token",
+			value: "abc",
+		},
+		{
+			name:  "cookie",
+			spec:  loginSpec{Cookie: "sid"},
+			state: loginState{Cookies: []loginCookie{{Name: "sid", Value: "secret"}}},
+			want:  "cookie",
+			value: "secret",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DetectLoginCompletion(tt.spec, tt.state)
+			if !got.Done || got.Reason != tt.want {
+				t.Fatalf("unexpected completion: %#v", got)
+			}
+			switch tt.want {
+			case "redirect":
+				if got.URL != tt.value {
+					t.Fatalf("URL=%q want %q", got.URL, tt.value)
+				}
+			case "token":
+				if got.Token != tt.value {
+					t.Fatalf("token=%q want %q", got.Token, tt.value)
+				}
+			case "cookie":
+				if got.Cookie != tt.value {
+					t.Fatalf("cookie=%q want %q", got.Cookie, tt.value)
+				}
+			}
+		})
+	}
+}
+
+func TestLoginDryRun(t *testing.T) {
+	out, errb, code := runTool(t, "--dry-run", "--success-url", "/ok", "login", "https://example.test/login")
+	if code != 0 || errb != "" {
+		t.Fatalf("dry run code=%d err=%q", code, errb)
+	}
+	if !strings.Contains(out, `success_url="/ok"`) || !strings.Contains(out, `domain="example.test"`) {
+		t.Fatalf("unexpected dry run: %q", out)
+	}
+}

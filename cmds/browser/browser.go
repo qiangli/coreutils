@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,6 +31,11 @@ func run(rc *tool.RunContext, args []string) int {
 	asJSON := fs.Bool("json", false, "emit JSON result envelopes")
 	mode := fs.String("mode", "probe", "browser mode: probe")
 	probeURL := fs.String("probe-url", probe.DefaultURL, "Chrome remote debugging URL for probe mode")
+	successURL := fs.String("success-url", "", "login completion URL substring")
+	tokenSelector := fs.String("token-selector", "", "CSS selector whose value/text is the login token")
+	cookieName := fs.String("cookie", "", "cookie name that indicates login completion")
+	dryRun := fs.Bool("dry-run", false, "for login, print what would be polled")
+	loginTimeout := fs.Duration("timeout", 2*time.Minute, "login polling timeout")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -47,6 +53,17 @@ func run(rc *tool.RunContext, args []string) int {
 		return browserStatus(rc, ctx, *mode, *probeURL, *asJSON)
 	case "fetch":
 		return browserFetch(rc, ctx, operands[1:], *asJSON)
+	case "login":
+		return browserLogin(rc, ctx, operands[1:], loginOptions{
+			Mode:          *mode,
+			ProbeURL:      *probeURL,
+			SuccessURL:    *successURL,
+			TokenSelector: *tokenSelector,
+			Cookie:        *cookieName,
+			DryRun:        *dryRun,
+			Timeout:       *loginTimeout,
+			JSON:          *asJSON,
+		})
 	}
 
 	action, err := actionFromArgs(operands)
@@ -63,6 +80,156 @@ func run(rc *tool.RunContext, args []string) int {
 		return printNoBrowser(rc, *asJSON, *mode, err)
 	}
 	return printResult(rc, res, *asJSON)
+}
+
+type loginOptions struct {
+	Mode          string
+	ProbeURL      string
+	SuccessURL    string
+	TokenSelector string
+	Cookie        string
+	DryRun        bool
+	Timeout       time.Duration
+	JSON          bool
+}
+
+type loginSpec struct {
+	SuccessURL    string `json:"success_url,omitempty"`
+	TokenSelector string `json:"token_selector,omitempty"`
+	Cookie        string `json:"cookie,omitempty"`
+	Domain        string `json:"domain,omitempty"`
+}
+
+type loginState struct {
+	URL     string
+	Token   string
+	Cookies []loginCookie
+}
+
+type loginCookie struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Domain string `json:"domain"`
+}
+
+type loginCompletion struct {
+	Done   bool   `json:"done"`
+	Reason string `json:"reason,omitempty"`
+	Token  string `json:"token,omitempty"`
+	Cookie string `json:"cookie,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+
+func browserLogin(rc *tool.RunContext, ctx context.Context, args []string, opt loginOptions) int {
+	if len(args) != 1 {
+		return tool.UsageError(rc, cmd, "login requires URL")
+	}
+	loginURL := args[0]
+	if opt.SuccessURL == "" && opt.TokenSelector == "" && opt.Cookie == "" {
+		return tool.UsageError(rc, cmd, "login requires --success-url, --token-selector, or --cookie")
+	}
+	spec := loginSpec{
+		SuccessURL:    opt.SuccessURL,
+		TokenSelector: opt.TokenSelector,
+		Cookie:        opt.Cookie,
+		Domain:        domainForURL(loginURL),
+	}
+	if opt.DryRun {
+		if opt.JSON {
+			return writeJSON(rc, map[string]any{"url": loginURL, "poll": spec, "dry_run": true})
+		}
+		fmt.Fprintf(rc.Out, "url=%s success_url=%q token_selector=%q cookie=%q domain=%q\n", loginURL, spec.SuccessURL, spec.TokenSelector, spec.Cookie, spec.Domain)
+		return 0
+	}
+
+	client, err := clientForMode(ctx, opt.Mode, opt.ProbeURL)
+	if err != nil {
+		return printNoBrowser(rc, opt.JSON, opt.Mode, err)
+	}
+	defer client.Close()
+	if res, err := client.Execute(ctx, wire.Action{Type: wire.ActionNavigate, URL: loginURL}); err != nil {
+		return printNoBrowser(rc, opt.JSON, opt.Mode, err)
+	} else if !res.Success {
+		return printResult(rc, res, opt.JSON)
+	}
+
+	deadline := time.Now().Add(opt.Timeout)
+	for {
+		state := pollLoginState(ctx, client, spec)
+		done := DetectLoginCompletion(spec, state)
+		if done.Done {
+			if opt.JSON {
+				return writeJSON(rc, done)
+			}
+			switch {
+			case done.Token != "":
+				fmt.Fprintln(rc.Out, done.Token)
+			case done.Cookie != "":
+				fmt.Fprintln(rc.Out, done.Cookie)
+			default:
+				fmt.Fprintln(rc.Out, done.URL)
+			}
+			return 0
+		}
+		if time.Now().After(deadline) {
+			if opt.JSON {
+				return writeJSON(rc, map[string]any{"done": false, "error": "login timed out"})
+			}
+			fmt.Fprintln(rc.Err, "browser login: timed out waiting for completion")
+			return 1
+		}
+		select {
+		case <-ctx.Done():
+			fmt.Fprintf(rc.Err, "browser login: %v\n", ctx.Err())
+			return 1
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func pollLoginState(ctx context.Context, client browser.Client, spec loginSpec) loginState {
+	var state loginState
+	if res, err := client.Execute(ctx, wire.Action{Type: wire.ActionEvaluate, Script: "location.href"}); err == nil && res != nil && res.Success {
+		state.URL = res.Data
+	}
+	if spec.TokenSelector != "" {
+		script := fmt.Sprintf(`(function(){var el=document.querySelector(%q); return el ? (el.value || el.textContent || "") : "";})()`, spec.TokenSelector)
+		if res, err := client.Execute(ctx, wire.Action{Type: wire.ActionEvaluate, Script: script}); err == nil && res != nil && res.Success {
+			state.Token = res.Data
+		}
+	}
+	if spec.Cookie != "" {
+		res, err := client.Execute(ctx, wire.Action{Type: wire.ActionCookiesGet, Name: spec.Cookie, Domain: spec.Domain})
+		if err == nil && res != nil && res.Success && res.Data != "" {
+			_ = json.Unmarshal([]byte(res.Data), &state.Cookies)
+		}
+	}
+	return state
+}
+
+func DetectLoginCompletion(spec loginSpec, state loginState) loginCompletion {
+	if spec.SuccessURL != "" && strings.Contains(state.URL, spec.SuccessURL) {
+		return loginCompletion{Done: true, Reason: "redirect", URL: state.URL}
+	}
+	if spec.TokenSelector != "" && strings.TrimSpace(state.Token) != "" {
+		return loginCompletion{Done: true, Reason: "token", Token: strings.TrimSpace(state.Token), URL: state.URL}
+	}
+	if spec.Cookie != "" {
+		for _, c := range state.Cookies {
+			if c.Name == spec.Cookie && c.Value != "" {
+				return loginCompletion{Done: true, Reason: "cookie", Cookie: c.Value, URL: state.URL}
+			}
+		}
+	}
+	return loginCompletion{Done: false}
+}
+
+func domainForURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 func clientForMode(ctx context.Context, mode, probeURL string) (browser.Client, error) {
