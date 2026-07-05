@@ -15,6 +15,7 @@
 package sedcmd
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -174,12 +175,21 @@ func run(rc *tool.RunContext, args []string) int {
 
 // apply compiles the program and streams input→output through the engine.
 func apply(program string, quiet bool, in io.Reader, out io.Writer) error {
+	if fast, err := gosed.NewFastSubstitution(program, quiet); err != nil {
+		return err
+	} else if fast != nil {
+		return fast.Run(in, out)
+	}
+
 	eng, err := newEngine(program, quiet)
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(out, eng.Wrap(in))
-	return err
+	bw := bufio.NewWriter(out)
+	if _, err := io.Copy(bw, eng.Wrap(in)); err != nil {
+		return err
+	}
+	return bw.Flush()
 }
 
 func editInPlace(rc *tool.RunContext, program string, quiet bool, file, suffix string) error {
