@@ -3,6 +3,10 @@
 Post-optimization performance baseline for the hot coreutils commands.
 Committed alongside the harness so it travels with the code and gates regressions.
 
+**Detailed side-by-side results:** `results/bashy-vs-gnu-9.11.md` (full per-command
+timing, all 15 T1 + 5 T2 workloads, before/after/vs-GNU) · `results/fidelity-vs-gnu-9.11.md`
+(62/62 byte-identical conformance matrix). This file is the terse regression gate.
+
 **Established:** 2026-07-05 (perf-sprint: wc/sort/cut/base64 optimized by the
 weave fleet). **Method:** `go test -bench=. -benchmem ./cmds/<cmd>/` — the
 `_bench_test.go` files are the executable guard. Machine: Apple M-series
