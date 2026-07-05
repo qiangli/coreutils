@@ -15,6 +15,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/base64"
 	_ "github.com/qiangli/coreutils/cmds/basename"
 	_ "github.com/qiangli/coreutils/cmds/batch"
+	_ "github.com/qiangli/coreutils/cmds/browser"
 	_ "github.com/qiangli/coreutils/cmds/cal"
 	_ "github.com/qiangli/coreutils/cmds/cat"
 	_ "github.com/qiangli/coreutils/cmds/chgrp"
