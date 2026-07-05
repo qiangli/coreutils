@@ -127,18 +127,18 @@ type weaveItem struct {
 	// podman/OCI containers. loadWeaveQueue migrates it into Workspace on
 	// load (then it stops being written — omitempty), so existing queues
 	// keep their stored clone paths without a migration step.
-	LegacyWorkspace string    `json:"sandbox,omitempty"`
-	Branch string `json:"branch,omitempty"`
+	LegacyWorkspace string `json:"sandbox,omitempty"`
+	Branch          string `json:"branch,omitempty"`
 	// BaseSHA is the base-branch commit captured in the WORKSPACE at
 	// clone time. weaveMeasureBranch counts commits ahead against this
 	// immutable sha rather than the base branch NAME — the workspace's
 	// local "main" ref drifts (origin is removed; the root branch may
 	// advance after clone), which is what made `weave status` miscount
 	// "0 commits ahead" when the branch actually had a commit.
-	BaseSHA         string    `json:"base_sha,omitempty"`
-	Created         time.Time `json:"created"`
-	StartedAt       time.Time `json:"started_at,omitempty"`
-	FinishedAt      time.Time `json:"finished_at,omitempty"`
+	BaseSHA    string    `json:"base_sha,omitempty"`
+	Created    time.Time `json:"created"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
 	// CommitsAhead and Head are the wrapper's own git measurement of
 	// the workspace branch at terminal time (rev-list count over base,
 	// plus HEAD). They are the EVIDENCE behind a submitted state for
@@ -4450,7 +4450,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale bool, flags *weaveOutputFlags)
 // Times out after timeout (default 1h); on timeout, emits
 // precondition_failed and returns ExitPrecondFail so the
 // orchestrator can react.
-func runWeaveWait(cmd *cobra.Command, issueID int64, all bool, timeout time.Duration, flags *weaveOutputFlags) error {
+func runWeaveWait(cmd *cobra.Command, issueID int64, all bool, timeout time.Duration, broker bool, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	if !all && issueID <= 0 {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave wait",
@@ -4482,6 +4482,7 @@ func runWeaveWait(cmd *cobra.Command, issueID int64, all bool, timeout time.Dura
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	brokers := map[int64]*gateBroker{}
 
 	for {
 		q, err := loadWeaveQueue(dir)
@@ -4495,6 +4496,9 @@ func runWeaveWait(cmd *cobra.Command, issueID int64, all bool, timeout time.Dura
 			if it == nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave wait",
 					weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", issueID, weaveOtherActiveQueuesHintSuffix(dir))))
+			}
+			if broker && it.State == "working" {
+				runGateBrokerForItem(brokers, cmd.ErrOrStderr(), dir, it, time.Now())
 			}
 			if isTerminalState(it.State) {
 				return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave wait", map[string]any{
@@ -4518,6 +4522,9 @@ func runWeaveWait(cmd *cobra.Command, issueID int64, all bool, timeout time.Dura
 				switch it.State {
 				case "todo", "working":
 					pending++
+					if broker && it.State == "working" {
+						runGateBrokerForItem(brokers, cmd.ErrOrStderr(), dir, it, time.Now())
+					}
 				default:
 					if isTerminalState(it.State) {
 						ready = append(ready, readyItem{ID: it.ID, State: it.State, ExitCode: it.ExitCode, LogPath: it.LogPath})
