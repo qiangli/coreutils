@@ -32,6 +32,12 @@ type ToolProfile struct {
 	SupportsGracefulQuit bool     `json:"supports_graceful_quit"`
 	Notes                string   `json:"notes,omitempty"`
 
+	// AuthHint is a human-facing instruction for authenticating the tool when
+	// a readiness probe reports needs-login (e.g. "run `agy` once
+	// interactively to sign in"). Empty for tools that authenticate via an
+	// env var / API key with no interactive step.
+	AuthHint string `json:"auth_hint,omitempty"`
+
 	// Contract verification — set by `fleet interview --live`, which runs the
 	// tool with its HeadlessArgs on a trivial prompt and watches for a flag-parse
 	// error (the signature of a STALE contract: e.g. codex 0.141.0 renamed
@@ -106,7 +112,8 @@ var seededLaunchContracts = map[string]ToolProfile{
 	"agy": {
 		HeadlessArgs: []string{"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},
 		SupportsSay:  false, SupportsGracefulQuit: true,
-		Notes: "antigravity; headless `-p` (use `-i` for a steerable TUI). Bump --print-timeout (default 5m).",
+		Notes:    "antigravity; headless `-p` (use `-i` for a steerable TUI). Bump --print-timeout (default 5m).",
+		AuthHint: "Antigravity requires a browser sign-in: run `agy` once interactively and complete the login, then it works headless. Not usable in a headless fleet until signed in.",
 	},
 	"opencode": {
 		HeadlessArgs: []string{"run"},
@@ -237,6 +244,70 @@ func liveProbeContract(tool string, args []string, now time.Time) (bool, string)
 		return true, "flags parse (tool ran past the 25s probe without a flag error)"
 	}
 	return true, "flags parse"
+}
+
+// authGateSignatures are stdout/stderr markers that mean the tool is blocked on
+// an interactive AUTH or TRUST gate rather than doing work — the failure mode
+// that silently stalls a headless fleet worker until its idle-timeout (agy
+// "you are currently not signed in", codex/claude "do you trust this
+// directory?"). Matched case-insensitively.
+var authGateSignatures = []string{
+	"not signed in", "sign in", "sign-in", "please log in", "please login",
+	"not logged in", "log in to", "login required", "authentication required",
+	"authenticate", "unauthorized", "run `login`", "run 'login'",
+	"do you trust", "trust the contents", "trust this", "requires permission",
+	"you must log in", "session expired", "no api key", "api key not",
+}
+
+// ReadyStatus values from liveProbeReady.
+const (
+	ReadyOK        = "ready"          // ran headless and responded / parsed fine
+	ReadyNeedsAuth = "needs-login"    // blocked on an auth/trust gate
+	ReadyStale     = "stale-contract" // rejected a launch flag (contract drift)
+)
+
+// liveProbeReady runs the tool headless on a trivial prompt and classifies
+// whether it is actually READY to be dispatched, distinguishing a working tool
+// from one silently blocked on an auth/trust gate. It is the readiness check
+// `fleet --auth` and a conductor pre-flight use so an unauthenticated tool
+// (installed and "available" on PATH) is caught before it stalls a real run.
+func liveProbeReady(tool string, args []string) (status, note string) {
+	full := append(append([]string{}, args...), "Reply with exactly PROBE_OK and do nothing else.")
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, tool, full...)
+	if d, err := os.MkdirTemp("", "weave-ready-probe-"); err == nil {
+		cmd.Dir = d
+		defer os.RemoveAll(d)
+	}
+	out, _ := cmd.CombinedOutput()
+	return classifyReadyOutput(string(out), ctx.Err() == context.DeadlineExceeded)
+}
+
+// classifyReadyOutput turns a readiness-probe's combined output (and whether it
+// hit the deadline) into a ReadyStatus. Split out from liveProbeReady so the
+// classification is unit-testable without launching a real tool.
+func classifyReadyOutput(raw string, timedOut bool) (status, note string) {
+	low := strings.ToLower(raw)
+	for _, sig := range contractErrSignatures {
+		if strings.Contains(raw, sig) {
+			return ReadyStale, "rejected a flag (" + strings.TrimSpace(sig) + ") — launch contract drifted"
+		}
+	}
+	for _, sig := range authGateSignatures {
+		if strings.Contains(low, sig) {
+			return ReadyNeedsAuth, "auth/trust gate detected (" + sig + ")"
+		}
+	}
+	if strings.Contains(raw, "PROBE_OK") {
+		return ReadyOK, "verified end-to-end (headless launch + tool responded)"
+	}
+	// Stalled: ran to the deadline with (essentially) no output — the exact
+	// shape of a tool parked at an interactive prompt it never gets to clear.
+	if timedOut && len(strings.TrimSpace(raw)) < 40 {
+		return ReadyNeedsAuth, "stalled with no output past 25s — likely an interactive auth/trust gate"
+	}
+	return ReadyOK, "responded (no auth gate, no flag error)"
 }
 
 // recordToolOutcome appends a role outcome to a tool's track record (used by the

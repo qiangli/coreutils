@@ -28,9 +28,10 @@ func newWeaveFleetCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var fleetCSV string
 	var probe bool
+	var auth bool
 	cmd := &cobra.Command{
 		Use:   "fleet",
-		Short: "Show each fleet tool's availability (installed? on PATH? cooling down?)",
+		Short: "Show each fleet tool's availability (installed? on PATH? cooling down? signed in?)",
 		Long: `fleet reports, for each configured agent CLI, whether it is assignable
 right now — and why not if not. This is the surface an orchestrator queries
 BEFORE assigning a tool, so it can skip tools it cannot launch and fail over
@@ -52,12 +53,13 @@ A tool is "available" only if it is installed AND not cooling down.
 The roster defaults to ` + fmt.Sprintf("%v", weaveDefaultFleet) + `; override
 with --fleet claude,codex,...`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeaveFleet(cmd, fleetCSV, probe, &flags)
+			return runWeaveFleet(cmd, fleetCSV, probe, auth, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated tool roster (default claude,codex,opencode,agy)")
 	cmd.Flags().BoolVar(&probe, "probe", false, "Also probe capability (`<tool> --version`, 3s timeout) and cache it")
+	cmd.Flags().BoolVar(&auth, "auth", false, "Also probe AUTH-readiness (headless launch on a trivial prompt; catches a tool that is installed but not signed in, before it stalls a real run)")
 	cmd.AddCommand(newWeaveFleetInterviewCmd())
 	cmd.AddCommand(newWeaveFleetReviewCmd())
 	return cmd
@@ -189,6 +191,10 @@ type fleetRow struct {
 	Probed      bool   `json:"probed,omitempty"`
 	Capable     bool   `json:"capable,omitempty"` // --version exited cleanly
 	Version     string `json:"version,omitempty"`
+	AuthProbed  bool   `json:"auth_probed,omitempty"`
+	Auth        string `json:"auth,omitempty"`      // ready | needs-login | stale-contract
+	AuthNote    string `json:"auth_note,omitempty"` // why
+	AuthHint    string `json:"auth_hint,omitempty"` // how to fix (needs-login only)
 }
 
 // fleetProbeEntry is one tool's cached capability probe.
@@ -199,7 +205,7 @@ type fleetProbeEntry struct {
 	ProbedAt time.Time `json:"probed_at"`
 }
 
-func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe bool, flags *weaveOutputFlags) error {
+func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth bool, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -225,6 +231,14 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe bool, flags *weave
 	for _, tool := range fleet {
 		row, d := fleetRowFor(dir, tool, now, probe, cache)
 		dirty = dirty || d
+		if auth && row.Available {
+			p := seededLaunchContracts[tool]
+			status, note := liveProbeReady(tool, p.HeadlessArgs)
+			row.AuthProbed, row.Auth, row.AuthNote = true, status, note
+			if status == ReadyNeedsAuth {
+				row.AuthHint = p.AuthHint
+			}
+		}
 		rows = append(rows, row)
 	}
 	if dirty {
@@ -247,6 +261,15 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe bool, flags *weave
 					m["version"] = r.Version
 				}
 			}
+			if r.AuthProbed {
+				m["auth_probed"], m["auth"] = true, r.Auth
+				if r.AuthNote != "" {
+					m["auth_note"] = r.AuthNote
+				}
+				if r.AuthHint != "" {
+					m["auth_hint"] = r.AuthHint
+				}
+			}
 			tools[i] = m
 		}
 		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet", map[string]any{"tools": tools}))
@@ -265,6 +288,19 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe bool, flags *weave
 			fmt.Fprintf(cmd.OutOrStdout(), "%-12s available  %s (%s)\n", r.Tool, r.Version, r.Path)
 		default:
 			fmt.Fprintf(cmd.OutOrStdout(), "%-12s available  (%s)\n", r.Tool, r.Path)
+		}
+		if r.AuthProbed {
+			switch r.Auth {
+			case ReadyOK:
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s   auth: READY — %s\n", "", r.AuthNote)
+			case ReadyNeedsAuth:
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s   auth: NEEDS-LOGIN — %s\n", "", r.AuthNote)
+				if r.AuthHint != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "%-12s         ↳ %s\n", "", r.AuthHint)
+				}
+			case ReadyStale:
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s   auth: STALE-CONTRACT — %s\n", "", r.AuthNote)
+			}
 		}
 	}
 	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet", nil))
