@@ -311,9 +311,5 @@ func bitsToFileMode(b uint32) os.FileMode {
 
 // reason unwraps os wrapper errors so diagnostics read like GNU's.
 func reason(err error) error {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

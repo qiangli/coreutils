@@ -17,7 +17,6 @@
 package lscmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -470,11 +469,7 @@ func joinDisplay(dir, name string) string {
 }
 
 func errMsg(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }
 
 // humanSize renders n bytes in GNU --human-readable form: powers of

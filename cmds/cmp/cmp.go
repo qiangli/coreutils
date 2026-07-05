@@ -8,10 +8,8 @@ package cmpcmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strconv"
 	"strings"
@@ -333,9 +331,5 @@ func multiplier(suf string) (int64, bool) {
 }
 
 func sysErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

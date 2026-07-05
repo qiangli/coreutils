@@ -9,10 +9,8 @@ package tailcmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"os"
 	"strings"
@@ -376,9 +374,5 @@ func openOperand(rc *tool.RunContext, name string) (io.Reader, io.Closer, error)
 }
 
 func sysErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

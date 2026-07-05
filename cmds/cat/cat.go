@@ -10,10 +10,8 @@ package catcmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 
@@ -275,9 +273,5 @@ func writeTransformed(w *bufio.Writer, c byte, o catOpts) {
 // sysErr unwraps *fs.PathError so messages read "cat: NAME: no such
 // file or directory" (GNU shape) instead of duplicating the path.
 func sysErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

@@ -9,7 +9,6 @@
 package unlinkcmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
@@ -55,9 +54,5 @@ func run(rc *tool.RunContext, args []string) int {
 
 // reason unwraps os wrapper errors so diagnostics read like GNU's.
 func reason(err error) error {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

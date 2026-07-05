@@ -267,8 +267,5 @@ func splitLines(data []byte) []string {
 // pathErr unwraps *fs.PathError so diagnostics read like GNU's
 // "No such file or directory" instead of Go's "open /abs/path: ...".
 func pathErr(err error) error {
-	if pe, ok := err.(*os.PathError); ok {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

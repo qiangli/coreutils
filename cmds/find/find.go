@@ -626,11 +626,7 @@ func displayPath(operand, root, p string) string {
 // pathErrMsg strips Go's "lstat <path>: " prefix so diagnostics read
 // like GNU's "find: '<name>': <reason>".
 func pathErrMsg(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }
 
 // ---------------------------------------------------------------------------

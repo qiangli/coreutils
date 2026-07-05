@@ -13,10 +13,8 @@ package hexdumpcmd
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 
@@ -156,9 +154,5 @@ func writeLine(w *bufio.Writer, offset int64, b []byte) error {
 }
 
 func sysErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

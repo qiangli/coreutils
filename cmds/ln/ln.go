@@ -8,7 +8,6 @@
 package lncmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -106,15 +105,8 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-// reason unwraps os wrapper errors so diagnostics read like GNU's.
+// reason unwraps os wrapper errors and GNU-capitalizes so diagnostics read
+// like GNU's (strerror shape).
 func reason(err error) error {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	var le *os.LinkError
-	if errors.As(err, &le) {
-		return le.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

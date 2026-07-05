@@ -409,8 +409,5 @@ func readLines(rc *tool.RunContext, operand string) ([]string, error) {
 }
 
 func pathErr(err error) error {
-	if pe, ok := err.(*os.PathError); ok {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

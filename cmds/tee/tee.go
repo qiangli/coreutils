@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 
 	"github.com/qiangli/coreutils/tool"
@@ -104,9 +103,5 @@ func run(rc *tool.RunContext, args []string) int {
 // pathErr unwraps *fs.PathError so diagnostics read "tee: f: no such
 // file or directory" instead of repeating the operation and path.
 func pathErr(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }

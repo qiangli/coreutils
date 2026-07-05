@@ -70,17 +70,17 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	status, err := interp.ExecProgram(prog, &interp.Config{
-		Stdin:   readerOrEmpty(rc.In),
-		Output:  rc.Out,
+		Stdin:  readerOrEmpty(rc.In),
+		Output: rc.Out,
 		// Deterministic LF output on every platform (GoAWK's default
 		// SmartNewlineMode emits CRLF on Windows, violating the LC_ALL=C
 		// no-platform-variance contract).
 		NewlineOutput: interp.RawNewlineMode,
-		Error:   rc.Err,
-		Argv0:   cmd.Name,
-		Args:    resolveFiles(rc, files),
-		Vars:    vars,
-		Environ: environPairs(rc.Env),
+		Error:         rc.Err,
+		Argv0:         cmd.Name,
+		Args:          resolveFiles(rc, files),
+		Vars:          vars,
+		Environ:       environPairs(rc.Env),
 	})
 	if err != nil {
 		fmt.Fprintf(rc.Err, "awk: %v\n", err)

@@ -10,10 +10,8 @@ package taccmd
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 
@@ -113,9 +111,5 @@ func tacWrite(w io.Writer, data, sep []byte) {
 }
 
 func sysErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

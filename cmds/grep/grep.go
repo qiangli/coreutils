@@ -28,7 +28,6 @@ package grepcmd
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -510,11 +509,7 @@ func (g *grepper) report(name string, err error) {
 // pathErrMsg strips Go's "open <path>: " prefix so diagnostics read
 // like GNU's "grep: <name>: <reason>".
 func pathErrMsg(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }
 
 // joinDisplay maps an OS walk path back onto the operand as the user

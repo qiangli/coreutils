@@ -10,10 +10,8 @@ package wccmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 
@@ -255,9 +253,5 @@ func printRow(w io.Writer, sel selection, c counts, width int, name string) {
 }
 
 func sysErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

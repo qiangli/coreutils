@@ -294,13 +294,5 @@ func allDigits(s string) bool {
 // reason unwraps os wrapper errors so diagnostics read like GNU's
 // ("No such file or directory" instead of "stat /x: no such file...").
 func reason(err error) error {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	var le *os.LinkError
-	if errors.As(err, &le) {
-		return le.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

@@ -9,10 +9,8 @@ package shufcmd
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math/rand/v2"
 	"os"
 	"strconv"
@@ -176,9 +174,5 @@ func sampleRange(n, k uint64) []uint64 {
 // pathErr unwraps *fs.PathError so diagnostics read "shuf: f: no such
 // file or directory" instead of repeating the operation and path.
 func pathErr(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }

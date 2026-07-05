@@ -1,11 +1,11 @@
 package rmcmd
 
 import (
-	"runtime"
 	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 

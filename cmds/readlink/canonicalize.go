@@ -8,7 +8,6 @@ package readlinkcmd
 
 import (
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,9 +121,5 @@ func joinOne(dir, name string) string {
 // "realpath: OPERAND: no such file or directory" without repeating
 // the resolved path inside the message.
 func pathErrText(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }

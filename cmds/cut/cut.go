@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"os"
 
@@ -310,9 +309,5 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 // pathErr unwraps *fs.PathError so diagnostics read "cut: f: no such
 // file or directory" instead of repeating the operation and path.
 func pathErr(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }

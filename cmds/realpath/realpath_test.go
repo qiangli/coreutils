@@ -103,7 +103,7 @@ func TestRealpathSymlinks(t *testing.T) {
 	mkSymlink(t, "loopB", filepath.Join(dir, "loopA"))
 	mkSymlink(t, "loopA", filepath.Join(dir, "loopB"))
 	_, errb, code := runIn(t, dir, "loopA")
-	if code != 1 || !strings.Contains(errb, "too many levels of symbolic links") {
+	if code != 1 || !strings.Contains(errb, "Too many levels of symbolic links") {
 		t.Errorf("realpath loopA = (code=%d, err=%q)", code, errb)
 	}
 }
@@ -226,7 +226,7 @@ func TestRealpathErrors(t *testing.T) {
 	}
 	// empty operand never exists
 	_, errb, code = runIn(t, dir, "")
-	if code != 1 || !strings.Contains(errb, "no such file or directory") {
+	if code != 1 || !strings.Contains(errb, "No such file or directory") {
 		t.Errorf("empty operand: code=%d err=%q", code, errb)
 	}
 }

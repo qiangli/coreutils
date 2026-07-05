@@ -11,7 +11,6 @@
 package dfcmd
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -178,11 +177,7 @@ func extractShort(args []string, chars string) ([]string, map[byte]bool) {
 }
 
 func errMsg(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }
 
 // humanSize renders n bytes in GNU --human-readable form: powers of

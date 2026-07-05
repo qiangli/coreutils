@@ -552,11 +552,7 @@ func errText(err error) string {
 	if errors.Is(err, iofs.ErrNotExist) {
 		return "No such file or directory"
 	}
-	var pe *iofs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }
 
 // ---------------------------------------------------------------------------

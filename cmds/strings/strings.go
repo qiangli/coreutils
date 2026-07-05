@@ -10,10 +10,8 @@ package stringscmd
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"strings"
 
@@ -132,9 +130,5 @@ func scan(r io.Reader, w *bufio.Writer, minLen int, radix string) error {
 }
 
 func sysErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
+	return tool.SysErr(err)
 }

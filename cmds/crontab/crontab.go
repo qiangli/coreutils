@@ -280,5 +280,3 @@ func parseCronTab(content string) ([]*schedule.Job, []error) {
 	}
 	return jobs, errs
 }
-
-

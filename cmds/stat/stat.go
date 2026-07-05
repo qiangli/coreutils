@@ -14,7 +14,6 @@
 package statcmd
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -298,9 +297,5 @@ func modeString(m os.FileMode) string {
 }
 
 func errMsg(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }

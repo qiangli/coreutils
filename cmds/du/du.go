@@ -15,7 +15,6 @@
 package ducmd
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -110,7 +109,14 @@ func (d *duRun) walk(display, full string, depth int) (int64, bool) {
 		return 0, false
 	}
 	if fi.IsDir() {
-		total := d.usage(fi)
+		// GNU du counts a directory's own DISK BLOCKS (default/block mode) but NOT
+		// its apparent st_size: with -b/--apparent-size the total is the sum of file
+		// *contents* only, so a directory contributes 0 to its own apparent size.
+		// (GNU `stat` still reports the dir's st_size; GNU `du -b` ignores it.)
+		var total int64
+		if !d.apparent {
+			total = d.usage(fi)
+		}
 		ents, rerr := os.ReadDir(full)
 		if rerr != nil {
 			fmt.Fprintf(d.rc.Err, "du: cannot read directory '%s': %s\n", display, errMsg(rerr))
@@ -160,11 +166,7 @@ func joinDisplay(dir, name string) string {
 }
 
 func errMsg(err error) string {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
+	return tool.SysErrString(err)
 }
 
 // humanSize renders n bytes in GNU --human-readable form: powers of
