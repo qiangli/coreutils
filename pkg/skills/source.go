@@ -206,6 +206,9 @@ func (c *Catalog) parse(dirName string, body []byte, src Source) Skill {
 		sk.Dhnt = parseDhntInfo(canon)
 	}
 	_, sk.HasTasks = src.File(dirName, "tasks.md")
+	if !sk.HasTasks && sk.Meta["tasks"] != "" {
+		sk.HasTasks = true // tasks POINTER (resolved under cwd at run time)
+	}
 	return sk
 }
 

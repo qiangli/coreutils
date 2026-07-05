@@ -225,6 +225,9 @@ type runPrep struct {
 	ctxKey string
 	tier   string
 	prims  map[string]dhntskills.PrimitiveFn // pre-bound primitives (e.g. the dag target)
+	// preflight, when non-nil, replaces the convention-derived needed
+	// set in the audit (dag targets feed their declared Effects: here).
+	preflight []dhntskills.Effect
 }
 
 // prepareRun runs the shared gate: valid canonical face, applicable
@@ -278,7 +281,11 @@ func prepareRun(cfg *config, sk Skill, src Source, ps *ProbeSet) (runPrep, error
 // bind, run, attest. A failed contract is a Valid=false record, not an
 // error.
 func runEffective(name string, effective dhntskills.Skill, p runPrep, dir string, log io.Writer) (AttestRecord, error) {
-	if needed := preflightEffects(effective); !dhntskills.EffectsWithin(needed, effective.EffectCap) {
+	needed := p.preflight
+	if needed == nil {
+		needed = preflightEffects(effective)
+	}
+	if !dhntskills.EffectsWithin(needed, effective.EffectCap) {
 		var atoms []string
 		for _, e := range needed {
 			atoms = append(atoms, e.String())

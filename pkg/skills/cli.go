@@ -442,7 +442,7 @@ func runTarget(cmd *cobra.Command, cfg *config, name, target string, asJSON bool
 		return fmt.Errorf("skills: %q not found", name)
 	}
 	ps, _ := cfg.probes(false)
-	rec, attested, err := runTargetSkill(cfg, sk, src, ps, target, cmd.ErrOrStderr())
+	rec, attested, err := runTargetSkill(cfg, sk, src, ps, target, mustGetwd(), cmd.ErrOrStderr())
 	if !attested {
 		// Executable-but-uncontracted rung: plain result, no receipt.
 		if err != nil {

@@ -318,21 +318,39 @@ func (d *Document) mergeFrom(child *Document) {
 	}
 }
 
-// Discover locates the task file in dir: DAG.md if present, else the first
-// (lexical) *.md containing a `## Tasks` section.
+// Discover locates the task file in dir: a file named dag.md in ANY
+// letter case, else the first (lexical) *.md containing a `## Tasks`
+// section. Case is a transcription artifact, not identity (the dhnt
+// alphabet has no upper case), so dag.md ≡ DAG.md ≡ Dag.md on every
+// filesystem; when a case-sensitive filesystem holds several variants,
+// lowercase `dag.md` wins, then the ecosystem-caps `DAG.md`, then the
+// lexically first remaining variant.
 func Discover(dir string) (string, error) {
-	if fi, err := os.Stat(filepath.Join(dir, "DAG.md")); err == nil && !fi.IsDir() {
-		return filepath.Join(dir, "DAG.md"), nil
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return "", errf(weavecli.ExitInvalidArg, "%v", err)
 	}
-	var mds []string
+	var variants, mds []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+		if e.IsDir() {
+			continue
+		}
+		if strings.EqualFold(e.Name(), "dag.md") {
+			variants = append(variants, e.Name())
+		}
+		if strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
 			mds = append(mds, e.Name())
 		}
+	}
+	if len(variants) > 0 {
+		sort.Slice(variants, func(i, j int) bool {
+			ri, rj := dagNameRank(variants[i]), dagNameRank(variants[j])
+			if ri != rj {
+				return ri < rj
+			}
+			return variants[i] < variants[j]
+		})
+		return filepath.Join(dir, variants[0]), nil
 	}
 	sort.Strings(mds)
 	for _, name := range mds {
@@ -345,7 +363,19 @@ func Discover(dir string) (string, error) {
 		}
 	}
 	return "", errf(weavecli.ExitInvalidArg,
-		"no DAG.md or *.md with a '## Tasks' section in %s", dir)
+		"no dag.md (any case) or *.md with a '## Tasks' section in %s", dir)
+}
+
+// dagNameRank orders same-name case variants: lowercase first (the
+// dhnt-native spelling), the caps compat spelling second.
+func dagNameRank(name string) int {
+	switch name {
+	case "dag.md":
+		return 0
+	case "DAG.md":
+		return 1
+	}
+	return 2
 }
 
 func hasTasksSection(data []byte) bool {
