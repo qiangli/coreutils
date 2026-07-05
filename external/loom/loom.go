@@ -490,11 +490,20 @@ func loomProxyHandler(target, publicPrefix string) (http.Handler, error) {
 		stripWebauthHeaders(req.Header)
 		user, email, name := proxyIdentity(req)
 		if user != "" {
-			req.Header.Set("X-WEBAUTH-USER", user)
-			req.Header.Set("X-WEBAUTH-EMAIL", firstNonEmpty(email, user))
-			if name != "" {
-				req.Header.Set("X-WEBAUTH-FULLNAME", name)
+			// Gitea rejects '@' (and most punctuation) in a username, and its
+			// reverse-proxy auto-registration SILENTLY DROPS a request whose
+			// X-WEBAUTH-USER isn't a valid username — leaving the caller
+			// anonymous. The cloudbox SSO vouch is commonly an email
+			// (a@b.com), so passing it verbatim surfaces as an unexpected
+			// "sign in" + a login popup on New Issue for an already-vouched
+			// user. Map it to a valid Gitea username; the real address still
+			// rides in X-WEBAUTH-EMAIL so Gitea records the right email.
+			if name == "" {
+				name = user
 			}
+			req.Header.Set("X-WEBAUTH-USER", giteaUsername(user))
+			req.Header.Set("X-WEBAUTH-EMAIL", firstNonEmpty(email, user))
+			req.Header.Set("X-WEBAUTH-FULLNAME", name)
 		}
 	}
 	rp.ModifyResponse = func(resp *http.Response) error {
@@ -597,6 +606,34 @@ func stripWebauthHeaders(h http.Header) {
 	for _, k := range []string{"X-WEBAUTH-USER", "X-WEBAUTH-EMAIL", "X-WEBAUTH-FULLNAME"} {
 		h.Del(k)
 	}
+}
+
+// giteaUsername maps an arbitrary SSO identity (often an email like a@b.com from
+// the cloudbox vouch) to a valid Gitea username. Gitea usernames allow only
+// [A-Za-z0-9-_.] (no '@', no leading/trailing '.'/'-'), and reverse-proxy
+// auto-registration silently rejects anything else — so an email must be
+// reduced to its local part and sanitized. The full email is preserved
+// separately in X-WEBAUTH-EMAIL. Single-user by design, so local-part
+// collisions across domains don't matter.
+func giteaUsername(id string) string {
+	id = strings.TrimSpace(strings.ToLower(id))
+	if at := strings.IndexByte(id, '@'); at > 0 {
+		id = id[:at]
+	}
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	name := strings.Trim(b.String(), "-.")
+	if name == "" {
+		name = "user"
+	}
+	return name
 }
 
 func proxyIdentity(req *http.Request) (user, email, name string) {
