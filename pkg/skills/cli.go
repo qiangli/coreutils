@@ -115,7 +115,17 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	}
 	verify.Flags().BoolVar(&verifyJSON, "json", false, "machine-readable report")
 
-	root.AddCommand(list, probe, show, add, verify)
+	var runJSON bool
+	run := &cobra.Command{
+		Use:   "run <name>",
+		Short: "execute a dhnt skill and attest it (exit 0 iff the contract held within the cap)",
+		Long:  "run executes a skill's canonical face through the in-process userland:\ncontract predicates and step primitives resolve their concrete commands from\nSKILL.md metadata (check-*/step-* keys), a static pre-flight audit refuses to\nstart when the declared effect cap cannot cover what the bindings report, and\nevery run emits a re-checkable attestation stored in the host-local store.\nCommand output streams to stderr; the receipt is stdout.",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return runRun(cmd, cfg, args[0], runJSON) },
+	}
+	run.Flags().BoolVar(&runJSON, "json", false, "machine-readable receipt")
+
+	root.AddCommand(list, probe, show, add, verify, run)
 	return root
 }
 
@@ -306,6 +316,51 @@ func runVerify(cmd *cobra.Command, cfg *config, name string, asJSON bool) error 
 		return fmt.Errorf("skills: %q did not verify (valid=%v applicable=%v)", name, a.Valid, a.Applicable)
 	}
 	return nil
+}
+
+func runRun(cmd *cobra.Command, cfg *config, name string, asJSON bool) error {
+	sk, src, ok := cfg.catalog().Get(name)
+	if !ok {
+		return fmt.Errorf("skills: %q not found", name)
+	}
+	ps, _ := cfg.probes(false)
+	rec, storePath, err := runSkill(cfg, sk, src, ps, mustGetwd(), cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(rec); err != nil {
+			return err
+		}
+	} else {
+		a := rec.Attest
+		fmt.Fprintf(cmd.OutOrStdout(), "skill: %s\ntier: %s\nvalid: %v\n", rec.Name, rec.Tier, a.Valid)
+		if len(a.Passed) > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "passed: %s\n", strings.Join(a.Passed, " "))
+		}
+		if len(a.Failed) > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "failed: %s\n", strings.Join(a.Failed, " "))
+		}
+		var effs []string
+		for _, e := range a.Effects {
+			effs = append(effs, e.String())
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "effects: %s\ncontext: %s\n", strings.Join(effs, " "), rec.ContextKey)
+		if storePath != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "attested: %s\n", storePath)
+		}
+	}
+	if !rec.Attest.Valid {
+		return fmt.Errorf("skills: %q contract not satisfied", name)
+	}
+	return nil
+}
+
+func mustGetwd() string {
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
 }
 
 // ExitCode maps a NewSkillsCmd Execute error to the repo exit
