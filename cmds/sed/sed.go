@@ -15,11 +15,15 @@
 package sedcmd
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/cmds/sed/internal/gosed"
 	"github.com/qiangli/coreutils/tool"
@@ -174,12 +178,173 @@ func run(rc *tool.RunContext, args []string) int {
 
 // apply compiles the program and streams input→output through the engine.
 func apply(program string, quiet bool, in io.Reader, out io.Writer) error {
+	if !quiet {
+		if subst, ok, err := parseSimpleSubstitution(program); ok || err != nil {
+			if err != nil {
+				return err
+			}
+			return applySimpleSubstitution(subst, in, out)
+		}
+	}
+
 	eng, err := newEngine(program, quiet)
 	if err != nil {
 		return err
 	}
 	_, err = io.Copy(out, eng.Wrap(in))
 	return err
+}
+
+type simpleSubstitution struct {
+	pattern     *regexp.Regexp
+	replacement []byte
+	global      bool
+}
+
+func parseSimpleSubstitution(program string) (*simpleSubstitution, bool, error) {
+	i := skipProgramSpace(program, 0)
+	if i >= len(program) || program[i] != 's' {
+		return nil, false, nil
+	}
+	i++
+	if i >= len(program) {
+		return nil, false, nil
+	}
+	delimiter, size := utf8.DecodeRuneInString(program[i:])
+	if delimiter == utf8.RuneError && size == 1 {
+		return nil, false, nil
+	}
+	i += size
+	if delimiter == '\n' {
+		return nil, false, nil
+	}
+
+	pattern, next, ok := readFastDelimited(program, i, delimiter, false)
+	if !ok {
+		return nil, false, nil
+	}
+	replacement, next, ok := readFastDelimited(program, next, delimiter, true)
+	if !ok {
+		return nil, false, nil
+	}
+
+	modsStart := next
+	for next < len(program) {
+		r, sz := utf8.DecodeRuneInString(program[next:])
+		if r == ';' || unicode.IsSpace(r) {
+			break
+		}
+		next += sz
+	}
+	mods := program[modsStart:next]
+	if mods != "" && mods != "g" {
+		return nil, false, nil
+	}
+	if skipProgramSpace(program, next) != len(program) {
+		return nil, false, nil
+	}
+
+	rx, repl, err := gosed.CompileSimpleSubstitution(pattern, replacement)
+	if err != nil {
+		return nil, true, err
+	}
+	return &simpleSubstitution{pattern: rx, replacement: repl, global: mods == "g"}, true, nil
+}
+
+func skipProgramSpace(s string, i int) int {
+	for i < len(s) {
+		r, sz := utf8.DecodeRuneInString(s[i:])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		i += sz
+	}
+	return i
+}
+
+func readFastDelimited(s string, i int, delimiter rune, replacement bool) (string, int, bool) {
+	var b strings.Builder
+	var previous rune
+	for i < len(s) {
+		r, sz := utf8.DecodeRuneInString(s[i:])
+		i += sz
+		if r == '\n' {
+			return "", 0, false
+		}
+		if r == delimiter && (replacement || previous != '\\') {
+			return b.String(), i, true
+		}
+		if replacement {
+			if r == '\r' {
+				continue
+			}
+			if r == '\\' {
+				if i >= len(s) {
+					return "", 0, false
+				}
+				next, nextSize := utf8.DecodeRuneInString(s[i:])
+				i += nextSize
+				if next == delimiter {
+					b.WriteRune(delimiter)
+				} else {
+					b.WriteRune('\\')
+					b.WriteRune(next)
+				}
+				previous = next
+				continue
+			}
+		}
+		b.WriteRune(r)
+		previous = r
+	}
+	return "", 0, false
+}
+
+func applySimpleSubstitution(subst *simpleSubstitution, in io.Reader, out io.Writer) error {
+	src, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+
+	w := bufio.NewWriter(out)
+	dst := make([]byte, 0, 4096)
+	for len(src) > 0 {
+		line := src
+		if i := bytes.IndexByte(src, '\n'); i >= 0 {
+			line = src[:i]
+			src = src[i+1:]
+		} else {
+			src = nil
+		}
+
+		dst = applySimpleSubstitutionLine(dst[:0], subst, line)
+		if _, err := w.Write(dst); err != nil {
+			return err
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+func applySimpleSubstitutionLine(dst []byte, subst *simpleSubstitution, line []byte) []byte {
+	limit := 1
+	if subst.global {
+		limit = -1
+	}
+	matches := subst.pattern.FindAllSubmatchIndex(line, limit)
+	if len(matches) == 0 {
+		return append(dst, line...)
+	}
+
+	end := 0
+	for _, match := range matches {
+		dst = append(dst, line[end:match[0]]...)
+		dst = subst.pattern.Expand(dst, subst.replacement, line, match)
+		end = match[1]
+	}
+	return append(dst, line[end:]...)
 }
 
 func editInPlace(rc *tool.RunContext, program string, quiet bool, file, suffix string) error {
