@@ -1,0 +1,128 @@
+package skills
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"testing/fstest"
+)
+
+func writeSkill(t *testing.T, dir, name, frontmatter string) {
+	t.Helper()
+	d := filepath.Join(dir, name)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(frontmatter+"\n# body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCatalogListGatingAndShadowing(t *testing.T) {
+	embedded := fstest.MapFS{
+		"alpha-notes/SKILL.md":    {Data: []byte("---\nname: alpha-notes\ndescription: rung-0 prose, no conditions\n---\nbody\n")},
+		"beta-deploy/SKILL.md":    {Data: []byte("---\nname: beta-deploy\ndescription: gated\nmetadata:\n  requires: \"os=linux has=examplectl\"\n---\nbody\n")},
+		"gamma-compat/SKILL.md":   {Data: []byte("---\nname: gamma-compat\ndescription: prose compat only\ncompatibility: requires exampled running\n---\nbody\n")},
+		"delta-broken/SKILL.md":   {Data: []byte("no frontmatter here\n")},
+		"epsilon-dhnt/SKILL.md":   {Data: []byte("---\nname: epsilon-dhnt\ndescription: dual bundle\n---\nbody\n")},
+		"epsilon-dhnt/skill.dhnt": {Data: []byte("sokilili epsilon fini\n")},
+	}
+	local := t.TempDir()
+	// Local override of an embedded skill (shadowing) + a local-only one.
+	writeSkill(t, local, "alpha-notes", "---\nname: alpha-notes\ndescription: local override\n---")
+	writeSkill(t, local, "zeta-local", "---\nname: zeta-local\ndescription: local only\nmetadata:\n  requires: \"os=linux,darwin,windows\"\n---")
+
+	cat := &Catalog{Sources: []Source{EmbedSource(embedded, RingEmbedded), DirSource(local)}}
+	ps := testProbes(t,
+		map[string]string{"os": "linux", "arch": "arm64"},
+		map[string]string{}, // examplectl absent
+	)
+	rows, err := cat.List(ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Listing{}
+	for _, r := range rows {
+		byName[r.Name] = r
+	}
+
+	if len(rows) != 6 {
+		t.Fatalf("rows = %d, want 6 (%v)", len(rows), names(rows))
+	}
+	if r := byName["alpha-notes"]; !r.Verdict.Applicable || !r.Shadows || r.Ring != RingLocal || r.Description != "local override" {
+		t.Errorf("alpha-notes: %+v", r)
+	}
+	if r := byName["beta-deploy"]; r.Verdict.Applicable || r.Verdict.Failing != "has=examplectl: absent" {
+		t.Errorf("beta-deploy: %+v", r.Verdict)
+	}
+	if r := byName["gamma-compat"]; !r.Verdict.Applicable || r.Verdict.Unchecked == "" {
+		t.Errorf("gamma-compat: %+v", r.Verdict)
+	}
+	// Malformed frontmatter degrades to dir name, applicable, warned.
+	if r := byName["delta-broken"]; !r.Verdict.Applicable || r.Warning == "" {
+		t.Errorf("delta-broken: %+v", r)
+	}
+	if r := byName["epsilon-dhnt"]; !r.HasDhnt {
+		t.Errorf("epsilon-dhnt: HasDhnt = false")
+	}
+	if r := byName["zeta-local"]; !r.Verdict.Applicable || r.Ring != RingLocal {
+		t.Errorf("zeta-local: %+v", r)
+	}
+}
+
+func names(rows []Listing) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.Name
+	}
+	return out
+}
+
+func TestCatalogGetPrecedence(t *testing.T) {
+	embedded := fstest.MapFS{
+		"alpha-notes/SKILL.md": {Data: []byte("---\nname: alpha-notes\ndescription: embedded\n---\nEMBEDDED BODY\n")},
+	}
+	local := t.TempDir()
+	writeSkill(t, local, "alpha-notes", "---\nname: alpha-notes\ndescription: local\n---")
+
+	cat := &Catalog{Sources: []Source{EmbedSource(embedded, RingEmbedded), DirSource(local)}}
+	sk, src, ok := cat.Get("alpha-notes")
+	if !ok || sk.Ring != RingLocal || src.Ring() != RingLocal {
+		t.Fatalf("Get precedence: %+v", sk)
+	}
+	if _, _, ok := cat.Get("missing"); ok {
+		t.Fatal("Get(missing) = ok")
+	}
+}
+
+func TestSourcePathSafety(t *testing.T) {
+	embedded := fstest.MapFS{"alpha-notes/SKILL.md": {Data: []byte("x")}}
+	src := EmbedSource(embedded, RingEmbedded)
+	for _, bad := range [][2]string{{"../alpha-notes", "SKILL.md"}, {"a/b", "SKILL.md"}, {"alpha-notes", "../../secret"}} {
+		if _, ok := src.File(bad[0], bad[1]); ok {
+			t.Errorf("File(%q, %q) allowed", bad[0], bad[1])
+		}
+	}
+}
+
+func TestKeyProbes(t *testing.T) {
+	req, err := ParseRequires("os=linux has=git go>=1.26")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk := Skill{Requires: &req}
+	got := KeyProbes(sk)
+	want := []string{"os", "arch", "tool.git", "tool.go"}
+	if len(got) != len(want) {
+		t.Fatalf("KeyProbes = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("KeyProbes = %v, want %v", got, want)
+		}
+	}
+	// No requires → coarse {os, arch} only.
+	if kp := KeyProbes(Skill{}); len(kp) != 2 {
+		t.Fatalf("KeyProbes(no requires) = %v", kp)
+	}
+}

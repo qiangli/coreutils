@@ -1,0 +1,213 @@
+// Package skills implements the P0 layer of the bashy skills mechanism:
+// host probes (the "space-time" coordinate), a machine-checkable requires
+// grammar, and an environment-gated skill catalog over ring sources
+// (embedded, host-local). Skills remain standard Agent Skills folders
+// (SKILL.md); gating reads the spec-legal `metadata.requires` string and
+// never rejects a skill it cannot parse — formality is earned, not
+// required.
+//
+// The context-key fingerprint is byte-compatible with the dhnt skill-CNL
+// runtime's ContextKey, so later phases can hand keys to a dhnt
+// adaptation store without translation.
+package skills
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"os"
+	"runtime"
+	"sort"
+	"strings"
+	"sync"
+)
+
+// ErrNotApplicable marks a probe that has no meaningful value on this
+// host (e.g. libc outside linux). Such probes are omitted from
+// snapshots — never reported as an empty value.
+var ErrNotApplicable = errors.New("skills: probe not applicable on this host")
+
+// A Probe measures one fact about this host's space-time coordinate.
+// Values are normalized lowercase [a-z0-9.-].
+type Probe struct {
+	Name string
+	Eval func() (string, error)
+}
+
+// A Resolver owns a lazy dotted namespace ("tool", "engine", "mesh")
+// whose keys are open-ended and evaluated only on reference.
+type Resolver interface {
+	Namespace() string               // "tool" answers "tool.<key>"
+	Eval(key string) (string, error) // "git" → "2.49.0" | "present" | "absent"
+}
+
+// ProbeSet is the evaluation surface: core probes computed once per
+// process plus namespace resolvers cached through Cache.
+type ProbeSet struct {
+	mu        sync.Mutex
+	core      map[string]Probe
+	coreVal   map[string]string
+	coreDone  map[string]bool
+	resolvers map[string]Resolver
+	cache     Cache
+	pathHash  string
+}
+
+// DefaultProbes returns the pinned P0 probe set: the always-on core
+// (os, arch, os.release, libc, container, tty, elevated) plus the lazy
+// tool.* / engine.* / mesh.* resolvers. cache may be nil (no
+// persistence). Static host facts (e.g. the bashy version) are added by
+// the caller via SetStatic.
+func DefaultProbes(cache Cache) *ProbeSet {
+	if cache == nil {
+		cache = NopCache()
+	}
+	ps := &ProbeSet{
+		core:      map[string]Probe{},
+		coreVal:   map[string]string{},
+		coreDone:  map[string]bool{},
+		resolvers: map[string]Resolver{},
+		cache:     cache,
+		pathHash:  hashOf(os.Getenv("PATH")),
+	}
+	for _, p := range []Probe{
+		{Name: "os", Eval: func() (string, error) { return runtime.GOOS, nil }},
+		{Name: "arch", Eval: func() (string, error) { return runtime.GOARCH, nil }},
+		{Name: "os.release", Eval: probeOSRelease},
+		{Name: "libc", Eval: probeLibc},
+		{Name: "container", Eval: probeContainer},
+		{Name: "tty", Eval: probeTTY},
+		{Name: "elevated", Eval: probeElevated},
+	} {
+		ps.core[p.Name] = p
+	}
+	ps.Register(&toolResolver{})
+	ps.Register(&engineResolver{})
+	ps.Register(meshResolver{})
+	return ps
+}
+
+// Register adds (or replaces) a namespace resolver.
+func (ps *ProbeSet) Register(r Resolver) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	ps.resolvers[r.Namespace()] = r
+}
+
+// SetStatic pins a core probe to a fixed value ("" removes it) — used by
+// the host binary to inject facts only it knows (its own version).
+func (ps *ProbeSet) SetStatic(name, value string) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if value == "" {
+		delete(ps.core, name)
+		delete(ps.coreVal, name)
+		delete(ps.coreDone, name)
+		return
+	}
+	v := value
+	ps.core[name] = Probe{Name: name, Eval: func() (string, error) { return v, nil }}
+	ps.coreVal[name] = v
+	ps.coreDone[name] = true
+}
+
+// Value evaluates one probe. ok is false when the probe is not
+// applicable, unknown, or (for lazy namespaces) has no resolver.
+func (ps *ProbeSet) Value(name string) (string, bool) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	return ps.valueLocked(name)
+}
+
+func (ps *ProbeSet) valueLocked(name string) (string, bool) {
+	if p, ok := ps.core[name]; ok {
+		if ps.coreDone[name] {
+			v := ps.coreVal[name]
+			return v, v != ""
+		}
+		ps.coreDone[name] = true
+		v, err := p.Eval()
+		if err != nil {
+			ps.coreVal[name] = ""
+			return "", false
+		}
+		v = normalize(v)
+		ps.coreVal[name] = v
+		return v, v != ""
+	}
+	ns, key, ok := strings.Cut(name, ".")
+	if !ok {
+		return "", false
+	}
+	r, ok := ps.resolvers[ns]
+	if !ok {
+		return "", false
+	}
+	if v, ok := ps.cache.Get(name, ps.pathHash); ok {
+		return v, v != ""
+	}
+	v, err := r.Eval(key)
+	if err != nil {
+		return "", false
+	}
+	v = normalize(v)
+	ps.cache.Put(name, ps.pathHash, v)
+	return v, v != ""
+}
+
+// Snapshot evaluates the named probes and returns the present ones.
+func (ps *ProbeSet) Snapshot(names []string) map[string]string {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	out := make(map[string]string, len(names))
+	for _, n := range names {
+		if v, ok := ps.valueLocked(n); ok {
+			out[n] = v
+		}
+	}
+	return out
+}
+
+// Core evaluates every always-on probe and returns the present ones.
+func (ps *ProbeSet) Core() map[string]string {
+	ps.mu.Lock()
+	names := make([]string, 0, len(ps.core))
+	for n := range ps.core {
+		names = append(names, n)
+	}
+	ps.mu.Unlock()
+	return ps.Snapshot(names)
+}
+
+// PathHash identifies the PATH the lazy probes were resolved under.
+func (ps *ProbeSet) PathHash() string { return ps.pathHash }
+
+// ContextKey fingerprints a probe snapshot. It is byte-compatible with
+// the dhnt skill-CNL runtime: sorted "name=value" lines joined by \n,
+// sha256, "c" + hex.
+func ContextKey(vals map[string]string) string {
+	lines := make([]string, 0, len(vals))
+	for k, v := range vals {
+		lines = append(lines, k+"="+v)
+	}
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return "c" + hex.EncodeToString(sum[:])
+}
+
+func hashOf(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:8])
+}
+
+// normalize lowercases and strips anything outside [a-z0-9.-].
+func normalize(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
