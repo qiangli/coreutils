@@ -4,6 +4,14 @@
 //
 // Keep the list alphabetical; it is the shipped-tool inventory
 // (docs/commands.md is the plan, this is the build).
+//
+// Deliberately EXCLUDED (like cmds/graph): cmds/foreman. It imports
+// pkg/foreman → pkg/dag, and pkg/dag's own tests blank-import this package —
+// so listing foreman here forms an import cycle (pkg/dag test → cmds/all →
+// cmds/foreman → pkg/foreman → pkg/dag). foreman is an AgentOS front-door verb
+// (like weave/dag/chat), not a bare userland tool: bashy registers it by
+// importing cmds/foreman directly in internal/agentos, reachable as
+// `bashy foreman`. Keep it out of here.
 package all
 
 import (
@@ -38,7 +46,6 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/false"
 	_ "github.com/qiangli/coreutils/cmds/fetch"
 	_ "github.com/qiangli/coreutils/cmds/find"
-	_ "github.com/qiangli/coreutils/cmds/foreman"
 	_ "github.com/qiangli/coreutils/cmds/grep"
 	_ "github.com/qiangli/coreutils/cmds/gzip"
 	_ "github.com/qiangli/coreutils/cmds/head"
