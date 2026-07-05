@@ -151,8 +151,61 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	}
 	promote.Flags().StringVar(&promoteOut, "out", "", "bundle output directory (default ./promote-<name>)")
 
-	root.AddCommand(list, probe, show, add, verify, run, learn, promote)
+	var expTo string
+	var expUser, expRepo, expForce bool
+	export := &cobra.Command{
+		Use:   "export <name>",
+		Short: "install a catalog skill into agent skill directories (user scope, a dir, or --repo)",
+		Long:  "export writes a skill folder where agentic tools read skills:\n  --user  ~/.agents/skills (the vendor-neutral standard) plus each DETECTED\n          vendor root (~/.claude/skills, ~/.copilot/skills)\n  --to    any directory (a workspace, a team catalog checkout)\n  --repo  .agents/skills at the repo root (+ .claude/skills if .claude exists);\n          repo writes are explicit-only — your repository, your call\nEvery export carries an ownership marker; re-exports refresh only folders we\nwrote (--force overrides). Content is the standard portable skill folder.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runExport(cmd, cfg, args[0], expTo, expUser, expRepo, expForce)
+		},
+	}
+	export.Flags().StringVar(&expTo, "to", "", "export into this directory")
+	export.Flags().BoolVar(&expUser, "user", false, "install at user scope (detected agent roots)")
+	export.Flags().BoolVar(&expRepo, "repo", false, "install at repo scope (explicit consent)")
+	export.Flags().BoolVar(&expForce, "force", false, "replace folders not exported by us")
+
+	root.AddCommand(list, probe, show, add, verify, run, learn, promote, export)
 	return root
+}
+
+func runExport(cmd *cobra.Command, cfg *config, name, to string, user, repo, force bool) error {
+	sk, src, ok := cfg.catalog().Get(name)
+	if !ok {
+		return fmt.Errorf("skills: %q not found", name)
+	}
+	var roots []string
+	if to != "" {
+		roots = append(roots, to)
+	}
+	if user {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		roots = append(roots, userExportRoots(home)...)
+	}
+	if repo {
+		roots = append(roots, repoExportRoots(findRepoRoot(mustGetwd()))...)
+	}
+	if len(roots) == 0 {
+		return fmt.Errorf("skills: pick a target: --user, --repo, or --to DIR")
+	}
+	var firstErr error
+	for _, root := range roots {
+		dst, err := ExportTo(sk, src, root, force)
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "skills: %v\n", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "exported: %s\n", dst)
+	}
+	return firstErr
 }
 
 func (c *config) probes(refresh bool) (*ProbeSet, *FileCache) {

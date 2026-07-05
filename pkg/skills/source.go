@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ type Source interface {
 	Names() ([]string, error)
 	Body(name string) ([]byte, bool)      // SKILL.md
 	File(name, rel string) ([]byte, bool) // reference.md, skill.dhnt, …
+	Files(name string) ([]string, error)  // every file in the skill folder (rel paths)
 }
 
 // EmbedSource wraps an fs.FS whose top-level directories are skills
@@ -46,6 +48,30 @@ func (s fsSource) Names() ([]string, error) {
 }
 
 func (s fsSource) Body(name string) ([]byte, bool) { return s.File(name, "SKILL.md") }
+
+func (s fsSource) Files(name string) ([]string, error) {
+	name = strings.Trim(name, "/")
+	if name == "" || strings.Contains(name, "/") {
+		return nil, fmt.Errorf("skills: bad skill name %q", name)
+	}
+	var out []string
+	err := fs.WalkDir(s.fsys, name, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(name, p)
+		if err != nil {
+			return err
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
+}
 
 func (s fsSource) File(name, rel string) ([]byte, bool) {
 	name = strings.Trim(name, "/")
@@ -91,6 +117,13 @@ func (s dirSource) File(name, rel string) ([]byte, bool) {
 		return nil, false
 	}
 	return fsSource{fsys: os.DirFS(s.dir), ring: s.ring}.File(name, rel)
+}
+
+func (s dirSource) Files(name string) ([]string, error) {
+	if _, err := os.Stat(s.dir); err != nil {
+		return nil, nil
+	}
+	return fsSource{fsys: os.DirFS(s.dir), ring: s.ring}.Files(name)
 }
 
 // Listing is one catalog row: the skill plus its applicability verdict

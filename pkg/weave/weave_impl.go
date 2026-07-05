@@ -2103,6 +2103,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				fmt.Fprintf(cmd.ErrOrStderr(), "weave: WARNING could not provision sibling dep %q — the build may fail; ask the orchestrator for help\n", f)
 			}
 		}
+		// Host-provided workspace provisioning (e.g. agent skills) — the
+		// workspace is weave-owned, so the host may stock it freely.
+		if ProvisionWorkspace != nil {
+			ProvisionWorkspace(workspace, cmd.ErrOrStderr())
+		}
 		for _, kv := range [][2]string{
 			{"user.name", fmt.Sprintf("agent-weave-issue-%d", it.ID)},
 			{"user.email", fmt.Sprintf("agent-weave-issue-%d@ycode.local", it.ID)},
