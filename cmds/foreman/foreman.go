@@ -32,6 +32,20 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 0 {
 		return runREPLWithFlags(rc, nil, nil)
 	}
+	// --help/-h and --version short-circuit before the manual flag parser,
+	// which would otherwise treat "--help" as a value-taking flag and drop
+	// into the interactive REPL (no rest args). The framework does not strip
+	// these because this tool does its own arg dispatch.
+	for _, a := range args {
+		switch a {
+		case "--help", "-h":
+			fmt.Fprintln(rc.Out, cmd.Usage)
+			return 0
+		case "--version":
+			fmt.Fprintf(rc.Out, "foreman %s\n", tool.Version)
+			return 0
+		}
+	}
 	global, rest := parseKVFlags(args)
 	if global["once"] == "true" {
 		return runOnce(rc, global)
