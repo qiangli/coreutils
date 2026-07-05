@@ -11,11 +11,13 @@ package sortcmd
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"strings"
+	"unsafe"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -125,33 +127,61 @@ func run(rc *tool.RunContext, args []string) int {
 		return s.checkSorted(rc, operands[0])
 	}
 
-	var lines []string
+	if s.canUsePreparedNumeric() {
+		var nlines numericLineSet
+		for _, op := range operands {
+			if err := nlines.read(rc, op); err != nil {
+				fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
+				return 2
+			}
+		}
+		slices.SortStableFunc(nlines.lines, s.compareNumericLines)
+		if s.unique {
+			out := nlines.lines[:0]
+			for i, l := range nlines.lines {
+				if i == 0 {
+					out = append(out, l)
+					continue
+				}
+				prev := out[len(out)-1]
+				if compareNumericKey(prev.text, prev.num, l.text, l.num) != 0 {
+					out = append(out, l)
+				}
+			}
+			nlines.lines = out
+		}
+		return writeNumericLines(rc, *output, nlines.lines)
+	}
+
+	var lines lineSet
 	for _, op := range operands {
-		ls, err := readLines(rc, op)
-		if err != nil {
+		if err := lines.read(rc, op); err != nil {
 			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
 			return 2
 		}
-		lines = append(lines, ls...)
 	}
 
-	sort.SliceStable(lines, func(i, j int) bool { return s.compare(lines[i], lines[j]) < 0 })
+	slices.SortStableFunc(lines.lines, s.compare)
 
 	if s.unique {
-		out := lines[:0]
-		for i, l := range lines {
+		out := lines.lines[:0]
+		for i, l := range lines.lines {
 			if i == 0 || s.compareEqual(out[len(out)-1], l) != 0 {
 				out = append(out, l)
 			}
 		}
-		lines = out
+		lines.lines = out
 	}
 
+	return writeStringLines(rc, *output, lines.lines)
+}
+
+func writeStringLines(rc *tool.RunContext, output string, lines []string) int {
 	var w io.Writer = rc.Out
-	if *output != "" {
-		f, err := os.Create(rc.Path(*output))
+	if output != "" {
+		f, err := os.Create(rc.Path(output))
 		if err != nil {
-			fmt.Fprintf(rc.Err, "sort: open failed: %s: %v\n", *output, pathErr(err))
+			fmt.Fprintf(rc.Err, "sort: open failed: %s: %v\n", output, pathErr(err))
 			return 2
 		}
 		defer f.Close()
@@ -167,6 +197,38 @@ func run(rc *tool.RunContext, args []string) int {
 		return 2
 	}
 	return 0
+}
+
+func writeNumericLines(rc *tool.RunContext, output string, lines []numericLine) int {
+	var w io.Writer = rc.Out
+	if output != "" {
+		f, err := os.Create(rc.Path(output))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "sort: open failed: %s: %v\n", output, pathErr(err))
+			return 2
+		}
+		defer f.Close()
+		w = f
+	}
+	bw := bufio.NewWriter(w)
+	for _, l := range lines {
+		bw.WriteString(l.text)
+		bw.WriteByte('\n')
+	}
+	if err := bw.Flush(); err != nil {
+		fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
+		return 2
+	}
+	return 0
+}
+
+func (s *sorter) canUsePreparedNumeric() bool {
+	if len(s.keys) != 1 {
+		return false
+	}
+	k := &s.keys[0]
+	return k.sword == 0 && k.schar == 0 && k.eword == -1 && k.echar == 0 &&
+		k.opts.numeric && !k.opts.human && !k.opts.fold && !k.opts.skipSB && !k.opts.skipEB
 }
 
 // compare is GNU sort's compare(): keys first; when all keys tie, the
@@ -220,48 +282,218 @@ func (s *sorter) compareKeys(a, b string) int {
 	return 0
 }
 
+type numericKey struct {
+	sign                           int8
+	ipStart, ipLen, fpStart, fpLen int32
+}
+
+type numericLine struct {
+	text string
+	num  numericKey
+}
+
+type numericLineSet struct {
+	buffers [][]byte
+	lines   []numericLine
+}
+
+func (ls *numericLineSet) read(rc *tool.RunContext, operand string) error {
+	data, err := readOperand(rc, operand)
+	if err != nil {
+		return err
+	}
+	ls.buffers = append(ls.buffers, data)
+	splitNumericLines(data, &ls.lines)
+	return nil
+}
+
+func parseNumericKey(s string) numericKey {
+	i := 0
+	for i < len(s) && isBlank(s[i]) {
+		i++
+	}
+	neg := false
+	if i < len(s) && s[i] == '-' {
+		neg = true
+		i++
+	}
+	j := i
+	for j < len(s) && isDigit(s[j]) {
+		j++
+	}
+	ipStart, ipEnd := i, j
+	for ipStart < ipEnd && s[ipStart] == '0' {
+		ipStart++
+	}
+	fpStart, fpEnd := 0, 0
+	if j < len(s) && s[j] == '.' {
+		k := j + 1
+		for k < len(s) && isDigit(s[k]) {
+			k++
+		}
+		fpStart, fpEnd = j+1, k
+		for fpEnd > fpStart && s[fpEnd-1] == '0' {
+			fpEnd--
+		}
+	}
+	if ipStart == ipEnd && fpStart == fpEnd {
+		return numericKey{}
+	}
+	sign := int8(1)
+	if neg {
+		sign = -1
+	}
+	return numericKey{
+		sign:    sign,
+		ipStart: int32(ipStart),
+		ipLen:   int32(ipEnd - ipStart),
+		fpStart: int32(fpStart),
+		fpLen:   int32(fpEnd - fpStart),
+	}
+}
+
+func compareNumericKey(as string, a numericKey, bs string, b numericKey) int {
+	if a.sign != b.sign {
+		return cmpInt(int(a.sign), int(b.sign))
+	}
+	m := cmpInt(int(a.ipLen), int(b.ipLen))
+	if m == 0 {
+		ai, bi := int(a.ipStart), int(b.ipStart)
+		m = strings.Compare(as[ai:ai+int(a.ipLen)], bs[bi:bi+int(b.ipLen)])
+	}
+	if m == 0 {
+		af, bf := int(a.fpStart), int(b.fpStart)
+		m = strings.Compare(as[af:af+int(a.fpLen)], bs[bf:bf+int(b.fpLen)])
+	}
+	if a.sign < 0 {
+		return -m
+	}
+	return m
+}
+
+func (s *sorter) compareNumericLines(a, b numericLine) int {
+	if d := compareNumericKey(a.text, a.num, b.text, b.num); d != 0 || s.stable || s.unique {
+		if d != 0 && s.keys[0].opts.reverse {
+			return -d
+		}
+		return d
+	}
+	d := strings.Compare(a.text, b.text)
+	if s.reverse {
+		return -d
+	}
+	return d
+}
+
 // checkSorted implements -c: report the first out-of-order line in the
 // GNU "sort: FILE:LINENO: disorder: LINE" shape and exit 1.
 func (s *sorter) checkSorted(rc *tool.RunContext, op string) int {
-	lines, err := readLines(rc, op)
-	if err != nil {
+	var lines lineSet
+	if err := lines.read(rc, op); err != nil {
 		fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
 		return 2
 	}
-	for i := 1; i < len(lines); i++ {
-		d := s.compare(lines[i-1], lines[i])
+	for i := 1; i < len(lines.lines); i++ {
+		d := s.compare(lines.lines[i-1], lines.lines[i])
 		if d > 0 || (s.unique && d == 0) {
-			fmt.Fprintf(rc.Err, "sort: %s:%d: disorder: %s\n", op, i+1, lines[i])
+			fmt.Fprintf(rc.Err, "sort: %s:%d: disorder: %s\n", op, i+1, lines.lines[i])
 			return 1
 		}
 	}
 	return 0
 }
 
-// readLines reads one operand ("-" = stdin) fully and splits it into
-// newline-terminated lines; a final line without a trailing newline
-// still counts (GNU appends the newline on output).
-func readLines(rc *tool.RunContext, operand string) ([]string, error) {
-	var data []byte
-	var err error
-	if operand == "-" {
-		data, err = io.ReadAll(rc.In)
-	} else {
-		data, err = os.ReadFile(rc.Path(operand))
-	}
-	if err != nil {
-		return nil, err
-	}
-	return splitLines(data), nil
+// lineSet retains input buffers while lines point directly into them.
+type lineSet struct {
+	buffers [][]byte
+	lines   []string
 }
 
-func splitLines(data []byte) []string {
-	if len(data) == 0 {
-		return nil
+// read reads one operand ("-" = stdin) fully and splits it into
+// newline-terminated lines; a final line without a trailing newline
+// still counts (GNU appends the newline on output).
+func (ls *lineSet) read(rc *tool.RunContext, operand string) error {
+	data, err := readOperand(rc, operand)
+	if err != nil {
+		return err
 	}
-	s := string(data)
-	s = strings.TrimSuffix(s, "\n")
-	return strings.Split(s, "\n")
+	ls.buffers = append(ls.buffers, data)
+	splitLines(data, &ls.lines)
+	return nil
+}
+
+func readOperand(rc *tool.RunContext, operand string) ([]byte, error) {
+	if operand == "-" {
+		return io.ReadAll(rc.In)
+	}
+	return os.ReadFile(rc.Path(operand))
+}
+
+func splitLines(data []byte, lines *[]string) {
+	if len(data) == 0 {
+		return
+	}
+	if data[len(data)-1] == '\n' {
+		data = data[:len(data)-1]
+	}
+	if len(data) == 0 {
+		*lines = append(*lines, "")
+		return
+	}
+	n := bytes.Count(data, []byte{'\n'}) + 1
+	old := len(*lines)
+	if cap(*lines)-old < n {
+		next := make([]string, old, old+n)
+		copy(next, *lines)
+		*lines = next
+	}
+	for {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			*lines = append(*lines, bytesString(data))
+			return
+		}
+		*lines = append(*lines, bytesString(data[:i]))
+		data = data[i+1:]
+	}
+}
+
+func splitNumericLines(data []byte, lines *[]numericLine) {
+	if len(data) == 0 {
+		return
+	}
+	if data[len(data)-1] == '\n' {
+		data = data[:len(data)-1]
+	}
+	if len(data) == 0 {
+		*lines = append(*lines, numericLine{})
+		return
+	}
+	n := bytes.Count(data, []byte{'\n'}) + 1
+	old := len(*lines)
+	if cap(*lines)-old < n {
+		next := make([]numericLine, old, old+n)
+		copy(next, *lines)
+		*lines = next
+	}
+	for {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			l := bytesString(data)
+			*lines = append(*lines, numericLine{text: l, num: parseNumericKey(l)})
+			return
+		}
+		l := bytesString(data[:i])
+		*lines = append(*lines, numericLine{text: l, num: parseNumericKey(l)})
+		data = data[i+1:]
+	}
+}
+
+func bytesString(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 // pathErr unwraps *fs.PathError so diagnostics read like GNU's
