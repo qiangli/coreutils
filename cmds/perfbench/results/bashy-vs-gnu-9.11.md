@@ -24,11 +24,11 @@ perf-sprint; "after" = post (wc/cut/sort/base64 optimized by the weave fleet).
 | head | 41 ms | 29 ms | **29 ms** | 0.75× | **0.70×** | 1.4× faster |
 | md5sum | 110 ms | 104 ms | **104 ms** | 0.96× | **0.96×** | par |
 | tail | 59 ms | 66 ms | **68 ms** | 1.13× | **1.13×** | ~par |
-| sed | 728 ms | 1.31 s | **1.31 s** | 1.77× | **1.80×** | slower (untargeted) |
+| **sed** ⚡⚡ | 733 ms | 1.31 s | **665 ms** | 1.77× | **0.91×** | **flipped** → 1.1× faster (s/// fast-path, read-all+IndexByte) |
 | **sort** ⚡⚡ | 192 ms | 866 ms | **94 ms** | 4.34× | **0.49×** | **flipped** → 2.0× faster (parallel + pdqsort) |
 | **sort -n** ⚡⚡ | 277 ms | 1.61 s | **135 ms** | 5.56× | **0.48×** | **flipped** → 2.1× faster (integer radix) |
-| **cut** ⚡ | 59 ms | 214 ms | **112 ms** | 3.61× | **1.89×** | gap ~halved (9856× fewer allocs) |
-| grep | 55 ms | 110 ms | **109 ms** | 1.97× | **1.99×** | slower (RE2; untargeted) |
+| **cut** ⚡⚡ | 60 ms | 214 ms | **36 ms** | 3.61× | **0.61×** | **flipped** → 1.6× faster (hot-loop + buffered) |
+| **grep** ⚡⚡ | 56 ms | 110 ms | **27 ms** | 1.97× | **0.49×** | **flipped** → 2.0× faster (literal fast-path, RE2 bypass) |
 
 ⚡ = optimized this sprint.
 
@@ -44,18 +44,21 @@ perf-sprint; "after" = post (wc/cut/sort/base64 optimized by the weave fleet).
 
 ## Summary
 
-**bashy is faster-or-par than GNU 9.11 on 11 of 15 hot single commands:**
+**bashy is faster-or-par than GNU 9.11 on 14 of 15 hot single commands:**
 sha256sum **5.3×**, wc-l **4.3×**, cat 2.9×, awk 2.5×, **sort-n 2.1×**, **sort 2.0×**,
-base64 1.7×, wc 1.6×, tac 1.5×, head 1.4×, md5sum par.
+grep 2.0×, base64 1.7×, cut 1.6×, wc 1.6×, tac 1.5×, head 1.4×, sed 1.1×, md5sum par.
 
-**The optimization work flipped the four worst offenders from slower to faster:**
-`wc -l` (12.9× slower → 4.3× faster) and `wc` (3.8× → 1.6× faster) via byte-scan;
-`sort` (4.3× slower → **2.0× faster**) via parallel merge (GOMAXPROCS chunks + stable
-k-way merge) + unstable pdqsort, and `sort -n` (5.6× slower → **2.1× faster**) via
-an LSD integer radix sort. `cut` gap ~halved (3.6×→1.9×).
+**The optimization work flipped SEVEN commands from slower to faster than GNU:**
+`wc -l` (12.9× → 4.3× faster) and `wc` (3.8× → 1.6×) via byte-scan; `sort`
+(4.3× → **2.0×**) via parallel merge (GOMAXPROCS chunks + stable k-way merge) +
+unstable pdqsort, `sort -n` (5.6× → **2.1×**) via LSD integer radix; `grep`
+(2.0× → **2.0× faster**) via a literal fast-path (RE2 bypass, `bytes.Index`);
+`cut` (1.9× → **1.6×**) via a tightened hot loop + buffered output; and `sed`
+(1.8× → **1.1×**) via a simple-`s///` fast path (`io.ReadAll` + `bytes.IndexByte`,
+after a first attempt's `ReadSlice` aliasing corrupted large output and was
+reverted — caught by the 300k-line differential, not the unit tests).
 
-**Still slower (untargeted / structural):** grep 2.0× (RE2 vs GNU Boyer-Moore —
-competitive, not a priority), cut 1.9×, sed 1.8×, tail 1.1×.
+**Still slower:** only tail 1.13× (essentially par; not worth optimizing).
 
 **Pipelines** improved as their slow stages sped up (topN 2.4→1.9×, wordfreq
 1.74→1.22×) but remain slower on darwin: `fork` is ~1 ms here, so avoiding 4–5
