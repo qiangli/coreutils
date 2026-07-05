@@ -67,3 +67,31 @@ func TestStartDetachStatusRoundTrip(t *testing.T) {
 		t.Fatalf("status = %q", got)
 	}
 }
+
+func TestScriptedREPL(t *testing.T) {
+	t.Setenv("BASHY_FOREMAN_DIR", t.TempDir())
+	old := runner
+	r := &stubRunner{out: "ack"}
+	runner = r
+	t.Cleanup(func() { runner = old })
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: t.TempDir(),
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("plain steering\nstatus\nstop\n"),
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	code := run(rc, []string{"run", "--id", "repl", "--goal", "scripted", "--agent", "stub"})
+	if code != 0 {
+		t.Fatalf("code = %d, err = %s", code, errb.String())
+	}
+	if len(r.prompts) != 1 || !strings.Contains(r.prompts[0], "plain steering") {
+		t.Fatalf("prompts = %#v, want plain steering", r.prompts)
+	}
+	if got := out.String(); !strings.Contains(got, "repl\tidle\tscripted") || !strings.Contains(got, "done") {
+		t.Fatalf("repl output = %q", got)
+	}
+}

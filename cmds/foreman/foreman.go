@@ -30,14 +30,14 @@ func run(rc *tool.RunContext, args []string) int {
 		rc.Ctx = context.Background()
 	}
 	if len(args) == 0 {
-		return runREPL(rc, args)
+		return runREPLWithFlags(rc, nil, nil)
 	}
 	global, rest := parseKVFlags(args)
 	if global["once"] == "true" {
 		return runOnce(rc, global)
 	}
 	if len(rest) == 0 {
-		return usage(rc, "missing subcommand")
+		return runREPLWithFlags(rc, global, nil)
 	}
 	sub := rest[0]
 	subFlags, subArgs := parseKVFlags(rest[1:])
@@ -58,7 +58,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case "prio":
 		return runPrio(rc, subArgs, jsonOut)
 	case "run":
-		return runREPL(rc, subArgs)
+		return runREPLWithFlags(rc, subFlags, subArgs)
 	default:
 		return usage(rc, "unknown subcommand %q", sub)
 	}
