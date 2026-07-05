@@ -338,3 +338,19 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Browser automation (`pkg/browser`, `bashy browser`)
+
+Ported from ycode's browser subsystem; the CDP engine and its transitive
+websocket deps are all MIT (permissive, pure-Go — allowed compiled-in):
+
+- `github.com/chromedp/chromedp` — MIT
+- `github.com/chromedp/cdproto` — MIT
+- `github.com/chromedp/sysutil` — MIT
+- `github.com/gobwas/ws` — MIT
+- `github.com/gobwas/httphead` — MIT
+- `github.com/gobwas/pool` — MIT
+
+No Chrome/Chromium binary is bundled: `probe` mode attaches to the user's
+already-running browser (`--remote-debugging-port`); `solo` mode uses a
+Chrome/Chromium found on `$PATH`.
