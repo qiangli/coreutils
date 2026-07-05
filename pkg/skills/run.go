@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -211,38 +212,43 @@ func appendAttest(storeDir string, rec AttestRecord) (string, error) {
 	return path, nil
 }
 
-// runSkill is the run verb's engine: applicability gate → pre-flight
-// effect audit → bind → execute → attest → store. It returns the record
-// whether or not the attestation is Valid; err is non-nil only for
-// refusals and execution faults (a failed contract is a Valid=false
-// record, not an error).
-func runSkill(cfg *config, sk Skill, src Source, ps *ProbeSet, dir string, log io.Writer) (AttestRecord, string, error) {
+// runPrep is everything a run (plain or adaptive) needs about one skill
+// at this coordinate.
+type runPrep struct {
+	base   dhntskills.Skill  // the catalog skill's canonical face
+	rootID string            // Identity(base) — the overlay key
+	meta   map[string]string // SKILL.md metadata + learned bindings
+	probes []dhntskills.EnvProbe
+	ctxKey string
+	tier   string
+}
+
+// prepareRun runs the shared gate: valid canonical face, applicable
+// here, canonical parse, merged bindings, coordinate + tier.
+func prepareRun(cfg *config, sk Skill, src Source, ps *ProbeSet) (runPrep, error) {
 	if !sk.Dhnt.Valid() {
 		if sk.HasDhnt {
-			return AttestRecord{}, "", fmt.Errorf("skills: %q has an invalid canonical face: %s", sk.Name, sk.Dhnt.Err)
+			return runPrep{}, fmt.Errorf("skills: %q has an invalid canonical face: %s", sk.Name, sk.Dhnt.Err)
 		}
-		return AttestRecord{}, "", fmt.Errorf("skills: %q has no skill.dhnt — a prose-only skill is read by a model, not machine-run", sk.Name)
+		return runPrep{}, fmt.Errorf("skills: %q has no skill.dhnt — a prose-only skill is read by a model, not machine-run", sk.Name)
 	}
 	if v := verdictOf(sk, ps); !v.Applicable {
-		return AttestRecord{}, "", fmt.Errorf("skills: %q is not applicable here (%s)", sk.Name, v.Failing)
+		return runPrep{}, fmt.Errorf("skills: %q is not applicable here (%s)", sk.Name, v.Failing)
 	}
 	canon, _ := src.File(sk.Name, "skill.dhnt")
-	dsk, err := dhntskills.ParseDhnt(strings.TrimSpace(string(canon)))
+	base, err := dhntskills.ParseDhnt(strings.TrimSpace(string(canon)))
 	if err != nil {
-		return AttestRecord{}, "", err
+		return runPrep{}, err
 	}
-	if needed := preflightEffects(dsk); !dhntskills.EffectsWithin(needed, dsk.EffectCap) {
-		var atoms []string
-		for _, e := range needed {
-			atoms = append(atoms, e.String())
-		}
-		return AttestRecord{}, "", fmt.Errorf(
-			"skills: pre-flight: bindings report {%s} but the declared effect cap does not cover it — declare `efefecato … fini` (machine-run needs the cap rung)",
-			strings.Join(atoms, " "))
+	rootID, err := dhntskills.Identity(base)
+	if err != nil {
+		return runPrep{}, err
 	}
 
-	probes := dhntProbes(ps, KeyProbes(sk))
-	env := bindEnv(dsk, sk.Meta, dir, log, probes)
+	meta := map[string]string{}
+	maps.Copy(meta, sk.Meta)
+	// Learned bindings extend/override authored metadata.
+	maps.Copy(meta, loadBindings(cfg.cfgDir, sk.Name))
 
 	tier := "local"
 	if len(cfg.statics) > 0 {
@@ -253,25 +259,82 @@ func runSkill(cfg *config, sk Skill, src Source, ps *ProbeSet, dir string, log i
 		sort.Strings(keys)
 		tier = keys[0] + "@" + cfg.statics[keys[0]]
 	}
+	return runPrep{
+		base:   base,
+		rootID: rootID,
+		meta:   meta,
+		probes: dhntProbes(ps, KeyProbes(sk)),
+		ctxKey: ContextKey(ps.Snapshot(KeyProbes(sk))),
+		tier:   tier,
+	}, nil
+}
 
-	att, err := dhntskills.Run(dsk, env, tier)
+// runEffective executes one concrete skill shape (base, overlay, or a
+// repair candidate) under the shared conventions: pre-flight audit,
+// bind, run, attest. A failed contract is a Valid=false record, not an
+// error.
+func runEffective(name string, effective dhntskills.Skill, p runPrep, dir string, log io.Writer) (AttestRecord, error) {
+	if needed := preflightEffects(effective); !dhntskills.EffectsWithin(needed, effective.EffectCap) {
+		var atoms []string
+		for _, e := range needed {
+			atoms = append(atoms, e.String())
+		}
+		return AttestRecord{}, fmt.Errorf(
+			"skills: pre-flight: bindings report {%s} but the declared effect cap does not cover it — declare `efefecato … fini` (machine-run needs the cap rung)",
+			strings.Join(atoms, " "))
+	}
+	env := bindEnv(effective, p.meta, dir, log, p.probes)
+	att, err := dhntskills.Run(effective, env, p.tier)
+	if err != nil {
+		return AttestRecord{}, err
+	}
+	return AttestRecord{
+		At:         time.Now().UTC(),
+		Name:       name,
+		Tier:       p.tier,
+		ContextKey: p.ctxKey,
+		Attest:     att,
+	}, nil
+}
+
+// runSkill is the plain run engine: gate → resolve the host's overlay
+// version (a self-healed host transparently prefers it) → execute →
+// attest → store.
+func runSkill(cfg *config, sk Skill, src Source, ps *ProbeSet, dir string, log io.Writer) (AttestRecord, string, error) {
+	p, err := prepareRun(cfg, sk, src, ps)
 	if err != nil {
 		return AttestRecord{}, "", err
 	}
-	rec := AttestRecord{
-		At:         time.Now().UTC(),
-		Name:       sk.Name,
-		Tier:       tier,
-		ContextKey: ContextKey(ps.Snapshot(KeyProbes(sk))),
-		Attest:     att,
-	}
-	path := ""
-	if cfg.cfgDir != "" {
-		if p, err := appendAttest(cfg.cfgDir, rec); err == nil {
-			path = p
-		} else {
-			fmt.Fprintf(log, "skills: attest store: %v\n", err)
+	effective := p.base
+	if vs := cfg.versions(); vs != nil {
+		if s, ok := dhntskills.ResolveLatest(vs, p.base); ok {
+			fmt.Fprintf(log, "skills: %s: running the host's learned version (overlay of %s)\n", sk.Name, shortID(p.rootID))
+			effective = s
 		}
 	}
+	rec, err := runEffective(sk.Name, effective, p, dir, log)
+	if err != nil {
+		return AttestRecord{}, "", err
+	}
+	path := storeAttest(cfg, rec, log)
 	return rec, path, nil
+}
+
+func storeAttest(cfg *config, rec AttestRecord, log io.Writer) string {
+	if cfg.cfgDir == "" {
+		return ""
+	}
+	p, err := appendAttest(cfg.cfgDir, rec)
+	if err != nil {
+		fmt.Fprintf(log, "skills: attest store: %v\n", err)
+		return ""
+	}
+	return p
+}
+
+func shortID(id string) string {
+	if len(id) > 13 {
+		return id[:13]
+	}
+	return id
 }

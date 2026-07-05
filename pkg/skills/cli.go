@@ -115,17 +115,43 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	}
 	verify.Flags().BoolVar(&verifyJSON, "json", false, "machine-readable report")
 
-	var runJSON bool
+	var runJSON, adapt bool
+	var repairAgent string
+	var attempts int
 	run := &cobra.Command{
 		Use:   "run <name>",
 		Short: "execute a dhnt skill and attest it (exit 0 iff the contract held within the cap)",
-		Long:  "run executes a skill's canonical face through the in-process userland:\ncontract predicates and step primitives resolve their concrete commands from\nSKILL.md metadata (check-*/step-* keys), a static pre-flight audit refuses to\nstart when the declared effect cap cannot cover what the bindings report, and\nevery run emits a re-checkable attestation stored in the host-local store.\nCommand output streams to stderr; the receipt is stdout.",
+		Long:  "run executes a skill's canonical face through the in-process userland:\ncontract predicates and step primitives resolve their concrete commands from\nSKILL.md metadata (check-*/step-* keys), a static pre-flight audit refuses to\nstart when the declared effect cap cannot cover what the bindings report, and\nevery run emits a re-checkable attestation stored in the host-local store.\nA host that has learned a fixed version of the skill runs it transparently.\nWith --adapt, a failing run asks the repair agent for corrected steps,\nverifies them under the ORIGINAL contract and effect cap, folds the fix into\na guarded environment arm, and saves it to the host overlay — the next run\n(by any agent on this host) reuses it. Command output streams to stderr;\nthe receipt is stdout.",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return runRun(cmd, cfg, args[0], runJSON) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRun(cmd, cfg, args[0], runJSON, adapt, repairAgent, attempts)
+		},
 	}
 	run.Flags().BoolVar(&runJSON, "json", false, "machine-readable receipt")
+	run.Flags().BoolVar(&adapt, "adapt", false, "self-heal: repair, verify, and fold a fix on failure")
+	run.Flags().StringVar(&repairAgent, "repair-agent", "", "headless agent CLI for repair proposals; the prompt is appended as the last argument (e.g. \"claude -p\")")
+	run.Flags().IntVar(&attempts, "attempts", 2, "max repair attempts under --adapt")
 
-	root.AddCommand(list, probe, show, add, verify, run)
+	var learnJSON bool
+	learn := &cobra.Command{
+		Use:   "learn <dir>",
+		Short: "execution-verified admission: add a skill AND prove its contract holds here",
+		Long:  "learn is the writeback gate for skills distilled from experience: the same\nstructural admission as `add`, PLUS the skill must actually run and satisfy\nits contract at this coordinate before it stays in the store. A skill that\nfails the run gate is removed again — the library only accretes procedures\nthat have worked here.",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return runLearn(cmd, cfg, args[0], learnJSON) },
+	}
+	learn.Flags().BoolVar(&learnJSON, "json", false, "machine-readable receipt")
+
+	var promoteOut string
+	promote := &cobra.Command{
+		Use:   "promote <name>",
+		Short: "render the human-review bundle for pushing a learned skill upstream (never commits)",
+		Args:  cobra.ExactArgs(1),
+		RunE:  func(cmd *cobra.Command, args []string) error { return runPromote(cmd, cfg, args[0], promoteOut) },
+	}
+	promote.Flags().StringVar(&promoteOut, "out", "", "bundle output directory (default ./promote-<name>)")
+
+	root.AddCommand(list, probe, show, add, verify, run, learn, promote)
 	return root
 }
 
@@ -318,41 +344,120 @@ func runVerify(cmd *cobra.Command, cfg *config, name string, asJSON bool) error 
 	return nil
 }
 
-func runRun(cmd *cobra.Command, cfg *config, name string, asJSON bool) error {
+func runRun(cmd *cobra.Command, cfg *config, name string, asJSON, adapt bool, repairAgent string, attempts int) error {
 	sk, src, ok := cfg.catalog().Get(name)
 	if !ok {
 		return fmt.Errorf("skills: %q not found", name)
 	}
 	ps, _ := cfg.probes(false)
-	rec, storePath, err := runSkill(cfg, sk, src, ps, mustGetwd(), cmd.ErrOrStderr())
-	if err != nil {
+
+	var rec AttestRecord
+	var outcome AdaptOutcome
+	var err error
+	if adapt {
+		var complete Completer
+		if repairAgent != "" {
+			complete = execCompleter(repairAgent)
+		}
+		rec, outcome, err = adaptiveRun(cfg, sk, src, ps, mustGetwd(), cmd.ErrOrStderr(), complete, attempts)
+	} else {
+		rec, _, err = runSkill(cfg, sk, src, ps, mustGetwd(), cmd.ErrOrStderr())
+	}
+	if err != nil && rec.Name == "" {
 		return err
 	}
-	if asJSON {
-		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(rec); err != nil {
-			return err
-		}
-	} else {
-		a := rec.Attest
-		fmt.Fprintf(cmd.OutOrStdout(), "skill: %s\ntier: %s\nvalid: %v\n", rec.Name, rec.Tier, a.Valid)
-		if len(a.Passed) > 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "passed: %s\n", strings.Join(a.Passed, " "))
-		}
-		if len(a.Failed) > 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "failed: %s\n", strings.Join(a.Failed, " "))
-		}
-		var effs []string
-		for _, e := range a.Effects {
-			effs = append(effs, e.String())
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "effects: %s\ncontext: %s\n", strings.Join(effs, " "), rec.ContextKey)
-		if storePath != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "attested: %s\n", storePath)
-		}
+	renderReceipt(cmd, rec, string(outcome), asJSON)
+	if err != nil {
+		return err
 	}
 	if !rec.Attest.Valid {
 		return fmt.Errorf("skills: %q contract not satisfied", name)
 	}
+	return nil
+}
+
+func renderReceipt(cmd *cobra.Command, rec AttestRecord, outcome string, asJSON bool) {
+	if asJSON {
+		out := struct {
+			AttestRecord
+			Outcome string `json:"outcome,omitempty"`
+		}{rec, outcome}
+		_ = json.NewEncoder(cmd.OutOrStdout()).Encode(out)
+		return
+	}
+	a := rec.Attest
+	fmt.Fprintf(cmd.OutOrStdout(), "skill: %s\ntier: %s\nvalid: %v\n", rec.Name, rec.Tier, a.Valid)
+	if outcome != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "outcome: %s\n", outcome)
+	}
+	if len(a.Passed) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "passed: %s\n", strings.Join(a.Passed, " "))
+	}
+	if len(a.Failed) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "failed: %s\n", strings.Join(a.Failed, " "))
+	}
+	var effs []string
+	for _, e := range a.Effects {
+		effs = append(effs, e.String())
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "effects: %s\ncontext: %s\n", strings.Join(effs, " "), rec.ContextKey)
+}
+
+func runLearn(cmd *cobra.Command, cfg *config, dir string, asJSON bool) error {
+	if cfg.cfgDir == "" {
+		return fmt.Errorf("skills: no host-local store directory configured")
+	}
+	sk, err := loadSkillDir(dir)
+	if err != nil {
+		return err
+	}
+	ps, _ := cfg.probes(false)
+	a := admit(sk, ps)
+	if !a.Valid {
+		if !asJSON {
+			renderAdmission(cmd.OutOrStdout(), a)
+		}
+		return fmt.Errorf("skills: %q failed the admission gate", sk.Name)
+	}
+	if !a.Applicable {
+		return fmt.Errorf("skills: %q is not applicable here (%s) — learn requires proving the contract at this coordinate; use `add` to install without the run gate", sk.Name, a.Failing)
+	}
+	if _, err := installSkill(dir, cfg.cfgDir, sk.Name, false); err != nil {
+		return err
+	}
+	// The run gate: the contract must actually hold here, or the skill
+	// comes back out of the store.
+	installed, src, ok := cfg.catalog().Get(sk.Name)
+	if !ok {
+		return fmt.Errorf("skills: %q vanished after install", sk.Name)
+	}
+	rec, _, err := runSkill(cfg, installed, src, ps, mustGetwd(), cmd.ErrOrStderr())
+	if err != nil || !rec.Attest.Valid {
+		_ = os.RemoveAll(filepath.Join(cfg.cfgDir, sk.Name))
+		if err != nil {
+			return fmt.Errorf("skills: %q not learned: %w", sk.Name, err)
+		}
+		renderReceipt(cmd, rec, "rejected", asJSON)
+		return fmt.Errorf("skills: %q not learned — the contract did not hold here (the failed run is attested)", sk.Name)
+	}
+	renderReceipt(cmd, rec, "learned", asJSON)
+	return nil
+}
+
+func runPromote(cmd *cobra.Command, cfg *config, name, out string) error {
+	sk, src, ok := cfg.catalog().Get(name)
+	if !ok {
+		return fmt.Errorf("skills: %q not found", name)
+	}
+	if out == "" {
+		out = "promote-" + name
+	}
+	dir, err := promoteBundle(cfg, sk, src, out)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "bundle: %s\n", dir)
+	fmt.Fprintln(cmd.OutOrStdout(), "review PROMOTION.md, then merge through the catalog's normal change process")
 	return nil
 }
 
