@@ -768,6 +768,7 @@ func newWeaveWaitCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var issue int64
 	var all bool
+	var broker bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "wait [--issue N | --all]",
@@ -787,12 +788,13 @@ A typical orchestrator flow:
 Default timeout is 1h. On timeout, exits with precondition_failed
 (exit code 3) so the caller can react.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeaveWait(cmd, issue, all, timeout, &flags)
+			return runWeaveWait(cmd, issue, all, timeout, broker, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().Int64Var(&issue, "issue", 0, "Wait on a specific issue ID")
 	cmd.Flags().BoolVar(&all, "all", false, "Wait until no `working` items remain")
+	cmd.Flags().BoolVar(&broker, "broker", false, "Auto-route live interactive auth/trust gates while waiting")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "Maximum wait duration (e.g. 30m, 1h)")
 	return cmd
 }
