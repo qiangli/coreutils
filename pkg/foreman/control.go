@@ -39,7 +39,10 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 			}
 			return err
 		}
-		go s.handleControlConn(ctx, conn)
+		s.handleControlConn(ctx, conn)
+		if s.state.Stopped {
+			return nil
+		}
 	}
 }
 

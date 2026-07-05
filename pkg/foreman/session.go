@@ -110,6 +110,10 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		s.state.Status = StatusWorking
 		s.state.CurrentStep = cmd.Message
 		s.history = append(s.history, "human: "+cmd.Message)
+		if s.runner == nil && strings.TrimSpace(s.state.Agent) == "" && strings.TrimSpace(s.state.Role) == "" {
+			s.state.Status = StatusIdle
+			return nil
+		}
 		res, err := chat.Invoke(ctx, chat.Options{
 			Agent:       s.state.Agent,
 			Role:        s.state.Role,

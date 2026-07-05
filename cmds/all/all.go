@@ -38,6 +38,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/false"
 	_ "github.com/qiangli/coreutils/cmds/fetch"
 	_ "github.com/qiangli/coreutils/cmds/find"
+	_ "github.com/qiangli/coreutils/cmds/foreman"
 	_ "github.com/qiangli/coreutils/cmds/grep"
 	_ "github.com/qiangli/coreutils/cmds/gzip"
 	_ "github.com/qiangli/coreutils/cmds/head"
