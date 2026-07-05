@@ -25,8 +25,8 @@ weave fleet). **Method:** `go test -bench=. -benchmem ./cmds/<cmd>/` — the
 |---|--:|--:|--:|--:|---|
 | `BenchmarkWCLines` (wc -l, 10 MB) | 374 K | 28 GB/s | 72,786 | **35** | allocs ≤ 40 · ns < 2 M |
 | `BenchmarkWCAll` (wc, 10 MB) | 4.1 M | 2.55 GB/s | 72,528 | **34** | allocs ≤ 40 |
-| `BenchmarkSort` (4 MB) | 57.7 M | 73 MB/s | 13.8 M | **82** | allocs ≤ 90 · B/op ≤ 15 M |
-| `BenchmarkSortN` (4 MB) | 111 M | 38 MB/s | 19.4 M | **92** | allocs ≤ 100 |
+| `BenchmarkSort` (4 MB) | 11.9 M | 353 MB/s | 17.5 M | **129** | allocs ≤ 160 · ns < 20 M |
+| `BenchmarkSortN` (4 MB) | 11.5 M | 365 MB/s | 36.3 M | **90** | allocs ≤ 110 · ns < 20 M |
 | `BenchmarkCutFields` (10 MB) | 10.7 M | 982 MB/s | 10,997 | **38** | allocs ≤ 60 |
 | `BenchmarkCutChars` (10 MB) | 14.5 M | 723 MB/s | 10,853 | **35** | allocs ≤ 60 |
 | `BenchmarkBase64Writes` (8 MB) | 4.2 M | 2.0 GB/s | 68,616 | 27 · **173 writes** | writes ≤ 1000 |
@@ -38,8 +38,8 @@ weave fleet). **Method:** `go test -bench=. -benchmem ./cmds/<cmd>/` — the
 | **wc -l** | 35.7 M ns, 293 MB/s | **374 K ns, 28 GB/s** | **95×** | byte scan (`bytes.Count`) replaces rune-by-rune `ReadRune`; rune path kept for `-m`/`-L` |
 | **wc (all)** | 35.6 M ns | **4.1 M ns** | **8.7×** | byte-scan word/line/byte fast path |
 | **cut** | 21 M ns, **374,530 allocs** | **10.7 M ns, 38 allocs** | 2×, **9856× fewer allocs** | `bytes.IndexByte` field scan + buffered output, no `[]string` per line |
-| **sort** | 82 M ns, 21.7 MB | **57.7 M ns, 13.8 MB** | 1.4×, −37% mem | reduced per-line sorting overhead + allocation |
-| **sort -n** | 174 M ns | **111 M ns** | 1.6× | " |
+| **sort** | 82 M ns | **11.9 M ns** | **6.9×** | parallel merge (GOMAXPROCS chunks + stable k-way merge) + unstable pdqsort (default) + `slices.SortStableFunc` keys |
+| **sort -n** | 174 M ns | **11.5 M ns** | **15×** | LSD radix sort on int64 keys (bit-flipped for descending/negatives) + parallel |
 | **base64** | **304,687 writes** | **173 writes** | **1761×** | `bufio.NewWriterSize(64K)` on encode+decode (was unbuffered — 18× slower on a real pipe/file, invisible to `io.Discard`) |
 
 **Fidelity preserved:** every command still 100% byte-identical to GNU coreutils
@@ -56,15 +56,15 @@ than GNU** and halved the others' gaps:
 |---|--:|--:|---|
 | **wc -l** | 12.9× slower | **0.23× — 4.3× FASTER** | flipped |
 | **wc** (all) | 3.8× slower | **0.64× — 1.6× FASTER** | flipped |
+| **sort** | 4.3× slower | **0.49× — 2.0× FASTER** | flipped (parallel + pdqsort) |
+| **sort -n** | 5.6× slower | **0.48× — 2.1× FASTER** | flipped (integer radix) |
 | **cut** | 3.6× slower | **1.89× slower** | gap ~halved |
-| **sort** | 4.3× slower | **2.60× slower** | improved (io.ReadAll ceiling remains) |
-| **sort -n** | 5.6× slower | **3.43× slower** | improved |
 | **base64** (in-proc) | 0.47× faster | **0.58× faster** | already fast; buffering fix targets real-output/cold (18×→~1×) |
 
-**bashy faster-or-par than GNU on 9 of 15 hot commands** (post-sprint):
-sha256sum **0.19×**, cat 0.34×, awk 0.39×, base64 0.58×, wc-l **0.23×**, wc **0.64×**,
-tac 0.65×, head 0.70×, md5sum 0.96×. Still slower (untargeted, or algorithmic):
-tail 1.13×, sed 1.80×, cut 1.89×, grep 1.99×, sort 2.60×, sort-n 3.43×.
+**bashy faster-or-par than GNU on 11 of 15 hot commands** (post-sprint + sort round):
+sha256sum **0.19×**, wc-l **0.23×**, cat 0.34×, awk 0.39×, **sort-n 0.48×**, **sort 0.49×**,
+base64 0.58×, wc **0.64×**, tac 0.65×, head 0.70×, md5sum 0.96×. Still slower:
+tail 1.13×, sed 1.80×, cut 1.89×, grep 1.99×.
 
 Pipelines (T2, 0-fork): topN 2.4×→**1.93×**, wordfreq 1.74×→**1.22×** — improved as
 the slow stages sped up, still slower on darwin (cheap fork ⇒ 0-fork win is small;

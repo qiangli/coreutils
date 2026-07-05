@@ -25,10 +25,10 @@ perf-sprint; "after" = post (wc/cut/sort/base64 optimized by the weave fleet).
 | md5sum | 110 ms | 104 ms | **104 ms** | 0.96× | **0.96×** | par |
 | tail | 59 ms | 66 ms | **68 ms** | 1.13× | **1.13×** | ~par |
 | sed | 728 ms | 1.31 s | **1.31 s** | 1.77× | **1.80×** | slower (untargeted) |
+| **sort** ⚡⚡ | 192 ms | 866 ms | **94 ms** | 4.34× | **0.49×** | **flipped** → 2.0× faster (parallel + pdqsort) |
+| **sort -n** ⚡⚡ | 277 ms | 1.61 s | **135 ms** | 5.56× | **0.48×** | **flipped** → 2.1× faster (integer radix) |
 | **cut** ⚡ | 59 ms | 214 ms | **112 ms** | 3.61× | **1.89×** | gap ~halved (9856× fewer allocs) |
 | grep | 55 ms | 110 ms | **109 ms** | 1.97× | **1.99×** | slower (RE2; untargeted) |
-| **sort** ⚡ | 196 ms | 866 ms | **511 ms** | 4.34× | **2.60×** | improved (io.ReadAll ceiling remains) |
-| **sort -n** ⚡ | 263 ms | 1.61 s | **905 ms** | 5.56× | **3.43×** | improved |
 
 ⚡ = optimized this sprint.
 
@@ -44,17 +44,18 @@ perf-sprint; "after" = post (wc/cut/sort/base64 optimized by the weave fleet).
 
 ## Summary
 
-**bashy is faster-or-par than GNU 9.11 on 9 of 15 hot single commands:**
-sha256sum **5.3×**, wc-l **4.3×**, cat 2.9×, awk 2.5×, base64 1.7×, wc 1.6×,
-tac 1.5×, head 1.4×, md5sum par.
+**bashy is faster-or-par than GNU 9.11 on 11 of 15 hot single commands:**
+sha256sum **5.3×**, wc-l **4.3×**, cat 2.9×, awk 2.5×, **sort-n 2.1×**, **sort 2.0×**,
+base64 1.7×, wc 1.6×, tac 1.5×, head 1.4×, md5sum par.
 
-**The sprint flipped the two worst offenders from slower to faster:** `wc -l`
-(12.9× slower → 4.3× faster) and `wc` (3.8× slower → 1.6× faster), and roughly
-halved `cut` (3.6×→1.9×) and `sort` (4.3×→2.6×).
+**The optimization work flipped the four worst offenders from slower to faster:**
+`wc -l` (12.9× slower → 4.3× faster) and `wc` (3.8× → 1.6× faster) via byte-scan;
+`sort` (4.3× slower → **2.0× faster**) via parallel merge (GOMAXPROCS chunks + stable
+k-way merge) + unstable pdqsort, and `sort -n` (5.6× slower → **2.1× faster**) via
+an LSD integer radix sort. `cut` gap ~halved (3.6×→1.9×).
 
-**Still slower (targets / structural):** sort 2.6× (io.ReadAll whole-input +
-SliceStable ceiling), sort-n 3.4×, grep 2.0× (RE2 vs GNU Boyer-Moore — competitive,
-not a priority), sed 1.8×, cut 1.9×, tail 1.1×.
+**Still slower (untargeted / structural):** grep 2.0× (RE2 vs GNU Boyer-Moore —
+competitive, not a priority), cut 1.9×, sed 1.8×, tail 1.1×.
 
 **Pipelines** improved as their slow stages sped up (topN 2.4→1.9×, wordfreq
 1.74→1.22×) but remain slower on darwin: `fork` is ~1 ms here, so avoiding 4–5
