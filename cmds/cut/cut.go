@@ -39,6 +39,7 @@ type cutter struct {
 	fieldMode     bool
 	delim         byte
 	onlyDelimited bool
+	scratch       []byte
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -249,13 +250,24 @@ func (c *cutter) selected(idx int) bool {
 
 func (c *cutter) process(in *bufio.Reader, out *bufio.Writer) error {
 	for {
-		line, err := in.ReadBytes('\n')
+		line, err := in.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			c.scratch = append(c.scratch, line...)
+			continue
+		}
+		if len(c.scratch) > 0 {
+			c.scratch = append(c.scratch, line...)
+			line = c.scratch
+		}
 		if len(line) > 0 {
 			hadNL := line[len(line)-1] == '\n'
 			if hadNL {
 				line = line[:len(line)-1]
 			}
 			c.emitLine(line, hadNL, out)
+		}
+		if len(c.scratch) > 0 {
+			c.scratch = c.scratch[:0]
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -279,16 +291,27 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 			}
 			return
 		}
-		fields := bytes.Split(line, []byte{c.delim})
 		first := true
-		for i, f := range fields {
-			if c.selected(i + 1) {
+		field := 1
+		start := 0
+		for {
+			rel := bytes.IndexByte(line[start:], c.delim)
+			end := len(line)
+			if rel >= 0 {
+				end = start + rel
+			}
+			if c.selected(field) {
 				if !first {
 					out.WriteByte(c.delim)
 				}
-				out.Write(f)
+				out.Write(line[start:end])
 				first = false
 			}
+			if rel < 0 {
+				break
+			}
+			field++
+			start = end + 1
 		}
 		if hadNL {
 			out.WriteByte('\n')
