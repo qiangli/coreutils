@@ -2,18 +2,13 @@ package foreman
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestTellReachesSessionOverUnixSocket(t *testing.T) {
-	dir, err := os.MkdirTemp("/private/tmp", "foreman-")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := t.TempDir()
 	r := &stubRunner{out: "ack"}
 	s, err := Start(context.Background(), Options{
 		ID:     "sock",

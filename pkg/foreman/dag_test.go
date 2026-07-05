@@ -38,11 +38,7 @@ func (r *recordingRunner) snapshot() []string {
 }
 
 func TestRunDAGAppliesSteerBetweenNodes(t *testing.T) {
-	root, err := os.MkdirTemp("/private/tmp", "foreman-dag-")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	root := t.TempDir()
 	dagPath := filepath.Join(root, "dag.md")
 	if err := os.WriteFile(dagPath, []byte("## Tasks\n\n### a\n```bash\necho a\n```\n\n### b\nRequires: a\n```bash\necho b\n```\n"), 0o600); err != nil {
 		t.Fatalf("write dag: %v", err)
