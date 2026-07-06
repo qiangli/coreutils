@@ -1,7 +1,7 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package chat
 
-// stripQuarantine is a macOS-only concern (Gatekeeper com.apple.quarantine);
-// a no-op everywhere else.
+// stripQuarantine is a no-op on Linux/unix: there is no Gatekeeper quarantine
+// or Mark-of-the-Web equivalent — a downloaded binary with +x just runs.
 func stripQuarantine(string) {}
