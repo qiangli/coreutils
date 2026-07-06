@@ -142,6 +142,7 @@ func resolveSHA(ctx context.Context, version, filename string) (string, error) {
 	if sha := pinnedSHA(filename); sha != "" {
 		return sha, nil
 	}
+	fmt.Fprintf(os.Stderr, "note: node %s is not a pinned default (%s) — verifying against the official published checksum\n", version, DefaultVersion)
 	url := fmt.Sprintf("https://nodejs.org/dist/v%s/SHASUMS256.txt", version)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	client := &http.Client{Timeout: 30 * time.Second}
