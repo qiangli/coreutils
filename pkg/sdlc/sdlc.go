@@ -232,7 +232,7 @@ Follow a run log until the process exits:
 
   bashy sdlc watch RUN_ID --follow
 
-Run records are stored under .bashy/sdlc/runs by default. The conductor log and
+Run records are stored under .bashy/generated/sdlc/runs by default. The conductor log and
 brief can contain request details and agent output, so keep that directory local
 or gitignored when working in repositories that may be published.
 
@@ -257,7 +257,7 @@ Record a local issue without delegating it:
   bashy sdlc issue --text "Add a deployment status check"
   bashy sdlc issue --file ./request.md
 
-Local issue files are written under .bashy/sdlc/issues by default. They are meant
+Local issue files are written under .bashy/generated/sdlc/issues by default. They are meant
 for local reference and automation handoff.
 
 Briefs and scheduled ticks
@@ -327,14 +327,14 @@ with origin the writable workspace) is still available by passing --baseline.
 
   cd ~/work/repo
   bashy sdlc issue --text "Fix the broken link"
-  bashy sdlc tick --issue-file .bashy/sdlc/issues/<printed-issue-file>.md \
+  bashy sdlc tick --issue-file .bashy/generated/sdlc/issues/<printed-issue-file>.md \
     --intake-provider loom --intake-repo owner/repo \
     --production github-pages --background
 
 The local scheduler can drive the same command periodically:
 
   bashy schedule add --every 5m -- \
-    bashy sdlc tick --issue-file .bashy/sdlc/issues/<printed-issue-file>.md \
+    bashy sdlc tick --issue-file .bashy/generated/sdlc/issues/<printed-issue-file>.md \
       --intake-provider loom --intake-repo owner/repo --background
 
 After the conductor finishes, the trigger or a human records QA and approval
@@ -937,7 +937,7 @@ func newStatusCmd() *cobra.Command {
 				"schema_version": schemaVersion,
 				"config":         exp,
 				"git":            gitSummary("."),
-				"issues":         listIssueFiles(".bashy/sdlc/issues"),
+				"issues":         listIssueFiles(".bashy/generated/sdlc/issues"),
 			}
 			if asJSON || os.Getenv("BASHY_AGENTIC") != "" {
 				b, _ := json.Marshal(status)
@@ -985,7 +985,7 @@ func newIssueCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&text, "text", "", "issue/request text")
 	cmd.Flags().StringVar(&file, "file", "", "file containing issue/request text")
-	cmd.Flags().StringVar(&dir, "dir", ".bashy/sdlc/issues", "local issue directory")
+	cmd.Flags().StringVar(&dir, "dir", ".bashy/generated/sdlc/issues", "local issue directory")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
 }
@@ -1041,7 +1041,7 @@ func newRunsCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	cmd.Flags().IntVar(&limit, "limit", 20, "maximum number of runs to list")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
@@ -1071,7 +1071,7 @@ func newWatchCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	cmd.Flags().BoolVar(&follow, "follow", false, "follow log output until the run exits")
 	cmd.Flags().IntVar(&tail, "tail", 80, "number of log lines to show")
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "follow polling interval")
@@ -1090,7 +1090,7 @@ func newSuperviseCmd() *cobra.Command {
 			return SuperviseRun(cmd.Context(), dir, args[0], args[1:])
 		},
 	}
-	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	return cmd
 }
 
@@ -1115,7 +1115,7 @@ func newApproveCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	cmd.Flags().StringVar(&note, "note", "", "approval note")
 	cmd.Flags().StringVar(&by, "by", "", "approver identity")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
@@ -1143,7 +1143,7 @@ func newQACmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	cmd.Flags().StringVar(&status, "status", "accepted", "QA status: accepted or rejected")
 	cmd.Flags().StringVar(&note, "note", "", "QA note")
 	cmd.Flags().StringVar(&by, "by", "", "QA reviewer identity")
@@ -1220,7 +1220,7 @@ func newResolveCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	cmd.Flags().StringVar(&status, "status", "resolved", "resolution status, for example resolved, rejected, rolled-out, failed")
 	cmd.Flags().StringVar(&note, "note", "", "resolution note")
 	cmd.Flags().StringVar(&by, "by", "", "resolver identity")
@@ -1395,7 +1395,7 @@ func newPublishGitHubPagesCmd() *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "workspace directory; defaults to the run cwd or current directory")
 	cmd.Flags().StringVar(&opt.Remote, "remote", "upstream", "git remote containing the GitHub target URL")
 	cmd.Flags().StringVar(&opt.Repo, "repo", "", "GitHub repo owner/name; overrides --remote URL")
@@ -1450,7 +1450,7 @@ func newPagesOnceCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opt.Token, "token", "", "Loom API token; defaults to BASHY_LOOM_TOKEN or GITEA_TOKEN")
 	// Workspace + publish.
 	cmd.Flags().StringVar(&opt.WorkspaceDir, "workspace", "", "guarded local workspace directory")
-	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory, relative to workspace when not absolute")
+	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory, relative to workspace when not absolute")
 	cmd.Flags().StringVar(&opt.BuildCommand, "build", "", "optional build/test command to run before publish (empty = none)")
 	cmd.Flags().StringVar(&opt.PublicURL, "public-url", "", "public page URL to verify after publish")
 	cmd.Flags().StringVar(&opt.Branch, "branch", "main", "GitHub Pages source branch")
@@ -1507,7 +1507,7 @@ func bindDelegateFlags(cmd *cobra.Command, opt *DelegateOptions) {
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "working directory for the conductor")
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "danger-full-access", "conductor sandbox for agents that support it")
 	cmd.Flags().BoolVar(&opt.Background, "background", false, "start the conductor in the background and write a local run log")
-	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 }
 
 func bindIssueFlags(cmd *cobra.Command, opt *DelegateOptions) {
@@ -2056,7 +2056,7 @@ func StartBackgroundRun(ctx context.Context, res DelegateResult, opt DelegateOpt
 func NewRunRecord(res DelegateResult, opt DelegateOptions, chatRes chat.Result) (*RunRecord, error) {
 	runsDir := strings.TrimSpace(opt.RunsDir)
 	if runsDir == "" {
-		runsDir = ".bashy/sdlc/runs"
+		runsDir = ".bashy/generated/sdlc/runs"
 	}
 	started := time.Now().UTC()
 	baseID := started.Format("20060102T150405Z")
@@ -2194,7 +2194,7 @@ func appendRunLog(run RunRecord, output string) error {
 func runsDirForOption(dir string) string {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
-		dir = ".bashy/sdlc/runs"
+		dir = ".bashy/generated/sdlc/runs"
 	}
 	if abs, err := filepath.Abs(dir); err == nil {
 		return abs
@@ -2219,7 +2219,7 @@ func LoadRun(path string) (RunRecord, error) {
 
 func ListRuns(dir string, limit int) ([]RunRecord, error) {
 	if strings.TrimSpace(dir) == "" {
-		dir = ".bashy/sdlc/runs"
+		dir = ".bashy/generated/sdlc/runs"
 	}
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -2249,7 +2249,7 @@ func ListRuns(dir string, limit int) ([]RunRecord, error) {
 
 func LoadRunByID(dir, id string) (RunRecord, error) {
 	if strings.TrimSpace(dir) == "" {
-		dir = ".bashy/sdlc/runs"
+		dir = ".bashy/generated/sdlc/runs"
 	}
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -2403,7 +2403,7 @@ func ResolveLifecycleRun(dir, id, status, note, by string) (RunRecord, error) {
 
 func WatchRun(ctx context.Context, out io.Writer, opt WatchOptions) error {
 	if opt.RunsDir == "" {
-		opt.RunsDir = ".bashy/sdlc/runs"
+		opt.RunsDir = ".bashy/generated/sdlc/runs"
 	}
 	if opt.Tail <= 0 {
 		opt.Tail = 80
@@ -2905,7 +2905,7 @@ func newPushSourceCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opt.Token, "github-token", "", "GitHub token; defaults to GITHUB_TOKEN/GIT_TOKEN")
 	cmd.Flags().BoolVar(&opt.NoPR, "no-pr", false, "push the branch only (non-GitHub upstream; open the PR on that forge)")
 	cmd.Flags().StringVar(&opt.RunID, "run", "", "gate: require this run be approved first")
-	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "SDLC runs directory")
+	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/generated/sdlc/runs", "SDLC runs directory")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the plan without pushing")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print JSON")
 	return cmd

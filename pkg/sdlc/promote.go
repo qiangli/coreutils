@@ -73,7 +73,7 @@ func newPromoteCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	cmd.Flags().StringVar(&env, "env", "", "target environment (dev|qa|prod)")
 	cmd.Flags().StringVar(&from, "from", "", "the stage the change has reached (enables ordered promotion — no skipping)")
 	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo owner/name; defaults from the run's issue id")

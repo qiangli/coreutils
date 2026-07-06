@@ -43,7 +43,7 @@ type ServiceStatus struct {
 }
 
 func servicePidPath(runsDir string) string {
-	rd := runsDirForOption(runsDir) // e.g. .bashy/sdlc/runs
+	rd := runsDirForOption(runsDir) // e.g. .bashy/generated/sdlc/runs
 	return filepath.Join(filepath.Dir(rd), "service.pid")
 }
 
@@ -189,7 +189,7 @@ bashy-service supervisor drives start|status|stop; register it with a BashyServi
 whose Command is ["sdlc","service"].`),
 	}
 	pf := cmd.PersistentFlags()
-	pf.StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
+	pf.StringVar(&opt.RunsDir, "runs-dir", ".bashy/generated/sdlc/runs", "local SDLC runs directory")
 	pf.StringVar(&opt.ConfigPath, "config", ".bashy/sdlc.yaml", "SDLC config file")
 	pf.DurationVar(&opt.Interval, "interval", 60*time.Second, "loop tick interval")
 	pf.StringVar(&opt.Cwd, "cwd", "", "working directory for the conductor")
