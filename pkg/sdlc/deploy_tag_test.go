@@ -50,7 +50,10 @@ func TestDeployOnceIsIdempotent(t *testing.T) {
 	git(t, work, "push", "origin", "HEAD:refs/heads/main")
 
 	counter := filepath.Join(work, "deploys.log")
-	deploy := []string{"sh", "-c", "printf x >> " + counter} // records each real deploy
+	// ToSlash: on Windows the native path has backslashes, which `sh -c` treats as
+	// escapes (writing to the wrong file → the test saw 0 runs). Git Bash accepts
+	// C:/… forward-slash paths. os.ReadFile below still uses the native `counter`.
+	deploy := []string{"sh", "-c", "printf x >> " + filepath.ToSlash(counter)} // records each real deploy
 	ctx := context.Background()
 
 	// 1) first deploy of v0.0.1 to qa → runs, tags v0.0.1-qa
