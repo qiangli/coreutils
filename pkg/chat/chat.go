@@ -60,6 +60,14 @@ type Runner interface {
 type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+	// macOS: a cask/download-installed agent (e.g. codex) carries
+	// com.apple.quarantine, so a background/CI launch (act_runner) hangs on the
+	// Gatekeeper "downloaded from the Internet" popup. The operator explicitly
+	// configured this agent as the conductor — strip the quarantine best-effort
+	// so the headless launch proceeds. No-op off darwin / when already clear.
+	if p, err := exec.LookPath(agent); err == nil {
+		stripQuarantine(p)
+	}
 	cmd := exec.CommandContext(ctx, agent, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
