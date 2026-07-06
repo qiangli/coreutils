@@ -774,7 +774,10 @@ func ownerIdentities(o Options) []string {
 // not promote an existing user.
 func promoteAdminViaAPI(ctx context.Context, baseURL, user string) error {
 	endpoint := strings.TrimRight(baseURL, "/") + "/api/v1/admin/users/" + url.PathEscape(user)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, strings.NewReader(`{"admin":true}`))
+	// Gitea's EditUser REQUIRES login_name + source_id (422 "[LoginName]: Required"
+	// otherwise). loom users are local (source_id 0); login_name = the username.
+	payload, _ := json.Marshal(map[string]any{"login_name": user, "source_id": 0, "admin": true})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
