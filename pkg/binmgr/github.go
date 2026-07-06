@@ -187,7 +187,17 @@ func resolveChecksum(ctx context.Context, rel *ghRelease, asset ghAsset) (sha, m
 	}
 	for _, a := range rel.Assets {
 		ln := strings.ToLower(a.Name)
-		if !strings.Contains(ln, "checksum") && !strings.Contains(ln, "sha256sum") && ln != "shasums" && !strings.HasSuffix(ln, ".sha256sum") {
+		// Recognize a checksums-list asset by common naming (checksums.txt,
+		// sha256sums, SHASUMS256.txt, …) but never a signature/detached-sig file
+		// (SHASUMS256.asc / .minisig / .sig) — those aren't digest lists.
+		isChecksumList := strings.Contains(ln, "checksum") ||
+			strings.Contains(ln, "sha256sum") ||
+			strings.Contains(ln, "shasums") ||
+			strings.HasSuffix(ln, ".sha256sum")
+		isSig := strings.HasSuffix(ln, ".asc") || strings.HasSuffix(ln, ".sig") ||
+			strings.HasSuffix(ln, ".minisig") || strings.HasSuffix(ln, ".pem") ||
+			strings.HasSuffix(ln, ".gpg")
+		if !isChecksumList || isSig {
 			continue
 		}
 		body, e := httpGetBody(ctx, a.URL, "")
