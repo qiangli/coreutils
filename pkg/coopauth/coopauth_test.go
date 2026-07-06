@@ -128,3 +128,20 @@ func TestResolveDirectLANIsAnonymous(t *testing.T) {
 }
 
 func secret2(s string) []byte { return []byte(s) }
+
+func TestAdminIdentities(t *testing.T) {
+	t.Setenv("USER", "devbox")
+	t.Setenv("LOGNAME", "")
+	// explicit (comma-separated) + system user, deduped
+	got := AdminIdentities("alice@corp.com,ops", "")
+	if len(got) != 3 || got[0] != "alice@corp.com" || got[1] != "ops" || got[2] != "devbox" {
+		t.Fatalf("AdminIdentities = %v", got)
+	}
+	// standalone: no explicit → just the system user
+	if got := AdminIdentities(); len(got) != 1 || got[0] != "devbox" {
+		t.Fatalf("AdminIdentities(standalone) = %v", got)
+	}
+	if SystemUser() != "devbox" {
+		t.Fatalf("SystemUser = %q", SystemUser())
+	}
+}

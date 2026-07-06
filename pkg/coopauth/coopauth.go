@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -115,6 +116,44 @@ func Username(id string) string {
 // tunnel (X-Forwarded-Prefix present) vs. directly on the LAN/loopback. Outpost
 // strips this header on direct requests and only stamps it for tunnel traffic,
 // so it is the single reliable "came from the web" signal.
+// SystemUser returns the local system-login handle — the OS user running the
+// process, which (on a home node) IS the local admin. Reusable across custom
+// apps that need "who owns this host" without a cloudbox/outpost dependency:
+// they can make this identity an admin of their own local surface, exactly as
+// loom promotes it to a site-admin. Empty only if no OS user env is set.
+func SystemUser() string {
+	for _, k := range []string{"USER", "LOGNAME", "USERNAME"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// AdminIdentities returns the identities a custom app should treat as owner/admin,
+// deduped: the explicit ones passed in (each may be comma-separated, e.g. a
+// cloudbox-signup email plus extras) followed by the local SystemUser fallback.
+// Standalone-safe — SystemUser alone yields a working single-operator admin with
+// no cloud dependency; explicit identities layer on when a control plane supplies
+// them. This is the shared resolver every custom app reuses instead of rederiving.
+func AdminIdentities(explicit ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		for _, part := range strings.Split(s, ",") {
+			if part = strings.TrimSpace(part); part != "" && !seen[part] {
+				seen[part] = true
+				out = append(out, part)
+			}
+		}
+	}
+	for _, e := range explicit {
+		add(e)
+	}
+	add(SystemUser())
+	return out
+}
+
 func ArrivedViaCloud(r *http.Request) bool {
 	return r.Header.Get(HdrForwardedPrefix) != ""
 }

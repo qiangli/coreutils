@@ -205,8 +205,10 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 		_ = proc.Stop(10 * time.Second)
 		return nil, err
 	}
-	ensureAdmins(ctx, bin, cfg, o.DataDir, loadAdmins(o.DataDir))
-	ensureOwnerAdmin(ctx, bin, cfg, o.DataDir, url, o)
+	// Two admins are auto-added: the host OS user (local username) and any
+	// explicit owner (the cloudbox-signup email the caller passes) — plus the
+	// email allowlist file. All promoted (existing or new).
+	ensureAdmins(ctx, bin, cfg, o.DataDir, url, append(loadAdmins(o.DataDir), ownerIdentities(o)...))
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
 }
 
@@ -223,6 +225,9 @@ func Serve(ctx context.Context, o Options) error {
 	}
 	fmt.Fprintf(o.Stdout, "loom (gitea %s) serving on %s — work dir %s\n", inst.Version, inst.URL, o.DataDir)
 	fmt.Fprintln(o.Stdout, "expose it over the mesh:  outpost mesh service add git "+inst.Addr)
+
+	// Auto-seed SDLC labels on every repo (created or migrated), continuously.
+	go startLabelReconciler(ctx, inst.URL)
 
 	<-ctx.Done()
 	fmt.Fprintln(o.Stdout, "loom: shutting down…")
@@ -350,8 +355,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		_ = removeState(o.DataDir)
 		return State{}, err
 	}
-	ensureAdmins(ctx, bin, cfg, o.DataDir, loadAdmins(o.DataDir))
-	ensureOwnerAdmin(ctx, bin, cfg, o.DataDir, st.URL, o)
+	ensureAdmins(ctx, bin, cfg, o.DataDir, st.URL, append(loadAdmins(o.DataDir), ownerIdentities(o)...))
 	if err := waitHTTP(ctx, st.ProxyURL, 30*time.Second); err != nil {
 		_ = cmd.Process.Kill()
 		_ = proxyCmd.Process.Kill()
@@ -466,6 +470,9 @@ func runProxy(ctx context.Context, addr string, port int, target, publicPrefix s
 	go func() {
 		errCh <- server.ListenAndServe()
 	}()
+	// The proxy is the long-lived process in daemon mode — run the SDLC-label
+	// reconciler here so repos created/migrated at runtime get auto-labelled.
+	go startLabelReconciler(ctx, target)
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -702,87 +709,64 @@ func loadAdmins(dataDir string) []string {
 // finds an existing ADMIN account instead of auto-registering a regular one.
 // Best-effort per entry (loom must still boot); Gitea has no CLI to promote an
 // already-registered regular user, so that edge is logged with the fix.
-func ensureAdmins(ctx context.Context, bin, cfg, dataDir string, emails []string) {
-	for _, email := range emails {
-		u := coopauth.Username(email)
-		out, err := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir,
-			"admin", "user", "create", "--username", u, "--email", email,
-			"--random-password", "--admin", "--must-change-password=false")
-		if err == nil {
-			slog.Info("loom: provisioned admin", "user", u, "email", email)
-			continue
-		}
-		if strings.Contains(strings.ToLower(string(out)), "already exists") {
-			list, _ := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir, "admin", "user", "list", "--admin")
-			if !adminListContainsUser(string(list), u) {
-				slog.Warn("loom: allowlisted admin exists but is NOT site-admin; delete the user and re-login, or promote in Gitea", "user", u, "email", email)
-			}
-			continue
-		}
-		slog.Warn("loom: provision admin failed", "email", email, "err", err, "out", strings.TrimSpace(string(out)))
-	}
-}
-
-// ownerIdentities returns the host-owner identities to always make site-admin:
-// an explicit Options.Owner (email or handle) plus the OS user running loom (the
-// operator on a home node, and the same identity the proxy auto-provisions for a
-// local login). Deduped; empties dropped.
-func ownerIdentities(o Options) []string {
+// ensureAdmins makes each identity a loom site-admin. An identity is an EMAIL
+// (cloud SSO — the primary identity) OR a bare USERNAME (a GitHub/remote handle:
+// the operator who registered a dev machine with cloudbox often acts remotely as
+// their GitHub user, which is NOT the host OS user). Both are supported so the
+// admin allowlist covers the real operator regardless of which identity the proxy
+// stamps. baseURL is the loom API base for promoting already-existing accounts.
+func ensureAdmins(ctx context.Context, bin, cfg, dataDir, baseURL string, identities []string) {
 	seen := map[string]bool{}
-	var out []string
-	add := func(s string) {
-		if s = strings.TrimSpace(s); s != "" && !seen[s] {
-			seen[s] = true
-			out = append(out, s)
+	for _, id := range identities {
+		if id = strings.TrimSpace(id); id == "" || seen[id] {
+			continue
 		}
+		seen[id] = true
+		ensureUserAdmin(ctx, bin, cfg, dataDir, baseURL, id)
 	}
-	add(o.Owner)
-	add(os.Getenv("LOOM_OWNER"))
-	for _, k := range []string{"USER", "LOGNAME", "USERNAME"} {
-		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-			add(v)
-			break
-		}
-	}
-	return out
 }
 
-// ensureOwnerAdmin makes the host owner a loom site-admin, ALWAYS. On a home node
-// the operator who registered the host must own its forge — but Gitea's
-// reverse-proxy auto-registration creates a first-time login as a NON-admin
-// account (the "changes wrt the username" shadow-account trap). So we pre-create
-// the owner as admin here, BEFORE first login, so the proxy matches the existing
-// admin account instead of minting a non-admin one; an owner account that already
-// exists as a non-admin is promoted via the loopback-admin API (the gitea CLI has
-// no promote-existing path). Runs after the server is up (health-checked). Best
-// effort: a failure logs a clear, actionable warning and never blocks startup.
-func ensureOwnerAdmin(ctx context.Context, bin, cfg, dataDir, baseURL string, o Options) {
-	for _, id := range ownerIdentities(o) {
-		u := coopauth.Username(id)
-		if u == "" || u == LoopbackUser {
-			continue
-		}
-		email := id
-		if !strings.Contains(email, "@") {
-			email = u + "@localhost"
-		}
-		out, err := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir,
-			"admin", "user", "create", "--username", u, "--email", email,
-			"--random-password", "--admin", "--must-change-password=false")
-		if err == nil {
-			slog.Info("loom: pre-provisioned host owner as site-admin", "user", u)
-			continue
-		}
-		if strings.Contains(strings.ToLower(string(out)), "already exists") {
-			if perr := promoteAdminViaAPI(ctx, baseURL, u); perr != nil {
-				slog.Warn("loom: host owner exists but is not site-admin; auto-promote failed — promote it in the loom UI (login as admin) or re-create the account", "user", u, "err", perr)
-				continue
-			}
-			slog.Info("loom: promoted existing host owner to site-admin", "user", u)
-			continue
-		}
-		slog.Warn("loom: ensure host-owner admin failed", "user", u, "err", err, "out", strings.TrimSpace(string(out)))
+// ensureUserAdmin makes one identity (email or bare username) a site-admin:
+// pre-create it as admin (so a first proxy login matches an existing admin
+// account instead of minting a non-admin shadow), or — if it already exists as a
+// non-admin — promote it via the loopback-admin API (the gitea CLI can only
+// create-as-admin, never promote). Best effort: logs an actionable warning, never
+// blocks startup.
+func ensureUserAdmin(ctx context.Context, bin, cfg, dataDir, baseURL, id string) {
+	u := coopauth.Username(id)
+	if u == "" || u == LoopbackUser {
+		return
 	}
+	email := id
+	if !strings.Contains(email, "@") {
+		email = u + "@localhost" // a bare handle: synthesize a stable local email
+	}
+	out, err := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir,
+		"admin", "user", "create", "--username", u, "--email", email,
+		"--random-password", "--admin", "--must-change-password=false")
+	if err == nil {
+		slog.Info("loom: pre-provisioned site-admin", "user", u)
+		return
+	}
+	if strings.Contains(strings.ToLower(string(out)), "already exists") {
+		if perr := promoteAdminViaAPI(ctx, baseURL, u); perr != nil {
+			slog.Warn("loom: admin exists but is not site-admin; auto-promote failed — promote in the loom UI (login as admin)", "user", u, "err", perr)
+			return
+		}
+		slog.Info("loom: promoted existing user to site-admin", "user", u)
+		return
+	}
+	slog.Warn("loom: ensure admin failed", "user", u, "err", err, "out", strings.TrimSpace(string(out)))
+}
+
+// ownerIdentities returns the host-owner identities to ALWAYS make site-admin,
+// via the shared resolver coopauth.AdminIdentities (reused by every custom app):
+// the LOCAL system-admin login (OS user — standalone, no cloudbox needed) plus,
+// when supplied, an explicit owner (Options.Owner / $LOOM_OWNER, comma-separated,
+// e.g. a cloudbox-signup email). loom-specific only in WHERE the explicit values
+// come from; the resolution logic lives in coopauth.
+func ownerIdentities(o Options) []string {
+	return coopauth.AdminIdentities(o.Owner, os.Getenv("LOOM_OWNER"))
 }
 
 // promoteAdminViaAPI sets is_admin on an existing user via the Gitea admin API,
@@ -825,6 +809,147 @@ func adminListContainsUser(output, user string) bool {
 		}
 	}
 	return false
+}
+
+// defaultRepoLabels are the SDLC labels every loom repo needs so the loom-driven
+// SDLC loop works the moment a repo is CREATED or MIGRATED — no manual setup.
+var defaultRepoLabels = []struct{ Name, Color, Desc string }{
+	{"sdlc:go", "#0e8a16", "trigger the SDLC conductor to implement + publish this issue"},
+	{"deploy:prod", "#b60205", "publish to prod"},
+	{"deploy:preview", "#fbca04", "build a safe local preview"},
+}
+
+// startLabelReconciler ensures every repo carries the default SDLC labels, at
+// startup and then on a timer — so a repo created OR migrated while loom is
+// running is auto-labelled without manual setup ("trace new repos, seed labels").
+// Standalone: uses the loopback-admin API, no cloudbox. Blocks until ctx is done,
+// so callers run it in a goroutine from a long-lived process (Serve / the proxy).
+func startLabelReconciler(ctx context.Context, baseURL string) {
+	reconcile := func() {
+		if err := reconcileRepoLabels(ctx, baseURL); err != nil {
+			slog.Debug("loom: label reconcile", "err", err)
+		}
+	}
+	reconcile()
+	t := time.NewTicker(2 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			reconcile()
+		}
+	}
+}
+
+func reconcileRepoLabels(ctx context.Context, baseURL string) error {
+	repos, err := listAllRepos(ctx, baseURL)
+	if err != nil {
+		return err
+	}
+	for _, full := range repos {
+		have, err := repoLabelNames(ctx, baseURL, full)
+		if err != nil {
+			continue
+		}
+		for _, l := range defaultRepoLabels {
+			if have[l.Name] {
+				continue
+			}
+			if err := createRepoLabel(ctx, baseURL, full, l.Name, l.Color, l.Desc); err == nil {
+				slog.Info("loom: seeded SDLC label", "repo", full, "label", l.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// loomAdminReq builds a loopback-admin-authenticated request to the loom API.
+func loomAdminReq(ctx context.Context, method, endpoint, body string) (*http.Request, error) {
+	var r io.Reader
+	if body != "" {
+		r = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, r)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(LoopbackUser, LoopbackPassword)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
+}
+
+// listAllRepos returns every repo's full_name (admin sees all), paginated.
+func listAllRepos(ctx context.Context, baseURL string) ([]string, error) {
+	base := strings.TrimRight(baseURL, "/")
+	var out []string
+	for page := 1; page <= 100; page++ {
+		req, err := loomAdminReq(ctx, http.MethodGet, fmt.Sprintf("%s/api/v1/repos/search?limit=50&page=%d", base, page), "")
+		if err != nil {
+			return out, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return out, err
+		}
+		var body struct {
+			Data []struct {
+				FullName string `json:"full_name"`
+			} `json:"data"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		for _, d := range body.Data {
+			out = append(out, d.FullName)
+		}
+		if len(body.Data) < 50 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func repoLabelNames(ctx context.Context, baseURL, full string) (map[string]bool, error) {
+	req, err := loomAdminReq(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/v1/repos/"+full+"/labels?limit=100", "")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var labels []struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&labels); err != nil {
+		return nil, err
+	}
+	m := make(map[string]bool, len(labels))
+	for _, l := range labels {
+		m[l.Name] = true
+	}
+	return m, nil
+}
+
+func createRepoLabel(ctx context.Context, baseURL, full, name, color, desc string) error {
+	payload, _ := json.Marshal(map[string]string{"name": name, "color": color, "description": desc})
+	req, err := loomAdminReq(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/api/v1/repos/"+full+"/labels", string(payload))
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("create label %s on %s: HTTP %d", name, full, resp.StatusCode)
+	}
+	return nil
 }
 
 func isLoopbackRemote(addr string) bool {
