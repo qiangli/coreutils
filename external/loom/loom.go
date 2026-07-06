@@ -436,7 +436,7 @@ func healthy(ctx context.Context, url string, timeout time.Duration) bool {
 	return resp.StatusCode < 500
 }
 
-func runProxy(ctx context.Context, addr string, port int, target, publicPrefix string) error {
+func runProxy(ctx context.Context, addr string, port int, target, publicPrefix string, autoProvision bool) error {
 	if addr == "" {
 		addr = DefaultAddr
 	}
@@ -446,7 +446,7 @@ func runProxy(ctx context.Context, addr string, port int, target, publicPrefix s
 	if target == "" {
 		target = fmt.Sprintf("http://127.0.0.1:%d", DefaultPort)
 	}
-	handler, err := loomProxyHandler(target, publicPrefix)
+	handler, err := loomProxyHandler(target, publicPrefix, autoProvision)
 	if err != nil {
 		return err
 	}
@@ -473,7 +473,7 @@ func runProxy(ctx context.Context, addr string, port int, target, publicPrefix s
 	}
 }
 
-func loomProxyHandler(target, publicPrefix string) (http.Handler, error) {
+func loomProxyHandler(target, publicPrefix string, autoProvision bool) (http.Handler, error) {
 	targetURL, err := url.Parse(target)
 	if err != nil {
 		return nil, fmt.Errorf("loom proxy: target: %w", err)
@@ -494,20 +494,24 @@ func loomProxyHandler(target, publicPrefix string) (http.Handler, error) {
 		stripWebauthHeaders(req.Header)
 		user, email, name := proxyIdentity(req)
 		if user != "" {
-			// Gitea rejects '@' (and most punctuation) in a username, and its
-			// reverse-proxy auto-registration SILENTLY DROPS a request whose
-			// X-WEBAUTH-USER isn't a valid username — leaving the caller
-			// anonymous. The cloudbox SSO vouch is commonly an email
-			// (a@b.com), so passing it verbatim surfaces as an unexpected
-			// "sign in" + a login popup on New Issue for an already-vouched
-			// user. Map it to a valid Gitea username; the real address still
-			// rides in X-WEBAUTH-EMAIL so Gitea records the right email.
 			if name == "" {
 				name = user
 			}
-			req.Header.Set("X-WEBAUTH-USER", coopauth.Username(user))
+			// EMAIL is the identity. Gitea's reverse-proxy auth matches an
+			// EXISTING account by X-WEBAUTH-EMAIL when no username is sent
+			// (getUserFromAuthEmail), so a vouched user is logged in with NO
+			// username-collision surface — the email is unique. We send
+			// X-WEBAUTH-USER — which is what triggers Gitea AUTO-REGISTRATION of
+			// a brand-new account — only when auto-provisioning is on. With it
+			// off (the default, a private forge), an unknown email stays
+			// anonymous: it can still VIEW public repos, but only owner/admins
+			// (pre-provisioned) and, when on, self-registered users can act. The
+			// username is a readable handle only; identity is the email.
 			req.Header.Set("X-WEBAUTH-EMAIL", firstNonEmpty(email, user))
 			req.Header.Set("X-WEBAUTH-FULLNAME", name)
+			if autoProvision {
+				req.Header.Set("X-WEBAUTH-USER", coopauth.Username(user))
+			}
 		}
 	}
 	rp.ModifyResponse = func(resp *http.Response) error {
@@ -604,6 +608,17 @@ func rewriteLocalHTMLPrefix(body []byte, prefix string) []byte {
 	body = bytes.ReplaceAll(body, []byte(`:`+prefix+`/`), []byte(`:/`))
 	body = bytes.ReplaceAll(body, []byte(prefix+`/`), []byte(`/`))
 	return body
+}
+
+// autoProvisionEnv reports whether $LOOM_AUTO_PROVISION opts a private forge
+// into auto-registering an account for any vouched user on first contact.
+func autoProvisionEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOOM_AUTO_PROVISION"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func stripWebauthHeaders(h http.Header) {
@@ -1149,6 +1164,7 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 	exposeCmd.Flags().StringVar(&o.DataDir, "data", "", "work dir (default ~/.agents/bashy/loom)")
 	exposeCmd.Flags().StringVar(&service, "service", "git", "outpost mesh service name")
 
+	var proxyAutoProvision bool
 	proxyCmd := &cobra.Command{
 		Use:    "proxy",
 		Short:  "Run the Loom reverse proxy",
@@ -1156,13 +1172,14 @@ compiled in). Expose it over the mesh with: outpost mesh service add git <addr>.
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return runProxy(ctx, o.Addr, o.ProxyPort, proxyTarget, proxyPublicPrefix)
+			return runProxy(ctx, o.Addr, o.ProxyPort, proxyTarget, proxyPublicPrefix, proxyAutoProvision || autoProvisionEnv())
 		},
 	}
 	proxyCmd.Flags().StringVar(&o.Addr, "addr", DefaultAddr, "HTTP bind address")
 	proxyCmd.Flags().IntVar(&o.ProxyPort, "port", DefaultProxyPort, "HTTP proxy port")
 	proxyCmd.Flags().StringVar(&proxyTarget, "target", "", "backend Gitea URL")
 	proxyCmd.Flags().StringVar(&proxyPublicPrefix, "public-prefix", "", "public URL path prefix to strip before forwarding to Gitea")
+	proxyCmd.Flags().BoolVar(&proxyAutoProvision, "auto-provision", false, "auto-register a Gitea account for any vouched user on first contact (default off; $LOOM_AUTO_PROVISION=1)")
 
 	pathCmd := &cobra.Command{
 		Use:   "path",

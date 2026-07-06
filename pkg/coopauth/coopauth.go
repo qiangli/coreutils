@@ -22,7 +22,6 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -74,28 +73,16 @@ func (id Identity) IsAdmin() bool { return id.Role == RoleAdmin }
 // alone; the app allowlist (Policy) is authoritative. Kept for visibility/logs.
 func (id Identity) CloudAdmin() bool { return id.Groups == RoleAdmin }
 
-// cleanEmail matches the addresses for which '@'->'-' is INJECTIVE: alnum
-// segments joined by single '.'/'_' in the local part and single '.' in the
-// domain, one '@', no '-' anywhere, no runs, no leading/trailing special. For
-// these the only '-' in the output is the one from '@', so the username is a
-// unique, reversible function of the address. The optional '@domain' also lets a
-// bare token (the loopback "admin", a hostname-less name) count as clean.
-var cleanEmail = regexp.MustCompile(`^[a-z0-9]+([._][a-z0-9]+)*(@[a-z0-9]+(\.[a-z0-9]+)*)?$`)
-
-// Username maps an SSO identity (typically a full email) to a valid,
-// COLLISION-FREE app username. Many systems (Gitea, unix, …) reject '@', a run
-// of two-or-more [-._], and a trailing [-._]. We keep the WHOLE address — not
-// just the local part, or alice@acme.com and alice@other.com would collide —
-// lowercase it, turn '@' and every other disallowed rune into '-', collapse
-// consecutive specials to one, and trim. alice@acme.com -> alice-acme.com.
-//
-// '@'->'-' is only injective when '-' doesn't otherwise appear: a literal '-'
-// (a hyphenated local part or domain) is indistinguishable from the '@'-derived
-// one, so a@my-co.com and a-my@co.com would both map to a-my-co.com — and since
-// reverse-proxy auth matches by USERNAME, that is silent identity confusion. So
-// for any address NOT in the clean form, append a short hash of the full address:
-// the username stays a unique function of the email while clean, common addresses
-// keep the readable form (and existing accounts are unaffected).
+// Username maps an SSO identity (typically an email) to a valid app username
+// for systems that reject '@' (Gitea, unix, …). It is a readable HANDLE, not the
+// identity: the canonical identity is the email, which apps should match on
+// directly (Gitea's reverse-proxy auth matches by X-WEBAUTH-EMAIL when no
+// username is sent, so there is no username-collision surface). The mapping:
+// lowercase, turn '@' and every disallowed rune into '-', collapse consecutive
+// specials to one (Gitea forbids [-._]{2,}), and trim. alice@acme.com ->
+// alice-acme.com. Because it is only a handle, an app that provisions accounts
+// must still ensure uniqueness at CREATE time (disambiguate a taken handle);
+// login never depends on it.
 func Username(id string) string {
 	id = strings.ToLower(strings.TrimSpace(id))
 	var b strings.Builder
@@ -119,11 +106,7 @@ func Username(id string) string {
 	}
 	name := strings.Trim(b.String(), "-._")
 	if name == "" {
-		return "user" // no usable identity to disambiguate
-	}
-	if !cleanEmail.MatchString(id) {
-		sum := sha256.Sum256([]byte(id))
-		name += "-" + hex.EncodeToString(sum[:])[:6]
+		name = "user"
 	}
 	return name
 }

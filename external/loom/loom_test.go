@@ -123,7 +123,7 @@ func TestProxyTranslatesRemoteIdentityToWebauth(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	handler, err := loomProxyHandler(upstream.URL, "")
+	handler, err := loomProxyHandler(upstream.URL, "", false) // auto_provision OFF
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,19 +134,48 @@ func TestProxyTranslatesRemoteIdentityToWebauth(t *testing.T) {
 	req.Header.Set("Remote-User", "alice@example.com")
 	req.Header.Set("Remote-Email", "alice@example.com")
 	req.Header.Set("Remote-Name", "Alice")
-	req.Header.Set("X-WEBAUTH-USER", "attacker@example.com")
+	req.Header.Set("X-WEBAUTH-USER", "attacker@example.com") // client-supplied, must be stripped
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	// X-WEBAUTH-USER is sanitized to a valid, collision-free Gitea username (the
-	// FULL email with '@' -> '-'); the real address is preserved in
-	// X-WEBAUTH-EMAIL and the display name in X-WEBAUTH-FULLNAME. Passing the raw
-	// email as the username makes Gitea's reverse-proxy auto-registration
-	// silently drop the request (anonymous).
-	if gotUser != "alice-example.com" || gotEmail != "alice@example.com" || gotName != "Alice" {
-		t.Fatalf("webauth headers = (%q,%q,%q), want alice-example.com/alice@example.com/Alice", gotUser, gotEmail, gotName)
+	// EMAIL is the identity: Gitea matches an existing account by X-WEBAUTH-EMAIL.
+	// With auto_provision OFF, X-WEBAUTH-USER is NOT stamped (no username-collision
+	// surface), and a client-supplied one is stripped.
+	if gotEmail != "alice@example.com" || gotName != "Alice" {
+		t.Fatalf("email-login headers = (email=%q,name=%q), want alice@example.com/Alice", gotEmail, gotName)
+	}
+	if gotUser != "" {
+		t.Fatalf("auto_provision OFF must not stamp X-WEBAUTH-USER, got %q", gotUser)
+	}
+}
+
+func TestProxyAutoProvisionStampsUsername(t *testing.T) {
+	// auto_provision ON: additionally stamp X-WEBAUTH-USER (the readable handle) so
+	// Gitea auto-registers a brand-new account for a first-time visitor.
+	var gotUser string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser = r.Header.Get("X-WEBAUTH-USER")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	handler, err := loomProxyHandler(upstream.URL, "", true) // auto_provision ON
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(handler)
+	t.Cleanup(proxy.Close)
+	req, _ := http.NewRequest(http.MethodGet, proxy.URL+"/", nil)
+	req.Header.Set("Remote-User", "alice@example.com")
+	req.Header.Set("Remote-Email", "alice@example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if gotUser != "alice-example.com" {
+		t.Fatalf("auto_provision ON: X-WEBAUTH-USER = %q, want alice-example.com", gotUser)
 	}
 }
 
@@ -160,7 +189,7 @@ func TestProxyUsesSharedLoopbackAdminIdentity(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	handler, err := loomProxyHandler(upstream.URL, "")
+	handler, err := loomProxyHandler(upstream.URL, "", false) // auto_provision OFF
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +201,13 @@ func TestProxyUsesSharedLoopbackAdminIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if gotUser != LoopbackUser || gotEmail != LoopbackEmail || gotName != LoopbackName {
-		t.Fatalf("loopback webauth headers = (%q,%q,%q), want %s/%s/%s", gotUser, gotEmail, gotName, LoopbackUser, LoopbackEmail, LoopbackName)
+	// The on-host owner logs in by the loopback EMAIL (matches the pre-created
+	// admin account); no username is stamped with auto_provision off.
+	if gotEmail != LoopbackEmail || gotName != LoopbackName {
+		t.Fatalf("loopback email-login = (email=%q,name=%q), want %s/%s", gotEmail, gotName, LoopbackEmail, LoopbackName)
+	}
+	if gotUser != "" {
+		t.Fatalf("loopback (auto_provision off) must not stamp X-WEBAUTH-USER, got %q", gotUser)
 	}
 }
 
@@ -186,7 +220,7 @@ func TestProxyStripsPublicPrefix(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	handler, err := loomProxyHandler(upstream.URL, "/matrix/h/dragon/app/loom")
+	handler, err := loomProxyHandler(upstream.URL, "/matrix/h/dragon/app/loom", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +249,7 @@ func TestProxyRewritesPublicPrefixForDirectLocalHTML(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	handler, err := loomProxyHandler(upstream.URL, prefix)
+	handler, err := loomProxyHandler(upstream.URL, prefix, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +288,7 @@ func TestProxyPreservesPublicPrefixForForwardedHTML(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	handler, err := loomProxyHandler(upstream.URL, prefix)
+	handler, err := loomProxyHandler(upstream.URL, prefix, false)
 	if err != nil {
 		t.Fatal(err)
 	}

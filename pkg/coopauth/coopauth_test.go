@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -52,24 +51,17 @@ func TestUsernameCleanFormsAreReadable(t *testing.T) {
 	}
 }
 
-func TestUsernameDisambiguatesAmbiguousAddresses(t *testing.T) {
-	// The classic collision: '@'->'-' makes these two DIFFERENT addresses map to
-	// the same base "a-my-co.com". The hash suffix must make them distinct, or
-	// reverse-proxy auth (which matches by username) would log one in as the
-	// other. This is the actual security fix.
-	a := Username("a@my-co.com")
-	b := Username("a-my@co.com")
-	if a == b {
-		t.Fatalf("ambiguous addresses collided: both -> %q", a)
-	}
-	for _, u := range []string{a, b} {
-		if !strings.HasPrefix(u, "a-my-co.com-") {
-			t.Errorf("disambiguated username %q lost its readable base", u)
-		}
-	}
-	// A hyphenated address is stable across calls (deterministic hash).
-	if Username("a@my-co.com") != a {
+func TestUsernameIsAHandleNotAnIdentity(t *testing.T) {
+	// Username is only a readable handle — the email is the identity, matched
+	// directly by the app (Gitea by X-WEBAUTH-EMAIL). So two addresses that
+	// happen to map to the same handle is NOT a security surface: login never
+	// depends on the handle. We only assert the mapping is deterministic and
+	// Gitea-valid; account provisioners disambiguate a taken handle at create.
+	if Username("a@my-co.com") != Username("a@my-co.com") {
 		t.Error("Username must be deterministic")
+	}
+	if got := Username("a@my-co.com"); got != "a-my-co.com" {
+		t.Errorf("Username(a@my-co.com) = %q, want a-my-co.com", got)
 	}
 }
 

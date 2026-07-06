@@ -41,12 +41,14 @@ type MirroredIssue struct {
 }
 
 type MirrorResult struct {
-	SchemaVersion string          `json:"schema_version"`
-	GitHubRepo    string          `json:"github_repo"`
-	LoomRepo      string          `json:"loom_repo"`
-	Scanned       int             `json:"scanned"`
-	Created       int             `json:"created"`
-	Issues        []MirroredIssue `json:"issues,omitempty"`
+	SchemaVersion    string          `json:"schema_version"`
+	GitHubRepo       string          `json:"github_repo"`
+	LoomRepo         string          `json:"loom_repo"`
+	Scanned          int             `json:"scanned"`
+	Created          int             `json:"created"`
+	Private          bool            `json:"private"`           // loom repo visibility, mirrored from GitHub
+	VisibilitySynced bool            `json:"visibility_synced"` // whether the mirror set it this run
+	Issues           []MirroredIssue `json:"issues,omitempty"`
 }
 
 var mirrorMarkerRe = regexp.MustCompile(`mirror:github:[^\s)]+`)
@@ -75,6 +77,16 @@ func MirrorGitHubIssuesToLoom(ctx context.Context, opt MirrorIssuesOptions) (Mir
 	}
 	if loomToken == "" {
 		loomToken = strings.TrimSpace(os.Getenv("GITEA_TOKEN"))
+	}
+
+	// Mirror the source repo's visibility onto loom so Gitea's OWN ACL matches
+	// GitHub — public GitHub repo => public loom repo (any authenticated user can
+	// see it), private => private (restricted to owner/collaborators). This is the
+	// "keep work local, GitHub is just backup" posture: loom is the source of
+	// truth, its access model tracks the mirror source. Best-effort — a
+	// visibility hiccup must not block issue mirroring.
+	if private, verr := syncLoomRepoVisibility(ctx, ghRepo, ghToken, loomURL, loomToken, loomRepo); verr == nil {
+		res.Private, res.VisibilitySynced = private, true
 	}
 
 	gh, err := listOpenGitHubIssues(ctx, ghRepo, opt.Labels, ghToken)
@@ -139,6 +151,23 @@ func MirrorGitHubIssuesToLoom(ctx context.Context, opt MirrorIssuesOptions) (Mir
 		res.Issues = append(res.Issues, mi)
 	}
 	return res, nil
+}
+
+// syncLoomRepoVisibility reads the GitHub repo's `private` flag and sets the
+// loom repo's visibility to match, so Gitea's native repo ACL mirrors GitHub
+// (public => any authenticated user can see it; private => restricted).
+func syncLoomRepoVisibility(ctx context.Context, ghRepo, ghToken, loomURL, loomToken, loomRepo string) (bool, error) {
+	var meta struct {
+		Private bool `json:"private"`
+	}
+	if err := githubJSON(ctx, http.MethodGet, "/repos/"+ghRepo, ghToken, nil, &meta); err != nil {
+		return false, err
+	}
+	if err := loomJSON(ctx, http.MethodPatch, loomURL, loomToken,
+		"/api/v1/repos/"+loomRepo, map[string]bool{"private": meta.Private}, nil); err != nil {
+		return meta.Private, err
+	}
+	return meta.Private, nil
 }
 
 func labelNameSet(labels []LoomLabel) map[string]bool {
