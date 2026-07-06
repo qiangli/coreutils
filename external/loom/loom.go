@@ -31,6 +31,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/binmgr"
+	"github.com/qiangli/coreutils/pkg/coopauth"
 )
 
 const (
@@ -501,7 +502,7 @@ func loomProxyHandler(target, publicPrefix string) (http.Handler, error) {
 			if name == "" {
 				name = user
 			}
-			req.Header.Set("X-WEBAUTH-USER", giteaUsername(user))
+			req.Header.Set("X-WEBAUTH-USER", coopauth.Username(user))
 			req.Header.Set("X-WEBAUTH-EMAIL", firstNonEmpty(email, user))
 			req.Header.Set("X-WEBAUTH-FULLNAME", name)
 		}
@@ -606,34 +607,6 @@ func stripWebauthHeaders(h http.Header) {
 	for _, k := range []string{"X-WEBAUTH-USER", "X-WEBAUTH-EMAIL", "X-WEBAUTH-FULLNAME"} {
 		h.Del(k)
 	}
-}
-
-// giteaUsername maps an arbitrary SSO identity (often an email like a@b.com from
-// the cloudbox vouch) to a valid Gitea username. Gitea usernames allow only
-// [A-Za-z0-9-_.] (no '@', no leading/trailing '.'/'-'), and reverse-proxy
-// auto-registration silently rejects anything else — so an email must be
-// reduced to its local part and sanitized. The full email is preserved
-// separately in X-WEBAUTH-EMAIL. Single-user by design, so local-part
-// collisions across domains don't matter.
-func giteaUsername(id string) string {
-	id = strings.TrimSpace(strings.ToLower(id))
-	if at := strings.IndexByte(id, '@'); at > 0 {
-		id = id[:at]
-	}
-	var b strings.Builder
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	name := strings.Trim(b.String(), "-.")
-	if name == "" {
-		name = "user"
-	}
-	return name
 }
 
 func proxyIdentity(req *http.Request) (user, email, name string) {
@@ -760,15 +733,6 @@ func ensureCustomUI(dataDir string) error {
 
 const loomHeaderTemplate = `<style>
 #navbar .navbar-left > a.item[target="_blank"][href="https://docs.gitea.com"] {
-	display: none !important;
-}
-
-/* Single-user loom: identity comes from the outpost SSO vouch (or the loopback
-   admin), never an interactive password — so the top-right Sign In / Register
-   buttons are dead ends. Hide them (href*= matches regardless of the ROOT_URL
-   sub-path prefix). Belt-and-suspenders for a direct-to-Gitea anonymous view. */
-#navbar a[href*="/user/login"],
-#navbar a[href*="/user/sign_up"] {
 	display: none !important;
 }
 

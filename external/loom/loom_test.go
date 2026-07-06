@@ -140,29 +140,13 @@ func TestProxyTranslatesRemoteIdentityToWebauth(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	// X-WEBAUTH-USER is sanitized to a valid Gitea username (email local-part);
-	// the full email is preserved in X-WEBAUTH-EMAIL, and the display name in
-	// X-WEBAUTH-FULLNAME. Passing the raw email as the username makes Gitea's
-	// reverse-proxy auto-registration silently drop the request (anonymous).
-	if gotUser != "alice" || gotEmail != "alice@example.com" || gotName != "Alice" {
-		t.Fatalf("webauth headers = (%q,%q,%q), want alice/alice@example.com/Alice", gotUser, gotEmail, gotName)
-	}
-}
-
-func TestGiteaUsernameSanitizesEmail(t *testing.T) {
-	cases := map[string]string{
-		"liqiang@gmail.com": "liqiang",
-		"qiangli":           "qiangli",
-		"admin":             "admin",
-		"First.Last@x.io":   "first.last",
-		"weird+tag@a.b":     "weird-tag",
-		"@@@":               "user",
-		"":                  "user",
-	}
-	for in, want := range cases {
-		if got := giteaUsername(in); got != want {
-			t.Errorf("giteaUsername(%q) = %q, want %q", in, got, want)
-		}
+	// X-WEBAUTH-USER is sanitized to a valid, collision-free Gitea username (the
+	// FULL email with '@' -> '-'); the real address is preserved in
+	// X-WEBAUTH-EMAIL and the display name in X-WEBAUTH-FULLNAME. Passing the raw
+	// email as the username makes Gitea's reverse-proxy auto-registration
+	// silently drop the request (anonymous).
+	if gotUser != "alice-example.com" || gotEmail != "alice@example.com" || gotName != "Alice" {
+		t.Fatalf("webauth headers = (%q,%q,%q), want alice-example.com/alice@example.com/Alice", gotUser, gotEmail, gotName)
 	}
 }
 
