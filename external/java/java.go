@@ -129,7 +129,9 @@ func EnsureMaven(ctx context.Context, version string) (string, error) {
 	if runtime.GOOS == "windows" {
 		entry = base + "/bin/mvn.cmd"
 	}
-	url := fmt.Sprintf("https://dlcdn.apache.org/maven/maven-3/%s/binaries/%s-bin.tar.gz", version, base)
+	// archive.apache.org keeps EVERY released version permanently (dlcdn.apache.org
+	// prunes to current only, so a pinned version 404s once it's superseded).
+	url := fmt.Sprintf("https://archive.apache.org/dist/maven/maven-3/%s/binaries/%s-bin.tar.gz", version, base)
 	sha512, err := resolveSHA512(ctx, url)
 	if err != nil {
 		return "", err
