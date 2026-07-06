@@ -131,8 +131,11 @@ func Registered(dataDir string) bool {
 
 // Daemon runs `act_runner daemon` in the foreground from the data dir, blocking
 // until the context is cancelled or SIGINT/SIGTERM arrives. The daemon dials OUT
-// to the registered Gitea instance — no inbound port, mesh/NAT-friendly.
-func Daemon(ctx context.Context, version, dataDir string) error {
+// to the registered Gitea instance — no inbound port, mesh/NAT-friendly. extraEnv
+// (may be nil) is appended to the inherited environment — e.g. OTEL_* so the CI
+// runner + the deploy jobs it launches self-export into the caller's telemetry
+// plane under their own service.name.
+func Daemon(ctx context.Context, version, dataDir string, extraEnv ...string) error {
 	if dataDir == "" {
 		dataDir = DefaultDataDir()
 	}
@@ -149,6 +152,9 @@ func Daemon(ctx context.Context, version, dataDir string) error {
 	cmd.Dir = dataDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	return cmd.Run()
 }
 
