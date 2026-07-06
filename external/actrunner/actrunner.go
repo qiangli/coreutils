@@ -194,6 +194,17 @@ func writeSandboxConfig(dataDir string) error {
 	return os.WriteFile(ConfigPath(dataDir), []byte(sandboxConfigYAML), 0o644)
 }
 
+// EnsureSandboxConfig writes the sandbox executor config into the data dir
+// (idempotent). Register --sandbox already writes it; callers that enable
+// sandbox mode on an ALREADY-registered runner (which skips Register) call this
+// before Daemon so the docker_host "-" setting takes effect.
+func EnsureSandboxConfig(dataDir string) error {
+	if dataDir == "" {
+		dataDir = DefaultDataDir()
+	}
+	return writeSandboxConfig(dataDir)
+}
+
 // Registered reports whether a .runner config already exists in the data dir.
 func Registered(dataDir string) bool {
 	if dataDir == "" {
