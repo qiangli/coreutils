@@ -763,6 +763,15 @@ const loomHeaderTemplate = `<style>
 	display: none !important;
 }
 
+/* Single-user loom: identity comes from the outpost SSO vouch (or the loopback
+   admin), never an interactive password — so the top-right Sign In / Register
+   buttons are dead ends. Hide them (href*= matches regardless of the ROOT_URL
+   sub-path prefix). Belt-and-suspenders for a direct-to-Gitea anonymous view. */
+#navbar a[href*="/user/login"],
+#navbar a[href*="/user/sign_up"] {
+	display: none !important;
+}
+
 .page-footer {
 	display: none !important;
 }
