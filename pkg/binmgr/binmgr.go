@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -32,13 +33,16 @@ import (
 type Asset struct {
 	// URL is the download URL (a raw binary, or a .tar.gz/.tgz/.zip archive).
 	URL string `json:"url"`
-	// SHA256 is the expected hex digest of the downloaded file (preferred). Empty
-	// skips the sha check.
+	// SHA256 is the expected hex digest of the downloaded file (preferred).
 	SHA256 string `json:"sha256"`
-	// MD5 is the expected hex md5 digest — the fallback integrity check for tools
-	// that publish only .md5 sidecars (e.g. SeaweedFS). Used when SHA256 is empty.
-	// One of SHA256/MD5 must be set; an empty Asset skips verification entirely
-	// (discouraged — the verify is the trust boundary).
+	// SHA512 is the expected hex sha512 digest — the strongest supported check,
+	// used when SHA256 is empty. The integrity check some vendors publish (e.g.
+	// Apache dist ships only .sha512).
+	SHA512 string `json:"sha512,omitempty"`
+	// MD5 is the expected hex md5 digest — a weak fallback for tools that publish
+	// only .md5 sidecars (e.g. SeaweedFS). Used when SHA256/SHA512 are empty.
+	// At least one of SHA256/SHA512/MD5 MUST be set: an asset with none is
+	// REFUSED (fail-closed), never installed unverified.
 	MD5 string `json:"md5,omitempty"`
 	// Binary is the path to the executable WITHIN an archive (e.g.
 	// "gitea/gitea"); empty means the download is itself the raw binary.
@@ -150,19 +154,31 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 
-	sum, md5sum, derr := download(ctx, asset.URL, tmp)
+	sum, sha512sum, md5sum, derr := download(ctx, asset.URL, tmp)
 	_ = tmp.Close()
 	if derr != nil {
 		return "", derr
 	}
-	if want := strings.ToLower(strings.TrimSpace(asset.SHA256)); want != "" {
-		if want != sum {
+	// Integrity is the supply-chain trust boundary — bashy is OSS and its
+	// download-and-exec path is exactly what a malicious mirror/tampered release
+	// would target. Verify against the strongest digest provided (sha256 >
+	// sha512 > md5) and — critically — FAIL CLOSED: refuse to install a binary
+	// for which no checksum was supplied at all, rather than silently trusting it.
+	switch {
+	case strings.TrimSpace(asset.SHA256) != "":
+		if want := strings.ToLower(strings.TrimSpace(asset.SHA256)); want != sum {
 			return "", fmt.Errorf("binmgr: %s %s sha256 mismatch: got %s, want %s", t.Name, t.Version, sum, want)
 		}
-	} else if want := strings.ToLower(strings.TrimSpace(asset.MD5)); want != "" {
-		if want != md5sum {
+	case strings.TrimSpace(asset.SHA512) != "":
+		if want := strings.ToLower(strings.TrimSpace(asset.SHA512)); want != sha512sum {
+			return "", fmt.Errorf("binmgr: %s %s sha512 mismatch: got %s, want %s", t.Name, t.Version, sha512sum, want)
+		}
+	case strings.TrimSpace(asset.MD5) != "":
+		if want := strings.ToLower(strings.TrimSpace(asset.MD5)); want != md5sum {
 			return "", fmt.Errorf("binmgr: %s %s md5 mismatch: got %s, want %s", t.Name, t.Version, md5sum, want)
 		}
+	default:
+		return "", fmt.Errorf("binmgr: %s %s: refusing to install %s with NO checksum (sha256/sha512/md5) — supply one or the download cannot be trusted", t.Name, t.Version, asset.URL)
 	}
 
 	switch {
@@ -194,25 +210,26 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	return dest, nil
 }
 
-func download(ctx context.Context, url string, w io.Writer) (sha, md5sum string, err error) {
+func download(ctx context.Context, url string, w io.Writer) (sha, sha512sum, md5sum string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("binmgr: GET %s: HTTP %d", url, resp.StatusCode)
+		return "", "", "", fmt.Errorf("binmgr: GET %s: HTTP %d", url, resp.StatusCode)
 	}
 	sh := sha256.New()
+	s5 := sha512.New()
 	mh := md5.New()
-	if _, err := io.Copy(io.MultiWriter(w, sh, mh), resp.Body); err != nil {
-		return "", "", err
+	if _, err := io.Copy(io.MultiWriter(w, sh, s5, mh), resp.Body); err != nil {
+		return "", "", "", err
 	}
-	return hex.EncodeToString(sh.Sum(nil)), hex.EncodeToString(mh.Sum(nil)), nil
+	return hex.EncodeToString(sh.Sum(nil)), hex.EncodeToString(s5.Sum(nil)), hex.EncodeToString(mh.Sum(nil)), nil
 }
 
 func extract(archivePath, url, member, dest string) error {

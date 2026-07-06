@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
@@ -83,6 +84,50 @@ func TestEnsure_ShaMismatch(t *testing.T) {
 	tool.Assets[Platform()] = Asset{URL: srv.URL + "/bin", SHA256: sha256hex(payload)}
 	if _, err := Ensure(context.Background(), tool); err != nil {
 		t.Fatalf("correct fetch after mismatch: %v", err)
+	}
+}
+
+func sha512hex(b []byte) string {
+	s := sha512.Sum512(b)
+	return hex.EncodeToString(s[:])
+}
+
+// SECURITY GATE: an asset with NO checksum (sha256/sha512/md5) must be REFUSED,
+// never installed. The supply-chain trust boundary — a silent-skip here is how a
+// tampered mirror gets code execution.
+func TestEnsure_FailsClosedWithoutChecksum(t *testing.T) {
+	payload := []byte("unverified bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	// No SHA256/SHA512/MD5 set.
+	tool := Tool{Name: "x", Version: "1", Assets: map[string]Asset{Platform(): {URL: srv.URL + "/bin"}}}
+	if _, err := Ensure(context.Background(), tool); err == nil {
+		t.Fatal("SECURITY: Ensure installed a binary with NO checksum — must fail closed")
+	}
+}
+
+// SHA512 is verified (the algorithm Apache dist / Maven publishes), and a
+// mismatch is rejected.
+func TestEnsure_SHA512Verify(t *testing.T) {
+	payload := []byte("maven-ish bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	good := Tool{Name: "y", Version: "1", Assets: map[string]Asset{Platform(): {URL: srv.URL + "/bin", SHA512: sha512hex(payload)}}}
+	if _, err := Ensure(context.Background(), good); err != nil {
+		t.Fatalf("valid sha512 rejected: %v", err)
+	}
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	bad := Tool{Name: "z", Version: "1", Assets: map[string]Asset{Platform(): {URL: srv.URL + "/bin", SHA512: sha512hex([]byte("DIFFERENT"))}}}
+	if _, err := Ensure(context.Background(), bad); err == nil {
+		t.Fatal("SECURITY: sha512 mismatch not rejected")
 	}
 }
 

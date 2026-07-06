@@ -12,6 +12,7 @@ package node
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,6 +26,29 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/binmgr"
 )
+
+// embeddedSums pins the OFFICIAL sha256 digests of the DefaultVersion archives,
+// downloaded from nodejs.org in dev and checked in. This is the supply-chain
+// trust anchor: the pinned digest ships INSIDE bashy (not fetched from the same
+// origin as the binary at install time), so a compromised nodejs.org release
+// can't hand us a matching-but-tampered checksum. `TestEmbeddedSumsMatchUpstream`
+// re-downloads the official SHASUMS256 and fails if these drift — so a version
+// bump is a deliberate, reviewed change. Non-default versions fall back to a
+// live SHASUMS256 fetch (still fail-closed in binmgr).
+//
+//go:embed node-22.11.0.sums
+var embeddedSums string
+
+// pinnedSHA returns the embedded (pinned, offline) sha256 for filename, or "".
+func pinnedSHA(filename string) string {
+	sc := bufio.NewScanner(strings.NewReader(embeddedSums))
+	for sc.Scan() {
+		if f := strings.Fields(sc.Text()); len(f) == 2 && f[1] == filename {
+			return f[0]
+		}
+	}
+	return ""
+}
 
 // DefaultVersion is the Node.js provisioned when none is requested. Active LTS.
 const DefaultVersion = "22.11.0"
@@ -113,6 +137,11 @@ func Ensure(ctx context.Context, version string) (nodeBin, binDir string, err er
 // resolveSHA fetches the release's SHASUMS256.txt and returns the sha256 of the
 // named archive (each line is "<sha>  <filename>").
 func resolveSHA(ctx context.Context, version, filename string) (string, error) {
+	// Prefer the embedded pinned digest (offline, tamper-anchored). Only reach
+	// nodejs.org for versions we didn't ship a pin for.
+	if sha := pinnedSHA(filename); sha != "" {
+		return sha, nil
+	}
 	url := fmt.Sprintf("https://nodejs.org/dist/v%s/SHASUMS256.txt", version)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	client := &http.Client{Timeout: 30 * time.Second}
