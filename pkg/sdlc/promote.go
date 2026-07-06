@@ -17,11 +17,11 @@ import (
 // Promotion to the production env is gated by the prod_approval policy.
 
 func newPromoteCmd() *cobra.Command {
-	var dir, env, repo, note, configPath string
+	var dir, env, from, repo, note, configPath string
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "promote RUN_ID --env ENV",
-		Short: "apply the deploy:<env> baton label to a run's issue (triggers the deploy Action)",
+		Use:   "promote RUN_ID --env ENV [--from PREV]",
+		Short: "advance the deploy:<env> baton (ordered dev→qa→prod when --from is given; prod owner-gated). Opt-in — simple repos skip it.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(env) == "" {
@@ -32,6 +32,15 @@ func newPromoteCmd() *cobra.Command {
 				return err
 			}
 			cfg, _, _ := LoadConfigOrDefault(configPath)
+			// Ordered-sequence discipline is OPT-IN: pass --from to declare the
+			// stage the change has reached, and the baton may only advance one
+			// step in the configured order (default dev→qa→prod) — no skipping.
+			// Omit --from for a simple, unstaged deploy.
+			if strings.TrimSpace(from) != "" {
+				if ok, why := ValidPromotion(cfg, from, env); !ok {
+					return fmt.Errorf("sdlc: %s", why)
+				}
+			}
 			if RequiresApproval(cfg, env) && !RunApproved(run) {
 				return fmt.Errorf("sdlc: promotion to %q requires approval (policy prod_approval=required); run `bashy sdlc approve %s --note ...` first", env, args[0])
 			}
@@ -66,6 +75,7 @@ func newPromoteCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&dir, "runs-dir", ".bashy/sdlc/runs", "local SDLC runs directory")
 	cmd.Flags().StringVar(&env, "env", "", "target environment (dev|qa|prod)")
+	cmd.Flags().StringVar(&from, "from", "", "the stage the change has reached (enables ordered promotion — no skipping)")
 	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo owner/name; defaults from the run's issue id")
 	cmd.Flags().StringVar(&configPath, "config", ".bashy/sdlc.yaml", "SDLC config file (for the prod_approval policy)")
 	cmd.Flags().StringVar(&note, "note", "", "optional comment to post on the issue")

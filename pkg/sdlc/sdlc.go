@@ -426,6 +426,67 @@ type IntakeConfig struct {
 type DeploymentConfig struct {
 	Staging    TargetConfig `json:"staging" yaml:"staging"`
 	Production TargetConfig `json:"production" yaml:"production"`
+	// Order is the promotion sequence the baton walks (default dev→qa→prod). A
+	// change may only advance to the env immediately after the one it has
+	// reached — no skipping. Each env's deploy is a bashy dag target (the dag
+	// decides how); prod stays owner-gated by the prod_approval policy.
+	Order []string `json:"order,omitempty" yaml:"order,omitempty"`
+	// Dag is the deploy DAG file promote runs per env (default deploy.md; each
+	// env is the `deploy-<env>` target). Empty leaves deploy to the label-fired
+	// path.
+	Dag string `json:"dag,omitempty" yaml:"dag,omitempty"`
+}
+
+// EnvOrder returns the configured promotion sequence, defaulting to dev→qa→prod.
+func (d DeploymentConfig) EnvOrder() []string {
+	var out []string
+	for _, e := range d.Order {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+			out = append(out, e)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"dev", "qa", "prod"}
+	}
+	return out
+}
+
+// ValidPromotion reports whether advancing the baton from -> to is a legal single
+// step: `to` must be the env immediately after `from` in the order (and `from`
+// must be the first env, or empty, when `to` is first). A reason is returned when
+// invalid. An unknown `to` is rejected; an empty `from` is allowed only for the
+// first env.
+func ValidPromotion(cfg Config, from, to string) (bool, string) {
+	order := cfg.Deploy.EnvOrder()
+	from = strings.ToLower(strings.TrimSpace(from))
+	to = strings.ToLower(strings.TrimSpace(to))
+	toIdx := indexOf(order, to)
+	if toIdx < 0 {
+		return false, fmt.Sprintf("env %q is not in the promotion order %v", to, order)
+	}
+	if toIdx == 0 {
+		if from == "" || from == to {
+			return true, ""
+		}
+		return false, fmt.Sprintf("%q is the first env; promote to it without --from", to)
+	}
+	want := order[toIdx-1]
+	if from == want {
+		return true, ""
+	}
+	if from == "" {
+		return false, fmt.Sprintf("promote to %q first (the step before %q)", want, to)
+	}
+	return false, fmt.Sprintf("cannot promote %q → %q; %q must come from %q (order %v)", from, to, to, want, order)
+}
+
+func indexOf(ss []string, s string) int {
+	for i, v := range ss {
+		if v == s {
+			return i
+		}
+	}
+	return -1
 }
 
 type TargetConfig struct {
