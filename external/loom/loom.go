@@ -82,8 +82,13 @@ type Options struct {
 	// a local CI control plane: act_runner registers against it and dials out
 	// over the mesh. See dhnt/docs/local-p2p-cicd.md.
 	Actions *bool
-	Stdout  io.Writer
-	Stderr  io.Writer
+	// Owner is the host owner's identity (email or handle) — ALWAYS made a loom
+	// site-admin. The operator who registered the host must own its forge. Empty
+	// falls back to the OS user running loom (plus $LOOM_OWNER). A caller that
+	// knows the paired cloud account (outpost) passes that email here.
+	Owner  string
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // actionsOn resolves the effective Actions toggle: an explicit Options.Actions
@@ -201,6 +206,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 		return nil, err
 	}
 	ensureAdmins(ctx, bin, cfg, o.DataDir, loadAdmins(o.DataDir))
+	ensureOwnerAdmin(ctx, bin, cfg, o.DataDir, url, o)
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
 }
 
@@ -345,6 +351,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		return State{}, err
 	}
 	ensureAdmins(ctx, bin, cfg, o.DataDir, loadAdmins(o.DataDir))
+	ensureOwnerAdmin(ctx, bin, cfg, o.DataDir, st.URL, o)
 	if err := waitHTTP(ctx, st.ProxyURL, 30*time.Second); err != nil {
 		_ = cmd.Process.Kill()
 		_ = proxyCmd.Process.Kill()
@@ -714,6 +721,91 @@ func ensureAdmins(ctx context.Context, bin, cfg, dataDir string, emails []string
 		}
 		slog.Warn("loom: provision admin failed", "email", email, "err", err, "out", strings.TrimSpace(string(out)))
 	}
+}
+
+// ownerIdentities returns the host-owner identities to always make site-admin:
+// an explicit Options.Owner (email or handle) plus the OS user running loom (the
+// operator on a home node, and the same identity the proxy auto-provisions for a
+// local login). Deduped; empties dropped.
+func ownerIdentities(o Options) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	add(o.Owner)
+	add(os.Getenv("LOOM_OWNER"))
+	for _, k := range []string{"USER", "LOGNAME", "USERNAME"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			add(v)
+			break
+		}
+	}
+	return out
+}
+
+// ensureOwnerAdmin makes the host owner a loom site-admin, ALWAYS. On a home node
+// the operator who registered the host must own its forge — but Gitea's
+// reverse-proxy auto-registration creates a first-time login as a NON-admin
+// account (the "changes wrt the username" shadow-account trap). So we pre-create
+// the owner as admin here, BEFORE first login, so the proxy matches the existing
+// admin account instead of minting a non-admin one; an owner account that already
+// exists as a non-admin is promoted via the loopback-admin API (the gitea CLI has
+// no promote-existing path). Runs after the server is up (health-checked). Best
+// effort: a failure logs a clear, actionable warning and never blocks startup.
+func ensureOwnerAdmin(ctx context.Context, bin, cfg, dataDir, baseURL string, o Options) {
+	for _, id := range ownerIdentities(o) {
+		u := coopauth.Username(id)
+		if u == "" || u == LoopbackUser {
+			continue
+		}
+		email := id
+		if !strings.Contains(email, "@") {
+			email = u + "@localhost"
+		}
+		out, err := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir,
+			"admin", "user", "create", "--username", u, "--email", email,
+			"--random-password", "--admin", "--must-change-password=false")
+		if err == nil {
+			slog.Info("loom: pre-provisioned host owner as site-admin", "user", u)
+			continue
+		}
+		if strings.Contains(strings.ToLower(string(out)), "already exists") {
+			if perr := promoteAdminViaAPI(ctx, baseURL, u); perr != nil {
+				slog.Warn("loom: host owner exists but is not site-admin; auto-promote failed — promote it in the loom UI (login as admin) or re-create the account", "user", u, "err", perr)
+				continue
+			}
+			slog.Info("loom: promoted existing host owner to site-admin", "user", u)
+			continue
+		}
+		slog.Warn("loom: ensure host-owner admin failed", "user", u, "err", err, "out", strings.TrimSpace(string(out)))
+	}
+}
+
+// promoteAdminViaAPI sets is_admin on an existing user via the Gitea admin API,
+// authenticated as the loopback admin — the gitea CLI can only create-as-admin,
+// not promote an existing user.
+func promoteAdminViaAPI(ctx context.Context, baseURL, user string) error {
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/v1/admin/users/" + url.PathEscape(user)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, strings.NewReader(`{"admin":true}`))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(LoopbackUser, LoopbackPassword)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("PATCH admin/users/%s: HTTP %d: %s", user, resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
 }
 
 func runGiteaAdmin(ctx context.Context, bin, dataDir string, args ...string) ([]byte, error) {

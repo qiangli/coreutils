@@ -355,3 +355,30 @@ func TestStateRoundTrip(t *testing.T) {
 		t.Fatalf("expected removed state, got %v", err)
 	}
 }
+
+func TestOwnerIdentities(t *testing.T) {
+	// explicit Owner + OS user, deduped; empties dropped.
+	t.Setenv("LOOM_OWNER", "")
+	t.Setenv("USER", "qiangli")
+	t.Setenv("LOGNAME", "")
+	got := ownerIdentities(Options{Owner: "liqiang@gmail.com"})
+	if len(got) != 2 || got[0] != "liqiang@gmail.com" || got[1] != "qiangli" {
+		t.Fatalf("ownerIdentities = %v, want [liqiang@gmail.com qiangli]", got)
+	}
+	// no explicit owner → OS user only
+	got = ownerIdentities(Options{})
+	if len(got) != 1 || got[0] != "qiangli" {
+		t.Fatalf("ownerIdentities(no owner) = %v, want [qiangli]", got)
+	}
+	// dedup when Owner == OS user
+	got = ownerIdentities(Options{Owner: "qiangli"})
+	if len(got) != 1 {
+		t.Fatalf("ownerIdentities(dup) = %v, want 1 entry", got)
+	}
+	// $LOOM_OWNER honored
+	t.Setenv("LOOM_OWNER", "boss@corp.com")
+	got = ownerIdentities(Options{})
+	if len(got) < 1 || got[0] != "boss@corp.com" {
+		t.Fatalf("ownerIdentities(LOOM_OWNER) = %v, want boss@corp.com first", got)
+	}
+}
