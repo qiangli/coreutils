@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -199,6 +200,7 @@ func Start(ctx context.Context, o Options) (*Instance, error) {
 		_ = proc.Stop(10 * time.Second)
 		return nil, err
 	}
+	ensureAdmins(ctx, bin, cfg, o.DataDir, loadAdmins(o.DataDir))
 	return &Instance{URL: url, Addr: addr, Version: tool.Version, proc: proc}, nil
 }
 
@@ -342,6 +344,7 @@ func StartDaemon(ctx context.Context, o Options) (State, error) {
 		_ = removeState(o.DataDir)
 		return State{}, err
 	}
+	ensureAdmins(ctx, bin, cfg, o.DataDir, loadAdmins(o.DataDir))
 	if err := waitHTTP(ctx, st.ProxyURL, 30*time.Second); err != nil {
 		_ = cmd.Process.Kill()
 		_ = proxyCmd.Process.Kill()
@@ -650,6 +653,52 @@ func ensureLoopbackAdmin(ctx context.Context, bin, cfg, dataDir string) error {
 		return fmt.Errorf("loom: local user %q already exists but is not an admin", LoopbackUser)
 	}
 	return nil
+}
+
+// loadAdmins reads the app admin allowlist at <dataDir>/admins — one email per
+// line, '#' comments and blanks ignored. This is loom's OWN authority over who
+// is admin (the coopauth model): the cloud tier is never trusted for admin, so
+// an allowlisted email — or the loopback owner — administers the forge, everyone
+// else is a regular user. Edit the file and restart loom to apply.
+func loadAdmins(dataDir string) []string {
+	b, err := os.ReadFile(filepath.Join(dataDir, "admins"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, ln := range strings.Split(string(b), "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" && !strings.HasPrefix(ln, "#") {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+// ensureAdmins provisions each allowlisted email as a Gitea site-admin, keyed by
+// coopauth.Username(email) — the SAME sanitized name the proxy stamps as
+// X-WEBAUTH-USER — so when that user first arrives over SSO, reverse-proxy auth
+// finds an existing ADMIN account instead of auto-registering a regular one.
+// Best-effort per entry (loom must still boot); Gitea has no CLI to promote an
+// already-registered regular user, so that edge is logged with the fix.
+func ensureAdmins(ctx context.Context, bin, cfg, dataDir string, emails []string) {
+	for _, email := range emails {
+		u := coopauth.Username(email)
+		out, err := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir,
+			"admin", "user", "create", "--username", u, "--email", email,
+			"--random-password", "--admin", "--must-change-password=false")
+		if err == nil {
+			slog.Info("loom: provisioned admin", "user", u, "email", email)
+			continue
+		}
+		if strings.Contains(strings.ToLower(string(out)), "already exists") {
+			list, _ := runGiteaAdmin(ctx, bin, dataDir, "--config", cfg, "--work-path", dataDir, "admin", "user", "list", "--admin")
+			if !adminListContainsUser(string(list), u) {
+				slog.Warn("loom: allowlisted admin exists but is NOT site-admin; delete the user and re-login, or promote in Gitea", "user", u, "email", email)
+			}
+			continue
+		}
+		slog.Warn("loom: provision admin failed", "email", email, "err", err, "out", strings.TrimSpace(string(out)))
+	}
 }
 
 func runGiteaAdmin(ctx context.Context, bin, dataDir string, args ...string) ([]byte, error) {

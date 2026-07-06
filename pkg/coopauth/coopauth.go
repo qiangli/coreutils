@@ -146,6 +146,15 @@ func rawIdentity(r *http.Request) Identity {
 	}
 }
 
+// IdentityFrom extracts the stamped identity WITHOUT verification (Username is
+// filled). Use it only to DISPLAY/log an unverified caller; call Resolve or a
+// Guard method before trusting the values for access control.
+func IdentityFrom(r *http.Request) Identity {
+	id := rawIdentity(r)
+	id.Username = Username(id.User)
+	return id
+}
+
 // VerifyOutpost returns true only when the request carries a valid, fresh
 // SSO-HMAC signature over the canonical identity payload. Empty secret => cannot
 // verify (callers must treat that as "don't trust Remote-* beyond loopback").
