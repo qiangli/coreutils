@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,14 +31,17 @@ func sign(secret, user, groups, prefix string, ts int64) *http.Request {
 	return r
 }
 
-func TestUsernameCollisionFree(t *testing.T) {
+func TestUsernameCleanFormsAreReadable(t *testing.T) {
+	// Addresses in the clean form keep the readable username (no hash suffix), so
+	// common users and existing accounts are unaffected.
 	cases := map[string]string{
 		"alice@acme.com":       "alice-acme.com",
 		"alice@other.com":      "alice-other.com", // distinct domain => distinct user
 		"First.Last@x.io":      "first.last-x.io",
-		"a..b@x.com":           "a.b-x.com", // consecutive specials collapsed
 		"qiangli@dragon.local": "qiangli-dragon.local",
+		"liqiang@gmail.com":    "liqiang-gmail.com",
 		"plainuser":            "plainuser",
+		"admin":                "admin",
 		"@@@":                  "user",
 		"":                     "user",
 	}
@@ -45,6 +49,27 @@ func TestUsernameCollisionFree(t *testing.T) {
 		if got := Username(in); got != want {
 			t.Errorf("Username(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestUsernameDisambiguatesAmbiguousAddresses(t *testing.T) {
+	// The classic collision: '@'->'-' makes these two DIFFERENT addresses map to
+	// the same base "a-my-co.com". The hash suffix must make them distinct, or
+	// reverse-proxy auth (which matches by username) would log one in as the
+	// other. This is the actual security fix.
+	a := Username("a@my-co.com")
+	b := Username("a-my@co.com")
+	if a == b {
+		t.Fatalf("ambiguous addresses collided: both -> %q", a)
+	}
+	for _, u := range []string{a, b} {
+		if !strings.HasPrefix(u, "a-my-co.com-") {
+			t.Errorf("disambiguated username %q lost its readable base", u)
+		}
+	}
+	// A hyphenated address is stable across calls (deterministic hash).
+	if Username("a@my-co.com") != a {
+		t.Error("Username must be deterministic")
 	}
 }
 
