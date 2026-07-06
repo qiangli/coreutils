@@ -744,6 +744,7 @@ bashy sdlc deploy-status --repo owner/repo --branch main
 		newBriefCmd(), newDelegateCmd(), newTickCmd(), newRunsCmd(), newWatchCmd(), newQACmd(),
 		newApproveCmd(), newRolloutCmd(), newPromoteCmd(), newResolveCmd(), newVerifyCmd(), newDeployStatusCmd(), newGuardCmd(),
 		newWorkspaceCmd(), newPublishCmd(), newPagesCmd(), newSuperviseCmd(), newServiceCmd(), newMirrorCmd(),
+		newPushSourceCmd(),
 	)
 	return cmd
 }
@@ -2768,6 +2769,191 @@ func PrepareWorkspace(ctx context.Context, opt WorkspaceOptions) (WorkspaceResul
 		return res, err
 	}
 	return res, nil
+}
+
+// PushSourceOptions drives the "close the loop" step: propose the shipped result
+// back to the migration source (the upstream the loom repo was migrated from) as
+// a PULL REQUEST — never a direct write to upstream's default branch. loom
+// proposes; the upstream owner disposes (auto-merge for a private backup, review
+// for a third-party upstream).
+type PushSourceOptions struct {
+	Cwd      string // workspace dir (its `upstream` remote is the source when --upstream is empty)
+	Upstream string // owner/repo or URL; empty => read the `upstream` remote
+	Branch   string // local ref to push (default: HEAD)
+	Head     string // upstream branch to push to + PR from (default: sdlc/ship)
+	Base     string // PR base branch (default: main)
+	Title    string
+	Body     string
+	Token    string // GitHub token (default GITHUB_TOKEN/GIT_TOKEN)
+	NoPR     bool   // push the branch only (non-GitHub upstream, or PR opened elsewhere)
+	RunID    string // when set, require the run be approved first (gate)
+	RunsDir  string
+	DryRun   bool
+	JSON     bool
+}
+
+type PushSourceResult struct {
+	SchemaVersion string   `json:"schema_version"`
+	Status        string   `json:"status"` // dry-run | pushed | pr-opened | error
+	Upstream      string   `json:"upstream"`
+	Head          string   `json:"head"`
+	Base          string   `json:"base"`
+	PRURL         string   `json:"pr_url,omitempty"`
+	PRNumber      int      `json:"pr_number,omitempty"`
+	Command       []string `json:"command,omitempty"` // token-redacted
+}
+
+// PushSourceToUpstream pushes the approved branch to the migration source and
+// opens a PR from it (GitHub). It closes the source→loom→ship→source cycle so the
+// upstream is a live, reviewable record of what shipped.
+// newPushSourceCmd is `bashy sdlc push-source` — the "close the loop" mechanism:
+// propose the shipped result back to the migration source as a GitHub PR. It is
+// ONE backup target a deploy.md/dag step can invoke; the dag decides which
+// mechanism a given repo uses (this for an upstream forge; s3/kopia/a fresh
+// remote for a repo created from scratch).
+func newPushSourceCmd() *cobra.Command {
+	var opt PushSourceOptions
+	cmd := &cobra.Command{
+		Use:   "push-source",
+		Short: "propose the shipped result back to the migration source as a pull request (close the loop)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := PushSourceToUpstream(cmd.Context(), opt)
+			if opt.JSON || os.Getenv("BASHY_AGENTIC") != "" {
+				b, _ := json.Marshal(res)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+			} else if err == nil {
+				switch res.Status {
+				case "pr-opened":
+					fmt.Fprintf(cmd.OutOrStdout(), "opened PR %s (%s#%d): %s -> %s\n", res.PRURL, res.Upstream, res.PRNumber, res.Head, res.Base)
+				case "pushed":
+					fmt.Fprintf(cmd.OutOrStdout(), "pushed %s to %s (no PR)\n", res.Head, res.Upstream)
+				case "dry-run":
+					fmt.Fprintf(cmd.OutOrStdout(), "dry-run: %s\n", strings.Join(res.Command, " "))
+				}
+			}
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "workspace dir (its `upstream` remote is the source when --upstream is empty)")
+	cmd.Flags().StringVar(&opt.Upstream, "upstream", "", "source owner/repo or URL (else the `upstream` remote)")
+	cmd.Flags().StringVar(&opt.Branch, "branch", "HEAD", "local ref to push")
+	cmd.Flags().StringVar(&opt.Head, "head", "sdlc/ship", "upstream branch to push + open the PR from")
+	cmd.Flags().StringVar(&opt.Base, "base", "main", "PR base branch")
+	cmd.Flags().StringVar(&opt.Title, "title", "", "PR title")
+	cmd.Flags().StringVar(&opt.Body, "body", "", "PR body")
+	cmd.Flags().StringVar(&opt.Token, "github-token", "", "GitHub token; defaults to GITHUB_TOKEN/GIT_TOKEN")
+	cmd.Flags().BoolVar(&opt.NoPR, "no-pr", false, "push the branch only (non-GitHub upstream; open the PR on that forge)")
+	cmd.Flags().StringVar(&opt.RunID, "run", "", "gate: require this run be approved first")
+	cmd.Flags().StringVar(&opt.RunsDir, "runs-dir", ".bashy/sdlc/runs", "SDLC runs directory")
+	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the plan without pushing")
+	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print JSON")
+	return cmd
+}
+
+func PushSourceToUpstream(ctx context.Context, opt PushSourceOptions) (PushSourceResult, error) {
+	if strings.TrimSpace(opt.Branch) == "" {
+		opt.Branch = "HEAD"
+	}
+	if strings.TrimSpace(opt.Base) == "" {
+		opt.Base = "main"
+	}
+	if strings.TrimSpace(opt.Head) == "" {
+		opt.Head = "sdlc/ship"
+	}
+	res := PushSourceResult{SchemaVersion: schemaVersion, Status: "error", Head: opt.Head, Base: opt.Base}
+	cwd := strings.TrimSpace(opt.Cwd)
+	if cwd == "" {
+		var err error
+		if cwd, err = os.Getwd(); err != nil {
+			return res, err
+		}
+	}
+	// Optional gate: only propose an APPROVED run back to source.
+	if strings.TrimSpace(opt.RunID) != "" {
+		run, err := LoadRunByID(opt.RunsDir, opt.RunID)
+		if err != nil {
+			return res, err
+		}
+		if !RunApproved(run) {
+			return res, fmt.Errorf("sdlc: run %s is not approved; approve before pushing back to source", run.ReferenceID)
+		}
+	}
+	// Resolve the upstream owner/repo.
+	upstream := strings.TrimSpace(opt.Upstream)
+	if upstream == "" {
+		upstream = strings.TrimSpace(runGit(cwd, "remote", "get-url", "upstream"))
+	}
+	if upstream == "" {
+		return res, errors.New("sdlc: no upstream; set --upstream owner/repo or configure the `upstream` remote")
+	}
+	if !isGitHubURL(upstream) && !opt.NoPR {
+		// Non-GitHub upstream: we can push the branch but can't open a GitHub PR.
+		return res, fmt.Errorf("sdlc: upstream %q is not github.com; pass --no-pr to push the branch only (open the PR on that forge)", upstream)
+	}
+	ownerRepo := githubOwnerRepo(upstream)
+	res.Upstream = ownerRepo
+
+	token := strings.TrimSpace(opt.Token)
+	if token == "" {
+		token = GitHubToken()
+	}
+	pushURL := "https://github.com/" + ownerRepo + ".git"
+	authURL := pushURL
+	if token != "" {
+		authURL = "https://x-access-token:" + token + "@github.com/" + ownerRepo + ".git"
+	}
+	// Redacted command for the envelope (never leak the token).
+	res.Command = []string{"git", "push", pushURL, opt.Branch + ":refs/heads/" + opt.Head}
+	if opt.DryRun {
+		res.Status = "dry-run"
+		return res, nil
+	}
+	pushArgs := []string{"push", "--force-with-lease", authURL, opt.Branch + ":refs/heads/" + opt.Head}
+	cmd := exec.CommandContext(ctx, "git", pushArgs...)
+	cmd.Dir = cwd
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return res, fmt.Errorf("git push to source: %w\n%s", err, redactToken(string(out), token))
+	}
+	res.Status = "pushed"
+	if opt.NoPR || !isGitHubURL(upstream) {
+		return res, nil
+	}
+	// Open (or reuse) the PR head->base.
+	title := strings.TrimSpace(opt.Title)
+	if title == "" {
+		title = "sdlc: ship approved changes"
+	}
+	var pr struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+	}
+	body := map[string]any{"title": title, "head": opt.Head, "base": opt.Base, "body": opt.Body}
+	if err := githubJSON(ctx, http.MethodPost, "/repos/"+ownerRepo+"/pulls", token, body, &pr); err != nil {
+		// A 422 "already exists" is a benign re-run — the branch push updated it.
+		if strings.Contains(err.Error(), "pull request already exists") || strings.Contains(err.Error(), "422") {
+			res.Status = "pushed"
+			return res, nil
+		}
+		return res, fmt.Errorf("sdlc: open PR on %s: %w", ownerRepo, err)
+	}
+	res.Status, res.PRURL, res.PRNumber = "pr-opened", pr.HTMLURL, pr.Number
+	return res, nil
+}
+
+// githubOwnerRepo normalizes an owner/repo or a github URL to "owner/repo".
+func githubOwnerRepo(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "https://github.com/")
+	s = strings.TrimPrefix(s, "git@github.com:")
+	s = strings.TrimSuffix(s, ".git")
+	return strings.Trim(s, "/")
+}
+
+func redactToken(s, token string) string {
+	if token == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, token, "***")
 }
 
 func PublishGitHubPages(ctx context.Context, opt PublishOptions) (PublishResult, error) {
