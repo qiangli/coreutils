@@ -65,11 +65,21 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 
 			// Convenience: `bashy dag path/to/file.md [target...]` — a leading
 			// positional that names an existing file is treated as --file, so a
-			// dag file can be run by path without -f. An explicit --file wins.
+			// dag file can be run by path without -f. A leading positional that
+			// names a DIRECTORY resolves to that folder's known entry (its
+			// DAG.md), so a conventional deploy folder like `.bashy/deploy/`
+			// works as the single entry point (`bashy dag .bashy/deploy deploy-qa`).
+			// An explicit --file wins.
 			path := fileArg
 			if path == "" && len(targets) > 0 {
-				if fi, statErr := os.Stat(targets[0]); statErr == nil && !fi.IsDir() {
-					path, targets = targets[0], targets[1:]
+				if fi, statErr := os.Stat(targets[0]); statErr == nil {
+					if fi.IsDir() {
+						if p, derr := Discover(targets[0]); derr == nil {
+							path, targets = p, targets[1:]
+						}
+					} else {
+						path, targets = targets[0], targets[1:]
+					}
 				}
 			}
 			if path == "" {

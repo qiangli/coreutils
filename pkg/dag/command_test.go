@@ -430,3 +430,25 @@ printf '%s\n' "$BASHY_ARGV0"`))
 		t.Fatalf("self env mismatch:\n got: %q\nwant: %q\nfull output:\n%s", got, want, out.String())
 	}
 }
+
+func TestCommandFolderArgResolvesEntry(t *testing.T) {
+	// A directory positional must resolve to that folder's known entry (DAG.md),
+	// so a conventional deploy folder like `.bashy/sdlc/deploy/` is the single
+	// entry point: `bashy dag .bashy/sdlc/deploy deploy-qa`.
+	dir := t.TempDir()
+	md := "## Tasks\n\n### deploy-qa\n" + block("bash", "echo qa")
+	if err := os.WriteFile(filepath.Join(dir, "DAG.md"), []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := NewDagCmd()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{dir, "--list", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v (stderr=%s)", err, errOut.String())
+	}
+	if !strings.Contains(out.String(), "deploy-qa") {
+		t.Fatalf("folder arg did not resolve to the entry: %s", out.String())
+	}
+}
