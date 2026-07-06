@@ -305,28 +305,25 @@ open through cloudbox. This keeps Gitea UI links and clone URLs coherent:
   bashy loom start \
     --root-url https://CLOUDBOX_HOST/matrix/h/HOST/app/loom/
 
-Prepare a guarded local workspace, then run SDLC from that workspace using the
-local issue/request pointer:
+Prepare a local workspace on the loom source-of-truth repo, then run SDLC from
+that workspace using the local issue/request pointer (single-repo model):
 
   bashy sdlc workspace prepare \
-    --baseline http://127.0.0.1:31880/loom/owner-repo.git \
-    --origin http://127.0.0.1:31880/loom/owner-repo-sdlc.git \
-    --upstream https://github.com/owner/repo.git \
+    --origin http://127.0.0.1:31880/loom/owner-repo.git \
     --dir ~/work/repo
 
-This creates the guarded remote layout:
+  origin   = the loom repo (source of truth): clone from it, push back to it
+  upstream = optional read-only source/backup (GitHub/GitLab/…), push disabled
 
-  origin   = writable Loom workspace repo
-  baseline = immutable Loom mirror repo
-  upstream = optional GitHub source repo with push disabled
+The loom repo is the source of truth and also the issue-intake surface. A loom
+repo can be created fresh or MIGRATED from any upstream (GitHub, GitLab, plain
+git) via Gitea's migrate — GitHub is just one source, and the migrated repo is
+writable. Agents commit + push to origin; GitHub writes happen only during an
+explicit, approved rollout/deploy (deploy.md), so GitHub stays a replaceable
+deploy/backup target, not the source.
 
-Agents commit and push only to origin during implementation. The mirror is the
-immutable comparison baseline; GitHub writes happen only during explicit,
-approved rollout.
-
-The Loom mirror can still host local/private issues and comments. Its Git refs
-are immutable to agents, but the issue tracker is a useful intake surface tied
-to the exact mirrored source baseline.
+Legacy guarded two-repo mode (an immutable Loom mirror to clone/diff against,
+with origin the writable workspace) is still available by passing --baseline.
 
   cd ~/work/repo
   bashy sdlc issue --text "Fix the broken link"
@@ -1275,8 +1272,8 @@ func newWorkspaceCmd() *cobra.Command {
 func newWorkspacePrepareCmd() *cobra.Command {
 	var opt WorkspaceOptions
 	cmd := &cobra.Command{
-		Use:   "prepare --baseline MIRROR_URL --origin WORKSPACE_URL --dir PATH",
-		Short: "clone from an immutable mirror and point writes at a mutable Loom workspace",
+		Use:   "prepare --origin LOOM_REPO_URL --dir PATH [--baseline MIRROR_URL] [--upstream URL]",
+		Short: "prepare a local workspace on the loom source-of-truth repo (single-repo; --baseline opts into the legacy guarded two-repo mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			res, err := PrepareWorkspace(cmd.Context(), opt)
 			if opt.JSON || os.Getenv("BASHY_AGENTIC") != "" {
@@ -1285,7 +1282,9 @@ func newWorkspacePrepareCmd() *cobra.Command {
 			} else if err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "workspace ready: %s\n", res.Dir)
 				fmt.Fprintf(cmd.OutOrStdout(), "  origin   %s\n", res.Origin)
-				fmt.Fprintf(cmd.OutOrStdout(), "  baseline %s\n", res.Baseline)
+				if res.Baseline != "" && res.Baseline != res.Origin {
+					fmt.Fprintf(cmd.OutOrStdout(), "  baseline %s (immutable, push disabled)\n", res.Baseline)
+				}
 				if res.Upstream != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "  upstream %s (push disabled)\n", res.Upstream)
 				}
@@ -1294,9 +1293,9 @@ func newWorkspacePrepareCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opt.Dir, "dir", "", "local mutable workspace directory")
-	cmd.Flags().StringVar(&opt.Origin, "origin", "", "writable Loom workspace repo URL")
-	cmd.Flags().StringVar(&opt.Baseline, "baseline", "", "immutable Loom mirror repo URL")
-	cmd.Flags().StringVar(&opt.Upstream, "upstream", "", "optional GitHub upstream URL, configured read-only")
+	cmd.Flags().StringVar(&opt.Origin, "origin", "", "the loom source-of-truth repo URL (single-repo: clone + push here)")
+	cmd.Flags().StringVar(&opt.Baseline, "baseline", "", "optional immutable Loom mirror to clone from (legacy guarded two-repo mode; omit for single-repo)")
+	cmd.Flags().StringVar(&opt.Upstream, "upstream", "", "optional upstream URL (GitHub/GitLab/…), configured read-only")
 	cmd.Flags().BoolVar(&opt.AllowGitHubOrigin, "allow-github-origin", false, "allow origin to point at github.com instead of Loom")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print JSON")
 	return cmd
@@ -2707,25 +2706,33 @@ func PrepareWorkspace(ctx context.Context, opt WorkspaceOptions) (WorkspaceResul
 	if opt.Dir == "" {
 		return res, errors.New("sdlc: workspace --dir is required")
 	}
-	if opt.Baseline == "" {
-		return res, errors.New("sdlc: workspace --baseline immutable mirror URL is required")
-	}
 	if opt.Origin == "" {
-		return res, errors.New("sdlc: workspace --origin mutable Loom workspace URL is required")
+		return res, errors.New("sdlc: workspace --origin (the loom source-of-truth repo) is required")
 	}
 	if isGitHubURL(opt.Origin) && !opt.AllowGitHubOrigin {
 		return res, errors.New("sdlc: refusing github.com as workspace origin; use a writable Loom workspace repo or pass --allow-github-origin")
 	}
-	created, err := ensureWorkspaceClone(ctx, opt.Dir, opt.Baseline)
+	// Single-repo model (default): the loom origin IS the source of truth — clone
+	// from it and push back to it. --baseline is OPTIONAL, kept for the legacy
+	// guarded two-repo mode (an immutable Loom mirror to clone from + diff
+	// against, with origin the writable push target). When it's omitted (or equal
+	// to origin) there is exactly one loom repo.
+	cloneFrom := opt.Baseline
+	if cloneFrom == "" {
+		cloneFrom = opt.Origin
+	}
+	created, err := ensureWorkspaceClone(ctx, opt.Dir, cloneFrom)
 	if err != nil {
 		return res, err
 	}
 	res.Created = created
-	if err := setGitRemote(ctx, opt.Dir, "baseline", opt.Baseline); err != nil {
-		return res, err
-	}
-	if err := runGitErr(ctx, opt.Dir, "remote", "set-url", "--push", "baseline", "DISABLED"); err != nil {
-		return res, err
+	if opt.Baseline != "" && opt.Baseline != opt.Origin {
+		if err := setGitRemote(ctx, opt.Dir, "baseline", opt.Baseline); err != nil {
+			return res, err
+		}
+		if err := runGitErr(ctx, opt.Dir, "remote", "set-url", "--push", "baseline", "DISABLED"); err != nil {
+			return res, err
+		}
 	}
 	if err := setGitRemote(ctx, opt.Dir, "origin", opt.Origin); err != nil {
 		return res, err
@@ -2738,10 +2745,12 @@ func PrepareWorkspace(ctx context.Context, opt WorkspaceOptions) (WorkspaceResul
 			return res, err
 		}
 	}
-	if err := runGitErr(ctx, opt.Dir, "fetch", "baseline", "--prune"); err != nil {
+	if err := runGitErr(ctx, opt.Dir, "fetch", "origin", "--prune"); err != nil {
 		return res, err
 	}
-	_ = runGitErr(ctx, opt.Dir, "fetch", "origin", "--prune")
+	if opt.Baseline != "" && opt.Baseline != opt.Origin {
+		_ = runGitErr(ctx, opt.Dir, "fetch", "baseline", "--prune")
+	}
 	metaPath := filepath.Join(opt.Dir, ".git", "bashy-sdlc-workspace.json")
 	res.MetadataPath = metaPath
 	res.Status = "ready"
