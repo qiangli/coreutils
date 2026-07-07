@@ -171,8 +171,11 @@ func TestInstallTDoesNotTreatExistingDirAsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, errb, code := runTool(t, dir, "-T", "src", "dest")
-	if code != 1 || !strings.Contains(errb, "cannot create regular file 'dest'") {
+	if code != 1 || !strings.Contains(errb, "cannot overwrite directory 'dest' with non-directory") {
 		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "dest")); err != nil || !fi.IsDir() {
+		t.Fatalf("existing directory was removed: %v", err)
 	}
 }
 
@@ -182,6 +185,48 @@ func TestInstallOwnershipFlagsUnsupported(t *testing.T) {
 	_, errb, code := runTool(t, dir, "-o", "root", "src", "dst")
 	if code != 2 || !strings.Contains(errb, "-o/--owner and -g/--group") {
 		t.Fatalf("code=%d err=%q", code, errb)
+	}
+}
+
+// GNU install removes an existing destination before copying, so a
+// read-only destination is replaced rather than failing on open.
+func TestInstallReplacesReadOnlyDest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only files block os.Remove on windows")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	if err := os.Chmod(filepath.Join(dir, "dst"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "dst")); got != "new" {
+		t.Fatalf("dst content = %q, want new", got)
+	}
+}
+
+// Removing the destination first breaks hard links instead of writing
+// through them.
+func TestInstallBreaksHardLinkedDest(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "other"), "old")
+	if err := os.Link(filepath.Join(dir, "other"), filepath.Join(dir, "dst")); err != nil {
+		t.Skipf("hard links unsupported here: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "dst")); got != "new" {
+		t.Fatalf("dst content = %q, want new", got)
+	}
+	if got := read(t, filepath.Join(dir, "other")); got != "old" {
+		t.Fatalf("hard link was written through: other = %q, want old", got)
 	}
 }
 

@@ -70,3 +70,15 @@ func TestVdirRegistered(t *testing.T) {
 		t.Fatalf("vdir is not registered")
 	}
 }
+
+// --help/--version answer as vdir, not as the ls delegate.
+func TestVdirHelpAndVersionIdentity(t *testing.T) {
+	out, _, code := runToolAt(t, t.TempDir(), "--help")
+	if code != 0 || !strings.Contains(out, "Usage: vdir") || strings.Contains(out, "Usage: ls") {
+		t.Fatalf("--help: code=%d out=%q", code, out)
+	}
+	out, _, code = runToolAt(t, t.TempDir(), "--version")
+	if code != 0 || !strings.HasPrefix(out, "vdir (qiangli/coreutils)") {
+		t.Fatalf("--version: code=%d out=%q", code, out)
+	}
+}

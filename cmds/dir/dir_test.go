@@ -57,3 +57,15 @@ func TestDirRegistered(t *testing.T) {
 		t.Fatalf("dir is not registered")
 	}
 }
+
+// --help/--version answer as dir, not as the ls delegate.
+func TestDirHelpAndVersionIdentity(t *testing.T) {
+	out, _, code := runToolAt(t, t.TempDir(), "--help")
+	if code != 0 || !strings.Contains(out, "Usage: dir") || strings.Contains(out, "Usage: ls") {
+		t.Fatalf("--help: code=%d out=%q", code, out)
+	}
+	out, _, code = runToolAt(t, t.TempDir(), "--version")
+	if code != 0 || !strings.HasPrefix(out, "dir (qiangli/coreutils)") {
+		t.Fatalf("--version: code=%d out=%q", code, out)
+	}
+}

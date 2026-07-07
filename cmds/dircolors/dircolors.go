@@ -1,7 +1,14 @@
 // Package dircolorscmd implements a useful GNU-compatible subset of
 // dircolors(1): emit Bourne-shell or C-shell setup code for LS_COLORS,
-// print the built-in database, and parse simple DIR/FILE/extension
-// color database lines.
+// print the built-in database, and parse color database files with
+// GNU's TERM/COLORTERM gating (entries before any TERM/COLORTERM line
+// always apply; entries after them apply once any pattern has matched
+// the current terminal). Unrecognized keywords and malformed lines are
+// errors, as in GNU — never silently skipped.
+//
+// Documented deviation: with no FILE operand the built-in database is
+// emitted in full, independent of $TERM (deterministic output; the
+// built-in TERM patterns are not consulted).
 package dircolorscmd
 
 import (
@@ -10,7 +17,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -37,6 +43,12 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "options --bourne-shell and --c-shell are mutually exclusive")
 	}
 	if *printDB {
+		if *bourne || *cshell {
+			return tool.UsageError(rc, cmd, "the options to output the internal database and to select a shell syntax are mutually exclusive")
+		}
+		if len(operands) > 0 {
+			return tool.UsageError(rc, cmd, "extra operand '%s'; file operands cannot be combined with --print-database", operands[0])
+		}
 		fmt.Fprint(rc.Out, defaultDatabase)
 		return 0
 	}
@@ -48,7 +60,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 1 {
 		parsed, err := parseDatabaseFile(rc, operands[0])
 		if err != nil {
-			fmt.Fprintf(rc.Err, "dircolors: %s: %v\n", operands[0], tool.SysErr(err))
+			fmt.Fprintf(rc.Err, "dircolors: %v\n", err)
 			return 1
 		}
 		entries = parsed
@@ -165,24 +177,43 @@ STICKY 37;44
 `
 
 func defaultEntries() []entry {
-	entries, _ := parseDatabase(strings.NewReader(defaultDatabase), "xterm-256color")
+	// The built-in database is emitted independent of $TERM (see the
+	// package doc); a terminal matching every built-in pattern keeps
+	// the parser's gating satisfied.
+	entries, _ := parseDatabase(strings.NewReader(defaultDatabase), "<internal>", "xterm-256color", "")
 	return entries
 }
 
 func parseDatabaseFile(rc *tool.RunContext, name string) ([]entry, error) {
 	f, err := os.Open(rc.Path(name))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %v", name, tool.SysErr(err))
 	}
 	defer f.Close()
-	return parseDatabase(f, rc.Getenv("TERM"))
+	return parseDatabase(f, name, rc.Getenv("TERM"), rc.Getenv("COLORTERM"))
 }
 
-func parseDatabase(r io.Reader, term string) ([]entry, error) {
+// parse states, per GNU semantics: entries before any TERM/COLORTERM
+// line are global; after such lines, entries apply only once some
+// pattern has matched — and a later mismatched TERM cannot cancel a
+// match already seen.
+type parseState int
+
+const (
+	stateGlobal parseState = iota
+	statePass
+	stateMatched
+	stateContinue
+)
+
+func parseDatabase(r io.Reader, filename, term, colorterm string) ([]entry, error) {
 	scanner := bufio.NewScanner(r)
 	var entries []entry
-	var termPatterns []string
+	state := stateGlobal
+	sawColortermMatch := false
+	lineno := 0
 	for scanner.Scan() {
+		lineno++
 		line := scanner.Text()
 		if i := strings.IndexByte(line, '#'); i >= 0 {
 			line = line[:i]
@@ -193,24 +224,50 @@ func parseDatabase(r io.Reader, term string) ([]entry, error) {
 		}
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
-			continue
+			return nil, fmt.Errorf("%s:%d: invalid line; missing second token", filename, lineno)
 		}
 		key, value := fields[0], fields[1]
-		if strings.EqualFold(key, "TERM") {
-			termPatterns = append(termPatterns, value)
+		switch strings.ToUpper(key) {
+		case "TERM":
+			if patternMatches(value, term) {
+				state = stateMatched
+			} else if state == stateGlobal {
+				state = statePass
+			}
+			continue
+		case "COLORTERM":
+			// COLORTERM ?* matches any non-empty COLORTERM.
+			matched := false
+			if value == "?*" {
+				matched = colorterm != ""
+			} else {
+				matched = patternMatches(value, colorterm)
+			}
+			if matched {
+				state = stateMatched
+				sawColortermMatch = true
+			} else if !sawColortermMatch && state == stateGlobal {
+				state = statePass
+			}
+			continue
+		case "OPTIONS", "COLOR", "EIGHTBIT":
+			// Slackware-only keywords; GNU ignores them.
+			continue
+		}
+		if state == stateMatched {
+			state = stateContinue
+		}
+		if state == statePass {
 			continue
 		}
 		encoded, ok := encodeKey(key)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("%s:%d: unrecognized keyword %s", filename, lineno, key)
 		}
 		entries = append(entries, entry{key: encoded, value: value})
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if len(termPatterns) > 0 && !termMatches(term, termPatterns) {
-		return nil, nil
+		return nil, fmt.Errorf("%s: %v", filename, err)
 	}
 	return entries, nil
 }
@@ -219,48 +276,33 @@ func encodeKey(key string) (string, bool) {
 	if strings.HasPrefix(key, ".") {
 		return "*" + key, true
 	}
-	if strings.HasPrefix(key, "*.") {
+	if strings.HasPrefix(key, "*") {
 		return key, true
 	}
 	v, ok := typeKeys[strings.ToUpper(key)]
 	return v, ok
 }
 
-func termMatches(term string, patterns []string) bool {
-	if term == "" {
-		term = "unknown"
+func patternMatches(pattern, s string) bool {
+	if s == "" {
+		s = "none"
 	}
-	for _, pattern := range patterns {
-		ok, err := filepath.Match(pattern, term)
-		if err == nil && ok {
-			return true
-		}
-		if pattern == term {
-			return true
-		}
+	ok, err := filepath.Match(pattern, s)
+	if err == nil && ok {
+		return true
 	}
-	return false
+	return pattern == s
 }
 
+// encodeLSColors joins the entries in database order, without
+// deduplication — GNU emits them as parsed; consumers use the last
+// match.
 func encodeLSColors(entries []entry) string {
 	if len(entries) == 0 {
 		return ""
 	}
-	seen := make(map[string]int, len(entries))
-	var out []entry
+	parts := make([]string, 0, len(entries))
 	for _, ent := range entries {
-		if i, ok := seen[ent.key]; ok {
-			out[i].value = ent.value
-			continue
-		}
-		seen[ent.key] = len(out)
-		out = append(out, ent)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].key < out[j].key
-	})
-	parts := make([]string, 0, len(out))
-	for _, ent := range out {
 		parts = append(parts, ent.key+"="+ent.value)
 	}
 	return strings.Join(parts, ":") + ":"

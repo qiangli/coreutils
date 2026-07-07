@@ -83,3 +83,89 @@ func TestDdErrors(t *testing.T) {
 		t.Fatalf("bad operand: code=%d err=%q", code, errb)
 	}
 }
+
+// POSIX: seek= preserves the skipped-over output blocks; without
+// conv=notrunc the file is truncated at the seek offset, not to zero.
+func TestDdSeekPreservesExistingPrefix(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("BB"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "out"), []byte("AAAAAAAA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "if=in", "of=out", "bs=4", "seek=1", "status=none")
+	if code != 0 {
+		t.Fatalf("dd seek: code=%d err=%q", code, errb)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "AAAABB" {
+		t.Fatalf("out=%q want AAAABB (prefix preserved, truncated at seek)", got)
+	}
+}
+
+// Without seek=, the default truncation still empties an existing file.
+func TestDdDefaultTruncatesExistingOutput(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("BB"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "out"), []byte("AAAAAAAA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "if=in", "of=out", "status=none")
+	if code != 0 {
+		t.Fatalf("dd: code=%d err=%q", code, errb)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "BB" {
+		t.Fatalf("out=%q want BB", got)
+	}
+}
+
+// With ibs=/obs=, output is re-blocked into obs-sized records and
+// "records out" counts those, not the input records.
+func TestDdReblocksOutputRecords(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("abcdefgh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "if=in", "of=out", "ibs=1", "obs=4")
+	if code != 0 {
+		t.Fatalf("dd reblock: code=%d err=%q", code, errb)
+	}
+	want := "8+0 records in\n2+0 records out\n8 bytes copied\n"
+	if errb != want {
+		t.Fatalf("status=%q want %q", errb, want)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "abcdefgh" {
+		t.Fatalf("out=%q want abcdefgh", got)
+	}
+}
+
+// bs= disables re-blocking: each input block is written as read, so
+// records out mirrors records in.
+func TestDdBsWritesRecordsAsRead(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("abcdef"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "if=in", "of=out", "bs=4")
+	if code != 0 {
+		t.Fatalf("dd bs: code=%d err=%q", code, errb)
+	}
+	want := "1+1 records in\n1+1 records out\n6 bytes copied\n"
+	if errb != want {
+		t.Fatalf("status=%q want %q", errb, want)
+	}
+}

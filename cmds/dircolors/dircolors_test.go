@@ -110,3 +110,83 @@ func TestDircolorsErrorsAndHelp(t *testing.T) {
 		t.Fatalf("--help: code=%d out=%q", code, out)
 	}
 }
+
+func TestDircolorsRejectsUnknownKeyword(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "colors"), []byte("TERM xterm*\nBOGUS 33\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, []string{"TERM=xterm"}, "colors")
+	if code != 1 || !strings.Contains(errb, "colors:2: unrecognized keyword BOGUS") {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+}
+
+func TestDircolorsRejectsMissingSecondToken(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "colors"), []byte("DIR\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, nil, "colors")
+	if code != 1 || !strings.Contains(errb, "colors:1: invalid line; missing second token") {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+}
+
+func TestDircolorsPrintDatabaseRejectsOperands(t *testing.T) {
+	_, errb, code := runTool(t, t.TempDir(), nil, "-p", "somefile")
+	if code != 2 || !strings.Contains(errb, "extra operand 'somefile'") {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, t.TempDir(), nil, "-p", "-b")
+	if code != 2 || !strings.Contains(errb, "mutually exclusive") {
+		t.Fatalf("-p -b: code=%d err=%q", code, errb)
+	}
+}
+
+// Entries before any TERM line are global: they apply even when no
+// TERM pattern matches; entries after a mismatched TERM do not.
+func TestDircolorsGlobalEntriesPrecedeTermGating(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "colors"), []byte("DIR 33\nTERM linux\nLINK 36\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, []string{"TERM=xterm"}, "colors")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if out != "LS_COLORS='di=33:';\nexport LS_COLORS\n" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+// GNU emits entries in database order without deduplication.
+func TestDircolorsPreservesOrderAndDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	db := "TERM xterm*\nLINK 36\nDIR 33\nDIR 44\n"
+	if err := os.WriteFile(filepath.Join(dir, "colors"), []byte(db), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, []string{"TERM=xterm"}, "colors")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if out != "LS_COLORS='ln=36:di=33:di=44:';\nexport LS_COLORS\n" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func TestDircolorsColortermGating(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "colors"), []byte("COLORTERM ?*\nDIR 33\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runTool(t, dir, []string{"COLORTERM=truecolor"}, "colors")
+	if code != 0 || !strings.Contains(out, "di=33") {
+		t.Fatalf("matched COLORTERM: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, dir, []string{"TERM=xterm"}, "colors")
+	if code != 0 || strings.Contains(out, "di=33") {
+		t.Fatalf("empty COLORTERM should gate entries: code=%d out=%q", code, out)
+	}
+}

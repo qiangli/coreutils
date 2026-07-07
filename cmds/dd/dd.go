@@ -1,5 +1,15 @@
 // Package ddcmd implements a practical dd(1) subset: copy bytes from
 // input to output using dd-style KEY=VALUE operands.
+//
+// POSIX/GNU block semantics: seek= preserves the skipped-over output
+// blocks, and (unless conv=notrunc) the output file is truncated at the
+// seek offset before copying. When ibs=/obs= are given, output is
+// re-blocked into obs-sized records; bs= disables re-blocking (each
+// input block is written as read), exactly as GNU documents.
+//
+// Documented deviation: the default status trailer is a plain
+// "N bytes copied" line — GNU appends wall-clock time and throughput,
+// which this repo omits for deterministic output.
 package ddcmd
 
 import (
@@ -28,6 +38,7 @@ type config struct {
 	skip, seek   int64
 	notrunc      bool
 	status       string
+	reblock      bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -36,7 +47,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	cfg := config{ibs: 512, obs: 512, count: -1}
+	cfg := config{ibs: 512, obs: 512, count: -1, reblock: true}
 	for _, op := range operands {
 		k, v, ok := strings.Cut(op, "=")
 		if !ok || k == "" {
@@ -53,18 +64,22 @@ func run(rc *tool.RunContext, args []string) int {
 				return tool.UsageError(rc, cmd, "invalid number: '%s'", v)
 			}
 			cfg.ibs, cfg.obs = n, n
+			// bs= writes each input block as read — no re-blocking (GNU).
+			cfg.reblock = false
 		case "ibs":
 			n, err := parseBytes(v)
 			if err != nil || n <= 0 {
 				return tool.UsageError(rc, cmd, "invalid number: '%s'", v)
 			}
 			cfg.ibs = n
+			cfg.reblock = true
 		case "obs":
 			n, err := parseBytes(v)
 			if err != nil || n <= 0 {
 				return tool.UsageError(rc, cmd, "invalid number: '%s'", v)
 			}
 			cfg.obs = n
+			cfg.reblock = true
 		case "count":
 			n, err := parseCount(v)
 			if err != nil {
@@ -117,17 +132,25 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 	var out io.Writer = rc.Out
 	var outf *os.File
 	if cfg.ofile != "" {
-		flags := os.O_WRONLY | os.O_CREATE
-		if !cfg.notrunc {
-			flags |= os.O_TRUNC
-		}
-		f, err := os.OpenFile(rc.Path(cfg.ofile), flags, 0o666)
+		f, err := os.OpenFile(rc.Path(cfg.ofile), os.O_WRONLY|os.O_CREATE, 0o666)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "dd: failed to open '%s': %v\n", cfg.ofile, reason(err))
 			return 1
 		}
 		outf = f
 		out = f
+		if !cfg.notrunc {
+			// POSIX: truncate at the seek offset, preserving the blocks
+			// dd seeks over. Truncate can fail on special files
+			// (/dev/null); GNU ignores that, so only surface the error
+			// for regular files where it would mean silent stale data.
+			if err := f.Truncate(cfg.seek * cfg.obs); err != nil {
+				if fi, serr := f.Stat(); serr == nil && fi.Mode().IsRegular() {
+					fmt.Fprintf(rc.Err, "dd: failed to truncate '%s': %v\n", cfg.ofile, reason(err))
+					return 1
+				}
+			}
+		}
 	}
 	if cfg.skip > 0 {
 		n := cfg.skip * cfg.ibs
@@ -151,6 +174,11 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		}
 	}
 
+	var blocker *obsWriter
+	if cfg.reblock {
+		blocker = &obsWriter{w: out, obs: cfg.obs}
+		out = blocker
+	}
 	buf := make([]byte, cfg.ibs)
 	var full, partial, bytesCopied int64
 	for cfg.count < 0 || full+partial < cfg.count {
@@ -175,6 +203,14 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 			return 1
 		}
 	}
+	outFull, outPartial := full, partial
+	if blocker != nil {
+		if err := blocker.Flush(); err != nil {
+			fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
+			return 1
+		}
+		outFull, outPartial = blocker.full, blocker.partial
+	}
 	if outf != nil {
 		if err := outf.Close(); err != nil {
 			fmt.Fprintf(rc.Err, "dd: error closing '%s': %v\n", cfg.ofile, reason(err))
@@ -186,11 +222,57 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		return 0
 	}
 	fmt.Fprintf(rc.Err, "%d+%d records in\n", full, partial)
-	fmt.Fprintf(rc.Err, "%d+%d records out\n", full, partial)
+	fmt.Fprintf(rc.Err, "%d+%d records out\n", outFull, outPartial)
 	if cfg.status != "noxfer" {
 		fmt.Fprintf(rc.Err, "%d bytes copied\n", bytesCopied)
 	}
 	return 0
+}
+
+// obsWriter re-blocks writes into obs-sized output records, counting
+// full and partial records the way GNU dd reports them.
+type obsWriter struct {
+	w             io.Writer
+	obs           int64
+	buf           []byte
+	full, partial int64
+}
+
+func (o *obsWriter) Write(p []byte) (int, error) {
+	total := len(p)
+	for len(p) > 0 {
+		if len(o.buf) == 0 && int64(len(p)) >= o.obs {
+			if _, err := o.w.Write(p[:o.obs]); err != nil {
+				return 0, err
+			}
+			o.full++
+			p = p[o.obs:]
+			continue
+		}
+		n := min(int(o.obs)-len(o.buf), len(p))
+		o.buf = append(o.buf, p[:n]...)
+		p = p[n:]
+		if int64(len(o.buf)) == o.obs {
+			if _, err := o.w.Write(o.buf); err != nil {
+				return 0, err
+			}
+			o.full++
+			o.buf = o.buf[:0]
+		}
+	}
+	return total, nil
+}
+
+func (o *obsWriter) Flush() error {
+	if len(o.buf) == 0 {
+		return nil
+	}
+	if _, err := o.w.Write(o.buf); err != nil {
+		return err
+	}
+	o.partial++
+	o.buf = o.buf[:0]
+	return nil
 }
 
 var byteMultipliers = map[string]int64{

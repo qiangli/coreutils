@@ -198,9 +198,22 @@ func (in *installer) copyFile(src, dst string, parents bool) {
 	if parents && !in.makeParentDir(dst) {
 		return
 	}
-	if di, err := os.Stat(in.rc.Path(dst)); err == nil && os.SameFile(fi, di) {
-		in.errf("'%s' and '%s' are the same file", src, dst)
-		return
+	if di, err := os.Stat(in.rc.Path(dst)); err == nil {
+		if os.SameFile(fi, di) {
+			in.errf("'%s' and '%s' are the same file", src, dst)
+			return
+		}
+		if di.IsDir() {
+			in.errf("cannot overwrite directory '%s' with non-directory", dst)
+			return
+		}
+		// GNU install removes an existing destination before copying
+		// (fresh inode: read-only dests are replaced, hard links are
+		// broken, running binaries don't hit ETXTBSY).
+		if err := os.Remove(in.rc.Path(dst)); err != nil {
+			in.errf("cannot remove '%s': %s", dst, reason(err))
+			return
+		}
 	}
 	inp, err := os.Open(in.rc.Path(src))
 	if err != nil {
