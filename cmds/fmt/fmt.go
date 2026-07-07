@@ -49,6 +49,11 @@ func run(rc *tool.RunContext, args []string) int {
 	tabWidth := fs.IntP("tab-width", "T", 8, "set tab stops every WIDTH columns")
 	quick := fs.BoolP("quick", "q", false, "use a fast line breaking mode")
 	exact := fs.BoolP("exact", "x", false, "try harder to preserve optimal line lengths")
+	exactPrefix := fs.String("exact-prefix", "", "reformat only lines beginning with STRING, do not reattach the prefix")
+	exactSkipPrefix := fs.String("exact-skip-prefix", "", "skip lines beginning with STRING, do not reattach (GNU compat, no-op in this subset)")
+	preserveHeaders := fs.BoolP("preserve-headers", "m", false, "preserve email/news headers (GNU compat, no-op in this subset)")
+	skipPrefix := fs.StringP("skip-prefix", "P", "", "skip reformatting lines beginning with STRING (GNU compat, no-op in this subset)")
+	cStyle := fs.BoolP("", "X", false, "toggle width style (GNU compat, no-op in this subset)")
 	operands, code := tool.Parse(rc, cmd, fs, rewriteObsoleteWidth(args))
 	if code >= 0 {
 		return code
@@ -83,6 +88,11 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	_ = *quick
 	_ = *exact
+	_ = *exactPrefix
+	_ = *exactSkipPrefix
+	_ = *preserveHeaders
+	_ = *skipPrefix
+	_ = *cStyle
 	if len(operands) == 0 {
 		operands = []string{"-"}
 	}

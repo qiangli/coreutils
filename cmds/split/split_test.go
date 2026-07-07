@@ -267,6 +267,29 @@ func TestSplitNewFlags(t *testing.T) {
 		t.Fatalf("--hex-suffixes files: %v", got2)
 	}
 
+	// -x shorthand for hex suffixes
+	dir2b := t.TempDir()
+	_, _, code = runTool(t, dir2b, "1\n2\n", "-l", "1", "-x")
+	if code != 0 {
+		t.Fatalf("split -x: code=%d", code)
+	}
+	got2b := listFiles(t, dir2b)
+	if len(got2b) != 2 || got2b[0] != "x0" || got2b[1] != "x1" {
+		t.Fatalf("-x files: %v", got2b)
+	}
+
+	// -x and -d are mutually exclusive
+	_, errb, code := runTool(t, "", "", "-x", "-d")
+	if code != 2 || !strings.Contains(errb, "cannot combine -x with --numeric-suffixes") {
+		t.Fatalf("-x with -d: code=%d err=%q", code, errb)
+	}
+
+	// --filter is unsupported
+	_, errb, code = runTool(t, "", "", "--filter", "cat >/dev/null")
+	if code != 2 || !strings.Contains(errb, "not supported") {
+		t.Fatalf("--filter: code=%d err=%q", code, errb)
+	}
+
 	// --elide-empty-files -e with -n
 	dir3 := t.TempDir()
 	_, _, code = runTool(t, dir3, "ab", "-n", "3", "-e")
@@ -293,7 +316,7 @@ func TestSplitNewFlags(t *testing.T) {
 
 	// --verbose
 	dir5 := t.TempDir()
-	_, errb, code := runTool(t, dir5, "1\n", "-l", "1", "--verbose")
+	_, errb, code = runTool(t, dir5, "1\n", "-l", "1", "--verbose")
 	if code != 0 {
 		t.Fatalf("--verbose: code=%d", code)
 	}

@@ -74,3 +74,55 @@ func TestShredErrors(t *testing.T) {
 		t.Fatalf("directory operand: code=%d err=%q", code, errb)
 	}
 }
+
+func TestShredNewFlags(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file")
+	if err := os.WriteFile(path, []byte("secret data text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// --size / -s: shred only first N bytes (rounded to block size without --exact)
+	_, errb, code := runTool(t, dir, "-n", "1", "-z", "-s", "6", "file")
+	if code != 0 {
+		t.Fatalf("shred -s 6: code=%d err=%q", code, errb)
+	}
+	got, _ := os.ReadFile(path)
+	if !bytes.Equal(got, bytes.Repeat([]byte{0}, len(got))) {
+		t.Fatalf("shred -s 6: file not zeroed: %x", got)
+	}
+
+	// --exact
+	path2 := filepath.Join(dir, "file2")
+	if err := os.WriteFile(path2, []byte("secret data text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, code = runTool(t, dir, "-n", "1", "-z", "--exact", "--size", "6", "file2")
+	if code != 0 {
+		t.Fatalf("shred --exact: code=%d", code)
+	}
+	got2, _ := os.ReadFile(path2)
+	if string(got2[:6]) != "\x00\x00\x00\x00\x00\x00" {
+		t.Fatalf("shred --exact: first 6 bytes not zeroed: %x", got2[:6])
+	}
+
+	// --random-source with /dev/zero: predictable zeros
+	path3 := filepath.Join(dir, "file3")
+	if err := os.WriteFile(path3, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, code = runTool(t, dir, "-n", "1", "--random-source", "/dev/zero", "file3")
+	if code != 0 {
+		t.Fatalf("shred --random-source: code=%d", code)
+	}
+
+	// -x (no-xdev) accepted
+	path4 := filepath.Join(dir, "file4")
+	if err := os.WriteFile(path4, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, code = runTool(t, dir, "-n", "1", "-x", "file4")
+	if code != 0 {
+		t.Fatalf("shred -x: code=%d", code)
+	}
+}

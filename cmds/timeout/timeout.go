@@ -27,7 +27,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "timeout",
 	Synopsis: "Run a command with a time limit; signal it if it runs too long (GNU timeout drop-in).",
-	Usage:    "timeout [-s SIGNAL] [-k DURATION] [--preserve-status] [--foreground] DURATION command [arguments...]",
+	Usage:    "timeout [OPTION] DURATION COMMAND [ARG]...",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -69,6 +69,13 @@ func run(rc *tool.RunContext, args []string) int {
 			o.signal = a[len("--signal="):]
 		case strings.HasPrefix(a, "-s"):
 			o.signal = a[2:] // -sKILL
+		case a == "--help" || a == "-h":
+			fmt.Fprintf(rc.Out, "Usage: %s\n", cmd.Usage)
+			fmt.Fprintf(rc.Out, "%s\n", cmd.Synopsis)
+			return 0
+		case a == "--version" || a == "-V":
+			fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
+			return 0
 		case a == "-k" || a == "--kill-after":
 			if v, ok := need(); ok {
 				o.killAfter = v

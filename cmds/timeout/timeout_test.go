@@ -1,8 +1,13 @@
 package timeoutcmd
 
 import (
+	"bytes"
+	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/tool"
 )
 
 func TestParseDuration(t *testing.T) {
@@ -30,8 +35,6 @@ func TestParseDuration(t *testing.T) {
 }
 
 func TestSignalByName(t *testing.T) {
-	// The default and a couple of common names must resolve (never nil) on the
-	// build platform; an unknown name must not resolve.
 	for _, name := range []string{"TERM", "SIGKILL", "int", "9"} {
 		if signalByName(name) == nil {
 			t.Errorf("signalByName(%q) = nil, want a signal", name)
@@ -48,5 +51,37 @@ func TestExitStatus(t *testing.T) {
 	}
 	if got := exitStatus(nil, false, false); got != 0 {
 		t.Errorf("clean exit = %d, want 0", got)
+	}
+}
+
+func TestTimeoutHelpAndVersion(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+
+	code := cmd.Run(rc, []string{"--help"})
+	if code != 0 || !strings.Contains(out.String(), "Usage: timeout") {
+		t.Errorf("--help: code=%d out=%q", code, out.String())
+	}
+
+	out.Reset()
+	code = cmd.Run(rc, []string{"--version"})
+	if code != 0 || !strings.Contains(out.String(), "timeout") {
+		t.Errorf("--version: code=%d out=%q", code, out.String())
+	}
+
+	out.Reset()
+	code = cmd.Run(rc, []string{"-h"})
+	if code != 0 || !strings.Contains(out.String(), "Usage: timeout") {
+		t.Errorf("-h: code=%d out=%q", code, out.String())
+	}
+
+	out.Reset()
+	code = cmd.Run(rc, []string{"-V"})
+	if code != 0 || !strings.Contains(out.String(), "timeout") {
+		t.Errorf("-V: code=%d out=%q", code, out.String())
 	}
 }

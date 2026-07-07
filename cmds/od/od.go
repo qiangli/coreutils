@@ -61,6 +61,7 @@ func run(rc *tool.RunContext, args []string) int {
 	octalWords := fs.BoolP("octal-2", "o", false, "same as -t o2")
 	hexWords := fs.BoolP("hex-2", "x", false, "same as -t x2")
 	showAll := fs.BoolP("output-duplicates", "v", false, "do not use * to mark line suppression")
+	traditional := fs.Bool("traditional", false, "accept arguments in third traditional form")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -72,6 +73,14 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		*skipText = strconv.FormatInt(traditionalSkip, 10)
 		operands = operands[:len(operands)-1]
+	}
+	if *traditional && len(operands) > 0 && strings.HasPrefix(operands[0], "+") {
+		traditionalSkip, err := parseTraditionalOffset(strings.TrimPrefix(operands[0], "+"))
+		if err != nil || traditionalSkip < 0 {
+			return tool.UsageError(rc, cmd, "invalid traditional skip offset: %q", operands[0])
+		}
+		*skipText = strconv.FormatInt(traditionalSkip, 10)
+		operands = operands[1:]
 	}
 	selectedFormats := append([]string{}, *formats...)
 	for _, choice := range []struct {
@@ -437,6 +446,16 @@ func parseFormat(s string) (dumpFormat, error) {
 	}
 	prefix := s[:1]
 	sizeText := s[1:]
+	if _, err := strconv.Atoi(sizeText); err != nil {
+		for pfx := len(s); pfx > 0; pfx-- {
+			cand := s[:pfx]
+			if alias, ok := prefixAliases[cand]; ok {
+				sizeText = s[pfx:]
+				prefix = alias
+				break
+			}
+		}
+	}
 	if alias, ok := sizeAliases[sizeText]; ok {
 		sizeText = alias
 	}
@@ -451,18 +470,34 @@ func parseFormat(s string) (dumpFormat, error) {
 }
 
 var formatAliases = map[string]string{
-	"char":   "c",
-	"ascii":  "a",
-	"named":  "a",
-	"float":  "f8",
-	"double": "f8",
+	"char":     "c",
+	"ascii":    "a",
+	"named":    "a",
+	"float":    "f8",
+	"double":   "f8",
+	"octal":    "o",
+	"hex":      "x",
+	"signed":   "d",
+	"unsigned": "u",
 }
 
 var sizeAliases = map[string]string{
-	"C": "1",
-	"S": "2",
-	"I": "4",
-	"L": "8",
+	"C":     "1",
+	"S":     "2",
+	"I":     "4",
+	"L":     "8",
+	"char":  "1",
+	"short": "2",
+	"int":   "4",
+	"long":  "8",
+}
+
+var prefixAliases = map[string]string{
+	"octal":    "o",
+	"hex":      "x",
+	"signed":   "d",
+	"unsigned": "u",
+	"decimal":  "d",
 }
 
 func formatOffset(n int64, radix string) string {

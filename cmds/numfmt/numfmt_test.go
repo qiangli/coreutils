@@ -240,3 +240,21 @@ func TestNumfmtImplicitPadding(t *testing.T) {
 		t.Fatalf("field 1 default: (%q, %d)", out, code)
 	}
 }
+
+func TestNumfmtShortMFlag(t *testing.T) {
+	out, errb, code := runTool(t, "", "-M", "--format=%.0f", "2K")
+	if code != 0 || errb != "" {
+		t.Fatalf("-M: code=%d err=%q", code, errb)
+	}
+	if out != "2000\n" {
+		t.Fatalf("-M: out=%q want 2000", out)
+	}
+	// -M is overridden by explicit --from
+	out, errb, code = runTool(t, "", "-M", "--from=iec", "--format=%.0f", "2K")
+	if code != 0 || errb != "" {
+		t.Fatalf("-M with --from: code=%d err=%q", code, errb)
+	}
+	if out != "2048\n" {
+		t.Fatalf("-M with --from=iec: out=%q want 2048", out)
+	}
+}

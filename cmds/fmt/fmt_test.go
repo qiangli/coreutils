@@ -208,11 +208,49 @@ func TestFmtTabWidthAndQuickExactModes(t *testing.T) {
 	}
 }
 
-func TestFmtRemovedFlagsFailLoudly(t *testing.T) {
-	for _, flag := range []string{"-m", "-P", "-X"} {
-		_, stderr, code := runFmt(t, "x\n", flag, "8")
-		if code != 2 || !strings.Contains(stderr, strings.TrimPrefix(flag, "-")) {
+func TestFmtRemovedFlagsNowAccepted(t *testing.T) {
+	// boolean flags
+	for _, flag := range []string{"-m", "-X"} {
+		out, stderr, code := runFmt(t, "x\n", flag, "-w", "8")
+		if code != 0 {
 			t.Fatalf("flag %s: code=%d stderr=%q", flag, code, stderr)
 		}
+		if stderr != "" {
+			t.Fatalf("flag %s has unexpected stderr: %q", flag, stderr)
+		}
+		if out != "x\n" {
+			t.Fatalf("flag %s: unexpected output: %q", flag, out)
+		}
+	}
+	// -P takes a string argument
+	out, stderr, code := runFmt(t, "x\n", "-P", "SKIP", "-w", "8")
+	if code != 0 {
+		t.Fatalf("flag -P: code=%d stderr=%q", code, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("flag -P has unexpected stderr: %q", stderr)
+	}
+	if out != "x\n" {
+		t.Fatalf("flag -P: unexpected output: %q", out)
+	}
+}
+
+func TestFmtNewExactPrefixFlags(t *testing.T) {
+	// --exact-prefix and --exact-skip-prefix are accepted
+	_, stderr, code := runFmt(t, "hello world\n", "--exact-prefix", ">", "-w", "20")
+	if code != 0 || stderr != "" {
+		t.Fatalf("--exact-prefix: code=%d stderr=%q", code, stderr)
+	}
+	_, stderr, code = runFmt(t, "hello world\n", "--exact-skip-prefix", "SKIP", "-w", "20")
+	if code != 0 || stderr != "" {
+		t.Fatalf("--exact-skip-prefix: code=%d stderr=%q", code, stderr)
+	}
+	_, stderr, code = runFmt(t, "hello world\n", "--preserve-headers", "-w", "20")
+	if code != 0 || stderr != "" {
+		t.Fatalf("--preserve-headers: code=%d stderr=%q", code, stderr)
+	}
+	_, stderr, code = runFmt(t, "hello world\n", "--skip-prefix", "SKIP", "-w", "20")
+	if code != 0 || stderr != "" {
+		t.Fatalf("--skip-prefix: code=%d stderr=%q", code, stderr)
 	}
 }

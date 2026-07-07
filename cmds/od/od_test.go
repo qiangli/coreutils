@@ -178,3 +178,51 @@ func TestODSkipPastEOF(t *testing.T) {
 		t.Fatalf("od skip past eof: code=%d err=%q", code, errb)
 	}
 }
+
+func TestODNewTypeAliases(t *testing.T) {
+	// octal format alias
+	out, _, code := runOD(t, t.TempDir(), "AB", "-A", "n", "-t", "octal1")
+	if want := " 101 102\n"; out != want || code != 0 {
+		t.Fatalf("od -t octal1 = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	// hex format alias
+	out, _, code = runOD(t, t.TempDir(), "AB", "-A", "n", "-t", "hex1")
+	if want := " 41 42\n"; out != want || code != 0 {
+		t.Fatalf("od -t hex1 = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	// signed format alias (maps to d=decimal)
+	out, _, code = runOD(t, t.TempDir(), "AB", "-A", "n", "-t", "signed1")
+	if want := "   65   66\n"; out != want || code != 0 {
+		t.Fatalf("od -t signed1 = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	// unsigned decimal format alias
+	out, _, code = runOD(t, t.TempDir(), "AB", "-A", "n", "-t", "unsigned1")
+	if want := "  65  66\n"; out != want || code != 0 {
+		t.Fatalf("od -t unsigned1 = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	// Size aliases: char, short, int, long
+	out, _, code = runOD(t, t.TempDir(), "ABCD", "-A", "n", "-t", "xchar")
+	if want := " 41 42 43 44\n"; out != want || code != 0 {
+		t.Fatalf("od -t xchar = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	out, _, code = runOD(t, t.TempDir(), "ABCD", "-A", "n", "-t", "xshort")
+	if want := " 4241 4443\n"; out != want || code != 0 {
+		t.Fatalf("od -t xshort = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	out, _, code = runOD(t, t.TempDir(), "ABCD", "-A", "n", "-t", "xint")
+	if want := " 44434241\n"; out != want || code != 0 {
+		t.Fatalf("od -t xint = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
+func TestODTraditionalOffsetBeforeFile(t *testing.T) {
+	// --traditional allows +offset before file name
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("abcd"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runOD(t, dir, "", "--traditional", "+2", "-t", "o1", "in")
+	if want := "0000002 143 144\n0000004\n"; out != want || code != 0 {
+		t.Fatalf("od --traditional +2 file = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
