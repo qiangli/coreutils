@@ -37,7 +37,8 @@ func run(rc *tool.RunContext, args []string) int {
 	reference := fs.String("reference", "", "use RFILE's owner and group rather than specifying OWNER[:GROUP]")
 	fromRef := fs.String("from", "", "change only if current owner:group matches FROM")
 	fs.Bool("dereference", false, "affect the referent of each symbolic link (the default)")
-	noDereference := fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
+	noDereference := fs.Bool("no-dereference", false, "affect symbolic links instead of their referents")
+	noTraverse := fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
 	cmdLineH := fs.BoolP("H", "H", false, "follow command-line symbolic links (with -R)")
 	followL := fs.BoolP("L", "L", false, "follow every symbolic link encountered (with -R)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -65,9 +66,9 @@ func run(rc *tool.RunContext, args []string) int {
 			if ferr != nil {
 				return statusError(rc, "%v", ferr)
 			}
-			return apply(rc, ownerSpec, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference || isBool(fs, "no-preserve-root"), *cmdLineH, isFollowOrDeref, fromUid, fromGid)
+			return apply(rc, ownerSpec, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference, *noTraverse, *cmdLineH, isFollowOrDeref, fromUid, fromGid)
 		}
-		return apply(rc, ownerSpec, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference || isBool(fs, "no-preserve-root"), *cmdLineH, isFollowOrDeref, -1, -1)
+		return apply(rc, ownerSpec, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference, *noTraverse, *cmdLineH, isFollowOrDeref, -1, -1)
 	}
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing operand")
@@ -80,9 +81,9 @@ func run(rc *tool.RunContext, args []string) int {
 		if ferr != nil {
 			return statusError(rc, "%v", ferr)
 		}
-		return apply(rc, operands[0], operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference || isBool(fs, "no-preserve-root"), *cmdLineH, isFollowOrDeref, fromUid, fromGid)
+		return apply(rc, operands[0], operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference, *noTraverse, *cmdLineH, isFollowOrDeref, fromUid, fromGid)
 	}
-	return apply(rc, operands[0], operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference || isBool(fs, "no-preserve-root"), *cmdLineH, isFollowOrDeref, -1, -1)
+	return apply(rc, operands[0], operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference, *noTraverse, *cmdLineH, isFollowOrDeref, -1, -1)
 }
 
 func isBool(fs interface{ GetBool(string) (bool, error) }, name string) bool {

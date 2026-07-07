@@ -44,6 +44,11 @@ func run(rc *tool.RunContext, args []string) int {
 	preserveRoot := fs.Bool("preserve-root", false, "fail to operate recursively on '/'")
 	fs.Bool("no-preserve-root", false, "do not treat '/' specially (the default)")
 	reference := fs.String("reference", "", "use RFILE's mode instead of MODE")
+	fs.Bool("dereference", false, "affect the referent of each symbolic link (the default)")
+	noDereference := fs.Bool("no-dereference", false, "do not affect the referent of symbolic links")
+	noTraverse := fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
+	cmdLineH := fs.BoolP("H", "H", false, "follow command-line symbolic links (with -R)")
+	followL := fs.BoolP("L", "L", false, "follow every symbolic link encountered (with -R)")
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
@@ -69,7 +74,7 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Err, "chmod: invalid mode from reference: '%s'\n", refMode)
 			return 1
 		}
-		return apply(rc, change, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot)
+		return apply(rc, change, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference, *noTraverse, *cmdLineH, *followL || isBool(fs, "dereference"))
 	}
 	if modeArg != "" {
 		operands = append([]string{modeArg}, operands...)
@@ -85,7 +90,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "chmod: invalid mode: '%s'\n", operands[0])
 		return 1
 	}
-	return apply(rc, change, operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot)
+	return apply(rc, change, operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference, *noTraverse, *cmdLineH, *followL || isBool(fs, "dereference"))
 }
 
 func isBool(fs interface{ GetBool(string) (bool, error) }, name string) bool {

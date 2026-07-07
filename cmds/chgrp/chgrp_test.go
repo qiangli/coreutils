@@ -124,9 +124,34 @@ func TestChgrpHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: chgrp") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	if !strings.Contains(out, "--from") || !strings.Contains(out, "--no-dereference") {
+		t.Errorf("--help missing uutils-compatible flags: %q", out)
+	}
 	out, _, code = runTool(t, t.TempDir(), "--version")
 	if code != 0 || !strings.Contains(out, "chgrp") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+func TestChgrpFromFlag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Skipf("user.Current: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "--from=:"+u.Gid, u.Gid, "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp --from group: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "--from=99999:99999", u.Gid, "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp --from no match: code=%d err=%q", code, errb)
 	}
 }
 
@@ -271,9 +296,9 @@ func TestChgrpNoDereference(t *testing.T) {
 	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
 		t.Skipf("symlinks not supported: %v", err)
 	}
-	out, errb, code := runTool(t, dir, "-P", u.Gid, "link")
+	out, errb, code := runTool(t, dir, "--no-dereference", u.Gid, "link")
 	if code != 0 || errb != "" {
-		t.Fatalf("chgrp -P: code=%d err=%q", code, errb)
+		t.Fatalf("chgrp --no-dereference: code=%d err=%q", code, errb)
 	}
 	_ = out
 }

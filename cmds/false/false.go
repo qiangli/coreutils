@@ -1,13 +1,30 @@
 // Package falsecmd implements false(1): do nothing, unsuccessfully.
 package falsecmd
 
-import "github.com/qiangli/coreutils/tool"
+import (
+	"fmt"
+
+	"github.com/qiangli/coreutils/tool"
+)
 
 func init() {
-	tool.Register(&tool.Tool{
+	cmd := &tool.Tool{
 		Name:     "false",
 		Synopsis: "Do nothing, unsuccessfully.",
 		Usage:    "false [ignored command line arguments]",
-		Run:      func(rc *tool.RunContext, args []string) int { return 1 },
-	})
+	}
+	cmd.Run = func(rc *tool.RunContext, args []string) int {
+		if len(args) > 0 {
+			switch args[0] {
+			case "--help", "-h":
+				fmt.Fprintf(rc.Out, "Usage: %s\n%s\n", cmd.Usage, cmd.Synopsis)
+				return 0
+			case "--version", "-V":
+				fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
+				return 0
+			}
+		}
+		return 1
+	}
+	tool.Register(cmd)
 }

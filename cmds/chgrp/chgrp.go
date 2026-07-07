@@ -33,8 +33,10 @@ func run(rc *tool.RunContext, args []string) int {
 	preserveRoot := fs.Bool("preserve-root", false, "fail to operate recursively on '/'")
 	fs.Bool("no-preserve-root", false, "do not treat '/' specially (the default)")
 	reference := fs.String("reference", "", "use RFILE's group rather than specifying a GROUP value")
+	fromRef := fs.String("from", "", "change only if current owner:group matches FROM")
 	fs.Bool("dereference", false, "affect the referent of each symbolic link (the default)")
-	noDereference := fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
+	noDereference := fs.Bool("no-dereference", false, "affect symbolic links instead of their referents")
+	noTraverse := fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
 	cmdLineH := fs.BoolP("H", "H", false, "follow command-line symbolic links (with -R)")
 	followL := fs.BoolP("L", "L", false, "follow every symbolic link encountered (with -R)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -56,7 +58,11 @@ func run(rc *tool.RunContext, args []string) int {
 		if groupStr == "" {
 			return statusError(rc, "cannot determine group of reference file '%s'", *reference)
 		}
-		return apply(rc, groupStr, operands[0:], *recursive, *verbose, *changes, *silent || isTrue(fs, "quiet"), *preserveRoot, *noDereference || isTrue(fs, "no-preserve-root"), *cmdLineH, *followL || isTrue(fs, "dereference"))
+		fromUid, fromGid, ferr := parseFromSpec(*fromRef)
+		if ferr != nil {
+			return statusError(rc, "%v", ferr)
+		}
+		return apply(rc, groupStr, operands[0:], *recursive, *verbose, *changes, *silent || isTrue(fs, "quiet"), *preserveRoot, *noDereference, *noTraverse, *cmdLineH, *followL || isTrue(fs, "dereference"), fromUid, fromGid)
 	}
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing operand")
@@ -64,7 +70,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 1 {
 		return tool.UsageError(rc, cmd, "missing operand after '%s'", operands[0])
 	}
-	return apply(rc, operands[0], operands[1:], *recursive, *verbose, *changes, *silent || isTrue(fs, "quiet"), *preserveRoot, *noDereference || isTrue(fs, "no-preserve-root"), *cmdLineH, *followL || isTrue(fs, "dereference"))
+	fromUid, fromGid, ferr := parseFromSpec(*fromRef)
+	if ferr != nil {
+		return statusError(rc, "%v", ferr)
+	}
+	return apply(rc, operands[0], operands[1:], *recursive, *verbose, *changes, *silent || isTrue(fs, "quiet"), *preserveRoot, *noDereference, *noTraverse, *cmdLineH, *followL || isTrue(fs, "dereference"), fromUid, fromGid)
 }
 
 func isTrue(fs interface{ GetBool(string) (bool, error) }, name string) bool {

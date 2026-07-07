@@ -21,12 +21,12 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 type value string
 
 func run(rc *tool.RunContext, args []string) int {
-	if len(args) == 1 && args[0] == "--help" {
-		fmt.Fprintln(rc.Out, cmd.Usage)
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n", cmd.Usage, cmd.Synopsis)
 		return 0
 	}
-	if len(args) == 1 && args[0] == "--version" {
-		fmt.Fprintln(rc.Out, "expr (coreutils-go)")
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "-V") {
+		fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
 		return 0
 	}
 	if len(args) > 0 && args[0] == "--" {
