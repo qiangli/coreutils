@@ -463,8 +463,21 @@ func TestHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: du") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	if !strings.Contains(out, "-h, --human-readable") {
+		t.Errorf("--help output should preserve semantic -h:\n%s", out)
+	}
+	if strings.Contains(out, "-h, --help") {
+		t.Errorf("--help output should not advertise -h as help when semantic:\n%s", out)
+	}
+	if !strings.Contains(out, "-V, --version") {
+		t.Errorf("--help output missing -V version alias:\n%s", out)
+	}
 	out, _, code = runTool(t, "--version")
 	if code != 0 || !strings.Contains(out, "du") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "-V")
+	if code != 0 || !strings.Contains(out, "du") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }

@@ -78,6 +78,33 @@ func AliasHelpVersion(args []string) []string {
 	return out
 }
 
+const (
+	helpAliasFlag    = "help-short"
+	versionAliasFlag = "version-short"
+)
+
+// AddHelpVersionAliases registers uutils-style -h and -V aliases for
+// the universal --help/--version flags, but only when those shorthands
+// are still unused by command-specific options. Call it after a command
+// registers its own flags.
+func AddHelpVersionAliases(fs *pflag.FlagSet) {
+	addUniversalAlias(fs, "help", "h", helpAliasFlag)
+	addUniversalAlias(fs, "version", "V", versionAliasFlag)
+}
+
+func addUniversalAlias(fs *pflag.FlagSet, long, short, aliasName string) {
+	canonical := fs.Lookup(long)
+	if canonical == nil || fs.ShorthandLookup(short) != nil {
+		return
+	}
+	_ = fs.BoolP(aliasName, short, false, canonical.Usage)
+	fs.Lookup(aliasName).Hidden = true
+
+	// pflag can only map a shorthand to one flag. The hidden alias owns
+	// parsing; the canonical flag carries the shorthand for help output.
+	canonical.Shorthand = short
+}
+
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
@@ -89,6 +116,7 @@ func (discard) Write(p []byte) (int, error) { return len(p), nil }
 // --help/--version output, 2 after a usage error (unknown flag, bad
 // value) with the contract message already printed to rc.Err.
 func Parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string) ([]string, int) {
+	AddHelpVersionAliases(fs)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
 			printHelp(rc, t, fs)
@@ -98,15 +126,20 @@ func Parse(rc *RunContext, t *Tool, fs *pflag.FlagSet, args []string) ([]string,
 		fmt.Fprintf(rc.Err, "%s: not every GNU flag is implemented in pure-Go coreutils — see '%s --help' for the supported subset\n", t.Name, t.Name)
 		return nil, 2
 	}
-	if v, _ := fs.GetBool("help"); v {
+	if flagBool(fs, "help") || flagBool(fs, helpAliasFlag) {
 		printHelp(rc, t, fs)
 		return nil, 0
 	}
-	if v, _ := fs.GetBool("version"); v {
+	if flagBool(fs, "version") || flagBool(fs, versionAliasFlag) {
 		fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", t.Name, Version)
 		return nil, 0
 	}
 	return fs.Args(), -1
+}
+
+func flagBool(fs *pflag.FlagSet, name string) bool {
+	v, err := fs.GetBool(name)
+	return err == nil && v
 }
 
 func printHelp(rc *RunContext, t *Tool, fs *pflag.FlagSet) {
