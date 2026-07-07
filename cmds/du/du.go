@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -39,33 +40,75 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type duRun struct {
-	rc       *tool.RunContext
-	all      bool
-	apparent bool // -b
-	human    bool
-	si       bool
-	block    int64
-	maxDepth int
-	exit     int
-	seen     map[devIno]bool
-	excludes []string
-	term     string
+	rc            *tool.RunContext
+	all           bool
+	apparent      bool
+	human         bool
+	si            bool
+	countLinks    bool
+	inodes        bool
+	separateDirs  bool
+	oneFileSystem bool
+	showTime      bool
+	timeStyle     string
+	block         int64
+	maxDepth      int
+	threshold     int64
+	haveThreshold bool
+	deref         derefMode
+	exit          int
+	seen          map[devIno]bool
+	excludes      []string
+	term          string
+}
+
+type derefMode int
+
+const (
+	derefNone derefMode = iota
+	derefArgs
+	derefAll
+)
+
+type duEntry struct {
+	size int64
+	mod  time.Time
+	dir  bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	all := fs.BoolP("all", "a", false, "write counts for all files, not just directories")
-	apparent := fs.BoolP("bytes", "b", false, "equivalent to '--apparent-size --block-size=1'")
+	apparentSize := fs.BoolP("apparent-size", "A", false, "print apparent sizes, rather than disk usage")
+	bytesMode := fs.BoolP("bytes", "b", false, "equivalent to '--apparent-size --block-size=1'")
 	blockSize := fs.StringP("block-size", "B", "", "scale sizes by SIZE before printing them")
+	derefArgsLong := fs.Bool("dereference-args", false, "dereference only symlinks that are listed on the command line")
+	derefArgsShort := fs.BoolP("dereference-args-short", "D", false, "dereference only symlinks that are listed on the command line")
+	hFlag := fs.BoolP("dereference-args-H", "H", false, "equivalent to --dereference-args")
+	fs.Lookup("dereference-args-short").Hidden = true
+	fs.Lookup("dereference-args-H").Hidden = true
+	derefAllFlag := fs.BoolP("dereference", "L", false, "dereference all symbolic links")
+	noDeref := fs.BoolP("no-dereference", "P", false, "do not follow any symbolic links")
 	kib := fs.BoolP("kilobytes", "k", false, "like --block-size=1K")
 	mib := fs.BoolP("megabytes", "m", false, "like --block-size=1M")
 	total := fs.BoolP("total", "c", false, "produce a grand total")
+	countLinks := fs.BoolP("count-links", "l", false, "count sizes many times if hard linked")
+	inodes := fs.Bool("inodes", false, "list inode usage information instead of block usage")
+	separateDirs := fs.BoolP("separate-dirs", "S", false, "for directories do not include size of subdirectories")
+	oneFileSystem := fs.BoolP("one-file-system", "x", false, "skip directories on different file systems")
+	thresholdArg := fs.StringP("threshold", "t", "", "exclude entries smaller than SIZE if positive, or greater than SIZE if negative")
+	showTime := fs.String("time", "", "show time of the last modification of any file in the directory")
+	if f := fs.Lookup("time"); f != nil {
+		f.NoOptDefVal = "mtime"
+	}
+	timeStyle := fs.String("time-style", "", "time/date format with --time: full-iso, long-iso, iso, or +FORMAT")
+	verbose := fs.BoolP("verbose", "v", false, "write counts for all files, not just directories")
 	maxDepth := fs.IntP("max-depth", "d", -1, "print the total for a directory (or file, with --all) only if it is N or fewer levels below the command line argument")
 	human := fs.BoolP("human-readable", "h", false, "print sizes in human readable format (e.g., 1K 234M 2G)")
 	si := fs.Bool("si", false, "like -h, but use powers of 1000 not 1024")
 	null := fs.BoolP("null", "0", false, "end each output line with NUL, not newline")
 	exclude := fs.StringArray("exclude", nil, "exclude files that match PATTERN")
-	excludeFrom := fs.StringArray("exclude-from", nil, "read exclude patterns from FILE, one per line")
+	excludeFrom := fs.StringArrayP("exclude-from", "X", nil, "read exclude patterns from FILE, one per line")
 	files0From := fs.String("files0-from", "", "read input file names from FILE, terminated by NUL; if FILE is -, read names from standard input")
 	summarize := fs.BoolP("summarize", "s", false, "display only a total for each argument")
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -73,6 +116,9 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
+	if *verbose {
+		*all = true
+	}
 	if *summarize && *all {
 		return tool.UsageError(rc, cmd, "cannot both summarize and show all entries")
 	}
@@ -81,6 +127,29 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if fs.Changed("max-depth") && *maxDepth < 0 {
 		return tool.UsageError(rc, cmd, "invalid maximum depth '%d'", *maxDepth)
+	}
+	var threshold int64
+	if fs.Changed("threshold") {
+		var err error
+		threshold, err = parseSignedSize(*thresholdArg)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "invalid threshold %q", *thresholdArg)
+		}
+	}
+	if fs.Changed("time-style") && !fs.Changed("time") {
+		*showTime = "mtime"
+	}
+	if fs.Changed("time") {
+		switch *showTime {
+		case "", "mtime", "modification", "modify":
+		default:
+			return tool.UsageError(rc, cmd, "unsupported --time=%s", *showTime)
+		}
+	}
+	if fs.Changed("time-style") {
+		if err := validateTimeStyle(*timeStyle); err != nil {
+			return tool.UsageError(rc, cmd, "%s", err)
+		}
 	}
 	if fs.Changed("files0-from") {
 		if len(operands) > 0 {
@@ -111,7 +180,8 @@ func run(rc *tool.RunContext, args []string) int {
 		depth = *maxDepth
 	}
 	block := int64(1024)
-	if *apparent {
+	apparent := *apparentSize || *bytesMode
+	if *bytesMode {
 		block = 1
 	}
 	if *kib {
@@ -131,45 +201,74 @@ func run(rc *tool.RunContext, args []string) int {
 	if *null {
 		term = "\x00"
 	}
+	deref := derefNone
+	if *derefArgsLong || *derefArgsShort || *hFlag {
+		deref = derefArgs
+	}
+	if *derefAllFlag {
+		deref = derefAll
+	}
+	if *noDeref {
+		deref = derefNone
+	}
 
 	d := &duRun{
-		rc:       rc,
-		all:      *all,
-		apparent: *apparent,
-		human:    *human,
-		si:       *si,
-		block:    block,
-		maxDepth: depth,
-		seen:     map[devIno]bool{},
-		excludes: patterns,
-		term:     term,
+		rc:            rc,
+		all:           *all,
+		apparent:      apparent,
+		human:         *human,
+		si:            *si,
+		countLinks:    *countLinks,
+		inodes:        *inodes,
+		separateDirs:  *separateDirs,
+		oneFileSystem: *oneFileSystem,
+		showTime:      fs.Changed("time") || fs.Changed("time-style"),
+		timeStyle:     *timeStyle,
+		block:         block,
+		maxDepth:      depth,
+		threshold:     threshold,
+		haveThreshold: fs.Changed("threshold"),
+		deref:         deref,
+		seen:          map[devIno]bool{},
+		excludes:      patterns,
+		term:          term,
 	}
 
 	if len(operands) == 0 {
 		operands = []string{"."}
 	}
-	var grand int64
+	var grand duEntry
 	for _, op := range operands {
-		n, ok := d.walk(op, rc.Path(op), 0)
+		e, ok := d.walk(op, rc.Path(op), 0, nil)
 		if ok {
-			grand += n
+			grand.size += e.size
+			grand.mod = maxTime(grand.mod, e.mod)
 		}
 	}
 	if *total {
-		d.print(grand, "total")
+		d.print(grand.size, "total", grand.mod)
 	}
 	return d.exit
 }
 
-func (d *duRun) walk(display, full string, depth int) (int64, bool) {
+func (d *duRun) walk(display, full string, depth int, rootDev *uint64) (duEntry, bool) {
 	if d.excluded(display) {
-		return 0, true
+		return duEntry{}, true
 	}
-	fi, err := os.Lstat(full)
+	fi, err := d.stat(full, depth == 0)
 	if err != nil {
 		fmt.Fprintf(d.rc.Err, "du: cannot access '%s': %s\n", display, errMsg(err))
 		d.exit = 1
-		return 0, false
+		return duEntry{}, false
+	}
+	if d.oneFileSystem {
+		if dev, ok := fileDev(fi); ok {
+			if rootDev == nil {
+				rootDev = &dev
+			} else if depth > 0 && dev != *rootDev && fi.IsDir() {
+				return duEntry{}, true
+			}
+		}
 	}
 	if fi.IsDir() {
 		// GNU du counts a directory's own DISK BLOCKS (default/block mode) but NOT
@@ -177,40 +276,73 @@ func (d *duRun) walk(display, full string, depth int) (int64, bool) {
 		// *contents* only, so a directory contributes 0 to its own apparent size.
 		// (GNU `stat` still reports the dir's st_size; GNU `du -b` ignores it.)
 		var total int64
-		if !d.apparent {
-			total = d.usage(fi)
+		if d.inodes || !d.apparent {
+			total = d.amount(fi)
 		}
+		mod := fi.ModTime()
 		ents, rerr := os.ReadDir(full)
 		if rerr != nil {
 			fmt.Fprintf(d.rc.Err, "du: cannot read directory '%s': %s\n", display, errMsg(rerr))
 			d.exit = 1
 		}
 		for _, de := range ents {
-			n, _ := d.walk(joinDisplay(display, de.Name()), filepath.Join(full, de.Name()), depth+1)
-			total += n
+			e, _ := d.walk(joinDisplay(display, de.Name()), filepath.Join(full, de.Name()), depth+1, rootDev)
+			if !d.separateDirs || !e.dir {
+				total += e.size
+			}
+			mod = maxTime(mod, e.mod)
 		}
 		if depth <= d.maxDepth {
-			d.print(total, display)
+			d.print(total, display, mod)
 		}
-		return total, true
+		return duEntry{size: total, mod: mod, dir: true}, true
 	}
 	if d.skipHardlink(fi) {
-		return 0, true
+		return duEntry{}, true
 	}
-	total := d.usage(fi)
+	total := d.amount(fi)
 	// File operands are always reported; files inside the tree only
 	// with --all (and within the depth limit).
 	if depth == 0 || (d.all && depth <= d.maxDepth) {
-		d.print(total, display)
+		d.print(total, display, fi.ModTime())
 	}
-	return total, true
+	return duEntry{size: total, mod: fi.ModTime()}, true
 }
 
-func (d *duRun) print(n int64, path string) {
+func (d *duRun) stat(full string, root bool) (os.FileInfo, error) {
+	if d.deref == derefAll || (root && d.deref == derefArgs) {
+		return os.Stat(full)
+	}
+	return os.Lstat(full)
+}
+
+func (d *duRun) amount(fi os.FileInfo) int64 {
+	if d.inodes {
+		return 1
+	}
+	return d.usage(fi)
+}
+
+func (d *duRun) print(n int64, path string, mod time.Time) {
+	if d.haveThreshold {
+		if d.threshold >= 0 && n < d.threshold {
+			return
+		}
+		if d.threshold < 0 && n > -d.threshold {
+			return
+		}
+	}
+	if d.showTime {
+		fmt.Fprintf(d.rc.Out, "%s\t%s\t%s%s", d.fmtSize(n), d.fmtTime(mod), path, d.term)
+		return
+	}
 	fmt.Fprintf(d.rc.Out, "%s\t%s%s", d.fmtSize(n), path, d.term)
 }
 
 func (d *duRun) fmtSize(n int64) string {
+	if d.inodes {
+		return strconv.FormatInt(n, 10)
+	}
 	switch {
 	case d.human:
 		return humanSize(uint64(n))
@@ -219,6 +351,59 @@ func (d *duRun) fmtSize(n int64) string {
 	default:
 		return strconv.FormatInt(divCeil(n, d.block), 10)
 	}
+}
+
+func (d *duRun) fmtTime(t time.Time) string {
+	if t.IsZero() {
+		t = time.Unix(0, 0)
+	}
+	switch d.timeStyle {
+	case "", "long-iso":
+		return t.Format("2006-01-02 15:04")
+	case "full-iso":
+		return t.Format("2006-01-02 15:04:05.000000000 -0700")
+	case "iso":
+		return t.Format("2006-01-02")
+	default:
+		if strings.HasPrefix(d.timeStyle, "+") {
+			return t.Format(goTimeLayout(d.timeStyle[1:]))
+		}
+		return t.Format("2006-01-02 15:04")
+	}
+}
+
+func validateTimeStyle(style string) error {
+	switch {
+	case style == "", style == "full-iso", style == "long-iso", style == "iso":
+		return nil
+	case strings.HasPrefix(style, "+"):
+		return nil
+	default:
+		return fmt.Errorf("unsupported --time-style=%s", style)
+	}
+}
+
+func goTimeLayout(format string) string {
+	repl := strings.NewReplacer(
+		"%Y", "2006",
+		"%y", "06",
+		"%m", "01",
+		"%d", "02",
+		"%H", "15",
+		"%M", "04",
+		"%S", "05",
+		"%F", "2006-01-02",
+		"%T", "15:04:05",
+		"%%", "%",
+	)
+	return repl.Replace(format)
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 func (d *duRun) excluded(display string) bool {
@@ -332,6 +517,24 @@ func parseBlockSize(s string) (int64, error) {
 		return 0, fmt.Errorf("size overflow")
 	}
 	return n * mult, nil
+}
+
+func parseSignedSize(s string) (int64, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty size")
+	}
+	sign := int64(1)
+	if strings.HasPrefix(s, "-") {
+		sign = -1
+		s = strings.TrimPrefix(s, "-")
+	} else if strings.HasPrefix(s, "+") {
+		s = strings.TrimPrefix(s, "+")
+	}
+	n, err := parseBlockSize(s)
+	if err != nil {
+		return 0, err
+	}
+	return sign * n, nil
 }
 
 func divCeil(n, d int64) int64 {
