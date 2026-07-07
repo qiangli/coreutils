@@ -2,6 +2,7 @@ package whocmd
 
 import (
 	"fmt"
+	"os/user"
 	"strings"
 	"time"
 
@@ -29,7 +30,9 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolP("runlevel", "r", false, "print current runlevel")
 	fs.BoolP("time", "t", false, "print last system clock change")
 	fs.BoolP("message", "w", false, "same as -T")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	onlyMe := fs.BoolP("same-host", "m", false, "only hostname and user associated with stdin")
+	writable := fs.Bool("writable", false, "same as -T")
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
@@ -55,6 +58,25 @@ func run(rc *tool.RunContext, args []string) int {
 			live = append(live, r)
 		}
 	}
+	showMesg := *mesg || *writable
+
+	if *onlyMe {
+		u, err := user.Current()
+		if err != nil {
+			fmt.Fprintf(rc.Err, "who: cannot get current user: %v\n", err)
+			return 1
+		}
+		live = nil
+		for _, r := range records {
+			if session.IsUser(r) && r.User == u.Username {
+				live = append(live, r)
+			}
+		}
+		if len(live) == 0 {
+			return 0
+		}
+	}
+
 	if *count {
 		names := make([]string, 0, len(live))
 		for _, r := range live {
@@ -73,7 +95,7 @@ func run(rc *tool.RunContext, args []string) int {
 	_ = usersOnly
 	for _, r := range live {
 		prefix := ""
-		if *mesg || *all {
+		if showMesg || *all {
 			prefix = "+ "
 		}
 		fmt.Fprintf(rc.Out, "%-8s %s%-12s %-16s", r.User, prefix, r.TTY, formatTime(r.Time))
