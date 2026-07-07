@@ -33,6 +33,9 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	directory := fs.BoolP("directory", "d", false, "create a directory, not a file")
 	dryRun := fs.BoolP("dry-run", "u", false, "do not create anything; merely print a name (unsafe)")
+	quiet := fs.BoolP("quiet", "q", false, "suppress diagnostics about file creation failure")
+	useTmp := fs.BoolP("tmpdir-template", "t", false, "interpret TEMPLATE relative to the temporary directory")
+	suffix := fs.String("suffix", "", "append SUFFIX to TEMPLATE")
 	// GNU: -p DIR, --tmpdir[=DIR]. The optional-argument long form
 	// ("--tmpdir" alone meaning $TMPDIR-else-/tmp) is not expressible
 	// here; a bare --tmpdir fails with a needs-an-argument error.
@@ -57,10 +60,20 @@ func run(rc *tool.RunContext, args []string) int {
 	switch {
 	case *tmpdir != "":
 		if filepath.IsAbs(template) {
-			fmt.Fprintf(rc.Err, "mktemp: invalid template, '%s'; with --tmpdir, it may not be absolute\n", template)
+			if !*quiet {
+				fmt.Fprintf(rc.Err, "mktemp: invalid template, '%s'; with --tmpdir, it may not be absolute\n", template)
+			}
 			return 1
 		}
 		base = *tmpdir
+	case *useTmp:
+		if filepath.IsAbs(template) {
+			if !*quiet {
+				fmt.Fprintf(rc.Err, "mktemp: invalid template, '%s'; with -t, it may not be absolute\n", template)
+			}
+			return 1
+		}
+		base = defaultTmpDir(rc)
 	case !explicit:
 		// The default template implies --tmpdir.
 		base = defaultTmpDir(rc)
@@ -87,7 +100,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if runStart < 0 || runEnd-runStart < 3 {
-		fmt.Fprintf(rc.Err, "mktemp: too few X's in template '%s'\n", template)
+		if !*quiet {
+			fmt.Fprintf(rc.Err, "mktemp: too few X's in template '%s'\n", template)
+		}
 		return 1
 	}
 
@@ -102,7 +117,7 @@ func run(rc *tool.RunContext, args []string) int {
 			lastErr = err
 			break
 		}
-		name := dir + file[:runStart] + random + file[runEnd:]
+		name := dir + file[:runStart] + random + file[runEnd:] + *suffix
 		if *dryRun {
 			fmt.Fprintln(rc.Out, name)
 			return 0
@@ -126,7 +141,9 @@ func run(rc *tool.RunContext, args []string) int {
 			break
 		}
 	}
-	fmt.Fprintf(rc.Err, "mktemp: failed to create %s via template '%s': %v\n", kind, template, reason(lastErr))
+	if !*quiet {
+		fmt.Fprintf(rc.Err, "mktemp: failed to create %s via template '%s': %v\n", kind, template, reason(lastErr))
+	}
 	return 1
 }
 

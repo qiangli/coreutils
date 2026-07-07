@@ -9,6 +9,7 @@
 package cpcmd
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -31,54 +32,109 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type copier struct {
-	rc        *tool.RunContext
-	recursive bool
-	preserve  bool
-	force     bool
-	noClobber bool
-	verbose   bool
-	failed    bool
+	rc          *tool.RunContext
+	recursive   bool
+	preserve    bool
+	force       bool
+	noClobber   bool
+	update      bool
+	backup      bool
+	suffix      string
+	link        bool
+	symlink     bool
+	deref       bool
+	interactive bool
+	verbose     bool
+	failed      bool
+	in          *bufio.Reader
 }
 
 func run(rc *tool.RunContext, args []string) int {
 	args = foldRShorthand(args)
+	args = normalizeOptionalArgs(args)
 	fs := tool.NewFlags(cmd.Name)
 	recursive := fs.BoolP("recursive", "r", false, "copy directories recursively (-R is identical to -r)")
 	preserve := fs.BoolP("preserve", "p", false, "preserve mode, ownership, timestamps")
 	force := fs.BoolP("force", "f", false, "if an existing destination file cannot be opened, remove it and try again")
 	noClobber := fs.BoolP("no-clobber", "n", false, "do not overwrite an existing file; silently skip it")
+	interactive := fs.BoolP("interactive", "i", false, "prompt before overwrite")
+	update := fs.BoolP("update", "u", false, "copy only when SOURCE is newer than the destination or destination is missing")
+	targetDir := fs.StringP("target-directory", "t", "", "copy all SOURCE arguments into DIRECTORY")
+	noTargetDir := fs.BoolP("no-target-directory", "T", false, "treat DEST as a normal file")
+	backup := fs.String("backup", "", "make a backup of each existing destination")
+	suffix := fs.StringP("suffix", "S", "~", "override the usual backup suffix")
+	link := fs.BoolP("link", "l", false, "hard link files instead of copying")
+	symlink := fs.BoolP("symbolic-link", "s", false, "make symbolic links instead of copying")
+	deref := fs.BoolP("dereference", "L", false, "always follow symbolic links in SOURCE")
+	noDeref := fs.BoolP("no-dereference", "P", false, "never follow symbolic links in SOURCE")
+	fs.Bool("progress", false, "accepted for compatibility; progress output is a no-op")
+	fs.String("context", "", "accepted for compatibility; SELinux context is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
+	if *targetDir != "" && *noTargetDir {
+		return tool.UsageError(rc, cmd, "cannot combine --target-directory and --no-target-directory")
+	}
+	if *link && *symlink {
+		return tool.UsageError(rc, cmd, "cannot make both hard and symbolic links")
+	}
 	switch len(operands) {
 	case 0:
 		return tool.UsageError(rc, cmd, "missing file operand")
 	case 1:
-		return tool.UsageError(rc, cmd, "missing destination file operand after '%s'", operands[0])
+		if *targetDir == "" {
+			return tool.UsageError(rc, cmd, "missing destination file operand after '%s'", operands[0])
+		}
 	}
 
 	c := &copier{
-		rc:        rc,
-		recursive: *recursive,
-		preserve:  *preserve,
-		force:     *force,
-		noClobber: *noClobber,
-		verbose:   *verbose,
+		rc:          rc,
+		recursive:   *recursive,
+		preserve:    *preserve,
+		force:       *force,
+		noClobber:   *noClobber,
+		update:      *update,
+		backup:      *backup != "",
+		suffix:      *suffix,
+		link:        *link,
+		symlink:     *symlink,
+		deref:       *deref,
+		interactive: *interactive,
+		verbose:     *verbose,
+		in:          inputReader(rc.In),
+	}
+	if *noDeref {
+		c.deref = false
 	}
 	// GNU rule: of -f and -n, the one given last takes effect.
 	switch lastOverride(args) {
 	case 'f':
 		c.noClobber = false
+		c.interactive = false
 	case 'n':
 		c.force = false
+		c.interactive = false
+	case 'i':
+		c.force = false
+		c.noClobber = false
 	}
 
-	dest := operands[len(operands)-1]
-	srcs := operands[:len(operands)-1]
+	dest := ""
+	srcs := operands
+	if *targetDir != "" {
+		dest = *targetDir
+	} else {
+		dest = operands[len(operands)-1]
+		srcs = operands[:len(operands)-1]
+	}
 	di, err := os.Stat(rc.Path(dest))
-	todir := err == nil && di.IsDir()
+	todir := !*noTargetDir && err == nil && di.IsDir()
+	if *targetDir != "" && !todir {
+		fmt.Fprintf(rc.Err, "cp: target directory '%s' is not a directory\n", dest)
+		return 1
+	}
 	if len(srcs) > 1 && !todir {
 		fmt.Fprintf(rc.Err, "cp: target '%s' is not a directory\n", dest)
 		return 1
@@ -105,7 +161,7 @@ func (c *copier) copyEntry(src, dst string) {
 		return
 	}
 	stat := os.Stat
-	if c.recursive {
+	if c.recursive && !c.deref {
 		stat = os.Lstat
 	}
 	fi, err := stat(c.rc.Path(src))
@@ -194,6 +250,12 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 		if c.noClobber {
 			return // -n: silently skip; exit status unaffected
 		}
+		if c.update && !sourceNewer(sp, dp) {
+			return
+		}
+		if c.interactive && !c.confirm(dst) {
+			return
+		}
 		if ds, err := os.Stat(dp); err == nil {
 			if ss, err := os.Stat(sp); err == nil && os.SameFile(ss, ds) {
 				c.errf("'%s' and '%s' are the same file", src, dst)
@@ -204,6 +266,27 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 				return
 			}
 		}
+		if c.backup && !c.backupDest(dst) {
+			return
+		}
+	} else if c.symlink {
+		// Nothing to do before creating a new symbolic link.
+	}
+	if c.link {
+		if err := os.Link(sp, dp); err != nil {
+			c.errf("cannot create hard link '%s' to '%s': %s", dst, src, reason(err))
+			return
+		}
+		c.verbosef("'%s' -> '%s'", src, dst)
+		return
+	}
+	if c.symlink {
+		if err := os.Symlink(src, dp); err != nil {
+			c.errf("cannot create symbolic link '%s' to '%s': %s", dst, src, reason(err))
+			return
+		}
+		c.verbosef("'%s' -> '%s'", src, dst)
+		return
 	}
 	in, err := os.Open(sp)
 	if err != nil {
@@ -251,6 +334,15 @@ func (c *copier) copySymlink(src, dst string) {
 		if c.noClobber {
 			return
 		}
+		if c.update && !sourceNewer(sp, dp) {
+			return
+		}
+		if c.interactive && !c.confirm(dst) {
+			return
+		}
+		if c.backup && !c.backupDest(dst) {
+			return
+		}
 		if err := os.Remove(dp); err != nil {
 			c.errf("cannot remove '%s': %s", dst, reason(err))
 			return
@@ -261,6 +353,43 @@ func (c *copier) copySymlink(src, dst string) {
 		return
 	}
 	c.verbosef("'%s' -> '%s'", src, dst)
+}
+
+func (c *copier) confirm(dst string) bool {
+	fmt.Fprintf(c.rc.Err, "cp: overwrite '%s'? ", dst)
+	line, err := c.in.ReadString('\n')
+	if err != nil && line == "" {
+		return false
+	}
+	line = strings.TrimSpace(line)
+	return line == "y" || line == "Y" || strings.EqualFold(line, "yes")
+}
+
+func inputReader(r io.Reader) *bufio.Reader {
+	if r == nil {
+		r = strings.NewReader("")
+	}
+	return bufio.NewReader(r)
+}
+
+func (c *copier) backupDest(dst string) bool {
+	dp := c.rc.Path(dst)
+	bp := dp + c.suffix
+	_ = os.Remove(bp)
+	if err := os.Rename(dp, bp); err != nil {
+		c.errf("cannot backup '%s': %s", dst, reason(err))
+		return false
+	}
+	return true
+}
+
+func sourceNewer(src, dst string) bool {
+	si, serr := os.Stat(src)
+	di, derr := os.Stat(dst)
+	if serr != nil || derr != nil {
+		return true
+	}
+	return si.ModTime().After(di.ModTime())
 }
 
 // preserveAttrs implements -p: mode, ownership, timestamps. Failing
@@ -310,9 +439,28 @@ func foldRShorthand(args []string) []string {
 	return out
 }
 
+func normalizeOptionalArgs(args []string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a == "--" {
+			break
+		}
+		switch {
+		case a == "--backup":
+			out[i] = "--backup=simple"
+		case a == "--interactive=always" || a == "--interactive=yes":
+			out[i] = "--interactive"
+		case a == "--interactive=never" || a == "--interactive=no" || a == "--interactive=none":
+			out[i] = "--force"
+		}
+	}
+	return out
+}
+
 // lastOverride reports which of -f / -n appeared last on the command
 // line (GNU: "If you specify more than one of -i, -f, -n, only the
-// final one takes effect"). Returns 'f', 'n', or 0.
+// final one takes effect"). Returns 'f', 'n', 'i', or 0.
 func lastOverride(args []string) byte {
 	var last byte
 	for _, a := range args {
@@ -324,6 +472,8 @@ func lastOverride(args []string) byte {
 			last = 'f'
 		case a == "--no-clobber":
 			last = 'n'
+		case a == "--interactive" || strings.HasPrefix(a, "--interactive="):
+			last = 'i'
 		case len(a) > 1 && a[0] == '-' && a[1] != '-':
 			for _, ch := range a[1:] {
 				if ch == 'f' {
@@ -331,6 +481,9 @@ func lastOverride(args []string) byte {
 				}
 				if ch == 'n' {
 					last = 'n'
+				}
+				if ch == 'i' {
+					last = 'i'
 				}
 			}
 		}

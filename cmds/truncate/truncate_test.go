@@ -89,10 +89,41 @@ func TestTruncateNoCreate(t *testing.T) {
 	}
 }
 
+func TestTruncateReferenceAndIoBlocks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ref"), []byte("1234567"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-r", "ref", "f")
+	if code != 0 {
+		t.Fatalf("truncate -r: code=%d err=%q", code, errb)
+	}
+	if got := sizeOf(t, filepath.Join(dir, "f")); got != 7 {
+		t.Fatalf("reference size=%d want 7", got)
+	}
+	_, errb, code = runTool(t, dir, "-r", "ref", "-s", "+5", "f")
+	if code != 0 {
+		t.Fatalf("truncate -r -s +5: code=%d err=%q", code, errb)
+	}
+	if got := sizeOf(t, filepath.Join(dir, "f")); got != 12 {
+		t.Fatalf("reference relative size=%d want 12", got)
+	}
+	_, errb, code = runTool(t, dir, "-o", "-s", "2", "f")
+	if code != 0 {
+		t.Fatalf("truncate -o: code=%d err=%q", code, errb)
+	}
+	if got := sizeOf(t, filepath.Join(dir, "f")); got != 1024 {
+		t.Fatalf("io-block size=%d want 1024", got)
+	}
+}
+
 func TestTruncateErrors(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "f")
-	if code != 2 || !strings.Contains(errb, "you must specify '--size'") {
+	if code != 2 || !strings.Contains(errb, "you must specify either '--size' or '--reference'") {
 		t.Errorf("no -s: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, dir, "-s", "5")

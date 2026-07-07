@@ -54,6 +54,20 @@ func TestRmdirNonEmpty(t *testing.T) {
 	}
 }
 
+func TestRmdirIgnoreFailOnNonEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "d", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "--ignore-fail-on-non-empty", "d")
+	if code != 0 || errb != "" {
+		t.Fatalf("ignore non-empty: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "d", "sub")); err != nil {
+		t.Error("non-empty directory contents were removed")
+	}
+}
+
 func TestRmdirNotADirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {

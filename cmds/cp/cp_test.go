@@ -77,6 +77,26 @@ func TestCpIntoDir(t *testing.T) {
 	}
 }
 
+func TestCpTargetDirectoryAndNoTargetDirectory(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "x")
+	write(t, filepath.Join(dir, "b"), "y")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-t", "d", "a", "b")
+	if code != 0 {
+		t.Fatalf("cp -t: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "d", "a")) != "x" || read(t, filepath.Join(dir, "d", "b")) != "y" {
+		t.Fatal("-t did not copy both sources into directory")
+	}
+	_, errb, code = runTool(t, dir, "-T", "a", "d")
+	if code != 1 || !strings.Contains(errb, "cannot overwrite directory 'd' with non-directory") {
+		t.Errorf("cp -T file dir: code=%d err=%q", code, errb)
+	}
+}
+
 func TestCpMultipleToNonDir(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "1")
@@ -160,6 +180,43 @@ func TestCpNoClobber(t *testing.T) {
 	_, _, code = runTool(t, dir, "-n", "-f", "a", "b")
 	if code != 0 || read(t, filepath.Join(dir, "b")) != "new" {
 		t.Errorf("-n -f should overwrite (last wins)")
+	}
+}
+
+func TestCpBackupSuffixUpdateAndInteractive(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a")
+	dst := filepath.Join(dir, "b")
+	write(t, src, "new")
+	write(t, dst, "old")
+	_, errb, code := runTool(t, dir, "--backup=simple", "-S", ".bak", "a", "b")
+	if code != 0 {
+		t.Fatalf("cp backup: code=%d err=%q", code, errb)
+	}
+	if read(t, dst) != "new" || read(t, filepath.Join(dir, "b.bak")) != "old" {
+		t.Fatalf("backup/suffix did not preserve old destination")
+	}
+
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)
+	newer := time.Date(2021, 1, 1, 0, 0, 0, 0, time.Local)
+	write(t, src, "older")
+	write(t, dst, "newer")
+	if err := os.Chtimes(src, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dst, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir, "-u", "a", "b")
+	if code != 0 || errb != "" || read(t, dst) != "newer" {
+		t.Fatalf("cp -u should skip newer destination: code=%d err=%q", code, errb)
+	}
+
+	write(t, src, "prompted")
+	write(t, dst, "keep")
+	_, errb, code = runTool(t, dir, "-i", "a", "b")
+	if code != 0 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
+		t.Fatalf("cp -i without yes should skip: code=%d err=%q", code, errb)
 	}
 }
 

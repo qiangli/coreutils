@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"unicode"
 
 	"github.com/qiangli/coreutils/tool"
@@ -28,14 +29,16 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type rm struct {
-	rc      *tool.RunContext
-	verbose bool
-	failed  bool
+	rc             *tool.RunContext
+	verbose        bool
+	ignoreNonEmpty bool
+	failed         bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	parents := fs.BoolP("parents", "p", false, "remove DIRECTORY and its ancestors; e.g., 'rmdir -p a/b' is similar to 'rmdir a/b a'")
+	ignoreNonEmpty := fs.Bool("ignore-fail-on-non-empty", false, "ignore each failure that is solely because a directory is non-empty")
 	verbose := fs.BoolP("verbose", "v", false, "output a diagnostic for every directory processed")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -45,7 +48,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "missing operand")
 	}
 
-	r := &rm{rc: rc, verbose: *verbose}
+	r := &rm{rc: rc, verbose: *verbose, ignoreNonEmpty: *ignoreNonEmpty}
 	for _, op := range operands {
 		if !r.remove1(op) {
 			continue
@@ -97,10 +100,17 @@ func (r *rm) remove1(op string) bool {
 		return false
 	}
 	if err := os.Remove(rp); err != nil {
+		if r.ignoreNonEmpty && isNonEmpty(err) {
+			return false
+		}
 		r.errf("failed to remove '%s': %s", op, reason(err))
 		return false
 	}
 	return true
+}
+
+func isNonEmpty(err error) bool {
+	return errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)
 }
 
 func (r *rm) errf(format string, a ...any) {
