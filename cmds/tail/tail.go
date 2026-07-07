@@ -1,19 +1,16 @@
 // Package tailcmd implements tail(1) per the GNU coreutils manual:
 // output the last part of files.
-//
-// Fresh implementation against the GNU manual (prior art consulted:
-// guonaihong/coreutils tail, u-root tail, aict tail). -f/--follow is
-// deliberately not supported yet (Phase B) and fails with the
-// contract error.
 package tailcmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -32,20 +29,33 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	linesV := fs.StringP("lines", "n", "10", "output the last NUM lines, instead of the last 10; or use -n +NUM to output starting with line NUM")
 	bytesV := fs.StringP("bytes", "c", "", "output the last NUM bytes; or use -c +NUM to output starting with byte NUM of each file")
-	follow := fs.StringP("follow", "f", "", "output appended data as the file grows (not supported yet)")
+	follow := fs.StringP("follow", "f", "", "output appended data as the file grows")
 	fs.Lookup("follow").NoOptDefVal = "descriptor"
+	fFlag := fs.BoolP("F", "F", false, "same as --follow=name --retry")
 	quiet := fs.BoolP("quiet", "q", false, "never print headers giving file names")
 	silent := fs.Bool("silent", false, "same as --quiet")
 	verbose := fs.BoolP("verbose", "v", false, "always print headers giving file names")
 	zero := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
+	retryV := fs.Bool("retry", false, "keep trying to open a file even when it is temporarily inaccessible")
+	sleepV := fs.Float64P("sleep-interval", "s", 1.0, "with -f, sleep for approximately N seconds (default 1.0) between iterations")
+	pidV := fs.Int("pid", 0, "with -f, terminate after process ID PID dies")
+	maxUnchanged := fs.Int("max-unchanged-stats", 5, "with --follow=name, reopen a FILE which has not changed size after N iterations (default 5)")
+	usePolling := fs.Bool("use-polling", false, "use polling instead of inotify (polling is always used)")
+	debugV := fs.Bool("debug", false, "print diagnostic information")
 	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
 
-	if fs.Changed("follow") {
-		_ = follow
-		return tool.NotSupported(rc, cmd, "-f/--follow (planned for a later phase)")
+	followMode := *follow
+	if *fFlag {
+		followMode = "name"
+		*retryV = true
+	}
+	if followMode != "" {
+		if followMode != "descriptor" && followMode != "name" {
+			return tool.UsageError(rc, cmd, "valid arguments for -f are 'descriptor' and 'name'")
+		}
 	}
 
 	mode, hdr := scanOrder(args)
@@ -70,10 +80,13 @@ func run(rc *tool.RunContext, args []string) int {
 		count, fromStart = n, plus
 	}
 
+	if *sleepV <= 0 {
+		return tool.UsageError(rc, cmd, "invalid sleep interval: %v", *sleepV)
+	}
+
 	q := *quiet || *silent
 	v := *verbose
 	if q && v {
-		// GNU getopt semantics: the option given last wins.
 		q = hdr == 'q'
 		v = hdr == 'v'
 	}
@@ -87,13 +100,8 @@ func run(rc *tool.RunContext, args []string) int {
 	w := bufio.NewWriter(rc.Out)
 	hp := headerPrinter{}
 	exit := 0
+
 	for _, name := range files {
-		r, closer, err := openOperand(rc, name)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "tail: cannot open '%s' for reading: %v\n", name, sysErr(err))
-			exit = 1
-			continue
-		}
 		if showHeaders {
 			hp.print(w, displayName(name))
 		}
@@ -101,13 +109,48 @@ func run(rc *tool.RunContext, args []string) int {
 		if *zero {
 			lineEnd = 0
 		}
-		err = tailStream(r, w, bytesMode, count, fromStart, lineEnd)
-		if closer != nil {
-			closer.Close()
-		}
-		if err != nil {
-			fmt.Fprintf(rc.Err, "tail: error reading '%s': %v\n", name, sysErr(err))
-			exit = 1
+
+		if followMode == "" {
+			r, closer, err := openOperand(rc, name)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "tail: cannot open '%s' for reading: %v\n", name, sysErr(err))
+				exit = 1
+				continue
+			}
+			err = tailStream(r, w, bytesMode, count, fromStart, lineEnd)
+			if closer != nil {
+				closer.Close()
+			}
+			if err != nil {
+				fmt.Fprintf(rc.Err, "tail: error reading '%s': %v\n", name, sysErr(err))
+				exit = 1
+			}
+		} else {
+			if name == "-" {
+				fmt.Fprintf(rc.Err, "tail: cannot follow standard input by %s\n", followMode)
+				exit = 1
+				continue
+			}
+			path := rc.Path(name)
+			fo := followOpts{
+				path:          path,
+				name:          name,
+				followByName:  followMode == "name",
+				retry:         *retryV,
+				sleepInterval: time.Duration(*sleepV * float64(time.Second)),
+				pid:           *pidV,
+				maxUnchanged:  *maxUnchanged,
+				usePolling:    *usePolling,
+				debug:         *debugV,
+				bytesMode:     bytesMode,
+				count:         count,
+				fromStart:     fromStart,
+				lineEnd:       lineEnd,
+			}
+			if err := tailFollow(rc, w, fo); err != nil {
+				fmt.Fprintf(rc.Err, "tail: %v\n", tool.SysErr(err))
+				exit = 1
+			}
 		}
 	}
 	if err := w.Flush(); err != nil {
@@ -117,12 +160,216 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
+type followOpts struct {
+	path          string
+	name          string
+	followByName  bool
+	retry         bool
+	sleepInterval time.Duration
+	pid           int
+	maxUnchanged  int
+	usePolling    bool
+	debug         bool
+	bytesMode     bool
+	count         int64
+	fromStart     bool
+	lineEnd       byte
+}
+
+func tailFollow(rc *tool.RunContext, w *bufio.Writer, fo followOpts) error {
+	ctx := rc.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if fo.debug {
+		fmode := "descriptor"
+		if fo.followByName {
+			fmode = "name"
+		}
+		fmt.Fprintf(rc.Err, "==> tail: following %q (by=%s retry=%v sleep=%v pid=%d max-unchanged=%d)\n",
+			fo.name, fmode, fo.retry, fo.sleepInterval, fo.pid, fo.maxUnchanged)
+	}
+
+	f, err := openOrRetry(rc, fo.path, fo.name, fo.retry, fo.sleepInterval)
+	if err != nil {
+		return err
+	}
+	if f != nil {
+		defer f.Close()
+	}
+
+	if f != nil {
+		if err := tailStream(f, w, fo.bytesMode, fo.count, fo.fromStart, fo.lineEnd); err != nil {
+			return err
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		if !fo.followByName {
+			if _, err := f.Seek(0, io.SeekEnd); err != nil {
+				return err
+			}
+		}
+	}
+
+	unchanged := 0
+	lastSize := int64(-1)
+	lastIno := uint64(0)
+
+	if f != nil {
+		fi, err := f.Stat()
+		if err == nil {
+			lastSize = fi.Size()
+			lastIno = inodeKey(fi)
+		}
+	}
+
+	for {
+		if fo.pid > 0 {
+			if !processExists(fo.pid) {
+				if fo.debug {
+					fmt.Fprintf(rc.Err, "==> tail: pid %d is dead; stopping\n", fo.pid)
+				}
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(fo.sleepInterval):
+		}
+
+		if fo.followByName {
+			fi, err := os.Stat(fo.path)
+			if err != nil {
+				if fo.retry {
+					if f != nil {
+						f.Close()
+						f = nil
+					}
+					if fo.debug {
+						fmt.Fprintf(rc.Err, "==> tail: %q has become inaccessible; retrying\n", fo.name)
+					}
+					f, err = openOrRetry(rc, fo.path, fo.name, fo.retry, fo.sleepInterval)
+					if err != nil {
+						return err
+					}
+					if f != nil {
+						fi, _ = f.Stat()
+					}
+					unchanged = 0
+					lastSize = -1
+					continue
+				}
+				return fmt.Errorf("cannot stat %q: %v", fo.name, err)
+			}
+
+			newIno := inodeKey(fi)
+			if newIno != lastIno && lastIno != 0 {
+				if f != nil {
+					f.Close()
+				}
+				f, err = openOrRetry(rc, fo.path, fo.name, fo.retry, fo.sleepInterval)
+				if err != nil {
+					return err
+				}
+				if f != nil {
+					fi, _ = f.Stat()
+					lastIno = inodeKey(fi)
+				}
+				lastSize = -1
+				unchanged = 0
+				continue
+			}
+			lastIno = newIno
+
+			if fi.Size() == lastSize {
+				unchanged++
+			} else if fi.Size() < lastSize {
+				unchanged = 0
+				if f != nil {
+					f.Close()
+				}
+				f, err = openOrRetry(rc, fo.path, fo.name, fo.retry, fo.sleepInterval)
+				if err != nil {
+					return err
+				}
+				lastSize = fi.Size()
+				if fo.debug {
+					fmt.Fprintf(rc.Err, "==> tail: %q was truncated; reading from start\n", fo.name)
+				}
+			} else {
+				unchanged = 0
+			}
+
+			if unchanged >= fo.maxUnchanged && fo.maxUnchanged > 0 {
+				if f != nil {
+					f.Close()
+				}
+				f, err = openOrRetry(rc, fo.path, fo.name, fo.retry, fo.sleepInterval)
+				if err != nil {
+					return err
+				}
+				if f != nil {
+					fi, _ = f.Stat()
+				}
+				unchanged = 0
+				lastSize = -1
+				continue
+			}
+		}
+
+		if f == nil {
+			continue
+		}
+
+		buf := make([]byte, 32*1024)
+		n, err := f.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			if fo.followByName {
+				lastSize += int64(n)
+			}
+		}
+		if err != nil && err != io.EOF {
+			return err
+		}
+	}
+}
+
+func openOrRetry(rc *tool.RunContext, path, name string, retry bool, sleep time.Duration) (*os.File, error) {
+	for {
+		f, err := os.Open(path)
+		if err == nil {
+			return f, nil
+		}
+		if !retry {
+			return nil, fmt.Errorf("cannot open %q for reading: %v", name, err)
+		}
+		fmt.Fprintf(rc.Err, "tail: %q has become inaccessible, retrying...\n", name)
+		ctx := rc.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(sleep):
+		}
+	}
+}
+
 func tailStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromStart bool, lineEnd byte) error {
 	br := bufio.NewReader(r)
 	switch {
 	case bytesMode && fromStart:
-		// -c +NUM: output starting with byte NUM (1-based; +0 acts
-		// like +1, per GNU).
 		skip := n - 1
 		if skip > 0 {
 			if _, err := io.CopyN(io.Discard, br, skip); err != nil {
@@ -135,7 +382,6 @@ func tailStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromStart
 		_, err := io.Copy(w, br)
 		return err
 	case bytesMode:
-		// Last NUM bytes: sliding window.
 		var keep []byte
 		buf := make([]byte, 32*1024)
 		for {
@@ -156,7 +402,6 @@ func tailStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromStart
 		_, err := w.Write(keep)
 		return err
 	case fromStart:
-		// -n +NUM: output starting with line NUM.
 		skip := n - 1
 		for skip > 0 {
 			line, err := br.ReadBytes(lineEnd)
@@ -173,8 +418,6 @@ func tailStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromStart
 		_, err := io.Copy(w, br)
 		return err
 	default:
-		// Last NUM lines: ring of line slices (a final line without a
-		// trailing newline counts as a line, per GNU).
 		var q [][]byte
 		for {
 			line, err := br.ReadBytes(lineEnd)
@@ -203,8 +446,6 @@ func tailStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromStart
 // --- shared helpers (duplicated per-package by design; cmds packages
 // do not import each other) ---
 
-// rewriteObsoleteNum implements the obsolete first-argument form
-// (tail -5 == tail -n 5). GNU only honors it as the first argument.
 func rewriteObsoleteNum(args []string, flag string) []string {
 	if len(args) == 0 {
 		return args
@@ -219,9 +460,6 @@ func rewriteObsoleteNum(args []string, flag string) []string {
 	return append([]string{flag + a[1:]}, args[1:]...)
 }
 
-// scanOrder reports which of -n/-c ('n'/'c') and which of -q/-v
-// ('q'/'v') appears last on the command line — GNU getopt lets the
-// last occurrence win for these mutually overriding options.
 func scanOrder(args []string) (mode, hdr byte) {
 	skip := false
 	for _, a := range args {
@@ -274,8 +512,6 @@ func scanOrder(args []string) (mode, hdr byte) {
 	return mode, hdr
 }
 
-// parseCount parses a GNU NUM with optional leading sign and
-// multiplier suffix (b 512, kB 1000, K/KiB 1024, MB, M/MiB, …).
 func parseCount(s string) (val int64, neg, plus bool, err error) {
 	t := s
 	switch {
@@ -346,8 +582,6 @@ func multiplier(suf string) (int64, bool) {
 
 type headerPrinter struct{ printed bool }
 
-// print emits the GNU "==> name <==" header, with a blank line before
-// every header except the first one printed.
 func (h *headerPrinter) print(w io.Writer, name string) {
 	if h.printed {
 		fmt.Fprintf(w, "\n==> %s <==\n", name)
