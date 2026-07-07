@@ -5,14 +5,15 @@
 // flag layer); wrap writer and decode filtering rewritten to match GNU
 // exactly (default 76-column wrap with trailing newline, -w 0 emits no
 // trailing newline, decoder tolerates embedded newlines only, -i drops
-// every non-alphabet byte, "invalid input" diagnostic + exit 1).
+// every non-alphabet byte, auto-padding of unpadded input at EOF and
+// rejection of non-zero padding bits per GNU >= 9.5, "invalid input"
+// diagnostic + exit 1).
 
 package hashenc
 
 import (
 	"bufio"
-	"encoding/base32"
-	"encoding/base64"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -118,69 +119,89 @@ func runBaseEncode(rc *tool.RunContext, t *tool.Tool, src io.Reader, spec BaseSp
 }
 
 func runBaseDecode(rc *tool.RunContext, t *tool.Tool, spec BaseSpec, src io.Reader, ignoreGarbage bool) int {
-	bw := bufio.NewWriterSize(rc.Out, 64<<10)
-	fr := &filterReader{r: src, inAlphabet: spec.InAlphabet, ignore: ignoreGarbage}
-	dec := spec.NewDecoder(fr)
-	if _, err := io.Copy(bw, dec); err != nil {
-		var b64 base64.CorruptInputError
-		var b32 base32.CorruptInputError
-		if errors.Is(err, errInvalidInput) || errors.Is(err, io.ErrUnexpectedEOF) ||
-			errors.As(err, &b64) || errors.As(err, &b32) {
-			fmt.Fprintf(rc.Err, "%s: invalid input\n", t.Name)
-		} else {
-			fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
-		}
+	data, err := io.ReadAll(src)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
 		return 1
 	}
-	if err := bw.Flush(); err != nil {
+	decoded, err := DecodeBase(data, spec.InAlphabet, ignoreGarbage, spec.NewEncoder, spec.NewDecoder)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "%s: invalid input\n", t.Name)
+		return 1
+	}
+	if _, err := rc.Out.Write(decoded); err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", t.Name, err)
 		return 1
 	}
 	return 0
 }
 
-// errInvalidInput is the sentinel for garbage bytes found while
-// decoding without -i.
-var errInvalidInput = errors.New("invalid input")
+// ErrInvalidInput is the sentinel for undecodable input (garbage bytes
+// without -i, bad padding, non-zero padding bits).
+var ErrInvalidInput = errors.New("invalid input")
 
-// filterReader prepares the encoded stream for the stdlib decoder.
-// Without -i it passes alphabet bytes and padding, silently drops
-// newlines (GNU decodes its own wrapped output), and fails on
-// anything else. With -i it drops every byte outside alphabet+padding.
-type filterReader struct {
-	r          io.Reader
-	inAlphabet func(byte) bool
-	ignore     bool
-	buf        [4096]byte
+// DecodeBase decodes a whole encoded buffer with GNU base64/base32/
+// basenc semantics (coreutils >= 9.5):
+//
+//   - newlines are always tolerated; with ignore every byte outside
+//     alphabet+padding is dropped, without it such a byte is an error;
+//   - input whose final group is unpadded is auto-padded at EOF
+//     ("QQ" decodes like "QQ==");
+//   - non-canonical input — non-zero padding bits ("QR=="), wrong
+//     padding length, padding in the middle — is rejected. This is
+//     enforced by re-encoding the decoded bytes and requiring an exact
+//     round trip, which is equivalent to decoding in the stdlib's
+//     Strict mode plus GNU's padding checks.
+//
+// The encoded block size (4 for base64, 8 for base32) is derived from
+// the encoder itself so the helper works for any RFC 4648 encoding.
+func DecodeBase(data []byte, inAlphabet func(byte) bool, ignore bool,
+	newEncoder func(io.Writer) io.WriteCloser, newDecoder func(io.Reader) io.Reader) ([]byte, error) {
+	filtered := make([]byte, 0, len(data))
+	for _, b := range data {
+		switch {
+		case inAlphabet(b) || b == '=':
+			filtered = append(filtered, b)
+		case ignore || b == '\n':
+			// dropped
+		default:
+			return nil, ErrInvalidInput
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	block := encodedBlockLen(newEncoder)
+	// Auto-pad at EOF (GNU >= 9.5): complete a final partial group
+	// with '=' unless the input already carries its own padding.
+	if r := len(filtered) % block; r != 0 && filtered[len(filtered)-1] != '=' {
+		filtered = append(filtered, bytes.Repeat([]byte{'='}, block-r)...)
+	}
+	decoded, err := io.ReadAll(newDecoder(bytes.NewReader(filtered)))
+	if err != nil {
+		return nil, ErrInvalidInput
+	}
+	var canon bytes.Buffer
+	enc := newEncoder(&canon)
+	_, _ = enc.Write(decoded)
+	_ = enc.Close()
+	if !bytes.Equal(canon.Bytes(), filtered) {
+		return nil, ErrInvalidInput
+	}
+	return decoded, nil
 }
 
-func (fr *filterReader) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
+// encodedBlockLen returns the padded output length of a one-byte
+// encode: the encoding's block size (base64: 4, base32: 8).
+func encodedBlockLen(newEncoder func(io.Writer) io.WriteCloser) int {
+	var buf bytes.Buffer
+	enc := newEncoder(&buf)
+	_, _ = enc.Write([]byte{0})
+	_ = enc.Close()
+	if n := buf.Len(); n > 0 {
+		return n
 	}
-	max := len(p)
-	if max > len(fr.buf) {
-		max = len(fr.buf)
-	}
-	for {
-		n, err := fr.r.Read(fr.buf[:max])
-		out := 0
-		for _, b := range fr.buf[:n] {
-			switch {
-			case fr.inAlphabet(b) || b == '=':
-				p[out] = b
-				out++
-			case fr.ignore || b == '\n':
-				// dropped
-			default:
-				return out, errInvalidInput
-			}
-		}
-		if out > 0 || err != nil {
-			return out, err
-		}
-		// Everything in this chunk was filtered out; read more.
-	}
+	return 4
 }
 
 // wrapWriter wraps encoder output at cols characters. GNU semantics:

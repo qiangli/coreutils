@@ -85,6 +85,9 @@ func TestDecode(t *testing.T) {
 		// -i ignores non-alphabet garbage.
 		{"Zm9v;;Ym!Fy\n", []string{"-d", "-i"}, "foobar"},
 		{"Zg==\n", []string{"-d"}, "f"},
+		// GNU >= 9.5 auto-pads unpadded input at EOF.
+		{"Zg\n", []string{"-d"}, "f"},
+		{"QQ", []string{"-d"}, "A"},
 		{"", []string{"-d"}, ""},
 	}
 	for _, c := range cases {
@@ -96,8 +99,10 @@ func TestDecode(t *testing.T) {
 }
 
 func TestDecodeInvalidInput(t *testing.T) {
-	// garbage without -i fails with the GNU diagnostic, exit 1.
-	for _, stdin := range []string{"Zm9v;YmFy\n", "Zg\n", "a\n"} {
+	// garbage without -i fails with the GNU diagnostic, exit 1; so do
+	// an impossible length ("a") and non-zero padding bits ("QR==",
+	// GNU >= 9.5).
+	for _, stdin := range []string{"Zm9v;YmFy\n", "a\n", "QR==\n", "Zh==\n", "QR\n"} {
 		out, errb, code := runTool(t, "", stdin, "-d")
 		if code != 1 || !strings.Contains(errb, "base64: invalid input") {
 			t.Errorf("decode %q: out=%q err=%q code=%d, want invalid input + exit 1", stdin, out, errb, code)

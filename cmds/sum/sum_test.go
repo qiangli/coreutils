@@ -39,6 +39,28 @@ func TestSumBSDAndSysV(t *testing.T) {
 	if out != "294 1\n" || code != 0 {
 		t.Fatalf("-s stdin = (%q, %d)", out, code)
 	}
+	out, _, code = runTool(t, "", "abc", "--sysv")
+	if out != "294 1\n" || code != 0 {
+		t.Fatalf("--sysv stdin = (%q, %d)", out, code)
+	}
+	// -r and -s may be combined: the last one wins (GNU).
+	out, _, code = runTool(t, "", "abc", "-r", "-s")
+	if out != "294 1\n" || code != 0 {
+		t.Fatalf("-r -s = (%q, %d)", out, code)
+	}
+	out, _, code = runTool(t, "", "abc", "-s", "-r")
+	if out != "16556     1\n" || code != 0 {
+		t.Fatalf("-s -r = (%q, %d)", out, code)
+	}
+	out, _, code = runTool(t, "", "abc", "-sr")
+	if out != "16556     1\n" || code != 0 {
+		t.Fatalf("-sr = (%q, %d)", out, code)
+	}
+	// An explicit "-" operand prints the name.
+	out, _, code = runTool(t, "", "abc", "-")
+	if out != "16556     1 -\n" || code != 0 {
+		t.Fatalf("explicit dash = (%q, %d)", out, code)
+	}
 }
 
 func TestSumFilesAndErrors(t *testing.T) {
@@ -54,8 +76,9 @@ func TestSumFilesAndErrors(t *testing.T) {
 	if code != 1 || !strings.Contains(errb, "sum: missing: No such file or directory") {
 		t.Fatalf("missing = (%q, %d)", errb, code)
 	}
-	_, errb, code = runTool(t, dir, "", "-r", "-s")
-	if code != 2 || !strings.Contains(errb, "cannot combine") {
-		t.Fatalf("conflict = (%q, %d)", errb, code)
+	// The invented --bsd long form is gone; -r has no long form in GNU.
+	_, errb, code = runTool(t, dir, "", "--bsd")
+	if code != 2 || !strings.Contains(errb, "bsd") {
+		t.Fatalf("--bsd = (%q, %d)", errb, code)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -122,6 +123,8 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 	points := make([]splitPoint, 0, len(patterns))
 	start := 0
 	last := ""
+	lastNum := 0  // N of the last line-number pattern (0 = last was a regexp)
+	lastLine := 0 // 1-based line of the last line-number split
 	for _, pattern := range patterns {
 		repeats, repeatToEOF, isRepeat, code := parseRepeat(rc, pattern)
 		if code >= 0 {
@@ -130,6 +133,28 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 		if isRepeat {
 			if last == "" {
 				return nil, tool.UsageError(rc, cmd, "missing pattern before repeat count")
+			}
+			if lastNum > 0 {
+				// POSIX: a repeated line-number pattern advances by N
+				// lines each round ("split every N lines").
+				for i := 0; repeatToEOF || i < repeats; i++ {
+					next := lastLine + lastNum
+					if next > len(lines) {
+						if repeatToEOF {
+							break
+						}
+						return nil, tool.UsageError(rc, cmd, "'%d': line number out of range", next)
+					}
+					idx := next - 1
+					point := splitPoint{line: idx, nextStart: idx}
+					if suppressMatched {
+						point.nextStart = idx + 1
+					}
+					points = append(points, point)
+					lastLine = next
+					start = idx
+				}
+				continue
 			}
 			if repeatToEOF {
 				for {
@@ -168,6 +193,11 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 		points = append(points, point)
 		start = nextSearch
 		last = pattern
+		if n, err := strconv.Atoi(pattern); err == nil {
+			lastNum, lastLine = n, n
+		} else {
+			lastNum = 0
+		}
 	}
 	return points, -1
 }
@@ -200,9 +230,19 @@ func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, star
 			return splitPoint{}, start, false, tool.UsageError(rc, cmd, "line number out of range: '%s'", pattern)
 		}
 		idx := n - 1
-		return splitPoint{line: idx, nextStart: idx}, idx, true, -1
+		point := splitPoint{line: idx, nextStart: idx}
+		if suppressMatched {
+			point.nextStart = idx + 1
+		}
+		return point, idx, true, -1
 	}
-	re, err := regexp.Compile(spec.expr)
+	// csplit patterns are POSIX basic regular expressions, like grep's
+	// default mode — translate through the shared BRE engine.
+	translated, err := bre.ToGo(spec.expr)
+	if err != nil {
+		return splitPoint{}, start, false, tool.UsageError(rc, cmd, "invalid regular expression '%s'", spec.expr)
+	}
+	re, err := regexp.Compile(translated)
 	if err != nil {
 		return splitPoint{}, start, false, tool.UsageError(rc, cmd, "invalid regular expression '%s'", spec.expr)
 	}

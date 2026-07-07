@@ -32,8 +32,9 @@ func TestODDefaultOctalWords(t *testing.T) {
 }
 
 func TestODFormatsAndOffsets(t *testing.T) {
+	// GNU prints hexadecimal addresses 6 digits wide.
 	out, _, code := runOD(t, t.TempDir(), "abc\n", "-A", "x", "-t", "x1", "-N", "3")
-	if want := "0000000 61 62 63\n0000003\n"; out != want || code != 0 {
+	if want := "000000 61 62 63\n000003\n"; out != want || code != 0 {
 		t.Fatalf("od x1 = (%q, %d), want (%q, 0)", out, code, want)
 	}
 	out, _, code = runOD(t, t.TempDir(), "a\n", "-A", "n", "-t", "c")
@@ -72,13 +73,14 @@ func TestODSkipAndFiles(t *testing.T) {
 
 func TestODMultiFormatEndianStringsAndTraditionalSkip(t *testing.T) {
 	out, _, code := runOD(t, t.TempDir(), "ABCD", "-A", "x", "-t", "x2", "-t", "u1", "--endian", "big", "-w", "4")
-	want := "0000000 4142 4344\n         65  66  67  68\n0000004\n"
+	want := "000000 4142 4344\n        65  66  67  68\n000004\n"
 	if out != want || code != 0 {
 		t.Fatalf("od multi/endian = (%q, %d), want (%q, 0)", out, code, want)
 	}
 
+	// -S prints NUL-terminated runs only, with no trailing offset line.
 	out, _, code = runOD(t, t.TempDir(), "\x00abc\x00de\x00", "-A", "d", "-S", "3")
-	want = "0000001 abc\n0000008\n"
+	want = "0000001 abc\n"
 	if out != want || code != 0 {
 		t.Fatalf("od strings = (%q, %d), want (%q, 0)", out, code, want)
 	}
@@ -106,5 +108,58 @@ func TestODRejectsBadWidth(t *testing.T) {
 	_, errb, code := runOD(t, t.TempDir(), "", "-w", "0")
 	if code != 2 || !strings.Contains(errb, "invalid output width") {
 		t.Fatalf("od bad width code=%d err=%q", code, errb)
+	}
+}
+
+// -t a is named characters (GNU: distinct from -t c, high bit ignored).
+func TestODNamedCharsVsC(t *testing.T) {
+	out, _, code := runOD(t, t.TempDir(), "a b\n", "-a", "-A", "n")
+	if want := "   a  sp   b  nl\n"; out != want || code != 0 {
+		t.Fatalf("od -a = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	out, _, code = runOD(t, t.TempDir(), "a b\n\a\v", "-t", "c", "-A", "n")
+	if want := "   a       b  \\n  \\a  \\v\n"; out != want || code != 0 {
+		t.Fatalf("od -t c = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	out, _, code = runOD(t, t.TempDir(), "\xe1", "-a", "-A", "n")
+	if want := "   a\n"; out != want || code != 0 {
+		t.Fatalf("od -a high bit = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
+// GNU elides consecutive identical lines with a single *; -v outputs all.
+func TestODDuplicateSuppression(t *testing.T) {
+	data := strings.Repeat("\x00", 48)
+	out, _, code := runOD(t, t.TempDir(), data)
+	want := "0000000 000000 000000 000000 000000 000000 000000 000000 000000\n*\n0000060\n"
+	if out != want || code != 0 {
+		t.Fatalf("od dup = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	out, _, code = runOD(t, t.TempDir(), data, "-v")
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 4 || strings.Contains(out, "*") || code != 0 {
+		t.Fatalf("od -v = (%q, %d), want 3 data lines + final offset and no *", out, code)
+	}
+}
+
+// The traditional +offset operand is octal by default; '.' means
+// decimal and a trailing 'b' multiplies by 512.
+func TestODTraditionalOffsetRadix(t *testing.T) {
+	data := strings.Repeat("x", 20)
+	out, _, code := runOD(t, t.TempDir(), data, "-t", "o1", "+20")
+	if code != 0 || !strings.HasPrefix(out, "0000020 170 170 170 170\n") {
+		t.Fatalf("od +20 (octal) = (%q, %d)", out, code)
+	}
+	out, _, code = runOD(t, t.TempDir(), data, "-t", "o1", "+16.")
+	if code != 0 || !strings.HasPrefix(out, "0000020 170 170 170 170\n") {
+		t.Fatalf("od +16. (decimal) = (%q, %d)", out, code)
+	}
+}
+
+// GNU errors when -j skips past the end of the combined input.
+func TestODSkipPastEOF(t *testing.T) {
+	_, errb, code := runOD(t, t.TempDir(), "hi", "-j", "100")
+	if code != 1 || !strings.Contains(errb, "cannot skip past end of combined input") {
+		t.Fatalf("od skip past eof: code=%d err=%q", code, errb)
 	}
 }

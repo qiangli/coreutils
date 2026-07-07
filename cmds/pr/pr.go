@@ -1,5 +1,15 @@
-// Package prcmd implements a non-interactive pr(1) subset: simple
-// sequential pagination with optional headers, page length, and width.
+// Package prcmd implements a single-column pr(1) subset: GNU page
+// structure (66-line pages: 5-line header, body, 5-line trailer, with
+// the last page padded to full length), form-feed page breaks, page
+// ranges (--pages and the +FIRST[:LAST] operand), line numbering,
+// margins, and -t/-T.
+//
+// Multi-column output (--columns, -a) and merging (-m) are not
+// implemented and fail loudly.
+//
+// Documented deviation: like GNU pr, the header timestamp for standard
+// input (or when stat fails) is the current wall-clock time, so that
+// header line is nondeterministic.
 package prcmd
 
 import (
@@ -16,27 +26,32 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "pr",
-	Synopsis: "Paginate or columnate files for printing. This pure-Go subset formats files sequentially without interactive features.",
+	Synopsis: "Paginate files for printing. This pure-Go subset formats files sequentially in a single column.",
 	Usage:    "pr [OPTION]... [FILE]...",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+const (
+	linesPerHeader  = 5
+	linesPerTrailer = 5
+)
+
 type options struct {
 	pageLength     int
+	bodyLines      int // input lines per page
 	width          int
+	truncate       bool // only with -W
 	omitHeader     bool
+	ffBreaks       bool // false with -T: input form feeds do not paginate
 	header         string
+	headerSet      bool
 	dateFormat     string
 	doubleSpace    bool
 	numberLines    bool
 	indent         int
 	noFileWarnings bool
 	expandTabs     bool
-	across         bool
-	columns        int
-	separator      string
-	merge          bool
 	formFeed       bool
 	pageStart      int
 	pageEnd        int
@@ -44,11 +59,11 @@ type options struct {
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
-	pageLength := fs.IntP("length", "l", 66, "set page length to PAGE_LENGTH lines")
-	width := fs.IntP("width", "w", 72, "set page width to WIDTH columns")
-	omitHeader := fs.BoolP("omit-header", "t", false, "omit page headers and trailers")
-	omitPagination := fs.BoolP("omit-pagination", "T", false, "omit page headers and trailers and do not paginate")
-	headerText := fs.StringP("header", "h", "", "use centered STRING instead of file name in page header")
+	pageLength := fs.IntP("length", "l", 66, "set page length to PAGE_LENGTH lines (<= 10 implies -t)")
+	width := fs.IntP("width", "w", 72, "set page width to PAGE_WIDTH columns for multi-column output")
+	omitHeader := fs.BoolP("omit-header", "t", false, "omit page headers and trailers, do not pad the last page")
+	omitPagination := fs.BoolP("omit-pagination", "T", false, "like -t, and eliminate input form-feed pagination")
+	headerText := fs.StringP("header", "h", "", "use centered HEADER instead of file name in page header")
 	dateFormat := fs.StringP("date-format", "D", "", "use FORMAT for the header date")
 	doubleSpace := fs.BoolP("double-space", "d", false, "double space the output")
 	numberLines := fs.BoolP("number-lines", "n", false, "precede each line with its line number")
@@ -56,16 +71,28 @@ func run(rc *tool.RunContext, args []string) int {
 	noFileWarnings := fs.BoolP("no-file-warnings", "r", false, "omit file open warnings")
 	pages := fs.String("pages", "", "print only pages in FIRST[:LAST] range")
 	expandTabs := fs.BoolP("expand-tabs", "e", false, "expand input tabs to spaces")
-	across := fs.BoolP("across", "a", false, "fill columns across rather than down")
-	columns := fs.Int("columns", 1, "produce COLUMN columns")
-	separator := fs.StringP("separator", "s", "\t", "separate columns by CHAR")
-	sepString := fs.StringP("sep-string", "S", "", "separate columns by STRING")
-	merge := fs.BoolP("merge", "m", false, "print files in parallel, one per column")
-	formFeed := fs.BoolP("form-feed", "F", false, "use form feed between pages")
-	pageWidth := fs.IntP("page-width", "W", 0, "set page width, always")
+	across := fs.BoolP("across", "a", false, "(not supported) fill columns across rather than down")
+	columns := fs.Int("columns", 1, "(not supported above 1) produce COLUMN columns")
+	_ = fs.StringP("separator", "s", "\t", "separate columns by CHAR (multi-column output only; no effect here)")
+	_ = fs.StringP("sep-string", "S", "", "separate columns by STRING (multi-column output only; no effect here)")
+	merge := fs.BoolP("merge", "m", false, "(not supported) print files in parallel, one per column")
+	formFeed := fs.BoolP("form-feed", "F", false, "use form feed instead of blank lines to end pages")
+	pageWidth := fs.IntP("page-width", "W", 72, "set page width and truncate lines")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	if *merge {
+		return tool.NotSupported(rc, cmd, "-m/--merge (parallel file merging)")
+	}
+	if *across {
+		return tool.NotSupported(rc, cmd, "-a/--across (multi-column output)")
+	}
+	if *columns <= 0 {
+		return tool.UsageError(rc, cmd, "invalid column count: %d", *columns)
+	}
+	if *columns > 1 {
+		return tool.NotSupported(rc, cmd, "--columns greater than 1 (multi-column output)")
 	}
 	if *pageLength <= 0 {
 		return tool.UsageError(rc, cmd, "invalid page length: %d", *pageLength)
@@ -73,45 +100,67 @@ func run(rc *tool.RunContext, args []string) int {
 	if *width <= 0 {
 		return tool.UsageError(rc, cmd, "invalid page width: %d", *width)
 	}
-	if *pageWidth > 0 {
-		*width = *pageWidth
+	if *pageWidth <= 0 {
+		return tool.UsageError(rc, cmd, "invalid page width: %d", *pageWidth)
 	}
 	if *indent < 0 {
 		return tool.UsageError(rc, cmd, "invalid indent: %d", *indent)
-	}
-	if *columns <= 0 {
-		return tool.UsageError(rc, cmd, "invalid column count: %d", *columns)
 	}
 	pageStart, pageEnd, err := parsePages(*pages)
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
-	sep := *separator
-	if *sepString != "" {
-		sep = *sepString
-	}
+
 	o := options{
-		pageLength: *pageLength, width: *width, omitHeader: *omitHeader || *omitPagination,
-		header: *headerText, dateFormat: *dateFormat, doubleSpace: *doubleSpace, numberLines: *numberLines,
+		pageLength: *pageLength,
+		width:      *width,
+		header:     *headerText, headerSet: fs.Changed("header"),
+		dateFormat: *dateFormat, doubleSpace: *doubleSpace, numberLines: *numberLines,
 		indent: *indent, noFileWarnings: *noFileWarnings, expandTabs: *expandTabs,
-		across: *across, columns: *columns, separator: sep, merge: *merge, formFeed: *formFeed,
+		formFeed:  *formFeed,
+		ffBreaks:  !*omitPagination,
 		pageStart: pageStart, pageEnd: pageEnd,
 	}
+	if fs.Changed("page-width") {
+		// -W sets the page width and enables line truncation; plain -w
+		// never truncates single-column output (GNU semantics).
+		o.width = *pageWidth
+		o.truncate = true
+	}
+	// A page too short to hold the 5-line header and 5-line trailer
+	// implies -t (GNU: page length <= 10).
+	o.omitHeader = *omitHeader || *omitPagination || o.pageLength <= linesPerHeader+linesPerTrailer
+	if o.omitHeader {
+		o.bodyLines = o.pageLength
+	} else {
+		o.bodyLines = o.pageLength - linesPerHeader - linesPerTrailer
+	}
+	if o.doubleSpace {
+		o.bodyLines /= 2
+		if o.bodyLines < 1 {
+			o.bodyLines = 1
+		}
+	}
 
-	files := operands
+	// The GNU/POSIX +FIRST[:LAST] operand is an alternative page range.
+	var files []string
+	for _, op := range operands {
+		if strings.HasPrefix(op, "+") {
+			start, end, err := parsePages(op[1:])
+			if err != nil || op == "+" {
+				return tool.UsageError(rc, cmd, "invalid page range: %q", op)
+			}
+			o.pageStart, o.pageEnd = start, end
+			continue
+		}
+		files = append(files, op)
+	}
 	if len(files) == 0 {
 		files = []string{"-"}
 	}
+
 	w := bufio.NewWriter(rc.Out)
 	exit := 0
-	if o.merge {
-		exit = printMerged(rc, w, files, o)
-		if err := w.Flush(); err != nil {
-			fmt.Fprintf(rc.Err, "pr: write error: %v\n", err)
-			return 1
-		}
-		return exit
-	}
 	for _, name := range files {
 		r, closer, label, stamp, err := open(rc, name)
 		if err != nil {
@@ -156,60 +205,79 @@ func open(rc *tool.RunContext, name string) (io.Reader, io.Closer, string, time.
 }
 
 func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o options) error {
-	lines, err := readLines(r, o)
+	segments, err := readSegments(r, o)
 	if err != nil {
 		return err
 	}
-	page := 1
-	lineOnPage := 0
-	lineNo := 1
-	contentPerPage := o.pageLength
-	if !o.omitHeader {
-		contentPerPage = o.pageLength - 2
-		if contentPerPage < 1 {
-			contentPerPage = 1
+	if !o.ffBreaks {
+		// -T: eliminate form-feed pagination; treat input as one segment.
+		var all []string
+		for _, seg := range segments {
+			all = append(all, seg...)
 		}
+		segments = [][]string{all}
+	}
+	// A trailing form feed ends the last page; it does not open a new one.
+	for len(segments) > 1 && len(segments[len(segments)-1]) == 0 {
+		segments = segments[:len(segments)-1]
+	}
+	if len(segments) == 1 && len(segments[0]) == 0 {
+		return nil // empty input produces no output
 	}
 
-	for _, line := range columnize(lines, o) {
-		if lineOnPage == 0 && !o.omitHeader {
-			headerLabel := label
-			if o.header != "" {
-				headerLabel = o.header
-			}
-			if inPageRange(page, o) {
-				if _, werr := fmt.Fprintln(w, header(headerLabel, stamp, page, o)); werr != nil {
-					return werr
-				}
-				if _, werr := w.WriteString("\n"); werr != nil {
-					return werr
-				}
-			}
-		}
-		if inPageRange(page, o) {
-			if _, werr := w.WriteString(formatLine(line, lineNo, o)); werr != nil {
-				return werr
-			}
-			if o.doubleSpace {
-				if _, werr := w.WriteString("\n"); werr != nil {
+	headerLabel := label
+	if o.headerSet {
+		headerLabel = o.header
+	}
+	physPerLine := 1
+	if o.doubleSpace {
+		physPerLine = 2
+	}
+	physBudget := o.bodyLines * physPerLine
+
+	page := 1
+	lineNo := 1
+	for si, seg := range segments {
+		for _, chunk := range chunkLines(seg, o.bodyLines) {
+			emit := inPageRange(page, o)
+			if emit && !o.omitHeader {
+				if _, werr := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(headerLabel, stamp, page, o)); werr != nil {
 					return werr
 				}
 			}
-		}
-		lineNo++
-		lineOnPage++
-		if lineOnPage >= contentPerPage {
-			lineOnPage = 0
-			page++
-			if !o.omitHeader {
-				if inPageRange(page-1, o) {
-					sep := "\n"
-					if o.formFeed {
-						sep = "\f"
-					}
-					if _, werr := w.WriteString(sep); werr != nil {
+			for _, line := range chunk {
+				if emit {
+					if _, werr := w.WriteString(formatLine(line, lineNo, o)); werr != nil {
 						return werr
 					}
+					if o.doubleSpace {
+						if _, werr := w.WriteString("\n"); werr != nil {
+							return werr
+						}
+					}
+				}
+				lineNo++
+			}
+			if emit && !o.omitHeader {
+				// Trailer: pad every page (including the last) to full
+				// page length, or emit one form feed with -F.
+				if o.formFeed {
+					if _, werr := w.WriteString("\f"); werr != nil {
+						return werr
+					}
+				} else {
+					pad := physBudget - len(chunk)*physPerLine + linesPerTrailer
+					if _, werr := w.WriteString(strings.Repeat("\n", pad)); werr != nil {
+						return werr
+					}
+				}
+			}
+			page++
+		}
+		if o.omitHeader && o.ffBreaks && si < len(segments)-1 {
+			if inPageRange(page-1, o) {
+				if _, werr := w.WriteString("\f"); werr != nil {
+					return werr
 				}
 			}
 		}
@@ -217,17 +285,29 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 	return nil
 }
 
-func header(label string, stamp time.Time, page int, o options) string {
-	name := label
-	if name == "" {
-		name = "standard input"
-	}
+// headerLine builds the GNU header text line: margin, date at the left,
+// the file name (or -h string) centered, and "Page N" at the right,
+// filling the page width.
+func headerLine(label string, stamp time.Time, page int, o options) string {
 	format := "2006-01-02 15:04"
 	if o.dateFormat != "" {
 		format = strftimeLayout(o.dateFormat)
 	}
-	text := fmt.Sprintf("%s  %s  Page %d", stamp.Format(format), name, page)
-	return fitText(text, o.width)
+	date := stamp.Format(format)
+	pageText := fmt.Sprintf("Page %d", page)
+	avail := o.width - len(date) - len(label) - len(pageText)
+	if avail < 0 {
+		avail = 0
+	}
+	lhs := avail / 2
+	rhs := avail - lhs
+	if lhs < 1 {
+		lhs = 1
+	}
+	if rhs < 1 {
+		rhs = 1
+	}
+	return strings.Repeat(" ", o.indent) + date + strings.Repeat(" ", lhs) + label + strings.Repeat(" ", rhs) + pageText
 }
 
 func formatLine(line string, lineNo int, o options) string {
@@ -236,29 +316,48 @@ func formatLine(line string, lineNo int, o options) string {
 	if o.numberLines {
 		line = fmt.Sprintf("%5d\t%s", lineNo, line)
 	}
+	if o.truncate && len(line) > o.width {
+		line = line[:o.width]
+	}
 	if o.indent > 0 {
 		line = strings.Repeat(" ", o.indent) + line
 	}
-	line = fitText(line, o.width)
 	if hasNL {
 		return line + "\n"
 	}
 	return line
 }
 
-func readLines(r io.Reader, o options) ([]string, error) {
+// readSegments reads all input lines, splitting into segments at input
+// form feeds: each '\f' ends the current segment (and its page); text
+// after a mid-line form feed starts the next segment.
+func readSegments(r io.Reader, o options) ([][]string, error) {
 	br := bufio.NewReader(r)
-	var lines []string
+	segments := [][]string{nil}
 	for {
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
 			if o.expandTabs {
 				line = expandTabs(line, 8)
 			}
-			lines = append(lines, line)
+			if strings.ContainsRune(line, '\f') {
+				frags := strings.Split(line, "\f")
+				for i, frag := range frags {
+					if i < len(frags)-1 {
+						if frag != "" {
+							segments[len(segments)-1] = append(segments[len(segments)-1], frag+"\n")
+						}
+						segments = append(segments, nil)
+					} else if frag != "" {
+						segments[len(segments)-1] = append(segments[len(segments)-1], frag)
+					}
+				}
+			} else {
+				segments[len(segments)-1] = append(segments[len(segments)-1], line)
+			}
 		}
 		if err == io.EOF {
-			return lines, nil
+			return segments, nil
 		}
 		if err != nil {
 			return nil, err
@@ -266,75 +365,21 @@ func readLines(r io.Reader, o options) ([]string, error) {
 	}
 }
 
-func columnize(lines []string, o options) []string {
-	if o.columns <= 1 {
-		return lines
+// chunkLines splits a segment into page-sized chunks; an empty segment
+// (from consecutive form feeds) is one empty page.
+func chunkLines(lines []string, size int) [][]string {
+	if len(lines) == 0 {
+		return [][]string{nil}
 	}
-	rows := (len(lines) + o.columns - 1) / o.columns
-	out := make([]string, 0, rows)
-	colWidth := o.width / o.columns
-	if colWidth < 1 {
-		colWidth = 1
-	}
-	for r := 0; r < rows; r++ {
-		var parts []string
-		for c := 0; c < o.columns; c++ {
-			idx := r*o.columns + c
-			if !o.across {
-				idx = c*rows + r
-			}
-			part := ""
-			if idx < len(lines) {
-				part = strings.TrimRight(lines[idx], "\n")
-			}
-			parts = append(parts, fitText(part, colWidth))
+	var out [][]string
+	for i := 0; i < len(lines); i += size {
+		end := i + size
+		if end > len(lines) {
+			end = len(lines)
 		}
-		out = append(out, strings.Join(parts, o.separator)+"\n")
+		out = append(out, lines[i:end])
 	}
 	return out
-}
-
-func printMerged(rc *tool.RunContext, w *bufio.Writer, files []string, o options) int {
-	var all [][]string
-	exit := 0
-	for _, name := range files {
-		r, closer, _, _, err := open(rc, name)
-		if err != nil {
-			if !o.noFileWarnings {
-				fmt.Fprintf(rc.Err, "pr: %s: %v\n", name, tool.SysErr(err))
-			}
-			exit = 1
-			continue
-		}
-		lines, err := readLines(r, o)
-		if closer != nil {
-			closer.Close()
-		}
-		if err != nil {
-			fmt.Fprintf(rc.Err, "pr: %s: %v\n", name, tool.SysErr(err))
-			exit = 1
-			continue
-		}
-		all = append(all, lines)
-	}
-	maxLines := 0
-	for _, lines := range all {
-		if len(lines) > maxLines {
-			maxLines = len(lines)
-		}
-	}
-	for i := 0; i < maxLines; i++ {
-		var parts []string
-		for _, lines := range all {
-			part := ""
-			if i < len(lines) {
-				part = strings.TrimRight(lines[i], "\n")
-			}
-			parts = append(parts, part)
-		}
-		fmt.Fprintln(w, strings.Join(parts, o.separator))
-	}
-	return exit
 }
 
 func parsePages(s string) (int, int, error) {
@@ -391,11 +436,4 @@ func strftimeLayout(format string) string {
 		format = strings.ReplaceAll(format, r.old, r.new)
 	}
 	return format
-}
-
-func fitText(s string, width int) string {
-	if len(s) <= width {
-		return s
-	}
-	return s[:width]
 }

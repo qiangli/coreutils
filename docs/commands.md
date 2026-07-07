@@ -72,11 +72,11 @@ Text — reading and slicing:
 | cmp | u-root | -l, -s (diffutils, but prior art covers it) |
 | strings | u-root | -n, -t |
 | hexdump | u-root | -C subset (od lands in Phase B) |
-| csplit | fresh | line numbers, /REGEXP/, %REGEXP%, -f, -n, -s, -k |
-| nl | fresh | -b a/t/n, -n ln/rn/rz, -s, -w |
-| od | fresh | default octal words; -A d/o/x/n, -t x1/o1/o2/c/d1, -N, -j |
-| pr | fresh | sequential non-interactive pagination; -l, -w, -t |
-| more | fresh | non-interactive pager fallback; stdin/files passthrough |
+| csplit | fresh | line numbers (repeats advance by N; {*} to EOF), /BRE/[+-N], %BRE%[+-N] via pkg/bre, {N}/{*}, -f, -n, -b, -s, -k, -z, --suppress-matched |
+| nl | fresh | -b/-h/-f a/t/n/pBRE (pkg/bre), GNU section delimiters (replaced by empty lines), one document across files, unnumbered lines padded width+len(sep), -d, -v/-i (negatives ok), -l, -p, -n ln/rn/rz, -s, -w |
+| od | fresh | default octal words + GNU * duplicate elision (-v disables); -A d/o/x/n, -t a/c/[doux][1248]/f[48], -a/-b/-c/-d/-o/-x, -N, -j (errors past EOF), -S (NUL-terminated), -w, --endian, traditional +offset (octal, ./0x/b) |
+| pr | fresh | GNU page model (66-line pages, 5-line header/trailer, bottom fill, -l≤10 implies -t, FF page breaks, +FIRST[:LAST]); -l, -w/-W, -t/-T, -h, -o, -d, -n; single-column never truncated; multi-column/-m refused loudly; stdin header uses wall clock (documented deviation) |
+| more | fresh | non-interactive pager fallback; stdin/files passthrough; -P literal pattern ("Pattern not found" fallback); util-linux flag spellings (-p/--print-over, -u/--plain) |
 
 Text — transform and combine:
 
@@ -92,11 +92,11 @@ Text — transform and combine:
 | tee | guonaihong, u-root | -a, -i |
 | tsort | u-root | (in prior art, so it rides along) |
 | shuf | guonaihong | -n, -e, -i; randomness is the upstream-documented exception to determinism |
-| expand / unexpand | fresh | -t; -a for unexpand |
-| fold | fresh | -w, -b, -s |
-| fmt | fresh | practical paragraph wrapping; -w, -s |
-| numfmt | fresh | --from=none/auto/si/iec/iec-i; --to=none/si/iec/iec-i; --format |
-| ptx | fresh | deterministic permuted index; -f, -i, -o |
+| expand / unexpand | fresh | -t lists incl. GNU +N//N prefixes, repeats accumulate, blank-separated; -i (expand); -a/--first-only (unexpand) with GNU's 2+-blank rule, beyond-last-stop blanks kept, blank+tab runs merged, backspace column tracking |
+| fold | fresh | -w/-WIDTH, -b, -c, -s; GNU screen-column counting (tab→next stop of 8, BS decrements, CR resets), -s keeps the break blank (never deletes bytes) |
+| fmt | fresh | GNU surface (-c, -t, -s, -u, -w/-WIDTH, -g, -p): paragraph indents preserved, different indents never join, goal per GNU (93% of width; -g without -w caps at 75 like GNU source); greedy filling + single-space normalization are documented deviations |
+| numfmt | fresh | --from=none/auto/si/iec/iec-i; --to=none/si/iec/iec-i with GNU human rounding (&lt;10 one decimal, else integer); field 1 default + implicit width padding; validated --format (%f family; ' and --grouping are C-locale no-ops); --round, --invalid, --header, -z, -d, --field |
+| ptx | fresh | GNU dumb-terminal output (width 72, gap 3, / truncation marks), roff via -O, -t=width 100, -f folds to upper, case-sensitive -i/-o unless -f, -A file:line refs, -G/-b/-S/-W; line-scoped contexts + Go-regexp -S/-W are documented deviations; -T refused |
 
 Environment, system, misc:
 
@@ -139,12 +139,12 @@ Checksums and encoding:
 | Command | Sources | Notes |
 |---|---|---|
 | base64 / base32 | guonaihong, u-root | -d, -i, -w |
-| basenc | written fresh | --base64, --base64url, --base32, --base32hex, --base16; -d, -i, -w |
-| b2sum | written fresh | BLAKE2b-512 via shared checksum engine |
-| cksum | written fresh | POSIX CRC default |
+| basenc | written fresh | --base64/url, --base32/hex, --base16, --base2msbf/lsbf, --z85, --base58; -d (GNU ≥9.5 semantics: auto-pads unpadded input, rejects non-zero padding bits), -i, -w; last encoding flag wins |
+| b2sum | written fresh | BLAKE2b via shared checksum engine; -l (0 = default 512), --tag with BLAKE2b-&lt;len&gt; labels, -c auto-detects digest length (untagged by hex count, tagged by suffix), --warn/--status/--quiet/--strict gated on -c |
+| cksum | written fresh | POSIX CRC default; -a GNU set (bsd/sysv/crc/crc32b decimal + md5/sha*/sha2/sha3+-l/blake2b/sm3, exact-match names) with tagged-only -c auto-detect per GNU; --raw incl. crc family; blake3/shake/sha3-NNN accepted as documented extensions |
 | md5sum | guonaihong, u-root | -c, -b, --tag |
 | sha1/224/256/384/512sum | guonaihong, u-root (shasum) | one shared engine |
-| sum | written fresh | BSD default/-r and System V -s |
+| sum | written fresh | BSD default/-r and System V -s (last flag wins, `-` prints its name; -r is short-only as in GNU) |
 
 Extensions (beyond coreutils, prior art in tree):
 

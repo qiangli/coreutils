@@ -59,12 +59,20 @@ func TestNumfmtFromAutoAndToIECI(t *testing.T) {
 }
 
 func TestNumfmtStdinFields(t *testing.T) {
+	// GNU default field is 1, for stdin as for operands.
 	out, errb, code := runTool(t, "1K 2K\n", "--from=si", "--format=%.0f")
 	if code != 0 || errb != "" {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
-	if out != "1000 2000\n" {
+	if out != "1000 2K\n" {
 		t.Fatalf("out=%q", out)
+	}
+	out, errb, code = runTool(t, "1K 2K\n", "--from=si", "--field=1,2", "--format=%.0f")
+	if code != 0 || errb != "" {
+		t.Fatalf("fields 1,2: code=%d err=%q", code, errb)
+	}
+	if out != "1000 2000\n" {
+		t.Fatalf("fields 1,2: out=%q", out)
 	}
 }
 
@@ -73,7 +81,8 @@ func TestNumfmtFieldDelimiterSuffixAndSeparator(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
-	if out != "a,1 KB,x\nb,2 KB,y\n" {
+	// An explicit --format precision is honored verbatim (no trimming).
+	if out != "a,1.0 KB,x\nb,2.0 KB,y\n" {
 		t.Fatalf("out=%q", out)
 	}
 }
@@ -101,7 +110,8 @@ func TestNumfmtHeaderZeroRoundAndGrouping(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
-	if out != "name\x0012,345.6\x00" {
+	// --grouping has no effect in the C locale (GNU behavior).
+	if out != "name\x0012345.6\x00" {
 		t.Fatalf("out=%q", out)
 	}
 
@@ -134,5 +144,88 @@ func TestNumfmtErrors(t *testing.T) {
 	_, errb, code = runTool(t, "", "--round=sideways", "1")
 	if code != 2 || !strings.Contains(errb, "invalid --round") {
 		t.Fatalf("code=%d err=%q", code, errb)
+	}
+}
+
+// GNU human formatting: scaled values below 10 get one decimal
+// (rounded per --round, from-zero by default), 10 and above round to
+// an integer; rounding can carry into the next unit.
+func TestNumfmtHumanDefaultPrecision(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"1000", "1.0K"},
+		{"1001", "1.1K"},
+		{"1500", "1.5K"},
+		{"9999", "10K"},
+		{"15000", "15K"},
+		{"999999", "1.0M"},
+		{"999", "999"},
+		{"5", "5"},
+		{"5.5", "5.5"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, "", "--to=si", c.in)
+		if code != 0 || errb != "" {
+			t.Fatalf("%s: code=%d err=%q", c.in, code, errb)
+		}
+		if out != c.want+"\n" {
+			t.Fatalf("--to=si %s = %q, want %q", c.in, out, c.want)
+		}
+	}
+	out, _, code := runTool(t, "", "--to=iec", "1536")
+	if code != 0 || out != "1.5K\n" {
+		t.Fatalf("--to=iec 1536 = (%q, %d)", out, code)
+	}
+}
+
+// A bare scaling suffix with no digits must be an invalid-number error,
+// not a crash.
+func TestNumfmtBareSuffixDoesNotPanic(t *testing.T) {
+	for _, from := range []string{"iec-i", "auto"} {
+		_, errb, code := runTool(t, "", "--from="+from, "1i")
+		if code != 1 || !strings.Contains(errb, "invalid number") {
+			t.Fatalf("--from=%s 1i: code=%d err=%q", from, code, errb)
+		}
+	}
+}
+
+// GNU validates --format: only a single %[0]['][-][N][.N]f directive.
+func TestNumfmtFormatValidation(t *testing.T) {
+	_, errb, code := runTool(t, "", "--format=%d", "5")
+	if code != 2 || !strings.Contains(errb, "invalid format") {
+		t.Fatalf("%%d: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, "", "--format=no directive", "5")
+	if code != 2 || !strings.Contains(errb, "has no % directive") {
+		t.Fatalf("no directive: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, "", "--format=%f%f", "5")
+	if code != 2 || !strings.Contains(errb, "too many % directives") {
+		t.Fatalf("two directives: code=%d err=%q", code, errb)
+	}
+	// The ' grouping flag is accepted (a no-op in the C locale).
+	out, errb, code := runTool(t, "", "--format=%'f", "12345")
+	if code != 0 || errb != "" || out != "12345\n" {
+		t.Fatalf("%%'f: (%q, %q, %d)", out, errb, code)
+	}
+	// A width in --format pads the number.
+	out, _, code = runTool(t, "", "--format=%10f", "--to=si", "1500")
+	if code != 0 || out != "       1.5K\n" {
+		t.Fatalf("%%10f: (%q, %d)", out, code)
+	}
+}
+
+// Whitespace-shaped input keeps its shape: a field with leading
+// whitespace is implicitly padded to its original width.
+func TestNumfmtImplicitPadding(t *testing.T) {
+	out, errb, code := runTool(t, "  5000  x\n", "--to=si")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if out != "  5.0K  x\n" {
+		t.Fatalf("out=%q", out)
+	}
+	out, _, code = runTool(t, "1000 hello\n", "--to=si")
+	if code != 0 || out != "1.0K hello\n" {
+		t.Fatalf("field 1 default: (%q, %d)", out, code)
 	}
 }

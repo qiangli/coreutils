@@ -1,4 +1,8 @@
 // Package sumcmd implements the legacy sum(1) checksum utility.
+//
+// Implemented flags: -r (BSD algorithm, the default; GNU defines no
+// long form, so it is pre-parsed manually) and -s/--sysv (System V
+// algorithm). When both are given the last one wins, as in GNU.
 package sumcmd
 
 import (
@@ -13,41 +17,74 @@ import (
 var cmd = &tool.Tool{
 	Name:     "sum",
 	Synopsis: "Print checksum and block count for each FILE. With no FILE, or when FILE is -, read standard input.",
-	Usage:    "sum [OPTION]... [FILE]...",
+	Usage: "sum [OPTION]... [FILE]...\n\n" +
+		"  -r          use BSD sum algorithm (the default), use 1K blocks\n" +
+		"  -s, --sysv  use System V sum algorithm, use 512 bytes blocks",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	// GNU sum's -r has no long form; pre-parse -r/-s (clusters like
+	// -rs included) and --sysv manually so the LAST one given wins,
+	// then hand everything else to the framework parser.
+	sysv := false
+	rest := make([]string, 0, len(args))
+preparse:
+	for idx, a := range args {
+		switch {
+		case a == "--":
+			rest = append(rest, args[idx:]...)
+			break preparse
+		case a == "--sysv":
+			sysv = true
+			continue
+		case len(a) > 1 && a[0] == '-' && a[1] != '-':
+			cluster := a[1:]
+			kept := make([]byte, 0, len(cluster))
+			for i := 0; i < len(cluster); i++ {
+				switch cluster[i] {
+				case 'r':
+					sysv = false
+				case 's':
+					sysv = true
+				default:
+					kept = append(kept, cluster[i:]...)
+					i = len(cluster)
+				}
+			}
+			if len(kept) > 0 {
+				rest = append(rest, "-"+string(kept))
+			}
+			continue
+		}
+		rest = append(rest, a)
+	}
 	fs := tool.NewFlags(cmd.Name)
-	bsd := fs.BoolP("bsd", "r", false, "use BSD checksum algorithm and 1K blocks")
-	sysv := fs.BoolP("sysv", "s", false, "use System V checksum algorithm and 512-byte blocks")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
 	}
-	if *bsd && *sysv {
-		return tool.UsageError(rc, cmd, "cannot combine -r and -s")
-	}
-	if len(operands) == 0 {
+	withName := len(operands) > 0
+	if !withName {
 		operands = []string{"-"}
 	}
 	exit := 0
 	for _, name := range operands {
-		result, err := sumOperand(rc, name, *sysv)
+		result, err := sumOperand(rc, name, sysv)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "sum: %s: %s\n", name, errMsg(err))
 			exit = 1
 			continue
 		}
-		width := 5
-		if *sysv {
-			width = 1
+		suffix := ""
+		if withName {
+			suffix = " " + name
 		}
-		if name == "-" {
-			fmt.Fprintf(rc.Out, "%0*d %*d\n", width, result.checksum, width, result.blocks)
+		if sysv {
+			fmt.Fprintf(rc.Out, "%d %d%s\n", result.checksum, result.blocks, suffix)
 		} else {
-			fmt.Fprintf(rc.Out, "%0*d %*d %s\n", width, result.checksum, width, result.blocks, name)
+			fmt.Fprintf(rc.Out, "%05d %5d%s\n", result.checksum, result.blocks, suffix)
 		}
 	}
 	return exit

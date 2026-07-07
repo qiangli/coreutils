@@ -5,7 +5,9 @@ package odcmd
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -22,6 +24,9 @@ var cmd = &tool.Tool{
 	Usage:    "od [OPTION]... [FILE]...",
 }
 
+// GNU od's exact (lowercase) diagnostic for -j past the end of input.
+var errSkipPastEOF = errors.New("cannot skip past end of combined input")
+
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type options struct {
@@ -32,6 +37,7 @@ type options struct {
 	limit     int64
 	skip      int64
 	width     int
+	showAll   bool
 }
 
 type dumpFormat struct {
@@ -48,19 +54,19 @@ func run(rc *tool.RunContext, args []string) int {
 	width := fs.IntP("width", "w", 16, "output BYTES bytes per line")
 	endianText := fs.String("endian", "little", "select byte order for multi-byte formats: little or big")
 	stringsText := fs.StringP("strings", "S", "", "output printable strings at least BYTES long")
-	namedChars := fs.BoolP("named-chars", "a", false, "same as -t c")
+	namedChars := fs.BoolP("named-chars", "a", false, "same as -t a")
 	octalBytes := fs.BoolP("octal-bytes", "b", false, "same as -t o1")
 	chars := fs.BoolP("characters", "c", false, "same as -t c")
 	unsignedDecimal := fs.BoolP("unsigned-decimal-2", "d", false, "same as -t u2")
 	octalWords := fs.BoolP("octal-2", "o", false, "same as -t o2")
 	hexWords := fs.BoolP("hex-2", "x", false, "same as -t x2")
-	_ = fs.BoolP("output-duplicates", "v", false, "do not use * to mark line suppression")
+	showAll := fs.BoolP("output-duplicates", "v", false, "do not use * to mark line suppression")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
 	if len(operands) > 0 && strings.HasPrefix(operands[len(operands)-1], "+") {
-		traditionalSkip, err := parseBytes(strings.TrimPrefix(operands[len(operands)-1], "+"))
+		traditionalSkip, err := parseTraditionalOffset(strings.TrimPrefix(operands[len(operands)-1], "+"))
 		if err != nil || traditionalSkip < 0 {
 			return tool.UsageError(rc, cmd, "invalid traditional skip offset: %q", operands[len(operands)-1])
 		}
@@ -72,7 +78,7 @@ func run(rc *tool.RunContext, args []string) int {
 		on     bool
 		format string
 	}{
-		{*namedChars, "c"},
+		{*namedChars, "a"},
 		{*octalBytes, "o1"},
 		{*chars, "c"},
 		{*unsignedDecimal, "u2"},
@@ -122,7 +128,7 @@ func run(rc *tool.RunContext, args []string) int {
 			minString = n
 		}
 	}
-	o := options{addrRadix: *addrRadix, formats: parsedFormats, endian: byteOrder, strings: minString, limit: limit, skip: skip, width: *width}
+	o := options{addrRadix: *addrRadix, formats: parsedFormats, endian: byteOrder, strings: minString, limit: limit, skip: skip, width: *width, showAll: *showAll}
 	if o.addrRadix != "d" && o.addrRadix != "o" && o.addrRadix != "x" && o.addrRadix != "n" {
 		return tool.UsageError(rc, cmd, "invalid address radix: %q", o.addrRadix)
 	}
@@ -142,7 +148,11 @@ func run(rc *tool.RunContext, args []string) int {
 
 	w := bufio.NewWriter(rc.Out)
 	if err := dump(r, w, o); err != nil {
-		fmt.Fprintf(rc.Err, "od: %v\n", tool.SysErr(err))
+		if errors.Is(err, errSkipPastEOF) {
+			fmt.Fprintf(rc.Err, "od: %v\n", err)
+		} else {
+			fmt.Fprintf(rc.Err, "od: %v\n", tool.SysErr(err))
+		}
 		exit = 1
 	}
 	if err := w.Flush(); err != nil {
@@ -193,10 +203,7 @@ func dump(r io.Reader, w *bufio.Writer, o options) error {
 			return err
 		}
 		if n < o.skip {
-			if o.addrRadix != "n" {
-				_, err = fmt.Fprintln(w, formatOffset(o.skip, o.addrRadix))
-			}
-			return err
+			return errSkipPastEOF
 		}
 	}
 	if o.limit >= 0 {
@@ -206,12 +213,27 @@ func dump(r io.Reader, w *bufio.Writer, o options) error {
 		return dumpStrings(r, w, o)
 	}
 	block := make([]byte, o.width)
+	prev := make([]byte, 0, o.width)
 	offset := o.skip
+	suppressing := false
 	for {
 		n, err := io.ReadFull(r, block)
 		if n > 0 {
-			if werr := writeLine(w, offset, block[:n], o); werr != nil {
-				return werr
+			// GNU default: consecutive identical lines are elided and
+			// marked with a single "*"; -v outputs them all.
+			if !o.showAll && n == o.width && len(prev) == o.width && bytes.Equal(block[:n], prev) {
+				if !suppressing {
+					if _, werr := w.WriteString("*\n"); werr != nil {
+						return werr
+					}
+					suppressing = true
+				}
+			} else {
+				suppressing = false
+				prev = append(prev[:0], block[:n]...)
+				if werr := writeLine(w, offset, block[:n], o); werr != nil {
+					return werr
+				}
 			}
 			offset += int64(n)
 		}
@@ -296,7 +318,11 @@ func writeFormat(w *bufio.Writer, b []byte, format dumpFormat, order binary.Byte
 		}
 	case "c":
 		for _, c := range b {
-			fmt.Fprintf(w, " %3s", charName(c))
+			fmt.Fprintf(w, " %3s", cChar(c))
+		}
+	case "a":
+		for _, c := range b {
+			fmt.Fprintf(w, " %3s", namedChar(c))
 		}
 	}
 	return nil
@@ -353,6 +379,10 @@ func words(b []byte, size int, order binary.ByteOrder) []uint64 {
 	return out
 }
 
+// dumpStrings implements -S per GNU: a string constant is at least
+// o.strings printable characters followed by a NUL byte. Runs cut off
+// by EOF (no NUL) are not printed, and no trailing offset line is
+// emitted.
 func dumpStrings(r io.Reader, w *bufio.Writer, o options) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -366,7 +396,7 @@ func dumpStrings(r io.Reader, w *bufio.Writer, o options) error {
 			}
 			continue
 		}
-		if start >= 0 && i-start >= o.strings {
+		if c == 0 && start >= 0 && i-start >= o.strings {
 			if o.addrRadix != "n" {
 				fmt.Fprintf(w, "%s ", formatOffset(o.skip+int64(start), o.addrRadix))
 			}
@@ -374,20 +404,11 @@ func dumpStrings(r io.Reader, w *bufio.Writer, o options) error {
 		}
 		start = -1
 	}
-	if start >= 0 && len(data)-start >= o.strings {
-		if o.addrRadix != "n" {
-			fmt.Fprintf(w, "%s ", formatOffset(o.skip+int64(start), o.addrRadix))
-		}
-		fmt.Fprintf(w, "%s\n", data[start:])
-	}
-	if o.addrRadix != "n" {
-		_, err = fmt.Fprintln(w, formatOffset(o.skip+int64(len(data)), o.addrRadix))
-	}
-	return err
+	return nil
 }
 
 func isStringByte(c byte) bool {
-	return c == '\t' || (c >= 32 && c <= 126)
+	return c >= 32 && c <= 126
 }
 
 func parseFormats(values []string) ([]dumpFormat, error) {
@@ -405,8 +426,8 @@ func parseFormats(values []string) ([]dumpFormat, error) {
 }
 
 func parseFormat(s string) (dumpFormat, error) {
-	if s == "c" {
-		return dumpFormat{kind: "c", size: 1}, nil
+	if s == "c" || s == "a" {
+		return dumpFormat{kind: s, size: 1}, nil
 	}
 	if len(s) < 2 {
 		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
@@ -427,33 +448,84 @@ func formatOffset(n int64, radix string) string {
 	case "d":
 		return fmt.Sprintf("%07d", n)
 	case "x":
-		return fmt.Sprintf("%07x", n)
+		// GNU prints hexadecimal addresses 6 digits wide.
+		return fmt.Sprintf("%06x", n)
 	default:
 		return fmt.Sprintf("%07o", n)
 	}
 }
 
-func charName(c byte) string {
+// parseTraditionalOffset parses the pre-POSIX trailing [+]offset
+// operand: octal by default, decimal with a trailing '.', hex with a
+// leading 0x/0X, and a trailing 'b' multiplies by 512.
+func parseTraditionalOffset(s string) (int64, error) {
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		return strconv.ParseInt(s[2:], 16, 64)
+	}
+	mult := int64(1)
+	if strings.HasSuffix(s, "b") {
+		mult = 512
+		s = strings.TrimSuffix(s, "b")
+	}
+	base := 8
+	if strings.HasSuffix(s, ".") {
+		base = 10
+		s = strings.TrimSuffix(s, ".")
+	}
+	n, err := strconv.ParseInt(s, base, 64)
+	if err != nil {
+		return 0, err
+	}
+	return n * mult, nil
+}
+
+// cChar renders one byte for -t c: printable bytes as themselves
+// (space stays a blank), the C backslash escapes, 3-digit octal for
+// the rest.
+func cChar(c byte) string {
 	switch c {
 	case 0:
 		return "\\0"
-	case '\n':
-		return "\\n"
-	case '\t':
-		return "\\t"
-	case '\r':
-		return "\\r"
+	case '\a':
+		return "\\a"
 	case '\b':
 		return "\\b"
+	case '\t':
+		return "\\t"
+	case '\n':
+		return "\\n"
+	case '\v':
+		return "\\v"
 	case '\f':
 		return "\\f"
-	case ' ':
-		return "sp"
+	case '\r':
+		return "\\r"
 	}
 	if c >= 32 && c <= 126 {
 		return string(c)
 	}
 	return fmt.Sprintf("%03o", c)
+}
+
+// asciiNames are the -t a named characters for bytes 0-32 (POSIX od).
+var asciiNames = [...]string{
+	"nul", "soh", "stx", "etx", "eot", "enq", "ack", "bel",
+	"bs", "ht", "nl", "vt", "ff", "cr", "so", "si",
+	"dle", "dc1", "dc2", "dc3", "dc4", "nak", "syn", "etb",
+	"can", "em", "sub", "esc", "fs", "gs", "rs", "us", "sp",
+}
+
+// namedChar renders one byte for -t a: named characters, ignoring the
+// high-order bit (GNU od manual).
+func namedChar(c byte) string {
+	c &= 0x7f
+	if int(c) < len(asciiNames) {
+		return asciiNames[c]
+	}
+	if c == 0x7f {
+		return "del"
+	}
+	return string(c)
 }
 
 var multipliers = map[string]int64{

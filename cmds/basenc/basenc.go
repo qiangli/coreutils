@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/coreutils/cmds/internal/hashenc"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -34,20 +35,26 @@ type encodingSpec struct {
 	decodeAll  func([]byte, bool) ([]byte, error)
 }
 
+// encodingNames lists the encoding-selection flags in registration
+// order; when several are given, GNU uses the last one on the command
+// line.
+var encodingNames = []string{
+	"base64", "base64url", "base32", "base32hex", "base16",
+	"base2lsbf", "base2msbf", "z85", "base58",
+}
+
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
-	base64Flag := fs.Bool("base64", false, "same as the base64 program")
-	base64URLFlag := fs.Bool("base64url", false, "file- and url-safe base64")
-	base32Flag := fs.Bool("base32", false, "same as the base32 program")
-	base32HexFlag := fs.Bool("base32hex", false, "extended hex alphabet base32")
-	base16Flag := fs.Bool("base16", false, "hex encoding")
-	base2LSBFlag := fs.Bool("base2lsbf", false, "bit string with least significant bit first")
-	base2MSBFlag := fs.Bool("base2msbf", false, "bit string with most significant bit first")
-	z85Flag := fs.Bool("z85", false, "ascii85-like encoding")
-	base58Flag := fs.Bool("base58", false, "visually unambiguous base58 encoding")
+	fs.Bool("base64", false, "same as the base64 program")
+	fs.Bool("base64url", false, "file- and url-safe base64")
+	fs.Bool("base32", false, "same as the base32 program")
+	fs.Bool("base32hex", false, "extended hex alphabet base32")
+	fs.Bool("base16", false, "hex encoding")
+	fs.Bool("base2lsbf", false, "bit string with least significant bit first")
+	fs.Bool("base2msbf", false, "bit string with most significant bit first")
+	fs.Bool("z85", false, "ascii85-like encoding")
+	fs.Bool("base58", false, "visually unambiguous base58 encoding")
 	decode := fs.BoolP("decode", "d", false, "decode data")
-	decodeAlias := fs.BoolP("decode-alias", "D", false, "decode data")
-	_ = fs.MarkHidden("decode-alias")
 	ignore := fs.BoolP("ignore-garbage", "i", false, "when decoding, ignore non-alphabet characters")
 	wrap := fs.StringP("wrap", "w", "76", "wrap encoded lines after COLS character (default 76); use 0 to disable line wrapping")
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -59,13 +66,32 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "basenc: invalid wrap size: '%s'\n", *wrap)
 		return 1
 	}
-	specs := selectedEncodings(*base64Flag, *base64URLFlag, *base32Flag, *base32HexFlag, *base16Flag, *base2LSBFlag, *base2MSBFlag, *z85Flag, *base58Flag)
-	if len(specs) == 0 {
+	// GNU takes the LAST encoding flag given, so recover the command-
+	// line order by scanning the raw args (each selector is an exact
+	// long flag with no argument).
+	selected := ""
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		for _, n := range encodingNames {
+			if a == "--"+n {
+				selected = n
+			}
+		}
+	}
+	if selected == "" {
+		// Fallback for spellings the scan doesn't see (--base64=true).
+		for _, n := range encodingNames {
+			if v, _ := fs.GetBool(n); v {
+				selected = n
+			}
+		}
+	}
+	if selected == "" {
 		return tool.UsageError(rc, cmd, "missing encoding type")
 	}
-	if len(specs) > 1 {
-		return tool.UsageError(rc, cmd, "multiple encoding types specified")
-	}
+	spec := encodingSpecFor(selected)
 	if len(operands) > 1 {
 		return tool.UsageError(rc, cmd, "extra operand %q", operands[1])
 	}
@@ -81,16 +107,16 @@ func run(rc *tool.RunContext, args []string) int {
 	if closeFn != nil {
 		defer closeFn()
 	}
-	if *decode || *decodeAlias {
-		return decodeBase(rc, specs[0], src, *ignore)
+	if *decode {
+		return decodeBase(rc, spec, src, *ignore)
 	}
-	return encodeBase(rc, specs[0], src, cols)
+	return encodeBase(rc, spec, src, cols)
 }
 
-func selectedEncodings(b64, b64URL, b32, b32Hex, b16, b2LSB, b2MSB, z85, b58 bool) []encodingSpec {
-	var out []encodingSpec
-	if b64 {
-		out = append(out, encodingSpec{
+func encodingSpecFor(name string) encodingSpec {
+	switch name {
+	case "base64":
+		return encodingSpec{
 			name: "base64",
 			newEncoder: func(w io.Writer) io.WriteCloser {
 				return base64.NewEncoder(base64.StdEncoding, w)
@@ -101,10 +127,9 @@ func selectedEncodings(b64, b64URL, b32, b32Hex, b16, b2LSB, b2MSB, z85, b58 boo
 			inAlphabet: func(b byte) bool {
 				return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '+' || b == '/'
 			},
-		})
-	}
-	if b64URL {
-		out = append(out, encodingSpec{
+		}
+	case "base64url":
+		return encodingSpec{
 			name: "base64url",
 			newEncoder: func(w io.Writer) io.WriteCloser {
 				return base64.NewEncoder(base64.URLEncoding, w)
@@ -115,10 +140,9 @@ func selectedEncodings(b64, b64URL, b32, b32Hex, b16, b2LSB, b2MSB, z85, b58 boo
 			inAlphabet: func(b byte) bool {
 				return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '-' || b == '_'
 			},
-		})
-	}
-	if b32 {
-		out = append(out, encodingSpec{
+		}
+	case "base32":
+		return encodingSpec{
 			name: "base32",
 			newEncoder: func(w io.Writer) io.WriteCloser {
 				return base32.NewEncoder(base32.StdEncoding, w)
@@ -129,10 +153,9 @@ func selectedEncodings(b64, b64URL, b32, b32Hex, b16, b2LSB, b2MSB, z85, b58 boo
 			inAlphabet: func(b byte) bool {
 				return b >= 'A' && b <= 'Z' || b >= '2' && b <= '7'
 			},
-		})
-	}
-	if b32Hex {
-		out = append(out, encodingSpec{
+		}
+	case "base32hex":
+		return encodingSpec{
 			name: "base32hex",
 			newEncoder: func(w io.Writer) io.WriteCloser {
 				return base32.NewEncoder(base32.HexEncoding, w)
@@ -143,45 +166,55 @@ func selectedEncodings(b64, b64URL, b32, b32Hex, b16, b2LSB, b2MSB, z85, b58 boo
 			inAlphabet: func(b byte) bool {
 				return b >= 'A' && b <= 'V' || b >= '0' && b <= '9'
 			},
-		})
-	}
-	if b16 {
-		out = append(out, encodingSpec{
+		}
+	case "base16":
+		return encodingSpec{
 			name: "base16",
 			newEncoder: func(w io.Writer) io.WriteCloser {
 				return &upperHexEncoder{w: w}
 			},
-			newDecoder: func(r io.Reader) io.Reader {
-				return hex.NewDecoder(r)
-			},
 			inAlphabet: func(b byte) bool {
 				return b >= 'A' && b <= 'F' || b >= 'a' && b <= 'f' || b >= '0' && b <= '9'
 			},
-		})
-	}
-	if b2LSB {
-		out = append(out, base2Spec("base2lsbf", true))
-	}
-	if b2MSB {
-		out = append(out, base2Spec("base2msbf", false))
-	}
-	if z85 {
-		out = append(out, encodingSpec{
+			decodeAll: decodeBase16,
+		}
+	case "base2lsbf":
+		return base2Spec("base2lsbf", true)
+	case "base2msbf":
+		return base2Spec("base2msbf", false)
+	case "z85":
+		return encodingSpec{
 			name:       "z85",
 			inAlphabet: isZ85Byte,
 			encodeAll:  encodeZ85,
 			decodeAll:  decodeZ85,
-		})
-	}
-	if b58 {
-		out = append(out, encodingSpec{
+		}
+	case "base58":
+		return encodingSpec{
 			name:       "base58",
 			inAlphabet: isBase58Byte,
 			encodeAll:  encodeBase58,
 			decodeAll:  decodeBase58,
-		})
+		}
 	}
-	return out
+	panic("basenc: unknown encoding " + name)
+}
+
+// decodeBase16 decodes hex input. '=' is never valid base16 (it is
+// dropped by -i like any other garbage byte); an odd number of hex
+// digits at EOF is invalid input.
+func decodeBase16(data []byte, ignore bool) ([]byte, error) {
+	encoded := filterBytes(data, func(b byte) bool {
+		return b >= 'A' && b <= 'F' || b >= 'a' && b <= 'f' || b >= '0' && b <= '9'
+	}, ignore)
+	if encoded == nil || len(encoded)%2 != 0 {
+		return nil, errInvalidInput
+	}
+	out := make([]byte, hex.DecodedLen(len(encoded)))
+	if _, err := hex.Decode(out, encoded); err != nil {
+		return nil, errInvalidInput
+	}
+	return out, nil
 }
 
 func openInput(rc *tool.RunContext, name string) (io.Reader, func() error, error) {
@@ -239,38 +272,25 @@ func encodeBase(rc *tool.RunContext, spec encodingSpec, src io.Reader, cols int6
 }
 
 func decodeBase(rc *tool.RunContext, spec encodingSpec, src io.Reader, ignore bool) int {
-	if spec.decodeAll != nil {
-		data, err := io.ReadAll(src)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "basenc: %v\n", err)
-			return 1
-		}
-		decoded, err := spec.decodeAll(data, ignore)
-		if err != nil {
-			fmt.Fprintln(rc.Err, "basenc: invalid input")
-			return 1
-		}
-		if _, err := rc.Out.Write(decoded); err != nil {
-			fmt.Fprintf(rc.Err, "basenc: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-	bw := bufio.NewWriterSize(rc.Out, 64<<10)
-	fr := &filterReader{r: src, inAlphabet: spec.inAlphabet, ignore: ignore}
-	dec := spec.newDecoder(fr)
-	if _, err := io.Copy(bw, dec); err != nil {
-		var b64 base64.CorruptInputError
-		var b32 base32.CorruptInputError
-		if errors.Is(err, errInvalidInput) || errors.Is(err, io.ErrUnexpectedEOF) ||
-			errors.As(err, &b64) || errors.As(err, &b32) || strings.Contains(err.Error(), "invalid byte") {
-			fmt.Fprintln(rc.Err, "basenc: invalid input")
-		} else {
-			fmt.Fprintf(rc.Err, "basenc: %v\n", err)
-		}
+	data, err := io.ReadAll(src)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "basenc: %v\n", err)
 		return 1
 	}
-	if err := bw.Flush(); err != nil {
+	var decoded []byte
+	if spec.decodeAll != nil {
+		decoded, err = spec.decodeAll(data, ignore)
+	} else {
+		// RFC 4648 padded encodings share the GNU >= 9.5 decode rules
+		// (auto-pad at EOF, reject non-zero padding bits) with the
+		// standalone base64/base32 tools.
+		decoded, err = hashenc.DecodeBase(data, spec.inAlphabet, ignore, spec.newEncoder, spec.newDecoder)
+	}
+	if err != nil {
+		fmt.Fprintln(rc.Err, "basenc: invalid input")
+		return 1
+	}
+	if _, err := rc.Out.Write(decoded); err != nil {
 		fmt.Fprintf(rc.Err, "basenc: %v\n", err)
 		return 1
 	}
@@ -368,7 +388,7 @@ func isZ85Byte(b byte) bool {
 
 func encodeZ85(data []byte) ([]byte, error) {
 	if len(data)%4 != 0 {
-		return nil, fmt.Errorf("z85 input length must be a multiple of 4")
+		return nil, fmt.Errorf("invalid input (length must be multiple of 4 characters)")
 	}
 	out := make([]byte, 0, len(data)/4*5)
 	for len(data) > 0 {
@@ -494,40 +514,6 @@ func filterBytes(data []byte, inAlphabet func(byte) bool, ignore bool) []byte {
 }
 
 var errInvalidInput = errors.New("invalid input")
-
-type filterReader struct {
-	r          io.Reader
-	inAlphabet func(byte) bool
-	ignore     bool
-	buf        [4096]byte
-}
-
-func (fr *filterReader) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	max := len(p)
-	if max > len(fr.buf) {
-		max = len(fr.buf)
-	}
-	for {
-		n, err := fr.r.Read(fr.buf[:max])
-		out := 0
-		for _, b := range fr.buf[:n] {
-			switch {
-			case fr.inAlphabet(b) || b == '=':
-				p[out] = b
-				out++
-			case fr.ignore || b == '\n':
-			default:
-				return out, errInvalidInput
-			}
-		}
-		if out > 0 || err != nil {
-			return out, err
-		}
-	}
-}
 
 type wrapWriter struct {
 	w    io.Writer

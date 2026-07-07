@@ -38,7 +38,7 @@ func run(rc *tool.RunContext, args []string) int {
 	header := fs.Int("header", 0, "print the first N header lines without conversion")
 	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
 	round := fs.String("round", "from-zero", "use METHOD for rounding: up, down, from-zero, towards-zero, nearest")
-	grouping := fs.Bool("grouping", false, "use grouped digits in output")
+	grouping := fs.Bool("grouping", false, "group digits per locale rules (no effect in the C locale)")
 	debug := fs.Bool("debug", false, "print warnings about invalid input")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -63,11 +63,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	effectiveFieldSpec := *fieldSpec
-	if !fs.Changed("field") && len(operands) == 0 {
-		effectiveFieldSpec = "-"
-	}
-	fields, code := parseFields(rc, effectiveFieldSpec)
+	fields, code := parseFields(rc, *fieldSpec)
 	if code >= 0 {
 		return code
 	}
@@ -82,12 +78,19 @@ func run(rc *tool.RunContext, args []string) int {
 	if *header < 0 {
 		return tool.UsageError(rc, cmd, "invalid --header value: '%d'", *header)
 	}
+	cleanFormat, precision, width, leftAlign, code := validateFormat(rc, *format)
+	if code >= 0 {
+		return code
+	}
 	opts := formatOptions{
 		from:          fromScale,
 		to:            toScale,
 		fromUnit:      fromUnitValue,
 		toUnit:        toUnitValue,
-		format:        *format,
+		format:        cleanFormat,
+		precision:     precision,
+		width:         width,
+		leftAlign:     leftAlign,
 		padding:       *padding,
 		suffix:        *suffix,
 		unitSeparator: *unitSeparator,
@@ -146,6 +149,9 @@ type formatOptions struct {
 	fromUnit      float64
 	toUnit        float64
 	format        string
+	precision     int // explicit .N from --format, -1 if none
+	width         int // field width from --format, 0 if none
+	leftAlign     bool
 	padding       int
 	suffix        string
 	unitSeparator string
@@ -153,6 +159,70 @@ type formatOptions struct {
 	round         roundMode
 	grouping      bool
 	debug         bool
+}
+
+// validateFormat checks --format per GNU: exactly one directive of the
+// form %[0]['][-][N][.N]f, with optional surrounding text. It returns
+// the format with any ' flag removed (--grouping and the ' flag have no
+// effect in the C locale), the explicit precision (-1 if none), and the
+// field width.
+func validateFormat(rc *tool.RunContext, format string) (clean string, precision, width int, leftAlign bool, code int) {
+	var b strings.Builder
+	found := false
+	precision = -1
+	i := 0
+	for i < len(format) {
+		c := format[i]
+		if c != '%' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if i+1 < len(format) && format[i+1] == '%' {
+			b.WriteString("%%")
+			i += 2
+			continue
+		}
+		if found {
+			return "", 0, 0, false, tool.UsageError(rc, cmd, "format '%s' has too many %% directives", format)
+		}
+		found = true
+		b.WriteByte('%')
+		i++
+		for i < len(format) && (format[i] == '0' || format[i] == '-' || format[i] == '\'') {
+			if format[i] == '-' {
+				leftAlign = true
+			}
+			if format[i] != '\'' {
+				b.WriteByte(format[i])
+			}
+			i++
+		}
+		for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+			width = width*10 + int(format[i]-'0')
+			b.WriteByte(format[i])
+			i++
+		}
+		if i < len(format) && format[i] == '.' {
+			b.WriteByte('.')
+			i++
+			precision = 0
+			for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				precision = precision*10 + int(format[i]-'0')
+				b.WriteByte(format[i])
+				i++
+			}
+		}
+		if i >= len(format) || format[i] != 'f' {
+			return "", 0, 0, false, tool.UsageError(rc, cmd, "invalid format '%s', directive must be %%[0]['][-][N][.][N]f", format)
+		}
+		b.WriteByte('f')
+		i++
+	}
+	if !found {
+		return "", 0, 0, false, tool.UsageError(rc, cmd, "format '%s' has no %% directive", format)
+	}
+	return b.String(), precision, width, leftAlign, -1
 }
 
 type invalidMode int
@@ -319,27 +389,70 @@ func selectedField(n int, ranges []fieldRange) bool {
 	return false
 }
 
+// wsToken is one field with its preceding whitespace run; a trailing
+// whitespace-only token has an empty field.
+type wsToken struct {
+	prefix string
+	field  string
+}
+
+func tokenizeWhitespace(line string) []wsToken {
+	var tokens []wsToken
+	i := 0
+	for i < len(line) {
+		start := i
+		for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+			i++
+		}
+		prefix := line[start:i]
+		start = i
+		for i < len(line) && line[i] != ' ' && line[i] != '\t' {
+			i++
+		}
+		tokens = append(tokens, wsToken{prefix: prefix, field: line[start:i]})
+	}
+	return tokens
+}
+
 func formatLine(rc *tool.RunContext, line, delimiter string, fields []fieldRange, opts formatOptions) (string, bool) {
 	if delimiter == "" {
-		parts := strings.Fields(line)
+		// GNU preserves the shape of whitespace-delimited input: a field
+		// with leading whitespace is implicitly padded to its original
+		// width (prefix + field), right-aligned.
+		var b strings.Builder
 		ok := true
-		for i, part := range parts {
-			if !selectedField(i+1, fields) {
+		for i, tk := range tokenizeWhitespace(line) {
+			n := i + 1
+			if tk.field == "" || !selectedField(n, fields) {
+				b.WriteString(tk.prefix)
+				b.WriteString(tk.field)
 				continue
 			}
-			out, fieldOK := formatOne(rc, part, opts)
+			out, fieldOK := formatOne(rc, tk.field, opts)
 			if !fieldOK {
 				ok = false
 				if opts.invalid == invalidAbort {
 					return line, false
 				}
-				if opts.invalid == invalidFail || opts.invalid == invalidWarn || opts.invalid == invalidIgnore {
-					continue
+				b.WriteString(tk.prefix)
+				b.WriteString(tk.field)
+				continue
+			}
+			prefix := tk.prefix
+			sep := ""
+			if n > 1 && len(prefix) > 0 {
+				sep = " "
+				prefix = prefix[1:]
+			}
+			if len(tk.prefix) > 0 && opts.padding == 0 {
+				if w := len(prefix) + len(tk.field); len(out) < w {
+					out = strings.Repeat(" ", w-len(out)) + out
 				}
 			}
-			parts[i] = out
+			b.WriteString(sep)
+			b.WriteString(out)
 		}
-		return strings.Join(parts, " "), ok
+		return b.String(), ok
 	}
 	parts := strings.Split(line, delimiter)
 	ok := true
@@ -374,7 +487,7 @@ func formatOne(rc *tool.RunContext, text string, opts formatOptions) (string, bo
 	}
 	n *= opts.fromUnit
 	n /= opts.toUnit
-	out := formatNumber(n, opts.to, opts.format, opts.unitSeparator, opts.round, opts.grouping)
+	out := formatNumber(n, opts)
 	if opts.suffix != "" {
 		out += opts.suffix
 	}
@@ -386,50 +499,9 @@ func formatOne(rc *tool.RunContext, text string, opts formatOptions) (string, bo
 	return out, true
 }
 
-func roundValue(n float64, mode roundMode, format string) float64 {
-	scale := math.Pow10(formatPrecision(format))
-	n *= scale
-	switch mode {
-	case roundUp:
-		n = math.Ceil(n)
-	case roundDown:
-		n = math.Floor(n)
-	case roundTowardsZero:
-		n = math.Trunc(n)
-	case roundNearest:
-		n = math.Round(n)
-	case roundFromZero:
-		if n < 0 {
-			n = math.Floor(n)
-		} else {
-			n = math.Ceil(n)
-		}
-	}
-	return n / scale
-}
-
-func formatPrecision(format string) int {
-	percent := strings.LastIndexByte(format, '%')
-	if percent < 0 {
-		return 6
-	}
-	dot := strings.LastIndexByte(format[percent:], '.')
-	if dot < 0 {
-		return 6
-	}
-	dot += percent
-	end := dot + 1
-	for end < len(format) && format[end] >= '0' && format[end] <= '9' {
-		end++
-	}
-	if end == dot+1 {
-		return 6
-	}
-	n, err := strconv.Atoi(format[dot+1 : end])
-	if err != nil || n < 0 || n > 12 {
-		return 6
-	}
-	return n
+func roundValue(n float64, mode roundMode, precision int) float64 {
+	scale := math.Pow10(precision)
+	return roundAt(n*scale, mode) / scale
 }
 
 func parseNumber(s string, sc scale) (float64, error) {
@@ -495,73 +567,101 @@ func unitMultiplier(unit string, sc scale) (float64, bool) {
 		}
 		unit = strings.TrimSuffix(unit, "i")
 	}
+	if len(unit) != 1 {
+		return 0, false
+	}
 	units := "KMGTPEZY"
 	i := strings.IndexRune(units, rune(unit[0]))
-	if i < 0 || len(unit) != 1 {
+	if i < 0 {
 		return 0, false
 	}
 	return math.Pow(unitBase(sc), float64(i+1)), true
 }
 
-func formatNumber(n float64, sc scale, format, unitSeparator string, round roundMode, grouping bool) string {
-	if sc == scaleNone {
-		out := trimFloat(fmt.Sprintf(format, roundValue(n, round, format)))
-		if grouping {
-			out = groupNumber(out)
+// humanRound implements GNU's scaled rounding: if the scaled value is
+// less than 10, round to one decimal place; otherwise round to an
+// integer (rounding per the selected --round method).
+func humanRound(v float64, mode roundMode) float64 {
+	if math.Abs(v) < 10 {
+		return roundAt(v*10, mode) / 10
+	}
+	return roundAt(v, mode)
+}
+
+func roundAt(n float64, mode roundMode) float64 {
+	switch mode {
+	case roundUp:
+		return math.Ceil(n)
+	case roundDown:
+		return math.Floor(n)
+	case roundTowardsZero:
+		return math.Trunc(n)
+	case roundNearest:
+		return math.Round(n)
+	default: // roundFromZero
+		if n < 0 {
+			return math.Floor(n)
 		}
-		return out
+		return math.Ceil(n)
+	}
+}
+
+func formatNumber(n float64, opts formatOptions) string {
+	sc := opts.to
+	if sc == scaleNone {
+		if opts.precision >= 0 {
+			return fmt.Sprintf(opts.format, roundValue(n, opts.round, opts.precision))
+		}
+		return applyWidth(trimFloat(fmt.Sprintf("%f", roundValue(n, opts.round, 6))), opts)
 	}
 	base := unitBase(sc)
 	units := []string{"", "K", "M", "G", "T", "P", "E", "Z", "Y"}
 	pow := 0
-	for math.Abs(n) >= base && pow < len(units)-1 {
-		n /= base
-		pow++
+	var v float64
+	for {
+		v = n / math.Pow(base, float64(pow))
+		if opts.precision >= 0 {
+			v = roundValue(v, opts.round, opts.precision)
+		} else {
+			v = humanRound(v, opts.round)
+		}
+		// Rounding can carry into the next unit (999999 -> 1000K -> 1.0M).
+		if math.Abs(v) >= base && pow < len(units)-1 {
+			pow++
+			continue
+		}
+		break
 	}
 	suffix := units[pow]
 	if sc == scaleIECI && suffix != "" {
 		suffix += "i"
 	}
-	out := trimFloat(fmt.Sprintf(format, roundValue(n, round, format)))
-	if grouping {
-		out = groupNumber(out)
+	var out string
+	if opts.precision >= 0 {
+		out = fmt.Sprintf(opts.format, v)
+	} else if pow > 0 && math.Abs(v) < 10 {
+		// GNU prints one decimal for scaled values below 10 (1.0K).
+		out = applyWidth(strconv.FormatFloat(v, 'f', 1, 64), opts)
+	} else {
+		out = applyWidth(strconv.FormatFloat(v, 'f', -1, 64), opts)
 	}
 	if suffix != "" {
-		out += unitSeparator + suffix
+		out += opts.unitSeparator + suffix
 	}
 	return out
 }
 
-func groupNumber(s string) string {
-	if strings.ContainsAny(s, "eE") {
+// applyWidth honors a width given in --format (e.g. %10f) on the
+// human-formatted number when no explicit precision was given.
+func applyWidth(s string, opts formatOptions) string {
+	if opts.width <= len(s) {
 		return s
 	}
-	sign := ""
-	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
-		sign = s[:1]
-		s = s[1:]
+	pad := strings.Repeat(" ", opts.width-len(s))
+	if opts.leftAlign {
+		return s + pad
 	}
-	frac := ""
-	if dot := strings.IndexByte(s, '.'); dot >= 0 {
-		frac = s[dot:]
-		s = s[:dot]
-	}
-	if len(s) <= 3 {
-		return sign + s + frac
-	}
-	first := len(s) % 3
-	if first == 0 {
-		first = 3
-	}
-	var b strings.Builder
-	b.WriteString(sign)
-	b.WriteString(s[:first])
-	for i := first; i < len(s); i += 3 {
-		b.WriteByte(',')
-		b.WriteString(s[i : i+3])
-	}
-	b.WriteString(frac)
-	return b.String()
+	return pad + s
 }
 
 func trimFloat(s string) string {

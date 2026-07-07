@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -23,16 +21,15 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
-	tabsValue := fs.StringP("tabs", "t", "8", "use comma-separated tab stops instead of 8")
+	tabsValue := fs.StringArrayP("tabs", "t", []string{"8"}, "have tabs N characters apart, not 8; or use comma- or blank-separated LIST of explicit tab positions (repeatable; the last position may be prefixed with '/' for multiples or '+' for an increment)")
 	initial := fs.BoolP("initial", "i", false, "do not convert tabs after non blanks")
-	noUTF8 := fs.BoolP("no-utf8", "U", false, "interpret input as bytes rather than UTF-8")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
 	tabs, err := parseTabStops(*tabsValue)
 	if err != nil {
-		return tool.UsageError(rc, cmd, "invalid tab size: %q", *tabsValue)
+		return tool.UsageError(rc, cmd, "%v", err)
 	}
 	if len(operands) == 0 {
 		operands = []string{"-"}
@@ -47,7 +44,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := expandStream(r, out, tabs, *initial, *noUTF8); err != nil {
+		if err := expandStream(r, out, tabs, *initial); err != nil {
 			fmt.Fprintf(rc.Err, "expand: %s: %v\n", name, err)
 			status = 1
 		}
@@ -62,150 +59,152 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-func expandStream(r io.Reader, w io.Writer, tabs []int, initial, noUTF8 bool) error {
-	if noUTF8 {
-		return expandBytes(r, w, tabs, initial)
-	}
+func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool) error {
 	br := bufio.NewReader(r)
 	col := 0
-	convertTabs := true
+	convert := true
 	for {
-		ch, size, err := br.ReadRune()
+		ch, _, err := br.ReadRune()
 		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		switch ch {
-		case '\t':
-			if initial && !convertTabs {
-				if _, err := io.WriteString(w, "\t"); err != nil {
-					return err
-				}
-				col = nextStop(col, tabs)
-				continue
-			}
-			n := nextStop(col, tabs) - col
-			if n <= 0 {
-				n = 1
-			}
-			if _, err := io.WriteString(w, strings.Repeat(" ", n)); err != nil {
+		switch {
+		case ch == '\t' && convert:
+			next, _ := tabs.next(col)
+			if _, err := io.WriteString(w, strings.Repeat(" ", next-col)); err != nil {
 				return err
 			}
-			col += n
-		case '\n':
+			col = next
+		case ch == '\n':
 			if _, err := io.WriteString(w, "\n"); err != nil {
 				return err
 			}
 			col = 0
-			convertTabs = true
-		case '\b':
-			if _, err := io.WriteString(w, "\b"); err != nil {
-				return err
-			}
-			if col > 0 {
-				col--
-			}
+			convert = true
 		default:
 			if _, err := io.WriteString(w, string(ch)); err != nil {
 				return err
 			}
-			if ch == utf8.RuneError && size == 1 {
-				col++
-			} else {
-				col++
-			}
-			if ch != ' ' {
-				convertTabs = false
-			}
-		}
-	}
-}
-
-func expandBytes(r io.Reader, w io.Writer, tabs []int, initial bool) error {
-	br := bufio.NewReader(r)
-	col := 0
-	convertTabs := true
-	for {
-		c, err := br.ReadByte()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		switch c {
-		case '\t':
-			if initial && !convertTabs {
-				if _, err := w.Write([]byte{c}); err != nil {
-					return err
+			if convert {
+				if ch == '\b' {
+					if col > 0 {
+						col--
+					}
+				} else {
+					col++
 				}
-				col = nextStop(col, tabs)
-				continue
+				// Under -i, only tabs preceding all non-blank
+				// characters are converted; a backspace also ends
+				// the initial region (GNU treats any non-blank,
+				// including \b, as ending it).
+				if initial && ch != ' ' && ch != '\t' {
+					convert = false
+				}
 			}
-			n := nextStop(col, tabs) - col
-			if n <= 0 {
-				n = 1
+		}
+	}
+}
+
+// tabStops is a parsed --tabs specification, following the GNU manual:
+// a single size repeats every N columns; an explicit ascending list
+// sets individual stops, with tabs beyond the last stop replaced by
+// single spaces unless the last entry carried a '/' (multiples of N
+// beyond the list) or '+' (every N columns past the last explicit
+// stop) prefix.
+type tabStops struct {
+	size      int   // single repeating interval; 0 when stops is authoritative
+	stops     []int // explicit ascending tab stops
+	extend    int   // '/N': stops continue at multiples of N past the list
+	increment int   // '+N': stops continue every N past the last explicit stop
+}
+
+func parseTabStops(list []string) (*tabStops, error) {
+	ts := &tabStops{}
+	entries := strings.FieldsFunc(strings.Join(list, ","), func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+	for i, entry := range entries {
+		e := entry
+		var spec byte
+		if e[0] == '/' || e[0] == '+' {
+			spec = e[0]
+			e = e[1:]
+		}
+		n := 0
+		if e == "" {
+			return nil, fmt.Errorf("tab size contains invalid character(s): %q", entry)
+		}
+		for _, r := range e {
+			if r < '0' || r > '9' {
+				return nil, fmt.Errorf("tab size contains invalid character(s): %q", entry)
 			}
-			if _, err := io.WriteString(w, strings.Repeat(" ", n)); err != nil {
-				return err
+			n = n*10 + int(r-'0')
+			if n > 1<<30 {
+				return nil, fmt.Errorf("tab stop is too large %q", entry)
 			}
-			col += n
-		case '\n':
-			if _, err := w.Write([]byte{c}); err != nil {
-				return err
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("tab size cannot be 0")
+		}
+		switch spec {
+		case '/':
+			if i != len(entries)-1 {
+				return nil, fmt.Errorf("'/' specifier only allowed with the last value")
 			}
-			col = 0
-			convertTabs = true
-		case '\b':
-			if _, err := w.Write([]byte{c}); err != nil {
-				return err
+			ts.extend = n
+		case '+':
+			if i != len(entries)-1 {
+				return nil, fmt.Errorf("'+' specifier only allowed with the last value")
 			}
-			if col > 0 {
-				col--
-			}
+			ts.increment = n
 		default:
-			if _, err := w.Write([]byte{c}); err != nil {
-				return err
+			if len(ts.stops) > 0 && n <= ts.stops[len(ts.stops)-1] {
+				return nil, fmt.Errorf("tab sizes must be ascending")
 			}
-			col++
-			if c != ' ' {
-				convertTabs = false
-			}
+			ts.stops = append(ts.stops, n)
 		}
 	}
+	// Finalize per GNU: no explicit stops means a plain repeating size
+	// (the '/' or '+' value if one was given, else 8); a single stop
+	// with no specifier is also a plain repeating size.
+	if len(ts.stops) == 0 {
+		switch {
+		case ts.extend > 0:
+			ts.size, ts.extend = ts.extend, 0
+		case ts.increment > 0:
+			ts.size, ts.increment = ts.increment, 0
+		default:
+			ts.size = 8
+		}
+	} else if len(ts.stops) == 1 && ts.extend == 0 && ts.increment == 0 {
+		ts.size = ts.stops[0]
+		ts.stops = nil
+	}
+	return ts, nil
 }
 
-func parseTabStops(s string) ([]int, error) {
-	if s == "" {
-		return nil, fmt.Errorf("empty")
+// next returns the first tab stop after col. last reports that col is
+// past the last defined stop (the caller substitutes a single blank).
+func (ts *tabStops) next(col int) (stop int, last bool) {
+	if ts.size > 0 {
+		return col + ts.size - col%ts.size, false
 	}
-	parts := strings.Split(s, ",")
-	out := make([]int, 0, len(parts))
-	prev := 0
-	for _, p := range parts {
-		n, err := strconv.Atoi(strings.TrimSpace(p))
-		if err != nil || n <= 0 || n <= prev {
-			return nil, fmt.Errorf("invalid")
-		}
-		out = append(out, n)
-		prev = n
-	}
-	return out, nil
-}
-
-func nextStop(col int, stops []int) int {
-	if len(stops) == 1 {
-		n := stops[0]
-		return ((col / n) + 1) * n
-	}
-	for _, stop := range stops {
-		if stop > col {
-			return stop
+	for _, s := range ts.stops {
+		if s > col {
+			return s, false
 		}
 	}
-	return col + 1
+	if ts.extend > 0 {
+		return col + ts.extend - col%ts.extend, false
+	}
+	if ts.increment > 0 {
+		end := ts.stops[len(ts.stops)-1]
+		return col + ts.increment - (col-end)%ts.increment, false
+	}
+	return col + 1, true
 }
 
 func openInput(rc *tool.RunContext, name string) (io.Reader, io.Closer, error) {

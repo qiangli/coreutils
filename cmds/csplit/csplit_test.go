@@ -139,3 +139,86 @@ func assertFile(t *testing.T, dir, name, want string) {
 		t.Fatalf("%s=%q want %q", name, got, want)
 	}
 }
+
+// POSIX: a repeated line-number pattern advances by N lines each round
+// (verified against BSD/GNU csplit: pieces 1-2 / 3-5 / rest).
+func TestCsplitLineNumberRepeatAdvances(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "in", "3", "{1}")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	assertFile(t, dir, "xx00", "l1\nl2\n")
+	assertFile(t, dir, "xx01", "l3\nl4\nl5\n")
+	assertFile(t, dir, "xx02", "l6\nl7\nl8\n")
+}
+
+// A line-number pattern with {*} repeats until the input is exhausted
+// (this used to loop forever).
+func TestCsplitLineNumberRepeatToEOF(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\nl4\nl5\nl6\nl7\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "in", "2", "{*}")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	assertFile(t, dir, "xx00", "l1\n")
+	assertFile(t, dir, "xx01", "l2\nl3\n")
+	assertFile(t, dir, "xx02", "l4\nl5\n")
+	assertFile(t, dir, "xx03", "l6\nl7\n")
+}
+
+// An explicit repeat count that runs past EOF is an error.
+func TestCsplitLineNumberRepeatOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\nl4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "in", "3", "{5}")
+	if code != 2 || !strings.Contains(errb, "line number out of range") {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+}
+
+// csplit patterns are BREs: \(...\) groups, \{n\} intervals.
+func TestCsplitPatternsAreBRE(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("aa\nxbbz\ncc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "in", `/xb\{2\}z/`)
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	assertFile(t, dir, "xx00", "aa\n")
+	assertFile(t, dir, "xx01", "xbbz\ncc\n")
+	// In a BRE, ( is a literal — this must not be a regex syntax error.
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "in"), []byte("aa\nx(y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir2, "", "in", "/x(y/")
+	if code != 0 {
+		t.Fatalf("literal paren: code=%d err=%q", code, errb)
+	}
+	assertFile(t, dir2, "xx01", "x(y\n")
+}
+
+// --suppress-matched also suppresses line-number split lines.
+func TestCsplitSuppressMatchedLineNumber(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "", "--suppress-matched", "in", "2")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	assertFile(t, dir, "xx00", "l1\n")
+	assertFile(t, dir, "xx01", "l3\n")
+}

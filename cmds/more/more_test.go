@@ -57,9 +57,15 @@ func TestMoreAcceptsDisplayOnlyFlags(t *testing.T) {
 		t.Fatalf("more display flags = (%q, %q, %d)", out, errb, code)
 	}
 
-	out, errb, code = runMore(t, t.TempDir(), "a\nb\n", "-l", "-e", "--number", "5")
+	out, errb, code = runMore(t, t.TempDir(), "a\nb\n", "-l", "-e", "-u", "--number", "5")
 	if out != "a\nb\n" || errb != "" || code != 0 {
 		t.Fatalf("more alias flags = (%q, %q, %d)", out, errb, code)
+	}
+
+	// -p pairs with --print-over and -u with --plain (util-linux naming).
+	out, errb, code = runMore(t, t.TempDir(), "a\n", "--print-over", "--plain")
+	if out != "a\n" || errb != "" || code != 0 {
+		t.Fatalf("more long display flags = (%q, %q, %d)", out, errb, code)
 	}
 
 	out, errb, code = runMore(t, t.TempDir(), "a\n", "-10")
@@ -69,9 +75,33 @@ func TestMoreAcceptsDisplayOnlyFlags(t *testing.T) {
 }
 
 func TestMorePatternStartsAtMatch(t *testing.T) {
-	out, errb, code := runMore(t, t.TempDir(), "alpha\nbeta\ngamma\n", "-P", "^bet")
+	out, errb, code := runMore(t, t.TempDir(), "alpha\nbeta\ngamma\n", "-P", "bet")
 	if want := "beta\ngamma\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("more pattern = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestMorePatternIsLiteral(t *testing.T) {
+	// "^bet" is a literal substring, not a regex anchor.
+	out, errb, code := runMore(t, t.TempDir(), "alpha\nx^bety\ngamma\n", "-P", "^bet")
+	if want := "x^bety\ngamma\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more literal pattern = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+
+	// Regex metacharacters are valid literal patterns.
+	out, errb, code = runMore(t, t.TempDir(), "a\n[b\nc\n", "-P", "[")
+	if want := "[b\nc\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more bracket pattern = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestMorePatternNotFound(t *testing.T) {
+	out, errb, code := runMore(t, t.TempDir(), "alpha\nbeta\n", "-P", "zzz")
+	if out != "alpha\nbeta\n" || code != 0 {
+		t.Fatalf("more pattern miss = (%q, %d), want display from start", out, code)
+	}
+	if !strings.Contains(errb, "Pattern not found") {
+		t.Fatalf("more pattern miss stderr = %q, want Pattern not found", errb)
 	}
 }
 
@@ -79,10 +109,5 @@ func TestMoreRejectsBadLineCounts(t *testing.T) {
 	_, errb, code := runMore(t, t.TempDir(), "", "-F", "0")
 	if code != 2 || !strings.Contains(errb, "invalid starting line") {
 		t.Fatalf("more bad from-line code=%d err=%q", code, errb)
-	}
-
-	_, errb, code = runMore(t, t.TempDir(), "", "-P", "[")
-	if code != 2 || !strings.Contains(errb, "invalid pattern") {
-		t.Fatalf("more bad pattern code=%d err=%q", code, errb)
 	}
 }

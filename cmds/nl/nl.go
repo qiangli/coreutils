@@ -1,6 +1,14 @@
 // Package nlcmd implements a focused nl(1) subset: line numbering for
 // files and standard input with common style, format, separator, width,
 // and numbering-sequence options.
+//
+// GNU semantics implemented here: all input files form one logical
+// document (numbering and section state carry across files), section
+// delimiter lines are replaced by an empty line on output, unnumbered
+// lines are prefixed with width+len(separator) spaces so text stays
+// aligned, -d with a single character keeps ':' as the second character
+// (an empty -d argument disables section matching), and p<re> styles use
+// POSIX basic regular expressions.
 package nlcmd
 
 import (
@@ -11,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -23,35 +32,44 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type options struct {
-	bodyStyle   string
-	headerStyle string
-	footerStyle string
-	format      string
-	separator   string
-	width       int
-	start       int
-	increment   int
-	noRenumber  bool
-	delimiter   string
-	blankJoin   int
-	bodyRE      *regexp.Regexp
-	headerRE    *regexp.Regexp
-	footerRE    *regexp.Regexp
+	bodyStyle    string
+	headerStyle  string
+	footerStyle  string
+	format       string
+	separator    string
+	width        int
+	start        int
+	increment    int
+	noRenumber   bool
+	delimiter    string
+	sectionMatch bool
+	blankJoin    int
+	bodyRE       *regexp.Regexp
+	headerRE     *regexp.Regexp
+	footerRE     *regexp.Regexp
+}
+
+// numberState carries the numbering state across all input files: GNU nl
+// treats the concatenation of its inputs as one logical document.
+type numberState struct {
+	lineNo   int
+	section  string
+	blankRun int
 }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
-	bodyStyle := fs.StringP("body-numbering", "b", "t", "use STYLE for numbering body lines: a (all), t (nonempty), n (none)")
-	headerStyle := fs.StringP("header-numbering", "h", "n", "use STYLE for numbering header lines: a, t, n")
-	footerStyle := fs.StringP("footer-numbering", "f", "n", "use STYLE for numbering footer lines: a, t, n")
+	bodyStyle := fs.StringP("body-numbering", "b", "t", "use STYLE for numbering body lines: a (all), t (nonempty), n (none), pBRE (matching lines)")
+	headerStyle := fs.StringP("header-numbering", "h", "n", "use STYLE for numbering header lines: a, t, n, pBRE")
+	footerStyle := fs.StringP("footer-numbering", "f", "n", "use STYLE for numbering footer lines: a, t, n, pBRE")
 	format := fs.StringP("number-format", "n", "rn", "insert line numbers according to FORMAT: ln, rn, rz")
 	separator := fs.StringP("number-separator", "s", "\t", "add SEP after each line number")
 	width := fs.IntP("number-width", "w", 6, "use WIDTH columns for line numbers")
-	start := fs.IntP("starting-line-number", "v", 1, "first line number on each logical page")
-	increment := fs.IntP("line-increment", "i", 1, "line number increment")
-	noRenumber := fs.BoolP("no-renumber", "p", false, "do not reset line numbers at logical page delimiters")
-	delimiter := fs.StringP("section-delimiter", "d", "\\:", "use CC as logical page delimiter characters")
-	blankJoin := fs.IntP("join-blank-lines", "l", 1, "number one of every NUMBER adjacent blank lines")
+	start := fs.IntP("starting-line-number", "v", 1, "first line number for each section")
+	increment := fs.IntP("line-increment", "i", 1, "line number increment at each line (may be negative)")
+	noRenumber := fs.BoolP("no-renumber", "p", false, "do not reset line numbers for each section")
+	delimiter := fs.StringP("section-delimiter", "d", "\\:", "use CC for logical page delimiters; empty CC disables section matching")
+	blankJoin := fs.IntP("join-blank-lines", "l", 1, "group of NUMBER empty lines counted as one")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -60,7 +78,7 @@ func run(rc *tool.RunContext, args []string) int {
 		bodyStyle: *bodyStyle, headerStyle: *headerStyle, footerStyle: *footerStyle,
 		format: *format, separator: *separator, width: *width,
 		start: *start, increment: *increment, noRenumber: *noRenumber,
-		delimiter: *delimiter, blankJoin: *blankJoin,
+		blankJoin: *blankJoin,
 	}
 	var err error
 	if o.bodyRE, err = validateStyle("body", o.bodyStyle); err != nil {
@@ -73,19 +91,26 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
 	if o.format != "ln" && o.format != "rn" && o.format != "rz" {
-		return tool.UsageError(rc, cmd, "invalid number format: %q", o.format)
+		return tool.UsageError(rc, cmd, "invalid line numbering format: %q", o.format)
 	}
-	if o.width < 0 {
-		return tool.UsageError(rc, cmd, "invalid line number width: %d", o.width)
-	}
-	if o.increment <= 0 {
-		return tool.UsageError(rc, cmd, "invalid line increment: %d", o.increment)
+	if o.width < 1 {
+		return tool.UsageError(rc, cmd, "invalid line number field width: %d", o.width)
 	}
 	if o.blankJoin <= 0 {
 		return tool.UsageError(rc, cmd, "invalid blank-line join count: %d", o.blankJoin)
 	}
-	if o.delimiter == "" {
-		return tool.UsageError(rc, cmd, "section delimiter must not be empty")
+	// -d semantics: one character c means delimiters are c followed by
+	// ':'; two or more characters are used as given; an empty argument
+	// disables section matching entirely (GNU extension).
+	switch len(*delimiter) {
+	case 0:
+		o.sectionMatch = false
+	case 1:
+		o.delimiter = *delimiter + ":"
+		o.sectionMatch = true
+	default:
+		o.delimiter = *delimiter
+		o.sectionMatch = true
 	}
 
 	files := operands
@@ -93,7 +118,7 @@ func run(rc *tool.RunContext, args []string) int {
 		files = []string{"-"}
 	}
 	w := bufio.NewWriter(rc.Out)
-	lineNo := o.start
+	st := &numberState{lineNo: o.start, section: "body"}
 	exit := 0
 	for _, name := range files {
 		r, closer, err := open(rc, name)
@@ -102,7 +127,7 @@ func run(rc *tool.RunContext, args []string) int {
 			exit = 1
 			continue
 		}
-		if err := number(r, w, o, &lineNo); err != nil {
+		if err := number(r, w, o, st); err != nil {
 			fmt.Fprintf(rc.Err, "nl: %s: %v\n", name, tool.SysErr(err))
 			exit = 1
 		}
@@ -118,17 +143,22 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func validateStyle(section, style string) (*regexp.Regexp, error) {
-	if style != "a" && style != "t" && style != "n" {
-		if strings.HasPrefix(style, "p") && len(style) > 1 {
-			re, err := regexp.Compile(style[1:])
-			if err != nil {
-				return nil, fmt.Errorf("invalid %s numbering regexp: %q", section, style[1:])
-			}
-			return re, nil
-		}
-		return nil, fmt.Errorf("invalid %s numbering style: %q", section, style)
+	switch style {
+	case "a", "t", "n":
+		return nil, nil
 	}
-	return nil, nil
+	if strings.HasPrefix(style, "p") && len(style) > 1 {
+		translated, err := bre.ToGo(style[1:])
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s numbering regexp: %q", section, style[1:])
+		}
+		re, err := regexp.Compile(translated)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s numbering regexp: %q", section, style[1:])
+		}
+		return re, nil
+	}
+	return nil, fmt.Errorf("invalid %s numbering style: %q", section, style)
 }
 
 func open(rc *tool.RunContext, name string) (io.Reader, io.Closer, error) {
@@ -145,20 +175,18 @@ func open(rc *tool.RunContext, name string) (io.Reader, io.Closer, error) {
 	return f, f, nil
 }
 
-func number(r io.Reader, w *bufio.Writer, o options, lineNo *int) error {
+func number(r io.Reader, w *bufio.Writer, o options, st *numberState) error {
 	br := bufio.NewReader(r)
-	section := "body"
-	blankRun := 0
 	for {
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
-			if next, delimiter := sectionDelimiter(line, o.delimiter); delimiter {
-				section = next
-				blankRun = 0
+			if next, delimiter := sectionDelimiter(line, o); delimiter {
+				st.section = next
 				if !o.noRenumber {
-					*lineNo = o.start
+					st.lineNo = o.start
 				}
-				if _, werr := w.WriteString(line); werr != nil {
+				// GNU nl replaces the delimiter line with an empty line.
+				if _, werr := w.WriteString("\n"); werr != nil {
 					return werr
 				}
 				if err == io.EOF {
@@ -169,15 +197,16 @@ func number(r io.Reader, w *bufio.Writer, o options, lineNo *int) error {
 				}
 				continue
 			}
-			style := o.styleFor(section)
-			numbered := shouldNumber(style, o.regexpFor(section), line, o.blankJoin, &blankRun)
-			if numbered {
-				if _, werr := fmt.Fprint(w, formatNumber(*lineNo, o)); werr != nil {
+			style := o.styleFor(st.section)
+			if st.shouldNumber(style, o.regexpFor(st.section), line, o.blankJoin) {
+				if _, werr := fmt.Fprint(w, formatNumber(st.lineNo, o)); werr != nil {
 					return werr
 				}
-				*lineNo += o.increment
-			} else if style == "t" {
-				if _, werr := fmt.Fprintf(w, "%*s%s", o.width, "", o.separator); werr != nil {
+				st.lineNo += o.increment
+			} else {
+				// Unnumbered lines get width+len(separator) spaces so the
+				// text column stays aligned (GNU print_no_line_fmt).
+				if _, werr := fmt.Fprintf(w, "%*s", o.width+len(o.separator), ""); werr != nil {
 					return werr
 				}
 			}
@@ -216,37 +245,46 @@ func (o options) regexpFor(section string) *regexp.Regexp {
 	}
 }
 
-func sectionDelimiter(line, delimiter string) (string, bool) {
+func sectionDelimiter(line string, o options) (string, bool) {
+	if !o.sectionMatch {
+		return "", false
+	}
 	text := strings.TrimRight(line, "\n")
 	switch text {
-	case delimiter + delimiter + delimiter:
+	case o.delimiter + o.delimiter + o.delimiter:
 		return "header", true
-	case delimiter + delimiter:
+	case o.delimiter + o.delimiter:
 		return "body", true
-	case delimiter:
+	case o.delimiter:
 		return "footer", true
 	default:
 		return "", false
 	}
 }
 
-func shouldNumber(style string, re *regexp.Regexp, line string, blankJoin int, blankRun *int) bool {
+func (st *numberState) shouldNumber(style string, re *regexp.Regexp, line string, blankJoin int) bool {
 	text := strings.TrimRight(line, "\n")
 	blank := text == ""
-	if blank {
-		(*blankRun)++
-	} else {
-		*blankRun = 0
-	}
 	switch style {
 	case "a":
-		if blank && blankJoin > 1 {
-			return *blankRun%blankJoin == 0
+		if blankJoin > 1 {
+			if !blank {
+				st.blankRun = 0
+				return true
+			}
+			st.blankRun++
+			if st.blankRun == blankJoin {
+				st.blankRun = 0
+				return true
+			}
+			return false
 		}
 		return true
 	case "t":
 		return !blank
-	default:
+	case "n":
+		return false
+	default: // p<re>
 		return re != nil && re.MatchString(text)
 	}
 }

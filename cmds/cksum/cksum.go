@@ -1,4 +1,9 @@
-// Package cksumcmd implements POSIX cksum(1).
+// Package cksumcmd implements POSIX cksum(1) plus GNU's -a digest
+// multiplexer. GNU semantics per coreutils 9.11: crc/crc32b/bsd/sysv
+// print decimal checksums (never tagged digests), --check verifies
+// only digest algorithms (auto-detected per line from the BSD tag
+// when -a is not given), sha2/sha3 require --length outside check
+// mode, and blake2b tags carry a length suffix when not 512.
 package cksumcmd
 
 import (
@@ -8,6 +13,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/coreutils/cmds/internal/hashenc"
 	"github.com/qiangli/coreutils/tool"
 	sm3hash "github.com/tjfoc/gmsm/sm3"
 	"golang.org/x/crypto/blake2b"
@@ -34,14 +41,58 @@ var cmd = &tool.Tool{
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+// digestFamily groups algorithms that share --length / tag-suffix
+// rules.
+type digestFamily int
+
+const (
+	famNone    digestFamily = iota // crc, crc32b, bsd, sysv
+	famFixed                       // md5, sha1, sha224..sha512, sm3, extensions
+	famSHA2                        // -a sha2 (length selects the member)
+	famSHA3                        // -a sha3 (length selects the member)
+	famBLAKE2B                     // -a blake2b (any multiple of 8 up to 512)
+	famSHAKE                       // shake128/shake256 extension
+	famBLAKE3                      // blake3 extension
+)
+
+type cksumMode struct {
+	kind    string // "crc", "crc32b", "sum", "digest"
+	family  digestFamily
+	name    string // the --algorithm value as given
+	label   string // base tag token, e.g. "SHA3", "BLAKE2b"
+	bits    int    // resolved digest size; 0 = auto-detect (check mode)
+	sysv    bool
+	lenAlgo bool // accepts --length
+	mk      func(bits int) hash.Hash
+	shake   func() sha3.ShakeHash
+}
+
+// tagLabel is the BSD tag this mode writes with --tag output.
+func (m cksumMode) tagLabel() string {
+	switch m.family {
+	case famSHA2:
+		return fmt.Sprintf("SHA%d", m.bits)
+	case famSHA3:
+		return fmt.Sprintf("SHA3-%d", m.bits)
+	case famBLAKE2B:
+		if m.bits < 512 {
+			return fmt.Sprintf("BLAKE2b-%d", m.bits)
+		}
+		return "BLAKE2b"
+	case famBLAKE3:
+		return fmt.Sprintf("BLAKE3-%d", m.bits)
+	}
+	return m.label
+}
+
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	algorithm := fs.StringP("algorithm", "a", "crc", "select the digest type")
-	tag := fs.Bool("tag", false, "create a BSD style checksum")
+	tag := fs.Bool("tag", false, "create a BSD style checksum (the default for digest algorithms)")
 	untagged := fs.Bool("untagged", false, "create a reversed style checksum, without digest type")
 	raw := fs.Bool("raw", false, "emit a raw binary digest, not hexadecimal")
 	base64Flag := fs.Bool("base64", false, "emit base64-encoded digests, not hexadecimal")
-	length := fs.IntP("length", "l", 512, "digest length in bits for blake2b")
+	length := fs.IntP("length", "l", 0, "digest length in bits; must not exceed the max size and must be a multiple of 8 for blake2b; must be 224, 256, 384, or 512 for sha2 or sha3")
 	check := fs.BoolP("check", "c", false, "read checksums from FILEs and check them")
 	warn := fs.BoolP("warn", "w", false, "warn about improperly formatted checksum lines")
 	status := fs.Bool("status", false, "don't output anything, status code shows success")
@@ -49,54 +100,136 @@ func run(rc *tool.RunContext, args []string) int {
 	strict := fs.Bool("strict", false, "exit non-zero for improperly formatted checksum lines")
 	ignoreMissing := fs.Bool("ignore-missing", false, "don't fail or report status for missing files")
 	zero := fs.BoolP("zero", "z", false, "end each output line with NUL, not newline")
-	debug := fs.Bool("debug", false, "print CPU hardware capability detection info")
+	debug := fs.Bool("debug", false, "indicate which implementation used")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
+	algorithmSpecified := fs.Changed("algorithm")
+	lengthSet := fs.Changed("length")
+	lv := *length
 	if *raw && *base64Flag {
-		return tool.UsageError(rc, cmd, "the --raw and --base64 options are mutually exclusive")
+		return tool.UsageError(rc, cmd, "--base64 and --raw are mutually exclusive")
 	}
 	if *tag && *check {
 		return tool.UsageError(rc, cmd, "the --tag option is meaningless when verifying checksums")
 	}
-	mode, err := parseAlgorithm(*algorithm, *length, fs.Changed("length"))
+	if *zero && *check {
+		return tool.UsageError(rc, cmd, "the --zero option is not supported when verifying checksums")
+	}
+	if !*check {
+		switch {
+		case *ignoreMissing:
+			return tool.UsageError(rc, cmd, "the --ignore-missing option is meaningful only when verifying checksums")
+		case *status:
+			return tool.UsageError(rc, cmd, "the --status option is meaningful only when verifying checksums")
+		case *warn:
+			return tool.UsageError(rc, cmd, "the --warn option is meaningful only when verifying checksums")
+		case *quiet:
+			return tool.UsageError(rc, cmd, "the --quiet option is meaningful only when verifying checksums")
+		case *strict:
+			return tool.UsageError(rc, cmd, "the --strict option is meaningful only when verifying checksums")
+		}
+	}
+	mode, err := parseAlgorithm(*algorithm)
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%s", err)
 	}
-	if (*raw || *base64Flag || *untagged) && (mode.kind == "crc" || mode.kind == "sum") {
-		return tool.UsageError(rc, cmd, "output encoding options are only supported for digest algorithms")
+	if lv != 0 && !mode.lenAlgo {
+		return tool.UsageError(rc, cmd, "--length is only supported with --algorithm blake2b, sha2, or sha3")
 	}
-	if len(operands) == 0 {
-		operands = []string{"-"}
+	if lv < 0 {
+		return tool.UsageError(rc, cmd, "invalid length: '%d'", lv)
 	}
+	switch mode.family {
+	case famSHA2, famSHA3:
+		if !*check && !lengthSet {
+			return tool.UsageError(rc, cmd, "--algorithm=%s requires specifying --length 224, 256, 384, or 512", mode.name)
+		}
+		if !*check || lengthSet {
+			if !validSHA2Len(lv) {
+				fmt.Fprintf(rc.Err, "cksum: invalid length: '%d'\n", lv)
+				return tool.UsageError(rc, cmd, "digest length for '%s' must be 224, 256, 384, or 512", mode.label)
+			}
+		}
+		if *check {
+			mode.bits = 0 // auto-detected per line
+		} else {
+			mode.bits = lv
+		}
+	case famBLAKE2B:
+		if lv > 512 {
+			fmt.Fprintf(rc.Err, "cksum: invalid length: '%d'\n", lv)
+			return tool.UsageError(rc, cmd, "maximum digest length for 'BLAKE2b' is 512 bits")
+		}
+		if lv%8 != 0 {
+			fmt.Fprintf(rc.Err, "cksum: invalid length: '%d'\n", lv)
+			return tool.UsageError(rc, cmd, "length is not a multiple of 8")
+		}
+		switch {
+		case *check:
+			mode.bits = 0 // auto-detected per line
+		case lv == 0:
+			mode.bits = 512
+		default:
+			mode.bits = lv
+		}
+	case famSHAKE:
+		if lv == 0 {
+			lv = 512
+		}
+		if lv%8 != 0 {
+			return tool.UsageError(rc, cmd, "invalid digest length: %d", lv)
+		}
+		mode.bits = lv
+	case famBLAKE3:
+		if lv == 0 {
+			lv = 256
+		}
+		if lv > 1024 || lv%8 != 0 {
+			return tool.UsageError(rc, cmd, "invalid digest length: %d", lv)
+		}
+		mode.bits = lv
+	}
+
 	if *debug {
 		printDebug(rc)
 	}
+
 	if *check {
+		if algorithmSpecified && mode.kind != "digest" {
+			return tool.UsageError(rc, cmd, "--check is not supported with --algorithm={bsd,sysv,crc,crc32b}")
+		}
+		if len(operands) == 0 {
+			operands = []string{"-"}
+		}
 		opts := cksumCheckOptions{
 			warn:          *warn,
 			status:        *status,
 			quiet:         *quiet,
 			strict:        *strict,
 			ignoreMissing: *ignoreMissing,
-			base64:        *base64Flag,
-			untagged:      *untagged,
-			zero:          *zero,
 		}
 		exit := 0
 		for _, name := range operands {
-			if checkCKSumFile(rc, mode, name, opts) != 0 {
+			if checkCKSumFile(rc, mode, !algorithmSpecified, name, opts) != 0 {
 				exit = 1
 			}
 		}
 		return exit
 	}
+
+	withName := len(operands) > 0
+	if !withName {
+		operands = []string{"-"}
+	} else if *raw && len(operands) > 1 {
+		return tool.UsageError(rc, cmd, "the --raw option is not supported with multiple files")
+	}
 	exit := 0
 	for _, name := range operands {
-		err := printCKSumOperand(rc, mode, name, *untagged, *raw, *base64Flag, *zero)
+		err := printCKSumOperand(rc, mode, name, withName, *untagged, *raw, *base64Flag, *zero)
 		if err != nil {
-			fmt.Fprintf(rc.Err, "cksum: %s: %s\n", name, errMsg(err))
+			fmt.Fprintf(rc.Err, "cksum: %s: %s\n", name, hashenc.GNUErrMsg(err))
 			exit = 1
 		}
 	}
@@ -105,93 +238,116 @@ func run(rc *tool.RunContext, args []string) int {
 
 func printDebug(rc *tool.RunContext) {
 	// The Go implementation does not dispatch to CPU-specific checksum
-	// kernels, but uutils treats --debug as informational and still
-	// computes the checksum. Keep that contract instead of failing.
-	fmt.Fprintln(rc.Out, "hardware acceleration managed by Go runtime")
+	// kernels; like GNU's --debug this is informational, printed to
+	// stderr, and the checksum is still computed.
+	fmt.Fprintln(rc.Err, "cksum: hardware acceleration managed by Go runtime")
 }
 
-type cksumMode struct {
-	kind     string
-	label    string
-	bits     int
-	new      func() hash.Hash
-	newShake func() sha3.ShakeHash
+func validSHA2Len(n int) bool {
+	return n == 224 || n == 256 || n == 384 || n == 512
 }
 
-func parseAlgorithm(name string, length int, lengthSet bool) (cksumMode, error) {
-	switch strings.ToLower(name) {
-	case "crc", "cksum":
-		return cksumMode{kind: "crc"}, nil
-	case "bsd":
-		return cksumMode{kind: "sum", label: "bsd"}, nil
-	case "sysv":
-		return cksumMode{kind: "sum", label: "sysv"}, nil
-	case "md5":
-		return cksumMode{kind: "digest", label: "MD5", bits: 128, new: md5.New}, nil
-	case "sha1":
-		return cksumMode{kind: "digest", label: "SHA1", bits: 160, new: sha1.New}, nil
-	case "sha224":
-		return cksumMode{kind: "digest", label: "SHA224", bits: 224, new: sha256.New224}, nil
-	case "sha2", "sha256":
-		return cksumMode{kind: "digest", label: "SHA256", bits: 256, new: sha256.New}, nil
-	case "sha384":
-		return cksumMode{kind: "digest", label: "SHA384", bits: 384, new: sha512.New384}, nil
-	case "sha512":
-		return cksumMode{kind: "digest", label: "SHA512", bits: 512, new: sha512.New}, nil
-	case "crc32b":
-		return cksumMode{kind: "digest", label: "CRC32B", bits: 32, new: func() hash.Hash {
-			return crc32.NewIEEE()
-		}}, nil
-	case "sha3", "sha3-256", "sha3_256":
-		return cksumMode{kind: "digest", label: "SHA3-256", bits: 256, new: sha3.New256}, nil
-	case "sha3-224", "sha3_224":
-		return cksumMode{kind: "digest", label: "SHA3-224", bits: 224, new: sha3.New224}, nil
-	case "sha3-384", "sha3_384":
-		return cksumMode{kind: "digest", label: "SHA3-384", bits: 384, new: sha3.New384}, nil
-	case "sha3-512", "sha3_512":
-		return cksumMode{kind: "digest", label: "SHA3-512", bits: 512, new: sha3.New512}, nil
-	case "shake128":
-		if length <= 0 || length%8 != 0 {
-			return cksumMode{}, fmt.Errorf("invalid digest length: %d", length)
-		}
-		return cksumMode{kind: "digest", label: "SHAKE128", bits: length, newShake: sha3.NewShake128}, nil
-	case "shake256":
-		if length <= 0 || length%8 != 0 {
-			return cksumMode{}, fmt.Errorf("invalid digest length: %d", length)
-		}
-		return cksumMode{kind: "digest", label: "SHAKE256", bits: length, newShake: sha3.NewShake256}, nil
-	case "sm3":
-		return cksumMode{kind: "digest", label: "SM3", bits: 256, new: sm3hash.New}, nil
-	case "blake2b":
-		if length <= 0 || length > 512 || length%8 != 0 {
-			return cksumMode{}, fmt.Errorf("invalid digest length: %d", length)
-		}
-		return cksumMode{kind: "digest", label: "BLAKE2b", bits: length, new: func() hash.Hash {
-			h, err := blake2b.New(length/8, nil)
-			if err != nil {
-				panic(err)
-			}
-			return h
-		}}, nil
-	case "blake3":
-		if !lengthSet {
-			length = 256
-		}
-		if length <= 0 || length > 1024 || length%8 != 0 {
-			return cksumMode{}, fmt.Errorf("invalid digest length: %d", length)
-		}
-		return cksumMode{kind: "digest", label: fmt.Sprintf("BLAKE3-%d", length), bits: length, new: func() hash.Hash {
-			return blake3hash.New(length/8, nil)
-		}}, nil
+func sha2New(bits int) hash.Hash {
+	switch bits {
+	case 224:
+		return sha256.New224()
+	case 256:
+		return sha256.New()
+	case 384:
+		return sha512.New384()
 	default:
-		return cksumMode{}, fmt.Errorf("invalid algorithm: %s", name)
+		return sha512.New()
 	}
 }
 
-func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, untagged, raw, b64, zero bool) error {
+func sha3New(bits int) hash.Hash {
+	switch bits {
+	case 224:
+		return sha3.New224()
+	case 256:
+		return sha3.New256()
+	case 384:
+		return sha3.New384()
+	default:
+		return sha3.New512()
+	}
+}
+
+func blake2bNew(bits int) hash.Hash {
+	h, err := blake2b.New(bits/8, nil)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+// parseAlgorithm resolves an --algorithm value. GNU's own values are
+// matched exactly (GNU uses exact argmatch); the extension values
+// (blake3, shake128/256, the sha3-NNN spellings, cksum) stay
+// case-insensitive.
+func parseAlgorithm(name string) (cksumMode, error) {
+	switch name {
+	case "crc":
+		return cksumMode{kind: "crc", family: famNone, name: name, label: "CRC"}, nil
+	case "crc32b":
+		return cksumMode{kind: "crc32b", family: famNone, name: name, label: "CRC32B"}, nil
+	case "bsd":
+		return cksumMode{kind: "sum", family: famNone, name: name, label: "BSD"}, nil
+	case "sysv":
+		return cksumMode{kind: "sum", family: famNone, name: name, label: "SYSV", sysv: true}, nil
+	case "md5":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "MD5", bits: 128, mk: func(int) hash.Hash { return md5.New() }}, nil
+	case "sha1":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA1", bits: 160, mk: func(int) hash.Hash { return sha1.New() }}, nil
+	case "sha224":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA224", bits: 224, mk: func(int) hash.Hash { return sha256.New224() }}, nil
+	case "sha256":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA256", bits: 256, mk: func(int) hash.Hash { return sha256.New() }}, nil
+	case "sha384":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA384", bits: 384, mk: func(int) hash.Hash { return sha512.New384() }}, nil
+	case "sha512":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA512", bits: 512, mk: func(int) hash.Hash { return sha512.New() }}, nil
+	case "sha2":
+		return cksumMode{kind: "digest", family: famSHA2, name: name, label: "SHA2", lenAlgo: true, mk: sha2New}, nil
+	case "sha3":
+		return cksumMode{kind: "digest", family: famSHA3, name: name, label: "SHA3", lenAlgo: true, mk: sha3New}, nil
+	case "blake2b":
+		return cksumMode{kind: "digest", family: famBLAKE2B, name: name, label: "BLAKE2b", lenAlgo: true, mk: blake2bNew}, nil
+	case "sm3":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SM3", bits: 256, mk: func(int) hash.Hash { return sm3hash.New() }}, nil
+	}
+	// Extensions beyond GNU's set (lenient, case-insensitive).
+	switch strings.ToLower(name) {
+	case "cksum":
+		return cksumMode{kind: "crc", family: famNone, name: name, label: "CRC"}, nil
+	case "sha3-224", "sha3_224":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA3-224", bits: 224, mk: func(int) hash.Hash { return sha3.New224() }}, nil
+	case "sha3-256", "sha3_256":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA3-256", bits: 256, mk: func(int) hash.Hash { return sha3.New256() }}, nil
+	case "sha3-384", "sha3_384":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA3-384", bits: 384, mk: func(int) hash.Hash { return sha3.New384() }}, nil
+	case "sha3-512", "sha3_512":
+		return cksumMode{kind: "digest", family: famFixed, name: name, label: "SHA3-512", bits: 512, mk: func(int) hash.Hash { return sha3.New512() }}, nil
+	case "shake128":
+		return cksumMode{kind: "digest", family: famSHAKE, name: name, label: "SHAKE128", lenAlgo: true, shake: sha3.NewShake128}, nil
+	case "shake256":
+		return cksumMode{kind: "digest", family: famSHAKE, name: name, label: "SHAKE256", lenAlgo: true, shake: sha3.NewShake256}, nil
+	case "blake3":
+		return cksumMode{kind: "digest", family: famBLAKE3, name: name, label: "BLAKE3", lenAlgo: true, mk: func(bits int) hash.Hash {
+			return blake3hash.New(bits/8, nil)
+		}}, nil
+	}
+	return cksumMode{}, fmt.Errorf("invalid algorithm: %s", name)
+}
+
+func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, withName, untagged, raw, b64, zero bool) error {
 	lineEnd := "\n"
 	if zero {
 		lineEnd = "\x00"
+	}
+	suffix := ""
+	if withName {
+		suffix = " " + name
 	}
 	switch mode.kind {
 	case "crc":
@@ -199,27 +355,45 @@ func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, untagge
 		if err != nil {
 			return err
 		}
-		if name == "-" {
-			fmt.Fprintf(rc.Out, "%d %d%s", crc, size, lineEnd)
-		} else {
-			fmt.Fprintf(rc.Out, "%d %d %s%s", crc, size, name, lineEnd)
+		if raw {
+			var be [4]byte
+			binary.BigEndian.PutUint32(be[:], crc)
+			_, err = rc.Out.Write(be[:])
+			return err
 		}
-	case "sum":
-		result, err := legacySumOperand(rc, name, mode.label == "sysv")
+		fmt.Fprintf(rc.Out, "%d %d%s%s", crc, size, suffix, lineEnd)
+	case "crc32b":
+		crc, size, err := crc32bOperand(rc, name)
 		if err != nil {
 			return err
 		}
-		width := 5
-		if mode.label == "sysv" {
-			width = 1
+		if raw {
+			var be [4]byte
+			binary.BigEndian.PutUint32(be[:], crc)
+			_, err = rc.Out.Write(be[:])
+			return err
 		}
-		if name == "-" {
-			fmt.Fprintf(rc.Out, "%0*d %*d%s", width, result.checksum, width, result.blocks, lineEnd)
+		// GNU dispatches crc32b to the same decimal untagged output
+		// as crc.
+		fmt.Fprintf(rc.Out, "%d %d%s%s", crc, size, suffix, lineEnd)
+	case "sum":
+		result, err := legacySumOperand(rc, name, mode.sysv)
+		if err != nil {
+			return err
+		}
+		if raw {
+			var be [2]byte
+			binary.BigEndian.PutUint16(be[:], result.checksum)
+			_, err = rc.Out.Write(be[:])
+			return err
+		}
+		if mode.sysv {
+			fmt.Fprintf(rc.Out, "%d %d%s%s", result.checksum, result.blocks, suffix, lineEnd)
 		} else {
-			fmt.Fprintf(rc.Out, "%0*d %*d %s%s", width, result.checksum, width, result.blocks, name, lineEnd)
+			fmt.Fprintf(rc.Out, "%05d %5d%s%s", result.checksum, result.blocks, suffix, lineEnd)
 		}
 	case "digest":
-		sum, err := digestOperand(rc, mode, name)
+		sum, err := digestOperand(rc, mode, mode.bits, name)
 		if err != nil {
 			return err
 		}
@@ -231,33 +405,37 @@ func printCKSumOperand(rc *tool.RunContext, mode cksumMode, name string, untagge
 		if b64 {
 			encoded = base64.StdEncoding.EncodeToString(sum)
 		}
+		outName, prefix := name, ""
+		if !zero {
+			outName, prefix = hashenc.EscapeFilename(name)
+		}
 		if untagged {
-			fmt.Fprintf(rc.Out, "%s  %s%s", encoded, name, lineEnd)
+			fmt.Fprintf(rc.Out, "%s%s  %s%s", prefix, encoded, outName, lineEnd)
 		} else {
-			fmt.Fprintf(rc.Out, "%s (%s) = %s%s", mode.label, name, encoded, lineEnd)
+			fmt.Fprintf(rc.Out, "%s%s (%s) = %s%s", prefix, mode.tagLabel(), outName, encoded, lineEnd)
 		}
 	}
 	return nil
 }
 
-func digestOperand(rc *tool.RunContext, mode cksumMode, name string) ([]byte, error) {
-	if mode.newShake != nil {
-		h := mode.newShake()
+func digestOperand(rc *tool.RunContext, mode cksumMode, bits int, name string) ([]byte, error) {
+	if mode.shake != nil {
+		h := mode.shake()
 		if err := copyOperandToHash(rc, name, h); err != nil {
 			return nil, err
 		}
-		sum := make([]byte, mode.bits/8)
+		sum := make([]byte, bits/8)
 		_, _ = h.Read(sum)
 		return sum, nil
 	}
-	h := mode.new()
+	h := mode.mk(bits)
 	if err := copyOperandToHash(rc, name, h); err != nil {
 		return nil, err
 	}
 	return h.Sum(nil), nil
 }
 
-func copyOperandToHash(rc *tool.RunContext, name string, h hash.Hash) error {
+func copyOperandToHash(rc *tool.RunContext, name string, h io.Writer) error {
 	if name == "-" {
 		if rc.In != nil {
 			if _, err := io.Copy(h, rc.In); err != nil {
@@ -272,7 +450,7 @@ func copyOperandToHash(rc *tool.RunContext, name string, h hash.Hash) error {
 	}
 	defer f.Close()
 	if fi, err := f.Stat(); err == nil && fi.IsDir() {
-		return errIsDirectory
+		return hashenc.ErrIsDirectory
 	}
 	if _, err := io.Copy(h, f); err != nil {
 		return err
@@ -286,15 +464,42 @@ type cksumCheckOptions struct {
 	quiet         bool
 	strict        bool
 	ignoreMissing bool
-	base64        bool
-	untagged      bool
-	zero          bool
 }
 
-func checkCKSumFile(rc *tool.RunContext, mode cksumMode, op string, opts cksumCheckOptions) int {
+// checkTagTemplates lists the digest algorithms a plain `cksum -c`
+// (no -a) auto-detects from BSD tags, keyed by base tag token. GNU
+// refuses to auto-detect the non-digest formats (CRC, CRC32B, BSD,
+// SYSV): those tags stay misformatted.
+var checkTagTemplates = map[string]cksumMode{}
+
+func init() {
+	for _, n := range []string{"md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha2", "sha3", "blake2b", "sm3"} {
+		m, err := parseAlgorithm(n)
+		if err != nil {
+			panic(err)
+		}
+		if m.family == famSHA2 || m.family == famSHA3 || m.family == famBLAKE2B {
+			m.bits = 0 // suffix / default selects the length
+		}
+		checkTagTemplates[m.label] = m
+	}
+}
+
+type cksumCheckEntry struct {
+	mode    cksumMode
+	bits    int
+	path    string
+	display string
+	digest  string
+	b64     bool
+}
+
+func checkCKSumFile(rc *tool.RunContext, mode cksumMode, autoDetect bool, op string, opts cksumCheckOptions) int {
 	var r io.Reader
 	isStdin := op == "-"
+	display := op
 	if isStdin {
+		display = "'standard input'"
 		r = rc.In
 		if r == nil {
 			r = strings.NewReader("")
@@ -302,7 +507,7 @@ func checkCKSumFile(rc *tool.RunContext, mode cksumMode, op string, opts cksumCh
 	} else {
 		f, err := os.Open(rc.Path(op))
 		if err != nil {
-			fmt.Fprintf(rc.Err, "cksum: %s: %s\n", op, errMsg(err))
+			fmt.Fprintf(rc.Err, "cksum: %s: %s\n", op, hashenc.GNUErrMsg(err))
 			return 1
 		}
 		defer f.Close()
@@ -310,27 +515,31 @@ func checkCKSumFile(rc *tool.RunContext, mode cksumMode, op string, opts cksumCh
 	}
 
 	br := bufio.NewReader(r)
-	delim := byte('\n')
-	if opts.zero {
-		delim = 0
-	}
 	var valid, badFormat, mismatched, unreadable int
+	lineNo := 0
+	curLabel := mode.label
 	exit := 0
 	for {
-		line, rerr := br.ReadString(delim)
-		l := strings.TrimSuffix(line, string(delim))
+		line, rerr := br.ReadString('\n')
+		lineNo++
+		l := strings.TrimSuffix(line, "\n")
 		if l != "" && !strings.HasPrefix(l, "#") {
-			entry, ok := parseCKSumCheckLine(mode, l, opts)
+			entry, ok := parseCKSumCheckLine(mode, autoDetect, l)
 			if !ok || (isStdin && entry.path == "-") {
 				badFormat++
+				if opts.warn {
+					fmt.Fprintf(rc.Err, "cksum: %s: %d: improperly formatted %s checksum line\n",
+						display, lineNo, curLabel)
+				}
 			} else {
+				curLabel = entry.mode.label
 				valid++
-				match, err := verifyCKSumEntry(rc, mode, entry, opts)
+				match, err := verifyCKSumEntry(rc, entry)
 				switch {
 				case err != nil:
 					if !(opts.ignoreMissing && errors.Is(err, fs.ErrNotExist)) {
 						if !opts.status {
-							fmt.Fprintf(rc.Err, "cksum: %s: %s\n", entry.display, errMsg(err))
+							fmt.Fprintf(rc.Err, "cksum: %s: %s\n", entry.display, hashenc.GNUErrMsg(err))
 							fmt.Fprintf(rc.Out, "%s: FAILED open or read\n", entry.display)
 						}
 						unreadable++
@@ -356,7 +565,7 @@ func checkCKSumFile(rc *tool.RunContext, mode cksumMode, op string, opts cksumCh
 
 	if valid == 0 {
 		if !opts.status {
-			fmt.Fprintf(rc.Err, "cksum: %s: no properly formatted checksum lines found\n", op)
+			fmt.Fprintf(rc.Err, "cksum: %s: no properly formatted checksum lines found\n", display)
 		}
 		return 1
 	}
@@ -378,75 +587,186 @@ func checkCKSumFile(rc *tool.RunContext, mode cksumMode, op string, opts cksumCh
 	return exit
 }
 
-type cksumCheckEntry struct {
-	path     string
-	display  string
-	digest   string
-	checksum uint64
-	size     uint64
+// parseCKSumCheckLine parses one --check line. Without -a only the
+// BSD tagged format is accepted and the algorithm comes from the tag;
+// with -a both tagged (label must match) and untagged formats are
+// accepted.
+func parseCKSumCheckLine(mode cksumMode, autoDetect bool, line string) (cksumCheckEntry, bool) {
+	escaped := false
+	l := line
+	if strings.HasPrefix(l, "\\") {
+		escaped = true
+		l = l[1:]
+	}
+
+	if entry, ok := parseTaggedCKSumLine(mode, autoDetect, l, escaped); ok {
+		return entry, true
+	}
+	if autoDetect {
+		// GNU only supports the tagged format without -a.
+		return cksumCheckEntry{}, false
+	}
+	return parseUntaggedCKSumLine(mode, l, escaped)
 }
 
-func parseCKSumCheckLine(mode cksumMode, line string, opts cksumCheckOptions) (cksumCheckEntry, bool) {
-	switch mode.kind {
-	case "crc", "sum":
-		first, second, rest, ok := splitCKSumFields(line)
+// parseTaggedCKSumLine handles "TAG[-BITS] (name) = digest" (with the
+// OpenSSL "TAG(name)= digest" spacing also accepted, as in GNU).
+func parseTaggedCKSumLine(mode cksumMode, autoDetect bool, l string, escaped bool) (cksumCheckEntry, bool) {
+	// Extract the tag token (ends at ' ', '-' or '(').
+	i := 0
+	for i < len(l) && l[i] != ' ' && l[i] != '-' && l[i] != '(' {
+		i++
+	}
+	token := l[:i]
+	rest := l[i:]
+
+	var tmpl cksumMode
+	switch {
+	case autoDetect:
+		m, ok := checkTagTemplates[token]
 		if !ok {
 			return cksumCheckEntry{}, false
 		}
-		checksum, err1 := strconv.ParseUint(first, 10, 64)
-		size, err2 := strconv.ParseUint(second, 10, 64)
-		if err1 != nil || err2 != nil {
+		tmpl = m
+	case mode.family == famSHA2:
+		// -a sha2 accepts SHA2[-BITS] and the SHA224..SHA512 tags.
+		switch token {
+		case "SHA2":
+			tmpl = mode
+		case "SHA224", "SHA256", "SHA384", "SHA512":
+			tmpl = mode
+			tmpl.bits, _ = strconv.Atoi(token[3:])
+		default:
 			return cksumCheckEntry{}, false
 		}
-		return cksumCheckEntry{path: rest, display: rest, checksum: checksum, size: size}, true
-	case "digest":
-		return parseDigestCheckLine(mode, line, opts)
 	default:
+		// The mode's own tag; a label like "SHA3-256" splits into
+		// token "SHA3" + required suffix.
+		wantToken, wantSuffix, _ := strings.Cut(mode.tagTokenForCheck(), "-")
+		if token != wantToken {
+			return cksumCheckEntry{}, false
+		}
+		tmpl = mode
+		if wantSuffix != "" {
+			// Fixed extension label with a mandatory suffix.
+			if !strings.HasPrefix(rest, "-"+wantSuffix) {
+				return cksumCheckEntry{}, false
+			}
+			rest = rest[1+len(wantSuffix):]
+		}
+	}
+
+	bits := tmpl.bits
+	// Optional "-BITS" suffix for the variable-length families.
+	if strings.HasPrefix(rest, "-") {
+		switch tmpl.family {
+		case famSHA2, famSHA3, famBLAKE2B, famBLAKE3:
+		default:
+			return cksumCheckEntry{}, false
+		}
+		j := 1
+		for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+			j++
+		}
+		n, err := strconv.Atoi(rest[1:j])
+		if j == 1 || err != nil {
+			return cksumCheckEntry{}, false
+		}
+		switch tmpl.family {
+		case famSHA2, famSHA3:
+			if !validSHA2Len(n) {
+				return cksumCheckEntry{}, false
+			}
+		case famBLAKE2B:
+			if n <= 0 || n%8 != 0 || n > 512 {
+				return cksumCheckEntry{}, false
+			}
+		case famBLAKE3:
+			if n <= 0 || n%8 != 0 || n > 1024 {
+				return cksumCheckEntry{}, false
+			}
+		}
+		bits = n
+		rest = rest[j:]
+	}
+	if bits == 0 {
+		// No suffix: GNU falls back to the family's maximum size.
+		bits = 512
+	}
+
+	rest = strings.TrimPrefix(rest, " ")
+	body, found := strings.CutPrefix(rest, "(")
+	if !found {
 		return cksumCheckEntry{}, false
 	}
+	end := strings.LastIndexByte(body, ')')
+	if end <= 0 {
+		return cksumCheckEntry{}, false
+	}
+	name := body[:end]
+	after := strings.TrimLeft(body[end+1:], " \t")
+	after, found = strings.CutPrefix(after, "=")
+	if !found {
+		return cksumCheckEntry{}, false
+	}
+	d := strings.TrimLeft(after, " \t")
+	isB64, ok := validCKSumDigest(d, bits)
+	if !ok {
+		return cksumCheckEntry{}, false
+	}
+	return cksumCheckEntry{
+		mode:    tmpl,
+		bits:    bits,
+		path:    hashenc.UnescapeFilename(escaped, name),
+		display: name,
+		digest:  d,
+		b64:     isB64,
+	}, true
 }
 
-func splitCKSumFields(line string) (first, second, rest string, ok bool) {
-	line = strings.TrimLeft(line, " \t")
-	i := strings.IndexAny(line, " \t")
-	if i < 0 {
-		return "", "", "", false
+// tagTokenForCheck is the tag a check line must carry for this mode.
+func (m cksumMode) tagTokenForCheck() string {
+	switch m.family {
+	case famSHA3:
+		return "SHA3"
+	case famBLAKE2B:
+		return "BLAKE2b"
 	}
-	first = line[:i]
-	line = strings.TrimLeft(line[i:], " \t")
-	i = strings.IndexAny(line, " \t")
-	if i < 0 {
-		return "", "", "", false
-	}
-	second = line[:i]
-	rest = strings.TrimLeft(line[i:], " \t")
-	return first, second, rest, rest != ""
+	return m.label
 }
 
-func parseDigestCheckLine(mode cksumMode, line string, opts cksumCheckOptions) (cksumCheckEntry, bool) {
-	l := line
-	if strings.HasPrefix(l, "\\") {
-		l = l[1:]
-	}
-	if !opts.untagged {
-		prefix := mode.label + " ("
-		if rest, ok := strings.CutPrefix(l, prefix); ok {
-			if i := strings.LastIndex(rest, ") = "); i >= 0 {
-				name, d := rest[:i], rest[i+4:]
-				if name != "" && validDigestText(d, mode.bits, opts.base64) {
-					return cksumCheckEntry{path: name, display: name, digest: d}, true
-				}
-			}
-			return cksumCheckEntry{}, false
-		}
-	}
+func parseUntaggedCKSumLine(mode cksumMode, l string, escaped bool) (cksumCheckEntry, bool) {
 	i := strings.IndexByte(l, ' ')
 	if i < 0 {
 		return cksumCheckEntry{}, false
 	}
 	d := l[:i]
-	if !validDigestText(d, mode.bits, opts.base64) {
-		return cksumCheckEntry{}, false
+	bits := mode.bits
+	var isB64 bool
+	if bits == 0 {
+		// Auto-detect the length from the hex-digit count (GNU does
+		// this for blake2b, sha2 and sha3).
+		if !isHexStr(d) || len(d) < 2 || len(d)%2 != 0 {
+			return cksumCheckEntry{}, false
+		}
+		n := len(d) * 4
+		switch mode.family {
+		case famSHA2, famSHA3:
+			if !validSHA2Len(n) {
+				return cksumCheckEntry{}, false
+			}
+		case famBLAKE2B:
+			if n > 512 {
+				return cksumCheckEntry{}, false
+			}
+		}
+		bits = n
+	} else {
+		var ok bool
+		isB64, ok = validCKSumDigest(d, bits)
+		if !ok {
+			return cksumCheckEntry{}, false
+		}
 	}
 	rest := l[i+1:]
 	var name string
@@ -459,51 +779,48 @@ func parseDigestCheckLine(mode cksumMode, line string, opts cksumCheckOptions) (
 	if name == "" {
 		return cksumCheckEntry{}, false
 	}
-	return cksumCheckEntry{path: name, display: name, digest: d}, true
+	return cksumCheckEntry{
+		mode:    mode,
+		bits:    bits,
+		path:    hashenc.UnescapeFilename(escaped, name),
+		display: name,
+		digest:  d,
+		b64:     isB64,
+	}, true
 }
 
-func validDigestText(s string, bits int, b64 bool) bool {
-	if b64 {
-		_, err := base64.StdEncoding.DecodeString(s)
-		return err == nil
+// validCKSumDigest reports whether s is a plausible digest of the
+// given bit length: hex of bits/4 characters, or (GNU cksum accepts
+// this in check lines regardless of --base64) base64 of the binary
+// digest length.
+func validCKSumDigest(s string, bits int) (isB64, ok bool) {
+	if isHexN(s, bits/4) {
+		return false, true
 	}
-	return isHexN(s, bits/4)
+	if len(s) == base64.StdEncoding.EncodedLen(bits/8) {
+		if _, err := base64.StdEncoding.DecodeString(s); err == nil {
+			return true, true
+		}
+	}
+	return false, false
 }
 
-func verifyCKSumEntry(rc *tool.RunContext, mode cksumMode, entry cksumCheckEntry, opts cksumCheckOptions) (bool, error) {
-	switch mode.kind {
-	case "crc":
-		crc, size, err := cksumOperand(rc, entry.path)
-		if err != nil {
-			return false, err
-		}
-		return uint64(crc) == entry.checksum && size == entry.size, nil
-	case "sum":
-		result, err := legacySumOperand(rc, entry.path, mode.label == "sysv")
-		if err != nil {
-			return false, err
-		}
-		return uint64(result.checksum) == entry.checksum && result.blocks == entry.size, nil
-	case "digest":
-		sum, err := digestOperand(rc, mode, entry.path)
-		if err != nil {
-			return false, err
-		}
-		got := hex.EncodeToString(sum)
-		if opts.base64 {
-			got = base64.StdEncoding.EncodeToString(sum)
-			return got == entry.digest, nil
-		}
-		return strings.EqualFold(got, entry.digest), nil
-	default:
-		return false, nil
+func verifyCKSumEntry(rc *tool.RunContext, entry cksumCheckEntry) (bool, error) {
+	sum, err := digestOperand(rc, entry.mode, entry.bits, entry.path)
+	if err != nil {
+		return false, err
 	}
+	if entry.b64 {
+		return base64.StdEncoding.EncodeToString(sum) == entry.digest, nil
+	}
+	return strings.EqualFold(hex.EncodeToString(sum), entry.digest), nil
 }
 
 func isHexN(s string, n int) bool {
-	if len(s) != n {
-		return false
-	}
+	return len(s) == n && isHexStr(s)
+}
+
+func isHexStr(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
@@ -521,23 +838,12 @@ func plural(n int, one, many string) string {
 }
 
 func cksumOperand(rc *tool.RunContext, name string) (uint32, uint64, error) {
-	var r io.Reader
-	if name == "-" {
-		if rc.In == nil {
-			r = strings.NewReader("")
-		} else {
-			r = rc.In
-		}
-	} else {
-		f, err := os.Open(rc.Path(name))
-		if err != nil {
-			return 0, 0, err
-		}
-		defer f.Close()
-		if fi, err := f.Stat(); err == nil && fi.IsDir() {
-			return 0, 0, errIsDirectory
-		}
-		r = f
+	r, closeFn, err := openOperand(rc, name)
+	if err != nil {
+		return 0, 0, err
+	}
+	if closeFn != nil {
+		defer closeFn()
 	}
 	var crc uint32
 	var n uint64
@@ -561,29 +867,54 @@ func cksumOperand(rc *tool.RunContext, name string) (uint32, uint64, error) {
 	return ^crc, n, nil
 }
 
+// crc32bOperand computes the standard IEEE CRC-32 ("crc32b") and the
+// byte count.
+func crc32bOperand(rc *tool.RunContext, name string) (uint32, uint64, error) {
+	r, closeFn, err := openOperand(rc, name)
+	if err != nil {
+		return 0, 0, err
+	}
+	if closeFn != nil {
+		defer closeFn()
+	}
+	h := crc32.NewIEEE()
+	n, err := io.Copy(h, r)
+	if err != nil {
+		return 0, 0, err
+	}
+	return h.Sum32(), uint64(n), nil
+}
+
+func openOperand(rc *tool.RunContext, name string) (io.Reader, func() error, error) {
+	if name == "-" {
+		if rc.In == nil {
+			return strings.NewReader(""), nil, nil
+		}
+		return rc.In, nil, nil
+	}
+	f, err := os.Open(rc.Path(name))
+	if err != nil {
+		return nil, nil, err
+	}
+	if fi, err := f.Stat(); err == nil && fi.IsDir() {
+		_ = f.Close()
+		return nil, nil, hashenc.ErrIsDirectory
+	}
+	return f, f.Close, nil
+}
+
 type legacySumResult struct {
 	checksum uint16
 	blocks   uint64
 }
 
 func legacySumOperand(rc *tool.RunContext, name string, sysv bool) (legacySumResult, error) {
-	var r io.Reader
-	if name == "-" {
-		if rc.In == nil {
-			r = strings.NewReader("")
-		} else {
-			r = rc.In
-		}
-	} else {
-		f, err := os.Open(rc.Path(name))
-		if err != nil {
-			return legacySumResult{}, err
-		}
-		defer f.Close()
-		if fi, err := f.Stat(); err == nil && fi.IsDir() {
-			return legacySumResult{}, errIsDirectory
-		}
-		r = f
+	r, closeFn, err := openOperand(rc, name)
+	if err != nil {
+		return legacySumResult{}, err
+	}
+	if closeFn != nil {
+		defer closeFn()
 	}
 	if sysv {
 		return legacySysvSum(r)
@@ -638,21 +969,6 @@ func legacyBlocks(size, block uint64) uint64 {
 		return 0
 	}
 	return (size + block - 1) / block
-}
-
-var errIsDirectory = fmt.Errorf("Is a directory")
-
-func errMsg(err error) string {
-	if err == errIsDirectory {
-		return err.Error()
-	}
-	if os.IsNotExist(err) {
-		return "No such file or directory"
-	}
-	if os.IsPermission(err) {
-		return "Permission denied"
-	}
-	return err.Error()
 }
 
 var cksumTable = makeCKSumTable()

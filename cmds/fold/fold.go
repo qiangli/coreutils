@@ -8,7 +8,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/mattn/go-runewidth"
 	"github.com/qiangli/coreutils/tool"
@@ -16,25 +15,39 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "fold",
-	Synopsis: "Wrap input lines to fit in a specified width.\nWith no FILE, or when FILE is -, read standard input.",
+	Synopsis: "Wrap input lines in each FILE, writing to standard output.\nWith no FILE, or when FILE is -, read standard input.",
 	Usage:    "fold [OPTION]... [FILE]...",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+type countMode int
+
+const (
+	countColumns countMode = iota
+	countBytes
+	countCharacters
+)
+
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	widthValue := fs.StringP("width", "w", "80", "use WIDTH columns instead of 80")
 	bytesMode := fs.BoolP("bytes", "b", false, "count bytes rather than columns")
-	characters := fs.BoolP("characters", "c", false, "count characters rather than display columns")
-	spaces := fs.BoolP("spaces", "s", false, "break at spaces when possible")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	characters := fs.BoolP("characters", "c", false, "count characters rather than columns")
+	spaces := fs.BoolP("spaces", "s", false, "break at spaces")
+	operands, code := tool.Parse(rc, cmd, fs, rewriteObsoleteWidth(args))
 	if code >= 0 {
 		return code
 	}
 	width, err := strconv.Atoi(*widthValue)
 	if err != nil || width <= 0 {
 		return tool.UsageError(rc, cmd, "invalid number of columns: %q", *widthValue)
+	}
+	mode := countColumns
+	if *bytesMode {
+		mode = countBytes
+	} else if *characters {
+		mode = countCharacters
 	}
 	if len(operands) == 0 {
 		operands = []string{"-"}
@@ -49,7 +62,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := foldStream(r, out, width, *bytesMode, *characters, *spaces); err != nil {
+		if err := foldStream(r, out, width, mode, *spaces); err != nil {
 			fmt.Fprintf(rc.Err, "fold: %s: %v\n", name, err)
 			status = 1
 		}
@@ -64,176 +77,219 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-func foldStream(r io.Reader, w io.Writer, width int, bytesMode, characters, spaces bool) error {
+// rewriteObsoleteWidth implements the obsolete option syntax
+// (fold -72 == fold -w 72), which GNU fold accepts anywhere on the
+// command line; the last width given wins.
+func rewriteObsoleteWidth(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i, a := range args {
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if len(a) >= 2 && a[0] == '-' && allDigits(a[1:]) {
+			out = append(out, "-w"+a[1:])
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func allDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func foldStream(r io.Reader, w io.Writer, width int, mode countMode, spaces bool) error {
+	if mode == countBytes {
+		return foldBytesStream(r, w, width, spaces)
+	}
+	return foldColumnsStream(r, w, width, mode, spaces)
+}
+
+// foldColumnsStream folds counting display columns (default) or
+// characters (-c). Per POSIX/GNU, in both modes a tab advances to the
+// next multiple of 8, a backspace decreases the column count, and a
+// carriage return resets it to zero. Nothing is ever deleted: with -s
+// the break goes after the last blank (which is kept), and the
+// remainder keeps its leading blanks.
+func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spaces bool) error {
 	br := bufio.NewReader(r)
-	for {
-		line, err := br.ReadString('\n')
-		if len(line) > 0 {
-			hasNL := strings.HasSuffix(line, "\n")
-			if hasNL {
-				line = strings.TrimSuffix(line, "\n")
-			}
-			var out string
-			if bytesMode {
-				out = foldBytes(line, width, spaces)
-			} else if characters {
-				out = foldRunes(line, width, spaces)
-			} else {
-				out = foldDisplay(line, width, spaces)
-			}
-			if _, werr := io.WriteString(w, out); werr != nil {
-				return werr
-			}
-			if hasNL {
-				if _, werr := io.WriteString(w, "\n"); werr != nil {
-					return werr
+	var line []rune
+	col := 0
+	lastWidth := 0
+	adjust := func(c int, ch rune) int {
+		switch ch {
+		case '\b':
+			if c > 0 {
+				c -= lastWidth
+				if c < 0 {
+					c = 0
 				}
 			}
+		case '\r':
+			c = 0
+		case '\t':
+			c += 8 - c%8
+		default:
+			cw := 1
+			if mode == countColumns {
+				cw = runewidth.RuneWidth(ch)
+				if cw < 0 {
+					cw = 1
+				}
+			}
+			lastWidth = cw
+			c += cw
 		}
+		return c
+	}
+	writeLine := func(rs []rune, nl bool) error {
+		if _, err := io.WriteString(w, string(rs)); err != nil {
+			return err
+		}
+		if nl {
+			if _, err := io.WriteString(w, "\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for {
+		ch, _, err := br.ReadRune()
 		if err == io.EOF {
+			if len(line) > 0 {
+				return writeLine(line, false)
+			}
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-	}
-}
-
-func foldRunes(s string, width int, spaces bool) string {
-	rs := []rune(s)
-	var b strings.Builder
-	for len(rs) > width {
-		cut := width
-		if spaces {
-			limit := width
-			if len(rs) > width && unicode.IsSpace(rs[width]) {
-				limit = width + 1
+		if ch == '\n' {
+			if err := writeLine(line, true); err != nil {
+				return err
 			}
-			for i := limit; i > 0; i-- {
-				if unicode.IsSpace(rs[i-1]) {
-					cut = i
-					break
+			line = line[:0]
+			col = 0
+			continue
+		}
+	rescan:
+		newCol := adjust(col, ch)
+		if newCol > width {
+			if spaces {
+				if i := lastBlankRune(line); i >= 0 {
+					// Break after the blank, keeping it; the remainder
+					// (leading blanks and all) starts the next line.
+					if err := writeLine(line[:i+1], true); err != nil {
+						return err
+					}
+					line = append(line[:0], line[i+1:]...)
+					col = 0
+					for _, r := range line {
+						col = adjust(col, r)
+					}
+					goto rescan
 				}
 			}
-		}
-		b.WriteString(strings.TrimRightFunc(string(rs[:cut]), unicode.IsSpace))
-		b.WriteByte('\n')
-		rs = rs[cut:]
-		if spaces {
-			for len(rs) > 0 && unicode.IsSpace(rs[0]) {
-				rs = rs[1:]
+			if len(line) == 0 {
+				// A single unit wider than the width still goes out.
+				line = append(line, ch)
+				col = newCol
+				continue
 			}
+			if err := writeLine(line, true); err != nil {
+				return err
+			}
+			line = line[:0]
+			col = 0
+			goto rescan
 		}
+		line = append(line, ch)
+		col = newCol
 	}
-	b.WriteString(string(rs))
-	return b.String()
 }
 
-type displayUnit struct {
-	r rune
-	w int
-}
-
-func foldDisplay(s string, width int, spaces bool) string {
-	units := make([]displayUnit, 0, len(s))
-	for _, r := range s {
-		w := runewidth.RuneWidth(r)
-		if w < 0 {
-			w = 0
+// foldBytesStream folds counting bytes (-b): tabs, backspaces, and
+// carriage returns each count one, like any other byte.
+func foldBytesStream(r io.Reader, w io.Writer, width int, spaces bool) error {
+	br := bufio.NewReader(r)
+	var line []byte
+	writeLine := func(bs []byte, nl bool) error {
+		if _, err := w.Write(bs); err != nil {
+			return err
 		}
-		units = append(units, displayUnit{r: r, w: w})
-	}
-	var b strings.Builder
-	for displayWidth(units) > width {
-		cut := displayFit(units, width)
-		if spaces {
-			limit := cut
-			if cut < len(units) && unicode.IsSpace(units[cut].r) {
-				limit = cut + 1
+		if nl {
+			if _, err := io.WriteString(w, "\n"); err != nil {
+				return err
 			}
-			for i := limit; i > 0; i-- {
-				if unicode.IsSpace(units[i-1].r) {
-					cut = i
-					break
+		}
+		return nil
+	}
+	for {
+		c, err := br.ReadByte()
+		if err == io.EOF {
+			if len(line) > 0 {
+				return writeLine(line, false)
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if c == '\n' {
+			if err := writeLine(line, true); err != nil {
+				return err
+			}
+			line = line[:0]
+			continue
+		}
+	rescan:
+		if len(line)+1 > width {
+			if spaces {
+				if i := lastBlankByte(line); i >= 0 {
+					if err := writeLine(line[:i+1], true); err != nil {
+						return err
+					}
+					line = append(line[:0], line[i+1:]...)
+					goto rescan
 				}
 			}
-		}
-		writeDisplayUnits(&b, trimRightSpaceUnits(units[:cut]))
-		b.WriteByte('\n')
-		units = units[cut:]
-		if spaces {
-			for len(units) > 0 && unicode.IsSpace(units[0].r) {
-				units = units[1:]
+			if len(line) == 0 {
+				line = append(line, c)
+				continue
 			}
+			if err := writeLine(line, true); err != nil {
+				return err
+			}
+			line = line[:0]
+			goto rescan
 		}
+		line = append(line, c)
 	}
-	writeDisplayUnits(&b, units)
-	return b.String()
 }
 
-func displayWidth(units []displayUnit) int {
-	n := 0
-	for _, u := range units {
-		n += u.w
-	}
-	return n
-}
-
-func displayFit(units []displayUnit, width int) int {
-	col := 0
-	for i, u := range units {
-		if col+u.w > width {
-			if i == 0 {
-				return 1
-			}
+func lastBlankRune(rs []rune) int {
+	for i := len(rs) - 1; i >= 0; i-- {
+		if rs[i] == ' ' || rs[i] == '\t' {
 			return i
 		}
-		col += u.w
 	}
-	return len(units)
+	return -1
 }
 
-func trimRightSpaceUnits(units []displayUnit) []displayUnit {
-	for len(units) > 0 && unicode.IsSpace(units[len(units)-1].r) {
-		units = units[:len(units)-1]
-	}
-	return units
-}
-
-func writeDisplayUnits(b *strings.Builder, units []displayUnit) {
-	for _, u := range units {
-		b.WriteRune(u.r)
-	}
-}
-
-func foldBytes(s string, width int, spaces bool) string {
-	bs := []byte(s)
-	var b strings.Builder
-	for len(bs) > width {
-		cut := width
-		if spaces {
-			limit := width
-			if len(bs) > width && (bs[width] == ' ' || bs[width] == '\t') {
-				limit = width + 1
-			}
-			for i := limit; i > 0; i-- {
-				if bs[i-1] == ' ' || bs[i-1] == '\t' {
-					cut = i
-					break
-				}
-			}
-		}
-		b.WriteString(strings.TrimRight(string(bs[:cut]), " \t"))
-		b.WriteByte('\n')
-		bs = bs[cut:]
-		if spaces {
-			for len(bs) > 0 && (bs[0] == ' ' || bs[0] == '\t') {
-				bs = bs[1:]
-			}
+func lastBlankByte(bs []byte) int {
+	for i := len(bs) - 1; i >= 0; i-- {
+		if bs[i] == ' ' || bs[i] == '\t' {
+			return i
 		}
 	}
-	b.Write(bs)
-	return b.String()
+	return -1
 }
 
 func openInput(rc *tool.RunContext, name string) (io.Reader, io.Closer, error) {

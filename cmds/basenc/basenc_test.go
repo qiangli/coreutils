@@ -55,12 +55,12 @@ func TestBasencZ85(t *testing.T) {
 	if out != "f!$Kw\n" || errb != "" || code != 0 {
 		t.Fatalf("z85 encode = (%q, %q, %d)", out, errb, code)
 	}
-	out, errb, code = runTool(t, "", "f!$Kw\n", "--z85", "-D")
+	out, errb, code = runTool(t, "", "f!$Kw\n", "--z85", "-d")
 	if out != "1234" || errb != "" || code != 0 {
 		t.Fatalf("z85 decode = (%q, %q, %d)", out, errb, code)
 	}
 	_, errb, code = runTool(t, "", "123", "--z85")
-	if code != 1 || !strings.Contains(errb, "multiple of 4") {
+	if code != 1 || !strings.Contains(errb, "basenc: invalid input (length must be multiple of 4 characters)") {
 		t.Fatalf("z85 invalid length = (%q, %d)", errb, code)
 	}
 }
@@ -103,15 +103,70 @@ func TestBasencFileAndErrors(t *testing.T) {
 		code int
 	}{
 		{nil, "missing encoding type", 2},
-		{[]string{"--base64", "--base16"}, "multiple encoding types", 2},
 		{[]string{"--base64", "-w", "-1"}, "invalid wrap size", 1},
 		{[]string{"--base64", "-d"}, "invalid input", 1},
 		{[]string{"--base64", "missing"}, "No such file or directory", 1},
+		{[]string{"--base64", "-D"}, "unknown shorthand flag", 2},
 	}
 	for _, tt := range tests {
 		_, errb, code := runTool(t, dir, "%%%%", tt.args...)
 		if code != tt.code || !strings.Contains(errb, tt.want) {
 			t.Fatalf("args %v err = (%q, %d), want %q code %d", tt.args, errb, code, tt.want, tt.code)
+		}
+	}
+}
+
+// GNU takes the last encoding flag given, not an error.
+func TestBasencLastEncodingWins(t *testing.T) {
+	out, errb, code := runTool(t, "", "foobar", "--base64", "--base16")
+	if out != "666F6F626172\n" || errb != "" || code != 0 {
+		t.Fatalf("--base64 --base16 = (%q, %q, %d), want base16 output", out, errb, code)
+	}
+	out, errb, code = runTool(t, "", "foobar", "--base16", "--base64")
+	if out != "Zm9vYmFy\n" || errb != "" || code != 0 {
+		t.Fatalf("--base16 --base64 = (%q, %q, %d), want base64 output", out, errb, code)
+	}
+}
+
+// GNU >= 9.5 decode semantics: auto-pad unpadded input at EOF, reject
+// non-zero padding bits, and treat '=' as garbage in encodings where
+// padding is invalid.
+func TestBasencDecodePadding(t *testing.T) {
+	okCases := []struct {
+		stdin string
+		args  []string
+		want  string
+	}{
+		{"QQ", []string{"--base64", "-d"}, "A"},
+		{"QQ", []string{"--base64url", "-d"}, "A"},
+		{"ME", []string{"--base32", "-d"}, "a"},
+		{"C4", []string{"--base32hex", "-d"}, "a"},
+		{"MZXW6", []string{"--base32", "-d"}, "foo"},
+		// -d -i strips '=' where padding is not part of the encoding.
+		{"4142=", []string{"--base16", "-d", "-i"}, "AB"},
+		{"01000001=", []string{"--base2msbf", "-d", "-i"}, "A"},
+	}
+	for _, c := range okCases {
+		out, errb, code := runTool(t, "", c.stdin, c.args...)
+		if out != c.want || errb != "" || code != 0 {
+			t.Errorf("basenc %v < %q = (%q, %q, %d), want %q", c.args, c.stdin, out, errb, code, c.want)
+		}
+	}
+	badCases := []struct {
+		stdin string
+		args  []string
+	}{
+		{"QR==", []string{"--base64", "-d"}}, // non-zero padding bits
+		{"QR", []string{"--base64", "-d"}},   // ditto, auto-padded
+		{"MF======", []string{"--base32", "-d"}},
+		{"Q", []string{"--base64", "-d"}}, // impossible length
+		{"4142=", []string{"--base16", "-d"}},
+		{"414", []string{"--base16", "-d"}}, // dangling nibble
+	}
+	for _, c := range badCases {
+		out, errb, code := runTool(t, "", c.stdin, c.args...)
+		if code != 1 || !strings.Contains(errb, "basenc: invalid input") {
+			t.Errorf("basenc %v < %q = (%q, %q, %d), want invalid input + exit 1", c.args, c.stdin, out, errb, code)
 		}
 	}
 }

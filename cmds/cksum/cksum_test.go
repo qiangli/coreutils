@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -57,8 +58,14 @@ func TestCKSumAlgorithms(t *testing.T) {
 		{[]string{"--algorithm=sha1", "--untagged"}, "a9993e364706816aba3e25717850c26c9cd0d89d  -\n"},
 		{[]string{"--algorithm=sha1", "--base64"}, "SHA1 (-) = qZk+NkcGgWq6PiVxeFDCbJzQ2J0=\n"},
 		{[]string{"--algorithm=md5"}, "MD5 (-) = 900150983cd24fb0d6963f7d28e17f72\n"},
-		{[]string{"--algorithm=crc32b"}, "CRC32B (-) = 352441c2\n"},
-		{[]string{"--algorithm=sha3"}, "SHA3-256 (-) = 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532\n"},
+		// crc32b prints a DECIMAL untagged checksum + length, like crc
+		// (GNU dispatches it to output_crc). 0x352441c2 = 891568578.
+		{[]string{"--algorithm=crc32b"}, "891568578 3\n"},
+		{[]string{"--algorithm=sha2", "--length=256"}, "SHA256 (-) = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"},
+		{[]string{"--algorithm=sha3", "--length=256"}, "SHA3-256 (-) = 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532\n"},
+		{[]string{"--algorithm=sha3", "--length=512"}, "SHA3-512 (-) = b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0\n"},
+		{[]string{"--algorithm=blake2b", "--length=128", "--tag"}, "BLAKE2b-128 (-) = cf4ab791c62b8d2b2109c90275287816\n"},
+		{[]string{"--algorithm=blake2b", "--length=0"}, "BLAKE2b (-) = ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923\n"},
 		{[]string{"--algorithm=sha3-512"}, "SHA3-512 (-) = b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0\n"},
 		{[]string{"--algorithm=sm3"}, "SM3 (-) = 66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0\n"},
 		{[]string{"--algorithm=blake3"}, "BLAKE3-256 (-) = 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85\n"},
@@ -89,10 +96,34 @@ func TestCKSumCheckMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("abc"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	checks := "1219131554 3 a.txt\n"
+
+	// Plain `cksum -c` verifies only BSD-tagged digest lines, auto-
+	// detecting the algorithm per line from the tag (GNU). Length-
+	// suffixed tags select the digest size.
+	checks := "SHA1 (a.txt) = a9993e364706816aba3e25717850c26c9cd0d89d\n" +
+		"SHA256 (a.txt) = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n" +
+		"BLAKE2b-128 (a.txt) = cf4ab791c62b8d2b2109c90275287816\n" +
+		"SHA3-256 (a.txt) = 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532\n"
 	out, errb, code := runTool(t, dir, checks, "-c")
-	if code != 0 || out != "a.txt: OK\n" || errb != "" {
-		t.Fatalf("crc check = (%q, %q, %d)", out, errb, code)
+	if code != 0 || out != strings.Repeat("a.txt: OK\n", 4) || errb != "" {
+		t.Fatalf("auto-detect check = (%q, %q, %d)", out, errb, code)
+	}
+
+	// `CRC LEN FILE` lines are NOT parsed by cksum -c.
+	checks = "1219131554 3 a.txt\n"
+	out, errb, code = runTool(t, dir, checks, "-c")
+	if code != 1 || out != "" || !strings.Contains(errb, "no properly formatted checksum lines found") {
+		t.Fatalf("crc line check = (%q, %q, %d)", out, errb, code)
+	}
+
+	// --check with a non-digest -a is a hard error (GNU).
+	_, errb, code = runTool(t, dir, "", "-c", "-a", "crc")
+	if code != 2 || !strings.Contains(errb, "--check is not supported with --algorithm={bsd,sysv,crc,crc32b}") {
+		t.Fatalf("crc -c = (%q, %d)", errb, code)
+	}
+	_, errb, code = runTool(t, dir, "", "-c", "-a", "bsd")
+	if code != 2 || !strings.Contains(errb, "--check is not supported with --algorithm={bsd,sysv,crc,crc32b}") {
+		t.Fatalf("bsd -c = (%q, %d)", errb, code)
 	}
 
 	checks = "SHA1 (a.txt) = a9993e364706816aba3e25717850c26c9cd0d89d\n"
@@ -107,22 +138,37 @@ func TestCKSumCheckMode(t *testing.T) {
 		t.Fatalf("md5 quiet check = (%q, %q, %d)", out, errb, code)
 	}
 
-	checks = "1219131554 3 missing.txt\n"
+	// -a sha2 -c needs no --length; the tag picks the member.
+	checks = "SHA256 (a.txt) = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"
+	out, errb, code = runTool(t, dir, checks, "--algorithm=sha2", "-c")
+	if code != 0 || out != "a.txt: OK\n" || errb != "" {
+		t.Fatalf("sha2 tagged check = (%q, %q, %d)", out, errb, code)
+	}
+
+	checks = "MD5 (missing.txt) = 900150983cd24fb0d6963f7d28e17f72\n"
 	out, errb, code = runTool(t, dir, checks, "-c", "--ignore-missing")
 	if code != 0 || out != "" || errb != "" {
 		t.Fatalf("ignore missing = (%q, %q, %d)", out, errb, code)
 	}
 
-	checks = "1219131554 3 a.txt\x00"
-	out, errb, code = runTool(t, dir, checks, "-c", "--zero")
-	if code != 0 || out != "a.txt: OK\n" || errb != "" {
-		t.Fatalf("zero check = (%q, %q, %d)", out, errb, code)
+	// --zero is rejected when verifying (GNU).
+	_, errb, code = runTool(t, dir, "", "-c", "--zero")
+	if code != 2 || !strings.Contains(errb, "the --zero option is not supported when verifying checksums") {
+		t.Fatalf("zero check = (%q, %d)", errb, code)
 	}
 
 	checks = "not a checksum\n"
 	out, errb, code = runTool(t, dir, checks, "-c", "--strict")
 	if code != 1 || out != "" || !strings.Contains(errb, "no properly formatted checksum lines found") {
 		t.Fatalf("strict malformed = (%q, %q, %d)", out, errb, code)
+	}
+
+	// --warn diagnoses each malformed line with its number.
+	checks = "SHA1 (a.txt) = a9993e364706816aba3e25717850c26c9cd0d89d\ngarbage\n"
+	out, errb, code = runTool(t, dir, checks, "-c", "--warn")
+	if code != 0 || out != "a.txt: OK\n" ||
+		!strings.Contains(errb, "cksum: 'standard input': 2: improperly formatted SHA1 checksum line") {
+		t.Fatalf("warn = (%q, %q, %d)", out, errb, code)
 	}
 }
 
@@ -139,8 +185,116 @@ func TestCKSumErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "mutually exclusive") {
 		t.Fatalf("conflicting encodings = (%q, %d)", errb, code)
 	}
+	// --debug information goes to stderr, not stdout (GNU).
 	out, errb, code := runTool(t, "", "", "--debug")
-	if code != 0 || errb != "" || !strings.Contains(out, "hardware acceleration managed by Go runtime") || !strings.Contains(out, "4294967295 0") {
+	if code != 0 || !strings.Contains(errb, "hardware acceleration managed by Go runtime") || out != "4294967295 0\n" {
 		t.Fatalf("debug = (%q, %q, %d)", out, errb, code)
+	}
+	// GNU algorithm names are matched exactly.
+	_, errb, code = runTool(t, "", "", "--algorithm=MD5")
+	if code != 2 || !strings.Contains(errb, "invalid algorithm") {
+		t.Fatalf("uppercase GNU algorithm = (%q, %d)", errb, code)
+	}
+}
+
+func TestCKSumLengthValidation(t *testing.T) {
+	// sha2/sha3 require --length outside check mode.
+	_, errb, code := runTool(t, "", "abc", "--algorithm=sha2")
+	if code != 2 || !strings.Contains(errb, "--algorithm=sha2 requires specifying --length 224, 256, 384, or 512") {
+		t.Fatalf("sha2 without length = (%q, %d)", errb, code)
+	}
+	_, errb, code = runTool(t, "", "abc", "--algorithm=sha3")
+	if code != 2 || !strings.Contains(errb, "--algorithm=sha3 requires specifying --length 224, 256, 384, or 512") {
+		t.Fatalf("sha3 without length = (%q, %d)", errb, code)
+	}
+	_, errb, code = runTool(t, "", "abc", "--algorithm=sha2", "--length=100")
+	if code != 2 || !strings.Contains(errb, "cksum: invalid length: '100'") ||
+		!strings.Contains(errb, "digest length for 'SHA2' must be 224, 256, 384, or 512") {
+		t.Fatalf("sha2 bad length = (%q, %d)", errb, code)
+	}
+	// --length with an algorithm that doesn't take it.
+	_, errb, code = runTool(t, "", "abc", "--algorithm=md5", "--length=128")
+	if code != 2 || !strings.Contains(errb, "--length is only supported with --algorithm blake2b, sha2, or sha3") {
+		t.Fatalf("md5 with length = (%q, %d)", errb, code)
+	}
+	_, errb, code = runTool(t, "", "abc", "--length=32")
+	if code != 2 || !strings.Contains(errb, "--length is only supported with --algorithm blake2b, sha2, or sha3") {
+		t.Fatalf("crc with length = (%q, %d)", errb, code)
+	}
+	_, errb, code = runTool(t, "", "abc", "--algorithm=blake2b", "--length=1024")
+	if code != 2 || !strings.Contains(errb, "maximum digest length for 'BLAKE2b' is 512 bits") {
+		t.Fatalf("blake2b too long = (%q, %d)", errb, code)
+	}
+	_, errb, code = runTool(t, "", "abc", "--algorithm=blake2b", "--length=100")
+	if code != 2 || !strings.Contains(errb, "length is not a multiple of 8") {
+		t.Fatalf("blake2b not mult 8 = (%q, %d)", errb, code)
+	}
+}
+
+func TestCKSumRawAndNames(t *testing.T) {
+	// --raw works for crc/crc32b (big-endian u32) and bsd/sysv
+	// (big-endian u16).
+	out, errb, code := runTool(t, "", "abc", "--raw")
+	if code != 0 || errb != "" || !bytes.Equal([]byte(out), []byte{0x48, 0xaa, 0x78, 0xa2}) {
+		t.Fatalf("crc raw = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runTool(t, "", "abc", "-a", "crc32b", "--raw")
+	if code != 0 || errb != "" || !bytes.Equal([]byte(out), []byte{0x35, 0x24, 0x41, 0xc2}) {
+		t.Fatalf("crc32b raw = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runTool(t, "", "abc", "-a", "bsd", "--raw")
+	if code != 0 || errb != "" || !bytes.Equal([]byte(out), []byte{0x40, 0xac}) {
+		t.Fatalf("bsd raw = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runTool(t, "", "abc", "-a", "sysv", "--raw")
+	if code != 0 || errb != "" || !bytes.Equal([]byte(out), []byte{0x01, 0x26}) {
+		t.Fatalf("sysv raw = (%q, %q, %d)", out, errb, code)
+	}
+
+	// --raw with multiple files is an error.
+	dir := t.TempDir()
+	for _, n := range []string{"a", "b"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("abc"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, errb, code = runTool(t, dir, "", "--raw", "a", "b")
+	if code != 2 || !strings.Contains(errb, "the --raw option is not supported with multiple files") {
+		t.Fatalf("raw multiple = (%q, %d)", errb, code)
+	}
+
+	// An explicit "-" operand prints the name.
+	out, _, code = runTool(t, "", "abc", "-")
+	if out != "1219131554 3 -\n" || code != 0 {
+		t.Fatalf("explicit dash = (%q, %d)", out, code)
+	}
+	out, _, code = runTool(t, "", "abc", "-a", "bsd", "-")
+	if out != "16556     1 -\n" || code != 0 {
+		t.Fatalf("bsd explicit dash = (%q, %d)", out, code)
+	}
+
+	// Check-only options are rejected outside --check (GNU).
+	_, errb, code = runTool(t, "", "abc", "--warn")
+	if code != 2 || !strings.Contains(errb, "the --warn option is meaningful only when verifying checksums") {
+		t.Fatalf("warn without check = (%q, %d)", errb, code)
+	}
+}
+
+func TestCKSumEscapedFilename(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skipf("backslash is a path separator on windows")
+	}
+	dir := t.TempDir()
+	name := `a\b`
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runTool(t, dir, "", "-a", "sha1", name)
+	if out != `\SHA1 (a\\b) = a9993e364706816aba3e25717850c26c9cd0d89d`+"\n" || code != 0 {
+		t.Fatalf("escaped tagged = (%q, %d)", out, code)
+	}
+	out, _, code = runTool(t, dir, "", "-a", "sha1", "--untagged", name)
+	if out != `\a9993e364706816aba3e25717850c26c9cd0d89d  a\\b`+"\n" || code != 0 {
+		t.Fatalf("escaped untagged = (%q, %d)", out, code)
 	}
 }

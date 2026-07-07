@@ -41,8 +41,78 @@ func TestFoldSpacesAndFile(t *testing.T) {
 	if code != 0 || stderr.String() != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	if want := "alpha beta\ngamma\n"; out.String() != want {
+	// The blank after "beta" overflows column 10, so the break goes
+	// after the last blank on the line — the one following "alpha" —
+	// and that blank is kept (POSIX; verified against GNU/BSD fold).
+	if want := "alpha \nbeta gamma\n"; out.String() != want {
 		t.Fatalf("out=%q want %q", out.String(), want)
+	}
+}
+
+func TestFoldSpacesKeepsTrailingBlank(t *testing.T) {
+	// fold never deletes bytes: -s breaks after the blank, keeping it.
+	out, stderr, code := runFold(t, "hello world\n", "-s", "-w", "8")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "hello \nworld\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldSpacesKeepsLeadingBlanks(t *testing.T) {
+	// Continuation lines keep their leading blanks; nothing is trimmed.
+	out, stderr, code := runFold(t, "aa   bb\n", "-s", "-w", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "aa  \n bb\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldTabAdvancesColumn(t *testing.T) {
+	// A tab advances to the next multiple of 8, so "a\tb" is 9 columns
+	// and folds at width 8.
+	out, stderr, code := runFold(t, "a\tb\n", "-w", "8")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "a\t\nb\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldBackspaceDecrementsColumn(t *testing.T) {
+	out, stderr, code := runFold(t, "ab\bcd\n", "-w", "3")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	// Columns: a=1 b=2 \b=1 c=2 d=3 — all fit in one 3-column line.
+	if want := "ab\bcd\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldCarriageReturnResetsColumn(t *testing.T) {
+	out, stderr, code := runFold(t, "abc\rdef\n", "-w", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "abc\rdef\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldBytesCountsControlCharsAsOne(t *testing.T) {
+	// With -b a tab is one byte like any other, so "a\tb" (3 bytes)
+	// fits in width 3.
+	out, stderr, code := runFold(t, "a\tb\n", "-b", "-w", "3")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "a\tb\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
 	}
 }
 
@@ -74,12 +144,34 @@ func TestFoldDefaultUsesDisplayColumns(t *testing.T) {
 	}
 }
 
+func TestFoldCharactersTabStillAdvances(t *testing.T) {
+	// -c counts characters, but per GNU a tab still advances to the
+	// next multiple of 8 (only -b treats it as a single unit).
+	out, stderr, code := runFold(t, "a\tb\n", "-c", "-w", "8")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "a\t\nb\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestFoldBytesCanSplitUTF8(t *testing.T) {
 	out, stderr, code := runFold(t, "éé\n", "-w", "2", "-b")
 	if code != 0 || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 	if want := "é\né\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldObsoleteWidthSyntax(t *testing.T) {
+	out, stderr, code := runFold(t, "abcdef\n", "-3")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "abc\ndef\n"; out != want {
 		t.Fatalf("out=%q want %q", out, want)
 	}
 }
