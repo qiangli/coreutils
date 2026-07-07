@@ -255,7 +255,8 @@ const (
 )
 
 func parseScale(rc *tool.RunContext, s, flag string) (scale, int) {
-	switch strings.ToLower(s) {
+	canon := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(s, "_", "-"), " ", ""))
+	switch canon {
 	case "", "none":
 		return scaleNone, -1
 	case "auto":
@@ -264,7 +265,7 @@ func parseScale(rc *tool.RunContext, s, flag string) (scale, int) {
 		return scaleSI, -1
 	case "iec":
 		return scaleIEC, -1
-	case "iec-i":
+	case "iec-i", "ieci":
 		return scaleIECI, -1
 	default:
 		return scaleNone, tool.NotSupported(rc, cmd, fmt.Sprintf("%s=%s (supported: none, auto, si, iec, iec-i)", flag, s))

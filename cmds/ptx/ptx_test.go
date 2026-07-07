@@ -204,6 +204,24 @@ func TestPtxRoffFormat(t *testing.T) {
 	}
 }
 
+func TestPtxTruncationFlagAndMacroName(t *testing.T) {
+	out, errb, code := runTool(t, t.TempDir(), "aa bbb cccc dd\n", "-w", "20", "-F", "!", "-")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if !strings.Contains(out, "aa bbb!") || strings.Contains(out, "/") {
+		t.Fatalf("custom truncation marker not used: %q", out)
+	}
+
+	out, errb, code = runTool(t, t.TempDir(), "alpha beta\n", "-A", "-O", "-M", "YY", "-")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if !strings.HasPrefix(out, `.YY "" "" "alpha beta" "" ":1"`+"\n") {
+		t.Fatalf("custom macro not used: %q", out)
+	}
+}
+
 func TestPtxBreakFileAndSentenceRegexp(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "breaks"), []byte("- "), 0o644); err != nil {

@@ -3,6 +3,8 @@ package envcmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,6 +55,52 @@ func TestEnv(t *testing.T) {
 		if out != c.want || code != 0 || errb != "" {
 			t.Errorf("env %q (env=%q) = (%q, %q, %d), want (%q, \"\", 0)", c.args, c.env, out, errb, code, c.want)
 		}
+	}
+}
+
+func TestEnvNullAndFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "envfile"), []byte("B=from-file\nD=4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   []string{"A=1", "B=2"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"--file", "envfile", "--null"})
+	if code != 0 || errb.String() != "" {
+		t.Fatalf("code=%d err=%q", code, errb.String())
+	}
+	if want := "A=1\x00B=from-file\x00D=4\x00"; out.String() != want {
+		t.Fatalf("out=%q want %q", out.String(), want)
+	}
+}
+
+func TestEnvChdirAndSplitStringCommandContract(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"--chdir", dir, "-S", "printf 'two words'"})
+	if code != 2 || !strings.Contains(errb.String(), "printf") || rc.Dir != dir {
+		t.Fatalf("code=%d err=%q dir=%q", code, errb.String(), rc.Dir)
+	}
+}
+
+func TestEnvSignalOptionsValidateInDataMode(t *testing.T) {
+	out, errb, code := runTool(t, []string{"A=1"}, "--ignore-signal=INT,TERM", "--default-signal=HUP", "--block-signal=USR1", "--list-signal-handling")
+	if code != 0 || errb != "" || out != "A=1\n" {
+		t.Fatalf("signal data mode = (%q, %q, %d)", out, errb, code)
+	}
+	_, errb, code = runTool(t, nil, "--ignore-signal=NOPE")
+	if code != 2 || !strings.Contains(errb, "unknown signal") {
+		t.Fatalf("bad signal code=%d err=%q", code, errb)
 	}
 }
 
