@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
@@ -32,6 +33,8 @@ type chgrpOpts struct {
 	preserveRoot bool
 	deref        derefMode
 	targetGid    int
+	fromUid      int
+	fromGid      int
 }
 
 func computeDeref(followLOrDeref, cmdLineH bool) derefMode {
@@ -44,7 +47,7 @@ func computeDeref(followLOrDeref, cmdLineH bool) derefMode {
 	return derefNever
 }
 
-func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose, changes, silent, preserveRoot, noDerefOrNoPreserve, cmdLineH, followLOrDeref bool) int {
+func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose, changes, silent, preserveRoot, noDereference, noTraverse, cmdLineH, followLOrDeref bool, fromUid, fromGid int) int {
 	opts := chgrpOpts{
 		recursive:    recursive,
 		verbose:      verbose || changes,
@@ -52,6 +55,11 @@ func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose,
 		silent:       silent,
 		preserveRoot: preserveRoot,
 		deref:        computeDeref(followLOrDeref, cmdLineH),
+		fromUid:      fromUid,
+		fromGid:      fromGid,
+	}
+	if noDereference || noTraverse {
+		opts.deref = derefNever
 	}
 
 	gid := -1
@@ -91,7 +99,7 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 	ok := true
 
 	if !opts.recursive {
-		changed, err := chgrpOne(root, opts)
+		changed, err := chgrpOne(root, opts, opts.deref != derefNever)
 		if err != nil {
 			chgrpReport(rc, display, opts, err)
 			return false
@@ -116,10 +124,9 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 		var changed bool
 		var cerr error
 		if useChown {
-			changed, cerr = chgrpOne(path, opts)
+			changed, cerr = chgrpOne(path, opts, true)
 		} else {
-			cerr = os.Lchown(path, -1, opts.targetGid)
-			changed = (cerr == nil)
+			changed, cerr = chgrpOne(path, opts, false)
 		}
 
 		if cerr != nil {
@@ -137,16 +144,30 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 	return ok
 }
 
-func chgrpOne(path string, opts chgrpOpts) (changed bool, err error) {
-	fi, statErr := os.Stat(path)
+func chgrpOne(path string, opts chgrpOpts, follow bool) (changed bool, err error) {
+	stat := os.Stat
+	chown := os.Chown
+	if !follow {
+		stat = os.Lstat
+		chown = os.Lchown
+	}
+	fi, statErr := stat(path)
 	if statErr != nil {
 		return false, statErr
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	if ok && int(st.Gid) == opts.targetGid {
-		return false, os.Chown(path, -1, opts.targetGid)
+	if ok {
+		if opts.fromUid >= 0 && int(st.Uid) != opts.fromUid {
+			return false, nil
+		}
+		if opts.fromGid >= 0 && int(st.Gid) != opts.fromGid {
+			return false, nil
+		}
+		if int(st.Gid) == opts.targetGid {
+			return false, nil
+		}
 	}
-	err = os.Chown(path, -1, opts.targetGid)
+	err = chown(path, -1, opts.targetGid)
 	return err == nil, err
 }
 
@@ -189,6 +210,47 @@ func statFile(rc *tool.RunContext, path string) (*refFileInfo, error) {
 		return nil, fmt.Errorf("cannot stat %s", path)
 	}
 	return &refFileInfo{gid: st.Gid}, nil
+}
+
+func parseFromSpec(spec string) (uid, gid int, err error) {
+	uid, gid = -1, -1
+	if spec == "" {
+		return uid, gid, nil
+	}
+	ownerStr, groupStr, hasColon := strings.Cut(spec, ":")
+	if ownerStr != "" {
+		u, uerr := user.Lookup(ownerStr)
+		switch {
+		case uerr == nil:
+			if uid, err = strconv.Atoi(u.Uid); err != nil {
+				return -1, -1, fmt.Errorf("invalid user: '%s'", spec)
+			}
+		default:
+			id, aerr := strconv.Atoi(ownerStr)
+			if aerr != nil || id < 0 {
+				return -1, -1, fmt.Errorf("invalid user: '%s'", spec)
+			}
+			uid = id
+		}
+	}
+	if !hasColon {
+		return uid, gid, nil
+	}
+	if groupStr == "" {
+		return uid, gid, nil
+	}
+	g, gerr := user.LookupGroup(groupStr)
+	if gerr == nil {
+		if gid, err = strconv.Atoi(g.Gid); err != nil {
+			return -1, -1, fmt.Errorf("invalid group: '%s'", spec)
+		}
+		return uid, gid, nil
+	}
+	id, aerr := strconv.Atoi(groupStr)
+	if aerr != nil || id < 0 {
+		return -1, -1, fmt.Errorf("invalid group: '%s'", spec)
+	}
+	return uid, id, nil
 }
 
 type refFileInfo struct {

@@ -25,10 +25,10 @@ func run(rc *tool.RunContext, args []string) int {
 	for _, a := range args {
 		switch a {
 		case "--help":
-			fmt.Fprintln(rc.Out, cmd.Usage)
+			fmt.Fprintf(rc.Out, "Usage: %s\n%s\n", cmd.Usage, cmd.Synopsis)
 			return 0
-		case "--version":
-			fmt.Fprintln(rc.Out, "factor (coreutils-go)")
+		case "--version", "-V":
+			fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
 			return 0
 		case "-h", "--exponents":
 			exponents = true

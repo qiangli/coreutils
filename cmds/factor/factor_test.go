@@ -24,3 +24,18 @@ func TestFactorExponents(t *testing.T) {
 		t.Fatalf("code=%d out=%q err=%s", code, out.String(), err.String())
 	}
 }
+
+func TestFactorHelpVersionAndShortH(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"--version"}, {"-V"}} {
+		var out, err bytes.Buffer
+		code := run(&tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &err, In: strings.NewReader("")}}, args)
+		if code != 0 || err.String() != "" || out.String() == "" {
+			t.Fatalf("factor %v: code=%d out=%q err=%q", args, code, out.String(), err.String())
+		}
+	}
+	var out, err bytes.Buffer
+	code := run(&tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &err, In: strings.NewReader("")}}, []string{"-h", "36"})
+	if code != 0 || out.String() != "36: 2^2 3^2\n" {
+		t.Fatalf("factor -h remains exponents: code=%d out=%q err=%q", code, out.String(), err.String())
+	}
+}

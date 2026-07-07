@@ -127,6 +127,9 @@ func TestChownHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: chown") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	if !strings.Contains(out, "--no-dereference") {
+		t.Errorf("--help missing --no-dereference: %q", out)
+	}
 	out, _, code = runTool(t, t.TempDir(), "--version")
 	if code != 0 || !strings.Contains(out, "chown") {
 		t.Errorf("--version: code=%d out=%q", code, out)
@@ -255,4 +258,22 @@ func TestChownDereference(t *testing.T) {
 		t.Fatalf("chown symlink (dereference): code=%d err=%q", code, errb)
 	}
 	_ = out
+}
+
+func TestChownNoDereference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown is unix-only")
+	}
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "--no-dereference", u.Uid, "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown --no-dereference: code=%d err=%q", code, errb)
+	}
 }

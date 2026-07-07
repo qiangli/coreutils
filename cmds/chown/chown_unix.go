@@ -48,7 +48,7 @@ func computeDeref(followLOrDeref, cmdLineH bool) derefMode {
 	return derefNever
 }
 
-func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose, changes, silent, preserveRoot, noDerefOrNoPreserve, cmdLineH, followLOrDeref bool, fromUid, fromGid int) int {
+func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose, changes, silent, preserveRoot, noDereference, noTraverse, cmdLineH, followLOrDeref bool, fromUid, fromGid int) int {
 	uid, gid, err := parseSpec(spec)
 	if err != nil {
 		statusError(rc, "%v", err)
@@ -65,6 +65,9 @@ func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose,
 		gid:          gid,
 		fromUid:      fromUid,
 		fromGid:      fromGid,
+	}
+	if noDereference || noTraverse {
+		opts.deref = derefNever
 	}
 
 	exit := 0
@@ -87,7 +90,7 @@ func chownTree(rc *tool.RunContext, root, display string, opts chownOpts) bool {
 	ok := true
 
 	if !opts.recursive {
-		changed, err := chownOne(root, opts)
+		changed, err := chownOne(root, opts, opts.deref != derefNever)
 		if err != nil {
 			chownReport(rc, display, opts, err)
 			return false
@@ -112,10 +115,9 @@ func chownTree(rc *tool.RunContext, root, display string, opts chownOpts) bool {
 		var changed bool
 		var cerr error
 		if useChown {
-			changed, cerr = chownOne(path, opts)
+			changed, cerr = chownOne(path, opts, true)
 		} else {
-			cerr = os.Lchown(path, opts.uid, opts.gid)
-			changed = (cerr == nil)
+			changed, cerr = chownOne(path, opts, false)
 		}
 
 		if cerr != nil {
@@ -133,8 +135,14 @@ func chownTree(rc *tool.RunContext, root, display string, opts chownOpts) bool {
 	return ok
 }
 
-func chownOne(path string, opts chownOpts) (changed bool, err error) {
-	fi, statErr := os.Stat(path)
+func chownOne(path string, opts chownOpts, follow bool) (changed bool, err error) {
+	stat := os.Stat
+	chown := os.Chown
+	if !follow {
+		stat = os.Lstat
+		chown = os.Lchown
+	}
+	fi, statErr := stat(path)
 	if statErr != nil {
 		return false, statErr
 	}
@@ -164,7 +172,7 @@ func chownOne(path string, opts chownOpts) (changed bool, err error) {
 			return false, nil
 		}
 	}
-	err = os.Chown(path, opts.uid, opts.gid)
+	err = chown(path, opts.uid, opts.gid)
 	return err == nil, err
 }
 

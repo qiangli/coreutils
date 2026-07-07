@@ -24,3 +24,13 @@ func TestExprMatch(t *testing.T) {
 		t.Fatalf("code=%d out=%q err=%s", code, out.String(), err.String())
 	}
 }
+
+func TestExprHelpVersionAliases(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"--version"}, {"-V"}} {
+		var out, err bytes.Buffer
+		code := run(&tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &err, In: strings.NewReader("")}}, args)
+		if code != 0 || err.String() != "" || out.String() == "" {
+			t.Fatalf("expr %v: code=%d out=%q err=%q", args, code, out.String(), err.String())
+		}
+	}
+}
