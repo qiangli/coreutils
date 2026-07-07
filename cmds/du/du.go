@@ -77,6 +77,7 @@ type duEntry struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = normalizeBlockSizeArgs(args)
 	fs := tool.NewFlags(cmd.Name)
 	all := fs.BoolP("all", "a", false, "write counts for all files, not just directories")
 	apparentSize := fs.BoolP("apparent-size", "A", false, "print apparent sizes, rather than disk usage")
@@ -249,6 +250,20 @@ func run(rc *tool.RunContext, args []string) int {
 		d.print(grand.size, "total", grand.mod)
 	}
 	return d.exit
+}
+
+func normalizeBlockSizeArgs(args []string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a == "--" {
+			break
+		}
+		if len(a) > 2 && strings.HasPrefix(a, "-B") && !strings.HasPrefix(a, "--") {
+			out[i] = "--block-size=" + a[2:]
+		}
+	}
+	return out
 }
 
 func (d *duRun) walk(display, full string, depth int, rootDev *uint64) (duEntry, bool) {
@@ -493,21 +508,35 @@ func parseBlockSize(s string) (int64, error) {
 		return 0, fmt.Errorf("empty block size")
 	}
 	mult := int64(1)
-	num := s
-	if last := s[len(s)-1]; last < '0' || last > '9' {
-		num = s[:len(s)-1]
-		switch last {
-		case 'K', 'k':
-			mult = 1024
-		case 'M', 'm':
-			mult = 1024 * 1024
-		case 'G', 'g':
-			mult = 1024 * 1024 * 1024
-		case 'T', 't':
-			mult = 1024 * 1024 * 1024 * 1024
-		default:
-			return 0, fmt.Errorf("bad suffix")
-		}
+	num := strings.ToUpper(strings.TrimSpace(s))
+	switch {
+	case strings.HasSuffix(num, "KIB"):
+		mult, num = 1024, strings.TrimSuffix(num, "KIB")
+	case strings.HasSuffix(num, "MIB"):
+		mult, num = 1024*1024, strings.TrimSuffix(num, "MIB")
+	case strings.HasSuffix(num, "GIB"):
+		mult, num = 1024*1024*1024, strings.TrimSuffix(num, "GIB")
+	case strings.HasSuffix(num, "TIB"):
+		mult, num = 1024*1024*1024*1024, strings.TrimSuffix(num, "TIB")
+	case strings.HasSuffix(num, "KB"):
+		mult, num = 1000, strings.TrimSuffix(num, "KB")
+	case strings.HasSuffix(num, "MB"):
+		mult, num = 1000*1000, strings.TrimSuffix(num, "MB")
+	case strings.HasSuffix(num, "GB"):
+		mult, num = 1000*1000*1000, strings.TrimSuffix(num, "GB")
+	case strings.HasSuffix(num, "TB"):
+		mult, num = 1000*1000*1000*1000, strings.TrimSuffix(num, "TB")
+	case strings.HasSuffix(num, "K"):
+		mult, num = 1024, strings.TrimSuffix(num, "K")
+	case strings.HasSuffix(num, "M"):
+		mult, num = 1024*1024, strings.TrimSuffix(num, "M")
+	case strings.HasSuffix(num, "G"):
+		mult, num = 1024*1024*1024, strings.TrimSuffix(num, "G")
+	case strings.HasSuffix(num, "T"):
+		mult, num = 1024*1024*1024*1024, strings.TrimSuffix(num, "T")
+	}
+	if num == "" {
+		num = "1"
 	}
 	n, err := strconv.ParseInt(num, 10, 64)
 	if err != nil || n <= 0 {

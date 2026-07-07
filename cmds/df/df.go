@@ -45,6 +45,7 @@ type mountEntry struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = normalizeBlockSizeArgs(args)
 	// -k has no GNU long form; -V is a uutils alias for --version.
 	rest, seenShort := extractShort(args, "kV")
 	if seenShort['V'] {
@@ -268,6 +269,20 @@ func divCeil(n, d uint64) uint64 {
 	return (n + d - 1) / d
 }
 
+func normalizeBlockSizeArgs(args []string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a == "--" {
+			break
+		}
+		if len(a) > 2 && strings.HasPrefix(a, "-B") && !strings.HasPrefix(a, "--") {
+			out[i] = "--block-size=" + a[2:]
+		}
+	}
+	return out
+}
+
 // extractShort removes the given single-letter flags (which have no
 // GNU long form) from short-flag clusters, returning the remaining
 // args and the set of letters seen. Scanning stops at "--".
@@ -365,6 +380,9 @@ func parseBlockSize(s string) (uint64, error) {
 		mult, upper = 1024*1024, strings.TrimSuffix(upper, "M")
 	case strings.HasSuffix(upper, "G"):
 		mult, upper = 1024*1024*1024, strings.TrimSuffix(upper, "G")
+	}
+	if upper == "" {
+		upper = "1"
 	}
 	n, err := strconv.ParseUint(upper, 10, 64)
 	if err != nil || n == 0 {

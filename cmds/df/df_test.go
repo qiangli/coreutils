@@ -89,6 +89,14 @@ func TestBlockSizeHeader(t *testing.T) {
 	if hdr := firstLine(out); !strings.Contains(hdr, "1048576B-blocks") {
 		t.Errorf("df -B 1M header = %q, want custom block header", hdr)
 	}
+
+	out, _, code = runTool(t, "-BM")
+	if code != 0 {
+		t.Fatalf("df -BM code = %d", code)
+	}
+	if hdr := firstLine(out); !strings.Contains(hdr, "1048576B-blocks") {
+		t.Errorf("df -BM header = %q, want custom block header", hdr)
+	}
 }
 
 func TestPortablePrintTypeAndInodesHeaders(t *testing.T) {

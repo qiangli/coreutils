@@ -72,7 +72,8 @@ func run(rc *tool.RunContext, args []string) int {
 	update := fs.BoolP("update", "u", false, "copy only when SOURCE is newer than the destination or destination is missing")
 	targetDir := fs.StringP("target-directory", "t", "", "copy all SOURCE arguments into DIRECTORY")
 	noTargetDir := fs.BoolP("no-target-directory", "T", false, "treat DEST as a normal file")
-	backup := fs.String("backup", "", "make a backup of each existing destination")
+	backup := fs.StringP("backup", "b", "", "make a backup of each existing destination")
+	fs.Lookup("backup").NoOptDefVal = "simple"
 	suffix := fs.StringP("suffix", "S", "~", "override the usual backup suffix")
 	link := fs.BoolP("link", "l", false, "hard link files instead of copying")
 	symlink := fs.BoolP("symbolic-link", "s", false, "make symbolic links instead of copying")
@@ -88,7 +89,7 @@ func run(rc *tool.RunContext, args []string) int {
 	removeDest := fs.Bool("remove-destination", false, "remove each existing destination before opening it")
 	sparse := fs.String("sparse", "auto", "control sparse file creation: auto, always, never")
 	fs.Bool("strip-trailing-slashes", false, "strip trailing slashes from operands")
-	fs.Bool("progress", false, "accepted for compatibility; progress output is a no-op")
+	fs.BoolP("progress", "g", false, "accepted for compatibility; progress output is a no-op")
 	fs.StringP("context", "Z", "", "accepted for compatibility; SELinux context is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -548,8 +549,6 @@ func normalizeOptionalArgs(args []string) []string {
 		case a == "-Z" || a == "--context":
 			out[i] = "--context="
 		case a == "--backup":
-			out[i] = "--backup=simple"
-		case a == "-b":
 			out[i] = "--backup=simple"
 		case a == "--preserve":
 			out[i] = "--preserve=mode,ownership,timestamps"

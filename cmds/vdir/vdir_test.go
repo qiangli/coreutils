@@ -63,6 +63,16 @@ func TestVdirDelegatesLsFlags(t *testing.T) {
 	if !strings.Contains(out, ".hidden") || !strings.Contains(out, "shown") {
 		t.Fatalf("vdir -A output = %q, want hidden and shown entries", out)
 	}
+
+	out, errb, code = runToolAt(t, dir, "-aU")
+	if code != 0 || errb != "" {
+		t.Fatalf("vdir -aU = (%q, %q, %d)", out, errb, code)
+	}
+	for _, name := range []string{".hidden", "shown"} {
+		if !strings.Contains(out, name) {
+			t.Fatalf("vdir -aU output missing %q:\n%s", name, out)
+		}
+	}
 }
 
 func TestVdirRegistered(t *testing.T) {
