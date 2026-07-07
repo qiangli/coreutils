@@ -64,6 +64,9 @@ func TestSeq(t *testing.T) {
 		{[]string{"-f", "==%.0f==", "1", "2"}, "==1==\n==2==\n"},
 		// Scientific-notation operands fall back to %g.
 		{[]string{"1e2", "1e2"}, "100\n"},
+		// Terminator
+		{[]string{"-t", ",", "3"}, "1\n2\n3,"},
+		{[]string{"--terminator", "|", "2"}, "1\n2|"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, c.args...)

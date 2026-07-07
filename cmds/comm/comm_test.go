@@ -112,14 +112,14 @@ func TestCommErrors(t *testing.T) {
 	if code != 1 || !strings.Contains(errb, "nope1") {
 		t.Errorf("missing file: code=%d err=%q", code, errb)
 	}
-	// Unknown short flag (GNU's -z, unimplemented): contract error.
-	_, errb, code = runRaw(t, dir, "", "-z", "a", "b")
-	if code != 2 || !strings.Contains(errb, "z") || !strings.Contains(errb, "pure-Go") {
+	// Unknown short flag: contract error.
+	_, errb, code = runRaw(t, dir, "", "-x", "a", "b")
+	if code != 2 || !strings.Contains(errb, "x") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown short flag: code=%d err=%q", code, errb)
 	}
 	// Unknown long flag: contract error via the framework.
-	_, errb, code = runRaw(t, dir, "", "--total", "a", "b")
-	if code != 2 || !strings.Contains(errb, "total") || !strings.Contains(errb, "pure-Go") {
+	_, errb, code = runRaw(t, dir, "", "--frobnicate", "a", "b")
+	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown long flag: code=%d err=%q", code, errb)
 	}
 	// After --, -1 is an operand, not a flag.
@@ -132,6 +132,53 @@ func TestCommErrors(t *testing.T) {
 	out, _, code := runRaw(t, dir, "", "--", "-1", "f2")
 	if code != 0 || out != "\t\ta\n" {
 		t.Errorf("-- handling: out=%q code=%d", out, code)
+	}
+}
+
+func TestCommNewOptions(t *testing.T) {
+	// 1. Output Delimiter
+	out, _, code := runTool(t, "a\nb\n", "b\nc\n", "--output-delimiter=,")
+	if code != 0 || out != "a\n,,b\n,c\n" {
+		t.Errorf("output delimiter: out=%q code=%d", out, code)
+	}
+
+	// 2. Total
+	out, _, code = runTool(t, "a\nb\n", "b\nc\n", "--total")
+	wantTotal := "a\n\t\tb\n\tc\n1\t1\t1\t3 total\n"
+	if code != 0 || out != wantTotal {
+		t.Errorf("total: out=%q code=%d", out, code)
+	}
+
+	// Total with suppressions
+	out, _, code = runTool(t, "a\nb\n", "b\nc\n", "--total", "-1")
+	wantTotalSuppress := "\tb\nc\n0\t1\t1\t2 total\n"
+	if code != 0 || out != wantTotalSuppress {
+		t.Errorf("total with -1: out=%q code=%d", out, code)
+	}
+
+	// 3. Zero Terminated
+	out, _, code = runTool(t, "a\x00b\x00", "b\x00c\x00", "-z")
+	if code != 0 || out != "a\x00\t\tb\x00\tc\x00" {
+		t.Errorf("zero terminated: out=%q code=%d", out, code)
+	}
+
+	// 4. Check Order
+	// Without --check-order: all pairable, so no diagnostic
+	_, errb, code := runTool(t, "b\na\n", "b\na\n")
+	if code != 0 || errb != "" {
+		t.Errorf("check order default: code=%d err=%q", code, errb)
+	}
+
+	// With --check-order: fails immediately on first out-of-order
+	_, errb, code = runTool(t, "b\na\n", "b\na\n", "--check-order")
+	if code != 1 || !strings.Contains(errb, "is not in sorted order") {
+		t.Errorf("check order: code=%d err=%q", code, errb)
+	}
+
+	// With --nocheck-order: even with unpairable lines, no error
+	_, errb, code = runTool(t, "b\na\nx\n", "a\nx\n", "--nocheck-order")
+	if code != 0 || errb != "" {
+		t.Errorf("nocheck order: code=%d err=%q", code, errb)
 	}
 }
 

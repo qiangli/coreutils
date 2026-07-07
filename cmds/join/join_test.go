@@ -153,14 +153,54 @@ func TestJoinErrors(t *testing.T) {
 	if code != 1 || !strings.Contains(errb, "nope1") {
 		t.Errorf("missing file: code=%d err=%q", code, errb)
 	}
-	// GNU flags we don't implement (-o here) fail loudly by name.
-	_, errb, code = runRaw(t, dir, "", "-o", "1.2", "a", "b")
-	if code != 2 || !strings.Contains(errb, "o") || !strings.Contains(errb, "pure-Go") {
-		t.Errorf("-o: code=%d err=%q", code, errb)
+	// Unknown short flag: contract error.
+	_, errb, code = runRaw(t, dir, "", "-x", "a", "b")
+	if code != 2 || !strings.Contains(errb, "x") || !strings.Contains(errb, "pure-Go") {
+		t.Errorf("-x: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runRaw(t, dir, "", "--check-order", "a", "b")
-	if code != 2 || !strings.Contains(errb, "check-order") || !strings.Contains(errb, "pure-Go") {
-		t.Errorf("--check-order: code=%d err=%q", code, errb)
+	// Unknown long flag: contract error.
+	_, errb, code = runRaw(t, dir, "", "--frobnicate", "a", "b")
+	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
+		t.Errorf("--frobnicate: code=%d err=%q", code, errb)
+	}
+}
+
+func TestJoinNewOptions(t *testing.T) {
+	// 1. Output Format (-o)
+	out, _, code := runTool(t, "1 a b\n2 c d\n", "1 x y\n", "-o", "0,1.2,2.2")
+	if code != 0 || out != "1 a x\n" {
+		t.Errorf("-o formatting: out=%q code=%d", out, code)
+	}
+
+	// 2. Empty filler (-e)
+	out, _, code = runTool(t, "1 a\n", "1 x y\n", "-o", "1.1,1.2,2.2,2.4", "-e", "MISSING")
+	if code != 0 || out != "1 a x MISSING\n" {
+		t.Errorf("-e formatting: out=%q code=%d", out, code)
+	}
+
+	// 3. Header (--header)
+	out, _, code = runTool(t, "ID Name\n1 Alice\n", "ID Score\n1 95\n", "--header")
+	if code != 0 || out != "ID Name Score\n1 Alice 95\n" {
+		t.Errorf("--header: out=%q code=%d", out, code)
+	}
+
+	// 4. Zero Terminated (-z)
+	out, _, code = runTool(t, "1 a\x002 b\x00", "1 x\x00", "-z")
+	if code != 0 || out != "1 a x\x00" {
+		t.Errorf("-z option: out=%q code=%d", out, code)
+	}
+
+	// 5. Check Order (--check-order)
+	// With check-order, fail immediately on disorder even without unpairable lines
+	_, errb, code := runTool(t, "2 b\n1 a\n", "2 x\n1 y\n", "--check-order")
+	if code != 1 || !strings.Contains(errb, "is not sorted") {
+		t.Errorf("--check-order failed: code=%d err=%q", code, errb)
+	}
+
+	// 6. Nocheck Order (--nocheck-order)
+	_, errb, code = runTool(t, "1 a\n2 b\n5 e\n4 d\n", "1 x\n9 y\n", "--nocheck-order")
+	if code != 0 || errb != "" {
+		t.Errorf("--nocheck-order failed: code=%d err=%q", code, errb)
 	}
 }
 

@@ -39,6 +39,7 @@ func run(rc *tool.RunContext, args []string) int {
 	format := fs.StringP("format", "f", "", "use printf style floating-point FORMAT")
 	sep := fs.StringP("separator", "s", "\n", "use STRING to separate numbers")
 	equalWidth := fs.BoolP("equal-width", "w", false, "equalize width by padding with leading zeroes")
+	terminator := fs.StringP("terminator", "t", "\n", "use STRING to terminate each line")
 	parsed, code := tool.Parse(rc, cmd, fs, flagArgs)
 	if code >= 0 {
 		return code
@@ -88,7 +89,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if errMsg != "" {
 			return tool.UsageError(rc, cmd, "%s", errMsg)
 		}
-		printFloats(out, f, *sep, first, incr, last)
+		printFloats(out, f, *sep, *terminator, first, incr, last)
 		return 0
 	}
 
@@ -106,7 +107,7 @@ func run(rc *tool.RunContext, args []string) int {
 			if *equalWidth {
 				width = max(len(firstStr), len(lastStr))
 			}
-			printInts(out, *sep, width, fi, ii, li)
+			printInts(out, *sep, *terminator, width, fi, ii, li)
 			return 0
 		}
 	}
@@ -139,7 +140,7 @@ func run(rc *tool.RunContext, args []string) int {
 			f = fmt.Sprintf("%%.%df", prec)
 		}
 	}
-	printFloats(out, f, *sep, first, incr, last)
+	printFloats(out, f, *sep, *terminator, first, incr, last)
 	return 0
 }
 
@@ -160,7 +161,7 @@ func splitArgs(args []string) (flagArgs, operands []string) {
 			operands = append(operands, a)
 		case len(a) > 1 && a[0] == '-':
 			flagArgs = append(flagArgs, a)
-			if a == "-s" || a == "-f" || a == "--separator" || a == "--format" {
+			if a == "-s" || a == "-f" || a == "-t" || a == "--separator" || a == "--format" || a == "--terminator" {
 				expectValue = true
 			}
 		default:
@@ -247,7 +248,7 @@ func normalizeFormat(f string) (string, string) {
 	return b.String(), ""
 }
 
-func printInts(out *bufio.Writer, sep string, width int, first, incr, last int64) {
+func printInts(out *bufio.Writer, sep, term string, width int, first, incr, last int64) {
 	printed := false
 	for v := first; (incr > 0 && v <= last) || (incr < 0 && v >= last); {
 		if printed {
@@ -266,14 +267,14 @@ func printInts(out *bufio.Writer, sep string, width int, first, incr, last int64
 		v = next
 	}
 	if printed {
-		out.WriteByte('\n')
+		out.WriteString(term)
 	}
 }
 
 // printFloats mirrors GNU's loop: x = first + i*incr, terminating
 // when x passes last (no epsilon — the multiply, not repeated
 // addition, is what keeps "seq 0 0.1 1" landing exactly on 1).
-func printFloats(out *bufio.Writer, format, sep string, first, incr, last float64) {
+func printFloats(out *bufio.Writer, format, sep, term string, first, incr, last float64) {
 	printed := false
 	for i := 0; ; i++ {
 		x := first + float64(i)*incr
@@ -287,6 +288,6 @@ func printFloats(out *bufio.Writer, format, sep string, first, incr, last float6
 		printed = true
 	}
 	if printed {
-		out.WriteByte('\n')
+		out.WriteString(term)
 	}
 }

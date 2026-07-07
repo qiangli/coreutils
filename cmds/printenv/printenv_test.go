@@ -65,3 +65,16 @@ func TestPrintenvFlags(t *testing.T) {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
 	}
 }
+
+func TestPrintenvNull(t *testing.T) {
+	base := []string{"A=1", "B=two"}
+	out, _, code := runTool(t, base, "-0")
+	if code != 0 || out != "A=1\x00B=two\x00" {
+		t.Errorf("-0 all: out=%q code=%d", out, code)
+	}
+
+	out, _, code = runTool(t, base, "-0", "A", "B")
+	if code != 0 || out != "1\x00two\x00" {
+		t.Errorf("-0 named: out=%q code=%d", out, code)
+	}
+}

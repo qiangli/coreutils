@@ -55,6 +55,13 @@ type options struct {
 	suppressed     [2]bool // -v given for that file
 	ignoreCase     bool
 	seenUnpairable bool
+	checkOrder     bool
+	nocheckOrder   bool
+	header         bool
+	zeroTerminated bool
+	format         string // -o FORMAT
+	empty          string // -e EMPTY
+	orderError     bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -65,10 +72,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return 2
 	}
 
-	// GNU join's -1 -2 -a -v -t (and -e -j -o, which we don't implement)
-	// have no long forms; pre-parse the supported ones manually, with
-	// getopt semantics: the value is the rest of the cluster, or else
-	// the next argument.
+	// GNU join's -1 -2 -a -v -t -e -o have no long forms; pre-parse them manually
 	rest := make([]string, 0, len(args))
 	for idx := 0; idx < len(args); idx++ {
 		a := args[idx]
@@ -87,7 +91,9 @@ func run(rc *tool.RunContext, args []string) int {
 			switch c {
 			case 'i':
 				opt.ignoreCase = true
-			case '1', '2', 'a', 'v', 't':
+			case 'z':
+				opt.zeroTerminated = true
+			case '1', '2', 'a', 'v', 't', 'o', 'e':
 				var val string
 				if j+1 < len(body) {
 					val = body[j+1:]
@@ -110,11 +116,20 @@ func run(rc *tool.RunContext, args []string) int {
 
 	fs := tool.NewFlags(cmd.Name)
 	ignoreCaseLong := fs.Bool("ignore-case", false, "ignore differences in case when comparing fields")
+	checkOrder := fs.Bool("check-order", false, "check that the input is correctly sorted")
+	nocheckOrder := fs.Bool("nocheck-order", false, "do not check that the input is correctly sorted")
+	header := fs.Bool("header", false, "treat the first line of each file as header lines")
+	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
+
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
 	}
 	opt.ignoreCase = opt.ignoreCase || *ignoreCaseLong
+	opt.checkOrder = *checkOrder
+	opt.nocheckOrder = *nocheckOrder
+	opt.header = *header
+	opt.zeroTerminated = opt.zeroTerminated || *zeroTerminated
 
 	switch {
 	case len(operands) == 0:
@@ -128,10 +143,19 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "both files cannot be standard input")
 	}
 
+	var specs []spec
+	if opt.format != "" {
+		var err error
+		specs, err = parseFormat(opt.format)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "%v", err)
+		}
+	}
+
 	printJoined := !(opt.suppressed[0] || opt.suppressed[1])
 	var files [2]*fileState
 	for i, op := range operands {
-		lines, err := readLines(rc, op)
+		lines, err := readLines(rc, op, opt.zeroTerminated)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "join: %s: %v\n", op, pathErr(err))
 			return 1
@@ -145,9 +169,13 @@ func run(rc *tool.RunContext, args []string) int {
 		osep = string([]byte{byte(opt.tab)})
 	}
 
+	lineTerm := "\n"
+	if opt.zeroTerminated {
+		lineTerm = "\x00"
+	}
 	emit := func(parts []string) {
 		bw.WriteString(strings.Join(parts, osep))
-		bw.WriteByte('\n')
+		bw.WriteString(lineTerm)
 	}
 	emitUnpaired := func(f *fileState, from, to int) {
 		opt.seenUnpairable = true
@@ -156,12 +184,42 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		for _, l := range f.lines[from:to] {
 			flds := opt.splitFields(l)
-			emit(append([]string{fieldAt(flds, f.field)}, otherFields(flds, f.field)...))
+			if f.idx == 0 {
+				emit(buildOutput(flds, nil, f.field, 0, &opt, specs, false))
+			} else {
+				emit(buildOutput(nil, flds, 0, f.field, &opt, specs, false))
+			}
+		}
+	}
+
+	if opt.header {
+		var h1, h2 []string
+		if len(files[0].lines) > 0 {
+			h1 = opt.splitFields(files[0].lines[0])
+			files[0].lines = files[0].lines[1:]
+		}
+		if len(files[1].lines) > 0 {
+			h2 = opt.splitFields(files[1].lines[0])
+			files[1].lines = files[1].lines[1:]
+		}
+		if h1 != nil && h2 != nil {
+			emit(buildOutput(h1, h2, opt.field[0], opt.field[1], &opt, specs, true))
+		} else if h1 != nil {
+			if opt.printU[0] {
+				emit(buildOutput(h1, nil, opt.field[0], 0, &opt, specs, false))
+			}
+		} else if h2 != nil {
+			if opt.printU[1] {
+				emit(buildOutput(nil, h2, 0, opt.field[1], &opt, specs, false))
+			}
 		}
 	}
 
 	f1, f2 := files[0], files[1]
 	g1, g2 := f1.nextGroup(), f2.nextGroup()
+	if opt.orderError {
+		return 1
+	}
 	for g1 != nil && g2 != nil {
 		d := opt.compareKeys(g1.key, g2.key)
 		switch {
@@ -175,23 +233,31 @@ func run(rc *tool.RunContext, args []string) int {
 			if printJoined {
 				for _, l1 := range f1.lines[g1.start:g1.end] {
 					flds1 := opt.splitFields(l1)
-					head := append([]string{fieldAt(flds1, f1.field)}, otherFields(flds1, f1.field)...)
 					for _, l2 := range f2.lines[g2.start:g2.end] {
 						flds2 := opt.splitFields(l2)
-						emit(append(append([]string{}, head...), otherFields(flds2, f2.field)...))
+						emit(buildOutput(flds1, flds2, f1.field, f2.field, &opt, specs, true))
 					}
 				}
 			}
 			g1, g2 = f1.nextGroup(), f2.nextGroup()
 		}
+		if opt.orderError {
+			return 1
+		}
 	}
 	for g1 != nil {
 		emitUnpaired(f1, g1.start, g1.end)
 		g1 = f1.nextGroup()
+		if opt.orderError {
+			return 1
+		}
 	}
 	for g2 != nil {
 		emitUnpaired(f2, g2.start, g2.end)
 		g2 = f2.nextGroup()
+		if opt.orderError {
+			return 1
+		}
 	}
 
 	if err := bw.Flush(); err != nil {
@@ -234,8 +300,90 @@ func (o *options) apply(rc *tool.RunContext, c byte, val string) int {
 		default:
 			return tool.UsageError(rc, cmd, "multi-character tab '%s'", val)
 		}
+	case 'o':
+		o.format = val
+	case 'e':
+		o.empty = val
 	}
 	return -1
+}
+
+type spec struct {
+	file  int // 0: join field, 1: file 1, 2: file 2
+	field int // 0-based field index
+}
+
+func parseFormat(s string) ([]spec, error) {
+	s = strings.ReplaceAll(s, " ", ",")
+	s = strings.ReplaceAll(s, "\t", ",")
+	parts := strings.Split(s, ",")
+	var specs []spec
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if p == "0" {
+			specs = append(specs, spec{file: 0})
+			continue
+		}
+		var file, field int
+		_, err := fmt.Sscanf(p, "%d.%d", &file, &field)
+		if err != nil || (file != 1 && file != 2) || field <= 0 {
+			return nil, fmt.Errorf("invalid field specification: %q", p)
+		}
+		specs = append(specs, spec{file: file, field: field - 1})
+	}
+	return specs, nil
+}
+
+func buildOutput(flds1, flds2 []string, field1, field2 int, opt *options, specs []spec, isPaired bool) []string {
+	if len(specs) == 0 {
+		if isPaired {
+			res := []string{fieldAt(flds1, field1)}
+			res = append(res, otherFields(flds1, field1)...)
+			res = append(res, otherFields(flds2, field2)...)
+			return res
+		}
+		if flds1 != nil {
+			res := []string{fieldAt(flds1, field1)}
+			res = append(res, otherFields(flds1, field1)...)
+			return res
+		}
+		if flds2 != nil {
+			res := []string{fieldAt(flds2, field2)}
+			res = append(res, otherFields(flds2, field2)...)
+			return res
+		}
+		return nil
+	}
+
+	res := make([]string, len(specs))
+	joinVal := ""
+	if flds1 != nil {
+		joinVal = fieldAt(flds1, field1)
+	} else if flds2 != nil {
+		joinVal = fieldAt(flds2, field2)
+	}
+
+	for i, sp := range specs {
+		if sp.file == 0 {
+			res[i] = joinVal
+		} else if sp.file == 1 {
+			if flds1 != nil && sp.field < len(flds1) {
+				res[i] = flds1[sp.field]
+			} else {
+				res[i] = opt.empty
+			}
+		} else if sp.file == 2 {
+			if flds2 != nil && sp.field < len(flds2) {
+				res[i] = flds2[sp.field]
+			} else {
+				res[i] = opt.empty
+			}
+		}
+	}
+	return res
 }
 
 func parsePositive(s string) (int, bool) {
@@ -362,10 +510,19 @@ func (f *fileState) keyOf(i int) string {
 func (f *fileState) touch(i int) {
 	for f.checked < i {
 		f.checked++
-		if f.opt.seenUnpairable && !f.warned &&
-			f.opt.compareKeys(f.keyOf(f.checked-1), f.keyOf(f.checked)) > 0 {
-			fmt.Fprintf(f.rc.Err, "join: %s:%d: is not sorted: %s\n", f.name, f.checked+1, f.lines[f.checked])
-			f.warned = true
+		if !f.opt.nocheckOrder {
+			isDisordered := f.opt.compareKeys(f.keyOf(f.checked-1), f.keyOf(f.checked)) > 0
+			if isDisordered {
+				if f.opt.checkOrder {
+					fmt.Fprintf(f.rc.Err, "join: %s:%d: is not sorted: %s\n", f.name, f.checked+1, f.lines[f.checked])
+					f.opt.orderError = true
+					return
+				}
+				if f.opt.seenUnpairable && !f.warned {
+					fmt.Fprintf(f.rc.Err, "join: %s:%d: is not sorted: %s\n", f.name, f.checked+1, f.lines[f.checked])
+					f.warned = true
+				}
+			}
 		}
 	}
 }
@@ -378,9 +535,15 @@ func (f *fileState) nextGroup() *group {
 	}
 	g := &group{start: f.pos, key: f.keyOf(f.pos)}
 	f.touch(f.pos)
+	if f.opt.orderError {
+		return nil
+	}
 	i := f.pos + 1
 	for i < len(f.lines) {
 		f.touch(i) // GNU reads (and order-checks) the line that ends the group
+		if f.opt.orderError {
+			return nil
+		}
 		if f.opt.compareKeys(f.keyOf(i), g.key) != 0 {
 			break
 		}
@@ -391,7 +554,7 @@ func (f *fileState) nextGroup() *group {
 	return g
 }
 
-func readLines(rc *tool.RunContext, operand string) ([]string, error) {
+func readLines(rc *tool.RunContext, operand string, zeroTerminated bool) ([]string, error) {
 	var data []byte
 	var err error
 	if operand == "-" {
@@ -405,7 +568,11 @@ func readLines(rc *tool.RunContext, operand string) ([]string, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), nil
+	sep := "\n"
+	if zeroTerminated {
+		sep = "\x00"
+	}
+	return strings.Split(strings.TrimSuffix(string(data), sep), sep), nil
 }
 
 func pathErr(err error) error {

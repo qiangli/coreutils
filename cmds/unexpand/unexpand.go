@@ -23,7 +23,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	tabsValue := fs.StringArrayP("tabs", "t", []string{"8"}, "have tabs N characters apart instead of 8 (enables -a); or use comma- or blank-separated LIST of explicit tab positions (repeatable; the last position may be prefixed with '/' for multiples or '+' for an increment)")
 	all := fs.BoolP("all", "a", false, "convert all blanks, instead of just initial blanks")
-	firstOnly := fs.Bool("first-only", false, "convert only leading sequences of blanks (overrides -a)")
+	firstOnly := fs.BoolP("first-only", "f", false, "convert only leading sequences of blanks (overrides -a)")
 	noUTF8 := fs.BoolP("no-utf8", "U", false, "interpret input bytes as columns instead of UTF-8 characters")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
