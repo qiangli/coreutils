@@ -39,7 +39,9 @@ type mover struct {
 	update      bool
 	interactive bool
 	backup      bool
+	backupMode  string
 	suffix      string
+	debug       bool
 	verbose     bool
 	failed      bool
 	in          *bufio.Reader
@@ -55,13 +57,26 @@ func run(rc *tool.RunContext, args []string) int {
 	targetDir := fs.StringP("target-directory", "t", "", "move all SOURCE arguments into DIRECTORY")
 	noTargetDir := fs.BoolP("no-target-directory", "T", false, "treat DEST as a normal file")
 	backup := fs.String("backup", "", "make a backup of each existing destination")
+	backupShort := fs.BoolP("backup-short", "b", false, "make a backup of each existing destination")
 	suffix := fs.StringP("suffix", "S", "~", "override the usual backup suffix")
+	debug := fs.Bool("debug", false, "explain move decisions on stderr")
+	fs.Bool("strip-trailing-slashes", false, "strip trailing slashes from operands")
 	fs.Bool("progress", false, "accepted for compatibility; progress output is a no-op")
-	fs.String("context", "", "accepted for compatibility; SELinux context is a no-op")
+	fs.StringP("context", "Z", "", "accepted for compatibility; SELinux context is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	operands = maybeStripTrailingSlashes(operands, fs.Changed("strip-trailing-slashes"))
+	backupMode := *backup
+	if *backupShort && backupMode == "" {
+		backupMode = "simple"
+	}
+	switch backupMode {
+	case "", "simple", "existing", "nil", "numbered", "t":
+	default:
+		return tool.UsageError(rc, cmd, "invalid --backup value '%s'", backupMode)
 	}
 	if *targetDir != "" && *noTargetDir {
 		return tool.UsageError(rc, cmd, "cannot combine --target-directory and --no-target-directory")
@@ -77,7 +92,8 @@ func run(rc *tool.RunContext, args []string) int {
 
 	m := &mover{
 		rc: rc, noClobber: *noClobber, update: *update, interactive: *interactive,
-		backup: *backup != "", suffix: *suffix, verbose: *verbose,
+		backup: backupMode != "" && backupMode != "nil", backupMode: backupMode, suffix: *suffix,
+		debug: *debug, verbose: *verbose,
 		in: inputReader(rc.In),
 	}
 	// GNU rule: of -f and -n, the one given last takes effect.
@@ -156,11 +172,13 @@ func (m *mover) move(src, dst string) {
 	}
 	err := os.Rename(sp, dp)
 	if err == nil {
+		m.debugf("renamed '%s' -> '%s'", src, dst)
 		m.verbosef("renamed '%s' -> '%s'", src, dst)
 		return
 	}
 	if isCrossDevice(err) {
 		if m.copyMove(src, dst) {
+			m.debugf("copied across file systems and removed '%s'", src)
 			m.verbosef("renamed '%s' -> '%s'", src, dst)
 		}
 		return
@@ -188,7 +206,17 @@ func inputReader(r io.Reader) *bufio.Reader {
 func (m *mover) backupDest(dst string) bool {
 	dp := m.rc.Path(dst)
 	bp := dp + m.suffix
-	_ = os.Remove(bp)
+	if m.backupMode == "numbered" || m.backupMode == "t" {
+		for i := 1; i < 1000; i++ {
+			candidate := fmt.Sprintf("%s%s.%d~", dp, m.suffix, i)
+			if _, err := os.Stat(candidate); os.IsNotExist(err) {
+				bp = candidate
+				break
+			}
+		}
+	} else {
+		_ = os.Remove(bp)
+	}
 	if err := os.Rename(dp, bp); err != nil {
 		m.errf("cannot backup '%s': %s", dst, reason(err))
 		return false
@@ -306,6 +334,12 @@ func (m *mover) verbosef(format string, a ...any) {
 	}
 }
 
+func (m *mover) debugf(format string, a ...any) {
+	if m.debug {
+		fmt.Fprintf(m.rc.Err, "mv: debug: "+format+"\n", a...)
+	}
+}
+
 func normalizeOptionalArgs(args []string) []string {
 	out := make([]string, len(args))
 	copy(out, args)
@@ -314,12 +348,30 @@ func normalizeOptionalArgs(args []string) []string {
 			break
 		}
 		switch {
+		case a == "-Z" || a == "--context":
+			out[i] = "--context="
 		case a == "--backup":
+			out[i] = "--backup=simple"
+		case a == "-b":
 			out[i] = "--backup=simple"
 		case a == "--interactive=always" || a == "--interactive=yes":
 			out[i] = "--interactive"
 		case a == "--interactive=never" || a == "--interactive=no" || a == "--interactive=none":
 			out[i] = "--force"
+		}
+	}
+	return out
+}
+
+func maybeStripTrailingSlashes(args []string, enabled bool) []string {
+	if !enabled {
+		return args
+	}
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = strings.TrimRight(a, string(filepath.Separator)+"/")
+		if out[i] == "" {
+			out[i] = a
 		}
 	}
 	return out

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"unicode"
 
 	"github.com/qiangli/coreutils/tool"
@@ -39,6 +40,7 @@ type installer struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = normalizeOptionalArgs(args)
 	fs := tool.NewFlags(cmd.Name)
 	dirs := fs.BoolP("directory", "d", false, "treat all arguments as directory names; create all components")
 	createParents := fs.BoolP("create-leading-directories", "D", false, "create leading components of the destination")
@@ -52,9 +54,12 @@ func run(rc *tool.RunContext, args []string) int {
 	compare := fs.BoolP("compare", "C", false, "compare content; skip if identical")
 	preserveTimestamps := fs.BoolP("preserve-timestamps", "p", false, "apply source timestamps to destination")
 	strip := fs.BoolP("strip", "s", false, "strip symbol tables (no-op without native strip)")
+	stripProgram := fs.String("strip-program", "strip", "program used to strip binaries (accepted as a no-op)")
+	unprivileged := fs.BoolP("unprivileged", "U", false, "avoid privileged ownership/context operations")
+	fs.BoolP("copy", "c", false, "ignored compatibility option")
 	suffix := fs.StringP("suffix", "S", "~", "override the usual backup suffix")
 	contextStr := fs.StringP("context", "Z", "", "set SELinux security context (no-op without SELinux)")
-	preserveContext := fs.Bool("preserve-context", false, "preserve SELinux security context (no-op without SELinux)")
+	preserveContext := fs.BoolP("preserve-context", "P", false, "preserve SELinux security context (no-op without SELinux)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -62,6 +67,8 @@ func run(rc *tool.RunContext, args []string) int {
 	_ = contextStr
 	_ = preserveContext
 	_ = strip // no-op: no native strip support in pure-Go
+	_ = stripProgram
+	_ = unprivileged
 
 	if fs.Changed("owner") || fs.Changed("group") {
 		_ = owner
@@ -312,6 +319,20 @@ func (in *installer) copyFile(src, dst string, parents, preserveTs, compare bool
 func isDir(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.IsDir()
+}
+
+func normalizeOptionalArgs(args []string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a == "--" {
+			break
+		}
+		if a == "--context" || (a == "-Z" && (i+1 >= len(out) || !strings.Contains(out[i+1], ":"))) {
+			out[i] = "--context="
+		}
+	}
+	return out
 }
 
 func (in *installer) errf(format string, a ...any) {

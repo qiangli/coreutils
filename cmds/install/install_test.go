@@ -336,6 +336,18 @@ func TestInstallStripFlag(t *testing.T) {
 	}
 }
 
+func TestInstallCompatibilityNoOps(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "hi")
+	out, errb, code := runTool(t, dir, "-c", "-U", "-P", "-Z", "--strip-program", "llvm-strip", "src", "dst")
+	if code != 0 || out != "" || errb != "" {
+		t.Fatalf("install compatibility no-ops: code=%d out=%q err=%q", code, out, errb)
+	}
+	if read(t, filepath.Join(dir, "dst")) != "hi" {
+		t.Fatal("content corrupted")
+	}
+}
+
 func TestInstallContextFlag(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "hi")

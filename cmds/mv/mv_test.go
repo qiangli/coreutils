@@ -192,6 +192,45 @@ func TestMvVerbose(t *testing.T) {
 	}
 }
 
+func TestMvDebugStripTrailingSlashesContextAndShortBackup(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src", "file"), "x")
+	if err := os.Mkdir(filepath.Join(dir, "dst"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "dst", "src"), "old")
+	out, errb, code := runTool(t, dir, "--debug", "--strip-trailing-slashes", "-Z", "-b", "-S", ".bak", "src/", "dst")
+	if code != 0 || out != "" {
+		t.Fatalf("mv debug/backups: code=%d out=%q err=%q", code, out, errb)
+	}
+	if !strings.Contains(errb, "mv: debug: renamed 'src' -> 'dst/src'") {
+		t.Fatalf("missing debug diagnostic: %q", errb)
+	}
+	if read(t, filepath.Join(dir, "dst", "src", "file")) != "x" {
+		t.Fatal("directory not moved into target")
+	}
+	if read(t, filepath.Join(dir, "dst", "src.bak")) != "old" {
+		t.Fatal("-b/-S backup was not created")
+	}
+}
+
+func TestMvNumberedBackupForm(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	write(t, filepath.Join(dir, "dst~.1~"), "previous")
+	_, errb, code := runTool(t, dir, "--backup=numbered", "src", "dst")
+	if code != 0 {
+		t.Fatalf("mv --backup=numbered: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "dst")) != "new" {
+		t.Fatal("destination not moved")
+	}
+	if read(t, filepath.Join(dir, "dst~.2~")) != "old" {
+		t.Fatal("numbered backup was not created")
+	}
+}
+
 func TestMvMissingSource(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "nope", "b")
