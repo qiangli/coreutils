@@ -11,11 +11,11 @@ The comparison is based on command inventory plus each command's `--help` output
 
 | Measure | Count |
 |---|---:|
-| Local registered commands (`cmds/all`) | 94 |
+| Local registered commands (`cmds/all`) | 111 |
 | uutils commands (`coreutils --list`) | 79 |
-| Commands present in both | 53 |
-| uutils commands missing locally | 26 |
-| Local commands not in uutils coreutils set | 41 |
+| Commands present in both | 58 |
+| uutils commands missing locally | 21 |
+| Local commands not in uutils coreutils set | 53 |
 
 The local implementation generally exposes smaller GNU subsets per command. It also uses long `--help` / `--version` as framework-wide options for most tools, while uutils commonly exposes short `-h` / `-V` aliases too. Commands with only that universal alias gap are: `basename`, `cat`, `dirname`, `link`, `pwd`, `sleep`, `tsort`, `unlink`, and `yes`. `true` and `false` do not expose the local framework help/version options.
 
@@ -23,13 +23,13 @@ The local implementation generally exposes smaller GNU subsets per command. It a
 
 These commands exist in uutils but are not registered in local `cmds/all`:
 
-`[`, `b2sum`, `basenc`, `cksum`, `csplit`, `dd`, `dir`, `dircolors`, `expand`, `expr`, `factor`, `fmt`, `fold`, `more`, `nl`, `numfmt`, `od`, `pathchk`, `pr`, `printf`, `ptx`, `shred`, `sum`, `test`, `unexpand`, `vdir`.
+`[`, `b2sum`, `basenc`, `cksum`, `csplit`, `expand`, `expr`, `factor`, `fmt`, `fold`, `more`, `nl`, `numfmt`, `od`, `pathchk`, `pr`, `printf`, `ptx`, `sum`, `test`, `unexpand`.
 
 ## Local commands outside uutils coreutils
 
 These are local commands not present in the uutils coreutils command list:
 
-`at`, `atq`, `atrm`, `awk`, `batch`, `browser`, `cal`, `chgrp`, `chmod`, `chown`, `clip`, `cmp`, `crontab`, `diff`, `duration`, `fetch`, `find`, `grep`, `gzip`, `hexdump`, `hostname`, `id`, `jq`, `ntp`, `sed`, `stat`, `strings`, `sync`, `tar`, `time`, `timeout`, `tokens`, `tree`, `tz`, `uname`, `uptime`, `watch`, `which`, `whoami`, `xargs`, `yc`.
+`ast-query`, `at`, `atq`, `atrm`, `awk`, `batch`, `browser`, `cal`, `chcon`, `chgrp`, `chmod`, `chown`, `clip`, `cmp`, `crontab`, `diff`, `duration`, `fetch`, `find`, `find-references`, `grep`, `gunzip`, `gzip`, `hexdump`, `hostname`, `id`, `install`, `jq`, `list-symbols`, `mkfifo`, `mknod`, `ncal`, `ntp`, `repo-map`, `search-symbols`, `sed`, `sntp`, `stat`, `strings`, `sync`, `tar`, `time`, `timeout`, `tokens`, `tree`, `tz`, `uname`, `uptime`, `watch`, `which`, `whoami`, `xargs`, `zcat`.
 
 ## Missing uutils options on overlapping commands
 
@@ -43,6 +43,7 @@ Universal `-h` / `-V` aliases are omitted from this table so the command-specifi
 | `cp` | `-H`, `-L`, `-P`, `-S`, `-T`, `-Z`, `-a`, `-b`, `-d`, `-g`, `-i`, `-l`, `-s`, `-t`, `-u`, `-x`, `--archive`, `--attributes-only`, `--backup`, `--context`, `--copy-contents`, `--debug`, `--dereference`, `--interactive`, `--link`, `--no-dereference`, `--no-preserve`, `--no-target-directory`, `--one-file-system`, `--parents`, `--preserve-default-attributes`, `--progress`, `--reflink`, `--remove-destination`, `--sparse`, `--strip-trailing-slashes`, `--suffix`, `--symbolic-link`, `--target-directory`, `--update` | - |
 | `cut` | `-n`, `-w`, `-z`, `--output-delimiter`, `--zero-terminated` | - |
 | `date` | `-I`, `-R`, `-f`, `-s`, `--debug`, `--file`, `--iso-8601`, `--resolution`, `--rfc-3339`, `--rfc-email`, `--set` | - |
+| `dd` | `-h`, `-V`; operands `cbs=`, `iflag=`, `iseek=`, `oflag=`, `oseek=`; `status=progress`; conversion options other than `conv=notrunc`; input/output/general flag sets | - |
 | `df` | `-B`, `-H`, `-P`, `-T`, `-a`, `-i`, `-k`, `-l`, `-t`, `-x`, `--all`, `--block-size`, `--exclude-type`, `--inodes`, `--local`, `--no-sync`, `--output`, `--portability`, `--print-type`, `--si`, `--sync`, `--total`, `--type` | - |
 | `du` | `-0`, `-A`, `-B`, `-D`, `-H`, `-L`, `-P`, `-S`, `-X`, `-k`, `-l`, `-m`, `-t`, `-v`, `-x`, `--count-links`, `--dereference`, `--dereference-args`, `--exclude`, `--exclude-from`, `--files0-from`, `--inodes`, `--no-dereference`, `--null`, `--one-file-system`, `--separate-dirs`, `--si`, `--threshold`, `--time`, `--time-style`, `--verbose` | - |
 | `echo` | `-E`, `-e`, `-n` | - |
@@ -67,6 +68,7 @@ Universal `-h` / `-V` aliases are omitted from this table so the command-specifi
 | `sha256sum` | `-t`, `-w`, `-z`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `--text`, `--warn`, `--zero` | `-b`, `--binary` |
 | `sha384sum` | `-t`, `-w`, `-z`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `--text`, `--warn`, `--zero` | `-b`, `--binary` |
 | `sha512sum` | `-t`, `-w`, `-z`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `--text`, `--warn`, `--zero` | `-b`, `--binary` |
+| `shred` | `-s`, `-x`, `--exact`, `--random-source`, `--remove=HOW` | - |
 | `shuf` | `-o`, `-r`, `-z`, `--output`, `--random-seed`, `--random-source`, `--repeat`, `--zero-terminated` | - |
 | `sort` | `-C`, `-M`, `-R`, `-S`, `-T`, `-d`, `-g`, `-i`, `-m`, `-z`, `--batch-size`, `--buffer-size`, `--check-silent`, `--compress-program`, `--debug`, `--dictionary-order`, `--files0-from`, `--general-numeric-sort`, `--ignore-nonprinting`, `--merge`, `--month-sort`, `--parallel`, `--random-sort`, `--random-source`, `--sort`, `--temporary-directory`, `--version-sort`, `--zero-terminated` | - |
 | `split` | `-C`, `-e`, `-t`, `-x`, `--additional-suffix`, `--elide-empty-files`, `--filter`, `--hex-suffixes`, `--line-bytes`, `--separator`, `--verbose` | - |

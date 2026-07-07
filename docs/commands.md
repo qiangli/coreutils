@@ -23,6 +23,7 @@ File operations:
 | Command | Sources | Notes |
 |---|---|---|
 | cp | u-root | -r/-R, -p, -f, -n, -v |
+| install | fresh | -d, -D, -m, -v, -t, -T; ownership flags refused |
 | mv | guonaihong, u-root | -f, -n, -v |
 | rm | u-root | -r/-R, -f, -v, -i refused (interactive) |
 | mkdir | u-root | -p, -m, -v |
@@ -30,16 +31,23 @@ File operations:
 | touch | guonaihong, u-root | -a, -m, -c, -d, -r, -t |
 | ln | u-root | -s, -f, -v |
 | link / unlink | guonaihong, u-root | trivial pair |
+| mkfifo | fresh | -m octal; Unix native, clear unsupported error elsewhere |
+| mknod | fresh | NAME TYPE [MAJOR MINOR], -m octal; Unix native, clear unsupported error elsewhere |
 | mktemp | u-root | -d, -p, -u, templates |
 | truncate | u-root | -s (K/M/G suffixes), -c |
+| dd | fresh | if/of/bs/count/skip/seek/status=none/conv=notrunc subset |
+| shred | fresh | -n, -z, -u, -f, -v; warns by documentation caveat, regular files only |
 | chmod | guonaihong, u-root | octal + symbolic; **unix only** — clear error on Windows (no POSIX mode bits; mapping to read-only would change the documented meaning) |
 | chown / chgrp | guonaihong | **unix only**, same rule |
+| chcon | fresh | CONTEXT FILE... via Linux `security.selinux` xattr; clear unsupported error elsewhere |
 
 Listing and filesystem info:
 
 | Command | Sources | Notes |
 |---|---|---|
 | ls | aict, u-root | -l, -a, -A, -d, -R, -r, -t, -S, -1, -h, -i; C-locale byte-order sort, no color |
+| dir / vdir | ls variant | dir delegates to ls compact output; vdir delegates to ls -l |
+| dircolors | fresh | Bourne/C-shell LS_COLORS output, built-in database, simple color database parsing |
 | stat | aict | default + -c format subset |
 | du | aict, u-root | -s, -h, -a, -c, -d |
 | df | aict, u-root | -h, -k; platform probes behind build tags |
@@ -138,8 +146,6 @@ or NO.
 | cksum | POSIX CRC default |
 | b2sum | needs x/crypto (dep-budget review) |
 | basenc | covers base64/32 variants beyond the Phase A pair |
-| dd | simplified: if/of/bs/count/skip/seek/status=none/conv subset |
-| install | -d, -m, -D subset |
 | csplit | split's sibling |
 | numfmt | --to/--from common units |
 | nproc | --all, --ignore |
@@ -164,13 +170,13 @@ revisit when the sh ExecHandler can run commands in-process):
 
 **Unix machinery with no cross-platform meaning:**
 
-- mkfifo, mknod, stty, chcon, runcon, hostid
+- stty, runcon, hostid
 - who, users, pinky, groups, logname (whoami covers identity)
 
 **Low agent value / legacy / dangerous:**
 
-- ptx, factor, pr, fmt, dircolors, dir, vdir, sum, pathchk
-- shred (lies on SSDs/COW filesystems), more/man (interactive pagers)
+- ptx, factor, pr, fmt, sum, pathchk
+- more/man (interactive pagers)
 
 **System administration (in u-root's tree, out of scope for an agent
 userland — outpost/ycode own these concerns):**
