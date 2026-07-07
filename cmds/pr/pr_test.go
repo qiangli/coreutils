@@ -206,3 +206,36 @@ func TestPRRejectsBadIndent(t *testing.T) {
 		t.Fatalf("pr bad indent code=%d err=%q", code, errb)
 	}
 }
+
+func TestPRFirstLineNumber(t *testing.T) {
+	out, _, code := runPR(t, t.TempDir(), "a\nb\n", "-t", "-n", "-N", "10")
+	want := "   10\ta\n   11\tb\n"
+	if out != want || code != 0 {
+		t.Fatalf("pr -N 10 = (%q, %d), want (%q, 0)", out, code, want)
+	}
+
+	_, errb, code := runPR(t, t.TempDir(), "", "-N", "0", "a")
+	if code != 2 || !strings.Contains(errb, "invalid first line number") {
+		t.Fatalf("pr -N 0 code=%d err=%q", code, errb)
+	}
+}
+
+func TestPRNewFlagAliases(t *testing.T) {
+	// --column is an alias for --columns
+	_, errb, code := runPR(t, t.TempDir(), "a\n", "--column", "2")
+	if code != 2 || !strings.Contains(errb, "not supported") {
+		t.Fatalf("pr --column 2 code=%d err=%q", code, errb)
+	}
+
+	// -J is accepted (join-lines, no-op)
+	out, _, code := runPR(t, t.TempDir(), "a\nb\n", "-J", "-t")
+	if out != "a\nb\n" || code != 0 {
+		t.Fatalf("pr -J = (%q, %d)", out, code)
+	}
+
+	// -i is accepted (indent style, no-op)
+	out, _, code = runPR(t, t.TempDir(), "a\n", "-i", "-t")
+	if out != "a\n" || code != 0 {
+		t.Fatalf("pr -i = (%q, %d)", out, code)
+	}
+}

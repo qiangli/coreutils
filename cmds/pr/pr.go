@@ -55,6 +55,7 @@ type options struct {
 	formFeed       bool
 	pageStart      int
 	pageEnd        int
+	firstLineNum   int
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -73,17 +74,25 @@ func run(rc *tool.RunContext, args []string) int {
 	expandTabs := fs.BoolP("expand-tabs", "e", false, "expand input tabs to spaces")
 	across := fs.BoolP("across", "a", false, "(not supported) fill columns across rather than down")
 	columns := fs.Int("columns", 1, "(not supported above 1) produce COLUMN columns")
+	fs.IntP("column", "", 1, "alias for --columns (not supported above 1)")
 	_ = fs.StringP("separator", "s", "\t", "separate columns by CHAR (multi-column output only; no effect here)")
 	_ = fs.StringP("sep-string", "S", "", "separate columns by STRING (multi-column output only; no effect here)")
 	merge := fs.BoolP("merge", "m", false, "(not supported) print files in parallel, one per column")
 	formFeed := fs.BoolP("form-feed", "F", false, "use form feed instead of blank lines to end pages")
 	pageWidth := fs.IntP("page-width", "W", 72, "set page width and truncate lines")
+	firstLineNum := fs.IntP("first-line-number", "N", 1, "start counting line numbers at NUMBER")
+	joinLines := fs.BoolP("join-lines", "J", false, "merge full-length lines (GNU compat, no-op in this subset)")
+	indentStyle := fs.BoolP("", "i", false, "indent style alias (GNU compat, no-op in this subset)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
 	if *merge {
 		return tool.NotSupported(rc, cmd, "-m/--merge (parallel file merging)")
+	}
+	if fs.Changed("column") {
+		cv, _ := fs.GetInt("column")
+		*columns = cv
 	}
 	if *across {
 		return tool.NotSupported(rc, cmd, "-a/--across (multi-column output)")
@@ -106,6 +115,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if *indent < 0 {
 		return tool.UsageError(rc, cmd, "invalid indent: %d", *indent)
 	}
+	if *firstLineNum < 1 {
+		return tool.UsageError(rc, cmd, "invalid first line number: %d", *firstLineNum)
+	}
 	pageStart, pageEnd, err := parsePages(*pages)
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
@@ -120,7 +132,10 @@ func run(rc *tool.RunContext, args []string) int {
 		formFeed:  *formFeed,
 		ffBreaks:  !*omitPagination,
 		pageStart: pageStart, pageEnd: pageEnd,
+		firstLineNum: *firstLineNum,
 	}
+	_ = joinLines
+	_ = indentStyle
 	if fs.Changed("page-width") {
 		// -W sets the page width and enables line truncation; plain -w
 		// never truncates single-column output (GNU semantics).
@@ -236,7 +251,7 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 	physBudget := o.bodyLines * physPerLine
 
 	page := 1
-	lineNo := 1
+	lineNo := o.firstLineNum
 	for si, seg := range segments {
 		for _, chunk := range chunkLines(seg, o.bodyLines) {
 			emit := inPageRange(page, o)

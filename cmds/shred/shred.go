@@ -23,13 +23,17 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type shredder struct {
-	rc         *tool.RunContext
-	iterations int
-	zero       bool
-	remove     bool
-	force      bool
-	verbose    bool
-	failed     bool
+	rc           *tool.RunContext
+	iterations   int
+	zero         bool
+	remove       bool
+	force        bool
+	verbose      bool
+	failed       bool
+	exact        bool
+	randomSource string
+	shredSize    int64
+	noXdev       bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -39,6 +43,10 @@ func run(rc *tool.RunContext, args []string) int {
 	remove := fs.BoolP("remove", "u", false, "truncate and remove file after overwriting")
 	force := fs.BoolP("force", "f", false, "change permissions to allow writing if necessary")
 	verbose := fs.BoolP("verbose", "v", false, "show progress")
+	exact := fs.Bool("exact", false, "do not round file sizes up to the next full block")
+	randomSource := fs.String("random-source", "", "get random bytes from FILE")
+	shredSize := fs.StringP("size", "s", "", "shred only SIZE bytes of the file")
+	noXdev := fs.BoolP("", "x", false, "do not cross file system boundaries")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -49,7 +57,16 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing file operand")
 	}
-	s := &shredder{rc: rc, iterations: *iter, zero: *zero, remove: *remove, force: *force, verbose: *verbose}
+	var sizeVal int64 = -1
+	if *shredSize != "" {
+		n, err := strconv.ParseInt(*shredSize, 10, 64)
+		if err != nil || n < 0 {
+			return tool.UsageError(rc, cmd, "invalid number of bytes: %q", *shredSize)
+		}
+		sizeVal = n
+	}
+	s := &shredder{rc: rc, iterations: *iter, zero: *zero, remove: *remove, force: *force, verbose: *verbose,
+		exact: *exact, randomSource: *randomSource, shredSize: sizeVal, noXdev: *noXdev}
 	for _, name := range operands {
 		s.shred(name)
 	}
@@ -80,8 +97,29 @@ func (s *shredder) shred(name string) {
 	}
 	defer f.Close()
 	size := fi.Size()
+	if s.shredSize >= 0 && s.shredSize < size {
+		if s.exact {
+			size = s.shredSize
+		} else {
+			const blockSize = 512
+			size = ((s.shredSize + blockSize - 1) / blockSize) * blockSize
+			if size > fi.Size() {
+				size = fi.Size()
+			}
+		}
+	}
+	src := io.Reader(rand.Reader)
+	if s.randomSource != "" {
+		rs, err := os.Open(s.rc.Path(s.randomSource))
+		if err != nil {
+			s.errf("failed to open random source '%s': %s", s.randomSource, reason(err))
+			return
+		}
+		defer rs.Close()
+		src = rs
+	}
 	for pass := 0; pass < s.iterations; pass++ {
-		if err := overwrite(f, size, rand.Reader); err != nil {
+		if err := overwrite(f, size, src); err != nil {
 			s.errf("'%s': pass %d failed: %s", name, pass+1, reason(err))
 			return
 		}

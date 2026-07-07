@@ -100,6 +100,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	fs := tool.NewFlags(cmd.Name)
 	noCreate := fs.BoolP("no-create", "c", false, "do not create any files")
+	_ = fs.BoolP("force", "f", false, "ignored; provided for compatibility with BSD touch(1)")
 	date := fs.StringP("date", "d", "", "parse STRING and use it instead of current time")
 	noDeref := fs.BoolP("no-dereference", "h", false, "affect symbolic links instead of any referenced file")
 	ref := fs.StringP("reference", "r", "", "use this file's times instead of current time")

@@ -45,9 +45,24 @@ func run(rc *tool.RunContext, args []string) int {
 	separator := fs.StringP("separator", "t", "", "use SEP as record separator instead of newline")
 	additionalSuffix := fs.StringP("additional-suffix", "", "", "additional suffix to append to output file names")
 	verbose := fs.BoolP("verbose", "", false, "print a diagnostic just before each output file is opened")
+	filter := fs.StringP("filter", "", "", "write to shell COMMAND; file name is $FILE")
+	hexSuffix := fs.BoolP("", "x", false, "use hexadecimal suffixes (shorthand for --hex-suffixes)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+
+	if *hexSuffix {
+		*hexSuffixes = "0"
+		for _, f := range []string{"numeric-suffixes"} {
+			if fs.Changed(f) {
+				return tool.UsageError(rc, cmd, "cannot combine -x with --numeric-suffixes")
+			}
+		}
+	}
+
+	if *filter != "" {
+		return tool.NotSupported(rc, cmd, "--filter (shell command output)")
 	}
 
 	if fs.Changed("numeric-suffixes") && *numeric != "0" {
@@ -109,7 +124,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if fs.Changed("numeric-suffixes") {
 		radix = 10
 	}
-	if fs.Changed("hex-suffixes") {
+	if fs.Changed("hex-suffixes") || *hexSuffix {
 		radix = 16
 		useHex = true
 		hexStart, _ = strconv.Atoi(*hexSuffixes)

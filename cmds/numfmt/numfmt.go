@@ -37,12 +37,16 @@ func run(rc *tool.RunContext, args []string) int {
 	invalid := fs.String("invalid", "abort", "failure mode for invalid input: abort, fail, warn, ignore")
 	header := fs.Int("header", 0, "print the first N header lines without conversion")
 	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
+	fromSI := fs.BoolP("from-si", "M", false, "shorthand for --from=si")
 	round := fs.String("round", "from-zero", "use METHOD for rounding: up, down, from-zero, towards-zero, nearest")
 	grouping := fs.Bool("grouping", false, "group digits per locale rules (no effect in the C locale)")
 	debug := fs.Bool("debug", false, "print warnings about invalid input")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	if *fromSI && !fs.Changed("from") {
+		*from = "si"
 	}
 	fromScale, code := parseScale(rc, *from, "--from")
 	if code >= 0 {
