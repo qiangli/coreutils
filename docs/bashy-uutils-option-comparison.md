@@ -1,153 +1,45 @@
 # bashy vs uutils coreutils option comparison
 
-Generated on 2026-07-07 from live command output after rebuilding `../bashy` against this sibling `coreutils` checkout.
+Generated on 2026-07-07 from live command output after rebuilding
+`./cmd/coreutils` to `/private/tmp/coreutils`.
 
-- uutils: `reference/uutils-coreutils/target/release/coreutils --list` and per-command `--help`
-- uutils build used here: `cargo build --release --features unix` on macOS, so `chcon` and `runcon` are excluded by uutils platform gating
-- bashy: `../bashy/bashy commands --json` plus `../bashy/bashy <cmd> --help`; bash builtins use `../bashy/bashy -c "help <cmd>"`
+- Reference: `reference/uutils-coreutils/target/release/coreutils`
+- Local binary: `/private/tmp/coreutils`
+- Comparison scope: command inventory and declared option tokens in `--help`
+- Bash builtin exclusions: `[`, `kill`, `printf`, `test`
 
-This is a declared CLI-surface comparison. It compares command presence, usage forms, and option tokens visible in help text. It is not a behavioral conformance test; matching flags may still differ semantically.
-
-> Update: a uutils option-parity sprint later on 2026-07-07 implemented many
-> gaps listed in the generated table below. See
-> [uutils-parity-sprint-2026-07-07.md](./uutils-parity-sprint-2026-07-07.md)
-> for the current implemented changes, verification status, and remaining
-> option-surface gaps.
+This is a declared CLI-surface comparison, not a full behavioral conformance
+test. Matching option spelling does not by itself prove identical semantics.
 
 ## Summary
 
-| Measure | Count |
+| Measure | Result |
 |---|---:|
-| uutils commands in this build | 107 |
-| bashy native coreutils commands | 158 |
-| uutils commands implemented as bashy native coreutils | 103 |
-| uutils commands covered only by bash builtins | 4 |
-| uutils commands covered by combined bashy surface | 107 |
-| uutils commands missing from combined bashy surface | 0 |
-| uutils commands missing from bashy native coreutils layer | 4 |
+| uutils commands missing locally, excluding bash builtins | 0 |
+| uutils commands intentionally covered by bash builtins | 4 |
+| Commands with non-builtin option-token discrepancies | 0 |
 
-## Missing Commands
+## Command Coverage
 
-Missing from the combined `../bashy` surface (native coreutils plus shell builtins):
+| Category | Commands |
+|---|---|
+| Missing native commands ignored because bash provides them | `[`, `kill`, `printf`, `test` |
+| Missing non-builtin commands | none |
 
-None.
+## Option Parity
 
-Missing from the native bashy coreutils layer, including commands that are covered as shell builtins:
+The artifact-aware option extraction compares only declared option tokens from
+option-definition lines and ignores prose/table artifacts such as `.env-style`
+and descriptive text in `pr --help`.
 
-`[`, `kill`, `printf`, `test`
+| Command scope | Missing uutils options locally |
+|---|---|
+| All overlapping non-builtin commands | none |
 
-Covered by Bash builtins rather than the native coreutils layer:
+## Notes
 
-`[`, `kill`, `printf`, `test`
-
-## Per-Command Option Table
-
-| Command | Bashy status | uutils usage forms | bashy usage forms | Common flags/options | Only in uutils | Only in bashy |
-|---|---|---|---|---|---|---|
-| `[` | bash builtin | test EXPRESSION | [: [ is a shell builtin | - | `-G`, `-L`, `-N`, `-O`, `-S`, `-V`, `-a`, `-b`, `-c`, `-d`, `-e`, `-f`, `-g`, `-h`, `--help`, `-k`, `-l`, `-n`, `-o`, `-p`, `-r`, `-s`, `-t`, `-u`, `--version`, `-w`, `-x`, `-z` | - |
-| `arch` | native coreutils | arch | arch [OPTION]... | `--help`, `--version` | `-V`, `-h` | - |
-| `b2sum` | native coreutils | b2sum [OPTIONS] [FILE]... | b2sum [OPTION]... [FILE]... | `-c`, `--check`, `--help`, `--ignore-missing`, `-l`, `--length`, `--quiet`, `--status`, `--strict`, `-t`, `--tag`, `--text`, `--version`, `-w`, `--warn`, `-z`, `--zero` | `-V`, `-h` | `-b`, `--binary` |
-| `base32` | native coreutils | base32 [OPTION]... [FILE] | base32 [OPTION]... [FILE] | `-d`, `--decode`, `--help`, `-i`, `--ignore-garbage`, `--version`, `-w`, `--wrap` | `-V`, `-h` | - |
-| `base64` | native coreutils | base64 [OPTION]... [FILE] | base64 [OPTION]... [FILE] | `-d`, `--decode`, `--help`, `-i`, `--ignore-garbage`, `--version`, `-w`, `--wrap` | `-V`, `-h` | - |
-| `basename` | native coreutils | basename [-z] NAME [SUFFIX] | basename NAME [SUFFIX]<br>basename OPTION... NAME... | `-a`, `--help`, `--multiple`, `-s`, `--suffix`, `--version`, `-z`, `--zero` | `-V`, `-h` | - |
-| `basenc` | native coreutils | basenc [OPTION]... [FILE] | basenc [OPTION]... [FILE] | `--base16`, `--base2lsbf`, `--base2msbf`, `--base32`, `--base32hex`, `--base58`, `--base64`, `--base64url`, `-d`, `--decode`, `--help`, `-i`, `--ignore-garbage`, `--version`, `-w`, `--wrap`, `--z85` | `-V`, `-h` | - |
-| `cat` | native coreutils | cat [OPTION]... [FILE]... | cat [OPTION]... [FILE]... | `-A`, `-E`, `-T`, `-b`, `-e`, `--help`, `-n`, `--number`, `--number-nonblank`, `-s`, `--show-all`, `--show-ends`, `--show-nonprinting`, `--show-tabs`, `--squeeze-blank`, `-t`, `-u`, `-v`, `--version` | `-V`, `-h` | - |
-| `chgrp` | native coreutils | chgrp [OPTION]... GROUP FILE... | chgrp [OPTION]... GROUP FILE... | `-R`, `--help`, `--recursive`, `--version` | `-H`, `-L`, `-P`, `-V`, `-c`, `--changes`, `--dereference`, `-f`, `--from`, `-h`, `--no-dereference`, `--no-preserve-root`, `--preserve-root`, `--quiet`, `--reference`, `--silent`, `-v`, `--verbose` | - |
-| `chmod` | native coreutils | chmod [OPTION]... MODE[,MODE]... FILE... | chmod [OPTION]... MODE[,MODE]... FILE...<br>chmod [OPTION]... OCTAL-MODE FILE... | `-R`, `--help`, `--recursive`, `--version` | `-H`, `-L`, `-P`, `-V`, `-c`, `--changes`, `--dereference`, `-f`, `-h`, `--no-dereference`, `--no-preserve-root`, `--preserve-root`, `--quiet`, `--reference`, `--silent`, `-v`, `--verbose` | - |
-| `chown` | native coreutils | chown [OPTION]... [OWNER][:[GROUP]] FILE... | chown [OPTION]... [OWNER][:[GROUP]] FILE... | `-R`, `--help`, `--recursive`, `--version` | `-H`, `-L`, `-P`, `-V`, `-c`, `--changes`, `--dereference`, `-f`, `--from`, `-h`, `--no-dereference`, `--no-preserve-root`, `--preserve-root`, `--quiet`, `--reference`, `--silent`, `-v`, `--verbose` | - |
-| `chroot` | native coreutils | chroot [OPTION]... NEWROOT [COMMAND [ARG]...] | chroot [OPTION] NEWROOT [COMMAND [ARG]...] | `--groups`, `--help`, `--skip-chdir`, `--userspec`, `--version` | `-V`, `-h` | - |
-| `cksum` | native coreutils | cksum [OPTIONS] [FILE]... | cksum [OPTION]... [FILE]... | `-a`, `--algorithm`, `--base64`, `-c`, `--check`, `--debug`, `--help`, `--ignore-missing`, `-l`, `--length`, `--quiet`, `--raw`, `--status`, `--strict`, `--tag`, `--untagged`, `--version`, `-w`, `--warn`, `-z`, `--zero` | `-V`, `-h` | - |
-| `comm` | native coreutils | comm [OPTION]... FILE1 FILE2 | comm [OPTION]... FILE1 FILE2 | `-1`, `-2`, `-3`, `--help`, `--version` | `-V`, `--check-order`, `-h`, `--nocheck-order`, `--output-delimiter`, `--total`, `-z`, `--zero-terminated` | - |
-| `cp` | native coreutils | cp [OPTION]... [-T] SOURCE DEST | cp [OPTION]... SOURCE DEST<br>cp [OPTION]... SOURCE... DIRECTORY | `-R`, `-f`, `--force`, `--help`, `-n`, `--no-clobber`, `-p`, `--preserve`, `--recursive`, `-v`, `--verbose`, `--version` | `-H`, `-L`, `-P`, `-S`, `-T`, `-V`, `-Z`, `-a`, `--archive`, `--attributes-only`, `-b`, `--backup`, `--context`, `--copy-contents`, `-d`, `--debug`, `--dereference`, `-g`, `-h`, `-i`, `--interactive`, `-l`, `--link`, `--no-dereference`, `--no-preserve`, `--no-target-directory`, `--one-file-system`, `--parents`, `--preserve-default-attributes`, `--progress`, `--reflink`, `--remove-destination`, `-s`, `--sparse`, `--strip-trailing-slashes`, `--suffix`, `--symbolic-link`, `-t`, `--target-directory`, `-u`, `--update`, `-x` | `-r` |
-| `csplit` | native coreutils | csplit [OPTION]... FILE PATTERN... | csplit [OPTION]... FILE PATTERN... | `-b`, `--digits`, `--elide-empty-files`, `-f`, `--help`, `-k`, `--keep-files`, `-n`, `--prefix`, `-q`, `--quiet`, `-s`, `--silent`, `--suffix-format`, `--suppress-matched`, `--version`, `-z` | `-V`, `-h` | - |
-| `cut` | native coreutils | cut OPTION... [FILE]... | cut OPTION... [FILE]... | `-b`, `--bytes`, `-c`, `--characters`, `--complement`, `-d`, `--delimiter`, `-f`, `--fields`, `--help`, `--only-delimited`, `-s`, `--version` | `-O`, `-V`, `-h`, `-n`, `--output-delimiter`, `-w`, `-z`, `--zero-terminated` | - |
-| `date` | native coreutils | date [OPTION]... [+FORMAT]... | date [OPTION]... [+FORMAT] | `-d`, `--date`, `--help`, `-r`, `--reference`, `-u`, `--universal`, `--utc`, `--version` | `-I`, `-R`, `-V`, `--debug`, `-f`, `--file`, `-h`, `--iso-8601`, `--resolution`, `--rfc-3339`, `--rfc-email`, `-s`, `--set` | - |
-| `dd` | native coreutils | dd [OPERAND]... | dd [OPERAND]... | `--help`, `--version` | `-V`, `-h` | - |
-| `df` | native coreutils | df [OPTION]... [FILE]... | df [OPTION]... [FILE]... | `-h`, `--help`, `--human-readable`, `--version` | `-B`, `-H`, `-P`, `-T`, `-V`, `-a`, `--all`, `--block-size`, `--exclude-type`, `-i`, `--inodes`, `-k`, `-l`, `--local`, `--no-sync`, `--output`, `--portability`, `--print-type`, `--si`, `--sync`, `-t`, `--total`, `--type`, `-x` | - |
-| `dir` | native coreutils | dir [OPTION]... [FILE]... | dir [OPTION]... [FILE]... | `--help` | `-1`, `-A`, `-B`, `-C`, `-D`, `-F`, `-G`, `-H`, `-I`, `-L`, `-N`, `-Q`, `-R`, `-S`, `-T`, `-U`, `-V`, `-X`, `-Z`, `-a`, `--all`, `--almost-all`, `--author`, `-b`, `--block-size`, `-c`, `--classify`, `--color`, `--context`, `-d`, `--dereference`, `--dereference-command-line`, `--dereference-command-line-symlink-to-dir`, `--directory`, `--dired`, `--escape`, `-f`, `--file-type`, `--format`, `--full-time`, `-g`, `--group-directories-first`, `-h`, `--hide`, `--hide-control-chars`, `--human-readable`, `--hyperlink`, `-i`, `--ignore`, `--ignore-backups`, `--indicator-style`, `--inode`, `-k`, `--kibibytes`, `-l`, `--literal`, `--long`, `-m`, `-n`, `--no-group`, `--numeric-uid-gid`, `-o`, `-p`, `-q`, `--quote-name`, `--quoting-style`, `-r`, `--recursive`, `--reverse`, `-s`, `--show-control-chars`, `--si`, `--size`, `--sort`, `-t`, `--tabsize`, `--time`, `--time-style`, `-u`, `-v`, `--version`, `-w`, `--width`, `-x`, `--zero` | - |
-| `dircolors` | native coreutils | dircolors [OPTION]... [FILE] | dircolors [OPTION]... [FILE] | `-b`, `--bourne-shell`, `-c`, `--c-shell`, `--help`, `-p`, `--print-database`, `--version` | `-V`, `--csh`, `-h`, `--print-ls-colors`, `--sh` | - |
-| `dirname` | native coreutils | dirname [OPTION] NAME... | dirname [OPTION] NAME... | `--help`, `--version`, `-z`, `--zero` | `-V`, `-h` | - |
-| `du` | native coreutils | du [OPTION]... [FILE]... | du [OPTION]... [FILE]... | `-a`, `--all`, `--apparent-size`, `-b`, `--block-size`, `--bytes`, `-c`, `-d`, `-h`, `--help`, `--human-readable`, `--max-depth`, `-s`, `--summarize`, `--total`, `--version` | `-0`, `-A`, `-B`, `-D`, `-L`, `-P`, `-S`, `-V`, `-X`, `--count-links`, `--dereference`, `--dereference-args`, `--exclude`, `--exclude-from`, `--files0-from`, `--inodes`, `-k`, `-l`, `-m`, `--no-dereference`, `--null`, `--one-file-system`, `--separate-dirs`, `--si`, `-t`, `--threshold`, `--time`, `--time-style`, `-v`, `--verbose`, `-x` | - |
-| `echo` | native coreutils | echo [OPTIONS]... [STRING]... | echo [SHORT-OPTION]... [STRING]...<br>echo LONG-OPTION | `--help`, `--version` | `-E`, `-V`, `-e`, `-h`, `-n` | - |
-| `env` | native coreutils | env [OPTION]... [-] [NAME=VALUE]... [COMMAND [ARG]...] | env [OPTION]... [-] [NAME=VALUE]... [COMMAND [ARG]...] | `--help`, `-i`, `--ignore-environment`, `-u`, `--unset`, `--version` | `-0`, `-C`, `-S`, `-V`, `-a`, `--argv0`, `--block-signal`, `--chdir`, `--debug`, `--default-signal`, `-f`, `--file`, `-h`, `--ignore-signal`, `--list-signal-handling`, `--null`, `--split-string`, `-v` | - |
-| `expand` | native coreutils | expand [OPTION]... [FILE]... | expand [OPTION]... [FILE]... | `--help`, `-i`, `--initial`, `-t`, `--tabs`, `--version` | `-U`, `-V`, `-h`, `--no-utf8` | - |
-| `expr` | native coreutils | expr [EXPRESSION] | - | - | `--help`, `--version` | - |
-| `factor` | native coreutils | factor [OPTION]... [NUMBER]... | factor [OPTION] [NUMBER]... | - | `-V`, `--exponents`, `-h`, `--help`, `--version` | - |
-| `false` | native coreutils | false | - | - | `--help`, `--version` | - |
-| `fmt` | native coreutils | [OPTION]... [FILE]... | fmt [-WIDTH] [OPTION]... [FILE]... | `-c`, `--crown-margin`, `-g`, `--goal`, `--help`, `-p`, `--prefix`, `-s`, `--split-only`, `-t`, `--tagged-paragraph`, `-u`, `--uniform-spacing`, `--version`, `-w`, `--width` | `-P`, `-T`, `-V`, `-X`, `--exact-prefix`, `--exact-skip-prefix`, `-h`, `-m`, `--preserve-headers`, `-q`, `--quick`, `--skip-prefix`, `--tab-width`, `-x` | - |
-| `fold` | native coreutils | fold [OPTION]... [FILE]... | fold [OPTION]... [FILE]... | `-b`, `--bytes`, `-c`, `--characters`, `--help`, `-s`, `--spaces`, `--version`, `-w`, `--width` | `-V`, `-h` | - |
-| `groups` | native coreutils | groups [OPTION]... [USERNAME]... | groups [OPTION]... [USERNAME]... | `--help`, `--version` | `-V`, `-h` | - |
-| `head` | native coreutils | head [OPTION]... [FILE]... | head [OPTION]... [FILE]... | `--bytes`, `-c`, `--help`, `--lines`, `-n`, `-q`, `--quiet`, `--silent`, `-v`, `--verbose`, `--version` | `-V`, `-h`, `-z`, `--zero-terminated` | - |
-| `hostid` | native coreutils | hostid [options] | hostid [OPTION]... | `--help`, `--version` | `-V`, `-h` | - |
-| `hostname` | native coreutils | hostname [OPTION]... [HOSTNAME] | hostname | `--help`, `--version` | `-V`, `-d`, `--domain`, `-f`, `--fqdn`, `-h`, `-i`, `--ip-address`, `-s`, `--short` | - |
-| `id` | native coreutils | id [OPTION]... [USER]... | id [OPTION]... [USER]... | `-G`, `-g`, `--group`, `--groups`, `--help`, `-n`, `--name`, `-u`, `--user`, `--version` | `-A`, `-P`, `-V`, `-Z`, `-a`, `--context`, `-h`, `--ignore`, `-p`, `-r`, `--real`, `-z`, `--zero` | - |
-| `install` | native coreutils | install [OPTION]... [FILE]... | install [OPTION]... SOURCE DEST<br>install [OPTION]... SOURCE... DIRECTORY<br>install -d [OPTION]... DIRECTORY... | `-D`, `-T`, `-d`, `--directory`, `-g`, `--group`, `--help`, `-m`, `--mode`, `--no-target-directory`, `-o`, `--owner`, `-t`, `--target-directory`, `-v`, `--verbose`, `--version` | `-C`, `-P`, `-S`, `-U`, `-V`, `-Z`, `-b`, `--backup`, `-c`, `--compare`, `--context`, `-h`, `-p`, `--preserve-context`, `--preserve-timestamps`, `-s`, `--strip`, `--strip-program`, `--suffix`, `--unprivileged` | `--create-leading-directories` |
-| `join` | native coreutils | join [OPTION]... FILE1 FILE2 | join [OPTION]... FILE1 FILE2 | `-1`, `-2`, `-a`, `--help`, `-i`, `--ignore-case`, `-t`, `-v`, `--version` | `-V`, `--check-order`, `-e`, `-h`, `--header`, `-j`, `--nocheck-order`, `-o`, `-z`, `--zero-terminated` | - |
-| `kill` | bash builtin | kill [OPTIONS]... PID... | - | - | `-V`, `-h`, `--help`, `-l`, `--list`, `-s`, `--signal`, `-t`, `--table`, `--version` | - |
-| `link` | native coreutils | link FILE1 FILE2 | link FILE1 FILE2 | `--help`, `--version` | `-V`, `-h` | - |
-| `ln` | native coreutils | ln [OPTION]... [-T] TARGET LINK_NAME | ln [OPTION]... TARGET LINK_NAME<br>ln [OPTION]... TARGET<br>ln [OPTION]... TARGET... DIRECTORY | `-f`, `--force`, `--help`, `-s`, `--symbolic`, `-v`, `--verbose`, `--version` | `-L`, `-P`, `-S`, `-T`, `-V`, `-b`, `--backup`, `-h`, `-i`, `--interactive`, `--logical`, `-n`, `--no-dereference`, `--no-target-directory`, `--physical`, `-r`, `--relative`, `--suffix`, `-t`, `--target-directory` | - |
-| `logname` | native coreutils | logname | logname [OPTION]... | `--help`, `--version` | `-V`, `-h` | - |
-| `ls` | native coreutils | ls [OPTION]... [FILE]... | ls [OPTION]... [FILE]... | `-A`, `-R`, `-a`, `--all`, `--almost-all`, `-d`, `--directory`, `-h`, `--help`, `--human-readable`, `-i`, `--inode`, `-l`, `-r`, `--recursive`, `--reverse`, `--version` | `-1`, `-B`, `-C`, `-D`, `-F`, `-G`, `-H`, `-I`, `-L`, `-N`, `-Q`, `-S`, `-T`, `-U`, `-V`, `-X`, `-Z`, `--author`, `-b`, `--block-size`, `-c`, `--classify`, `--color`, `--context`, `--dereference`, `--dereference-command-line`, `--dereference-command-line-symlink-to-dir`, `--dired`, `--escape`, `-f`, `--file-type`, `--format`, `--full-time`, `-g`, `--group-directories-first`, `--hide`, `--hide-control-chars`, `--hyperlink`, `--ignore`, `--ignore-backups`, `--indicator-style`, `-k`, `--kibibytes`, `--literal`, `--long`, `-m`, `-n`, `--no-group`, `--numeric-uid-gid`, `-o`, `-p`, `-q`, `--quote-name`, `--quoting-style`, `-s`, `--show-control-chars`, `--si`, `--size`, `--sort`, `-t`, `--tabsize`, `--time`, `--time-style`, `-u`, `-v`, `-w`, `--width`, `-x`, `--zero` | - |
-| `md5sum` | native coreutils | md5sum [OPTIONS] [FILE]... | md5sum [OPTION]... [FILE]... | `-c`, `--check`, `--help`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `-t`, `--tag`, `--text`, `--version`, `-w`, `--warn`, `-z`, `--zero` | `-V`, `-h` | `-b`, `--binary` |
-| `mkdir` | native coreutils | mkdir [OPTION]... DIRECTORY... | mkdir [OPTION]... DIRECTORY... | `--help`, `-m`, `--mode`, `-p`, `--parents`, `-v`, `--verbose`, `--version` | `-V`, `-Z`, `--context`, `-h` | - |
-| `mkfifo` | native coreutils | mkfifo [OPTION]... NAME... | mkfifo [OPTION]... NAME... | `--help`, `-m`, `--mode`, `--version` | `-V`, `-Z`, `--context`, `-h` | - |
-| `mknod` | native coreutils | mknod [OPTION]... NAME TYPE [MAJOR MINOR] | mknod [OPTION]... NAME TYPE [MAJOR MINOR] | `--help`, `-m`, `--mode`, `--version` | `-V`, `-Z`, `--context`, `-h` | - |
-| `mktemp` | native coreutils | mktemp [OPTION]... [TEMPLATE] | mktemp [OPTION]... [TEMPLATE] | `-d`, `--directory`, `--dry-run`, `--help`, `-p`, `--tmpdir`, `-u`, `--version` | `-V`, `-h`, `-q`, `--quiet`, `--suffix`, `-t` | - |
-| `more` | native coreutils | more [OPTIONS] FILE... | more [OPTION]... [FILE]... | `-F`, `-P`, `-c`, `--clean-print`, `-d`, `-e`, `--exit-on-eof`, `-f`, `--from-line`, `--help`, `-l`, `--lines`, `--logical`, `-n`, `--no-pause`, `--number`, `-p`, `--pattern`, `--print-over`, `-s`, `--silent`, `--squeeze`, `--version` | `-V`, `-h` | `--plain`, `-u` |
-| `mv` | native coreutils | mv [OPTION]... [-T] SOURCE DEST | mv [OPTION]... SOURCE DEST<br>mv [OPTION]... SOURCE... DIRECTORY | `-f`, `--force`, `--help`, `-n`, `--no-clobber`, `-v`, `--verbose`, `--version` | `-S`, `-T`, `-V`, `-Z`, `-b`, `--backup`, `--context`, `--debug`, `-g`, `-h`, `-i`, `--interactive`, `--no-target-directory`, `--progress`, `--strip-trailing-slashes`, `--suffix`, `-t`, `--target-directory`, `-u`, `--update` | - |
-| `nice` | native coreutils | nice [OPTION] [COMMAND [ARG]...] | nice [OPTION]... [COMMAND [ARG]...] | `--adjustment`, `--help`, `-n`, `--version` | `-V`, `-h` | - |
-| `nl` | native coreutils | nl [OPTION]... [FILE]... | nl [OPTION]... [FILE]... | `-b`, `--body-numbering`, `-d`, `-f`, `--footer-numbering`, `-h`, `--header-numbering`, `--help`, `-i`, `--join-blank-lines`, `-l`, `--line-increment`, `-n`, `--no-renumber`, `--number-format`, `--number-separator`, `--number-width`, `-p`, `-s`, `--section-delimiter`, `--starting-line-number`, `-v`, `--version`, `-w` | `-V` | - |
-| `nohup` | native coreutils | nohup COMMAND [ARG]... | nohup COMMAND [ARG]... | `--help`, `--version` | `-V`, `-h` | - |
-| `nproc` | native coreutils | nproc [OPTIONS]... | nproc [OPTION]... | `--all`, `--help`, `--ignore`, `--version` | `-V`, `-h` | - |
-| `numfmt` | native coreutils | numfmt [OPTION]... [NUMBER]... | numfmt [OPTION]... [NUMBER]... | `-d`, `--debug`, `--delimiter`, `--field`, `--format`, `--from`, `--from-unit`, `--grouping`, `--header`, `--help`, `--invalid`, `--padding`, `--round`, `--suffix`, `--to`, `--to-unit`, `--unit-separator`, `--version`, `-z`, `--zero-terminated` | `-M`, `-V`, `-h` | - |
-| `od` | native coreutils | od [OPTION]... [--] [FILENAME]... | od [OPTION]... [FILE]... | `-A`, `-N`, `-S`, `-a`, `--address-radix`, `-b`, `-c`, `-d`, `--endian`, `--format`, `--help`, `-j`, `-o`, `--output-duplicates`, `--read-bytes`, `--skip-bytes`, `--strings`, `-t`, `-v`, `--version`, `-w`, `--width`, `-x` | `-D`, `-F`, `-H`, `-I`, `-L`, `-O`, `-V`, `-X`, `-e`, `-f`, `-h`, `-i`, `-l`, `-s`, `--traditional` | `--characters`, `--hex-2`, `--named-chars`, `--octal-2`, `--octal-bytes`, `--unsigned-decimal-2` |
-| `paste` | native coreutils | paste [OPTIONS] [FILE]... | paste [OPTION]... [FILE]... | `-d`, `--delimiters`, `--help`, `-s`, `--serial`, `--version` | `-V`, `-h`, `-z`, `--zero-terminated` | - |
-| `pathchk` | native coreutils | pathchk [OPTION]... NAME... | pathchk [OPTION]... NAME... | `-P`, `--help`, `-p`, `--portability`, `--version` | `-V`, `-h` | `--posix`, `--posix-special` |
-| `pinky` | native coreutils | pinky [OPTION]... [USER]... | pinky [OPTION]... [USER]... | `-b`, `-f`, `-h`, `--help`, `-l`, `-p`, `-s`, `--version`, `-w` | `-V`, `-i`, `--lookup`, `-q` | `--heading`, `--long`, `--no-home`, `--no-name`, `--no-plan`, `--no-project`, `--short` |
-| `pr` | native coreutils | pr [OPTION]... [FILE]... | pr [OPTION]... [FILE]... | `-D`, `-F`, `-S`, `-T`, `-W`, `-a`, `--across`, `-d`, `--date-format`, `--double-space`, `-e`, `--expand-tabs`, `--form-feed`, `-h`, `--header`, `--help`, `--indent`, `-l`, `--length`, `-m`, `--merge`, `-n`, `--no-file-warnings`, `--number-lines`, `-o`, `--omit-header`, `--omit-pagination`, `--page-width`, `--pages`, `-r`, `-s`, `--sep-string`, `--separator`, `-t`, `--version`, `-w`, `--width` | `-J`, `-N`, `-V`, `--column`, `--first-line-number`, `-i` | `--columns` |
-| `printenv` | native coreutils | printenv [OPTION]... [VARIABLE]... | printenv [OPTION]... [VARIABLE]... | `--help`, `--version` | `-0`, `-V`, `-h`, `--null` | - |
-| `printf` | bash builtin | printf FORMAT [ARGUMENT]... | - | - | `--help`, `--quoting`, `--version` | - |
-| `ptx` | native coreutils | ptx [OPTION]... [INPUT]... | ptx [OPTION]... [FILE]... | `-A`, `-G`, `-O`, `-R`, `-S`, `-W`, `--auto-reference`, `-b`, `--break-file`, `-f`, `-g`, `--gap-size`, `--help`, `-i`, `--ignore-case`, `--ignore-file`, `-o`, `--only-file`, `-r`, `--references`, `--right-side-refs`, `--sentence-regexp`, `-t`, `--traditional`, `--typeset-mode`, `--version`, `-w`, `--width`, `--word-regexp` | `-F`, `-M`, `-T`, `-V`, `--flag-truncation`, `-h`, `--macro-name` | `--format` |
-| `pwd` | native coreutils | pwd [OPTION]... | pwd [OPTION]... | `-L`, `-P`, `--help`, `--logical`, `--physical`, `--version` | `-V`, `-h` | - |
-| `readlink` | native coreutils | readlink [OPTION]... [FILE]... | readlink [OPTION]... FILE... | `--canonicalize`, `--canonicalize-existing`, `--canonicalize-missing`, `-e`, `-f`, `--help`, `-m`, `-n`, `--no-newline`, `--version` | `-V`, `-h`, `-q`, `--quiet`, `-s`, `--silent`, `-v`, `--verbose`, `-z`, `--zero` | - |
-| `realpath` | native coreutils | realpath [OPTION]... FILE... | realpath [OPTION]... FILE... | `--canonicalize-existing`, `--canonicalize-missing`, `-e`, `--help`, `-m`, `--no-symlinks`, `--relative-to`, `-s`, `--strip`, `--version` | `-E`, `-L`, `-P`, `-V`, `--canonicalize`, `-h`, `--logical`, `--physical`, `-q`, `--quiet`, `--relative-base`, `-z`, `--zero` | - |
-| `rm` | native coreutils | rm [OPTION]... FILE... | rm [OPTION]... [FILE]... | `-f`, `--force`, `--help`, `-r`, `--recursive`, `-v`, `--verbose`, `--version` | `-I`, `-V`, `-d`, `--dir`, `-g`, `-h`, `-i`, `--interactive`, `--no-preserve-root`, `--one-file-system`, `--preserve-root`, `--progress` | `-R` |
-| `rmdir` | native coreutils | rmdir [OPTION]... DIRECTORY... | rmdir [OPTION]... DIRECTORY... | `--help`, `-p`, `--parents`, `-v`, `--verbose`, `--version` | `-V`, `-h`, `--ignore-fail-on-non-empty` | - |
-| `seq` | native coreutils | seq [OPTION]... LAST | seq [OPTION]... LAST<br>seq [OPTION]... FIRST LAST<br>seq [OPTION]... FIRST INCREMENT LAST | `--equal-width`, `-f`, `--format`, `--help`, `-s`, `--separator`, `--version`, `-w` | `-V`, `-h`, `-t`, `--terminator` | - |
-| `sha1sum` | native coreutils | sha1sum [OPTIONS] [FILE]... | sha1sum [OPTION]... [FILE]... | `-c`, `--check`, `--help`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `-t`, `--tag`, `--text`, `--version`, `-w`, `--warn`, `-z`, `--zero` | `-V`, `-h` | `-b`, `--binary` |
-| `sha224sum` | native coreutils | sha224sum [OPTIONS] [FILE]... | sha224sum [OPTION]... [FILE]... | `-c`, `--check`, `--help`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `-t`, `--tag`, `--text`, `--version`, `-w`, `--warn`, `-z`, `--zero` | `-V`, `-h` | `-b`, `--binary` |
-| `sha256sum` | native coreutils | sha256sum [OPTIONS] [FILE]... | sha256sum [OPTION]... [FILE]... | `-c`, `--check`, `--help`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `-t`, `--tag`, `--text`, `--version`, `-w`, `--warn`, `-z`, `--zero` | `-V`, `-h` | `-b`, `--binary` |
-| `sha384sum` | native coreutils | sha384sum [OPTIONS] [FILE]... | sha384sum [OPTION]... [FILE]... | `-c`, `--check`, `--help`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `-t`, `--tag`, `--text`, `--version`, `-w`, `--warn`, `-z`, `--zero` | `-V`, `-h` | `-b`, `--binary` |
-| `sha512sum` | native coreutils | sha512sum [OPTIONS] [FILE]... | sha512sum [OPTION]... [FILE]... | `-c`, `--check`, `--help`, `--ignore-missing`, `--quiet`, `--status`, `--strict`, `-t`, `--tag`, `--text`, `--version`, `-w`, `--warn`, `-z`, `--zero` | `-V`, `-h` | `-b`, `--binary` |
-| `shred` | native coreutils | shred [OPTION]... FILE... | shred [OPTION]... FILE... | `-f`, `--force`, `--help`, `--iterations`, `-n`, `--remove`, `-u`, `-v`, `--verbose`, `--version`, `-z`, `--zero` | `-V`, `--exact`, `-h`, `--random-source`, `-s`, `--size`, `-x` | - |
-| `shuf` | native coreutils | shuf [OPTION]... [FILE] | shuf [OPTION]... [FILE]<br>shuf -e [OPTION]... [ARG]...<br>shuf -i LO-HI [OPTION]... | `-e`, `--echo`, `--head-count`, `--help`, `-i`, `--input-range`, `-n`, `--version` | `-V`, `-h`, `-o`, `--output`, `-r`, `--random-seed`, `--random-source`, `--repeat`, `-z`, `--zero-terminated` | - |
-| `sleep` | native coreutils | sleep NUMBER[SUFFIX]... | sleep NUMBER[smhd]... | `--help`, `--version` | `-V`, `-h` | - |
-| `sort` | native coreutils | sort [OPTION]... [FILE]... | sort [OPTION]... [FILE]... | `-b`, `-c`, `--check`, `-f`, `--field-separator`, `-h`, `--help`, `--human-numeric-sort`, `--ignore-case`, `--ignore-leading-blanks`, `-k`, `--key`, `-n`, `--numeric-sort`, `-o`, `--output`, `-r`, `--reverse`, `-s`, `--stable`, `-t`, `-u`, `--unique`, `--version` | `-C`, `-M`, `-R`, `-S`, `-T`, `-V`, `--batch-size`, `--buffer-size`, `--check-silent`, `--compress-program`, `-d`, `--debug`, `--dictionary-order`, `--files0-from`, `-g`, `--general-numeric-sort`, `-i`, `--ignore-nonprinting`, `-m`, `--merge`, `--month-sort`, `--parallel`, `--random-sort`, `--random-source`, `--sort`, `--temporary-directory`, `--version-sort`, `-z`, `--zero-terminated` | - |
-| `split` | native coreutils | split [OPTION]... [INPUT [PREFIX]] | split [OPTION]... [FILE [PREFIX]] | `-a`, `-b`, `--bytes`, `-d`, `--help`, `-l`, `--lines`, `-n`, `--number`, `--numeric-suffixes`, `--suffix-length`, `--version` | `-C`, `-V`, `--additional-suffix`, `-e`, `--elide-empty-files`, `--filter`, `-h`, `--hex-suffixes`, `--line-bytes`, `--separator`, `-t`, `--verbose`, `-x` | - |
-| `stat` | native coreutils | stat [OPTION]... FILE... | stat [OPTION]... FILE... | `-c`, `--format`, `--help`, `--version` | `-L`, `-V`, `--dereference`, `-f`, `--file-system`, `-h`, `--printf`, `-t`, `--terse` | - |
-| `stdbuf` | native coreutils | stdbuf [OPTION]... COMMAND | stdbuf OPTION... COMMAND | `-e`, `--error`, `--help`, `-i`, `--input`, `-o`, `--output`, `--version` | `-V`, `-h` | - |
-| `stty` | native coreutils | stty [-F DEVICE \\| --file=DEVICE] [SETTING]...<br>stty [-F DEVICE \\| --file=DEVICE] [-a\\|--all]<br>stty [-F DEVICE \\| --file=DEVICE] [-g\\|--save] | stty [OPTION]... [SETTING]... | `-F`, `-a`, `--all`, `--file`, `-g`, `--help`, `--save`, `--version` | `-V`, `-h` | - |
-| `sum` | native coreutils | sum [OPTION]... [FILE]... | sum [OPTION]... [FILE]... | `--help`, `-r`, `-s`, `--sysv`, `--version` | `-V`, `-h` | - |
-| `sync` | native coreutils | sync [OPTION]... FILE... | sync [OPTION] [FILE]... | `--help`, `--version` | `-V`, `-d`, `--data`, `-f`, `--file-system`, `-h` | - |
-| `tac` | native coreutils | tac [OPTION]... [FILE]... | tac [OPTION]... [FILE]... | `--help`, `-s`, `--separator`, `--version` | `-V`, `-b`, `--before`, `-h`, `-r`, `--regex` | - |
-| `tail` | native coreutils | tail [OPTION]... [FILE]... | tail [OPTION]... [FILE]... | `--bytes`, `-c`, `-f`, `--follow`, `--help`, `--lines`, `-n`, `-q`, `--quiet`, `--silent`, `-v`, `--verbose`, `--version` | `-F`, `-V`, `--debug`, `-h`, `--max-unchanged-stats`, `--pid`, `--retry`, `-s`, `--sleep-interval`, `--use-polling`, `-z`, `--zero-terminated` | - |
-| `tee` | native coreutils | tee [OPTION]... [FILE]... | tee [OPTION]... [FILE]... | `-a`, `--append`, `--help`, `-i`, `--ignore-interrupts`, `--version` | `-V`, `-h`, `--output-error`, `-p` | - |
-| `test` | bash builtin | - | - | - | - | - |
-| `timeout` | native coreutils | timeout [OPTION] DURATION COMMAND... | - | `--help` | `-V`, `-f`, `--foreground`, `-h`, `-k`, `--kill-after`, `-p`, `--preserve-status`, `-s`, `--signal`, `-v`, `--verbose`, `--version` | - |
-| `touch` | native coreutils | touch [OPTION]... [FILE]... | touch [OPTION]... FILE... | `-c`, `-d`, `--date`, `--help`, `--no-create`, `-r`, `--reference`, `--version` | `-V`, `-a`, `-f`, `-h`, `-m`, `--no-dereference`, `-t`, `--time` | - |
-| `tr` | native coreutils | tr [OPTION]... SET1 [SET2] | tr [OPTION]... SET1 [SET2] | `-c`, `--complement`, `-d`, `--delete`, `--help`, `-s`, `--squeeze-repeats`, `--version` | `-V`, `-h`, `-t`, `--truncate-set1` | - |
-| `true` | native coreutils | true | - | - | `--help`, `--version` | - |
-| `truncate` | native coreutils | truncate [OPTION]... [FILE]... | truncate OPTION... FILE... | `-c`, `--help`, `--no-create`, `-s`, `--size`, `--version` | `-V`, `-h`, `--io-blocks`, `-o`, `-r`, `--reference` | - |
-| `tsort` | native coreutils | tsort [OPTIONS] FILE | tsort [OPTION] [FILE] | `--help`, `--version` | `-V`, `-h` | - |
-| `tty` | native coreutils | tty [OPTION]... | tty [OPTION]... | `--help`, `--version` | `-V`, `-h`, `--quiet`, `-s`, `--silent` | - |
-| `uname` | native coreutils | uname [OPTION]... | uname [OPTION]... | `-a`, `--all`, `--help`, `--kernel-name`, `--kernel-release`, `-m`, `--machine`, `-n`, `--nodename`, `-o`, `--operating-system`, `-r`, `-s`, `--version` | `-V`, `-h`, `--kernel-version`, `-v` | - |
-| `unexpand` | native coreutils | unexpand [OPTION]... [FILE]... | unexpand [OPTION]... [FILE]... | `-a`, `--all`, `--first-only`, `--help`, `-t`, `--tabs`, `--version` | `-U`, `-V`, `-f`, `-h`, `--no-utf8` | - |
-| `uniq` | native coreutils | uniq [OPTION]... [INPUT [OUTPUT]] | uniq [OPTION]... [INPUT [OUTPUT]] | `-c`, `--check-chars`, `--count`, `-d`, `-f`, `--help`, `-i`, `--ignore-case`, `--repeated`, `-s`, `--skip-chars`, `--skip-fields`, `-u`, `--unique`, `--version`, `-w` | `-D`, `-V`, `--all-repeated`, `--group`, `-h`, `-z`, `--zero-terminated` | - |
-| `unlink` | native coreutils | unlink FILE | unlink FILE | `--help`, `--version` | `-V`, `-h` | - |
-| `uptime` | native coreutils | uptime [OPTION]... | uptime | `--help`, `--version` | `-V`, `-h`, `-p`, `--pretty`, `-s`, `--since` | - |
-| `users` | native coreutils | users [FILE] | users [OPTION]... [FILE] | `--help`, `--version` | `-V`, `-h` | - |
-| `vdir` | native coreutils | vdir [OPTION]... [FILE]... | vdir [OPTION]... [FILE]... | `--help` | `-1`, `-A`, `-B`, `-C`, `-D`, `-F`, `-G`, `-H`, `-I`, `-L`, `-N`, `-Q`, `-R`, `-S`, `-T`, `-U`, `-V`, `-X`, `-Z`, `-a`, `--all`, `--almost-all`, `--author`, `-b`, `--block-size`, `-c`, `--classify`, `--color`, `--context`, `-d`, `--dereference`, `--dereference-command-line`, `--dereference-command-line-symlink-to-dir`, `--directory`, `--dired`, `--escape`, `-f`, `--file-type`, `--format`, `--full-time`, `-g`, `--group-directories-first`, `-h`, `--hide`, `--hide-control-chars`, `--human-readable`, `--hyperlink`, `-i`, `--ignore`, `--ignore-backups`, `--indicator-style`, `--inode`, `-k`, `--kibibytes`, `-l`, `--literal`, `--long`, `-m`, `-n`, `--no-group`, `--numeric-uid-gid`, `-o`, `-p`, `-q`, `--quote-name`, `--quoting-style`, `-r`, `--recursive`, `--reverse`, `-s`, `--show-control-chars`, `--si`, `--size`, `--sort`, `-t`, `--tabsize`, `--time`, `--time-style`, `-u`, `-v`, `--version`, `-w`, `--width`, `-x`, `--zero` | - |
-| `wc` | native coreutils | wc [OPTION]... [FILE]... | wc [OPTION]... [FILE]... | `-L`, `--bytes`, `-c`, `--chars`, `--help`, `-l`, `--lines`, `-m`, `--max-line-length`, `--version`, `-w`, `--words` | `-V`, `--files0-from`, `-h`, `--total` | - |
-| `who` | native coreutils | who [OPTION]... [ FILE \\| ARG1 ARG2 ] | who [OPTION]... [FILE \\| ARG1 ARG2] | `-H`, `-T`, `-a`, `--all`, `-b`, `--boot`, `--count`, `-d`, `--dead`, `--heading`, `--help`, `-l`, `--login`, `--lookup`, `--mesg`, `--message`, `-p`, `--process`, `-q`, `-r`, `--runlevel`, `-s`, `--short`, `-t`, `--time`, `-u`, `--users`, `--version`, `-w` | `-V`, `-h`, `-m`, `--writable` | - |
-| `whoami` | native coreutils | whoami | whoami [OPTION]... | `--help`, `--version` | `-V`, `-h` | - |
-| `yes` | native coreutils | yes [STRING]... | yes [STRING]...<br>yes OPTION | `--help`, `--version` | `-V`, `-h` | - |
+- `uutils-coreutils` is MIT licensed and may be used as a reference for future
+  ports; substantial adaptations should be attributed in the relevant source
+  comments and license notes.
+- The four ignored commands are bash builtins in the importing `bashy` surface,
+  so native Go command parity intentionally excludes them.

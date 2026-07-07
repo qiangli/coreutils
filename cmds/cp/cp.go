@@ -62,6 +62,7 @@ func run(rc *tool.RunContext, args []string) int {
 	args = normalizeOptionalArgs(args)
 	fs := tool.NewFlags(cmd.Name)
 	recursive := fs.BoolP("recursive", "r", false, "copy directories recursively (-R is identical to -r)")
+	recursiveUpper := fs.BoolP("recursive-uppercase", "R", false, "copy directories recursively")
 	archive := fs.BoolP("archive", "a", false, "same as -dR --preserve=all")
 	preserveShort := fs.BoolP("preserve-short", "p", false, "preserve mode, ownership, timestamps")
 	preserveList := fs.String("preserve", "", "preserve selected attributes: mode,ownership,timestamps,all")
@@ -135,7 +136,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	c := &copier{
 		rc:          rc,
-		recursive:   *recursive || *archive,
+		recursive:   *recursive || *recursiveUpper || *archive,
 		preserve:    preserve,
 		force:       *force,
 		noClobber:   *noClobber,

@@ -89,6 +89,8 @@ func run(rc *tool.RunContext, args []string) int {
 	width := fs.IntP("width", "w", 72, "output width in columns, references excluded")
 	wordRegexp := fs.StringP("word-regexp", "W", "", "use REGEXP to match each keyword")
 	format := fs.String("format", "", "generate output as roff directives (-O) or TeX macros (-T)")
+	roffFormat := fs.BoolP("format-roff", "O", false, "generate roff directives")
+	texFormat := fs.BoolP("format-tex", "T", false, "generate TeX macros")
 	truncation := fs.StringP("flag-truncation", "F", "/", "use STRING to flag line truncations")
 	macroName := fs.StringP("macro-name", "M", "xx", "use NAME as the roff macro in -O output")
 	// GNU's -O (roff) and -T (TeX) short flags have no independent long
@@ -126,6 +128,15 @@ func run(rc *tool.RunContext, args []string) int {
 		opts.tex = true
 	default:
 		return tool.UsageError(rc, cmd, "invalid output format: %q", *format)
+	}
+	if *roffFormat {
+		opts.roff = true
+	}
+	if *texFormat {
+		opts.tex = true
+	}
+	if opts.roff && opts.tex {
+		return tool.UsageError(rc, cmd, "cannot combine roff and TeX output formats")
 	}
 	if opts.gap <= 0 {
 		return tool.UsageError(rc, cmd, "invalid gap width: %d", opts.gap)

@@ -68,40 +68,19 @@ Rejected or killed work:
 
 ## Current Option-Surface Snapshot
 
-This snapshot was generated after rebuilding `./cmd/coreutils` and comparing
-live `--help` output with `reference/uutils-coreutils/target/release/coreutils`.
-For commands using framework alias rewriting, `-h` and `-V` are counted as
-supported even when generated help only prints `--help` and `--version`.
+This snapshot was generated after rebuilding `./cmd/coreutils` to
+`/private/tmp/coreutils` and comparing live `--help` output with
+`reference/uutils-coreutils/target/release/coreutils`.
 
-| Command | Remaining uutils option-surface gaps |
+| Scope | Remaining gap |
 |---|---|
-| `ls` | none |
-| `hostname` | none |
-| `nproc` | none |
-| `uname` | none |
-| `uptime` | none |
-| `users` | none |
-| `groups` | none |
-| `readlink` | none |
-| `realpath` | none |
-| `head` | none |
-| `paste` | none |
-| `wc` | none |
-| `tee` | none |
-| `tty` | none |
-| `uniq` | none |
-| `tail` | none |
-| `ln` | none |
-| `df` | none |
-| `id` | none |
-| `who` | none |
-| `pinky` | none |
-| `du` | `-A`, `-D`, `-H`, `-L`, `-P`, `-S`, `-V`, `-X`, `--count-links`, `--dereference`, `--dereference-args`, `--inodes`, `-l`, `--no-dereference`, `--one-file-system`, `--separate-dirs`, `-t`, `--threshold`, `--time`, `--time-style`, `-v`, `--verbose`, `-x` |
+| uutils commands missing locally, excluding bash builtins | none |
+| uutils commands covered by bash builtins and intentionally ignored | `[`, `kill`, `printf`, `test` |
+| overlapping non-builtin command option tokens | none |
 
-`dir` and `vdir` delegate to `ls`, so their behavior follows the improved
-`ls` implementation. Their help text still summarizes that they accept `ls`
-options rather than enumerating every `ls` option, so naive help-token
-comparisons still show false-positive gaps for those two wrappers.
+The final comparison uses an artifact-aware option extractor that reads declared
+option lines and ignores prose/table false positives, for example `.env-style`
+in `env --help` and descriptive text in `pr --help`.
 
 ## Verification
 

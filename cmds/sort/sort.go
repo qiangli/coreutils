@@ -76,6 +76,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.String("batch-size", "", "merge at most N inputs at once (accepted as an in-memory no-op)")
 	fs.StringP("buffer-size", "S", "", "use SIZE for main memory buffer (accepted as an in-memory no-op)")
 	fs.String("compress-program", "", "compress temporary files with PROG (accepted as an in-memory no-op)")
+	fs.Bool("debug", false, "annotate the part of the line used to sort; accepted as a no-op")
 	fs.String("parallel", "", "change the number of sorts run concurrently (accepted as an in-memory no-op)")
 	unique := fs.BoolP("unique", "u", false, "with -c, check for strict ordering; without -c, output only the first of an equal run")
 	versionSort := fs.BoolP("version-sort", "V", false, "natural sort of (version) numbers within text")

@@ -99,12 +99,14 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "%s", perr)
 	}
 	fs := tool.NewFlags(cmd.Name)
+	accessOnly := fs.BoolP("access", "a", false, "change only the access time")
 	noCreate := fs.BoolP("no-create", "c", false, "do not create any files")
 	_ = fs.BoolP("force", "f", false, "ignored; provided for compatibility with BSD touch(1)")
 	date := fs.StringP("date", "d", "", "parse STRING and use it instead of current time")
 	noDeref := fs.BoolP("no-dereference", "h", false, "affect symbolic links instead of any referenced file")
 	ref := fs.StringP("reference", "r", "", "use this file's times instead of current time")
 	stamp := fs.StringP("stamp", "t", "", "use [[CC]YY]MMDDhhmm[.ss] instead of current time")
+	modifyOnly := fs.BoolP("modify", "m", false, "change only the modification time")
 	timeWord := fs.StringP("time", "", "", "which time to change: access (or atime, use), modify (or mtime); implies -a for access, -m for modify")
 	operands, code := tool.Parse(rc, cmd, fs, pre.rest)
 	if code >= 0 {
@@ -122,6 +124,12 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		pre.tSeen = true
 		pre.stamp = *stamp
+	}
+	if *accessOnly {
+		pre.atime = true
+	}
+	if *modifyOnly {
+		pre.mtime = true
 	}
 	if *date != "" && *ref != "" {
 		return tool.NotSupported(rc, cmd, "combining --date with --reference")
