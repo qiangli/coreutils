@@ -36,7 +36,9 @@ import (
 var cmd = &tool.Tool{
 	Name:     "cksum",
 	Synopsis: "Print POSIX CRC checksum and byte count for each FILE. With no FILE, or when FILE is -, read standard input.",
-	Usage:    "cksum [OPTION]... [FILE]...",
+	Usage: "cksum [OPTION]... [FILE]...\n\n" +
+		"  -r          use BSD sum algorithm\n" +
+		"  -s          use System V sum algorithm",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -101,7 +103,7 @@ func run(rc *tool.RunContext, args []string) int {
 	ignoreMissing := fs.Bool("ignore-missing", false, "don't fail or report status for missing files")
 	zero := fs.BoolP("zero", "z", false, "end each output line with NUL, not newline")
 	debug := fs.Bool("debug", false, "indicate which implementation used")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.Parse(rc, cmd, fs, rewriteLegacyAlgorithmAliases(args))
 	if code >= 0 {
 		return code
 	}
@@ -234,6 +236,44 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	return exit
+}
+
+func rewriteLegacyAlgorithmAliases(args []string) []string {
+	out := make([]string, 0, len(args))
+	rest := false
+	for _, arg := range args {
+		if rest {
+			out = append(out, arg)
+			continue
+		}
+		if arg == "--" {
+			rest = true
+			out = append(out, arg)
+			continue
+		}
+		if len(arg) <= 1 || arg[0] != '-' || arg[1] == '-' {
+			out = append(out, arg)
+			continue
+		}
+		kept := "-"
+		for i := 1; i < len(arg); i++ {
+			switch arg[i] {
+			case 'r':
+				out = append(out, "--algorithm=bsd")
+			case 's':
+				out = append(out, "--algorithm=sysv")
+			case 'c', 'w', 'z', 'h', 'V':
+				kept += string(arg[i])
+			default:
+				kept += arg[i:]
+				i = len(arg)
+			}
+		}
+		if kept != "-" {
+			out = append(out, kept)
+		}
+	}
+	return out
 }
 
 func printDebug(rc *tool.RunContext) {

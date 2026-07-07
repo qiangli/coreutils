@@ -155,6 +155,25 @@ func TestCheckAllOK(t *testing.T) {
 	}
 }
 
+func TestCheckOutputControls(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "good", "abc")
+	writeFile(t, dir, "missing.sums", abcMD5+"  missing\n")
+
+	out, errb, code := runTool(t, dir, abcMD5+"  good\n", "-c", "--quiet")
+	if out != "" || errb != "" || code != 0 {
+		t.Errorf("--quiet ok: out=%q err=%q code=%d", out, errb, code)
+	}
+	out, errb, code = runTool(t, dir, strings.Repeat("0", len(abcMD5))+"  good\n", "-c", "--status")
+	if out != "" || errb != "" || code != 1 {
+		t.Errorf("--status mismatch: out=%q err=%q code=%d", out, errb, code)
+	}
+	out, errb, code = runTool(t, dir, "", "-c", "--ignore-missing", "missing.sums")
+	if out != "" || errb != "" || code != 0 {
+		t.Errorf("--ignore-missing: out=%q err=%q code=%d", out, errb, code)
+	}
+}
+
 func TestCheckFromStdin(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "good", "abc")
@@ -243,11 +262,20 @@ func TestUnknownFlag(t *testing.T) {
 
 func TestHelpAndVersion(t *testing.T) {
 	out, _, code := runTool(t, "", "", "--help")
-	if code != 0 || !strings.Contains(out, "Usage: md5sum") || !strings.Contains(out, "--check") {
+	if code != 0 || !strings.Contains(out, "Usage: md5sum") || !strings.Contains(out, "--check") ||
+		!strings.Contains(out, "-h, --help") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: md5sum") {
+		t.Errorf("-h: code=%d out=%q", code, out)
 	}
 	out, _, code = runTool(t, "", "", "--version")
 	if code != 0 || !strings.Contains(out, "md5sum") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-V")
+	if code != 0 || !strings.Contains(out, "md5sum") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }
