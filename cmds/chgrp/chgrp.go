@@ -26,9 +26,37 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	recursive := fs.BoolP("recursive", "R", false, "operate on files and directories recursively")
+	verbose := fs.BoolP("verbose", "v", false, "output a diagnostic for every file processed")
+	changes := fs.BoolP("changes", "c", false, "like verbose but report only when a change is made")
+	silent := fs.BoolP("silent", "f", false, "suppress most error messages")
+	fs.Bool("quiet", false, "suppress most error messages")
+	preserveRoot := fs.Bool("preserve-root", false, "fail to operate recursively on '/'")
+	fs.Bool("no-preserve-root", false, "do not treat '/' specially (the default)")
+	reference := fs.String("reference", "", "use RFILE's group rather than specifying a GROUP value")
+	fs.Bool("dereference", false, "affect the referent of each symbolic link (the default)")
+	noDereference := fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
+	cmdLineH := fs.BoolP("H", "H", false, "follow command-line symbolic links (with -R)")
+	followL := fs.BoolP("L", "L", false, "follow every symbolic link encountered (with -R)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	if *reference != "" && *silent {
+		*silent = false // -f doesn't suppress --reference errors
+	}
+	if *reference != "" {
+		if len(operands) == 0 {
+			return tool.UsageError(rc, cmd, "missing operand")
+		}
+		rfi, err := statFile(rc, *reference)
+		if err != nil {
+			return statusError(rc, "cannot stat reference file '%s': %v", *reference, err)
+		}
+		groupStr := rfi.gidStr()
+		if groupStr == "" {
+			return statusError(rc, "cannot determine group of reference file '%s'", *reference)
+		}
+		return apply(rc, groupStr, operands[0:], *recursive, *verbose, *changes, *silent || isTrue(fs, "quiet"), *preserveRoot, *noDereference || isTrue(fs, "no-preserve-root"), *cmdLineH, *followL || isTrue(fs, "dereference"))
 	}
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing operand")
@@ -36,5 +64,10 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 1 {
 		return tool.UsageError(rc, cmd, "missing operand after '%s'", operands[0])
 	}
-	return apply(rc, operands[0], operands[1:], *recursive)
+	return apply(rc, operands[0], operands[1:], *recursive, *verbose, *changes, *silent || isTrue(fs, "quiet"), *preserveRoot, *noDereference || isTrue(fs, "no-preserve-root"), *cmdLineH, *followL || isTrue(fs, "dereference"))
+}
+
+func isTrue(fs interface{ GetBool(string) (bool, error) }, name string) bool {
+	v, err := fs.GetBool(name)
+	return err == nil && v
 }

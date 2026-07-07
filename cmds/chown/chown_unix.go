@@ -5,38 +5,198 @@ package chowncmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
 )
 
-// apply resolves the [OWNER][:[GROUP]] spec and changes ownership of
-// every operand (recursively with -R). Command-line operands are
-// dereferenced; symlinks met during recursion get lchown (GNU -P
-// default traversal).
-func apply(rc *tool.RunContext, spec string, files []string, recursive bool) int {
+type derefMode int
+
+const (
+	derefNever derefMode = iota
+	derefCmdLine
+	derefAlways
+)
+
+type chownOpts struct {
+	recursive    bool
+	verbose      bool
+	changes      bool
+	silent       bool
+	preserveRoot bool
+	deref        derefMode
+	uid          int
+	gid          int
+	fromUid      int
+	fromGid      int
+}
+
+func computeDeref(followLOrDeref, cmdLineH bool) derefMode {
+	if followLOrDeref {
+		return derefAlways
+	}
+	if cmdLineH {
+		return derefCmdLine
+	}
+	return derefNever
+}
+
+func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose, changes, silent, preserveRoot, noDerefOrNoPreserve, cmdLineH, followLOrDeref bool, fromUid, fromGid int) int {
 	uid, gid, err := parseSpec(spec)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "chown: %v\n", err)
+		statusError(rc, "%v", err)
 		return 1
 	}
+	opts := chownOpts{
+		recursive:    recursive,
+		verbose:      verbose || changes,
+		changes:      changes,
+		silent:       silent,
+		preserveRoot: preserveRoot,
+		deref:        computeDeref(followLOrDeref, cmdLineH),
+		uid:          uid,
+		gid:          gid,
+		fromUid:      fromUid,
+		fromGid:      fromGid,
+	}
+
 	exit := 0
 	for _, name := range files {
-		if !chownTree(rc, "chown", "changing ownership of", rc.Path(name), name, uid, gid, recursive) {
+		path := rc.Path(name)
+		if opts.recursive && opts.preserveRoot && path == "/" {
+			fmt.Fprintf(rc.Err, "chown: it is dangerous to operate recursively on '/'\n")
+			fmt.Fprintf(rc.Err, "chown: use --no-preserve-root to override this failsafe\n")
+			exit = 1
+			continue
+		}
+		if !chownTree(rc, path, name, opts) {
 			exit = 1
 		}
 	}
 	return exit
 }
 
-// parseSpec resolves [OWNER][:[GROUP]] to numeric ids; -1 = unchanged.
-// Names are looked up first (os/user); pure-numeric strings that are
-// not known names are used as raw ids, as GNU does.
+func chownTree(rc *tool.RunContext, root, display string, opts chownOpts) bool {
+	ok := true
+
+	if !opts.recursive {
+		changed, err := chownOne(root, opts)
+		if err != nil {
+			chownReport(rc, display, opts, err)
+			return false
+		}
+		chownVerbose(rc.Out, display, changed, opts)
+		return true
+	}
+
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			chownReport(rc, path, opts, err)
+			ok = false
+			return nil
+		}
+		isSymlink := d.Type()&fs.ModeSymlink != 0
+
+		useChown := true
+		if opts.deref == derefNever && isSymlink {
+			useChown = false
+		}
+
+		var changed bool
+		var cerr error
+		if useChown {
+			changed, cerr = chownOne(path, opts)
+		} else {
+			cerr = os.Lchown(path, opts.uid, opts.gid)
+			changed = (cerr == nil)
+		}
+
+		if cerr != nil {
+			chownReport(rc, path, opts, cerr)
+			ok = false
+		} else {
+			chownVerbose(rc.Out, path, changed, opts)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		chownReport(rc, display, opts, walkErr)
+		ok = false
+	}
+	return ok
+}
+
+func chownOne(path string, opts chownOpts) (changed bool, err error) {
+	fi, statErr := os.Stat(path)
+	if statErr != nil {
+		return false, statErr
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if ok {
+		if opts.fromUid >= 0 && opts.fromGid >= 0 {
+			if int(st.Uid) != opts.fromUid || int(st.Gid) != opts.fromGid {
+				return false, nil
+			}
+		} else if opts.fromUid >= 0 {
+			if int(st.Uid) != opts.fromUid {
+				return false, nil
+			}
+		} else if opts.fromGid >= 0 {
+			if int(st.Gid) != opts.fromGid {
+				return false, nil
+			}
+		}
+		changed := false
+		if opts.uid >= 0 && int(st.Uid) != opts.uid {
+			changed = true
+		}
+		if opts.gid >= 0 && int(st.Gid) != opts.gid {
+			changed = true
+		}
+		if !changed {
+			return false, nil
+		}
+	}
+	err = os.Chown(path, opts.uid, opts.gid)
+	return err == nil, err
+}
+
+func chownVerbose(out io.Writer, name string, changed bool, opts chownOpts) {
+	if !opts.verbose {
+		return
+	}
+	if opts.changes && !changed {
+		return
+	}
+	if changed {
+		fmt.Fprintf(out, "changed ownership of '%s'\n", name)
+	} else if !opts.changes {
+		fmt.Fprintf(out, "ownership of '%s' retained\n", name)
+	}
+}
+
+func chownReport(rc *tool.RunContext, name string, opts chownOpts, err error) {
+	if opts.silent {
+		return
+	}
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		err = pe.Err
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(rc.Err, "chown: cannot access '%s': %v\n", name, err)
+		return
+	}
+	fmt.Fprintf(rc.Err, "chown: changing ownership of '%s': %v\n", name, err)
+}
+
 func parseSpec(spec string) (uid, gid int, err error) {
 	uid, gid = -1, -1
 	ownerStr, groupStr, hasColon := strings.Cut(spec, ":")
@@ -54,7 +214,7 @@ func parseSpec(spec string) (uid, gid int, err error) {
 				return -1, -1, fmt.Errorf("invalid user: '%s'", spec)
 			}
 			uid = id
-			u, _ = user.LookupId(ownerStr) // may stay nil; only needed for 'OWNER:'
+			u, _ = user.LookupId(ownerStr)
 		}
 	}
 	if !hasColon {
@@ -62,9 +222,8 @@ func parseSpec(spec string) (uid, gid int, err error) {
 	}
 	if groupStr == "" {
 		if ownerStr == "" {
-			return -1, -1, nil // ':' alone changes nothing
+			return -1, -1, nil
 		}
-		// 'OWNER:' means OWNER's login group.
 		if u == nil {
 			return -1, -1, fmt.Errorf("invalid spec: '%s'", spec)
 		}
@@ -87,50 +246,31 @@ func parseSpec(spec string) (uid, gid int, err error) {
 	return uid, id, nil
 }
 
-// chownTree is shared with chgrp via copy — both packages keep their
-// own copy to stay self-contained (no helpers outside cmds/<name>/).
-func chownTree(rc *tool.RunContext, toolName, verb, root, display string, uid, gid int, recursive bool) bool {
-	ok := true
-	if !recursive {
-		if err := os.Chown(root, uid, gid); err != nil {
-			reportChownErr(rc, toolName, verb, display, err)
-			return false
-		}
-		return true
+func statFile(rc *tool.RunContext, path string) (*refFileInfo, error) {
+	fi, err := os.Stat(rc.Path(path))
+	if err != nil {
+		return nil, err
 	}
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			reportChownErr(rc, toolName, verb, path, err)
-			ok = false
-			return nil
-		}
-		var cerr error
-		if d.Type()&fs.ModeSymlink != 0 {
-			cerr = os.Lchown(path, uid, gid) // -P traversal: never follow
-		} else {
-			cerr = os.Chown(path, uid, gid)
-		}
-		if cerr != nil {
-			reportChownErr(rc, toolName, verb, path, cerr)
-			ok = false
-		}
-		return nil
-	})
-	if walkErr != nil {
-		reportChownErr(rc, toolName, verb, display, walkErr)
-		ok = false
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, fmt.Errorf("cannot stat %s", path)
 	}
-	return ok
+	return &refFileInfo{uid: st.Uid, gid: st.Gid}, nil
 }
 
-func reportChownErr(rc *tool.RunContext, toolName, verb, name string, err error) {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		err = pe.Err
+type refFileInfo struct {
+	uid uint32
+	gid uint32
+}
+
+func (r *refFileInfo) ownerStr() string {
+	if r == nil {
+		return ""
 	}
-	if errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(rc.Err, "%s: cannot access '%s': %v\n", toolName, name, err)
-		return
-	}
-	fmt.Fprintf(rc.Err, "%s: %s '%s': %v\n", toolName, verb, name, err)
+	return fmt.Sprintf("%d:%d", r.uid, r.gid)
+}
+
+func statusError(rc *tool.RunContext, format string, a ...any) int {
+	fmt.Fprintf(rc.Err, "chown: "+format+"\n", a...)
+	return 1
 }
