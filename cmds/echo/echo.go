@@ -12,6 +12,7 @@ package echocmd
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -28,9 +29,12 @@ func run(rc *tool.RunContext, args []string) int {
 	// GNU echo recognizes --help / --version only as the sole argument;
 	// otherwise they are operands and printed literally.
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "--version") {
-		fs := tool.NewFlags(cmd.Name)
-		_, code := tool.Parse(rc, cmd, fs, args)
-		return code
+		if args[0] == "--help" {
+			printHelp(rc)
+			return 0
+		}
+		fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
+		return 0
 	}
 
 	noNewline := false
@@ -86,6 +90,18 @@ scan:
 	}
 	rc.Out.Write(buf.Bytes())
 	return 0
+}
+
+func printHelp(rc *tool.RunContext) {
+	fmt.Fprintf(rc.Out, "Usage: %s\n%s\n", cmd.Usage, cmd.Synopsis)
+	fmt.Fprint(rc.Out, `
+Options:
+  -n          do not output the trailing newline
+  -e          enable interpretation of backslash escapes
+  -E          disable interpretation of backslash escapes (default)
+      --help     display this help and exit
+      --version  output version information and exit
+`)
 }
 
 // interpretEscapes appends s to buf interpreting the GNU echo -e

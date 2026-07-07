@@ -66,6 +66,11 @@ func TestTimeoutHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out.String(), "Usage: timeout") {
 		t.Errorf("--help: code=%d out=%q", code, out.String())
 	}
+	for _, want := range []string{"-f, --foreground", "-k, --kill-after", "-p, --preserve-status", "-s, --signal", "-v, --verbose", "-h, --help", "-V, --version"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("--help missing %q in %q", want, out.String())
+		}
+	}
 
 	out.Reset()
 	code = cmd.Run(rc, []string{"--version"})
@@ -83,5 +88,23 @@ func TestTimeoutHelpAndVersion(t *testing.T) {
 	code = cmd.Run(rc, []string{"-V"})
 	if code != 0 || !strings.Contains(out.String(), "timeout") {
 		t.Errorf("-V: code=%d out=%q", code, out.String())
+	}
+}
+
+func TestTimeoutShortOptionSurface(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: t.TempDir(),
+		Env: []string{"PATH=/bin:/usr/bin"},
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	code := cmd.Run(rc, []string{"-f", "-p", "-s", "TERM", "-k", "1s", "1s", "true"})
+	if code != 0 || errb.String() != "" {
+		t.Fatalf("short options: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}
 }

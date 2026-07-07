@@ -70,8 +70,7 @@ func run(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "-s"):
 			o.signal = a[2:] // -sKILL
 		case a == "--help" || a == "-h":
-			fmt.Fprintf(rc.Out, "Usage: %s\n", cmd.Usage)
-			fmt.Fprintf(rc.Out, "%s\n", cmd.Synopsis)
+			printHelp(rc)
 			return 0
 		case a == "--version" || a == "-V":
 			fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
@@ -84,9 +83,9 @@ func run(rc *tool.RunContext, args []string) int {
 			o.killAfter = a[len("--kill-after="):]
 		case strings.HasPrefix(a, "-k"):
 			o.killAfter = a[2:]
-		case a == "--preserve-status":
+		case a == "--preserve-status" || a == "-p":
 			o.preserveStatus = true
-		case a == "--foreground":
+		case a == "--foreground" || a == "-f":
 			o.foreground = true
 		case a == "-v" || a == "--verbose":
 			o.verbose = true
@@ -199,6 +198,22 @@ func exitStatus(werr error, timedOut, preserve bool) int {
 
 func usage(rc *tool.RunContext, format string, a ...any) int {
 	return tool.UsageError(rc, cmd, format, a...)
+}
+
+func printHelp(rc *tool.RunContext) {
+	fmt.Fprintf(rc.Out, "Usage: %s\n", cmd.Usage)
+	fmt.Fprintf(rc.Out, "%s\n", cmd.Synopsis)
+	fmt.Fprint(rc.Out, `
+Options:
+  -f, --foreground          do not create a separate process group
+  -k, --kill-after=DURATION send KILL if the command is still running
+                             this long after the initial signal
+  -p, --preserve-status     exit with the same status as COMMAND
+  -s, --signal=SIGNAL       specify the signal to send on timeout
+  -v, --verbose             diagnose to stderr any signal sent
+  -h, --help                display this help and exit
+  -V, --version             output version information and exit
+`)
 }
 
 // parseDuration accepts GNU forms: a bare number (seconds) or NUMBER[smhd].
