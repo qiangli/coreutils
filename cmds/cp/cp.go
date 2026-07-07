@@ -34,7 +34,7 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 type copier struct {
 	rc          *tool.RunContext
 	recursive   bool
-	preserve    bool
+	preserve    preserveSet
 	force       bool
 	noClobber   bool
 	update      bool
@@ -43,10 +43,18 @@ type copier struct {
 	link        bool
 	symlink     bool
 	deref       bool
+	derefArgs   bool
+	attrsOnly   bool
+	debug       bool
+	oneFS       bool
+	parents     bool
+	removeDest  bool
 	interactive bool
 	verbose     bool
 	failed      bool
 	in          *bufio.Reader
+	rootDev     devID
+	haveRootDev bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -54,7 +62,10 @@ func run(rc *tool.RunContext, args []string) int {
 	args = normalizeOptionalArgs(args)
 	fs := tool.NewFlags(cmd.Name)
 	recursive := fs.BoolP("recursive", "r", false, "copy directories recursively (-R is identical to -r)")
-	preserve := fs.BoolP("preserve", "p", false, "preserve mode, ownership, timestamps")
+	archive := fs.BoolP("archive", "a", false, "same as -dR --preserve=all")
+	preserveShort := fs.BoolP("preserve-short", "p", false, "preserve mode, ownership, timestamps")
+	preserveList := fs.String("preserve", "", "preserve selected attributes: mode,ownership,timestamps,all")
+	noPreserveList := fs.String("no-preserve", "", "do not preserve selected attributes")
 	force := fs.BoolP("force", "f", false, "if an existing destination file cannot be opened, remove it and try again")
 	noClobber := fs.BoolP("no-clobber", "n", false, "do not overwrite an existing file; silently skip it")
 	interactive := fs.BoolP("interactive", "i", false, "prompt before overwrite")
@@ -66,13 +77,30 @@ func run(rc *tool.RunContext, args []string) int {
 	link := fs.BoolP("link", "l", false, "hard link files instead of copying")
 	symlink := fs.BoolP("symbolic-link", "s", false, "make symbolic links instead of copying")
 	deref := fs.BoolP("dereference", "L", false, "always follow symbolic links in SOURCE")
+	derefArgs := fs.BoolP("dereference-command-line", "H", false, "follow command-line symbolic links")
 	noDeref := fs.BoolP("no-dereference", "P", false, "never follow symbolic links in SOURCE")
+	fs.BoolP("no-dereference-preserve-links", "d", false, "same as --no-dereference --preserve=links")
+	attrsOnly := fs.Bool("attributes-only", false, "copy only attributes, not file data")
+	debug := fs.Bool("debug", false, "explain copy decisions on stderr")
+	oneFS := fs.BoolP("one-file-system", "x", false, "stay on this file system during recursive copies")
+	parents := fs.Bool("parents", false, "use full source file name under DIRECTORY")
+	reflink := fs.String("reflink", "auto", "control clone/CoW copies: auto, always, never")
+	removeDest := fs.Bool("remove-destination", false, "remove each existing destination before opening it")
+	sparse := fs.String("sparse", "auto", "control sparse file creation: auto, always, never")
+	fs.Bool("strip-trailing-slashes", false, "strip trailing slashes from operands")
 	fs.Bool("progress", false, "accepted for compatibility; progress output is a no-op")
-	fs.String("context", "", "accepted for compatibility; SELinux context is a no-op")
+	fs.StringP("context", "Z", "", "accepted for compatibility; SELinux context is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	operands = maybeStripTrailingSlashes(operands, fs.Changed("strip-trailing-slashes"))
+	if err := validChoice("--reflink", *reflink, "auto", "always", "never"); err != "" {
+		return tool.UsageError(rc, cmd, "%s", err)
+	}
+	if err := validChoice("--sparse", *sparse, "auto", "always", "never"); err != "" {
+		return tool.UsageError(rc, cmd, "%s", err)
 	}
 	if *targetDir != "" && *noTargetDir {
 		return tool.UsageError(rc, cmd, "cannot combine --target-directory and --no-target-directory")
@@ -89,10 +117,23 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
+	preserve, preserveErr := parsePreserve(*preserveList)
+	if preserveErr != "" {
+		return tool.UsageError(rc, cmd, "%s", preserveErr)
+	}
+	if *preserveShort || *archive {
+		preserve = allPreserve()
+	}
+	if noPreserve, preserveErr := parsePreserve(*noPreserveList); preserveErr != "" {
+		return tool.UsageError(rc, cmd, "%s", preserveErr)
+	} else {
+		preserve.remove(noPreserve)
+	}
+
 	c := &copier{
 		rc:          rc,
-		recursive:   *recursive,
-		preserve:    *preserve,
+		recursive:   *recursive || *archive,
+		preserve:    preserve,
 		force:       *force,
 		noClobber:   *noClobber,
 		update:      *update,
@@ -100,12 +141,18 @@ func run(rc *tool.RunContext, args []string) int {
 		suffix:      *suffix,
 		link:        *link,
 		symlink:     *symlink,
-		deref:       *deref,
+		deref:       *deref && !*archive,
+		derefArgs:   *derefArgs,
+		attrsOnly:   *attrsOnly,
+		debug:       *debug,
+		oneFS:       *oneFS,
+		parents:     *parents,
+		removeDest:  *removeDest,
 		interactive: *interactive,
 		verbose:     *verbose,
 		in:          inputReader(rc.In),
 	}
-	if *noDeref {
+	if *noDeref || *archive || fs.Changed("no-dereference-preserve-links") {
 		c.deref = false
 	}
 	// GNU rule: of -f and -n, the one given last takes effect.
@@ -142,7 +189,11 @@ func run(rc *tool.RunContext, args []string) int {
 	for _, src := range srcs {
 		dst := dest
 		if todir {
-			dst = filepath.Join(dest, filepath.Base(src))
+			if c.parents {
+				dst = filepath.Join(dest, parentPath(src))
+			} else {
+				dst = filepath.Join(dest, filepath.Base(src))
+			}
 		}
 		c.copyEntry(src, dst)
 	}
@@ -161,7 +212,7 @@ func (c *copier) copyEntry(src, dst string) {
 		return
 	}
 	stat := os.Stat
-	if c.recursive && !c.deref {
+	if c.recursive && !c.deref && !c.derefArgs {
 		stat = os.Lstat
 	}
 	fi, err := stat(c.rc.Path(src))
@@ -187,6 +238,12 @@ func (c *copier) copyEntry(src, dst string) {
 				return
 			}
 		}
+		if c.oneFS {
+			if dev, ok := fileDev(fi); ok {
+				c.rootDev = dev
+				c.haveRootDev = true
+			}
+		}
 		c.copyDir(src, dst, fi)
 	case fi.Mode()&os.ModeSymlink != 0:
 		c.copySymlink(src, dst)
@@ -196,6 +253,12 @@ func (c *copier) copyEntry(src, dst string) {
 }
 
 func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
+	if c.oneFS && c.haveRootDev {
+		if dev, ok := fileDev(fi); ok && dev != c.rootDev {
+			c.debugf("skipping '%s': different file system", src)
+			return
+		}
+	}
 	created := false
 	if di, err := os.Lstat(c.rc.Path(dst)); err == nil {
 		if !di.IsDir() {
@@ -235,7 +298,7 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 			}
 		}
 	}
-	if c.preserve {
+	if c.preserve.any() {
 		c.preserveAttrs(src, dst, fi)
 	} else if created {
 		if err := os.Chmod(c.rc.Path(dst), fi.Mode().Perm()); err != nil {
@@ -269,8 +332,20 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 		if c.backup && !c.backupDest(dst) {
 			return
 		}
+		if c.removeDest {
+			if err := os.Remove(dp); err != nil {
+				c.errf("cannot remove '%s': %s", dst, reason(err))
+				return
+			}
+		}
 	} else if c.symlink {
 		// Nothing to do before creating a new symbolic link.
+	}
+	if parent := filepath.Dir(dp); parent != "." && parent != dp {
+		if err := os.MkdirAll(parent, 0o777); err != nil {
+			c.errf("cannot create directory '%s': %s", filepath.Dir(dst), reason(err))
+			return
+		}
 	}
 	if c.link {
 		if err := os.Link(sp, dp); err != nil {
@@ -288,13 +363,10 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 		c.verbosef("'%s' -> '%s'", src, dst)
 		return
 	}
-	in, err := os.Open(sp)
-	if err != nil {
-		c.errf("cannot open '%s' for reading: %s", src, reason(err))
-		return
+	flags := os.O_WRONLY | os.O_CREATE
+	if !c.attrsOnly {
+		flags |= os.O_TRUNC
 	}
-	defer in.Close()
-	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	out, err := os.OpenFile(dp, flags, fi.Mode().Perm())
 	if err != nil && c.force {
 		// -f: if an existing destination file cannot be opened,
@@ -307,19 +379,32 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 		c.errf("cannot create regular file '%s': %s", dst, reason(err))
 		return
 	}
-	_, werr := io.Copy(out, in)
-	cerr := out.Close()
-	if werr != nil {
-		c.errf("error writing '%s': %s", dst, reason(werr))
+	if !c.attrsOnly {
+		in, err := os.Open(sp)
+		if err != nil {
+			_ = out.Close()
+			c.errf("cannot open '%s' for reading: %s", src, reason(err))
+			return
+		}
+		_, werr := io.Copy(out, in)
+		_ = in.Close()
+		cerr := out.Close()
+		if werr != nil {
+			c.errf("error writing '%s': %s", dst, reason(werr))
+			return
+		}
+		if cerr != nil {
+			c.errf("error writing '%s': %s", dst, reason(cerr))
+			return
+		}
+	} else if err := out.Close(); err != nil {
+		c.errf("error writing '%s': %s", dst, reason(err))
 		return
 	}
-	if cerr != nil {
-		c.errf("error writing '%s': %s", dst, reason(cerr))
-		return
-	}
-	if c.preserve {
+	if c.preserve.any() {
 		c.preserveAttrs(src, dst, fi)
 	}
+	c.debugf("copied '%s' -> '%s'", src, dst)
 	c.verbosef("'%s' -> '%s'", src, dst)
 }
 
@@ -352,6 +437,7 @@ func (c *copier) copySymlink(src, dst string) {
 		c.errf("cannot create symbolic link '%s': %s", dst, reason(err))
 		return
 	}
+	c.debugf("copied symbolic link '%s' -> '%s'", src, dst)
 	c.verbosef("'%s' -> '%s'", src, dst)
 }
 
@@ -397,13 +483,19 @@ func sourceNewer(src, dst string) bool {
 // (GNU -p rule); mode/time failures are diagnosed.
 func (c *copier) preserveAttrs(src, dst string, fi os.FileInfo) {
 	dp := c.rc.Path(dst)
-	mode := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
-	if err := os.Chmod(dp, mode); err != nil {
-		c.errf("preserving permissions for '%s': %s", dst, reason(err))
+	if c.preserve.mode {
+		mode := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+		if err := os.Chmod(dp, mode); err != nil {
+			c.errf("preserving permissions for '%s': %s", dst, reason(err))
+		}
 	}
-	preserveOwner(dp, fi)
-	if err := os.Chtimes(dp, atime(fi), fi.ModTime()); err != nil {
-		c.errf("preserving times for '%s': %s", dst, reason(err))
+	if c.preserve.ownership {
+		preserveOwner(dp, fi)
+	}
+	if c.preserve.timestamps {
+		if err := os.Chtimes(dp, atime(fi), fi.ModTime()); err != nil {
+			c.errf("preserving times for '%s': %s", dst, reason(err))
+		}
 	}
 	_ = src
 }
@@ -416,6 +508,12 @@ func (c *copier) errf(format string, a ...any) {
 func (c *copier) verbosef(format string, a ...any) {
 	if c.verbose {
 		fmt.Fprintf(c.rc.Out, format+"\n", a...)
+	}
+}
+
+func (c *copier) debugf(format string, a ...any) {
+	if c.debug {
+		fmt.Fprintf(c.rc.Err, "cp: debug: "+format+"\n", a...)
 	}
 }
 
@@ -447,8 +545,20 @@ func normalizeOptionalArgs(args []string) []string {
 			break
 		}
 		switch {
+		case a == "-Z" || a == "--context":
+			out[i] = "--context="
 		case a == "--backup":
 			out[i] = "--backup=simple"
+		case a == "-b":
+			out[i] = "--backup=simple"
+		case a == "--preserve":
+			out[i] = "--preserve=mode,ownership,timestamps"
+		case a == "--no-preserve":
+			out[i] = "--no-preserve=all"
+		case a == "--reflink":
+			out[i] = "--reflink=always"
+		case a == "--sparse":
+			out[i] = "--sparse=auto"
 		case a == "--interactive=always" || a == "--interactive=yes":
 			out[i] = "--interactive"
 		case a == "--interactive=never" || a == "--interactive=no" || a == "--interactive=none":
@@ -456,6 +566,86 @@ func normalizeOptionalArgs(args []string) []string {
 		}
 	}
 	return out
+}
+
+func maybeStripTrailingSlashes(args []string, enabled bool) []string {
+	if !enabled {
+		return args
+	}
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = strings.TrimRight(a, string(filepath.Separator)+"/")
+		if out[i] == "" {
+			out[i] = a
+		}
+	}
+	return out
+}
+
+func parentPath(src string) string {
+	clean := filepath.Clean(src)
+	for strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		clean = strings.TrimPrefix(clean, ".."+string(filepath.Separator))
+	}
+	clean = strings.TrimPrefix(clean, string(filepath.Separator))
+	if clean == "." || clean == "" {
+		return filepath.Base(src)
+	}
+	return clean
+}
+
+type preserveSet struct {
+	mode       bool
+	ownership  bool
+	timestamps bool
+}
+
+func allPreserve() preserveSet { return preserveSet{mode: true, ownership: true, timestamps: true} }
+
+func (p preserveSet) any() bool { return p.mode || p.ownership || p.timestamps }
+
+func (p *preserveSet) remove(other preserveSet) {
+	if other.mode {
+		p.mode = false
+	}
+	if other.ownership {
+		p.ownership = false
+	}
+	if other.timestamps {
+		p.timestamps = false
+	}
+}
+
+func parsePreserve(s string) (preserveSet, string) {
+	var p preserveSet
+	if s == "" {
+		return p, ""
+	}
+	for _, part := range strings.Split(s, ",") {
+		switch strings.TrimSpace(part) {
+		case "", "links", "context", "xattr":
+		case "all":
+			p = allPreserve()
+		case "mode":
+			p.mode = true
+		case "ownership", "owner":
+			p.ownership = true
+		case "timestamps", "timestamp":
+			p.timestamps = true
+		default:
+			return p, fmt.Sprintf("unsupported preserve attribute '%s'", part)
+		}
+	}
+	return p, ""
+}
+
+func validChoice(flag, got string, allowed ...string) string {
+	for _, a := range allowed {
+		if got == a {
+			return ""
+		}
+	}
+	return fmt.Sprintf("invalid %s value '%s'", flag, got)
 }
 
 // lastOverride reports which of -f / -n appeared last on the command

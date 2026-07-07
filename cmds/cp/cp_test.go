@@ -258,6 +258,111 @@ func TestCpPreserve(t *testing.T) {
 	}
 }
 
+func TestCpArchiveParentsAttributesAndNoPreserve(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src", "sub", "file")
+	write(t, src, "new-data")
+	when := time.Date(2022, 2, 3, 4, 5, 6, 0, time.UTC)
+	if err := os.Chmod(src, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(src, when, when); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-a", "--parents", "src/sub/file", "out")
+	if code != 0 || errb != "" {
+		t.Fatalf("cp -a --parents: code=%d err=%q", code, errb)
+	}
+	dst := filepath.Join(dir, "out", "src", "sub", "file")
+	if got := read(t, dst); got != "new-data" {
+		t.Fatalf("content = %q", got)
+	}
+	fi, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o640 || !fi.ModTime().Equal(when) {
+		t.Fatalf("archive did not preserve mode/time: mode=%o time=%v", fi.Mode().Perm(), fi.ModTime())
+	}
+
+	write(t, filepath.Join(dir, "attrs-dst"), "keep")
+	_, errb, code = runTool(t, dir, "--attributes-only", "--preserve=mode,timestamps", "src/sub/file", "attrs-dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("cp --attributes-only: code=%d err=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "attrs-dst")); got != "keep" {
+		t.Fatalf("--attributes-only changed data: %q", got)
+	}
+	fi, err = os.Stat(filepath.Join(dir, "attrs-dst"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o640 || !fi.ModTime().Equal(when) {
+		t.Fatalf("--attributes-only did not preserve selected attrs: mode=%o time=%v", fi.Mode().Perm(), fi.ModTime())
+	}
+
+	_, errb, code = runTool(t, dir, "-p", "--no-preserve=timestamps", "src/sub/file", "no-time")
+	if code != 0 || errb != "" {
+		t.Fatalf("cp --no-preserve: code=%d err=%q", code, errb)
+	}
+	fi, err = os.Stat(filepath.Join(dir, "no-time"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o640 {
+		t.Fatalf("--no-preserve=timestamps should still preserve mode: %o", fi.Mode().Perm())
+	}
+	if fi.ModTime().Equal(when) {
+		t.Fatalf("--no-preserve=timestamps still preserved source timestamp")
+	}
+}
+
+func TestCpDebugRemoveDestinationParsingAndZ(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "linked"), "old")
+	if err := os.Link(filepath.Join(dir, "linked"), filepath.Join(dir, "dst")); err != nil {
+		t.Skipf("hard links unsupported here: %v", err)
+	}
+	out, errb, code := runTool(t, dir, "--debug", "--remove-destination", "--reflink=auto", "--sparse=always", "-Z", "src", "dst")
+	if code != 0 || out != "" {
+		t.Fatalf("cp compatibility flags: code=%d out=%q err=%q", code, out, errb)
+	}
+	if !strings.Contains(errb, "cp: debug: copied 'src' -> 'dst'") {
+		t.Fatalf("missing debug diagnostic: %q", errb)
+	}
+	if read(t, filepath.Join(dir, "dst")) != "new" {
+		t.Fatal("destination not copied")
+	}
+	if read(t, filepath.Join(dir, "linked")) != "old" {
+		t.Fatal("--remove-destination wrote through hard link")
+	}
+}
+
+func TestCpStripTrailingSlashesAndH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privilege on windows")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "real", "file"), "x")
+	if err := os.Symlink("real", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-R", "-H", "--strip-trailing-slashes", "link/", "dst/")
+	if code != 0 {
+		t.Fatalf("cp -H --strip-trailing-slashes: code=%d err=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "dst", "file")); got != "x" {
+		t.Fatalf("did not follow command-line symlink to directory: %q", got)
+	}
+}
+
 func TestCpForceUnwritableDest(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("POSIX write-permission semantics")
