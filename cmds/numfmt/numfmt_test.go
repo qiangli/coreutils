@@ -58,6 +58,17 @@ func TestNumfmtFromAutoAndToIECI(t *testing.T) {
 	}
 }
 
+func TestNumfmtScaleAliases(t *testing.T) {
+	out, errb, code := runTool(t, "", "--from=ieci", "--format=%.0f", "2Ki")
+	if code != 0 || errb != "" || out != "2048\n" {
+		t.Fatalf("--from=ieci = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runTool(t, "", "--to=iec_i", "--format=%.1f", "1536")
+	if code != 0 || errb != "" || out != "1.5Ki\n" {
+		t.Fatalf("--to=iec_i = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestNumfmtStdinFields(t *testing.T) {
 	// GNU default field is 1, for stdin as for operands.
 	out, errb, code := runTool(t, "1K 2K\n", "--from=si", "--format=%.0f")

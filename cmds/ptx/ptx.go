@@ -33,8 +33,6 @@ var cmd = &tool.Tool{
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-const truncationMark = "/"
-
 type ptxOptions struct {
 	ignoreCase  bool
 	autoRef     bool
@@ -42,6 +40,8 @@ type ptxOptions struct {
 	traditional bool
 	rightRef    bool
 	roff        bool
+	truncation  string
+	macroName   string
 	gap         int
 	wordRE      *regexp.Regexp
 	sentenceRE  *regexp.Regexp
@@ -87,6 +87,8 @@ func run(rc *tool.RunContext, args []string) int {
 	width := fs.IntP("width", "w", 72, "output width in columns, references excluded")
 	wordRegexp := fs.StringP("word-regexp", "W", "", "use REGEXP to match each keyword")
 	format := fs.String("format", "", "generate output as roff directives (-O is --format=roff)")
+	truncation := fs.StringP("flag-truncation", "F", "/", "use STRING to flag line truncations")
+	macroName := fs.StringP("macro-name", "M", "xx", "use NAME as the roff macro in -O output")
 	// GNU's -O (roff) and -T (TeX) short flags have no independent long
 	// spelling; map them onto --format before parsing.
 	for i, arg := range args {
@@ -110,6 +112,8 @@ func run(rc *tool.RunContext, args []string) int {
 		inputRef:    *references,
 		traditional: *traditional,
 		rightRef:    *rightRefs,
+		truncation:  *truncation,
+		macroName:   *macroName,
 		gap:         *gapSize,
 	}
 	switch *format {
@@ -123,6 +127,12 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if opts.gap <= 0 {
 		return tool.UsageError(rc, cmd, "invalid gap width: %d", opts.gap)
+	}
+	if opts.truncation == "" {
+		return tool.UsageError(rc, cmd, "empty truncation marker")
+	}
+	if opts.macroName == "" {
+		return tool.UsageError(rc, cmd, "empty macro name")
 	}
 	if *width <= 0 {
 		return tool.UsageError(rc, cmd, "invalid line width: %d", *width)
@@ -418,7 +428,7 @@ func fixOutputParameters(opts *ptxOptions, entries []occurrence) {
 		}
 	}
 	opts.half = lineWidth / 2
-	tl := len(truncationMark)
+	tl := len(opts.truncation)
 	if opts.traditional {
 		opts.beforeMax = opts.half - opts.gap
 		opts.kaMax = opts.half - (2*tl + 1)
@@ -595,9 +605,9 @@ func field(ctx string, start, end int) string {
 	return ""
 }
 
-func truncLen(flag bool) int {
+func truncLen(flag bool, opts ptxOptions) int {
 	if flag {
-		return len(truncationMark)
+		return len(opts.truncation)
 	}
 	return 0
 }
@@ -622,29 +632,29 @@ func formatDumb(e occurrence, f fields, opts ptxOptions) string {
 	if f.tailS < f.tailE {
 		printField(&b, field(ctx, f.tailS, f.tailE), false)
 		if f.tailTr {
-			b.WriteString(truncationMark)
+			b.WriteString(opts.truncation)
 		}
-		spaces(&b, opts.half-opts.gap-beforeLen-truncLen(f.beforeTr)-(f.tailE-f.tailS)-truncLen(f.tailTr))
+		spaces(&b, opts.half-opts.gap-beforeLen-truncLen(f.beforeTr, opts)-(f.tailE-f.tailS)-truncLen(f.tailTr, opts))
 	} else {
-		spaces(&b, opts.half-opts.gap-beforeLen-truncLen(f.beforeTr))
+		spaces(&b, opts.half-opts.gap-beforeLen-truncLen(f.beforeTr, opts))
 	}
 	if f.beforeTr {
-		b.WriteString(truncationMark)
+		b.WriteString(opts.truncation)
 	}
 	printField(&b, field(ctx, f.beforeS, f.beforeE), false)
 	spaces(&b, opts.gap)
 	printField(&b, field(ctx, f.kaS, f.kaE), false)
 	if f.kaTr {
-		b.WriteString(truncationMark)
+		b.WriteString(opts.truncation)
 	}
 	if f.headS < f.headE {
-		spaces(&b, opts.half-(f.kaE-f.kaS)-truncLen(f.kaTr)-(f.headE-f.headS)-truncLen(f.headTr))
+		spaces(&b, opts.half-(f.kaE-f.kaS)-truncLen(f.kaTr, opts)-(f.headE-f.headS)-truncLen(f.headTr, opts))
 		if f.headTr {
-			b.WriteString(truncationMark)
+			b.WriteString(opts.truncation)
 		}
 		printField(&b, field(ctx, f.headS, f.headE), false)
 	} else if hasRefs && opts.rightRef {
-		spaces(&b, opts.half-(f.kaE-f.kaS)-truncLen(f.kaTr))
+		spaces(&b, opts.half-(f.kaE-f.kaS)-truncLen(f.kaTr, opts))
 	}
 	if hasRefs && opts.rightRef {
 		spaces(&b, opts.gap)
@@ -658,24 +668,26 @@ func formatDumb(e occurrence, f fields, opts ptxOptions) string {
 func formatRoff(e occurrence, f fields, opts ptxOptions) string {
 	ctx := e.ctx.text
 	var b strings.Builder
-	b.WriteString(".xx \"")
+	b.WriteString(".")
+	b.WriteString(opts.macroName)
+	b.WriteString(" \"")
 	printField(&b, field(ctx, f.tailS, f.tailE), true)
 	if f.tailTr {
-		b.WriteString(truncationMark)
+		b.WriteString(opts.truncation)
 	}
 	b.WriteString(`" "`)
 	if f.beforeTr {
-		b.WriteString(truncationMark)
+		b.WriteString(opts.truncation)
 	}
 	printField(&b, field(ctx, f.beforeS, f.beforeE), true)
 	b.WriteString(`" "`)
 	printField(&b, field(ctx, f.kaS, f.kaE), true)
 	if f.kaTr {
-		b.WriteString(truncationMark)
+		b.WriteString(opts.truncation)
 	}
 	b.WriteString(`" "`)
 	if f.headTr {
-		b.WriteString(truncationMark)
+		b.WriteString(opts.truncation)
 	}
 	printField(&b, field(ctx, f.headS, f.headE), true)
 	b.WriteString(`"`)

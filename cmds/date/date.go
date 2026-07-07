@@ -42,9 +42,20 @@ func run(rc *tool.RunContext, args []string) int {
 	universal := fs.Bool("universal", false, "same as --utc")
 	dstr := fs.StringP("date", "d", "", "display time described by STRING, not 'now'")
 	ref := fs.StringP("reference", "r", "", "display the last modification time of FILE")
+	dateFile := fs.StringP("file", "f", "", "like --date once for each line of FILE")
+	debug := fs.Bool("debug", false, "annotate parsed dates on stderr")
+	iso8601 := fs.StringP("iso-8601", "I", "", "output date/time in ISO 8601 format")
+	fs.Lookup("iso-8601").NoOptDefVal = "date"
+	rfc3339 := fs.String("rfc-3339", "", "output date/time in RFC 3339 format")
+	rfcEmail := fs.BoolP("rfc-email", "R", false, "output date and time in RFC 5322 email format")
+	resolution := fs.Bool("resolution", false, "output the available timestamp resolution")
+	setDate := fs.StringP("set", "s", "", "set time described by STRING")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	if *setDate != "" {
+		return tool.NotSupported(rc, cmd, "setting the system date")
 	}
 
 	loc := time.Local
@@ -52,8 +63,46 @@ func run(rc *tool.RunContext, args []string) int {
 		loc = time.UTC
 	}
 
-	if *dstr != "" && *ref != "" {
+	sources := 0
+	for _, set := range []bool{*dstr != "", *ref != "", *dateFile != ""} {
+		if set {
+			sources++
+		}
+	}
+	if sources > 1 {
 		return tool.UsageError(rc, cmd, "the options to specify dates for printing are mutually exclusive")
+	}
+	if *resolution {
+		if sources > 0 || len(operands) > 0 {
+			return tool.UsageError(rc, cmd, "--resolution is mutually exclusive with date formatting")
+		}
+		fmt.Fprintln(rc.Out, "0.000000001")
+		return 0
+	}
+	format, code := selectFormat(rc, operands, *iso8601, fs.Changed("iso-8601"), *rfc3339, *rfcEmail)
+	if code >= 0 {
+		return code
+	}
+	if *dateFile != "" {
+		data, err := os.ReadFile(rc.Path(*dateFile))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "date: %s: %v\n", *dateFile, tool.SysErr(err))
+			return 1
+		}
+		status := 0
+		for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+			t, err := parseDateString(line, loc)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "date: invalid date %q (supported: RFC 3339, @EPOCH, \"YYYY-MM-DD [HH:MM[:SS]]\")\n", line)
+				status = 1
+				continue
+			}
+			if *debug {
+				fmt.Fprintf(rc.Err, "date: parsed date %q -> %s\n", line, t.In(loc).Format(time.RFC3339Nano))
+			}
+			fmt.Fprintf(rc.Out, "%s\n", strftime(t.In(loc), format))
+		}
+		return status
 	}
 
 	t := time.Now()
@@ -74,20 +123,80 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	t = t.In(loc)
+	if *debug && *dstr != "" {
+		fmt.Fprintf(rc.Err, "date: parsed date %q -> %s\n", *dstr, t.Format(time.RFC3339Nano))
+	}
 
-	switch len(operands) {
-	case 0:
-		// GNU C-locale default: "%a %b %e %H:%M:%S %Z %Y".
-		fmt.Fprintf(rc.Out, "%s\n", t.Format("Mon Jan _2 15:04:05 MST 2006"))
-		return 0
-	case 1:
-		if !strings.HasPrefix(operands[0], "+") {
-			return tool.NotSupported(rc, cmd, "setting the system date")
+	fmt.Fprintf(rc.Out, "%s\n", strftime(t, format))
+	return 0
+}
+
+func selectFormat(rc *tool.RunContext, operands []string, iso string, isoSet bool, rfc3339 string, rfcEmail bool) (string, int) {
+	format := "%a %b %e %H:%M:%S %Z %Y"
+	formatCount := 0
+	if len(operands) > 0 {
+		if len(operands) > 1 {
+			return "", tool.UsageError(rc, cmd, "extra operand %q", operands[1])
 		}
-		fmt.Fprintf(rc.Out, "%s\n", strftime(t, operands[0][1:]))
-		return 0
+		if !strings.HasPrefix(operands[0], "+") {
+			return "", tool.NotSupported(rc, cmd, "setting the system date")
+		}
+		format = operands[0][1:]
+		formatCount++
+	}
+	if isoSet {
+		f, code := isoFormat(rc, iso)
+		if code >= 0 {
+			return "", code
+		}
+		format = f
+		formatCount++
+	}
+	if rfc3339 != "" {
+		f, code := rfc3339Format(rc, rfc3339)
+		if code >= 0 {
+			return "", code
+		}
+		format = f
+		formatCount++
+	}
+	if rfcEmail {
+		format = "%a, %d %b %Y %H:%M:%S %z"
+		formatCount++
+	}
+	if formatCount > 1 {
+		return "", tool.UsageError(rc, cmd, "multiple output formats specified")
+	}
+	return format, -1
+}
+
+func isoFormat(rc *tool.RunContext, spec string) (string, int) {
+	switch spec {
+	case "", "date":
+		return "%Y-%m-%d", -1
+	case "hours":
+		return "%Y-%m-%dT%H%z", -1
+	case "minutes":
+		return "%Y-%m-%dT%H:%M%z", -1
+	case "seconds":
+		return "%Y-%m-%dT%H:%M:%S%z", -1
+	case "ns", "nanoseconds":
+		return "%Y-%m-%dT%H:%M:%S,%N%z", -1
 	default:
-		return tool.UsageError(rc, cmd, "extra operand %q", operands[1])
+		return "", tool.UsageError(rc, cmd, "invalid --iso-8601 timespec: %q", spec)
+	}
+}
+
+func rfc3339Format(rc *tool.RunContext, spec string) (string, int) {
+	switch spec {
+	case "date":
+		return "%Y-%m-%d", -1
+	case "seconds":
+		return "%Y-%m-%d %H:%M:%S%:z", -1
+	case "ns", "nanoseconds":
+		return "%Y-%m-%d %H:%M:%S.%N%:z", -1
+	default:
+		return "", tool.UsageError(rc, cmd, "invalid --rfc-3339 timespec: %q", spec)
 	}
 }
 
@@ -211,6 +320,14 @@ func strftime(t time.Time, f string) string {
 			fmt.Fprintf(&b, "%d", int(t.Weekday()))
 		case 'z':
 			b.WriteString(t.Format("-0700"))
+		case ':':
+			if i+1 < len(f) && f[i+1] == 'z' {
+				i++
+				b.WriteString(t.Format("-07:00"))
+			} else {
+				b.WriteByte('%')
+				b.WriteByte(':')
+			}
 		case 'Z':
 			b.WriteString(t.Format("MST"))
 		case 'n':

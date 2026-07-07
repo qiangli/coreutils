@@ -426,6 +426,9 @@ func parseFormats(values []string) ([]dumpFormat, error) {
 }
 
 func parseFormat(s string) (dumpFormat, error) {
+	if alias, ok := formatAliases[s]; ok {
+		s = alias
+	}
 	if s == "c" || s == "a" {
 		return dumpFormat{kind: s, size: 1}, nil
 	}
@@ -433,7 +436,11 @@ func parseFormat(s string) (dumpFormat, error) {
 		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
 	}
 	prefix := s[:1]
-	size, err := strconv.Atoi(s[1:])
+	sizeText := s[1:]
+	if alias, ok := sizeAliases[sizeText]; ok {
+		sizeText = alias
+	}
+	size, err := strconv.Atoi(sizeText)
 	if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
 		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
 	}
@@ -441,6 +448,21 @@ func parseFormat(s string) (dumpFormat, error) {
 		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
 	}
 	return dumpFormat{kind: prefix + strconv.Itoa(size), size: size}, nil
+}
+
+var formatAliases = map[string]string{
+	"char":   "c",
+	"ascii":  "a",
+	"named":  "a",
+	"float":  "f8",
+	"double": "f8",
+}
+
+var sizeAliases = map[string]string{
+	"C": "1",
+	"S": "2",
+	"I": "4",
+	"L": "8",
 }
 
 func formatOffset(n int64, radix string) string {

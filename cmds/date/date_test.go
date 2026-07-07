@@ -61,6 +61,44 @@ func TestDateFormats(t *testing.T) {
 	}
 }
 
+func TestDateFormatAliases(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-u", "-d", "@0", "--iso-8601"}, "1970-01-01\n"},
+		{[]string{"-u", "-d", "@0", "--iso-8601=seconds"}, "1970-01-01T00:00:00+0000\n"},
+		{[]string{"-u", "-d", "@0", "--rfc-3339=seconds"}, "1970-01-01 00:00:00+00:00\n"},
+		{[]string{"-u", "-d", "@0", "--rfc-email"}, "Thu, 01 Jan 1970 00:00:00 +0000\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, c.args...)
+		if code != 0 || errb != "" || out != c.want {
+			t.Fatalf("date %q = (%q, %q, %d), want %q", c.args, out, errb, code, c.want)
+		}
+	}
+}
+
+func TestDateFileDebugAndResolution(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "dates")
+	if err := os.WriteFile(file, []byte("@0\n1970-01-02 03:04:05\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, "-u", "--debug", "--file", file, "+%F %T")
+	if code != 0 || !strings.Contains(errb, "parsed date") {
+		t.Fatalf("--file debug code=%d err=%q", code, errb)
+	}
+	if want := "1970-01-01 00:00:00\n1970-01-02 03:04:05\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+
+	out, errb, code = runTool(t, "--resolution")
+	if code != 0 || errb != "" || out != "0.000000001\n" {
+		t.Fatalf("--resolution = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestDateDefaultShape(t *testing.T) {
 	out, _, code := runTool(t)
 	if code != 0 {
@@ -115,6 +153,10 @@ func TestDateErrors(t *testing.T) {
 	_, errb, code = runTool(t, "12011030")
 	if code != 2 || !strings.Contains(errb, "not supported") {
 		t.Errorf("set-date: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, "--set", "@0")
+	if code != 2 || !strings.Contains(errb, "not supported") {
+		t.Errorf("--set: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, "+%Y", "+%m")
 	if code != 2 || !strings.Contains(errb, "extra operand") {

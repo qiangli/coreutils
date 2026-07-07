@@ -43,6 +43,21 @@ func TestODFormatsAndOffsets(t *testing.T) {
 	}
 }
 
+func TestODTypeAliases(t *testing.T) {
+	out, _, code := runOD(t, t.TempDir(), "AB", "-A", "n", "-t", "xC")
+	if want := " 41 42\n"; out != want || code != 0 {
+		t.Fatalf("od -t xC = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	out, _, code = runOD(t, t.TempDir(), "AB", "-A", "n", "-t", "xS")
+	if want := " 4241\n"; out != want || code != 0 {
+		t.Fatalf("od -t xS = (%q, %d), want (%q, 0)", out, code, want)
+	}
+	out, _, code = runOD(t, t.TempDir(), "a\n", "-A", "n", "-t", "char")
+	if want := "   a  \\n\n"; out != want || code != 0 {
+		t.Fatalf("od -t char = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
 func TestODShortAliasesAndWidth(t *testing.T) {
 	out, _, code := runOD(t, t.TempDir(), "abcd", "-b", "-w", "2")
 	if want := "0000000 141 142\n0000002 143 144\n0000004\n"; out != want || code != 0 {

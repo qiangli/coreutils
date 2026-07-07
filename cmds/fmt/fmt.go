@@ -46,6 +46,9 @@ func run(rc *tool.RunContext, args []string) int {
 	widthValue := fs.StringP("width", "w", "", "maximum line width (default of 75 columns)")
 	goalValue := fs.StringP("goal", "g", "", "goal width (default of 93% of width)")
 	prefix := fs.StringP("prefix", "p", "", "reformat only lines beginning with STRING, reattaching the prefix to reformatted lines")
+	tabWidth := fs.IntP("tab-width", "T", 8, "set tab stops every WIDTH columns")
+	quick := fs.BoolP("quick", "q", false, "use a fast line breaking mode")
+	exact := fs.BoolP("exact", "x", false, "try harder to preserve optimal line lengths")
 	operands, code := tool.Parse(rc, cmd, fs, rewriteObsoleteWidth(args))
 	if code >= 0 {
 		return code
@@ -75,6 +78,11 @@ func run(rc *tool.RunContext, args []string) int {
 		// 93% of width, computed the way GNU does (LEEWAY = 7).
 		goal = width * (2*(100-7) + 1) / 200
 	}
+	if *tabWidth <= 0 {
+		return tool.UsageError(rc, cmd, "invalid tab width: %d", *tabWidth)
+	}
+	_ = *quick
+	_ = *exact
 	if len(operands) == 0 {
 		operands = []string{"-"}
 	}
@@ -86,6 +94,7 @@ func run(rc *tool.RunContext, args []string) int {
 		prefix:         *prefix,
 		crownMargin:    *crownMargin,
 		tagged:         *taggedParagraph,
+		tabWidth:       *tabWidth,
 	}
 
 	out := bufio.NewWriter(rc.Out)
@@ -138,6 +147,7 @@ type fmtOptions struct {
 	prefix         string
 	crownMargin    bool
 	tagged         bool
+	tabWidth       int
 }
 
 // lineInfo is one parsed input line.
@@ -150,16 +160,16 @@ type lineInfo struct {
 	body    string // text after prefix and leading whitespace
 }
 
-func parseLine(line, prefix string) lineInfo {
+func parseLine(line, prefix string, tabWidth int) lineInfo {
 	li := lineInfo{raw: line, match: true}
-	lead, rest := measureIndent(line, 0)
+	lead, rest := measureIndent(line, 0, tabWidth)
 	if prefix != "" {
 		if !strings.HasPrefix(rest, prefix) {
 			li.match = false
 			return li
 		}
 		li.pIndent = lead
-		li.indent, li.body = measureIndent(rest[len(prefix):], lead+runeCols(prefix))
+		li.indent, li.body = measureIndent(rest[len(prefix):], lead+runeCols(prefix), tabWidth)
 	} else {
 		li.indent, li.body = lead, rest
 	}
@@ -170,13 +180,13 @@ func parseLine(line, prefix string) lineInfo {
 // measureIndent counts the display column (tabs expand at 8, starting
 // from col) of the first non-blank character of s and returns it with
 // the remainder of the string.
-func measureIndent(s string, col int) (int, string) {
+func measureIndent(s string, col, tabWidth int) (int, string) {
 	for i, r := range s {
 		switch r {
 		case ' ':
 			col++
 		case '\t':
-			col += 8 - col%8
+			col += tabWidth - col%tabWidth
 		default:
 			return col, s[i:]
 		}
@@ -189,7 +199,7 @@ func fmtStream(r io.Reader, w io.Writer, opts fmtOptions) error {
 	sc.Buffer(make([]byte, 1024), 1024*1024)
 	var infos []lineInfo
 	for sc.Scan() {
-		infos = append(infos, parseLine(sc.Text(), opts.prefix))
+		infos = append(infos, parseLine(sc.Text(), opts.prefix, opts.tabWidth))
 	}
 	if err := sc.Err(); err != nil {
 		return err

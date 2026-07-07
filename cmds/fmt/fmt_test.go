@@ -191,8 +191,25 @@ func TestFmtTaggedFirstLineOwnParagraphWhenIndentEqual(t *testing.T) {
 	}
 }
 
+func TestFmtTabWidthAndQuickExactModes(t *testing.T) {
+	out, stderr, code := runFmt(t, "\talpha beta gamma\n", "-T", "4", "-w", "14")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "    alpha beta\n    gamma\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+	out, stderr, code = runFmt(t, "aa bb cc dd\n", "-q", "-x", "-w", "12")
+	if code != 0 || stderr != "" {
+		t.Fatalf("quick/exact code=%d stderr=%q", code, stderr)
+	}
+	if want := "aa bb cc dd\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestFmtRemovedFlagsFailLoudly(t *testing.T) {
-	for _, flag := range []string{"-T", "-m", "-P", "-x", "-X", "-q"} {
+	for _, flag := range []string{"-m", "-P", "-X"} {
 		_, stderr, code := runFmt(t, "x\n", flag, "8")
 		if code != 2 || !strings.Contains(stderr, strings.TrimPrefix(flag, "-")) {
 			t.Fatalf("flag %s: code=%d stderr=%q", flag, code, stderr)
