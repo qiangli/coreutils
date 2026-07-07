@@ -5,6 +5,8 @@ package synccmd
 import (
 	"fmt"
 	"os"
+
+	"github.com/qiangli/coreutils/tool"
 )
 
 func syncFileData(path string) error {

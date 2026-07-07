@@ -3,8 +3,10 @@
 package synccmd
 
 import (
+	"fmt"
 	"os"
 
+	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/sys/unix"
 )
 
