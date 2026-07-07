@@ -114,7 +114,11 @@ func printHelp(rc *RunContext, t *Tool, fs *pflag.FlagSet) {
 	if t.Synopsis != "" {
 		fmt.Fprintf(rc.Out, "%s\n", t.Synopsis)
 	}
-	fmt.Fprintf(rc.Out, "\nOptions:\n%s", fs.FlagUsages())
+	u := fs.FlagUsages()
+	for _, char := range []string{"1", "t", "S", "v", "g", "o", "C", "x", "p", "f", "U", "X", "q", "c", "u", "m", "Z"} {
+		u = strings.ReplaceAll(u, ", --"+char+" ", "      ")
+	}
+	fmt.Fprintf(rc.Out, "\nOptions:\n%s", u)
 	fmt.Fprintf(rc.Out, "\nImplements the documented GNU semantics for the flags above;\nanything else fails with a clear error (exit 2), never a silent guess.\n")
 }
 

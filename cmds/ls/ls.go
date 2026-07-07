@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/spf13/pflag"
 )
 
 var cmd = &tool.Tool{
@@ -68,39 +69,37 @@ type entry struct {
 	target string // symlink target, filled only for -l
 }
 
-func run(rc *tool.RunContext, args []string) int {
-	// -l, -t, -S, -1 have no GNU long form: pre-parse them out of the
-	// short-flag clusters before pflag sees the args.
-	rest, short := extractShort(args, "ltS1gGnoCpfUXQNbqsvCxZHLV")
-	fs := tool.NewFlags(cmd.Name)
-	all := fs.BoolP("all", "a", false, "do not ignore entries starting with .")
-	almost := fs.BoolP("almost-all", "A", false, "do not list implied . and ..")
-	dirOnly := fs.BoolP("directory", "d", false, "list directories themselves, not their contents")
-	human := fs.BoolP("human-readable", "h", false, "with -l, print sizes like 1K 234M 2G etc.")
-	inode := fs.BoolP("inode", "i", false, "print the index number of each file")
-	recursive := fs.BoolP("recursive", "R", false, "list subdirectories recursively")
-	reverse := fs.BoolP("reverse", "r", false, "reverse order while sorting")
-	longFlag := fs.Bool("long", false, "display detailed information")
-	noGroup := fs.Bool("no-group", false, "in a long listing, don't print group names")
-	numeric := fs.Bool("numeric-uid-gid", false, "like -l, but list numeric user and group IDs")
-	format := fs.String("format", "", "set display format: long, single-column, commas")
-	sortMode := fs.String("sort", "", "sort by WORD: name, none, time, size, extension")
-	hide := fs.StringArray("hide", nil, "do not list implied entries matching shell PATTERN")
-	ignore := fs.StringArrayP("ignore", "I", nil, "do not list implied entries matching shell PATTERN")
+// GetFlagSet returns the FlagSet containing all ls options, configured with the given command name.
+func GetFlagSet(name string) *pflag.FlagSet {
+	fs := tool.NewFlags(name)
+	fs.BoolP("all", "a", false, "do not ignore entries starting with .")
+	fs.BoolP("almost-all", "A", false, "do not list implied . and ..")
+	fs.BoolP("directory", "d", false, "list directories themselves, not their contents")
+	fs.BoolP("human-readable", "h", false, "with -l, print sizes like 1K 234M 2G etc.")
+	fs.BoolP("inode", "i", false, "print the index number of each file")
+	fs.BoolP("recursive", "R", false, "list subdirectories recursively")
+	fs.BoolP("reverse", "r", false, "reverse order while sorting")
+	fs.BoolP("long", "l", false, "display detailed information")
+	fs.BoolP("no-group", "G", false, "in a long listing, don't print group names")
+	fs.BoolP("numeric-uid-gid", "n", false, "like -l, but list numeric user and group IDs")
+	fs.String("format", "", "set display format: long, single-column, commas")
+	fs.String("sort", "", "sort by WORD: name, none, time, size, extension")
+	fs.StringArray("hide", nil, "do not list implied entries matching shell PATTERN")
+	fs.StringArrayP("ignore", "I", nil, "do not list implied entries matching shell PATTERN")
 	fs.BoolP("ignore-backups", "B", false, "do not list implied entries ending with ~")
 	fs.Bool("zero", false, "end each output line with NUL, not newline")
 	fs.Bool("file-type", false, "append file type indicators except '*'")
-	fs.String("classify", "", "append file type indicators")
+	fs.StringP("classify", "F", "", "append file type indicators")
 	fs.String("indicator-style", "", "append indicator with style WORD: none, slash, file-type, classify")
-	fs.Bool("literal", false, "print entry names without quoting")
-	fs.Bool("quote-name", false, "enclose entry names in double quotes")
-	fs.Bool("escape", false, "print C-style escapes for nongraphic characters")
+	fs.BoolP("literal", "N", false, "print entry names without quoting")
+	fs.BoolP("quote-name", "Q", false, "enclose entry names in double quotes")
+	fs.BoolP("escape", "b", false, "print C-style escapes for nongraphic characters")
 	fs.Bool("hide-control-chars", false, "print question marks instead of nongraphic characters")
 	fs.Bool("show-control-chars", false, "show nongraphic characters as-is")
 	fs.String("quoting-style", "", "set quoting style: literal, c, escape")
 	fs.Bool("group-directories-first", false, "group directories before files")
-	fs.Bool("dereference", false, "show file information for symlink referents")
-	fs.Bool("dereference-command-line", false, "follow command-line symlinks")
+	fs.BoolP("dereference", "L", false, "show file information for symlink referents")
+	fs.BoolP("dereference-command-line", "H", false, "follow command-line symlinks")
 	fs.Bool("dereference-command-line-symlink-to-dir", false, "follow command-line symlinked directories")
 	fs.Bool("author", false, "with -l, print the author of each file")
 	fs.Bool("context", false, "print security context when available")
@@ -113,12 +112,47 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.Bool("full-time", false, "like -l --time-style=full-iso")
 	fs.String("block-size", "", "scale block counts; supports 1, K, KB")
 	fs.Bool("si", false, "print human-readable sizes in powers of 1000")
-	fs.Bool("size", false, "print allocated size of each file, in blocks")
+	fs.BoolP("size", "s", false, "print allocated size of each file, in blocks")
 	fs.BoolP("kibibytes", "k", false, "use 1024-byte blocks for allocated sizes")
 	fs.BoolP("dired", "D", false, "accepted for compatibility")
+
+	// Short-only options that do not have canonical long options in GNU ls,
+	// but are fully supported via the short flag clusters.
+	fs.BoolP("1", "1", false, "list one file per line")
+	fs.BoolP("t", "t", false, "sort by modification time, newest first")
+	fs.BoolP("S", "S", false, "sort by file size, largest first")
+	fs.BoolP("v", "v", false, "natural sort of (version) numbers within text")
+	fs.BoolP("g", "g", false, "like -l, but do not list owner")
+	fs.BoolP("o", "o", false, "like -l, but do not list group information")
+	fs.BoolP("C", "C", false, "list entries by columns")
+	fs.BoolP("x", "x", false, "list entries by lines instead of by columns")
+	fs.BoolP("p", "p", false, "append / indicator to directories")
+	fs.BoolP("f", "f", false, "do not sort, enable -a")
+	fs.BoolP("U", "U", false, "do not sort; list entries in directory order")
+	fs.BoolP("X", "X", false, "sort alphabetically by entry extension")
+	fs.BoolP("q", "q", false, "print question marks instead of nongraphic characters")
+	fs.BoolP("c", "c", false, "with -lt: sort by, and show, ctime")
+	fs.BoolP("u", "u", false, "with -lt: sort by, and show, atime")
+	fs.BoolP("m", "m", false, "fill width with a comma separated list of entries")
+	fs.BoolP("Z", "Z", false, "print security context when available")
+
+	// Set --version shorthand to -V
+	if verFlag := fs.Lookup("version"); verFlag != nil {
+		verFlag.Shorthand = "V"
+	}
+
 	fs.Lookup("classify").NoOptDefVal = "always"
 	fs.Lookup("color").NoOptDefVal = "always"
 	fs.Lookup("hyperlink").NoOptDefVal = "always"
+
+	return fs
+}
+
+func run(rc *tool.RunContext, args []string) int {
+	// -l, -t, -S, -1 have no GNU long form: pre-parse them out of the
+	// short-flag clusters before pflag sees the args.
+	rest, short := ExtractShort(args, "ltS1gGnoCpfUXQNbqsvCxZHLV")
+	fs := GetFlagSet(cmd.Name)
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
@@ -143,18 +177,33 @@ func run(rc *tool.RunContext, args []string) int {
 	timeField, _ := fs.GetString("time")
 	fullTime, _ := fs.GetBool("full-time")
 	sizeFlag, _ := fs.GetBool("size")
+	format, _ := fs.GetString("format")
+	sortMode, _ := fs.GetString("sort")
+
+	all, _ := fs.GetBool("all")
+	almost, _ := fs.GetBool("almost-all")
+	dirOnly, _ := fs.GetBool("directory")
+	human, _ := fs.GetBool("human-readable")
+	inode, _ := fs.GetBool("inode")
+	recursive, _ := fs.GetBool("recursive")
+	reverse, _ := fs.GetBool("reverse")
+	longFlag, _ := fs.GetBool("long")
+	noGroup, _ := fs.GetBool("no-group")
+	numeric, _ := fs.GetBool("numeric-uid-gid")
+	hide, _ := fs.GetStringArray("hide")
+	ignore, _ := fs.GetStringArray("ignore")
 
 	opt := options{
-		long:           short['l'] > 0 || *longFlag,
-		all:            *all,
-		almostAll:      *almost,
-		dirOnly:        *dirOnly,
-		recursive:      *recursive,
-		reverse:        *reverse,
-		inode:          *inode,
-		human:          *human,
-		noGroup:        short['g'] > 0 || short['G'] > 0 || *noGroup,
-		numeric:        short['n'] > 0 || *numeric,
+		long:           short['l'] > 0 || longFlag,
+		all:            all,
+		almostAll:      almost,
+		dirOnly:        dirOnly,
+		recursive:      recursive,
+		reverse:        reverse,
+		inode:          inode,
+		human:          human,
+		noGroup:        short['g'] > 0 || short['G'] > 0 || noGroup,
+		numeric:        short['n'] > 0 || numeric,
 		sortTime:       short['t'] > 0,
 		sortSize:       short['S'] > 0,
 		sizeBlocks:     short['s'] > 0 || sizeFlag,
@@ -170,8 +219,8 @@ func run(rc *tool.RunContext, args []string) int {
 		literal:        short['N'] > 0 || literal,
 		quoteName:      short['Q'] > 0 || quoteName,
 		escape:         short['b'] > 0 || escape,
-		hide:           *hide,
-		ignore:         *ignore,
+		hide:           hide,
+		ignore:         ignore,
 	}
 	if short['o'] > 0 {
 		opt.long, opt.noGroup = true, true
@@ -199,7 +248,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if ignoreBackups {
 		opt.ignore = append(opt.ignore, "*~")
 	}
-	switch *format {
+	switch format {
 	case "", "verbose":
 	case "long":
 		opt.long = true
@@ -207,9 +256,9 @@ func run(rc *tool.RunContext, args []string) int {
 	case "commas":
 		opt.comma = true
 	default:
-		return tool.UsageError(rc, cmd, "unsupported --format=%s", *format)
+		return tool.UsageError(rc, cmd, "unsupported --format=%s", format)
 	}
-	switch *sortMode {
+	switch sortMode {
 	case "":
 	case "name":
 		opt.sortTime, opt.sortSize, opt.sortExtension, opt.unsorted = false, false, false, false
@@ -222,7 +271,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case "extension":
 		opt.sortExtension = true
 	default:
-		return tool.UsageError(rc, cmd, "unsupported --sort=%s", *sortMode)
+		return tool.UsageError(rc, cmd, "unsupported --sort=%s", sortMode)
 	}
 	switch indicator {
 	case "", "none":
@@ -730,11 +779,11 @@ func matchesAny(name string, patterns []string) bool {
 	return false
 }
 
-// extractShort removes the given single-letter flags (which have no
+// ExtractShort removes the given single-letter flags (which have no
 // GNU long form) from short-flag clusters, returning the remaining
 // args and a map of flag letter to the sequence number of its last
 // occurrence (0 = absent). Scanning stops at the "--" terminator.
-func extractShort(args []string, chars string) ([]string, map[byte]int) {
+func ExtractShort(args []string, chars string) ([]string, map[byte]int) {
 	found := map[byte]int{}
 	seq := 0
 	var rest []string
