@@ -96,11 +96,19 @@ func TestErrors(t *testing.T) {
 
 func TestHelpAndVersion(t *testing.T) {
 	out, _, code := runTool(t, "", "", "--help")
-	if code != 0 || !strings.Contains(out, "Usage: sha256sum") {
+	if code != 0 || !strings.Contains(out, "Usage: sha256sum") || !strings.Contains(out, "-h, --help") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: sha256sum") {
+		t.Errorf("-h: code=%d out=%q", code, out)
 	}
 	out, _, code = runTool(t, "", "", "--version")
 	if code != 0 || !strings.Contains(out, "sha256sum") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-V")
+	if code != 0 || !strings.Contains(out, "sha256sum") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }

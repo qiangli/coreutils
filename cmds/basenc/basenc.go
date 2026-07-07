@@ -21,7 +21,8 @@ import (
 var cmd = &tool.Tool{
 	Name:     "basenc",
 	Synopsis: "Encode or decode FILE, or standard input, to standard output. With no FILE, or when FILE is -, read standard input.",
-	Usage:    "basenc [OPTION]... [FILE]",
+	Usage: "basenc [OPTION]... [FILE]\n\n" +
+		"  -D          same as --decode",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -55,6 +56,10 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.Bool("z85", false, "ascii85-like encoding")
 	fs.Bool("base58", false, "visually unambiguous base58 encoding")
 	decode := fs.BoolP("decode", "d", false, "decode data")
+	decodeUpper := fs.BoolP("decode-uppercase", "D", false, "same as --decode")
+	if flag := fs.Lookup("decode-uppercase"); flag != nil {
+		flag.Hidden = true
+	}
 	ignore := fs.BoolP("ignore-garbage", "i", false, "when decoding, ignore non-alphabet characters")
 	wrap := fs.StringP("wrap", "w", "76", "wrap encoded lines after COLS character (default 76); use 0 to disable line wrapping")
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -107,7 +112,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if closeFn != nil {
 		defer closeFn()
 	}
-	if *decode {
+	if *decode || *decodeUpper {
 		return decodeBase(rc, spec, src, *ignore)
 	}
 	return encodeBase(rc, spec, src, cols)

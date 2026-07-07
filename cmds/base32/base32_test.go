@@ -60,6 +60,7 @@ func TestDecode(t *testing.T) {
 		want  string
 	}{
 		{"MZXW6YTBOI======\n", []string{"-d"}, "foobar"},
+		{"MZXW6YTBOI======\n", []string{"-D"}, "foobar"},
 		// embedded newlines (wrapped input) are tolerated.
 		{"MZXW6YTB\nOI======\n", []string{"--decode"}, "foobar"},
 		// -i ignores non-alphabet garbage (lowercase is garbage in base32).
@@ -119,11 +120,20 @@ func TestOperandAndFlagErrors(t *testing.T) {
 
 func TestHelpAndVersion(t *testing.T) {
 	out, _, code := runTool(t, "", "", "--help")
-	if code != 0 || !strings.Contains(out, "Usage: base32") || !strings.Contains(out, "--ignore-garbage") {
+	if code != 0 || !strings.Contains(out, "Usage: base32") ||
+		!strings.Contains(out, "-D          same as --decode") || !strings.Contains(out, "--ignore-garbage") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: base32") || !strings.Contains(out, "-h, --help") {
+		t.Errorf("-h: code=%d out=%q", code, out)
 	}
 	out, _, code = runTool(t, "", "", "--version")
 	if code != 0 || !strings.Contains(out, "base32") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-V")
+	if code != 0 || !strings.Contains(out, "base32") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }

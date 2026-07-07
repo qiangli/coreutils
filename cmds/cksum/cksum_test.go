@@ -53,7 +53,9 @@ func TestCKSumAlgorithms(t *testing.T) {
 		want string
 	}{
 		{[]string{"--algorithm=bsd"}, "16556     1\n"},
+		{[]string{"-r"}, "16556     1\n"},
 		{[]string{"--algorithm=sysv"}, "294 1\n"},
+		{[]string{"-s"}, "294 1\n"},
 		{[]string{"--algorithm=sha1"}, "SHA1 (-) = a9993e364706816aba3e25717850c26c9cd0d89d\n"},
 		{[]string{"--algorithm=sha1", "--untagged"}, "a9993e364706816aba3e25717850c26c9cd0d89d  -\n"},
 		{[]string{"--algorithm=sha1", "--base64"}, "SHA1 (-) = qZk+NkcGgWq6PiVxeFDCbJzQ2J0=\n"},
@@ -79,7 +81,16 @@ func TestCKSumAlgorithms(t *testing.T) {
 		}
 	}
 
-	out, errb, code := runTool(t, "", "abc", "--algorithm=sha1", "--raw")
+	out, errb, code := runTool(t, "", "abc", "-rs")
+	if out != "294 1\n" || errb != "" || code != 0 {
+		t.Fatalf("cksum -rs = (%q, %q, %d), want sysv", out, errb, code)
+	}
+	out, errb, code = runTool(t, "", "abc", "-sr")
+	if out != "16556     1\n" || errb != "" || code != 0 {
+		t.Fatalf("cksum -sr = (%q, %q, %d), want bsd", out, errb, code)
+	}
+
+	out, errb, code = runTool(t, "", "abc", "--algorithm=sha1", "--raw")
 	wantRaw := []byte{0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e, 0x25, 0x71, 0x78, 0x50, 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d}
 	if !bytes.Equal([]byte(out), wantRaw) || errb != "" || code != 0 {
 		t.Fatalf("raw sha1 = (%q, %q, %d)", out, errb, code)
@@ -163,6 +174,12 @@ func TestCKSumCheckMode(t *testing.T) {
 		t.Fatalf("strict malformed = (%q, %q, %d)", out, errb, code)
 	}
 
+	checks = "SHA1 (a.txt) = 0000000000000000000000000000000000000000\n"
+	out, errb, code = runTool(t, dir, checks, "-c", "--status")
+	if code != 1 || out != "" || errb != "" {
+		t.Fatalf("status mismatch = (%q, %q, %d)", out, errb, code)
+	}
+
 	// --warn diagnoses each malformed line with its number.
 	checks = "SHA1 (a.txt) = a9993e364706816aba3e25717850c26c9cd0d89d\ngarbage\n"
 	out, errb, code = runTool(t, dir, checks, "-c", "--warn")
@@ -194,6 +211,20 @@ func TestCKSumErrors(t *testing.T) {
 	_, errb, code = runTool(t, "", "", "--algorithm=MD5")
 	if code != 2 || !strings.Contains(errb, "invalid algorithm") {
 		t.Fatalf("uppercase GNU algorithm = (%q, %d)", errb, code)
+	}
+}
+
+func TestCKSumHelpVersionAliases(t *testing.T) {
+	out, _, code := runTool(t, "", "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: cksum") ||
+		!strings.Contains(out, "-r          use BSD sum algorithm") ||
+		!strings.Contains(out, "-s          use System V sum algorithm") ||
+		!strings.Contains(out, "-h, --help") || !strings.Contains(out, "-V, --version") {
+		t.Fatalf("-h = (%q, %d)", out, code)
+	}
+	out, _, code = runTool(t, "", "", "-V")
+	if code != 0 || !strings.Contains(out, "cksum") {
+		t.Fatalf("-V = (%q, %d)", out, code)
 	}
 }
 

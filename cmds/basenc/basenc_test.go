@@ -72,6 +72,7 @@ func TestBasencDecode(t *testing.T) {
 		want  string
 	}{
 		{"Zm9vYmFy\n", []string{"--base64", "-d"}, "foobar"},
+		{"Zm9vYmFy\n", []string{"--base64", "-D"}, "foobar"},
 		{"Zm9v;;Ym!Fy\n", []string{"--base64", "-d", "-i"}, "foobar"},
 		{"MZXW6YTBOI======\n", []string{"--base32", "--decode"}, "foobar"},
 		{"CPNMUOJ1E8======\n", []string{"--base32hex", "-d"}, "foobar"},
@@ -106,7 +107,6 @@ func TestBasencFileAndErrors(t *testing.T) {
 		{[]string{"--base64", "-w", "-1"}, "invalid wrap size", 1},
 		{[]string{"--base64", "-d"}, "invalid input", 1},
 		{[]string{"--base64", "missing"}, "No such file or directory", 1},
-		{[]string{"--base64", "-D"}, "unknown shorthand flag", 2},
 	}
 	for _, tt := range tests {
 		_, errb, code := runTool(t, dir, "%%%%", tt.args...)
@@ -173,7 +173,17 @@ func TestBasencDecodePadding(t *testing.T) {
 
 func TestBasencHelp(t *testing.T) {
 	out, _, code := runTool(t, "", "", "--help")
-	if code != 0 || !strings.Contains(out, "--base64url") || !strings.Contains(out, "--base16") {
+	if code != 0 || !strings.Contains(out, "--base64url") || !strings.Contains(out, "--base16") ||
+		!strings.Contains(out, "-D          same as --decode") ||
+		!strings.Contains(out, "-h, --help") || !strings.Contains(out, "-V, --version") {
 		t.Fatalf("help = (%q, %d)", out, code)
+	}
+	out, _, code = runTool(t, "", "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: basenc") {
+		t.Fatalf("-h = (%q, %d)", out, code)
+	}
+	out, _, code = runTool(t, "", "", "-V")
+	if code != 0 || !strings.Contains(out, "basenc") {
+		t.Fatalf("-V = (%q, %d)", out, code)
 	}
 }

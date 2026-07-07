@@ -79,6 +79,7 @@ func TestDecode(t *testing.T) {
 		want  string
 	}{
 		{"Zm9vYmFy\n", []string{"-d"}, "foobar"},
+		{"Zm9vYmFy\n", []string{"-D"}, "foobar"},
 		// embedded newlines (wrapped input) are tolerated.
 		{"Zm9v\nYmFy\n", []string{"-d"}, "foobar"},
 		{"aGVsbG8gY2hpbmEK\n", []string{"--decode"}, "hello china\n"},
@@ -148,11 +149,20 @@ func TestOperandAndFlagErrors(t *testing.T) {
 
 func TestHelpAndVersion(t *testing.T) {
 	out, _, code := runTool(t, "", "", "--help")
-	if code != 0 || !strings.Contains(out, "Usage: base64") || !strings.Contains(out, "--decode") {
+	if code != 0 || !strings.Contains(out, "Usage: base64") ||
+		!strings.Contains(out, "-D          same as --decode") || !strings.Contains(out, "--decode") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: base64") || !strings.Contains(out, "-h, --help") {
+		t.Errorf("-h: code=%d out=%q", code, out)
 	}
 	out, _, code = runTool(t, "", "", "--version")
 	if code != 0 || !strings.Contains(out, "base64") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-V")
+	if code != 0 || !strings.Contains(out, "base64") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }

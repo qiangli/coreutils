@@ -38,7 +38,8 @@ func NewBaseTool(spec BaseSpec) *tool.Tool {
 	t := &tool.Tool{
 		Name:     spec.Name,
 		Synopsis: fmt.Sprintf("%s encode or decode FILE, or standard input, to standard output. With no FILE, or when FILE is -, read standard input.", spec.Display),
-		Usage:    fmt.Sprintf("%s [OPTION]... [FILE]", spec.Name),
+		Usage: fmt.Sprintf("%s [OPTION]... [FILE]\n\n"+
+			"  -D          same as --decode", spec.Name),
 	}
 	t.Run = func(rc *tool.RunContext, args []string) int {
 		return runBase(rc, t, spec, args)
@@ -49,6 +50,10 @@ func NewBaseTool(spec BaseSpec) *tool.Tool {
 func runBase(rc *tool.RunContext, t *tool.Tool, spec BaseSpec, args []string) int {
 	fs := tool.NewFlags(t.Name)
 	decode := fs.BoolP("decode", "d", false, "decode data")
+	decodeUpper := fs.BoolP("decode-uppercase", "D", false, "same as --decode")
+	if flag := fs.Lookup("decode-uppercase"); flag != nil {
+		flag.Hidden = true
+	}
 	ignore := fs.BoolP("ignore-garbage", "i", false, "when decoding, ignore non-alphabet characters")
 	wrap := fs.StringP("wrap", "w", "76", "wrap encoded lines after COLS character (default 76); use 0 to disable line wrapping")
 	operands, code := tool.Parse(rc, t, fs, args)
@@ -88,7 +93,7 @@ func runBase(rc *tool.RunContext, t *tool.Tool, spec BaseSpec, args []string) in
 		src = f
 	}
 
-	if *decode {
+	if *decode || *decodeUpper {
 		// -w is accepted but has no effect when decoding (GNU).
 		return runBaseDecode(rc, t, spec, src, *ignore)
 	}
