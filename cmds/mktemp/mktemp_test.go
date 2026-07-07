@@ -128,6 +128,29 @@ func TestMktempTmpdirFlag(t *testing.T) {
 	}
 }
 
+func TestMktempSuffixQuietAndT(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, "tmp")
+	if err := os.Mkdir(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, []string{"TMPDIR=" + tmp}, "-t", "--suffix=.log", "fooXXXX")
+	if code != 0 || errb != "" {
+		t.Fatalf("mktemp -t --suffix: code=%d err=%q", code, errb)
+	}
+	name := strings.TrimSuffix(out, "\n")
+	if filepath.Dir(name) != tmp || !strings.HasSuffix(name, ".log") {
+		t.Fatalf("name %q not under TMPDIR with suffix", name)
+	}
+	if _, err := os.Stat(name); err != nil {
+		t.Fatalf("created file missing: %v", err)
+	}
+	_, errb, code = runTool(t, dir, nil, "-q", "badXX")
+	if code != 1 || errb != "" {
+		t.Fatalf("mktemp -q should suppress diagnostics: code=%d err=%q", code, errb)
+	}
+}
+
 func TestMktempErrors(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, nil, "fooXX")

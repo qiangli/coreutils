@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -75,6 +76,27 @@ func TestMvIntoDir(t *testing.T) {
 	}
 }
 
+func TestMvTargetDirectoryAndNoTargetDirectory(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "x")
+	write(t, filepath.Join(dir, "b"), "y")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-t", "d", "a", "b")
+	if code != 0 {
+		t.Fatalf("mv -t: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "d", "a")) != "x" || read(t, filepath.Join(dir, "d", "b")) != "y" {
+		t.Fatal("-t did not move both sources into directory")
+	}
+	write(t, filepath.Join(dir, "c"), "z")
+	_, errb, code = runTool(t, dir, "-T", "c", "d")
+	if code != 1 || !strings.Contains(errb, "cannot move 'c' to 'd'") {
+		t.Errorf("mv -T file dir: code=%d err=%q", code, errb)
+	}
+}
+
 func TestMvDirRename(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src", "f"), "x")
@@ -115,6 +137,49 @@ func TestMvNoClobber(t *testing.T) {
 	_, _, code = runTool(t, dir, "-n", "-f", "a", "b")
 	if code != 0 || read(t, filepath.Join(dir, "b")) != "new" {
 		t.Error("-n -f should overwrite (last wins)")
+	}
+}
+
+func TestMvBackupSuffixUpdateAndInteractive(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "new")
+	write(t, filepath.Join(dir, "b"), "old")
+	_, errb, code := runTool(t, dir, "--backup=simple", "-S", ".bak", "a", "b")
+	if code != 0 {
+		t.Fatalf("mv backup: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "b")) != "new" || read(t, filepath.Join(dir, "b.bak")) != "old" {
+		t.Fatalf("backup/suffix did not preserve old destination")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
+		t.Fatal("source should be removed after move")
+	}
+
+	src := filepath.Join(dir, "a")
+	dst := filepath.Join(dir, "b")
+	write(t, src, "older")
+	write(t, dst, "newer")
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)
+	newer := time.Date(2021, 1, 1, 0, 0, 0, 0, time.Local)
+	if err := os.Chtimes(src, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dst, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir, "-u", "a", "b")
+	if code != 0 || errb != "" || read(t, dst) != "newer" {
+		t.Fatalf("mv -u should skip newer destination: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(src); err != nil {
+		t.Fatal("source should remain after -u skip")
+	}
+
+	write(t, src, "prompted")
+	write(t, dst, "keep")
+	_, errb, code = runTool(t, dir, "-i", "a", "b")
+	if code != 0 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
+		t.Fatalf("mv -i without yes should skip: code=%d err=%q", code, errb)
 	}
 }
 

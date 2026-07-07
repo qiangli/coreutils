@@ -16,11 +16,16 @@ import (
 // output is captured after Run returns.
 func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolIn(t, dir, "", args...)
+}
+
+func runToolIn(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
@@ -84,6 +89,20 @@ func TestRmDirWithoutR(t *testing.T) {
 	}
 }
 
+func TestRmDirFlagRemovesEmptyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-d", "d")
+	if code != 0 {
+		t.Fatalf("rm -d: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "d")); !os.IsNotExist(err) {
+		t.Error("empty directory still exists")
+	}
+}
+
 func TestRmRecursive(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "d", "f"), "x")
@@ -119,23 +138,34 @@ func TestRmCapitalRAlias(t *testing.T) {
 	}
 }
 
-func TestRmInteractiveRefused(t *testing.T) {
+func TestRmInteractivePrompt(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "x")
-	for _, args := range [][]string{
-		{"-i", "a"},
-		{"-I", "a"},
-		{"-ri", "a"},
-		{"--interactive", "a"},
-		{"--interactive=always", "a"},
-	} {
-		_, errb, code := runTool(t, dir, args...)
-		if code != 2 || !strings.Contains(errb, "not supported") {
-			t.Errorf("rm %v: code=%d err=%q", args, code, errb)
-		}
-		if _, err := os.Stat(filepath.Join(dir, "a")); err != nil {
-			t.Fatalf("rm %v removed the file despite refusal", args)
-		}
+	_, errb, code := runTool(t, dir, "-i", "a")
+	if code != 0 || !strings.Contains(errb, "remove 'a'?") {
+		t.Fatalf("rm -i no input: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a")); err != nil {
+		t.Fatal("rm -i without yes removed the file")
+	}
+	_, errb, code = runToolIn(t, dir, "y\n", "-i", "a")
+	if code != 0 || !strings.Contains(errb, "remove 'a'?") {
+		t.Fatalf("rm -i yes: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
+		t.Fatal("rm -i yes did not remove the file")
+	}
+}
+
+func TestRmCompatibilityNoOps(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "x")
+	_, errb, code := runTool(t, dir, "--one-file-system", "--progress", "a")
+	if code != 0 || errb != "" {
+		t.Fatalf("compat flags: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
+		t.Fatal("file still exists")
 	}
 }
 

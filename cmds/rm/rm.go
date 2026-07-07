@@ -5,14 +5,14 @@
 // (BSD-3-Clause).
 // Changes: rewired to the tool framework; manual post-order tree
 // removal for GNU -v output and per-file error continuation; GNU
-// root-protection failsafe (--preserve-root default); the -i/-I/
-// --interactive family is refused (interactive prompting is out of
-// scope for an agent userland).
+// root-protection failsafe (--preserve-root default).
 package rmcmd
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -34,32 +34,31 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type remover struct {
-	rc        *tool.RunContext
-	recursive bool
-	force     bool
-	verbose   bool
-	failed    bool
+	rc           *tool.RunContext
+	recursive    bool
+	force        bool
+	dir          bool
+	interactive  bool
+	preserveRoot bool
+	verbose      bool
+	failed       bool
+	in           *bufio.Reader
 }
 
 func run(rc *tool.RunContext, args []string) int {
-	// The interactive family is documented GNU behavior we
-	// deliberately do not cover: an agent userland never prompts.
-	for _, a := range args {
-		if a == "--" {
-			break
-		}
-		if a == "--interactive" || strings.HasPrefix(a, "--interactive=") {
-			return tool.NotSupported(rc, cmd, "--interactive (prompting requires an interactive user; this agent userland never prompts)")
-		}
-		if len(a) > 1 && a[0] == '-' && a[1] != '-' && strings.ContainsAny(a[1:], "iI") {
-			return tool.NotSupported(rc, cmd, "-i/-I (interactive prompting; this agent userland never prompts)")
-		}
-	}
 	args = foldRShorthand(args)
+	args = normalizeOptionalArgs(args)
 
 	fs := tool.NewFlags(cmd.Name)
 	recursive := fs.BoolP("recursive", "r", false, "remove directories and their contents recursively (-R is identical to -r)")
+	dir := fs.BoolP("dir", "d", false, "remove empty directories")
 	force := fs.BoolP("force", "f", false, "ignore nonexistent files and arguments, never prompt")
+	interactive := fs.BoolP("interactive", "i", false, "prompt before every removal")
+	interactiveOnce := fs.BoolP("interactive-once", "I", false, "prompt once before removing recursively or more than three files")
+	preserveRoot := fs.Bool("preserve-root", true, "do not remove '/'")
+	noPreserveRoot := fs.Bool("no-preserve-root", false, "do not treat '/' specially")
+	fs.Bool("one-file-system", false, "accepted for compatibility; filesystem boundary pruning is a no-op")
+	fs.Bool("progress", false, "accepted for compatibility; progress output is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -72,7 +71,15 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "missing operand")
 	}
 
-	r := &remover{rc: rc, recursive: *recursive, force: *force, verbose: *verbose}
+	ask := (*interactive || *interactiveOnce) && !*force
+	if *interactiveOnce && !*interactive && len(operands) <= 3 && !*recursive {
+		ask = false
+	}
+	r := &remover{
+		rc: rc, recursive: *recursive, force: *force, dir: *dir,
+		interactive: ask, preserveRoot: *preserveRoot && !*noPreserveRoot,
+		verbose: *verbose, in: inputReader(rc.In),
+	}
 	for _, op := range operands {
 		r.remove(op)
 	}
@@ -100,19 +107,27 @@ func (r *remover) remove(op string) {
 		return
 	}
 	if fi.IsDir() {
-		if !r.recursive {
+		if !r.recursive && !r.dir {
 			r.errf("cannot remove '%s': Is a directory", op)
 			return
 		}
-		// GNU --preserve-root default: refuse to operate recursively
-		// on the filesystem root. --no-preserve-root is deliberately
-		// not implemented.
-		if cleaned := filepath.Clean(rp); filepath.Dir(cleaned) == cleaned {
+		// GNU --preserve-root default: refuse to operate on the
+		// filesystem root unless --no-preserve-root was explicit.
+		if r.preserveRoot && filepath.Dir(filepath.Clean(rp)) == filepath.Clean(rp) {
 			r.errf("it is dangerous to operate recursively on '%s'", op)
-			fmt.Fprintf(r.rc.Err, "rm: --no-preserve-root is not supported by pure-Go coreutils\n")
+			return
+		}
+		if r.interactive && !r.confirm(op) {
+			return
+		}
+		if r.dir && !r.recursive {
+			r.removeFile(op)
 			return
 		}
 		r.removeTree(op)
+		return
+	}
+	if r.interactive && !r.confirm(op) {
 		return
 	}
 	r.removeFile(op)
@@ -161,6 +176,23 @@ func (r *remover) verbosef(format string, a ...any) {
 	}
 }
 
+func (r *remover) confirm(op string) bool {
+	fmt.Fprintf(r.rc.Err, "rm: remove '%s'? ", op)
+	line, err := r.in.ReadString('\n')
+	if err != nil && line == "" {
+		return false
+	}
+	line = strings.TrimSpace(line)
+	return line == "y" || line == "Y" || strings.EqualFold(line, "yes")
+}
+
+func inputReader(r io.Reader) *bufio.Reader {
+	if r == nil {
+		r = strings.NewReader("")
+	}
+	return bufio.NewReader(r)
+}
+
 // foldRShorthand rewrites -R into -r inside short-option clusters
 // (before any "--" terminator). GNU rm treats -R and -r identically;
 // pflag cannot attach two shorthands to one flag and inventing a
@@ -175,6 +207,27 @@ func foldRShorthand(args []string) []string {
 		}
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
 			out[i] = strings.ReplaceAll(a, "R", "r")
+		}
+	}
+	return out
+}
+
+func normalizeOptionalArgs(args []string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a == "--" {
+			break
+		}
+		switch {
+		case a == "--interactive=always" || a == "--interactive=yes":
+			out[i] = "--interactive"
+		case a == "--interactive=once":
+			out[i] = "--interactive-once"
+		case a == "--interactive=never" || a == "--interactive=no" || a == "--interactive=none":
+			out[i] = "--force"
+		case a == "--preserve-root=all":
+			out[i] = "--preserve-root"
 		}
 	}
 	return out

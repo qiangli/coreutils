@@ -31,22 +31,47 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	noCreate := fs.BoolP("no-create", "c", false, "do not create any files")
 	size := fs.StringP("size", "s", "", "set or adjust the file size by SIZE bytes")
+	reference := fs.StringP("reference", "r", "", "base the size on RFILE")
+	ioBlocks := fs.BoolP("io-blocks", "o", false, "treat SIZE as number of 512-byte I/O blocks")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
-	if *size == "" {
-		return tool.UsageError(rc, cmd, "you must specify '--size'")
+	if *size == "" && *reference == "" {
+		return tool.UsageError(rc, cmd, "you must specify either '--size' or '--reference'")
 	}
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing file operand")
 	}
-	value, rel, perr := parseSize(*size)
-	if perr != nil {
-		if errors.Is(perr, errSizePrefix) {
-			return tool.NotSupported(rc, cmd, fmt.Sprintf("the '%c' size prefix", (*size)[0]))
+	var value int64
+	var rel int
+	if *size != "" {
+		var perr error
+		value, rel, perr = parseSize(*size)
+		if perr != nil {
+			if errors.Is(perr, errSizePrefix) {
+				return tool.NotSupported(rc, cmd, fmt.Sprintf("the '%c' size prefix", (*size)[0]))
+			}
+			return tool.UsageError(rc, cmd, "invalid number: '%s'", *size)
 		}
-		return tool.UsageError(rc, cmd, "invalid number: '%s'", *size)
+		if *ioBlocks {
+			if value > (1<<63-1)/512 {
+				return tool.UsageError(rc, cmd, "invalid number: '%s'", *size)
+			}
+			value *= 512
+		}
+	}
+	refSize := int64(0)
+	if *reference != "" {
+		fi, err := os.Stat(rc.Path(*reference))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "truncate: cannot stat '%s': %v\n", *reference, reason(err))
+			return 1
+		}
+		refSize = fi.Size()
+		if *size == "" {
+			value = refSize
+		}
 	}
 
 	exit := 0
@@ -78,6 +103,9 @@ func run(rc *tool.RunContext, args []string) int {
 		final := value
 		if rel != 0 {
 			final = st.Size() + int64(rel)*value
+			if *reference != "" {
+				final = refSize + int64(rel)*value
+			}
 		}
 		if final < 0 {
 			final = 0
