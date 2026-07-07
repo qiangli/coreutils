@@ -14,11 +14,16 @@ import (
 // runTool is the canonical test harness shape for cmds packages.
 func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolIn(t, dir, "", args...)
+}
+
+func runToolIn(t *testing.T, dir, input string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
@@ -189,6 +194,111 @@ func TestLnForce(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(dir, "b"))
 	if string(got) != "a" {
 		t.Errorf("after -f content=%q", got)
+	}
+}
+
+func TestLnBackupAndSuffix(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dest"), "old")
+	_, errb, code := runTool(t, dir, "-b", "-S", ".bak", "src", "dest")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -b -S: code=%d err=%q", code, errb)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "dest"))
+	if string(got) != "new" {
+		t.Errorf("dest content=%q", got)
+	}
+	backup, err := os.ReadFile(filepath.Join(dir, "dest.bak"))
+	if err != nil || string(backup) != "old" {
+		t.Errorf("backup content=%q err=%v", backup, err)
+	}
+}
+
+func TestLnBackupExistingUsesNumberedWhenPresent(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dest"), "old")
+	write(t, filepath.Join(dir, "dest.~1~"), "older")
+	_, errb, code := runTool(t, dir, "--backup", "src", "dest")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln --backup: code=%d err=%q", code, errb)
+	}
+	backup, err := os.ReadFile(filepath.Join(dir, "dest.~2~"))
+	if err != nil || string(backup) != "old" {
+		t.Errorf("numbered backup content=%q err=%v", backup, err)
+	}
+}
+
+func TestLnInteractiveAcceptsAndDeclines(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dest"), "old")
+	_, errb, code := runToolIn(t, dir, "n\n", "-i", "src", "dest")
+	if code != 0 || !strings.Contains(errb, "replace 'dest'?") {
+		t.Fatalf("ln -i decline: code=%d err=%q", code, errb)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "dest"))
+	if string(got) != "old" {
+		t.Errorf("declined replacement content=%q", got)
+	}
+	_, errb, code = runToolIn(t, dir, "y\n", "-i", "src", "dest")
+	if code != 0 || !strings.Contains(errb, "replace 'dest'?") {
+		t.Fatalf("ln -i accept: code=%d err=%q", code, errb)
+	}
+	got, _ = os.ReadFile(filepath.Join(dir, "dest"))
+	if string(got) != "new" {
+		t.Errorf("accepted replacement content=%q", got)
+	}
+}
+
+func TestLnForceAndInteractiveLastOptionWins(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dest"), "old")
+	_, errb, code := runToolIn(t, dir, "n\n", "-f", "-i", "src", "dest")
+	if code != 0 || !strings.Contains(errb, "replace 'dest'?") {
+		t.Fatalf("ln -f -i: code=%d err=%q", code, errb)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "dest"))
+	if string(got) != "old" {
+		t.Errorf("-f -i should obey prompt, got %q", got)
+	}
+	_, errb, code = runToolIn(t, dir, "n\n", "-i", "-f", "src", "dest")
+	if code != 0 || strings.Contains(errb, "replace 'dest'?") {
+		t.Fatalf("ln -i -f: code=%d err=%q", code, errb)
+	}
+	got, _ = os.ReadFile(filepath.Join(dir, "dest"))
+	if string(got) != "new" {
+		t.Errorf("-i -f should force replacement, got %q", got)
+	}
+}
+
+func TestLnLogicalAndPhysicalSourceSymlink(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "real"), "real")
+	if err := os.Symlink("real", filepath.Join(dir, "sym")); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-L", "sym", "logical")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -L: code=%d err=%q", code, errb)
+	}
+	if target, err := os.Readlink(filepath.Join(dir, "logical")); err == nil {
+		t.Fatalf("ln -L created symlink hard link to %q, want regular file", target)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "logical"))
+	if string(got) != "real" {
+		t.Errorf("logical content=%q", got)
+	}
+	_, errb, code = runTool(t, dir, "-P", "sym", "physical")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -P: code=%d err=%q", code, errb)
+	}
+	target, err := os.Readlink(filepath.Join(dir, "physical"))
+	if err != nil || target != "real" {
+		t.Errorf("physical readlink=%q err=%v", target, err)
 	}
 }
 
