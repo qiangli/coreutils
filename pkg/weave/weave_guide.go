@@ -95,6 +95,18 @@ Always list repo-specific traps (e.g. "submodule: bump the umbrella pin separate
 after pushing"; "native access gate must stay fail-closed"). Review the DIFF before
 merging, not just the exit code. Keep issues ≤3 points; split bigger work.
 
+## The kb loop (host knowledge base — check before, write back after)
+` + "`bashy kb`" + ` is the collective memory of ALL agents on this host across ALL
+repos (~/.bashy/kb). The discipline that stops the fleet repeating errors:
+  • BEFORE decomposing/dispatching: ` + "`bashy kb search <goal terms>`" + ` — known
+    traps become the issue body's KNOWN TRAPS section for free.
+  • Workers get the check done FOR them: ` + "`weave start`" + ` drops KB.md (top
+    matches + the write-back instruction) into every workspace.
+  • AT RETRO (after converge): ` + "`bashy kb retro <terms>`" + ` and decide ONE —
+    add / update / supersede / validate / noop. Validate what proved out
+    (` + "`bashy kb validate <slug> --evidence \"<gate cmd/commit>\"`" + `), supersede
+    what proved wrong. Distilled strategy only, never transcripts.
+
 ## The loop
 1. PREFLIGHT — ` + "`bashy weave fleet --probe`" + `. Assign ONLY tools reported
    available (installed on PATH AND not cooling down). NEVER launch a tool shown

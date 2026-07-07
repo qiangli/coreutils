@@ -108,6 +108,10 @@ func (s *Session) runDAGTarget(ctx context.Context, dir string, task *dag.Task) 
 func (s *Session) composeDAGPrompt(task *dag.Task) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal:\n%s\n\n", s.state.Goal)
+	if note := s.kbPreamble(); note != "" {
+		b.WriteString(note)
+		b.WriteByte('\n')
+	}
 	if len(s.history) > 0 {
 		b.WriteString("Session history:\n")
 		for _, h := range s.history {

@@ -957,16 +957,18 @@ func weaveInjectMemoryFileWithPrefix(dir, workspace string, it *weaveItem, prefi
 	if err := os.WriteFile(filepath.Join(workspace, "WEAVE_MEMORY.md"), []byte(b.String()), 0o644); err != nil {
 		return err
 	}
-	return weaveExcludeWorkspaceMemory(workspace)
+	return weaveExcludeWorkspaceFile(workspace, "WEAVE_MEMORY.md")
 }
 
-func weaveExcludeWorkspaceMemory(workspace string) error {
+// weaveExcludeWorkspaceFile marks a workspace drop (WEAVE_MEMORY.md, KB.md)
+// as git-excluded so it can never ride a merge.
+func weaveExcludeWorkspaceFile(workspace, name string) error {
 	exclude := filepath.Join(workspace, ".git", "info", "exclude")
 	b, err := os.ReadFile(exclude)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if strings.Contains(string(b), "\nWEAVE_MEMORY.md\n") || strings.HasSuffix(string(b), "\nWEAVE_MEMORY.md") || strings.HasPrefix(string(b), "WEAVE_MEMORY.md\n") {
+	if strings.Contains(string(b), "\n"+name+"\n") || strings.HasSuffix(string(b), "\n"+name) || strings.HasPrefix(string(b), name+"\n") {
 		return nil
 	}
 	f, err := os.OpenFile(exclude, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -979,7 +981,7 @@ func weaveExcludeWorkspaceMemory(workspace string) error {
 			return err
 		}
 	}
-	_, err = f.WriteString("WEAVE_MEMORY.md\n")
+	_, err = f.WriteString(name + "\n")
 	return err
 }
 
@@ -2177,6 +2179,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	}
 	if err := weaveInjectMemoryFileWithPrefix(dir, workspace, it, memoryPrefix); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory inject failed (continuing): %v\n", err)
+	}
+	if err := weaveInjectKBFile(dir, workspace, it); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: kb inject failed (continuing): %v\n", err)
 	}
 	if mode != weavecli.OutputJSON {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave start: issue #%d workspace=%s branch=%s\n", it.ID, workspace, branch)

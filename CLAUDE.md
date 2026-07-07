@@ -268,7 +268,12 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   dag), `pkg/schedule` (bashy's modern cron, robfig/cron), `pkg/sdlc`
   (the label-driven SDLC control plane), `pkg/secrets` (the
   cloudbox-vault client behind `bashy secrets`), `pkg/skills` (the dhnt
-  skill-CNL mechanism), `pkg/chat` + `pkg/ollm` (agent chat / Ollama
+  skill-CNL mechanism), `pkg/kb` (the host-scope shared knowledge base
+  behind `bashy kb`: OKF-style wiki pages under `~/.bashy/kb` — the
+  collective memory of all agents on the host across all repos;
+  reconcile-on-write, supersede-not-delete, candidate→validated ladder;
+  weave/foreman auto-inject its top matches at spawn — see
+  dhnt/docs/kb-host-knowledge-base-design.md), `pkg/chat` + `pkg/ollm` (agent chat / Ollama
   client isolation), `pkg/browser` + `pkg/webinspect` (chromedp-backed
   browser sessions for `cmds/browser`/`fetch`), `pkg/coopauth` (the ONE
   shared cloudbox/outpost cooperative-auth impl), `pkg/bre` (POSIX BRE →

@@ -26,6 +26,7 @@ type Session struct {
 	state   State
 	runner  chat.Runner
 	history []string
+	kbNote  *string // cached host-kb preamble for the session goal
 	mu      sync.Mutex
 }
 
@@ -168,6 +169,10 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 func (s *Session) composePrompt(msg string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal:\n%s\n\n", s.state.Goal)
+	if note := s.kbPreamble(); note != "" {
+		b.WriteString(note)
+		b.WriteByte('\n')
+	}
 	if len(s.history) > 0 {
 		b.WriteString("Session history:\n")
 		for _, h := range s.history {
