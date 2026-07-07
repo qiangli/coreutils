@@ -11,10 +11,10 @@ The comparison is based on command inventory plus each command's `--help` output
 
 | Measure | Count |
 |---|---:|
-| Local registered commands (`cmds/all`) | 111 |
+| Local registered commands (`cmds/all`) | 126 |
 | uutils commands (`coreutils --list`) | 79 |
-| Commands present in both | 58 |
-| uutils commands missing locally | 21 |
+| Commands present in both | 73 |
+| uutils commands missing locally | 6 |
 | Local commands not in uutils coreutils set | 53 |
 
 The local implementation generally exposes smaller GNU subsets per command. It also uses long `--help` / `--version` as framework-wide options for most tools, while uutils commonly exposes short `-h` / `-V` aliases too. Commands with only that universal alias gap are: `basename`, `cat`, `dirname`, `link`, `pwd`, `sleep`, `tsort`, `unlink`, and `yes`. `true` and `false` do not expose the local framework help/version options.
@@ -23,7 +23,7 @@ The local implementation generally exposes smaller GNU subsets per command. It a
 
 These commands exist in uutils but are not registered in local `cmds/all`:
 
-`[`, `b2sum`, `basenc`, `cksum`, `csplit`, `expand`, `expr`, `factor`, `fmt`, `fold`, `more`, `nl`, `numfmt`, `od`, `pathchk`, `pr`, `printf`, `ptx`, `sum`, `test`, `unexpand`.
+`[`, `expr`, `factor`, `pathchk`, `printf`, `test`.
 
 ## Local commands outside uutils coreutils
 

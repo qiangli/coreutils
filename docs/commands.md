@@ -72,6 +72,11 @@ Text — reading and slicing:
 | cmp | u-root | -l, -s (diffutils, but prior art covers it) |
 | strings | u-root | -n, -t |
 | hexdump | u-root | -C subset (od lands in Phase B) |
+| csplit | fresh | line numbers, /REGEXP/, %REGEXP%, -f, -n, -s, -k |
+| nl | fresh | -b a/t/n, -n ln/rn/rz, -s, -w |
+| od | fresh | default octal words; -A d/o/x/n, -t x1/o1/o2/c/d1, -N, -j |
+| pr | fresh | sequential non-interactive pagination; -l, -w, -t |
+| more | fresh | non-interactive pager fallback; stdin/files passthrough |
 
 Text — transform and combine:
 
@@ -87,6 +92,11 @@ Text — transform and combine:
 | tee | guonaihong, u-root | -a, -i |
 | tsort | u-root | (in prior art, so it rides along) |
 | shuf | guonaihong | -n, -e, -i; randomness is the upstream-documented exception to determinism |
+| expand / unexpand | fresh | -t; -a for unexpand |
+| fold | fresh | -w, -b, -s |
+| fmt | fresh | practical paragraph wrapping; -w, -s |
+| numfmt | fresh | --from=none/auto/si/iec/iec-i; --to=none/si/iec/iec-i; --format |
+| ptx | fresh | deterministic permuted index; -f, -i, -o |
 
 Environment, system, misc:
 
@@ -112,8 +122,12 @@ Checksums and encoding:
 | Command | Sources | Notes |
 |---|---|---|
 | base64 / base32 | guonaihong, u-root | -d, -i, -w |
+| basenc | written fresh | --base64, --base64url, --base32, --base32hex, --base16; -d, -i, -w |
+| b2sum | written fresh | BLAKE2b-512 via shared checksum engine |
+| cksum | written fresh | POSIX CRC default |
 | md5sum | guonaihong, u-root | -c, -b, --tag |
 | sha1/224/256/384/512sum | guonaihong, u-root (shasum) | one shared engine |
+| sum | written fresh | BSD default/-r and System V -s |
 
 Extensions (beyond coreutils, prior art in tree):
 
@@ -139,15 +153,6 @@ or NO.
 | printf | %s %d %x %o %c %b %% escapes, width/precision |
 | test / [ | standalone (the sh interp builtin covers in-shell use) |
 | expr | arithmetic + string ops |
-| nl | -b, -n, -s, -w subset |
-| fold | -w, -b, -s |
-| expand / unexpand | -t; -a (unexpand) |
-| od | -A, -t, -N, -j subset |
-| cksum | POSIX CRC default |
-| b2sum | needs x/crypto (dep-budget review) |
-| basenc | covers base64/32 variants beyond the Phase A pair |
-| csplit | split's sibling |
-| numfmt | --to/--from common units |
 | nproc | --all, --ignore |
 | arch | trivial `uname -m` alias |
 | tail -f | follow mode for the Phase A tail (polling, cross-platform) |
@@ -186,8 +191,8 @@ semantics, not an implementation shortcut. Still NO (↻ = revisit):
 
 **Low agent value / legacy / dangerous:**
 
-- ptx, factor, pr, fmt, sum, pathchk
-- more/man (interactive pagers)
+- factor, pathchk
+- man (interactive pager)
 
 **System administration (in u-root's tree, out of scope for an agent
 userland — outpost/ycode own these concerns):**
