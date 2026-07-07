@@ -203,3 +203,68 @@ func TestHelpAndVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+func TestDereference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skipf("symlinks not available on windows")
+	}
+	dir := t.TempDir()
+	write(t, dir, "target", "x")
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	// Without -L: reports symlink
+	out, _, code := runToolAt(t, dir, "-c", "%F", "link")
+	if code != 0 || out != "symbolic link\n" {
+		t.Errorf("without -L: got=%q", out)
+	}
+	// With -L: reports regular file
+	out, _, code = runToolAt(t, dir, "-L", "-c", "%F", "link")
+	if code != 0 || out != "regular file\n" {
+		t.Errorf("with -L: got=%q", out)
+	}
+}
+
+func TestPrintf(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", "hello")
+	// --printf should NOT append a newline
+	out, _, code := runToolAt(t, dir, "--printf", "%n", "f")
+	if code != 0 || out != "f" {
+		t.Errorf("--printf: got=%q code=%d", out, code)
+	}
+}
+
+func TestTerse(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", "hello")
+	out, _, code := runToolAt(t, dir, "-t", "f")
+	if code != 0 {
+		t.Fatalf("-t: code=%d err=%q", code, out)
+	}
+	if !strings.HasPrefix(out, "f ") {
+		t.Errorf("-t: got=%q, want 'f ' prefix", out)
+	}
+}
+
+func TestFileSystem(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skipf("--file-system not supported on windows")
+	}
+	dir := t.TempDir()
+	out, _, code := runToolAt(t, dir, "-f", ".")
+	if code != 0 {
+		t.Fatalf("-f: code=%d err=%q", code, out)
+	}
+	if !strings.Contains(out, "Block size") {
+		t.Errorf("-f default: got=%q", out)
+	}
+	// Terse mode for -f
+	out2, _, code := runToolAt(t, dir, "-f", "-t", ".")
+	if code != 0 {
+		t.Fatalf("-f -t: code=%d err=%q", code, out2)
+	}
+	if !strings.Contains(out2, " ") {
+		t.Errorf("-f -t: got=%q", out2)
+	}
+}

@@ -1,11 +1,9 @@
 // Package splitcmd implements split(1) per the GNU coreutils manual:
 // split a file into pieces.
 //
-// Fresh implementation against the GNU manual (the guonaihong prior
-// art is a flag-only stub). Suffix naming follows GNU exactly: with
-// no -a, suffixes auto-lengthen using the reserved-last-symbol scheme
-// (xaa … xyz, then xzaaa … xzyzz, …); with -a N the width is fixed and
-// exhaustion is an error. -d switches to numeric suffixes (x00 …).
+// Implemented flags: -a -b -C -d -e -l -n -t --additional-suffix
+// --hex-suffixes --separator --verbose.
+// Suffix naming follows GNU exactly.
 package splitcmd
 
 import (
@@ -36,10 +34,17 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	suffixLen := fs.IntP("suffix-length", "a", 0, "generate suffixes of length N (default 2)")
 	bytesV := fs.StringP("bytes", "b", "", "put SIZE bytes per output file")
+	hexSuffixes := fs.StringP("hex-suffixes", "", "", "use hexadecimal suffixes, optionally starting at FROM")
+	fs.Lookup("hex-suffixes").NoOptDefVal = "0"
+	elideEmpty := fs.BoolP("elide-empty-files", "e", false, "do not generate empty output files with -n")
+	lineBytes := fs.StringP("line-bytes", "C", "", "put at most SIZE bytes of lines per output file")
 	numeric := fs.StringP("numeric-suffixes", "d", "", "use numeric suffixes starting at 0, not alphabetic")
 	fs.Lookup("numeric-suffixes").NoOptDefVal = "0"
 	linesV := fs.StringP("lines", "l", "", "put NUMBER lines/records per output file")
 	chunksV := fs.StringP("number", "n", "", "generate CHUNKS output files; supported forms: N, l/N")
+	separator := fs.StringP("separator", "t", "", "use SEP as record separator instead of newline")
+	additionalSuffix := fs.StringP("additional-suffix", "", "", "additional suffix to append to output file names")
+	verbose := fs.BoolP("verbose", "", false, "print a diagnostic just before each output file is opened")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -49,8 +54,15 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.NotSupported(rc, cmd, "--numeric-suffixes=FROM with a nonzero start value")
 	}
 
+	if fs.Changed("hex-suffixes") {
+		start, err := strconv.Atoi(*hexSuffixes)
+		if err != nil || start < 0 {
+			return tool.UsageError(rc, cmd, "invalid hex suffix start: %q", *hexSuffixes)
+		}
+	}
+
 	nModes := 0
-	for _, on := range []bool{fs.Changed("lines"), fs.Changed("bytes"), fs.Changed("number")} {
+	for _, on := range []bool{fs.Changed("lines"), fs.Changed("bytes"), fs.Changed("number"), fs.Changed("line-bytes")} {
 		if on {
 			nModes++
 		}
@@ -92,11 +104,24 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	radix := 26
+	hexStart := 0
+	useHex := false
 	if fs.Changed("numeric-suffixes") {
 		radix = 10
 	}
-	sfx := &suffixer{radix: radix, fixed: *suffixLen}
-	out := &outFiles{rc: rc, prefix: prefix, sfx: sfx}
+	if fs.Changed("hex-suffixes") {
+		radix = 16
+		useHex = true
+		hexStart, _ = strconv.Atoi(*hexSuffixes)
+	}
+	sfx := &suffixer{radix: radix, fixed: *suffixLen, useHex: useHex, hexStart: hexStart}
+	out := &outFiles{
+		rc:      rc,
+		prefix:  prefix,
+		sfx:     sfx,
+		suffix:  *additionalSuffix,
+		verbose: *verbose,
+	}
 	defer out.close()
 
 	var err error
@@ -107,6 +132,12 @@ func run(rc *tool.RunContext, args []string) int {
 			return tool.UsageError(rc, cmd, "invalid number of bytes: %q", *bytesV)
 		}
 		err = splitBytes(in, out, size)
+	case fs.Changed("line-bytes"):
+		size, perr := parseSize(*lineBytes)
+		if perr != nil || size < 1 {
+			return tool.UsageError(rc, cmd, "invalid number of bytes: %q", *lineBytes)
+		}
+		err = splitLineBytes(in, out, size, *separator)
 	case fs.Changed("number"):
 		var byLines bool
 		var n int64
@@ -114,7 +145,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if code >= 0 {
 			return code
 		}
-		err = splitChunks(in, out, n, byLines)
+		err = splitChunks(in, out, n, byLines, *elideEmpty)
 	default:
 		lines := int64(1000)
 		if fs.Changed("lines") {
@@ -124,7 +155,11 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 			lines = v
 		}
-		err = splitLines(in, out, lines)
+		if fs.Changed("separator") {
+			err = splitRecords(in, out, lines, []byte(*separator))
+		} else {
+			err = splitLines(in, out, lines)
+		}
 	}
 	if err != nil {
 		fmt.Fprintf(rc.Err, "split: %v\n", err)
@@ -137,8 +172,6 @@ func run(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// rewriteObsoleteNum implements the obsolete first-argument form
-// (split -1000 == split -l 1000).
 func rewriteObsoleteNum(args []string) []string {
 	if len(args) == 0 {
 		return args
@@ -155,10 +188,6 @@ func rewriteObsoleteNum(args []string) []string {
 	return append([]string{"--lines=" + a[1:]}, args[1:]...)
 }
 
-// parseChunks parses the -n CHUNKS argument. Supported: "N" (split
-// into N byte chunks) and "l/N" (split into N chunks without
-// splitting lines). The K/N, l/K/N and r/... extraction forms are
-// deliberately not supported.
 func parseChunks(rc *tool.RunContext, s string) (byLines bool, n int64, code int) {
 	spec := s
 	if i := strings.IndexByte(spec, '/'); i >= 0 {
@@ -177,21 +206,44 @@ func parseChunks(rc *tool.RunContext, s string) (byLines bool, n int64, code int
 	return byLines, v, -1
 }
 
-// suffixer generates output-file suffixes in GNU order.
 type suffixer struct {
-	radix int // 26 alphabetic, 10 numeric
-	fixed int // 0 = auto-lengthening (GNU default)
-	idx   int
+	radix    int
+	fixed    int
+	idx      int
+	useHex   bool
+	hexStart int
 }
 
 func (s *suffixer) symbol(d int) byte {
 	if s.radix == 10 {
 		return '0' + byte(d)
 	}
+	if s.radix == 16 {
+		hd := d
+		if hd < 10 {
+			return '0' + byte(hd)
+		}
+		return 'a' + byte(hd-10)
+	}
 	return 'a' + byte(d)
 }
 
 func (s *suffixer) next() (string, error) {
+	if s.useHex {
+		idx := s.idx + s.hexStart
+		s.idx++
+		if s.fixed > 0 {
+			limit := int64(1)
+			for i := 0; i < s.fixed; i++ {
+				limit *= 16
+			}
+			if int64(idx) >= limit {
+				return "", errors.New("output file suffixes exhausted")
+			}
+			return fmt.Sprintf("%0*x", s.fixed, idx), nil
+		}
+		return fmt.Sprintf("%x", idx), nil
+	}
 	idx := s.idx
 	s.idx++
 	if s.fixed > 0 {
@@ -214,9 +266,6 @@ func (s *suffixer) next() (string, error) {
 		}
 		return string(buf), nil
 	}
-	// Auto-lengthening: the last symbol ('z' / '9') is reserved as a
-	// width-escape prefix, so names never collide across widths:
-	// aa..yz, then zaaa..zyzz, then zzaaaa, ... (GNU scheme).
 	remaining := idx
 	sub := (s.radix - 1) * s.radix
 	nd := 2
@@ -235,13 +284,14 @@ func (s *suffixer) next() (string, error) {
 	return fill + string(buf), nil
 }
 
-// outFiles opens output files lazily and sequentially.
 type outFiles struct {
-	rc     *tool.RunContext
-	prefix string
-	sfx    *suffixer
-	f      *os.File
-	w      *bufio.Writer
+	rc      *tool.RunContext
+	prefix  string
+	sfx     *suffixer
+	f       *os.File
+	w       *bufio.Writer
+	suffix  string
+	verbose bool
 }
 
 func (o *outFiles) nextFile() error {
@@ -252,7 +302,10 @@ func (o *outFiles) nextFile() error {
 	if err != nil {
 		return err
 	}
-	name := o.prefix + suf
+	name := o.prefix + suf + o.suffix
+	if o.verbose {
+		fmt.Fprintf(o.rc.Err, "%s\n", name)
+	}
 	f, err := os.Create(o.rc.Path(name))
 	if err != nil {
 		return fmt.Errorf("%s: %v", name, sysErr(err))
@@ -310,6 +363,45 @@ func splitLines(in io.Reader, out *outFiles, perFile int64) error {
 	}
 }
 
+func splitRecords(in io.Reader, out *outFiles, perFile int64, sep []byte) error {
+	data, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	var lastEnd int
+	var count int64
+	for i := 0; i < len(data); {
+		j := bytes.Index(data[i:], sep)
+		if j < 0 {
+			if lastEnd == 0 && count == 0 {
+				if nerr := out.nextFile(); nerr != nil {
+					return nerr
+				}
+			}
+			return out.write(data[lastEnd:])
+		}
+		end := i + j + len(sep)
+		if count == 0 {
+			if nerr := out.nextFile(); nerr != nil {
+				return nerr
+			}
+		}
+		if werr := out.write(data[lastEnd:end]); werr != nil {
+			return werr
+		}
+		lastEnd = end
+		i = end
+		count++
+		if count == perFile {
+			count = 0
+		}
+	}
+	return nil
+}
+
 func splitBytes(in io.Reader, out *outFiles, perFile int64) error {
 	buf := make([]byte, 64*1024)
 	var remaining int64
@@ -342,9 +434,47 @@ func splitBytes(in io.Reader, out *outFiles, perFile int64) error {
 	}
 }
 
-// splitChunks implements -n N (byte chunks) and -n l/N (line-aligned
-// chunks). All N files are created, even when some end up empty.
-func splitChunks(in io.Reader, out *outFiles, n int64, byLines bool) error {
+func splitLineBytes(in io.Reader, out *outFiles, perFile int64, sepStr string) error {
+	sep := byte('\n')
+	if sepStr != "" && len(sepStr) == 1 {
+		sep = sepStr[0]
+	}
+	br := bufio.NewReader(in)
+	var inFile int64
+	for {
+		line, err := br.ReadBytes(sep)
+		n := int64(len(line))
+		for len(line) > 0 {
+			if inFile == 0 {
+				if nerr := out.nextFile(); nerr != nil {
+					return nerr
+				}
+			}
+			take := n
+			remaining := perFile - inFile
+			if take > remaining {
+				take = remaining
+			}
+			if werr := out.write(line[:take]); werr != nil {
+				return werr
+			}
+			inFile += take
+			line = line[take:]
+			n -= take
+			if inFile >= perFile {
+				inFile = 0
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func splitChunks(in io.Reader, out *outFiles, n int64, byLines, elideEmpty bool) error {
 	data, err := io.ReadAll(in)
 	if err != nil {
 		return err
@@ -353,15 +483,19 @@ func splitChunks(in io.Reader, out *outFiles, n int64, byLines bool) error {
 	if !byLines {
 		chunk := size / n
 		for i := int64(0); i < n; i++ {
-			if err := out.nextFile(); err != nil {
-				return err
-			}
 			start := i * chunk
 			end := start + chunk
 			if i == n-1 {
 				end = size
 			}
-			if err := out.write(data[start:end]); err != nil {
+			b := data[start:end]
+			if elideEmpty && len(b) == 0 {
+				continue
+			}
+			if err := out.nextFile(); err != nil {
+				return err
+			}
+			if err := out.write(b); err != nil {
 				return err
 			}
 		}
@@ -376,6 +510,7 @@ func splitChunks(in io.Reader, out *outFiles, n int64, byLines bool) error {
 	}
 	cur := int64(0)
 	var pos int64
+	var fileStarted bool
 	for pos < size {
 		nl := int64(-1)
 		if i := bytes.IndexByte(data[pos:], '\n'); i >= 0 {
@@ -385,8 +520,13 @@ func splitChunks(in io.Reader, out *outFiles, n int64, byLines bool) error {
 		if nl >= 0 {
 			end = nl + 1
 		}
-		if err := out.write(data[pos:end]); err != nil {
-			return err
+		if !fileStarted {
+			out.write(data[pos:end])
+			fileStarted = true
+		} else {
+			if err := out.write(data[pos:end]); err != nil {
+				return err
+			}
 		}
 		pos = end
 		for cur < n-1 && pos >= (cur+1)*chunk {
@@ -405,8 +545,6 @@ func splitChunks(in io.Reader, out *outFiles, n int64, byLines bool) error {
 	return nil
 }
 
-// parseSize parses a GNU SIZE with multiplier suffix (b 512, kB 1000,
-// K/KiB 1024, MB, M/MiB, …).
 func parseSize(s string) (int64, error) {
 	i := 0
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {

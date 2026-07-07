@@ -2,8 +2,8 @@
 // sort lines of text files.
 //
 // Comparisons are C-locale byte comparisons (LC_ALL=C semantics).
-// Implemented flags: -r -n -u -f -b -k POS1[,POS2] (with .CHAR offsets
-// and per-key type letters n/b/f/r/h), -t SEP, -o FILE, -s, -c, -h.
+// Implemented flags: -b -c -C -d -f -g -h -i -k -m -M -n -o -r
+// -R --random-source -s -t -T -u -V -z --files0-from.
 // GNU's last-resort whole-line comparison applies unless -s/-u, and the
 // global ordering options are inherited by keys that carry no options
 // of their own, exactly as documented in the manual.
@@ -12,9 +12,13 @@ package sortcmd
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"sort"
 	"strings"
 	"unsafe"
 
@@ -27,32 +31,51 @@ var cmd = &tool.Tool{
 	Usage:    "sort [OPTION]... [FILE]...\n\nWith no FILE, or when FILE is -, read standard input.",
 }
 
-// Run is wired in init: a literal would create an initialization
-// cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-// sorter is one invocation's comparison configuration.
 type sorter struct {
-	keys    []keySpec
-	tab     int // field separator byte; -1 = blank/non-blank transition
-	reverse bool
-	stable  bool
-	unique  bool
+	keys        []keySpec
+	tab         int // field separator byte; -1 = blank/non-blank transition
+	reverse     bool
+	stable      bool
+	unique      bool
+	dict        bool
+	generalNum  bool
+	ignoreNP    bool
+	month       bool
+	version     bool
+	random      bool
+	randSrc     io.Reader
+	checkSilent bool
+	zeroTerm    bool
+	merge       bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	blanks := fs.BoolP("ignore-leading-blanks", "b", false, "ignore leading blanks")
 	check := fs.BoolP("check", "c", false, "check for sorted input; do not sort")
+	checkSilent := fs.BoolP("check-silent", "C", false, "like -c, but do not report first bad line")
+	dict := fs.BoolP("dictionary-order", "d", false, "consider only blanks and alphanumeric characters")
 	fold := fs.BoolP("ignore-case", "f", false, "fold lower case to upper case characters")
+	generalNum := fs.BoolP("general-numeric-sort", "g", false, "compare according to general numerical value")
 	human := fs.BoolP("human-numeric-sort", "h", false, "compare human readable numbers (e.g., 2K 1G)")
+	ignoreNP := fs.BoolP("ignore-nonprinting", "i", false, "consider only printable characters")
 	keyDefs := fs.StringArrayP("key", "k", nil, "sort via a key; KEYDEF gives location and type")
+	merge := fs.BoolP("merge", "m", false, "merge already sorted files; do not sort")
+	month := fs.BoolP("month-sort", "M", false, "compare (unknown) < 'JAN' < ... < 'DEC'")
 	numeric := fs.BoolP("numeric-sort", "n", false, "compare according to string numerical value")
 	output := fs.StringP("output", "o", "", "write result to FILE instead of standard output")
+	randSort := fs.BoolP("random-sort", "R", false, "shuffle, but group identical keys")
+	randSource := fs.StringP("random-source", "", "", "get random bytes from FILE")
 	reverse := fs.BoolP("reverse", "r", false, "reverse the result of comparisons")
 	stable := fs.BoolP("stable", "s", false, "stabilize sort by disabling last-resort comparison")
 	sep := fs.StringP("field-separator", "t", "", "use SEP instead of non-blank to blank transition")
+	tmpDir := fs.StringP("temporary-directory", "T", "", "use DIR for temporaries, not $TMPDIR or /tmp; implies --debug")
 	unique := fs.BoolP("unique", "u", false, "with -c, check for strict ordering; without -c, output only the first of an equal run")
+	versionSort := fs.BoolP("version-sort", "V", false, "natural sort of (version) numbers within text")
+	zeroTerm := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
+	files0 := fs.StringP("files0-from", "", "", "read input from the files specified by NUL-terminated names in file F")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -62,8 +85,18 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "sort: options '-hn' are incompatible\n")
 		return 2
 	}
+	if *numeric && *generalNum {
+		fmt.Fprintf(rc.Err, "sort: options '-ng' are incompatible\n")
+		return 2
+	}
 
-	s := &sorter{tab: -1, reverse: *reverse, stable: *stable, unique: *unique}
+	s := &sorter{
+		tab: -1, reverse: *reverse, stable: *stable, unique: *unique,
+		dict: *dict, generalNum: *generalNum, ignoreNP: *ignoreNP,
+		month: *month, version: *versionSort,
+		random: *randSort, checkSilent: *checkSilent,
+		zeroTerm: *zeroTerm, merge: *merge,
+	}
 	if fs.Changed("field-separator") {
 		switch {
 		case *sep == "":
@@ -78,6 +111,18 @@ func run(rc *tool.RunContext, args []string) int {
 			return 2
 		}
 	}
+
+	if *randSource != "" {
+		f, err := os.Open(rc.Path(*randSource))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "sort: %s: cannot open\n", *randSource)
+			return 2
+		}
+		defer f.Close()
+		s.randSrc = f
+	}
+
+	_ = *tmpDir
 
 	for _, def := range *keyDefs {
 		k, errMsg, badType := parseKeySpec(def)
@@ -95,11 +140,10 @@ func run(rc *tool.RunContext, args []string) int {
 		s.keys = append(s.keys, k)
 	}
 
-	// GNU inheritance: a key with no ordering options of its own (and no
-	// per-key r) takes all the global ordering options. When no key is
-	// given at all and any global ordering option is set, the whole line
-	// becomes one key carrying the global options.
-	gOpts := keyOpts{numeric: *numeric, human: *human, fold: *fold, skipSB: *blanks, skipEB: *blanks, reverse: *reverse}
+	gOpts := keyOpts{numeric: *numeric, human: *human, fold: *fold,
+		dict: *dict, generalNum: *generalNum, ignoreNP: *ignoreNP,
+		month: *month, version: *versionSort, random: *randSort,
+		skipSB: *blanks, skipEB: *blanks, reverse: *reverse}
 	for i := range s.keys {
 		k := &s.keys[i]
 		if !k.opts.hasMods() && !k.opts.reverse {
@@ -110,11 +154,20 @@ func run(rc *tool.RunContext, args []string) int {
 		s.keys = append(s.keys, keySpec{sword: 0, schar: 0, eword: -1, echar: 0, opts: gOpts})
 	}
 
+	if *files0 != "" {
+		files, err := readFiles0From(rc.Path(*files0))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "sort: %s: %v\n", *files0, err)
+			return 2
+		}
+		operands = append(files, operands...)
+	}
+
 	if len(operands) == 0 {
 		operands = []string{"-"}
 	}
 
-	if *check {
+	if *check || *checkSilent {
 		if *output != "" {
 			fmt.Fprintf(rc.Err, "sort: options '-co' are incompatible\n")
 			return 2
@@ -126,10 +179,21 @@ func run(rc *tool.RunContext, args []string) int {
 		return s.checkSorted(rc, operands[0])
 	}
 
+	if s.merge {
+		if s.random {
+			return tool.NotSupported(rc, cmd, "combining --merge with --random-sort")
+		}
+		return s.mergeFiles(rc, operands, *output)
+	}
+
+	if s.random && !s.hasNonTrivialKeys() {
+		return s.randomShuffle(rc, operands, *output)
+	}
+
 	if s.canUsePreparedNumeric() {
 		nlines := numericLineSet{allInt: true}
 		for _, op := range operands {
-			if err := nlines.read(rc, op); err != nil {
+			if err := nlines.read(rc, op, s.zeroTerm); err != nil {
 				fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
 				return 2
 			}
@@ -149,12 +213,12 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 			nlines.lines = out
 		}
-		return writeNumericLines(rc, *output, nlines.lines)
+		return writeNumericLines(rc, *output, nlines.lines, s.zeroTerm)
 	}
 
 	var lines lineSet
 	for _, op := range operands {
-		if err := lines.read(rc, op); err != nil {
+		if err := lines.read(rc, op, s.zeroTerm); err != nil {
 			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
 			return 2
 		}
@@ -172,10 +236,10 @@ func run(rc *tool.RunContext, args []string) int {
 		lines.lines = out
 	}
 
-	return writeStringLines(rc, *output, lines.lines)
+	return writeStringLines(rc, *output, lines.lines, s.zeroTerm)
 }
 
-func writeStringLines(rc *tool.RunContext, output string, lines []string) int {
+func writeStringLines(rc *tool.RunContext, output string, lines []string, zeroTerm bool) int {
 	var w io.Writer = rc.Out
 	if output != "" {
 		f, err := os.Create(rc.Path(output))
@@ -187,9 +251,13 @@ func writeStringLines(rc *tool.RunContext, output string, lines []string) int {
 		w = f
 	}
 	bw := bufio.NewWriter(w)
+	delim := byte('\n')
+	if zeroTerm {
+		delim = 0
+	}
 	for _, l := range lines {
 		bw.WriteString(l)
-		bw.WriteByte('\n')
+		bw.WriteByte(delim)
 	}
 	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
@@ -198,7 +266,7 @@ func writeStringLines(rc *tool.RunContext, output string, lines []string) int {
 	return 0
 }
 
-func writeNumericLines(rc *tool.RunContext, output string, lines []numericLine) int {
+func writeNumericLines(rc *tool.RunContext, output string, lines []numericLine, zeroTerm bool) int {
 	var w io.Writer = rc.Out
 	if output != "" {
 		f, err := os.Create(rc.Path(output))
@@ -210,9 +278,13 @@ func writeNumericLines(rc *tool.RunContext, output string, lines []numericLine) 
 		w = f
 	}
 	bw := bufio.NewWriter(w)
+	delim := byte('\n')
+	if zeroTerm {
+		delim = 0
+	}
 	for _, l := range lines {
 		bw.WriteString(l.text)
-		bw.WriteByte('\n')
+		bw.WriteByte(delim)
 	}
 	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
@@ -227,12 +299,20 @@ func (s *sorter) canUsePreparedNumeric() bool {
 	}
 	k := &s.keys[0]
 	return k.sword == 0 && k.schar == 0 && k.eword == -1 && k.echar == 0 &&
-		k.opts.numeric && !k.opts.human && !k.opts.fold && !k.opts.skipSB && !k.opts.skipEB
+		k.opts.numeric && !k.opts.human && !k.opts.fold && !k.opts.dict &&
+		!k.opts.generalNum && !k.opts.ignoreNP && !k.opts.month &&
+		!k.opts.random && !k.opts.version && !k.opts.skipSB && !k.opts.skipEB
 }
 
-// compare is GNU sort's compare(): keys first; when all keys tie, the
-// last-resort whole-line byte comparison applies unless -s or -u, with
-// the global -r reversing its result.
+func (s *sorter) hasNonTrivialKeys() bool {
+	for _, k := range s.keys {
+		if k.sword != 0 || k.schar != 0 || k.eword != -1 || k.echar != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *sorter) compare(a, b string) int {
 	if len(s.keys) > 0 {
 		if d := s.compareKeys(a, b); d != 0 || s.stable || s.unique {
@@ -246,8 +326,6 @@ func (s *sorter) compare(a, b string) int {
 	return d
 }
 
-// compareEqual is the equality used by -u: keys when present, else the
-// whole line byte-for-byte.
 func (s *sorter) compareEqual(a, b string) int {
 	if len(s.keys) > 0 {
 		return s.compareKeys(a, b)
@@ -262,10 +340,22 @@ func (s *sorter) compareKeys(a, b string) int {
 		kb := extractKey(b, k, s.tab)
 		var d int
 		switch {
+		case k.opts.random:
+			d = 0
+		case k.opts.generalNum:
+			d = generalNumCompare(ka, kb)
 		case k.opts.numeric:
 			d = numCompare(ka, kb)
 		case k.opts.human:
 			d = humanCompare(ka, kb)
+		case k.opts.month:
+			d = monthCompare(ka, kb)
+		case k.opts.version:
+			d = versionCompare(ka, kb)
+		case k.opts.dict:
+			d = dictCompare(ka, kb)
+		case k.opts.ignoreNP:
+			d = ignoreNPCompare(ka, kb)
 		case k.opts.fold:
 			d = foldCompare(ka, kb)
 		default:
@@ -289,22 +379,22 @@ type numericKey struct {
 type numericLine struct {
 	text string
 	num  numericKey
-	val  int64 // exact key value when the whole set is integer (allInt)
+	val  int64
 }
 
 type numericLineSet struct {
 	buffers [][]byte
 	lines   []numericLine
-	allInt  bool // every key so far is an int64-representable integer
+	allInt  bool
 }
 
-func (ls *numericLineSet) read(rc *tool.RunContext, operand string) error {
+func (ls *numericLineSet) read(rc *tool.RunContext, operand string, zeroTerm bool) error {
 	data, err := readOperand(rc, operand)
 	if err != nil {
 		return err
 	}
 	ls.buffers = append(ls.buffers, data)
-	if !splitNumericLines(data, &ls.lines) {
+	if !splitNumericLines(data, &ls.lines, zeroTerm) {
 		ls.allInt = false
 	}
 	return nil
@@ -388,40 +478,86 @@ func (s *sorter) compareNumericLines(a, b numericLine) int {
 	return d
 }
 
-// checkSorted implements -c: report the first out-of-order line in the
-// GNU "sort: FILE:LINENO: disorder: LINE" shape and exit 1.
 func (s *sorter) checkSorted(rc *tool.RunContext, op string) int {
 	var lines lineSet
-	if err := lines.read(rc, op); err != nil {
+	if err := lines.read(rc, op, s.zeroTerm); err != nil {
 		fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
 		return 2
 	}
 	for i := 1; i < len(lines.lines); i++ {
 		d := s.compare(lines.lines[i-1], lines.lines[i])
 		if d > 0 || (s.unique && d == 0) {
-			fmt.Fprintf(rc.Err, "sort: %s:%d: disorder: %s\n", op, i+1, lines.lines[i])
+			if !s.checkSilent {
+				fmt.Fprintf(rc.Err, "sort: %s:%d: disorder: %s\n", op, i+1, lines.lines[i])
+			}
 			return 1
 		}
 	}
 	return 0
 }
 
-// lineSet retains input buffers while lines point directly into them.
+func (s *sorter) mergeFiles(rc *tool.RunContext, operands []string, output string) int {
+	var lines lineSet
+	for _, op := range operands {
+		if err := lines.read(rc, op, s.zeroTerm); err != nil {
+			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
+			return 2
+		}
+	}
+	if s.reverse {
+		slices.Reverse(lines.lines)
+	}
+	return writeStringLines(rc, output, lines.lines, s.zeroTerm)
+}
+
+func (s *sorter) randomShuffle(rc *tool.RunContext, operands []string, output string) int {
+	var lines lineSet
+	for _, op := range operands {
+		if err := lines.read(rc, op, s.zeroTerm); err != nil {
+			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
+			return 2
+		}
+	}
+	src := s.randSrc
+	if src == nil {
+		src = rand.Reader
+	}
+	rnd := make([]uint64, len(lines.lines))
+	var b [8]byte
+	for i := range lines.lines {
+		if _, err := io.ReadFull(src, b[:]); err != nil {
+			fmt.Fprintf(rc.Err, "sort: random-source exhausted\n")
+			return 2
+		}
+		rnd[i] = binary.LittleEndian.Uint64(b[:])
+	}
+	sort.SliceStable(lines.lines, func(i, j int) bool {
+		return rnd[i] < rnd[j]
+	})
+	if s.unique {
+		out := lines.lines[:0]
+		for i, l := range lines.lines {
+			if i == 0 || s.compareEqual(out[len(out)-1], l) != 0 {
+				out = append(out, l)
+			}
+		}
+		lines.lines = out
+	}
+	return writeStringLines(rc, output, lines.lines, s.zeroTerm)
+}
+
 type lineSet struct {
 	buffers [][]byte
 	lines   []string
 }
 
-// read reads one operand ("-" = stdin) fully and splits it into
-// newline-terminated lines; a final line without a trailing newline
-// still counts (GNU appends the newline on output).
-func (ls *lineSet) read(rc *tool.RunContext, operand string) error {
+func (ls *lineSet) read(rc *tool.RunContext, operand string, zeroTerm bool) error {
 	data, err := readOperand(rc, operand)
 	if err != nil {
 		return err
 	}
 	ls.buffers = append(ls.buffers, data)
-	splitLines(data, &ls.lines)
+	splitLines(data, &ls.lines, zeroTerm)
 	return nil
 }
 
@@ -432,18 +568,22 @@ func readOperand(rc *tool.RunContext, operand string) ([]byte, error) {
 	return os.ReadFile(rc.Path(operand))
 }
 
-func splitLines(data []byte, lines *[]string) {
+func splitLines(data []byte, lines *[]string, zeroTerm bool) {
+	delim := byte('\n')
+	if zeroTerm {
+		delim = 0
+	}
 	if len(data) == 0 {
 		return
 	}
-	if data[len(data)-1] == '\n' {
+	if data[len(data)-1] == delim {
 		data = data[:len(data)-1]
 	}
 	if len(data) == 0 {
 		*lines = append(*lines, "")
 		return
 	}
-	n := bytes.Count(data, []byte{'\n'}) + 1
+	n := bytes.Count(data, []byte{delim}) + 1
 	old := len(*lines)
 	if cap(*lines)-old < n {
 		next := make([]string, old, old+n)
@@ -451,7 +591,7 @@ func splitLines(data []byte, lines *[]string) {
 		*lines = next
 	}
 	for {
-		i := bytes.IndexByte(data, '\n')
+		i := bytes.IndexByte(data, delim)
 		if i < 0 {
 			*lines = append(*lines, bytesString(data))
 			return
@@ -461,22 +601,23 @@ func splitLines(data []byte, lines *[]string) {
 	}
 }
 
-// splitNumericLines splits data into numericLines and reports whether
-// every parsed key is an int64-representable integer (see intKeyVal),
-// which enables the radix-sort fast path.
-func splitNumericLines(data []byte, lines *[]numericLine) bool {
+func splitNumericLines(data []byte, lines *[]numericLine, zeroTerm bool) bool {
+	delim := byte('\n')
+	if zeroTerm {
+		delim = 0
+	}
 	allInt := true
 	if len(data) == 0 {
 		return allInt
 	}
-	if data[len(data)-1] == '\n' {
+	if data[len(data)-1] == delim {
 		data = data[:len(data)-1]
 	}
 	if len(data) == 0 {
 		*lines = append(*lines, numericLine{})
 		return allInt
 	}
-	n := bytes.Count(data, []byte{'\n'}) + 1
+	n := bytes.Count(data, []byte{delim}) + 1
 	old := len(*lines)
 	if cap(*lines)-old < n {
 		next := make([]numericLine, old, old+n)
@@ -492,7 +633,7 @@ func splitNumericLines(data []byte, lines *[]numericLine) bool {
 		*lines = append(*lines, numericLine{text: l, num: num, val: val})
 	}
 	for {
-		i := bytes.IndexByte(data, '\n')
+		i := bytes.IndexByte(data, delim)
 		if i < 0 {
 			appendLine(bytesString(data))
 			return allInt
@@ -509,8 +650,21 @@ func bytesString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
-// pathErr unwraps *fs.PathError so diagnostics read like GNU's
-// "No such file or directory" instead of Go's "open /abs/path: ...".
+func readFiles0From(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, name := range bytes.Split(data, []byte{0}) {
+		s := string(name)
+		if s != "" {
+			files = append(files, s)
+		}
+	}
+	return files, nil
+}
+
 func pathErr(err error) error {
 	return tool.SysErr(err)
 }

@@ -88,3 +88,18 @@ func TestTacHelpVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+func TestTacBefore(t *testing.T) {
+	out, _, code := runTool(t, "", "a\nb\nc\n", "-b")
+	if code != 0 || out != "c\nb\na" {
+		t.Errorf("tac -b: got=%q code=%d", out, code)
+	}
+}
+
+func TestTacRegex(t *testing.T) {
+	// Split on word boundaries
+	out, _, code := runTool(t, "", "abc-def-ghi-", "-r", "-s", "-")
+	if code != 0 || out != "ghi-def-abc-" {
+		t.Errorf("tac -r -s '-': got=%q code=%d", out, code)
+	}
+}

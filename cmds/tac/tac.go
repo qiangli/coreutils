@@ -1,10 +1,7 @@
 // Package taccmd implements tac(1) per the GNU coreutils manual:
 // concatenate and print files in reverse (record order).
 //
-// Fresh implementation against the GNU manual (prior art consulted:
-// guonaihong/coreutils tac; its seek-backwards machinery was replaced
-// by a simple read-all + boundary scan, which is exact for the
-// supported default + -s modes).
+// Implemented flags: -b, -r, -s.
 package taccmd
 
 import (
@@ -13,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -28,6 +26,8 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	before := fs.BoolP("before", "b", false, "attach the separator before instead of after")
+	regex := fs.BoolP("regex", "r", false, "interpret the separator as a regular expression")
 	sep := fs.StringP("separator", "s", "\n", "use STRING as the separator instead of newline")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -41,6 +41,16 @@ func run(rc *tool.RunContext, args []string) int {
 	files := operands
 	if len(files) == 0 {
 		files = []string{"-"}
+	}
+
+	var re *regexp.Regexp
+	if *regex {
+		var err error
+		re, err = regexp.Compile(*sep)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "tac: invalid regex separator '%s': %v\n", *sep, err)
+			return 1
+		}
 	}
 
 	w := bufio.NewWriter(rc.Out)
@@ -72,7 +82,11 @@ func run(rc *tool.RunContext, args []string) int {
 			exit = 1
 			continue
 		}
-		tacWrite(w, data, []byte(*sep))
+		if re != nil {
+			tacWriteRegex(w, data, re, *before)
+		} else {
+			tacWrite(w, data, []byte(*sep), *before)
+		}
 	}
 	if err := w.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "tac: write error: %v\n", err)
@@ -81,12 +95,7 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-// tacWrite emits the records of data in reverse order. A record is a
-// chunk of input ending with (and including) the separator; a final
-// chunk without a trailing separator is also a record and is emitted
-// first, without a separator — matching GNU's default "attach the
-// separator after the record" behavior.
-func tacWrite(w io.Writer, data, sep []byte) {
+func tacWrite(w io.Writer, data, sep []byte, before bool) {
 	if len(data) == 0 {
 		return
 	}
@@ -104,6 +113,38 @@ func tacWrite(w io.Writer, data, sep []byte) {
 	}
 	if i < len(data) {
 		recs = append(recs, span{i, len(data)})
+	}
+	for k := len(recs) - 1; k >= 0; k-- {
+		if before && k < len(recs)-1 {
+			w.Write(sep)
+		}
+		s, e := recs[k].s, recs[k].e
+		if before {
+			e -= len(sep)
+		}
+		w.Write(data[s:e])
+	}
+}
+
+func tacWriteRegex(w io.Writer, data []byte, re *regexp.Regexp, before bool) {
+	if len(data) == 0 {
+		return
+	}
+	matches := re.FindAllIndex(data, -1)
+	type span struct{ s, e int }
+	var recs []span
+	last := 0
+	for _, m := range matches {
+		if before {
+			recs = append(recs, span{last, m[0]})
+			last = m[1]
+		} else {
+			recs = append(recs, span{last, m[1]})
+			last = m[1]
+		}
+	}
+	if last < len(data) {
+		recs = append(recs, span{last, len(data)})
 	}
 	for k := len(recs) - 1; k >= 0; k-- {
 		w.Write(data[recs[k].s:recs[k].e])

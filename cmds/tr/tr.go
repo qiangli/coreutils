@@ -97,6 +97,7 @@ func run(rc *tool.RunContext, args []string) int {
 	complement := fs.BoolP("complement", "c", false, "use the complement of SET1")
 	del := fs.BoolP("delete", "d", false, "delete characters in SET1, do not translate")
 	squeeze := fs.BoolP("squeeze-repeats", "s", false, "replace each sequence of a repeated character that is listed in the last specified SET, with a single occurrence of that character")
+	truncateSet1 := fs.BoolP("truncate-set1", "t", false, "truncate SET1 to the length of SET2")
 	operands, code := tool.Parse(rc, cmd, fs, pre)
 	if code >= 0 {
 		return code
@@ -185,18 +186,27 @@ func run(rc *tool.RunContext, args []string) int {
 		if comp && set2.hasCaseClass {
 			return fail("when translating with complemented character classes,\nstring2 must map all characters in the domain to one")
 		}
-		set2.applyFill(len(eff1.bytes) - len(set2.bytes))
-		if len(set2.bytes) == 0 {
-			return fail("when not truncating set1, string2 must be non-empty")
-		}
-		if len(set2.bytes) < len(eff1.bytes) {
-			if set2.lastIsClass {
-				return fail("when translating with string1 longer than string2,\nthe latter string must not end with a character class")
+		if *truncateSet1 {
+			if len(set2.bytes) == 0 {
+				return fail("when not truncating set1, string2 must be non-empty")
 			}
-			// GNU extension: extend SET2 by repeating its last byte.
-			last := set2.bytes[len(set2.bytes)-1]
-			for len(set2.bytes) < len(eff1.bytes) {
-				set2.append(last, tagNone)
+			if len(eff1.bytes) > len(set2.bytes) {
+				eff1.bytes = eff1.bytes[:len(set2.bytes)]
+				eff1.tags = eff1.tags[:len(set2.bytes)]
+			}
+		} else {
+			set2.applyFill(len(eff1.bytes) - len(set2.bytes))
+			if len(set2.bytes) == 0 {
+				return fail("when not truncating set1, string2 must be non-empty")
+			}
+			if len(set2.bytes) < len(eff1.bytes) {
+				if set2.lastIsClass {
+					return fail("when translating with string1 longer than string2,\nthe latter string must not end with a character class")
+				}
+				last := set2.bytes[len(set2.bytes)-1]
+				for len(set2.bytes) < len(eff1.bytes) {
+					set2.append(last, tagNone)
+				}
 			}
 		}
 		for i, c1 := range eff1.bytes {

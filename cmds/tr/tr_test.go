@@ -162,10 +162,14 @@ func TestTrUnknownFlag(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
 	}
-	// -t (truncate-set1) is deliberately not implemented
-	_, errb, code = runTool(t, "", "-t", "a", "b")
-	if code != 2 || !strings.Contains(errb, "t") {
-		t.Errorf("-t: code=%d err=%q", code, errb)
+	// -t (truncate-set1) is now implemented: translates with truncated set1
+	out, _, code := runTool(t, "abc\n", "-t", "abc", "xy")
+	if code != 0 {
+		t.Errorf("-t translate: code=%d", code)
+	}
+	// set1 truncated to len(set2)=2: "ab" -> "xy", 'c' unchanged
+	if out != "xyc\n" {
+		t.Errorf("-t: got %q, want 'xyc\\n' (set1 truncated to len(set2))", out)
 	}
 }
 
