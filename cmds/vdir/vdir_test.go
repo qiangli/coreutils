@@ -77,8 +77,21 @@ func TestVdirHelpAndVersionIdentity(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: vdir") || strings.Contains(out, "Usage: ls") {
 		t.Fatalf("--help: code=%d out=%q", code, out)
 	}
+
+	// Verify representative options are enumerated
+	for _, opt := range []string{"-1", "-A", "--all", "--format", "--sort", "--zero"} {
+		if !strings.Contains(out, opt) {
+			t.Errorf("--help output missing representative option %q", opt)
+		}
+	}
+
 	out, _, code = runToolAt(t, t.TempDir(), "--version")
 	if code != 0 || !strings.HasPrefix(out, "vdir (qiangli/coreutils)") {
 		t.Fatalf("--version: code=%d out=%q", code, out)
+	}
+
+	out, _, code = runToolAt(t, t.TempDir(), "-V")
+	if code != 0 || !strings.HasPrefix(out, "vdir (qiangli/coreutils)") {
+		t.Fatalf("-V: code=%d out=%q", code, out)
 	}
 }
