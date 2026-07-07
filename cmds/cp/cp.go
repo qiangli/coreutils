@@ -89,6 +89,8 @@ func run(rc *tool.RunContext, args []string) int {
 	removeDest := fs.Bool("remove-destination", false, "remove each existing destination before opening it")
 	sparse := fs.String("sparse", "auto", "control sparse file creation: auto, always, never")
 	fs.Bool("strip-trailing-slashes", false, "strip trailing slashes from operands")
+	fs.Bool("copy-contents", false, "copy contents of special files when recursive (compatibility no-op)")
+	fs.Bool("preserve-default-attributes", false, "preserve default attributes (compatibility no-op)")
 	fs.BoolP("progress", "g", false, "accepted for compatibility; progress output is a no-op")
 	fs.StringP("context", "Z", "", "accepted for compatibility; SELinux context is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")

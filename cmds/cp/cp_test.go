@@ -220,12 +220,12 @@ func TestCpBackupSuffixUpdateAndInteractive(t *testing.T) {
 	}
 }
 
-func TestCpBackupAndProgressAliasesVisible(t *testing.T) {
+func TestCpCompatibilityAliasesVisible(t *testing.T) {
 	out, _, code := runTool(t, t.TempDir(), "--help")
 	if code != 0 {
 		t.Fatalf("cp --help code = %d", code)
 	}
-	for _, opt := range []string{"-b, --backup", "-g, --progress"} {
+	for _, opt := range []string{"-b, --backup", "-g, --progress", "--copy-contents", "--preserve-default-attributes"} {
 		if !strings.Contains(out, opt) {
 			t.Fatalf("cp --help missing %q:\n%s", opt, out)
 		}
@@ -240,6 +240,12 @@ func TestCpBackupAndProgressAliasesVisible(t *testing.T) {
 	}
 	if read(t, filepath.Join(dir, "b")) != "new" || read(t, filepath.Join(dir, "b~")) != "old" {
 		t.Fatalf("cp -bg did not create simple backup")
+	}
+
+	write(t, filepath.Join(dir, "c"), "compat")
+	_, errb, code = runTool(t, dir, "--copy-contents", "--preserve-default-attributes", "c", "d")
+	if code != 0 || errb != "" || read(t, filepath.Join(dir, "d")) != "compat" {
+		t.Fatalf("cp compatibility flags: code=%d err=%q", code, errb)
 	}
 }
 

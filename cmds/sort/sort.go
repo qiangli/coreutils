@@ -68,10 +68,15 @@ func run(rc *tool.RunContext, args []string) int {
 	output := fs.StringP("output", "o", "", "write result to FILE instead of standard output")
 	randSort := fs.BoolP("random-sort", "R", false, "shuffle, but group identical keys")
 	randSource := fs.StringP("random-source", "", "", "get random bytes from FILE")
+	sortMode := fs.String("sort", "", "sort according to WORD: general-numeric, human-numeric, month, numeric, random, version")
 	reverse := fs.BoolP("reverse", "r", false, "reverse the result of comparisons")
 	stable := fs.BoolP("stable", "s", false, "stabilize sort by disabling last-resort comparison")
 	sep := fs.StringP("field-separator", "t", "", "use SEP instead of non-blank to blank transition")
 	tmpDir := fs.StringP("temporary-directory", "T", "", "use DIR for temporaries, not $TMPDIR or /tmp; implies --debug")
+	fs.String("batch-size", "", "merge at most N inputs at once (accepted as an in-memory no-op)")
+	fs.StringP("buffer-size", "S", "", "use SIZE for main memory buffer (accepted as an in-memory no-op)")
+	fs.String("compress-program", "", "compress temporary files with PROG (accepted as an in-memory no-op)")
+	fs.String("parallel", "", "change the number of sorts run concurrently (accepted as an in-memory no-op)")
 	unique := fs.BoolP("unique", "u", false, "with -c, check for strict ordering; without -c, output only the first of an equal run")
 	versionSort := fs.BoolP("version-sort", "V", false, "natural sort of (version) numbers within text")
 	zeroTerm := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
@@ -81,6 +86,24 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
+	if *sortMode != "" {
+		switch *sortMode {
+		case "general-numeric", "g":
+			*generalNum = true
+		case "human-numeric", "human", "h":
+			*human = true
+		case "month", "M":
+			*month = true
+		case "numeric", "n":
+			*numeric = true
+		case "random", "R":
+			*randSort = true
+		case "version", "V":
+			*versionSort = true
+		default:
+			return tool.UsageError(rc, cmd, "invalid --sort argument %q", *sortMode)
+		}
+	}
 	if *numeric && *human {
 		fmt.Fprintf(rc.Err, "sort: options '-hn' are incompatible\n")
 		return 2

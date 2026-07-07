@@ -287,6 +287,19 @@ func TestSortNewFlags(t *testing.T) {
 		t.Errorf("-T: code=%d", code)
 	}
 
+	out, _, code = runTool(t, "10\n2\n", "--sort=numeric", "-S", "1M", "--batch-size=2", "--compress-program=gzip", "--parallel=4")
+	if code != 0 || out != "2\n10\n" {
+		t.Errorf("resource aliases with --sort=numeric: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "a10\na2\n", "--sort=version")
+	if code != 0 || out != "a2\na10\n" {
+		t.Errorf("--sort=version: code=%d out=%q", code, out)
+	}
+	_, errb, code := runTool(t, "a\n", "--sort=bogus")
+	if code != 2 || !strings.Contains(errb, "invalid --sort argument") {
+		t.Errorf("--sort=bogus: code=%d err=%q", code, errb)
+	}
+
 	// --files0-from
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("b\na\nc\n"), 0644); err != nil {

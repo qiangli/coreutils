@@ -57,8 +57,8 @@ func run(rc *tool.RunContext, args []string) int {
 	interactiveOnce := fs.BoolP("interactive-once", "I", false, "prompt once before removing recursively or more than three files")
 	preserveRoot := fs.Bool("preserve-root", true, "do not remove '/'")
 	noPreserveRoot := fs.Bool("no-preserve-root", false, "do not treat '/' specially")
-	fs.Bool("one-file-system", false, "accepted for compatibility; filesystem boundary pruning is a no-op")
-	fs.Bool("progress", false, "accepted for compatibility; progress output is a no-op")
+	fs.BoolP("one-file-system", "o", false, "accepted for compatibility; filesystem boundary pruning is a no-op")
+	fs.BoolP("progress", "g", false, "accepted for compatibility; progress output is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {

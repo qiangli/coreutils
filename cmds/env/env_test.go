@@ -79,6 +79,31 @@ func TestEnvNullAndFile(t *testing.T) {
 	}
 }
 
+func TestEnvRealShortAliases(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Env:   []string{"A=1", "B=2"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"-i", "-C", dir, "-u", "A", "-0", "B=3"})
+	if code != 0 || errb.String() != "" || out.String() != "B=3\x00" || rc.Dir != dir {
+		t.Fatalf("real short aliases = (%q, %q, %d, dir=%q)", out.String(), errb.String(), code, rc.Dir)
+	}
+
+	help, _, code := runTool(t, nil, "--help")
+	if code != 0 {
+		t.Fatalf("env --help code = %d", code)
+	}
+	for _, opt := range []string{"-i, --ignore-environment", "-u, --unset", "-0, --null", "-C, --chdir", "-a, --argv0", "-S, --split-string"} {
+		if !strings.Contains(help, opt) {
+			t.Fatalf("env --help missing real short alias %q:\n%s", opt, help)
+		}
+	}
+}
+
 func TestEnvChdirAndSplitStringCommandContract(t *testing.T) {
 	dir := t.TempDir()
 	var out, errb bytes.Buffer

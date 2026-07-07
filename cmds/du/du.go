@@ -253,15 +253,29 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func normalizeBlockSizeArgs(args []string) []string {
-	out := make([]string, len(args))
-	copy(out, args)
-	for i, a := range out {
+	var out []string
+	for i, a := range args {
 		if a == "--" {
+			out = append(out, args[i:]...)
 			break
 		}
 		if len(a) > 2 && strings.HasPrefix(a, "-B") && !strings.HasPrefix(a, "--") {
-			out[i] = "--block-size=" + a[2:]
+			out = append(out, "--block-size="+a[2:])
+			continue
 		}
+		if a == "-M" {
+			out = append(out, "--block-size=1M")
+			continue
+		}
+		if len(a) > 2 && a[0] == '-' && a[1] != '-' && strings.Contains(a, "M") {
+			out = append(out, "--block-size=1M")
+			kept := strings.ReplaceAll(a, "M", "")
+			if kept != "-" {
+				out = append(out, kept)
+			}
+			continue
+		}
+		out = append(out, a)
 	}
 	return out
 }
