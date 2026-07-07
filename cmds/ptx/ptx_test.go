@@ -197,10 +197,15 @@ func TestPtxRoffFormat(t *testing.T) {
 	if out != want {
 		t.Fatalf("out=%q want=%q", out, want)
 	}
-	// TeX output is rejected loudly.
-	_, errb, code = runTool(t, t.TempDir(), "a\n", "-T", "-")
-	if code != 2 || !strings.Contains(errb, "not supported") {
+	out, errb, code = runTool(t, t.TempDir(), "alpha x$x\n", "-A", "-T", "-")
+	if code != 0 || errb != "" {
 		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	want = `\xx {}{}{alpha x\$x}{}{:1}` + "\n" +
+		`\xx {}{alpha}{x\$x}{}{:1}` + "\n" +
+		`\xx {}{alpha x\$}{x}{}{:1}` + "\n"
+	if out != want {
+		t.Fatalf("tex out=%q want=%q", out, want)
 	}
 }
 

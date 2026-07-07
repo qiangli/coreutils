@@ -226,3 +226,32 @@ func TestODTraditionalOffsetBeforeFile(t *testing.T) {
 		t.Fatalf("od --traditional +2 file = (%q, %d), want (%q, 0)", out, code, want)
 	}
 }
+
+func TestODShortTypeAliases(t *testing.T) {
+	cases := []struct {
+		flag string
+		data string
+		want string
+	}{
+		{"-D", "ABCD", " 1145258561\n"},
+		{"-F", "\x00\x00\x00\x00\x00\x00\xf0\x3f", " 1\n"},
+		{"-H", "ABCD", " 44434241\n"},
+		{"-I", "ABCD", " 1145258561\n"},
+		{"-O", "ABCD", " 010420641101\n"},
+		{"-X", "ABCD", " 44434241\n"},
+		{"-e", "\x00\x00\x00\x00\x00\x00\xf0\x3f", " 1\n"},
+		{"-f", "\x00\x00\x80\x3f", " 1\n"},
+		{"-i", "ABCD", " 1145258561\n"},
+		{"-s", "ABCD", " 16961 17475\n"},
+	}
+	for _, tc := range cases {
+		out, _, code := runOD(t, t.TempDir(), tc.data, tc.flag, "-A", "n")
+		if out != tc.want || code != 0 {
+			t.Fatalf("od %s = (%q, %d), want (%q, 0)", tc.flag, out, code, tc.want)
+		}
+	}
+	out, _, code := runOD(t, t.TempDir(), "ABCD", "-x", "-d", "-A", "n")
+	if want := " 16961 17475\n 4241 4443\n"; out != want || code != 0 {
+		t.Fatalf("od -x -d = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}

@@ -205,4 +205,8 @@ func TestCutNewOptions(t *testing.T) {
 	if code != 0 || out != "c\n" {
 		t.Errorf("whitespace delimited with only-delimited: out=%q code=%d", out, code)
 	}
+	out, _, code = runTool(t, "a:b:c\n", "-f", "1,3", "-d", ":", "-O", "XYZ")
+	if code != 0 || out != "aXYZc\n" {
+		t.Errorf("-O output delimiter alias: out=%q code=%d", out, code)
+	}
 }

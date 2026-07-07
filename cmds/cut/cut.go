@@ -56,7 +56,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fieldsList := fs.StringP("fields", "f", "", "select only these fields; also print any line that contains no delimiter character, unless the -s option is specified")
 	complement := fs.Bool("complement", false, "complement the set of selected bytes, characters or fields")
 	onlyDelimited := fs.BoolP("only-delimited", "s", false, "do not print lines not containing delimiters")
-	outputDelimiter := fs.String("output-delimiter", "", "use STRING as the output delimiter")
+	outputDelimiter := fs.StringP("output-delimiter", "O", "", "use STRING as the output delimiter")
 	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
 	fs.BoolP("ignored-n", "n", false, "do not split multi-byte characters (ignored)")
 	whitespaceDelimited := fs.BoolP("whitespace-delimited", "w", false, "use any consecutive spaces and/or tabs as the field delimiter")

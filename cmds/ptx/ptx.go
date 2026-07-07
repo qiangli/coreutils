@@ -2,7 +2,8 @@
 // contents in GNU's dumb-terminal output format — each keyword aligned
 // at the center of a line of --width columns (default 72), fields
 // separated by --gap-size spaces (default 3), with '/' marking truncated
-// context — or roff .xx lines via -O/--format=roff.
+// context, roff .xx lines via -O/--format=roff, or TeX macro lines via
+// -T/--format=tex.
 //
 // Documented deviations from GNU ptx: a context never spans input lines
 // (the default context is one input line rather than GNU's end-of-sentence
@@ -40,6 +41,7 @@ type ptxOptions struct {
 	traditional bool
 	rightRef    bool
 	roff        bool
+	tex         bool
 	truncation  string
 	macroName   string
 	gap         int
@@ -86,7 +88,7 @@ func run(rc *tool.RunContext, args []string) int {
 	references := fs.BoolP("references", "r", false, "first field of each line is a reference")
 	width := fs.IntP("width", "w", 72, "output width in columns, references excluded")
 	wordRegexp := fs.StringP("word-regexp", "W", "", "use REGEXP to match each keyword")
-	format := fs.String("format", "", "generate output as roff directives (-O is --format=roff)")
+	format := fs.String("format", "", "generate output as roff directives (-O) or TeX macros (-T)")
 	truncation := fs.StringP("flag-truncation", "F", "/", "use STRING to flag line truncations")
 	macroName := fs.StringP("macro-name", "M", "xx", "use NAME as the roff macro in -O output")
 	// GNU's -O (roff) and -T (TeX) short flags have no independent long
@@ -121,7 +123,7 @@ func run(rc *tool.RunContext, args []string) int {
 	case "roff":
 		opts.roff = true
 	case "tex":
-		return tool.NotSupported(rc, cmd, "-T/--format=tex (TeX output)")
+		opts.tex = true
 	default:
 		return tool.UsageError(rc, cmd, "invalid output format: %q", *format)
 	}
@@ -595,6 +597,9 @@ func formatEntry(e occurrence, opts ptxOptions) string {
 	if opts.roff {
 		return formatRoff(e, f, opts)
 	}
+	if opts.tex {
+		return formatTex(e, f, opts)
+	}
 	return formatDumb(e, f, opts)
 }
 
@@ -697,4 +702,53 @@ func formatRoff(e occurrence, f fields, opts ptxOptions) string {
 		b.WriteString(`"`)
 	}
 	return b.String()
+}
+
+func formatTex(e occurrence, f fields, opts ptxOptions) string {
+	ctx := e.ctx.text
+	var b strings.Builder
+	b.WriteString("\\")
+	b.WriteString(opts.macroName)
+	b.WriteString(" {")
+	printTexField(&b, field(ctx, f.tailS, f.tailE))
+	if f.tailTr {
+		b.WriteString(opts.truncation)
+	}
+	b.WriteString("}{")
+	if f.beforeTr {
+		b.WriteString(opts.truncation)
+	}
+	printTexField(&b, field(ctx, f.beforeS, f.beforeE))
+	b.WriteString("}{")
+	printTexField(&b, field(ctx, f.kaS, f.kaE))
+	if f.kaTr {
+		b.WriteString(opts.truncation)
+	}
+	b.WriteString("}{")
+	if f.headTr {
+		b.WriteString(opts.truncation)
+	}
+	printTexField(&b, field(ctx, f.headS, f.headE))
+	b.WriteString("}")
+	if opts.autoRef || opts.inputRef {
+		b.WriteString("{")
+		printTexField(&b, e.ref)
+		b.WriteString("}")
+	}
+	return b.String()
+}
+
+func printTexField(b *strings.Builder, text string) {
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case isWhite(c):
+			b.WriteByte(' ')
+		case c == '\\' || c == '{' || c == '}' || c == '#' || c == '&' || c == '%' || c == '$':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
 }

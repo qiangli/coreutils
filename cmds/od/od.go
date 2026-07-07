@@ -20,7 +20,7 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "od",
-	Synopsis: "Dump files in octal and other simple formats.",
+	Synopsis: "Dump files in octal and other simple formats. Type aliases: -D -F -H -I -L -O -X -e -f -i -l -s.",
 	Usage:    "od [OPTION]... [FILE]...",
 }
 
@@ -46,6 +46,7 @@ type dumpFormat struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = normalizeTypeAliasArgs(args)
 	fs := tool.NewFlags(cmd.Name)
 	addrRadix := fs.StringP("address-radix", "A", "o", "select offset radix: d, o, x, or n")
 	formats := fs.StringArrayP("format", "t", nil, "select output format; repeat for multiple formats")
@@ -169,6 +170,42 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return exit
+}
+
+func normalizeTypeAliasArgs(args []string) []string {
+	aliases := map[string]string{
+		"-D": "u4",
+		"-F": "f8",
+		"-H": "x4",
+		"-I": "d4",
+		"-L": "d8",
+		"-O": "o4",
+		"-X": "x4",
+		"-e": "f8",
+		"-f": "f4",
+		"-i": "d4",
+		"-l": "d8",
+		"-s": "d2",
+	}
+	out := make([]string, 0, len(args))
+	rest := false
+	for _, arg := range args {
+		if rest {
+			out = append(out, arg)
+			continue
+		}
+		if arg == "--" {
+			rest = true
+			out = append(out, arg)
+			continue
+		}
+		if format, ok := aliases[arg]; ok {
+			out = append(out, "-t", format)
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
 }
 
 func openInputs(rc *tool.RunContext, operands []string) (io.Reader, []io.Closer, int) {
