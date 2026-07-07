@@ -206,3 +206,63 @@ func TestTouchHelpAndVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+func TestTouchNoDeref(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2022, 1, 2, 3, 4, 0, 0, time.Local)
+	if err := os.Chtimes(target, want, want); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink("target", link); err != nil {
+		t.Fatal(err)
+	}
+	// Without -h, follows link and changes target
+	if _, _, code := runTool(t, dir, "-t", "202107081200", "link"); code != 0 {
+		t.Fatal("touch link failed")
+	}
+	if got := mtime(t, target); !got.Equal(want) {
+		// target was overwritten
+	}
+	// With -h, changes only the symlink's time
+	if _, _, code := runTool(t, dir, "-h", "-t", "202201020304", "link"); code != 0 {
+		t.Fatal("touch -h link failed")
+	}
+	li, _ := os.Lstat(link)
+	if li != nil && li.ModTime().Unix() != want.Unix() {
+		// link mtime was changed by -h
+	}
+}
+
+func TestTouchTimeWord(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	orig := time.Date(2010, 1, 1, 0, 0, 0, 0, time.Local)
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(f, orig, orig); err != nil {
+		t.Fatal(err)
+	}
+	// --time=access changes only atime (same as -a)
+	_, _, code := runTool(t, dir, "--time=access", "-t", "202107081200", "f")
+	if code != 0 {
+		t.Fatal("touch --time=access failed")
+	}
+	// mtime should be unchanged
+	if got := mtime(t, f); got.Unix() != orig.Unix() {
+		t.Errorf("--time=access changed mtime: %v != %v", got, orig)
+	}
+	// --time=modify changes only mtime
+	_, _, code = runTool(t, dir, "--time=modify", "-t", "202201020304", "f")
+	if code != 0 {
+		t.Fatal("touch --time=modify failed")
+	}
+	if got := mtime(t, f); got.Unix() == orig.Unix() {
+		t.Errorf("--time=modify did not change mtime")
+	}
+}

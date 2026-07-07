@@ -245,6 +245,81 @@ func TestSplitHelpVersion(t *testing.T) {
 	}
 }
 
+func TestSplitNewFlags(t *testing.T) {
+	// --additional-suffix
+	dir := t.TempDir()
+	_, _, code := runTool(t, dir, "1\n2\n", "-l", "1", "--additional-suffix", ".txt")
+	if code != 0 {
+		t.Fatalf("--additional-suffix: code=%d", code)
+	}
+	if got := listFiles(t, dir); !equal(got, []string{"xaa.txt", "xab.txt"}) {
+		t.Fatalf("--additional-suffix files: %v", got)
+	}
+
+	// --hex-suffixes
+	dir2 := t.TempDir()
+	_, _, code = runTool(t, dir2, "1\n2\n3\n", "-l", "1", "--hex-suffixes")
+	if code != 0 {
+		t.Fatalf("--hex-suffixes: code=%d", code)
+	}
+	got2 := listFiles(t, dir2)
+	if len(got2) != 3 || got2[0] != "x0" || got2[1] != "x1" || got2[2] != "x2" {
+		t.Fatalf("--hex-suffixes files: %v", got2)
+	}
+
+	// --elide-empty-files -e with -n
+	dir3 := t.TempDir()
+	_, _, code = runTool(t, dir3, "ab", "-n", "3", "-e")
+	if code != 0 {
+		t.Fatalf("-n 3 -e: code=%d", code)
+	}
+	got3 := listFiles(t, dir3)
+	if len(got3) == 3 {
+		t.Errorf("-e should elide empty files, got %v", got3)
+	}
+
+	// --separator / -t
+	dir4 := t.TempDir()
+	_, _, code = runTool(t, dir4, "a:b:c:d:", "-l", "2", "-t", ":")
+	if code != 0 {
+		t.Fatalf("--separator: code=%d", code)
+	}
+	if got := listFiles(t, dir4); !equal(got, []string{"xaa", "xab"}) {
+		t.Fatalf("--separator files: %v", got)
+	}
+	if readFile(t, dir4, "xaa") != "a:b:" || readFile(t, dir4, "xab") != "c:d:" {
+		t.Error("--separator wrong contents")
+	}
+
+	// --verbose
+	dir5 := t.TempDir()
+	_, errb, code := runTool(t, dir5, "1\n", "-l", "1", "--verbose")
+	if code != 0 {
+		t.Fatalf("--verbose: code=%d", code)
+	}
+	if !strings.Contains(errb, "xaa") {
+		t.Errorf("--verbose should print file names, got: %q", errb)
+	}
+
+	// --line-bytes / -C
+	dir6 := t.TempDir()
+	_, _, code = runTool(t, dir6, "hello\nworld\na\n", "-C", "6")
+	if code != 0 {
+		t.Fatalf("-C: code=%d", code)
+	}
+	got6 := listFiles(t, dir6)
+	if len(got6) < 2 {
+		t.Fatalf("-C files: %v", got6)
+	}
+	// Content should preserve lines
+	for _, name := range got6 {
+		c := readFile(t, dir6, name)
+		if len(c) > 7 { // 6 bytes + possible newline
+			t.Errorf("-C line too long in %s: %q", name, c)
+		}
+	}
+}
+
 func equal(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

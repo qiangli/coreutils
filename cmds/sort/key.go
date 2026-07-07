@@ -10,21 +10,28 @@ package sortcmd
 // separator is not part of either adjacent field, but a key spanning
 // fields retains the separators inside the range.
 
-// keyOpts are the per-key ordering options (type letters n/b/f/r/h).
+// keyOpts are the per-key ordering options (type letters n/b/f/r/h/d/g/i/M/R/V).
 type keyOpts struct {
-	numeric bool // n
-	human   bool // h
-	fold    bool // f
-	reverse bool // r
-	skipSB  bool // b attached to POS1 (or global -b)
-	skipEB  bool // b attached to POS2 (or global -b)
+	numeric    bool // n
+	human      bool // h
+	fold       bool // f
+	dict       bool // d
+	generalNum bool // g
+	ignoreNP   bool // i
+	month      bool // M
+	random     bool // R
+	version    bool // V
+	reverse    bool // r
+	skipSB     bool // b attached to POS1 (or global -b)
+	skipEB     bool // b attached to POS2 (or global -b)
 }
 
 // hasMods reports whether the key carries any ordering option other
 // than r — GNU's default_key_compare(): such a key does NOT inherit
 // the global ordering options.
 func (o keyOpts) hasMods() bool {
-	return o.numeric || o.human || o.fold || o.skipSB || o.skipEB
+	return o.numeric || o.human || o.fold || o.dict || o.generalNum ||
+		o.ignoreNP || o.month || o.random || o.version || o.skipSB || o.skipEB
 }
 
 // keySpec is one parsed -k KEYDEF. All counts mirror GNU sort's
@@ -114,16 +121,26 @@ func parseKeyOpts(s string, o *keyOpts, start bool) (rest, errMsg string, badTyp
 			} else {
 				o.skipEB = true
 			}
+		case 'd':
+			o.dict = true
 		case 'f':
 			o.fold = true
+		case 'g':
+			o.generalNum = true
 		case 'h':
 			o.human = true
+		case 'i':
+			o.ignoreNP = true
+		case 'M':
+			o.month = true
 		case 'n':
 			o.numeric = true
 		case 'r':
 			o.reverse = true
-		case 'd', 'g', 'i', 'M', 'R', 'V', 'z':
-			return s, "", c
+		case 'R':
+			o.random = true
+		case 'V':
+			o.version = true
 		default:
 			return s, "stray character in field spec", 0
 		}

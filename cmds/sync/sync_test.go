@@ -67,11 +67,15 @@ func TestSyncBare(t *testing.T) {
 }
 
 func TestSyncErrors(t *testing.T) {
-	_, errb, code := runIn(t, t.TempDir(), "--data", "x")
-	if code != 2 || !strings.Contains(errb, "data") || !strings.Contains(errb, "pure-Go") {
-		t.Errorf("unimplemented flag: code=%d err=%q", code, errb)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x"), nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	_, errb, code = runIn(t, t.TempDir(), "--frobnicate")
+	_, errb, code := runIn(t, dir, "--data", "x")
+	if code != 0 || errb != "" {
+		t.Errorf("--data on existing file: code=%d err=%q, want success", code, errb)
+	}
+	_, errb, code = runIn(t, dir, "--frobnicate")
 	if code != 2 || !strings.Contains(errb, "frobnicate") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
 	}

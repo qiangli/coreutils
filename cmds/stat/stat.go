@@ -1,22 +1,19 @@
 // Package statcmd implements stat(1) per the GNU coreutils manual:
-// the default information block, plus --format/-c with the directive
-// subset %n %s %F %a %U %G %u %g %x %y %z %i %h (and %%). Directives
-// outside the subset fail with a clear error rather than a guess, per
-// the repository contract. Like GNU stat, symlinks are not followed
-// (the link itself is reported).
+// the default information block, plus --format/-c --printf --terse/-t
+// --dereference/-L --file-system/-f with directives %n %s %F %a %U %G
+// %u %g %x %y %z %i %h (and %%). Directives outside the subset fail
+// with a clear error.
 //
 // Platform note: on Windows there is no inode / link count / uid /
 // gid / block count — they report 0 / 1 / 0 / 0 / a size-derived
-// value; owner and group names are a best-effort SID account lookup
-// ("UNKNOWN" when unavailable, matching GNU's unresolvable-ID
-// spelling); the change time (%z) reports the last write time, and
-// the birth time comes from the file's creation time.
+// value; owner and group names are a best-effort SID account lookup.
 package statcmd
 
 import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -30,13 +27,8 @@ var cmd = &tool.Tool{
 	Usage:    "stat [OPTION]... FILE...",
 }
 
-// Run is wired in init: a literal would create an initialization
-// cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-// fileMeta is one file's gathered metadata; the platform-dependent
-// fields are filled by fillSys (sys_linux.go / sys_darwin.go /
-// sys_windows.go).
 type fileMeta struct {
 	name, target     string
 	size             int64
@@ -60,6 +52,10 @@ type fileMeta struct {
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	format := fs.StringP("format", "c", "", "use the specified FORMAT instead of the default; output a newline after each use of FORMAT")
+	dereference := fs.BoolP("dereference", "L", false, "follow links")
+	fileSystem := fs.BoolP("file-system", "f", false, "display file system status instead of file status")
+	printf := fs.StringP("printf", "", "", "like --format, but interpret backslash escapes and do not output a mandatory trailing newline")
+	terse := fs.BoolP("terse", "t", false, "print the information in terse form")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -67,9 +63,17 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing operand")
 	}
+
 	useFormat := fs.Changed("format")
+	usePrintf := fs.Changed("printf")
+
 	if useFormat {
 		if c := checkFormat(rc, *format); c >= 0 {
+			return c
+		}
+	}
+	if usePrintf {
+		if c := checkFormat(rc, *printf); c >= 0 {
 			return c
 		}
 	}
@@ -77,14 +81,40 @@ func run(rc *tool.RunContext, args []string) int {
 	exit := 0
 	for _, op := range operands {
 		full := rc.Path(op)
-		fi, err := os.Lstat(full)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "stat: cannot stat '%s': %s\n", op, errMsg(err))
-			exit = 1
+		if *fileSystem {
+			if d := showFileSystem(rc, full, op, *terse); d != 0 {
+				exit = 1
+			}
 			continue
 		}
-		m := gather(full, op, fi)
-		if useFormat {
+
+		var fi os.FileInfo
+		var m *fileMeta
+		if *dereference {
+			var err error
+			fi, err = os.Stat(full)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "stat: cannot stat '%s': %s\n", op, errMsg(err))
+				exit = 1
+				continue
+			}
+			m = gather(full, op, fi)
+		} else {
+			var err error
+			fi, err = os.Lstat(full)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "stat: cannot stat '%s': %s\n", op, errMsg(err))
+				exit = 1
+				continue
+			}
+			m = gatherNoFollow(full, op, fi)
+		}
+
+		if *terse {
+			printTerse(rc.Out, m)
+		} else if usePrintf {
+			fmt.Fprint(rc.Out, expandFormatStr(rc, *printf, m))
+		} else if useFormat {
 			expandFormat(rc.Out, *format, m)
 		} else {
 			printDefault(rc.Out, m)
@@ -103,18 +133,20 @@ func gather(path, name string, fi os.FileInfo) *fileMeta {
 		fileType: fileTypeName(fi),
 		isDevice: fi.Mode()&os.ModeDevice != 0,
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		m.target, _ = os.Readlink(path)
-	}
 	fillSys(m, path, fi)
 	return m
 }
 
-// supported is the -c directive subset.
+func gatherNoFollow(path, name string, fi os.FileInfo) *fileMeta {
+	m := gather(path, name, fi)
+	if fi.Mode()&os.ModeSymlink != 0 {
+		m.target, _ = os.Readlink(path)
+	}
+	return m
+}
+
 const supported = "%nsFaUGugxyzih"
 
-// checkFormat validates the format once up front so a bad directive
-// fails before any output. Returns -1 when the format is acceptable.
 func checkFormat(rc *tool.RunContext, format string) int {
 	for i := 0; i < len(format); i++ {
 		if format[i] != '%' {
@@ -122,7 +154,7 @@ func checkFormat(rc *tool.RunContext, format string) int {
 		}
 		i++
 		if i >= len(format) {
-			break // trailing % is emitted literally, like GNU
+			break
 		}
 		if strings.IndexByte(supported, format[i]) < 0 {
 			return tool.NotSupported(rc, cmd, fmt.Sprintf("format directive '%%%c'", format[i]))
@@ -132,6 +164,10 @@ func checkFormat(rc *tool.RunContext, format string) int {
 }
 
 func expandFormat(w io.Writer, format string, m *fileMeta) {
+	fmt.Fprintln(w, expandFormatStr(nil, format, m))
+}
+
+func expandFormatStr(rc *tool.RunContext, format string, m *fileMeta) string {
 	var b strings.Builder
 	for i := 0; i < len(format); i++ {
 		c := format[i]
@@ -175,10 +211,9 @@ func expandFormat(w io.Writer, format string, m *fileMeta) {
 			b.WriteString(strconv.FormatUint(m.nlink, 10))
 		}
 	}
-	fmt.Fprintln(w, b.String())
+	return b.String()
 }
 
-// printDefault renders the GNU default information block.
 func printDefault(w io.Writer, m *fileMeta) {
 	name := m.name
 	if m.target != "" {
@@ -204,6 +239,42 @@ func printDefault(w io.Writer, m *fileMeta) {
 	} else {
 		fmt.Fprintf(w, " Birth: -\n")
 	}
+}
+
+func printTerse(w io.Writer, m *fileMeta) {
+	fmt.Fprintf(w, "%s %d %d %03o %d %d %x %x %d %d %d %d %d %d %d %d\n",
+		m.name, m.size, m.blocks, m.permBits, m.uid, m.gid,
+		m.devMaj, m.devMin, m.ino, m.nlink, m.rdevMaj, m.rdevMin,
+		m.atime.Unix(), m.mtime.Unix(), m.ctime.Unix(), 0)
+}
+
+func showFileSystem(rc *tool.RunContext, path, op string, terse bool) int {
+	if runtime.GOOS == "windows" {
+		notImplemente(rc, op)
+		return 1
+	}
+	st, err := statfsFile(path)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "stat: cannot read file system information for '%s': %s\n", op, err)
+		return 1
+	}
+	if terse {
+		fmt.Fprintf(rc.Out, "%s %d %d %d %d %d %d %d\n",
+			op, st.blockSize, st.totalBlocks, st.freeBlocks,
+			st.availBlocks, st.totalInodes, st.freeInodes, st.nameMax)
+	} else {
+		fmt.Fprintf(rc.Out, "  File: \"%s\"\n", op)
+		fmt.Fprintf(rc.Out, "    ID: %x Namelen: %-5d Type: %s\n", 0, st.nameMax, st.fsType)
+		fmt.Fprintf(rc.Out, "Block size: %-10d Fundamental block size: %d\n", st.blockSize, st.blockSize)
+		fmt.Fprintf(rc.Out, "Blocks: Total: %-10d Free: %-10d Available: %d\n",
+			st.totalBlocks, st.freeBlocks, st.availBlocks)
+		fmt.Fprintf(rc.Out, "Inodes: Total: %-10d Free: %d\n", st.totalInodes, st.freeInodes)
+	}
+	return 0
+}
+
+func notImplemente(rc *tool.RunContext, op string) {
+	fmt.Fprintf(rc.Err, "stat: --file-system is not supported on this platform for '%s'\n", op)
 }
 
 func tsString(t time.Time) string {
@@ -232,8 +303,6 @@ func fileTypeName(fi os.FileInfo) string {
 	}
 }
 
-// permBits is the full octal access-rights value (%a): permission
-// bits plus setuid/setgid/sticky.
 func permBits(m os.FileMode) uint32 {
 	bits := uint32(m.Perm())
 	if m&os.ModeSetuid != 0 {
@@ -248,7 +317,6 @@ func permBits(m os.FileMode) uint32 {
 	return bits
 }
 
-// modeString builds the GNU 10-character permission string.
 func modeString(m os.FileMode) string {
 	b := []byte("----------")
 	switch {

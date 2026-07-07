@@ -2,15 +2,20 @@ package sortcmd
 
 // Ordering comparators, all C-locale / byte-oriented:
 //
-//   - numCompare implements GNU strnumcmp semantics for -n: arbitrary-
-//     precision decimal string comparison (no float conversion), with
-//     leading blanks skipped, an optional '-' sign (no '+'), and any
-//     text without digits comparing equal to zero.
-//   - humanCompare implements -h: sign first, then SI suffix order
-//     (K=k < M < G < T < P < E < Z < Y < R < Q), then numeric value.
+//   - numCompare implements GNU strnumcmp semantics for -n.
+//   - generalNumCompare implements GNU general-numeric -g (float-compatible).
+//   - humanCompare implements -h: sign first, then SI suffix order.
+//   - monthCompare implements -M: three-letter month abbreviation order.
+//   - versionCompare implements -V: natural comparison of version strings.
+//   - dictCompare implements -d: blanks and alphanumerics only.
+//   - ignoreNPCompare implements -i: skip non-printing characters.
 //   - foldCompare implements -f: bytewise after ASCII upcasing.
 
-import "strings"
+import (
+	"math"
+	"strconv"
+	"strings"
+)
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
@@ -151,4 +156,206 @@ func foldCompare(a, b string) int {
 		}
 	}
 	return cmpInt(len(a), len(b))
+}
+
+func stripNonDict(s string) string {
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\t' || (c >= '0' && c <= '9') ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			b = append(b, c)
+		}
+	}
+	return string(b)
+}
+
+func dictCompare(a, b string) int {
+	return strings.Compare(stripNonDict(a), stripNonDict(b))
+}
+
+func stripNonPrinting(s string) string {
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 32 && c <= 126 || c == '\t' || c == '\n' {
+			b = append(b, c)
+		}
+	}
+	return string(b)
+}
+
+func ignoreNPCompare(a, b string) int {
+	return strings.Compare(stripNonPrinting(a), stripNonPrinting(b))
+}
+
+var months = map[string]int{
+	"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
+	"MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
+	"SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+func monthOrder(a, b string) int {
+	ua := strings.ToUpper(strings.TrimLeft(a, " \t"))
+	ub := strings.ToUpper(strings.TrimLeft(b, " \t"))
+	if len(ua) >= 3 && len(ub) >= 3 {
+		ma, oka := months[ua[:3]]
+		mb, okb := months[ub[:3]]
+		if oka && okb {
+			if ma < mb {
+				return -1
+			}
+			if ma > mb {
+				return 1
+			}
+			return 0
+		}
+		if oka && !okb {
+			return -1
+		}
+		if !oka && okb {
+			return 1
+		}
+	}
+	return 0
+}
+
+func monthCompare(a, b string) int {
+	if d := monthOrder(a, b); d != 0 {
+		return d
+	}
+	return strings.Compare(strings.TrimLeft(a, " \t"), strings.TrimLeft(b, " \t"))
+}
+
+func compareFraction(a, b string) int {
+	na, nb := len(a), len(b)
+	n := na
+	if nb < n {
+		n = nb
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	if na < nb {
+		return -1
+	}
+	if na > nb {
+		return 1
+	}
+	return 0
+}
+
+func filevercmp(a, b string) int {
+	ai, bi := 0, 0
+	for ai < len(a) && bi < len(b) {
+		aIsNum := a[ai] >= '0' && a[ai] <= '9'
+		bIsNum := b[bi] >= '0' && b[bi] <= '9'
+		if aIsNum && bIsNum {
+			for ai < len(a) && a[ai] == '0' {
+				ai++
+			}
+			for bi < len(b) && b[bi] == '0' {
+				bi++
+			}
+			aStart, bStart := ai, bi
+			for ai < len(a) && a[ai] >= '0' && a[ai] <= '9' {
+				ai++
+			}
+			for bi < len(b) && b[bi] >= '0' && b[bi] <= '9' {
+				bi++
+			}
+			alen, blen := ai-aStart, bi-bStart
+			if alen < blen {
+				return -1
+			}
+			if alen > blen {
+				return 1
+			}
+			if d := strings.Compare(a[aStart:ai], b[bStart:bi]); d != 0 {
+				return d
+			}
+			continue
+		}
+		if a[ai] != b[bi] {
+			if a[ai] < b[bi] {
+				return -1
+			}
+			return 1
+		}
+		ai++
+		bi++
+	}
+	if ai < len(a) {
+		return 1
+	}
+	if bi < len(b) {
+		return -1
+	}
+	return 0
+}
+
+func versionCompare(a, b string) int {
+	return filevercmp(strings.TrimLeft(a, " \t"), strings.TrimLeft(b, " \t"))
+}
+
+func generalNumParse(s string) (float64, bool) {
+	t := strings.TrimLeft(s, " \t")
+	if t == "" {
+		return 0, false
+	}
+	if len(t) >= 3 && (t[:3] == "nan" || t[:3] == "NaN") {
+		return math.NaN(), true
+	}
+	if len(t) >= 3 && (t[:3] == "inf" || t[:3] == "Inf" || t[:3] == "INF") {
+		return math.Inf(1), true
+	}
+	if len(t) >= 4 && (t[:4] == "+nan" || t[:4] == "+NaN" || t[:4] == "-nan" || t[:4] == "-NaN") {
+		return math.NaN(), true
+	}
+	if len(t) >= 4 && (t[:4] == "+inf" || t[:4] == "+Inf" || t[:4] == "+INF") {
+		return math.Inf(1), true
+	}
+	if len(t) >= 4 && (t[:4] == "-inf" || t[:4] == "-Inf" || t[:4] == "-INF") {
+		return math.Inf(-1), true
+	}
+	v, err := strconv.ParseFloat(t, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func generalNumCompare(a, b string) int {
+	va, oka := generalNumParse(a)
+	vb, okb := generalNumParse(b)
+	if !oka && !okb {
+		return 0
+	}
+	if !oka {
+		return -1
+	}
+	if !okb {
+		return 1
+	}
+	if math.IsNaN(va) && math.IsNaN(vb) {
+		return 0
+	}
+	if math.IsNaN(va) {
+		return 1
+	}
+	if math.IsNaN(vb) {
+		return -1
+	}
+	if va < vb {
+		return -1
+	}
+	if va > vb {
+		return 1
+	}
+	return 0
 }

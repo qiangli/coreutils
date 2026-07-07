@@ -195,19 +195,20 @@ func TestSortErrors(t *testing.T) {
 			t.Errorf("sort %v: code=%d err=%q, want err containing %q", c.args, code, errb, c.want)
 		}
 	}
-	// GNU key type letters this implementation doesn't cover fail loudly.
-	_, errb, code := runTool(t, "", "-k", "1M")
-	if code != 2 || !strings.Contains(errb, "'M'") || !strings.Contains(errb, "not supported") {
-		t.Errorf("-k 1M: code=%d err=%q", code, errb)
+	// Month sort (-k 1M) is now implemented.
+	out, _, code := runTool(t, "MAR\nJAN\nFEB\n", "-k", "1M")
+	if code != 0 || out != "JAN\nFEB\nMAR\n" {
+		t.Errorf("-k 1M: code=%d out=%q, want sorted months", code, out)
 	}
 	// Unknown flag: contract error, exit 2, names the flag.
-	_, errb, code = runTool(t, "", "--frobnicate")
+	_, errb, code := runTool(t, "", "--frobnicate")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, "", "-z")
-	if code != 2 || !strings.Contains(errb, "z") {
-		t.Errorf("unknown short flag: code=%d err=%q", code, errb)
+	// -z is now --zero-terminated, a valid flag.
+	out, _, code = runTool(t, "a\000b\000c\000", "-z")
+	if code != 0 {
+		t.Errorf("-z zero-terminated: code=%d err=%q", code, out)
 	}
 }
 
@@ -219,5 +220,83 @@ func TestSortHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, "", "--version")
 	if code != 0 || !strings.Contains(out, "sort") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+func TestSortNewFlags(t *testing.T) {
+	// --check-silent / -C returns 1 on disorder but no output
+	_, errs, code := runTool(t, "b\na\n", "-C")
+	if code != 1 || strings.Contains(errs, "disorder") {
+		t.Errorf("-C: code=%d err=%q, want code=1 and silent", code, errs)
+	}
+
+	// --zero-terminated / -z
+	out, _, code := runTool(t, "c\x00a\x00b\x00", "-z")
+	if code != 0 || out != "a\x00b\x00c\x00" {
+		t.Errorf("-z: got=%q code=%d", out, code)
+	}
+
+	// --dictionary-order / -d
+	out, _, code = runTool(t, "a-b\nab\n", "-d")
+	if code != 0 || out != "a-b\nab\n" {
+		t.Errorf("-d: got=%q", out)
+	}
+
+	// --month-sort / -M
+	out, _, code = runTool(t, "OCT\nJAN\nMAR\n", "-M")
+	if code != 0 || out != "JAN\nMAR\nOCT\n" {
+		t.Errorf("-M: got=%q", out)
+	}
+
+	// --version-sort / -V
+	out, _, code = runTool(t, "a10\na2\n", "-V")
+	if code != 0 || out != "a2\na10\n" {
+		t.Errorf("-V: got=%q", out)
+	}
+
+	// --general-numeric-sort / -g
+	out, _, code = runTool(t, "10\n2.5\n1e10\n", "-g")
+	if code != 0 || out != "2.5\n10\n1e10\n" {
+		t.Errorf("-g: got=%q", out)
+	}
+
+	// --ignore-nonprinting / -i
+	out, _, code = runTool(t, "a\x01b\nab\n", "-i")
+	if code != 0 || out != "a\x01b\nab\n" {
+		t.Errorf("-i: got=%q", out)
+	}
+
+	// --merge / -m: passes input through (already sorted)
+	out, _, code = runTool(t, "a\nb\nc\n", "-m")
+	if code != 0 || out != "a\nb\nc\n" {
+		t.Errorf("-m: got=%q", out)
+	}
+
+	// --random-sort / -R produces same lines (just in different order)
+	out, _, code = runTool(t, "a\nb\nc\n", "-R")
+	if code != 0 {
+		t.Errorf("-R: code=%d", code)
+	}
+	if !strings.Contains(out, "a") || !strings.Contains(out, "b") || !strings.Contains(out, "c") {
+		t.Errorf("-R lost lines: %q", out)
+	}
+
+	// --temporary-directory / -T is accepted (no-op)
+	_, _, code = runTool(t, "a\nb\n", "-T", "/tmp")
+	if code != 0 {
+		t.Errorf("-T: code=%d", code)
+	}
+
+	// --files0-from
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("b\na\nc\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "list"), []byte("f.txt\x00"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code = runToolDir(t, dir, "", "--files0-from", "list")
+	if code != 0 || out != "a\nb\nc\n" {
+		t.Errorf("--files0-from: got=%q code=%d", out, code)
 	}
 }

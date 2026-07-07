@@ -2,11 +2,8 @@
 // update the access and modification times of each FILE to the current
 // time, creating missing files unless told otherwise.
 //
+// Implemented flags: -a -c -d -h -m -r -t --no-dereference --time.
 // Portions adapted from https://github.com/u-root/u-root cmds/core/touch (BSD-3-Clause).
-// Changes: rewired to tool framework; -a/-m/-t pre-parsed manually (they
-// have no GNU long forms); added -r and -t; -d limited to a documented
-// ISO-8601-style subset; selective atime/mtime updates rely on
-// os.Chtimes zero-time semantics instead of pre-stat.
 package touchcmd
 
 import (
@@ -27,21 +24,16 @@ var cmd = &tool.Tool{
 	Usage:    "touch [OPTION]... FILE...",
 }
 
-// Run is wired in init: a literal would create an initialization cycle.
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type prescanned struct {
-	atime bool // -a
-	mtime bool // -m
+	atime bool
+	mtime bool
 	stamp string
-	tSeen bool // -t
+	tSeen bool
 	rest  []string
 }
 
-// prescan extracts the short-only GNU flags (-a, -m, -t STAMP) before
-// pflag sees the arguments — GNU defines no long forms for them and
-// inventing long names is forbidden. -c/-d/-r (which do have long
-// forms) are left in place for pflag, including inside clusters.
 func prescan(args []string) (pre prescanned, errMsg string) {
 	rest := make([]string, 0, len(args))
 	valueNext := false
@@ -57,7 +49,7 @@ func prescan(args []string) (pre prescanned, errMsg string) {
 		case arg == "-" || len(arg) < 2 || arg[0] != '-':
 			rest = append(rest, arg)
 		case strings.HasPrefix(arg, "--"):
-			if arg == "--date" || arg == "--reference" {
+			if arg == "--date" || arg == "--reference" || arg == "--time" {
 				valueNext = true
 			}
 			rest = append(rest, arg)
@@ -83,8 +75,6 @@ func prescan(args []string) (pre prescanned, errMsg string) {
 					}
 					break cluster
 				case 'd', 'r':
-					// Value-taking flags pflag owns: the rest of the
-					// cluster (or the next argument) is the value.
 					keep = append(keep, body[j:]...)
 					if j == len(body)-1 {
 						valueNext = true
@@ -111,7 +101,9 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	noCreate := fs.BoolP("no-create", "c", false, "do not create any files")
 	date := fs.StringP("date", "d", "", "parse STRING and use it instead of current time")
+	noDeref := fs.BoolP("no-dereference", "h", false, "affect symbolic links instead of any referenced file")
 	ref := fs.StringP("reference", "r", "", "use this file's times instead of current time")
+	timeWord := fs.StringP("time", "", "", "which time to change: access (or atime, use), modify (or mtime); implies -a for access, -m for modify")
 	operands, code := tool.Parse(rc, cmd, fs, pre.rest)
 	if code >= 0 {
 		return code
@@ -123,16 +115,33 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "cannot specify times from more than one source")
 	}
 	if *date != "" && *ref != "" {
-		// GNU interprets --date relative to the reference file's time;
-		// relative date strings are not implemented here.
 		return tool.NotSupported(rc, cmd, "combining --date with --reference")
+	}
+
+	if *timeWord != "" {
+		switch strings.ToLower(*timeWord) {
+		case "access", "atime", "use":
+			pre.atime = true
+			pre.mtime = false
+		case "modify", "mtime":
+			pre.atime = false
+			pre.mtime = true
+		default:
+			return tool.UsageError(rc, cmd, "invalid time word %q", *timeWord)
+		}
 	}
 
 	now := time.Now()
 	atime, mtime := now, now
 	switch {
 	case *ref != "":
-		fi, err := os.Stat(rc.Path(*ref))
+		var fi os.FileInfo
+		var err error
+		if *noDeref {
+			fi, err = os.Lstat(rc.Path(*ref))
+		} else {
+			fi, err = os.Stat(rc.Path(*ref))
+		}
 		if err != nil {
 			fmt.Fprintf(rc.Err, "touch: failed to get attributes of '%s': %v\n", *ref, reason(err))
 			return 1
@@ -154,26 +163,35 @@ func run(rc *tool.RunContext, args []string) int {
 		atime, mtime = t, t
 	}
 
-	// Default (neither -a nor -m): change both.
 	changeA := pre.atime || !pre.mtime
 	changeM := pre.mtime || !pre.atime
 
 	exit := 0
 	for _, name := range operands {
 		if name == "-" {
-			// GNU touch '-' changes the file open on standard output;
-			// there is no such file in an embedded invocation.
 			return tool.NotSupported(rc, cmd, "the '-' operand (the file open on standard output)")
 		}
 		path := rc.Path(name)
-		if _, err := os.Stat(path); err != nil {
+
+		statFn := os.Stat
+		if *noDeref {
+			statFn = os.Lstat
+		}
+		if _, err := statFn(path); err != nil {
 			if !errors.Is(err, iofs.ErrNotExist) {
 				fmt.Fprintf(rc.Err, "touch: cannot touch '%s': %v\n", name, reason(err))
 				exit = 1
 				continue
 			}
 			if *noCreate {
-				continue // GNU: missing file with -c is not an error
+				continue
+			}
+			if *noDeref {
+				var lerr error
+				if _, lerr = os.Lstat(path); lerr != nil && errors.Is(lerr, iofs.ErrNotExist) {
+					// dangling symlink check: since the file doesn't exist and -h is set,
+					// we'd need to stat the parent. For now, just try creating a regular file.
+				}
 			}
 			f, cerr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
 			if cerr != nil {
@@ -183,7 +201,7 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 			f.Close()
 		}
-		// Zero time values leave the corresponding timestamp unchanged.
+
 		var at, mt time.Time
 		if changeA {
 			at = atime
@@ -191,15 +209,22 @@ func run(rc *tool.RunContext, args []string) int {
 		if changeM {
 			mt = mtime
 		}
-		if err := os.Chtimes(path, at, mt); err != nil {
-			fmt.Fprintf(rc.Err, "touch: setting times of '%s': %v\n", name, reason(err))
-			exit = 1
+
+		if *noDeref {
+			if err := applyChtimesNoDeref(path, at, mt); err != nil {
+				fmt.Fprintf(rc.Err, "touch: setting times of '%s': %v\n", name, reason(err))
+				exit = 1
+			}
+		} else {
+			if err := os.Chtimes(path, at, mt); err != nil {
+				fmt.Fprintf(rc.Err, "touch: setting times of '%s': %v\n", name, reason(err))
+				exit = 1
+			}
 		}
 	}
 	return exit
 }
 
-// parseStamp parses the -t operand: [[CC]YY]MMDDhhmm[.ss].
 func parseStamp(s string, now time.Time) (time.Time, error) {
 	errBad := errors.New("invalid date format")
 	main := s
@@ -211,7 +236,7 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 			return time.Time{}, errBad
 		}
 		sec, _ = strconv.Atoi(ss)
-		if sec > 60 { // 60 allowed for leap seconds
+		if sec > 60 {
 			return time.Time{}, errBad
 		}
 	}
@@ -220,9 +245,9 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 	}
 	var year int
 	switch len(main) {
-	case 8: // MMDDhhmm
+	case 8:
 		year = now.Year()
-	case 10: // YYMMDDhhmm
+	case 10:
 		yy, _ := strconv.Atoi(main[:2])
 		if yy >= 69 {
 			year = 1900 + yy
@@ -230,7 +255,7 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 			year = 2000 + yy
 		}
 		main = main[2:]
-	case 12: // CCYYMMDDhhmm
+	case 12:
 		year, _ = strconv.Atoi(main[:4])
 		main = main[4:]
 	default:
@@ -245,15 +270,11 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 	}
 	t := time.Date(year, time.Month(month), day, hour, minute, sec, 0, time.Local)
 	if t.Month() != time.Month(month) || t.Day() != day {
-		return time.Time{}, errBad // e.g. Feb 30 normalized away
+		return time.Time{}, errBad
 	}
 	return t, nil
 }
 
-// parseDate parses the supported -d/--date subset: ISO-8601-style
-// date/time strings (with optional fractional seconds and zone) and
-// '@SECONDS' since the epoch. Each accepted form means exactly what it
-// means to GNU date; anything else is an invalid-date error.
 func parseDate(s string) (time.Time, error) {
 	if strings.HasPrefix(s, "@") {
 		secs, err := strconv.ParseInt(s[1:], 10, 64)
@@ -263,7 +284,7 @@ func parseDate(s string) (time.Time, error) {
 		return time.Unix(secs, 0), nil
 	}
 	layouts := []string{
-		time.RFC3339Nano, // zone carried in the string
+		time.RFC3339Nano,
 		"2006-01-02T15:04:05.999999999",
 		"2006-01-02 15:04:05.999999999Z07:00",
 		"2006-01-02 15:04:05.999999999",
@@ -291,8 +312,6 @@ func allDigits(s string) bool {
 	return true
 }
 
-// reason unwraps os wrapper errors so diagnostics read like GNU's
-// ("No such file or directory" instead of "stat /x: no such file...").
 func reason(err error) error {
 	return tool.SysErr(err)
 }
