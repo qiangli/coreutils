@@ -41,6 +41,7 @@ func listMounts() ([]mountEntry, error) {
 		out = append(out, mountEntry{
 			device: root[:2],
 			point:  root,
+			fstype: "fixed",
 			total:  total,
 			used:   total - totalFree,
 			avail:  availCaller,
@@ -48,6 +49,8 @@ func listMounts() ([]mountEntry, error) {
 	}
 	return out, nil
 }
+
+func syncFilesystems() {}
 
 func mountForFile(path string, mounts []mountEntry) (int, bool) {
 	vol := filepath.VolumeName(path)
