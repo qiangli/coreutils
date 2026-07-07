@@ -209,3 +209,49 @@ func TestShufHelpAndVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+// An absurd range without -n must fail with GNU's clean diagnostic
+// instead of attempting the allocation (host-OOM regression: this
+// exact invocation is uutils' #12500 repro and took a host down when
+// run before the guard existed).
+func TestShufHugeRangeMemoryExhausted(t *testing.T) {
+	_, errb, code := runTool(t, "", "-i", "1-18446744073709551615")
+	if code != 1 || errb != "shuf: memory exhausted\n" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	// A huge -n over a huge range is just as unsatisfiable.
+	_, errb, code = runTool(t, "", "-n", "18446744073709551615", "-i", "1-18446744073709551615")
+	if code != 1 || errb != "shuf: memory exhausted\n" {
+		t.Fatalf("huge -n: code=%d err=%q", code, errb)
+	}
+}
+
+// Sampling a few values from extreme ranges stays cheap, including the
+// full uint64 range 0-MaxUint64 whose span overflows uint64.
+func TestShufHugeRangeSmallSample(t *testing.T) {
+	out, errb, code := runTool(t, "", "-n", "3", "-i", "1-100000000000")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if got := len(strings.Fields(out)); got != 3 {
+		t.Fatalf("want 3 samples, got %d (%q)", got, out)
+	}
+	out, errb, code = runTool(t, "", "-n", "1", "-i", "0-18446744073709551615")
+	if code != 0 || errb != "" {
+		t.Fatalf("full u64: code=%d err=%q", code, errb)
+	}
+	if got := len(strings.Fields(out)); got != 1 {
+		t.Fatalf("full u64: want 1 sample, got %d (%q)", got, out)
+	}
+}
+
+// A count beyond int range means "everything available", as in GNU.
+func TestShufHugeHeadCountLineMode(t *testing.T) {
+	out, errb, code := runTool(t, "a\nb\n", "-n", "18446744073709551615")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if got := len(strings.Fields(out)); got != 2 {
+		t.Fatalf("want both lines, got %d (%q)", got, out)
+	}
+}

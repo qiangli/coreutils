@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"os"
 	"strconv"
@@ -41,10 +42,16 @@ func run(rc *tool.RunContext, args []string) int {
 
 	count := -1 // unlimited
 	if fs.Changed("head-count") {
-		v, err := strconv.ParseUint(*countStr, 10, 62)
+		v, err := strconv.ParseUint(*countStr, 10, 64)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "shuf: invalid line count: '%s'\n", *countStr)
 			return 1
+		}
+		// A count beyond int range means "everything available" — the
+		// per-mode k = min(count, n) logic (and the range-mode memory
+		// guard) does the rest, as in GNU.
+		if v > math.MaxInt {
+			v = math.MaxInt
 		}
 		count = int(v)
 	}
@@ -65,12 +72,32 @@ func run(rc *tool.RunContext, args []string) int {
 			return 1
 		}
 		n := hi - lo + 1 // 0 when LO == HI+1 (an allowed empty range)
+		// n also wraps to 0 for the full uint64 range 0-MaxUint64,
+		// which GNU (unlike uutils) rejects but we must not crash on.
+		fullU64 := lo == 0 && hi == math.MaxUint64
 		k := n
+		if fullU64 {
+			k = math.MaxUint64
+		}
 		if count >= 0 && uint64(count) < k {
 			k = uint64(count)
 		}
-		for _, v := range sampleRange(n, k) {
-			fmt.Fprintf(out, "%d\n", lo+v)
+		// GNU reports "memory exhausted" when the sample can't be
+		// materialized. Guard BEFORE allocating: an absurd range must
+		// degrade into that clean error, not swap the host to death
+		// (uutils had the same bug — their #12500).
+		if k > maxSampleElems(k == n || fullU64) {
+			fmt.Fprintln(rc.Err, "shuf: memory exhausted")
+			return 1
+		}
+		if fullU64 {
+			for _, v := range sampleFullU64(k) {
+				fmt.Fprintf(out, "%d\n", v)
+			}
+		} else {
+			for _, v := range sampleRange(n, k) {
+				fmt.Fprintf(out, "%d\n", lo+v)
+			}
 		}
 	case *echo:
 		lines := make([][]byte, len(operands))
@@ -152,11 +179,32 @@ func emitShuffled(out *bufio.Writer, lines [][]byte, count int) {
 	}
 }
 
+// maxSampleElems bounds how many elements a range sample may
+// materialize before shuf reports GNU's "memory exhausted" instead of
+// attempting an allocation that could swap the host to death. A full
+// permutation costs 8 bytes/elem (plain slice); Floyd sampling adds a
+// dedup map (~50 bytes/elem), so its bound is lower.
+func maxSampleElems(fullPermutation bool) uint64 {
+	if fullPermutation {
+		return 1 << 30 // 8 GiB permutation slice
+	}
+	return 1 << 27 // ~7 GiB Floyd map + slice
+}
+
 // sampleRange picks k distinct offsets from [0, n) without
-// materializing the range (Floyd's algorithm), then shuffles them so
-// the output order is uniform too. Keeps `shuf -i 1-1000000000 -n 5`
+// materializing the range, then shuffles them so the output order is
+// uniform too. k == n uses a plain Fisher-Yates permutation (no map);
+// k < n uses Floyd's algorithm. Keeps `shuf -i 1-1000000000 -n 5`
 // cheap.
 func sampleRange(n, k uint64) []uint64 {
+	if k == n {
+		res := make([]uint64, n)
+		for i := range res {
+			res[i] = uint64(i)
+		}
+		rand.Shuffle(len(res), func(a, b int) { res[a], res[b] = res[b], res[a] })
+		return res
+	}
 	chosen := make(map[uint64]struct{}, k)
 	res := make([]uint64, 0, k)
 	for j := n - k; j < n; j++ {
@@ -168,6 +216,23 @@ func sampleRange(n, k uint64) []uint64 {
 		res = append(res, t)
 	}
 	rand.Shuffle(len(res), func(a, b int) { res[a], res[b] = res[b], res[a] })
+	return res
+}
+
+// sampleFullU64 picks k distinct values uniformly from the full uint64
+// range (whose span does not fit in uint64 arithmetic). k is small
+// here — the memory guard runs first — so rejection sampling is cheap.
+func sampleFullU64(k uint64) []uint64 {
+	chosen := make(map[uint64]struct{}, k)
+	res := make([]uint64, 0, k)
+	for uint64(len(res)) < k {
+		v := rand.Uint64()
+		if _, dup := chosen[v]; dup {
+			continue
+		}
+		chosen[v] = struct{}{}
+		res = append(res, v)
+	}
 	return res
 }
 
