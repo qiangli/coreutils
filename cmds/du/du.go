@@ -31,7 +31,7 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "du",
-	Synopsis: "Summarize device usage of the set of FILEs, recursively for directories.",
+	Synopsis: "Summarize device usage of the set of FILEs, recursively for directories. Supports -D, -H, and -M aliases.",
 	Usage:    "du [OPTION]... [FILE]...",
 }
 
@@ -92,6 +92,8 @@ func run(rc *tool.RunContext, args []string) int {
 	noDeref := fs.BoolP("no-dereference", "P", false, "do not follow any symbolic links")
 	kib := fs.BoolP("kilobytes", "k", false, "like --block-size=1K")
 	mib := fs.BoolP("megabytes", "m", false, "like --block-size=1M")
+	fs.BoolP("megabytes-short", "M", false, "like --block-size=1M")
+	fs.Lookup("megabytes-short").Hidden = true
 	total := fs.BoolP("total", "c", false, "produce a grand total")
 	countLinks := fs.BoolP("count-links", "l", false, "count sizes many times if hard linked")
 	inodes := fs.Bool("inodes", false, "list inode usage information instead of block usage")

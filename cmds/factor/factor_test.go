@@ -26,23 +26,18 @@ func TestFactorExponents(t *testing.T) {
 }
 
 func TestFactorHelpVersionAndShortH(t *testing.T) {
-	for _, args := range [][]string{{"--help"}, {"--version"}, {"-V"}} {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"--version"}, {"-V"}} {
 		var out, err bytes.Buffer
 		code := run(&tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &err, In: strings.NewReader("")}}, args)
 		if code != 0 || err.String() != "" || out.String() == "" {
 			t.Fatalf("factor %v: code=%d out=%q err=%q", args, code, out.String(), err.String())
 		}
-		if args[0] == "--help" {
-			for _, want := range []string{"--exponents", "--help", "--version"} {
+		if args[0] == "--help" || args[0] == "-h" {
+			for _, want := range []string{"--exponents", "-h, --help", "-V, --version"} {
 				if !strings.Contains(out.String(), want) {
 					t.Fatalf("factor help missing %q in %q", want, out.String())
 				}
 			}
 		}
-	}
-	var out, err bytes.Buffer
-	code := run(&tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &err, In: strings.NewReader("")}}, []string{"-h", "36"})
-	if code != 0 || out.String() != "36: 2^2 3^2\n" {
-		t.Fatalf("factor -h remains exponents: code=%d out=%q err=%q", code, out.String(), err.String())
 	}
 }

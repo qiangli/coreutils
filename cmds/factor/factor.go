@@ -24,13 +24,13 @@ func run(rc *tool.RunContext, args []string) int {
 	var nums []string
 	for _, a := range args {
 		switch a {
-		case "--help":
-			fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --exponents  print repeated factors in exponential form\n      --help       display this help and exit\n      --version    output version information and exit\n", cmd.Usage, cmd.Synopsis)
+		case "--help", "-h":
+			fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --exponents  print repeated factors in exponential form\n  -h, --help       display this help and exit\n  -V, --version    output version information and exit\n", cmd.Usage, cmd.Synopsis)
 			return 0
 		case "--version", "-V":
 			fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
 			return 0
-		case "-h", "--exponents":
+		case "--exponents":
 			exponents = true
 		default:
 			nums = append(nums, a)

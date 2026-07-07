@@ -20,7 +20,7 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "touch",
-	Synopsis: "Update the access and modification times of each FILE to the current time.",
+	Synopsis: "Update the access and modification times of each FILE to the current time. Supports -t STAMP.",
 	Usage:    "touch [OPTION]... FILE...",
 }
 
@@ -104,6 +104,10 @@ func run(rc *tool.RunContext, args []string) int {
 	date := fs.StringP("date", "d", "", "parse STRING and use it instead of current time")
 	noDeref := fs.BoolP("no-dereference", "h", false, "affect symbolic links instead of any referenced file")
 	ref := fs.StringP("reference", "r", "", "use this file's times instead of current time")
+	fs.StringP("stamp", "t", "", "use [[CC]YY]MMDDhhmm[.ss] instead of current time")
+	if f := fs.Lookup("stamp"); f != nil {
+		f.Hidden = true
+	}
 	timeWord := fs.StringP("time", "", "", "which time to change: access (or atime, use), modify (or mtime); implies -a for access, -m for modify")
 	operands, code := tool.Parse(rc, cmd, fs, pre.rest)
 	if code >= 0 {

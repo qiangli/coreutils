@@ -45,12 +45,12 @@ func run(rc *tool.RunContext, args []string) int {
 	chdir := fs.StringP("chdir", "C", "", "change working directory before running COMMAND")
 	argv0 := fs.StringP("argv0", "a", "", "pass ARGV0 as COMMAND's zeroth argument")
 	splitStrings := fs.StringArrayP("split-string", "S", nil, "process and split S into separate arguments")
-	envFiles := fs.StringArray("file", nil, "read environment variables from FILE")
+	envFiles := fs.StringArrayP("file", "f", nil, "read environment variables from FILE")
 	ignoreSignals := fs.StringArray("ignore-signal", nil, "set handling of SIGNAL to ignore before running COMMAND")
 	defaultSignals := fs.StringArray("default-signal", nil, "set handling of SIGNAL to default before running COMMAND")
 	blockSignals := fs.StringArray("block-signal", nil, "block delivery of SIGNAL before running COMMAND")
 	listSignalHandling := fs.Bool("list-signal-handling", false, "list non-default signal handling to stderr")
-	debug := fs.Bool("debug", false, "print verbose information for each processing step")
+	debug := fs.BoolP("debug", "v", false, "print verbose information for each processing step")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code

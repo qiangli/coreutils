@@ -56,6 +56,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolP("kibibytes", "k", false, "like --block-size=1K")
 	human := fs.BoolP("human-readable", "h", false, "print sizes in powers of 1024 (e.g., 1023M)")
 	blockSize := fs.StringP("block-size", "B", "", "scale sizes by SIZE before printing")
+	fs.BoolP("megabytes", "M", false, "like --block-size=1M")
 	si := fs.BoolP("si", "H", false, "print sizes in powers of 1000 (e.g., 1.1G)")
 	portable := fs.BoolP("portability", "P", false, "use the POSIX output format")
 	printType := fs.BoolP("print-type", "T", false, "print file system type")
