@@ -255,3 +255,61 @@ func TestShufHugeHeadCountLineMode(t *testing.T) {
 		t.Fatalf("want both lines, got %d (%q)", got, out)
 	}
 }
+
+func TestShufNewOptions(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Output file (-o)
+	out, _, code := runToolDir(t, dir, "a\nb\nc\n", "-o", "out.txt")
+	if code != 0 || out != "" {
+		t.Errorf("-o output option: out=%q code=%d", out, code)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sorted(outLines(string(data)))
+	if strings.Join(got, ",") != "a,b,c" {
+		t.Errorf("shuf to file lost data: %q", string(data))
+	}
+
+	// 2. Repeat (-r)
+	out, _, code = runTool(t, "a\n", "-r", "-n", "5")
+	if code != 0 || out != "a\na\na\na\na\n" {
+		t.Errorf("-r repeat option: out=%q code=%d", out, code)
+	}
+
+	// 3. Zero Terminated (-z)
+	out, _, code = runTool(t, "a\x00b\x00", "-z")
+	if code != 0 {
+		t.Errorf("-z option code: %d", code)
+	}
+	parts := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	sort.Strings(parts)
+	if strings.Join(parts, ",") != "a,b" {
+		t.Errorf("-z output: %q", out)
+	}
+
+	// 4. Random Seed (--random-seed)
+	// Output should be deterministic for the same seed!
+	out1, _, _ := runTool(t, "", "-i", "1-100", "-n", "10", "--random-seed=12345")
+	out2, _, _ := runTool(t, "", "-i", "1-100", "-n", "10", "--random-seed=12345")
+	if out1 != out2 {
+		t.Errorf("random seed not deterministic: out1=%q out2=%q", out1, out2)
+	}
+
+	// 5. Random Source (--random-source)
+	srcFile := filepath.Join(dir, "rand_src")
+	// 8 bytes for 1 Uint64: let's write 80 bytes for 10 samples
+	var srcBytes []byte
+	for i := 0; i < 80; i++ {
+		srcBytes = append(srcBytes, byte(i))
+	}
+	if err := os.WriteFile(srcFile, srcBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runToolDir(t, dir, "", "-i", "1-100", "-n", "5", "--random-source=rand_src")
+	if code != 0 || errb != "" {
+		t.Errorf("random source failed: code=%d err=%q", code, errb)
+	}
+}

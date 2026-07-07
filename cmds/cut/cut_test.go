@@ -162,3 +162,47 @@ func TestCutHelpAndVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+func TestCutNewOptions(t *testing.T) {
+	// 1. Output Delimiter in Field Mode
+	out, _, code := runTool(t, "a:b:c\n", "-f", "1,3", "-d", ":", "--output-delimiter=XYZ")
+	if code != 0 || out != "aXYZc\n" {
+		t.Errorf("output delimiter field mode: out=%q code=%d", out, code)
+	}
+
+	// 2. Output Delimiter in Byte Mode
+	out, _, code = runTool(t, "abcdef\n", "-b", "1-2,4-5", "--output-delimiter=XYZ")
+	if code != 0 || out != "abXYZde\n" {
+		t.Errorf("output delimiter byte mode: out=%q code=%d", out, code)
+	}
+
+	// 3. Zero Terminated
+	out, _, code = runTool(t, "a:b:c\x00d:e:f\x00", "-f", "2", "-d", ":", "-z")
+	if code != 0 || out != "b\x00e\x00" {
+		t.Errorf("zero terminated: out=%q code=%d", out, code)
+	}
+
+	// 4. Ignored -n option
+	out, _, code = runTool(t, "abcdef\n", "-b", "1-3", "-n")
+	if code != 0 || out != "abc\n" {
+		t.Errorf("ignored -n: out=%q code=%d", out, code)
+	}
+
+	// 5. Whitespace Delimited (-w)
+	out, _, code = runTool(t, "  a   b\tc  \n", "-f", "1,3", "-w")
+	if code != 0 || out != "a c\n" {
+		t.Errorf("whitespace delimited default output: out=%q code=%d", out, code)
+	}
+
+	// 6. Whitespace Delimited (-w) with output-delimiter
+	out, _, code = runTool(t, "  a   b\tc  \n", "-f", "1,3", "-w", "--output-delimiter=,")
+	if code != 0 || out != "a,c\n" {
+		t.Errorf("whitespace delimited with output-delimiter: out=%q code=%d", out, code)
+	}
+
+	// 7. Whitespace Delimited (-w) with -s (only-delimited)
+	out, _, code = runTool(t, "a\n  b  c\n", "-f", "2", "-w", "-s")
+	if code != 0 || out != "c\n" {
+		t.Errorf("whitespace delimited with only-delimited: out=%q code=%d", out, code)
+	}
+}

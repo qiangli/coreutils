@@ -44,29 +44,45 @@ func run(rc *tool.RunContext, args []string) int {
 	// framework parser.
 	var suppress [4]bool
 	rest := make([]string, 0, len(args))
-preparse:
 	for idx, a := range args {
 		if a == "--" {
 			rest = append(rest, args[idx:]...)
 			break
 		}
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
-			for _, c := range []byte(a[1:]) {
-				if c < '1' || c > '3' {
-					fmt.Fprintf(rc.Err, "comm: unknown shorthand flag: %q in %s\n", string(c), a)
-					fmt.Fprintf(rc.Err, "comm: not every GNU flag is implemented in pure-Go coreutils — see 'comm --help' for the supported subset\n")
-					return 2
+			hasDigits := false
+			for i := 1; i < len(a); i++ {
+				if a[i] >= '1' && a[i] <= '3' {
+					hasDigits = true
+					break
 				}
 			}
-			for _, c := range []byte(a[1:]) {
-				suppress[c-'0'] = true
+			if hasDigits {
+				var rebuilt strings.Builder
+				rebuilt.WriteByte('-')
+				for i := 1; i < len(a); i++ {
+					if a[i] >= '1' && a[i] <= '3' {
+						suppress[a[i]-'0'] = true
+					} else {
+						rebuilt.WriteByte(a[i])
+					}
+				}
+				if rebuilt.Len() > 1 {
+					rest = append(rest, rebuilt.String())
+				}
+				continue
 			}
-			continue preparse
 		}
 		rest = append(rest, a)
 	}
 
 	fs := tool.NewFlags(cmd.Name)
+	checkOrder := fs.Bool("check-order", false, "check that the input is correctly sorted")
+	nocheckOrder := fs.Bool("nocheck-order", false, "do not check that the input is correctly sorted")
+	outputDelimiter := fs.String("output-delimiter", "", "separate columns with STR")
+	total := fs.Bool("total", false, "output a summary")
+	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
+
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
@@ -82,7 +98,7 @@ preparse:
 
 	var lines [2][]string
 	for i, op := range operands {
-		ls, err := readLines(rc, op)
+		ls, err := readLines(rc, op, *zeroTerminated)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "comm: %s: %v\n", op, pathErr(err))
 			return 1
@@ -90,8 +106,15 @@ preparse:
 		lines[i] = ls
 	}
 
+	delim := "\t"
+	if fs.Changed("output-delimiter") {
+		delim = *outputDelimiter
+	}
+
+	var colCounts [4]int
 	bw := bufio.NewWriter(rc.Out)
 	emit := func(col int, line string) {
+		colCounts[col]++
 		if suppress[col] {
 			return
 		}
@@ -101,9 +124,13 @@ preparse:
 				tabs++
 			}
 		}
-		bw.WriteString(strings.Repeat("\t", tabs))
+		bw.WriteString(strings.Repeat(delim, tabs))
 		bw.WriteString(line)
-		bw.WriteByte('\n')
+		if *zeroTerminated {
+			bw.WriteByte('\x00')
+		} else {
+			bw.WriteByte('\n')
+		}
 	}
 
 	// GNU default order checking: each newly consumed line is compared
@@ -112,17 +139,26 @@ preparse:
 	seenUnpairable := false
 	var warned [2]bool
 	i, j := 0, 0
-	advance := func(file int) {
+	advance := func(file int) bool {
 		pos := &i
 		if file == 2 {
 			pos = &j
 		}
 		*pos++
 		ls := lines[file-1]
-		if *pos < len(ls) && seenUnpairable && !warned[file-1] && ls[*pos-1] > ls[*pos] {
-			fmt.Fprintf(rc.Err, "comm: file %d is not in sorted order\n", file)
-			warned[file-1] = true
+		if *pos < len(ls) && ls[*pos-1] > ls[*pos] {
+			if !*nocheckOrder {
+				if *checkOrder {
+					fmt.Fprintf(rc.Err, "comm: file %d is not in sorted order\n", file)
+					return false
+				}
+				if seenUnpairable && !warned[file-1] {
+					fmt.Fprintf(rc.Err, "comm: file %d is not in sorted order\n", file)
+					warned[file-1] = true
+				}
+			}
 		}
+		return true
 	}
 	for i < len(lines[0]) || j < len(lines[1]) {
 		var d int
@@ -138,15 +174,41 @@ preparse:
 		case d < 0:
 			seenUnpairable = true
 			emit(1, lines[0][i])
-			advance(1)
+			if !advance(1) {
+				return 1
+			}
 		case d > 0:
 			seenUnpairable = true
 			emit(2, lines[1][j])
-			advance(2)
+			if !advance(2) {
+				return 1
+			}
 		default:
 			emit(3, lines[0][i])
-			advance(1)
-			advance(2)
+			if !advance(1) || !advance(2) {
+				return 1
+			}
+		}
+	}
+	if *total {
+		c1 := colCounts[1]
+		if suppress[1] {
+			c1 = 0
+		}
+		c2 := colCounts[2]
+		if suppress[2] {
+			c2 = 0
+		}
+		c3 := colCounts[3]
+		if suppress[3] {
+			c3 = 0
+		}
+		sum := c1 + c2 + c3
+		fmt.Fprintf(bw, "%d%s%d%s%d%s%d total", c1, delim, c2, delim, c3, delim, sum)
+		if *zeroTerminated {
+			bw.WriteByte('\x00')
+		} else {
+			bw.WriteByte('\n')
 		}
 	}
 	if err := bw.Flush(); err != nil {
@@ -160,7 +222,7 @@ preparse:
 	return 0
 }
 
-func readLines(rc *tool.RunContext, operand string) ([]string, error) {
+func readLines(rc *tool.RunContext, operand string, zeroTerminated bool) ([]string, error) {
 	var data []byte
 	var err error
 	if operand == "-" {
@@ -174,7 +236,11 @@ func readLines(rc *tool.RunContext, operand string) ([]string, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), nil
+	sep := "\n"
+	if zeroTerminated {
+		sep = "\x00"
+	}
+	return strings.Split(strings.TrimSuffix(string(data), sep), sep), nil
 }
 
 func pathErr(err error) error {

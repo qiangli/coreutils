@@ -74,7 +74,7 @@ func TestUnexpandNoUTF8CountsBytes(t *testing.T) {
 }
 
 func TestUnexpandFirstOnlyOverridesAll(t *testing.T) {
-	out, stderr, code := runUnexpand(t, "x   y\n", "-a", "--first-only", "-t", "4")
+	out, stderr, code := runUnexpand(t, "x   y\n", "-a", "-f", "-t", "4")
 	if code != 0 || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}

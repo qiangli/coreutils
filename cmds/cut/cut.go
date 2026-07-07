@@ -35,13 +35,17 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 type rangePair struct{ lo, hi int }
 
 type cutter struct {
-	pairs         []rangePair
-	complement    bool
-	fieldMode     bool
-	delim         byte
-	onlyDelimited bool
-	scratch       []byte
-	buf           []byte
+	pairs               []rangePair
+	complement          bool
+	fieldMode           bool
+	delim               byte
+	onlyDelimited       bool
+	scratch             []byte
+	buf                 []byte
+	outDelim            []byte
+	lineTerm            byte
+	whitespaceDelimited bool
+	hasOutDelim         bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -52,6 +56,11 @@ func run(rc *tool.RunContext, args []string) int {
 	fieldsList := fs.StringP("fields", "f", "", "select only these fields; also print any line that contains no delimiter character, unless the -s option is specified")
 	complement := fs.Bool("complement", false, "complement the set of selected bytes, characters or fields")
 	onlyDelimited := fs.BoolP("only-delimited", "s", false, "do not print lines not containing delimiters")
+	outputDelimiter := fs.String("output-delimiter", "", "use STRING as the output delimiter")
+	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
+	fs.BoolP("ignored-n", "n", false, "do not split multi-byte characters (ignored)")
+	whitespaceDelimited := fs.BoolP("whitespace-delimited", "w", false, "use any consecutive spaces and/or tabs as the field delimiter")
+
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -80,6 +89,10 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "only one type of list may be specified")
 	}
 
+	if *whitespaceDelimited && fs.Changed("delimiter") {
+		return tool.UsageError(rc, cmd, "only one delimiter may be specified")
+	}
+
 	delimByte := byte('\t')
 	if fs.Changed("delimiter") {
 		if !fieldMode {
@@ -98,6 +111,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if *onlyDelimited && !fieldMode {
 		return tool.UsageError(rc, cmd, "suppressing non-delimited lines makes sense\n\tonly when operating on fields")
 	}
+	if *whitespaceDelimited && !fieldMode {
+		return tool.UsageError(rc, cmd, "whitespace-delimited mode makes sense only when operating on fields")
+	}
 
 	pairs, errMsg := parseList(list, fieldMode)
 	if errMsg != "" {
@@ -109,14 +125,31 @@ func run(rc *tool.RunContext, args []string) int {
 		pairs = complementRanges(pairs)
 	}
 
+	lineTerm := byte('\n')
+	if *zeroTerminated {
+		lineTerm = 0
+	}
+	var outDelim []byte
+	if fs.Changed("output-delimiter") {
+		outDelim = []byte(*outputDelimiter)
+	} else if *whitespaceDelimited {
+		outDelim = []byte(" ")
+	} else {
+		outDelim = []byte{delimByte}
+	}
+
 	c := &cutter{
-		pairs:         pairs,
-		complement:    *complement,
-		fieldMode:     fieldMode,
-		delim:         delimByte,
-		onlyDelimited: *onlyDelimited,
-		scratch:       make([]byte, 0, 1024),
-		buf:           make([]byte, 4*1024),
+		pairs:               pairs,
+		complement:          *complement,
+		fieldMode:           fieldMode,
+		delim:               delimByte,
+		onlyDelimited:       *onlyDelimited,
+		scratch:             make([]byte, 0, 1024),
+		buf:                 make([]byte, 4*1024),
+		outDelim:            outDelim,
+		lineTerm:            lineTerm,
+		whitespaceDelimited: *whitespaceDelimited,
+		hasOutDelim:         fs.Changed("output-delimiter"),
 	}
 
 	if len(operands) == 0 {
@@ -315,7 +348,7 @@ func (c *cutter) process(r io.Reader, out *bufio.Writer) error {
 		tail += n
 
 		for {
-			idx := bytes.IndexByte(buf[head:tail], '\n')
+			idx := bytes.IndexByte(buf[head:tail], c.lineTerm)
 			if idx < 0 {
 				break
 			}
@@ -341,12 +374,56 @@ func (c *cutter) process(r io.Reader, out *bufio.Writer) error {
 
 func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 	if c.fieldMode {
+		if c.whitespaceDelimited {
+			hasDelim := bytes.IndexByte(line, ' ') >= 0 || bytes.IndexByte(line, '\t') >= 0
+			if !hasDelim {
+				if !c.onlyDelimited {
+					c.scratch = c.scratch[:0]
+					c.scratch = append(c.scratch, line...)
+					if hadNL {
+						c.scratch = append(c.scratch, c.lineTerm)
+					}
+					if len(c.scratch) > 0 {
+						out.Write(c.scratch)
+					}
+				}
+				return
+			}
+			fields := splitWhitespace(line)
+			first := true
+			c.scratch = c.scratch[:0]
+			for _, p := range c.pairs {
+				lo := p.lo
+				hi := p.hi
+				if lo > len(fields) {
+					break
+				}
+				if hi > len(fields) {
+					hi = len(fields)
+				}
+				for fIdx := lo; fIdx <= hi; fIdx++ {
+					if !first {
+						c.scratch = append(c.scratch, c.outDelim...)
+					}
+					c.scratch = append(c.scratch, fields[fIdx-1]...)
+					first = false
+				}
+			}
+			if hadNL {
+				c.scratch = append(c.scratch, c.lineTerm)
+			}
+			if len(c.scratch) > 0 {
+				out.Write(c.scratch)
+			}
+			return
+		}
+
 		if bytes.IndexByte(line, c.delim) < 0 {
 			if !c.onlyDelimited {
 				c.scratch = c.scratch[:0]
 				c.scratch = append(c.scratch, line...)
 				if hadNL {
-					c.scratch = append(c.scratch, '\n')
+					c.scratch = append(c.scratch, c.lineTerm)
 				}
 				if len(c.scratch) > 0 {
 					out.Write(c.scratch)
@@ -387,7 +464,7 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 			}
 
 			if !first {
-				c.scratch = append(c.scratch, c.delim)
+				c.scratch = append(c.scratch, c.outDelim...)
 			}
 			c.scratch = append(c.scratch, line[start:end]...)
 			first = false
@@ -400,7 +477,7 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 		}
 	done:
 		if hadNL {
-			c.scratch = append(c.scratch, '\n')
+			c.scratch = append(c.scratch, c.lineTerm)
 		}
 		if len(c.scratch) > 0 {
 			out.Write(c.scratch)
@@ -409,6 +486,7 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 	}
 
 	c.scratch = c.scratch[:0]
+	printDelim := false
 	for _, p := range c.pairs {
 		if p.lo > len(line) {
 			break
@@ -417,14 +495,42 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 		if end > len(line) {
 			end = len(line)
 		}
+		if printDelim {
+			c.scratch = append(c.scratch, c.outDelim...)
+		} else if c.hasOutDelim {
+			printDelim = true
+		}
 		c.scratch = append(c.scratch, line[p.lo-1:end]...)
 	}
 	if hadNL {
-		c.scratch = append(c.scratch, '\n')
+		c.scratch = append(c.scratch, c.lineTerm)
 	}
 	if len(c.scratch) > 0 {
 		out.Write(c.scratch)
 	}
+}
+
+func splitWhitespace(line []byte) [][]byte {
+	var fields [][]byte
+	inField := false
+	start := 0
+	for i, b := range line {
+		if b == ' ' || b == '\t' {
+			if inField {
+				fields = append(fields, line[start:i])
+				inField = false
+			}
+		} else {
+			if !inField {
+				start = i
+				inField = true
+			}
+		}
+	}
+	if inField {
+		fields = append(fields, line[start:])
+	}
+	return fields
 }
 
 // pathErr unwraps *fs.PathError so diagnostics read "cut: f: no such

@@ -25,14 +25,20 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	null := fs.BoolP("null", "0", false, "end each output line with NUL, not newline")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
 
+	lineTerm := "\n"
+	if *null {
+		lineTerm = "\x00"
+	}
+
 	if len(operands) == 0 {
 		for _, raw := range rc.Env {
-			fmt.Fprintf(rc.Out, "%s\n", raw)
+			fmt.Fprintf(rc.Out, "%s%s", raw, lineTerm)
 		}
 		return 0
 	}
@@ -44,7 +50,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		fmt.Fprintf(rc.Out, "%s\n", val)
+		fmt.Fprintf(rc.Out, "%s%s", val, lineTerm)
 	}
 	return status
 }
