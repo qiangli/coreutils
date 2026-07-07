@@ -42,6 +42,23 @@ func TestODFormatsAndOffsets(t *testing.T) {
 	}
 }
 
+func TestODShortAliasesAndWidth(t *testing.T) {
+	out, _, code := runOD(t, t.TempDir(), "abcd", "-b", "-w", "2")
+	if want := "0000000 141 142\n0000002 143 144\n0000004\n"; out != want || code != 0 {
+		t.Fatalf("od -b -w = (%q, %d), want (%q, 0)", out, code, want)
+	}
+
+	out, _, code = runOD(t, t.TempDir(), "AB", "-x")
+	if want := "0000000 4241\n0000002\n"; out != want || code != 0 {
+		t.Fatalf("od -x = (%q, %d), want (%q, 0)", out, code, want)
+	}
+
+	out, _, code = runOD(t, t.TempDir(), "AB", "-d")
+	if want := "0000000 16961\n0000002\n"; out != want || code != 0 {
+		t.Fatalf("od -d = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
 func TestODSkipAndFiles(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("abcd"), 0o644); err != nil {
@@ -53,9 +70,41 @@ func TestODSkipAndFiles(t *testing.T) {
 	}
 }
 
+func TestODMultiFormatEndianStringsAndTraditionalSkip(t *testing.T) {
+	out, _, code := runOD(t, t.TempDir(), "ABCD", "-A", "x", "-t", "x2", "-t", "u1", "--endian", "big", "-w", "4")
+	want := "0000000 4142 4344\n         65  66  67  68\n0000004\n"
+	if out != want || code != 0 {
+		t.Fatalf("od multi/endian = (%q, %d), want (%q, 0)", out, code, want)
+	}
+
+	out, _, code = runOD(t, t.TempDir(), "\x00abc\x00de\x00", "-A", "d", "-S", "3")
+	want = "0000001 abc\n0000008\n"
+	if out != want || code != 0 {
+		t.Fatalf("od strings = (%q, %d), want (%q, 0)", out, code, want)
+	}
+
+	out, _, code = runOD(t, t.TempDir(), "abcd", "+2")
+	want = "0000002 062143\n0000004\n"
+	if out != want || code != 0 {
+		t.Fatalf("od traditional skip = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
 func TestODRejectsBadFormat(t *testing.T) {
-	_, errb, code := runOD(t, t.TempDir(), "", "-t", "x2")
+	_, errb, code := runOD(t, t.TempDir(), "", "-t", "x4")
+	if code != 0 || errb != "" {
+		t.Fatalf("od x4 should now be supported code=%d err=%q", code, errb)
+	}
+
+	_, errb, code = runOD(t, t.TempDir(), "", "-t", "z9")
 	if code != 2 || !strings.Contains(errb, "unsupported output format") {
 		t.Fatalf("od bad format code=%d err=%q", code, errb)
+	}
+}
+
+func TestODRejectsBadWidth(t *testing.T) {
+	_, errb, code := runOD(t, t.TempDir(), "", "-w", "0")
+	if code != 2 || !strings.Contains(errb, "invalid output width") {
+		t.Fatalf("od bad width code=%d err=%q", code, errb)
 	}
 }

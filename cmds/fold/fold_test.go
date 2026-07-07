@@ -46,6 +46,44 @@ func TestFoldSpacesAndFile(t *testing.T) {
 	}
 }
 
+func TestFoldCharactersKeepsUTF8RunesWhole(t *testing.T) {
+	out, stderr, code := runFold(t, "ééé\n", "-w", "2", "-c")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "éé\né\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldDefaultUsesDisplayColumns(t *testing.T) {
+	out, stderr, code := runFold(t, "界界界\n", "-w", "3")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "界\n界\n界\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+
+	out, stderr, code = runFold(t, "界界界\n", "-w", "3", "-c")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "界界界\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldBytesCanSplitUTF8(t *testing.T) {
+	out, stderr, code := runFold(t, "éé\n", "-w", "2", "-b")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "é\né\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestFoldRejectsBadWidth(t *testing.T) {
 	_, stderr, code := runFold(t, "", "-w", "0")
 	if code != 2 || !strings.Contains(stderr, "invalid number of columns") {

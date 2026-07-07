@@ -32,10 +32,11 @@ import (
 // by hash constructor + name: write the semantics once, instantiate
 // six times.
 type SumSpec struct {
-	Name string           // command name, e.g. "md5sum"
-	Algo string           // --tag label and tagged-line matcher, e.g. "MD5"
-	Bits int              // digest size in bits (hex length = Bits/4)
-	New  func() hash.Hash // digest constructor
+	Name      string           // command name, e.g. "md5sum"
+	Algo      string           // --tag label and tagged-line matcher, e.g. "MD5"
+	Bits      int              // digest size in bits (hex length = Bits/4)
+	New       func() hash.Hash // digest constructor
+	NewLength func(bits int) (hash.Hash, error)
 }
 
 // NewSumTool builds the registered Tool for one checksum command.
@@ -56,21 +57,48 @@ func runSum(rc *tool.RunContext, t *tool.Tool, spec SumSpec, args []string) int 
 	binary := fs.BoolP("binary", "b", false, "read in binary mode")
 	check := fs.BoolP("check", "c", false, "read checksums from the FILEs and check them")
 	tag := fs.Bool("tag", false, "create a BSD-style checksum")
+	text := fs.BoolP("text", "t", false, "read in text mode")
+	zero := fs.BoolP("zero", "z", false, "end each output line with NUL, not newline, and disable file name escaping")
+	warn := fs.BoolP("warn", "w", false, "warn about improperly formatted checksum lines")
+	status := fs.Bool("status", false, "don't output anything, status code shows success")
+	quiet := fs.Bool("quiet", false, "don't print OK for each successfully verified file")
+	strict := fs.Bool("strict", false, "exit non-zero for improperly formatted checksum lines")
+	ignoreMissing := fs.Bool("ignore-missing", false, "don't fail or report status for missing files")
+	length := fs.IntP("length", "l", spec.Bits, "digest length in bits")
 	operands, code := tool.Parse(rc, t, fs, args)
 	if code >= 0 {
 		return code
 	}
+	_ = text
 	if *tag && *check {
 		return tool.UsageError(rc, t, "the --tag option is meaningless when verifying checksums")
 	}
+	if *zero && *check {
+		return tool.UsageError(rc, t, "the --zero option is not supported when verifying checksums")
+	}
+	if *length != spec.Bits && spec.NewLength == nil {
+		return tool.UsageError(rc, t, "--length is not supported for %s", t.Name)
+	}
+	if *length <= 0 || *length%8 != 0 || *length > spec.Bits {
+		return tool.UsageError(rc, t, "invalid digest length: %d", *length)
+	}
+	runSpec := spec
+	runSpec.Bits = *length
 	if len(operands) == 0 {
 		operands = []string{"-"}
 	}
 
 	if *check {
+		opts := checkOptions{
+			warn:          *warn,
+			status:        *status,
+			quiet:         *quiet,
+			strict:        *strict,
+			ignoreMissing: *ignoreMissing,
+		}
 		exit := 0
 		for _, op := range operands {
-			if checkSumsFile(rc, t, spec, op) != 0 {
+			if checkSumsFile(rc, t, runSpec, op, opts) != 0 {
 				exit = 1
 			}
 		}
@@ -84,21 +112,28 @@ func runSum(rc *tool.RunContext, t *tool.Tool, spec SumSpec, args []string) int 
 	// exactly as on GNU/Linux.
 	exit := 0
 	for _, op := range operands {
-		sum, err := digestOf(rc, spec, op)
+		sum, err := digestOf(rc, runSpec, op)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "%s: %s: %s\n", t.Name, op, gnuErrMsg(err))
 			exit = 1
 			continue
 		}
-		name, prefix := escapeFilename(op)
+		name, prefix := op, ""
+		if !*zero {
+			name, prefix = escapeFilename(op)
+		}
+		lineEnd := "\n"
+		if *zero {
+			lineEnd = "\x00"
+		}
 		if *tag {
-			fmt.Fprintf(rc.Out, "%s%s (%s) = %s\n", prefix, spec.Algo, name, sum)
+			fmt.Fprintf(rc.Out, "%s%s (%s) = %s%s", prefix, runSpec.Algo, name, sum, lineEnd)
 		} else {
 			sep := "  "
 			if *binary {
 				sep = " *"
 			}
-			fmt.Fprintf(rc.Out, "%s%s%s%s\n", prefix, sum, sep, name)
+			fmt.Fprintf(rc.Out, "%s%s%s%s%s", prefix, sum, sep, name, lineEnd)
 		}
 	}
 	return exit
@@ -110,7 +145,16 @@ var errIsDirectory = errors.New("Is a directory")
 // digestOf hashes one operand ("-" = the invocation's stdin) and
 // returns the lowercase hex digest.
 func digestOf(rc *tool.RunContext, spec SumSpec, name string) (string, error) {
-	h := spec.New()
+	var h hash.Hash
+	if spec.NewLength != nil {
+		var err error
+		h, err = spec.NewLength(spec.Bits)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		h = spec.New()
+	}
 	if name == "-" {
 		if rc.In != nil {
 			if _, err := io.Copy(h, rc.In); err != nil {
@@ -135,7 +179,15 @@ func digestOf(rc *tool.RunContext, spec SumSpec, name string) (string, error) {
 
 // checkSumsFile verifies one checksum-list operand (GNU -c semantics).
 // Returns 0 when every listed file verified, 1 otherwise.
-func checkSumsFile(rc *tool.RunContext, t *tool.Tool, spec SumSpec, op string) int {
+type checkOptions struct {
+	warn          bool
+	status        bool
+	quiet         bool
+	strict        bool
+	ignoreMissing bool
+}
+
+func checkSumsFile(rc *tool.RunContext, t *tool.Tool, spec SumSpec, op string, opts checkOptions) int {
 	var r io.Reader
 	isStdin := op == "-"
 	if isStdin {
@@ -173,14 +225,22 @@ func checkSumsFile(rc *tool.RunContext, t *tool.Tool, spec SumSpec, op string) i
 				sum, err := digestOf(rc, spec, path)
 				switch {
 				case err != nil:
-					fmt.Fprintf(rc.Err, "%s: %s: %s\n", t.Name, display, gnuErrMsg(err))
-					fmt.Fprintf(rc.Out, "%s: FAILED open or read\n", display)
-					unreadable++
-					exit = 1
+					if !(opts.ignoreMissing && errors.Is(err, fs.ErrNotExist)) {
+						if !opts.status {
+							fmt.Fprintf(rc.Err, "%s: %s: %s\n", t.Name, display, gnuErrMsg(err))
+							fmt.Fprintf(rc.Out, "%s: FAILED open or read\n", display)
+						}
+						unreadable++
+						exit = 1
+					}
 				case strings.EqualFold(sum, digest):
-					fmt.Fprintf(rc.Out, "%s: OK\n", display)
+					if !opts.status && !opts.quiet {
+						fmt.Fprintf(rc.Out, "%s: OK\n", display)
+					}
 				default:
-					fmt.Fprintf(rc.Out, "%s: FAILED\n", display)
+					if !opts.status {
+						fmt.Fprintf(rc.Out, "%s: FAILED\n", display)
+					}
 					mismatched++
 					exit = 1
 				}
@@ -192,18 +252,23 @@ func checkSumsFile(rc *tool.RunContext, t *tool.Tool, spec SumSpec, op string) i
 	}
 
 	if valid == 0 {
-		fmt.Fprintf(rc.Err, "%s: %s: no properly formatted checksum lines found\n", t.Name, op)
+		if !opts.status {
+			fmt.Fprintf(rc.Err, "%s: %s: no properly formatted checksum lines found\n", t.Name, op)
+		}
 		return 1
 	}
-	if badFormat > 0 {
+	if badFormat > 0 && !opts.status {
 		fmt.Fprintf(rc.Err, "%s: WARNING: %d %s\n", t.Name, badFormat,
 			plural(badFormat, "line is improperly formatted", "lines are improperly formatted"))
 	}
-	if mismatched > 0 {
+	if badFormat > 0 && opts.strict {
+		exit = 1
+	}
+	if mismatched > 0 && !opts.status {
 		fmt.Fprintf(rc.Err, "%s: WARNING: %d %s\n", t.Name, mismatched,
 			plural(mismatched, "computed checksum did NOT match", "computed checksums did NOT match"))
 	}
-	if unreadable > 0 {
+	if unreadable > 0 && !opts.status {
 		fmt.Fprintf(rc.Err, "%s: WARNING: %d %s\n", t.Name, unreadable,
 			plural(unreadable, "listed file could not be read", "listed files could not be read"))
 	}

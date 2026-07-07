@@ -46,6 +46,36 @@ func TestUnexpandAllAndFile(t *testing.T) {
 	}
 }
 
+func TestUnexpandTabsImpliesAll(t *testing.T) {
+	out, stderr, code := runUnexpand(t, "x   y\n", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "x\ty\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestUnexpandFirstOnlyOverridesAll(t *testing.T) {
+	out, stderr, code := runUnexpand(t, "x   y\n", "-a", "-f", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "x   y\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestUnexpandNoUTF8CountsBytes(t *testing.T) {
+	out, stderr, code := runUnexpand(t, "é  z\n", "-U", "-a", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "é\tz\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestUnexpandRejectsBadTabs(t *testing.T) {
 	_, stderr, code := runUnexpand(t, "", "--tabs=4,2")
 	if code != 2 || !strings.Contains(stderr, "invalid tab size") {

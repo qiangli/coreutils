@@ -20,6 +20,9 @@ var cmd = hashenc.NewSumTool(hashenc.SumSpec{
 		}
 		return h
 	},
+	NewLength: func(bits int) (hash.Hash, error) {
+		return blake2b.New(bits/8, nil)
+	},
 })
 
 func init() { tool.Register(cmd) }

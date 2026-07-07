@@ -24,6 +24,8 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	tabsValue := fs.StringP("tabs", "t", "8", "use comma-separated tab stops instead of 8")
+	initial := fs.BoolP("initial", "i", false, "do not convert tabs after non blanks")
+	noUTF8 := fs.BoolP("no-utf8", "U", false, "interpret input as bytes rather than UTF-8")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -45,7 +47,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := expandStream(r, out, tabs); err != nil {
+		if err := expandStream(r, out, tabs, *initial, *noUTF8); err != nil {
 			fmt.Fprintf(rc.Err, "expand: %s: %v\n", name, err)
 			status = 1
 		}
@@ -60,9 +62,13 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-func expandStream(r io.Reader, w io.Writer, tabs []int) error {
+func expandStream(r io.Reader, w io.Writer, tabs []int, initial, noUTF8 bool) error {
+	if noUTF8 {
+		return expandBytes(r, w, tabs, initial)
+	}
 	br := bufio.NewReader(r)
 	col := 0
+	convertTabs := true
 	for {
 		ch, size, err := br.ReadRune()
 		if err == io.EOF {
@@ -73,6 +79,13 @@ func expandStream(r io.Reader, w io.Writer, tabs []int) error {
 		}
 		switch ch {
 		case '\t':
+			if initial && !convertTabs {
+				if _, err := io.WriteString(w, "\t"); err != nil {
+					return err
+				}
+				col = nextStop(col, tabs)
+				continue
+			}
 			n := nextStop(col, tabs) - col
 			if n <= 0 {
 				n = 1
@@ -86,6 +99,7 @@ func expandStream(r io.Reader, w io.Writer, tabs []int) error {
 				return err
 			}
 			col = 0
+			convertTabs = true
 		case '\b':
 			if _, err := io.WriteString(w, "\b"); err != nil {
 				return err
@@ -101,6 +115,63 @@ func expandStream(r io.Reader, w io.Writer, tabs []int) error {
 				col++
 			} else {
 				col++
+			}
+			if ch != ' ' {
+				convertTabs = false
+			}
+		}
+	}
+}
+
+func expandBytes(r io.Reader, w io.Writer, tabs []int, initial bool) error {
+	br := bufio.NewReader(r)
+	col := 0
+	convertTabs := true
+	for {
+		c, err := br.ReadByte()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch c {
+		case '\t':
+			if initial && !convertTabs {
+				if _, err := w.Write([]byte{c}); err != nil {
+					return err
+				}
+				col = nextStop(col, tabs)
+				continue
+			}
+			n := nextStop(col, tabs) - col
+			if n <= 0 {
+				n = 1
+			}
+			if _, err := io.WriteString(w, strings.Repeat(" ", n)); err != nil {
+				return err
+			}
+			col += n
+		case '\n':
+			if _, err := w.Write([]byte{c}); err != nil {
+				return err
+			}
+			col = 0
+			convertTabs = true
+		case '\b':
+			if _, err := w.Write([]byte{c}); err != nil {
+				return err
+			}
+			if col > 0 {
+				col--
+			}
+		default:
+			if _, err := w.Write([]byte{c}); err != nil {
+				return err
+			}
+			col++
+			if c != ' ' {
+				convertTabs = false
 			}
 		}
 	}

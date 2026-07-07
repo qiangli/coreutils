@@ -46,6 +46,26 @@ func TestExpandCustomTabsAndFile(t *testing.T) {
 	}
 }
 
+func TestExpandInitialOnly(t *testing.T) {
+	out, stderr, code := runExpand(t, "\t x\t y\n", "-i", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "     x\t y\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestExpandNoUTF8CountsBytes(t *testing.T) {
+	out, stderr, code := runExpand(t, "é\tz\n", "-U", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "é  z\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestExpandRejectsBadTabs(t *testing.T) {
 	_, stderr, code := runExpand(t, "", "-t", "0")
 	if code != 2 || !strings.Contains(stderr, "invalid tab size") {

@@ -24,16 +24,29 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type splitPoint struct {
-	line int
-	skip bool
+	line      int
+	nextStart int
+	skip      bool
+}
+
+type patternSpec struct {
+	raw    string
+	expr   string
+	offset int
+	skip   bool
+	regex  bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	prefix := fs.StringP("prefix", "f", "xx", "use PREFIX instead of 'xx'")
 	digits := fs.IntP("digits", "n", 2, "use DIGITS digits in output file names")
+	suffixFormat := fs.StringP("suffix-format", "b", "", "use sprintf FORMAT instead of %02d")
 	silent := fs.BoolP("silent", "s", false, "do not print output file sizes")
+	quiet := fs.BoolP("quiet", "q", false, "do not print output file sizes")
 	keep := fs.BoolP("keep-files", "k", false, "do not remove output files on errors")
+	suppressMatched := fs.Bool("suppress-matched", false, "suppress the lines matching PATTERN")
+	elideEmpty := fs.BoolP("elide-empty-files", "z", false, "remove empty output files")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -44,17 +57,24 @@ func run(rc *tool.RunContext, args []string) int {
 	if *digits < 1 {
 		return tool.UsageError(rc, cmd, "invalid number of digits: '%d'", *digits)
 	}
+	format := *suffixFormat
+	if format == "" {
+		format = "%0" + strconv.Itoa(*digits) + "d"
+	}
+	if _, err := formatSuffix(format, 0); err != nil {
+		return tool.UsageError(rc, cmd, "invalid suffix format '%s': %v", format, err)
+	}
 
 	lines, err := readLines(rc, operands[0])
 	if err != nil {
 		fmt.Fprintf(rc.Err, "csplit: cannot open '%s' for reading: %v\n", operands[0], tool.SysErr(err))
 		return 1
 	}
-	points, code := resolvePatterns(rc, lines, operands[1:])
+	points, code := resolvePatterns(rc, lines, operands[1:], *suppressMatched)
 	if code >= 0 {
 		return code
 	}
-	created, err := writePieces(rc, lines, points, *prefix, *digits, *silent)
+	created, err := writePieces(rc, lines, points, *prefix, format, *silent || *quiet, *elideEmpty)
 	if err != nil {
 		if !*keep {
 			for _, name := range created {
@@ -98,48 +118,168 @@ func readLines(rc *tool.RunContext, name string) ([]string, error) {
 	}
 }
 
-func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string) ([]splitPoint, int) {
+func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, suppressMatched bool) ([]splitPoint, int) {
 	points := make([]splitPoint, 0, len(patterns))
 	start := 0
+	last := ""
 	for _, pattern := range patterns {
-		if pattern == "{*}" {
-			return nil, tool.NotSupported(rc, cmd, "repeat pattern {*} in this subset")
+		repeats, repeatToEOF, isRepeat, code := parseRepeat(rc, pattern)
+		if code >= 0 {
+			return nil, code
 		}
-		if n, err := strconv.Atoi(pattern); err == nil {
-			if n < 1 || n > len(lines)+1 {
-				return nil, tool.UsageError(rc, cmd, "line number out of range: '%s'", pattern)
+		if isRepeat {
+			if last == "" {
+				return nil, tool.UsageError(rc, cmd, "missing pattern before repeat count")
 			}
-			idx := n - 1
-			points = append(points, splitPoint{line: idx})
-			start = idx
+			if repeatToEOF {
+				for {
+					point, nextSearch, found, code := resolveOnePattern(rc, lines, last, start, suppressMatched)
+					if code >= 0 {
+						return nil, code
+					}
+					if !found {
+						break
+					}
+					points = append(points, point)
+					start = nextSearch
+				}
+				continue
+			}
+			for i := 0; i < repeats; i++ {
+				point, nextSearch, found, code := resolveOnePattern(rc, lines, last, start, suppressMatched)
+				if code >= 0 {
+					return nil, code
+				}
+				if !found {
+					return nil, tool.UsageError(rc, cmd, "match not found: '%s'", last)
+				}
+				points = append(points, point)
+				start = nextSearch
+			}
 			continue
 		}
-		skip := strings.HasPrefix(pattern, "%") && strings.HasSuffix(pattern, "%")
-		if !(skip || strings.HasPrefix(pattern, "/") && strings.HasSuffix(pattern, "/")) {
-			return nil, tool.NotSupported(rc, cmd, fmt.Sprintf("pattern form '%s' (supported: line numbers, /REGEXP/, %%REGEXP%%)", pattern))
+		point, nextSearch, found, code := resolveOnePattern(rc, lines, pattern, start, suppressMatched)
+		if code >= 0 {
+			return nil, code
 		}
-		expr := pattern[1 : len(pattern)-1]
-		re, err := regexp.Compile(expr)
-		if err != nil {
-			return nil, tool.UsageError(rc, cmd, "invalid regular expression '%s'", expr)
-		}
-		found := -1
-		for i := start; i < len(lines); i++ {
-			if re.MatchString(strings.TrimSuffix(lines[i], "\n")) {
-				found = i
-				break
-			}
-		}
-		if found < 0 {
+		if !found {
 			return nil, tool.UsageError(rc, cmd, "match not found: '%s'", pattern)
 		}
-		points = append(points, splitPoint{line: found, skip: skip})
-		start = found + 1
+		points = append(points, point)
+		start = nextSearch
+		last = pattern
 	}
 	return points, -1
 }
 
-func writePieces(rc *tool.RunContext, lines []string, points []splitPoint, prefix string, digits int, silent bool) ([]string, error) {
+func parseRepeat(rc *tool.RunContext, pattern string) (count int, toEOF bool, repeat bool, code int) {
+	if pattern == "{*}" {
+		return 0, true, true, -1
+	}
+	if strings.HasPrefix(pattern, "{") && strings.HasSuffix(pattern, "}") {
+		n, err := strconv.Atoi(pattern[1 : len(pattern)-1])
+		if err != nil || n < 0 {
+			return 0, false, false, tool.UsageError(rc, cmd, "invalid repeat count: '%s'", pattern)
+		}
+		return n, false, true, -1
+	}
+	return 0, false, false, -1
+}
+
+func resolveOnePattern(rc *tool.RunContext, lines []string, pattern string, start int, suppressMatched bool) (splitPoint, int, bool, int) {
+	spec, code := parsePattern(rc, pattern)
+	if code >= 0 {
+		return splitPoint{}, start, false, code
+	}
+	if !spec.regex {
+		n, err := strconv.Atoi(spec.raw)
+		if err != nil {
+			return splitPoint{}, start, false, tool.NotSupported(rc, cmd, fmt.Sprintf("pattern form '%s' (supported: line numbers, /REGEXP/[+-N], %%REGEXP%%[+-N])", pattern))
+		}
+		if n < 1 || n > len(lines)+1 {
+			return splitPoint{}, start, false, tool.UsageError(rc, cmd, "line number out of range: '%s'", pattern)
+		}
+		idx := n - 1
+		return splitPoint{line: idx, nextStart: idx}, idx, true, -1
+	}
+	re, err := regexp.Compile(spec.expr)
+	if err != nil {
+		return splitPoint{}, start, false, tool.UsageError(rc, cmd, "invalid regular expression '%s'", spec.expr)
+	}
+	found := -1
+	for i := start; i < len(lines); i++ {
+		if re.MatchString(strings.TrimSuffix(lines[i], "\n")) {
+			found = i
+			break
+		}
+	}
+	if found < 0 {
+		return splitPoint{}, start, false, -1
+	}
+	line := found + spec.offset
+	if line < 0 || line > len(lines) {
+		return splitPoint{}, start, false, tool.UsageError(rc, cmd, "line number out of range: '%s'", pattern)
+	}
+	nextStart := line
+	if suppressMatched {
+		nextStart = found + 1
+	}
+	return splitPoint{line: line, nextStart: nextStart, skip: spec.skip}, found + 1, true, -1
+}
+
+func parsePattern(rc *tool.RunContext, pattern string) (patternSpec, int) {
+	spec := patternSpec{raw: pattern}
+	if pattern == "" {
+		return spec, -1
+	}
+	delim := pattern[0]
+	if delim != '/' && delim != '%' {
+		return spec, -1
+	}
+	end := findClosingDelimiter(pattern, delim)
+	if end < 0 {
+		return spec, tool.NotSupported(rc, cmd, fmt.Sprintf("pattern form '%s' (supported: line numbers, /REGEXP/[+-N], %%REGEXP%%[+-N])", pattern))
+	}
+	spec.regex = true
+	spec.skip = delim == '%'
+	spec.expr = pattern[1:end]
+	if tail := pattern[end+1:]; tail != "" {
+		sign := tail[0]
+		if sign != '+' && sign != '-' {
+			return spec, tool.UsageError(rc, cmd, "invalid offset in pattern '%s'", pattern)
+		}
+		n, err := strconv.Atoi(tail[1:])
+		if err != nil {
+			return spec, tool.UsageError(rc, cmd, "invalid offset in pattern '%s'", pattern)
+		}
+		if sign == '-' {
+			n = -n
+		}
+		spec.offset = n
+	}
+	return spec, -1
+}
+
+func findClosingDelimiter(pattern string, delim byte) int {
+	escaped := false
+	for i := 1; i < len(pattern); i++ {
+		c := pattern[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == delim {
+			return i
+		}
+	}
+	return -1
+}
+
+func writePieces(rc *tool.RunContext, lines []string, points []splitPoint, prefix, suffixFormat string, silent, elideEmpty bool) ([]string, error) {
 	var created []string
 	start := 0
 	seq := 0
@@ -148,34 +288,59 @@ func writePieces(rc *tool.RunContext, lines []string, points []splitPoint, prefi
 			return created, fmt.Errorf("split point moved backwards")
 		}
 		if !point.skip {
-			name, err := writePiece(rc, lines[start:point.line], prefix, digits, seq, silent)
+			name, wrote, err := writePiece(rc, lines[start:point.line], prefix, suffixFormat, seq, silent, elideEmpty)
 			if err != nil {
 				return created, err
 			}
-			created = append(created, name)
-			seq++
+			if wrote {
+				created = append(created, name)
+				seq++
+			}
 		}
-		start = point.line
+		start = point.nextStart
 	}
-	name, err := writePiece(rc, lines[start:], prefix, digits, seq, silent)
+	name, wrote, err := writePiece(rc, lines[start:], prefix, suffixFormat, seq, silent, elideEmpty)
 	if err != nil {
 		return created, err
 	}
-	created = append(created, name)
+	if wrote {
+		created = append(created, name)
+	}
 	return created, nil
 }
 
-func writePiece(rc *tool.RunContext, lines []string, prefix string, digits, seq int, silent bool) (string, error) {
-	name := fmt.Sprintf("%s%0*d", prefix, digits, seq)
+func writePiece(rc *tool.RunContext, lines []string, prefix, suffixFormat string, seq int, silent, elideEmpty bool) (string, bool, error) {
+	suffix, err := formatSuffix(suffixFormat, seq)
+	if err != nil {
+		return prefix, false, err
+	}
+	name := prefix + suffix
 	var buf bytes.Buffer
 	for _, line := range lines {
 		buf.WriteString(line)
 	}
+	if elideEmpty && buf.Len() == 0 {
+		return name, false, nil
+	}
 	if err := os.WriteFile(rc.Path(name), buf.Bytes(), 0o666); err != nil {
-		return name, err
+		return name, false, err
 	}
 	if !silent {
 		fmt.Fprintf(rc.Out, "%d\n", buf.Len())
 	}
-	return name, nil
+	return name, true, nil
+}
+
+func formatSuffix(format string, seq int) (suffix string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			suffix = ""
+			err = fmt.Errorf("requires one integer conversion")
+		}
+	}()
+	suffix = fmt.Sprintf(format, seq)
+	if strings.Contains(suffix, "%!") {
+		return "", fmt.Errorf("requires one integer conversion")
+	}
+	return suffix, nil
 }

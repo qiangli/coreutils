@@ -36,6 +36,9 @@ func TestBasencEncodings(t *testing.T) {
 		{[]string{"--base32"}, "MZXW6YTBOI======\n"},
 		{[]string{"--base32hex"}, "CPNMUOJ1E8======\n"},
 		{[]string{"--base16"}, "666F6F626172\n"},
+		{[]string{"--base2lsbf"}, "011001101111011011110110010001101000011001001110\n"},
+		{[]string{"--base2msbf"}, "011001100110111101101111011000100110000101110010\n"},
+		{[]string{"--base58"}, "t1Zv2yaZ\n"},
 		{[]string{"--base64", "-w", "4"}, "Zm9v\nYmFy\n"},
 		{[]string{"--base16", "-w", "0"}, "666F6F626172"},
 	}
@@ -44,6 +47,21 @@ func TestBasencEncodings(t *testing.T) {
 		if out != c.want || code != 0 {
 			t.Fatalf("basenc %v = (%q, %q, %d), want %q", c.args, out, errb, code, c.want)
 		}
+	}
+}
+
+func TestBasencZ85(t *testing.T) {
+	out, errb, code := runTool(t, "", "1234", "--z85")
+	if out != "f!$Kw\n" || errb != "" || code != 0 {
+		t.Fatalf("z85 encode = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runTool(t, "", "f!$Kw\n", "--z85", "-D")
+	if out != "1234" || errb != "" || code != 0 {
+		t.Fatalf("z85 decode = (%q, %q, %d)", out, errb, code)
+	}
+	_, errb, code = runTool(t, "", "123", "--z85")
+	if code != 1 || !strings.Contains(errb, "multiple of 4") {
+		t.Fatalf("z85 invalid length = (%q, %d)", errb, code)
 	}
 }
 
@@ -58,6 +76,9 @@ func TestBasencDecode(t *testing.T) {
 		{"MZXW6YTBOI======\n", []string{"--base32", "--decode"}, "foobar"},
 		{"CPNMUOJ1E8======\n", []string{"--base32hex", "-d"}, "foobar"},
 		{"666F6F626172\n", []string{"--base16", "-d"}, "foobar"},
+		{"011001101111011011110110010001101000011001001110\n", []string{"--base2lsbf", "-d"}, "foobar"},
+		{"011001100110111101101111011000100110000101110010\n", []string{"--base2msbf", "-d"}, "foobar"},
+		{"t1Zv2yaZ\n", []string{"--base58", "-d"}, "foobar"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, "", c.stdin, c.args...)

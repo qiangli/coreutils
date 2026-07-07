@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	abcB2 = "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"
+	abcB2     = "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"
+	abcB2_256 = "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319"
 )
 
 func runTool(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
@@ -44,6 +45,14 @@ func TestB2SumStdinAndFiles(t *testing.T) {
 	if out != abcB2+" *a.txt\n" || code != 0 {
 		t.Fatalf("file -b = (%q, %d)", out, code)
 	}
+	out, _, code = runTool(t, "", "abc", "--length=256")
+	if out != abcB2_256+"  -\n" || code != 0 {
+		t.Fatalf("length 256 = (%q, %d)", out, code)
+	}
+	out, _, code = runTool(t, "", "abc", "-z")
+	if out != abcB2+"  -\x00" || code != 0 {
+		t.Fatalf("zero = (%q, %d)", out, code)
+	}
 }
 
 func TestB2SumCheckAndErrors(t *testing.T) {
@@ -59,8 +68,19 @@ func TestB2SumCheckAndErrors(t *testing.T) {
 		t.Fatalf("check = (%q, %q, %d)", out, errb, code)
 	}
 
-	_, errb, code = runTool(t, dir, "", "--status")
-	if code != 2 || !strings.Contains(errb, "status") || !strings.Contains(errb, "pure-Go") {
-		t.Fatalf("unsupported flag = (%q, %d)", errb, code)
+	out, errb, code = runTool(t, dir, "", "--quiet", "-c", "sums.txt")
+	if out != "" || errb != "" || code != 0 {
+		t.Fatalf("quiet check = (%q, %q, %d)", out, errb, code)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bad.txt"), []byte("not a checksum\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code = runTool(t, dir, "", "--status", "-c", "bad.txt")
+	if out != "" || errb != "" || code != 1 {
+		t.Fatalf("status bad check = (%q, %q, %d)", out, errb, code)
+	}
+	_, errb, code = runTool(t, dir, "", "--length=7")
+	if code != 2 || !strings.Contains(errb, "invalid digest length") {
+		t.Fatalf("bad length = (%q, %d)", errb, code)
 	}
 }

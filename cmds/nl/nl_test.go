@@ -42,6 +42,48 @@ func TestNLStylesAndFormatting(t *testing.T) {
 	}
 }
 
+func TestNLStartIncrementAndNoRenumber(t *testing.T) {
+	out, _, code := runNL(t, t.TempDir(), "a\nb\n", "-b", "a", "-v", "10", "-i", "5", "-w", "2", "-s", ":")
+	if want := "10:a\n15:b\n"; out != want || code != 0 {
+		t.Fatalf("nl start/increment = (%q, %d), want (%q, 0)", out, code, want)
+	}
+
+	input := "a\n\\:\\:\nb\n"
+	out, _, code = runNL(t, t.TempDir(), input, "-b", "a", "-v", "3", "-w", "1", "-s", ":")
+	if want := "3:a\n\\:\\:\n3:b\n"; out != want || code != 0 {
+		t.Fatalf("nl renumber delimiter = (%q, %d), want (%q, 0)", out, code, want)
+	}
+
+	out, _, code = runNL(t, t.TempDir(), input, "-b", "a", "-v", "3", "-w", "1", "-s", ":", "-p")
+	if want := "3:a\n\\:\\:\n4:b\n"; out != want || code != 0 {
+		t.Fatalf("nl no-renumber delimiter = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
+func TestNLHeaderFooterStyles(t *testing.T) {
+	input := "\\:\\:\\:\nh\n\\:\\:\nb\n\\:\nf\n"
+	out, _, code := runNL(t, t.TempDir(), input, "-h", "a", "-b", "n", "-f", "a", "-w", "1", "-s", ":")
+	want := "\\:\\:\\:\n1:h\n\\:\\:\nb\n\\:\n1:f\n"
+	if out != want || code != 0 {
+		t.Fatalf("nl section styles = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
+func TestNLCustomDelimiterRegexAndBlankJoin(t *testing.T) {
+	input := "+++\nHEAD\n++\nkeep\nskip\n\n\n+\nfoot\n"
+	out, _, code := runNL(t, t.TempDir(), input, "-d", "+", "-h", "pHEAD", "-b", "p^keep$", "-f", "a", "-w", "1", "-s", ":")
+	want := "+++\n1:HEAD\n++\n1:keep\nskip\n\n\n+\n1:foot\n"
+	if out != want || code != 0 {
+		t.Fatalf("nl custom delimiter/regex = (%q, %d), want (%q, 0)", out, code, want)
+	}
+
+	out, _, code = runNL(t, t.TempDir(), "a\n\n\n\nb\n", "-b", "a", "-l", "2", "-w", "1", "-s", ":")
+	want = "1:a\n\n2:\n\n3:b\n"
+	if out != want || code != 0 {
+		t.Fatalf("nl blank join = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
 func TestNLReadsFiles(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("x\n"), 0o644); err != nil {
@@ -57,7 +99,7 @@ func TestNLReadsFiles(t *testing.T) {
 }
 
 func TestNLRejectsBadStyle(t *testing.T) {
-	_, errb, code := runNL(t, t.TempDir(), "", "-b", "pREGEXP")
+	_, errb, code := runNL(t, t.TempDir(), "", "-b", "x")
 	if code != 2 || !strings.Contains(errb, "invalid body numbering style") {
 		t.Fatalf("nl bad style code=%d err=%q", code, errb)
 	}

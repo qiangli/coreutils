@@ -24,6 +24,8 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	tabsValue := fs.StringP("tabs", "t", "8", "use comma-separated tab stops instead of 8")
 	all := fs.BoolP("all", "a", false, "convert all blanks instead of only leading blanks")
+	firstOnly := fs.BoolP("first-only", "f", false, "convert only leading blanks, overriding -a")
+	noUTF8 := fs.BoolP("no-utf8", "U", false, "interpret input as bytes rather than UTF-8")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -35,6 +37,10 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 0 {
 		operands = []string{"-"}
 	}
+	convertAll := *all || fs.Changed("tabs")
+	if *firstOnly {
+		convertAll = false
+	}
 
 	out := bufio.NewWriter(rc.Out)
 	status := 0
@@ -45,7 +51,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := unexpandStream(r, out, tabs, *all); err != nil {
+		if err := unexpandStream(r, out, tabs, convertAll, *noUTF8); err != nil {
 			fmt.Fprintf(rc.Err, "unexpand: %s: %v\n", name, err)
 			status = 1
 		}
@@ -60,12 +66,18 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-func unexpandStream(r io.Reader, w io.Writer, tabs []int, all bool) error {
+func unexpandStream(r io.Reader, w io.Writer, tabs []int, all, noUTF8 bool) error {
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
-			if _, werr := io.WriteString(w, unexpandLine(line, tabs, all)); werr != nil {
+			var out string
+			if noUTF8 {
+				out = unexpandBytes(line, tabs, all)
+			} else {
+				out = unexpandLine(line, tabs, all)
+			}
+			if _, werr := io.WriteString(w, out); werr != nil {
 				return werr
 			}
 		}
@@ -76,6 +88,50 @@ func unexpandStream(r io.Reader, w io.Writer, tabs []int, all bool) error {
 			return err
 		}
 	}
+}
+
+func unexpandBytes(line string, tabs []int, all bool) string {
+	var b strings.Builder
+	col := 0
+	spaceRun := 0
+	leading := true
+	flush := func() {
+		for spaceRun > 0 {
+			next := nextStop(col, tabs)
+			if spaceRun >= next-col && next > col {
+				b.WriteByte('\t')
+				spaceRun -= next - col
+				col = next
+			} else {
+				b.WriteByte(' ')
+				spaceRun--
+				col++
+			}
+		}
+	}
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if c == ' ' && (all || leading) {
+			spaceRun++
+			continue
+		}
+		flush()
+		switch c {
+		case '\n':
+			b.WriteByte(c)
+			col = 0
+			leading = true
+		case '\t':
+			b.WriteByte(c)
+			col = nextStop(col, tabs)
+		default:
+			b.WriteByte(c)
+			col++
+			leading = false
+		}
+	}
+	flush()
+	return b.String()
 }
 
 func unexpandLine(line string, tabs []int, all bool) string {

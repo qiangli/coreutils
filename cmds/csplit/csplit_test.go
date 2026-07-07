@@ -63,17 +63,68 @@ func TestCsplitRepeatedRegexAdvances(t *testing.T) {
 	assertFile(t, dir, "p2", "b\nc\n")
 }
 
+func TestCsplitRepeatToEOF(t *testing.T) {
+	dir := t.TempDir()
+	stdout, errb, code := runTool(t, dir, "a\ncut\nb\ncut\nc\n", "-s", "-f", "p", "-n", "1", "-", "/cut/", "{*}")
+	if code != 0 || stdout != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout, errb)
+	}
+	assertFile(t, dir, "p0", "a\n")
+	assertFile(t, dir, "p1", "cut\nb\n")
+	assertFile(t, dir, "p2", "cut\nc\n")
+}
+
+func TestCsplitRegexOffsets(t *testing.T) {
+	dir := t.TempDir()
+	stdout, errb, code := runTool(t, dir, "a\nmatch\nb\nc\n", "-s", "-f", "p", "-n", "1", "-", "/match/+1")
+	if code != 0 || stdout != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout, errb)
+	}
+	assertFile(t, dir, "p0", "a\nmatch\n")
+	assertFile(t, dir, "p1", "b\nc\n")
+
+	dir = t.TempDir()
+	stdout, errb, code = runTool(t, dir, "a\nskip\nb\nc\n", "-s", "-f", "q", "-n", "1", "-", "%skip%+1")
+	if code != 0 || stdout != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout, errb)
+	}
+	assertFile(t, dir, "q0", "b\nc\n")
+}
+
+func TestCsplitSuffixSuppressRepeatAndElideEmpty(t *testing.T) {
+	dir := t.TempDir()
+	stdout, errb, code := runTool(t, dir, "a\nmatch\nb\nmatch\nc\n", "-q", "-z", "--suppress-matched", "-b", "%03d.out", "-", "/match/", "{1}")
+	if code != 0 || stdout != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout, errb)
+	}
+	assertFile(t, dir, "xx000.out", "a\n")
+	assertFile(t, dir, "xx001.out", "b\n")
+	assertFile(t, dir, "xx002.out", "c\n")
+}
+
+func TestCsplitElidesEmptyInitialPiece(t *testing.T) {
+	dir := t.TempDir()
+	stdout, errb, code := runTool(t, dir, "match\nbody\n", "-s", "-z", "-", "/match/")
+	if code != 0 || stdout != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout, errb)
+	}
+	assertFile(t, dir, "xx00", "match\nbody\n")
+	if _, err := os.Stat(filepath.Join(dir, "xx01")); !os.IsNotExist(err) {
+		t.Fatalf("xx01 exists or stat failed unexpectedly: %v", err)
+	}
+}
+
 func TestCsplitErrors(t *testing.T) {
 	_, errb, code := runTool(t, t.TempDir(), "", "missing")
 	if code != 2 || !strings.Contains(errb, "missing operand") {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, t.TempDir(), "a\n", "-", "{*}")
-	if code != 2 || !strings.Contains(errb, "not supported") {
+	if code != 2 || !strings.Contains(errb, "missing pattern before repeat count") {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, t.TempDir(), "a\n", "-", "/a/+1")
-	if code != 2 || !strings.Contains(errb, "not supported") {
+	_, errb, code = runTool(t, t.TempDir(), "a\n", "-", "/a/+2")
+	if code != 2 || !strings.Contains(errb, "line number out of range") {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
 }

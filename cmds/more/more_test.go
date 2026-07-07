@@ -44,9 +44,45 @@ func TestMoreConcatenatesFiles(t *testing.T) {
 	}
 }
 
-func TestMoreRejectsInteractiveFlags(t *testing.T) {
-	_, errb, code := runMore(t, t.TempDir(), "", "-d")
-	if code != 2 || !strings.Contains(errb, "not every GNU flag is implemented") {
-		t.Fatalf("more -d code=%d err=%q", code, errb)
+func TestMoreSqueezeAndFromLine(t *testing.T) {
+	out, errb, code := runMore(t, t.TempDir(), "one\n\n\ntwo\n", "-s", "-F", "2")
+	if want := "\ntwo\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more squeeze/from-line = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestMoreAcceptsDisplayOnlyFlags(t *testing.T) {
+	out, errb, code := runMore(t, t.TempDir(), "a\nb\n", "-d", "-f", "-p", "-c", "-n", "5")
+	if out != "a\nb\n" || errb != "" || code != 0 {
+		t.Fatalf("more display flags = (%q, %q, %d)", out, errb, code)
+	}
+
+	out, errb, code = runMore(t, t.TempDir(), "a\nb\n", "-l", "-e", "--number", "5")
+	if out != "a\nb\n" || errb != "" || code != 0 {
+		t.Fatalf("more alias flags = (%q, %q, %d)", out, errb, code)
+	}
+
+	out, errb, code = runMore(t, t.TempDir(), "a\n", "-10")
+	if out != "a\n" || errb != "" || code != 0 {
+		t.Fatalf("more numeric screen size = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestMorePatternStartsAtMatch(t *testing.T) {
+	out, errb, code := runMore(t, t.TempDir(), "alpha\nbeta\ngamma\n", "-P", "^bet")
+	if want := "beta\ngamma\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("more pattern = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestMoreRejectsBadLineCounts(t *testing.T) {
+	_, errb, code := runMore(t, t.TempDir(), "", "-F", "0")
+	if code != 2 || !strings.Contains(errb, "invalid starting line") {
+		t.Fatalf("more bad from-line code=%d err=%q", code, errb)
+	}
+
+	_, errb, code = runMore(t, t.TempDir(), "", "-P", "[")
+	if code != 2 || !strings.Contains(errb, "invalid pattern") {
+		t.Fatalf("more bad pattern code=%d err=%q", code, errb)
 	}
 }

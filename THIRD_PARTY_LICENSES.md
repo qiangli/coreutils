@@ -13,6 +13,8 @@ GPL code is ever copied into this repository.
 | [u-root/u-root](https://github.com/u-root/u-root) | BSD-3-Clause | cmds/: tar, gzip (incl. gunzip/zcat), sync, which, touch, ln, mktemp, truncate, chmod, cp, mv, rm, mkdir, du, df (linux probe), yes, printenv, date, sleep, seq, uname, hostname, tty, uptime, strings, tee, uniq; cmds/internal/hashenc (base64 structure) |
 | [guonaihong/coreutils](https://github.com/guonaihong/coreutils) | Apache-2.0 | cmds/: link, unlink, chown, chgrp, cat (show-nonprinting table), cut, echo, env, seq, uname; cmds/internal/hashenc (engine idea from basecore/hashcore). Changes are stated per-file in provenance headers, as Apache-2.0 §4(b) requires. |
 | [synseqack/aict](https://github.com/synseqack/aict) | MIT | cmds/df (windows probe) |
+| [tjfoc/gmsm](https://github.com/tjfoc/gmsm) | Apache-2.0 | cmds/cksum (`--algorithm=sm3`) |
+| [lukechampine/blake3](https://lukechampine.com/blake3) | MIT | cmds/cksum (`--algorithm=blake3`) |
 
 Tools without a row above are fresh implementations written from the
 GNU / POSIX documentation (the per-file package comments say which).
@@ -337,6 +339,32 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+### lukechampine/blake3 — MIT
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2020 Luke Champine
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ## Browser automation (`pkg/browser`, `bashy browser`)
