@@ -63,6 +63,18 @@ func run(rc *tool.RunContext, args []string) int {
 	hexWords := fs.BoolP("hex-2", "x", false, "same as -t x2")
 	showAll := fs.BoolP("output-duplicates", "v", false, "do not use * to mark line suppression")
 	traditional := fs.Bool("traditional", false, "accept arguments in third traditional form")
+	unsignedInt := fs.BoolP("unsigned-int", "D", false, "same as -t u4")
+	floatDouble := fs.BoolP("float-double", "F", false, "same as -t f8")
+	hexInt := fs.BoolP("hex-int", "H", false, "same as -t x4")
+	decimalInt := fs.BoolP("decimal-int", "I", false, "same as -t d4")
+	decimalLong := fs.BoolP("decimal-long", "L", false, "same as -t d8")
+	octalInt := fs.BoolP("octal-int", "O", false, "same as -t o4")
+	hexCap := fs.BoolP("hex-cap", "X", false, "same as -t x4")
+	floatDoubleShort := fs.BoolP("float-double-short", "e", false, "same as -t f8")
+	floatSingle := fs.BoolP("float-single", "f", false, "same as -t f4")
+	signedInt := fs.BoolP("signed-int", "i", false, "same as -t d4")
+	signedLong := fs.BoolP("signed-long", "l", false, "same as -t d8")
+	signedShort := fs.BoolP("signed-short", "s", false, "same as -t d2")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -94,6 +106,18 @@ func run(rc *tool.RunContext, args []string) int {
 		{*unsignedDecimal, "u2"},
 		{*octalWords, "o2"},
 		{*hexWords, "x2"},
+		{*unsignedInt, "u4"},
+		{*floatDouble, "f8"},
+		{*hexInt, "x4"},
+		{*decimalInt, "d4"},
+		{*decimalLong, "d8"},
+		{*octalInt, "o4"},
+		{*hexCap, "x4"},
+		{*floatDoubleShort, "f8"},
+		{*floatSingle, "f4"},
+		{*signedInt, "d4"},
+		{*signedLong, "d8"},
+		{*signedShort, "d2"},
 	} {
 		if choice.on {
 			selectedFormats = append(selectedFormats, choice.format)

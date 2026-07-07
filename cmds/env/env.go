@@ -45,7 +45,7 @@ func run(rc *tool.RunContext, args []string) int {
 	chdir := fs.StringP("chdir", "C", "", "change working directory before running COMMAND")
 	argv0 := fs.StringP("argv0", "a", "", "pass ARGV0 as COMMAND's zeroth argument")
 	splitStrings := fs.StringArrayP("split-string", "S", nil, "process and split S into separate arguments")
-	envFiles := fs.StringArrayP("file", "f", nil, "read environment variables from FILE")
+	envFiles := fs.StringArrayP("file", "f", nil, "read variables from a .env-style configuration file before other changes")
 	ignoreSignals := fs.StringArray("ignore-signal", nil, "set handling of SIGNAL to ignore before running COMMAND")
 	defaultSignals := fs.StringArray("default-signal", nil, "set handling of SIGNAL to default before running COMMAND")
 	blockSignals := fs.StringArray("block-signal", nil, "block delivery of SIGNAL before running COMMAND")

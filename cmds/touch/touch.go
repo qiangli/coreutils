@@ -104,10 +104,7 @@ func run(rc *tool.RunContext, args []string) int {
 	date := fs.StringP("date", "d", "", "parse STRING and use it instead of current time")
 	noDeref := fs.BoolP("no-dereference", "h", false, "affect symbolic links instead of any referenced file")
 	ref := fs.StringP("reference", "r", "", "use this file's times instead of current time")
-	fs.StringP("stamp", "t", "", "use [[CC]YY]MMDDhhmm[.ss] instead of current time")
-	if f := fs.Lookup("stamp"); f != nil {
-		f.Hidden = true
-	}
+	stamp := fs.StringP("stamp", "t", "", "use [[CC]YY]MMDDhhmm[.ss] instead of current time")
 	timeWord := fs.StringP("time", "", "", "which time to change: access (or atime, use), modify (or mtime); implies -a for access, -m for modify")
 	operands, code := tool.Parse(rc, cmd, fs, pre.rest)
 	if code >= 0 {
@@ -118,6 +115,13 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if pre.tSeen && (*date != "" || *ref != "") {
 		return tool.UsageError(rc, cmd, "cannot specify times from more than one source")
+	}
+	if fs.Changed("stamp") {
+		if pre.tSeen {
+			return tool.UsageError(rc, cmd, "cannot specify multiple -t values")
+		}
+		pre.tSeen = true
+		pre.stamp = *stamp
 	}
 	if *date != "" && *ref != "" {
 		return tool.NotSupported(rc, cmd, "combining --date with --reference")

@@ -95,8 +95,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	fs := tool.NewFlags(cmd.Name)
 	complement := fs.BoolP("complement", "c", false, "use the complement of SET1")
-	fs.BoolP("complement-C", "C", false, "use the complement of SET1")
-	fs.Lookup("complement-C").Hidden = true
+	complementUpper := fs.BoolP("complement-C", "C", false, "use the complement of SET1")
 	del := fs.BoolP("delete", "d", false, "delete characters in SET1, do not translate")
 	squeeze := fs.BoolP("squeeze-repeats", "s", false, "replace each sequence of a repeated character that is listed in the last specified SET, with a single occurrence of that character")
 	truncateSet1 := fs.BoolP("truncate-set1", "t", false, "truncate SET1 to the length of SET2")
@@ -104,7 +103,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	comp := *complement || complementC
+	comp := *complement || complementC || *complementUpper
 	deleting, squeezing := *del, *squeeze
 
 	if len(operands) == 0 {

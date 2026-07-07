@@ -55,6 +55,9 @@ func run(rc *tool.RunContext, args []string) int {
 	squeeze := fs.BoolP("squeeze-blank", "s", false, "suppress repeated empty output lines")
 	showTabs := fs.BoolP("show-tabs", "T", false, "display TAB characters as ^I")
 	showNP := fs.BoolP("show-nonprinting", "v", false, "use ^ and M- notation, except for LFD and TAB")
+	showEndsNP := fs.BoolP("show-ends-nonprinting", "e", false, "equivalent to -vE")
+	showTabsNP := fs.BoolP("show-tabs-nonprinting", "t", false, "equivalent to -vT")
+	fs.BoolP("unbuffered", "u", false, "ignored; retained for compatibility")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -75,6 +78,12 @@ func run(rc *tool.RunContext, args []string) int {
 		o.showNP, o.showEnds = true, true
 	}
 	if optT {
+		o.showNP, o.showTabs = true, true
+	}
+	if *showEndsNP {
+		o.showNP, o.showEnds = true, true
+	}
+	if *showTabsNP {
 		o.showNP, o.showTabs = true, true
 	}
 	if o.numberNonblank {

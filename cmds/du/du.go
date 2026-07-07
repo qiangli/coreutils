@@ -86,14 +86,11 @@ func run(rc *tool.RunContext, args []string) int {
 	derefArgsLong := fs.Bool("dereference-args", false, "dereference only symlinks that are listed on the command line")
 	derefArgsShort := fs.BoolP("dereference-args-short", "D", false, "dereference only symlinks that are listed on the command line")
 	hFlag := fs.BoolP("dereference-args-H", "H", false, "equivalent to --dereference-args")
-	fs.Lookup("dereference-args-short").Hidden = true
-	fs.Lookup("dereference-args-H").Hidden = true
 	derefAllFlag := fs.BoolP("dereference", "L", false, "dereference all symbolic links")
 	noDeref := fs.BoolP("no-dereference", "P", false, "do not follow any symbolic links")
 	kib := fs.BoolP("kilobytes", "k", false, "like --block-size=1K")
 	mib := fs.BoolP("megabytes", "m", false, "like --block-size=1M")
 	fs.BoolP("megabytes-short", "M", false, "like --block-size=1M")
-	fs.Lookup("megabytes-short").Hidden = true
 	total := fs.BoolP("total", "c", false, "produce a grand total")
 	countLinks := fs.BoolP("count-links", "l", false, "count sizes many times if hard linked")
 	inodes := fs.Bool("inodes", false, "list inode usage information instead of block usage")
