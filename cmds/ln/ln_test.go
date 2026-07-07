@@ -355,4 +355,8 @@ func TestLnHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "ln") {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
+	out, _, code = runTool(t, t.TempDir(), "-V")
+	if code != 0 || !strings.Contains(out, "ln") {
+		t.Errorf("-V: code=%d out=%q", code, out)
+	}
 }

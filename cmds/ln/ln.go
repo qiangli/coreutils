@@ -46,7 +46,7 @@ func run(rc *tool.RunContext, args []string) int {
 	noTargetDir := fs.BoolP("no-target-directory", "T", false, "treat LINK_NAME as a normal file always")
 	verbose := fs.BoolP("verbose", "v", false, "print name of each linked file")
 	replaceMode := replacementMode(args)
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
