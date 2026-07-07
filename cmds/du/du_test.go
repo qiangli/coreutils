@@ -17,11 +17,16 @@ import (
 // with an explicit working directory.
 func runToolAt(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolAtWithInput(t, dir, "", args...)
+}
+
+func runToolAtWithInput(t *testing.T, dir, input string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
@@ -184,6 +189,98 @@ func TestDefaultUnitIs1K(t *testing.T) {
 	// proves the value is in 1024-byte units, not bytes.
 	if vals[0] < 5 || vals[0] > 64 {
 		t.Errorf("du f = %d 1K-blocks, want a small block count", vals[0])
+	}
+}
+
+func TestFiles0FromFileAndStdin(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a", "abc")
+	write(t, dir, "b", "12345")
+	write(t, dir, "list", "a\x00b\x00")
+
+	out, _, code := runToolAt(t, dir, "-b", "--files0-from=list")
+	if code != 0 {
+		t.Fatalf("--files0-from file code = %d", code)
+	}
+	vals, paths := parseLines(t, out)
+	if strings.Join(paths, " ") != "a b" || vals[0] != 3 || vals[1] != 5 {
+		t.Errorf("--files0-from file = (%v, %v)", vals, paths)
+	}
+
+	out, _, code = runToolAtWithInput(t, dir, "b\x00", "-b", "--files0-from=-")
+	if code != 0 || out != "5\tb\n" {
+		t.Errorf("--files0-from stdin = (%q, %d)", out, code)
+	}
+
+	_, errb, code := runToolAt(t, dir, "--files0-from=list", "a")
+	if code != 2 || !strings.Contains(errb, "file operands cannot be combined") {
+		t.Errorf("--files0-from operands: code=%d err=%q", code, errb)
+	}
+}
+
+func TestNullOutputTerminator(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", "hello")
+	out, _, code := runToolAt(t, dir, "-0b", "f")
+	if code != 0 || out != "5\tf\x00" {
+		t.Errorf("du -0b f = (%q, %d), want NUL-terminated line", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "--null", "-b", "f")
+	if code != 0 || out != "5\tf\x00" {
+		t.Errorf("du --null -b f = (%q, %d), want NUL-terminated line", out, code)
+	}
+}
+
+func TestExcludeAndExcludeFrom(t *testing.T) {
+	dir := mkTree(t)
+	out, _, code := runToolAt(t, dir, "-ab", "--exclude=f2", "tree")
+	if code != 0 {
+		t.Fatalf("--exclude code = %d", code)
+	}
+	_, paths := parseLines(t, out)
+	if strings.Contains(strings.Join(paths, " "), "tree/f2") || !strings.Contains(strings.Join(paths, " "), "tree/f1") {
+		t.Errorf("--exclude paths = %v", paths)
+	}
+
+	write(t, dir, "patterns", "sub\n")
+	out, _, code = runToolAt(t, dir, "-ab", "--exclude-from=patterns", "tree")
+	if code != 0 {
+		t.Fatalf("--exclude-from code = %d", code)
+	}
+	_, paths = parseLines(t, out)
+	got := strings.Join(paths, " ")
+	if strings.Contains(got, "tree/sub") || !strings.Contains(got, "tree/f1") || !strings.Contains(got, "tree") {
+		t.Errorf("--exclude-from paths = %v", paths)
+	}
+}
+
+func TestBlockSizeModes(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", strings.Repeat("x", 1536))
+	out, _, code := runToolAt(t, dir, "-b", "-B", "512", "f")
+	if code != 0 || out != "3\tf\n" {
+		t.Errorf("-b -B 512 = (%q, %d), want 3 blocks", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "-b", "-k", "f")
+	if code != 0 || out != "2\tf\n" {
+		t.Errorf("-b -k = (%q, %d), want 2 KiB blocks", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "-b", "-m", "f")
+	if code != 0 || out != "1\tf\n" {
+		t.Errorf("-b -m = (%q, %d), want 1 MiB block", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "-b", "--block-size=1K", "f")
+	if code != 0 || out != "2\tf\n" {
+		t.Errorf("--block-size=1K = (%q, %d), want 2 blocks", out, code)
+	}
+}
+
+func TestSIHumanReadable(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", strings.Repeat("x", 1001))
+	out, _, code := runToolAt(t, dir, "-b", "--si", "f")
+	if code != 0 || out != "1.1K\tf\n" {
+		t.Errorf("du -b --si f = (%q, %d), want SI human output", out, code)
 	}
 }
 

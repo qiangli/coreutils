@@ -15,9 +15,12 @@
 package ducmd
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,18 +43,30 @@ type duRun struct {
 	all      bool
 	apparent bool // -b
 	human    bool
+	si       bool
+	block    int64
 	maxDepth int
 	exit     int
 	seen     map[devIno]bool
+	excludes []string
+	term     string
 }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	all := fs.BoolP("all", "a", false, "write counts for all files, not just directories")
 	apparent := fs.BoolP("bytes", "b", false, "equivalent to '--apparent-size --block-size=1'")
+	blockSize := fs.StringP("block-size", "B", "", "scale sizes by SIZE before printing them")
+	kib := fs.BoolP("kilobytes", "k", false, "like --block-size=1K")
+	mib := fs.BoolP("megabytes", "m", false, "like --block-size=1M")
 	total := fs.BoolP("total", "c", false, "produce a grand total")
 	maxDepth := fs.IntP("max-depth", "d", -1, "print the total for a directory (or file, with --all) only if it is N or fewer levels below the command line argument")
 	human := fs.BoolP("human-readable", "h", false, "print sizes in human readable format (e.g., 1K 234M 2G)")
+	si := fs.Bool("si", false, "like -h, but use powers of 1000 not 1024")
+	null := fs.BoolP("null", "0", false, "end each output line with NUL, not newline")
+	exclude := fs.StringArray("exclude", nil, "exclude files that match PATTERN")
+	excludeFrom := fs.StringArray("exclude-from", nil, "read exclude patterns from FILE, one per line")
+	files0From := fs.String("files0-from", "", "read input file names from FILE, terminated by NUL; if FILE is -, read names from standard input")
 	summarize := fs.BoolP("summarize", "s", false, "display only a total for each argument")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -67,6 +82,26 @@ func run(rc *tool.RunContext, args []string) int {
 	if fs.Changed("max-depth") && *maxDepth < 0 {
 		return tool.UsageError(rc, cmd, "invalid maximum depth '%d'", *maxDepth)
 	}
+	if fs.Changed("files0-from") {
+		if len(operands) > 0 {
+			return tool.UsageError(rc, cmd, "file operands cannot be combined with --files0-from")
+		}
+		var err error
+		operands, err = readFiles0(rc, *files0From)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "du: %s: %s\n", *files0From, errMsg(err))
+			return 1
+		}
+	}
+	patterns := append([]string{}, *exclude...)
+	for _, name := range *excludeFrom {
+		more, err := readExcludePatterns(rc, name)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "du: %s: %s\n", name, errMsg(err))
+			return 1
+		}
+		patterns = append(patterns, more...)
+	}
 
 	depth := math.MaxInt
 	switch {
@@ -75,14 +110,39 @@ func run(rc *tool.RunContext, args []string) int {
 	case fs.Changed("max-depth"):
 		depth = *maxDepth
 	}
+	block := int64(1024)
+	if *apparent {
+		block = 1
+	}
+	if *kib {
+		block = 1024
+	}
+	if *mib {
+		block = 1024 * 1024
+	}
+	if fs.Changed("block-size") {
+		var err error
+		block, err = parseBlockSize(*blockSize)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "invalid block size %q", *blockSize)
+		}
+	}
+	term := "\n"
+	if *null {
+		term = "\x00"
+	}
 
 	d := &duRun{
 		rc:       rc,
 		all:      *all,
 		apparent: *apparent,
 		human:    *human,
+		si:       *si,
+		block:    block,
 		maxDepth: depth,
 		seen:     map[devIno]bool{},
+		excludes: patterns,
+		term:     term,
 	}
 
 	if len(operands) == 0 {
@@ -102,6 +162,9 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func (d *duRun) walk(display, full string, depth int) (int64, bool) {
+	if d.excluded(display) {
+		return 0, true
+	}
 	fi, err := os.Lstat(full)
 	if err != nil {
 		fmt.Fprintf(d.rc.Err, "du: cannot access '%s': %s\n", display, errMsg(err))
@@ -144,18 +207,42 @@ func (d *duRun) walk(display, full string, depth int) (int64, bool) {
 }
 
 func (d *duRun) print(n int64, path string) {
-	fmt.Fprintf(d.rc.Out, "%s\t%s\n", d.fmtSize(n), path)
+	fmt.Fprintf(d.rc.Out, "%s\t%s%s", d.fmtSize(n), path, d.term)
 }
 
 func (d *duRun) fmtSize(n int64) string {
 	switch {
 	case d.human:
 		return humanSize(uint64(n))
-	case d.apparent:
-		return strconv.FormatInt(n, 10)
+	case d.si:
+		return siSize(uint64(n))
 	default:
-		return strconv.FormatInt((n+1023)/1024, 10)
+		return strconv.FormatInt(divCeil(n, d.block), 10)
 	}
+}
+
+func (d *duRun) excluded(display string) bool {
+	if len(d.excludes) == 0 {
+		return false
+	}
+	clean := filepath.ToSlash(display)
+	base := path.Base(clean)
+	for _, pat := range d.excludes {
+		pat = filepath.ToSlash(pat)
+		if pat == "" {
+			continue
+		}
+		if ok, _ := path.Match(pat, clean); ok {
+			return true
+		}
+		if ok, _ := path.Match(pat, base); ok {
+			return true
+		}
+		if pat == clean || pat == base {
+			return true
+		}
+	}
+	return false
 }
 
 func joinDisplay(dir, name string) string {
@@ -167,6 +254,91 @@ func joinDisplay(dir, name string) string {
 
 func errMsg(err error) string {
 	return tool.SysErrString(err)
+}
+
+func readFiles0(rc *tool.RunContext, name string) ([]string, error) {
+	var data []byte
+	var err error
+	if name == "-" {
+		data, err = io.ReadAll(rc.In)
+	} else {
+		data, err = os.ReadFile(rc.Path(name))
+	}
+	if err != nil {
+		return nil, err
+	}
+	parts := bytes.Split(data, []byte{0})
+	names := make([]string, 0, len(parts))
+	for i, p := range parts {
+		if len(p) == 0 {
+			if i == len(parts)-1 {
+				continue
+			}
+			return nil, fmt.Errorf("invalid zero-length file name")
+		}
+		names = append(names, string(p))
+	}
+	return names, nil
+}
+
+func readExcludePatterns(rc *tool.RunContext, name string) ([]string, error) {
+	var data []byte
+	var err error
+	if name == "-" {
+		data, err = io.ReadAll(rc.In)
+	} else {
+		data, err = os.ReadFile(rc.Path(name))
+	}
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	patterns := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if ln == "" {
+			continue
+		}
+		patterns = append(patterns, ln)
+	}
+	return patterns, nil
+}
+
+func parseBlockSize(s string) (int64, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty block size")
+	}
+	mult := int64(1)
+	num := s
+	if last := s[len(s)-1]; last < '0' || last > '9' {
+		num = s[:len(s)-1]
+		switch last {
+		case 'K', 'k':
+			mult = 1024
+		case 'M', 'm':
+			mult = 1024 * 1024
+		case 'G', 'g':
+			mult = 1024 * 1024 * 1024
+		case 'T', 't':
+			mult = 1024 * 1024 * 1024 * 1024
+		default:
+			return 0, fmt.Errorf("bad suffix")
+		}
+	}
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("bad size")
+	}
+	if n > math.MaxInt64/mult {
+		return 0, fmt.Errorf("size overflow")
+	}
+	return n * mult, nil
+}
+
+func divCeil(n, d int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	return (n + d - 1) / d
 }
 
 // humanSize renders n bytes in GNU --human-readable form: powers of
@@ -195,6 +367,35 @@ func humanSize(n uint64) string {
 		v++
 	}
 	if v >= 1024 && idx < len(units)-1 {
+		return fmt.Sprintf("1.0%c", units[idx+1])
+	}
+	return fmt.Sprintf("%d%c", v, units[idx])
+}
+
+func siSize(n uint64) string {
+	if n < 1000 {
+		return strconv.FormatUint(n, 10)
+	}
+	const units = "KMGTPE"
+	div := uint64(1000)
+	idx := 0
+	for n/div >= 1000 && idx < len(units)-1 {
+		div *= 1000
+		idx++
+	}
+	whole, rem := n/div, n%div
+	if whole < 10 {
+		tenths := whole*10 + (rem*10+div-1)/div
+		if tenths < 100 {
+			return fmt.Sprintf("%d.%d%c", tenths/10, tenths%10, units[idx])
+		}
+		return fmt.Sprintf("10%c", units[idx])
+	}
+	v := whole
+	if rem > 0 {
+		v++
+	}
+	if v >= 1000 && idx < len(units)-1 {
 		return fmt.Sprintf("1.0%c", units[idx+1])
 	}
 	return fmt.Sprintf("%d%c", v, units[idx])
