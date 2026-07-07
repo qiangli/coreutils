@@ -481,6 +481,14 @@ func TestHelpAndVersion(t *testing.T) {
 	if !strings.Contains(out, "-V, --version") {
 		t.Errorf("--help output missing -V version alias:\n%s", out)
 	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runToolAt(t, dir, "-M", "f")
+	if code != 0 || errb != "" || !strings.HasPrefix(out, "1\tf\n") {
+		t.Errorf("du -M: code=%d err=%q out=%q", code, errb, out)
+	}
 	out, _, code = runTool(t, "--version")
 	if code != 0 || !strings.Contains(out, "du") {
 		t.Errorf("--version: code=%d out=%q", code, out)

@@ -237,6 +237,10 @@ func TestHelpAndVersion(t *testing.T) {
 			t.Errorf("--help output missing %s", flag)
 		}
 	}
+	out, errb, code := runTool(t, "-M")
+	if code != 0 || errb != "" || !strings.Contains(firstLine(out), "1048576B-blocks") {
+		t.Errorf("-M: code=%d err=%q first line=%q", code, errb, firstLine(out))
+	}
 	out, _, code = runTool(t, "--version")
 	if code != 0 || !strings.Contains(out, "df") {
 		t.Errorf("--version: code=%d out=%q", code, out)

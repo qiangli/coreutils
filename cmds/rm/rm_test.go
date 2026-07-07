@@ -160,12 +160,17 @@ func TestRmInteractivePrompt(t *testing.T) {
 func TestRmCompatibilityNoOps(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "x")
-	_, errb, code := runTool(t, dir, "--one-file-system", "--progress", "a")
+	_, errb, code := runTool(t, dir, "-go", "a")
 	if code != 0 || errb != "" {
 		t.Fatalf("compat flags: code=%d err=%q", code, errb)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
 		t.Fatal("file still exists")
+	}
+
+	out, _, code := runTool(t, dir, "--help")
+	if code != 0 || !strings.Contains(out, "-g, --progress") || !strings.Contains(out, "-o, --one-file-system") {
+		t.Fatalf("help missing compatibility aliases: code=%d out=%q", code, out)
 	}
 }
 
