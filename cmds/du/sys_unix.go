@@ -25,6 +25,9 @@ func (d *duRun) usage(fi os.FileInfo) int64 {
 // through another hard link in this invocation (GNU counts multiply
 // linked files once).
 func (d *duRun) skipHardlink(fi os.FileInfo) bool {
+	if d.countLinks {
+		return false
+	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok || st.Nlink <= 1 {
 		return false
@@ -35,4 +38,12 @@ func (d *duRun) skipHardlink(fi os.FileInfo) bool {
 	}
 	d.seen[key] = true
 	return false
+}
+
+func fileDev(fi os.FileInfo) (uint64, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return uint64(st.Dev), true
 }

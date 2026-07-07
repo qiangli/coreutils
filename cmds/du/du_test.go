@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -87,6 +89,19 @@ func TestFileOperand(t *testing.T) {
 	}
 }
 
+func TestApparentSizeDoesNotForceBytes(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", strings.Repeat("x", 1536))
+	out, _, code := runToolAt(t, dir, "-A", "f")
+	if code != 0 || out != "2\tf\n" {
+		t.Errorf("du -A f = (%q, %d), want apparent size in default 1K units", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "-b", "f")
+	if code != 0 || out != "1536\tf\n" {
+		t.Errorf("du -b f = (%q, %d), want apparent bytes", out, code)
+	}
+}
+
 func TestDirPostOrder(t *testing.T) {
 	dir := mkTree(t)
 	out, _, code := runToolAt(t, dir, "-b", "tree")
@@ -99,6 +114,19 @@ func TestDirPostOrder(t *testing.T) {
 	}
 	if vals[0] < 30 || vals[1] < 60 || vals[1] < vals[0] {
 		t.Errorf("du values = %v, want sub >= 30 and total >= 60", vals)
+	}
+}
+
+func TestVerboseShowsAllFiles(t *testing.T) {
+	dir := mkTree(t)
+	out, _, code := runToolAt(t, dir, "-vb", "tree")
+	if code != 0 {
+		t.Fatalf("du -vb code = %d", code)
+	}
+	_, paths := parseLines(t, out)
+	want := []string{"tree/f1", "tree/f2", "tree/sub/f3", "tree/sub", "tree"}
+	if strings.Join(paths, " ") != strings.Join(want, " ") {
+		t.Errorf("du -vb paths = %v, want %v", paths, want)
 	}
 }
 
@@ -115,6 +143,17 @@ func TestAll(t *testing.T) {
 	}
 }
 
+func TestSeparateDirs(t *testing.T) {
+	dir := mkTree(t)
+	vals, paths := parseDu(t, dir, "-bS", "tree")
+	if strings.Join(paths, " ") != "tree/sub tree" {
+		t.Fatalf("du -bS paths = %v", paths)
+	}
+	if vals[0] != 30 || vals[1] != 30 {
+		t.Errorf("du -bS values = %v, want sub=30 root direct files=30", vals)
+	}
+}
+
 func TestSummarize(t *testing.T) {
 	dir := mkTree(t)
 	out, _, code := runToolAt(t, dir, "-sb", "tree")
@@ -124,6 +163,77 @@ func TestSummarize(t *testing.T) {
 	vals, paths := parseLines(t, out)
 	if len(paths) != 1 || paths[0] != "tree" || vals[0] < 60 {
 		t.Errorf("du -sb = (%v, %v)", vals, paths)
+	}
+}
+
+func TestSymlinkDereferenceModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on many Windows setups")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "target"), "f", "1234567")
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	out, _, code := runToolAt(t, dir, "-sb", "link")
+	if code != 0 {
+		t.Fatalf("du -sb link code = %d", code)
+	}
+	if out == "7\tlink\n" {
+		t.Fatalf("du -sb link followed symlink by default: %q", out)
+	}
+
+	for _, flag := range []string{"-D", "-H", "--dereference-args"} {
+		out, _, code = runToolAt(t, dir, "-sb", flag, "link")
+		if code != 0 || out != "7\tlink\n" {
+			t.Errorf("du -sb %s link = (%q, %d), want dereferenced target", flag, out, code)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, "root"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../target", filepath.Join(dir, "root", "alias")); err != nil {
+		t.Fatal(err)
+	}
+	_, paths := parseDu(t, dir, "-abL", "root")
+	if strings.Join(paths, " ") != "root/alias/f root/alias root" {
+		t.Errorf("du -abL root paths = %v, want traversal through symlinked directory", paths)
+	}
+	_, paths = parseDu(t, dir, "-abP", "root")
+	if strings.Join(paths, " ") != "root/alias root" {
+		t.Errorf("du -abP root paths = %v, want symlink itself only", paths)
+	}
+}
+
+func TestCountLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.FileInfo link counts are not available on Windows")
+	}
+	dir := t.TempDir()
+	write(t, dir, "f", "data")
+	if err := os.Link(filepath.Join(dir, "f"), filepath.Join(dir, "g")); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	vals, paths := parseDu(t, dir, "-cb", "f", "g")
+	if strings.Join(paths, " ") != "f total" || vals[1] != 4 {
+		t.Errorf("du -cb hardlinks = (%v, %v), want second link deduped in total", vals, paths)
+	}
+	vals, paths = parseDu(t, dir, "-clb", "f", "g")
+	if strings.Join(paths, " ") != "f g total" || vals[2] != 8 {
+		t.Errorf("du -clb hardlinks = (%v, %v), want both links counted", vals, paths)
+	}
+}
+
+func TestInodes(t *testing.T) {
+	dir := mkTree(t)
+	out, _, code := runToolAt(t, dir, "-s", "--inodes", "tree")
+	if code != 0 || out != "5\ttree\n" {
+		t.Errorf("du -s --inodes tree = (%q, %d), want five filesystem entries", out, code)
 	}
 }
 
@@ -251,6 +361,48 @@ func TestExcludeAndExcludeFrom(t *testing.T) {
 	got := strings.Join(paths, " ")
 	if strings.Contains(got, "tree/sub") || !strings.Contains(got, "tree/f1") || !strings.Contains(got, "tree") {
 		t.Errorf("--exclude-from paths = %v", paths)
+	}
+
+	write(t, dir, "patterns-x", "f1\n")
+	out, _, code = runToolAt(t, dir, "-ab", "-X", "patterns-x", "tree")
+	if code != 0 {
+		t.Fatalf("-X code = %d", code)
+	}
+	_, paths = parseLines(t, out)
+	got = strings.Join(paths, " ")
+	if strings.Contains(got, "tree/f1") || !strings.Contains(got, "tree/f2") {
+		t.Errorf("-X paths = %v", paths)
+	}
+}
+
+func TestThreshold(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "small", strings.Repeat("s", 10))
+	write(t, dir, "big", strings.Repeat("b", 30))
+	out, _, code := runToolAt(t, dir, "-b", "-t", "20", "small", "big")
+	if code != 0 || out != "30\tbig\n" {
+		t.Errorf("du -b -t 20 = (%q, %d), want only big file", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "-b", "--threshold=-20", "small", "big")
+	if code != 0 || out != "10\tsmall\n" {
+		t.Errorf("du -b --threshold=-20 = (%q, %d), want only small file", out, code)
+	}
+}
+
+func TestTimeStyle(t *testing.T) {
+	dir := t.TempDir()
+	p := write(t, dir, "f", "hello")
+	ts := time.Date(2020, 3, 4, 5, 6, 7, 0, time.Local)
+	if err := os.Chtimes(p, ts, ts); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runToolAt(t, dir, "-b", "--time=mtime", "--time-style=+%Y-%m-%d", "f")
+	if code != 0 || out != "5\t2020-03-04\tf\n" {
+		t.Errorf("du --time --time-style = (%q, %d)", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "-b", "--time-style=iso", "f")
+	if code != 0 || out != "5\t2020-03-04\tf\n" {
+		t.Errorf("du --time-style=iso = (%q, %d)", out, code)
 	}
 }
 
