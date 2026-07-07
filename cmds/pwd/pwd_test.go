@@ -104,8 +104,16 @@ func TestPwdHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: pwd") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	out, _, code = runIn(t, t.TempDir(), "-h")
+	if code != 0 || !strings.Contains(out, "Usage: pwd") {
+		t.Errorf("-h: code=%d out=%q", code, out)
+	}
 	out, _, code = runIn(t, t.TempDir(), "--version")
 	if code != 0 || !strings.Contains(out, "pwd") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runIn(t, t.TempDir(), "-V")
+	if code != 0 || !strings.Contains(out, "pwd") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }

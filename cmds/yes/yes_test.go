@@ -81,6 +81,16 @@ func TestYesFlags(t *testing.T) {
 		t.Errorf("--help: code=%d out=%q", code, out.String())
 	}
 	out.Reset()
+	_, code = runYes(t, context.Background(), &out, "-h")
+	if code != 0 || !strings.Contains(out.String(), "Usage: yes") {
+		t.Errorf("-h: code=%d out=%q", code, out.String())
+	}
+	out.Reset()
+	_, code = runYes(t, context.Background(), &out, "-V")
+	if code != 0 || !strings.Contains(out.String(), "yes") {
+		t.Errorf("-V: code=%d out=%q", code, out.String())
+	}
+	out.Reset()
 	stderr, code := runYes(t, context.Background(), &out, "--frobnicate")
 	if code != 2 || !strings.Contains(stderr, "frobnicate") {
 		t.Errorf("unknown flag: code=%d stderr=%q", code, stderr)

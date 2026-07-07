@@ -28,6 +28,7 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
 	fs.BoolP("logical", "L", false, "print the logical working directory, even with symlinks")
 	fs.BoolP("physical", "P", false, "print the physical directory, with all symlinks resolved")

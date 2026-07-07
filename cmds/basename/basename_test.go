@@ -67,8 +67,20 @@ func TestHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: basename") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	out, _, code = runTool(t, "-h")
+	if code != 0 || !strings.Contains(out, "Usage: basename") {
+		t.Errorf("-h: code=%d out=%q", code, out)
+	}
 	out, _, code = runTool(t, "--version")
 	if code != 0 || !strings.Contains(out, "basename") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "-V")
+	if code != 0 || !strings.Contains(out, "basename") {
+		t.Errorf("-V: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "-azV", "a/b")
+	if code != 0 || !strings.Contains(out, "basename") {
+		t.Errorf("-azV: code=%d out=%q", code, out)
 	}
 }

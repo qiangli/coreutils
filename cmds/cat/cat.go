@@ -44,6 +44,7 @@ type catState struct {
 
 func run(rc *tool.RunContext, args []string) int {
 	args, optE, optT, optU := extractShortOnly(args)
+	args = tool.AliasHelpVersion(args)
 	_ = optU // -u is ignored, per the GNU manual
 
 	fs := tool.NewFlags(cmd.Name)
