@@ -16,6 +16,9 @@ func TestFalseHelpVersionAliases(t *testing.T) {
 		if code != 0 || err.String() != "" || out.String() == "" {
 			t.Fatalf("false %v: code=%d out=%q err=%q", args, code, out.String(), err.String())
 		}
+		if args[0] == "--help" && (!strings.Contains(out.String(), "--help") || !strings.Contains(out.String(), "--version")) {
+			t.Fatalf("false help missing long options: %q", out.String())
+		}
 	}
 }
 

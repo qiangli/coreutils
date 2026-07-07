@@ -55,6 +55,7 @@ func TestJoin(t *testing.T) {
 		{"-v 1 -v 2", f1, f2, []string{"-v", "1", "-v", "2"}, "2 b\n4 z\n"},
 		{"attached value -a1", f1, f2, []string{"-a1"}, "1 a x\n2 b\n3 c y\n"},
 		{"join field selection -1 -2", "a 1\nb 2\n", "1 x\n2 y\n", []string{"-1", "2", "-2", "1"}, "1 a x\n2 b y\n"},
+		{"join field selection -j", "a 1\nb 2\n", "x 1\ny 2\n", []string{"-j", "2"}, "1 a x\n2 b y\n"},
 		{"-t separator", "1:a\n2:b\n", "1:x\n3:y\n", []string{"-t", ":"}, "1:a:x\n"},
 		{"-t separator empty fields significant", "1::z\n", "1:x\n", []string{"-t", ":"}, "1::z:x\n"},
 		{"-i case-insensitive", "A 1\n", "a 2\n", []string{"-i"}, "A 1 2\n"},
@@ -210,8 +211,21 @@ func TestJoinHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: join") || !strings.Contains(out, "-a FILENUM") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	for _, want := range []string{"-e EMPTY", "-j FIELD", "-o FORMAT", "-h, --help", "-V, --version"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--help missing %q in %q", want, out)
+		}
+	}
 	out, _, code = runRaw(t, dir, "", "--version")
 	if code != 0 || !strings.Contains(out, "join") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runRaw(t, dir, "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: join") {
+		t.Errorf("-h: code=%d out=%q", code, out)
+	}
+	out, _, code = runRaw(t, dir, "", "-V")
+	if code != 0 || !strings.Contains(out, "join") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }

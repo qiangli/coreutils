@@ -82,6 +82,11 @@ func TestEchoHelpVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: echo") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	for _, want := range []string{"-n", "-e", "-E", "--help", "--version"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--help missing %q in %q", want, out)
+		}
+	}
 	out, _, code = runTool(t, "--version")
 	if code != 0 || !strings.Contains(out, "echo") {
 		t.Errorf("--version: code=%d out=%q", code, out)

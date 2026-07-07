@@ -32,6 +32,13 @@ func TestFactorHelpVersionAndShortH(t *testing.T) {
 		if code != 0 || err.String() != "" || out.String() == "" {
 			t.Fatalf("factor %v: code=%d out=%q err=%q", args, code, out.String(), err.String())
 		}
+		if args[0] == "--help" {
+			for _, want := range []string{"--exponents", "--help", "--version"} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("factor help missing %q in %q", want, out.String())
+				}
+			}
+		}
 	}
 	var out, err bytes.Buffer
 	code := run(&tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &err, In: strings.NewReader("")}}, []string{"-h", "36"})

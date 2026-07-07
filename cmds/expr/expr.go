@@ -22,7 +22,7 @@ type value string
 
 func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n", cmd.Usage, cmd.Synopsis)
+		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n", cmd.Usage, cmd.Synopsis)
 		return 0
 	}
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-V") {

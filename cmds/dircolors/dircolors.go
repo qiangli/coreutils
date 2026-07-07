@@ -34,16 +34,24 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	bourne := fs.BoolP("bourne-shell", "b", false, "output Bourne shell commands")
 	cshell := fs.BoolP("c-shell", "c", false, "output C shell commands")
+	sh := fs.Bool("sh", false, "output Bourne shell commands")
+	csh := fs.Bool("csh", false, "output C shell commands")
 	printDB := fs.BoolP("print-database", "p", false, "output the built-in color database")
+	printLSColors := fs.Bool("print-ls-colors", false, "output the LS_COLORS value")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
-	if *bourne && *cshell {
+	useBourne := *bourne || *sh
+	useCShell := *cshell || *csh
+	if useBourne && useCShell {
 		return tool.UsageError(rc, cmd, "options --bourne-shell and --c-shell are mutually exclusive")
 	}
+	if *printLSColors && (useBourne || useCShell) {
+		return tool.UsageError(rc, cmd, "the options to output LS_COLORS and to select a shell syntax are mutually exclusive")
+	}
 	if *printDB {
-		if *bourne || *cshell {
+		if useBourne || useCShell || *printLSColors {
 			return tool.UsageError(rc, cmd, "the options to output the internal database and to select a shell syntax are mutually exclusive")
 		}
 		if len(operands) > 0 {
@@ -67,7 +75,11 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	colors := encodeLSColors(entries)
-	if *cshell {
+	if *printLSColors {
+		fmt.Fprintln(rc.Out, colors)
+		return 0
+	}
+	if useCShell {
 		fmt.Fprintf(rc.Out, "setenv LS_COLORS %s\n", shellQuote(colors))
 		return 0
 	}

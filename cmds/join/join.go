@@ -30,9 +30,12 @@ var cmd = &tool.Tool{
 		"When FILE1 or FILE2 (not both) is -, read standard input.\n\n" +
 		"  -1 FIELD     join on this FIELD of file 1\n" +
 		"  -2 FIELD     join on this FIELD of file 2\n" +
+		"  -j FIELD     equivalent to -1 FIELD -2 FIELD\n" +
 		"  -a FILENUM   also print unpairable lines from file FILENUM,\n" +
 		"               where FILENUM is 1 or 2\n" +
 		"  -v FILENUM   like -a FILENUM, but suppress joined output lines\n" +
+		"  -e EMPTY     replace missing input fields with EMPTY\n" +
+		"  -o FORMAT    obey FORMAT while constructing output lines\n" +
 		"  -t CHAR      use CHAR as input and output field separator\n" +
 		"  -i           like --ignore-case",
 }
@@ -89,11 +92,13 @@ func run(rc *tool.RunContext, args []string) int {
 		for j := 0; j < len(body); j++ {
 			c := body[j]
 			switch c {
+			case 'h', 'V':
+				rest = append(rest, "-"+string(c))
 			case 'i':
 				opt.ignoreCase = true
 			case 'z':
 				opt.zeroTerminated = true
-			case '1', '2', 'a', 'v', 't', 'o', 'e':
+			case '1', '2', 'j', 'a', 'v', 't', 'o', 'e':
 				var val string
 				if j+1 < len(body) {
 					val = body[j+1:]
@@ -280,6 +285,12 @@ func (o *options) apply(rc *tool.RunContext, c byte, val string) int {
 			return tool.UsageError(rc, cmd, "invalid field number: '%s'", val)
 		}
 		o.field[c-'1'] = n - 1
+	case 'j':
+		n, ok := parsePositive(val)
+		if !ok {
+			return tool.UsageError(rc, cmd, "invalid field number: '%s'", val)
+		}
+		o.field[0], o.field[1] = n-1, n-1
 	case 'a', 'v':
 		if val != "1" && val != "2" {
 			return tool.UsageError(rc, cmd, "invalid file number: '%s'", val)

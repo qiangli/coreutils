@@ -52,6 +52,28 @@ func TestDircolorsCShellAndPrintDatabase(t *testing.T) {
 	}
 }
 
+func TestDircolorsUutilsAliases(t *testing.T) {
+	dir := t.TempDir()
+	out, errb, code := runTool(t, dir, nil, "--csh")
+	if code != 0 || errb != "" || !strings.HasPrefix(out, "setenv LS_COLORS '") {
+		t.Fatalf("--csh: code=%d out=%q err=%q", code, out, errb)
+	}
+	out, errb, code = runTool(t, dir, nil, "--sh")
+	if code != 0 || errb != "" || !strings.HasPrefix(out, "LS_COLORS='") {
+		t.Fatalf("--sh: code=%d out=%q err=%q", code, out, errb)
+	}
+	out, errb, code = runTool(t, dir, nil, "--print-ls-colors")
+	if code != 0 || errb != "" || !strings.Contains(out, "di=01;34") || strings.Contains(out, "LS_COLORS=") {
+		t.Fatalf("--print-ls-colors: code=%d out=%q err=%q", code, out, errb)
+	}
+	out, _, code = runTool(t, dir, nil, "--help")
+	for _, want := range []string{"--csh", "--sh", "--print-ls-colors", "-h, --help", "-V, --version"} {
+		if code != 0 || !strings.Contains(out, want) {
+			t.Fatalf("--help missing %q: code=%d out=%q", want, code, out)
+		}
+	}
+}
+
 func TestDircolorsParsesFile(t *testing.T) {
 	dir := t.TempDir()
 	db := strings.Join([]string{
@@ -141,6 +163,10 @@ func TestDircolorsPrintDatabaseRejectsOperands(t *testing.T) {
 	_, errb, code = runTool(t, t.TempDir(), nil, "-p", "-b")
 	if code != 2 || !strings.Contains(errb, "mutually exclusive") {
 		t.Fatalf("-p -b: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, t.TempDir(), nil, "--print-ls-colors", "--csh")
+	if code != 2 || !strings.Contains(errb, "mutually exclusive") {
+		t.Fatalf("--print-ls-colors --csh: code=%d err=%q", code, errb)
 	}
 }
 

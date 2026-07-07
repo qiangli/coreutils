@@ -17,7 +17,7 @@ func init() {
 		if len(args) > 0 {
 			switch args[0] {
 			case "--help", "-h":
-				fmt.Fprintf(rc.Out, "Usage: %s\n%s\n", cmd.Usage, cmd.Synopsis)
+				fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n", cmd.Usage, cmd.Synopsis)
 			case "--version", "-V":
 				fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
 			}
