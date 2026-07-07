@@ -33,13 +33,18 @@ func listMounts() ([]mountEntry, error) {
 		out = append(out, mountEntry{
 			device: unescapeMount(f[0]),
 			point:  point,
+			fstype: f[2],
 			total:  st.Blocks * bs,
 			used:   (st.Blocks - st.Bfree) * bs,
 			avail:  uint64(st.Bavail) * bs,
+			files:  st.Files,
+			ifree:  st.Ffree,
 		})
 	}
 	return out, nil
 }
+
+func syncFilesystems() { unix.Sync() }
 
 // unescapeMount decodes the \ooo octal escapes /proc/mounts uses for
 // spaces, tabs, newlines, and backslashes in mount paths.

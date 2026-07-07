@@ -68,6 +68,106 @@ func TestHumanHeader(t *testing.T) {
 	}
 }
 
+func TestSIHeader(t *testing.T) {
+	out, _, code := runTool(t, "-H")
+	if code != 0 {
+		t.Fatalf("df -H code = %d", code)
+	}
+	hdr := firstLine(out)
+	for _, col := range []string{"Filesystem", "Size", "Used", "Avail", "Use%", "Mounted on"} {
+		if !strings.Contains(hdr, col) {
+			t.Errorf("df -H header %q missing %q", hdr, col)
+		}
+	}
+}
+
+func TestBlockSizeHeader(t *testing.T) {
+	out, _, code := runTool(t, "-B", "1M")
+	if code != 0 {
+		t.Fatalf("df -B 1M code = %d", code)
+	}
+	if hdr := firstLine(out); !strings.Contains(hdr, "1048576B-blocks") {
+		t.Errorf("df -B 1M header = %q, want custom block header", hdr)
+	}
+}
+
+func TestPortablePrintTypeAndInodesHeaders(t *testing.T) {
+	out, _, code := runTool(t, "-P")
+	if code != 0 {
+		t.Fatalf("df -P code = %d", code)
+	}
+	if hdr := firstLine(out); !strings.Contains(hdr, "1024-blocks") {
+		t.Errorf("df -P header = %q, want POSIX block header", hdr)
+	}
+
+	out, _, code = runTool(t, "-T")
+	if code != 0 {
+		t.Fatalf("df -T code = %d", code)
+	}
+	if hdr := firstLine(out); !strings.Contains(hdr, "Type") {
+		t.Errorf("df -T header = %q, want Type", hdr)
+	}
+
+	out, _, code = runTool(t, "-i")
+	if code != 0 {
+		t.Fatalf("df -i code = %d", code)
+	}
+	hdr := firstLine(out)
+	for _, col := range []string{"Inodes", "IUsed", "IFree", "IUse%"} {
+		if !strings.Contains(hdr, col) {
+			t.Errorf("df -i header %q missing %q", hdr, col)
+		}
+	}
+}
+
+func TestOutputFields(t *testing.T) {
+	out, _, code := runTool(t, "--output=source,fstype,target")
+	if code != 0 {
+		t.Fatalf("df --output code = %d", code)
+	}
+	hdr := firstLine(out)
+	for _, col := range []string{"Filesystem", "Type", "Mounted on"} {
+		if !strings.Contains(hdr, col) {
+			t.Errorf("--output header %q missing %q", hdr, col)
+		}
+	}
+	if strings.Contains(hdr, "Used") {
+		t.Errorf("--output header %q includes unrequested Used column", hdr)
+	}
+}
+
+func TestOutputWithoutFieldList(t *testing.T) {
+	out, _, code := runTool(t, "--output")
+	if code != 0 {
+		t.Fatalf("df --output code = %d", code)
+	}
+	hdr := firstLine(out)
+	for _, col := range []string{"Filesystem", "Type", "Inodes", "Mounted on"} {
+		if !strings.Contains(hdr, col) {
+			t.Errorf("--output header %q missing %q", hdr, col)
+		}
+	}
+}
+
+func TestTypeFiltersAndTotal(t *testing.T) {
+	out, _, code := runTool(t, "-t", "__definitely_missing_fs_type__")
+	if code != 0 {
+		t.Fatalf("df -t missing-type code = %d", code)
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Errorf("df -t missing-type output = %q, want header only", out)
+	}
+
+	out, _, code = runTool(t, "--total")
+	if code != 0 {
+		t.Fatalf("df --total code = %d", code)
+	}
+	if !strings.Contains(out, "total") {
+		t.Errorf("df --total output lacks total row: %q", out)
+	}
+}
+
 func TestFileOperand(t *testing.T) {
 	out, errb, code := runTool(t, ".")
 	if code != 0 {
@@ -124,9 +224,18 @@ func TestHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: df") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	for _, flag := range []string{"-V", "-k", "--block-size", "--si", "--portability", "--print-type", "--all", "--inodes", "--local", "--no-sync", "--sync", "--output", "--type", "--exclude-type", "--total"} {
+		if !strings.Contains(out, flag) {
+			t.Errorf("--help output missing %s", flag)
+		}
+	}
 	out, _, code = runTool(t, "--version")
 	if code != 0 || !strings.Contains(out, "df") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "-V")
+	if code != 0 || !strings.Contains(out, "df") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }
 

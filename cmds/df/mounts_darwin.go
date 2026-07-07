@@ -21,10 +21,15 @@ func listMounts() ([]mountEntry, error) {
 		out = append(out, mountEntry{
 			device: unix.ByteSliceToString(st.Mntfromname[:]),
 			point:  unix.ByteSliceToString(st.Mntonname[:]),
+			fstype: unix.ByteSliceToString(st.Fstypename[:]),
 			total:  st.Blocks * bs,
 			used:   (st.Blocks - st.Bfree) * bs,
 			avail:  uint64(st.Bavail) * bs,
+			files:  st.Files,
+			ifree:  st.Ffree,
 		})
 	}
 	return out, nil
 }
+
+func syncFilesystems() { unix.Sync() }
