@@ -30,7 +30,9 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	silent := fs.BoolP("silent", "s", false, "print nothing, only return an exit status")
+	fs.Bool("quiet", false, "same as --silent")
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
@@ -40,11 +42,15 @@ func run(rc *tool.RunContext, args []string) int {
 
 	if f, ok := rc.In.(*os.File); ok {
 		if name, ok := ttyName(f); ok {
-			fmt.Fprintf(rc.Out, "%s\n", name)
+			if !*silent && !fs.Changed("quiet") {
+				fmt.Fprintf(rc.Out, "%s\n", name)
+			}
 			return 0
 		}
 	}
 	// GNU prints the diagnosis on stdout, not stderr.
-	fmt.Fprintf(rc.Out, "not a tty\n")
+	if !*silent && !fs.Changed("quiet") {
+		fmt.Fprintf(rc.Out, "not a tty\n")
+	}
 	return 1
 }

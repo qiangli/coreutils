@@ -32,6 +32,17 @@ func TestTTYNotAFile(t *testing.T) {
 	}
 }
 
+func TestTTYSilent(t *testing.T) {
+	out, errb, code := runTool(t, strings.NewReader("data"), "-s")
+	if code != 1 || out != "" || errb != "" {
+		t.Errorf("tty -s = (%q, %q, %d), want quiet status 1", out, errb, code)
+	}
+	out, errb, code = runTool(t, strings.NewReader("data"), "--quiet")
+	if code != 1 || out != "" || errb != "" {
+		t.Errorf("tty --quiet = (%q, %q, %d), want quiet status 1", out, errb, code)
+	}
+}
+
 func TestTTYRegularFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f")
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {

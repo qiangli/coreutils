@@ -56,6 +56,23 @@ func TestUnexpandTabsImpliesAll(t *testing.T) {
 	}
 }
 
+func TestUnexpandNoUTF8CountsBytes(t *testing.T) {
+	out, stderr, code := runUnexpand(t, "é  x\n", "-a", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "é  x\n"; out != want {
+		t.Fatalf("default UTF-8 out=%q want %q", out, want)
+	}
+	out, stderr, code = runUnexpand(t, "é  x\n", "-U", "-a", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "é\tx\n"; out != want {
+		t.Fatalf("-U out=%q want %q", out, want)
+	}
+}
+
 func TestUnexpandFirstOnlyOverridesAll(t *testing.T) {
 	out, stderr, code := runUnexpand(t, "x   y\n", "-a", "--first-only", "-t", "4")
 	if code != 0 || stderr != "" {
@@ -136,13 +153,6 @@ func TestUnexpandRepeatedTabsAccumulate(t *testing.T) {
 	}
 	if want := "\t\t  x\n"; out != want {
 		t.Fatalf("out=%q want %q", out, want)
-	}
-}
-
-func TestUnexpandNoUTF8FlagRemoved(t *testing.T) {
-	_, stderr, code := runUnexpand(t, "x\n", "-U")
-	if code != 2 || !strings.Contains(stderr, "U") {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }
 

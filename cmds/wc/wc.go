@@ -52,9 +52,27 @@ func run(rc *tool.RunContext, args []string) int {
 	cLines := fs.BoolP("lines", "l", false, "print the newline counts")
 	cMaxLine := fs.BoolP("max-line-length", "L", false, "print the maximum display width")
 	cWords := fs.BoolP("words", "w", false, "print the word counts")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	files0From := fs.String("files0-from", "", "read input file names from F, terminated by NUL; if F is -, read names from standard input")
+	totalWhen := fs.String("total", "auto", "when to print a total line: auto, always, only, never")
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
+	}
+	if fs.Changed("files0-from") {
+		if len(operands) > 0 {
+			return tool.UsageError(rc, cmd, "file operands cannot be combined with --files0-from")
+		}
+		var err error
+		operands, err = readFiles0(rc, *files0From)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "wc: %s: %v\n", *files0From, sysErr(err))
+			return 1
+		}
+	}
+	switch *totalWhen {
+	case "auto", "always", "only", "never":
+	default:
+		return tool.UsageError(rc, cmd, "invalid argument %q for --total", *totalWhen)
 	}
 
 	sel := selection{lines: *cLines, words: *cWords, chars: *cChars, bytes: *cBytes, maxLine: *cMaxLine}
@@ -66,7 +84,7 @@ func run(rc *tool.RunContext, args []string) int {
 	w := bufio.NewWriter(rc.Out)
 	exit := 0
 
-	if len(operands) == 0 {
+	if len(operands) == 0 && !fs.Changed("files0-from") {
 		var in io.Reader = rc.In
 		if in == nil {
 			in = strings.NewReader("")
@@ -115,9 +133,11 @@ func run(rc *tool.RunContext, args []string) int {
 		if c.maxLine > total.maxLine {
 			total.maxLine = c.maxLine
 		}
-		printRow(w, sel, c, width, name)
+		if *totalWhen != "only" {
+			printRow(w, sel, c, width, name)
+		}
 	}
-	if len(operands) > 1 {
+	if shouldPrintTotal(*totalWhen, len(operands)) {
 		printRow(w, sel, total, width, "total")
 	}
 	if err := w.Flush(); err != nil {
@@ -125,6 +145,42 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return exit
+}
+
+func shouldPrintTotal(mode string, nfiles int) bool {
+	switch mode {
+	case "always", "only":
+		return true
+	case "never":
+		return false
+	default:
+		return nfiles > 1
+	}
+}
+
+func readFiles0(rc *tool.RunContext, name string) ([]string, error) {
+	var data []byte
+	var err error
+	if name == "-" {
+		data, err = io.ReadAll(rc.In)
+	} else {
+		data, err = os.ReadFile(rc.Path(name))
+	}
+	if err != nil {
+		return nil, err
+	}
+	parts := bytes.Split(data, []byte{0})
+	names := make([]string, 0, len(parts))
+	for i, p := range parts {
+		if len(p) == 0 {
+			if i == len(parts)-1 {
+				continue
+			}
+			return nil, fmt.Errorf("invalid zero-length file name")
+		}
+		names = append(names, string(p))
+	}
+	return names, nil
 }
 
 // countReader makes one pass computing the counts sel needs. Only -m

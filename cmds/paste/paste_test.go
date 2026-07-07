@@ -151,6 +151,18 @@ func TestPasteStdin(t *testing.T) {
 	}
 }
 
+func TestPasteZeroTerminated(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"f1": "a\x00b\x00", "f2": "1\x002\x00"})
+	out, _, code := runToolDir(t, dir, "", "-z", "f1", "f2")
+	if code != 0 || out != "a\t1\x00b\t2\x00" {
+		t.Errorf("parallel -z: out=%q code=%d", out, code)
+	}
+	out, _, code = runToolDir(t, dir, "", "-z", "-s", "-d", ",", "f1")
+	if code != 0 || out != "a,b\x00" {
+		t.Errorf("serial -z: out=%q code=%d", out, code)
+	}
+}
+
 func TestPasteErrors(t *testing.T) {
 	dir := writeFiles(t, map[string]string{"f1": "a\n"})
 	// trailing unescaped backslash in -d

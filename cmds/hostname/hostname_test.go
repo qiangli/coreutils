@@ -50,3 +50,25 @@ func TestHostnameFlags(t *testing.T) {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
 	}
 }
+
+func TestHostnameUutilsAliases(t *testing.T) {
+	want, err := os.Hostname()
+	if err != nil {
+		t.Skipf("os.Hostname: %v", err)
+	}
+	out, errb, code := runTool(t, "-s")
+	if code != 0 || errb != "" {
+		t.Fatalf("hostname -s = (%q, %q, %d)", out, errb, code)
+	}
+	short := want
+	if i := strings.IndexByte(short, '.'); i >= 0 {
+		short = short[:i]
+	}
+	if out != short+"\n" {
+		t.Fatalf("hostname -s = %q, want %q", out, short+"\n")
+	}
+	out, _, code = runTool(t, "-h")
+	if code != 0 || !strings.Contains(out, "Usage: hostname") {
+		t.Fatalf("hostname -h = (%q, %d)", out, code)
+	}
+}

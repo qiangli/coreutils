@@ -23,7 +23,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	all := fs.Bool("all", false, "print the number of installed processors")
 	ignore := fs.Uint("ignore", 0, "exclude up to N processing units")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}

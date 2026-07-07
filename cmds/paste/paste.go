@@ -33,7 +33,8 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	delims := fs.StringP("delimiters", "d", "\t", "reuse characters from LIST instead of TABs")
 	serial := fs.BoolP("serial", "s", false, "paste one file at a time instead of in parallel")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	zero := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
@@ -67,10 +68,14 @@ func run(rc *tool.RunContext, args []string) int {
 	out := bufio.NewWriter(rc.Out)
 	dc := &delimCycle{list: dl}
 	var status int
+	lineEnd := byte('\n')
+	if *zero {
+		lineEnd = 0
+	}
 	if *serial {
-		status = pasteSerial(rc, operands, open, dc, out)
+		status = pasteSerial(rc, operands, open, dc, out, lineEnd)
 	} else {
-		status = pasteParallel(rc, operands, open, dc, out)
+		status = pasteParallel(rc, operands, open, dc, out, lineEnd)
 	}
 	if err := out.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "paste: write error: %v\n", err)
@@ -150,7 +155,7 @@ func (d *delimCycle) reset() {
 
 type opener func(name string) (*bufio.Reader, io.Closer, error)
 
-func pasteParallel(rc *tool.RunContext, names []string, open opener, dc *delimCycle, out *bufio.Writer) int {
+func pasteParallel(rc *tool.RunContext, names []string, open opener, dc *delimCycle, out *bufio.Writer, lineEnd byte) int {
 	type input struct {
 		r *bufio.Reader
 		c io.Closer
@@ -185,7 +190,7 @@ func pasteParallel(rc *tool.RunContext, names []string, open opener, dc *delimCy
 			if eof[i] {
 				eofCount++
 			} else {
-				chunk, err := in.r.ReadBytes('\n')
+				chunk, err := in.r.ReadBytes(lineEnd)
 				if len(chunk) == 0 {
 					eof[i] = true
 					eofCount++
@@ -194,7 +199,7 @@ func pasteParallel(rc *tool.RunContext, names []string, open opener, dc *delimCy
 						return 1
 					}
 				} else {
-					if chunk[len(chunk)-1] == '\n' {
+					if chunk[len(chunk)-1] == lineEnd {
 						chunk = chunk[:len(chunk)-1]
 					}
 					buf = append(buf, chunk...)
@@ -206,12 +211,12 @@ func pasteParallel(rc *tool.RunContext, names []string, open opener, dc *delimCy
 			return 0
 		}
 		dc.trimTrailing(&buf)
-		buf = append(buf, '\n')
+		buf = append(buf, lineEnd)
 		out.Write(buf)
 	}
 }
 
-func pasteSerial(rc *tool.RunContext, names []string, open opener, dc *delimCycle, out *bufio.Writer) int {
+func pasteSerial(rc *tool.RunContext, names []string, open opener, dc *delimCycle, out *bufio.Writer, lineEnd byte) int {
 	status := 0
 	var buf []byte
 	for _, name := range names {
@@ -224,7 +229,7 @@ func pasteSerial(rc *tool.RunContext, names []string, open opener, dc *delimCycl
 		buf = buf[:0]
 		dc.reset()
 		for {
-			chunk, rerr := r.ReadBytes('\n')
+			chunk, rerr := r.ReadBytes(lineEnd)
 			if len(chunk) == 0 {
 				if rerr != nil && !errors.Is(rerr, io.EOF) {
 					fmt.Fprintf(rc.Err, "paste: %s: %v\n", name, rerr)
@@ -232,14 +237,14 @@ func pasteSerial(rc *tool.RunContext, names []string, open opener, dc *delimCycl
 				}
 				break
 			}
-			if chunk[len(chunk)-1] == '\n' {
+			if chunk[len(chunk)-1] == lineEnd {
 				chunk = chunk[:len(chunk)-1]
 			}
 			buf = append(buf, chunk...)
 			dc.write(&buf)
 		}
 		dc.trimTrailing(&buf)
-		buf = append(buf, '\n')
+		buf = append(buf, lineEnd)
 		out.Write(buf)
 		if closer != nil {
 			closer.Close()

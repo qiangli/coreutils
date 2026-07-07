@@ -239,6 +239,67 @@ func TestInode(t *testing.T) {
 	}
 }
 
+func TestUutilsDisplayOptions(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "b.go", "b")
+	write(t, dir, "a.txt", "a")
+	write(t, dir, "skip~", "x")
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := runToolAt(t, dir, "--ignore=*.go", "--ignore-backups", "--file-type")
+	if code != 0 || out != "a.txt\nsub/\n" {
+		t.Fatalf("ls ignore/file-type = (%q, %d)", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "--zero", "--sort=extension")
+	if code != 0 || out != "skip~\x00sub\x00b.go\x00a.txt\x00" {
+		t.Fatalf("ls --zero --sort=extension = (%q, %d)", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "--format=commas")
+	if code != 0 || out != "a.txt, b.go, skip~, sub, \n" {
+		t.Fatalf("ls --format=commas = (%q, %d)", out, code)
+	}
+}
+
+func TestUutilsLongAliases(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", "hello")
+	out, _, code := runToolAt(t, dir, "--long", "--no-group", "--quote-name")
+	if code != 0 {
+		t.Fatalf("ls aliases code = %d output=%q", code, out)
+	}
+	if !strings.Contains(out, `"f"`) {
+		t.Fatalf("ls --quote-name output = %q", out)
+	}
+	if strings.Count(strings.Fields(strings.Split(strings.TrimSpace(out), "\n")[1])[0], "-") == 0 {
+		t.Fatalf("ls --long output does not look long: %q", out)
+	}
+}
+
+func TestUutilsRemainingLsFlags(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "v10", "x")
+	write(t, dir, "v2", "x")
+	out, _, code := runToolAt(t, dir, "-v")
+	if code != 0 || out != "v2\nv10\n" {
+		t.Fatalf("ls -v = (%q, %d)", out, code)
+	}
+	out, _, code = runToolAt(t, dir, "--size")
+	if code != 0 {
+		t.Fatalf("ls --size code = %d", code)
+	}
+	for _, name := range []string{"v2", "v10"} {
+		if !strings.Contains(out, name) {
+			t.Fatalf("ls --size output missing %s: %q", name, out)
+		}
+	}
+	out, _, code = runToolAt(t, dir, "-V")
+	if code != 0 || !strings.Contains(out, "ls (qiangli/coreutils)") {
+		t.Fatalf("ls -V = (%q, %d)", out, code)
+	}
+}
+
 func TestNonexistentOperand(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "real", "x")

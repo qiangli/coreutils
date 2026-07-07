@@ -100,6 +100,25 @@ func TestReadlinkNoNewline(t *testing.T) {
 	}
 }
 
+func TestReadlinkZeroAndVerbose(t *testing.T) {
+	dir := t.TempDir()
+	mkSymlink(t, "target", filepath.Join(dir, "lnk"))
+	mkSymlink(t, "target2", filepath.Join(dir, "lnk2"))
+
+	out, errb, code := runIn(t, dir, "-z", "lnk", "lnk2")
+	if code != 0 || out != "target\x00target2\x00" || errb != "" {
+		t.Errorf("readlink -z = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runIn(t, dir, "-v", "missing", "lnk")
+	if code != 1 || out != "target\n" || !strings.Contains(errb, "readlink: missing:") {
+		t.Errorf("readlink -v missing lnk = (%q, %q, %d)", out, errb, code)
+	}
+	_, errb, code = runIn(t, dir, "-v", "-q", "missing")
+	if code != 1 || errb != "" {
+		t.Errorf("readlink -v -q missing = (err=%q, code=%d), want quiet", errb, code)
+	}
+}
+
 func TestReadlinkCanonicalize(t *testing.T) {
 	dir := resolvedTempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
@@ -161,11 +180,6 @@ func TestReadlinkErrors(t *testing.T) {
 	_, errb, code = runIn(t, dir, "--frobnicate", "x")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
-	}
-	// GNU flags deliberately not implemented fail loudly
-	_, errb, code = runIn(t, dir, "-z", "x")
-	if code != 2 || !strings.Contains(errb, "z") {
-		t.Errorf("-z: code=%d err=%q", code, errb)
 	}
 }
 

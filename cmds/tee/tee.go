@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -32,13 +33,27 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	appendMode := fs.BoolP("append", "a", false, "append to the given FILEs, do not overwrite")
 	fs.BoolP("ignore-interrupts", "i", false, "ignore interrupt signals")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	ignorePipeErrors := fs.BoolP("ignore-pipe-errors", "p", false, "diagnose errors writing to non pipe outputs")
+	outputError := fs.String("output-error", "", "set behavior on write error: warn, warn-nopipe, exit, or exit-nopipe")
+	fs.Lookup("output-error").NoOptDefVal = "warn-nopipe"
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
 	// -i is accepted for upstream compatibility but has no effect here:
 	// tools run in-process and never receive a SIGINT of their own to
 	// ignore, which matches the documented effect for this embedding.
+	if *ignorePipeErrors && !fs.Changed("output-error") {
+		*outputError = "warn-nopipe"
+	}
+	exitOnWriteError := false
+	switch strings.ToLower(*outputError) {
+	case "", "warn", "warn-nopipe":
+	case "exit", "exit-nopipe":
+		exitOnWriteError = true
+	default:
+		return tool.UsageError(rc, cmd, "invalid argument %q for --output-error", *outputError)
+	}
 
 	oflags := os.O_WRONLY | os.O_CREATE
 	if *appendMode {
@@ -76,7 +91,13 @@ func run(rc *tool.RunContext, args []string) int {
 					fmt.Fprintf(rc.Err, "tee: %s: %v\n", sinks[i].name, pathErr(werr))
 					sinks[i].w = nil
 					status = 1
+					if exitOnWriteError {
+						break
+					}
 				}
+			}
+			if exitOnWriteError && status != 0 {
+				break
 			}
 		}
 		if rerr != nil {

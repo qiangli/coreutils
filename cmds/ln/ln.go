@@ -30,6 +30,10 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	symbolic := fs.BoolP("symbolic", "s", false, "make symbolic links instead of hard links")
 	force := fs.BoolP("force", "f", false, "remove existing destination files")
+	noDeref := fs.BoolP("no-dereference", "n", false, "treat LINK_NAME as a normal file if it is a symlink to a directory")
+	relative := fs.BoolP("relative", "r", false, "with -s, create links relative to link location")
+	targetDir := fs.StringP("target-directory", "t", "", "specify the DIRECTORY in which to create the links")
+	noTargetDir := fs.BoolP("no-target-directory", "T", false, "treat LINK_NAME as a normal file always")
 	verbose := fs.BoolP("verbose", "v", false, "print name of each linked file")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -38,15 +42,26 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing file operand")
 	}
+	if *targetDir != "" && *noTargetDir {
+		return tool.UsageError(rc, cmd, "cannot combine -t and -T")
+	}
+	if *relative && !*symbolic {
+		return tool.UsageError(rc, cmd, "--relative can only be used with --symbolic")
+	}
 
 	// Decide which GNU form applies: TARGET, TARGET LINK_NAME, or
 	// TARGET... DIRECTORY (last operand is an existing directory).
 	targets := operands
 	linkName := ""
-	dir := ""
-	if len(operands) > 1 {
+	dir := *targetDir
+	if dir != "" {
+		if fi, err := os.Stat(rc.Path(dir)); err != nil || !fi.IsDir() {
+			fmt.Fprintf(rc.Err, "ln: target directory '%s' is not a directory\n", dir)
+			return 1
+		}
+	} else if len(operands) > 1 {
 		last := operands[len(operands)-1]
-		if fi, err := os.Stat(rc.Path(last)); err == nil && fi.IsDir() {
+		if !*noTargetDir && isDestDir(rc, last, *noDeref) {
 			dir = last
 			targets = operands[:len(operands)-1]
 		} else if len(operands) == 2 {
@@ -68,6 +83,16 @@ func run(rc *tool.RunContext, args []string) int {
 			dest = filepath.Join(dir, filepath.Base(target))
 		}
 		destPath := rc.Path(dest)
+		linkTarget := target
+		if *symbolic && *relative {
+			var err error
+			linkTarget, err = relativeTarget(rc, target, dest)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "ln: failed to create symbolic link '%s': %v\n", dest, reason(err))
+				exit = 1
+				continue
+			}
+		}
 		if *force {
 			if _, err := os.Lstat(destPath); err == nil {
 				if err := os.Remove(destPath); err != nil {
@@ -79,9 +104,7 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		var err error
 		if *symbolic {
-			// The symlink stores TARGET exactly as written — GNU never
-			// resolves it against the working directory.
-			err = os.Symlink(target, destPath)
+			err = os.Symlink(linkTarget, destPath)
 		} else {
 			err = os.Link(rc.Path(target), destPath)
 		}
@@ -99,10 +122,36 @@ func run(rc *tool.RunContext, args []string) int {
 			if *symbolic {
 				arrow = "->"
 			}
-			fmt.Fprintf(rc.Out, "'%s' %s '%s'\n", dest, arrow, target)
+			fmt.Fprintf(rc.Out, "'%s' %s '%s'\n", dest, arrow, linkTarget)
 		}
 	}
 	return exit
+}
+
+func isDestDir(rc *tool.RunContext, operand string, noDeref bool) bool {
+	var (
+		fi  os.FileInfo
+		err error
+	)
+	if noDeref {
+		fi, err = os.Lstat(rc.Path(operand))
+	} else {
+		fi, err = os.Stat(rc.Path(operand))
+	}
+	return err == nil && fi.IsDir()
+}
+
+func relativeTarget(rc *tool.RunContext, target, dest string) (string, error) {
+	targetAbs := rc.Path(target)
+	if !filepath.IsAbs(targetAbs) {
+		targetAbs = filepath.Join(rc.Dir, target)
+	}
+	destDir := filepath.Dir(rc.Path(dest))
+	rel, err := filepath.Rel(destDir, targetAbs)
+	if err != nil {
+		return "", err
+	}
+	return rel, nil
 }
 
 // reason unwraps os wrapper errors and GNU-capitalizes so diagnostics read

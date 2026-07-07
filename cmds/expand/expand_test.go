@@ -68,6 +68,23 @@ func TestExpandInitialBackspaceEndsInitialRegion(t *testing.T) {
 	}
 }
 
+func TestExpandNoUTF8CountsBytes(t *testing.T) {
+	out, stderr, code := runExpand(t, "é\tx\n", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "é   x\n"; out != want {
+		t.Fatalf("default UTF-8 out=%q want %q", out, want)
+	}
+	out, stderr, code = runExpand(t, "é\tx\n", "-U", "-t", "4")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "é  x\n"; out != want {
+		t.Fatalf("-U out=%q want %q", out, want)
+	}
+}
+
 func TestExpandBackspaceDecrementsColumn(t *testing.T) {
 	// "ab\b\t": the backspace moves back to column 1, so the tab
 	// expands from there to column 4 (3 spaces).
@@ -130,13 +147,6 @@ func TestExpandTabsBeyondLastStopBecomeSingleSpaces(t *testing.T) {
 	}
 	if want := "  a b c\n"; out != want {
 		t.Fatalf("out=%q want %q", out, want)
-	}
-}
-
-func TestExpandNoUTF8FlagRemoved(t *testing.T) {
-	_, stderr, code := runExpand(t, "x\n", "-U")
-	if code != 2 || !strings.Contains(stderr, "U") {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }
 

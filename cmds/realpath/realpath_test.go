@@ -108,11 +108,46 @@ func TestRealpathSymlinks(t *testing.T) {
 	}
 }
 
+func TestRealpathLogicalMode(t *testing.T) {
+	dir := resolvedTempDir(t)
+	if err := os.MkdirAll(filepath.Join(dir, "real", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "real", "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mkSymlink(t, "real/nested", filepath.Join(dir, "link"))
+
+	out, _, code := runIn(t, dir, "-P", "link"+sep()+".."+sep()+"file")
+	if code != 0 || out != filepath.Join(dir, "real", "file")+"\n" {
+		t.Errorf("realpath -P link/../file = (%q, %d)", out, code)
+	}
+	out, _, code = runIn(t, dir, "-L", "link"+sep()+".."+sep()+"file")
+	if code != 0 || out != filepath.Join(dir, "file")+"\n" {
+		t.Errorf("realpath -L link/../file = (%q, %d)", out, code)
+	}
+	out, _, code = runIn(t, dir, "-s", "-P", "link"+sep()+".."+sep()+"file")
+	if code != 0 || out != filepath.Join(dir, "real", "file")+"\n" {
+		t.Errorf("realpath -s -P link/../file = (%q, %d), want physical last option", out, code)
+	}
+}
+
 func TestRealpathModes(t *testing.T) {
 	dir := resolvedTempDir(t)
 
+	out, _, code := runIn(t, dir, "-E", "missing")
+	if code != 0 || out != filepath.Join(dir, "missing")+"\n" {
+		t.Errorf("realpath -E missing = (%q, %d)", out, code)
+	}
+	out, _, code = runIn(t, dir, "-P", "missing")
+	if code != 0 || out != filepath.Join(dir, "missing")+"\n" {
+		t.Errorf("realpath -P missing = (%q, %d)", out, code)
+	}
 	// -m: nothing needs to exist
-	out, _, code := runIn(t, dir, "-m", "a"+sep()+"b"+sep()+"c")
+	out, _, code = runIn(t, dir, "-m", "a"+sep()+"b"+sep()+"c")
 	if code != 0 || out != filepath.Join(dir, "a", "b", "c")+"\n" {
 		t.Errorf("realpath -m a/b/c = (%q, %d)", out, code)
 	}
@@ -134,10 +169,30 @@ func TestRealpathModes(t *testing.T) {
 	if code != 1 {
 		t.Errorf("realpath -m -e missing: code=%d, want 1", code)
 	}
+	out, _, code = runIn(t, dir, "-e", "-E", "missing")
+	if code != 0 || out != filepath.Join(dir, "missing")+"\n" {
+		t.Errorf("realpath -e -E missing = (%q, %d), want -E to win", out, code)
+	}
 	// multiple operands: failures don't stop the rest
 	out, _, code = runIn(t, dir, "-e", "missing", ".")
 	if code != 1 || out != dir+"\n" {
 		t.Errorf("realpath -e missing . = (%q, %d), want (%q, 1)", out, code, dir+"\n")
+	}
+}
+
+func TestRealpathQuietAndZero(t *testing.T) {
+	dir := resolvedTempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runIn(t, dir, "-z", "f", "missing")
+	want := filepath.Join(dir, "f") + "\x00" + filepath.Join(dir, "missing") + "\x00"
+	if code != 0 || out != want || errb != "" {
+		t.Errorf("realpath -z = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	out, errb, code = runIn(t, dir, "-q", "-e", "missing", "f")
+	if code != 1 || out != filepath.Join(dir, "f")+"\n" || errb != "" {
+		t.Errorf("realpath -q -e missing f = (%q, %q, %d)", out, errb, code)
 	}
 }
 
@@ -209,6 +264,30 @@ func TestRealpathRelativeTo(t *testing.T) {
 	}
 }
 
+func TestRealpathRelativeBase(t *testing.T) {
+	dir := resolvedTempDir(t)
+	if err := os.MkdirAll(filepath.Join(dir, "base", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "base", "sub", "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "outside"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := runIn(t, dir, "--relative-base=base", "base"+sep()+"sub"+sep()+"f", "outside")
+	want := filepath.Join("sub", "f") + "\n" + filepath.Join(dir, "outside") + "\n"
+	if code != 0 || out != want {
+		t.Errorf("realpath --relative-base = (%q, %d), want %q", out, code, want)
+	}
+	out, _, code = runIn(t, dir, "--relative-base=base", "--relative-to=base"+sep()+"sub", "base"+sep()+"sub"+sep()+"f", "outside")
+	want = "f\n" + filepath.Join(dir, "outside") + "\n"
+	if code != 0 || out != want {
+		t.Errorf("realpath --relative-base --relative-to = (%q, %d), want %q", out, code, want)
+	}
+}
+
 func TestRealpathErrors(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runIn(t, dir)
@@ -218,11 +297,6 @@ func TestRealpathErrors(t *testing.T) {
 	_, errb, code = runIn(t, dir, "--frobnicate", "x")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
-	}
-	// GNU flags deliberately not implemented fail loudly
-	_, errb, code = runIn(t, dir, "-z", "x")
-	if code != 2 || !strings.Contains(errb, "z") {
-		t.Errorf("-z: code=%d err=%q", code, errb)
 	}
 	// empty operand never exists
 	_, errb, code = runIn(t, dir, "")

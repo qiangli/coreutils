@@ -34,7 +34,8 @@ func run(rc *tool.RunContext, args []string) int {
 	quiet := fs.BoolP("quiet", "q", false, "never print headers giving file names")
 	silent := fs.Bool("silent", false, "same as --quiet")
 	verbose := fs.BoolP("verbose", "v", false, "always print headers giving file names")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	zero := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
@@ -88,7 +89,11 @@ func run(rc *tool.RunContext, args []string) int {
 		if showHeaders {
 			hp.print(w, displayName(name))
 		}
-		err = headStream(r, w, bytesMode, count, fromEnd)
+		lineEnd := byte('\n')
+		if *zero {
+			lineEnd = 0
+		}
+		err = headStream(r, w, bytesMode, count, fromEnd, lineEnd)
 		if closer != nil {
 			closer.Close()
 		}
@@ -104,7 +109,7 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-func headStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromEnd bool) error {
+func headStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromEnd bool, lineEnd byte) error {
 	br := bufio.NewReader(r)
 	switch {
 	case bytesMode && !fromEnd:
@@ -146,7 +151,7 @@ func headStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromEnd b
 	case !fromEnd:
 		remaining := n
 		for remaining > 0 {
-			line, err := br.ReadBytes('\n')
+			line, err := br.ReadBytes(lineEnd)
 			if len(line) > 0 {
 				if _, werr := w.Write(line); werr != nil {
 					return werr
@@ -169,7 +174,7 @@ func headStream(r io.Reader, w *bufio.Writer, bytesMode bool, n int64, fromEnd b
 		}
 		var q [][]byte
 		for {
-			line, err := br.ReadBytes('\n')
+			line, err := br.ReadBytes(lineEnd)
 			if len(line) > 0 {
 				q = append(q, line)
 				if int64(len(q)) > n {

@@ -96,6 +96,25 @@ func TestTeeIgnoreInterruptsAccepted(t *testing.T) {
 	}
 }
 
+func TestTeeOutputErrorOptionsAccepted(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"-p", "f"},
+		{"--output-error", "f"},
+		{"--output-error=warn", "f"},
+		{"--output-error=exit-nopipe", "f"},
+	} {
+		out, errb, code := runToolDir(t, dir, "x\n", args...)
+		if code != 0 || errb != "" || out != "x\n" {
+			t.Errorf("tee %v: out=%q err=%q code=%d", args, out, errb, code)
+		}
+	}
+	_, errb, code := runToolDir(t, dir, "", "--output-error=bad")
+	if code != 2 || !strings.Contains(errb, "invalid argument") {
+		t.Errorf("bad --output-error: err=%q code=%d", errb, code)
+	}
+}
+
 func TestTeeOpenErrorContinues(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skipf("relies on opening a path under a missing directory failing the same way")

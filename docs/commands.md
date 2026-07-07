@@ -29,7 +29,7 @@ File operations:
 | mkdir | u-root | -p, -m, -v |
 | rmdir | guonaihong | -p, -v |
 | touch | guonaihong, u-root | -a, -m, -c, -d, -r, -t |
-| ln | u-root | -s, -f, -v |
+| ln | u-root | -s, -f, -v; uutils-parity additions: -t/--target-directory, -T/--no-target-directory, -n/--no-dereference, -r/--relative |
 | link / unlink | guonaihong, u-root | trivial pair |
 | mkfifo | fresh | -m octal; Unix native, clear unsupported error elsewhere |
 | mknod | fresh | NAME TYPE [MAJOR MINOR], -m octal; Unix native, clear unsupported error elsewhere |
@@ -45,15 +45,15 @@ Listing and filesystem info:
 
 | Command | Sources | Notes |
 |---|---|---|
-| ls | aict, u-root | -l, -a, -A, -d, -R, -r, -t, -S, -1, -h, -i; C-locale byte-order sort, no color |
+| ls | aict, u-root | Broad uutils option surface: -l, -a, -A, -d, -R, -r, -t, -S, -1, -h, -i plus display/sort/quoting/filtering/dereference additions from the 2026-07-07 parity sprint; deterministic one-entry-per-line output for column/row width modes; no color emission |
 | dir / vdir | ls variant | delegate to ls / ls -l, answering --help/--version as themselves; GNU's -C/-b column/escape modes are not in ls, so output is ls's deterministic one-per-line (documented deviation) |
 | dircolors | fresh | Bourne/C-shell LS_COLORS output in database order; GNU TERM/COLORTERM gating (pre-TERM entries global); unrecognized keywords and malformed lines are errors; built-in database emitted independent of $TERM (deterministic deviation) |
 | stat | aict | default + -c format subset |
 | du | aict, u-root | -s, -h, -a, -c, -d |
 | df | aict, u-root | -h, -k; platform probes behind build tags |
 | pwd | aict, guonaihong, u-root | -L, -P |
-| realpath | aict, guonaihong, u-root | -e, -m, -s, --relative-to |
-| readlink | u-root | -f, -e, -m, -n |
+| realpath | aict, guonaihong, u-root | -e, -m, -s, --relative-to; uutils-parity additions: -E/--canonicalize, -L/--logical, -P/--physical, -q/--quiet, -z/--zero, --relative-base |
+| readlink | u-root | -f, -e, -m, -n; uutils-parity additions: -q/--quiet, -s/--silent, -v/--verbose, -z/--zero |
 | basename | all three | exemplar |
 | dirname | all three | -z |
 | sync | u-root | fsync named files; bare sync unix-only |
@@ -64,9 +64,9 @@ Text — reading and slicing:
 | Command | Sources | Notes |
 |---|---|---|
 | cat | all three | -A, -b, -e, -E, -n, -s, -t, -T, -u, -v |
-| head | aict, guonaihong, u-root | -n (incl. -NUM), -c, -q, -v |
-| tail | aict, guonaihong, u-root | -n (incl. +N), -c, -q, -v; **-f in Phase B** |
-| wc | aict, guonaihong, u-root | -l, -w, -c, -m, -L |
+| head | aict, guonaihong, u-root | -n (incl. -NUM), -c, -q, -v; uutils-parity addition: -z/--zero-terminated |
+| tail | aict, guonaihong, u-root | -n (incl. +N), -c, -q, -v, -z/--zero-terminated; **-f in Phase B** |
+| wc | aict, guonaihong, u-root | -l, -w, -c, -m, -L; uutils-parity additions: --files0-from, --total=auto/always/only/never |
 | tac | guonaihong | default + -s |
 | split | guonaihong | -l, -b, -n, -d, -a |
 | cmp | u-root | -l, -s (diffutils, but prior art covers it) |
@@ -83,16 +83,16 @@ Text — transform and combine:
 | Command | Sources | Notes |
 |---|---|---|
 | sort | aict, guonaihong, u-root | -r, -n, -u, -f, -b, -k, -t, -o, -s, -c, -h; byte order |
-| uniq | aict, guonaihong, u-root | -c, -d, -u, -i, -f, -s, -w |
+| uniq | aict, guonaihong, u-root | -c, -d, -u, -i, -f, -s, -w; uutils-parity additions: -z, -D/--all-repeated[=METHOD], --group[=METHOD] |
 | cut | aict, guonaihong | -b, -c, -f, -d, -s, --complement |
 | tr | aict, guonaihong, u-root | SET1/SET2, -d, -s, -c, classes |
 | comm | u-root | -1, -2, -3 |
 | join | guonaihong | -1, -2, -t, -a, -v, -i subset |
-| paste | guonaihong | -d, -s |
-| tee | guonaihong, u-root | -a, -i |
+| paste | guonaihong | -d, -s; uutils-parity addition: -z/--zero-terminated |
+| tee | guonaihong, u-root | -a, -i; uutils-parity additions: -p/--ignore-pipe-errors, --output-error[=MODE] |
 | tsort | u-root | (in prior art, so it rides along) |
 | shuf | guonaihong | -n, -e, -i; randomness is the upstream-documented exception to determinism |
-| expand / unexpand | fresh | -t lists incl. GNU +N//N prefixes, repeats accumulate, blank-separated; -i (expand); -a/--first-only (unexpand) with GNU's 2+-blank rule, beyond-last-stop blanks kept, blank+tab runs merged, backspace column tracking |
+| expand / unexpand | fresh | -t lists incl. GNU +N//N prefixes, repeats accumulate, blank-separated; -i (expand); -a/--first-only (unexpand) with GNU's 2+-blank rule, beyond-last-stop blanks kept, blank+tab runs merged, backspace column tracking; uutils-parity addition: -U/--no-utf8 byte-column mode |
 | fold | fresh | -w/-WIDTH, -b, -c, -s; GNU screen-column counting (tab→next stop of 8, BS decrements, CR resets), -s keeps the break blank (never deletes bytes) |
 | fmt | fresh | GNU surface (-c, -t, -s, -u, -w/-WIDTH, -g, -p): paragraph indents preserved, different indents never join, goal per GNU (93% of width; -g without -w caps at 75 like GNU source); greedy filling + single-space normalization are documented deviations |
 | numfmt | fresh | --from=none/auto/si/iec/iec-i; --to=none/si/iec/iec-i with GNU human rounding (&lt;10 one decimal, else integer); field 1 default + implicit width padding; validated --format (%f family; ' and --grouping are C-locale no-ops); --round, --invalid, --header, -z, -d, --field |
@@ -110,12 +110,12 @@ Environment, system, misc:
 | date | u-root | strftime +FORMAT, -u, -d subset, -r; C locale |
 | sleep | guonaihong, u-root | suffixed durations, multiple args |
 | seq | guonaihong, u-root | -s, -w, -f |
-| uname | guonaihong, u-root | -s, -n, -r, -m, -o, -a |
+| uname | guonaihong, u-root | -s, -n, -r, -m, -o, -a; uutils-parity addition: -v/--kernel-version |
 | whoami | guonaihong | |
-| hostname | u-root | print only |
-| tty | u-root | |
+| hostname | u-root | print mode plus uutils query flags -d/--domain, -f/--fqdn, -i/--ip-address, -s/--short; setting HOSTNAME still refused |
+| tty | u-root | uutils-parity additions: -s/--silent, --quiet |
 | id | u-root | unix semantics; Windows best-effort per platform note |
-| uptime | u-root | platform probes |
+| uptime | u-root | platform probes; uutils-parity additions: -p/--pretty, -s/--since |
 | arch | uutils parity | prints machine hardware name |
 | chroot | uutils parity | native chroot on Unix; --userspec, --groups, --skip-chdir; requires privileges and mutates process root as the utility semantics require |
 | expr | uutils parity | arithmetic, comparison, boolean, regex match, length/index/substr/match/quote |

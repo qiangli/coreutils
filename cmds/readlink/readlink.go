@@ -4,9 +4,8 @@
 // printed exactly; -f/-e/-m canonicalize instead (recursive symlink
 // resolution, existence requirement varying by flag).
 //
-// GNU suppresses error messages by default (-q is the default; -v is
-// not implemented), so failures are silent and only the exit status
-// reports them.
+// GNU suppresses error messages by default (-q/-s is the default);
+// -v reports diagnostics.
 package readlinkcmd
 
 import (
@@ -32,7 +31,11 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolP("canonicalize-existing", "e", false, "canonicalize: all components must exist")
 	fs.BoolP("canonicalize-missing", "m", false, "canonicalize: no components need exist")
 	noNewline := fs.BoolP("no-newline", "n", false, "do not output the trailing delimiter")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	fs.BoolP("quiet", "q", false, "suppress most error messages")
+	fs.BoolP("silent", "s", false, "suppress most error messages")
+	fs.BoolP("verbose", "v", false, "report error messages")
+	zero := fs.BoolP("zero", "z", false, "end each output line with NUL, not newline")
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
@@ -46,19 +49,27 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Err, "readlink: ignoring --no-newline with multiple arguments")
 		nn = false
 	}
+	delim := "\n"
+	if *zero {
+		delim = "\x00"
+	}
+	verbose := lastQSV(args) == 'v' || os.Getenv("POSIXLY_CORRECT") != ""
 
 	mode := lastFEM(args) // GNU: the last of -f/-e/-m wins; 0 = plain readlink
 	status := 0
 	for _, op := range operands {
 		out, err := resolveOne(rc, op, mode)
 		if err != nil {
-			status = 1 // quiet by default, like GNU
+			if verbose {
+				fmt.Fprintf(rc.Err, "readlink: %s: %s\n", op, pathErrText(err))
+			}
+			status = 1
 			continue
 		}
 		if nn {
 			fmt.Fprint(rc.Out, out)
 		} else {
-			fmt.Fprintln(rc.Out, out)
+			fmt.Fprint(rc.Out, out, delim)
 		}
 	}
 	return status
@@ -103,6 +114,32 @@ func lastFEM(args []string) byte {
 			for _, c := range a[1:] {
 				switch c {
 				case 'f', 'e', 'm':
+					mode = byte(c)
+				}
+			}
+		}
+	}
+	return mode
+}
+
+// lastQSV scans args for the last occurrence of -q/-s/-v. GNU readlink
+// lets these options override each other by argument order.
+func lastQSV(args []string) byte {
+	var mode byte
+	for _, a := range args {
+		switch {
+		case a == "--":
+			return mode
+		case a == "--quiet":
+			mode = 'q'
+		case a == "--silent":
+			mode = 's'
+		case a == "--verbose":
+			mode = 'v'
+		case len(a) > 1 && a[0] == '-' && a[1] != '-':
+			for _, c := range a[1:] {
+				switch c {
+				case 'q', 's', 'v':
 					mode = byte(c)
 				}
 			}

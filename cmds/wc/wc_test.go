@@ -74,6 +74,45 @@ func TestWcMultipleAndTotal(t *testing.T) {
 	}
 }
 
+func TestWcTotalModes(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "x\n")
+	writeFile(t, dir, "b", "yy\n")
+
+	out, _, code := runTool(t, dir, "", "--total=never", "a", "b")
+	if code != 0 || out != "1 1 2 a\n1 1 3 b\n" {
+		t.Errorf("--total=never: out=%q code=%d", out, code)
+	}
+	out, _, code = runTool(t, dir, "", "-l", "--total=only", "a", "b")
+	if code != 0 || out != "2 total\n" {
+		t.Errorf("--total=only: out=%q code=%d", out, code)
+	}
+	out, _, code = runTool(t, dir, "", "-l", "--total=always", "a")
+	if code != 0 || out != "1 a\n1 total\n" {
+		t.Errorf("--total=always: out=%q code=%d", out, code)
+	}
+}
+
+func TestWcFiles0From(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "x\n")
+	writeFile(t, dir, "b", "y z\n")
+	writeFile(t, dir, "list", "a\x00b\x00")
+
+	out, _, code := runTool(t, dir, "", "-l", "--files0-from=list")
+	if code != 0 || out != "1 a\n1 b\n2 total\n" {
+		t.Errorf("--files0-from file: out=%q code=%d", out, code)
+	}
+	out, _, code = runTool(t, dir, "a\x00b\x00", "-w", "--files0-from=-", "--total=only")
+	if code != 0 || out != "3 total\n" {
+		t.Errorf("--files0-from stdin: out=%q code=%d", out, code)
+	}
+	_, errb, code := runTool(t, dir, "", "--files0-from=list", "a")
+	if code != 2 || !strings.Contains(errb, "cannot be combined") {
+		t.Errorf("--files0-from operands: err=%q code=%d", errb, code)
+	}
+}
+
 func TestWcCharsAndMaxLine(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "u", "héllo\n") // 7 bytes, 6 chars

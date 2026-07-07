@@ -102,6 +102,76 @@ func TestLnIntoDirectory(t *testing.T) {
 	}
 }
 
+func TestLnTargetDirectoryOption(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a1"), "1")
+	write(t, filepath.Join(dir, "a2"), "2")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-t", "d", "a1", "a2")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -t d a1 a2: code=%d err=%q", code, errb)
+	}
+	for _, n := range []string{"a1", "a2"} {
+		if _, err := os.Stat(filepath.Join(dir, "d", n)); err != nil {
+			t.Errorf("d/%s missing: %v", n, err)
+		}
+	}
+}
+
+func TestLnNoTargetDirectory(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a")
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-T", "a", "d")
+	if code != 1 || !strings.Contains(errb, "failed to create hard link") {
+		t.Errorf("ln -T a d: code=%d err=%q", code, errb)
+	}
+}
+
+func TestLnNoDereferenceDestinationSymlink(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a")
+	if err := os.Mkdir(filepath.Join(dir, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(dir, "linkdir")); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-n", "a", "linkdir")
+	if code != 1 || !strings.Contains(errb, "failed to create hard link") {
+		t.Errorf("ln -n a linkdir: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "real", "a")); !os.IsNotExist(err) {
+		t.Errorf("ln -n unexpectedly linked inside symlinked directory: %v", err)
+	}
+}
+
+func TestLnRelativeSymbolic(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "links", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "src", "file"), "x")
+	_, errb, code := runTool(t, dir, "-sr", "src/file", "links/deep/file-link")
+	if code != 0 || errb != "" {
+		t.Fatalf("ln -sr: code=%d err=%q", code, errb)
+	}
+	target, err := os.Readlink(filepath.Join(dir, "links", "deep", "file-link"))
+	want := filepath.Join("..", "..", "src", "file")
+	if err != nil || target != want {
+		t.Errorf("relative symlink target=%q err=%v, want %q", target, err, want)
+	}
+}
+
 func TestLnForce(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "a")
@@ -155,6 +225,14 @@ func TestLnErrors(t *testing.T) {
 	_, errb, code = runTool(t, dir, "--frobnicate", "a", "b")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "-t", "d", "-T", "a")
+	if code != 2 || !strings.Contains(errb, "cannot combine -t and -T") {
+		t.Errorf("ln -t -T: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "-r", "a", "c")
+	if code != 2 || !strings.Contains(errb, "--relative can only be used") {
+		t.Errorf("ln -r without -s: code=%d err=%q", code, errb)
 	}
 }
 

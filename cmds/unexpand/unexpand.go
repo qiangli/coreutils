@@ -24,6 +24,7 @@ func run(rc *tool.RunContext, args []string) int {
 	tabsValue := fs.StringArrayP("tabs", "t", []string{"8"}, "have tabs N characters apart instead of 8 (enables -a); or use comma- or blank-separated LIST of explicit tab positions (repeatable; the last position may be prefixed with '/' for multiples or '+' for an increment)")
 	all := fs.BoolP("all", "a", false, "convert all blanks, instead of just initial blanks")
 	firstOnly := fs.Bool("first-only", false, "convert only leading sequences of blanks (overrides -a)")
+	noUTF8 := fs.BoolP("no-utf8", "U", false, "interpret input bytes as columns instead of UTF-8 characters")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -49,7 +50,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := unexpandStream(r, out, tabs, convertAll); err != nil {
+		if err := unexpandStream(r, out, tabs, convertAll, *noUTF8); err != nil {
 			fmt.Fprintf(rc.Err, "unexpand: %s: %v\n", name, err)
 			status = 1
 		}
@@ -64,12 +65,16 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-func unexpandStream(r io.Reader, w io.Writer, tabs *tabStops, all bool) error {
+func unexpandStream(r io.Reader, w io.Writer, tabs *tabStops, all bool, noUTF8 bool) error {
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
-			if _, werr := io.WriteString(w, unexpandLine(line, tabs, all)); werr != nil {
+			out := unexpandLine(line, tabs, all)
+			if noUTF8 {
+				out = unexpandLineBytes(line, tabs, all)
+			}
+			if _, werr := io.WriteString(w, out); werr != nil {
 				return werr
 			}
 		}
@@ -80,6 +85,88 @@ func unexpandStream(r io.Reader, w io.Writer, tabs *tabStops, all bool) error {
 			return err
 		}
 	}
+}
+
+func unexpandLineBytes(line string, tabs *tabStops, all bool) string {
+	var b strings.Builder
+	var pending []byte
+	col := 0
+	convert := true
+	oneBlankBeforeStop := false
+	prevBlank := true
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if len(pending) > 1 && oneBlankBeforeStop {
+			pending[0] = '\t'
+		}
+		for _, p := range pending {
+			b.WriteByte(p)
+		}
+		pending = pending[:0]
+		oneBlankBeforeStop = false
+	}
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if !convert {
+			b.WriteByte(ch)
+			continue
+		}
+		blank := ch == ' ' || ch == '\t'
+		writeCh := true
+		if blank {
+			next, last := tabs.next(col)
+			switch {
+			case last:
+				convert = false
+			case ch == '\t':
+				col = next
+				if len(pending) > 0 {
+					pending[0] = '\t'
+				}
+				if oneBlankBeforeStop {
+					pending = pending[:1]
+				} else {
+					pending = pending[:0]
+				}
+			default:
+				col++
+				if !(prevBlank && col >= next) {
+					if col == next {
+						oneBlankBeforeStop = true
+					}
+					pending = append(pending, ch)
+					prevBlank = true
+					continue
+				}
+				b.WriteByte('\t')
+				if oneBlankBeforeStop {
+					pending = pending[:1]
+					pending[0] = '\t'
+				} else {
+					pending = pending[:0]
+				}
+				writeCh = false
+			}
+		} else if ch == '\b' {
+			if col > 0 {
+				col--
+			}
+		} else {
+			col++
+		}
+		flush()
+		prevBlank = blank
+		if !all && !blank {
+			convert = false
+		}
+		if writeCh {
+			b.WriteByte(ch)
+		}
+	}
+	flush()
+	return b.String()
 }
 
 // unexpandLine converts blanks in one line (with or without a trailing

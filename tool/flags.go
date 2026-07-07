@@ -3,6 +3,7 @@ package tool
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/pflag"
 )
@@ -30,6 +31,41 @@ func NewFlags(name string) *pflag.FlagSet {
 	// output so it lands on the invocation's stderr, not the process's.
 	fs.SetOutput(discard{})
 	return fs
+}
+
+// AliasHelpVersion rewrites uutils-style standalone -h and -V aliases
+// to the universal long options. Only commands that do not use those
+// short options for command-specific behavior should call this helper.
+func AliasHelpVersion(args []string) []string {
+	var out []string
+	for _, arg := range args {
+		switch arg {
+		case "-h":
+			out = append(out, "--help")
+		case "-V":
+			out = append(out, "--version")
+		default:
+			if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && len(arg) > 2 {
+				kept := "-"
+				for _, r := range arg[1:] {
+					switch r {
+					case 'h':
+						out = append(out, "--help")
+					case 'V':
+						out = append(out, "--version")
+					default:
+						kept += string(r)
+					}
+				}
+				if kept != "-" {
+					out = append(out, kept)
+				}
+			} else {
+				out = append(out, arg)
+			}
+		}
+	}
+	return out
 }
 
 type discard struct{}

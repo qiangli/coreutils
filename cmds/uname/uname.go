@@ -49,9 +49,10 @@ func run(rc *tool.RunContext, args []string) int {
 	kernelName := fs.BoolP("kernel-name", "s", false, "print the kernel name")
 	nodename := fs.BoolP("nodename", "n", false, "print the network node hostname")
 	release := fs.BoolP("kernel-release", "r", false, "print the kernel release")
+	kernelVersion := fs.BoolP("kernel-version", "v", false, "print the kernel version")
 	machine := fs.BoolP("machine", "m", false, "print the machine hardware name")
 	osFlag := fs.BoolP("operating-system", "o", false, "print the operating system")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
@@ -59,7 +60,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "extra operand %q", operands[0])
 	}
 
-	if !*all && !*kernelName && !*nodename && !*release && !*machine && !*osFlag {
+	if !*all && !*kernelName && !*nodename && !*release && !*kernelVersion && !*machine && !*osFlag {
 		*kernelName = true
 	}
 
@@ -80,6 +81,9 @@ func run(rc *tool.RunContext, args []string) int {
 		parts = append(parts, info.release)
 	}
 	if *all && info.version != "" {
+		parts = append(parts, info.version)
+	}
+	if *kernelVersion {
 		parts = append(parts, info.version)
 	}
 	if *machine || *all {

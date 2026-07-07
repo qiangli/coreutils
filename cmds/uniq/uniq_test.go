@@ -50,6 +50,11 @@ func TestUniq(t *testing.T) {
 		{"fields skipped before chars", "x 1same\ny 2same\n", []string{"-f", "1", "-s", "2"}, "x 1same\n"},
 		{"no trailing newline", "a\na", nil, "a\n"},
 		{"empty input", "", nil, ""},
+		{"zero terminated", "a\x00a\x00b\x00", []string{"-z"}, "a\x00b\x00"},
+		{"all repeated", "a\na\nb\nc\nc\nc\n", []string{"-D"}, "a\na\nc\nc\nc\n"},
+		{"all repeated separate", "a\na\nb\nc\nc\n", []string{"--all-repeated=separate"}, "a\na\n\nc\nc\n"},
+		{"group prepend", "a\na\nb\n", []string{"--group=prepend"}, "\na\na\n\nb\n"},
+		{"group both", "a\na\nb\n", []string{"--group=both"}, "\na\na\n\n\nb\n\n"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, c.stdin, c.args...)
@@ -106,9 +111,13 @@ func TestUniqErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, "", "-D")
-	if code != 2 || !strings.Contains(errb, "D") {
-		t.Errorf("unknown short flag: code=%d err=%q", code, errb)
+	_, errb, code = runTool(t, "", "-c", "-D")
+	if code != 2 || !strings.Contains(errb, "meaningless") {
+		t.Errorf("-c -D: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, "", "--group=bad")
+	if code != 2 || !strings.Contains(errb, "invalid group method") {
+		t.Errorf("--group=bad: code=%d err=%q", code, errb)
 	}
 }
 

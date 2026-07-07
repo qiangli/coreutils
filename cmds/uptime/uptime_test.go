@@ -63,6 +63,20 @@ func TestFormatUptime(t *testing.T) {
 	}
 }
 
+func TestPrettyUptime(t *testing.T) {
+	if got := formatPrettyUptime(25*time.Hour + 2*time.Minute); got != "1 day, 1 hour, 2 minutes" {
+		t.Fatalf("formatPrettyUptime = %q", got)
+	}
+	out, errb, code := runTool(t, "-p")
+	if code != 0 || errb != "" || !strings.HasPrefix(out, "up ") {
+		t.Fatalf("uptime -p = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runTool(t, "-s")
+	if code != 0 || errb != "" || !regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\n$`).MatchString(out) {
+		t.Fatalf("uptime -s = (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestUptimeErrors(t *testing.T) {
 	_, errb, code := runTool(t, "extra")
 	if code != 2 || !strings.Contains(errb, "extra operand") {

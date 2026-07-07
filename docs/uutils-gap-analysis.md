@@ -7,6 +7,11 @@ Generated from this checkout on 2026-07-07 by comparing:
 
 The comparison is based on command inventory plus each command's `--help` output. It is therefore a declared CLI surface comparison, not a behavioral conformance test. Flags with the same spelling may still differ semantically.
 
+> Update: this file is a historical pre-sprint gap snapshot. A later
+> 2026-07-07 uutils option-parity sprint closed many rows below. Current sprint
+> results and remaining gaps are recorded in
+> [uutils-parity-sprint-2026-07-07.md](./uutils-parity-sprint-2026-07-07.md).
+
 ## Summary
 
 | Measure | Count |

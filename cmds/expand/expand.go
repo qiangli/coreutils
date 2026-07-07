@@ -23,6 +23,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	tabsValue := fs.StringArrayP("tabs", "t", []string{"8"}, "have tabs N characters apart, not 8; or use comma- or blank-separated LIST of explicit tab positions (repeatable; the last position may be prefixed with '/' for multiples or '+' for an increment)")
 	initial := fs.BoolP("initial", "i", false, "do not convert tabs after non blanks")
+	noUTF8 := fs.BoolP("no-utf8", "U", false, "interpret input bytes as columns instead of UTF-8 characters")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -44,7 +45,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := expandStream(r, out, tabs, *initial); err != nil {
+		if err := expandStream(r, out, tabs, *initial, *noUTF8); err != nil {
 			fmt.Fprintf(rc.Err, "expand: %s: %v\n", name, err)
 			status = 1
 		}
@@ -59,7 +60,10 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool) error {
+func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool, noUTF8 bool) error {
+	if noUTF8 {
+		return expandStreamBytes(r, w, tabs, initial)
+	}
 	br := bufio.NewReader(r)
 	col := 0
 	convert := true
@@ -100,6 +104,51 @@ func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool) error 
 				// characters are converted; a backspace also ends
 				// the initial region (GNU treats any non-blank,
 				// including \b, as ending it).
+				if initial && ch != ' ' && ch != '\t' {
+					convert = false
+				}
+			}
+		}
+	}
+}
+
+func expandStreamBytes(r io.Reader, w io.Writer, tabs *tabStops, initial bool) error {
+	br := bufio.NewReader(r)
+	col := 0
+	convert := true
+	for {
+		ch, err := br.ReadByte()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch {
+		case ch == '\t' && convert:
+			next, _ := tabs.next(col)
+			if _, err := io.WriteString(w, strings.Repeat(" ", next-col)); err != nil {
+				return err
+			}
+			col = next
+		case ch == '\n':
+			if _, err := w.Write([]byte{'\n'}); err != nil {
+				return err
+			}
+			col = 0
+			convert = true
+		default:
+			if _, err := w.Write([]byte{ch}); err != nil {
+				return err
+			}
+			if convert {
+				if ch == '\b' {
+					if col > 0 {
+						col--
+					}
+				} else {
+					col++
+				}
 				if initial && ch != ' ' && ch != '\t' {
 					convert = false
 				}

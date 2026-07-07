@@ -100,6 +100,17 @@ func TestHeadHeaders(t *testing.T) {
 	}
 }
 
+func TestHeadZeroTerminated(t *testing.T) {
+	out, _, code := runTool(t, "", "a\x00b\x00c\x00", "-z", "-n", "2")
+	if code != 0 || out != "a\x00b\x00" {
+		t.Errorf("head -z -n 2: out=%q code=%d", out, code)
+	}
+	out, _, code = runTool(t, "", "a\x00b\x00c\x00", "-z", "-n", "-1")
+	if code != 0 || out != "a\x00b\x00" {
+		t.Errorf("head -z -n -1: out=%q code=%d", out, code)
+	}
+}
+
 func TestHeadErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a", "1\n")

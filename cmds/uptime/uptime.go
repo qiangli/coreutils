@@ -17,6 +17,7 @@ package uptimecmd
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/tool"
@@ -25,14 +26,16 @@ import (
 var cmd = &tool.Tool{
 	Name:     "uptime",
 	Synopsis: "Tell how long the system has been running.",
-	Usage:    "uptime",
+	Usage:    "uptime [OPTION]...",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	pretty := fs.BoolP("pretty", "p", false, "show uptime in pretty format")
+	since := fs.BoolP("since", "s", false, "system up since")
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
@@ -45,6 +48,14 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "uptime: cannot determine uptime: %v\n", err)
 		return 1
 	}
+	if *pretty {
+		fmt.Fprintf(rc.Out, "up %s\n", formatPrettyUptime(up))
+		return 0
+	}
+	if *since {
+		fmt.Fprintf(rc.Out, "%s\n", time.Now().Add(-up).Format("2006-01-02 15:04:05"))
+		return 0
+	}
 
 	line := fmt.Sprintf(" %s up %s", time.Now().Format("15:04:05"), formatUptime(up))
 	if load, ok := loadAverages(); ok {
@@ -52,6 +63,33 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	fmt.Fprintf(rc.Out, "%s\n", line)
 	return 0
+}
+
+func formatPrettyUptime(d time.Duration) string {
+	mins := int64(d.Minutes())
+	days := mins / (24 * 60)
+	hours := (mins % (24 * 60)) / 60
+	minutes := mins % 60
+	var parts []string
+	if days == 1 {
+		parts = append(parts, "1 day")
+	} else if days > 1 {
+		parts = append(parts, fmt.Sprintf("%d days", days))
+	}
+	if hours == 1 {
+		parts = append(parts, "1 hour")
+	} else if hours > 1 {
+		parts = append(parts, fmt.Sprintf("%d hours", hours))
+	}
+	if minutes == 1 {
+		parts = append(parts, "1 minute")
+	} else if minutes > 1 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%d minutes", minutes))
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + ", " + parts[len(parts)-1]
 }
 
 // formatUptime renders the procps duration shape: "N days," when at

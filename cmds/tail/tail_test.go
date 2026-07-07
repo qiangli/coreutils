@@ -96,6 +96,17 @@ func TestTailHeaders(t *testing.T) {
 	}
 }
 
+func TestTailZeroTerminated(t *testing.T) {
+	out, _, code := runTool(t, "", "a\x00b\x00c\x00", "-z", "-n", "2")
+	if code != 0 || out != "b\x00c\x00" {
+		t.Errorf("tail -z -n 2: out=%q code=%d", out, code)
+	}
+	out, _, code = runTool(t, "", "a\x00b\x00c\x00", "-z", "-n", "+2")
+	if code != 0 || out != "b\x00c\x00" {
+		t.Errorf("tail -z -n +2: out=%q code=%d", out, code)
+	}
+}
+
 func TestTailFollowNotSupported(t *testing.T) {
 	for _, args := range [][]string{{"-f"}, {"--follow"}, {"--follow=name"}} {
 		_, errb, code := runTool(t, "", "x\n", args...)

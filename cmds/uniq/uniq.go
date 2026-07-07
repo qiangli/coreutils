@@ -38,10 +38,15 @@ func run(rc *tool.RunContext, args []string) int {
 	repeated := fs.BoolP("repeated", "d", false, "only print duplicate lines, one for each group")
 	unique := fs.BoolP("unique", "u", false, "only print unique lines")
 	ignoreCase := fs.BoolP("ignore-case", "i", false, "ignore differences in case when comparing")
+	allRepeated := fs.StringP("all-repeated", "D", "", "print all duplicate lines; delimit-method may be none, prepend, or separate")
+	fs.Lookup("all-repeated").NoOptDefVal = "none"
+	group := fs.String("group", "", "show all items, separating groups with METHOD: separate, prepend, append, or both")
+	fs.Lookup("group").NoOptDefVal = "separate"
+	zero := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
 	skipFields := fs.IntP("skip-fields", "f", 0, "avoid comparing the first N fields")
 	skipChars := fs.IntP("skip-chars", "s", 0, "avoid comparing the first N characters")
 	checkChars := fs.IntP("check-chars", "w", 0, "compare no more than N characters in lines")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
@@ -58,12 +63,37 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) > 2 {
 		return tool.UsageError(rc, cmd, "extra operand '%s'", operands[2])
 	}
+	delimMode := delimNone
+	if fs.Changed("group") {
+		if *count || *repeated || fs.Changed("all-repeated") || *unique {
+			return tool.UsageError(rc, cmd, "--group is mutually exclusive with -c, -d, -D, and -u")
+		}
+		var ok bool
+		delimMode, ok = parseDelimMode(*group, true)
+		if !ok {
+			return tool.UsageError(rc, cmd, "invalid group method %q", *group)
+		}
+	} else if fs.Changed("all-repeated") {
+		var ok bool
+		delimMode, ok = parseDelimMode(*allRepeated, false)
+		if !ok {
+			return tool.UsageError(rc, cmd, "invalid delimit method %q", *allRepeated)
+		}
+		if *count {
+			return tool.UsageError(rc, cmd, "printing all duplicated lines and repeat counts is meaningless")
+		}
+		*repeated = true
+	}
 
 	input := "-"
 	if len(operands) > 0 {
 		input = operands[0]
 	}
-	lines, err := readLines(rc, input)
+	lineEnd := byte('\n')
+	if *zero {
+		lineEnd = 0
+	}
+	lines, err := readLines(rc, input, lineEnd)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "uniq: %s: %v\n", input, pathErr(err))
 		return 1
@@ -96,40 +126,105 @@ func run(rc *tool.RunContext, args []string) int {
 		return a == b
 	}
 
-	flush := func(first string, n int) {
+	writeTerm := func() {
+		_ = bw.WriteByte(lineEnd)
+	}
+	writeLine := func(line string, n int) {
+		if *count {
+			fmt.Fprintf(bw, "%7d %s", n, line)
+		} else {
+			fmt.Fprint(bw, line)
+		}
+		writeTerm()
+	}
+	shouldPrint := func(group []string) bool {
+		n := len(group)
 		// GNU shouldPrint: -d drops singleton groups, -u drops repeated
 		// groups (so -d -u prints nothing).
 		if (*repeated && n == 1) || (*unique && n > 1) {
-			return
+			return false
 		}
-		if *count {
-			fmt.Fprintf(bw, "%7d %s\n", n, first)
+		return true
+	}
+	flush := func(group []string) bool {
+		n := len(group)
+		if !shouldPrint(group) {
+			return false
+		}
+		if fs.Changed("group") || fs.Changed("all-repeated") {
+			for _, line := range group {
+				writeLine(line, n)
+			}
 		} else {
-			fmt.Fprintf(bw, "%s\n", first)
+			writeLine(group[0], n)
 		}
+		return true
 	}
 
-	groupN := 0
-	var first, prevKey string
+	var groupLines []string
+	firstPrinted := false
+	var prevKey string
 	for _, line := range lines {
 		k := keyOf(line)
-		if groupN > 0 && equal(prevKey, k) {
-			groupN++
+		if len(groupLines) > 0 && equal(prevKey, k) {
+			groupLines = append(groupLines, line)
 			continue
 		}
-		if groupN > 0 {
-			flush(first, groupN)
+		if len(groupLines) > 0 {
+			firstPrinted = flushWithDelimiter(bw, groupLines, shouldPrint(groupLines), flush, delimMode, firstPrinted, lineEnd)
 		}
-		first, prevKey, groupN = line, k, 1
+		groupLines, prevKey = []string{line}, k
 	}
-	if groupN > 0 {
-		flush(first, groupN)
+	if len(groupLines) > 0 {
+		firstPrinted = flushWithDelimiter(bw, groupLines, shouldPrint(groupLines), flush, delimMode, firstPrinted, lineEnd)
 	}
 	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "uniq: write failed: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+type delimiterMode int
+
+const (
+	delimNone delimiterMode = iota
+	delimPrepend
+	delimSeparate
+	delimAppend
+	delimBoth
+)
+
+func parseDelimMode(s string, group bool) (delimiterMode, bool) {
+	switch s {
+	case "", "none":
+		return delimNone, !group
+	case "prepend":
+		return delimPrepend, true
+	case "separate":
+		return delimSeparate, true
+	case "append":
+		return delimAppend, group
+	case "both":
+		return delimBoth, group
+	default:
+		return delimNone, false
+	}
+}
+
+func flushWithDelimiter(w *bufio.Writer, group []string, shouldPrint bool, flush func([]string) bool, mode delimiterMode, firstPrinted bool, lineEnd byte) bool {
+	if !shouldPrint {
+		return firstPrinted
+	}
+	printed := false
+	if mode == delimPrepend || mode == delimBoth || (mode == delimSeparate && firstPrinted) {
+		_ = w.WriteByte(lineEnd)
+	}
+	printed = flush(group)
+	if printed && (mode == delimAppend || mode == delimBoth) {
+		_ = w.WriteByte(lineEnd)
+	}
+	return firstPrinted || printed
 }
 
 // skipKey mirrors GNU uniq's find_field: skip N fields (each a run of
@@ -175,7 +270,7 @@ func upperByte(c byte) byte {
 	return c
 }
 
-func readLines(rc *tool.RunContext, operand string) ([]string, error) {
+func readLines(rc *tool.RunContext, operand string, lineEnd byte) ([]string, error) {
 	var data []byte
 	var err error
 	if operand == "-" {
@@ -189,7 +284,8 @@ func readLines(rc *tool.RunContext, operand string) ([]string, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), nil
+	s := strings.TrimSuffix(string(data), string([]byte{lineEnd}))
+	return strings.Split(s, string([]byte{lineEnd})), nil
 }
 
 func pathErr(err error) error {
