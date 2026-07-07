@@ -116,6 +116,23 @@ Environment, system, misc:
 | tty | u-root | |
 | id | u-root | unix semantics; Windows best-effort per platform note |
 | uptime | u-root | platform probes |
+| arch | uutils parity | prints machine hardware name |
+| chroot | uutils parity | native chroot on Unix; --userspec, --groups, --skip-chdir; requires privileges and mutates process root as the utility semantics require |
+| expr | uutils parity | arithmetic, comparison, boolean, regex match, length/index/substr/match/quote |
+| factor | uutils parity | decimal integers, stdin splitting, -h/--exponents |
+| groups | uutils parity | current user or named users via OS account database |
+| hostid | uutils parity | 8-hex host identifier; pure-Go fallback when libc gethostid is unavailable |
+| logname | uutils parity | login/current account name |
+| nice | uutils parity | prints current niceness or runs COMMAND with -n/--adjustment; wrapper exit codes 126/127 |
+| nohup | uutils parity | runs COMMAND with output appended to nohup.out when possible; wrapper exit codes 126/127 |
+| nproc | uutils parity | --all, --ignore, OMP_NUM_THREADS/OMP_THREAD_LIMIT, Linux cgroup quota best effort |
+| pathchk | uutils parity | -p, -P, --portability |
+| pinky | uutils parity | utmp-backed short listing and long user format; empty output when no records are available |
+| runcon | uutils parity | Linux SELinux procfs contexts; clear unsupported error elsewhere |
+| stdbuf | uutils parity | -i/-o/-e parsing and COMMAND environment; depends on target program/libstdbuf support |
+| stty | uutils parity | terminal status, size, selected modes/settings; platform terminal support required |
+| users | uutils parity | utmp-backed logged-in user list; optional FILE |
+| who | uutils parity | utmp-backed listing with main flags, count and heading modes; optional FILE / ARG1 ARG2 |
 
 Checksums and encoding:
 
@@ -152,9 +169,6 @@ or NO.
 |---|---|
 | printf | %s %d %x %o %c %b %% escapes, width/precision |
 | test / [ | standalone (the sh interp builtin covers in-shell use) |
-| expr | arithmetic + string ops |
-| nproc | --all, --ignore |
-| arch | trivial `uname -m` alias |
 | tail -f | follow mode for the Phase A tail (polling, cross-platform) |
 | coreutils | the multicall binary itself (`cmd/coreutils`) |
 
@@ -181,17 +195,15 @@ tools whose upstream-documented purpose IS running the COMMAND operand
 directly, exactly as the GNU binary does — that is the upstream
 semantics, not an implementation shortcut. Still NO (↻ = revisit):
 
-- nohup ↻, env COMMAND ↻, nice, stdbuf, chroot
+- env COMMAND ↻
 - kill — already a builtin in the qiangli/sh fork; a standalone would race it
 
 **Unix machinery with no cross-platform meaning:**
 
-- stty, runcon, hostid
-- who, users, pinky, groups, logname (whoami covers identity)
+- none currently from the coreutils shell-utils gap; platform-specific commands now return real native behavior where supported and clear unsupported errors otherwise
 
 **Low agent value / legacy / dangerous:**
 
-- factor, pathchk
 - man (interactive pager)
 
 **System administration (in u-root's tree, out of scope for an agent

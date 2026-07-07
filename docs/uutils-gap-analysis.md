@@ -3,7 +3,7 @@
 Generated from this checkout on 2026-07-07 by comparing:
 
 - local multicall binary built from `./cmd/coreutils`
-- uutils multicall binary built from `priorart/uutils-coretuils`
+- uutils multicall binary built from `reference/uutils-coreutils`
 
 The comparison is based on command inventory plus each command's `--help` output. It is therefore a declared CLI surface comparison, not a behavioral conformance test. Flags with the same spelling may still differ semantically.
 
@@ -11,11 +11,11 @@ The comparison is based on command inventory plus each command's `--help` output
 
 | Measure | Count |
 |---|---:|
-| Local registered commands (`cmds/all`) | 126 |
+| Local registered commands (`cmds/all`) | 143 |
 | uutils commands (`coreutils --list`) | 79 |
-| Commands present in both | 73 |
-| uutils commands missing locally | 6 |
-| Local commands not in uutils coreutils set | 53 |
+| Commands present in both | 76 |
+| uutils commands missing locally | 3 |
+| Local commands not in uutils coreutils set | 67 |
 
 The local implementation generally exposes smaller GNU subsets per command. It also uses long `--help` / `--version` as framework-wide options for most tools, while uutils commonly exposes short `-h` / `-V` aliases too. Commands with only that universal alias gap are: `basename`, `cat`, `dirname`, `link`, `pwd`, `sleep`, `tsort`, `unlink`, and `yes`. `true` and `false` do not expose the local framework help/version options.
 
@@ -23,13 +23,13 @@ The local implementation generally exposes smaller GNU subsets per command. It a
 
 These commands exist in uutils but are not registered in local `cmds/all`:
 
-`[`, `expr`, `factor`, `pathchk`, `printf`, `test`.
+`[`, `printf`, `test`.
 
 ## Local commands outside uutils coreutils
 
 These are local commands not present in the uutils coreutils command list:
 
-`ast-query`, `at`, `atq`, `atrm`, `awk`, `batch`, `browser`, `cal`, `chcon`, `chgrp`, `chmod`, `chown`, `clip`, `cmp`, `crontab`, `diff`, `duration`, `fetch`, `find`, `find-references`, `grep`, `gunzip`, `gzip`, `hexdump`, `hostname`, `id`, `install`, `jq`, `list-symbols`, `mkfifo`, `mknod`, `ncal`, `ntp`, `repo-map`, `search-symbols`, `sed`, `sntp`, `stat`, `strings`, `sync`, `tar`, `time`, `timeout`, `tokens`, `tree`, `tz`, `uname`, `uptime`, `watch`, `which`, `whoami`, `xargs`, `zcat`.
+`arch`, `ast-query`, `at`, `atq`, `atrm`, `awk`, `batch`, `browser`, `cal`, `chcon`, `chgrp`, `chmod`, `chown`, `chroot`, `clip`, `cmp`, `crontab`, `diff`, `duration`, `fetch`, `find`, `find-references`, `grep`, `groups`, `gunzip`, `gzip`, `hexdump`, `hostid`, `hostname`, `id`, `install`, `jq`, `list-symbols`, `logname`, `mkfifo`, `mknod`, `ncal`, `nice`, `nohup`, `nproc`, `ntp`, `pinky`, `repo-map`, `runcon`, `search-symbols`, `sed`, `sntp`, `stat`, `stdbuf`, `strings`, `stty`, `sync`, `tar`, `time`, `timeout`, `tokens`, `tree`, `tz`, `uname`, `uptime`, `users`, `watch`, `which`, `who`, `whoami`, `xargs`, `zcat`.
 
 ## Missing uutils options on overlapping commands
 
