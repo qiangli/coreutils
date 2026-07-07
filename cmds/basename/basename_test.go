@@ -67,6 +67,11 @@ func TestHelpAndVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: basename") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	for _, flag := range []string{"-h, --help", "-V, --version"} {
+		if !strings.Contains(out, flag) {
+			t.Errorf("--help output missing %q:\n%s", flag, out)
+		}
+	}
 	out, _, code = runTool(t, "-h")
 	if code != 0 || !strings.Contains(out, "Usage: basename") {
 		t.Errorf("-h: code=%d out=%q", code, out)

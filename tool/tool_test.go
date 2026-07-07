@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -277,6 +278,73 @@ func TestAliasHelpVersion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := AliasHelpVersion(tt.args); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("AliasHelpVersion(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddHelpVersionAliases(t *testing.T) {
+	fs := NewFlags("sample")
+	AddHelpVersionAliases(fs)
+
+	help := fs.Lookup("help")
+	if help == nil {
+		t.Fatal("help flag missing")
+	}
+	if help.Shorthand != "h" {
+		t.Fatalf("help shorthand = %q, want h", help.Shorthand)
+	}
+	version := fs.Lookup("version")
+	if version == nil {
+		t.Fatal("version flag missing")
+	}
+	if version.Shorthand != "V" {
+		t.Fatalf("version shorthand = %q, want V", version.Shorthand)
+	}
+	if got := fs.ShorthandLookup("h"); got == nil || got.Name != helpAliasFlag {
+		t.Fatalf("ShorthandLookup(h) = %#v, want %s", got, helpAliasFlag)
+	}
+	if got := fs.ShorthandLookup("V"); got == nil || got.Name != versionAliasFlag {
+		t.Fatalf("ShorthandLookup(V) = %#v, want %s", got, versionAliasFlag)
+	}
+	u := fs.FlagUsages()
+	if !strings.Contains(u, "-h, --help") || !strings.Contains(u, "-V, --version") {
+		t.Fatalf("FlagUsages() missing aliases:\n%s", u)
+	}
+}
+
+func TestAddHelpVersionAliasesPreservesSemanticShorthand(t *testing.T) {
+	fs := NewFlags("sample")
+	fs.BoolP("human-readable", "h", false, "print human-readable sizes")
+	AddHelpVersionAliases(fs)
+
+	if got := fs.ShorthandLookup("h"); got == nil || got.Name != "human-readable" {
+		t.Fatalf("ShorthandLookup(h) = %#v, want human-readable", got)
+	}
+	if got := fs.Lookup("help").Shorthand; got != "" {
+		t.Fatalf("help shorthand = %q, want empty when -h is semantic", got)
+	}
+	u := fs.FlagUsages()
+	if !strings.Contains(u, "-h, --human-readable") || strings.Contains(u, "-h, --help") {
+		t.Fatalf("FlagUsages() did not preserve semantic -h:\n%s", u)
+	}
+}
+
+func TestParseHelpVersionAliases(t *testing.T) {
+	tl := &Tool{Name: "sample", Usage: "sample [OPTION]..."}
+	for _, tt := range []struct {
+		arg  string
+		want string
+	}{
+		{arg: "-h", want: "Usage: sample"},
+		{arg: "-V", want: "sample (qiangli/coreutils)"},
+	} {
+		t.Run(tt.arg, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			rc := &RunContext{Ctx: context.Background(), Stdio: Stdio{Out: &out, Err: &errb}}
+			_, code := Parse(rc, tl, NewFlags(tl.Name), []string{tt.arg})
+			if code != 0 || !strings.Contains(out.String(), tt.want) || errb.Len() != 0 {
+				t.Fatalf("Parse(%s): code=%d out=%q err=%q", tt.arg, code, out.String(), errb.String())
 			}
 		})
 	}
