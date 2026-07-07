@@ -9,17 +9,22 @@ code in this repository.
 time `ls`/`cat`/`sort`/…) implemented with no cgo and no shell-out, so
 agentic consumers get **one identical toolset on every platform** — the
 load-bearing case is Windows hosts with nothing installed. It is a library
-first: consumers embed packages directly (outpost, ycode); a busybox-style
-multicall binary is planned, not primary.
+first: consumers embed packages directly (bashy, outpost, ycode); the
+busybox-style multicall binary (`cmd/coreutils`) is secondary.
 
 This repo is OSS (MIT) and is consumed by other OSS repos. Two hard rules:
 
 1. **Never port GNU source.** GNU coreutils is GPLv3. Implement behavior
    from the GNU manual / POSIX documentation, or adapt code from the
    permissive prior-art clones below — never from GPL code.
-2. **Never shell out.** No `os/exec` anywhere. If pure Go can't do it, the
-   tool returns a clear error naming what's unsupported. Partial flag
-   coverage is fine — silent approximation is not.
+2. **Never shell out.** No tool spawns programs to *implement its own
+   behavior* (cat never execs /bin/cat). If pure Go can't do it, the tool
+   returns a clear error naming what's unsupported. Partial flag coverage
+   is fine — silent approximation is not. The one documented exception:
+   command wrappers whose upstream-documented purpose IS running the
+   COMMAND operand (timeout, time, watch, xargs) spawn that command
+   directly, exactly as the GNU binary does — see docs/commands.md's
+   NO-list preamble.
 3. **Upstream semantics are immutable.** Every flag, option, and argument
    a tool accepts means exactly what the original command's official
    documentation says it means — same spelling, same default, same
@@ -77,15 +82,32 @@ more).
 
 ## Build & test
 
+No Makefile — `DAG.md` at the repo root is the agent-first equivalent,
+runnable with the `bashy dag` task runner (`bashy dag --list` / `build` /
+`test` / `dist`). The equivalent plain-go commands:
+
 ```bash
-go build ./...
-go test ./...          # hermetic; no network, no system git required
-go test -short ./...   # skips the slower e2e-ish cases
+go build -o bin/coreutils ./cmd/coreutils   # the multicall binary
+
+# CI scope — EXCLUDES the vendored external/ forks (ollama, podman):
+# they pull cgo + platform backends and need hydrated submodules.
+go vet  $(go list ./... | grep -v /external/)
+go test $(go list ./... | grep -v /external/)
+
+go test ./cmds/ls/       # one command's tests
+go test -short ./...     # skips the slower e2e-ish cases
+go test ./...            # full incl. external/ — unix + submodules only
 ```
+
+Tests are hermetic: no network, no system git required. `reference/`
+(like `priorart/`) is gitignored local source — GNU coreutils, bash,
+uutils, hyperfine — kept for conformance/benchmark reference;
+`cmd/perfbench` is the dev-only bashy-vs-GNU A/B perf harness (out of
+`cmds/all`; see the umbrella's fidelity-perf harness spec).
 
 ## Architecture
 
-### git/ — the one shipped package so far
+### git/ — the pure-Go git client
 
 Self-contained git client on go-git/v5. Two API layers over one
 implementation:
@@ -160,9 +182,15 @@ shell owns those; every fs operand goes through rc.Path), pflag-based
 strict GNU flags, automatic --help/--version, and the contract error
 helpers (UsageError, NotSupported). `cmds/<name>/` is one package per
 command (`package <name>cmd`), init-registered; `cmds/all` blank-
-imports the full set; `cmds/internal/hashenc` is the shared
-checksum/encoding engine. `cmd/coreutils` is the multicall binary
-(argv[0] dispatch + `coreutils <tool>`). Conventions every new tool
+imports the full set (~103 commands — `cmds/all/all.go` is the shipped
+inventory, `docs/commands.md` the plan; keep both in sync when adding a
+tool); `cmds/internal/hashenc` is the shared checksum/encoding engine.
+`cmd/coreutils` is the multicall binary (argv[0] dispatch +
+`coreutils <tool>`). Two commands are deliberately NOT in `cmds/all`:
+`cmds/graph` (pulls gfy deps — see the placement invariant below) and
+`cmds/foreman` (imports pkg/foreman → pkg/dag, whose tests blank-import
+cmds/all — listing it would form an import cycle; bashy registers it
+directly in internal/agentos). Conventions every new tool
 follows: the basename exemplar's shape (cmd.Run wired in init to avoid
 init cycles), table tests with output captured after Run, unix-only
 behavior behind build tags with clear Windows errors, GNU flags with
@@ -170,28 +198,35 @@ no long form pre-parsed manually (never invent long names), numeric
 shorthands (-NUM) pre-scanned before pflag. Repo convention: usage
 errors exit 2 even where GNU uses 1 (documented deviation).
 
-## Roadmap (agreed 2026-06)
+## Roadmap status (as of 2026-07)
 
-1. ~~git relocation~~ (done — this package).
-2. ~~`tool/` framework + Phase A userland~~ (done — 74 commands per
-   docs/commands.md Phase A, incl. the grep/find/diff/cmp/tar/gzip/
-   strings/hexdump/which extensions; sed/xargs/ps remain Phase C).
-3. Phase B: the GNU-manual complement (printf, test, expr, od, dd, …
-   per docs/commands.md).
-4. ~~`shell/` adapter~~ (done — `shell/Handler()` / `HandlerFunc()` is an
-   `interp.ExecHandler` middleware for `mvdan.cc/sh/v3` that dispatches any
-   argv[0] naming a registered `tool.Tool` to `Tool.Run`, else falls through
-   to PATH. Precedence is **pure-Go first**; a host opts out by simply not
-   wiring it — that is how `bashy`'s AgentOS shell turns it on while the
-   `bash` drop-in leaves it off. The adapter imports sh; sh never imports
-   coreutils.)
-5. ~~`cmd/coreutils/` multicall binary~~ (done — busybox-style; the
-   `multicall/` package factors out Resolve/Dispatch/Main so bashy and any
-   other front-end reuse the same argv[0] dispatch).
+Done: git relocation; the `tool/` framework + Phase A userland (incl. the
+2026-07 file-utilities batch: dd, install, shred, mkfifo, mknod, chcon,
+dircolors, dir/vdir); the `shell/` adapter (`shell/Handler()` /
+`HandlerFunc()` — an `interp.ExecHandler` middleware for `mvdan.cc/sh/v3`
+that dispatches any argv[0] naming a registered `tool.Tool` to `Tool.Run`,
+else falls through to PATH; precedence is **pure-Go first**, a host opts
+out by not wiring it — bashy's AgentOS shell turns it on, the `bash`
+drop-in leaves it off; the adapter imports sh, sh never imports
+coreutils); the `cmd/coreutils` multicall binary (the `multicall/`
+package factors out Resolve/Dispatch/Main so bashy reuses the same
+argv[0] dispatch); and much of the former Phase C — sed, xargs, awk
+(goawk), jq (gojq), time/timeout, watch, tree, and the agentic extras
+(at/atq/atrm/batch/crontab, browser, fetch, clip, tokens, duration, tz,
+ntp, cal, tsort).
 
-Skip-with-clear-error tier (don't implement): chroot, mkfifo/mknod,
-who/users/pinky, dircolors, ptx, csplit, tsort, factor, stdbuf, nice,
-chcon/runcon.
+Remaining Phase B (written fresh, per docs/commands.md): printf, test,
+expr, od, nl, fold, expand/unexpand, cksum, b2sum, basenc, csplit,
+numfmt, nproc, arch, tail -f.
+
+The not-supported tier is docs/commands.md's **NO list** (canonical —
+grouped by reason: needs-exec, unix-only machinery, low agent value,
+sysadmin out-of-scope). Recognized-but-NO names get a clear error naming
+the command, the reason, and the nearest alternative — never a silent
+fallthrough. Note the list evolves: several early "NO ↻ revisit" entries
+(timeout, time) and former skips (mkfifo, mknod, dircolors, chcon, tsort)
+have since shipped — trust docs/commands.md + `cmds/all/all.go` over any
+older skip list.
 
 ## AgentOS hub
 
@@ -225,6 +260,22 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   into either; it is the download half that complements `external/`'s
   exec-an-already-present-binary wrappers. See
   dhnt/docs/external-binary-builtins.md).
+
+  Newer engines, same pattern (one impl, every host; each pulls its deps
+  only into its importers): `pkg/dag` (agent-first task runner — the
+  Makefile replacement behind `bashy dag`; this repo's own `DAG.md` +
+  `dag-p*.md` are its task files), `pkg/foreman` (process manager over
+  dag), `pkg/schedule` (bashy's modern cron, robfig/cron), `pkg/sdlc`
+  (the label-driven SDLC control plane), `pkg/secrets` (the
+  cloudbox-vault client behind `bashy secrets`), `pkg/skills` (the dhnt
+  skill-CNL mechanism), `pkg/chat` + `pkg/ollm` (agent chat / Ollama
+  client isolation), `pkg/browser` + `pkg/webinspect` (chromedp-backed
+  browser sessions for `cmds/browser`/`fetch`), `pkg/coopauth` (the ONE
+  shared cloudbox/outpost cooperative-auth impl), `pkg/bre` (POSIX BRE →
+  Go regexp, shared by grep/sed), `pkg/ignore` (opt-in agentic path
+  filter shared by grep/find), `pkg/mirror` (see below), `pkg/timezones`,
+  `pkg/jobs`, `pkg/agentcmd`, `pkg/oci` (separate module wrapped by the
+  podman engine).
 - `cmds/yc` — the code-intelligence verbs (list-symbols / search-symbols /
   find-references / repo-map / ast-query — flat, no yc prefix) over those engines, reachable through all three surfaces.
 - `cmds/graph` — the graph verbs (flat, `graph-` stem). Two layers:
@@ -258,10 +309,22 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
     binary and the `bash` drop-in stay gfy-free. See
     `dhnt/docs/bashy-code-graph-agentic-feature.md`.
 
-### Embedded forks: ollama + podman (AgentOS Phase 4, 2026-06-27)
+### external/ — managed externals + embedded forks
 
-Distinct from the download-and-run tools above, **ollama and podman are embedded
-forks we own** — for version/issue control and identical cross-platform behavior:
+`external/` holds three kinds of packages. First, **binmgr-managed
+externals** — thin wrappers that `pkg/binmgr`-provision (download →
+sha256-verify → cache → exec/supervise) a pinned release, so bashy/outpost
+run them without linking them: services (`loom`/Gitea, `actrunner`,
+`zot`, `seaweedfs`, `kopia`, `rclone`, `registry`-catalogued k8s/cloud
+CLIs), CLIs (`gh`, `helm`, `kubectl`, `act`, `mise`, `curlbin`,
+`gitscm` — real git / MinGit on Windows, `meshagent` — execs the outpost
+mesh agent without linking it), and **toolchain provisioners**
+(`gotoolchain`, `node`, `python` via uv, `rust` via rustup, `java`/Temurin
++ Maven, `clang`, `cmake`) so `bashy <tool>` works on a bare node.
+Second, dhnt **front-doors**: `sphere` (the sphere tier) and `tessaro`
+(account pairing). Third — distinct from download-and-run — **ollama and
+podman are embedded forks we own**, for version/issue control and
+identical cross-platform behavior:
 
 - **`external/ollama`** — in-process ollama server + embedded runner; consumes
   the `qiangli/ollama` fork (`external/ollama/src` submodule, `replace
@@ -279,7 +342,12 @@ forks we own** — for version/issue control and identical cross-platform behavi
   binaries (podman/vfkit/gvproxy) build via `scripts/embed-{podman,vfkit,
   gvproxy}.sh` into gitignored `*_embed/*.gz` blobs, consumed only under the
   `embed_*` build tags (default build uses the stub → host/PATH fallback).
-  **This pulls the go floor to 1.26.2** (all consumers must match).
+  **The forks pull the go floor up (currently 1.26.4)** — all consumers
+  must match.
+
+The forks are why the canonical test scope excludes `external/` (see
+Build & test): they pull cgo + platform backends (MLX, btrfs) and are
+upstream's to test; the CI/Windows scope must stay green without them.
 
 Hosts: `bashy` (the AgentOS shell binary) wires `shell.Handler()` so the
 whole userland + code-intel verbs run in-process, and mounts `pkg/weave` as `bashy weave`
@@ -297,14 +365,18 @@ client-side git through `coreutils/git` (pure-Go-first, host-git fallback).
   README catalog line. Cross-platform CI (ubuntu/macos/windows) must pass —
   the windows leg is the product, not an afterthought.
 - Dependency budget is deliberately tight: go-git (for `git/`), pflag, and
-  the stdlib for the userland core. The AgentOS hub adds, used only by the
-  packages that need them: `mvdan.cc/sh/v3` (`shell/`),
-  `github.com/modelcontextprotocol/go-sdk` (`mcp/`), `gotreesitter`
-  (`pkg/treesitter`, pure Go), and `gfy` (`pkg/codegraph` only — kept out of
-  the bare binary by per-import compilation), and `github.com/rjeczalik/notify`
-  (`pkg/mirror` only — **MIT**, cgo-free, native-recursive cross-platform fs
-  watching; the third-party lib Syncthing forked, used here directly, no
-  Syncthing code). Adding a dependency needs a written justification in the PR.
+  the stdlib for the userland core. The AgentOS hub adds deps **used only
+  by the packages that need them** (per-import compilation keeps them out
+  of the bare binary): `mvdan.cc/sh/v3` (`shell/`, `pkg/dag`),
+  `modelcontextprotocol/go-sdk` (`mcp/`), `gotreesitter` (`pkg/treesitter`,
+  pure Go), `gfy` (`pkg/codegraph` only), `rjeczalik/notify` (`pkg/mirror`
+  only — MIT, cgo-free recursive fs watching; the lib Syncthing forked,
+  used directly, no Syncthing code), `benhoyt/goawk` (`cmds/awk`),
+  `itchyny/gojq` (`cmds/jq`), `chromedp` (`pkg/browser`),
+  `tiktoken-go/tokenizer` (`cmds/tokens`), `robfig/cron` (`pkg/schedule`),
+  cobra (the front-door verb trees), and `github.com/dhnt/dhnt`
+  (`pkg/skills` — a versioned dep, NOT a submodule). Adding a dependency
+  needs a written justification in the PR.
   **License rule (bashy+coreutils ship as a bundled barebone "OS"):** compiled-in
   deps must be **permissive (MIT/BSD/Apache)** — anything whose license would
   *propagate* to the project (GPL/MPL copyleft) is out. External tools we only

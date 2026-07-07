@@ -153,19 +153,30 @@ or NO.
 | tail -f | follow mode for the Phase A tail (polling, cross-platform) |
 | coreutils | the multicall binary itself (`cmd/coreutils`) |
 
-## Phase C — remaining extensions (beyond coreutils)
+## Phase C — extensions (beyond coreutils)
 
-sed; xargs (lands with in-process command execution via the sh
-ExecHandler); ps (agent-useful, large cross-platform surface); file
-(magic detection). grep/find/diff/tar/gzip already land in Phase A via
-prior art.
+Shipped: sed; xargs (command-wrapper tier, see the NO list — spawns
+COMMAND directly; GNU subset incl. -I, -P, -0, -d); awk (goawk); plus
+the agent-oriented extras not tracked by this GNU-manual inventory
+(watch, tree, cal, time, timeout, at/atq/atrm/batch/crontab, browser,
+fetch, clip, tokens, duration, tz, ntp — see `cmds/all/all.go` for the
+authoritative shipped set). grep/find/diff/jq/tar/gzip landed in
+Phase A via prior art.
+
+Remaining: ps (agent-useful, large cross-platform surface); file
+(magic detection).
 
 ## NO — not supported (clear error, by reason)
 
-**Requires executing other programs** (violates no-shell-out; ↻ =
-revisit when the sh ExecHandler can run commands in-process):
+**Requires executing other programs.** The no-shell-out rule bars a
+tool from spawning programs to *implement its own behavior* (cat never
+execs /bin/cat). **Command wrappers are the documented exception**:
+tools whose upstream-documented purpose IS running the COMMAND operand
+(timeout, time, watch, xargs — all shipped) spawn that command
+directly, exactly as the GNU binary does — that is the upstream
+semantics, not an implementation shortcut. Still NO (↻ = revisit):
 
-- timeout ↻, nohup ↻, env COMMAND ↻, time ↻, nice, stdbuf, chroot
+- nohup ↻, env COMMAND ↻, nice, stdbuf, chroot
 - kill — already a builtin in the qiangli/sh fork; a standalone would race it
 
 **Unix machinery with no cross-platform meaning:**
