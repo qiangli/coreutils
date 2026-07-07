@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -240,4 +241,116 @@ func TestInstallUsage(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: install") || !strings.Contains(out, "-D") {
 		t.Fatalf("help code=%d out=%q", code, out)
 	}
+}
+
+func TestInstallBackup(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	out, errb, code := runTool(t, dir, "-b", "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("install -b: code=%d err=%q", code, errb)
+	}
+	_ = out
+	if read(t, filepath.Join(dir, "dst")) != "new" {
+		t.Fatal("dst was not updated")
+	}
+	bakContent, err := os.ReadFile(filepath.Join(dir, "dst~"))
+	if err != nil || string(bakContent) != "old" {
+		t.Fatalf("backup not created or has wrong content: err=%v", err)
+	}
+}
+
+func TestInstallBackupWithSuffix(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	_, errb, code := runTool(t, dir, "-b", "-S", ".bak", "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("install -b -S: code=%d err=%q", code, errb)
+	}
+	bakContent, err := os.ReadFile(filepath.Join(dir, "dst.bak"))
+	if err != nil || string(bakContent) != "old" {
+		t.Fatalf("backup with suffix not created: err=%v", err)
+	}
+}
+
+func TestInstallCompareSkipsIdentical(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "same")
+	write(t, filepath.Join(dir, "dst"), "same")
+	out, errb, code := runTool(t, dir, "-C", "-v", "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("install -C: code=%d err=%q", code, errb)
+	}
+	if !strings.Contains(out, "unchanged, skipped") {
+		t.Errorf("expected skip message for identical files, got: %q", out)
+	}
+}
+
+func TestInstallCompareCopiesDifferent(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "different")
+	_, errb, code := runTool(t, dir, "-C", "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("install -C: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "dst")) != "new" {
+		t.Fatal("different files not copied with -C")
+	}
+}
+
+func TestInstallPreserveTimestamps(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	write(t, src, "hi")
+	past := "1999-01-01T00:00:00Z"
+	if err := os.Chtimes(src, parseTime(t, past), parseTime(t, past)); err != nil {
+		t.Skipf("Chtimes failed (may need newer Go): %v", err)
+	}
+	dst := filepath.Join(dir, "dst")
+	_, errb, code := runTool(t, dir, "-p", "src", dst)
+	if code != 0 || errb != "" {
+		t.Fatalf("install -p: code=%d err=%q", code, errb)
+	}
+	sfi, _ := os.Stat(src)
+	dfi, _ := os.Stat(dst)
+	if sfi != nil && dfi != nil && !sfi.ModTime().Equal(dfi.ModTime()) {
+		t.Errorf("source=%v dest=%v, timestamps should match", sfi.ModTime(), dfi.ModTime())
+	}
+}
+
+func TestInstallStripFlag(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "hi")
+	out, errb, code := runTool(t, dir, "-s", "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("install -s: code=%d err=%q", code, errb)
+	}
+	if out != "" {
+		t.Logf("install -s output: %q", out)
+	}
+	if read(t, filepath.Join(dir, "dst")) != "hi" {
+		t.Fatal("content corrupted after -s")
+	}
+}
+
+func TestInstallContextFlag(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "hi")
+	out, errb, code := runTool(t, dir, "-Z", "unconfined_u:object_r:default_t:s0", "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("install -Z: code=%d err=%q", code, errb)
+	}
+	_ = out
+}
+
+func parseTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	tm, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tm
 }

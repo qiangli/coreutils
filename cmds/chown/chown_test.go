@@ -132,3 +132,127 @@ func TestChownHelpAndVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+func TestChownVerbose(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown is unix-only")
+	}
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, "-v", u.Uid, "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown -v: code=%d err=%q", code, errb)
+	}
+	if !strings.Contains(out, "ownership of 'f' retained") && !strings.Contains(out, "changed ownership of 'f'") {
+		t.Errorf("expected verbose output, got: %q", out)
+	}
+}
+
+func TestChownChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown is unix-only")
+	}
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runTool(t, dir, "-c", u.Uid, "f")
+	if code != 0 {
+		t.Fatalf("chown -c: code=%d", code)
+	}
+	if out != "" {
+		t.Errorf("expected no output for unchanged ownership with -c, got: %q", out)
+	}
+}
+
+func TestChownSilent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown is unix-only")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-f", "nobody", "no-such-file")
+	if code != 1 {
+		t.Fatalf("chown -f: expected code=1, got=%d", code)
+	}
+	if errb != "" {
+		t.Errorf("expected no stderr with -f, got: %q", errb)
+	}
+}
+
+func TestChownReference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown is unix-only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ref"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "--reference=ref", "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown --reference: code=%d err=%q", code, errb)
+	}
+}
+
+func TestChownFromFlag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown is unix-only")
+	}
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "--from="+u.Uid, u.Uid, "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown --from: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "--from=99999", u.Uid, "f")
+	if code != 0 {
+		t.Fatalf("chown --from (no match): code=%d err=%q", code, errb)
+	}
+}
+
+func TestChownPreserveRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown is unix-only")
+	}
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-R", "--preserve-root", u.Uid, "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown --preserve-root on non-root: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "-R", "--preserve-root", u.Uid, "/")
+	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively on '/'") {
+		t.Fatalf("chown --preserve-root on /: code=%d err=%q", code, errb)
+	}
+}
+
+func TestChownDereference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chown is unix-only")
+	}
+	u := currentUser(t)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	out, errb, code := runTool(t, dir, u.Uid, "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("chown symlink (dereference): code=%d err=%q", code, errb)
+	}
+	_ = out
+}

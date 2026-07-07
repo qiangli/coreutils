@@ -223,3 +223,105 @@ func TestChmodHelpAndVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+func TestChmodVerbose(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, "-v", "644", "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod -v: code=%d err=%q", code, errb)
+	}
+	if !strings.Contains(out, "mode of 'f' retained as") && !strings.Contains(out, "mode of 'f' changed to") {
+		t.Errorf("expected verbose output, got: %q", out)
+	}
+}
+
+func TestChmodChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runTool(t, dir, "-c", "644", "f")
+	if code != 0 {
+		t.Fatalf("chmod -c: code=%d", code)
+	}
+	if out != "" {
+		t.Errorf("expected no output for unchanged mode with -c, got: %q", out)
+	}
+	out, _, code = runTool(t, dir, "-c", "600", "f")
+	if code != 0 {
+		t.Fatalf("chmod -c 600: code=%d", code)
+	}
+	if !strings.Contains(out, "mode of 'f' changed to 0600") {
+		t.Errorf("expected changed output with -c, got: %q", out)
+	}
+}
+
+func TestChmodSilent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-f", "644", "no-such-file")
+	if code != 1 {
+		t.Fatalf("chmod -f: expected code=1, got=%d", code)
+	}
+	if errb != "" {
+		t.Errorf("expected no stderr with -f, got: %q", errb)
+	}
+}
+
+func TestChmodReference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref")
+	if err := os.WriteFile(ref, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(dir, "f")
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "--reference=ref", "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod --reference: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("expected mode 0600 from reference, got %#o", fi.Mode().Perm())
+	}
+}
+
+func TestChmodPreserveRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-R", "--preserve-root", "644", "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod --preserve-root on non-root: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "-R", "--preserve-root", "644", "/")
+	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively on '/'") {
+		t.Fatalf("chmod --preserve-root on /: code=%d err=%q", code, errb)
+	}
+}

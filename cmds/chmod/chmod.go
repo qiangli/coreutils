@@ -37,9 +37,39 @@ func run(rc *tool.RunContext, args []string) int {
 	modeArg, rest := extractDashMode(args)
 	fs := tool.NewFlags(cmd.Name)
 	recursive := fs.BoolP("recursive", "R", false, "change files and directories recursively")
+	verbose := fs.BoolP("verbose", "v", false, "output a diagnostic for every file processed")
+	changes := fs.BoolP("changes", "c", false, "like verbose but report only when a change is made")
+	silent := fs.BoolP("silent", "f", false, "suppress most error messages")
+	fs.Bool("quiet", false, "suppress most error messages")
+	preserveRoot := fs.Bool("preserve-root", false, "fail to operate recursively on '/'")
+	fs.Bool("no-preserve-root", false, "do not treat '/' specially (the default)")
+	reference := fs.String("reference", "", "use RFILE's mode instead of MODE")
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
+	}
+
+	isSilent := *silent || isBool(fs, "quiet")
+
+	if *reference != "" {
+		if modeArg != "" {
+			return tool.UsageError(rc, cmd, "cannot combine --reference and MODE")
+		}
+		if len(operands) == 0 {
+			return tool.UsageError(rc, cmd, "missing operand")
+		}
+		fi, err := os.Stat(rc.Path(*reference))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "chmod: cannot stat '%s': %v\n", *reference, err)
+			return 1
+		}
+		refMode := fmt.Sprintf("%04o", fileModeToBits(fi.Mode()))
+		change, err := parseMode(refMode)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "chmod: invalid mode from reference: '%s'\n", refMode)
+			return 1
+		}
+		return apply(rc, change, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot)
 	}
 	if modeArg != "" {
 		operands = append([]string{modeArg}, operands...)
@@ -55,7 +85,12 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "chmod: invalid mode: '%s'\n", operands[0])
 		return 1
 	}
-	return apply(rc, change, operands[1:], *recursive)
+	return apply(rc, change, operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot)
+}
+
+func isBool(fs interface{ GetBool(string) (bool, error) }, name string) bool {
+	v, err := fs.GetBool(name)
+	return err == nil && v
 }
 
 // extractDashMode rescues dash-prefixed mode operands (chmod -w FILE,

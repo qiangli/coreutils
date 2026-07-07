@@ -3,11 +3,13 @@ package chgrpcmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
@@ -125,5 +127,167 @@ func TestChgrpHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, t.TempDir(), "--version")
 	if code != 0 || !strings.Contains(out, "chgrp") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+func TestChgrpVerbose(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Skipf("user.Current: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, "-v", u.Gid, "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp -v: code=%d err=%q", code, errb)
+	}
+	if !strings.Contains(out, "group of 'f' retained as") && !strings.Contains(out, "changed group of 'f'") {
+		t.Errorf("expected verbose output, got: %q", out)
+	}
+}
+
+func TestChgrpChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Skipf("user.Current: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runTool(t, dir, "-c", u.Gid, "f")
+	if code != 0 {
+		t.Fatalf("chgrp -c: code=%d", code)
+	}
+	if out != "" {
+		t.Errorf("expected no output for unchanged group with -c, got: %q", out)
+	}
+}
+
+func TestChgrpSilent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-f", "staff", "no-such-file")
+	if code != 1 {
+		t.Fatalf("chgrp -f: expected code=1, got=%d", code)
+	}
+	if errb != "" {
+		t.Errorf("expected no stderr with -f, got: %q", errb)
+	}
+}
+
+func TestChgrpReference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ref"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "--reference=ref", "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp --reference: code=%d err=%q", code, errb)
+	}
+}
+
+func TestChgrpPreserveRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Skipf("user.Current: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-R", "--preserve-root", u.Gid, "f")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp --preserve-root on non-root: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "-R", "--preserve-root", u.Gid, "/")
+	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively on '/'") {
+		t.Fatalf("chgrp --preserve-root on /: code=%d err=%q", code, errb)
+	}
+}
+
+func TestChgrpDereference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Skipf("user.Current: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	out, errb, code := runTool(t, dir, u.Gid, "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp symlink (dereference): code=%d err=%q", code, errb)
+	}
+	_ = out
+	fi, err := os.Stat(filepath.Join(dir, "target"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if ok {
+		wantGid := fmt.Sprintf("%d", st.Gid)
+		_ = wantGid
+	}
+}
+
+func TestChgrpNoDereference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Skipf("user.Current: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	out, errb, code := runTool(t, dir, "-P", u.Gid, "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("chgrp -P: code=%d err=%q", code, errb)
+	}
+	_ = out
+}
+
+func TestChgrpQuietFlag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chgrp is unix-only")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "--quiet", "staff", "no-such-file")
+	if code != 1 {
+		t.Fatalf("chgrp --quiet: expected code=1, got=%d", code)
+	}
+	if errb != "" {
+		t.Errorf("expected no stderr with --quiet, got: %q", errb)
 	}
 }

@@ -1,8 +1,11 @@
 // Package installcmd implements a practical GNU install(1) subset:
 // directory creation plus copying regular files with final chmod.
+// Supports backup (-b), compare (-C), preserve-timestamps (-p),
+// strip (-s, no-op), suffix (-S), and context (-Z, --preserve-context, no-op).
 package installcmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -28,10 +31,11 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type installer struct {
-	rc      *tool.RunContext
-	verbose bool
-	mode    os.FileMode
-	failed  bool
+	rc       *tool.RunContext
+	verbose  bool
+	mode     os.FileMode
+	failed   bool
+	backupFn func(src, dst string) error // backup handler
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -44,10 +48,21 @@ func run(rc *tool.RunContext, args []string) int {
 	verbose := fs.BoolP("verbose", "v", false, "print the name of each created file or directory")
 	owner := fs.StringP("owner", "o", "", "set ownership (not supported)")
 	group := fs.StringP("group", "g", "", "set group ownership (not supported)")
+	backup := fs.BoolP("backup", "b", false, "make a backup of each existing destination file")
+	compare := fs.BoolP("compare", "C", false, "compare content; skip if identical")
+	preserveTimestamps := fs.BoolP("preserve-timestamps", "p", false, "apply source timestamps to destination")
+	strip := fs.BoolP("strip", "s", false, "strip symbol tables (no-op without native strip)")
+	suffix := fs.StringP("suffix", "S", "~", "override the usual backup suffix")
+	contextStr := fs.StringP("context", "Z", "", "set SELinux security context (no-op without SELinux)")
+	preserveContext := fs.Bool("preserve-context", false, "preserve SELinux security context (no-op without SELinux)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
+	_ = contextStr
+	_ = preserveContext
+	_ = strip // no-op: no native strip support in pure-Go
+
 	if fs.Changed("owner") || fs.Changed("group") {
 		_ = owner
 		_ = group
@@ -62,10 +77,18 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	in := &installer{rc: rc, verbose: *verbose, mode: mode}
 
+	hasBackup := *backup
+	backupSuffix := *suffix
+	if hasBackup {
+		in.backupFn = func(src, dst string) error {
+			return makeBackup(rc, dst, backupSuffix, "existing")
+		}
+	}
+
 	switch {
 	case *dirs:
-		if *targetDir != "" || *noTargetDir || *createParents {
-			return tool.UsageError(rc, cmd, "the -d option cannot be combined with -D, -t, or -T")
+		if *targetDir != "" || *noTargetDir || *createParents || *preserveTimestamps || *compare || hasBackup {
+			return tool.UsageError(rc, cmd, "the -d option cannot be combined with -D, -t, -T, -p, -C, or -b")
 		}
 		if len(operands) == 0 {
 			return tool.UsageError(rc, cmd, "missing file operand")
@@ -84,7 +107,8 @@ func run(rc *tool.RunContext, args []string) int {
 			in.makeParentDir(filepath.Join(*targetDir, "x"))
 		}
 		for _, src := range operands {
-			in.copyFile(src, filepath.Join(*targetDir, filepath.Base(src)), *createParents)
+			dst := filepath.Join(*targetDir, filepath.Base(src))
+			in.copyFile(src, dst, *createParents, *preserveTimestamps, *compare)
 		}
 	default:
 		switch len(operands) {
@@ -104,7 +128,7 @@ func run(rc *tool.RunContext, args []string) int {
 				return 1
 			}
 			for _, src := range srcs {
-				in.copyFile(src, filepath.Join(dest, filepath.Base(src)), false)
+				in.copyFile(src, filepath.Join(dest, filepath.Base(src)), false, *preserveTimestamps, *compare)
 			}
 			break
 		}
@@ -112,7 +136,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if !*noTargetDir && isDir(rc.Path(dest)) {
 			dst = filepath.Join(dest, filepath.Base(srcs[0]))
 		}
-		in.copyFile(srcs[0], dst, *createParents)
+		in.copyFile(srcs[0], dst, *createParents, *preserveTimestamps, *compare)
 	}
 	if in.failed {
 		return 1
@@ -150,6 +174,23 @@ func allDigits(s string) bool {
 	return s != ""
 }
 
+func makeBackup(rc *tool.RunContext, dst, suffix, config string) error {
+	backupName := dst + suffix
+	if _, err := os.Stat(rc.Path(dst)); os.IsNotExist(err) {
+		return nil
+	}
+	if config == "numbered" || config == "t" {
+		for i := 1; i < 1000; i++ {
+			candidate := fmt.Sprintf("%s%s.%d~", dst, suffix, i)
+			if _, err := os.Stat(rc.Path(candidate)); os.IsNotExist(err) {
+				backupName = candidate
+				break
+			}
+		}
+	}
+	return os.Rename(rc.Path(dst), rc.Path(backupName))
+}
+
 func (in *installer) makeDir(name string) {
 	if name == "" {
 		in.errf("cannot create directory '': No such file or directory")
@@ -181,7 +222,7 @@ func (in *installer) makeParentDir(dst string) bool {
 	return true
 }
 
-func (in *installer) copyFile(src, dst string, parents bool) {
+func (in *installer) copyFile(src, dst string, parents, preserveTs, compare bool) {
 	if src == "" {
 		in.errf("cannot stat '': No such file or directory")
 		return
@@ -198,6 +239,20 @@ func (in *installer) copyFile(src, dst string, parents bool) {
 	if parents && !in.makeParentDir(dst) {
 		return
 	}
+
+	if compare {
+		srcData, err := os.ReadFile(in.rc.Path(src))
+		if err != nil {
+			in.errf("cannot read '%s': %s", src, reason(err))
+			return
+		}
+		dstData, err := os.ReadFile(in.rc.Path(dst))
+		if err == nil && bytes.Equal(srcData, dstData) {
+			in.verbosef("'%s' -> '%s' (unchanged, skipped)", src, dst)
+			return
+		}
+	}
+
 	if di, err := os.Stat(in.rc.Path(dst)); err == nil {
 		if os.SameFile(fi, di) {
 			in.errf("'%s' and '%s' are the same file", src, dst)
@@ -207,12 +262,16 @@ func (in *installer) copyFile(src, dst string, parents bool) {
 			in.errf("cannot overwrite directory '%s' with non-directory", dst)
 			return
 		}
-		// GNU install removes an existing destination before copying
-		// (fresh inode: read-only dests are replaced, hard links are
-		// broken, running binaries don't hit ETXTBSY).
-		if err := os.Remove(in.rc.Path(dst)); err != nil {
-			in.errf("cannot remove '%s': %s", dst, reason(err))
-			return
+		if in.backupFn != nil {
+			if err := in.backupFn(src, dst); err != nil {
+				in.errf("cannot backup '%s': %s", dst, reason(err))
+				return
+			}
+		} else {
+			if err := os.Remove(in.rc.Path(dst)); err != nil {
+				in.errf("cannot remove '%s': %s", dst, reason(err))
+				return
+			}
 		}
 	}
 	inp, err := os.Open(in.rc.Path(src))
@@ -239,6 +298,13 @@ func (in *installer) copyFile(src, dst string, parents bool) {
 	if err := os.Chmod(in.rc.Path(dst), in.mode); err != nil {
 		in.errf("cannot change permissions of '%s': %s", dst, reason(err))
 		return
+	}
+	if preserveTs {
+		atime := fi.ModTime()
+		if err := os.Chtimes(in.rc.Path(dst), atime, atime); err != nil {
+			in.errf("cannot set timestamps of '%s': %s", dst, reason(err))
+			return
+		}
 	}
 	in.verbosef("'%s' -> '%s'", src, dst)
 }

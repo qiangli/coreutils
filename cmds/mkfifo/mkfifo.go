@@ -3,6 +3,7 @@
 // This is a conservative subset: -m/--mode accepts octal modes only.
 // The native operation is split behind build tags so non-Unix platforms
 // fail loudly instead of approximating FIFO semantics.
+// -Z/--context accepted as no-op on non-SELinux platforms.
 package mkfifocmd
 
 import (
@@ -25,10 +26,12 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	modeStr := fs.StringP("mode", "m", "", "set file mode (octal, as in chmod), not a=rw - umask")
+	contextStr := fs.StringP("context", "Z", "", "set SELinux security context (no-op without SELinux)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
+	_ = contextStr // deterministic no-op on non-SELinux platforms
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing operand")
 	}

@@ -7,6 +7,7 @@
 // so -v reports each created ancestor; -m applies to the final
 // directory only (intermediates get the default mode); -m refused on
 // windows (no POSIX mode bits); symbolic modes refused (octal only).
+// -Z/--context accepted as no-op on non-SELinux platforms.
 package mkdircmd
 
 import (
@@ -46,10 +47,12 @@ func run(rc *tool.RunContext, args []string) int {
 	parents := fs.BoolP("parents", "p", false, "no error if existing, make parent directories as needed")
 	modeStr := fs.StringP("mode", "m", "", "set file mode (octal, as in chmod), not a=rwx - umask")
 	verbose := fs.BoolP("verbose", "v", false, "print a message for each created directory")
+	contextStr := fs.StringP("context", "Z", "", "set SELinux security context (no-op without SELinux)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
+	_ = contextStr // deterministic no-op on non-SELinux platforms
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing operand")
 	}
