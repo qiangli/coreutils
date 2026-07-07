@@ -102,6 +102,15 @@ func TestApparentSizeDoesNotForceBytes(t *testing.T) {
 	}
 }
 
+func TestBlockSizeCluster(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", "x")
+	out, errb, code := runToolAt(t, dir, "-A", "-BM", "f")
+	if code != 0 || errb != "" || out != "1\tf\n" {
+		t.Fatalf("du -A -BM f = (%q, %q, %d), want 1 MiB block", out, errb, code)
+	}
+}
+
 func TestDirPostOrder(t *testing.T) {
 	dir := mkTree(t)
 	out, _, code := runToolAt(t, dir, "-b", "tree")

@@ -56,12 +56,12 @@ func run(rc *tool.RunContext, args []string) int {
 	update := fs.BoolP("update", "u", false, "move only when SOURCE is newer than the destination or destination is missing")
 	targetDir := fs.StringP("target-directory", "t", "", "move all SOURCE arguments into DIRECTORY")
 	noTargetDir := fs.BoolP("no-target-directory", "T", false, "treat DEST as a normal file")
-	backup := fs.String("backup", "", "make a backup of each existing destination")
-	backupShort := fs.BoolP("backup-short", "b", false, "make a backup of each existing destination")
+	backup := fs.StringP("backup", "b", "", "make a backup of each existing destination")
+	fs.Lookup("backup").NoOptDefVal = "simple"
 	suffix := fs.StringP("suffix", "S", "~", "override the usual backup suffix")
 	debug := fs.Bool("debug", false, "explain move decisions on stderr")
 	fs.Bool("strip-trailing-slashes", false, "strip trailing slashes from operands")
-	fs.Bool("progress", false, "accepted for compatibility; progress output is a no-op")
+	fs.BoolP("progress", "g", false, "accepted for compatibility; progress output is a no-op")
 	fs.StringP("context", "Z", "", "accepted for compatibility; SELinux context is a no-op")
 	verbose := fs.BoolP("verbose", "v", false, "explain what is being done")
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -70,9 +70,6 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	operands = maybeStripTrailingSlashes(operands, fs.Changed("strip-trailing-slashes"))
 	backupMode := *backup
-	if *backupShort && backupMode == "" {
-		backupMode = "simple"
-	}
 	switch backupMode {
 	case "", "simple", "existing", "nil", "numbered", "t":
 	default:
@@ -351,8 +348,6 @@ func normalizeOptionalArgs(args []string) []string {
 		case a == "-Z" || a == "--context":
 			out[i] = "--context="
 		case a == "--backup":
-			out[i] = "--backup=simple"
-		case a == "-b":
 			out[i] = "--backup=simple"
 		case a == "--interactive=always" || a == "--interactive=yes":
 			out[i] = "--interactive"

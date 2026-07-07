@@ -214,6 +214,29 @@ func TestMvDebugStripTrailingSlashesContextAndShortBackup(t *testing.T) {
 	}
 }
 
+func TestMvBackupAndProgressAliasesVisible(t *testing.T) {
+	out, _, code := runTool(t, t.TempDir(), "--help")
+	if code != 0 {
+		t.Fatalf("mv --help code = %d", code)
+	}
+	for _, opt := range []string{"-b, --backup", "-g, --progress"} {
+		if !strings.Contains(out, opt) {
+			t.Fatalf("mv --help missing %q:\n%s", opt, out)
+		}
+	}
+
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	_, errb, code := runTool(t, dir, "-bg", "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("mv -bg: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "dst")) != "new" || read(t, filepath.Join(dir, "dst~")) != "old" {
+		t.Fatalf("mv -bg did not create simple backup")
+	}
+}
+
 func TestMvNumberedBackupForm(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "new")

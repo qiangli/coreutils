@@ -220,6 +220,58 @@ func TestCpBackupSuffixUpdateAndInteractive(t *testing.T) {
 	}
 }
 
+func TestCpBackupAndProgressAliasesVisible(t *testing.T) {
+	out, _, code := runTool(t, t.TempDir(), "--help")
+	if code != 0 {
+		t.Fatalf("cp --help code = %d", code)
+	}
+	for _, opt := range []string{"-b, --backup", "-g, --progress"} {
+		if !strings.Contains(out, opt) {
+			t.Fatalf("cp --help missing %q:\n%s", opt, out)
+		}
+	}
+
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "new")
+	write(t, filepath.Join(dir, "b"), "old")
+	_, errb, code := runTool(t, dir, "-bg", "a", "b")
+	if code != 0 || errb != "" {
+		t.Fatalf("cp -bg: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "b")) != "new" || read(t, filepath.Join(dir, "b~")) != "old" {
+		t.Fatalf("cp -bg did not create simple backup")
+	}
+}
+
+func TestCpClusteredPreserveArchiveUpdateAliases(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	write(t, src, "older")
+	write(t, dst, "newer")
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local)
+	newer := time.Date(2021, 1, 1, 0, 0, 0, 0, time.Local)
+	if err := os.Chtimes(src, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dst, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-pu", "src", "dst")
+	if code != 0 || errb != "" || read(t, dst) != "newer" {
+		t.Fatalf("cp -pu should preserve parser behavior and skip newer destination: code=%d err=%q", code, errb)
+	}
+
+	write(t, filepath.Join(dir, "tree", "f"), "x")
+	_, errb, code = runTool(t, dir, "-au", "tree", "copy")
+	if code != 0 {
+		t.Fatalf("cp -au should parse as archive+update: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "copy", "f")) != "x" {
+		t.Fatalf("cp -au did not copy recursively")
+	}
+}
+
 func TestCpVerbose(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "x")

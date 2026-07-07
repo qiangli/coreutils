@@ -50,6 +50,16 @@ func TestDirDelegatesLsFlags(t *testing.T) {
 	if code != 0 || errb != "" || out != ".hidden\na\n" {
 		t.Fatalf("dir -A = (%q, %q, %d), want ls -A behavior", out, errb, code)
 	}
+
+	out, errb, code = runToolAt(t, dir, "-aU")
+	if code != 0 || errb != "" {
+		t.Fatalf("dir -aU = (%q, %q, %d)", out, errb, code)
+	}
+	for _, name := range []string{".", "..", ".hidden", "a"} {
+		if !strings.Contains(out, name+"\n") {
+			t.Fatalf("dir -aU output missing %q:\n%s", name, out)
+		}
+	}
 }
 
 func TestDirRegistered(t *testing.T) {

@@ -87,6 +87,19 @@ func TestAllAndAlmostAll(t *testing.T) {
 	}
 }
 
+func TestAllUnsortedCluster(t *testing.T) {
+	dir := mkTree(t)
+	out, errb, code := runToolAt(t, dir, "-aU")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -aU: code=%d err=%q", code, errb)
+	}
+	for _, name := range []string{".", "..", ".hidden", "a.txt", "b.txt"} {
+		if !strings.Contains(out, name+"\n") {
+			t.Fatalf("ls -aU output missing %q:\n%s", name, out)
+		}
+	}
+}
+
 func TestReverse(t *testing.T) {
 	dir := mkTree(t)
 	out, _, code := runToolAt(t, dir, "-r")
