@@ -1,7 +1,6 @@
 // Package idcmd implements id(1) per the GNU coreutils manual: print
 // user and group information for each specified USER, or for the
-// current process when no USER is given. Supported flags: -u -g -G
-// -n.
+// current process when no USER is given.
 //
 // IDs come from os/user, so they are strings throughout: numeric
 // uid/gid on unix, SIDs on Windows (the documented best-effort —
@@ -32,10 +31,21 @@ func run(rc *tool.RunContext, args []string) int {
 	gFlag := fs.BoolP("group", "g", false, "print only the effective group ID")
 	GFlag := fs.BoolP("groups", "G", false, "print all group IDs")
 	nFlag := fs.BoolP("name", "n", false, "print a name instead of a number, for -ugG")
-	operands, code := tool.Parse(rc, cmd, fs, args)
+	aFlag := fs.BoolP("all-compat", "a", false, "ignore, for compatibility with other versions")
+	rFlag := fs.BoolP("real", "r", false, "print the real ID instead of the effective ID")
+	pFlag := fs.BoolP("pretty", "p", false, "make output human-readable")
+	zFlag := fs.BoolP("zero", "z", false, "delimit entries with NUL, not newline")
+	ignoreFlag := fs.Bool("ignore", false, "ignore unknown users; print nothing for them")
+	fs.BoolP("audit-context", "A", false, "no-op: no SELinux audit user context support")
+	fs.BoolP("password-db", "P", false, "no-op: no password database sidestep")
+	fs.BoolP("selinux-context", "Z", false, "no-op: no SELinux security context support")
+	fs.Bool("context", false, "no-op: no SELinux security context support")
+	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
 	}
+
+	_ = rFlag
 
 	chosen := 0
 	for _, v := range []bool{*uFlag, *gFlag, *GFlag} {
@@ -43,11 +53,16 @@ func run(rc *tool.RunContext, args []string) int {
 			chosen++
 		}
 	}
-	if chosen > 1 {
+	if !*aFlag && chosen > 1 {
 		return tool.UsageError(rc, cmd, "cannot print \"only\" of more than one choice")
 	}
 	if *nFlag && chosen == 0 {
 		return tool.UsageError(rc, cmd, "cannot print only names or real IDs in default format")
+	}
+	useName := *nFlag || *pFlag
+	term := "\n"
+	if *zFlag {
+		term = "\x00"
 	}
 
 	users := operands
@@ -58,20 +73,26 @@ func run(rc *tool.RunContext, args []string) int {
 	for _, name := range users {
 		u, err := lookupUser(name)
 		if err != nil {
+			if *ignoreFlag {
+				continue
+			}
 			fmt.Fprintf(rc.Err, "id: %q: no such user\n", name)
 			status = 1
 			continue
 		}
-		if err := printOne(rc, u, *uFlag, *gFlag, *GFlag, *nFlag); err != nil {
-			fmt.Fprintf(rc.Err, "id: %v\n", err)
+		results, pErr := formatOne(u, *uFlag, *gFlag, *GFlag, useName, *aFlag)
+		if pErr != nil {
+			fmt.Fprintf(rc.Err, "id: %v\n", pErr)
 			status = 1
+			continue
+		}
+		for _, line := range results {
+			fmt.Fprintf(rc.Out, "%s%s", line, term)
 		}
 	}
 	return status
 }
 
-// lookupUser resolves "" to the current user, otherwise tries the
-// name and then (GNU behavior) a literal user ID.
 func lookupUser(name string) (*user.User, error) {
 	if name == "" {
 		return user.Current()
@@ -82,57 +103,76 @@ func lookupUser(name string) (*user.User, error) {
 	return user.LookupId(name)
 }
 
-func printOne(rc *tool.RunContext, u *user.User, uFlag, gFlag, GFlag, nFlag bool) error {
+func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag bool) ([]string, error) {
+	var results []string
+
 	switch {
 	case uFlag:
-		if nFlag {
-			fmt.Fprintf(rc.Out, "%s\n", u.Username)
-		} else {
-			fmt.Fprintf(rc.Out, "%s\n", u.Uid)
+		val := u.Uid
+		if useName {
+			val = u.Username
 		}
-		return nil
+		results = append(results, val)
+		if !aFlag {
+			return results, nil
+		}
+		fallthrough
 	case gFlag:
-		if nFlag {
-			fmt.Fprintf(rc.Out, "%s\n", groupName(u.Gid))
-		} else {
-			fmt.Fprintf(rc.Out, "%s\n", u.Gid)
+		val := u.Gid
+		if useName {
+			val = groupName(u.Gid)
 		}
-		return nil
-	}
-
-	gids, err := groupIDs(u)
-	if err != nil {
-		return fmt.Errorf("cannot get groups for %q: %v", u.Username, err)
-	}
-
-	if GFlag {
+		results = append(results, val)
+		if !aFlag {
+			return results, nil
+		}
+		fallthrough
+	case GFlag:
+		gids, err := groupIDs(u)
+		if err != nil {
+			return nil, fmt.Errorf("cannot get groups for %q: %v", u.Username, err)
+		}
 		parts := make([]string, 0, len(gids))
 		for _, gid := range gids {
-			if nFlag {
+			if useName {
 				parts = append(parts, groupName(gid))
 			} else {
 				parts = append(parts, gid)
 			}
 		}
-		fmt.Fprintf(rc.Out, "%s\n", strings.Join(parts, " "))
-		return nil
+		results = append(results, strings.Join(parts, " "))
+		return results, nil
 	}
 
 	// Default format: uid=U(name) gid=G(gname) groups=g1(n1),...
 	var b strings.Builder
-	fmt.Fprintf(&b, "uid=%s gid=%s groups=", decorate(u.Uid, u.Username), decorate(u.Gid, lookupGroupName(u.Gid)))
+	uidName := u.Username
+	if !useName {
+		uidName = ""
+	}
+	gidName := lookupGroupName(u.Gid)
+	if !useName {
+		gidName = ""
+	}
+	fmt.Fprintf(&b, "uid=%s gid=%s groups=", decorate(u.Uid, uidName), decorate(u.Gid, gidName))
+	gids, err := groupIDs(u)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get groups for %q: %v", u.Username, err)
+	}
 	for i, gid := range gids {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(decorate(gid, lookupGroupName(gid)))
+		gn := lookupGroupName(gid)
+		if !useName {
+			gn = ""
+		}
+		b.WriteString(decorate(gid, gn))
 	}
-	fmt.Fprintf(rc.Out, "%s\n", b.String())
-	return nil
+	results = append(results, b.String())
+	return results, nil
 }
 
-// groupIDs returns the user's group IDs with the primary group first
-// (GNU id prints the effective gid at the head of the groups list).
 func groupIDs(u *user.User) ([]string, error) {
 	gids, err := u.GroupIds()
 	if err != nil {
@@ -147,8 +187,6 @@ func groupIDs(u *user.User) ([]string, error) {
 	return ordered, nil
 }
 
-// lookupGroupName returns the group's name, or "" when the database
-// has no entry for the ID.
 func lookupGroupName(gid string) string {
 	if g, err := user.LookupGroupId(gid); err == nil {
 		return g.Name
@@ -156,8 +194,6 @@ func lookupGroupName(gid string) string {
 	return ""
 }
 
-// groupName is lookupGroupName with the GNU -gn fallback: when the
-// name is unknown the bare ID is printed.
 func groupName(gid string) string {
 	if name := lookupGroupName(gid); name != "" {
 		return name
@@ -165,7 +201,6 @@ func groupName(gid string) string {
 	return gid
 }
 
-// decorate renders "id(name)", or just "id" when no name resolved.
 func decorate(id, name string) string {
 	if name == "" {
 		return id

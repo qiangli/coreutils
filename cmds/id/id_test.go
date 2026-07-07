@@ -120,3 +120,124 @@ func TestIDHelp(t *testing.T) {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
 }
+
+func TestIDAliasHelpVersion(t *testing.T) {
+	out, _, code := runTool(t, "-h")
+	if code != 0 || !strings.Contains(out, "Usage: id") {
+		t.Errorf("-h: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "-V")
+	if code != 0 || !strings.Contains(out, "qiangli/coreutils") {
+		t.Errorf("-V: code=%d out=%q", code, out)
+	}
+}
+
+func TestIDAFlag(t *testing.T) {
+	u := current(t)
+	out, _, code := runTool(t, "-a", "-u", "-g")
+	if code != 0 {
+		t.Fatalf("-a -u -g: code=%d", code)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("-a -u -g output too short: %q", out)
+	}
+	if lines[0] != u.Uid || lines[1] != u.Gid {
+		t.Errorf("-a -u -g lines: %q want uid=%s then gid=%s", out, u.Uid, u.Gid)
+	}
+}
+
+func TestIDPFlag(t *testing.T) {
+	u := current(t)
+	out, _, code := runTool(t, "-p")
+	if code != 0 {
+		t.Fatalf("-p: code=%d", code)
+	}
+	for _, want := range []string{"uid=", "gid=", "groups="} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-p output %q missing %q", out, want)
+		}
+	}
+	outn, _, code := runTool(t, "-u", "-p")
+	if code != 0 || outn != u.Username+"\n" {
+		t.Errorf("-u -p = (%q, %d) want username %s", outn, code, u.Username)
+	}
+}
+
+func TestIDZFlag(t *testing.T) {
+	u := current(t)
+	out, _, code := runTool(t, "-z")
+	if code != 0 {
+		t.Fatalf("-z: code=%d", code)
+	}
+	if !strings.Contains(out, "uid="+u.Uid) {
+		t.Errorf("-z output %q missing uid", out)
+	}
+	if !strings.HasSuffix(out, "\x00") {
+		t.Errorf("-z should end with NUL: %q", out)
+	}
+	if strings.Count(out, "\n") > 0 {
+		t.Errorf("-z output should not contain newline: %q", out)
+	}
+}
+
+func TestIDRealFlag(t *testing.T) {
+	u := current(t)
+	out, _, code := runTool(t, "-r")
+	if code != 0 {
+		t.Fatalf("-r: code=%d", code)
+	}
+	if !strings.Contains(out, "uid="+u.Uid) {
+		t.Errorf("-r output %q missing uid", out)
+	}
+	out2, _, code := runTool(t, "--real")
+	if code != 0 {
+		t.Fatalf("--real: code=%d", code)
+	}
+	if out != out2 {
+		t.Errorf("-r vs --real mismatch: %q vs %q", out, out2)
+	}
+}
+
+func TestIDIgnoreFlag(t *testing.T) {
+	_, errb, code := runTool(t, "--ignore", "no-such-user-xyzzy")
+	if code != 0 {
+		t.Fatalf("--ignore unknown: code=%d", code)
+	}
+	if strings.Contains(errb, "no such user") {
+		t.Errorf("--ignore should suppress error: %q", errb)
+	}
+}
+
+func TestIDNoOpFlags(t *testing.T) {
+	for _, flag := range []string{"-A", "-P", "-Z", "--context"} {
+		out, _, code := runTool(t, flag)
+		if code != 0 {
+			t.Errorf("%s: code=%d", flag, code)
+		}
+		if !strings.Contains(out, "uid=") {
+			t.Errorf("%s output %q missing uid", flag, out)
+		}
+	}
+}
+
+func TestIDPWithGN(t *testing.T) {
+	u := current(t)
+	out, _, code := runTool(t, "-g", "-p")
+	if code != 0 {
+		t.Fatalf("-g -p: code=%d", code)
+	}
+	outn, _, _ := runTool(t, "-g", "-n")
+	if out != outn {
+		t.Errorf("-g -p vs -g -n: %q vs %q", out, outn)
+	}
+
+	outG, _, code := runTool(t, "-G", "-p")
+	if code != 0 {
+		t.Fatalf("-G -p: code=%d", code)
+	}
+	if strings.TrimSpace(outG) == strings.TrimSpace(outn) && outG == "" {
+		t.Errorf("-G -p output should be non-empty group names: %q", outG)
+	}
+	_ = u
+}
