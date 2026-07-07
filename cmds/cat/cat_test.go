@@ -115,8 +115,20 @@ func TestCatHelpVersion(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "Usage: cat") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
+	out, _, code = runTool(t, "", "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: cat") {
+		t.Errorf("-h: code=%d out=%q", code, out)
+	}
 	out, _, code = runTool(t, "", "", "--version")
 	if code != 0 || !strings.Contains(out, "cat") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-V")
+	if code != 0 || !strings.Contains(out, "cat") {
+		t.Errorf("-V: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "", "-etV")
+	if code != 0 || !strings.Contains(out, "cat") {
+		t.Errorf("-etV: code=%d out=%q", code, out)
 	}
 }

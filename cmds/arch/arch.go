@@ -16,6 +16,7 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {

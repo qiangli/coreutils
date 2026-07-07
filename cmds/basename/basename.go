@@ -25,6 +25,7 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
 	multiple := fs.BoolP("multiple", "a", false, "support multiple arguments and treat each as a NAME")
 	suffix := fs.StringP("suffix", "s", "", "remove a trailing SUFFIX; implies -a")

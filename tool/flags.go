@@ -38,7 +38,17 @@ func NewFlags(name string) *pflag.FlagSet {
 // short options for command-specific behavior should call this helper.
 func AliasHelpVersion(args []string) []string {
 	var out []string
+	rest := false
 	for _, arg := range args {
+		if rest {
+			out = append(out, arg)
+			continue
+		}
+		if arg == "--" {
+			rest = true
+			out = append(out, arg)
+			continue
+		}
 		switch arg {
 		case "-h":
 			out = append(out, "--help")

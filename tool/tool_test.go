@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -242,6 +243,42 @@ func TestResolveExecutable(t *testing.T) {
 		if got2 != exePath {
 			t.Errorf("ResolveExecutable(%q) = %q, want %q", exeName, got2, exePath)
 		}
+	}
+}
+
+func TestAliasHelpVersion(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "standalone aliases",
+			args: []string{"-h", "-V"},
+			want: []string{"--help", "--version"},
+		},
+		{
+			name: "cluster keeps other short flags",
+			args: []string{"-azV"},
+			want: []string{"--version", "-az"},
+		},
+		{
+			name: "preserve operands after delimiter",
+			args: []string{"--", "-h", "-V"},
+			want: []string{"--", "-h", "-V"},
+		},
+		{
+			name: "long options and operands unchanged",
+			args: []string{"--help", "name", "--version"},
+			want: []string{"--help", "name", "--version"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AliasHelpVersion(tt.args); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("AliasHelpVersion(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
 	}
 }
 
