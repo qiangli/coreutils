@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/spf13/cobra"
 )
 
@@ -213,12 +214,34 @@ var roleDefaults = map[string]string{
 // NewChatCmd returns the `bashy chat` command.
 func NewChatCmd() *cobra.Command {
 	var opt Options
+	var capStr string
 	cmd := &cobra.Command{
 		Use:   "chat --agent AGENT --instruction TEXT",
 		Short: "invoke an agent with a single unattended instruction",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opt.Instruction = strings.TrimSpace(strings.Join(append([]string{opt.Instruction}, args...), " "))
+			}
+			// --capability routes to the best-fit ROUTABLE agent from the living
+			// matrix (see pkg/capability). We dispatch by tool (the model comes
+			// from the tool's own config); the intended tool:model is logged.
+			if strings.TrimSpace(capStr) != "" && opt.Agent == "" {
+				c, ok := capability.ParseCapability(capStr)
+				if !ok {
+					return fmt.Errorf("chat: unknown capability %q", capStr)
+				}
+				m, err := capability.Load()
+				if err != nil {
+					return err
+				}
+				ranked := m.Best(c, true)
+				if len(ranked) == 0 {
+					return fmt.Errorf("chat: no routable agent for capability %q", capStr)
+				}
+				best := ranked[0]
+				opt.Agent = capability.ToolOf(best.Agent)
+				fmt.Fprintf(cmd.ErrOrStderr(), "chat: capability %s → %s (q=%.2f); launching tool %q\n",
+					c, best.Agent, best.Cell.Quality, opt.Agent)
 			}
 			plain, _ := cmd.Flags().GetBool("plain")
 			opt.JSON = opt.JSON || (os.Getenv("BASHY_AGENTIC") != "" && !plain)
@@ -238,6 +261,7 @@ func NewChatCmd() *cobra.Command {
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().StringVar(&opt.Agent, "agent", "", "agent command to run, such as claude, codex, agy, or opencode")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when --agent is omitted: conductor, reviewer, qa, release")
+	cmd.Flags().StringVar(&capStr, "capability", "", "route to the best-fit routable agent for this capability (e.g. deep-research, coding)")
 	cmd.Flags().StringVar(&opt.Instruction, "instruction", "", "instruction to send to the agent")
 	cmd.Flags().StringArrayVar(&opt.Files, "file", nil, "append file contents to the instruction")
 	cmd.Flags().StringArrayVar(&opt.Context, "context", nil, "append context text to the instruction")

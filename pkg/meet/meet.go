@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/spf13/cobra"
 )
 
@@ -34,11 +33,10 @@ func humanName() string {
 }
 
 func drivability(name string) string {
-	if _, err := exec.LookPath(name); err != nil {
+	// Shared operability gate with the capability router (pkg/capability): the
+	// codex login-shell caveat is surfaced by shellRouting below, not here.
+	if ok, _ := capability.Operable(name); !ok {
 		return "not installed"
-	}
-	if name == "codex" && runtime.GOOS == "darwin" {
-		return "installed (headless-caveated on macOS — PTY fallback)"
 	}
 	return "installed"
 }
