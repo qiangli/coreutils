@@ -129,9 +129,31 @@ func TestPRPlusOperandPageRange(t *testing.T) {
 }
 
 func TestPRFormFeedTrailer(t *testing.T) {
-	out, _, code := runPR(t, t.TempDir(), "a\nb\n", "-F")
-	if code != 0 || strings.Count(out, "\f") != 1 || !strings.HasSuffix(out, "b\n\f") {
-		t.Fatalf("pr -F = (%q, %d), want single trailing form feed", out, code)
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"-F", []string{"-F"}},
+		{"-f", []string{"-f"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, _, code := runPR(t, t.TempDir(), "a\nb\n", tt.args...)
+			if code != 0 || strings.Count(out, "\f") != 1 || !strings.HasSuffix(out, "b\n\f") {
+				t.Fatalf("pr %s = (%q, %d), want single trailing form feed", tt.name, out, code)
+			}
+		})
+	}
+}
+
+func TestPRFormFeedLowerEqualsUpper(t *testing.T) {
+	outF, _, codeF := runPR(t, t.TempDir(), "a\nb\n", "-F")
+	outf, _, codef := runPR(t, t.TempDir(), "a\nb\n", "-f")
+	if codeF != 0 || codef != 0 {
+		t.Fatalf("pr -F/-f exit codes: %d, %d", codeF, codef)
+	}
+	if outF != outf {
+		t.Fatalf("pr -f output differs from pr -F:\n-F: %q\n-f: %q", outF, outf)
 	}
 }
 
