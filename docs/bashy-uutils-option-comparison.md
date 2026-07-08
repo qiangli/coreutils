@@ -65,13 +65,18 @@ the local binary) found and a follow-up sprint closed them:
    error `option '--x' is ambiguous; possibilities: …`, exit 2), so
    e.g. `cp --parent` and `wc --line` parse as in GNU/uutils.
 
-Known remaining deltas, by policy:
+4. **chcon** (closed 2026-07-08, follow-up round): full GNU option
+   surface — `-R` with `-H/-L/-P` traversal, `--dereference`/`-h`,
+   `-u/-r/-t/-l` component mode, `--reference`, `-v`,
+   `--preserve-root` — parsing and usage errors identical on every
+   platform, relabeling Linux-only as before. NOTE: the macOS-built
+   uutils binary used for the table above omits `chcon`/`runcon`
+   entirely (feature-gated), so this row was invisible to the
+   help-token method; the source-level extractor now reports zero
+   residual chcon gaps.
 
-- **chcon flag surface** — local chcon is positional-only; uutils' full
-  flag set is Linux/SELinux machinery. NOTE: the macOS-built uutils
-  binary used for the table above omits `chcon`/`runcon` entirely
-  (feature-gated), so this row was never compared by the help-token
-  method. Deferred, not closed.
+Known remaining delta, by policy:
+
 - **uutils-only inventions are deliberately excluded** (`--l` on ls,
   `---presume-input-pipe`/`---io-blksize`/`dis` internal test hooks,
   `du --time=birth`): conformance is judged against GNU documentation;
