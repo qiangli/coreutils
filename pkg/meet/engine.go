@@ -5,12 +5,50 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/chat"
 )
 
 const turnGuard = "You are a participant in a planning meeting. Read the topic, agenda, and transcript, then contribute one concise, focused turn (a few sentences). Do not edit files or run commands — return meeting contribution text only."
+
+// ansiEscape matches ANSI CSI/OSC escape sequences that leak into an agent CLI's
+// combined output (e.g. opencode's "\x1b[0m > build" banner).
+var ansiEscape = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(\x07|\x1b\\\\)")
+
+// sanitizeTurn makes captured agent output safe to STORE and to REPLAY as prompt
+// context. Agent CLIs emit banners/warnings on the combined stream, sometimes with
+// invalid UTF-8 (truncated box-drawing) and ANSI/control bytes. Fed back verbatim
+// as the next agent's argv these crash downstream tools — codex exec rejects
+// "invalid UTF-8 in arguments"; aider throws UnicodeEncodeError writing its input
+// history. So: coerce to valid UTF-8, strip ANSI escapes and C0/C1 control chars
+// (keeping \n and \t), and trim. Preserves ordinary prose (incl. legitimate
+// non-ASCII).
+func sanitizeTurn(s string) string {
+	s = strings.ToValidUTF8(s, "")
+	s = ansiEscape.ReplaceAllString(s, "")
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			return r
+		case r < 0x20 || (r >= 0x7f && r < 0xa0): // C0/C1 control
+			return -1
+		case r >= 0xd800 && r <= 0xdfff: // surrogates (never valid in UTF-8 argv)
+			return -1
+		case r >= 0x2500 && r <= 0x259f: // box-drawing + block elements — CLI banner chrome
+			return -1
+		case r == 0xfffd: // replacement char from an earlier lossy decode
+			return -1
+		default:
+			return r
+		}
+	}, s)
+	// Collapse runs of blank lines/spaces left by stripped banners.
+	s = regexp.MustCompile(`[ \t]{2,}`).ReplaceAllString(s, " ")
+	s = regexp.MustCompile(`\n{3,}`).ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(s)
+}
 
 func transcriptContext(events []Event) string {
 	if len(events) == 0 {
@@ -27,7 +65,7 @@ func transcriptContext(events []Event) string {
 		} else if e.Kind == "action" {
 			who = "ACTION"
 		}
-		fmt.Fprintf(&b, "%s: %s\n", who, oneLine(e.Text))
+		fmt.Fprintf(&b, "%s: %s\n", who, oneLine(sanitizeTurn(e.Text)))
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -53,7 +91,7 @@ func runTurn(ctx context.Context, st *State, name, question string, runner chat.
 		Context:     []string{transcriptContext(events)},
 		Cwd:         st.Cwd,
 	}, runner)
-	text := strings.TrimSpace(res.Output)
+	text := sanitizeTurn(res.Output)
 	if text == "" && err != nil {
 		text = fmt.Sprintf("(no response: %v)", err)
 	}
@@ -76,9 +114,11 @@ func runRound(ctx context.Context, st *State, question string, runner chat.Runne
 	return out
 }
 
-// record appends a marker/human event.
+// record appends a marker/human event. Human/marker text is sanitized too — it
+// is replayed as prompt context to agents, so stray control/invalid-UTF-8 bytes
+// there would crash the same downstream tools as raw agent banners.
 func record(st *State, kind, speaker, role, text string) (Event, error) {
-	ev := Event{Round: st.Round, Speaker: speaker, Role: role, Kind: kind, Text: strings.TrimSpace(text), TS: nowFn()}
+	ev := Event{Round: st.Round, Speaker: speaker, Role: role, Kind: kind, Text: sanitizeTurn(text), TS: nowFn()}
 	return ev, appendEvent(st.ID, ev)
 }
 

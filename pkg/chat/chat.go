@@ -86,18 +86,42 @@ func (execRunner) Run(ctx context.Context, agent string, args []string, cwd stri
 			cmd.Env = forcedShellEnv(os.Environ(), bashy, ensureShims(bashy))
 		}
 	}
-	out, err := cmd.CombinedOutput()
+	// Capture stdout and stderr SEPARATELY. The agent's actual answer is on
+	// stdout; CLI chrome (banners, warnings, progress) goes to stderr and would
+	// otherwise pollute a captured turn — and a truncated multibyte char in that
+	// chrome becomes invalid UTF-8 that crashes a downstream tool when the turn is
+	// replayed as its prompt. On success we return stdout only; on failure we
+	// append stderr so the error is still visible to the caller.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	out := stdout.String()
 	if ctx.Err() != nil {
-		return string(out), 124, ctx.Err()
+		return appendStderr(out, stderr.String()), 124, ctx.Err()
 	}
 	if err == nil {
-		return string(out), 0, nil
+		return out, 0, nil
 	}
+	out = appendStderr(out, stderr.String())
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return string(out), exitErr.ExitCode(), err
+		return out, exitErr.ExitCode(), err
 	}
-	return string(out), 127, err
+	return out, 127, err
+}
+
+// appendStderr joins captured stderr onto stdout for error reporting.
+func appendStderr(stdout, stderr string) string {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return stdout
+	}
+	stdout = strings.TrimRight(stdout, "\n")
+	if stdout != "" {
+		stdout += "\n"
+	}
+	return stdout + stderr
 }
 
 var seededProfiles = map[string]LaunchProfile{
