@@ -70,6 +70,9 @@ func TestDateFormatAliases(t *testing.T) {
 		{[]string{"-u", "-d", "@0", "--iso-8601=seconds"}, "1970-01-01T00:00:00+0000\n"},
 		{[]string{"-u", "-d", "@0", "--rfc-3339=seconds"}, "1970-01-01 00:00:00+00:00\n"},
 		{[]string{"-u", "-d", "@0", "--rfc-email"}, "Thu, 01 Jan 1970 00:00:00 +0000\n"},
+		{[]string{"-u", "-d", "@0", "--rfc-822"}, "Thu, 01 Jan 1970 00:00:00 +0000\n"},
+		{[]string{"-u", "-d", "@0", "--rfc-2822"}, "Thu, 01 Jan 1970 00:00:00 +0000\n"},
+		{[]string{"--uct", "-d", "@0", "+%H %Z"}, "00 UTC\n"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, c.args...)
@@ -172,5 +175,10 @@ func TestDateHelp(t *testing.T) {
 	out, _, code := runTool(t, "--help")
 	if code != 0 || !strings.Contains(out, "Usage: date") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+	for _, hidden := range []string{"rfc-822", "rfc-2822", "uct"} {
+		if strings.Contains(out, hidden) {
+			t.Errorf("--help contains hidden alias %q in %q", hidden, out)
+		}
 	}
 }
