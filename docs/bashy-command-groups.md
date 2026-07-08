@@ -2,6 +2,12 @@
 
 Generated from `../bashy/bin/bashy commands --json` on 2026-07-07.
 
+> **Superseded as the live grouping source by the Command Atlas**
+> (`bashy/docs/command-atlas.md`; live data: `bashy commands --atlas --json`,
+> tables in `coreutils/pkg/atlas`). This file is kept as the 2026-07-07
+> count snapshot; the userland has grown since (Phase B additions), so
+> regenerate from `--atlas --json` when citing counts.
+
 This is the live bashy command catalog reported by `bashy commands`: shell builtins, in-process coreutils tools, and bashy front-door verbs. The groups below are mutually exclusive for the combined command surface. Commands implemented both as shell builtins and in the in-process coreutils layer are listed in the Bash builtins group, because the shell resolver handles builtins before the coreutils `ExecHandler`.
 
 Raw catalog counts:

@@ -83,6 +83,11 @@ func TestListTools(t *testing.T) {
 			if ti.Synopsis != "mcp test probe" {
 				t.Errorf("synopsis = %q", ti.Synopsis)
 			}
+			// mcpprobe has no Command Atlas entry: the additive atlas
+			// fields must be absent, not fabricated.
+			if ti.Group != "" || len(ti.Caps) != 0 {
+				t.Errorf("atlas fields for unlisted tool: group=%q caps=%v", ti.Group, ti.Caps)
+			}
 		}
 	}
 	if !found {

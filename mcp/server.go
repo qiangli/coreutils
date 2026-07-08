@@ -33,14 +33,20 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/qiangli/coreutils/multicall"
+	"github.com/qiangli/coreutils/pkg/atlas"
 	"github.com/qiangli/coreutils/tool"
 )
 
-// ToolInfo describes one registered tool for list_tools.
+// ToolInfo describes one registered tool for list_tools. Group and Caps are
+// the Command Atlas axes (pkg/atlas): the functional group and the agentic
+// capability flags; both are additive and omitted when the atlas has no
+// entry for the name.
 type ToolInfo struct {
-	Name     string `json:"name" jsonschema:"command name as spelled on the CLI"`
-	Synopsis string `json:"synopsis" jsonschema:"one-line description"`
-	Usage    string `json:"usage" jsonschema:"usage line"`
+	Name     string   `json:"name" jsonschema:"command name as spelled on the CLI"`
+	Synopsis string   `json:"synopsis" jsonschema:"one-line description"`
+	Usage    string   `json:"usage" jsonschema:"usage line"`
+	Group    string   `json:"group,omitempty" jsonschema:"Command Atlas functional group (fileutils, textutils, code-intel, …)"`
+	Caps     []string `json:"caps,omitempty" jsonschema:"Command Atlas capability flags (json, read-only, destructive, …)"`
 }
 
 // ListToolsInput is empty — list_tools takes no arguments.
@@ -123,7 +129,11 @@ func listToolsHandler(_ context.Context, _ *mcpsdk.CallToolRequest, _ ListToolsI
 		if t == nil {
 			continue
 		}
-		infos = append(infos, ToolInfo{Name: t.Name, Synopsis: t.Synopsis, Usage: t.Usage})
+		info := ToolInfo{Name: t.Name, Synopsis: t.Synopsis, Usage: t.Usage}
+		if e, ok := atlas.Lookup(t.Name); ok {
+			info.Group, info.Caps = e.Group, e.Caps
+		}
+		infos = append(infos, info)
 	}
 	return nil, ListToolsOutput{Tools: infos}, nil
 }
