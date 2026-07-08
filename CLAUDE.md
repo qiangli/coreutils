@@ -187,9 +187,11 @@ error; `tool/abbrev_test.go`), and the contract error
 helpers (UsageError, NotSupported). `cmds/<name>/` is one package per
 command (`package <name>cmd`), init-registered; `cmds/all` blank-
 imports the full set (135 commands — `cmds/all/all.go` is the shipped
-inventory, `docs/commands.md` the plan; keep both in sync when adding a
-tool); shared engines live under `cmds/internal/` (`hashenc` —
-checksums/encodings; `session` — utmp session records for
+inventory, `docs/commands.md` the plan, and `pkg/atlas` the Command
+Atlas metadata table (group/tier/caps per command; its coverage test
+fails by name if a registered tool lacks an entry); keep all three in
+sync when adding a tool); shared engines live under `cmds/internal/`
+(`hashenc` — checksums/encodings; `session` — utmp session records for
 who/users/pinky).
 `cmd/coreutils` is the multicall binary (argv[0] dispatch +
 `coreutils <tool>`). Two commands are deliberately NOT in `cmds/all`:
@@ -383,7 +385,12 @@ client-side git through `coreutils/git` (pure-Go-first, host-git fallback).
   qiangli/* deps; see the dhnt umbrella CLAUDE.md).
 - New tools land with: implementation + table tests + a `--help` text +
   README catalog line. Cross-platform CI (ubuntu/macos/windows) must pass —
-  the windows leg is the product, not an afterthought.
+  the windows leg is the product, not an afterthought. Catch its compile
+  breaks BEFORE pushing: `bashy dag crossvet` (GOOS=windows/linux/darwin
+  `go vet` over the CI scope — vet cross-typechecks tests too, no Windows
+  box needed), enforced automatically once the committed hook is installed:
+  `git config core.hooksPath scripts/hooks`. The recurring offender is a
+  unix-only type (`syscall.Stat_t` etc.) in an untagged `_test.go`.
 - Dependency budget is deliberately tight: go-git (for `git/`), pflag, and
   the stdlib for the userland core. The AgentOS hub adds deps **used only
   by the packages that need them** (per-import compilation keeps them out

@@ -3,13 +3,11 @@ package chgrpcmd
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
@@ -270,14 +268,11 @@ func TestChgrpDereference(t *testing.T) {
 		t.Fatalf("chgrp symlink (dereference): code=%d err=%q", code, errb)
 	}
 	_ = out
-	fi, err := os.Stat(filepath.Join(dir, "target"))
-	if err != nil {
+	// The dereference target's resulting gid is platform-specific to read
+	// (syscall.Stat_t is unix-only and would break the windows vet/compile);
+	// exit code 0 + empty stderr above is the portable assertion.
+	if _, err := os.Stat(filepath.Join(dir, "target")); err != nil {
 		t.Fatal(err)
-	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if ok {
-		wantGid := fmt.Sprintf("%d", st.Gid)
-		_ = wantGid
 	}
 }
 

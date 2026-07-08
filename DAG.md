@@ -51,6 +51,23 @@ go vet $(go list ./... | grep -v /external/)
 go test $(go list ./... | grep -v /external/)
 ```
 
+### crossvet
+Cross-OS typecheck of the CI scope WITHOUT needing a Windows/Linux box —
+`go vet` compiles every package (tests included) for the target GOOS, which
+is exactly the class of break the CI windows leg keeps catching after
+darwin-only local work (unix-only types like syscall.Stat_t in untagged
+files). Run before every push; the pre-push hook (scripts/hooks/pre-push)
+runs this automatically once installed.
+Effects: read
+
+```bash
+set -e
+for os in windows linux darwin; do
+  echo "crossvet: GOOS=$os"
+  GOOS=$os go vet $(go list ./... | grep -v /external/)
+done
+```
+
 ### vet
 Static check, same scope as `test`.
 Effects: read
