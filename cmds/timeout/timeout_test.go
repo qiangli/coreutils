@@ -3,6 +3,8 @@ package timeoutcmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -92,18 +94,26 @@ func TestTimeoutHelpAndVersion(t *testing.T) {
 }
 
 func TestTimeoutShortOptionSurface(t *testing.T) {
+	// A no-op COMMAND that exists per platform: /bin/true has no windows
+	// counterpart, so use cmd.exe there.
+	env := []string{"PATH=/bin:/usr/bin"}
+	noop := []string{"true"}
+	if runtime.GOOS == "windows" {
+		env = []string{"PATH=" + os.Getenv("PATH")}
+		noop = []string{"cmd", "/c", "exit 0"}
+	}
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx: context.Background(),
 		Dir: t.TempDir(),
-		Env: []string{"PATH=/bin:/usr/bin"},
+		Env: env,
 		Stdio: tool.Stdio{
 			In:  strings.NewReader(""),
 			Out: &out,
 			Err: &errb,
 		},
 	}
-	code := cmd.Run(rc, []string{"-f", "-p", "-s", "TERM", "-k", "1s", "1s", "true"})
+	code := cmd.Run(rc, append([]string{"-f", "-p", "-s", "TERM", "-k", "1s", "1s"}, noop...))
 	if code != 0 || errb.String() != "" {
 		t.Fatalf("short options: code=%d out=%q err=%q", code, out.String(), errb.String())
 	}

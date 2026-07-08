@@ -414,7 +414,13 @@ func TestTimeWords(t *testing.T) {
 	if defOut, _, _ := runToolAt(t, dir, "-l", "f"); defOut != outs["mtime"] {
 		t.Errorf("ls -l = %q, want the --time=mtime output %q", defOut, outs["mtime"])
 	}
-	if strings.Contains(outs["ctime"], "2019") || strings.Contains(outs["ctime"], "2020") {
+	if runtime.GOOS == "windows" {
+		// No POSIX status-change time on Windows; ctime maps to the last
+		// write time (documented platform note in times_windows.go).
+		if !strings.Contains(outs["ctime"], "2020") {
+			t.Errorf("ls --time=ctime = %q, want the mtime mapping on windows", outs["ctime"])
+		}
+	} else if strings.Contains(outs["ctime"], "2019") || strings.Contains(outs["ctime"], "2020") {
 		t.Errorf("ls --time=ctime = %q, want a status-change time distinct from atime/mtime", outs["ctime"])
 	}
 

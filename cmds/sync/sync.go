@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"runtime"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -72,10 +73,17 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func syncFile(path string) error {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	// Windows FlushFileBuffers requires a WRITABLE handle — a read-only
+	// open succeeds but Sync then fails with Access denied, so try RDWR
+	// first there. Unix keeps the GNU order: read-only, write-only fallback.
+	flags := []int{os.O_RDONLY, os.O_WRONLY}
+	if runtime.GOOS == "windows" {
+		flags = []int{os.O_RDWR, os.O_RDONLY}
+	}
+	f, err := os.OpenFile(path, flags[0], 0)
 	if err != nil {
 		var werr error
-		if f, werr = os.OpenFile(path, os.O_WRONLY, 0); werr != nil {
+		if f, werr = os.OpenFile(path, flags[1], 0); werr != nil {
 			return err
 		}
 	}

@@ -110,7 +110,7 @@ func (r *rm) remove1(op string) bool {
 }
 
 func isNonEmpty(err error) bool {
-	return errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)
+	return errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) || isNonEmptySys(err)
 }
 
 func (r *rm) errf(format string, a ...any) {

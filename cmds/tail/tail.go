@@ -195,9 +195,15 @@ func tailFollow(rc *tool.RunContext, w *bufio.Writer, fo followOpts) error {
 	if err != nil {
 		return err
 	}
-	if f != nil {
-		defer f.Close()
-	}
+	// Closure, not `defer f.Close()`: the follow loop reopens the file on
+	// rotation/max-unchanged-stats, and a plain defer would close only the
+	// ORIGINAL handle — leaking the current one on ctx cancel (Windows then
+	// can't delete the still-open file).
+	defer func() {
+		if f != nil {
+			f.Close()
+		}
+	}()
 
 	if f != nil {
 		if err := tailStream(f, w, fo.bytesMode, fo.count, fo.fromStart, fo.lineEnd); err != nil {

@@ -28,7 +28,7 @@ func TestMkfifoCreatesFIFO(t *testing.T) {
 	dir := t.TempDir()
 	out, errb, code := runTool(t, dir, "pipe")
 	if runtime.GOOS == "windows" {
-		if code != 1 || !strings.Contains(errb, "not supported") {
+		if code != 1 || !strings.Contains(strings.ToLower(errb), "not supported") {
 			t.Fatalf("windows mkfifo: code=%d err=%q", code, errb)
 		}
 		return

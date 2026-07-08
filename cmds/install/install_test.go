@@ -145,7 +145,8 @@ func TestInstallTargetDirectoryMustExistWithoutD(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "x")
 	_, errb, code := runTool(t, dir, "-t", "missing", "src")
-	if code != 1 || !strings.Contains(errb, "cannot create regular file 'missing/src'") {
+	want := "cannot create regular file '" + filepath.Join("missing", "src") + "'"
+	if code != 1 || !strings.Contains(errb, want) {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "missing")); !os.IsNotExist(statErr) {

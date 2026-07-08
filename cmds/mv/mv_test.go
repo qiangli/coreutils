@@ -203,7 +203,7 @@ func TestMvDebugStripTrailingSlashesContextAndShortBackup(t *testing.T) {
 	if code != 0 || out != "" {
 		t.Fatalf("mv debug/backups: code=%d out=%q err=%q", code, out, errb)
 	}
-	if !strings.Contains(errb, "mv: debug: renamed 'src' -> 'dst/src'") {
+	if !strings.Contains(errb, "mv: debug: renamed 'src' -> '"+filepath.Join("dst", "src")+"'") {
 		t.Fatalf("missing debug diagnostic: %q", errb)
 	}
 	if read(t, filepath.Join(dir, "dst", "src", "file")) != "x" {

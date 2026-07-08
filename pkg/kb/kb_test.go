@@ -298,6 +298,8 @@ func TestIndexOrdering(t *testing.T) {
 func TestFederatedSearch(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads %USERPROFILE% on windows, not HOME.
+	t.Setenv("USERPROFILE", home)
 	repo := filepath.Join(home, "src", "myrepo")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)

@@ -542,7 +542,13 @@ func TestTimeWords(t *testing.T) {
 	if mtimeOut, _, code := runToolAt(t, dir, "--time", style, "f"); code != 0 || !strings.Contains(mtimeOut, "2020-03-04") {
 		t.Errorf("du --time = (%q, %d), want the 2020-03-04 modification time", mtimeOut, code)
 	}
-	if strings.Contains(ctimeOut, "2019-05-06") || strings.Contains(ctimeOut, "2020-03-04") {
+	if runtime.GOOS == "windows" {
+		// No POSIX status-change time on Windows; ctime maps to the last
+		// write time (documented platform note in times_windows.go).
+		if !strings.Contains(ctimeOut, "2020-03-04") {
+			t.Errorf("du --time=ctime = %q, want the mtime mapping on windows", ctimeOut)
+		}
+	} else if strings.Contains(ctimeOut, "2019-05-06") || strings.Contains(ctimeOut, "2020-03-04") {
 		t.Errorf("du --time=ctime = %q, want a status-change time distinct from atime/mtime", ctimeOut)
 	}
 }

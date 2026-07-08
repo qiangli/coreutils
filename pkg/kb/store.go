@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -146,7 +147,21 @@ func atomicWrite(path string, data []byte) error {
 		os.Remove(name)
 		return err
 	}
-	return os.Rename(name, path)
+	err = os.Rename(name, path)
+	// Windows rename-over-existing fails with a sharing violation while any
+	// concurrent reader/writer holds the target open; the window is brief,
+	// so retry with backoff instead of failing the lock-free write model.
+	if err != nil && runtime.GOOS == "windows" {
+		for i := 0; i < 50 && err != nil; i++ {
+			time.Sleep(10 * time.Millisecond)
+			err = os.Rename(name, path)
+		}
+	}
+	if err != nil {
+		os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 // journalRecord is one appended mutation line — provenance for the audit

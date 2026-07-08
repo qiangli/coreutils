@@ -106,12 +106,16 @@ func TestShredNewFlags(t *testing.T) {
 		t.Fatalf("shred --exact: first 6 bytes not zeroed: %x", got2[:6])
 	}
 
-	// --random-source with /dev/zero: predictable zeros
+	// --random-source with a created zeros file: predictable bytes, and it
+	// also runs on windows (no /dev/zero there).
 	path3 := filepath.Join(dir, "file3")
 	if err := os.WriteFile(path3, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _, code = runTool(t, dir, "-n", "1", "--random-source", "/dev/zero", "file3")
+	if err := os.WriteFile(filepath.Join(dir, "zeros"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, code = runTool(t, dir, "-n", "1", "--random-source", "zeros", "file3")
 	if code != 0 {
 		t.Fatalf("shred --random-source: code=%d", code)
 	}

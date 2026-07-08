@@ -28,7 +28,7 @@ func TestMknodCreatesFIFO(t *testing.T) {
 	dir := t.TempDir()
 	out, errb, code := runTool(t, dir, "pipe", "p")
 	if runtime.GOOS == "windows" {
-		if code != 1 || !strings.Contains(errb, "not supported") {
+		if code != 1 || !strings.Contains(strings.ToLower(errb), "not supported") {
 			t.Fatalf("windows mknod p: code=%d err=%q", code, errb)
 		}
 		return
