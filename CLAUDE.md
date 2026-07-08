@@ -290,7 +290,15 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   collective memory of all agents on the host across all repos;
   reconcile-on-write, supersede-not-delete, candidate→validated ladder;
   weave/foreman auto-inject its top matches at spawn — see
-  dhnt/docs/kb-host-knowledge-base-design.md), `pkg/chat` + `pkg/ollm` (agent chat / Ollama
+  dhnt/docs/kb-host-knowledge-base-design.md. The `sources` + `transfer`
+  verbs structure agent-to-agent knowledge transfer: `sources` probes the
+  private-memory stores on the host (Claude memory / ycode memex / weave
+  memory / repo graph — best-effort, read-only), `transfer` prints the
+  retro-shaped checklist (sources + `xfer:<source>` tag counts + related
+  pages + literal commands); both write NOTHING — the hard rule "kb reads
+  foreign stores, never writes them" is pinned by tests, and the judgment
+  half lives in bashy's embedded `knowledge-transfer` skill — see
+  dhnt/docs/kb-knowledge-transfer-design.md), `pkg/chat` + `pkg/ollm` (agent chat / Ollama
   client isolation), `pkg/browser` + `pkg/webinspect` (chromedp-backed
   browser sessions for `cmds/browser`/`fetch`), `pkg/coopauth` (the ONE
   shared cloudbox/outpost cooperative-auth impl), `pkg/bre` (POSIX BRE →

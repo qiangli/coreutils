@@ -61,6 +61,8 @@ phrase it as "what + WHEN this applies" with trigger keywords.`,
 	cmd.AddCommand(newSupersedeCmd(&dir))
 	cmd.AddCommand(newValidateCmd(&dir))
 	cmd.AddCommand(newRetroCmd(&dir))
+	cmd.AddCommand(newSourcesCmd(&dir))
+	cmd.AddCommand(newTransferCmd(&dir))
 	cmd.AddCommand(newListCmd(&dir))
 	cmd.AddCommand(newIndexCmd(&dir))
 	cmd.AddCommand(newLogCmd(&dir))
