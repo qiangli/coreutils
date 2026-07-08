@@ -405,7 +405,7 @@ func TestTimeStyle(t *testing.T) {
 	if err := os.Chtimes(p, ts, ts); err != nil {
 		t.Fatal(err)
 	}
-	out, _, code := runToolAt(t, dir, "-b", "--time=mtime", "--time-style=+%Y-%m-%d", "f")
+	out, _, code := runToolAt(t, dir, "-b", "--time", "--time-style=+%Y-%m-%d", "f")
 	if code != 0 || out != "5\t2020-03-04\tf\n" {
 		t.Errorf("du --time --time-style = (%q, %d)", out, code)
 	}
@@ -496,5 +496,53 @@ func TestHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, "-V")
 	if code != 0 || !strings.Contains(out, "du") {
 		t.Errorf("-V: code=%d out=%q", code, out)
+	}
+}
+
+func TestTimeWords(t *testing.T) {
+	dir := t.TempDir()
+	p := write(t, dir, "f", "hello")
+	atime := time.Date(2019, 5, 6, 7, 8, 9, 0, time.Local)
+	mtime := time.Date(2020, 3, 4, 5, 6, 7, 0, time.Local)
+	if err := os.Chtimes(p, atime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	// GNU du accepts exactly atime/access/use and ctime/status.
+	for _, w := range []string{"atime", "access", "use", "ctime", "status"} {
+		if out, errb, code := runToolAt(t, dir, "--time="+w, "f"); code != 0 || errb != "" {
+			t.Errorf("du --time=%s = (%q, %q, %d), want code 0", w, out, errb, code)
+		}
+	}
+	// mtime is du's wordless default, not an accepted word (unlike ls);
+	// birth/creation is a uutils extension du must not grow.
+	for _, w := range []string{"mtime", "modification", "birth", "creation", "bogus"} {
+		if _, errb, code := runToolAt(t, dir, "--time="+w, "f"); code != 2 || !strings.Contains(errb, "--time="+w) {
+			t.Errorf("du --time=%s = (%q, %d), want exit 2 naming the word", w, errb, code)
+		}
+	}
+
+	// Synonyms select the same field: byte-identical output.
+	style := "--time-style=+%F %T"
+	atimeOut, _, _ := runToolAt(t, dir, "--time=atime", style, "f")
+	for _, w := range []string{"access", "use"} {
+		if out, _, _ := runToolAt(t, dir, "--time="+w, style, "f"); out != atimeOut {
+			t.Errorf("du --time=%s = %q, want --time=atime output %q", w, out, atimeOut)
+		}
+	}
+	ctimeOut, _, _ := runToolAt(t, dir, "--time=ctime", style, "f")
+	if out, _, _ := runToolAt(t, dir, "--time=status", style, "f"); out != ctimeOut {
+		t.Errorf("du --time=status = %q, want --time=ctime output %q", out, ctimeOut)
+	}
+
+	// The field really is selected, never approximated by mtime.
+	if !strings.Contains(atimeOut, "2019-05-06") {
+		t.Errorf("du --time=atime = %q, want the 2019-05-06 access time", atimeOut)
+	}
+	if mtimeOut, _, code := runToolAt(t, dir, "--time", style, "f"); code != 0 || !strings.Contains(mtimeOut, "2020-03-04") {
+		t.Errorf("du --time = (%q, %d), want the 2020-03-04 modification time", mtimeOut, code)
+	}
+	if strings.Contains(ctimeOut, "2019-05-06") || strings.Contains(ctimeOut, "2020-03-04") {
+		t.Errorf("du --time=ctime = %q, want a status-change time distinct from atime/mtime", ctimeOut)
 	}
 }
