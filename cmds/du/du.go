@@ -50,6 +50,7 @@ type duRun struct {
 	separateDirs  bool
 	oneFileSystem bool
 	showTime      bool
+	timeSel       timeSel
 	timeStyle     string
 	block         int64
 	maxDepth      int
@@ -76,8 +77,35 @@ type duEntry struct {
 	dir  bool
 }
 
+// timeSel is the timestamp field selected by --time. GNU du accepts
+// exactly atime/access/use and ctime/status as words; mtime is the
+// wordless default and — unlike ls — NOT an accepted word.
+type timeSel int
+
+const (
+	timeMtime timeSel = iota
+	timeAtime
+	timeCtime
+)
+
 func run(rc *tool.RunContext, args []string) int {
 	args = normalizeBlockSizeArgs(args)
+	// --time takes an optional word, so pflag never consumes a separate
+	// value argument; every explicit word arrives as --time=WORD. GNU
+	// validates each occurrence, so pre-scan them all (a bare --time
+	// parses as the internal "mtime" default and stays valid).
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if w, ok := strings.CutPrefix(a, "--time="); ok {
+			switch w {
+			case "atime", "access", "use", "ctime", "status":
+			default:
+				return tool.UsageError(rc, cmd, "unsupported --time=%s", w)
+			}
+		}
+	}
 	fs := tool.NewFlags(cmd.Name)
 	all := fs.BoolP("all", "a", false, "write counts for all files, not just directories")
 	apparentSize := fs.BoolP("apparent-size", "A", false, "print apparent sizes, rather than disk usage")
@@ -97,7 +125,7 @@ func run(rc *tool.RunContext, args []string) int {
 	separateDirs := fs.BoolP("separate-dirs", "S", false, "for directories do not include size of subdirectories")
 	oneFileSystem := fs.BoolP("one-file-system", "x", false, "skip directories on different file systems")
 	thresholdArg := fs.StringP("threshold", "t", "", "exclude entries smaller than SIZE if positive, or greater than SIZE if negative")
-	showTime := fs.String("time", "", "show time of the last modification of any file in the directory")
+	showTime := fs.String("time", "", "show time of the last modification of any file in the directory, or WORD: atime/access/use, ctime/status")
 	if f := fs.Lookup("time"); f != nil {
 		f.NoOptDefVal = "mtime"
 	}
@@ -139,12 +167,17 @@ func run(rc *tool.RunContext, args []string) int {
 	if fs.Changed("time-style") && !fs.Changed("time") {
 		*showTime = "mtime"
 	}
-	if fs.Changed("time") {
-		switch *showTime {
-		case "", "mtime", "modification", "modify":
-		default:
-			return tool.UsageError(rc, cmd, "unsupported --time=%s", *showTime)
-		}
+	// Explicit --time=WORD forms were validated by the pre-scan above;
+	// the only other reachable value is the bare --time "mtime" default.
+	sel := timeMtime
+	switch *showTime {
+	case "atime", "access", "use":
+		sel = timeAtime
+	case "ctime", "status":
+		sel = timeCtime
+	}
+	if sel != timeMtime && !haveSysTimes {
+		return tool.NotSupported(rc, cmd, "--time="+*showTime+" on this platform")
 	}
 	if fs.Changed("time-style") {
 		if err := validateTimeStyle(*timeStyle); err != nil {
@@ -223,6 +256,7 @@ func run(rc *tool.RunContext, args []string) int {
 		separateDirs:  *separateDirs,
 		oneFileSystem: *oneFileSystem,
 		showTime:      fs.Changed("time") || fs.Changed("time-style"),
+		timeSel:       sel,
 		timeStyle:     *timeStyle,
 		block:         block,
 		maxDepth:      depth,
@@ -307,7 +341,7 @@ func (d *duRun) walk(display, full string, depth int, rootDev *uint64) (duEntry,
 		if d.inodes || !d.apparent {
 			total = d.amount(fi)
 		}
-		mod := fi.ModTime()
+		mod := d.fileTime(fi)
 		ents, rerr := os.ReadDir(full)
 		if rerr != nil {
 			fmt.Fprintf(d.rc.Err, "du: cannot read directory '%s': %s\n", display, errMsg(rerr))
@@ -329,12 +363,25 @@ func (d *duRun) walk(display, full string, depth int, rootDev *uint64) (duEntry,
 		return duEntry{}, true
 	}
 	total := d.amount(fi)
+	ft := d.fileTime(fi)
 	// File operands are always reported; files inside the tree only
 	// with --all (and within the depth limit).
 	if depth == 0 || (d.all && depth <= d.maxDepth) {
-		d.print(total, display, fi.ModTime())
+		d.print(total, display, ft)
 	}
-	return duEntry{size: total, mod: fi.ModTime()}, true
+	return duEntry{size: total, mod: ft}, true
+}
+
+// fileTime returns fi's timestamp for the --time field in effect. The
+// non-mtime selectors were gated on haveSysTimes at parse time, so the
+// mtime fallback here is unreachable on supported platforms.
+func (d *duRun) fileTime(fi os.FileInfo) time.Time {
+	if d.timeSel != timeMtime {
+		if t, ok := sysTime(fi, d.timeSel); ok {
+			return t
+		}
+	}
+	return fi.ModTime()
 }
 
 func (d *duRun) stat(full string, root bool) (os.FileInfo, error) {

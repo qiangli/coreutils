@@ -368,3 +368,108 @@ func TestHumanSize(t *testing.T) {
 		}
 	}
 }
+
+func TestTimeWords(t *testing.T) {
+	dir := t.TempDir()
+	p := write(t, dir, "f", "x")
+	atime := time.Date(2019, 5, 6, 7, 8, 9, 0, time.Local)
+	mtime := time.Date(2020, 3, 4, 5, 6, 7, 0, time.Local)
+	if err := os.Chtimes(p, atime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	// GNU ls accepts all four field families as --time words.
+	words := []string{"atime", "access", "use", "ctime", "status", "mtime", "modification", "birth", "creation"}
+	outs := map[string]string{}
+	for _, w := range words {
+		out, errb, code := runToolAt(t, dir, "-l", "--time="+w, "f")
+		if code != 0 {
+			t.Fatalf("ls -l --time=%s = (%q, %q, %d), want code 0", w, out, errb, code)
+		}
+		outs[w] = out
+	}
+	if _, errb, code := runToolAt(t, dir, "-l", "--time=bogus", "f"); code != 2 || !strings.Contains(errb, "--time=bogus") {
+		t.Errorf("ls --time=bogus = (%q, %d), want exit 2 naming the word", errb, code)
+	}
+
+	// Synonyms select the same field: byte-identical output.
+	for _, syn := range [][2]string{
+		{"atime", "access"}, {"atime", "use"},
+		{"ctime", "status"},
+		{"mtime", "modification"},
+		{"birth", "creation"},
+	} {
+		if outs[syn[0]] != outs[syn[1]] {
+			t.Errorf("ls --time=%s = %q, want --time=%s output %q", syn[1], outs[syn[1]], syn[0], outs[syn[0]])
+		}
+	}
+
+	// The field really is selected, never approximated by mtime.
+	if !strings.Contains(outs["atime"], "2019") {
+		t.Errorf("ls --time=atime = %q, want the 2019 access time", outs["atime"])
+	}
+	if !strings.Contains(outs["mtime"], "2020") {
+		t.Errorf("ls --time=mtime = %q, want the 2020 modification time", outs["mtime"])
+	}
+	if defOut, _, _ := runToolAt(t, dir, "-l", "f"); defOut != outs["mtime"] {
+		t.Errorf("ls -l = %q, want the --time=mtime output %q", defOut, outs["mtime"])
+	}
+	if strings.Contains(outs["ctime"], "2019") || strings.Contains(outs["ctime"], "2020") {
+		t.Errorf("ls --time=ctime = %q, want a status-change time distinct from atime/mtime", outs["ctime"])
+	}
+
+	// -u and -c are the short spellings of atime and ctime.
+	if out, _, _ := runToolAt(t, dir, "-lu", "f"); out != outs["atime"] {
+		t.Errorf("ls -lu = %q, want the --time=atime output %q", out, outs["atime"])
+	}
+	if out, _, _ := runToolAt(t, dir, "-lc", "f"); out != outs["ctime"] {
+		t.Errorf("ls -lc = %q, want the --time=ctime output %q", out, outs["ctime"])
+	}
+	// -c/-u/--time all set one selector; the last occurrence wins (GNU).
+	if out, _, _ := runToolAt(t, dir, "-l", "-u", "--time=ctime", "f"); out != outs["ctime"] {
+		t.Errorf("ls -l -u --time=ctime = %q, want the ctime output %q", out, outs["ctime"])
+	}
+	if out, _, _ := runToolAt(t, dir, "-l", "--time=ctime", "-u", "f"); out != outs["atime"] {
+		t.Errorf("ls -l --time=ctime -u = %q, want the atime output %q", out, outs["atime"])
+	}
+}
+
+func TestTimeWordSorting(t *testing.T) {
+	dir := t.TempDir()
+	mt := time.Date(2022, 1, 1, 0, 0, 0, 0, time.Local)
+	pa := write(t, dir, "aa", "x")
+	pb := write(t, dir, "bb", "x")
+	if err := os.Chtimes(pa, time.Date(2020, 1, 1, 0, 0, 0, 0, time.Local), mt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(pb, time.Date(2025, 1, 1, 0, 0, 0, 0, time.Local), mt); err != nil {
+		t.Fatal(err)
+	}
+
+	// GNU: a non-mtime field with no explicit sort choice sorts the
+	// short-format listing by that field, newest first...
+	for _, args := range [][]string{{"--time=atime"}, {"-u"}} {
+		if out, _, code := runToolAt(t, dir, args...); code != 0 || out != "bb\naa\n" {
+			t.Errorf("ls %v = (%q, %d), want access-time order bb,aa", args, out, code)
+		}
+	}
+	// ...an explicit sort choice wins...
+	if out, _, code := runToolAt(t, dir, "--time=atime", "--sort=name"); code != 0 || out != "aa\nbb\n" {
+		t.Errorf("ls --time=atime --sort=name = (%q, %d), want name order", out, code)
+	}
+	// ...and a long listing stays name-sorted while showing the field.
+	out, _, code := runToolAt(t, dir, "-lu")
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if code != 0 || len(lines) != 3 ||
+		!strings.Contains(lines[1], "aa") || !strings.Contains(lines[1], "2020") ||
+		!strings.Contains(lines[2], "bb") || !strings.Contains(lines[2], "2025") {
+		t.Errorf("ls -lu = (%q, %d), want name order with access times shown", out, code)
+	}
+	// -lt with -u sorts by, and shows, the access time.
+	out, _, code = runToolAt(t, dir, "-ltu")
+	lines = strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if code != 0 || len(lines) != 3 ||
+		!strings.Contains(lines[1], "bb") || !strings.Contains(lines[2], "aa") {
+		t.Errorf("ls -ltu = (%q, %d), want access-time order bb,aa", out, code)
+	}
+}

@@ -50,8 +50,20 @@ type options struct {
 	unsorted, sortExtension, sortVersion     bool
 	groupDirsFirst                           bool
 	literal, quoteName, escape               bool
+	timeSel                                  timeSel
 	hide, ignore                             []string
 }
+
+// timeSel is the timestamp field shown in -l and used for time
+// sorting, selected by --time=WORD, -c, or -u.
+type timeSel int
+
+const (
+	selMtime timeSel = iota
+	selAtime
+	selCtime
+	selBirth
+)
 
 // sysInfo is the platform-dependent slice of an entry's metadata,
 // filled by sysOf in sys_unix.go / sys_windows.go.
@@ -66,7 +78,8 @@ type entry struct {
 	name   string // display name
 	path   string // resolved path for stat operations
 	info   os.FileInfo
-	target string // symlink target, filled only for -l
+	tm     time.Time // the --time/-c/-u-selected timestamp
+	target string    // symlink target, filled only for -l
 }
 
 // GetFlagSet returns the FlagSet containing all ls options, configured with the given command name.
@@ -107,7 +120,7 @@ func GetFlagSet(name string) *pflag.FlagSet {
 	fs.String("hyperlink", "never", "control hyperlink output; accepted for compatibility")
 	fs.IntP("width", "w", 0, "set output width; accepted for compatibility")
 	fs.IntP("tabsize", "T", 8, "set tab stops; accepted for compatibility")
-	fs.String("time", "", "select timestamp field; mtime, atime/access/use, ctime/status")
+	fs.String("time", "", "select timestamp field: mtime/modification, atime/access/use, ctime/status, birth/creation")
 	fs.String("time-style", "", "set time style for -l; full-iso supported")
 	fs.Bool("full-time", false, "like -l --time-style=full-iso")
 	fs.String("block-size", "", "scale block counts; supports 1, K, KB")
@@ -231,9 +244,6 @@ func run(rc *tool.RunContext, args []string) int {
 	if short['f'] > 0 {
 		opt.all, opt.unsorted = true, true
 	}
-	if short['c'] > 0 || short['u'] > 0 {
-		opt.sortTime = true
-	}
 	if short['C'] > 0 || short['x'] > 0 {
 		// Column and row formats collapse to the existing deterministic
 		// single-column output for non-interactive tool invocations.
@@ -306,17 +316,37 @@ func run(rc *tool.RunContext, args []string) int {
 		// These modes are handled in the command-line symlink decision below.
 	}
 	switch timeField {
-	case "", "mtime", "modification":
-	case "atime", "access", "use":
-		// Portable os.FileInfo only exposes mtime; accept the selector but keep
-		// mtime rather than silently reaching for platform globals.
-	case "ctime", "status":
-		opt.sortTime = true
+	case "", "mtime", "modification", "atime", "access", "use",
+		"ctime", "status", "birth", "creation":
 	default:
 		return tool.UsageError(rc, cmd, "unsupported --time=%s", timeField)
 	}
+	// -c, -u, and --time=WORD all set the same timestamp selector; the
+	// last occurrence wins (GNU).
+	switch lastTimeSelector(args) {
+	case 'c':
+		opt.timeSel = selCtime
+	case 'u':
+		opt.timeSel = selAtime
+	case 'T':
+		switch timeField {
+		case "atime", "access", "use":
+			opt.timeSel = selAtime
+		case "ctime", "status":
+			opt.timeSel = selCtime
+		case "birth", "creation":
+			opt.timeSel = selBirth
+		}
+	}
 	if fullTime {
 		opt.long = true
+	}
+	// GNU: a non-mtime timestamp with no explicit sort choice sorts a
+	// short-format listing by that timestamp, newest first.
+	sortExplicit := short['t'] > 0 || short['S'] > 0 || short['U'] > 0 ||
+		short['X'] > 0 || short['v'] > 0 || short['f'] > 0 || fs.Changed("sort")
+	if !sortExplicit && !opt.long && opt.timeSel != selMtime {
+		opt.sortTime = true
 	}
 	// GNU last-one-wins pairs: -a vs -A and -t vs -S each set a single
 	// internal mode, so the later occurrence wins.
@@ -358,6 +388,7 @@ func run(rc *tool.RunContext, args []string) int {
 				e.info = ti
 			}
 		}
+		e.tm = l.entryTime(e)
 		if isDir && !opt.dirOnly {
 			dirs = append(dirs, e)
 			continue
@@ -395,6 +426,34 @@ func (l *lister) fail(code int, format string, a ...any) {
 	}
 }
 
+// entryTime resolves the selected timestamp field for display and time
+// sorting. A field the platform or filesystem cannot provide is
+// reported loudly (never approximated by mtime) and renders as the
+// zero time.
+func (l *lister) entryTime(e entry) time.Time {
+	if l.opt.timeSel == selMtime {
+		return e.info.ModTime()
+	}
+	t, err := sysTime(e.info, e.path, l.opt.timeSel)
+	if err != nil {
+		l.fail(1, "cannot determine %s time of '%s': %s", timeSelName(l.opt.timeSel), e.name, errMsg(err))
+		return time.Time{}
+	}
+	return t
+}
+
+func timeSelName(sel timeSel) string {
+	switch sel {
+	case selAtime:
+		return "access"
+	case selCtime:
+		return "status change"
+	case selBirth:
+		return "birth"
+	}
+	return "modification"
+}
+
 func (l *lister) listDir(display, full string, header bool) {
 	if l.wrote {
 		fmt.Fprintln(l.rc.Out)
@@ -417,7 +476,9 @@ func (l *lister) listDir(display, full string, header bool) {
 				p = filepath.Join(full, "..")
 			}
 			if fi, ferr := os.Stat(p); ferr == nil {
-				ents = append(ents, entry{name: dot, path: p, info: fi})
+				e := entry{name: dot, path: p, info: fi}
+				e.tm = l.entryTime(e)
+				ents = append(ents, e)
 			}
 		}
 	}
@@ -439,6 +500,7 @@ func (l *lister) listDir(display, full string, header bool) {
 		if l.opt.long && fi.Mode()&os.ModeSymlink != 0 {
 			e.target, _ = os.Readlink(p)
 		}
+		e.tm = l.entryTime(e)
 		ents = append(ents, e)
 	}
 	sortEntries(ents, l.opt)
@@ -507,7 +569,7 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 			group:  sys.group,
 			blocks: strconv.FormatUint((sys.blocks512+1)/2, 10),
 			size:   sizeString(e.info, sys, opt.human),
-			mtime:  timeString(e.info.ModTime(), now),
+			mtime:  timeString(e.tm, now),
 			name:   displayName(e, opt),
 		}
 		if e.info.Mode()&os.ModeSymlink != 0 {
@@ -679,7 +741,7 @@ func compareEntries(a, b entry, opt options) int {
 	}
 	switch {
 	case opt.sortTime:
-		at, bt := a.info.ModTime(), b.info.ModTime()
+		at, bt := a.tm, b.tm
 		if at.After(bt) {
 			return -1
 		}
@@ -811,6 +873,31 @@ func ExtractShort(args []string, chars string) ([]string, map[byte]int) {
 		rest = append(rest, a)
 	}
 	return rest, found
+}
+
+// lastTimeSelector scans args for the last of -c, -u, or --time,
+// returning 'c', 'u', 'T' (--time), or 0 when none is present;
+// scanning stops at the "--" terminator. Only which selector came last
+// matters: multiple --time values already resolve last-wins in pflag.
+func lastTimeSelector(args []string) byte {
+	var kind byte
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--time" || strings.HasPrefix(a, "--time=") {
+			kind = 'T'
+			continue
+		}
+		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
+			for j := 1; j < len(a); j++ {
+				if a[j] == 'c' || a[j] == 'u' {
+					kind = a[j]
+				}
+			}
+		}
+	}
+	return kind
 }
 
 // lastFlag returns the position (1-based, 0 = absent) of the last
