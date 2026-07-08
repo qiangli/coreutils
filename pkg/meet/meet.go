@@ -43,16 +43,31 @@ func drivability(name string) string {
 	return "installed"
 }
 
+// shellRouting reports whether a participant's shell commands will run through
+// bashy. The chat launcher force-injects SHELL/CLAUDE_CODE_SHELL + a PATH shim
+// into every spawned agent (on unless BASHY_FORCE_AGENT_SHELL=0), which covers
+// every agent EXCEPT codex — it reads the /etc/passwd login shell, not the
+// environment, so it needs `bashy install-agent codex` (chsh) instead.
+func shellRouting(name string) string {
+	if os.Getenv("BASHY_FORCE_AGENT_SHELL") == "0" {
+		return "shell: system (forcing disabled)"
+	}
+	if name == "codex" {
+		return "shell: ⚠ codex reads /etc/passwd — run `bashy install-agent codex` (chsh) to route via bashy"
+	}
+	return "shell: bashy ✓ (env-forced)"
+}
+
 func printPreview(w io.Writer, st *State) {
 	fmt.Fprintln(w, "meet: resolved session")
 	fmt.Fprintf(w, "  id           %s\n", st.ID)
-	fmt.Fprintf(w, "  secretary    %s  role=secretary (notes-only) — %s\n", st.Secretary, drivability(st.Secretary))
+	fmt.Fprintf(w, "  secretary    %s  role=secretary (notes-only) — %s · %s\n", st.Secretary, drivability(st.Secretary), shellRouting(st.Secretary))
 	for i, p := range st.Participants {
 		label := "participants"
 		if i > 0 {
 			label = "            "
 		}
-		fmt.Fprintf(w, "  %s %s  %s\n", label, p, drivability(p))
+		fmt.Fprintf(w, "  %s %s  %s · %s\n", label, p, drivability(p), shellRouting(p))
 	}
 	if len(st.Participants) == 0 {
 		fmt.Fprintln(w, "  participants (none)")

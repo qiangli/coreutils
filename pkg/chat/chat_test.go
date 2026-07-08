@@ -2,6 +2,8 @@ package chat
 
 import (
 	"context"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -91,5 +93,70 @@ func TestInvokeCodexDangerFullAccessIsNonInteractive(t *testing.T) {
 	}
 	if strings.Contains(got, "--sandbox") {
 		t.Fatalf("danger-full-access must not emit --sandbox: %#v", r.args)
+	}
+}
+
+func TestInvokeAiderHeadlessProfile(t *testing.T) {
+	// aider must be driven headlessly with --message (prompt appended as its
+	// value) + --yes-always + --no-git; bare `aider <prompt>` opens the TUI.
+	r := &fakeRunner{}
+	_, err := Invoke(context.Background(), Options{
+		Agent: "aider", Instruction: "review this",
+	}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(r.args, " ")
+	if !strings.Contains(got, "--yes-always") || !strings.Contains(got, "--no-git") {
+		t.Fatalf("aider headless flags missing: %#v", r.args)
+	}
+	if n := len(r.args); n < 2 || r.args[n-2] != "--message" || r.args[n-1] != "review this" {
+		t.Fatalf("prompt must be the --message value (last two args): %#v", r.args)
+	}
+}
+
+func TestForcedShellEnv(t *testing.T) {
+	base := []string{
+		"PATH=/usr/bin:/bin",
+		"HOME=/home/u",
+		"SHELL=/bin/zsh",             // should be replaced
+		"CLAUDE_CODE_SHELL=/bin/zsh", // should be replaced
+	}
+	got := forcedShellEnv(base, "/opt/bashy", "/shims")
+
+	find := func(prefix string) string {
+		var v string
+		n := 0
+		for _, kv := range got {
+			if strings.HasPrefix(kv, prefix) {
+				v = kv[len(prefix):]
+				n++
+			}
+		}
+		if n != 1 {
+			t.Fatalf("expected exactly one %q, found %d in %#v", prefix, n, got)
+		}
+		return v
+	}
+
+	if p := find("PATH="); p != "/shims"+string(os.PathListSeparator)+"/usr/bin:/bin" {
+		t.Fatalf("shim dir not prepended to PATH: %q", p)
+	}
+	if s := find("SHELL="); s != "/opt/bashy" {
+		t.Fatalf("SHELL not pinned to bashy: %q", s)
+	}
+	if s := find("CLAUDE_CODE_SHELL="); s != "/opt/bashy" {
+		t.Fatalf("CLAUDE_CODE_SHELL not pinned to bashy: %q", s)
+	}
+	if h := find("HOME="); h != "/home/u" {
+		t.Fatalf("unrelated var mangled: HOME=%q", h)
+	}
+}
+
+func TestForcedShellEnvNoShimNoPath(t *testing.T) {
+	// With no shim dir, PATH is left untouched and no PATH entry is invented.
+	got := forcedShellEnv([]string{"PATH=/usr/bin", "HOME=/h"}, "/opt/bashy", "")
+	if !slices.Contains(got, "PATH=/usr/bin") {
+		t.Fatalf("PATH should be unchanged when shimDir empty: %#v", got)
 	}
 }

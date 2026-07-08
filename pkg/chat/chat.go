@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -72,6 +73,19 @@ func (execRunner) Run(ctx context.Context, agent string, args []string, cwd stri
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	// Force the spawned agent to run its shell commands through bashy (this
+	// running binary) rather than the system shell — so the pure-Go userland,
+	// the space-time advisor, and OTel apply to every command the agent runs.
+	// Covers claude (CLAUDE_CODE_SHELL), aider/opencode ($SHELL), and agy and any
+	// bare-name `bash`/`sh`/`zsh` shell-out (PATH shim). codex reads /etc/passwd
+	// and is unreachable this way — see `bashy install-agent codex`. On by
+	// default; BASHY_FORCE_AGENT_SHELL=0 disables. cmd.Path is already resolved
+	// against the real PATH, so prepending the shim dir never shadows the agent.
+	if forceAgentShell() {
+		if bashy, err := os.Executable(); err == nil && bashy != "" {
+			cmd.Env = forcedShellEnv(os.Environ(), bashy, ensureShims(bashy))
+		}
+	}
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return string(out), 124, ctx.Err()
@@ -91,6 +105,78 @@ var seededProfiles = map[string]LaunchProfile{
 	"codex":    {Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}},
 	"agy":      {Args: []string{"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"}},
 	"opencode": {Args: []string{"run"}},
+	// aider takes its prompt via --message; resolveLaunchArgs appends the prompt
+	// as the final arg, so it becomes the --message value. --yes-always makes it
+	// non-interactive; --no-git keeps a turn advisory (no repo/commit writes).
+	"aider": {Args: []string{"--yes-always", "--no-git", "--message"}},
+}
+
+// forceAgentShell reports whether the launcher routes a spawned agent's shell
+// through bashy. On by default; BASHY_FORCE_AGENT_SHELL=0 disables (and --posix
+// hosts / the lean `bash` binary never reach this path).
+func forceAgentShell() bool { return os.Getenv("BASHY_FORCE_AGENT_SHELL") != "0" }
+
+// shimDir is the directory of sh/bash/zsh symlinks to the bashy binary, prepended
+// to a spawned agent's PATH so bare-name shell lookups resolve to bashy. Override
+// with BASHY_SHIM_DIR (used by tests).
+func shimDir() string {
+	if d := os.Getenv("BASHY_SHIM_DIR"); d != "" {
+		return d
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".bashy", "shims")
+}
+
+// ensureShims makes shimDir hold sh/bash/zsh symlinks to bashy (idempotent,
+// best-effort). No-op on Windows (POSIX shell names don't apply) or when the dir
+// is unavailable; returns "" in those cases so forcedShellEnv skips the PATH shim.
+func ensureShims(bashy string) string {
+	if runtime.GOOS == "windows" || bashy == "" {
+		return ""
+	}
+	dir := shimDir()
+	if dir == "" || os.MkdirAll(dir, 0o755) != nil {
+		return ""
+	}
+	for _, name := range []string{"sh", "bash", "zsh"} {
+		link := filepath.Join(dir, name)
+		if target, err := os.Readlink(link); err == nil && target == bashy {
+			continue
+		}
+		_ = os.Remove(link)
+		_ = os.Symlink(bashy, link)
+	}
+	return dir
+}
+
+// forcedShellEnv returns base with the bashy-shell routing vars applied: shimDir
+// prepended to PATH (when non-empty), and SHELL + CLAUDE_CODE_SHELL pinned to
+// bashy. Pure and deterministic so it can be tested without spawning a process.
+func forcedShellEnv(base []string, bashy, shimDir string) []string {
+	out := make([]string, 0, len(base)+2)
+	pathSet := false
+	for _, kv := range base {
+		switch {
+		case shimDir != "" && strings.HasPrefix(kv, "PATH="):
+			out = append(out, "PATH="+shimDir+string(os.PathListSeparator)+kv[len("PATH="):])
+			pathSet = true
+		case strings.HasPrefix(kv, "SHELL="), strings.HasPrefix(kv, "CLAUDE_CODE_SHELL="):
+			// re-added canonically below
+		default:
+			out = append(out, kv)
+		}
+	}
+	if shimDir != "" && !pathSet {
+		out = append(out, "PATH="+shimDir)
+	}
+	if runtime.GOOS != "windows" {
+		out = append(out, "SHELL="+bashy)
+	}
+	out = append(out, "CLAUDE_CODE_SHELL="+bashy)
+	return out
 }
 
 var roleDefaults = map[string]string{
