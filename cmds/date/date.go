@@ -48,6 +48,12 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.Lookup("iso-8601").NoOptDefVal = "date"
 	rfc3339 := fs.String("rfc-3339", "", "output date/time in RFC 3339 format")
 	rfcEmail := fs.BoolP("rfc-email", "R", false, "output date and time in RFC 5322 email format")
+	rfc822 := fs.Bool("rfc-822", false, "output date and time in RFC 5322 email format")
+	fs.Lookup("rfc-822").Hidden = true
+	rfc2822 := fs.Bool("rfc-2822", false, "output date and time in RFC 5322 email format")
+	fs.Lookup("rfc-2822").Hidden = true
+	uct := fs.Bool("uct", false, "print in Coordinated Universal Time (UTC)")
+	fs.Lookup("uct").Hidden = true
 	resolution := fs.Bool("resolution", false, "output the available timestamp resolution")
 	setDate := fs.StringP("set", "s", "", "set time described by STRING")
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -59,7 +65,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	loc := time.Local
-	if *utc || *universal {
+	if *utc || *universal || *uct {
 		loc = time.UTC
 	}
 
@@ -79,7 +85,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Out, "0.000000001")
 		return 0
 	}
-	format, code := selectFormat(rc, operands, *iso8601, fs.Changed("iso-8601"), *rfc3339, *rfcEmail)
+	format, code := selectFormat(rc, operands, *iso8601, fs.Changed("iso-8601"), *rfc3339, *rfcEmail || *rfc822 || *rfc2822)
 	if code >= 0 {
 		return code
 	}

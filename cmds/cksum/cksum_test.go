@@ -47,6 +47,24 @@ func TestCKSumStdinAndFiles(t *testing.T) {
 	}
 }
 
+func TestCKSumDeprecatedBinaryTextAliases(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"-b", "a.txt"},
+		{"--binary", "a.txt"},
+		{"-t", "a.txt"},
+		{"--text", "a.txt"},
+	} {
+		out, errb, code := runTool(t, dir, "", args...)
+		if out != "1219131554 3 a.txt\n" || errb != "" || code != 0 {
+			t.Fatalf("cksum %v = (%q, %q, %d)", args, out, errb, code)
+		}
+	}
+}
+
 func TestCKSumAlgorithms(t *testing.T) {
 	tests := []struct {
 		args []string
@@ -221,6 +239,11 @@ func TestCKSumHelpVersionAliases(t *testing.T) {
 		!strings.Contains(out, "-s          use System V sum algorithm") ||
 		!strings.Contains(out, "-h, --help") || !strings.Contains(out, "-V, --version") {
 		t.Fatalf("-h = (%q, %d)", out, code)
+	}
+	for _, hidden := range []string{"binary", "text"} {
+		if strings.Contains(out, hidden) {
+			t.Fatalf("-h contains hidden alias %q in %q", hidden, out)
+		}
 	}
 	out, _, code = runTool(t, "", "", "-V")
 	if code != 0 || !strings.Contains(out, "cksum") {

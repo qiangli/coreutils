@@ -92,7 +92,11 @@ func run(rc *tool.RunContext, args []string) int {
 	algorithm := fs.StringP("algorithm", "a", "crc", "select the digest type")
 	tag := fs.Bool("tag", false, "create a BSD style checksum (the default for digest algorithms)")
 	untagged := fs.Bool("untagged", false, "create a reversed style checksum, without digest type")
-	raw := fs.Bool("raw", false, "emit a raw binary digest, not hexadecimal")
+	_ = fs.BoolP("binary", "b", false, "read in binary mode")
+	fs.Lookup("binary").Hidden = true
+	_ = fs.BoolP("text", "t", false, "read in text mode")
+	fs.Lookup("text").Hidden = true
+	raw := fs.Bool("raw", false, "emit raw digest bytes, not hexadecimal")
 	base64Flag := fs.Bool("base64", false, "emit base64-encoded digests, not hexadecimal")
 	length := fs.IntP("length", "l", 0, "digest length in bits; must not exceed the max size and must be a multiple of 8 for blake2b; must be 224, 256, 384, or 512 for sha2 or sha3")
 	check := fs.BoolP("check", "c", false, "read checksums from FILEs and check them")
@@ -262,7 +266,7 @@ func rewriteLegacyAlgorithmAliases(args []string) []string {
 				out = append(out, "--algorithm=bsd")
 			case 's':
 				out = append(out, "--algorithm=sysv")
-			case 'c', 'w', 'z', 'h', 'V':
+			case 'b', 'c', 't', 'w', 'z', 'h', 'V':
 				kept += string(arg[i])
 			default:
 				kept += arg[i:]
