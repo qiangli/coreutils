@@ -372,6 +372,7 @@ func init() {
 	addVerb("dag", Entry{Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("sdlc", Entry{Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("chat", Entry{Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("meet", Entry{Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("agent", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("schedule", Entry{Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("act", managed(GroupOrch, TierSandbox))
