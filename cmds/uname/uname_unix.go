@@ -21,10 +21,12 @@ func probe() (sysinfo, error) {
 		return strings.Join(strings.Fields(s), " ")
 	}
 	return sysinfo{
-		sysname:  clean(u.Sysname[:]),
-		nodename: clean(u.Nodename[:]),
-		release:  clean(u.Release[:]),
-		version:  clean(u.Version[:]),
-		machine:  clean(u.Machine[:]),
+		sysname:          clean(u.Sysname[:]),
+		nodename:         clean(u.Nodename[:]),
+		release:          clean(u.Release[:]),
+		version:          clean(u.Version[:]),
+		machine:          clean(u.Machine[:]),
+		processor:        "unknown",
+		hardwarePlatform: "unknown",
 	}, nil
 }

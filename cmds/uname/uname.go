@@ -36,11 +36,13 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 // sysinfo is filled by the per-platform probe.
 type sysinfo struct {
-	sysname  string // -s: kernel name
-	nodename string // -n: network node hostname
-	release  string // -r: kernel release
-	version  string // kernel version; printed only by -a, "" = omit
-	machine  string // -m: machine hardware name
+	sysname          string // -s: kernel name
+	nodename         string // -n: network node hostname
+	release          string // -r: kernel release
+	version          string // kernel version; printed only by -a, "" = omit
+	machine          string // -m: machine hardware name
+	processor        string // -p: processor type
+	hardwarePlatform string // -i: hardware platform
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -51,7 +53,20 @@ func run(rc *tool.RunContext, args []string) int {
 	release := fs.BoolP("kernel-release", "r", false, "print the kernel release")
 	kernelVersion := fs.BoolP("kernel-version", "v", false, "print the kernel version")
 	machine := fs.BoolP("machine", "m", false, "print the machine hardware name")
+	processor := fs.BoolP("processor", "p", false, "print the processor type (non-portable)")
+	hardwarePlatform := fs.BoolP("hardware-platform", "i", false, "print the hardware platform (non-portable)")
 	osFlag := fs.BoolP("operating-system", "o", false, "print the operating system")
+
+	// Obsolescent long aliases
+	sysnameAlias := fs.Bool("sysname", false, "print the kernel name")
+	releaseAlias := fs.Bool("release", false, "print the kernel release")
+	if flag := fs.Lookup("sysname"); flag != nil {
+		flag.Hidden = true
+	}
+	if flag := fs.Lookup("release"); flag != nil {
+		flag.Hidden = true
+	}
+
 	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
 	if code >= 0 {
 		return code
@@ -60,7 +75,14 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "extra operand %q", operands[0])
 	}
 
-	if !*all && !*kernelName && !*nodename && !*release && !*kernelVersion && !*machine && !*osFlag {
+	if *sysnameAlias {
+		*kernelName = true
+	}
+	if *releaseAlias {
+		*release = true
+	}
+
+	if !*all && !*kernelName && !*nodename && !*release && !*kernelVersion && !*machine && !*processor && !*hardwarePlatform && !*osFlag {
 		*kernelName = true
 	}
 
@@ -88,6 +110,12 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if *machine || *all {
 		parts = append(parts, info.machine)
+	}
+	if *processor || (*all && info.processor != "unknown") {
+		parts = append(parts, info.processor)
+	}
+	if *hardwarePlatform || (*all && info.hardwarePlatform != "unknown") {
+		parts = append(parts, info.hardwarePlatform)
 	}
 	if *osFlag || *all {
 		parts = append(parts, operatingSystem())

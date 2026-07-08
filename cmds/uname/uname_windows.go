@@ -20,10 +20,12 @@ func probe() (sysinfo, error) {
 	}
 	v := windows.RtlGetVersion()
 	return sysinfo{
-		sysname:  "Windows_NT",
-		nodename: host,
-		release:  fmt.Sprintf("%d.%d.%d", v.MajorVersion, v.MinorVersion, v.BuildNumber),
-		version:  "",
-		machine:  gnuArch(),
+		sysname:          "Windows_NT",
+		nodename:         host,
+		release:          fmt.Sprintf("%d.%d.%d", v.MajorVersion, v.MinorVersion, v.BuildNumber),
+		version:          "",
+		machine:          gnuArch(),
+		processor:        "unknown",
+		hardwarePlatform: "unknown",
 	}, nil
 }

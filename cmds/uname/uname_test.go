@@ -116,10 +116,6 @@ func TestUnameErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "extra operand") {
 		t.Errorf("operand: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, "-p")
-	if code != 2 || !strings.Contains(errb, "p") {
-		t.Errorf("-p (not implemented): code=%d err=%q", code, errb)
-	}
 	_, errb, code = runTool(t, "--frobnicate")
 	if code != 2 || !strings.Contains(errb, "frobnicate") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
@@ -130,5 +126,109 @@ func TestUnameHelp(t *testing.T) {
 	out, _, code := runTool(t, "--help")
 	if code != 0 || !strings.Contains(out, "Usage: uname") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+}
+
+func TestNewFlagsAndAliases(t *testing.T) {
+	sOut, _, _ := runTool(t, "-s")
+	rOut, _, _ := runTool(t, "-r")
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantOut  string
+		wantCode int
+		checkOut func(t *testing.T, out string)
+	}{
+		{
+			name:     "processor short flag",
+			args:     []string{"-p"},
+			wantOut:  "unknown\n",
+			wantCode: 0,
+		},
+		{
+			name:     "processor long flag",
+			args:     []string{"--processor"},
+			wantOut:  "unknown\n",
+			wantCode: 0,
+		},
+		{
+			name:     "hardware-platform short flag",
+			args:     []string{"-i"},
+			wantOut:  "unknown\n",
+			wantCode: 0,
+		},
+		{
+			name:     "hardware-platform long flag",
+			args:     []string{"--hardware-platform"},
+			wantOut:  "unknown\n",
+			wantCode: 0,
+		},
+		{
+			name:     "sysname long alias",
+			args:     []string{"--sysname"},
+			wantOut:  sOut,
+			wantCode: 0,
+		},
+		{
+			name:     "release long alias",
+			args:     []string{"--release"},
+			wantOut:  rOut,
+			wantCode: 0,
+		},
+		{
+			name:     "all flag",
+			args:     []string{"-a"},
+			wantCode: 0,
+			checkOut: func(t *testing.T, out string) {
+				if strings.Contains(out, "unknown") {
+					t.Errorf("-a output %q should not contain 'unknown'", out)
+				}
+			},
+		},
+		{
+			name:     "all flag with processor",
+			args:     []string{"-a", "-p"},
+			wantCode: 0,
+			checkOut: func(t *testing.T, out string) {
+				// Since -p is explicitly requested, "unknown" should be printed
+				if !strings.Contains(out, "unknown") {
+					t.Errorf("-a -p output %q should contain 'unknown'", out)
+				}
+			},
+		},
+		{
+			name:     "help output has -p/--processor and -i/--hardware-platform but not aliases",
+			args:     []string{"--help"},
+			wantCode: 0,
+			checkOut: func(t *testing.T, out string) {
+				for _, exp := range []string{"-p", "--processor", "-i", "--hardware-platform"} {
+					if !strings.Contains(out, exp) {
+						t.Errorf("help output %q missing %q", out, exp)
+					}
+				}
+				for _, unexpected := range []string{"--sysname", "--release"} {
+					if strings.Contains(out, unexpected) {
+						t.Errorf("help output %q should not contain hidden alias %q", out, unexpected)
+					}
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, _, code := runTool(t, tt.args...)
+			if code != tt.wantCode {
+				t.Fatalf("args=%v code=%d, want %d", tt.args, code, tt.wantCode)
+			}
+			if tt.checkOut != nil {
+				tt.checkOut(t, out)
+			} else {
+				if out != tt.wantOut {
+					t.Errorf("args=%v output=%q, want %q", tt.args, out, tt.wantOut)
+				}
+			}
+		})
 	}
 }
