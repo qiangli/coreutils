@@ -1,0 +1,1 @@
+sort: option '--r' is ambiguous; possibilities: '--random-sort' '--random-source' '--reverse'
