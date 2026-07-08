@@ -79,6 +79,7 @@ func run(rc *tool.RunContext, args []string) int {
 	_ = fs.StringP("sep-string", "S", "", "separate columns by STRING (multi-column output only; no effect here)")
 	merge := fs.BoolP("merge", "m", false, "(not supported) print files in parallel, one per column")
 	formFeed := fs.BoolP("form-feed", "F", false, "use form feed instead of blank lines to end pages")
+	formFeedLower := fs.BoolP("f", "f", false, "use form feed instead of blank lines to end pages")
 	pageWidth := fs.IntP("page-width", "W", 72, "set page width and truncate lines")
 	firstLineNum := fs.IntP("first-line-number", "N", 1, "start counting line numbers at NUMBER")
 	joinLines := fs.BoolP("join-lines", "J", false, "merge full-length lines (GNU compat, no-op in this subset)")
@@ -129,7 +130,7 @@ func run(rc *tool.RunContext, args []string) int {
 		header:     *headerText, headerSet: fs.Changed("header"),
 		dateFormat: *dateFormat, doubleSpace: *doubleSpace, numberLines: *numberLines,
 		indent: *indent, noFileWarnings: *noFileWarnings, expandTabs: *expandTabs,
-		formFeed:  *formFeed,
+		formFeed:  *formFeed || *formFeedLower,
 		ffBreaks:  !*omitPagination,
 		pageStart: pageStart, pageEnd: pageEnd,
 		firstLineNum: *firstLineNum,
