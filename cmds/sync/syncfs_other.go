@@ -4,21 +4,15 @@ package synccmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/qiangli/coreutils/tool"
 )
 
+// syncFileData: no fdatasync here (this arm includes windows, where
+// FlushFileBuffers also needs a WRITABLE handle) — delegate to syncFile,
+// which picks the right open mode per platform.
 func syncFileData(path string) error {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
-	if err != nil {
-		var werr error
-		if f, werr = os.OpenFile(path, os.O_WRONLY, 0); werr != nil {
-			return err
-		}
-	}
-	defer f.Close()
-	return f.Sync()
+	return syncFile(path)
 }
 
 func syncFSOperands(rc *tool.RunContext, operands []string) int {
