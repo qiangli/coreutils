@@ -102,8 +102,9 @@ go test ./...            # full incl. external/ — unix + submodules only
 Tests are hermetic: no network, no system git required. `reference/`
 (like `priorart/`) is gitignored local source — GNU coreutils, bash,
 uutils, hyperfine — kept for conformance/benchmark reference;
-`cmd/perfbench` is the dev-only bashy-vs-GNU A/B perf harness (out of
-`cmds/all`; see the umbrella's fidelity-perf harness spec).
+`cmds/perfbench` (with its `cmd/perfbench` main) is the dev-only
+bashy-vs-GNU A/B perf harness (out of `cmds/all`; see the umbrella's
+fidelity-perf harness spec).
 
 ## Architecture
 
@@ -179,12 +180,17 @@ ycode's executor — run it after changing argv-handler behavior.
 `tool/` is the framework (see package docs): Tool registry,
 RunContext (tools NEVER read os.Stdin/Getwd/Environ — the embedding
 shell owns those; every fs operand goes through rc.Path), pflag-based
-strict GNU flags, automatic --help/--version, and the contract error
+strict GNU flags, automatic --help/--version, GNU-style long-option
+abbreviation (unambiguous prefixes expand in `tool.Parse` before
+pflag sees them — exact match wins, ambiguity is a GNU-format exit-2
+error; `tool/abbrev_test.go`), and the contract error
 helpers (UsageError, NotSupported). `cmds/<name>/` is one package per
 command (`package <name>cmd`), init-registered; `cmds/all` blank-
-imports the full set (~103 commands — `cmds/all/all.go` is the shipped
+imports the full set (135 commands — `cmds/all/all.go` is the shipped
 inventory, `docs/commands.md` the plan; keep both in sync when adding a
-tool); `cmds/internal/hashenc` is the shared checksum/encoding engine.
+tool); shared engines live under `cmds/internal/` (`hashenc` —
+checksums/encodings; `session` — utmp session records for
+who/users/pinky).
 `cmd/coreutils` is the multicall binary (argv[0] dispatch +
 `coreutils <tool>`). Two commands are deliberately NOT in `cmds/all`:
 `cmds/graph` (pulls gfy deps — see the placement invariant below) and
@@ -215,9 +221,18 @@ argv[0] dispatch); and much of the former Phase C — sed, xargs, awk
 (at/atq/atrm/batch/crontab, browser, fetch, clip, tokens, duration, tz,
 ntp, cal, tsort).
 
-Remaining Phase B (written fresh, per docs/commands.md): printf, test,
-expr, od, nl, fold, expand/unexpand, cksum, b2sum, basenc, csplit,
-numfmt, nproc, arch, tail -f.
+Phase B is essentially complete (2026-07): expr, od, nl, fold,
+expand/unexpand, cksum, b2sum, basenc, csplit, numfmt, nproc, arch,
+tail -f (polling follow), plus the sh-utils sweep (who/users/pinky,
+pr, ptx, factor, stdbuf, stty, hexdump, yes, which, …) all shipped.
+Remaining (per docs/commands.md): printf, test/[. The 2026-07-07
+**uutils option-parity sprint** then closed flag/option gaps against
+`reference/uutils-coreutils` across the whole userland (ls, df, du,
+ln, tail, sort, stat, checksums, …) — see
+`docs/uutils-parity-sprint-2026-07-07.md` for what landed and
+`docs/bashy-uutils-option-comparison.md` for the final per-command
+gap status. Conformance is still judged against GNU/POSIX docs; the
+uutils reference was parity guidance, never translated source.
 
 The not-supported tier is docs/commands.md's **NO list** (canonical —
 grouped by reason: needs-exec, unix-only machinery, low agent value,
