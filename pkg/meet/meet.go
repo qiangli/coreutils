@@ -21,8 +21,39 @@ func NewMeetCmd() *cobra.Command {
 			"docs/meetings/ on close. See dhnt/docs/bashy-meet.md.",
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.AddCommand(newStartCmd(), newTellCmd(), newRoundCmd(), newCloseCmd(), newListCmd(), newResumeCmd())
+	cmd.AddCommand(newStartCmd(), newTellCmd(), newRoundCmd(), newConvergeCmd(), newCloseCmd(), newListCmd(), newResumeCmd())
 	return cmd
+}
+
+func newConvergeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "converge <id>",
+		Short: "secretary pass: extract decisions, action items, and open questions (records them)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadState(args[0])
+			if err != nil {
+				return err
+			}
+			openQ, summary := converge(cmd.Context(), st, nil)
+			w := cmd.OutOrStdout()
+			events, _ := readTranscript(st.ID)
+			var dec, act int
+			for _, e := range events {
+				switch e.Kind {
+				case "decision":
+					dec++
+				case "action":
+					act++
+				}
+			}
+			fmt.Fprintf(w, "converged: %d decisions, %d action items, %d open questions recorded\n", dec, act, len(openQ))
+			if summary != "" {
+				fmt.Fprintf(w, "summary: %s\n", oneLine(summary))
+			}
+			return nil
+		},
+	}
 }
 
 func humanName() string {
@@ -75,10 +106,30 @@ func printPreview(w io.Writer, st *State) {
 	fmt.Fprintf(w, "  store        %s/\n", dir)
 	fmt.Fprintf(w, "  minutes →    %s\n", minutesPath(st))
 	fmt.Fprintf(w, "  turn model   %s round-robin\n", st.Mode)
+	for _, warn := range attendeeWarnings(st) {
+		fmt.Fprintf(w, "  ⚠ %s\n", warn)
+	}
+}
+
+// attendeeWarnings applies the meet attendee gate (see
+// dhnt/docs/agentic-capability-taxonomy.md §meet attendee requirements): flag
+// non-routable participants (operability) and a roster past the Self-MoA sweet
+// spot (diversity). Advisory — it warns, it does not refuse.
+func attendeeWarnings(st *State) []string {
+	var out []string
+	for _, p := range st.Participants {
+		if ok, reason := capability.Operable(p); !ok {
+			out = append(out, fmt.Sprintf("%s is not routable: %s", p, reason))
+		}
+	}
+	if n := len(st.Participants); n > 4 {
+		out = append(out, fmt.Sprintf("%d participants exceeds the 2–4 Self-MoA sweet spot — trim redundant seats (same tool/model dilutes signal)", n))
+	}
+	return out
 }
 
 func newStartCmd() *cobra.Command {
-	var topic, assistant, mode, out string
+	var topic, assistant, mode, out, turnTimeout string
 	var participants, agenda []string
 	var rounds int
 	var dry, nonInteractive bool
@@ -99,7 +150,7 @@ func newStartCmd() *cobra.Command {
 			st := &State{
 				ID: newID(topic, nowFn()), Topic: topic, Agenda: agenda,
 				Secretary: assistant, Participants: participants, Human: humanName(),
-				Mode: mode, Status: "open", Cwd: cwd, Out: out, Created: nowFn(),
+				Mode: mode, Status: "open", Cwd: cwd, Out: out, TurnTimeout: turnTimeout, Created: nowFn(),
 			}
 			w := cmd.OutOrStdout()
 			printPreview(w, st)
@@ -141,6 +192,7 @@ func newStartCmd() *cobra.Command {
 	f.StringVar(&mode, "mode", "sequential", "turn mode (P0: sequential)")
 	f.StringVar(&out, "out", "docs", "filing target: docs | kb | <path>")
 	f.IntVar(&rounds, "rounds", 1, "rounds to run in --non-interactive mode")
+	f.StringVar(&turnTimeout, "turn-timeout", "20m", "per-turn agent timeout (e.g. 20m); a wedged agent can't hang the round")
 	f.BoolVar(&dry, "dry-run", false, "print the resolved session and exit")
 	f.BoolVar(&nonInteractive, "non-interactive", false, "run rounds then close, no REPL")
 	return cmd
@@ -153,7 +205,7 @@ func repl(cmd *cobra.Command, st *State) error {
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	fmt.Fprintf(w, "\nmeet %s · secretary=%s(notes-only) · participants: %s\n",
 		st.ID, st.Secretary, strings.Join(st.Participants, ", "))
-	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /decision <t> | /action owner: task | /agenda <t> | /close")
+	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /decision <t> | /action owner: task | /agenda <t> | /converge | /close")
 	fmt.Fprint(w, "you> ")
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -162,6 +214,12 @@ func repl(cmd *cobra.Command, st *State) error {
 			continue
 		}
 		switch {
+		case line == "/converge":
+			openQ, summary := converge(cmd.Context(), st, nil)
+			fmt.Fprintf(w, "⏺ converged: recorded decisions/actions; %d open questions\n", len(openQ))
+			if summary != "" {
+				fmt.Fprintf(w, "  summary: %s\n", oneLine(summary))
+			}
 		case line == "/close":
 			path, err := closeMeeting(cmd.Context(), st, true, nil)
 			if err != nil {

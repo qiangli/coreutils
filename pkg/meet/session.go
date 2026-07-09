@@ -32,7 +32,30 @@ type Event struct {
 	Role    string    `json:"role,omitempty"`
 	Kind    string    `json:"kind"` // agenda|human|turn|decision|action|summary
 	Text    string    `json:"text"`
+	File    string    `json:"file,omitempty"` // per-turn full-text file (context-offloading target)
 	TS      time.Time `json:"ts"`
+}
+
+// writeTurnFile persists an event's full text under the session's turns/ dir and
+// returns the absolute path. Context offloading (LangChain Deep Agents pattern):
+// the transcript passed to attendees carries a head/tail PREVIEW + a file link,
+// and the full bytes live here for read-on-demand. Best-effort; "" on failure.
+func writeTurnFile(id string, e Event) string {
+	dir, err := storeDir(id)
+	if err != nil {
+		return ""
+	}
+	turns := filepath.Join(dir, "turns")
+	if err := os.MkdirAll(turns, 0o755); err != nil {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(e.Text))
+	name := fmt.Sprintf("%03d-%s-%s-%s.txt", e.Round, e.Kind, slugify(e.Speaker), hex.EncodeToString(sum[:])[:6])
+	path := filepath.Join(turns, name)
+	if err := os.WriteFile(path, []byte(e.Text), 0o644); err != nil {
+		return ""
+	}
+	return path
 }
 
 // State is the durable meeting header, saved as state.json.
@@ -48,6 +71,7 @@ type State struct {
 	Status       string    `json:"status"`
 	Cwd          string    `json:"cwd"`
 	Out          string    `json:"out,omitempty"`
+	TurnTimeout  string    `json:"turn_timeout,omitempty"` // per-turn agent timeout, e.g. "20m"
 	Created      time.Time `json:"created"`
 	Round        int       `json:"round"`
 }
