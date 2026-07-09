@@ -2,6 +2,7 @@ package meet
 
 import (
 	"bufio"
+	_ "embed"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// referenceMD is the full `bashy meet` guide, embedded into the binary so it is
+// available wherever bashy runs (agents use bashy as a tool, not from this repo).
+// Surfaced by `bashy meet reference`.
+//
+//go:embed reference.md
+var referenceMD string
+
 // NewMeetCmd returns the `bashy meet` command tree.
 func NewMeetCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -18,11 +26,23 @@ func NewMeetCmd() *cobra.Command {
 		Short: "multi-participant deliberation session with a notes-only secretary",
 		Long: "Run a turn-taking planning meeting across agentic CLIs and a human.\n" +
 			"A dedicated notes-only secretary keeps the minutes and files them to\n" +
-			"docs/meetings/ on close. See dhnt/docs/bashy-meet.md.",
+			"docs/meetings/ on close. Run `bashy meet reference` for the full guide.",
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.AddCommand(newStartCmd(), newTellCmd(), newRoundCmd(), newConvergeCmd(), newCloseCmd(), newListCmd(), newResumeCmd())
+	cmd.AddCommand(newStartCmd(), newTellCmd(), newRoundCmd(), newConvergeCmd(), newCloseCmd(), newListCmd(), newResumeCmd(), newReferenceCmd())
 	return cmd
+}
+
+func newReferenceCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reference",
+		Short: "print the full bashy meet guide (embedded in the binary)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprint(cmd.OutOrStdout(), referenceMD)
+			return nil
+		},
+	}
 }
 
 func newConvergeCmd() *cobra.Command {

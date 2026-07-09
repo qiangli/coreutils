@@ -1,12 +1,19 @@
 package capability
 
 import (
+	_ "embed"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
+
+// referenceMD is the full `bashy capability` guide, embedded so it ships with the
+// binary and is available wherever bashy runs. Surfaced by `bashy capability reference`.
+//
+//go:embed reference.md
+var referenceMD string
 
 // NewCapabilityCmd returns the `bashy capability` command tree — the living
 // agent×capability matrix behind capability-routed delegation.
@@ -16,11 +23,24 @@ func NewCapabilityCmd() *cobra.Command {
 		Short: "living agent (tool:model) × capability matrix for routing",
 		Long: "The routing table behind capability-routed delegation: which agent\n" +
 			"(tool:model) is best for each capability, seeded from research priors and\n" +
-			"refined by observed outcomes on this host. See dhnt/docs/capability-routed-delegation.md.",
+			"refined by observed outcomes on this host. Run `bashy capability reference`\n" +
+			"for the full guide.",
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.AddCommand(newBestCmd(), newShowCmd(), newMatrixCmd(), newRecordCmd(), newSeedCmd())
+	cmd.AddCommand(newBestCmd(), newShowCmd(), newMatrixCmd(), newRecordCmd(), newSeedCmd(), newReferenceCmd())
 	return cmd
+}
+
+func newReferenceCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reference",
+		Short: "print the full bashy capability guide (embedded in the binary)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprint(cmd.OutOrStdout(), referenceMD)
+			return nil
+		},
+	}
 }
 
 func newBestCmd() *cobra.Command {
