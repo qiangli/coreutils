@@ -144,6 +144,13 @@ func TestGrepBRE(t *testing.T) {
 		{`[]ab]`, "]\n", "]\n", 0},                  // ] first member
 		{`[[:digit:]]\{2\}`, "ab12\n", "ab12\n", 0}, // class + interval
 		{`\(a\)\1`, "aa\nab\n", "aa\n", 0},          // back-reference
+		{`\<word\>`, "sword\nword\nwords\n", "word\n", 0},
+		{`.*\<`, "!!!\nfoo\n", "foo\n", 0},
+		{`\<\(.\)\1\>`, "-aa-\naaa\n", "-aa-\n", 0},
+		{`\<[[:alnum:]_]\+\>`, "abc\n123\nx_y\n", "abc\n123\nx_y\n", 0},
+		{`a\{0,2\}`, "bbb\naaa\n", "bbb\naaa\n", 0},
+		{`^ba\{,2\}r$`, "br\nbar\nbaar\nbaaar\n", "br\nbar\nbaar\n", 0},
+		{`^a\{2,\}$`, "a\naa\naaa\n", "aa\naaa\n", 0},
 	}
 	for _, c := range cases {
 		out, _, code := runGrep(t, "", c.in, c.pat)
@@ -152,7 +159,7 @@ func TestGrepBRE(t *testing.T) {
 		}
 	}
 	// rejected constructs: clear error, exit 2
-	for _, pat := range []string{`\<word`, `a\{2`, `[a`, `bad\m`} {
+	for _, pat := range []string{`a\{2`, `a\{,\}`, `a\{3,2\}`, `[a`, `bad\m`} {
 		_, errb, code := runGrep(t, "", "x\n", pat)
 		if code != 2 || errb == "" {
 			t.Errorf("BRE reject %q: code=%d err=%q", pat, code, errb)
@@ -164,6 +171,10 @@ func TestGrepEREAndFixed(t *testing.T) {
 	out, _, code := runGrep(t, "", "fooo\nbar\n", "-E", "fo+|bar")
 	if out != "fooo\nbar\n" || code != 0 {
 		t.Errorf("-E: out=%q code=%d", out, code)
+	}
+	out, _, code = runGrep(t, "", "sword\nword\nwords\n", "-E", `\<word\>`)
+	if out != "word\n" || code != 0 {
+		t.Errorf("-E word edge: out=%q code=%d", out, code)
 	}
 	_, errb, code := runGrep(t, "", "x\n", "-E", `(a)\1`)
 	if code != 2 || !strings.Contains(errb, "back-reference") {

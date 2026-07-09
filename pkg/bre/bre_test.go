@@ -63,6 +63,99 @@ func TestCompileBackrefs(t *testing.T) {
 	}
 }
 
+func TestCompileWordEdgeAnchors(t *testing.T) {
+	cases := []struct {
+		name    string
+		pattern string
+		in      string
+		want    []int
+	}{
+		{"word", `\<word\>`, "a word.", []int{2, 6}},
+		{"start", `\<[[:alpha:]]\+`, "..abc", []int{2, 5}},
+		{"end", `[[:alpha:]]\+\>`, "abc..", []int{0, 3}},
+		{"underscore word", `\<foo_bar\>`, "foo_bar", []int{0, 7}},
+		{"repeat backtracks to word start", `.*\<`, "foo", []int{0, 0}},
+		{"word edge with backref", `\<\(.\)\1\>`, "-aa-", []int{1, 3}},
+	}
+	for _, c := range cases {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Fatalf("%s: Compile(%q): %v", c.name, c.pattern, err)
+		}
+		got := re.FindStringIndex(c.in)
+		if !sameInts(got, c.want) {
+			t.Errorf("%s: FindStringIndex(%q)=%v, want %v", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+func TestCompileWordEdgeNoMatch(t *testing.T) {
+	re, err := Compile(`\<word\>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []string{"sword", "words", "swordfish"} {
+		if re.MatchString(in) {
+			t.Fatalf("%q unexpectedly matched word-edge pattern", in)
+		}
+	}
+}
+
+func TestCompileIntervalEdges(t *testing.T) {
+	cases := []struct {
+		pattern string
+		in      string
+		want    bool
+	}{
+		{`^a\{0,2\}$`, "", true},
+		{`^a\{0,2\}$`, "aa", true},
+		{`^a\{0,2\}$`, "aaa", false},
+		{`^ba\{,2\}r$`, "br", true},
+		{`^ba\{,2\}r$`, "baar", true},
+		{`^ba\{,2\}r$`, "baaar", false},
+		{`^a\{2,\}$`, "aa", true},
+		{`^a\{2,\}$`, "a", false},
+	}
+	for _, c := range cases {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", c.pattern, err)
+		}
+		if got := re.MatchString(c.in); got != c.want {
+			t.Errorf("%q.MatchString(%q)=%v, want %v", c.pattern, c.in, got, c.want)
+		}
+	}
+}
+
+func TestCompileInvalidIntervals(t *testing.T) {
+	for _, pattern := range []string{
+		`a\{`,
+		`a\{\}`,
+		`a\{,\}`,
+		`a\{3,2\}`,
+		`a\{x\}`,
+		`a\{1,2,3\}`,
+		`\(a\)\1\{3,2\}`,
+	} {
+		if _, err := Compile(pattern); err == nil {
+			t.Errorf("Compile(%q) succeeded, want invalid interval error", pattern)
+		}
+	}
+}
+
+func TestToGoEREWordEdgeAnchors(t *testing.T) {
+	got, err := ToGoERE(`\<word\>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `\bword\b` {
+		t.Fatalf(`ToGoERE(\<word\>)=%q, want \bword\b`, got)
+	}
+	if _, err := ToGoERE(`(a)\1`); err == nil {
+		t.Fatal("ToGoERE accepted an ERE back-reference")
+	}
+}
+
 func TestCompileBackrefsNoMatch(t *testing.T) {
 	re, err := Compile(`^\(.\)\1$`)
 	if err != nil {

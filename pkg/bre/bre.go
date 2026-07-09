@@ -1,8 +1,7 @@
 // Package bre matches POSIX Basic Regular Expressions (plus the common GNU
 // extensions), shared by the pure-Go tools that default to BRE (grep, sed).
 // Patterns without back-references are translated to Go RE2 syntax; patterns
-// with \1..\9 use a bounded backtracking matcher. Word-edge anchors remain
-// unsupported and fail with a clear error rather than silently mis-matching.
+// with \1..\9 or word-edge anchors use a bounded backtracking matcher.
 //
 // Supported BRE constructs (translated to the equivalent Go regexp):
 //
@@ -27,8 +26,8 @@
 //	\<meta>                       escaped metacharacter = literal
 //	( ) { } + ? |                 unescaped = literal (BRE rule)
 //
-// Rejected with a clear error: word-edge anchors \< \> and any alphanumeric
-// escape with no defined translation.
+// Rejected with a clear error: any alphanumeric escape with no defined
+// translation.
 package bre
 
 import (
@@ -103,7 +102,7 @@ func ToGo(p string) (string, error) {
 				state = posAtom
 				i += 2
 			case n == '<' || n == '>':
-				return "", fmt.Errorf("\\%c word-edge anchor is not supported (use \\b)", n)
+				return "", fmt.Errorf("\\%c word-edge anchor requires the BRE matcher", n)
 			case n >= utf8.RuneSelf:
 				r, sz := utf8.DecodeRuneInString(p[i+1:])
 				b.WriteRune(r)
@@ -170,8 +169,8 @@ func ToGo(p string) (string, error) {
 	return b.String(), nil
 }
 
-// normalizeInterval validates the inside of \{...\} and maps the
-// POSIX-valid-but-RE2-invalid "{,n}" to "{0,n}".
+// normalizeInterval validates the inside of \{...\} and maps GNU grep's
+// RE2-invalid "{,n}" extension to "{0,n}".
 func normalizeInterval(s string) (string, bool) {
 	digits := func(x string) bool {
 		if x == "" {
@@ -189,13 +188,27 @@ func normalizeInterval(s string) (string, bool) {
 		return s, digits(s)
 	}
 	lo, hi := s[:comma], s[comma+1:]
+	if strings.Contains(hi, ",") || (lo == "" && hi == "") {
+		return "", false
+	}
 	if lo == "" {
 		lo = "0"
 	}
 	if !digits(lo) || (hi != "" && !digits(hi)) {
 		return "", false
 	}
+	if hi != "" && atoi(lo) > atoi(hi) {
+		return "", false
+	}
 	return lo + "," + hi, true
+}
+
+func atoi(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		n = n*10 + int(s[i]-'0')
+	}
+	return n
 }
 
 // escapeClassRune escapes a rune for safe inclusion as a literal member of an RE2
@@ -268,23 +281,44 @@ func translateBracket(s string) (string, int, error) {
 	return "", 0, fmt.Errorf("unmatched [")
 }
 
-// ValidateERE rejects the POSIX/GNU ERE constructs RE2 cannot express;
-// everything else passes through to Go regexp unchanged.
-func ValidateERE(p string) error {
+// ToGoERE translates the small GNU ERE extension set that RE2 does not parse
+// under the same spelling. ERE back-references remain unsupported.
+func ToGoERE(p string) (string, error) {
+	var b strings.Builder
 	for i := 0; i+1 < len(p); i++ {
-		if p[i] != '\\' {
+		if p[i] != '\\' || i+1 >= len(p) {
+			if p[i] != '\\' {
+				b.WriteByte(p[i])
+			}
 			continue
 		}
 		n := p[i+1]
 		if n >= '1' && n <= '9' {
-			return fmt.Errorf("back-reference \\%c is not supported (RE2 has no back-references)", n)
+			return "", fmt.Errorf("back-reference \\%c is not supported (RE2 has no back-references)", n)
 		}
 		if n == '<' || n == '>' {
-			return fmt.Errorf("\\%c word-edge anchor is not supported (use \\b)", n)
+			b.WriteString(`\b`)
+			i++
+			continue
 		}
+		b.WriteByte('\\')
+		b.WriteByte(n)
 		i++
 	}
-	return nil
+	if len(p) > 0 {
+		last := len(p) - 1
+		if last == 0 || p[last-1] != '\\' {
+			b.WriteByte(p[last])
+		}
+	}
+	return b.String(), nil
+}
+
+// ValidateERE rejects the POSIX/GNU ERE constructs RE2 cannot express;
+// everything else passes through to Go regexp unchanged.
+func ValidateERE(p string) error {
+	_, err := ToGoERE(p)
+	return err
 }
 
 func isAlnumByte(b byte) bool {

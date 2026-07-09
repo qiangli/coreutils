@@ -9,9 +9,9 @@ import (
 
 const maxBacktrackSteps = 200000
 
-// Regexp is a POSIX BRE matcher. Patterns without back-references are backed
-// by Go's RE2 engine; patterns with \1..\9 use the bounded backtracking engine
-// in this package.
+// Regexp is a POSIX BRE matcher. Patterns without back-references or word-edge
+// anchors are backed by Go's RE2 engine; patterns with \1..\9 or \<...\> use
+// the bounded backtracking engine in this package.
 type Regexp struct {
 	re *regexp.Regexp
 	bt *btProg
@@ -19,7 +19,7 @@ type Regexp struct {
 
 // Compile compiles a POSIX basic regular expression.
 func Compile(pattern string) (*Regexp, error) {
-	if !hasBackref(pattern) {
+	if !needsBacktrack(pattern) {
 		t, err := ToGo(pattern)
 		if err != nil {
 			return nil, err
@@ -40,7 +40,7 @@ func Compile(pattern string) (*Regexp, error) {
 // CompileWithFlags compiles a BRE with an optional RE2-style flag prefix such
 // as "(?i)" or "(?im)", used by sed modifiers.
 func CompileWithFlags(pattern, flags string) (*Regexp, error) {
-	if !hasBackref(pattern) {
+	if !needsBacktrack(pattern) {
 		t, err := ToGo(pattern)
 		if err != nil {
 			return nil, err
@@ -92,11 +92,11 @@ func (r *Regexp) Expand(dst []byte, template []byte, src []byte, match []int) []
 	return expandTemplate(dst, string(template), string(src), match)
 }
 
-func hasBackref(p string) bool {
+func needsBacktrack(p string) bool {
 	for i := 0; i+1 < len(p); i++ {
 		if p[i] == '\\' {
 			n := p[i+1]
-			if n >= '1' && n <= '9' {
+			if (n >= '1' && n <= '9') || n == '<' || n == '>' {
 				return true
 			}
 			i++
@@ -238,6 +238,25 @@ func (n anchorNode) match(ctx *btCtx, st btState) []btState {
 	return nil
 }
 
+type wordEdgeNode byte
+
+func (n wordEdgeNode) match(ctx *btCtx, st btState) []btState {
+	ctx.steps++
+	switch byte(n) {
+	case '<':
+		if st.pos < len(ctx.s) && isWordByte(ctx.s[st.pos]) &&
+			(st.pos == 0 || !isWordByte(ctx.s[st.pos-1])) {
+			return []btState{st}
+		}
+	case '>':
+		if st.pos > 0 && isWordByte(ctx.s[st.pos-1]) &&
+			(st.pos == len(ctx.s) || !isWordByte(ctx.s[st.pos])) {
+			return []btState{st}
+		}
+	}
+	return nil
+}
+
 type classNode struct {
 	re *regexp.Regexp
 }
@@ -322,7 +341,11 @@ func (n repeatNode) match(ctx *btCtx, st btState) []btState {
 	if len(levels)-1 < n.min {
 		return nil
 	}
-	return levels[len(levels)-1]
+	var out []btState
+	for i := len(levels) - 1; i >= n.min; i-- {
+		out = append(out, levels[i]...)
+	}
+	return out
 }
 
 type parser struct {
@@ -420,7 +443,10 @@ func (p *parser) parseAtom() (btNode, error) {
 				return nil, fmt.Errorf("invalid back-reference \\%c", n)
 			}
 			return backrefNode{num: num, ignoreCase: p.ignoreCase}, nil
-		case n == 'w' || n == 'W' || n == 's' || n == 'S' || n == 'b' || n == 'B' || n == '<' || n == '>':
+		case n == '<' || n == '>':
+			p.i += 2
+			return wordEdgeNode(n), nil
+		case n == 'w' || n == 'W' || n == 's' || n == 'S' || n == 'b' || n == 'B':
 			return nil, fmt.Errorf("unsupported escape \\%c in BRE back-reference matcher", n)
 		default:
 			p.i += 2
@@ -592,4 +618,8 @@ func leadingRepeatEnd(n btNode, s string, start int, ignoreCase bool) int {
 		}
 	}
 	return start
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || (b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
 }

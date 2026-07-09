@@ -284,12 +284,13 @@ func (m multiMatcher) FindStringIndex(s string) []int {
 }
 
 // compilePattern builds one matcher implementing the selected pattern list and
-// dialect. BREs without back-references still take the single combined RE2 path.
+// dialect. BREs without back-references or word-edge anchors still take the
+// single combined RE2 path.
 func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (grepMatcher, error) {
 	if !fixed && !extended {
 		needBRE := false
 		for _, p := range pats {
-			if breContainsBackref(p) {
+			if breNeedsPackageMatcher(p) {
 				needBRE = true
 				break
 			}
@@ -319,10 +320,11 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (gr
 		case fixed:
 			parts = append(parts, regexp.QuoteMeta(p))
 		case extended:
-			if err := bre.ValidateERE(p); err != nil {
+			t, err := bre.ToGoERE(p)
+			if err != nil {
 				return nil, err
 			}
-			parts = append(parts, p)
+			parts = append(parts, t)
 		default:
 			t, err := bre.ToGo(p)
 			if err != nil {
@@ -344,11 +346,11 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (gr
 	return regexp.Compile(expr)
 }
 
-func breContainsBackref(p string) bool {
+func breNeedsPackageMatcher(p string) bool {
 	for i := 0; i+1 < len(p); i++ {
 		if p[i] == '\\' {
 			n := p[i+1]
-			if n >= '1' && n <= '9' {
+			if (n >= '1' && n <= '9') || n == '<' || n == '>' {
 				return true
 			}
 			i++
