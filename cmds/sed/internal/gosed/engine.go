@@ -24,6 +24,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -33,6 +34,9 @@ import (
 type Engine struct {
 	ins []instruction // the instruction stream
 }
+
+// ReadFileFunc reads filenames named by sed's r command.
+type ReadFileFunc func(string) ([]byte, error)
 
 // vm is the virtual machine state for a running sed program.
 type vm struct {
@@ -56,12 +60,19 @@ type instruction func(*vm) error
 // makeEngine is the logic behine the New and NewQuiet public functions.
 // It lexes and parses the program, and makes a new Engine out of it.
 func makeEngine(program io.Reader, isQuiet bool) (*Engine, error) {
+	return makeEngineWithReadFile(program, isQuiet, os.ReadFile)
+}
+
+func makeEngineWithReadFile(program io.Reader, isQuiet bool, readFile ReadFileFunc) (*Engine, error) {
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
 	bufprog := bufio.NewReader(program)
 	ch := make(chan *token, 128)
 	errch := make(chan error, 1)
 	go lex(bufprog, ch, errch)
 
-	instructions, parseErr := parse(ch, isQuiet)
+	instructions, parseErr := parse(ch, isQuiet, readFile)
 	var err = <-errch // look for lexing errors first...
 	if err == nil {
 		// if there were no lex errors, look for a parsing error
@@ -84,6 +95,17 @@ func New(program io.Reader) (*Engine, error) {
 // is the classic '-n' sed behaviour.
 func NewQuiet(program io.Reader) (*Engine, error) {
 	return makeEngine(program, true)
+}
+
+// NewWithReadFile creates a sed engine using readFile for files named by the
+// r command.
+func NewWithReadFile(program io.Reader, readFile ReadFileFunc) (*Engine, error) {
+	return makeEngineWithReadFile(program, false, readFile)
+}
+
+// NewQuietWithReadFile is NewWithReadFile with automatic printing disabled.
+func NewQuietWithReadFile(program io.Reader, readFile ReadFileFunc) (*Engine, error) {
+	return makeEngineWithReadFile(program, true, readFile)
 }
 
 // Wrap supplies an io.Reader that applies the sed Engine to the given

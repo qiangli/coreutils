@@ -27,13 +27,14 @@ type parseState struct {
 	branches   []waitingBranch        // references to fix up
 	b_labels   map[string]instruction // named b branch labels
 	t_labels   map[string]instruction // named t branch labels
+	readFile   ReadFileFunc           // file reader for the r command
 	blockLevel int                    // how deeply nested are our blocks?
 	quiet      bool                   // are we building a quiet engine (-n sed)?
 	err        error                  // record any errors we encounter
 }
 
-func parse(input <-chan *token, quiet bool) ([]instruction, error) {
-	ps := &parseState{toks: input, b_labels: make(map[string]instruction), t_labels: make(map[string]instruction), quiet: quiet}
+func parse(input <-chan *token, quiet bool, readFile ReadFileFunc) ([]instruction, error) {
+	ps := &parseState{toks: input, b_labels: make(map[string]instruction), t_labels: make(map[string]instruction), readFile: readFile, quiet: quiet}
 
 	ps.ins = append(ps.ins, cmd_fillNext)
 	parse_toplevel(ps)
@@ -278,12 +279,7 @@ func compile_cmd(ps *parseState, cmd *token) {
 		}
 		ps.ins = append(ps.ins, cmd_quit)
 	case 'r':
-		reader, err := cmd_newReader(cmd.args[0])
-		if err != nil {
-			ps.err = fmt.Errorf("'r' command parse: %s %v", err.Error(), &cmd.location)
-			break
-		}
-		ps.ins = append(ps.ins, reader)
+		ps.ins = append(ps.ins, cmd_newReader(cmd.args[0], ps.readFile))
 	case 's':
 		subst, err := newSubstitution(cmd.args[0], cmd.args[1], cmd.args[2])
 		if err != nil {

@@ -13,10 +13,15 @@ import (
 
 func runSed(t *testing.T, in string, args ...string) (out, errOut string, code int) {
 	t.Helper()
+	return runSedInDir(t, t.TempDir(), in, args...)
+}
+
+func runSedInDir(t *testing.T, dir, in string, args ...string) (out, errOut string, code int) {
+	t.Helper()
 	var o, e bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
-		Dir:   t.TempDir(),
+		Dir:   dir,
 		Stdio: tool.Stdio{In: strings.NewReader(in), Out: &o, Err: &e},
 	}
 	code = cmd.Run(rc, args)
@@ -71,6 +76,26 @@ func TestSedDeleteAndRange(t *testing.T) {
 	}
 	if out, _, _ := runSed(t, "1\n2\n3\n4\n", "2,3d"); out != "1\n4\n" {
 		t.Errorf("2,3d = %q, want 1\\n4", out)
+	}
+}
+
+func TestSedReadCommandUsesRunDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "include.txt"), []byte("included\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runSedInDir(t, dir, "1\n2\n", "1r include.txt")
+	if code != 0 || errOut != "" || out != "1\nincluded\n2\n" {
+		t.Errorf("1r include.txt: out=%q err=%q code=%d", out, errOut, code)
+	}
+}
+
+func TestSedReadCommandMissingFileIsEmpty(t *testing.T) {
+	// GNU sed documents r filename as treating unreadable files as empty,
+	// without an error indication.
+	out, errOut, code := runSed(t, "1\n2\n", "1r missing.txt")
+	if code != 0 || errOut != "" || out != "1\n2\n" {
+		t.Errorf("1r missing.txt: out=%q err=%q code=%d", out, errOut, code)
 	}
 }
 

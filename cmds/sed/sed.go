@@ -123,7 +123,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	// Stream mode: stdin, or files concatenated (one stream) / separate (-s).
 	if len(files) == 0 {
-		if err := apply(program, *quiet, rc.In, rc.Out); err != nil {
+		if err := apply(rc, program, *quiet, rc.In, rc.Out); err != nil {
 			fmt.Fprintf(rc.Err, "sed: %v\n", err)
 			return 2
 		}
@@ -139,7 +139,7 @@ func run(rc *tool.RunContext, args []string) int {
 				status = 2
 				continue
 			}
-			err = apply(program, *quiet, r, rc.Out)
+			err = apply(rc, program, *quiet, r, rc.Out)
 			closeIf(r)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "sed: %v\n", err)
@@ -164,7 +164,7 @@ func run(rc *tool.RunContext, args []string) int {
 			closers = append(closers, c)
 		}
 	}
-	if err := apply(program, *quiet, io.MultiReader(readers...), rc.Out); err != nil {
+	if err := apply(rc, program, *quiet, io.MultiReader(readers...), rc.Out); err != nil {
 		fmt.Fprintf(rc.Err, "sed: %v\n", err)
 		status = 2
 	}
@@ -175,7 +175,7 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 // apply compiles the program and streams input→output through the engine.
-func apply(program string, quiet bool, in io.Reader, out io.Writer) error {
+func apply(rc *tool.RunContext, program string, quiet bool, in io.Reader, out io.Writer) error {
 	if !quiet {
 		if subst, ok, err := parseSimpleSubstitution(program); ok || err != nil {
 			if err != nil {
@@ -185,7 +185,7 @@ func apply(program string, quiet bool, in io.Reader, out io.Writer) error {
 		}
 	}
 
-	eng, err := newEngine(program, quiet)
+	eng, err := newEngine(rc, program, quiet)
 	if err != nil {
 		return err
 	}
@@ -356,7 +356,7 @@ func editInPlace(rc *tool.RunContext, program string, quiet bool, file, suffix s
 	if err != nil {
 		return err
 	}
-	eng, err := newEngine(program, quiet)
+	eng, err := newEngine(rc, program, quiet)
 	if err != nil {
 		return err
 	}
@@ -381,11 +381,14 @@ func editInPlace(rc *tool.RunContext, program string, quiet bool, file, suffix s
 	return os.WriteFile(path, buf.Bytes(), mode)
 }
 
-func newEngine(program string, quiet bool) (*gosed.Engine, error) {
-	if quiet {
-		return gosed.NewQuiet(strings.NewReader(program))
+func newEngine(rc *tool.RunContext, program string, quiet bool) (*gosed.Engine, error) {
+	readFile := func(name string) ([]byte, error) {
+		return os.ReadFile(rc.Path(name))
 	}
-	return gosed.New(strings.NewReader(program))
+	if quiet {
+		return gosed.NewQuietWithReadFile(strings.NewReader(program), readFile)
+	}
+	return gosed.NewWithReadFile(strings.NewReader(program), readFile)
 }
 
 func openInput(rc *tool.RunContext, f string) (io.Reader, error) {

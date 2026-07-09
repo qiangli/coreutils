@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"strings"
 )
@@ -301,11 +300,24 @@ func cmd_newInserter(text string) instruction {
 }
 
 // --------------------------------------------------
-// The 'r' command is basically and 'a\' with the contents
-// of a filsvm. I implement it literally that way below.
-func cmd_newReader(filename string) (instruction, error) {
-	bytes, err := ioutil.ReadFile(filename)
-	return cmd_newAppender(string(bytes)), err
+// The 'r' command queues a file's contents for output at the end of the
+// current cycle. GNU sed treats an unreadable file as empty.
+func cmd_newReader(filename string, readFile ReadFileFunc) instruction {
+	return func(svm *vm) error {
+		svm.ip++
+		bytes, err := readFile(filename)
+		if err != nil {
+			return nil
+		}
+		text := string(bytes)
+		if svm.appl == nil {
+			svm.appl = &text
+		} else {
+			newstr := *svm.appl + text
+			svm.appl = &newstr
+		}
+		return nil
+	}
 }
 
 // --------------------------------------------------
