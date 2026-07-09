@@ -15,8 +15,10 @@
 //	                              $ at end or before \) \|); literal
 //	                              elsewhere
 //	[...] [^...]                  bracket expressions, incl. ranges,
-//	                              ']' first member, and [:class:];
-//	                              backslash is literal inside (POSIX)
+//	                              ']' first member, [:class:], and (in the
+//	                              C locale) [.x.] collating symbols and
+//	                              [=x=] equivalence classes → their literal
+//	                              member; backslash is literal inside (POSIX)
 //	\( \)  \|  \{m,n\}            grouping, alternation (GNU), intervals
 //	\+ \?                         GNU one-or-more / zero-or-one
 //	\w \W \s \S \b \B             GNU character-class / word-boundary
@@ -25,8 +27,7 @@
 //	( ) { } + ? |                 unescaped = literal (BRE rule)
 //
 // Rejected with a clear error: back-references \1..\9, word-edge anchors \< \>,
-// collating symbols [. .], equivalence classes [= =], and any alphanumeric
-// escape with no defined translation.
+// and any alphanumeric escape with no defined translation.
 package bre
 
 import (
@@ -196,6 +197,16 @@ func normalizeInterval(s string) (string, bool) {
 	return lo + "," + hi, true
 }
 
+// escapeClassRune escapes a rune for safe inclusion as a literal member of an RE2
+// character class ([...]): the class metacharacters are \ ] ^ -.
+func escapeClassRune(r rune) string {
+	switch r {
+	case '\\', ']', '^', '-':
+		return "\\" + string(r)
+	}
+	return string(r)
+}
+
 // translateBracket converts one POSIX bracket expression (s starts at '[') to
 // RE2 class syntax, returning the translation and the number of input bytes
 // consumed.
@@ -222,7 +233,23 @@ func translateBracket(s string) (string, int, error) {
 			b.WriteString(s[i : i+end+2]) // RE2 supports [:class:] directly
 			i += end + 2
 		case s[i] == '[' && i+1 < len(s) && (s[i+1] == '.' || s[i+1] == '='):
-			return "", 0, fmt.Errorf("collating symbols [. .] / equivalence classes [= =] are not supported")
+			// Collating symbol [.x.] / equivalence class [=x=]. Under LC_ALL=C
+			// (the coreutils locale) the only collating elements are the single
+			// characters and no character has equivalents, so both reduce to
+			// their literal member(s). Emit them into the class, escaped.
+			delim := s[i+1]
+			end := strings.Index(s[i+2:], string(delim)+"]")
+			if end < 0 {
+				return "", 0, fmt.Errorf("unmatched [%c in bracket expression", delim)
+			}
+			content := s[i+2 : i+2+end]
+			if content == "" {
+				return "", 0, fmt.Errorf("empty %s", map[byte]string{'.': "collating symbol [..]", '=': "equivalence class [==]"}[delim])
+			}
+			for _, r := range content {
+				b.WriteString(escapeClassRune(r))
+			}
+			i += 2 + end + 2
 		case s[i] == '\\':
 			// backslash is a literal member in POSIX bracket expressions
 			b.WriteString(`\\`)
