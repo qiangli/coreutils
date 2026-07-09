@@ -37,7 +37,9 @@ type sedRegexp interface {
 func compileRE(pattern, flags string) (sedRegexp, error) {
 	translated := pattern
 	if ExtendedRegex {
-		if err := bre.ValidateERE(pattern); err != nil {
+		var err error
+		translated, err = bre.ToGoERE(pattern)
+		if err != nil {
 			return nil, err
 		}
 		return regexp.Compile(flags + translated)

@@ -6,8 +6,7 @@
 // Expressions (BRE), switching to ERE under -E/-r, via coreutils/pkg/bre (the
 // same matcher grep uses); s/// replacements use GNU `\1`/`&` form. The full
 // command set is supported — s, y, d, D, p, P, n, N, g, G, h, H, x, b, t,
-// :label, a, i, c, r, w, q, = and address ranges. Constructs RE2 cannot express
-// (\< \> word anchors) fail loudly rather than mis-match.
+// :label, a, i, c, r, w, q, = and address ranges.
 //
 // Flags: -n (suppress auto-print), -e SCRIPT, -f FILE, -E/-r (ERE), -s (treat
 // files separately), -i[SUFFIX] (edit in place). Unsupported flags fail loudly.

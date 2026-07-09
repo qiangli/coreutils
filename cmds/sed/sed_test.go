@@ -58,9 +58,21 @@ func TestSedBREInterval(t *testing.T) {
 	}
 }
 
+func TestSedBREWordEdgeAnchors(t *testing.T) {
+	if out, _, _ := runSed(t, "sword word words\n", `s/\<word\>/X/g`); out != "sword X words\n" {
+		t.Errorf(`s/\<word\>/X/g = %q, want sword X words`, out)
+	}
+	if out, _, _ := runSed(t, "sword\nword\nwords\n", "-n", `/\<word\>/p`); out != "word\n" {
+		t.Errorf(`-n /\<word\>/p = %q, want word`, out)
+	}
+}
+
 func TestSedEREMode(t *testing.T) {
 	if out, _, _ := runSed(t, "aaa\n", "-E", "s/a+/X/"); out != "X\n" {
 		t.Errorf("-E s/a+/X/ = %q, want X", out)
+	}
+	if out, _, _ := runSed(t, "sword word words\n", "-E", `s/\<word\>/X/g`); out != "sword X words\n" {
+		t.Errorf(`-E s/\<word\>/X/g = %q, want sword X words`, out)
 	}
 }
 
