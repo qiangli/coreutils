@@ -1,9 +1,6 @@
 package gosed
 
-import (
-	"fmt"
-	"regexp"
-)
+import "fmt"
 
 // conditions are what I'm calling the '1,10' in
 // commands ike '1,10 d'.  They are the line numbers,
@@ -30,7 +27,7 @@ func (_ eofcond) isMet(svm *vm) bool {
 
 // -----------------------------------------------------
 type regexpcond struct {
-	re *regexp.Regexp // for matching regexp conditions
+	re sedRegexp // for matching regexp conditions
 }
 
 func (r *regexpcond) isMet(svm *vm) (answer bool) {

@@ -6,7 +6,6 @@ package gosed
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -16,11 +15,11 @@ import (
 // -  SUBSTITUTION  -------------------------------------------------
 // ------------------------------------------------------------------
 type substitute struct {
-	pattern     *regexp.Regexp // the pattern to match
-	replacement string         // the template for replacements
-	which       int            // which pattern to replace
-	pflag       bool           // do we print upon replacement?
-	gflag       bool           // do we replace every match after 'which'?
+	pattern     sedRegexp // the pattern to match
+	replacement string    // the template for replacements
+	which       int       // which pattern to replace
+	pflag       bool      // do we print upon replacement?
+	gflag       bool      // do we replace every match after 'which'?
 }
 
 func (s *substitute) run(svm *vm) (err error) {

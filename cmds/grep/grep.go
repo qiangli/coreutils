@@ -1,12 +1,11 @@
 // Package grepcmd implements grep(1) per the GNU grep manual: print
 // lines of each FILE (or standard input) that match PATTERNS.
 //
-// Pattern dialects (all executed on Go's regexp / RE2):
+// Pattern dialects:
 //
-//   - Default (BRE) is translated construct-by-construct — see bre.go
-//     for exactly which BRE constructs are supported; anything RE2
-//     cannot express (back-references \1..\9, \< \>) is rejected with
-//     a clear error rather than mis-matched.
+//   - Default (BRE) is translated construct-by-construct — see bre.go.
+//     Patterns without back-references use RE2; patterns with \1..\9 use
+//     pkg/bre's bounded backtracking matcher.
 //   - -E (ERE): Go regexp syntax is a near-superset of POSIX ERE, so
 //     patterns pass through after rejecting back-references and \< \>.
 //     Corner deviations from GNU: a malformed interval such as "a{1,"
@@ -55,7 +54,7 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 type grepper struct {
 	rc *tool.RunContext
-	re *regexp.Regexp
+	re grepMatcher
 
 	invert     bool
 	word       bool
@@ -254,9 +253,66 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 }
 
-// compilePattern builds one RE2 regexp implementing the selected
-// pattern list and dialect.
-func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (*regexp.Regexp, error) {
+type grepMatcher interface {
+	MatchString(string) bool
+	FindStringIndex(string) []int
+}
+
+type multiMatcher []*bre.Regexp
+
+func (m multiMatcher) MatchString(s string) bool {
+	for _, re := range m {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m multiMatcher) FindStringIndex(s string) []int {
+	var best []int
+	for _, re := range m {
+		loc := re.FindStringIndex(s)
+		if loc == nil {
+			continue
+		}
+		if best == nil || loc[0] < best[0] || (loc[0] == best[0] && loc[1] > best[1]) {
+			best = loc
+		}
+	}
+	return best
+}
+
+// compilePattern builds one matcher implementing the selected pattern list and
+// dialect. BREs without back-references still take the single combined RE2 path.
+func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (grepMatcher, error) {
+	if !fixed && !extended {
+		needBRE := false
+		for _, p := range pats {
+			if breContainsBackref(p) {
+				needBRE = true
+				break
+			}
+		}
+		if needBRE {
+			out := make(multiMatcher, 0, len(pats))
+			for _, p := range pats {
+				if lineRe {
+					p = "^" + p + "$"
+				}
+				flags := ""
+				if ignoreCase {
+					flags = "(?i)"
+				}
+				re, err := bre.CompileWithFlags(p, flags)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, re)
+			}
+			return out, nil
+		}
+	}
 	parts := make([]string, 0, len(pats))
 	for _, p := range pats {
 		switch {
@@ -286,6 +342,19 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (*r
 		expr = "(?i)" + expr
 	}
 	return regexp.Compile(expr)
+}
+
+func breContainsBackref(p string) bool {
+	for i := 0; i+1 < len(p); i++ {
+		if p[i] == '\\' {
+			n := p[i+1]
+			if n >= '1' && n <= '9' {
+				return true
+			}
+			i++
+		}
+	}
+	return false
 }
 
 // walk handles -r: lexical filepath.WalkDir, symlinks not followed

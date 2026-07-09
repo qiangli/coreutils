@@ -22,22 +22,28 @@ import (
 // invocation drives a single engine per process.
 var ExtendedRegex bool
 
-// compileRE compiles a GNU sed regex (BRE by default, ERE under ExtendedRegex)
-// into a Go regexp. flags is an optional RE2 flag prefix like "(?i)" / "(?im)".
-func compileRE(pattern, flags string) (*regexp.Regexp, error) {
+// sedRegexp is the small regexp surface the engine needs.
+type sedRegexp interface {
+	MatchString(string) bool
+	FindAllStringSubmatchIndex(string, int) [][]int
+	ExpandString([]byte, string, string, []int) []byte
+	FindAllSubmatchIndex([]byte, int) [][]int
+	Expand([]byte, []byte, []byte, []int) []byte
+}
+
+// compileRE compiles a GNU sed regex (BRE by default, ERE under ExtendedRegex).
+// BREs without back-references use RE2 through pkg/bre; BREs with \1..\9 use
+// pkg/bre's bounded backtracking matcher.
+func compileRE(pattern, flags string) (sedRegexp, error) {
 	translated := pattern
 	if ExtendedRegex {
 		if err := bre.ValidateERE(pattern); err != nil {
 			return nil, err
 		}
+		return regexp.Compile(flags + translated)
 	} else {
-		t, err := bre.ToGo(pattern)
-		if err != nil {
-			return nil, err
-		}
-		translated = t
+		return bre.CompileWithFlags(pattern, flags)
 	}
-	return regexp.Compile(flags + translated)
 }
 
 // translateReplacement converts a GNU sed s/// replacement into the Go

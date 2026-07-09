@@ -1,7 +1,8 @@
-// Package bre translates POSIX Basic Regular Expressions (plus the common GNU
-// extensions) into Go RE2 syntax, shared by the pure-Go tools that default to
-// BRE (grep, sed). RE2 cannot express back-references or word-edge anchors, so
-// those are rejected with a clear error rather than silently mis-matched.
+// Package bre matches POSIX Basic Regular Expressions (plus the common GNU
+// extensions), shared by the pure-Go tools that default to BRE (grep, sed).
+// Patterns without back-references are translated to Go RE2 syntax; patterns
+// with \1..\9 use a bounded backtracking matcher. Word-edge anchors remain
+// unsupported and fail with a clear error rather than silently mis-matching.
 //
 // Supported BRE constructs (translated to the equivalent Go regexp):
 //
@@ -26,8 +27,8 @@
 //	\<meta>                       escaped metacharacter = literal
 //	( ) { } + ? |                 unescaped = literal (BRE rule)
 //
-// Rejected with a clear error: back-references \1..\9, word-edge anchors \< \>,
-// and any alphanumeric escape with no defined translation.
+// Rejected with a clear error: word-edge anchors \< \> and any alphanumeric
+// escape with no defined translation.
 package bre
 
 import (

@@ -4,11 +4,10 @@
 // The script engine is the vendored Go.Sed (MIT — see internal/gosed/LICENSE),
 // adapted for GNU compatibility: patterns default to POSIX Basic Regular
 // Expressions (BRE), switching to ERE under -E/-r, via coreutils/pkg/bre (the
-// same translator grep uses); s/// replacements use GNU `\1`/`&` form. The full
+// same matcher grep uses); s/// replacements use GNU `\1`/`&` form. The full
 // command set is supported — s, y, d, D, p, P, n, N, g, G, h, H, x, b, t,
 // :label, a, i, c, r, w, q, = and address ranges. Constructs RE2 cannot express
-// (back-references \1..\9 in a PATTERN, \< \> word anchors) fail loudly rather
-// than mis-match.
+// (\< \> word anchors) fail loudly rather than mis-match.
 //
 // Flags: -n (suppress auto-print), -e SCRIPT, -f FILE, -E/-r (ERE), -s (treat
 // files separately), -i[SUFFIX] (edit in place). Unsupported flags fail loudly.
@@ -20,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -196,9 +194,14 @@ func apply(program string, quiet bool, in io.Reader, out io.Writer) error {
 }
 
 type simpleSubstitution struct {
-	pattern     *regexp.Regexp
+	pattern     simplePattern
 	replacement []byte
 	global      bool
+}
+
+type simplePattern interface {
+	FindAllSubmatchIndex([]byte, int) [][]int
+	Expand([]byte, []byte, []byte, []int) []byte
 }
 
 func parseSimpleSubstitution(program string) (*simpleSubstitution, bool, error) {

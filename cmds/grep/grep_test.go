@@ -143,6 +143,7 @@ func TestGrepBRE(t *testing.T) {
 		{`a^b`, "a^b\n", "a^b\n", 0},                // mid-pattern ^ literal
 		{`[]ab]`, "]\n", "]\n", 0},                  // ] first member
 		{`[[:digit:]]\{2\}`, "ab12\n", "ab12\n", 0}, // class + interval
+		{`\(a\)\1`, "aa\nab\n", "aa\n", 0},          // back-reference
 	}
 	for _, c := range cases {
 		out, _, code := runGrep(t, "", c.in, c.pat)
@@ -151,7 +152,7 @@ func TestGrepBRE(t *testing.T) {
 		}
 	}
 	// rejected constructs: clear error, exit 2
-	for _, pat := range []string{`\(a\)\1`, `\<word`, `a\{2`, `[a`, `bad\m`} {
+	for _, pat := range []string{`\<word`, `a\{2`, `[a`, `bad\m`} {
 		_, errb, code := runGrep(t, "", "x\n", pat)
 		if code != 2 || errb == "" {
 			t.Errorf("BRE reject %q: code=%d err=%q", pat, code, errb)

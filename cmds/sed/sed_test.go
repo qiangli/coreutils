@@ -115,14 +115,9 @@ func TestSedInPlaceBackup(t *testing.T) {
 	}
 }
 
-// A back-reference in a PATTERN can't be expressed by RE2 → must fail loudly,
-// not silently mis-match (the coreutils rule).
-func TestSedPatternBackrefFailsLoudly(t *testing.T) {
-	_, errOut, code := runSed(t, "aa\n", `s/\(a\)\1/X/`)
-	if code == 0 {
-		t.Error("a pattern back-reference should be a hard error")
-	}
-	if !strings.Contains(strings.ToLower(errOut), "back-reference") {
-		t.Errorf("error should name the cause: %q", errOut)
+func TestSedPatternBackref(t *testing.T) {
+	out, errOut, code := runSed(t, "aa\n", `s/\(a\)\1/X/`)
+	if code != 0 || errOut != "" || out != "X\n" {
+		t.Errorf("sed pattern backref: out=%q err=%q code=%d", out, errOut, code)
 	}
 }
