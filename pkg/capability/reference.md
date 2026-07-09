@@ -29,7 +29,7 @@ quality columns; same tool → shared harness columns.
 
 ```
 bashy capability matrix                 # the full agent × capability grid
-bashy capability best <cap> [--all]     # rank routable agents for a capability (--all: include non-routable)
+bashy capability best <cap> [--all] [--by quality|value|cost]   # rank routable agents (--all: include non-routable)
 bashy capability show <agent>           # one agent's row + operability status
 bashy capability record --agent tool:model --capability C --outcome pass|fail [--latency ms --cost n]
 bashy capability seed [--force]         # (re)write the research-prior matrix
@@ -46,6 +46,15 @@ Stored per-host at `~/.bashy/capability/matrix.json` (override with
 cost, with a `source` of `prior` (research seed) or `host` (measured). `record` folds
 an observed outcome via an exponential moving average and flips the cell to
 host-measured — so routing improves as the fleet runs real assignments on this host.
+`meet` auto-records each participant's **operability** at close (operability is
+tool-governed, so it updates every row of that tool).
+
+**Ranking keys** (`best --by`): `quality` (raw fit, default); `cost` (cheapest first);
+`value` = **quality × reliability ÷ cost** — the routing objective, where reliability
+is the agent's operability (a gate-pass-rate proxy). So a flaky or premium agent
+loses to a cheaper, reliable one on commodity work (the "dishwasher rule"), and a
+low-operability agent is penalised (the reliability/rework term). `chat --capability`
+routes by **value**.
 
 ## Operability gate
 

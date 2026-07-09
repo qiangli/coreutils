@@ -234,7 +234,7 @@ func NewChatCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				ranked := m.Best(c, true)
+				ranked := m.Best(c, true, capability.ByValue)
 				if len(ranked) == 0 {
 					return fmt.Errorf("chat: no routable agent for capability %q", capStr)
 				}

@@ -176,15 +176,29 @@ func (m *Matrix) save() error {
 
 // Ranked is an agent's score for a capability, used by Best.
 type Ranked struct {
-	Agent   string
-	Cell    Cell
-	Operable bool
-	Reason  string // operability note
+	Agent       string
+	Cell        Cell
+	Operable    bool
+	Reason      string  // operability note
+	Reliability float64 // the agent's operability quality — a gate-pass-rate proxy
+	Value       float64 // expected value = quality × reliability ÷ cost (the routing objective, coarsely)
 }
 
-// Best ranks agents for a capability, highest quality first (cost breaks ties).
-// If routableOnly, non-operable agents are dropped.
-func (m *Matrix) Best(c Capability, routableOnly bool) []Ranked {
+// SortKey selects how Best ranks agents.
+type SortKey string
+
+const (
+	ByQuality SortKey = "quality" // raw capability fit (default)
+	ByValue   SortKey = "value"   // quality × reliability ÷ cost — the routing objective
+	ByCost    SortKey = "cost"    // cheapest first
+)
+
+// Best ranks agents for a capability. It always computes each agent's Reliability
+// (its operability quality — a gate-pass-rate proxy, so a flaky agent is penalised
+// per the meeting's reliability/rework term) and Value (quality × reliability ÷
+// cost — the dishwasher rule made computable). If routableOnly, non-operable
+// agents are dropped. Sort order is by `key` (default ByQuality).
+func (m *Matrix) Best(c Capability, routableOnly bool, key SortKey) []Ranked {
 	var out []Ranked
 	for agent, caps := range m.Agents {
 		cell, ok := caps[c]
@@ -195,18 +209,67 @@ func (m *Matrix) Best(c Capability, routableOnly bool) []Ranked {
 		if routableOnly && !ok2 {
 			continue
 		}
-		out = append(out, Ranked{Agent: agent, Cell: cell, Operable: ok2, Reason: reason})
+		rel := 1.0
+		if op, ok := caps[CapOperability]; ok {
+			rel = op.Quality
+		}
+		costNorm := float64(cell.CostMicro) / 1000.0
+		if costNorm < 0.5 {
+			costNorm = 0.5 // floor so free/unpriced agents don't dominate infinitely
+		}
+		out = append(out, Ranked{
+			Agent: agent, Cell: cell, Operable: ok2, Reason: reason,
+			Reliability: rel, Value: cell.Quality * rel / costNorm,
+		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Cell.Quality != out[j].Cell.Quality {
-			return out[i].Cell.Quality > out[j].Cell.Quality
+		a, b := out[i], out[j]
+		switch key {
+		case ByValue:
+			if a.Value != b.Value {
+				return a.Value > b.Value
+			}
+		case ByCost:
+			if a.Cell.CostMicro != b.Cell.CostMicro {
+				return a.Cell.CostMicro < b.Cell.CostMicro
+			}
+		default: // ByQuality
+			if a.Cell.Quality != b.Cell.Quality {
+				return a.Cell.Quality > b.Cell.Quality
+			}
+			if a.Cell.CostMicro != b.Cell.CostMicro {
+				return a.Cell.CostMicro < b.Cell.CostMicro
+			}
 		}
-		if out[i].Cell.CostMicro != out[j].Cell.CostMicro {
-			return out[i].Cell.CostMicro < out[j].Cell.CostMicro // cheaper wins ties
-		}
-		return out[i].Agent < out[j].Agent
+		return a.Agent < b.Agent
 	})
 	return out
+}
+
+// AgentsForTool returns the matrix agent ids (tool:model) whose tool matches.
+func (m *Matrix) AgentsForTool(tool string) []string {
+	var out []string
+	for agent := range m.Agents {
+		if ToolOf(agent) == tool {
+			out = append(out, agent)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RecordOperability folds an observed operability outcome for a TOOL into every
+// matrix row of that tool (operability is tool-governed, model-independent). Used
+// by meet to self-update the matrix from each meeting.
+func RecordOperability(tool string, pass bool) error {
+	m, err := Load()
+	if err != nil {
+		return err
+	}
+	for _, agent := range m.AgentsForTool(tool) {
+		_ = Record(agent, CapOperability, pass, 0, 0, NowRFC())
+	}
+	return nil
 }
 
 // Record folds one observed outcome into an agent's capability cell (rolling
@@ -295,13 +358,24 @@ func seedPriors() *Matrix {
 		"kimi-k2.7-code": 0.82, "kimi-k2.6": 0.80, "deepseek-v4": 0.80,
 		"deepseek-chat": 0.75, "gemini3.1": 0.80, "gemini": 0.78,
 	}
-	// per (model, capability) bumps where a model is notably stronger/weaker
+	// per (model, capability) bumps where a model is notably stronger/weaker.
+	// The gpt-5.5 (codex) profile encodes the 2026-07-08 validation-meeting
+	// correction: codex leads gated repo-local implementation, trails on broad/
+	// ambiguous strategy (see docs/capability-routed-delegation.md §Refinements).
 	spec := map[string]map[Capability]float64{
 		"gemini3.1": {CapDeepResearch: +0.10, CapWebSearch: +0.30, CapBrowserUse: +0.25},
 		"gemini":    {CapDeepResearch: +0.08, CapWebSearch: +0.28, CapBrowserUse: +0.22},
-		"gpt-5.5":   {CapCoding: +0.03, CapBugFixing: +0.03},
+		"gpt-5.5":   {CapCoding: +0.06, CapBugFixing: +0.06, CapTestGen: +0.04, CapPlanning: -0.05, CapDecisionSupport: -0.05, CapOrchestration: -0.05},
 		"opus":      {CapCodeReview: +0.03, CapPlanning: +0.03, CapOrchestration: +0.04},
 		"fable":     {CapCodeReview: +0.03, CapDeepResearch: +0.05, CapOrchestration: +0.04},
+	}
+	// Per-model per-turn cost tier (relative micro-units) — the routing objective's
+	// cost term / the dishwasher rule. Locally-hostable commodity models (deepseek,
+	// kimi) are cheapest; premium hosted models are dearest.
+	modelCost := map[string]int64{
+		"opus": 15000, "gpt-5.5": 12000, "fable": 12000, "sonnet": 6000,
+		"gemini3.1": 5000, "gemini": 4000,
+		"kimi-k2.7-code": 2000, "kimi-k2.6": 1500, "deepseek-v4": 1500, "deepseek-chat": 800,
 	}
 	// Not every quality capability tracks the coding tier. Web-search and
 	// browser-use need live web integration (a coding-strong model is NOT
@@ -328,13 +402,15 @@ func seedPriors() *Matrix {
 	m := &Matrix{SchemaVersion: schemaVersion, Agents: map[string]map[Capability]Cell{}}
 	for _, agent := range pairs {
 		tool, model := ToolOf(agent), ModelOf(agent)
+		cost := modelCost[model] // 0 if unknown
+		mk := func(q float64) Cell { return Cell{Quality: clamp(q), CostMicro: cost, Source: SourcePrior} }
 		row := map[Capability]Cell{}
 		for _, hc := range HarnessCaps {
 			q := 0.6
 			if v, ok := toolHarness[tool][hc]; ok {
 				q = v
 			}
-			row[hc] = Cell{Quality: clamp(q), Source: SourcePrior}
+			row[hc] = mk(q)
 		}
 		tier := 0.7
 		if v, ok := modelTier[model]; ok {
@@ -353,7 +429,7 @@ func seedPriors() *Matrix {
 			if b, ok := spec[model][qc]; ok {
 				q += b
 			}
-			row[qc] = Cell{Quality: clamp(q), Source: SourcePrior}
+			row[qc] = mk(q)
 		}
 		m.Agents[agent] = row
 	}

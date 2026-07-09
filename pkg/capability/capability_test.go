@@ -47,7 +47,7 @@ func TestFactorization(t *testing.T) {
 		t.Errorf("same-tool operability should match: %.2f vs %.2f", ok, od2)
 	}
 	// gemini should lead web-search among seeded agents.
-	best := m.Best(CapWebSearch, false)
+	best := m.Best(CapWebSearch, false, ByQuality)
 	if len(best) == 0 || ToolOf(best[0].Agent) != "agy" {
 		t.Errorf("expected agy to lead web-search, got %v", best)
 	}
@@ -57,7 +57,7 @@ func TestBestRoutableFilter(t *testing.T) {
 	withTempStore(t)
 	m, _ := Load()
 	// With routableOnly, every returned agent's tool must be operable here.
-	for _, r := range m.Best(CapCoding, true) {
+	for _, r := range m.Best(CapCoding, true, ByQuality) {
 		if ok, _ := Operable(ToolOf(r.Agent)); !ok {
 			t.Errorf("non-routable agent %s returned under routableOnly", r.Agent)
 		}
@@ -112,4 +112,41 @@ func keys(m map[string]map[Capability]Cell) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestCostSeededAndValueRanking(t *testing.T) {
+	withTempStore(t)
+	NowRFC = func() string { return "2026-07-09T00:00:00Z" }
+	m, _ := Load()
+	// cost is seeded per model tier: premium codex > commodity opencode.
+	if m.Agents["codex:gpt-5.5"][CapCoding].CostMicro <= m.Agents["opencode:deepseek-v4"][CapCoding].CostMicro {
+		t.Errorf("premium model should cost more than commodity")
+	}
+	// codex leads coding by QUALITY (meeting correction).
+	byQ := m.Best(CapCoding, true, ByQuality)
+	if ToolOf(byQ[0].Agent) != "codex" {
+		t.Errorf("codex should lead coding by quality, got %s", byQ[0].Agent)
+	}
+	// After codex operability tanks, its VALUE should drop (reliability/rework +
+	// dishwasher): a cheaper, reliable commodity agent should out-value it.
+	_ = RecordOperability("codex", false)
+	_ = RecordOperability("codex", false)
+	m2, _ := Load()
+	byV := m2.Best(CapCoding, true, ByValue)
+	if ToolOf(byV[0].Agent) == "codex" {
+		t.Errorf("flaky+premium codex should not top coding by VALUE, got %s (val=%.2f)", byV[0].Agent, byV[0].Value)
+	}
+}
+
+func TestRecordOperabilityAllToolRows(t *testing.T) {
+	withTempStore(t)
+	NowRFC = func() string { return "2026-07-09T00:00:00Z" }
+	_ = RecordOperability("opencode", false)
+	m, _ := Load()
+	for _, agent := range m.AgentsForTool("opencode") {
+		cell := m.Agents[agent][CapOperability]
+		if cell.Source != SourceHost {
+			t.Errorf("%s operability should be host-measured after RecordOperability", agent)
+		}
+	}
 }

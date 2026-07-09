@@ -22,6 +22,7 @@ func fixedNow() time.Time { return time.Date(2026, 7, 8, 5, 40, 0, 0, time.UTC) 
 func newTestSession(t *testing.T) *State {
 	t.Helper()
 	t.Setenv("BASHY_MEET_DIR", t.TempDir())
+	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir()) // isolate the operability auto-record at close
 	old := nowFn
 	nowFn = fixedNow
 	t.Cleanup(func() { nowFn = old })

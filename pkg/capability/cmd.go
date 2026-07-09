@@ -45,6 +45,7 @@ func newReferenceCmd() *cobra.Command {
 
 func newBestCmd() *cobra.Command {
 	var all bool
+	var by string
 	cmd := &cobra.Command{
 		Use:   "best <capability>",
 		Short: "rank agents for a capability (routable only, unless --all)",
@@ -54,28 +55,34 @@ func newBestCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("unknown capability %q (try: %s)", args[0], joinCaps())
 			}
+			key := SortKey(by)
+			if key != ByQuality && key != ByValue && key != ByCost {
+				return fmt.Errorf("--by must be quality | value | cost")
+			}
 			m, err := Load()
 			if err != nil {
 				return err
 			}
-			ranked := m.Best(c, !all)
+			ranked := m.Best(c, !all, key)
 			if len(ranked) == 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "no agents scored for %s\n", c)
 				return nil
 			}
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "best for %s:\n", c)
+			fmt.Fprintf(w, "best for %s (by %s):\n", c, key)
 			for i, r := range ranked {
 				mark := "✓"
 				if !r.Operable {
 					mark = "✗"
 				}
-				fmt.Fprintf(w, "  %d. %-28s q=%.2f %s %s [%s]\n", i+1, r.Agent, r.Cell.Quality, mark, r.Reason, r.Cell.Source)
+				fmt.Fprintf(w, "  %d. %-26s q=%.2f rel=%.2f cost=%d val=%.2f %s %s [%s]\n",
+					i+1, r.Agent, r.Cell.Quality, r.Reliability, r.Cell.CostMicro, r.Value, mark, r.Reason, r.Cell.Source)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "include non-routable agents")
+	cmd.Flags().StringVar(&by, "by", "quality", "ranking key: quality | value | cost")
 	return cmd
 }
 

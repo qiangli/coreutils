@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/chat"
 )
 
@@ -316,6 +317,29 @@ func renderMinutes(st *State, events []Event, summary string, openQ []string) st
 	return b.String()
 }
 
+// turnFailed reports whether a turn event is a failure marker (from runTurn).
+func turnFailed(e Event) bool {
+	return strings.HasPrefix(e.Text, "(") &&
+		(strings.Contains(e.Text, "unavailable this turn") || strings.Contains(e.Text, "returned no content"))
+}
+
+// recordOperability folds each participant's per-turn outcome into the capability
+// matrix's operability column (the self-updating loop). Operability is
+// tool-governed, so a clean turn is a pass and a failure marker is a fail for that
+// tool — a flaky agent nets down over the meeting.
+func recordOperability(st *State, events []Event) {
+	seat := map[string]bool{}
+	for _, p := range st.Participants {
+		seat[p] = true
+	}
+	for _, e := range events {
+		if e.Kind != "turn" || !seat[e.Speaker] {
+			continue
+		}
+		_ = capability.RecordOperability(e.Speaker, !turnFailed(e))
+	}
+}
+
 // hasMarkers reports whether the transcript already carries decision/action
 // markers (so converge doesn't duplicate what a human already marked).
 func hasMarkers(events []Event) bool {
@@ -414,6 +438,7 @@ func closeMeeting(ctx context.Context, st *State, synth bool, runner chat.Runner
 	if err != nil {
 		return "", err
 	}
+	recordOperability(st, events) // self-update the capability matrix from this meeting
 	md := renderMinutes(st, events, summary, openQ)
 	path := minutesPath(st)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
