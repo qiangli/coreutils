@@ -290,8 +290,13 @@ func runEffective(name string, effective dhntskills.Skill, p runPrep, dir string
 		for _, e := range needed {
 			atoms = append(atoms, e.String())
 		}
+		// NOTE: this is a manifest-consistency lint (declared-needs ⊆
+		// declared-cap), NOT a runtime sandbox. A declared cap is not enforced
+		// against the skill body — an admitted skill runs unconfined shell.
+		// Confinement is a separate layer (isolate under a weave workspace or
+		// `bashy podman`); do not treat this check as a security boundary.
 		return AttestRecord{}, fmt.Errorf(
-			"skills: pre-flight: bindings report {%s} but the declared effect cap does not cover it — declare `efefecato … fini` (machine-run needs the cap rung)",
+			"skills: pre-flight: this skill's bindings need effects {%s} that its declared effect cap does not list — declare `efefecato … fini` to match (manifest consistency check, not a runtime confinement guarantee)",
 			strings.Join(atoms, " "))
 	}
 	env := bindEnv(effective, p.meta, dir, log, p.probes, p.prims)

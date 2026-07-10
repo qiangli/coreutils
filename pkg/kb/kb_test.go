@@ -363,6 +363,25 @@ func TestRetroTemplate(t *testing.T) {
 	}
 }
 
+// TestSearchTokenizesQuotedQuery is the G1 regression guard
+// (docs/kb-usage-gaps-fix-plan.md): a quoted, task-shaped query must be
+// tokenized through Terms() so it matches per word. Before the fix the CLI
+// passed raw argv as Query.Terms, so a single 5-word term matched nothing.
+func TestSearchTokenizesQuotedQuery(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--type", "lesson",
+		"--title", "How to gate a merge",
+		"--description", "run make test-bash 86/86 before merging any weave branch")
+
+	out := mustRun(t, dir, "search", "how do I gate a merge")
+	if strings.Contains(out, "no matching kb pages") || strings.TrimSpace(out) == "" {
+		t.Fatalf("quoted task-shaped query returned nothing (G1 regression):\n%s", out)
+	}
+	if !strings.Contains(out, "gate-a-merge") {
+		t.Fatalf("expected the page in results, got:\n%s", out)
+	}
+}
+
 func TestGitSnapshotBestEffort(t *testing.T) {
 	dir := t.TempDir()
 	mustRun(t, dir, "add", "--title", "git snap", "--description", "d")

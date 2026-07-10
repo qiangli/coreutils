@@ -107,12 +107,16 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 					}
 				}
 			}
-			q := Query{Terms: args, Repo: repo, OS: goos, Tags: tags, K: k, All: all}
+			// Tokenize the raw CLI args through the shared Terms() tokenizer
+			// (as transfer.go does) so quoted task-shaped queries — "how do I
+			// gate a merge" — match per word instead of as one 5-word term.
+			terms := Terms(strings.Join(args, " "))
+			q := Query{Terms: terms, Repo: repo, OS: goos, Tags: tags, K: k, All: all}
 			hits := Search(pages, q)
 			var fed []FedHit
 			if federate {
 				if cwd, err := os.Getwd(); err == nil {
-					fed = FederatedSearch(cwd, args, k)
+					fed = FederatedSearch(cwd, terms, k)
 				}
 			}
 			out := c.OutOrStdout()
@@ -473,7 +477,7 @@ Deterministic (no LLM): the judgment is yours, retro structures it.`,
 					repo = filepath.Base(root)
 				}
 			}
-			hits := Search(pages, Query{Terms: args, Repo: repo, OS: runtime.GOOS, K: k})
+			hits := Search(pages, Query{Terms: Terms(strings.Join(args, " ")), Repo: repo, OS: runtime.GOOS, K: k})
 			out := c.OutOrStdout()
 			fmt.Fprintln(out, "kb retro — post-task knowledge write-back")
 			if len(args) > 0 {
