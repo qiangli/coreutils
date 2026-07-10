@@ -299,8 +299,13 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   foreign stores, never writes them" is pinned by tests, and the judgment
   half lives in bashy's embedded `knowledge-transfer` skill — see
   dhnt/docs/kb-knowledge-transfer-design.md), `pkg/chat` + `pkg/ollm` (agent chat / Ollama
-  client isolation), `pkg/browser` + `pkg/webinspect` (chromedp-backed
-  browser sessions for `cmds/browser`/`fetch`), `pkg/coopauth` (the ONE
+  client isolation), `pkg/browser` + `pkg/webinspect` (browser automation
+  for `cmds/browser`/`fetch`, three modes: `probe` = attach to a Chrome on
+  `--remote-debugging-port`, `solo` = launch a headless Chrome, and `live`
+  = the MV3 Chrome extension + WebSocket hub that drives the user's real
+  logged-in Chrome — `pkg/browser/live`, migrated verbatim from ycode
+  Apache-2.0, run via `bashy browser hub` + `--mode live`; the whole browser
+  feature now lives here, not ycode), `pkg/coopauth` (the ONE
   shared cloudbox/outpost cooperative-auth impl), `pkg/bre` (POSIX BRE →
   Go regexp, shared by grep/sed), `pkg/ignore` (opt-in agentic path
   filter shared by grep/find), `pkg/mirror` (see below), `pkg/timezones`,
