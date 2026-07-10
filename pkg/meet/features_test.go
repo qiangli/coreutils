@@ -417,7 +417,10 @@ func TestRedactHome(t *testing.T) {
 	if strings.Contains(got, home) {
 		t.Fatalf("home leaked: %q", got)
 	}
-	if !strings.Contains(got, "~/projects/x") {
+	// ToSlash so the assertion holds on Windows, where filepath.Join (and thus
+	// the redacted path) uses '\'. Redaction's job is that home doesn't leak
+	// (checked above); the separator is platform-native.
+	if !strings.Contains(filepath.ToSlash(got), "~/projects/x") {
 		t.Fatalf("want ~-relative path, got %q", got)
 	}
 }

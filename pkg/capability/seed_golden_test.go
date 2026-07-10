@@ -42,7 +42,10 @@ func TestSeedPriorsMatchGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	// Normalize CRLF: git's autocrlf checks the golden out with \r\n on
+	// Windows, and a whole-string TrimSpace leaves the per-line \r behind.
+	norm := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	want := strings.Split(strings.TrimSpace(norm), "\n")
 	sort.Strings(want)
 
 	if len(got) != len(want) {
