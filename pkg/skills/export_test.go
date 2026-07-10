@@ -10,7 +10,10 @@ import (
 )
 
 func TestDetectAgent(t *testing.T) {
-	for _, env := range []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "GEMINI_CLI", "CURSOR_AGENT", "AGENT", "AI_AGENT"} {
+	for _, marker := range agentMarkers {
+		t.Setenv(marker.env, "")
+	}
+	for _, env := range []string{"AGENT", "AI_AGENT"} {
 		t.Setenv(env, "")
 	}
 	if name, ok := DetectAgent(); ok {

@@ -123,7 +123,10 @@ func TestCostSeededAndValueRanking(t *testing.T) {
 		t.Errorf("premium model should cost more than commodity")
 	}
 	// codex leads coding by QUALITY (meeting correction).
-	byQ := m.Best(CapCoding, true, ByQuality)
+	byQ := m.Best(CapCoding, false, ByQuality)
+	if len(byQ) == 0 {
+		t.Fatal("expected quality ranking to return seeded agents")
+	}
 	if ToolOf(byQ[0].Agent) != "codex" {
 		t.Errorf("codex should lead coding by quality, got %s", byQ[0].Agent)
 	}
@@ -132,7 +135,10 @@ func TestCostSeededAndValueRanking(t *testing.T) {
 	_ = RecordOperability("codex", false)
 	_ = RecordOperability("codex", false)
 	m2, _ := Load()
-	byV := m2.Best(CapCoding, true, ByValue)
+	byV := m2.Best(CapCoding, false, ByValue)
+	if len(byV) == 0 {
+		t.Fatal("expected value ranking to return seeded agents")
+	}
 	if ToolOf(byV[0].Agent) == "codex" {
 		t.Errorf("flaky+premium codex should not top coding by VALUE, got %s (val=%.2f)", byV[0].Agent, byV[0].Value)
 	}
