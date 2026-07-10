@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -142,8 +143,16 @@ func TestForcedShellEnv(t *testing.T) {
 	if p := find("PATH="); p != "/shims"+string(os.PathListSeparator)+"/usr/bin:/bin" {
 		t.Fatalf("shim dir not prepended to PATH: %q", p)
 	}
-	if s := find("SHELL="); s != "/opt/bashy" {
-		t.Fatalf("SHELL not pinned to bashy: %q", s)
+	if runtime.GOOS == "windows" {
+		for _, kv := range got {
+			if strings.HasPrefix(kv, "SHELL=") {
+				t.Fatalf("SHELL should not be set on Windows: %#v", got)
+			}
+		}
+	} else {
+		if s := find("SHELL="); s != "/opt/bashy" {
+			t.Fatalf("SHELL not pinned to bashy: %q", s)
+		}
 	}
 	if s := find("CLAUDE_CODE_SHELL="); s != "/opt/bashy" {
 		t.Fatalf("CLAUDE_CODE_SHELL not pinned to bashy: %q", s)
