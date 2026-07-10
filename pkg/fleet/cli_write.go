@@ -552,3 +552,48 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
+
+// newSync builds the `sync` verb: pull one noun's org catalog into the
+// overlay ring.
+//
+// Failing to reach the control plane is an error for `sync` (the caller asked
+// to pull) but never for any other verb: the cached ring keeps answering, and
+// an unpaired host never needed it.
+func newSync(noun string, opts []Option) *cobra.Command {
+	var cfg CloudConfig
+	var asJSON bool
+	c := &cobra.Command{
+		Use:   "sync",
+		Short: "Pull the org catalog into the overlay ring",
+		Long: "Pull the org catalog into the overlay ring.\n\n" +
+			"The overlay sits above the compiled-in baseline and below the local\n" +
+			"store: an org default beats what bashy shipped, and your own entry\n" +
+			"beats the org. Everything works without it — pairing only enhances.",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			client, err := cfg.Resolve()
+			if err != nil {
+				return err
+			}
+			cat := New(opts...)
+			res, err := client.Sync(CloudCacheRoot(cat.Root()), noun+"s")
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return writeJSON(cmd.OutOrStdout(), res)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: %d pulled into %s\n", res.Noun, res.Fetched, res.Dir)
+			if res.Skipped > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: skipped %d non-cli tool kinds (function kits are not fleet tools)\n", res.Skipped)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&cfg.URL, "url", "", "control-plane base URL (default $BASHY_CLOUDBOX_URL)")
+	c.Flags().StringVar(&cfg.Token, "token", "", "Bearer token (default $BASHY_FLEET_TOKEN, else $BASHY_API_KEY)")
+	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	return c
+}

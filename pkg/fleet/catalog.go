@@ -17,6 +17,7 @@ type Config struct {
 	shared  map[string][]assetring.Source // noun → extra read-only sources
 	baseFS  fs.FS                         // embedded baseline (nil = the compiled-in one)
 	noLocal bool
+	noCloud bool
 }
 
 // Option configures a Catalog.
@@ -49,6 +50,9 @@ func WithBaselineFS(fsys fs.FS) Option { return func(c *Config) { c.baseFS = fsy
 // WithoutLocalStore drops the host-local ring. Tests use it to read the
 // baseline without touching the developer's real store.
 func WithoutLocalStore() Option { return func(c *Config) { c.noLocal = true } }
+
+// WithoutCloudOverlay drops the org-overlay ring.
+func WithoutCloudOverlay() Option { return func(c *Config) { c.noCloud = true } }
 
 // Catalog reads the merged fleet across every ring.
 type Catalog struct{ cfg Config }
@@ -92,6 +96,12 @@ func (c *Catalog) sources(noun string) []assetring.Source {
 		out = append(out, assetring.FileDir(dir, assetring.RingShared, ext))
 	}
 	out = append(out, c.cfg.shared[noun]...)
+	// The org overlay sits ABOVE the compiled-in baseline and the shared dirs,
+	// and BELOW the local store: an org default beats what bashy shipped, and
+	// an operator's own entry beats the org. Absent until a `sync` lands.
+	if !c.cfg.noCloud {
+		out = append(out, cloudSources(c.cfg.root, noun)...)
+	}
 	if !c.cfg.noLocal {
 		out = append(out, assetring.FileDir(c.nounDir(noun), assetring.RingLocal, ext))
 	}

@@ -27,6 +27,7 @@ func NewToolsCmd(opts ...Option) *cobra.Command {
 		newToolsSet(opts),
 		newRm(KindTool, opts, (*Catalog).RemoveTool),
 		newEdit(KindTool, opts, (*Catalog).MaterializeTool),
+		newSync(KindTool, opts),
 		newVerify(KindTool, opts, func(c *Catalog, n string) Check {
 			return c.VerifyTool(n, Probes(nil))
 		}),
@@ -42,6 +43,7 @@ func NewModelsCmd(opts ...Option) *cobra.Command {
 		newModelsSet(opts),
 		newRm(KindModel, opts, (*Catalog).RemoveModel),
 		newEdit(KindModel, opts, (*Catalog).MaterializeModel),
+		newSync(KindModel, opts),
 		newVerify(KindModel, opts, func(c *Catalog, n string) Check {
 			return c.VerifyModel(n, Probes(nil))
 		}),
@@ -57,6 +59,7 @@ func NewAgentsCmd(opts ...Option) *cobra.Command {
 		newAgentsSet(opts),
 		newRm(KindAgent, opts, (*Catalog).RemoveAgent),
 		newEdit(KindAgent, opts, (*Catalog).MaterializeAgent),
+		newSync(KindAgent, opts),
 		newVerify(KindAgent, opts, func(c *Catalog, n string) Check {
 			return c.VerifyAgent(n, Probes(nil))
 		}),
@@ -132,7 +135,7 @@ func newToolsList(opts []Option) *cobra.Command {
 }
 
 func newToolsShow(opts []Option) *cobra.Command {
-	var asJSON bool
+	var asJSON, asYAML bool
 	c := &cobra.Command{
 		Use:           "show <name>",
 		Short:         "Print a tool's definition",
@@ -140,6 +143,9 @@ func newToolsShow(opts []Option) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkFormat(asJSON, asYAML); err != nil {
+				return err
+			}
 			t, ok := New(opts...).Tool(args[0])
 			if !ok {
 				return fmt.Errorf("fleet: no tool %q", args[0])
@@ -148,6 +154,7 @@ func newToolsShow(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of the canonical YAML")
+	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob (the default)")
 	return c
 }
 
@@ -196,7 +203,7 @@ func newModelsList(opts []Option) *cobra.Command {
 }
 
 func newModelsShow(opts []Option) *cobra.Command {
-	var asJSON bool
+	var asJSON, asYAML bool
 	c := &cobra.Command{
 		Use:           "show <name>",
 		Short:         "Print a model's definition",
@@ -204,6 +211,9 @@ func newModelsShow(opts []Option) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkFormat(asJSON, asYAML); err != nil {
+				return err
+			}
 			m, ok := New(opts...).Model(args[0])
 			if !ok {
 				return fmt.Errorf("fleet: no model %q", args[0])
@@ -212,6 +222,7 @@ func newModelsShow(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of the canonical YAML")
+	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob (the default)")
 	return c
 }
 
@@ -278,7 +289,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 }
 
 func newAgentsShow(opts []Option) *cobra.Command {
-	var asJSON bool
+	var asJSON, asYAML bool
 	c := &cobra.Command{
 		Use:           "show <name>",
 		Short:         "Print an agent's binding",
@@ -287,6 +298,9 @@ func newAgentsShow(opts []Option) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkFormat(asJSON, asYAML); err != nil {
+				return err
+			}
 			cat := New(opts...)
 			a, ok := cat.Agent(args[0])
 			if !ok {
@@ -294,6 +308,11 @@ func newAgentsShow(opts []Option) *cobra.Command {
 			}
 			if asJSON {
 				return emit(cmd.OutOrStdout(), a, true)
+			}
+			// An agent's asset blob is the envelope, not the bare agent —
+			// that is the shape the store holds and the control plane serves.
+			if asYAML {
+				return emit(cmd.OutOrStdout(), AgentFile{Agents: []Agent{a}}, false)
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "%s  (%s)\n", a.Name, a.MatrixKey())
@@ -315,10 +334,20 @@ func newAgentsShow(opts []Option) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of a summary")
+	c.Flags().BoolVar(&asYAML, "yaml", false, "emit the canonical YAML asset blob")
 	return c
 }
 
 // --- shared helpers ------------------------------------------------------
+
+// checkFormat rejects asking for two output formats at once, rather than
+// silently letting one win.
+func checkFormat(asJSON, asYAML bool) error {
+	if asJSON && asYAML {
+		return fmt.Errorf("fleet: --json and --yaml are mutually exclusive")
+	}
+	return nil
+}
 
 func emit(w io.Writer, v any, asJSON bool) error {
 	if asJSON {
