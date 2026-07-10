@@ -1,0 +1,221 @@
+package supervise
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// scriptRunner returns a canned reply per agent so workers/supervisor can be
+// driven deterministically without spawning real CLIs.
+type scriptRunner struct {
+	reply map[string]string
+	code  map[string]int
+}
+
+func (s scriptRunner) Run(_ context.Context, agent string, _ []string, _ string) (string, int, error) {
+	return s.reply[agent], s.code[agent], nil
+}
+
+type noProgress struct{}
+
+func (noProgress) progress(string) {}
+
+// funcRunner adapts a function to chat.Runner.
+type funcRunner func(ctx context.Context, agent string, args []string, cwd string) (string, int, error)
+
+func (f funcRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+	return f(ctx, agent, args, cwd)
+}
+
+func testEnv(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("BASHY_SUPERVISE_DIR", filepath.Join(dir, "store"))
+	old := nowFn
+	nowFn = func() time.Time { return time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { nowFn = old })
+	return dir
+}
+
+func TestParseTasks(t *testing.T) {
+	cs, err := parseTasks([]string{
+		"fix comsub :: make test | grep PASS",
+		"@codex: fix errors :: true",
+		"varenv| fix varenv :: false",
+		"no gate task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs) != 4 {
+		t.Fatalf("want 4 contracts, got %d", len(cs))
+	}
+	if cs[0].Goal != "fix comsub" || cs[0].Gate != "make test | grep PASS" {
+		t.Errorf("c0: %+v", cs[0])
+	}
+	if cs[1].Worker != "codex" || cs[1].Goal != "fix errors" || cs[1].Gate != "true" {
+		t.Errorf("c1 (pinned worker): %+v", cs[1])
+	}
+	if cs[2].ID != "varenv" || cs[2].Goal != "fix varenv" || cs[2].Gate != "false" {
+		t.Errorf("c2 (named id): %+v", cs[2])
+	}
+	if cs[3].gated() {
+		t.Errorf("c3 should be ungated: %+v", cs[3])
+	}
+}
+
+// The verdict is the GATE, not the worker's claim. A worker that "succeeds" but
+// leaves the gate failing is recorded FAIL — the green-but-uncommitted defense.
+func TestGateDecidesVerdictNotTheWorker(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "g", Supervisor: "claude", Fleet: []string{"codex"}, MaxAttempts: 1, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "false"}}, // gate always fails
+	}
+	// worker claims success (exit 0), but the gate `false` fails.
+	r := scriptRunner{reply: map[string]string{"codex": "done!", "claude": "not met"}}
+	v := runContract(context.Background(), p, p.Contracts[0], r, noProgress{})
+	if v.Passed {
+		t.Fatal("gate `false` must make the verdict FAIL even though the worker claimed success")
+	}
+	if v.GateExit == 0 {
+		t.Errorf("gate exit should be non-zero, got %d", v.GateExit)
+	}
+}
+
+// A passing gate converges.
+func TestGatePassConverges(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "g", Supervisor: "claude", Fleet: []string{"codex"}, MaxAttempts: 2, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
+	}
+	r := scriptRunner{reply: map[string]string{"codex": "ok", "claude": "looks good"}}
+	res, err := Run(context.Background(), p, r, noProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Converged || len(res.Verdicts) != 1 || !res.Verdicts[0].Passed {
+		t.Fatalf("expected convergence, got %+v", res)
+	}
+	if res.Report == "" {
+		t.Error("a report should be filed")
+	}
+}
+
+// Retry rotates the fleet: a gate that fails then passes should land the second
+// attempt on a DIFFERENT worker.
+func TestRetryRotatesFleet(t *testing.T) {
+	testEnv(t)
+	// gate fails on the first run, passes on the second (a file toggled by the worker turns)
+	gatefile := filepath.Join(t.TempDir(), "flag")
+	gate := "test -f " + gatefile
+	attempts := 0
+	// A runner that creates the flag file on its SECOND invocation.
+	r := funcRunner(func(_ context.Context, agent string, _ []string, _ string) (string, int, error) {
+		attempts++
+		if attempts == 2 {
+			_ = os.WriteFile(gatefile, []byte("x"), 0o644)
+		}
+		return "turn by " + agent, 0, nil
+	})
+	p := &Plan{
+		Goal: "g", Supervisor: "claude", Fleet: []string{"codex", "opencode"}, MaxAttempts: 3, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: gate}},
+	}
+	v := runContract(context.Background(), p, p.Contracts[0], r, noProgress{})
+	if !v.Passed {
+		t.Fatal("should pass on the 2nd attempt")
+	}
+	if v.Attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", v.Attempts)
+	}
+	if v.Worker != "opencode" {
+		t.Errorf("2nd attempt should rotate to opencode, got %q", v.Worker)
+	}
+}
+
+// A pinned @worker is never rotated.
+func TestPinnedWorkerNotRotated(t *testing.T) {
+	testEnv(t)
+	p := &Plan{Fleet: []string{"codex", "opencode"}}
+	c := &Contract{ID: "t1", Goal: "x", Worker: "codex"}
+	for a := 0; a < 3; a++ {
+		if p.pick(c, a) != "codex" {
+			t.Fatalf("pinned worker must not rotate (attempt %d)", a)
+		}
+	}
+}
+
+// An ungated task is UNVERIFIED and does not count toward convergence — you
+// cannot "review" what has no gate.
+func TestUngatedTaskDoesNotConverge(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "g", Supervisor: "claude", Fleet: []string{"codex"}, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do"}}, // no gate
+	}
+	r := scriptRunner{reply: map[string]string{"codex": "ok", "claude": "hmm"}}
+	res, err := Run(context.Background(), p, r, noProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Converged {
+		t.Error("an ungated task must not count as converged")
+	}
+	if !res.Verdicts[0].Unverified {
+		t.Error("ungated task should be marked Unverified")
+	}
+}
+
+// Validation enforces the roster invariants.
+func TestValidate(t *testing.T) {
+	cases := []struct {
+		name string
+		p    Plan
+		want string
+	}{
+		{"no goal", Plan{Supervisor: "c", Fleet: []string{"x"}, Contracts: []*Contract{{Goal: "g"}}}, "--goal"},
+		{"no supervisor", Plan{Goal: "g", Fleet: []string{"x"}, Contracts: []*Contract{{Goal: "g"}}}, "--supervisor"},
+		{"no worker", Plan{Goal: "g", Supervisor: "c", Contracts: []*Contract{{Goal: "g"}}}, "--worker"},
+		{"no tasks", Plan{Goal: "g", Supervisor: "c", Fleet: []string{"x"}}, "--task"},
+		{"pinned worker off-fleet", Plan{Goal: "g", Supervisor: "c", Fleet: []string{"x"},
+			Contracts: []*Contract{{ID: "t1", Goal: "g", Worker: "codex"}}}, "not in --worker fleet"},
+	}
+	for _, tc := range cases {
+		err := tc.p.Validate()
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want error containing %q, got %v", tc.name, tc.want, err)
+		}
+	}
+	ok := Plan{Goal: "g", Supervisor: "claude", Fleet: []string{"codex"}, Contracts: []*Contract{{ID: "t1", Goal: "g", Gate: "true"}}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid plan rejected: %v", err)
+	}
+}
+
+// The report captures the verdict table and the supervisor judgment; home is
+// redacted.
+func TestReportContents(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "fix the thing", Supervisor: "claude", Fleet: []string{"codex"}, Cwd: t.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
+	}
+	r := scriptRunner{reply: map[string]string{"codex": "ok", "claude": "The goal is met; nothing left."}}
+	res, err := Run(context.Background(), p, r, noProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(res.Report)
+	md := string(b)
+	for _, must := range []string{"# Supervision — fix the thing", "CONVERGED", "Supervisor judgment", "The goal is met", "| Task | Verdict |"} {
+		if !strings.Contains(md, must) {
+			t.Fatalf("report missing %q\n%s", must, md)
+		}
+	}
+}
