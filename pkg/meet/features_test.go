@@ -304,7 +304,7 @@ func TestVerdictDecide(t *testing.T) {
 // ending someone else's meeting.
 func TestAgentInitiatorGatesTheClose(t *testing.T) {
 	st := newTestSession(t)
-	st.Initiator, st.InitiatorKind = "codex", "agent"
+	st.Initiator = "codex" // a participant convened it, so an agent must confirm
 	_ = st.save()
 
 	declining := scriptRunner{replies: map[string]string{
@@ -355,6 +355,28 @@ func TestYesBypassIsRecorded(t *testing.T) {
 	events, _ := readTranscript(st.ID)
 	if countKind(events, "confirm") != 1 {
 		t.Fatal("--yes must still record a confirm event")
+	}
+}
+
+// An unnamed initiator is the anonymous agent that called `meet consult`. It
+// receives its verdict synchronously and never confirms — so if anything asks it
+// to confirm, there is nobody to ask, and the close must refuse rather than
+// invent someone.
+func TestUnnamedInitiatorCannotConfirm(t *testing.T) {
+	st := newTestSession(t)
+	st.Initiator = ""
+	_ = st.save()
+	err := confirmConclusion(context.Background(), st, nil, &strings.Builder{}, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "no named initiator") {
+		t.Fatalf("want a no-named-initiator error, got %v", err)
+	}
+	// --yes still closes it, and still records that it did.
+	if err := confirmConclusion(context.Background(), st, nil, nil, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := readTranscript(st.ID)
+	if countKind(events, "confirm") != 1 {
+		t.Error("--yes must record the bypass even for an unnamed caller")
 	}
 }
 
@@ -409,7 +431,7 @@ func TestMinutesCarryFullTurnsCoverageAndPolls(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Cwd = repo
-	st.Initiator, st.InitiatorKind = "qiangli", "human"
+	st.Initiator = "qiangli" // == st.Human, so a human must confirm
 	_ = st.save()
 
 	longArgument := "The slicer must be a strict no-op at n=1. " + strings.Repeat("Otherwise everything downstream is theatre. ", 12)
@@ -527,26 +549,37 @@ func TestApplyActionsIsIdempotent(t *testing.T) {
 // The shared source set reaches every participant: chat.BuildPrompt inlines each
 // --context file, so a missing file must fail loudly at start, not mid-round.
 func TestContextFilesAreValidatedUpFront(t *testing.T) {
-	sf := sessionFlags{topic: "t", context: []string{filepath.Join(t.TempDir(), "nope.md")}}
+	sf := sessionFlags{topic: "t", secretary: "claude", context: []string{filepath.Join(t.TempDir(), "nope.md")}}
 	if _, err := sf.newState(); err == nil {
 		t.Fatal("a missing --context file must fail before any agent is launched")
 	}
 }
 
-// An --initiator that is not the human is an agent, without having to say so.
-func TestInitiatorKindInferredFromName(t *testing.T) {
+// The initiator's kind is DERIVED from the roster, so the two can never disagree.
+func TestInitiatorKindDerivedNeverStored(t *testing.T) {
 	t.Setenv("USER", "alice")
-	sf := sessionFlags{topic: "t", initiator: "codex"}
-	st, err := sf.newState()
+	st, err := (&sessionFlags{topic: "t", secretary: "claude",
+		participants: []string{"codex"}, initiator: "codex"}).newState()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st.initiatorKind() != "agent" {
-		t.Errorf("kind = %q, want agent", st.initiatorKind())
+		t.Errorf("a participant initiator is an agent, got %q", st.initiatorKind())
 	}
-	sf2 := sessionFlags{topic: "t"}
-	st2, _ := sf2.newState()
-	if st2.initiatorKind() != "human" || st2.initiatorName() != "alice" {
-		t.Errorf("default initiator = %s/%s, want alice/human", st2.initiatorName(), st2.initiatorKind())
+	human, _ := (&sessionFlags{topic: "t", secretary: "claude",
+		participants: []string{"codex"}, initiator: "alice"}).newState()
+	if human.initiatorKind() != "human" {
+		t.Errorf("the human initiator must be human, got %q", human.initiatorKind())
+	}
+	// An unnamed initiator is the calling agent (consult); it never confirms.
+	caller, _ := (&sessionFlags{topic: "t", secretary: "claude", participants: []string{"codex"}}).newState()
+	if caller.initiatorKind() != "agent" || caller.initiatorName() != "" {
+		t.Errorf("an unnamed initiator must be an unnamed agent, got %q/%q",
+			caller.initiatorName(), caller.initiatorKind())
+	}
+	// An initiator nobody has heard of is a mistake, not an agent.
+	if _, err := (&sessionFlags{topic: "t", secretary: "claude",
+		participants: []string{"codex"}, initiator: "ghost"}).newState(); err == nil {
+		t.Error("an initiator who is not at the meeting must be rejected")
 	}
 }

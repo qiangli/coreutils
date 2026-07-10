@@ -9,24 +9,32 @@ files the result. It is the *deliberative* front half of the fleet; `weave` /
 `meet` is also **callable by an agent**: a coding agent that wants a cross-vendor
 second opinion mid-task runs `bashy meet consult` and reads back a verdict.
 
-## Roles
+## Roles — three, and the separation between them is the design
 
-- **Chair / facilitator** — sets the agenda, poses each item, decides when to
-  converge. The human by default; under `--mode facilitated` an agent takes the
-  role and picks each speaker (see below).
-- **Initiator** — whoever convened the meeting. *Only the initiator may end it*
-  (see `close`). May be a human or an agent.
-- **Participants** — the agentic CLIs (and/or humans); each contributes one turn per
-  round. Diversity of tool/model is the value (2–4 near-equal proposers is the sweet
-  spot; more dilutes signal — the Self-MoA guard).
-- **Secretary** — a *dedicated, non-participating* role: it only records, maintains
-  the minutes, and on converge/close extracts decisions / actions / risks / open
-  questions / corrections (never proposes, votes, or decides). Default: `claude`.
+| Role | Decides | Filled by |
+|---|---|---|
+| **participant** | **content** — argues, proposes, votes | agents, 1..N |
+| **chair** | **process** — poses the agenda, calls on speakers, judges done-ness. Never argues. | an agent (`--chair`), the human, or nobody |
+| **secretary** | **nothing** — records, and extracts what was decided | exactly one agent (`--secretary`, default `claude`) |
+
+**These are enforced, not merely documented.** `meet` refuses to start a meeting
+where the secretary is also a participant (a recorder with a stake in the record),
+where the secretary is also the chair (it could declare the meeting over and then
+author the minutes saying so), or where the chair is also a participant (it would
+pick itself). A participant seated twice is refused too — a duplicate seat dilutes
+a vote and adds no diversity.
+
+Diversity of tool/model among participants is the value (2–4 near-equal proposers is
+the sweet spot; more dilutes signal — the Self-MoA guard).
+
+**Initiator** is not a fourth role. It is an *attribute*: whoever convened the
+meeting, named among the people already at the table. *Only the initiator may end
+it* (see `close`).
 
 ## CLI
 
 ```
-bashy meet start   --topic TEXT [--participant AGENT ...] [flags]
+bashy meet start   --topic TEXT [--participant AGENT ...] [--chair AGENT] [flags]
 bashy meet consult --topic TEXT --question TEXT [--choice yes --choice no] [--json]
 
 bashy meet tell          <id> "<text>"          # append a human contribution
@@ -45,30 +53,35 @@ bashy meet list | resume <id> | reference
 ```
 
 Session flags (`start`, `consult`): `--topic` (required) · `--participant`
-(repeatable) · `--assistant` (secretary; default claude) · `--agenda` (repeatable) ·
-`--context FILE` (repeatable — every participant reads the same source set) ·
-`--turn-timeout` (default 20m) · `--decision-mode infer|explicit` ·
-`--min-turn-chars N` · `--initiator NAME` / `--initiator-kind human|agent` ·
-`--mode sequential|facilitated` · `--facilitator AGENT` · `--max-turns` ·
-`--max-stalls` · `--out docs|kb|<path>`.
+(repeatable) · `--secretary` (default `claude`) · `--chair AGENT` (optional) ·
+`--agenda` (repeatable) · `--context FILE` (repeatable — every participant reads the
+same source set) · `--turn-timeout` (default 20m) · `--decision-mode infer|explicit` ·
+`--min-turn-chars N` · `--initiator NAME` · `--max-turns` · `--max-stalls` ·
+`--out docs|kb|<path>`.
+
+There is **no `--mode` flag.** The turn model is a consequence of who chairs.
 
 `start` adds `--rounds N --non-interactive` (run then auto-close), `--dry-run`
 (print the resolved session + attendee gate, launch nothing), and `--yes`.
 
 In the REPL: plain text = a human turn · `@name <text>` = a targeted turn · `/round` ·
-`/facilitate` · `/poll <q>` · `/ask <q>` · `/decision <t>` · `/action owner: task` ·
+`/chair` · `/poll <q>` · `/ask <q>` · `/decision <t>` · `/action owner: task` ·
 `/agenda <t>` · `/show` · `/converge` · `/close`.
 
-## Turn model: `sequential` vs `facilitated`
+## The turn model follows from who chairs
 
-`--mode sequential` (the default) is strict round-robin: every participant speaks,
-once, per round. Simple and cheap, but rigid — it cannot skip a participant with
-nothing to add, cannot call one twice mid-argument, and **cannot notice the meeting
-is going in circles**. Step repetition is the largest measured failure mode in
-multi-agent systems (~17% of failures across 1600+ traces).
+There is no mode flag, because there is nothing a mode flag could say that the
+roster does not already say.
 
-`--mode facilitated` puts an agent in the chair. Before each turn the facilitator
-answers five questions at once — speaker selection is only two of them:
+**No `--chair`** → strict round-robin: every participant speaks, once, per round.
+The human directs (`/round`), or nobody does (`--non-interactive`, `consult`).
+Simple and cheap, but rigid — it cannot skip a participant with nothing to add,
+cannot call one twice mid-argument, and **cannot notice the meeting is going in
+circles**. Step repetition is the largest measured failure mode in multi-agent
+systems (~17% of failures across 1600+ traces).
+
+**`--chair <agent>`** → that agent directs. Before each turn it answers five
+questions at once — speaker selection is only two of them:
 
 ```
 SATISFIED: yes|no        has the agenda been fully addressed?
@@ -89,8 +102,8 @@ the transcript and the minutes. Three defenses, each against a documented failur
   attempts **degrades to a default speaker and marks the ledger `degraded`**. A
   fallback that hides itself looks like a working selector.
 - **Stall counter.** `LOOPING` or `not PROGRESSING` for `--max-stalls` consecutive
-  turns triggers a **re-plan**: the facilitator is asked for a new approach instead
-  of calling on another participant to repeat the loop. A second exhausted run of
+  turns triggers a **re-plan**: the chair is asked for a new approach instead of
+  calling on another participant to repeat the loop. A second exhausted run of
   stalls stops the meeting rather than spinning. Stall detection runs *before*
   dispatch — that is the whole point.
 - **Hard backstops.** `--max-turns` and the caller's deadline always apply.
@@ -99,24 +112,24 @@ the transcript and the minutes. Three defenses, each against a documented failur
   the orchestrator, never to a token a model emits — models both fail to stop and
   stop early, at measurable rates.
 
-The facilitator is a **distinct role from the secretary**: the facilitator directs
-and judges done-ness, the secretary only records. `--facilitator` defaults to the
-secretary's agent for convenience; name a different one to keep them fully separate.
+The chair is a **distinct seat from the secretary**, and `meet` will not let one
+agent hold both — see Roles above.
 
 ```bash
-bashy meet start --topic "…" --mode facilitated \
-  --participant codex --participant claude \
-  --facilitator claude --max-turns 12 --max-stalls 3 --non-interactive
+bashy meet start --topic "…" \
+  --participant codex --participant opencode \
+  --chair claude --secretary gemini \
+  --max-turns 12 --max-stalls 3 --non-interactive
 ```
 
-A facilitated run reports how it ended:
+A chaired run reports how it ended:
 
 ```
-facilitation: 6 turns, 2 stalls, 1 re-plans, 0 degraded selections — stopped by satisfied
+chaired: 6 turns, 2 stalls, 1 re-plans, 0 degraded selections — stopped by satisfied
 ```
 
-`stopped_by` is `satisfied` (the facilitator's own call), or `max_turns` / `stalled`
-/ `deadline` (a backstop fired). Only `satisfied` means the meeting finished.
+`stopped_by` is `satisfied` (the chair's own call), or `max_turns` / `stalled` /
+`deadline` (a backstop fired). Only `satisfied` means the meeting finished.
 
 ## Turn styles
 
@@ -292,7 +305,7 @@ A session is local under `~/.bashy/meet/<id>/`:
 | File | Contents |
 |---|---|
 | `state.json` | the durable header (roster, initiator, modes) |
-| `transcript.jsonl` | **append-only** events: turns, votes, facilitator ledgers, re-plans, human markers, confirmations |
+| `transcript.jsonl` | **append-only** events: turns, votes, chair ledgers, re-plans, human markers, confirmations |
 | `synthesis.json` | the secretary's latest pass — rewritten, never appended |
 | `turns/*.txt` | each turn's complete text |
 | `minutes.md` | when cwd is outside a git repo |

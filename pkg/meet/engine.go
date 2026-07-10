@@ -112,9 +112,9 @@ func transcriptContext(events []Event) string {
 		case "action":
 			who = "ACTION"
 		case "ledger":
-			who = "FACILITATOR"
+			who = "CHAIR"
 		case "replan":
-			who = "FACILITATOR (new approach)"
+			who = "CHAIR (new approach)"
 		}
 		// Decisions/actions (short + load-bearing) and the most recent turns get a
 		// full preview; older turns collapse to a one-line reference.
@@ -179,7 +179,7 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 	elapsed := time.Since(start)
 
 	ev := Event{
-		Round: st.Round, Speaker: name, Role: "participant", Kind: "turn",
+		Round: st.Round, Speaker: name, Role: string(RoleParticipant), Kind: "turn",
 		Question: question, TS: nowFn(),
 		ExitCode: res.ExitCode, DurMS: elapsed.Milliseconds(),
 	}
@@ -348,6 +348,9 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	for _, p := range st.Participants {
 		attendees = append(attendees, p+" (participant)")
 	}
+	if st.chaired() {
+		attendees = append(attendees, st.chair()+" (chair)")
+	}
 	attendees = append(attendees, st.Secretary+" (secretary)")
 	fmt.Fprintf(&b, "Attendees: %s\n", strings.Join(attendees, " · "))
 	if len(st.Context) > 0 {
@@ -432,9 +435,11 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 		case "confirm":
 			fmt.Fprintf(&b, "\n**%s** (conclusion confirmed): %s\n", e.Speaker, oneLine(redactHome(e.Text)))
 		case "ledger":
-			fmt.Fprintf(&b, "\n*facilitator: %s*\n", oneLine(redactHome(e.Text)))
+			fmt.Fprintf(&b, "\n*chair: %s*\n", oneLine(redactHome(e.Text)))
 		case "replan":
-			fmt.Fprintf(&b, "\n**%s** (re-plan after a stall):\n\n%s", e.Speaker, blockquote(redactHome(e.Text), e.File))
+			fmt.Fprintf(&b, "\n**%s** (chair re-plan after a stall):\n\n%s", e.Speaker, blockquote(redactHome(e.Text), e.File))
+		case "note":
+			fmt.Fprintf(&b, "\n*%s*\n", oneLine(redactHome(e.Text)))
 		}
 	}
 
@@ -521,7 +526,7 @@ func converge(ctx context.Context, st *State, runner chat.Runner) (*Synthesis, e
 	}
 	events, _ := readTranscript(st.ID)
 	res, err := chat.Invoke(ctx, chat.Options{
-		Agent: st.Secretary, Role: "secretary", Instruction: convergeInstruction(st.decisionMode()),
+		Agent: st.Secretary, Role: string(RoleSecretary), Instruction: convergeInstruction(st.decisionMode()),
 		Context: []string{transcriptContext(events)}, Cwd: st.Cwd, Timeout: turnTimeout(st),
 	}, runner)
 	if err != nil {
@@ -647,8 +652,18 @@ func isTerminal(r io.Reader) bool {
 func confirmConclusion(ctx context.Context, st *State, in io.Reader, out io.Writer, yes bool, runner chat.Runner) error {
 	who, kind := st.initiatorName(), st.initiatorKind()
 	if yes {
+		if who == "" {
+			who = "unnamed caller"
+		}
 		_, _ = record(st, "confirm", who, kind, "concluded without prompting (--yes)")
 		return nil
+	}
+	// An unnamed initiator is the agent that called `meet consult`, which receives
+	// the verdict synchronously and never confirms. Reaching here means someone
+	// asked an anonymous caller to confirm; there is nobody to ask.
+	if who == "" {
+		return fmt.Errorf("meet: this meeting has no named initiator to confirm it may end; " +
+			"pass --initiator <name at the table>, or --yes for an unattended close")
 	}
 
 	events, _ := readTranscript(st.ID)
@@ -664,7 +679,7 @@ func confirmConclusion(ctx context.Context, st *State, in io.Reader, out io.Writ
 			"You convened this meeting (topic: %q). It has run %s. The secretary's synthesis is in the transcript below.\n\n"+
 				"Has the meeting achieved what you convened it for? Reply on the FIRST line with EXACTLY one word: "+
 				"CONCLUDE or CONTINUE. On the next line give one sentence of reason.", st.Topic, brief)
-		ev, err := invokeAgent(ctx, st, who, "initiator", instr, "conclude?", runner)
+		ev, err := invokeAgent(ctx, st, who, "", instr, "conclude?", runner)
 		if err != nil {
 			return fmt.Errorf("meet: could not reach initiator %s to confirm conclusion: %w", who, err)
 		}

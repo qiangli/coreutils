@@ -1,10 +1,9 @@
 // Package meet implements `bashy meet` — a multi-participant deliberation
-// session where agentic CLIs and a human take turns, and a dedicated
-// notes-only secretary keeps the minutes and files them.
+// session where agentic CLIs and a human take turns.
 //
-// P0 (this cut) is deliberately minimal: local sessions only, sequential
-// round-robin turns, a notes-only secretary, and a docs/ filer. See
-// dhnt/docs/bashy-meet.md for the full design and the deferred rungs.
+// A meeting has three roles and the separation between them is the design:
+// PARTICIPANTS decide content, the CHAIR decides process, and the SECRETARY
+// decides nothing and records. See dhnt/docs/bashy-meet.md.
 package meet
 
 import (
@@ -44,7 +43,7 @@ type Event struct {
 	Round   int       `json:"round"`
 	Speaker string    `json:"speaker"`
 	Role    string    `json:"role,omitempty"`
-	Kind    string    `json:"kind"` // agenda|human|turn|decision|action|poll|vote|question|confirm|context
+	Kind    string    `json:"kind"` // agenda|human|turn|vote|poll|question|ledger|replan|note|decision|action|confirm
 	Text    string    `json:"text"`
 	File    string    `json:"file,omitempty"` // per-turn full-text file (context-offloading target)
 	TS      time.Time `json:"ts"`
@@ -62,20 +61,20 @@ type Event struct {
 	Choice   string   `json:"choice,omitempty"`  // on a vote: the normalized answer
 	Choices  []string `json:"choices,omitempty"` // on a poll: the permitted answers
 
-	// Ledger is set on a `ledger` event: the facilitator's structured decision
-	// for that turn.
+	// Ledger is set on a `ledger` event: the chair's structured decision for
+	// that turn.
 	Ledger *Ledger `json:"ledger,omitempty"`
 }
 
-// Ledger is one facilitator turn's structured decision. Speaker selection is not
-// a separate question from progress: the same call that picks who speaks next
-// also answers whether the request is already satisfied and whether the team is
-// going in circles.
+// Ledger is one chair turn's structured decision. Speaker selection is not a
+// separate question from progress: the same call that picks who speaks next also
+// answers whether the request is already satisfied and whether the team is going
+// in circles.
 //
 // This is the Magentic-One progress-ledger shape. It exists because "who speaks
 // next" alone cannot detect the largest measured multi-agent failure mode — step
 // repetition, ~17% of failures across 1600+ traces. A round-robin scheduler
-// cannot notice a loop; a facilitator that must answer `looping?` every turn can.
+// cannot notice a loop; a chair that must answer `looping?` every turn can.
 type Ledger struct {
 	Satisfied   bool   `json:"request_satisfied"`
 	Looping     bool   `json:"team_looping"`
@@ -84,9 +83,9 @@ type Ledger struct {
 	Instruction string `json:"instruction,omitempty"`
 	Reason      string `json:"reason,omitempty"`
 
-	// Degraded records that the facilitator failed to name a valid speaker and
-	// the orchestrator fell back. Never silent — a fallback that hides itself
-	// looks like a working selector.
+	// Degraded records that the chair failed to name a valid speaker and the
+	// orchestrator fell back. Never silent — a fallback that hides itself looks
+	// like a working selector.
 	Degraded bool `json:"degraded,omitempty"`
 }
 
@@ -154,28 +153,58 @@ func writeTurnFile(id string, e Event) string {
 	return path
 }
 
+// A meeting has exactly three roles, and the separation between them is the
+// feature — not a naming convention.
+//
+//   - PARTICIPANT decides CONTENT. It argues, proposes, and votes.
+//   - CHAIR decides PROCESS. It poses the agenda, calls on speakers, and judges
+//     whether the meeting is done. It never argues.
+//   - SECRETARY decides NOTHING. It records, and extracts what was decided.
+//
+// The chair may be an agent, the human, or absent (a fixed round-robin fan-out
+// where nobody directs). The secretary is always an agent and always exactly one.
+//
+// Separation of powers is enforced in Validate(), not merely documented: a
+// recorder that also chairs can declare the meeting over and then write the
+// minutes that say so, and a chair that also participates biases every speaker
+// selection toward its own thread. Those are the two ways this design fails.
+type Role string
+
+const (
+	RoleParticipant Role = "participant"
+	RoleChair       Role = "chair"
+	RoleSecretary   Role = "secretary"
+	RoleHuman       Role = "human"
+)
+
 // State is the durable meeting header, saved as state.json.
 type State struct {
-	Schema       string    `json:"schema"`
-	ID           string    `json:"id"`
-	Topic        string    `json:"topic"`
-	Agenda       []string  `json:"agenda,omitempty"`
-	Secretary    string    `json:"secretary"`
-	Participants []string  `json:"participants"`
-	Human        string    `json:"human"`
-	Mode         string    `json:"mode"`
-	Status       string    `json:"status"`
-	Cwd          string    `json:"cwd"`
-	Out          string    `json:"out,omitempty"`
-	TurnTimeout  string    `json:"turn_timeout,omitempty"` // per-turn agent timeout, e.g. "20m"
-	Created      time.Time `json:"created"`
-	Round        int       `json:"round"`
+	Schema string   `json:"schema"`
+	ID     string   `json:"id"`
+	Topic  string   `json:"topic"`
+	Agenda []string `json:"agenda,omitempty"`
 
-	// Initiator is who convened the meeting and therefore who must confirm it
-	// may conclude. Kind is "human" or "agent" — an agent-initiated meeting is
-	// confirmed by asking that agent, so `meet` works as a tool call.
-	Initiator     string `json:"initiator,omitempty"`
-	InitiatorKind string `json:"initiator_kind,omitempty"`
+	// The roster. Secretary is required. Chair is optional: empty means nobody
+	// directs (a fixed round-robin), and the turn model follows from that rather
+	// than from a separate mode knob.
+	Participants []string `json:"participants"`
+	Secretary    string   `json:"secretary"`
+	Chair        string   `json:"chair,omitempty"`
+	Human        string   `json:"human"`
+
+	Status      string    `json:"status"`
+	Cwd         string    `json:"cwd"`
+	Out         string    `json:"out,omitempty"`
+	TurnTimeout string    `json:"turn_timeout,omitempty"` // per-turn agent timeout, e.g. "20m"
+	Created     time.Time `json:"created"`
+	Round       int       `json:"round"`
+
+	// Initiator is who convened the meeting and therefore who must confirm it may
+	// conclude. It is an ATTRIBUTE of an attendee, not a fourth role: it names the
+	// human, or an agent already seated at the table. Empty means an unnamed
+	// caller (an agent invoking `meet consult`), which never confirms because it
+	// receives the verdict synchronously.
+	Initiator string `json:"initiator,omitempty"`
 
 	// DecisionMode is "infer" (default — the secretary may record a decision the
 	// meeting converged on, tagged as inferred) or "explicit" (only decisions a
@@ -190,23 +219,45 @@ type State struct {
 	// turn, so the panel reviews the same files rather than guessing.
 	Context []string `json:"context,omitempty"`
 
-	// Facilitator drives `--mode facilitated`: it picks each speaker and decides
-	// when the request is satisfied. Distinct from the secretary, which only
-	// records. Empty falls back to the secretary's agent.
-	Facilitator string `json:"facilitator,omitempty"`
-
-	// MaxTurns and MaxStalls are the orchestrator-owned backstops. Termination is
-	// never left to a token an agent emits: the literature measures both
-	// never-stopping and premature-stopping as common failures.
+	// MaxTurns and MaxStalls are the orchestrator-owned backstops for a chaired
+	// meeting. Termination is never left to a token an agent emits: the
+	// literature measures both never-stopping and premature-stopping as common.
 	MaxTurns  int `json:"max_turns,omitempty"`
 	MaxStalls int `json:"max_stalls,omitempty"`
 }
 
-func (s *State) facilitator() string {
-	if f := strings.TrimSpace(s.Facilitator); f != "" {
-		return f
+// chair returns the agent chairing the meeting, or "" when nobody does.
+func (s *State) chair() string { return strings.TrimSpace(s.Chair) }
+
+// chaired reports whether an agent directs the discussion. When true the meeting
+// runs the chair's progress-ledger loop; when false it runs a fixed round-robin.
+// The turn model is a CONSEQUENCE of who chairs, never a separate flag that can
+// contradict the roster.
+func (s *State) chaired() bool { return s.chair() != "" }
+
+// turnModel describes the turn model for humans.
+func (s *State) turnModel() string {
+	if s.chaired() {
+		return fmt.Sprintf("chaired by %s (max %d turns, re-plan after %d stalls)",
+			s.chair(), s.maxTurns(), s.maxStalls())
 	}
-	return s.Secretary
+	return "round-robin (no chair — every participant speaks each round)"
+}
+
+// attendees lists every seat, so the initiator can be validated against it.
+func (s *State) attendees() []string {
+	out := make([]string, 0, len(s.Participants)+3)
+	out = append(out, s.Participants...)
+	if s.Secretary != "" {
+		out = append(out, s.Secretary)
+	}
+	if s.chaired() {
+		out = append(out, s.chair())
+	}
+	if s.Human != "" {
+		out = append(out, s.Human)
+	}
+	return out
 }
 
 func (s *State) maxTurns() int {
@@ -223,35 +274,100 @@ func (s *State) maxStalls() int {
 	return defaultMaxStalls
 }
 
-// facilitated reports whether the session uses the facilitator loop rather than
-// strict round-robin.
-func (s *State) facilitated() bool {
-	return strings.EqualFold(strings.TrimSpace(s.Mode), "facilitated")
-}
-
-func (s *State) initiatorName() string {
-	if n := strings.TrimSpace(s.Initiator); n != "" {
-		return n
+// Validate enforces the role invariants. Each one exists because violating it
+// silently produces a meeting that lies about itself.
+func (s *State) Validate() error {
+	if strings.TrimSpace(s.Topic) == "" {
+		return fmt.Errorf("meet: a meeting needs a --topic")
 	}
-	return s.Human
+	if strings.TrimSpace(s.Secretary) == "" {
+		return fmt.Errorf("meet: a meeting needs a --secretary to record it")
+	}
+
+	seen := map[string]bool{}
+	for _, p := range s.Participants {
+		if p = strings.TrimSpace(p); p == "" {
+			return fmt.Errorf("meet: empty --participant")
+		}
+		if seen[strings.ToLower(p)] {
+			return fmt.Errorf("meet: %s is seated twice; one seat per participant "+
+				"(duplicate seats dilute a vote and add no diversity)", p)
+		}
+		seen[strings.ToLower(p)] = true
+	}
+
+	// The secretary records what was decided. A secretary that also argues has an
+	// interest in the record; a secretary that also chairs can declare the meeting
+	// over and then write the minutes saying so.
+	if seen[strings.ToLower(s.Secretary)] {
+		return fmt.Errorf("meet: %s cannot be both secretary and participant — "+
+			"the secretary records the decisions and must not have a stake in them", s.Secretary)
+	}
+	if s.chaired() && strings.EqualFold(s.chair(), s.Secretary) {
+		return fmt.Errorf("meet: %s cannot be both chair and secretary — "+
+			"the chair decides when the meeting is done and the secretary writes down what it decided; "+
+			"one agent doing both can conclude a meeting and then author the record of it.\n"+
+			"      Use a different --chair, or drop --chair to let the human direct the discussion", s.Secretary)
+	}
+	// A chair that also argues biases every speaker selection toward its own thread.
+	if s.chaired() && seen[strings.ToLower(s.chair())] {
+		return fmt.Errorf("meet: %s cannot be both chair and participant — "+
+			"the chair picks who speaks next and would be picking itself", s.chair())
+	}
+	if s.chaired() && len(s.Participants) == 0 {
+		return fmt.Errorf("meet: a chair needs at least one --participant to call on")
+	}
+
+	// The initiator must be someone at the table, so `close` knows who to ask.
+	if n := strings.TrimSpace(s.Initiator); n != "" && !strings.EqualFold(n, s.Human) {
+		for _, a := range s.attendees() {
+			if strings.EqualFold(a, n) {
+				return nil
+			}
+		}
+		return fmt.Errorf("meet: --initiator %s is not at this meeting; "+
+			"name the human, a participant, the chair, or the secretary", n)
+	}
+	return nil
 }
 
+func (s *State) initiatorName() string { return strings.TrimSpace(s.Initiator) }
+
+// initiatorKind derives human-vs-agent from the roster rather than storing it, so
+// the two can never disagree. An EMPTY initiator is an unnamed agent caller —
+// only `meet consult` produces one, and it never confirms, because the caller
+// receives the verdict synchronously. `start` always names its initiator.
 func (s *State) initiatorKind() string {
-	if k := strings.TrimSpace(s.InitiatorKind); k == "agent" {
+	n := s.initiatorName()
+	if n == "" {
 		return "agent"
 	}
-	return "human"
+	if strings.EqualFold(n, s.Human) {
+		return "human"
+	}
+	return "agent"
 }
 
-// initiatorLabel renders the initiator for humans. An agent that convened a
-// meeting without naming itself is just "an agent"; repeating "agent (agent)"
-// tells the reader nothing.
-func (s *State) initiatorLabel() string {
-	name, kind := s.initiatorName(), s.initiatorKind()
-	if strings.EqualFold(name, kind) {
-		return "an unnamed " + kind + " (pass --initiator to name it)"
+// procedural names the speaker of a procedural act — posing an agenda item, a
+// poll, or an open question. That is the chair's act, whether an agent holds the
+// chair or the human does.
+func procedural(s *State) string {
+	if s.chaired() {
+		return s.chair()
 	}
-	return fmt.Sprintf("%s (%s)", name, kind)
+	if s.Human != "" {
+		return s.Human
+	}
+	return string(RoleChair)
+}
+
+// initiatorLabel renders the initiator for humans.
+func (s *State) initiatorLabel() string {
+	name := s.initiatorName()
+	if name == "" {
+		return "an unnamed calling agent (pass --initiator to name it)"
+	}
+	return fmt.Sprintf("%s (%s)", name, s.initiatorKind())
 }
 
 func (s *State) decisionMode() string {

@@ -8,17 +8,25 @@ import (
 	"github.com/qiangli/coreutils/pkg/chat"
 )
 
-// The facilitated turn model.
+// The CHAIR: the role that decides process.
+//
+// When an agent chairs (`--chair <agent>`), it directs the discussion. When no
+// agent chairs, the meeting is a fixed round-robin and nobody directs. That is
+// the entire turn-model question — there is no separate mode.
 //
 // Round-robin is rigid: it cannot skip a participant with nothing to add, cannot
 // call the same one twice when it is mid-argument, and — the reason this file
 // exists — cannot notice that the meeting is going in circles. Step repetition is
 // the single largest measured failure mode in multi-agent systems.
 //
-// So the facilitator does not merely answer "who speaks next." Every turn it
-// rebuilds a structured PROGRESS LEDGER answering five questions at once, and
-// speaker selection is two of the five. The orchestrator — this Go code, not the
-// model — owns termination, applies the backstops, and validates the selection.
+// So the chair does not merely answer "who speaks next." Every turn it rebuilds a
+// structured PROGRESS LEDGER answering five questions at once, and speaker
+// selection is two of the five. The orchestrator — this Go code, not the model —
+// owns termination, applies the backstops, and validates the selection.
+//
+// The chair never argues and never records. Both are enforced by State.Validate:
+// a chair that participates would pick itself, and a chair that also kept the
+// minutes could conclude the meeting and then author the record of it.
 //
 // Three defenses, each drawn from a documented failure:
 //
@@ -27,9 +35,9 @@ import (
 //     roster → re-prompt with the error → after N attempts, degrade to a default
 //     speaker and MARK the ledger degraded. Never match a free-text name loosely.
 //  2. STALL COUNTER. When the ledger reports looping or no progress for
-//     maxStalls consecutive turns, re-plan: ask the facilitator for a fresh
-//     approach, record it, reset the counter. After a second exhausted run of
-//     stalls the loop gives up rather than spinning.
+//     maxStalls consecutive turns, re-plan: ask the chair for a fresh approach,
+//     record it, reset the counter. After a second exhausted run of stalls the
+//     loop gives up rather than spinning.
 //  3. HARD BACKSTOPS. maxTurns and the caller's context deadline always apply.
 //     `satisfied` is advisory: an agent claiming completion cannot extend the
 //     budget, and one that never claims it cannot run forever.
@@ -42,13 +50,13 @@ const (
 	maxSelectorAttempts = 3
 )
 
-// facilitatorPrompt asks for the five-question ledger in a labeled format. A
+// chairPrompt asks for the five-question ledger in a labeled format. A
 // labeled reply parses far more reliably from a coding CLI than JSON does, and
 // degrades gracefully when a field is missing.
-func facilitatorPrompt(st *State, roster []string, correction string) string {
+func chairPrompt(st *State, roster []string, correction string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are the FACILITATOR of a planning meeting. You do not contribute opinions; "+
-		"you direct the discussion and judge whether it is done.\n\nTopic: %s\n", st.Topic)
+	fmt.Fprintf(&b, "You are the CHAIR of a planning meeting. You do not contribute opinions and you do not "+
+		"keep the minutes; you direct the discussion and judge whether it is done.\n\nTopic: %s\n", st.Topic)
 	if len(st.Agenda) > 0 {
 		fmt.Fprintf(&b, "Agenda: %s\n", strings.Join(st.Agenda, " | "))
 	}
@@ -71,7 +79,7 @@ func facilitatorPrompt(st *State, roster []string, correction string) string {
 // approach rather than calling on yet another participant.
 func replanPrompt(st *State, roster []string) string {
 	return fmt.Sprintf(
-		"You are the FACILITATOR. The meeting on %q has STALLED — participants are repeating themselves "+
+		"You are the CHAIR. The meeting on %q has STALLED — participants are repeating themselves "+
 			"or adding nothing new for %d consecutive turns.\n\nParticipants: %s\n\n"+
 			"In 2-4 sentences, state a NEW approach: what specific sub-question has gone unexamined, and who "+
 			"should examine it. Do not restate the discussion so far.",
@@ -86,7 +94,7 @@ func parseYesNo(s string) bool {
 	return false
 }
 
-// parseLedger reads the facilitator's labeled reply. Missing fields default
+// parseLedger reads the chair's labeled reply. Missing fields default
 // conservatively: not satisfied, not looping, PROGRESSING true — so a garbled
 // reply never ends the meeting and never triggers a spurious re-plan. The
 // backstops, not the parse, are what bound the loop.
@@ -116,7 +124,7 @@ func parseLedger(s string) *Ledger {
 	return l
 }
 
-// resolveSpeaker matches a facilitator's pick against the roster. Exact
+// resolveSpeaker matches the chair's pick against the roster. Exact
 // case-insensitive match only: loose substring matching is what produces the
 // "coworker mentioned not found" bug class, where an agent named `code-reviewer`
 // silently routes to `reviewer`.
@@ -138,8 +146,8 @@ func resolveSpeaker(name string, roster []string) (string, bool) {
 func nextLedger(ctx context.Context, st *State, roster []string, fallback string, runner chat.Runner) *Ledger {
 	correction := ""
 	for attempt := 0; attempt < maxSelectorAttempts; attempt++ {
-		ev, err := invokeAgent(ctx, st, st.facilitator(), "facilitator",
-			facilitatorPrompt(st, roster, correction), "", runner)
+		ev, err := invokeAgent(ctx, st, st.chair(), string(RoleChair),
+			chairPrompt(st, roster, correction), "", runner)
 		if err != nil || statusOf(ev) != statusOK {
 			correction = "you did not reply"
 			continue
@@ -165,15 +173,15 @@ func nextLedger(ctx context.Context, st *State, roster []string, fallback string
 		Progressing: true,
 		NextSpeaker: fallback,
 		Degraded:    true,
-		Reason: fmt.Sprintf("facilitator %s failed to name a valid participant in %d attempts; defaulting to %s",
-			st.facilitator(), maxSelectorAttempts, fallback),
+		Reason: fmt.Sprintf("chair %s failed to name a valid participant in %d attempts; defaulting to %s",
+			st.chair(), maxSelectorAttempts, fallback),
 	}
 }
 
-// FacilitationResult reports how a facilitated run ended. `Satisfied` is the only
-// outcome the facilitator chose; the others are the orchestrator's backstops
-// firing, and a caller must be able to tell them apart.
-type FacilitationResult struct {
+// Deliberation reports how a chaired run ended. `Satisfied` is the only outcome
+// the chair chose; the others are the orchestrator's backstops firing, and a
+// caller must be able to tell them apart.
+type Deliberation struct {
 	Turns     int    `json:"turns"`
 	Stalls    int    `json:"stalls"`
 	Replans   int    `json:"replans"`
@@ -182,14 +190,14 @@ type FacilitationResult struct {
 	StoppedBy string `json:"stopped_by"` // satisfied | max_turns | stalled | deadline
 }
 
-// runFacilitated drives the meeting with a facilitator until the request is
+// runChaired drives the meeting with an agent chair until the request is
 // satisfied or a backstop fires. Termination is owned here, never by the model.
-func runFacilitated(ctx context.Context, st *State, runner chat.Runner) (*FacilitationResult, error) {
+func runChaired(ctx context.Context, st *State, runner chat.Runner) (*Deliberation, error) {
 	roster := st.Participants
 	if len(roster) == 0 {
-		return nil, fmt.Errorf("meet: a facilitated meeting needs participants")
+		return nil, fmt.Errorf("meet: a chaired meeting needs participants")
 	}
-	res := &FacilitationResult{StoppedBy: "max_turns"}
+	res := &Deliberation{StoppedBy: "max_turns"}
 	prev := roster[0]
 	stalls, replans := 0, 0
 
@@ -207,7 +215,7 @@ func runFacilitated(ctx context.Context, st *State, runner chat.Runner) (*Facili
 			res.Degraded++
 		}
 		_, _ = recordFull(st, Event{
-			Round: st.Round, Speaker: st.facilitator(), Role: "facilitator", Kind: "ledger",
+			Round: st.Round, Speaker: st.chair(), Role: string(RoleChair), Kind: "ledger",
 			Text: ledgerLine(l), Ledger: l,
 		})
 
@@ -226,15 +234,15 @@ func runFacilitated(ctx context.Context, st *State, runner chat.Runner) (*Facili
 				res.Replans++
 				if replans > 1 {
 					res.StoppedBy = "stalled"
-					_, _ = record(st, "human", "chair", "",
+					_, _ = record(st, "note", procedural(st), string(RoleChair),
 						fmt.Sprintf("(meeting stopped: stalled through %d re-plans)", replans))
 					return res, nil
 				}
-				ev, err := invokeAgent(ctx, st, st.facilitator(), "facilitator",
+				ev, err := invokeAgent(ctx, st, st.chair(), string(RoleChair),
 					replanPrompt(st, roster), "", runner)
 				if err == nil && statusOf(ev) == statusOK {
 					ev.Kind = "replan"
-					ev.Role = "facilitator"
+					ev.Role = string(RoleChair)
 					_ = appendEvent(st.ID, ev)
 				}
 				stalls = 0

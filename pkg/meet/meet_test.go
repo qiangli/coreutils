@@ -29,8 +29,8 @@ func newTestSession(t *testing.T) *State {
 	st := &State{
 		ID: newID("Finalize meet P0", fixedNow()), Topic: "Finalize meet P0",
 		Agenda: []string{"verb set"}, Secretary: "claude",
-		Participants: []string{"codex", "opencode"}, Human: "qiangli",
-		Mode: "sequential", Status: "open", Cwd: t.TempDir(), Created: fixedNow(),
+		Participants: []string{"codex", "opencode"}, Human: "qiangli", Initiator: "qiangli",
+		Status: "open", Cwd: t.TempDir(), Created: fixedNow(),
 	}
 	if err := st.save(); err != nil {
 		t.Fatalf("save: %v", err)

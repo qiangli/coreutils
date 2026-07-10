@@ -8,7 +8,7 @@ import (
 )
 
 // seqRunner replies from a per-agent script, advancing one entry per call, so a
-// facilitator can be made to answer differently on successive turns. Past the end
+// chair can be made to answer differently on successive turns. Past the end
 // of a script the last entry repeats — which is what a looping meeting looks like.
 type seqRunner struct {
 	scripts map[string][]string
@@ -48,10 +48,10 @@ func ledger(satisfied, looping, progressing bool, next string) string {
 		"\nINSTRUCTION: address the open point\nREASON: because"
 }
 
-func facilitatedSession(t *testing.T) *State {
+func chairedSession(t *testing.T) *State {
 	t.Helper()
 	st := newTestSession(t)
-	st.Mode = "facilitated"
+	st.Chair = "chairbot" // distinct from the secretary and from every participant
 	st.MaxTurns = 6
 	st.MaxStalls = 3
 	_ = st.save()
@@ -100,12 +100,12 @@ func TestResolveSpeakerIsExact(t *testing.T) {
 	}
 }
 
-// The validation ladder: a facilitator that names a nonexistent participant is
+// The validation ladder: a chair that names a nonexistent participant is
 // re-prompted, and a valid retry is accepted.
 func TestSelectorLadderRepromptsThenAccepts(t *testing.T) {
-	st := facilitatedSession(t)
+	st := chairedSession(t)
 	r := newSeqRunner()
-	r.scripts["claude"] = []string{
+	r.scripts["chairbot"] = []string{
 		ledger(false, false, true, "reviewer"), // not on the roster
 		ledger(false, false, true, "codex"),    // valid
 	}
@@ -116,17 +116,17 @@ func TestSelectorLadderRepromptsThenAccepts(t *testing.T) {
 	if l.NextSpeaker != "codex" {
 		t.Errorf("next = %q, want codex", l.NextSpeaker)
 	}
-	if r.calls["claude"] != 2 {
-		t.Errorf("expected exactly one re-prompt, facilitator called %d times", r.calls["claude"])
+	if r.calls["chairbot"] != 2 {
+		t.Errorf("expected exactly one re-prompt, chair called %d times", r.calls["chairbot"])
 	}
 }
 
 // After the ladder is exhausted, degrade to a default speaker — and SAY SO. A
 // silent fallback looks like a working selector.
 func TestSelectorLadderDegradesLoudly(t *testing.T) {
-	st := facilitatedSession(t)
+	st := chairedSession(t)
 	r := newSeqRunner()
-	r.scripts["claude"] = []string{ledger(false, false, true, "nobody")}
+	r.scripts["chairbot"] = []string{ledger(false, false, true, "nobody")}
 
 	l := nextLedger(context.Background(), st, st.Participants, "opencode", r)
 	if !l.Degraded {
@@ -138,27 +138,27 @@ func TestSelectorLadderDegradesLoudly(t *testing.T) {
 	if !strings.Contains(l.Reason, "failed to name a valid participant") {
 		t.Errorf("degradation must explain itself: %q", l.Reason)
 	}
-	if r.calls["claude"] != maxSelectorAttempts {
-		t.Errorf("ladder ran %d times, want %d", r.calls["claude"], maxSelectorAttempts)
+	if r.calls["chairbot"] != maxSelectorAttempts {
+		t.Errorf("ladder ran %d times, want %d", r.calls["chairbot"], maxSelectorAttempts)
 	}
-	// A dead facilitator degrades too, rather than hanging or routing nowhere.
-	st2 := facilitatedSession(t)
+	// A dead chair degrades too, rather than hanging or routing nowhere.
+	st2 := chairedSession(t)
 	dead := newSeqRunner()
-	dead.err["claude"] = errors.New("boom")
+	dead.err["chairbot"] = errors.New("boom")
 	if l2 := nextLedger(context.Background(), st2, st2.Participants, "codex", dead); !l2.Degraded || l2.NextSpeaker != "codex" {
-		t.Errorf("dead facilitator should degrade to the fallback, got %+v", l2)
+		t.Errorf("dead chair should degrade to the fallback, got %+v", l2)
 	}
 }
 
-// `satisfied` ends the loop, and it is the ONLY outcome the facilitator chooses.
-func TestFacilitatedStopsWhenSatisfied(t *testing.T) {
-	st := facilitatedSession(t)
+// `satisfied` ends the loop, and it is the ONLY outcome the chair chooses.
+func TestChairedStopsWhenSatisfied(t *testing.T) {
+	st := chairedSession(t)
 	r := newSeqRunner()
-	r.scripts["claude"] = []string{
+	r.scripts["chairbot"] = []string{
 		ledger(false, false, true, "codex"),
 		ledger(true, false, true, "codex"), // satisfied on the second ledger
 	}
-	res, err := runFacilitated(context.Background(), st, r)
+	res, err := runChaired(context.Background(), st, r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestFacilitatedStopsWhenSatisfied(t *testing.T) {
 	if res.Turns != 1 {
 		t.Errorf("one participant turn should have run, got %d", res.Turns)
 	}
-	// Only the selected participant spoke — that is the point of facilitation.
+	// Only the selected participant spoke — that is the point of chairing.
 	events, _ := readTranscript(st.ID)
 	for _, e := range events {
 		if e.Kind == "turn" && e.Speaker != "codex" {
@@ -176,20 +176,20 @@ func TestFacilitatedStopsWhenSatisfied(t *testing.T) {
 		}
 	}
 	if countKind(events, "ledger") != 2 {
-		t.Errorf("every facilitator decision must be recorded, got %d ledgers", countKind(events, "ledger"))
+		t.Errorf("every chair decision must be recorded, got %d ledgers", countKind(events, "ledger"))
 	}
 }
 
 // An agent that never says "satisfied" must not run forever. Termination is the
 // orchestrator's, never the model's.
-func TestFacilitatedHonorsMaxTurns(t *testing.T) {
-	st := facilitatedSession(t)
+func TestChairedHonorsMaxTurns(t *testing.T) {
+	st := chairedSession(t)
 	st.MaxTurns = 3
 	_ = st.save()
 	r := newSeqRunner()
-	r.scripts["claude"] = []string{ledger(false, false, true, "codex")} // never satisfied
+	r.scripts["chairbot"] = []string{ledger(false, false, true, "codex")} // never satisfied
 
-	res, err := runFacilitated(context.Background(), st, r)
+	res, err := runChaired(context.Background(), st, r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,16 +203,16 @@ func TestFacilitatedHonorsMaxTurns(t *testing.T) {
 
 // The stall counter: a looping meeting triggers a re-plan rather than calling on
 // yet another participant to repeat the loop.
-func TestFacilitatedStallTriggersReplanThenGivesUp(t *testing.T) {
-	st := facilitatedSession(t)
+func TestChairedStallTriggersReplanThenGivesUp(t *testing.T) {
+	st := chairedSession(t)
 	st.MaxTurns = 20
 	st.MaxStalls = 2
 	_ = st.save()
 	r := newSeqRunner()
 	// Every ledger reports looping + no progress; the replan reply is prose.
-	r.scripts["claude"] = []string{ledger(false, true, false, "codex")}
+	r.scripts["chairbot"] = []string{ledger(false, true, false, "codex")}
 
-	res, err := runFacilitated(context.Background(), st, r)
+	res, err := runChaired(context.Background(), st, r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,11 +233,11 @@ func TestFacilitatedStallTriggersReplanThenGivesUp(t *testing.T) {
 }
 
 // A cancelled context stops the loop promptly and says so.
-func TestFacilitatedHonorsDeadline(t *testing.T) {
-	st := facilitatedSession(t)
+func TestChairedHonorsDeadline(t *testing.T) {
+	st := chairedSession(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res, err := runFacilitated(ctx, st, newSeqRunner())
+	res, err := runChaired(ctx, st, newSeqRunner())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,26 +246,82 @@ func TestFacilitatedHonorsDeadline(t *testing.T) {
 	}
 }
 
-func TestFacilitatedNeedsParticipants(t *testing.T) {
+func TestChairedNeedsParticipants(t *testing.T) {
 	st := newTestSession(t)
 	st.Participants = nil
-	if _, err := runFacilitated(context.Background(), st, newSeqRunner()); err == nil {
-		t.Fatal("a facilitated meeting with no participants must error, not hang")
+	if _, err := runChaired(context.Background(), st, newSeqRunner()); err == nil {
+		t.Fatal("a chaired meeting with no participants must error, not hang")
 	}
 }
 
-func TestModeValidation(t *testing.T) {
-	if _, err := (&sessionFlags{topic: "t", mode: "swarm"}).newState(); err == nil {
-		t.Error("an unknown --mode must be rejected")
-	}
-	if _, err := (&sessionFlags{topic: "t", mode: "facilitated"}).newState(); err == nil {
-		t.Error("--mode facilitated with no participants must be rejected up front")
-	}
-	st, err := (&sessionFlags{topic: "t", mode: "facilitated", participants: []string{"codex"}}).newState()
+// The turn model is a CONSEQUENCE of who chairs, never a separate flag that could
+// contradict the roster.
+func TestTurnModelFollowsFromTheRoster(t *testing.T) {
+	plain, err := (&sessionFlags{topic: "t", secretary: "claude", participants: []string{"codex"}}).newState()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !st.facilitated() || st.facilitator() != st.Secretary {
-		t.Errorf("facilitator should default to the secretary's agent: %+v", st)
+	if plain.chaired() {
+		t.Error("no --chair must mean round-robin")
+	}
+	if !strings.Contains(plain.turnModel(), "round-robin") {
+		t.Errorf("turnModel = %q", plain.turnModel())
+	}
+
+	chaired, err := (&sessionFlags{topic: "t", secretary: "claude", chair: "gemini",
+		participants: []string{"codex"}}).newState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !chaired.chaired() || chaired.chair() != "gemini" {
+		t.Errorf("a --chair agent must imply the chaired turn model: %+v", chaired)
+	}
+	if _, err := (&sessionFlags{topic: "t", secretary: "claude", chair: "gemini"}).newState(); err == nil {
+		t.Error("a chair with no participants to call on must be rejected up front")
+	}
+}
+
+// Separation of powers. Each of these is a way the design fails silently, so each
+// is a hard error rather than a warning.
+func TestRoleSeparationIsEnforced(t *testing.T) {
+	cases := []struct {
+		name string
+		sf   sessionFlags
+		want string
+	}{
+		{"secretary is also a participant",
+			sessionFlags{topic: "t", secretary: "claude", participants: []string{"claude", "codex"}},
+			"secretary and participant"},
+		{"secretary is also the chair",
+			sessionFlags{topic: "t", secretary: "claude", chair: "claude", participants: []string{"codex"}},
+			"chair and secretary"},
+		{"chair is also a participant",
+			sessionFlags{topic: "t", secretary: "claude", chair: "codex", participants: []string{"codex"}},
+			"chair and participant"},
+		{"a participant is seated twice",
+			sessionFlags{topic: "t", secretary: "claude", participants: []string{"codex", "codex"}},
+			"seated twice"},
+		{"no secretary",
+			sessionFlags{topic: "t", secretary: "", participants: []string{"codex"}},
+			"needs a --secretary"},
+		{"no topic",
+			sessionFlags{topic: "", secretary: "claude", participants: []string{"codex"}},
+			"needs a --topic"},
+	}
+	for _, c := range cases {
+		_, err := c.sf.newState()
+		if err == nil {
+			t.Errorf("%s: expected a hard error, got none", c.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error %q should explain %q", c.name, err.Error(), c.want)
+		}
+	}
+
+	// The legal roster: three distinct agents in three distinct roles.
+	if _, err := (&sessionFlags{topic: "t", secretary: "claude", chair: "gemini",
+		participants: []string{"codex", "opencode"}}).newState(); err != nil {
+		t.Fatalf("a well-separated roster must be accepted: %v", err)
 	}
 }

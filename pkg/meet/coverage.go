@@ -43,7 +43,7 @@ func coverage(st *State, events []Event) []Coverage {
 	rows := make([]Coverage, 0, len(st.Participants))
 	for _, p := range st.Participants {
 		idx[p] = len(rows)
-		rows = append(rows, Coverage{Name: p, Role: "participant"})
+		rows = append(rows, Coverage{Name: p, Role: string(RoleParticipant)})
 	}
 	for _, e := range events {
 		if e.Kind != "turn" && e.Kind != "vote" {
@@ -137,7 +137,8 @@ func writeShow(w io.Writer, st *State, events []Event, syn *Synthesis) {
 	fmt.Fprintf(w, "topic    %s\n", st.Topic)
 	fmt.Fprintf(w, "status   %s  ·  round %d\n", st.Status, st.Round)
 	fmt.Fprintf(w, "initiator %s\n", st.initiatorLabel())
-	fmt.Fprintf(w, "secretary %s (notes-only)\n", st.Secretary)
+	fmt.Fprintf(w, "secretary %s (records only)\n", st.Secretary)
+	fmt.Fprintf(w, "chair     %s\n", st.turnModel())
 	if len(st.Context) > 0 {
 		fmt.Fprintf(w, "context  %s\n", strings.Join(st.Context, ", "))
 	}

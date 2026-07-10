@@ -156,7 +156,7 @@ func runPoll(ctx context.Context, st *State, question string, choices, participa
 	st.Round++
 	_ = st.save()
 	if _, err := recordFull(st, Event{
-		Round: st.Round, Speaker: "chair", Kind: "poll",
+		Round: st.Round, Speaker: procedural(st), Role: string(RoleChair), Kind: "poll",
 		Text: question, Question: question, Choices: choices,
 	}); err != nil {
 		return nil, err
@@ -202,7 +202,7 @@ func runAsk(ctx context.Context, st *State, question string, optional bool, part
 	st.Round++
 	_ = st.save()
 	if _, err := recordFull(st, Event{
-		Round: st.Round, Speaker: "chair", Kind: "question",
+		Round: st.Round, Speaker: procedural(st), Role: string(RoleChair), Kind: "question",
 		Text: question, Question: question,
 	}); err != nil {
 		return nil, err
