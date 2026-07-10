@@ -134,7 +134,12 @@ func printPreview(w io.Writer, st *State) {
 	dir, _ := storeDir(st.ID)
 	fmt.Fprintf(w, "  store        %s/\n", redactHome(dir))
 	fmt.Fprintf(w, "  minutes →    %s\n", redactHome(minutesPath(st)))
-	fmt.Fprintf(w, "  turn model   %s round-robin · decisions=%s\n", st.Mode, st.decisionMode())
+	if st.facilitated() {
+		fmt.Fprintf(w, "  turn model   facilitated by %s (max %d turns, re-plan after %d stalls) · decisions=%s\n",
+			st.facilitator(), st.maxTurns(), st.maxStalls(), st.decisionMode())
+	} else {
+		fmt.Fprintf(w, "  turn model   sequential round-robin · decisions=%s\n", st.decisionMode())
+	}
 	for _, warn := range attendeeWarnings(st) {
 		fmt.Fprintf(w, "  ⚠ %s\n", warn)
 	}
@@ -161,6 +166,7 @@ func attendeeWarnings(st *State) []string {
 type sessionFlags struct {
 	topic         string
 	assistant     string
+	facilitator   string
 	mode          string
 	out           string
 	turnTimeout   string
@@ -168,6 +174,8 @@ type sessionFlags struct {
 	initiator     string
 	initiatorKind string
 	minTurnChars  int
+	maxTurns      int
+	maxStalls     int
 	participants  []string
 	agenda        []string
 	context       []string
@@ -180,7 +188,10 @@ func (sf *sessionFlags) bind(cmd *cobra.Command) {
 	f.StringArrayVar(&sf.participants, "participant", nil, "participant agent (repeatable)")
 	f.StringArrayVar(&sf.agenda, "agenda", nil, "agenda item (repeatable)")
 	f.StringArrayVar(&sf.context, "context", nil, "file every participant reads before its first turn (repeatable)")
-	f.StringVar(&sf.mode, "mode", "sequential", "turn mode (P0: sequential)")
+	f.StringVar(&sf.mode, "mode", "sequential", "turn mode: sequential (round-robin) | facilitated (a facilitator picks each speaker and judges done-ness)")
+	f.StringVar(&sf.facilitator, "facilitator", "", "facilitator agent for --mode facilitated (default: the secretary's agent, in a distinct role)")
+	f.IntVar(&sf.maxTurns, "max-turns", defaultMaxTurns, "hard ceiling on participant turns in --mode facilitated")
+	f.IntVar(&sf.maxStalls, "max-stalls", defaultMaxStalls, "consecutive looping/no-progress turns before the facilitator re-plans")
 	f.StringVar(&sf.out, "out", "docs", "filing target: docs | kb | <path>")
 	f.StringVar(&sf.turnTimeout, "turn-timeout", "20m", "per-turn agent timeout (e.g. 20m); a wedged agent can't hang the round")
 	f.StringVar(&sf.decisionMode, "decision-mode", "infer", "infer: the secretary may record a converged decision (tagged); explicit: only stated decisions")
@@ -196,8 +207,16 @@ func (sf *sessionFlags) newState() (*State, error) {
 	if sf.assistant == "" {
 		sf.assistant = "claude" // dedicated notes-only secretary default
 	}
-	if sf.mode == "" {
+	switch strings.ToLower(strings.TrimSpace(sf.mode)) {
+	case "", "sequential":
 		sf.mode = "sequential"
+	case "facilitated":
+		sf.mode = "facilitated"
+		if len(sf.participants) == 0 {
+			return nil, fmt.Errorf("meet: --mode facilitated needs at least one --participant to call on")
+		}
+	default:
+		return nil, fmt.Errorf("meet: unknown --mode %q (want sequential or facilitated)", sf.mode)
 	}
 	kind := strings.TrimSpace(sf.initiatorKind)
 	if kind == "" {
@@ -216,12 +235,45 @@ func (sf *sessionFlags) newState() (*State, error) {
 	cwd, _ := os.Getwd()
 	return &State{
 		ID: newID(sf.topic, nowFn()), Topic: sf.topic, Agenda: sf.agenda,
-		Secretary: sf.assistant, Participants: sf.participants, Human: humanName(),
+		Secretary: sf.assistant, Facilitator: sf.facilitator,
+		Participants: sf.participants, Human: humanName(),
 		Initiator: sf.initiator, InitiatorKind: kind,
 		DecisionMode: sf.decisionMode, MinTurnChars: sf.minTurnChars, Context: sf.context,
+		MaxTurns: sf.maxTurns, MaxStalls: sf.maxStalls,
 		Mode: sf.mode, Status: "open", Cwd: cwd, Out: sf.out,
 		TurnTimeout: sf.turnTimeout, Created: nowFn(),
 	}, nil
+}
+
+// deliberate runs the discussion under whichever turn model the session declares,
+// so `start --non-interactive` and `consult` share one path.
+func deliberate(ctx context.Context, st *State, w io.Writer, rounds int, question string, verbose bool) error {
+	if st.facilitated() {
+		res, err := runFacilitated(ctx, st, nil)
+		if err != nil {
+			return err
+		}
+		if verbose {
+			fmt.Fprintf(w, "facilitation: %d turns, %d stalls, %d re-plans, %d degraded selections — stopped by %s\n",
+				res.Turns, res.Stalls, res.Replans, res.Degraded, res.StoppedBy)
+		}
+		if res.StoppedBy == "stalled" {
+			fmt.Fprintln(w, "⚠ the meeting stalled — participants stopped adding anything new")
+		}
+		return nil
+	}
+	for i := 0; i < rounds; i++ {
+		q := question
+		if q == "" && i < len(st.Agenda) {
+			q = st.Agenda[i]
+		}
+		for _, e := range runRound(ctx, st, q, nil) {
+			if verbose {
+				fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
+			}
+		}
+	}
+	return nil
 }
 
 func newStartCmd() *cobra.Command {
@@ -255,14 +307,8 @@ func newStartCmd() *cobra.Command {
 			if !nonInteractive {
 				return repl(cmd, st)
 			}
-			for i := 0; i < rounds; i++ {
-				q := ""
-				if i < len(st.Agenda) {
-					q = st.Agenda[i]
-				}
-				for _, e := range runRound(cmd.Context(), st, q, nil) {
-					fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
-				}
+			if err := deliberate(cmd.Context(), st, w, rounds, "", true); err != nil {
+				return err
 			}
 			// An unattended run cannot prompt a human; an agent initiator is still
 			// asked, because that is the whole point of agent-initiated meetings.
@@ -439,12 +485,8 @@ func newConsultCmd() *cobra.Command {
 			for _, a := range st.Agenda {
 				_, _ = record(st, "agenda", "chair", "", a)
 			}
-			for i := 0; i < rounds; i++ {
-				q := question
-				if q == "" && i < len(st.Agenda) {
-					q = st.Agenda[i]
-				}
-				runRound(ctx, st, q, nil)
+			if err := deliberate(ctx, st, w, rounds, question, false); err != nil {
+				return err
 			}
 
 			v := &Verdict{
@@ -558,8 +600,8 @@ func repl(cmd *cobra.Command, st *State) error {
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	fmt.Fprintf(w, "\nmeet %s · secretary=%s(notes-only) · participants: %s\n",
 		st.ID, st.Secretary, strings.Join(st.Participants, ", "))
-	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /poll <q> | /ask <q> | /decision <t> |")
-	fmt.Fprintln(w, "          /action owner: task | /agenda <t> | /show | /converge | /close")
+	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /facilitate | /poll <q> | /ask <q> |")
+	fmt.Fprintln(w, "          /decision <t> | /action owner: task | /agenda <t> | /show | /converge | /close")
 	fmt.Fprint(w, "you> ")
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -599,6 +641,14 @@ func repl(cmd *cobra.Command, st *State) error {
 			for _, e := range runRound(cmd.Context(), st, currentAgenda(st), nil) {
 				fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
 			}
+		case line == "/facilitate":
+			res, err := runFacilitated(cmd.Context(), st, nil)
+			if err != nil {
+				fmt.Fprintf(w, "⏺ facilitation failed: %v\n", err)
+				break
+			}
+			fmt.Fprintf(w, "⏺ facilitated %d turns (%d stalls, %d re-plans, %d degraded) — stopped by %s\n",
+				res.Turns, res.Stalls, res.Replans, res.Degraded, res.StoppedBy)
 		case strings.HasPrefix(line, "/poll "):
 			q := strings.TrimSpace(line[len("/poll "):])
 			res, err := runPoll(cmd.Context(), st, q, nil, nil, nil)

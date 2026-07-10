@@ -111,6 +111,10 @@ func transcriptContext(events []Event) string {
 			who = "DECISION"
 		case "action":
 			who = "ACTION"
+		case "ledger":
+			who = "FACILITATOR"
+		case "replan":
+			who = "FACILITATOR (new approach)"
 		}
 		// Decisions/actions (short + load-bearing) and the most recent turns get a
 		// full preview; older turns collapse to a one-line reference.
@@ -427,6 +431,10 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 			b.WriteString(blockquote(redactHome(e.Text), e.File))
 		case "confirm":
 			fmt.Fprintf(&b, "\n**%s** (conclusion confirmed): %s\n", e.Speaker, oneLine(redactHome(e.Text)))
+		case "ledger":
+			fmt.Fprintf(&b, "\n*facilitator: %s*\n", oneLine(redactHome(e.Text)))
+		case "replan":
+			fmt.Fprintf(&b, "\n**%s** (re-plan after a stall):\n\n%s", e.Speaker, blockquote(redactHome(e.Text), e.File))
 		}
 	}
 

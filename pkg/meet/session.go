@@ -61,7 +61,37 @@ type Event struct {
 	Question string   `json:"question,omitempty"`
 	Choice   string   `json:"choice,omitempty"`  // on a vote: the normalized answer
 	Choices  []string `json:"choices,omitempty"` // on a poll: the permitted answers
+
+	// Ledger is set on a `ledger` event: the facilitator's structured decision
+	// for that turn.
+	Ledger *Ledger `json:"ledger,omitempty"`
 }
+
+// Ledger is one facilitator turn's structured decision. Speaker selection is not
+// a separate question from progress: the same call that picks who speaks next
+// also answers whether the request is already satisfied and whether the team is
+// going in circles.
+//
+// This is the Magentic-One progress-ledger shape. It exists because "who speaks
+// next" alone cannot detect the largest measured multi-agent failure mode — step
+// repetition, ~17% of failures across 1600+ traces. A round-robin scheduler
+// cannot notice a loop; a facilitator that must answer `looping?` every turn can.
+type Ledger struct {
+	Satisfied   bool   `json:"request_satisfied"`
+	Looping     bool   `json:"team_looping"`
+	Progressing bool   `json:"making_progress"`
+	NextSpeaker string `json:"next_speaker,omitempty"`
+	Instruction string `json:"instruction,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+
+	// Degraded records that the facilitator failed to name a valid speaker and
+	// the orchestrator fell back. Never silent — a fallback that hides itself
+	// looks like a working selector.
+	Degraded bool `json:"degraded,omitempty"`
+}
+
+// stalling reports whether this turn shows the team failing to advance.
+func (l *Ledger) stalling() bool { return l.Looping || !l.Progressing }
 
 // statusOf reports an event's outcome, reconstructing it for transcripts written
 // before Status existed so `meet show` works on old sessions.
@@ -159,6 +189,44 @@ type State struct {
 	// Context is the shared source set every participant reads before its first
 	// turn, so the panel reviews the same files rather than guessing.
 	Context []string `json:"context,omitempty"`
+
+	// Facilitator drives `--mode facilitated`: it picks each speaker and decides
+	// when the request is satisfied. Distinct from the secretary, which only
+	// records. Empty falls back to the secretary's agent.
+	Facilitator string `json:"facilitator,omitempty"`
+
+	// MaxTurns and MaxStalls are the orchestrator-owned backstops. Termination is
+	// never left to a token an agent emits: the literature measures both
+	// never-stopping and premature-stopping as common failures.
+	MaxTurns  int `json:"max_turns,omitempty"`
+	MaxStalls int `json:"max_stalls,omitempty"`
+}
+
+func (s *State) facilitator() string {
+	if f := strings.TrimSpace(s.Facilitator); f != "" {
+		return f
+	}
+	return s.Secretary
+}
+
+func (s *State) maxTurns() int {
+	if s.MaxTurns > 0 {
+		return s.MaxTurns
+	}
+	return defaultMaxTurns
+}
+
+func (s *State) maxStalls() int {
+	if s.MaxStalls > 0 {
+		return s.MaxStalls
+	}
+	return defaultMaxStalls
+}
+
+// facilitated reports whether the session uses the facilitator loop rather than
+// strict round-robin.
+func (s *State) facilitated() bool {
+	return strings.EqualFold(strings.TrimSpace(s.Mode), "facilitated")
 }
 
 func (s *State) initiatorName() string {
