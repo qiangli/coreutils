@@ -1,4 +1,4 @@
-package skills
+package spacetime
 
 import (
 	"bufio"
@@ -18,7 +18,7 @@ import (
 // patch upgrade must not move the space-time coordinate.
 //   - darwin:  product major ("15")
 //   - linux:   distro id + version major ("debian12", "alpine3")
-//   - windows: not probed in P0 (omitted)
+//   - windows: not probed (omitted)
 func probeOSRelease() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
@@ -98,7 +98,7 @@ func probeTTY() (string, error) {
 
 func probeElevated() (string, error) {
 	if runtime.GOOS == "windows" {
-		return "", ErrNotApplicable // P0: no admin-token check on windows
+		return "", ErrNotApplicable // no admin-token check on windows
 	}
 	if os.Geteuid() == 0 {
 		return "true", nil
@@ -155,8 +155,8 @@ func (toolResolver) Eval(key string) (string, error) {
 }
 
 // engineResolver answers engine.<name> (podman, ollama, …): presence of
-// a managed/host engine binary. P0 keeps this exec-free (PATH presence);
-// binmgr-tree awareness can extend it without changing callers.
+// a managed/host engine binary. Exec-free (PATH presence); binmgr-tree
+// awareness can extend it without changing callers.
 type engineResolver struct{}
 
 func (engineResolver) Namespace() string { return "engine" }

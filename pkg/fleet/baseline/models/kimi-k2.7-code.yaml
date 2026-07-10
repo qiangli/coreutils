@@ -1,0 +1,8 @@
+name: kimi-k2.7-code
+display: Kimi K2.7 Code
+provider: openai-compat
+kind: api
+api_key_ref: moonshot
+model: moonshot/kimi-k2.7-code
+quality: 0.82
+cost_micro: 2000

@@ -1,0 +1,8 @@
+agents:
+  - name: claude-opus
+    tool: claude
+    model: opus
+    display: "claude · opus"
+    ledger:
+      reliability: high
+      notes: deep multi-file; watch API-timeout stalls

@@ -78,14 +78,29 @@ func newWeaveStartCmd() *cobra.Command {
 	var maxRuntime time.Duration
 	var memLimit string
 	cmd := &cobra.Command{
-		Use:   "start [-- <tool> [args...]]",
-		Short: "Allocate a workspace and launch an agentic tool",
+		Use:   "start [-- <agent>|<tool> [args...]]",
+		Short: "Allocate a workspace and launch an agent",
 		Long: `start atomically claims the top of the loom:todo queue (or the
 issue specified with --issue), allocates a workspace, and launches the
-named tool inside it with WEAVE_* env vars set.
+named agent or tool inside it with WEAVE_* env vars set.
 
-The trailing '-- <tool>' form is the human-natural shape; --tool is
+The trailing '-- <agent>' form is the human-natural shape; --tool is
 the programmatic alternative.
+
+Naming an AGENT is the way to select a model. A single token that names
+an agent (a nickname, an alias, or a bare tool:model) expands from the
+fleet registry into that tool's headless argv with its model selected,
+and the issue body as the prompt:
+
+    weave start --issue 3 -- 007
+      -> claude --dangerously-skip-permissions --model fable "<issue body>"
+
+The worker is stamped with the principal it acts as, so what it writes
+resolves: BASHY_PRINCIPAL=dhnt:agent/007. WEAVE_AGENT stays the per-issue
+SEAT (007-a) — the slot, not the agent. See "bashy agents" / "bashy whois".
+
+Anything else is passed through untouched. A bare tool name (-- claude)
+still launches raw, and a multi-token argv is honored exactly as written.
 
 PTY: by default the subagent runs inside a freshly-allocated PTY
 (claude-code, codex, opencode and similar TUIs need one to render).
@@ -112,7 +127,7 @@ blocks until N reaches a terminal state.`,
 	}
 	flags.attach(cmd)
 	cmd.Flags().Int64Var(&issue, "issue", 0, "Claim a specific issue instead of top-of-queue")
-	cmd.Flags().StringVar(&tool, "tool", "", "Tool name (alternative to trailing -- <tool>)")
+	cmd.Flags().StringVar(&tool, "tool", "", "Agent nickname, tool:model, or tool name (alternative to trailing -- <agent>)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Reattach to an existing lease for the given issue")
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
 	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "After a clean run and passing verify, commit dirty workspace changes before recording terminal state")
@@ -256,13 +271,24 @@ func newWeaveAutopilotCmd() *cobra.Command {
 	var standby bool
 	var leaseTTL, heartbeat, backoff time.Duration
 	cmd := &cobra.Command{
-		Use:   "autopilot --orchestrator-fleet claude,codex[,gemini...]",
-		Short: "Autonomously drive THIS repo's run queue (claim→launch→verify→merge) with tool failover",
+		Use:   "autopilot --orchestrator-fleet 007,claude:opus[,codex...]",
+		Short: "Autonomously drive THIS repo's run queue (claim→launch→verify→merge) with failover",
 		Long: `autopilot holds a queue-scoped orchestration lease and launches one
-agent CLI from the configured fleet as the active orchestrator. If the
+roster member from the configured fleet as the active orchestrator. If the
 orchestrator exits non-zero or emits overload/rate-limit output,
-autopilot rotates to the next fleet member and resumes from the same
-durable weave queue.
+autopilot rotates to the next member and resumes from the same durable
+weave queue.
+
+A roster member may name an AGENT (a nickname, an alias, or a bare
+tool:model) or a bare tool. Naming agents is what makes failover a MODEL
+decision rather than only a binary one: --orchestrator-fleet claude:opus,
+claude:fable rotates between two models on one CLI, which a tool-keyed
+roster cannot express. The lease and the result record the binding.
+
+The whole roster is resolved BEFORE the lease is taken. Naming an agent
+asserts a model, and a binding that cannot run — a dangling tool, a
+metered model with no vault key — is a configuration error you hear now
+rather than at 3am, on failover, from a dead member.
 
 With --standby, autopilot waits for the active holder's heartbeat to
 expire before taking over. This supports a second process or machine as
@@ -279,7 +305,7 @@ a cold standby for unattended campaigns.`,
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().StringVar(&fleet, "orchestrator-fleet", "", "Comma-separated preferred orchestrator tools, e.g. claude,codex,gemini")
+	cmd.Flags().StringVar(&fleet, "orchestrator-fleet", "", "Comma-separated roster of agents (007, claude:opus) or tools, in preference order")
 	cmd.Flags().StringVar(&brief, "brief", "", "Optional orchestration brief file to prepend to the queue context")
 	cmd.Flags().BoolVar(&standby, "standby", false, "Wait for the orchestration lease to expire, then take over")
 	cmd.Flags().DurationVar(&leaseTTL, "lease-ttl", 30*time.Second, "Orchestrator lease TTL")

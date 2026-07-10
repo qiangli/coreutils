@@ -609,15 +609,4 @@ func truncate(s string, n int) string {
 
 // ExitCode maps a NewSkillsCmd Execute error to the repo exit
 // convention: 2 for usage errors, 1 otherwise, 0 for nil.
-func ExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	msg := err.Error()
-	for _, p := range []string{"unknown command", "unknown flag", "unknown shorthand", "accepts ", "requires ", "invalid argument"} {
-		if strings.Contains(msg, p) {
-			return 2
-		}
-	}
-	return 1
-}
+// (Defined in source.go over pkg/assetring.)

@@ -1,5 +1,5 @@
 //go:build !darwin
 
-package skills
+package spacetime
 
 func darwinProductVersion() (string, error) { return "", ErrNotApplicable }

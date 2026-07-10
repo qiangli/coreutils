@@ -224,6 +224,8 @@ type weaveComment struct {
 type weaveLaunchSpec struct {
 	Tool        string        `json:"tool"`
 	Argv        []string      `json:"argv,omitempty"`
+	Agent       string        `json:"agent,omitempty"` // nickname, when started by agent name
+	Model       string        `json:"model,omitempty"` // provider-side id actually selected
 	MaxRuntime  time.Duration `json:"max_runtime,omitempty"`
 	MemLimit    string        `json:"mem_limit,omitempty"`
 	IdleTimeout time.Duration `json:"idle_timeout,omitempty"`
@@ -1966,6 +1968,24 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitStateConflict, fmt.Errorf("issue #%d state is %q", it.ID, it.State)))
 	}
+	// `-- 007` / `-- claude:opus` name an AGENT, so the launch argv comes from
+	// the registry with the issue body as the prompt. This is resolved here,
+	// after the issue is known, because the body IS the prompt.
+	agentLaunch, agentArgv, aerr := weaveExpandAgent(toolArgs, it.Body, it.Title)
+	if aerr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+			weavecli.ExitInvalidArg, aerr))
+	}
+	// displayTool is what the queue records; for an agent launch it is the
+	// tool's registry name, not the resolved executable path.
+	displayTool := weaveToolDisplayName(toolArgs)
+	ownerBase := displayTool
+	if agentLaunch != nil {
+		toolArgs = agentArgv
+		launchSpec = weaveLaunchSpecFromArgs(toolArgs, opts)
+		launchSpec.Agent, launchSpec.Model = agentLaunch.Nick, agentLaunch.Model
+		displayTool, ownerBase = agentLaunch.ToolName, agentLaunch.Nick
+	}
 	if opts.resume {
 		// Any state with a preserved workspace is resumable: "working"
 		// (wrapper died), "failed" (weave kill / watchdog kill — the
@@ -2028,7 +2048,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.AutoCommitted = false
 			freshIt.AutoCommitError = ""
 			if len(toolArgs) > 0 {
-				freshIt.Tool = weaveToolDisplayName(toolArgs)
+				freshIt.Tool = displayTool
 				freshIt.LaunchSpec = launchSpec
 			}
 			it = freshIt
@@ -2147,8 +2167,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				}
 			}
 			if len(toolArgs) > 0 {
-				freshIt.Tool = weaveToolDisplayName(toolArgs)
-				freshIt.Owner = weaveAgentName(freshIt.Tool, freshIt.ID)
+				freshIt.Tool = displayTool
+				// The OWNER is the per-issue seat (`007-a`), not the agent.
+				freshIt.Owner = weaveAgentName(ownerBase, freshIt.ID)
 				freshIt.LaunchSpec = launchSpec
 			}
 			// Record assignment / formal reassignment in the task thread.
@@ -2188,7 +2209,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if opts.noSpawn {
 			fmt.Fprintf(cmd.OutOrStdout(), "weave start: --no-spawn (skipping tool exec)\n")
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "weave start: launching %s ...\n", strings.Join(toolArgs, " "))
+			if agentLaunch != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "weave start: launching %s (%s) as %s ...\n",
+					agentLaunch.Nick, agentLaunch.Binding(), it.Owner)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "weave start: launching %s ...\n", strings.Join(toolArgs, " "))
+			}
 		}
 	}
 	if opts.noSpawn {
@@ -2242,6 +2268,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		fmt.Sprintf("WEAVE_AGENT=%s", it.Owner),
 		fmt.Sprintf("WEAVE_OWNER=%s", it.Owner),
 	)
+	// WEAVE_AGENT is the seat; BASHY_PRINCIPAL is the agent that fills it.
+	env = weaveAgentEnv(env, agentLaunch)
 	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
 	tool.Dir = workspace
 	tool.Env = env

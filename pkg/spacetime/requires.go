@@ -1,4 +1,4 @@
-package skills
+package spacetime
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 // doc): space-separated clauses AND-ed; commas inside a clause are
 // any-of; repeating a clause key is AND; `key>=ver` is version-at-least
 // (any probe key); a bare word is a boolean probe. All positive — no
-// negation in P0.
+// negation.
 //
 //	os=linux,darwin has=git has=claude,codex go>=1.26 tty
 
@@ -31,12 +31,12 @@ type Clause struct {
 
 type Requires struct{ Clauses []Clause }
 
-var wordRe = regexp.MustCompile(`^[a-z][a-z0-9.-]*$`)
+var wordRe = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
 
 // ParseRequires parses a metadata.requires string. It errors loudly on
 // syntax it does not understand — callers decide whether to degrade
-// (the catalog treats an unparsable requires as advisory-unchecked, it
-// never hides the skill).
+// (the skills catalog treats an unparsable requires as advisory-unchecked,
+// it never hides the skill).
 func ParseRequires(s string) (Requires, error) {
 	var r Requires
 	for _, tok := range strings.Fields(s) {
@@ -44,30 +44,37 @@ func ParseRequires(s string) (Requires, error) {
 		case strings.Contains(tok, ">="):
 			key, ver, _ := strings.Cut(tok, ">=")
 			if !wordRe.MatchString(key) || ver == "" {
-				return Requires{}, fmt.Errorf("skills: bad requires clause %q", tok)
+				return Requires{}, fmt.Errorf("spacetime: bad requires clause %q", tok)
 			}
 			r.Clauses = append(r.Clauses, Clause{Key: key, Op: OpAtLeast, Values: []string{ver}})
 		case strings.Contains(tok, "="):
 			key, vals, _ := strings.Cut(tok, "=")
 			if !wordRe.MatchString(key) || vals == "" {
-				return Requires{}, fmt.Errorf("skills: bad requires clause %q", tok)
+				return Requires{}, fmt.Errorf("spacetime: bad requires clause %q", tok)
 			}
 			var vs []string
 			for _, v := range strings.Split(vals, ",") {
 				if !wordRe.MatchString(v) {
-					return Requires{}, fmt.Errorf("skills: bad requires value %q in %q", v, tok)
+					return Requires{}, fmt.Errorf("spacetime: bad requires value %q in %q", v, tok)
 				}
 				vs = append(vs, v)
 			}
 			r.Clauses = append(r.Clauses, Clause{Key: key, Op: OpAnyOf, Values: vs})
 		default:
 			if !wordRe.MatchString(tok) {
-				return Requires{}, fmt.Errorf("skills: bad requires clause %q", tok)
+				return Requires{}, fmt.Errorf("spacetime: bad requires clause %q", tok)
 			}
 			r.Clauses = append(r.Clauses, Clause{Key: tok, Op: OpBool})
 		}
 	}
 	return r, nil
+}
+
+// coreProbes are the always-on facts addressable by their bare name.
+// Everything else without a dot resolves through the tool namespace.
+var coreProbes = map[string]bool{
+	"os": true, "arch": true, "libc": true, "container": true,
+	"tty": true, "elevated": true, "bashy": true,
 }
 
 // probeFor maps a clause key to the probe it reads: an exact dotted
@@ -77,15 +84,18 @@ func probeFor(key string) string {
 	if strings.Contains(key, ".") {
 		return key
 	}
-	switch key {
-	case "os", "arch", "libc", "container", "tty", "elevated", "bashy":
+	if coreProbes[key] {
 		return key
 	}
 	return "tool." + key
 }
 
-// ProbeRefs returns the probe names this Requires reads — the skill's
-// relevant probe subset for context keying (callers union {os, arch}).
+// ProbeRefs returns the probe names this Requires reads — the relevant
+// probe subset for context keying (callers union {os, arch}).
+//
+// This subset, not the whole probe set, is what ContextKey is computed
+// over. Widening it fragments every cache keyed by the result: an entry
+// that never mentions `net.*` must not re-key when the host roams.
 func (r Requires) ProbeRefs() []string {
 	seen := map[string]bool{}
 	var out []string
@@ -107,7 +117,7 @@ func (r Requires) ProbeRefs() []string {
 	return out
 }
 
-// Verdict is the applicability result for one skill at this coordinate.
+// Verdict is the applicability result for one entry at this coordinate.
 type Verdict struct {
 	Applicable bool
 	Failing    string // first failing clause, e.g. "go>=1.26: tool.go=1.24"
@@ -169,7 +179,7 @@ func orAbsent(v string) string {
 
 // versionAtLeast compares best-effort dotted numerals ("1.26" < "1.26.2");
 // missing segments are zero; non-numeric values ("present", "absent")
-// fail. No semver pre-release semantics — pinned as good enough for P0.
+// fail. No semver pre-release semantics.
 func versionAtLeast(have, want string) bool {
 	hs, ws := strings.Split(have, "."), strings.Split(want, ".")
 	n := len(hs)

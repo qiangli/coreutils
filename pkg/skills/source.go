@@ -1,130 +1,55 @@
 package skills
 
 import (
-	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"sort"
-	"strings"
+
+	"github.com/qiangli/coreutils/pkg/assetring"
+)
+
+// The ring machinery (Ring, Source, the merge order, shadowing) lives in
+// pkg/assetring so skills, tools, models, and agents all resolve names
+// the same way. A skill is a folder identified by its SKILL.md.
+
+const skillMarker = "SKILL.md"
+
+// Ring names where a skill came from. Later sources shadow earlier ones
+// on a name collision (a host-local override of a shared or embedded
+// skill is deliberate, and reported).
+type Ring = assetring.Ring
+
+const (
+	RingEmbedded = assetring.RingEmbedded // compiled into the host binary
+	RingShared   = assetring.RingShared   // a shared catalog dir — read-only
+	RingLocal    = assetring.RingLocal    // host-local store (installed + learned)
 )
 
 // Source is one ring's skill supply.
-type Source interface {
-	Ring() Ring
-	Names() ([]string, error)
-	Body(name string) ([]byte, bool)      // SKILL.md
-	File(name, rel string) ([]byte, bool) // reference.md, skill.dhnt, …
-	Files(name string) ([]string, error)  // every file in the skill folder (rel paths)
-}
+type Source = assetring.Source
 
 // EmbedSource wraps an fs.FS whose top-level directories are skills
 // (the shape of bashy's embedded skills FS).
-func EmbedSource(fsys fs.FS, ring Ring) Source { return fsSource{fsys: fsys, ring: ring} }
-
-type fsSource struct {
-	fsys fs.FS
-	ring Ring
-}
-
-func (s fsSource) Ring() Ring { return s.ring }
-
-func (s fsSource) Names() ([]string, error) {
-	entries, err := fs.ReadDir(s.fsys, ".")
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		if _, err := fs.Stat(s.fsys, e.Name()+"/SKILL.md"); err == nil {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
-	return names, nil
-}
-
-func (s fsSource) Body(name string) ([]byte, bool) { return s.File(name, "SKILL.md") }
-
-func (s fsSource) Files(name string) ([]string, error) {
-	name = strings.Trim(name, "/")
-	if name == "" || strings.Contains(name, "/") {
-		return nil, fmt.Errorf("skills: bad skill name %q", name)
-	}
-	var out []string
-	err := fs.WalkDir(s.fsys, name, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		rel, err := filepath.Rel(name, p)
-		if err != nil {
-			return err
-		}
-		out = append(out, filepath.ToSlash(rel))
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-func (s fsSource) File(name, rel string) ([]byte, bool) {
-	name = strings.Trim(name, "/")
-	if name == "" || strings.Contains(name, "/") || strings.Contains(rel, "..") {
-		return nil, false
-	}
-	data, err := fs.ReadFile(s.fsys, name+"/"+rel)
-	if err != nil {
-		return nil, false
-	}
-	return data, true
+func EmbedSource(fsys fs.FS, ring Ring) Source {
+	return assetring.FolderFS(fsys, ring, skillMarker)
 }
 
 // DirSource serves the host-local ring from a directory of skill
 // folders. A missing directory is an empty source, not an error.
-func DirSource(dir string) Source { return dirSource{dir: dir, ring: RingLocal} }
+func DirSource(dir string) Source {
+	return assetring.FolderDir(dir, RingLocal, skillMarker)
+}
 
 // SharedDirSource serves a shared catalog directory — any git clone or
 // synced folder of skill folders — as a read-only ring between embedded
 // and local. This is the standalone sharing path ("cloud as a thin
 // replaceable relay"): a team's skills repo cloned to disk IS a catalog;
 // no control plane required. Local installs/learning still shadow it.
-func SharedDirSource(dir string) Source { return dirSource{dir: dir, ring: RingShared} }
-
-type dirSource struct {
-	dir  string
-	ring Ring
+func SharedDirSource(dir string) Source {
+	return assetring.FolderDir(dir, RingShared, skillMarker)
 }
 
-func (s dirSource) Ring() Ring { return s.ring }
-
-func (s dirSource) Names() ([]string, error) {
-	if _, err := os.Stat(s.dir); err != nil {
-		return nil, nil
-	}
-	return fsSource{fsys: os.DirFS(s.dir), ring: s.ring}.Names()
-}
-
-func (s dirSource) Body(name string) ([]byte, bool) { return s.File(name, "SKILL.md") }
-
-func (s dirSource) File(name, rel string) ([]byte, bool) {
-	if _, err := os.Stat(s.dir); err != nil {
-		return nil, false
-	}
-	return fsSource{fsys: os.DirFS(s.dir), ring: s.ring}.File(name, rel)
-}
-
-func (s dirSource) Files(name string) ([]string, error) {
-	if _, err := os.Stat(s.dir); err != nil {
-		return nil, nil
-	}
-	return fsSource{fsys: os.DirFS(s.dir), ring: s.ring}.Files(name)
-}
+// ExitCode maps a cobra error to the repo exit convention (2 usage, 1 otherwise).
+func ExitCode(err error) int { return assetring.ExitCode(err) }
 
 // Listing is one catalog row: the skill plus its applicability verdict
 // at this host's coordinate.
@@ -139,56 +64,34 @@ type Listing struct {
 // (ring order: embedded first, local last — local shadows embedded).
 type Catalog struct{ Sources []Source }
 
-// Get returns a skill's parsed entry and its winning source.
-func (c *Catalog) Get(name string) (Skill, Source, bool) {
-	for i := len(c.Sources) - 1; i >= 0; i-- {
-		src := c.Sources[i]
-		body, ok := src.Body(name)
-		if !ok {
-			continue
-		}
-		return c.parse(name, body, src), src, true
-	}
-	return Skill{}, nil, false
+func (c *Catalog) ring() *assetring.Catalog[Skill] {
+	return &assetring.Catalog[Skill]{Sources: c.Sources, Parse: parseSkill}
 }
+
+// Get returns a skill's parsed entry and its winning source.
+func (c *Catalog) Get(name string) (Skill, Source, bool) { return c.ring().Get(name) }
 
 // List returns every row with verdicts attached. Filtering is the
 // caller's business — `--all`, JSON views, and future consumers choose
 // their own cut.
 func (c *Catalog) List(ps *ProbeSet) ([]Listing, error) {
-	byName := map[string]int{}
-	var rows []Listing
-	for _, src := range c.Sources {
-		names, err := src.Names()
-		if err != nil {
-			return nil, err
-		}
-		for _, n := range names {
-			body, ok := src.Body(n)
-			if !ok {
-				continue
-			}
-			row := Listing{Skill: c.parse(n, body, src)}
-			if i, dup := byName[row.Name]; dup {
-				row.Shadows = true
-				rows[i] = row
-				continue
-			}
-			byName[row.Name] = len(rows)
-			rows = append(rows, row)
-		}
+	rows, err := c.ring().Rows()
+	if err != nil {
+		return nil, err
 	}
-	for i := range rows {
-		rows[i].Verdict = verdictOf(rows[i].Skill, ps)
-		if rows[i].RequiresErr != "" {
-			rows[i].Warning = "requires unparsable: " + rows[i].RequiresErr
+	out := make([]Listing, 0, len(rows))
+	for _, r := range rows {
+		l := Listing{Skill: r.Entry, Shadows: r.Shadows}
+		l.Verdict = verdictOf(l.Skill, ps)
+		if l.RequiresErr != "" {
+			l.Warning = "requires unparsable: " + l.RequiresErr
 		}
+		out = append(out, l)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
-	return rows, nil
+	return out, nil
 }
 
-func (c *Catalog) parse(dirName string, body []byte, src Source) Skill {
+func parseSkill(dirName string, body []byte, src Source) Skill {
 	sk, err := ParseFrontmatter(body)
 	if err != nil {
 		// Degrade, never hide: directory name, no description, rung-0.
@@ -198,8 +101,8 @@ func (c *Catalog) parse(dirName string, body []byte, src Source) Skill {
 		sk.Name = dirName
 	}
 	sk.Ring = src.Ring()
-	if ds, ok := src.(dirSource); ok {
-		sk.Dir = filepath.Join(ds.dir, dirName)
+	if ds, ok := src.(assetring.DirSourcer); ok {
+		sk.Dir = filepath.Join(ds.Dir(), dirName)
 	}
 	if canon, ok := src.File(dirName, "skill.dhnt"); ok {
 		sk.HasDhnt = true

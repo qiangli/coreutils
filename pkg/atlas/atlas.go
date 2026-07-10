@@ -375,6 +375,13 @@ func init() {
 	addVerb("meet", Entry{Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("capability", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("agent", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
+
+	// the fleet registry: what this host runs with
+	addVerb("tools", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("models", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("agents", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("people", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("whois", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("schedule", Entry{Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("act", managed(GroupOrch, TierSandbox))
 	addVerb("act-runner", managed(GroupOrch, TierSandbox, CapDaemon))

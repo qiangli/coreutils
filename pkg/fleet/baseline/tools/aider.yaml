@@ -1,0 +1,24 @@
+name: aider
+kind: cli
+display: Aider
+cli:
+  binary: aider
+  launch:
+    exec: aider --yes-always --no-git --model {model} --message {prompt}
+    prompt_position: last
+    trust_preseed: none
+    supports_say: false
+    supports_graceful_quit: true
+    notes: >-
+      aider takes its prompt as the value of --message, so the prompt must stay the final
+      argument. --yes-always makes it non-interactive; --no-git keeps a turn advisory
+      (no repo/commit writes).
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+quirks: surgical one-shots; auto-commits; pin exact cases
+harness:
+  operability: 0.8
+  shell: 0.85
+  tool-use: 0.7
+  isolation: 0.7

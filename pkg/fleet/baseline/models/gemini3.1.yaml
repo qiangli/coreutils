@@ -1,0 +1,11 @@
+name: gemini3.1
+display: Gemini 3.1
+provider: gemini
+kind: subscription
+model: gemini-3.1
+quality: 0.80
+cost_micro: 5000
+spec:
+  deep-research: 0.10
+  web-search: 0.30
+  browser-use: 0.25

@@ -1,0 +1,23 @@
+name: opencode
+kind: cli
+display: OpenCode
+cli:
+  binary: opencode
+  launch:
+    exec: opencode run --model {model} {prompt}
+    prompt_position: last
+    trust_preseed: opencode.json
+    supports_say: false
+    supports_graceful_quit: true
+    notes: headless `run`; judge by committed artifacts, not exit code. --model takes provider/model.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+    env_markers:
+      - OPENCODE_CLIENT
+quirks: delivers committed work; pre-seed opencode.json or it silently no-ops (exit 0)
+harness:
+  operability: 0.9
+  shell: 0.9
+  tool-use: 0.8
+  isolation: 0.75

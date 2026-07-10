@@ -1,0 +1,11 @@
+name: opus
+display: Claude Opus
+provider: anthropic
+kind: subscription
+model: opus
+quality: 0.92
+cost_micro: 15000
+spec:
+  code-review: 0.03
+  planning: 0.03
+  orchestration: 0.04

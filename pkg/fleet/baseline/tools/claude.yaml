@@ -1,0 +1,25 @@
+name: claude
+kind: cli
+display: Claude Code
+cli:
+  binary: claude
+  launch:
+    exec: claude --dangerously-skip-permissions --model {model} {prompt}
+    prompt_position: last
+    trust_preseed: .claude.json
+    trust_clear: "say:1"
+    supports_say: true
+    supports_graceful_quit: true
+    notes: TUI is steerable; a per-directory trust prompt needs a `say` of "1" (or a pre-seeded .claude.json).
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+    env_markers:
+      - CLAUDECODE
+      - CLAUDE_CODE_ENTRYPOINT
+quirks: strongest deep / multi-file work; watch for API-timeout stalls on the hardest issue
+harness:
+  operability: 0.95
+  shell: 0.95
+  tool-use: 0.9
+  isolation: 0.8

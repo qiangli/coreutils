@@ -1,0 +1,11 @@
+name: fable
+display: Claude Fable
+provider: anthropic
+kind: subscription
+model: fable
+quality: 0.90
+cost_micro: 12000
+spec:
+  code-review: 0.03
+  deep-research: 0.05
+  orchestration: 0.04

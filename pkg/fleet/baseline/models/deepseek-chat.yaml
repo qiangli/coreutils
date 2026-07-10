@@ -1,0 +1,9 @@
+name: deepseek-chat
+display: DeepSeek Chat
+provider: openai-compat
+kind: api
+base_url: https://api.deepseek.com
+api_key_ref: deepseek
+model: deepseek/deepseek-chat
+quality: 0.75
+cost_micro: 800

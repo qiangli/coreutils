@@ -33,8 +33,13 @@ type weaveAutopilotOptions struct {
 }
 
 type weaveOrchestratorLease struct {
-	Holder      string    `json:"holder"`
+	Holder string `json:"holder"`
+	// Tool stays the executable's registry name — the key everything else is
+	// recorded under. Agent and Binding are additive, present when the roster
+	// entry named an agent.
 	Tool        string    `json:"tool"`
+	Agent       string    `json:"agent,omitempty"`
+	Binding     string    `json:"binding,omitempty"`
 	PID         int       `json:"pid"`
 	AcquiredAt  time.Time `json:"acquired_at"`
 	HeartbeatAt time.Time `json:"heartbeat_at"`
@@ -42,9 +47,14 @@ type weaveOrchestratorLease struct {
 	Generation  int64     `json:"generation"`
 }
 
+// weaveAutopilotRunner drives one orchestrator member.
+//
+// It takes a resolved member rather than a tool name because an agent and its
+// bare tool exec the same binary — what differs is the model, and a runner
+// handed only a name cannot know it.
 type weaveAutopilotRunner interface {
-	Run(ctx context.Context, tool, prompt, queueDir string, onOutput func(string)) (int, error)
-	Healthy(ctx context.Context, tool string) bool
+	Run(ctx context.Context, m weaveMember, prompt, queueDir string, onOutput func(string)) (int, error)
+	Healthy(ctx context.Context, m weaveMember) bool
 }
 
 type weaveExecAutopilotRunner struct{}
@@ -66,16 +76,24 @@ func runWeaveAutopilot(cmd *cobra.Command, opts weaveAutopilotOptions, flags *we
 	if opts.backoff <= 0 {
 		opts.backoff = 10 * time.Second
 	}
-	fleet := parseWeaveAutopilotFleet(opts.fleetCSV)
-	if len(fleet) == 0 {
+	names := parseWeaveAutopilotFleet(opts.fleetCSV)
+	if len(names) == 0 {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave autopilot",
 			weavecli.ExitInvalidArg, fmt.Errorf("--orchestrator-fleet is required")))
 	}
-	cwd, _ := os.Getwd()
-	root, err := weaveRepoRoot(cwd)
+	// Resolve the whole roster before taking a lease. Naming an agent asserts a
+	// model, and a binding that cannot run is a configuration error the
+	// operator should hear now — not at 3am, on failover, from a dead member.
+	fleet, err := resolveWeaveRoster(names)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave autopilot",
-			weavecli.ExitPrecondFail, err))
+			weavecli.ExitInvalidArg, err))
+	}
+	cwd, _ := os.Getwd()
+	root, rerr := weaveRepoRoot(cwd)
+	if rerr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave autopilot",
+			weavecli.ExitPrecondFail, rerr))
 	}
 	dir, err := weaveQueueDir(root)
 	if err != nil {
@@ -111,14 +129,18 @@ func runWeaveAutopilot(cmd *cobra.Command, opts weaveAutopilotOptions, flags *we
 	if mode == weavecli.OutputJSON {
 		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave autopilot", res))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave autopilot: orchestrator %s exited cleanly\n", res.Tool)
+	label := res.Tool
+	if res.Agent != "" {
+		label = fmt.Sprintf("%s (%s)", res.Agent, res.Binding)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "weave autopilot: orchestrator %s exited cleanly\n", label)
 	return nil
 }
 
 type weaveAutopilotLoopOptions struct {
 	queueDir  string
 	repoRoot  string
-	fleet     []string
+	fleet     []weaveMember
 	brief     string
 	standby   bool
 	leaseTTL  time.Duration
@@ -135,6 +157,8 @@ type weaveAutopilotLoopOptions struct {
 
 type weaveAutopilotResult struct {
 	Tool       string `json:"tool"`
+	Agent      string `json:"agent,omitempty"`
+	Binding    string `json:"binding,omitempty"`
 	Runs       int    `json:"runs"`
 	QueueDir   string `json:"queue_dir"`
 	LastReason string `json:"last_reason,omitempty"`
@@ -179,8 +203,8 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 		if opts.maxRuns > 0 && runs >= opts.maxRuns {
 			return weaveAutopilotResult{Runs: runs, QueueDir: opts.queueDir, LastReason: lastReason}, nil
 		}
-		tool := opts.fleet[index]
-		acquired, lease, err := acquireWeaveAutopilotLease(opts.queueDir, opts.holder, tool, os.Getpid(), opts.leaseTTL, opts.now)
+		member := opts.fleet[index]
+		acquired, lease, err := acquireWeaveAutopilotLease(opts.queueDir, opts.holder, member, os.Getpid(), opts.leaseTTL, opts.now)
 		if err != nil {
 			return weaveAutopilotResult{}, err
 		}
@@ -199,7 +223,7 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 			continue
 		}
 
-		leaseLog(opts.queueDir, "takeover", fmt.Sprintf("tool=%s holder=%s generation=%d reason=%s", tool, opts.holder, lease.Generation, lastReasonOrInitial(lastReason)))
+		leaseLog(opts.queueDir, "takeover", fmt.Sprintf("%s holder=%s generation=%d reason=%s", memberLogFields(member), opts.holder, lease.Generation, lastReasonOrInitial(lastReason)))
 		prompt, err := buildWeaveAutopilotPrompt(opts.repoRoot, opts.queueDir, opts.brief)
 		if err != nil {
 			_ = releaseWeaveAutopilotLease(opts.queueDir, opts.holder)
@@ -215,7 +239,7 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 			for {
 				select {
 				case <-ticker.C:
-					if err := renewWeaveAutopilotLease(opts.queueDir, opts.holder, tool, opts.leaseTTL, opts.now); err != nil {
+					if err := renewWeaveAutopilotLease(opts.queueDir, opts.holder, member, opts.leaseTTL, opts.now); err != nil {
 						fmt.Fprintf(opts.stderr, "weave autopilot: heartbeat failed: %v\n", err)
 					}
 				case <-runCtx.Done():
@@ -225,7 +249,7 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 		}()
 
 		overload := false
-		exitCode, runErr := opts.runner.Run(runCtx, tool, prompt, opts.queueDir, func(s string) {
+		exitCode, runErr := opts.runner.Run(runCtx, member, prompt, opts.queueDir, func(s string) {
 			if s == "" {
 				return
 			}
@@ -247,10 +271,13 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 			lastReason = fmt.Sprintf("exit %d", exitCode)
 		} else {
 			_ = releaseWeaveAutopilotLease(opts.queueDir, opts.holder)
-			return weaveAutopilotResult{Tool: tool, Runs: runs, QueueDir: opts.queueDir}, nil
+			return weaveAutopilotResult{
+				Tool: member.Tool, Agent: member.agentNick(), Binding: member.Binding(),
+				Runs: runs, QueueDir: opts.queueDir,
+			}, nil
 		}
 
-		leaseLog(opts.queueDir, "failover", fmt.Sprintf("from=%s reason=%s", tool, lastReason))
+		leaseLog(opts.queueDir, "failover", fmt.Sprintf("from=%s reason=%s", member.Label(), lastReason))
 		_ = releaseWeaveAutopilotLease(opts.queueDir, opts.holder)
 
 		if index == 0 {
@@ -262,7 +289,7 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 			continue
 		}
 		if opts.now().After(primaryProbeAfter) && opts.runner.Healthy(ctx, opts.fleet[0]) {
-			leaseLog(opts.queueDir, "failback", fmt.Sprintf("from=%s to=%s boundary=between-runs", opts.fleet[index], opts.fleet[0]))
+			leaseLog(opts.queueDir, "failback", fmt.Sprintf("from=%s to=%s boundary=between-runs", opts.fleet[index].Label(), opts.fleet[0].Label()))
 			index = 0
 		}
 	}
@@ -337,7 +364,7 @@ func saveWeaveAutopilotLease(dir string, l weaveOrchestratorLease) error {
 	return os.Rename(tmp, path)
 }
 
-func acquireWeaveAutopilotLease(dir, holder, tool string, pid int, ttl time.Duration, now func() time.Time) (bool, weaveOrchestratorLease, error) {
+func acquireWeaveAutopilotLease(dir, holder string, m weaveMember, pid int, ttl time.Duration, now func() time.Time) (bool, weaveOrchestratorLease, error) {
 	var out weaveOrchestratorLease
 	acquired := false
 	err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
@@ -357,7 +384,9 @@ func acquireWeaveAutopilotLease(dir, holder, tool string, pid int, ttl time.Dura
 		}
 		out = weaveOrchestratorLease{
 			Holder:      holder,
-			Tool:        tool,
+			Tool:        m.Tool,
+			Agent:       m.agentNick(),
+			Binding:     m.Binding(),
 			PID:         pid,
 			AcquiredAt:  t,
 			HeartbeatAt: t,
@@ -373,7 +402,7 @@ func acquireWeaveAutopilotLease(dir, holder, tool string, pid int, ttl time.Dura
 	return acquired, out, err
 }
 
-func renewWeaveAutopilotLease(dir, holder, tool string, ttl time.Duration, now func() time.Time) error {
+func renewWeaveAutopilotLease(dir, holder string, m weaveMember, ttl time.Duration, now func() time.Time) error {
 	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		_ = q
 		cur, ok, err := loadWeaveAutopilotLease(dir)
@@ -384,7 +413,8 @@ func renewWeaveAutopilotLease(dir, holder, tool string, ttl time.Duration, now f
 			return fmt.Errorf("orchestrator lease not held by %s", holder)
 		}
 		t := now().UTC()
-		cur.Tool = tool
+		cur.Tool = m.Tool
+		cur.Agent, cur.Binding = m.agentNick(), m.Binding()
 		cur.HeartbeatAt = t
 		cur.ExpiresAt = t.Add(ttl)
 		return saveWeaveAutopilotLease(dir, cur)
@@ -454,22 +484,18 @@ func leaseLog(dir, event, msg string) {
 	_, _ = f.WriteString(line)
 }
 
-func (weaveExecAutopilotRunner) Healthy(ctx context.Context, tool string) bool {
-	_, err := exec.LookPath(tool)
+// Healthy probes the member's EXECUTABLE. Its model was validated when the
+// roster resolved; nothing about a model changes between runs, so failback
+// asks only the question that can change: is the binary back on PATH.
+func (weaveExecAutopilotRunner) Healthy(ctx context.Context, m weaveMember) bool {
+	_, err := exec.LookPath(m.Bin)
 	return err == nil
 }
 
-func (weaveExecAutopilotRunner) Run(ctx context.Context, tool, prompt, queueDir string, onOutput func(string)) (int, error) {
-	var args []string
-	if toolsDir, err := weaveToolsDir(); err == nil {
-		if p, ok := loadToolProfile(toolsDir, tool); ok {
-			args = append(args, p.HeadlessArgs...)
-		} else if seed, has := seededLaunchContracts[tool]; has {
-			args = append(args, seed.HeadlessArgs...)
-		}
-	}
+func (weaveExecAutopilotRunner) Run(ctx context.Context, m weaveMember, prompt, queueDir string, onOutput func(string)) (int, error) {
+	args := m.headlessArgs()
 
-	cmd := exec.CommandContext(ctx, tool, args...)
+	cmd := exec.CommandContext(ctx, m.Bin, args...)
 	cmd.Dir = queueDir
 	cmd.Stdin = strings.NewReader(prompt)
 	env := make([]string, 0, len(os.Environ())+4)
@@ -479,7 +505,10 @@ func (weaveExecAutopilotRunner) Run(ctx context.Context, tool, prompt, queueDir 
 		}
 		env = append(env, kv)
 	}
-	cmd.Env = append(env, "PWD="+queueDir, "WEAVE_ORCHESTRATOR=1", "WEAVE_QUEUE_DIR="+queueDir)
+	env = append(env, "PWD="+queueDir, "WEAVE_ORCHESTRATOR=1", "WEAVE_QUEUE_DIR="+queueDir)
+	// The orchestrator signs its own work too: it comments on issues and
+	// commits. Stamp it with the principal it acts as, when it has one.
+	cmd.Env = weaveAgentEnv(env, m.agent)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

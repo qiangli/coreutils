@@ -1,0 +1,374 @@
+package fleet
+
+import (
+	"fmt"
+	"io/fs"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/qiangli/coreutils/pkg/assetring"
+)
+
+// Config assembles the rings a Catalog reads. Build one with New.
+type Config struct {
+	root    string
+	rootSet bool                          // root came from WithRoot, not the environment
+	shared  map[string][]assetring.Source // noun → extra read-only sources
+	baseFS  fs.FS                         // embedded baseline (nil = the compiled-in one)
+	noLocal bool
+}
+
+// Option configures a Catalog.
+type Option func(*Config)
+
+// WithRoot pins the local store's parent directory.
+//
+// An explicit root also disables the per-noun $BASHY_*_DIR overrides: a
+// caller that named a root meant that root, and ambient environment must
+// not redirect writes out of it.
+func WithRoot(dir string) Option {
+	return func(c *Config) { c.root, c.rootSet = dir, true }
+}
+
+// WithSource adds a read-only source for one noun, above the baseline and
+// below the local store.
+func WithSource(noun string, src assetring.Source) Option {
+	return func(c *Config) {
+		if c.shared == nil {
+			c.shared = map[string][]assetring.Source{}
+		}
+		c.shared[noun] = append(c.shared[noun], src)
+	}
+}
+
+// WithBaselineFS replaces the compiled-in baseline. Tests use it to pin a
+// catalog to a known world.
+func WithBaselineFS(fsys fs.FS) Option { return func(c *Config) { c.baseFS = fsys } }
+
+// WithoutLocalStore drops the host-local ring. Tests use it to read the
+// baseline without touching the developer's real store.
+func WithoutLocalStore() Option { return func(c *Config) { c.noLocal = true } }
+
+// Catalog reads the merged fleet across every ring.
+type Catalog struct{ cfg Config }
+
+// New builds a Catalog.
+func New(opts ...Option) *Catalog {
+	cfg := Config{root: DefaultRoot()}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &Catalog{cfg: cfg}
+}
+
+// Root reports the local store's parent directory.
+func (c *Catalog) Root() string { return c.cfg.root }
+
+// nounDir resolves a noun's local store, honoring the per-noun environment
+// overrides only when the root itself came from the environment.
+func (c *Catalog) nounDir(noun string) string {
+	if c.cfg.rootSet {
+		return filepath.Join(c.cfg.root, noun)
+	}
+	return NounDir(c.cfg.root, noun)
+}
+
+// sources assembles a noun's rings in precedence order: the embedded
+// baseline, then shared catalog dirs, then any injected overlay (an org
+// catalog cache), then the host-local store. The last source wins, so a
+// local entry shadows everything.
+func (c *Catalog) sources(noun string) []assetring.Source {
+	var out []assetring.Source
+
+	base := c.cfg.baseFS
+	if base == nil {
+		base = baselineFS
+	}
+	if sub, err := fs.Sub(base, baselineRoot+"/"+noun); err == nil {
+		out = append(out, assetring.FileFS(sub, assetring.RingEmbedded, ext))
+	}
+	for _, dir := range sharedDirs(noun) {
+		out = append(out, assetring.FileDir(dir, assetring.RingShared, ext))
+	}
+	out = append(out, c.cfg.shared[noun]...)
+	if !c.cfg.noLocal {
+		out = append(out, assetring.FileDir(c.nounDir(noun), assetring.RingLocal, ext))
+	}
+	return out
+}
+
+// parseErr records an entry that could not be read. A catalog reports
+// broken entries; it never hides them behind a shorter list.
+type parseErr struct {
+	Name string
+	Err  error
+}
+
+func (e parseErr) Error() string { return e.Name + ": " + e.Err.Error() }
+
+// Tools returns every agentic-CLI tool, name-sorted.
+//
+// The asset registry's tool namespace is shared with MCP-style function
+// kits (kind func/web/system). Those are not fleet tools and are omitted;
+// pass all=true to see them.
+func (c *Catalog) Tools(all bool) ([]Tool, []error) {
+	var errs []error
+	cat := &assetring.Catalog[Tool]{
+		Sources: c.sources(dirTools),
+		Parse: func(n string, b []byte, s assetring.Source) Tool {
+			t, err := ParseTool(n, b, s)
+			if err != nil {
+				errs = append(errs, parseErr{n, err})
+				return Tool{Name: n, Ring: s.Ring()}
+			}
+			return t
+		},
+	}
+	rows, err := cat.Rows()
+	if err != nil {
+		return nil, append(errs, err)
+	}
+	out := make([]Tool, 0, len(rows))
+	for _, r := range rows {
+		if !all && !r.Entry.IsCLI() {
+			continue
+		}
+		out = append(out, r.Entry)
+	}
+	return out, errs
+}
+
+// Tool resolves a tool by canonical name or alias.
+func (c *Catalog) Tool(name string) (Tool, bool) {
+	tools, _ := c.Tools(true)
+	for _, t := range tools {
+		for _, n := range t.Names() {
+			if n == name {
+				return t, true
+			}
+		}
+	}
+	return Tool{}, false
+}
+
+// Models returns every model, name-sorted.
+func (c *Catalog) Models() ([]Model, []error) {
+	var errs []error
+	cat := &assetring.Catalog[Model]{
+		Sources: c.sources(dirModels),
+		Parse: func(n string, b []byte, s assetring.Source) Model {
+			m, err := ParseModel(n, b, s)
+			if err != nil {
+				errs = append(errs, parseErr{n, err})
+				return Model{Name: n, Ring: s.Ring()}
+			}
+			return m
+		},
+	}
+	rows, err := cat.Rows()
+	if err != nil {
+		return nil, append(errs, err)
+	}
+	out := make([]Model, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Entry)
+	}
+	return out, errs
+}
+
+// Model resolves a model by canonical name or alias.
+func (c *Catalog) Model(name string) (Model, bool) {
+	models, _ := c.Models()
+	for _, m := range models {
+		for _, n := range m.Names() {
+			if n == name {
+				return m, true
+			}
+		}
+	}
+	return Model{}, false
+}
+
+// Agents returns every agent across every file, nickname-sorted.
+func (c *Catalog) Agents() ([]Agent, []error) {
+	var errs []error
+	cat := &assetring.Catalog[AgentFile]{
+		Sources: c.sources(dirAgents),
+		Parse: func(n string, b []byte, s assetring.Source) AgentFile {
+			f, err := ParseAgentFile(n, b, s)
+			if err != nil {
+				errs = append(errs, parseErr{n, err})
+				return AgentFile{}
+			}
+			return f
+		},
+	}
+	rows, err := cat.Rows()
+	if err != nil {
+		return nil, append(errs, err)
+	}
+	var out []Agent
+	for _, r := range rows {
+		out = append(out, r.Entry.Agents...)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, errs
+}
+
+// Agent resolves an agent by nickname or alias. It also accepts a bare
+// tool:model binding, so `claude:opus` names its agent even before anyone
+// has nicknamed it.
+func (c *Catalog) Agent(name string) (Agent, bool) {
+	agents, _ := c.Agents()
+	for _, a := range agents {
+		for _, n := range a.Names() {
+			if n == name {
+				return a, true
+			}
+		}
+	}
+	if tool, model, ok := strings.Cut(name, ":"); ok {
+		for _, a := range agents {
+			if a.Tool == tool && a.Model == model {
+				return a, true
+			}
+		}
+	}
+	return Agent{}, false
+}
+
+// People returns every human principal, handle-sorted.
+func (c *Catalog) People() ([]Person, []error) {
+	var errs []error
+	cat := &assetring.Catalog[Person]{
+		Sources: c.sources(dirPeople),
+		Parse: func(n string, b []byte, s assetring.Source) Person {
+			p, err := ParsePerson(n, b, s)
+			if err != nil {
+				errs = append(errs, parseErr{n, err})
+				return Person{Handle: n, Ring: s.Ring()}
+			}
+			return p
+		},
+	}
+	rows, err := cat.Rows()
+	if err != nil {
+		return nil, append(errs, err)
+	}
+	out := make([]Person, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Entry)
+	}
+	return out, errs
+}
+
+// Person resolves a human by handle or alias.
+func (c *Catalog) Person(name string) (Person, bool) {
+	people, _ := c.People()
+	for _, p := range people {
+		for _, n := range p.Names() {
+			if n == name {
+				return p, true
+			}
+		}
+	}
+	return Person{}, false
+}
+
+// Binding resolves an agent nickname to its tool and model entries. It is
+// the bridge from a name a human typed to the two assets that make the
+// agent runnable. A dangling tool or model is reported, never silently
+// dropped: an agent whose halves do not resolve cannot be launched.
+func (c *Catalog) Binding(nick string) (Agent, Tool, Model, error) {
+	a, ok := c.Agent(nick)
+	if !ok {
+		return Agent{}, Tool{}, Model{}, fmt.Errorf("fleet: no agent %q", nick)
+	}
+	t, ok := c.Tool(a.Tool)
+	if !ok {
+		return a, Tool{}, Model{}, fmt.Errorf("fleet: agent %q names tool %q, which is not in the catalog", nick, a.Tool)
+	}
+	m, ok := c.Model(a.Model)
+	if !ok {
+		return a, t, Model{}, fmt.Errorf("fleet: agent %q names model %q, which is not in the catalog", nick, a.Model)
+	}
+	return a, t, m, nil
+}
+
+// AliasCollision reports a name claimed by two entries of the same kind.
+type AliasCollision struct {
+	Kind  string
+	Name  string
+	Holds []string // canonical names of the entries claiming it
+}
+
+func (a AliasCollision) Error() string {
+	return fmt.Sprintf("fleet: %s name %q is claimed by %s", a.Kind, a.Name, strings.Join(a.Holds, " and "))
+}
+
+// CheckAliases reports names claimed by more than one entry of the same
+// kind. Aliasing is free — `007` and `smarty` may both name one agent —
+// but one name may never mean two things, or `whois` would have to guess.
+func (c *Catalog) CheckAliases() []AliasCollision {
+	var out []AliasCollision
+	check := func(kind string, entries [][]string) {
+		holders := map[string][]string{}
+		for _, ns := range entries {
+			if len(ns) == 0 {
+				continue
+			}
+			canon := ns[0]
+			for _, n := range ns {
+				holders[n] = append(holders[n], canon)
+			}
+		}
+		for _, n := range sortedKeys(holders) {
+			if h := dedupe(holders[n]); len(h) > 1 {
+				out = append(out, AliasCollision{Kind: kind, Name: n, Holds: h})
+			}
+		}
+	}
+
+	tools, _ := c.Tools(true)
+	tn := make([][]string, 0, len(tools))
+	for _, t := range tools {
+		tn = append(tn, t.Names())
+	}
+	check(KindTool, tn)
+
+	models, _ := c.Models()
+	mn := make([][]string, 0, len(models))
+	for _, m := range models {
+		mn = append(mn, m.Names())
+	}
+	check(KindModel, mn)
+
+	agents, _ := c.Agents()
+	an := make([][]string, 0, len(agents))
+	for _, a := range agents {
+		an = append(an, a.Names())
+	}
+	check(KindAgent, an)
+
+	people, _ := c.People()
+	pn := make([][]string, 0, len(people))
+	for _, p := range people {
+		pn = append(pn, p.Names())
+	}
+	check(KindPerson, pn)
+
+	return out
+}
+
+func dedupe(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}

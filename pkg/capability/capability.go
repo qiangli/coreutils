@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // Capability is a canonical capability key. The set mirrors
@@ -33,17 +35,17 @@ const (
 	CapToolUse     Capability = "tool-use"
 	CapIsolation   Capability = "isolation"
 	// Quality columns (model-governed).
-	CapCoding         Capability = "coding"
-	CapBugFixing      Capability = "bug-fixing"
-	CapCodeReview     Capability = "code-review"
-	CapTestGen        Capability = "test-generation"
-	CapDeepResearch   Capability = "deep-research"
-	CapWebSearch      Capability = "web-search"
-	CapBrowserUse     Capability = "browser-use"
-	CapDataAnalysis   Capability = "data-analysis"
-	CapPlanning       Capability = "planning"
+	CapCoding          Capability = "coding"
+	CapBugFixing       Capability = "bug-fixing"
+	CapCodeReview      Capability = "code-review"
+	CapTestGen         Capability = "test-generation"
+	CapDeepResearch    Capability = "deep-research"
+	CapWebSearch       Capability = "web-search"
+	CapBrowserUse      Capability = "browser-use"
+	CapDataAnalysis    Capability = "data-analysis"
+	CapPlanning        Capability = "planning"
 	CapDecisionSupport Capability = "decision-support"
-	CapOrchestration  Capability = "orchestration"
+	CapOrchestration   Capability = "orchestration"
 )
 
 // HarnessCaps are governed by the tool; QualityCaps by the model.
@@ -89,18 +91,18 @@ const (
 
 // Cell is one (agent, capability) estimate.
 type Cell struct {
-	Quality    float64 `json:"quality"`               // 0..1 fitness
-	LatencyMS  int64   `json:"latency_ms,omitempty"`  // typical, observed
-	CostMicro  int64   `json:"cost_micro,omitempty"`  // millionths of a unit, observed
-	Source     Source  `json:"source"`                // prior | host
-	Samples    int     `json:"samples"`               // host observations folded in
-	UpdatedRFC string  `json:"updated,omitempty"`     // RFC3339 of last update
+	Quality    float64 `json:"quality"`              // 0..1 fitness
+	LatencyMS  int64   `json:"latency_ms,omitempty"` // typical, observed
+	CostMicro  int64   `json:"cost_micro,omitempty"` // millionths of a unit, observed
+	Source     Source  `json:"source"`               // prior | host
+	Samples    int     `json:"samples"`              // host observations folded in
+	UpdatedRFC string  `json:"updated,omitempty"`    // RFC3339 of last update
 }
 
 // Matrix is the persisted capability matrix: agent (tool:model) -> capability -> cell.
 type Matrix struct {
-	SchemaVersion string                            `json:"schema_version"`
-	Agents        map[string]map[Capability]Cell    `json:"agents"`
+	SchemaVersion string                         `json:"schema_version"`
+	Agents        map[string]map[Capability]Cell `json:"agents"`
 }
 
 const schemaVersion = "bashy-capability-v1"
@@ -338,83 +340,87 @@ func Operable(tool string) (bool, string) {
 
 // --- priors ----------------------------------------------------------------
 
-// seedPriors builds the initial matrix from two coarse factor tables — tool
-// harness scores and model quality tiers — encoding the taxonomy factorization
-// capability ≈ harness(tool) ⊕ quality(model). Values are deliberately coarse
-// and marked Source=prior; host outcomes refine them. Seeds the tool:model pairs
-// in local use; add rows as agents appear.
+// seedPriors builds the initial matrix from the fleet registry, encoding the
+// taxonomy factorization capability ≈ harness(tool) ⊕ quality(model).
+//
+// The factor tables used to live here as Go literals, duplicated against the
+// launch contracts in pkg/chat and pkg/weave. They now live in the registry
+// (coreutils/pkg/fleet): a tool declares its harness scores, a model its
+// quality/cost/specializations, and an agent declares the tool:model pair.
+// One declaration, three consumers — so a model added with `bashy models add`
+// is routable without editing Go.
+//
+// Values stay deliberately coarse and marked Source=prior; host outcomes
+// refine them.
 func seedPriors() *Matrix {
-	// tool -> harness capability -> score
-	toolHarness := map[string]map[Capability]float64{
-		"claude":   {CapOperability: 0.95, CapShell: 0.95, CapToolUse: 0.90, CapIsolation: 0.80},
-		"codex":    {CapOperability: 0.70, CapShell: 0.65, CapToolUse: 0.85, CapIsolation: 0.80}, // login-shell caveat on macOS
-		"opencode": {CapOperability: 0.90, CapShell: 0.90, CapToolUse: 0.80, CapIsolation: 0.75},
-		"aider":    {CapOperability: 0.80, CapShell: 0.85, CapToolUse: 0.70, CapIsolation: 0.70},
-		"agy":      {CapOperability: 0.85, CapShell: 0.85, CapToolUse: 0.80, CapIsolation: 0.75},
-	}
-	// model -> overall quality tier (applied to quality caps; a few specializations below)
-	modelTier := map[string]float64{
-		"opus": 0.92, "fable": 0.90, "sonnet": 0.85, "gpt-5.5": 0.90,
-		"kimi-k2.7-code": 0.82, "kimi-k2.6": 0.80, "deepseek-v4": 0.80,
-		"deepseek-chat": 0.75, "gemini3.1": 0.80, "gemini": 0.78,
-	}
-	// per (model, capability) bumps where a model is notably stronger/weaker.
-	// The gpt-5.5 (codex) profile encodes the 2026-07-08 validation-meeting
-	// correction: codex leads gated repo-local implementation, trails on broad/
-	// ambiguous strategy (see docs/capability-routed-delegation.md §Refinements).
-	spec := map[string]map[Capability]float64{
-		"gemini3.1": {CapDeepResearch: +0.10, CapWebSearch: +0.30, CapBrowserUse: +0.25},
-		"gemini":    {CapDeepResearch: +0.08, CapWebSearch: +0.28, CapBrowserUse: +0.22},
-		"gpt-5.5":   {CapCoding: +0.06, CapBugFixing: +0.06, CapTestGen: +0.04, CapPlanning: -0.05, CapDecisionSupport: -0.05, CapOrchestration: -0.05},
-		"opus":      {CapCodeReview: +0.03, CapPlanning: +0.03, CapOrchestration: +0.04},
-		"fable":     {CapCodeReview: +0.03, CapDeepResearch: +0.05, CapOrchestration: +0.04},
-	}
-	// Per-model per-turn cost tier (relative micro-units) — the routing objective's
-	// cost term / the dishwasher rule. Locally-hostable commodity models (deepseek,
-	// kimi) are cheapest; premium hosted models are dearest.
-	modelCost := map[string]int64{
-		"opus": 15000, "gpt-5.5": 12000, "fable": 12000, "sonnet": 6000,
-		"gemini3.1": 5000, "gemini": 4000,
-		"kimi-k2.7-code": 2000, "kimi-k2.6": 1500, "deepseek-v4": 1500, "deepseek-chat": 800,
-	}
-	// Not every quality capability tracks the coding tier. Web-search and
-	// browser-use need live web integration (a coding-strong model is NOT
-	// automatically good at them), so they start from a low generic base and the
-	// specialization bumps decide the leader. deep-research / data-analysis sit
-	// just below the coding tier. Everything else tracks the tier directly.
-	lowBase := map[Capability]float64{CapWebSearch: 0.50, CapBrowserUse: 0.50}
-	tierMinus := map[Capability]float64{CapDeepResearch: 0.05, CapDataAnalysis: 0.05}
-	// The concrete tool:model rows seeded (extend as agents appear on the host).
-	pairs := []string{
-		"claude:opus", "claude:fable", "codex:gpt-5.5",
-		"opencode:deepseek-v4", "opencode:kimi-k2.7-code",
-		"aider:deepseek-v4", "aider:kimi-k2.7-code", "agy:gemini3.1",
-	}
-	clamp := func(x float64) float64 {
-		if x > 0.99 {
-			return 0.99
+	return seedPriorsFrom(newCatalog())
+}
+
+// newCatalog is indirected so tests can pin the registry to a scratch store.
+var newCatalog = func() *fleet.Catalog { return fleet.New() }
+
+// Not every quality capability tracks the coding tier. Web-search and
+// browser-use need live web integration (a coding-strong model is NOT
+// automatically good at them), so they start from a low generic base and the
+// per-model specializations decide the leader. deep-research / data-analysis
+// sit just below the coding tier. Everything else tracks the tier directly.
+var (
+	lowBase   = map[Capability]float64{CapWebSearch: 0.50, CapBrowserUse: 0.50}
+	tierMinus = map[Capability]float64{CapDeepResearch: 0.05, CapDataAnalysis: 0.05}
+)
+
+// defaultHarness is the score for a tool that declares none, and defaultTier
+// for a model that declares no quality.
+const (
+	defaultHarness = 0.6
+	defaultTier    = 0.7
+)
+
+func seedPriorsFrom(cat *fleet.Catalog) *Matrix {
+	tools, _ := cat.Tools(true)
+	harness := make(map[string]map[Capability]float64, len(tools))
+	for _, t := range tools {
+		if len(t.Harness) == 0 {
+			continue
 		}
-		if x < 0.01 {
-			return 0.01
+		row := make(map[Capability]float64, len(t.Harness))
+		for k, v := range t.Harness {
+			row[Capability(k)] = v
 		}
-		return x
+		harness[t.Name] = row
 	}
+
+	models, _ := cat.Models()
+	byModel := make(map[string]fleet.Model, len(models))
+	for _, m := range models {
+		byModel[m.Name] = m
+	}
+
 	m := &Matrix{SchemaVersion: schemaVersion, Agents: map[string]map[Capability]Cell{}}
-	for _, agent := range pairs {
-		tool, model := ToolOf(agent), ModelOf(agent)
-		cost := modelCost[model] // 0 if unknown
-		mk := func(q float64) Cell { return Cell{Quality: clamp(q), CostMicro: cost, Source: SourcePrior} }
+	agents, _ := cat.Agents()
+	for _, a := range agents {
+		// One matrix row per binding. Several nicknames may name the same
+		// tool:model, and they must collapse to one row rather than
+		// fragmenting the evidence the router accumulates.
+		key := a.MatrixKey()
+		if _, seen := m.Agents[key]; seen {
+			continue
+		}
+		model := byModel[a.Model]
+		cost := model.CostMicro
+		mk := func(q float64) Cell { return Cell{Quality: clampQuality(q), CostMicro: cost, Source: SourcePrior} }
+
 		row := map[Capability]Cell{}
 		for _, hc := range HarnessCaps {
-			q := 0.6
-			if v, ok := toolHarness[tool][hc]; ok {
+			q := defaultHarness
+			if v, ok := harness[a.Tool][hc]; ok {
 				q = v
 			}
 			row[hc] = mk(q)
 		}
-		tier := 0.7
-		if v, ok := modelTier[model]; ok {
-			tier = v
+		tier := defaultTier
+		if model.Quality > 0 {
+			tier = model.Quality
 		}
 		for _, qc := range QualityCaps {
 			var q float64
@@ -426,14 +432,22 @@ func seedPriors() *Matrix {
 			default:
 				q = tier
 			}
-			if b, ok := spec[model][qc]; ok {
-				q += b
-			}
+			q += model.Spec[string(qc)]
 			row[qc] = mk(q)
 		}
-		m.Agents[agent] = row
+		m.Agents[key] = row
 	}
 	return m
+}
+
+func clampQuality(x float64) float64 {
+	if x > 0.99 {
+		return 0.99
+	}
+	if x < 0.01 {
+		return 0.01
+	}
+	return x
 }
 
 // NowRFC is the current time as RFC3339 (indirected for tests).

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // ToolProfile is the persistent profile + track record for one agentic CLI,
@@ -71,7 +73,7 @@ type RoleRecord struct {
 func setRoleReview(dir, tool, role string, rating int, verdict string, notes []string, now time.Time) error {
 	p, ok := loadToolProfile(dir, tool)
 	if !ok {
-		seed := seededLaunchContracts[tool]
+		seed, _ := seededContract(tool)
 		p = &seed
 		p.Tool = tool
 	}
@@ -95,32 +97,42 @@ func setRoleReview(dir, tool, role string, rating int, verdict string, notes []s
 	return saveToolProfile(dir, p)
 }
 
-// seededLaunchContracts are the known-good headless invocations, kept in sync
-// with the weave-orchestration skill cheat-sheet. `fleet interview` starts from
-// these for a tool it has not seen, then refreshes bin/version live.
-var seededLaunchContracts = map[string]ToolProfile{
-	"claude": {
-		HeadlessArgs: []string{"--dangerously-skip-permissions"},
-		TrustClear:   "say:1", SupportsSay: true, SupportsGracefulQuit: true,
-		Notes: "TUI is steerable; per-dir trust prompt needs `weave say <N> \"1\"` (or pre-seed ~/.claude.json).",
-	},
-	"codex": {
-		HeadlessArgs: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"},
-		SupportsSay:  false, SupportsGracefulQuit: true,
-		Notes: "headless `exec`; the sandbox flag is `-s/--sandbox workspace-write` (codex 0.141.0 — NOT `--workspace`, which errors 'unexpected argument' and exits 2). --full-auto is deprecated. Not steerable.",
-	},
-	"agy": {
-		HeadlessArgs: []string{"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},
-		SupportsSay:  false, SupportsGracefulQuit: true,
-		Notes:    "antigravity; headless `-p` (use `-i` for a steerable TUI). Bump --print-timeout (default 5m).",
-		AuthHint: "Antigravity requires a browser sign-in: run `agy` once interactively and complete the login, then it works headless. Not usable in a headless fleet until signed in.",
-	},
-	"opencode": {
-		HeadlessArgs: []string{"run"},
-		SupportsSay:  false, SupportsGracefulQuit: true,
-		Notes: "headless `run`; judge by committed artifacts, not exit code.",
-	},
+// seededContract is the known-good headless invocation for a tool, read from
+// the fleet registry (coreutils/pkg/fleet).
+//
+// It used to be a Go map here, a second copy of the same launch flags that
+// pkg/chat carried and the capability matrix scored against. The three drifted
+// independently. Now a tool declares its contract once — `bashy tools show
+// codex` is what weave launches — and `bashy tools set` changes it without a
+// rebuild.
+//
+// The accrued track record (Roles, ContractOK, run counts) is NOT registry
+// data: it is what this host learned, and it keeps living in the per-tool
+// profile JSON. The registry supplies the seed; the profile accrues the
+// evidence.
+func seededContract(tool string) (ToolProfile, bool) {
+	t, ok := fleetCatalog().Tool(tool)
+	if !ok || !t.IsCLI() {
+		return ToolProfile{}, false
+	}
+	args, ok := t.ArgvPrefix("")
+	if !ok {
+		return ToolProfile{}, false // recognized, but not drivable headless
+	}
+	l := t.CLI.Launch
+	return ToolProfile{
+		Tool:                 t.Name,
+		HeadlessArgs:         args,
+		TrustClear:           l.TrustClear,
+		SupportsSay:          l.SupportsSay,
+		SupportsGracefulQuit: l.SupportsGracefulQuit,
+		Notes:                l.Notes,
+		AuthHint:             l.AuthHint,
+	}, true
 }
+
+// fleetCatalog is indirected so tests can pin the registry.
+var fleetCatalog = func() *fleet.Catalog { return fleet.New() }
 
 func weaveToolsDir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -167,7 +179,7 @@ func saveToolProfile(dir string, p *ToolProfile) error {
 func interviewTool(dir, tool string, now time.Time, live bool) (*ToolProfile, error) {
 	p, ok := loadToolProfile(dir, tool)
 	if !ok {
-		seed := seededLaunchContracts[tool] // zero value if unknown
+		seed, _ := seededContract(tool) // zero value if unknown
 		p = &seed
 		p.Tool = tool
 	}
@@ -187,7 +199,7 @@ func interviewTool(dir, tool string, now time.Time, live bool) (*ToolProfile, er
 			// Self-heal: the recorded contract is stale, but the maintained seed
 			// contract may already carry the fixed flags (codex --sandbox). Probe
 			// the seed; if it parses, adopt it.
-			if seed, has := seededLaunchContracts[tool]; has && !sameArgs(seed.HeadlessArgs, p.HeadlessArgs) {
+			if seed, has := seededContract(tool); has && !sameArgs(seed.HeadlessArgs, p.HeadlessArgs) {
 				if sok, snote := liveProbeContract(tool, seed.HeadlessArgs, now); sok {
 					p.HeadlessArgs = seed.HeadlessArgs
 					if seed.Notes != "" {
@@ -315,7 +327,7 @@ func classifyReadyOutput(raw string, timedOut bool) (status, note string) {
 func recordToolOutcome(dir, tool, role string, passed bool, note string) error {
 	p, ok := loadToolProfile(dir, tool)
 	if !ok {
-		seed := seededLaunchContracts[tool]
+		seed, _ := seededContract(tool)
 		p = &seed
 		p.Tool = tool
 	}

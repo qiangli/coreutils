@@ -7,27 +7,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Ring names where a skill came from. Later sources shadow earlier ones
-// on a name collision (a host-local override of a shared or embedded
-// skill is deliberate, and reported).
-type Ring int
-
-const (
-	RingEmbedded Ring = iota // compiled into the host binary
-	RingShared               // a shared catalog dir (git clone, synced folder) — read-only
-	RingLocal                // host-local store (installed + learned)
-)
-
-func (r Ring) String() string {
-	switch r {
-	case RingLocal:
-		return "local"
-	case RingShared:
-		return "shared"
-	default:
-		return "embedded"
-	}
-}
+// Ring, the ring constants, and Ring.String live in source.go as
+// aliases of pkg/assetring.
 
 // Skill is one catalog entry: a standard Agent Skills folder (SKILL.md
 // + optional reference.md), with the P0 machine-checkable extras parsed

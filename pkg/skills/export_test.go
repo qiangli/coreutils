@@ -10,8 +10,14 @@ import (
 )
 
 func TestDetectAgent(t *testing.T) {
-	for _, marker := range agentMarkers {
-		t.Setenv(marker.env, "")
+	// The marker table lives in the fleet registry now; this test only needs a
+	// clean environment before exercising the delegation.
+	for _, env := range []string{
+		"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID",
+		"GEMINI_CLI", "CURSOR_AGENT", "CURSOR_TRACE_ID", "GOOSE_TERMINAL",
+		"OPENCODE_CLIENT", "CLINE_ACTIVE",
+	} {
+		t.Setenv(env, "")
 	}
 	for _, env := range []string{"AGENT", "AI_AGENT"} {
 		t.Setenv(env, "")

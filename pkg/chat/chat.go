@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/capability"
+	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/spf13/cobra"
 )
 
@@ -37,9 +38,15 @@ type Options struct {
 
 // Result is the stable envelope returned by Invoke and optionally printed by
 // the CLI.
+//
+// Agent stays the executable that ran, so every existing consumer keeps
+// working. Nick and Model are additive: they record what the caller asked for
+// and which inference backend was actually selected.
 type Result struct {
 	SchemaVersion string   `json:"schema_version"`
 	Agent         string   `json:"agent"`
+	Nick          string   `json:"nick,omitempty"`  // the name the caller used: 007, claude:opus, claude
+	Model         string   `json:"model,omitempty"` // the provider-side id passed to the tool
 	Role          string   `json:"role,omitempty"`
 	Cwd           string   `json:"cwd,omitempty"`
 	Args          []string `json:"args,omitempty"`
@@ -49,8 +56,37 @@ type Result struct {
 }
 
 // LaunchProfile is the minimal headless launch contract needed by chat.
+//
+// Deprecated: launch contracts now live in the fleet registry
+// (coreutils/pkg/fleet), where one declaration serves chat, weave, and the
+// capability matrix. seededProfiles remains only as the fallback for a tool
+// the registry does not know.
 type LaunchProfile struct {
 	Args []string
+}
+
+// Launch is a fully resolved invocation: which binary, which model, which argv.
+//
+// Tool and Model are what the OS needs — an executable and the provider's own
+// model id. ToolName and ModelName are what the REGISTRY calls them, and they
+// are what attribution records: a binding written with a binary path would not
+// match the capability matrix, whose rows are keyed by tool:model.
+type Launch struct {
+	Nick      string   // canonical agent nickname, or the bare name the caller typed
+	Tool      string   // the executable to run
+	ToolName  string   // the tool's registry name
+	Model     string   // provider-side model id ("" when none was selected)
+	ModelName string   // the model's registry alias
+	Args      []string // argv after the binary, prompt NOT included
+}
+
+// Binding is the capability-matrix key for this launch, or "" when no model
+// was selected.
+func (l Launch) Binding() string {
+	if l.ModelName == "" {
+		return ""
+	}
+	return l.ToolName + ":" + l.ModelName
 }
 
 // Runner starts an agent process. Tests and higher-level workflows can replace
@@ -82,11 +118,16 @@ func (execRunner) Run(ctx context.Context, agent string, args []string, cwd stri
 	// and is unreachable this way — see `bashy install-agent codex`. On by
 	// default; BASHY_FORCE_AGENT_SHELL=0 disables. cmd.Path is already resolved
 	// against the real PATH, so prepending the shim dir never shadows the agent.
+	env := os.Environ()
 	if forceAgentShell() {
 		if bashy, err := os.Executable(); err == nil && bashy != "" {
-			cmd.Env = forcedShellEnv(os.Environ(), bashy, ensureShims(bashy))
+			env = forcedShellEnv(env, bashy, ensureShims(bashy))
 		}
 	}
+	if l, ok := LaunchFrom(ctx); ok {
+		env = principalEnv(env, l)
+	}
+	cmd.Env = env
 	// Capture stdout and stderr SEPARATELY. The agent's actual answer is on
 	// stdout; CLI chrome (banners, warnings, progress) goes to stderr and would
 	// otherwise pollute a captured turn — and a truncated multibyte char in that
@@ -133,15 +174,87 @@ func appendStderr(stdout, stderr string) string {
 	return stdout + stderr
 }
 
+// seededProfiles is the LAST-RESORT launch contract, for a tool the fleet
+// registry has never heard of. The registry (coreutils/pkg/fleet) is the
+// source of truth; these rows exist so an operator who names an unregistered
+// binary still gets the behavior they had before the registry existed.
+//
+// Do not add rows here. Add a tool to the registry instead — a row here can
+// only describe how to start a binary, never which model to give it.
 var seededProfiles = map[string]LaunchProfile{
 	"claude":   {Args: []string{"--dangerously-skip-permissions"}},
 	"codex":    {Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}},
 	"agy":      {Args: []string{"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"}},
 	"opencode": {Args: []string{"run"}},
-	// aider takes its prompt via --message; resolveLaunchArgs appends the prompt
-	// as the final arg, so it becomes the --message value. --yes-always makes it
+	// aider takes its prompt via --message; the launcher appends the prompt as
+	// the final arg, so it becomes the --message value. --yes-always makes it
 	// non-interactive; --no-git keeps a turn advisory (no repo/commit writes).
 	"aider": {Args: []string{"--yes-always", "--no-git", "--message"}},
+}
+
+// newCatalog builds the fleet catalog the launcher resolves against. It is a
+// var so tests can pin it to a scratch store instead of the developer's own.
+var newCatalog = func() *fleet.Catalog { return fleet.New() }
+
+// resolveLaunch turns a name into a runnable invocation.
+//
+// The name may be an agent nickname (007), a bare tool:model binding
+// (claude:opus), or a plain tool (claude). Only the first two can select a
+// model — which is the whole point: before the registry, `claude:opus` was a
+// label the launcher logged and threw away, and every run silently used
+// whatever model the tool's own config happened to name.
+func resolveLaunch(name string, opt Options) (Launch, error) {
+	lnch := Launch{Nick: name, Tool: name, ToolName: name}
+	cat := newCatalog()
+
+	// An agent nickname resolves to both halves of its binding. Catalog.Agent
+	// also accepts a bare tool:model, so `claude:opus` finds the seeded agent.
+	//
+	// When it does, the CANONICAL nickname becomes the identity, not the string
+	// the caller typed. Attribution has to record a name that resolves: an
+	// agent stamped as `claude:opus` could never be written `@claude:opus` in
+	// prose, because a mention cannot contain a colon.
+	var toolName, modelName string
+	if a, ok := cat.Agent(name); ok {
+		toolName, modelName, lnch.Nick = a.Tool, a.Model, a.Name
+	} else if t, m, ok := strings.Cut(name, ":"); ok && t != "" && m != "" {
+		// A binding nobody has nicknamed yet.
+		toolName, modelName = t, m
+	} else {
+		toolName = name
+	}
+	lnch.Tool, lnch.ToolName = toolName, toolName
+
+	// The id handed to --model is the provider's, not ours: opencode wants
+	// `deepseek/deepseek-v4`, not the alias `deepseek-v4`. An unregistered
+	// model passes through verbatim rather than being dropped.
+	if modelName != "" {
+		lnch.Model, lnch.ModelName = modelName, modelName
+		if m, ok := cat.Model(modelName); ok {
+			lnch.Model, lnch.ModelName = m.Target(), m.Name
+		}
+	}
+
+	tool, known := cat.Tool(toolName)
+	if known {
+		lnch.Tool = tool.Binary()
+		if lnch.Model != "" && !tool.TakesModel() {
+			return lnch, fmt.Errorf("chat: tool %q cannot select a model, so %q is a label, not a selection (its launch template has no %s)",
+				tool.Name, name, fleet.ModelToken)
+		}
+		if args, ok := tool.ArgvPrefix(lnch.Model); ok {
+			lnch.Args = applySandbox(tool.Name, args, opt)
+			return lnch, nil
+		}
+	}
+
+	// Fallback: a tool the registry does not describe. It cannot take a model.
+	if lnch.Model != "" {
+		return lnch, fmt.Errorf("chat: no launch template for tool %q, so model %q cannot be passed to it; add it with `bashy tools add`",
+			toolName, modelName)
+	}
+	lnch.Args = applySandbox(toolName, append([]string{}, seededProfiles[toolName].Args...), opt)
+	return lnch, nil
 }
 
 // forceAgentShell reports whether the launcher routes a spawned agent's shell
@@ -212,6 +325,45 @@ func forcedShellEnv(base []string, bashy, shimDir string) []string {
 	return out
 }
 
+// principalEnv tells the spawned process who it is.
+//
+// The child can only sign its work with what the launcher gave it, which is
+// what makes "agent 007 commented" trustworthy inside one host: forging the
+// name means already controlling the launcher. Nothing is stamped for a bare
+// tool — a tool is not an agent, and inventing a nickname for it would put a
+// name in the record that resolves to nothing.
+func principalEnv(base []string, l Launch) []string {
+	// A raw `tool:model` binding nobody has nicknamed is not stampable either:
+	// a mention cannot contain a colon, so `@claude:opus` would never resolve.
+	// Mint a nickname (`bashy agents add`) to give the run a name.
+	//
+	// The comparison is against the tool's NAME, not its executable: a tool
+	// whose binary differs from its name (cursor → cursor-agent) is still a
+	// bare tool, and stamping it as an agent would invent a principal.
+	if l.Nick == "" || l.Nick == l.ToolName || strings.Contains(l.Nick, ":") {
+		return base
+	}
+	out := make([]string, 0, len(base)+4)
+	for _, kv := range base {
+		switch {
+		case strings.HasPrefix(kv, "BASHY_PRINCIPAL="),
+			strings.HasPrefix(kv, "BASHY_AGENT_ID="),
+			strings.HasPrefix(kv, "BASHY_AGENT_BINDING="):
+			// re-stamped below; a nested launch must not inherit its parent
+		default:
+			out = append(out, kv)
+		}
+	}
+	out = append(out,
+		"BASHY_PRINCIPAL=dhnt:agent/"+l.Nick,
+		"BASHY_AGENT_ID="+l.Nick,
+	)
+	if b := l.Binding(); b != "" {
+		out = append(out, "BASHY_AGENT_BINDING="+b)
+	}
+	return out
+}
+
 var roleDefaults = map[string]string{
 	"conductor": "claude",
 	"reviewer":  "codex",
@@ -226,13 +378,19 @@ func NewChatCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "chat --agent AGENT --instruction TEXT",
 		Short: "invoke an agent with a single unattended instruction",
+		// A failed launch is a runtime error, not a usage error. Dumping the
+		// flag list on "this tool cannot select a model" buries the sentence
+		// that explains what to do about it.
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opt.Instruction = strings.TrimSpace(strings.Join(append([]string{opt.Instruction}, args...), " "))
 			}
 			// --capability routes to the best-fit ROUTABLE agent from the living
-			// matrix (see pkg/capability). We dispatch by tool (the model comes
-			// from the tool's own config); the intended tool:model is logged.
+			// matrix (see pkg/capability). The matrix is keyed by tool:model, and
+			// that whole binding is what we launch: the router picked a model for
+			// a reason, and dispatching by tool alone would silently run whatever
+			// the tool's own config happened to name.
 			if strings.TrimSpace(capStr) != "" && opt.Agent == "" {
 				c, ok := capability.ParseCapability(capStr)
 				if !ok {
@@ -247,9 +405,9 @@ func NewChatCmd() *cobra.Command {
 					return fmt.Errorf("chat: no routable agent for capability %q", capStr)
 				}
 				best := ranked[0]
-				opt.Agent = capability.ToolOf(best.Agent)
-				fmt.Fprintf(cmd.ErrOrStderr(), "chat: capability %s → %s (q=%.2f); launching tool %q\n",
-					c, best.Agent, best.Cell.Quality, opt.Agent)
+				opt.Agent = best.Agent
+				fmt.Fprintf(cmd.ErrOrStderr(), "chat: capability %s → %s (q=%.2f)\n",
+					c, best.Agent, best.Cell.Quality)
 			}
 			plain, _ := cmd.Flags().GetBool("plain")
 			opt.JSON = opt.JSON || (os.Getenv("BASHY_AGENTIC") != "" && !plain)
@@ -288,30 +446,38 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if runner == nil {
 		runner = execRunner{}
 	}
-	agent, err := ResolveAgent(opt.Agent, opt.Role)
+	name, err := ResolveAgent(opt.Agent, opt.Role)
 	if err != nil {
 		return Result{SchemaVersion: schemaVersion, Agent: opt.Agent, Role: opt.Role, ExitCode: 2}, err
 	}
+	lnch, err := resolveLaunch(name, opt)
+	if err != nil {
+		return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
+	}
 	prompt, err := BuildPrompt(opt)
 	if err != nil {
-		return Result{SchemaVersion: schemaVersion, Agent: agent, Role: opt.Role, ExitCode: 2}, err
+		return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
 	}
-	args := append(resolveLaunchArgs(agent, opt), prompt)
+	args := append(lnch.Args, prompt)
 	cwd := opt.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
 	res := Result{
 		SchemaVersion: schemaVersion,
-		Agent:         agent,
+		Agent:         lnch.Tool,
 		Role:          opt.Role,
 		Cwd:           cwd,
 		Args:          args,
 		DryRun:        opt.DryRun,
 	}
+	if lnch.Nick != lnch.ToolName {
+		res.Nick = lnch.Nick
+	}
+	res.Model = lnch.Model
 	if opt.DryRun {
 		res.ExitCode = 0
-		res.Output = strings.Join(append([]string{agent}, args...), " ")
+		res.Output = strings.Join(append([]string{lnch.Tool}, args...), " ")
 		return res, nil
 	}
 	if opt.Timeout > 0 {
@@ -319,14 +485,32 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		ctx, cancel = context.WithTimeout(ctx, opt.Timeout)
 		defer cancel()
 	}
-	out, code, err := runner.Run(ctx, agent, args, cwd)
+	// The launcher is the only place that knows which principal is about to
+	// act, so it is the only place that can tell the spawned process who it
+	// is. execRunner reads this back out to stamp the child's environment.
+	out, code, err := runner.Run(withLaunch(ctx, lnch), lnch.Tool, args, cwd)
 	res.Output, res.ExitCode = out, code
 	return res, err
 }
 
-func resolveLaunchArgs(agent string, opt Options) []string {
-	profile := seededProfiles[agent]
-	args := append([]string{}, profile.Args...)
+// launchKey carries the resolved Launch to execRunner without widening the
+// Runner interface, which meet, foreman, and sdlc all implement against.
+type launchKey struct{}
+
+func withLaunch(ctx context.Context, l Launch) context.Context {
+	return context.WithValue(ctx, launchKey{}, l)
+}
+
+// LaunchFrom returns the invocation being run, when the caller came through
+// Invoke. A Runner built by hand sees no value and simply skips attribution.
+func LaunchFrom(ctx context.Context) (Launch, bool) {
+	l, ok := ctx.Value(launchKey{}).(Launch)
+	return l, ok
+}
+
+// applySandbox layers the --sandbox override onto an already-rendered argv.
+// The prompt is not yet present, so appending a flag pair is safe here.
+func applySandbox(agent string, args []string, opt Options) []string {
 	if agent == "codex" {
 		sb := strings.TrimSpace(opt.Sandbox)
 		// danger-full-access is the conductor's unattended full-access mode. Plain

@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -29,13 +30,14 @@ func newWeaveFleetCmd() *cobra.Command {
 	var fleetCSV string
 	var probe bool
 	var auth bool
+	var agents bool
 	cmd := &cobra.Command{
 		Use:   "fleet",
-		Short: "Show each fleet tool's availability (installed? on PATH? cooling down? signed in?)",
-		Long: `fleet reports, for each configured agent CLI, whether it is assignable
-right now — and why not if not. This is the surface an orchestrator queries
-BEFORE assigning a tool, so it can skip tools it cannot launch and fail over
-to ones it can:
+		Short: "Show each fleet member's availability (installed? on PATH? cooling down? signed in? model usable?)",
+		Long: `fleet reports, for each roster entry, whether it is assignable right
+now — and why not if not. This is the surface an orchestrator queries BEFORE
+assigning work, so it can skip what it cannot launch and fail over to what it
+can:
 
   installed   the binary resolves on PATH (exec.LookPath) — a tool that is
               not installed/not on PATH is reported NOT FOUND, so the
@@ -48,16 +50,29 @@ to ones it can:
               the result (` + fleetProbeTTL.String() + ` TTL) under the queue dir, so repeated
               preflights are instant.
 
-A tool is "available" only if it is installed AND not cooling down.
+  model       a roster entry naming an AGENT (a nickname, an alias, or a bare
+              tool:model) additionally requires its model to be usable — a
+              metered model with no vault key is not assignable no matter how
+              healthy its tool is. Bare tool entries have no model, so this
+              check does not apply to them.
 
-The roster defaults to ` + fmt.Sprintf("%v", weaveDefaultFleet) + `; override
-with --fleet claude,codex,...`,
+A row is "available" only if it is installed AND not cooling down AND, for an
+agent, its model is usable.
+
+Availability is mostly a TOOL property — PATH, throttle, sign-in all belong to
+the binary, and two agents sharing a tool share them. What an agent adds is the
+model: the half that decides whether the launch is even meaningful.
+
+The roster defaults to ` + fmt.Sprintf("%v", weaveDefaultFleet) + ` (tools);
+entries may name agents instead (--fleet 007,codex-gpt-5.5), and --agents
+expands the roster to every agent in the registry.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeaveFleet(cmd, fleetCSV, probe, auth, &flags)
+			return runWeaveFleet(cmd, fleetCSV, probe, auth, agents, &flags)
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated tool roster (default claude,codex,opencode,agy)")
+	cmd.Flags().StringVar(&fleetCSV, "fleet", "", "Comma-separated roster of agents (007, claude:opus) or tools (default claude,codex,opencode,agy)")
+	cmd.Flags().BoolVar(&agents, "agents", false, "Roster every agent in the registry (`bashy agents list`) instead of the default tool roster")
 	cmd.Flags().BoolVar(&probe, "probe", false, "Also probe capability (`<tool> --version`, 3s timeout) and cache it")
 	cmd.Flags().BoolVar(&auth, "auth", false, "Also probe AUTH-readiness (headless launch on a trivial prompt; catches a tool that is installed but not signed in, before it stalls a real run)")
 	cmd.AddCommand(newWeaveFleetInterviewCmd())
@@ -183,8 +198,21 @@ func newWeaveFleetInterviewCmd() *cobra.Command {
 }
 
 type fleetRow struct {
-	Tool        string `json:"tool"`
-	Available   bool   `json:"available"` // installed AND not cooling down
+	// Tool is the executable's registry name. It stays the primary key so
+	// every existing consumer of `weave fleet --json` keeps reading what it
+	// always read.
+	Tool string `json:"tool"`
+	// Agent, Model, and Binding are populated when the roster entry named an
+	// AGENT rather than a bare tool. Additive: absent for a tool row.
+	Agent   string `json:"agent,omitempty"`
+	Model   string `json:"model,omitempty"`   // provider-side id
+	Binding string `json:"binding,omitempty"` // tool:model — the capability-matrix key
+	// Reason explains an unavailable row. A dangling binding is reported, not
+	// silently dropped: an orchestrator that never sees the row cannot learn
+	// why it may not assign the agent.
+	Reason string `json:"reason,omitempty"`
+
+	Available   bool   `json:"available"` // installed AND not cooling down AND its model is usable
 	Found       bool   `json:"found"`     // binary resolves on PATH
 	Path        string `json:"path,omitempty"`
 	CoolingUnit string `json:"cooling_until,omitempty"` // RFC3339 local
@@ -195,6 +223,10 @@ type fleetRow struct {
 	Auth        string `json:"auth,omitempty"`      // ready | needs-login | stale-contract
 	AuthNote    string `json:"auth_note,omitempty"` // why
 	AuthHint    string `json:"auth_hint,omitempty"` // how to fix (needs-login only)
+
+	// launch is the resolved agent, when the entry named one. Unexported: it
+	// is machinery, not part of the wire shape.
+	launch *weaveAgentLaunch
 }
 
 // fleetProbeEntry is one tool's cached capability probe.
@@ -205,7 +237,26 @@ type fleetProbeEntry struct {
 	ProbedAt time.Time `json:"probed_at"`
 }
 
-func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth bool, flags *weaveOutputFlags) error {
+// weaveFleetRoster returns the roster to report on.
+//
+// --agents expands to every agent in the registry; otherwise the roster is the
+// --fleet list (which may name agents or tools) or the default tool roster.
+func weaveFleetRoster(fleetCSV string, agents bool) []string {
+	if agents {
+		list, _ := fleetCatalog().Agents()
+		out := make([]string, 0, len(list))
+		for _, a := range list {
+			out = append(out, a.Name)
+		}
+		return out
+	}
+	if r := parseWeaveAutopilotFleet(fleetCSV); len(r) > 0 {
+		return r
+	}
+	return append([]string(nil), weaveDefaultFleet...)
+}
+
+func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -219,25 +270,17 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth bool, flags 
 			weavecli.ExitGenericFail, err))
 	}
 
-	fleet := parseWeaveAutopilotFleet(fleetCSV)
-	if len(fleet) == 0 {
-		fleet = append([]string(nil), weaveDefaultFleet...)
-	}
+	roster := weaveFleetRoster(fleetCSV, agents)
 
 	now := time.Now()
 	cache := loadFleetProbeCache(dir)
 	dirty := false
-	rows := make([]fleetRow, 0, len(fleet))
-	for _, tool := range fleet {
-		row, d := fleetRowFor(dir, tool, now, probe, cache)
+	rows := make([]fleetRow, 0, len(roster))
+	for _, name := range roster {
+		row, d := fleetRowForEntry(dir, name, now, probe, cache)
 		dirty = dirty || d
 		if auth && row.Available {
-			p := seededLaunchContracts[tool]
-			status, note := liveProbeReady(tool, p.HeadlessArgs)
-			row.AuthProbed, row.Auth, row.AuthNote = true, status, note
-			if status == ReadyNeedsAuth {
-				row.AuthHint = p.AuthHint
-			}
+			row.probeAuth()
 		}
 		rows = append(rows, row)
 	}
@@ -249,6 +292,12 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth bool, flags 
 		tools := make([]map[string]any, len(rows))
 		for i, r := range rows {
 			m := map[string]any{"tool": r.Tool, "available": r.Available, "found": r.Found}
+			if r.Agent != "" {
+				m["agent"], m["model"], m["binding"] = r.Agent, r.Model, r.Binding
+			}
+			if r.Reason != "" {
+				m["reason"] = r.Reason
+			}
 			if r.Path != "" {
 				m["path"] = r.Path
 			}
@@ -276,34 +325,97 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth bool, flags 
 	}
 
 	for _, r := range rows {
+		label := r.Tool
+		if r.Agent != "" {
+			label = r.Agent
+		}
 		switch {
+		case r.Reason != "":
+			fmt.Fprintf(cmd.OutOrStdout(), "%-16s UNAVAILABLE  %s\n", label, r.Reason)
 		case !r.Found:
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s NOT FOUND on PATH\n", r.Tool)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-16s NOT FOUND on PATH\n", label)
 		case r.CoolingUnit != "":
 			until, _ := toolAvailableAt(dir, r.Tool)
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s cooling until %s\n", r.Tool, until.Local().Format("15:04"))
+			fmt.Fprintf(cmd.OutOrStdout(), "%-16s cooling until %s\n", label, until.Local().Format("15:04"))
 		case r.Probed && !r.Capable:
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s installed but --version failed (%s)\n", r.Tool, r.Path)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-16s installed but --version failed (%s)\n", label, r.Path)
 		case r.Probed:
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s available  %s (%s)\n", r.Tool, r.Version, r.Path)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-16s available  %s (%s)\n", label, r.Version, r.Path)
 		default:
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s available  (%s)\n", r.Tool, r.Path)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-16s available  (%s)\n", label, r.Path)
+		}
+		if r.Binding != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "%-16s   binding: %s → %s\n", "", r.Binding, r.Model)
 		}
 		if r.AuthProbed {
 			switch r.Auth {
 			case ReadyOK:
-				fmt.Fprintf(cmd.OutOrStdout(), "%-12s   auth: READY — %s\n", "", r.AuthNote)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s   auth: READY — %s\n", "", r.AuthNote)
 			case ReadyNeedsAuth:
-				fmt.Fprintf(cmd.OutOrStdout(), "%-12s   auth: NEEDS-LOGIN — %s\n", "", r.AuthNote)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s   auth: NEEDS-LOGIN — %s\n", "", r.AuthNote)
 				if r.AuthHint != "" {
-					fmt.Fprintf(cmd.OutOrStdout(), "%-12s         ↳ %s\n", "", r.AuthHint)
+					fmt.Fprintf(cmd.OutOrStdout(), "%-16s         ↳ %s\n", "", r.AuthHint)
 				}
 			case ReadyStale:
-				fmt.Fprintf(cmd.OutOrStdout(), "%-12s   auth: STALE-CONTRACT — %s\n", "", r.AuthNote)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s   auth: STALE-CONTRACT — %s\n", "", r.AuthNote)
 			}
 		}
 	}
 	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet", nil))
+}
+
+// headlessArgs is the flag list an auth probe should launch with: the agent's
+// real argv when the row names one, else the tool's seeded contract.
+func (r *fleetRow) headlessArgs() ([]string, string) {
+	if r.launch != nil {
+		hint := ""
+		if t, ok := fleetCatalog().Tool(r.Tool); ok {
+			hint = t.CLI.Launch.AuthHint
+		}
+		return r.launch.Args, hint
+	}
+	p, _ := seededContract(r.Tool)
+	return p.HeadlessArgs, p.AuthHint
+}
+
+// probeAuth runs the row's real headless invocation on a trivial prompt. For an
+// agent that means the model flag is included — a sign-in probe that omitted it
+// would not exercise the launch the orchestrator is about to make.
+func (r *fleetRow) probeAuth() {
+	args, hint := r.headlessArgs()
+	status, note := liveProbeReady(r.Tool, args)
+	r.AuthProbed, r.Auth, r.AuthNote = true, status, note
+	if status == ReadyNeedsAuth {
+		r.AuthHint = hint
+	}
+}
+
+// fleetRowForEntry evaluates one roster entry — an agent or a bare tool.
+//
+// An agent's assignability is its TOOL's assignability plus its model's. The
+// tool half is shared: two agents on one tool cool down together, because the
+// throttle belongs to the binary and its provider, not to the binding.
+func fleetRowForEntry(dir, name string, now time.Time, probe bool, cache map[string]fleetProbeEntry) (fleetRow, bool) {
+	launch, err := weaveResolveAgent(name)
+	if err != nil {
+		// A dangling binding: report it, never hide it.
+		return fleetRow{Tool: name, Agent: name, Reason: err.Error()}, false
+	}
+	if launch == nil {
+		return fleetRowFor(dir, name, now, probe, cache) // a bare tool, exactly as before
+	}
+
+	row, dirty := fleetRowForBinary(dir, launch.ToolName, launch.Bin, now, probe, cache)
+	row.launch = launch
+	row.Agent, row.Model, row.Binding = launch.Nick, launch.Model, launch.Binding()
+
+	// The model half. Structural and offline: a probe that dialed a provider on
+	// every preflight would make an offline orchestrator look broken.
+	if chk := fleetCatalog().VerifyModel(launch.ModelName, fleet.Probes(nil)); !chk.OK {
+		row.Available = false
+		row.Reason = "model " + launch.ModelName + ": " + chk.Reason
+	}
+	return row, dirty
 }
 
 // fleetRowFor evaluates one tool's assignability: existence on PATH (always),
@@ -311,10 +423,21 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth bool, flags 
 // row and whether the probe cache was updated (so the caller can persist it).
 // A tool is Available only if its binary resolves AND it is not cooling down.
 func fleetRowFor(dir, tool string, now time.Time, probe bool, cache map[string]fleetProbeEntry) (fleetRow, bool) {
+	return fleetRowForBinary(dir, tool, tool, now, probe, cache)
+}
+
+// fleetRowForBinary is fleetRowFor with the executable named separately. A
+// tool's binary need not be its name (cursor runs `cursor-agent`), and looking
+// up the name would report a healthy tool as NOT FOUND.
+//
+// Cooldown and the probe cache stay keyed by the TOOL name, not the binary:
+// that is the key `weave start` records a throttle under, and two agents
+// sharing a tool must share its cooldown.
+func fleetRowForBinary(dir, tool, binary string, now time.Time, probe bool, cache map[string]fleetProbeEntry) (fleetRow, bool) {
 	row := fleetRow{Tool: tool}
 	dirty := false
 	// Existence: does the binary resolve on PATH? (cheap, never cached)
-	if p, lookErr := exec.LookPath(tool); lookErr == nil {
+	if p, lookErr := exec.LookPath(binary); lookErr == nil {
 		row.Found, row.Path = true, p
 	}
 	// Cooldown: recorded by a prior throttled `weave start`.

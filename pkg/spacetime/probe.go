@@ -1,15 +1,4 @@
-// Package skills implements the P0 layer of the bashy skills mechanism:
-// host probes (the "space-time" coordinate), a machine-checkable requires
-// grammar, and an environment-gated skill catalog over ring sources
-// (embedded, host-local). Skills remain standard Agent Skills folders
-// (SKILL.md); gating reads the spec-legal `metadata.requires` string and
-// never rejects a skill it cannot parse — formality is earned, not
-// required.
-//
-// The context-key fingerprint is byte-compatible with the dhnt skill-CNL
-// runtime's ContextKey, so later phases can hand keys to a dhnt
-// adaptation store without translation.
-package skills
+package spacetime
 
 import (
 	"crypto/sha256"
@@ -25,13 +14,17 @@ import (
 // ErrNotApplicable marks a probe that has no meaningful value on this
 // host (e.g. libc outside linux). Such probes are omitted from
 // snapshots — never reported as an empty value.
-var ErrNotApplicable = errors.New("skills: probe not applicable on this host")
+var ErrNotApplicable = errors.New("spacetime: probe not applicable on this host")
 
 // A Probe measures one fact about this host's space-time coordinate.
 // Values are normalized lowercase [a-z0-9.-].
 type Probe struct {
 	Name string
 	Eval func() (string, error)
+	// Volatile marks a fact that can change while the process runs, so
+	// it is re-evaluated on every read instead of memoized. Network
+	// locality is the motivating case.
+	Volatile bool
 }
 
 // A Resolver owns a lazy dotted namespace ("tool", "engine", "mesh")
@@ -39,6 +32,16 @@ type Probe struct {
 type Resolver interface {
 	Namespace() string               // "tool" answers "tool.<key>"
 	Eval(key string) (string, error) // "git" → "2.49.0" | "present" | "absent"
+}
+
+// A VolatileResolver's namespace is never served from the persistent
+// Cache. Implement it on any resolver whose answers expire faster than
+// the cache TTL — `net.*` and `peer.*` above all. Within a single
+// process the value is still memoized once, so one command sees one
+// consistent coordinate.
+type VolatileResolver interface {
+	Resolver
+	Volatile() bool
 }
 
 // ProbeSet is the evaluation surface: core probes computed once per
@@ -49,11 +52,14 @@ type ProbeSet struct {
 	coreVal   map[string]string
 	coreDone  map[string]bool
 	resolvers map[string]Resolver
+	volatile  map[string]bool   // namespaces that bypass the persistent cache
+	memo      map[string]string // in-process memo for volatile namespaces
+	memoDone  map[string]bool
 	cache     Cache
 	pathHash  string
 }
 
-// DefaultProbes returns the pinned P0 probe set: the always-on core
+// DefaultProbes returns the pinned probe set: the always-on core
 // (os, arch, os.release, libc, container, tty, elevated) plus the lazy
 // tool.* / engine.* / mesh.* resolvers. cache may be nil (no
 // persistence). Static host facts (e.g. the bashy version) are added by
@@ -67,6 +73,9 @@ func DefaultProbes(cache Cache) *ProbeSet {
 		coreVal:   map[string]string{},
 		coreDone:  map[string]bool{},
 		resolvers: map[string]Resolver{},
+		volatile:  map[string]bool{},
+		memo:      map[string]string{},
+		memoDone:  map[string]bool{},
 		cache:     cache,
 		pathHash:  hashOf(os.Getenv("PATH")),
 	}
@@ -87,11 +96,19 @@ func DefaultProbes(cache Cache) *ProbeSet {
 	return ps
 }
 
-// Register adds (or replaces) a namespace resolver.
+// Register adds (or replaces) a namespace resolver. A resolver that
+// implements VolatileResolver and reports true bypasses the persistent
+// cache for its whole namespace.
 func (ps *ProbeSet) Register(r Resolver) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	ps.resolvers[r.Namespace()] = r
+	ns := r.Namespace()
+	ps.resolvers[ns] = r
+	if vr, ok := r.(VolatileResolver); ok && vr.Volatile() {
+		ps.volatile[ns] = true
+	} else {
+		delete(ps.volatile, ns)
+	}
 }
 
 // SetStatic pins a core probe to a fixed value ("" removes it) — used by
@@ -111,6 +128,16 @@ func (ps *ProbeSet) SetStatic(name, value string) {
 	ps.coreDone[name] = true
 }
 
+// SetProbe registers (or replaces) a core probe. Use it to add a
+// volatile fact — a probe re-evaluated on every read.
+func (ps *ProbeSet) SetProbe(p Probe) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	ps.core[p.Name] = p
+	delete(ps.coreVal, p.Name)
+	delete(ps.coreDone, p.Name)
+}
+
 // Value evaluates one probe. ok is false when the probe is not
 // applicable, unknown, or (for lazy namespaces) has no resolver.
 func (ps *ProbeSet) Value(name string) (string, bool) {
@@ -121,7 +148,7 @@ func (ps *ProbeSet) Value(name string) (string, bool) {
 
 func (ps *ProbeSet) valueLocked(name string) (string, bool) {
 	if p, ok := ps.core[name]; ok {
-		if ps.coreDone[name] {
+		if ps.coreDone[name] && !p.Volatile {
 			v := ps.coreVal[name]
 			return v, v != ""
 		}
@@ -142,6 +169,24 @@ func (ps *ProbeSet) valueLocked(name string) (string, bool) {
 	r, ok := ps.resolvers[ns]
 	if !ok {
 		return "", false
+	}
+	if ps.volatile[ns] {
+		// Never persisted: a roam invalidates it. Memoized once per
+		// process so a single command sees one consistent coordinate.
+		if ps.memoDone[name] {
+			v := ps.memo[name]
+			return v, v != ""
+		}
+		v, err := r.Eval(key)
+		if err != nil {
+			ps.memoDone[name] = true
+			ps.memo[name] = ""
+			return "", false
+		}
+		v = normalize(v)
+		ps.memoDone[name] = true
+		ps.memo[name] = v
+		return v, v != ""
 	}
 	if v, ok := ps.cache.Get(name, ps.pathHash); ok {
 		return v, v != ""
@@ -177,6 +222,19 @@ func (ps *ProbeSet) Core() map[string]string {
 	}
 	ps.mu.Unlock()
 	return ps.Snapshot(names)
+}
+
+// Forget drops the in-process memo for a volatile probe so the next
+// read re-evaluates it. Static probes are unaffected.
+func (ps *ProbeSet) Forget(name string) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	delete(ps.memo, name)
+	delete(ps.memoDone, name)
+	if p, ok := ps.core[name]; ok && p.Volatile {
+		delete(ps.coreVal, name)
+		delete(ps.coreDone, name)
+	}
 }
 
 // PathHash identifies the PATH the lazy probes were resolved under.

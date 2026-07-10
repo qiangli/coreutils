@@ -1,0 +1,26 @@
+name: agy
+kind: cli
+display: Antigravity
+aliases:
+  - antigravity
+cli:
+  binary: agy
+  launch:
+    exec: agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}
+    prompt_position: last
+    trust_preseed: none
+    supports_say: false
+    supports_graceful_quit: true
+    notes: headless `-p` (use `-i` for a steerable TUI). Bump --print-timeout (default 5m).
+    auth_hint: >-
+      Antigravity requires a browser sign-in: run `agy` once interactively and complete the
+      login, then it works headless. Not usable in a headless fleet until signed in.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+quirks: surgical; forgets to commit (salvage); the prompt must be the last arg (-p swallows flags)
+harness:
+  operability: 0.85
+  shell: 0.85
+  tool-use: 0.8
+  isolation: 0.75

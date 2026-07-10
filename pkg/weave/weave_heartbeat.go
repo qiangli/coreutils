@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/spf13/cobra"
 )
 
 type weaveHeartbeatOptions struct {
@@ -48,7 +48,7 @@ duration specified by --idle-timeout, preventing background resource leaks.`,
 	cmd.Flags().DurationVar(&interval, "interval", 30*time.Second, "Poll interval (e.g. 30s, 1m)")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 15*time.Minute, "Idle shutdown threshold (e.g. 15m, 1h)")
 	cmd.Flags().BoolVar(&background, "background", false, "Run in background (detaches process)")
-	cmd.Flags().StringVar(&fleetCSV, "orchestrator-fleet", "", "Fleet roster (comma-separated, default: claude,codex,opencode,agy)")
+	cmd.Flags().StringVar(&fleetCSV, "orchestrator-fleet", "", "Roster of agents (007, claude:opus) or tools, comma-separated (default: claude,codex,opencode,agy)")
 	return cmd
 }
 

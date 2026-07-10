@@ -1,0 +1,554 @@
+package fleet
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+// --- agents add / set --------------------------------------------------
+
+// agentFlags are the fields `agents add` and `agents set` can write. A nil
+// pointer means "not given", so `set` can distinguish clearing a field from
+// leaving it alone.
+type agentFlags struct {
+	tool, model, display, description string
+	aliases, addAlias, rmAlias        []string
+	force                             bool
+}
+
+func (f *agentFlags) bind(c *cobra.Command, forSet bool) {
+	c.Flags().StringVar(&f.tool, "tool", "", "the agentic CLI half of the binding")
+	c.Flags().StringVar(&f.model, "model", "", "the inference-backend half of the binding")
+	c.Flags().StringVar(&f.display, "display", "", "human-facing label")
+	c.Flags().StringVar(&f.description, "description", "", "what this agent is for")
+	c.Flags().BoolVar(&f.force, "force", false, "take a name that already belongs to another entry")
+	if forSet {
+		c.Flags().StringArrayVar(&f.addAlias, "add-alias", nil, "add a nickname (repeatable)")
+		c.Flags().StringArrayVar(&f.rmAlias, "rm-alias", nil, "drop a nickname (repeatable)")
+		return
+	}
+	c.Flags().StringArrayVar(&f.aliases, "alias", nil, "an additional nickname (repeatable)")
+}
+
+func newAgentsAdd(opts []Option) *cobra.Command {
+	var f agentFlags
+	c := &cobra.Command{
+		Use:   "add (<nickname> --tool T --model M | <file>|-)",
+		Short: "Mint an agent: a named tool:model binding",
+		Long: "Mint an agent: a named tool:model binding.\n\n" +
+			"Give a nickname with --tool and --model to build the binding from flags,\n" +
+			"or give a path (or - for stdin) to import an agent asset document.\n\n" +
+			"A nickname is an alias for a binding, not an identity of its own:\n" +
+			"`007` and `smarty` may both name claude:fable, and both resolve to the\n" +
+			"same capability-matrix row.",
+		Example: "  bashy agents add 007 --tool codex --model deepseek-v4 --alias smarty\n" +
+			"  bashy agents add ./conductor.yaml",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			arg := args[0]
+
+			if f.tool == "" && f.model == "" && looksLikePath(arg) {
+				return importAgent(cmd, cat, arg, f.force)
+			}
+			if f.tool == "" || f.model == "" {
+				return fmt.Errorf("fleet: minting %q needs both --tool and --model (an agent always names both)", arg)
+			}
+			a := Agent{
+				Name: arg, Aliases: f.aliases, Tool: f.tool, Model: f.model,
+				Display: f.display, Description: f.description,
+			}
+			if err := cat.claimName(KindAgent, a.Name, a.Aliases, f.force); err != nil {
+				return err
+			}
+			if err := cat.SaveAgent(a); err != nil {
+				return err
+			}
+			return reportAgentSaved(cmd, cat, a)
+		},
+	}
+	f.bind(c, false)
+	return c
+}
+
+func importAgent(cmd *cobra.Command, cat *Catalog, path string, force bool) error {
+	data, err := readSource(path, cmd.InOrStdin())
+	if err != nil {
+		return err
+	}
+	file, err := ParseAgentFile(baseName(path), data, nil)
+	if err != nil {
+		return err
+	}
+	for _, a := range file.Agents {
+		if err := cat.claimName(KindAgent, a.Name, a.Aliases, force); err != nil {
+			return err
+		}
+		if err := cat.SaveAgent(a); err != nil {
+			return err
+		}
+		if err := reportAgentSaved(cmd, cat, a); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reportAgentSaved echoes what was written and whether it can actually run.
+// A minted agent whose halves do not resolve is a warning, never an error:
+// binding ahead of installing the tool is a legitimate order of work.
+func reportAgentSaved(cmd *cobra.Command, cat *Catalog, a Agent) error {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "%s → %s\n", a.Name, a.MatrixKey())
+	if len(a.Aliases) > 0 {
+		fmt.Fprintf(out, "aliases: %s\n", strings.Join(a.Aliases, " "))
+	}
+	for _, w := range cat.crossKindWarnings(KindAgent, a.Name, a.Aliases) {
+		fmt.Fprintln(cmd.ErrOrStderr(), "warning:", w)
+	}
+	chk := cat.VerifyAgent(a.Name, Probes(nil))
+	if !chk.OK {
+		fmt.Fprintln(cmd.ErrOrStderr(), "warning:", chk.Reason)
+	}
+	return nil
+}
+
+// crossKindWarnings reports names that already mean something else.
+//
+// Names are unique WITHIN a kind, not across kinds, so `bashy agents add
+// claude` is legal. But it makes `whois claude` ambiguous, and the places that
+// resolve a name — `bashy chat --agent`, `weave start -- <name>` — try the
+// agent first, so the new nickname silently shadows the tool. Say so.
+func (c *Catalog) crossKindWarnings(kind, canonical string, aliases []string) []string {
+	var out []string
+	for _, n := range names(canonical, aliases) {
+		if kind != KindTool {
+			if t, ok := c.Tool(n); ok && t.Name == n {
+				out = append(out, fmt.Sprintf("%q also names a tool; `whois %s` is now ambiguous, and a launcher resolving %q will prefer this %s", n, n, n, kind))
+			}
+		}
+		if kind != KindModel {
+			if m, ok := c.Model(n); ok && m.Name == n {
+				out = append(out, fmt.Sprintf("%q also names a model; `whois %s` is now ambiguous", n, n))
+			}
+		}
+	}
+	return out
+}
+
+func newAgentsSet(opts []Option) *cobra.Command {
+	var f agentFlags
+	c := &cobra.Command{
+		Use:   "set <name>",
+		Short: "Modify an agent's binding or nicknames",
+		Long: "Modify an agent's binding or nicknames.\n\n" +
+			"An agent from the embedded baseline, a shared dir, or an org overlay is\n" +
+			"copied into the host-local store on first modification: the edit shadows\n" +
+			"the original rather than mutating a catalog this host does not own.",
+		Example:       "  bashy agents set 007 --model opus --add-alias bond",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			a, ok := cat.Agent(args[0])
+			if !ok {
+				return fmt.Errorf("fleet: no agent %q", args[0])
+			}
+			from := a.Ring
+
+			if cmd.Flags().Changed("tool") {
+				a.Tool = f.tool
+			}
+			if cmd.Flags().Changed("model") {
+				a.Model = f.model
+			}
+			if cmd.Flags().Changed("display") {
+				a.Display = f.display
+			}
+			if cmd.Flags().Changed("description") {
+				a.Description = f.description
+			}
+			a.Aliases = mergeAliases(a.Aliases, f.addAlias, f.rmAlias)
+
+			if err := cat.claimName(KindAgent, a.Name, a.Aliases, f.force); err != nil {
+				return err
+			}
+			if err := cat.SaveAgent(a); err != nil {
+				return err
+			}
+			if from != ringLocal() {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", a.Name, from)
+			}
+			return reportAgentSaved(cmd, cat, a)
+		},
+	}
+	f.bind(c, true)
+	return c
+}
+
+// --- tools / models add + set -------------------------------------------
+
+func newToolsAdd(opts []Option) *cobra.Command {
+	var force bool
+	var name string
+	c := &cobra.Command{
+		Use:           "add <file>|-",
+		Short:         "Import a tool definition into the local store",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			data, err := readSource(args[0], cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			fallback := name
+			if fallback == "" {
+				fallback = baseName(args[0])
+			}
+			t, err := ParseTool(fallback, data, nil)
+			if err != nil {
+				return err
+			}
+			if name != "" {
+				t.Name = name
+			}
+			if err := cat.claimName(KindTool, t.Name, t.Aliases, force); err != nil {
+				return err
+			}
+			if err := cat.SaveTool(t); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s (%s)\n", t.Name, t.Kind)
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	c.Flags().StringVar(&name, "name", "", "store under this name instead of the document's own")
+	return c
+}
+
+func newToolsSet(opts []Option) *cobra.Command {
+	var binary, execTmpl, display string
+	var addAlias, rmAlias []string
+	var force bool
+	c := &cobra.Command{
+		Use:           "set <name>",
+		Short:         "Modify a tool definition",
+		Long:          "Modify a tool definition. Entries from a lower ring are copied into the local store first.",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			t, ok := cat.Tool(args[0])
+			if !ok {
+				return fmt.Errorf("fleet: no tool %q", args[0])
+			}
+			from := t.Ring
+			if cmd.Flags().Changed("binary") {
+				t.CLI.Binary = binary
+			}
+			if cmd.Flags().Changed("exec") {
+				t.CLI.Launch.Exec = execTmpl
+			}
+			if cmd.Flags().Changed("display") {
+				t.Display = display
+			}
+			t.Aliases = mergeAliases(t.Aliases, addAlias, rmAlias)
+
+			if err := cat.claimName(KindTool, t.Name, t.Aliases, force); err != nil {
+				return err
+			}
+			if err := cat.SaveTool(t); err != nil {
+				return err
+			}
+			if from != ringLocal() {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", t.Name, from)
+			}
+			if t.CLI.Launch.Exec != "" && !t.TakesModel() {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s has no %s placeholder, so agents bound to it cannot select a model\n", t.Name, ModelToken)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), t.Name)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&binary, "binary", "", "the executable to run")
+	c.Flags().StringVar(&execTmpl, "exec", "", "launch template; {prompt} and {model} are substituted")
+	c.Flags().StringVar(&display, "display", "", "human-facing label")
+	c.Flags().StringArrayVar(&addAlias, "add-alias", nil, "add an alias (repeatable)")
+	c.Flags().StringArrayVar(&rmAlias, "rm-alias", nil, "drop an alias (repeatable)")
+	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	return c
+}
+
+func newModelsAdd(opts []Option) *cobra.Command {
+	var m Model
+	var force bool
+	c := &cobra.Command{
+		Use:   "add (<name> --provider P --kind K | <file>|-)",
+		Short: "Add an inference backend to the local store",
+		Example: "  bashy models add opus --provider anthropic --kind subscription --upstream opus\n" +
+			"  bashy models add ./deepseek.yaml",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			arg := args[0]
+
+			if looksLikePath(arg) && m.Provider == "" && m.Kind == "" {
+				data, err := readSource(arg, cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				parsed, err := ParseModel(baseName(arg), data, nil)
+				if err != nil {
+					return err
+				}
+				m = parsed
+			} else {
+				m.Name = arg
+			}
+			if err := cat.claimName(KindModel, m.Name, m.Aliases, force); err != nil {
+				return err
+			}
+			if err := cat.SaveModel(m); err != nil {
+				return err
+			}
+			chk := cat.VerifyModel(m.Name, Probes(nil))
+			fmt.Fprintf(cmd.OutOrStdout(), "%s → %s\n", m.Name, m.Target())
+			if !chk.OK {
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning:", chk.Reason)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&m.Provider, "provider", "", "anthropic | openai | gemini | openai-compat | ollama")
+	c.Flags().StringVar(&m.Kind, "kind", "", "subscription | api | local")
+	c.Flags().StringVar(&m.UpstreamID, "upstream", "", "provider-side model id (the value passed to --model)")
+	c.Flags().StringVar(&m.BaseURL, "base-url", "", "API base URL")
+	c.Flags().StringVar(&m.APIKeyRef, "api-key-ref", "", "vault key name; never an inline secret")
+	c.Flags().StringVar(&m.Display, "display", "", "human-facing label")
+	c.Flags().StringArrayVar(&m.Aliases, "alias", nil, "an additional name (repeatable)")
+	c.Flags().Float64Var(&m.Quality, "quality", 0, "capability prior in [0,1]; the router's quality term")
+	c.Flags().Int64Var(&m.CostMicro, "cost-micro", 0, "relative per-turn cost; the router's cost term")
+	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	return c
+}
+
+func newModelsSet(opts []Option) *cobra.Command {
+	var provider, kind, upstream, baseURL, keyRef, display string
+	var quality float64
+	var costMicro int64
+	var addAlias, rmAlias []string
+	var force bool
+	c := &cobra.Command{
+		Use:           "set <name>",
+		Short:         "Modify an inference backend",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			m, ok := cat.Model(args[0])
+			if !ok {
+				return fmt.Errorf("fleet: no model %q", args[0])
+			}
+			from := m.Ring
+			for flag, set := range map[string]func(){
+				"provider":    func() { m.Provider = provider },
+				"kind":        func() { m.Kind = kind },
+				"upstream":    func() { m.UpstreamID = upstream },
+				"base-url":    func() { m.BaseURL = baseURL },
+				"api-key-ref": func() { m.APIKeyRef = keyRef },
+				"display":     func() { m.Display = display },
+				"quality":     func() { m.Quality = quality },
+				"cost-micro":  func() { m.CostMicro = costMicro },
+			} {
+				if cmd.Flags().Changed(flag) {
+					set()
+				}
+			}
+			m.Aliases = mergeAliases(m.Aliases, addAlias, rmAlias)
+
+			if err := cat.claimName(KindModel, m.Name, m.Aliases, force); err != nil {
+				return err
+			}
+			if err := cat.SaveModel(m); err != nil {
+				return err
+			}
+			if from != ringLocal() {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: copied %s from the %s ring into the local store\n", m.Name, from)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), m.Name)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&provider, "provider", "", "anthropic | openai | gemini | openai-compat | ollama")
+	c.Flags().StringVar(&kind, "kind", "", "subscription | api | local")
+	c.Flags().StringVar(&upstream, "upstream", "", "provider-side model id")
+	c.Flags().StringVar(&baseURL, "base-url", "", "API base URL")
+	c.Flags().StringVar(&keyRef, "api-key-ref", "", "vault key name; never an inline secret")
+	c.Flags().StringVar(&display, "display", "", "human-facing label")
+	c.Flags().Float64Var(&quality, "quality", 0, "capability prior in [0,1]; the router's quality term")
+	c.Flags().Int64Var(&costMicro, "cost-micro", 0, "relative per-turn cost; the router's cost term")
+	c.Flags().StringArrayVar(&addAlias, "add-alias", nil, "add an alias (repeatable)")
+	c.Flags().StringArrayVar(&rmAlias, "rm-alias", nil, "drop an alias (repeatable)")
+	c.Flags().BoolVar(&force, "force", false, "take a name that already belongs to another entry")
+	return c
+}
+
+// --- rm / edit / verify --------------------------------------------------
+
+func newRm(noun string, opts []Option, remove func(*Catalog, string) error) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <name>",
+		Short: "Remove an entry from the local store",
+		Long: "Remove an entry from the local store.\n\n" +
+			"Only the local ring is writable. Removing an entry that also exists in a\n" +
+			"lower ring unshadows the original rather than deleting it.",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			if err := remove(cat, args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "removed %s %s\n", noun, args[0])
+			return nil
+		},
+	}
+}
+
+// newEdit opens an entry in $EDITOR. An entry from a lower ring is
+// materialized into the local store first, so the editor never opens a file
+// the operator cannot save.
+func newEdit(noun string, opts []Option, materialize func(*Catalog, string) (string, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:           "edit <name>",
+		Short:         "Open an entry in $EDITOR",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			path, err := materialize(cat, args[0])
+			if err != nil {
+				return err
+			}
+			editor := firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"))
+			if editor == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), path)
+				return fmt.Errorf("fleet: neither $VISUAL nor $EDITOR is set; the %s is at the path above", noun)
+			}
+			ed := exec.Command(editor, path)
+			ed.Stdin, ed.Stdout, ed.Stderr = os.Stdin, cmd.OutOrStdout(), cmd.ErrOrStderr()
+			return ed.Run()
+		},
+	}
+}
+
+func newVerify(noun string, opts []Option, check func(*Catalog, string) Check) *cobra.Command {
+	var asJSON bool
+	c := &cobra.Command{
+		Use:           "verify [<name>]",
+		Short:         "Check that an entry is usable on this host",
+		Long:          "Check that an entry is usable on this host. With no name, every entry is checked.",
+		Args:          cobra.MaximumNArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat := New(opts...)
+			var checks []Check
+			if len(args) == 1 {
+				checks = []Check{check(cat, args[0])}
+			} else {
+				for _, n := range allNames(cat, noun) {
+					checks = append(checks, check(cat, n))
+				}
+			}
+			if asJSON {
+				return writeJSON(cmd.OutOrStdout(), checks)
+			}
+			bad, candidates := 0, 0
+			for _, k := range checks {
+				var mark string
+				switch {
+				case k.Skipped:
+					mark = "skip"
+				case k.OK:
+					mark, candidates = "ok  ", candidates+1
+				default:
+					mark, bad, candidates = "FAIL", bad+1, candidates+1
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %-24s %s\n", mark, k.Name, k.Reason)
+				if k.OK && k.Detail != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "     %-24s %s\n", "", k.Detail)
+				}
+			}
+			if bad > 0 {
+				return fmt.Errorf("fleet: %d of %d %ss are not usable here", bad, candidates, noun)
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	return c
+}
+
+func allNames(c *Catalog, noun string) []string {
+	var out []string
+	switch noun {
+	case KindTool:
+		tools, _ := c.Tools(false)
+		for _, t := range tools {
+			out = append(out, t.Name)
+		}
+	case KindModel:
+		models, _ := c.Models()
+		for _, m := range models {
+			out = append(out, m.Name)
+		}
+	case KindAgent:
+		agents, _ := c.Agents()
+		for _, a := range agents {
+			out = append(out, a.Name)
+		}
+	}
+	return out
+}
+
+// --- helpers -------------------------------------------------------------
+
+func baseName(path string) string {
+	if path == "-" {
+		return ""
+	}
+	s := path
+	if i := strings.LastIndexAny(s, `/\`); i >= 0 {
+		s = s[i+1:]
+	}
+	for _, e := range []string{ext, ".yml"} {
+		s = strings.TrimSuffix(s, e)
+	}
+	return s
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}

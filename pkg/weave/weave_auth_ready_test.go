@@ -39,7 +39,7 @@ func TestClassifyReadyOutput(t *testing.T) {
 // TestAgyProfileHasAuthHint guards that the tool most affected (agy, which needs
 // a one-time browser sign-in) carries an actionable AuthHint for the pre-flight.
 func TestAgyProfileHasAuthHint(t *testing.T) {
-	p, ok := seededLaunchContracts["agy"]
+	p, ok := seededContract("agy")
 	if !ok {
 		t.Fatal("no seeded profile for agy")
 	}

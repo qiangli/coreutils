@@ -1,0 +1,8 @@
+agents:
+  - name: agy-gemini3.1
+    tool: agy
+    model: gemini3.1
+    display: "agy · gemini3.1"
+    ledger:
+      reliability: medium
+      notes: surgical; forgets to commit (salvage); needs interactive sign-in first

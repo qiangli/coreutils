@@ -1,0 +1,8 @@
+name: kimi-k2.6
+display: Kimi K2.6
+provider: openai-compat
+kind: api
+api_key_ref: moonshot
+model: moonshot/kimi-k2.6
+quality: 0.80
+cost_micro: 1500

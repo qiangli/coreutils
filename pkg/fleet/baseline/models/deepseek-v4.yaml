@@ -1,0 +1,9 @@
+name: deepseek-v4
+display: DeepSeek V4
+provider: openai-compat
+kind: api
+base_url: https://api.deepseek.com
+api_key_ref: deepseek
+model: deepseek/deepseek-v4
+quality: 0.80
+cost_micro: 1500

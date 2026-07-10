@@ -24,20 +24,21 @@ type testWeaveAutopilotRunner struct {
 	healthy map[string]bool
 }
 
-func (r *testWeaveAutopilotRunner) Healthy(ctx context.Context, tool string) bool {
+func (r *testWeaveAutopilotRunner) Healthy(ctx context.Context, m weaveMember) bool {
 	_ = ctx
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.healthy == nil {
 		return true
 	}
-	return r.healthy[tool]
+	return r.healthy[m.Label()]
 }
 
-func (r *testWeaveAutopilotRunner) Run(ctx context.Context, tool, prompt, queueDir string, onOutput func(string)) (int, error) {
+func (r *testWeaveAutopilotRunner) Run(ctx context.Context, m weaveMember, prompt, queueDir string, onOutput func(string)) (int, error) {
 	_ = ctx
 	_ = prompt
 	_ = queueDir
+	tool := m.Label()
 	r.mu.Lock()
 	r.runs = append(r.runs, tool)
 	var action testWeaveAutopilotRun
@@ -93,7 +94,7 @@ func TestWeaveAutopilotRotatesOnOverloadSignature(t *testing.T) {
 	res, err := runWeaveAutopilotLoop(context.Background(), weaveAutopilotLoopOptions{
 		queueDir:  dir,
 		repoRoot:  "/repo",
-		fleet:     []string{"claude", "codex"},
+		fleet:     testMembers("claude", "codex"),
 		leaseTTL:  time.Second,
 		heartbeat: 10 * time.Millisecond,
 		backoff:   time.Millisecond,
@@ -143,7 +144,7 @@ func TestWeaveAutopilotStandbyTakesOverExpiredLease(t *testing.T) {
 	res, err := runWeaveAutopilotLoop(context.Background(), weaveAutopilotLoopOptions{
 		queueDir:  dir,
 		repoRoot:  "/repo",
-		fleet:     []string{"codex"},
+		fleet:     testMembers("codex"),
 		standby:   true,
 		leaseTTL:  time.Minute,
 		heartbeat: 10 * time.Millisecond,
@@ -184,7 +185,7 @@ func TestWeaveAutopilotLeaseBusyWithoutStandby(t *testing.T) {
 	_, err := runWeaveAutopilotLoop(context.Background(), weaveAutopilotLoopOptions{
 		queueDir:  dir,
 		repoRoot:  "/repo",
-		fleet:     []string{"codex"},
+		fleet:     testMembers("codex"),
 		leaseTTL:  time.Minute,
 		heartbeat: time.Second,
 		runner:    &testWeaveAutopilotRunner{},
@@ -199,4 +200,14 @@ func TestWeaveAutopilotLeaseBusyWithoutStandby(t *testing.T) {
 func readWeaveAutopilotTestLog(dir string) string {
 	b, _ := os.ReadFile(filepath.Join(dir, "autopilot.log"))
 	return strings.TrimSpace(string(b))
+}
+
+// testMembers builds a bare-tool roster, the shape autopilot took before
+// agents existed.
+func testMembers(names ...string) []weaveMember {
+	out := make([]weaveMember, 0, len(names))
+	for _, n := range names {
+		out = append(out, weaveMember{Name: n, Tool: n, Bin: n})
+	}
+	return out
 }

@@ -1,4 +1,4 @@
-package skills
+package spacetime
 
 import (
 	"os"
@@ -11,14 +11,14 @@ func TestFileCacheTTL(t *testing.T) {
 	dir := t.TempDir()
 	fc := NewFileCache(dir, time.Hour)
 	now := time.Now()
-	fc.now = func() time.Time { return now }
+	fc.SetNow(func() time.Time { return now })
 
 	fc.Put("tool.zzz", "h1", "1.2.3")
 	if v, ok := fc.Get("tool.zzz", "h1"); !ok || v != "1.2.3" {
 		t.Fatalf("Get = %q, %v", v, ok)
 	}
 	// Expired.
-	fc.now = func() time.Time { return now.Add(2 * time.Hour) }
+	fc.SetNow(func() time.Time { return now.Add(2 * time.Hour) })
 	if _, ok := fc.Get("tool.zzz", "h1"); ok {
 		t.Fatal("expired entry served")
 	}

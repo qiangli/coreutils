@@ -1,4 +1,4 @@
-package skills
+package spacetime
 
 import (
 	"encoding/json"
@@ -11,6 +11,8 @@ import (
 // Cache persists lazy probe values across processes. Implementations
 // must treat a PATH-hash mismatch as a miss (a changed PATH can change
 // every tool resolution).
+//
+// Volatile namespaces never reach a Cache — see VolatileResolver.
 type Cache interface {
 	Get(name, pathHash string) (val string, ok bool)
 	Put(name, pathHash, val string)
@@ -39,6 +41,13 @@ func NewFileCache(dir string, ttl time.Duration) *FileCache {
 		ttl = 24 * time.Hour
 	}
 	return &FileCache{path: filepath.Join(dir, "probecache.json"), ttl: ttl, now: time.Now}
+}
+
+// SetNow overrides the clock. Test seam.
+func (c *FileCache) SetNow(now func() time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
 }
 
 type cacheFile struct {

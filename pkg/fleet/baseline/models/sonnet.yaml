@@ -1,0 +1,7 @@
+name: sonnet
+display: Claude Sonnet
+provider: anthropic
+kind: subscription
+model: sonnet
+quality: 0.85
+cost_micro: 6000
