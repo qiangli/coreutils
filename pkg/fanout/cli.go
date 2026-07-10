@@ -116,12 +116,15 @@ func newRunCmd() *cobra.Command {
 	var inst []string
 	var jobs int
 	var timeout time.Duration
-	var asJSON bool
+	var asJSON, dryRun bool
 	c := &cobra.Command{
 		Use:   "run",
 		Short: "Fan agents out over the board",
-		Long: "Each instruction line becomes one instance; agents are assigned " +
-			"round-robin from --agents. A line may start with `scope: ` to name its lens.",
+		Long: "Each instruction line becomes one instance. Bind a tool→facet " +
+			"explicitly with an `<agent> <scope>:` prefix (the division-of-labor " +
+			"form, e.g. `codex code: …`, `agy tests: …`); a line with no agent " +
+			"falls back to round-robin over --agents. --dry-run prints the plan " +
+			"without launching.",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -146,6 +149,14 @@ func newRunCmd() *cobra.Command {
 			}
 
 			instances := pairInstances(agents, instructions)
+			if dryRun {
+				out := cmd.OutOrStdout()
+				fmt.Fprintf(out, "board %q — %d instance(s):\n", b.Name(), len(instances))
+				for _, inst := range instances {
+					fmt.Fprintf(out, "  %-12s %-10s %s\n", inst.Agent, inst.Scope, inst.Instruction)
+				}
+				return nil
+			}
 			// Board-aware agents can call `bashy fanout {read,post}` mid-run; make
 			// the board reachable to the children via the environment.
 			os.Setenv("BASHY_BOARD", b.Name())
@@ -167,6 +178,7 @@ func newRunCmd() *cobra.Command {
 	c.Flags().StringArrayVar(&inst, "inst", nil, "an inline instruction (repeatable)")
 	c.Flags().IntVarP(&jobs, "jobs", "j", 0, "max concurrent instances (default: all)")
 	c.Flags().DurationVar(&timeout, "timeout", 0, "per-instance timeout (0 = none)")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan (agent/scope/instruction) without launching")
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	return c
 }
@@ -283,22 +295,43 @@ func gatherInstructions(file string, inline []string) ([]string, error) {
 	return out, nil
 }
 
-// pairInstances turns instruction lines into instances, assigning agents
-// round-robin. A `scope: text` prefix names the lens; otherwise it's lens-N.
+// pairInstances turns instruction lines into instances. Each line may bind its
+// tool→facet explicitly — the practical division-of-labor form:
+//
+//	codex code:     implement the rate limiter
+//	agy tests:      write table tests
+//	opencode data:  provide edge-case JSON
+//
+// Rules: if the first token (a trailing ':' is tolerated) names an agent in the
+// pool, it is that instance's agent; a following `scope:` names the lens.
+// A line with no explicit agent falls back to round-robin over the pool, so the
+// old positional form still works.
 func pairInstances(agents, instructions []string) []Instance {
+	inPool := map[string]bool{}
+	for _, a := range agents {
+		inPool[strings.TrimSpace(a)] = true
+	}
 	out := make([]Instance, 0, len(instructions))
+	rr := 0
 	for i, line := range instructions {
-		scope := fmt.Sprintf("lens-%d", i+1)
+		agent := ""
 		text := line
-		if idx := strings.Index(line, ":"); idx > 0 && idx < 24 && !strings.ContainsAny(line[:idx], " \t") {
-			scope = strings.TrimSpace(line[:idx])
-			text = strings.TrimSpace(line[idx+1:])
+		if fields := strings.Fields(line); len(fields) > 0 {
+			if name := strings.TrimRight(fields[0], ":"); inPool[name] {
+				agent = name
+				text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), fields[0]))
+			}
 		}
-		out = append(out, Instance{
-			Agent:       strings.TrimSpace(agents[i%len(agents)]),
-			Instruction: text,
-			Scope:       scope,
-		})
+		scope := fmt.Sprintf("lens-%d", i+1)
+		if idx := strings.Index(text, ":"); idx > 0 && idx < 24 && !strings.ContainsAny(text[:idx], " \t") {
+			scope = strings.TrimSpace(text[:idx])
+			text = strings.TrimSpace(text[idx+1:])
+		}
+		if agent == "" && len(agents) > 0 {
+			agent = strings.TrimSpace(agents[rr%len(agents)])
+			rr++
+		}
+		out = append(out, Instance{Agent: agent, Instruction: text, Scope: scope})
 	}
 	return out
 }

@@ -236,3 +236,30 @@ func TestPairInstancesRoundRobinAndScopePrefix(t *testing.T) {
 		t.Fatalf("third scope wrong: %+v", inst[2])
 	}
 }
+
+func TestPairInstancesExplicitToolFacetBinding(t *testing.T) {
+	// The practical division-of-labor form: each line binds its own tool.
+	inst := pairInstances([]string{"codex", "agy", "opencode"}, []string{
+		"codex code: implement the limiter",
+		"agy tests: write table tests",
+		"opencode testdata: provide edge-case JSON",
+		"codex: refactor",        // agent with trailing colon, no scope
+		"perf: profile the path", // no agent → round-robin
+	})
+	want := []struct{ agent, scope, text string }{
+		{"codex", "code", "implement the limiter"},
+		{"agy", "tests", "write table tests"},
+		{"opencode", "testdata", "provide edge-case JSON"},
+		{"codex", "lens-4", "refactor"},
+		{"codex", "perf", "profile the path"}, // round-robin lands on codex (rr=0)
+	}
+	if len(inst) != len(want) {
+		t.Fatalf("want %d, got %d", len(want), len(inst))
+	}
+	for i, w := range want {
+		if inst[i].Agent != w.agent || inst[i].Scope != w.scope || inst[i].Instruction != w.text {
+			t.Errorf("inst[%d] = {%q %q %q}, want {%q %q %q}",
+				i, inst[i].Agent, inst[i].Scope, inst[i].Instruction, w.agent, w.scope, w.text)
+		}
+	}
+}
