@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/browser"
+	"github.com/qiangli/coreutils/pkg/browser/live"
 	"github.com/qiangli/coreutils/pkg/browser/probe"
 	"github.com/qiangli/coreutils/pkg/browser/solo"
 	"github.com/qiangli/coreutils/pkg/browser/wire"
@@ -20,7 +21,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "browser",
 	Synopsis: "Browser automation: status, fetch, and CDP-backed page actions.",
-	Usage:    "browser [--json] [--mode probe] [--probe-url URL] status|fetch|navigate|extract|click|type|eval|screenshot|cookies-get|wait-for-selector|tabs|scroll|keyboard-press|back ...",
+	Usage:    "browser [--json] [--mode probe|solo|live] [--probe-url URL] status|hub|setup|fetch|navigate|extract|click|type|eval|screenshot|cookies-get|wait-for-selector|tabs|scroll|keyboard-press|back ...",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -55,6 +56,10 @@ func run(rc *tool.RunContext, args []string) int {
 	switch operands[0] {
 	case "status":
 		return browserStatus(rc, ctx, *mode, *probeURL, solo.Config{ChromePath: *chromePath, UserDataDir: *userDataDir, Headed: *headed}, *asJSON)
+	case "hub":
+		return browserHub(rc, ctx, operands[1:], *asJSON)
+	case "setup":
+		return browserSetup(rc, operands[1:], *asJSON)
 	case "fetch":
 		return browserFetch(rc, ctx, operands[1:], *asJSON)
 	case "login":
@@ -262,6 +267,13 @@ func clientForMode(ctx context.Context, mode, probeURL string, soloCfg solo.Conf
 			return nil, err
 		}
 		return c, nil
+	case "live":
+		// Attach to the running hub (started by `bashy browser hub`) and
+		// forward actions to the connected extension via /dispatch. If no
+		// hub is up, EnsureReady binds one in-process — but a one-shot CLI
+		// process exits right after, so the durable path is a separate
+		// `bashy browser hub`.
+		return live.NewClient(ctx, live.DefaultPort)
 	default:
 		return nil, fmt.Errorf("mode %q is not supported", mode)
 	}

@@ -382,3 +382,18 @@ websocket deps are all MIT (permissive, pure-Go — allowed compiled-in):
 No Chrome/Chromium binary is bundled: `probe` mode attaches to the user's
 already-running browser (`--remote-debugging-port`); `solo` mode uses a
 Chrome/Chromium found on `$PATH`.
+
+### Live mode (`pkg/browser/live`, `bashy browser --mode live`)
+
+The `live` backend — the WebSocket hub (`server.go`, `protocol.go`), the
+embedded MV3 Chrome extension (`extension/`), and the extract helper
+(`embed.go`) — was migrated verbatim from ycode's
+`internal/runtime/mcpservers/live` package. ycode is **Apache-2.0**
+(permissive, compatible with this repo's MIT); only `service.go`'s
+action↔`wire` mapping was adapted. The extension is first-party
+JavaScript (no minified bundles, no third-party JS). Its one runtime dep:
+
+- `github.com/gorilla/websocket` — BSD-2-Clause (permissive, pure-Go)
+
+The extension runs in the user's real Chrome profile and connects only to
+`ws://127.0.0.1:<port>` — never the public internet.
