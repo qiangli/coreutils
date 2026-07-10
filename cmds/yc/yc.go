@@ -6,7 +6,7 @@
 // §Command surface).
 //
 // The verbs are thin CLI wrappers; the engines live in
-// coreutils/pkg/{treesitter,repomap}. The gfy-backed graph-query (DQL) verb is
+// coreutils/pkg/{treesitter,repomap}. The gfy-backed graph query (DQL) verb is
 // left out of the bare binary so it stays free of gfy's document-parsing deps.
 package yccmd
 

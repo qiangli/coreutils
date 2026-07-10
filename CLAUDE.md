@@ -313,9 +313,11 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   podman engine).
 - `cmds/yc` — the code-intelligence verbs (list-symbols / search-symbols /
   find-references / repo-map / ast-query — flat, no yc prefix) over those engines, reachable through all three surfaces.
-- `cmds/graph` — the graph verbs (flat, `graph-` stem). Two layers:
-  - **Read (code-graph):** graph-build / graph-stats / graph-neighbors /
-    graph-impact / graph-path / graph-hotspots / graph-query over `pkg/codegraph`.
+- `cmds/graph` — the `graph` command with subcommands (one registered tool
+  that sub-dispatches `graph <sub>`; the former flat `graph-*` verbs were
+  collapsed 2026-07). Two layers:
+  - **Read (code-graph):** graph build / graph stats / graph neighbors /
+    graph impact / graph path / graph hotspots / graph query over `pkg/codegraph`.
     Fully structural + model-free; a bashy-owned disk cache
     (`.agents/bashy/graph.json`) with mtime staleness makes repeated calls cheap.
     `graph_sha` in the `bashy-graph-v1` envelope is a **source** fingerprint
@@ -323,9 +325,9 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
     non-deterministically per build, so only a source fingerprint is reproducible
     across rebuilds (the caching premise is that the graph is a pure function of
     source).
-  - **Write (contribution layer, `contrib*.go`):** graph-note / graph-link /
-    graph-observe / graph-forget (write) + graph-recall / graph-notes /
-    graph-pitfalls (read) — the "agentic wiki, built by agents, for agents." A
+  - **Write (contribution layer, `contrib*.go`):** graph note / graph link /
+    graph observe / graph forget (write) + graph recall / graph notes /
+    graph pitfalls (read) — the "agentic wiki, built by agents, for agents." A
     durable, append-only JSONL store at the repo root
     (`.agents/bashy/graph/contrib.jsonl`, resolved by walking up to `.git` so all
     agents in the repo share one store). O_APPEND = concurrency-safe multi-agent
@@ -340,8 +342,8 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
     pulls gfy's document-parsing deps, which must stay out of the bare
     `cmd/coreutils` multicall binary — verified: `go list -deps ./cmd/coreutils`
     has zero gfy pkgs). Blank-imported only by bashy's `internal/agentos`, so the
-    verbs reach the `bashy graph-*` front door + in-shell ExecHandler while the bare
-    binary and the `bash` drop-in stay gfy-free. See
+    `graph` verb reaches the `bashy graph …` front door + in-shell ExecHandler while
+    the bare binary and the `bash` drop-in stay gfy-free. See
     `dhnt/docs/bashy-code-graph-agentic-feature.md`.
 
 ### external/ — managed externals + embedded forks

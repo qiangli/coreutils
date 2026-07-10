@@ -1,13 +1,16 @@
-// Package graphcmd registers the AgentOS code-knowledge-graph verbs as flat,
-// first-class commands — graph-build, graph-stats, graph-neighbors, graph-impact,
-// graph-path, graph-hotspots, graph-query — over the gfy-backed engine in
-// coreutils/pkg/codegraph. No cryptic prefix; grouping is by the shared `graph-`
-// stem (see dhnt/docs/bashy-code-graph-agentic-feature.md).
+// Package graphcmd registers the AgentOS code-knowledge-graph feature as a
+// single `graph` command with subcommands — `graph build`, `graph stats`,
+// `graph neighbors`, `graph impact`, `graph path`, `graph hotspots`,
+// `graph query` (the structural, gfy-backed code-graph reads over
+// coreutils/pkg/codegraph) plus the contribution subcommands `graph note`,
+// `graph link`, `graph observe`, `graph forget`, `graph recall`,
+// `graph notes`, `graph pitfalls` (the durable per-repo "agentic wiki").
+// One verb, grouped subcommands (see dhnt/docs/bashy-code-graph-agentic-feature.md).
 //
 // This package is deliberately NOT blank-imported by cmds/all: it pulls in gfy's
 // document-parsing dependency graph, which must stay out of the bare coreutils
 // multicall binary (and out of the lean `bash` drop-in). It is imported only by
-// bashy's internal/agentos, so the verbs are reachable at the `bashy graph-*`
+// bashy's internal/agentos, so the verb is reachable at the `bashy graph …`
 // front door and in-shell via the ExecHandler, while cmd/coreutils and cmd/bash
 // stay gfy-free.
 //
@@ -45,27 +48,99 @@ const schemaVersion = "bashy-graph-v1"
 // .agents/ycode/graph.json so the two never contend for the same file / lock.
 const cacheRel = ".agents/bashy/graph.json"
 
-func init() {
-	register("graph-build", "build/refresh the code knowledge graph and cache it",
-		"graph-build [path] [--rebuild] [--json]", runBuild)
-	register("graph-stats", "code-graph size: nodes/edges/communities/languages",
-		"graph-stats [path] [--rebuild] [--json]", runStats)
-	register("graph-neighbors", "direct neighbors (1-hop coupling) of a symbol",
-		"graph-neighbors <symbol> [path] [--relation R] [--json]", runNeighbors)
-	register("graph-impact", "blast radius: symbols coupled to a target (direct by default)",
-		"graph-impact <file|symbol> [path] [--depth N=1] [--limit N=40] [--json]", runImpact)
-	register("graph-path", "shortest path between two symbols in the code graph",
-		"graph-path <a> <b> [path] [--max-hops N] [--json]", runPath)
-	register("graph-hotspots", "most-connected entities (refactor/blast-radius centers)",
-		"graph-hotspots [path] [--top N] [--raw] [--json]", runHotspots)
-	register("graph-query", "keyword question → matching subgraph (model-free)",
-		"graph-query <question> [path] [--depth N=1] [--limit N=40] [--json]", runQuery)
+// subcmd is one `graph <name>` subcommand.
+type subcmd struct {
+	name     string
+	synopsis string
+	usage    string
+	run      func(*tool.RunContext, []string) int
 }
 
-func register(name, synopsis, usage string, run func(*tool.RunContext, []string) int) {
-	t := &tool.Tool{Name: name, Synopsis: synopsis, Usage: usage}
-	t.Run = run
-	tool.Register(t)
+// subcommands is the dispatch table. It is populated by this file (the
+// structural code-graph reads) and by contrib_verbs.go (the contribution
+// layer), and read only at Run time — so init() order across the two files
+// does not matter.
+var subcommands []subcmd
+
+func addSub(name, synopsis, usage string, run func(*tool.RunContext, []string) int) {
+	subcommands = append(subcommands, subcmd{name, synopsis, usage, run})
+}
+
+func init() {
+	addSub("build", "build/refresh the code knowledge graph and cache it",
+		"graph build [path] [--rebuild] [--json]", runBuild)
+	addSub("stats", "code-graph size: nodes/edges/communities/languages",
+		"graph stats [path] [--rebuild] [--json]", runStats)
+	addSub("neighbors", "direct neighbors (1-hop coupling) of a symbol",
+		"graph neighbors <symbol> [path] [--relation R] [--json]", runNeighbors)
+	addSub("impact", "blast radius: symbols coupled to a target (direct by default)",
+		"graph impact <file|symbol> [path] [--depth N=1] [--limit N=40] [--json]", runImpact)
+	addSub("path", "shortest path between two symbols in the code graph",
+		"graph path <a> <b> [path] [--max-hops N] [--json]", runPath)
+	addSub("hotspots", "most-connected entities (refactor/blast-radius centers)",
+		"graph hotspots [path] [--top N] [--raw] [--json]", runHotspots)
+	addSub("query", "keyword question → matching subgraph (model-free)",
+		"graph query <question> [path] [--depth N=1] [--limit N=40] [--json]", runQuery)
+
+	tool.Register(&tool.Tool{
+		Name:     "graph",
+		Synopsis: "code knowledge graph + agentic wiki (subcommands: build stats neighbors impact path hotspots query · note link observe forget recall notes pitfalls)",
+		Usage: "graph <subcommand> [args]\n\n" +
+			"code graph:    build stats neighbors impact path hotspots query\n" +
+			"agentic wiki:  note link observe forget recall notes pitfalls\n\n" +
+			"Run `graph help` for one-line synopses, or `graph <sub> ...`.",
+		Run: runGraph,
+	})
+}
+
+// runGraph dispatches `graph <subcommand>` to the matching subcommand. Both
+// the `bashy graph …` front door and the in-shell ExecHandler call this with
+// the raw argv tail, so subcommands keep parsing their own flags exactly as
+// the former flat verbs did.
+func runGraph(rc *tool.RunContext, args []string) int {
+	if len(args) == 0 {
+		printGraphHelp(rc)
+		return 0
+	}
+	switch args[0] {
+	case "help", "-h", "--help":
+		printGraphHelp(rc)
+		return 0
+	}
+	for _, sc := range subcommands {
+		if sc.name == args[0] {
+			return sc.run(rc, args[1:])
+		}
+	}
+	fmt.Fprintf(rc.Err, "graph: unknown subcommand %q (run `graph help`)\n", args[0])
+	return 2
+}
+
+// helpSections is the canonical help layout: the two layers in their
+// documented order (code-graph reads, then the agentic-wiki contribution
+// verbs), independent of init() append order across the two source files.
+var helpSections = []struct {
+	title string
+	names []string
+}{
+	{"code graph", []string{"build", "stats", "neighbors", "impact", "path", "hotspots", "query"}},
+	{"agentic wiki", []string{"note", "link", "observe", "forget", "recall", "notes", "pitfalls"}},
+}
+
+func printGraphHelp(rc *tool.RunContext) {
+	byName := make(map[string]subcmd, len(subcommands))
+	for _, sc := range subcommands {
+		byName[sc.name] = sc
+	}
+	fmt.Fprintln(rc.Out, "Usage: graph <subcommand> [args]")
+	for _, sec := range helpSections {
+		fmt.Fprintf(rc.Out, "\n%s:\n", sec.title)
+		for _, n := range sec.names {
+			if sc, ok := byName[n]; ok {
+				fmt.Fprintf(rc.Out, "  %-11s %s\n", sc.name, sc.synopsis)
+			}
+		}
+	}
 }
 
 // --- shared envelope ---
@@ -240,7 +315,7 @@ func usageErr(rc *tool.RunContext, name, msg string) int {
 	return 2
 }
 
-// --- graph-build ---
+// --- graph build ---
 
 type buildPayload struct {
 	header
@@ -261,10 +336,10 @@ func runBuild(rc *tool.RunContext, args []string) int {
 			asJSON = true
 		case "--json=false", "--plain":
 			asJSON = false
-		case "--rebuild": // graph-build always rebuilds; flag accepted for symmetry
+		case "--rebuild": // graph build always rebuilds; flag accepted for symmetry
 		default:
 			if strings.HasPrefix(a, "-") {
-				return usageErr(rc, "graph-build", "unknown option "+a)
+				return usageErr(rc, "graph build", "unknown option "+a)
 			}
 			if target == "" {
 				target = a
@@ -272,10 +347,10 @@ func runBuild(rc *tool.RunContext, args []string) int {
 		}
 	}
 	root := resolveRoot(rc, target)
-	// graph-build forces a fresh build (its whole purpose) and caches it.
+	// graph build forces a fresh build (its whole purpose) and caches it.
 	gc, err := loadOrBuild(rc, root, true, asJSON)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-build: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph build: %v\n", err)
 		return 1
 	}
 	cp := filepath.Join(root, cacheRel)
@@ -296,7 +371,7 @@ func runBuild(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- graph-stats ---
+// --- graph stats ---
 
 type statsPayload struct {
 	header
@@ -324,7 +399,7 @@ func runStats(rc *tool.RunContext, args []string) int {
 			rebuild = true
 		default:
 			if strings.HasPrefix(a, "-") {
-				return usageErr(rc, "graph-stats", "unknown option "+a)
+				return usageErr(rc, "graph stats", "unknown option "+a)
 			}
 			if target == "" {
 				target = a
@@ -334,7 +409,7 @@ func runStats(rc *tool.RunContext, args []string) int {
 	root := resolveRoot(rc, target)
 	gc, err := loadOrBuild(rc, root, rebuild, asJSON)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-stats: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph stats: %v\n", err)
 		return 1
 	}
 	if asJSON {
@@ -370,7 +445,7 @@ func confidenceCounts(gc *codegraph.GraphContext) (extracted, inferred, ambiguou
 	return
 }
 
-// --- graph-neighbors ---
+// --- graph neighbors ---
 
 type neighbor struct {
 	Label      string `json:"label"`
@@ -403,7 +478,7 @@ func runNeighbors(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--relation="):
 			relation = a[len("--relation="):]
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-neighbors", "unknown option "+a)
+			return usageErr(rc, "graph neighbors", "unknown option "+a)
 		default:
 			if symbol == "" {
 				symbol = a
@@ -413,17 +488,17 @@ func runNeighbors(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if symbol == "" {
-		return usageErr(rc, "graph-neighbors", "missing <symbol>")
+		return usageErr(rc, "graph neighbors", "missing <symbol>")
 	}
 	root := resolveRoot(rc, target)
 	gc, err := loadOrBuild(rc, root, false, asJSON)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-neighbors: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph neighbors: %v\n", err)
 		return 1
 	}
 	id := search.FindNode(gc.Graph, symbol)
 	if id == "" {
-		fmt.Fprintf(rc.Err, "graph-neighbors: symbol not found: %s\n", symbol)
+		fmt.Fprintf(rc.Err, "graph neighbors: symbol not found: %s\n", symbol)
 		return 1
 	}
 	var nbrs []neighbor
@@ -459,7 +534,7 @@ func runNeighbors(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- graph-impact ---
+// --- graph impact ---
 
 type sgNode struct {
 	Label    string `json:"label"`
@@ -518,7 +593,7 @@ func runImpact(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--limit="):
 			limit = atoiDefault(a[len("--limit="):], limit)
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-impact", "unknown option "+a)
+			return usageErr(rc, "graph impact", "unknown option "+a)
 		default:
 			if symbol == "" {
 				symbol = a
@@ -528,7 +603,7 @@ func runImpact(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if symbol == "" {
-		return usageErr(rc, "graph-impact", "missing <file|symbol>")
+		return usageErr(rc, "graph impact", "missing <file|symbol>")
 	}
 	if depth < 1 {
 		depth = 1
@@ -536,12 +611,12 @@ func runImpact(rc *tool.RunContext, args []string) int {
 	root := resolveRoot(rc, target)
 	gc, err := loadOrBuild(rc, root, false, asJSON)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-impact: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph impact: %v\n", err)
 		return 1
 	}
 	id := search.FindNode(gc.Graph, symbol)
 	if id == "" {
-		fmt.Fprintf(rc.Err, "graph-impact: not found: %s\n", symbol)
+		fmt.Fprintf(rc.Err, "graph impact: not found: %s\n", symbol)
 		return 1
 	}
 	visited, edges := gc.Graph.BFS([]string{id}, depth)
@@ -601,7 +676,7 @@ func subgraphView(g *gfygraph.Graph, visited []string, edges []gfygraph.EdgeData
 	return nodes, sgEdges
 }
 
-// --- graph-path ---
+// --- graph path ---
 
 type pathPayload struct {
 	header
@@ -630,7 +705,7 @@ func runPath(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--max-hops="):
 			maxHops = atoiDefault(a[len("--max-hops="):], maxHops)
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-path", "unknown option "+a)
+			return usageErr(rc, "graph path", "unknown option "+a)
 		default:
 			switch {
 			case a1 == "":
@@ -643,22 +718,22 @@ func runPath(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if a1 == "" || a2 == "" {
-		return usageErr(rc, "graph-path", "usage: graph-path <a> <b> [path]")
+		return usageErr(rc, "graph path", "usage: graph path <a> <b> [path]")
 	}
 	root := resolveRoot(rc, target)
 	gc, err := loadOrBuild(rc, root, false, asJSON)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-path: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph path: %v\n", err)
 		return 1
 	}
 	src := search.FindNode(gc.Graph, a1)
 	tgt := search.FindNode(gc.Graph, a2)
 	if src == "" {
-		fmt.Fprintf(rc.Err, "graph-path: not found: %s\n", a1)
+		fmt.Fprintf(rc.Err, "graph path: not found: %s\n", a1)
 		return 1
 	}
 	if tgt == "" {
-		fmt.Fprintf(rc.Err, "graph-path: not found: %s\n", a2)
+		fmt.Fprintf(rc.Err, "graph path: not found: %s\n", a2)
 		return 1
 	}
 	ids := gc.Graph.ShortestPath(src, tgt, maxHops)
@@ -688,7 +763,7 @@ func runPath(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- graph-hotspots ---
+// --- graph hotspots ---
 
 type hotspot struct {
 	Rank   int    `json:"rank"`
@@ -703,7 +778,7 @@ type hotspotsPayload struct {
 
 // ubiquitousLabels are accessor/utility method names that dominate raw degree
 // ranking (a bare `.String()`/`.Len()` is on nearly every type) but carry no
-// architectural signal. graph-hotspots drops them by default so real linchpins
+// architectural signal. graph hotspots drops them by default so real linchpins
 // surface; --raw disables the filter (identical to gfy's god-nodes). This is a
 // documented heuristic, not upstream behavior. Degree centrality is the cheap
 // O(V) first-order god-object signal; betweenness/PageRank (a future --metric)
@@ -744,7 +819,7 @@ func runHotspots(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--top="):
 			top = atoiDefault(a[len("--top="):], top)
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-hotspots", "unknown option "+a)
+			return usageErr(rc, "graph hotspots", "unknown option "+a)
 		default:
 			if target == "" {
 				target = a
@@ -757,7 +832,7 @@ func runHotspots(rc *tool.RunContext, args []string) int {
 	root := resolveRoot(rc, target)
 	gc, err := loadOrBuild(rc, root, false, asJSON)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-hotspots: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph hotspots: %v\n", err)
 		return 1
 	}
 	var spots []hotspot
@@ -784,7 +859,7 @@ func runHotspots(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- graph-query ---
+// --- graph query ---
 
 type queryPayload struct {
 	header
@@ -822,7 +897,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--limit="):
 			limit = atoiDefault(a[len("--limit="):], limit)
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-query", "unknown option "+a)
+			return usageErr(rc, "graph query", "unknown option "+a)
 		default:
 			if question == "" {
 				question = a
@@ -832,7 +907,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if question == "" {
-		return usageErr(rc, "graph-query", "missing <question>")
+		return usageErr(rc, "graph query", "missing <question>")
 	}
 	if depth < 1 {
 		depth = 1
@@ -840,7 +915,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 	root := resolveRoot(rc, target)
 	gc, err := loadOrBuild(rc, root, false, asJSON)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-query: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph query: %v\n", err)
 		return 1
 	}
 	results := search.ScoreNodes(gc.Graph, question)

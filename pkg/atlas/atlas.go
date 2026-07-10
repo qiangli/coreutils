@@ -314,10 +314,7 @@ func init() {
 	)
 	addTools(GroupCodeIntel,
 		"ast-query", "find-references", "list-symbols", "repo-map",
-		"search-symbols", "graph-build", "graph-forget", "graph-hotspots",
-		"graph-impact", "graph-link", "graph-neighbors", "graph-note",
-		"graph-notes", "graph-observe", "graph-path", "graph-pitfalls",
-		"graph-query", "graph-recall", "graph-stats",
+		"search-symbols", "graph",
 	)
 	addTools(GroupNet, "browser", "fetch")
 	addTools(GroupOrch, "foreman")
@@ -325,10 +322,7 @@ func init() {
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
 		"ast-query", "find-references", "list-symbols", "repo-map",
-		"search-symbols", "graph-build", "graph-forget", "graph-hotspots",
-		"graph-impact", "graph-link", "graph-neighbors", "graph-note",
-		"graph-notes", "graph-observe", "graph-path", "graph-pitfalls",
-		"graph-query", "graph-recall", "graph-stats",
+		"search-symbols", "graph",
 		"browser", "fetch", "duration", "tz", "ntp", "sntp", "tokens",
 		"foreman",
 	)
@@ -339,14 +333,11 @@ func init() {
 		"ls", "od", "readlink", "realpath", "stat", "strings", "tac", "tail",
 		"tokens", "tree", "wc", "which",
 		"ast-query", "find-references", "list-symbols", "repo-map",
-		"search-symbols", "graph-query", "graph-neighbors", "graph-impact",
-		"graph-path", "graph-hotspots", "graph-stats", "graph-notes",
-		"graph-recall", "graph-pitfalls",
+		"search-symbols",
 	)
-	capTools(CapCached,
-		"graph-build", "graph-query", "graph-neighbors", "graph-impact",
-		"graph-path", "graph-hotspots", "graph-stats",
-	)
+	// The `graph` umbrella has write subcommands (note/link/observe/forget), so
+	// it is not read-only; its structural reads keep a disk cache, so CapCached.
+	capTools(CapCached, "graph")
 	capTools(CapBudget, "tokens", "repo-map")
 	capTools(CapNeedsNetwork, "fetch", "browser", "ntp", "sntp")
 	capTools(CapSpawnsProcesses,

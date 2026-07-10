@@ -47,7 +47,7 @@ func TestGraphBuildCreatesCacheAndStats(t *testing.T) {
 	dir := fixtureRepo(t)
 	out, errOut, code := run(t, dir, runBuild, "--plain")
 	if code != 0 {
-		t.Fatalf("graph-build exit %d, stderr=%s", code, errOut)
+		t.Fatalf("graph build exit %d, stderr=%s", code, errOut)
 	}
 	if !strings.Contains(out, "Nodes:") {
 		t.Fatalf("expected stats in output, got: %s", out)
@@ -62,7 +62,7 @@ func TestGraphStatsJSONEnvelope(t *testing.T) {
 	dir := fixtureRepo(t)
 	out, errOut, code := run(t, dir, runStats, "--json")
 	if code != 0 {
-		t.Fatalf("graph-stats exit %d, stderr=%s", code, errOut)
+		t.Fatalf("graph stats exit %d, stderr=%s", code, errOut)
 	}
 	var p statsPayload
 	if err := json.Unmarshal([]byte(out), &p); err != nil {
@@ -83,7 +83,7 @@ func TestGraphNeighborsFindsCallee(t *testing.T) {
 	dir := fixtureRepo(t)
 	out, errOut, code := run(t, dir, runNeighbors, "Alpha", "--plain")
 	if code != 0 {
-		t.Fatalf("graph-neighbors exit %d, stderr=%s", code, errOut)
+		t.Fatalf("graph neighbors exit %d, stderr=%s", code, errOut)
 	}
 	// Undirected coupling: Alpha's neighbors include Beta (calls) and Gamma (caller).
 	if !strings.Contains(out, "Beta") {
@@ -106,7 +106,7 @@ func TestGraphImpactBlastRadius(t *testing.T) {
 	dir := fixtureRepo(t)
 	out, errOut, code := run(t, dir, runImpact, "Alpha", "--depth", "2", "--json")
 	if code != 0 {
-		t.Fatalf("graph-impact exit %d, stderr=%s", code, errOut)
+		t.Fatalf("graph impact exit %d, stderr=%s", code, errOut)
 	}
 	var p impactPayload
 	if err := json.Unmarshal([]byte(out), &p); err != nil {
@@ -128,7 +128,7 @@ func TestGraphImpactDefaultsToDirectAndCaps(t *testing.T) {
 	// the returned set and reports the remainder rather than silently dropping.
 	out, _, code := run(t, dir, runImpact, "Alpha", "--depth", "2", "--limit", "1", "--json")
 	if code != 0 {
-		t.Fatalf("graph-impact exit %d", code)
+		t.Fatalf("graph impact exit %d", code)
 	}
 	var p impactPayload
 	if err := json.Unmarshal([]byte(out), &p); err != nil {
@@ -159,7 +159,7 @@ func TestGraphPathBetweenSymbols(t *testing.T) {
 	dir := fixtureRepo(t)
 	out, errOut, code := run(t, dir, runPath, "Gamma", "Beta", "--plain")
 	if code != 0 {
-		t.Fatalf("graph-path exit %d, stderr=%s", code, errOut)
+		t.Fatalf("graph path exit %d, stderr=%s", code, errOut)
 	}
 	if !strings.Contains(out, "path (") && !strings.Contains(out, "no path") {
 		t.Fatalf("unexpected path output: %s", out)
@@ -170,7 +170,7 @@ func TestGraphQueryKeyword(t *testing.T) {
 	dir := fixtureRepo(t)
 	out, _, code := run(t, dir, runQuery, "Beta", "--plain")
 	if code != 0 {
-		t.Fatalf("graph-query exit %d", code)
+		t.Fatalf("graph query exit %d", code)
 	}
 	if !strings.Contains(out, "Beta") {
 		t.Fatalf("expected Beta in query subgraph, got: %s", out)
@@ -183,7 +183,7 @@ func TestGraphHotspotsRunsAndFilters(t *testing.T) {
 	// (Alpha/Beta/Gamma) are not in the ubiquitous denylist, so they survive.
 	out, errOut, code := run(t, dir, runHotspots, "--json")
 	if code != 0 {
-		t.Fatalf("graph-hotspots exit %d, stderr=%s", code, errOut)
+		t.Fatalf("graph hotspots exit %d, stderr=%s", code, errOut)
 	}
 	var p hotspotsPayload
 	if err := json.Unmarshal([]byte(out), &p); err != nil {

@@ -53,7 +53,7 @@ This group contains bashy-specific in-process tools and front-door verbs for Age
 
 In-process extended tools, count 22:
 
-`ast-query`, `browser`, `fetch`, `find-references`, `foreman`, `graph-build`, `graph-forget`, `graph-hotspots`, `graph-impact`, `graph-link`, `graph-neighbors`, `graph-note`, `graph-notes`, `graph-observe`, `graph-path`, `graph-pitfalls`, `graph-query`, `graph-recall`, `graph-stats`, `list-symbols`, `repo-map`, `search-symbols`
+`ast-query`, `browser`, `fetch`, `find-references`, `foreman`, `graph`, `list-symbols`, `repo-map`, `search-symbols`
 
 Front-door verbs, count 37:
 

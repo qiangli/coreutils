@@ -1,9 +1,10 @@
 package graphcmd
 
-// The contribution verbs — the write/read API over the durable per-repo store.
-// Registered in the tool registry like the code-graph verbs, reachable at the
-// `bashy graph-*` front door and in-shell. Model-free, no graph build required for
-// writes (they are pure append ops), so contributing is cheap in a tight loop.
+// The contribution subcommands — the write/read API over the durable per-repo
+// store. Added to the shared `graph` dispatch table like the code-graph reads,
+// reachable at the `bashy graph …` front door and in-shell. Model-free, no
+// graph build required for writes (they are pure append ops), so contributing
+// is cheap in a tight loop.
 
 import (
 	"fmt"
@@ -18,20 +19,20 @@ import (
 const contribSchema = "bashy-graph-contrib-v1"
 
 func init() {
-	register("graph-note", "attach a note/fact to an entity (contribute knowledge)",
-		"graph-note <target> <text> [--confidence C] [--source S] [--json]", runNote)
-	register("graph-link", "assert a typed relationship between two entities",
-		"graph-link <src> <relation> <dst> [--json]", runLink)
-	register("graph-observe", "record an action outcome (build/test/run/execution/…)",
-		"graph-observe <kind> <target> [--outcome O] [--summary S] [--data k=v]… [--json]", runObserve)
-	register("graph-forget", "retract a contribution (by id, or --target/--episode)",
-		"graph-forget <id> | [--target X] [--episode E] [--json]", runForget)
-	register("graph-recall", "search contributed knowledge (notes/links/observations)",
-		"graph-recall [query] [--target X] [--kind K] [--outcome O] [--limit N] [--json]", runRecall)
-	register("graph-notes", "show everything contributed about one entity",
-		"graph-notes <target> [--json]", runNotesFor)
-	register("graph-pitfalls", "known failures recorded against an entity/goal (avoid these)",
-		"graph-pitfalls <target> [--json]", runPitfalls)
+	addSub("note", "attach a note/fact to an entity (contribute knowledge)",
+		"graph note <target> <text> [--confidence C] [--source S] [--json]", runNote)
+	addSub("link", "assert a typed relationship between two entities",
+		"graph link <src> <relation> <dst> [--json]", runLink)
+	addSub("observe", "record an action outcome (build/test/run/execution/…)",
+		"graph observe <kind> <target> [--outcome O] [--summary S] [--data k=v]… [--json]", runObserve)
+	addSub("forget", "retract a contribution (by id, or --target/--episode)",
+		"graph forget <id> | [--target X] [--episode E] [--json]", runForget)
+	addSub("recall", "search contributed knowledge (notes/links/observations)",
+		"graph recall [query] [--target X] [--kind K] [--outcome O] [--limit N] [--json]", runRecall)
+	addSub("notes", "show everything contributed about one entity",
+		"graph notes <target> [--json]", runNotesFor)
+	addSub("pitfalls", "known failures recorded against an entity/goal (avoid these)",
+		"graph pitfalls <target> [--json]", runPitfalls)
 }
 
 type contribEnvelope struct {
@@ -68,7 +69,7 @@ func ack(rc *tool.RunContext, asJSON bool, op, id, target string) {
 	}
 }
 
-// --- graph-note ---
+// --- graph note ---
 
 func runNote(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
@@ -97,7 +98,7 @@ func runNote(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--source="):
 			source = a[len("--source="):]
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-note", "unknown option "+a)
+			return usageErr(rc, "graph note", "unknown option "+a)
 		default:
 			if target == "" {
 				target = a
@@ -107,7 +108,7 @@ func runNote(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if target == "" || len(textParts) == 0 {
-		return usageErr(rc, "graph-note", "usage: graph-note <target> <text>")
+		return usageErr(rc, "graph note", "usage: graph note <target> <text>")
 	}
 	text := strings.Join(textParts, " ")
 	c := Contribution{
@@ -117,14 +118,14 @@ func runNote(rc *tool.RunContext, args []string) int {
 	}
 	root := storeRoot(rc)
 	if err := openStore(root).append(c); err != nil {
-		fmt.Fprintf(rc.Err, "graph-note: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph note: %v\n", err)
 		return 1
 	}
 	ack(rc, asJSON, "note", c.ID, target)
 	return 0
 }
 
-// --- graph-link ---
+// --- graph link ---
 
 func runLink(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
@@ -136,13 +137,13 @@ func runLink(rc *tool.RunContext, args []string) int {
 		case a == "--json=false" || a == "--plain":
 			asJSON = false
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-link", "unknown option "+a)
+			return usageErr(rc, "graph link", "unknown option "+a)
 		default:
 			pos = append(pos, a)
 		}
 	}
 	if len(pos) != 3 {
-		return usageErr(rc, "graph-link", "usage: graph-link <src> <relation> <dst>")
+		return usageErr(rc, "graph link", "usage: graph link <src> <relation> <dst>")
 	}
 	src, relation, dst := pos[0], pos[1], pos[2]
 	c := Contribution{
@@ -152,7 +153,7 @@ func runLink(rc *tool.RunContext, args []string) int {
 	}
 	root := storeRoot(rc)
 	if err := openStore(root).append(c); err != nil {
-		fmt.Fprintf(rc.Err, "graph-link: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph link: %v\n", err)
 		return 1
 	}
 	if asJSON {
@@ -163,7 +164,7 @@ func runLink(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- graph-observe ---
+// --- graph observe ---
 
 func runObserve(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
@@ -199,13 +200,13 @@ func runObserve(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--data="):
 			addKV(data, a[len("--data="):])
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-observe", "unknown option "+a)
+			return usageErr(rc, "graph observe", "unknown option "+a)
 		default:
 			pos = append(pos, a)
 		}
 	}
 	if len(pos) < 2 {
-		return usageErr(rc, "graph-observe", "usage: graph-observe <kind> <target> [--outcome O] [--summary S]")
+		return usageErr(rc, "graph observe", "usage: graph observe <kind> <target> [--outcome O] [--summary S]")
 	}
 	kind, target := pos[0], pos[1]
 	if outcome == "" {
@@ -222,7 +223,7 @@ func runObserve(rc *tool.RunContext, args []string) int {
 	}
 	root := storeRoot(rc)
 	if err := openStore(root).append(c); err != nil {
-		fmt.Fprintf(rc.Err, "graph-observe: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph observe: %v\n", err)
 		return 1
 	}
 	ack(rc, asJSON, "observe", c.ID, target)
@@ -235,7 +236,7 @@ func addKV(m map[string]string, kv string) {
 	}
 }
 
-// --- graph-forget ---
+// --- graph forget ---
 
 func runForget(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
@@ -262,7 +263,7 @@ func runForget(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--episode="):
 			episode = a[len("--episode="):]
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-forget", "unknown option "+a)
+			return usageErr(rc, "graph forget", "unknown option "+a)
 		default:
 			if id == "" {
 				id = a
@@ -270,7 +271,7 @@ func runForget(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if id == "" && target == "" && episode == "" {
-		return usageErr(rc, "graph-forget", "usage: graph-forget <id> | --target X | --episode E")
+		return usageErr(rc, "graph forget", "usage: graph forget <id> | --target X | --episode E")
 	}
 	c := Contribution{
 		ID: contribID("forget", id, target, episode, time.Now().UTC().Format(time.RFC3339Nano)),
@@ -279,7 +280,7 @@ func runForget(rc *tool.RunContext, args []string) int {
 	}
 	root := storeRoot(rc)
 	if err := openStore(root).append(c); err != nil {
-		fmt.Fprintf(rc.Err, "graph-forget: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph forget: %v\n", err)
 		return 1
 	}
 	sel := id
@@ -332,7 +333,7 @@ func runRecall(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--limit="):
 			limit = atoiDefault(a[len("--limit="):], limit)
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-recall", "unknown option "+a)
+			return usageErr(rc, "graph recall", "unknown option "+a)
 		default:
 			if query == "" {
 				query = a
@@ -342,7 +343,7 @@ func runRecall(rc *tool.RunContext, args []string) int {
 	root := storeRoot(rc)
 	live, err := openStore(root).live()
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-recall: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph recall: %v\n", err)
 		return 1
 	}
 	q := strings.ToLower(query)
@@ -380,7 +381,7 @@ func runNotesFor(rc *tool.RunContext, args []string) int {
 		case a == "--json=false" || a == "--plain":
 			asJSON = false
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-notes", "unknown option "+a)
+			return usageErr(rc, "graph notes", "unknown option "+a)
 		default:
 			if target == "" {
 				target = a
@@ -388,12 +389,12 @@ func runNotesFor(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if target == "" {
-		return usageErr(rc, "graph-notes", "usage: graph-notes <target>")
+		return usageErr(rc, "graph notes", "usage: graph notes <target>")
 	}
 	root := storeRoot(rc)
 	live, err := openStore(root).live()
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-notes: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph notes: %v\n", err)
 		return 1
 	}
 	var hits []Contribution
@@ -416,7 +417,7 @@ func runPitfalls(rc *tool.RunContext, args []string) int {
 		case a == "--json=false" || a == "--plain":
 			asJSON = false
 		case strings.HasPrefix(a, "-") && a != "-":
-			return usageErr(rc, "graph-pitfalls", "unknown option "+a)
+			return usageErr(rc, "graph pitfalls", "unknown option "+a)
 		default:
 			if target == "" {
 				target = a
@@ -424,12 +425,12 @@ func runPitfalls(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if target == "" {
-		return usageErr(rc, "graph-pitfalls", "usage: graph-pitfalls <target>")
+		return usageErr(rc, "graph pitfalls", "usage: graph pitfalls <target>")
 	}
 	root := storeRoot(rc)
 	live, err := openStore(root).live()
 	if err != nil {
-		fmt.Fprintf(rc.Err, "graph-pitfalls: %v\n", err)
+		fmt.Fprintf(rc.Err, "graph pitfalls: %v\n", err)
 		return 1
 	}
 	var hits []Contribution
