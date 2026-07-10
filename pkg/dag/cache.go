@@ -11,15 +11,22 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 )
 
 // Cache is the fingerprint store backing dag's incremental up-to-date skip —
 // the agent-first answer to make's mtime prerequisites, but content-hashed
 // (a touched-but-unchanged file does not force a rebuild). One JSON file per
 // DAG document under the configured cache dir, atomic tmp+rename writes.
+//
+// It also carries measured per-target wall-clock (Durations). Durations do not
+// affect up-to-date decisions; they exist so a scheduler can order ready targets
+// longest-first, which turns a plain worker pool into online LPT scheduling
+// (within 4/3 of the optimal makespan — Graham 1969).
 type Cache struct {
-	path   string
-	Hashes map[string]string `json:"hashes"`
+	path      string
+	Hashes    map[string]string        `json:"hashes"`
+	Durations map[string]time.Duration `json:"durations,omitempty"`
 }
 
 // LoadCache opens (or starts) the fingerprint cache for docPath. cacheDir wins,
@@ -27,7 +34,7 @@ type Cache struct {
 // empty cache rather than failing — a missing/garbage cache just means
 // "everything is out of date".
 func LoadCache(docPath, cacheDir string) *Cache {
-	c := &Cache{Hashes: map[string]string{}}
+	c := &Cache{Hashes: map[string]string{}, Durations: map[string]time.Duration{}}
 	abs, _ := filepath.Abs(docPath)
 	dir := cacheDir
 	if dir == "" {
@@ -52,6 +59,11 @@ func (c *Cache) load() {
 		if c.Hashes == nil {
 			c.Hashes = map[string]string{}
 		}
+		// Absent in caches written before durations existed — a missing key just
+		// means "never measured", which is exactly what an empty map encodes.
+		if c.Durations == nil {
+			c.Durations = map[string]time.Duration{}
+		}
 	}
 }
 
@@ -74,6 +86,7 @@ func (c *Cache) ImportFromDir(dir string) error {
 		return err
 	}
 	c.Hashes = map[string]string{}
+	c.Durations = map[string]time.Duration{}
 	c.load()
 	return nil
 }
@@ -137,6 +150,39 @@ func (c *Cache) Record(name, fp string) {
 		c.Hashes = map[string]string{}
 	}
 	c.Hashes[name] = fp
+}
+
+// RecordDuration stores a target's measured wall-clock. Callers record only
+// targets that actually RAN TO COMPLETION:
+//
+//   - An up-to-date or skipped target's ~0s is not its cost. Recording it would
+//     make the next run believe a heavy target is cheap and dispatch it last.
+//   - A failed target's time is truncated at the failure (or inflated to its
+//     Timeout ceiling), so it is not a cost estimate either. Leaving it unmeasured
+//     is deliberate: an unknown target sorts FIRST under LPT, which is what you
+//     want during a fix campaign — the broken chunk gets the fastest feedback.
+//
+// A zero duration from a genuinely instant target is still recorded; map
+// membership, not the value, distinguishes "measured and fast" from "unmeasured".
+func (c *Cache) RecordDuration(name string, d time.Duration) {
+	if c.Durations == nil {
+		c.Durations = map[string]time.Duration{}
+	}
+	if d < 0 {
+		d = 0
+	}
+	c.Durations[name] = d
+}
+
+// Duration returns a target's last measured wall-clock. The bool reports whether
+// the target has ever been measured — callers treat "never" as +infinity so
+// unmeasured work is scheduled before anything of known cost.
+func (c *Cache) Duration(name string) (time.Duration, bool) {
+	if c == nil || c.Durations == nil {
+		return 0, false
+	}
+	d, ok := c.Durations[name]
+	return d, ok
 }
 
 // Save atomically persists the cache. Best-effort: a write failure is ignored

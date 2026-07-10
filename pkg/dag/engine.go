@@ -263,6 +263,11 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 			}
 		} else if e.Cache != nil {
 			e.Cache.Record(node.Task.Name, fp[node.Task.Name])
+			// Guard on StatusDone rather than reusing the branch condition: this
+			// else also catches StatusConditionSkipped, whose ~0s is not a cost.
+			if res.Status == StatusDone {
+				e.Cache.RecordDuration(node.Task.Name, res.Duration)
+			}
 		}
 	}
 	return report
@@ -365,6 +370,7 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 		case StatusDone, StatusUpToDate:
 			if n.Result.Status == StatusDone && e.Cache != nil {
 				e.Cache.Record(n.Task.Name, fp[n.Task.Name])
+				e.Cache.RecordDuration(n.Task.Name, n.Result.Duration)
 			}
 		}
 		for _, dep := range n.Dependents {

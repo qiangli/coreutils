@@ -25,7 +25,7 @@ import (
 func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
-		sandboxF, meshF                                                                               bool
+		sandboxF, meshF, timingsF                                                                     bool
 		fileArg                                                                                       string
 		cacheDir, cacheExport, cacheImport, remoteCmd, remoteShell                                    string
 		jobs                                                                                          int
@@ -135,6 +135,11 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 					return emitErr(errOut, mode, errf(weavecli.ExitInvalidArg, "cache import: %v", err))
 				}
 			}
+			// Reads the cache, runs nothing — so it sits after the cache is loaded
+			// (and after --cache-import, to report an imported baseline).
+			if timingsF {
+				return runTimings(out, mode, doc, cache)
+			}
 			// Body env: process env, then frontmatter vars (so ${HOST} etc. are
 			// available to bodies, not just metadata), then CLI overrides (win).
 			bodyEnv := os.Environ()
@@ -206,6 +211,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVarP(&dryRunF, "dryrun", "n", false, "Print the ordered plan without running any target body")
 	cmd.Flags().BoolVar(&outGroupF, "output-group", false, "Fold each target's output in GitHub ::group::/::endgroup:: markers (auto-on under GITHUB_ACTIONS)")
 	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")
+	cmd.Flags().BoolVar(&timingsF, "timings", false, "Report recorded per-target durations, total (T) and longest (L); runs nothing")
 	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
 	cmd.Flags().BoolVar(&sandboxF, "sandbox", false, "Run target bodies through DAG_SANDBOX_CMD wrapper constraints")
 	cmd.Flags().BoolVar(&meshF, "mesh", false, "Dispatch Host:-tagged targets to another machine (control plane only; body fetches its own code/data)")
