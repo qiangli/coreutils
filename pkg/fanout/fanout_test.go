@@ -263,3 +263,99 @@ func TestPairInstancesExplicitToolFacetBinding(t *testing.T) {
 		}
 	}
 }
+
+// --- P-staging: dependency waves ---------------------------------------------
+
+func TestComputeWavesTopological(t *testing.T) {
+	inst := []Instance{
+		{Scope: "code"},
+		{Scope: "tests", Needs: []string{"code"}},
+		{Scope: "testdata", Needs: []string{"code"}},
+		{Scope: "review", Needs: []string{"tests", "testdata"}},
+	}
+	waves, err := computeWaves(inst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waves) != 3 {
+		t.Fatalf("want 3 waves, got %d: %v", len(waves), waves)
+	}
+	if len(waves[0]) != 1 || waves[0][0] != 0 {
+		t.Fatalf("wave 0 should be just code: %v", waves[0])
+	}
+	if len(waves[1]) != 2 { // tests + testdata in parallel
+		t.Fatalf("wave 1 should be tests+testdata: %v", waves[1])
+	}
+	if len(waves[2]) != 1 || waves[2][0] != 3 {
+		t.Fatalf("wave 2 should be review: %v", waves[2])
+	}
+}
+
+func TestComputeWavesErrors(t *testing.T) {
+	if _, err := computeWaves([]Instance{
+		{Scope: "a", Needs: []string{"b"}},
+		{Scope: "b", Needs: []string{"a"}},
+	}); err == nil {
+		t.Error("cycle must error")
+	}
+	if _, err := computeWaves([]Instance{
+		{Scope: "tests", Needs: []string{"code"}}, // no producer of "code"
+	}); err == nil {
+		t.Error("missing dependency scope must error")
+	}
+}
+
+// A dependent instance runs AFTER its dependency and sees its contribution.
+func TestRunStagedFeedsDependencyOutput(t *testing.T) {
+	b := newBoard(t)
+	_ = b.Seed("build a thing", nil, "alice")
+	inst := []Instance{
+		{Agent: "codex", Instruction: "write the code", Scope: "code"},
+		{Agent: "agy", Instruction: "write tests for the code", Scope: "tests", Needs: []string{"code"}},
+	}
+	// The fake launcher captures the prompt the tests agent receives, so we can
+	// assert it contained the code agent's posted output.
+	var testsPrompt string
+	fl := launcherFunc(func(ctx context.Context, agent, prompt string, _ time.Duration) (string, int, error) {
+		if agent == "agy" {
+			testsPrompt = prompt
+		}
+		return "output from " + agent, 0, nil
+	})
+	if _, err := Run(context.Background(), Config{Board: b, Instances: inst}, fl); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(testsPrompt, "output from codex") {
+		t.Fatalf("tests agent did not receive the code agent's contribution:\n%s", testsPrompt)
+	}
+	if !strings.Contains(testsPrompt, "prior work you depend on (code)") {
+		t.Fatalf("dependency section missing from tests prompt:\n%s", testsPrompt)
+	}
+}
+
+func TestPairInstancesAfterDependency(t *testing.T) {
+	inst := pairInstances([]string{"codex", "agy", "opencode"}, []string{
+		"codex code: implement it",
+		"agy tests after code: test it",
+		"opencode testdata after code,tests: make data",
+	})
+	if len(inst[0].Needs) != 0 {
+		t.Fatalf("code should have no deps: %v", inst[0].Needs)
+	}
+	if inst[1].Scope != "tests" || len(inst[1].Needs) != 1 || inst[1].Needs[0] != "code" {
+		t.Fatalf("tests dep parse: %+v", inst[1])
+	}
+	if inst[1].Instruction != "test it" {
+		t.Fatalf("tests instruction: %q", inst[1].Instruction)
+	}
+	if inst[2].Scope != "testdata" || len(inst[2].Needs) != 2 {
+		t.Fatalf("testdata deps: %+v", inst[2])
+	}
+}
+
+// launcherFunc adapts a func to the Launcher interface.
+type launcherFunc func(context.Context, string, string, time.Duration) (string, int, error)
+
+func (f launcherFunc) Launch(ctx context.Context, a, p string, to time.Duration) (string, int, error) {
+	return f(ctx, a, p, to)
+}

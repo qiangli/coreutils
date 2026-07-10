@@ -151,9 +151,21 @@ func newRunCmd() *cobra.Command {
 			instances := pairInstances(agents, instructions)
 			if dryRun {
 				out := cmd.OutOrStdout()
-				fmt.Fprintf(out, "board %q — %d instance(s):\n", b.Name(), len(instances))
-				for _, inst := range instances {
-					fmt.Fprintf(out, "  %-12s %-10s %s\n", inst.Agent, inst.Scope, inst.Instruction)
+				waves, werr := computeWaves(instances)
+				if werr != nil {
+					return werr
+				}
+				fmt.Fprintf(out, "board %q — %d instance(s) in %d wave(s):\n", b.Name(), len(instances), len(waves))
+				for w, wave := range waves {
+					fmt.Fprintf(out, "wave %d:\n", w)
+					for _, idx := range wave {
+						inst := instances[idx]
+						after := ""
+						if len(inst.Needs) > 0 {
+							after = "  (after " + strings.Join(inst.Needs, ",") + ")"
+						}
+						fmt.Fprintf(out, "  %-12s %-10s %s%s\n", inst.Agent, inst.Scope, inst.Instruction, after)
+					}
 				}
 				return nil
 			}
@@ -322,16 +334,30 @@ func pairInstances(agents, instructions []string) []Instance {
 				text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), fields[0]))
 			}
 		}
+		// Prefix grammar before the first ':' — `scope` or
+		// `scope after dep1,dep2` (the dependency form). A natural-language
+		// colon ("review this: thing") does not match and is left intact.
 		scope := fmt.Sprintf("lens-%d", i+1)
-		if idx := strings.Index(text, ":"); idx > 0 && idx < 24 && !strings.ContainsAny(text[:idx], " \t") {
-			scope = strings.TrimSpace(text[:idx])
-			text = strings.TrimSpace(text[idx+1:])
+		var needs []string
+		if idx := strings.Index(text, ":"); idx > 0 && idx < 60 {
+			pf := strings.Fields(strings.TrimSpace(text[:idx]))
+			if len(pf) == 1 || (len(pf) >= 3 && pf[1] == "after") {
+				scope = pf[0]
+				if len(pf) >= 3 && pf[1] == "after" {
+					for _, d := range strings.Split(strings.Join(pf[2:], ""), ",") {
+						if d = strings.TrimSpace(d); d != "" {
+							needs = append(needs, d)
+						}
+					}
+				}
+				text = strings.TrimSpace(text[idx+1:])
+			}
 		}
 		if agent == "" && len(agents) > 0 {
 			agent = strings.TrimSpace(agents[rr%len(agents)])
 			rr++
 		}
-		out = append(out, Instance{Agent: agent, Instruction: text, Scope: scope})
+		out = append(out, Instance{Agent: agent, Instruction: text, Scope: scope, Needs: needs})
 	}
 	return out
 }
