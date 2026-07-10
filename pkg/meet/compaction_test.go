@@ -47,24 +47,44 @@ OPEN QUESTIONS:
 SUMMARY:
 The group agreed on the P0 scope.
 It will iterate from there.`
-	dec, act, oq, sum := parseConverge(out)
-	if len(dec) != 2 || len(act) != 1 || len(oq) != 1 {
-		t.Fatalf("parse counts: dec=%d act=%d oq=%d", len(dec), len(act), len(oq))
+	syn := parseConverge(out)
+	if len(syn.Decisions) != 2 || len(syn.Actions) != 1 || len(syn.OpenQuestions) != 1 {
+		t.Fatalf("parse counts: dec=%d act=%d oq=%d", len(syn.Decisions), len(syn.Actions), len(syn.OpenQuestions))
 	}
-	if dec[0] != "ship the P0 verbs" || act[0] != "claude: file the minutes" {
-		t.Errorf("bad items: %v %v", dec, act)
+	if syn.Decisions[0].Text != "ship the P0 verbs" || syn.Actions[0] != "claude: file the minutes" {
+		t.Errorf("bad items: %v %v", syn.Decisions, syn.Actions)
 	}
-	if !strings.HasPrefix(sum, "The group agreed") || !strings.Contains(sum, "iterate") {
-		t.Errorf("summary joined wrong: %q", sum)
+	if !strings.HasPrefix(syn.Summary, "The group agreed") || !strings.Contains(syn.Summary, "iterate") {
+		t.Errorf("summary joined wrong: %q", syn.Summary)
 	}
 }
 
 func TestParseConvergeNone(t *testing.T) {
-	dec, act, oq, sum := parseConverge("DECISIONS:\nnone\nACTIONS:\nnone\nOPEN QUESTIONS:\nnone\nSUMMARY:\nNothing decided.")
-	if len(dec)+len(act)+len(oq) != 0 {
+	syn := parseConverge("DECISIONS:\nnone\nACTIONS:\nnone\nOPEN QUESTIONS:\nnone\nSUMMARY:\nNothing decided.")
+	if len(syn.Decisions)+len(syn.Actions)+len(syn.OpenQuestions) != 0 {
 		t.Errorf("'none' should yield no items")
 	}
-	if sum != "Nothing decided." {
-		t.Errorf("summary=%q", sum)
+	if syn.Summary != "Nothing decided." {
+		t.Errorf("summary=%q", syn.Summary)
+	}
+}
+
+// The secretary may INFER a decision from consensus, but the reader must always
+// be able to tell an inferred decision from a stated one — the label is the guard
+// against hallucinated consensus, not the mode.
+func TestParseConvergeMarksInferredDecisions(t *testing.T) {
+	syn := parseConverge("DECISIONS:\n- ship the P0 verbs\n- (inferred) cert bypasses the atomizer\n" +
+		"RISKS:\n- the fd race is unfixed\nCORRECTIONS:\n- chunks=1 is not unchunked\nSUMMARY:\nok.")
+	if len(syn.Decisions) != 2 {
+		t.Fatalf("want 2 decisions, got %d", len(syn.Decisions))
+	}
+	if syn.Decisions[0].Inferred {
+		t.Error("stated decision must not be marked inferred")
+	}
+	if !syn.Decisions[1].Inferred || syn.Decisions[1].Text != "cert bypasses the atomizer" {
+		t.Errorf("inferred decision mis-parsed: %+v", syn.Decisions[1])
+	}
+	if len(syn.Risks) != 1 || len(syn.Corrections) != 1 {
+		t.Errorf("risks=%v corrections=%v", syn.Risks, syn.Corrections)
 	}
 }

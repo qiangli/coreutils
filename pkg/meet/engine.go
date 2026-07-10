@@ -1,8 +1,11 @@
 package meet
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -142,30 +145,73 @@ func turnTimeout(st *State) time.Duration {
 	return 20 * time.Minute
 }
 
-// runTurn invokes one participant and appends its turn to the transcript.
-func runTurn(ctx context.Context, st *State, name, question string, runner chat.Runner) (Event, error) {
+// isTimeout distinguishes a per-turn deadline from an ordinary crash. The agent
+// is killed by exec's context, which surfaces as "signal: killed" rather than
+// context.DeadlineExceeded, so the elapsed time is the reliable signal — with a
+// slack margin because the kill races the deadline.
+func isTimeout(err error, elapsed, budget time.Duration) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return budget > 0 && elapsed >= budget-2*time.Second
+}
+
+// invokeAgent runs one agent turn and classifies the outcome. The classification
+// is the whole point: "opencode returned no content" is useless to an operator
+// who cannot tell a timeout from a crash from a considered silence.
+func invokeAgent(ctx context.Context, st *State, name, role, instruction, question string, runner chat.Runner) (Event, error) {
 	events, _ := readTranscript(st.ID)
+	budget := turnTimeout(st)
+	start := time.Now()
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       name,
-		Instruction: turnPrompt(st, question),
+		Role:        role,
+		Instruction: instruction,
 		Context:     []string{transcriptContext(events)},
+		Files:       st.Context, // every participant reviews the same source set
 		Cwd:         st.Cwd,
-		Timeout:     turnTimeout(st),
+		Timeout:     budget,
 	}, runner)
-	ev := Event{Round: st.Round, Speaker: name, Role: "participant", Kind: "turn", TS: nowFn()}
-	if err != nil {
+	elapsed := time.Since(start)
+
+	ev := Event{
+		Round: st.Round, Speaker: name, Role: "participant", Kind: "turn",
+		Question: question, TS: nowFn(),
+		ExitCode: res.ExitCode, DurMS: elapsed.Milliseconds(),
+	}
+	switch {
+	case err != nil && isTimeout(err, elapsed, budget):
+		ev.Status = statusTimeout
+		ev.Text = fmt.Sprintf("(%s timed out after %s)", name, budget)
+	case err != nil:
 		// A failed turn is recorded as a SHORT marker — never the raw error
 		// output (agent CLI banners/tracebacks would pollute the transcript and,
 		// replayed as context, crash the next agent). It is not offloaded.
+		ev.Status = statusError
 		ev.Text = fmt.Sprintf("(%s unavailable this turn: %s)", name, oneLine(sanitizeTurn(shortErr(res.Output, err))))
-	} else {
-		ev.Text = sanitizeTurn(res.Output)
-		if ev.Text == "" {
+	default:
+		text := sanitizeTurn(res.Output)
+		ev.Chars = len(text)
+		switch {
+		case text == "":
+			ev.Status = statusEmpty
 			ev.Text = fmt.Sprintf("(%s returned no content)", name)
-		} else {
+		case st.MinTurnChars > 0 && len(text) < st.MinTurnChars:
+			ev.Status = statusShort
+			ev.Text = text
+			ev.File = writeTurnFile(st.ID, ev)
+		default:
+			ev.Status = statusOK
+			ev.Text = text
 			ev.File = writeTurnFile(st.ID, ev) // offload full text for read-on-demand
 		}
 	}
+	return ev, err
+}
+
+// runTurn invokes one participant and appends its turn to the transcript.
+func runTurn(ctx context.Context, st *State, name, question string, runner chat.Runner) (Event, error) {
+	ev, err := invokeAgent(ctx, st, name, "", turnPrompt(st, question), question, runner)
 	if aerr := appendEvent(st.ID, ev); aerr != nil {
 		return ev, aerr
 	}
@@ -255,73 +301,153 @@ func oneLine(s string) string {
 	return s
 }
 
-// renderMinutes builds the deterministic minutes document. Decisions and
-// action-items come only from explicit markers (the secretary never decides);
-// summary is an optional secretary-authored prose block.
-func renderMinutes(st *State, events []Event, summary string, openQ []string) string {
+// minutesTurnChars bounds one turn's full text in the published minutes. The
+// per-turn file always holds the complete bytes, so nothing is lost — but the
+// minutes must carry the ARGUMENT, not a 240-char ellipsis of it.
+const minutesTurnChars = 4000
+
+// blockquote renders a turn's full text as a markdown blockquote, capped, with a
+// pointer to the complete per-turn file when it was truncated.
+func blockquote(text, file string) string {
+	t := strings.TrimSpace(text)
+	truncated := false
+	if len(t) > minutesTurnChars {
+		t = strings.TrimSpace(t[:minutesTurnChars])
+		truncated = true
+	}
+	var b strings.Builder
+	for line := range strings.SplitSeq(t, "\n") {
+		fmt.Fprintf(&b, "> %s\n", line)
+	}
+	if truncated {
+		if file != "" {
+			fmt.Fprintf(&b, ">\n> *(truncated — full text: `%s`)*\n", redactHome(file))
+		} else {
+			b.WriteString(">\n> *(truncated)*\n")
+		}
+	}
+	return b.String()
+}
+
+// renderMinutes builds the deterministic minutes document.
+//
+// Decisions and action items come from explicit human markers in the transcript
+// PLUS the secretary's synthesis; inferred decisions are labelled so a reader can
+// always tell what was stated from what was read out of a consensus.
+func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Meeting — %s\n", st.Topic)
-	fmt.Fprintf(&b, "Date: %s  ·  Session: %s\n", st.Created.Format("2006-01-02 15:04"), st.ID)
+	fmt.Fprintf(&b, "Date: %s  ·  Session: `%s`\n", st.Created.Format("2006-01-02 15:04"), st.ID)
+	fmt.Fprintf(&b, "Initiator: %s\n", st.initiatorLabel())
+
 	attendees := []string{st.Human + " (human)"}
 	for _, p := range st.Participants {
 		attendees = append(attendees, p+" (participant)")
 	}
 	attendees = append(attendees, st.Secretary+" (secretary)")
-	fmt.Fprintf(&b, "Attendees: %s\n\n", strings.Join(attendees, " · "))
+	fmt.Fprintf(&b, "Attendees: %s\n", strings.Join(attendees, " · "))
+	if len(st.Context) > 0 {
+		fmt.Fprintf(&b, "Context reviewed: %s\n", strings.Join(st.Context, " · "))
+	}
+	b.WriteString("\n")
 	if len(st.Agenda) > 0 {
 		fmt.Fprintf(&b, "Agenda: %s\n\n", strings.Join(st.Agenda, " · "))
 	}
 
-	var decisions, actions []string
+	if syn != nil && strings.TrimSpace(syn.Summary) != "" {
+		fmt.Fprintf(&b, "## Summary\n%s\n\n", redactHome(syn.Summary))
+	}
+
+	// Explicit human markers first — they are authoritative and never inferred.
+	var decisions []Decision
+	var actions []string
 	for _, e := range events {
 		switch e.Kind {
 		case "decision":
-			decisions = append(decisions, e.Text)
+			decisions = append(decisions, Decision{Text: e.Text})
 		case "action":
 			actions = append(actions, e.Text)
 		}
 	}
+	if syn != nil {
+		decisions = append(decisions, syn.Decisions...)
+		actions = append(actions, syn.Actions...)
+	}
+
 	b.WriteString("## Decisions\n")
 	if len(decisions) == 0 {
-		b.WriteString("(none recorded — discussed without an explicit /decision)\n")
+		b.WriteString("(none — the meeting reached no decision)\n")
 	} else {
 		for i, d := range decisions {
-			fmt.Fprintf(&b, "%d. %s\n", i+1, d)
+			tag := ""
+			if d.Inferred {
+				tag = " *(inferred from consensus"
+				if len(d.Support) > 0 {
+					tag += "; agreed: " + strings.Join(d.Support, ", ")
+				}
+				tag += ")*"
+			}
+			fmt.Fprintf(&b, "%d. %s%s\n", i+1, redactHome(d.Text), tag)
 		}
 	}
+
 	b.WriteString("\n## Action items\n")
 	if len(actions) == 0 {
 		b.WriteString("(none)\n")
 	} else {
 		for _, a := range actions {
-			fmt.Fprintf(&b, "- [ ] %s\n", a)
+			fmt.Fprintf(&b, "- [ ] %s\n", redactHome(a))
 		}
 	}
-	if len(openQ) > 0 {
-		b.WriteString("\n## Open questions\n")
-		for _, q := range openQ {
-			fmt.Fprintf(&b, "- %s\n", q)
-		}
+
+	if syn != nil {
+		writeList(&b, "Risks", syn.Risks)
+		writeList(&b, "Open questions", syn.OpenQuestions)
+		writeList(&b, "Corrections / revised framing", syn.Corrections)
 	}
-	if s := strings.TrimSpace(summary); s != "" {
-		fmt.Fprintf(&b, "\n## Summary\n%s\n", s)
-	}
+
+	renderPolls(&b, events)
+
+	b.WriteString("\n## Participant coverage\n\n")
+	writeCoverageTable(&b, coverage(st, events))
+
 	b.WriteString("\n## Notes (turns)\n")
 	for _, e := range events {
-		if e.Kind == "turn" || e.Kind == "human" {
-			fmt.Fprintf(&b, "- **%s:** %s\n", e.Speaker, oneLine(e.Text))
+		switch e.Kind {
+		case "human":
+			fmt.Fprintf(&b, "\n**%s** (human):\n\n%s", e.Speaker, blockquote(redactHome(e.Text), ""))
+		case "turn":
+			status := statusOf(e)
+			label := fmt.Sprintf("\n**%s** (round %d", e.Speaker, e.Round)
+			if status != statusOK {
+				label += ", " + status
+			}
+			label += "):\n\n"
+			b.WriteString(label)
+			b.WriteString(blockquote(redactHome(e.Text), e.File))
+		case "confirm":
+			fmt.Fprintf(&b, "\n**%s** (conclusion confirmed): %s\n", e.Speaker, oneLine(redactHome(e.Text)))
 		}
 	}
+
 	dir, _ := storeDir(st.ID)
-	fmt.Fprintf(&b, "\nTranscript: %s\n", filepath.Join(dir, "transcript.jsonl"))
+	fmt.Fprintf(&b, "\nTranscript: `%s`\n", redactHome(filepath.Join(dir, "transcript.jsonl")))
 	return b.String()
 }
 
-// turnFailed reports whether a turn event is a failure marker (from runTurn).
-func turnFailed(e Event) bool {
-	return strings.HasPrefix(e.Text, "(") &&
-		(strings.Contains(e.Text, "unavailable this turn") || strings.Contains(e.Text, "returned no content"))
+func writeList(b *strings.Builder, title string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n## %s\n", title)
+	for _, it := range items {
+		fmt.Fprintf(b, "- %s\n", redactHome(it))
+	}
 }
+
+// turnFailed reports whether a turn event failed to contribute. An abstention on
+// an optional question is NOT a failure.
+func turnFailed(e Event) bool { return !contributed(e) }
 
 // recordOperability folds each participant's per-turn outcome into the capability
 // matrix's operability column (the self-updating loop). Operability is
@@ -333,61 +459,110 @@ func recordOperability(st *State, events []Event) {
 		seat[p] = true
 	}
 	for _, e := range events {
-		if e.Kind != "turn" || !seat[e.Speaker] {
+		if e.Kind != "turn" && e.Kind != "vote" {
 			continue
 		}
+		if !seat[e.Speaker] {
+			continue
+		}
+		// An abstention on an optional question is a clean turn: the tool ran and
+		// the agent chose to say nothing. Only real failures net down.
 		_ = capability.RecordOperability(e.Speaker, !turnFailed(e))
 	}
 }
 
-// hasMarkers reports whether the transcript already carries decision/action
-// markers (so converge doesn't duplicate what a human already marked).
-func hasMarkers(events []Event) bool {
-	for _, e := range events {
-		if e.Kind == "decision" || e.Kind == "action" {
-			return true
-		}
+// convergeInstruction builds the secretary's prompt. The decision mode is the
+// load-bearing knob: `explicit` extracts only decisions a participant stated
+// outright, `infer` additionally lets the secretary name a decision the meeting
+// clearly converged on — which is what stops a meeting that plainly agreed on
+// four things from filing "Decisions: none recorded".
+//
+// The guard against hallucinated consensus is not the mode, it is the label: an
+// inferred decision is marked as such, and inference is still forbidden from
+// inventing a position no participant took.
+func convergeInstruction(mode string) string {
+	var b strings.Builder
+	b.WriteString("You are the meeting secretary (notes only). Read the transcript and report what happened. " +
+		"You do not participate, propose, vote, or decide.\n\n")
+	if mode == "explicit" {
+		b.WriteString("DECISIONS: list ONLY decisions a participant stated outright as decided. " +
+			"If the meeting converged on something but nobody declared it a decision, it is an OPEN QUESTION, not a decision.\n\n")
+	} else {
+		b.WriteString("DECISIONS: list decisions a participant stated outright, AND decisions the meeting clearly " +
+			"converged on. A convergence needs BOTH a proposal and an acceptance: one participant proposed it and at " +
+			"least one other AGREED, and nobody dissented. Prefix every converged-but-undeclared item with the literal " +
+			"token (inferred) and end it with the literal token [agreed: name1, name2] naming the participants who " +
+			"proposed and agreed. Discussing an option is NOT agreeing to it. Never invent a position no participant " +
+			"actually took — if you are unsure whether it was agreed, it is an OPEN QUESTION, not a decision.\n\n")
 	}
-	return false
+	b.WriteString("Output EXACTLY these sections, each as '- ' bullet lines, writing 'none' when empty:\n" +
+		"DECISIONS:\nACTIONS:\nRISKS:\nOPEN QUESTIONS:\nCORRECTIONS:\nSUMMARY:\n\n" +
+		"ACTIONS name an owner when one was stated. RISKS are hazards a participant raised. " +
+		"CORRECTIONS are claims in the topic, agenda, or earlier framing that the meeting corrected or superseded — " +
+		"so a reader does not mistake stale framing for an endorsed premise. " +
+		"SUMMARY is 2-4 neutral sentences.")
+	return b.String()
 }
 
-// converge runs the secretary's synthesis pass: it EXTRACTS decisions, action
-// items, and open questions as stated (never invents), records the decisions and
-// actions as durable markers, and returns the open questions + a short summary.
-// It is the difference between a filed transcript and filed minutes.
-func converge(ctx context.Context, st *State, runner chat.Runner) (openQ []string, summary string) {
+// converge runs the secretary's synthesis pass and persists the result to
+// synthesis.json (latest pass wins). Safe to re-run: it never appends markers to
+// the transcript, so `meet amend` cannot duplicate anything.
+func converge(ctx context.Context, st *State, runner chat.Runner) (*Synthesis, error) {
 	if st.Secretary == "" {
-		return nil, ""
+		return nil, fmt.Errorf("meet: no secretary configured for %s", st.ID)
 	}
 	events, _ := readTranscript(st.ID)
-	instr := "You are the meeting secretary (notes only). From the transcript, extract ONLY what participants actually said — do not invent, do not decide, do not opine. Output EXACTLY these four sections, each as '- ' bullet lines (write 'none' if empty):\n" +
-		"DECISIONS:\nACTIONS:\nOPEN QUESTIONS:\nSUMMARY:\n" +
-		"(SUMMARY is 2-4 neutral sentences. An ACTION should name an owner if one was stated.)"
 	res, err := chat.Invoke(ctx, chat.Options{
-		Agent: st.Secretary, Role: "secretary", Instruction: instr,
+		Agent: st.Secretary, Role: "secretary", Instruction: convergeInstruction(st.decisionMode()),
 		Context: []string{transcriptContext(events)}, Cwd: st.Cwd, Timeout: turnTimeout(st),
 	}, runner)
 	if err != nil {
-		return nil, ""
+		return nil, fmt.Errorf("meet: secretary %s failed: %w", st.Secretary, err)
 	}
-	clean := sanitizeTurn(res.Output)
-	dec, act, oq, sum := parseConverge(clean)
-	if sum == "" && len(dec) == 0 && len(act) == 0 && len(oq) == 0 {
-		sum = strings.TrimSpace(clean) // unsectioned reply → treat as the summary
+	syn := parseConverge(sanitizeTurn(res.Output))
+	syn.demoteUnsupported() // an inferred decision with no named acceptance is an open question
+	syn.By, syn.At, syn.Mode = st.Secretary, nowFn(), st.decisionMode()
+	if err := syn.save(st.ID); err != nil {
+		return nil, err
 	}
-	if !hasMarkers(events) { // don't double-record if a human already marked
-		for _, d := range dec {
-			_, _ = record(st, "decision", st.Secretary, "secretary", d)
-		}
-		for _, a := range act {
-			_, _ = record(st, "action", st.Secretary, "secretary", a)
-		}
-	}
-	return oq, sum
+	return syn, nil
 }
 
-// parseConverge splits the secretary's labeled output into sections.
-func parseConverge(s string) (dec, act, oq []string, summary string) {
+// supportTag matches the trailing `[agreed: codex, claude]` grounding token.
+var supportTag = regexp.MustCompile(`(?i)\[\s*agreed\s*:\s*([^\]]*)\]`)
+
+// parseDecision pulls the `(inferred)` prefix and the `[agreed: …]` support list
+// off one decision line.
+func parseDecision(item string) Decision {
+	d := Decision{Text: item}
+	if m := supportTag.FindStringSubmatch(d.Text); m != nil {
+		for _, name := range strings.Split(m[1], ",") {
+			if n := strings.TrimSpace(name); n != "" {
+				d.Support = append(d.Support, n)
+			}
+		}
+		d.Text = strings.TrimSpace(supportTag.ReplaceAllString(d.Text, ""))
+	}
+	if rest, ok := cutPrefixFold(d.Text, "(inferred)"); ok {
+		d.Inferred = true
+		d.Text = strings.TrimSpace(rest)
+	}
+	d.Text = strings.TrimSpace(strings.Trim(d.Text, "—- "))
+	return d
+}
+
+// cutPrefixFold is strings.CutPrefix, case-insensitive.
+func cutPrefixFold(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
+		return s[len(prefix):], true
+	}
+	return s, false
+}
+
+// parseConverge splits the secretary's labeled output into a Synthesis. An
+// unsectioned reply degrades to a summary rather than being dropped.
+func parseConverge(s string) *Synthesis {
+	syn := &Synthesis{}
 	cur := ""
 	var sumParts []string
 	for line := range strings.SplitSeq(s, "\n") {
@@ -399,8 +574,14 @@ func parseConverge(s string) (dec, act, oq []string, summary string) {
 		case strings.HasPrefix(up, "ACTION"):
 			cur = "a"
 			continue
+		case strings.HasPrefix(up, "RISK"):
+			cur = "r"
+			continue
 		case strings.HasPrefix(up, "OPEN QUESTION"):
 			cur = "q"
+			continue
+		case strings.HasPrefix(up, "CORRECTION"):
+			cur = "c"
 			continue
 		case strings.HasPrefix(up, "SUMMARY"):
 			cur = "s"
@@ -415,31 +596,166 @@ func parseConverge(s string) (dec, act, oq []string, summary string) {
 		}
 		switch cur {
 		case "d":
-			dec = append(dec, item)
+			syn.Decisions = append(syn.Decisions, parseDecision(item))
 		case "a":
-			act = append(act, item)
+			syn.Actions = append(syn.Actions, item)
+		case "r":
+			syn.Risks = append(syn.Risks, item)
 		case "q":
-			oq = append(oq, item)
+			syn.OpenQuestions = append(syn.OpenQuestions, item)
+		case "c":
+			syn.Corrections = append(syn.Corrections, item)
 		case "s":
 			sumParts = append(sumParts, item)
 		}
 	}
-	return dec, act, oq, strings.TrimSpace(strings.Join(sumParts, " "))
+	syn.Summary = strings.TrimSpace(strings.Join(sumParts, " "))
+	if syn.Summary == "" && len(syn.Decisions)+len(syn.Actions)+len(syn.Risks)+len(syn.OpenQuestions)+len(syn.Corrections) == 0 {
+		syn.Summary = strings.TrimSpace(s) // unsectioned reply → treat as the summary
+	}
+	return syn
 }
 
-// closeMeeting converges (optionally) and writes the minutes.
-func closeMeeting(ctx context.Context, st *State, synth bool, runner chat.Runner) (string, error) {
-	var openQ []string
-	summary := ""
-	if synth {
-		openQ, summary = converge(ctx, st, runner)
+// ErrDeclined is returned when the initiator refuses to conclude the meeting.
+var ErrDeclined = errors.New("meet: initiator declined to conclude the meeting")
+
+// isTerminal reports whether r is an interactive terminal we may prompt on.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
 	}
-	events, err := readTranscript(st.ID) // re-read: converge may have recorded markers
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// confirmConclusion asks the meeting's INITIATOR whether it may end, and records
+// the answer. A human initiator is prompted on the terminal; an agent initiator
+// is asked through the secretary's own channel, which is what lets an agent
+// convene a meeting as a tool call and stay in control of when it ends.
+//
+// `yes` is the operator's explicit unattended override; it is recorded, not
+// silent.
+func confirmConclusion(ctx context.Context, st *State, in io.Reader, out io.Writer, yes bool, runner chat.Runner) error {
+	who, kind := st.initiatorName(), st.initiatorKind()
+	if yes {
+		_, _ = record(st, "confirm", who, kind, "concluded without prompting (--yes)")
+		return nil
+	}
+
+	events, _ := readTranscript(st.ID)
+	syn := loadSynthesis(st.ID)
+	var dec, act int
+	if syn != nil {
+		dec, act = len(syn.Decisions), len(syn.Actions)
+	}
+	brief := fmt.Sprintf("%d rounds, %d turns, %d decisions, %d action items", st.Round, countKind(events, "turn"), dec, act)
+
+	if kind == "agent" {
+		instr := fmt.Sprintf(
+			"You convened this meeting (topic: %q). It has run %s. The secretary's synthesis is in the transcript below.\n\n"+
+				"Has the meeting achieved what you convened it for? Reply on the FIRST line with EXACTLY one word: "+
+				"CONCLUDE or CONTINUE. On the next line give one sentence of reason.", st.Topic, brief)
+		ev, err := invokeAgent(ctx, st, who, "initiator", instr, "conclude?", runner)
+		if err != nil {
+			return fmt.Errorf("meet: could not reach initiator %s to confirm conclusion: %w", who, err)
+		}
+		verdict, reason := parseVerdict(ev.Text)
+		_, _ = record(st, "confirm", who, "agent", fmt.Sprintf("%s — %s", verdict, reason))
+		if verdict != "CONCLUDE" {
+			fmt.Fprintf(out, "meet: initiator %s asked to CONTINUE: %s\n", who, reason)
+			return ErrDeclined
+		}
+		return nil
+	}
+
+	if !isTerminal(in) {
+		return fmt.Errorf("meet: %s must confirm the meeting may end, but stdin is not a terminal; pass --yes for an unattended close", who)
+	}
+	fmt.Fprintf(out, "\nmeet: %s — %s\nEnd the meeting and file the minutes? [y/N] ", st.ID, brief)
+	sc := bufio.NewScanner(in)
+	if !sc.Scan() {
+		return fmt.Errorf("meet: no confirmation received; pass --yes for an unattended close")
+	}
+	switch strings.ToLower(strings.TrimSpace(sc.Text())) {
+	case "y", "yes":
+		_, _ = record(st, "confirm", who, "human", "confirmed at the prompt")
+		return nil
+	}
+	return ErrDeclined
+}
+
+// parseVerdict pulls CONCLUDE/CONTINUE plus a reason out of an agent's reply.
+// Defaults to CONTINUE: an unparseable answer must not end someone's meeting.
+func parseVerdict(text string) (verdict, reason string) {
+	verdict = "CONTINUE"
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for i, l := range lines {
+		up := strings.ToUpper(l)
+		switch {
+		case strings.Contains(up, "CONCLUDE"):
+			verdict = "CONCLUDE"
+		case strings.Contains(up, "CONTINUE"):
+			verdict = "CONTINUE"
+		default:
+			continue
+		}
+		reason = strings.TrimSpace(strings.Join(lines[i+1:], " "))
+		if reason == "" {
+			reason = oneLine(text)
+		}
+		return verdict, oneLine(reason)
+	}
+	return verdict, "no CONCLUDE/CONTINUE verdict in the reply — defaulting to CONTINUE"
+}
+
+func countKind(events []Event, kind string) int {
+	n := 0
+	for _, e := range events {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// closeOptions controls the close path. Synthesize runs the secretary; Confirm
+// gates the close on the initiator's agreement.
+type closeOptions struct {
+	Synthesize bool
+	Confirm    bool
+	Yes        bool
+	In         io.Reader
+	Out        io.Writer
+}
+
+// closeMeeting converges, asks the initiator to confirm, then writes the minutes.
+func closeMeeting(ctx context.Context, st *State, opt closeOptions, runner chat.Runner) (string, error) {
+	if opt.Out == nil {
+		opt.Out = io.Discard
+	}
+	if opt.Synthesize {
+		if _, err := converge(ctx, st, runner); err != nil {
+			fmt.Fprintf(opt.Out, "meet: ⚠ secretary pass failed, filing without a synthesis: %v\n", err)
+		}
+	}
+	if opt.Confirm {
+		if err := confirmConclusion(ctx, st, opt.In, opt.Out, opt.Yes, runner); err != nil {
+			return "", err
+		}
+	}
+	return fileMinutes(st)
+}
+
+// fileMinutes renders and writes the minutes from whatever is on disk. It is the
+// shared tail of `close` and `amend`.
+func fileMinutes(st *State) (string, error) {
+	events, err := readTranscript(st.ID)
 	if err != nil {
 		return "", err
 	}
 	recordOperability(st, events) // self-update the capability matrix from this meeting
-	md := renderMinutes(st, events, summary, openQ)
+	md := renderMinutes(st, events, loadSynthesis(st.ID))
 	path := minutesPath(st)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err

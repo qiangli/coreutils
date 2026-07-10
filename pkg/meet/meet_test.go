@@ -98,7 +98,7 @@ func TestCloseWritesMinutesWithMarkers(t *testing.T) {
 	_, _ = record(st, "decision", "qiangli", "", "P0 verbs = start, round, close, list")
 	_, _ = record(st, "action", "qiangli", "", "claude: strike deferred verbs")
 
-	path, err := closeMeeting(context.Background(), st, true, fakeRunner{reply: "Discussed and agreed the P0 verb set."})
+	path, err := closeMeeting(context.Background(), st, closeOptions{Synthesize: true}, fakeRunner{reply: "Discussed and agreed the P0 verb set."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,10 @@ func TestCommandTreeWiring(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		names[c.Name()] = true
 	}
-	for _, v := range []string{"start", "tell", "round", "close", "list", "resume"} {
+	for _, v := range []string{
+		"start", "consult", "tell", "round", "poll", "ask",
+		"converge", "close", "amend", "apply", "show", "contributions", "list", "resume",
+	} {
 		if !names[v] {
 			t.Fatalf("missing subcommand %q", v)
 		}

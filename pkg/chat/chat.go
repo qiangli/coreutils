@@ -96,6 +96,14 @@ func (execRunner) Run(ctx context.Context, agent string, args []string, cwd stri
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Because Stdout/Stderr are buffers rather than *os.File, os/exec pipes them
+	// through copying goroutines, and Wait blocks until EVERY writer closes the
+	// pipe. An agent CLI that spawns children (a shell, a language server) leaves
+	// those children holding it, so killing the agent on ctx cancellation does NOT
+	// unblock Wait — the "a wedged agent can't hang the round" timeout silently
+	// waits for the grandchild instead. WaitDelay bounds that: after the context
+	// ends, Wait gives the pipes this long to drain, then closes them and returns.
+	cmd.WaitDelay = 5 * time.Second
 	err := cmd.Run()
 	out := stdout.String()
 	if ctx.Err() != nil {

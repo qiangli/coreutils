@@ -2,11 +2,16 @@ package meet
 
 import (
 	"bufio"
+	"context"
 	_ "embed"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/spf13/cobra"
@@ -19,6 +24,31 @@ import (
 //go:embed reference.md
 var referenceMD string
 
+// meetDepthEnv bounds recursion. `meet` spawns agent CLIs, and those agents can
+// call `bashy meet` themselves — so a panelist could convene a panel, whose
+// panelists convene panels, forking exponentially and unboundedly. The depth
+// marker is exported into every spawned agent's environment; convening from
+// inside a meeting is refused.
+const meetDepthEnv = "BASHY_MEET_DEPTH"
+
+func meetDepth() int {
+	n, _ := strconv.Atoi(strings.TrimSpace(os.Getenv(meetDepthEnv)))
+	return n
+}
+
+// guardDepth refuses to convene a meeting from inside one.
+func guardDepth() error {
+	if d := meetDepth(); d >= 1 {
+		return fmt.Errorf("meet: refusing to convene a meeting from inside a meeting (%s=%d).\n"+
+			"      A participant must contribute a turn, not convene its own panel — that recursion is unbounded.\n"+
+			"      If you are an agent that needs a second opinion, say so in your turn and let the chair decide", meetDepthEnv, d)
+	}
+	return nil
+}
+
+// markDepth stamps the environment inherited by every agent this process spawns.
+func markDepth() { _ = os.Setenv(meetDepthEnv, strconv.Itoa(meetDepth()+1)) }
+
 // NewMeetCmd returns the `bashy meet` command tree.
 func NewMeetCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -26,10 +56,16 @@ func NewMeetCmd() *cobra.Command {
 		Short: "multi-participant deliberation session with a notes-only secretary",
 		Long: "Run a turn-taking planning meeting across agentic CLIs and a human.\n" +
 			"A dedicated notes-only secretary keeps the minutes and files them to\n" +
-			"docs/meetings/ on close. Run `bashy meet reference` for the full guide.",
+			"docs/meetings/ on close. Agents can convene a one-shot panel with\n" +
+			"`bashy meet consult`. Run `bashy meet reference` for the full guide.",
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.AddCommand(newStartCmd(), newTellCmd(), newRoundCmd(), newConvergeCmd(), newCloseCmd(), newListCmd(), newResumeCmd(), newReferenceCmd())
+	cmd.AddCommand(
+		newStartCmd(), newConsultCmd(), newTellCmd(), newRoundCmd(),
+		newPollCmd(), newAskCmd(),
+		newConvergeCmd(), newCloseCmd(), newAmendCmd(), newApplyCmd(),
+		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
+	)
 	return cmd
 }
 
@@ -40,37 +76,6 @@ func newReferenceCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Fprint(cmd.OutOrStdout(), referenceMD)
-			return nil
-		},
-	}
-}
-
-func newConvergeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "converge <id>",
-		Short: "secretary pass: extract decisions, action items, and open questions (records them)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := loadState(args[0])
-			if err != nil {
-				return err
-			}
-			openQ, summary := converge(cmd.Context(), st, nil)
-			w := cmd.OutOrStdout()
-			events, _ := readTranscript(st.ID)
-			var dec, act int
-			for _, e := range events {
-				switch e.Kind {
-				case "decision":
-					dec++
-				case "action":
-					act++
-				}
-			}
-			fmt.Fprintf(w, "converged: %d decisions, %d action items, %d open questions recorded\n", dec, act, len(openQ))
-			if summary != "" {
-				fmt.Fprintf(w, "summary: %s\n", oneLine(summary))
-			}
 			return nil
 		},
 	}
@@ -110,6 +115,7 @@ func shellRouting(name string) string {
 func printPreview(w io.Writer, st *State) {
 	fmt.Fprintln(w, "meet: resolved session")
 	fmt.Fprintf(w, "  id           %s\n", st.ID)
+	fmt.Fprintf(w, "  initiator    %s\n", st.initiatorLabel())
 	fmt.Fprintf(w, "  secretary    %s  role=secretary (notes-only) — %s · %s\n", st.Secretary, drivability(st.Secretary), shellRouting(st.Secretary))
 	for i, p := range st.Participants {
 		label := "participants"
@@ -122,10 +128,13 @@ func printPreview(w io.Writer, st *State) {
 		fmt.Fprintln(w, "  participants (none)")
 	}
 	fmt.Fprintf(w, "  human        %s\n", st.Human)
+	if len(st.Context) > 0 {
+		fmt.Fprintf(w, "  context      %s\n", strings.Join(st.Context, ", "))
+	}
 	dir, _ := storeDir(st.ID)
-	fmt.Fprintf(w, "  store        %s/\n", dir)
-	fmt.Fprintf(w, "  minutes →    %s\n", minutesPath(st))
-	fmt.Fprintf(w, "  turn model   %s round-robin\n", st.Mode)
+	fmt.Fprintf(w, "  store        %s/\n", redactHome(dir))
+	fmt.Fprintf(w, "  minutes →    %s\n", redactHome(minutesPath(st)))
+	fmt.Fprintf(w, "  turn model   %s round-robin · decisions=%s\n", st.Mode, st.decisionMode())
 	for _, warn := range attendeeWarnings(st) {
 		fmt.Fprintf(w, "  ⚠ %s\n", warn)
 	}
@@ -148,29 +157,87 @@ func attendeeWarnings(st *State) []string {
 	return out
 }
 
+// sessionFlags are shared by `start` and `consult`.
+type sessionFlags struct {
+	topic         string
+	assistant     string
+	mode          string
+	out           string
+	turnTimeout   string
+	decisionMode  string
+	initiator     string
+	initiatorKind string
+	minTurnChars  int
+	participants  []string
+	agenda        []string
+	context       []string
+}
+
+func (sf *sessionFlags) bind(cmd *cobra.Command) {
+	f := cmd.Flags()
+	f.StringVar(&sf.topic, "topic", "", "meeting topic (required)")
+	f.StringVar(&sf.assistant, "assistant", "", "secretary agent (notes only; default claude)")
+	f.StringArrayVar(&sf.participants, "participant", nil, "participant agent (repeatable)")
+	f.StringArrayVar(&sf.agenda, "agenda", nil, "agenda item (repeatable)")
+	f.StringArrayVar(&sf.context, "context", nil, "file every participant reads before its first turn (repeatable)")
+	f.StringVar(&sf.mode, "mode", "sequential", "turn mode (P0: sequential)")
+	f.StringVar(&sf.out, "out", "docs", "filing target: docs | kb | <path>")
+	f.StringVar(&sf.turnTimeout, "turn-timeout", "20m", "per-turn agent timeout (e.g. 20m); a wedged agent can't hang the round")
+	f.StringVar(&sf.decisionMode, "decision-mode", "infer", "infer: the secretary may record a converged decision (tagged); explicit: only stated decisions")
+	f.StringVar(&sf.initiator, "initiator", "", "who convened the meeting and must confirm it may end (default: the human)")
+	f.StringVar(&sf.initiatorKind, "initiator-kind", "", "human | agent (default: human, or agent when --initiator names a participant)")
+	f.IntVar(&sf.minTurnChars, "min-turn-chars", 0, "a reply shorter than N chars counts as `short`, not a contribution")
+}
+
+func (sf *sessionFlags) newState() (*State, error) {
+	if strings.TrimSpace(sf.topic) == "" {
+		return nil, fmt.Errorf("meet: --topic is required")
+	}
+	if sf.assistant == "" {
+		sf.assistant = "claude" // dedicated notes-only secretary default
+	}
+	if sf.mode == "" {
+		sf.mode = "sequential"
+	}
+	kind := strings.TrimSpace(sf.initiatorKind)
+	if kind == "" {
+		// An --initiator that is not the human is, by construction, an agent.
+		if n := strings.TrimSpace(sf.initiator); n != "" && n != humanName() {
+			kind = "agent"
+		} else {
+			kind = "human"
+		}
+	}
+	for _, f := range sf.context {
+		if _, err := os.Stat(f); err != nil {
+			return nil, fmt.Errorf("meet: --context %s: %w", f, err)
+		}
+	}
+	cwd, _ := os.Getwd()
+	return &State{
+		ID: newID(sf.topic, nowFn()), Topic: sf.topic, Agenda: sf.agenda,
+		Secretary: sf.assistant, Participants: sf.participants, Human: humanName(),
+		Initiator: sf.initiator, InitiatorKind: kind,
+		DecisionMode: sf.decisionMode, MinTurnChars: sf.minTurnChars, Context: sf.context,
+		Mode: sf.mode, Status: "open", Cwd: cwd, Out: sf.out,
+		TurnTimeout: sf.turnTimeout, Created: nowFn(),
+	}, nil
+}
+
 func newStartCmd() *cobra.Command {
-	var topic, assistant, mode, out, turnTimeout string
-	var participants, agenda []string
+	var sf sessionFlags
 	var rounds int
-	var dry, nonInteractive bool
+	var dry, nonInteractive, yes bool
 	cmd := &cobra.Command{
 		Use:   "start --topic TEXT [--participant AGENT ...]",
 		Short: "start a meeting (enters the REPL unless --non-interactive)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(topic) == "" {
-				return fmt.Errorf("meet: --topic is required")
+			if err := guardDepth(); err != nil {
+				return err
 			}
-			if assistant == "" {
-				assistant = "claude" // dedicated notes-only secretary default
-			}
-			if mode == "" {
-				mode = "sequential"
-			}
-			cwd, _ := os.Getwd()
-			st := &State{
-				ID: newID(topic, nowFn()), Topic: topic, Agenda: agenda,
-				Secretary: assistant, Participants: participants, Human: humanName(),
-				Mode: mode, Status: "open", Cwd: cwd, Out: out, TurnTimeout: turnTimeout, Created: nowFn(),
+			st, err := sf.newState()
+			if err != nil {
+				return err
 			}
 			w := cmd.OutOrStdout()
 			printPreview(w, st)
@@ -181,41 +248,307 @@ func newStartCmd() *cobra.Command {
 			if err := st.save(); err != nil {
 				return err
 			}
-			for _, a := range agenda {
+			markDepth()
+			for _, a := range st.Agenda {
 				_, _ = record(st, "agenda", "chair", "", a)
 			}
-			if nonInteractive {
-				for i := 0; i < rounds; i++ {
-					q := ""
-					if i < len(agenda) {
-						q = agenda[i]
-					}
-					for _, e := range runRound(cmd.Context(), st, q, nil) {
-						fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
-					}
+			if !nonInteractive {
+				return repl(cmd, st)
+			}
+			for i := 0; i < rounds; i++ {
+				q := ""
+				if i < len(st.Agenda) {
+					q = st.Agenda[i]
 				}
-				path, err := closeMeeting(cmd.Context(), st, true, nil)
+				for _, e := range runRound(cmd.Context(), st, q, nil) {
+					fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
+				}
+			}
+			// An unattended run cannot prompt a human; an agent initiator is still
+			// asked, because that is the whole point of agent-initiated meetings.
+			autoYes := yes || st.initiatorKind() == "human"
+			path, err := closeMeeting(cmd.Context(), st, closeOptions{
+				Synthesize: true, Confirm: true, Yes: autoYes,
+				In: cmd.InOrStdin(), Out: w,
+			}, nil)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(w, "wrote %s\n", redactHome(path))
+			return nil
+		},
+	}
+	sf.bind(cmd)
+	f := cmd.Flags()
+	f.IntVar(&rounds, "rounds", 1, "rounds to run in --non-interactive mode")
+	f.BoolVar(&dry, "dry-run", false, "print the resolved session and exit")
+	f.BoolVar(&nonInteractive, "non-interactive", false, "run rounds then close, no REPL")
+	f.BoolVar(&yes, "yes", false, "close without asking the initiator to confirm")
+	return cmd
+}
+
+// Consult outcomes. Disagreement is a FIRST-CLASS result, not an error: the one
+// thing a calling agent must never do is read `summary` from a panel that did not
+// converge and act on it as an answer.
+const (
+	verdictAgree    = "agree"    // decisive, complete panel — safe to act on
+	verdictSplit    = "split"    // the panel genuinely disagreed — you decide
+	verdictEscalate = "escalate" // the panel could not answer (seats failed, or nothing decided)
+)
+
+// Exit codes, mirroring the convention agent-callable gates converge on:
+// 0 = act on it · 1 = a decision exists but blocking issues were raised ·
+// 2 = do not proceed on this alone.
+const (
+	exitAgree    = 0
+	exitBlocked  = 1
+	exitEscalate = 2
+)
+
+// Verdict is the machine-readable result of a one-shot `meet consult`. It is the
+// return value of `meet` used as a tool: a calling agent reads this, not prose.
+type Verdict struct {
+	Schema        string      `json:"schema"`
+	ID            string      `json:"id"`
+	Topic         string      `json:"topic"`
+	Question      string      `json:"question,omitempty"`
+	Participants  []string    `json:"participants"`
+	Rounds        int         `json:"rounds"`
+	Verdict       string      `json:"verdict"`    // agree | split | escalate
+	Confidence    float64     `json:"confidence"` // 0..1, from panel coverage and vote share
+	ExitCode      int         `json:"exit_code"`
+	Summary       string      `json:"summary,omitempty"`
+	Decisions     []Decision  `json:"decisions,omitempty"`
+	Actions       []string    `json:"actions,omitempty"`
+	Risks         []string    `json:"risks,omitempty"` // the blocking issues
+	OpenQuestions []string    `json:"open_questions,omitempty"`
+	Corrections   []string    `json:"corrections,omitempty"`
+	Poll          *PollResult `json:"poll,omitempty"`
+	Coverage      []Coverage  `json:"coverage"`
+	Minutes       string      `json:"minutes"`
+}
+
+// decide computes the verdict, a confidence, and an exit code from what actually
+// happened — never from a model's self-reported confidence, which the literature
+// finds badly miscalibrated. Confidence here is a coverage-and-vote-share
+// statistic: what fraction of the seats we asked actually answered, and how
+// lopsidedly.
+func (v *Verdict) decide() {
+	seats := len(v.Coverage)
+	answered := 0
+	for _, c := range v.Coverage {
+		if c.Contributed() {
+			answered++
+		}
+	}
+	coverageRatio := 1.0
+	if seats > 0 {
+		coverageRatio = float64(answered) / float64(seats)
+	}
+
+	// A poll, when present, is the sharpest signal we have.
+	agreement := 0.5
+	decisive := false
+	if v.Poll != nil {
+		if win, ok := v.Poll.Winner(); ok {
+			decisive = true
+			if seats > 0 {
+				agreement = float64(v.Poll.Tally[win]) / float64(seats)
+			}
+		} else {
+			agreement = 0.0
+		}
+	} else if len(v.Decisions) > 0 {
+		decisive = true
+		agreement = 1.0
+	} else {
+		agreement = 0.0
+	}
+
+	v.Confidence = coverageRatio * agreement
+
+	switch {
+	case answered < seats || answered == 0:
+		// Half a panel is a sample, not a consensus, however loudly it agreed.
+		v.Verdict, v.ExitCode = verdictEscalate, exitEscalate
+	case len(v.Decisions) == 0:
+		// The panel answered but settled nothing — there is no result to split over.
+		v.Verdict, v.ExitCode = verdictEscalate, exitEscalate
+	case !decisive:
+		v.Verdict, v.ExitCode = verdictSplit, exitEscalate
+	case len(v.Risks) > 0:
+		v.Verdict, v.ExitCode = verdictAgree, exitBlocked
+	default:
+		v.Verdict, v.ExitCode = verdictAgree, exitAgree
+	}
+}
+
+// newConsultCmd is `meet` as a tool call: one command, no REPL, no confirmation
+// round-trip (the caller IS the initiator and receives the verdict synchronously),
+// and a JSON verdict on stdout. An agent mid-task runs this to get a cross-vendor
+// second opinion and then continues.
+func newConsultCmd() *cobra.Command {
+	var sf sessionFlags
+	var question, deadline string
+	var choices []string
+	var rounds int
+	var jsonOut, failOnDissent bool
+	cmd := &cobra.Command{
+		Use:   "consult --topic TEXT [--question TEXT] [--participant AGENT ...]",
+		Short: "one-shot panel: convene, deliberate, synthesize, return a verdict (agent-callable)",
+		Long: "Convene a panel, run the rounds, poll if --choice is given, synthesize, file the\n" +
+			"minutes, and print a verdict. Blocks until done and never enters a REPL, so an\n" +
+			"agentic tool can call it as a tool and read the result.\n\n" +
+			"A participant cannot call this from inside a meeting (unbounded recursion).",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := guardDepth(); err != nil {
+				return err
+			}
+			if sf.initiator == "" {
+				sf.initiator = "agent"
+				sf.initiatorKind = "agent"
+			}
+			if q := strings.TrimSpace(question); q != "" && len(sf.agenda) == 0 {
+				sf.agenda = []string{q}
+			}
+			st, err := sf.newState()
+			if err != nil {
+				return err
+			}
+			if len(st.Participants) == 0 {
+				return fmt.Errorf("meet: consult needs at least one --participant")
+			}
+			if err := st.save(); err != nil {
+				return err
+			}
+			markDepth()
+			w := cmd.OutOrStdout()
+
+			// A blocking call needs a ceiling on the WHOLE consult, not just on
+			// each turn: N participants × R rounds × --turn-timeout is otherwise a
+			// multi-hour hang inside somebody's tool call.
+			ctx := cmd.Context()
+			if d, err := time.ParseDuration(strings.TrimSpace(deadline)); err == nil && d > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, d)
+				defer cancel()
+			} else if strings.TrimSpace(deadline) != "" {
+				return fmt.Errorf("meet: bad --deadline %q: %w", deadline, err)
+			}
+
+			for _, a := range st.Agenda {
+				_, _ = record(st, "agenda", "chair", "", a)
+			}
+			for i := 0; i < rounds; i++ {
+				q := question
+				if q == "" && i < len(st.Agenda) {
+					q = st.Agenda[i]
+				}
+				runRound(ctx, st, q, nil)
+			}
+
+			v := &Verdict{
+				Schema: schemaVersion, ID: st.ID, Topic: st.Topic, Question: question,
+				Participants: st.Participants,
+			}
+			if len(choices) > 0 {
+				poll, err := runPoll(ctx, st, question, choices, st.Participants, nil)
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(w, "wrote %s\n", path)
-				return nil
+				for i := range poll.Votes {
+					poll.Votes[i].Text = redactHome(poll.Votes[i].Text)
+					poll.Votes[i].File = redactHome(poll.Votes[i].File)
+				}
+				v.Poll = poll
 			}
-			return repl(cmd, st)
+
+			// The caller is the initiator and gets the verdict synchronously, so
+			// there is nobody else to confirm the conclusion to.
+			path, err := closeMeeting(ctx, st, closeOptions{
+				Synthesize: true, Confirm: false, Out: io.Discard,
+			}, nil)
+			if err != nil {
+				return err
+			}
+			events, _ := readTranscript(st.ID)
+			if syn := loadSynthesis(st.ID); syn != nil {
+				v.Summary, v.Decisions, v.Actions = syn.Summary, syn.Decisions, syn.Actions
+				v.Risks, v.OpenQuestions, v.Corrections = syn.Risks, syn.OpenQuestions, syn.Corrections
+			}
+			v.Rounds, v.Coverage, v.Minutes = st.Round, coverage(st, events), redactHome(path)
+			v.decide()
+
+			if jsonOut {
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(v); err != nil {
+					return err
+				}
+			} else {
+				writeVerdict(w, v)
+			}
+			if failOnDissent && v.ExitCode != exitAgree {
+				return fmt.Errorf("meet: verdict=%s (exit_code=%d) — the panel did not agree", v.Verdict, v.ExitCode)
+			}
+			return nil
 		},
 	}
+	sf.bind(cmd)
 	f := cmd.Flags()
-	f.StringVar(&topic, "topic", "", "meeting topic (required)")
-	f.StringVar(&assistant, "assistant", "", "secretary agent (notes only; default claude)")
-	f.StringArrayVar(&participants, "participant", nil, "participant agent (repeatable)")
-	f.StringArrayVar(&agenda, "agenda", nil, "agenda item (repeatable)")
-	f.StringVar(&mode, "mode", "sequential", "turn mode (P0: sequential)")
-	f.StringVar(&out, "out", "docs", "filing target: docs | kb | <path>")
-	f.IntVar(&rounds, "rounds", 1, "rounds to run in --non-interactive mode")
-	f.StringVar(&turnTimeout, "turn-timeout", "20m", "per-turn agent timeout (e.g. 20m); a wedged agent can't hang the round")
-	f.BoolVar(&dry, "dry-run", false, "print the resolved session and exit")
-	f.BoolVar(&nonInteractive, "non-interactive", false, "run rounds then close, no REPL")
+	f.StringVar(&question, "question", "", "the question put to the panel")
+	f.StringArrayVar(&choices, "choice", nil, "make it a poll: permitted answer (repeatable; default free-form)")
+	f.IntVar(&rounds, "rounds", 1, "deliberation rounds before the poll/synthesis")
+	f.StringVar(&deadline, "deadline", "10m", "hard ceiling on the whole consult (a blocking tool call must not hang)")
+	f.BoolVar(&jsonOut, "json", false, "emit the verdict as JSON (the agent-callable shape)")
+	f.BoolVar(&failOnDissent, "fail-on-dissent", false, "exit non-zero unless the verdict is `agree` with no blocking issues")
 	return cmd
+}
+
+func writeVerdict(w io.Writer, v *Verdict) {
+	fmt.Fprintf(w, "meeting %s — %s\n\n", v.ID, v.Topic)
+	if v.Summary != "" {
+		fmt.Fprintf(w, "%s\n\n", v.Summary)
+	}
+	if v.Poll != nil {
+		if win, ok := v.Poll.Winner(); ok {
+			fmt.Fprintf(w, "poll: %s\n", win)
+		} else {
+			fmt.Fprintf(w, "poll: no clear result\n")
+		}
+		for _, vote := range v.Poll.Votes {
+			answer := vote.Choice
+			if answer == "" {
+				answer = statusOf(vote)
+			}
+			fmt.Fprintf(w, "  %-12s %s\n", vote.Speaker, answer)
+		}
+		fmt.Fprintln(w)
+	}
+	for _, d := range v.Decisions {
+		tag := ""
+		if d.Inferred {
+			tag = " (inferred)"
+		}
+		fmt.Fprintf(w, "decision: %s%s\n", d.Text, tag)
+	}
+	for _, a := range v.Actions {
+		fmt.Fprintf(w, "action:   %s\n", a)
+	}
+	for _, r := range v.Risks {
+		fmt.Fprintf(w, "risk:     %s\n", r)
+	}
+	for _, q := range v.OpenQuestions {
+		fmt.Fprintf(w, "open:     %s\n", q)
+	}
+	fmt.Fprintf(w, "\nverdict: %s (confidence %.2f, exit %d)\n", v.Verdict, v.Confidence, v.ExitCode)
+	switch v.Verdict {
+	case verdictSplit:
+		fmt.Fprintln(w, "⚠ the panel genuinely disagreed — this is input, not an answer")
+	case verdictEscalate:
+		fmt.Fprintln(w, "⚠ the panel could not answer (seats failed, or nothing was decided) — do not act on this alone")
+	}
+	fmt.Fprintf(w, "\nminutes: %s\n", v.Minutes)
 }
 
 // repl is the interactive meeting loop.
@@ -225,7 +558,8 @@ func repl(cmd *cobra.Command, st *State) error {
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	fmt.Fprintf(w, "\nmeet %s · secretary=%s(notes-only) · participants: %s\n",
 		st.ID, st.Secretary, strings.Join(st.Participants, ", "))
-	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /decision <t> | /action owner: task | /agenda <t> | /converge | /close")
+	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /poll <q> | /ask <q> | /decision <t> |")
+	fmt.Fprintln(w, "          /action owner: task | /agenda <t> | /show | /converge | /close")
 	fmt.Fprint(w, "you> ")
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -235,20 +569,63 @@ func repl(cmd *cobra.Command, st *State) error {
 		}
 		switch {
 		case line == "/converge":
-			openQ, summary := converge(cmd.Context(), st, nil)
-			fmt.Fprintf(w, "⏺ converged: recorded decisions/actions; %d open questions\n", len(openQ))
-			if summary != "" {
-				fmt.Fprintf(w, "  summary: %s\n", oneLine(summary))
+			syn, err := converge(cmd.Context(), st, nil)
+			if err != nil {
+				fmt.Fprintf(w, "⏺ secretary pass failed: %v\n", err)
+				break
 			}
+			fmt.Fprintf(w, "⏺ converged: %d decisions, %d actions, %d risks, %d open questions\n",
+				len(syn.Decisions), len(syn.Actions), len(syn.Risks), len(syn.OpenQuestions))
+			if syn.Summary != "" {
+				fmt.Fprintf(w, "  summary: %s\n", oneLine(syn.Summary))
+			}
+		case line == "/show":
+			events, _ := readTranscript(st.ID)
+			writeShow(w, st, events, loadSynthesis(st.ID))
 		case line == "/close":
-			path, err := closeMeeting(cmd.Context(), st, true, nil)
+			path, err := closeMeeting(cmd.Context(), st, closeOptions{
+				Synthesize: true, Confirm: true, In: cmd.InOrStdin(), Out: w,
+			}, nil)
+			if errors.Is(err, ErrDeclined) {
+				fmt.Fprintln(w, "⏺ meeting continues.")
+				break
+			}
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "wrote %s\n", path)
+			fmt.Fprintf(w, "wrote %s\n", redactHome(path))
 			return nil
 		case line == "/round":
 			for _, e := range runRound(cmd.Context(), st, currentAgenda(st), nil) {
+				fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
+			}
+		case strings.HasPrefix(line, "/poll "):
+			q := strings.TrimSpace(line[len("/poll "):])
+			res, err := runPoll(cmd.Context(), st, q, nil, nil, nil)
+			if err != nil {
+				fmt.Fprintf(w, "⏺ poll failed: %v\n", err)
+				break
+			}
+			for _, v := range res.Votes {
+				answer := v.Choice
+				if answer == "" {
+					answer = statusOf(v)
+				}
+				fmt.Fprintf(w, "%s> %s — %s\n", v.Speaker, answer, oneLine(v.Text))
+			}
+			if win, ok := res.Winner(); ok {
+				fmt.Fprintf(w, "⏺ poll result: %s\n", win)
+			} else {
+				fmt.Fprintln(w, "⏺ poll result: no clear result")
+			}
+		case strings.HasPrefix(line, "/ask "):
+			q := strings.TrimSpace(line[len("/ask "):])
+			evs, err := runAsk(cmd.Context(), st, q, true, nil, nil)
+			if err != nil {
+				fmt.Fprintf(w, "⏺ ask failed: %v\n", err)
+				break
+			}
+			for _, e := range evs {
 				fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
 			}
 		case strings.HasPrefix(line, "/decision "):
@@ -302,6 +679,7 @@ func newRoundCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			markDepth()
 			for _, e := range runRound(cmd.Context(), st, currentAgenda(st), nil) {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s> %s\n", e.Speaker, oneLine(e.Text))
 			}
@@ -310,24 +688,285 @@ func newRoundCmd() *cobra.Command {
 	}
 }
 
-func newCloseCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "close <id>",
-		Short: "run the secretary pass, write and file the minutes",
+// newPollCmd is the request-for-comment style: a fixed answer set, every
+// participant must answer, the tally is recorded.
+func newPollCmd() *cobra.Command {
+	var question string
+	var choices, participants []string
+	cmd := &cobra.Command{
+		Use:   "poll <id> --question TEXT [--choice yes --choice no]",
+		Short: "put a fixed-choice question to the participants and tally the answers",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := loadState(args[0])
 			if err != nil {
 				return err
 			}
-			path, err := closeMeeting(cmd.Context(), st, true, nil)
+			markDepth()
+			res, err := runPoll(cmd.Context(), st, question, choices, participants, nil)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path)
+			w := cmd.OutOrStdout()
+			for _, v := range res.Votes {
+				answer := v.Choice
+				if answer == "" {
+					answer = statusOf(v)
+				}
+				fmt.Fprintf(w, "%-12s %-10s %s\n", v.Speaker, answer, oneLine(v.Text))
+			}
+			if win, ok := res.Winner(); ok {
+				fmt.Fprintf(w, "\nresult: %s\n", win)
+			} else {
+				fmt.Fprintln(w, "\nresult: no clear result (tie, or too many non-answers)")
+			}
 			return nil
 		},
 	}
+	f := cmd.Flags()
+	f.StringVar(&question, "question", "", "the poll question (required)")
+	f.StringArrayVar(&choices, "choice", nil, "permitted answer (repeatable; default: yes, no)")
+	f.StringArrayVar(&participants, "participant", nil, "poll only these participants (default: all)")
+	return cmd
+}
+
+// newAskCmd is the open-question style: answering is optional and silence is a
+// recorded abstention rather than a failure.
+func newAskCmd() *cobra.Command {
+	var question string
+	var participants []string
+	var required bool
+	cmd := &cobra.Command{
+		Use:   "ask <id> --question TEXT",
+		Short: "put an open question to the participants (answering is optional)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadState(args[0])
+			if err != nil {
+				return err
+			}
+			markDepth()
+			evs, err := runAsk(cmd.Context(), st, question, !required, participants, nil)
+			if err != nil {
+				return err
+			}
+			w := cmd.OutOrStdout()
+			for _, e := range evs {
+				fmt.Fprintf(w, "── %s (%s)\n%s\n\n", e.Speaker, statusOf(e), strings.TrimSpace(e.Text))
+			}
+			return nil
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&question, "question", "", "the open question (required)")
+	f.StringArrayVar(&participants, "participant", nil, "ask only these participants (default: all)")
+	f.BoolVar(&required, "required", false, "an empty answer is a failure, not an abstention")
+	return cmd
+}
+
+func newConvergeCmd() *cobra.Command {
+	var mode string
+	cmd := &cobra.Command{
+		Use:   "converge <id>",
+		Short: "secretary pass: extract decisions, actions, risks, open questions, corrections",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadState(args[0])
+			if err != nil {
+				return err
+			}
+			if mode != "" {
+				st.DecisionMode = mode
+				_ = st.save()
+			}
+			markDepth()
+			syn, err := converge(cmd.Context(), st, nil)
+			if err != nil {
+				return err
+			}
+			w := cmd.OutOrStdout()
+			fmt.Fprintf(w, "converged (%s mode): %d decisions, %d actions, %d risks, %d open questions, %d corrections\n",
+				syn.Mode, len(syn.Decisions), len(syn.Actions), len(syn.Risks), len(syn.OpenQuestions), len(syn.Corrections))
+			if syn.Summary != "" {
+				fmt.Fprintf(w, "summary: %s\n", oneLine(syn.Summary))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&mode, "decision-mode", "", "override the session's decision mode: infer | explicit")
+	return cmd
+}
+
+func newCloseCmd() *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "close <id>",
+		Short: "secretary pass, confirm with the initiator, then write and file the minutes",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadState(args[0])
+			if err != nil {
+				return err
+			}
+			markDepth()
+			path, err := closeMeeting(cmd.Context(), st, closeOptions{
+				Synthesize: true, Confirm: true, Yes: yes,
+				In: cmd.InOrStdin(), Out: cmd.OutOrStdout(),
+			}, nil)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", redactHome(path))
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "close without asking the initiator to confirm")
+	return cmd
+}
+
+// newAmendCmd re-runs the secretary over the existing transcript and rewrites the
+// minutes. The fix for a weak secretary pass: the transcript is the durable
+// artifact, the minutes are a projection of it, and a projection can be redone.
+func newAmendCmd() *cobra.Command {
+	var mode string
+	var resynthesize bool
+	cmd := &cobra.Command{
+		Use:   "amend <id>",
+		Short: "regenerate the minutes from the transcript (optionally re-running the secretary)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadState(args[0])
+			if err != nil {
+				return err
+			}
+			if mode != "" {
+				st.DecisionMode = mode
+				resynthesize = true
+			}
+			w := cmd.OutOrStdout()
+			if resynthesize {
+				markDepth()
+				if _, err := converge(cmd.Context(), st, nil); err != nil {
+					return err
+				}
+				fmt.Fprintf(w, "re-ran the secretary (%s mode)\n", st.decisionMode())
+			}
+			_ = st.save()
+			path, err := fileMinutes(st)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(w, "rewrote %s\n", redactHome(path))
+			return nil
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&mode, "decision-mode", "", "re-run the secretary with this mode: infer | explicit")
+	f.BoolVar(&resynthesize, "resynthesize", false, "re-run the secretary before rewriting the minutes")
+	return cmd
+}
+
+func newApplyCmd() *cobra.Command {
+	var to string
+	var write bool
+	cmd := &cobra.Command{
+		Use:   "apply <id> [--to PATH --write]",
+		Short: "render the agreed action items as a block; --write appends them to a document",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadState(args[0])
+			if err != nil {
+				return err
+			}
+			events, _ := readTranscript(st.ID)
+			block, err := applyActions(st, events, loadSynthesis(st.ID), to, write)
+			if err != nil {
+				return err
+			}
+			w := cmd.OutOrStdout()
+			if write {
+				fmt.Fprintf(w, "appended %d action item(s) to %s\n", len(actionsOf(events, loadSynthesis(st.ID))), to)
+				return nil
+			}
+			fmt.Fprint(w, block)
+			return nil
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&to, "to", "", "target document")
+	f.BoolVar(&write, "write", false, "append the block to --to (default: print it)")
+	return cmd
+}
+
+func newShowCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "show <id>",
+		Short: "show a meeting's roster, per-participant coverage, and artifacts",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadState(args[0])
+			if err != nil {
+				return err
+			}
+			events, _ := readTranscript(st.ID)
+			w := cmd.OutOrStdout()
+			if jsonOut {
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				return enc.Encode(map[string]any{
+					"state": st, "coverage": coverage(st, events), "synthesis": loadSynthesis(st.ID),
+				})
+			}
+			writeShow(w, st, events, loadSynthesis(st.ID))
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the session, coverage, and synthesis as JSON")
+	return cmd
+}
+
+func newContributionsCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:     "contributions <id> [participant]",
+		Aliases: []string{"contrib"},
+		Short:   "print every contribution in full, optionally filtered to one participant",
+		Args:    cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := loadState(args[0])
+			if err != nil {
+				return err
+			}
+			who := ""
+			if len(args) == 2 {
+				who = args[1]
+			}
+			events, _ := readTranscript(st.ID)
+			w := cmd.OutOrStdout()
+			if jsonOut {
+				var sel []Event
+				for _, e := range events {
+					if e.Kind != "turn" && e.Kind != "vote" && e.Kind != "human" {
+						continue
+					}
+					if who != "" && !strings.EqualFold(e.Speaker, who) {
+						continue
+					}
+					e.Text = redactHome(e.Text)
+					e.File = redactHome(e.File)
+					sel = append(sel, e)
+				}
+				enc := json.NewEncoder(w)
+				enc.SetIndent("", "  ")
+				return enc.Encode(sel)
+			}
+			writeContributions(w, st, events, who)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the contributions as JSON")
+	return cmd
 }
 
 func newListCmd() *cobra.Command {
@@ -342,7 +981,8 @@ func newListCmd() *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			for _, s := range sessions {
-				fmt.Fprintf(w, "%-40s  %-8s  %s\n", s.ID, s.Status, s.Topic)
+				fmt.Fprintf(w, "%-40s  %-8s  %-24s  %s\n",
+					s.ID, s.Status, strings.Join(s.Participants, ","), s.Topic)
 			}
 			return nil
 		},
@@ -359,6 +999,7 @@ func newResumeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			markDepth()
 			return repl(cmd, st)
 		},
 	}
