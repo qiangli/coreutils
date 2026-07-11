@@ -53,10 +53,10 @@ This group contains bashy-specific in-process tools and front-door verbs for Age
 
 In-process extended tools, count 22:
 
-`ast-query`, `browser`, `fetch`, `find-references`, `foreman`, `graph`, `list-symbols`, `repo-map`, `search-symbols`
+`browser`, `fetch`, `foreman`, `graph`
 
 Front-door verbs, count 37:
 
-`act`, `act-runner`, `agent`, `chat`, `check`, `commands`, `context`, `dag`, `docker`, `doctl`, `doctor`, `foreman`, `gh`, `git`, `helm`, `kopia`, `kubectl`, `login`, `loom`, `mirror`, `ollama`, `podman`, `rclone`, `run`, `schedule`, `sdlc`, `seaweedfs`, `secrets`, `self`, `skills`, `sphere`, `sprint`, `tessaro`, `verify`, `weave`, `web`, `zot`
+`act`, `act-runner`, `agent`, `ast`, `chat`, `check`, `commands`, `context`, `dag`, `docker`, `doctl`, `doctor`, `foreman`, `gh`, `git`, `helm`, `kopia`, `kubectl`, `login`, `loom`, `mirror`, `ollama`, `podman`, `rclone`, `run`, `schedule`, `sdlc`, `seaweedfs`, `secrets`, `self`, `skills`, `sphere`, `sprint`, `tessaro`, `verify`, `weave`, `web`, `zot`
 
 `foreman` appears in both the in-process extended tools and front-door verbs; it is counted once in the unique misc total.

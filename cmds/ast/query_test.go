@@ -1,4 +1,4 @@
-package yccmd
+package astcmd
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
-func runYC(t *testing.T, dir string, args ...string) (out, errOut string, code int) {
+func runAstSub(t *testing.T, dir string, args ...string) (out, errOut string, code int) {
 	t.Helper()
 	var o, e bytes.Buffer
 	rc := &tool.RunContext{
@@ -22,18 +22,18 @@ func runYC(t *testing.T, dir string, args ...string) (out, errOut string, code i
 	verb, rest := args[0], args[1:]
 	var fn func(*tool.RunContext, []string) int
 	switch verb {
-	case "list-symbols", "symbols":
+	case "symbols":
 		fn = runSymbols
-	case "search-symbols":
+	case "search":
 		fn = runSearchSymbols
-	case "find-references", "refs":
+	case "refs":
 		fn = runRefs
-	case "repo-map", "repomap":
+	case "map":
 		fn = runRepomap
-	case "ast-query", "query":
+	case "query":
 		fn = runQuery
 	default:
-		t.Fatalf("runYC: unknown verb %q", verb)
+		t.Fatalf("runAstSub: unknown subcommand %q", verb)
 	}
 	code = fn(rc, rest)
 	return o.String(), e.String(), code
@@ -51,7 +51,7 @@ func writeGo(t *testing.T) string {
 
 func TestYCQueryGoFunctions(t *testing.T) {
 	dir := writeGo(t)
-	out, errOut, code := runYC(t, dir, "query", "--lang", "go",
+	out, errOut, code := runAstSub(t, dir, "query", "--lang", "go",
 		"(function_declaration name: (identifier) @fn)", ".")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
@@ -67,7 +67,7 @@ func TestYCQueryGoFunctions(t *testing.T) {
 
 func TestYCQueryJSON(t *testing.T) {
 	dir := writeGo(t)
-	out, _, code := runYC(t, dir, "query", "--lang", "go", "--json",
+	out, _, code := runAstSub(t, dir, "query", "--lang", "go", "--json",
 		"(function_declaration name: (identifier) @fn)", ".")
 	if code != 0 {
 		t.Fatalf("exit %d", code)
@@ -80,7 +80,7 @@ func TestYCQueryJSON(t *testing.T) {
 func TestYCQueryInferLangFromFile(t *testing.T) {
 	dir := writeGo(t)
 	// No --lang; single .go file target → language inferred.
-	out, errOut, code := runYC(t, dir, "query",
+	out, errOut, code := runAstSub(t, dir, "query",
 		"(function_declaration name: (identifier) @fn)", "a.go")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
@@ -94,7 +94,7 @@ func TestYCQueryHonorsAgentMode(t *testing.T) {
 	dir := writeGo(t)
 	t.Setenv("BASHY_AGENTIC", "1")
 	// Default under agent mode → JSON (consistent with weave/dag).
-	out, _, code := runYC(t, dir, "query", "--lang", "go",
+	out, _, code := runAstSub(t, dir, "query", "--lang", "go",
 		"(function_declaration name: (identifier) @fn)", ".")
 	if code != 0 {
 		t.Fatalf("exit %d", code)
@@ -103,7 +103,7 @@ func TestYCQueryHonorsAgentMode(t *testing.T) {
 		t.Errorf("under BASHY_AGENTIC, yc should default to JSON:\n%s", out)
 	}
 	// --json=false escapes back to text even under agent mode.
-	out, _, _ = runYC(t, dir, "query", "--lang", "go", "--json=false",
+	out, _, _ = runAstSub(t, dir, "query", "--lang", "go", "--json=false",
 		"(function_declaration name: (identifier) @fn)", ".")
 	if strings.Contains(out, `"name"`) || !strings.Contains(out, "@fn") {
 		t.Errorf("--json=false should force text under agent mode:\n%s", out)
@@ -112,7 +112,7 @@ func TestYCQueryHonorsAgentMode(t *testing.T) {
 
 func TestYCQueryInvalidFailsLoudly(t *testing.T) {
 	dir := writeGo(t)
-	_, errOut, code := runYC(t, dir, "query", "--lang", "go", "(this is not valid", ".")
+	_, errOut, code := runAstSub(t, dir, "query", "--lang", "go", "(this is not valid", ".")
 	if code == 0 {
 		t.Error("an invalid query should fail loudly")
 	}
@@ -123,7 +123,7 @@ func TestYCQueryInvalidFailsLoudly(t *testing.T) {
 
 func TestYCQueryNeedsLangForDir(t *testing.T) {
 	dir := writeGo(t)
-	_, errOut, code := runYC(t, dir, "query", "(x)") // dir target, no --lang
+	_, errOut, code := runAstSub(t, dir, "query", "(x)") // dir target, no --lang
 	if code == 0 || !strings.Contains(errOut, "--lang") {
 		t.Errorf("querying a dir without --lang should error asking for it: %q", errOut)
 	}

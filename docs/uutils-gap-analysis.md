@@ -34,7 +34,7 @@ These commands exist in uutils but are not registered in local `cmds/all`:
 
 These are local commands not present in the uutils coreutils command list:
 
-`arch`, `ast-query`, `at`, `atq`, `atrm`, `awk`, `batch`, `browser`, `cal`, `chcon`, `chgrp`, `chmod`, `chown`, `chroot`, `clip`, `cmp`, `crontab`, `diff`, `duration`, `fetch`, `find`, `find-references`, `grep`, `groups`, `gunzip`, `gzip`, `hexdump`, `hostid`, `hostname`, `id`, `install`, `jq`, `list-symbols`, `logname`, `mkfifo`, `mknod`, `ncal`, `nice`, `nohup`, `nproc`, `ntp`, `pinky`, `repo-map`, `runcon`, `search-symbols`, `sed`, `sntp`, `stat`, `stdbuf`, `strings`, `stty`, `sync`, `tar`, `time`, `timeout`, `tokens`, `tree`, `tz`, `uname`, `uptime`, `users`, `watch`, `which`, `who`, `whoami`, `xargs`, `zcat`.
+`arch`, `ast`, `at`, `atq`, `atrm`, `awk`, `batch`, `browser`, `cal`, `chcon`, `chgrp`, `chmod`, `chown`, `chroot`, `clip`, `cmp`, `crontab`, `diff`, `duration`, `fetch`, `find`, `grep`, `groups`, `gunzip`, `gzip`, `hexdump`, `hostid`, `hostname`, `id`, `install`, `jq`, `logname`, `mkfifo`, `mknod`, `ncal`, `nice`, `nohup`, `nproc`, `ntp`, `pinky`, `runcon`, `sed`, `sntp`, `stat`, `stdbuf`, `strings`, `stty`, `sync`, `tar`, `time`, `timeout`, `tokens`, `tree`, `tz`, `uname`, `uptime`, `users`, `watch`, `which`, `who`, `whoami`, `xargs`, `zcat`.
 
 ## Missing uutils options on overlapping commands
 

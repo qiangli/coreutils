@@ -311,8 +311,11 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   filter shared by grep/find), `pkg/mirror` (see below), `pkg/timezones`,
   `pkg/jobs`, `pkg/agentcmd`, `pkg/oci` (separate module wrapped by the
   podman engine).
-- `cmds/yc` — the code-intelligence verbs (list-symbols / search-symbols /
-  find-references / repo-map / ast-query — flat, no yc prefix) over those engines, reachable through all three surfaces.
+- `cmds/ast` — the `ast` code-intelligence command with subcommands
+  (`ast symbols` list / `ast search` / `ast refs` / `ast map` repo map /
+  `ast query` tree-sitter S-expr) over the `pkg/{treesitter,repomap}` engines,
+  reachable through all three surfaces (the former flat list-symbols/…/ast-query
+  verbs were collapsed 2026-07, mirroring `graph`).
 - `cmds/graph` — the `graph` command with subcommands (one registered tool
   that sub-dispatches `graph <sub>`; the former flat `graph-*` verbs were
   collapsed 2026-07). Two layers:

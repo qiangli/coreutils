@@ -312,17 +312,13 @@ func init() {
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
 	)
-	addTools(GroupCodeIntel,
-		"ast-query", "find-references", "list-symbols", "repo-map",
-		"search-symbols", "graph",
-	)
+	addTools(GroupCodeIntel, "ast", "graph")
 	addTools(GroupNet, "browser", "fetch")
 	addTools(GroupOrch, "foreman")
 
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
-		"ast-query", "find-references", "list-symbols", "repo-map",
-		"search-symbols", "graph",
+		"ast", "graph",
 		"browser", "fetch", "duration", "tz", "ntp", "sntp", "tokens",
 		"foreman",
 	)
@@ -332,13 +328,14 @@ func init() {
 		"cat", "cmp", "comm", "df", "diff", "du", "grep", "head", "hexdump",
 		"ls", "od", "readlink", "realpath", "stat", "strings", "tac", "tail",
 		"tokens", "tree", "wc", "which",
-		"ast-query", "find-references", "list-symbols", "repo-map",
-		"search-symbols",
+		// `ast` (symbols/search/refs/map/query) is pure structural reads.
+		"ast",
 	)
 	// The `graph` umbrella has write subcommands (note/link/observe/forget), so
 	// it is not read-only; its structural reads keep a disk cache, so CapCached.
 	capTools(CapCached, "graph")
-	capTools(CapBudget, "tokens", "repo-map")
+	// `ast map` is the token-budgeted repo map.
+	capTools(CapBudget, "tokens", "ast")
 	capTools(CapNeedsNetwork, "fetch", "browser", "ntp", "sntp")
 	capTools(CapSpawnsProcesses,
 		"xargs", "timeout", "time", "watch", "nice", "nohup", "chroot",

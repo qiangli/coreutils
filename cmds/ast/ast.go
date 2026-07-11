@@ -1,14 +1,15 @@
-// Package yccmd registers the AgentOS code-intelligence verbs as flat,
-// first-class commands — list-symbols, search-symbols, find-references,
-// repo-map, ast-query — reachable through every coreutils surface (shell
-// dispatch, multicall, MCP run_tool). No cryptic `yc` prefix; grouping is by
-// help section, not command namespace (see dhnt/docs/bashy-execution-path.md
-// §Command surface).
+// Package astcmd registers the AgentOS code-intelligence feature as a single
+// `ast` command with subcommands — `ast symbols` (list), `ast search`,
+// `ast refs`, `ast map` (repo map), `ast query` (structural tree-sitter query)
+// — reachable through every coreutils surface (shell dispatch, multicall, MCP
+// run_tool). One tree-sitter/AST verb, grouped subcommands (mirrors the `graph`
+// collapse; the former flat list-symbols/search-symbols/find-references/
+// repo-map/ast-query verbs were consolidated 2026-07).
 //
-// The verbs are thin CLI wrappers; the engines live in
+// The subcommands are thin CLI wrappers; the engines live in
 // coreutils/pkg/{treesitter,repomap}. The gfy-backed graph query (DQL) verb is
-// left out of the bare binary so it stays free of gfy's document-parsing deps.
-package yccmd
+// the separate `graph` command so this stays free of gfy's document-parsing deps.
+package astcmd
 
 import (
 	"encoding/json"
@@ -24,26 +25,68 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
-// Flat, first-class verbs — each a thin CLI over the engines in
-// pkg/{treesitter,repomap}. Naming: descriptive/composite (self-evident +
-// structurally distinct from the classic short userland namespace).
-func init() {
-	register("list-symbols", "list AST symbols in a file or tree",
-		"list-symbols <path> [--json]", runSymbols)
-	register("search-symbols", "search AST symbols by name substring",
-		"search-symbols <pattern> [path] [--json]", runSearchSymbols)
-	register("find-references", "find references/callers of a symbol (AST)",
-		"find-references <symbol> [path] [--json]", runRefs)
-	register("repo-map", "token-budgeted file→symbol repo map",
-		"repo-map [path] [--budget=N] [--query=...] [--json]", runRepomap)
-	register("ast-query", "structural tree-sitter query (S-expression) over source",
-		"ast-query --lang <lang> '<query>' [path] [--json]", runQuery)
+// subcmd is one `ast <name>` subcommand.
+type subcmd struct {
+	name     string
+	synopsis string
+	usage    string
+	run      func(*tool.RunContext, []string) int
 }
 
-func register(name, synopsis, usage string, run func(*tool.RunContext, []string) int) {
-	t := &tool.Tool{Name: name, Synopsis: synopsis, Usage: usage}
-	t.Run = run
-	tool.Register(t)
+// subcommands is the `ast` dispatch table; read only at Run time.
+var subcommands = []subcmd{
+	{"symbols", "list AST symbols in a file or tree",
+		"ast symbols <path> [--json]", runSymbols},
+	{"search", "search AST symbols by name substring",
+		"ast search <pattern> [path] [--json]", runSearchSymbols},
+	{"refs", "find references/callers of a symbol (AST)",
+		"ast refs <symbol> [path] [--json]", runRefs},
+	{"map", "token-budgeted file→symbol repo map",
+		"ast map [path] [--budget=N] [--query=...] [--json]", runRepomap},
+	{"query", "structural tree-sitter query (S-expression) over source",
+		"ast query --lang <lang> '<query>' [path] [--json]", runQuery},
+}
+
+// Each subcommand is a thin CLI over the engines in pkg/{treesitter,repomap}.
+func init() {
+	tool.Register(&tool.Tool{
+		Name:     "ast",
+		Synopsis: "tree-sitter code intelligence (subcommands: symbols search refs map query)",
+		Usage: "ast <subcommand> [args]\n\n" +
+			"subcommands: symbols (list) · search · refs · map (repo map) · query (tree-sitter S-expr)\n" +
+			"Run `ast help` for one-line synopses, or `ast <sub> ...`.",
+		Run: runAst,
+	})
+}
+
+// runAst dispatches `ast <subcommand>` to the matching subcommand. Every
+// coreutils surface calls this with the raw argv tail, so subcommands parse
+// their own flags exactly as the former flat verbs did.
+func runAst(rc *tool.RunContext, args []string) int {
+	if len(args) == 0 {
+		printAstHelp(rc)
+		return 0
+	}
+	switch args[0] {
+	case "help", "-h", "--help":
+		printAstHelp(rc)
+		return 0
+	}
+	for _, sc := range subcommands {
+		if sc.name == args[0] {
+			return sc.run(rc, args[1:])
+		}
+	}
+	fmt.Fprintf(rc.Err, "ast: unknown subcommand %q (run `ast help`)\n", args[0])
+	return 2
+}
+
+func printAstHelp(rc *tool.RunContext) {
+	fmt.Fprintln(rc.Out, "Usage: ast <subcommand> [args]")
+	fmt.Fprintln(rc.Out, "\nSubcommands:")
+	for _, sc := range subcommands {
+		fmt.Fprintf(rc.Out, "  %-9s %s\n", sc.name, sc.synopsis)
+	}
 }
 
 // --- shared helpers (parity with ycode's builtins) ---
@@ -97,7 +140,7 @@ func formatSymbolLine(s treesitter.Symbol) string {
 	return s.Kind + " " + s.Name
 }
 
-// --- list-symbols ---
+// --- ast symbols ---
 
 func runSymbols(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
@@ -115,7 +158,7 @@ func runSymbols(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if target == "" {
-		fmt.Fprintln(rc.Err, "list-symbols: missing path argument")
+		fmt.Fprintln(rc.Err, "ast symbols: missing path argument")
 		return 2
 	}
 	abs := rc.Path(target)
@@ -134,7 +177,7 @@ func runSymbols(rc *tool.RunContext, args []string) int {
 		all = append(all, parser.ExtractSymbols(tree, path)...)
 		return nil
 	}); err != nil {
-		fmt.Fprintf(rc.Err, "list-symbols: %v\n", err)
+		fmt.Fprintf(rc.Err, "ast symbols: %v\n", err)
 		return 1
 	}
 	if asJSON {
@@ -152,7 +195,7 @@ func runSymbols(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- search-symbols ---
+// --- ast search ---
 
 func runSearchSymbols(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
@@ -172,7 +215,7 @@ func runSearchSymbols(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if pattern == "" {
-		fmt.Fprintln(rc.Err, "search-symbols: missing pattern")
+		fmt.Fprintln(rc.Err, "ast search: missing pattern")
 		return 2
 	}
 	if target == "" {
@@ -199,7 +242,7 @@ func runSearchSymbols(rc *tool.RunContext, args []string) int {
 		}
 		return nil
 	}); err != nil {
-		fmt.Fprintf(rc.Err, "search-symbols: %v\n", err)
+		fmt.Fprintf(rc.Err, "ast search: %v\n", err)
 		return 1
 	}
 	if asJSON {
@@ -218,7 +261,7 @@ func runSearchSymbols(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- find-references ---
+// --- ast refs ---
 
 func runRefs(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
@@ -238,7 +281,7 @@ func runRefs(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if symbol == "" {
-		fmt.Fprintln(rc.Err, "find-references: missing symbol")
+		fmt.Fprintln(rc.Err, "ast refs: missing symbol")
 		return 2
 	}
 	if workspace == "" {
@@ -249,7 +292,7 @@ func runRefs(rc *tool.RunContext, args []string) int {
 
 	impacts, err := treesitter.Analyze(rc.Ctx, parser, symbol, "", abs)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "find-references: %v\n", err)
+		fmt.Fprintf(rc.Err, "ast refs: %v\n", err)
 		return 1
 	}
 	if asJSON {
@@ -271,7 +314,7 @@ func runRefs(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- repo-map ---
+// --- ast map ---
 
 func runRepomap(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
@@ -286,7 +329,7 @@ func runRepomap(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--budget="):
 			n := 0
 			if _, err := fmt.Sscanf(a[len("--budget="):], "%d", &n); err != nil || n <= 0 {
-				fmt.Fprintf(rc.Err, "repo-map: invalid --budget value %q\n", a)
+				fmt.Fprintf(rc.Err, "ast map: invalid --budget value %q\n", a)
 				return 2
 			}
 			opts.MaxTokens = n
@@ -309,7 +352,7 @@ func runRepomap(rc *tool.RunContext, args []string) int {
 
 	rm, err := repomap.Generate(target, opts)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "repo-map: %v\n", err)
+		fmt.Fprintf(rc.Err, "ast map: %v\n", err)
 		return 1
 	}
 	if asJSON {
@@ -322,7 +365,7 @@ func runRepomap(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// --- ast-query (structural search via tree-sitter queries) ---
+// --- ast query (structural tree-sitter search) ---
 
 // runQuery runs a tree-sitter query (S-expression pattern with @captures)
 // over the source files of one language and prints each captured node's
@@ -331,8 +374,8 @@ func runRepomap(rc *tool.RunContext, args []string) int {
 // Tree-sitter queries are grammar-specific, so a language is required (given by
 // --lang, or inferred from a single-file target).
 //
-//	ast-query --lang go '(function_declaration name: (identifier) @fn)'
-//	ast-query --lang python '(call function: (identifier) @c (#eq? @c "eval"))' src/
+//	ast query --lang go '(function_declaration name: (identifier) @fn)'
+//	ast query --lang python '(call function: (identifier) @c (#eq? @c "eval"))' src/
 func runQuery(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent() // JSON by default under $BASHY_AGENTIC; --json=false/--plain override
 	lang := ""
@@ -352,7 +395,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 		case strings.HasPrefix(a, "--lang="):
 			lang = a[len("--lang="):]
 		case strings.HasPrefix(a, "-") && a != "-":
-			fmt.Fprintf(rc.Err, "ast-query: unknown option %q\n", a)
+			fmt.Fprintf(rc.Err, "ast query: unknown option %q\n", a)
 			return 2
 		default:
 			if queryStr == "" {
@@ -363,7 +406,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if queryStr == "" {
-		fmt.Fprintln(rc.Err, "ast-query: missing tree-sitter query (an S-expression pattern)")
+		fmt.Fprintln(rc.Err, "ast query: missing tree-sitter query (an S-expression pattern)")
 		return 2
 	}
 	if target == "" {
@@ -378,18 +421,18 @@ func runQuery(rc *tool.RunContext, args []string) int {
 			lang = languageFromPath(abs)
 		}
 		if lang == "" {
-			fmt.Fprintln(rc.Err, "ast-query: specify --lang (a tree-sitter query is grammar-specific)")
+			fmt.Fprintln(rc.Err, "ast query: specify --lang (a tree-sitter query is grammar-specific)")
 			return 2
 		}
 	}
 	language := treesitter.GetLanguage(lang)
 	if language == nil {
-		fmt.Fprintf(rc.Err, "ast-query: unsupported language %q\n", lang)
+		fmt.Fprintf(rc.Err, "ast query: unsupported language %q\n", lang)
 		return 2
 	}
 	q, err := gotreesitter.NewQuery(queryStr, language)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "ast-query: invalid query: %v\n", err)
+		fmt.Fprintf(rc.Err, "ast query: invalid query: %v\n", err)
 		return 2
 	}
 
@@ -428,7 +471,7 @@ func runQuery(rc *tool.RunContext, args []string) int {
 		}
 		return nil
 	}); err != nil {
-		fmt.Fprintf(rc.Err, "ast-query: %v\n", err)
+		fmt.Fprintf(rc.Err, "ast query: %v\n", err)
 		return 1
 	}
 
