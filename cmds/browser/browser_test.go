@@ -25,7 +25,7 @@ func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
 }
 
 func TestStatusWorksWithoutBrowser(t *testing.T) {
-	out, errb, code := runTool(t, "--probe-url", "http://127.0.0.1:1", "status")
+	out, errb, code := runTool(t, "--mode", "probe", "--probe-url", "http://127.0.0.1:1", "status")
 	if code != 0 || errb != "" {
 		t.Fatalf("status code=%d stderr=%q", code, errb)
 	}
@@ -35,7 +35,7 @@ func TestStatusWorksWithoutBrowser(t *testing.T) {
 }
 
 func TestStatusJSONWorksWithoutBrowser(t *testing.T) {
-	out, _, code := runTool(t, "--json", "--probe-url", "http://127.0.0.1:1", "status")
+	out, _, code := runTool(t, "--json", "--mode", "probe", "--probe-url", "http://127.0.0.1:1", "status")
 	if code != 0 {
 		t.Fatalf("status json code=%d out=%q", code, out)
 	}
@@ -95,9 +95,26 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestActionWithoutBrowserPrintsClearMessage(t *testing.T) {
-	_, errb, code := runTool(t, "--probe-url", "http://127.0.0.1:1", "navigate", "https://example.com")
+	_, errb, code := runTool(t, "--mode", "probe", "--probe-url", "http://127.0.0.1:1", "navigate", "https://example.com")
 	if code == 0 || !strings.Contains(errb, noBrowserMessage) {
 		t.Fatalf("action without browser = code=%d stderr=%q", code, errb)
+	}
+}
+
+// TestDefaultModeIsSolo guards the zero-setup default: with no --mode, status
+// reports solo (reachability then depends on whether a Chrome binary exists,
+// so we assert only the mode, never launch a browser).
+func TestDefaultModeIsSolo(t *testing.T) {
+	out, _, code := runTool(t, "--json", "status")
+	if code != 0 {
+		t.Fatalf("status code=%d out=%q", code, out)
+	}
+	var env map[string]any
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env["mode"] != "solo" {
+		t.Fatalf("default mode = %v, want solo", env["mode"])
 	}
 }
 
