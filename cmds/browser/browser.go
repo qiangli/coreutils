@@ -24,8 +24,8 @@ var cmd = &tool.Tool{
 	Usage: "browser [--json] [--mode solo|probe|live] [--probe-url URL] <subcommand> [args]\n" +
 		"\n" +
 		"Modes (--mode) — how it gets a browser:\n" +
-		"  solo   private headless Chrome, zero setup; `navigate URL` returns title/url/content (best for one-shot scrapes)\n" +
-		"  probe  (default) attach to a Chrome you started with --remote-debugging-port=9222 — persistent session\n" +
+		"  solo   (default) private headless Chrome, zero setup; `navigate URL` returns title/url/content — best for one-shot scrapes\n" +
+		"  probe  attach to a Chrome you started with --remote-debugging-port=9222 — persistent session\n" +
 		"  live   drive your real logged-in Chrome via `browser hub` + the MV3 extension (cookies/SSO intact)\n" +
 		"\n" +
 		"Subcommands: status navigate extract eval click type wait-for-selector screenshot\n" +
@@ -41,7 +41,7 @@ const noBrowserMessage = "no browser: start Chrome with --remote-debugging-port=
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	asJSON := fs.Bool("json", false, "emit JSON result envelopes")
-	mode := fs.String("mode", "probe", "browser mode: probe")
+	mode := fs.String("mode", "solo", "browser mode: solo (zero-setup headless Chrome), probe, or live")
 	probeURL := fs.String("probe-url", probe.DefaultURL, "Chrome remote debugging URL for probe mode")
 	chromePath := fs.String("chrome-path", "", "Chrome/Chromium executable path for solo mode")
 	userDataDir := fs.String("user-data-dir", "", "Chrome user-data-dir for solo mode")

@@ -12,8 +12,8 @@ Engine: `coreutils/pkg/browser` (`probe` / `solo` / `live` clients + the
 
 | mode | how it gets a browser | setup | best for |
 |---|---|---|---|
-| **`solo`** | launches a **private headless Chrome** (`--headed` to show it), runs one action, exits | none | one-shot scrapes / automation — the zero-setup default recommendation for agents |
-| **`probe`** *(coded default)* | attaches to a **Chrome you already started** with `--remote-debugging-port=9222` (override with `--probe-url`) | start Chrome yourself | a persistent session you control across many calls |
+| **`solo`** *(default)* | launches a **private headless Chrome** (`--headed` to show it), runs one action, exits | none | one-shot scrapes / automation — the zero-setup default |
+| **`probe`** | attaches to a **Chrome you already started** with `--remote-debugging-port=9222` (override with `--probe-url`) | start Chrome yourself | a persistent session you control across many calls |
 | **`live`** | drives your **real, logged-in Chrome** via an MV3 extension + a local WebSocket hub | `browser hub` + `browser setup` | pages exactly as *you're* logged in (cookies/SSO intact) |
 
 **Session model:** `probe` and `live` attach to a *persistent* browser, so
@@ -24,9 +24,9 @@ Chrome, so a successful `navigate <url>` returns the loaded page itself
 see `about:blank`. Scrape in solo mode with a single `navigate` (or an `eval`
 whose script is self-contained).
 
-> Note: the **coded default is `probe`**, which errors ("no browser reachable")
-> until you start a Chrome with `--remote-debugging-port=9222`. For hands-off
-> agent use, pass `--mode solo` (self-contained) or start a probe Chrome first.
+> The default is **`solo`** — `bashy browser navigate URL` just works with no
+> setup. Switch to `--mode probe` (attach to your Chrome) or `--mode live` (your
+> logged-in Chrome) when you want a persistent or authenticated session.
 
 ## Subcommands
 
