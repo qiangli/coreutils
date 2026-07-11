@@ -70,7 +70,30 @@ func NewGitSCMCmd() *cobra.Command {
 			}
 			c := exec.CommandContext(cmd.Context(), git, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+			if runtime.GOOS == "windows" {
+				c.Env = appendGitWindowsNonInteractiveEnv(os.Environ())
+			}
 			return c.Run()
 		},
 	}
+}
+
+func appendGitWindowsNonInteractiveEnv(env []string) []string {
+	if !hasEnv(env, "GIT_TERMINAL_PROMPT") {
+		env = append(env, "GIT_TERMINAL_PROMPT=0")
+	}
+	if !hasEnv(env, "GCM_INTERACTIVE") {
+		env = append(env, "GCM_INTERACTIVE=never")
+	}
+	return env
+}
+
+func hasEnv(env []string, name string) bool {
+	prefix := name + "="
+	for _, kv := range env {
+		if len(kv) >= len(prefix) && kv[:len(prefix)] == prefix {
+			return true
+		}
+	}
+	return false
 }
