@@ -21,7 +21,17 @@ import (
 var cmd = &tool.Tool{
 	Name:     "browser",
 	Synopsis: "Browser automation: status, fetch, and CDP-backed page actions.",
-	Usage:    "browser [--json] [--mode probe|solo|live] [--probe-url URL] status|hub|setup|fetch|navigate|extract|click|type|eval|screenshot|cookies-get|wait-for-selector|tabs|scroll|keyboard-press|back ...",
+	Usage: "browser [--json] [--mode solo|probe|live] [--probe-url URL] <subcommand> [args]\n" +
+		"\n" +
+		"Modes (--mode) — how it gets a browser:\n" +
+		"  solo   private headless Chrome, zero setup; `navigate URL` returns title/url/content (best for one-shot scrapes)\n" +
+		"  probe  (default) attach to a Chrome you started with --remote-debugging-port=9222 — persistent session\n" +
+		"  live   drive your real logged-in Chrome via `browser hub` + the MV3 extension (cookies/SSO intact)\n" +
+		"\n" +
+		"Subcommands: status navigate extract eval click type wait-for-selector screenshot\n" +
+		"  cookies-get scroll keyboard-press back tabs fetch hub setup login\n" +
+		"(--json emits {success,title,url,content,error}; `bashy fetch URL` is the non-browser HTTP client.)\n" +
+		"Guide: coreutils/docs/browser.md",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
