@@ -14,8 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/pkg/binmgr"
 )
@@ -68,17 +70,45 @@ func NewGitSCMCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c := exec.CommandContext(cmd.Context(), git, args...)
+			c := exec.Command(git, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			if runtime.GOOS == "windows" {
-				c.Env = appendGitWindowsNonInteractiveEnv(os.Environ())
+				c.Env = appendGitWindowsEnv(os.Environ(), gitPromptsNonInteractive(
+					os.Environ(),
+					term.IsTerminal(int(os.Stdin.Fd())),
+					term.IsTerminal(int(os.Stderr.Fd())),
+				))
 			}
-			return c.Run()
+			return runGitCommand(cmd.Context(), c)
 		},
 	}
 }
 
-func appendGitWindowsNonInteractiveEnv(env []string) []string {
+func runGitCommand(ctx context.Context, c *exec.Cmd) error {
+	configureGitCommand(c)
+	if err := c.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		killGitProcessTree(c.Process.Pid)
+		_ = c.Process.Kill()
+		err := <-done
+		if err != nil {
+			return err
+		}
+		return ctx.Err()
+	}
+}
+
+func appendGitWindowsEnv(env []string, nonInteractive bool) []string {
+	if !nonInteractive {
+		return env
+	}
 	if !hasEnv(env, "GIT_TERMINAL_PROMPT") {
 		env = append(env, "GIT_TERMINAL_PROMPT=0")
 	}
@@ -86,6 +116,38 @@ func appendGitWindowsNonInteractiveEnv(env []string) []string {
 		env = append(env, "GCM_INTERACTIVE=never")
 	}
 	return env
+}
+
+func gitPromptsNonInteractive(env []string, stdinTTY, stderrTTY bool) bool {
+	if envTruthy(env, "BASHY_GIT_INTERACTIVE") {
+		return false
+	}
+	if envTruthy(env, "BASHY_GIT_NONINTERACTIVE") || envTruthy(env, "BASHY_AGENTIC") {
+		return true
+	}
+	return !stdinTTY || !stderrTTY
+}
+
+func envTruthy(env []string, name string) bool {
+	v, ok := envValue(env, name)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(v) {
+	case "", "0", "false", "no", "off":
+		return false
+	}
+	return true
+}
+
+func envValue(env []string, name string) (string, bool) {
+	prefix := name + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return kv[len(prefix):], true
+		}
+	}
+	return "", false
 }
 
 func hasEnv(env []string, name string) bool {
