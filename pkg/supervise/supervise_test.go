@@ -24,6 +24,10 @@ type noProgress struct{}
 
 func (noProgress) progress(string) {}
 
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // funcRunner adapts a function to chat.Runner.
 type funcRunner func(ctx context.Context, agent string, args []string, cwd string) (string, int, error)
 
@@ -113,7 +117,7 @@ func TestRetryRotatesFleet(t *testing.T) {
 	testEnv(t)
 	// gate fails on the first run, passes on the second (a file toggled by the worker turns)
 	gatefile := filepath.Join(t.TempDir(), "flag")
-	gate := "test -f " + gatefile
+	gate := "test -f " + shellQuote(gatefile)
 	attempts := 0
 	// A runner that creates the flag file on its SECOND invocation.
 	r := funcRunner(func(_ context.Context, agent string, _ []string, _ string) (string, int, error) {
