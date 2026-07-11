@@ -144,9 +144,73 @@ func NewGoCmd() *cobra.Command {
 			}
 			c := exec.CommandContext(cmd.Context(), goBin, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-			c.Env = append(os.Environ(), "GOROOT="+goroot)
+			c.Env = goCommandEnv(goroot)
 			return c.Run()
 		},
 	}
 	return cmd
+}
+
+func goCommandEnv(goroot string) []string {
+	env := append([]string{}, os.Environ()...)
+	if runtime.GOOS == "windows" {
+		env = normalizeWindowsTempEnv(env)
+	}
+	return append(env, "GOROOT="+goroot)
+}
+
+func normalizeWindowsTempEnv(env []string) []string {
+	out := make([]string, 0, len(env)+2)
+	seen := map[string]bool{}
+	for _, e := range env {
+		name, value, ok := strings.Cut(e, "=")
+		if !ok {
+			out = append(out, e)
+			continue
+		}
+		upper := strings.ToUpper(name)
+		switch upper {
+		case "TMP", "TEMP", "TMPDIR":
+			value = windowsNativePath(value)
+			seen[upper] = true
+		}
+		out = append(out, name+"="+value)
+	}
+	fallback := windowsNativePath(os.TempDir())
+	if fallback != "" {
+		if !seen["TMP"] {
+			out = append(out, "TMP="+fallback)
+		}
+		if !seen["TEMP"] {
+			out = append(out, "TEMP="+fallback)
+		}
+	}
+	return out
+}
+
+func windowsNativePath(path string) string {
+	return windowsNativePathForGOOS(runtime.GOOS, path)
+}
+
+func windowsNativePathForGOOS(goos, path string) string {
+	if goos != "windows" || path == "" {
+		return path
+	}
+	p := strings.ReplaceAll(path, `/`, `\`)
+	if len(p) >= 2 && p[0] == '\\' && asciiLetter(p[1]) && (len(p) == 2 || p[2] == '\\') {
+		drive := p[1]
+		if 'a' <= drive && drive <= 'z' {
+			drive -= 'a' - 'A'
+		}
+		rest := p[2:]
+		if rest == "" {
+			rest = `\`
+		}
+		return string(drive) + ":" + rest
+	}
+	return p
+}
+
+func asciiLetter(c byte) bool {
+	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }
