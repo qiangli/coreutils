@@ -10,6 +10,7 @@ func TestWindowsNativePathForGOOS(t *testing.T) {
 		want string
 	}{
 		{"msys temp", "windows", "/c/Users/liqiang/AppData/Local/Temp", `C:\Users\liqiang\AppData\Local\Temp`},
+		{"shellified go cache", "windows", `\c\Users\liqiang\go\pkg\mod`, `C:\Users\liqiang\go\pkg\mod`},
 		{"drive path", "windows", `C:\Users\liqiang\AppData\Local\Temp`, `C:\Users\liqiang\AppData\Local\Temp`},
 		{"other os unchanged", "linux", "/c/Users/liqiang/AppData/Local/Temp", "/c/Users/liqiang/AppData/Local/Temp"},
 	}

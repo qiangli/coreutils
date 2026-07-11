@@ -170,7 +170,7 @@ func normalizeWindowsTempEnv(env []string) []string {
 		}
 		upper := strings.ToUpper(name)
 		switch upper {
-		case "TMP", "TEMP", "TMPDIR":
+		case "TMP", "TEMP", "TMPDIR", "GOPATH", "GOMODCACHE", "GOCACHE", "GOENV":
 			value = windowsNativePath(value)
 			seen[upper] = true
 		}
