@@ -69,6 +69,11 @@ func systemPodman() bool {
 // bashy's isolated machine socket via CONTAINER_HOST when one exists. The
 // child's exit code propagates via os.Exit so CI scripts see failures.
 func ExecManaged(ctx context.Context, args []string) error {
+	if shouldEnsureMachine(args) {
+		if err := EnsureMachine(ctx, DefaultMachineConfig()); err != nil {
+			return err
+		}
+	}
 	bin, err := resolvePodmanBinary()
 	if err != nil {
 		return err
@@ -82,6 +87,24 @@ func ExecManaged(ctx context.Context, args []string) error {
 		return fmt.Errorf("podman: %w", runErr)
 	}
 	return nil
+}
+
+func shouldEnsureMachine(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	for _, arg := range args {
+		switch arg {
+		case "--":
+			return true
+		case "-h", "--help", "--version", "help", "machine", "version", "system":
+			return false
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return true
+		}
+	}
+	return true
 }
 
 // buildManagedExec builds the exec.Cmd shipping args to the resolved podman,

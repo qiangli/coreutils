@@ -136,6 +136,9 @@ func DefaultMachineConfig() MachineConfig {
 func EnsureMachine(ctx context.Context, cfg MachineConfig) error {
 	// Ensure vfkit helper is available (macOS VM hypervisor).
 	ensureHelperBinariesOnPath()
+	if err := ensurePlatformMachinePrereqs(ctx); err != nil {
+		return err
+	}
 
 	// Get the platform's VM provider (AppleHV on macOS, QEMU on Linux, HyperV on Windows).
 	mp, err := ociMachine.GetProvider()
@@ -296,6 +299,10 @@ func StopMachine(ctx context.Context, name string) error {
 // InitMachine creates and registers a new VM without starting it. Use
 // StartMachine afterward (or EnsureMachine which does both).
 func InitMachine(ctx context.Context, cfg MachineConfig) error {
+	if err := ensurePlatformMachinePrereqs(ctx); err != nil {
+		return err
+	}
+
 	// Preflight: refuse before we touch any state if the host doesn't
 	// have enough memory or disk to run the VM as configured. Without
 	// this, vfkit would happily allocate a 50 GB sparse image on a
