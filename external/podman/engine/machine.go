@@ -462,6 +462,9 @@ func ensureHelperBinariesOnPath() {
 			slog.Info("container: using embedded gvproxy", "path", path)
 		}
 	}
+	if err := ensurePlatformHelperBinaries(cacheDir); err != nil {
+		slog.Warn("container: platform helper provisioning failed", "error", err)
+	}
 
 	// PATH-search (vfkit) — `FindHelperBinary(_, true)`.
 	currentPath := os.Getenv("PATH")
