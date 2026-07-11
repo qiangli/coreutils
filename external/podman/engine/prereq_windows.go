@@ -7,14 +7,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"go.podman.io/common/pkg/config"
+	"go.podman.io/podman/v6/pkg/machine/define"
 )
 
 const wslInstallHint = "run an elevated PowerShell and execute `wsl --install --no-distribution`, reboot if Windows asks, then rerun `bashy podman`"
 
+var getenv = os.Getenv
+
 func ensurePlatformMachinePrereqs(ctx context.Context) error {
+	provider, err := selectedWindowsMachineProvider()
+	if err != nil {
+		return err
+	}
+	if provider == define.HyperVVirt {
+		return nil
+	}
+
 	status, err := runWSL(ctx, "--status")
 	if wslStatusLooksReady(status, err) {
 		return nil
@@ -48,6 +62,21 @@ func runWSL(parent context.Context, args ...string) ([]byte, error) {
 		return out, ctx.Err()
 	}
 	return out, err
+}
+
+func selectedWindowsMachineProvider() (define.VMType, error) {
+	provider := ""
+	if cfg, err := config.Default(); err == nil {
+		provider = cfg.Machine.Provider
+	}
+	if override := strings.TrimSpace(getenv("CONTAINERS_MACHINE_PROVIDER")); override != "" {
+		provider = override
+	}
+	vmType, err := define.ParseVMType(provider, define.WSLVirt)
+	if err != nil {
+		return define.UnknownVirt, fmt.Errorf("bashy podman: invalid Windows machine provider %q: %w", provider, err)
+	}
+	return vmType, nil
 }
 
 func wslStatusLooksReady(out []byte, err error) bool {
