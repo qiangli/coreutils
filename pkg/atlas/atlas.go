@@ -492,6 +492,7 @@ func init() {
 	addVerb("commands", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("context", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("doctor", Entry{Group: GroupPlatform, Caps: []string{CapReadOnly}})
+	addVerb("audit", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("check", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("verify", Entry{Group: GroupPlatform, Caps: []string{CapSpawnsProcesses}})
 	addVerb("self", Entry{Group: GroupPlatform, Caps: []string{CapCached, CapNeedsNetwork}})
@@ -546,7 +547,7 @@ func init() {
 		// verbs that read stores / remote state
 		"capability", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "git", "web", "rclone", "kopia", "commands", "context",
-		"doctor", "check", "sprint",
+		"doctor", "audit", "check", "sprint",
 	)
 
 	// write — mutates the filesystem or host state (short of irreversible loss).
