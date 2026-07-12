@@ -253,9 +253,15 @@ func prepareRun(cfg *config, sk Skill, src Source, ps *ProbeSet) (runPrep, error
 	}
 
 	meta := map[string]string{}
-	maps.Copy(meta, sk.Meta)
-	// Learned bindings extend/override authored metadata.
+	// Learned host-local bindings supply concrete commands for NEW step
+	// primitives a repair introduced (see adapt.go) — they EXTEND the authored
+	// metadata, they do not get to silently redefine it. So apply them first and
+	// let the authored SKILL.md frontmatter win on any shared key: a host-local
+	// overlay must not be able to change what an authored, signed skill executes.
+	// (The repair-search trial path in adapt.go layers a candidate over this
+	// baseline explicitly — that override is deliberate and stays there.)
 	maps.Copy(meta, loadBindings(cfg.cfgDir, sk.Name))
+	maps.Copy(meta, sk.Meta)
 
 	tier := "local"
 	if len(cfg.statics) > 0 {

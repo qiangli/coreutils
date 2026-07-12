@@ -43,9 +43,12 @@ file body with a single line:
   eval "$(bashy secrets env)"
 
 Every new shell pulls the current values over an authenticated, audited,
-revocable token; nothing secret stays on disk. 'env' caches the rendered
-exports locally and falls back to that cache when cloudbox is unreachable,
-so opening a shell never blocks or breaks.`,
+revocable token; the rc file itself holds no secret material. For resilience
+'env' caches the rendered exports on disk (owner-only, mode 0600) and falls
+back to that cache when cloudbox is unreachable, so opening a shell never
+blocks or breaks — so the decrypted values DO persist there, at the same
+0600 protection an rc file would have. Pass --no-cache to keep nothing on
+disk (at the cost of the offline fallback).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

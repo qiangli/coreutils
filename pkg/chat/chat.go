@@ -16,6 +16,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -73,7 +74,15 @@ type Result struct {
 // capability matrix. seededProfiles remains only as the fallback for a tool
 // the registry does not know.
 type LaunchProfile struct {
+	// Args is the SAFE launch argv — the agent runs under its own approval gate
+	// / sandbox. The prompt is appended after these, so any flag that consumes
+	// the prompt (aider's --message, agy's -p) stays last.
 	Args []string
+	// UnsafeArgs are the agent's own approval-gate kill-switches. They are
+	// prepended to Args ONLY when unsafeLaunchAllowed() (an explicit opt-in or a
+	// verified container) — never by default. Prepending keeps a prompt-consuming
+	// trailing flag last.
+	UnsafeArgs []string
 }
 
 // Launch is a fully resolved invocation: which binary, which model, which argv.
@@ -129,16 +138,7 @@ func (execRunner) Run(ctx context.Context, agent string, args []string, cwd stri
 	// and is unreachable this way — see `bashy install-agent codex`. On by
 	// default; BASHY_FORCE_AGENT_SHELL=0 disables. cmd.Path is already resolved
 	// against the real PATH, so prepending the shim dir never shadows the agent.
-	env := os.Environ()
-	if forceAgentShell() {
-		if bashy, err := os.Executable(); err == nil && bashy != "" {
-			env = forcedShellEnv(env, bashy, ensureShims(bashy))
-		}
-	}
-	if l, ok := LaunchFrom(ctx); ok {
-		env = principalEnv(env, l)
-	}
-	cmd.Env = env
+	cmd.Env = agentChildEnv(ctx)
 	// Capture stdout and stderr SEPARATELY. The agent's actual answer is on
 	// stdout; CLI chrome (banners, warnings, progress) goes to stderr and would
 	// otherwise pollute a captured turn — and a truncated multibyte char in that
@@ -172,6 +172,29 @@ func (execRunner) Run(ctx context.Context, agent string, args []string, cwd stri
 	return out, 127, err
 }
 
+// agentChildEnv builds the environment for a spawned agent process.
+//
+// It starts from the launcher's own environment, then, in order:
+//   - CREDENTIAL FIREWALL: strips the operator's vault secrets, so a spawned
+//     third-party agent does not inherit them by default. An agent CLI processes
+//     untrusted content and has its own network egress; an inherited vault is the
+//     lethal trifecta. Restore with secrets.AllowAgentSecretsEnv (explicit,
+//     auditable). No-op when the host projects no vault secrets.
+//   - shell forcing: route the agent's shell-outs back through bashy.
+//   - principal stamping: tell the child which agent it is.
+func agentChildEnv(ctx context.Context) []string {
+	env := secrets.ScrubAgentEnv(os.Environ())
+	if forceAgentShell() {
+		if bashy, err := os.Executable(); err == nil && bashy != "" {
+			env = forcedShellEnv(env, bashy, ensureShims(bashy))
+		}
+	}
+	if l, ok := LaunchFrom(ctx); ok {
+		env = principalEnv(env, l)
+	}
+	return env
+}
+
 // appendStderr joins captured stderr onto stdout for error reporting.
 func appendStderr(stdout, stderr string) string {
 	stderr = strings.TrimSpace(stderr)
@@ -192,15 +215,23 @@ func appendStderr(stdout, stderr string) string {
 //
 // Do not add rows here. Add a tool to the registry instead — a row here can
 // only describe how to start a binary, never which model to give it.
+// The kill-switch flags (--dangerously-skip-permissions, --yes-always) live in
+// UnsafeArgs, not Args, so the DEFAULT launch runs each agent under its own
+// safety system. They are restored only under an explicit opt-in / verified
+// container (see unsafeLaunchAllowed). codex needs none here: its safe default
+// (--sandbox workspace-write) is already in Args, and the unsafe form is reached
+// only by an explicit `--sandbox danger-full-access`, which applySandbox maps and
+// guardUnsafeArgs then gates.
 var seededProfiles = map[string]LaunchProfile{
-	"claude":   {Args: []string{"--dangerously-skip-permissions"}},
+	"claude":   {UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"codex":    {Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}},
-	"agy":      {Args: []string{"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"}},
+	"agy":      {Args: []string{"--print-timeout", "40m", "-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"opencode": {Args: []string{"run"}},
 	// aider takes its prompt via --message; the launcher appends the prompt as
-	// the final arg, so it becomes the --message value. --yes-always makes it
-	// non-interactive; --no-git keeps a turn advisory (no repo/commit writes).
-	"aider": {Args: []string{"--yes-always", "--no-git", "--message"}},
+	// the final arg, so it becomes the --message value. --no-git keeps a turn
+	// advisory (no repo/commit writes). --yes-always (which switches off aider's
+	// confirmation gate) is unsafe and applied only when explicitly allowed.
+	"aider": {Args: []string{"--no-git", "--message"}, UnsafeArgs: []string{"--yes-always"}},
 }
 
 // newCatalog builds the fleet catalog the launcher resolves against. It is a
@@ -268,7 +299,18 @@ func resolveLaunch(name string, opt Options) (Launch, error) {
 		return lnch, fmt.Errorf("chat: no launch template for tool %q, so model %q cannot be passed to it; add it with `bashy tools add`",
 			toolName, modelName)
 	}
-	out, err := finalizeArgs(toolName, append([]string{}, seededProfiles[toolName].Args...), opt)
+	prof := seededProfiles[toolName]
+	base := append([]string{}, prof.Args...)
+	// Restore the agent's kill-switch flags ONLY when unsafe launches are
+	// permitted here (explicit opt-in or a verified container). By default the
+	// agent launches under its own approval gate — stricter, and the safe posture
+	// on an uncontained host.
+	if len(prof.UnsafeArgs) > 0 {
+		if ok, _ := unsafeLaunchAllowed(); ok {
+			base = append(append([]string{}, prof.UnsafeArgs...), base...)
+		}
+	}
+	out, err := finalizeArgs(toolName, base, opt)
 	if err != nil {
 		return lnch, err
 	}
@@ -540,7 +582,8 @@ func LaunchFrom(ctx context.Context) (Launch, bool) {
 var unsafeLaunchFlags = map[string]string{
 	"--dangerously-skip-permissions":             "disables the agent's approval gate",
 	"--dangerously-bypass-approvals-and-sandbox": "disables the agent's approval gate AND its sandbox",
-	"--yolo": "disables the agent's approval gate",
+	"--yolo":       "disables the agent's approval gate",
+	"--yes-always": "auto-confirms every action, disabling the agent's approval gate",
 }
 
 // UnsafeLaunchEnv opts a host into launching agents with their own safety
