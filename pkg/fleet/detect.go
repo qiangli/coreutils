@@ -68,3 +68,22 @@ var (
 	indexOnce   sync.Once
 	markerIndex []marker
 )
+
+// MarkerEnvs lists every environment variable DetectTool consults, plus the two
+// name-valued conventions.
+//
+// Exported because the marker set is DATA (it comes from the tool registry, so
+// `bashy tools add` can extend it) and callers need to enumerate it rather than
+// hardcode it:
+//
+//   - a test that wants a genuinely agent-free environment must clear all of them,
+//     and a hardcoded list would silently rot the first time a harness is added;
+//   - `bashy doctor` can say WHY it believes an agent is driving the shell.
+func MarkerEnvs() []string {
+	indexOnce.Do(func() { markerIndex = New().markers() })
+	out := make([]string, 0, len(markerIndex)+2)
+	for _, m := range markerIndex {
+		out = append(out, m.env)
+	}
+	return append(out, "AGENT", "AI_AGENT")
+}

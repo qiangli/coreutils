@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // SchemaVersion is stamped into every envelope's schema_version field.
@@ -67,12 +69,60 @@ const (
 	OutputQuiet                   // --quiet: final result line only
 )
 
-// IsAgent reports whether the environment requests agent defaults (forces
-// --json + no prompts + no spinners). The single signal is BASHY_AGENTIC
-// (matching the `--agentic` flag family): a truthy value enables agent mode; an
-// off-ish value or unset leaves it off.
+// IsAgent reports whether AGENT MODE was explicitly requested: force --json, no
+// prompts, no spinners. The single signal is BASHY_AGENTIC (matching the `--agentic`
+// flag family).
+//
+// This is deliberately NARROW, and stays narrow. It decides OUTPUT FORMAT for ~30
+// subverbs, so widening it to "an agent CLI is driving the shell" would silently turn
+// every `weave list` and `weave status` in a Claude session from a human-readable table
+// into a JSON blob — a real change to what a human reads in their transcript, and not
+// one to make by ambient detection. Agent mode is asked for; it is not sniffed.
+//
+// The question "is a machine at the wheel?" — which is what the AFFORDANCES (the
+// advisor, the nudges) actually want — is IsAgentDriven. See its doc: they are
+// different questions, and the bug was one predicate answering both.
 func IsAgent() bool {
 	return truthyAgent(os.Getenv("BASHY_AGENTIC"))
+}
+
+// IsAgentDriven reports whether a MACHINE is at the wheel — by either route.
+//
+// # The bug this fixes
+//
+// BASHY_AGENTIC is set in exactly ONE place: when bashy itself launches an agentic
+// worker (weave, `bashy run`). A human who types `claude` in a terminal — with bashy as
+// its shell, which is the ENTIRE POINT of `bashy install-agent` — sets nothing. So the
+// advisor and the nudges, which gated on IsAgent(), were SILENTLY DARK in the single
+// most common agentic configuration there is. Two shipped features that never once fired
+// for the users they were built for.
+//
+// The same wrong gate would have neutered the coordination guard, which is how it was
+// finally caught: a guard that no-ops in exactly the sessions that collide.
+//
+//	BASHY_AGENTIC     bashy ORCHESTRATED this run (a weave worker, `bashy run`)
+//	fleet.DetectTool  an agent CLI is DRIVING this shell (CLAUDECODE, CODEX_SANDBOX, …)
+//
+// # Why this is a separate predicate and not just a wider IsAgent
+//
+// Because the two questions have different blast radii, and conflating them trades one
+// bug for a worse one:
+//
+//   - An AFFORDANCE (an advisor hint on stderr when a command fails) is additive. Firing
+//     it for an agent that did not ask can only help.
+//   - A FORMAT (stdout as JSON instead of a table) is a contract. Flipping it by sniffing
+//     the environment changes what every existing script and human sees.
+//   - A WORLD (shimming `go` to a self-downloaded toolchain — `bashy go` does not wrap
+//     the host one) would shadow the compiler a developer actually installed.
+//
+// A machine at the wheel earns better HINTS. Only an explicit request earns a different
+// FORMAT, and only bashy orchestrating the run earns a different WORLD.
+func IsAgentDriven() bool {
+	if IsAgent() {
+		return true
+	}
+	_, detected := fleet.DetectTool()
+	return detected
 }
 
 func truthyAgent(v string) bool {
