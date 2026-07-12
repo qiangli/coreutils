@@ -322,6 +322,14 @@ func resolveProject(root string) Project {
 	}
 }
 
+// ProjectRoots resolves the project as a PATH SET: the repo plus the sibling
+// repos it actually depends on. Exported because discovery needs it — `bashy
+// context --json` asks "is there a handoff pending for this project?", and the
+// honest answer requires knowing that a project spans repos. A session that
+// handed off while working across bashy + sh + coreutils must be found by an
+// agent that later opens ANY ONE of them.
+func ProjectRoots(root string) []string { return projectRoots(root) }
+
 func projectRoots(root string) []string {
 	roots := []string{root}
 	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
