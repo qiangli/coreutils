@@ -159,6 +159,15 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 	if derr != nil {
 		return "", derr
 	}
+	// A committed pin, when present, is authoritative: verify against OUR digest
+	// (trust root = this repo's reviewed history) and discard whatever the release
+	// resolved to, including a weaker md5. See pins.go for why this matters — the
+	// release-resolved checksum protects only against transit corruption, not
+	// against the release itself being tampered with.
+	if pin, ok := pinnedSHA256(t.Name, t.Version, Platform()); ok {
+		asset.SHA256, asset.SHA512, asset.MD5 = pin, "", ""
+	}
+
 	// Integrity is the supply-chain trust boundary — bashy is OSS and its
 	// download-and-exec path is exactly what a malicious mirror/tampered release
 	// would target. Verify against the strongest digest provided (sha256 >
@@ -174,9 +183,19 @@ func Ensure(ctx context.Context, t Tool) (string, error) {
 			return "", fmt.Errorf("binmgr: %s %s sha512 mismatch: got %s, want %s", t.Name, t.Version, sha512sum, want)
 		}
 	case strings.TrimSpace(asset.MD5) != "":
+		// MD5 is collision-broken: an attacker can craft a malicious artifact
+		// with the same md5 as a benign one, so an md5-only check against a
+		// release-supplied digest is close to no check at all. Refuse it by
+		// default. The fix is to commit a sha256 pin (pins.go); the env override
+		// exists only so a legitimately md5-only upstream is not bricked before a
+		// pin lands, and it says clearly what it is trading away.
+		if !weakChecksumAllowed() {
+			return "", fmt.Errorf("binmgr: %s %s: only an MD5 checksum is available for %s, and MD5 is collision-broken — not a trustworthy integrity check. Commit a sha256 pin (pkg/binmgr/pins.go), or set BASHY_ALLOW_WEAK_CHECKSUM=1 to accept the weaker check", t.Name, t.Version, asset.URL)
+		}
 		if want := strings.ToLower(strings.TrimSpace(asset.MD5)); want != md5sum {
 			return "", fmt.Errorf("binmgr: %s %s md5 mismatch: got %s, want %s", t.Name, t.Version, md5sum, want)
 		}
+		fmt.Fprintf(os.Stderr, "binmgr: warning: %s %s verified with MD5 only (collision-broken); commit a sha256 pin\n", t.Name, t.Version)
 	default:
 		return "", fmt.Errorf("binmgr: %s %s: refusing to install %s with NO checksum (sha256/sha512/md5) — supply one or the download cannot be trusted", t.Name, t.Version, asset.URL)
 	}

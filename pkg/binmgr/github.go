@@ -14,11 +14,16 @@ import (
 // githubAPI is the GitHub REST base (overridable in tests).
 var githubAPI = "https://api.github.com"
 
-// GitHubSpec locates a tool's binary on GitHub releases so we never hand-maintain
-// pinned digests: given a repo + version, ResolveGitHub picks the asset for the
-// current platform and resolves its sha256 (a per-asset .sha256 sidecar, or a
-// checksums file in the release). Reusable for every tool that ships GitHub
-// releases (Gitea, Zot, SeaweedFS, Kopia, …).
+// GitHubSpec locates a tool's binary on GitHub releases: given a repo + version,
+// ResolveGitHub picks the asset for the current platform and resolves its sha256
+// (a per-asset .sha256 sidecar, or a checksums file in the release). Reusable for
+// every tool that ships GitHub releases (Gitea, Zot, SeaweedFS, Kopia, …).
+//
+// Note on trust: a checksum resolved from the release is a transit-integrity
+// check, not a defense against a tampered release — the sidecar lives next to
+// the artifact and moves with it. For real supply-chain integrity, pin the
+// digest in pins.go, where the trust root is this repo's reviewed history rather
+// than the downloaded release. See Ensure and pins.go.
 type GitHubSpec struct {
 	// Name is the logical tool name — the cache key and the cached binary name.
 	Name string
