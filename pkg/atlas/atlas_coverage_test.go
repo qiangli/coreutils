@@ -49,6 +49,7 @@ func TestClosedVocabularies(t *testing.T) {
 	groups := sliceSet(atlas.Groups())
 	tiers := sliceSet(atlas.Tiers())
 	caps := sliceSet(atlas.Capabilities())
+	effects := sliceSet(atlas.Effects())
 
 	check := func(names []string) {
 		for _, n := range names {
@@ -74,6 +75,33 @@ func TestClosedVocabularies(t *testing.T) {
 					t.Errorf("%s: duplicate cap %q", n, c)
 				}
 				seen[c] = true
+			}
+
+			// Security-effect classification is MANDATORY. A command with no
+			// declared effect is unclassified, and unclassified must fail the
+			// build, not fall through as harmless — this is the whole point of
+			// the axis. EffPure is the explicit "considered, no governed effect"
+			// declaration for the genuinely benign ones (true, echo, seq).
+			if len(e.Effects) == 0 {
+				t.Errorf("%s: no security effect declared (classify it in pkg/atlas; use %q if genuinely benign)", n, atlas.EffPure)
+			}
+			if !sort.StringsAreSorted(e.Effects) {
+				t.Errorf("%s: effects not sorted: %v", n, e.Effects)
+			}
+			seenEff := map[string]bool{}
+			for _, ef := range e.Effects {
+				if !effects[ef] {
+					t.Errorf("%s: effect %q not in vocabulary", n, ef)
+				}
+				if seenEff[ef] {
+					t.Errorf("%s: duplicate effect %q", n, ef)
+				}
+				seenEff[ef] = true
+			}
+			// EffPure is exclusive: a command is benign OR it has real effects,
+			// never both. Catching this keeps "pure" meaningful.
+			if seenEff[atlas.EffPure] && len(e.Effects) > 1 {
+				t.Errorf("%s: %q cannot be combined with other effects: %v", n, atlas.EffPure, e.Effects)
 			}
 		}
 	}
@@ -135,6 +163,14 @@ func TestRegistryEntryDerivation(t *testing.T) {
 	if e.Tier != atlas.TierCloud || e.Group != atlas.GroupClusterCloud ||
 		e.Subclass != atlas.SubclassManagedExternal {
 		t.Errorf("RegistryEntry(6) = %+v, want cloud/cluster-cloud/managed-external", e)
+	}
+	// A cloud/cluster CLI acts on another host — remote; a tier-2 local tool
+	// (ripgrep) is downloaded and run but stays on this box — not remote.
+	if !sliceSet(e.Effects)[atlas.EffRemote] {
+		t.Errorf("RegistryEntry(6) effects %v missing %q", e.Effects, atlas.EffRemote)
+	}
+	if sliceSet(atlas.RegistryEntry(2).Effects)[atlas.EffRemote] {
+		t.Errorf("RegistryEntry(2) (local tool) must not be %q: %v", atlas.EffRemote, atlas.RegistryEntry(2).Effects)
 	}
 	if got := atlas.TierName(5); got != atlas.TierCluster {
 		t.Errorf("TierName(5) = %q, want cluster", got)

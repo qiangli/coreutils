@@ -78,6 +78,33 @@ const (
 	CapDaemon           = "daemon"            // starts/manages a long-running service
 )
 
+// Security effects (closed vocabulary; curated, never inferred). Unlike the
+// capability flags — which describe what a command is FOR — effects describe
+// what a command can DO to the machine, the data, or the outside world, from a
+// security / privacy / governance lens. Every atlas entry declares at least one
+// (EffPure is the explicit "no governed effect" declaration), so classification
+// is mandatory: a command with no declared effect fails the coverage ratchet,
+// it does not fail open.
+//
+// The first six mirror the dhnt skill-CNL effect lattice
+// (coreutils/pkg/skills → github.com/dhnt/dhnt/skills); the last five are the
+// finer distinctions a shell that an agent drives needs to reason about. A
+// future policy engine projects this 11-atom set onto the dhnt 6 for skill-cap
+// compatibility.
+const (
+	EffPure    = "pure"    // deterministic, no governed side effect (true, echo, seq)
+	EffRead    = "read"    // reads filesystem / host state / input data (privacy surface)
+	EffWrite   = "write"   // mutates the filesystem or host state
+	EffDestroy = "destroy" // can IRREVERSIBLY lose data (rm, dd, shred)
+	EffNet     = "net"     // opens a network connection (egress / exfiltration surface)
+	EffExec    = "exec"    // spawns an external process that bashy no longer governs
+	EffCred    = "cred"    // reads or writes credentials / secrets
+	EffPriv    = "priv"    // changes privilege, ownership, or a security label
+	EffRemote  = "remote"  // executes on ANOTHER host (crosses the machine boundary)
+	EffPersist = "persist" // leaves something that OUTLIVES the session (cron, daemon, install)
+	EffSpend   = "spend"   // incurs metered cost (paid inference, cloud resources)
+)
+
 // Subclass refines the verb class only.
 const (
 	SubclassProvisioner     = "provisioner"
@@ -92,7 +119,8 @@ type Entry struct {
 	Tier     string
 	Subclass string // verbs only: provisioner | managed-external | ""
 	Caps     []string
-	AliasOf  string // e.g. docker → podman, upgrade → self
+	Effects  []string // security effects (closed vocab); every entry has ≥1
+	AliasOf  string   // e.g. docker → podman, upgrade → self
 }
 
 // Idiom is one curated composite: commands naturally used together.
@@ -138,6 +166,14 @@ func Capabilities() []string {
 	}
 }
 
+// Effects returns the closed security-effect vocabulary, sorted.
+func Effects() []string {
+	return []string{
+		EffCred, EffDestroy, EffExec, EffNet, EffPersist, EffPriv,
+		EffPure, EffRead, EffRemote, EffSpend, EffWrite,
+	}
+}
+
 // Lookup returns the atlas entry for a command name: in-process tools first,
 // then front-door verbs (mirroring dispatch precedence). Shell builtins and
 // declarative-registry CLIs are the embedder's to merge (see RegistryEntry).
@@ -161,6 +197,15 @@ func VerbNames() []string { return sortedKeys(verbs) }
 // CLI (external/registry), given its Entry.Tier int. Registry CLIs are never
 // hand-listed in the atlas: new providers are registry data only.
 func RegistryEntry(tier int) Entry {
+	// Every managed external is downloaded (net) and then run as its own process
+	// (exec). Only a tier-4+ CLI (sphere/cluster/cloud — doctl, …) drives a
+	// control plane on ANOTHER host and so is also `remote`; a tier-2/3 local
+	// tool like ripgrep is not.
+	effects := []string{EffExec, EffNet}
+	if tier >= 4 {
+		effects = append(effects, EffRemote)
+	}
+	sort.Strings(effects)
 	return Entry{
 		Group:    GroupClusterCloud,
 		Tier:     TierName(tier),
@@ -168,6 +213,7 @@ func RegistryEntry(tier int) Entry {
 		Caps: []string{
 			CapCached, CapNeedsNetwork, CapSelfProvisioning, CapSpawnsProcesses,
 		},
+		Effects: effects,
 	}
 }
 
@@ -271,6 +317,25 @@ func capTools(capability string, names ...string) {
 		}
 		e.Caps = append(e.Caps, capability)
 		tools[n] = e
+	}
+}
+
+// eff appends a security effect to existing entries (tool OR verb); an unknown
+// name panics so the classification self-checks at init and can never silently
+// skip a command.
+func eff(effect string, names ...string) {
+	for _, n := range names {
+		if e, ok := tools[n]; ok {
+			e.Effects = append(e.Effects, effect)
+			tools[n] = e
+			continue
+		}
+		if e, ok := verbs[n]; ok {
+			e.Effects = append(e.Effects, effect)
+			verbs[n] = e
+			continue
+		}
+		panic(fmt.Sprintf("atlas: effect %q names unknown command %q", effect, n))
 	}
 }
 
@@ -443,13 +508,131 @@ func init() {
 	addVerb("login", Entry{Group: GroupAccount, Tier: TierAccount,
 		Caps: []string{CapNeedsNetwork, CapNeedsPairing, CapSpawnsProcesses}})
 
+	// --- security-effect classification ------------------------------------
+	//
+	// What each command can DO, from a security/privacy/governance lens. Runs
+	// last, over BOTH tables, because eff() resolves a name in either. The
+	// coverage ratchet requires ≥1 effect on every entry, so a new command that
+	// is added without a line here fails the build by name — classification is
+	// mandatory, never fail-open. A command legitimately lists several atoms.
+
+	// pure — deterministic, touches nothing governed.
+	eff(EffPure,
+		"basename", "dirname", "dircolors", "cal", "ncal", "duration", "echo",
+		"expr", "factor", "false", "true", "numfmt", "seq", "sleep", "yes",
+		"sync",
+	)
+
+	// read — reads filesystem, host state, or input data (the privacy surface).
+	eff(EffRead,
+		// fileutils/inspection
+		"df", "du", "ls", "dir", "vdir", "stat", "readlink", "realpath", "tree",
+		"find", "clip",
+		// textutils (transform/read input)
+		"awk", "cat", "cmp", "comm", "csplit", "cut", "diff", "expand", "fmt",
+		"fold", "grep", "gzip", "gunzip", "head", "hexdump", "join", "jq",
+		"more", "nl", "od", "paste", "pr", "ptx", "sed", "shuf", "sort",
+		"split", "strings", "tac", "tail", "tee", "tokens", "tr", "tsort",
+		"unexpand", "uniq", "wc", "xargs", "zcat",
+		"b2sum", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum",
+		"sha384sum", "sha512sum", "sum", "base32", "base64", "basenc",
+		// host info
+		"arch", "groups", "hostid", "hostname", "id", "logname", "nproc",
+		"pathchk", "pinky", "pwd", "tty", "tz", "uname", "uptime", "users",
+		"which", "who", "whoami", "atq", "date", "env", "printenv", "ntp",
+		"sntp",
+		// code-intel / net
+		"ast", "graph", "browser", "fetch",
+		// verbs that read stores / remote state
+		"capability", "agent", "tools", "models", "agents", "people", "whois",
+		"kb", "skills", "git", "web", "rclone", "kopia", "commands", "context",
+		"doctor", "check", "sprint",
+	)
+
+	// write — mutates the filesystem or host state (short of irreversible loss).
+	eff(EffWrite,
+		"clip", "cp", "install", "link", "ln", "mkdir", "mkfifo", "mknod",
+		"mktemp", "mv", "rmdir", "tar", "touch",
+		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "graph",
+		"stty", "atrm", "crontab",
+		// verbs
+		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent",
+		"tools", "models", "agents", "people", "kb", "skills", "mirror", "git",
+		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
+		"rclone",
+	)
+
+	// destroy — can IRREVERSIBLY lose data.
+	eff(EffDestroy, "dd", "rm", "shred", "truncate", "unlink")
+
+	// net — opens a network connection (the egress / exfiltration surface).
+	eff(EffNet,
+		"ntp", "sntp", "browser", "fetch",
+		"sdlc", "chat", "meet", "tools", "models", "agents", "act",
+		"act-runner", "mirror", "podman", "docker", "ollama", "sphere", "git",
+		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
+		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
+		"tessaro", "login",
+	)
+
+	// exec — spawns a process bashy no longer governs (the coreutils userland,
+	// the advisor, and the audit hook do not reach across an execve).
+	eff(EffExec,
+		"find", "awk", "xargs", "at", "batch", "chroot", "nice", "nohup",
+		"runcon", "stdbuf", "time", "timeout", "watch", "env", "foreman",
+		"weave", "dag", "sdlc", "chat", "meet", "supervise", "schedule", "act",
+		"act-runner", "skills", "podman", "docker", "ollama", "sphere",
+		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
+		"verify", "run", "tessaro", "login",
+	)
+
+	// cred — reads or writes credentials / secrets. `env`/`printenv` are here
+	// because they emit the whole environment, secrets included — the reason the
+	// context-redaction allowlist must also cover them.
+	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secrets", "tessaro", "login")
+
+	// priv — changes privilege, ownership, or a security label.
+	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod", "chroot", "runcon")
+
+	// remote — executes on ANOTHER host (crosses the machine boundary). `dag`
+	// pipes a Host:-tagged target body to a remote `bash -s`; sphere runs pooled
+	// compute on peers; mirror/rclone push to a remote endpoint.
+	eff(EffRemote, "dag", "mirror", "sphere", "rclone", "kubectl", "helm")
+
+	// persist — leaves something that OUTLIVES the session: a cron entry, a
+	// daemon, an installed/upgraded binary.
+	eff(EffPersist,
+		"at", "batch", "crontab", "nohup", "foreman",
+		"schedule", "act-runner", "mirror", "podman", "docker", "ollama",
+		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
+	)
+
+	// spend — incurs metered cost: paid inference the agent drives, pooled
+	// compute, or cloud resources.
+	eff(EffSpend, "chat", "meet", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama")
+
+	// The toolchain provisioners each download over the network and then run
+	// arbitrary code (a compiler / package manager / interpreter — npm and pip
+	// run install scripts), so they are net+exec+write as a class.
+	for _, n := range []string{
+		"go", "cmake", "clang", "node", "npm", "npx", "pnpm", "yarn",
+		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust",
+		"java", "javac", "mvn",
+	} {
+		eff(EffNet, n)
+		eff(EffExec, n)
+		eff(EffWrite, n)
+	}
+
 	// Deterministic ordering for every consumer.
 	for n, e := range tools {
 		sort.Strings(e.Caps)
+		sort.Strings(e.Effects)
 		tools[n] = e
 	}
 	for n, e := range verbs {
 		sort.Strings(e.Caps)
+		sort.Strings(e.Effects)
 		verbs[n] = e
 	}
 }
