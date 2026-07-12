@@ -601,6 +601,13 @@ func init() {
 	addVerb("doctor", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapReadOnly}})
 	addVerb("audit", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("check", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
+	// gate: THE Test verb. Before it, the Test stage was EMPTY -- not because
+	// nobody tested, but because the gate (the command that decides pass/fail)
+	// was spelled four incompatible ways across four packages: weave's
+	// suite-gate file, sdlc's healthcheck: key, supervise's :: string, and a
+	// dag target that happens to fail. All four mean the same thing; they only
+	// disagreed about where the command lives. This is the one place it lives.
+	addVerb("gate", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	// conform: BASHY'S OWN fidelity batteries (bash-5.3 compat / POSIX conformance /
 	// VSC-PCTS compliance / benchmark). Renamed from `verify` 2026-07-12: it had
 	// claimed the most general word in the vocabulary for the narrowest possible
@@ -707,7 +714,7 @@ func init() {
 		"weave", "dag", "sdlc", "chat", "invoke", "meet", "supervise", "schedule", "act",
 		"act-runner", "skills", "podman", "docker", "ollama", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
-		"verify", "conform", "run", "tessaro", "login",
+		"verify", "conform", "gate", "run", "tessaro", "login",
 	)
 
 	// cred — reads or writes credentials / secrets. `env`/`printenv` are here

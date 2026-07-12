@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/spf13/cobra"
 	"github.com/qiangli/coreutils/pkg/weavecli"
+	"github.com/spf13/cobra"
 )
 
 func weaveHeartbeatDaemonize(cmd *cobra.Command, opts weaveHeartbeatOptions, queueDir, logFile string, flags *weaveOutputFlags) (bool, error) {

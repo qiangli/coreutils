@@ -26,6 +26,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/gate"
 	"github.com/qiangli/coreutils/pkg/weave/memory"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -1113,9 +1114,24 @@ func maybeAutoCommit(workspace, msg string) (bool, error) {
 	return true, nil
 }
 
+// weaveSuiteGateCommand resolves the gate a merge must clear.
+//
+// Precedence: the issue's own override, then the PROJECT'S gate (`bashy gate`),
+// then weave's historical `.agents/weave/suite-gate`.
+//
+// The project gate is consulted second so that a repo defines "does this pass?"
+// ONCE and weave, sdlc, dag, CI and a human at a terminal all read the same
+// answer. Before `bashy gate`, that question was spelled four incompatible ways
+// in four packages — they never disagreed about semantics (run a command, let its
+// exit status be the verdict), only about where the command lived. weave keeps
+// reading its own file last, so every project already using it works unchanged:
+// the point of unifying is to stop breaking people, not to start.
 func weaveSuiteGateCommand(root string, it *weaveItem) string {
 	if it.SuiteGate != "" {
 		return it.SuiteGate
+	}
+	if def, err := gate.Resolve(root, ""); err == nil && len(def.Commands) > 0 {
+		return strings.Join(def.Commands, " && ")
 	}
 	b, err := os.ReadFile(filepath.Join(root, ".agents", "weave", "suite-gate"))
 	if err != nil {
