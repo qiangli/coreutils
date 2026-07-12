@@ -34,6 +34,17 @@ type Options struct {
 	Sandbox     string
 	JSON        bool
 	DryRun      bool
+	// ReadOnly launches the agent with NO write authority: the approval-gate
+	// kill-switches are stripped from its argv and a sandboxing tool is pinned to
+	// its read-only mode.
+	//
+	// It exists for `bashy judge`, and the reason is an integrity property, not a
+	// convenience: A REVIEWER MUST NOT BE ABLE TO MODIFY WHAT IT REVIEWS. An agent
+	// with write access could "fix" the code and then approve its own fix, and the
+	// verdict would be worthless. It is also simply unnecessary — judge passes the
+	// diff INLINE in the prompt, so the reviewer needs no filesystem access to do
+	// its job, which means it can be denied all of it.
+	ReadOnly bool
 }
 
 // Result is the stable envelope returned by Invoke and optionally printed by
@@ -608,6 +619,9 @@ containing it. Choose one:
 // finalizeArgs applies the --sandbox override, then gates the result. Both
 // launch paths (registry template and seeded fallback) go through here.
 func finalizeArgs(tool string, args []string, opt Options) ([]string, error) {
+	if opt.ReadOnly {
+		args = readOnlyArgs(tool, args)
+	}
 	args = applySandbox(tool, args, opt)
 	// A dry run renders the argv but never executes it, so there is nothing to
 	// contain. Gating it would be backwards: seeing the dangerous flag printed is
@@ -619,6 +633,42 @@ func finalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 		return nil, err
 	}
 	return args, nil
+}
+
+// readOnlyArgs strips every approval-gate kill-switch from an argv and pins a
+// sandboxing tool to read-only.
+//
+// The result passes guardUnsafeArgs by construction — not because the guard was
+// bypassed, but because there is nothing left to guard: the agent is being launched
+// with less authority, not more.
+func readOnlyArgs(tool string, args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if _, unsafe := unsafeLaunchFlags[args[i]]; unsafe {
+			continue
+		}
+		// codex spells its kill-switch as a flag PAIR; rewrite rather than drop, or
+		// the tool falls back to its interactive default and hangs a headless run.
+		if args[i] == "--sandbox" && i+1 < len(args) {
+			out = append(out, "--sandbox", "read-only")
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	if tool == "codex" && !containsArg(out, "--sandbox") {
+		out = append(out, "--sandbox", "read-only")
+	}
+	return out
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
 
 // applySandbox layers the --sandbox override onto an already-rendered argv.
