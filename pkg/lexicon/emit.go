@@ -49,6 +49,20 @@ func (s *Store) EmitAgentsMD(project string) string {
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "    bashy lexicon resolve <term> --json     # what does this word mean HERE?")
 	fmt.Fprintln(&b)
+	// The canonical sentence, with its exact syntax.
+	//
+	// Cross-tool testing earned this line. Cold codex and opencode sessions BOTH
+	// resolved the meaning perfectly from the block above — "claude" is a host
+	// binding, not a vendor's product; "handoff" is the bashy verb — and BOTH then
+	// guessed the invocation wrong, writing `handoff claude` instead of
+	// `bashy handoff --to claude`. The block taught MEANING but not USAGE, so they
+	// had to invent the flag. Teaching the sentence costs two lines and removes the
+	// guess.
+	fmt.Fprintln(&b, "The sentence this vocabulary exists for, and its exact form:")
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, "    \"handoff this to codex\"   →   bashy handoff --to codex -m \"<why, for the successor>\"")
+	fmt.Fprintln(&b, "    \"resume it\"                →   bashy resume")
+	fmt.Fprintln(&b)
 
 	verbs, bindings := s.split()
 	if len(bindings) > 0 {
