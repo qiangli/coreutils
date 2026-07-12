@@ -516,7 +516,13 @@ func init() {
 	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("sdlc", Entry{Stage: StageDeploy, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("chat", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	// invoke: ONE agent, ONCE, on one instruction — the primitive that unifies the
+	// heterogeneous agent CLIs. Renamed from `chat` 2026-07-12: chat does not chat.
+	// Its own synopsis always read "invoke an agent with a single unattended
+	// instruction" — no conversation, no session. The name misled agents into
+	// thinking it was a session, which is what `foreman` is.
+	addVerb("invoke", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("chat", Entry{Stage: StageCode, Group: GroupOrch, AliasOf: "invoke", Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
@@ -595,7 +601,14 @@ func init() {
 	addVerb("doctor", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapReadOnly}})
 	addVerb("audit", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("check", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("verify", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapSpawnsProcesses}})
+	// conform: BASHY'S OWN fidelity batteries (bash-5.3 compat / POSIX conformance /
+	// VSC-PCTS compliance / benchmark). Renamed from `verify` 2026-07-12: it had
+	// claimed the most general word in the vocabulary for the narrowest possible
+	// thing — verifying BASHY ITSELF. A project that ADOPTS bashy would reach for
+	// `bashy verify` to ask "does MY code pass?" and get bash's conformance suites.
+	// The general pass/fail question is `bashy gate`.
+	addVerb("conform", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapSpawnsProcesses}})
+	addVerb("verify", Entry{Stage: StageTest, Group: GroupPlatform, AliasOf: "conform", Caps: []string{CapSpawnsProcesses}})
 	addVerb("self", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapCached, CapNeedsNetwork}})
 	addVerb("bootstrap", Entry{Stage: StageCross, Group: GroupPlatform, AliasOf: "self",
 		Caps: []string{CapCached, CapNeedsNetwork}})
@@ -679,7 +692,7 @@ func init() {
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch",
-		"sdlc", "chat", "meet", "tools", "models", "agents", "act",
+		"sdlc", "chat", "invoke", "meet", "tools", "models", "agents", "act",
 		"act-runner", "mirror", "podman", "docker", "ollama", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
@@ -691,10 +704,10 @@ func init() {
 	eff(EffExec,
 		"find", "awk", "xargs", "at", "batch", "chroot", "nice", "nohup",
 		"runcon", "stdbuf", "time", "timeout", "watch", "env", "foreman",
-		"weave", "dag", "sdlc", "chat", "meet", "supervise", "schedule", "act",
+		"weave", "dag", "sdlc", "chat", "invoke", "meet", "supervise", "schedule", "act",
 		"act-runner", "skills", "podman", "docker", "ollama", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
-		"verify", "run", "tessaro", "login",
+		"verify", "conform", "run", "tessaro", "login",
 	)
 
 	// cred — reads or writes credentials / secrets. `env`/`printenv` are here
@@ -720,7 +733,7 @@ func init() {
 
 	// spend — incurs metered cost: paid inference the agent drives, pooled
 	// compute, or cloud resources.
-	eff(EffSpend, "chat", "meet", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama")
+	eff(EffSpend, "chat", "invoke", "meet", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
