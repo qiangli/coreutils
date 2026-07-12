@@ -62,6 +62,28 @@ const (
 	GroupAccount      = "account"
 )
 
+// SDLC stages (closed vocabulary). The spine every front-door verb must place
+// itself on: plan → code → test → deploy, plus "cross" for the verbs that serve
+// every stage (knowledge, identity, diagnostics, the userland itself).
+//
+// This axis exists to answer ONE question, asked of every new verb before it
+// ships: *which stage do you serve that nothing else already does?* bashy's
+// agentic surface grew piecemeal until the Code stage had six overlapping verbs
+// and the Test stage had none — a hole nobody could see because there was no
+// axis on which to see it. A stage is therefore MANDATORY for a verb: addVerb
+// panics without one, so a verb that cannot answer the question cannot start the
+// binary. That is deliberately harsher than a test: a test can be defaulted
+// around (this one was — see the git history of bashy's verbAtlasRecord, which
+// invented a valid-looking group/tier for unclassified verbs and so silently
+// defeated the very coverage test that was meant to catch them).
+const (
+	StagePlan   = "plan"   // decide what to build: sprint, meet, kb
+	StageCode   = "code"   // build it: weave, chat, foreman
+	StageTest   = "test"   // decide pass/fail: dag, check, verify
+	StageDeploy = "deploy" // ship it: sdlc, cluster/cloud CLIs
+	StageCross  = "cross"  // serves every stage: skills, secrets, doctor, the userland
+)
+
 // Agentic capability flags (closed vocabulary; curated, never inferred —
 // absence means unknown, not no).
 const (
@@ -117,6 +139,7 @@ const (
 type Entry struct {
 	Group    string
 	Tier     string
+	Stage    string // SDLC stage (closed vocab); every VERB declares one
 	Subclass string // verbs only: provisioner | managed-external | ""
 	Caps     []string
 	Effects  []string // security effects (closed vocab); every entry has ≥1
@@ -166,6 +189,12 @@ func Capabilities() []string {
 	}
 }
 
+// Stages returns the closed SDLC-stage vocabulary, in pipeline order (not
+// sorted: the order IS the spine, and reading it out of order loses the point).
+func Stages() []string {
+	return []string{StagePlan, StageCode, StageTest, StageDeploy, StageCross}
+}
+
 // Effects returns the closed security-effect vocabulary, sorted.
 func Effects() []string {
 	return []string{
@@ -206,9 +235,17 @@ func RegistryEntry(tier int) Entry {
 		effects = append(effects, EffRemote)
 	}
 	sort.Strings(effects)
+	// SDLC stage follows the same tier split: a tier-4+ CLI drives a control
+	// plane on another host — that is shipping (deploy). A local tier-2/3 tool
+	// like ripgrep serves every stage (cross).
+	stage := StageCross
+	if tier >= 4 {
+		stage = StageDeploy
+	}
 	return Entry{
 		Group:    GroupClusterCloud,
 		Tier:     TierName(tier),
+		Stage:    stage,
 		Subclass: SubclassManagedExternal,
 		Caps: []string{
 			CapCached, CapNeedsNetwork, CapSelfProvisioning, CapSpawnsProcesses,
@@ -293,7 +330,10 @@ func addTools(group string, names ...string) {
 		if _, dup := tools[n]; dup {
 			panic(fmt.Sprintf("atlas: duplicate tool entry %q", n))
 		}
-		tools[n] = Entry{Group: group, Tier: TierUserland}
+		// The userland serves every stage — `grep` is not a "test" command any
+		// more than it is a "deploy" one. Only front-door VERBS take a position
+		// on the spine.
+		tools[n] = Entry{Group: group, Tier: TierUserland, Stage: StageCross}
 	}
 }
 
@@ -304,7 +344,55 @@ func addVerb(name string, e Entry) {
 	if e.Tier == "" {
 		e.Tier = TierUserland
 	}
+	// A verb MUST place itself on the SDLC spine. This panics at init rather
+	// than failing a test, because a test can be defaulted around and this one
+	// was: bashy's verbAtlasRecord used to invent a valid-looking group/tier for
+	// any verb missing an entry, so the coverage test that was supposed to catch
+	// the omission passed happily instead. An unclassifiable verb should not be
+	// able to start the binary.
+	if !validStage(e.Stage) {
+		panic(fmt.Sprintf("atlas: verb %q has no SDLC stage (one of %v). "+
+			"Which stage does it serve that nothing else already does? If the honest "+
+			"answer is 'none', it should not ship.", name, Stages()))
+	}
 	verbs[name] = e
+}
+
+func validStage(s string) bool {
+	for _, v := range Stages() {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// staged places an Entry built by the managed()/provisioner() helpers on the
+// SDLC spine. Those helpers predate the stage axis and are shared by many verbs
+// with different stages, so the stage is applied at the call site.
+func staged(stage string, e Entry) Entry {
+	e.Stage = stage
+	return e
+}
+
+// stageTools overrides the default StageCross for tool entries that are not
+// really userland utilities. Today that is exactly one: `foreman`, which is an
+// orchestration command registered through the tool registry (an import-cycle
+// workaround), so addTools had filed it as cross-cutting alongside `cat` and
+// `grep`. It drives an agent session — it belongs on the Code stage. The
+// misfiling was invisible until there was an axis to see it on.
+func stageTools(stage string, names ...string) {
+	for _, n := range names {
+		e, ok := tools[n]
+		if !ok {
+			panic(fmt.Sprintf("atlas: stage %q names unknown tool %q", stage, n))
+		}
+		if !validStage(stage) {
+			panic(fmt.Sprintf("atlas: invalid stage %q for tool %q", stage, n))
+		}
+		e.Stage = stage
+		tools[n] = e
+	}
 }
 
 // capTools appends a capability to existing tool entries; unknown names panic
@@ -407,6 +495,10 @@ func init() {
 		"runcon", "stdbuf", "at", "batch",
 	)
 	capTools(CapDaemon, "foreman")
+	// foreman drives an agent session: it is a Code-stage orchestrator, not a
+	// cross-cutting userland utility. It only lives in the tool table to dodge an
+	// import cycle (see bashy agentos.go).
+	stageTools(StageCode, "foreman")
 
 	// Front-door verbs. Shell builtins and registry CLIs are merged by the
 	// embedder (bashy); everything else lives here.
@@ -420,50 +512,50 @@ func init() {
 	}
 
 	// orchestration
-	addVerb("weave", Entry{Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("sprint", Entry{Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("dag", Entry{Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("sdlc", Entry{Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	addVerb("chat", Entry{Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("meet", Entry{Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
-	addVerb("supervise", Entry{Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
-	addVerb("capability", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("agent", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("weave", Entry{Stage: StageCode, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("sdlc", Entry{Stage: StageDeploy, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	addVerb("chat", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
+	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
+	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("agent", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON}})
 
 	// the fleet registry: what this host runs with
-	addVerb("tools", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("models", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("agents", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("people", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("whois", Entry{Group: GroupOrch, Caps: []string{CapJSON}})
-	addVerb("schedule", Entry{Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("act", managed(GroupOrch, TierSandbox))
-	addVerb("act-runner", managed(GroupOrch, TierSandbox, CapDaemon))
-	addVerb("mirror", Entry{Group: GroupOrch, Caps: []string{CapDaemon, CapSpawnsProcesses}})
+	addVerb("tools", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("models", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("agents", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("people", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("whois", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("schedule", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("act", staged(StageTest, managed(GroupOrch, TierSandbox)))
+	addVerb("act-runner", staged(StageTest, managed(GroupOrch, TierSandbox, CapDaemon)))
+	addVerb("mirror", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapDaemon, CapSpawnsProcesses}})
 
 	// knowledge
-	addVerb("kb", Entry{Group: GroupKnowledge, Caps: []string{CapJSON}})
-	addVerb("skills", Entry{Group: GroupKnowledge, Caps: []string{CapJSON}})
+	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
+	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 
 	// engines
-	addVerb("podman", Entry{Group: GroupEngines, Tier: TierSandbox,
+	addVerb("podman", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox,
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
-	addVerb("docker", Entry{Group: GroupEngines, Tier: TierSandbox, AliasOf: "podman",
+	addVerb("docker", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox, AliasOf: "podman",
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
-	addVerb("ollama", Entry{Group: GroupEngines, Tier: TierSphere,
+	addVerb("ollama", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSphere,
 		Caps: []string{CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
-	addVerb("sphere", Entry{Group: GroupEngines, Tier: TierSphere,
+	addVerb("sphere", Entry{Stage: StageDeploy, Group: GroupEngines, Tier: TierSphere,
 		Caps: []string{CapNeedsNetwork, CapNeedsPairing, CapSpawnsProcesses}})
 
 	// forge
-	addVerb("git", managed(GroupForge, TierUserland, CapNeedsNetwork))
-	addVerb("git-scm", provisioner(GroupForge, CapNeedsNetwork))
-	addVerb("gh", managed(GroupForge, TierUserland, CapNeedsNetwork))
-	addVerb("loom", managed(GroupForge, TierWorkspace, CapDaemon))
+	addVerb("git", staged(StageCross, managed(GroupForge, TierUserland, CapNeedsNetwork)))
+	addVerb("git-scm", staged(StageCross, provisioner(GroupForge, CapNeedsNetwork)))
+	addVerb("gh", staged(StageCross, managed(GroupForge, TierUserland, CapNeedsNetwork)))
+	addVerb("loom", staged(StageCross, managed(GroupForge, TierWorkspace, CapDaemon)))
 
 	// net
-	addVerb("web", Entry{Group: GroupNet, Caps: []string{CapJSON}})
-	addVerb("curl", provisioner(GroupNet, CapNeedsNetwork))
+	addVerb("web", Entry{Stage: StageCross, Group: GroupNet, Caps: []string{CapJSON}})
+	addVerb("curl", staged(StageCross, provisioner(GroupNet, CapNeedsNetwork)))
 
 	// toolchains (self-provisioning, agent-mode shims)
 	for _, n := range []string{
@@ -471,7 +563,10 @@ func init() {
 		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust",
 		"java", "javac", "mvn",
 	} {
-		e := provisioner(GroupToolchains)
+		// A compiler/package-manager is a CODE-stage tool: it is how the thing
+		// gets built. (`bashy go` also runs tests, but so does every compiler —
+		// the stage is what the verb is FOR, not every use it can be put to.)
+		e := staged(StageCode, provisioner(GroupToolchains))
 		if n == "rust" {
 			e.AliasOf = "rustc"
 		}
@@ -479,34 +574,34 @@ func init() {
 	}
 
 	// storage
-	addVerb("rclone", managed(GroupStorage, TierUserland, CapNeedsNetwork))
-	addVerb("zot", managed(GroupStorage, TierUserland, CapDaemon))
-	addVerb("seaweedfs", managed(GroupStorage, TierUserland, CapDaemon))
-	addVerb("kopia", managed(GroupStorage, TierUserland, CapDaemon))
+	addVerb("rclone", staged(StageCross, managed(GroupStorage, TierUserland, CapNeedsNetwork)))
+	addVerb("zot", staged(StageCross, managed(GroupStorage, TierUserland, CapDaemon)))
+	addVerb("seaweedfs", staged(StageCross, managed(GroupStorage, TierUserland, CapDaemon)))
+	addVerb("kopia", staged(StageCross, managed(GroupStorage, TierUserland, CapDaemon)))
 
 	// cluster
-	addVerb("kubectl", managed(GroupClusterCloud, TierCluster, CapJSON, CapNeedsNetwork))
-	addVerb("helm", managed(GroupClusterCloud, TierCluster, CapNeedsNetwork))
+	addVerb("kubectl", staged(StageDeploy, managed(GroupClusterCloud, TierCluster, CapJSON, CapNeedsNetwork)))
+	addVerb("helm", staged(StageDeploy, managed(GroupClusterCloud, TierCluster, CapNeedsNetwork)))
 
 	// platform
-	addVerb("commands", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("context", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("doctor", Entry{Group: GroupPlatform, Caps: []string{CapReadOnly}})
-	addVerb("audit", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("check", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("verify", Entry{Group: GroupPlatform, Caps: []string{CapSpawnsProcesses}})
-	addVerb("self", Entry{Group: GroupPlatform, Caps: []string{CapCached, CapNeedsNetwork}})
-	addVerb("bootstrap", Entry{Group: GroupPlatform, AliasOf: "self",
+	addVerb("commands", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("context", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("doctor", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapReadOnly}})
+	addVerb("audit", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("check", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("verify", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapSpawnsProcesses}})
+	addVerb("self", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapCached, CapNeedsNetwork}})
+	addVerb("bootstrap", Entry{Stage: StageCross, Group: GroupPlatform, AliasOf: "self",
 		Caps: []string{CapCached, CapNeedsNetwork}})
-	addVerb("upgrade", Entry{Group: GroupPlatform, AliasOf: "self",
+	addVerb("upgrade", Entry{Stage: StageCross, Group: GroupPlatform, AliasOf: "self",
 		Caps: []string{CapCached, CapNeedsNetwork}})
-	addVerb("run", Entry{Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("secrets", Entry{Group: GroupPlatform, Caps: []string{CapNeedsNetwork, CapNeedsPairing}})
+	addVerb("run", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("secrets", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapNeedsNetwork, CapNeedsPairing}})
 
 	// account
-	addVerb("tessaro", Entry{Group: GroupAccount, Tier: TierAccount,
+	addVerb("tessaro", Entry{Stage: StageCross, Group: GroupAccount, Tier: TierAccount,
 		Caps: []string{CapNeedsNetwork, CapNeedsPairing, CapSpawnsProcesses}})
-	addVerb("login", Entry{Group: GroupAccount, Tier: TierAccount,
+	addVerb("login", Entry{Stage: StageCross, Group: GroupAccount, Tier: TierAccount,
 		Caps: []string{CapNeedsNetwork, CapNeedsPairing, CapSpawnsProcesses}})
 
 	// --- security-effect classification ------------------------------------

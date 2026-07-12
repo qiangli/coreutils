@@ -48,6 +48,7 @@ func TestToolTableMatchesRegistry(t *testing.T) {
 func TestClosedVocabularies(t *testing.T) {
 	groups := sliceSet(atlas.Groups())
 	tiers := sliceSet(atlas.Tiers())
+	stages := sliceSet(atlas.Stages())
 	caps := sliceSet(atlas.Capabilities())
 	effects := sliceSet(atlas.Effects())
 
@@ -62,6 +63,11 @@ func TestClosedVocabularies(t *testing.T) {
 			}
 			if !tiers[e.Tier] {
 				t.Errorf("%s: tier %q not in vocabulary", n, e.Tier)
+			}
+			// Every entry sits on the SDLC spine. addVerb already panics at init
+			// on a missing stage, so this guards the value, not the presence.
+			if !stages[e.Stage] {
+				t.Errorf("%s: sdlc stage %q not in vocabulary %v", n, e.Stage, atlas.Stages())
 			}
 			if !sort.StringsAreSorted(e.Caps) {
 				t.Errorf("%s: caps not sorted: %v", n, e.Caps)
