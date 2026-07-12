@@ -1,7 +1,7 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-//go:build !linux && !darwin
+//go:build !linux && !darwin && !windows
 
 package audit
 

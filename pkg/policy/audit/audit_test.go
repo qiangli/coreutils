@@ -6,6 +6,7 @@ package audit
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -133,6 +134,13 @@ func TestConcurrentAppendsStayChained(t *testing.T) {
 
 // The log file is owner-only (NIST AU-9).
 func TestLogFileIsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows has no unix permission bits: os.Chmod only toggles the
+		// read-only attribute and os.Stat reports 0666/0444, so an owner-only
+		// mode cannot be represented. AU-9 confinement on Windows is an ACL
+		// concern, out of scope for this perm-bit assertion.
+		t.Skip("unix permission bits do not apply on Windows (ACL-based file security)")
+	}
 	_, p := newLog(t)
 	fi, err := os.Stat(p)
 	if err != nil {

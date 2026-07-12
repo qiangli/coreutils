@@ -186,7 +186,7 @@ func Apply(ws WorkingState, target string) error {
 // guarantee.
 func applyPatch(target, diff string) error {
 	try := func(args ...string) error {
-		cmd := exec.Command("git", append([]string{"-C", target, "apply"}, args...)...)
+		cmd := exec.Command("git", append(gitArgs(target, "apply"), args...)...)
 		cmd.Stdin = strings.NewReader(diff)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
@@ -226,11 +226,24 @@ func gitOut(repo string, args ...string) (string, error) {
 // gitOutRaw preserves output byte-for-byte. Use it for anything whose trailing
 // newline is semantically load-bearing — a patch, above all.
 func gitOutRaw(repo string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).Output()
+	out, err := exec.Command("git", gitArgs(repo, args...)...).Output()
 	if err != nil {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// gitArgs builds the argv for a handoff git call, pinning the line-ending
+// config OFF. Handoff's contract is a byte-exact working tree: it must carry
+// the literal LF/CRLF bytes an agent left, not what a host's git happens to
+// normalize them to. A Windows git defaults to core.autocrlf=true, which would
+// rewrite LF→CRLF on `git apply` (and skew the captured diff) — silently
+// corrupting the reconstruction the whole feature exists to guarantee. Forcing
+// autocrlf=false + eol=lf on handoff's own invocations makes capture/apply
+// deterministic on every platform, independent of the host's git config.
+func gitArgs(repo string, args ...string) []string {
+	base := []string{"-C", repo, "-c", "core.autocrlf=false", "-c", "core.eol=lf"}
+	return append(base, args...)
 }
 
 func short(sha string) string {
