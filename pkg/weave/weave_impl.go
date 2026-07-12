@@ -622,9 +622,30 @@ func weaveMeasureDirtiness(workspace string) (dirty bool, dirtyFiles, untrackedF
 // as a non-zero exit; the decision about what to do with a failing
 // verify belongs to `weave pull`, never to this function.
 // weaveSiblingReplaceDirs scans a repo's go.mod for relative replace targets
-// (`replace … => ../NAME`) and returns the distinct relative paths. Empty when
-// there is no go.mod or no relative replaces (the generic, non-Go case is a
-// no-op). Handles both the single-line and `replace ( … )` block forms.
+// (`replace … => ../NAME/…`) and returns the distinct SIBLING REPOS they live
+// in — i.e. `../NAME`, never the nested path beneath it. Empty when there is no
+// go.mod or no relative replaces (the generic, non-Go case is a no-op). Handles
+// both the single-line and `replace ( … )` block forms.
+//
+// Collapsing to the top-level sibling is the whole point, and getting it wrong
+// was a real bug. A replace may point INSIDE a sibling:
+//
+//	replace github.com/qiangli/coreutils/external/otel => ../coreutils/external/otel
+//	replace github.com/qiangli/coreutils/pkg/oci      => ../coreutils/pkg/oci
+//	replace go.podman.io/podman/v6                    => ../coreutils/external/podman/src
+//
+// These are NOT siblings — they are subdirectories of one sibling (`coreutils`),
+// and cloning `coreutils` satisfies all of them, because `../coreutils/pkg/oci`
+// resolves through the clone. The old code took filepath.Base(rel), so it tried
+// to provision "otel", "oci" and "src" as top-level repos. That produced a junk
+// top-level `src` clone (and two different replaces collided on that one name),
+// and — worse — it FAILED on `oci` (a plain directory, not a git repo) and told
+// the agent:
+//
+//	WARNING could not provision sibling dep "oci" — the build may fail
+//
+// The build was never going to fail. A false "your build is broken" is the most
+// expensive kind of wrong thing to say to an agent: it sends it chasing a ghost.
 func weaveSiblingReplaceDirs(root string) []string {
 	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
@@ -642,9 +663,18 @@ func weaveSiblingReplaceDirs(root string) []string {
 		if sp := strings.IndexAny(rhs, " \t"); sp >= 0 {
 			rhs = rhs[:sp]
 		}
-		if strings.HasPrefix(rhs, "../") && !seen[rhs] {
-			seen[rhs] = true
-			dirs = append(dirs, rhs)
+		if !strings.HasPrefix(rhs, "../") {
+			continue
+		}
+		// Collapse to the top-level sibling: "../coreutils/external/otel" → "../coreutils".
+		parts := strings.Split(filepath.ToSlash(rhs), "/")
+		if len(parts) < 2 || parts[1] == "" || parts[1] == ".." {
+			continue // "../" alone, or a grandparent hop we don't model
+		}
+		sib := "../" + parts[1]
+		if !seen[sib] {
+			seen[sib] = true
+			dirs = append(dirs, sib)
 		}
 	}
 	return dirs
