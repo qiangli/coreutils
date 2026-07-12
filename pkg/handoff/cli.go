@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -106,7 +107,21 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 
 			switch {
 			case to != "" && to != "schedule":
-				rec.Dispatch = Dispatch{Disposition: DispatchAgent, To: to}
+				// THE ENUM. `--to` accepts only the agent tools and bindings that
+				// actually exist on THIS host, and it resolves the word a human says
+				// ("codex") to the thing it denotes here ("codex-gpt-5.5").
+				//
+				// This is what makes "bashy handoff this to codex" unambiguous BY
+				// CONSTRUCTION rather than by prompting: in this position "codex"
+				// cannot mean a vendor's product, because that is not a legal value.
+				// A closed value set grounds a word far harder than any description
+				// can -- and unlike a glossary it cannot go stale, because it IS the
+				// registry.
+				resolved, err := resolveAgent(to)
+				if err != nil {
+					return err
+				}
+				rec.Dispatch = Dispatch{Disposition: DispatchAgent, To: resolved}
 			case to == "schedule":
 				rec.Dispatch = Dispatch{Disposition: DispatchSchedule, To: at}
 			default:
@@ -389,4 +404,47 @@ func firstLine(s string) string {
 		s = s[:69] + "…"
 	}
 	return s
+}
+
+// resolveAgent turns the word a human SAYS into the binding it denotes on this
+// host, and refuses anything that denotes nothing.
+//
+// It accepts a tool name ("codex" -> its binding here), a binding name
+// ("codex-gpt-5.5"), or an alias. On failure it prints the legal values, because a
+// closed set is only useful if the caller can see it -- an agent that is told
+// "invalid" without being told "valid: ..." will guess, and guessing is the failure
+// this exists to prevent.
+func resolveAgent(name string) (string, error) {
+	cat := fleet.New()
+	agents, _ := cat.Agents()
+
+	lower := strings.ToLower(strings.TrimSpace(name))
+	var legal []string
+	seen := map[string]bool{}
+
+	// A binding, named exactly (or by alias).
+	for _, a := range agents {
+		if strings.EqualFold(a.Name, lower) {
+			return a.Name, nil
+		}
+		for _, al := range a.Aliases {
+			if strings.EqualFold(al, lower) {
+				return a.Name, nil
+			}
+		}
+	}
+	// A TOOL -- the word people actually say. Resolve to its binding here.
+	for _, a := range agents {
+		if strings.EqualFold(a.Tool, lower) {
+			return a.Name, nil
+		}
+		if !seen[a.Tool] {
+			seen[a.Tool] = true
+			legal = append(legal, a.Tool)
+		}
+	}
+	sort.Strings(legal)
+	return "", fmt.Errorf("%q is not an agent on this host.\n\nValid: %s (or a binding: try `bashy agents list`).\n"+
+		"On this machine those words name a CLI plus the model bound to it -- not a vendor's product.",
+		name, strings.Join(legal, ", "))
 }

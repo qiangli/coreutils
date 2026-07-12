@@ -547,6 +547,12 @@ func init() {
 
 	// knowledge
 	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
+	// lexicon: what do this project's words mean HERE? It PROJECTS the atlas and the
+	// fleet registry into the channels agents read -- it introduces NO new source of
+	// truth, which is the test it has to keep passing. The moment it starts STORING
+	// vocabulary rather than projecting it, it has become the hand-written glossary
+	// that the whole data-catalog industry exists because it failed.
+	addVerb("lexicon", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 
 	// engines
@@ -671,7 +677,7 @@ func init() {
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
 		"capability", "agent", "tools", "models", "agents", "people", "whois",
-		"kb", "skills", "git", "web", "rclone", "kopia", "commands", "context",
+		"kb", "skills", "lexicon", "git", "web", "rclone", "kopia", "commands", "context",
 		"doctor", "audit", "check", "sprint",
 	)
 
@@ -688,7 +694,7 @@ func init() {
 		"handoff", "resume",
 		// verbs
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent",
-		"tools", "models", "agents", "people", "kb", "skills", "mirror", "git",
+		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		"rclone",
 	)
