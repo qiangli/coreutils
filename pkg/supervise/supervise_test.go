@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/chat"
 )
 
 // scriptRunner returns a canned reply per agent so workers/supervisor can be
@@ -222,4 +224,15 @@ func TestReportContents(t *testing.T) {
 			t.Fatalf("report missing %q\n%s", must, md)
 		}
 	}
+}
+
+// TestMain permits launching agents with their own approval gate disabled.
+//
+// These tests drive the real launch path (with fake runners) against baseline
+// tools whose templates carry a `--dangerously-*` flag, which chat's
+// guardUnsafeArgs refuses on an uncontained host. The gate is the point of that
+// guard and is tested in pkg/chat; here it is a precondition, not the subject.
+func TestMain(m *testing.M) {
+	os.Setenv(chat.UnsafeLaunchEnv, "1")
+	os.Exit(m.Run())
 }

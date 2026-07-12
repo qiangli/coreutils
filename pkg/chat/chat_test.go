@@ -81,6 +81,9 @@ func TestInvokeCanOverrideCodexSandbox(t *testing.T) {
 func TestInvokeCodexDangerFullAccessIsNonInteractive(t *testing.T) {
 	// danger-full-access → the fully non-interactive bypass flag (no approval/trust
 	// popup that would hang a headless runner), and NOT a plain --sandbox value.
+	// Asserts the RENDERING; guardUnsafeArgs (tested in TestUnsafeLaunch*) is what
+	// decides whether this rendering is permitted to run at all.
+	permitUnsafeLaunch(t)
 	r := &fakeRunner{}
 	_, err := Invoke(context.Background(), Options{
 		Agent: "codex", Instruction: "commit this", Sandbox: "danger-full-access",

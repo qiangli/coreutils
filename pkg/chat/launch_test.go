@@ -8,6 +8,20 @@ import (
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
+// permitUnsafeLaunch opts the test host into launching agents with their own
+// safety systems disabled.
+//
+// The tests below assert how an argv is RENDERED (model passing, prompt
+// position, sandbox override) — not whether the launch is permitted. Several
+// baseline tools declare a `--dangerously-*` flag, which guardUnsafeArgs
+// refuses on an uncontained host, so without this they would all fail on the
+// gate before reaching what they actually test. The gate itself is tested
+// separately, and deliberately WITHOUT this helper, in TestUnsafeLaunch*.
+func permitUnsafeLaunch(t *testing.T) {
+	t.Helper()
+	t.Setenv(UnsafeLaunchEnv, "1")
+}
+
 // pinCatalog points the launcher at the compiled-in baseline only, so a
 // developer's own ~/.config/bashy store cannot change what these tests see.
 func pinCatalog(t *testing.T) {
@@ -31,6 +45,7 @@ func argv(t *testing.T, name string, opt Options) (string, []string, string) {
 // a single argument for a bare tool name. These are the exact arg lists the
 // hardcoded seededProfiles table produced before the registry existed.
 func TestBareToolArgvIsUnchangedFromTheLegacyTable(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	for name, want := range seededProfiles {
 		tool, args, model := argv(t, name, Options{})
@@ -48,6 +63,7 @@ func TestBareToolArgvIsUnchangedFromTheLegacyTable(t *testing.T) {
 
 // The whole point of P2: a binding actually reaches the tool's --model flag.
 func TestBindingPassesModel(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 
 	tool, args, model := argv(t, "claude:opus", Options{})
@@ -63,6 +79,7 @@ func TestBindingPassesModel(t *testing.T) {
 // `deepseek/deepseek-v4`. Passing the alias would name a model that does not
 // exist upstream.
 func TestModelIsTheProviderSideID(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	tool, args, model := argv(t, "opencode:deepseek-v4", Options{})
 	if tool != "opencode" || model != "deepseek/deepseek-v4" {
@@ -75,6 +92,7 @@ func TestModelIsTheProviderSideID(t *testing.T) {
 
 // A nickname resolves to its binding, and so do its aliases.
 func TestNicknameAndAliasSelectTheSameModel(t *testing.T) {
+	permitUnsafeLaunch(t)
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))
 	if err := cat.SaveAgent(fleet.Agent{
@@ -126,6 +144,7 @@ func TestBindingToAToolThatCannotSelectAModelIsAnError(t *testing.T) {
 // A tool the registry has never heard of still launches, and still cannot
 // be handed a model.
 func TestUnregisteredToolFallsBackAndRefusesAModel(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	tool, args, model := argv(t, "my-own-agent", Options{})
 	if tool != "my-own-agent" || len(args) != 0 || model != "" {
@@ -139,6 +158,7 @@ func TestUnregisteredToolFallsBackAndRefusesAModel(t *testing.T) {
 
 // An unregistered MODEL passes through verbatim rather than being dropped.
 func TestUnregisteredModelPassesThroughVerbatim(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	_, args, model := argv(t, "claude:some-future-model", Options{})
 	if model != "some-future-model" {
@@ -152,6 +172,7 @@ func TestUnregisteredModelPassesThroughVerbatim(t *testing.T) {
 // --- the codex sandbox contract, preserved -------------------------------
 
 func TestCodexSandboxOverrideStillApplies(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 
 	_, args, _ := argv(t, "codex", Options{Sandbox: "read-only"})
@@ -173,6 +194,7 @@ func TestCodexSandboxOverrideStillApplies(t *testing.T) {
 // The sandbox override and a model selection must coexist: the override
 // rewrites a flag, it does not rebuild the argv.
 func TestCodexSandboxOverrideCoexistsWithModel(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	_, args, model := argv(t, "codex:gpt-5.5", Options{Sandbox: "read-only"})
 	if model != "gpt-5.5" {
@@ -194,6 +216,7 @@ func TestCodexSandboxOverrideCoexistsWithModel(t *testing.T) {
 // stopped appending the prompt last, the task text would become the value of
 // whatever flag happened to end the template.
 func TestPromptRemainsTheFinalArgument(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	for _, name := range []string{"claude", "codex", "opencode", "aider", "agy", "claude:opus"} {
 		l, err := resolveLaunch(name, Options{})
@@ -273,6 +296,7 @@ func TestPrincipalEnvOverwritesAnInheritedIdentity(t *testing.T) {
 // Invoke threads the resolved launch to the runner without widening the
 // Runner interface that meet, foreman, and sdlc implement against.
 func TestInvokeCarriesTheLaunchToTheRunner(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	var seen Launch
 	var ok bool
@@ -290,6 +314,7 @@ func TestInvokeCarriesTheLaunchToTheRunner(t *testing.T) {
 
 // The result envelope records what was asked for and what was selected.
 func TestResultRecordsNickAndModel(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	res, err := Invoke(context.Background(), Options{Agent: "claude:opus", Instruction: "hi", DryRun: true}, nil)
 	if err != nil {
@@ -308,6 +333,7 @@ func TestResultRecordsNickAndModel(t *testing.T) {
 
 // A bare tool leaves Nick and Model empty, so nothing downstream changes.
 func TestResultUnchangedForABareTool(t *testing.T) {
+	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	res, err := Invoke(context.Background(), Options{Agent: "codex", Instruction: "hi", DryRun: true}, nil)
 	if err != nil {
@@ -414,4 +440,111 @@ func TestBareToolWithADifferentBinaryIsNotStamped(t *testing.T) {
 	if got := principalEnv(base, l); len(got) != len(base) {
 		t.Fatalf("a bare tool must not be stamped as an agent: %q", got)
 	}
+}
+
+// --- the unsafe-launch gate ----------------------------------------------
+//
+// These deliberately do NOT call permitUnsafeLaunch: they test the gate.
+
+// The regression this whole guard exists for: bashy used to hand every agent
+// its own kill-switch by default, on an ordinary host, with nothing containing
+// it. A launch that would do that must now be refused.
+func TestUnsafeLaunchIsRefusedOnAnUncontainedHost(t *testing.T) {
+	pinCatalog(t)
+	stubContainerized(t, false)
+
+	for _, name := range []string{"claude", "agy"} {
+		_, err := resolveLaunch(name, Options{})
+		if err == nil {
+			t.Fatalf("%s: launch was permitted with its approval gate disabled", name)
+		}
+		if !strings.Contains(err.Error(), "refusing to launch") {
+			t.Fatalf("%s: err = %v", name, err)
+		}
+	}
+}
+
+// codex's own sandbox is the DEFAULT and must keep working untouched — the gate
+// must not fire on a tool that is sandboxing itself.
+func TestSelfSandboxingToolIsNotRefused(t *testing.T) {
+	pinCatalog(t)
+	stubContainerized(t, false)
+
+	l, err := resolveLaunch("codex", Options{})
+	if err != nil {
+		t.Fatalf("codex --sandbox workspace-write must launch: %v", err)
+	}
+	if !adjacent(l.Args, "--sandbox", "workspace-write") {
+		t.Fatalf("args = %q", l.Args)
+	}
+}
+
+// Turning codex's sandbox OFF is the same class of act as --dangerously-*, and
+// is caught even though it is spelled as a flag PAIR rather than a single flag.
+func TestTurningOffASelfSandboxIsRefused(t *testing.T) {
+	pinCatalog(t)
+	stubContainerized(t, false)
+
+	if _, err := resolveLaunch("codex", Options{Sandbox: "danger-full-access"}); err == nil {
+		t.Fatal("codex danger-full-access was permitted on an uncontained host")
+	}
+}
+
+// A container IS the containment, so the flags are legitimate inside one.
+func TestUnsafeLaunchIsAllowedWhenContained(t *testing.T) {
+	pinCatalog(t)
+	stubContainerized(t, true)
+
+	if _, err := resolveLaunch("claude", Options{}); err != nil {
+		t.Fatalf("contained host must permit the launch: %v", err)
+	}
+}
+
+// The operator can always accept the risk explicitly. That is the escape hatch
+// the refusal message points at, so it must actually work.
+func TestOperatorCanExplicitlyAcceptTheRisk(t *testing.T) {
+	pinCatalog(t)
+	stubContainerized(t, false)
+	t.Setenv(UnsafeLaunchEnv, "1")
+
+	if _, err := resolveLaunch("claude", Options{}); err != nil {
+		t.Fatalf("%s=1 must permit the launch: %v", UnsafeLaunchEnv, err)
+	}
+}
+
+// An off-ish value is not consent — otherwise `BASHY_ALLOW_UNSAFE_AGENT_LAUNCH=0`
+// would read as "yes".
+func TestFalseyOptInIsNotConsent(t *testing.T) {
+	pinCatalog(t)
+	stubContainerized(t, false)
+
+	for _, v := range []string{"0", "false", "off", "no", ""} {
+		t.Setenv(UnsafeLaunchEnv, v)
+		if _, err := resolveLaunch("claude", Options{}); err == nil {
+			t.Fatalf("%s=%q was treated as consent", UnsafeLaunchEnv, v)
+		}
+	}
+}
+
+// The refusal has to tell the operator what to actually do about it.
+func TestRefusalIsActionable(t *testing.T) {
+	pinCatalog(t)
+	stubContainerized(t, false)
+
+	_, err := resolveLaunch("claude", Options{})
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	for _, want := range []string{"--dangerously-skip-permissions", "bashy podman", UnsafeLaunchEnv} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not mention %q:\n%v", want, err)
+		}
+	}
+}
+
+func stubContainerized(t *testing.T, v bool) {
+	t.Helper()
+	prev := containerized
+	containerized = func() bool { return v }
+	t.Cleanup(func() { containerized = prev })
 }

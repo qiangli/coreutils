@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/chat"
 )
 
 // fakeRunner returns a canned reply without spawning a real agent, so the whole
@@ -150,4 +152,15 @@ func TestCommandTreeWiring(t *testing.T) {
 			t.Fatalf("missing subcommand %q", v)
 		}
 	}
+}
+
+// TestMain permits launching agents with their own approval gate disabled.
+//
+// These tests drive the real launch path (with fake runners) against baseline
+// tools whose templates carry a `--dangerously-*` flag, which chat's
+// guardUnsafeArgs refuses on an uncontained host. The gate is the point of that
+// guard and is tested in pkg/chat; here it is a precondition, not the subject.
+func TestMain(m *testing.M) {
+	os.Setenv(chat.UnsafeLaunchEnv, "1")
+	os.Exit(m.Run())
 }

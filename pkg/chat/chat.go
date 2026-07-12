@@ -243,7 +243,11 @@ func resolveLaunch(name string, opt Options) (Launch, error) {
 				tool.Name, name, fleet.ModelToken)
 		}
 		if args, ok := tool.ArgvPrefix(lnch.Model); ok {
-			lnch.Args = applySandbox(tool.Name, args, opt)
+			out, err := finalizeArgs(tool.Name, args, opt)
+			if err != nil {
+				return lnch, err
+			}
+			lnch.Args = out
 			return lnch, nil
 		}
 	}
@@ -253,7 +257,11 @@ func resolveLaunch(name string, opt Options) (Launch, error) {
 		return lnch, fmt.Errorf("chat: no launch template for tool %q, so model %q cannot be passed to it; add it with `bashy tools add`",
 			toolName, modelName)
 	}
-	lnch.Args = applySandbox(toolName, append([]string{}, seededProfiles[toolName].Args...), opt)
+	out, err := finalizeArgs(toolName, append([]string{}, seededProfiles[toolName].Args...), opt)
+	if err != nil {
+		return lnch, err
+	}
+	lnch.Args = out
 	return lnch, nil
 }
 
@@ -506,6 +514,111 @@ func withLaunch(ctx context.Context, l Launch) context.Context {
 func LaunchFrom(ctx context.Context) (Launch, bool) {
 	l, ok := ctx.Value(launchKey{}).(Launch)
 	return l, ok
+}
+
+// unsafeLaunchFlags are the flags by which an agent CLI's OWN approval gate is
+// switched off. Passing one hands the agent unattended, unreviewed access to
+// whatever the launching process can reach — so each is legitimate only when
+// something ELSE is already containing the agent (a container), and is a
+// self-inflicted wound otherwise. Their vendors named them "dangerously"; we
+// take that literally.
+//
+// codex's `--sandbox danger-full-access` is here for the same reason: it turns
+// codex's built-in sandbox off. `--sandbox workspace-write` (the default) is
+// codex sandboxing itself and is NOT unsafe.
+var unsafeLaunchFlags = map[string]string{
+	"--dangerously-skip-permissions":             "disables the agent's approval gate",
+	"--dangerously-bypass-approvals-and-sandbox": "disables the agent's approval gate AND its sandbox",
+	"--yolo": "disables the agent's approval gate",
+}
+
+// UnsafeLaunchEnv opts a host into launching agents with their own safety
+// systems disabled. It is the operator's explicit, auditable acceptance of the
+// risk — never a default.
+const UnsafeLaunchEnv = "BASHY_ALLOW_UNSAFE_AGENT_LAUNCH"
+
+// containerized reports whether this process is already inside an OCI
+// container, i.e. whether something else is containing the agent. A var so
+// tests can simulate a contained host.
+//
+// This deliberately re-probes on every call instead of reading the shared
+// spacetime probe cache: that cache is a user-writable file, and a security
+// gate must not be unlockable by writing `"container":"true"` into it. The
+// signals mirror spacetime's own probeContainer.
+var containerized = func() bool {
+	for _, p := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// unsafeLaunchAllowed reports whether stripping an agent's safety systems is
+// permissible here, and why.
+func unsafeLaunchAllowed() (bool, string) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(UnsafeLaunchEnv))) {
+	case "", "0", "false", "off", "no":
+	default:
+		return true, UnsafeLaunchEnv + " is set"
+	}
+	if containerized() {
+		return true, "running inside a container"
+	}
+	return false, ""
+}
+
+// guardUnsafeArgs refuses a launch that would disable an agent CLI's own safety
+// systems on a host where nothing else is containing it.
+//
+// This is the ONE choke point for it: every launch — registry-templated or
+// seeded-fallback — renders its argv through resolveLaunch, so a dangerous flag
+// cannot reach an agent by any other route, including a `bashy tools add`
+// template written later.
+//
+// It refuses rather than silently stripping the flag: stripping would leave a
+// headless agent blocking forever on an approval prompt nobody can answer, and
+// a hang is a worse failure than a clear error. The operator gets a one-line fix.
+func guardUnsafeArgs(tool string, args []string) error {
+	if ok, _ := unsafeLaunchAllowed(); ok {
+		return nil
+	}
+	for i, a := range args {
+		why, bad := unsafeLaunchFlags[a]
+		// codex spells its kill-switch as a flag PAIR.
+		if !bad && a == "--sandbox" && i+1 < len(args) && args[i+1] == "danger-full-access" {
+			why, bad = "disables the agent's sandbox", true
+			a = "--sandbox danger-full-access"
+		}
+		if !bad {
+			continue
+		}
+		return fmt.Errorf(`chat: refusing to launch %q with %s
+
+%s, giving it unattended full access to this machine — and nothing here is
+containing it. Choose one:
+
+  • contain it     run the fleet inside a container (e.g. bashy podman), or
+  • accept it      %s=1 (explicit, logged risk acceptance)`,
+			tool, a, why, UnsafeLaunchEnv)
+	}
+	return nil
+}
+
+// finalizeArgs applies the --sandbox override, then gates the result. Both
+// launch paths (registry template and seeded fallback) go through here.
+func finalizeArgs(tool string, args []string, opt Options) ([]string, error) {
+	args = applySandbox(tool, args, opt)
+	// A dry run renders the argv but never executes it, so there is nothing to
+	// contain. Gating it would be backwards: seeing the dangerous flag printed is
+	// exactly how an operator discovers it is there.
+	if opt.DryRun {
+		return args, nil
+	}
+	if err := guardUnsafeArgs(tool, args); err != nil {
+		return nil, err
+	}
+	return args, nil
 }
 
 // applySandbox layers the --sandbox override onto an already-rendered argv.
