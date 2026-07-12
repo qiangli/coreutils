@@ -520,6 +520,12 @@ func init() {
 	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// handoff/resume: pause a live session and pass the work on -- to another
+	// agentic tool, a scheduler, or tomorrow. CROSS, because you hand off work
+	// at any stage: a half-finished plan, a half-finished refactor, a half-run
+	// test campaign, a half-done deploy.
+	addVerb("handoff", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("resume", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("agent", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON}})
 
 	// the fleet registry: what this host runs with
@@ -632,6 +638,10 @@ func init() {
 		"unexpand", "uniq", "wc", "xargs", "zcat",
 		"b2sum", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum",
 		"sha384sum", "sha512sum", "sum", "base32", "base64", "basenc",
+		// handoff READS the working tree (the diff + untracked files it captures);
+		// resume READS the record. Both are a privacy surface: a handoff record
+		// carries real source, so treat it like the working tree it came from.
+		"handoff", "resume",
 		// host info
 		"arch", "groups", "hostid", "hostname", "id", "logname", "nproc",
 		"pathchk", "pinky", "pwd", "tty", "tz", "uname", "uptime", "users",
@@ -651,6 +661,11 @@ func init() {
 		"mktemp", "mv", "rmdir", "tar", "touch",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "graph",
 		"stty", "atrm", "crontab",
+		// handoff WRITES a portable record; resume WRITES the captured working
+		// tree back into a checkout. Both also read (below). Neither execs: v1
+		// dispatch PRINTS the command to launch a successor rather than spawning
+		// one behind the user's back.
+		"handoff", "resume",
 		// verbs
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent",
 		"tools", "models", "agents", "people", "kb", "skills", "mirror", "git",
