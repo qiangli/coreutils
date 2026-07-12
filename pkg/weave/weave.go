@@ -50,6 +50,8 @@ Common-case usage:
 	cmd.CompletionOptions.DisableDefaultCmd = true
 
 	cmd.AddCommand(newWeaveAddCmd())
+	cmd.AddCommand(newWeaveSplitCmd())
+	cmd.AddCommand(newWeaveLinkCmd())
 	cmd.AddCommand(newWeaveStartCmd())
 	cmd.AddCommand(newWeaveNextCmd())
 	cmd.AddCommand(newWeavePrioCmd())

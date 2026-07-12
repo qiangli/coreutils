@@ -36,13 +36,20 @@ func newWeaveAddCmd() *cobra.Command {
 	var fromFile string
 	var verify string
 	var suiteGate string
+	var stage string
 	var points int
 	cmd := &cobra.Command{
 		Use:   `add "<title>"`,
 		Short: "Seed an issue into the queue",
 		Long: `Files a new issue into the local queue, tags it loom:todo, and
 applies priority + source labels. The next 'weave start' picks it up
-according to the priority sort order.`,
+according to the priority sort order.
+
+--stage says WHICH PART OF THE LIFECYCLE this work belongs to: plan, code,
+test or deploy. Until it existed, every weave issue was implicitly a coding
+issue, so "review the design", "triage the flaky fixture" and "promote to
+staging" had nowhere to live and the board could only describe the middle of
+the lifecycle. It defaults to "code", which is what every existing issue is.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 {
@@ -52,14 +59,15 @@ according to the priority sort order.`,
 			if fromFile != "" {
 				return runWeaveAddFromFile(cmd, fromFile, priority, &flags)
 			}
-			return runWeaveAddPointed(cmd, title, body, priority, verify, suiteGate, points, &flags)
+			return runWeaveAddStaged(cmd, title, body, priority, verify, suiteGate, stage, points, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&body, "body", "", "Issue body (optional)")
 	cmd.Flags().StringVar(&tool, "tool", "", "Pin a specific agentic tool for this issue (label tool:X)")
 	cmd.Flags().StringVar(&priority, "priority", "", "Priority tier: p0|p1|p2|p3 (default p2)")
-	cmd.Flags().IntVar(&points, "points", 0, "Story points (1,2,3,5,8; 8 = ~30m cap — split bigger work)")
+	cmd.Flags().StringVar(&stage, "stage", "", "SDLC stage: plan|code|test|deploy (default code)")
+	cmd.Flags().IntVar(&points, "points", 0, "Story points (1,2,3,5,8; 8 = ~30m cap — `weave split` bigger work)")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "Bulk seed: markdown (`- [ ] title`) or JSON list of {title,body,priority}")
 	cmd.Flags().StringVar(&verify, "verify", "", "Verify command the wrapper runs (`bash -c`) in the workspace at terminal time; verify_exit/verify_output recorded on the item, non-zero blocks `weave pull`")
 	cmd.Flags().StringVar(&suiteGate, "suite-gate", "", "Integration suite command run (`bash -c`) at the base repo root after merge; non-zero resets the merge and records suite_gate_exit/suite_gate_output")

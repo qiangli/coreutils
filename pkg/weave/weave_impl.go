@@ -110,6 +110,25 @@ type weaveItem struct {
 	// runtime cap — bigger work must be split before assignment.
 	Points int    `json:"points,omitempty"`
 	State  string `json:"state"`
+	// Stage is the SDLC stage this work belongs to: plan | code | test | deploy
+	// (the atlas vocabulary, minus "cross" — a VERB may serve every stage, a unit
+	// of WORK cannot BE every stage). Empty reads as "code", which needs no
+	// migration: every queue that existed before this field was, by construction, a
+	// queue of coding issues. Without it the board could only ever describe the
+	// middle of the lifecycle — "review the design" and "promote to staging" had
+	// nowhere to live.
+	Stage string `json:"stage,omitempty"`
+	// Parent is the issue this one was split out of (0 = not a child). An item with
+	// children is a CONTAINER: never claimed by an agent, its state derived from
+	// theirs. `weave add --points` has always said "8 = ~30m cap, split bigger work"
+	// while offering no split; the link to the parent used to be lost the moment you
+	// hand-added the children.
+	Parent int64 `json:"parent,omitempty"`
+	// DependsOn lists issues that must be DONE (merged) before this one may start.
+	// This is the conductor's "schedule by parallel safety" rule, moved out of the
+	// conductor's head and into the data — where a resumed conductor, or a second
+	// agent, can actually see it.
+	DependsOn []int64 `json:"depends_on,omitempty"`
 	// Tool is the short (argv[0] basename) name of the CLI working
 	// the issue — codex, claude, gemini, opencode, bash — recorded
 	// at claim time, updated on resume.
@@ -1156,10 +1175,20 @@ func findWeaveItem(q *weaveQueue, id int64) *weaveItem {
 	return nil
 }
 
+// nextTodo picks the issue an agent should claim next.
+//
+// It is the single choke point for BOTH the read-only peek (`weave next`) and the
+// real claim inside `weave start`/`autopilot` — so dependency-blocking and epic
+// containers are honored everywhere by construction, not by remembering to check
+// twice.
+//
+// weaveClaimable is what "todo" used to mean, plus the two facts a flat queue could
+// not express: an item split into children is worked through the children, and an
+// item that needs another issue's merged code cannot start before it lands.
 func nextTodo(q *weaveQueue) *weaveItem {
 	var todos []*weaveItem
 	for _, it := range q.Items {
-		if it.State == "todo" {
+		if weaveClaimable(q, it) {
 			todos = append(todos, it)
 		}
 	}
@@ -1201,6 +1230,15 @@ func ec(code int) error {
 // issue in one queue transaction. Points used to be stamped in a
 // second read-modify-write after add returned; that made add --points
 // sensitive to concurrent queue writers and to "last item" races.
+func runWeaveAddStaged(cmd *cobra.Command, title, body, priority, verify, suiteGate, stage string, points int, flags *weaveOutputFlags) error {
+	st, err := normalizeStage(stage)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave add",
+			weavecli.ExitInvalidArg, err))
+	}
+	return runWeaveAddFull(cmd, title, body, priority, verify, suiteGate, st, points, flags)
+}
+
 func runWeaveAddPointed(cmd *cobra.Command, title, body, priority, verify, suiteGate string, points int, flags *weaveOutputFlags) error {
 	if points != 0 && !weaveValidPoints(points) {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave add",
@@ -1214,6 +1252,10 @@ func runWeaveAdd(cmd *cobra.Command, title, body, priority, verify string, flags
 }
 
 func runWeaveAddWithPoints(cmd *cobra.Command, title, body, priority, verify, suiteGate string, points int, flags *weaveOutputFlags) error {
+	return runWeaveAddFull(cmd, title, body, priority, verify, suiteGate, "", points, flags)
+}
+
+func runWeaveAddFull(cmd *cobra.Command, title, body, priority, verify, suiteGate, stage string, points int, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	if title == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add",
@@ -1241,6 +1283,7 @@ func runWeaveAddWithPoints(cmd *cobra.Command, title, body, priority, verify, su
 			Title:         title,
 			Body:          body,
 			Priority:      prio,
+			Stage:         stage,
 			State:         "todo",
 			VerifyCommand: verify,
 			SuiteGate:     suiteGate,
@@ -1261,11 +1304,13 @@ func runWeaveAddWithPoints(cmd *cobra.Command, title, body, priority, verify, su
 			"issue":    it.ID,
 			"title":    it.Title,
 			"priority": it.Priority,
+			"stage":    itemStage(it),
 			"state":    it.State,
 			"points":   it.Points,
 		}))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave add: issue #%d created (%s, todo) — %q\n", it.ID, it.Priority, it.Title)
+	fmt.Fprintf(cmd.OutOrStdout(), "weave add: issue #%d created (%s/%s, todo) — %q\n",
+		it.ID, it.Priority, itemStage(it), it.Title)
 	return nil
 }
 
@@ -1288,10 +1333,42 @@ func weaveTestPauseInsideAddLock() {
 }
 
 // weaveRenderItemRows prints the standard list table rows (no header).
-func weaveRenderItemRows(w io.Writer, items []*weaveItem) {
+// weaveRenderItemRows prints the list table.
+//
+// It takes the whole queue, not just the rows, because two of the columns are FACTS
+// ABOUT THE GRAPH and cannot be read off a lone item: whether an issue is an epic
+// (derived from its children) and whether it is blocked (derived from its
+// dependencies). A field nobody can see in the primary view may as well not exist —
+// so stage, epics and blockers all surface here.
+func weaveRenderItemRows(w io.Writer, q *weaveQueue, items []*weaveItem) {
 	for _, it := range items {
 		title := weaveTruncate(it.Title, 40)
+		if it.Parent != 0 {
+			title = weaveTruncate("↳ "+it.Title, 40)
+		}
 		state := it.State
+		if q != nil {
+			if kids := weaveChildren(q, it.ID); len(kids) > 0 {
+				done := 0
+				for _, k := range kids {
+					if k.State == "done" {
+						done++
+					}
+				}
+				state = fmt.Sprintf("epic %d/%d", done, len(kids))
+			} else if it.State == "todo" {
+				if b := weaveBlockers(q, it); len(b) > 0 {
+					// Blocked work looks like available work in a flat list; that is
+					// how a conductor picks up an issue whose prerequisite is not in
+					// main yet.
+					ids := make([]string, 0, len(b))
+					for _, d := range b {
+						ids = append(ids, "#"+strconv.FormatInt(d.ID, 10))
+					}
+					state = "blocked→" + strings.Join(ids, ",")
+				}
+			}
+		}
 		if it.Stale {
 			state = it.State + "*"
 		}
@@ -1306,8 +1383,9 @@ func weaveRenderItemRows(w io.Writer, items []*weaveItem) {
 		if it.Points > 0 {
 			pts = strconv.Itoa(it.Points)
 		}
-		fmt.Fprintf(w, "%-4d %-4s %-3s %-10s %-9s %-8s %-8s %-40s %s\n",
-			it.ID, it.Priority, pts, state, toolCol, weaveStartedCol(it), weaveDurationCol(it), title, weaveTildePath(it.Workspace))
+		fmt.Fprintf(w, "%-4d %-4s %-6s %-3s %-14s %-9s %-8s %-8s %-40s %s\n",
+			it.ID, it.Priority, itemStage(it), pts, state, toolCol,
+			weaveStartedCol(it), weaveDurationCol(it), title, weaveTildePath(it.Workspace))
 	}
 }
 
@@ -1465,8 +1543,10 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "%s\n", weaveTildePath(v.Root))
-		fmt.Fprintf(w, "%-4s %-4s %-3s %-10s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "WORKSPACE")
-		weaveRenderItemRows(w, v.Items)
+		fmt.Fprintf(w, "%-4s %-4s %-6s %-3s %-14s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "WORKSPACE")
+		// The graph columns (epic, blocked) are facts about the WHOLE queue, so the
+		// renderer needs one — this view carries the same items under another name.
+		weaveRenderItemRows(w, &weaveQueue{Root: v.Root, Items: v.Items}, v.Items)
 	}
 	return nil
 }
@@ -1564,8 +1644,8 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		weavePrintReclaimableFooter(w, reclaimable)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-3s %-10s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "WORKSPACE")
-	weaveRenderItemRows(cmd.OutOrStdout(), items)
+	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-6s %-3s %-14s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "WORKSPACE")
+	weaveRenderItemRows(cmd.OutOrStdout(), q, items)
 	if anyStale {
 		fmt.Fprintln(cmd.OutOrStdout(), "* wrapper process is dead — re-attach with `weave start --resume --issue N` or `weave abandon N`")
 	}
@@ -1853,10 +1933,37 @@ func runWeaveNext(cmd *cobra.Command, flags *weaveOutputFlags) error {
 	q, _ := loadWeaveQueue(dir)
 	it := nextTodo(q)
 	if it == nil {
+		// A BLOCKED queue must never look like an EMPTY one. "queue empty" means
+		// "we are finished"; a queue full of work that is all waiting on a dead
+		// dependency means "we are stuck" — and if both print the same line, a
+		// conductor (human or agent) reads a deadlock as success and walks away.
+		blocked := weaveBlockedTodos(q)
 		if mode == weavecli.OutputJSON {
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave next", map[string]any{"empty": true}))
+			out := map[string]any{"empty": len(blocked) == 0}
+			if len(blocked) > 0 {
+				out["blocked"] = weaveBlockedJSON(q, blocked)
+			}
+			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave next", out))
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "weave next: queue empty")
+		if len(blocked) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "weave next: queue empty")
+			return nil
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "weave next: nothing claimable — %d issue(s) blocked\n", len(blocked))
+		for _, b := range blocked {
+			var parts []string
+			dead := false
+			for _, dep := range weaveBlockers(q, b) {
+				parts = append(parts, fmt.Sprintf("#%d (%s)", dep.ID, dep.State))
+				if weaveDepDead(dep) {
+					dead = true
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  #%-4d %-40s waits on %s\n", b.ID, truncate(b.Title, 40), strings.Join(parts, ", "))
+			if dead {
+				fmt.Fprintf(cmd.OutOrStdout(), "        a dependency is dead — `weave link %d --depends-on <id> --unlink` to unstick it\n", b.ID)
+			}
+		}
 		return nil
 	}
 	if mode == weavecli.OutputJSON {
@@ -1864,10 +1971,54 @@ func runWeaveNext(cmd *cobra.Command, flags *weaveOutputFlags) error {
 			"issue":    it.ID,
 			"title":    it.Title,
 			"priority": it.Priority,
+			"stage":    itemStage(it),
 		}))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave next: #%d (%s) %q\n", it.ID, it.Priority, it.Title)
+	fmt.Fprintf(cmd.OutOrStdout(), "weave next: #%d (%s/%s) %q\n", it.ID, it.Priority, itemStage(it), it.Title)
 	return nil
+}
+
+// weaveBlockedTodos are the todo items held back ONLY by an unmet dependency —
+// i.e. the work that would run if its blockers landed. Containers are excluded:
+// an epic is not "blocked", it is worked through its children.
+func weaveBlockedTodos(q *weaveQueue) []*weaveItem {
+	var out []*weaveItem
+	for _, it := range q.Items {
+		if it.State == "todo" && !weaveIsContainer(q, it) && len(weaveBlockers(q, it)) > 0 {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func weaveBlockedJSON(q *weaveQueue, blocked []*weaveItem) []map[string]any {
+	out := make([]map[string]any, 0, len(blocked))
+	for _, b := range blocked {
+		var deps []map[string]any
+		for _, dep := range weaveBlockers(q, b) {
+			deps = append(deps, map[string]any{
+				"issue": dep.ID,
+				"state": dep.State,
+				"dead":  weaveDepDead(dep),
+			})
+		}
+		out = append(out, map[string]any{
+			"issue":    b.ID,
+			"title":    b.Title,
+			"waits_on": deps,
+		})
+	}
+	return out
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if n <= 1 {
+		return s[:n]
+	}
+	return s[:n-1] + "…"
 }
 
 // weaveStartOptions controls runWeaveStart behavior. noSpawn does
