@@ -553,6 +553,10 @@ func init() {
 	// vocabulary rather than projecting it, it has become the hand-written glossary
 	// that the whole data-catalog industry exists because it failed.
 	addVerb("lexicon", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
+	// claim: who is working in this project. CROSS -- you collide at any stage:
+	// planning, coding, testing, deploying. Two agents writing one project is how
+	// an untested change reaches main.
+	addVerb("claim", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 
 	// engines
@@ -677,7 +681,7 @@ func init() {
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
 		"capability", "agent", "tools", "models", "agents", "people", "whois",
-		"kb", "skills", "lexicon", "git", "web", "rclone", "kopia", "commands", "context",
+		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		"doctor", "audit", "check", "sprint",
 	)
 
@@ -694,7 +698,7 @@ func init() {
 		"handoff", "resume",
 		// verbs
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent",
-		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "mirror", "git",
+		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		"rclone",
 	)
