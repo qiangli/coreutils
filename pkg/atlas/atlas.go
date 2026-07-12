@@ -617,6 +617,11 @@ func init() {
 	// suite-gate file, sdlc's healthcheck: key, supervise's :: string, and a
 	// dag target that happens to fail. All four mean the same thing; they only
 	// disagreed about where the command lives. This is the one place it lives.
+	// The Plan stage's intake verb: the durable, committed register of bugs,
+	// features and requirements — filed BEFORE anyone starts work. Plan had only
+	// sprint (a conductor's live board) and meet (deliberation); neither can hold
+	// an untriaged thought, so those lived as bullets in docs/TODO.md.
+	addVerb("issue", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("gate", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	// conform: BASHY'S OWN fidelity batteries (bash-5.3 compat / POSIX conformance /
 	// VSC-PCTS compliance / benchmark). Renamed from `verify` 2026-07-12: it had
@@ -683,10 +688,15 @@ func init() {
 		"capability", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		"doctor", "audit", "check", "sprint",
+		// issue READS the committed register (`list`/`show`) and WRITES it (below).
+		"issue",
 	)
 
 	// write — mutates the filesystem or host state (short of irreversible loss).
 	eff(EffWrite,
+		// issue writes the project's COMMITTED issue register (.bashy/issues/) —
+		// source, not scratch, so a write here lands in the repo's history.
+		"issue",
 		"clip", "cp", "install", "link", "ln", "mkdir", "mkfifo", "mknod",
 		"mktemp", "mv", "rmdir", "tar", "touch",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "graph",

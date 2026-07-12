@@ -120,7 +120,7 @@ func TestRunWeaveAttachPreconditionGuards(t *testing.T) {
 			id:       42,
 			q:        &weaveQueue{NextID: 2, Root: root, Items: []*weaveItem{}},
 			wantCode: weavecli.ExitInvalidArg,
-			wantText: "issue #42 not found",
+			wantText: "run #42 not found",
 		},
 	}
 	for _, c := range cases {

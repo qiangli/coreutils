@@ -42,19 +42,19 @@ func runWeaveAttach(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	it := findWeaveItem(q, id)
 	if it == nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb,
-			weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
+			weavecli.ExitInvalidArg, fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
 	}
 	if it.State != "working" || it.WrapperPid == 0 || !pidAlive(it.WrapperPid) {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb,
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no live subagent (state=%q)", it.ID, it.State)))
+			weavecli.ExitStateConflict, fmt.Errorf("run #%d has no live subagent (state=%q)", it.ID, it.State)))
 	}
 	if it.CtlSock == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb,
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no control socket — its wrapper predates `weave say` or ran with --pty=never", it.ID)))
+			weavecli.ExitStateConflict, fmt.Errorf("run #%d has no control socket — its wrapper predates `weave say` or ran with --pty=never", it.ID)))
 	}
 	if it.LogPath == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb,
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no PTY capture (state=%q) — it either hasn't started or ran interactively (PTY passthrough)", it.ID, it.State)))
+			weavecli.ExitStateConflict, fmt.Errorf("run #%d has no PTY capture (state=%q) — it either hasn't started or ran interactively (PTY passthrough)", it.ID, it.State)))
 	}
 	f, err := os.Open(it.LogPath)
 	if err != nil {
@@ -64,7 +64,7 @@ func runWeaveAttach(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	defer f.Close()
 
 	errOut := cmd.ErrOrStderr()
-	fmt.Fprintf(errOut, "attached to issue #%d (%s) — type to instruct, /detach to leave (subagent keeps running)\n", it.ID, attachToolName(it))
+	fmt.Fprintf(errOut, "attached to run #%d (%s) — type to instruct, /detach to leave (subagent keeps running)\n", it.ID, attachToolName(it))
 
 	signalCtx, stopSignals := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stopSignals()
@@ -136,7 +136,7 @@ loop:
 		return ec(weavecli.EmitError(errOut, mode, verb, weavecli.ExitDepUnhealthy, attachErr))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, map[string]any{
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, map[string]any{
 			"issue": it.ID,
 			"state": "detached",
 		}))

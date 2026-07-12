@@ -48,10 +48,10 @@ func runWeaveRemember(cmd *cobra.Command, text string, issueID int64, tags []str
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave remember", weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave remember", o))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave remember", o))
 	}
 	if issueID > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "weave remember: noted issue #%d\n", issueID)
+		fmt.Fprintf(cmd.OutOrStdout(), "weave remember: noted run #%d\n", issueID)
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "weave remember: noted")
 	}
@@ -78,7 +78,7 @@ func runWeaveRecall(cmd *cobra.Command, query string, issueID int64, filesCSV st
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave recall", weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave recall", obs))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave recall", obs))
 	}
 	for _, o := range obs {
 		fmt.Fprintf(cmd.OutOrStdout(), "#%d %-9s %s\n", o.IssueID, o.Outcome, memoryOneLine(o))
@@ -99,7 +99,7 @@ func runWeaveMemory(cmd *cobra.Command, action string, issueID int64, flags *wea
 	switch action {
 	case "list":
 		if mode == weavecli.OutputJSON {
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave memory list", all))
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave memory list", all))
 		}
 		for _, o := range all {
 			fmt.Fprintf(cmd.OutOrStdout(), "#%d %-9s %s\n", o.IssueID, o.Outcome, memoryOneLine(o))
@@ -113,7 +113,7 @@ func runWeaveMemory(cmd *cobra.Command, action string, issueID int64, flags *wea
 			}
 		}
 		if mode == weavecli.OutputJSON {
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave memory show", hits))
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave memory show", hits))
 		}
 		for _, o := range hits {
 			fmt.Fprintf(cmd.OutOrStdout(), "#%d %-9s %s\n", o.IssueID, o.Outcome, memoryOneLine(o))

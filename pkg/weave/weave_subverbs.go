@@ -34,6 +34,7 @@ func newWeaveAddCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var title, body, tool, priority string
 	var fromFile string
+	var fromIssue string
 	var verify string
 	var suiteGate string
 	var stage string
@@ -56,6 +57,9 @@ the lifecycle. It defaults to "code", which is what every existing issue is.`,
 				title = args[0]
 			}
 			_ = tool
+			if fromIssue != "" {
+				return runWeaveAddFromIssue(cmd, fromIssue, &flags)
+			}
 			if fromFile != "" {
 				return runWeaveAddFromFile(cmd, fromFile, priority, &flags)
 			}
@@ -69,6 +73,7 @@ the lifecycle. It defaults to "code", which is what every existing issue is.`,
 	cmd.Flags().StringVar(&stage, "stage", "", "SDLC stage: plan|code|test|deploy (default code)")
 	cmd.Flags().IntVar(&points, "points", 0, "Story points (1,2,3,5,8; 8 = ~30m cap — `weave split` bigger work)")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "Bulk seed: markdown (`- [ ] title`) or JSON list of {title,body,priority}")
+	cmd.Flags().StringVar(&fromIssue, "from-issue", "", "Seed from a TRIAGED `bashy issue` register entry (id or unique prefix); links both ways")
 	cmd.Flags().StringVar(&verify, "verify", "", "Verify command the wrapper runs (`bash -c`) in the workspace at terminal time; verify_exit/verify_output recorded on the item, non-zero blocks `weave pull`")
 	cmd.Flags().StringVar(&suiteGate, "suite-gate", "", "Integration suite command run (`bash -c`) at the base repo root after merge; non-zero resets the merge and records suite_gate_exit/suite_gate_output")
 	return cmd
@@ -134,7 +139,7 @@ blocks until N reaches a terminal state.`,
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().Int64Var(&issue, "issue", 0, "Claim a specific issue instead of top-of-queue")
+	runFlag(cmd, &issue, "Claim a specific run instead of top-of-queue")
 	cmd.Flags().StringVar(&tool, "tool", "", "Agent nickname, tool:model, or tool name (alternative to trailing -- <agent>)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Reattach to an existing lease for the given issue")
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
@@ -269,7 +274,7 @@ func newWeaveResumeCmd() *cobra.Command {
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().Int64Var(&issue, "issue", 0, "Resume only one paused issue")
+	runFlag(cmd, &issue, "Resume only one paused run")
 	return cmd
 }
 
@@ -381,7 +386,7 @@ func newWeaveRememberCmd() *cobra.Command {
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().Int64Var(&issue, "issue", 0, "Associate the note with an issue")
+	runFlag(cmd, &issue, "Associate the note with a run")
 	cmd.Flags().StringArrayVar(&tags, "tag", nil, "Tag for recall scoring (repeatable; comma-separated accepted)")
 	return cmd
 }
@@ -399,7 +404,7 @@ func newWeaveRecallCmd() *cobra.Command {
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().Int64Var(&issue, "issue", 0, "Boost observations for an issue")
+	runFlag(cmd, &issue, "Boost observations for a run")
 	cmd.Flags().StringVar(&files, "files", "", "Comma-separated file paths for overlap scoring")
 	return cmd
 }
@@ -826,7 +831,7 @@ Default timeout is 1h. On timeout, exits with precondition_failed
 		},
 	}
 	flags.attach(cmd)
-	cmd.Flags().Int64Var(&issue, "issue", 0, "Wait on a specific issue ID")
+	runFlag(cmd, &issue, "Wait on a specific run ID")
 	cmd.Flags().BoolVar(&all, "all", false, "Wait until no `working` items remain")
 	cmd.Flags().BoolVar(&broker, "broker", false, "Auto-route live interactive auth/trust gates while waiting")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "Maximum wait duration (e.g. 30m, 1h)")
@@ -1066,14 +1071,14 @@ for agents and humans auditing the surface.`,
 				for i, r := range rows {
 					subs[i] = map[string]any{"name": r.Name, "status": r.Status}
 				}
-				return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave check", map[string]any{
+				return ec(emitOK(cmd.OutOrStdout(), mode, "weave check", map[string]any{
 					"subcommands": subs,
 				}))
 			}
 			for _, r := range rows {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-12s %s\n", r.Name, r.Status)
 			}
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave check", nil))
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave check", nil))
 		},
 	}
 	flags.attach(cmd)

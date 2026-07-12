@@ -109,7 +109,7 @@ func newWeaveFleetReviewCmd() *cobra.Command {
 			if mode != weavecli.OutputJSON {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s as %s: %d/5 — %s\n", args[0], role, rating, verdict)
 			}
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet review",
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave fleet review",
 				map[string]any{"tool": args[0], "role": role, "rating": rating, "verdict": verdict}))
 		},
 	}
@@ -188,7 +188,7 @@ func newWeaveFleetInterviewCmd() *cobra.Command {
 					"supports_say": p.SupportsSay, "supports_graceful_quit": p.SupportsGracefulQuit,
 				})
 			}
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet interview", map[string]any{"profiles": profiles}))
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave fleet interview", map[string]any{"profiles": profiles}))
 		},
 	}
 	flags.attach(cmd)
@@ -321,7 +321,7 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 			}
 			tools[i] = m
 		}
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet", map[string]any{"tools": tools}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave fleet", map[string]any{"tools": tools}))
 	}
 
 	for _, r := range rows {
@@ -361,7 +361,7 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 			}
 		}
 	}
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave fleet", nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, "weave fleet", nil))
 }
 
 // headlessArgs is the flag list an auth probe should launch with: the agent's

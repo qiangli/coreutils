@@ -75,10 +75,10 @@ func runWeaveSessions(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, map[string]any{"tasks": tasks}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, map[string]any{"tasks": tasks}))
 	}
 	renderSessionTasks(cmd.OutOrStdout(), tasks)
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
 func runWeaveJoin(cmd *cobra.Command, explicitTaskID string, observer, once bool, flags *weaveOutputFlags) error {
@@ -112,14 +112,14 @@ func runWeaveJoin(cmd *cobra.Command, explicitTaskID string, observer, once bool
 	}
 	if mode == weavecli.OutputJSON {
 		if once {
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, joined))
+			return ec(emitOK(cmd.OutOrStdout(), mode, verb, joined))
 		}
-		_ = weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, joined)
+		_ = emitOK(cmd.OutOrStdout(), mode, verb, joined)
 	} else {
 		renderJoinResponse(cmd.OutOrStdout(), joined)
 	}
 	if once {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -170,10 +170,10 @@ func runSessionAppend(cmd *cobra.Command, flags *weaveOutputFlags, verb string, 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, ev))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, ev))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s\n", ev.Kind, ev.Summary)
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
 func runWeaveTake(cmd *cobra.Command, holder string, force bool, ttl time.Duration, flags *weaveOutputFlags) error {
@@ -198,10 +198,10 @@ func runWeaveTake(cmd *cobra.Command, holder string, force bool, ttl time.Durati
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, resp))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, resp))
 	}
 	renderLease(cmd.OutOrStdout(), resp)
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
 func runWeaveHandoff(cmd *cobra.Command, to string, flags *weaveOutputFlags) error {
@@ -220,11 +220,11 @@ func runWeaveHandoff(cmd *cobra.Command, to string, flags *weaveOutputFlags) err
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, map[string]any{"event": ev, "lease": lease}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, map[string]any{"event": ev, "lease": lease}))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "handoff recorded for %s; lease released\n", to)
 	fmt.Fprintf(cmd.OutOrStdout(), "successor runs: weave take --as %s\n", to)
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
 func runWeaveRoster(cmd *cobra.Command, flags *weaveOutputFlags) error {
@@ -243,10 +243,10 @@ func runWeaveRoster(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, roster))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, roster))
 	}
 	renderRoster(cmd.OutOrStdout(), roster)
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
 func runWeaveShare(cmd *cobra.Command, email, role string, flags *weaveOutputFlags) error {
@@ -271,10 +271,10 @@ func runWeaveShare(cmd *cobra.Command, email, role string, flags *weaveOutputFla
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, share))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, share))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "shared session with %s as %s\n", email, role)
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
 func runWeaveShares(cmd *cobra.Command, flags *weaveOutputFlags) error {
@@ -293,12 +293,12 @@ func runWeaveShares(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, shares))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, shares))
 	}
 	for _, share := range shares {
 		fmt.Fprintf(cmd.OutOrStdout(), "%s  %s\n", share.ShareeEmail, share.Role)
 	}
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
 func runWeaveUnshare(cmd *cobra.Command, email string, flags *weaveOutputFlags) error {
@@ -316,10 +316,10 @@ func runWeaveUnshare(cmd *cobra.Command, email string, flags *weaveOutputFlags) 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, verb, weavecli.ExitGenericFail, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+		return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "revoked %s\n", email)
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, verb, nil))
 }
 
 func resolveJoinTaskID(ctx context.Context, client SessionClient, explicit string, pointer *SessionPointer) (string, error) {

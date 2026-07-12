@@ -54,7 +54,7 @@ func weaveHeartbeatDaemonize(cmd *cobra.Command, opts weaveHeartbeatOptions, que
 	}
 
 	if mode == weavecli.OutputJSON {
-		_ = weavecli.EmitOK(cmd.OutOrStdout(), mode, op, map[string]any{
+		_ = emitOK(cmd.OutOrStdout(), mode, op, map[string]any{
 			"pid":      childCmd.Process.Pid,
 			"log_file": logFile,
 		})

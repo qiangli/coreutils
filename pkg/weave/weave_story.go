@@ -137,7 +137,7 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 	}
 	sort.Slice(stories, func(i, j int) bool { return stories[i].ID < stories[j].ID })
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "sprint board", map[string]any{"stories": stories}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint board", map[string]any{"stories": stories}))
 	}
 	out := cmd.OutOrStdout()
 	if len(stories) == 0 {
@@ -299,7 +299,7 @@ func runWeaveStoryAdd(cmd *cobra.Command, title, epic, spec, acceptance, column 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint add", weavecli.ExitGenericFail, lockErr))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "sprint add", map[string]any{"sprint": newID, "column": column}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint add", map[string]any{"sprint": newID, "column": column}))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "sprint add: sprint #%d in %s\n", newID, column)
 	return nil
@@ -339,7 +339,7 @@ func runWeaveStoryShow(cmd *cobra.Command, id int64, flags *weaveOutputFlags) er
 			fmt.Errorf("sprint #%d not found", id)))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "sprint show", map[string]any{"sprint": s}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "sprint show", map[string]any{"sprint": s}))
 	}
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "sprint #%d [%s] — %s\n", s.ID, s.Column, s.Title)
@@ -733,7 +733,7 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, code, lockErr))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, op, map[string]any{"sprint": id, "ok": true}))
+		return ec(emitOK(cmd.OutOrStdout(), mode, op, map[string]any{"sprint": id, "ok": true}))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", op, line)
 	return nil

@@ -242,7 +242,7 @@ func newWeaveBatonTakeCmd() *cobra.Command {
 					fmt.Fprintln(cmd.OutOrStdout(), "no baton yet — write one with `weave baton write` as you go.")
 				}
 			}
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton take",
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave baton take",
 				map[string]any{"holder": l.Holder, "epoch": l.Epoch}))
 		},
 	}
@@ -270,7 +270,7 @@ func newWeaveBatonReleaseCmd() *cobra.Command {
 			if mode != weavecli.OutputJSON {
 				fmt.Fprintln(cmd.OutOrStdout(), "conductor lock released")
 			}
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton release", nil))
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave baton release", nil))
 		},
 	}
 	flags.attach(cmd)
@@ -309,7 +309,7 @@ func runWeaveBatonShow(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		if hasLock {
 			out["conductor"] = lock
 		}
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton", out))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave baton", out))
 	}
 	now := time.Now()
 	if hasLock && lock.Holder != "" {
@@ -327,7 +327,7 @@ func runWeaveBatonShow(cmd *cobra.Command, flags *weaveOutputFlags) error {
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "no baton yet — the conductor writes one with `weave baton write …`")
 	}
-	return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton", nil))
+	return ec(emitOK(cmd.OutOrStdout(), mode, "weave baton", nil))
 }
 
 func newWeaveBatonWriteCmd() *cobra.Command {
@@ -389,7 +389,7 @@ func newWeaveBatonWriteCmd() *cobra.Command {
 			if mode != weavecli.OutputJSON {
 				fmt.Fprintln(cmd.OutOrStdout(), "baton written — next conductor: `bashy weave baton`")
 			}
-			return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave baton write", map[string]any{"written_by": cur.WrittenBy}))
+			return ec(emitOK(cmd.OutOrStdout(), mode, "weave baton write", map[string]any{"written_by": cur.WrittenBy}))
 		},
 	}
 	flags.attach(cmd)

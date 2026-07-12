@@ -78,7 +78,7 @@ func runWeaveComment(cmd *cobra.Command, id int64, author, kind, body string, fl
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
 		if it == nil {
-			return fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))
+			return fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))
 		}
 		weaveAppendComment(it, author, kind, body)
 		return nil
@@ -91,11 +91,11 @@ func runWeaveComment(cmd *cobra.Command, id int64, author, kind, body string, fl
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave comment", code, lockErr))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave comment", map[string]any{
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave comment", map[string]any{
 			"issue": id, "kind": kind, "body": body,
 		}))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave comment: issue #%d +%s\n", id, kind)
+	fmt.Fprintf(cmd.OutOrStdout(), "weave comment: run #%d +%s\n", id, kind)
 	return nil
 }
 
@@ -140,10 +140,10 @@ func runWeaveComments(cmd *cobra.Command, id int64, flags *weaveOutputFlags) err
 	it := findWeaveItem(q, id)
 	if it == nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave comments",
-			weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
+			weavecli.ExitInvalidArg, fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave comments", map[string]any{
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave comments", map[string]any{
 			"issue": id, "owner": it.Owner, "comments": it.Comments,
 		}))
 	}
@@ -152,7 +152,7 @@ func runWeaveComments(cmd *cobra.Command, id int64, flags *weaveOutputFlags) err
 	if owner == "" {
 		owner = "(unassigned)"
 	}
-	fmt.Fprintf(out, "issue #%d [%s] owner=%s — %s\n", it.ID, it.State, owner, it.Title)
+	fmt.Fprintf(out, "run #%d [%s] owner=%s — %s\n", it.ID, it.State, owner, it.Title)
 	if len(it.Comments) == 0 {
 		fmt.Fprintln(out, "  (no comments)")
 		return nil

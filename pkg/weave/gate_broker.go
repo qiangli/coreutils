@@ -234,7 +234,7 @@ func newLiveGateRouteDeps(cmdErr io.Writer, dir string, issueID int64, ctlSock s
 		},
 		Escalate: func(msg string) error {
 			if cmdErr != nil {
-				fmt.Fprintf(cmdErr, "weave wait --broker: issue #%d blocked: %s\n", issueID, msg)
+				fmt.Fprintf(cmdErr, "weave wait --broker: run #%d blocked: %s\n", issueID, msg)
 			}
 			return gateBrokerEscalate(dir, issueID, msg)
 		},
@@ -256,7 +256,7 @@ func runGateBrokerForItem(brokers map[int64]*gateBroker, errw io.Writer, dir str
 		return
 	}
 	if err != nil && errw != nil {
-		fmt.Fprintf(errw, "weave wait --broker: issue #%d route %s failed: %v\n", it.ID, action, err)
+		fmt.Fprintf(errw, "weave wait --broker: run #%d route %s failed: %v\n", it.ID, action, err)
 	}
 }
 
@@ -323,7 +323,7 @@ func gateBrokerEscalate(dir string, issueID int64, msg string) error {
 	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, issueID)
 		if it == nil {
-			return fmt.Errorf("issue #%d not found", issueID)
+			return fmt.Errorf("run #%d not found", issueID)
 		}
 		weaveAppendComment(it, "broker", "blocker", msg)
 		return nil

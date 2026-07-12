@@ -51,19 +51,19 @@ func runWeaveReview(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	it := findWeaveItem(q, id)
 	if it == nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave review",
-			weavecli.ExitInvalidArg, fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
+			weavecli.ExitInvalidArg, fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
 	}
 	if it.Workspace == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave review",
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no workspace recorded", id)))
+			weavecli.ExitStateConflict, fmt.Errorf("run #%d has no workspace recorded", id)))
 	}
 	if _, err := os.Stat(it.Workspace); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave review",
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d workspace unavailable: %s: %w", id, it.Workspace, err)))
+			weavecli.ExitStateConflict, fmt.Errorf("run #%d workspace unavailable: %s: %w", id, it.Workspace, err)))
 	}
 	if it.Branch == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave review",
-			weavecli.ExitStateConflict, fmt.Errorf("issue #%d has no branch to review", id)))
+			weavecli.ExitStateConflict, fmt.Errorf("run #%d has no branch to review", id)))
 	}
 
 	tmpParent, err := os.MkdirTemp("", "weave-review-*")
@@ -121,7 +121,7 @@ func runWeaveReview(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		fresh := findWeaveItem(q, id)
 		if fresh == nil {
-			return fmt.Errorf("issue #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))
+			return fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))
 		}
 		fresh.ReviewVerdict = verdict
 		fresh.ReviewBlocking = blocking
@@ -141,7 +141,7 @@ func runWeaveReview(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	}
 
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave review", res))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave review", res))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "review: %s (exit=%d, files=%d) — %s\n", verdict, verifyExit, files, notes)
 	return nil

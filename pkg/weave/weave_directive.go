@@ -157,7 +157,7 @@ func applyDirectivePrio(queueDir string, id int64, tier string) error {
 	return withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
 		if it == nil {
-			return fmt.Errorf("issue #%d not found", id)
+			return fmt.Errorf("run #%d not found", id)
 		}
 		it.Priority = tier
 		return nil
@@ -171,13 +171,13 @@ func applyDirectiveSay(queueDir string, id int64, text string) error {
 	}
 	it := findWeaveItem(q, id)
 	if it == nil {
-		return fmt.Errorf("issue #%d not found", id)
+		return fmt.Errorf("run #%d not found", id)
 	}
 	if it.State != "working" || it.WrapperPid == 0 || !pidAlive(it.WrapperPid) {
-		return fmt.Errorf("issue #%d has no live subagent (state=%q)", it.ID, it.State)
+		return fmt.Errorf("run #%d has no live subagent (state=%q)", it.ID, it.State)
 	}
 	if it.CtlSock == "" {
-		return fmt.Errorf("issue #%d has no control socket", it.ID)
+		return fmt.Errorf("run #%d has no control socket", it.ID)
 	}
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r", " "), "\n", " ")
 	return weaveWriteControlFrame(it.CtlSock, text+"\r\n")
@@ -190,10 +190,10 @@ func applyDirectiveKill(queueDir string, id int64, reason string) error {
 	if err := withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
 		if it == nil {
-			return fmt.Errorf("issue #%d not found", id)
+			return fmt.Errorf("run #%d not found", id)
 		}
 		if it.State != "working" {
-			return fmt.Errorf("issue #%d state is %q (kill requires working)", id, it.State)
+			return fmt.Errorf("run #%d state is %q (kill requires working)", id, it.State)
 		}
 		wrapperPid = it.WrapperPid
 		workspace = it.Workspace
@@ -219,10 +219,10 @@ func applyDirectiveKill(queueDir string, id int64, reason string) error {
 	return withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
 		if it == nil {
-			return fmt.Errorf("issue #%d not found", id)
+			return fmt.Errorf("run #%d not found", id)
 		}
 		if it.State != "working" && it.State != "killed" {
-			return fmt.Errorf("issue #%d state is %q (kill requires working)", id, it.State)
+			return fmt.Errorf("run #%d state is %q (kill requires working)", id, it.State)
 		}
 		it.CommitsAhead = ahead
 		it.Head = head
@@ -319,7 +319,7 @@ func runWeaveConduct(cmd *cobra.Command, interval time.Duration, flags *weaveOut
 			}
 		}
 		if mode == weavecli.OutputJSON && applied > 0 {
-			_ = weavecli.EmitOK(cmd.OutOrStdout(), mode, verb, map[string]any{
+			_ = emitOK(cmd.OutOrStdout(), mode, verb, map[string]any{
 				"cursor":  next,
 				"applied": applied,
 			})

@@ -127,7 +127,7 @@ func runWeaveAutopilot(cmd *cobra.Command, opts weaveAutopilotOptions, flags *we
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave autopilot", code, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave autopilot", res))
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave autopilot", res))
 	}
 	label := res.Tool
 	if res.Agent != "" {

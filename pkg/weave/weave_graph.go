@@ -290,11 +290,11 @@ func runWeaveSplit(cmd *cobra.Command, idArg string, into []string, points int, 
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		parent = weaveFindItem(q, id)
 		if parent == nil {
-			return fmt.Errorf("issue #%d not found", id)
+			return fmt.Errorf("run #%d not found", id)
 		}
 		// Splitting work an agent is actively doing would orphan its workspace.
 		if parent.State != "todo" {
-			return fmt.Errorf("issue #%d is %s: only a todo issue can be split (its work has already started)", id, parent.State)
+			return fmt.Errorf("run #%d is %s: only a todo issue can be split (its work has already started)", id, parent.State)
 		}
 		now := timeNowUTC()
 		for _, title := range into {
@@ -331,7 +331,7 @@ func runWeaveSplit(cmd *cobra.Command, idArg string, into []string, points int, 
 		for _, k := range kids {
 			ids = append(ids, k.ID)
 		}
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave split", map[string]any{
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave split", map[string]any{
 			"parent":   parent.ID,
 			"children": ids,
 			"stage":    itemStage(parent),
@@ -418,10 +418,10 @@ func runWeaveLink(cmd *cobra.Command, idArg string, dependsOn, blocks []int64, u
 		for _, e := range edges {
 			from := weaveFindItem(q, e.from)
 			if from == nil {
-				return fmt.Errorf("issue #%d not found", e.from)
+				return fmt.Errorf("run #%d not found", e.from)
 			}
 			if weaveFindItem(q, e.to) == nil {
-				return fmt.Errorf("issue #%d not found", e.to)
+				return fmt.Errorf("run #%d not found", e.to)
 			}
 			if unlink {
 				from.DependsOn = removeID(from.DependsOn, e.to)
@@ -452,7 +452,7 @@ func runWeaveLink(cmd *cobra.Command, idArg string, dependsOn, blocks []int64, u
 		for _, e := range edges {
 			out = append(out, map[string]any{"issue": e.from, "depends_on": e.to})
 		}
-		return ec(weavecli.EmitOK(cmd.OutOrStdout(), mode, "weave link", map[string]any{
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave link", map[string]any{
 			"action": verb,
 			"edges":  out,
 		}))
