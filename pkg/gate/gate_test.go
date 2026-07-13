@@ -12,6 +12,18 @@ import (
 	"testing"
 )
 
+// requirePOSIXShell skips a test that executes gate checks through /bin/sh when
+// no such shell exists (Windows). Gate.Run defaults to /bin/sh and the checks
+// below are POSIX shell scripts (true/false/echo…>&2); on a host without a
+// POSIX shell there is nothing to execute them, so the exec-path assertions do
+// not apply. The resolution/precedence tests, which do not exec, still run.
+func requirePOSIXShell(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("gate execution requires a POSIX /bin/sh (absent on this platform)")
+	}
+}
+
 func write(t *testing.T, dir, rel, content string) {
 	t.Helper()
 	p := filepath.Join(dir, rel)
@@ -37,7 +49,9 @@ func TestNoGateIsAnError(t *testing.T) {
 		t.Fatalf("wrong error: %v", err)
 	}
 	// The message must tell you how to fix it, not just that you are wrong.
-	if !strings.Contains(err.Error(), DefinitionFile) {
+	// Compare slash-normalized: the message embeds an OS-native path (backslashes
+	// on Windows), while DefinitionFile is written forward-slash.
+	if !strings.Contains(filepath.ToSlash(err.Error()), DefinitionFile) {
 		t.Fatalf("the error does not say how to define a gate: %v", err)
 	}
 }
@@ -77,6 +91,7 @@ func TestNewDefinitionTakesPrecedence(t *testing.T) {
 // decision is made the moment one check fails, and running the rest wastes time an
 // agent is waiting on while burying the one line that matters.
 func TestStopsAtFirstFailure(t *testing.T) {
+	requirePOSIXShell(t)
 	dir := t.TempDir()
 	write(t, dir, DefinitionFile, "true\nfalse\ntouch SHOULD_NOT_EXIST\n")
 
@@ -102,6 +117,7 @@ func TestStopsAtFirstFailure(t *testing.T) {
 // A failing check must carry its output, or an agent is told "it failed" with no
 // way to know why and has to re-run the whole thing to find out.
 func TestFailureCarriesOutput(t *testing.T) {
+	requirePOSIXShell(t)
 	dir := t.TempDir()
 	write(t, dir, DefinitionFile, "echo the-real-reason >&2; exit 7\n")
 
@@ -125,6 +141,7 @@ func TestFailureCarriesOutput(t *testing.T) {
 // A passing gate does NOT carry output. A green gate is not interesting, and
 // dumping a successful build log into an agent's context window is pure cost.
 func TestPassCarriesNoOutput(t *testing.T) {
+	requirePOSIXShell(t)
 	dir := t.TempDir()
 	write(t, dir, DefinitionFile, "echo lots and lots of chatter\n")
 
