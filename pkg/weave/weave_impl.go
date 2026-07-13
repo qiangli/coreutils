@@ -27,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/gate"
+	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/weave/memory"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -2473,6 +2474,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	)
 	// WEAVE_AGENT is the seat; BASHY_PRINCIPAL is the agent that fills it.
 	env = weaveAgentEnv(env, agentLaunch)
+	// Credential firewall: a weave subagent is a third-party CLI processing
+	// untrusted repo content with its own network egress, so it must not inherit
+	// the operator's vault secrets by default (the lethal trifecta). Removes only
+	// the vault-projected names; WEAVE_*/BASHY_* stamped above are untouched.
+	// Opt back in with secrets.AllowAgentSecretsEnv.
+	env = secrets.ScrubAgentEnv(env)
 	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
 	tool.Dir = workspace
 	tool.Env = env

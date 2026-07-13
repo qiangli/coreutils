@@ -55,8 +55,13 @@ func TestBareToolArgvIsUnchangedFromTheLegacyTable(t *testing.T) {
 		if model != "" {
 			t.Errorf("%s: a bare tool name selects no model, got %q", name, model)
 		}
-		if strings.Join(args, "\x00") != strings.Join(want.Args, "\x00") {
-			t.Errorf("%s: args =\n  %q\nwant (legacy table)\n  %q", name, args, want.Args)
+		// The legacy argv folded the approval-gate kill-switches into Args; they
+		// now live in UnsafeArgs and are prepended only when unsafe launches are
+		// permitted — which permitUnsafeLaunch has done. So the FULL rendered argv
+		// must still equal the exact legacy table, kill-switch included.
+		legacy := append(append([]string{}, want.UnsafeArgs...), want.Args...)
+		if strings.Join(args, "\x00") != strings.Join(legacy, "\x00") {
+			t.Errorf("%s: args =\n  %q\nwant (legacy table)\n  %q", name, args, legacy)
 		}
 	}
 }
@@ -266,6 +271,11 @@ func TestPrincipalEnvStampedOnlyForANamedAgent(t *testing.T) {
 // An un-nicknamed binding still launches with the right model; it just has no
 // principal identity to sign with.
 func TestUnNicknamedBindingKeepsItsRawName(t *testing.T) {
+	// aider's baseline template carries --yes-always (its approval-gate
+	// kill-switch), which guardUnsafeArgs now refuses on an uncontained host. This
+	// test asserts NAME/MODEL resolution, not the gate, so permit unsafe launches —
+	// the same convention the other rendering tests follow.
+	permitUnsafeLaunch(t)
 	root := t.TempDir()
 	prev := newCatalog
 	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root), fleet.WithoutLocalStore()) }

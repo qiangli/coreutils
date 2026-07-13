@@ -181,9 +181,18 @@ var (
 )
 
 // resolveChecksum finds the asset's checksum, preferring sha256 (a per-asset
-// .sha256 sidecar, then a checksums file) and falling back to a .md5 sidecar for
-// tools that publish only md5 (e.g. SeaweedFS). Returns (sha256, md5) — exactly
-// one is non-empty.
+// .sha256 sidecar, then a checksums file). A .md5 sidecar is consulted ONLY as a
+// last resort and ONLY under the explicit BASHY_ALLOW_WEAK_CHECKSUM opt-in —
+// md5 is collision-broken, so by default a tool that ships only md5 fails to
+// resolve here and must be pinned (pins.go). Returns (sha256, md5) — at most one
+// is non-empty.
+//
+// Detached signatures (.asc/.sig/.minisig) are intentionally NOT selected as the
+// checksum source: a signature is only a trust anchor once verified against a
+// PINNED public key / keyless identity, which needs a committed trust-root
+// registry (a signature that travels with the release it signs is itself TOFU).
+// That verification layer is tracked as a follow-up; see pins.go for the pinned
+// trust root that closes the same hole for digests today.
 func resolveChecksum(ctx context.Context, rel *ghRelease, asset ghAsset) (sha, md5sum string, err error) {
 	if body, e := httpGetBody(ctx, asset.URL+".sha256", ""); e == nil {
 		if h := hex64.FindString(string(body)); h != "" {
@@ -213,13 +222,21 @@ func resolveChecksum(ctx context.Context, rel *ghRelease, asset ghAsset) (sha, m
 			return h, "", nil
 		}
 	}
-	// Fallback: a per-asset .md5 sidecar (the only integrity check some tools ship).
-	if body, e := httpGetBody(ctx, asset.URL+".md5", ""); e == nil {
-		if h := hex32.FindString(string(body)); h != "" {
-			return "", strings.ToLower(h), nil
+	// Last resort: a per-asset .md5 sidecar. MD5 is collision-broken, so a
+	// release-supplied md5 is close to no integrity check at all (an attacker who
+	// can rewrite the artifact can craft a colliding md5) — we do NOT resolve it by
+	// default. It is fetched only when the operator has explicitly accepted a weak
+	// check (BASHY_ALLOW_WEAK_CHECKSUM), matching the fail-closed gate in Ensure, so
+	// a legitimately md5-only upstream is still reachable but never silently trusted.
+	// The durable fix for such a tool is a committed sha256 pin (pins.go).
+	if weakChecksumAllowed() {
+		if body, e := httpGetBody(ctx, asset.URL+".md5", ""); e == nil {
+			if h := hex32.FindString(string(body)); h != "" {
+				return "", strings.ToLower(h), nil
+			}
 		}
 	}
-	return "", "", fmt.Errorf("binmgr: no checksum (sha256/md5) found for %s", asset.Name)
+	return "", "", fmt.Errorf("binmgr: no trustworthy checksum (sha256) found for %s — commit a sha256 pin in pkg/binmgr/pins.go, or set BASHY_ALLOW_WEAK_CHECKSUM=1 to permit an md5-only upstream", asset.Name)
 }
 
 // digestForFile finds the checksum line naming filename in a `<digest>  filename`

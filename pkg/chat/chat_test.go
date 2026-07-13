@@ -103,6 +103,10 @@ func TestInvokeCodexDangerFullAccessIsNonInteractive(t *testing.T) {
 func TestInvokeAiderHeadlessProfile(t *testing.T) {
 	// aider must be driven headlessly with --message (prompt appended as its
 	// value) + --yes-always + --no-git; bare `aider <prompt>` opens the TUI.
+	// --yes-always is aider's approval-gate kill-switch, so it is emitted only
+	// when unsafe launches are permitted — this test asserts that full headless
+	// argv, so it opts in (the default now launches aider under its own gate).
+	permitUnsafeLaunch(t)
 	r := &fakeRunner{}
 	_, err := Invoke(context.Background(), Options{
 		Agent: "aider", Instruction: "review this",
