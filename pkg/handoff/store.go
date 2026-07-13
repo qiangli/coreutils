@@ -126,7 +126,7 @@ func Pending(dir string, roots []string) ([]*Record, error) {
 	}
 	var out []*Record
 	for _, r := range all {
-		if r.ResumedAt != nil {
+		if r.ResumedAt != nil || r.SupersededAt != nil {
 			continue
 		}
 		if intersects(r.Project.Roots, roots) || intersects([]string{r.Project.Primary}, roots) {
@@ -134,6 +134,27 @@ func Pending(dir string, roots []string) ([]*Record, error) {
 		}
 	}
 	return out, nil
+}
+
+// Prune deletes handoff records that are DONE — resumed or superseded — leaving
+// live (pending) records untouched. It is how a store that has seen many
+// handoffs stays legible: a bare `bashy resume` should face only live seats, not
+// a museum of claimed and retired ones. Returns the number removed.
+func Prune(dir string) (int, error) {
+	all, err := List(dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range all {
+		if r.ResumedAt == nil && r.SupersededAt == nil {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, r.ID+".json")); err == nil {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func intersects(a, b []string) bool {

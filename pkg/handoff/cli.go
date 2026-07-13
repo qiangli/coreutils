@@ -136,6 +136,22 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 				return err
 			}
 
+			// A role (seat) handoff is SINGULAR: retire any prior UNCLAIMED
+			// handoff of the SAME role in this project, so a bare `bashy resume`
+			// finds exactly one live seat instead of an ambiguous pile.
+			if role != "" {
+				when := rec.CreatedAt
+				if prior, perr := Pending(DefaultDir(), projectRoots(root)); perr == nil {
+					for _, p := range prior {
+						if p.ID == rec.ID || p.Role != role {
+							continue
+						}
+						p.SupersededAt, p.SupersededBy = &when, rec.ID
+						_, _ = Save(DefaultDir(), p)
+					}
+				}
+			}
+
 			if asJSON {
 				b, _ := json.MarshalIndent(rec, "", "  ")
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
@@ -196,6 +212,7 @@ func NewResumeCmd() *cobra.Command {
 		asJSON  bool
 		show    bool
 		message string
+		prune   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "resume [id|path]",
@@ -211,8 +228,13 @@ intersection, so a session that handed off across several repos is found from
 any one of them.
 
   bashy resume                 # continue here, in this checkout
-  bashy resume --to codex      # continue in an isolated weave workspace, as codex
-  bashy resume <path.json>     # a record that arrived by scp, mesh, or email`,
+  bashy resume -m "do X first"  # continue, with a fresh steer from the human at pickup
+  bashy resume <path.json>     # a record that arrived by scp, mesh, or email
+  bashy resume --prune         # delete DONE handoffs (resumed or superseded)
+
+A role (seat) handoff is singular: a new one supersedes the prior unclaimed seat,
+so bare 'resume' finds exactly one live seat. Task handoffs may be many; if 'resume'
+finds several it lists them and asks you to name one.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := DefaultDir()
@@ -220,6 +242,15 @@ any one of them.
 			root, _ := repoRoot(cwd)
 			if root == "" {
 				root = cwd
+			}
+
+			if prune {
+				n, err := Prune(dir)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "resume: pruned %d done handoff(s) (resumed or superseded)\n", n)
+				return nil
 			}
 
 			if list {
@@ -299,6 +330,7 @@ any one of them.
 	cmd.Flags().StringVarP(&message, "message", "m", "", "an instruction from the human at pickup, shown to the successor first (e.g. what to prioritize now)")
 	cmd.Flags().StringVar(&to, "to", "", "resume in an isolated weave workspace as this tool")
 	cmd.Flags().BoolVar(&list, "list", false, "list pending handoffs for this project")
+	cmd.Flags().BoolVar(&prune, "prune", false, "delete DONE handoffs (resumed or superseded), leaving live ones")
 	cmd.Flags().BoolVar(&show, "show", false, "print the record without resuming")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the record")
 	return cmd

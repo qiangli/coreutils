@@ -141,6 +141,14 @@ type Record struct {
 	// handoff cannot be silently picked up twice.
 	ResumedAt *time.Time     `json:"resumed_at,omitempty"`
 	ResumedBy *principal.Ref `json:"resumed_by,omitempty"`
+
+	// SupersededAt/SupersededBy retire an UNCLAIMED handoff when a newer one of
+	// the SAME ROLE is parked for the same project. A seat is singular — only one
+	// live steward handoff should exist at a time — so a bare `bashy resume`
+	// finds exactly one live seat instead of an ambiguous pile. Superseded, like
+	// resumed, drops off the pending list.
+	SupersededAt *time.Time `json:"superseded_at,omitempty"`
+	SupersededBy string     `json:"superseded_by,omitempty"`
 }
 
 // Project is the scope: a set of roots, plus how they were determined.
