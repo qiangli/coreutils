@@ -1,0 +1,409 @@
+// Copyright (c) 2025 qiangli
+
+// See LICENSE for licensing information
+
+package dag
+
+import (
+	"context"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/weavecli"
+)
+
+// This is the FLEET half of fleet execution — how a chunk reaches a worker. It
+// is the mirror of chunks.go and the split is the load-bearing invariant:
+// nothing here decides what is *in* a chunk, and nothing in chunks.go consults
+// a slot count. Capacity sets how many chunks run concurrently; the committed
+// manifest sets how many chunks exist and what they contain.
+//
+// One host is a valid fleet. There is one scheduler and one code path; fleet
+// size is a parameter and N=1 is an ordinary value of it. `pool == nil` degrades
+// to LocalPool(Concurrency) — today's `-j N` reproduced by construction rather
+// than by branching around the pool.
+//
+// P2 ships venue 1 (userland: same-host, in-process) only. Worker carries the
+// fields the remote venues will need (Host, Labels, MemBytes) so that adding a
+// transport is a new Transport implementation, not a reshaping of the Pool —
+// but no remote transport exists here, by design.
+
+// Execution venues. A venue answers "what isolation does this chunk get",
+// separately from "how does the orchestrator reach it" — which is why one pool
+// can eventually serve all six. Only VenueUserland is implemented in P2.
+const (
+	VenueUserland  = "userland"  // venue 1 — in-process on this host
+	VenueWorkspace = "workspace" // venue 2 — private HOME/TMPDIR clone (not in P2)
+	VenueSandbox   = "sandbox"   // venue 3 — container (not in P2)
+)
+
+// LocalWorkerID is the logical name of the same-host worker. It is deliberately
+// a venue name and not a hostname: a worker identity that leaked host facts
+// would carry them into every result and artifact the fleet produces.
+const LocalWorkerID = "local-userland"
+
+// Worker is one capacity bucket in the fleet.
+type Worker struct {
+	ID   string // logical identity — never a hostname
+	Host string // "" => in-process on this box; set only by remote transports
+
+	Venues []string          // which venues this worker can offer
+	Labels map[string]string // os/arch/libc/... for a future Requires-host: match
+
+	CPU      int    // slot ceiling
+	MemBytes uint64 // the other half of the capacity formula
+
+	Transport Transport // nil => the pool's default transport
+}
+
+// offers reports whether the worker can host the given venue. An empty venue
+// means "unconstrained", which resolves to userland.
+func (w *Worker) offers(venue string) bool {
+	if venue == "" {
+		venue = VenueUserland
+	}
+	for _, v := range w.Venues {
+		if v == venue {
+			return true
+		}
+	}
+	return false
+}
+
+// matches reports whether the worker satisfies a label constraint.
+func (w *Worker) matches(want map[string]string) bool {
+	for k, v := range want {
+		if w.Labels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// Constraints is what a task demands of a worker. It is derived from task
+// metadata, never from the pool.
+type Constraints struct {
+	Venue      string            // userland | workspace | sandbox | ... ("" => userland)
+	Match      map[string]string // worker HOST labels; venues 1-2 only
+	Exclusive  bool              // drain the worker; nothing co-schedules
+	MemPerTask uint64            // 0 => not memory-gated
+}
+
+// Transport delivers one task to one worker and returns its result. This is the
+// seam every venue plugs into: localTransport runs it in-process here, and a
+// remote transport (ssh, sandbox exec, cluster job) is another implementation of
+// this one method. P2 implements the local one only.
+type Transport interface {
+	Exec(ctx context.Context, w *Worker, t *Task, io TaskIO) TaskResult
+	// Close releases the transport's resources. It must be idempotent: a
+	// transport shared by several workers may be closed once per worker.
+	Close() error
+}
+
+// Pool is a capacity-aware set of workers behind one or more transports.
+//
+// Slots are per-worker, not global: a single global semaphore cannot express "4
+// slots here, 12 there", which is the whole point of a fleet. The pool owns
+// placement and slot accounting; the engine owns the graph.
+type Pool struct {
+	mu      sync.Mutex
+	workers []*Worker
+	free    []int // free slots, indexed like workers
+	busy    []int // in-flight tasks per worker (for Exclusive)
+
+	transport Transport     // default transport when Worker.Transport is nil
+	freed     chan struct{} // buffered(1): "a slot released, re-scan"
+}
+
+// NewPool builds a pool over the given workers. transport is the default for
+// workers that do not carry one of their own.
+func NewPool(transport Transport, workers ...*Worker) *Pool {
+	p := &Pool{
+		transport: transport,
+		freed:     make(chan struct{}, 1),
+	}
+	for _, w := range workers {
+		if w == nil {
+			continue
+		}
+		if w.ID == "" {
+			w.ID = LocalWorkerID
+		}
+		if len(w.Venues) == 0 {
+			w.Venues = []string{VenueUserland}
+		}
+		p.workers = append(p.workers, w)
+		p.free = append(p.free, max(1, w.CPU))
+		p.busy = append(p.busy, 0)
+	}
+	return p
+}
+
+// LocalPool is the degrade-to-today constructor: one in-process worker offering
+// the userland venue with `concurrency` slots. `dag -j 8` with no fleet
+// configured is exactly this — same dispatch, same results, no off-box reach.
+//
+// Its transport is left nil so that the engine can install one built from its
+// own executor (which is what carries --sandbox wrapping); standalone callers
+// get the plain in-process executor via Exec's fallback.
+func LocalPool(concurrency int) *Pool {
+	return NewPool(nil, &Worker{
+		ID:     LocalWorkerID,
+		Host:   "", // in-process
+		Venues: []string{VenueUserland},
+		CPU:    max(1, concurrency),
+	})
+}
+
+// SetDefaultTransport installs tr as the pool's default transport if it has
+// none, leaving an explicitly-configured transport alone. The engine calls this
+// so a pool from LocalPool() executes through the engine's executor rather than
+// silently dropping its sandbox wrapper.
+func (p *Pool) SetDefaultTransport(tr Transport) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.transport == nil {
+		p.transport = tr
+	}
+}
+
+// Slots is the capacity formula: cores, gated by memory. A 16 GB / 10-core host
+// running a suite with a 4 GB/task watchdog offers 4 slots, not 10 — slots are
+// gated by memory as often as by cores.
+func (p *Pool) Slots(w *Worker, memPerTask uint64) int {
+	slots := max(1, w.CPU)
+	if memPerTask > 0 && w.MemBytes > 0 {
+		if byMem := int(w.MemBytes / memPerTask); byMem < slots {
+			slots = byMem
+		}
+	}
+	return max(0, slots)
+}
+
+// Capacity is the pool's total slot count across all workers.
+func (p *Pool) Capacity() int {
+	if p == nil {
+		return 1
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	total := 0
+	for _, w := range p.workers {
+		total += max(1, w.CPU)
+	}
+	return max(1, total)
+}
+
+// Eligible reports whether ANY worker could ever satisfy these constraints,
+// free or not. This is the anti-hang guard: a ready task that no worker could
+// ever host must fail fast with a clear reason, exactly as a missing tool does,
+// rather than waiting forever for a slot that will never qualify.
+//
+// It must not special-case a one-worker pool: a single local worker that cannot
+// offer venue=sandbox fails the same way a fleet of twenty would.
+func (p *Pool) Eligible(c Constraints) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, w := range p.workers {
+		if w.offers(c.Venue) && w.matches(c.Match) && p.Slots(w, c.MemPerTask) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// TryAcquire reserves one qualifying slot and returns the worker plus its
+// release func, or (nil, nil) when every qualifying worker is currently full.
+//
+// It is non-blocking on purpose. When the longest ready chunk cannot be placed
+// on any free qualifying worker, the scheduler must be free to try the
+// *next*-longest; a blocking acquire commits to one task and cannot.
+func (p *Pool) TryAcquire(c Constraints) (*Worker, func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Least-loaded first, so work spreads instead of stacking on worker 0.
+	idx := make([]int, len(p.workers))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return p.free[idx[a]] > p.free[idx[b]] })
+
+	for _, i := range idx {
+		w := p.workers[i]
+		if !w.offers(c.Venue) || !w.matches(c.Match) {
+			continue
+		}
+		if p.Slots(w, c.MemPerTask) <= 0 {
+			continue
+		}
+		if c.Exclusive && p.busy[i] > 0 {
+			continue // an exclusive task never shares a worker (perfbench, cert)
+		}
+		if p.free[i] <= 0 {
+			continue
+		}
+		take := 1
+		if c.Exclusive {
+			take = p.free[i] // drain the worker: nothing may co-schedule
+		}
+		p.free[i] -= take
+		p.busy[i]++
+		return w, func() { p.release(i, take) }
+	}
+	return nil, nil
+}
+
+// Acquire blocks until a qualifying slot frees up or ctx ends. It fails fast
+// (without waiting) when no worker could ever qualify.
+func (p *Pool) Acquire(ctx context.Context, c Constraints) (*Worker, func(), error) {
+	if !p.Eligible(c) {
+		return nil, nil, errf(weavecli.ExitDepUnhealthy, "no worker offers %s", describeConstraints(c))
+	}
+	for {
+		if w, release := p.TryAcquire(c); w != nil {
+			return w, release, nil
+		}
+		select {
+		case <-p.freed:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
+}
+
+func (p *Pool) release(i, n int) {
+	p.mu.Lock()
+	p.free[i] += n
+	p.busy[i]--
+	p.mu.Unlock()
+	select { // buffered(1): a pending waiter re-scans; a full buffer already will
+	case p.freed <- struct{}{}:
+	default:
+	}
+}
+
+// Exec places one task on a qualifying worker and runs it there. It is the
+// self-contained form: acquire, run, release.
+//
+// The engine does not use it — its scheduler acquires the slot itself (so that
+// the When: condition and the cache check run inside the slot too) and then
+// calls ExecOn. Keeping both means the pool is usable on its own without
+// reaching into the engine's scheduling loop.
+func (p *Pool) Exec(ctx context.Context, c Constraints, t *Task, io TaskIO) TaskResult {
+	w, release, err := p.Acquire(ctx, c)
+	if err != nil {
+		return TaskResult{Name: t.Name, Host: t.Host, Status: StatusFailed, ExitCode: 1, Err: err}
+	}
+	defer release()
+	return p.ExecOn(ctx, w, t, io)
+}
+
+// ExecOn runs a task on a worker whose slot the caller already holds. The
+// worker's own transport wins over the pool's default, so a heterogeneous fleet
+// (local here, ssh there) is a matter of which transport each worker carries.
+func (p *Pool) ExecOn(ctx context.Context, w *Worker, t *Task, io TaskIO) TaskResult {
+	tr := w.Transport
+	if tr == nil {
+		p.mu.Lock()
+		tr = p.transport
+		p.mu.Unlock()
+	}
+	if tr == nil {
+		tr = localTransport{}
+	}
+	return tr.Exec(ctx, w, t, io)
+}
+
+// Close releases the pool's transports.
+//
+// Transports are deduplicated so a transport shared by twenty workers is torn
+// down once — but only when its dynamic type is comparable. An interface value
+// cannot be used as a map key (or compared with ==) when its dynamic type is
+// unhashable, which any transport holding a func, slice, or map field is; doing
+// so panics at run time. Uncomparable transports are therefore closed once per
+// worker that carries them, which is why Transport.Close must be idempotent.
+func (p *Pool) Close() error {
+	p.mu.Lock()
+	transports := make([]Transport, 0, len(p.workers)+1)
+	add := func(tr Transport) {
+		if tr == nil {
+			return
+		}
+		if reflect.TypeOf(tr).Comparable() {
+			for _, seen := range transports {
+				if seen == tr { // safe: differing dynamic types compare false
+					return
+				}
+			}
+		}
+		transports = append(transports, tr)
+	}
+	for _, w := range p.workers {
+		add(w.Transport)
+	}
+	add(p.transport)
+	p.mu.Unlock()
+
+	var firstErr error
+	for _, tr := range transports {
+		if err := tr.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func describeConstraints(c Constraints) string {
+	venue := c.Venue
+	if venue == "" {
+		venue = VenueUserland
+	}
+	parts := []string{"venue=" + venue}
+	keys := make([]string, 0, len(c.Match))
+	for k := range c.Match {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, k+"="+c.Match[k])
+	}
+	return strings.Join(parts, " ")
+}
+
+// localTransport is venue 1: the task runs in-process on this host, through the
+// engine's own executor. It is the P2 transport, and the one every other venue
+// degrades to when the fleet is a single box.
+//
+// It tags the task's env with the worker's LOGICAL identity (DAG_FLEET_WORKER /
+// DAG_FLEET_VENUE), never a hostname, uname, or user. Those facts are what a
+// verdict must not carry: an artifact stamped with the machine that produced it
+// cannot be compared against one produced anywhere else, and the standing rule
+// is that no host fact reaches a committed artifact.
+type localTransport struct {
+	exec Executor // nil => the default in-process executor
+}
+
+func (x localTransport) Exec(ctx context.Context, w *Worker, t *Task, io TaskIO) TaskResult {
+	start := time.Now()
+
+	io.Env = append(append([]string{}, io.Env...),
+		"DAG_FLEET_WORKER="+w.ID,
+		"DAG_FLEET_VENUE="+VenueUserland,
+	)
+
+	exec := x.exec
+	if exec == nil {
+		exec = localExecutor{}
+	}
+	res := exec.Execute(ctx, t, io)
+	if res.Duration == 0 {
+		res.Duration = time.Since(start)
+	}
+	return res
+}
+
+func (x localTransport) Close() error { return nil }

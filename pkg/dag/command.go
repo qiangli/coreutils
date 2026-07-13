@@ -25,9 +25,9 @@ import (
 func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
-		sandboxF, meshF, timingsF                                                                     bool
+		sandboxF, fleetF, meshF, timingsF                                                             bool
 		fileArg                                                                                       string
-		cacheDir, cacheExport, cacheImport, remoteCmd, remoteShell                                    string
+		cacheDir, cacheExport, cacheImport, chunksPath, remoteCmd, remoteShell                        string
 		jobs                                                                                          int
 	)
 	cmd := &cobra.Command{
@@ -98,6 +98,17 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			// matrix fan-out into one concrete node per combination.
 			docVars := doc.expandVars(os.Environ(), overrides)
 			doc.expandMatrix()
+
+			// Chunk membership is a corpus property, so it is resolved here —
+			// after the matrix fan-out that creates the shard targets, before
+			// the graph is built, and entirely without reference to --fleet or
+			// -j. Chunking pays off with no fleet configured at all (selective
+			// re-run, cache granularity); the fleet only decides how many
+			// chunks run at once.
+			if err := applyChunkManifest(doc, chunksPath, path); err != nil {
+				return emitErr(errOut, mode, err)
+			}
+
 			g, err := BuildGraph(doc)
 			if err != nil {
 				return emitErr(errOut, mode, err)
@@ -158,6 +169,7 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				DryRun:      dryRunF,
 				OutputGroup: outputGroup,
 				Sandbox:     sandboxF,
+				Fleet:       fleetF,
 				Mesh:        meshF,
 				RemoteCmd:   remoteCmd,
 				RemoteShell: remoteShell,
@@ -214,6 +226,8 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&timingsF, "timings", false, "Report recorded per-target durations, total (T) and longest (L); runs nothing")
 	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
 	cmd.Flags().BoolVar(&sandboxF, "sandbox", false, "Run target bodies through DAG_SANDBOX_CMD wrapper constraints")
+	cmd.Flags().BoolVar(&fleetF, "fleet", false, "Run targets through the capacity-aware worker pool (local same-host workers only)")
+	cmd.Flags().StringVar(&chunksPath, "chunks", "", "Committed chunk manifest pinning case→chunk membership (default: chunks.json next to the DAG file)")
 	cmd.Flags().BoolVar(&meshF, "mesh", false, "Dispatch Host:-tagged targets to another machine (control plane only; body fetches its own code/data)")
 	cmd.Flags().StringVar(&remoteCmd, "remote", "", "Remote-exec command for --mesh (default: ssh or DAG_REMOTE_EXEC)")
 	cmd.Flags().StringVar(&remoteShell, "remote-shell", "", "Remote shell argv for --mesh (default: bash -s; use none to feed stdin directly)")
@@ -332,6 +346,41 @@ func isVarName(s string) bool {
 		}
 	}
 	return s != ""
+}
+
+// applyChunkManifest binds committed chunk membership onto the document's shard
+// targets.
+//
+// An explicit --chunks path must exist and must bind: a manifest the user named
+// and that reached nothing is a silent truncation of the corpus. A manifest
+// merely *discovered* beside the DAG file binds only when the document actually
+// declares shard targets, so an unchunked `dag build` in a repo that happens to
+// commit a chunks.json is unaffected.
+func applyChunkManifest(doc *Document, chunksPath, dagPath string) error {
+	explicit := chunksPath != ""
+
+	p := chunksPath
+	if p == "" {
+		p = "chunks.json"
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(filepath.Dir(dagPath), p)
+	}
+
+	if !explicit {
+		if !docHasShards(doc) {
+			return nil
+		}
+		if _, err := os.Stat(p); err != nil {
+			return nil // unchunked run of a sharded file; nothing pinned to apply
+		}
+	}
+
+	m, err := LoadChunkManifest(p)
+	if err != nil {
+		return err
+	}
+	return BindChunks(doc, m)
 }
 
 // --- result shapes (envelope Result payloads) ---

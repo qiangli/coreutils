@@ -38,6 +38,8 @@ type Engine struct {
 	OutputGroup bool   // wrap each target's captured output in CI ::group:: markers
 	Sandbox     bool   // wrap target bodies in SandboxCmd/DAG_SANDBOX_CMD
 	SandboxCmd  string // shell-split wrapper command; default is DAG_SANDBOX_CMD
+	Fleet       bool   // run targets through a capacity-aware worker pool
+	Pool        *Pool  // nil => LocalPool(Concurrency); a supplied pool owns its transports
 	Mesh        bool   // dispatch Host:-tagged targets to another machine
 	RemoteCmd   string // remote-exec command for mesh; default "ssh" / DAG_REMOTE_EXEC
 	RemoteShell string // shell argv appended after host; default "bash -s"; "none" feeds stdin directly
@@ -46,6 +48,10 @@ type Engine struct {
 
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// pool is the run-scoped worker pool, bound at the top of Run and cleared
+	// when it returns. Non-nil only under Fleet.
+	pool *Pool
 }
 
 // RunReport aggregates per-target results. In dry-run mode Results is empty and
@@ -98,8 +104,22 @@ func (e *Engine) Run(ctx context.Context, targets ...string) (RunReport, error) 
 		return RunReport{Plan: e.planFor(order, fp)}, nil
 	}
 
+	// Bind the worker pool for this run. It is built once here, not per task:
+	// a pool constructed per dispatch would hand out a fresh set of slots every
+	// time and enforce no capacity at all.
+	if e.Fleet {
+		pool, owned := e.bindPool()
+		e.pool = pool
+		defer func() {
+			if owned {
+				_ = pool.Close()
+			}
+			e.pool = nil
+		}()
+	}
+
 	var report RunReport
-	if e.Concurrency > 1 {
+	if e.Fleet || e.Concurrency > 1 {
 		report = e.runParallel(ctx, order, fp)
 	} else {
 		report = e.runSerial(ctx, order, fp)
@@ -244,7 +264,7 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 			fmt.Fprintf(e.Stderr, "==> %s\n", node.Task.Name)
 		}
 		node.Status = StatusRunning
-		res := e.runOne(ctx, node, capture)
+		res := e.runOne(ctx, node, capture, nil)
 		node.Status = res.Status
 		node.Result = &res
 		report.add(res)
@@ -297,7 +317,7 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 		results = make(map[string]*TaskResult, len(order))
 		failed  bool
 		stopped bool
-		sem     = make(chan struct{}, e.Concurrency)
+		sem     = make(chan struct{}, max(1, e.Concurrency)) // unused under a fleet: the pool gates instead
 		done    = make(chan *Node, len(order))
 	)
 
@@ -326,16 +346,28 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 			wg.Add(1)
 			go func(node *Node) {
 				defer wg.Done()
-				sem <- struct{}{}
+				// One gate, not two: a slot on a qualifying worker when a fleet
+				// is configured, else the plain -j semaphore. Everything the
+				// slot covers — the When: condition, the cache check, the body —
+				// runs inside it, exactly as it did under the bare semaphore.
+				worker, release, err := e.acquireSlot(ctx, node.Task, sem)
 				var r TaskResult
-				if e.conditionFalse(ctx, node) {
+				switch {
+				case err != nil:
+					// No worker can ever host this target: fail fast with the
+					// reason instead of waiting for a slot that will never
+					// qualify, mirroring the missing-tool failure.
+					r = TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusFailed, ExitCode: 1, Err: err}
+				case e.conditionFalse(ctx, node):
 					r = TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusConditionSkipped}
-				} else if e.upToDate(node, fp) {
+				case e.upToDate(node, fp):
 					r = TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusUpToDate, UpToDate: true}
-				} else {
-					r = e.runOne(ctx, node, true)
+				default:
+					r = e.runOne(ctx, node, true, worker)
 				}
-				<-sem
+				if release != nil {
+					release()
+				}
 				mu.Lock()
 				node.Status, node.Result, results[node.Task.Name] = r.Status, &r, &r
 				mu.Unlock()
@@ -401,6 +433,27 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 	return report
 }
 
+// acquireSlot blocks until this task may run, and reports where it may run.
+//
+// With a fleet, the pool IS the gate — it is the only thing that can express "4
+// slots on this worker, 12 on that one", which a single global semaphore cannot.
+// It returns the worker the task was placed on, so the body runs on the machine
+// the scheduler chose rather than being re-placed further down.
+//
+// Without a fleet, the gate is the plain -j semaphore and there is no worker:
+// byte-for-byte today's path.
+func (e *Engine) acquireSlot(ctx context.Context, t *Task, sem chan struct{}) (*Worker, func(), error) {
+	if e.pool != nil {
+		return e.pool.Acquire(ctx, constraintsFor(t))
+	}
+	select {
+	case sem <- struct{}{}:
+		return nil, func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+}
+
 // flushGroup writes one target's captured output wrapped in GitHub Actions log
 // folding markers (::group::<target> … ::endgroup::), emitted in topological
 // order so that -j N output folds cleanly in CI logs instead of interleaving.
@@ -463,7 +516,9 @@ func (e *Engine) flushBanner(n *Node, r TaskResult) {
 // StatusFailed, ExitCode 124, "timeout") and up to Retries extra attempts on
 // failure (with an optional Backoff sleep between). When capture is set,
 // stdout/stderr are buffered into the result instead of streamed.
-func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResult {
+// worker is the fleet worker the scheduler placed this target on, or nil when
+// no fleet is configured (then the engine's own executor runs it in-process).
+func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *Worker) TaskResult {
 	// P1 #7 — resolve declared secret VALUES so they can be redacted from the
 	// captured output. A target with secrets is always captured (even when the
 	// engine isn't) so the values never reach the real stdout unredacted.
@@ -482,7 +537,7 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool) TaskResul
 			case <-ctx.Done():
 			}
 		}
-		res = e.runAttempt(ctx, node, captureRun)
+		res = e.runAttempt(ctx, node, captureRun, worker)
 		res = applyExitContract(node.Task, res)
 		if res.Status == StatusDone {
 			break
@@ -557,7 +612,7 @@ func applyExitContract(t *Task, res TaskResult) TaskResult {
 
 // runAttempt runs the body once, wrapping it in a context.WithTimeout when the
 // target declares a Timeout. A deadline hit is reported as exit 124 "timeout".
-func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool) TaskResult {
+func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worker *Worker) TaskResult {
 	runCtx := ctx
 	if node.Task.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -578,7 +633,7 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool) TaskR
 		cp.Body = toolPreamble(task.Tools) + task.Body
 		task = &cp
 	}
-	res := e.executor().Execute(runCtx, task, TaskIO{
+	res := e.executeTask(runCtx, task, worker, TaskIO{
 		Dir:    e.Dir,
 		Env:    e.envFor(node),
 		Stdout: stdout,
@@ -596,8 +651,47 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool) TaskR
 	return res
 }
 
+// executeTask is the placement seam. Without --fleet it is exactly today's path
+// (the engine's executor, in-process). With --fleet the run-scoped pool picks a
+// worker that satisfies the task's constraints and its transport runs the body
+// there — which for P2 is always the local userland worker.
+func (e *Engine) executeTask(ctx context.Context, task *Task, worker *Worker, tio TaskIO) TaskResult {
+	if e.pool != nil && worker != nil {
+		// The slot on this worker is already held by the scheduler; run the body
+		// there through its transport (locally, for the userland venue).
+		return e.pool.ExecOn(ctx, worker, task, tio)
+	}
+	return e.executor().Execute(ctx, task, tio)
+}
+
+// constraintsFor derives what a task demands of a worker. P2 has no Venue: or
+// Requires-host: metadata on Task yet, so every task asks for the userland venue
+// — which the local worker offers, making --fleet on one box behave exactly like
+// -j N. The seam is here so that adding the metadata is a parser change, not a
+// scheduler change.
+func constraintsFor(t *Task) Constraints {
+	return Constraints{Venue: VenueUserland}
+}
+
 func (e *Engine) sandboxEnabled() bool {
 	return e.Sandbox || e.SandboxCmd != "" || os.Getenv("DAG_SANDBOX_CMD") != ""
+}
+
+// bindPool resolves the pool for one run and reports whether the engine owns it
+// (and must therefore close it). `Pool == nil` degrades to LocalPool(Concurrency):
+// one in-process worker with N slots, which is today's -j N by construction
+// rather than by branching around the pool.
+//
+// The pool's default transport is built from the engine's executor, so --sandbox
+// composes with --fleet instead of being silently dropped.
+func (e *Engine) bindPool() (*Pool, bool) {
+	if e.Pool != nil {
+		e.Pool.SetDefaultTransport(localTransport{exec: e.executor()})
+		return e.Pool, false
+	}
+	p := LocalPool(max(1, e.Concurrency))
+	p.SetDefaultTransport(localTransport{exec: e.executor()})
+	return p, true
 }
 
 func (e *Engine) executor() Executor {

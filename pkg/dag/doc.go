@@ -74,6 +74,30 @@
 // The `file-exists`/`file-absent`/`http-ok` sugar also accepts the explicit
 // `key=value` spelling (`path=`, `url=`). See contract.go for the evaluator.
 //
+// # Fleet execution
+//
+// `--fleet` runs targets through a [Pool] of [Worker]s instead of a bare -j
+// semaphore. A worker offers one or more execution venues; a [Transport] is how
+// a target reaches one. Only the userland venue ships today — same host, in
+// process — so `--fleet` on one box is `-j N` by construction: `Pool == nil`
+// degrades to LocalPool(Concurrency), and there is no second code path to drift.
+//
+// The pool is the gate, not an addition to one. It owns placement and per-worker
+// slot accounting, which a single global semaphore cannot express ("4 slots
+// here, 12 there"). [Pool.Eligible] fails a target fast when no worker could
+// ever host it, rather than parking it on a slot that will never qualify.
+//
+// Chunking is a separate axis and pays off with no fleet at all. Chunk
+// membership — which cases are in chunk i, out of how many — is a property of
+// the CORPUS, pinned in a committed manifest (see [LoadChunkManifest]) and
+// changed only when the corpus changes. Fleet capacity decides how many chunks
+// run concurrently, never how many exist or what is in them. Deriving membership
+// from capacity would make `suite:shard=7` name a different case set depending
+// on who was online, which breaks both selective re-run and the fingerprint
+// cache. [BindChunks] hands each shard target its committed case list via
+// DAG_CHUNK_MEMBERS; a manifest that reaches no target is an error, because
+// silently dropping corpus produces a flattering pass rate.
+//
 // # dag-v1 schema stability
 //
 // Every dag envelope stamps schema_version = "dag-v1" (see [SchemaVersion]).
