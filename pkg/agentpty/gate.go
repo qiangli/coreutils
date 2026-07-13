@@ -3,11 +3,11 @@ package agentpty
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
+	"os"
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/qiangli/coreutils/pkg/agentlaunch"
 )
 
 // An agent CLI that stops to ask a question is the quietest way a headless fleet
@@ -253,7 +253,41 @@ func BrokerSay(ctlSock, payload string) error {
 	if strings.ContainsRune(payload, '\x00') {
 		frame = "\x00R" + base64.StdEncoding.EncodeToString([]byte(payload)) + "\n"
 	}
-	return agentlaunch.SendControlFrame(ctlSock, frame)
+	return sendControlFrame(ctlSock, frame)
+}
+
+// sendControlFrame writes a frame to a run's control channel.
+//
+// Deliberately NOT reused from pkg/agentlaunch, even though that package has the
+// same twenty lines. agentlaunch resolves the fleet registry, and importing it
+// would drag the whole tool catalog into a package whose entire claim is that it
+// knows nothing about any particular tool. A terminal does not need to know what
+// claude is.
+//
+// Falls back to a regular file when the socket cannot be dialled — a unix socket
+// address caps at ~104 bytes, and a caller with a long path would otherwise lose
+// steering entirely rather than merely polling for it.
+func sendControlFrame(path, frame string) error {
+	conn, err := net.DialTimeout("unix", path, 3*time.Second)
+	if err == nil {
+		defer conn.Close()
+		if _, err := conn.Write([]byte(frame)); err != nil {
+			return fmt.Errorf("control socket write: %w", err)
+		}
+		return nil
+	}
+	if st, statErr := os.Stat(path); statErr == nil && st.Mode().IsRegular() {
+		f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+		if openErr != nil {
+			return fmt.Errorf("control file open: %w", openErr)
+		}
+		defer f.Close()
+		if _, writeErr := f.WriteString(frame); writeErr != nil {
+			return fmt.Errorf("control file write: %w", writeErr)
+		}
+		return nil
+	}
+	return fmt.Errorf("control socket dial: %w", err)
 }
 
 func exceededAutoRouteCap(state *GateRouteState, cap int) bool {

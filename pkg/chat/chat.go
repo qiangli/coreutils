@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/capability"
@@ -254,6 +255,16 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	// pipe rather than failing, since a run without trust-clearing and steering
 	// is degraded, not broken.
 	if r.pty && agentpty.Supported() {
+		// Prevention before cure. A trust prompt that never appears cannot be
+		// mis-answered, cannot be raced, and costs nothing to avoid — so the
+		// tool's own config is seeded first, and agentpty's reactive gate clearing
+		// is the backstop for the prompts a preseed does not cover.
+		//
+		// Best-effort: an unwritable config is a reason to fall back on clearing
+		// the prompt, never a reason to refuse to launch the agent.
+		if p, ok := agentctl.ProfileFor(agent); ok && p.Preseed != "" {
+			_ = agentctl.ApplyTrustPreseed(cmd.Dir, p.Preseed)
+		}
 		return r.runPTY(cmd)
 	}
 

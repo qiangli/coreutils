@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/qiangli/coreutils/pkg/agentlaunch"
+	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
@@ -85,7 +85,7 @@ func newSayCmd() *cobra.Command {
 					seatLabel(floor.Speaker))
 			}
 
-			if err := agentlaunch.SendControlLine(floor.CtlSock, text); err != nil {
+			if err := agentctl.Say(floor.CtlSock, text); err != nil {
 				return fmt.Errorf("meet: could not reach %s: %w", seatLabel(floor.Speaker), err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "→ %s (round %d): %s\n",
@@ -133,14 +133,10 @@ func currentSpeaker(id string) (LiveEvent, error) {
 // steerable reports whether the seat's tool declares that it reads its terminal
 // mid-run. The registry is the source of truth; meet keeps no list of its own.
 func steerable(seat string) bool {
-	cat := fleet.New()
-	a, ok := cat.Agent(seat)
+	a, ok := fleet.New().Agent(seat)
 	if !ok {
 		return false
 	}
-	t, ok := cat.Tool(a.Tool)
-	if !ok {
-		return false
-	}
-	return t.CLI.Launch.SupportsSay
+	p, ok := agentctl.ProfileFor(a.Tool)
+	return ok && p.Steerable
 }
