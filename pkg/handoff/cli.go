@@ -29,6 +29,7 @@ func NewHandoffCmd() *cobra.Command {
 		park     bool
 		asJSON   bool
 		blockers []string
+		role     string
 	)
 	cmd := &cobra.Command{
 		Use:   "handoff",
@@ -102,6 +103,7 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 				Continuity: brief,
 				NextAction: next,
 				Blockers:   blockers,
+				Role:       role,
 				Work:       work,
 			}
 
@@ -176,6 +178,7 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 	cmd.Flags().StringVarP(&brief, "message", "m", "", "the continuity brief a successor reads first (required)")
 	cmd.Flags().StringVar(&next, "next", "", "the one next action, stated for a cold agent in another tool")
 	cmd.Flags().StringSliceVar(&blockers, "blocker", nil, "a blocker the successor must know about (repeatable)")
+	cmd.Flags().StringVar(&role, "as", "", "hand off a ROLE, not just the task: the skill the successor assumes (e.g. 'steward', 'conductor'). It loads the skill, becomes that role, and decides how to drive — including whether to delegate the work back.")
 	cmd.Flags().StringVar(&to, "to", "", "successor: an agent tool (codex, claude, …) or 'schedule'")
 	cmd.Flags().StringVar(&at, "at", "", "when, for --to schedule (e.g. 09:00, 30m)")
 	cmd.Flags().BoolVar(&park, "park", false, "park the work for anyone to resume (the default)")
@@ -249,6 +252,9 @@ any one of them.
 			// diff — otherwise it applies a patch it cannot interpret.
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "resuming %s (from %s, %s)\n\n", rec.ID, refName(rec.From), rec.CreatedAt.Format(time.RFC3339))
+			if rec.Role != "" {
+				fmt.Fprintf(out, "── role ──\nAssume the '%s' role before touching the work below: run `bashy skills show %s` and follow it. You are handed the SEAT, not just the task — decide how to drive (including whether to delegate it back).\n\n", rec.Role, rec.Role)
+			}
 			fmt.Fprintf(out, "── continuity ──\n%s\n\n", strings.TrimSpace(rec.Continuity))
 			if rec.NextAction != "" {
 				fmt.Fprintf(out, "── next action ──\n%s\n\n", rec.NextAction)

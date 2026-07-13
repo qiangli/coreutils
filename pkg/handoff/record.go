@@ -100,6 +100,15 @@ type Record struct {
 	NextAction string   `json:"next_action,omitempty"`
 	Blockers   []string `json:"blockers,omitempty"`
 
+	// Role, when set, names a ROLE the successor should ASSUME before touching
+	// the work — a skill name like "steward" or "conductor". A plain handoff
+	// passes a TASK ("here is what I was doing"); a role handoff passes the SEAT
+	// ("you are now the steward"): the successor loads the skill
+	// (`bashy skills show <role>`), acts as that role, and DECIDES how to drive —
+	// including whether to delegate the work back. Empty = task handoff. This is
+	// the distinction that made "handoff your work" ambiguous: work vs. seat.
+	Role string `json:"role,omitempty"`
+
 	// Work is the in-flight state — the piece nothing else captured, and the
 	// reason a successor used to inherit a narrative instead of a working tree.
 	Work WorkingState `json:"work"`
