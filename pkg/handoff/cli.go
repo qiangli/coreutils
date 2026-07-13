@@ -207,12 +207,14 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 // machine, and it must work when the agent knows nothing.
 func NewResumeCmd() *cobra.Command {
 	var (
-		to      string
 		list    bool
 		asJSON  bool
 		show    bool
 		message string
 		prune   bool
+		all     bool
+		claim   bool
+		cancel  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "resume [id|path]",
@@ -227,14 +229,17 @@ With no argument it finds the pending handoff for this project — by path-set
 intersection, so a session that handed off across several repos is found from
 any one of them.
 
-  bashy resume                 # continue here, in this checkout
-  bashy resume -m "do X first"  # continue, with a fresh steer from the human at pickup
-  bashy resume <path.json>     # a record that arrived by scp, mesh, or email
-  bashy resume --prune         # delete DONE handoffs (resumed or superseded)
+  bashy resume                 # SHOW the current handoff + whether it is claimed (read-only, idempotent)
+  bashy resume --claim         # TAKE it: apply the work and record you hold it (the ONLY side effect)
+  bashy resume --claim -m "X"  # take it, with a fresh steer from the human
+  bashy resume --all           # every handoff for this project, with status
+  bashy resume --cancel <id>   # retire an unclaimed one (kept for the record)
+  bashy resume --prune         # delete DONE handoffs (resumed/superseded/cancelled)
 
-A role (seat) handoff is singular: a new one supersedes the prior unclaimed seat,
-so bare 'resume' finds exactly one live seat. Task handoffs may be many; if 'resume'
-finds several it lists them and asks you to name one.`,
+Bare 'resume' NEVER claims — run it before and after a pickup to confirm an agent
+took the seat. Claiming requires --claim. A role (seat) handoff is singular: a
+new one supersedes the prior unclaimed seat, so bare 'resume' shows exactly one
+live seat. Task handoffs may be many; if several are current it lists them.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := DefaultDir()
@@ -253,45 +258,93 @@ finds several it lists them and asks you to name one.`,
 				return nil
 			}
 
-			if list {
-				recs, err := Pending(dir, projectRoots(root))
+			out := cmd.OutOrStdout()
+			roots := projectRoots(root)
+
+			// --cancel <id>: explicitly retire an unclaimed handoff. Kept for the
+			// record (only --prune deletes), hidden from the default view.
+			if cancel {
+				rec, err := pick(dir, root, args)
 				if err != nil {
 					return err
 				}
-				if len(recs) == 0 {
-					fmt.Fprintln(cmd.OutOrStdout(), "resume: no pending handoff for this project")
-					return nil
+				if rec.ResumedAt != nil {
+					return fmt.Errorf("%s is already claimed; nothing to cancel", rec.ID)
 				}
+				now := time.Now().UTC()
+				self, _ := principal.NewResolver(fleet.New(), principal.DefaultEnv()).Self()
+				rec.CancelledAt, rec.CancelledBy = &now, &self
+				if _, err := Save(dir, rec); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "cancelled %s (kept for the record; `resume --prune` to delete)\n", rec.ID)
+				return nil
+			}
+
+			// --list / --all: the register view. Default lists CURRENT only; --all
+			// lists every record with its status.
+			if list || all {
+				recs, err := List(dir)
+				if err != nil {
+					return err
+				}
+				shown := 0
 				for _, r := range recs {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  from=%s  %s\n",
-						r.ID, r.CreatedAt.Format(time.RFC3339), refName(r.From), firstLine(r.Continuity))
+					if !(intersects(r.Project.Roots, roots) || intersects([]string{r.Project.Primary}, roots)) {
+						continue
+					}
+					if !all && r.Status() != "current" {
+						continue
+					}
+					fmt.Fprintf(out, "[%-10s] %s  %s  from=%s  %s\n",
+						r.Status(), r.ID, r.CreatedAt.Format(time.RFC3339), refName(r.From), firstLine(r.Continuity))
+					shown++
+				}
+				if shown == 0 {
+					if all {
+						fmt.Fprintln(out, "resume: no handoffs for this project")
+					} else {
+						fmt.Fprintln(out, "resume: no current handoff (--all shows resumed/superseded/cancelled/stale)")
+					}
 				}
 				return nil
 			}
 
 			rec, err := pick(dir, root, args)
 			if err != nil {
+				// No live unclaimed handoff. If a recent one was CLAIMED, report
+				// that — so `resume` run after a pickup tells you who holds it.
+				if held := mostRecentClaimed(dir, roots); held != nil {
+					fmt.Fprintf(out, "%s — CLAIMED by %s at %s (no unclaimed handoff pending)\n",
+						held.ID, refName(*held.ResumedBy), held.ResumedAt.Format(time.RFC3339))
+					return nil
+				}
 				return err
 			}
 
 			if show || asJSON {
 				b, _ := json.MarshalIndent(rec, "", "  ")
-				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				fmt.Fprintln(out, string(b))
 				return nil
 			}
 
-			// The brief FIRST. A cold agent must be oriented before it is handed a
-			// diff — otherwise it applies a patch it cannot interpret.
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "resuming %s (from %s, %s)\n\n", rec.ID, refName(rec.From), rec.CreatedAt.Format(time.RFC3339))
+			// A claimed record is reported read-only (this is how you confirm a
+			// pickup): bare `resume` NEVER stamps or applies.
+			if rec.ResumedAt != nil {
+				fmt.Fprintf(out, "%s — CLAIMED by %s at %s\n", rec.ID, refName(*rec.ResumedBy), rec.ResumedAt.Format(time.RFC3339))
+				if claim {
+					return fmt.Errorf("%s is already claimed by %s", rec.ID, refName(*rec.ResumedBy))
+				}
+				return nil
+			}
+
+			// UNCLAIMED — show the brief. Read-only unless --claim.
+			fmt.Fprintf(out, "handoff %s (from %s, %s) — UNCLAIMED\n\n", rec.ID, refName(rec.From), rec.CreatedAt.Format(time.RFC3339))
 			if message != "" {
-				// The human's fresh steer at pickup — read BEFORE the parked
-				// brief, because it reflects what the human wants NOW, which may
-				// re-prioritize the handed-off plan.
 				fmt.Fprintf(out, "── the human says (on pickup) ──\n%s\n\n", strings.TrimSpace(message))
 			}
 			if rec.Role != "" {
-				fmt.Fprintf(out, "── role ──\nAssume the '%s' role before touching the work below: run `bashy skills show %s` and follow it. You are handed the SEAT, not just the task — decide how to drive (including whether to delegate it back).\n\n", rec.Role, rec.Role)
+				fmt.Fprintf(out, "── role ──\nAssume the '%s' role: run `bashy skills show %s` and follow it. You are handed the SEAT — decide how to drive (including whether to delegate it back).\n\n", rec.Role, rec.Role)
 			}
 			fmt.Fprintf(out, "── continuity ──\n%s\n\n", strings.TrimSpace(rec.Continuity))
 			if rec.NextAction != "" {
@@ -300,40 +353,67 @@ finds several it lists them and asks you to name one.`,
 			for _, b := range rec.Blockers {
 				fmt.Fprintf(out, "── blocker ──\n%s\n\n", b)
 			}
-
 			if rec.Work.Clean {
 				fmt.Fprintln(out, "── work ──\nnothing was in flight; the tree was clean.")
 			} else {
-				target := root
-				if to != "" {
-					return fmt.Errorf("--to <tool> is not wired yet: create the workspace with " +
-						"`bashy weave add` + `weave start --issue N -- <tool>`, then apply this record inside it. " +
-						"(The record already travels; only the launch shortcut is missing.)")
-				}
-				if err := Apply(rec.Work, target); err != nil {
-					return err
-				}
-				fmt.Fprintf(out, "── work ──\nrestored into %s (%d untracked file(s))\n", target, len(rec.Work.Untracked))
+				fmt.Fprintf(out, "── work ──\n%d diff line(s), %d untracked file(s) — applied on --claim.\n",
+					strings.Count(rec.Work.Diff, "\n"), len(rec.Work.Untracked))
 			}
 
-			// Stamp it, so the same handoff cannot be silently picked up twice by two
-			// agents — the collision this whole line of work exists to prevent.
+			if !claim {
+				fmt.Fprintf(out, "\nSTATUS: unclaimed — this was READ-ONLY. To TAKE it (apply the work and record you hold it): `bashy resume --claim`\n")
+				return nil
+			}
+
+			// --claim: the ONLY side-effecting path — apply the work and stamp.
+			if !rec.Work.Clean {
+				if err := Apply(rec.Work, root); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "\n── work ──\nrestored into %s\n", root)
+			}
 			now := time.Now().UTC()
 			self, _ := principal.NewResolver(fleet.New(), principal.DefaultEnv()).Self()
 			rec.ResumedAt, rec.ResumedBy = &now, &self
 			if _, err := Save(dir, rec); err != nil {
 				return err
 			}
+			fmt.Fprintf(out, "\nCLAIMED by %s. Re-run `bashy resume` to confirm the seat is held.\n", refName(self))
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&message, "message", "m", "", "an instruction from the human at pickup, shown to the successor first (e.g. what to prioritize now)")
-	cmd.Flags().StringVar(&to, "to", "", "resume in an isolated weave workspace as this tool")
-	cmd.Flags().BoolVar(&list, "list", false, "list pending handoffs for this project")
-	cmd.Flags().BoolVar(&prune, "prune", false, "delete DONE handoffs (resumed or superseded), leaving live ones")
-	cmd.Flags().BoolVar(&show, "show", false, "print the record without resuming")
-	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the record")
+	cmd.Flags().BoolVar(&claim, "claim", false, "TAKE the handoff: apply its work and record that you hold it. This is the ONLY side-effecting form — bare `resume` is read-only.")
+	cmd.Flags().BoolVar(&all, "all", false, "list ALL handoffs for this project with their status (current/resumed/superseded/cancelled/stale)")
+	cmd.Flags().BoolVar(&cancel, "cancel", false, "retire an unclaimed handoff by id — kept for the record, hidden from the default view")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "an instruction from the human at pickup, shown to the successor (use with --claim)")
+	cmd.Flags().BoolVar(&list, "list", false, "list CURRENT handoffs (one line each)")
+	cmd.Flags().BoolVar(&prune, "prune", false, "delete DONE handoffs (resumed, superseded, or cancelled), leaving live ones")
+	cmd.Flags().BoolVar(&show, "show", false, "print the record as JSON (read-only)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the record as JSON")
 	return cmd
+}
+
+// mostRecentClaimed returns the newest handoff for the project that has been
+// claimed (resumed) and not since superseded/cancelled — so `bashy resume`, run
+// after a pickup, can report who now holds the seat instead of just "none".
+func mostRecentClaimed(dir string, roots []string) *Record {
+	recs, err := List(dir)
+	if err != nil {
+		return nil
+	}
+	var best *Record
+	for _, r := range recs {
+		if r.ResumedAt == nil || r.SupersededAt != nil || r.CancelledAt != nil {
+			continue
+		}
+		if !(intersects(r.Project.Roots, roots) || intersects([]string{r.Project.Primary}, roots)) {
+			continue
+		}
+		if best == nil || r.ResumedAt.After(*best.ResumedAt) {
+			best = r
+		}
+	}
+	return best
 }
 
 func pick(dir, root string, args []string) (*Record, error) {

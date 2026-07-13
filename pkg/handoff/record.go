@@ -149,6 +149,38 @@ type Record struct {
 	// resumed, drops off the pending list.
 	SupersededAt *time.Time `json:"superseded_at,omitempty"`
 	SupersededBy string     `json:"superseded_by,omitempty"`
+
+	// CancelledAt/CancelledBy retire an unclaimed handoff EXPLICITLY — the human
+	// decided it will not be picked up. Kept for the record (only `resume
+	// --prune` deletes), hidden from the default list, reported "cancelled"
+	// under `--all`.
+	CancelledAt *time.Time     `json:"cancelled_at,omitempty"`
+	CancelledBy *principal.Ref `json:"cancelled_by,omitempty"`
+}
+
+// StaleAfter is how long an unclaimed handoff stays "current" before it is
+// reported "stale" — probably abandoned, but kept for the record (nothing is
+// deleted to reach a status; only `resume --prune` removes).
+const StaleAfter = 3 * 24 * time.Hour
+
+// Status classifies a record for display. Nothing is deleted to reach a status;
+// records persist until an explicit `resume --prune`.
+//   - resumed / superseded / cancelled — done, hidden by default, shown by --all
+//   - stale     — unclaimed but old (>= StaleAfter); hidden by default
+//   - current   — the live handoff you would resume
+func (r *Record) Status() string {
+	switch {
+	case r.ResumedAt != nil:
+		return "resumed"
+	case r.CancelledAt != nil:
+		return "cancelled"
+	case r.SupersededAt != nil:
+		return "superseded"
+	case time.Since(r.CreatedAt) >= StaleAfter:
+		return "stale"
+	default:
+		return "current"
+	}
 }
 
 // Project is the scope: a set of roots, plus how they were determined.

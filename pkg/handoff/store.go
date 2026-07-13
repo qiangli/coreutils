@@ -147,7 +147,7 @@ func Prune(dir string) (int, error) {
 	}
 	n := 0
 	for _, r := range all {
-		if r.ResumedAt == nil && r.SupersededAt == nil {
+		if r.ResumedAt == nil && r.SupersededAt == nil && r.CancelledAt == nil {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, r.ID+".json")); err == nil {
