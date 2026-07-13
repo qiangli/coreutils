@@ -1,111 +1,101 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-// Package steward is the host/user-scoped seat of authority and continuity.
+// Package steward is the host/user-scoped seat of authority and continuity: exactly
+// one steward per machine-and-account, holding an append-only, hash-chained,
+// evidence-carrying journal that outlives whoever holds the seat.
 //
-// There is exactly ONE steward per host/user. Not one per repository, not one
-// per checkout, not one per terminal — one per machine-and-account, held by
-// whoever currently holds the seat, and answerable across every project on that
-// host. The seat lives in ~/.bashy/steward (or $BASHY_STEWARD_DIR) and is
-// completely independent of the working directory: you can claim it from
-// anywhere, and it means the same thing everywhere.
+// # The problem
+//
+// An agentic host accumulates two kinds of loss, and they are different things.
+//
+// LOST WORK is a session dying with an uncommitted diff in the tree. That is
+// pkg/handoff's problem: capture the working tree, restore it into a successor's
+// checkout.
+//
+// LOST AUTHORITY AND LOST TRUTH is the agent that has been answering for this machine
+// vanishing, and with it the only account of what was actually done, what was decided,
+// and what was merely CLAIMED. Nobody can say who is in charge, and nobody can
+// distinguish "we verified that" from "an agent said so". That is this package, and it
+// is the harder one, because the incumbent NEVER GETS TO SAY GOODBYE. A steward that
+// crashed, hit a rate limit, or was killed leaves no handoff note. Continuity has to
+// work anyway.
+//
+// # The design, and why each part is load-bearing
+//
+// ONE JOURNAL, MANY VIEWS. journal.jsonl is the only authority. Board, status, log,
+// conversation, history and checkpoints are read-only PROJECTIONS derived by replay. A
+// view has no state of its own, so it structurally cannot drift into a competing
+// writable truth.
+//
+// A REFERENCE IS NOT A VERIFICATION. This is the spine. An entry claiming success with
+// NOTHING to point at projects as UNKNOWN (Entry.EffectiveOutcome). An entry claiming
+// success WITH references projects as ASSERTED — still not verified. Only a
+// KindVerification entry, where somebody went and looked, reaches ConfidenceVerified.
+// The reason is simple and unpleasant: an agent can attach a plausible command string
+// or commit hash to work it never did exactly as easily as to work it did, so a
+// reference buys AUDITABILITY and nothing else. Degradation travels one way — a failure
+// without evidence stays a failure, and a refutation is believed where a self-serving
+// upgrade is not.
+//
+// AUTHORITY vs LIVENESS. Authority (holder, epoch) replays from the journal; liveness
+// comes from seat.json, which is a CACHE that is validated against the journal before
+// it is believed at all — wrong schema, wrong holder, wrong epoch, or a timestamp from
+// the future and it is discarded, not merely discounted.
+//
+// A STALE HEARTBEAT PROVES ONLY A LAPSE. It never proves death. So Claim takes a seat
+// only when it is VACANT or when a TRUSTWORTHY heartbeat says the holder is LAPSED, and
+// the claim bumps a monotonic fencing epoch so the returning incumbent is rejected
+// (ErrFenced) rather than silently interleaving its writes.
+//
+// AN UNREADABLE LIVENESS RECORD PROVES LESS THAN A LAPSE, SO IT IS NOT CLAIMABLE. "I
+// looked and the incumbent is late" is a fact about the incumbent; "I cannot find or
+// trust the record" is a fact about the RECORD, and every way of producing it is also a
+// way of producing it deliberately. Deleting one file must not be enough to take a
+// healthy steward's seat. Recovering from unknown is a takeover.
+//
+// EVERY AUTHORITATIVE WRITE PRESENTS A FENCING EPOCH, AND ZERO IS NOT A VALUE. There is
+// no "use whatever epoch is current" shortcut — that convenience was a hole, because an
+// agent that does not know its tenure ended is precisely the agent that would use it.
+// The epoch is checked BEFORE identity, so the same logical principal returning with a
+// stale token is fenced exactly like a stranger.
+//
+// TAKEOVER CONSUMES A DURABLE CAPABILITY. Grant is single-use (its nonce is recorded in
+// the journal by the takeover that spends it), expiring, and bound to one grantee, one
+// seat scope, and one epoch. Read Provenance for exactly what it does and does not
+// prove: this package runs as the user, so it cannot produce cryptographic evidence
+// that a human was present, and it says so rather than pretending. An operator
+// assertion is labelled an ASSERTION; an unattended takeover requires an external
+// receipt somebody can go and audit.
+//
+// TRANSCRIPTS ARE OPTIONAL BY CONTRACT. Delete every artifact and every projection is
+// bit-identical (TestTranscriptDeletionDoesNotAffectProjections).
+//
+// TORN TAILS ARE REPAIRABLE; TAMPERING IS NOT. Replay always returns the valid PREFIX,
+// so a crash that tore the last append never hides the history before it. Repair
+// truncates ONLY a torn final append — mid-log damage, or a complete record that does
+// not chain, fails closed, because a tool that silently truncated those would delete
+// the evidence of tampering and call it a repair. Every repair quarantines the exact
+// bytes it discards, by digest, and writes a degraded receipt under the holder's epoch;
+// a receipt that cannot be written is an error, never a shrug.
+//
+// RECONCILE DOES NOT CLAIM TO HAVE CHECKED REALITY. Comparing a claim against the world
+// needs an adapter that knows how (Observer). With none supplied, the report says
+// plainly that nothing was compared — a re-read of the journal is a spellcheck, not a
+// reality check.
+//
+// # Durability and concurrency
+//
+// Atomic temp+fsync+rename for every file; journal appends are fsynced; the whole
+// read/decide/write cycle is serialized under a real file lock (flock on unix,
+// LockFileEx on Windows). There is no no-op lock fallback: a platform with no locking
+// fails every mutation closed (ErrLockUnsupported), because a lock that silently does
+// nothing is worse than none — the caller believes it is protected while two agents
+// interleave and both claim the seat.
 //
 // # What this is NOT
 //
-// It is not pkg/handoff. Handoff is TASK- and ARTIFACT-scoped: it captures an
-// in-flight working tree (a diff, untracked files) so a successor inherits real
-// work. Steward captures no working tree, restores no working tree, and touches
-// no repository. Claiming the seat is an act of AUTHORITY, not a checkout.
-//
-// The two compose — a steward may well hand a task off with `bashy handoff` —
-// but conflating them is what made "hand off your work" ambiguous in the first
-// place: WORK is a diff, a SEAT is a mandate, and only one of them should ever
-// mutate your repo.
-//
-// # Continuity without a handoff note
-//
-// The hard requirement is that continuity must survive an incumbent who never
-// says goodbye. A steward that crashed, was rate-limited, or simply vanished
-// leaves no note — and a successor must still be able to pick up the seat, read
-// what happened, and know what is true. So:
-//
-//   - Acquisition NEVER requires talking to the incumbent.
-//   - There is NO handoff note on the critical path. The journal IS the note.
-//   - A successor reconstructs everything by REPLAY, not by being told.
-//
-// # One journal, many views
-//
-// A single append-only, hash-chained journal (journal.jsonl) is the ONLY
-// authority. Board, status, log, conversation, history, and checkpoints are all
-// read-only PROJECTIONS derived by replaying it. None of them is a second place
-// where truth lives, so none of them can disagree with the journal — the most
-// common way a state machine rots is that a cached view becomes a competing
-// writable truth, and this package structurally cannot do that.
-//
-// # Three authority classes
-//
-// Not every entry carries the same weight, and pretending otherwise is how a
-// model's prose gets mistaken for a fact:
-//
-//	effect / observation   AUTHORITATIVE. Something happened in the world, and
-//	                       the entry carries EVIDENCE for it.
-//	decision               AUTHORITATIVE. An explicit, durable decision record
-//	                       with a rationale. It does not claim an effect.
-//	transcript             NON-AUTHORITATIVE. An optional hash-linked artifact
-//	                       (a conversation dump). Nothing derives from it.
-//
-// Transcripts are OPTIONAL by contract: delete every transcript artifact on the
-// host and the board, the status, the history, and every checkpoint must be
-// bit-identical. TestTranscriptDeletionDoesNotAffectProjections pins this.
-//
-// # Missing evidence yields unknown, never success
-//
-// An entry claiming success WITHOUT evidence does not project as success — it
-// projects as unknown. See Entry.EffectiveOutcome. The journal still records the
-// claim faithfully (it is an honest record of what was asserted), but no view
-// will ever promote an unevidenced assertion into a fact. Degradation only ever
-// travels one way: a failure without evidence stays a failure, because the safe
-// direction is never to upgrade.
-//
-// # The seat: heartbeat lease + monotonic fencing epoch
-//
-// Authority is split from liveness, and the split is the whole trick:
-//
-//	AUTHORITY (who holds the seat, at which epoch)  — derived from the JOURNAL
-//	LIVENESS  (is the holder still breathing)       — from seat.json's heartbeat
-//
-// Authority is therefore recoverable by replay alone. Delete seat.json entirely
-// and the holder and epoch survive; only liveness is lost, and unknown liveness
-// honestly degrades to "lapsed" rather than inventing a death.
-//
-// A STALE HEARTBEAT PROVES ONLY A LIVENESS LAPSE. It does not prove the
-// incumbent is dead, and this package never claims it does. The incumbent may be
-// mid-thought, rate-limited, or on a slow network, and may come back. That is
-// precisely why the epoch exists: a successor claiming an expired seat bumps the
-// monotonically increasing epoch, and the returning incumbent — still holding the
-// OLD epoch — is FENCED: its mutations are rejected (ErrFenced), loudly, instead
-// of silently interleaving with the new steward's.
-//
-// # Takeover is a human act
-//
-// Claim takes a VACANT or EXPIRED seat and is the ordinary path. Takeover seizes
-// a LIVE one and is the emergency path — so it requires explicit human
-// authorization (--authorized-by) and records who authorized it and why. It never
-// asks the incumbent's permission, because an incumbent that could be asked would
-// not need to be taken over.
-//
-// # Durability
-//
-// Every write is atomic (temp + fsync + rename) and every read/decide/write cycle
-// is serialized under an exclusive file lock — a real flock on Unix and a real
-// LockFileEx on Windows (see lock_*.go), so unlike the older claim registry this
-// package has no honest-but-racy Windows gap to apologize for. On any OTHER
-// platform there is no lock (lock_other.go), and that is stated rather than
-// pretended: what still holds there is the fencing epoch, which turns a lost
-// acquisition race into a DETECTED ErrFenced rather than two silent stewards.
-//
-// A crash mid-append can still leave a torn final line. That is tolerated on
-// READ — a corrupt tail never hides the valid history before it — and refused on
-// WRITE until an explicit `steward reconcile --repair-tail`, which truncates only
-// the trailing bytes AFTER the last valid entry and can never remove a valid one.
+// It is not pkg/handoff. Claiming the seat restores no working tree, captures no diff,
+// and touches no repository (TestSeatLifecycleTouchesNoRepository). WORK is a diff; a
+// SEAT is a mandate.
 package steward

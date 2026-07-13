@@ -4,6 +4,7 @@
 package steward
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // opts is the state every subcommand shares: which store, and whether the caller
@@ -25,11 +27,11 @@ type opts struct {
 
 func (o *opts) store() (*Store, error) { return Open(o.dir) }
 
-// NewStewardCmd builds `bashy steward`: the host's single seat of authority and
-// its permanent record.
+// NewStewardCmd builds `bashy steward`: the host's single seat of authority and its
+// permanent record.
 //
-// Mounted by the host (bashy) rather than exported as a tool, because a steward is
-// not a userland utility — it is the thing the human talks TO about everything the
+// Mounted by the host (bashy) rather than exported as a userland tool, because a
+// steward is not a utility — it is the thing the human talks TO about everything the
 // agents on this machine did.
 func NewStewardCmd() *cobra.Command {
 	o := &opts{}
@@ -41,84 +43,163 @@ func NewStewardCmd() *cobra.Command {
 Not one per repo, not one per terminal — one per machine-and-account, held under a
 heartbeat lease, and recoverable by the next agent WITHOUT the last one's
 cooperation. That last part is the whole design: a steward that crashed, was
-rate-limited, or simply vanished leaves no goodbye note, and continuity must
-survive it anyway.
+rate-limited, or simply vanished leaves no goodbye note, and continuity must survive
+it anyway.
 
   THE JOURNAL IS THE ONLY TRUTH.
-  Board, status, log, conversation, history and checkpoints are read-only
-  PROJECTIONS of it. None of them is a second place where state lives, so none of
-  them can drift from it or quietly become the real one.
+  Board, status, log, conversation, history and checkpoints are read-only PROJECTIONS
+  of it. None of them is a second place where state lives, so none of them can drift
+  from it or quietly become the real one.
 
-  EVIDENCE, OR IT DID NOT HAPPEN.
-  An entry claiming success with nothing to point at projects as UNKNOWN, not as
-  success. An agent writes confident prose about work it did not do; the only
-  defense that scales is to refuse to promote an unevidenced claim into a fact.
+  A REFERENCE IS NOT A VERIFICATION.
+  A claim of success with nothing to point at projects as UNKNOWN. A claim with
+  references nobody checked projects as ASSERTED — never as verified. Only a
+  verification record (` + "`steward verify`" + `), where somebody went and looked, promotes a
+  claim to verified. An agent can attach a plausible command string to work it never
+  did exactly as easily as to work it did.
 
-  A STALE HEARTBEAT PROVES ONLY A LAPSE.
-  It does not prove the incumbent is dead — it may be mid-thought, throttled, or
-  on a bad network, and it may come back. So a successor's claim BUMPS A FENCING
-  EPOCH: the returning incumbent, still holding the old epoch, is rejected
-  loudly instead of silently interleaving its writes with the new steward's.
+  EVERY WRITE PRESENTS A FENCING EPOCH.
+  There is no "use whatever is current". A steward that lapsed and was taken over
+  comes back holding a stale token and is REJECTED, loudly, instead of interleaving
+  its writes with its successor's.
 
-steward is NOT handoff. ` + "`bashy handoff`" + ` moves WORK — a diff, a working tree, a
-task. steward moves a MANDATE. Claiming the seat touches no repository, restores
-no working tree, and captures no diff.`,
+  SEIZING THE SEAT IS AUTHORIZED, AND THE AUTHORIZATION IS DURABLE.
+  ` + "`steward claim`" + ` takes a VACANT or LAPSED seat. Anything else — a live seat, or one
+  whose liveness record cannot be trusted — is a TAKEOVER, which needs a capability
+  minted by ` + "`steward authorize`" + `: single-use, expiring, bound to one epoch and one
+  agent, and recorded in the journal forever.
+
+steward is NOT handoff. ` + "`bashy handoff`" + ` moves WORK — a diff, a working tree, a task.
+steward moves a MANDATE. Claiming the seat touches no repository, restores no working
+tree, and captures no diff.`,
 		Example: `  bashy steward status                     # who holds the seat, and is the record sound?
-  bashy steward claim --intent "on call"   # take a vacant or lapsed seat
+  eval "$(bashy steward claim --intent 'on call' --export)"   # take the seat, export the epoch
+  bashy steward board                      # the Kanban: lanes, priorities, blockers, next actions
   bashy steward record --workstream api -m "migrated the schema" \
         --outcome success -e "command:go test ./..." -e "commit:de6485c"
-  bashy steward decide --workstream api -m "drop the v1 endpoint" \
-        --rationale "no callers left in 90d of logs"
-  bashy steward board                      # what is in flight, and what is unproven
+  bashy steward verify --seq 7 --result success --method "re-ran the suite on a clean checkout"
   bashy steward log --degraded             # what do we NOT actually know?
   bashy steward reconcile                  # the verb a successor runs FIRST
-  bashy steward takeover --authorized-by qiangli --reason "incumbent wedged"`,
+  bashy steward authorize --actor qiangli --reason "incumbent wedged"
+  bashy steward takeover --grant g-…`,
 		SilenceUsage: true,
 	}
 	cmd.PersistentFlags().StringVar(&o.dir, "dir", "",
-		"steward store (default $BASHY_STEWARD_DIR, else ~/.bashy/steward)")
+		"steward store (default $BASHY_STEWARD_DIR, else ~/.bashy/steward/<host>-<user>-<id>)")
 	cmd.PersistentFlags().BoolVar(&o.asJSON, "json", false, "emit machine-readable JSON")
 
 	cmd.AddCommand(
 		newStatusCmd(o),
+		newScopeCmd(o),
 		newBoardCmd(o),
 		newLogCmd(o),
 		newConversationCmd(o),
 		newHistoryCmd(o),
 		newCheckpointCmd(o),
 		newReconcileCmd(o),
+		newRepairCmd(o),
 		newClaimCmd(o),
+		newAuthorizeCmd(o),
+		newGrantsCmd(o),
 		newTakeoverCmd(o),
 		newReleaseCmd(o),
 		newHeartbeatCmd(o),
 		newRecordCmd(o),
 		newDecideCmd(o),
+		newVerifyCmd(o),
 		newTranscriptCmd(o),
 		newWorkstreamCmd(o),
 	)
 	return cmd
 }
 
+// epochFlag wires the fencing token onto a command. Every authoritative mutation has
+// one, and every one of them REFUSES to proceed without a value — from the flag, or
+// from $BASHY_STEWARD_EPOCH exported at claim time.
+func epochFlag(c *cobra.Command, into *uint64) {
+	c.Flags().Uint64Var(into, "epoch", 0,
+		"the fencing epoch you hold (default $"+EpochEnv+", exported by `steward claim --export`). "+
+			"The write is REJECTED if the seat has moved on")
+}
+
+// interactive reports whether a terminal is attached to stdin.
+//
+// It is used for one thing only: minting an operator-assertion authorization, and
+// refusing an unattended takeover that leans on one. It is an OBSERVATION about the
+// process, not a security boundary — a caller that wants to lie about it can, and the
+// journal records the assertion as an assertion precisely because of that. See
+// Provenance.
+// It asks the OS whether the fd is a TERMINAL, and the distinction from the usual
+// os.ModeCharDevice shortcut is not pedantry — that shortcut is TRUE FOR /dev/null,
+// which is precisely how a daemon, a cron job, a CI runner, and a headless agent get
+// their stdin. Under it, the most unattended process on the machine would be judged
+// attended, and could spend an operator ASSERTION on an unattended takeover: the exact
+// case the external-receipt rule exists to stop. The weaker check does not merely
+// mislabel the situation, it hands back the control.
+func interactive(in io.Reader) bool {
+	f, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
+
 // ─── seat lifecycle ───────────────────────────────────────────────────────────
+
+func newScopeCmd(o *opts) *cobra.Command {
+	return &cobra.Command{
+		Use:   "scope",
+		Short: "print this host/user's seat scope id (and store directory)",
+		Long: `scope prints the identity of THIS seat: the host and user it belongs to.
+
+The store is keyed by it. A home directory is not reliably one machine's — a network
+home, a synced home, a container image with a baked-in $HOME is mounted on several
+hosts at once — and a seat keyed only by $HOME would silently MERGE the stewards of
+every machine sharing it: two hosts, two live stewards, one journal, one epoch ladder,
+and a fencing war between agents that have nothing to do with each other.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			s, err := o.store()
+			if err != nil {
+				return err
+			}
+			if o.asJSON {
+				return emitJSON(cmd.OutOrStdout(), struct {
+					Scope string `json:"scope"`
+					Dir   string `json:"dir"`
+				}{s.Scope(), s.Dir()})
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), s.Scope())
+			fmt.Fprintf(cmd.OutOrStdout(), "store: %s\n", s.Dir())
+			return nil
+		},
+	}
+}
 
 func newClaimCmd(o *opts) *cobra.Command {
 	var intent string
+	var export bool
 	cmd := &cobra.Command{
 		Use:     "claim",
 		Aliases: []string{"take"},
-		Short:   "acquire a vacant or lapsed seat (atomically; never asks the incumbent)",
-		Long: `claim takes the seat when nobody holds it, or when the holder's heartbeat has
-lapsed. It is the ORDINARY path.
+		Short:   "acquire a VACANT or LAPSED seat (atomically; never asks the incumbent)",
+		Long: `claim takes the seat in exactly two situations, and no others:
 
-It never negotiates with the incumbent and never needs a handoff note: it reads
-the journal, decides, and writes — all under one lock, so two agents racing for an
-empty seat cannot both win.
+  VACANT  nobody holds it.
+  LAPSED  a heartbeat record that AGREES with the journal — right holder, right epoch,
+          sane timestamps — says the holder is past the TTL.
 
-Taking over a LIVE seat is a different act with a different name (` + "`steward takeover`" + `),
-because seizing authority from a working agent is a human's call, not an agent's.
+Everything else is refused. In particular, a seat whose liveness record is MISSING,
+unreadable, wrong-schema, wrong-holder, wrong-epoch, or dated into the future is NOT
+claimable. That is a fact about the RECORD, not about the holder: every way of
+producing it is also a way of producing it deliberately, and deleting one file must
+not be enough to take a healthy steward's seat. Recovering from it is a takeover.
 
-Re-claiming a seat you already hold and are live in is just a heartbeat: no new
-epoch, no new journal entry.
+Claiming a lapsed seat BUMPS THE FENCING EPOCH, so the prior holder — who may be
+mid-thought and about to come back — is fenced rather than buried: their next write is
+rejected loudly instead of interleaving with yours.
+
+Re-claiming a seat you already hold and are live in is just a heartbeat.
 
 Claiming captures NO repository state. It is a mandate, not a checkout.`,
 		Args: cobra.NoArgs,
@@ -131,72 +212,285 @@ Claiming captures NO repository state. It is a mandate, not a checkout.`,
 			if err != nil {
 				return err
 			}
-			if o.asJSON {
-				return emitJSON(cmd.OutOrStdout(), v)
+			if err := ExportEpoch(v.Authority.Epoch); err != nil {
+				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "claimed the steward seat: %s at epoch %d\n",
+			out := cmd.OutOrStdout()
+			if o.asJSON {
+				return emitJSON(out, v)
+			}
+			if export {
+				// The one line a shell can eval. Everything else goes to stderr so it does
+				// not end up inside the eval.
+				fmt.Fprintf(out, "export %s=%d\n", EpochEnv, v.Authority.Epoch)
+				out = cmd.ErrOrStderr()
+			}
+			fmt.Fprintf(out, "claimed the steward seat: %s at epoch %d\n",
 				holderName(v.Authority.Holder), v.Authority.Epoch)
 			if v.Authority.TakenOverFrom != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "  the lapsed seat was held by %s — they are now FENCED at the old epoch\n",
+				fmt.Fprintf(out, "  the lapsed seat was held by %s — they are now FENCED at the old epoch\n",
 					holderName(*v.Authority.TakenOverFrom))
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  store: %s\n", s.Dir())
-			fmt.Fprintln(cmd.OutOrStdout(), "\nRun `steward reconcile` before acting: it reports what the record can and cannot establish.")
+			fmt.Fprintf(out, "  store: %s\n", s.Dir())
+			if !export {
+				fmt.Fprintf(out, "\nEvery write presents this epoch. Export it to your children:\n"+
+					"  export %s=%d          (or: eval \"$(steward claim --export)\")\n", EpochEnv, v.Authority.Epoch)
+			}
+			fmt.Fprintln(out, "\nRun `steward reconcile` before acting: it reports what the record can and cannot establish.")
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&intent, "intent", "", "what you hold the seat to do")
+	cmd.Flags().BoolVar(&export, "export", false, "print only `export "+EpochEnv+"=N` on stdout, for eval")
 	return cmd
 }
 
-func newTakeoverCmd(o *opts) *cobra.Command {
-	var by, reason string
+func newAuthorizeCmd(o *opts) *cobra.Command {
+	var (
+		actor, reason           string
+		ttl                     time.Duration
+		receipt, issuer, rcptID string
+		yes                     bool
+	)
 	cmd := &cobra.Command{
-		Use:   "takeover",
-		Short: "seize a LIVE seat under explicit human authorization, fencing the prior holder",
-		Long: `takeover is the RECOVERY path, and it is deliberately the loud one.
+		Use:   "authorize",
+		Short: "mint a single-use, expiring capability to take over the seat",
+		Long: `authorize mints the capability that ` + "`steward takeover`" + ` consumes.
 
-It seizes the seat whether or not the incumbent is live, bumps the fencing epoch,
-and records who authorized it, from whom it was taken, and why.
+It is bound, on purpose, to everything that could otherwise be abused:
 
-It requires a named human (--authorized-by). That is not ceremony: an agent that
-could decide on its own to take over would eventually decide to do it to a healthy
-steward. Seizing authority is a human's call.
+  single-use   the takeover that spends it names its nonce IN THE JOURNAL, so replay
+               refuses a second use — even if the grant file is restored from a backup.
+  expiring     15 minutes by default (--ttl), 24h maximum.
+  one agent    it names its grantee. It is not a coupon somebody else can pick up.
+  one epoch    it authorizes seizing the seat AS IT STANDS NOW. If the seat moves on,
+               the grant is dead: it authorized a situation, not the seat in general.
 
-It never asks the incumbent — an incumbent that could be asked would not need to be
-taken over. From the instant the epoch bumps, the prior holder's writes are
-REJECTED rather than interleaved, so a steward that comes back from a network
-partition mid-sentence cannot corrupt the record.`,
-		Example: `  bashy steward takeover --authorized-by qiangli --reason "incumbent wedged on a rate limit"`,
-		Args:    cobra.NoArgs,
+BE CLEAR ABOUT WHAT THIS PROVES, because the honest answer is "less than it looks".
+
+An --actor is an ASSERTION, not a credential. This command runs as you, on your
+machine, with your filesystem; anything else running as you — including the agent this
+is meant to restrain — can write these same files. There is no signature to check and
+no second party to ask. What the capability actually buys is that seizing the seat
+becomes a separate, deliberate, expiring, single-use act that names a human and a
+reason and lands in the permanent record where somebody will see it. That stops the
+ordinary failure — an agent deciding on its own that the steward looks stuck — and it
+makes the extraordinary one leave fingerprints. It is a real control. It is not
+cryptographic proof that a human was in the room, and this package will never claim it
+is.
+
+Two provenances follow from that:
+
+  operator-assertion  minted at an interactive terminal, after you type the
+                      confirmation. Usable only for an ATTENDED takeover.
+  external-receipt    --receipt <file> --receipt-issuer <where-it-came-from>. The bytes
+                      of an out-of-band approval (a PR review, a ticket, a page ack) are
+                      copied into the store and pinned by digest. REQUIRED for an
+                      unattended takeover: with nobody at a terminal, an assertion that
+                      a human approved is worth precisely nothing, and the only honest
+                      thing to demand is an artifact somebody can go and audit.`,
+		Example: `  bashy steward authorize --actor qiangli --reason "incumbent wedged on a rate limit"
+  bashy steward authorize --actor oncall --receipt ./approval.json --receipt-issuer github:pr-412`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
 			if err != nil {
 				return err
 			}
-			v, err := s.Takeover(Self(), Authorization{By: by, Reason: reason}, time.Now())
+			req := GrantRequest{
+				Grantee:       Self(),
+				Actor:         actor,
+				Reason:        reason,
+				TTL:           ttl,
+				ReceiptPath:   receipt,
+				ReceiptIssuer: issuer,
+				ReceiptID:     rcptID,
+			}
+
+			if receipt == "" {
+				// An operator assertion needs a human to assert it. With no terminal, say
+				// so and point at the receipt path instead of quietly minting something
+				// weaker than it looks.
+				if !yes {
+					if !interactive(cmd.InOrStdin()) {
+						return &ErrUnauthorized{Why: "no terminal is attached, so there is nobody here to assert operator " +
+							"authorization. Supply an external receipt (--receipt <file> --receipt-issuer <src>), which a " +
+							"human can audit, instead of an assertion nobody made"}
+					}
+					v, err := s.Status(time.Now())
+					if err != nil {
+						return err
+					}
+					if !confirm(cmd, v, actor) {
+						return fmt.Errorf("steward: authorization aborted")
+					}
+				}
+				req.Confirmed = true
+			}
+
+			g, err := s.Authorize(req, time.Now())
 			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if o.asJSON {
+				return emitJSON(out, g)
+			}
+			fmt.Fprintf(out, "authorization %s minted\n", g.ID)
+			fmt.Fprintf(out, "  provenance: %s\n", g.Provenance)
+			fmt.Fprintf(out, "  actor:      %s  (an assertion, not a credential — see `steward authorize --help`)\n", g.Actor)
+			fmt.Fprintf(out, "  grantee:    %s\n", holderName(g.Grantee))
+			fmt.Fprintf(out, "  seizes:     epoch %d (and only epoch %d — if the seat moves, this dies)\n", g.FromEpoch, g.FromEpoch)
+			fmt.Fprintf(out, "  expires:    %s\n", g.ExpiresAt.Local().Format(time.RFC3339))
+			if g.Receipt != nil {
+				fmt.Fprintf(out, "  receipt:    %s from %s (%s)\n", g.Receipt.Path, g.Receipt.Issuer, short8(g.Receipt.Digest))
+			}
+			fmt.Fprintf(out, "\nSpend it once: `steward takeover --grant %s`\n", g.ID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&actor, "actor", "", "the operator asserting this authorization (required)")
+	cmd.Flags().StringVar(&reason, "reason", "", "why recovery is necessary")
+	cmd.Flags().DurationVar(&ttl, "ttl", DefaultGrantTTL, "how long the capability stays usable")
+	cmd.Flags().StringVar(&receipt, "receipt", "", "an out-of-band approval artifact; makes this an external-receipt grant")
+	cmd.Flags().StringVar(&issuer, "receipt-issuer", "", "where the receipt came from (required with --receipt)")
+	cmd.Flags().StringVar(&rcptID, "receipt-id", "", "the receipt's identifier over there (a PR number, a ticket)")
+	cmd.Flags().BoolVar(&yes, "yes", false, "skip the interactive confirmation (still recorded as an operator ASSERTION)")
+	return cmd
+}
+
+// confirm asks the human to type the seat they are about to authorize seizing. Typing
+// the epoch back is the point: it cannot be answered by a reflexive "y", and it forces
+// the person to look at who is actually holding the seat.
+func confirm(cmd *cobra.Command, v View, actor string) bool {
+	out := cmd.ErrOrStderr()
+	fmt.Fprintf(out, "You are authorizing %s to SEIZE the steward seat on this host.\n\n", actor)
+	switch v.Liveness {
+	case LivenessVacant:
+		fmt.Fprintln(out, "  the seat is currently VACANT — a takeover is not needed; `steward claim` takes it.")
+	default:
+		fmt.Fprintf(out, "  current holder: %s (epoch %d, liveness %s)\n",
+			holderName(v.Authority.Holder), v.Authority.Epoch, v.Liveness)
+		if v.Liveness == LivenessLive {
+			fmt.Fprintln(out, "  THIS STEWARD IS ALIVE. It may be mid-thought. Its writes will be rejected from the")
+			fmt.Fprintln(out, "  instant the takeover lands.")
+		}
+	}
+	fmt.Fprintf(out, "\nType the epoch to confirm (%d): ", v.Authority.Epoch)
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(line) == fmt.Sprint(v.Authority.Epoch)
+}
+
+func newGrantsCmd(o *opts) *cobra.Command {
+	return &cobra.Command{
+		Use:   "grants",
+		Short: "list authorizations, and whether they can still be used",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			s, err := o.store()
+			if err != nil {
+				return err
+			}
+			gs, err := s.ListGrants(time.Now())
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if o.asJSON {
+				return emitJSON(out, gs)
+			}
+			if len(gs) == 0 {
+				fmt.Fprintln(out, "no authorizations")
+				return nil
+			}
+			tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "  ID\tPROVENANCE\tACTOR\tSEIZES EPOCH\tEXPIRES\tUSABLE")
+			for _, g := range gs {
+				usable := "no — " + g.Reason
+				if g.Usable {
+					usable = "yes"
+				}
+				fmt.Fprintf(tw, "  %s\t%s\t%s\t%d\t%s\t%s\n",
+					g.Grant.ID, g.Grant.Provenance, g.Grant.Actor, g.Grant.FromEpoch,
+					g.Grant.ExpiresAt.Local().Format(time.RFC3339), usable)
+			}
+			return tw.Flush()
+		},
+	}
+}
+
+func newTakeoverCmd(o *opts) *cobra.Command {
+	var grant, grantFile string
+	cmd := &cobra.Command{
+		Use:   "takeover",
+		Short: "seize the seat with a capability from `steward authorize`, fencing the prior holder",
+		Long: `takeover is the RECOVERY path, and it is deliberately the loud one.
+
+It seizes the seat whether or not the incumbent is live — including the case ` + "`claim`" + `
+refuses, where the liveness record is missing or cannot be trusted — bumps the fencing
+epoch, and records the capability it was performed under in the journal forever.
+
+It CONSUMES a grant (` + "`steward authorize`" + `). The grant is single-use, expiring, bound to
+one agent and to the exact epoch it was minted against; the takeover entry names its
+nonce, so replay refuses any second use of it. An agent cannot decide on its own to
+take over, because an agent that could would eventually do it to a healthy steward.
+
+An UNATTENDED takeover (no terminal) requires a grant carrying an EXTERNAL RECEIPT.
+With nobody present, "a human authorized this" is a sentence with no author; a receipt
+is an artifact somebody can go and audit.
+
+It never asks the incumbent — an incumbent that could be asked would not need taking
+over. From the instant the epoch bumps, the prior holder's writes are REJECTED rather
+than interleaved, so a steward that comes back from a network partition mid-sentence
+cannot corrupt the record.`,
+		Example: `  bashy steward authorize --actor qiangli --reason "incumbent wedged"
+  bashy steward takeover --grant g-9f2c…`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			s, err := o.store()
+			if err != nil {
+				return err
+			}
+			v, err := s.Takeover(Self(), TakeoverRequest{
+				GrantID:     grant,
+				GrantPath:   grantFile,
+				Interactive: interactive(cmd.InOrStdin()),
+			}, time.Now())
+			if err != nil {
+				return err
+			}
+			if err := ExportEpoch(v.Authority.Epoch); err != nil {
 				return err
 			}
 			if o.asJSON {
 				return emitJSON(cmd.OutOrStdout(), v)
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "TOOK OVER the steward seat: %s at epoch %d (authorized by %s)\n",
-				holderName(v.Authority.Holder), v.Authority.Epoch, by)
+			fmt.Fprintf(out, "TOOK OVER the steward seat: %s at epoch %d\n",
+				holderName(v.Authority.Holder), v.Authority.Epoch)
+			if a := v.Authority.Authz; a != nil {
+				fmt.Fprintf(out, "  under:  grant %s (%s), actor %q, attended=%v\n", a.GrantID, a.Provenance, a.Actor, a.Interactive)
+				if a.Provenance == ProvenanceOperatorAssertion {
+					fmt.Fprintln(out, "          recorded as an operator ASSERTION — not proof a human was present")
+				}
+				if a.Receipt != nil {
+					fmt.Fprintf(out, "          receipt %s from %s\n", short8(a.Receipt.Digest), a.Receipt.Issuer)
+				}
+			}
 			if v.Authority.TakenOverFrom != nil {
 				fmt.Fprintf(out, "  fenced: %s — any write it attempts at its old epoch is now rejected\n",
 					holderName(*v.Authority.TakenOverFrom))
 			}
-			if reason != "" {
-				fmt.Fprintf(out, "  reason: %s\n", reason)
-			}
-			fmt.Fprintln(out, "\nRun `steward reconcile` now: the prior steward may have left claims nobody has verified.")
+			fmt.Fprintf(out, "\n  export %s=%d\n", EpochEnv, v.Authority.Epoch)
+			fmt.Fprintln(out, "\nRun `steward reconcile` now: the prior steward may have left claims nobody has checked.")
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&by, "authorized-by", "", "the human authorizing this seizure (required)")
-	cmd.Flags().StringVar(&reason, "reason", "", "why recovery is necessary")
+	cmd.Flags().StringVar(&grant, "grant", "", "the authorization id to consume (from `steward authorize`)")
+	cmd.Flags().StringVar(&grantFile, "grant-file", "", "read the authorization from a file instead")
 	return cmd
 }
 
@@ -209,21 +503,28 @@ func newReleaseCmd(o *opts) *cobra.Command {
 		Long: `release vacates the seat so the next steward can claim it without waiting for the
 lease to lapse.
 
-It is a COURTESY, not a correctness requirement — an unreleased seat still expires,
-and the epoch still fences whoever comes back. The system is designed for the
-steward that never gets to say goodbye; releasing merely saves the next one a wait.
+It is a COURTESY, not a correctness requirement — an unreleased seat still lapses, and
+the epoch still fences whoever comes back. The system is designed for the steward that
+never gets to say goodbye; releasing merely saves the next one a wait.
 
-It captures NO repository state: no diff, no branch, no working tree. A steward
-hands over a MANDATE. Work in flight travels by ` + "`bashy handoff`" + `, which is a
-different verb because it is a different thing — and conflating them is what made
-"hand off your work" ambiguous in the first place.`,
+It is FENCED like every other mutation, and this is the most dangerous place not to be:
+a fenced steward "tidying up" on its way out would otherwise vacate the seat of the
+steward that replaced it.
+
+It captures NO repository state: no diff, no branch, no working tree. A steward hands
+over a MANDATE. Work in flight travels by ` + "`bashy handoff`" + `, which is a different verb
+because it is a different thing.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
 			if err != nil {
 				return err
 			}
-			if err := s.Release(Self(), epoch, note, time.Now()); err != nil {
+			ep, err := ResolveEpoch(epoch)
+			if err != nil {
+				return err
+			}
+			if err := s.Release(Self(), ep, note, time.Now()); err != nil {
 				return err
 			}
 			if o.asJSON {
@@ -239,12 +540,13 @@ different verb because it is a different thing — and conflating them is what m
 		},
 	}
 	cmd.Flags().StringVar(&note, "note", "", "why you are standing down")
-	cmd.Flags().Uint64Var(&epoch, "epoch", 0, "the epoch you believe you hold (0 = whatever is current)")
+	epochFlag(cmd, &epoch)
 	return cmd
 }
 
 func newHeartbeatCmd(o *opts) *cobra.Command {
-	return &cobra.Command{
+	var epoch uint64
+	cmd := &cobra.Command{
 		Use:   "heartbeat",
 		Short: "refresh the holder's liveness (writes no journal entry)",
 		Long: `heartbeat refreshes the seat's liveness so it does not lapse.
@@ -252,16 +554,28 @@ func newHeartbeatCmd(o *opts) *cobra.Command {
 It writes NO journal entry. A heartbeat is a pulse, not history, and a journal that
 recorded every pulse would bury the events that matter underneath them.
 
+It is FENCED. A heartbeat is a claim to be the live holder — the most consequential
+claim in the system, since it is what keeps everyone else out — so a zombie cannot
+refresh a tenure that ended.
+
+It is also the holder's way OUT of an unknown liveness. If the heartbeat file was
+deleted or corrupted, the journal still knows you hold the seat: heartbeating rebuilds
+the record from it, and status goes back to live.
+
 Recording to the journal already heartbeats — a steward that is actively writing is
-self-evidently alive — so this is only needed by a steward that is thinking for a
-long time without producing any record.`,
+self-evidently alive — so this is only needed by a steward that is thinking for a long
+time without producing any record.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
 			if err != nil {
 				return err
 			}
-			if err := s.Heartbeat(Self(), time.Now()); err != nil {
+			ep, err := ResolveEpoch(epoch)
+			if err != nil {
+				return err
+			}
+			if err := s.Heartbeat(Self(), ep, time.Now()); err != nil {
 				return err
 			}
 			if o.asJSON {
@@ -275,12 +589,13 @@ long time without producing any record.`,
 			return nil
 		},
 	}
+	epochFlag(cmd, &epoch)
+	return cmd
 }
 
 // ─── status ───────────────────────────────────────────────────────────────────
 
-// statusEnvelope is the stable --json shape for `steward status`: the seat, the
-// board, and the journal's coordinates in one object.
+// statusEnvelope is the stable --json shape for `steward status`.
 type statusEnvelope struct {
 	SchemaVersion string `json:"schema_version"`
 	Seat          View   `json:"seat"`
@@ -291,7 +606,8 @@ type statusEnvelope struct {
 		Intact  bool   `json:"intact"`
 		Corrupt string `json:"corrupt,omitempty"`
 	} `json:"journal"`
-	Dir string `json:"dir"`
+	Scope string `json:"scope"`
+	Dir   string `json:"dir"`
 }
 
 func newStatusCmd(o *opts) *cobra.Command {
@@ -301,13 +617,15 @@ func newStatusCmd(o *opts) *cobra.Command {
 		Long: `status answers the two questions a successor asks first, and keeps them SEPARATE:
 
   AUTHORITY — who holds the seat, at which epoch. Replayed from the journal, so it
-              survives losing everything else. Delete the heartbeat file entirely
-              and the holder and epoch are still known.
-  LIVENESS  — is that holder still breathing. Read from the heartbeat, and honest
-              about its limits: a lapse is a LAPSE, not a death.
+              survives losing everything else. Delete the heartbeat file entirely and
+              the holder and epoch are still known.
+  LIVENESS  — is that holder still breathing. Read from the heartbeat record, and only
+              believed if that record AGREES with the journal. A heartbeat naming the
+              wrong holder, the wrong epoch, or a time in the future is not a weaker
+              signal — it is no signal, and it reports as unknown.
 
 Then the board: what is in flight, and — the part that matters — what is claimed but
-not established.`,
+never checked.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
@@ -319,14 +637,11 @@ not established.`,
 			if err != nil {
 				return err
 			}
-			v, err := s.viewFrom(rep, now)
-			if err != nil {
-				return err
-			}
+			v := s.viewFrom(rep, now)
 			board := ProjectBoard(rep.Entries)
 
 			if o.asJSON {
-				env := statusEnvelope{SchemaVersion: SchemaVersion, Seat: v, Board: board, Dir: s.Dir()}
+				env := statusEnvelope{SchemaVersion: SchemaVersion, Seat: v, Board: board, Scope: s.Scope(), Dir: s.Dir()}
 				env.Journal.Entries = len(rep.Entries)
 				env.Journal.Head = rep.Head
 				env.Journal.Intact = rep.Intact()
@@ -358,17 +673,16 @@ not established.`,
 						"             they may be mid-thought, throttled, or coming back. Claiming FENCES them, safely.)\n",
 						v.Heartbeat.Format(time.RFC3339), short(now.UTC().Sub(v.Heartbeat)))
 				case LivenessUnknown:
-					fmt.Fprintln(out, "  heartbeat: UNKNOWN — no liveness record. Authority above still replayed from the journal.")
+					fmt.Fprintf(out, "  heartbeat: UNKNOWN — %s\n", v.LivenessReason)
+					fmt.Fprintln(out, "             Authority above is still replayed from the journal, and the seat is NOT")
+					fmt.Fprintln(out, "             claimable: an unreadable liveness record says nothing about the holder.")
+					fmt.Fprintln(out, "             The holder can restore it with `steward heartbeat`; anyone else needs a takeover.")
 				}
 				if v.Intent != "" {
 					fmt.Fprintf(out, "  intent:    %s\n", v.Intent)
 				}
-				if v.Authority.AuthorizedBy != "" {
-					fmt.Fprintf(out, "  took over: authorized by %s", v.Authority.AuthorizedBy)
-					if v.Authority.TakenOverFrom != nil {
-						fmt.Fprintf(out, ", from %s", holderName(*v.Authority.TakenOverFrom))
-					}
-					fmt.Fprintln(out)
+				if a := v.Authority.Authz; a != nil {
+					fmt.Fprintf(out, "  took over: grant %s (%s), actor %q\n", a.GrantID, a.Provenance, a.Actor)
 				}
 			}
 
@@ -376,8 +690,8 @@ not established.`,
 			if rep.Intact() {
 				fmt.Fprintln(out, "intact")
 			} else {
-				fmt.Fprintf(out, "CORRUPT TAIL at line %d (%s)\n", rep.CorruptLine, rep.CorruptReason)
-				fmt.Fprintf(out, "             the %d entries above are valid and unaffected; `steward reconcile --repair-tail` truncates only the unreadable bytes\n", len(rep.Entries))
+				fmt.Fprintf(out, "UNREADABLE TAIL at line %d (%s)\n", rep.CorruptLine, rep.CorruptReason)
+				fmt.Fprintf(out, "             the %d entries above are valid and unaffected; `steward repair --plan` says what can be done\n", len(rep.Entries))
 			}
 			fmt.Fprintf(out, "  store:     %s\n", s.Dir())
 
@@ -393,21 +707,34 @@ not established.`,
 func newBoardCmd(o *opts) *cobra.Command {
 	return &cobra.Command{
 		Use:   "board [workstream]",
-		Short: "the workstreams, and which of their outcomes are actually established",
-		Long: `board is a read-only PROJECTION of the journal — never a place where state lives.
+		Short: "the host Kanban: lanes, priorities, owners, blockers, next actions — and what is unproven",
+		Long: `board is the host-level Kanban ABOVE the per-project issue queues: every strand of
+work on this machine, whoever owns it, whatever repo it lives in.
 
-It cannot drift from the journal, because it has no state of its own to drift with.
-Replay the journal and you get this board, byte for byte, on any host.
+  LANE        backlog → ready → in-progress → blocked → review → done. A strand with
+              live blockers is shown as BLOCKED no matter what lane anyone typed: a
+              board that let you park a blocked item in "in-progress" would be hiding
+              the only thing worth looking at.
+  PRIORITY    p0..p3. Untriaged sorts LAST, not in the middle — it has not earned a
+              place ahead of something a human actually called p2.
+  BLOCKERS    what is in the way. NEXT is what happens next, and when.
+  LINKS       out to where the work really lives: issue:88, github:pr-412, weave:run-88.
 
-Two columns matter and they are deliberately separate:
+And it is STILL a read-only PROJECTION of the journal. Every field was recorded by
+somebody, at a time, under an epoch (` + "`steward workstream set`" + `) — nothing here is a cell
+that got overwritten, so the board cannot drift from the record, and "who moved this to
+p0, and when" is answerable forever.
+
+Three columns are kept deliberately apart:
 
   STATE       open or closed — where the work is in its lifecycle.
-  CONFIDENCE  verified, unknown, or degraded — whether we can actually BELIEVE the
-              outcome it reports.
+  OUTCOME     what was claimed.
+  CONFIDENCE  verified (somebody CHECKED, and their attestation is in the journal),
+              asserted (references were supplied, nobody checked them),
+              unknown, degraded, or refuted.
 
-A workstream closed with a claim of success and no evidence is closed AND unknown.
-Collapsing those into one green row is exactly how a status board starts reporting
-wishes as facts.`,
+"Closed", "claimed done", and "verified done" are three different facts. Collapsing
+them into one green row is exactly how a status board starts reporting wishes.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := o.store()
@@ -428,22 +755,7 @@ wishes as facts.`,
 					if o.asJSON {
 						return emitJSON(out, ws)
 					}
-					fmt.Fprintf(out, "workstream: %s\n", ws.Name)
-					if ws.Title != "" {
-						fmt.Fprintf(out, "  title:      %s\n", ws.Title)
-					}
-					fmt.Fprintf(out, "  state:      %s\n", ws.State)
-					fmt.Fprintf(out, "  outcome:    %s (confidence: %s)\n", orDash(string(ws.Outcome)), ws.Confidence)
-					fmt.Fprintf(out, "  entries:    %d (%d evidence, %d decisions)\n", ws.Entries, ws.EvidenceCount, ws.Decisions)
-					if !ws.OpenedAt.IsZero() {
-						fmt.Fprintf(out, "  opened:     %s\n", ws.OpenedAt.Format(time.RFC3339))
-					}
-					if ws.LastSummary != "" {
-						fmt.Fprintf(out, "  last:       %s\n", ws.LastSummary)
-					}
-					for _, d := range ws.Degraded {
-						fmt.Fprintf(out, "  UNPROVEN:   %s\n", d)
-					}
+					writeCard(out, ws)
 					return nil
 				}
 				return fmt.Errorf("steward: no workstream %q on the board", args[0])
@@ -458,39 +770,91 @@ wishes as facts.`,
 	}
 }
 
-// writeBoard renders the board, leading with the honest headline.
+func writeCard(out io.Writer, ws Workstream) {
+	fmt.Fprintf(out, "workstream: %s\n", ws.Name)
+	if ws.Title != "" {
+		fmt.Fprintf(out, "  title:      %s\n", ws.Title)
+	}
+	fmt.Fprintf(out, "  lane:       %s\n", ws.Lane)
+	fmt.Fprintf(out, "  state:      %s\n", ws.State)
+	fmt.Fprintf(out, "  priority:   %s\n", orDash(string(ws.Priority)))
+	fmt.Fprintf(out, "  owner:      %s\n", orDash(ws.Owner))
+	if len(ws.Agents) > 0 {
+		fmt.Fprintf(out, "  agents:     %s\n", strings.Join(ws.Agents, ", "))
+	}
+	for _, b := range ws.Blockers {
+		fmt.Fprintf(out, "  BLOCKED BY: %s\n", b)
+	}
+	if ws.NextAction != "" {
+		fmt.Fprintf(out, "  next:       %s\n", ws.NextAction)
+	}
+	if !ws.NextAt.IsZero() {
+		fmt.Fprintf(out, "  next at:    %s\n", ws.NextAt.Format(time.RFC3339))
+	}
+	for _, l := range ws.Links {
+		fmt.Fprintf(out, "  link:       %s:%s\n", l.Kind, l.Ref)
+	}
+	fmt.Fprintf(out, "  outcome:    %s (confidence: %s)\n", orDash(string(ws.Outcome)), ws.Confidence)
+	if ws.Confidence == ConfidenceAsserted {
+		fmt.Fprintln(out, "              ASSERTED — references were supplied and NOBODY CHECKED THEM.")
+		fmt.Fprintln(out, "              `steward verify --seq N` is what makes this verified.")
+	}
+	fmt.Fprintf(out, "  entries:    %d (%d evidence, %d decisions, %d verifications)\n",
+		ws.Entries, ws.EvidenceCount, ws.Decisions, ws.Verifications)
+	if !ws.OpenedAt.IsZero() {
+		fmt.Fprintf(out, "  opened:     %s\n", ws.OpenedAt.Format(time.RFC3339))
+	}
+	if ws.LastSummary != "" {
+		fmt.Fprintf(out, "  last:       %s\n", ws.LastSummary)
+	}
+	for _, d := range ws.Unproven {
+		fmt.Fprintf(out, "  UNPROVEN:   %s\n", d)
+	}
+}
+
+// writeBoard renders the Kanban, leading with the honest headline.
 func writeBoard(out io.Writer, b Board) {
 	if len(b.Workstreams) == 0 {
 		fmt.Fprintln(out, "board: empty — no workstreams recorded")
 		return
 	}
-	degraded := 0
+	unproven := 0
 	for _, ws := range b.Workstreams {
 		if ws.Outcome == OutcomeUnknown || ws.Outcome == OutcomeDegraded {
-			degraded++
+			unproven++
 		}
 	}
-	fmt.Fprintf(out, "board: %d workstream(s)", len(b.Workstreams))
-	if degraded > 0 {
-		fmt.Fprintf(out, ", %d with an outcome NOBODY ESTABLISHED", degraded)
+	fmt.Fprintf(out, "board: %d workstream(s)  (watermark %d)\n", len(b.Workstreams), b.Watermark)
+	if b.Blocked > 0 {
+		fmt.Fprintf(out, "  %d BLOCKED\n", b.Blocked)
 	}
-	fmt.Fprintf(out, "  (watermark %d)\n", b.Watermark)
+	if unproven > 0 {
+		fmt.Fprintf(out, "  %d with an outcome NOBODY ESTABLISHED\n", unproven)
+	}
+	if b.Asserted > 0 {
+		fmt.Fprintf(out, "  %d ASSERTED but never checked — a reference is a pointer, not a verification\n", b.Asserted)
+	}
 
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "  WORKSTREAM\tSTATE\tOUTCOME\tCONFIDENCE\tLAST")
+	fmt.Fprintln(tw, "  LANE\tPRI\tWORKSTREAM\tOWNER\tOUTCOME\tCONFIDENCE\tNEXT / BLOCKED BY")
 	for _, ws := range b.Workstreams {
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n",
-			ws.Name, ws.State, orDash(string(ws.Outcome)), ws.Confidence, truncate(ws.LastSummary, 44))
+		next := ws.NextAction
+		if len(ws.Blockers) > 0 {
+			next = "⛔ " + strings.Join(ws.Blockers, "; ")
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			ws.Lane, orDash(string(ws.Priority)), ws.Name, orDash(ws.Owner),
+			orDash(string(ws.Outcome)), ws.Confidence, truncate(next, 40))
 	}
 	tw.Flush()
 
-	if degraded > 0 {
+	if unproven > 0 {
 		fmt.Fprintln(out, "\nUnproven — a claim nobody can check is not a fact:")
 		for _, ws := range b.Workstreams {
 			if ws.Outcome != OutcomeUnknown && ws.Outcome != OutcomeDegraded {
 				continue
 			}
-			for _, d := range ws.Degraded {
+			for _, d := range ws.Unproven {
 				fmt.Fprintf(out, "  %s: %s\n", ws.Name, d)
 			}
 		}
@@ -512,14 +876,13 @@ func newLogCmd(o *opts) *cobra.Command {
 		Short: "the journal, chronologically — the authoritative record itself",
 		Long: `log prints the journal: the one authoritative record, in the order it was written.
 
-Chronological because the journal is append-only — entry order IS time order, and a
-log that reordered them would be inventing a history the hash chain does not attest
-to.
+Chronological because the journal is append-only — entry order IS time order, and a log
+that reordered them would be inventing a history the hash chain does not attest to.
 
   --degraded   the query a successor needs FIRST: only the entries whose claims were
                never established. "What do I not actually know?"
-  --follow     stream new entries as they land (polling; a corrupt tail does not stop
-               the stream, it just does not advance past it)`,
+  --follow     stream new entries as they land (polling; an unreadable tail does not
+               stop the stream, it just does not advance past it)`,
 		Example: `  bashy steward log --limit 20
   bashy steward log --degraded          # what is claimed but unproven
   bashy steward log --kind decision --workstream api
@@ -577,7 +940,7 @@ to.
 			})
 		},
 	}
-	cmd.Flags().StringSliceVar(&kinds, "kind", nil, "only these kinds (effect, observation, decision, transcript, reconcile, checkpoint, seat.*, workstream.*)")
+	cmd.Flags().StringSliceVar(&kinds, "kind", nil, "only these kinds (effect, observation, decision, verification, transcript, reconcile, repair, checkpoint, seat.*, workstream.*)")
 	cmd.Flags().StringVar(&f.Workstream, "workstream", "", "only this workstream")
 	cmd.Flags().StringVar(&f.Actor, "actor", "", "only this actor")
 	cmd.Flags().BoolVar(&f.DegradedOnly, "degraded", false, "only entries whose claim was never established — the 'what do I not know?' query")
@@ -597,14 +960,13 @@ func newConversationCmd(o *opts) *cobra.Command {
 		Long: `conversation shows what was DECIDED and why.
 
 Decisions are AUTHORITATIVE: an explicit, durable record of intent with a rationale.
-They are what a successor reads to learn not just what happened on this host, but
-what the previous steward had concluded and was steering toward — which no amount of
+They are what a successor reads to learn not just what happened on this host, but what
+the previous steward had concluded and was steering toward — which no amount of
 replaying effects would ever recover.
 
-Transcripts are NOT authoritative and are shown only as a courtesy. They are
-hash-linked artifacts; nothing derives from them; deleting every one of them changes
-no board, no status, and no checkpoint. The decision record is what binds — a
-transcript merely lets a human see how the room got there.`,
+Transcripts are NOT authoritative and are shown only as a courtesy. They are hash-linked
+artifacts; nothing derives from them; deleting every one of them changes no board, no
+status, and no checkpoint. The decision record is what binds.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
@@ -665,18 +1027,21 @@ type historyEnvelope struct {
 func newHistoryCmd(o *opts) *cobra.Command {
 	return &cobra.Command{
 		Use:   "history",
-		Short: "how the seat changed hands, and the checkpoints taken along the way",
+		Short: "how the seat changed hands, and under what authority",
 		Long: `history is the seat's authority ladder, reconstructed ENTIRELY by replay.
 
 Every claim, every takeover, every release — who, when, at which epoch, and (for a
-takeover) which human authorized seizing it. There is nowhere else this is stored:
-delete the heartbeat file, delete every checkpoint, and this history is unchanged,
-because it lives in the journal like everything else that matters.
+takeover) the exact capability it was performed under: the grant, its provenance, the
+operator it named, whether anyone was actually at a terminal, and whether a receipt
+backed it.
 
-The checkpoints listed are the ones the JOURNAL remembers being taken. That is a
-different question from which checkpoint FILES still exist — a file is a cache and
-can be deleted or re-derived; the fact that a checkpoint was taken at a watermark is
-history.`,
+It shows the PROVENANCE, not a comforting summary. "authorized by qiangli" and "an
+operator ASSERTION naming qiangli, unattended, with no receipt" are different facts,
+and only the second one is true.
+
+There is nowhere else this is stored: delete the heartbeat file, delete every
+checkpoint, and this history is unchanged, because it lives in the journal like
+everything else that matters.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
@@ -697,10 +1062,10 @@ history.`,
 			} else {
 				fmt.Fprintln(out, "seat history:")
 				tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(tw, "  SEQ\tWHEN\tEVENT\tEPOCH\tACTOR\tAUTHORIZED BY")
+				fmt.Fprintln(tw, "  SEQ\tWHEN\tEVENT\tEPOCH\tACTOR\tAUTHORIZATION")
 				for _, c := range changes {
 					fmt.Fprintf(tw, "  %d\t%s\t%s\t%d\t%s\t%s\n",
-						c.Seq, c.At.Format(time.RFC3339), c.Kind, c.Epoch, c.Actor, orDash(c.AuthorizedBy))
+						c.Seq, c.At.Format(time.RFC3339), c.Kind, c.Epoch, c.Actor, describeAuthz(c.Authz))
 				}
 				tw.Flush()
 			}
@@ -717,6 +1082,20 @@ history.`,
 	}
 }
 
+func describeAuthz(a *AuthzRef) string {
+	if a == nil {
+		return "—"
+	}
+	s := fmt.Sprintf("%s %q", a.Provenance, a.Actor)
+	if a.Receipt != nil {
+		s += " +receipt(" + a.Receipt.Issuer + ")"
+	}
+	if !a.Interactive {
+		s += " unattended"
+	}
+	return s
+}
+
 // ─── checkpoint ───────────────────────────────────────────────────────────────
 
 func newCheckpointCmd(o *opts) *cobra.Command {
@@ -724,30 +1103,31 @@ func newCheckpointCmd(o *opts) *cobra.Command {
 		note   string
 		list   bool
 		verify string
+		epoch  uint64
 	)
 	cmd := &cobra.Command{
 		Use:   "checkpoint",
 		Short: "materialize a verified, reproducible projection of the journal",
-		Long: `checkpoint materializes the board at the journal's current head, and records that
-it did so IN the journal.
+		Long: `checkpoint materializes the board at the journal's current head, and records that it
+did so IN the journal.
+
+It is an AUTHORITATIVE act — the holder, at the current epoch, or nothing. It appends
+to the journal, and the file it drops in the store is exactly the artifact a later
+reader trusts to summarize what happened here; neither is a thing a bystander gets to
+write.
 
 A checkpoint is a CACHE WITH A RECEIPT, never a competing truth. It carries the
 watermark it projects and the chain digest at that watermark, so it can be VERIFIED
-rather than trusted: re-project the journal at the same watermark and compare. Same
-entries, same board, always — no clock, no randomness, no ambient state leaks into
-the projection.
+rather than trusted: re-project the journal at the same watermark and compare. Delete
+every checkpoint on the host and you have lost nothing but the time to recompute them.
 
-Delete every checkpoint on the host and you have lost nothing but the time it takes
-to recompute them.
+It carries its unknowns forward BY NAME — both the unestablished outcomes and the
+merely-asserted ones. A checkpoint that quietly dropped them would look like a clean
+bill of health, which is the one thing it must never be able to fake.
 
-The tempting design — a checkpoint you can EDIT, that accumulates state the journal
-never saw — produces an artifact that is faster to read and impossible to trust: the
-first time it disagrees with the journal, nobody can say which one is wrong. This
-package structurally cannot do that.
-
-  --verify <id>   re-derive a stored checkpoint and report whether it still holds.
-                  A mismatch means the journal beneath it changed, which — given the
-                  hash chain — means someone rewrote history.`,
+  --verify <id>   re-derive a stored checkpoint and report whether it still holds. A
+                  mismatch means the journal beneath it changed, which — given the hash
+                  chain — means someone rewrote history.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
@@ -774,8 +1154,8 @@ package structurally cannot do that.
 					return nil
 				}
 				fmt.Fprintf(out, "%s: NOT REPRODUCIBLE — %s\n", v.ID, v.Reason)
-				fmt.Fprintf(out, "  stored board:   %s\n  derived board:  %s\n", v.StoredDigest, v.DerivedDigest)
-				fmt.Fprintf(out, "  stored journal: %s\n  derived journal:%s\n", v.StoredHead, v.DerivedHead)
+				fmt.Fprintf(out, "  stored board:    %s\n  derived board:   %s\n", v.StoredDigest, v.DerivedDigest)
+				fmt.Fprintf(out, "  stored journal:  %s\n  derived journal: %s\n", v.StoredHead, v.DerivedHead)
 				return fmt.Errorf("checkpoint %s no longer re-derives from the journal — the history beneath it changed", v.ID)
 
 			case list:
@@ -791,16 +1171,20 @@ package structurally cannot do that.
 					return nil
 				}
 				tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(tw, "  ID\tCREATED\tWATERMARK\tWORKSTREAMS\tDEGRADED")
+				fmt.Fprintln(tw, "  ID\tCREATED\tWATERMARK\tWORKSTREAMS\tUNRESOLVED\tASSERTED")
 				for _, ck := range cks {
-					fmt.Fprintf(tw, "  %s\t%s\t%d\t%d\t%d\n",
-						ck.ID, ck.CreatedAt.Format(time.RFC3339), ck.Watermark, len(ck.Board.Workstreams), len(ck.Degraded))
+					fmt.Fprintf(tw, "  %s\t%s\t%d\t%d\t%d\t%d\n",
+						ck.ID, ck.CreatedAt.Format(time.RFC3339), ck.Watermark,
+						len(ck.Board.Workstreams), len(ck.Unresolved), len(ck.Asserted))
 				}
-				tw.Flush()
-				return nil
+				return tw.Flush()
 			}
 
-			ck, err := s.Checkpoint(Self(), note, time.Now())
+			ep, err := ResolveEpoch(epoch)
+			if err != nil {
+				return err
+			}
+			ck, err := s.Checkpoint(Self(), ep, note, time.Now())
 			if err != nil {
 				return err
 			}
@@ -812,10 +1196,15 @@ package structurally cannot do that.
 			fmt.Fprintf(out, "  journal digest: %s\n", ck.JournalDigest)
 			fmt.Fprintf(out, "  board digest:   %s\n", ck.Board.Digest)
 			fmt.Fprintf(out, "  workstreams:    %d\n", len(ck.Board.Workstreams))
-			if len(ck.Degraded) > 0 {
-				fmt.Fprintf(out, "  CARRIED FORWARD — %d unresolved claim(s); a checkpoint that dropped its unknowns\n"+
-					"                    would look like a clean bill of health:\n", len(ck.Degraded))
-				for _, d := range ck.Degraded {
+			if len(ck.Unresolved) > 0 {
+				fmt.Fprintf(out, "  CARRIED FORWARD — %d unresolved claim(s):\n", len(ck.Unresolved))
+				for _, d := range ck.Unresolved {
+					fmt.Fprintf(out, "    %s\n", d)
+				}
+			}
+			if len(ck.Asserted) > 0 {
+				fmt.Fprintf(out, "  CARRIED FORWARD — %d claim(s) asserted but NEVER CHECKED:\n", len(ck.Asserted))
+				for _, d := range ck.Asserted {
 					fmt.Fprintf(out, "    %s\n", d)
 				}
 			}
@@ -826,48 +1215,50 @@ package structurally cannot do that.
 	cmd.Flags().StringVar(&note, "note", "", "why this checkpoint is being taken")
 	cmd.Flags().BoolVar(&list, "list", false, "list stored checkpoints")
 	cmd.Flags().StringVar(&verify, "verify", "", "re-derive a stored checkpoint and report whether it still holds")
+	epochFlag(cmd, &epoch)
 	return cmd
 }
 
-// ─── reconcile ────────────────────────────────────────────────────────────────
+// ─── reconcile / repair ───────────────────────────────────────────────────────
 
 func newReconcileCmd(o *opts) *cobra.Command {
 	var (
-		record     bool
-		repairTail bool
+		record bool
+		epoch  uint64
 	)
 	cmd := &cobra.Command{
 		Use:   "reconcile",
 		Short: "what can and cannot be established — the verb a successor runs FIRST",
-		Long: `reconcile compares the journal against reality and reports what it can and cannot
-establish.
+		Long: `reconcile reports what the record can and cannot establish.
 
 It is the verb a successor runs BEFORE touching anything: who holds the seat, whether
-the journal is intact, which claims are unproven, and which artifacts have gone
-missing. That is the difference between inheriting a SYSTEM and inheriting a STORY
-about a system.
+the journal is intact, which claims are unproven, which rest on references nobody
+checked, and which artifacts have gone missing. That is the difference between
+inheriting a SYSTEM and inheriting a STORY about a system.
 
-The result is allowed — required, even — to say "I don't know". A reconciliation that
-always produced a clean verdict would be worthless; the only useful thing it can do is
-tell you precisely where the record runs out.
+IT DOES NOT COMPARE THE JOURNAL AGAINST REALITY BY ITSELF, AND IT SAYS SO.
 
-  ok        the journal is intact and every claim in it is established
-  degraded  the record is readable, but something in it could not be established
-  unknown   the record ITSELF is damaged. What survives is still valid; what came
-            after it cannot be spoken for.
+This package is host-scoped and generic: its journal spans every project on the
+machine, and it knows nothing about git, CI, GitHub, or your services. Comparing a
+claim against the world needs an ADAPTER that knows how to go and look (steward.Observer
+— a host wires them in). With no adapter, this report tells you exactly what it did:
+it re-read the journal, and it checked NOTHING against reality. That is a spellcheck,
+not a reality check, and calling it one would be the most dangerous lie in the system.
+
+  ok        the journal is intact and every claim in it has been CHECKED. Deliberately
+            hard to reach: it needs verification records, not references.
+  degraded  the record is readable, but something in it could not be established — or
+            rests on references nobody has checked.
+  unknown   the record ITSELF is damaged. What survives is still valid; what came after
+            it cannot be spoken for.
 
 There is deliberately no "failed". This subsystem never reports success in the face of
 missing evidence — and it never invents a failure it cannot prove either.
 
-  --record       append the reconciliation to the journal, so "we checked, and here is
-                 what we could not establish" becomes permanent rather than printed
-                 once and lost. Its outcome mirrors the verdict, so a reconciliation
-                 that found damage can never be replayed later as a success.
-  --repair-tail  truncate an unreadable journal tail. It cuts ONLY the bytes after the
-                 last entry that verified — a valid entry can never be removed — and
-                 records the repair. Explicit and human-invoked on purpose: a log that
-                 silently healed itself would be worthless, because "it repaired
-                 itself" and "someone tampered with it" would look identical.`,
+  --record  append the reconciliation to the journal (requires holding the seat), so
+            "we checked, and here is what we could not establish" becomes permanent.
+            Its outcome mirrors the verdict, and its summary states whether reality was
+            actually compared.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
@@ -877,34 +1268,27 @@ missing evidence — and it never invents a failure it cannot prove either.
 			out := cmd.OutOrStdout()
 			now := time.Now()
 
-			if repairTail {
-				discarded, err := s.Repair(Self(), now)
-				if err != nil {
-					return err
-				}
-				if discarded == 0 {
-					fmt.Fprintln(out, "journal tail is intact — nothing to repair")
-				} else {
-					fmt.Fprintf(out, "repaired: discarded %d unreadable trailing byte(s) after the last valid entry.\n", discarded)
-					fmt.Fprintln(out, "No valid entry was removed — the cut is at the last byte that verified.")
-				}
-			}
-
-			r, err := s.Reconcile(now)
+			// No observers here: the CLI is the generic front door, and it has none to
+			// give. A host that has adapters calls Store.Reconcile directly.
+			r, err := s.Reconcile(cmd.Context(), now)
 			if err != nil {
 				return err
 			}
 			if record {
-				if _, err := s.RecordReconciliation(Self(), r, now); err != nil {
-					// Recording needs the seat. Not being the holder must not swallow the
-					// REPORT — the reader still gets the truth, and is told why it was
-					// not written down.
+				// EVERY way this can fail must leave the REPORT standing: no seat, no
+				// fencing token to present, a superseded epoch. Reconcile is the verb a cold
+				// successor runs BEFORE it holds anything, so refusing to print the truth on
+				// the grounds that we could not also write it down would break the one
+				// command that matters most in exactly the situation it exists for. The
+				// reader gets the report, and is told plainly why it is not in the journal.
+				ep, err := ResolveEpoch(epoch)
+				if err == nil {
+					_, err = s.RecordReconciliation(Self(), ep, r, now)
+				}
+				if err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "note: the report below was NOT written to the journal: %v\n\n", err)
-				} else {
-					// Re-derive: the reconcile entry we just wrote is itself history now.
-					if r2, err := s.Reconcile(now); err == nil {
-						r = r2
-					}
+				} else if r2, err := s.Reconcile(cmd.Context(), now); err == nil {
+					r = r2 // the reconcile entry we just wrote is itself history now
 				}
 			}
 
@@ -920,6 +1304,9 @@ missing evidence — and it never invents a failure it cannot prove either.
 			default:
 				fmt.Fprintf(out, "seat:     %s (epoch %d) — %s\n",
 					holderName(r.Seat.Authority.Holder), r.Seat.Authority.Epoch, r.Seat.Liveness)
+				if r.Seat.LivenessReason != "" {
+					fmt.Fprintf(out, "          %s\n", r.Seat.LivenessReason)
+				}
 			}
 
 			fmt.Fprintf(out, "journal:  %d entries, ", r.JournalEntries)
@@ -927,9 +1314,10 @@ missing evidence — and it never invents a failure it cannot prove either.
 				fmt.Fprintf(out, "intact (head %s)\n", short8(r.JournalHead))
 			} else {
 				fmt.Fprintf(out, "DAMAGED — %s\n", r.CorruptTail)
-				fmt.Fprintln(out, "          `steward reconcile --repair-tail` truncates the unreadable bytes and nothing else")
+				fmt.Fprintln(out, "          `steward repair --plan` says whether this is a torn append (repairable) or something worse")
 			}
 			fmt.Fprintf(out, "board:    %d workstream(s)\n", len(r.Board.Workstreams))
+			fmt.Fprintf(out, "reality:  %s\n", r.RealityNote)
 
 			if len(r.Unproven) > 0 {
 				fmt.Fprintf(out, "\nUNPROVEN — %d claim(s) you must not take on faith:\n", len(r.Unproven))
@@ -937,6 +1325,22 @@ missing evidence — and it never invents a failure it cannot prove either.
 					fmt.Fprintf(out, "  seq %-4d [%s] claimed %s, effective %s\n", u.Seq, orDash(u.Workstream), u.Claimed, u.Effective)
 					fmt.Fprintf(out, "           %s\n           why: %s\n", u.Summary, u.Why)
 				}
+			}
+			if len(r.Asserted) > 0 {
+				fmt.Fprintf(out, "\nASSERTED, NEVER CHECKED — %d claim(s) resting on references nobody verified:\n", len(r.Asserted))
+				for _, u := range r.Asserted {
+					fmt.Fprintf(out, "  seq %-4d [%s] %s\n", u.Seq, orDash(u.Workstream), u.Summary)
+					fmt.Fprintf(out, "           verify it: `steward verify --seq %d --result <success|failed> --method <how>`\n", u.Seq)
+				}
+			}
+			if len(r.Observations) > 0 {
+				fmt.Fprintf(out, "\nobservations (%d) — what the adapters actually FOUND:\n", len(r.Observations))
+				for _, ob := range r.Observations {
+					fmt.Fprintf(out, "  seq %-4d %s: %s — %s\n", ob.Seq, ob.Observer, ob.Result, ob.Detail)
+				}
+			}
+			for _, e := range r.ObserverErrors {
+				fmt.Fprintf(out, "  adapter FAILED: %s\n", e)
 			}
 			if len(r.MissingArtifacts) > 0 {
 				fmt.Fprintf(out, "\nmissing artifacts (%d) — OPTIONAL by contract; no projection depends on them,\n"+
@@ -964,10 +1368,10 @@ missing evidence — and it never invents a failure it cannot prove either.
 
 			switch r.Health {
 			case HealthOK:
-				fmt.Fprintln(out, "\nEverything in the record is established. Safe to proceed.")
+				fmt.Fprintln(out, "\nEverything in the record has been checked. Safe to proceed.")
 			case HealthDegraded:
-				fmt.Fprintln(out, "\nThe record is readable but INCOMPLETE. Treat the unproven claims above as open questions —")
-				fmt.Fprintln(out, "they are exactly the things a previous agent said were done and could not show for.")
+				fmt.Fprintln(out, "\nThe record is readable but INCOMPLETE. Treat the claims above as open questions —")
+				fmt.Fprintln(out, "they are exactly the things a previous agent said were done and nobody confirmed.")
 			case HealthUnknown:
 				fmt.Fprintln(out, "\nThe RECORD ITSELF is damaged. What survives above is valid; what came after it cannot be")
 				fmt.Fprintln(out, "spoken for. Do not treat the absence of an entry as proof that nothing happened.")
@@ -976,7 +1380,106 @@ missing evidence — and it never invents a failure it cannot prove either.
 		},
 	}
 	cmd.Flags().BoolVar(&record, "record", false, "append the reconciliation to the journal (requires holding the seat)")
-	cmd.Flags().BoolVar(&repairTail, "repair-tail", false, "truncate an unreadable journal tail — only the bytes after the last valid entry")
+	epochFlag(cmd, &epoch)
+	return cmd
+}
+
+func newRepairCmd(o *opts) *cobra.Command {
+	var (
+		plan  bool
+		epoch uint64
+	)
+	cmd := &cobra.Command{
+		Use:   "repair",
+		Short: "truncate a TORN FINAL APPEND — and nothing else — quarantining what it discards",
+		Long: `repair fixes exactly one kind of damage: a torn final append.
+
+That is what a crash leaves behind — the process died partway through writing the last
+line, so the file ends with an incomplete fragment and no terminating newline. Nothing
+that was ever completed is in those bytes, by definition, since a completed append is
+fsynced with its newline.
+
+EVERYTHING ELSE IS REFUSED, and the two refusals are the point:
+
+  MID-LOG DAMAGE — if complete lines FOLLOW the unreadable region, then whatever is
+  after it was fully written. Truncating from the damage point would destroy completed
+  records, so it will not happen.
+
+  A COMPLETE RECORD THAT DOES NOT CHAIN — a parseable entry whose hash, prev_hash, seq,
+  or epoch is wrong is not a torn write. It is a record that was ALTERED, or one written
+  around a record that was REMOVED. That is the signature of tampering, and a tool that
+  silently truncated it away would be the attacker's best friend: it would delete the
+  evidence and call it a repair.
+
+A repair that can only ever remove garbage is a repair. A repair that can remove data is
+a data-loss tool with a reassuring name.
+
+What a repair does, in order:
+
+  1. AUTHORIZES — the holder, at the current epoch. A damaged journal is not a licence
+     for a stranger to truncate the host's record.
+  2. QUARANTINES — the exact discarded bytes are copied out, by digest, BEFORE the
+     truncation. "The tool ate it" is not an answer to "what was in those bytes?".
+  3. TRUNCATES — at the last byte that verified. A valid entry can never be removed.
+  4. RECEIPTS — a durable, degraded entry under the holder's epoch saying what was
+     discarded and where it went. If the receipt cannot be written, that is an ERROR,
+     loudly: a log that quietly healed itself is indistinguishable from a log somebody
+     edited.
+
+  --plan   say what would be done, and change nothing.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			s, err := o.store()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+
+			p, err := s.PlanRepair()
+			if err != nil {
+				return err
+			}
+			if plan {
+				if o.asJSON {
+					return emitJSON(out, p)
+				}
+				if !p.Corrupt {
+					fmt.Fprintln(out, "journal is intact — nothing to repair")
+					return nil
+				}
+				fmt.Fprintf(out, "journal is DAMAGED (%s)\n", p.Kind)
+				fmt.Fprintf(out, "  valid entries:  %d (%d bytes)\n", p.ValidEntries, p.ValidBytes)
+				fmt.Fprintf(out, "  unreadable:     %d byte(s)  %s\n", p.SuffixBytes, short8(p.SuffixDigest))
+				fmt.Fprintf(out, "  bytes:          %s\n", p.SuffixPreview)
+				fmt.Fprintf(out, "  repairable:     %v\n", p.Repairable)
+				fmt.Fprintf(out, "  %s\n", p.Reason)
+				return nil
+			}
+			if !p.Corrupt {
+				fmt.Fprintln(out, "journal is intact — nothing to repair")
+				return nil
+			}
+
+			ep, err := ResolveEpoch(epoch)
+			if err != nil {
+				return err
+			}
+			res, err := s.Repair(Self(), ep, time.Now())
+			if err != nil {
+				return err
+			}
+			if o.asJSON {
+				return emitJSON(out, res)
+			}
+			fmt.Fprintf(out, "repaired: discarded %d torn trailing byte(s) after the last valid entry.\n", res.Discarded)
+			fmt.Fprintf(out, "  quarantined: %s (%s)\n", res.QuarantinePath, short8(res.SuffixDigest))
+			fmt.Fprintf(out, "  receipt:     seq %d, outcome degraded — a repair is never a clean success\n", res.Receipt.Seq)
+			fmt.Fprintln(out, "No valid entry was removed: the cut is at the last byte that verified.")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&plan, "plan", false, "say what would be done, and change nothing")
+	epochFlag(cmd, &epoch)
 	return cmd
 }
 
@@ -994,14 +1497,19 @@ func newRecordCmd(o *opts) *cobra.Command {
 		Short: "append an evidence-bearing effect or observation to the journal",
 		Long: `record appends an AUTHORITATIVE entry: something happened in the world.
 
-Bring evidence. An entry claiming --outcome success with no -e/--evidence does not
-project as success — it projects as UNKNOWN, on every board, in every checkpoint,
-forever. The claim is still recorded faithfully (it is an honest record of what was
-asserted), but no view will ever promote it into a fact.
+Bring evidence — and know what evidence buys you.
 
-That rule is the point of the whole subsystem. An agent writes fluent, confident
-prose about work it did not do; the only defense that scales is to refuse to launder
-an unevidenced claim into a fact.
+An entry claiming --outcome success with NO -e/--evidence does not project as success.
+It projects as UNKNOWN, on every board, in every checkpoint, forever. The claim is still
+recorded faithfully (it is an honest record of what was asserted), but no view will
+promote it into a fact.
+
+An entry WITH references projects as ASSERTED — still not verified. A reference is a
+pointer, not a check. "command:go test ./..." records that you SAY you ran the tests; it
+does not record that they ran, or passed, or exist. A model producing a confident summary
+with a plausible command string attached is the most common way a fabricated success
+enters a system that means well, because the reference is exactly as easy to generate as
+the prose. Only ` + "`steward verify`" + ` — somebody going and looking — makes a claim verified.
 
 Evidence is anything a skeptic could go and check:
 
@@ -1009,13 +1517,10 @@ Evidence is anything a skeptic could go and check:
   commit:de6485c               test:TestFencing
   url:https://…                note:asked the human, they confirmed
 
-Only the holder of the seat may write, and only at the CURRENT epoch: a steward that
-lapsed and was taken over is fenced, and its writes are rejected loudly.
-
-A long-running steward should capture its epoch at claim time and pass it with
---epoch. That is the whole point of holding a fencing token: if the seat moved on
-while you were away, the write is REJECTED rather than silently interleaved with the
-new steward's — and you are told so, instead of quietly corrupting the record.`,
+Only the holder of the seat may write, and only at the CURRENT epoch, and only by
+PRESENTING it (--epoch, or $` + EpochEnv + ` exported at claim time). A steward that lapsed and
+was taken over is fenced, and its writes are rejected loudly rather than silently
+interleaved with its successor's.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
@@ -1026,6 +1531,10 @@ new steward's — and you are told so, instead of quietly corrupting the record.
 				return fmt.Errorf("steward: a record needs a summary (-m)")
 			}
 			evs, err := parseEvidenceList(evidence)
+			if err != nil {
+				return err
+			}
+			ep, err := ResolveEpoch(epoch)
 			if err != nil {
 				return err
 			}
@@ -1042,7 +1551,7 @@ new steward's — and you are told so, instead of quietly corrupting the record.
 				Rationale:  rationale,
 				Outcome:    Outcome(outcome),
 				Evidence:   evs,
-			}, epoch, time.Now())
+			}, ep, time.Now())
 			if err != nil {
 				return err
 			}
@@ -1055,6 +1564,9 @@ new steward's — and you are told so, instead of quietly corrupting the record.
 				fmt.Fprintf(out, "\nNOTE: you claimed %q with NO EVIDENCE, so the board will show %q.\n", e.Outcome, eff)
 				fmt.Fprintln(out, "The claim is recorded exactly as you made it — but nothing will project it as a fact.")
 				fmt.Fprintln(out, "Add something checkable: -e \"command:…\" -e \"commit:…\" -e \"test:…\"")
+			} else if e.Outcome == OutcomeSuccess {
+				fmt.Fprintf(out, "\nThe board will show this as ASSERTED, not verified: you pointed at something, and nobody\n"+
+					"has checked it. When someone does: `steward verify --seq %d --result success --method <how>`\n", e.Seq)
 			}
 			return nil
 		},
@@ -1066,8 +1578,7 @@ new steward's — and you are told so, instead of quietly corrupting the record.
 	cmd.Flags().StringVar(&rationale, "rationale", "", "why")
 	cmd.Flags().StringSliceVarP(&evidence, "evidence", "e", nil, "checkable reference: kind:ref[#sha256:…] (repeatable)")
 	cmd.Flags().BoolVar(&observation, "observation", false, "you OBSERVED this rather than caused it")
-	cmd.Flags().Uint64Var(&epoch, "epoch", 0,
-		"present the fencing token you captured at claim time; the write is REJECTED if the seat has moved on (0 = whatever you currently hold)")
+	epochFlag(cmd, &epoch)
 	return cmd
 }
 
@@ -1075,19 +1586,20 @@ func newDecideCmd(o *opts) *cobra.Command {
 	var (
 		workstream, summary, rationale string
 		evidence                       []string
+		epoch                          uint64
 	)
 	cmd := &cobra.Command{
 		Use:   "decide",
 		Short: "record an explicit, durable decision — what was decided, and WHY",
 		Long: `decide records a DECISION: an explicit, durable statement of intent with a rationale.
 
-A decision is authoritative on its own terms. It asserts INTENT, not effect, so it
-needs a rationale rather than evidence — nothing about the world is being claimed.
+A decision is authoritative on its own terms. It asserts INTENT, not effect, so it needs
+a rationale rather than evidence — nothing about the world is being claimed.
 
 This is the entry a successor reads to understand not just what happened on this host,
 but what the previous steward had CONCLUDED and was steering toward. No amount of
-replaying effects would ever recover that: effects tell you what was done, and only a
-decision record tells you what it was for.`,
+replaying effects would recover that: effects tell you what was done, and only a decision
+record tells you what it was for.`,
 		Example: `  bashy steward decide --workstream api -m "drop the v1 endpoint" \
         --rationale "no callers in 90 days of logs; keeping it forces the auth shim to stay"`,
 		Args: cobra.NoArgs,
@@ -1108,7 +1620,11 @@ decision record tells you what it was for.`,
 			if err != nil {
 				return err
 			}
-			e, err := s.Decide(Self(), workstream, summary, rationale, evs, time.Now())
+			ep, err := ResolveEpoch(epoch)
+			if err != nil {
+				return err
+			}
+			e, err := s.Decide(Self(), ep, workstream, summary, rationale, evs, time.Now())
 			if err != nil {
 				return err
 			}
@@ -1123,29 +1639,115 @@ decision record tells you what it was for.`,
 	cmd.Flags().StringVar(&rationale, "rationale", "", "why (required)")
 	cmd.Flags().StringVar(&workstream, "workstream", "", "the strand of work this belongs to")
 	cmd.Flags().StringSliceVarP(&evidence, "evidence", "e", nil, "supporting reference (repeatable)")
+	epochFlag(cmd, &epoch)
+	return cmd
+}
+
+func newVerifyCmd(o *opts) *cobra.Command {
+	var (
+		seq            uint64
+		hash           string
+		result, method string
+		evidence       []string
+		epoch          uint64
+	)
+	cmd := &cobra.Command{
+		Use:   "verify",
+		Short: "attest that you WENT AND CHECKED an earlier entry's claim",
+		Long: `verify records a VERIFICATION: somebody went and checked an earlier claim, and this is
+the durable attestation of what they found.
+
+It is the ONLY thing that promotes a claim to "verified" on the board.
+
+Everything else — every command string, every commit hash, every URL attached to the
+original entry — is a REFERENCE. A reference tells a skeptic where to look. It does not
+tell them what they will find, and it is exactly as easy for an agent to invent as the
+prose it accompanies. The gap between "here is a plausible pointer" and "I looked" is the
+gap this command exists to close, and nothing else in the package closes it.
+
+It binds to the target's HASH, not just its sequence number: an attestation has to name
+the exact bytes it vouched for, or it becomes an attestation of whatever ends up at that
+seq.
+
+A verification can move a claim BACKWARDS — --result failed refutes it, and the board
+believes the refutation. Degradation travels one way.
+
+  --method  how you checked. Required: an unexplained "I verified it" is the same
+            trust-me claim it is supposed to replace.`,
+		Example: `  bashy steward verify --seq 7 --result success \
+        --method "re-ran the suite on a clean checkout at de6485c" -e "command:go test ./..."`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			s, err := o.store()
+			if err != nil {
+				return err
+			}
+			if seq == 0 {
+				return fmt.Errorf("steward: verify needs the entry it attests to (--seq)")
+			}
+			evs, err := parseEvidenceList(evidence)
+			if err != nil {
+				return err
+			}
+			ep, err := ResolveEpoch(epoch)
+			if err != nil {
+				return err
+			}
+			e, err := s.Attest(Self(), ep, Verification{
+				TargetSeq:  seq,
+				TargetHash: hash,
+				Result:     Outcome(result),
+				Method:     method,
+				Observer:   holderName(Self()),
+			}, evs, time.Now())
+			if err != nil {
+				return err
+			}
+			if o.asJSON {
+				return emitJSON(cmd.OutOrStdout(), e)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "verification recorded: seq %d attests to seq %d (%s)\n", e.Seq, seq, e.Verifies.Result)
+			return nil
+		},
+	}
+	cmd.Flags().Uint64Var(&seq, "seq", 0, "the journal seq you checked (required)")
+	cmd.Flags().StringVar(&hash, "hash", "", "the entry hash you checked (defaults to whatever is at --seq now)")
+	cmd.Flags().StringVar(&result, "result", string(OutcomeSuccess), "success | failed | unknown")
+	cmd.Flags().StringVar(&method, "method", "", "HOW you checked (required)")
+	cmd.Flags().StringSliceVarP(&evidence, "evidence", "e", nil, "what you found (repeatable)")
+	epochFlag(cmd, &epoch)
 	return cmd
 }
 
 func newTranscriptCmd(o *opts) *cobra.Command {
 	var workstream, summary, file string
+	var epoch uint64
 	cmd := &cobra.Command{
 		Use:   "transcript",
 		Short: "attach an OPTIONAL, non-authoritative conversation artifact",
 		Long: `transcript stores a conversation dump and records a hash-linked pointer to it.
 
 It is NON-AUTHORITATIVE, and that is a contract, not a caveat. Nothing derives from a
-transcript: delete every transcript artifact on this host and the board, the status,
-the history, and every checkpoint are BIT-IDENTICAL. A test pins this
+transcript: delete every transcript artifact on this host and the board, the status, the
+history, and every checkpoint are BIT-IDENTICAL. A test pins this
 (TestTranscriptDeletionDoesNotAffectProjections) precisely so it cannot quietly stop
 being true.
 
 So why store one at all? A decision record says what was decided; a transcript lets a
 human go back and see how the room got there. Useful — and never load-bearing.
 
+It is bounded (` + "8 MiB" + `) and authorized BEFORE a byte is written. A courtesy artifact that
+no projection reads does not get to fill the human's disk, and a bystander does not get
+to write megabytes into the steward's store and only then be told they may not journal it.
+
 Reads from --file, or from stdin.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
+			if err != nil {
+				return err
+			}
+			ep, err := ResolveEpoch(epoch)
 			if err != nil {
 				return err
 			}
@@ -1158,7 +1760,7 @@ Reads from --file, or from stdin.`,
 				defer f.Close()
 				src = f
 			}
-			e, err := s.Transcript(Self(), workstream, summary, src, time.Now())
+			e, err := s.Transcript(Self(), ep, workstream, summary, src, time.Now())
 			if err != nil {
 				return err
 			}
@@ -1173,6 +1775,7 @@ Reads from --file, or from stdin.`,
 	cmd.Flags().StringVarP(&summary, "message", "m", "", "what this transcript is")
 	cmd.Flags().StringVar(&workstream, "workstream", "", "the strand of work this belongs to")
 	cmd.Flags().StringVar(&file, "file", "", "read the transcript from this file (default: stdin)")
+	epochFlag(cmd, &epoch)
 	return cmd
 }
 
@@ -1180,10 +1783,13 @@ func newWorkstreamCmd(o *opts) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "workstream",
 		Aliases: []string{"ws"},
-		Short:   "open or close a strand of work",
+		Short:   "open, update, or close a strand of work",
 	}
 
-	var title string
+	var (
+		title string
+		epoch uint64
+	)
 	open := &cobra.Command{
 		Use:   "open <name>",
 		Short: "open a strand of work",
@@ -1193,7 +1799,11 @@ func newWorkstreamCmd(o *opts) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			e, err := s.OpenWorkstream(Self(), args[0], title, time.Now())
+			ep, err := ResolveEpoch(epoch)
+			if err != nil {
+				return err
+			}
+			e, err := s.OpenWorkstream(Self(), ep, args[0], title, time.Now())
 			if err != nil {
 				return err
 			}
@@ -1205,21 +1815,93 @@ func newWorkstreamCmd(o *opts) *cobra.Command {
 		},
 	}
 	open.Flags().StringVar(&title, "title", "", "a human title for the strand")
+	epochFlag(open, &epoch)
 
 	var (
-		summary  string
-		outcome  string
-		evidence []string
+		setEpoch                     uint64
+		lane, priority, owner, next  string
+		nextAt                       string
+		agents, blockers, links, clr []string
+	)
+	set := &cobra.Command{
+		Use:   "set <name>",
+		Short: "record the Kanban fields: lane, priority, owner, blockers, next action, links",
+		Long: `set records a change to a strand's Kanban fields.
+
+It is an ENTRY, not an edit. Nothing is mutated in place: the board folds the latest
+recorded value for each field, so the Kanban stays a pure projection of the journal, and
+"who moved this to p0, and when" is answerable forever.
+
+  --blocker   what is in the way. A strand with live blockers shows as BLOCKED on the
+              board regardless of its lane.
+  --clear     put a field back to empty (blockers, agents, links, owner, priority, lane,
+              next_action, next_at). Unblocking is as much of an event as blocking.
+  --link      where the work really lives: issue:88, github:pr-412, weave:run-88, url:…`,
+		Example: `  bashy steward ws set api --priority p0 --owner qiangli --lane in-progress \
+        --next "run the race gate" --link issue:88 --link weave:run-88 --agent claude-opus
+  bashy steward ws set api --blocker "waiting on review of #412"
+  bashy steward ws set api --clear blockers`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := o.store()
+			if err != nil {
+				return err
+			}
+			ep, err := ResolveEpoch(setEpoch)
+			if err != nil {
+				return err
+			}
+			ls, err := parseLinks(links)
+			if err != nil {
+				return err
+			}
+			e, err := s.UpdateWorkstream(Self(), ep, args[0], WorkstreamUpdate{
+				Lane:       Lane(lane),
+				Priority:   Priority(priority),
+				Owner:      owner,
+				Agents:     agents,
+				Blockers:   blockers,
+				NextAction: next,
+				NextAt:     nextAt,
+				Links:      ls,
+				Clear:      clr,
+			}, time.Now())
+			if err != nil {
+				return err
+			}
+			if o.asJSON {
+				return emitJSON(cmd.OutOrStdout(), e)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s (seq %d)\n", e.Summary, e.Seq)
+			return nil
+		},
+	}
+	set.Flags().StringVar(&lane, "lane", "", "backlog | ready | in-progress | blocked | review | done")
+	set.Flags().StringVar(&priority, "priority", "", "p0 | p1 | p2 | p3")
+	set.Flags().StringVar(&owner, "owner", "", "who owns this strand")
+	set.Flags().StringSliceVar(&agents, "agent", nil, "an agent or resource working it (repeatable)")
+	set.Flags().StringSliceVar(&blockers, "blocker", nil, "what is in the way (repeatable)")
+	set.Flags().StringVar(&next, "next", "", "the next action / checkpoint")
+	set.Flags().StringVar(&nextAt, "next-at", "", "when the next checkpoint is due (RFC3339)")
+	set.Flags().StringSliceVar(&links, "link", nil, "kind:ref — issue:88, github:pr-412, weave:run-88, url:… (repeatable)")
+	set.Flags().StringSliceVar(&clr, "clear", nil, "reset a field to empty (repeatable)")
+	epochFlag(set, &setEpoch)
+
+	var (
+		summary    string
+		outcome    string
+		evidence   []string
+		closeEpoch uint64
 	)
 	closeCmd := &cobra.Command{
 		Use:   "close <name>",
 		Short: "close a strand of work, with its outcome",
 		Long: `close records that a strand of work is finished.
 
-It does NOT force the outcome to success. If the closing entry claims success with no
-evidence, the board still projects UNKNOWN — so "closed" and "verified done" remain
-different facts, which is the entire difference between a status board and a wish
-list.`,
+It does NOT force the outcome to success. A closing entry claiming success with no
+evidence still projects UNKNOWN; one whose references nobody attested to still projects
+ASSERTED. "Closed", "claimed done", and "verified done" stay three different facts, which
+is the entire difference between a status board and a wish list.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := o.store()
@@ -1230,7 +1912,11 @@ list.`,
 			if err != nil {
 				return err
 			}
-			e, err := s.CloseWorkstream(Self(), args[0], summary, Outcome(outcome), evs, time.Now())
+			ep, err := ResolveEpoch(closeEpoch)
+			if err != nil {
+				return err
+			}
+			e, err := s.CloseWorkstream(Self(), ep, args[0], summary, Outcome(outcome), evs, time.Now())
 			if err != nil {
 				return err
 			}
@@ -1249,8 +1935,9 @@ list.`,
 	closeCmd.Flags().StringVarP(&summary, "message", "m", "", "how it ended")
 	closeCmd.Flags().StringVar(&outcome, "outcome", "", "success | failed | degraded | unknown")
 	closeCmd.Flags().StringSliceVarP(&evidence, "evidence", "e", nil, "checkable reference (repeatable)")
+	epochFlag(closeCmd, &closeEpoch)
 
-	cmd.AddCommand(open, closeCmd)
+	cmd.AddCommand(open, set, closeCmd)
 	return cmd
 }
 
@@ -1287,6 +1974,12 @@ func writeEntry(out io.Writer, e Entry) {
 			fmt.Fprintf(out, "         outcome: %s\n", eff)
 		}
 	}
+	if v := e.Verifies; v != nil {
+		fmt.Fprintf(out, "         verifies: seq %d (%s) — %s\n", v.TargetSeq, short8(v.TargetHash), v.Method)
+	}
+	if a := e.Authz; a != nil {
+		fmt.Fprintf(out, "         authz:    grant %s, %s, actor %q, attended=%v\n", a.GrantID, a.Provenance, a.Actor, a.Interactive)
+	}
 	for _, ev := range e.Evidence {
 		fmt.Fprintf(out, "         evidence: %s:%s", ev.Kind, ev.Ref)
 		if ev.Note != "" {
@@ -1300,15 +1993,15 @@ func writeEntry(out io.Writer, e Entry) {
 }
 
 // warnCorrupt tells the reader that what they just saw is a valid PREFIX, not
-// necessarily the whole story. Printing the entries and staying silent about the
-// damage would be the one dishonest thing this package could do.
+// necessarily the whole story. Printing the entries and staying silent about the damage
+// would be the one dishonest thing this package could do.
 func warnCorrupt(out io.Writer, rep *Replay) {
 	if rep == nil || !rep.Corrupt {
 		return
 	}
 	fmt.Fprintf(out, "\nWARNING: the journal's tail is unreadable from line %d (%s).\n", rep.CorruptLine, rep.CorruptReason)
 	fmt.Fprintf(out, "The %d entries above ARE valid — a torn tail never hides the history before it.\n", len(rep.Entries))
-	fmt.Fprintln(out, "Anything written after the tear cannot be spoken for. `steward reconcile --repair-tail` truncates only the unreadable bytes.")
+	fmt.Fprintln(out, "Anything written after the tear cannot be spoken for. `steward repair --plan` says what can be done.")
 }
 
 func parseEvidenceList(in []string) ([]Evidence, error) {
@@ -1319,6 +2012,22 @@ func parseEvidenceList(in []string) ([]Evidence, error) {
 			return nil, err
 		}
 		out = append(out, ev)
+	}
+	return out, nil
+}
+
+var linkKinds = map[string]bool{
+	"issue": true, "pr": true, "github": true, "weave": true, "kb": true, "url": true, "host": true,
+}
+
+func parseLinks(in []string) ([]Link, error) {
+	var out []Link
+	for _, s := range in {
+		k, ref, ok := strings.Cut(strings.TrimSpace(s), ":")
+		if !ok || ref == "" || !linkKinds[k] {
+			return nil, fmt.Errorf("steward: --link %q must be kind:ref, where kind is one of issue, pr, github, weave, kb, url, host", s)
+		}
+		out = append(out, Link{Kind: k, Ref: ref})
 	}
 	return out, nil
 }
@@ -1346,7 +2055,7 @@ func truncate(s string, n int) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) > n {
+	if len(s) > n && n > 1 {
 		return s[:n-1] + "…"
 	}
 	return s

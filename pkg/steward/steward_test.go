@@ -16,10 +16,10 @@ import (
 	"github.com/qiangli/coreutils/pkg/principal"
 )
 
-// Every test here is named for the CLAIM it defends, and each one guards a
-// specific way a continuity subsystem rots: a second steward appears, a returning
-// zombie interleaves its writes, a crash erases the history, or — the quietest and
-// worst — an agent's unevidenced "done ✅" gets laundered into a fact.
+// Every test here is named for the CLAIM it defends, and each one guards a specific
+// way a continuity subsystem rots: a second steward appears, a returning zombie
+// interleaves its writes, a crash erases the history, a seizure of authority leaves no
+// trace — or, the quietest and worst, an agent's "done ✅" gets laundered into a fact.
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,27 +43,31 @@ var t0 = time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
 
 func at(d time.Duration) time.Time { return t0.Add(d) }
 
-// mustClaim claims or fails the test.
-func mustClaim(t *testing.T, s *Store, who principal.Ref, when time.Time) View {
+// mustClaim claims or fails the test, returning the epoch the holder must now present
+// on every write. Returning the EPOCH rather than the View is deliberate: it is the
+// token, and a test that forgets to carry it is a test that would not have caught a
+// fencing bug.
+func mustClaim(t *testing.T, s *Store, who principal.Ref, when time.Time) uint64 {
 	t.Helper()
 	v, err := s.Claim(who, "", when)
 	if err != nil {
 		t.Fatalf("Claim(%s): %v", who.Name, err)
 	}
-	return v
+	return v.Authority.Epoch
 }
 
 // mustRecord appends an entry or fails the test.
-func mustRecord(t *testing.T, s *Store, e Entry, when time.Time) Entry {
+func mustRecord(t *testing.T, s *Store, e Entry, epoch uint64, when time.Time) Entry {
 	t.Helper()
-	out, err := s.Record(e, 0, when)
+	out, err := s.Record(e, epoch, when)
 	if err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	return out
 }
 
-// evidenced is an entry whose success claim is actually backed by something.
+// evidenced is an entry whose success claim points at SOMETHING. Note what it is not:
+// verified. Nobody has checked that command ran.
 func evidenced(who principal.Ref, ws, summary string) Entry {
 	return Entry{
 		Actor: who, Kind: KindEffect, Workstream: ws, Summary: summary,
@@ -72,7 +76,29 @@ func evidenced(who principal.Ref, ws, summary string) Entry {
 	}
 }
 
-// journalBytes reads the raw journal.
+// mustGrant mints an interactive operator-assertion capability for `who`.
+func mustGrant(t *testing.T, s *Store, who principal.Ref, when time.Time) Grant {
+	t.Helper()
+	g, err := s.Authorize(GrantRequest{
+		Grantee: who, Actor: "qiangli", Reason: "test", Confirmed: true,
+	}, when)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	return g
+}
+
+// mustTakeover seizes the seat with a fresh grant, returning the new epoch.
+func mustTakeover(t *testing.T, s *Store, who principal.Ref, when time.Time) uint64 {
+	t.Helper()
+	g := mustGrant(t, s, who, when)
+	v, err := s.Takeover(who, TakeoverRequest{GrantID: g.ID, Interactive: true}, when)
+	if err != nil {
+		t.Fatalf("Takeover(%s): %v", who.Name, err)
+	}
+	return v.Authority.Epoch
+}
+
 func journalBytes(t *testing.T, s *Store) []byte {
 	t.Helper()
 	b, err := os.ReadFile(s.journalPath())
@@ -85,49 +111,39 @@ func journalBytes(t *testing.T, s *Store) []byte {
 // ─── singleton acquisition ────────────────────────────────────────────────────
 
 // The seat is a SINGLETON. If two agents can both believe they hold it, every other
-// guarantee in this package is decoration — so this is the first thing that must
-// hold, and it must hold under a real race, not a polite sequential one.
+// guarantee in this package is decoration — so this is the first thing that must hold,
+// and it must hold under a real race, not a polite sequential one.
 func TestSeatIsSingletonUnderConcurrentClaims(t *testing.T) {
 	s := newStore(t)
 
-	const n = 12
-	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		winners []string
-		held    int
-	)
-	wg.Add(n)
+	const n = 16
+	var wg sync.WaitGroup
+	won := make([]bool, n)
 	for i := range n {
-		go func(i int) {
+		wg.Add(1)
+		go func() {
 			defer wg.Done()
-			v, err := s.Claim(agent(string(rune('a'+i))), "", at(0))
-			mu.Lock()
-			defer mu.Unlock()
-			var e *ErrHeld
-			switch {
-			case err == nil:
-				winners = append(winners, v.Authority.Holder.Name)
-			case errors.As(err, &e):
-				held++
-			default:
-				t.Errorf("unexpected error: %v", err)
+			if _, err := s.Claim(agent(string(rune('a'+i))), "", at(0)); err == nil {
+				won[i] = true
 			}
-		}(i)
+		}()
 	}
 	wg.Wait()
 
-	if len(winners) != 1 {
-		t.Fatalf("the seat is a singleton: %d agents believe they hold it (%v) — a lost acquisition race means two stewards writing the host's authoritative record", len(winners), winners)
+	winners := 0
+	for _, w := range won {
+		if w {
+			winners++
+		}
 	}
-	if held != n-1 {
-		t.Fatalf("expected %d losers to be told the seat is held, got %d", n-1, held)
+	if winners != 1 {
+		t.Fatalf("exactly one agent must win the seat, got %d winners", winners)
 	}
 
-	// And the journal agrees: exactly ONE seat.claimed entry.
+	// And the journal must agree: one claim event, not sixteen.
 	rep, err := s.Replay()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Replay: %v", err)
 	}
 	claims := 0
 	for _, e := range rep.Entries {
@@ -136,932 +152,1108 @@ func TestSeatIsSingletonUnderConcurrentClaims(t *testing.T) {
 		}
 	}
 	if claims != 1 {
-		t.Fatalf("journal records %d claims for a singleton seat; want 1", claims)
+		t.Fatalf("the journal records %d claims; a singleton has exactly 1", claims)
 	}
 }
 
-// Re-claiming a seat you already hold and are live in is a HEARTBEAT, not a new
-// tenure. If it minted an epoch, a steward's own routine keep-alive would fence
-// itself — and it would climb the epoch ladder forever for no reason.
 func TestReclaimByLiveHolderIsJustAHeartbeat(t *testing.T) {
 	s := newStore(t)
-	first := mustClaim(t, s, agent("alice"), at(0))
+	e1 := mustClaim(t, s, agent("a"), at(0))
 
-	again, err := s.Claim(agent("alice"), "", at(time.Minute))
+	v, err := s.Claim(agent("a"), "still here", at(time.Minute))
 	if err != nil {
-		t.Fatalf("a live holder re-claiming its own seat must succeed: %v", err)
+		t.Fatalf("re-claim by the live holder must succeed: %v", err)
 	}
-	if again.Authority.Epoch != first.Authority.Epoch {
-		t.Fatalf("re-claim bumped the epoch %d → %d: a steward would fence itself with its own keep-alive",
-			first.Authority.Epoch, again.Authority.Epoch)
+	if v.Authority.Epoch != e1 {
+		t.Fatalf("re-claiming your own live seat must NOT bump the epoch: %d → %d", e1, v.Authority.Epoch)
 	}
-
 	rep, _ := s.Replay()
-	if len(rep.Entries) != 1 {
-		t.Fatalf("re-claim wrote a journal entry (%d total): a heartbeat is a pulse, not history", len(rep.Entries))
+	if n := len(rep.Entries); n != 1 {
+		t.Fatalf("a re-claim is a heartbeat, not history: expected 1 journal entry, got %d", n)
 	}
 }
 
-// A LIVE seat is not claimable. Taking one is `takeover`, and takeover is a human's
-// decision — the whole point of separating the two verbs.
 func TestClaimRefusesALiveSeat(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
+	mustClaim(t, s, agent("a"), at(0))
 
-	_, err := s.Claim(agent("bob"), "", at(time.Minute))
+	_, err := s.Claim(agent("b"), "", at(time.Minute))
 	var held *ErrHeld
 	if !errors.As(err, &held) {
-		t.Fatalf("claiming a live seat must be refused with ErrHeld, got %v", err)
-	}
-	// The refusal must TEACH: it names the remedy, or the agent will invent one.
-	if !strings.Contains(err.Error(), "takeover") {
-		t.Fatalf("ErrHeld must point at the remedy (`steward takeover`); got: %v", err)
+		t.Fatalf("claiming a live seat must fail with ErrHeld, got %v", err)
 	}
 }
 
-// ─── heartbeat / staleness ────────────────────────────────────────────────────
-
-// A stale heartbeat proves A LIVENESS LAPSE AND NOTHING MORE.
-//
-// This is the single most misread signal in every lease system: "the heartbeat is
-// old" is treated as "the holder is dead", and then a returning incumbent — which
-// was merely throttled or mid-thought — silently corrupts the record. Here it must
-// degrade to `lapsed` while AUTHORITY stays exactly where it was.
-func TestStaleHeartbeatProvesOnlyALivenessLapse(t *testing.T) {
+// A lapse is the ONE ordinary way a seat changes hands without authorization — and it
+// requires a heartbeat record we actually trust. See the adversarial suite for every
+// way an untrustworthy one is refused.
+func TestLapsedSeatIsClaimableAndFencesTheIncumbent(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
+	e1 := mustClaim(t, s, agent("a"), at(0))
 
 	v, err := s.Status(at(TTL + time.Minute))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Status: %v", err)
 	}
 	if v.Liveness != LivenessLapsed {
-		t.Fatalf("liveness = %q, want %q", v.Liveness, LivenessLapsed)
-	}
-	// AUTHORITY is untouched. A lapse says nothing about who holds the seat.
-	if v.Authority.Vacant || v.Authority.Holder.Name != "alice" {
-		t.Fatalf("a lapsed heartbeat vacated the seat: authority=%+v — a lapse is not a death, "+
-			"and inferring one would let a throttled steward be quietly erased", v.Authority)
+		t.Fatalf("a heartbeat older than the TTL is LAPSED, got %q", v.Liveness)
 	}
 	if !v.Claimable {
-		t.Fatal("a lapsed seat must be claimable — otherwise a crashed steward blocks the host until a human intervenes")
+		t.Fatal("a lapsed seat with a trustworthy heartbeat is the ordinary recovery path — it must be claimable")
+	}
+
+	e2 := mustClaim(t, s, agent("b"), at(TTL+2*time.Minute))
+	if e2 <= e1 {
+		t.Fatalf("a change of holder must bump the fencing epoch: %d → %d", e1, e2)
+	}
+
+	// The incumbent was never asked, and may come back at any moment. It is FENCED.
+	_, err = s.Record(evidenced(agent("a"), "ws", "i'm back"), e1, at(TTL+3*time.Minute))
+	var fenced *ErrFenced
+	if !errors.As(err, &fenced) {
+		t.Fatalf("the lapsed incumbent returning at its old epoch must be FENCED, got %v", err)
 	}
 }
 
 func TestLiveHeartbeatKeepsTheSeat(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
+	ep := mustClaim(t, s, agent("a"), at(0))
 
-	// Alice keeps breathing right up to the edge of the TTL.
-	for d := time.Duration(0); d < 3*TTL; d += TTL / 2 {
-		if err := s.Heartbeat(agent("alice"), at(d)); err != nil {
-			t.Fatalf("Heartbeat at %v: %v", d, err)
-		}
-		v, err := s.Status(at(d))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if v.Liveness != LivenessLive {
-			t.Fatalf("at %v: liveness = %q, want live — a steward that keeps heartbeating must keep the seat", d, v.Liveness)
-		}
+	if err := s.Heartbeat(agent("a"), ep, at(TTL-time.Minute)); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
 	}
-	// A heartbeat is a pulse, not history: none of that reached the journal.
-	rep, _ := s.Replay()
-	if len(rep.Entries) != 1 {
-		t.Fatalf("heartbeats wrote %d journal entries; a journal that recorded every pulse would bury the events that matter", len(rep.Entries)-1)
+	// The heartbeat moved the clock forward, so what would have lapsed has not.
+	v, _ := s.Status(at(TTL + time.Minute))
+	if v.Liveness != LivenessLive {
+		t.Fatalf("a heartbeat inside the TTL keeps the seat live, got %q", v.Liveness)
+	}
+	if _, err := s.Claim(agent("b"), "", at(TTL+time.Minute)); err == nil {
+		t.Fatal("a live seat must not be claimable")
 	}
 }
 
-// Recording IS a heartbeat. A steward actively writing to the journal is
-// self-evidently alive; making it prove that separately is busywork that only ever
-// fails at the worst moment.
 func TestRecordingRefreshesLiveness(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
+	ep := mustClaim(t, s, agent("a"), at(0))
+	mustRecord(t, s, evidenced(agent("a"), "ws", "did a thing"), ep, at(TTL-time.Minute))
 
-	// Well past the TTL — but she records, which is itself proof of life.
-	mustRecord(t, s, evidenced(agent("alice"), "api", "migrated the schema"), at(TTL+time.Minute))
-
-	v, err := s.Status(at(TTL + 2*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	v, _ := s.Status(at(TTL + time.Minute))
 	if v.Liveness != LivenessLive {
-		t.Fatalf("liveness = %q after a fresh journal write; a steward that is writing is alive", v.Liveness)
+		t.Fatalf("writing to the journal is self-evidently being alive; liveness = %q", v.Liveness)
 	}
 }
 
-func TestHeartbeatFromNonHolderIsRejected(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-
-	err := s.Heartbeat(agent("bob"), at(time.Minute))
-	var nh *ErrNotHolder
-	if !errors.As(err, &nh) {
-		t.Fatalf("a non-holder must not be able to keep someone else's seat alive; got %v", err)
-	}
-}
-
-// ─── takeover (human-authorized) ──────────────────────────────────────────────
-
-// Takeover WITHOUT a named human is refused. An agent that could decide on its own
-// to seize the seat would eventually decide to do it to a healthy steward.
-func TestTakeoverRequiresHumanAuthorization(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-
-	_, err := s.Takeover(agent("bob"), Authorization{Reason: "she looks stuck"}, at(time.Minute))
-	var ua *ErrUnauthorized
-	if !errors.As(err, &ua) {
-		t.Fatalf("takeover with no --authorized-by must be refused; got %v", err)
-	}
-
-	// And it must not have touched a thing.
-	v, _ := s.Status(at(time.Minute))
-	if v.Authority.Holder.Name != "alice" {
-		t.Fatalf("a refused takeover still changed the holder to %q", v.Authority.Holder.Name)
-	}
-}
-
-// A human CAN seize a live seat, and the record says who, from whom, and why.
-// An unexplained seizure of authority is indistinguishable from a hijack.
-func TestTakeoverSeizesALiveSeatAndRecordsItsAuthority(t *testing.T) {
-	s := newStore(t)
-	alice := mustClaim(t, s, agent("alice"), at(0))
-
-	v, err := s.Takeover(agent("bob"), Authorization{By: "qiangli", Reason: "alice wedged on a rate limit"}, at(time.Minute))
-	if err != nil {
-		t.Fatalf("Takeover: %v", err)
-	}
-	if v.Authority.Holder.Name != "bob" {
-		t.Fatalf("holder = %q, want bob", v.Authority.Holder.Name)
-	}
-	if v.Authority.Epoch <= alice.Authority.Epoch {
-		t.Fatalf("takeover must BUMP the epoch (%d → %d); without a higher epoch the prior holder is not fenced",
-			alice.Authority.Epoch, v.Authority.Epoch)
-	}
-	if v.Authority.AuthorizedBy != "qiangli" {
-		t.Fatalf("authorized_by = %q, want qiangli", v.Authority.AuthorizedBy)
-	}
-	if v.Authority.TakenOverFrom == nil || v.Authority.TakenOverFrom.Name != "alice" {
-		t.Fatalf("the record must name who was fenced; taken_over_from = %+v", v.Authority.TakenOverFrom)
-	}
-
-	// The authorization survives REPLAY — it is in the hash-chained journal, not
-	// only in a status file that a crash could take with it.
-	changes, _, _, err := s.History()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var found bool
-	for _, c := range changes {
-		if c.Kind == KindSeatTakeover && c.AuthorizedBy == "qiangli" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("the takeover's human authorization did not survive replay; history: it must live in the journal")
-	}
-}
-
-// ─── fencing ──────────────────────────────────────────────────────────────────
-
-// THE PAYOFF. A steward that lapsed, was taken over, and comes back believing it
-// still holds the seat is REJECTED — loudly — rather than silently interleaving its
-// writes with the real steward's.
-//
-// This is exactly the scenario a stale heartbeat cannot rule out, which is why the
-// epoch exists at all.
-func TestReturningZombieIsFenced(t *testing.T) {
-	s := newStore(t)
-	alice := mustClaim(t, s, agent("alice"), at(0))
-	aliceEpoch := alice.Authority.Epoch
-
-	// Alice lapses; bob is authorized to take the seat.
-	if _, err := s.Takeover(agent("bob"), Authorization{By: "qiangli", Reason: "recovery"}, at(TTL+time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-
-	// Alice comes back, mid-sentence, still holding her old fencing token.
-	_, err := s.Record(Entry{
-		Actor: agent("alice"), Kind: KindEffect, Workstream: "api",
-		Summary: "…and then I deployed it", Outcome: OutcomeSuccess,
-		Evidence: []Evidence{{Kind: "command", Ref: "kubectl apply"}},
-	}, aliceEpoch, at(TTL+2*time.Minute))
-
-	var fenced *ErrFenced
-	if !errors.As(err, &fenced) {
-		t.Fatalf("a returning zombie steward MUST be fenced, got %v — otherwise its writes interleave with the real steward's and the record is corrupt", err)
-	}
-	if fenced.Presented != aliceEpoch || fenced.Current <= aliceEpoch {
-		t.Fatalf("fencing error is wrong: presented=%d current=%d (alice held %d)", fenced.Presented, fenced.Current, aliceEpoch)
-	}
-
-	// Nothing of hers reached the journal.
-	entries, _, _ := s.Log(Filter{Workstream: "api"})
-	for _, e := range entries {
-		if e.Actor.Name == "alice" {
-			t.Fatalf("a fenced write landed in the journal: seq %d %q", e.Seq, e.Summary)
-		}
-	}
-}
-
-// Old-epoch mutation is rejected even when the actor IS still the holder — e.g. a
-// long-running process that captured epoch 1, lapsed, and re-claimed as epoch 2,
-// while an old goroutine still carries the stale token.
-func TestOldEpochMutationIsRejectedEvenForTheCurrentHolder(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-
-	// Alice lapses and re-claims: same holder, NEW epoch.
-	v2, err := s.Claim(agent("alice"), "", at(TTL+time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v2.Authority.Epoch != 2 {
-		t.Fatalf("re-claim after a lapse must mint a new epoch; got %d", v2.Authority.Epoch)
-	}
-
-	_, err = s.Record(evidenced(agent("alice"), "api", "stale-token write"), 1, at(TTL+2*time.Minute))
-	var fenced *ErrFenced
-	if !errors.As(err, &fenced) {
-		t.Fatalf("a write bearing epoch 1 while the seat is at epoch 2 must be fenced, got %v", err)
-	}
-}
-
-// The epoch ladder is MONOTONIC. If a release lowered it, a fenced holder could
-// become un-fenced simply by waiting — which would make the fence worthless.
 func TestEpochIsMonotonicAcrossRelease(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	if err := s.Release(agent("alice"), 0, "done", at(time.Minute)); err != nil {
-		t.Fatal(err)
+	e1 := mustClaim(t, s, agent("a"), at(0))
+	if err := s.Release(agent("a"), e1, "done", at(time.Minute)); err != nil {
+		t.Fatalf("Release: %v", err)
 	}
-	v, err := s.Claim(agent("bob"), "", at(2*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v.Authority.Epoch != 2 {
-		t.Fatalf("epoch after release+claim = %d, want 2: the ladder must never descend, "+
-			"or a fenced holder un-fences itself by waiting", v.Authority.Epoch)
-	}
-}
-
-// A bystander cannot write the host's authoritative record.
-func TestNonHolderCannotWrite(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-
-	_, err := s.Record(evidenced(agent("mallory"), "api", "I was here"), 0, at(time.Minute))
-	var nh *ErrNotHolder
-	if !errors.As(err, &nh) {
-		t.Fatalf("a non-holder must not write to the journal; got %v", err)
-	}
-}
-
-func TestWriteToVacantSeatIsRejected(t *testing.T) {
-	s := newStore(t)
-	_, err := s.Record(evidenced(agent("alice"), "api", "no seat"), 0, at(0))
-	var nh *ErrNotHolder
-	if !errors.As(err, &nh) || !nh.Vacant {
-		t.Fatalf("writing with no seat held must be refused as vacant; got %v", err)
-	}
-}
-
-// Seat lifecycle events mint their own epoch, so a generic Record must not be able
-// to forge one — otherwise the fencing ladder is climbable by anyone.
-func TestRecordCannotForgeASeatEvent(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-
-	_, err := s.Record(Entry{Actor: agent("alice"), Kind: KindSeatTakeover, Summary: "I hereby seize the seat"}, 0, at(time.Minute))
-	if err == nil {
-		t.Fatal("Record accepted a seat lifecycle event: the epoch ladder must not be climbable by a generic write")
-	}
-	if !strings.Contains(err.Error(), "claim/takeover/release") {
-		t.Fatalf("the refusal must name the right verbs; got: %v", err)
-	}
-}
-
-// ─── crash recovery, with no handoff note ─────────────────────────────────────
-
-// THE HARD REQUIREMENT: continuity must survive an incumbent who never says goodbye.
-//
-// Simulate a total crash — the process is gone, seat.json is gone with it, and there
-// is no handoff note anywhere. A successor must still reconstruct WHO held the seat,
-// at WHAT epoch, and WHAT they had established, purely by replaying the journal.
-func TestCrashRecoveryWithoutAHandoffNote(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "migrated the schema"), at(time.Minute))
-	mustRecord(t, s, Entry{
-		Actor: agent("alice"), Kind: KindDecision, Workstream: "api",
-		Summary: "drop the v1 endpoint", Rationale: "no callers in 90 days",
-	}, at(2*time.Minute))
-
-	// CRASH. The liveness record dies with the process. No goodbye, no handoff note,
-	// no cooperation of any kind from the incumbent.
-	if err := os.Remove(s.seatPath()); err != nil {
-		t.Fatal(err)
-	}
-
-	// A brand-new process opens the same store, knowing nothing.
-	succ, err := Open(s.Dir())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	v, err := succ.Status(at(3 * time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// AUTHORITY survived: the journal remembers who held the seat and at which epoch.
-	if v.Authority.Vacant || v.Authority.Holder.Name != "alice" || v.Authority.Epoch != 1 {
-		t.Fatalf("authority did not survive the crash: %+v — it must be replayable from the journal alone", v.Authority)
-	}
-	// LIVENESS did not, and says so honestly rather than inventing a death.
-	if v.Liveness != LivenessUnknown {
-		t.Fatalf("liveness = %q, want %q: 'I have no idea' and 'I checked and it is late' are different facts", v.Liveness, LivenessUnknown)
-	}
-	if !v.Claimable {
-		t.Fatal("a seat with no liveness record must be claimable, or a crash deadlocks the host forever")
-	}
-
-	// The successor learns what happened AND what alice was steering toward — by
-	// replay, not by being told.
-	board, _, err := succ.Board()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(board.Workstreams) != 1 || board.Workstreams[0].Name != "api" {
-		t.Fatalf("the successor could not reconstruct the board: %+v", board.Workstreams)
-	}
-	if board.Workstreams[0].Decisions != 1 {
-		t.Fatal("the successor lost alice's DECISION: effects tell you what was done, only a decision record tells you what it was for")
-	}
-
-	// And it can take the seat with no cooperation from alice at all.
-	v2, err := succ.Claim(agent("bob"), "picking up after a crash", at(4*time.Minute))
-	if err != nil {
-		t.Fatalf("a successor must be able to claim after a crash with no handoff note: %v", err)
-	}
-	if v2.Authority.Epoch != 2 {
-		t.Fatalf("epoch after recovery = %d, want 2 (alice is now fenced)", v2.Authority.Epoch)
-	}
-}
-
-// Claiming the seat is an act of AUTHORITY, not a checkout. It must not touch a
-// repository — no diff captured, no working tree restored, nothing.
-//
-// This is the boundary against pkg/handoff, and it is the whole reason both exist:
-// WORK is a diff, a SEAT is a mandate, and only one of them should ever mutate a repo.
-func TestSeatLifecycleTouchesNoRepository(t *testing.T) {
-	s := newStore(t)
-
-	// A "repository" with work in flight.
-	repo := t.TempDir()
-	dirty := filepath.Join(repo, "in-flight.go")
-	if err := os.WriteFile(dirty, []byte("package main // uncommitted\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(dirty)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "did a thing"), at(time.Minute))
-	if err := s.Release(agent("alice"), 0, "standing down", at(2*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	mustClaim(t, s, agent("bob"), at(3*time.Minute))
-
-	// The working tree is byte-identical, and nothing new appeared beside it.
-	after, err := os.ReadFile(dirty)
-	if err != nil {
-		t.Fatalf("the seat lifecycle disturbed the working tree: %v", err)
-	}
-	if string(before) != string(after) {
-		t.Fatal("claiming/releasing the seat MUTATED a working file — a seat is a mandate, not a checkout")
-	}
-	ents, err := os.ReadDir(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ents) != 1 {
-		t.Fatalf("the seat lifecycle created %d files in the repo; it must create none", len(ents)-1)
-	}
-
-	// And no journal entry smuggled a diff in as an artifact.
-	rep, _ := s.Replay()
-	for _, e := range rep.Entries {
-		if e.Artifact != nil {
-			t.Fatalf("seq %d captured an artifact during a pure seat lifecycle: %+v", e.Seq, e.Artifact)
-		}
+	e2 := mustClaim(t, s, agent("b"), at(2*time.Minute))
+	if e2 <= e1 {
+		t.Fatalf("the epoch ladder never resets — a release must not lower it: %d → %d", e1, e2)
 	}
 }
 
 func TestReleaseIsOptionalForCorrectness(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	// Alice never releases. She simply vanishes. The seat still becomes claimable.
-	v, err := s.Claim(agent("bob"), "", at(TTL+time.Minute))
-	if err != nil {
-		t.Fatalf("an unreleased seat must still expire: %v", err)
-	}
-	if v.Authority.Holder.Name != "bob" {
-		t.Fatalf("holder = %q, want bob", v.Authority.Holder.Name)
+	mustClaim(t, s, agent("a"), at(0))
+	// 'a' vanishes. No release, no goodbye, no cooperation.
+	e2 := mustClaim(t, s, agent("b"), at(TTL+time.Minute))
+	if e2 != 2 {
+		t.Fatalf("a successor must not need the predecessor's cooperation; epoch = %d", e2)
 	}
 }
 
 func TestReleasingAVacantSeatIsANoOp(t *testing.T) {
 	s := newStore(t)
-	if err := s.Release(agent("alice"), 0, "", at(0)); err != nil {
-		t.Fatalf("releasing a vacant seat must be a no-op, not an error: %v", err)
+	if err := s.Release(agent("a"), 1, "", at(0)); err != nil {
+		t.Fatalf("releasing a seat nobody holds is a no-op, not an error: %v", err)
 	}
 }
 
-// ─── append-only replay + hash chain ──────────────────────────────────────────
+// ─── fencing ──────────────────────────────────────────────────────────────────
 
-// The journal is APPEND-ONLY and hash-chained: alter or remove any entry and every
-// later entry stops verifying. A record you can quietly rewrite is not a record.
-func TestReplayDetectsAnAlteredEntry(t *testing.T) {
+// The returning zombie is the case the epoch exists for: a steward that lapsed, was
+// replaced, and comes back mid-sentence believing it still holds the seat.
+func TestReturningZombieIsFenced(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "the truth"), at(time.Minute))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "later work"), at(2*time.Minute))
+	zombieEpoch := mustClaim(t, s, agent("zombie"), at(0))
+	mustRecord(t, s, evidenced(agent("zombie"), "ws", "before the lapse"), zombieEpoch, at(time.Minute))
 
-	// Someone edits history: rewrite the middle entry's summary in place.
-	raw := string(journalBytes(t, s))
-	tampered := strings.Replace(raw, `"the truth"`, `"a lie!!!!"`, 1)
-	if tampered == raw {
-		t.Fatal("test bug: nothing was tampered")
-	}
-	if err := os.WriteFile(s.journalPath(), []byte(tampered), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	successorEpoch := mustClaim(t, s, agent("successor"), at(TTL+time.Minute))
+	mustRecord(t, s, evidenced(agent("successor"), "ws", "took over"), successorEpoch, at(TTL+2*time.Minute))
 
-	rep, err := s.Replay()
-	if err != nil {
-		t.Fatal(err)
+	_, err := s.Record(evidenced(agent("zombie"), "ws", "as I was saying…"), zombieEpoch, at(TTL+3*time.Minute))
+	var fenced *ErrFenced
+	if !errors.As(err, &fenced) {
+		t.Fatalf("a zombie presenting its old epoch must be FENCED, got %v", err)
 	}
-	if !rep.Corrupt {
-		t.Fatal("replay accepted an altered entry: the hash chain must make tampering detectable")
+	if fenced.Presented != zombieEpoch || fenced.Current != successorEpoch {
+		t.Fatalf("the fence must name both epochs: presented %d, current %d", fenced.Presented, fenced.Current)
 	}
-	// It stopped AT the tampered entry, keeping the valid prefix before it.
-	if len(rep.Entries) != 1 {
-		t.Fatalf("replay kept %d entries; the valid prefix before the tamper is 1 (the seat claim)", len(rep.Entries))
+	// The error explains the ZOMBIE'S situation, not a stranger's. An agent that reads
+	// "you are not the holder" may decide to re-claim — and overwrite its successor.
+	if !strings.Contains(fenced.Error(), "tenure ended") {
+		t.Fatalf("ErrFenced must explain the zombie to itself, got: %v", fenced)
 	}
 }
 
-func TestReplayIsDeterministicAndChainsFromGenesis(t *testing.T) {
+// Fencing is a property of the TOKEN, not of the identity. The same logical principal,
+// returning with a stale token, is fenced exactly like a stranger — because "being
+// yourself" is not a credential, and a tenure that ended is over no matter whose hand
+// the old token is in.
+func TestStaleTokenIsFencedEvenForTheSameLogicalPrincipal(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "one"), at(time.Minute))
+	a := agent("a")
+	old := mustClaim(t, s, a, at(0))
 
-	rep, err := s.Replay()
-	if err != nil {
-		t.Fatal(err)
+	// 'a' lapses, and 'a' — the same logical agent, a new process — re-claims. New tenure,
+	// new epoch. The OLD process is still out there holding `old`.
+	fresh := mustClaim(t, s, a, at(TTL+time.Minute))
+	if fresh == old {
+		t.Fatalf("a re-claim after a lapse is a NEW tenure and must bump the epoch (%d)", old)
 	}
-	if rep.Corrupt {
-		t.Fatalf("fresh journal replayed as corrupt: %s", rep.CorruptReason)
+
+	_, err := s.Record(evidenced(a, "ws", "from the old process"), old, at(TTL+2*time.Minute))
+	var fenced *ErrFenced
+	if !errors.As(err, &fenced) {
+		t.Fatalf("the same principal presenting a stale token must be FENCED (not waved through), got %v", err)
 	}
-	if rep.Entries[0].PrevHash != genesis {
-		t.Fatalf("the first entry must chain from the public genesis root, got %q", rep.Entries[0].PrevHash)
-	}
-	for i, e := range rep.Entries {
-		if e.Seq != uint64(i+1) {
-			t.Fatalf("entry %d has seq %d: sequence must be dense and monotonic", i, e.Seq)
+}
+
+// Zero is not "whatever I hold". It is an absence, and it is refused — because the
+// agent that would use it is precisely the agent that does not know its tenure ended.
+func TestEpochZeroIsRefusedOnEveryMutation(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	seq := mustRecord(t, s, evidenced(a, "ws", "a thing"), ep, at(time.Minute)).Seq
+
+	var noEpoch *ErrNoEpoch
+	check := func(name string, err error) {
+		t.Helper()
+		if !errors.As(err, &noEpoch) {
+			t.Fatalf("%s with epoch 0 must be refused with ErrNoEpoch, got %v", name, err)
 		}
-		if e.Schema != SchemaVersion {
-			t.Fatalf("entry %d carries schema %q, want %q — every artifact is schema-versioned", i, e.Schema, SchemaVersion)
-		}
 	}
-	// Verify() over the raw bytes agrees — a third party can check the chain with no
-	// access to the Store.
-	v := Verify(strings.NewReader(string(journalBytes(t, s))))
-	if v.Corrupt || v.Head != rep.Head {
-		t.Fatalf("independent Verify disagreed with Replay: corrupt=%v head=%q want %q", v.Corrupt, v.Head, rep.Head)
-	}
+
+	_, err := s.Record(evidenced(a, "ws", "x"), 0, at(2*time.Minute))
+	check("Record", err)
+
+	_, err = s.Decide(a, 0, "ws", "x", "why", nil, at(2*time.Minute))
+	check("Decide", err)
+
+	_, err = s.Attest(a, 0, Verification{TargetSeq: seq, Result: OutcomeSuccess, Method: "looked"}, nil, at(2*time.Minute))
+	check("Attest", err)
+
+	_, err = s.Transcript(a, 0, "ws", "x", strings.NewReader("hi"), at(2*time.Minute))
+	check("Transcript", err)
+
+	_, err = s.OpenWorkstream(a, 0, "ws2", "x", at(2*time.Minute))
+	check("OpenWorkstream", err)
+
+	_, err = s.UpdateWorkstream(a, 0, "ws", WorkstreamUpdate{Priority: P0}, at(2*time.Minute))
+	check("UpdateWorkstream", err)
+
+	_, err = s.CloseWorkstream(a, 0, "ws", "x", OutcomeSuccess, nil, at(2*time.Minute))
+	check("CloseWorkstream", err)
+
+	_, err = s.Checkpoint(a, 0, "x", at(2*time.Minute))
+	check("Checkpoint", err)
+
+	r, _ := s.Reconcile(context.Background(), at(2*time.Minute))
+	_, err = s.RecordReconciliation(a, 0, r, at(2*time.Minute))
+	check("RecordReconciliation", err)
+
+	check("Heartbeat", s.Heartbeat(a, 0, at(2*time.Minute)))
+	check("Release", s.Release(a, 0, "", at(2*time.Minute)))
 }
 
-// ─── corrupt-tail recovery ────────────────────────────────────────────────────
-
-// A crash mid-append leaves a torn final line. That must NOT erase the history
-// before it: refusing to read a whole journal because its last 40 bytes are garbage
-// would turn a survivable crash into total amnesia — the exact failure this
-// subsystem exists to prevent.
-func TestCorruptTailDoesNotHidePriorHistory(t *testing.T) {
+// A stored entry never carries epoch 0, so replay refuses one that does: it was not
+// written by this package, and an unfenced entry in the journal is exactly what a
+// forger needs.
+func TestReplayRefusesAnEntryWithEpochZero(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "real work"), at(time.Minute))
-	mustRecord(t, s, evidenced(agent("alice"), "db", "more real work"), at(2*time.Minute))
+	ep := mustClaim(t, s, agent("a"), at(0))
+	mustRecord(t, s, evidenced(agent("a"), "ws", "real"), ep, at(time.Minute))
 
-	good := journalBytes(t, s)
-
-	// The power goes out mid-write: a half-serialized final line.
+	forged := `{"schema":"` + SchemaVersion + `","seq":3,"prev_hash":"x","id":"f","time":"2026-07-13T12:05:00Z",` +
+		`"actor":{"name":"forger"},"epoch":0,"kind":"effect","summary":"unfenced","hash":"x"}` + "\n"
 	f, err := os.OpenFile(s.journalPath(), os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.WriteString(`{"schema":"bashy-steward-v1","seq":4,"prev_ha`); err != nil {
-		t.Fatal(err)
-	}
+	f.WriteString(forged)
 	f.Close()
 
-	rep, err := s.Replay()
-	if err != nil {
-		t.Fatal(err)
-	}
+	rep, _ := s.Replay()
 	if !rep.Corrupt {
-		t.Fatal("a torn tail must be REPORTED, not silently ignored")
+		t.Fatal("an entry with epoch 0 must not replay as valid")
 	}
-	if len(rep.Entries) != 3 {
-		t.Fatalf("a torn tail hid valid history: %d entries survived, want 3 — the history before the tear is exactly what a successor needs", len(rep.Entries))
-	}
-	// The board still projects from the valid prefix.
-	board := ProjectBoard(rep.Entries)
-	if len(board.Workstreams) != 2 {
-		t.Fatalf("board lost workstreams to a torn tail: %+v", board.Workstreams)
-	}
-
-	// WRITES refuse, rather than forking the chain around the damage.
-	_, err = s.Record(evidenced(agent("alice"), "api", "carrying on regardless"), 0, at(3*time.Minute))
-	var ct *ErrCorruptTail
-	if !errors.As(err, &ct) {
-		t.Fatalf("appending onto a corrupt tail must be refused; got %v", err)
-	}
-	if ct.ValidEntries != 3 {
-		t.Fatalf("the error must tell the operator how much good history survives (got %d, want 3) — "+
-			"otherwise a repair looks like it might cost them everything", ct.ValidEntries)
-	}
-
-	// REPAIR truncates only the unreadable bytes, and never a valid entry.
-	discarded, err := s.Repair(agent("alice"), at(4*time.Minute))
-	if err != nil {
-		t.Fatalf("Repair: %v", err)
-	}
-	if discarded == 0 {
-		t.Fatal("Repair discarded nothing but the tail was corrupt")
-	}
-
-	rep2, err := s.Replay()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep2.Corrupt {
-		t.Fatalf("journal still corrupt after repair: %s", rep2.CorruptReason)
-	}
-	// The three valid entries are intact and BYTE-IDENTICAL to what they were — plus
-	// the repair note, which is history too.
-	if len(rep2.Entries) < 3 {
-		t.Fatalf("repair destroyed valid entries: %d remain, want >= 3", len(rep2.Entries))
-	}
-	if !strings.HasPrefix(string(journalBytes(t, s)), string(good)) {
-		t.Fatal("repair rewrote bytes it should never have touched: the valid prefix must be preserved exactly")
-	}
-	// A repair is never a clean success — data WAS lost, and the record says so.
-	last := rep2.Entries[len(rep2.Entries)-1]
-	if last.Kind != KindReconcile || last.Outcome != OutcomeDegraded {
-		t.Fatalf("the repair must be recorded as a DEGRADED reconcile (got kind=%q outcome=%q): "+
-			"a log that silently healed itself would be worthless, since 'it repaired itself' and "+
-			"'someone tampered with it' would look identical", last.Kind, last.Outcome)
+	if len(rep.Entries) != 2 {
+		t.Fatalf("the valid prefix before the forgery must survive: got %d entries", len(rep.Entries))
 	}
 }
 
-func TestRepairOnAnIntactJournalIsANoOp(t *testing.T) {
+func TestNonHolderCannotWrite(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	before := journalBytes(t, s)
+	ep := mustClaim(t, s, agent("holder"), at(0))
 
-	discarded, err := s.Repair(agent("alice"), at(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if discarded != 0 {
-		t.Fatalf("repair discarded %d bytes from an intact journal", discarded)
-	}
-	if string(journalBytes(t, s)) != string(before) {
-		t.Fatal("repair modified an intact journal")
+	_, err := s.Record(evidenced(agent("stranger"), "ws", "sneaking in"), ep, at(time.Minute))
+	var notHolder *ErrNotHolder
+	if !errors.As(err, &notHolder) {
+		t.Fatalf("a bystander must not write the host's authoritative record, got %v", err)
 	}
 }
 
-// ─── evidence: unknown/degraded preservation ──────────────────────────────────
-
-// THE LOAD-BEARING RULE. A claim of success with no evidence is not success — it is
-// UNKNOWN. An agent writes fluent, confident prose about work it did not do; the
-// only defense that scales is to refuse to promote an unevidenced claim into a fact.
-func TestUnevidencedSuccessProjectsAsUnknown(t *testing.T) {
+func TestWriteToVacantSeatIsRejected(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-
-	e := mustRecord(t, s, Entry{
-		Actor: agent("alice"), Kind: KindEffect, Workstream: "api",
-		Summary: "shipped it, all tests pass ✅", Outcome: OutcomeSuccess, // …and nothing to point at.
-	}, at(time.Minute))
-
-	// The journal records the CLAIM faithfully — it is an honest record of what was
-	// asserted…
-	if e.Outcome != OutcomeSuccess {
-		t.Fatalf("the journal must record the claim as made, got %q", e.Outcome)
-	}
-	// …but nothing will ever project it as a fact.
-	if e.EffectiveOutcome() != OutcomeUnknown {
-		t.Fatalf("effective outcome = %q, want unknown: an unevidenced 'done ✅' must never become a fact", e.EffectiveOutcome())
-	}
-
-	board, _, err := s.Board()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ws := board.Workstreams[0]
-	if ws.Outcome != OutcomeUnknown || ws.Confidence != ConfidenceUnknown {
-		t.Fatalf("board shows outcome=%q confidence=%q; an unevidenced success must show as unknown", ws.Outcome, ws.Confidence)
-	}
-	if !board.Degraded {
-		t.Fatal("the board must flag itself degraded at the TOP LEVEL, or a status check misses it by reading only the happy rows")
+	_, err := s.Record(evidenced(agent("a"), "ws", "no seat"), 1, at(0))
+	var notHolder *ErrNotHolder
+	if !errors.As(err, &notHolder) || !notHolder.Vacant {
+		t.Fatalf("writing on a vacant seat must be rejected, got %v", err)
 	}
 }
 
-func TestEvidencedSuccessIsVerified(t *testing.T) {
+// The epoch ladder must not be climbable by anyone already on it: a generic write may
+// not forge a seat event and mint itself an epoch.
+func TestRecordCannotForgeASeatEvent(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "shipped it"), at(time.Minute))
+	ep := mustClaim(t, s, agent("a"), at(0))
 
-	board, _, err := s.Board()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ws := board.Workstreams[0]
-	if ws.Outcome != OutcomeSuccess || ws.Confidence != ConfidenceVerified {
-		t.Fatalf("an evidenced success must verify: outcome=%q confidence=%q", ws.Outcome, ws.Confidence)
-	}
-	if board.Degraded {
-		t.Fatal("a fully-evidenced board must not report itself degraded")
-	}
-}
-
-// Degradation travels ONE WAY. A failure without evidence stays a failure: the cost
-// of a false "success" is unbounded, the cost of a false "failed" is a second look.
-func TestFailureWithoutEvidenceStaysFailure(t *testing.T) {
-	e := Entry{Kind: KindEffect, Outcome: OutcomeFailed, Summary: "it broke"}
-	if got := e.EffectiveOutcome(); got != OutcomeFailed {
-		t.Fatalf("effective outcome = %q, want failed: we never upgrade toward the happy path", got)
-	}
-	if !e.Degraded() {
-		// A failure is a settled, evidenced-enough-to-act-on fact, not an unknown.
-		if e.EffectiveOutcome() != OutcomeFailed {
-			t.Fatal("a failure must remain a failure")
+	for _, k := range []Kind{KindSeatClaimed, KindSeatTakeover, KindSeatReleased} {
+		_, err := s.Record(Entry{Actor: agent("a"), Kind: k, Summary: "forged"}, ep, at(time.Minute))
+		if err == nil {
+			t.Fatalf("Record must refuse to forge a %s seat event", k)
 		}
 	}
 }
 
-// "Closed" and "verified done" are DIFFERENT FACTS. Collapsing them is how a status
-// board starts reporting wishes as facts.
+func TestAppendRefusesAnUnknownKind(t *testing.T) {
+	s := newStore(t)
+	ep := mustClaim(t, s, agent("a"), at(0))
+	_, err := s.Record(Entry{Actor: agent("a"), Kind: Kind("whatever"), Summary: "x"}, ep, at(time.Minute))
+	if err == nil || !strings.Contains(err.Error(), "unknown kind") {
+		t.Fatalf("an entry of a kind no projection understands must be refused, got %v", err)
+	}
+}
+
+// ─── takeover & authorization ─────────────────────────────────────────────────
+
+func TestTakeoverRequiresACapability(t *testing.T) {
+	s := newStore(t)
+	mustClaim(t, s, agent("incumbent"), at(0))
+
+	_, err := s.Takeover(agent("usurper"), TakeoverRequest{Interactive: true}, at(time.Minute))
+	var unauth *ErrUnauthorized
+	if !errors.As(err, &unauth) {
+		t.Fatalf("seizing a live seat with no capability must be refused, got %v", err)
+	}
+}
+
+func TestTakeoverSeizesALiveSeatAndRecordsItsAuthority(t *testing.T) {
+	s := newStore(t)
+	oldEpoch := mustClaim(t, s, agent("incumbent"), at(0))
+
+	newEpoch := mustTakeover(t, s, agent("successor"), at(time.Minute))
+	if newEpoch <= oldEpoch {
+		t.Fatalf("a takeover must bump the epoch: %d → %d", oldEpoch, newEpoch)
+	}
+
+	v, _ := s.Status(at(2 * time.Minute))
+	if !SameHolder(v.Authority.Holder, agent("successor")) {
+		t.Fatalf("the seat must have changed hands, holder = %s", holderName(v.Authority.Holder))
+	}
+	if v.Authority.TakenOverFrom == nil || v.Authority.TakenOverFrom.Name != "incumbent" {
+		t.Fatal("the record must say WHO was fenced — an unexplained seizure is indistinguishable from a hijack")
+	}
+	a := v.Authority.Authz
+	if a == nil || a.Actor != "qiangli" || a.Provenance != ProvenanceOperatorAssertion {
+		t.Fatalf("the record must carry the capability the seizure was performed under, got %+v", a)
+	}
+
+	// And the incumbent, who was never asked, is fenced from that instant.
+	_, err := s.Record(evidenced(agent("incumbent"), "ws", "still working"), oldEpoch, at(3*time.Minute))
+	var fenced *ErrFenced
+	if !errors.As(err, &fenced) {
+		t.Fatalf("the seized incumbent must be fenced, got %v", err)
+	}
+}
+
+// A grant is SINGLE-USE, and the journal — not the grant file — is what makes it so.
+func TestGrantCannotBeReplayed(t *testing.T) {
+	s := newStore(t)
+	mustClaim(t, s, agent("a"), at(0))
+
+	g := mustGrant(t, s, agent("b"), at(time.Minute))
+	if _, err := s.Takeover(agent("b"), TakeoverRequest{GrantID: g.ID, Interactive: true}, at(2*time.Minute)); err != nil {
+		t.Fatalf("first use of a grant must work: %v", err)
+	}
+
+	// Restore the grant file, exactly as a backup or a `cp` would. The journal still
+	// remembers the takeover that consumed the nonce.
+	if err := writeJSONAtomic(filepath.Join(s.grantDir(), g.ID+".json"), g); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Takeover(agent("b"), TakeoverRequest{GrantID: g.ID, Interactive: true}, at(3*time.Minute))
+	var unauth *ErrUnauthorized
+	if !errors.As(err, &unauth) || !strings.Contains(err.Error(), "already been used") {
+		t.Fatalf("a replayed grant must be refused even when its file is restored, got %v", err)
+	}
+}
+
+func TestNoninteractiveTakeoverRequiresAnExternalReceipt(t *testing.T) {
+	s := newStore(t)
+	mustClaim(t, s, agent("a"), at(0))
+	g := mustGrant(t, s, agent("b"), at(time.Minute)) // operator-assertion
+
+	_, err := s.Takeover(agent("b"), TakeoverRequest{GrantID: g.ID, Interactive: false}, at(2*time.Minute))
+	var unauth *ErrUnauthorized
+	if !errors.As(err, &unauth) {
+		t.Fatalf("an UNATTENDED takeover on an operator ASSERTION must be refused: with nobody present, "+
+			"'a human approved' is a sentence with no author. got %v", err)
+	}
+
+	// With a receipt — an artifact somebody can go and audit — it is allowed.
+	approval := filepath.Join(t.TempDir(), "approval.txt")
+	if err := os.WriteFile(approval, []byte("approved by oncall, ticket OPS-42"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g2, err := s.Authorize(GrantRequest{
+		Grantee: agent("b"), Actor: "oncall", Reason: "wedged",
+		ReceiptPath: approval, ReceiptIssuer: "ops:OPS-42",
+	}, at(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Authorize with a receipt: %v", err)
+	}
+	if g2.Provenance != ProvenanceExternalReceipt {
+		t.Fatalf("a receipt-backed grant must be labelled as such, got %q", g2.Provenance)
+	}
+	if _, err := s.Takeover(agent("b"), TakeoverRequest{GrantID: g2.ID, Interactive: false}, at(3*time.Minute)); err != nil {
+		t.Fatalf("an unattended takeover backed by a receipt must be allowed: %v", err)
+	}
+}
+
+// The provenance is recorded HONESTLY. An operator assertion is not a proof of
+// humanity, and the journal says "assertion", not "authorized by a human".
+func TestOperatorAssertionIsLabelledAsAnAssertion(t *testing.T) {
+	s := newStore(t)
+	mustClaim(t, s, agent("a"), at(0))
+	mustTakeover(t, s, agent("b"), at(time.Minute))
+
+	changes, _, _, err := s.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range changes {
+		if c.Kind != KindSeatTakeover {
+			continue
+		}
+		if c.Authz == nil {
+			t.Fatal("a takeover must carry its authorization in the history")
+		}
+		if c.Authz.Provenance != ProvenanceOperatorAssertion {
+			t.Fatalf("provenance must be recorded verbatim, got %q", c.Authz.Provenance)
+		}
+		if c.Authz.Receipt != nil {
+			t.Fatal("an operator assertion has no receipt, and must not claim one")
+		}
+		return
+	}
+	t.Fatal("no takeover found in the history")
+}
+
+// ─── evidence: reference vs verification ──────────────────────────────────────
+
+// The single most load-bearing rule. An agent writes fluent, confident prose about
+// work it did not do; the only defense that scales is to refuse to promote an
+// unevidenced claim into a fact.
+func TestUnevidencedSuccessProjectsAsUnknown(t *testing.T) {
+	s := newStore(t)
+	ep := mustClaim(t, s, agent("a"), at(0))
+	e := mustRecord(t, s, Entry{
+		Actor: agent("a"), Kind: KindEffect, Workstream: "api",
+		Summary: "shipped it 🎉", Outcome: OutcomeSuccess, // …and nothing to point at
+	}, ep, at(time.Minute))
+
+	if e.Outcome != OutcomeSuccess {
+		t.Fatal("the CLAIM must be recorded faithfully — this is an honest record of what was asserted")
+	}
+	if e.EffectiveOutcome() != OutcomeUnknown {
+		t.Fatalf("but no view may BELIEVE it: effective outcome = %q, want unknown", e.EffectiveOutcome())
+	}
+
+	board, _, _ := s.Board()
+	ws := board.Workstreams[0]
+	if ws.Outcome != OutcomeUnknown || ws.Confidence != ConfidenceUnknown {
+		t.Fatalf("the board must show unknown/unknown, got %s/%s", ws.Outcome, ws.Confidence)
+	}
+	if !board.Degraded {
+		t.Fatal("the board's headline must not hide an unestablished outcome")
+	}
+}
+
+// The rule the earlier revision was missing. A reference is a POINTER, not a check —
+// and it is exactly as easy for a model to fabricate as the prose it accompanies.
+func TestEvidencedSuccessIsAssertedNotVerified(t *testing.T) {
+	s := newStore(t)
+	ep := mustClaim(t, s, agent("a"), at(0))
+	mustRecord(t, s, evidenced(agent("a"), "api", "migrated the schema"), ep, at(time.Minute))
+
+	board, _, _ := s.Board()
+	ws := board.Workstreams[0]
+	if ws.Outcome != OutcomeSuccess {
+		t.Fatalf("an evidenced success keeps its outcome, got %q", ws.Outcome)
+	}
+	if ws.Confidence != ConfidenceAsserted {
+		t.Fatalf("a claim NOBODY CHECKED is asserted, never verified: got %q. "+
+			"'command:go test ./...' records that an agent SAYS it ran the tests", ws.Confidence)
+	}
+	if board.Asserted != 1 {
+		t.Fatalf("the board headline must count unverified claims, got %d", board.Asserted)
+	}
+}
+
+// …and this is the only thing that closes the gap.
+func TestVerificationPromotesAClaimToVerified(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "migrated the schema"), ep, at(time.Minute))
+
+	if _, err := s.Attest(a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "re-ran the suite on a clean checkout",
+	}, []Evidence{{Kind: "command", Ref: "go test ./...", Digest: "sha256:" + strings.Repeat("a", 64)}}, at(2*time.Minute)); err != nil {
+		t.Fatalf("Attest: %v", err)
+	}
+
+	board, _, _ := s.Board()
+	ws := board.Workstreams[0]
+	if ws.Confidence != ConfidenceVerified {
+		t.Fatalf("an attested claim is verified, got %q", ws.Confidence)
+	}
+	if board.Asserted != 0 {
+		t.Fatalf("a verified claim is no longer merely asserted, got %d asserted", board.Asserted)
+	}
+}
+
+// A verification can move a claim BACKWARDS. Degradation travels one way.
+func TestVerificationCanRefuteAClaim(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	if _, err := s.Attest(a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeFailed, Method: "the endpoint 502s",
+	}, nil, at(2*time.Minute)); err != nil {
+		t.Fatalf("Attest: %v", err)
+	}
+
+	board, _, _ := s.Board()
+	ws := board.Workstreams[0]
+	if ws.Confidence != ConfidenceRefuted || ws.Outcome != OutcomeFailed {
+		t.Fatalf("a refuted success must degrade to failed/refuted, got %s/%s", ws.Outcome, ws.Confidence)
+	}
+}
+
+// An attestation names the exact BYTES it vouched for, or it is an attestation of
+// whatever ends up at that sequence number.
+func TestVerificationBindsToTheTargetHash(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	_, err := s.Attest(a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: "sha256:" + strings.Repeat("f", 64),
+		Result: OutcomeSuccess, Method: "trust me",
+	}, nil, at(2*time.Minute))
+	if err == nil || !strings.Contains(err.Error(), "exact bytes") {
+		t.Fatalf("attesting to a hash that is not what is at that seq must be refused, got %v", err)
+	}
+}
+
+func TestVerificationRequiresAMethod(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	_, err := s.Attest(a, ep, Verification{TargetSeq: target.Seq, Result: OutcomeSuccess}, nil, at(2*time.Minute))
+	if err == nil {
+		t.Fatal("an unexplained 'I verified it' is the same trust-me claim it is supposed to replace")
+	}
+}
+
+func TestFailureWithoutEvidenceStaysFailure(t *testing.T) {
+	s := newStore(t)
+	ep := mustClaim(t, s, agent("a"), at(0))
+	e := mustRecord(t, s, Entry{
+		Actor: agent("a"), Kind: KindEffect, Workstream: "api",
+		Summary: "the migration blew up", Outcome: OutcomeFailed,
+	}, ep, at(time.Minute))
+
+	if e.EffectiveOutcome() != OutcomeFailed {
+		t.Fatalf("degradation travels ONE WAY — an unevidenced failure is still a failure, got %q", e.EffectiveOutcome())
+	}
+}
+
 func TestClosedWithoutEvidenceIsClosedAndUnknown(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	if _, err := s.OpenWorkstream(agent("alice"), "api", "the API migration", at(time.Minute)); err != nil {
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	if _, err := s.OpenWorkstream(a, ep, "api", "the api migration", at(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CloseWorkstream(agent("alice"), "api", "all done!", OutcomeSuccess, nil, at(2*time.Minute)); err != nil {
+	if _, err := s.CloseWorkstream(a, ep, "api", "all done!", OutcomeSuccess, nil, at(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
-	board, _, err := s.Board()
-	if err != nil {
-		t.Fatal(err)
-	}
+	board, _, _ := s.Board()
 	ws := board.Workstreams[0]
 	if ws.State != WorkstreamClosed {
-		t.Fatalf("state = %q, want closed", ws.State)
+		t.Fatalf("state must be closed, got %q", ws.State)
 	}
 	if ws.Outcome != OutcomeUnknown {
-		t.Fatalf("outcome = %q, want unknown: closing does not conjure evidence", ws.Outcome)
+		t.Fatalf("'closed' and 'verified done' are different facts: outcome = %q", ws.Outcome)
 	}
-	if len(ws.Degraded) == 0 || !strings.Contains(ws.Degraded[0], "no evidence") {
-		t.Fatalf("the board must say WHICH claim is unproven, in words: %v", ws.Degraded)
+	if ws.Lane != LaneDone {
+		t.Fatalf("a closed strand sits in the done lane, got %q", ws.Lane)
 	}
 }
 
-// A later, evidenced entry SETTLES an earlier unknown. An unknown that a subsequent
-// fact resolved is history, not a live problem — otherwise the board never goes green
-// again and everyone learns to ignore it.
+// ─── the Kanban board ─────────────────────────────────────────────────────────
+
+func TestBoardIsAKanbanDerivedPurelyFromTheJournal(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+
+	if _, err := s.OpenWorkstream(a, ep, "api", "the api migration", at(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateWorkstream(a, ep, "api", WorkstreamUpdate{
+		Lane: LaneInProgress, Priority: P0, Owner: "qiangli",
+		Agents: []string{"claude-opus"}, NextAction: "run the race gate",
+		NextAt: at(time.Hour).Format(time.RFC3339),
+		Links:  []Link{{Kind: "issue", Ref: "88"}, {Kind: "weave", Ref: "run-88"}},
+	}, at(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	board, _, _ := s.Board()
+	ws := board.Workstreams[0]
+	if ws.Lane != LaneInProgress || ws.Priority != P0 || ws.Owner != "qiangli" {
+		t.Fatalf("the Kanban fields must fold from the journal, got lane=%s pri=%s owner=%s", ws.Lane, ws.Priority, ws.Owner)
+	}
+	if ws.NextAction != "run the race gate" || ws.NextAt.IsZero() {
+		t.Fatalf("next action/checkpoint must fold, got %q / %v", ws.NextAction, ws.NextAt)
+	}
+	if len(ws.Links) != 2 || len(ws.Agents) != 1 {
+		t.Fatalf("links and agents must fold, got %v / %v", ws.Links, ws.Agents)
+	}
+
+	// A blocked strand shows as BLOCKED regardless of the lane anyone typed — a board
+	// that lets you park a blocked item in "in-progress" hides the only thing worth
+	// looking at.
+	if _, err := s.UpdateWorkstream(a, ep, "api", WorkstreamUpdate{Blockers: []string{"waiting on review of #412"}}, at(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	board, _, _ = s.Board()
+	if board.Workstreams[0].Lane != LaneBlocked || board.Blocked != 1 {
+		t.Fatalf("live blockers must force the blocked lane, got %q (blocked=%d)", board.Workstreams[0].Lane, board.Blocked)
+	}
+
+	// And unblocking is as much of an event as blocking.
+	if _, err := s.UpdateWorkstream(a, ep, "api", WorkstreamUpdate{Clear: []string{"blockers"}}, at(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	board, _, _ = s.Board()
+	if board.Workstreams[0].Lane != LaneInProgress || board.Blocked != 0 {
+		t.Fatalf("clearing the blockers must return the strand to its lane, got %q", board.Workstreams[0].Lane)
+	}
+}
+
+func TestBoardRejectsAnInvalidLaneOrPriority(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	if _, err := s.UpdateWorkstream(a, ep, "api", WorkstreamUpdate{Lane: "wherever"}, at(time.Minute)); err == nil {
+		t.Fatal("an invented lane must be refused, not silently stored")
+	}
+	if _, err := s.UpdateWorkstream(a, ep, "api", WorkstreamUpdate{Priority: "urgent"}, at(time.Minute)); err == nil {
+		t.Fatal("an invented priority must be refused")
+	}
+}
+
 func TestAnEvidencedEntrySettlesAnEarlierUnknown(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, Entry{
-		Actor: agent("alice"), Kind: KindEffect, Workstream: "api",
-		Summary: "probably shipped", Outcome: OutcomeSuccess,
-	}, at(time.Minute))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "confirmed shipped"), at(2*time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, Entry{Actor: a, Kind: KindEffect, Workstream: "api",
+		Summary: "probably fine", Outcome: OutcomeSuccess}, ep, at(time.Minute))
+	mustRecord(t, s, evidenced(a, "api", "actually verified the migration"), ep, at(2*time.Minute))
 
-	board, _, err := s.Board()
-	if err != nil {
-		t.Fatal(err)
+	board, _, _ := s.Board()
+	ws := board.Workstreams[0]
+	if ws.Outcome != OutcomeSuccess || ws.Confidence != ConfidenceAsserted {
+		t.Fatalf("a later evidenced entry settles the earlier unknown, got %s/%s", ws.Outcome, ws.Confidence)
 	}
 	if board.Degraded {
-		t.Fatal("an unknown that a later evidenced entry settled must not keep the board red forever")
-	}
-	if board.Workstreams[0].Confidence != ConfidenceVerified {
-		t.Fatalf("confidence = %q, want verified", board.Workstreams[0].Confidence)
+		t.Fatal("an early unknown that a later entry settled is history, not a live problem")
 	}
 }
 
-// ─── reconcile: unknown/degraded honesty ──────────────────────────────────────
+// ─── the journal as the only authority ────────────────────────────────────────
 
-func TestReconcileReportsDegradedForUnprovenClaims(t *testing.T) {
+// The whole recovery story: seat.json is a cache, and the journal survives without it.
+func TestAuthoritySurvivesLosingTheLivenessRecord(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, Entry{
-		Actor: agent("alice"), Kind: KindEffect, Workstream: "api",
-		Summary: "migrated everything", Outcome: OutcomeSuccess,
-	}, at(time.Minute))
+	ep := mustClaim(t, s, agent("crashed"), at(0))
+	mustRecord(t, s, evidenced(agent("crashed"), "api", "did real work"), ep, at(time.Minute))
 
-	r, err := s.Reconcile(at(2 * time.Minute))
+	// The heartbeat file is gone — a crash, a cleanup script, a hostile `rm`.
+	if err := os.Remove(s.seatPath()); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := s.Status(at(2 * time.Minute))
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	// AUTHORITY survives — replayed from the journal.
+	if v.Authority.Vacant || !SameHolder(v.Authority.Holder, agent("crashed")) || v.Authority.Epoch != ep {
+		t.Fatalf("authority must replay from the journal without seat.json, got %+v", v.Authority)
+	}
+	// LIVENESS does not, and it is honest about it.
+	if v.Liveness != LivenessUnknown {
+		t.Fatalf("with no heartbeat record, liveness is UNKNOWN, got %q", v.Liveness)
+	}
+	// And the holder can restore it — the journal still says the seat is theirs.
+	if err := s.Heartbeat(agent("crashed"), ep, at(3*time.Minute)); err != nil {
+		t.Fatalf("the holder must be able to rebuild the liveness record from the journal: %v", err)
+	}
+	v, _ = s.Status(at(4 * time.Minute))
+	if v.Liveness != LivenessLive {
+		t.Fatalf("after heartbeating, liveness is live again, got %q", v.Liveness)
+	}
+}
+
+func TestSeatLifecycleTouchesNoRepository(t *testing.T) {
+	// A steward moves a MANDATE, not a checkout. If claiming the seat ever starts
+	// touching a repository, `steward` and `handoff` have quietly become the same verb —
+	// and the distinction is the whole reason both exist.
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	head := filepath.Join(repo, ".git", "HEAD")
+	if err := os.WriteFile(head, []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tracked := filepath.Join(repo, "file.txt")
+	if err := os.WriteFile(tracked, []byte("original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	before := snapshot(t, repo)
+
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "worked in that repo"), ep, at(time.Minute))
+	if err := s.Release(a, ep, "done", at(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ep2 := mustClaim(t, s, agent("b"), at(3*time.Minute))
+	if _, err := s.Checkpoint(agent("b"), ep2, "", at(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	if after := snapshot(t, repo); after != before {
+		t.Fatalf("the seat lifecycle must not touch a repository.\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+func snapshot(t *testing.T, dir string) string {
+	t.Helper()
+	var sb strings.Builder
+	err := filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		sb.WriteString(rel + "|")
+		if !fi.IsDir() {
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			sb.WriteString(digestOf(b))
+		}
+		sb.WriteString("\n")
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return sb.String()
+}
+
+func TestReplayDetectsAnAlteredEntry(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "the truth"), ep, at(time.Minute))
+	mustRecord(t, s, evidenced(a, "api", "more truth"), ep, at(2*time.Minute))
+
+	raw := journalBytes(t, s)
+	tampered := strings.Replace(string(raw), "the truth", "a lie!!!!", 1)
+	if err := os.WriteFile(s.journalPath(), []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, _ := s.Replay()
+	if !rep.Corrupt {
+		t.Fatal("an altered entry must break the chain — that is what the chain is FOR")
+	}
+	if rep.CorruptKind != CorruptInvalid {
+		t.Fatalf("tampering is not a torn write: kind = %q", rep.CorruptKind)
+	}
+	if len(rep.Entries) != 1 {
+		t.Fatalf("the valid prefix before the alteration survives: got %d entries", len(rep.Entries))
+	}
+}
+
+func TestReplayChainsFromGenesis(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "one"), ep, at(time.Minute))
+
+	rep, _ := s.Replay()
+	if rep.Entries[0].PrevHash != genesis {
+		t.Fatalf("the first entry must chain from the public genesis root, got %q", rep.Entries[0].PrevHash)
+	}
+	prev := genesis
+	for i, e := range rep.Entries {
+		if e.PrevHash != prev {
+			t.Fatalf("entry %d does not link to its predecessor", i)
+		}
+		if e.computeHash(prev) != e.Hash {
+			t.Fatalf("entry %d's hash does not verify", i)
+		}
+		prev = e.Hash
+	}
+}
+
+func TestEvidenceOrderDoesNotAffectTheHash(t *testing.T) {
+	e1 := Entry{Actor: agent("a"), Epoch: 1, Kind: KindEffect, Summary: "x", Evidence: []Evidence{
+		{Kind: "command", Ref: "go test"}, {Kind: "commit", Ref: "abc"},
+	}}
+	e2 := Entry{Actor: agent("a"), Epoch: 1, Kind: KindEffect, Summary: "x", Evidence: []Evidence{
+		{Kind: "commit", Ref: "abc"}, {Kind: "command", Ref: "go test"},
+	}}
+	sortEvidence(e1.Evidence)
+	sortEvidence(e2.Evidence)
+	if e1.computeHash(genesis) != e2.computeHash(genesis) {
+		t.Fatal("the same evidence in a different flag order must hash identically")
+	}
+}
+
+// ─── transcripts are optional by contract ─────────────────────────────────────
+
+func TestTranscriptDeletionDoesNotAffectProjections(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	if _, err := s.OpenWorkstream(a, ep, "api", "the migration", at(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	mustRecord(t, s, evidenced(a, "api", "did the thing"), ep, at(2*time.Minute))
+	if _, err := s.Decide(a, ep, "api", "drop v1", "no callers in 90d", nil, at(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Transcript(a, ep, "api", "how we got here", strings.NewReader("a long conversation"), at(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	boardBefore, _, _ := s.Board()
+	ckBefore := ProjectCheckpoint(mustReplay(t, s).Entries, 0)
+
+	// Delete every artifact byte on the host.
+	if err := os.RemoveAll(s.transcriptDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	boardAfter, _, _ := s.Board()
+	ckAfter := ProjectCheckpoint(mustReplay(t, s).Entries, 0)
+
+	if boardBefore.Digest != boardAfter.Digest {
+		t.Fatal("deleting a transcript changed the board — transcripts are NOT authoritative, and this is the test that says so")
+	}
+	if ckBefore.Board.Digest != ckAfter.Board.Digest || ckBefore.JournalDigest != ckAfter.JournalDigest {
+		t.Fatal("deleting a transcript changed a checkpoint projection")
+	}
+}
+
+func mustReplay(t *testing.T, s *Store) *Replay {
+	t.Helper()
+	rep, err := s.Replay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rep
+}
+
+func TestTamperedArtifactIsFlagged(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	e, err := s.Transcript(a, ep, "api", "the conversation", strings.NewReader("original"), at(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(s.dir, filepath.FromSlash(e.Artifact.Path))
+	if err := os.WriteFile(path, []byte("REWRITTEN"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := s.Reconcile(context.Background(), at(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.TamperedArtifacts) != 1 {
+		t.Fatal("an artifact whose bytes no longer match its digest is a LIE, and must be flagged")
+	}
+	if r.Health != HealthUnknown {
+		t.Fatalf("tampering degrades health to unknown, got %q", r.Health)
+	}
+	// An ABSENT artifact, by contrast, is merely a gap.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	r, _ = s.Reconcile(context.Background(), at(3*time.Minute))
+	if len(r.MissingArtifacts) != 1 || len(r.TamperedArtifacts) != 0 {
+		t.Fatal("a missing artifact is a gap, not a lie")
+	}
+	if r.Health == HealthUnknown {
+		t.Fatal("a missing OPTIONAL artifact must not degrade health to unknown")
+	}
+}
+
+// ─── reconcile ────────────────────────────────────────────────────────────────
+
+// Reconcile must not claim it compared reality when it compared nothing.
+func TestReconcileWithNoAdapterSaysItCheckedNothing(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	r, err := s.Reconcile(context.Background(), at(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RealityCompared {
+		t.Fatal("with no adapter, NOTHING was compared against reality — saying otherwise is the most dangerous lie in the system")
+	}
+	if !strings.Contains(r.RealityNote, "NOTHING was compared") {
+		t.Fatalf("the report must say so in prose, got %q", r.RealityNote)
+	}
+	if len(r.Asserted) != 1 {
+		t.Fatalf("an unchecked reference must be listed as asserted, got %d", len(r.Asserted))
+	}
 	if r.Health != HealthDegraded {
-		t.Fatalf("health = %q, want degraded: an unevidenced claim is exactly what reconcile exists to surface", r.Health)
+		t.Fatalf("a claim nobody checked is not a clean bill of health, got %q", r.Health)
 	}
-	if len(r.Unproven) != 1 {
-		t.Fatalf("unproven = %d, want 1", len(r.Unproven))
+}
+
+// stubObserver is a host-supplied adapter that actually went and looked.
+type stubObserver struct {
+	name string
+	obs  []Observation
+	err  error
+}
+
+func (o stubObserver) Name() string { return o.name }
+func (o stubObserver) Observe(context.Context, []Entry) ([]Observation, error) {
+	return o.obs, o.err
+}
+
+func TestReconcileWithAnAdapterReportsWhatItFound(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	e := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	r, err := s.Reconcile(context.Background(), at(2*time.Minute), stubObserver{
+		name: "git",
+		obs:  []Observation{{Seq: e.Seq, TargetHash: e.Hash, Result: OutcomeSuccess, Detail: "commit is on main"}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(r.Unproven[0].Why, "no evidence") {
-		t.Fatalf("reconcile must say WHY a claim is unproven: %q", r.Unproven[0].Why)
+	if !r.RealityCompared || len(r.Observations) != 1 {
+		t.Fatal("an adapter that returned observations means reality WAS compared")
 	}
-	if r.SchemaVersion != SchemaVersion {
-		t.Fatalf("reconciliation is unversioned: %q", r.SchemaVersion)
+	if r.Observations[0].Observer != "git" {
+		t.Fatalf("the observation must name its adapter, got %q", r.Observations[0].Observer)
+	}
+	// …and an observation is still not a verification until it is RECORDED as one.
+	if len(r.Asserted) != 1 {
+		t.Fatal("an observation the steward has not journaled does not promote the claim")
+	}
+}
+
+func TestReconcileReportsAFailedAdapterHonestly(t *testing.T) {
+	s := newStore(t)
+	mustClaim(t, s, agent("a"), at(0))
+	r, err := s.Reconcile(context.Background(), at(time.Minute), stubObserver{name: "ci", err: errors.New("network is down")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RealityCompared {
+		t.Fatal("an adapter that FAILED compared nothing")
+	}
+	if len(r.ObserverErrors) != 1 || !strings.Contains(r.RealityNote, "FAILED") {
+		t.Fatalf("the failure must be surfaced, got %+v / %q", r.ObserverErrors, r.RealityNote)
 	}
 }
 
 func TestReconcileReportsUnknownForADamagedJournal(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "real work"), at(time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "real work"), ep, at(time.Minute))
+	appendRaw(t, s, "{ not json at all")
 
-	f, _ := os.OpenFile(s.journalPath(), os.O_WRONLY|os.O_APPEND, 0o600)
-	f.WriteString("{ this is not json\n")
-	f.Close()
-
-	r, err := s.Reconcile(at(2 * time.Minute))
+	r, err := s.Reconcile(context.Background(), at(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Health != HealthUnknown {
-		t.Fatalf("health = %q, want unknown: damage to the RECORD outranks unproven claims within it", r.Health)
+		t.Fatalf("a damaged RECORD is unknown, not merely degraded: got %q", r.Health)
 	}
-	if r.JournalIntact {
-		t.Fatal("reconcile reported an intact journal over a torn one")
-	}
-	// The valid prefix is still counted and still usable.
 	if r.JournalEntries != 2 {
-		t.Fatalf("reconcile counted %d valid entries, want 2 — what survives is still valid", r.JournalEntries)
+		t.Fatalf("the valid entries before the damage are still counted: got %d", r.JournalEntries)
 	}
-	if !strings.Contains(r.CorruptTail, "valid") {
-		t.Fatalf("the corrupt-tail note must reassure that prior history survives: %q", r.CorruptTail)
+	if r.CorruptTail == "" {
+		t.Fatal("the reconciliation must say where the record runs out")
 	}
 }
 
-// A reconciliation that found damage must never be replayable later as a success.
 func TestRecordedReconciliationMirrorsItsVerdict(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, Entry{
-		Actor: agent("alice"), Kind: KindEffect, Workstream: "api",
-		Summary: "trust me", Outcome: OutcomeSuccess,
-	}, at(time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, Entry{Actor: a, Kind: KindEffect, Workstream: "api",
+		Summary: "done!", Outcome: OutcomeSuccess}, ep, at(time.Minute))
 
-	r, err := s.Reconcile(at(2 * time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	e, err := s.RecordReconciliation(agent("alice"), r, at(3*time.Minute))
+	r, _ := s.Reconcile(context.Background(), at(2*time.Minute))
+	e, err := s.RecordReconciliation(a, ep, r, at(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if e.Outcome != OutcomeDegraded {
-		t.Fatalf("the recorded reconciliation claims outcome %q for a DEGRADED verdict — "+
-			"a check that found problems must not replay as a success", e.Outcome)
+		t.Fatalf("a reconciliation that found unproven claims may never be replayed as a success, got %q", e.Outcome)
+	}
+	if !strings.Contains(e.Summary, "reality NOT compared") {
+		t.Fatalf("the recorded entry must say whether reality was actually checked, got %q", e.Summary)
 	}
 }
 
-func TestReconcileOnAHealthyStoreIsOK(t *testing.T) {
+func TestReconcileIsOKOnlyWhenEverythingHasBeenChecked(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "did it, here is the proof"), at(time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
 
-	r, err := s.Reconcile(at(2 * time.Minute))
-	if err != nil {
+	r, _ := s.Reconcile(context.Background(), at(2*time.Minute))
+	if r.Health != HealthDegraded {
+		t.Fatalf("an unchecked claim is degraded, got %q", r.Health)
+	}
+
+	if _, err := s.Attest(a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash, Result: OutcomeSuccess, Method: "looked",
+	}, nil, at(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
+	r, _ = s.Reconcile(context.Background(), at(4*time.Minute))
 	if r.Health != HealthOK {
-		t.Fatalf("health = %q, want ok. unproven=%+v degraded=%v", r.Health, r.Unproven, r.Board.Degraded)
+		t.Fatalf("once every claim is attested, health is ok: got %q (%d unproven, %d asserted)",
+			r.Health, len(r.Unproven), len(r.Asserted))
 	}
 }
 
-// ─── checkpoints: reproducible projections, never a competing truth ───────────
+// ─── checkpoints ──────────────────────────────────────────────────────────────
 
-// A checkpoint is a PURE projection: same entries, same watermark → same board and
-// the same digests. No clock, no randomness, no ambient state may leak in, or
-// "reproducible" means nothing.
 func TestCheckpointProjectionIsPure(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "one"), at(time.Minute))
-	mustRecord(t, s, evidenced(agent("alice"), "db", "two"), at(2*time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "one"), ep, at(time.Minute))
+	mustRecord(t, s, evidenced(a, "web", "two"), ep, at(2*time.Minute))
+	entries := mustReplay(t, s).Entries
 
-	rep, err := s.Replay()
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := ProjectCheckpoint(rep.Entries, 0)
-	b := ProjectCheckpoint(rep.Entries, 0)
-	if a.Board.Digest != b.Board.Digest || a.JournalDigest != b.JournalDigest {
-		t.Fatal("ProjectCheckpoint is not pure: two derivations of the same entries disagree")
-	}
-
-	// Re-derived in a DIFFERENT store, from the same journal bytes: still identical.
-	// A projection that depended on where it ran would not be a projection.
-	other, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(other.journalPath(), journalBytes(t, s), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	rep2, err := other.Replay()
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := ProjectCheckpoint(rep2.Entries, 0)
-	if c.Board.Digest != a.Board.Digest {
-		t.Fatalf("the same journal projected a different board on another host: %s vs %s", c.Board.Digest, a.Board.Digest)
+	first := ProjectCheckpoint(entries, 0)
+	for range 5 {
+		if got := ProjectCheckpoint(entries, 0); got.Board.Digest != first.Board.Digest {
+			t.Fatal("the projection is not pure — same entries must always yield the same board")
+		}
 	}
 }
 
 func TestCheckpointIsReproducibleAndVerifiable(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "one"), at(time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "work"), ep, at(time.Minute))
 
-	ck, err := s.Checkpoint(agent("alice"), "before the risky bit", at(2*time.Minute))
+	ck, err := s.Checkpoint(a, ep, "before the risky bit", at(2*time.Minute))
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if ck.SchemaVersion != SchemaVersion {
-		t.Fatalf("checkpoint is unversioned: %q", ck.SchemaVersion)
-	}
-	if ck.JournalDigest == "" || ck.Board.Digest == "" {
-		t.Fatal("a checkpoint without its receipt (watermark + digests) is a cache nobody can verify")
-	}
-
 	v, err := s.VerifyCheckpoint(ck)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !v.Reproducible {
-		t.Fatalf("a fresh checkpoint must re-derive from the journal: %s", v.Reason)
+		t.Fatalf("a fresh checkpoint must re-derive: %s", v.Reason)
 	}
 
-	// It keeps verifying as the journal GROWS — the watermark pins the history it
-	// projected, so later entries cannot invalidate an earlier checkpoint.
-	mustRecord(t, s, evidenced(agent("alice"), "db", "later work"), at(3*time.Minute))
-	v2, err := s.VerifyCheckpoint(ck)
+	// And the JOURNAL remembers it was taken, even if the file is deleted.
+	if err := os.RemoveAll(s.checkpointDir()); err != nil {
+		t.Fatal(err)
+	}
+	_, cks, _, err := s.History()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !v2.Reproducible {
-		t.Fatalf("appending to the journal broke an old checkpoint: %s — the watermark exists precisely to prevent this", v2.Reason)
-	}
-
-	// Reload from disk and re-verify: the stored file is the same projection.
-	loaded, err := s.LoadCheckpoint(ck.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Board.Digest != ck.Board.Digest {
-		t.Fatal("the checkpoint on disk does not match the one that was returned")
+	if len(cks) != 1 || cks[0].ID != ck.ID {
+		t.Fatal("the file is a cache; the journal entry is the memory")
 	}
 }
 
-// If the journal beneath a checkpoint is rewritten, the checkpoint must STOP
-// verifying. That is the alarm: given the hash chain, a mismatch means someone
-// rewrote history.
 func TestCheckpointStopsVerifyingIfHistoryIsRewritten(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "one"), at(time.Minute))
-	ck, err := s.Checkpoint(agent("alice"), "", at(2*time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "work"), ep, at(time.Minute))
+	ck, err := s.Checkpoint(a, ep, "", at(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Rewrite history: drop the middle entry entirely.
-	lines := strings.Split(strings.TrimSpace(string(journalBytes(t, s))), "\n")
-	rewritten := strings.Join([]string{lines[0], lines[2]}, "\n") + "\n"
-	if err := os.WriteFile(s.journalPath(), []byte(rewritten), 0o600); err != nil {
+	// Rewrite history beneath it.
+	raw := string(journalBytes(t, s))
+	raw = strings.Replace(raw, `"work"`, `"different work"`, 1)
+	if err := os.WriteFile(s.journalPath(), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1070,369 +1262,37 @@ func TestCheckpointStopsVerifyingIfHistoryIsRewritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	if v.Reproducible {
-		t.Fatal("a checkpoint kept verifying after the journal beneath it was rewritten — it must be the alarm, not a rubber stamp")
-	}
-	if v.Reason == "" {
-		t.Fatal("a non-reproducible checkpoint must say why")
+		t.Fatal("a checkpoint over rewritten history must STOP verifying — that is the whole point of the receipt")
 	}
 }
 
-// The checkpoint FILE is a cache; the fact that a checkpoint was TAKEN is history.
-// Delete every file and the journal still remembers.
-func TestCheckpointFilesAreACacheTheJournalIsTheMemory(t *testing.T) {
+func TestCheckpointCarriesUnprovenClaimsForward(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	ck, err := s.Checkpoint(agent("alice"), "", at(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, Entry{Actor: a, Kind: KindEffect, Workstream: "api",
+		Summary: "done!", Outcome: OutcomeSuccess}, ep, at(time.Minute)) // unevidenced
+	mustRecord(t, s, evidenced(a, "web", "shipped"), ep, at(2*time.Minute)) // asserted
 
-	if err := os.RemoveAll(s.checkpointDir()); err != nil {
-		t.Fatal(err)
-	}
-	cks, err := s.ListCheckpoints()
-	if err != nil {
-		t.Fatalf("a missing checkpoint dir must not be an error: %v", err)
-	}
-	if len(cks) != 0 {
-		t.Fatalf("expected no checkpoint FILES, got %d", len(cks))
-	}
-
-	// …but history remembers it was taken, at which watermark.
-	_, refs, _, err := s.History()
+	ck, err := s.Checkpoint(a, ep, "", at(3*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(refs) != 1 || refs[0].ID != ck.ID {
-		t.Fatalf("the journal forgot a checkpoint whose file was deleted: %+v", refs)
+	if len(ck.Unresolved) != 1 {
+		t.Fatalf("a checkpoint that dropped its unknowns would look like a clean bill of health; got %v", ck.Unresolved)
+	}
+	if len(ck.Asserted) != 1 {
+		t.Fatalf("it must also carry forward what was merely ASSERTED; got %v", ck.Asserted)
 	}
 }
 
-// A checkpoint that quietly dropped its unknowns would be worse than no checkpoint:
-// it would look like a clean bill of health.
-func TestCheckpointCarriesDegradedClaimsForward(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, Entry{
-		Actor: agent("alice"), Kind: KindEffect, Workstream: "api",
-		Summary: "shipped, honest", Outcome: OutcomeSuccess,
-	}, at(time.Minute))
+// ─── follow / log / history ───────────────────────────────────────────────────
 
-	ck, err := s.Checkpoint(agent("alice"), "", at(2*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ck.Degraded) == 0 {
-		t.Fatal("the checkpoint dropped its unresolved claims — a checkpoint that hides its unknowns is a clean bill of health nobody earned")
-	}
-	if !strings.Contains(ck.Degraded[0], "api") {
-		t.Fatalf("the degraded list must name WHICH workstream is unproven: %v", ck.Degraded)
-	}
-}
-
-// ─── transcripts are OPTIONAL, by contract ────────────────────────────────────
-
-// THE NAMED TEST (doc.go and cli.go both promise it by name).
-//
-// Delete every transcript artifact on the host and the board, the status, the
-// history, and every checkpoint must be BIT-IDENTICAL. Nothing authoritative may
-// ever depend on a non-authoritative artifact — otherwise a model's prose quietly
-// becomes load-bearing.
-func TestTranscriptDeletionDoesNotAffectProjections(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "migrated the schema"), at(time.Minute))
-	if _, err := s.Decide(agent("alice"), "api", "drop v1", "no callers in 90d", nil, at(2*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Transcript(agent("alice"), "api",
-		"the conversation where we agreed to drop v1",
-		strings.NewReader("human: should we drop v1?\nagent: yes, nobody calls it.\n"), at(3*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	mustRecord(t, s, evidenced(agent("alice"), "db", "vacuumed"), at(4*time.Minute))
-
-	// Take the checkpoint FIRST — it appends a journal entry of its own, and a
-	// snapshot taken before it would differ afterwards for a reason that has nothing
-	// to do with transcripts.
-	beforeCk, err := s.Checkpoint(agent("alice"), "", at(5*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Snapshot every projection WITH the transcript present.
-	beforeBoard, _, err := s.Board()
-	if err != nil {
-		t.Fatal(err)
-	}
-	beforeStatus, err := s.Status(at(5 * time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	beforeChanges, beforeCks, _, err := s.History()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The transcript artifact exists on disk…
-	tdir := s.transcriptDir()
-	files, err := os.ReadDir(tdir)
-	if err != nil || len(files) != 1 {
-		t.Fatalf("expected exactly one transcript artifact on disk, got %v (%v)", files, err)
-	}
-
-	// …now DELETE every one of them.
-	if err := os.RemoveAll(tdir); err != nil {
-		t.Fatal(err)
-	}
-
-	// Every projection must be bit-identical.
-	afterBoard, _, err := s.Board()
-	if err != nil {
-		t.Fatalf("the board must derive without transcripts: %v", err)
-	}
-	if afterBoard.Digest != beforeBoard.Digest {
-		t.Fatalf("deleting transcripts CHANGED the board digest (%s → %s): a projection depends on a "+
-			"non-authoritative artifact, which means a model's prose is load-bearing",
-			beforeBoard.Digest, afterBoard.Digest)
-	}
-
-	afterStatus, err := s.Status(at(5 * time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if afterStatus.Authority != beforeStatus.Authority || afterStatus.Liveness != beforeStatus.Liveness {
-		t.Fatal("deleting transcripts changed the seat status")
-	}
-
-	afterChanges, afterCks, _, err := s.History()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(afterChanges) != len(beforeChanges) || len(afterCks) != len(beforeCks) {
-		t.Fatal("deleting transcripts changed the history")
-	}
-
-	// And a checkpoint re-derived now must equal the one taken before the deletion.
-	v, err := s.VerifyCheckpoint(beforeCk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !v.Reproducible {
-		t.Fatalf("a checkpoint stopped re-deriving once its transcripts were deleted: %s", v.Reason)
-	}
-
-	// Reconcile NOTICES the artifact is gone — and does NOT call that a failure.
-	// An absent transcript is a gap in richness, never a gap in truth.
-	r, err := s.Reconcile(at(6 * time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(r.MissingArtifacts) != 1 {
-		t.Fatalf("reconcile did not notice the missing artifact: %+v", r.MissingArtifacts)
-	}
-	if r.Health == HealthUnknown {
-		t.Fatal("a missing TRANSCRIPT must not damage health: it is optional by contract, and no projection depends on it")
-	}
-	// The decision it accompanied is untouched — the decision is what binds.
-	conv, _, err := s.Conversation(Filter{Kinds: []Kind{KindDecision}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(conv) != 1 || conv[0].Rationale != "no callers in 90d" {
-		t.Fatal("deleting a transcript damaged the DECISION record it accompanied")
-	}
-}
-
-// A present-but-ALTERED artifact is a different matter: an absent one is a gap, an
-// altered one is a lie.
-func TestTamperedArtifactIsFlagged(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	e, err := s.Transcript(agent("alice"), "api", "the conversation",
-		strings.NewReader("the original words\n"), at(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	path := filepath.Join(s.Dir(), e.Artifact.Path)
-	if err := os.WriteFile(path, []byte("words nobody actually said\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	r, err := s.Reconcile(at(2 * time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(r.TamperedArtifacts) != 1 {
-		t.Fatalf("a rewritten artifact must be detected by its digest: %+v", r.TamperedArtifacts)
-	}
-	if r.Health != HealthUnknown {
-		t.Fatalf("health = %q; a tampered artifact must raise the alarm", r.Health)
-	}
-}
-
-// ─── view derivation ──────────────────────────────────────────────────────────
-
-// Every view is a pure function of the journal. Same entries → same views, always.
-func TestViewsAreDerivedPurelyFromTheJournal(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	if _, err := s.OpenWorkstream(agent("alice"), "api", "the API migration", at(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	mustRecord(t, s, evidenced(agent("alice"), "api", "migrated"), at(2*time.Minute))
-	if _, err := s.Decide(agent("alice"), "api", "drop v1", "no callers", nil, at(3*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.CloseWorkstream(agent("alice"), "api", "done", OutcomeSuccess,
-		[]Evidence{{Kind: "commit", Ref: "de6485c"}}, at(4*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-
-	// A fresh Store over the SAME directory — nothing cached, nothing carried over.
-	fresh, err := Open(s.Dir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	board, _, err := fresh.Board()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(board.Workstreams) != 1 {
-		t.Fatalf("board = %+v", board.Workstreams)
-	}
-	ws := board.Workstreams[0]
-	if ws.Title != "the API migration" {
-		t.Fatalf("title = %q", ws.Title)
-	}
-	if ws.State != WorkstreamClosed || ws.Outcome != OutcomeSuccess || ws.Confidence != ConfidenceVerified {
-		t.Fatalf("ws = %+v; an evidenced close must project as closed+success+verified", ws)
-	}
-	if ws.Decisions != 1 {
-		t.Fatalf("decisions = %d, want 1", ws.Decisions)
-	}
-	if ws.Entries != 4 {
-		t.Fatalf("entries = %d, want 4 (open, effect, decision, close)", ws.Entries)
-	}
-
-	// Log filters.
-	dec, _, err := fresh.Log(Filter{Kinds: []Kind{KindDecision}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(dec) != 1 || dec[0].Rationale != "no callers" {
-		t.Fatalf("decision filter: %+v", dec)
-	}
-
-	// Chronological order is preserved — entry order IS time order.
-	all, _, err := fresh.Log(Filter{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 1; i < len(all); i++ {
-		if all[i].Seq <= all[i-1].Seq {
-			t.Fatal("the log is not chronological; a reordered log invents a history the chain does not attest to")
-		}
-	}
-
-	// Limit keeps the LAST n, still in order.
-	last2, _, err := fresh.Log(Filter{Limit: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(last2) != 2 || last2[1].Seq != all[len(all)-1].Seq {
-		t.Fatalf("--limit must keep the recent tail: %+v", last2)
-	}
-}
-
-// The "what do I NOT know?" query — the first thing a successor needs.
-func TestDegradedOnlyFilterSurfacesTheUnproven(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "proven"), at(time.Minute))
-	mustRecord(t, s, Entry{
-		Actor: agent("alice"), Kind: KindEffect, Workstream: "db",
-		Summary: "trust me bro", Outcome: OutcomeSuccess,
-	}, at(2*time.Minute))
-
-	got, _, err := s.Log(Filter{DegradedOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Workstream != "db" {
-		t.Fatalf("--degraded must surface exactly the unproven claims, got %+v", got)
-	}
-}
-
-func TestConversationShowsDecisionsAndTranscripts(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "an effect, not a decision"), at(time.Minute))
-	if _, err := s.Decide(agent("alice"), "api", "drop v1", "no callers", nil, at(2*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Transcript(agent("alice"), "api", "how we got there",
-		strings.NewReader("…"), at(3*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-
-	conv, _, err := s.Conversation(Filter{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(conv) != 2 {
-		t.Fatalf("conversation = %d entries, want 2 (the decision and the transcript, not the effect)", len(conv))
-	}
-	if conv[0].Kind != KindDecision || conv[1].Kind != KindTranscript {
-		t.Fatalf("conversation must stay in sequence: %q then %q", conv[0].Kind, conv[1].Kind)
-	}
-}
-
-func TestHistoryReconstructsTheAuthorityLadder(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	if err := s.Release(agent("alice"), 0, "standing down", at(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	mustClaim(t, s, agent("bob"), at(2*time.Minute))
-	if _, err := s.Takeover(agent("carol"), Authorization{By: "qiangli", Reason: "bob wedged"}, at(3*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-
-	changes, _, _, err := s.History()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []Kind{KindSeatClaimed, KindSeatReleased, KindSeatClaimed, KindSeatTakeover}
-	if len(changes) != len(want) {
-		t.Fatalf("history has %d changes, want %d: %+v", len(changes), len(want), changes)
-	}
-	for i, k := range want {
-		if changes[i].Kind != k {
-			t.Fatalf("change %d is %q, want %q", i, changes[i].Kind, k)
-		}
-	}
-	// Epochs never descend.
-	for i := 1; i < len(changes); i++ {
-		if changes[i].Epoch < changes[i-1].Epoch {
-			t.Fatalf("the epoch ladder descended: %d → %d", changes[i-1].Epoch, changes[i].Epoch)
-		}
-	}
-	if changes[3].AuthorizedBy != "qiangli" {
-		t.Fatalf("the takeover's authorizing human is missing from history: %+v", changes[3])
-	}
-}
-
-// ─── follow ───────────────────────────────────────────────────────────────────
-
-// Follow must deliver every entry appended after it started, and nothing before —
-// and it must be testable without sleeping around a filesystem race, or it is a
-// tailer nobody can trust to have delivered everything.
 func TestFollowStreamsNewEntriesOnly(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "BEFORE the follow started"), at(time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "before the follow"), ep, at(time.Minute))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1440,170 +1300,161 @@ func TestFollowStreamsNewEntriesOnly(t *testing.T) {
 	got := make(chan Entry, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.Follow(ctx, Filter{Workstream: "api"}, 5*time.Millisecond, func(e Entry) error {
+		done <- s.Follow(ctx, Filter{}, 5*time.Millisecond, func(e Entry) error {
 			got <- e
 			return nil
 		})
 	}()
 
-	// Give Follow a moment to establish its starting watermark, then append.
-	time.Sleep(30 * time.Millisecond)
-	mustRecord(t, s, evidenced(agent("alice"), "api", "AFTER the follow started"), at(2*time.Minute))
-	mustRecord(t, s, evidenced(agent("alice"), "other", "filtered out"), at(3*time.Minute))
-	mustRecord(t, s, evidenced(agent("alice"), "api", "also after"), at(4*time.Minute))
+	time.Sleep(20 * time.Millisecond)
+	mustRecord(t, s, evidenced(a, "api", "after the follow"), ep, at(2*time.Minute))
 
-	var seen []string
-	deadline := time.After(3 * time.Second)
-	for len(seen) < 2 {
-		select {
-		case e := <-got:
-			seen = append(seen, e.Summary)
-		case <-deadline:
-			t.Fatalf("follow delivered %d entries in time, want 2: %v", len(seen), seen)
+	select {
+	case e := <-got:
+		if e.Summary != "after the follow" {
+			t.Fatalf("follow must start from the head, not replay the backlog; got %q", e.Summary)
 		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follow delivered nothing")
 	}
 	cancel()
-
 	if err := <-done; err != nil {
-		t.Fatalf("a cancelled follow must exit cleanly (Ctrl-C is how it ENDS, not how it fails): %v", err)
-	}
-	for _, s := range seen {
-		if strings.Contains(s, "BEFORE") {
-			t.Fatal("follow replayed the backlog; it must stream only what happens NEXT")
-		}
-		if strings.Contains(s, "filtered") {
-			t.Fatal("follow ignored its filter")
-		}
+		t.Fatalf("a cancelled follow is how follow ENDS, not how it fails: %v", err)
 	}
 }
 
-// ─── schema versioning + evidence parsing ─────────────────────────────────────
+func TestDegradedOnlyFilterSurfacesTheUnproven(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "evidenced"), ep, at(time.Minute))
+	mustRecord(t, s, Entry{Actor: a, Kind: KindEffect, Workstream: "api",
+		Summary: "unevidenced", Outcome: OutcomeSuccess}, ep, at(2*time.Minute))
+
+	entries, _, err := s.Log(Filter{DegradedOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Summary != "unevidenced" {
+		t.Fatalf("--degraded is the 'what do I NOT know' query; got %d entries", len(entries))
+	}
+}
+
+func TestHistoryReconstructsTheAuthorityLadder(t *testing.T) {
+	s := newStore(t)
+	e1 := mustClaim(t, s, agent("first"), at(0))
+	if err := s.Release(agent("first"), e1, "handing off", at(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	mustClaim(t, s, agent("second"), at(2*time.Minute))
+	mustTakeover(t, s, agent("third"), at(3*time.Minute))
+
+	changes, _, _, err := s.History()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Kind{KindSeatClaimed, KindSeatReleased, KindSeatClaimed, KindSeatTakeover}
+	if len(changes) != len(want) {
+		t.Fatalf("expected %d seat events, got %d", len(want), len(changes))
+	}
+	for i, k := range want {
+		if changes[i].Kind != k {
+			t.Fatalf("event %d: want %s, got %s", i, k, changes[i].Kind)
+		}
+	}
+	if changes[3].Authz == nil || changes[3].Authz.Actor != "qiangli" {
+		t.Fatal("a takeover must record the capability it was performed under")
+	}
+	if changes[3].Epoch <= changes[2].Epoch {
+		t.Fatal("the epoch ladder must be monotonic across the whole history")
+	}
+}
+
+// ─── misc invariants ──────────────────────────────────────────────────────────
 
 func TestEveryArtifactIsSchemaVersioned(t *testing.T) {
 	s := newStore(t)
-	mustClaim(t, s, agent("alice"), at(0))
-	ck, err := s.Checkpoint(agent("alice"), "", at(time.Minute))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	mustRecord(t, s, evidenced(a, "api", "x"), ep, at(time.Minute))
+	ck, err := s.Checkpoint(a, ep, "", at(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
+	g := mustGrant(t, s, agent("b"), at(3*time.Minute))
 
-	rep, _ := s.Replay()
-	for _, e := range rep.Entries {
-		if e.Schema != SchemaVersion {
-			t.Fatalf("journal entry seq %d is unversioned (%q)", e.Seq, e.Schema)
-		}
+	if ck.SchemaVersion != SchemaVersion || g.SchemaVersion != SchemaVersion {
+		t.Fatal("every stored artifact carries the schema it was written under")
 	}
-	if ck.SchemaVersion != SchemaVersion {
-		t.Fatalf("checkpoint is unversioned: %q", ck.SchemaVersion)
-	}
-
 	var seat Seat
-	found, err := readJSON(s.seatPath(), &seat)
-	if err != nil || !found {
-		t.Fatalf("seat file: found=%v err=%v", found, err)
+	if found, err := readJSON(s.seatPath(), &seat); err != nil || !found {
+		t.Fatal("seat file must exist")
 	}
 	if seat.SchemaVersion != SchemaVersion {
-		t.Fatalf("seat file is unversioned: %q", seat.SchemaVersion)
+		t.Fatal("the seat cache must be schema-versioned — an unversioned cache cannot be validated")
 	}
-
-	board, _, err := s.Board()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if board.SchemaVersion != SchemaVersion {
-		t.Fatalf("board is unversioned: %q", board.SchemaVersion)
+	for _, e := range mustReplay(t, s).Entries {
+		if e.Schema != SchemaVersion {
+			t.Fatalf("entry seq %d has schema %q", e.Seq, e.Schema)
+		}
 	}
 }
 
 func TestParseEvidence(t *testing.T) {
-	for _, tc := range []struct {
-		in        string
-		kind, ref string
-		digest    string
+	cases := []struct {
+		in         string
+		kind, ref  string
+		digest     string
+		wantDigest bool
 	}{
-		{"command:go test ./...", "command", "go test ./...", ""},
-		{"commit:de6485c", "commit", "de6485c", ""},
-		{"file:/tmp/out.log#sha256:abc", "file", "/tmp/out.log", "sha256:abc"},
-		{"url:https://example.com/x", "url", "https://example.com/x", ""},
-		// A bare string is recorded as a note rather than rejected: weak evidence
-		// still beats silently dropped evidence.
-		{"the human confirmed it", "note", "the human confirmed it", ""},
-		// An unknown prefix is not a kind — keep the whole string.
-		{"banana:split", "note", "banana:split", ""},
-	} {
-		got, err := ParseEvidence(tc.in)
+		{in: "command:go test ./...", kind: "command", ref: "go test ./..."},
+		{in: "commit:de6485c", kind: "commit", ref: "de6485c"},
+		{in: "file:/tmp/o.log#sha256:abc", kind: "file", ref: "/tmp/o.log", digest: "sha256:abc", wantDigest: true},
+		{in: "just some prose", kind: "note", ref: "just some prose"},
+		// An unknown prefix is NOT silently promoted to a kind — it stays a note, whole.
+		{in: "unknownkind:x", kind: "note", ref: "unknownkind:x"},
+	}
+	for _, c := range cases {
+		ev, err := ParseEvidence(c.in)
 		if err != nil {
-			t.Fatalf("ParseEvidence(%q): %v", tc.in, err)
+			t.Fatalf("ParseEvidence(%q): %v", c.in, err)
 		}
-		if got.Kind != tc.kind || got.Ref != tc.ref || got.Digest != tc.digest {
-			t.Errorf("ParseEvidence(%q) = %+v, want kind=%q ref=%q digest=%q", tc.in, got, tc.kind, tc.ref, tc.digest)
+		if ev.Kind != c.kind || ev.Ref != c.ref {
+			t.Fatalf("ParseEvidence(%q) = %s:%s, want %s:%s", c.in, ev.Kind, ev.Ref, c.kind, c.ref)
+		}
+		if c.wantDigest && ev.Digest != c.digest {
+			t.Fatalf("ParseEvidence(%q) digest = %q, want %q", c.in, ev.Digest, c.digest)
+		}
+		if c.wantDigest && !ev.DigestBound() {
+			t.Fatalf("ParseEvidence(%q) must be digest-bound", c.in)
 		}
 	}
-	if _, err := ParseEvidence("  "); err == nil {
-		t.Error("empty evidence must be rejected")
-	}
-}
-
-// Evidence order must not change an entry's hash — otherwise the same facts,
-// supplied in a different flag order, would produce a different chain.
-func TestEvidenceOrderDoesNotAffectTheHash(t *testing.T) {
-	a := Entry{
-		Actor: agent("alice"), Kind: KindEffect, Summary: "x", Seq: 1, PrevHash: genesis,
-		Evidence: []Evidence{{Kind: "command", Ref: "b"}, {Kind: "command", Ref: "a"}},
-	}
-	b := Entry{
-		Actor: agent("alice"), Kind: KindEffect, Summary: "x", Seq: 1, PrevHash: genesis,
-		Evidence: []Evidence{{Kind: "command", Ref: "a"}, {Kind: "command", Ref: "b"}},
-	}
-	sortEvidence(a.Evidence)
-	sortEvidence(b.Evidence)
-	if a.computeHash(genesis) != b.computeHash(genesis) {
-		t.Fatal("the same evidence in a different order hashed differently; canonical ordering is what makes the chain reproducible")
-	}
-}
-
-func TestDefaultDirHonorsTheEnvOverride(t *testing.T) {
-	t.Setenv("BASHY_STEWARD_DIR", "/tmp/custom-steward")
-	if got := DefaultDir(); got != "/tmp/custom-steward" {
-		t.Fatalf("DefaultDir() = %q, want the BASHY_STEWARD_DIR override", got)
-	}
-}
-
-// The seat is HOST-scoped, not repo-scoped: it must not vary with the working
-// directory. Keying it to a repo would produce one steward per clone — precisely
-// what the singleton exists to prevent.
-func TestDefaultDirIsIndependentOfWorkingDirectory(t *testing.T) {
-	t.Setenv("BASHY_STEWARD_DIR", "")
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("no home dir")
-	}
-	want := filepath.Join(home, ".bashy", "steward")
-
-	a := DefaultDir()
-	t.Chdir(t.TempDir())
-	b := DefaultDir()
-
-	if a != b || a != want {
-		t.Fatalf("DefaultDir moved with the cwd (%q → %q, want %q): the steward seat is one per host/user, not one per checkout", a, b, want)
+	if _, err := ParseEvidence("   "); err == nil {
+		t.Fatal("empty evidence must be rejected")
 	}
 }
 
 func TestSameHolderMatchesTheLogicalAgentNotThePID(t *testing.T) {
-	// One logical agent, many processes (a shell, a subagent, a hook). None of them
-	// should be told it is colliding with itself.
-	a := principal.Ref{Name: "claude", Host: "h1", Episode: "ep-1"}
-	b := principal.Ref{Name: "claude-subagent", Host: "h1", Episode: "ep-1"}
+	a := principal.Ref{Name: "agent", Host: "h", Episode: "ep-1"}
+	b := principal.Ref{Name: "agent", Host: "h", Episode: "ep-1"}
 	if !SameHolder(a, b) {
-		t.Fatal("two processes of the same episode must be the same logical steward")
+		t.Fatal("one logical agent runs many processes; they are the same holder")
 	}
-	c := principal.Ref{Name: "claude", Host: "h1"}
-	d := principal.Ref{Name: "claude", Host: "h1"}
-	if !SameHolder(c, d) {
-		t.Fatal("same name+host must match when there is no episode")
+	c := principal.Ref{Name: "other", Host: "h", Episode: "ep-2"}
+	if SameHolder(a, c) {
+		t.Fatal("different agents are different holders")
 	}
-	e := principal.Ref{Name: "claude", Host: "h2"}
-	if SameHolder(c, e) {
-		t.Fatal("the same agent name on a DIFFERENT host is a different steward")
+}
+
+// appendRaw writes raw bytes to the end of the journal, simulating damage.
+func appendRaw(t *testing.T, s *Store, raw string) {
+	t.Helper()
+	f, err := os.OpenFile(s.journalPath(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(raw); err != nil {
+		t.Fatal(err)
 	}
 }

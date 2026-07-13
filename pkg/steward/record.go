@@ -4,12 +4,11 @@
 package steward
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/principal"
@@ -17,20 +16,10 @@ import (
 
 // Record appends an authoritative entry to the journal, FENCED against the seat.
 //
-// Three gates, in order, all under one lock:
-//
-//  1. The journal must be readable. A corrupt tail refuses the write (ErrCorruptTail)
-//     rather than forking the chain around the damage.
-//  2. The actor must hold the seat (ErrNotHolder). Authority is singular; a
-//     bystander does not get to write the host's authoritative record.
-//  3. The presented epoch must be the CURRENT epoch (ErrFenced). This is what stops
-//     a returning zombie steward — one that lapsed and was taken over — from
-//     interleaving its writes with the real one's.
-//
-// Pass epoch 0 to mean "whatever epoch I currently hold", which is what an
-// interactive caller wants; a long-running process that captured its epoch at
-// claim time should pass it explicitly, because that is the whole point of holding
-// a fencing token.
+// Every gate lives in one place (see authorize): the journal must be readable, the
+// seat must be held, a NONZERO epoch must be presented, that epoch must be the
+// current one, and the actor must be the holder. There is no "epoch 0 means whatever
+// I hold" — see ErrNoEpoch for why that shortcut was the hole.
 func (s *Store) Record(e Entry, epoch uint64, now time.Time) (Entry, error) {
 	now = mustUTC(now)
 	var out Entry
@@ -39,63 +28,28 @@ func (s *Store) Record(e Entry, epoch uint64, now time.Time) (Entry, error) {
 		if err != nil {
 			return err
 		}
-		if rep.Corrupt {
-			return &ErrCorruptTail{Line: rep.CorruptLine, Reason: rep.CorruptReason, ValidEntries: len(rep.Entries)}
-		}
-		auth := deriveAuthority(rep)
-		if auth.Vacant {
-			return &ErrNotHolder{Actor: e.Actor, Vacant: true}
-		}
-		// FENCING IS CHECKED ON THE TOKEN, BEFORE IDENTITY — and the order matters.
-		//
-		// The case this exists for is a steward that lapsed, was taken over, and came
-		// back still holding its old epoch. By then it is no longer the holder, so
-		// checking identity first would reject it as a mere bystander (ErrNotHolder)
-		// and never tell it the one thing it needs to know: your tenure ENDED, the
-		// world moved on, re-read the journal before you do anything else. Both errors
-		// refuse the write, so safety is identical — but only one of them explains a
-		// zombie to itself, and an agent that misreads "you are not the holder" as
-		// "I should just claim the seat again" will happily overwrite the steward that
-		// replaced it.
-		if epoch != 0 && epoch != auth.Epoch {
-			return &ErrFenced{Presented: epoch, Current: auth.Epoch, Holder: auth.Holder}
-		}
-		if !SameHolder(auth.Holder, e.Actor) {
-			return &ErrNotHolder{Actor: e.Actor, Holder: auth.Holder}
-		}
-		// Epoch 0 means "whatever I currently hold" — and by here, we ARE the holder.
-		e.Epoch = auth.Epoch
-
-		if e.Kind.SeatEvent() {
-			// Seat lifecycle mints its own epoch and must go through Claim / Takeover /
-			// Release, which know how to bump it. Letting a generic write forge one
-			// would make the fencing ladder climbable by anyone.
-			return fmt.Errorf("steward: %s is a seat lifecycle event — use claim/takeover/release, not record", e.Kind)
-		}
-
-		stored, err := appendEntry(s.journalPath(), rep, e, now)
+		stored, err := s.appendAuthorized(rep, e, epoch, now)
 		if err != nil {
 			return err
 		}
 		out = stored
 		// Writing to the journal IS a heartbeat: a steward actively recording is
 		// self-evidently alive, and making it prove that separately is busywork that
-		// only ever fails at the worst moment.
-		_ = s.writeSeat(auth, "", now)
-		return nil
+		// only ever fails at the worst moment. The authority here is the one the gate
+		// just verified, so this cannot refresh a tenure that has ended.
+		return s.writeSeat(deriveAuthority(rep), "", now)
 	})
 	return out, err
 }
 
-// Decide is the ergonomic front door for an explicit decision record: what was
-// decided, and WHY.
+// Decide is the front door for an explicit decision record: what was decided, and
+// WHY.
 //
 // A decision asserts INTENT, not effect, so it needs a rationale rather than
-// evidence — and it is authoritative on its own terms. This is the entry a
-// successor reads to understand not just what happened on this host, but what the
-// previous steward had concluded and was steering toward, which no amount of
-// effect-replay would recover.
-func (s *Store) Decide(actor principal.Ref, workstream, summary, rationale string, evidence []Evidence, now time.Time) (Entry, error) {
+// evidence. This is the entry a successor reads to understand not just what happened
+// on this host, but what the previous steward had concluded and was steering toward —
+// which no amount of effect-replay would ever recover.
+func (s *Store) Decide(actor principal.Ref, epoch uint64, workstream, summary, rationale string, evidence []Evidence, now time.Time) (Entry, error) {
 	return s.Record(Entry{
 		Actor:      actor,
 		Kind:       KindDecision,
@@ -103,69 +57,256 @@ func (s *Store) Decide(actor principal.Ref, workstream, summary, rationale strin
 		Summary:    summary,
 		Rationale:  rationale,
 		Evidence:   evidence,
-	}, 0, now)
+	}, epoch, now)
 }
 
-// Transcript stores an OPTIONAL, non-authoritative conversation artifact and
-// records a hash-linked pointer to it.
+// Attest records a VERIFICATION: somebody went and checked an earlier entry's claim,
+// and this is the durable attestation of what they found.
 //
-// The bytes go in transcripts/<digest>.txt and the entry carries the digest, so
-// the record is tamper-evident. Nothing in any projection reads the artifact —
-// delete the whole transcripts directory and every board, status, history, and
-// checkpoint on the host is bit-identical. That is a contract, not an accident,
-// and TestTranscriptDeletionDoesNotAffectProjections holds it to it.
+// This is the ONLY thing that promotes a claim to "verified" on the board. Evidence
+// on the original entry is a POINTER — "go look at commit de6485c", "I ran go test" —
+// and a pointer is not a check. An agent can attach a plausible reference to a claim
+// it never made true, and the reference will look exactly like one attached to a
+// claim that is. So the board never treats a reference as a verification, and this
+// entry is how the gap gets closed.
 //
-// Why bother storing it at all: a decision record says what was decided; a
-// transcript lets a human go back and see how the room got there. Useful, and
-// never load-bearing.
-func (s *Store) Transcript(actor principal.Ref, workstream, summary string, content io.Reader, now time.Time) (Entry, error) {
+// It binds to the target's HASH, not merely its seq: an attestation has to name the
+// exact bytes it vouched for, or it is an attestation of whatever ends up at that
+// sequence number.
+func (s *Store) Attest(actor principal.Ref, epoch uint64, v Verification, evidence []Evidence, now time.Time) (Entry, error) {
 	now = mustUTC(now)
-	b, err := io.ReadAll(content)
+	var out Entry
+	err := s.withLock(func() error {
+		rep, err := s.Replay()
+		if err != nil {
+			return err
+		}
+		target, ok := entryBySeq(rep.Entries, v.TargetSeq)
+		if !ok {
+			return fmt.Errorf("steward: cannot verify seq %d — no such entry in the journal", v.TargetSeq)
+		}
+		switch {
+		case v.TargetHash == "":
+			v.TargetHash = target.Hash
+		case v.TargetHash != target.Hash:
+			return fmt.Errorf("steward: refusing to verify seq %d — you attested to entry %s but seq %d is %s. "+
+				"An attestation names the exact bytes it vouched for; if the journal moved under you, re-read it",
+				v.TargetSeq, short8(v.TargetHash), v.TargetSeq, short8(target.Hash))
+		}
+		switch v.Result {
+		case OutcomeSuccess, OutcomeFailed, OutcomeUnknown:
+		default:
+			return fmt.Errorf("steward: a verification result is success, failed, or unknown — not %q", v.Result)
+		}
+		if strings.TrimSpace(v.Method) == "" {
+			return fmt.Errorf("steward: a verification must say HOW it checked (--method): " +
+				"an unexplained 'I verified it' is the same trust-me claim it is supposed to replace")
+		}
+
+		e := Entry{
+			Actor:      actor,
+			Kind:       KindVerification,
+			Workstream: target.Workstream,
+			Ref:        target.ID,
+			Summary: fmt.Sprintf("verified seq %d (%s): %s", v.TargetSeq, v.Result,
+				truncate(target.Summary, 60)),
+			Outcome:  v.Result,
+			Evidence: evidence,
+			Verifies: &v,
+		}
+		stored, err := s.appendAuthorized(rep, e, epoch, now)
+		if err != nil {
+			return err
+		}
+		out = stored
+		return s.writeSeat(deriveAuthority(rep), "", now)
+	})
+	return out, err
+}
+
+func entryBySeq(entries []Entry, seq uint64) (Entry, bool) {
+	for _, e := range entries {
+		if e.Seq == seq {
+			return e, true
+		}
+	}
+	return Entry{}, false
+}
+
+// Transcript stores an OPTIONAL, non-authoritative conversation artifact and records
+// a hash-linked pointer to it.
+//
+// The order of operations here is the whole point, and an earlier revision had it
+// backwards. It:
+//
+//  1. CHECKS AUTHORITY FIRST. A bystander does not get to write megabytes into the
+//     steward's store and only then be told they may not journal it. The pre-check is
+//     advisory (the real gate runs under the lock at append time) but it is what keeps
+//     an unauthorized caller from touching the disk at all.
+//  2. BOUNDS THE READ. The content comes from an agent-supplied stream. An unbounded
+//     io.ReadAll on it is a way to fill the human's disk with bytes no projection will
+//     ever look at.
+//  3. CLEANS UP IF THE JOURNAL REFUSES. An artifact with no entry pointing at it is
+//     litter — and worse, it is litter that looks like evidence. If we created the file
+//     and the append then fails, the file goes.
+//
+// Nothing in any projection reads the artifact: delete the whole transcripts
+// directory and every board, status, history, and checkpoint on the host is
+// bit-identical (TestTranscriptDeletionDoesNotAffectProjections). A decision record
+// says what was decided; a transcript lets a human go back and see how the room got
+// there. Useful, and never load-bearing.
+func (s *Store) Transcript(actor principal.Ref, epoch uint64, workstream, summary string, content io.Reader, now time.Time) (Entry, error) {
+	now = mustUTC(now)
+
+	// (1) Authority before bytes.
+	rep, err := s.Replay()
 	if err != nil {
 		return Entry{}, err
 	}
-	sum := sha256.Sum256(b)
-	digest := "sha256:" + hex.EncodeToString(sum[:])
-	name := hex.EncodeToString(sum[:]) + ".txt"
-
-	if err := os.MkdirAll(s.transcriptDir(), 0o700); err != nil {
-		return Entry{}, err
-	}
-	if err := writeBytesAtomic(filepath.Join(s.transcriptDir(), name), b); err != nil {
+	if _, err := authorize(rep, actor, epoch); err != nil {
 		return Entry{}, err
 	}
 
-	return s.Record(Entry{
+	// (2) Bounded read. +1 byte so "exactly at the limit" is distinguishable from
+	// "over it" without reading the whole stream to find out.
+	limit := s.maxTranscript
+	b, err := io.ReadAll(io.LimitReader(content, limit+1))
+	if err != nil {
+		return Entry{}, err
+	}
+	if int64(len(b)) > limit {
+		return Entry{}, fmt.Errorf("steward: transcript exceeds the %d-byte limit. A transcript is a courtesy artifact "+
+			"that no projection reads — it does not get to fill the disk. Trim it, or store it where it belongs and "+
+			"record a `file:` reference instead", limit)
+	}
+	if len(b) == 0 {
+		return Entry{}, fmt.Errorf("steward: refusing to record an empty transcript")
+	}
+
+	digest := digestOf(b)
+	name := strings.TrimPrefix(digest, "sha256:") + ".txt"
+	path := filepath.Join(s.transcriptDir(), name)
+
+	// (3) Only clean up what we created. The store is content-addressed, so an
+	// identical transcript may already be referenced by an earlier entry — removing
+	// that on our failure would break someone else's record.
+	_, statErr := os.Stat(path)
+	preexisting := statErr == nil
+
+	if err := writeBytesAtomic(path, b); err != nil {
+		return Entry{}, err
+	}
+
+	e, err := s.Record(Entry{
 		Actor:      actor,
 		Kind:       KindTranscript,
 		Workstream: workstream,
 		Summary:    summary,
 		Artifact: &Artifact{
-			Path:   filepath.Join("transcripts", name),
+			Path:   filepath.ToSlash(filepath.Join("transcripts", name)),
 			Digest: digest,
 			Bytes:  int64(len(b)),
 			Media:  "text/plain",
 		},
-	}, 0, now)
+	}, epoch, now)
+	if err != nil {
+		if !preexisting {
+			_ = os.Remove(path)
+		}
+		return Entry{}, err
+	}
+	return e, nil
 }
 
 // OpenWorkstream records the start of a strand of work.
-func (s *Store) OpenWorkstream(actor principal.Ref, name, title string, now time.Time) (Entry, error) {
+func (s *Store) OpenWorkstream(actor principal.Ref, epoch uint64, name, title string, now time.Time) (Entry, error) {
+	if strings.TrimSpace(name) == "" {
+		return Entry{}, fmt.Errorf("steward: a workstream needs a name")
+	}
 	return s.Record(Entry{
 		Actor:      actor,
 		Kind:       KindWorkstreamOpen,
 		Workstream: name,
 		Summary:    title,
-	}, 0, now)
+	}, epoch, now)
+}
+
+// UpdateWorkstream records a change to a strand's Kanban fields: lane, priority,
+// owner, agents, blockers, next action, links.
+//
+// It is an ENTRY, not an edit. Nothing is mutated in place — the board folds the
+// latest recorded value for each field, so the Kanban stays a pure projection of the
+// journal, and "who moved this to p0, and when" is answerable forever.
+func (s *Store) UpdateWorkstream(actor principal.Ref, epoch uint64, name string, u WorkstreamUpdate, now time.Time) (Entry, error) {
+	if strings.TrimSpace(name) == "" {
+		return Entry{}, fmt.Errorf("steward: a workstream update needs a name")
+	}
+	if u.Lane != "" && !u.Lane.Valid() {
+		return Entry{}, fmt.Errorf("steward: %q is not a lane (%s)", u.Lane, strings.Join(laneNames(), ", "))
+	}
+	if u.Priority != "" && !u.Priority.Valid() {
+		return Entry{}, fmt.Errorf("steward: %q is not a priority (p0, p1, p2, p3)", u.Priority)
+	}
+	if u.NextAt != "" {
+		if _, err := time.Parse(time.RFC3339, u.NextAt); err != nil {
+			return Entry{}, fmt.Errorf("steward: --next-at %q is not an RFC3339 time", u.NextAt)
+		}
+	}
+	return s.Record(Entry{
+		Actor:      actor,
+		Kind:       KindWorkstreamUpdate,
+		Workstream: name,
+		Summary:    describeUpdate(name, u),
+		Update:     &u,
+	}, epoch, now)
+}
+
+func describeUpdate(name string, u WorkstreamUpdate) string {
+	var parts []string
+	if u.Lane != "" {
+		parts = append(parts, "lane="+string(u.Lane))
+	}
+	if u.Priority != "" {
+		parts = append(parts, "priority="+string(u.Priority))
+	}
+	if u.Owner != "" {
+		parts = append(parts, "owner="+u.Owner)
+	}
+	if len(u.Agents) > 0 {
+		parts = append(parts, "agents="+strings.Join(u.Agents, "+"))
+	}
+	if len(u.Blockers) > 0 {
+		parts = append(parts, fmt.Sprintf("blockers=%d", len(u.Blockers)))
+	}
+	if u.NextAction != "" {
+		parts = append(parts, "next="+truncate(u.NextAction, 40))
+	}
+	if u.NextAt != "" {
+		parts = append(parts, "next-at="+u.NextAt)
+	}
+	if len(u.Links) > 0 {
+		parts = append(parts, fmt.Sprintf("links=%d", len(u.Links)))
+	}
+	if len(u.Clear) > 0 {
+		parts = append(parts, "cleared="+strings.Join(u.Clear, "+"))
+	}
+	if len(parts) == 0 {
+		return "updated " + name
+	}
+	return "updated " + name + ": " + strings.Join(parts, ", ")
 }
 
 // CloseWorkstream records the end of a strand of work, with its outcome.
 //
-// Note what this does NOT do: it does not force the outcome to success. If the
-// closing entry claims success with no evidence, the board still projects unknown
-// (Entry.EffectiveOutcome), so "closed" and "verified done" remain different facts
-// — which is the difference between a status board and a wish list.
-func (s *Store) CloseWorkstream(actor principal.Ref, name, summary string, outcome Outcome, evidence []Evidence, now time.Time) (Entry, error) {
+// Note what this does NOT do: it does not force the outcome to success. A closing
+// entry that claims success with no evidence still projects as UNKNOWN, and one whose
+// evidence nobody attested to still projects as ASSERTED rather than verified — so
+// "closed", "claimed done", and "verified done" remain three different facts. That is
+// the entire difference between a status board and a wish list.
+func (s *Store) CloseWorkstream(actor principal.Ref, epoch uint64, name, summary string, outcome Outcome, evidence []Evidence, now time.Time) (Entry, error) {
+	if strings.TrimSpace(name) == "" {
+		return Entry{}, fmt.Errorf("steward: a workstream needs a name")
+	}
 	return s.Record(Entry{
 		Actor:      actor,
 		Kind:       KindWorkstreamClose,
@@ -173,32 +314,5 @@ func (s *Store) CloseWorkstream(actor principal.Ref, name, summary string, outco
 		Summary:    summary,
 		Outcome:    outcome,
 		Evidence:   evidence,
-	}, 0, now)
-}
-
-// writeBytesAtomic is writeJSONAtomic for raw content.
-func writeBytesAtomic(path string, b []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	}, epoch, now)
 }

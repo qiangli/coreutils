@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,11 +25,23 @@ func cli(t *testing.T, dir string, args ...string) (string, error) {
 	// agent-detection happens to infer on the machine running the tests.
 	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/tester")
 	t.Setenv("BASHY_EPISODE", "ep-test")
+	// `claim` exports the fencing token with a raw os.Setenv, which would otherwise
+	// survive into the NEXT test in this process and hand it a tenure it never took.
+	// Re-registering the variable at its CURRENT value snapshots it for cleanup without
+	// clearing it, so a claim earlier in this same test still counts — which is the
+	// actual UX being tested (claim exports the epoch; later commands inherit it).
+	t.Setenv(EpochEnv, os.Getenv(EpochEnv))
 
 	cmd := NewStewardCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
+	// Stdin is pinned to a NON-TERMINAL, always. Left unset, cobra hands the command
+	// os.Stdin, and whether that is a terminal depends on how the suite was launched —
+	// so `go test` from a shell would take the attended path and the same test in CI
+	// would take the unattended one. The unattended path is the one that matters here,
+	// and it is the one an agent will actually be on.
+	cmd.SetIn(strings.NewReader(""))
 	cmd.SetArgs(append([]string{"--dir", dir}, args...))
 	err := cmd.Execute()
 	return out.String(), err
@@ -98,8 +111,44 @@ func TestCLIStatusJSONIsStable(t *testing.T) {
 	if !env.Journal.Intact || env.Journal.Entries != 2 {
 		t.Fatalf("journal = %+v, want 2 intact entries", env.Journal)
 	}
-	if len(env.Board.Workstreams) != 1 || env.Board.Workstreams[0].Confidence != ConfidenceVerified {
-		t.Fatalf("board = %+v; an evidenced success must project as verified", env.Board.Workstreams)
+	// An evidenced success is ASSERTED, never verified: `-e command:go test ./...`
+	// records that somebody SAID they ran the tests. Only `steward verify` closes that
+	// gap, and the JSON envelope must not blur it — a consumer that read this as
+	// "verified" would be laundering a reference into a check.
+	if len(env.Board.Workstreams) != 1 || env.Board.Workstreams[0].Confidence != ConfidenceAsserted {
+		t.Fatalf("board = %+v; an evidenced success is asserted, not verified", env.Board.Workstreams)
+	}
+	if env.Board.Asserted != 1 {
+		t.Fatalf("the board must COUNT the unchecked claims, got %d", env.Board.Asserted)
+	}
+}
+
+// …and `verify` is what closes it. This is the one promotion path in the whole CLI.
+func TestCLIVerifyIsTheOnlyThingThatReachesVerified(t *testing.T) {
+	dir := t.TempDir()
+	mustCLI(t, dir, "claim")
+	mustCLI(t, dir, "record", "-m", "shipped the migration", "--workstream", "api",
+		"--outcome", "success", "-e", "commit:de6485c")
+
+	// seq 1 is the claim, seq 2 the effect.
+	out := mustCLI(t, dir, "verify", "--seq", "2", "--result", "success",
+		"--method", "re-ran the suite on a clean checkout", "-e", "command:go test ./...")
+	if !strings.Contains(out, "verification recorded") {
+		t.Fatalf("verify:\n%s", out)
+	}
+
+	var env statusEnvelope
+	if err := json.Unmarshal([]byte(mustCLI(t, dir, "--json", "status")), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Board.Workstreams[0].Confidence != ConfidenceVerified {
+		t.Fatalf("an attested claim must project as verified, got %q", env.Board.Workstreams[0].Confidence)
+	}
+
+	// A verification with no --method is the same trust-me claim it replaces.
+	_, err := cli(t, dir, "verify", "--seq", "2", "--result", "success")
+	if err == nil || !strings.Contains(err.Error(), "method") {
+		t.Fatalf("verify must demand HOW it checked, got %v", err)
 	}
 }
 
@@ -176,19 +225,80 @@ func TestCLIDecideRequiresARationale(t *testing.T) {
 	}
 }
 
-func TestCLITakeoverRequiresAHuman(t *testing.T) {
+// mintReceiptGrant mints an EXTERNAL-RECEIPT capability and returns its id.
+//
+// A test has no terminal, so it is by definition an unattended caller — exactly the
+// case where an operator ASSERTION is worth nothing and the package demands an artifact
+// somebody can go and audit instead. That is not a testing workaround; it is the
+// unattended path every CI runner and headless agent has to walk, so testing the CLI
+// through it is testing the path that will actually be used.
+func mintReceiptGrant(t *testing.T, dir, actor, reason string) string {
+	t.Helper()
+	receipt := filepath.Join(t.TempDir(), "approval.json")
+	if err := os.WriteFile(receipt, []byte(`{"approved_by":"`+actor+`","pr":412}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := mustCLI(t, dir, "authorize", "--actor", actor, "--reason", reason,
+		"--receipt", receipt, "--receipt-issuer", "github:pr-412")
+
+	id, ok := grantIDFrom(out)
+	if !ok {
+		t.Fatalf("authorize must print the grant id it minted:\n%s", out)
+	}
+	return id
+}
+
+// grantIDFrom pulls the id out of "authorization <id> minted".
+func grantIDFrom(out string) (string, bool) {
+	for line := range strings.SplitSeq(out, "\n") {
+		if f := strings.Fields(line); len(f) >= 3 && f[0] == "authorization" && f[2] == "minted" {
+			return f[1], true
+		}
+	}
+	return "", false
+}
+
+// An agent cannot decide on its own that the steward looks stuck. Seizing the seat
+// costs a capability, and the CLI must refuse every way of skipping that.
+func TestCLITakeoverRequiresACapability(t *testing.T) {
 	dir := t.TempDir()
 	mustCLI(t, dir, "claim")
 
-	_, err := cli(t, dir, "takeover", "--reason", "looks stuck")
+	_, err := cli(t, dir, "takeover")
 	if err == nil {
-		t.Fatal("takeover with no --authorized-by must be refused")
+		t.Fatal("a takeover presenting no authorization must be refused — otherwise the capability is decoration")
 	}
-	if !strings.Contains(err.Error(), "authorized-by") {
-		t.Fatalf("the refusal must name the missing flag: %v", err)
+	if !strings.Contains(err.Error(), "no authorization was presented") {
+		t.Fatalf("the refusal must say what was missing: %v", err)
 	}
 
-	out := mustCLI(t, dir, "takeover", "--authorized-by", "qiangli", "--reason", "wedged on a rate limit")
+	// An operator ASSERTION minted with --yes is real, and it is still not usable from
+	// a process with nobody at the terminal: "a human approved this" is a sentence with
+	// no author when there is no human present to be its author.
+	assertion := mustCLI(t, dir, "authorize", "--actor", "qiangli", "--reason", "looks stuck", "--yes")
+	id, ok := grantIDFrom(assertion)
+	if !ok {
+		t.Fatalf("authorize --yes must still mint:\n%s", assertion)
+	}
+	_, err = cli(t, dir, "takeover", "--grant", id)
+	if err == nil {
+		t.Fatal("an unattended takeover on an operator ASSERTION must be refused")
+	}
+	if !strings.Contains(err.Error(), "receipt") {
+		t.Fatalf("the refusal must point at the receipt that WOULD be auditable: %v", err)
+	}
+
+	// With a receipt, the same unattended seizure is allowed — and is recorded forever.
+	grant := mintReceiptGrant(t, dir, "qiangli", "wedged on a rate limit")
+
+	// Keep a copy of the capability, the way a backup — or an attacker — would.
+	grantFile := filepath.Join(dir, "grants", grant+".json")
+	backup, err := os.ReadFile(grantFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := mustCLI(t, dir, "takeover", "--grant", grant)
 	if !strings.Contains(out, "TOOK OVER") || !strings.Contains(out, "epoch 2") {
 		t.Fatalf("an authorized takeover must seize the seat and bump the epoch:\n%s", out)
 	}
@@ -196,6 +306,21 @@ func TestCLITakeoverRequiresAHuman(t *testing.T) {
 	hist := mustCLI(t, dir, "history")
 	if !strings.Contains(hist, "qiangli") {
 		t.Fatalf("history must record who authorized the seizure:\n%s", hist)
+	}
+
+	// Single-use — and the JOURNAL is what enforces it, not the grant file. Spending the
+	// grant removes the file, so deleting it would be a flimsy control: put the bytes
+	// back and a file-based check hands the seat over again. The takeover that consumed
+	// this nonce is in the hash chain, and THAT is what refuses.
+	if err := os.WriteFile(grantFile, backup, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = cli(t, dir, "takeover", "--grant", grant)
+	if err == nil {
+		t.Fatal("a capability restored from a backup must not be spendable a second time")
+	}
+	if !strings.Contains(err.Error(), "already been used") {
+		t.Fatalf("the refusal must name the replay, and cite the journal as the reason: %v", err)
 	}
 }
 
@@ -209,8 +334,9 @@ func TestCLIRecordWithAStaleEpochIsFenced(t *testing.T) {
 
 	// A human authorizes recovery; the seat moves to epoch 2. (Same principal here —
 	// which is the sharpest version of the test: even the SAME agent, presenting a
-	// superseded token, must be refused.)
-	mustCLI(t, dir, "takeover", "--authorized-by", "qiangli", "--reason", "recovery drill")
+	// superseded token, must be refused. Being yourself is not a credential.)
+	grant := mintReceiptGrant(t, dir, "qiangli", "recovery drill")
+	mustCLI(t, dir, "takeover", "--grant", grant)
 
 	_, err := cli(t, dir, "record", "-m", "…and then I deployed it",
 		"--workstream", "api", "--outcome", "success", "-e", "command:kubectl apply", "--epoch", "1")
@@ -418,16 +544,38 @@ func TestCLIWarnsAboutACorruptTail(t *testing.T) {
 		t.Fatal("appending onto a corrupt tail must be refused")
 	}
 
+	// --plan changes nothing, and says exactly what it WOULD discard, so an operator can
+	// see with their own eyes that it is a torn fragment and not a record.
+	out = mustCLI(t, dir, "repair", "--plan")
+	if !strings.Contains(out, "repairable:     true") {
+		t.Fatalf("a torn final append is repairable, and the plan must say so:\n%s", out)
+	}
+	if !strings.Contains(out, "trunc") {
+		t.Fatalf("the plan must show the bytes it would discard:\n%s", out)
+	}
+	if !strings.Contains(mustCLI(t, dir, "log"), "WARNING") {
+		t.Fatal("--plan must change nothing")
+	}
+
 	// …and the repair is explicit, and truncates only the unreadable bytes.
-	out = mustCLI(t, dir, "reconcile", "--repair-tail")
+	out = mustCLI(t, dir, "repair")
 	if !strings.Contains(out, "No valid entry was removed") {
 		t.Fatalf("the repair must reassure that it cost only the torn tail:\n%s", out)
 	}
+	if !strings.Contains(out, "quarantined") {
+		t.Fatalf("the repair must say where the discarded bytes went:\n%s", out)
+	}
+
 	out = mustCLI(t, dir, "log")
 	if strings.Contains(out, "WARNING") {
 		t.Fatalf("the journal must be clean after a repair:\n%s", out)
 	}
 	if !strings.Contains(out, "real work") {
 		t.Fatalf("the repair destroyed valid history:\n%s", out)
+	}
+	// The repair itself is on the record, as a DEGRADED entry. A journal that quietly
+	// healed itself is indistinguishable from one somebody edited.
+	if !strings.Contains(mustCLI(t, dir, "log", "--kind", "repair"), "quarantined") {
+		t.Fatal("the repair must leave a receipt in the journal")
 	}
 }

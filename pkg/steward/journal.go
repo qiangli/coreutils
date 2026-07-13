@@ -5,8 +5,7 @@ package steward
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,7 +18,9 @@ import (
 )
 
 // SchemaVersion is the on-disk contract for every artifact this package writes:
-// journal entries, the seat file, and checkpoints. Bump on a breaking change.
+// journal entries, the seat file, grants, and checkpoints. Bump on a breaking
+// change — and note that a MISMATCH is never tolerated on the seat cache or a
+// grant: a record this package cannot fully understand is not one it may act on.
 const SchemaVersion = "bashy-steward-v1"
 
 // genesis is the chain's public root: the PrevHash of the first entry in a fresh
@@ -27,47 +28,63 @@ const SchemaVersion = "bashy-steward-v1"
 const genesis = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 // Kind classifies a journal entry — and, crucially, its AUTHORITY.
-//
-// The three classes are not decoration. An effect is a claim about the world and
-// must carry evidence. A decision is a claim about intent and must carry a
-// rationale. A transcript is a claim about nothing at all: it is an artifact,
-// nothing derives from it, and deleting it changes no view.
 type Kind string
 
 const (
-	// KindEffect — AUTHORITATIVE. Something changed in the world (a command ran,
-	// a PR merged, a service restarted). Carries evidence, or it projects unknown.
+	// KindEffect — AUTHORITATIVE. Something changed in the world (a command ran, a
+	// PR merged, a service restarted). Carries evidence, or it projects unknown.
 	KindEffect Kind = "effect"
 	// KindObservation — AUTHORITATIVE. Something was observed to be true, without
 	// this steward having caused it. Also evidence-bearing.
 	KindObservation Kind = "observation"
-	// KindDecision — AUTHORITATIVE. An explicit, durable decision record: what was
-	// decided and WHY. It asserts intent, not effect, so it needs a rationale
-	// rather than evidence.
+	// KindDecision — AUTHORITATIVE. What was decided, and WHY. It asserts intent,
+	// not effect, so it needs a rationale rather than evidence.
 	KindDecision Kind = "decision"
+	// KindVerification — AUTHORITATIVE. Someone went and CHECKED an earlier entry's
+	// claim, and this is the durable attestation of what they found. It is the ONLY
+	// thing that promotes a claim to "verified" on the board: a reference is a
+	// pointer, an attestation is a check, and the whole package turns on the
+	// difference.
+	KindVerification Kind = "verification"
 	// KindTranscript — NON-AUTHORITATIVE. An optional hash-linked conversation
-	// artifact. No projection reads it. It exists so a human can go back and see
-	// how a decision was reached; the decision record is what actually binds.
+	// artifact. No projection reads it. Deleting every one changes no view.
 	KindTranscript Kind = "transcript"
 
-	// Seat lifecycle. These are the AUTHORITY events: the epoch ladder is derived
-	// from them and from nowhere else, which is what makes the seat recoverable by
-	// replay when seat.json is gone.
+	// Seat lifecycle. These are the AUTHORITY events: the epoch ladder derives from
+	// them and from nowhere else, which is what makes the seat recoverable by replay
+	// when seat.json is gone.
 	KindSeatClaimed  Kind = "seat.claimed"
 	KindSeatTakeover Kind = "seat.takeover"
 	KindSeatReleased Kind = "seat.released"
 
 	// Workstream lifecycle.
-	KindWorkstreamOpen  Kind = "workstream.open"
-	KindWorkstreamClose Kind = "workstream.close"
+	KindWorkstreamOpen   Kind = "workstream.open"
+	KindWorkstreamUpdate Kind = "workstream.update"
+	KindWorkstreamClose  Kind = "workstream.close"
 
-	// KindReconcile records an explicit reconciliation: someone compared the
-	// journal against reality and wrote down what they found, including what could
-	// NOT be established.
+	// KindReconcile records an explicit reconciliation: someone compared the journal
+	// against reality and wrote down what they found, including what could NOT be
+	// established.
 	KindReconcile Kind = "reconcile"
+	// KindRepair records a journal repair: what was discarded, and where the
+	// discarded bytes were quarantined.
+	KindRepair Kind = "repair"
 	// KindCheckpoint marks that a checkpoint was materialized at this watermark.
 	KindCheckpoint Kind = "checkpoint"
 )
+
+var knownKinds = map[Kind]bool{
+	KindEffect: true, KindObservation: true, KindDecision: true,
+	KindVerification: true, KindTranscript: true,
+	KindSeatClaimed: true, KindSeatTakeover: true, KindSeatReleased: true,
+	KindWorkstreamOpen: true, KindWorkstreamUpdate: true, KindWorkstreamClose: true,
+	KindReconcile: true, KindRepair: true, KindCheckpoint: true,
+}
+
+// Known reports whether this is a kind the package understands. An entry of an
+// unknown kind is refused at append: a projection cannot honestly account for a
+// record whose meaning it does not know.
+func (k Kind) Known() bool { return knownKinds[k] }
 
 // Authoritative reports whether anything may be DERIVED from an entry of this
 // kind. Transcripts are the sole exception, and the exception is the point.
@@ -83,6 +100,43 @@ func (k Kind) SeatEvent() bool {
 	return false
 }
 
+// RecordFact reports whether an entry of this kind is made true BY BEING WRITTEN,
+// rather than by something out in the world.
+//
+// The distinction decides who reconciliation may accuse. A world claim — an effect, an
+// observation, a workstream closed as done — asserts that the machine, the repo, or the
+// service is in some state, and a skeptic can go and look. A record fact asserts
+// something about the JOURNAL ITSELF: this agent took the seat, this checkpoint was
+// materialized at this watermark, these torn bytes were discarded. The entry does not
+// describe the acquisition; the entry IS the acquisition. There is nowhere to send an
+// observer, because there is nothing out there to see.
+//
+// Reconcile therefore holds record facts to no evidentiary standard, and the reason is
+// not politeness — it is that grading them produces nonsense in both directions:
+//
+//   - Every seat claim carries Outcome success and points at its own epoch, so counting
+//     it as an unchecked claim would mean the host is degraded from the moment anyone
+//     becomes steward, forever, with no act available to anybody that could clear it.
+//   - Recording a CLEAN reconciliation would append an entry claiming success that the
+//     next reconciliation then reads back as unverified — so the act of writing down
+//     "everything checks out" is what makes the next answer "degraded". A health signal
+//     that flips because you asked it is not a health signal.
+//
+// What keeps this from becoming a laundering hole is that record facts are checked in
+// the ways that actually apply to them, and those checks are stricter than the
+// evidence ladder, not weaker: the hash chain verifies every entry on replay, a
+// checkpoint is independently re-derived (CheckpointsVerified) and a mismatch drops
+// health to unknown, and a damaged journal is reported as damage rather than as an
+// unproven claim.
+func (k Kind) RecordFact() bool {
+	switch k {
+	case KindSeatClaimed, KindSeatTakeover, KindSeatReleased,
+		KindCheckpoint, KindReconcile, KindRepair:
+		return true
+	}
+	return false
+}
+
 // Outcome is what an entry claims happened.
 type Outcome string
 
@@ -93,37 +147,52 @@ const (
 	OutcomeDegraded Outcome = "degraded"
 )
 
-// Evidence is a pointer to something a skeptic could go and check: a command
-// that ran, a file, a commit, a test result, a URL. The Digest, when present,
-// binds the reference to exact bytes.
+// Evidence is a pointer to something a skeptic could go and check: a command that
+// ran, a file, a commit, a test result, a URL.
 //
-// Evidence is what separates a fact from a story. An LLM writes fluent,
-// confident prose about work it did not do; the only defense that scales is to
-// refuse to promote an unevidenced claim into a fact, which is exactly what
-// Entry.EffectiveOutcome does.
+// A piece of evidence is a REFERENCE, not a verification. This distinction is the
+// spine of the package. "command:go test ./..." records that someone said they ran
+// the tests; it does not record that the tests passed, and nothing in this package
+// will ever pretend otherwise. Only two things are stronger:
+//
+//   - a DIGEST binds the reference to exact bytes, so the artifact it names can be
+//     rehashed and caught if it changes;
+//   - a VERIFICATION entry (KindVerification) is somebody's durable, authorized
+//     attestation that they went and checked.
+//
+// The board promotes a claim to "verified" for the second of those, and for
+// nothing else. See Confidence.
 type Evidence struct {
-	Kind   string `json:"kind"` // command | file | commit | test | url | digest
+	Kind   string `json:"kind"` // command | file | commit | test | url | digest | note | human | seat | principal | grant
 	Ref    string `json:"ref"`
 	Digest string `json:"digest,omitempty"`
 	Note   string `json:"note,omitempty"`
 }
 
+// DigestBound reports whether this reference is pinned to exact bytes. Stronger
+// than a bare reference; still not a verification.
+func (e Evidence) DigestBound() bool { return strings.HasPrefix(e.Digest, "sha256:") }
+
+var evidenceKinds = map[string]bool{
+	"command": true, "file": true, "commit": true, "test": true, "url": true,
+	"digest": true, "note": true, "human": true, "seat": true, "principal": true,
+	"grant": true, "quarantine": true,
+}
+
 // ParseEvidence reads the CLI form "kind:ref[#digest]" — e.g.
 // "command:go test ./...", "commit:de6485c", "file:/tmp/out.log#sha256:abc…".
 // A bare string with no recognized kind prefix is recorded as a note-kind
-// reference rather than being rejected: a weak piece of evidence is still
-// better than a silently dropped one.
+// reference rather than being rejected: weak evidence is still better than
+// silently dropped evidence, and a note projects no better than any other
+// unverified reference anyway.
 func ParseEvidence(s string) (Evidence, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return Evidence{}, fmt.Errorf("steward: empty evidence")
 	}
 	ev := Evidence{Kind: "note", Ref: s}
-	if k, rest, ok := strings.Cut(s, ":"); ok && rest != "" {
-		switch k {
-		case "command", "file", "commit", "test", "url", "digest", "note":
-			ev.Kind, ev.Ref = k, rest
-		}
+	if k, rest, ok := strings.Cut(s, ":"); ok && rest != "" && evidenceKinds[k] {
+		ev.Kind, ev.Ref = k, rest
 	}
 	if ref, dig, ok := strings.Cut(ev.Ref, "#"); ok && strings.HasPrefix(dig, "sha256:") {
 		ev.Ref, ev.Digest = ref, dig
@@ -132,8 +201,8 @@ func ParseEvidence(s string) (Evidence, error) {
 }
 
 // Artifact is an optional, hash-linked blob referenced by an entry — typically a
-// transcript. The Digest binds the entry to exact bytes; the Path is a HINT
-// about where those bytes were last seen.
+// transcript. The Digest binds the entry to exact bytes; the Path is a HINT about
+// where those bytes were last seen.
 //
 // The bytes are allowed to be gone. A missing artifact is a degradation of the
 // record's richness, never of its truth: every projection is derived from the
@@ -145,6 +214,67 @@ type Artifact struct {
 	Media  string `json:"media,omitempty"`
 }
 
+// Verification is an attestation that an earlier entry's claim was CHECKED.
+//
+// It binds to the target's HASH, not just its seq. Binding to a seq alone would
+// let an attestation of one claim be read as an attestation of whatever ends up at
+// that sequence number — and since the whole point is to stop unearned trust, the
+// attestation has to name the exact bytes it vouched for.
+type Verification struct {
+	TargetSeq  uint64  `json:"target_seq"`
+	TargetHash string  `json:"target_hash"`
+	Result     Outcome `json:"result"`             // success | failed | unknown
+	Method     string  `json:"method,omitempty"`   // how it was checked
+	Observer   string  `json:"observer,omitempty"` // adapter name, or the operator
+}
+
+// Link is a pointer from a workstream to where the work actually lives.
+type Link struct {
+	Kind string `json:"kind"` // issue | pr | github | weave | kb | url | host
+	Ref  string `json:"ref"`
+}
+
+// WorkstreamUpdate carries the Kanban fields a host-level board needs: who owns a
+// strand, how urgent it is, what is blocking it, and what happens next.
+//
+// It is a JOURNAL ENTRY, not a mutable row. The board is still a pure projection —
+// "set the priority to p0" is recorded as a fact that someone set it, at a time,
+// under an epoch, and the board simply folds the latest value. That is what keeps
+// a practical Kanban from quietly becoming a second, writable source of truth.
+type WorkstreamUpdate struct {
+	Lane       Lane     `json:"lane,omitempty"`
+	Priority   Priority `json:"priority,omitempty"`
+	Owner      string   `json:"owner,omitempty"`
+	Agents     []string `json:"agents,omitempty"`
+	Blockers   []string `json:"blockers,omitempty"`
+	NextAction string   `json:"next_action,omitempty"`
+	NextAt     string   `json:"next_at,omitempty"` // RFC3339, the next checkpoint
+	Links      []Link   `json:"links,omitempty"`
+
+	// Clear names fields to reset ("blockers", "agents", "links", "owner",
+	// "next_action", "next_at", "priority", "lane"). Unblocking is as much of an
+	// event as blocking, and a field you can only ever set is a field that rots.
+	Clear []string `json:"clear,omitempty"`
+}
+
+// AuthzRef is the authorization a takeover was performed under, recorded IN the
+// journal so the seizure carries its own receipt forever.
+//
+// Read Grant's doc comment for what this does and does not prove. In short: it is
+// a durable, replay-protected, auditable capability — not cryptographic proof that
+// a human was present.
+type AuthzRef struct {
+	GrantID     string           `json:"grant_id"`
+	Action      string           `json:"action"`
+	Provenance  Provenance       `json:"provenance"`
+	Actor       string           `json:"actor"` // the operator identity ASSERTED at mint time
+	FromEpoch   uint64           `json:"from_epoch"`
+	IssuedAt    string           `json:"issued_at"`
+	ExpiresAt   string           `json:"expires_at"`
+	Interactive bool             `json:"interactive"` // the host asserted an interactive confirmation
+	Receipt     *ExternalReceipt `json:"receipt,omitempty"`
+}
+
 // Entry is one journal record. Field order is the canonical serialization order
 // for the hash — DO NOT reorder without bumping SchemaVersion.
 type Entry struct {
@@ -154,10 +284,10 @@ type Entry struct {
 	ID       string `json:"id"`
 	Time     string `json:"time"` // RFC3339Nano, UTC
 
-	// Actor is who wrote this entry, and Epoch is the seat epoch they held when
-	// they wrote it. Together they are the fencing token: an entry bearing a
-	// superseded epoch is rejected at append (see ErrFenced) and is recognizable
-	// forever after in the log.
+	// Actor is who wrote this entry, and Epoch is the seat epoch they held when they
+	// wrote it. Together they are the fencing token: an entry bearing a superseded
+	// epoch is rejected at append (see ErrFenced) and is recognizable forever after
+	// in the log. Epoch is NEVER zero on a stored entry.
 	Actor principal.Ref `json:"actor"`
 	Epoch uint64        `json:"epoch"`
 
@@ -174,6 +304,10 @@ type Entry struct {
 	Evidence  []Evidence `json:"evidence,omitempty"`
 	Artifact  *Artifact  `json:"artifact,omitempty"`
 
+	Verifies *Verification     `json:"verifies,omitempty"`
+	Update   *WorkstreamUpdate `json:"update,omitempty"`
+	Authz    *AuthzRef         `json:"authz,omitempty"`
+
 	// Hash is H(prev_hash ‖ canonical(entry with Hash="")). Last field, so the
 	// canonical form is simply this entry with this one field zeroed.
 	Hash string `json:"hash"`
@@ -182,18 +316,22 @@ type Entry struct {
 // HasEvidence reports whether the entry carries at least one checkable reference.
 func (e Entry) HasEvidence() bool { return len(e.Evidence) > 0 }
 
-// EffectiveOutcome is the outcome a PROJECTION is allowed to believe, which is
-// not always the outcome that was claimed.
+// EffectiveOutcome is the outcome a PROJECTION is allowed to believe, which is not
+// always the outcome that was claimed.
 //
-// The rule: a claim of success with no evidence is not success — it is unknown.
-// This is the single most load-bearing line in the package. An agent that says
-// "done ✅" and cannot point at anything has told you a story, and a system that
-// records stories as facts is worse than one that records nothing, because it
-// launders confidence.
+// The rule: a claim of success with NOTHING to point at is not success — it is
+// unknown. An agent that says "done ✅" and cannot name a single thing a skeptic
+// could check has told you a story, and a system that records stories as facts is
+// worse than one that records nothing, because it launders confidence.
 //
-// Degradation travels one way only. A FAILURE without evidence stays a failure;
-// we never upgrade toward the happy path, because the cost of a false "success"
-// is unbounded and the cost of a false "failed" is a second look.
+// Note what this does NOT do: it does not promote a claim WITH references into a
+// verified fact either. That is Confidence's job, and only a KindVerification entry
+// gets a claim there. A reference means someone pointed; verification means someone
+// checked.
+//
+// Degradation travels one way only. A FAILURE without evidence stays a failure; we
+// never upgrade toward the happy path, because the cost of a false "success" is
+// unbounded and the cost of a false "failed" is a second look.
 func (e Entry) EffectiveOutcome() Outcome {
 	if e.Outcome == OutcomeSuccess && !e.HasEvidence() {
 		return OutcomeUnknown
@@ -201,8 +339,8 @@ func (e Entry) EffectiveOutcome() Outcome {
 	return e.Outcome
 }
 
-// Degraded reports whether this entry's claim could not be established — either
-// it says so itself, or it claimed success and brought nothing to back it up.
+// Degraded reports whether this entry's claim could not be established — either it
+// says so itself, or it claimed success and brought nothing to back it up.
 func (e Entry) Degraded() bool {
 	switch e.EffectiveOutcome() {
 	case OutcomeUnknown, OutcomeDegraded:
@@ -212,17 +350,17 @@ func (e Entry) Degraded() bool {
 }
 
 // computeHash returns the chain hash for e given the previous entry's hash. The
-// entry's own Hash is cleared first, so each link binds to the full content of
-// the one before it: alter or delete any entry and every later entry's hash
-// stops verifying.
+// entry's own Hash is cleared first, so each link binds to the full content of the
+// one before it: alter or delete any entry and every later entry's hash stops
+// verifying.
 func (e Entry) computeHash(prevHash string) string {
 	e.Hash = ""
 	body, _ := json.Marshal(e)
-	h := sha256.New()
-	h.Write([]byte(prevHash))
-	h.Write([]byte{0}) // separator, so prev‖body is unambiguous
-	h.Write(body)
-	return "sha256:" + hex.EncodeToString(h.Sum(nil))
+	var buf bytes.Buffer
+	buf.WriteString(prevHash)
+	buf.WriteByte(0) // separator, so prev‖body is unambiguous
+	buf.Write(body)
+	return digestOf(buf.Bytes())
 }
 
 // newID mints a stable, sortable entry id.
@@ -230,14 +368,35 @@ func newID(now time.Time, seq uint64) string {
 	return fmt.Sprintf("%s-%04d", now.UTC().Format("20060102T150405Z"), seq)
 }
 
+// CorruptKind classifies what is wrong with a journal's tail, because the two
+// possibilities call for opposite responses and conflating them is how a repair
+// tool becomes a data-loss tool.
+type CorruptKind string
+
+const (
+	// CorruptNone — the journal replays cleanly.
+	CorruptNone CorruptKind = ""
+	// CorruptTornAppend — the FINAL append was cut off mid-line: the trailing bytes
+	// are an incomplete record with no terminating newline. This is what a crash or a
+	// full disk actually leaves behind, it destroys nothing that was ever completed,
+	// and it is the ONLY thing Repair will touch.
+	CorruptTornAppend CorruptKind = "torn-append"
+	// CorruptInvalid — anything else: a well-formed record that does not chain, a
+	// hash that does not verify, a sequence gap, damage in the MIDDLE of the log, or
+	// a suffix that still contains complete lines. None of these is a torn write.
+	// Every one of them means either tampering or the loss of something that was
+	// completed, and neither is a thing a tool may silently truncate away.
+	CorruptInvalid CorruptKind = "invalid"
+)
+
 // Replay is the result of walking the journal: the valid prefix, plus an honest
 // account of anything it could not read.
 //
 // "Valid PREFIX" is the important word. A journal whose final line was torn by a
-// crash still has a perfectly good history before the tear, and that history is
-// what a successor needs. Refusing to read the whole file because its last 40
-// bytes are garbage would turn a survivable crash into total amnesia — which is
-// the exact failure this subsystem exists to prevent.
+// crash still has a perfectly good history before the tear, and that history is what
+// a successor needs. Refusing to read the whole file because its last 40 bytes are
+// garbage would turn a survivable crash into total amnesia — the exact failure this
+// subsystem exists to prevent.
 type Replay struct {
 	Entries  []Entry
 	Head     string // chain hash of the last valid entry (genesis if none)
@@ -246,36 +405,52 @@ type Replay struct {
 
 	// Corrupt reports that bytes after the valid prefix could not be replayed.
 	Corrupt       bool
+	CorruptKind   CorruptKind
 	CorruptLine   int    // 1-based line number where replay stopped
 	CorruptReason string // why it stopped
 	// ValidBytes is the byte offset just past the last valid entry — the exact
-	// truncation point RepairTail uses, so a repair can never remove a valid entry.
+	// truncation point a repair uses, so a repair can never remove a valid entry.
 	ValidBytes int64
 }
 
 // Intact reports a fully-readable journal.
 func (r *Replay) Intact() bool { return !r.Corrupt }
 
-// ErrCorruptTail is returned by Append when the journal's tail is unreadable.
+// ErrCorruptTail is returned by any write when the journal's tail is unreadable.
 // Writes refuse rather than silently forking the chain around the damage; reads
-// carry on. Clearing it is an explicit, human-invoked act:
-// `steward reconcile --repair-tail`.
+// carry on. Clearing it is an explicit, human-invoked act: `steward repair`.
 type ErrCorruptTail struct {
-	Line   int
-	Reason string
-	// ValidEntries is how much good history survives — stated in the error so the
-	// operator learns immediately that a repair costs them nothing but the torn tail.
+	Line         int
+	Reason       string
+	Kind         CorruptKind
 	ValidEntries int
 }
 
 func (e *ErrCorruptTail) Error() string {
-	return fmt.Sprintf("steward: journal tail is corrupt at line %d (%s); %d valid entries before it are intact — "+
-		"run `steward reconcile --repair-tail` to truncate the unreadable tail and resume appending",
+	s := fmt.Sprintf("steward: journal tail is unreadable at line %d (%s); the %d entries before it are intact",
 		e.Line, e.Reason, e.ValidEntries)
+	if e.Kind == CorruptTornAppend {
+		return s + " — this is a torn final append; `steward repair` quarantines the partial bytes and resumes"
+	}
+	return s + " — this is NOT a torn append (a completed record is unreadable or does not chain), so it will not be " +
+		"auto-repaired: something was tampered with or lost, and truncating it would destroy the evidence"
 }
 
-// replayReader walks a journal stream, verifying every link, and stops at the
-// first byte it cannot trust — returning everything valid before it.
+// ErrNotRepairable is returned by Repair when the damage is not a torn final
+// append. Failing closed here is the whole point: see CorruptInvalid.
+type ErrNotRepairable struct {
+	Plan RepairPlan
+}
+
+func (e *ErrNotRepairable) Error() string {
+	return fmt.Sprintf("steward: refusing to repair — %s. %d valid entries precede the damage and are readable; "+
+		"the %d unreadable byte(s) are NOT a torn final append, so discarding them could destroy a completed record. "+
+		"Investigate by hand (`steward repair --plan` shows the exact bytes and their digest)",
+		e.Plan.Reason, e.Plan.ValidEntries, e.Plan.SuffixBytes)
+}
+
+// replayReader walks a journal stream, verifying every link, and stops at the first
+// byte it cannot trust — returning everything valid before it.
 func replayReader(r io.Reader) *Replay {
 	out := &Replay{Head: genesis}
 	sc := bufio.NewScanner(r)
@@ -289,8 +464,8 @@ func replayReader(r io.Reader) *Replay {
 	for sc.Scan() {
 		line++
 		raw := sc.Bytes()
-		// +1 for the newline the scanner stripped. Tracked so RepairTail knows the
-		// exact byte at which the good history ends.
+		// +1 for the newline the scanner stripped. Tracked so a repair knows the exact
+		// byte at which the good history ends.
 		lineBytes := int64(len(raw)) + 1
 
 		text := strings.TrimSpace(string(raw))
@@ -301,19 +476,33 @@ func replayReader(r io.Reader) *Replay {
 
 		var e Entry
 		if err := json.Unmarshal([]byte(text), &e); err != nil {
-			out.stop(line, "unparsable entry: "+err.Error())
+			// Unparsable: MAY be a torn write. Whether it actually is one is decided by
+			// PlanRepair, which can see the bytes (a torn write has no trailing newline
+			// and nothing after it); replay itself does not get to assume the friendly
+			// explanation.
+			out.stop(line, "unparsable entry: "+err.Error(), CorruptTornAppend)
+			return out
+		}
+		if e.Schema != SchemaVersion {
+			out.stop(line, fmt.Sprintf("schema %q is not %q", e.Schema, SchemaVersion), CorruptInvalid)
 			return out
 		}
 		if e.PrevHash != prevHash {
-			out.stop(line, "prev_hash mismatch (an earlier entry was altered or removed)")
+			out.stop(line, "prev_hash mismatch (an earlier entry was altered or removed)", CorruptInvalid)
 			return out
 		}
 		if e.Seq != prevSeq+1 {
-			out.stop(line, fmt.Sprintf("seq gap (expected %d, got %d)", prevSeq+1, e.Seq))
+			out.stop(line, fmt.Sprintf("seq gap (expected %d, got %d)", prevSeq+1, e.Seq), CorruptInvalid)
+			return out
+		}
+		if e.Epoch == 0 {
+			// No stored entry ever carried epoch 0. One that does was not written by
+			// this package.
+			out.stop(line, "entry carries epoch 0 — no authoritative write is ever unfenced", CorruptInvalid)
 			return out
 		}
 		if want := e.computeHash(prevHash); want != e.Hash {
-			out.stop(line, "hash mismatch (this entry was altered)")
+			out.stop(line, "hash mismatch (this entry was altered)", CorruptInvalid)
 			return out
 		}
 
@@ -326,7 +515,7 @@ func replayReader(r io.Reader) *Replay {
 		out.ValidBytes = offset
 	}
 	if err := sc.Err(); err != nil {
-		out.stop(line+1, "read error: "+err.Error())
+		out.stop(line+1, "read error: "+err.Error(), CorruptInvalid)
 		return out
 	}
 	out.Head, out.HeadSeq = prevHash, prevSeq
@@ -334,19 +523,19 @@ func replayReader(r io.Reader) *Replay {
 }
 
 // stop records where replay lost trust, keeping every entry read so far.
-func (r *Replay) stop(line int, reason string) {
-	r.Corrupt, r.CorruptLine, r.CorruptReason = true, line, reason
+func (r *Replay) stop(line int, reason string, kind CorruptKind) {
+	r.Corrupt, r.CorruptLine, r.CorruptReason, r.CorruptKind = true, line, reason, kind
 	if n := len(r.Entries); n > 0 {
 		r.Head, r.HeadSeq = r.Entries[n-1].Hash, r.Entries[n-1].Seq
 	}
 }
 
-// Verify walks a journal stream and reports whether the whole chain holds. It is
-// the same walk Replay does; this is the caller-facing "is my history intact?".
+// Verify walks a journal stream and reports whether the whole chain holds. Same
+// walk as Replay; this is the caller-facing "is my history intact?".
 func Verify(r io.Reader) *Replay { return replayReader(r) }
 
-// readJournal replays the journal file. A missing journal is an empty one — a
-// fresh host has no history, and that is not an error.
+// readJournal replays the journal file. A missing journal is an empty one — a fresh
+// host has no history, and that is not an error.
 func readJournal(path string) (*Replay, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -359,13 +548,26 @@ func readJournal(path string) (*Replay, error) {
 	return replayReader(f), nil
 }
 
-// appendEntry links e to the chain head and durably appends it. The caller MUST
-// hold the store lock and MUST have already replayed to obtain rep — append is
-// never allowed to re-derive the head on its own, because a read-decide-write
-// that re-reads outside the lock is the race this whole package exists to avoid.
+// appendEntry links e to the chain head and durably appends it.
+//
+// The caller MUST hold the store lock, MUST have already replayed to obtain rep,
+// and MUST have passed the authority gate (see Store.appendAuthorized — the ONLY
+// caller of this function outside the seat lifecycle). Append never re-derives the
+// head on its own: a read-decide-write that re-reads outside the lock is the race
+// this whole package exists to avoid.
 func appendEntry(path string, rep *Replay, e Entry, now time.Time) (Entry, error) {
 	if rep.Corrupt {
-		return Entry{}, &ErrCorruptTail{Line: rep.CorruptLine, Reason: rep.CorruptReason, ValidEntries: len(rep.Entries)}
+		return Entry{}, &ErrCorruptTail{Line: rep.CorruptLine, Reason: rep.CorruptReason, Kind: rep.CorruptKind, ValidEntries: len(rep.Entries)}
+	}
+	if !e.Kind.Known() {
+		return Entry{}, fmt.Errorf("steward: refusing to append an entry of unknown kind %q — "+
+			"a projection cannot honestly account for a record whose meaning it does not know", e.Kind)
+	}
+	if e.Epoch == 0 {
+		// Belt and braces: the gate already rejected epoch 0. If it ever gets here,
+		// the gate has a hole, and an unfenced entry in the journal is exactly the
+		// thing an attacker (or a bug) needs.
+		return Entry{}, &ErrNoEpoch{}
 	}
 	e.Schema = SchemaVersion
 	e.Seq = rep.HeadSeq + 1
@@ -392,17 +594,17 @@ func appendEntry(path string, rep *Replay, e Entry, now time.Time) (Entry, error
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return Entry{}, err
 	}
-	// fsync: an entry that the journal reported as written must survive the power
-	// going out a microsecond later. The journal is the only authority there is —
-	// if it can lose a write, everything derived from it is a guess.
+	// fsync: an entry the journal reported as written must survive the power going
+	// out a microsecond later. The journal is the only authority there is — if it can
+	// lose a write, everything derived from it is a guess.
 	if err := f.Sync(); err != nil {
 		return Entry{}, err
 	}
 	return e, nil
 }
 
-// sortEvidence gives evidence a canonical order so the hash of an entry does not
-// depend on the order flags happened to arrive in.
+// sortEvidence gives evidence a canonical order so an entry's hash does not depend
+// on the order the flags happened to arrive in.
 func sortEvidence(evs []Evidence) {
 	sort.SliceStable(evs, func(i, j int) bool {
 		if evs[i].Kind != evs[j].Kind {
@@ -410,42 +612,4 @@ func sortEvidence(evs []Evidence) {
 		}
 		return evs[i].Ref < evs[j].Ref
 	})
-}
-
-// RepairTail truncates the unreadable tail of a journal, and NOTHING else.
-//
-// It cuts at Replay.ValidBytes — the byte just past the last entry that verified
-// — so a valid entry can never be removed by a repair. The bytes it discards are
-// bytes no reader was able to trust anyway. Deliberately explicit and
-// human-invoked: silently self-healing a chain would make the chain worthless,
-// since "the log repaired itself" and "someone tampered with the log" would look
-// identical.
-func RepairTail(path string) (discarded int64, err error) {
-	rep, err := readJournal(path)
-	if err != nil {
-		return 0, err
-	}
-	if !rep.Corrupt {
-		return 0, nil
-	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		return 0, err
-	}
-	discarded = fi.Size() - rep.ValidBytes
-	if discarded <= 0 {
-		return 0, nil
-	}
-	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	if err := f.Truncate(rep.ValidBytes); err != nil {
-		return 0, err
-	}
-	if err := f.Sync(); err != nil {
-		return 0, err
-	}
-	return discarded, nil
 }

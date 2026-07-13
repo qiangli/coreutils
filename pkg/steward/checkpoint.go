@@ -16,14 +16,14 @@ import (
 
 // Checkpoint is a materialized projection of the journal at a watermark.
 //
-// It is a CACHE with a receipt, never a competing truth. Everything in it is
+// It is a CACHE WITH A RECEIPT, never a competing truth. Everything in it is
 // re-derivable from the journal, and the watermark plus the journal digest are the
 // receipt that says exactly which history it came from. Delete every checkpoint on
 // the host and you have lost nothing but the time it takes to recompute them.
 //
-// This is the discipline that keeps a checkpoint honest. The tempting design — let
-// a checkpoint be edited, let it accumulate state the journal never saw — produces
-// an artifact that is faster to read and impossible to trust, and the first time it
+// This discipline is what keeps a checkpoint honest. The tempting design — let a
+// checkpoint be edited, let it accumulate state the journal never saw — produces an
+// artifact that is faster to read and impossible to trust, and the first time it
 // disagrees with the journal nobody can say which one is wrong.
 type Checkpoint struct {
 	SchemaVersion string    `json:"schema_version"`
@@ -41,10 +41,14 @@ type Checkpoint struct {
 
 	Board Board `json:"board"`
 
-	// Degraded carries every unresolved claim forward, by name. A checkpoint that
+	// Unresolved carries every unestablished claim forward, by name. A checkpoint that
 	// quietly dropped its unknowns would be worse than no checkpoint: it would look
 	// like a clean bill of health.
-	Degraded []string `json:"degraded,omitempty"`
+	Unresolved []string `json:"unresolved,omitempty"`
+	// Asserted carries forward the strands whose outcome rests on references NOBODY
+	// CHECKED. Also carried by name, and for the same reason: it is the most common
+	// way a checkpoint would otherwise flatter itself.
+	Asserted []string `json:"asserted,omitempty"`
 
 	// Note is the operator's reason for taking this checkpoint.
 	Note string `json:"note,omitempty"`
@@ -74,11 +78,11 @@ func headAt(entries []Entry) string {
 	return genesis
 }
 
-// ProjectCheckpoint derives a checkpoint from entries, PURELY. Same entries and
-// same watermark always yield the same board and the same digests — no clock, no
-// randomness, no ambient state leaks in. CreatedAt/ID/Note are stamped by the
-// caller, and are deliberately NOT part of the board digest, so a re-derivation an
-// hour later still proves the same history.
+// ProjectCheckpoint derives a checkpoint from entries, PURELY. Same entries and same
+// watermark always yield the same board and the same digests — no clock, no
+// randomness, no ambient state leaks in. CreatedAt/ID/Note are stamped by the caller
+// and are deliberately NOT part of the board digest, so a re-derivation an hour later
+// still proves the same history.
 func ProjectCheckpoint(entries []Entry, watermark uint64) Checkpoint {
 	prefix := entriesUpTo(entries, watermark)
 	board := ProjectBoard(prefix)
@@ -93,8 +97,11 @@ func ProjectCheckpoint(entries []Entry, watermark uint64) Checkpoint {
 		Board:         board,
 	}
 	for _, ws := range board.Workstreams {
-		if ws.Outcome == OutcomeUnknown || ws.Outcome == OutcomeDegraded {
-			ck.Degraded = append(ck.Degraded, fmt.Sprintf("%s: %s (%s)", ws.Name, ws.Outcome, ws.Confidence))
+		switch ws.Confidence {
+		case ConfidenceUnknown, ConfidenceDegraded, ConfidenceRefuted:
+			ck.Unresolved = append(ck.Unresolved, fmt.Sprintf("%s: %s (%s)", ws.Name, ws.Outcome, ws.Confidence))
+		case ConfidenceAsserted:
+			ck.Asserted = append(ck.Asserted, fmt.Sprintf("%s: %s — asserted, never checked", ws.Name, ws.Outcome))
 		}
 	}
 	return ck
@@ -110,13 +117,20 @@ func maxEpochOf(entries []Entry) uint64 {
 	return m
 }
 
-// Checkpoint materializes and stores a verified checkpoint at the journal's
-// current head, and records THAT IT DID SO in the journal.
+// Checkpoint materializes a verified checkpoint at the journal's current head and
+// records THAT IT DID SO in the journal.
 //
-// The recording is not ceremony: it is what makes `steward history` able to say a
-// checkpoint was taken even after the checkpoint file is gone. The file is the
-// cache; the journal entry is the memory.
-func (s *Store) Checkpoint(actor principal.Ref, note string, now time.Time) (Checkpoint, error) {
+// It is an AUTHORITATIVE MUTATION and is gated like every other one: the holder, at
+// the current epoch, or nothing. An earlier revision let any actor checkpoint —
+// reasoning that a checkpoint is only a cache, so who cares who writes it. That was
+// wrong twice over: it appends to the journal (so a bystander could grow the host's
+// authoritative record at will), and the checkpoint file it drops in the store is
+// exactly the artifact a later reader trusts to summarize what happened here.
+//
+// If the journal append fails, the checkpoint FILE is removed. A checkpoint the
+// journal does not remember is a cache nothing points at — and, worse, a cache a
+// human might find and believe.
+func (s *Store) Checkpoint(actor principal.Ref, epoch uint64, note string, now time.Time) (Checkpoint, error) {
 	now = mustUTC(now)
 	var out Checkpoint
 	err := s.withLock(func() error {
@@ -124,8 +138,9 @@ func (s *Store) Checkpoint(actor principal.Ref, note string, now time.Time) (Che
 		if err != nil {
 			return err
 		}
-		if rep.Corrupt {
-			return &ErrCorruptTail{Line: rep.CorruptLine, Reason: rep.CorruptReason, ValidEntries: len(rep.Entries)}
+		auth, err := authorize(rep, actor, epoch)
+		if err != nil {
+			return err
 		}
 
 		ck := ProjectCheckpoint(rep.Entries, 0)
@@ -133,29 +148,28 @@ func (s *Store) Checkpoint(actor principal.Ref, note string, now time.Time) (Che
 		ck.CreatedAt = now
 		ck.Note = note
 
-		if err := os.MkdirAll(s.checkpointDir(), 0o700); err != nil {
-			return err
-		}
-		if err := writeJSONAtomic(filepath.Join(s.checkpointDir(), ck.ID+".json"), ck); err != nil {
+		path := filepath.Join(s.checkpointDir(), ck.ID+".json")
+		if err := writeJSONAtomic(path, ck); err != nil {
 			return err
 		}
 
-		// Record the checkpoint in the journal — evidence-bearing, so it never
-		// projects as an unevidenced success.
 		e := Entry{
-			Actor:     actor,
-			Epoch:     deriveAuthority(rep).Epoch,
-			Kind:      KindCheckpoint,
-			Ref:       ck.ID,
-			Summary:   fmt.Sprintf("checkpoint %s at watermark %d (%d workstreams, %d degraded)", ck.ID, ck.Watermark, len(ck.Board.Workstreams), len(ck.Degraded)),
+			Actor: actor,
+			Kind:  KindCheckpoint,
+			Ref:   ck.ID,
+			Summary: fmt.Sprintf("checkpoint %s at watermark %d (%d workstreams, %d unresolved, %d asserted-not-verified)",
+				ck.ID, ck.Watermark, len(ck.Board.Workstreams), len(ck.Unresolved), len(ck.Asserted)),
 			Rationale: note,
 			Outcome:   OutcomeSuccess,
+			// Evidence-bearing, and the evidence is DIGEST-BOUND: a checkpoint is one of
+			// the few claims in this package that can point at bytes it actually produced.
 			Evidence: []Evidence{
 				{Kind: "digest", Ref: ck.ID, Digest: ck.Board.Digest, Note: "board-digest"},
 				{Kind: "digest", Ref: fmt.Sprintf("watermark:%d", ck.Watermark), Digest: ck.JournalDigest, Note: "journal-head"},
 			},
 		}
-		if _, err := appendEntry(s.journalPath(), rep, e, now); err != nil {
+		if _, err := s.appendAuthorized(rep, e, auth.Epoch, now); err != nil {
+			_ = os.Remove(path)
 			return err
 		}
 		out = ck
@@ -164,13 +178,7 @@ func (s *Store) Checkpoint(actor principal.Ref, note string, now time.Time) (Che
 	return out, err
 }
 
-// VerifyCheckpoint re-derives a stored checkpoint from the journal and reports
-// whether it still holds.
-//
-// Because a checkpoint is a pure projection, "still holds" is decidable rather
-// than a matter of trust: re-project at the same watermark and compare digests. A
-// mismatch means the journal beneath it changed — which, given the hash chain,
-// means someone rewrote history. That is worth finding out about.
+// CheckpointVerdict is the result of re-deriving a stored checkpoint.
 type CheckpointVerdict struct {
 	ID            string `json:"id"`
 	Reproducible  bool   `json:"reproducible"`
@@ -182,7 +190,13 @@ type CheckpointVerdict struct {
 	Reason        string `json:"reason,omitempty"`
 }
 
-// VerifyCheckpoint checks a stored checkpoint against the live journal.
+// VerifyCheckpoint re-derives a stored checkpoint from the journal and reports
+// whether it still holds.
+//
+// Because a checkpoint is a pure projection, "still holds" is DECIDABLE rather than a
+// matter of trust: re-project at the same watermark and compare digests. A mismatch
+// means the journal beneath it changed — which, given the hash chain, means someone
+// rewrote history. That is worth finding out about.
 func (s *Store) VerifyCheckpoint(ck Checkpoint) (CheckpointVerdict, error) {
 	rep, err := s.Replay()
 	if err != nil {
@@ -210,6 +224,9 @@ func (s *Store) VerifyCheckpoint(ck Checkpoint) (CheckpointVerdict, error) {
 
 // LoadCheckpoint reads a stored checkpoint by id.
 func (s *Store) LoadCheckpoint(id string) (Checkpoint, error) {
+	if strings.ContainsAny(id, `/\`) {
+		return Checkpoint{}, fmt.Errorf("steward: %q is not a checkpoint id", id)
+	}
 	var ck Checkpoint
 	found, err := readJSON(filepath.Join(s.checkpointDir(), id+".json"), &ck)
 	if err != nil {
@@ -222,8 +239,8 @@ func (s *Store) LoadCheckpoint(id string) (Checkpoint, error) {
 }
 
 // ListCheckpoints returns the stored checkpoint files, newest first. Missing files
-// are not an error: the journal remembers that a checkpoint was taken even when
-// the cache of it is gone (see History).
+// are not an error: the journal remembers that a checkpoint was taken even when the
+// cache of it is gone (see History).
 func (s *Store) ListCheckpoints() ([]Checkpoint, error) {
 	entries, err := os.ReadDir(s.checkpointDir())
 	if err != nil {
