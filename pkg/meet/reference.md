@@ -42,6 +42,9 @@ bashy meet round         <id>                   # one moderated round across par
 bashy meet poll          <id> --question TEXT   # fixed-choice ballot; every seat must answer
 bashy meet ask           <id> --question TEXT   # open question; silence = "no comment"
 
+bashy meet list                                 # every meeting; ROOM is the short handle
+bashy meet observe       [<room>|<id>]          # attach and WATCH it happen, live (read-only)
+
 bashy meet show          <id>                   # roster, per-participant coverage, artifacts
 bashy meet contributions <id> [participant]     # every contribution, in full
 bashy meet converge      <id>                   # secretary pass (rewrites synthesis.json)
@@ -67,6 +70,49 @@ There is **no `--mode` flag.** The turn model is a consequence of who chairs.
 In the REPL: plain text = a human turn · `@name <text>` = a targeted turn · `/round` ·
 `/chair` · `/poll <q>` · `/ask <q>` · `/decision <t>` · `/action owner: task` ·
 `/agenda <t>` · `/show` · `/converge` · `/close`.
+
+## Watching a meeting: `meet observe`
+
+A meeting runs unattended for a long time. `observe` lets you look in on one
+without joining it — you attend, you do not participate.
+
+```
+bashy meet list                 # ROOM  ID  STATUS  PARTICIPANTS  TOPIC
+bashy meet observe 2            # attach to room 2
+bashy meet observe              # attach to the most recent open meeting
+bashy meet observe 2 --participant Sable    # watch one seat
+bashy meet observe 2 --json | jq -r 'select(.kind=="decision") | .text'
+```
+
+**Rooms.** A meeting id is a space-time coordinate — unique forever, and far too
+long to retype. A **room** is the small number you actually say: room 2. Rooms
+work like a shell's job numbers — assigned from the lowest free number among the
+*open* meetings, and reused once a meeting closes. A room is a pointer, resolved
+when you type it and **never written into a record**: a transcript claiming
+"room 2 decided X" would rot the moment room 2 was reused. `observe` also takes
+the full id, or any unambiguous prefix of it.
+
+**What you see.** The whole history first, in full — you are joining a
+conversation already in progress and need to know what was said. After that you
+are watching it live: each agent's answer streams in **line by line as it writes
+it**, not all at once, minutes later, when the turn completes.
+
+Granularity is a *line*, not a token. The agent CLIs emit complete lines on
+stdout; there is no token channel to subscribe to without going around the
+harness straight to a provider API, which would abandon the tools, the sandbox,
+and the shell-forcing that make the harness worth having. A line is the finest
+grain honestly available.
+
+**Observing is read-only.** It takes no seat, casts no vote, and writes nothing.
+Any number of observers can attach to one meeting, and attaching can never
+change what the meeting decides. `^C` detaches you; the meeting keeps running.
+
+**Two channels, one truth.** The meeting writes `transcript.jsonl` — the RECORD,
+one sanitized event per completed turn, from which the minutes are built and
+which is replayed as context to the next agent — and `live.jsonl`, the VIEW:
+ephemeral, line-granular, and safe to lose, because everything it carried also
+lands, whole, in the transcript. The live channel is a *tee* of the agent's
+stdout, so it can never show a watcher something the record will not contain.
 
 ## The turn model follows from who chairs
 

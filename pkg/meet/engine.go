@@ -167,6 +167,12 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 	events, _ := readTranscript(st.ID)
 	budget := turnTimeout(st)
 	start := time.Now()
+
+	// Tee this turn onto the live channel so an observer watches the argument
+	// being made rather than being told, minutes later, that it was made. It is
+	// a tee: `res` is unchanged, so the RECORDED turn is byte-for-byte what it
+	// would have been with nobody watching.
+	live := newLiveWriter(st, name, role)
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       name,
 		Role:        role,
@@ -175,6 +181,27 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		Files:       st.Context, // every participant reviews the same source set
 		Cwd:         st.Cwd,
 		Timeout:     budget,
+		Stream:      live,
+
+		// A MEETING IS A CONVERSATION, NOT A WORK SESSION. Every seat here —
+		// participant, chair, secretary — produces exactly one thing: text, which
+		// this process captures and writes. No attendee has any reason to touch
+		// the filesystem, and the context files it reviews are read INTO the
+		// prompt for it (Files, above), so it does not even need to open them.
+		//
+		// The same integrity argument as `bashy judge`, one step earlier: an
+		// agent that can edit the code it is discussing can quietly "fix" the
+		// thing under debate and then argue from the fixed version, and the
+		// minutes would record a discussion of a codebase that no longer exists.
+		//
+		// This is also what makes a meeting work OUT OF THE BOX. The launch guard
+		// refuses to strip an agent CLI's approval gate on an uncontained host —
+		// correctly, since that hands an unattended agent full access. Read-only
+		// removes the dangerous flags rather than demanding permission to keep
+		// them, so the guard passes BY CONSTRUCTION: there is nothing left to
+		// guard. Nobody has to set BASHY_ALLOW_UNSAFE_AGENT_LAUNCH to hold a
+		// meeting, and nobody has to weaken a host to watch one.
+		ReadOnly: true,
 	}, runner)
 	elapsed := time.Since(start)
 
@@ -210,6 +237,10 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 			ev.File = writeTurnFile(st.ID, ev) // offload full text for read-on-demand
 		}
 	}
+	// Free the floor, and say how the turn ended. A watcher must be able to tell
+	// a timeout from a crash from a considered silence — the same distinction the
+	// transcript preserves, which is why the status is carried on both channels.
+	live.close(ev.Status)
 	return ev, err
 }
 

@@ -47,6 +47,19 @@ type Options struct {
 	// diff INLINE in the prompt, so the reviewer needs no filesystem access to do
 	// its job, which means it can be denied all of it.
 	ReadOnly bool
+
+	// Stream, when set, receives the agent's stdout AS IT IS WRITTEN, in
+	// addition to the captured Result. It is a tee, not a redirect: the caller
+	// still gets the whole output at the end, so nothing downstream has to
+	// change to keep working.
+	//
+	// Only stdout is teed. Stderr is the agent CLI's chrome — banners, spinners,
+	// progress bars — and streaming it would show a watcher the harness talking
+	// rather than the agent. The answer is on stdout.
+	//
+	// Honoured only by the default runner: an injected Runner captures output
+	// however it likes, and it is not this package's business to make it stream.
+	Stream io.Writer
 }
 
 // Result is the stable envelope returned by Invoke and optionally printed by
@@ -142,9 +155,9 @@ type Runner interface {
 	Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error)
 }
 
-type execRunner struct{}
+type execRunner struct{ stream io.Writer }
 
-func (execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
 	// macOS: a cask/download-installed agent (e.g. codex) carries
 	// com.apple.quarantine, so a background/CI launch (act_runner) hangs on the
 	// Gatekeeper "downloaded from the Internet" popup. The operator explicitly
@@ -174,6 +187,12 @@ func (execRunner) Run(ctx context.Context, agent string, args []string, cwd stri
 	// append stderr so the error is still visible to the caller.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	if r.stream != nil {
+		// A tee, never a redirect: the caller still gets the whole captured
+		// output, so the turn that gets RECORDED is byte-for-byte what it was
+		// before anyone was watching. Observing must not change the record.
+		cmd.Stdout = io.MultiWriter(&stdout, r.stream)
+	}
 	cmd.Stderr = &stderr
 	// Because Stdout/Stderr are buffers rather than *os.File, os/exec pipes them
 	// through copying goroutines, and Wait blocks until EVERY writer closes the
@@ -438,7 +457,7 @@ func NewChatCmd() *cobra.Command {
 // Invoke resolves the agent, builds the prompt, and runs it.
 func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if runner == nil {
-		runner = execRunner{}
+		runner = execRunner{stream: opt.Stream}
 	}
 	name, err := ResolveAgent(opt.Agent, opt.Role)
 	if err != nil {

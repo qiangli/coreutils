@@ -179,8 +179,14 @@ const (
 
 // State is the durable meeting header, saved as state.json.
 type State struct {
-	Schema string   `json:"schema"`
-	ID     string   `json:"id"`
+	Schema string `json:"schema"`
+	ID     string `json:"id"`
+
+	// Room is the short number a human types to attach — see room.go. It is a
+	// POINTER, held for the life of the meeting and released (and reused) when
+	// it closes. Nothing may ever be recorded against it; the id is the identity.
+	Room int `json:"room,omitempty"`
+
 	Topic  string   `json:"topic"`
 	Agenda []string `json:"agenda,omitempty"`
 
@@ -224,6 +230,17 @@ type State struct {
 	// literature measures both never-stopping and premature-stopping as common.
 	MaxTurns  int `json:"max_turns,omitempty"`
 	MaxStalls int `json:"max_stalls,omitempty"`
+}
+
+// seated reports whether a canonical name holds any seat — participant, chair,
+// or secretary. Used to refuse a filter on somebody who is not at the table.
+func (s *State) seated(name string) bool {
+	for _, a := range s.attendees() {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }
 
 // chair returns the agent chairing the meeting, or "" when nobody does.

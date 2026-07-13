@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/capability"
@@ -65,6 +66,7 @@ func NewMeetCmd() *cobra.Command {
 		newPollCmd(), newAskCmd(),
 		newConvergeCmd(), newCloseCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
+		newObserveCmd(),
 	)
 	return cmd
 }
@@ -91,7 +93,10 @@ func humanName() string {
 func drivability(name string) string {
 	// Shared operability gate with the capability router (pkg/capability): the
 	// codex login-shell caveat is surfaced by shellRouting below, not here.
-	if ok, _ := capability.Operable(name); !ok {
+	// The name is resolved to its harness first — a participant seated by
+	// nickname is still driven by a binary, and LookPath does not know the
+	// nickname.
+	if ok, _ := capability.Operable(capability.ResolveTool(name)); !ok {
 		return "not installed"
 	}
 	return "installed"
@@ -106,7 +111,11 @@ func shellRouting(name string) string {
 	if os.Getenv("BASHY_FORCE_AGENT_SHELL") == "0" {
 		return "shell: system (forcing disabled)"
 	}
-	if name == "codex" {
+	// Match on the harness, not on what the seat was called. `codex`,
+	// `codex-gpt-5.5`, and the nickname drawn for that binding are all the
+	// same binary reading the same /etc/passwd — a caveat that only fires for
+	// one spelling of the name is a caveat that does not fire.
+	if capability.ResolveTool(name) == "codex" {
 		return "shell: ⚠ codex reads /etc/passwd — run `bashy install-agent codex` (chsh) to route via bashy"
 	}
 	return "shell: bashy ✓ (env-forced)"
@@ -115,6 +124,9 @@ func shellRouting(name string) string {
 func printPreview(w io.Writer, st *State) {
 	fmt.Fprintln(w, "meet: resolved session")
 	fmt.Fprintf(w, "  id           %s\n", st.ID)
+	if st.Room > 0 {
+		fmt.Fprintf(w, "  room         %d   ← `bashy meet observe %d` to watch it live\n", st.Room, st.Room)
+	}
 	fmt.Fprintf(w, "  initiator    %s\n", st.initiatorLabel())
 	fmt.Fprintf(w, "  secretary    %s  records only, decides nothing — %s · %s\n", st.Secretary, drivability(st.Secretary), shellRouting(st.Secretary))
 	if st.chaired() {
@@ -127,7 +139,7 @@ func printPreview(w io.Writer, st *State) {
 		if i > 0 {
 			label = "            "
 		}
-		fmt.Fprintf(w, "  %s %s  %s · %s\n", label, p, drivability(p), shellRouting(p))
+		fmt.Fprintf(w, "  %s %s  %s · %s\n", label, seatLabel(p), drivability(p), shellRouting(p))
 	}
 	if len(st.Participants) == 0 {
 		fmt.Fprintln(w, "  participants (none)")
@@ -152,7 +164,7 @@ func printPreview(w io.Writer, st *State) {
 func attendeeWarnings(st *State) []string {
 	var out []string
 	for _, p := range st.Participants {
-		if ok, reason := capability.Operable(p); !ok {
+		if ok, reason := capability.Operable(capability.ResolveTool(p)); !ok {
 			out = append(out, fmt.Sprintf("%s is not routable: %s", p, reason))
 		}
 	}
@@ -174,15 +186,18 @@ type sessionFlags struct {
 	minTurnChars int
 	maxTurns     int
 	maxStalls    int
+	minBand      int
 	participants []string
 	agenda       []string
 	context      []string
+	rosterNotes  []string // what --min-band seated, and what it could not
 }
 
 func (sf *sessionFlags) bind(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.StringVar(&sf.topic, "topic", "", "meeting topic (required)")
 	f.StringArrayVar(&sf.participants, "participant", nil, "participant agent — decides content (repeatable)")
+	f.IntVar(&sf.minBand, "min-band", 0, "seat every operable agent at this capability band or above (1-4), instead of naming them")
 	f.StringVar(&sf.secretary, "secretary", "claude", "secretary agent — records, decides nothing; never a participant or the chair")
 	f.StringVar(&sf.chair, "chair", "", "chair agent — directs the discussion and judges done-ness; empty means round-robin with no chair")
 	f.StringArrayVar(&sf.agenda, "agenda", nil, "agenda item (repeatable)")
@@ -202,9 +217,19 @@ func (sf *sessionFlags) newState() (*State, error) {
 			return nil, fmt.Errorf("meet: --context %s: %w", f, err)
 		}
 	}
+	// Seating happens before Validate, so a band-built roster is held to the
+	// same rules as one someone typed out.
+	if err := sf.seatByBand(); err != nil {
+		return nil, err
+	}
+	// And every seat is resolved to its canonical name before Validate, so the
+	// duplicate check sees through aliases: --participant Sable --participant
+	// claude-fable5 is ONE agent seated twice, and seating it twice would
+	// dilute the vote while looking like diversity.
+	sf.canonicalizeRoster()
 	cwd, _ := os.Getwd()
 	st := &State{
-		ID: newID(sf.topic, nowFn()), Topic: sf.topic, Agenda: sf.agenda,
+		ID: newID(sf.topic, nowFn()), Room: assignRoom(), Topic: sf.topic, Agenda: sf.agenda,
 		Participants: sf.participants, Secretary: sf.secretary, Chair: sf.chair,
 		Human:        humanName(),
 		Initiator:    sf.initiator,
@@ -270,6 +295,7 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 			w := cmd.OutOrStdout()
+			sf.printRoster(w)
 			printPreview(w, st)
 			if dry {
 				fmt.Fprintln(w, "  (dry-run: no agents launched)")
@@ -438,8 +464,11 @@ func newConsultCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// consult's stdout is the verdict a caller parses; the roster note
+			// is commentary and belongs on stderr.
+			sf.printRoster(cmd.ErrOrStderr())
 			if len(st.Participants) == 0 {
-				return fmt.Errorf("meet: consult needs at least one --participant")
+				return fmt.Errorf("meet: consult needs at least one --participant or a --min-band")
 			}
 			if err := st.save(); err != nil {
 				return err
@@ -932,10 +961,15 @@ func newApplyCmd() *cobra.Command {
 func newShowCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
-		Use:   "show <id>",
+		Use:   "show <room>|<id>",
 		Short: "show a meeting's roster, per-participant coverage, and artifacts",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := resolveMeeting(args[0])
+			if err != nil {
+				return err
+			}
+			args = []string{id}
 			st, err := loadState(args[0])
 			if err != nil {
 				return err
@@ -1004,16 +1038,27 @@ func newListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "list saved meetings",
-		Args:  cobra.NoArgs,
+		Long: "List saved meetings.\n\n" +
+			"ROOM is the short number you attach by: `bashy meet observe 2`. It is\n" +
+			"assigned from the lowest free number among the OPEN meetings and reused\n" +
+			"once a meeting closes, exactly like a shell's job numbers.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sessions, err := listSessions()
+			sessions, err := openRooms()
 			if err != nil {
 				return err
 			}
-			w := cmd.OutOrStdout()
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ROOM\tID\tSTATUS\tPARTICIPANTS\tTOPIC")
 			for _, s := range sessions {
-				fmt.Fprintf(w, "%-40s  %-8s  %-24s  %s\n",
-					s.ID, s.Status, strings.Join(s.Participants, ","), s.Topic)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					roomLabel(s), s.ID, s.Status, strings.Join(s.Participants, ","), s.Topic)
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			if len(sessions) == 0 {
+				fmt.Fprintln(cmd.ErrOrStderr(), "no meetings on this host")
 			}
 			return nil
 		},
@@ -1022,11 +1067,15 @@ func newListCmd() *cobra.Command {
 
 func newResumeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "resume <id>",
+		Use:   "resume <room>|<id>",
 		Short: "reopen a saved meeting in the REPL",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := loadState(args[0])
+			id, err := resolveMeeting(args[0])
+			if err != nil {
+				return err
+			}
+			st, err := loadState(id)
 			if err != nil {
 				return err
 			}
