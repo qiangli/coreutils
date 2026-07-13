@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/agentpty"
 )
 
 func TestClassifyGate(t *testing.T) {
@@ -120,7 +122,7 @@ func TestRouteGateRoutesByKind(t *testing.T) {
 			name:    "trust says clear payload",
 			verdict: GateVerdict{Kind: GateTrust, Signature: "do you trust"},
 			action:  "say_trust",
-			wantSay: gateTrustClearPayload,
+			wantSay: agentpty.GateTrustClearPayload,
 		},
 		{
 			name:    "browser oauth opens browser login",
@@ -273,28 +275,28 @@ func TestGateBrokerObserveTailDebouncesAndRoutesOnce(t *testing.T) {
 	}, time.Second)
 	tail := "Do you trust the contents of this folder?\n1. Yes, proceed\n2. No"
 
-	_, action, err := b.observeTail(tail, now)
+	_, action, err := b.ObserveTail(tail, now)
 	if err != nil {
 		t.Fatalf("first observe error: %v", err)
 	}
 	if action != "debounce" || len(said) != 0 {
 		t.Fatalf("first observe action=%q said=%d, want debounce and 0", action, len(said))
 	}
-	_, action, err = b.observeTail(tail, now.Add(500*time.Millisecond))
+	_, action, err = b.ObserveTail(tail, now.Add(500*time.Millisecond))
 	if err != nil {
 		t.Fatalf("second observe error: %v", err)
 	}
 	if action != "debounce" || len(said) != 0 {
 		t.Fatalf("second observe action=%q said=%d, want debounce and 0", action, len(said))
 	}
-	_, action, err = b.observeTail(tail, now.Add(time.Second))
+	_, action, err = b.ObserveTail(tail, now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("third observe error: %v", err)
 	}
 	if action != "say_trust" || len(said) != 1 {
 		t.Fatalf("third observe action=%q said=%d, want say_trust and 1", action, len(said))
 	}
-	_, action, err = b.observeTail(tail, now.Add(2*time.Second))
+	_, action, err = b.ObserveTail(tail, now.Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("fourth observe error: %v", err)
 	}
@@ -325,20 +327,20 @@ func TestGateBrokerObserveTailCapEscalates(t *testing.T) {
 
 	first := "Do you trust this directory?\n1) Yes\n2) No"
 	second := "Login required. Visit https://auth.example.com/oauth/authorize?client_id=abc to continue."
-	if _, _, err := b.observeTail(first, now); err != nil {
+	if _, _, err := b.ObserveTail(first, now); err != nil {
 		t.Fatalf("first observe error: %v", err)
 	}
-	actionVerdict, action, err := b.observeTail(first, now.Add(time.Second))
+	actionVerdict, action, err := b.ObserveTail(first, now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("first route error: %v", err)
 	}
 	if actionVerdict.Kind != GateTrust || action != "say_trust" || said != 1 || escalated != 0 {
 		t.Fatalf("first route kind=%q action=%q said=%d escalated=%d", actionVerdict.Kind, action, said, escalated)
 	}
-	if _, _, err := b.observeTail(second, now.Add(2*time.Second)); err != nil {
+	if _, _, err := b.ObserveTail(second, now.Add(2*time.Second)); err != nil {
 		t.Fatalf("second observe error: %v", err)
 	}
-	actionVerdict, action, err = b.observeTail(second, now.Add(3*time.Second))
+	actionVerdict, action, err = b.ObserveTail(second, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("second route error: %v", err)
 	}

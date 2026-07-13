@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
+	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/secrets"
@@ -60,6 +61,30 @@ type Options struct {
 	// Honoured only by the default runner: an injected Runner captures output
 	// however it likes, and it is not this package's business to make it stream.
 	Stream io.Writer
+
+	// PTY runs the agent attached to a pseudo-terminal instead of a pipe.
+	//
+	// Agent CLIs are TUIs, and several of them stop dead on a pipe: the first
+	// thing they do in an unfamiliar directory is ask "do you trust the contents
+	// of this folder?" — on a terminal, expecting a keystroke. A launcher that
+	// cannot answer produces not a slow agent but a silent one, which then times
+	// out reporting the wrong cause. `agy` does this on EVERY launch. Under a PTY
+	// the prompt is seen and cleared (pkg/agentpty), and the agent just works.
+	//
+	// It also opens CtlSock, which is the only way to steer a running agent.
+	//
+	// The cost is that a PTY has one stream: stdout and stderr merge, so an
+	// agent's CLI chrome lands in the captured turn alongside its answer. Pipe
+	// mode keeps them apart. So this is opt-in per call, not a default.
+	//
+	// Windows has no PTY here; the runner falls back to a pipe rather than
+	// failing. A Windows user loses trust-clearing and steering — degraded, not
+	// broken.
+	PTY bool
+
+	// CtlSock is the unix socket an operator writes to in order to steer this
+	// agent mid-run (see agentpty). Only meaningful with PTY.
+	CtlSock string
 }
 
 // Result is the stable envelope returned by Invoke and optionally printed by
@@ -155,7 +180,50 @@ type Runner interface {
 	Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error)
 }
 
-type execRunner struct{ stream io.Writer }
+type execRunner struct {
+	stream  io.Writer
+	pty     bool
+	ctlSock string
+}
+
+// runPTY runs the agent attached to a pseudo-terminal.
+//
+// It builds the SAME *exec.Cmd as the pipe path — same argv, same cwd, and
+// crucially the same agentChildEnv — and only changes how the process is
+// attached. That is why the PTY runner lives here rather than in agentpty or in
+// a caller: agentChildEnv is what scrubs secrets out of the child's environment,
+// forces its shell to be bashy, and stamps its principal identity. A PTY runner
+// built anywhere else would silently launch agents without any of the three, and
+// nothing would fail loudly enough to notice.
+//
+// A PTY merges stdout and stderr — a terminal has one stream — so the captured
+// turn includes whatever chrome the CLI prints. That is the price of being able
+// to answer the agent's questions and steer it, and it is why PTY is opt-in.
+func (r execRunner) runPTY(cmd *exec.Cmd) (string, int, error) {
+	var buf bytes.Buffer
+	sink := io.Writer(&buf)
+	if r.stream != nil {
+		// Tee to the live watcher, exactly as the pipe path does.
+		sink = io.MultiWriter(&buf, r.stream)
+	}
+	exit, killReason, err := agentpty.Run(cmd, sink, agentpty.Options{
+		CtlSock: r.ctlSock,
+		// Always capture. The caller records this turn; the human, if there is
+		// one, is watching through an observer rather than typing at the agent.
+		Capture: true,
+	})
+	out := buf.String()
+	if err != nil {
+		return out, exit, err
+	}
+	if killReason != "" {
+		return out, exit, fmt.Errorf("agent terminated: %s", killReason)
+	}
+	if exit != 0 {
+		return out, exit, fmt.Errorf("%s exited %d", cmd.Path, exit)
+	}
+	return out, 0, nil
+}
 
 func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
 	// macOS: a cask/download-installed agent (e.g. codex) carries
@@ -179,6 +247,16 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	// default; BASHY_FORCE_AGENT_SHELL=0 disables. cmd.Path is already resolved
 	// against the real PATH, so prepending the shim dir never shadows the agent.
 	cmd.Env = agentChildEnv(ctx)
+
+	// Attach to a PTY once the command — and above all its environment — is
+	// fully built, so the PTY path cannot diverge from the pipe path in what the
+	// agent actually inherits. On Windows there is no PTY: fall through to the
+	// pipe rather than failing, since a run without trust-clearing and steering
+	// is degraded, not broken.
+	if r.pty && agentpty.Supported() {
+		return r.runPTY(cmd)
+	}
+
 	// Capture stdout and stderr SEPARATELY. The agent's actual answer is on
 	// stdout; CLI chrome (banners, warnings, progress) goes to stderr and would
 	// otherwise pollute a captured turn — and a truncated multibyte char in that
@@ -457,7 +535,7 @@ func NewChatCmd() *cobra.Command {
 // Invoke resolves the agent, builds the prompt, and runs it.
 func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if runner == nil {
-		runner = execRunner{stream: opt.Stream}
+		runner = execRunner{stream: opt.Stream, pty: opt.PTY, ctlSock: opt.CtlSock}
 	}
 	name, err := ResolveAgent(opt.Agent, opt.Role)
 	if err != nil {

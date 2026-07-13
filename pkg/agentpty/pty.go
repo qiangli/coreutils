@@ -1,6 +1,6 @@
 //go:build !windows
 
-package weave
+package agentpty
 
 import (
 	"bufio"
@@ -25,7 +25,11 @@ import (
 	"golang.org/x/term"
 )
 
-// runWeaveToolPTY launches cmd attached to a freshly-allocated PTY.
+// Supported reports whether this host can run an agent under a PTY. The Windows
+// build returns false and callers fall back to a plain exec.
+func Supported() bool { return true }
+
+// Run launches cmd attached to a freshly-allocated PTY.
 //
 // Stdin/stdout routing depends on the parent's terminal:
 //   - parent stdin IS a TTY: switch to raw mode, bidirectionally
@@ -39,11 +43,11 @@ import (
 //
 // logSink is only used in the non-TTY path; pass nil for the TTY
 // pass-through case. guards carries the three watchdog tripwires
-// (idle, wall-clock, memory) — see weaveGuards. Returns the
+// (idle, wall-clock, memory) — see Options. Returns the
 // subagent's exit code (or 128+N when killed by signal N, matching
 // the wrap helper), the first wrapper-initiated kill reason, if any.
-func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int, string, error) {
-	rows, cols := weavePTYSize()
+func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
+	rows, cols := ptySize()
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: rows, Cols: cols})
 	if err != nil {
 		return 127, "", fmt.Errorf("pty.Start: %w", err)
@@ -69,20 +73,20 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 				return
 			}
 			pid := cmd.Process.Pid
-			slog.Warn("weave: terminating subagent tree", "pid", pid, "reason", reason)
+			slog.Warn("agentpty: terminating subagent tree", "pid", pid, "reason", reason)
 			if logSink != nil {
-				fmt.Fprintf(logSink, "\r\n[weave] terminating subagent: %s\r\n", reason)
+				fmt.Fprintf(logSink, "\r\n[agent] terminating subagent: %s\r\n", reason)
 				// Forensic snapshot while `ps` still works: the
 				// 2026-06 OOM post-mortems had no record of which
 				// process actually held the memory. Tree-local AND
 				// system-wide, so a culprit outside the subagent
 				// tree is still named.
-				if tree, system := weaveForensicSnapshot(pid); tree != "" {
-					fmt.Fprintf(logSink, "[weave] top tree procs:   %s\r\n", tree)
-					fmt.Fprintf(logSink, "[weave] top system procs: %s\r\n", system)
+				if tree, system := forensicSnapshot(pid); tree != "" {
+					fmt.Fprintf(logSink, "[agent] top tree procs:   %s\r\n", tree)
+					fmt.Fprintf(logSink, "[agent] top system procs: %s\r\n", system)
 				}
 			}
-			pids := weaveProcTreePids(pid)
+			pids := procTreePids(pid)
 			_ = syscall.Kill(-pid, syscall.SIGTERM)
 			for _, p := range pids {
 				_ = syscall.Kill(p, syscall.SIGTERM)
@@ -93,7 +97,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 					return // leader reaped; Wait() unblocks
 				}
 				_ = syscall.Kill(-pid, syscall.SIGKILL)
-				for _, p := range weaveProcTreePids(pid) {
+				for _, p := range procTreePids(pid) {
 					_ = syscall.Kill(p, syscall.SIGKILL)
 				}
 			}()
@@ -131,9 +135,9 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	lastWriteUnixNs.Store(time.Now().UnixNano())
 	watchdogStop := make(chan struct{})
 	defer close(watchdogStop)
-	if guards.idleTimeout > 0 {
+	if opts.IdleTimeout > 0 {
 		go func() {
-			ticker := time.NewTicker(guards.idleTimeout / 4)
+			ticker := time.NewTicker(opts.IdleTimeout / 4)
 			defer ticker.Stop()
 			for {
 				select {
@@ -141,9 +145,9 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 					return
 				case <-ticker.C:
 					last := time.Unix(0, lastWriteUnixNs.Load())
-					if time.Since(last) >= guards.idleTimeout {
+					if time.Since(last) >= opts.IdleTimeout {
 						killTree(fmt.Sprintf("idle %s exceeds --idle-timeout %s",
-							time.Since(last).Round(time.Second), guards.idleTimeout), 10*time.Second)
+							time.Since(last).Round(time.Second), opts.IdleTimeout), 10*time.Second)
 						return
 					}
 				}
@@ -166,10 +170,10 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	// wake it re-checks within `interval` and catches the overrun, so
 	// the ceiling fires within `interval` of the true deadline even
 	// across a suspend.
-	if guards.maxRuntime > 0 {
+	if opts.MaxRuntime > 0 {
 		go func() {
-			deadlineUnix := time.Now().Add(guards.maxRuntime).Unix()
-			interval := guards.maxRuntime / 10
+			deadlineUnix := time.Now().Add(opts.MaxRuntime).Unix()
+			interval := opts.MaxRuntime / 10
 			if interval <= 0 || interval > 30*time.Second {
 				interval = 30 * time.Second
 			}
@@ -181,7 +185,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 					return
 				case <-ticker.C:
 					if time.Now().Unix() >= deadlineUnix {
-						killTree(fmt.Sprintf("runtime exceeds --max-runtime %s (wall-clock)", guards.maxRuntime), 10*time.Second)
+						killTree(fmt.Sprintf("runtime exceeds --max-runtime %s (wall-clock)", opts.MaxRuntime), 10*time.Second)
 						return
 					}
 				}
@@ -194,7 +198,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	// backstop — whatever leaks (orphan storms, runaway builds, a
 	// buggy interpreter under test), the agent dies at its budget
 	// instead of taking down the machine.
-	if guards.memLimitBytes > 0 {
+	if opts.MemLimitBytes > 0 {
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
@@ -212,19 +216,19 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 					if cmd.Process == nil {
 						continue
 					}
-					rss := weaveProcTreeRSSBytes(cmd.Process.Pid)
-					if rss > guards.memLimitBytes {
+					rss := procTreeRSSBytes(cmd.Process.Pid)
+					if rss > opts.MemLimitBytes {
 						killTree(fmt.Sprintf("process-tree RSS %dMB exceeds --mem-limit %dMB",
-							rss>>20, guards.memLimitBytes>>20), 10*time.Second)
+							rss>>20, opts.MemLimitBytes>>20), 10*time.Second)
 						return
 					}
 					if rss >= lastLogged*2 {
 						lastLogged = rss
-						slog.Warn("weave: subagent tree RSS growing", "pid", cmd.Process.Pid, "rss_mb", rss>>20)
+						slog.Warn("agentpty: subagent tree RSS growing", "pid", cmd.Process.Pid, "rss_mb", rss>>20)
 						if logSink != nil {
-							tree, system := weaveForensicSnapshot(cmd.Process.Pid)
-							fmt.Fprintf(logSink, "\r\n[weave] tree RSS %dMB (limit %dMB) — top tree: %s | top system: %s\r\n",
-								rss>>20, guards.memLimitBytes>>20, tree, system)
+							tree, system := forensicSnapshot(cmd.Process.Pid)
+							fmt.Fprintf(logSink, "\r\n[agent] tree RSS %dMB (limit %dMB) — top tree: %s | top system: %s\r\n",
+								rss>>20, opts.MemLimitBytes>>20, tree, system)
 						}
 					}
 				}
@@ -237,12 +241,12 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	// TUI's line discipline reads as submit). Serving it in both
 	// the captured and pass-through paths costs nothing; writes to
 	// *os.File are serialized by the kernel for these small sizes.
-	if guards.ctlSock != "" {
-		_ = os.Remove(guards.ctlSock)
-		if ln, lnErr := net.Listen("unix", guards.ctlSock); lnErr == nil {
+	if opts.CtlSock != "" {
+		_ = os.Remove(opts.CtlSock)
+		if ln, lnErr := net.Listen("unix", opts.CtlSock); lnErr == nil {
 			defer func() {
 				_ = ln.Close()
-				_ = os.Remove(guards.ctlSock)
+				_ = os.Remove(opts.CtlSock)
 			}()
 			go func() {
 				for {
@@ -254,19 +258,19 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 						defer c.Close()
 						sc := bufio.NewScanner(c)
 						for sc.Scan() {
-							weaveWritePTYControlLine(ptmx, sc.Text())
+							writePTYControlLine(ptmx, sc.Text())
 						}
 					}(conn)
 				}
 			}()
 		} else {
-			if f, err := os.OpenFile(guards.ctlSock, os.O_CREATE|os.O_RDONLY, 0o600); err == nil {
+			if f, err := os.OpenFile(opts.CtlSock, os.O_CREATE|os.O_RDONLY, 0o600); err == nil {
 				_ = f.Close()
-				defer func() { _ = os.Remove(guards.ctlSock) }()
-				go weaveTailPTYControlFile(guards.ctlSock, ptmx)
-				slog.Warn("weave: control socket unavailable; using file control fallback", "path", guards.ctlSock, "err", lnErr)
+				defer func() { _ = os.Remove(opts.CtlSock) }()
+				go tailPTYControlFile(opts.CtlSock, ptmx)
+				slog.Warn("agentpty: control socket unavailable; using file control fallback", "path", opts.CtlSock, "err", lnErr)
 			} else {
-				slog.Warn("weave: control socket unavailable; `weave say` disabled for this run", "path", guards.ctlSock, "err", lnErr)
+				slog.Warn("agentpty: control socket unavailable; `weave say` disabled for this run", "path", opts.CtlSock, "err", lnErr)
 			}
 		}
 	}
@@ -313,20 +317,20 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	}
 	tap := func(w io.Writer) io.Writer { return &activityTap{w: w, bump: bump} }
 	trustTap := func(w io.Writer) io.Writer {
-		if guards.ctlSock == "" {
+		if opts.CtlSock == "" {
 			return w
 		}
-		return newTrustClearTap(w, guards.ctlSock)
+		return newTrustClearTap(w, opts.CtlSock)
 	}
 
-	if parentTTY {
+	if parentTTY && !opts.Capture {
 		// Raw mode so the user's keystrokes go straight to the
 		// subagent's TTY. Goroutine for stdin→PTY (os.Stdin reads
 		// block); PTY→stdout in the foreground (blocks until child
 		// closes the slave).
 		oldState, err = term.MakeRaw(int(os.Stdout.Fd()))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "weave: term.MakeRaw: %v\n", err)
+			fmt.Fprintf(os.Stderr, "agentpty: term.MakeRaw: %v\n", err)
 		}
 		go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
 		_, _ = io.Copy(tap(trustTap(os.Stdout)), ptmx)
@@ -341,9 +345,13 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		if logSink == nil {
 			logSink = io.Discard
 		}
-		streamJSONLog := newWeaveStreamJSONLogWriter(logSink)
-		_, _ = io.Copy(tap(trustTap(streamJSONLog)), ptmx)
-		_ = streamJSONLog.Flush()
+		// The caller decides what the output IS — weave decodes stream-json into
+		// a worker log, a meeting streams the raw lines to whoever is watching.
+		sink, flush := opts.filter(logSink)
+		_, _ = io.Copy(tap(trustTap(sink)), ptmx)
+		if flush != nil {
+			_ = flush()
+		}
 	}
 
 	waitErr := cmd.Wait()
@@ -369,7 +377,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	}
 }
 
-func weaveWritePTYControlLine(ptmx *os.File, line string) {
+func writePTYControlLine(ptmx *os.File, line string) {
 	if line == "" {
 		return
 	}
@@ -385,7 +393,7 @@ func weaveWritePTYControlLine(ptmx *os.File, line string) {
 	_, _ = ptmx.WriteString(line + "\r")
 }
 
-func weaveTailPTYControlFile(path string, ptmx *os.File) {
+func tailPTYControlFile(path string, ptmx *os.File) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -398,7 +406,7 @@ func weaveTailPTYControlFile(path string, ptmx *os.File) {
 		if line != "" {
 			line = strings.TrimSuffix(line, "\n")
 			line = strings.TrimSuffix(line, "\r")
-			weaveWritePTYControlLine(ptmx, line)
+			writePTYControlLine(ptmx, line)
 		}
 		if err == nil {
 			continue
@@ -420,19 +428,25 @@ type activityTap struct {
 	bump func(int)
 }
 
+// trustClearTap watches the live output and clears a trust prompt the moment it
+// appears — the difference between an agent that attends and one that sits at a
+// question nobody is there to answer.
+//
+// Only GateTrust is routed here. The other gates need a browser or a human, and
+// those routes belong to the caller, which knows where an escalation should go.
 type trustClearTap struct {
 	w    io.Writer
-	deps routeDeps
+	deps RouteDeps
 	tail string
 }
 
 func newTrustClearTap(w io.Writer, ctlSock string) io.Writer {
 	return &trustClearTap{
 		w: w,
-		deps: routeDeps{
-			State: &gateRouteState{},
+		deps: RouteDeps{
+			State: &GateRouteState{},
 			Say: func(payload string) error {
-				return gateBrokerSay(ctlSock, payload)
+				return BrokerSay(ctlSock, payload)
 			},
 		},
 	}
@@ -445,8 +459,8 @@ func (t *trustClearTap) Write(p []byte) (int, error) {
 		if len(t.tail) > 8192 {
 			t.tail = t.tail[len(t.tail)-8192:]
 		}
-		if verdict := classifyGate(t.tail); verdict.Kind == GateTrust {
-			_, _ = routeGate(verdict, t.deps)
+		if verdict := ClassifyGate(t.tail); verdict.Kind == GateTrust {
+			_, _ = RouteGate(verdict, t.deps)
 		}
 	}
 	return n, err
@@ -458,26 +472,20 @@ func (a *activityTap) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// weavePTYSize returns the controlling terminal's size, or 24x80 as
+// ptySize returns the controlling terminal's size, or 24x80 as
 // a fallback so backgrounded subagents still get a sensible default.
-func weavePTYSize() (uint16, uint16) {
+func ptySize() (uint16, uint16) {
 	if w, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
 		return uint16(h), uint16(w)
 	}
 	return 24, 80
 }
 
-// weaveStdinIsTTY reports whether the calling process's stdin is a
-// real terminal. Used to gate the auto-setsid + auto-log-file paths.
-func weaveStdinIsTTY() bool {
-	return term.IsTerminal(int(os.Stdin.Fd()))
-}
-
-// weaveProcSnapshot returns the child-map, RSS (bytes), and command
+// procSnapshot returns the child-map, RSS (bytes), and command
 // name per PID from one `ps` pass. Shelling out to ps is deliberate:
 // it's portable across macOS and Linux (no /proc on darwin), and the
 // watchdogs poll at multi-second intervals where a fork is noise.
-func weaveProcSnapshot() (children map[int][]int, rss map[int]int64, comm map[int]string) {
+func procSnapshot() (children map[int][]int, rss map[int]int64, comm map[int]string) {
 	out, err := exec.Command("ps", "-axo", "pid=,ppid=,rss=,comm=").Output()
 	if err != nil {
 		return nil, nil, nil
@@ -503,9 +511,9 @@ func weaveProcSnapshot() (children map[int][]int, rss map[int]int64, comm map[in
 	return children, rss, comm
 }
 
-// weaveTopProcs formats the n highest-RSS processes among pids as
+// topProcs formats the n highest-RSS processes among pids as
 // one log-friendly line: "pid:comm=rssMB pid:comm=rssMB ...".
-func weaveTopProcs(pids []int, rss map[int]int64, comm map[int]string, n int) string {
+func topProcs(pids []int, rss map[int]int64, comm map[int]string, n int) string {
 	sorted := append([]int(nil), pids...)
 	sort.Slice(sorted, func(i, j int) bool { return rss[sorted[i]] > rss[sorted[j]] })
 	if len(sorted) > n {
@@ -522,14 +530,14 @@ func weaveTopProcs(pids []int, rss map[int]int64, comm map[int]string, n int) st
 	return strings.Join(parts, " ")
 }
 
-// weaveForensicSnapshot returns two lines for the issue log: the
+// forensicSnapshot returns two lines for the issue log: the
 // top-RSS processes inside the subagent tree, and system-wide. The
 // system-wide line is the one that catches a culprit OUTSIDE the
 // tree (the 2026-06 OOMs were attributed to a VSCode process while
 // per-process stats in Activity Monitor were already unreadable —
 // this snapshot is taken while `ps` still works).
-func weaveForensicSnapshot(root int) (tree string, system string) {
-	children, rss, comm := weaveProcSnapshot()
+func forensicSnapshot(root int) (tree string, system string) {
+	children, rss, comm := procSnapshot()
 	if children == nil {
 		return "", ""
 	}
@@ -537,13 +545,13 @@ func weaveForensicSnapshot(root int) (tree string, system string) {
 	for p := range rss {
 		all = append(all, p)
 	}
-	return weaveTopProcs(weaveDescend(root, children), rss, comm, 5),
-		weaveTopProcs(all, rss, comm, 5)
+	return topProcs(descend(root, children), rss, comm, 5),
+		topProcs(all, rss, comm, 5)
 }
 
-// weaveDescend walks the snapshot from root, breadth-first, and
+// descend walks the snapshot from root, breadth-first, and
 // returns root plus every transitive descendant.
-func weaveDescend(root int, children map[int][]int) []int {
+func descend(root int, children map[int][]int) []int {
 	pids := []int{root}
 	seen := map[int]bool{root: true}
 	for i := 0; i < len(pids); i++ {
@@ -557,27 +565,27 @@ func weaveDescend(root int, children map[int][]int) []int {
 	return pids
 }
 
-// weaveProcTreePids returns root + all transitive children. Best
+// procTreePids returns root + all transitive children. Best
 // effort: processes that double-fork and reparent to init escape
 // the tree (they also escape the process group; nothing short of
 // cgroups catches those, and macOS has none).
-func weaveProcTreePids(root int) []int {
-	children, _, _ := weaveProcSnapshot()
+func procTreePids(root int) []int {
+	children, _, _ := procSnapshot()
 	if children == nil {
 		return []int{root}
 	}
-	return weaveDescend(root, children)
+	return descend(root, children)
 }
 
-// weaveProcTreeRSSBytes sums resident memory across the subagent's
+// procTreeRSSBytes sums resident memory across the subagent's
 // process tree.
-func weaveProcTreeRSSBytes(root int) int64 {
-	children, rss, _ := weaveProcSnapshot()
+func procTreeRSSBytes(root int) int64 {
+	children, rss, _ := procSnapshot()
 	if children == nil {
 		return 0
 	}
 	var total int64
-	for _, p := range weaveDescend(root, children) {
+	for _, p := range descend(root, children) {
 		total += rss[p]
 	}
 	return total
