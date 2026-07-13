@@ -310,16 +310,26 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				return nil
 			}
 
-			rec, err := pick(dir, root, args)
-			if err != nil {
-				// No live unclaimed handoff. If a recent one was CLAIMED, report
-				// that — so `resume` run after a pickup tells you who holds it.
-				if held := mostRecentClaimed(dir, roots); held != nil {
-					fmt.Fprintf(out, "STATUS: active — the %s seat is held by %s since %s\n  (%s; no handoff in flight — `bashy resume --all` for the register)\n",
-						held.SeatRole(), ownerOf(held), held.ResumedAt.Format(time.RFC3339), held.ID)
-					return nil
+			// With no id, "resume" means the SEAT: prefer the one live role handoff
+			// (steward/conductor) over task handoffs, so `resume` answers "who holds
+			// the seat" even when tasks coexist. Tasks are reached by id or --all.
+			var rec *Record
+			if len(args) == 0 {
+				rec = liveSeat(dir, roots)
+			}
+			if rec == nil {
+				var err error
+				rec, err = pick(dir, root, args)
+				if err != nil {
+					// No live unclaimed handoff. If a recent one was CLAIMED, report
+					// that — so `resume` after a pickup tells you who holds it.
+					if held := mostRecentClaimed(dir, roots); held != nil {
+						fmt.Fprintf(out, "STATUS: active — the %s seat is held by %s since %s\n  (%s; no handoff in flight — `bashy resume --all` for the register)\n",
+							held.SeatRole(), ownerOf(held), held.ResumedAt.Format(time.RFC3339), held.ID)
+						return nil
+					}
+					return err
 				}
-				return err
 			}
 
 			if show || asJSON {
@@ -412,6 +422,33 @@ func mostRecentClaimed(dir string, roots []string) *Record {
 			continue
 		}
 		if best == nil || r.ResumedAt.After(*best.ResumedAt) {
+			best = r
+		}
+	}
+	return best
+}
+
+// liveSeat returns the newest live role (seat) handoff for the project — one
+// that is transferring (parked, awaiting claim) or active (held). It is what a
+// bare `resume` resolves to, so "resume" answers the seat question directly even
+// when task handoffs coexist. Nil if there is no live seat.
+func liveSeat(dir string, roots []string) *Record {
+	recs, err := List(dir)
+	if err != nil {
+		return nil
+	}
+	var best *Record
+	for _, r := range recs {
+		if r.Role == "" {
+			continue
+		}
+		if s := r.Status(); s != "transferring" && s != "active" {
+			continue
+		}
+		if !(intersects(r.Project.Roots, roots) || intersects([]string{r.Project.Primary}, roots)) {
+			continue
+		}
+		if best == nil || r.CreatedAt.After(best.CreatedAt) {
 			best = r
 		}
 	}
