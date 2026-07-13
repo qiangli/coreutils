@@ -270,6 +270,13 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 			}
 		}
 	}
+	if guards.startupTrustClearPayload != "" {
+		_ = callSay(routeDeps{
+			Say: func(payload string) error {
+				return gateBrokerSay(guards.ctlSock, payload)
+			},
+		}, guards.startupTrustClearPayload)
+	}
 
 	parentTTY := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 
