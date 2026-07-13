@@ -306,6 +306,8 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 					} else {
 						fmt.Fprintln(out, "resume: no live handoff (--all shows superseded/cancelled/stale too)")
 					}
+				} else {
+					fmt.Fprintln(out, resumeHelpHint)
 				}
 				return nil
 			}
@@ -346,6 +348,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				if claim {
 					return fmt.Errorf("already held by %s", ownerOf(rec))
 				}
+				fmt.Fprintln(out, resumeHelpHint)
 				return nil
 			}
 
@@ -374,6 +377,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 
 			if !claim {
 				fmt.Fprintf(out, "\nSTATUS: unclaimed — this was READ-ONLY. To TAKE it (apply the work and record you hold it): `bashy resume --claim`\n")
+				fmt.Fprintln(out, resumeHelpHint)
 				return nil
 			}
 
@@ -454,6 +458,10 @@ func liveSeat(dir string, roots []string) *Record {
 	}
 	return best
 }
+
+// resumeHelpHint is the discoverability footer printed under resume's output so
+// a reader always knows how to reach the rest of the flags.
+const resumeHelpHint = "→ `bashy resume --help` for all options (--claim take it · --all register · --cancel · --prune)"
 
 // ownerOf names who holds a record: the claimant's grounded identity for an
 // active one (stamped from who ran --claim — not free text, so it cannot be
