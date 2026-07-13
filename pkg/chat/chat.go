@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/secrets"
@@ -85,6 +86,10 @@ type LaunchProfile struct {
 	UnsafeArgs []string
 }
 
+func toAgentLaunchOptions(opt Options) agentlaunch.Options {
+	return agentlaunch.Options{Sandbox: opt.Sandbox, ReadOnly: opt.ReadOnly, DryRun: opt.DryRun}
+}
+
 // Launch is a fully resolved invocation: which binary, which model, which argv.
 //
 // Tool and Model are what the OS needs — an executable and the provider's own
@@ -107,6 +112,28 @@ func (l Launch) Binding() string {
 		return ""
 	}
 	return l.ToolName + ":" + l.ModelName
+}
+
+func fromAgentLaunch(l agentlaunch.Launch) Launch {
+	return Launch{
+		Nick:      l.Nick,
+		Tool:      l.Tool,
+		ToolName:  l.ToolName,
+		Model:     l.Model,
+		ModelName: l.ModelName,
+		Args:      l.Args,
+	}
+}
+
+func toAgentLaunch(l Launch) agentlaunch.Launch {
+	return agentlaunch.Launch{
+		Nick:      l.Nick,
+		Tool:      l.Tool,
+		ToolName:  l.ToolName,
+		Model:     l.Model,
+		ModelName: l.ModelName,
+		Args:      l.Args,
+	}
 }
 
 // Runner starts an agent process. Tests and higher-level workflows can replace
@@ -222,17 +249,16 @@ func appendStderr(stdout, stderr string) string {
 // (--sandbox workspace-write) is already in Args, and the unsafe form is reached
 // only by an explicit `--sandbox danger-full-access`, which applySandbox maps and
 // guardUnsafeArgs then gates.
-var seededProfiles = map[string]LaunchProfile{
-	"claude":   {UnsafeArgs: []string{"--dangerously-skip-permissions"}},
-	"codex":    {Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}},
-	"agy":      {Args: []string{"--print-timeout", "40m", "-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
-	"opencode": {Args: []string{"run"}},
-	// aider takes its prompt via --message; the launcher appends the prompt as
-	// the final arg, so it becomes the --message value. --no-git keeps a turn
-	// advisory (no repo/commit writes). --yes-always (which switches off aider's
-	// confirmation gate) is unsafe and applied only when explicitly allowed.
-	"aider": {Args: []string{"--no-git", "--message"}, UnsafeArgs: []string{"--yes-always"}},
-}
+var seededProfiles = func() map[string]LaunchProfile {
+	out := make(map[string]LaunchProfile, len(agentlaunch.SeededProfiles))
+	for name, p := range agentlaunch.SeededProfiles {
+		out[name] = LaunchProfile{
+			Args:       append([]string(nil), p.Args...),
+			UnsafeArgs: append([]string(nil), p.UnsafeArgs...),
+		}
+	}
+	return out
+}()
 
 // newCatalog builds the fleet catalog the launcher resolves against. It is a
 // var so tests can pin it to a scratch store instead of the developer's own.
@@ -246,76 +272,11 @@ var newCatalog = func() *fleet.Catalog { return fleet.New() }
 // label the launcher logged and threw away, and every run silently used
 // whatever model the tool's own config happened to name.
 func resolveLaunch(name string, opt Options) (Launch, error) {
-	lnch := Launch{Nick: name, Tool: name, ToolName: name}
-	cat := newCatalog()
-
-	// An agent nickname resolves to both halves of its binding. Catalog.Agent
-	// also accepts a bare tool:model, so `claude:opus` finds the seeded agent.
-	//
-	// When it does, the CANONICAL nickname becomes the identity, not the string
-	// the caller typed. Attribution has to record a name that resolves: an
-	// agent stamped as `claude:opus` could never be written `@claude:opus` in
-	// prose, because a mention cannot contain a colon.
-	var toolName, modelName string
-	if a, ok := cat.Agent(name); ok {
-		toolName, modelName, lnch.Nick = a.Tool, a.Model, a.Name
-	} else if t, m, ok := strings.Cut(name, ":"); ok && t != "" && m != "" {
-		// A binding nobody has nicknamed yet.
-		toolName, modelName = t, m
-	} else {
-		toolName = name
-	}
-	lnch.Tool, lnch.ToolName = toolName, toolName
-
-	// The id handed to --model is the provider's, not ours: opencode wants
-	// `deepseek/deepseek-v4`, not the alias `deepseek-v4`. An unregistered
-	// model passes through verbatim rather than being dropped.
-	if modelName != "" {
-		lnch.Model, lnch.ModelName = modelName, modelName
-		if m, ok := cat.Model(modelName); ok {
-			lnch.Model, lnch.ModelName = m.Target(), m.Name
-		}
-	}
-
-	tool, known := cat.Tool(toolName)
-	if known {
-		lnch.Tool = tool.Binary()
-		if lnch.Model != "" && !tool.TakesModel() {
-			return lnch, fmt.Errorf("chat: tool %q cannot select a model, so %q is a label, not a selection (its launch template has no %s)",
-				tool.Name, name, fleet.ModelToken)
-		}
-		if args, ok := tool.ArgvPrefix(lnch.Model); ok {
-			out, err := finalizeArgs(tool.Name, args, opt)
-			if err != nil {
-				return lnch, err
-			}
-			lnch.Args = out
-			return lnch, nil
-		}
-	}
-
-	// Fallback: a tool the registry does not describe. It cannot take a model.
-	if lnch.Model != "" {
-		return lnch, fmt.Errorf("chat: no launch template for tool %q, so model %q cannot be passed to it; add it with `bashy tools add`",
-			toolName, modelName)
-	}
-	prof := seededProfiles[toolName]
-	base := append([]string{}, prof.Args...)
-	// Restore the agent's kill-switch flags ONLY when unsafe launches are
-	// permitted here (explicit opt-in or a verified container). By default the
-	// agent launches under its own approval gate — stricter, and the safe posture
-	// on an uncontained host.
-	if len(prof.UnsafeArgs) > 0 {
-		if ok, _ := unsafeLaunchAllowed(); ok {
-			base = append(append([]string{}, prof.UnsafeArgs...), base...)
-		}
-	}
-	out, err := finalizeArgs(toolName, base, opt)
-	if err != nil {
-		return lnch, err
-	}
-	lnch.Args = out
-	return lnch, nil
+	prevContainerized := agentlaunch.Containerized
+	agentlaunch.Containerized = containerized
+	defer func() { agentlaunch.Containerized = prevContainerized }()
+	l, err := agentlaunch.ResolveWithCatalog(name, toAgentLaunchOptions(opt), newCatalog)
+	return fromAgentLaunch(l), err
 }
 
 // forceAgentShell reports whether the launcher routes a spawned agent's shell
@@ -394,35 +355,7 @@ func forcedShellEnv(base []string, bashy, shimDir string) []string {
 // tool — a tool is not an agent, and inventing a nickname for it would put a
 // name in the record that resolves to nothing.
 func principalEnv(base []string, l Launch) []string {
-	// A raw `tool:model` binding nobody has nicknamed is not stampable either:
-	// a mention cannot contain a colon, so `@claude:opus` would never resolve.
-	// Mint a nickname (`bashy agents add`) to give the run a name.
-	//
-	// The comparison is against the tool's NAME, not its executable: a tool
-	// whose binary differs from its name (cursor → cursor-agent) is still a
-	// bare tool, and stamping it as an agent would invent a principal.
-	if l.Nick == "" || l.Nick == l.ToolName || strings.Contains(l.Nick, ":") {
-		return base
-	}
-	out := make([]string, 0, len(base)+4)
-	for _, kv := range base {
-		switch {
-		case strings.HasPrefix(kv, "BASHY_PRINCIPAL="),
-			strings.HasPrefix(kv, "BASHY_AGENT_ID="),
-			strings.HasPrefix(kv, "BASHY_AGENT_BINDING="):
-			// re-stamped below; a nested launch must not inherit its parent
-		default:
-			out = append(out, kv)
-		}
-	}
-	out = append(out,
-		"BASHY_PRINCIPAL=dhnt:agent/"+l.Nick,
-		"BASHY_AGENT_ID="+l.Nick,
-	)
-	if b := l.Binding(); b != "" {
-		out = append(out, "BASHY_AGENT_BINDING="+b)
-	}
-	return out
+	return agentlaunch.PrincipalEnv(base, toAgentLaunch(l))
 }
 
 var roleDefaults = map[string]string{
@@ -554,19 +487,15 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	return res, err
 }
 
-// launchKey carries the resolved Launch to execRunner without widening the
-// Runner interface, which meet, foreman, and sdlc all implement against.
-type launchKey struct{}
-
 func withLaunch(ctx context.Context, l Launch) context.Context {
-	return context.WithValue(ctx, launchKey{}, l)
+	return agentlaunch.WithLaunch(ctx, toAgentLaunch(l))
 }
 
 // LaunchFrom returns the invocation being run, when the caller came through
 // Invoke. A Runner built by hand sees no value and simply skips attribution.
 func LaunchFrom(ctx context.Context) (Launch, bool) {
-	l, ok := ctx.Value(launchKey{}).(Launch)
-	return l, ok
+	l, ok := agentlaunch.LaunchFrom(ctx)
+	return fromAgentLaunch(l), ok
 }
 
 // unsafeLaunchFlags are the flags by which an agent CLI's OWN approval gate is
@@ -579,12 +508,7 @@ func LaunchFrom(ctx context.Context) (Launch, bool) {
 // codex's `--sandbox danger-full-access` is here for the same reason: it turns
 // codex's built-in sandbox off. `--sandbox workspace-write` (the default) is
 // codex sandboxing itself and is NOT unsafe.
-var unsafeLaunchFlags = map[string]string{
-	"--dangerously-skip-permissions":             "disables the agent's approval gate",
-	"--dangerously-bypass-approvals-and-sandbox": "disables the agent's approval gate AND its sandbox",
-	"--yolo":       "disables the agent's approval gate",
-	"--yes-always": "auto-confirms every action, disabling the agent's approval gate",
-}
+var unsafeLaunchFlags = agentlaunch.UnsafeLaunchFlags
 
 // UnsafeLaunchEnv opts a host into launching agents with their own safety
 // systems disabled. It is the operator's explicit, auditable acceptance of the
@@ -611,15 +535,10 @@ var containerized = func() bool {
 // unsafeLaunchAllowed reports whether stripping an agent's safety systems is
 // permissible here, and why.
 func unsafeLaunchAllowed() (bool, string) {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(UnsafeLaunchEnv))) {
-	case "", "0", "false", "off", "no":
-	default:
-		return true, UnsafeLaunchEnv + " is set"
-	}
-	if containerized() {
-		return true, "running inside a container"
-	}
-	return false, ""
+	prevContainerized := agentlaunch.Containerized
+	agentlaunch.Containerized = containerized
+	defer func() { agentlaunch.Containerized = prevContainerized }()
+	return agentlaunch.UnsafeLaunchAllowed()
 }
 
 // guardUnsafeArgs refuses a launch that would disable an agent CLI's own safety
@@ -634,48 +553,19 @@ func unsafeLaunchAllowed() (bool, string) {
 // headless agent blocking forever on an approval prompt nobody can answer, and
 // a hang is a worse failure than a clear error. The operator gets a one-line fix.
 func guardUnsafeArgs(tool string, args []string) error {
-	if ok, _ := unsafeLaunchAllowed(); ok {
-		return nil
-	}
-	for i, a := range args {
-		why, bad := unsafeLaunchFlags[a]
-		// codex spells its kill-switch as a flag PAIR.
-		if !bad && a == "--sandbox" && i+1 < len(args) && args[i+1] == "danger-full-access" {
-			why, bad = "disables the agent's sandbox", true
-			a = "--sandbox danger-full-access"
-		}
-		if !bad {
-			continue
-		}
-		return fmt.Errorf(`chat: refusing to launch %q with %s
-
-%s, giving it unattended full access to this machine — and nothing here is
-containing it. Choose one:
-
-  • contain it     run the fleet inside a container (e.g. bashy podman), or
-  • accept it      %s=1 (explicit, logged risk acceptance)`,
-			tool, a, why, UnsafeLaunchEnv)
-	}
-	return nil
+	prevContainerized := agentlaunch.Containerized
+	agentlaunch.Containerized = containerized
+	defer func() { agentlaunch.Containerized = prevContainerized }()
+	return agentlaunch.GuardUnsafeArgs(tool, args)
 }
 
 // finalizeArgs applies the --sandbox override, then gates the result. Both
 // launch paths (registry template and seeded fallback) go through here.
 func finalizeArgs(tool string, args []string, opt Options) ([]string, error) {
-	if opt.ReadOnly {
-		args = readOnlyArgs(tool, args)
-	}
-	args = applySandbox(tool, args, opt)
-	// A dry run renders the argv but never executes it, so there is nothing to
-	// contain. Gating it would be backwards: seeing the dangerous flag printed is
-	// exactly how an operator discovers it is there.
-	if opt.DryRun {
-		return args, nil
-	}
-	if err := guardUnsafeArgs(tool, args); err != nil {
-		return nil, err
-	}
-	return args, nil
+	prevContainerized := agentlaunch.Containerized
+	agentlaunch.Containerized = containerized
+	defer func() { agentlaunch.Containerized = prevContainerized }()
+	return agentlaunch.FinalizeArgs(tool, args, toAgentLaunchOptions(opt))
 }
 
 // readOnlyArgs strips every approval-gate kill-switch from an argv and pins a
@@ -685,74 +575,13 @@ func finalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 // bypassed, but because there is nothing left to guard: the agent is being launched
 // with less authority, not more.
 func readOnlyArgs(tool string, args []string) []string {
-	out := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		if _, unsafe := unsafeLaunchFlags[args[i]]; unsafe {
-			continue
-		}
-		// codex spells its kill-switch as a flag PAIR; rewrite rather than drop, or
-		// the tool falls back to its interactive default and hangs a headless run.
-		if args[i] == "--sandbox" && i+1 < len(args) {
-			out = append(out, "--sandbox", "read-only")
-			i++
-			continue
-		}
-		out = append(out, args[i])
-	}
-	if tool == "codex" && !containsArg(out, "--sandbox") {
-		out = append(out, "--sandbox", "read-only")
-	}
-	return out
-}
-
-func containsArg(args []string, want string) bool {
-	for _, a := range args {
-		if a == want {
-			return true
-		}
-	}
-	return false
+	return agentlaunch.ReadOnlyArgs(tool, args)
 }
 
 // applySandbox layers the --sandbox override onto an already-rendered argv.
 // The prompt is not yet present, so appending a flag pair is safe here.
 func applySandbox(agent string, args []string, opt Options) []string {
-	if agent == "codex" {
-		sb := strings.TrimSpace(opt.Sandbox)
-		// danger-full-access is the conductor's unattended full-access mode. Plain
-		// `--sandbox danger-full-access` STILL shows codex approval/trust prompts —
-		// a GUI popup that hangs a headless runner (act_runner / CI). codex's
-		// --dangerously-bypass-approvals-and-sandbox is the documented fully
-		// non-interactive equivalent, "intended solely for externally sandboxed
-		// environments" (which the owner-gated act_runner is).
-		if sb == "danger-full-access" {
-			return replaceSandboxFlag(args, "--dangerously-bypass-approvals-and-sandbox")
-		}
-		if sb != "" {
-			for i := 0; i < len(args)-1; i++ {
-				if args[i] == "--sandbox" {
-					args[i+1] = sb
-					return args
-				}
-			}
-			args = append(args, "--sandbox", sb)
-		}
-	}
-	return args
-}
-
-// replaceSandboxFlag drops any `--sandbox <val>` pair and appends a standalone
-// flag (e.g. --dangerously-bypass-approvals-and-sandbox).
-func replaceSandboxFlag(args []string, flag string) []string {
-	out := make([]string, 0, len(args)+1)
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--sandbox" {
-			i++ // skip its value too
-			continue
-		}
-		out = append(out, args[i])
-	}
-	return append(out, flag)
+	return agentlaunch.ApplySandbox(agent, args, toAgentLaunchOptions(opt))
 }
 
 // ResolveAgent maps either an explicit agent or a workflow role to a command.

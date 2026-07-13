@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/gate"
 	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/weave/memory"
@@ -2067,10 +2067,6 @@ type weaveGuards struct {
 	// PTY master with a trailing \r — keystrokes, as far as the
 	// subagent can tell.
 	ctlSock string
-	// startupTrustClearPayload, when non-empty, is injected after the
-	// PTY control channel is up. This clears first-run trust prompts
-	// for tools whose fleet template declares a trust_clear route.
-	startupTrustClearPayload string
 }
 
 // errWeaveWrapperLive is returned from inside the queue-lock callback
@@ -2514,9 +2510,6 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		memLimitBytes: memLimitBytes,
 		ctlSock:       ctlSock,
 	}
-	if payload, ok := weaveTrustClearPayload(trustLaunch.Clear); ok {
-		guards.startupTrustClearPayload = payload
-	}
 	if ctlSock != "" {
 		if err := os.MkdirAll(filepath.Dir(ctlSock), 0o755); err != nil {
 			// Non-fatal: `weave say` degrades to state_conflict.
@@ -2808,29 +2801,7 @@ func runWeaveSay(cmd *cobra.Command, id int64, text string, tab, enter bool, raw
 }
 
 func weaveWriteControlFrame(path, frame string) error {
-	conn, err := net.DialTimeout("unix", path, 3*time.Second)
-	if err == nil {
-		defer conn.Close()
-		if _, err := io.WriteString(conn, frame); err != nil {
-			return fmt.Errorf("control socket write: %w", err)
-		}
-		return nil
-	}
-
-	st, statErr := os.Stat(path)
-	if statErr == nil && st.Mode().IsRegular() {
-		f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
-		if openErr != nil {
-			return fmt.Errorf("control file open: %w", openErr)
-		}
-		defer f.Close()
-		if _, writeErr := io.WriteString(f, frame); writeErr != nil {
-			return fmt.Errorf("control file write: %w", writeErr)
-		}
-		return nil
-	}
-
-	return fmt.Errorf("control socket dial: %w", err)
+	return agentlaunch.SendControlFrame(path, frame)
 }
 
 // decodeCescape decodes C-style escape sequences: \t, \r, \n, \xNN, \\.

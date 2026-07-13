@@ -270,14 +270,6 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 			}
 		}
 	}
-	if guards.startupTrustClearPayload != "" {
-		_ = callSay(routeDeps{
-			Say: func(payload string) error {
-				return gateBrokerSay(guards.ctlSock, payload)
-			},
-		}, guards.startupTrustClearPayload)
-	}
-
 	parentTTY := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 
 	// Forward SIGWINCH so terminal resizes propagate into the subagent's
@@ -320,6 +312,12 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		}
 	}
 	tap := func(w io.Writer) io.Writer { return &activityTap{w: w, bump: bump} }
+	trustTap := func(w io.Writer) io.Writer {
+		if guards.ctlSock == "" {
+			return w
+		}
+		return newTrustClearTap(w, guards.ctlSock)
+	}
 
 	if parentTTY {
 		// Raw mode so the user's keystrokes go straight to the
@@ -331,7 +329,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 			fmt.Fprintf(os.Stderr, "weave: term.MakeRaw: %v\n", err)
 		}
 		go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
-		_, _ = io.Copy(tap(os.Stdout), ptmx)
+		_, _ = io.Copy(tap(trustTap(os.Stdout)), ptmx)
 	} else {
 		// Non-TTY parent (orchestrator pipe / backgrounded by `cmd &`).
 		// Subagent gets a PTY but stdin is closed; PTY output is
@@ -344,7 +342,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 			logSink = io.Discard
 		}
 		streamJSONLog := newWeaveStreamJSONLogWriter(logSink)
-		_, _ = io.Copy(tap(streamJSONLog), ptmx)
+		_, _ = io.Copy(tap(trustTap(streamJSONLog)), ptmx)
 		_ = streamJSONLog.Flush()
 	}
 
@@ -420,6 +418,38 @@ func weaveTailPTYControlFile(path string, ptmx *os.File) {
 type activityTap struct {
 	w    io.Writer
 	bump func(int)
+}
+
+type trustClearTap struct {
+	w    io.Writer
+	deps routeDeps
+	tail string
+}
+
+func newTrustClearTap(w io.Writer, ctlSock string) io.Writer {
+	return &trustClearTap{
+		w: w,
+		deps: routeDeps{
+			State: &gateRouteState{},
+			Say: func(payload string) error {
+				return gateBrokerSay(ctlSock, payload)
+			},
+		},
+	}
+}
+
+func (t *trustClearTap) Write(p []byte) (int, error) {
+	n, err := t.w.Write(p)
+	if len(p) > 0 {
+		t.tail += string(p)
+		if len(t.tail) > 8192 {
+			t.tail = t.tail[len(t.tail)-8192:]
+		}
+		if verdict := classifyGate(t.tail); verdict.Kind == GateTrust {
+			_, _ = routeGate(verdict, t.deps)
+		}
+	}
+	return n, err
 }
 
 func (a *activityTap) Write(p []byte) (int, error) {
