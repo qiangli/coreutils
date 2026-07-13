@@ -583,7 +583,6 @@ func init() {
 	for _, n := range []string{
 		"go", "cmake", "clang", "node", "npm", "npx", "pnpm", "yarn",
 		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust",
-		"java", "javac", "mvn",
 	} {
 		// A compiler/package-manager is a CODE-stage tool: it is how the thing
 		// gets built. (`bashy go` also runs tests, but so does every compiler —
@@ -774,7 +773,6 @@ func init() {
 	for _, n := range []string{
 		"go", "cmake", "clang", "node", "npm", "npx", "pnpm", "yarn",
 		"python", "pip", "uv", "mise", "cargo", "rustc", "rustup", "rust",
-		"java", "javac", "mvn",
 	} {
 		eff(EffNet, n)
 		eff(EffExec, n)
