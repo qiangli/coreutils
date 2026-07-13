@@ -254,7 +254,7 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "resume: pruned %d done handoff(s) (resumed or superseded)\n", n)
+				fmt.Fprintf(cmd.OutOrStdout(), "resume: pruned %d retired handoff(s) (superseded/cancelled/stale) — live seats kept\n", n)
 				return nil
 			}
 
@@ -293,18 +293,18 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 					if !(intersects(r.Project.Roots, roots) || intersects([]string{r.Project.Primary}, roots)) {
 						continue
 					}
-					if !all && r.Status() != "current" {
+					if !all && !r.Live() {
 						continue
 					}
-					fmt.Fprintf(out, "[%-10s] %s  %s  from=%s  %s\n",
-						r.Status(), r.ID, r.CreatedAt.Format(time.RFC3339), refName(r.From), firstLine(r.Continuity))
+					fmt.Fprintf(out, "%-13s seat=%-9s owner=%-10s %s  %s\n",
+						r.Status(), r.SeatRole(), ownerOf(r), r.ID, firstLine(r.Continuity))
 					shown++
 				}
 				if shown == 0 {
 					if all {
 						fmt.Fprintln(out, "resume: no handoffs for this project")
 					} else {
-						fmt.Fprintln(out, "resume: no current handoff (--all shows resumed/superseded/cancelled/stale)")
+						fmt.Fprintln(out, "resume: no live handoff (--all shows superseded/cancelled/stale too)")
 					}
 				}
 				return nil
@@ -315,8 +315,8 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 				// No live unclaimed handoff. If a recent one was CLAIMED, report
 				// that — so `resume` run after a pickup tells you who holds it.
 				if held := mostRecentClaimed(dir, roots); held != nil {
-					fmt.Fprintf(out, "%s — CLAIMED by %s at %s (no unclaimed handoff pending)\n",
-						held.ID, refName(*held.ResumedBy), held.ResumedAt.Format(time.RFC3339))
+					fmt.Fprintf(out, "STATUS: active — the %s seat is held by %s since %s\n  (%s; no handoff in flight — `bashy resume --all` for the register)\n",
+						held.SeatRole(), ownerOf(held), held.ResumedAt.Format(time.RFC3339), held.ID)
 					return nil
 				}
 				return err
@@ -330,16 +330,18 @@ live seat. Task handoffs may be many; if several are current it lists them.`,
 
 			// A claimed record is reported read-only (this is how you confirm a
 			// pickup): bare `resume` NEVER stamps or applies.
-			if rec.ResumedAt != nil {
-				fmt.Fprintf(out, "%s — CLAIMED by %s at %s\n", rec.ID, refName(*rec.ResumedBy), rec.ResumedAt.Format(time.RFC3339))
+			if rec.Status() == "active" {
+				fmt.Fprintf(out, "STATUS: active — the %s seat is held by %s since %s (%s)\n",
+					rec.SeatRole(), ownerOf(rec), rec.ResumedAt.Format(time.RFC3339), rec.ID)
 				if claim {
-					return fmt.Errorf("%s is already claimed by %s", rec.ID, refName(*rec.ResumedBy))
+					return fmt.Errorf("already held by %s", ownerOf(rec))
 				}
 				return nil
 			}
 
 			// UNCLAIMED — show the brief. Read-only unless --claim.
-			fmt.Fprintf(out, "handoff %s (from %s, %s) — UNCLAIMED\n\n", rec.ID, refName(rec.From), rec.CreatedAt.Format(time.RFC3339))
+			fmt.Fprintf(out, "STATUS: %s — the %s seat is UNCLAIMED  (%s, from %s, %s)\n\n",
+				rec.Status(), rec.SeatRole(), rec.ID, refName(rec.From), rec.CreatedAt.Format(time.RFC3339))
 			if message != "" {
 				fmt.Fprintf(out, "── the human says (on pickup) ──\n%s\n\n", strings.TrimSpace(message))
 			}
@@ -414,6 +416,16 @@ func mostRecentClaimed(dir string, roots []string) *Record {
 		}
 	}
 	return best
+}
+
+// ownerOf names who holds a record: the claimant's grounded identity for an
+// active one (stamped from who ran --claim — not free text, so it cannot be
+// faked or forgotten), else "—".
+func ownerOf(r *Record) string {
+	if r.Status() == "active" && r.ResumedBy != nil {
+		return refName(*r.ResumedBy)
+	}
+	return "—"
 }
 
 func pick(dir, root string, args []string) (*Record, error) {

@@ -126,7 +126,9 @@ func Pending(dir string, roots []string) ([]*Record, error) {
 	}
 	var out []*Record
 	for _, r := range all {
-		if r.ResumedAt != nil || r.SupersededAt != nil {
+		// Claimable = unclaimed and live: a seat mid-transfer or an open task.
+		// Excludes active (held), superseded, cancelled, and stale.
+		if s := r.Status(); s != "transferring" && s != "open" {
 			continue
 		}
 		if intersects(r.Project.Roots, roots) || intersects([]string{r.Project.Primary}, roots) {
@@ -136,10 +138,12 @@ func Pending(dir string, roots []string) ([]*Record, error) {
 	return out, nil
 }
 
-// Prune deletes handoff records that are DONE — resumed or superseded — leaving
-// live (pending) records untouched. It is how a store that has seen many
-// handoffs stays legible: a bare `bashy resume` should face only live seats, not
-// a museum of claimed and retired ones. Returns the number removed.
+// Prune deletes RETIRED handoff records — superseded, cancelled, or stale —
+// leaving every LIVE one untouched. Crucially it never deletes an ACTIVE seat:
+// the record that stamps who holds the seat is the thing that answers "who is
+// the steward?", so pruning it would be self-defeating (the bug that lost
+// codex's seat trail). A transfer in flight and an open task are kept too.
+// Returns the number removed.
 func Prune(dir string) (int, error) {
 	all, err := List(dir)
 	if err != nil {
@@ -147,7 +151,7 @@ func Prune(dir string) (int, error) {
 	}
 	n := 0
 	for _, r := range all {
-		if r.ResumedAt == nil && r.SupersededAt == nil && r.CancelledAt == nil {
+		if r.Live() { // active seat / in-flight transfer / open task — keep
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, r.ID+".json")); err == nil {

@@ -163,24 +163,52 @@ type Record struct {
 // deleted to reach a status; only `resume --prune` removes).
 const StaleAfter = 3 * 24 * time.Hour
 
-// Status classifies a record for display. Nothing is deleted to reach a status;
-// records persist until an explicit `resume --prune`.
-//   - resumed / superseded / cancelled — done, hidden by default, shown by --all
-//   - stale     — unclaimed but old (>= StaleAfter); hidden by default
-//   - current   — the live handoff you would resume
+// Status classifies a record. Nothing is deleted to reach a status; records
+// persist until an explicit `resume --prune` (which never removes a live seat).
+//   - active       — claimed and HELD; an owner holds the seat/work (the live one)
+//   - transferring — a role (seat) handoff parked, awaiting a claim (mid-handoff)
+//   - open         — a task handoff parked, awaiting a taker
+//   - superseded   — retired by a newer handoff of the same role
+//   - cancelled    — explicitly retired by the human
+//   - stale        — unclaimed and old (>= StaleAfter); probably abandoned
+//
+// cancelled/superseded are checked before active: a seat that was claimed and
+// LATER superseded/cancelled reads as retired, not held.
 func (r *Record) Status() string {
 	switch {
-	case r.ResumedAt != nil:
-		return "resumed"
 	case r.CancelledAt != nil:
 		return "cancelled"
 	case r.SupersededAt != nil:
 		return "superseded"
+	case r.ResumedAt != nil:
+		return "active"
 	case time.Since(r.CreatedAt) >= StaleAfter:
 		return "stale"
+	case r.Role != "":
+		return "transferring"
 	default:
-		return "current"
+		return "open"
 	}
+}
+
+// Live reports whether the record is a live state worth keeping in the default
+// view and NEVER pruning: an active seat/work, or a handoff still in flight.
+func (r *Record) Live() bool {
+	switch r.Status() {
+	case "active", "transferring", "open":
+		return true
+	default:
+		return false
+	}
+}
+
+// SeatRole is the role of the seat this record concerns, or "task" if it is a
+// plain task handoff (no seat). Used to label the register.
+func (r *Record) SeatRole() string {
+	if r.Role == "" {
+		return "task"
+	}
+	return r.Role
 }
 
 // Project is the scope: a set of roots, plus how they were determined.
