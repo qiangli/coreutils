@@ -358,3 +358,158 @@ func mustCanonical(t *testing.T, dir string) string {
 	}
 	return c
 }
+
+// ─── AND THE REGISTRY'S OWN ROOT DOES NOT GET A VOTE EITHER ───────────────────
+//
+// The registry closed the --dir door, and left its own front door reachable through the very
+// same kind of knob. Its root was os.UserHomeDir — which is $HOME (%USERPROFILE% on windows),
+// a string the process it governs can set. So the escape survived, at one remove and with one
+// extra variable:
+//
+//	HOME=/tmp/other BASHY_STEWARD_DIR=/tmp/other/store bashy steward claim
+//
+// A registry that has never been written is a registry with no binding in it, and no binding
+// means "this seat has no store yet — bind mine." Fresh store, fresh journal, epoch 1,
+// second steward on a host that already had one. The registry did not fail; it was simply
+// asked in a different building.
+//
+// So the root is taken from the OS ACCOUNT — the passwd record for the real uid, the access
+// token's profile directory on windows — which is exactly as unspoofable as the uid and the
+// SID the seat is already keyed on. These tests come at it from both sides: the resolver
+// itself must ignore the environment, and the enforcement must hold across a process that
+// changes its mind about where home is.
+
+// The resolver, on the real OS, with the environment lying to it.
+//
+// This is the one test that deliberately un-hooks the suite's accountHomeFn and calls the
+// PRODUCTION path, because "os.UserHomeDir was replaced by something that does not read
+// $HOME" is precisely the claim, and a test that only exercised the injected fake would
+// assert nothing about it.
+func TestDefaultRegistryRootIgnoresAmbientHome(t *testing.T) {
+	real := accountHomeFn
+	accountHomeFn = accountHome
+	t.Cleanup(func() { accountHomeFn = real })
+
+	first, err := defaultRegistryRoot()
+	if err != nil {
+		t.Skipf("no OS account record on this box (%v) — which fails CLOSED by design, see ErrNoAccountHome", err)
+	}
+
+	// Now tell the process it lives somewhere else. Both spellings, because os.UserHomeDir
+	// reads $HOME on unix and %USERPROFILE% on windows and a fix that only covered one would
+	// be a fix on one platform.
+	lie := t.TempDir()
+	t.Setenv("HOME", lie)
+	t.Setenv("USERPROFILE", lie)
+
+	second, err := defaultRegistryRoot()
+	if err != nil {
+		t.Fatalf("the environment cannot break a root it does not supply: %v", err)
+	}
+	if second != first {
+		t.Fatalf("the registry root moved when $HOME/%%USERPROFILE%% did (%q → %q). That is the hole: a root the agent "+
+			"can relocate is a root it can always find EMPTY, and an empty registry hands out a second seat.", first, second)
+	}
+	if strings.HasPrefix(first, lie) {
+		t.Fatalf("the root landed inside the directory the environment named (%q) — it must come from the OS account, "+
+			"not from a variable the governed process sets", first)
+	}
+	if home, src, err := accountHome(); err != nil || home == lie || !strings.HasPrefix(src, "account:") {
+		t.Fatalf("accountHome must answer from the OS and say so: home=%q source=%q err=%v", home, src, err)
+	}
+}
+
+// The enforcement, end to end: one process, two Opens, a different $HOME in between — and
+// NO WithRegistryRoot, because the default root is the thing under test.
+//
+// Both routes an agent has once it can rewrite its own home are here: pointing
+// $BASHY_STEWARD_DIR at a store of its choosing, and simply letting the default store dir
+// follow $HOME. Neither may reach a second registry, so both land on the same canonical
+// binding and are refused.
+func TestChangingHomeCannotMintASecondSeat(t *testing.T) {
+	firstHome, secondHome := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", firstHome)
+	t.Setenv("USERPROFILE", firstHome)
+	t.Setenv("BASHY_STEWARD_DIR", "")
+
+	scope := testScope("home-flip-seat")
+	canonical := t.TempDir()
+
+	s, err := Open(canonical, WithScopeProvider(scope))
+	if err != nil {
+		t.Fatalf("the first store for a seat becomes its store: %v", err)
+	}
+	// The binding lives under the OS account's home (the suite's accountHomeFn), NOT under the
+	// $HOME this process was pretending to have when it wrote it.
+	wantReg := filepath.Join(testHome, ".bashy", "steward", registryRootName)
+	if !strings.HasPrefix(s.RegistryPath(), wantReg+string(filepath.Separator)) {
+		t.Fatalf("the binding must be rooted in the OS account's home (%s), got %s", wantReg, s.RegistryPath())
+	}
+
+	// The agent moves home. Every ambient signal now says it is somebody else, somewhere else.
+	t.Setenv("HOME", secondHome)
+	t.Setenv("USERPROFILE", secondHome)
+
+	// Route 1: $BASHY_STEWARD_DIR, the store of its choosing under the new home.
+	alternate := filepath.Join(secondHome, "store")
+	t.Setenv("BASHY_STEWARD_DIR", alternate)
+
+	_, err = Open("", WithScopeProvider(scope))
+	var conflict *ErrScopeDirConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("HOME=%s BASHY_STEWARD_DIR=%s must NOT reach a second registry, find it empty, and mint a second seat "+
+			"for a machine-and-account that already has one. Got %v", secondHome, alternate, err)
+	}
+	if conflict.Canonical != mustCanonical(t, canonical) {
+		t.Fatalf("the refusal must name the store the seat actually has, got %q", conflict.Canonical)
+	}
+	if conflict.Registry != s.RegistryPath() {
+		t.Fatalf("both opens must consult the SAME canonical binding — a per-$HOME registry is no registry at all: "+
+			"%q vs %q", conflict.Registry, s.RegistryPath())
+	}
+
+	// Route 2: no override at all. The default store dir does follow $HOME (it is a place to
+	// keep bytes, not a licence to have two — see defaultDirFor), so this is a store the seat
+	// has never had, and the registry says so.
+	t.Setenv("BASHY_STEWARD_DIR", "")
+	_, err = Open("", WithScopeProvider(scope))
+	if !errors.As(err, &conflict) {
+		t.Fatalf("moving $HOME alone must not mint a second seat either, got %v", err)
+	}
+	if conflict.Registry != s.RegistryPath() {
+		t.Fatalf("same seat, same binding, whatever home says: %q vs %q", conflict.Registry, s.RegistryPath())
+	}
+
+	// And the seat's own store keeps opening, from under the moved home, exactly as it should:
+	// the check is a singleton, not a lock-out.
+	if _, err := Open(canonical, WithScopeProvider(scope)); err != nil {
+		t.Fatalf("the seat's own store must keep opening: %v", err)
+	}
+}
+
+// With no OS account record there is no root, and the store REFUSES TO OPEN rather than
+// falling back to something an agent could have chosen.
+//
+// The fallbacks it declines are $HOME (the hole) and a temp dir (os.TempDir is $TMPDIR — the
+// same hole, different variable). The way out is in-process and trusted: WithRegistryRoot.
+func TestNoAccountHomeFailsClosed(t *testing.T) {
+	real := accountHomeFn
+	accountHomeFn = func() (string, string, error) { return "", "", errors.New("no account record for uid 65534") }
+	t.Cleanup(func() { accountHomeFn = real })
+
+	_, err := Open(t.TempDir(), WithScopeProvider(testScope("no-home-seat")))
+	var noHome *ErrNoAccountHome
+	if !errors.As(err, &noHome) {
+		t.Fatalf("a store that cannot root its registry must not guess a root — guessing one an agent could have "+
+			"chosen is how a second seat gets minted. Got %v", err)
+	}
+	if !strings.Contains(err.Error(), "WithRegistryRoot") {
+		t.Fatalf("the refusal must name the trusted way out, got %q", err.Error())
+	}
+
+	// …and that way out works, which is what makes failing closed acceptable rather than fatal
+	// for a host whose state lives somewhere the OS cannot name.
+	if _, err := Open(t.TempDir(), WithScopeProvider(testScope("no-home-seat")), WithRegistryRoot(t.TempDir())); err != nil {
+		t.Fatalf("an injected root must still open the store: %v", err)
+	}
+}

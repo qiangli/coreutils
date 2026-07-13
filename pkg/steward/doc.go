@@ -94,6 +94,19 @@
 // still get two seats. See registry.go — including what it is NOT worth: an agent that can
 // delete the registry can delete the journal, and no filesystem check survives that.
 //
+// AND THE REGISTRY'S OWN ROOT COMES FROM THE OS ACCOUNT, NOT FROM $HOME. It was rooted at
+// os.UserHomeDir once, which is $HOME (%USERPROFILE% on Windows) — a string the governed
+// process can set — so the escape survived with one extra variable: `HOME=/tmp/other
+// BASHY_STEWARD_DIR=/tmp/other/store` reached a PRISTINE registry, found no binding in it,
+// and bound a second seat. A root the agent can relocate is a root it can always find empty,
+// and an empty registry is a licence to mint. The root is now the OS account's own home (the
+// passwd record for the real uid; the access token's profile directory on Windows) — as
+// unspoofable as the uid and the SID the seat is already keyed on — and with no account
+// record it FAILS CLOSED (ErrNoAccountHome) rather than falling back to $HOME or to a temp
+// dir, os.TempDir being $TMPDIR and therefore the same hole. The store DIRECTORY is still
+// movable by --dir/$BASHY_STEWARD_DIR/$HOME, deliberately: saying where a seat keeps its bytes
+// is not permission to have two of it. WithRegistryRoot is the trusted in-process hook.
+//
 // A STALE HEARTBEAT PROVES ONLY A LAPSE. It never proves death. So Claim takes a seat
 // only when it is VACANT or when a TRUSTWORTHY heartbeat says the holder is LAPSED, and
 // the claim bumps a monotonic fencing epoch so the returning incumbent is rejected

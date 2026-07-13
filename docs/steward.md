@@ -149,8 +149,41 @@ store and keyed by the scope digest, records the ONE directory each seat lives i
 | **rejects** | any other directory, for `--dir`, `$BASHY_STEWARD_DIR`, and a plain `Open` alike (`ErrScopeDirConflict`) |
 | **serializes** | first-bind, under a per-scope lock — two processes racing cannot both win |
 | **revalidates** | before **every mutation**, so a handle whose seat was rebound behind its back is refused at its next write rather than journaling into an orphan |
-| **isolates** | a shared home: entries are keyed by *machine*, so two boxes mounting one `$HOME` still get two seats |
+| **isolates** | a shared home: entries are keyed by *machine*, so two boxes mounting one home still get two seats |
+| **rooted** | in the **OS account's own home** — the passwd record for the real uid, the access token's profile directory on Windows. Never `$HOME`/`%USERPROFILE%` (see below) |
 | **injectable** | `WithRegistryRoot`, for hermetic tests and for an embedder migrating a host's stores. Deliberately **not** an env var or a flag — a registry the agent can redirect is not a registry |
+
+#### …and neither does `$HOME` **[revised 4]**
+
+The registry closed the `--dir` door and left its own front door reachable through the same
+kind of knob. Its root was `os.UserHomeDir` — which *is* `$HOME` (`%USERPROFILE%` on Windows),
+a string the process it governs can set. So the escape survived, at one remove and with one
+extra variable:
+
+```bash
+HOME=/tmp/other BASHY_STEWARD_DIR=/tmp/other/store bashy steward claim
+```
+
+A registry that has never been written is a registry with **no binding in it**, and no binding
+means *this seat has no store yet — bind mine*. Fresh store, fresh journal, epoch 1, a second
+steward on a host that already had one. The registry did not fail; **it was asked in a
+different building**.
+
+So the root is taken from the **OS account**, by the same standard the seat's identity already
+meets: the passwd record for the real UID, or the profile directory of this process's access
+token on Windows. Both are as unspoofable as the UID and the SID the scope is keyed on, and
+neither reads an environment variable.
+
+The *store* directory is still movable — `--dir`, `$BASHY_STEWARD_DIR`, and `$HOME` all still
+select where the seat keeps its bytes. That is deliberate, and it is not the same permission:
+saying **where** a seat lives is not being allowed to have **two**. Move `$HOME` and you do not
+get a fresh seat; you get `ErrScopeDirConflict` from the same canonical registry, naming the
+store you already have.
+
+With no account record at all (a container with no passwd entry), the root **fails closed**
+(`ErrNoAccountHome`). The fallbacks it declines are `$HOME` — the hole — and a temp directory,
+since `os.TempDir` is `$TMPDIR`, which is the same hole wearing a different variable. A host
+whose state lives somewhere the OS cannot name says so **in-process**, with `WithRegistryRoot`.
 
 **What it is not worth.** An agent with write access can delete the registry entry, just as
 it can delete the journal. Nothing rooted in the filesystem survives an attacker who owns the

@@ -49,7 +49,9 @@ type Store struct {
 	// registryRoot is where the canonical scope→store registry lives. It is INDEPENDENT
 	// of dir on purpose: a registry kept inside the store it governs could be escaped by
 	// pointing --dir somewhere else, which is the entire hole it exists to close. See
-	// registry.go. Empty means the default (~/.bashy/steward/registry).
+	// registry.go. Open resolves it once — WithRegistryRoot if a host injected one, else
+	// the OS ACCOUNT's own home (never $HOME, see defaultRegistryRoot) — and refuses to
+	// open if it cannot, so it is non-empty for the life of the Store.
 	registryRoot string
 	// maxTranscript bounds transcript artifacts; overridable for tests.
 	maxTranscript int64
@@ -94,10 +96,17 @@ func WithVerificationVerifier(v VerificationVerifier) Option {
 //
 // The registry is what enforces ONE STORE PER OS SCOPE no matter what directory was asked
 // for (see registry.go), so its location must not be reachable from the same knobs the
-// data dir is — there is deliberately no env var and no flag for it. This hook exists for
-// two callers: TESTS, which need it hermetic rather than rooted in the developer's real
-// home, and an EMBEDDER migrating a host's stores, which needs to say where the registry
-// it is rebuilding actually is.
+// data dir is — there is deliberately no env var and no flag for it, and the default is
+// rooted in the OS account's home rather than in $HOME/%USERPROFILE% for the same reason: a
+// root the governed process can move is a root it can always find EMPTY, and an empty
+// registry hands out a second seat. This hook is IN-PROCESS and therefore trusted: reaching
+// it means being the host, not being an agent the host runs.
+//
+// It exists for two callers: TESTS, which need it hermetic rather than rooted in the
+// developer's real home, and an EMBEDDER — one migrating a host's stores, or one whose state
+// lives somewhere the OS cannot name (a container with no account record, where
+// defaultRegistryRoot fails closed with ErrNoAccountHome) — which needs to say where the
+// registry actually is.
 func WithRegistryRoot(dir string) Option {
 	return func(s *Store) {
 		if dir != "" {
@@ -161,6 +170,16 @@ func Open(dir string, opts ...Option) (*Store, error) {
 		return nil, err
 	}
 	s.scope = sc
+
+	// The canonical registry root, resolved ONCE and never from the environment. A host may
+	// inject it (WithRegistryRoot); otherwise it comes from the OS account's own home — not
+	// $HOME, which the process being governed can set, and which paired with
+	// $BASHY_STEWARD_DIR was an escape from the registry itself. See defaultRegistryRoot.
+	if s.registryRoot == "" {
+		if s.registryRoot, err = defaultRegistryRoot(); err != nil {
+			return nil, err
+		}
+	}
 
 	if dir == "" {
 		if v := os.Getenv("BASHY_STEWARD_DIR"); v != "" {

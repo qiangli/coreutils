@@ -221,16 +221,22 @@ deliberately, carried by a synced home, or restored from a backup onto the wrong
 			sc := s.ScopeInfo()
 			if o.asJSON {
 				return emitJSON(cmd.OutOrStdout(), struct {
-					Scope  string `json:"scope"`
-					Dir    string `json:"dir"`
-					Digest string `json:"digest"`
-					Source string `json:"machine_id_source"`
-					Host   string `json:"host_label"`
-				}{sc.ID, s.Dir(), sc.Digest(), sc.Source, sc.Host})
+					Scope    string `json:"scope"`
+					Dir      string `json:"dir"`
+					Registry string `json:"registry"`
+					Digest   string `json:"digest"`
+					Source   string `json:"machine_id_source"`
+					Host     string `json:"host_label"`
+				}{sc.ID, s.Dir(), s.RegistryPath(), sc.Digest(), sc.Source, sc.Host})
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintln(out, sc.ID)
 			fmt.Fprintf(out, "store:      %s\n", s.Dir())
+			// Where the seat's ONE store is recorded. Printed because it is no longer guessable:
+			// the root comes from the OS account's home, not from $HOME, so an operator who has to
+			// go and look at the binding (or deliberately remove it after a real move) cannot
+			// derive the path from anything they can echo.
+			fmt.Fprintf(out, "registry:   %s\n", s.RegistryPath())
 			fmt.Fprintf(out, "machine id: %s (a LABEL, not identity: %s)\n", sc.Source, sc.Host)
 			fmt.Fprintf(out, "binding:    %s\n", short8(sc.Digest()))
 			return nil

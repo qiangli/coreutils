@@ -217,6 +217,13 @@ func DefaultDir() (string, error) {
 	return defaultDirFor(sc)
 }
 
+// defaultDirFor picks the default STORE directory, and $HOME is allowed to move it — for
+// the same reason --dir and $BASHY_STEWARD_DIR are allowed to move it: saying WHERE the seat
+// keeps its bytes is not the same as being allowed to have a second one. Which directory a
+// seat lives in is settable; HOW MANY it lives in is not, and that is the registry's job
+// (registry.go), whose own root is rooted in the OS account precisely so this knob cannot
+// reach it. Point $HOME somewhere new and you do not get a fresh seat — you get
+// ErrScopeDirConflict from the same canonical registry, naming the store you already have.
 func defaultDirFor(sc Scope) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -117,27 +117,67 @@ func (e *ErrRegistryUnreadable) Unwrap() error { return e.Cause }
 // registry that store can escape.
 const registryRootName = "registry"
 
-// defaultRegistryRoot is ~/.bashy/steward/registry.
+// accountHomeFn resolves the OS account's home directory. It is a var for exactly one
+// reason — the test suite pins it to a temp directory so a test that forgets to inject a
+// registry root cannot write a binding into the developer's real home — and production
+// never reassigns it. It is NOT a seam an agent can reach: setting a package variable
+// requires already being inside this process's code, at which point the filesystem argument
+// below applies and nothing here would have saved you anyway.
+var accountHomeFn = accountHome
+
+// ErrNoAccountHome is returned when the OS cannot say where this account's home is. It
+// FAILS CLOSED, and the fallback it refuses is the whole point.
 //
-// It lives in the home directory, which may well be SHARED between machines — and that is
-// fine, because the entries are keyed by the scope digest, which includes the machine
-// identity. Two machines mounting one home get two different keys, two different entries,
-// and two different canonical stores. The shared-home isolation that scope.go established
-// is preserved here rather than undone by it.
-func defaultRegistryRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "bashy-steward", registryRootName)
-	}
-	return filepath.Join(home, ".bashy", "steward", registryRootName)
+// The two tempting fallbacks are $HOME (the hole being closed) and a temp directory — and
+// os.TempDir is $TMPDIR, which is the same hole wearing a different variable. Any root a
+// process can move is a root that yields a FRESH, EMPTY registry on demand, and an empty
+// registry is a licence to mint a second seat: no binding found, so bind mine, so epoch 1,
+// so two stewards. A registry that can be relocated by the thing it governs is not a
+// registry, so when the OS has no answer this refuses to invent one.
+type ErrNoAccountHome struct{ Cause error }
+
+func (e *ErrNoAccountHome) Error() string {
+	return fmt.Sprintf("steward: cannot establish this OS account's home directory from the operating system: %v.\n"+
+		"The canonical seat registry is rooted there, and it is rooted in the OS ACCOUNT rather than in $HOME/%%USERPROFILE%% "+
+		"on purpose: an environment variable is a suggestion the process can rewrite, and a registry the agent can point "+
+		"somewhere new is one it can always find empty — which is precisely how a machine that already has a steward acquires "+
+		"a second one. Refusing to guess a root rather than guessing one an agent could have chosen.\n"+
+		"A host that keeps its state somewhere the OS cannot name must say so in-process, with WithRegistryRoot — a trusted "+
+		"hook, deliberately not an env var and not a flag.", e.Cause)
 }
 
-func (s *Store) regRoot() string {
-	if s.registryRoot != "" {
-		return s.registryRoot
+func (e *ErrNoAccountHome) Unwrap() error { return e.Cause }
+
+// defaultRegistryRoot is <os-account-home>/.bashy/steward/registry.
+//
+// THE HOME COMES FROM THE OS, NOT FROM THE ENVIRONMENT — the passwd record for the real uid
+// on unix, the access token's profile directory on windows (see accountHome). os.UserHomeDir
+// would have been the obvious call and it is exactly wrong here: it returns $HOME (or
+// %USERPROFILE%), which the process whose singleton this enforces can set. Paired with
+// $BASHY_STEWARD_DIR, that was a two-variable escape from the registry itself —
+//
+//	HOME=/tmp/other BASHY_STEWARD_DIR=/tmp/other/store bashy steward claim
+//
+// — a pristine registry, no binding in it, a fresh store bound to the same scope, its own
+// epoch 1, and a second steward on a host that already had one. The registry closed the
+// --dir door while leaving its own root reachable through the same kind of knob.
+//
+// The account home may well be SHARED between machines (an NFS home), and that remains fine:
+// entries are keyed by the scope digest, which includes the machine identity. Two machines
+// mounting one home get two keys, two entries, two canonical stores. The shared-home
+// isolation scope.go establishes is preserved here rather than undone by it.
+func defaultRegistryRoot() (string, error) {
+	home, _, err := accountHomeFn()
+	if err != nil {
+		return "", &ErrNoAccountHome{Cause: err}
 	}
-	return defaultRegistryRoot()
+	return filepath.Join(home, ".bashy", "steward", registryRootName), nil
 }
+
+// regRoot is the resolved root. Open resolves it once — from WithRegistryRoot if the host
+// injected one, else from the OS account — and fails if it cannot, so by the time any of
+// this runs it is never empty.
+func (s *Store) regRoot() string { return s.registryRoot }
 
 // registryKey is the entry's filename, derived from the scope DIGEST — the machine and the
 // account. Never the host label (a machine can be renamed), never the directory (that is

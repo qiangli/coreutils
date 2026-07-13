@@ -82,25 +82,37 @@ func testScope(id string) ScopeProvider {
 	})
 }
 
-// TestMain pins $HOME to a throwaway directory for the whole package.
+// testHome is the throwaway home the suite runs in. Tests that need to know where a
+// default-rooted registry landed read it from here.
+var testHome string
+
+// TestMain redirects the two things that fall back to a home directory — the default store
+// dir ($HOME, see defaultDirFor) and the CANONICAL SEAT REGISTRY (the OS account's home, see
+// defaultRegistryRoot) — into a throwaway directory for the whole package.
 //
-// This is a HERMETICITY BACKSTOP, not a convenience. Two things in this package now fall
-// back to the home directory when nothing overrides them — the default store dir and, more
-// to the point, the CANONICAL SEAT REGISTRY (registry.go) — and a test that forgets to
-// inject a root would otherwise write a binding into the developer's real ~/.bashy and
-// then, being a singleton, refuse the NEXT test that tried. The failure would be real, the
-// cause would be invisible, and the litter would outlive the run.
+// Note what it does NOT do, because that is the point of the fix this backstop follows. It
+// used to pin $HOME and consider the registry handled, since the registry root was
+// os.UserHomeDir — i.e. $HOME. It is not any more: the root now comes from the OS ACCOUNT
+// (the passwd record for the real uid; the token's profile directory on windows), which no
+// amount of Setenv touches, because an agent that could relocate the registry by exporting a
+// variable could always find it empty and mint a second seat. So the suite injects the
+// resolver directly (accountHomeFn) — an in-process hook, the same kind of trusted seam as
+// WithRegistryRoot — and TestDefaultRegistryRootIgnoresAmbientHome pins that the REAL
+// resolver ignores the environment entirely.
 //
-// Individual tests still pass WithRegistryRoot where they need stores isolated from each
-// other WITHIN one test; this is the floor underneath that, so a missing option is a
-// contained bug rather than a contaminated machine.
+// This remains a BACKSTOP, not a convenience: individual tests pass WithRegistryRoot where
+// they need stores isolated from each other WITHIN one test. The floor underneath makes a
+// missing option a contained bug rather than a binding written into the developer's real
+// ~/.bashy — which, being a singleton, would then refuse the next test that tried.
 func TestMain(m *testing.M) {
 	home, err := os.MkdirTemp("", "steward-test-home-")
 	if err != nil {
 		panic(err)
 	}
-	os.Setenv("HOME", home)        // unix
-	os.Setenv("USERPROFILE", home) // windows
+	testHome = home
+	os.Setenv("HOME", home)        // unix: the default STORE dir only
+	os.Setenv("USERPROFILE", home) // windows: likewise
+	accountHomeFn = func() (string, string, error) { return home, "account:test", nil }
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)
