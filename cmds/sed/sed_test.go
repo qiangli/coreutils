@@ -42,6 +42,15 @@ func TestSedBREGroupsAndBackrefs(t *testing.T) {
 	}
 }
 
+func TestSedBREBackrefConformance(t *testing.T) {
+	if out, _, _ := runSed(t, "a^bb\naXbb\n", `s/a^\(b\)\1/Z/`); out != "Z\naXbb\n" {
+		t.Errorf(`s/a^\(b\)\1/Z/ = %q, want literal-caret replacement`, out)
+	}
+	if out, _, _ := runSed(t, "__\n!!\n", `s/\(\w\)\1/Z/`); out != "Z\n!!\n" {
+		t.Errorf(`s/\(\w\)\1/Z/ = %q, want GNU word-class escape through backref matcher`, out)
+	}
+}
+
 func TestSedAmpersandWholeMatch(t *testing.T) {
 	if out, _, _ := runSed(t, "abc\n", `s/b/[&]/`); out != "a[b]c\n" {
 		t.Errorf("s/b/[&]/ = %q, want a[b]c", out)
@@ -156,5 +165,59 @@ func TestSedPatternBackref(t *testing.T) {
 	out, errOut, code := runSed(t, "aa\n", `s/\(a\)\1/X/`)
 	if code != 0 || errOut != "" || out != "X\n" {
 		t.Errorf("sed pattern backref: out=%q err=%q code=%d", out, errOut, code)
+	}
+}
+
+// POSIX behaviors that sed's regex layer previously got wrong. Each expectation
+// is the byte-for-byte output GNU sed produces.
+func TestSedPOSIXRegexConformance(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		script string
+		want   string
+	}{
+		// POSIX XCU sed: "the escape sequence '\n' shall match a <newline>
+		// embedded in the pattern space". This used to be a hard parse error
+		// ("unsupported escape \n"), so no N;s/…\n…/ script could run at all.
+		{"backslash-n matches embedded newline", "a\nb\n", `N;s/a\nb/X/`, "X\n"},
+		{"backslash-n in a bracket expression", "a\nb\n", `N;s/a[\n]b/X/`, "X\n"},
+		{"backslash-n in the replacement is unchanged", "ab\n", `s/ab/a\nb/`, "a\nb\n"},
+		{"backslash-t matches a tab", "a\tb\n", `s/a\tb/X/`, "X\n"},
+		// An escaped backslash must not turn the next byte into an escape:
+		// \\n is a literal backslash followed by 'n'.
+		{"escaped backslash then n is literal", "a\\nb\n", `s/a\\nb/X/`, "X\n"},
+
+		// POSIX: a period matches any character — including the newlines sed's
+		// pattern space holds after N.
+		{"dot matches embedded newline", "a\nb\n", `N;s/a.b/X/`, "X\n"},
+		{"dot-star spans embedded newline", "a\nb\n", `N;s/a.*b/X/`, "X\n"},
+		// ...except under the M modifier, where GNU documents the opposite:
+		// "the dot character does not match a new-line character in multi-line
+		// mode".
+		{"M modifier turns dot-all back off", "a\nb\n", `N;s/a.b/X/M`, "a\nb\n"},
+		// M also makes ^/$ match at the embedded newlines, which still works.
+		{"M anchors match at embedded newlines", "a\nb\n", `N;s/^b$/X/M`, "a\nX\n"},
+
+		// POSIX XBD 9.1: leftmost-longest. The shorter alternative is written
+		// first, but the longest match at the leftmost offset is the one
+		// substituted.
+		{"leftmost-longest alternation", "ab\n", `s/a\|ab/X/`, "X\n"},
+		{"leftmost-longest, longer alternative later", "foobar\n", `s/foo\|foobar/X/`, "X\n"},
+
+		// POSIX XBD 9.3.6: a back-reference matches the same string the group
+		// matched — the empty string, when the group matched empty. \(a*\)
+		// matches empty before "b", so \1 matches empty and the whole pattern
+		// matches "b".
+		{"backref to a group that matched empty", "b\n", `s/\(a*\)b\1/X/`, "X\n"},
+		// And the match reported is the leftmost one: "aba" at offset 1
+		// (group 1 = "a"), not the empty-capture match "b" at offset 2.
+		{"leftmost match beats a later empty-capture match", "aaba\n", `s/\(a*\)b\1/X/`, "aX\n"},
+	}
+	for _, c := range cases {
+		if out, errOut, code := runSed(t, c.in, c.script); out != c.want || code != 0 {
+			t.Errorf("%s: sed %q on %q = (%q, code %d, err %q), want %q",
+				c.name, c.script, c.in, out, code, errOut, c.want)
+		}
 	}
 }

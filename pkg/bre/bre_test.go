@@ -63,6 +63,54 @@ func TestCompileBackrefs(t *testing.T) {
 	}
 }
 
+func TestBackrefMatcherPOSIXAnchorPositions(t *testing.T) {
+	cases := []struct {
+		name    string
+		pattern string
+		in      string
+		want    []int
+	}{
+		{"mid caret literal", `a^\(b\)\1`, "a^bb", []int{0, 4}},
+		{"mid dollar literal", `a$\(b\)\1`, "a$bb", []int{0, 4}},
+		{"group caret anchor", `\(^a\)\1`, "aa", []int{0, 2}},
+		{"dollar before group end", `\(a$\)\1`, "aa", nil},
+	}
+	for _, c := range cases {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Fatalf("%s: Compile(%q): %v", c.name, c.pattern, err)
+		}
+		got := re.FindStringIndex(c.in)
+		if !sameInts(got, c.want) {
+			t.Errorf("%s: FindStringIndex(%q)=%v, want %v", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+func TestBackrefMatcherGNUEscapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		pattern string
+		in      string
+		want    []int
+	}{
+		{"word class", `\(\w\)\1`, "--__--", []int{2, 4}},
+		{"nonword class", `\(\W\)\1`, "aa!!", []int{2, 4}},
+		{"space class", `\(\s\)\1`, "a \t\tb", []int{2, 4}},
+		{"word boundary", `\b\(a\)\1\b`, "-aa-", []int{1, 3}},
+	}
+	for _, c := range cases {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Fatalf("%s: Compile(%q): %v", c.name, c.pattern, err)
+		}
+		got := re.FindStringIndex(c.in)
+		if !sameInts(got, c.want) {
+			t.Errorf("%s: FindStringIndex(%q)=%v, want %v", c.name, c.in, got, c.want)
+		}
+	}
+}
+
 func TestCompileWordEdgeAnchors(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -136,6 +184,8 @@ func TestCompileInvalidIntervals(t *testing.T) {
 		`a\{x\}`,
 		`a\{1,2,3\}`,
 		`\(a\)\1\{3,2\}`,
+		`\{\(a\)\1`,
+		`\(a\)\1\}`,
 	} {
 		if _, err := Compile(pattern); err == nil {
 			t.Errorf("Compile(%q) succeeded, want invalid interval error", pattern)
@@ -164,12 +214,17 @@ func TestCompileBackrefsNoMatch(t *testing.T) {
 	if re.MatchString("aaa") {
 		t.Fatal("anchored backref unexpectedly matched")
 	}
+	// \(a*\) can match the empty string, and a back-reference to a group that
+	// matched the empty string matches the empty string (POSIX XBD 9.3.6), so
+	// \(a*\)b\1 matches every subject containing a 'b'. A subject with no 'b' is
+	// the real negative. (This case previously asserted that "aaba" does NOT
+	// match, which POSIX contradicts — see TestPOSIXBackrefEmptyGroup.)
 	re, err = Compile(`\(a*\)b\1`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if re.MatchString("aaba") {
-		t.Fatal("backref with leading repeated capture unexpectedly matched")
+	if re.MatchString("aaa") {
+		t.Fatal(`\(a*\)b\1 unexpectedly matched a subject with no "b"`)
 	}
 }
 

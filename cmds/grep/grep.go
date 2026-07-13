@@ -140,7 +140,9 @@ func run(rc *tool.RunContext, args []string) int {
 		split = append(split, strings.Split(p, "\n")...)
 	}
 
-	re, err := compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase)
+	// -w is the only mode that reads a match's extent rather than just its
+	// existence, so it is the only one that needs POSIX leftmost-longest.
+	re, err := compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase, *word)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
 		return 2
@@ -286,7 +288,14 @@ func (m multiMatcher) FindStringIndex(s string) []int {
 // compilePattern builds one matcher implementing the selected pattern list and
 // dialect. BREs without back-references or word-edge anchors still take the
 // single combined RE2 path.
-func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (grepMatcher, error) {
+//
+// longest selects POSIX leftmost-longest matching. It is off by default: a
+// leftmost-first and a leftmost-longest engine always agree on whether a line
+// matches, so grep's usual boolean question is unaffected and RE2 keeps its
+// faster lanes. Callers that read a match's extent (-w) pass true, without
+// which `grep -w 'a\|ab'` would report the "a" alternative, fail the
+// word-boundary test, and wrongly reject the line "ab".
+func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase, longest bool) (grepMatcher, error) {
 	if !fixed && !extended {
 		needBRE := false
 		for _, p := range pats {
@@ -308,6 +317,9 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (gr
 				re, err := bre.CompileWithFlags(p, flags)
 				if err != nil {
 					return nil, err
+				}
+				if longest {
+					re.Longest()
 				}
 				out = append(out, re)
 			}
@@ -343,7 +355,14 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase bool) (gr
 	if ignoreCase {
 		expr = "(?i)" + expr
 	}
-	return regexp.Compile(expr)
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return nil, err
+	}
+	if longest {
+		re.Longest()
+	}
+	return re, nil
 }
 
 func breNeedsPackageMatcher(p string) bool {

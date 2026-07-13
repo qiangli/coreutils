@@ -58,6 +58,28 @@ func CompileWithFlags(pattern, flags string) (*Regexp, error) {
 	return &Regexp{bt: bt}, nil
 }
 
+// Longest makes future searches prefer the leftmost-longest match — the match
+// POSIX specifies (XBD 9.1: the match is "the longest of the leftmost
+// matches"), and the one GNU grep/sed report. Go's RE2 and this package's
+// backtracker both default to leftmost-first, which differs whenever
+// alternation can match at the same offset with different lengths: `a\|ab`
+// against "ab" is leftmost-first "a" but POSIX "ab".
+//
+// It is opt-in because the two agree on whether a match exists at all, so a
+// caller that only asks "does this line match" (grep's common path) sees no
+// difference and keeps RE2's faster leftmost-first lanes. Callers that observe
+// the match extent or its submatches — sed's s///, grep's -w — must set it.
+//
+// Like regexp.Regexp.Longest, this modifies the Regexp and must not race with
+// other methods on it.
+func (r *Regexp) Longest() {
+	if r.re != nil {
+		r.re.Longest()
+		return
+	}
+	r.bt.longest = true
+}
+
 func (r *Regexp) MatchString(s string) bool {
 	return r.FindStringIndex(s) != nil
 }
@@ -142,6 +164,7 @@ type btProg struct {
 	groups     int
 	anchored   bool
 	ignoreCase bool
+	longest    bool
 }
 
 type btState struct {
@@ -210,11 +233,17 @@ func (n literalNode) match(ctx *btCtx, st btState) []btState {
 	return nil
 }
 
-type dotNode struct{}
+// dotNode is BRE's '.'. POSIX says a period matches any character; RE2 (and
+// grep, whose subject never contains one) excludes the newline. dotAll is the
+// sed reading: sed's pattern space can hold embedded newlines (after N), and
+// '.' matches them.
+type dotNode struct {
+	dotAll bool
+}
 
-func (dotNode) match(ctx *btCtx, st btState) []btState {
+func (n dotNode) match(ctx *btCtx, st btState) []btState {
 	ctx.steps++
-	if st.pos >= len(ctx.s) || ctx.s[st.pos] == '\n' {
+	if st.pos >= len(ctx.s) || (!n.dotAll && ctx.s[st.pos] == '\n') {
 		return nil
 	}
 	st.pos++
@@ -257,6 +286,43 @@ func (n wordEdgeNode) match(ctx *btCtx, st btState) []btState {
 	return nil
 }
 
+type wordBoundaryNode byte
+
+func (n wordBoundaryNode) match(ctx *btCtx, st btState) []btState {
+	ctx.steps++
+	left := st.pos > 0 && isWordByte(ctx.s[st.pos-1])
+	right := st.pos < len(ctx.s) && isWordByte(ctx.s[st.pos])
+	if (byte(n) == 'b') == (left != right) {
+		return []btState{st}
+	}
+	return nil
+}
+
+type builtinClassNode byte
+
+func (n builtinClassNode) match(ctx *btCtx, st btState) []btState {
+	ctx.steps++
+	if st.pos >= len(ctx.s) {
+		return nil
+	}
+	c := ctx.s[st.pos]
+	var ok bool
+	switch byte(n) {
+	case 'w', 'W':
+		ok = isWordByte(c)
+	case 's', 'S':
+		ok = c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
+	}
+	if byte(n) == 'W' || byte(n) == 'S' {
+		ok = !ok
+	}
+	if ok {
+		st.pos++
+		return []btState{st}
+	}
+	return nil
+}
+
 type classNode struct {
 	re *regexp.Regexp
 }
@@ -295,8 +361,19 @@ type backrefNode struct {
 func (n backrefNode) match(ctx *btCtx, st btState) []btState {
 	ctx.steps++
 	s, e := st.caps[2*n.num], st.caps[2*n.num+1]
-	if s < 0 || e <= s {
+	if s < 0 || e < 0 {
+		// The group never participated in the match (e.g. \(a\)\{0\}b\1). POSIX
+		// leaves this undefined; we fail the back-reference. Note this is a
+		// different state from a group that participated and matched the empty
+		// string, handled just below — conflating the two was the bug.
 		return nil
+	}
+	if e == s {
+		// The group participated and matched the empty string, so the
+		// back-reference matches the empty string too: POSIX XBD 9.3.6 defines
+		// \n as matching "the same string as was matched by" the group, and
+		// that string is "". This is what makes \(a*\)b\1 match "b".
+		return []btState{st}
 	}
 	lit := ctx.s[s:e]
 	if st.pos+len(lit) > len(ctx.s) {
@@ -353,11 +430,16 @@ type parser struct {
 	i          int
 	groups     int
 	ignoreCase bool
+	dotAll     bool
 }
 
 func compileBackref(pattern, flags string) (*btProg, error) {
+	// flags is an RE2 flag prefix ("", "(?i)", "(?is)", …) — the same string the
+	// RE2 path prepends to its translated pattern, read here for the engine's
+	// own nodes.
 	ignoreCase := strings.Contains(flags, "i")
-	p := &parser{p: pattern, ignoreCase: ignoreCase}
+	dotAll := strings.Contains(flags, "s")
+	p := &parser{p: pattern, ignoreCase: ignoreCase, dotAll: dotAll}
 	root, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -366,8 +448,13 @@ func compileBackref(pattern, flags string) (*btProg, error) {
 		return nil, fmt.Errorf("unsupported BRE syntax near %q", pattern[p.i:])
 	}
 	prog := &btProg{root: root, groups: p.groups, ignoreCase: ignoreCase}
+	// Only a leading '^' lets find() stop after one attempt; a leading '$' is an
+	// anchorNode too, but it can still match at any offset (the empty string at
+	// end of subject), so it must not short-circuit the scan.
 	if seq, ok := root.(seqNode); ok && len(seq) > 0 {
-		_, prog.anchored = seq[0].(anchorNode)
+		if a, ok := seq[0].(anchorNode); ok && byte(a) == '^' {
+			prog.anchored = true
+		}
 	}
 	return prog, nil
 }
@@ -394,29 +481,33 @@ func (p *parser) parseExpr() (btNode, error) {
 
 func (p *parser) parseSeq() (btNode, error) {
 	var nodes []btNode
+	state := posStart
 	for p.i < len(p.p) {
 		if p.p[p.i] == '\\' && p.i+1 < len(p.p) && (p.p[p.i+1] == ')' || p.p[p.i+1] == '|') {
 			break
 		}
-		atom, err := p.parseAtom()
+		atom, nextState, quantifiable, err := p.parseAtom(state)
 		if err != nil {
 			return nil, err
 		}
-		atom, err = p.parseQuant(atom)
-		if err != nil {
-			return nil, err
+		if quantifiable {
+			atom, err = p.parseQuant(atom)
+			if err != nil {
+				return nil, err
+			}
 		}
 		nodes = append(nodes, atom)
+		state = nextState
 	}
 	return seqNode(nodes), nil
 }
 
-func (p *parser) parseAtom() (btNode, error) {
+func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 	c := p.p[p.i]
 	switch c {
 	case '\\':
 		if p.i+1 >= len(p.p) {
-			return nil, fmt.Errorf("trailing backslash (\\)")
+			return nil, state, false, fmt.Errorf("trailing backslash (\\)")
 		}
 		n := p.p[p.i+1]
 		switch {
@@ -425,60 +516,82 @@ func (p *parser) parseAtom() (btNode, error) {
 			p.groups++
 			num := p.groups
 			if num > 9 {
-				return nil, fmt.Errorf("too many capture groups for BRE back-reference matcher")
+				return nil, state, false, fmt.Errorf("too many capture groups for BRE back-reference matcher")
 			}
 			child, err := p.parseExpr()
 			if err != nil {
-				return nil, err
+				return nil, state, false, err
 			}
 			if !(p.i+1 < len(p.p) && p.p[p.i] == '\\' && p.p[p.i+1] == ')') {
-				return nil, fmt.Errorf("unmatched \\(")
+				return nil, state, false, fmt.Errorf("unmatched \\(")
 			}
 			p.i += 2
-			return groupNode{num: num, child: child}, nil
+			return groupNode{num: num, child: child}, posAtom, true, nil
 		case n >= '1' && n <= '9':
 			p.i += 2
 			num := int(n - '0')
 			if num > p.groups {
-				return nil, fmt.Errorf("invalid back-reference \\%c", n)
+				return nil, state, false, fmt.Errorf("invalid back-reference \\%c", n)
 			}
-			return backrefNode{num: num, ignoreCase: p.ignoreCase}, nil
+			return backrefNode{num: num, ignoreCase: p.ignoreCase}, posAtom, true, nil
 		case n == '<' || n == '>':
 			p.i += 2
-			return wordEdgeNode(n), nil
-		case n == 'w' || n == 'W' || n == 's' || n == 'S' || n == 'b' || n == 'B':
-			return nil, fmt.Errorf("unsupported escape \\%c in BRE back-reference matcher", n)
+			return wordEdgeNode(n), posAnchor, false, nil
+		case n == 'b' || n == 'B':
+			p.i += 2
+			return wordBoundaryNode(n), posAnchor, false, nil
+		case n == 'w' || n == 'W' || n == 's' || n == 'S':
+			p.i += 2
+			return builtinClassNode(n), posAtom, true, nil
+		case n == '{':
+			return nil, state, false, fmt.Errorf("\\{ with nothing to repeat")
+		case n == '}':
+			return nil, state, false, fmt.Errorf("unmatched \\}")
 		default:
 			p.i += 2
-			return literalNode{lit: string(n), ignoreCase: p.ignoreCase}, nil
+			return literalNode{lit: string(n), ignoreCase: p.ignoreCase}, posAtom, true, nil
 		}
 	case '.':
 		p.i++
-		return dotNode{}, nil
+		return dotNode{dotAll: p.dotAll}, posAtom, true, nil
 	case '^':
 		p.i++
-		return anchorNode('^'), nil
+		if state == posStart {
+			return anchorNode('^'), posAnchor, false, nil
+		}
+		return literalNode{lit: "^", ignoreCase: p.ignoreCase}, posAtom, true, nil
 	case '$':
 		p.i++
-		return anchorNode('$'), nil
+		if p.dollarAnchors() {
+			return anchorNode('$'), posAnchor, false, nil
+		}
+		return literalNode{lit: "$", ignoreCase: p.ignoreCase}, posAtom, true, nil
 	case '[':
 		cls, n, err := translateBracket(p.p[p.i:])
 		if err != nil {
-			return nil, err
+			return nil, state, false, err
 		}
 		if p.ignoreCase {
 			cls = "(?i)" + cls
 		}
 		re, err := regexp.Compile("^" + cls + "$")
 		if err != nil {
-			return nil, err
+			return nil, state, false, err
 		}
 		p.i += n
-		return classNode{re: re}, nil
+		return classNode{re: re}, posAtom, true, nil
+	case '*':
+		p.i++
+		return literalNode{lit: "*", ignoreCase: p.ignoreCase}, posAtom, true, nil
 	default:
 		p.i++
-		return literalNode{lit: string(c), ignoreCase: p.ignoreCase}, nil
+		return literalNode{lit: string(c), ignoreCase: p.ignoreCase}, posAtom, true, nil
 	}
+}
+
+func (p *parser) dollarAnchors() bool {
+	return p.i == len(p.p) ||
+		(p.i+1 < len(p.p) && p.p[p.i] == '\\' && (p.p[p.i+1] == ')' || p.p[p.i+1] == '|'))
 }
 
 func (p *parser) parseQuant(atom btNode) (btNode, error) {
@@ -535,9 +648,17 @@ func parseInterval(s string) (int, int, error) {
 func (p *btProg) find(s string, n int) [][]int {
 	var out [][]int
 	limit := n
+	// Every offset is tried in turn: the first that matches is the leftmost
+	// match, as POSIX requires. (An earlier "skip past the leading repeat on
+	// failure" shortcut lived here. It is unsound on precisely the patterns
+	// this engine exists for: it assumes the position the pattern resumes at
+	// after a leading \(a*\) does not depend on where that group started, but a
+	// back-reference makes the rest of the match depend on both the group's text
+	// and its offset. It made \(a*\)b\1 skip the leftmost match "aba" in "aaba"
+	// and report "b" instead.)
 	for start := 0; start <= len(s); start++ {
-		matches := p.matchAt(s, start)
-		for _, st := range matches {
+		st, ok := p.pick(p.matchAt(s, start))
+		if ok {
 			match := make([]int, 2*(p.groups+1))
 			for i := range match {
 				match[i] = -1
@@ -551,18 +672,32 @@ func (p *btProg) find(s string, n int) [][]int {
 			if st.pos > start {
 				start = st.pos - 1
 			}
-			break
-		}
-		if len(matches) == 0 {
-			if end := leadingRepeatEnd(p.root, s, start, p.ignoreCase); end > start {
-				start = end - 1
-			}
 		}
 		if p.anchored {
 			break
 		}
 	}
 	return out
+}
+
+// pick chooses which of the states a successful match at one offset produced to
+// report. The backtracker yields them in greedy-preference (leftmost-first)
+// order, so the default is the first. Under longest, POSIX wants the greatest
+// end offset; ties keep the earliest such state, which preserves the greedy
+// subexpression assignment that the yield order already encodes.
+func (p *btProg) pick(sts []btState) (btState, bool) {
+	if len(sts) == 0 {
+		return btState{}, false
+	}
+	best := sts[0]
+	if p.longest {
+		for _, st := range sts[1:] {
+			if st.pos > best.pos {
+				best = st
+			}
+		}
+	}
+	return best, true
 }
 
 func (p *btProg) matchAt(s string, start int) []btState {
@@ -577,47 +712,6 @@ func (p *btProg) matchAt(s string, start int) []btState {
 		return nil
 	}
 	return outs
-}
-
-func leadingRepeatEnd(n btNode, s string, start int, ignoreCase bool) int {
-	switch v := n.(type) {
-	case seqNode:
-		if len(v) == 0 {
-			return start
-		}
-		return leadingRepeatEnd(v[0], s, start, ignoreCase)
-	case groupNode:
-		return leadingRepeatEnd(v.child, s, start, ignoreCase)
-	case repeatNode:
-		pos := start
-		for {
-			ctx := &btCtx{s: s, limit: maxBacktrackSteps}
-			st := btState{pos: pos}
-			for i := range st.caps {
-				st.caps[i] = -1
-			}
-			outs := v.child.match(ctx, st)
-			if len(outs) == 0 || outs[0].pos <= pos {
-				return pos
-			}
-			pos = outs[0].pos
-			if v.max >= 0 && pos-start >= v.max {
-				return pos
-			}
-		}
-	case literalNode:
-		if start+len(v.lit) <= len(s) {
-			got := s[start : start+len(v.lit)]
-			if (ignoreCase && strings.EqualFold(got, v.lit)) || (!ignoreCase && got == v.lit) {
-				return start + len(v.lit)
-			}
-		}
-	case dotNode:
-		if start < len(s) && s[start] != '\n' {
-			return start + 1
-		}
-	}
-	return start
 }
 
 func isWordByte(b byte) bool {
