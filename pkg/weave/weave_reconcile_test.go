@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/issue"
 )
 
 // TestWeaveQueueSummariesActiveOnly locks in the cross-repo hint fix:
@@ -159,6 +162,291 @@ func TestWeaveReconcileMerged(t *testing.T) {
 	if q.Items[2].State != "working" {
 		t.Errorf("issue 3: expected working (untouched), got %q", q.Items[2].State)
 	}
+}
+
+func TestWeaveTerminalStateRequiresEvidence(t *testing.T) {
+	cases := []struct {
+		name     string
+		exitCode int
+		killedBy string
+		ev       weaveTerminalEvidence
+		want     string
+	}{
+		{
+			name:     "clean exit with commit evidence",
+			exitCode: 0,
+			ev:       weaveTerminalEvidence{CommitsAhead: 1, Head: "abc"},
+			want:     "submitted",
+		},
+		{
+			name:     "clean exit with zero commits",
+			exitCode: 0,
+			ev:       weaveTerminalEvidence{CommitsAhead: 0, Head: "abc"},
+			want:     "failed",
+		},
+		{
+			name:     "killed reason wins over clean exit",
+			exitCode: 0,
+			killedBy: "watchdog",
+			ev:       weaveTerminalEvidence{CommitsAhead: 1, Head: "abc"},
+			want:     "killed",
+		},
+		{
+			name:     "signal exit is killed",
+			exitCode: 143,
+			ev:       weaveTerminalEvidence{CommitsAhead: 1, Head: "abc"},
+			want:     "killed",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := weaveTerminalState(c.exitCode, nil, c.killedBy, c.ev); got != c.want {
+				t.Fatalf("state = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestWeavePullRefusesEmptyAndKilledSubmittedEvidence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root, workspace, baseSHA := setupEmptyBranchFixture(t)
+	t.Chdir(root)
+	root, err := weaveRepoRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := &weaveQueue{NextID: 3, Root: root, Items: []*weaveItem{
+		{
+			ID:           1,
+			Title:        "empty run",
+			State:        "submitted",
+			Workspace:    workspace,
+			Branch:       "agent/weave-issue-1",
+			BaseSHA:      baseSHA,
+			Head:         baseSHA,
+			CommitsAhead: 0,
+			Created:      time.Now().UTC(),
+		},
+		{
+			ID:           2,
+			Title:        "killed run",
+			State:        "submitted",
+			Workspace:    workspace,
+			Branch:       "agent/weave-issue-1",
+			BaseSHA:      baseSHA,
+			Head:         baseSHA,
+			CommitsAhead: 1,
+			KilledBy:     "watchdog",
+			Created:      time.Now().UTC(),
+		},
+	}}
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWeave(t, "pull", "1")
+	if code != 0 {
+		t.Fatalf("pull empty exit=%d out=%s", code, out)
+	}
+	if !strings.Contains(out, "empty") || !strings.Contains(out, "0 commits ahead") {
+		t.Fatalf("pull empty output did not refuse with evidence:\n%s", out)
+	}
+
+	out, code = runWeave(t, "pull", "2")
+	if code != 0 {
+		t.Fatalf("pull killed exit=%d out=%s", code, out)
+	}
+	if !strings.Contains(out, "killed") || !strings.Contains(out, "watchdog") {
+		t.Fatalf("pull killed output did not refuse killed evidence:\n%s", out)
+	}
+}
+
+func TestWeaveKilledRunResumeClearsStaleEvidenceAndPullsFreshSubmission(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("system git not available; weave lifecycle needs it")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_AGENTIC", "")
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@t")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@t")
+
+	root := weaveTestRepo(t)
+	t.Chdir(root)
+	resolvedRoot, err := weaveRepoRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := weaveQueueDir(resolvedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseSHA := weaveTestGit(t, root, "rev-parse", "HEAD")
+	workspace := filepath.Join(dir, "workspaces", "issue-1")
+	if err := os.MkdirAll(filepath.Dir(workspace), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	weaveTestGit(t, root, "clone", "--local", "--no-hardlinks", root, workspace)
+	weaveTestGit(t, workspace, "checkout", "-qb", "agent/weave-issue-1")
+
+	verifyExit := 1
+	killedExit := 143
+	staleFinishedAt := time.Now().UTC().Add(-time.Minute)
+	q := &weaveQueue{NextID: 2, Root: resolvedRoot, Items: []*weaveItem{{
+		ID:              1,
+		Title:           "fresh reassignment",
+		Body:            "[killed by agy]\n\npreserve this historical note",
+		State:           "killed",
+		Workspace:       workspace,
+		Branch:          "agent/weave-issue-1",
+		BaseSHA:         baseSHA,
+		Created:         time.Now().UTC().Add(-2 * time.Minute),
+		FinishedAt:      staleFinishedAt,
+		CommitsAhead:    3,
+		Head:            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		VerifyExit:      &verifyExit,
+		VerifyOutput:    "old failed verification",
+		VerifyTree:      "head",
+		Dirty:           true,
+		DirtyFiles:      2,
+		UntrackedFiles:  1,
+		AutoCommitted:   true,
+		AutoCommitError: "old auto-commit failure",
+		Throttled:       true,
+		ThrottleSignal:  "rate-limit",
+		ExitCode:        &killedExit,
+		KilledBy:        "agy",
+	}}}
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, code := runWeave(t, "start", "--issue", "1", "--resume", "--no-spawn", "--json"); code != 0 {
+		t.Fatalf("resume no-spawn exit=%d out=%s", code, out)
+	}
+	q, err = loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relaunched := findWeaveItem(q, 1)
+	if relaunched == nil {
+		t.Fatal("run #1 disappeared after relaunch")
+	}
+	if relaunched.KilledBy != "" || relaunched.ExitCode != nil || !relaunched.FinishedAt.IsZero() || relaunched.Head != "" || relaunched.CommitsAhead != 0 {
+		t.Fatalf("relaunch kept stale terminal evidence: killed_by=%q exit=%v finished=%v head=%q commits=%d",
+			relaunched.KilledBy, relaunched.ExitCode, relaunched.FinishedAt, relaunched.Head, relaunched.CommitsAhead)
+	}
+	if relaunched.VerifyExit != nil || relaunched.VerifyOutput != "" || relaunched.VerifyTree != "" || relaunched.Dirty || relaunched.DirtyFiles != 0 || relaunched.UntrackedFiles != 0 || relaunched.AutoCommitted || relaunched.AutoCommitError != "" || relaunched.Throttled || relaunched.ThrottleSignal != "" {
+		t.Fatalf("relaunch kept stale verification/tree evidence: %+v", relaunched)
+	}
+	if !strings.Contains(relaunched.Body, "[killed by agy]") {
+		t.Fatalf("relaunch dropped historical body note: %q", relaunched.Body)
+	}
+
+	script := "printf 'fresh\\n' > fresh.txt && git add fresh.txt && git commit -q -m fresh"
+	if out, code := runWeave(t, "start", "--issue", "1", "--resume", "--json", "--", "sh", "-c", script); code != 0 {
+		t.Fatalf("resume submission exit=%d out=%s", code, out)
+	}
+	q, err = loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitted := findWeaveItem(q, 1)
+	if submitted == nil || submitted.State != "submitted" || submitted.KilledBy != "" || submitted.CommitsAhead <= 0 || submitted.Head == "" {
+		t.Fatalf("fresh run did not submit clean evidence: %+v", submitted)
+	}
+	if out, code := runWeave(t, "pull", "1"); code != 0 || !strings.Contains(out, "merged") {
+		t.Fatalf("pull fresh submission exit=%d out=%s", code, out)
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "fresh.txt")); err != nil || string(b) != "fresh\n" {
+		t.Fatalf("fresh submission was not merged into root: content=%q err=%v", b, err)
+	}
+
+	q, err = loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Items = append(q.Items,
+		&weaveItem{ID: 2, Title: "still killed", State: "submitted", Workspace: workspace, Branch: "agent/weave-issue-2", BaseSHA: baseSHA, Head: submitted.Head, CommitsAhead: 1, KilledBy: "agy", Created: time.Now().UTC()},
+		&weaveItem{ID: 3, Title: "still empty", State: "submitted", Workspace: workspace, Branch: "agent/weave-issue-3", BaseSHA: baseSHA, Head: baseSHA, CommitsAhead: 0, Created: time.Now().UTC()},
+	)
+	q.NextID = 4
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runWeave(t, "pull", "2"); code != 0 || !strings.Contains(out, "killed") || !strings.Contains(out, "agy") {
+		t.Fatalf("pull truly killed exit=%d out=%s", code, out)
+	}
+	if out, code := runWeave(t, "pull", "3"); code != 0 || !strings.Contains(out, "empty") || !strings.Contains(out, "0 commits ahead") {
+		t.Fatalf("pull zero-commit exit=%d out=%s", code, out)
+	}
+}
+
+func TestWeaveCloseRegisterOnMergeRequiresMergedDiff(t *testing.T) {
+	root, workspace, sha := setupMergeFixture(t)
+	reg := issue.New(root)
+	ri := &issue.Issue{
+		ID:      "abcdef123456",
+		Kind:    issue.KindBug,
+		Title:   "fix real bug",
+		Status:  issue.StatusTriaged,
+		Created: time.Now().UTC(),
+	}
+	if _, err := reg.Save(ri); err != nil {
+		t.Fatal(err)
+	}
+
+	empty := &weaveItem{Register: ri.ID, Owner: "agent", State: "done", Head: gitT(t, root, "rev-parse", "main"), CommitsAhead: 0}
+	weaveCloseRegisterOnMerge(root, "main", empty)
+	got, err := reg.Resolve(ri.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == issue.StatusClosed {
+		t.Fatal("empty run closed the register")
+	}
+
+	unmerged := &weaveItem{Register: ri.ID, Owner: "agent", State: "done", Head: sha, Workspace: workspace, CommitsAhead: 1}
+	weaveCloseRegisterOnMerge(root, "main", unmerged)
+	got, err = reg.Resolve(ri.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == issue.StatusClosed {
+		t.Fatal("unmerged run closed the register")
+	}
+
+	gitT(t, root, "fetch", "-q", workspace, "agent/weave-issue-1:agent/weave-issue-1")
+	gitT(t, root, "merge", "-q", "--no-ff", "-m", "merge issue 1", "agent/weave-issue-1")
+	weaveCloseRegisterOnMerge(root, "main", unmerged)
+	got, err = reg.Resolve(ri.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != issue.StatusClosed || got.Resolution != "fixed" {
+		t.Fatalf("merged diff did not close as fixed: %+v", got)
+	}
+}
+
+func setupEmptyBranchFixture(t *testing.T) (root, workspace, baseSHA string) {
+	t.Helper()
+	root = t.TempDir()
+	gitT(t, root, "init", "-q", "-b", "main")
+	gitT(t, root, "commit", "--allow-empty", "-qm", "seed")
+	baseSHA = gitT(t, root, "rev-parse", "HEAD")
+
+	workspace = t.TempDir()
+	gitT(t, workspace, "clone", "-q", root, ".")
+	gitT(t, workspace, "checkout", "-q", "-b", "agent/weave-issue-1")
+	return root, workspace, baseSHA
 }
 
 func TestWeaveTruncate(t *testing.T) {

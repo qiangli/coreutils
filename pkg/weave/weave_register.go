@@ -116,8 +116,11 @@ func runWeaveAddFromIssue(cmd *cobra.Command, ref string, flags *weaveOutputFlag
 // Called when an item reaches "done". Without it the register would drift out of date
 // the moment work succeeded — and a stale register is worse than none, because people
 // trust it.
-func weaveCloseRegisterOnMerge(root string, it *weaveItem) {
+func weaveCloseRegisterOnMerge(root, base string, it *weaveItem) {
 	if it.Register == "" {
+		return
+	}
+	if it.CommitsAhead <= 0 || !weaveItemMerged(root, base, it) {
 		return
 	}
 	reg := issue.New(root)

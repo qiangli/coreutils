@@ -320,7 +320,7 @@ func weaveCtlSockPath(dir string, id int64) string {
 
 // Terminal states for queue items — used by `weave wait` and similar
 // orchestrator-side polling. "submitted" means the subagent exited
-// cleanly and its branch is ready to be merged by `weave pull`.
+// cleanly and weave measured committed work ready to be merged by `weave pull`.
 // "failed" means the subagent exited non-zero; the branch is left
 // alone (no merge) and the user can inspect the log to decide.
 func isTerminalState(s string) bool {
@@ -886,6 +886,34 @@ func weaveApplyTerminalEvidence(it *weaveItem, ev weaveTerminalEvidence) {
 		it.VerifyOutput = ev.VerifyOutput
 		it.VerifyTree = ev.VerifyTree
 	}
+}
+
+func weaveClearCurrentRunTerminalEvidence(it *weaveItem) {
+	it.ExitCode = nil
+	it.KilledBy = ""
+	it.FinishedAt = time.Time{}
+	it.CommitsAhead = 0
+	it.Head = ""
+	it.VerifyExit = nil
+	it.VerifyOutput = ""
+	it.VerifyTree = ""
+	it.Dirty = false
+	it.DirtyFiles = 0
+	it.UntrackedFiles = 0
+	it.AutoCommitted = false
+	it.AutoCommitError = ""
+	it.Throttled = false
+	it.ThrottleSignal = ""
+}
+
+func weaveTerminalState(exitCode int, runErr error, killedBy string, ev weaveTerminalEvidence) string {
+	if killedBy != "" || exitCode >= 129 {
+		return "killed"
+	}
+	if exitCode == 0 && runErr == nil && ev.CommitsAhead > 0 {
+		return "submitted"
+	}
+	return "failed"
 }
 
 func weaveIssueMemoryFiles(it *weaveItem) []string {
@@ -2238,20 +2266,13 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// Flip back to working and clear the stale terminal
 			// record — otherwise `weave list` shows failed while an
 			// agent is actively running and `weave wait` returns
-			// immediately on the old terminal state.
+			// immediately on the old terminal state. The append-only
+			// body/comments keep the old killed/failed facts; the item
+			// fields describe only the current run.
 			freshIt.State = "working"
-			freshIt.ExitCode = nil
+			weaveClearCurrentRunTerminalEvidence(freshIt)
 			freshIt.StartedAt = time.Now().UTC()
-			freshIt.FinishedAt = time.Time{}
 			freshIt.CtlSock = ctlSock
-			freshIt.VerifyExit = nil
-			freshIt.VerifyOutput = ""
-			freshIt.VerifyTree = ""
-			freshIt.Dirty = false
-			freshIt.DirtyFiles = 0
-			freshIt.UntrackedFiles = 0
-			freshIt.AutoCommitted = false
-			freshIt.AutoCommitError = ""
 			if len(toolArgs) > 0 {
 				freshIt.Tool = displayTool
 				freshIt.LaunchSpec = launchSpec
@@ -2648,11 +2669,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if logPath != "" {
 			freshIt.LogPath = logPath
 		}
-		switch {
-		case exitCode == 0 && runErr == nil:
-			// Clean self-exit: the tool itself confirmed completion.
-			freshIt.State = "submitted"
-		case exitCode >= 129:
+		freshIt.State = weaveTerminalState(exitCode, runErr, killReason, ev)
+		if freshIt.State == "killed" {
 			// Signal death (watchdog, weave kill escalation, external
 			// SIGTERM): killed stays killed — never silently promoted.
 			// The wrapper-measured evidence travels with the item so
@@ -2662,8 +2680,6 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				freshIt.Body = fmt.Sprintf("[killed exit %d with %d wrapper-verified commit(s) ahead at %.12s — inspect, then resume or merge deliberately]\n\n",
 					exitCode, ev.CommitsAhead, ev.Head) + freshIt.Body
 			}
-		default:
-			freshIt.State = "failed"
 		}
 		it = freshIt
 		return nil
@@ -3139,12 +3155,17 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			if issueSpecified && it.ID != issueID {
 				continue
 			}
+			if it.KilledBy != "" {
+				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "killed",
+					Detail: fmt.Sprintf("run recorded killed_by=%q; inspect or salvage committed work explicitly", it.KilledBy)})
+				continue
+			}
 			// Already landed in base by some other route (manual merge,
 			// a peer weave). Reconcile the stale "submitted" to "done"
 			// and report it rather than re-fetching a no-op branch.
 			if it.State == "submitted" && weaveItemMerged(root, base, it) {
 				it.State = "done"
-				weaveCloseRegisterOnMerge(root, it)
+				weaveCloseRegisterOnMerge(root, base, it)
 				if it.Workspace != "" {
 					_ = safeRemoveWorkspace(dir, it.Workspace)
 					it.Workspace = ""
@@ -3155,7 +3176,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			}
 			// Merge any branch belonging to an item that's either still
 			// running (working — predates state transitions) or that
-			// finished cleanly (submitted). Items in "failed", "done",
+			// finished with committed evidence (submitted). Items in "failed", "done",
 			// or "abandoned" are skipped: failed shouldn't auto-merge,
 			// done is already merged, abandoned was torn down.
 			if it.State != "working" && it.State != "submitted" {
@@ -3169,6 +3190,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			if it.State == "working" && it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "running",
 					Detail: fmt.Sprintf("wrapper pid %d alive; wait or kill before pull", it.WrapperPid)})
+				continue
+			}
+			if it.State == "submitted" && it.CommitsAhead <= 0 {
+				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "empty",
+					Detail: "terminal evidence recorded 0 commits ahead; nothing mergeable"})
 				continue
 			}
 			if it.Dirty {
@@ -3219,7 +3245,8 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			}
 			ahead, _ := strconv.Atoi(strings.TrimSpace(cnt))
 			if ahead == 0 {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "empty"})
+				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "empty",
+					Detail: "branch has 0 commits ahead of HEAD; nothing mergeable"})
 				continue
 			}
 			preMergeOut, err := gitOut(root, "rev-parse", "HEAD")
@@ -3279,7 +3306,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// The work landed, so the register entry it implements is settled. A
 			// register that stays open after its fix merges is worse than none —
 			// people trust it, and it lies.
-			weaveCloseRegisterOnMerge(root, it)
+			weaveCloseRegisterOnMerge(root, base, it)
 			mergedReports = append(mergedReports, &reportIt)
 			results = append(results, result{
 				Issue:           it.ID,
