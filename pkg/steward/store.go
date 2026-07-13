@@ -10,10 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -31,107 +28,20 @@ const MaxTranscriptBytes int64 = 8 << 20
 // MaxReceiptBytes bounds an external authorization receipt artifact.
 const MaxReceiptBytes int64 = 1 << 20
 
-// ScopeID identifies the host AND user this seat belongs to.
-//
-// Both halves are load-bearing. The seat is "one steward per host/user", and the
-// store lives under $HOME — but $HOME is not reliably one machine's. A shared or
-// network home directory (NFS, a synced home, a container image with a baked-in
-// home) is mounted on several hosts at once, and a store keyed only by $HOME would
-// silently MERGE the seats of every machine sharing it: two hosts, two live
-// stewards, one journal, one epoch ladder, and an endless mutual fencing war
-// between agents that never had anything to do with each other.
-//
-// So the default store is keyed by (hostname, user). The short hash suffix keeps
-// two hosts that happen to share a hostname ("localhost") apart from each other
-// only insofar as their usernames differ — it is a disambiguator, not a secret.
-func ScopeID() string { return scopeFor(hostname(), username()) }
-
-// scopeFor is ScopeID's pure core, so the host/user isolation can be tested without
-// an env hook in production code.
-func scopeFor(host, who string) string {
-	sum := sha256.Sum256([]byte(host + "\x00" + who))
-	return slug(host) + "-" + slug(who) + "-" + hex.EncodeToString(sum[:4])
-}
-
-func hostname() string {
-	h, err := os.Hostname()
-	if err != nil || strings.TrimSpace(h) == "" {
-		return "unknown-host"
-	}
-	return h
-}
-
-// username resolves the account, preferring the ambient environment (which works
-// with CGO_ENABLED=0 on every platform) and falling back to os/user and then the
-// numeric uid. An unnamed account still gets a stable, distinguishable scope.
-func username() string {
-	for _, env := range []string{"USER", "USERNAME", "LOGNAME"} {
-		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
-			return v
-		}
-	}
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		return u.Username
-	}
-	return "uid" + strconv.Itoa(os.Getuid())
-}
-
-// slug reduces a name to a filesystem-safe token. Lossy on purpose — the hash
-// suffix in ScopeID carries the precision, this half carries the readability.
-func slug(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '-' || r == '_' || r == '.':
-			b.WriteByte('-')
-		}
-		if b.Len() >= 32 {
-			break
-		}
-	}
-	if b.Len() == 0 {
-		return "x"
-	}
-	return strings.Trim(b.String(), "-")
-}
-
-// DefaultDir is the host/user-scoped seat: ~/.bashy/steward/<host>-<user>-<hash>,
-// or $BASHY_STEWARD_DIR verbatim when set.
-//
-// HOST-WIDE and cwd-INDEPENDENT, deliberately. A steward is not a property of a
-// checkout — it is the human's continuous point of contact across every project on
-// the machine. Keying it to a repository would produce one steward per clone, which
-// is precisely what the singleton exists to prevent.
-//
-// MIGRATION: an earlier revision of this package stored the seat directly at
-// ~/.bashy/steward. That path is no longer read. A store written there predates the
-// host/user scoping and can be adopted by pointing $BASHY_STEWARD_DIR at it, or
-// moved into place: `mv ~/.bashy/steward ~/.bashy/steward.old && mkdir -p
-// ~/.bashy/steward/$(bashy steward scope) && mv ~/.bashy/steward.old/*
-// ~/.bashy/steward/$(bashy steward scope)/`. Only do that on the host the old
-// journal actually belongs to — that judgement is the entire reason the old layout
-// was wrong.
-func DefaultDir() string {
-	if v := os.Getenv("BASHY_STEWARD_DIR"); v != "" {
-		return v
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "bashy-steward", ScopeID())
-	}
-	return filepath.Join(home, ".bashy", "steward", ScopeID())
-}
-
 // Store is the on-disk steward state: one journal (the authority), one seat file
 // (liveness only), and directories of derived or optional artifacts.
 type Store struct {
 	dir string
-	// scope is the host/user this store speaks for. It is stamped into grants so a
-	// capability minted for one seat cannot be replayed against another.
-	scope string
+	// scope is the machine/account this store speaks for. It is stamped into grants so
+	// a capability minted for one seat cannot be replayed against another, and it is
+	// BOUND into the store (scope.json) so a store that travels to another machine is
+	// refused rather than adopted. See scope.go.
+	scope Scope
+	// scopeProvider resolves that identity. Injectable so the isolation can be tested.
+	scopeProvider ScopeProvider
+	// verifier is the injected root of trust. Nil means every authority transition
+	// fails closed — see verifier.go, which is the argument for why that is right.
+	verifier Verifier
 	// maxTranscript bounds transcript artifacts; overridable for tests.
 	maxTranscript int64
 }
@@ -148,34 +58,141 @@ func WithMaxTranscriptBytes(n int64) Option {
 	}
 }
 
-// WithScope overrides the scope id stamped into grants. Tests use it to prove that
-// a grant minted for one host/user is refused by another.
-func WithScope(scope string) Option {
+// WithVerifier injects the root of trust for authority transitions (claim, takeover).
+//
+// This is the integration hook. A host with a channel the agent cannot write into —
+// bashy meet, a desktop confirmation, an approval service, a signature it can check —
+// implements Verifier and passes it here. WITHOUT IT, NO AUTHORITY TRANSITION IS
+// POSSIBLE: the store fails closed, because a capability that rests only on store state
+// is one the agent can mint by writing a file. See verifier.go.
+func WithVerifier(v Verifier) Option {
+	return func(s *Store) { s.verifier = v }
+}
+
+// WithScopeProvider overrides how the seat's identity is resolved.
+//
+// The default reads the OS: a stable machine id and the process's real OS account. This
+// hook exists so those isolation properties can be TESTED — two machines sharing a
+// hostname, one machine under two accounts — none of which is reachable by setting an
+// environment variable any more, which was the entire point of removing them.
+func WithScopeProvider(p ScopeProvider) Option {
 	return func(s *Store) {
-		if scope != "" {
-			s.scope = scope
+		if p != nil {
+			s.scopeProvider = p
 		}
 	}
 }
 
+// WithScope pins the seat identity to a fixed id. Tests use it to prove that a grant
+// minted for one seat is refused by another.
+func WithScope(id string) Option {
+	return WithScopeProvider(StaticScope(Scope{
+		ID: id, Machine: "static:" + id, Account: "static:" + id, Host: id, Source: "static",
+	}))
+}
+
 // Open prepares the store directory. The journal records what an agent did across
 // every project on the host, so it is owner-only (0700/0600) like the audit log.
+//
+// It RESOLVES and BINDS the seat's identity (see scope.go): a store that was born on
+// another machine or under another OS account is refused here, before anything can read
+// or write it.
 func Open(dir string, opts ...Option) (*Store, error) {
-	if dir == "" {
-		dir = DefaultDir()
+	s := &Store{maxTranscript: MaxTranscriptBytes, scopeProvider: OSScope{}}
+	for _, o := range opts {
+		o(s)
 	}
+
+	sc, err := s.scopeProvider.Scope()
+	if err != nil {
+		return nil, err
+	}
+	s.scope = sc
+
+	if dir == "" {
+		if v := os.Getenv("BASHY_STEWARD_DIR"); v != "" {
+			dir = v
+		} else if dir, err = defaultDirFor(sc); err != nil {
+			return nil, err
+		}
+	}
+	s.dir = dir
+
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("steward: store dir: %w", err)
 	}
-	s := &Store{dir: dir, scope: ScopeID(), maxTranscript: MaxTranscriptBytes}
-	for _, o := range opts {
-		o(s)
+	if err := s.bindScope(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Store) Dir() string   { return s.dir }
-func (s *Store) Scope() string { return s.scope }
+func (s *Store) Dir() string       { return s.dir }
+func (s *Store) Scope() string     { return s.scope.ID }
+func (s *Store) ScopeInfo() Scope  { return s.scope }
+func (s *Store) HasVerifier() bool { return s.verifier != nil }
+
+// ─── committed-but-incomplete ─────────────────────────────────────────────────
+
+// ErrCommitted reports an operation whose JOURNAL APPEND SUCCEEDED and whose follow-up
+// housekeeping did not.
+//
+// This exists because the alternative is silent corruption of the caller's beliefs. The
+// journal is the authority; everything else this package writes — the seat.json liveness
+// cache, the spent-grant marker, the removal of a released seat file — is derived. So
+// when the append lands and the cache write then fails, returning a bare error tells the
+// caller "your claim failed", and a caller that believes that RETRIES. The retry replays
+// against a journal that already contains the claim: at best it is refused confusingly,
+// at worst it appends a second seat event and mints a second epoch, fencing the very
+// tenure the first call successfully acquired.
+//
+// So the operation reports what actually happened: IT COMMITTED. The seq and epoch are
+// carried so the caller can proceed as the holder it now is, and the message says which
+// derived artifact is stale and how to rebuild it — which, for the seat cache, is a
+// plain `steward heartbeat --epoch N`, an idempotent operation that reconstructs it from
+// the journal. That is the whole recovery.
+//
+// Callers that only want to know "did this work" can keep using errors.Is/As; callers
+// that must not retry check for this type. The journal is fine either way — which is the
+// point of putting the authority in exactly one place.
+type ErrCommitted struct {
+	Op    string // "claim", "takeover", "record", "release", …
+	Seq   uint64 // the journal seq that WAS committed (0 if the op appends nothing)
+	Epoch uint64 // the epoch it was committed under
+	Cause error  // what failed AFTER the commit
+}
+
+func (e *ErrCommitted) Error() string {
+	return fmt.Sprintf("steward: %s WAS COMMITTED to the journal (seq %d, epoch %d) — but the derived state that "+
+		"follows it could not be written: %v.\n"+
+		"DO NOT RETRY IT. The journal is the authority and it already holds this operation; retrying would append it a "+
+		"second time. What is stale is the liveness cache, which is derived and rebuildable: run "+
+		"`steward heartbeat --epoch %d`, which reconstructs it from the journal and is safe to repeat.",
+		e.Op, e.Seq, e.Epoch, e.Cause, e.Epoch)
+}
+
+func (e *ErrCommitted) Unwrap() error { return e.Cause }
+
+// Committed reports the seq and epoch that reached the journal.
+func (e *ErrCommitted) Committed() (seq, epoch uint64) { return e.Seq, e.Epoch }
+
+// committed wraps a post-append failure, or returns nil if there was none.
+func committed(op string, seq, epoch uint64, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ErrCommitted{Op: op, Seq: seq, Epoch: epoch, Cause: err}
+}
+
+// failpoint is a test hook for crash simulation, and it is a no-op in production.
+//
+// The durability arguments in this package — a repair is atomic, a commit is either
+// visible or not — are claims about what happens when the process dies at the worst
+// possible instant. Those instants are unreachable from an ordinary test, so the code
+// names them, and the tests kill the process there. A named failpoint that nothing can
+// trigger in production is a cheap price for a durability property that is actually
+// exercised rather than merely asserted in a comment.
+var failpoint = func(string) error { return nil }
 
 func (s *Store) journalPath() string   { return filepath.Join(s.dir, "journal.jsonl") }
 func (s *Store) seatPath() string      { return filepath.Join(s.dir, "seat.json") }

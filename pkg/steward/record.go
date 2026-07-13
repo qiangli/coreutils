@@ -37,7 +37,11 @@ func (s *Store) Record(e Entry, epoch uint64, now time.Time) (Entry, error) {
 		// self-evidently alive, and making it prove that separately is busywork that
 		// only ever fails at the worst moment. The authority here is the one the gate
 		// just verified, so this cannot refresh a tenure that has ended.
-		return s.writeSeat(deriveAuthority(rep), "", now)
+		//
+		// The entry is COMMITTED at this point. If the liveness cache write fails, the
+		// caller is told so — WITH the seq it committed — rather than being handed a bare
+		// error it would reasonably retry, appending the same record twice. See ErrCommitted.
+		return committed("record", stored.Seq, stored.Epoch, s.writeSeat(deriveAuthority(rep), "", now))
 	})
 	return out, err
 }
@@ -63,22 +67,44 @@ func (s *Store) Decide(actor principal.Ref, epoch uint64, workstream, summary, r
 // Attest records a VERIFICATION: somebody went and checked an earlier entry's claim,
 // and this is the durable attestation of what they found.
 //
-// This is the ONLY thing that promotes a claim to "verified" on the board. Evidence
-// on the original entry is a POINTER — "go look at commit de6485c", "I ran go test" —
-// and a pointer is not a check. An agent can attach a plausible reference to a claim
-// it never made true, and the reference will look exactly like one attached to a
-// claim that is. So the board never treats a reference as a verification, and this
-// entry is how the gap gets closed.
+// This is the ONLY thing that promotes a claim to "verified" on the board. Evidence on
+// the original entry is a POINTER — "go look at commit de6485c", "I ran go test" — and a
+// pointer is not a check. An agent can attach a plausible reference to a claim it never
+// made true, and the reference will look exactly like one attached to a claim that is.
 //
-// It binds to the target's HASH, not merely its seq: an attestation has to name the
-// exact bytes it vouched for, or it is an attestation of whatever ends up at that
-// sequence number.
+// AND A VERIFICATION IS NOT A SENTENCE ABOUT A CHECK. The previous revision demanded a
+// --method string and then promoted the claim on the strength of it, which moved the
+// trust-me claim one entry down the log and promoted it there instead: an agent that
+// would write "done ✅" with no evidence will just as happily write `verify --method "re-ran
+// the suite"`, and the board turned that prose into a green VERIFIED row. The check was
+// a spelling test.
+//
+// So a PROMOTING verification must bring something enforceable (see
+// Verification.Enforceable):
+//
+//   - digest-bound evidence — bytes a skeptic can go and rehash, and that cannot be
+//     swapped afterwards, or
+//   - an Adapter attestation from a trusted verification adapter the HOST injected,
+//     which is rooted outside the store the agent can write to.
+//
+// A REFUTING or INCONCLUSIVE verification needs neither, and the asymmetry is the whole
+// ethic of this package: degradation travels one way. We demand credentials to become
+// more confident and never to become less, because the cost of a false "verified" is
+// unbounded and the cost of a false "refuted" is a second look.
 func (s *Store) Attest(actor principal.Ref, epoch uint64, v Verification, evidence []Evidence, now time.Time) (Entry, error) {
 	now = mustUTC(now)
 	var out Entry
 	err := s.withLock(func() error {
 		rep, err := s.Replay()
 		if err != nil {
+			return err
+		}
+		// AUTHORITY FIRST. The gate runs again at append time — it is the real one — but a
+		// caller who may not write at all gets told THAT, rather than being walked through
+		// the evidentiary rules for a record it was never going to be allowed to make. A
+		// fenced zombie needs to hear "your tenure ended", not "your verification is
+		// unpersuasive".
+		if _, err := authorize(rep, actor, epoch); err != nil {
 			return err
 		}
 		target, ok := entryBySeq(rep.Entries, v.TargetSeq)
@@ -99,8 +125,8 @@ func (s *Store) Attest(actor principal.Ref, epoch uint64, v Verification, eviden
 			return fmt.Errorf("steward: a verification result is success, failed, or unknown — not %q", v.Result)
 		}
 		if strings.TrimSpace(v.Method) == "" {
-			return fmt.Errorf("steward: a verification must say HOW it checked (--method): " +
-				"an unexplained 'I verified it' is the same trust-me claim it is supposed to replace")
+			return fmt.Errorf("steward: a verification must say HOW it checked (--method). " +
+				"It is prose, and prose promotes nothing — but a check nobody can even describe is not one")
 		}
 
 		e := Entry{
@@ -114,12 +140,29 @@ func (s *Store) Attest(actor principal.Ref, epoch uint64, v Verification, eviden
 			Evidence: evidence,
 			Verifies: &v,
 		}
+
+		// THE GATE ON PROMOTION. A success that would turn a strand green must bring
+		// something checkable; failure and unknown pass freely, because they take
+		// confidence away rather than granting it.
+		if v.Result == OutcomeSuccess && !v.Enforceable(e) {
+			return fmt.Errorf("steward: refusing to record a verification that VERIFIES NOTHING.\n"+
+				"You attested that seq %d succeeded, and the only thing backing it is the sentence %q. That is the same "+
+				"trust-me claim a verification is supposed to replace — an agent that would claim success it did not "+
+				"earn will write a method string it did not run, and the board would promote it to VERIFIED either way.\n"+
+				"A verification that promotes must bring one of:\n"+
+				"  - digest-bound evidence, which a skeptic can rehash:\n"+
+				"      steward verify --seq %d --result success --method %q -e 'file:/tmp/test.log#sha256:<digest>'\n"+
+				"  - an attestation from a trusted verification adapter the host injected (Verification.Adapter).\n"+
+				"Recording that the check FAILED or was INCONCLUSIVE needs neither: doubt is free, confidence is not.",
+				v.TargetSeq, v.Method, v.TargetSeq, v.Method)
+		}
+
 		stored, err := s.appendAuthorized(rep, e, epoch, now)
 		if err != nil {
 			return err
 		}
 		out = stored
-		return s.writeSeat(deriveAuthority(rep), "", now)
+		return committed("verify", stored.Seq, stored.Epoch, s.writeSeat(deriveAuthority(rep), "", now))
 	})
 	return out, err
 }

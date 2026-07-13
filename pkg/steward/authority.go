@@ -4,6 +4,7 @@
 package steward
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -196,12 +197,29 @@ func Self() principal.Ref { return selfRef() }
 
 // ErrHeld is returned by Claim when a LIVE steward already holds the seat. It is
 // not an error to route around — it is the singleton working.
-type ErrHeld struct{ View View }
+//
+// Yours reports that the live holder IS the caller. That is no longer a shortcut to a
+// free refresh — see Claim — so the case gets its own message: what a live holder needs
+// is Heartbeat, which presents the fencing epoch, and presenting the epoch is the entire
+// point. A holder that cannot produce its epoch is telling us something, and what it is
+// telling us is that it may be a zombie.
+type ErrHeld struct {
+	View  View
+	Yours bool
+}
 
 func (e *ErrHeld) Error() string {
+	if e.Yours {
+		return fmt.Sprintf("steward: you already hold the seat (epoch %d, last heartbeat %s), and it is LIVE. "+
+			"Claiming does not renew it: renewing is `steward heartbeat --epoch %d`, which PRESENTS the epoch, and a claim "+
+			"that refreshed a held tenure without one would be a way to keep a tenure alive without ever proving it is "+
+			"still yours — which is exactly what a steward that was superseded while it was away would do",
+			e.View.Authority.Epoch, e.View.Heartbeat.Local().Format(time.RFC3339), e.View.Authority.Epoch)
+	}
 	return fmt.Sprintf("steward: the seat is held by %s (epoch %d, last heartbeat %s) — "+
-		"this host/user has exactly one steward. If they are truly gone and you must recover the seat, "+
-		"that is a takeover: mint an authorization (`steward authorize`) and run `steward takeover --grant <id>`",
+		"this machine/account has exactly one steward. If they are truly gone and you must recover the seat, "+
+		"that is a takeover: mint an authorization (`steward authorize --action takeover`) and run "+
+		"`steward takeover --grant <id>`",
 		holderName(e.View.Authority.Holder), e.View.Authority.Epoch,
 		e.View.Heartbeat.Local().Format(time.RFC3339))
 }
@@ -452,10 +470,10 @@ func (s *Store) viewFrom(rep *Replay, now time.Time) View {
 
 // ─── seat lifecycle ───────────────────────────────────────────────────────────
 
-// Claim acquires a VACANT or LAPSED seat, atomically.
+// Claim acquires a VACANT or LAPSED seat, atomically, UNDER AN AUTHORIZATION CAPABILITY.
 //
-// It reads the journal, decides, and writes — all under one lock, so two agents
-// racing for an empty seat cannot both win.
+// It reads the journal, decides, and writes — all under one lock, so two agents racing
+// for an empty seat cannot both win.
 //
 // It takes the seat in exactly two situations, and NOTHING else:
 //
@@ -463,19 +481,42 @@ func (s *Store) viewFrom(rep *Replay, now time.Time) View {
 //	LAPSED  — a heartbeat record that AGREES with the journal (right holder, right
 //	          epoch, sane timestamps) says the holder is past the TTL.
 //
-// Every other state fails closed. In particular a seat whose liveness is UNKNOWN —
-// no heartbeat file, corrupt file, wrong schema, wrong holder, wrong epoch, a
-// timestamp from the future — is NOT claimable (ErrLivenessUnknown). An earlier
-// revision treated unknown as claimable, reasoning that a missing seat.json is what
-// a crash leaves behind. It is; but it is also what `rm seat.json` leaves behind,
-// and the two are indistinguishable from inside the process. Recovering the seat
-// from a state we cannot read is a TAKEOVER, which is authorized and recorded.
+// Every other state fails closed. A LIVE seat is ErrHeld — including one held by the
+// caller itself, see below. A seat whose liveness is UNKNOWN (no heartbeat file, corrupt
+// file, wrong schema, wrong holder, wrong epoch, a timestamp from the future) is
+// ErrLivenessUnknown: that is a fact about the RECORD, not the holder, and every way of
+// producing it is also a way of producing it deliberately. Recovering from either is a
+// Takeover.
 //
-// A change of holder BUMPS THE EPOCH, fencing the previous one. Re-claiming a seat
-// you already hold and are LIVE in is an idempotent heartbeat: no new epoch, no new
-// journal entry, no churn.
-func (s *Store) Claim(holder principal.Ref, intent string, now time.Time) (View, error) {
+// TWO THINGS CHANGED HERE, and both were holes rather than refinements.
+//
+// IT IS AUTHORIZED. Claiming used to be free — any process that could see a vacant or
+// lapsed seat became the steward by asking. But a LAPSED seat has an incumbent, and
+// "lapsed" proves a heartbeat gap and nothing else: the holder may be mid-thought,
+// rate-limited, or paused at a human prompt. An unattended agent that could claim a
+// lapsed seat could simply WAIT OUT the TTL and depose a working steward — the takeover
+// it was forbidden to perform, spelled differently and with no record of authorization.
+// And a vacant seat is still the seat of authority for the whole host; "whoever gets
+// there first" is a race, not an access-control policy. So both go through a Grant, and
+// through the injected verifier that grant is bounded by (see verifier.go).
+//
+// THERE IS NO SAME-HOLDER SHORTCUT. Claiming a seat you already hold and are live in
+// used to be quietly treated as a heartbeat — no epoch presented, no journal entry, seat
+// refreshed. That is a way to REFRESH A HELD TENURE WITHOUT PRESENTING THE EPOCH, and
+// the epoch is the one thing that tells a steward its tenure ended. The agent that most
+// wants that shortcut is precisely the one that must not have it: a zombie, whose
+// identity still matches the journal's holder because it IS the holder of a tenure it
+// does not know is over — one that lapsed and was reclaimed by... itself, restarted. A
+// live holder renews through Heartbeat(holder, epoch), which presents the token and is
+// fenced like everything else. Being yourself is not a credential; the token is.
+func (s *Store) Claim(ctx context.Context, holder principal.Ref, req SeatRequest, now time.Time) (View, error) {
 	now = mustUTC(now)
+	// FAIL CLOSED FIRST. With no root of trust there is nothing that could authorize this,
+	// and a store that cannot grant authority should say so plainly rather than walking the
+	// caller through the paperwork before refusing on principle.
+	if s.verifier == nil {
+		return View{}, &ErrNoVerifier{Action: ActionClaim}
+	}
 	var out View
 	err := s.withLock(func() error {
 		rep, err := s.Replay()
@@ -487,63 +528,102 @@ func (s *Store) Claim(holder principal.Ref, intent string, now time.Time) (View,
 		}
 		v := s.viewFrom(rep, now)
 
-		// Already ours and live: a heartbeat, not a new tenure.
-		if v.Liveness == LivenessLive && SameHolder(v.Authority.Holder, holder) {
-			if err := s.writeSeat(v.Authority, intent, now); err != nil {
-				return err
-			}
-			out = s.viewFrom(rep, now)
-			return nil
-		}
 		switch v.Liveness {
 		case LivenessLive:
-			return &ErrHeld{View: v}
+			// Including when the live holder IS the caller. See the doc comment: renewing a
+			// held seat is Heartbeat's job, because Heartbeat presents the epoch.
+			return &ErrHeld{View: v, Yours: SameHolder(v.Authority.Holder, holder)}
 		case LivenessUnknown:
 			return &ErrLivenessUnknown{View: v}
 		case LivenessVacant, LivenessLapsed:
-			// the two ordinary paths
+			// the two ordinary paths — and both are authorized
 		default:
 			return &ErrLivenessUnknown{View: v}
 		}
 
+		prev := v.Authority
+		grant, err := s.loadGrantFor(ActionClaim, req)
+		if err != nil {
+			return err
+		}
+		at, err := s.verifyGrant(ctx, rep, grant, ActionClaim, holder, prev, req, now)
+		if err != nil {
+			return err
+		}
+
 		epoch := rep.MaxEpoch + 1
+		authz := authzRefOf(grant, at, req)
 		e := Entry{
-			Actor:   holder,
-			Epoch:   epoch,
-			Kind:    KindSeatClaimed,
-			Summary: fmt.Sprintf("%s claimed the steward seat at epoch %d", holderName(holder), epoch),
-			Outcome: OutcomeSuccess,
+			Actor:     holder,
+			Epoch:     epoch,
+			Kind:      KindSeatClaimed,
+			Summary:   fmt.Sprintf("%s claimed the steward seat at epoch %d under grant %s (%s, actor %q)", holderName(holder), epoch, grant.ID, grant.Provenance, grant.Actor),
+			Rationale: req.Intent,
+			Outcome:   OutcomeSuccess,
+			Authz:     authz,
 			Evidence: []Evidence{
+				{Kind: "grant", Ref: grant.ID, Note: "authorization"},
 				{Kind: "seat", Ref: fmt.Sprintf("epoch:%d", epoch), Note: "acquisition"},
 			},
 		}
-		if intent != "" {
-			e.Rationale = intent
+		if req.Intent == "" {
+			e.Rationale = grant.Reason
 		}
-		if prev := v.Authority; !prev.Vacant {
-			// Record whom this claim fenced. The prior holder never agreed to this and
-			// was never asked — the record says so plainly.
+		if grant.Receipt != nil {
+			e.Evidence = append(e.Evidence, Evidence{
+				Kind: "digest", Ref: grant.Receipt.Path, Digest: grant.Receipt.Digest, Note: "authorization-receipt",
+			})
+		}
+		if !prev.Vacant {
+			// Record whom this claim fenced. The prior holder never agreed to this and was
+			// never asked — the record says so plainly.
 			e.Evidence = append(e.Evidence, Evidence{
 				Kind: "principal", Ref: holderName(prev.Holder), Note: "prior-holder",
 			})
 			e.Summary += fmt.Sprintf(" (lapsed seat previously held by %s at epoch %d)",
 				holderName(prev.Holder), prev.Epoch)
 		}
-		if _, err := appendEntry(s.journalPath(), rep, e, now); err != nil {
+		stored, err := appendEntry(s.journalPath(), rep, e, now)
+		if err != nil {
 			return err
 		}
+		s.markGrantConsumed(grant, epoch, now)
 
-		auth := Authority{Holder: holder, Epoch: epoch, AcquiredAt: now}
-		if err := s.writeSeat(auth, intent, now); err != nil {
-			return err
+		auth := Authority{Holder: holder, Epoch: epoch, AcquiredAt: now, Authz: authz}
+		if !prev.Vacant {
+			p := prev.Holder
+			auth.TakenOverFrom = &p
 		}
 		out = View{
 			SchemaVersion: SchemaVersion, Authority: auth,
-			Liveness: LivenessLive, Heartbeat: now, Since: now, PID: os.Getpid(), Intent: intent,
+			Liveness: LivenessLive, Heartbeat: now, Since: now, PID: os.Getpid(), Intent: req.Intent,
 		}
-		return nil
+		// The claim is COMMITTED from here on. A failure to write the derived liveness
+		// cache does not un-claim it, and must not be reported as if it had — see
+		// ErrCommitted.
+		return committed("claim", stored.Seq, epoch, s.writeSeat(auth, req.Intent, now))
 	})
 	return out, err
+}
+
+// authzRefOf records, in the journal, what a seat acquisition was authorized by — the
+// capability's bounds AND the attestation that actually established it.
+func authzRefOf(g Grant, at *Attestation, req SeatRequest) *AuthzRef {
+	ref := &AuthzRef{
+		GrantID:    g.ID,
+		Action:     g.Action,
+		Provenance: g.Provenance,
+		Actor:      g.Actor,
+		FromEpoch:  g.FromEpoch,
+		IssuedAt:   g.IssuedAt.UTC().Format(time.RFC3339Nano),
+		ExpiresAt:  g.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		Attended:   req.Attended,
+		Receipt:    g.Receipt,
+	}
+	if at != nil {
+		ref.Attestation = at
+	}
+	return ref
 }
 
 // Takeover seizes the seat — live, lapsed, or unreadable — under a durable
@@ -562,8 +642,11 @@ func (s *Store) Claim(holder principal.Ref, intent string, now time.Time) (View,
 // the same id. Read Grant's doc for exactly what a grant does and does not prove —
 // the short version is that it is durable, replay-protected and auditable, and it is
 // NOT cryptographic evidence that a human was in the room.
-func (s *Store) Takeover(holder principal.Ref, req TakeoverRequest, now time.Time) (View, error) {
+func (s *Store) Takeover(ctx context.Context, holder principal.Ref, req SeatRequest, now time.Time) (View, error) {
 	now = mustUTC(now)
+	if s.verifier == nil {
+		return View{}, &ErrNoVerifier{Action: ActionTakeover}
+	}
 	var out View
 	err := s.withLock(func() error {
 		rep, err := s.Replay()
@@ -577,26 +660,17 @@ func (s *Store) Takeover(holder principal.Ref, req TakeoverRequest, now time.Tim
 		}
 		prev := deriveAuthority(rep)
 
-		grant, err := s.loadGrantFor(req)
+		grant, err := s.loadGrantFor(ActionTakeover, req)
 		if err != nil {
 			return err
 		}
-		if err := s.verifyGrant(rep, grant, holder, prev, req, now); err != nil {
+		at, err := s.verifyGrant(ctx, rep, grant, ActionTakeover, holder, prev, req, now)
+		if err != nil {
 			return err
 		}
 
 		epoch := rep.MaxEpoch + 1
-		authz := &AuthzRef{
-			GrantID:     grant.ID,
-			Action:      grant.Action,
-			Provenance:  grant.Provenance,
-			Actor:       grant.Actor,
-			FromEpoch:   grant.FromEpoch,
-			IssuedAt:    grant.IssuedAt.UTC().Format(time.RFC3339Nano),
-			ExpiresAt:   grant.ExpiresAt.UTC().Format(time.RFC3339Nano),
-			Interactive: req.Interactive,
-			Receipt:     grant.Receipt,
-		}
+		authz := authzRefOf(grant, at, req)
 		e := Entry{
 			Actor:     holder,
 			Epoch:     epoch,
@@ -621,7 +695,8 @@ func (s *Store) Takeover(holder principal.Ref, req TakeoverRequest, now time.Tim
 			})
 			e.Summary += fmt.Sprintf(", fencing %s (epoch %d)", holderName(prev.Holder), prev.Epoch)
 		}
-		if _, err := appendEntry(s.journalPath(), rep, e, now); err != nil {
+		stored, err := appendEntry(s.journalPath(), rep, e, now)
+		if err != nil {
 			return err
 		}
 		// The journal now records the grant as consumed; the file is only a cache of
@@ -633,14 +708,13 @@ func (s *Store) Takeover(holder principal.Ref, req TakeoverRequest, now time.Tim
 			p := prev.Holder
 			newAuth.TakenOverFrom = &p
 		}
-		if err := s.writeSeat(newAuth, "", now); err != nil {
-			return err
-		}
 		out = View{
 			SchemaVersion: SchemaVersion, Authority: newAuth,
-			Liveness: LivenessLive, Heartbeat: now, Since: now, PID: os.Getpid(),
+			Liveness: LivenessLive, Heartbeat: now, Since: now, PID: os.Getpid(), Intent: req.Intent,
 		}
-		return nil
+		// COMMITTED. See ErrCommitted: the seizure landed in the journal, and a failure to
+		// write the derived liveness cache must not be reported as if it had not.
+		return committed("takeover", stored.Seq, epoch, s.writeSeat(newAuth, req.Intent, now))
 	})
 	return out, err
 }
@@ -682,13 +756,20 @@ func (s *Store) Release(holder principal.Ref, epoch uint64, note string, now tim
 
 		// Release is a seat event, so it cannot go through appendAuthorized (which
 		// forbids them by design). The gate above is the same one, run explicitly.
-		if _, err := appendEntry(s.journalPath(), rep, e, now); err != nil {
+		stored, err := appendEntry(s.journalPath(), rep, e, now)
+		if err != nil {
 			return err
 		}
 		// The seat file is liveness only; with the seat vacated it has nothing left to
-		// say. Its removal loses no authority — that lives in the journal.
+		// say. Its removal loses no authority — that lives in the journal, which now says
+		// the seat is empty regardless of what this stale cache claims. So the release IS
+		// COMMITTED even if the removal fails, and reporting a bare error here would invite
+		// a retry that appends a second release.
+		if err := failpoint("seat.remove"); err != nil {
+			return committed("release", stored.Seq, auth.Epoch, err)
+		}
 		if err := os.Remove(s.seatPath()); err != nil && !os.IsNotExist(err) {
-			return err
+			return committed("release", stored.Seq, auth.Epoch, err)
 		}
 		return nil
 	})
@@ -727,6 +808,9 @@ func (s *Store) Heartbeat(holder principal.Ref, epoch uint64, now time.Time) err
 // Carrying a field forward out of a cache we would refuse to read is how a bad cache
 // launders itself into a good one.
 func (s *Store) writeSeat(auth Authority, intent string, now time.Time) error {
+	if err := failpoint("seat.write"); err != nil {
+		return err
+	}
 	seat := Seat{
 		SchemaVersion: SchemaVersion,
 		Holder:        auth.Holder,

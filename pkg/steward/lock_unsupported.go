@@ -1,7 +1,7 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-//go:build !linux && !darwin && !freebsd && !netbsd && !openbsd && !dragonfly && !solaris && !aix && !windows
+//go:build !linux && !darwin && !freebsd && !netbsd && !openbsd && !dragonfly && !solaris && !windows
 
 package steward
 

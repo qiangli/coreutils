@@ -279,6 +279,17 @@ func ProjectBoard(entries []Entry) Board {
 		}
 		switch e.Verifies.Result {
 		case OutcomeSuccess:
+			// PROMOTION IS EARNED, NOT ASSERTED. A verification whose entire backing is a
+			// prose --method promotes NOTHING: it is recorded, it is visible in the log, and
+			// the strand stays exactly as confident as it was. Only digest-bound evidence or
+			// a trusted adapter's attestation moves it to verified — see
+			// Verification.Enforceable, and note that Attest refuses to write an
+			// unenforceable success at all, so this is the second of two locks on the same
+			// door. It is here as well because the board is a projection of the JOURNAL, and
+			// a projection must be able to grade a record it did not write.
+			if !e.Verifies.Enforceable(e) {
+				continue
+			}
 			ws.Confidence = ConfidenceVerified
 		case OutcomeFailed:
 			// Degradation travels one way, and this is the direction it travels in.

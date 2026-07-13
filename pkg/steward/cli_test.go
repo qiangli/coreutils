@@ -5,12 +5,15 @@ package steward
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The CLI is the surface a cold successor actually touches, so these tests assert
@@ -25,6 +28,10 @@ func cli(t *testing.T, dir string, args ...string) (string, error) {
 	// agent-detection happens to infer on the machine running the tests.
 	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/tester")
 	t.Setenv("BASHY_EPISODE", "ep-test")
+	// A fixed machine identity, so the suite does not depend on the box it runs on (and
+	// so a CI container with no /etc/machine-id does not fail closed on every test). It is
+	// the ONE identity input that is overridable by design — see HostIDEnv.
+	t.Setenv("BASHY_HOST_ID", "cli-test-machine")
 	// `claim` exports the fencing token with a raw os.Setenv, which would otherwise
 	// survive into the NEXT test in this process and hand it a tenure it never took.
 	// Re-registering the variable at its CURRENT value snapshots it for cleanup without
@@ -57,6 +64,74 @@ func mustCLI(t *testing.T, dir string, args ...string) string {
 	return out
 }
 
+// apiStore opens the same store the CLI is pointed at, with a TRUSTED verifier.
+//
+// Tests need this because the CLI, run from a test, CANNOT ACQUIRE THE SEAT — and that
+// is the control working, not an inconvenience to route around. The CLI's only root of
+// trust is a typed confirmation at a real terminal (see ptyVerifier); a test has no
+// terminal, so it is by definition an unattended caller, and an unattended acquisition is
+// exactly what the package refuses. Every CI runner, cron job and headless agent is in
+// the same position, which is the point.
+//
+// So the seat is seeded the way a HOST would do it: through the API, with a verifier the
+// host injected. The CLI tests below then exercise the commands a steward actually runs
+// once it holds the seat — which is nearly all of them.
+func apiStore(t *testing.T, dir string) *Store {
+	t.Helper()
+	t.Setenv("BASHY_HOST_ID", "cli-test-machine")
+	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/tester")
+	t.Setenv("BASHY_EPISODE", "ep-test")
+	s, err := Open(dir, WithVerifier(verified()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	return s
+}
+
+// seedSeat takes the seat through the API and exports the fencing epoch, so the CLI
+// commands under test inherit the tenure exactly as they would after a real `claim`.
+func seedSeat(t *testing.T, dir string) uint64 {
+	t.Helper()
+	s := apiStore(t, dir)
+	who := Self()
+	now := time.Now()
+
+	g, err := s.Authorize(context.Background(), GrantRequest{
+		Action: ActionClaim, Grantee: who, Actor: "qiangli", Reason: "test seat", Attended: true,
+	}, now)
+	if err != nil {
+		t.Fatalf("Authorize(claim): %v", err)
+	}
+	v, err := s.Claim(context.Background(), who, SeatRequest{GrantID: g.ID, Attended: true}, now)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	t.Setenv(EpochEnv, strconv.FormatUint(v.Authority.Epoch, 10))
+	return v.Authority.Epoch
+}
+
+// seizeSeat takes the seat over through the API, bumping the epoch — the setup a test
+// needs when what it is actually testing is what happens to the FENCED steward.
+func seizeSeat(t *testing.T, dir string) uint64 {
+	t.Helper()
+	s := apiStore(t, dir)
+	who := Self()
+	now := time.Now()
+
+	g, err := s.Authorize(context.Background(), GrantRequest{
+		Action: ActionTakeover, Grantee: who, Actor: "qiangli", Reason: "recovery drill", Attended: true,
+	}, now)
+	if err != nil {
+		t.Fatalf("Authorize(takeover): %v", err)
+	}
+	v, err := s.Takeover(context.Background(), who, SeatRequest{GrantID: g.ID, Attended: true}, now)
+	if err != nil {
+		t.Fatalf("Takeover: %v", err)
+	}
+	t.Setenv(EpochEnv, strconv.FormatUint(v.Authority.Epoch, 10))
+	return v.Authority.Epoch
+}
+
 func TestCLIStatusOnAVacantSeat(t *testing.T) {
 	dir := t.TempDir()
 	out := mustCLI(t, dir, "status")
@@ -68,20 +143,87 @@ func TestCLIStatusOnAVacantSeat(t *testing.T) {
 	}
 }
 
-func TestCLIClaimThenStatus(t *testing.T) {
+func TestCLIStatusShowsTheLiveHolder(t *testing.T) {
 	dir := t.TempDir()
+	seedSeat(t, dir)
 
-	out := mustCLI(t, dir, "claim", "--intent", "on call")
-	if !strings.Contains(out, "epoch 1") {
-		t.Fatalf("the first claim must be epoch 1:\n%s", out)
-	}
-
-	out = mustCLI(t, dir, "status")
+	out := mustCLI(t, dir, "status")
 	if !strings.Contains(out, "live") || !strings.Contains(out, "tester") {
 		t.Fatalf("status must show the live holder:\n%s", out)
 	}
-	if !strings.Contains(out, "on call") {
-		t.Fatalf("status must surface the holder's intent:\n%s", out)
+	if !strings.Contains(out, "epoch 1") {
+		t.Fatalf("the first acquisition must be epoch 1:\n%s", out)
+	}
+}
+
+// EVERY AUTHORITY TRANSITION FAILS CLOSED WITH NO TERMINAL — and a test process is an
+// unattended process, exactly like the cron job, the CI runner, and the runaway agent
+// loop this is meant to stop.
+//
+// This is the single most important CLI behavior in the revision, so it is asserted for
+// all three verbs. Note what it means for the test suite itself: the CLI tests below
+// cannot take the seat and must seed it through a host-injected verifier (see apiStore).
+// A control that the test suite could shrug off would be a control an agent could shrug
+// off.
+func TestCLIAuthorityTransitionsFailClosedWithNoTerminal(t *testing.T) {
+	// Minting is refused outright: there is nobody here to confirm anything.
+	for _, action := range []string{ActionClaim, ActionTakeover} {
+		t.Run("authorize a "+action, func(t *testing.T) {
+			dir := t.TempDir()
+			_, err := cli(t, dir, "authorize", "--action", action, "--actor", "qiangli")
+			if err == nil {
+				t.Fatal("an unattended process must not be able to mint a capability")
+			}
+			if !strings.Contains(err.Error(), "no terminal is attached") {
+				t.Fatalf("the refusal must say why: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "journal.jsonl")); err == nil {
+				t.Fatal("a refused mint must write nothing")
+			}
+		})
+	}
+
+	// And SPENDING a genuine capability — one a host verifier really did establish — is
+	// refused too, which is the sharper half. A capability is a BOUND on an authority, not
+	// the source of one: the CLI re-asks its own root of trust at the moment authority
+	// moves, and an unattended process cannot satisfy it. If it could, an agent would only
+	// ever need to get a grant minted once.
+	for _, action := range []string{ActionClaim, ActionTakeover} {
+		t.Run("spend a real capability on a "+action, func(t *testing.T) {
+			dir := t.TempDir()
+			if action == ActionTakeover {
+				seedSeat(t, dir)
+			}
+			s := apiStore(t, dir)
+			g, err := s.Authorize(context.Background(), GrantRequest{
+				Action: action, Grantee: Self(), Actor: "qiangli", Reason: "drill", Attended: true,
+			}, time.Now())
+			if err != nil {
+				t.Fatalf("Authorize: %v", err)
+			}
+
+			_, err = cli(t, dir, action, "--grant", g.ID)
+			if err == nil {
+				t.Fatalf("an unattended %s must be refused even holding a valid capability", action)
+			}
+			if !strings.Contains(err.Error(), "no terminal is attached") {
+				t.Fatalf("the refusal must come from the ROOT OF TRUST, not from the paperwork: %v", err)
+			}
+		})
+	}
+}
+
+// THERE IS NO --yes. It existed, and it was the whole control handed back in one word: a
+// flag that skips the confirmation is a flag every unattended agent on the machine will
+// pass, and an operator "assertion" nobody asserted is not an assertion.
+func TestCLIHasNoYesFlagToSkipConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	out, err := cli(t, dir, "authorize", "--action", "claim", "--actor", "qiangli", "--yes")
+	if err == nil {
+		t.Fatal("--yes must not exist: a flag that skips the human is a flag an agent will pass")
+	}
+	if !strings.Contains(err.Error(), "unknown flag") {
+		t.Fatalf("--yes must be rejected as an unknown flag, got: %v\n%s", err, out)
 	}
 }
 
@@ -89,7 +231,7 @@ func TestCLIClaimThenStatus(t *testing.T) {
 // program can safely consume it.
 func TestCLIStatusJSONIsStable(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 	mustCLI(t, dir, "record", "-m", "did a thing", "--workstream", "api",
 		"--outcome", "success", "-e", "command:go test ./...")
 
@@ -126,13 +268,15 @@ func TestCLIStatusJSONIsStable(t *testing.T) {
 // …and `verify` is what closes it. This is the one promotion path in the whole CLI.
 func TestCLIVerifyIsTheOnlyThingThatReachesVerified(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 	mustCLI(t, dir, "record", "-m", "shipped the migration", "--workstream", "api",
 		"--outcome", "success", "-e", "commit:de6485c")
 
-	// seq 1 is the claim, seq 2 the effect.
+	// seq 1 is the claim, seq 2 the effect. The verification must bring bytes a skeptic
+	// can rehash — a `command:` reference is a pointer, and a pointer is not a check.
+	digest := digestOf([]byte("ok 1 - all tests passed"))
 	out := mustCLI(t, dir, "verify", "--seq", "2", "--result", "success",
-		"--method", "re-ran the suite on a clean checkout", "-e", "command:go test ./...")
+		"--method", "re-ran the suite on a clean checkout", "-e", "file:/tmp/test.log#"+digest)
 	if !strings.Contains(out, "verification recorded") {
 		t.Fatalf("verify:\n%s", out)
 	}
@@ -150,13 +294,22 @@ func TestCLIVerifyIsTheOnlyThingThatReachesVerified(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "method") {
 		t.Fatalf("verify must demand HOW it checked, got %v", err)
 	}
+
+	// …AND A METHOD ALONE IS NOT ENOUGH. This is the trust-me hole in the middle of the
+	// package's own thesis: `--method "I ran the tests"`, typed by an agent that did no
+	// such thing, used to produce exactly the same green VERIFIED row as the truth.
+	_, err = cli(t, dir, "verify", "--seq", "2", "--result", "success",
+		"--method", "I definitely checked it, trust me")
+	if err == nil || !strings.Contains(err.Error(), "VERIFIES NOTHING") {
+		t.Fatalf("a verification backed only by prose must be refused, got %v", err)
+	}
 }
 
 // THE ONE THAT MATTERS. An agent records "done ✅" with nothing to point at, and the
 // CLI must tell it — to its face — that the board will not believe it.
 func TestCLIRecordWarnsWhenSuccessHasNoEvidence(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 
 	out := mustCLI(t, dir, "record", "-m", "shipped it, all green", "--workstream", "api", "--outcome", "success")
 	if !strings.Contains(out, "NO EVIDENCE") {
@@ -178,7 +331,7 @@ func TestCLIRecordWarnsWhenSuccessHasNoEvidence(t *testing.T) {
 
 func TestCLILogDegradedSurfacesOnlyTheUnproven(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 	mustCLI(t, dir, "record", "-m", "proven work", "--workstream", "api",
 		"--outcome", "success", "-e", "commit:de6485c")
 	mustCLI(t, dir, "record", "-m", "trust me bro", "--workstream", "db", "--outcome", "success")
@@ -204,7 +357,7 @@ func TestCLILogDegradedSurfacesOnlyTheUnproven(t *testing.T) {
 
 func TestCLIDecideRequiresARationale(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 
 	_, err := cli(t, dir, "decide", "-m", "drop v1")
 	if err == nil {
@@ -225,44 +378,16 @@ func TestCLIDecideRequiresARationale(t *testing.T) {
 	}
 }
 
-// mintReceiptGrant mints an EXTERNAL-RECEIPT capability and returns its id.
+// The takeover the CLI CAN reach is the refusal, and the refusal is the feature.
 //
-// A test has no terminal, so it is by definition an unattended caller — exactly the
-// case where an operator ASSERTION is worth nothing and the package demands an artifact
-// somebody can go and audit instead. That is not a testing workaround; it is the
-// unattended path every CI runner and headless agent has to walk, so testing the CLI
-// through it is testing the path that will actually be used.
-func mintReceiptGrant(t *testing.T, dir, actor, reason string) string {
-	t.Helper()
-	receipt := filepath.Join(t.TempDir(), "approval.json")
-	if err := os.WriteFile(receipt, []byte(`{"approved_by":"`+actor+`","pr":412}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out := mustCLI(t, dir, "authorize", "--actor", actor, "--reason", reason,
-		"--receipt", receipt, "--receipt-issuer", "github:pr-412")
-
-	id, ok := grantIDFrom(out)
-	if !ok {
-		t.Fatalf("authorize must print the grant id it minted:\n%s", out)
-	}
-	return id
-}
-
-// grantIDFrom pulls the id out of "authorization <id> minted".
-func grantIDFrom(out string) (string, bool) {
-	for line := range strings.SplitSeq(out, "\n") {
-		if f := strings.Fields(line); len(f) >= 3 && f[0] == "authorization" && f[2] == "minted" {
-			return f[1], true
-		}
-	}
-	return "", false
-}
-
-// An agent cannot decide on its own that the steward looks stuck. Seizing the seat
-// costs a capability, and the CLI must refuse every way of skipping that.
-func TestCLITakeoverRequiresACapability(t *testing.T) {
+// The previous revision's version of this test used `--yes` to mint an assertion nobody
+// asserted, then leaned on a receipt file to get an unattended seizure through — which is
+// precisely the hole: an agent can write a file and hash it, so the "control" on the
+// unattended path was "the agent must write a file first". Both halves are gone. What an
+// unattended CLI can do with a takeover now is be told no.
+func TestCLITakeoverIsRefusedWithoutACapability(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 
 	_, err := cli(t, dir, "takeover")
 	if err == nil {
@@ -272,55 +397,64 @@ func TestCLITakeoverRequiresACapability(t *testing.T) {
 		t.Fatalf("the refusal must say what was missing: %v", err)
 	}
 
-	// An operator ASSERTION minted with --yes is real, and it is still not usable from
-	// a process with nobody at the terminal: "a human approved this" is a sentence with
-	// no author when there is no human present to be its author.
-	assertion := mustCLI(t, dir, "authorize", "--actor", "qiangli", "--reason", "looks stuck", "--yes")
-	id, ok := grantIDFrom(assertion)
-	if !ok {
-		t.Fatalf("authorize --yes must still mint:\n%s", assertion)
+	// Even holding a genuine capability, minted through a host verifier, the unattended
+	// CLI cannot spend it: the CLI's own root of trust is a typed terminal confirmation,
+	// and there is no terminal. A capability is a BOUND on an authority, never the source
+	// of one.
+	s := apiStore(t, dir)
+	g, err := s.Authorize(context.Background(), GrantRequest{
+		Action: ActionTakeover, Grantee: Self(), Actor: "qiangli", Reason: "looks stuck", Attended: true,
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err = cli(t, dir, "takeover", "--grant", id)
-	if err == nil {
-		t.Fatal("an unattended takeover on an operator ASSERTION must be refused")
-	}
-	if !strings.Contains(err.Error(), "receipt") {
-		t.Fatalf("the refusal must point at the receipt that WOULD be auditable: %v", err)
+	if _, err := cli(t, dir, "takeover", "--grant", g.ID); err == nil {
+		t.Fatal("an unattended CLI must not be able to seize the seat even with a valid grant in hand")
 	}
 
-	// With a receipt, the same unattended seizure is allowed — and is recorded forever.
-	grant := mintReceiptGrant(t, dir, "qiangli", "wedged on a rate limit")
+	// The seat never moved.
+	out := mustCLI(t, dir, "status")
+	if !strings.Contains(out, "epoch 1") {
+		t.Fatalf("no refused takeover may move the seat:\n%s", out)
+	}
+}
 
-	// Keep a copy of the capability, the way a backup — or an attacker — would.
-	grantFile := filepath.Join(dir, "grants", grant+".json")
+// The journal — not the grant file — is what makes a capability single-use. Spending it
+// removes the file, so a file-based check would be flimsy: put the bytes back and a
+// file-based check hands the seat over again.
+func TestCLIGrantsListsARestoredGrantAsAlreadyUsed(t *testing.T) {
+	dir := t.TempDir()
+	seedSeat(t, dir)
+
+	s := apiStore(t, dir)
+	g, err := s.Authorize(context.Background(), GrantRequest{
+		Action: ActionTakeover, Grantee: Self(), Actor: "qiangli", Reason: "wedged", Attended: true,
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantFile := filepath.Join(dir, "grants", g.ID+".json")
 	backup, err := os.ReadFile(grantFile)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.Takeover(context.Background(), Self(),
+		SeatRequest{GrantID: g.ID, Attended: true}, time.Now()); err != nil {
+		t.Fatalf("Takeover: %v", err)
+	}
 
-	out := mustCLI(t, dir, "takeover", "--grant", grant)
-	if !strings.Contains(out, "TOOK OVER") || !strings.Contains(out, "epoch 2") {
-		t.Fatalf("an authorized takeover must seize the seat and bump the epoch:\n%s", out)
+	// Restore the spent capability, exactly as a backup — or an attacker — would.
+	if err := os.WriteFile(grantFile, backup, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := mustCLI(t, dir, "grants")
+	if !strings.Contains(out, "already used") {
+		t.Fatalf("a restored, spent capability must still read as used — the hash chain is what refuses it:\n%s", out)
 	}
 
 	hist := mustCLI(t, dir, "history")
 	if !strings.Contains(hist, "qiangli") {
 		t.Fatalf("history must record who authorized the seizure:\n%s", hist)
-	}
-
-	// Single-use — and the JOURNAL is what enforces it, not the grant file. Spending the
-	// grant removes the file, so deleting it would be a flimsy control: put the bytes
-	// back and a file-based check hands the seat over again. The takeover that consumed
-	// this nonce is in the hash chain, and THAT is what refuses.
-	if err := os.WriteFile(grantFile, backup, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err = cli(t, dir, "takeover", "--grant", grant)
-	if err == nil {
-		t.Fatal("a capability restored from a backup must not be spendable a second time")
-	}
-	if !strings.Contains(err.Error(), "already been used") {
-		t.Fatalf("the refusal must name the replay, and cite the journal as the reason: %v", err)
 	}
 }
 
@@ -330,13 +464,12 @@ func TestCLITakeoverRequiresACapability(t *testing.T) {
 // would be unreachable from the shell.
 func TestCLIRecordWithAStaleEpochIsFenced(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim") // epoch 1 — the token a long-running steward would capture
+	seedSeat(t, dir) // epoch 1 — the token a long-running steward would capture
 
 	// A human authorizes recovery; the seat moves to epoch 2. (Same principal here —
 	// which is the sharpest version of the test: even the SAME agent, presenting a
 	// superseded token, must be refused. Being yourself is not a credential.)
-	grant := mintReceiptGrant(t, dir, "qiangli", "recovery drill")
-	mustCLI(t, dir, "takeover", "--grant", grant)
+	seizeSeat(t, dir)
 
 	_, err := cli(t, dir, "record", "-m", "…and then I deployed it",
 		"--workstream", "api", "--outcome", "success", "-e", "command:kubectl apply", "--epoch", "1")
@@ -363,7 +496,7 @@ func TestCLIRecordWithAStaleEpochIsFenced(t *testing.T) {
 
 func TestCLICheckpointAndVerify(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 	mustCLI(t, dir, "record", "-m", "real work", "--workstream", "api",
 		"--outcome", "success", "-e", "commit:abc1234")
 
@@ -389,7 +522,7 @@ func TestCLICheckpointAndVerify(t *testing.T) {
 
 func TestCLIReconcileReportsDegradedAndCanRecordIt(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 	mustCLI(t, dir, "record", "-m", "shipped, honest", "--workstream", "api", "--outcome", "success")
 
 	out := mustCLI(t, dir, "reconcile")
@@ -442,7 +575,7 @@ func TestCLIReconcileStillReportsWithoutTheSeat(t *testing.T) {
 
 func TestCLIWorkstreamOpenAndClose(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 	mustCLI(t, dir, "workstream", "open", "api", "--title", "the API migration")
 
 	out := mustCLI(t, dir, "workstream", "close", "api", "-m", "all done", "--outcome", "success")
@@ -465,7 +598,7 @@ func TestCLIWorkstreamOpenAndClose(t *testing.T) {
 // A transcript is stored, and the CLI says plainly that nothing depends on it.
 func TestCLITranscriptIsMarkedNonAuthoritative(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 
 	cmd := NewStewardCmd()
 	var out bytes.Buffer
@@ -490,15 +623,20 @@ func TestCLITranscriptIsMarkedNonAuthoritative(t *testing.T) {
 // `take` is an alias for `claim` — the issue asks for either spelling, so both work.
 func TestCLITakeIsAnAliasForClaim(t *testing.T) {
 	dir := t.TempDir()
-	out := mustCLI(t, dir, "take")
-	if !strings.Contains(out, "claimed the steward seat") {
+	// The alias resolves to the same command — including the same refusal, which is all an
+	// unattended test can reach. `take --help` proves the routing without needing a seat.
+	out := mustCLI(t, dir, "take", "--help")
+	if !strings.Contains(out, "claim takes the seat in exactly two situations") {
 		t.Fatalf("`take` must be an alias for `claim`:\n%s", out)
+	}
+	if !strings.Contains(out, "--grant") {
+		t.Fatalf("claim takes a capability, and its help must say so:\n%s", out)
 	}
 }
 
 func TestCLIReleaseSaysItCapturedNoWork(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 
 	out := mustCLI(t, dir, "release", "--note", "stopping for the day")
 	if !strings.Contains(out, "handoff") {
@@ -515,7 +653,7 @@ func TestCLIReleaseSaysItCapturedNoWork(t *testing.T) {
 // printing a partial history with no warning is the one dishonest thing this could do.
 func TestCLIWarnsAboutACorruptTail(t *testing.T) {
 	dir := t.TempDir()
-	mustCLI(t, dir, "claim")
+	seedSeat(t, dir)
 	mustCLI(t, dir, "record", "-m", "real work", "--workstream", "api",
 		"--outcome", "success", "-e", "commit:abc")
 

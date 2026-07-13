@@ -23,9 +23,65 @@ import (
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-func newStore(t *testing.T) *Store {
+// testVerifier is an injected root of trust, which is the only kind there is.
+//
+// Tests get one because the store FAILS CLOSED without one: no verifier, no authority
+// transition, ever. That is the fail-closed default (see ErrNoVerifier), and a test
+// helper that quietly worked around it would be testing a system nobody ships.
+//
+// It records what it was asked, so a test can assert that the transition really did put
+// the capability in front of the root of trust rather than deciding on its own.
+type testVerifier struct {
+	name    string
+	grade   Grade
+	approve bool
+	err     error
+	calls   []Capability
+}
+
+func (v *testVerifier) Name() string {
+	if v.name == "" {
+		return "test-verifier"
+	}
+	return v.name
+}
+
+func (v *testVerifier) VerifyCapability(_ context.Context, c Capability) (Attestation, error) {
+	v.calls = append(v.calls, c)
+	if v.err != nil {
+		return Attestation{}, v.err
+	}
+	return Attestation{
+		Channel:  "test",
+		Grade:    v.grade,
+		Approved: v.approve,
+		Why:      "test verifier",
+	}, nil
+}
+
+// verified is a verifier that establishes authority OUTSIDE the store — the grade a host
+// with a real human channel (bashy meet, an approval service) would return, and the only
+// grade that authorizes an unattended transition.
+func verified() *testVerifier { return &testVerifier{grade: GradeVerified, approve: true} }
+
+// auditOnly is the grade the CLI's typed-terminal confirmation returns: deliberate and
+// attended, and NOT proof a human was present.
+func auditOnly() *testVerifier { return &testVerifier{grade: GradeAudit, approve: true} }
+
+// testScope pins the seat identity so tests do not depend on the machine they run on —
+// and, more to the point, so the ISOLATION properties can be exercised: two machines
+// sharing a hostname, one machine under two accounts. None of that is reachable by
+// setting an environment variable any more, which was the whole point of removing them.
+func testScope(id string) ScopeProvider {
+	return StaticScope(Scope{
+		ID: id, Machine: "machine:" + id, Account: "account:" + id, Host: "test-host", Source: "test",
+	})
+}
+
+func newStore(t *testing.T, opts ...Option) *Store {
 	t.Helper()
-	s, err := Open(t.TempDir())
+	opts = append([]Option{WithScopeProvider(testScope("test-seat")), WithVerifier(verified())}, opts...)
+	s, err := Open(t.TempDir(), opts...)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -43,13 +99,30 @@ var t0 = time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
 
 func at(d time.Duration) time.Time { return t0.Add(d) }
 
+// mustGrant mints a capability for `who` to perform `action`.
+func mustGrant(t *testing.T, s *Store, who principal.Ref, action string, when time.Time) Grant {
+	t.Helper()
+	g, err := s.Authorize(context.Background(), GrantRequest{
+		Action: action, Grantee: who, Actor: "qiangli", Reason: "test", Attended: true,
+	}, when)
+	if err != nil {
+		t.Fatalf("Authorize(%s): %v", action, err)
+	}
+	return g
+}
+
 // mustClaim claims or fails the test, returning the epoch the holder must now present
 // on every write. Returning the EPOCH rather than the View is deliberate: it is the
 // token, and a test that forgets to carry it is a test that would not have caught a
 // fencing bug.
+//
+// It mints a capability first, because CLAIMING IS AUTHORIZED — a vacant seat is still
+// the seat of authority for the whole machine, and a lapsed one still has an incumbent
+// who is about to be fenced.
 func mustClaim(t *testing.T, s *Store, who principal.Ref, when time.Time) uint64 {
 	t.Helper()
-	v, err := s.Claim(who, "", when)
+	g := mustGrant(t, s, who, ActionClaim, when)
+	v, err := s.Claim(context.Background(), who, SeatRequest{GrantID: g.ID, Attended: true}, when)
 	if err != nil {
 		t.Fatalf("Claim(%s): %v", who.Name, err)
 	}
@@ -76,27 +149,34 @@ func evidenced(who principal.Ref, ws, summary string) Entry {
 	}
 }
 
-// mustGrant mints an interactive operator-assertion capability for `who`.
-func mustGrant(t *testing.T, s *Store, who principal.Ref, when time.Time) Grant {
-	t.Helper()
-	g, err := s.Authorize(GrantRequest{
-		Grantee: who, Actor: "qiangli", Reason: "test", Confirmed: true,
-	}, when)
-	if err != nil {
-		t.Fatalf("Authorize: %v", err)
-	}
-	return g
+// digestEvidence is evidence pinned to exact bytes — the weakest thing a verification may
+// rest on that is not simply a sentence. See Verification.Enforceable.
+func digestEvidence() []Evidence {
+	return []Evidence{{Kind: "file", Ref: "/tmp/test.log", Digest: digestOf([]byte("PASS"))}}
 }
 
 // mustTakeover seizes the seat with a fresh grant, returning the new epoch.
 func mustTakeover(t *testing.T, s *Store, who principal.Ref, when time.Time) uint64 {
 	t.Helper()
-	g := mustGrant(t, s, who, when)
-	v, err := s.Takeover(who, TakeoverRequest{GrantID: g.ID, Interactive: true}, when)
+	g := mustGrant(t, s, who, ActionTakeover, when)
+	v, err := s.Takeover(context.Background(), who, SeatRequest{GrantID: g.ID, Attended: true}, when)
 	if err != nil {
 		t.Fatalf("Takeover(%s): %v", who.Name, err)
 	}
 	return v.Authority.Epoch
+}
+
+// setFailpoint arms a named crash point for the duration of one test. See failpoint.
+func setFailpoint(t *testing.T, stage string, err error) {
+	t.Helper()
+	prev := failpoint
+	failpoint = func(s string) error {
+		if s == stage {
+			return err
+		}
+		return prev(s)
+	}
+	t.Cleanup(func() { failpoint = prev })
 }
 
 func journalBytes(t *testing.T, s *Store) []byte {
@@ -117,13 +197,23 @@ func TestSeatIsSingletonUnderConcurrentClaims(t *testing.T) {
 	s := newStore(t)
 
 	const n = 16
+	// Every racer is separately authorized, so what the race tests is the SEAT, not the
+	// authorization: sixteen agents each holding a valid, unspent capability for the
+	// vacant seat, all trying to spend it at once. Exactly one may win.
+	grants := make([]Grant, n)
+	for i := range n {
+		grants[i] = mustGrant(t, s, agent(string(rune('a'+i))), ActionClaim, at(0))
+	}
+
 	var wg sync.WaitGroup
 	won := make([]bool, n)
 	for i := range n {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := s.Claim(agent(string(rune('a'+i))), "", at(0)); err == nil {
+			_, err := s.Claim(context.Background(), agent(string(rune('a'+i))),
+				SeatRequest{GrantID: grants[i].ID, Attended: true}, at(0))
+			if err == nil {
 				won[i] = true
 			}
 		}()
@@ -156,20 +246,79 @@ func TestSeatIsSingletonUnderConcurrentClaims(t *testing.T) {
 	}
 }
 
-func TestReclaimByLiveHolderIsJustAHeartbeat(t *testing.T) {
+// THE SAME-HOLDER CLAIM SHORTCUT IS GONE, and this is the test that keeps it gone.
+//
+// Claim used to treat "you already hold this seat and it is live" as an idempotent
+// heartbeat: refresh the liveness cache, no epoch presented, no journal entry, no
+// complaint. It reads as a harmless convenience and it is a hole, because it is A WAY TO
+// REFRESH A HELD TENURE WITHOUT PRESENTING THE EPOCH — and the epoch is the only thing in
+// the system that can tell a steward its tenure ended while it was away.
+//
+// The agent that most wants this shortcut is precisely the one that must not have it. A
+// live holder renews through Heartbeat, which presents the token and is fenced like
+// everything else.
+func TestClaimNeverRefreshesALiveSeatEvenForItsOwnHolder(t *testing.T) {
 	s := newStore(t)
-	e1 := mustClaim(t, s, agent("a"), at(0))
+	ep := mustClaim(t, s, agent("a"), at(0))
 
-	v, err := s.Claim(agent("a"), "still here", at(time.Minute))
-	if err != nil {
-		t.Fatalf("re-claim by the live holder must succeed: %v", err)
+	// The holder returns, live, with a perfectly good capability — and CLAIM still refuses.
+	g := mustGrant(t, s, agent("a"), ActionClaim, at(time.Minute))
+	_, err := s.Claim(context.Background(), agent("a"),
+		SeatRequest{GrantID: g.ID, Attended: true, Intent: "still here"}, at(time.Minute))
+
+	var held *ErrHeld
+	if !errors.As(err, &held) {
+		t.Fatalf("a live seat is HELD, even by you — claim must not refresh it. got %v", err)
 	}
-	if v.Authority.Epoch != e1 {
-		t.Fatalf("re-claiming your own live seat must NOT bump the epoch: %d → %d", e1, v.Authority.Epoch)
+	if !held.Yours {
+		t.Fatal("the error must say the live holder is the caller, or it sends them looking for a takeover they do not need")
 	}
+	if !strings.Contains(held.Error(), "heartbeat") {
+		t.Fatalf("the refusal must point at the way to actually renew (heartbeat --epoch): %v", held)
+	}
+
+	// Nothing moved: no new epoch, no new entry, no refreshed cache without a token.
 	rep, _ := s.Replay()
 	if n := len(rep.Entries); n != 1 {
-		t.Fatalf("a re-claim is a heartbeat, not history: expected 1 journal entry, got %d", n)
+		t.Fatalf("the refused claim must write nothing: expected 1 journal entry, got %d", n)
+	}
+
+	// And the honest path still works — because it presents the epoch.
+	if err := s.Heartbeat(agent("a"), ep, at(2*time.Minute)); err != nil {
+		t.Fatalf("the live holder renews with Heartbeat(epoch): %v", err)
+	}
+	v, _ := s.Status(at(2 * time.Minute))
+	if v.Liveness != LivenessLive || v.Authority.Epoch != ep {
+		t.Fatalf("heartbeat renews in place: liveness=%q epoch=%d (want live, %d)", v.Liveness, v.Authority.Epoch, ep)
+	}
+}
+
+// The same hole from the zombie's side: a steward whose tenure ENDED, returning with the
+// identity it always had, must not be able to claim its way back in without noticing.
+// Identity is not authority — and a claim that refreshed on identity alone would let the
+// zombie skip the fence entirely.
+func TestZombieHolderCannotClaimItsWayBackIn(t *testing.T) {
+	s := newStore(t)
+	old := mustClaim(t, s, agent("a"), at(0))
+	mustTakeover(t, s, agent("b"), at(TTL+time.Minute)) // a lapses; b seizes
+
+	// `a` comes back believing it still holds the seat. b is live, so the claim is HELD —
+	// and critically it is NOT "yours", because a is not the holder any more.
+	g := mustGrant(t, s, agent("a"), ActionClaim, at(TTL+2*time.Minute))
+	_, err := s.Claim(context.Background(), agent("a"),
+		SeatRequest{GrantID: g.ID, Attended: true}, at(TTL+2*time.Minute))
+	var held *ErrHeld
+	if !errors.As(err, &held) {
+		t.Fatalf("the seat is live under its new holder — the zombie's claim must be refused: %v", err)
+	}
+	if held.Yours {
+		t.Fatal("a fenced zombie is NOT the holder; telling it the seat is 'yours' would be a lie with consequences")
+	}
+	// And its writes at the old epoch remain fenced, which is the whole point of the ladder.
+	_, err = s.Record(evidenced(agent("a"), "ws", "i'm back"), old, at(TTL+3*time.Minute))
+	var fenced *ErrFenced
+	if !errors.As(err, &fenced) {
+		t.Fatalf("the zombie's writes at its old epoch must be FENCED, got %v", err)
 	}
 }
 
@@ -177,7 +326,8 @@ func TestClaimRefusesALiveSeat(t *testing.T) {
 	s := newStore(t)
 	mustClaim(t, s, agent("a"), at(0))
 
-	_, err := s.Claim(agent("b"), "", at(time.Minute))
+	g := mustGrant(t, s, agent("b"), ActionClaim, at(time.Minute))
+	_, err := s.Claim(context.Background(), agent("b"), SeatRequest{GrantID: g.ID, Attended: true}, at(time.Minute))
 	var held *ErrHeld
 	if !errors.As(err, &held) {
 		t.Fatalf("claiming a live seat must fail with ErrHeld, got %v", err)
@@ -227,7 +377,9 @@ func TestLiveHeartbeatKeepsTheSeat(t *testing.T) {
 	if v.Liveness != LivenessLive {
 		t.Fatalf("a heartbeat inside the TTL keeps the seat live, got %q", v.Liveness)
 	}
-	if _, err := s.Claim(agent("b"), "", at(TTL+time.Minute)); err == nil {
+	g := mustGrant(t, s, agent("b"), ActionClaim, at(TTL+time.Minute))
+	if _, err := s.Claim(context.Background(), agent("b"),
+		SeatRequest{GrantID: g.ID, Attended: true}, at(TTL+time.Minute)); err == nil {
 		t.Fatal("a live seat must not be claimable")
 	}
 }
@@ -445,10 +597,77 @@ func TestTakeoverRequiresACapability(t *testing.T) {
 	s := newStore(t)
 	mustClaim(t, s, agent("incumbent"), at(0))
 
-	_, err := s.Takeover(agent("usurper"), TakeoverRequest{Interactive: true}, at(time.Minute))
+	_, err := s.Takeover(context.Background(), agent("usurper"), SeatRequest{Attended: true}, at(time.Minute))
 	var unauth *ErrUnauthorized
 	if !errors.As(err, &unauth) {
 		t.Fatalf("seizing a live seat with no capability must be refused, got %v", err)
+	}
+}
+
+// CLAIMING IS AN AUTHORITY TRANSITION TOO, and this is the test that says so.
+//
+// It used to be free: any process that could see a vacant or lapsed seat became the
+// steward by asking. The lapsed case is the one that gives it away — "lapsed" proves a
+// heartbeat gap and nothing more, so an unattended agent that could claim a lapsed seat
+// could wait out the TTL and depose a working steward. That is the takeover it was
+// forbidden to perform, spelled differently and with no record of authorization.
+func TestClaimRequiresACapability(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, s *Store)
+		when  time.Duration
+	}{
+		{
+			name:  "a vacant seat is still the seat of authority for the whole machine",
+			setup: func(*testing.T, *Store) {},
+			when:  0,
+		},
+		{
+			name:  "a lapsed seat has an incumbent, and claiming it FENCES them",
+			setup: func(t *testing.T, s *Store) { mustClaim(t, s, agent("incumbent"), at(0)) },
+			when:  TTL + time.Minute,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			tc.setup(t, s)
+
+			_, err := s.Claim(context.Background(), agent("worker"), SeatRequest{Attended: true}, at(tc.when))
+			var unauth *ErrUnauthorized
+			if !errors.As(err, &unauth) {
+				t.Fatalf("claiming with no capability must be refused, got %v", err)
+			}
+			// And the refusal left no trace of the worker in the record.
+			rep, _ := s.Replay()
+			for _, e := range rep.Entries {
+				if e.Kind == KindSeatClaimed && SameHolder(e.Actor, agent("worker")) {
+					t.Fatal("the refused claim must not have reached the journal")
+				}
+			}
+		})
+	}
+}
+
+// A capability minted to CLAIM an empty seat must not be spendable on SEIZING an occupied
+// one. They are different acts with different victims, and a grant is not a skeleton key.
+func TestGrantIsBoundToItsAction(t *testing.T) {
+	s := newStore(t)
+	mustClaim(t, s, agent("incumbent"), at(0))
+
+	claimGrant := mustGrant(t, s, agent("b"), ActionClaim, at(time.Minute))
+	_, err := s.Takeover(context.Background(), agent("b"),
+		SeatRequest{GrantID: claimGrant.ID, Attended: true}, at(2*time.Minute))
+	var unauth *ErrUnauthorized
+	if !errors.As(err, &unauth) || !strings.Contains(err.Error(), "not \"takeover\"") {
+		t.Fatalf("a claim capability must not authorize a takeover, got %v", err)
+	}
+
+	// And the reverse: a takeover grant does not authorize a claim.
+	s2 := newStore(t)
+	tkGrant := mustGrant(t, s2, agent("b"), ActionTakeover, at(0))
+	_, err = s2.Claim(context.Background(), agent("b"), SeatRequest{GrantID: tkGrant.ID, Attended: true}, at(0))
+	if !errors.As(err, &unauth) || !strings.Contains(err.Error(), "not \"claim\"") {
+		t.Fatalf("a takeover capability must not authorize a claim, got %v", err)
 	}
 }
 
@@ -483,62 +702,220 @@ func TestTakeoverSeizesALiveSeatAndRecordsItsAuthority(t *testing.T) {
 
 // A grant is SINGLE-USE, and the journal — not the grant file — is what makes it so.
 func TestGrantCannotBeReplayed(t *testing.T) {
-	s := newStore(t)
-	mustClaim(t, s, agent("a"), at(0))
+	for _, action := range []string{ActionClaim, ActionTakeover} {
+		t.Run(action, func(t *testing.T) {
+			s := newStore(t)
+			spend := func(g Grant, when time.Time) error {
+				req := SeatRequest{GrantID: g.ID, Attended: true}
+				if action == ActionClaim {
+					_, err := s.Claim(context.Background(), agent("b"), req, when)
+					return err
+				}
+				_, err := s.Takeover(context.Background(), agent("b"), req, when)
+				return err
+			}
+			if action == ActionTakeover {
+				mustClaim(t, s, agent("a"), at(0))
+			}
 
-	g := mustGrant(t, s, agent("b"), at(time.Minute))
-	if _, err := s.Takeover(agent("b"), TakeoverRequest{GrantID: g.ID, Interactive: true}, at(2*time.Minute)); err != nil {
-		t.Fatalf("first use of a grant must work: %v", err)
-	}
+			g := mustGrant(t, s, agent("b"), action, at(time.Minute))
+			if err := spend(g, at(2*time.Minute)); err != nil {
+				t.Fatalf("first use of a grant must work: %v", err)
+			}
+			// Vacate, so the second attempt is refused for being a REPLAY rather than merely
+			// for arriving at an occupied seat. The nonce is what must stop it.
+			ep, _ := s.Status(at(2 * time.Minute))
+			if err := s.Release(agent("b"), ep.Authority.Epoch, "", at(2*time.Minute+time.Second)); err != nil {
+				t.Fatalf("Release: %v", err)
+			}
 
-	// Restore the grant file, exactly as a backup or a `cp` would. The journal still
-	// remembers the takeover that consumed the nonce.
-	if err := writeJSONAtomic(filepath.Join(s.grantDir(), g.ID+".json"), g); err != nil {
-		t.Fatal(err)
-	}
-	_, err := s.Takeover(agent("b"), TakeoverRequest{GrantID: g.ID, Interactive: true}, at(3*time.Minute))
-	var unauth *ErrUnauthorized
-	if !errors.As(err, &unauth) || !strings.Contains(err.Error(), "already been used") {
-		t.Fatalf("a replayed grant must be refused even when its file is restored, got %v", err)
+			// Restore the grant file, exactly as a backup or a `cp` would. The journal still
+			// remembers the seat event that consumed the nonce — and the journal is the
+			// authority for consumption, not the file.
+			if err := writeJSONAtomic(filepath.Join(s.grantDir(), g.ID+".json"), g); err != nil {
+				t.Fatal(err)
+			}
+			err := spend(g, at(3*time.Minute))
+			var unauth *ErrUnauthorized
+			if !errors.As(err, &unauth) || !strings.Contains(err.Error(), "already been used") {
+				t.Fatalf("a replayed grant must be refused even when its file is restored, got %v", err)
+			}
+		})
 	}
 }
 
-func TestNoninteractiveTakeoverRequiresAnExternalReceipt(t *testing.T) {
-	s := newStore(t)
+// UNATTENDED ACQUISITION NEEDS A VERIFIER, NOT A RECEIPT — and this test is the
+// correction of the previous revision's worst mistake.
+//
+// It used to demand an "external receipt" for an unattended takeover: a file, copied into
+// the store, pinned by digest. That sounds like evidence and is not. A DIGEST IS
+// INTEGRITY, NOT AUTHENTICITY — it proves the bytes did not change, and says nothing
+// whatever about who wrote them. An agent can write a file, hash it, and hand it over as
+// an approval; the digest verifies perfectly. So the control on the unattended path — the
+// path that needs it most, because that is where the cron jobs and the runaway agent loops
+// live — reduced to "the agent must write a file first".
+//
+// What actually authorizes an unattended transition is an attestation at GradeVerified,
+// from a verifier the HOST injected, rooted outside the store the agent can write to.
+func TestUnattendedAcquisitionRequiresAVerifiedGradeAttestation(t *testing.T) {
+	// A receipt does NOT rescue an audit-grade attestation when nobody is attended.
+	audit := auditOnly()
+	s := newStore(t, WithVerifier(audit))
 	mustClaim(t, s, agent("a"), at(0))
-	g := mustGrant(t, s, agent("b"), at(time.Minute)) // operator-assertion
 
-	_, err := s.Takeover(agent("b"), TakeoverRequest{GrantID: g.ID, Interactive: false}, at(2*time.Minute))
-	var unauth *ErrUnauthorized
-	if !errors.As(err, &unauth) {
-		t.Fatalf("an UNATTENDED takeover on an operator ASSERTION must be refused: with nobody present, "+
-			"'a human approved' is a sentence with no author. got %v", err)
-	}
-
-	// With a receipt — an artifact somebody can go and audit — it is allowed.
 	approval := filepath.Join(t.TempDir(), "approval.txt")
 	if err := os.WriteFile(approval, []byte("approved by oncall, ticket OPS-42"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	g2, err := s.Authorize(GrantRequest{
-		Grantee: agent("b"), Actor: "oncall", Reason: "wedged",
-		ReceiptPath: approval, ReceiptIssuer: "ops:OPS-42",
-	}, at(2*time.Minute))
+	g, err := s.Authorize(context.Background(), GrantRequest{
+		Action: ActionTakeover, Grantee: agent("b"), Actor: "oncall", Reason: "wedged",
+		Attended: true, ReceiptPath: approval, ReceiptIssuer: "ops:OPS-42",
+	}, at(time.Minute))
 	if err != nil {
 		t.Fatalf("Authorize with a receipt: %v", err)
 	}
-	if g2.Provenance != ProvenanceExternalReceipt {
-		t.Fatalf("a receipt-backed grant must be labelled as such, got %q", g2.Provenance)
+	if g.Provenance != ProvenanceExternalReceipt {
+		t.Fatalf("a receipt-backed grant must be labelled as such, got %q", g.Provenance)
 	}
-	if _, err := s.Takeover(agent("b"), TakeoverRequest{GrantID: g2.ID, Interactive: false}, at(3*time.Minute)); err != nil {
-		t.Fatalf("an unattended takeover backed by a receipt must be allowed: %v", err)
+
+	_, err = s.Takeover(context.Background(), agent("b"),
+		SeatRequest{GrantID: g.ID, Attended: false}, at(2*time.Minute))
+	var unverified *ErrUnverified
+	if !errors.As(err, &unverified) {
+		t.Fatalf("an UNATTENDED seizure backed only by an audit-grade attestation must be refused — "+
+			"a receipt's hash is integrity, never issuer authenticity, and a confirmation nobody made attests to "+
+			"nothing. got %v", err)
+	}
+
+	// A host verifier that can establish authority OUTSIDE the store is what unlocks it.
+	s2 := newStore(t, WithVerifier(verified()))
+	mustClaim(t, s2, agent("a"), at(0))
+	g2 := mustGrant(t, s2, agent("b"), ActionTakeover, at(time.Minute))
+	if _, err := s2.Takeover(context.Background(), agent("b"),
+		SeatRequest{GrantID: g2.ID, Attended: false}, at(2*time.Minute)); err != nil {
+		t.Fatalf("an unattended seizure established by a TRUSTED verifier must be allowed: %v", err)
 	}
 }
 
-// The provenance is recorded HONESTLY. An operator assertion is not a proof of
-// humanity, and the journal says "assertion", not "authorized by a human".
-func TestOperatorAssertionIsLabelledAsAnAssertion(t *testing.T) {
-	s := newStore(t)
+// FAIL CLOSED. With no root of trust injected, there is nothing that could authorize an
+// acquisition — so there is no acquisition. Not a warning, not an "unverified" label on a
+// transition that happened anyway: a refusal.
+//
+// Reads keep working, which is the point of the split: a store you cannot get authority
+// from is still a store you can inspect.
+func TestNoVerifierMeansNoAuthorityAtAll(t *testing.T) {
+	dir := t.TempDir()
+	open := func(opts ...Option) *Store {
+		s, err := Open(dir, append([]Option{WithScopeProvider(testScope("test-seat"))}, opts...)...)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		return s
+	}
+	bare := open() // NO verifier
+
+	var noVerifier *ErrNoVerifier
+
+	// Minting is refused...
+	_, err := bare.Authorize(context.Background(), GrantRequest{
+		Action: ActionClaim, Grantee: agent("a"), Actor: "qiangli", Attended: true,
+	}, at(0))
+	if !errors.As(err, &noVerifier) {
+		t.Fatalf("minting a capability with no root of trust must fail closed, got %v", err)
+	}
+
+	// ...and so is spending one, even a real one minted through a verifier that WAS
+	// present. The capability is a bound on an authority, never the source of one: it does
+	// not carry its own permission around in its pocket.
+	withV := open(WithVerifier(verified()))
+	g := mustGrant(t, withV, agent("a"), ActionClaim, at(0))
+
+	_, err = bare.Claim(context.Background(), agent("a"), SeatRequest{GrantID: g.ID, Attended: true}, at(time.Minute))
+	if !errors.As(err, &noVerifier) {
+		t.Fatalf("spending a capability with no root of trust must fail closed, got %v", err)
+	}
+	_, err = bare.Takeover(context.Background(), agent("a"), SeatRequest{GrantID: g.ID, Attended: true}, at(time.Minute))
+	if !errors.As(err, &noVerifier) {
+		t.Fatalf("a takeover with no root of trust must fail closed, got %v", err)
+	}
+
+	// Nothing reached the journal, and reads still work.
+	if v, err := bare.Status(at(time.Minute)); err != nil || !v.Authority.Vacant {
+		t.Fatalf("no authority transition may have occurred; status = %+v (err %v)", v, err)
+	}
+}
+
+// The verifier is asked at CONSUME time, not merely at mint time — because a mint-time
+// attestation is a record IN THE STORE, and a record in the store is exactly what an
+// agent with file access can fabricate. Re-asking the injected verifier at the moment
+// authority actually moves is what makes the check unforgeable from disk.
+func TestVerifierIsAskedWhenTheCapabilityIsSpent(t *testing.T) {
+	v := verified()
+	s := newStore(t, WithVerifier(v))
+	mustClaim(t, s, agent("a"), at(0))
+
+	before := len(v.calls)
+	mustTakeover(t, s, agent("b"), at(time.Minute))
+
+	var mint, consume int
+	for _, c := range v.calls[before:] {
+		switch c.Phase {
+		case PhaseMint:
+			mint++
+		case PhaseConsume:
+			consume++
+		}
+	}
+	if mint != 1 || consume != 1 {
+		t.Fatalf("the verifier must be asked at BOTH mint and consume (got mint=%d consume=%d): a capability that "+
+			"authorized itself from store state would be one the agent could write", mint, consume)
+	}
+}
+
+// A forged grant — one an agent simply WROTE into the store, complete with a
+// self-attested approval — buys nothing, because the transition asks the injected
+// verifier rather than reading the attestation off the disk.
+func TestForgedGrantWithSelfAttestedApprovalIsRefused(t *testing.T) {
+	deny := &testVerifier{grade: GradeVerified, approve: false}
+	s := newStore(t, WithVerifier(deny))
+
+	forged := Grant{
+		SchemaVersion: SchemaVersion,
+		ID:            "g-forged",
+		Action:        ActionClaim,
+		Grantee:       agent("rogue"),
+		Scope:         s.Scope(),
+		FromEpoch:     0,
+		Actor:         "definitely-a-human",
+		Provenance:    ProvenanceOperatorAssertion,
+		IssuedAt:      at(0),
+		ExpiresAt:     at(time.Hour),
+		// The agent writes its own approval. Every static check passes.
+		Attestation: &Attestation{
+			Verifier: "cli-pty", Channel: "pty", Grade: GradeVerified, Approved: true, At: at(0),
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(s.grantDir(), forged.ID+".json"), forged); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.Claim(context.Background(), agent("rogue"),
+		SeatRequest{GrantID: forged.ID, Attended: true}, at(time.Minute))
+	var unverified *ErrUnverified
+	if !errors.As(err, &unverified) {
+		t.Fatalf("a grant an agent wrote for itself, with an approval it wrote for itself, must still be refused — "+
+			"the root of trust is the injected verifier, not the bytes on disk. got %v", err)
+	}
+	if v, _ := s.Status(at(time.Minute)); !v.Authority.Vacant {
+		t.Fatal("the forged capability must not have moved the seat")
+	}
+}
+
+// The record is HONEST about what authorized a seizure. An audit-grade attestation is
+// recorded as audit-grade, forever, so nothing downstream can read it as proof a human
+// was present.
+func TestAttestationGradeIsRecordedVerbatim(t *testing.T) {
+	s := newStore(t, WithVerifier(auditOnly()))
 	mustClaim(t, s, agent("a"), at(0))
 	mustTakeover(t, s, agent("b"), at(time.Minute))
 
@@ -550,8 +927,14 @@ func TestOperatorAssertionIsLabelledAsAnAssertion(t *testing.T) {
 		if c.Kind != KindSeatTakeover {
 			continue
 		}
-		if c.Authz == nil {
-			t.Fatal("a takeover must carry its authorization in the history")
+		if c.Authz == nil || c.Authz.Attestation == nil {
+			t.Fatal("a takeover must carry the attestation that authorized it")
+		}
+		if c.Authz.Attestation.Grade != GradeAudit {
+			t.Fatalf("the grade must be recorded verbatim, got %q", c.Authz.Attestation.Grade)
+		}
+		if c.Authz.Verified() {
+			t.Fatal("an AUDIT-grade attestation must never report itself as verified — that is the whole distinction")
 		}
 		if c.Authz.Provenance != ProvenanceOperatorAssertion {
 			t.Fatalf("provenance must be recorded verbatim, got %q", c.Authz.Provenance)
@@ -686,6 +1069,110 @@ func TestVerificationRequiresAMethod(t *testing.T) {
 	_, err := s.Attest(a, ep, Verification{TargetSeq: target.Seq, Result: OutcomeSuccess}, nil, at(2*time.Minute))
 	if err == nil {
 		t.Fatal("an unexplained 'I verified it' is the same trust-me claim it is supposed to replace")
+	}
+}
+
+// A METHOD STRING IS PROSE, AND PROSE PROMOTES NOTHING.
+//
+// This is the hole the previous revision left in the middle of its own thesis. The whole
+// package exists to refuse "done ✅" from an agent with nothing to point at — and then
+// `verify --method "re-ran the suite on a clean checkout"`, typed by an agent that did no
+// such thing, produced a green VERIFIED row. The trust-me claim was not eliminated; it
+// was moved one entry down the log and promoted there instead, and the check that
+// supposedly replaced it was a spelling test.
+func TestVerificationCannotPromoteOnProseAlone(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "migrated the schema"), ep, at(time.Minute))
+
+	_, err := s.Attest(a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "re-ran the suite on a clean checkout, all green",
+	}, nil, at(2*time.Minute)) // …and not one byte anybody can check
+	if err == nil {
+		t.Fatal("a verification whose entire backing is a sentence must be REFUSED: an agent that would claim " +
+			"success it did not earn will write a method string it did not run")
+	}
+	if !strings.Contains(err.Error(), "VERIFIES NOTHING") {
+		t.Fatalf("the refusal must say what is missing, got %v", err)
+	}
+
+	// Nothing was promoted, because nothing was recorded.
+	board, _, _ := s.Board()
+	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
+		t.Fatalf("the strand stays exactly as confident as it was: %q, want asserted", c)
+	}
+
+	// Bringing bytes a skeptic can rehash is what earns it.
+	if _, err := s.Attest(a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "re-ran the suite on a clean checkout, all green",
+	}, digestEvidence(), at(3*time.Minute)); err != nil {
+		t.Fatalf("a verification with digest-bound evidence must be accepted: %v", err)
+	}
+	board, _, _ = s.Board()
+	if c := board.Workstreams[0].Confidence; c != ConfidenceVerified {
+		t.Fatalf("digest-bound evidence promotes, got %q", c)
+	}
+}
+
+// The same rule, enforced at the PROJECTION as well as at the write. The board is a
+// function of the JOURNAL, so it must be able to grade a record it did not write — a
+// verification entry that reached the log some other way (an older schema, a hand-edited
+// store, a future bug in Attest) still promotes nothing on prose alone.
+func TestBoardRefusesToPromoteAnUnenforceableVerificationInTheJournal(t *testing.T) {
+	a := agent("a")
+	target := Entry{
+		Seq: 2, Hash: "sha256:" + strings.Repeat("b", 64), Kind: KindEffect, Actor: a,
+		Workstream: "api", Summary: "shipped", Outcome: OutcomeSuccess,
+		Evidence: []Evidence{{Kind: "command", Ref: "go test ./..."}},
+	}
+	// A verification with a method, a matching target hash, a success result — and nothing
+	// checkable. Exactly what an agent would write.
+	prose := Entry{
+		Seq: 3, Kind: KindVerification, Actor: a, Workstream: "api", Summary: "verified",
+		Outcome: OutcomeSuccess,
+		Verifies: &Verification{
+			TargetSeq: 2, TargetHash: target.Hash, Result: OutcomeSuccess, Method: "I checked it, honest",
+		},
+	}
+	board := ProjectBoard([]Entry{target, prose})
+	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
+		t.Fatalf("the board must not promote on prose, got %q — the projection is the second lock on the same door", c)
+	}
+
+	// A trusted adapter's attestation is the other way to earn it.
+	adapted := prose
+	adapted.Verifies = &Verification{
+		TargetSeq: 2, TargetHash: target.Hash, Result: OutcomeSuccess, Method: "asked CI",
+		Adapter: &Attestation{Verifier: "ci", Channel: "github-actions", Grade: GradeVerified, Approved: true},
+	}
+	board = ProjectBoard([]Entry{target, adapted})
+	if c := board.Workstreams[0].Confidence; c != ConfidenceVerified {
+		t.Fatalf("a trusted adapter's attestation promotes, got %q", c)
+	}
+}
+
+// Degradation travels one way, and this is the direction it travels in: REFUTING a claim
+// needs no credential at all. We demand evidence to become more confident, never to
+// become less — the cost of a false "verified" is unbounded, and the cost of a false
+// "refuted" is a second look.
+func TestRefutationNeedsNoEvidence(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	if _, err := s.Attest(a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeFailed, Method: "the endpoint 502s",
+	}, nil, at(2*time.Minute)); err != nil {
+		t.Fatalf("doubt is free: a refutation must not require digest-bound evidence: %v", err)
+	}
+	board, _, _ := s.Board()
+	if c := board.Workstreams[0].Confidence; c != ConfidenceRefuted {
+		t.Fatalf("the refutation must land, got %q", c)
 	}
 }
 
@@ -1180,8 +1667,9 @@ func TestReconcileIsOKOnlyWhenEverythingHasBeenChecked(t *testing.T) {
 	}
 
 	if _, err := s.Attest(a, ep, Verification{
-		TargetSeq: target.Seq, TargetHash: target.Hash, Result: OutcomeSuccess, Method: "looked",
-	}, nil, at(3*time.Minute)); err != nil {
+		TargetSeq: target.Seq, TargetHash: target.Hash, Result: OutcomeSuccess,
+		Method: "re-ran it and kept the log",
+	}, digestEvidence(), at(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	r, _ = s.Reconcile(context.Background(), at(4*time.Minute))
@@ -1381,7 +1869,7 @@ func TestEveryArtifactIsSchemaVersioned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := mustGrant(t, s, agent("b"), at(3*time.Minute))
+	g := mustGrant(t, s, agent("b"), ActionTakeover, at(3*time.Minute))
 
 	if ck.SchemaVersion != SchemaVersion || g.SchemaVersion != SchemaVersion {
 		t.Fatal("every stored artifact carries the schema it was written under")

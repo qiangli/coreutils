@@ -5,6 +5,7 @@ package steward
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,7 +26,32 @@ type opts struct {
 	asJSON bool
 }
 
+// store opens the store for everything that is NOT an authority transition: status,
+// board, log, record, verify, reconcile, repair. It injects no verifier — and therefore,
+// by construction, cannot claim or take over the seat. That is not an oversight; it is
+// the fail-closed default doing its job, and it means a bug in a read path cannot become
+// an authority bug.
 func (o *opts) store() (*Store, error) { return Open(o.dir) }
+
+// authStore opens the store for an AUTHORITY TRANSITION — authorize, claim, takeover —
+// with the root of trust the CLI can actually offer: a typed confirmation at a real
+// terminal.
+//
+// BE CLEAR ABOUT WHAT THAT IS WORTH. It is AUDIT-grade, never security-grade (see
+// GradeAudit). The process cannot distinguish a human's keystrokes from a pty an agent
+// allocated and wrote into — both are terminals, both produce the same bytes. What it
+// delivers is that the transition is deliberate, attended, and permanently recorded; what
+// it does NOT deliver is proof that a human was in the room.
+//
+// The consequence is enforced rather than merely documented: an audit-grade attestation
+// authorizes only an ATTENDED transition. With no terminal — a cron job, a CI runner, a
+// headless agent loop — this verifier refuses, and there is nothing else to fall back on,
+// so the unattended path fails closed until a host injects a real verifier
+// (steward.WithVerifier). That is the integration hook for bashy meet or a host approval
+// UI, and nothing here has to change to take it: the enforcement point already exists.
+func (o *opts) authStore(cmd *cobra.Command) (*Store, error) {
+	return Open(o.dir, WithVerifier(&ptyVerifier{in: cmd.InOrStdin(), out: cmd.ErrOrStderr()}))
+}
 
 // NewStewardCmd builds `bashy steward`: the host's single seat of authority and its
 // permanent record.
@@ -149,66 +175,105 @@ func interactive(in io.Reader) bool {
 func newScopeCmd(o *opts) *cobra.Command {
 	return &cobra.Command{
 		Use:   "scope",
-		Short: "print this host/user's seat scope id (and store directory)",
-		Long: `scope prints the identity of THIS seat: the host and user it belongs to.
+		Short: "print this seat's identity: which machine, which OS account",
+		Long: `scope prints the identity of THIS seat — one stable machine, one stable OS account.
 
-The store is keyed by it. A home directory is not reliably one machine's — a network
-home, a synced home, a container image with a baked-in $HOME is mounted on several
-hosts at once — and a seat keyed only by $HOME would silently MERGE the stewards of
-every machine sharing it: two hosts, two live stewards, one journal, one epoch ladder,
-and a fencing war between agents that have nothing to do with each other.`,
+The store is keyed by it, and NEITHER HALF COMES FROM THE ENVIRONMENT.
+
+  machine  a stable machine id from the OS: /etc/machine-id (linux), kern.uuid (darwin),
+           the MachineGuid registry value (windows) — or $BASHY_HOST_ID where the OS has
+           none. NOT the hostname, which is a label a machine wears, not a machine: two
+           laptops both called "localhost" sharing a synced home would otherwise merge
+           their journals, their epoch ladders, and their stewards.
+  account  the OS account this process actually runs as: the numeric UID, or the account
+           SID on windows. NOT $USER/$LOGNAME/$USERNAME, which are strings a process
+           inherits and can overwrite — so ` + "`USER=someone-else bashy steward claim`" + ` used to
+           be a DIFFERENT SEAT, and an agent could sidestep the singleton by exporting a
+           variable instead of taking anything.
+
+The store carries a BINDING to this identity and refuses to be opened from another
+machine or account, because a store directory is a path, and a path can be pointed at
+deliberately, carried by a synced home, or restored from a backup onto the wrong box.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
 			if err != nil {
 				return err
 			}
+			sc := s.ScopeInfo()
 			if o.asJSON {
 				return emitJSON(cmd.OutOrStdout(), struct {
-					Scope string `json:"scope"`
-					Dir   string `json:"dir"`
-				}{s.Scope(), s.Dir()})
+					Scope  string `json:"scope"`
+					Dir    string `json:"dir"`
+					Digest string `json:"digest"`
+					Source string `json:"machine_id_source"`
+					Host   string `json:"host_label"`
+				}{sc.ID, s.Dir(), sc.Digest(), sc.Source, sc.Host})
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), s.Scope())
-			fmt.Fprintf(cmd.OutOrStdout(), "store: %s\n", s.Dir())
+			out := cmd.OutOrStdout()
+			fmt.Fprintln(out, sc.ID)
+			fmt.Fprintf(out, "store:      %s\n", s.Dir())
+			fmt.Fprintf(out, "machine id: %s (a LABEL, not identity: %s)\n", sc.Source, sc.Host)
+			fmt.Fprintf(out, "binding:    %s\n", short8(sc.Digest()))
 			return nil
 		},
 	}
 }
 
 func newClaimCmd(o *opts) *cobra.Command {
-	var intent string
+	var intent, grant, grantFile string
 	var export bool
 	cmd := &cobra.Command{
 		Use:     "claim",
 		Aliases: []string{"take"},
-		Short:   "acquire a VACANT or LAPSED seat (atomically; never asks the incumbent)",
+		Short:   "acquire a VACANT or LAPSED seat, under an authorization (atomically; never asks the incumbent)",
 		Long: `claim takes the seat in exactly two situations, and no others:
 
   VACANT  nobody holds it.
   LAPSED  a heartbeat record that AGREES with the journal — right holder, right epoch,
           sane timestamps — says the holder is past the TTL.
 
-Everything else is refused. In particular, a seat whose liveness record is MISSING,
-unreadable, wrong-schema, wrong-holder, wrong-epoch, or dated into the future is NOT
-claimable. That is a fact about the RECORD, not about the holder: every way of
-producing it is also a way of producing it deliberately, and deleting one file must
-not be enough to take a healthy steward's seat. Recovering from it is a takeover.
+Everything else is refused. A LIVE seat is held — including one you hold yourself (see
+below). A seat whose liveness record is MISSING, unreadable, wrong-schema, wrong-holder,
+wrong-epoch, or dated into the future is NOT claimable: that is a fact about the RECORD,
+not about the holder, every way of producing it is also a way of producing it
+deliberately, and deleting one file must not be enough to take a healthy steward's seat.
+Recovering from either is a takeover.
 
-Claiming a lapsed seat BUMPS THE FENCING EPOCH, so the prior holder — who may be
-mid-thought and about to come back — is fenced rather than buried: their next write is
-rejected loudly instead of interleaving with yours.
+IT IS AUTHORIZED, like a takeover. Claiming used to be free, on the theory that an empty
+chair belongs to whoever sits in it. But a LAPSED seat is not an empty chair — it has an
+incumbent, and "lapsed" proves a heartbeat gap and nothing more: they may be mid-thought,
+rate-limited, or paused at a prompt, and the claim FENCES them. An unattended agent that
+could claim a lapsed seat could simply wait out the TTL and depose a working steward —
+the takeover it was forbidden to perform, spelled differently. And a vacant seat is still
+the seat of authority for the whole machine; "whoever gets there first" is a race, not a
+policy. So:
 
-Re-claiming a seat you already hold and are live in is just a heartbeat.
+  steward authorize --action claim --actor <who> --reason <why>
+  steward claim --grant <id>
+
+RENEWING IS NOT CLAIMING. Re-claiming a seat you already hold used to be quietly treated
+as a heartbeat. It isn't one any more, because it was a way to refresh a held tenure
+WITHOUT presenting the epoch — and the epoch is the only thing that can tell a steward
+its tenure ended while it was away. Renew with ` + "`steward heartbeat --epoch N`" + `, which
+presents it.
+
+Claiming a lapsed seat BUMPS THE FENCING EPOCH, so the prior holder is fenced rather than
+buried: their next write is rejected loudly instead of interleaving with yours.
 
 Claiming captures NO repository state. It is a mandate, not a checkout.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, err := o.store()
+			s, err := o.authStore(cmd)
 			if err != nil {
 				return err
 			}
-			v, err := s.Claim(Self(), intent, time.Now())
+			v, err := s.Claim(cmd.Context(), Self(), SeatRequest{
+				GrantID:   grant,
+				GrantPath: grantFile,
+				Attended:  interactive(cmd.InOrStdin()),
+				Intent:    intent,
+			}, time.Now())
 			if err != nil {
 				return err
 			}
@@ -241,94 +306,86 @@ Claiming captures NO repository state. It is a mandate, not a checkout.`,
 		},
 	}
 	cmd.Flags().StringVar(&intent, "intent", "", "what you hold the seat to do")
+	cmd.Flags().StringVar(&grant, "grant", "", "the authorization id to consume (from `steward authorize --action claim`)")
+	cmd.Flags().StringVar(&grantFile, "grant-file", "", "read the authorization from a file instead")
 	cmd.Flags().BoolVar(&export, "export", false, "print only `export "+EpochEnv+"=N` on stdout, for eval")
 	return cmd
 }
 
 func newAuthorizeCmd(o *opts) *cobra.Command {
 	var (
-		actor, reason           string
+		action, actor, reason   string
 		ttl                     time.Duration
 		receipt, issuer, rcptID string
-		yes                     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "authorize",
-		Short: "mint a single-use, expiring capability to take over the seat",
-		Long: `authorize mints the capability that ` + "`steward takeover`" + ` consumes.
+		Short: "mint a single-use, expiring capability to ACQUIRE the seat (claim or takeover)",
+		Long: `authorize mints the capability that ` + "`steward claim`" + ` and ` + "`steward takeover`" + ` consume.
 
-It is bound, on purpose, to everything that could otherwise be abused:
+Both are acquisitions of authority and both are authorized. A takeover obviously so. A
+CLAIM too, and that is the less obvious half: a LAPSED seat has an incumbent — "lapsed"
+proves a heartbeat gap and nothing more, and they may be mid-thought — so an unattended
+agent that could claim one could just wait out the TTL and depose a working steward. Same
+act, different spelling.
 
-  single-use   the takeover that spends it names its nonce IN THE JOURNAL, so replay
+The capability is bound, on purpose, to everything that could otherwise be abused:
+
+  single-use   the seat event that spends it names its nonce IN THE JOURNAL, so replay
                refuses a second use — even if the grant file is restored from a backup.
+  one action   a capability minted to CLAIM an empty seat does not authorize SEIZING an
+               occupied one.
   expiring     15 minutes by default (--ttl), 24h maximum.
   one agent    it names its grantee. It is not a coupon somebody else can pick up.
-  one epoch    it authorizes seizing the seat AS IT STANDS NOW. If the seat moves on,
+  one epoch    it authorizes acting on the seat AS IT STANDS NOW. If the seat moves on,
                the grant is dead: it authorized a situation, not the seat in general.
 
-BE CLEAR ABOUT WHAT THIS PROVES, because the honest answer is "less than it looks".
+AND THE BOUNDS ARE NOT THE AUTHORITY. This is the thing to understand about this command.
+Every bound above is a check on bytes in a file — and the agent this is meant to restrain
+can write that file, because it runs as you. A capability rooted in the store can never be
+worth more than the store.
 
-An --actor is an ASSERTION, not a credential. This command runs as you, on your
-machine, with your filesystem; anything else running as you — including the agent this
-is meant to restrain — can write these same files. There is no signature to check and
-no second party to ask. What the capability actually buys is that seizing the seat
-becomes a separate, deliberate, expiring, single-use act that names a human and a
-reason and lands in the permanent record where somebody will see it. That stops the
-ordinary failure — an agent deciding on its own that the steward looks stuck — and it
-makes the extraordinary one leave fingerprints. It is a real control. It is not
-cryptographic proof that a human was in the room, and this package will never claim it
-is.
+So what actually authorizes an acquisition is a VERIFIER, injected by the host, which the
+transition asks — and asks AGAIN when the grant is spent. The CLI's verifier is a typed
+confirmation at a real terminal. It is AUDIT-grade: deliberate, attended, permanently
+recorded, and NOT proof that a human was in the room, because a pty an agent allocated
+produces the same bytes a keyboard does. There is deliberately no --yes to skip it: a flag
+that skipped the confirmation would hand every unattended process on the machine exactly
+the capability the confirmation exists to withhold.
 
-Two provenances follow from that:
+The consequence is enforced, not merely documented: an UNATTENDED acquisition cannot be
+authorized by an audit-grade attestation at all. With no terminal, this command refuses,
+and so does the acquisition — until a host wires a verifier that can establish authority
+outside this store (bashy meet, an approval service, a signature it can check).
 
-  operator-assertion  minted at an interactive terminal, after you type the
-                      confirmation. Usable only for an ATTENDED takeover.
-  external-receipt    --receipt <file> --receipt-issuer <where-it-came-from>. The bytes
-                      of an out-of-band approval (a PR review, a ticket, a page ack) are
-                      copied into the store and pinned by digest. REQUIRED for an
-                      unattended takeover: with nobody at a terminal, an assertion that
-                      a human approved is worth precisely nothing, and the only honest
-                      thing to demand is an artifact somebody can go and audit.`,
-		Example: `  bashy steward authorize --actor qiangli --reason "incumbent wedged on a rate limit"
-  bashy steward authorize --actor oncall --receipt ./approval.json --receipt-issuer github:pr-412`,
+  --receipt <file> --receipt-issuer <src>  attaches an out-of-band approval artifact and
+                                           pins its bytes by digest. Note what that is: a
+                                           digest is INTEGRITY, never AUTHENTICITY. It
+                                           proves the bytes did not change; it says
+                                           nothing about who wrote them, and an agent can
+                                           write a file and hash it as easily as a human.
+                                           It is evidence for a human or a verifier to
+                                           weigh — never an authorization on its own.`,
+		Example: `  bashy steward authorize --action claim    --actor qiangli --reason "taking the seat for the day"
+  bashy steward authorize --action takeover --actor qiangli --reason "incumbent wedged on a rate limit"
+  bashy steward authorize --action takeover --actor oncall  --receipt ./approval.json --receipt-issuer github:pr-412`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, err := o.store()
+			s, err := o.authStore(cmd)
 			if err != nil {
 				return err
 			}
-			req := GrantRequest{
+			g, err := s.Authorize(cmd.Context(), GrantRequest{
+				Action:        action,
 				Grantee:       Self(),
 				Actor:         actor,
 				Reason:        reason,
 				TTL:           ttl,
+				Attended:      interactive(cmd.InOrStdin()),
 				ReceiptPath:   receipt,
 				ReceiptIssuer: issuer,
 				ReceiptID:     rcptID,
-			}
-
-			if receipt == "" {
-				// An operator assertion needs a human to assert it. With no terminal, say
-				// so and point at the receipt path instead of quietly minting something
-				// weaker than it looks.
-				if !yes {
-					if !interactive(cmd.InOrStdin()) {
-						return &ErrUnauthorized{Why: "no terminal is attached, so there is nobody here to assert operator " +
-							"authorization. Supply an external receipt (--receipt <file> --receipt-issuer <src>), which a " +
-							"human can audit, instead of an assertion nobody made"}
-					}
-					v, err := s.Status(time.Now())
-					if err != nil {
-						return err
-					}
-					if !confirm(cmd, v, actor) {
-						return fmt.Errorf("steward: authorization aborted")
-					}
-				}
-				req.Confirmed = true
-			}
-
-			g, err := s.Authorize(req, time.Now())
+			}, time.Now())
 			if err != nil {
 				return err
 			}
@@ -337,51 +394,112 @@ Two provenances follow from that:
 				return emitJSON(out, g)
 			}
 			fmt.Fprintf(out, "authorization %s minted\n", g.ID)
+			fmt.Fprintf(out, "  action:     %s\n", g.Action)
 			fmt.Fprintf(out, "  provenance: %s\n", g.Provenance)
 			fmt.Fprintf(out, "  actor:      %s  (an assertion, not a credential — see `steward authorize --help`)\n", g.Actor)
 			fmt.Fprintf(out, "  grantee:    %s\n", holderName(g.Grantee))
-			fmt.Fprintf(out, "  seizes:     epoch %d (and only epoch %d — if the seat moves, this dies)\n", g.FromEpoch, g.FromEpoch)
+			fmt.Fprintf(out, "  acts on:    epoch %d (and only epoch %d — if the seat moves, this dies)\n", g.FromEpoch, g.FromEpoch)
 			fmt.Fprintf(out, "  expires:    %s\n", g.ExpiresAt.Local().Format(time.RFC3339))
-			if g.Receipt != nil {
-				fmt.Fprintf(out, "  receipt:    %s from %s (%s)\n", g.Receipt.Path, g.Receipt.Issuer, short8(g.Receipt.Digest))
+			if a := g.Attestation; a != nil {
+				fmt.Fprintf(out, "  attested:   %s via %s — %s-grade\n", a.Verifier, a.Channel, a.Grade)
+				if a.Grade == GradeAudit {
+					fmt.Fprintln(out, "              AUDIT-grade: deliberate and attended, NOT proof a human was present.")
+					fmt.Fprintln(out, "              It will NOT authorize an unattended acquisition.")
+				}
 			}
-			fmt.Fprintf(out, "\nSpend it once: `steward takeover --grant %s`\n", g.ID)
+			if g.Receipt != nil {
+				fmt.Fprintf(out, "  receipt:    %s from %s (%s) — bytes pinned, author NOT verified\n",
+					g.Receipt.Path, g.Receipt.Issuer, short8(g.Receipt.Digest))
+			}
+			fmt.Fprintf(out, "\nSpend it once: `steward %s --grant %s`\n", g.Action, g.ID)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&action, "action", ActionTakeover, "what to authorize: claim | takeover")
 	cmd.Flags().StringVar(&actor, "actor", "", "the operator asserting this authorization (required)")
-	cmd.Flags().StringVar(&reason, "reason", "", "why recovery is necessary")
+	cmd.Flags().StringVar(&reason, "reason", "", "why the acquisition is necessary")
 	cmd.Flags().DurationVar(&ttl, "ttl", DefaultGrantTTL, "how long the capability stays usable")
-	cmd.Flags().StringVar(&receipt, "receipt", "", "an out-of-band approval artifact; makes this an external-receipt grant")
+	cmd.Flags().StringVar(&receipt, "receipt", "", "an out-of-band approval artifact (bytes pinned by digest; author NOT authenticated)")
 	cmd.Flags().StringVar(&issuer, "receipt-issuer", "", "where the receipt came from (required with --receipt)")
 	cmd.Flags().StringVar(&rcptID, "receipt-id", "", "the receipt's identifier over there (a PR number, a ticket)")
-	cmd.Flags().BoolVar(&yes, "yes", false, "skip the interactive confirmation (still recorded as an operator ASSERTION)")
 	return cmd
 }
 
-// confirm asks the human to type the seat they are about to authorize seizing. Typing
-// the epoch back is the point: it cannot be answered by a reflexive "y", and it forces
-// the person to look at who is actually holding the seat.
-func confirm(cmd *cobra.Command, v View, actor string) bool {
-	out := cmd.ErrOrStderr()
-	fmt.Fprintf(out, "You are authorizing %s to SEIZE the steward seat on this host.\n\n", actor)
-	switch v.Liveness {
+// ptyVerifier is the root of trust the CLI can honestly offer: a human, at a real
+// terminal, typing the epoch back.
+//
+// IT IS AUDIT-GRADE (GradeAudit), AND THE LABEL IS NOT MODESTY — it is the accurate
+// description of what a process running as the user can establish about the user. There
+// is no signature to check, no second party to ask, and no secret the agent does not also
+// have; a pty an agent allocated delivers the same bytes a keyboard does. So this
+// attests that the act was DELIBERATE and ATTENDED, which is real and worth having, and
+// it attests to nothing about WHO. The typed epoch is what makes "deliberate" mean
+// something: it cannot be answered by a reflexive "y", and it forces the person to look
+// at who currently holds the seat before taking it from them.
+//
+// The two refusals below are the enforcement, and neither is bypassable from the CLI —
+// note in particular that there is NO --yes. A flag that skipped the confirmation would
+// hand every unattended agent on the host exactly the capability the confirmation exists
+// to withhold, and it would do it in a single word that looks like a convenience.
+type ptyVerifier struct {
+	in  io.Reader
+	out io.Writer
+}
+
+func (*ptyVerifier) Name() string { return "cli-pty" }
+
+func (p *ptyVerifier) VerifyCapability(_ context.Context, c Capability) (Attestation, error) {
+	if !interactive(p.in) {
+		return Attestation{}, fmt.Errorf("no terminal is attached, so there is nobody here to confirm this %s. "+
+			"The CLI's only root of trust is a typed confirmation at a real terminal, and an unattended process cannot "+
+			"produce one — nor may it, since a confirmation with no human present attests to nothing. An unattended %s "+
+			"needs a host verifier that can establish authority outside this store (steward.WithVerifier)", c.Action, c.Action)
+	}
+
+	verb := "CLAIM"
+	if c.Action == ActionTakeover {
+		verb = "SEIZE"
+	}
+	fmt.Fprintf(p.out, "\nYou are authorizing %s to %s the steward seat on this machine.\n\n", c.Actor, verb)
+	if c.Phase == PhaseConsume {
+		fmt.Fprintf(p.out, "  This is the moment authority actually moves — authorization %s is being SPENT.\n\n", c.Nonce)
+	}
+	switch c.Seat.Liveness {
 	case LivenessVacant:
-		fmt.Fprintln(out, "  the seat is currently VACANT — a takeover is not needed; `steward claim` takes it.")
+		fmt.Fprintln(p.out, "  the seat is currently VACANT.")
 	default:
-		fmt.Fprintf(out, "  current holder: %s (epoch %d, liveness %s)\n",
-			holderName(v.Authority.Holder), v.Authority.Epoch, v.Liveness)
-		if v.Liveness == LivenessLive {
-			fmt.Fprintln(out, "  THIS STEWARD IS ALIVE. It may be mid-thought. Its writes will be rejected from the")
-			fmt.Fprintln(out, "  instant the takeover lands.")
+		fmt.Fprintf(p.out, "  current holder: %s (epoch %d, liveness %s)\n",
+			holderName(c.Seat.Authority.Holder), c.Seat.Authority.Epoch, c.Seat.Liveness)
+		if c.Seat.Liveness == LivenessLive {
+			fmt.Fprintln(p.out, "  THIS STEWARD IS ALIVE. It may be mid-thought. Its writes will be rejected from the")
+			fmt.Fprintln(p.out, "  instant this lands.")
+		}
+		if c.Seat.Liveness == LivenessLapsed {
+			fmt.Fprintln(p.out, "  A LAPSE PROVES A HEARTBEAT GAP AND NOTHING MORE. They may be mid-thought,")
+			fmt.Fprintln(p.out, "  rate-limited, or paused at a prompt, and they will be FENCED the instant this lands.")
 		}
 	}
-	fmt.Fprintf(out, "\nType the epoch to confirm (%d): ", v.Authority.Epoch)
-	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-	if err != nil {
-		return false
+	if c.Receipt != nil {
+		fmt.Fprintf(p.out, "\n  a receipt from %q is attached (%s). Its bytes are pinned; its AUTHOR is not\n",
+			c.Receipt.Issuer, short8(c.Receipt.Digest))
+		fmt.Fprintln(p.out, "  verified by anything — a digest is integrity, never authenticity. You are the check.")
 	}
-	return strings.TrimSpace(line) == fmt.Sprint(v.Authority.Epoch)
+	fmt.Fprintf(p.out, "\nType the epoch to confirm (%d): ", c.FromEpoch)
+
+	line, err := bufio.NewReader(p.in).ReadString('\n')
+	if err != nil {
+		return Attestation{}, fmt.Errorf("the confirmation could not be read: %w", err)
+	}
+	if strings.TrimSpace(line) != fmt.Sprint(c.FromEpoch) {
+		return Attestation{Approved: false, Grade: GradeAudit, Channel: "pty",
+			Why: "the typed confirmation did not match the epoch"}, nil
+	}
+	return Attestation{
+		Channel:  "pty",
+		Grade:    GradeAudit,
+		Approved: true,
+		Why:      "a typed confirmation at a terminal — deliberate and attended, NOT proof a human was present",
+	}, nil
 }
 
 func newGrantsCmd(o *opts) *cobra.Command {
@@ -450,14 +568,14 @@ cannot corrupt the record.`,
   bashy steward takeover --grant g-9f2c…`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, err := o.store()
+			s, err := o.authStore(cmd)
 			if err != nil {
 				return err
 			}
-			v, err := s.Takeover(Self(), TakeoverRequest{
-				GrantID:     grant,
-				GrantPath:   grantFile,
-				Interactive: interactive(cmd.InOrStdin()),
+			v, err := s.Takeover(cmd.Context(), Self(), SeatRequest{
+				GrantID:   grant,
+				GrantPath: grantFile,
+				Attended:  interactive(cmd.InOrStdin()),
 			}, time.Now())
 			if err != nil {
 				return err
@@ -472,7 +590,7 @@ cannot corrupt the record.`,
 			fmt.Fprintf(out, "TOOK OVER the steward seat: %s at epoch %d\n",
 				holderName(v.Authority.Holder), v.Authority.Epoch)
 			if a := v.Authority.Authz; a != nil {
-				fmt.Fprintf(out, "  under:  grant %s (%s), actor %q, attended=%v\n", a.GrantID, a.Provenance, a.Actor, a.Interactive)
+				fmt.Fprintf(out, "  under:  grant %s (%s), actor %q, attended=%v\n", a.GrantID, a.Provenance, a.Actor, a.Attended)
 				if a.Provenance == ProvenanceOperatorAssertion {
 					fmt.Fprintln(out, "          recorded as an operator ASSERTION — not proof a human was present")
 				}
@@ -1090,7 +1208,7 @@ func describeAuthz(a *AuthzRef) string {
 	if a.Receipt != nil {
 		s += " +receipt(" + a.Receipt.Issuer + ")"
 	}
-	if !a.Interactive {
+	if !a.Attended {
 		s += " unattended"
 	}
 	return s
@@ -1672,10 +1790,33 @@ seq.
 A verification can move a claim BACKWARDS — --result failed refutes it, and the board
 believes the refutation. Degradation travels one way.
 
-  --method  how you checked. Required: an unexplained "I verified it" is the same
-            trust-me claim it is supposed to replace.`,
+AND A METHOD STRING IS PROSE. PROSE PROMOTES NOTHING.
+
+This is the sharp edge, and it used to be blunt: --method was required, and the board then
+promoted the claim on the strength of it. So an agent that would write "done ✅" it had not
+earned would just as happily write --method "re-ran the suite on a clean checkout" it had
+not run, and the board turned that sentence into a green VERIFIED row. The trust-me claim
+was not eliminated — it was moved one entry down the log and promoted there instead.
+
+So a verification that PROMOTES must bring something a skeptic can actually check:
+
+  digest-bound evidence   -e 'file:/tmp/test.log#sha256:…' — bytes that exist, that can be
+                          rehashed, and that cannot be quietly swapped afterwards. It is
+                          the weakest thing that is not nothing.
+  a trusted adapter       an attestation from a verification adapter the HOST injected
+                          (a CI adapter that asked the CI system, a git adapter that
+                          looked at the commit) — rooted outside the store you can write to.
+
+REFUTING or reporting an INCONCLUSIVE check needs neither. Doubt is free; confidence is
+not. We demand credentials to become more confident and never to become less, because the
+cost of a false "verified" is unbounded and the cost of a false "refuted" is a second look.
+
+  --method  how you checked. Still required, because a check nobody can even describe is
+            not one — it just does not decide anything on its own.`,
 		Example: `  bashy steward verify --seq 7 --result success \
-        --method "re-ran the suite on a clean checkout at de6485c" -e "command:go test ./..."`,
+        --method "re-ran the suite on a clean checkout at de6485c" \
+        -e "file:/tmp/test.log#sha256:9f2c…"
+  bashy steward verify --seq 7 --result failed --method "the endpoint 502s"   # no evidence needed`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
@@ -1978,7 +2119,7 @@ func writeEntry(out io.Writer, e Entry) {
 		fmt.Fprintf(out, "         verifies: seq %d (%s) — %s\n", v.TargetSeq, short8(v.TargetHash), v.Method)
 	}
 	if a := e.Authz; a != nil {
-		fmt.Fprintf(out, "         authz:    grant %s, %s, actor %q, attended=%v\n", a.GrantID, a.Provenance, a.Actor, a.Interactive)
+		fmt.Fprintf(out, "         authz:    grant %s, %s, actor %q, attended=%v\n", a.GrantID, a.Provenance, a.Actor, a.Attended)
 	}
 	for _, ev := range e.Evidence {
 		fmt.Fprintf(out, "         evidence: %s:%s", ev.Kind, ev.Ref)

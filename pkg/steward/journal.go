@@ -220,12 +220,61 @@ type Artifact struct {
 // let an attestation of one claim be read as an attestation of whatever ends up at
 // that sequence number — and since the whole point is to stop unearned trust, the
 // attestation has to name the exact bytes it vouched for.
+//
+// METHOD IS PROSE, AND PROSE PROMOTES NOTHING. This is the correction that matters here.
+// The previous revision required a --method string and then promoted the strand to
+// VERIFIED on the strength of it — so "I re-ran the suite on a clean checkout", typed by
+// an agent that did no such thing, produced exactly the same green row as the truth. A
+// free-text field that an agent fills in is the trust-me claim the whole package exists
+// to refuse, wearing the badge of the thing that refuses it. Method survives, because a
+// human reading the log wants it; it just does not decide anything.
+//
+// What decides it is Enforceable (see the method): the verification must carry
+// DIGEST-BOUND evidence — bytes a skeptic can rehash — or an Adapter attestation from a
+// trusted verifier injected by the host. Anything else records the check and does NOT
+// promote the claim.
 type Verification struct {
 	TargetSeq  uint64  `json:"target_seq"`
 	TargetHash string  `json:"target_hash"`
 	Result     Outcome `json:"result"`             // success | failed | unknown
-	Method     string  `json:"method,omitempty"`   // how it was checked
+	Method     string  `json:"method,omitempty"`   // how it was checked — PROSE. Promotes nothing.
 	Observer   string  `json:"observer,omitempty"` // adapter name, or the operator
+
+	// Adapter is a trusted verification adapter's attestation that it went and looked.
+	// Rooted outside agent-controlled store state, exactly like the authorization
+	// verifier — and for exactly the same reason.
+	Adapter *Attestation `json:"adapter,omitempty"`
+}
+
+// Enforceable reports whether this verification rests on something a skeptic could check
+// — and is therefore allowed to promote a claim to verified on the board.
+//
+// Two ways to earn it, and prose is not one of them:
+//
+//   - DIGEST-BOUND EVIDENCE on the verification entry: a test log, an artifact, a
+//     transcript of the check, pinned to exact bytes. A digest is not proof the check
+//     happened, but it IS bytes that exist, that a human can go and rehash, and that
+//     cannot be quietly swapped afterwards. It is the weakest thing that is not nothing.
+//   - AN ADAPTER ATTESTATION from a trusted verifier the host injected — a CI adapter
+//     that asked the CI system, a git adapter that looked at the commit. This is the
+//     strong form, and the one that means what "verified" sounds like.
+//
+// Note the asymmetry, which is deliberate: this gates PROMOTION only. A verification
+// that REFUTES a claim needs no such credential, because degradation travels one way —
+// we never require evidence to become more doubtful. See ProjectBoard.
+func (v *Verification) Enforceable(e Entry) bool {
+	if v == nil {
+		return false
+	}
+	if v.Adapter != nil && v.Adapter.Approved && v.Adapter.Grade == GradeVerified {
+		return true
+	}
+	for _, ev := range e.Evidence {
+		if ev.DigestBound() {
+			return true
+		}
+	}
+	return false
 }
 
 // Link is a pointer from a workstream to where the work actually lives.
@@ -257,22 +306,34 @@ type WorkstreamUpdate struct {
 	Clear []string `json:"clear,omitempty"`
 }
 
-// AuthzRef is the authorization a takeover was performed under, recorded IN the
-// journal so the seizure carries its own receipt forever.
+// AuthzRef is the authorization a seat acquisition — a claim OR a takeover — was
+// performed under, recorded IN the journal so the acquisition carries its own receipt
+// forever.
 //
-// Read Grant's doc comment for what this does and does not prove. In short: it is
-// a durable, replay-protected, auditable capability — not cryptographic proof that
-// a human was present.
+// Attestation is the load-bearing field, and the rest of the struct is context. The
+// capability's bounds (grant id, action, epoch, expiry) say what the authorization was
+// ALLOWED to reach; the attestation says what actually ESTABLISHED it, at what grade,
+// over what channel. An AuthzRef with an audit-grade attestation and one with a
+// verified-grade attestation are different facts, and the journal keeps them different
+// facts forever — see Grade.
 type AuthzRef struct {
 	GrantID     string           `json:"grant_id"`
-	Action      string           `json:"action"`
+	Action      string           `json:"action"` // claim | takeover
 	Provenance  Provenance       `json:"provenance"`
 	Actor       string           `json:"actor"` // the operator identity ASSERTED at mint time
 	FromEpoch   uint64           `json:"from_epoch"`
 	IssuedAt    string           `json:"issued_at"`
 	ExpiresAt   string           `json:"expires_at"`
-	Interactive bool             `json:"interactive"` // the host asserted an interactive confirmation
+	Attended    bool             `json:"attended"` // the host OBSERVED a terminal. Not a credential.
 	Receipt     *ExternalReceipt `json:"receipt,omitempty"`
+	Attestation *Attestation     `json:"attestation,omitempty"`
+}
+
+// Verified reports whether the authority behind this acquisition was established by a
+// trusted verifier rooted outside this store — as opposed to merely asserted at a
+// terminal this process cannot authenticate.
+func (a *AuthzRef) Verified() bool {
+	return a != nil && a.Attestation != nil && a.Attestation.Approved && a.Attestation.Grade == GradeVerified
 }
 
 // Entry is one journal record. Field order is the canonical serialization order
@@ -559,15 +620,48 @@ func appendEntry(path string, rep *Replay, e Entry, now time.Time) (Entry, error
 	if rep.Corrupt {
 		return Entry{}, &ErrCorruptTail{Line: rep.CorruptLine, Reason: rep.CorruptReason, Kind: rep.CorruptKind, ValidEntries: len(rep.Entries)}
 	}
+	e, line, err := prepareEntry(rep, e, now)
+	if err != nil {
+		return Entry{}, err
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return Entry{}, err
+	}
+	defer f.Close()
+	if _, err := f.Write(line); err != nil {
+		return Entry{}, err
+	}
+	// fsync: an entry the journal reported as written must survive the power going
+	// out a microsecond later. The journal is the only authority there is — if it can
+	// lose a write, everything derived from it is a guess.
+	if err := f.Sync(); err != nil {
+		return Entry{}, err
+	}
+	return e, nil
+}
+
+// prepareEntry links an entry to the chain head and serializes it, WITHOUT writing.
+//
+// Factored out of appendEntry for Repair, which must build its receipt and the repaired
+// journal as ONE set of bytes to be swapped in atomically — it cannot truncate first and
+// append the receipt second, because a crash between those two steps leaves a journal
+// that is shorter with nothing in it saying why, which is indistinguishable from one
+// somebody edited. See Store.Repair.
+//
+// It deliberately does NOT check rep.Corrupt: the caller owns that judgement, and Repair
+// is precisely the caller for whom a corrupt replay is the normal input.
+func prepareEntry(rep *Replay, e Entry, now time.Time) (Entry, []byte, error) {
 	if !e.Kind.Known() {
-		return Entry{}, fmt.Errorf("steward: refusing to append an entry of unknown kind %q — "+
+		return Entry{}, nil, fmt.Errorf("steward: refusing to append an entry of unknown kind %q — "+
 			"a projection cannot honestly account for a record whose meaning it does not know", e.Kind)
 	}
 	if e.Epoch == 0 {
 		// Belt and braces: the gate already rejected epoch 0. If it ever gets here,
 		// the gate has a hole, and an unfenced entry in the journal is exactly the
 		// thing an attacker (or a bug) needs.
-		return Entry{}, &ErrNoEpoch{}
+		return Entry{}, nil, &ErrNoEpoch{}
 	}
 	e.Schema = SchemaVersion
 	e.Seq = rep.HeadSeq + 1
@@ -583,24 +677,9 @@ func appendEntry(path string, rep *Replay, e Entry, now time.Time) (Entry, error
 
 	line, err := json.Marshal(e)
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, nil, err
 	}
-
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return Entry{}, err
-	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		return Entry{}, err
-	}
-	// fsync: an entry the journal reported as written must survive the power going
-	// out a microsecond later. The journal is the only authority there is — if it can
-	// lose a write, everything derived from it is a guess.
-	if err := f.Sync(); err != nil {
-		return Entry{}, err
-	}
-	return e, nil
+	return e, append(line, '\n'), nil
 }
 
 // sortEvidence gives evidence a canonical order so an entry's hash does not depend

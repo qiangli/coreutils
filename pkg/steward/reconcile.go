@@ -168,10 +168,13 @@ func (s *Store) Reconcile(ctx context.Context, now time.Time, observers ...Obser
 			rep.CorruptLine, rep.CorruptReason, len(rep.Entries))
 	}
 
-	// Which entries have somebody's attestation against their exact bytes?
+	// Which entries have somebody's ENFORCEABLE attestation against their exact bytes?
+	// A verification backed by nothing but its own --method prose does not count here
+	// either — if it did, "asserted" would be one sentence away from "checked", which is
+	// the distinction this whole report exists to draw.
 	attested := map[string]bool{}
 	for _, e := range rep.Entries {
-		if e.Kind == KindVerification && e.Verifies != nil && e.Verifies.Result == OutcomeSuccess {
+		if e.Kind == KindVerification && e.Verifies != nil && e.Verifies.Result == OutcomeSuccess && e.Verifies.Enforceable(e) {
 			attested[e.Verifies.TargetHash] = true
 		}
 	}
@@ -461,23 +464,39 @@ type RepairResult struct {
 //
 //   - TORN FINAL APPEND, AND NOTHING ELSE. It refuses (ErrNotRepairable) on mid-log
 //     damage or on a complete-but-unchained record. See PlanRepair.
+//
 //   - AUTHORIZED. It goes through the same gate as every other mutation: the holder,
 //     at the current epoch. A damaged journal is not a licence for a stranger to
 //     truncate the host's record — if anything it is the moment that matters most.
 //     (The gate used is authorizeDamaged, which skips only the readability check,
 //     because refusing to repair a journal on the grounds that it needs repairing
 //     would be a fine joke and a useless tool.)
+//
 //   - QUARANTINED. The discarded bytes are copied out, by digest, BEFORE the
 //     truncation. A repair that destroys the only copy of what it removed cannot be
 //     audited, and "the tool ate it" is not an acceptable answer to "what was in
 //     those bytes?".
-//   - RECEIPTED, AND THE RECEIPT MAY NOT FAIL SILENTLY. The earlier revision wrote
-//     its receipt with `_, _ = s.Record(...)`, so a repair by a non-holder — or any
-//     other failure — silently produced a truncated journal with NO record that
-//     anything had been removed. That is the single worst outcome available to this
-//     package: a log that quietly healed itself is indistinguishable from a log
-//     somebody edited. If the receipt cannot be written, that is an ERROR, and it
-//     says exactly what state the store is in.
+//
+//   - RECEIPTED, ATOMICALLY, AND THE RECEIPT MAY NOT FAIL SILENTLY. Two revisions got
+//     this wrong in two different ways, and the second is the subtler one.
+//
+//     The first wrote its receipt with `_, _ = s.Record(...)`, so a failure silently
+//     produced a truncated journal with NO record that anything had been removed.
+//
+//     The second fixed the swallowing but kept the SHAPE: truncate the file, then append
+//     the receipt. Those are two separate durable writes, and a crash — or a kill, or a
+//     full disk — in the window between them leaves exactly the state the receipt exists
+//     to prevent: a journal that is SHORTER, with nothing in it saying why. That is
+//     bit-for-bit indistinguishable from a journal somebody edited to remove a record
+//     they did not like, and the loud error message the code printed on the way out is no
+//     help at all, because in the crash case there is nobody to print it to.
+//
+//     So the repair is now ONE atomic write. The valid prefix and the fully-formed,
+//     already-authorized receipt are assembled in a temp file, fsynced, and renamed over
+//     the journal, with the directory fsynced after. The observable journal is therefore
+//     either the ORIGINAL CORRUPT BYTES or the REPAIRED-AND-RECEIPTED BYTES. There is no
+//     third state, at any instant, for any observer — see the failpoint tests, which kill
+//     the repair at each stage and assert exactly that.
 func (s *Store) Repair(actor principal.Ref, epoch uint64, now time.Time) (RepairResult, error) {
 	now = mustUTC(now)
 	var out RepairResult
@@ -495,7 +514,11 @@ func (s *Store) Repair(actor principal.Ref, epoch uint64, now time.Time) (Repair
 		if err != nil {
 			return err
 		}
-		// AUTHORITY FIRST — before we touch a single byte.
+		// AUTHORITY FIRST — before we touch a single byte. A torn tail is not a licence
+		// for a stranger to truncate the host's record; if anything it is the moment that
+		// matters most. authorizeDamaged skips only the readability gate, because refusing
+		// to repair a journal on the grounds that it needs repairing would be a fine joke
+		// and a useless tool.
 		if _, err := authorizeDamaged(rep, actor, epoch); err != nil {
 			return err
 		}
@@ -507,12 +530,17 @@ func (s *Store) Repair(actor principal.Ref, epoch uint64, now time.Time) (Repair
 		if err != nil {
 			return err
 		}
+		if int64(len(b)) < plan.ValidBytes {
+			return fmt.Errorf("steward: the journal shrank while the repair was being planned — refusing to touch it")
+		}
 		suffix := b[plan.ValidBytes:]
 		if digestOf(suffix) != plan.SuffixDigest {
 			return fmt.Errorf("steward: the journal changed while the repair was being planned — refusing to truncate")
 		}
 
-		// QUARANTINE BEFORE TRUNCATION. If this fails, nothing has been destroyed.
+		// (1) QUARANTINE, DURABLY, FIRST. writeBytesAtomic fsyncs the bytes and the
+		// directory entry, so the discarded suffix is on disk BEFORE anything else moves.
+		// If this fails, nothing has been destroyed and nothing has been changed.
 		qname := fmt.Sprintf("%s-%s.bin", now.UTC().Format("20060102T150405Z"),
 			strings.TrimPrefix(plan.SuffixDigest, "sha256:")[:12])
 		qpath := filepath.Join(s.quarantineDir(), qname)
@@ -520,67 +548,74 @@ func (s *Store) Repair(actor principal.Ref, epoch uint64, now time.Time) (Repair
 			return fmt.Errorf("steward: cannot quarantine the bytes this repair would discard, so the repair is "+
 				"refused — nothing has been changed: %w", err)
 		}
-
-		if err := truncateJournal(s.journalPath(), plan.ValidBytes); err != nil {
+		if err := failpoint("repair.after-quarantine"); err != nil {
 			return err
 		}
+
+		qrel := filepath.ToSlash(filepath.Join("quarantine", qname))
+
+		// (2) BUILD the receipt against the VALID PREFIX — the state the journal will be
+		// in — without writing anything. It chains to rep.Head/rep.HeadSeq, which is
+		// exactly where the good history ends.
+		receipt, line, err := prepareEntry(rep, Entry{
+			Actor: actor,
+			Epoch: epoch,
+			Kind:  KindRepair,
+			Summary: fmt.Sprintf("repaired journal: discarded %d torn trailing byte(s) after seq %d; "+
+				"the exact bytes are quarantined at %s", plan.SuffixBytes, rep.HeadSeq, qrel),
+			Rationale: plan.Reason,
+			Outcome:   OutcomeDegraded, // data was discarded — never a clean success
+			Evidence: []Evidence{
+				{Kind: "quarantine", Ref: qrel, Digest: plan.SuffixDigest, Note: "discarded-suffix"},
+				{Kind: "digest", Ref: fmt.Sprintf("valid-bytes:%d", plan.ValidBytes), Digest: rep.Head, Note: "journal-head-before"},
+			},
+		}, now)
+		if err != nil {
+			return fmt.Errorf("steward: cannot build the repair receipt, so the repair is refused — "+
+				"nothing has been changed: %w", err)
+		}
+
+		// (3) ONE ATOMIC REPLACEMENT: valid prefix ‖ receipt. Written to a temp file,
+		// fsynced, renamed over the journal, directory fsynced. A reader at ANY instant —
+		// including a successor mid-recovery, including after a power cut — sees either the
+		// old corrupt journal or the repaired-and-receipted one. The shortened-without-a-
+		// receipt state that the truncate-then-append shape could produce does not exist.
+		repaired := make([]byte, 0, int(plan.ValidBytes)+len(line))
+		repaired = append(repaired, b[:plan.ValidBytes]...)
+		repaired = append(repaired, line...)
+
+		if err := failpoint("repair.before-replace"); err != nil {
+			return err
+		}
+		if err := writeBytesAtomic(s.journalPath(), repaired); err != nil {
+			return fmt.Errorf("steward: the repair could not be written, so it was NOT performed — the journal is "+
+				"untouched and the torn bytes are still there (a copy is quarantined at %s): %w", qrel, err)
+		}
+		if err := failpoint("repair.after-replace"); err != nil {
+			return err
+		}
+
 		out.Discarded = plan.SuffixBytes
 		out.SuffixDigest = plan.SuffixDigest
-		out.QuarantinePath = filepath.ToSlash(filepath.Join("quarantine", qname))
+		out.QuarantinePath = qrel
+		out.Receipt = receipt
+		out.ValidEntries = len(rep.Entries) + 1
 
-		// The journal is clean now, so the receipt can be appended through the ordinary
-		// gate. It is DEGRADED, always: a repair is never a clean success — bytes were
-		// discarded, and the record says so forever.
+		// Paranoia, and cheap: read back what we just installed. If the repaired journal
+		// does not replay clean, we have produced a state nobody understands, and the
+		// operator needs to hear it now rather than at the next write.
 		rep2, err := s.Replay()
 		if err != nil {
 			return err
 		}
 		if rep2.Corrupt {
-			return fmt.Errorf("steward: the journal is STILL unreadable after truncating %d byte(s) at %d "+
-				"(line %d: %s). The discarded bytes are quarantined at %s. This should not happen; do not write to "+
-				"this store until it is understood",
-				out.Discarded, plan.ValidBytes, rep2.CorruptLine, rep2.CorruptReason, out.QuarantinePath)
+			return fmt.Errorf("steward: the repaired journal is STILL unreadable (line %d: %s). The discarded bytes "+
+				"are quarantined at %s. This should not happen; do not write to this store until it is understood",
+				rep2.CorruptLine, rep2.CorruptReason, qrel)
 		}
-
-		receipt, err := s.appendAuthorized(rep2, Entry{
-			Actor: actor,
-			Kind:  KindRepair,
-			Summary: fmt.Sprintf("repaired journal: discarded %d torn trailing byte(s) after seq %d; "+
-				"the exact bytes are quarantined at %s", out.Discarded, rep2.HeadSeq, out.QuarantinePath),
-			Rationale: plan.Reason,
-			Outcome:   OutcomeDegraded, // data was discarded — never a clean success
-			Evidence: []Evidence{
-				{Kind: "quarantine", Ref: out.QuarantinePath, Digest: plan.SuffixDigest, Note: "discarded-suffix"},
-				{Kind: "digest", Ref: fmt.Sprintf("valid-bytes:%d", plan.ValidBytes), Digest: rep2.Head, Note: "journal-head-after"},
-			},
-		}, epoch, now)
-		if err != nil {
-			// NEVER SWALLOWED. The truncation happened; the receipt did not. Say exactly
-			// that, and say where the bytes are, so the operator is not left with a
-			// silently-shortened journal and no idea why.
-			return fmt.Errorf("steward: the torn tail was truncated (%d byte(s), quarantined at %s) but the repair "+
-				"RECEIPT COULD NOT BE WRITTEN: %w — the journal is now shorter with nothing in it saying so. "+
-				"Record this by hand before doing anything else",
-				out.Discarded, out.QuarantinePath, err)
-		}
-		out.Receipt = receipt
-		out.ValidEntries = len(rep2.Entries)
 		return nil
 	})
 	return out, err
-}
-
-// truncateJournal cuts the file at n bytes, durably.
-func truncateJournal(path string, n int64) error {
-	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if err := f.Truncate(n); err != nil {
-		return err
-	}
-	return f.Sync()
 }
 
 func preview(b []byte, n int) string {

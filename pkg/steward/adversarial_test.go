@@ -29,37 +29,106 @@ import (
 // only by $HOME would silently merge the seats of every machine sharing it: two live
 // stewards, one journal, one epoch ladder, and an endless mutual fencing war between
 // agents that never had anything to do with each other.
-func TestSharedHomeDoesNotMergeSeatsAcrossHosts(t *testing.T) {
-	// Same home, same user, DIFFERENT machine — the network-home case.
-	a := scopeFor("host-a", "qiangli")
-	b := scopeFor("host-b", "qiangli")
-	if a == b {
-		t.Fatalf("two hosts sharing one home must NOT share one seat (both scoped to %q). Otherwise both "+
-			"machines' agents claim the same journal, and every one of them fences the others forever.", a)
+func TestSharedHomeDoesNotMergeSeatsAcrossMachines(t *testing.T) {
+	mk := func(machine, account string) Scope {
+		sc := Scope{Machine: machine, Account: account, Host: "localhost"}
+		sc.ID = scopeIDFor(sc)
+		return sc
+	}
+	// SAME HOSTNAME, SAME ACCOUNT, DIFFERENT MACHINE — the network-home case, and the one
+	// a hostname-keyed scope got wrong. Two laptops both called "localhost", one synced
+	// home: keyed on the hostname they are the same seat, and both machines' agents then
+	// claim the same journal and fence each other forever.
+	a := mk("machine-a", "uid:501")
+	b := mk("machine-b", "uid:501")
+	if a.ID == b.ID || a.Digest() == b.Digest() {
+		t.Fatalf("two MACHINES sharing a hostname and a home must not share a seat (both %q)", a.ID)
 	}
 	// Same machine, DIFFERENT account — also two stewards.
-	if scopeFor("host-a", "someone-else") == a {
-		t.Fatal("two users on one host must not share a seat")
+	if mk("machine-a", "uid:502").Digest() == a.Digest() {
+		t.Fatal("two accounts on one machine must not share a seat")
 	}
-	// And the scoping is stable: the same host/user always resolves to the same seat,
-	// or a steward would lose its own journal on restart.
-	if scopeFor("host-a", "qiangli") != a {
+	// And it is stable: the same machine/account always resolves to the same seat, or a
+	// steward would lose its own journal on restart.
+	if mk("machine-a", "uid:501").ID != a.ID {
 		t.Fatal("the scope must be deterministic — an agent has to find its own seat again")
 	}
+}
 
-	// The default store is that scope, under the home directory.
-	home := t.TempDir()
-	t.Setenv("BASHY_STEWARD_DIR", "")
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // windows
-	dir := DefaultDir()
-	if want := filepath.Join(home, ".bashy", "steward", ScopeID()); dir != want {
-		t.Fatalf("DefaultDir = %q, want %q", dir, want)
+// IDENTITY DOES NOT COME FROM THE ENVIRONMENT, and this is the test that pins it.
+//
+// The scope used to be keyed on $USER (falling back to $LOGNAME/$USERNAME) and the
+// hostname. Both are strings the process inherits and can overwrite — so
+// `USER=someone-else bashy steward claim` was A DIFFERENT SEAT. An agent that wanted a
+// seat another agent held did not need to take it: it could export a variable and be the
+// steward of a host that already had one. The singleton was sidestepped without touching
+// a single file.
+//
+// Now the account comes from the kernel (the UID; the SID on Windows) and the machine
+// from the OS (machine-id / kern.uuid / MachineGuid). Neither moves when the environment
+// does.
+func TestScopeIgnoresIdentityEnvironmentVariables(t *testing.T) {
+	base, err := OSScope{}.Scope()
+	if err != nil {
+		t.Skipf("this machine exposes no stable identity (%v) — see $%s", err, HostIDEnv)
 	}
-	// The pre-scoping layout (~/.bashy/steward itself) is no longer the store — that is
-	// the whole point, and the migration note in DefaultDir's doc says how to adopt one.
-	if dir == filepath.Join(home, ".bashy", "steward") {
-		t.Fatal("the unscoped path is exactly the bug")
+
+	for _, env := range []string{"USER", "LOGNAME", "USERNAME"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv(env, "somebody-else-entirely")
+			got, err := OSScope{}.Scope()
+			if err != nil {
+				t.Fatalf("Scope: %v", err)
+			}
+			if got.Digest() != base.Digest() {
+				t.Fatalf("$%s changed the seat identity (%s → %s). An agent that can rename its own seat can "+
+					"sidestep the singleton by exporting a variable.", env, base.ID, got.ID)
+			}
+		})
+	}
+}
+
+// The machine identity override exists for platforms where the OS has none — and it is
+// an ANSWER to "I cannot establish this", not a shortcut past it.
+func TestHostIDOverrideIsHonoredAndFailsClosedWithout(t *testing.T) {
+	t.Setenv(HostIDEnv, "a-very-stable-machine-id")
+	sc, err := OSScope{}.Scope()
+	if err != nil {
+		t.Fatalf("with an explicit host id, the scope must resolve: %v", err)
+	}
+	if sc.Machine != "a-very-stable-machine-id" || sc.Source != "env:"+HostIDEnv {
+		t.Fatalf("the override must win verbatim and say so: %+v", sc)
+	}
+
+	// And the fail-closed error names the way out rather than guessing a machine identity
+	// — because every guessable source (the hostname, a file under $HOME) is one that two
+	// machines can share, which is the failure this identity exists to detect.
+	e := &ErrNoStableIdentity{Why: "no machine-id file"}
+	if !strings.Contains(e.Error(), HostIDEnv) || !strings.Contains(e.Error(), "Refusing to guess") {
+		t.Fatalf("the refusal must fail closed and name the fix, got %q", e.Error())
+	}
+}
+
+// A store carries a BINDING to the seat it was born under, and refuses to be adopted by
+// another. This is what makes the identity rework enforceable rather than merely correct:
+// a store directory is a path, and a path can be pointed at deliberately (--dir), carried
+// by a synced home, or restored from a backup onto a different machine.
+func TestStoreRefusesToBeAdoptedByAnotherMachine(t *testing.T) {
+	dir := t.TempDir()
+
+	if _, err := Open(dir, WithScopeProvider(testScope("machine-a")), WithVerifier(verified())); err != nil {
+		t.Fatalf("first open binds the store: %v", err)
+	}
+	// The same directory, seen from a different machine — a synced home, exactly.
+	_, err := Open(dir, WithScopeProvider(testScope("machine-b")), WithVerifier(verified()))
+	var mismatch *ErrScopeMismatch
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("a store bound to one machine must refuse another: adopting it would give two machines one "+
+			"journal, one epoch ladder, and two stewards that fence each other forever. got %v", err)
+	}
+	// And the machine it belongs to still opens it.
+	if _, err := Open(dir, WithScopeProvider(testScope("machine-a")), WithVerifier(verified())); err != nil {
+		t.Fatalf("the machine the store belongs to must still open it: %v", err)
 	}
 }
 
@@ -67,7 +136,11 @@ func TestSharedHomeDoesNotMergeSeatsAcrossHosts(t *testing.T) {
 // (a migration, a test, a mounted volume) still can.
 func TestStewardDirOverrideIsHonored(t *testing.T) {
 	t.Setenv("BASHY_STEWARD_DIR", "/tmp/explicit-steward")
-	if got := DefaultDir(); got != "/tmp/explicit-steward" {
+	got, err := DefaultDir()
+	if err != nil {
+		t.Skipf("no stable machine identity here: %v", err)
+	}
+	if got != "/tmp/explicit-steward" {
 		t.Fatalf("$BASHY_STEWARD_DIR must win verbatim, got %q", got)
 	}
 }
@@ -78,7 +151,18 @@ func TestDefaultDirIsIndependentOfWorkingDirectory(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	first := DefaultDir()
+	first, err := DefaultDir()
+	if err != nil {
+		t.Skipf("no stable machine identity here: %v", err)
+	}
+	if !strings.HasPrefix(first, filepath.Join(home, ".bashy", "steward")+string(filepath.Separator)) {
+		t.Fatalf("the default store lives under the scoped path, got %q", first)
+	}
+	// The pre-scoping layout (~/.bashy/steward itself) is no longer the store.
+	if first == filepath.Join(home, ".bashy", "steward") {
+		t.Fatal("the unscoped path is exactly the bug")
+	}
+
 	sub := filepath.Join(t.TempDir(), "some", "repo")
 	if err := os.MkdirAll(sub, 0o700); err != nil {
 		t.Fatal(err)
@@ -88,8 +172,9 @@ func TestDefaultDirIsIndependentOfWorkingDirectory(t *testing.T) {
 	if err := os.Chdir(sub); err != nil {
 		t.Fatal(err)
 	}
-	if DefaultDir() != first {
-		t.Fatal("the seat is a property of the HOST, not of the checkout you happen to be standing in")
+	again, err := DefaultDir()
+	if err != nil || again != first {
+		t.Fatal("the seat is a property of the MACHINE, not of the checkout you happen to be standing in")
 	}
 }
 
@@ -208,8 +293,11 @@ func TestUntrustworthyHeartbeatIsUnknownAndNotClaimable(t *testing.T) {
 				t.Fatalf("authority must survive a bad cache, got %+v", v.Authority)
 			}
 
-			// And an ordinary Claim is REFUSED.
-			_, err = s.Claim(agent("usurper"), "", now)
+			// And an ordinary Claim is REFUSED — even a fully authorized one. The refusal is
+			// about the RECORD, so a capability does not cure it: recovering a seat whose
+			// liveness cannot be read is a takeover, which says so in the journal.
+			ug := mustGrant(t, s, agent("usurper"), ActionClaim, now)
+			_, err = s.Claim(context.Background(), agent("usurper"), SeatRequest{GrantID: ug.ID, Attended: true}, now)
 			var unknown *ErrLivenessUnknown
 			if !errors.As(err, &unknown) {
 				t.Fatalf("Claim on an untrustworthy seat must fail with ErrLivenessUnknown, got %v", err)
@@ -251,22 +339,22 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		mutate func(t *testing.T, s *Store, g *Grant, req *TakeoverRequest)
+		mutate func(t *testing.T, s *Store, g *Grant, req *SeatRequest)
 		wantIn string
 	}{
 		{
 			name:   "no capability at all",
-			mutate: func(_ *testing.T, _ *Store, _ *Grant, req *TakeoverRequest) { req.GrantID = "" },
+			mutate: func(_ *testing.T, _ *Store, _ *Grant, req *SeatRequest) { req.GrantID = "" },
 			wantIn: "no authorization was presented",
 		},
 		{
 			name:   "a capability that does not exist",
-			mutate: func(_ *testing.T, _ *Store, _ *Grant, req *TakeoverRequest) { req.GrantID = "g-deadbeef" },
+			mutate: func(_ *testing.T, _ *Store, _ *Grant, req *SeatRequest) { req.GrantID = "g-deadbeef" },
 			wantIn: "no such authorization",
 		},
 		{
 			name: "expired",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
 				g.ExpiresAt = at(-time.Hour)
 				rewriteGrant(t, s, *g)
 			},
@@ -274,7 +362,7 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 		},
 		{
 			name: "dated into the future",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
 				g.IssuedAt = at(24 * time.Hour)
 				g.ExpiresAt = at(25 * time.Hour)
 				rewriteGrant(t, s, *g)
@@ -283,7 +371,7 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 		},
 		{
 			name: "minted for a different agent",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
 				g.Grantee = agent("somebody-else")
 				rewriteGrant(t, s, *g)
 			},
@@ -291,31 +379,41 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 		},
 		{
 			name: "minted against a different epoch",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
 				g.FromEpoch = 99
 				rewriteGrant(t, s, *g)
 			},
-			wantIn: "authorizes seizing epoch 99",
+			wantIn: "authorizes acting on epoch 99",
 		},
 		{
 			name: "minted for a different seat",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
-				g.Scope = "some-other-host-user-abc123"
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
+				g.Scope = "some-other-machine-account-abc123"
 				rewriteGrant(t, s, *g)
 			},
-			wantIn: "does not travel between hosts",
+			wantIn: "does not travel between machines",
 		},
 		{
 			name: "wrong action",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
 				g.Action = "read"
 				rewriteGrant(t, s, *g)
 			},
 			wantIn: "is for \"read\"",
 		},
 		{
+			// A capability minted to CLAIM an empty seat is not a licence to SEIZE an
+			// occupied one. Different acts, different victims.
+			name: "a claim capability, spent on a takeover",
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
+				g.Action = ActionClaim
+				rewriteGrant(t, s, *g)
+			},
+			wantIn: "is for \"claim\", not \"takeover\"",
+		},
+		{
 			name: "wrong schema",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
 				g.SchemaVersion = "bashy-steward-v99"
 				rewriteGrant(t, s, *g)
 			},
@@ -323,7 +421,7 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 		},
 		{
 			name: "no nonce, so its single use cannot be tracked",
-			mutate: func(t *testing.T, s *Store, g *Grant, req *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, req *SeatRequest) {
 				g.ID = ""
 				// A grant with no id cannot live under an id, so present it as a file.
 				p := filepath.Join(t.TempDir(), "g.json")
@@ -336,7 +434,7 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 		},
 		{
 			name: "unknown provenance",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
 				g.Provenance = "vibes"
 				rewriteGrant(t, s, *g)
 			},
@@ -344,7 +442,7 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 		},
 		{
 			name: "claims a receipt it does not carry",
-			mutate: func(t *testing.T, s *Store, g *Grant, _ *TakeoverRequest) {
+			mutate: func(t *testing.T, s *Store, g *Grant, _ *SeatRequest) {
 				g.Provenance = ProvenanceExternalReceipt
 				g.Receipt = nil
 				rewriteGrant(t, s, *g)
@@ -358,11 +456,11 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 			s := newStore(t)
 			incumbentEpoch := mustClaim(t, s, agent("incumbent"), at(0))
 
-			g := mustGrant(t, s, grantee, at(time.Minute))
-			req := TakeoverRequest{GrantID: g.ID, Interactive: true}
+			g := mustGrant(t, s, grantee, ActionTakeover, at(time.Minute))
+			req := SeatRequest{GrantID: g.ID, Attended: true}
 			c.mutate(t, s, &g, &req)
 
-			_, err := s.Takeover(grantee, req, at(2*time.Minute))
+			_, err := s.Takeover(context.Background(), grantee, req, at(2*time.Minute))
 			var unauth *ErrUnauthorized
 			if !errors.As(err, &unauth) {
 				t.Fatalf("the takeover must be REFUSED, got %v", err)
@@ -380,6 +478,11 @@ func TestTakeoverRefusesEveryBadCapability(t *testing.T) {
 }
 
 // A receipt whose bytes were edited after the fact is worse than no receipt.
+//
+// Note precisely what this proves and what it does not. It proves INTEGRITY: the artifact
+// is the one the grant was minted against. It proves NOTHING about who wrote it — see
+// TestUnattendedAcquisitionRequiresAVerifiedGradeAttestation, which is the test that says
+// a hash is not an issuer.
 func TestTamperedReceiptIsRefused(t *testing.T) {
 	s := newStore(t)
 	mustClaim(t, s, agent("a"), at(0))
@@ -388,8 +491,9 @@ func TestTamperedReceiptIsRefused(t *testing.T) {
 	if err := os.WriteFile(approval, []byte("approved: emergency only"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	g, err := s.Authorize(GrantRequest{
-		Grantee: agent("b"), Actor: "oncall", ReceiptPath: approval, ReceiptIssuer: "ops",
+	g, err := s.Authorize(context.Background(), GrantRequest{
+		Action: ActionTakeover, Grantee: agent("b"), Actor: "oncall", Attended: true,
+		ReceiptPath: approval, ReceiptIssuer: "ops",
 	}, at(time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -401,17 +505,17 @@ func TestTamperedReceiptIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = s.Takeover(agent("b"), TakeoverRequest{GrantID: g.ID}, at(2*time.Minute))
+	_, err = s.Takeover(context.Background(), agent("b"), SeatRequest{GrantID: g.ID, Attended: true}, at(2*time.Minute))
 	if err == nil || !strings.Contains(err.Error(), "altered") {
 		t.Fatalf("a receipt whose bytes no longer match its digest must be refused, got %v", err)
 	}
 
-	// And so must a receipt whose bytes are simply GONE: the artifact that justified a
-	// seizure has to be there to be audited.
+	// And so must a receipt whose bytes are simply GONE: the artifact offered in
+	// justification has to be there to be audited.
 	if err := os.Remove(stored); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.Takeover(agent("b"), TakeoverRequest{GrantID: g.ID}, at(3*time.Minute))
+	_, err = s.Takeover(context.Background(), agent("b"), SeatRequest{GrantID: g.ID, Attended: true}, at(3*time.Minute))
 	if err == nil || !strings.Contains(err.Error(), "bytes are gone") {
 		t.Fatalf("a receipt with no bytes must be refused, got %v", err)
 	}
@@ -420,18 +524,19 @@ func TestTamperedReceiptIsRefused(t *testing.T) {
 func TestAuthorizeRefusesAnUnboundOrUnattributedCapability(t *testing.T) {
 	s := newStore(t)
 	mustClaim(t, s, agent("a"), at(0))
+	ctx := context.Background()
 
-	if _, err := s.Authorize(GrantRequest{Actor: "qiangli", Confirmed: true}, at(time.Minute)); err == nil {
+	if _, err := s.Authorize(ctx, GrantRequest{Action: ActionTakeover, Actor: "qiangli", Attended: true}, at(time.Minute)); err == nil {
 		t.Fatal("a capability with no grantee is a skeleton key — it must be refused")
 	}
-	if _, err := s.Authorize(GrantRequest{Grantee: agent("b"), Confirmed: true}, at(time.Minute)); err == nil {
+	if _, err := s.Authorize(ctx, GrantRequest{Action: ActionTakeover, Grantee: agent("b"), Attended: true}, at(time.Minute)); err == nil {
 		t.Fatal("a capability naming no operator must be refused")
 	}
-	if _, err := s.Authorize(GrantRequest{Grantee: agent("b"), Actor: "x"}, at(time.Minute)); err == nil {
-		t.Fatal("with no interactive confirmation and no receipt, there is nobody asserting anything — refuse")
+	if _, err := s.Authorize(ctx, GrantRequest{Grantee: agent("b"), Actor: "x", Attended: true}, at(time.Minute)); err == nil {
+		t.Fatal("a capability must say WHAT it authorizes — claim and takeover are different acts")
 	}
-	if _, err := s.Authorize(GrantRequest{
-		Grantee: agent("b"), Actor: "x", Confirmed: true, TTL: 30 * 24 * time.Hour,
+	if _, err := s.Authorize(ctx, GrantRequest{
+		Action: ActionTakeover, Grantee: agent("b"), Actor: "x", Attended: true, TTL: 30 * 24 * time.Hour,
 	}, at(time.Minute)); err == nil {
 		t.Fatal("a capability that outlives the situation that justified it is a backdoor with a nice name")
 	}
@@ -718,15 +823,24 @@ func TestUnsupportedLockFailsEveryMutationClosed(t *testing.T) {
 	t.Cleanup(func() { lockAcquire = orig })
 
 	a := agent("a")
+	ctx := context.Background()
 	mutations := map[string]error{
-		"Claim":      errFrom(func() error { _, err := s.Claim(a, "", at(time.Minute)); return err }),
-		"Takeover":   errFrom(func() error { _, err := s.Takeover(a, TakeoverRequest{GrantID: "g-x"}, at(time.Minute)); return err }),
+		"Claim": errFrom(func() error {
+			_, err := s.Claim(ctx, a, SeatRequest{GrantID: "g-x", Attended: true}, at(time.Minute))
+			return err
+		}),
+		"Takeover": errFrom(func() error {
+			_, err := s.Takeover(ctx, a, SeatRequest{GrantID: "g-x", Attended: true}, at(time.Minute))
+			return err
+		}),
 		"Record":     errFrom(func() error { _, err := s.Record(evidenced(a, "ws", "x"), ep, at(time.Minute)); return err }),
 		"Heartbeat":  s.Heartbeat(a, ep, at(time.Minute)),
 		"Release":    s.Release(a, ep, "", at(time.Minute)),
 		"Checkpoint": errFrom(func() error { _, err := s.Checkpoint(a, ep, "", at(time.Minute)); return err }),
 		"Authorize": errFrom(func() error {
-			_, err := s.Authorize(GrantRequest{Grantee: a, Actor: "x", Confirmed: true}, at(time.Minute))
+			_, err := s.Authorize(ctx, GrantRequest{
+				Action: ActionTakeover, Grantee: a, Actor: "x", Attended: true,
+			}, at(time.Minute))
 			return err
 		}),
 		"Repair": errFrom(func() error { _, err := s.Repair(a, ep, at(time.Minute)); return err }),
@@ -776,14 +890,11 @@ func TestTranscriptRefusesAnUnauthorizedWriterBeforeTouchingDisk(t *testing.T) {
 }
 
 func TestTranscriptIsBounded(t *testing.T) {
-	s, err := Open(t.TempDir(), WithMaxTranscriptBytes(64))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := newStore(t, WithMaxTranscriptBytes(64))
 	a := agent("a")
 	ep := mustClaim(t, s, a, at(0))
 
-	_, err = s.Transcript(a, ep, "ws", "huge", strings.NewReader(strings.Repeat("x", 65)), at(time.Minute))
+	_, err := s.Transcript(a, ep, "ws", "huge", strings.NewReader(strings.Repeat("x", 65)), at(time.Minute))
 	if err == nil || !strings.Contains(err.Error(), "limit") {
 		t.Fatalf("an unbounded read from an agent-supplied stream is a way to fill the disk with bytes no "+
 			"projection will ever read; got %v", err)
