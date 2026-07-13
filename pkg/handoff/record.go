@@ -108,16 +108,19 @@ type Record struct {
 	// including whether to delegate the work back. Empty = task handoff. This is
 	// the distinction that made "handoff your work" ambiguous: work vs. seat.
 	//
-	// LAUNCH CONSTRAINT (for whoever wires --to): a HUMAN-FACING role must be
-	// launched as an INTERACTIVE session; an AUTONOMOUS role may run headless.
-	//   - steward   = the human's continuous point of contact (surface decisions,
-	//                 take direction, report). MUST be interactive — a headless
-	//                 `codex exec`/`--print` is deaf to the human and cannot
-	//                 steward.
-	//   - conductor = the autonomous execution loop (decompose → isolate → gate →
-	//                 converge until a verifier passes). The GATE is its safety,
-	//                 not human dialogue, so it MAY run headless/in the background.
-	// A steward launches a conductor; it does not become one.
+	// LAUNCH CONSTRAINT (for whoever wires --to). Two axes separate the seats —
+	// SCOPE and MODE:
+	//   - steward   = HOST-WIDE + INTERACTIVE, always. The human's continuous
+	//                 point of contact across EVERY project on the machine. A
+	//                 headless `codex exec`/`--print` is deaf to the human and
+	//                 cannot steward, so a steward is NEVER launched headless.
+	//   - conductor = PROJECT-scoped (one project, possibly a superproject/
+	//                 umbrella spanning repos) + HEADLESS OR INTERACTIVE. The
+	//                 execution loop (decompose → isolate → gate → converge to a
+	//                 verifier); the GATE is its safety, not dialogue, so either
+	//                 mode is fine.
+	// A steward owns the host and LAUNCHES conductors (one per project); it does
+	// not become one.
 	Role string `json:"role,omitempty"`
 
 	// Work is the in-flight state — the piece nothing else captured, and the
