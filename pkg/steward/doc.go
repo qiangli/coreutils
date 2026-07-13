@@ -28,21 +28,31 @@
 // view has no state of its own, so it structurally cannot drift into a competing
 // writable truth.
 //
-// A REFERENCE IS NOT A VERIFICATION — AND NEITHER IS A SENTENCE ABOUT ONE. This is the
-// spine. An entry claiming success with NOTHING to point at projects as UNKNOWN
-// (Entry.EffectiveOutcome). An entry claiming success WITH references projects as
-// ASSERTED — still not verified. Only a KindVerification entry reaches
-// ConfidenceVerified, and only when that verification itself brings something checkable:
-// DIGEST-BOUND evidence, or an attestation from a trusted verification adapter the host
-// injected (Verification.Enforceable).
+// A REFERENCE IS NOT A VERIFICATION — AND NEITHER IS ANYTHING ELSE THE CALLER CAN WRITE.
+// This is the spine. An entry claiming success with NOTHING to point at projects as UNKNOWN
+// (Entry.EffectiveOutcome). An entry claiming success WITH references projects as ASSERTED
+// — still not verified. Only a KindVerification entry reaches ConfidenceVerified, and only
+// when a VerificationVerifier the HOST injected (WithVerificationVerifier) went and
+// established the claim and SEALED it — a seal the board then asks that same verifier to
+// re-check when it projects. See verification.go, which is the argument in full.
 //
-// The last clause is not a detail; it is where an earlier revision left the hole in the
-// middle of its own thesis. It required a --method string and then promoted the claim on
-// the strength of it — so `verify --method "re-ran the suite"`, typed by an agent that did
-// no such thing, produced exactly the same green VERIFIED row as the truth. The trust-me
-// claim was not eliminated, it was moved one entry down the log and promoted there
-// instead. An agent can attach a plausible command string, commit hash, or method
-// sentence to work it never did exactly as easily as to work it did.
+// That clause is not a detail; it is where three revisions in a row left the hole in the
+// middle of their own thesis, each time by letting the agent supply BOTH the claim and the
+// credential that vouched for it:
+//
+//   - a --method string, and the board promoted on the strength of the sentence;
+//   - DIGEST-BOUND evidence, and the board promoted on the strength of a hash — but a
+//     digest is INTEGRITY, not a check: it proves some bytes did not change and says nothing
+//     about whether anybody looked, and since nothing rehashes it at promotion time, thirty-
+//     two arbitrary bytes did just as well;
+//   - a public Verification.Adapter *Attestation with Approved and Grade fields, which the
+//     caller simply filled in itself.
+//
+// Each move eliminated nothing; it relocated the trust-me claim one field sideways and
+// promoted it there. What an agent cannot do is implement an interface it does not hold, so
+// that is where promotion now lives. WITH NO VERIFIER INJECTED, NOTHING IS EVER PROMOTED:
+// checks are recorded in full, and the board says asserted — which is the honest state of a
+// claim on a host that cannot check anything.
 //
 // Degradation travels one way. Refuting a claim needs no credential at all: we demand
 // evidence to become more confident and never to become less, because the cost of a false
@@ -60,10 +70,29 @@
 // exporting a variable rather than taking anything. The machine is the OS's stable id
 // (/etc/machine-id, kern.uuid, MachineGuid), never the hostname, which is a label a
 // machine wears — two boxes both called "localhost" sharing a synced home would otherwise
-// merge their journals and their stewards. Where the OS offers none, $BASHY_HOST_ID says
-// so explicitly and the seat FAILS CLOSED without it (ErrNoStableIdentity), because every
-// guessable fallback is one two machines can share. The store binds itself to this
-// identity and refuses to be adopted by another (ErrScopeMismatch). See Scope.
+// merge their journals and their stewards. Where the OS offers none — and ONLY there —
+// $BASHY_HOST_ID names it; where the OS answers, the variable is IGNORED, because a machine
+// identity a process can choose is not one (it was consulted first once, and
+// `BASHY_HOST_ID=elsewhere` was a fresh seat for the asking). With neither, the seat FAILS
+// CLOSED (ErrNoStableIdentity), because every guessable fallback is one two machines can
+// share. See Scope.
+//
+// AND THE SEAT LIVES IN EXACTLY ONE DIRECTORY. The identity above is only half the
+// singleton, and the missing half was an open door. Each store binds itself to its seat and
+// refuses to be adopted by another (ErrScopeMismatch) — that is dir → scope. Nothing said
+// scope → dir, so `--dir /tmp/mine` (or $BASHY_STEWARD_DIR, or a plain Open elsewhere) got
+// a fresh store, which bound ITSELF to the same seat, minted its own epoch ladder from an
+// empty journal, and handed over the seat: two stewards on one host, each at epoch 1,
+// neither able to fence the other, because fencing compares epochs WITHIN one journal and
+// there were now two.
+//
+// So a CANONICAL REGISTRY, kept outside every store and keyed by the scope digest, maps each
+// seat to its ONE directory and refuses any other (ErrScopeDirConflict). It is taken under a
+// per-scope lock, so first-bind cannot race, and it is REVALIDATED before every mutation, so
+// a handle whose seat was rebound behind its back is refused at its next write rather than
+// journaling into an orphan. In a shared home the entries are keyed by machine, so two boxes
+// still get two seats. See registry.go — including what it is NOT worth: an agent that can
+// delete the registry can delete the journal, and no filesystem check survives that.
 //
 // A STALE HEARTBEAT PROVES ONLY A LAPSE. It never proves death. So Claim takes a seat
 // only when it is VACANT or when a TRUSTWORTHY heartbeat says the holder is LAPSED, and
@@ -133,11 +162,22 @@
 // crash case there is nobody to report to. The observable journal is now either the old
 // corrupt bytes or the repaired-and-receipted bytes, at every instant, for every observer.
 //
-// AN OPERATION THAT COMMITTED SAYS SO. The journal is the authority; seat.json is derived.
-// When an append lands and the cache write then fails, the operation returns ErrCommitted
-// — carrying the committed seq and epoch — rather than a bare error a caller would
-// reasonably RETRY, appending the same seat event twice and fencing the tenure it just
-// won. Recovery is an idempotent Heartbeat, which rebuilds the cache from the journal.
+// AN OPERATION THAT COMMITTED SAYS SO. The journal is the authority; everything else this
+// package writes is derived. When the append lands and the work AFTER it fails, the
+// operation returns ErrCommitted — carrying the committed seq and epoch, and the remedy —
+// rather than a bare error a caller would reasonably RETRY, appending the same seat event
+// twice and fencing the tenure it just won.
+//
+// This covers the REPAIR too, which is where the previous revision still had it wrong. The
+// atomic rename IS the commit: once it returns, the repaired-and-receipted journal is the
+// journal, and nothing afterwards can un-commit it. But the failpoint and the read-back
+// that follow it returned bare errors with an EMPTY RepairResult — so a caller was told the
+// repair had failed, retried, found an intact journal, and was told there had never been
+// anything wrong. Two false statements in sequence, the second of which ends an
+// investigation. Now the result is populated at the moment of commit and every later failure
+// reports ErrCommitted with the remedy that actually fits: a stale liveness cache is rebuilt
+// by an idempotent Heartbeat; a repair that committed and could not be read back is not
+// rebuilt by anything — go and LOOK (`steward reconcile`), which is what the error says.
 //
 // RECONCILE DOES NOT CLAIM TO HAVE CHECKED REALITY. Comparing a claim against the world
 // needs an adapter that knows how (Observer). With none supplied, the report says

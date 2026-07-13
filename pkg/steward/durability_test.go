@@ -299,3 +299,143 @@ func TestCommittedWithStaleCacheRecoversByHeartbeat(t *testing.T) {
 		t.Fatalf("recovery writes no history: %d entries, want 1 (the claim)", n)
 	}
 }
+
+// ─── A COMMITTED REPAIR SAYS SO ───────────────────────────────────────────────
+//
+// The rename is the commit. Once writeBytesAtomic returns, the repaired-and-receipted
+// journal IS the journal, for every reader, at every instant, including one arriving after
+// a power cut. Nothing that happens afterwards can un-commit it.
+//
+// The previous revision reported the failures that come AFTER that moment as bare errors,
+// with an empty RepairResult. That is not a confusing report; it is a FALSE one, and the
+// falsehood compounds: a caller handed `RepairResult{}, err` reasonably concludes the
+// repair did not happen, and a caller that concludes that RETRIES. The retry replays
+// against a journal that is already repaired, finds it intact, and cheerfully reports
+// "nothing to repair" — so the operator is told, in sequence, that the repair failed and
+// that there was never anything wrong with the journal. Both statements are false, and the
+// second one is the kind that ends an investigation.
+func TestRepairCommittedThenFailedReportsTheCommit(t *testing.T) {
+	// Every way the work AFTER the commit can fail. The crash is the failpoint; the corrupt
+	// read-back is the "this should never happen" branch that, when it does happen, must not
+	// masquerade as a repair that never ran.
+	t.Run("crash after the atomic swap", func(t *testing.T) {
+		s, a, ep, _ := tornJournal(t)
+		setFailpoint(t, "repair.after-replace", errCrash)
+
+		res, err := s.Repair(a, ep, at(2*time.Minute))
+
+		var c *ErrCommitted
+		if !errors.As(err, &c) {
+			t.Fatalf("a repair that COMMITTED and then failed must say so — a bare error is one a caller retries, "+
+				"and the retry finds an intact journal and reports there was never anything wrong. Got %T: %v", err, err)
+		}
+		if c.Op != "repair" {
+			t.Fatalf("the report must name the operation that committed, got %q", c.Op)
+		}
+		seq, epoch := c.Committed()
+		if seq != 3 || epoch != ep {
+			t.Fatalf("it must carry WHAT committed, so the caller can go and look: got seq %d epoch %d, want seq 3 epoch %d",
+				seq, epoch, ep)
+		}
+		if !errors.Is(err, errCrash) {
+			t.Fatal("…and it must still unwrap to the underlying cause")
+		}
+
+		// THE RESULT IS POPULATED. The repair happened; a caller that ignores the error type
+		// and reads the result must not see an empty struct describing a repair that did.
+		if res.Receipt.Seq != 3 {
+			t.Fatalf("the result must describe the repair that COMMITTED, got receipt seq %d", res.Receipt.Seq)
+		}
+		if res.Discarded == 0 || res.SuffixDigest == "" || res.QuarantinePath == "" {
+			t.Fatalf("a committed repair's result must be whole: %+v", res)
+		}
+		if res.ValidEntries != 3 {
+			t.Fatalf("two good entries plus the receipt, got %d", res.ValidEntries)
+		}
+
+		// The remedy must be the RIGHT one. A repair is not recovered by a heartbeat — it is
+		// already whole — so telling the operator to run one would be confident, specific, and
+		// wrong, which is what the previous revision's fixed sentence did.
+		if strings.Contains(c.Remedy, "heartbeat") {
+			t.Fatalf("a repair is not rebuilt by a heartbeat; the advice must fit the operation: %q", c.Remedy)
+		}
+		if !strings.Contains(c.Remedy, "reconcile") {
+			t.Fatalf("the remedy must tell the operator how to SEE the state: %q", c.Remedy)
+		}
+		if !strings.Contains(err.Error(), "DO NOT RETRY") {
+			t.Fatalf("and the error must say the one thing that matters: %v", err)
+		}
+
+		// And the journal really is repaired — which is the whole reason the error had to say so.
+		assertRepairedAndReceipted(t, s, journalBytes(t, s))
+	})
+
+	// NO RETRY AMBIGUITY. This is the failure the typed error exists to prevent, played out:
+	// a caller that treats the error as "it did not happen" and retries gets told the journal
+	// is intact — so the two reports together say the repair failed AND there was nothing to
+	// repair, which is how an operator ends up believing a damaged store was fine.
+	t.Run("a retry after a committed repair finds nothing to do", func(t *testing.T) {
+		s, a, ep, _ := tornJournal(t)
+		setFailpoint(t, "repair.after-replace", errCrash)
+		if _, err := s.Repair(a, ep, at(2*time.Minute)); err == nil {
+			t.Fatal("the failpoint must fire")
+		}
+		failpoint = func(string) error { return nil }
+
+		res, err := s.Repair(a, ep, at(3*time.Minute))
+		if err != nil {
+			t.Fatalf("the second call sees an intact journal: %v", err)
+		}
+		if res.Discarded != 0 || res.Receipt.Seq != 0 {
+			t.Fatalf("…and repairs nothing, because there is nothing left to repair: %+v", res)
+		}
+		// Exactly ONE receipt. A caller that retried on a bare error would have wanted a second
+		// one, and the journal must never grow a duplicate record of the same repair.
+		rep := mustReplay(t, s)
+		var receipts int
+		for _, e := range rep.Entries {
+			if e.Kind == KindRepair {
+				receipts++
+			}
+		}
+		if receipts != 1 {
+			t.Fatalf("a repair is recorded exactly once, got %d receipts", receipts)
+		}
+	})
+
+	// The read-back is the other way the post-commit work can fail, and it is the more
+	// alarming one: the repair landed and the result is WRONG. That is a different and much
+	// worse fact than "the repair failed", and the operator must be told which one they have.
+	t.Run("the readback finds the repaired journal corrupt", func(t *testing.T) {
+		s, a, ep, _ := tornJournal(t)
+
+		// Corrupt the journal at the instant AFTER the atomic swap lands — the exact state a
+		// bug (or a hostile filesystem) would leave, and the branch the code calls
+		// "this should not happen".
+		orig := failpoint
+		failpoint = func(stage string) error {
+			if stage == "repair.after-replace" {
+				appendRaw(t, s, `{"schema":"bashy-steward-v1","seq":9,"prev_hash":"sha`)
+			}
+			return nil
+		}
+		t.Cleanup(func() { failpoint = orig })
+
+		res, err := s.Repair(a, ep, at(2*time.Minute))
+
+		var c *ErrCommitted
+		if !errors.As(err, &c) {
+			t.Fatalf("the repair COMMITTED and then read back dirty — reporting that as a plain failure would send "+
+				"the operator looking for a repair that did not run, when what they have is one that did. Got %T: %v", err, err)
+		}
+		if seq, _ := c.Committed(); seq != 3 {
+			t.Fatalf("it must still carry what committed, got seq %d", seq)
+		}
+		if res.Receipt.Seq != 3 {
+			t.Fatalf("and the result must still describe it, got %+v", res)
+		}
+		if !strings.Contains(err.Error(), "STILL unreadable") {
+			t.Fatalf("the cause must name what was found, got %v", err)
+		}
+	})
+}

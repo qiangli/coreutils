@@ -13,11 +13,28 @@ import (
 	"time"
 )
 
-// HostIDEnv overrides the machine identity when the OS has no stable one to offer, or
-// when an operator deliberately wants to say which machine this is.
+// HostIDEnv names the machine when — and ONLY when — the OS cannot.
 //
-// It is an ANSWER to "I cannot establish this", not a shortcut past it: with no OS
-// source and no override, the seat fails closed rather than guessing (see machineID).
+// IT IS A FALLBACK, NOT AN OVERRIDE, and the previous revision had that backwards. It
+// consulted the environment FIRST and the OS only if the variable was unset, which made
+// the machine identity settable by the process whose isolation depends on it:
+//
+//	BASHY_HOST_ID=somewhere-else bashy steward claim
+//
+// produced a DIFFERENT seat on the same machine — a different scope digest, a different
+// store, a different epoch ladder — so an agent that did not like the steward it found
+// could simply declare itself to be on another computer and take a fresh one. That is the
+// same class of hole as the `USER=root` trick this file was written to close, reintroduced
+// by the escape hatch meant to make it usable.
+//
+// So the order is now: ask the OS; believe it if it answers. The environment is consulted
+// only where the OS has nothing to say — a container with no /etc/machine-id, an exotic
+// platform — which is the case the variable was actually for. It remains an ANSWER to "I
+// cannot establish this", never a shortcut past it: with no OS source and no fallback, the
+// seat fails closed rather than guessing (see machineID and ErrNoStableIdentity).
+//
+// A host that must resolve identity its own way has a trusted, in-process hook for it —
+// WithScopeProvider — which an agent cannot reach by setting a variable.
 const HostIDEnv = "BASHY_HOST_ID"
 
 // Scope is WHICH SEAT this is: one stable machine, one stable OS account.
@@ -109,10 +126,13 @@ func resolveOSScope() (Scope, error) {
 		return Scope{}, fmt.Errorf("steward: cannot establish the OS account this seat belongs to: %w", err)
 	}
 
-	machine, source := strings.TrimSpace(os.Getenv(HostIDEnv)), "env:"+HostIDEnv
-	if machine == "" {
-		machine, source, err = machineID()
-		if err != nil {
+	// THE OS FIRST, AND THE ENVIRONMENT ONLY IF IT HAS NOTHING. See HostIDEnv: consulting
+	// the variable first let a process rename the machine it was running on, and a machine
+	// identity a process can choose is not one.
+	machine, source, err := machineID()
+	if err != nil {
+		machine, source = strings.TrimSpace(os.Getenv(HostIDEnv)), "env:"+HostIDEnv
+		if machine == "" {
 			return Scope{}, &ErrNoStableIdentity{Why: err.Error()}
 		}
 	}

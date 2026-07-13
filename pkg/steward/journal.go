@@ -221,60 +221,46 @@ type Artifact struct {
 // that sequence number — and since the whole point is to stop unearned trust, the
 // attestation has to name the exact bytes it vouched for.
 //
-// METHOD IS PROSE, AND PROSE PROMOTES NOTHING. This is the correction that matters here.
-// The previous revision required a --method string and then promoted the strand to
-// VERIFIED on the strength of it — so "I re-ran the suite on a clean checkout", typed by
-// an agent that did no such thing, produced exactly the same green row as the truth. A
-// free-text field that an agent fills in is the trust-me claim the whole package exists
-// to refuse, wearing the badge of the thing that refuses it. Method survives, because a
-// human reading the log wants it; it just does not decide anything.
+// NOTHING A CALLER CAN WRITE PROMOTES A CLAIM. This is the correction that matters here,
+// and the previous two revisions each got it wrong in a different way.
 //
-// What decides it is Enforceable (see the method): the verification must carry
-// DIGEST-BOUND evidence — bytes a skeptic can rehash — or an Adapter attestation from a
-// trusted verifier injected by the host. Anything else records the check and does NOT
-// promote the claim.
+// The first required a --method string and promoted on the strength of it — so "I re-ran
+// the suite on a clean checkout", typed by an agent that did no such thing, produced the
+// same green row as the truth. The second demanded something "enforceable" and accepted
+// two things that were not: DIGEST-BOUND EVIDENCE (a digest proves the bytes did not
+// change, never that a check ran — an agent hashes any file it likes, or types thirty-two
+// bytes, since nothing rehashes it) and a public Adapter *Attestation the caller simply
+// filled in with Approved=true, Grade=verified. Each moved the trust-me claim one field
+// sideways and promoted it there instead.
+//
+// So promotion rests on a Seal, minted by a VerificationVerifier the HOST injected and
+// RE-CHECKED by that verifier when the board is projected. See verification.go, which is
+// the argument in full. Method and Evidence survive because a human reading the log wants
+// them; they decide nothing.
 type Verification struct {
 	TargetSeq  uint64  `json:"target_seq"`
 	TargetHash string  `json:"target_hash"`
 	Result     Outcome `json:"result"`             // success | failed | unknown
 	Method     string  `json:"method,omitempty"`   // how it was checked — PROSE. Promotes nothing.
-	Observer   string  `json:"observer,omitempty"` // adapter name, or the operator
+	Observer   string  `json:"observer,omitempty"` // the verifier's name, or the operator
 
-	// Adapter is a trusted verification adapter's attestation that it went and looked.
-	// Rooted outside agent-controlled store state, exactly like the authorization
-	// verifier — and for exactly the same reason.
-	Adapter *Attestation `json:"adapter,omitempty"`
+	// Seal is the trusted verifier's verdict, and the ONLY thing that promotes a claim to
+	// verified. It is MINTED BY THE STORE from an injected VerificationVerifier's answer
+	// and is never accepted from a caller — Attest refuses a Verification that arrives
+	// with one already set (ErrSealSupplied). Its Approved/Grade fields are descriptive;
+	// its Token is what the projection re-checks. See verification.go.
+	Seal *Seal `json:"seal,omitempty"`
 }
 
-// Enforceable reports whether this verification rests on something a skeptic could check
-// — and is therefore allowed to promote a claim to verified on the board.
+// Sealed reports whether a trusted verifier vouched for this verification AT ALL — a
+// cheap, descriptive check for the log and the CLI.
 //
-// Two ways to earn it, and prose is not one of them:
-//
-//   - DIGEST-BOUND EVIDENCE on the verification entry: a test log, an artifact, a
-//     transcript of the check, pinned to exact bytes. A digest is not proof the check
-//     happened, but it IS bytes that exist, that a human can go and rehash, and that
-//     cannot be quietly swapped afterwards. It is the weakest thing that is not nothing.
-//   - AN ADAPTER ATTESTATION from a trusted verifier the host injected — a CI adapter
-//     that asked the CI system, a git adapter that looked at the commit. This is the
-//     strong form, and the one that means what "verified" sounds like.
-//
-// Note the asymmetry, which is deliberate: this gates PROMOTION only. A verification
-// that REFUTES a claim needs no such credential, because degradation travels one way —
-// we never require evidence to become more doubtful. See ProjectBoard.
-func (v *Verification) Enforceable(e Entry) bool {
-	if v == nil {
-		return false
-	}
-	if v.Adapter != nil && v.Adapter.Approved && v.Adapter.Grade == GradeVerified {
-		return true
-	}
-	for _, ev := range e.Evidence {
-		if ev.DigestBound() {
-			return true
-		}
-	}
-	return false
+// IT IS NOT THE PROMOTION GATE and must never be used as one: it reads only the bytes in
+// the record, which is exactly what a forger controls. Promotion asks the injected
+// verifier to re-check the Seal against the claim (sealPromotes). This says "there is a
+// seal here"; only the verifier can say "and it is mine".
+func (v *Verification) Sealed() bool {
+	return v != nil && v.Seal != nil && v.Seal.Approved && v.Seal.Grade == GradeVerified && v.Seal.Token != ""
 }
 
 // Link is a pointer from a workstream to where the work actually lives.

@@ -78,14 +78,20 @@ func headAt(entries []Entry) string {
 	return genesis
 }
 
-// ProjectCheckpoint derives a checkpoint from entries, PURELY. Same entries and same
-// watermark always yield the same board and the same digests — no clock, no
-// randomness, no ambient state leaks in. CreatedAt/ID/Note are stamped by the caller
-// and are deliberately NOT part of the board digest, so a re-derivation an hour later
-// still proves the same history.
-func ProjectCheckpoint(entries []Entry, watermark uint64) Checkpoint {
+// ProjectCheckpoint derives a checkpoint from entries, PURELY. Same entries, same
+// watermark, and same seal checker always yield the same board and the same digests — no
+// clock, no randomness, no ambient state leaks in. CreatedAt/ID/Note are stamped by the
+// caller and are deliberately NOT part of the board digest, so a re-derivation an hour
+// later still proves the same history.
+//
+// SC IS PART OF "SAME INPUTS", and honestly so. A checkpoint taken on a host that can
+// check its claims records that they were checked; one taken where nothing can check
+// anything records that they were not. Those are different facts about the same journal
+// and the digest is entitled to differ — what it may never do is claim the first while
+// standing in the second. See ProjectBoard.
+func ProjectCheckpoint(entries []Entry, watermark uint64, sc SealChecker) Checkpoint {
 	prefix := entriesUpTo(entries, watermark)
-	board := ProjectBoard(prefix)
+	board := ProjectBoard(prefix, sc)
 	auth := deriveAuthority(&Replay{Entries: prefix, MaxEpoch: maxEpochOf(prefix)})
 
 	ck := Checkpoint{
@@ -143,7 +149,7 @@ func (s *Store) Checkpoint(actor principal.Ref, epoch uint64, note string, now t
 			return err
 		}
 
-		ck := ProjectCheckpoint(rep.Entries, 0)
+		ck := ProjectCheckpoint(rep.Entries, 0, s.sealChecker())
 		ck.ID = fmt.Sprintf("ck-%s-%04d", now.UTC().Format("20060102T150405Z"), ck.Watermark)
 		ck.CreatedAt = now
 		ck.Note = note
@@ -202,7 +208,7 @@ func (s *Store) VerifyCheckpoint(ck Checkpoint) (CheckpointVerdict, error) {
 	if err != nil {
 		return CheckpointVerdict{}, err
 	}
-	derived := ProjectCheckpoint(rep.Entries, ck.Watermark)
+	derived := ProjectCheckpoint(rep.Entries, ck.Watermark, s.sealChecker())
 	v := CheckpointVerdict{
 		ID:            ck.ID,
 		Watermark:     ck.Watermark,

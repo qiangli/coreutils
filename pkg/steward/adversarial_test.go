@@ -88,21 +88,59 @@ func TestScopeIgnoresIdentityEnvironmentVariables(t *testing.T) {
 	}
 }
 
-// The machine identity override exists for platforms where the OS has none — and it is
-// an ANSWER to "I cannot establish this", not a shortcut past it.
-func TestHostIDOverrideIsHonoredAndFailsClosedWithout(t *testing.T) {
-	t.Setenv(HostIDEnv, "a-very-stable-machine-id")
-	sc, err := OSScope{}.Scope()
-	if err != nil {
-		t.Fatalf("with an explicit host id, the scope must resolve: %v", err)
-	}
-	if sc.Machine != "a-very-stable-machine-id" || sc.Source != "env:"+HostIDEnv {
-		t.Fatalf("the override must win verbatim and say so: %+v", sc)
+// $BASHY_HOST_ID IS A FALLBACK, NOT AN OVERRIDE — and the difference is a hole.
+//
+// The previous revision consulted the variable FIRST and the OS only if it was unset. That
+// made the machine identity settable by the very process whose isolation depends on it:
+//
+//	BASHY_HOST_ID=somewhere-else bashy steward claim
+//
+// resolved to a DIFFERENT scope digest, hence a different store, a different epoch ladder,
+// and a fresh vacant seat — so an agent that did not care for the steward it found could
+// declare itself to be on another computer and take a new one. That is the same class of
+// hole as the `USER=root` trick the scope rework was written to close, reintroduced by the
+// escape hatch meant to make it usable.
+//
+// So where the OS CAN name the machine, the variable is ignored; where it cannot, the
+// variable is the answer; where there is neither, the seat fails closed.
+func TestHostIDCannotOverrideARealMachineIdentity(t *testing.T) {
+	// What does the OS say when nobody is interfering?
+	t.Setenv(HostIDEnv, "")
+	base, osErr := OSScope{}.Scope()
+
+	t.Setenv(HostIDEnv, "somewhere-else-entirely")
+	got, err := OSScope{}.Scope()
+
+	if osErr == nil {
+		// This box HAS a machine identity. The variable must not be able to rename it.
+		if err != nil {
+			t.Fatalf("Scope: %v", err)
+		}
+		if got.Digest() != base.Digest() {
+			t.Fatalf("$%s renamed a machine the OS had already identified (%s → %s). An agent that can rename its "+
+				"own machine can mint a second seat on it by exporting a variable — which is the singleton defeated "+
+				"by an env var, exactly the hole the scope rework closed for $USER.", HostIDEnv, base.ID, got.ID)
+		}
+		if got.Machine == "somewhere-else-entirely" {
+			t.Fatal("the OS answered, so the environment must not be consulted at all")
+		}
+		return
 	}
 
-	// And the fail-closed error names the way out rather than guessing a machine identity
-	// — because every guessable source (the hostname, a file under $HOME) is one that two
-	// machines can share, which is the failure this identity exists to detect.
+	// This box has NO machine identity (a bare container). Now — and only now — the variable
+	// is the answer, and it is used verbatim.
+	if err != nil {
+		t.Fatalf("with no OS identity, the fallback must resolve the scope: %v", err)
+	}
+	if got.Machine != "somewhere-else-entirely" || got.Source != "env:"+HostIDEnv {
+		t.Fatalf("as a FALLBACK it must win verbatim and say where it came from: %+v", got)
+	}
+}
+
+// With neither an OS identity nor a fallback, the seat fails closed and names the way out
+// rather than guessing — because every guessable source (the hostname, a file under $HOME)
+// is one that two machines can share, which is the failure this identity exists to detect.
+func TestNoMachineIdentityFailsClosed(t *testing.T) {
 	e := &ErrNoStableIdentity{Why: "no machine-id file"}
 	if !strings.Contains(e.Error(), HostIDEnv) || !strings.Contains(e.Error(), "Refusing to guess") {
 		t.Fatalf("the refusal must fail closed and name the fix, got %q", e.Error())
@@ -115,19 +153,23 @@ func TestHostIDOverrideIsHonoredAndFailsClosedWithout(t *testing.T) {
 // by a synced home, or restored from a backup onto a different machine.
 func TestStoreRefusesToBeAdoptedByAnotherMachine(t *testing.T) {
 	dir := t.TempDir()
+	// One registry, two machines — a SHARED HOME, which is the case this whole check exists
+	// for. The registry keys on the scope digest (machine + account), so the two machines get
+	// two separate bindings and neither can speak for the other's seat.
+	reg := t.TempDir()
 
-	if _, err := Open(dir, WithScopeProvider(testScope("machine-a")), WithVerifier(verified())); err != nil {
+	if _, err := Open(dir, WithScopeProvider(testScope("machine-a")), WithVerifier(verified()), WithRegistryRoot(reg)); err != nil {
 		t.Fatalf("first open binds the store: %v", err)
 	}
 	// The same directory, seen from a different machine — a synced home, exactly.
-	_, err := Open(dir, WithScopeProvider(testScope("machine-b")), WithVerifier(verified()))
+	_, err := Open(dir, WithScopeProvider(testScope("machine-b")), WithVerifier(verified()), WithRegistryRoot(reg))
 	var mismatch *ErrScopeMismatch
 	if !errors.As(err, &mismatch) {
 		t.Fatalf("a store bound to one machine must refuse another: adopting it would give two machines one "+
 			"journal, one epoch ladder, and two stewards that fence each other forever. got %v", err)
 	}
 	// And the machine it belongs to still opens it.
-	if _, err := Open(dir, WithScopeProvider(testScope("machine-a")), WithVerifier(verified())); err != nil {
+	if _, err := Open(dir, WithScopeProvider(testScope("machine-a")), WithVerifier(verified()), WithRegistryRoot(reg)); err != nil {
 		t.Fatalf("the machine the store belongs to must still open it: %v", err)
 	}
 }

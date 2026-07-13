@@ -160,7 +160,7 @@ func (s *Store) Reconcile(ctx context.Context, now time.Time, observers ...Obser
 		JournalIntact:  rep.Intact(),
 		JournalEntries: len(rep.Entries),
 		JournalHead:    rep.Head,
-		Board:          ProjectBoard(rep.Entries),
+		Board:          ProjectBoard(rep.Entries, s.sealChecker()),
 	}
 	if rep.Corrupt {
 		r.CorruptKind = rep.CorruptKind
@@ -168,13 +168,23 @@ func (s *Store) Reconcile(ctx context.Context, now time.Time, observers ...Obser
 			rep.CorruptLine, rep.CorruptReason, len(rep.Entries))
 	}
 
-	// Which entries have somebody's ENFORCEABLE attestation against their exact bytes?
-	// A verification backed by nothing but its own --method prose does not count here
-	// either — if it did, "asserted" would be one sentence away from "checked", which is
-	// the distinction this whole report exists to draw.
+	// Which entries have a SEALED attestation against their exact bytes — one a trusted
+	// verifier issued and still recognizes?
+	//
+	// Nothing the caller can write counts here. Not the --method prose, not a digest it
+	// attached to its own evidence, not an attestation struct it filled in: if any of those
+	// counted, "asserted" would be one sentence (or one sha256) away from "checked", which
+	// is the exact distinction this whole report exists to draw. The seal is re-checked
+	// against the injected verifier, so a store with none of them reports nothing as
+	// attested — which is the truth about a host that cannot check anything.
+	sc := s.sealChecker()
+	bySeq := entriesBySeq(rep.Entries)
 	attested := map[string]bool{}
 	for _, e := range rep.Entries {
-		if e.Kind == KindVerification && e.Verifies != nil && e.Verifies.Result == OutcomeSuccess && e.Verifies.Enforceable(e) {
+		if e.Kind != KindVerification || e.Verifies == nil || e.Verifies.Result != OutcomeSuccess {
+			continue
+		}
+		if sealPromotes(e, bySeq[e.Verifies.TargetSeq], sc) {
 			attested[e.Verifies.TargetHash] = true
 		}
 	}
@@ -591,27 +601,56 @@ func (s *Store) Repair(actor principal.Ref, epoch uint64, now time.Time) (Repair
 			return fmt.Errorf("steward: the repair could not be written, so it was NOT performed — the journal is "+
 				"untouched and the torn bytes are still there (a copy is quarantined at %s): %w", qrel, err)
 		}
-		if err := failpoint("repair.after-replace"); err != nil {
-			return err
-		}
 
+		// ─── THE RENAME LANDED. THE REPAIR IS COMMITTED. ──────────────────────────────
+		//
+		// Everything from here on is AFTER the fact, and must say so. writeBytesAtomic
+		// fsynced the bytes and renamed over the journal: the repaired-and-receipted
+		// journal IS the journal now, for every reader, at every instant, including one
+		// that arrives after a power cut. Nothing below can un-commit it.
+		//
+		// So the result is populated HERE, before anything else is allowed to fail, and
+		// every failure below is reported as ErrCommitted rather than as a bare error.
+		// The previous revision did neither: the after-replace failpoint returned a naked
+		// error with `out` still zeroed, and the readback errors returned naked errors too.
+		// A caller seeing `Repair() -> RepairResult{}, err` reasonably concludes the repair
+		// did not happen — and a caller that concludes that RETRIES. The retry replays
+		// against a journal that is already repaired, finds it intact, and reports "nothing
+		// to repair", so the operator is told, in sequence, that the repair failed and that
+		// there was never anything wrong. That is not a confusing error; it is a false one.
 		out.Discarded = plan.SuffixBytes
 		out.SuffixDigest = plan.SuffixDigest
 		out.QuarantinePath = qrel
 		out.Receipt = receipt
 		out.ValidEntries = len(rep.Entries) + 1
 
+		// A repair is not recovered by a heartbeat — it is already whole. What a failure
+		// below means is that we could not CONFIRM the result, so the remedy is to go and
+		// look, not to run anything.
+		remedy := fmt.Sprintf("The journal is repaired: the torn bytes are gone, the receipt is at seq %d, and the "+
+			"discarded bytes are quarantined at %s. What did not complete is the read-back that CONFIRMS it. "+
+			"Run `steward reconcile` (a pure read) to see the journal's actual state before doing anything else.",
+			receipt.Seq, qrel)
+
+		if err := failpoint("repair.after-replace"); err != nil {
+			return committedWith("repair", receipt.Seq, receipt.Epoch, err, remedy)
+		}
+
 		// Paranoia, and cheap: read back what we just installed. If the repaired journal
 		// does not replay clean, we have produced a state nobody understands, and the
-		// operator needs to hear it now rather than at the next write.
+		// operator needs to hear it now rather than at the next write — but they need to
+		// hear it as "the repair committed AND the result is wrong", which is a different
+		// and much worse fact than "the repair failed".
 		rep2, err := s.Replay()
 		if err != nil {
-			return err
+			return committedWith("repair", receipt.Seq, receipt.Epoch,
+				fmt.Errorf("the repaired journal could not be read back: %w", err), remedy)
 		}
 		if rep2.Corrupt {
-			return fmt.Errorf("steward: the repaired journal is STILL unreadable (line %d: %s). The discarded bytes "+
-				"are quarantined at %s. This should not happen; do not write to this store until it is understood",
-				rep2.CorruptLine, rep2.CorruptReason, qrel)
+			return committedWith("repair", receipt.Seq, receipt.Epoch,
+				fmt.Errorf("the repaired journal is STILL unreadable (line %d: %s) — this should not happen; "+
+					"do not write to this store until it is understood", rep2.CorruptLine, rep2.CorruptReason),
+				remedy)
 		}
 		return nil
 	})

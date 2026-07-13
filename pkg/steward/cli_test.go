@@ -21,6 +21,15 @@ import (
 // parse, and the human output TELLS THE TRUTH — especially when the truth is
 // "nobody established this".
 
+// cliRegistry is the canonical seat registry for a CLI test, derived from the store dir so
+// that every cli() call within ONE test shares it and no two tests share anything.
+//
+// It has to be injected, and that is the feature working rather than a wrinkle to route
+// around: the registry allows a scope exactly ONE store directory, every CLI test uses a
+// fresh temp dir, and they all run as the same OS account on the same machine — so a
+// shared registry would (correctly) refuse the second test in the process as a second seat.
+func cliRegistry(dir string) string { return dir + ".registry" }
+
 // cli runs `steward <args…>` against an isolated store and returns stdout.
 func cli(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
@@ -28,9 +37,14 @@ func cli(t *testing.T, dir string, args ...string) (string, error) {
 	// agent-detection happens to infer on the machine running the tests.
 	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/tester")
 	t.Setenv("BASHY_EPISODE", "ep-test")
-	// A fixed machine identity, so the suite does not depend on the box it runs on (and
-	// so a CI container with no /etc/machine-id does not fail closed on every test). It is
-	// the ONE identity input that is overridable by design — see HostIDEnv.
+	// A machine identity for the platforms where the OS has none to give (a CI container
+	// with no /etc/machine-id would otherwise fail closed on every test).
+	//
+	// It is a FALLBACK, not an override — see HostIDEnv. Where the OS does answer (macOS,
+	// a real Linux box), this is IGNORED and the tests run under the real machine id, which
+	// is exactly what the enforcement requires: a variable that could rename the machine
+	// could mint a second seat on it. What the tests depend on is that the id is STABLE
+	// within a run, and both paths give that.
 	t.Setenv("BASHY_HOST_ID", "cli-test-machine")
 	// `claim` exports the fencing token with a raw os.Setenv, which would otherwise
 	// survive into the NEXT test in this process and hand it a tenure it never took.
@@ -39,7 +53,7 @@ func cli(t *testing.T, dir string, args ...string) (string, error) {
 	// actual UX being tested (claim exports the epoch; later commands inherit it).
 	t.Setenv(EpochEnv, os.Getenv(EpochEnv))
 
-	cmd := NewStewardCmd()
+	cmd := NewStewardCmd(WithRegistryRoot(cliRegistry(dir)))
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -81,7 +95,7 @@ func apiStore(t *testing.T, dir string) *Store {
 	t.Setenv("BASHY_HOST_ID", "cli-test-machine")
 	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/tester")
 	t.Setenv("BASHY_EPISODE", "ep-test")
-	s, err := Open(dir, WithVerifier(verified()))
+	s, err := Open(dir, WithVerifier(verified()), WithRegistryRoot(cliRegistry(dir)))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -265,28 +279,54 @@ func TestCLIStatusJSONIsStable(t *testing.T) {
 	}
 }
 
-// …and `verify` is what closes it. This is the one promotion path in the whole CLI.
-func TestCLIVerifyIsTheOnlyThingThatReachesVerified(t *testing.T) {
+// NOTHING THE CLI CAN TYPE REACHES VERIFIED — and the CLI says so to the operator's face.
+//
+// This is the honest replacement for a test that used to assert the opposite. The CLI
+// injects no verification verifier (it has nothing that could go and check a claim), so on
+// this surface `verify --result success` RECORDS the check and promotes nothing. Every
+// route an agent would reach for is exercised here, and all of them land on asserted:
+// prose, a real digest over real bytes, and an arbitrary digest over bytes that never
+// existed.
+func TestCLIVerifyRecordsButCannotPromote(t *testing.T) {
 	dir := t.TempDir()
 	seedSeat(t, dir)
 	mustCLI(t, dir, "record", "-m", "shipped the migration", "--workstream", "api",
 		"--outcome", "success", "-e", "commit:de6485c")
 
-	// seq 1 is the claim, seq 2 the effect. The verification must bring bytes a skeptic
-	// can rehash — a `command:` reference is a pointer, and a pointer is not a check.
+	// seq 1 is the claim, seq 2 the effect.
 	digest := digestOf([]byte("ok 1 - all tests passed"))
 	out := mustCLI(t, dir, "verify", "--seq", "2", "--result", "success",
 		"--method", "re-ran the suite on a clean checkout", "-e", "file:/tmp/test.log#"+digest)
 	if !strings.Contains(out, "verification recorded") {
-		t.Fatalf("verify:\n%s", out)
+		t.Fatalf("the check is worth recording — the log is not the thing being defended:\n%s", out)
+	}
+	// And it must SAY it promoted nothing, here, where the operator is looking. A command
+	// that prints "verification recorded" and stops invites exactly the belief the package
+	// exists to refuse.
+	if !strings.Contains(out, "NOT PROMOTED") || !strings.Contains(out, "ASSERTED") {
+		t.Fatalf("verify must tell the operator what it was worth, rather than leaving them to "+
+			"discover it from a board they may never read:\n%s", out)
 	}
 
 	var env statusEnvelope
 	if err := json.Unmarshal([]byte(mustCLI(t, dir, "--json", "status")), &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Board.Workstreams[0].Confidence != ConfidenceVerified {
-		t.Fatalf("an attested claim must project as verified, got %q", env.Board.Workstreams[0].Confidence)
+	if got := env.Board.Workstreams[0].Confidence; got != ConfidenceAsserted {
+		t.Fatalf("a digest is INTEGRITY, not a check: it proves some bytes did not change and says nothing about "+
+			"whether anybody looked. Got %q, want asserted", got)
+	}
+
+	// An ARBITRARY digest — the version an agent would actually reach for, since nothing
+	// rehashes the evidence. Also asserted.
+	mustCLI(t, dir, "verify", "--seq", "2", "--result", "success",
+		"--method", "the suite passed, see the log",
+		"-e", "file:/tmp/never-existed.log#sha256:"+strings.Repeat("f", 64))
+	if err := json.Unmarshal([]byte(mustCLI(t, dir, "--json", "status")), &env); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.Board.Workstreams[0].Confidence; got != ConfidenceAsserted {
+		t.Fatalf("thirty-two bytes an agent typed must not promote a claim, got %q", got)
 	}
 
 	// A verification with no --method is the same trust-me claim it replaces.
@@ -295,13 +335,52 @@ func TestCLIVerifyIsTheOnlyThingThatReachesVerified(t *testing.T) {
 		t.Fatalf("verify must demand HOW it checked, got %v", err)
 	}
 
-	// …AND A METHOD ALONE IS NOT ENOUGH. This is the trust-me hole in the middle of the
-	// package's own thesis: `--method "I ran the tests"`, typed by an agent that did no
-	// such thing, used to produce exactly the same green VERIFIED row as the truth.
-	_, err = cli(t, dir, "verify", "--seq", "2", "--result", "success",
+	// Prose alone: recorded, and still asserted.
+	mustCLI(t, dir, "verify", "--seq", "2", "--result", "success",
 		"--method", "I definitely checked it, trust me")
-	if err == nil || !strings.Contains(err.Error(), "VERIFIES NOTHING") {
-		t.Fatalf("a verification backed only by prose must be refused, got %v", err)
+	if err := json.Unmarshal([]byte(mustCLI(t, dir, "--json", "status")), &env); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.Board.Workstreams[0].Confidence; got != ConfidenceAsserted {
+		t.Fatalf("a sentence must not promote a claim, got %q", got)
+	}
+}
+
+// …and when the HOST injects something that CAN check a claim, the very same command
+// promotes it. The enforcement point is the only thing that changed; the CLI did not.
+func TestCLIVerifyPromotesWhenTheHostInjectsAVerifier(t *testing.T) {
+	dir := t.TempDir()
+	seedSeat(t, dir)
+	mustCLI(t, dir, "record", "-m", "shipped the migration", "--workstream", "api",
+		"--outcome", "success", "-e", "commit:de6485c")
+
+	// A host mounting `steward` with a real verification verifier — a CI adapter, a signing
+	// service — is the ONLY difference between this test and the one above.
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := NewStewardCmd(WithRegistryRoot(cliRegistry(dir)), WithVerificationVerifier(sealing()))
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetIn(strings.NewReader(""))
+		cmd.SetArgs(append([]string{"--dir", dir}, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("steward %s: %v\n%s", strings.Join(args, " "), err, out.String())
+		}
+		return out.String()
+	}
+
+	out := run("verify", "--seq", "2", "--result", "success", "--method", "asked the CI system")
+	if strings.Contains(out, "NOT PROMOTED") {
+		t.Fatalf("a trusted verifier vouched for this one:\n%s", out)
+	}
+
+	var env statusEnvelope
+	if err := json.Unmarshal([]byte(run("--json", "status")), &env); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.Board.Workstreams[0].Confidence; got != ConfidenceVerified {
+		t.Fatalf("a seal a trusted verifier issued and still recognizes IS what verified means, got %q", got)
 	}
 }
 
@@ -657,7 +736,7 @@ func TestCLIWarnsAboutACorruptTail(t *testing.T) {
 	mustCLI(t, dir, "record", "-m", "real work", "--workstream", "api",
 		"--outcome", "success", "-e", "commit:abc")
 
-	s, err := Open(dir)
+	s, err := Open(dir, WithRegistryRoot(cliRegistry(dir)))
 	if err != nil {
 		t.Fatal(err)
 	}

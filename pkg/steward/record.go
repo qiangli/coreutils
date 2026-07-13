@@ -4,6 +4,7 @@
 package steward
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -67,31 +68,44 @@ func (s *Store) Decide(actor principal.Ref, epoch uint64, workstream, summary, r
 // Attest records a VERIFICATION: somebody went and checked an earlier entry's claim,
 // and this is the durable attestation of what they found.
 //
-// This is the ONLY thing that promotes a claim to "verified" on the board. Evidence on
+// This is the ONLY thing that can promote a claim to "verified" on the board. Evidence on
 // the original entry is a POINTER — "go look at commit de6485c", "I ran go test" — and a
 // pointer is not a check. An agent can attach a plausible reference to a claim it never
 // made true, and the reference will look exactly like one attached to a claim that is.
 //
-// AND A VERIFICATION IS NOT A SENTENCE ABOUT A CHECK. The previous revision demanded a
-// --method string and then promoted the claim on the strength of it, which moved the
-// trust-me claim one entry down the log and promoted it there instead: an agent that
-// would write "done ✅" with no evidence will just as happily write `verify --method "re-ran
-// the suite"`, and the board turned that prose into a green VERIFIED row. The check was
-// a spelling test.
+// BUT RECORDING A VERIFICATION IS NOT THE SAME AS EARNING ONE, and separating those two is
+// what this revision fixes. Two previous attempts both let the CALLER supply the thing that
+// promoted its own claim:
 //
-// So a PROMOTING verification must bring something enforceable (see
-// Verification.Enforceable):
+//	--method "re-ran the suite"      prose. An agent that would claim success it did not
+//	                                 earn will write a sentence it did not run.
+//	-e file:x#sha256:…               a digest. It proves bytes did not CHANGE; it says
+//	                                 nothing about whether a check RAN. Nothing rehashes it
+//	                                 at promotion time, so any 32 bytes did.
+//	Verification.Adapter             a public struct with Approved and Grade fields. The
+//	                                 caller filled in its own credential.
 //
-//   - digest-bound evidence — bytes a skeptic can go and rehash, and that cannot be
-//     swapped afterwards, or
-//   - an Adapter attestation from a trusted verification adapter the HOST injected,
-//     which is rooted outside the store the agent can write to.
+// So promotion is rooted where authority already is: in a VerificationVerifier the HOST
+// injects (WithVerificationVerifier), which this method ASKS, and whose Seal the board
+// later RE-CHECKS with that same verifier. A caller cannot implement it, name it in a
+// config file, or write it to disk. See verification.go.
 //
-// A REFUTING or INCONCLUSIVE verification needs neither, and the asymmetry is the whole
-// ethic of this package: degradation travels one way. We demand credentials to become
-// more confident and never to become less, because the cost of a false "verified" is
+// What Attest does with the answer:
+//
+//	no verifier injected     records the check, UNSEALED. The board says asserted, which
+//	                         is what an unverified claim is. Fail-closed by default.
+//	verifier cannot say      records the check, UNSEALED. Same as above — this is the floor,
+//	                         not a new hole.
+//	verifier REFUTES it      REFUSES to record it as a success (ErrRefuted). A claim the one
+//	                         trusted party actively refuted must not enter the log wearing a
+//	                         success label. Record it as --result failed instead.
+//	verifier vouches         records the check WITH the Seal. This, and only this, promotes.
+//
+// A REFUTING or INCONCLUSIVE verification needs no credential at all, and the asymmetry is
+// the whole ethic of this package: degradation travels one way. We demand credentials to
+// become more confident and never to become less, because the cost of a false "verified" is
 // unbounded and the cost of a false "refuted" is a second look.
-func (s *Store) Attest(actor principal.Ref, epoch uint64, v Verification, evidence []Evidence, now time.Time) (Entry, error) {
+func (s *Store) Attest(ctx context.Context, actor principal.Ref, epoch uint64, v Verification, evidence []Evidence, now time.Time) (Entry, error) {
 	now = mustUTC(now)
 	var out Entry
 	err := s.withLock(func() error {
@@ -107,6 +121,14 @@ func (s *Store) Attest(actor principal.Ref, epoch uint64, v Verification, eviden
 		if _, err := authorize(rep, actor, epoch); err != nil {
 			return err
 		}
+
+		// A SEAL IS MINTED HERE, NEVER ACCEPTED. A caller arriving with one already set is
+		// writing its own credential for its own claim — the exact move this file exists to
+		// refuse — so it is rejected loudly rather than quietly overwritten.
+		if v.Seal != nil {
+			return &ErrSealSupplied{TargetSeq: v.TargetSeq}
+		}
+
 		target, ok := entryBySeq(rep.Entries, v.TargetSeq)
 		if !ok {
 			return fmt.Errorf("steward: cannot verify seq %d — no such entry in the journal", v.TargetSeq)
@@ -141,20 +163,15 @@ func (s *Store) Attest(actor principal.Ref, epoch uint64, v Verification, eviden
 			Verifies: &v,
 		}
 
-		// THE GATE ON PROMOTION. A success that would turn a strand green must bring
-		// something checkable; failure and unknown pass freely, because they take
-		// confidence away rather than granting it.
-		if v.Result == OutcomeSuccess && !v.Enforceable(e) {
-			return fmt.Errorf("steward: refusing to record a verification that VERIFIES NOTHING.\n"+
-				"You attested that seq %d succeeded, and the only thing backing it is the sentence %q. That is the same "+
-				"trust-me claim a verification is supposed to replace — an agent that would claim success it did not "+
-				"earn will write a method string it did not run, and the board would promote it to VERIFIED either way.\n"+
-				"A verification that promotes must bring one of:\n"+
-				"  - digest-bound evidence, which a skeptic can rehash:\n"+
-				"      steward verify --seq %d --result success --method %q -e 'file:/tmp/test.log#sha256:<digest>'\n"+
-				"  - an attestation from a trusted verification adapter the host injected (Verification.Adapter).\n"+
-				"Recording that the check FAILED or was INCONCLUSIVE needs neither: doubt is free, confidence is not.",
-				v.TargetSeq, v.Method, v.TargetSeq, v.Method)
+		// THE PROMOTION GATE. Only a success can promote, so only a success is put in front
+		// of the trusted verifier; failure and unknown pass straight through, because they
+		// take confidence away rather than granting it.
+		if v.Result == OutcomeSuccess {
+			seal, err := s.mintSeal(ctx, e, epoch, target)
+			if err != nil {
+				return err // the verifier went and looked, and refuted it — see ErrRefuted
+			}
+			v.Seal = seal // nil when nothing trusted could vouch: recorded, not promoted
 		}
 
 		stored, err := s.appendAuthorized(rep, e, epoch, now)
@@ -174,6 +191,18 @@ func entryBySeq(entries []Entry, seq uint64) (Entry, bool) {
 		}
 	}
 	return Entry{}, false
+}
+
+// entriesBySeq indexes the journal so a projection can find the entry a verification
+// vouched for without rescanning per verification. The zero Entry for an unknown seq is
+// deliberate and safe: a seal re-checked against an empty target cannot match the claim it
+// was minted for, so a dangling verification promotes nothing.
+func entriesBySeq(entries []Entry) map[uint64]Entry {
+	m := make(map[uint64]Entry, len(entries))
+	for _, e := range entries {
+		m[e.Seq] = e
+	}
+	return m
 }
 
 // Transcript stores an OPTIONAL, non-authoritative conversation artifact and records

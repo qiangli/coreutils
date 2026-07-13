@@ -63,6 +63,23 @@ mutate your repo.
 > control is only as good as the thing it is rooted in — and that "the agent could just
 > write the file" is a sentence you have to say out loud about your own design, not only
 > about somebody else's.**
+>
+> **A third pass found that the second pass's fixes had the same disease**, and those are
+> marked **[revised 3]**. The rhyme is now impossible to miss:
+>
+> - Promotion was moved off the `--method` sentence… onto a **digest the agent chooses** and
+>   an **`Approved: true` struct the agent fills in**. Still the agent's own credential for
+>   the agent's own claim.
+> - The seat was keyed to the OS machine id… with an **environment variable consulted first**,
+>   so the agent could rename the machine and get a fresh seat.
+> - Each store was bound to its seat… and the agent could open **as many stores as it liked**
+>   with `--dir`, each binding itself to that same seat.
+> - The repair was made atomic… and then **reported as a failure after it had committed**.
+>
+> **The lesson of the third pass: it is not enough to ask what a control is rooted in. You
+> have to ask who can *write the root* — and, for anything read back off disk, who can write
+> the thing you check it against.** A control whose evidence lives in a file the agent owns is
+> a control the agent owns, however many layers of indirection sit in between.
 
 ### One seat per machine and OS account — and neither comes from the environment **[revised 2]**
 
@@ -85,18 +102,62 @@ Identity now comes from the OS:
 | **account** | the numeric **UID** (unix); the account **SID**, read from this process's token (Windows). Never an env var. |
 | **machine** | `/etc/machine-id` (linux), `kern.uuid` via sysctl (darwin), `kern.hostuuid` (freebsd), the `MachineGuid` registry value (Windows) — read by syscall, never by shelling out. |
 
-Where the OS offers no stable machine id, the seat **fails closed** (`ErrNoStableIdentity`)
-and names `$BASHY_HOST_ID` as the fix. The tempting fallback — generate an id and persist it
-under `$HOME` — is exactly wrong: a shared home is the case machine identity exists to
-*detect*, and an id stored there would travel with the home directory to every machine
-mounting it, handing all of them the same seat. That is the failure, wearing the costume of
-the fix.
+Where the OS offers no stable machine id — and **only** there — `$BASHY_HOST_ID` names it.
+Where the OS *does* answer, the variable is **ignored**.
 
-The store also carries a **binding** to the identity it was born under and refuses to be
-opened from another machine or account (`ErrScopeMismatch`) — because a store directory is a
-*path*, and a path can be pointed at deliberately (`--dir`), carried by a synced home, or
-restored from a backup onto the wrong box. `ScopeProvider` makes all of this injectable, so
-the isolation is *tested* rather than asserted.
+> **[revised 3]** This used to be backwards: the variable was consulted *first*, so
+> `BASHY_HOST_ID=elsewhere bashy steward claim` resolved to a different scope digest, hence a
+> different store, a different epoch ladder, and a **fresh vacant seat for the asking**. An
+> agent that did not like the steward it found could simply declare itself to be on another
+> computer. That is the same class of hole as the `USER=root` trick this section was written
+> to close, reintroduced by the escape hatch meant to make it usable. A machine identity a
+> process can *choose* is not one.
+
+With neither an OS id nor the fallback, the seat **fails closed** (`ErrNoStableIdentity`).
+The tempting alternative — generate an id and persist it under `$HOME` — is exactly wrong: a
+shared home is the case machine identity exists to *detect*, and an id stored there would
+travel with the home directory to every machine mounting it, handing all of them the same
+seat. That is the failure, wearing the costume of the fix. A host that must resolve identity
+its own way has a trusted, in-process hook (`WithScopeProvider`) that an agent cannot reach
+by exporting anything.
+
+### One seat, one store — and `--dir` does not get a vote **[revised 3]**
+
+The store carries a **binding** to the identity it was born under and refuses to be opened
+from another machine or account (`ErrScopeMismatch`). That is `dir → scope`: *this directory
+belongs to that seat*.
+
+It is **half** the singleton, and the missing half was an open door. Nothing enforced
+`scope → dir`: *that seat lives in exactly one directory*. So:
+
+```bash
+bashy steward --dir /tmp/mine claim          # a fresh store…
+BASHY_STEWARD_DIR=/tmp/mine bashy steward claim
+```
+
+got a brand-new store, which cheerfully bound **itself** to the very same seat, minted its
+own epoch ladder from an empty journal, and handed over the seat. Two stewards on one host,
+each holding epoch 1, neither able to see the other, **neither fenced** — because fencing
+compares epochs *within one journal* and there were now two. The singleton the whole package
+exists to guarantee was defeated by a flag.
+
+So the mapping is made canonical. A **seat registry** (`registry.go`), kept *outside* every
+store and keyed by the scope digest, records the ONE directory each seat lives in:
+
+| | |
+|---|---|
+| **rejects** | any other directory, for `--dir`, `$BASHY_STEWARD_DIR`, and a plain `Open` alike (`ErrScopeDirConflict`) |
+| **serializes** | first-bind, under a per-scope lock — two processes racing cannot both win |
+| **revalidates** | before **every mutation**, so a handle whose seat was rebound behind its back is refused at its next write rather than journaling into an orphan |
+| **isolates** | a shared home: entries are keyed by *machine*, so two boxes mounting one `$HOME` still get two seats |
+| **injectable** | `WithRegistryRoot`, for hermetic tests and for an embedder migrating a host's stores. Deliberately **not** an env var or a flag — a registry the agent can redirect is not a registry |
+
+**What it is not worth.** An agent with write access can delete the registry entry, just as
+it can delete the journal. Nothing rooted in the filesystem survives an attacker who owns the
+filesystem, and this package will not pretend otherwise. What the registry buys is that the
+singleton is now *enforced* rather than merely intended: reaching a second store takes a
+deliberate, destructive, evidence-leaving act instead of an ordinary flag — and the loser
+finds out at its next write.
 
 ### One journal. Everything else is a projection.
 
@@ -193,45 +254,73 @@ The board therefore has four rungs, and only one act climbs the last one:
 | `unknown` | success claimed with **nothing** to point at |
 | `degraded` | an outcome self-declared as degraded |
 | `asserted` | success claimed **with references nobody has checked** — the ordinary state of honest work |
-| `verified` | a `verification` entry: somebody went and **looked** |
+| `verified` | a `verification` **sealed by a host-injected verifier** that went and looked — and that still recognizes its own seal when the board is projected |
 | `refuted` | somebody looked, and the claim was **false** |
 
-`steward verify --seq N` is the only thing that reaches `verified`. It binds to the
-target's **hash**, not merely its sequence number — an attestation must name the exact
-bytes it vouched for, or it is an attestation of whatever ends up at that seq.
+A `verification` entry is the only thing that can reach `verified`. It binds to the target's
+**hash**, not merely its sequence number — an attestation must name the exact bytes it
+vouched for, or it is an attestation of whatever ends up at that seq.
 
-#### A method string is prose, and prose promotes nothing **[revised 2]**
+#### Nothing the caller can write promotes a claim **[revised 3]**
 
-The first revision required `--method` and then **promoted the claim on the strength of
-it**. Read that next to the argument above and the hole is obvious: an agent that would
-write `--outcome success` it had not earned will just as happily write `--method "re-ran
-the suite on a clean checkout"` it had not run — the sentence costs the same either way —
-and the board turned it into a green **VERIFIED** row.
+Three revisions have now put a lock on this door, and the first two locks could be opened
+from the inside. Each time, the agent supplied **both the claim and the credential that
+vouched for it**:
 
-The trust-me claim was not eliminated. It was **moved one entry down the log and promoted
-there instead**, and the check that supposedly replaced it was a spelling test.
+| What promoted | Why it was worthless |
+|---|---|
+| `--method "re-ran the suite"` | An agent that would write `--outcome success` it had not earned will just as happily write a method string it did not run. The sentence costs the same either way. |
+| `-e 'file:/tmp/test.log#sha256:…'` | A digest proves **integrity**, not that a check ran: it says some bytes did not change and nothing about whether anybody looked. And since nothing rehashes the evidence at promotion time, **thirty-two arbitrary bytes did just as well** — the file need not exist. |
+| `Verification.Adapter` | A *public* `*Attestation` with `Approved` and `Grade` fields, described in its own doc comment as "a trusted verification adapter's attestation." Nothing made it one. The caller filled it in: `Approved: true, Grade: verified`. |
 
-So a verification that **promotes** must bring something a skeptic can actually check:
+None of those eliminated the trust-me claim. Each **relocated it one field sideways and
+promoted it there**.
 
-- **digest-bound evidence** — `-e 'file:/tmp/test.log#sha256:…'`: bytes that exist, that can
-  be rehashed, and that cannot be quietly swapped afterwards. The weakest thing that is not
-  nothing.
-- **a trusted verification adapter** — an attestation from an adapter the *host* injected (a
-  CI adapter that asked the CI system, a git adapter that looked at the commit), rooted
-  outside the store the agent can write to. The strong form, and the one that means what
-  "verified" sounds like.
+So promotion now rests on the one thing an agent cannot produce: **an interface it does not
+implement.** A `VerificationVerifier`, injected by the *host* (`WithVerificationVerifier`) —
+a CI adapter that asks the CI system, a git adapter that looks at the commit, a signing
+service the agent holds no key for — goes and establishes the claim, and **seals** it.
 
-`--method` survives, because a human reading the log wants it and a check nobody can even
-describe is not one. It just does not **decide** anything.
+And it is asked **twice**. Once at `Attest`, to mint the seal; once again **at projection**,
+to re-check the seal that came back off disk. The second ask is the load-bearing one: the
+journal is a file on the agent's filesystem, so a seal read out of it is just bytes the agent
+could have typed. Only the verifier can say whether the seal is one **it** issued, **for this
+claim** — so a hand-written seal fails, and a genuine seal *lifted off another verification*
+fails too, because the token commits to the claim.
 
-**Refuting needs neither.** `--result failed` moves a claim backwards with no credential at
-all, and the board believes it. Degradation travels one way: we demand evidence to become
-more confident and never to become less, because the cost of a false `verified` is unbounded
-and the cost of a false `refuted` is a second look.
+```
+Seal.Approved, Seal.Grade   descriptive. A forger sets these to anything. They decide nothing.
+Seal.Token                  opaque, and the whole seal. Only the verifier can produce it,
+                            and only the verifier can recognize it.
+```
 
-Both locks are real — `Attest` refuses to *write* an unenforceable success, and
-`ProjectBoard` refuses to *promote* one it finds in the journal. The projection is a pure
-function of the log, so it must be able to grade a record it did not write.
+**With no verifier injected, nothing is ever promoted.** Checks are still recorded in full —
+the log keeps its value, `--method` and `-e` are there for a human to read and rehash — and
+the board reports the strand as `asserted`, which is what an unverified claim *is*. The CLI
+injects none (it has nothing that could go and check a claim), so it says so out loud:
+
+```
+$ bashy steward verify --seq 7 --result success --method "re-ran the suite" -e file:/tmp/t.log#sha256:9f2c…
+verification recorded: seq 8 attests to seq 7 (success)
+  NOT PROMOTED: the board still reports this strand as ASSERTED, not verified.
+  No trusted verification verifier is injected on this surface, so nothing here could
+  establish that the claim came true — your method and evidence are recorded and
+  auditable, and they promote nothing. A host wires one with WithVerificationVerifier.
+```
+
+That is not a disappointment; it is a host with nothing that can check a claim, declining to
+produce a green row about one.
+
+**Refuting needs no credential at all.** `--result failed` moves a claim backwards with
+nothing attached, and the board believes it. Degradation travels one way: we demand evidence
+to become more confident and never to become less, because the cost of a false `verified` is
+unbounded and the cost of a false `refuted` is a second look. (A verifier that goes and looks
+and finds the claim **false** blocks recording it as a *success* — `ErrRefuted`. A refuted
+claim must not enter the log wearing a success label.)
+
+Both locks are real — `Attest` mints the seal, and `ProjectBoard` re-checks it. The
+projection is a pure function of the log, so it must be able to grade a record it did not
+write, including one that reached the journal without ever passing through `Attest`.
 
 Most healthy hosts sit at `asserted`, and `steward reconcile` grades that **degraded**
 rather than `ok`. That is not pessimism — it is the whole point. Calling a pile of
@@ -655,6 +744,25 @@ system.
   the **committed seq and epoch** and saying plainly: do not retry. Recovery is an
   **idempotent** `steward heartbeat --epoch N`, which rebuilds the cache from the journal.
   Fault-injection tests (`seat.write`, `seat.remove` failpoints) pin every one.
+
+- **…and so does a committed *repair*. [revised 3]** The rule above was stated for the seat
+  and then not applied to the one operation with the most to lose. **The atomic rename is the
+  commit**: once `writeBytesAtomic` returns, the repaired-and-receipted journal *is* the
+  journal, for every reader, at every instant, including one arriving after a power cut.
+
+  But the failpoint and the read-back that follow it returned **bare errors with an empty
+  `RepairResult`**. A caller handed `RepairResult{}, err` reasonably concludes the repair did
+  not happen — and retries. The retry replays against a journal that is **already repaired**,
+  finds it intact, and reports *"nothing to repair."* So the operator is told, in sequence,
+  that the repair failed and that there was never anything wrong with the journal. Both are
+  false, and the second is the kind that **ends an investigation**.
+
+  Now the result is populated at the instant of commit, and every later failure returns
+  `ErrCommitted{Op: "repair"}` with the seq, the epoch, and the cause. The **remedy is
+  operation-specific**, because the fixed sentence the previous revision printed
+  (*"run `steward heartbeat`"*) was confident, specific, and wrong for a repair: a repair is
+  not rebuilt by a heartbeat — it is already whole. What failed is the step that *confirms*
+  it, so the advice is to go and **look**: `steward reconcile`, a pure read.
 
 - **Schema-versioned artifacts.** Every journal entry, seat file, grant, checkpoint, board,
   and reconciliation carries `bashy-steward-v1`. A **mismatch is never tolerated** on the

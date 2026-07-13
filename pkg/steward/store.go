@@ -39,9 +39,18 @@ type Store struct {
 	scope Scope
 	// scopeProvider resolves that identity. Injectable so the isolation can be tested.
 	scopeProvider ScopeProvider
-	// verifier is the injected root of trust. Nil means every authority transition
-	// fails closed — see verifier.go, which is the argument for why that is right.
+	// verifier is the injected root of trust for AUTHORITY. Nil means every authority
+	// transition fails closed — see verifier.go, which is the argument for why that is right.
 	verifier Verifier
+	// vverifier is the injected root of trust for PROMOTION. Nil means no verification
+	// ever promotes a claim to verified: the check is recorded, the board says asserted.
+	// See verification.go.
+	vverifier VerificationVerifier
+	// registryRoot is where the canonical scope→store registry lives. It is INDEPENDENT
+	// of dir on purpose: a registry kept inside the store it governs could be escaped by
+	// pointing --dir somewhere else, which is the entire hole it exists to close. See
+	// registry.go. Empty means the default (~/.bashy/steward/registry).
+	registryRoot string
 	// maxTranscript bounds transcript artifacts; overridable for tests.
 	maxTranscript int64
 }
@@ -69,6 +78,34 @@ func WithVerifier(v Verifier) Option {
 	return func(s *Store) { s.verifier = v }
 }
 
+// WithVerificationVerifier injects the root of trust for PROMOTION — the thing that
+// decides whether a verification may turn a strand VERIFIED on the board.
+//
+// Same argument as WithVerifier, applied to the other half of the package. A host that can
+// actually establish whether work came true — a CI adapter, a git adapter, a signing
+// service the agent holds no key for — implements VerificationVerifier and passes it here.
+// WITHOUT IT, NOTHING IS EVER PROMOTED: checks are recorded in full, and the board reports
+// them as asserted, which is what an unverified claim is. See verification.go.
+func WithVerificationVerifier(v VerificationVerifier) Option {
+	return func(s *Store) { s.vverifier = v }
+}
+
+// WithRegistryRoot overrides where the canonical scope→store registry lives.
+//
+// The registry is what enforces ONE STORE PER OS SCOPE no matter what directory was asked
+// for (see registry.go), so its location must not be reachable from the same knobs the
+// data dir is — there is deliberately no env var and no flag for it. This hook exists for
+// two callers: TESTS, which need it hermetic rather than rooted in the developer's real
+// home, and an EMBEDDER migrating a host's stores, which needs to say where the registry
+// it is rebuilding actually is.
+func WithRegistryRoot(dir string) Option {
+	return func(s *Store) {
+		if dir != "" {
+			s.registryRoot = dir
+		}
+	}
+}
+
 // WithScopeProvider overrides how the seat's identity is resolved.
 //
 // The default reads the OS: a stable machine id and the process's real OS account. This
@@ -94,9 +131,25 @@ func WithScope(id string) Option {
 // Open prepares the store directory. The journal records what an agent did across
 // every project on the host, so it is owner-only (0700/0600) like the audit log.
 //
-// It RESOLVES and BINDS the seat's identity (see scope.go): a store that was born on
-// another machine or under another OS account is refused here, before anything can read
-// or write it.
+// It resolves the seat's identity and then enforces the singleton TWICE, because one
+// check was not enough and the gap between them was a hole:
+//
+//	REGISTRY (scope → dir)  a canonical, per-OS-scope record, kept OUTSIDE any store, of
+//	                        the ONE directory this seat lives in. It is what stops --dir,
+//	                        $BASHY_STEWARD_DIR, or Open("/tmp/elsewhere") from minting a
+//	                        SECOND steward for a scope that already has one. See registry.go.
+//	BINDING (dir → scope)   the store's own record of whose seat it is, so a store carried
+//	                        onto another machine in a synced home or a restored backup is
+//	                        refused rather than adopted. See scope.go.
+//
+// The previous revision had only the second. It made every store say which seat it
+// belonged to, and then let an agent open as many of them as it liked: `--dir /tmp/mine`
+// bound a fresh store to the very same scope, and the host now had two journals, two
+// epoch ladders, and two stewards that could not see each other — the exact failure the
+// seat exists to prevent, reached by a flag.
+//
+// Both binds happen under ONE canonical lock, so two processes racing to first-bind a
+// scope cannot both win.
 func Open(dir string, opts ...Option) (*Store, error) {
 	s := &Store{maxTranscript: MaxTranscriptBytes, scopeProvider: OSScope{}}
 	for _, o := range opts {
@@ -116,15 +169,35 @@ func Open(dir string, opts ...Option) (*Store, error) {
 			return nil, err
 		}
 	}
-	s.dir = dir
+	// Canonicalize before anything compares it. "~/.bashy/steward/x", "./x" from the right
+	// cwd, and "x/../x" are one directory, and a registry that compared them as strings
+	// would hand out a second seat to whoever spelled the path differently.
+	if s.dir, err = canonicalDir(dir); err != nil {
+		return nil, err
+	}
 
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return nil, fmt.Errorf("steward: store dir: %w", err)
 	}
-	if err := s.bindScope(); err != nil {
+	if err := s.withRegistryLockOpen(s.revalidateBindings); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// canonicalDir resolves a store path to the one string everything else compares.
+// Symlinks are followed where they resolve (macOS's /var → /private/var is the standard
+// case, and it is why a naive Abs is not enough); a path that does not exist yet is
+// merely absolute-ized, since there is nothing to resolve.
+func canonicalDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("steward: store dir %q: %w", dir, err)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	return abs, nil
 }
 
 func (s *Store) Dir() string       { return s.dir }
@@ -156,19 +229,37 @@ func (s *Store) HasVerifier() bool { return s.verifier != nil }
 // that must not retry check for this type. The journal is fine either way — which is the
 // point of putting the authority in exactly one place.
 type ErrCommitted struct {
-	Op    string // "claim", "takeover", "record", "release", …
+	Op    string // "claim", "takeover", "record", "release", "repair", …
 	Seq   uint64 // the journal seq that WAS committed (0 if the op appends nothing)
 	Epoch uint64 // the epoch it was committed under
 	Cause error  // what failed AFTER the commit
+
+	// Remedy says how to rebuild whatever derived state is stale, in the caller's own
+	// terms. It is a FIELD rather than a fixed sentence because the operations that can
+	// reach this state fail in different places and are recovered differently: a stale
+	// liveness cache is rebuilt by a heartbeat, whereas a repair that committed and then
+	// could not be read back needs a human to look at the journal, not a heartbeat. The
+	// previous revision printed the heartbeat advice unconditionally, which for a repair
+	// was confident, specific, and wrong.
+	Remedy string
+}
+
+// remedyHeartbeat is the recovery for the common case: the append landed, the derived
+// seat.json did not. A heartbeat reconstructs it from the journal and is idempotent.
+func remedyHeartbeat(epoch uint64) string {
+	return fmt.Sprintf("What is stale is the liveness cache, which is derived and rebuildable: run "+
+		"`steward heartbeat --epoch %d`, which reconstructs it from the journal and is safe to repeat.", epoch)
 }
 
 func (e *ErrCommitted) Error() string {
-	return fmt.Sprintf("steward: %s WAS COMMITTED to the journal (seq %d, epoch %d) — but the derived state that "+
-		"follows it could not be written: %v.\n"+
+	s := fmt.Sprintf("steward: %s WAS COMMITTED to the journal (seq %d, epoch %d) — but the work that follows it did "+
+		"not complete: %v.\n"+
 		"DO NOT RETRY IT. The journal is the authority and it already holds this operation; retrying would append it a "+
-		"second time. What is stale is the liveness cache, which is derived and rebuildable: run "+
-		"`steward heartbeat --epoch %d`, which reconstructs it from the journal and is safe to repeat.",
-		e.Op, e.Seq, e.Epoch, e.Cause, e.Epoch)
+		"second time.", e.Op, e.Seq, e.Epoch, e.Cause)
+	if e.Remedy != "" {
+		s += "\n" + e.Remedy
+	}
+	return s
 }
 
 func (e *ErrCommitted) Unwrap() error { return e.Cause }
@@ -178,10 +269,15 @@ func (e *ErrCommitted) Committed() (seq, epoch uint64) { return e.Seq, e.Epoch }
 
 // committed wraps a post-append failure, or returns nil if there was none.
 func committed(op string, seq, epoch uint64, err error) error {
+	return committedWith(op, seq, epoch, err, remedyHeartbeat(epoch))
+}
+
+// committedWith is committed with an operation-specific recovery.
+func committedWith(op string, seq, epoch uint64, err error, remedy string) error {
 	if err == nil {
 		return nil
 	}
-	return &ErrCommitted{Op: op, Seq: seq, Epoch: epoch, Cause: err}
+	return &ErrCommitted{Op: op, Seq: seq, Epoch: epoch, Cause: err, Remedy: remedy}
 }
 
 // failpoint is a test hook for crash simulation, and it is a no-op in production.
@@ -220,18 +316,35 @@ func (s *Store) quarantineDir() string { return filepath.Join(s.dir, "quarantine
 // rather than proceeding unserialized (TestUnsupportedLockFailsEveryMutationClosed).
 var lockAcquire = lockFile
 
+// withLock serializes a mutation, and REVALIDATES the seat's bindings first.
+//
+// Two locks, always in this order — canonical registry, then store — so two mutations can
+// never deadlock by taking them in opposite orders.
+//
+// The revalidation is the part that is easy to leave out and expensive to omit. Open()
+// checks the bindings once, and a Store is a long-lived object: an agent that opened
+// legitimately and then rewrote the registry (or the store's scope.json, or moved the
+// directory out from under itself) would keep writing through a handle whose authority was
+// checked minutes ago against a world that no longer exists. So every mutation re-reads
+// both bindings UNDER THE CANONICAL LOCK, where nothing can change them while it looks. A
+// check that is not re-taken at the moment of the write is a check that races.
 func (s *Store) withLock(fn func() error) error {
-	f, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("steward: lock: %w", err)
-	}
-	defer f.Close()
-	unlock, err := lockAcquire(f)
-	if err != nil {
-		return fmt.Errorf("steward: lock: %w", err)
-	}
-	defer unlock()
-	return fn()
+	return s.withRegistryLock(func() error {
+		if err := s.revalidateBindings(); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(s.lockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return fmt.Errorf("steward: lock: %w", err)
+		}
+		defer f.Close()
+		unlock, err := lockAcquire(f)
+		if err != nil {
+			return fmt.Errorf("steward: lock: %w", err)
+		}
+		defer unlock()
+		return fn()
+	})
 }
 
 // Replay walks the journal and returns the valid prefix plus an honest account of

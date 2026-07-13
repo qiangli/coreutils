@@ -5,7 +5,11 @@ package steward
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,9 +82,121 @@ func testScope(id string) ScopeProvider {
 	})
 }
 
+// TestMain pins $HOME to a throwaway directory for the whole package.
+//
+// This is a HERMETICITY BACKSTOP, not a convenience. Two things in this package now fall
+// back to the home directory when nothing overrides them — the default store dir and, more
+// to the point, the CANONICAL SEAT REGISTRY (registry.go) — and a test that forgets to
+// inject a root would otherwise write a binding into the developer's real ~/.bashy and
+// then, being a singleton, refuse the NEXT test that tried. The failure would be real, the
+// cause would be invisible, and the litter would outlive the run.
+//
+// Individual tests still pass WithRegistryRoot where they need stores isolated from each
+// other WITHIN one test; this is the floor underneath that, so a missing option is a
+// contained bug rather than a contaminated machine.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "steward-test-home-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HOME", home)        // unix
+	os.Setenv("USERPROFILE", home) // windows
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
+// ─── the trusted verification verifier, faked honestly ────────────────────────
+//
+// sealingVerifier is what a HOST supplies: something that can actually go and look, and
+// that seals its verdict with a token only it can produce and only it can recognize.
+//
+// The token is an HMAC over the CANONICAL CLAIM, keyed by a secret the "agent" (the test's
+// caller) does not have. That is not decoration — it is the property the whole design rests
+// on, and it is what makes the adversarial tests below mean something:
+//
+//   - a caller cannot MINT one (it has no key), so a hand-written Seal fails RecheckSeal;
+//   - a token cannot be MOVED to another claim (the claim is inside the MAC), so lifting a
+//     real seal off one verification and pasting it onto another fails too.
+//
+// A real one asks a CI system or checks a signature. The shape is the same: an answer the
+// agent's filesystem cannot fabricate.
+type sealingVerifier struct {
+	name   string
+	key    string
+	admits map[uint64]bool // which target seqs it will vouch for; nil ⇒ all
+	refute bool            // it went and looked, and the claim is FALSE
+	err    error           // it could not establish the claim either way
+	calls  []VerificationClaim
+}
+
+func (v *sealingVerifier) Name() string {
+	if v.name == "" {
+		return "test-seal-verifier"
+	}
+	return v.name
+}
+
+// canonical is the exact byte string the token commits to. Everything that identifies the
+// claim goes in; nothing that does not.
+func (v *sealingVerifier) canonical(c VerificationClaim) string {
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s",
+		c.Workstream, c.Actor.Name, c.Epoch, c.TargetSeq, c.TargetHash, c.Result)
+}
+
+func (v *sealingVerifier) mac(c VerificationClaim) string {
+	key := v.key
+	if key == "" {
+		key = "test-key"
+	}
+	m := hmac.New(sha256.New, []byte(key))
+	m.Write([]byte(v.canonical(c)))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+func (v *sealingVerifier) VerifyClaim(_ context.Context, c VerificationClaim) (Seal, error) {
+	v.calls = append(v.calls, c)
+	if v.err != nil {
+		return Seal{}, v.err
+	}
+	if v.refute {
+		return Seal{Verifier: v.Name(), Grade: GradeVerified, Approved: false, Why: "the claim is false"}, nil
+	}
+	if v.admits != nil && !v.admits[c.TargetSeq] {
+		return Seal{}, fmt.Errorf("this verifier cannot speak to seq %d", c.TargetSeq)
+	}
+	return Seal{
+		Verifier: v.Name(),
+		Grade:    GradeVerified,
+		Approved: true,
+		Why:      "went and looked",
+		Binding:  digestOf([]byte(v.canonical(c))),
+		Token:    v.mac(c),
+	}, nil
+}
+
+func (v *sealingVerifier) RecheckSeal(c VerificationClaim, s Seal) bool {
+	return s.Token != "" && hmac.Equal([]byte(s.Token), []byte(v.mac(c)))
+}
+
+// sealing is a verifier that vouches for everything it is asked about.
+func sealing() *sealingVerifier { return &sealingVerifier{} }
+
+// newStore opens a hermetic store.
+//
+// WithRegistryRoot is not optional here, and the reason is the feature. Every store in
+// this suite shares one scope ("test-seat"), and the canonical registry allows a scope
+// exactly ONE directory — so without a per-test registry root, the second store built in
+// the process would be refused as a second seat, which is precisely the enforcement being
+// added. Rooting it in t.TempDir() gives each test its own canonical world, and keeps the
+// suite out of the developer's real ~/.bashy.
 func newStore(t *testing.T, opts ...Option) *Store {
 	t.Helper()
-	opts = append([]Option{WithScopeProvider(testScope("test-seat")), WithVerifier(verified())}, opts...)
+	opts = append([]Option{
+		WithScopeProvider(testScope("test-seat")),
+		WithVerifier(verified()),
+		WithRegistryRoot(t.TempDir()),
+	}, opts...)
 	s, err := Open(t.TempDir(), opts...)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -149,8 +265,9 @@ func evidenced(who principal.Ref, ws, summary string) Entry {
 	}
 }
 
-// digestEvidence is evidence pinned to exact bytes — the weakest thing a verification may
-// rest on that is not simply a sentence. See Verification.Enforceable.
+// digestEvidence is evidence pinned to exact bytes: auditable, rehashable — and PROMOTING
+// NOTHING, which is what several tests here exist to pin. A digest proves the bytes did not
+// change; it says nothing about whether a check ran. See verification.go.
 func digestEvidence() []Evidence {
 	return []Evidence{{Kind: "file", Ref: "/tmp/test.log", Digest: digestOf([]byte("PASS"))}}
 }
@@ -496,7 +613,7 @@ func TestEpochZeroIsRefusedOnEveryMutation(t *testing.T) {
 	_, err = s.Decide(a, 0, "ws", "x", "why", nil, at(2*time.Minute))
 	check("Decide", err)
 
-	_, err = s.Attest(a, 0, Verification{TargetSeq: seq, Result: OutcomeSuccess, Method: "looked"}, nil, at(2*time.Minute))
+	_, err = s.Attest(context.Background(), a, 0, Verification{TargetSeq: seq, Result: OutcomeSuccess, Method: "looked"}, nil, at(2*time.Minute))
 	check("Attest", err)
 
 	_, err = s.Transcript(a, 0, "ws", "x", strings.NewReader("hi"), at(2*time.Minute))
@@ -998,14 +1115,18 @@ func TestEvidencedSuccessIsAssertedNotVerified(t *testing.T) {
 	}
 }
 
-// …and this is the only thing that closes the gap.
+// …and this is the only thing that closes the gap: a check a TRUSTED VERIFIER vouched for.
+//
+// Note what the store needs before this test can pass at all — WithVerificationVerifier. A
+// store with no way to check a claim cannot promote one, and that is the fail-closed default
+// rather than a gap in the fixture.
 func TestVerificationPromotesAClaimToVerified(t *testing.T) {
-	s := newStore(t)
+	s := newStore(t, WithVerificationVerifier(sealing()))
 	a := agent("a")
 	ep := mustClaim(t, s, a, at(0))
 	target := mustRecord(t, s, evidenced(a, "api", "migrated the schema"), ep, at(time.Minute))
 
-	if _, err := s.Attest(a, ep, Verification{
+	if _, err := s.Attest(context.Background(), a, ep, Verification{
 		TargetSeq: target.Seq, TargetHash: target.Hash,
 		Result: OutcomeSuccess, Method: "re-ran the suite on a clean checkout",
 	}, []Evidence{{Kind: "command", Ref: "go test ./...", Digest: "sha256:" + strings.Repeat("a", 64)}}, at(2*time.Minute)); err != nil {
@@ -1029,7 +1150,7 @@ func TestVerificationCanRefuteAClaim(t *testing.T) {
 	ep := mustClaim(t, s, a, at(0))
 	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
 
-	if _, err := s.Attest(a, ep, Verification{
+	if _, err := s.Attest(context.Background(), a, ep, Verification{
 		TargetSeq: target.Seq, TargetHash: target.Hash,
 		Result: OutcomeFailed, Method: "the endpoint 502s",
 	}, nil, at(2*time.Minute)); err != nil {
@@ -1051,7 +1172,7 @@ func TestVerificationBindsToTheTargetHash(t *testing.T) {
 	ep := mustClaim(t, s, a, at(0))
 	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
 
-	_, err := s.Attest(a, ep, Verification{
+	_, err := s.Attest(context.Background(), a, ep, Verification{
 		TargetSeq: target.Seq, TargetHash: "sha256:" + strings.Repeat("f", 64),
 		Result: OutcomeSuccess, Method: "trust me",
 	}, nil, at(2*time.Minute))
@@ -1066,91 +1187,272 @@ func TestVerificationRequiresAMethod(t *testing.T) {
 	ep := mustClaim(t, s, a, at(0))
 	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
 
-	_, err := s.Attest(a, ep, Verification{TargetSeq: target.Seq, Result: OutcomeSuccess}, nil, at(2*time.Minute))
+	_, err := s.Attest(context.Background(), a, ep, Verification{TargetSeq: target.Seq, Result: OutcomeSuccess}, nil, at(2*time.Minute))
 	if err == nil {
 		t.Fatal("an unexplained 'I verified it' is the same trust-me claim it is supposed to replace")
 	}
 }
 
-// A METHOD STRING IS PROSE, AND PROSE PROMOTES NOTHING.
+// ─── PROMOTION IS NOT SOMETHING A CALLER CAN WRITE ────────────────────────────
 //
-// This is the hole the previous revision left in the middle of its own thesis. The whole
-// package exists to refuse "done ✅" from an agent with nothing to point at — and then
-// `verify --method "re-ran the suite on a clean checkout"`, typed by an agent that did no
-// such thing, produced a green VERIFIED row. The trust-me claim was not eliminated; it
-// was moved one entry down the log and promoted there instead, and the check that
-// supposedly replaced it was a spelling test.
+// The three tests below are one argument in three moves, and each move is a hole a
+// previous revision actually shipped. In every case the agent supplies BOTH the claim and
+// the credential that vouches for it — the trust-me claim the package exists to refuse,
+// laundered one field sideways.
+
+// MOVE ONE: PROSE. "verify --method 're-ran the suite on a clean checkout'", typed by an
+// agent that did no such thing, used to produce a green VERIFIED row.
+//
+// The verification is RECORDED — the log keeps its full value, and a human can read what
+// was claimed — and it promotes NOTHING.
 func TestVerificationCannotPromoteOnProseAlone(t *testing.T) {
 	s := newStore(t)
 	a := agent("a")
 	ep := mustClaim(t, s, a, at(0))
 	target := mustRecord(t, s, evidenced(a, "api", "migrated the schema"), ep, at(time.Minute))
 
-	_, err := s.Attest(a, ep, Verification{
+	e, err := s.Attest(context.Background(), a, ep, Verification{
 		TargetSeq: target.Seq, TargetHash: target.Hash,
 		Result: OutcomeSuccess, Method: "re-ran the suite on a clean checkout, all green",
 	}, nil, at(2*time.Minute)) // …and not one byte anybody can check
-	if err == nil {
-		t.Fatal("a verification whose entire backing is a sentence must be REFUSED: an agent that would claim " +
-			"success it did not earn will write a method string it did not run")
+	if err != nil {
+		t.Fatalf("the check is still worth RECORDING — the log is not the thing being defended: %v", err)
 	}
-	if !strings.Contains(err.Error(), "VERIFIES NOTHING") {
-		t.Fatalf("the refusal must say what is missing, got %v", err)
+	if e.Verifies.Sealed() {
+		t.Fatal("nothing sealed this: no verifier was injected, and a sentence is not a credential")
 	}
-
-	// Nothing was promoted, because nothing was recorded.
 	board, _, _ := s.Board()
 	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
-		t.Fatalf("the strand stays exactly as confident as it was: %q, want asserted", c)
-	}
-
-	// Bringing bytes a skeptic can rehash is what earns it.
-	if _, err := s.Attest(a, ep, Verification{
-		TargetSeq: target.Seq, TargetHash: target.Hash,
-		Result: OutcomeSuccess, Method: "re-ran the suite on a clean checkout, all green",
-	}, digestEvidence(), at(3*time.Minute)); err != nil {
-		t.Fatalf("a verification with digest-bound evidence must be accepted: %v", err)
-	}
-	board, _, _ = s.Board()
-	if c := board.Workstreams[0].Confidence; c != ConfidenceVerified {
-		t.Fatalf("digest-bound evidence promotes, got %q", c)
+		t.Fatalf("a verification whose entire backing is a sentence promotes NOTHING — an agent that would claim "+
+			"success it did not earn will write a method string it did not run. Got %q, want asserted", c)
 	}
 }
 
-// The same rule, enforced at the PROJECTION as well as at the write. The board is a
-// function of the JOURNAL, so it must be able to grade a record it did not write — a
-// verification entry that reached the log some other way (an older schema, a hand-edited
-// store, a future bug in Attest) still promotes nothing on prose alone.
-func TestBoardRefusesToPromoteAnUnenforceableVerificationInTheJournal(t *testing.T) {
+// MOVE TWO: A DIGEST. This one is subtler and it fooled the last revision completely.
+//
+// A digest proves INTEGRITY — these bytes did not change — and says NOTHING about whether
+// a check ran. The agent writes any file it likes, hashes it, and attaches it. It need not
+// even write the file: nothing rehashes the evidence at promotion time, so thirty-two
+// arbitrary bytes typed at the prompt did just as well. Both are tested here, because
+// "arbitrary digest" is the version an agent would actually reach for.
+func TestArbitraryDigestEvidenceDoesNotPromote(t *testing.T) {
+	s := newStore(t)
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	// Bytes an agent invented, pinned to a hash of nothing in particular.
+	made_up := []Evidence{{
+		Kind:   "file",
+		Ref:    "/tmp/definitely-passing-tests.log",
+		Digest: "sha256:" + strings.Repeat("f", 64),
+	}}
+	if _, err := s.Attest(context.Background(), a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "the suite passed, see the log",
+	}, made_up, at(2*time.Minute)); err != nil {
+		t.Fatalf("recording it is fine — believing it is not: %v", err)
+	}
+
+	board, _, _ := s.Board()
+	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
+		t.Fatalf("a digest is integrity, NOT a check: it proves some bytes did not change and says nothing about "+
+			"whether anybody looked. Got %q, want asserted", c)
+	}
+
+	// And the same for a digest over bytes that really do exist: existing is not checking.
+	if _, err := s.Attest(context.Background(), a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "rehash it yourself",
+	}, digestEvidence(), at(3*time.Minute)); err != nil {
+		t.Fatalf("Attest: %v", err)
+	}
+	board, _, _ = s.Board()
+	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
+		t.Fatalf("real bytes, honestly hashed, still do not establish that a CHECK RAN. Got %q, want asserted", c)
+	}
+}
+
+// MOVE THREE: A CREDENTIAL THE CALLER FILLED IN ITSELF.
+//
+// Verification.Adapter used to be a public *Attestation with an Approved bool and a Grade
+// string, described in its own doc comment as "a trusted verification adapter's
+// attestation". Nothing made it one. Any caller could write Approved=true, Grade=verified,
+// and the board promoted the strand.
+//
+// The field is gone, and its replacement cannot be forged the same way: a Seal is minted by
+// the store from an injected verifier's answer, and Attest REFUSES a verification that
+// arrives carrying one.
+func TestCallerSuppliedSealIsRefused(t *testing.T) {
+	s := newStore(t, WithVerificationVerifier(sealing()))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	// The agent writes its own credential for its own claim. This is the whole attack.
+	_, err := s.Attest(context.Background(), a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "trust me",
+		Seal: &Seal{Verifier: "ci", Grade: GradeVerified, Approved: true, Token: "looks-official"},
+	}, nil, at(2*time.Minute))
+
+	var supplied *ErrSealSupplied
+	if !errors.As(err, &supplied) {
+		t.Fatalf("a caller-supplied seal must be REFUSED, loudly — quietly overwriting it would hide a caller whose "+
+			"next line deserves to be read. Got %v", err)
+	}
+
+	board, _, _ := s.Board()
+	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
+		t.Fatalf("nothing was recorded, so nothing was promoted: got %q", c)
+	}
+}
+
+// The same rule, enforced at the PROJECTION as well as at the write — and this is the lock
+// that actually matters.
+//
+// The board is a function of the JOURNAL, and the journal is a FILE ON THE AGENT'S DISK.
+// So a verification can reach the log without ever passing through Attest: the agent
+// appends it, or rewrites it, or a future bug lets one through. A projection that trusted
+// the Approved bool it read out of that file would be checking the forger's own work.
+//
+// It does not. It asks the injected verifier whether the seal is one IT issued, for THIS
+// claim — and a verifier that never issued it says no.
+func TestBoardRefusesAForgedSealInTheJournal(t *testing.T) {
+	v := sealing()
 	a := agent("a")
 	target := Entry{
 		Seq: 2, Hash: "sha256:" + strings.Repeat("b", 64), Kind: KindEffect, Actor: a,
 		Workstream: "api", Summary: "shipped", Outcome: OutcomeSuccess,
 		Evidence: []Evidence{{Kind: "command", Ref: "go test ./..."}},
 	}
-	// A verification with a method, a matching target hash, a success result — and nothing
-	// checkable. Exactly what an agent would write.
-	prose := Entry{
+	// A verification hand-written straight into the journal, wearing every field that used
+	// to matter: a method, a matching target hash, a success result, digest-bound evidence,
+	// and a seal that SAYS it is approved and verified. Exactly what a forger would write.
+	forged := Entry{
 		Seq: 3, Kind: KindVerification, Actor: a, Workstream: "api", Summary: "verified",
-		Outcome: OutcomeSuccess,
+		Outcome: OutcomeSuccess, Epoch: 1,
+		Evidence: []Evidence{{Kind: "file", Ref: "/tmp/ci.log", Digest: "sha256:" + strings.Repeat("c", 64)}},
 		Verifies: &Verification{
-			TargetSeq: 2, TargetHash: target.Hash, Result: OutcomeSuccess, Method: "I checked it, honest",
+			TargetSeq: 2, TargetHash: target.Hash, Result: OutcomeSuccess, Method: "asked CI, honest",
+			Seal: &Seal{Verifier: "test-seal-verifier", Grade: GradeVerified, Approved: true, Token: "not-a-real-token"},
 		},
 	}
-	board := ProjectBoard([]Entry{target, prose})
+	entries := []Entry{target, forged}
+
+	// With the trusted verifier asked: it does not recognize the token, so nothing moves.
+	board := ProjectBoard(entries, v.RecheckSeal)
 	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
-		t.Fatalf("the board must not promote on prose, got %q — the projection is the second lock on the same door", c)
+		t.Fatalf("a seal the verifier never issued must promote NOTHING, however green its fields look. Got %q", c)
 	}
 
-	// A trusted adapter's attestation is the other way to earn it.
-	adapted := prose
-	adapted.Verifies = &Verification{
-		TargetSeq: 2, TargetHash: target.Hash, Result: OutcomeSuccess, Method: "asked CI",
-		Adapter: &Attestation{Verifier: "ci", Channel: "github-actions", Grade: GradeVerified, Approved: true},
+	// And with no verifier at all, a store cannot check anything, so it promotes nothing —
+	// which is the fail-closed default, not a special case.
+	board = ProjectBoard(entries, nil)
+	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
+		t.Fatalf("with nothing able to check a claim, the board must not report one as checked. Got %q", c)
 	}
-	board = ProjectBoard([]Entry{target, adapted})
+}
+
+// A REAL seal promotes — otherwise none of the above is a design, it is just a refusal.
+//
+// And it promotes only where it BELONGS: lifting a genuine token off one verification and
+// pasting it onto another is the obvious next move, and the token commits to the claim, so
+// it fails there too.
+func TestASealedVerificationPromotesAndCannotBeMoved(t *testing.T) {
+	v := sealing()
+	s := newStore(t, WithVerificationVerifier(v))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "migrated the schema"), ep, at(time.Minute))
+
+	e, err := s.Attest(context.Background(), a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "asked the CI system",
+	}, nil, at(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Attest: %v", err)
+	}
+	if !e.Verifies.Sealed() {
+		t.Fatal("the trusted verifier vouched for it — the seal must be in the record")
+	}
+	if len(v.calls) != 1 {
+		t.Fatalf("the transition must actually ASK the root of trust, got %d calls", len(v.calls))
+	}
+	board, _, _ := s.Board()
 	if c := board.Workstreams[0].Confidence; c != ConfidenceVerified {
-		t.Fatalf("a trusted adapter's attestation promotes, got %q", c)
+		t.Fatalf("a seal a trusted verifier issued and still recognizes IS what verified means. Got %q", c)
+	}
+
+	// Now STEAL it: a genuine token, lifted off this verification and pasted onto a claim
+	// nobody checked. The token commits to the claim, so the verifier does not recognize it
+	// there — which is the property that makes a seal a seal rather than a password.
+	other := Entry{
+		Seq: 4, Hash: "sha256:" + strings.Repeat("d", 64), Kind: KindEffect, Actor: a,
+		Workstream: "billing", Summary: "shipped billing too", Outcome: OutcomeSuccess,
+		Evidence: []Evidence{{Kind: "command", Ref: "go test ./..."}},
+	}
+	pasted := Entry{
+		Seq: 5, Kind: KindVerification, Actor: a, Workstream: "billing", Epoch: ep,
+		Outcome: OutcomeSuccess, Summary: "verified",
+		Verifies: &Verification{
+			TargetSeq: 4, TargetHash: other.Hash, Result: OutcomeSuccess, Method: "asked the CI system",
+			Seal: e.Verifies.Seal, // ← a genuine token, on somebody else's claim
+		},
+	}
+	board = ProjectBoard([]Entry{other, pasted}, v.RecheckSeal)
+	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
+		t.Fatalf("a genuine token pasted onto a DIFFERENT claim must not promote it — the token commits to the "+
+			"claim. Got %q", c)
+	}
+}
+
+// A verifier that goes and looks and finds the claim FALSE is not the same as one that
+// cannot say. The first is a refutation, and recording it as a success would put a claim
+// the one trusted party actively refuted into the permanent record wearing a success label.
+func TestARefutingVerifierBlocksASuccessVerification(t *testing.T) {
+	s := newStore(t, WithVerificationVerifier(&sealingVerifier{refute: true}))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	_, err := s.Attest(context.Background(), a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "asked CI",
+	}, digestEvidence(), at(2*time.Minute))
+
+	var refuted *ErrRefuted
+	if !errors.As(err, &refuted) {
+		t.Fatalf("the trusted verifier said the claim is FALSE — recording it as a success is not available. Got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--result failed") {
+		t.Fatalf("and the refusal must say what IS available, got %v", err)
+	}
+}
+
+// A verifier that cannot speak to a claim leaves it exactly where a host with no verifier
+// would: recorded, unsealed, asserted. That is the floor, not a new hole — and it is what
+// keeps a narrow verifier (a CI adapter that knows nothing about a manual check) from
+// blocking every honest record on the host.
+func TestAVerifierThatCannotEstablishAClaimRecordsItUnsealed(t *testing.T) {
+	s := newStore(t, WithVerificationVerifier(&sealingVerifier{admits: map[uint64]bool{}}))
+	a := agent("a")
+	ep := mustClaim(t, s, a, at(0))
+	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
+
+	e, err := s.Attest(context.Background(), a, ep, Verification{
+		TargetSeq: target.Seq, TargetHash: target.Hash,
+		Result: OutcomeSuccess, Method: "asked CI, which had never heard of this",
+	}, digestEvidence(), at(2*time.Minute))
+	if err != nil {
+		t.Fatalf("a verifier with nothing to say must not block the record: %v", err)
+	}
+	if e.Verifies.Sealed() {
+		t.Fatal("…and must not seal it either")
+	}
+	board, _, _ := s.Board()
+	if c := board.Workstreams[0].Confidence; c != ConfidenceAsserted {
+		t.Fatalf("unsealed is asserted, got %q", c)
 	}
 }
 
@@ -1164,7 +1466,7 @@ func TestRefutationNeedsNoEvidence(t *testing.T) {
 	ep := mustClaim(t, s, a, at(0))
 	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
 
-	if _, err := s.Attest(a, ep, Verification{
+	if _, err := s.Attest(context.Background(), a, ep, Verification{
 		TargetSeq: target.Seq, TargetHash: target.Hash,
 		Result: OutcomeFailed, Method: "the endpoint 502s",
 	}, nil, at(2*time.Minute)); err != nil {
@@ -1470,7 +1772,7 @@ func TestTranscriptDeletionDoesNotAffectProjections(t *testing.T) {
 	}
 
 	boardBefore, _, _ := s.Board()
-	ckBefore := ProjectCheckpoint(mustReplay(t, s).Entries, 0)
+	ckBefore := ProjectCheckpoint(mustReplay(t, s).Entries, 0, s.sealChecker())
 
 	// Delete every artifact byte on the host.
 	if err := os.RemoveAll(s.transcriptDir()); err != nil {
@@ -1478,7 +1780,7 @@ func TestTranscriptDeletionDoesNotAffectProjections(t *testing.T) {
 	}
 
 	boardAfter, _, _ := s.Board()
-	ckAfter := ProjectCheckpoint(mustReplay(t, s).Entries, 0)
+	ckAfter := ProjectCheckpoint(mustReplay(t, s).Entries, 0, s.sealChecker())
 
 	if boardBefore.Digest != boardAfter.Digest {
 		t.Fatal("deleting a transcript changed the board — transcripts are NOT authoritative, and this is the test that says so")
@@ -1656,7 +1958,9 @@ func TestRecordedReconciliationMirrorsItsVerdict(t *testing.T) {
 }
 
 func TestReconcileIsOKOnlyWhenEverythingHasBeenChecked(t *testing.T) {
-	s := newStore(t)
+	// "Checked" means a trusted verifier went and looked. On a host with none, health can
+	// never reach ok — which is the honest verdict, not a missing feature.
+	s := newStore(t, WithVerificationVerifier(sealing()))
 	a := agent("a")
 	ep := mustClaim(t, s, a, at(0))
 	target := mustRecord(t, s, evidenced(a, "api", "shipped"), ep, at(time.Minute))
@@ -1666,7 +1970,7 @@ func TestReconcileIsOKOnlyWhenEverythingHasBeenChecked(t *testing.T) {
 		t.Fatalf("an unchecked claim is degraded, got %q", r.Health)
 	}
 
-	if _, err := s.Attest(a, ep, Verification{
+	if _, err := s.Attest(context.Background(), a, ep, Verification{
 		TargetSeq: target.Seq, TargetHash: target.Hash, Result: OutcomeSuccess,
 		Method: "re-ran it and kept the log",
 	}, digestEvidence(), at(3*time.Minute)); err != nil {
@@ -1689,9 +1993,9 @@ func TestCheckpointProjectionIsPure(t *testing.T) {
 	mustRecord(t, s, evidenced(a, "web", "two"), ep, at(2*time.Minute))
 	entries := mustReplay(t, s).Entries
 
-	first := ProjectCheckpoint(entries, 0)
+	first := ProjectCheckpoint(entries, 0, nil)
 	for range 5 {
-		if got := ProjectCheckpoint(entries, 0); got.Board.Digest != first.Board.Digest {
+		if got := ProjectCheckpoint(entries, 0, nil); got.Board.Digest != first.Board.Digest {
 			t.Fatal("the projection is not pure — same entries must always yield the same board")
 		}
 	}

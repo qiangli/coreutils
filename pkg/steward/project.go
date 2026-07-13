@@ -192,14 +192,27 @@ type Board struct {
 	Blocked int `json:"blocked"`
 }
 
-// ProjectBoard derives the board from a sequence of entries.
+// ProjectBoard derives the board from a sequence of entries, grading each strand's
+// confidence with sc.
+//
+// SC IS THE TRUSTED VERIFIER, AND A NIL SC PROMOTES NOTHING. That is not a degenerate
+// case, it is the DEFAULT: a host that injected no VerificationVerifier has no way to
+// check whether any claim came true, so its board reports every claimed success as
+// asserted. Passing the checker in — rather than reading it off a Store — is what keeps
+// this a pure function: the same entries and the same checker always give the same board,
+// and a projection can still be taken of a journal nobody holds a handle to.
+//
+// Promotion is NOT decided by anything in the entries themselves. A Seal read out of the
+// journal is bytes on the agent's filesystem; only sc can say whether it is one the
+// verifier actually issued, for this exact claim. See sealPromotes.
 //
 // TRANSCRIPTS ARE SKIPPED ENTIRELY. Nothing about the board may depend on a
 // non-authoritative artifact, which is why deleting every transcript on the host
 // leaves this function's output bit-identical.
-func ProjectBoard(entries []Entry) Board {
+func ProjectBoard(entries []Entry, sc SealChecker) Board {
 	byName := map[string]*Workstream{}
 	var order []string
+	bySeq := entriesBySeq(entries)
 
 	// Pass 1: fold the strands.
 	for _, e := range entries {
@@ -279,15 +292,23 @@ func ProjectBoard(entries []Entry) Board {
 		}
 		switch e.Verifies.Result {
 		case OutcomeSuccess:
-			// PROMOTION IS EARNED, NOT ASSERTED. A verification whose entire backing is a
-			// prose --method promotes NOTHING: it is recorded, it is visible in the log, and
-			// the strand stays exactly as confident as it was. Only digest-bound evidence or
-			// a trusted adapter's attestation moves it to verified — see
-			// Verification.Enforceable, and note that Attest refuses to write an
-			// unenforceable success at all, so this is the second of two locks on the same
-			// door. It is here as well because the board is a projection of the JOURNAL, and
-			// a projection must be able to grade a record it did not write.
-			if !e.Verifies.Enforceable(e) {
+			// PROMOTION IS EARNED, NOT ASSERTED, AND NOT BY ANYTHING IN THIS FILE.
+			//
+			// A verification promotes only when the injected verifier RE-CHECKS its seal and
+			// says it is one it issued for this exact claim. Nothing else does: not the prose
+			// --method, not a digest the caller attached to evidence it chose, not an
+			// approved-looking attestation struct it filled in itself. Every one of those is
+			// bytes the agent wrote, and the board is a projection of a FILE the agent can
+			// write — so a check that only reads the file checks the forger's own work.
+			//
+			// This is the second of two locks on the same door (Attest holds the first), and
+			// it is the one that matters, because it grades records it did not write —
+			// including a verification that appeared in the journal without ever going
+			// through Attest at all, which is precisely the case worth defending against.
+			if !sealPromotes(e, bySeq[e.Verifies.TargetSeq], sc) {
+				ws.Unproven = append(ws.Unproven, "seq "+itoa(ws.outcomeSeq)+
+					": a success verification at seq "+itoa(e.Seq)+" was recorded, but no trusted verifier vouched for it — "+
+					"it promotes nothing")
 				continue
 			}
 			ws.Confidence = ConfidenceVerified
@@ -457,7 +478,7 @@ func (s *Store) Board() (Board, *Replay, error) {
 	if err != nil {
 		return Board{}, nil, err
 	}
-	return ProjectBoard(rep.Entries), rep, nil
+	return ProjectBoard(rep.Entries, s.sealChecker()), rep, nil
 }
 
 // Filter selects entries from the log.

@@ -24,6 +24,13 @@ import (
 type opts struct {
 	dir    string
 	asJSON bool
+
+	// base is what the EMBEDDER passed to NewStewardCmd — the store options this command
+	// tree was mounted with. It is deliberately NOT reachable from a flag: it carries the
+	// roots of trust (a real Verifier, a VerificationVerifier) and the canonical registry
+	// root, and every one of those would be worthless if the agent running the command
+	// could redirect it from the command line.
+	base []Option
 }
 
 // store opens the store for everything that is NOT an authority transition: status,
@@ -31,7 +38,7 @@ type opts struct {
 // by construction, cannot claim or take over the seat. That is not an oversight; it is
 // the fail-closed default doing its job, and it means a bug in a read path cannot become
 // an authority bug.
-func (o *opts) store() (*Store, error) { return Open(o.dir) }
+func (o *opts) store() (*Store, error) { return Open(o.dir, o.base...) }
 
 // authStore opens the store for an AUTHORITY TRANSITION — authorize, claim, takeover —
 // with the root of trust the CLI can actually offer: a typed confirmation at a real
@@ -49,8 +56,12 @@ func (o *opts) store() (*Store, error) { return Open(o.dir) }
 // so the unattended path fails closed until a host injects a real verifier
 // (steward.WithVerifier). That is the integration hook for bashy meet or a host approval
 // UI, and nothing here has to change to take it: the enforcement point already exists.
+// The pty verifier is appended AFTER the embedder's options, so a host that injected a real
+// Verifier keeps it: later options win, and the audit-grade terminal is the FLOOR, not a
+// downgrade applied on top of something better.
 func (o *opts) authStore(cmd *cobra.Command) (*Store, error) {
-	return Open(o.dir, WithVerifier(&ptyVerifier{in: cmd.InOrStdin(), out: cmd.ErrOrStderr()}))
+	base := append([]Option{WithVerifier(&ptyVerifier{in: cmd.InOrStdin(), out: cmd.ErrOrStderr()})}, o.base...)
+	return Open(o.dir, base...)
 }
 
 // NewStewardCmd builds `bashy steward`: the host's single seat of authority and its
@@ -59,8 +70,15 @@ func (o *opts) authStore(cmd *cobra.Command) (*Store, error) {
 // Mounted by the host (bashy) rather than exported as a userland tool, because a
 // steward is not a utility — it is the thing the human talks TO about everything the
 // agents on this machine did.
-func NewStewardCmd() *cobra.Command {
-	o := &opts{}
+//
+// The options are the HOST's, not the user's: the roots of trust (WithVerifier,
+// WithVerificationVerifier) and the canonical registry root (WithRegistryRoot). They are
+// passed in code, at mount time, precisely because none of them would be worth anything if
+// the agent typing the command could point them somewhere else. With none of them, the CLI
+// is what it has always been: it can read everything, it can journal, it can refute — and
+// it can neither hand out the seat unattended nor promote a claim to verified.
+func NewStewardCmd(base ...Option) *cobra.Command {
+	o := &opts{base: base}
 	cmd := &cobra.Command{
 		Use:   "steward",
 		Short: "the host's one seat of authority, and the journal that outlives whoever holds it",
@@ -756,7 +774,7 @@ never checked.`,
 				return err
 			}
 			v := s.viewFrom(rep, now)
-			board := ProjectBoard(rep.Entries)
+			board := ProjectBoard(rep.Entries, s.sealChecker())
 
 			if o.asJSON {
 				env := statusEnvelope{SchemaVersion: SchemaVersion, Seat: v, Board: board, Scope: s.Scope(), Dir: s.Dir()}
@@ -1790,33 +1808,41 @@ seq.
 A verification can move a claim BACKWARDS — --result failed refutes it, and the board
 believes the refutation. Degradation travels one way.
 
-AND A METHOD STRING IS PROSE. PROSE PROMOTES NOTHING.
+BUT NOTHING YOU CAN TYPE HERE PROMOTES A CLAIM.
 
-This is the sharp edge, and it used to be blunt: --method was required, and the board then
-promoted the claim on the strength of it. So an agent that would write "done ✅" it had not
+This is the sharp edge, and it has been blunt twice. First --method was required and the
+board promoted on the strength of it — so an agent that would write "done ✅" it had not
 earned would just as happily write --method "re-ran the suite on a clean checkout" it had
-not run, and the board turned that sentence into a green VERIFIED row. The trust-me claim
-was not eliminated — it was moved one entry down the log and promoted there instead.
+not run. Then digest-bound evidence promoted — but a digest proves the BYTES DID NOT
+CHANGE, never that a check ran: attach -e 'file:/tmp/pass.log#sha256:…' and the row went
+green, and since nothing rehashed it, any thirty-two bytes did. Each time, the trust-me
+claim was not eliminated; it was moved one field sideways and promoted there instead.
 
-So a verification that PROMOTES must bring something a skeptic can actually check:
+So promotion now rests on something you CANNOT WRITE: a seal from a verification verifier
+the HOST injected (steward.WithVerificationVerifier) — a CI adapter that asks the CI
+system, a git adapter that looks at the commit, a signing service you hold no key for. The
+store asks it here, and the BOARD ASKS IT AGAIN when it projects, so a seal typed into the
+journal by hand is refused by the one party that can recognize its own.
 
-  digest-bound evidence   -e 'file:/tmp/test.log#sha256:…' — bytes that exist, that can be
-                          rehashed, and that cannot be quietly swapped afterwards. It is
-                          the weakest thing that is not nothing.
-  a trusted adapter       an attestation from a verification adapter the HOST injected
-                          (a CI adapter that asked the CI system, a git adapter that
-                          looked at the commit) — rooted outside the store you can write to.
+THIS CLI INJECTS NO SUCH VERIFIER. So on this surface, "verify --result success" RECORDS
+the check in full — it is in the log, a human can read the method and rehash the evidence —
+and the board leaves the strand at ASSERTED. That is not a bug and it is not a
+disappointment: it is the honest state of a claim on a host with nothing that can check it.
+A green VERIFIED row here would be a lie the machine told itself.
 
-REFUTING or reporting an INCONCLUSIVE check needs neither. Doubt is free; confidence is
-not. We demand credentials to become more confident and never to become less, because the
-cost of a false "verified" is unbounded and the cost of a false "refuted" is a second look.
+REFUTING or reporting an INCONCLUSIVE check needs no credential at all, and works fully
+here. Doubt is free; confidence is not. We demand credentials to become more confident and
+never to become less, because the cost of a false "verified" is unbounded and the cost of a
+false "refuted" is a second look.
 
   --method  how you checked. Still required, because a check nobody can even describe is
-            not one — it just does not decide anything on its own.`,
+            not one — it just does not decide anything on its own.
+  -e        what you found. Recorded, auditable, rehashable by a human — and promoting
+            nothing on its own, for the reason above.`,
 		Example: `  bashy steward verify --seq 7 --result success \
         --method "re-ran the suite on a clean checkout at de6485c" \
-        -e "file:/tmp/test.log#sha256:9f2c…"
-  bashy steward verify --seq 7 --result failed --method "the endpoint 502s"   # no evidence needed`,
+        -e "file:/tmp/test.log#sha256:9f2c…"          # recorded; stays ASSERTED here
+  bashy steward verify --seq 7 --result failed --method "the endpoint 502s"   # refutes, fully`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.store()
@@ -1834,7 +1860,7 @@ cost of a false "verified" is unbounded and the cost of a false "refuted" is a s
 			if err != nil {
 				return err
 			}
-			e, err := s.Attest(Self(), ep, Verification{
+			e, err := s.Attest(cmd.Context(), Self(), ep, Verification{
 				TargetSeq:  seq,
 				TargetHash: hash,
 				Result:     Outcome(result),
@@ -1847,7 +1873,20 @@ cost of a false "verified" is unbounded and the cost of a false "refuted" is a s
 			if o.asJSON {
 				return emitJSON(cmd.OutOrStdout(), e)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "verification recorded: seq %d attests to seq %d (%s)\n", e.Seq, seq, e.Verifies.Result)
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "verification recorded: seq %d attests to seq %d (%s)\n", e.Seq, seq, e.Verifies.Result)
+
+			// SAY WHAT IT WAS WORTH, HERE, WHERE THE OPERATOR IS LOOKING. A command that
+			// prints "verification recorded" and nothing else invites exactly the belief this
+			// package exists to refuse — that the claim is now checked. It is not: with no
+			// trusted verifier injected, the board still says asserted, and the operator finds
+			// that out later, from a board they may not read, or never.
+			if e.Verifies.Result == OutcomeSuccess && !e.Verifies.Sealed() {
+				fmt.Fprintln(out, "  NOT PROMOTED: the board still reports this strand as ASSERTED, not verified.")
+				fmt.Fprintln(out, "  No trusted verification verifier is injected on this surface, so nothing here could")
+				fmt.Fprintln(out, "  establish that the claim came true — your method and evidence are recorded and")
+				fmt.Fprintln(out, "  auditable, and they promote nothing. A host wires one with WithVerificationVerifier.")
+			}
 			return nil
 		},
 	}
