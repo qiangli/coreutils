@@ -112,6 +112,37 @@ func TestGrepWordRegexp(t *testing.T) {
 	}
 }
 
+func TestGrepBREBackrefConformance(t *testing.T) {
+	cases := []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+		code  int
+	}{
+		{
+			name:  "literal caret in backref pattern",
+			stdin: "a^bb\naXbb\n",
+			args:  []string{`a^\(b\)\1`},
+			want:  "a^bb\n",
+			code:  0,
+		},
+		{
+			name:  "gnu word class with backref",
+			stdin: "__\n!!\nab\n",
+			args:  []string{`\(\w\)\1`},
+			want:  "__\n",
+			code:  0,
+		},
+	}
+	for _, c := range cases {
+		out, _, code := runGrep(t, "", c.stdin, c.args...)
+		if out != c.want || code != c.code {
+			t.Errorf("%s: grep %v = (%q, %d), want (%q, %d)", c.name, c.args, out, code, c.want, c.code)
+		}
+	}
+}
+
 func TestGrepQuiet(t *testing.T) {
 	dir := setupTree(t)
 	out, _, code := runGrep(t, dir, "", "-q", "foo", "f1.txt")
@@ -281,5 +312,47 @@ func TestGrepHelpAndVersion(t *testing.T) {
 	out, _, code = runGrep(t, "", "", "--version")
 	if code != 0 || !strings.Contains(out, "grep") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+// POSIX behaviors that grep's regex layer previously got wrong.
+func TestGrepPOSIXRegexConformance(t *testing.T) {
+	cases := []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+		code  int
+	}{
+		// POSIX XBD 9.3.6: a back-reference to a group that matched the empty
+		// string matches the empty string, so \(a*\) matching empty before "b"
+		// lets \(a*\)b\1 match "b". This used to reject the line.
+		{"backref to a group that matched empty", "b\n", []string{`\(a*\)b\1`}, "b\n", 0},
+		{"...and still rejects a line with no b", "aaa\n", []string{`\(a*\)b\1`}, "", 1},
+		{"non-empty backref still has to repeat", "aaxaa\naaxa\n", []string{`^\(a*\)x\1$`}, "aaxaa\n", 0},
+
+		// POSIX XBD 9.1 leftmost-longest, observable through -w: -w asks whether
+		// some match is bounded by non-word characters. Under leftmost-first,
+		// `a\|ab` reports the "a" alternative, whose right edge sits against the
+		// word character "b", so the line was wrongly rejected. POSIX reports the
+		// longest match at that offset — "ab" — which is a whole word.
+		{"-w with a shorter alternative first", "ab\n", []string{"-w", `a\|ab`}, "ab\n", 0},
+		{"-w with a longer alternative later", "foobar\n", []string{"-w", `foo\|foobar`}, "foobar\n", 0},
+		{"-w still rejects a genuine non-word match", "abc\n", []string{"-w", `a\|ab`}, "", 1},
+		// -w over the back-reference engine.
+		{"-w with a backref", "aa\n", []string{"-w", `\(a\)\1`}, "aa\n", 0},
+		{"-w with a backref inside a longer word", "aab\n", []string{"-w", `\(a\)\1`}, "", 1},
+
+		// Leftmost-longest must not change whether a line matches at all, only
+		// which extent is reported: plain grep is unaffected.
+		{"plain match existence is unchanged", "zab\n", []string{`a\|ab`}, "zab\n", 0},
+		{"plain non-match is unchanged", "zzz\n", []string{`a\|ab`}, "", 1},
+	}
+	for _, c := range cases {
+		out, errOut, code := runGrep(t, "", c.stdin, c.args...)
+		if out != c.want || code != c.code {
+			t.Errorf("%s: grep %v on %q = (%q, %d, err %q), want (%q, %d)",
+				c.name, c.args, c.stdin, out, code, errOut, c.want, c.code)
+		}
 	}
 }

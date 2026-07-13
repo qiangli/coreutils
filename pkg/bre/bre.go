@@ -28,6 +28,11 @@
 //
 // Rejected with a clear error: any alphanumeric escape with no defined
 // translation.
+//
+// Matching is leftmost-first by default and leftmost-longest — the semantics
+// POSIX specifies — after (*Regexp).Longest; see its doc comment for why that
+// is opt-in rather than the default. SedEscapes supplies the character escapes
+// (\n, \t, …) that a sed regex, but not a grep one, gives meaning to.
 package bre
 
 import (
@@ -167,6 +172,49 @@ func ToGo(p string) (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+// sedEscape maps the escapes a sed script may use to name a character it cannot
+// write literally, to that character.
+var sedEscape = map[byte]byte{
+	'n': '\n', 't': '\t', 'r': '\r', 'f': '\f', 'v': '\v', 'a': '\a',
+}
+
+// SedEscapes rewrites the character escapes a sed regex gives meaning to but a
+// bare BRE does not, replacing each with the literal character it denotes so
+// that the rest of the engine sees an ordinary literal.
+//
+// POSIX (XCU sed) requires \n: "the escape sequence '\n' shall match a
+// <newline> embedded in the pattern space" — a script cannot contain a literal
+// newline inside a BRE, so the escape is the only way to spell one. GNU sed
+// adds \t \r \f \v \a. Every other escape is passed through byte-for-byte,
+// including \1..\9, \( \) \{ \} \| \+ \? \< \> \w \s \b and the escaped
+// metacharacters, so this is safe to run ahead of ToGo / ToGoERE / Compile. A
+// preceding \\ is consumed as a unit, so \\n stays "escaped backslash, then n".
+//
+// grep deliberately does not get this: GNU grep gives \n no such meaning (a
+// grep subject line never contains a newline), and inventing one would be a
+// behavior no upstream spelling licenses.
+func SedEscapes(p string) string {
+	if !strings.Contains(p, `\`) {
+		return p
+	}
+	var b strings.Builder
+	b.Grow(len(p))
+	for i := 0; i < len(p); i++ {
+		if p[i] != '\\' || i+1 >= len(p) {
+			b.WriteByte(p[i])
+			continue
+		}
+		if c, ok := sedEscape[p[i+1]]; ok {
+			b.WriteByte(c)
+		} else {
+			b.WriteByte('\\')
+			b.WriteByte(p[i+1])
+		}
+		i++
+	}
+	return b.String()
 }
 
 // normalizeInterval validates the inside of \{...\} and maps GNU grep's

@@ -34,18 +34,48 @@ type sedRegexp interface {
 // compileRE compiles a GNU sed regex (BRE by default, ERE under ExtendedRegex).
 // BREs without back-references use RE2 through pkg/bre; BREs with \1..\9 use
 // pkg/bre's bounded backtracking matcher.
+//
+// Two sed-specific rules are applied on top of the shared engine, both because
+// sed — unlike grep — matches against a pattern space that can hold embedded
+// newlines: the sed character escapes (\n, \t, …) are expanded to the
+// characters they name, and '.' is compiled dot-all (see sedFlags). Matching is
+// POSIX leftmost-longest, the extent GNU sed substitutes and reports.
 func compileRE(pattern, flags string) (sedRegexp, error) {
-	translated := pattern
+	pattern = bre.SedEscapes(pattern)
+	flags = sedFlags(flags)
 	if ExtendedRegex {
-		var err error
-		translated, err = bre.ToGoERE(pattern)
+		translated, err := bre.ToGoERE(pattern)
 		if err != nil {
 			return nil, err
 		}
-		return regexp.Compile(flags + translated)
-	} else {
-		return bre.CompileWithFlags(pattern, flags)
+		re, err := regexp.Compile(flags + translated)
+		if err != nil {
+			return nil, err
+		}
+		re.Longest()
+		return re, nil
 	}
+	re, err := bre.CompileWithFlags(pattern, flags)
+	if err != nil {
+		return nil, err
+	}
+	re.Longest()
+	return re, nil
+}
+
+// sedFlags finalizes the RE2 flag prefix for one sed pattern. POSIX has '.'
+// match any character, and sed's pattern space can contain newlines (after N or
+// G), so '.' is compiled dot-all — except under the M/m modifier, where GNU
+// documents the opposite: "the dot character does not match a new-line
+// character in multi-line mode".
+func sedFlags(flags string) string {
+	if strings.Contains(flags, "m") || strings.Contains(flags, "s") {
+		return flags
+	}
+	if flags == "" {
+		return "(?s)"
+	}
+	return strings.TrimSuffix(flags, ")") + "s)"
 }
 
 // translateReplacement converts a GNU sed s/// replacement into the Go
