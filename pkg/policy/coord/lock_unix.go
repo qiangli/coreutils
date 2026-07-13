@@ -1,7 +1,7 @@
 // Copyright (c) 2025 qiangli
 // See LICENSE for licensing information
 
-//go:build !windows
+//go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
 
 package coord
 
@@ -11,6 +11,13 @@ import (
 	"path/filepath"
 	"syscall"
 )
+
+// The tag lists the platforms where syscall.Flock ACTUALLY EXISTS, rather than saying
+// "!windows" and assuming every other OS is a unix with flock. It is not: aix and solaris
+// lock through fcntl, and js/wasm and plan9 have no such call at all, so `!windows` did
+// not merely mislabel those targets — it failed to COMPILE on them. Anything unlisted now
+// falls through to lock_unsupported.go, which fails closed. A platform earns its place in
+// this tag by being tested, not by being a unix.
 
 // withLock serialises read-modify-write on the claim registry with a real
 // advisory file lock. Extracted from the same pattern weave has used for its queue,

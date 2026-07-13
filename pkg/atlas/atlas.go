@@ -557,6 +557,21 @@ func init() {
 	// planning, coding, testing, deploying. Two agents writing one project is how
 	// an untested change reaches main.
 	addVerb("claim", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// steward: WHO ANSWERS FOR THIS HOST, and what actually happened on it. Exactly one
+	// seat per host/user, held under a monotonic fencing epoch, over an append-only
+	// hash-chained journal that outlives whoever holds it — board, status, log, history
+	// and checkpoints are read-only projections of that one record.
+	//
+	// CROSS, and for the same reason claim is: authority is not a stage. A steward
+	// crashes mid-plan, mid-refactor, mid-deploy, and the successor's first question is
+	// the same in every case — who was in charge, what did they do, and which of their
+	// claims did anybody actually check?
+	//
+	// Distinct from claim and from handoff, which is why it is a third verb rather than
+	// a flag on either: claim says who is working in a PROJECT, handoff moves a working
+	// TREE, and steward holds a MANDATE. Claiming the seat restores no diff and touches
+	// no repository — work is a diff, a seat is not.
+	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 
 	// engines
@@ -691,6 +706,11 @@ func init() {
 		"capability", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		"doctor", "audit", "check", "sprint",
+		// steward READS the host's authority record (status/board/log/history/reconcile)
+		// and WRITES it (below). A privacy surface: the journal is a durable account of
+		// what agents did on this machine, and its transcripts can carry real
+		// conversation.
+		"steward",
 		// issue READS the committed register (`list`/`show`) and WRITES it (below).
 		"issue",
 	)
@@ -714,6 +734,11 @@ func init() {
 		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		"rclone",
+		// steward APPENDS to the host's journal and rewrites the seat/grant files. It is
+		// write, not destroy: the one thing that removes bytes (`steward repair`) refuses
+		// anything but a torn final append, and quarantines the exact bytes it discards
+		// BEFORE truncating, so nothing it does is irreversible.
+		"steward",
 	)
 
 	// destroy — can IRREVERSIBLY lose data.

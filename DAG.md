@@ -58,6 +58,16 @@ is exactly the class of break the CI windows leg keeps catching after
 darwin-only local work (unix-only types like syscall.Stat_t in untagged
 files). Run before every push; the pre-push hook (scripts/hooks/pre-push)
 runs this automatically once installed.
+
+The `aix` build is a DELIBERATE canary, not a shipping target. A build tag
+that says `!windows` is a claim that every other OS is a unix with flock —
+and aix and solaris lock through fcntl, so such a tag does not merely
+mislabel them, it fails to COMPILE. Locking code is where this keeps
+happening (pkg/steward, pkg/policy/coord), and the fail-closed
+implementations those packages ship for unsupported platforms are only
+reachable if the package builds there at all. `go build` rather than
+`go vet`, since aix has no test-runner story and the point is the tag
+selection.
 Effects: read
 
 ```bash
@@ -66,6 +76,8 @@ for os in windows linux darwin; do
   echo "crossvet: GOOS=$os"
   GOOS=$os go vet $(go list ./... | grep -v /external/)
 done
+echo "crossvet: GOOS=aix (fail-closed-lock canary)"
+GOOS=aix GOARCH=ppc64 go build ./pkg/steward/ ./pkg/policy/coord/
 ```
 
 ### vet
