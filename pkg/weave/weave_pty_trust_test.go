@@ -1,0 +1,45 @@
+//go:build !windows
+
+package weave
+
+import (
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRunWeaveToolPTYAppliesStartupTrustClear(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-tool")
+	out := filepath.Join(dir, "said")
+	body := "#!/bin/sh\nIFS= read -r line\nprintf '%s' \"$line\" > \"$1\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exit, reason, err := runWeaveToolPTY(
+		exec.Command(script, out),
+		io.Discard,
+		weaveGuards{
+			ctlSock:                  filepath.Join(dir, "issue.sock"),
+			startupTrustClearPayload: "1",
+			maxRuntime:               5 * time.Second,
+		},
+	)
+	if err != nil {
+		t.Fatalf("runWeaveToolPTY: %v", err)
+	}
+	if exit != 0 || reason != "" {
+		t.Fatalf("exit=%d reason=%q, want clean exit", exit, reason)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "1" {
+		t.Fatalf("startup trust clear payload = %q, want 1", got)
+	}
+}

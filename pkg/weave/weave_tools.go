@@ -29,8 +29,9 @@ type ToolProfile struct {
 	// final prompt argument. A BARE launch (no HeadlessArgs) hangs at the tool's
 	// interactive/trust prompt — that is the failure this profile prevents.
 	HeadlessArgs         []string `json:"headless_args"`
-	TrustClear           string   `json:"trust_clear,omitempty"` // e.g. "say:1" — how to clear a per-dir trust prompt
-	SupportsSay          bool     `json:"supports_say"`          // mid-run `weave say` injection reaches it (steerable)
+	TrustPreseed         string   `json:"trust_preseed,omitempty"` // e.g. ".claude.json" — config seed that suppresses first-run trust prompts
+	TrustClear           string   `json:"trust_clear,omitempty"`   // e.g. "say:1" — how to clear a per-dir trust prompt
+	SupportsSay          bool     `json:"supports_say"`            // mid-run `weave say` injection reaches it (steerable)
 	SupportsGracefulQuit bool     `json:"supports_graceful_quit"`
 	Notes                string   `json:"notes,omitempty"`
 
@@ -123,6 +124,7 @@ func seededContract(tool string) (ToolProfile, bool) {
 	return ToolProfile{
 		Tool:                 t.Name,
 		HeadlessArgs:         args,
+		TrustPreseed:         l.TrustPreseed,
 		TrustClear:           l.TrustClear,
 		SupportsSay:          l.SupportsSay,
 		SupportsGracefulQuit: l.SupportsGracefulQuit,

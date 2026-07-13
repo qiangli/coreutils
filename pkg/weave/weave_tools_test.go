@@ -23,6 +23,9 @@ func TestInterviewToolSeedsContract(t *testing.T) {
 	if p.TrustClear != "say:1" {
 		t.Fatalf("claude trust_clear = %q, want say:1", p.TrustClear)
 	}
+	if p.TrustPreseed != ".claude.json" {
+		t.Fatalf("claude trust_preseed = %q, want .claude.json", p.TrustPreseed)
+	}
 	// Persisted + reloadable.
 	got, ok := loadToolProfile(dir, "claude")
 	if !ok || len(got.HeadlessArgs) != len(p.HeadlessArgs) {

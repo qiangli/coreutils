@@ -2067,6 +2067,10 @@ type weaveGuards struct {
 	// PTY master with a trailing \r — keystrokes, as far as the
 	// subagent can tell.
 	ctlSock string
+	// startupTrustClearPayload, when non-empty, is injected after the
+	// PTY control channel is up. This clears first-run trust prompts
+	// for tools whose fleet template declares a trust_clear route.
+	startupTrustClearPayload string
 }
 
 // errWeaveWrapperLive is returned from inside the queue-lock callback
@@ -2190,6 +2194,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		launchSpec.Agent, launchSpec.Model = agentLaunch.Nick, agentLaunch.Model
 		displayTool, ownerBase = agentLaunch.ToolName, agentLaunch.Nick
 	}
+	trustLaunch := weaveTrustLaunchFor(displayTool)
 	if opts.resume {
 		// Any state with a preserved workspace is resumable: "working"
 		// (wrapper died), "failed" (weave kill / watchdog kill — the
@@ -2447,6 +2452,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 		return nil
 	}
+	if err := weaveApplyTrustPreseed(workspace, trustLaunch.Preseed); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: trust preseed failed (continuing): %v\n", err)
+	}
 	// Containment: the subagent must not learn the origin repo's
 	// path from its environment. The orchestrator's shell typically
 	// sits in the origin repo, so the inherited PWD/OLDPWD point
@@ -2505,6 +2513,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		maxRuntime:    opts.maxRuntime,
 		memLimitBytes: memLimitBytes,
 		ctlSock:       ctlSock,
+	}
+	if payload, ok := weaveTrustClearPayload(trustLaunch.Clear); ok {
+		guards.startupTrustClearPayload = payload
 	}
 	if ctlSock != "" {
 		if err := os.MkdirAll(filepath.Dir(ctlSock), 0o755); err != nil {
