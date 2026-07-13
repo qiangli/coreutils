@@ -359,6 +359,263 @@ func mustCanonical(t *testing.T, dir string) string {
 	return c
 }
 
+// ─── THE FIRST STORE A SEAT EVER HAS MUST BE ABLE TO WRITE ────────────────────
+//
+// The singleton is enforced by comparing a directory against the one the registry recorded,
+// so the STRING those comparisons run on has to be the same string every time it is derived.
+// It was not, and the seam was exactly where nobody looks: a store that does not exist yet.
+//
+// filepath.EvalSymlinks fails on a path with no directory at the end of it, and the old
+// canonicalizer fell back to the unresolved spelling when it did. So a BRAND-NEW store under
+// a symlinked parent — /var/… on macOS, where /var is a symlink to /private/var, which is
+// where every temp dir and many a state dir lives — bound its seat to /var/…/store, and then
+// created the directory. One mutation later, revalidateBindings canonicalized the recorded
+// dir, which now resolved, compared /private/var/…/store against the /var/…/store the Store
+// still held, and refused the write with ErrScopeDirConflict: the seat's only store, denied
+// against its OWN binding, advising the operator to go and use the store it was already
+// using. It fired on the first claim a host ever made — the one path with no earlier store to
+// paper over it.
+//
+// The fix is an ordering: create, THEN canonicalize, and read the canonical form off the
+// directory that now exists (makeCanonicalDir). These tests hold the property that ordering
+// buys — one directory has one spelling, whenever you ask — from both sides: the new store
+// works, and it is still exactly one store.
+
+// The regression, through a genuinely symlinked parent, on the path that broke: a store
+// directory that does not exist until Open makes it.
+func TestAFirstStoreUnderASymlinkedParentCanTakeItsSeat(t *testing.T) {
+	reg := t.TempDir()
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	symlinkOrSkip(t, real, link)
+
+	// The store is BELOW the symlink and does not exist yet — a fresh seat on a host whose
+	// state dir is reached through a symlinked parent.
+	dir := filepath.Join(link, "store")
+
+	s, err := Open(dir, WithScopeProvider(testScope("seat")), WithVerifier(verified()), WithRegistryRoot(reg))
+	if err != nil {
+		t.Fatalf("the first store for a seat must open: %v", err)
+	}
+
+	// It bound itself to the RESOLVED directory, not to the spelling it was asked for. This is
+	// the assertion the whole defect reduces to: what goes into the registry has to be what
+	// every later revalidation derives.
+	want := mustCanonical(t, real) + string(filepath.Separator) + "store"
+	if s.Dir() != want {
+		t.Fatalf("the store must canonicalize to the directory it actually made, got %q want %q", s.Dir(), want)
+	}
+	var e registryEntry
+	if found, err := readJSON(s.RegistryPath(), &e); err != nil || !found {
+		t.Fatalf("reading the binding: found=%v err=%v", found, err)
+	}
+	if e.Dir != want {
+		t.Fatalf("the binding recorded %q, but every mutation will canonicalize the store to %q and refuse itself "+
+			"against its own entry. The seat's FIRST write is the one that fails.", e.Dir, want)
+	}
+
+	// And the write actually happens. mustClaim mints a capability (a mutation) and claims the
+	// seat (another) — both go through withLock → revalidateBindings, which is where the seat
+	// used to be refused against its own binding.
+	ep := mustClaim(t, s, agent("a"), at(0))
+	if _, err := s.Record(evidenced(agent("a"), "api", "the first thing this seat ever did"), ep, at(time.Minute)); err != nil {
+		t.Fatalf("the seat's first authoritative write must land: %v", err)
+	}
+
+	// The OTHER spelling of the same directory is the same store, opened again — through the
+	// symlink and through the resolved path alike.
+	for _, spelling := range []string{dir, want} {
+		again, err := Open(spelling, WithScopeProvider(testScope("seat")), WithVerifier(verified()), WithRegistryRoot(reg))
+		if err != nil {
+			t.Fatalf("%q is the seat's own store, reached by another name — it must open: %v", spelling, err)
+		}
+		if again.Dir() != want {
+			t.Fatalf("both spellings must canonicalize to one directory, got %q want %q", again.Dir(), want)
+		}
+		if _, err := again.Record(evidenced(agent("a"), "api", "and again"), ep, at(2*time.Minute)); err != nil {
+			t.Fatalf("…and it must be able to write: %v", err)
+		}
+	}
+
+	// AND THE SINGLETON IS INTACT. The fix makes the seat's own store work; it does not hand
+	// out a second one, and the not-yet-existing directory is where that would be easiest to
+	// miss — the same missing-path branch, on a directory the seat does not own.
+	for _, alternate := range []string{
+		t.TempDir(),                         // an existing dir elsewhere
+		filepath.Join(t.TempDir(), "fresh"), // one that does not exist yet
+		filepath.Join(link, "store", "..", "..", "elsewhere"), // reached back out through the symlink
+	} {
+		_, err := Open(alternate, WithScopeProvider(testScope("seat")), WithVerifier(verified()), WithRegistryRoot(reg))
+		var conflict *ErrScopeDirConflict
+		if !errors.As(err, &conflict) {
+			t.Fatalf("a SECOND store for this seat must still be refused (%s), got %v", alternate, err)
+		}
+		if conflict.Canonical != want {
+			t.Fatalf("the refusal must name the seat's real store %q, got %q", want, conflict.Canonical)
+		}
+	}
+}
+
+// The canonical form of a directory MUST NOT DEPEND ON WHETHER IT EXISTS. That is the
+// property the defect violated, stated directly and without a store around it — and it is
+// the half that runs on windows, where creating a symlink needs a privilege the test box may
+// not have.
+//
+// It matters on both sides of the comparison. makeCanonicalDir answers for the store this
+// process is opening (and creates it). canonicalDir answers for the directory the REGISTRY
+// recorded, which this process must not create and which may since have been deleted — and a
+// canonicalizer that gave one answer for a live directory and another for a deleted one would
+// refuse a seat against its own binding the moment its store was removed.
+func TestCanonicalDirIsTheSameAnswerWhetherOrNotThePathExists(t *testing.T) {
+	base := t.TempDir()
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"a leaf that does not exist yet", filepath.Join(base, "store")},
+		{"several levels that do not exist yet", filepath.Join(base, "a", "b", "c")},
+		{"an unclean spelling of one", filepath.Join(base, "a", "..", "a", "b", ".")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, err := canonicalDir(tc.path)
+			if err != nil {
+				t.Fatalf("canonicalDir on a path that does not exist must still answer: %v", err)
+			}
+			if !filepath.IsAbs(before) {
+				t.Fatalf("the canonical form is absolute, got %q", before)
+			}
+
+			made, err := makeCanonicalDir(tc.path)
+			if err != nil {
+				t.Fatalf("makeCanonicalDir: %v", err)
+			}
+			if made != before {
+				t.Fatalf("creating the directory changed its canonical form (%q → %q). That is the defect: the "+
+					"registry records the first answer at Open and compares the second at every write.", before, made)
+			}
+
+			after, err := canonicalDir(tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after != made {
+				t.Fatalf("canonicalDir disagrees with makeCanonicalDir on a directory that EXISTS (%q vs %q) — the "+
+					"two run on opposite sides of every singleton comparison", after, made)
+			}
+
+			// …and deleting it does not change the answer either, which is what keeps a seat whose
+			// store was removed from being refused against its own binding.
+			if err := os.RemoveAll(filepath.Join(base, "a")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(filepath.Join(base, "store")); err != nil {
+				t.Fatal(err)
+			}
+			gone, err := canonicalDir(tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gone != made {
+				t.Fatalf("the canonical form of a DELETED directory changed (%q → %q) — a seat whose store is gone "+
+					"would be refused against its own entry", made, gone)
+			}
+		})
+	}
+}
+
+// The same property, with a real symlink in the middle of it: the resolution has to happen
+// through the parent even when the leaf below it is missing, which is the case a plain
+// EvalSymlinks cannot answer at all.
+func TestCanonicalDirResolvesASymlinkedParentOfAMissingDir(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	symlinkOrSkip(t, real, link)
+
+	want := mustCanonical(t, real) + string(filepath.Separator) + "store"
+
+	got, err := canonicalDir(filepath.Join(link, "store"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("a missing directory under a symlinked parent must resolve THROUGH the parent — the leaf is the only "+
+			"part with nothing to resolve. Got %q want %q", got, want)
+	}
+}
+
+// TWO PROCESSES, ONE NEW STORE, TWO SPELLINGS OF IT, AT THE SAME TIME.
+//
+// The first-bind race (TestFirstBindIsSerializedUnderTheCanonicalLock) proves that two
+// racers wanting DIFFERENT directories cannot both win. This is its mirror, and it is the
+// race the canonicalization defect actually created: racers wanting the SAME directory, by
+// different names, before it exists. If the winner records a spelling the losers do not
+// derive, every loser is refused from the store it correctly shares — a self-inflicted
+// conflict on a seat with exactly one store.
+func TestRacingOpensOfOneNewStoreAgreeOnItsSpelling(t *testing.T) {
+	reg := t.TempDir()
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	symlinkOrSkip(t, real, link)
+
+	// Half the racers say it through the symlink, half through the resolved path. Neither
+	// creates it first: Open does, under the lock, whichever one gets there.
+	spellings := []string{
+		filepath.Join(link, "store"),
+		filepath.Join(real, "store"),
+		filepath.Join(link, "sub", "..", "store"),
+		filepath.Join(real, "store") + string(filepath.Separator),
+	}
+
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		dirs []string
+		errs []error
+	)
+	start := make(chan struct{})
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			s, err := Open(spellings[i%len(spellings)], WithScopeProvider(testScope("contested")), WithRegistryRoot(reg))
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+			dirs = append(dirs, s.Dir())
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if len(errs) != 0 {
+		t.Fatalf("every racer asked for the SAME store, spelled differently — none may be refused. Got %d refusals, "+
+			"first: %v", len(errs), errs[0])
+	}
+	want := mustCanonical(t, real) + string(filepath.Separator) + "store"
+	for _, d := range dirs {
+		if d != want {
+			t.Fatalf("all racers must derive one canonical directory, got %q want %q", d, want)
+		}
+	}
+}
+
+// symlinkOrSkip creates a directory symlink, or skips: on windows it needs developer mode or
+// SeCreateSymbolicLinkPrivilege, and a test box without either cannot exercise a symlink at
+// all. The ordering property the symlink tests are here for is pinned WITHOUT one by
+// TestCanonicalDirIsTheSameAnswerWhetherOrNotThePathExists, which runs everywhere.
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create a symlink on this box (%v) — on windows that needs developer mode or "+
+			"SeCreateSymbolicLinkPrivilege", err)
+	}
+}
+
 // ─── AND THE REGISTRY'S OWN ROOT DOES NOT GET A VOTE EITHER ───────────────────
 //
 // The registry closed the --dir door, and left its own front door reachable through the very
