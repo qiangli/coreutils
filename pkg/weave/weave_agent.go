@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
@@ -25,38 +26,8 @@ import (
 // a raw launch, interactive under a PTY — because changing what that spawns
 // would silently rewrite every conductor script that relies on it.
 
-// weaveAgentLaunch is an agent resolved from the registry.
-type weaveAgentLaunch struct {
-	// Nick is the agent's canonical nickname — the principal that acts. It is
-	// a bare `tool:model` when nobody has nicknamed the binding.
-	Nick string
-	// Bin is the executable; ToolName and ModelName are what the registry
-	// calls the two halves of the binding.
-	Bin       string
-	ToolName  string
-	ModelName string
-	// Model is the provider-side id actually passed to the tool.
-	Model string
-	// Args is the headless flag list, model selected, prompt NOT included.
-	Args []string
-}
-
-// Binding is the capability-matrix key: tool:model.
-func (l *weaveAgentLaunch) Binding() string { return l.ToolName + ":" + l.ModelName }
-
-// Named reports whether this agent has a nickname a mention can carry. A bare
-// `tool:model` does not: `@claude:opus` would never resolve.
-func (l *weaveAgentLaunch) Named() bool {
-	return l != nil && l.Nick != "" && !strings.Contains(l.Nick, ":")
-}
-
-// Argv is the complete command: binary, flags, then the prompt.
-func (l *weaveAgentLaunch) Argv(prompt string) []string {
-	out := make([]string, 0, len(l.Args)+2)
-	out = append(out, l.Bin)
-	out = append(out, l.Args...)
-	return append(out, prompt)
-}
+// weaveAgentLaunch is the shared agent launch resolved from the fleet registry.
+type weaveAgentLaunch = agentlaunch.Launch
 
 // weaveResolveAgent resolves a name to an agent: a nickname, an alias, or a
 // bare tool:model. It returns (nil, nil) when the name is not an agent —
@@ -66,41 +37,19 @@ func (l *weaveAgentLaunch) Argv(prompt string) []string {
 // which is the question both `weave start` and `weave fleet` begin with.
 func weaveResolveAgent(name string) (*weaveAgentLaunch, error) {
 	cat := fleetCatalog()
-
-	var toolName, modelName, nick string
-	if a, ok := cat.Agent(name); ok {
-		toolName, modelName, nick = a.Tool, a.Model, a.Name
-	} else if t, m, ok := strings.Cut(name, ":"); ok && t != "" && m != "" {
-		toolName, modelName, nick = t, m, name
-	} else {
-		// A bare tool name, or a name the registry does not know. Neither
-		// names a model, so neither is an agent.
+	if _, ok := cat.Agent(name); !ok {
+		if t, m, ok := strings.Cut(name, ":"); !ok || t == "" || m == "" {
+			return nil, nil
+		}
+	}
+	l, err := agentlaunch.ResolveWithCatalog(name, agentlaunch.Options{DryRun: true}, fleetCatalog)
+	if err != nil {
+		return nil, err
+	}
+	if l.ModelName == "" {
 		return nil, nil
 	}
-
-	tool, ok := cat.Tool(toolName)
-	if !ok {
-		return nil, fmt.Errorf("agent %q names tool %q, which is not in the catalog (see `bashy tools list`)", name, toolName)
-	}
-	if !tool.TakesModel() {
-		return nil, fmt.Errorf("agent %q binds tool %q to model %q, but %s cannot select a model: its launch template has no %s",
-			name, toolName, modelName, toolName, fleet.ModelToken)
-	}
-
-	target := modelName
-	if m, ok := cat.Model(modelName); ok {
-		target, modelName = m.Target(), m.Name
-	}
-
-	args, ok := tool.ArgvPrefix(target)
-	if !ok {
-		return nil, fmt.Errorf("tool %q has no headless launch template; a bare launch hangs at its trust prompt (see `bashy tools show %s`)", toolName, toolName)
-	}
-
-	return &weaveAgentLaunch{
-		Nick: nick, Bin: tool.Binary(), ToolName: tool.Name,
-		ModelName: modelName, Model: target, Args: args,
-	}, nil
+	return &l, nil
 }
 
 // weaveExpandAgent expands a single agent token into a full launch argv.
@@ -138,27 +87,10 @@ func weaveExpandAgent(toolArgs []string, body, title string) (*weaveAgentLaunch,
 // the seat into the principal slot would put a name in the record that resolves
 // to nothing.
 func weaveAgentEnv(env []string, l *weaveAgentLaunch) []string {
-	if !l.Named() {
-		// An un-nicknamed `tool:model` binding cannot be a principal: a
-		// mention cannot carry a colon, so `@claude:opus` would never resolve.
+	if l == nil {
 		return env
 	}
-	out := make([]string, 0, len(env)+3)
-	for _, kv := range env {
-		switch {
-		case strings.HasPrefix(kv, "BASHY_PRINCIPAL="),
-			strings.HasPrefix(kv, "BASHY_AGENT_ID="),
-			strings.HasPrefix(kv, "BASHY_AGENT_BINDING="):
-			// re-stamped below; a worker must not inherit the conductor's identity
-		default:
-			out = append(out, kv)
-		}
-	}
-	return append(out,
-		"BASHY_PRINCIPAL=dhnt:agent/"+l.Nick,
-		"BASHY_AGENT_ID="+l.Nick,
-		"BASHY_AGENT_BINDING="+l.Binding(),
-	)
+	return agentlaunch.PrincipalEnv(env, agentlaunch.Launch(*l))
 }
 
 // --- roster members ---------------------------------------------------------
@@ -226,7 +158,7 @@ func resolveWeaveMember(name string) (weaveMember, error) {
 	if chk := fleetCatalog().VerifyModel(launch.ModelName, fleet.Probes(nil)); !chk.OK {
 		return weaveMember{}, fmt.Errorf("agent %q: model %s: %s", name, launch.ModelName, chk.Reason)
 	}
-	return weaveMember{Name: name, Tool: launch.ToolName, Bin: launch.Bin, agent: launch}, nil
+	return weaveMember{Name: name, Tool: launch.ToolName, Bin: launch.Tool, agent: launch}, nil
 }
 
 // resolveWeaveRoster resolves every entry, reporting the first that cannot run.

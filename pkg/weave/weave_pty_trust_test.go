@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-func TestRunWeaveToolPTYAppliesStartupTrustClear(t *testing.T) {
+func TestRunWeaveToolPTYClearsTrustPromptReactively(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-tool")
 	out := filepath.Join(dir, "said")
-	body := "#!/bin/sh\nIFS= read -r line\nprintf '%s' \"$line\" > \"$1\"\n"
+	body := "#!/bin/sh\nprintf 'Do you trust this directory?\\n1. Yes\\n'\nIFS= read -r line\nprintf '%s' \"$line\" > \"$1\"\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -24,9 +24,8 @@ func TestRunWeaveToolPTYAppliesStartupTrustClear(t *testing.T) {
 		exec.Command(script, out),
 		io.Discard,
 		weaveGuards{
-			ctlSock:                  filepath.Join(dir, "issue.sock"),
-			startupTrustClearPayload: "1",
-			maxRuntime:               5 * time.Second,
+			ctlSock:    filepath.Join(dir, "issue.sock"),
+			maxRuntime: 5 * time.Second,
 		},
 	)
 	if err != nil {
@@ -40,6 +39,6 @@ func TestRunWeaveToolPTYAppliesStartupTrustClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(string(got)) != "1" {
-		t.Fatalf("startup trust clear payload = %q, want 1", got)
+		t.Fatalf("reactive trust clear payload = %q, want 1", got)
 	}
 }

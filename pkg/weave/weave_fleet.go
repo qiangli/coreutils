@@ -405,7 +405,7 @@ func fleetRowForEntry(dir, name string, now time.Time, probe bool, cache map[str
 		return fleetRowFor(dir, name, now, probe, cache) // a bare tool, exactly as before
 	}
 
-	row, dirty := fleetRowForBinary(dir, launch.ToolName, launch.Bin, now, probe, cache)
+	row, dirty := fleetRowForBinary(dir, launch.ToolName, launch.Tool, now, probe, cache)
 	row.launch = launch
 	row.Agent, row.Model, row.Binding = launch.Nick, launch.Model, launch.Binding()
 

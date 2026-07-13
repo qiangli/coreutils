@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/agentlaunch"
 )
 
 func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
@@ -70,20 +72,11 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 
 func SendCommand(root, id string, cmd Command) error {
 	store := NewStore(root, id)
-	conn, err := net.DialTimeout("unix", store.CtlSockPath(), 3*time.Second)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if err := json.NewEncoder(conn).Encode(cmd); err != nil {
-		return err
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	var ack struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
-	if err := json.NewDecoder(conn).Decode(&ack); err != nil {
+	if err := agentlaunch.SendJSONControl(store.CtlSockPath(), cmd, &ack, 3*time.Second); err != nil {
 		return err
 	}
 	if !ack.OK {
