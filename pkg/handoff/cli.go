@@ -182,11 +182,13 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 			// unattended process the human did not see start.
 			switch rec.Dispatch.Disposition {
 			case DispatchAgent:
-				fmt.Fprintf(cmd.OutOrStdout(), "\nTo hand it over, in an isolated workspace seeded with your work:\n")
-				fmt.Fprintf(cmd.OutOrStdout(), "  bashy resume %s --to %s\n", rec.ID, rec.Dispatch.To)
+				fmt.Fprintf(cmd.OutOrStdout(), "\nTo hand it over: START %s interactively (you), then have it run `bashy resume --claim`.\n", rec.Dispatch.To)
 			case DispatchSchedule:
 				fmt.Fprintf(cmd.OutOrStdout(), "\nTo arm the wake-up:\n")
 				fmt.Fprintf(cmd.OutOrStdout(), "  bashy schedule add --at %s --prompt \"bashy resume %s\"\n", at, rec.ID)
+			}
+			if !asJSON {
+				fmt.Fprintln(cmd.OutOrStdout(), handoffHelpHint)
 			}
 			return nil
 		},
@@ -459,9 +461,11 @@ func liveSeat(dir string, roots []string) *Record {
 	return best
 }
 
-// resumeHelpHint is the discoverability footer printed under resume's output so
-// a reader always knows how to reach the rest of the flags.
+// resumeHelpHint / handoffHelpHint are the discoverability footers printed under
+// each command's output so a reader always knows how to reach the rest of the
+// flags — and how the two halves fit together — without guessing.
 const resumeHelpHint = "→ `bashy resume --help` for all options (--claim take it · --all register · --cancel · --prune)"
+const handoffHelpHint = "→ `bashy handoff --help` for options (--as <role> seat · --next · --blocker). The successor picks it up with `bashy resume` (look) then `bashy resume --claim` (take)."
 
 // ownerOf names who holds a record: the claimant's grounded identity for an
 // active one (stamped from who ran --claim — not free text, so it cannot be
