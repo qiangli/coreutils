@@ -142,7 +142,45 @@ func Load() (*Matrix, error) {
 	if m.Agents == nil {
 		m.Agents = map[string]map[Capability]Cell{}
 	}
+	if m.reconcile() {
+		_ = m.save() // best-effort; the in-memory matrix is correct either way
+	}
 	return m, nil
+}
+
+// reconcile brings a persisted matrix back in line with the catalog, and
+// reports whether anything moved.
+//
+// A row is keyed by tool:model, so retiring a model — or renaming one to a
+// version-explicit name — strands its row and leaves its replacement absent.
+// Neither half is harmless: Best() ranks whatever rows exist, so a stranded
+// row routes work to a model that is gone, while a missing row makes a
+// perfectly good agent invisible to the router.
+//
+// Both are repaired on load rather than behind a `capability seed` the
+// operator has to know to run. What is discarded is host-local posterior
+// evidence, not a durable record; what is added is a prior, marked as one.
+func (m *Matrix) reconcile() bool {
+	cat := newCatalog()
+	changed := false
+	for agent := range m.Agents {
+		// The test is canonical identity, not mere resolvability. `claude:fable`
+		// still RESOLVES — the family alias carries it to fable5 — but it is no
+		// longer the canonical key, and leaving it would keep a duplicate row
+		// accumulating half the evidence for one agent under an old name.
+		a, ok := cat.Agent(agent)
+		if !ok || a.MatrixKey() != agent {
+			delete(m.Agents, agent)
+			changed = true
+		}
+	}
+	for agent, row := range seedPriorsFrom(cat).Agents {
+		if _, ok := m.Agents[agent]; !ok {
+			m.Agents[agent] = row
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (m *Matrix) save() error {
@@ -322,6 +360,25 @@ func ToolOf(agent string) string {
 func ModelOf(agent string) string {
 	_, model, _ := strings.Cut(agent, ":")
 	return model
+}
+
+// ResolveTool resolves any name a human or an agent might type — a nickname
+// ("Beatrix"), a family alias ("claude-opus"), a tool:model binding, or a bare
+// tool — to the harness binary behind it.
+//
+// Operability is a fact about the BINARY, so a name has to be resolved before
+// it can be asked: LookPath("Beatrix") only ever answers "not installed", and
+// that answer is a lie about a perfectly routable agent. Use this, not ToolOf,
+// wherever the string came from outside. ToolOf stays the cheap split for
+// matrix keys, which are already tool:model by construction.
+func ResolveTool(name string) string {
+	if a, ok := newCatalog().Agent(name); ok {
+		return a.Tool
+	}
+	if t := ToolOf(name); t != "" {
+		return t
+	}
+	return name
 }
 
 // Operable reports whether a TOOL can be driven headless on this host, with a

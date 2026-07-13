@@ -89,7 +89,7 @@ func TestAgentsShowYAMLEmitsTheEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Agents) != 1 || f.Agents[0].MatrixKey() != "claude:fable" {
+	if len(f.Agents) != 1 || f.Agents[0].MatrixKey() != "claude:fable5" {
 		t.Fatalf("round-trip lost the binding: %+v", f.Agents)
 	}
 }

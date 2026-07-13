@@ -80,6 +80,9 @@ func (c *Catalog) SaveModel(m Model) error {
 	if err := validName(m.Name); err != nil {
 		return err
 	}
+	if m.Band < 0 || m.Band > MaxBand {
+		return fmt.Errorf("fleet: band %d is out of range (1-%d, or 0 for unpegged)", m.Band, MaxBand)
+	}
 	data, err := Marshal(m)
 	if err != nil {
 		return err
@@ -92,6 +95,18 @@ func (c *Catalog) SaveModel(m Model) error {
 func (c *Catalog) SaveAgent(a Agent) error {
 	if err := validName(a.Name); err != nil {
 		return err
+	}
+	// Store the binding by canonical name, whatever the caller typed. `agents
+	// add x --model opus` is a fine thing to write and a terrible thing to
+	// persist: `opus` floats, so the saved identity would change meaning under
+	// the file. A half that does not resolve is left alone — binding ahead of
+	// installing is legitimate, and refusing it here would be a new failure
+	// mode for no gain.
+	if m, ok := c.Model(a.Model); ok {
+		a.Model = m.Name
+	}
+	if t, ok := c.Tool(a.Tool); ok {
+		a.Tool = t.Name
 	}
 	data, err := Marshal(AgentFile{Agents: []Agent{a}})
 	if err != nil {

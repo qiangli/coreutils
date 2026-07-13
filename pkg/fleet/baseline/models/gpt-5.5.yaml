@@ -1,4 +1,7 @@
 name: gpt-5.5
+family: gpt
+version: "5.5"
+band: 3
 display: GPT-5.5 (ChatGPT subscription)
 provider: openai
 kind: subscription

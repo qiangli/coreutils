@@ -1,4 +1,7 @@
 name: deepseek-v4
+family: deepseek
+version: "4"
+band: 2
 display: DeepSeek V4
 provider: openai-compat
 kind: api

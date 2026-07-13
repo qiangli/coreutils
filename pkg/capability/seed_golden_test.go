@@ -1,6 +1,7 @@
 package capability
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"sort"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
+
+var updateGolden = flag.Bool("update", false, "rewrite testdata/seed_priors.golden from the current baseline")
 
 // bare builds a catalog with an EMPTY baseline and a scratch local store, so a
 // test sees exactly the entries it wrote and nothing else.
@@ -37,6 +40,18 @@ func TestSeedPriorsMatchGolden(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
+
+	// Re-pegging a band or a quality prior legitimately moves these cells.
+	// `go test ./pkg/capability -update` rewrites the golden so the diff shows
+	// up in review as an intentional change rather than a chore.
+	if *updateGolden {
+		if err := os.WriteFile("testdata/seed_priors.golden",
+			[]byte(strings.Join(got, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("wrote testdata/seed_priors.golden")
+		return
+	}
 
 	raw, err := os.ReadFile("testdata/seed_priors.golden")
 	if err != nil {

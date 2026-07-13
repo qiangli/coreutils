@@ -91,6 +91,13 @@ type cloudModel struct {
 	APIKeyRef string `json:"api_key_ref"`
 	Model     string `json:"model"` // provider-side id
 
+	// Family, Version, and Band ride the overlay so an org can re-peg a
+	// band, or publish a new version of a family, without anyone shipping
+	// a binary. A server that omits them leaves the embedded peg standing.
+	Family  string `json:"family"`
+	Version string `json:"version"`
+	Band    int    `json:"band"`
+
 	Tier          string   `json:"tier"`
 	Capabilities  []string `json:"capabilities"`
 	Domain        []string `json:"domain"`
@@ -213,10 +220,14 @@ func (c CloudClient) fetchModels() (map[string][]byte, error) {
 		if validName(m.Name) != nil {
 			continue
 		}
+		if m.Band < 0 || m.Band > MaxBand {
+			continue // a nonsense band would silently misroute; drop the row
+		}
 		body, err := Marshal(Model{
 			Name: m.Name, Display: m.Display, Kind: m.Kind, Source: m.Source,
 			Provider: m.Provider, BaseURL: m.BaseURL, APIKeyRef: m.APIKeyRef,
 			UpstreamID: m.Model, Tier: m.Tier,
+			Family: m.Family, Version: m.Version, Band: m.Band,
 			Capabilities: m.Capabilities, Domain: m.Domain,
 			ContextLength: m.ContextLength, Price: m.Price,
 		})

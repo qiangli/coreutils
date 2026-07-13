@@ -1,4 +1,7 @@
 name: kimi-k2.6
+family: kimi
+version: "2.6"
+band: 2
 display: Kimi K2.6
 provider: openai-compat
 kind: api

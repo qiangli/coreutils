@@ -27,7 +27,7 @@ func TestSaveAndResolveAgent(t *testing.T) {
 		t.Fatalf("entry not written: %v", err)
 	}
 	got, ok := c.Agent("smarty")
-	if !ok || got.Name != "007" || got.MatrixKey() != "claude:fable" {
+	if !ok || got.Name != "007" || got.MatrixKey() != "claude:fable5" {
 		t.Fatalf("alias did not resolve to the saved agent: %+v %v", got, ok)
 	}
 	if got.Ring != assetring.RingLocal {
@@ -264,8 +264,15 @@ func TestVerifyModelKinds(t *testing.T) {
 	if chk := c.VerifyModel("keyless", Probes(nil)); chk.OK {
 		t.Fatalf("an api model without api_key_ref must fail: %+v", chk)
 	}
-	if chk := c.VerifyModel("opus", Probes(nil)); !chk.OK || chk.Detail != "opus" {
+	if chk := c.VerifyModel("opus", Probes(nil)); !chk.OK || chk.Detail != "claude-opus-4-8" {
 		t.Fatalf("subscription model check = %+v", chk)
+	}
+	// An unpegged model still verifies — it is usable, just not band-routable.
+	if err := c.SaveModel(Model{Name: "unpegged", Kind: ModelKindSubscription}); err != nil {
+		t.Fatal(err)
+	}
+	if chk := c.VerifyModel("unpegged", Probes(nil)); !chk.OK || chk.Warn == "" {
+		t.Fatalf("an unpegged model must pass with a warning: %+v", chk)
 	}
 	if err := c.SaveModel(Model{Name: "weird", Kind: "telepathy"}); err != nil {
 		t.Fatal(err)

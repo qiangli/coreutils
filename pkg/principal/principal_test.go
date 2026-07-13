@@ -90,7 +90,7 @@ func TestResolveAgentByNicknameAndAlias(t *testing.T) {
 		if !ans.Resolved || ans.Matches[0].Name != "007" {
 			t.Fatalf("Resolve(%q) did not land on 007: %+v", q, ans)
 		}
-		if ans.Matches[0].Summary != "claude:fable" {
+		if ans.Matches[0].Summary != "claude:fable5" {
 			t.Fatalf("Resolve(%q) summary = %q", q, ans.Matches[0].Summary)
 		}
 	}
@@ -522,7 +522,7 @@ func TestExpandResolvesMentionsInline(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := r.Expand("@007 commented on the gate")
-	if !strings.Contains(got, "@007 (agent, claude:fable)") {
+	if !strings.Contains(got, "@007 (agent, claude:fable5)") {
 		t.Fatalf("Expand = %q", got)
 	}
 	// An unresolvable mention is left exactly as written.

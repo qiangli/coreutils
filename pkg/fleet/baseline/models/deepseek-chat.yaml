@@ -1,4 +1,5 @@
 name: deepseek-chat
+band: 1
 display: DeepSeek Chat
 provider: openai-compat
 kind: api

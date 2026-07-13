@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -160,8 +161,19 @@ func newToolsShow(opts []Option) *cobra.Command {
 
 // --- models -------------------------------------------------------------
 
+// BandLabel renders a band for humans. An unpegged model shows as "-"
+// rather than "L0", because 0 is not a band — it is a model nobody has
+// placed yet, and it should look unanswered, not weak.
+func BandLabel(band int) string {
+	if band < 1 {
+		return "-"
+	}
+	return "L" + strconv.Itoa(band)
+}
+
 type modelRow struct {
 	Name     string   `json:"name"`
+	Band     int      `json:"band,omitempty"`
 	Kind     string   `json:"kind,omitempty"`
 	Provider string   `json:"provider,omitempty"`
 	Target   string   `json:"target,omitempty"`
@@ -172,8 +184,12 @@ type modelRow struct {
 func newModelsList(opts []Option) *cobra.Command {
 	var asJSON bool
 	c := &cobra.Command{
-		Use:           "list",
-		Short:         "List inference backends",
+		Use:   "list",
+		Short: "List inference backends",
+		Long: "List inference backends.\n\n" +
+			"BAND is the model's capability peg, L1 (basic) to L4 (frontier),\n" +
+			"normalized across providers — a vendor's own tier ladder is never\n" +
+			"mapped positionally. Agents inherit the band of the model they bind.",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -182,17 +198,18 @@ func newModelsList(opts []Option) *cobra.Command {
 			rows := make([]modelRow, 0, len(models))
 			for _, m := range models {
 				rows = append(rows, modelRow{
-					Name: m.Name, Kind: m.Kind, Provider: m.Provider,
-					Target: m.Target(), Aliases: m.Aliases, Ring: m.Ring.String(),
+					Name: m.Name, Band: m.Band, Kind: m.Kind, Provider: m.Provider,
+					Target: m.Target(), Aliases: m.Names()[1:], Ring: m.Ring.String(),
 				})
 			}
 			if asJSON {
 				return writeJSON(cmd.OutOrStdout(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tKIND\tPROVIDER\tTARGET\tRING")
+			fmt.Fprintln(tw, "NAME\tBAND\tKIND\tPROVIDER\tTARGET\tALIASES\tRING")
 			for _, r := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Kind, r.Provider, r.Target, r.Ring)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, BandLabel(r.Band),
+					r.Kind, r.Provider, r.Target, strings.Join(r.Aliases, ","), r.Ring)
 			}
 			tw.Flush()
 			return reportParseErrs(cmd.ErrOrStderr(), errs)
@@ -229,40 +246,67 @@ func newModelsShow(opts []Option) *cobra.Command {
 // --- agents -------------------------------------------------------------
 
 type agentRow struct {
-	Name     string   `json:"name"`
-	Tool     string   `json:"tool"`
-	Model    string   `json:"model"`
-	Binding  string   `json:"binding"`
-	Aliases  []string `json:"aliases,omitempty"`
-	Resolves bool     `json:"resolves"`
-	Reason   string   `json:"reason,omitempty"`
-	Ring     string   `json:"ring"`
+	Name        string   `json:"name"`
+	Nick        string   `json:"nick,omitempty"`
+	Band        int      `json:"band,omitempty"`
+	Tool        string   `json:"tool"`
+	Model       string   `json:"model"`
+	Binding     string   `json:"binding"`
+	Reliability string   `json:"reliability,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
+	Resolves    bool     `json:"resolves"`
+	Reason      string   `json:"reason,omitempty"`
+	Ring        string   `json:"ring"`
 }
 
 func newAgentsList(opts []Option) *cobra.Command {
 	var asJSON, all bool
+	var band, minBand int
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List named tool:model bindings",
 		Long: "List named tool:model bindings.\n\n" +
 			"An agent resolves when both halves of its binding are in the catalog.\n" +
-			"Dangling agents are hidden unless --all is given.",
+			"Dangling agents are hidden unless --all is given.\n\n" +
+			"BAND is inherited from the model — L1 (basic) to L4 (frontier) — and is\n" +
+			"how you select a roster without naming anyone: --min-band 3 is every\n" +
+			"agent worth seating at a design discussion. NICK is the agent's human\n" +
+			"name, assigned from its binding unless one was set with --nick.",
+		Example: "  bashy agents list --min-band 3\n" +
+			"  bashy agents list --json",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if band != 0 && minBand != 0 {
+				return fmt.Errorf("fleet: --band and --min-band are alternatives; give one")
+			}
 			cat := New(opts...)
 			agents, errs := cat.Agents()
 			rows := make([]agentRow, 0, len(agents))
 			for _, a := range agents {
 				r := agentRow{
-					Name: a.Name, Tool: a.Tool, Model: a.Model, Binding: a.MatrixKey(),
-					Aliases: a.Aliases, Resolves: true, Ring: a.Ring.String(),
+					Name: a.Name, Nick: a.NickName(), Tool: a.Tool, Model: a.Model,
+					Binding: a.MatrixKey(), Aliases: a.Aliases, Resolves: true,
+					Ring: a.Ring.String(),
 				}
-				if _, _, _, err := cat.Binding(a.Name); err != nil {
+				if a.Ledger != nil {
+					r.Reliability = a.Ledger.Reliability
+				}
+				if _, _, m, err := cat.Binding(a.Name); err != nil {
 					r.Resolves, r.Reason = false, err.Error()
+				} else {
+					r.Band = m.Band
 				}
 				if !r.Resolves && !all {
+					continue
+				}
+				// An unpegged or dangling agent is never silently swept into a
+				// band filter: it has no band, so it matches no band.
+				if band != 0 && r.Band != band {
+					continue
+				}
+				if minBand != 0 && r.Band < minBand {
 					continue
 				}
 				rows = append(rows, r)
@@ -271,10 +315,11 @@ func newAgentsList(opts []Option) *cobra.Command {
 				return writeJSON(cmd.OutOrStdout(), rows)
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tBINDING\tALIASES\tRESOLVES\tRING")
+			fmt.Fprintln(tw, "NAME\tNICK\tBAND\tTOOL\tMODEL\tRELIAB\tRESOLVES\tRING")
 			for _, r := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-					r.Name, r.Binding, strings.Join(r.Aliases, ","), yesNo(r.Resolves), r.Ring)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.Name, dashIfEmpty(r.Nick), BandLabel(r.Band), r.Tool, r.Model,
+					dashIfEmpty(r.Reliability), yesNo(r.Resolves), r.Ring)
 			}
 			tw.Flush()
 			if err := reportCollisions(cmd.ErrOrStderr(), cat.CheckAliases()); err != nil {
@@ -285,7 +330,16 @@ func newAgentsList(opts []Option) *cobra.Command {
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	c.Flags().BoolVar(&all, "all", false, "include agents whose tool or model does not resolve")
+	c.Flags().IntVar(&band, "band", 0, "only agents in exactly this band (1-4)")
+	c.Flags().IntVar(&minBand, "min-band", 0, "only agents in this band or above (1-4)")
 	return c
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func newAgentsShow(opts []Option) *cobra.Command {

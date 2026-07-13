@@ -40,8 +40,8 @@ func TestBaselineParses(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("model parse errors: %v", errs)
 	}
-	if len(models) < 10 {
-		t.Errorf("baseline has %d models, want the 10 capability priors", len(models))
+	if len(models) < 9 {
+		t.Errorf("baseline has %d models, want the 9 capability priors", len(models))
 	}
 
 	agents, errs := c.Agents()
@@ -82,12 +82,16 @@ func TestMatrixKeyIsTheBinding(t *testing.T) {
 	}
 }
 
-// A tool:model binding names its agent even before anyone nicknames it.
+// A tool:model binding names its agent even before anyone nicknames it —
+// and the model half resolves by any name it answers to, so the floating
+// family alias works in a binding just as it does on its own.
 func TestAgentResolvesByBinding(t *testing.T) {
 	c := baseline(t)
-	a, ok := c.Agent("claude:opus")
-	if !ok || a.Tool != "claude" || a.Model != "opus" {
-		t.Fatalf("Agent(claude:opus) = %+v, %v", a, ok)
+	for _, q := range []string{"claude:opus4.8", "claude:opus"} {
+		a, ok := c.Agent(q)
+		if !ok || a.Tool != "claude" || a.Model != "opus4.8" {
+			t.Fatalf("Agent(%s) = %+v, %v", q, a, ok)
+		}
 	}
 }
 
@@ -290,7 +294,7 @@ func TestAliasesResolveToOneAgent(t *testing.T) {
 		if !ok {
 			t.Fatalf("alias %q did not resolve", nick)
 		}
-		if a.MatrixKey() != "claude:fable" {
+		if a.MatrixKey() != "claude:fable5" {
 			t.Fatalf("alias %q resolved to %q", nick, a.MatrixKey())
 		}
 	}

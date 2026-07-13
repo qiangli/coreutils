@@ -1,4 +1,7 @@
 name: gemini3.1
+family: gemini
+version: "3.1"
+band: 3
 display: Gemini 3.1
 provider: gemini
 kind: subscription

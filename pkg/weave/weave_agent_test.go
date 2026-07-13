@@ -34,11 +34,13 @@ func TestExpandAgentSelectsTheModel(t *testing.T) {
 	if l == nil {
 		t.Fatal("a nickname must expand")
 	}
-	want := "claude --dangerously-skip-permissions --model fable FIX THE GATE"
+	want := "claude --dangerously-skip-permissions --model claude-fable-5 FIX THE GATE"
 	if strings.Join(argv, " ") != want {
 		t.Fatalf("argv =\n  %q\nwant\n  %q", strings.Join(argv, " "), want)
 	}
-	if l.Nick != "007" || l.Binding() != "claude:fable" {
+	// Bound as `fable`, recorded as `claude:fable5`: the binding is canonical
+	// however it was spelled.
+	if l.Nick != "007" || l.Binding() != "claude:fable5" {
 		t.Fatalf("launch = %+v", l)
 	}
 }
@@ -88,7 +90,7 @@ func TestUnNicknamedBindingIsNotAPrincipal(t *testing.T) {
 	if l.Nick != "aider:opus" {
 		t.Fatalf("nick = %q", l.Nick)
 	}
-	if !strings.Contains(strings.Join(argv, " "), "--model opus") {
+	if !strings.Contains(strings.Join(argv, " "), "--model claude-opus-4-8") {
 		t.Fatalf("argv = %q", argv)
 	}
 	base := []string{"PATH=/bin"}

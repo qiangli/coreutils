@@ -20,6 +20,10 @@ type Check struct {
 	Skipped bool   `json:"skipped,omitempty"`
 	Reason  string `json:"reason"`
 	Detail  string `json:"detail,omitempty"` // version, target id, launch argv
+	// Warn carries something true but not disqualifying — an entry that
+	// works yet is missing something a caller may be counting on. It never
+	// affects OK: a warning that failed the check would just get silenced.
+	Warn string `json:"warn,omitempty"`
 }
 
 // Probes builds the probe set fleet checks read. It is the same engine
@@ -91,6 +95,9 @@ func (c *Catalog) VerifyModel(name string, _ *spacetime.ProbeSet) Check {
 		return chk
 	}
 	chk.Name, chk.Detail = m.Name, m.Target()
+	if m.Band < 1 {
+		chk.Warn = "unpegged: no band, so a --min-band roster will never seat an agent bound to it"
+	}
 
 	switch m.Kind {
 	case ModelKindAPI:

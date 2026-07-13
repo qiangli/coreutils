@@ -71,11 +71,13 @@ func TestBindingPassesModel(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 
+	// `opus` is the family alias; what reaches the wire is the pinned id of
+	// whichever version it currently names.
 	tool, args, model := argv(t, "claude:opus", Options{})
-	if tool != "claude" || model != "opus" {
+	if tool != "claude" || model != "claude-opus-4-8" {
 		t.Fatalf("tool=%q model=%q", tool, model)
 	}
-	if strings.Join(args, " ") != "--dangerously-skip-permissions --model opus" {
+	if strings.Join(args, " ") != "--dangerously-skip-permissions --model claude-opus-4-8" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -111,10 +113,10 @@ func TestNicknameAndAliasSelectTheSameModel(t *testing.T) {
 
 	for _, nick := range []string{"007", "smarty"} {
 		tool, args, model := argv(t, nick, Options{})
-		if tool != "claude" || model != "fable" {
+		if tool != "claude" || model != "claude-fable-5" {
 			t.Fatalf("%s: tool=%q model=%q", nick, tool, model)
 		}
-		if !contains(args, "--model") || !contains(args, "fable") {
+		if !contains(args, "--model") || !contains(args, "claude-fable-5") {
 			t.Fatalf("%s: args = %q", nick, args)
 		}
 	}
@@ -286,7 +288,7 @@ func TestUnNicknamedBindingKeepsItsRawName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Nick != "aider:opus" || l.Tool != "aider" || l.Model != "opus" {
+	if l.Nick != "aider:opus" || l.Tool != "aider" || l.Model != "claude-opus-4-8" {
 		t.Fatalf("launch = %+v", l)
 	}
 }
@@ -317,7 +319,7 @@ func TestInvokeCarriesTheLaunchToTheRunner(t *testing.T) {
 	if _, err := Invoke(context.Background(), Options{Agent: "claude:opus", Instruction: "hi"}, r); err != nil {
 		t.Fatal(err)
 	}
-	if !ok || seen.Tool != "claude" || seen.Model != "opus" {
+	if !ok || seen.Tool != "claude" || seen.Model != "claude-opus-4-8" {
 		t.Fatalf("launch = %+v ok=%v", seen, ok)
 	}
 }
@@ -331,12 +333,13 @@ func TestResultRecordsNickAndModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The registry seeds an agent for this binding, so the CANONICAL nickname
-	// is what gets recorded — a name that `whois` and `@mentions` can resolve.
-	if res.Agent != "claude" || res.Nick != "claude-opus" || res.Model != "opus" {
+	// is what gets recorded — a name that `whois` and `@mentions` can resolve,
+	// and one that names an exact version rather than a moving family.
+	if res.Agent != "claude" || res.Nick != "claude-opus4.8" || res.Model != "claude-opus-4-8" {
 		t.Fatalf("res = %+v", res)
 	}
 	// Agent stays the executable, so the dry-run line is still runnable.
-	if !strings.HasPrefix(res.Output, "claude --dangerously-skip-permissions --model opus ") {
+	if !strings.HasPrefix(res.Output, "claude --dangerously-skip-permissions --model claude-opus-4-8 ") {
 		t.Fatalf("dry run = %q", res.Output)
 	}
 }

@@ -184,10 +184,12 @@ func (c *Catalog) Models() ([]Model, []error) {
 	for _, r := range rows {
 		out = append(out, r.Entry)
 	}
+	decorateModels(out)
 	return out, errs
 }
 
-// Model resolves a model by canonical name or alias.
+// Model resolves a model by canonical name or alias — including the derived
+// family alias, so `opus` finds whichever opus is newest.
 func (c *Catalog) Model(name string) (Model, bool) {
 	models, _ := c.Models()
 	for _, m := range models {
@@ -223,12 +225,16 @@ func (c *Catalog) Agents() ([]Agent, []error) {
 		out = append(out, r.Entry.Agents...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	// Model parse errors are not agent parse errors — they surface in
+	// `models list`, and here they already show up as a dangling binding.
+	models, _ := c.Models()
+	decorateAgents(out, models)
 	return out, errs
 }
 
-// Agent resolves an agent by nickname or alias. It also accepts a bare
-// tool:model binding, so `claude:opus` names its agent even before anyone
-// has nicknamed it.
+// Agent resolves an agent by nickname, human name, family alias, or declared
+// alias. It also accepts a bare tool:model binding, so `claude:opus4.8` names
+// its agent even before anyone has nicknamed it.
 func (c *Catalog) Agent(name string) (Agent, bool) {
 	agents, _ := c.Agents()
 	for _, a := range agents {
@@ -239,6 +245,13 @@ func (c *Catalog) Agent(name string) (Agent, bool) {
 		}
 	}
 	if tool, model, ok := strings.Cut(name, ":"); ok {
+		// The model half is resolved through the catalog, not string-matched,
+		// so `claude:opus` finds the agent bound to opus4.8 the same way the
+		// bare name `opus` finds the model. A binding you can type is worth
+		// little if it only accepts the exact version string.
+		if m, found := c.Model(model); found {
+			model = m.Name
+		}
 		for _, a := range agents {
 			if a.Tool == tool && a.Model == model {
 				return a, true

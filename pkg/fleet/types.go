@@ -211,6 +211,26 @@ type Model struct {
 	// registry's column.
 	UpstreamID string `yaml:"model,omitempty" json:"model,omitempty"`
 
+	// Family and Version make the canonical name version-explicit. The
+	// catalog derives the floating family alias from them: `opus` names
+	// whichever member of family `opus` has the highest Version. A record
+	// therefore stores `claude:opus4.8`, which is true forever, while the
+	// convenient `opus` re-points on its own when a release lands.
+	//
+	// Family is declared, never parsed out of the name: `kimi-k2.7-code`
+	// and `kimi-k2.6` are separate product lines, and no amount of clever
+	// suffix-stripping gets that right.
+	Family  string `yaml:"family,omitempty" json:"family,omitempty"`
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+
+	// Band is the model's capability peg, 1 (basic) to MaxBand (frontier); 0 is
+	// unpegged. It is normalized ACROSS providers — a provider's own tier
+	// ladder is never mapped positionally, so four vendor tiers may all
+	// land in one band. Agents inherit it; they never carry their own.
+	Band int `yaml:"band,omitempty" json:"band,omitempty"`
+
+	// Tier is the provider's own word for its tier, carried from an org
+	// overlay. It is not Band and is not routable.
 	Tier          string   `yaml:"tier,omitempty" json:"tier,omitempty"`
 	Capabilities  []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
 	Domain        []string `yaml:"domain,omitempty" json:"domain,omitempty"`
@@ -227,6 +247,12 @@ type Model struct {
 	Spec      map[string]float64 `yaml:"spec,omitempty" json:"spec,omitempty"`
 
 	XHosts []ModelHost `yaml:"x_hosts,omitempty" json:"x_hosts,omitempty"`
+
+	// Derived holds names the catalog computed at load — today, the family
+	// alias. It is a function of the whole catalog, not of this entry, so
+	// it is never persisted (`yaml:"-"`): writing it back would freeze a
+	// pointer that is supposed to float.
+	Derived []string `yaml:"-" json:"derived,omitempty"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }
@@ -261,6 +287,11 @@ type Agent struct {
 	Display     string   `yaml:"display,omitempty" json:"display,omitempty"`
 	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
 
+	// Nick is the agent's human name — the one you say out loud. Leave it
+	// empty and the catalog assigns one deterministically from the binding,
+	// so every agent has a memorable handle without anyone naming it.
+	Nick string `yaml:"nick,omitempty" json:"nick,omitempty"`
+
 	Tool  string `yaml:"tool" json:"tool"`   // → Tool.Name
 	Model string `yaml:"model" json:"model"` // → Model.Name
 
@@ -268,6 +299,13 @@ type Agent struct {
 	Ledger      *AgentLedger      `yaml:"ledger,omitempty" json:"ledger,omitempty"`
 	Instruction *AgentInstruction `yaml:"instruction,omitempty" json:"instruction,omitempty"`
 	Functions   []string          `yaml:"functions,omitempty" json:"functions,omitempty"`
+
+	// AutoNick and Derived are computed by the catalog at load: the
+	// assigned human name (when Nick is empty) and the floating family
+	// alias (`claude-opus` for a binding on `opus4.8`). Both are functions
+	// of the whole catalog, so neither is ever persisted.
+	AutoNick string   `yaml:"-" json:"auto_nick,omitempty"`
+	Derived  []string `yaml:"-" json:"derived,omitempty"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
 }
@@ -345,11 +383,32 @@ func names(name string, aliases []string) []string {
 // Names returns the tool's canonical name and every alias.
 func (t Tool) Names() []string { return names(t.Name, t.Aliases) }
 
-// Names returns the model's canonical name and every alias.
-func (m Model) Names() []string { return names(m.Name, m.Aliases) }
+// Names returns the model's canonical name and every alias it answers to,
+// including the catalog-derived family alias.
+func (m Model) Names() []string {
+	return names(m.Name, append(append([]string{}, m.Aliases...), m.Derived...))
+}
 
-// Names returns the agent's canonical nickname and every alias.
-func (a Agent) Names() []string { return names(a.Name, a.Aliases) }
+// Names returns the agent's canonical nickname and every alias it answers
+// to: declared aliases, its human name, and the catalog-derived family
+// alias. One list, so every resolver — whois, chat, meet, weave — sees the
+// same set of names without knowing which were declared and which derived.
+func (a Agent) Names() []string {
+	extra := append([]string{}, a.Aliases...)
+	if n := a.NickName(); n != "" {
+		extra = append(extra, n)
+	}
+	return names(a.Name, append(extra, a.Derived...))
+}
+
+// NickName is the agent's human name: the one it was given, else the one
+// the catalog assigned it.
+func (a Agent) NickName() string {
+	if a.Nick != "" {
+		return a.Nick
+	}
+	return a.AutoNick
+}
 
 // Names returns the person's handle and every alias.
 func (p Person) Names() []string { return names(p.Handle, p.Aliases) }
