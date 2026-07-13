@@ -107,6 +107,17 @@ type Record struct {
 	// (`bashy skills show <role>`), acts as that role, and DECIDES how to drive —
 	// including whether to delegate the work back. Empty = task handoff. This is
 	// the distinction that made "handoff your work" ambiguous: work vs. seat.
+	//
+	// LAUNCH CONSTRAINT (for whoever wires --to): a HUMAN-FACING role must be
+	// launched as an INTERACTIVE session; an AUTONOMOUS role may run headless.
+	//   - steward   = the human's continuous point of contact (surface decisions,
+	//                 take direction, report). MUST be interactive — a headless
+	//                 `codex exec`/`--print` is deaf to the human and cannot
+	//                 steward.
+	//   - conductor = the autonomous execution loop (decompose → isolate → gate →
+	//                 converge until a verifier passes). The GATE is its safety,
+	//                 not human dialogue, so it MAY run headless/in the background.
+	// A steward launches a conductor; it does not become one.
 	Role string `json:"role,omitempty"`
 
 	// Work is the in-flight state — the piece nothing else captured, and the
