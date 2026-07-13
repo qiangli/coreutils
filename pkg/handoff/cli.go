@@ -191,10 +191,11 @@ The record is a FILE. It travels — scp it, mesh it, paste it in an issue.`,
 // machine, and it must work when the agent knows nothing.
 func NewResumeCmd() *cobra.Command {
 	var (
-		to     string
-		list   bool
-		asJSON bool
-		show   bool
+		to      string
+		list    bool
+		asJSON  bool
+		show    bool
+		message string
 	)
 	cmd := &cobra.Command{
 		Use:   "resume [id|path]",
@@ -252,6 +253,12 @@ any one of them.
 			// diff — otherwise it applies a patch it cannot interpret.
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "resuming %s (from %s, %s)\n\n", rec.ID, refName(rec.From), rec.CreatedAt.Format(time.RFC3339))
+			if message != "" {
+				// The human's fresh steer at pickup — read BEFORE the parked
+				// brief, because it reflects what the human wants NOW, which may
+				// re-prioritize the handed-off plan.
+				fmt.Fprintf(out, "── the human says (on pickup) ──\n%s\n\n", strings.TrimSpace(message))
+			}
 			if rec.Role != "" {
 				fmt.Fprintf(out, "── role ──\nAssume the '%s' role before touching the work below: run `bashy skills show %s` and follow it. You are handed the SEAT, not just the task — decide how to drive (including whether to delegate it back).\n\n", rec.Role, rec.Role)
 			}
@@ -289,6 +296,7 @@ any one of them.
 			return nil
 		},
 	}
+	cmd.Flags().StringVarP(&message, "message", "m", "", "an instruction from the human at pickup, shown to the successor first (e.g. what to prioritize now)")
 	cmd.Flags().StringVar(&to, "to", "", "resume in an isolated weave workspace as this tool")
 	cmd.Flags().BoolVar(&list, "list", false, "list pending handoffs for this project")
 	cmd.Flags().BoolVar(&show, "show", false, "print the record without resuming")
