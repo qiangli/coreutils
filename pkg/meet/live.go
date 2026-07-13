@@ -2,7 +2,10 @@ package meet
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +59,15 @@ type LiveEvent struct {
 	Text    string    `json:"text,omitempty"`
 	Status  string    `json:"status,omitempty"` // on `spoke`
 	TS      time.Time `json:"ts"`
+
+	// CtlSock is set on `speaking`: the socket that steers THIS turn.
+	//
+	// It rides the live channel because the live channel already answers "who has
+	// the floor right now" — a `speaking` with no matching `spoke` IS the current
+	// speaker. Keeping the steer address in the same record means `meet say`
+	// cannot address an agent that has already finished, which is the one way a
+	// steer goes quietly nowhere.
+	CtlSock string `json:"ctl_sock,omitempty"`
 }
 
 func livePath(id string) (string, error) {
@@ -106,12 +118,34 @@ type liveWriter struct {
 	buf bytes.Buffer
 }
 
-func newLiveWriter(st *State, speaker, role string) *liveWriter {
+func newLiveWriter(st *State, speaker, role, ctlSock string) *liveWriter {
 	w := &liveWriter{id: st.ID, round: st.Round, speaker: speaker, role: role}
 	appendLive(w.id, LiveEvent{
-		Kind: liveSpeaking, Round: w.round, Speaker: speaker, Role: role, TS: nowFn(),
+		Kind: liveSpeaking, Round: w.round, Speaker: speaker, Role: role,
+		CtlSock: ctlSock, TS: nowFn(),
 	})
 	return w
+}
+
+// ctlSockPath is where this turn's steer socket lives.
+//
+// Deliberately SHORT, and NOT under the meeting's own directory. A unix socket
+// address is capped at ~104 bytes, and a meeting id is a slug of its topic —
+// `~/.bashy/meet/2026-07-13-should-the-cache-be-write-through-0e1e/…` blows the
+// cap and the bind fails. agentpty degrades to a polling file channel when that
+// happens, so steering would still work, just silently worse. Hashing keeps the
+// address inside the limit for any topic anyone can type.
+func ctlSockPath(st *State, speaker string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".bashy", "ctl")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s", st.ID, st.Round, speaker))
+	return filepath.Join(dir, hex.EncodeToString(sum[:])[:12]+".sock")
 }
 
 func (w *liveWriter) Write(p []byte) (int, error) {

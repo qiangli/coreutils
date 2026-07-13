@@ -103,7 +103,7 @@ func TestAgentResolvesByBinding(t *testing.T) {
 func TestArgvDropsOrphanedModelFlag(t *testing.T) {
 	c := baseline(t)
 	legacy := map[string][]string{
-		"claude":   {"claude", "--dangerously-skip-permissions"},
+		"claude":   {"claude", "--dangerously-skip-permissions", "-p"},
 		"codex":    {"codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write"},
 		"agy":      {"agy", "--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},
 		"opencode": {"opencode", "run"},
@@ -126,7 +126,7 @@ func TestArgvSubstitutesModel(t *testing.T) {
 	c := baseline(t)
 	tool, _ := c.Tool("claude")
 	got := tool.Argv("opus", "hi")
-	want := []string{"claude", "--dangerously-skip-permissions", "--model", "opus", "hi"}
+	want := []string{"claude", "--dangerously-skip-permissions", "--model", "opus", "-p", "hi"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("Argv = %q, want %q", got, want)
 	}

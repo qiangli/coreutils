@@ -294,7 +294,7 @@ func TestAuthProbeUsesTheAgentsRealArgv(t *testing.T) {
 	// A bare tool row falls back to its seeded contract.
 	bare := rowFor(t, "claude")
 	bargs, _ := bare.headlessArgs()
-	if strings.Join(bargs, " ") != "--dangerously-skip-permissions" {
+	if strings.Join(bargs, " ") != "--dangerously-skip-permissions -p" {
 		t.Fatalf("bare tool probe argv = %q", bargs)
 	}
 }

@@ -28,7 +28,7 @@ func TestResolveWithCatalogRendersNicknameFromFleetTemplate(t *testing.T) {
 	if l.Tool != "claude" || l.Nick != "007" || l.Binding() != "claude:fable5" {
 		t.Fatalf("launch = %+v", l)
 	}
-	if strings.Join(l.Args, " ") != "--dangerously-skip-permissions --model claude-fable-5" {
+	if strings.Join(l.Args, " ") != "--dangerously-skip-permissions --model claude-fable-5 -p" {
 		t.Fatalf("args = %q", l.Args)
 	}
 }

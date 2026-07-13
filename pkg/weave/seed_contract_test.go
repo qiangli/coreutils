@@ -23,7 +23,7 @@ func pinFleet(t *testing.T) {
 func TestSeededContractArgsUnchanged(t *testing.T) {
 	pinFleet(t)
 	legacy := map[string][]string{
-		"claude":   {"--dangerously-skip-permissions"},
+		"claude":   {"--dangerously-skip-permissions", "-p"},
 		"codex":    {"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"},
 		"agy":      {"--dangerously-skip-permissions", "--print-timeout", "40m", "-p"},
 		"opencode": {"run"},

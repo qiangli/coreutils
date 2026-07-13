@@ -34,7 +34,7 @@ func TestExpandAgentSelectsTheModel(t *testing.T) {
 	if l == nil {
 		t.Fatal("a nickname must expand")
 	}
-	want := "claude --dangerously-skip-permissions --model claude-fable-5 FIX THE GATE"
+	want := "claude --dangerously-skip-permissions --model claude-fable-5 -p FIX THE GATE"
 	if strings.Join(argv, " ") != want {
 		t.Fatalf("argv =\n  %q\nwant\n  %q", strings.Join(argv, " "), want)
 	}
@@ -144,7 +144,7 @@ func TestBareToolNameIsNotExpanded(t *testing.T) {
 func TestMultiTokenArgvIsVerbatim(t *testing.T) {
 	pinAgentFleet(t)
 	for _, argv := range [][]string{
-		{"claude", "--dangerously-skip-permissions"},
+		{"claude", "--dangerously-skip-permissions", "-p"},
 		{"sh", "-c", "echo hi"},
 		{"007", "--extra"}, // even an agent name, once the operator adds args
 	} {

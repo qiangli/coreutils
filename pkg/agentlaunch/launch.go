@@ -55,7 +55,13 @@ type LaunchProfile struct {
 }
 
 var SeededProfiles = map[string]LaunchProfile{
-	"claude":   {UnsafeArgs: []string{"--dangerously-skip-permissions"}},
+	// -p is print mode, and it is stated rather than inferred. Without it claude
+	// decides it is headless by looking at whether stdout is a terminal — true on
+	// a pipe, FALSE the moment the agent is given a PTY (to clear a trust prompt,
+	// or to be steered mid-run), at which point it opens its REPL and waits
+	// forever. Every other tool here already declares its headless mode; claude
+	// was the only one relying on the guess.
+	"claude":   {Args: []string{"-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"codex":    {Args: []string{"exec", "--skip-git-repo-check", "--sandbox", "workspace-write"}},
 	"agy":      {Args: []string{"--print-timeout", "40m", "-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"opencode": {Args: []string{"run"}},

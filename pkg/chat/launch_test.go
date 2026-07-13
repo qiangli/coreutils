@@ -77,7 +77,7 @@ func TestBindingPassesModel(t *testing.T) {
 	if tool != "claude" || model != "claude-opus-4-8" {
 		t.Fatalf("tool=%q model=%q", tool, model)
 	}
-	if strings.Join(args, " ") != "--dangerously-skip-permissions --model claude-opus-4-8" {
+	if strings.Join(args, " ") != "--dangerously-skip-permissions --model claude-opus-4-8 -p" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -339,7 +339,7 @@ func TestResultRecordsNickAndModel(t *testing.T) {
 		t.Fatalf("res = %+v", res)
 	}
 	// Agent stays the executable, so the dry-run line is still runnable.
-	if !strings.HasPrefix(res.Output, "claude --dangerously-skip-permissions --model claude-opus-4-8 ") {
+	if !strings.HasPrefix(res.Output, "claude --dangerously-skip-permissions --model claude-opus-4-8 -p ") {
 		t.Fatalf("dry run = %q", res.Output)
 	}
 }

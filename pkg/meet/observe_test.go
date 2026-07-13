@@ -300,7 +300,7 @@ func TestObserveStreamsLinesAsTheyAreWritten(t *testing.T) {
 
 	// The agent takes the floor and writes, a chunk at a time, exactly as a
 	// process flushes stdout — chunks that do NOT align with lines.
-	w := newLiveWriter(st, "claude-fable5", "")
+	w := newLiveWriter(st, "claude-fable5", "", "")
 	w.Write([]byte("the cache should be write-through\nbecause a lost write is w"))
 	time.Sleep(2 * observePoll)
 
@@ -358,7 +358,7 @@ func TestObserveJoiningMidTurnTakesTheWholeTurnFromTheRecord(t *testing.T) {
 	st.Round = 1
 
 	// The agent is already speaking when the observer attaches.
-	w := newLiveWriter(st, "claude-fable5", "")
+	w := newLiveWriter(st, "claude-fable5", "", "")
 	w.Write([]byte("first point\n"))
 
 	var out, errW bytes.Buffer
@@ -406,7 +406,7 @@ func TestLiveWriterDoesNotAlterTheRecord(t *testing.T) {
 	pinStore(t, st)
 
 	raw := "answer line one\nanswer line two\n"
-	w := newLiveWriter(st, "claude-fable5", "")
+	w := newLiveWriter(st, "claude-fable5", "", "")
 	n, err := w.Write([]byte(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -431,7 +431,7 @@ func TestLiveLinesAreSanitizedLikeTheRecord(t *testing.T) {
 	st := testState()
 	pinStore(t, st)
 
-	w := newLiveWriter(st, "claude-fable5", "")
+	w := newLiveWriter(st, "claude-fable5", "", "")
 	w.Write([]byte("\x1b[32mgreen\x1b[0m text\n"))
 	w.close(statusOK)
 

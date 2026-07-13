@@ -173,26 +173,21 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 	// a tee: `res` is unchanged, so the RECORDED turn is byte-for-byte what it
 	// would have been with nobody watching.
 	//
-	// NOT under a PTY, and the reason is worth writing down, because "just attach
-	// a PTY so the chair can steer it" is the obvious idea and it does not work.
+	// The turn runs under a PTY with a control socket, and that buys two things a
+	// pipe cannot: an agent that stops to ask "do you trust this folder?" gets its
+	// prompt SEEN and cleared instead of sitting at a question nobody is there to
+	// answer, and `meet say` can steer a participant mid-turn without killing it.
 	//
-	// A PTY does not merely give the agent a terminal — it flips the agent CLI
-	// out of headless print mode and into its REPL. Measured, on claude: with a
-	// pipe it answers the prompt and exits; with a PTY it draws its TUI banner,
-	// prints `❯ Try "how does …"`, and sits at the prompt forever. The turn never
-	// completes and the "answer" recorded is box-drawing.
-	//
-	// Steering an agent therefore means DRIVING its TUI — type the prompt, watch
-	// for it to go idle, quit gracefully — which is what weave's launch-and-steer
-	// loop does and what the fleet's prompt_position / supports_say /
-	// supports_graceful_quit / trust_clear fields are for. That is a protocol, not
-	// a flag, and meet does not implement it yet. Until it does, a meeting turn is
-	// a headless print-mode call: it works, it is clean, and it cannot be
-	// interrupted.
-	//
-	// chat.Options.PTY and pkg/agentpty exist and are wired; what is missing is
-	// the TUI-driving loop above them. See `meet say`.
-	live := newLiveWriter(st, name, role)
+	// A PTY and an explicit headless flag are two halves of ONE contract, and this
+	// is the trap. Handed a pipe, an agent CLI infers headlessness from "stdout is
+	// not a terminal". Give it a PTY and that inference flips: claude opened its
+	// REPL, printed its banner, and sat at the prompt forever while the recorded
+	// "answer" filled with box-drawing. The fix is not to take the PTY away — it is
+	// to stop relying on the guess. Every tool's fleet template now DECLARES its
+	// print mode (claude -p, codex exec, opencode run, aider --message, agy -p), so
+	// a terminal changes what the agent can be asked, never what it does.
+	sock := ctlSockPath(st, name)
+	live := newLiveWriter(st, name, role, sock)
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       name,
 		Role:        role,
@@ -202,6 +197,8 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		Cwd:         st.Cwd,
 		Timeout:     budget,
 		Stream:      live,
+		PTY:         true,
+		CtlSock:     sock,
 
 		// A MEETING IS A CONVERSATION, NOT A WORK SESSION. Every seat here —
 		// participant, chair, secretary — produces exactly one thing: text, which
