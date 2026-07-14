@@ -203,9 +203,9 @@ background:rgba(255,255,255,0.08)}
 			fmt.Fprintf(w, `<div class="row"><span class="label">VictoriaLogs (logs)</span><span class="value">127.0.0.1:%d</span></div>`,
 				c.cfg.VictoriaLogsPort)
 		}
-		if c.cfg.JaegerOTLPPort > 0 {
+		if c.cfg.VictoriaTracesPort > 0 {
 			fmt.Fprintf(w, `<div class="row"><span class="label">Jaeger OTLP (traces)</span><span class="value">127.0.0.1:%d</span></div>`,
-				c.cfg.JaegerOTLPPort)
+				c.cfg.VictoriaTracesPort)
 		}
 		if c.cfg.RemoteOTLPEndpoint != "" {
 			fmt.Fprintf(w, `<div class="row"><span class="label">Remote OTLP</span><span class="value">%s</span></div>`,

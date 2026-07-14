@@ -19,7 +19,7 @@ type CollectorConfig struct {
 	PrometheusPort         int    // where Prometheus scrapes metrics from
 	VictoriaLogsPort       int    // VictoriaLogs OTLP HTTP endpoint for logs
 	VictoriaLogsPathPrefix string // path prefix VictoriaLogs requires (e.g. "/logs")
-	JaegerOTLPPort         int    // Jaeger OTLP gRPC endpoint for traces
+	VictoriaTracesPort         int    // VictoriaTraces OTLP/HTTP ingest port
 	HealthPort             int
 
 	// Optional remote OTLP endpoint.
@@ -29,7 +29,7 @@ type CollectorConfig struct {
 
 // GenerateCollectorYAML produces the embedded collector config YAML from
 // the given parameters. Pipeline routing: metrics→Prometheus,
-// logs→VictoriaLogs, traces→Jaeger.
+// logs→VictoriaLogs, traces→VictoriaTraces.
 func GenerateCollectorYAML(cfg CollectorConfig) string {
 	var b strings.Builder
 
@@ -77,9 +77,16 @@ func GenerateCollectorYAML(cfg CollectorConfig) string {
 		b.WriteString(fmt.Sprintf("  otlphttp/vlogs:\n    endpoint: \"http://127.0.0.1:%d%s/insert/opentelemetry\"\n", cfg.VictoriaLogsPort, prefix))
 	}
 
-	// Traces → Jaeger (OTLP gRPC — Jaeger v2 natively accepts OTLP)
-	if cfg.JaegerOTLPPort > 0 {
-		b.WriteString(fmt.Sprintf("  otlp/jaeger:\n    endpoint: \"127.0.0.1:%d\"\n    tls:\n      insecure: true\n", cfg.JaegerOTLPPort))
+	// Traces → VictoriaTraces, over OTLP/HTTP, which it ingests NATIVELY.
+	//
+	// This is the seam that makes the collector deletable: every Victoria component
+	// accepts OTLP directly, so an app can point the standard per-signal env vars
+	// (OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, ..._LOGS_ENDPOINT, ..._METRICS_ENDPOINT)
+	// straight at the store. The collector's remaining job is fan-out for callers that
+	// send everything to one address — 833 dependencies to save the caller from setting
+	// three env vars.
+	if cfg.VictoriaTracesPort > 0 {
+		b.WriteString(fmt.Sprintf("  otlphttp/vtraces:\n    endpoint: \"http://127.0.0.1:%d/insert/opentelemetry\"\n", cfg.VictoriaTracesPort))
 	}
 
 	// Optional remote OTLP endpoint (receives all signals)
@@ -102,10 +109,10 @@ func GenerateCollectorYAML(cfg CollectorConfig) string {
 	b.WriteString("      level: none\n")
 	b.WriteString("  pipelines:\n")
 
-	// Traces → Jaeger (+ optional remote)
+	// Traces → VictoriaTraces (+ optional remote)
 	traceExporters := []string{}
-	if cfg.JaegerOTLPPort > 0 {
-		traceExporters = append(traceExporters, "otlp/jaeger")
+	if cfg.VictoriaTracesPort > 0 {
+		traceExporters = append(traceExporters, "otlphttp/vtraces")
 	}
 	if cfg.RemoteOTLPEndpoint != "" {
 		traceExporters = append(traceExporters, "otlphttp/remote")

@@ -24,19 +24,17 @@ func NewService(cfg *Config, dataDir string) (*Service, error) {
 	}
 	mgr.AddComponent(NewVictoriaLogsComponent(vlogsPort, filepath.Join(dataDir, "vlogs")))
 
-	jaegerOTLPPort, err := allocate()
+	// JAEGER IS GONE. VictoriaTraces stores the traces and serves its own vmui.
+	//
+	//	jaeger        2,240 transitive dependencies
+	//	victoria      ~113  (the same logstorage engine as VictoriaLogs)
+	//
+	// Twenty times the weight, for the same job.
+	vtracesPort, err := allocate()
 	if err != nil {
-		return nil, fmt.Errorf("jaeger otlp port: %w", err)
+		return nil, fmt.Errorf("victoria-traces port: %w", err)
 	}
-	jaegerQueryPort, err := allocate()
-	if err != nil {
-		return nil, fmt.Errorf("jaeger query port: %w", err)
-	}
-	jaegerQueryGRPCPort, err := allocate()
-	if err != nil {
-		return nil, fmt.Errorf("jaeger query grpc port: %w", err)
-	}
-	mgr.AddComponent(NewJaegerComponentWithQueryGRPC(jaegerOTLPPort, jaegerQueryPort, jaegerQueryGRPCPort, filepath.Join(dataDir, "jaeger")))
+	mgr.AddComponent(NewVictoriaTracesComponent(vtracesPort, filepath.Join(dataDir, "vtraces")))
 
 	collGRPCPort, err := resolveOTLPPort(cfg.OTLPGRPCPort, 4317, "OTLP gRPC", allocate)
 	if err != nil {
@@ -56,7 +54,7 @@ func NewService(cfg *Config, dataDir string) (*Service, error) {
 		PrometheusPort:         collPromPort,
 		VictoriaLogsPort:       vlogsPort,
 		VictoriaLogsPathPrefix: "/logs",
-		JaegerOTLPPort:         jaegerOTLPPort,
+		VictoriaTracesPort:     vtracesPort,
 	}
 	coll := NewEmbeddedCollector(collCfg, filepath.Join(dataDir, "collector"))
 	mgr.AddComponent(coll)
