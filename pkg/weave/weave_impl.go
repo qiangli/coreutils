@@ -2673,8 +2673,35 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// queue lock so the cooldown reset can be parsed + recorded after the
 	// state write (best-effort, mirroring memory/reporter below).
 	throttleLogTail := ""
-	if opts.autoCommit && exitCode == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) && (ev.Dirty || ev.UntrackedFiles > 0) {
-		committed, err := maybeAutoCommit(workspace, weaveAutoCommitMessageWithContext(it, ev))
+	// PRESERVE THE ARTIFACT. DO NOT ASSERT SUCCESS ON IT.
+	//
+	// This gate used to require exitCode == 0, which quietly stranded the work of
+	// every tool that crashes on its way OUT. Observed across a whole fleet run:
+	// three opencode workers each did their job — tests passing, by their own logs
+	// — and then died in their storage layer on exit. Non-zero exit, so no
+	// auto-commit, so no commits, so no evidence, so `failed`. The finished work
+	// sat uncommitted in a workspace that `weave prune` would have deleted.
+	//
+	// A crash on the way out is not evidence that the work is bad. It is evidence
+	// of nothing at all about the work.
+	//
+	// So the tree is committed either way — onto an ISOLATED BRANCH that can only
+	// reach base through the gate, so committing costs nothing and risks nothing.
+	// What does NOT change is the terminal STATE: weaveTerminalState still refuses
+	// `submitted` for a non-zero exit, so this never turns a crash into a success.
+	// It turns work-that-is-silently-at-risk into work-that-is-recorded-and-must-
+	// still-prove-itself.
+	//
+	// The commit message says plainly which of the two happened.
+	autoCommitEligible := opts.autoCommit &&
+		(ev.VerifyExit == nil || *ev.VerifyExit == 0) &&
+		(ev.Dirty || ev.UntrackedFiles > 0)
+	if autoCommitEligible {
+		msg := weaveAutoCommitMessageWithContext(it, ev)
+		if exitCode != 0 || runErr != nil || killReason != "" {
+			msg = weaveCrashedAutoCommitMessage(it, exitCode, killReason)
+		}
+		committed, err := maybeAutoCommit(workspace, msg)
 		autoCommitted = committed
 		if err != nil {
 			autoCommitErr = err.Error()
@@ -4951,4 +4978,27 @@ func weavePruneHoldReason(ahead, dirtyFiles, untracked int) string {
 		return "holds unmerged work"
 	}
 	return strings.Join(parts, "; ") + " (--force to delete anyway)"
+}
+
+// weaveCrashedAutoCommitMessage labels work preserved from a run that did not
+// exit cleanly.
+//
+// The message has to be honest in both directions. It must not read like a
+// completed piece of work (the run failed; the state says so and the commit must
+// not contradict it), and it must not read like garbage either — the work is
+// often finished and correct, and the next person to look at this branch needs to
+// know that a human decision is required rather than a rerun.
+func weaveCrashedAutoCommitMessage(it *weaveItem, exitCode int, killReason string) string {
+	how := fmt.Sprintf("exited %d", exitCode)
+	if killReason != "" {
+		how = "killed: " + killReason
+	}
+	return fmt.Sprintf("wip(weave #%d): work preserved from a run that %s\n\n"+
+		"%s\n\n"+
+		"The agent did not exit cleanly, so this run is NOT submitted and this\n"+
+		"commit asserts nothing about whether the work is correct or complete.\n"+
+		"It exists so the work is not lost: it was sitting uncommitted in a\n"+
+		"workspace, and an unreviewed tree is one `weave prune` away from gone.\n\n"+
+		"Review it, then `weave salvage %d` to put it through the gate.",
+		it.ID, how, strings.TrimSpace(it.Title), it.ID)
 }
