@@ -13,14 +13,18 @@ import (
 
 func NewCommand() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "otel",
-		Short: "Query OTEL telemetry with bounded agent-readable summaries",
+		Use:           "otel",
+		Short:         "Query OTEL telemetry with bounded agent-readable summaries",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 	AddCommands(root)
 	return root
 }
 
 func AddCommands(root *cobra.Command) {
+	root.SilenceUsage = true
+	root.SilenceErrors = true
 	opts := Options{BaseURL: "", Since: time.Hour}
 	root.PersistentFlags().StringVar(&opts.BaseURL, "url", "", "OTEL query proxy URL (default BASHY_OTEL_QUERY_URL or http://127.0.0.1:8428)")
 	root.PersistentFlags().BoolVar(&opts.JSON, "json", false, "emit JSON schema "+SchemaVersion)
@@ -82,7 +86,7 @@ func sinceCmd(use, short string, opts *Options, run func(context.Context) (Envel
 func render(stdout, stderr io.Writer, env Envelope, err error, asJSON bool) error {
 	if err != nil {
 		fmt.Fprintf(stderr, "otel query: %v\n", err)
-		return err
+		return printedError{err: err}
 	}
 	if asJSON {
 		enc := json.NewEncoder(stdout)
@@ -98,6 +102,18 @@ func render(stdout, stderr io.Writer, env Envelope, err error, asJSON bool) erro
 			env.Trace.TraceID, env.Trace.DurationMS, env.Trace.BoundWaitMS, env.Trace.WorkMS)
 	}
 	return nil
+}
+
+type printedError struct {
+	err error
+}
+
+func (e printedError) Error() string { return e.err.Error() }
+func (e printedError) Unwrap() error { return e.err }
+
+func ErrorAlreadyPrinted(err error) bool {
+	_, ok := err.(printedError)
+	return ok
 }
 
 func printItem(w io.Writer, item SummaryItem) {

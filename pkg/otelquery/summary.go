@@ -197,7 +197,7 @@ func mustEnv(verb, backend, queryURL, query string, total int, items []SummaryIt
 	e := Envelope{
 		SchemaVersion: SchemaVersion,
 		Verb:          verb, Backend: backend, QueryURL: queryURL, Query: query,
-		TotalMatches: total, Shown: shown, Truncated: total > rowLimit || shown >= displayLimit,
+		TotalMatches: total, Shown: shown, Truncated: total > rowLimit || total > shown,
 		Items: items,
 	}
 	if total == 0 {
