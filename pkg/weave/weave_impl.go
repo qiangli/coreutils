@@ -1617,7 +1617,44 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	var items []*weaveItem
 	anyStale := false
 	reclaimable := 0
+	var salvageable []int64
 	for _, it := range q.Items {
+		// A run that DIED WITH GOOD WORK INSIDE IT.
+		//
+		// weaveTerminalState is correctly conservative: `submitted` requires a
+		// zero exit AND commits, so a wrapper that crashed can never claim
+		// success. But the inverse costs real work. A tool that commits its
+		// changes and THEN crashes on the way out (opencode does this — its
+		// storage layer blows the filename limit on exit) leaves a run marked
+		// `failed` with a perfect, building, tested diff sitting on its branch —
+		// and nothing anywhere says so. It reads exactly like a run that
+		// achieved nothing.
+		//
+		// Observed: a run marked `failed` had committed the whole feature, built
+		// clean, and passed its tests. The only way to know was to go looking.
+		// The next conductor would have redone eight minutes of work for free.
+		//
+		// So: do not change the state (a crash is a crash), SURFACE THE EVIDENCE.
+		// MEASURE IT, DO NOT TRUST THE REPORT. CommitsAhead is written by the
+		// WRAPPER — which, in exactly this case, is the process that died. A tool
+		// that commits its work and then crashes on the way out never reaches the
+		// evidence-recording step, so the queue records commits_ahead=0 while the
+		// branch carries a complete feature.
+		//
+		// That is the fleet-evidence rule inverted: we would be concluding "no
+		// work" from the ABSENCE OF A REPORT BY A PROCESS THAT DID NOT SURVIVE TO
+		// REPORT. The artifact is right there on disk. Go and look at it.
+		if (it.State == "failed" || it.State == "killed") && it.Workspace != "" {
+			ahead := it.CommitsAhead
+			if ahead == 0 {
+				if st, err := os.Stat(it.Workspace); err == nil && st.IsDir() {
+					ahead, _ = weaveMeasureBranch(it.Workspace, base)
+				}
+			}
+			if ahead > 0 {
+				salvageable = append(salvageable, it.ID)
+			}
+		}
 		// Terminal items whose workspace clone still occupies disk are
 		// reclaimable via `weave prune` — surfaced in a footer so the
 		// clutter isn't invisible until something trips over it.
@@ -1648,6 +1685,9 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		if len(others) > 0 {
 			res["other_active_queues"] = others
 		}
+		if len(salvageable) > 0 {
+			res["salvageable"] = salvageable
+		}
 		if reclaimable > 0 {
 			res["reclaimable"] = reclaimable
 		}
@@ -1675,6 +1715,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		if weaveQueueSummaries(w, dir, true) > 0 {
 			fmt.Fprintln(w, "  (queues are per-repo; cd there, or `weave list --all` for full tables)")
 		}
+		weavePrintSalvageableFooter(w, salvageable)
 		weavePrintReclaimableFooter(w, reclaimable)
 		return nil
 	}
@@ -1683,6 +1724,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	if anyStale {
 		fmt.Fprintln(cmd.OutOrStdout(), "* wrapper process is dead — re-attach with `weave start --resume --issue N` or `weave abandon N`")
 	}
+	weavePrintSalvageableFooter(cmd.OutOrStdout(), salvageable)
 	weavePrintReclaimableFooter(cmd.OutOrStdout(), reclaimable)
 	return nil
 }
@@ -4813,4 +4855,24 @@ func runWeaveWait(cmd *cobra.Command, issueID int64, all bool, timeout time.Dura
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// weavePrintSalvageableFooter says that a dead run left work behind.
+//
+// A `failed` row with a green diff on its branch looks exactly like a `failed`
+// row with nothing on it. That silence is expensive: the obvious response to a
+// failed run is to run it again, and re-running it throws away a completed
+// feature and pays for it a second time.
+func weavePrintSalvageableFooter(w io.Writer, ids []int64) {
+	if len(ids) == 0 {
+		return
+	}
+	var b strings.Builder
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "#%d", id)
+	}
+	fmt.Fprintf(w, "%s committed work before dying — `weave salvage <id>` to keep it (do NOT re-run: the diff is already there)\n", b.String())
 }
