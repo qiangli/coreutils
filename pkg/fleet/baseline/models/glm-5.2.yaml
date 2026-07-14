@@ -1,0 +1,54 @@
+name: glm-5.2
+family: glm
+version: "5.2"
+band: 3
+band_source: declared
+# EVIDENCE, and its limits — stated so nobody reads this peg as measured.
+#
+# HAVE (2026-07-14, this host):
+#   - Passed a real gate TWICE on the wrap-implementation task (go test ./... run by
+#     us after the agent exited, never its own claim): exit 0, 89s and 125s, spec
+#     untouched, 6 LLM round-trips, no repeat loop. Clean coder work — an L2 result.
+#   - Handed an adversarial code-review brief (refute a deletion plan), it DECOMPOSED
+#     AND DELEGATED unprompted: 23 subagent tool calls across parallel explorations.
+#     That is conductor-shaped behaviour, and it is the exact axis that separated
+#     deepseek-v4-pro (L3: 1.2x repeat, delegated) from gemini3.1 (demoted to L2:
+#     9.4x repeat, read one file 26 times, never converged).
+#
+# DO NOT HAVE:
+#   - No conductor bake-off against the L3 rung.
+#   - No steward evidence (judgment / restraint / self-correction). The refutation
+#     exam was still running when this was pegged.
+#
+# So: band_source is `declared`, NOT `measured`. A vendor's flagship is never mapped
+# positionally onto our ladder — the peg is against the anchor, by capability we have
+# actually seen. Re-peg when the bake-off lands.
+display: GLM-5.2 (z.ai)
+provider: openai-compat
+kind: api
+# BILLING NOTE — the taxonomy has a gap and this model sits in it.
+#
+# `kind: subscription` means flat-rate through a vendor CLI (claude, codex, gemini:
+# OAuth login, the CLI *is* the product). `kind: api` means pay-per-token through an
+# API key (deepseek, kimi). The GLM Coding Plan is FLAT-RATE BILLING OVER AN API KEY —
+# economically a subscription, operationally a plain HTTP call.
+#
+# It is declared `api` because that is what the field mechanically controls: `api`
+# requires an api_key_ref, and this model needs one (verify.go:104). But cost_micro is
+# priced for the flat-rate reality — the marginal cost of a token is ~0 under the plan,
+# so the router should reach for this BEFORE a metered model of similar band. It is not
+# set to 0: a free-forever model would dominate every routing decision unconditionally,
+# and that is a claim about the plan, not about the model.
+#
+# This combination is exactly the lane ycode exists to serve: no per-token anxiety AND
+# no third-party CLI to change its flags underneath us (which is what retired aider).
+base_url: https://api.z.ai/api/coding/paas/v4
+api_key_ref: zai
+# THE ENDPOINT IS THE CODING-PLAN ONE: /api/coding/paas/v4, not the general
+# /api/paas/v4. They differ by one path segment, and a coding-plan key is REJECTED by
+# the general endpoint — which reads exactly like "the model is broken".
+model: glm-5.2
+quality: 0.84
+cost_micro: 900
+ids:
+  ycode: glm-5.2
