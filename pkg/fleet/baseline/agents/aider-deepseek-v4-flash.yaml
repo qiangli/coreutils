@@ -1,8 +1,0 @@
-agents:
-  - name: aider-deepseek-v4-flash
-    tool: aider
-    model: deepseek-v4-flash
-    display: "aider · deepseek-v4-flash"
-    ledger:
-      reliability: unmeasured
-      notes: L2 rung; live-probed

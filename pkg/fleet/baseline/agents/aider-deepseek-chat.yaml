@@ -1,8 +1,0 @@
-agents:
-  - name: aider-deepseek-chat
-    tool: aider
-    model: deepseek-chat
-    display: "aider · deepseek-chat"
-    ledger:
-      reliability: unmeasured
-      notes: L1 rung; live-probed

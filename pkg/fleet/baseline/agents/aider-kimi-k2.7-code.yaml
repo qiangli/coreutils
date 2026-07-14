@@ -1,8 +1,0 @@
-agents:
-  - name: aider-kimi-k2.7-code
-    tool: aider
-    model: kimi-k2.7-code
-    display: "aider · kimi-k2.7-code"
-    ledger:
-      reliability: medium
-      notes: surgical one-shots; auto-commits; pin exact cases

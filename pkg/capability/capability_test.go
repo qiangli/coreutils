@@ -34,11 +34,20 @@ func TestSeedAndLoad(t *testing.T) {
 func TestFactorization(t *testing.T) {
 	withTempStore(t)
 	m, _ := Load()
-	// Same model, different tool → close QUALITY (deep-research) column.
-	ad := m.Agents["aider:deepseek-v4-pro"][CapCoding].Quality
+	// Same model, different tool → close QUALITY column. The matrix factorizes:
+	// quality is a property of the MODEL, harness is a property of the TOOL, and
+	// the same model behind two different tools must not read as two different
+	// models.
+	//
+	// This used to compare aider against opencode. aider was RETIRED from the fleet
+	// (it has no file discovery, so it cannot be handed a task — see
+	// baseline/tools/aider.yaml), which left it with no agent bindings and this
+	// assertion reading 0.00 for an agent that no longer exists. The property is
+	// unchanged; it is now checked against two tools that are actually staffed.
+	yd := m.Agents["ycode:deepseek-v4-pro"][CapCoding].Quality
 	od := m.Agents["opencode:deepseek-v4-pro"][CapCoding].Quality
-	if diff := ad - od; diff > 0.06 || diff < -0.06 {
-		t.Errorf("same-model coding quality should be close: aider=%.2f opencode=%.2f", ad, od)
+	if diff := yd - od; diff > 0.06 || diff < -0.06 {
+		t.Errorf("same-model coding quality should be close: ycode=%.2f opencode=%.2f", yd, od)
 	}
 	// Same tool, different model → HARNESS column (operability) identical.
 	ok := m.Agents["opencode:kimi-k2.7-code"][CapOperability].Quality
@@ -68,16 +77,16 @@ func TestRecordMovesQualityAndPersists(t *testing.T) {
 	withTempStore(t)
 	NowRFC = func() string { return "2026-07-08T00:00:00Z" }
 	m, _ := Load()
-	before := m.Agents["aider:kimi-k2.7-code"][CapCoding].Quality
+	before := m.Agents["opencode:kimi-k2.7-code"][CapCoding].Quality
 	// Two failures should pull quality DOWN and flip source to host.
-	if err := Record("aider:kimi-k2.7-code", CapCoding, false, 1200, 50, NowRFC()); err != nil {
+	if err := Record("opencode:kimi-k2.7-code", CapCoding, false, 1200, 50, NowRFC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Record("aider:kimi-k2.7-code", CapCoding, false, 0, 0, NowRFC()); err != nil {
+	if err := Record("opencode:kimi-k2.7-code", CapCoding, false, 0, 0, NowRFC()); err != nil {
 		t.Fatal(err)
 	}
 	m2, _ := Load() // reload from disk → persistence check
-	cell := m2.Agents["aider:kimi-k2.7-code"][CapCoding]
+	cell := m2.Agents["opencode:kimi-k2.7-code"][CapCoding]
 	if cell.Source != SourceHost {
 		t.Errorf("source should be host after Record, got %s", cell.Source)
 	}
