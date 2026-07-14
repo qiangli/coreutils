@@ -51,6 +51,13 @@ func TestSteerLive(t *testing.T) {
 		// `opencode [project]` (no `run`) is the TUI — the launch I never tried
 		// when I recorded opencode as un-steerable.
 		argv = []string{"opencode", "--model", os.Getenv("STEER_MODEL")}
+	case "ycode":
+		// Bare `ycode` (no `prompt`) is the interactive bubbletea TUI — the same
+		// shape as codex and opencode, both of which steer. If this passes, the
+		// "expose ycode's event bus as a control socket" work is UNNECESSARY: a TUI
+		// that reads stdin is already reachable through the pty control channel, and
+		// all ycode needs is a `steer_exec:` line in the registry.
+		argv = []string{"ycode", "--model", os.Getenv("STEER_MODEL")}
 	case "aider":
 		// aider's REPL: --message makes it a one-shot; without it, it prompts.
 		argv = []string{"aider", "--yes-always", "--no-git", "--model", os.Getenv("STEER_MODEL")}

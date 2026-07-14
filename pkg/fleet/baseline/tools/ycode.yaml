@@ -11,7 +11,11 @@ cli:
     exec: ycode prompt --model {model} --print {prompt}
     prompt_position: last
     trust_preseed: none
-    supports_say: false
+    # Bare `ycode` is the interactive bubbletea TUI — the same shape as codex and
+    # opencode, and it reads stdin the same way, so agentpty's control socket
+    # reaches it through the pty master with NO ycode change at all.
+    steer_exec: ycode --model {model}
+    supports_say: true
     supports_graceful_quit: true
     notes: >-
       FIRST-PARTY harness. It reaches every API-key provider (deepseek, moonshot,
@@ -22,9 +26,16 @@ cli:
       to STDERR; the answer is on stdout, which is why the pipe path keeps them
       apart and a turn stays clean.
 
-      supports_say is false ONLY because the bus is not yet exposed as a control
-      socket. It is the one harness where that is a wiring job rather than an
-      impossibility — see docs/first-party-harness.md.
+      It STEERS, and it always did. This entry said `supports_say: false` with a
+      comment asserting the bus had to be exposed as a control socket first —
+      written without ever launching `ycode` interactively and typing at it. It is
+      a bubbletea TUI reading stdin; the pty control channel reaches it exactly as
+      it reaches codex and opencode. Measured in pkg/agentpty/steer_live_test.go
+      (STEER_TOOL=ycode): STEERED_OK, echoed AND answered.
+
+      That was the sixth registry claim in one day that described a tool nobody had
+      tried. The bus is still worth exposing — for a real TURN BOUNDARY and for
+      evidence by construction — but not for this.
     watchdog:
       max_runtime: 45m
       mem_limit: 12g
