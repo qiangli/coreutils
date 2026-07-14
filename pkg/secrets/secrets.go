@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // NewSecretsCmd returns the `secrets` cobra command tree — the
@@ -342,11 +343,14 @@ func newSetCmd(cfg *Config) *cobra.Command {
 			if len(args) == 2 {
 				value = args[1]
 			} else {
-				b, rerr := io.ReadAll(c.InOrStdin())
+				v, rerr := readSecretValue(c, args[0])
 				if rerr != nil {
 					return rerr
 				}
-				value = strings.TrimRight(string(b), "\r\n")
+				value = v
+			}
+			if value == "" {
+				return fmt.Errorf("refusing to store an empty value for %s", args[0])
 			}
 			if err := client.Put([]Item{{Name: args[0], Value: value}}); err != nil {
 				return err
@@ -356,6 +360,43 @@ func newSetCmd(cfg *Config) *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+// readSecretValue gets the value for `secrets set NAME` when none was given on the
+// command line.
+//
+// It used to be a bare io.ReadAll(stdin). At a terminal that BLOCKS WITH NO PROMPT —
+// silently, forever, until you happen to know you are supposed to type a secret and
+// press Ctrl-D. It is indistinguishable from a hang, and it was reported as one.
+//
+// Reading from stdin is the RIGHT default (it keeps the key out of shell history,
+// which is the entire point of this command). The bug was never the read. It was that
+// the command asked for something without saying so.
+//
+//	A prompt is not decoration. Without it, waiting looks exactly like broken.
+//
+// At a TTY: prompt on stderr (so `secrets set X < file` and pipelines are unaffected)
+// and read one line with echo DISABLED — it is a secret being typed in a terminal.
+// Not at a TTY: unchanged, read the stream to EOF.
+func readSecretValue(c *cobra.Command, name string) (string, error) {
+	in := c.InOrStdin()
+
+	f, ok := in.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		b, err := io.ReadAll(in)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimRight(string(b), "\r\n"), nil
+	}
+
+	fmt.Fprintf(c.ErrOrStderr(), "Value for %s (input hidden): ", name)
+	b, err := term.ReadPassword(int(f.Fd()))
+	fmt.Fprintln(c.ErrOrStderr())
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", name, err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // --- import ------------------------------------------------------------
