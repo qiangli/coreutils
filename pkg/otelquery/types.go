@@ -4,7 +4,27 @@ import "time"
 
 const SchemaVersion = "bashy-otelquery-v1"
 
-const defaultBaseURL = "http://127.0.0.1:8428"
+// defaultBaseURL is the `bashy otel` REVERSE PROXY, not any one store.
+//
+// It must be the proxy, because every query in this package is written against the proxy's
+// path prefixes (/logs/, /traces/, /metrics/) — those exist only there. The individual
+// Victoria stores serve their APIs at the ROOT of their own ports and know nothing about a
+// prefix.
+//
+// This was 8428 — VictoriaMetrics' own port — which meant every verb in this package queried
+// http://127.0.0.1:8428/traces/... against a server that has no /traces. `bashy otel guessed`
+// could not have worked against a real stack, ever.
+//
+// It survived review because EVERY TEST INJECTS ITS OWN httptest URL. The one value that has
+// to be right in production is the one value no test touched. See defaultBaseURL_test.go,
+// which now pins it.
+//
+// Keep in sync with external/otel/stack.DefaultProxyPort. It cannot be imported: external/otel
+// is a separate Go module (heavy, build-tagged), and a query client must stay linkable into the
+// LEAN build. So the coupling is a comment and a test, deliberately.
+const defaultProxyPort = 31415
+
+const defaultBaseURL = "http://127.0.0.1:31415"
 
 type Options struct {
 	BaseURL string

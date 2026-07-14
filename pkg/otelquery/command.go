@@ -26,7 +26,7 @@ func AddCommands(root *cobra.Command) {
 	root.SilenceUsage = true
 	root.SilenceErrors = true
 	opts := Options{BaseURL: "", Since: time.Hour}
-	root.PersistentFlags().StringVar(&opts.BaseURL, "url", "", "OTEL query proxy URL (default BASHY_OTEL_QUERY_URL or http://127.0.0.1:8428)")
+	root.PersistentFlags().StringVar(&opts.BaseURL, "url", "", "OTEL query proxy URL (default BASHY_OTEL_QUERY_URL or http://127.0.0.1:31415)")
 	root.PersistentFlags().BoolVar(&opts.JSON, "json", false, "emit JSON schema "+SchemaVersion)
 	query := &cobra.Command{
 		Use:   "query",
