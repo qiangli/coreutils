@@ -175,12 +175,62 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		if err := s.waitReady(ctx); err != nil {
 			return s, err
 		}
-		if err := s.Say(opt.Prompt); err != nil {
-			return s, fmt.Errorf("chat: could not open the conversation: %w", err)
+		if err := s.openConversation(ctx, opt.Prompt); err != nil {
+			return s, err
 		}
 	}
 	return s, nil
 }
+
+// openConversation sends the first message and CONFIRMS it arrived.
+//
+// It does not send and hope. A TUI that has not finished starting silently
+// swallows whatever you type at it, and the resulting session sits at an empty
+// prompt forever — which looks, from every angle, like a model that had nothing to
+// say. Observed exactly that: an opencode conductor idled at its splash screen with
+// `calls=0`, and the obvious conclusion ("deepseek did nothing") would have been
+// wrong, and would have been recorded as a fact about the model.
+//
+// So: send, then look for the agent to actually start writing. If it does not,
+// send once more. Confirmation is cheap; a false verdict about a model is not.
+func (s *Session) openConversation(ctx context.Context, prompt string) error {
+	for attempt := 1; attempt <= 2; attempt++ {
+		s.mu.Lock()
+		before := s.buf.Len()
+		s.mu.Unlock()
+
+		if err := s.Say(prompt); err != nil {
+			return fmt.Errorf("chat: could not open the conversation with %s: %w", s.Nick, err)
+		}
+
+		// Did it take? An agent that received a prompt starts producing output.
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-s.done:
+				return fmt.Errorf("chat: %s exited before it could be asked anything", s.Nick)
+			case <-time.After(500 * time.Millisecond):
+			}
+			s.mu.Lock()
+			grew := s.buf.Len() - before
+			s.mu.Unlock()
+			// A TUI redraws its own input box as the text is typed, so a few bytes
+			// prove nothing. Real work moves considerably more than that.
+			if grew > openAckBytes {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("chat: %s never acknowledged the opening prompt — it accepted the keystrokes "+
+		"and produced nothing. Its TUI was most likely still starting up. This is a HARNESS failure, "+
+		"not a model failure: do not record it as one", s.Nick)
+}
+
+// openAckBytes is how much output proves the agent actually took the prompt,
+// rather than merely echoing it into its input box.
+const openAckBytes = 400
 
 // Say puts a line in front of the agent WHILE it is working.
 //
@@ -308,14 +358,31 @@ func (s *Session) Close() {
 
 // waitReady blocks until the control socket exists, so the first message is not
 // sent into a socket agentpty has not bound yet — which would silently vanish.
+// waitReady blocks until the agent can actually HEAR us.
+//
+// Two conditions, and the second one is the one that was missing:
+//
+//  1. The control socket is bound — otherwise the message goes to an address that
+//     does not exist yet and simply vanishes.
+//  2. The TUI has DRAWN and gone QUIET. A tool still starting up (opencode loads
+//     MCP servers; codex draws a splash) swallows keystrokes without a trace. It
+//     is not an error, it is not a rejection, it is nothing at all — the session
+//     just sits at an empty prompt forever, looking for all the world like a model
+//     with nothing to say.
+//
+// This used to be `time.Sleep(1500ms)`, which is not a readiness check; it is a
+// guess. It happened to be long enough for the tools that take their prompt on
+// argv (where it does not matter) and too short for the ones that do not (where it
+// is the whole ballgame). Waiting for the output to settle asks the tool itself
+// whether it is ready, instead of betting on a number.
 func (s *Session) waitReady(ctx context.Context) error {
+	// 1. The socket.
 	deadline := time.Now().Add(20 * time.Second)
+	bound := false
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(s.CtlSock); err == nil {
-			// The socket exists; give the TUI a moment to draw its input box before
-			// typing into it.
-			time.Sleep(1500 * time.Millisecond)
-			return nil
+			bound = true
+			break
 		}
 		select {
 		case <-ctx.Done():
@@ -325,7 +392,33 @@ func (s *Session) waitReady(ctx context.Context) error {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	return fmt.Errorf("chat: %s never opened a control channel", s.Nick)
+	if !bound {
+		return fmt.Errorf("chat: %s never opened a control channel", s.Nick)
+	}
+
+	// 2. The TUI: it has painted something, and then stopped painting.
+	//
+	// Bounded, because a tool that renders a spinner never goes quiet at all. When
+	// the budget runs out we send anyway — a prompt that might be swallowed beats a
+	// session that never starts, and openConversation confirms delivery regardless.
+	settle := 1200 * time.Millisecond
+	budget := time.Now().Add(25 * time.Second)
+	for time.Now().Before(budget) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.done:
+			return fmt.Errorf("chat: %s exited before its session was ready", s.Nick)
+		case <-time.After(200 * time.Millisecond):
+		}
+		s.mu.Lock()
+		drawn, quiet := s.buf.Len() > 0, time.Since(s.lastWrite) >= settle
+		s.mu.Unlock()
+		if drawn && quiet {
+			return nil
+		}
+	}
+	return nil
 }
 
 type sessionWriter struct{ s *Session }
