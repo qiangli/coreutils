@@ -177,27 +177,66 @@ func decodeJaegerTrace(b []byte) ([]map[string]any, error) {
 	return resp.Data[0].Spans, nil
 }
 
+// field looks up a logical attribute name in a VictoriaTraces row.
+//
+// VictoriaTraces does NOT store attributes under their bare OTel names. It prefixes them by
+// origin, and buries span-event attributes under an indexed key:
+//
+//	cmd.exit_code    ->  span_attr:cmd.exit_code
+//	service.name     ->  resource_attr:service.name
+//	value.source     ->  event:event_attr:value.source:0   (the :0 is the event index)
+//
+// The first cut of this package queried and read the bare names, so every trace verb returned
+// EMPTY against a real store — a plausible "0 matches" that meant "I looked in a schema that
+// does not exist," not "nothing happened." It was never caught because the tests mock the HTTP
+// server with hand-authored flat rows. This resolver is what a live VictoriaTraces actually
+// returns; see schema_live_test.go, whose fixtures are copied from a real store.
 func field(row map[string]any, names ...string) string {
 	for _, n := range names {
-		if v, ok := row[n]; ok {
-			switch x := v.(type) {
-			case string:
-				return x
-			case float64:
-				if math.Trunc(x) == x {
-					return strconv.FormatInt(int64(x), 10)
-				}
-				return strconv.FormatFloat(x, 'f', -1, 64)
-			case bool:
-				return strconv.FormatBool(x)
-			default:
-				if x != nil {
-					return fmt.Sprint(x)
-				}
+		if s := lookupSchemaAware(row, n); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// lookupSchemaAware tries the bare key, then each origin prefix, then a scan for the indexed
+// event-attribute form (event:event_attr:<name>:<N>).
+func lookupSchemaAware(row map[string]any, n string) string {
+	for _, k := range []string{n, "span_attr:" + n, "resource_attr:" + n} {
+		if s := coerce(row[k]); s != "" {
+			return s
+		}
+	}
+	// Event attributes carry a trailing :<index> that we cannot predict.
+	prefix := "event:event_attr:" + n + ":"
+	for k, v := range row {
+		if strings.HasPrefix(k, prefix) {
+			if s := coerce(v); s != "" {
+				return s
 			}
 		}
 	}
 	return ""
+}
+
+func coerce(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		if math.Trunc(x) == x {
+			return strconv.FormatInt(int64(x), 10)
+		}
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(x)
+	default:
+		return fmt.Sprint(x)
+	}
 }
 
 func number(v any) float64 {

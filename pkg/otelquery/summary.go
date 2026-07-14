@@ -13,13 +13,21 @@ const (
 )
 
 func (c *Client) Guessed(ctx context.Context, opts Options) (Envelope, error) {
-	query := `value.name:* value.source:(estimate or GUESS-default-rate)`
+	// Provenance emits a span NAMED value.<name> carrying an event whose value.source says
+	// where the number came from. The store buries the event attr at
+	// event:event_attr:value.source:0, so we cannot filter it in LogsQL by that logical name --
+	// we select by span name (clean, top-level) and keep the guesses in code.
+	query := `name:value.*`
 	rows, queryURL, err := c.logRows(ctx, "/traces/select/logsql/query", query, opts.Since, rowLimit+1)
 	if err != nil {
 		return Envelope{}, err
 	}
 	items := make([]SummaryItem, 0, len(rows))
 	for _, r := range capRows(rows, rowLimit) {
+		src := field(r, "value.source")
+		if src != "estimate" && !strings.HasPrefix(src, "GUESS") {
+			continue // ran on a real value, not a guess -- not what this verb reports
+		}
 		items = append(items, SummaryItem{
 			Key:       joinNonEmpty(field(r, "value.source"), field(r, "value.name")),
 			TraceID:   field(r, "trace_id", "traceId"),
@@ -40,7 +48,9 @@ func (c *Client) Guessed(ctx context.Context, opts Options) (Envelope, error) {
 }
 
 func (c *Client) Bounds(ctx context.Context, opts Options) (Envelope, error) {
-	query := `(bound.was_hit:true or event.name:bound.hit)`
+	// BoundHit emits a span NAMED bound.<kind> with span_attr:bound.was_hit=true and an event
+	// carrying the limit/actual. Select by span name; the details resolve via schema-aware field.
+	query := `name:bound.*`
 	rows, queryURL, err := c.logRows(ctx, "/traces/select/logsql/query", query, opts.Since, rowLimit+1)
 	if err != nil {
 		return Envelope{}, err
@@ -67,7 +77,9 @@ func (c *Client) Bounds(ctx context.Context, opts Options) (Envelope, error) {
 }
 
 func (c *Client) Failed(ctx context.Context, opts Options) (Envelope, error) {
-	query := `name:exec* cmd.exit_code:*`
+	// cmd.exit_code lives at span_attr:cmd.exit_code, which LogsQL will not match by the bare
+	// name -- select all exec spans and keep the failures in code (exit != 0), below.
+	query := `name:exec*`
 	rows, queryURL, err := c.logRows(ctx, "/traces/select/logsql/query", query, opts.Since, rowLimit+1)
 	if err != nil {
 		return Envelope{}, err
@@ -88,7 +100,7 @@ func (c *Client) Failed(ctx context.Context, opts Options) (Envelope, error) {
 			ExitCode:   exit,
 			CWD:        field(r, "cwd", "process.cwd"),
 			Principal:  field(r, "agent.principal"),
-			DurationMS: number(firstAny(r, "duration_ms", "duration")),
+			DurationMS: number(firstAny(r, "duration_ms")) + number(field(r, "duration"))/1000,
 			Count:      1,
 		})
 	}

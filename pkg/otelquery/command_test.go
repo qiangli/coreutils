@@ -15,11 +15,15 @@ func TestGuessedQueryAndSummary(t *testing.T) {
 		gotQuery = r.URL.Query().Get("query")
 		gotLimit = r.URL.Query().Get("limit")
 		w.Header().Set("Content-Type", "application/json")
+		// REAL VictoriaTraces schema (copied from a live store): span named value.<name>,
+		// event attributes buried under event:event_attr:<name>:<index>, service under
+		// resource_attr:. The previous fixture used flat names the store never emits, so it
+		// passed against a schema that does not exist and the verb returned 0 in production.
 		w.Write([]byte(`[
-{"trace_id":"t1","span_id":"s1","service.name":"ycode","span.name":"turn","event.name":"value","value.name":"context_tokens","value.amount":123,"value.source":"estimate"},
-{"trace_id":"t2","span_id":"s2","service.name":"ycode","span.name":"turn","event.name":"value","value.name":"price","value.amount":1.2,"value.source":"GUESS-default-rate"},
-{"trace_id":"t3","span_id":"s3","service.name":"bashy","span.name":"turn","event.name":"value","value.name":"context_tokens","value.amount":99,"value.source":"estimate"},
-{"trace_id":"t4","span_id":"s4","service.name":"ycode","span.name":"turn","event.name":"value","value.name":"context_tokens","value.amount":456,"value.source":"estimate"}
+{"trace_id":"t1","span_id":"s1","name":"value.context_tokens","resource_attr:service.name":"ycode","event:event_name:0":"value","event:event_attr:value.name:0":"context_tokens","event:event_attr:value.amount:0":"123","event:event_attr:value.source:0":"estimate"},
+{"trace_id":"t2","span_id":"s2","name":"value.price","resource_attr:service.name":"ycode","event:event_name:0":"value","event:event_attr:value.name:0":"price","event:event_attr:value.amount:0":"1.2","event:event_attr:value.source:0":"GUESS-default-rate"},
+{"trace_id":"t3","span_id":"s3","name":"value.context_tokens","resource_attr:service.name":"bashy","event:event_name:0":"value","event:event_attr:value.name:0":"context_tokens","event:event_attr:value.amount:0":"99","event:event_attr:value.source:0":"estimate"},
+{"trace_id":"t4","span_id":"s4","name":"value.context_tokens","resource_attr:service.name":"ycode","event:event_name:0":"value","event:event_attr:value.name:0":"context_tokens","event:event_attr:value.amount:0":"456","event:event_attr:value.source:0":"estimate"}
 ]`))
 	}))
 	defer srv.Close()
@@ -31,8 +35,10 @@ func TestGuessedQueryAndSummary(t *testing.T) {
 	if gotPath != "/traces/select/logsql/query" {
 		t.Fatalf("path = %q", gotPath)
 	}
-	if !strings.Contains(gotQuery, "value.source") || !strings.Contains(gotQuery, "GUESS-default-rate") {
-		t.Fatalf("query = %q", gotQuery)
+	// The store buries value.source at event:event_attr:value.source:0, which LogsQL cannot
+	// filter by the bare name -- so the verb selects by span name and filters guesses in code.
+	if gotQuery != "name:value.*" {
+		t.Fatalf("query = %q, want name:value.* (a span-name filter that the real store matches)", gotQuery)
 	}
 	if gotLimit != "201" {
 		t.Fatalf("limit = %q", gotLimit)
@@ -77,13 +83,13 @@ func TestGuessedQueryAndSummary(t *testing.T) {
 
 func TestBoundsQueryAndSummary(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Query().Get("query"), "bound.was_hit") {
-			t.Fatalf("query = %q", r.URL.Query().Get("query"))
+		if r.URL.Query().Get("query") != "name:bound.*" {
+			t.Fatalf("query = %q, want name:bound.*", r.URL.Query().Get("query"))
 		}
 		w.Write([]byte(`[
-{"trace_id":"t1","bound.kind":"rate_limit","bound.limit":90,"bound.actual":130},
-{"trace_id":"t2","bound.kind":"rate_limit","bound.limit":90,"bound.actual":100},
-{"trace_id":"t3","bound.kind":"bytes","bound.limit":1000,"bound.actual":1200}
+{"trace_id":"t1","name":"bound.rate_limit","span_attr:bound.was_hit":"true","event:event_attr:bound.kind:0":"rate_limit","event:event_attr:bound.limit:0":"90","event:event_attr:bound.actual:0":"130"},
+{"trace_id":"t2","name":"bound.rate_limit","span_attr:bound.was_hit":"true","event:event_attr:bound.kind:0":"rate_limit","event:event_attr:bound.limit:0":"90","event:event_attr:bound.actual:0":"100"},
+{"trace_id":"t3","name":"bound.bytes","span_attr:bound.was_hit":"true","event:event_attr:bound.kind:0":"bytes","event:event_attr:bound.limit:0":"1000","event:event_attr:bound.actual:0":"1200"}
 ]`))
 	}))
 	defer srv.Close()
@@ -99,9 +105,9 @@ func TestBoundsQueryAndSummary(t *testing.T) {
 func TestFailedGroupsIdenticalFailures(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`[
-{"trace_id":"t1","cmd.name":"go test","cmd.exit_code":1,"cwd":"/repo","agent.principal":"codex","duration_ms":100},
-{"trace_id":"t2","cmd.name":"go test","cmd.exit_code":1,"cwd":"/repo","agent.principal":"codex","duration_ms":90},
-{"trace_id":"t3","cmd.name":"go vet","cmd.exit_code":0,"cwd":"/repo"}
+{"trace_id":"t1","name":"exec go test","status_code":"2","span_attr:cmd.name":"go test","span_attr:cmd.exit_code":"1","span_attr:cmd.cwd":"/repo","span_attr:agent.principal":"codex","duration":"100000"},
+{"trace_id":"t2","name":"exec go test","status_code":"2","span_attr:cmd.name":"go test","span_attr:cmd.exit_code":"1","span_attr:cmd.cwd":"/repo","span_attr:agent.principal":"codex","duration":"90000"},
+{"trace_id":"t3","name":"exec go vet","status_code":"0","span_attr:cmd.name":"go vet","span_attr:cmd.exit_code":"0","span_attr:cmd.cwd":"/repo"}
 ]`))
 	}))
 	defer srv.Close()
