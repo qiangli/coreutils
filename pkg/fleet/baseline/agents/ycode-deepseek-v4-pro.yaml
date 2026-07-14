@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-deepseek-v4-pro
+    tool: ycode
+    model: deepseek-v4-pro
+    display: "ycode · deepseek-v4-pro"
+    ledger:
+      reliability: unmeasured
+      notes: L3 rung — first-party harness

@@ -211,6 +211,24 @@ type Model struct {
 	// registry's column.
 	UpstreamID string `yaml:"model,omitempty" json:"model,omitempty"`
 
+	// ToolIDs override UpstreamID for a specific tool, because THE ID A MODEL
+	// ANSWERS TO IS A PROPERTY OF THE TOOL, NOT OF THE MODEL.
+	//
+	// One model, three spellings, all live today:
+	//
+	//   aider/opencode  deepseek/deepseek-v4-pro   (litellm wants provider/model)
+	//   ycode           deepseek-v4-pro            (it detects the provider itself)
+	//   agy             Gemini 3.1 Pro (High)      (a display string, not a slug)
+	//
+	// Treating UpstreamID as one global value made ycode's bindings dead on
+	// arrival: the registry handed it litellm's prefixed form and ycode rejected
+	// it, while the same model worked perfectly when ycode was run by hand. That
+	// is the whole dead-binding failure mode again, and `agents verify --live`
+	// caught it within a minute of the tool being registered.
+	//
+	// Keyed by TOOL name. Absent → UpstreamID.
+	ToolIDs map[string]string `yaml:"ids,omitempty" json:"ids,omitempty"`
+
 	// Family and Version make the canonical name version-explicit. The
 	// catalog derives the floating family alias from them: `opus` names
 	// whichever member of family `opus` has the highest Version. A record
@@ -280,11 +298,27 @@ type ModelHost struct {
 
 // Target is the id passed to a tool's model flag: the provider-side id
 // when known, else the alias itself.
+//
+// Prefer TargetFor: the id a model answers to depends on WHICH TOOL is asking.
 func (m Model) Target() string {
 	if m.UpstreamID != "" {
 		return m.UpstreamID
 	}
 	return m.Name
+}
+
+// TargetFor is the id THIS TOOL will accept for this model.
+//
+// The same model is spelled differently by different harnesses — litellm wants
+// `deepseek/deepseek-v4-pro`, ycode wants `deepseek-v4-pro`, agy wants
+// `Gemini 3.1 Pro (High)`. A registry that stores one global id hands the wrong
+// string to somebody, and a wrong model id is a DEAD BINDING: it looks perfectly
+// healthy until an agent tries to speak.
+func (m Model) TargetFor(tool string) string {
+	if id, ok := m.ToolIDs[tool]; ok && id != "" {
+		return id
+	}
+	return m.Target()
 }
 
 // AgentFile is the on-disk envelope for agents. It mirrors the asset

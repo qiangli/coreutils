@@ -17,3 +17,8 @@ api_key_ref: deepseek
 model: deepseek/deepseek-v4-pro
 quality: 0.82
 cost_micro: 1500
+# ycode detects the provider from the model name, so it takes the BARE id —
+# litellm's `provider/model` prefix is rejected. The id a model answers to is a
+# property of the TOOL, not of the model.
+ids:
+  ycode: deepseek-v4-pro

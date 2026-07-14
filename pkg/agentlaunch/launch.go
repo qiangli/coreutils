@@ -95,14 +95,21 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	}
 	lnch.Tool, lnch.ToolName = toolName, toolName
 
+	tool, known := cat.Tool(toolName)
+
+	// The model id is resolved AFTER the tool is known, because the id a model
+	// answers to is a property of the TOOL: litellm wants `deepseek/deepseek-v4-pro`,
+	// ycode wants the bare `deepseek-v4-pro`, agy wants `Gemini 3.1 Pro (High)`.
+	// Resolving it first — as this used to — hands somebody the wrong string, and
+	// a wrong model id is a dead binding that looks perfectly healthy right up
+	// until an agent tries to speak.
 	if modelName != "" {
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
-			lnch.Model, lnch.ModelName = m.Target(), m.Name
+			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
+
 		}
 	}
-
-	tool, known := cat.Tool(toolName)
 	if namedAgent && !known {
 		return lnch, fmt.Errorf("agent launch: agent %q names tool %q, which is not in the catalog (see `bashy tools list`)", name, toolName)
 	}

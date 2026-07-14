@@ -1,0 +1,36 @@
+name: ycode
+kind: cli
+display: ycode
+cli:
+  binary: ycode
+  launch:
+    # --print is an EXPLICIT headless flag, which is the whole point: ycode does
+    # not infer print mode from "stdout is not a terminal", so a PTY (which it
+    # needs in order to be steerable) cannot flip it into a REPL. claude had to
+    # learn this the hard way; ycode already gets it right.
+    exec: ycode prompt --model {model} --print {prompt}
+    prompt_position: last
+    trust_preseed: none
+    supports_say: false
+    supports_graceful_quit: true
+    notes: >-
+      FIRST-PARTY harness. It reaches every API-key provider (deepseek, moonshot,
+      openai, anthropic, gemini, xai, dashscope) and maps each to its own env key,
+      so an api-kind model needs no third-party CLI at all.
+
+      Its startup chatter (LSP, memory consolidation, browser backend, OTel) goes
+      to STDERR; the answer is on stdout, which is why the pipe path keeps them
+      apart and a turn stays clean.
+
+      supports_say is false ONLY because the bus is not yet exposed as a control
+      socket. It is the one harness where that is a wiring job rather than an
+      impossibility — see docs/first-party-harness.md.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+quirks: first-party; reaches every api-key provider incl. moonshot (which opencode cannot)
+harness:
+  operability: 0.9
+  shell: 0.95
+  tool-use: 0.9
+  isolation: 0.85

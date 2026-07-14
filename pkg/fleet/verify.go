@@ -149,6 +149,6 @@ func (c *Catalog) VerifyAgent(name string, ps *spacetime.ProbeSet) Check {
 
 	chk.OK = true
 	chk.Reason = "launchable"
-	chk.Detail = strings.Join(tool.Argv(model.Target(), PromptToken), " ")
+	chk.Detail = strings.Join(tool.Argv(model.TargetFor(tool.Name), PromptToken), " ")
 	return chk
 }

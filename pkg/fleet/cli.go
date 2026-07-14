@@ -415,8 +415,8 @@ func newAgentsShow(opts []Option) *cobra.Command {
 				return nil
 			}
 			fmt.Fprintf(out, "tool:    %s (%s)\n", tool.Name, tool.CLI.Binary)
-			fmt.Fprintf(out, "model:   %s → %s\n", model.Name, model.Target())
-			fmt.Fprintf(out, "launch:  %s\n", strings.Join(tool.Argv(model.Target(), PromptToken), " "))
+			fmt.Fprintf(out, "model:   %s → %s\n", model.Name, model.TargetFor(tool.Name))
+			fmt.Fprintf(out, "launch:  %s\n", strings.Join(tool.Argv(model.TargetFor(tool.Name), PromptToken), " "))
 			if !tool.TakesModel() {
 				fmt.Fprintf(out, "warning: %s cannot select a model; the binding is a label, not a selection\n", tool.Name)
 			}
