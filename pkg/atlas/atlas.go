@@ -623,6 +623,7 @@ func init() {
 	addVerb("commands", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("context", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("doctor", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapReadOnly}})
+	addVerb("otel", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly, CapNeedsNetwork}})
 	addVerb("audit", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("check", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	// gate: THE Test verb. Before it, the Test stage was EMPTY -- not because
@@ -705,7 +706,7 @@ func init() {
 		// verbs that read stores / remote state
 		"capability", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
-		"doctor", "audit", "check", "sprint",
+		"doctor", "otel", "audit", "check", "sprint",
 		// steward READS the host's authority record (status/board/log/history/reconcile)
 		// and WRITES it (below). A privacy surface: the journal is a durable account of
 		// what agents did on this machine, and its transcripts can carry real
@@ -751,7 +752,7 @@ func init() {
 		"act-runner", "mirror", "podman", "docker", "ollama", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
-		"tessaro", "login",
+		"otel", "tessaro", "login",
 	)
 
 	// exec — spawns a process bashy no longer governs (the coreutils userland,

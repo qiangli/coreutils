@@ -236,6 +236,8 @@ var componentPathMap = map[string]string{
 	"alertmanager":   "/alerts/",
 	"perses":         "/dashboard/",
 	"victoria-logs":  "/logs/",
+	"victoria-traces": "/traces/",
+	"victoria-metrics": "/metrics/",
 	"jaeger":         "/traces/",
 }
 

@@ -1,28 +1,45 @@
 name: glm-5.2
 family: glm
 version: "5.2"
-band: 3
-band_source: declared
-# EVIDENCE, and its limits — stated so nobody reads this peg as measured.
+band: 2
+band_source: measured
+# THE FLEET'S FIRST *MEASURED* BAND. Three independent exams, harness clean.
 #
-# HAVE (2026-07-14, this host):
-#   - Passed a real gate TWICE on the wrap-implementation task (go test ./... run by
-#     us after the agent exited, never its own claim): exit 0, 89s and 125s, spec
-#     untouched, 6 LLM round-trips, no repeat loop. Clean coder work — an L2 result.
-#   - Handed an adversarial code-review brief (refute a deletion plan), it DECOMPOSED
-#     AND DELEGATED unprompted: 23 subagent tool calls across parallel explorations.
-#     That is conductor-shaped behaviour, and it is the exact axis that separated
-#     deepseek-v4-pro (L3: 1.2x repeat, delegated) from gemini3.1 (demoted to L2:
-#     9.4x repeat, read one file 26 times, never converged).
+# WHAT IT CAN DO — and it is genuinely good:
+#   CODING: 3/3 gate PASS on the wrap task (48s/46s/44s), plus 2/2 earlier. Minimal turns,
+#     no thrashing, correct code.
+#   FINDING: excellent, and BETTER THAN AN L4 ON THE SAME CODE. Given an adversarial review
+#     brief it found TWO real bugs that codex:gpt-5.5 did not, in code that had just been
+#     reviewed and committed:
+#       - internal/service/local.go:18 — a SECOND hardcoded maxToolIterations=25 that
+#         published EventTurnComplete (a SUCCESS event) for a truncated run
+#       - usage.Tracker.Model never set (every call site used Add(), not AddWithModel()),
+#         so the "Est. cost" line at the end of EVERY run priced every model as Claude
+#         Sonnet — a THIRD hardcoded copy of the pricing. It found this immediately after
+#         the pricing table and cost metric had been fixed and committed.
 #
-# DO NOT HAVE:
-#   - No conductor bake-off against the L3 rung.
-#   - No steward evidence (judgment / restraint / self-correction). The refutation
-#     exam was still running when this was pegged.
+# WHY IT IS NOT L3 — measured 3/3, and this is the whole case:
+#   IT CANNOT CONVERGE. It hit the iteration cap in all three exams — 25, 80, and 60 turns
+#   — and produced NO synthesized report in any of them. The third run had nothing in its
+#   way: no truncation bug, no quota wall, 2x429 absorbed by the pacer, 60 turns of budget.
+#   It still never stopped.
 #
-# So: band_source is `declared`, NOT `measured`. A vendor's flagship is never mapped
-# positionally onto our ladder — the peg is against the anchor, by capability we have
-# actually seen. Re-peg when the bake-off lands.
+#   Its own transcript is the evidence: "Critical finding emerging...", "Confirmed: the main
+#   flow calls Add()..." — IT HAD THE FINDING AND KEPT INVESTIGATING INSTEAD OF WRITING IT
+#   DOWN. Both bugs above exist only because a HUMAN read its stderr after it failed. Left
+#   alone in an unattended fleet run, it delivers nothing.
+#
+#     A diagnosis you never deliver is not a diagnosis.
+#
+#   L3 is "diagnosis, judgment" — and judgment includes knowing when to stop. It does not.
+#   Same call as gemini3.1 (demoted L3->L2: 9.4x repeat, never converged). Same failure,
+#   same band.
+#
+# ROUTING CONSEQUENCE, and it is not a demotion in practice:
+#   Route it CODING and REVIEW work with a gate and a bounded scope — it is strong there and
+#   cheap. Never make it a conductor or steward: it will burn the budget and report nothing.
+#   It is worth routing work TO. It is never worth leaving ALONE.
+
 display: GLM-5.2 (z.ai)
 provider: openai-compat
 kind: api          # AUTH: an API key (see api_key_ref below)
