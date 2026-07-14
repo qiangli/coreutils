@@ -559,6 +559,11 @@ func NewChatCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope")
 	cmd.Flags().Bool("plain", false, "force plain output even under BASHY_AGENTIC")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the resolved invocation without running the agent")
+	cmd.Flags().BoolVar(&opt.ReadOnly, "read-only", false,
+		"launch with NO write authority: strip the approval-gate kill-switches and pin any sandbox to read-only. "+
+			"An agent that only has to ANSWER needs no filesystem access — and because this removes the dangerous "+
+			"flags rather than asking permission to keep them, it passes the launch guard on an ordinary uncontained "+
+			"host, so nobody has to weaken a machine just to ask an agent a question")
 	_ = cmd.Flags().MarkHidden("plain")
 	return cmd
 }
