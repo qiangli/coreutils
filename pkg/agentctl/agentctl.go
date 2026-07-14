@@ -74,6 +74,22 @@ type Profile struct {
 	GracefulQuit bool
 }
 
+// NeedsTerminal reports whether this tool can actually USE a pseudo-terminal —
+// because it listens mid-run, or because it has a prompt that must be cleared
+// reactively.
+//
+// A terminal is not free, and this is the check that stops it being handed out
+// like one. A pty merges stdout and stderr, so the tool's chrome — codex prints
+// a version banner and its workdir — lands in the captured answer, where a pipe
+// would have kept it apart. Pay that for a tool that can be steered; do not pay
+// it for one that would only sit there being un-steerable and noisy.
+//
+// The registry decides, not the caller: codex and agy declare supports_say=false
+// and get a pipe; claude declares supports_say + trust_clear and gets a terminal.
+func (p Profile) NeedsTerminal() bool {
+	return p.Steerable || strings.TrimSpace(p.Clear) != ""
+}
+
 // ProfileFor reads a tool's contract from the fleet registry. The registry is the
 // single source of truth — no package keeps its own table of what claude needs.
 func ProfileFor(tool string) (Profile, bool) {

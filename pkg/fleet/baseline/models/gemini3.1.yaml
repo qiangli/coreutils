@@ -5,7 +5,14 @@ band: 3
 display: Gemini 3.1
 provider: gemini
 kind: subscription
-model: gemini-3.1
+# The id agy actually accepts on --model. It is a DISPLAY string, not a slug:
+# `gemini-3.1` is rejected outright ("not recognized as a known model"), and the
+# rejection only shows up at launch, which is how this sat broken and unnoticed —
+# a dangling binding looks exactly like a working one until an agent tries to
+# speak. (`agents verify` is structural: it confirms both halves of the binding
+# resolve in the catalog, not that the tool will accept the model. Only a live
+# probe catches this class.)
+model: Gemini 3.1 Pro (High)
 quality: 0.80
 cost_micro: 5000
 spec:

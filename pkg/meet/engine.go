@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/chat"
 )
@@ -55,9 +56,27 @@ func briefRef(e Event) string {
 	return t
 }
 
-// ansiEscape matches ANSI CSI/OSC escape sequences that leak into an agent CLI's
-// combined output (e.g. opencode's "\x1b[0m > build" banner).
-var ansiEscape = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(\x07|\x1b\\\\)")
+// ansiEscape matches the escape sequences that leak into an agent CLI's captured
+// output.
+//
+// Three alternatives, and the first two both matter:
+//
+//   - CSI — `\x1b[ … final`. The parameter class INCLUDES the private markers
+//     `<>=?`, which the original pattern omitted. Under a pty a tool resets the
+//     terminal on exit and emits `\x1b[>4m` and `\x1b[<u`; without the private
+//     markers those did not match, and the tail of every claude turn was recorded
+//     as literal `(B[>4m[<u78`.
+//   - OSC — `\x1b] … BEL|ST`.
+//   - Two-character escapes — `\x1b7`, `\x1b8` (save/restore cursor) and
+//     `\x1b(B` (charset select). Not CSI at all, so nothing else catches them.
+//
+// This runs on the recorded turn AND on each live line, so a watcher and the
+// transcript never disagree about what was said.
+var ansiEscape = regexp.MustCompile(
+	"\x1b\\[[0-9;?<>=]*[ -/]*[@-~]" + // CSI, incl. private-mode params
+		"|\x1b\\][^\x07\x1b]*(\x07|\x1b\\\\)" + // OSC
+		"|\x1b[()][0-9A-Za-z]" + // charset select: ESC ( B
+		"|\x1b[0-9A-Za-z><=]") // two-char: ESC 7, ESC 8, ESC =
 
 // sanitizeTurn makes captured agent output safe to STORE and to REPLAY as prompt
 // context. Agent CLIs emit banners/warnings on the combined stream, sometimes with
@@ -173,20 +192,28 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 	// a tee: `res` is unchanged, so the RECORDED turn is byte-for-byte what it
 	// would have been with nobody watching.
 	//
-	// The turn runs under a PTY with a control socket, and that buys two things a
-	// pipe cannot: an agent that stops to ask "do you trust this folder?" gets its
-	// prompt SEEN and cleared instead of sitting at a question nobody is there to
-	// answer, and `meet say` can steer a participant mid-turn without killing it.
+	// A terminal is given only to a tool that can USE one — the registry says
+	// which (agentctl.Profile.NeedsTerminal): claude listens mid-run and has a
+	// trust prompt to clear, so it gets a pty and a control socket; codex and agy
+	// declare supports_say=false, so they get a pipe.
 	//
-	// A PTY and an explicit headless flag are two halves of ONE contract, and this
-	// is the trap. Handed a pipe, an agent CLI infers headlessness from "stdout is
-	// not a terminal". Give it a PTY and that inference flips: claude opened its
-	// REPL, printed its banner, and sat at the prompt forever while the recorded
-	// "answer" filled with box-drawing. The fix is not to take the PTY away — it is
-	// to stop relying on the guess. Every tool's fleet template now DECLARES its
-	// print mode (claude -p, codex exec, opencode run, aider --message, agy -p), so
-	// a terminal changes what the agent can be asked, never what it does.
-	sock := ctlSockPath(st, name)
+	// This is not tidiness. A pty merges stdout and stderr, so a tool's chrome —
+	// codex prints a version banner and its workdir — lands inside the captured
+	// answer, where a pipe keeps it out. That cost is worth paying for an agent a
+	// chair can interrupt, and pure loss for one that would only sit there being
+	// un-steerable and noisy.
+	//
+	// The other half of the contract is that print mode is DECLARED, never
+	// inferred. An agent CLI that decides it is headless by sniffing whether
+	// stdout is a terminal is right on a pipe and wrong on a pty — claude opened
+	// its REPL and sat there. A terminal changes what an agent can be ASKED; it
+	// must never change what the agent DOES.
+	var sock string
+	usePTY := false
+	if p, ok := agentctl.ProfileFor(toolOf(name)); ok && p.NeedsTerminal() {
+		usePTY = true
+		sock = ctlSockPath(st, name)
+	}
 	live := newLiveWriter(st, name, role, sock)
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       name,
@@ -197,7 +224,7 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		Cwd:         st.Cwd,
 		Timeout:     budget,
 		Stream:      live,
-		PTY:         true,
+		PTY:         usePTY,
 		CtlSock:     sock,
 
 		// A MEETING IS A CONVERSATION, NOT A WORK SESSION. Every seat here —

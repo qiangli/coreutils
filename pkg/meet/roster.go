@@ -177,3 +177,12 @@ func canonAgent(name string) string {
 	}
 	return name
 }
+
+// toolOf resolves a seat to the tool behind it, so the registry can be asked what
+// that tool needs. A bare tool name is already the answer.
+func toolOf(seat string) string {
+	if a, ok := fleet.New().Agent(seat); ok {
+		return a.Tool
+	}
+	return seat
+}
