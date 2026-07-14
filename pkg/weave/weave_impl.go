@@ -3265,14 +3265,48 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					Detail: fmt.Sprintf("wrapper pid %d alive; wait or kill before pull", it.WrapperPid)})
 				continue
 			}
-			if it.State == "submitted" && it.CommitsAhead <= 0 {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "empty",
-					Detail: "terminal evidence recorded 0 commits ahead; nothing mergeable"})
-				continue
+			// MEASURE, DO NOT TRUST THE REPORT. Third time in this file.
+			//
+			// CommitsAhead is written by the WRAPPER at terminal time. A tool that
+			// crashes on its way out — or whose commit lands a moment after the
+			// wrapper measured — leaves the record saying 0 while the branch carries
+			// the whole feature. `weave list` and `weave prune` were both taught to
+			// go and look; pull was not, so it went on refusing to merge work that
+			// was sitting right there:
+			//
+			//   run #3: empty — terminal evidence recorded 0 commits ahead
+			//
+			// while `git rev-list --count main..HEAD` in that very workspace said 1.
+			//
+			// A record written by a process that did not survive is not evidence of
+			// absence. Ask git.
+			if it.State == "submitted" {
+				ahead := it.CommitsAhead
+				if ahead <= 0 && it.Workspace != "" {
+					if st, err := os.Stat(it.Workspace); err == nil && st.IsDir() {
+						ahead, _ = weaveMeasureBranch(it.Workspace, weaveCountRef(it, base))
+					}
+				}
+				if ahead <= 0 {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "empty",
+						Detail: "0 commits ahead of base — MEASURED in the workspace, not merely recorded; nothing mergeable"})
+					continue
+				}
 			}
-			if it.Dirty {
+			// Same rule as the commit count above: it.Dirty is a RECORD, written by
+			// the wrapper at terminal time. A tree that has been committed since —
+			// by the salvage path, or by hand — is clean now, and refusing to merge
+			// it because a dead process once saw it dirty is refusing on the strength
+			// of stale hearsay. Look at the tree.
+			dirtyNow, dirtyFilesNow := it.Dirty, it.DirtyFiles
+			if it.Workspace != "" {
+				if st, err := os.Stat(it.Workspace); err == nil && st.IsDir() {
+					dirtyNow, dirtyFilesNow, _ = weaveMeasureDirtiness(it.Workspace)
+				}
+			}
+			if dirtyNow {
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "dirty",
-					Detail: fmt.Sprintf("verify attested a dirty working tree with %d tracked file(s) uncommitted; resume the agent to commit the work (or commit manually in the workspace) and re-verify", it.DirtyFiles)})
+					Detail: fmt.Sprintf("working tree has %d uncommitted tracked file(s) RIGHT NOW (measured, not recorded); commit them in the workspace (`weave shell %d`) and re-run", dirtyFilesNow, it.ID)})
 				continue
 			}
 			// Substrate-verified outcome gate: the wrapper ran the item's
