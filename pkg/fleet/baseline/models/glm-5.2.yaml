@@ -25,20 +25,23 @@ band_source: declared
 # actually seen. Re-peg when the bake-off lands.
 display: GLM-5.2 (z.ai)
 provider: openai-compat
-kind: api
-# BILLING NOTE — the taxonomy has a gap and this model sits in it.
+kind: api          # AUTH: an API key (see api_key_ref below)
+billing: flat      # PAY: a prepaid seat. The next token is free at the margin.
 #
-# `kind: subscription` means flat-rate through a vendor CLI (claude, codex, gemini:
-# OAuth login, the CLI *is* the product). `kind: api` means pay-per-token through an
-# API key (deepseek, kimi). The GLM Coding Plan is FLAT-RATE BILLING OVER AN API KEY —
-# economically a subscription, operationally a plain HTTP call.
+# GLM is the model that split `kind` in two. The field used to mean auth AND billing at
+# once, which worked only because they had always travelled together: a seat plan meant
+# an interactive login, an API key meant per-token metering.
 #
-# It is declared `api` because that is what the field mechanically controls: `api`
-# requires an api_key_ref, and this model needs one (verify.go:104). But cost_micro is
-# priced for the flat-rate reality — the marginal cost of a token is ~0 under the plan,
-# so the router should reach for this BEFORE a metered model of similar band. It is not
-# set to 0: a free-forever model would dominate every routing decision unconditionally,
-# and that is a claim about the plan, not about the model.
+# The GLM Coding Plan is FLAT-RATE BILLING OVER AN API KEY — economically a
+# subscription, operationally a plain HTTP call. No single enum value can say that, and
+# a fourth value (`api-subscription`) would just grow the enum as the PRODUCT of the two
+# axes. So Kind is auth, Billing is billing, and each names one thing.
+#
+# What `billing: flat` BUYS: the router divides by MARGINAL cost, and under a plan you
+# have already paid for, the next token costs nothing. So this model is preferred over a
+# metered peer of equal quality — not using capacity you already bought is a waste, not
+# a saving. It is not priced at zero, because a plan is prepaid and FINITE: burning its
+# quota on trivial work exhausts it for the work that needs it.
 #
 # This combination is exactly the lane ycode exists to serve: no per-token anxiety AND
 # no third-party CLI to change its flags underneath us (which is what retired aider).

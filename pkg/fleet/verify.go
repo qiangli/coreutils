@@ -99,25 +99,50 @@ func (c *Catalog) VerifyModel(name string, _ *spacetime.ProbeSet) Check {
 		chk.Warn = "unpegged: no band, so a --min-band roster will never seat an agent bound to it"
 	}
 
+	// AUTH and BILLING are separate questions now, so verify asks them separately.
+	// Every message here used to have to describe both — which was the tell that one
+	// field was doing two jobs. See types.go.
 	switch m.Kind {
 	case ModelKindAPI:
 		if m.APIKeyRef == "" {
-			chk.Reason = "kind is api but no api_key_ref is declared — nothing to bill against"
+			chk.Reason = "kind is api but no api_key_ref is declared — nothing to authenticate with"
 			return chk
 		}
 		chk.OK = true
-		chk.Reason = "metered api; bills against the vault key " + m.APIKeyRef
+		chk.Reason = "authenticates with the vault key " + m.APIKeyRef
 	case ModelKindSubscription:
 		chk.OK = true
-		chk.Reason = "subscription seat; the CLI authenticates interactively on this host"
+		chk.Reason = "authenticates interactively; the CLI holds the seat on this host"
 	case ModelKindLocal:
 		chk.OK = true
-		chk.Reason = "pooled local inference; served by a paired host"
+		chk.Reason = "no credential; served by a paired host"
 	case "":
 		chk.OK = true
 		chk.Reason = "no access kind declared"
 	default:
 		chk.Reason = fmt.Sprintf("unknown kind %q (want subscription, api, or local)", m.Kind)
+		return chk
+	}
+
+	switch m.BillingMode() {
+	case BillingMetered:
+		chk.Reason += "; metered per token"
+	case BillingFlat:
+		chk.Reason += "; flat-rate plan with a HARD quota — exhausting it BLOCKS this agent until the window resets"
+	case BillingFlatThenMetered:
+		// The one an unattended run has to know about. Overrunning a seat does not fail
+		// loudly; it starts spending money quietly.
+		chk.Reason += "; flat-rate plan that OVERRUNS INTO PER-TOKEN BILLING — exhausting the " +
+			"quota does not block, it starts charging. An unattended fleet run can spend real " +
+			"money here after the seat is gone, and nothing will fail to tell you"
+		chk.Warn = "billing overruns into money: quota exhaustion is a COST event here, not an availability one"
+	case BillingFree:
+		chk.Reason += "; free (your own hardware)"
+	case "":
+		// no kind, no billing — already reported above
+	default:
+		chk.OK = false
+		chk.Reason = fmt.Sprintf("unknown billing %q (want metered, flat, flat_then_metered, or free)", m.Billing)
 	}
 	return chk
 }

@@ -27,11 +27,58 @@ const (
 	ToolKindSystem = "system"
 )
 
-// Model kind — the access/billing discriminator, orthogonal to Source.
+// Model kind — HOW YOU AUTHENTICATE. Nothing else.
+//
+// This used to be "the access/billing discriminator" — one field naming two things —
+// and it worked only because the two axes happened to travel together in every model we
+// had: a seat plan authenticated by an interactive login, an API authenticated by a key
+// and billed per token.
+//
+// z.ai's GLM Coding Plan is the case that separates them: FLAT-RATE BILLING OVER AN API
+// KEY. Economically a subscription, operationally a plain HTTP call. There is no value
+// of a single enum that can say that.
+//
+// The tell was already in verify.go, which had to describe BOTH axes in every message
+// ("metered api; bills against the vault key", "subscription seat; the CLI
+// authenticates interactively"). A field whose every description needs two clauses is
+// two fields.
+//
+// A fourth value (`api-subscription`) would have worked for GLM and then grown as the
+// PRODUCT of the axes — a metered vendor CLI needs a fifth, a flat-rate local pool a
+// sixth. Same mistake in a new costume. So: Kind is auth, Billing is billing, and each
+// names one thing.
 const (
-	ModelKindSubscription = "subscription" // a seat/login plan; the CLI authenticates on the host
-	ModelKindAPI          = "api"          // metered; bills against APIKeyRef
-	ModelKindLocal        = "local"        // pooled local inference, managed by the outpost
+	ModelKindSubscription = "subscription" // interactive login; the CLI authenticates on the host
+	ModelKindAPI          = "api"          // an API key, named by APIKeyRef
+	ModelKindLocal        = "local"        // no credential; pooled local inference via the outpost
+)
+
+// Model billing — HOW YOU PAY. Orthogonal to Kind.
+//
+// Optional. When absent it is DERIVED from Kind by Model.BillingMode(), which reproduces
+// the old collapsed behaviour exactly — so every model written before this field existed
+// keeps its meaning, and there is no migration.
+// The values differ in WHAT HAPPENS WHEN THE QUOTA RUNS OUT, and that is the part that
+// matters most — because the two failure modes are opposites:
+//
+//	flat              -> the agent STOPS WORKING. A reliability event. Loud.
+//	flat_then_metered -> the agent KEEPS WORKING AND STARTS CHARGING YOU. A cost event. SILENT.
+//
+// The second is the dangerous one. An unattended fleet run that exhausts a subscription
+// seat does not fail — it quietly moves onto pay-as-you-go and you find out on the
+// invoice. That is why it is a first-class value and not a footnote on `flat`.
+const (
+	BillingMetered = "metered" // per token, always. The next token costs money.
+	BillingFlat    = "flat"    // a prepaid seat with a HARD quota. Exhausted -> blocked until it resets.
+	BillingFree    = "free"    // your own hardware. No bill at all.
+
+	// BillingFlatThenMetered is a prepaid seat that FALLS BACK TO PER-TOKEN BILLING once
+	// the quota is gone, instead of blocking. Anthropic Max/Pro and Codex work this way.
+	//
+	// At the margin, below quota, it prices exactly like `flat`. The difference is not
+	// the price — it is that overrunning does not fail, it BILLS. Routing treats it as
+	// flat; `models verify` says the quiet part out loud.
+	BillingFlatThenMetered = "flat_then_metered"
 )
 
 // Model source — where the row came from, not how it is billed.
@@ -273,8 +320,18 @@ type Model struct {
 	Name    string   `yaml:"name" json:"name"` // the alias clients pass
 	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
 	Display string   `yaml:"display,omitempty" json:"display,omitempty"`
-	Kind    string   `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Source  string   `yaml:"source,omitempty" json:"source,omitempty"`
+	// Kind is HOW YOU AUTHENTICATE: subscription | api | local.
+	Kind string `yaml:"kind,omitempty" json:"kind,omitempty"`
+
+	// Billing is HOW YOU PAY: metered | flat | free. Optional — when empty it is
+	// derived from Kind by BillingMode(), reproducing the old collapsed behaviour, so
+	// no existing model needs touching.
+	//
+	// It exists because z.ai's GLM Coding Plan is flat-rate billing over an API key,
+	// and no single value of Kind can say that. See the constants above.
+	Billing string `yaml:"billing,omitempty" json:"billing,omitempty"`
+
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
 
 	Provider  string `yaml:"provider,omitempty" json:"provider,omitempty"`
 	BaseURL   string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
@@ -563,3 +620,89 @@ func (t Tool) EventsArgv(path string) []string {
 func (t Tool) ReportsTurnEnd() bool {
 	return strings.TrimSpace(t.CLI.Launch.EventsArg) != ""
 }
+
+// BillingMode returns how this model is paid for, deriving it from Kind when the
+// Billing field is absent.
+//
+// The derivation reproduces exactly what the collapsed enum used to mean, which is what
+// makes this a purely additive change: a model written before `billing:` existed keeps
+// its old semantics with no edit.
+//
+//	subscription -> flat      (a seat you already paid for)
+//	api          -> metered   (you pay per token)
+//	local        -> free      (your own hardware)
+func (m Model) BillingMode() string {
+	switch m.Billing {
+	case BillingMetered, BillingFlat, BillingFree, BillingFlatThenMetered:
+		return m.Billing
+	}
+	switch m.Kind {
+	case ModelKindSubscription:
+		// A vendor seat overruns into pay-as-you-go rather than blocking — that is how
+		// Anthropic Max/Pro and Codex behave, and they are every subscription we have.
+		// Defaulting to the SILENT-COST mode rather than the loud one is deliberate: if
+		// the guess is wrong the operator is warned about a bill that cannot arrive,
+		// which is a harmless false alarm. The other way round, the warning is missing
+		// exactly when the money is moving.
+		return BillingFlatThenMetered
+	case ModelKindLocal:
+		return BillingFree
+	case ModelKindAPI:
+		return BillingMetered
+	}
+	return ""
+}
+
+// OverrunsIntoMoney reports whether exhausting this model's quota starts BILLING rather
+// than blocking. The one thing an unattended run needs to know before it starts.
+func (m Model) OverrunsIntoMoney() bool {
+	return m.BillingMode() == BillingFlatThenMetered
+}
+
+// MarginalCostMicro is the cost of the NEXT token — the only cost a routing decision
+// can actually act on, and not always CostMicro.
+//
+// Under a FLAT plan no invoice moves when you use it, so the naive reading is "free at
+// the margin, prefer it over everything". THAT IS WRONG, and a test caught it: pricing
+// every flat plan at a constant floor made a premium Opus/Codex SEAT marginally cheaper
+// than metered DeepSeek, so the router would have sent every trivial task to the most
+// expensive model in the fleet — inverting the whole point of the band ladder
+// ("don't send a premium model to add a line of YAML").
+//
+// The thing a flat plan is short of is QUOTA, and quota scarcity SCALES WITH THE MODEL.
+// A premium seat's quota is precious; a commodity seat's is not. Burning Opus quota on
+// a YAML edit is expensive even though no invoice moves.
+//
+// So a flat plan is a DISCOUNT ON ITS OWN LIST PRICE, never a flat floor:
+//
+//	metered  -> CostMicro                      (you pay per token)
+//	flat     -> CostMicro * FlatPlanDiscount   (prepaid, but the quota is finite)
+//	free     -> 0                              (your own hardware)
+//
+// That keeps both truths at once: a flat model beats a METERED PEER of the same class
+// (using capacity you already bought is not a saving to forgo), while a premium seat
+// still costs more than a commodity one (its quota is worth more).
+func (m Model) MarginalCostMicro() int64 {
+	switch m.BillingMode() {
+	case BillingFree:
+		return 0
+	case BillingFlat, BillingFlatThenMetered:
+		// Below quota these price identically — the seat is bought either way. They
+		// differ in what happens when it runs out (blocked vs billed), which is a
+		// failure mode, not a price. See the billing constants.
+		c := m.CostMicro * FlatPlanDiscountNum / FlatPlanDiscountDen
+		if c < 1 && m.CostMicro > 0 {
+			c = 1 // a priced model never becomes literally free
+		}
+		return c
+	default:
+		return m.CostMicro
+	}
+}
+
+// FlatPlanDiscount — what a prepaid seat is worth at the margin, as a fraction of its
+// list price. Half: real, but nowhere near free, because the quota is finite.
+const (
+	FlatPlanDiscountNum = 1
+	FlatPlanDiscountDen = 2
+)

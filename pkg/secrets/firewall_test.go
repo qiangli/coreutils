@@ -67,14 +67,29 @@ func TestScrubAgentEnvOptInRestoresSecrets(t *testing.T) {
 
 // With no binding template there is nothing to scrub, and the environment is
 // returned untouched.
-func TestScrubAgentEnvNoTemplateIsNoOp(t *testing.T) {
+// This test used to assert the OPPOSITE — "with no vault template, nothing should be
+// scrubbed" — and it passed, guarding the hole it described. A missing config meant the
+// firewall handed the operator's OPENAI_API_KEY to every spawned third-party agent.
+//
+// That is fail-OPEN, and it is the absence-of-evidence bug wearing a security boundary:
+// no template found, therefore nothing is a secret. A boundary that disables itself when
+// it cannot read its own config is not a boundary.
+//
+// No template now means STRICTER, not absent: the shape rule (looksLikeCredential) still
+// applies, so a credential-shaped name is scrubbed whether or not the vault has heard of
+// it. The requirement was wrong, so the test is inverted rather than the code bent to fit
+// it.
+func TestScrubAgentEnvWithNoTemplateFailsCLOSED(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv(AllowAgentSecretsEnv, "")
 
 	in := []string{"PATH=/bin", "OPENAI_API_KEY=sk-secret"}
 	got := ScrubAgentEnv(in)
-	if !has(got, "OPENAI_API_KEY") {
-		t.Fatalf("with no vault template, nothing should be scrubbed: %v", got)
+	if has(got, "OPENAI_API_KEY") {
+		t.Fatalf("with no vault template the firewall handed over a credential — it failed OPEN: %v", got)
+	}
+	if !has(got, "PATH") {
+		t.Errorf("PATH was scrubbed: %v", got)
 	}
 }

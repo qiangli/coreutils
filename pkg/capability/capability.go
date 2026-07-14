@@ -496,7 +496,18 @@ func seedPriorsFrom(cat *fleet.Catalog) *Matrix {
 			continue
 		}
 		model := byModel[a.Model]
-		cost := model.CostMicro
+
+		// MARGINAL cost, not list price — the router's objective divides by this, and
+		// the only cost a routing decision can act on is the cost of the NEXT token.
+		//
+		// Under a flat-rate plan the seat is already bought, so that cost is ~0: a
+		// flat-billed model should be preferred over a metered peer of equal quality.
+		// Not using capacity you have already paid for is a waste, not a saving.
+		//
+		// It is not literally zero — a plan is prepaid and FINITE, and burning its quota
+		// on trivial work exhausts it for the work that needs it. MarginalCostMicro
+		// prices that scarcity. See fleet/types.go.
+		cost := model.MarginalCostMicro()
 		mk := func(q float64) Cell { return Cell{Quality: clampQuality(q), CostMicro: cost, Source: SourcePrior} }
 
 		row := map[Capability]Cell{}
