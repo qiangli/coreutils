@@ -15,6 +15,15 @@ cli:
     # opencode, and it reads stdin the same way, so agentpty's control socket
     # reaches it through the pty master with NO ycode change at all.
     steer_exec: ycode --model {model}
+    # THE FIRST-PARTY DIVIDEND. ycode reports when a turn ends; every other tool
+    # in this fleet leaves bashy to infer it from 25 seconds of silence — which is
+    # wrong for an agent that pauses to think, wrong for one that renders a
+    # spinner, and costs 25s on every single turn.
+    #
+    # It also emits tool.call as STRUCTURED DATA, which is what the fleet-evidence
+    # rule has been asking for from the beginning: a tool call as a fact, not a
+    # line scraped back out of a terminal and guessed at.
+    events_arg: --events {path}
     supports_say: true
     supports_graceful_quit: true
     notes: >-

@@ -99,6 +99,25 @@ type ToolLaunch struct {
 	// about the tool, MEASURED (pkg/agentpty/steer_live_test.go), not asserted.
 	SupportsSay bool `yaml:"supports_say,omitempty" json:"supports_say,omitempty"`
 
+	// EventsArg is how this tool is told to stream STRUCTURED EVENTS, if it can.
+	//
+	// This is the difference between a first-party harness and a third-party one,
+	// and it is not cosmetic. Without it, bashy decides a turn has ended by
+	// WATCHING FOR SILENCE — 25 seconds of no output (see chat.Session.WaitIdle).
+	// That heuristic is wrong in both directions: an agent that pauses to think
+	// looks finished, and an agent that renders a spinner never does. Every turn
+	// also pays the 25 seconds on its way out, which is why `meet --steerable` is
+	// a flag and not the default.
+	//
+	// A tool that declares this gets a real boundary instead: it says `turn.end`,
+	// and bashy believes it, because it is a fact the agent reported rather than a
+	// silence bashy interpreted.
+	//
+	// Template with one token: {path}. e.g. `--events {path}`.
+	// The events are NDJSON, one object per line, with at minimum:
+	//     {"type":"turn.start"} {"type":"tool.call"} {"type":"turn.end", ...}
+	EventsArg string `yaml:"events_arg,omitempty" json:"events_arg,omitempty"`
+
 	// SteerExec is the argv template that ACTUALLY accepts steering, and it is
 	// usually NOT Exec.
 	//
@@ -523,4 +542,24 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// EventsArgv renders the tool's event-channel flag for a given path, or nil when
+// the tool cannot stream events (which is every third-party CLI we have).
+func (t Tool) EventsArgv(path string) []string {
+	tmpl := strings.TrimSpace(t.CLI.Launch.EventsArg)
+	if tmpl == "" || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	var out []string
+	for _, f := range strings.Fields(tmpl) {
+		out = append(out, strings.ReplaceAll(f, "{path}", path))
+	}
+	return out
+}
+
+// ReportsTurnEnd says whether this tool tells us when a turn is over, instead of
+// leaving us to infer it from silence.
+func (t Tool) ReportsTurnEnd() bool {
+	return strings.TrimSpace(t.CLI.Launch.EventsArg) != ""
 }

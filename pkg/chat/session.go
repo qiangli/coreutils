@@ -50,14 +50,20 @@ type Session struct {
 	Nick    string // the name the caller used
 	CtlSock string // where a steer lands
 
-	mu        sync.Mutex
-	buf       strings.Builder
-	mark      int // end of the last Turn
-	lastWrite time.Time
-	done      chan struct{}
-	exit      int
-	err       error
-	killed    string
+	// events is the tool's structured channel, when it has one. Its presence is
+	// the difference between KNOWING a turn ended and guessing from silence.
+	events *eventTail
+
+	mu         sync.Mutex
+	buf        strings.Builder
+	mark       int       // end of the last Turn
+	reported   string    // the answer the tool ASSERTED on its event channel
+	eventsOnce sync.Once // the silent-degradation warning fires once per session, not per turn
+	lastWrite  time.Time
+	done       chan struct{}
+	exit       int
+	err        error
+	killed     string
 }
 
 // SessionOptions configures a live agent session.
@@ -109,6 +115,22 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	}
 
 	argv := append([]string{}, l.Args...)
+
+	// If the tool can TELL us when a turn ends, let it. See pkg/chat/events.go:
+	// everything else here infers a turn boundary from 25 seconds of silence,
+	// which is wrong for an agent that pauses to think and wrong for one that
+	// renders a spinner.
+	var tail *eventTail
+	if tl, ok := newCatalog().Tool(l.ToolName); ok && tl.ReportsTurnEnd() {
+		evPath, err := sessionEventsPath(l.Binding())
+		if err == nil {
+			if extra := tl.EventsArgv(evPath); len(extra) > 0 {
+				argv = append(argv, extra...)
+				tail = &eventTail{path: evPath}
+			}
+		}
+	}
+
 	if l.TakesPrompt && strings.TrimSpace(opt.Prompt) != "" {
 		argv = append(argv, opt.Prompt)
 	}
@@ -146,6 +168,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		Agent:   l.Binding(),
 		Nick:    l.Nick,
 		CtlSock: sock,
+		events:  tail,
 		done:    make(chan struct{}),
 		// Seed the idle clock at launch. An agent that says NOTHING must still go
 		// idle — otherwise WaitIdle would hang forever on the one failure it most
@@ -262,6 +285,20 @@ func (s *Session) Output() string {
 func (s *Session) Turn() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// PREFER WHAT THE AGENT SAID IT SAID.
+	//
+	// The terminal scrape is a RECONSTRUCTION: a pty merges stdout and stderr, so
+	// the captured text carries banners, spinners and cursor gymnastics, and
+	// SanitizeTurn spends its life guessing which bytes were the answer. When the
+	// tool reports the answer as DATA, the guessing stops -- the answer is known.
+	if s.reported != "" {
+		out := s.reported
+		s.reported = ""
+		s.mark = s.buf.Len()
+		return out
+	}
+
 	all := s.buf.String()
 	if s.mark > len(all) {
 		s.mark = len(all)
@@ -292,14 +329,72 @@ func (s *Session) WaitIdle(ctx context.Context, quiet time.Duration) error {
 	if quiet <= 0 {
 		quiet = 20 * time.Second
 	}
+
+	// RACE THE REPORT AGAINST THE GUESS. Whichever arrives first is the answer.
+	//
+	// The first version ran them in sequence: wait for turn.end, and on failure
+	// fall back to silence. That is wrong in a way a test caught immediately —
+	// waiting for the report consumed the ENTIRE context budget, so the fallback
+	// inherited an already-expired deadline and could never run. The degradation
+	// path was unreachable, which meant a tool that declared an event channel and
+	// did not deliver one would hang until the caller's timeout rather than quietly
+	// doing the sensible thing.
+	//
+	// Racing is also just the truth of the situation: we do not know which will
+	// happen. A tool that reports gives us a real boundary; a tool that does not
+	// goes quiet. Wait for either.
+	events := make(chan string, 1)
+	if s.events != nil {
+		go func() {
+			text, ok, err := s.events.WaitTurnEnd(ctx)
+			if err == nil && ok {
+				events <- text
+				return
+			}
+			close(events)
+		}()
+	}
+
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+
 		case <-s.done:
 			return nil // it exited; that IS a boundary
+
+		case text, ok := <-events:
+			if ok {
+				// THE TOOL TOLD US. No guessing, no quiet period, and the answer
+				// arrives as data rather than as bytes scraped off a terminal.
+				s.mu.Lock()
+				s.reported = text
+				s.mu.Unlock()
+				return nil
+			}
+			// The channel closed without a turn.end: we know NOTHING, which is not
+			// the same as "the turn ended". Keep waiting on silence — but SAY SO. A
+			// capability that quietly does not work is the exact failure this whole
+			// line of work exists to stamp out.
+			//
+			// Known live gap: ycode emits events from its ONE-SHOT path (RunPrompt)
+			// and not from its TUI (RunInteractive) — and the TUI is what steer_exec
+			// launches, so a steerable ycode session lands here every time. The TUI's
+			// events already flow through ycode's internal bus; what is missing is a
+			// sink and ONE vocabulary (the bus says `turn.complete`, the one-shot path
+			// says `turn.end` — two names for one thing, inside one binary). Until
+			// that is fixed this warning fires, and it should: it is telling the truth
+			// about a feature that is plumbed and not yet delivered.
+			s.eventsOnce.Do(func() {
+				fmt.Fprintf(os.Stderr,
+					"chat: %s: declared an event channel but reported no turn.end — "+
+						"falling back to the SILENCE heuristic (a turn is GUESSED, not reported)\n",
+					s.Nick)
+			})
+			events = nil // stop selecting on a closed channel
+
 		case <-tick.C:
 			s.mu.Lock()
 			last := s.lastWrite
@@ -469,4 +564,17 @@ func CanSteer(agent string) (bool, string) {
 		return false, err.Error()
 	}
 	return true, ""
+}
+
+// sessionEventsPath is where a tool streams its structured events for this run.
+func sessionEventsPath(binding string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".bashy", "events")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, shortHash(binding+"\x00"+fmt.Sprint(os.Getpid()))+".ndjson"), nil
 }
