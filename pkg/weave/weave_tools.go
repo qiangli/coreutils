@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
@@ -302,26 +303,21 @@ func liveProbeReady(tool string, args []string) (status, note string) {
 // hit the deadline) into a ReadyStatus. Split out from liveProbeReady so the
 // classification is unit-testable without launching a real tool.
 func classifyReadyOutput(raw string, timedOut bool) (status, note string) {
-	low := strings.ToLower(raw)
-	for _, sig := range contractErrSignatures {
-		if strings.Contains(raw, sig) {
-			return ReadyStale, "rejected a flag (" + strings.TrimSpace(sig) + ") — launch contract drifted"
-		}
+	// One classifier for the whole fleet (pkg/agentctl). weave's probe launches a
+	// bare TOOL, so it can never see a bad model id — that is what
+	// `agents verify --live` is for, and both now read the same signatures rather
+	// than drifting apart into two opinions about what "not signed in" means.
+	st, note := agentctl.Classify(raw, timedOut)
+	switch st {
+	case agentctl.ProbeStaleContract:
+		return ReadyStale, note
+	case agentctl.ProbeNeedsAuth:
+		return ReadyNeedsAuth, note
+	case agentctl.ProbeBadModel:
+		return ReadyStale, note
+	default:
+		return ReadyOK, note
 	}
-	for _, sig := range authGateSignatures {
-		if strings.Contains(low, sig) {
-			return ReadyNeedsAuth, "auth/trust gate detected (" + sig + ")"
-		}
-	}
-	if strings.Contains(raw, "PROBE_OK") {
-		return ReadyOK, "verified end-to-end (headless launch + tool responded)"
-	}
-	// Stalled: ran to the deadline with (essentially) no output — the exact
-	// shape of a tool parked at an interactive prompt it never gets to clear.
-	if timedOut && len(strings.TrimSpace(raw)) < 40 {
-		return ReadyNeedsAuth, "stalled with no output past 25s — likely an interactive auth/trust gate"
-	}
-	return ReadyOK, "responded (no auth gate, no flag error)"
 }
 
 // recordToolOutcome appends a role outcome to a tool's track record (used by the

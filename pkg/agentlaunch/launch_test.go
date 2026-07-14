@@ -39,7 +39,7 @@ func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.Model != "deepseek/deepseek-v4" || strings.Join(l.Args, " ") != "run --model deepseek/deepseek-v4" {
+	if l.Model != "deepseek/deepseek-v4-pro" || strings.Join(l.Args, " ") != "run --model deepseek/deepseek-v4-pro" {
 		t.Fatalf("launch = %+v", l)
 	}
 }

@@ -61,7 +61,7 @@ func TestSyncModelsRendersStructuredColumns(t *testing.T) {
 		"/api/v1/models": `{"models":[
 		  {"name":"deepseek-v4","display":"DeepSeek V4","kind":"api","source":"cloud",
 		   "provider":"openai-compat","base_url":"https://api.deepseek.com",
-		   "api_key_ref":"deepseek","model":"deepseek/deepseek-v4",
+		   "api_key_ref":"deepseek","model":"deepseek/deepseek-v4-pro",
 		   "capabilities":["completion","tools"],"domain":["coding"],
 		   "context_length":128000,"price":1.5}]}`,
 	})
@@ -82,7 +82,7 @@ func TestSyncModelsRendersStructuredColumns(t *testing.T) {
 	if m.Ring != assetring.RingCloud {
 		t.Fatalf("ring = %v, want cloud", m.Ring)
 	}
-	if m.Target() != "deepseek/deepseek-v4" {
+	if m.Target() != "deepseek/deepseek-v4-pro" {
 		t.Fatalf("target = %q — the provider-side id must survive the round trip", m.Target())
 	}
 	if m.Kind != ModelKindAPI || m.APIKeyRef != "deepseek" || m.ContextLength != 128000 {

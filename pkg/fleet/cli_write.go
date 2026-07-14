@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -492,23 +493,49 @@ func newEdit(noun string, opts []Option, materialize func(*Catalog, string) (str
 }
 
 func newVerify(noun string, opts []Option, check func(*Catalog, string) Check) *cobra.Command {
-	var asJSON bool
+	var asJSON, live bool
+	var timeout time.Duration
 	c := &cobra.Command{
-		Use:           "verify [<name>]",
-		Short:         "Check that an entry is usable on this host",
-		Long:          "Check that an entry is usable on this host. With no name, every entry is checked.",
+		Use:   "verify [<name>]",
+		Short: "Check that an entry is usable on this host",
+		Long: "Check that an entry is usable on this host. With no name, every entry is checked.\n\n" +
+			"The default check is STRUCTURAL: it confirms the entry resolves and that\n" +
+			"this host has what it names. It does not launch anything, so it cannot\n" +
+			"tell you that a tool will reject the model an agent is bound to — and a\n" +
+			"dead binding looks exactly like a live one until an agent tries to speak.\n\n" +
+			"--live (agents only) actually LAUNCHES each agent on a trivial prompt and\n" +
+			"reports what came back: ok, bad-model, stale-contract, or needs-auth. It\n" +
+			"costs a real model call per agent, and it is the only thing that catches a\n" +
+			"binding the registry believes in and the tool does not.",
+		Example: "  bashy agents verify\n" +
+			"  bashy agents verify --live\n" +
+			"  bashy agents verify --live claude-opus4.8",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cat := New(opts...)
+			if live && noun != KindAgent {
+				return fmt.Errorf("fleet: --live launches an agent, so it only applies to `agents verify`")
+			}
+			names := args
+			if len(names) == 0 {
+				names = allNames(cat, noun)
+			}
 			var checks []Check
-			if len(args) == 1 {
-				checks = []Check{check(cat, args[0])}
-			} else {
-				for _, n := range allNames(cat, noun) {
+			for _, n := range names {
+				if !live {
 					checks = append(checks, check(cat, n))
+					continue
 				}
+				chk, wired := cat.LiveProbeAgent(cmd.Context(), n, timeout)
+				if !wired {
+					// Never silently fall back to the weaker check: a caller that
+					// asked to be sure must not be told "verified" on less evidence
+					// than they asked for.
+					return fmt.Errorf("fleet: --live needs a launcher, and this build has none wired")
+				}
+				checks = append(checks, chk)
 			}
 			if asJSON {
 				return writeJSON(cmd.OutOrStdout(), checks)
@@ -525,7 +552,11 @@ func newVerify(noun string, opts []Option, check func(*Catalog, string) Check) *
 					mark, bad, candidates = "FAIL", bad+1, candidates+1
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "%s %-24s %s\n", mark, k.Name, k.Reason)
-				if k.OK && k.Detail != "" {
+				// The detail is printed on FAILURE above all. It carries what the
+				// tool actually said, which is the only thing that tells an operator
+				// whether to re-peg a model, fix an argv, or go and log in. Showing it
+				// only on success — as this did — hides it exactly when it is needed.
+				if k.Detail != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "     %-24s %s\n", "", k.Detail)
 				}
 				if k.Warn != "" {
@@ -539,6 +570,8 @@ func newVerify(noun string, opts []Option, check func(*Catalog, string) Check) *
 		},
 	}
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	c.Flags().BoolVar(&live, "live", false, "actually launch each agent on a trivial prompt (agents only; costs a model call each)")
+	c.Flags().DurationVar(&timeout, "timeout", 45*time.Second, "per-agent ceiling for --live")
 	return c
 }
 

@@ -135,7 +135,7 @@ func TestArgvSubstitutesModel(t *testing.T) {
 	oc, _ := c.Tool("opencode")
 	m, _ := c.Model("deepseek-v4")
 	got = oc.Argv(m.Target(), "hi")
-	want = []string{"opencode", "run", "--model", "deepseek/deepseek-v4", "hi"}
+	want = []string{"opencode", "run", "--model", "deepseek/deepseek-v4-pro", "hi"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("Argv = %q, want %q", got, want)
 	}

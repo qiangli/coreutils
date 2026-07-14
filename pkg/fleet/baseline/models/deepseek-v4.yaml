@@ -2,11 +2,16 @@ name: deepseek-v4
 family: deepseek
 version: "4"
 band: 2
-display: DeepSeek V4
+display: DeepSeek V4 Pro
 provider: openai-compat
 kind: api
 base_url: https://api.deepseek.com
 api_key_ref: deepseek
-model: deepseek/deepseek-v4
+# `deepseek/deepseek-v4` is REJECTED by the provider: "The supported API model
+# names are deepseek-v4-pro or deepseek-v4-flash, but you passed deepseek-v4."
+# The binding was dead — every agent bound to it failed on every run — and it
+# looked healthy to `agents verify`, which only checks that both halves of the
+# binding resolve in the catalog. `agents verify --live` is what found it.
+model: deepseek/deepseek-v4-pro
 quality: 0.80
 cost_micro: 1500

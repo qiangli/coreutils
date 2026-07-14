@@ -1,11 +1,13 @@
 package fleet
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/assetring"
 )
@@ -18,10 +20,51 @@ type Config struct {
 	baseFS  fs.FS                         // embedded baseline (nil = the compiled-in one)
 	noLocal bool
 	noCloud bool
+
+	liveProbe LiveProbe
 }
+
+// LiveProbe launches an agent on a trivial prompt and reports whether it can
+// actually speak.
+//
+// It is INJECTED rather than implemented here, and the reason is the import
+// graph: launching an agent means pkg/chat, and chat reads this registry. So the
+// registry declares the hole and the binary fills it (see WithLiveProbe).
+//
+// Plain strings, deliberately: the status vocabulary belongs to pkg/agentctl,
+// which also imports this package. Naming its type here would close the cycle.
+type LiveProbe func(ctx context.Context, agent string, timeout time.Duration) (status, note string, ok bool)
 
 // Option configures a Catalog.
 type Option func(*Config)
+
+// WithLiveProbe supplies the launcher `agents verify --live` uses.
+//
+// Without it, --live refuses rather than quietly falling back to the structural
+// check. A verification that silently checked something weaker than it claimed
+// would be the exact failure it exists to prevent: a dead binding that looks
+// verified.
+func WithLiveProbe(p LiveProbe) Option { return func(c *Config) { c.liveProbe = p } }
+
+// LiveProbeAgent launches an agent and reports what happened. Reports !ok when no
+// probe is wired: a caller must be able to tell "not verified" from "verified OK".
+func (c *Catalog) LiveProbeAgent(ctx context.Context, name string, timeout time.Duration) (Check, bool) {
+	chk := Check{Kind: KindAgent, Name: name}
+	if c.cfg.liveProbe == nil {
+		return chk, false
+	}
+	// A dangling binding cannot be launched, and saying "it did not answer" would
+	// bury the actual reason under a symptom.
+	if _, _, _, err := c.Binding(name); err != nil {
+		chk.Reason = err.Error()
+		return chk, true
+	}
+	status, note, ok := c.cfg.liveProbe(ctx, name, timeout)
+	chk.OK = ok
+	chk.Reason = status
+	chk.Detail = note
+	return chk, true
+}
 
 // WithRoot pins the local store's parent directory.
 //

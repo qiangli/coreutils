@@ -67,7 +67,7 @@ func TestBindingResolvesToItsCanonicalNickname(t *testing.T) {
 		t.Fatalf("l=%+v err=%v", l, err)
 	}
 	// The provider-side id is what reaches --model.
-	if !strings.Contains(strings.Join(argv, " "), "--model deepseek/deepseek-v4") {
+	if !strings.Contains(strings.Join(argv, " "), "--model deepseek/deepseek-v4-pro") {
 		t.Fatalf("argv = %q", argv)
 	}
 	if l.Nick != "opencode-deepseek-v4" {

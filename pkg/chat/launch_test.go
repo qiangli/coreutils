@@ -89,10 +89,10 @@ func TestModelIsTheProviderSideID(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
 	tool, args, model := argv(t, "opencode:deepseek-v4", Options{})
-	if tool != "opencode" || model != "deepseek/deepseek-v4" {
+	if tool != "opencode" || model != "deepseek/deepseek-v4-pro" {
 		t.Fatalf("tool=%q model=%q", tool, model)
 	}
-	if strings.Join(args, " ") != "run --model deepseek/deepseek-v4" {
+	if strings.Join(args, " ") != "run --model deepseek/deepseek-v4-pro" {
 		t.Fatalf("args = %q", args)
 	}
 }
@@ -418,7 +418,7 @@ func TestBindingUsesRegistryNamesNotThePath(t *testing.T) {
 		t.Fatalf("Binding() = %q, want the registry names", l.Binding())
 	}
 	// The provider-side id is what reaches --model.
-	if l.Model != "deepseek/deepseek-v4" {
+	if l.Model != "deepseek/deepseek-v4-pro" {
 		t.Fatalf("Model = %q", l.Model)
 	}
 	env := principalEnv(nil, l)
