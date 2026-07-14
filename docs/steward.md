@@ -152,6 +152,7 @@ store and keyed by the scope digest, records the ONE directory each seat lives i
 | **isolates** | a shared home: entries are keyed by *machine*, so two boxes mounting one home still get two seats |
 | **rooted** | in the **OS account's own home** — the passwd record for the real uid, the access token's profile directory on Windows. Never `$HOME`/`%USERPROFILE%` (see below) |
 | **injectable** | `WithRegistryRoot`, for hermetic tests and for an embedder migrating a host's stores. Deliberately **not** an env var or a flag — a registry the agent can redirect is not a registry |
+| **compares canonically** | the recorded directory is the *canonical* one — absolute, symlinks resolved — so `./x`, a trailing slash, and `/var/…` vs `/private/var/…` are one directory, not two seats |
 
 #### …and neither does `$HOME` **[revised 4]**
 
@@ -191,6 +192,36 @@ filesystem, and this package will not pretend otherwise. What the registry buys 
 singleton is now *enforced* rather than merely intended: reaching a second store takes a
 deliberate, destructive, evidence-leaving act instead of an ordinary flag — and the loser
 finds out at its next write.
+
+#### One directory has one spelling **[revised 5]**
+
+The registry decides *same store?* by comparing a directory against the one it recorded, so
+the **string** those comparisons run on has to be the same string every time it is derived —
+including the one time there is no directory there yet.
+
+That was the gap, and it hit the *first* store a seat ever had. `filepath.EvalSymlinks` cannot
+resolve a path that does not exist, and the canonicalizer fell back to the unresolved spelling
+when it failed. So a brand-new store under a **symlinked parent** — `/var/…` on macOS, where
+`/var` is a symlink to `/private/var`, which is where `$TMPDIR` and many a state dir lives —
+bound its seat to `/var/…/store`, and *then* created the directory. One mutation later,
+revalidation canonicalized the recorded dir — which now resolved, because the directory was
+there — compared `/private/var/…/store` against the `/var/…/store` the open store still held,
+and refused the write with `ErrScopeDirConflict`: **the seat's only store, refused against its
+own binding**, advising the operator to go and use the store it was already using. It fired on
+the first claim a host ever made, which is the one path with no earlier store to paper over it.
+
+So the order is fixed: **create the directory, then canonicalize it**, and take the canonical
+form off the directory that now exists (`makeCanonicalDir`). The answer no longer depends on
+*when* it is asked, and a store that cannot be resolved to a canonical path is refused rather
+than opened under a spelling it would repudiate one write later.
+
+The read-only half (`canonicalDir`) answers for a directory the registry *recorded* — one this
+process must not create, and which may since have been deleted. It resolves the deepest
+existing ancestor and re-attaches the components below it, so it agrees with the other half on
+a live directory and does not change its answer when one goes away: a seat whose store was
+removed is not refused against its own entry either. Bindings written by the affected revision
+carry the unresolved spelling and keep working, since they resolve to the same canonical
+string — there is nothing to migrate.
 
 ### One journal. Everything else is a projection.
 

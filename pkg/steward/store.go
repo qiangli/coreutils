@@ -188,15 +188,11 @@ func Open(dir string, opts ...Option) (*Store, error) {
 			return nil, err
 		}
 	}
-	// Canonicalize before anything compares it. "~/.bashy/steward/x", "./x" from the right
-	// cwd, and "x/../x" are one directory, and a registry that compared them as strings
-	// would hand out a second seat to whoever spelled the path differently.
-	if s.dir, err = canonicalDir(dir); err != nil {
+	// Create the directory and canonicalize it IN THAT ORDER, and take the canonical form
+	// from the directory that now exists. See makeCanonicalDir: resolving a path before
+	// creating it is what bound a brand-new seat to a spelling it would refuse one write later.
+	if s.dir, err = makeCanonicalDir(dir); err != nil {
 		return nil, err
-	}
-
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return nil, fmt.Errorf("steward: store dir: %w", err)
 	}
 	if err := s.withRegistryLockOpen(s.revalidateBindings); err != nil {
 		return nil, err
@@ -204,19 +200,89 @@ func Open(dir string, opts ...Option) (*Store, error) {
 	return s, nil
 }
 
-// canonicalDir resolves a store path to the one string everything else compares.
-// Symlinks are followed where they resolve (macOS's /var → /private/var is the standard
-// case, and it is why a naive Abs is not enough); a path that does not exist yet is
-// merely absolute-ized, since there is nothing to resolve.
+// makeCanonicalDir creates the store directory and returns the ONE string everything else
+// compares it by. Creation comes first, and the canonical form is read back off the created
+// directory, because the two orders do not agree and only this one is stable.
+//
+// THE HOLE THIS CLOSES — the first store a seat ever had could not perform its first write.
+// filepath.EvalSymlinks fails on a path that does not exist, so canonicalizing BEFORE the
+// mkdir left the unresolved spelling: on macOS, where a temp dir hands you /var/… and /var
+// is a symlink to /private/var, a brand-new store bound its seat to
+//
+//	/var/folders/…/store         (the leaf did not exist, so nothing resolved)
+//
+// and then the mkdir made it exist. The very next mutation revalidates the binding
+// (revalidateBindings), canonicalizes the recorded dir — which now resolves, because the
+// directory is there — and compares /private/var/…/store against the /var/…/store this Store
+// still held. Different strings, so ErrScopeDirConflict: the seat's one and only store,
+// refused against its OWN binding, telling the operator to go and use the store it was
+// already using. Every host whose steward dir sits under a symlinked parent (macOS $TMPDIR,
+// a /home → /system/home layout, a bind-mounted state dir) hit it on the FIRST claim it ever
+// made — which is exactly the path with no prior store to fall back to.
+//
+// Canonicalizing after the mkdir makes the answer independent of when it is asked: the
+// directory exists, EvalSymlinks resolves the whole path, and the string bound into the
+// registry at Open is the string every later revalidation derives. A leaf that is itself a
+// symlink resolves the same way, which is the point — one directory, one spelling, however
+// it was reached.
+//
+// It also FAILS rather than falling back to the unresolved path. A fallback is what produced
+// the defect: it does not avoid the mismatch, it merely postpones it to the first write, and
+// a store that cannot say which directory it is cannot be held to living in exactly one.
+func makeCanonicalDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("steward: store dir %q: %w", dir, err)
+	}
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return "", fmt.Errorf("steward: store dir: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("steward: cannot resolve the store dir %q to a canonical path: %w — "+
+			"refusing to open, because the seat is one-per-directory and a store that cannot say WHICH "+
+			"directory it is cannot be held to that", abs, err)
+	}
+	return resolved, nil
+}
+
+// canonicalDir is makeCanonicalDir's read-only half: the canonical form of a path this
+// process does not own and must not create — the directory RECORDED in a registry entry,
+// which may since have been deleted, or may never have existed.
+//
+// It must agree with makeCanonicalDir on a path that exists, and it must not change its
+// answer when one stops existing. So it resolves the deepest ancestor that DOES exist and
+// re-attaches the components below it: /var/…/gone/store canonicalizes to
+// /private/var/…/gone/store whether or not the leaf is still there. A plain Abs fallback
+// would answer /var/…/store for a deleted store and /private/var/…/store for a live one —
+// two answers for one directory, which in a registry is a spurious conflict (a seat refused
+// against its own binding because its store was removed) or, worse, a missed one.
+//
+// It carries the compatibility case too: a binding written by the version that had the
+// defect records the unresolved spelling, and this resolves it to the same canonical string
+// the store now holds, so those seats keep working with no migration.
 func canonicalDir(dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", fmt.Errorf("steward: store dir %q: %w", dir, err)
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved, nil
+	// Walk up to the deepest existing ancestor, resolving it, then re-attach the tail. The
+	// loop terminates at the volume root ("/" on unix, `C:\` on windows), where Dir(p) == p.
+	var tail []string
+	for p := abs; ; {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, tail[i])
+			}
+			return resolved, nil
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return abs, nil // nothing along the path resolves; the spelling is all we have
+		}
+		tail = append(tail, filepath.Base(p))
+		p = parent
 	}
-	return abs, nil
 }
 
 func (s *Store) Dir() string       { return s.dir }
