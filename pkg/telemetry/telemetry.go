@@ -146,6 +146,17 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 // Tracer returns bashy's tracer. Safe before Init: it is a no-op tracer until then.
 func Tracer() trace.Tracer { return tracer }
 
+// standalone starts a span for a fact that has no parent — a bound that bound, or a
+// number whose provenance matters, recorded from a code path nobody thought to
+// instrument.
+//
+// It reads the GLOBAL provider, so it is free (a no-op span, never recorded) in a process
+// that configured no telemetry, and real in one that did.
+func standalone(ctx context.Context, name string) (context.Context, func()) {
+	ctx, span := otel.Tracer(instrumentationName).Start(ctx, name)
+	return ctx, func() { span.End() }
+}
+
 // --- The two things this package exists for --------------------------------------
 
 // Provenance records a VALUE together with WHERE IT CAME FROM.
@@ -164,7 +175,22 @@ func Tracer() trace.Tracer { return tracer }
 func Provenance(ctx context.Context, name string, value int64, source string) {
 	span := trace.SpanFromContext(ctx)
 	if !span.IsRecording() {
-		return
+		// NO ACTIVE SPAN IS NOT A REASON TO SAY NOTHING.
+		//
+		// The first version returned here, and it silently emitted nothing at every call
+		// site that happened not to sit inside an instrumented span — which was most of
+		// them, including the truncation path this exists to record. A helper that
+		// quietly does nothing when its precondition is unmet is the exact disease this
+		// package was built to detect, committed inside the detector.
+		//
+		// A fact worth recording is worth its own span.
+		var end func()
+		ctx, end = standalone(ctx, "value."+name)
+		defer end()
+		span = trace.SpanFromContext(ctx)
+		if !span.IsRecording() {
+			return // genuinely no provider configured; now it really is free
+		}
 	}
 	span.AddEvent("value", trace.WithAttributes(
 		attribute.String("value.name", name),
@@ -190,7 +216,15 @@ func Provenance(ctx context.Context, name string, value int64, source string) {
 func BoundHit(ctx context.Context, kind string, limit int64, actual int64, detail string) {
 	span := trace.SpanFromContext(ctx)
 	if !span.IsRecording() {
-		return
+		// See Provenance: a bound that binds outside an instrumented span still bound.
+		// It gets its own span rather than vanishing.
+		var end func()
+		ctx, end = standalone(ctx, "bound."+kind)
+		defer end()
+		span = trace.SpanFromContext(ctx)
+		if !span.IsRecording() {
+			return
+		}
 	}
 	span.AddEvent("bound.hit", trace.WithAttributes(
 		attribute.String("bound.kind", kind), // "iterations", "bytes", "rate_limit", "timeout", "context_window"
