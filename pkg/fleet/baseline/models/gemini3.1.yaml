@@ -1,9 +1,30 @@
 name: gemini3.1
 family: gemini
 version: "3.1"
-band: 3
-band_source: declared
-# UNTESTED at L3. The vendor's reasoning tier; nobody has run it as a conductor. First candidate for the ladder bake-off.
+band: 2
+band_source: operator
+# Re-pegged L3 -> L2 on 2026-07-14. A CODER, not a conductor.
+#
+# EVIDENCE (one run, and stated as one run): driven as the conductor of a real
+# two-repo task, agy:gemini3.1 made 224 tool calls of which only 22 were
+# DISTINCT -- it re-read the same file 26 times, looped for forty minutes,
+# produced no plan, and edited a tree it had been explicitly told not to touch.
+# It never converged, and it never would have: it took three operator
+# interventions (an ESC to break the loop, a steer, and an explicit staffing
+# instruction) to become useful. Once corrected it investigated well and
+# delegated correctly -- which is the L2 profile exactly.
+#
+# THE CONFOUND, RECORDED HONESTLY: gemini3.1 is reachable through ONE harness
+# (agy), whose own registry gives it the lowest tool-use score in the fleet
+# (0.8). So this run CANNOT separate "the model cannot hold a conductor loop"
+# from "agy's loop detection is weak". The demotion is therefore `operator` --
+# an owner's judgment, backed by lived experience with this family -- and NOT
+# `measured`. Do not let it be quoted as a measurement.
+#
+# TO MEASURE IT PROPERLY: register gemini3.1 under a second harness (ycode
+# reaches gemini directly) and re-run the same conductor task. Loops there too
+# -> the model, and this becomes `measured`. Converges -> it was agy's harness
+# all along, and agy's tool-use score takes the hit instead.
 display: Gemini 3.1
 provider: gemini
 kind: subscription

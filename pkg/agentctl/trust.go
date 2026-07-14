@@ -90,7 +90,64 @@ func preseedOpencodeTrust(workspace string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(b, '\n'), 0o600)
+	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	// And hide it from git. We just wrote a file into a repository the agent is
+	// about to commit from -- so without this, BASHY'S OWN preseed shows up as an
+	// untracked file in the workspace, and an agent told to "commit your work"
+	// dutifully commits our plumbing into the artifact. The tool that set up the
+	// run would be polluting the diff it is judging.
+	//
+	// .git/info/exclude, not .gitignore: it is local to the clone, so we never
+	// modify a file the project tracks.
+	excludeFromGit(workspace, "opencode.json")
+	return nil
+}
+
+// excludeFromGit adds a path to the repo's LOCAL exclude list (.git/info/exclude),
+// which is not tracked and so cannot leak into a commit. Best-effort: a workspace
+// that is not a git repo needs no exclusion, and a failure here must never stop a
+// launch.
+func excludeFromGit(workspace, name string) {
+	gitDir := filepath.Join(workspace, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		return
+	}
+	if !info.IsDir() {
+		// A worktree: .git is a FILE pointing at the real gitdir. weave uses these,
+		// so this is the common case, not the exotic one.
+		b, err := os.ReadFile(gitDir)
+		if err != nil {
+			return
+		}
+		line := strings.TrimSpace(string(b))
+		if !strings.HasPrefix(line, "gitdir:") {
+			return
+		}
+		gitDir = strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(workspace, gitDir)
+		}
+	}
+	path := filepath.Join(gitDir, "info", "exclude")
+	if b, err := os.ReadFile(path); err == nil {
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.TrimSpace(l) == name {
+				return // already excluded
+			}
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString("\n# written by bashy: agent trust preseed, not project config\n" + name + "\n")
 }
 
 // preseedClaudeTrust marks one workspace as already-trusted in ~/.claude.json.
