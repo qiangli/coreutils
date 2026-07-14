@@ -65,17 +65,17 @@ func NewService(cfg *Config, dataDir string) (*Service, error) {
 		filepath.Join(dataDir, "prometheus"),
 		fmt.Sprintf("127.0.0.1:%d", collCfg.PrometheusPort),
 	))
-	mgr.AddComponent(NewAlertmanagerComponent())
-
-	persesPort, err := allocate()
-	if err != nil {
-		return nil, fmt.Errorf("perses port: %w", err)
-	}
-	mgr.AddComponent(NewPersesComponent(
-		persesPort,
-		fmt.Sprintf("http://127.0.0.1:%d/prometheus", cfg.proxyPort()),
-		filepath.Join(dataDir, "perses"),
-	))
+	// PERSES AND ALERTMANAGER ARE GONE.
+	//
+	// Perses cost 1,478 transitive dependencies to render dashboards — for a stack whose
+	// storage layer (VictoriaLogs) does its entire job in 113. Twenty times the weight of
+	// the thing it was decorating. And Victoria ships vmui, a query UI that is already in
+	// the binary, so the dashboards were a second UI over the same data.
+	//
+	// Alertmanager routes alerts to pagers and Slack. This is a LOCAL DEBUGGING STACK on
+	// a developer's laptop. Nobody is being paged.
+	//
+	// Measured, not asserted: see the dep table in the commit message.
 
 	return &Service{
 		Manager:       mgr,
