@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -59,8 +60,14 @@ type turnEndData struct {
 // process: the turn we are waiting for has not happened yet when we start
 // watching.
 type eventTail struct {
-	path   string
-	offset int64
+	mu       sync.Mutex
+	path     string
+	offset   int64
+	sawStart bool
+	// pending holds events consumed by a SawTurnStart poll so that the WaitTurnEnd
+	// that follows does not miss them. Two readers of one file, one offset — drain
+	// is destructive, so whatever it takes must be handed on rather than dropped.
+	pending []Event
 }
 
 // WaitTurnEnd blocks until the tool reports that the turn is over, and returns
@@ -74,7 +81,13 @@ func (e *eventTail) WaitTurnEnd(ctx context.Context) (text string, ok bool, err 
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		e.mu.Lock()
 		evs, rerr := e.drain()
+		if len(e.pending) > 0 {
+			evs = append(e.pending, evs...)
+			e.pending = nil
+		}
+		e.mu.Unlock()
 		if rerr != nil && !os.IsNotExist(rerr) {
 			return "", false, rerr
 		}
@@ -146,4 +159,39 @@ func (e *eventTail) drain() ([]Event, error) {
 		out = append(out, ev)
 	}
 	return out, nil
+}
+
+// SawTurnStart reports whether the agent has announced a turn.
+//
+// This is the honest answer to "did my prompt land?". Everything else in this
+// package answers it by watching how many bytes the terminal produced — which
+// measures that SOMETHING happened, never that the RIGHT thing did. A TUI drawing
+// its splash screen produces plenty of bytes and has not read your prompt.
+//
+// It is sticky: once seen, always true. The caller asks after the fact, and a turn
+// that started and finished before we looked still started.
+func (e *eventTail) SawTurnStart() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sawStart {
+		return true
+	}
+	evs, err := e.drain()
+	if err != nil {
+		return false
+	}
+	for _, ev := range evs {
+		switch ev.Type {
+		case EventTurnStart:
+			e.sawStart = true
+		case EventTurnEnd:
+			// A turn that already ENDED certainly started. Hold it so the WaitTurnEnd
+			// that follows does not miss the event we consumed here.
+			e.sawStart = true
+			e.pending = append(e.pending, ev)
+		default:
+			e.pending = append(e.pending, ev)
+		}
+	}
+	return e.sawStart
 }

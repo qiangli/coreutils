@@ -226,8 +226,19 @@ func (s *Session) openConversation(ctx context.Context, prompt string) error {
 			return fmt.Errorf("chat: could not open the conversation with %s: %w", s.Nick, err)
 		}
 
-		// Did it take? An agent that received a prompt starts producing output.
-		deadline := time.Now().Add(20 * time.Second)
+		// DID IT TAKE? Ask for evidence, not for a byte count.
+		//
+		// A tool with an event channel answers this exactly: `turn.start` means the
+		// agent received a prompt and began a turn. That is a fact it reported, and
+		// it cannot be confused with anything else.
+		//
+		// The byte-count fallback below is for tools that cannot say. It is a poor
+		// signal and it failed in exactly the way you would expect: ycode's TUI
+		// redraws a splash screen, a spinner, and its LSP/OTel startup logs, which
+		// sailed past the threshold while the prompt sat unsubmitted. The session
+		// then waited three minutes for a turn that had never begun. Counting bytes
+		// measures that SOMETHING happened, never that the RIGHT thing did.
+		deadline := time.Now().Add(45 * time.Second)
 		for time.Now().Before(deadline) {
 			select {
 			case <-ctx.Done():
@@ -236,11 +247,17 @@ func (s *Session) openConversation(ctx context.Context, prompt string) error {
 				return fmt.Errorf("chat: %s exited before it could be asked anything", s.Nick)
 			case <-time.After(500 * time.Millisecond):
 			}
+
+			if s.events != nil {
+				if s.events.SawTurnStart() {
+					return nil // the agent SAID it started. No guessing.
+				}
+				continue // it can tell us; do not fall back on a worse signal
+			}
+
 			s.mu.Lock()
 			grew := s.buf.Len() - before
 			s.mu.Unlock()
-			// A TUI redraws its own input box as the text is typed, so a few bytes
-			// prove nothing. Real work moves considerably more than that.
 			if grew > openAckBytes {
 				return nil
 			}
