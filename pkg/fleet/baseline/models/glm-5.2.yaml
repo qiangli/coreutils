@@ -45,6 +45,33 @@ billing: flat      # PAY: a prepaid seat. The next token is free at the margin.
 #
 # This combination is exactly the lane ycode exists to serve: no per-token anxiety AND
 # no third-party CLI to change its flags underneath us (which is what retired aider).
+# PLAN: GLM Coding Plan PRO ($72/mo), upgraded 2026-07-14 on measured evidence.
+#
+# The evidence, because the tiers publish only half the story:
+#
+#   PUBLISHED  quota, per 5h:   Lite ~80   Pro ~400   Max ~1600
+#   NOT PUBLISHED  concurrency: nothing, for any tier
+#
+# We hit BOTH limits, and they are different errors that were being treated the same:
+#
+#   429 code 1302  "Rate limit reached for requests"   -> RPM/concurrency. Back off; clears
+#                                                          in seconds.
+#   429 code 1308  "Usage limit reached for 5 hour"    -> QUOTA GONE. Retrying is futile for
+#                                                          HOURS. Hand off, do not wait.
+#
+# On Lite: one afternoon of real fleet work exhausted the 5h quota (1308), and the
+# concurrency ceiling was ~5 — which is a conductor plus four workers, i.e. sitting
+# permanently ON the limit.
+#
+# MEASURED after the Pro upgrade — the unpublished axis moved too:
+#
+#   concurrency   Lite: 8 requests -> 5 OK, 3x429      Pro: 8 requests -> 8 OK, 0x429
+#                                                      Pro: 12 -> 7 OK, 5x429  (ceiling ~8)
+#
+# So concurrency DOES scale with the tier even though z.ai documents none of it. Pro was
+# chosen over Max on evidence: one deep conductor run costs ~100 requests, and glm-5.2
+# carries a 3x peak-hours quota multiplier — Pro buys ~4-5 such runs per window, and Max
+# buys headroom we have not yet shown we need.
 base_url: https://api.z.ai/api/coding/paas/v4
 api_key_ref: zai
 # THE ENDPOINT IS THE CODING-PLAN ONE: /api/coding/paas/v4, not the general
