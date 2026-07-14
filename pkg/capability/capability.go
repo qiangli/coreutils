@@ -312,6 +312,38 @@ func RecordOperability(tool string, pass bool) error {
 	return nil
 }
 
+// RecordProbe writes the verdict of a LIVE LAUNCH — `agents verify --live` —
+// into an agent's operability cell, and it OVERWRITES rather than averaging.
+//
+// Operability is not an opinion to be refined; it is a fact about right now.
+// Either the agent launched and answered, or it did not. An exponential moving
+// average would let eight stale observations outvote the one that actually tried
+// it, which is how `agy:gemini3.1` came to sit in this matrix at operability 1.0,
+// with 8 samples, while being completely incapable of running: those samples came
+// from Operable(), which is exec.LookPath — "the binary is on disk". A binary on
+// disk that rejects its own model flag is not operable, and the router had no way
+// to know.
+//
+// So a probe is authoritative and a LookPath is not, and this is the one place
+// the distinction is written down.
+func RecordProbe(agent string, ok bool) error {
+	m, err := Load()
+	if err != nil {
+		return err
+	}
+	if m.Agents[agent] == nil {
+		m.Agents[agent] = map[Capability]Cell{}
+	}
+	q := 0.0
+	if ok {
+		q = 1.0
+	}
+	m.Agents[agent][CapOperability] = Cell{
+		Quality: q, Source: SourceHost, Samples: 1, UpdatedRFC: NowRFC(),
+	}
+	return m.save()
+}
+
 // Record folds one observed outcome into an agent's capability cell (rolling
 // quality via an exponential moving average toward pass=1/fail=0) and persists.
 func Record(agent string, c Capability, pass bool, latencyMS, costMicro int64, nowRFC string) error {

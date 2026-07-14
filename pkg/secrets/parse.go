@@ -9,7 +9,7 @@ import (
 // ParseEnv parses the `export NAME='value'` lines produced by `bashy secrets env`
 // back into a NAME->value map. It is the inverse of the renderer: comments (#) and
 // blank lines are skipped, and single-quoted values are unescaped with the same
-// convention shellSingleQuote emits ('\'' -> '), so any value round-trips exactly.
+// convention shellSingleQuote emits ('\” -> '), so any value round-trips exactly.
 //
 // This lets a supervisor (e.g. outpost) REUSE `secrets env` — with its cloudbox
 // fetch, local binding-template resolution, and offline-cache fallback — and
@@ -40,7 +40,7 @@ func ParseEnv(data []byte) map[string]string {
 }
 
 // unquoteSingle reverses shellSingleQuote: strip the wrapping single quotes and
-// collapse the '\'' escape back to a literal quote. A bare (unquoted) value is
+// collapse the '\” escape back to a literal quote. A bare (unquoted) value is
 // returned unchanged.
 func unquoteSingle(s string) string {
 	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {

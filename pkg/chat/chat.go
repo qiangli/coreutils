@@ -318,7 +318,27 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 //   - shell forcing: route the agent's shell-outs back through bashy.
 //   - principal stamping: tell the child which agent it is.
 func agentChildEnv(ctx context.Context) []string {
-	env := secrets.ScrubAgentEnv(os.Environ())
+	parent := os.Environ()
+	env := secrets.ScrubAgentEnv(parent)
+
+	// Deny by default, then grant exactly one thing.
+	//
+	// The scrub above strips every vault-projected credential, so an agent cannot
+	// inherit the operator's keyring. But a metered model needs ONE key in order
+	// to answer, and the registry has always said which — `api_key_ref: moonshot`
+	// on the model entry. Nothing read it, so the firewall took MOONSHOT_API_KEY
+	// away and nothing gave it back, and every kimi agent failed to authenticate
+	// on every run while the fleet wrote that down as "medium reliability".
+	//
+	// Granting the model's own declared key — and only that key — is what makes
+	// the firewall a security boundary rather than an outage.
+	if l, ok := LaunchFrom(ctx); ok && l.ModelName != "" {
+		if m, found := newCatalog().Model(l.ModelName); found && m.APIKeyRef != "" {
+			if kv, granted := secrets.GrantAgentKey(parent, m.APIKeyRef); granted {
+				env = append(env, kv)
+			}
+		}
+	}
 	if forceAgentShell() {
 		if bashy, err := os.Executable(); err == nil && bashy != "" {
 			env = forcedShellEnv(env, bashy, ensureShims(bashy))
