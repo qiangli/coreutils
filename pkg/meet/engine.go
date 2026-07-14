@@ -332,15 +332,33 @@ func findRepoRoot(dir string) string {
 	return ""
 }
 
-// minutesPath resolves where the published minutes go. An explicit --out path
-// wins; otherwise docs/meetings/ inside a git repo, else the session store.
+// minutesPath resolves where the published minutes go. An explicit --out wins;
+// otherwise docs/meetings/ inside a git repo, else the session store.
+//
+// --out MAY BE A DIRECTORY, and this used to break. The flag's own help says
+// "docs | kb | <path>", which invites you to pass a directory — and the path was
+// then handed straight to atomicWrite, which writes `<path>.tmp` and renames it
+// onto `<path>`. Renaming a file onto an existing DIRECTORY fails, so the whole
+// meeting died at the last step with:
+//
+//	rename /…/scratchpad.tmp /…/scratchpad: file exists
+//
+// after every participant had already spoken and been paid for. The minutes were
+// lost at the moment they were finished.
+//
+// So: a directory gets the generated filename INSIDE it. Anything else is taken
+// as the file itself.
 func minutesPath(st *State) string {
 	out := strings.TrimSpace(st.Out)
-	if out != "" && out != "docs" && out != "kb" {
-		return out
-	}
 	ts := st.Created.Format("2006-01-02T15-04")
 	name := fmt.Sprintf("meeting-note-%s-%s.md", ts, slugify(st.Topic))
+
+	if out != "" && out != "docs" && out != "kb" {
+		if fi, err := os.Stat(out); err == nil && fi.IsDir() {
+			return filepath.Join(out, name)
+		}
+		return out
+	}
 	if root := findRepoRoot(st.Cwd); root != "" {
 		return filepath.Join(root, "docs", "meetings", name)
 	}
