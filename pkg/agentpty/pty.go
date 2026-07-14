@@ -406,9 +406,53 @@ func writePTYControlLine(ptmx *os.File, line string) {
 	//
 	// That is exactly how `supports_say: false` came to be believed about codex.
 	// Two writes, and it submits.
-	_, _ = ptmx.WriteString(line)
+	//
+	// And the TEXT itself goes in CHUNKS, because a terminal's input buffer is not
+	// infinite. A pty's canonical input queue is ~4096 bytes (MAX_CANON); write a
+	// whole conductor brief at it in one go and the tail is simply dropped — no
+	// error, no short write, nothing. The agent gets a truncated prompt, or none at
+	// all, and sits at an empty input box looking exactly like a model with nothing
+	// to say.
+	//
+	// Measured: a 4 KB opening prompt vanished entirely into an opencode session
+	// while a 40-byte probe on the SAME socket went straight through. Every real
+	// conductor prompt is 4 KB, so opening a session on any tool that does not take
+	// its prompt on argv (opencode, codex) was structurally broken — and it failed
+	// as "deepseek did nothing", which is a lie about the model.
+	writePTYChunked(ptmx, line)
 	time.Sleep(steerEnterDelay)
 	_, _ = ptmx.WriteString("\r")
+}
+
+// ptyChunkBytes is comfortably under MAX_CANON (4096) so a chunk can never sit at
+// the boundary, and small enough that a TUI's own input handling keeps up.
+const ptyChunkBytes = 512
+
+// ptyChunkDelay lets the reader drain between chunks. Without it we simply refill
+// the buffer as fast as we overflowed it.
+const ptyChunkDelay = 25 * time.Millisecond
+
+// writePTYChunked feeds text to the terminal in pieces, the way typing does.
+func writePTYChunked(ptmx *os.File, s string) {
+	b := []byte(s)
+	for len(b) > 0 {
+		n := min(ptyChunkBytes, len(b))
+		// Do not split a multi-byte rune across a chunk: a terminal handed half a
+		// UTF-8 sequence renders garbage and may drop the rest of the line.
+		for n < len(b) && n > 0 && b[n]&0xC0 == 0x80 {
+			n--
+		}
+		if n == 0 {
+			n = min(ptyChunkBytes, len(b))
+		}
+		if _, err := ptmx.Write(b[:n]); err != nil {
+			return
+		}
+		b = b[n:]
+		if len(b) > 0 {
+			time.Sleep(ptyChunkDelay)
+		}
+	}
 }
 
 func tailPTYControlFile(path string, ptmx *os.File) {
