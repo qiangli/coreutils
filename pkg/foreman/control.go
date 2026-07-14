@@ -107,21 +107,36 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 	_ = sc.Err()
 }
 
-func SendCommand(root, id string, cmd Command) error {
-	store := NewStore(root, id)
-	var ack struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := agentlaunch.SendJSONControl(store.CtlSockPath(), cmd, &ack, 3*time.Second); err != nil {
-		return err
-	}
-	if !ack.OK {
-		return fmt.Errorf("foreman: control command failed: %s", ack.Error)
-	}
-	return nil
+// Ack is what the daemon says it did with a command.
+//
+// Steered and Accepted are NOT the same thing and the caller must be able to tell
+// them apart:
+//
+//	Steered  -- the message went to a LIVE agent, mid-turn. You interrupted it.
+//	Accepted -- there was no live agent; the message STARTS a turn instead.
+//
+// Collapsing both into "ok" is exactly the lie this whole line of work exists to
+// remove. An operator who typed a correction needs to know whether it landed on a
+// working agent or merely got queued for a fresh one.
+type Ack struct {
+	OK       bool   `json:"ok"`
+	Error    string `json:"error"`
+	Steered  bool   `json:"steered"`
+	Accepted bool   `json:"accepted"`
 }
 
-func Tell(root, id, msg string) error {
+func SendCommand(root, id string, cmd Command) (Ack, error) {
+	store := NewStore(root, id)
+	var ack Ack
+	if err := agentlaunch.SendJSONControl(store.CtlSockPath(), cmd, &ack, 3*time.Second); err != nil {
+		return ack, err
+	}
+	if !ack.OK {
+		return ack, fmt.Errorf("foreman: control command failed: %s", ack.Error)
+	}
+	return ack, nil
+}
+
+func Tell(root, id, msg string) (Ack, error) {
 	return SendCommand(root, id, Command{Verb: CommandTell, Message: msg})
 }

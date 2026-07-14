@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -36,9 +37,10 @@ type Session struct {
 	// running*, which means it cannot wait on s.mu: it would block until the very
 	// turn it was trying to interrupt had already finished. A steer that waits for
 	// the turn to end is not a steer, it is a note left on the desk.
-	liveMu sync.Mutex
-	live   *chat.Session
-	steers []string // mid-turn corrections, appended under liveMu
+	liveMu  sync.Mutex
+	live    *chat.Session
+	steers  []string // mid-turn corrections, appended under liveMu
+	logFile *os.File // the live agent's output, tee'd for `foreman log`
 }
 
 func Start(ctx context.Context, opt Options) (*Session, error) {
@@ -112,6 +114,18 @@ func (s *Session) ProcessPending(ctx context.Context) error {
 	return s.store.SaveState(s.state)
 }
 
+// persistLocked writes state.json. The caller must ALREADY hold s.mu — it reads
+// s.state directly rather than going through State(), which would re-take the
+// lock and deadlock.
+//
+// It exists because status must be true DURING a turn, not merely after it.
+// SaveState used to run only once Apply returned, so for the entire time an agent
+// was working, `foreman status` reported "idle" and `steering: false` -- the file
+// described a session that was doing nothing, while an agent burned tokens. An
+// operator cannot supervise a run whose status only becomes true once there is
+// nothing left to supervise.
+func (s *Session) persistLocked() { _ = s.store.SaveState(s.state) }
+
 func (s *Session) Apply(ctx context.Context, cmd Command) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -128,6 +142,7 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		s.state.Status = StatusWorking
 		s.state.CurrentStep = cmd.Message
 		s.history = append(s.history, "human: "+cmd.Message)
+		s.persistLocked() // the turn has STARTED; say so now, not when it ends
 		if s.runner == nil && strings.TrimSpace(s.state.Agent) == "" && strings.TrimSpace(s.state.Role) == "" {
 			s.state.Status = StatusIdle
 			return nil

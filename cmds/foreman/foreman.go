@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,7 +19,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "foreman",
 	Synopsis: "Drive a persistent, steerable agent session.",
-	Usage:    "foreman start [--detach] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status <id>\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
+	Usage:    "foreman start [--detach] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status <id>\n   or: foreman log <id> [-f]\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
 }
 
 var runner chat.Runner
@@ -65,6 +66,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return runTell(rc, subArgs, jsonOut)
 	case "status":
 		return runStatus(rc, subArgs, jsonOut)
+	case "log":
+		return runLog(rc, subFlags, subArgs)
 	case "list":
 		return runList(rc, jsonOut)
 	case "pause", "resume", "skip", "stop":
@@ -158,10 +161,60 @@ func runTell(rc *tool.RunContext, args []string, jsonOut bool) int {
 		return usage(rc, "tell requires id and message")
 	}
 	id, msg := args[0], strings.Join(args[1:], " ")
-	if err := foreman.Tell("", id, msg); err != nil {
+	ack, err := foreman.Tell("", id, msg)
+	if err != nil {
 		return fail(rc, jsonOut, err)
 	}
-	return ok(rc, jsonOut, map[string]any{"id": id, "sent": msg})
+	// SAY WHICH ONE HAPPENED. "steered" means the line landed on an agent that was
+	// working; "accepted" means there was nobody there and it starts a fresh turn
+	// instead. Those are different acts, and an operator who typed a correction
+	// needs to know which one they got -- reporting both as a bare "ok" is the
+	// precise lie this control plane was built to stop telling.
+	delivery := "accepted (no live agent — this STARTS a turn)"
+	if ack.Steered {
+		delivery = "steered (delivered to the running agent, mid-turn)"
+	}
+	if !jsonOut {
+		fmt.Fprintf(rc.Out, "→ %s: %s\n", id, delivery)
+	}
+	return ok(rc, jsonOut, map[string]any{
+		"id": id, "sent": msg, "steered": ack.Steered, "accepted": ack.Accepted,
+	})
+}
+
+// runLog shows what the agent is actually SAYING.
+//
+// Without it a detached foreman was a black box: `status` told you it was
+// `working` and nothing at all about what it was working ON. That makes steering
+// useless in practice, because you steer when you SEE the agent going wrong.
+func runLog(rc *tool.RunContext, flags map[string]string, args []string) int {
+	if len(args) != 1 {
+		return usage(rc, "log requires id")
+	}
+	path := foreman.NewStore("", args[0]).LogPath()
+	f, err := os.Open(path)
+	if err != nil {
+		return fail(rc, false, fmt.Errorf("no log for %s yet (the agent may not have started): %w", args[0], err))
+	}
+	defer f.Close()
+	if _, err := io.Copy(rc.Out, f); err != nil {
+		return fail(rc, false, err)
+	}
+	if flags["f"] != "true" && flags["follow"] != "true" {
+		return 0
+	}
+	// Follow. A turn runs for minutes; an operator watching for the moment to
+	// intervene needs the stream, not a snapshot.
+	for {
+		select {
+		case <-rc.Ctx.Done():
+			return 0
+		case <-time.After(500 * time.Millisecond):
+		}
+		if _, err := io.Copy(rc.Out, f); err != nil {
+			return 0
+		}
+	}
 }
 
 func runStatus(rc *tool.RunContext, args []string, jsonOut bool) int {
@@ -202,7 +255,7 @@ func runControl(rc *tool.RunContext, verb string, args []string, jsonOut bool) i
 	if len(args) == 2 {
 		cmd.Target = args[1]
 	}
-	if err := foreman.SendCommand("", args[0], cmd); err != nil {
+	if _, err := foreman.SendCommand("", args[0], cmd); err != nil {
 		return fail(rc, jsonOut, err)
 	}
 	return ok(rc, jsonOut, map[string]any{"id": args[0], "verb": verb})
@@ -216,7 +269,7 @@ func runPrio(rc *tool.RunContext, args []string, jsonOut bool) int {
 	if len(args) == 3 {
 		c.Target = args[1]
 	}
-	if err := foreman.SendCommand("", args[0], c); err != nil {
+	if _, err := foreman.SendCommand("", args[0], c); err != nil {
 		return fail(rc, jsonOut, err)
 	}
 	return ok(rc, jsonOut, map[string]any{"id": args[0], "priority": args[len(args)-1]})

@@ -33,7 +33,7 @@ func TestTellReachesSessionOverUnixSocket(t *testing.T) {
 		t.Fatal("control socket did not become ready")
 	}
 
-	if err := Tell(dir, "sock", "steer over socket"); err != nil {
+	if _, err := Tell(dir, "sock", "steer over socket"); err != nil {
 		t.Fatalf("Tell: %v", err)
 	}
 

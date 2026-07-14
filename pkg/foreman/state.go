@@ -113,6 +113,17 @@ func (s Store) CtlSockPath() string {
 	return filepath.Join(os.TempDir(), "bashy-foreman-"+s.ID+".sock")
 }
 
+// LogPath is where the live agent's output is TEE'd.
+//
+// A detached foreman held its agent's output in the daemon's memory and nowhere
+// else, so an operator supervising a run could see that it was `working` and not
+// one word of what it was doing. You cannot steer what you cannot see: the whole
+// value of a mid-turn correction is that you noticed the agent going wrong, and
+// noticing requires watching.
+func (s Store) LogPath() string {
+	return filepath.Join(s.Dir(), "log")
+}
+
 func (s Store) Ensure() error {
 	return os.MkdirAll(s.Dir(), 0o700)
 }

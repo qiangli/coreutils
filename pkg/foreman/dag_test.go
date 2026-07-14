@@ -74,7 +74,7 @@ func TestRunDAGAppliesSteerBetweenNodes(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("target a did not run")
 	}
-	if err := Tell(root, "dag", "steer between nodes"); err != nil {
+	if _, err := Tell(root, "dag", "steer between nodes"); err != nil {
 		t.Fatalf("Tell: %v", err)
 	}
 	select {

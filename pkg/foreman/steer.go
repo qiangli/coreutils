@@ -2,6 +2,8 @@ package foreman
 
 import (
 	"context"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -105,9 +107,21 @@ func (s *Session) noteSteer(msg string) {
 
 // attach opens the live session, using the first message as its opening prompt.
 func (s *Session) attach(ctx context.Context, msg string) error {
+	// Tee the agent's output to a log the operator can tail. A tee, never a
+	// redirect: what gets RECORDED in the history is byte-for-byte what it would
+	// have been with nobody watching. Observing must not change the record.
+	var sink io.Writer
+	if err := s.store.Ensure(); err == nil {
+		if f, err := os.OpenFile(s.store.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			s.logFile = f
+			sink = f
+		}
+	}
+
 	live, err := chat.Start(ctx, s.state.Agent, chat.SessionOptions{
 		Prompt:   s.composePrompt(msg),
 		Cwd:      s.state.Cwd,
+		Stream:   sink,
 		ReadOnly: false, // a foreman's agent is here to DO the work
 	})
 	if err != nil {
@@ -116,8 +130,11 @@ func (s *Session) attach(ctx context.Context, msg string) error {
 	s.setLive(live)
 	s.state.Steering = true
 	s.state.SteerWhyNot = ""
-	s.state.CtlSock = live.CtlSock
 	s.state.Binding = live.Agent
+	// The agent is UP and reachable. Persist immediately: an operator watching
+	// `foreman status` must be able to see that this session is steerable while the
+	// turn is still running, which is the only time steering it would do any good.
+	s.persistLocked()
 	return nil
 }
 
@@ -172,6 +189,10 @@ func (s *Session) closeLive() {
 	if live := s.getLive(); live != nil {
 		live.Close()
 		s.setLive(nil)
+	}
+	if s.logFile != nil {
+		_ = s.logFile.Close()
+		s.logFile = nil
 	}
 	s.state.Steering = false
 }
