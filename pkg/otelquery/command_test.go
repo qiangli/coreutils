@@ -18,7 +18,8 @@ func TestGuessedQueryAndSummary(t *testing.T) {
 		w.Write([]byte(`[
 {"trace_id":"t1","span_id":"s1","service.name":"ycode","span.name":"turn","event.name":"value","value.name":"context_tokens","value.amount":123,"value.source":"estimate"},
 {"trace_id":"t2","span_id":"s2","service.name":"ycode","span.name":"turn","event.name":"value","value.name":"price","value.amount":1.2,"value.source":"GUESS-default-rate"},
-{"trace_id":"t3","span_id":"s3","service.name":"bashy","span.name":"turn","event.name":"value","value.name":"context_tokens","value.amount":99,"value.source":"estimate"}
+{"trace_id":"t3","span_id":"s3","service.name":"bashy","span.name":"turn","event.name":"value","value.name":"context_tokens","value.amount":99,"value.source":"estimate"},
+{"trace_id":"t4","span_id":"s4","service.name":"ycode","span.name":"turn","event.name":"value","value.name":"context_tokens","value.amount":456,"value.source":"estimate"}
 ]`))
 	}))
 	defer srv.Close()
@@ -36,8 +37,41 @@ func TestGuessedQueryAndSummary(t *testing.T) {
 	if gotLimit != "201" {
 		t.Fatalf("limit = %q", gotLimit)
 	}
-	if env.TotalMatches != 3 || env.Items[0].Count != 2 || !strings.Contains(env.Items[0].Key, "estimate") {
-		t.Fatalf("bad summary: %+v", env)
+	// GROUPING IS WHAT MAKES THE OUTPUT BOUNDED. Without it this verb returns a data dump,
+	// which is the bug the whole feature exists to avoid: an agent must read every byte you
+	// hand it.
+	//
+	// The key is (source, value_name, SERVICE) — deliberately including the service, because
+	// "ycode's context gate is running on an estimate" and "bashy's is" are DIFFERENT FACTS.
+	// Merging them across services would hide exactly what you need to know.
+	//
+	// This test asserted Count==2 against a fixture with no two rows from the same service,
+	// so it never passed and never exercised grouping. The fixture now has two ycode
+	// estimates (t1, t4), which must collapse to one item with Count 2.
+	if env.TotalMatches != 4 {
+		t.Fatalf("TotalMatches = %d, want 4 (the raw row count)", env.TotalMatches)
+	}
+	if len(env.Items) != 3 {
+		t.Fatalf("got %d items, want 3 — 4 rows must group to 3 distinct (source,name,service) keys:\n%+v",
+			len(env.Items), env.Items)
+	}
+
+	var ycodeEstimates *SummaryItem
+	for i := range env.Items {
+		if env.Items[i].Source == "estimate" && env.Items[i].Service == "ycode" {
+			ycodeEstimates = &env.Items[i]
+		}
+	}
+	if ycodeEstimates == nil {
+		t.Fatalf("no grouped item for (estimate, ycode):\n%+v", env.Items)
+	}
+	if ycodeEstimates.Count != 2 {
+		t.Errorf("(estimate, ycode) has Count %d, want 2 — the two ycode estimates did not "+
+			"group, so this verb returns raw rows instead of a summary", ycodeEstimates.Count)
+	}
+	if !strings.Contains(ycodeEstimates.Key, "estimate") || !strings.Contains(ycodeEstimates.Key, "ycode") {
+		t.Errorf("key = %q — it must name both the SOURCE and the SERVICE, or the reader "+
+			"cannot tell who is guessing", ycodeEstimates.Key)
 	}
 }
 
