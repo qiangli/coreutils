@@ -377,6 +377,11 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 	}
 }
 
+// steerEnterDelay separates the typed text from the Enter that submits it.
+//
+// It is not a magic sleep — it is the difference between typing and pasting.
+var steerEnterDelay = 150 * time.Millisecond
+
 func writePTYControlLine(ptmx *os.File, line string) {
 	if line == "" {
 		return
@@ -389,8 +394,21 @@ func writePTYControlLine(ptmx *os.File, line string) {
 		}
 		return
 	}
-	// Plain line protocol: append \r for Enter.
-	_, _ = ptmx.WriteString(line + "\r")
+
+	// Text first, THEN Enter, as two writes with a pause between them.
+	//
+	// Sending `text + "\r"` in one write looks like a PASTE, not typing — and a
+	// TUI in bracketed-paste mode (codex turns it on, along with the kitty
+	// keyboard protocol) puts the pasted text in its input box and does NOT
+	// submit it. The steer lands on screen and nothing happens; worse, the echoed
+	// text is indistinguishable from an answer to anything reading the output, so
+	// the failure looks like a success.
+	//
+	// That is exactly how `supports_say: false` came to be believed about codex.
+	// Two writes, and it submits.
+	_, _ = ptmx.WriteString(line)
+	time.Sleep(steerEnterDelay)
+	_, _ = ptmx.WriteString("\r")
 }
 
 func tailPTYControlFile(path string, ptmx *os.File) {

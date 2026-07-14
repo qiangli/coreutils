@@ -5,9 +5,17 @@ cli:
   binary: codex
   launch:
     exec: codex exec --skip-git-repo-check --sandbox workspace-write --model {model} {prompt}
+    steer_exec: codex --model {model}
     prompt_position: last
     trust_preseed: none
-    supports_say: false
+
+    # supports_say: MEASURED, not asserted. Proven with agentpty.Run + BrokerSay —
+    # the production path `meet say` uses — in pkg/agentpty/steer_live_test.go.
+    # It was `false` here for months because nobody ever tried, and because the
+    # control channel sent `text + \r` in ONE write, which a TUI in bracketed-paste
+    # mode reads as a PASTE: the steer landed in the input box and was never
+    # submitted. Two writes (text, pause, Enter) and it submits.
+    supports_say: true
     supports_graceful_quit: true
     notes: >-
       headless `exec`; the sandbox flag is `-s/--sandbox workspace-write` (codex 0.141.0 —

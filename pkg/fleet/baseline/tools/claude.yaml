@@ -12,6 +12,7 @@ cli:
     # already says so out loud (codex `exec`, opencode `run`, aider --message,
     # agy -p); claude was the only one relying on the guess.
     exec: claude --dangerously-skip-permissions --model {model} -p {prompt}
+    steer_exec: claude --dangerously-skip-permissions --model {model}
     prompt_position: last
     trust_preseed: .claude.json
     trust_clear: "say:1"

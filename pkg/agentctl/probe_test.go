@@ -90,18 +90,35 @@ func TestClassifyVerdicts(t *testing.T) {
 	}
 }
 
-// A terminal is given only to a tool that can use one. codex and agy declare
-// supports_say=false; handing them a pty merges stderr into the answer and buys
-// nothing, because neither listens.
+// A HEADLESS turn gets a pty only if it has a prompt to clear mid-run. Being
+// steerable is NOT a reason: a one-shot (`codex exec`, `agy -p`) runs the prompt
+// and exits, so there is no session to interrupt — and the pty would only merge
+// the tool's banner into the captured answer.
 func TestNeedsTerminal(t *testing.T) {
-	if (Profile{Steerable: true}).NeedsTerminal() != true {
-		t.Error("a steerable tool needs a terminal")
+	if (Profile{Steerable: true, SteerExec: "codex"}).NeedsTerminal() {
+		t.Error("a steerable tool does NOT need a terminal for a headless one-shot — " +
+			"its steering lives in a different launch, and a pty here only adds banner noise")
 	}
-	if (Profile{Clear: "say:1"}).NeedsTerminal() != true {
-		t.Error("a tool with a trust prompt to clear needs a terminal")
+	if !(Profile{Clear: "say:1"}).NeedsTerminal() {
+		t.Error("a tool with a trust prompt that can appear mid-run needs a terminal")
 	}
-	if (Profile{}).NeedsTerminal() != false {
-		t.Error("a tool that neither listens nor prompts must get a pipe")
+	if (Profile{}).NeedsTerminal() {
+		t.Error("a tool that neither prompts nor listens must get a pipe")
+	}
+}
+
+// CanSteer needs BOTH: the measured capability, and a launch that delivers it.
+// supports_say alone is a claim about the tool; without SteerExec there is no
+// argv that opens a session to steer.
+func TestCanSteer(t *testing.T) {
+	if !(Profile{Steerable: true, SteerExec: "codex --model x"}).CanSteer() {
+		t.Error("measured-steerable + an interactive launch = steerable")
+	}
+	if (Profile{Steerable: true}).CanSteer() {
+		t.Error("steerable with no interactive launch is a capability with no way to reach it")
+	}
+	if (Profile{SteerExec: "x"}).CanSteer() {
+		t.Error("an interactive launch on a tool that does not listen is not steering")
 	}
 }
 

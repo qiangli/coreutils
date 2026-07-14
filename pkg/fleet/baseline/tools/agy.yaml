@@ -7,9 +7,17 @@ cli:
   binary: agy
   launch:
     exec: agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}
+    steer_exec: agy --dangerously-skip-permissions --model {model} -i {prompt}
     prompt_position: last
     trust_preseed: none
-    supports_say: false
+
+    # supports_say: MEASURED, not asserted. Proven with agentpty.Run + BrokerSay —
+    # the production path `meet say` uses — in pkg/agentpty/steer_live_test.go.
+    # It was `false` here for months because nobody ever tried, and because the
+    # control channel sent `text + \r` in ONE write, which a TUI in bracketed-paste
+    # mode reads as a PASTE: the steer landed in the input box and was never
+    # submitted. Two writes (text, pause, Enter) and it submits.
+    supports_say: true
     supports_graceful_quit: true
     notes: headless `-p` (use `-i` for a steerable TUI). Bump --print-timeout (default 5m).
     auth_hint: >-

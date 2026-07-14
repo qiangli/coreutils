@@ -95,8 +95,23 @@ type ToolLaunch struct {
 	TrustPreseed string       `yaml:"trust_preseed,omitempty" json:"trust_preseed,omitempty"`
 	Watchdog     ToolWatchdog `yaml:"watchdog,omitempty" json:"watchdog"`
 
-	// SupportsSay marks a steerable TUI that accepts mid-run input.
+	// SupportsSay marks a tool that CAN be steered mid-run — a capability fact
+	// about the tool, MEASURED (pkg/agentpty/steer_live_test.go), not asserted.
 	SupportsSay bool `yaml:"supports_say,omitempty" json:"supports_say,omitempty"`
+
+	// SteerExec is the argv template that ACTUALLY accepts steering, and it is
+	// usually NOT Exec.
+	//
+	// A headless one-shot has nothing to steer: `codex exec` and `agy -p` run the
+	// prompt and exit. Steering needs the tool's interactive session — bare `codex`,
+	// or `agy -i` ("run an initial prompt interactively and CONTINUE the session").
+	//
+	// Two templates, because the choice is a real trade. Exec gives a clean captured
+	// answer (stdout and stderr stay apart on a pipe). SteerExec gives a session you
+	// can interrupt, at the cost of a pty that merges the tool's chrome into the
+	// transcript. A launcher picks by what it needs; the registry refuses to pretend
+	// one launch does both.
+	SteerExec string `yaml:"steer_exec,omitempty" json:"steer_exec,omitempty"`
 	// SupportsGracefulQuit marks a tool that exits cleanly on a quit signal.
 	SupportsGracefulQuit bool `yaml:"supports_graceful_quit,omitempty" json:"supports_graceful_quit,omitempty"`
 	// TrustClear is the steering input that clears a trust prompt.

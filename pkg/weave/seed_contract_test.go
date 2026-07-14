@@ -52,9 +52,14 @@ func TestSeededContractCarriesTheLaunchQuirks(t *testing.T) {
 		t.Errorf("claude is steerable and needs a trust clear: %+v", claude)
 	}
 
+	// codex IS steerable. It was recorded as not-steerable for months because
+	// nobody ever tried — and because the control channel sent `text + \r` in ONE
+	// write, which codex's TUI (bracketed paste + kitty keyboard protocol) reads
+	// as a PASTE: the steer landed in its input box and was never submitted.
+	// Measured in pkg/agentpty/steer_live_test.go, through the real control socket.
 	codex, _ := seededContract("codex")
-	if codex.SupportsSay {
-		t.Error("codex is not steerable")
+	if !codex.SupportsSay {
+		t.Error("codex IS steerable — measured in pkg/agentpty/steer_live_test.go")
 	}
 	if !codex.SupportsGracefulQuit {
 		t.Error("codex quits gracefully")

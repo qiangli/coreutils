@@ -72,22 +72,39 @@ type Profile struct {
 	// GracefulQuit reports whether the tool can be asked to exit rather than
 	// killed.
 	GracefulQuit bool
+
+	// SteerExec is the argv that actually accepts steering — usually NOT the
+	// headless launch, which has nothing to interrupt. Empty means the tool has no
+	// interactive session to reach.
+	SteerExec string
 }
 
-// NeedsTerminal reports whether this tool can actually USE a pseudo-terminal —
-// because it listens mid-run, or because it has a prompt that must be cleared
-// reactively.
+// NeedsTerminal reports whether a HEADLESS turn needs a pty anyway — i.e. whether
+// this tool has a prompt that must be cleared reactively while it runs.
 //
-// A terminal is not free, and this is the check that stops it being handed out
-// like one. A pty merges stdout and stderr, so the tool's chrome — codex prints
-// a version banner and its workdir — lands in the captured answer, where a pipe
-// would have kept it apart. Pay that for a tool that can be steered; do not pay
-// it for one that would only sit there being un-steerable and noisy.
+// It is deliberately NOT "is the tool steerable". A pty is not free: it merges
+// stdout and stderr, so the tool's chrome — codex prints a version banner and its
+// workdir — lands inside the captured answer, where a pipe keeps it out. And a
+// terminal buys a headless launch nothing anyway: `codex exec` and `agy -p` run
+// the prompt and EXIT. There is no session there to steer.
 //
-// The registry decides, not the caller: codex and agy declare supports_say=false
-// and get a pipe; claude declares supports_say + trust_clear and gets a terminal.
+// So today only claude qualifies, because only claude has a trust prompt that can
+// appear mid-run (trust_clear). codex and agy are steerable — measured — but their
+// steering lives in a DIFFERENT launch (SteerExec), and asking for it means asking
+// for it, not getting a terminal by accident.
 func (p Profile) NeedsTerminal() bool {
-	return p.Steerable || strings.TrimSpace(p.Clear) != ""
+	return strings.TrimSpace(p.Clear) != ""
+}
+
+// CanSteer reports whether this tool can be interrupted mid-run at all, and names
+// the launch that allows it.
+//
+// Steerable is a MEASURED capability (pkg/agentpty/steer_live_test.go drives the
+// real tool through the real control socket). SteerExec is the launch that
+// delivers it — usually not the headless one, because a one-shot has nothing to
+// interrupt.
+func (p Profile) CanSteer() bool {
+	return p.Steerable && strings.TrimSpace(p.SteerExec) != ""
 }
 
 // ProfileFor reads a tool's contract from the fleet registry. The registry is the
@@ -109,6 +126,7 @@ func ProfileFor(tool string) (Profile, bool) {
 		Preseed:      l.TrustPreseed,
 		Clear:        l.TrustClear,
 		Steerable:    l.SupportsSay,
+		SteerExec:    l.SteerExec,
 		GracefulQuit: l.SupportsGracefulQuit,
 	}, true
 }
