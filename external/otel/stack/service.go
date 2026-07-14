@@ -2,6 +2,7 @@ package stack
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 )
 
@@ -36,49 +37,59 @@ func NewService(cfg *Config, dataDir string) (*Service, error) {
 	}
 	mgr.AddComponent(NewVictoriaTracesComponent(vtracesPort, filepath.Join(dataDir, "vtraces")))
 
-	collGRPCPort, err := resolveOTLPPort(cfg.OTLPGRPCPort, 4317, "OTLP gRPC", allocate)
+	// METRICS: VictoriaMetrics, ingesting OTLP natively.
+	vmetricsPort, err := allocate()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("victoria-metrics port: %w", err)
 	}
-	collHTTPPort, err := resolveOTLPPort(cfg.OTLPHTTPPort, 4318, "OTLP HTTP", allocate)
-	if err != nil {
-		return nil, err
-	}
-	collPromPort, err := allocate()
-	if err != nil {
-		return nil, fmt.Errorf("collector prometheus port: %w", err)
-	}
-	collCfg := CollectorConfig{
-		GRPCPort:               collGRPCPort,
-		HTTPPort:               collHTTPPort,
-		PrometheusPort:         collPromPort,
-		VictoriaLogsPort:       vlogsPort,
-		VictoriaLogsPathPrefix: "/logs",
-		VictoriaTracesPort:     vtracesPort,
-	}
-	coll := NewEmbeddedCollector(collCfg, filepath.Join(dataDir, "collector"))
-	mgr.AddComponent(coll)
+	mgr.AddComponent(NewVictoriaMetricsComponent(vmetricsPort, filepath.Join(dataDir, "vmetrics")))
 
-	mgr.AddComponent(NewPrometheusComponent(
-		filepath.Join(dataDir, "prometheus"),
-		fmt.Sprintf("127.0.0.1:%d", collCfg.PrometheusPort),
-	))
-	// PERSES AND ALERTMANAGER ARE GONE.
+	// THE OTEL COLLECTOR IS GONE, AND SO IS PROMETHEUS.
 	//
-	// Perses cost 1,478 transitive dependencies to render dashboards — for a stack whose
-	// storage layer (VictoriaLogs) does its entire job in 113. Twenty times the weight of
-	// the thing it was decorating. And Victoria ships vmui, a query UI that is already in
-	// the binary, so the dashboards were a second UI over the same data.
+	// The chain is why neither could be deleted alone: the collector received OTLP and
+	// handed metrics to a prometheusexporter, and Prometheus SCRAPED that exporter. So
+	// deleting the collector deleted the only path metrics had. Both fall together, or
+	// neither does.
 	//
-	// Alertmanager routes alerts to pagers and Slack. This is a LOCAL DEBUGGING STACK on
-	// a developer's laptop. Nobody is being paged.
+	//	jaeger        2,240  -> VictoriaTraces
+	//	perses        1,478  -> vmui (already in the binary)
+	//	collector       833  -> nothing. See below.
+	//	prometheus      556  -> VictoriaMetrics
+	//	victoria       ~113  <- the engine that stores all three signals
 	//
-	// Measured, not asserted: see the dep table in the commit message.
+	// EVERY VICTORIA COMPONENT INGESTS OTLP NATIVELY. So the collector's entire remaining
+	// job was to be ONE ADDRESS that accepts all three signals and fans them out — 833
+	// dependencies to spare a caller from setting three environment variables.
+	//
+	// The proxy already reverse-proxies by path prefix, and OTLP/HTTP is defined as
+	// POST {endpoint}/v1/{traces,logs,metrics}. So the proxy IS the fan-out, in four
+	// lines, and an app points at it exactly as it pointed at the collector:
+	//
+	//	OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>
+	//	OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+	//
+	// A middleman that only forwards is a dependency, not a feature.
+	otlpRoutes := map[string]string{
+		"/v1/traces":  fmt.Sprintf("http://127.0.0.1:%d/insert/opentelemetry/v1/traces", vtracesPort),
+		"/v1/logs":    fmt.Sprintf("http://127.0.0.1:%d/insert/opentelemetry/v1/logs", vlogsPort),
+		"/v1/metrics": fmt.Sprintf("http://127.0.0.1:%d/opentelemetry/v1/metrics", vmetricsPort),
+	}
+	for path, backend := range otlpRoutes {
+		u, perr := url.Parse(backend)
+		if perr != nil {
+			return nil, fmt.Errorf("otlp route %s: %w", path, perr)
+		}
+		mgr.AddOTLPRoute(path, u)
+	}
 
+	addr := fmt.Sprintf("%s:%d", cfg.proxyBindAddr(), cfg.proxyPort())
 	return &Service{
-		Manager:       mgr,
-		CollectorAddr: coll.GRPCAddr(),
-		HTTPAddr:      fmt.Sprintf("%s:%d", cfg.proxyBindAddr(), cfg.proxyPort()),
+		Manager: mgr,
+		// The OTLP endpoint is now the proxy itself, over HTTP. There is no gRPC
+		// receiver any more: nothing in this stack speaks OTLP/gRPC, because nothing
+		// needs to — Victoria takes OTLP/HTTP directly.
+		CollectorAddr: "http://" + addr,
+		HTTPAddr:      addr,
 	}, nil
 }
 

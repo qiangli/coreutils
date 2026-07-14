@@ -52,6 +52,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -100,7 +101,27 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			return // no-op mode. Deliberately, and completely.
 		}
 
-		exp, err := otlptracegrpc.New(ctx)
+		// BOTH PROTOCOLS, chosen by the standard env var. Not one, hard-coded.
+		//
+		// The embedded stack no longer runs an OTel Collector — the only thing in it that
+		// spoke gRPC. Every Victoria component ingests OTLP/HTTP natively and the proxy
+		// fans /v1/{traces,logs,metrics} out to them, so the stack's own endpoint is HTTP.
+		//
+		// But hard-coding HTTP would have broken every gRPC collector in the world,
+		// including the umbrella's own otlp-receiver — which is exactly how I found out,
+		// because the first version silently sent to nothing and I nearly recorded another
+		// process's spans as proof that it worked.
+		//
+		// OTEL_EXPORTER_OTLP_PROTOCOL is the standard knob: "grpc" or "http/protobuf".
+		// The spec's default is http/protobuf, and so is ours.
+		var exp sdktrace.SpanExporter
+		var err error
+		switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL"))) {
+		case "grpc":
+			exp, err = otlptracegrpc.New(ctx)
+		default:
+			exp, err = otlptracehttp.New(ctx)
+		}
 		if err != nil {
 			// A shell must not fail to start because a collector is down. Say so once,
 			// on stderr, and carry on in no-op mode — SILENTLY degrading here would be

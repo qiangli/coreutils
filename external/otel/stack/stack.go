@@ -18,6 +18,7 @@ type StackManager struct {
 	mu         sync.Mutex
 	components []Component
 	proxy      *ProxyServer
+	otlpRoutes map[string]*url.URL
 	started    bool
 }
 
@@ -31,6 +32,26 @@ func NewStackManager(cfg *Config, dataDir string) *StackManager {
 
 // AddComponent registers a component to be managed by the stack.
 // Components are started in the order they are added (dependency ordering).
+// AddOTLPRoute registers an OTLP/HTTP ingest path on the proxy, pointing at the Victoria
+// component that stores that signal.
+//
+// This is what replaced the OpenTelemetry Collector. OTLP/HTTP is defined as
+// POST {endpoint}/v1/{traces,logs,metrics}, and every Victoria component ingests OTLP
+// natively — so the collector's entire remaining job was to be one address that fans three
+// signals out to three stores. The proxy already reverse-proxies by path prefix, so it IS
+// the fan-out, and it costs nothing.
+//
+//	collector    833 transitive dependencies
+//	this          3 map entries
+//
+// A middleman that only forwards is a dependency, not a feature.
+func (s *StackManager) AddOTLPRoute(path string, backend *url.URL) {
+	if s.otlpRoutes == nil {
+		s.otlpRoutes = map[string]*url.URL{}
+	}
+	s.otlpRoutes[path] = backend
+}
+
 func (s *StackManager) AddComponent(c Component) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,6 +90,9 @@ func (s *StackManager) Start(ctx context.Context) error {
 	// Start reverse proxy.
 	s.proxy = NewProxyServer(s.cfg.proxyBindAddr(), s.cfg.proxyPort())
 	s.registerRoutes()
+	for path, backend := range s.otlpRoutes {
+		s.proxy.AddRoute(path, backend)
+	}
 	if err := s.proxy.Start(ctx); err != nil {
 		return fmt.Errorf("start proxy: %w", err)
 	}
