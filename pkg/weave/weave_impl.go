@@ -581,14 +581,34 @@ func weaveItemMerged(root, base string, it *weaveItem) bool {
 	// get reconciled to done and vanish from the list). CommitsAhead is
 	// the wrapper's terminal-time measurement; 0 means nothing to merge,
 	// which is "empty", not "merged".
-	if it.CommitsAhead <= 0 {
+	//
+	// MEASURED, not merely recorded. Both of the inputs below used to be read
+	// straight off the queue — and both are written by the WRAPPER at terminal
+	// time, so a tool that crashes on its way out (or commits a moment after the
+	// wrapper measured) leaves them describing a run that no longer exists:
+	// CommitsAhead 0 while the branch carries the feature, and Head still pointing
+	// at the base commit the workspace was forked from.
+	//
+	// The consequence was quiet and annoying rather than dangerous: work that HAD
+	// landed in base went on reading as `submitted` forever, because the guard
+	// short-circuited on a stale zero and never got as far as asking git.
+	//
+	// This is the fifth place in this file that had to learn the same thing, so it
+	// is written down once more: a record written by a process that did not
+	// survive is not evidence of absence. If the artifact is on disk, ask the
+	// artifact.
+	ahead, liveHead := it.CommitsAhead, ""
+	if it.Workspace != "" {
+		if st, err := os.Stat(it.Workspace); err == nil && st.IsDir() {
+			ahead, liveHead = weaveMeasureBranch(it.Workspace, weaveCountRef(it, base))
+		}
+	}
+	if ahead <= 0 {
 		return false
 	}
-	sha := it.Head
-	if sha == "" && it.Workspace != "" {
-		if out, err := exec.Command("git", "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
-			sha = strings.TrimSpace(string(out))
-		}
+	sha := liveHead
+	if sha == "" {
+		sha = it.Head
 	}
 	if sha == "" {
 		return false
