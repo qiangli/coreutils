@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -31,11 +32,24 @@ import (
 //	the agent principal, because "which agent did this" was unanswerable across a fleet run
 func ExecMiddleware(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(ctx context.Context, args []string) error {
-		if !enabled || len(args) == 0 {
+		if len(args) == 0 {
 			return next(ctx, args)
 		}
 
-		ctx, span := tracer.Start(ctx, "exec "+args[0],
+		// THE GLOBAL PROVIDER, not one this package owns.
+		//
+		// The first version gated on a package-local `enabled` that only THIS package's
+		// Init() could set. It worked in bashy and emitted NOTHING in ycode — because
+		// ycode configures its own provider (internal/telemetry/otel) and never calls
+		// ours. The middleware was installed, the commands ran, and every span was
+		// silently dropped.
+		//
+		// That is the library/binary boundary drawn in the wrong place. A LIBRARY EMITS
+		// THROUGH THE GLOBAL PROVIDER; ONLY THE BINARY CONFIGURES ONE. Doing it this way
+		// means the same middleware works in bashy, in ycode, and in any host that has
+		// set a provider up — and is free in one that has not, because the default global
+		// provider is a no-op whose spans never record.
+		ctx, span := otel.Tracer(instrumentationName).Start(ctx, "exec "+args[0],
 			trace.WithSpanKind(trace.SpanKindInternal),
 			trace.WithAttributes(
 				attribute.String("cmd.name", args[0]),
@@ -44,6 +58,12 @@ func ExecMiddleware(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 			),
 		)
 		defer span.End()
+
+		// Not recording (no provider, or sampled out): do no attribute work at all. A
+		// shell that pays for telemetry it is not exporting is a shell nobody uses.
+		if !span.IsRecording() {
+			return next(ctx, args)
+		}
 
 		if dir := handlerDir(ctx); dir != "" {
 			span.SetAttributes(attribute.String("cmd.cwd", dir))

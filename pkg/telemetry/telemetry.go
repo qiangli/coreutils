@@ -65,6 +65,9 @@ import (
 // missing from.
 const ServiceName = "bashy"
 
+// instrumentationName identifies this instrumentation library in every span it emits.
+const instrumentationName = "github.com/qiangli/coreutils/pkg/telemetry"
+
 var (
 	initOnce sync.Once
 	provider *sdktrace.TracerProvider

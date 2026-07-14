@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"mvdan.cc/sh/v3/interp"
 )
@@ -25,9 +27,16 @@ func withRecorder(t *testing.T) *tracetest.SpanRecorder {
 	sr := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
 
-	oldTracer, oldEnabled := tracer, enabled
-	tracer, enabled = tp.Tracer("test"), true
-	t.Cleanup(func() { tracer, enabled = oldTracer, oldEnabled })
+	// Install it GLOBALLY, because that is how a real host provides one — bashy via
+	// telemetry.Init, ycode via its own internal/telemetry/otel. The middleware reads
+	// the global provider precisely so it works in both.
+	//
+	// The first version of this helper set a package-LOCAL tracer, and so tested a code
+	// path production does not take. It passed while the middleware emitted nothing at
+	// all inside ycode.
+	old := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(old) })
 
 	return sr
 }
@@ -110,7 +119,7 @@ func TestArgvIsRedactedBeforeItLeavesTheProcess(t *testing.T) {
 func TestBoundHitIsRecordedEvenWhenTheRunRecovers(t *testing.T) {
 	sr := withRecorder(t)
 
-	ctx, span := tracer.Start(context.Background(), "agent.turn")
+	ctx, span := otel.Tracer("test").Start(context.Background(), "agent.turn")
 	BoundHit(ctx, "iterations", 25, 25, "agent had not finished")
 	span.End()
 
@@ -153,7 +162,7 @@ func TestBoundHitIsRecordedEvenWhenTheRunRecovers(t *testing.T) {
 func TestProvenanceRecordsWhereTheNumberCameFrom(t *testing.T) {
 	sr := withRecorder(t)
 
-	ctx, span := tracer.Start(context.Background(), "agent.turn")
+	ctx, span := otel.Tracer("test").Start(context.Background(), "agent.turn")
 	Provenance(ctx, "context.tokens", 6482, "provider")
 	span.End()
 
@@ -176,8 +185,11 @@ func TestProvenanceRecordsWhereTheNumberCameFrom(t *testing.T) {
 
 // A shell that pays for telemetry it is not exporting is a shell nobody uses.
 func TestDisabledTelemetryIsAPureNoOp(t *testing.T) {
-	sr := withRecorder(t)
-	enabled = false // the default: OTEL_EXPORTER_OTLP_ENDPOINT unset
+	// No global provider at all — the default state of any process that never configured
+	// telemetry. The global default is a no-op whose spans never record.
+	sr := tracetest.NewSpanRecorder()
+	otel.SetTracerProvider(noop.NewTracerProvider())
+	t.Cleanup(func() { otel.SetTracerProvider(noop.NewTracerProvider()) })
 
 	called := false
 	h := ExecMiddleware(func(ctx context.Context, args []string) error {
