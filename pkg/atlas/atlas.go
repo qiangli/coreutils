@@ -640,6 +640,7 @@ func init() {
 	// judge is gate's SEMANTIC twin: gate asks "does it PASS" (mechanical,
 	// reproducible); judge asks "is it GOOD" (an LLM opinion, advisory unless
 	// --gate). Together they finally encode "sandbox-green is not mergeable".
+	addVerb("pair", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("judge", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("gate", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	// conform: BASHY'S OWN fidelity batteries (bash-5.3 compat / POSIX conformance /
@@ -748,7 +749,7 @@ func init() {
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch",
-		"sdlc", "chat", "invoke", "meet", "judge", "tools", "models", "agents", "act",
+		"sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act",
 		"act-runner", "mirror", "podman", "docker", "ollama", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
@@ -760,7 +761,7 @@ func init() {
 	eff(EffExec,
 		"find", "awk", "xargs", "at", "batch", "chroot", "nice", "nohup",
 		"runcon", "stdbuf", "time", "timeout", "watch", "env", "foreman",
-		"weave", "dag", "sdlc", "chat", "invoke", "meet", "judge", "supervise", "schedule", "act",
+		"weave", "dag", "sdlc", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act",
 		"act-runner", "skills", "podman", "docker", "ollama", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login",
@@ -791,7 +792,7 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "chat", "invoke", "meet", "judge", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama")
+	eff(EffSpend, "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip

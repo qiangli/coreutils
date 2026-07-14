@@ -88,7 +88,7 @@ compute for itself. ` + "`bashy ollama`" + ` is what makes the local-first claim
 contact with an air-gapped room. Without it, every LLM-shaped verb silently requires a
 hosted API, and "bashy is all an agent needs" stops being true.`)
 	}
-	for _, n := range []string{"judge", "invoke"} {
+	for _, n := range []string{"pair", "judge", "invoke"} {
 		e, ok := atlas.Lookup(n)
 		if !ok {
 			t.Errorf("%s missing from the atlas", n)
