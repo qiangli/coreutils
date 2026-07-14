@@ -59,6 +59,50 @@ func (s *Session) steerable() (bool, string) {
 	return chat.CanSteer(agent)
 }
 
+// setLive / getLive guard s.live with liveMu, never s.mu — see the Session struct.
+func (s *Session) setLive(l *chat.Session) {
+	s.liveMu.Lock()
+	s.live = l
+	s.liveMu.Unlock()
+}
+
+func (s *Session) getLive() *chat.Session {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	return s.live
+}
+
+// TrySteer delivers a message to the agent RIGHT NOW, without waiting for the
+// current turn to finish — which is the entire point of steering.
+//
+// It takes only liveMu, never s.mu. Apply holds s.mu for the whole turn, so a
+// steer that went through Apply would block until the turn it meant to interrupt
+// was already over, and then arrive as a fresh instruction to a finished agent.
+// That is precisely the failure `foreman tell` had before: a correction that is
+// always too late, and looks exactly like one that was not.
+//
+// Reports whether a live agent was there to hear it.
+func (s *Session) TrySteer(msg string) (bool, error) {
+	live := s.getLive()
+	if live == nil || !live.Live() {
+		return false, nil
+	}
+	if err := live.Say(msg); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// noteSteer records a mid-turn steer in the history, WITHOUT taking s.mu — the
+// turn it interrupted is holding that lock. The history is guarded by its own
+// small lock so an operator's correction is never lost just because it landed
+// while the agent was busy, which is the only time a correction ever lands.
+func (s *Session) noteSteer(msg string) {
+	s.liveMu.Lock()
+	s.steers = append(s.steers, "human (mid-turn): "+msg)
+	s.liveMu.Unlock()
+}
+
 // attach opens the live session, using the first message as its opening prompt.
 func (s *Session) attach(ctx context.Context, msg string) error {
 	live, err := chat.Start(ctx, s.state.Agent, chat.SessionOptions{
@@ -69,7 +113,7 @@ func (s *Session) attach(ctx context.Context, msg string) error {
 	if err != nil {
 		return err
 	}
-	s.live = live
+	s.setLive(live)
 	s.state.Steering = true
 	s.state.SteerWhyNot = ""
 	s.state.CtlSock = live.CtlSock
@@ -84,32 +128,35 @@ func (s *Session) attach(ctx context.Context, msg string) error {
 // would be both wasteful and confusing, since the agent would see its own words
 // quoted back at it as if they were new.
 func (s *Session) steer(ctx context.Context, msg string) error {
-	if s.live == nil || !s.live.Live() {
+	live := s.getLive()
+	if live == nil || !live.Live() {
 		if err := s.attach(ctx, msg); err != nil {
 			return err
 		}
-	} else if err := s.live.Say(msg); err != nil {
+		live = s.getLive()
+	} else if err := live.Say(msg); err != nil {
 		return err
 	}
+	s.live = live
 
 	// Silence means the agent has stopped talking. It does NOT mean the agent has
 	// finished thinking, and it certainly does not mean the agent did what it was
 	// asked — for THAT, read the artifacts, not the terminal.
-	_ = s.live.WaitIdle(ctx, quietPeriod)
+	_ = live.WaitIdle(ctx, quietPeriod)
 
-	if out := strings.TrimSpace(chat.SanitizeTurn(s.live.Turn())); out != "" {
+	if out := strings.TrimSpace(chat.SanitizeTurn(live.Turn())); out != "" {
 		s.history = append(s.history, "agent: "+out)
 	}
-	if !s.live.Live() {
+	if !live.Live() {
 		// It left. Say so rather than letting the next tell silently start a fresh
 		// agent that knows nothing about this conversation.
-		if _, err := s.live.Wait(); err != nil {
-			s.live = nil
+		if _, err := live.Wait(); err != nil {
+			s.setLive(nil)
 			s.state.Steering = false
 			s.state.SteerWhyNot = "the agent exited: " + err.Error()
 			return nil
 		}
-		s.live = nil
+		s.setLive(nil)
 		s.state.Steering = false
 		s.state.SteerWhyNot = "the agent exited"
 	}
@@ -118,18 +165,13 @@ func (s *Session) steer(ctx context.Context, msg string) error {
 
 // Close ends the live agent, if there is one. A foreman that is done with a
 // session must not leave an agent sitting at a prompt forever.
-func (s *Session) Close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.closeLive()
-}
+func (s *Session) Close() { s.closeLive() }
 
-// closeLive ends the live agent. The caller must hold s.mu — Apply already does.
+// closeLive ends the live agent.
 func (s *Session) closeLive() {
-	if s.live == nil {
-		return
+	if live := s.getLive(); live != nil {
+		live.Close()
+		s.setLive(nil)
 	}
-	s.live.Close()
-	s.live = nil
 	s.state.Steering = false
 }

@@ -263,7 +263,19 @@ func spawnServe(id string) error {
 	}
 	base := strings.TrimSuffix(filepath.Base(exe), ".exe")
 	args := []string{exe}
-	if base == "coreutils" {
+	// Any multicall HOST binary needs the `foreman` verb prepended; only a binary
+	// that IS foreman takes `serve` directly.
+	//
+	// This used to check `base == "coreutils"`, which meant that under `bashy` —
+	// the binary everyone actually runs — it spawned `bashy serve <id>`. That is a
+	// real command, and a completely different one: the warm-session server. So
+	// `foreman start --detach` cheerfully launched the wrong daemon, never created
+	// a control socket, and every subsequent `foreman tell` died on
+	// "dial unix …/ctl.sock: no such file or directory".
+	//
+	// Naming the ONE case that is right, instead of guessing at the set that is
+	// wrong, is what keeps a third multicall host from re-breaking this.
+	if base != "foreman" {
 		args = append(args, "foreman")
 	}
 	args = append(args, "serve", id)

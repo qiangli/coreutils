@@ -26,9 +26,19 @@ type Session struct {
 	state   State
 	runner  chat.Runner
 	history []string
-	kbNote  *string // cached host-kb preamble for the session goal
-	live    *chat.Session
-	mu      sync.Mutex
+	kbNote  *string    // cached host-kb preamble for the session goal
+	mu      sync.Mutex // guards state/history; HELD FOR THE WHOLE TURN
+
+	// live is guarded by its OWN lock, deliberately.
+	//
+	// Apply holds s.mu for the entire duration of a turn — that is correct, a turn
+	// is one atomic thing. But a STEER must reach the agent *while that turn is
+	// running*, which means it cannot wait on s.mu: it would block until the very
+	// turn it was trying to interrupt had already finished. A steer that waits for
+	// the turn to end is not a steer, it is a note left on the desk.
+	liveMu sync.Mutex
+	live   *chat.Session
+	steers []string // mid-turn corrections, appended under liveMu
 }
 
 func Start(ctx context.Context, opt Options) (*Session, error) {

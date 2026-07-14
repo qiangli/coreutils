@@ -36,15 +36,41 @@ func TestTellReachesSessionOverUnixSocket(t *testing.T) {
 	if err := Tell(dir, "sock", "steer over socket"); err != nil {
 		t.Fatalf("Tell: %v", err)
 	}
-	if len(r.prompts) != 1 || !strings.Contains(r.prompts[0], "steer over socket") {
-		t.Fatalf("runner prompts = %#v, want socket steering", r.prompts)
+
+	// THE ACK MEANS "ACCEPTED", NOT "FINISHED", and that is deliberate.
+	//
+	// A turn runs an LLM: it takes minutes. The ack has a 3-second deadline. The
+	// old code applied the command inline and only then acked, which meant every
+	// `foreman tell` against a real agent died on "i/o timeout" while the agent it
+	// had just launched went on working — the command SUCCEEDED and reported
+	// failure. It also blocked the listener for the whole turn, so the one moment
+	// you most need to say "stop, wrong file" was the one moment the socket would
+	// not take the call.
+	//
+	// So the outcome lands in state.json, which is where `foreman status` reads it
+	// from and the only place that can honestly carry the result of a long turn.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if p := r.Prompts(); len(p) == 1 && strings.Contains(p[0], "steer over socket") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runner prompts = %#v, want socket steering", r.Prompts())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	st, err := NewStore(dir, "sock").LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	if st.Status != StatusIdle {
-		t.Fatalf("status = %q, want idle", st.Status)
+	for {
+		st, err := NewStore(dir, "sock").LoadState()
+		if err != nil {
+			t.Fatalf("LoadState: %v", err)
+		}
+		if st.Status == StatusIdle {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("status = %q, want idle", st.Status)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	cancel()
 	select {

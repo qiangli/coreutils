@@ -3,10 +3,16 @@ package foreman
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 )
 
+// stubRunner is written by the async apply goroutine and read by the test, so it
+// carries its own lock. `foreman tell` acks "accepted" and applies in the
+// background -- the ack has a 3s deadline and a turn runs an LLM, so it could
+// never have honestly carried the result.
 type stubRunner struct {
+	mu      sync.Mutex
 	prompts []string
 	out     string
 	code    int
@@ -14,10 +20,21 @@ type stubRunner struct {
 }
 
 func (s *stubRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+	s.mu.Lock()
 	if len(args) > 0 {
 		s.prompts = append(s.prompts, args[len(args)-1])
 	}
-	return s.out, s.code, s.err
+	out, code, err := s.out, s.code, s.err
+	s.mu.Unlock()
+	return out, code, err
+}
+
+// Prompts is a snapshot of what the runner has been asked, safe to read while a
+// turn is in flight.
+func (s *stubRunner) Prompts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.prompts...)
 }
 
 func TestSessionStateMachine(t *testing.T) {
