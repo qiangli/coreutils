@@ -8,7 +8,29 @@ cli:
     # not infer print mode from "stdout is not a terminal", so a PTY (which it
     # needs in order to be steerable) cannot flip it into a REPL. claude had to
     # learn this the hard way; ycode already gets it right.
-    exec: ycode prompt --model {model} --print {prompt}
+    # --danger-skip-permissions is ycode's approval-gate kill-switch, and it was
+    # MISSING. Every other harness in the fleet is handed one (claude and agy take
+    # --dangerously-skip-permissions, aider --yes-always, opencode is preseeded via
+    # opencode.json); ycode was launched with no write authority at all.
+    #
+    # The failure was silent and it flattered the model. In a three-harness bake-off
+    # ycode reasoned out a correct implementation, could not write it, printed it
+    # into its reply, and EXITED 0. A gate that only checked the exit code would
+    # have recorded a pass. What it actually said:
+    #
+    #   "I have the implementation ready, but I don't have workspace-write
+    #    permissions in this environment to write the file."
+    #
+    # The launch guard still refuses this on an uncontained host, and ReadOnly still
+    # strips it (see agentlaunch.UnsafeLaunchFlags) — so `judge` and `meet` remain
+    # unable to touch what they review. It is granted the same way, and gated the
+    # same way, as everyone else's.
+    # The flag goes BEFORE the subcommand (it is a persistent flag, and cobra takes
+    # it either way) so this template and the seeded fallback profile render the
+    # SAME argv. They are two sources of truth for one launch, and a test compares
+    # them precisely so they cannot drift — which it duly caught when I put the
+    # flag after `prompt` here and prepended it there.
+    exec: ycode --danger-skip-permissions prompt --model {model} --print {prompt}
     prompt_position: last
     trust_preseed: none
     # Bare `ycode` is the interactive bubbletea TUI — the same shape as codex and

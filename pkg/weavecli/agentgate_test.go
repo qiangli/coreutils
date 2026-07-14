@@ -80,9 +80,9 @@ func TestAgentDrivenDoesNotImplyAgentMode(t *testing.T) {
 
 IsAgent decides OUTPUT FORMAT (~30 subverbs) and the TOOLCHAIN SHIMS. If it is true here:
 
-  - every `+"`weave list`"+` and `+"`weave status`"+` in the transcript becomes a JSON blob
+  - every ` + "`weave list`" + ` and ` + "`weave status`" + ` in the transcript becomes a JSON blob
     instead of a table, changing what a human reads; and
-  - bashy shadows the developer's own `+"`go`"+` with a DIFFERENT, self-downloaded
+  - bashy shadows the developer's own ` + "`go`" + ` with a DIFFERENT, self-downloaded
     toolchain, in a session they never asked to have taken over.
 
 Agent MODE is asked for. It is not sniffed.`)

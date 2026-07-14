@@ -80,6 +80,7 @@ var SeededProfiles = map[string]LaunchProfile{
 	"agy":      {Args: []string{"--print-timeout", "40m", "-p"}, UnsafeArgs: []string{"--dangerously-skip-permissions"}},
 	"opencode": {Args: []string{"run"}},
 	"aider":    {Args: []string{"--no-git", "--message"}, UnsafeArgs: []string{"--yes-always"}},
+	"ycode":    {Args: []string{"prompt", "--print"}, UnsafeArgs: []string{"--danger-skip-permissions"}},
 }
 
 var NewCatalog = func() *fleet.Catalog { return fleet.New() }
@@ -222,6 +223,21 @@ var UnsafeLaunchFlags = map[string]string{
 	"--dangerously-bypass-approvals-and-sandbox": "disables the agent's approval gate AND its sandbox",
 	"--yolo":       "disables the agent's approval gate",
 	"--yes-always": "auto-confirms every action, disabling the agent's approval gate",
+
+	// ycode's own. It belongs here for the same reason as everyone else's: the
+	// guard must REFUSE it on an uncontained host, and ReadOnly must STRIP it so a
+	// judge or a meeting participant cannot touch the thing it is reviewing.
+	//
+	// It was missing, and the omission was invisible in the only way that matters:
+	// ycode's exec template never passed it either, so nothing ever tripped the
+	// guard and nothing ever looked wrong. The model would work out the answer,
+	// discover it had no write permission, print the code into its reply, and exit
+	// 0. Measured in a three-harness bake-off — ycode produced a correct
+	// implementation and wrote NOTHING to disk, and it said so:
+	//
+	//   "I have the implementation ready, but I don't have workspace-write
+	//    permissions in this environment to write the file."
+	"--danger-skip-permissions": "disables the agent's approval gate",
 }
 
 func GuardUnsafeArgs(tool string, args []string) error {
