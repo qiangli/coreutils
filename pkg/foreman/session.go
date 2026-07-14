@@ -27,6 +27,7 @@ type Session struct {
 	runner  chat.Runner
 	history []string
 	kbNote  *string // cached host-kb preamble for the session goal
+	live    *chat.Session
 	mu      sync.Mutex
 }
 
@@ -121,6 +122,29 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 			s.state.Status = StatusIdle
 			return nil
 		}
+
+		// STEER a live agent when we can. `tell` means "lean over and say something
+		// to the agent that is working right now" — and for most of this fleet's
+		// tools that is now literally what it does.
+		if ok, why := s.steerable(); ok {
+			if err := s.steer(ctx, cmd.Message); err != nil {
+				// Falling through to the replay path would be the wrong kindness: it
+				// would produce a plausible answer from a fresh agent and hide the fact
+				// that the live one is gone.
+				s.state.Status = StatusBlocked
+				s.state.Steering = false
+				s.state.SteerWhyNot = err.Error()
+				return err
+			}
+			s.state.Status = StatusIdle
+			break
+		} else {
+			// Not steerable. The replay path below still works — it is just a
+			// different thing, and the state must not pretend otherwise.
+			s.state.Steering = false
+			s.state.SteerWhyNot = why
+		}
+
 		res, err := chat.Invoke(ctx, chat.Options{
 			Agent:       s.state.Agent,
 			Role:        s.state.Role,
@@ -160,6 +184,9 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 	case CommandStop:
 		s.state.Stopped = true
 		s.state.Status = StatusDone
+		// Ask the live agent to leave. Stopping a foreman while its agent sits at a
+		// prompt would strand a process holding an API session open indefinitely.
+		s.closeLive()
 	default:
 		return fmt.Errorf("foreman: unknown command %q", cmd.Verb)
 	}

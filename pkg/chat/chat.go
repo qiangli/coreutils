@@ -50,6 +50,14 @@ type Options struct {
 	// its job, which means it can be denied all of it.
 	ReadOnly bool
 
+	// Steer resolves the tool's INTERACTIVE launch (its `steer_exec:` template)
+	// instead of its headless one-shot, so the process stays alive and can be
+	// talked to mid-turn. Set by Start; a one-shot Invoke has nothing to steer.
+	//
+	// It fails loudly on a tool that declares no interactive launch, rather than
+	// handing back a one-shot that will have exited before the first steer lands.
+	Steer bool
+
 	// Stream, when set, receives the agent's stdout AS IT IS WRITTEN, in
 	// addition to the captured Result. It is a tee, not a redirect: the caller
 	// still gets the whole output at the end, so nothing downstream has to
@@ -126,7 +134,12 @@ type LaunchProfile struct {
 }
 
 func toAgentLaunchOptions(opt Options) agentlaunch.Options {
-	return agentlaunch.Options{Sandbox: opt.Sandbox, ReadOnly: opt.ReadOnly, DryRun: opt.DryRun}
+	return agentlaunch.Options{
+		Sandbox:  opt.Sandbox,
+		ReadOnly: opt.ReadOnly,
+		DryRun:   opt.DryRun,
+		Steer:    opt.Steer,
+	}
 }
 
 // Launch is a fully resolved invocation: which binary, which model, which argv.
@@ -142,6 +155,12 @@ type Launch struct {
 	Model     string   // provider-side model id ("" when none was selected)
 	ModelName string   // the model's registry alias
 	Args      []string // argv after the binary, prompt NOT included
+
+	// TakesPrompt reports whether the prompt goes on the command line. A headless
+	// launch always does. A STEERABLE launch sometimes does not — codex and
+	// opencode open an empty session — and those get their opening message down
+	// the control channel instead.
+	TakesPrompt bool
 }
 
 // Binding is the capability-matrix key for this launch, or "" when no model
@@ -155,23 +174,25 @@ func (l Launch) Binding() string {
 
 func fromAgentLaunch(l agentlaunch.Launch) Launch {
 	return Launch{
-		Nick:      l.Nick,
-		Tool:      l.Tool,
-		ToolName:  l.ToolName,
-		Model:     l.Model,
-		ModelName: l.ModelName,
-		Args:      l.Args,
+		Nick:        l.Nick,
+		Tool:        l.Tool,
+		ToolName:    l.ToolName,
+		Model:       l.Model,
+		ModelName:   l.ModelName,
+		Args:        l.Args,
+		TakesPrompt: l.TakesPrompt,
 	}
 }
 
 func toAgentLaunch(l Launch) agentlaunch.Launch {
 	return agentlaunch.Launch{
-		Nick:      l.Nick,
-		Tool:      l.Tool,
-		ToolName:  l.ToolName,
-		Model:     l.Model,
-		ModelName: l.ModelName,
-		Args:      l.Args,
+		Nick:        l.Nick,
+		Tool:        l.Tool,
+		ToolName:    l.ToolName,
+		Model:       l.Model,
+		ModelName:   l.ModelName,
+		Args:        l.Args,
+		TakesPrompt: l.TakesPrompt,
 	}
 }
 

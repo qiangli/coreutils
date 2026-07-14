@@ -243,26 +243,55 @@ func RouteGate(verdict GateVerdict, deps RouteDeps) (action string, err error) {
 	}
 }
 
-// BrokerSay writes a payload to a run's control socket as keystrokes.
-func BrokerSay(ctlSock, payload string) error {
+// The control wire lives HERE, and only here.
+//
+// It used to live in three places: this one, pkg/agentlaunch (its own copy of the
+// same twenty lines), and pkg/weave (which hand-rolled its own base64 frames). One
+// protocol with three implementations is one protocol that will diverge, and it
+// had already begun to: BrokerSay flattens newlines and escapes NULs; weave's
+// attach loop did neither, and sent whatever the operator typed straight down the
+// socket.
+//
+// So: agentpty owns the wire — the encoding AND the transport. Everything else
+// speaks it through these three functions.
+
+// TextFrame is a line of prose, delivered as typed keystrokes ending in Enter.
+//
+// Newlines are flattened to spaces, because a newline in the middle of a payload
+// would submit half a sentence and leave the rest sitting in the agent's input
+// box. A payload containing a NUL cannot survive the line protocol at all, so it
+// falls back to the verbatim encoding.
+func TextFrame(text string) string {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r", " "), "\n", " ")
+	if strings.ContainsRune(text, '\x00') {
+		return VerbatimFrame([]byte(text))
+	}
+	return text + "\r\n"
+}
+
+// VerbatimFrame carries arbitrary BYTES — control characters, Tab, a bare Enter,
+// an escape sequence — which a plain line cannot express. This is what `weave say
+// --raw/--enter/--tab` needs, and it is why the wire has two frame kinds rather
+// than one: "send the agent a sentence" and "press this key at the agent" are
+// genuinely different acts.
+func VerbatimFrame(payload []byte) string {
+	return "\x00R" + base64.StdEncoding.EncodeToString(payload) + "\n"
+}
+
+// SendFrame writes a pre-built frame to a run's control channel.
+func SendFrame(ctlSock, frame string) error {
 	if strings.TrimSpace(ctlSock) == "" {
 		return fmt.Errorf("control socket unavailable")
-	}
-	payload = strings.ReplaceAll(strings.ReplaceAll(payload, "\r", " "), "\n", " ")
-	frame := payload + "\r\n"
-	if strings.ContainsRune(payload, '\x00') {
-		frame = "\x00R" + base64.StdEncoding.EncodeToString([]byte(payload)) + "\n"
 	}
 	return sendControlFrame(ctlSock, frame)
 }
 
+// BrokerSay writes a line of prose to a run's control socket as keystrokes.
+func BrokerSay(ctlSock, payload string) error {
+	return SendFrame(ctlSock, TextFrame(payload))
+}
+
 // sendControlFrame writes a frame to a run's control channel.
-//
-// Deliberately NOT reused from pkg/agentlaunch, even though that package has the
-// same twenty lines. agentlaunch resolves the fleet registry, and importing it
-// would drag the whole tool catalog into a package whose entire claim is that it
-// knows nothing about any particular tool. A terminal does not need to know what
-// claude is.
 //
 // Falls back to a regular file when the socket cannot be dialled — a unix socket
 // address caps at ~104 bytes, and a caller with a long path would otherwise lose

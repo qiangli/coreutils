@@ -41,6 +41,21 @@ type State struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Stopped     bool      `json:"stopped,omitempty"`
 	Paused      bool      `json:"paused,omitempty"`
+
+	// Binding is the canonical tool:model this session is actually talking to.
+	// Agent may be an alias or a nickname; a record must never store one of those.
+	Binding string `json:"binding,omitempty"`
+
+	// Steering says whether `tell` reaches a LIVE agent (a keystroke into an open
+	// session) or merely queues a message for the next fresh spawn.
+	//
+	// The two look identical from outside — the operator types tell, the status
+	// goes to working, an answer comes back — and they are not remotely the same
+	// thing. So the state says which one happened, and SteerWhyNot says why when it
+	// is the lesser one. An operator who thinks they interrupted an agent, and did
+	// not, has been lied to by silence.
+	Steering    bool   `json:"steering"`
+	SteerWhyNot string `json:"steer_why_not,omitempty"`
 }
 
 type Command struct {

@@ -225,6 +225,21 @@ type State struct {
 	// turn, so the panel reviews the same files rather than guessing.
 	Context []string `json:"context,omitempty"`
 
+	// Steerable runs each turn as a LIVE agent session rather than a headless
+	// one-shot, so `meet say` can actually reach the agent that is speaking.
+	//
+	// It is opt-in, and the reason is an honest trade rather than caution. A
+	// headless turn ends when the process exits — a real boundary, cheap and exact.
+	// A live turn has no boundary at all: the agent simply stops typing, so the
+	// turn ends on a silence timeout, and each one also pays a TUI's startup. On a
+	// four-seat, three-round meeting that is minutes of pure waiting.
+	//
+	// So a chair who wants to be able to interrupt asks for it and pays for it.
+	// Until this change `meet say` wrote into a socket that a one-shot turn never
+	// listened on: it reported success, and nothing arrived. A steer that silently
+	// goes nowhere is worse than one that refuses.
+	Steerable bool `json:"steerable,omitempty"`
+
 	// MaxTurns and MaxStalls are the orchestrator-owned backstops for a chaired
 	// meeting. Termination is never left to a token an agent emits: the
 	// literature measures both never-stopping and premature-stopping as common.

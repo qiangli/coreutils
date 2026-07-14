@@ -187,6 +187,7 @@ type sessionFlags struct {
 	maxTurns     int
 	maxStalls    int
 	minBand      int
+	steerable    bool
 	participants []string
 	agenda       []string
 	context      []string
@@ -209,6 +210,11 @@ func (sf *sessionFlags) bind(cmd *cobra.Command) {
 	f.StringVar(&sf.decisionMode, "decision-mode", "infer", "infer: the secretary may record a converged decision (tagged); explicit: only stated decisions")
 	f.StringVar(&sf.initiator, "initiator", "", "who convened the meeting and must confirm it may end; must be someone at the table (default: the human)")
 	f.IntVar(&sf.minTurnChars, "min-turn-chars", 0, "a reply shorter than N chars counts as `short`, not a contribution")
+	f.BoolVar(&sf.steerable, "steerable", false,
+		"hold each speaker OPEN for its whole turn, so `meet say` reaches it mid-answer. "+
+			"Without this a turn is a headless one-shot: it runs the prompt and exits, so a steer arrives "+
+			"after the agent is already gone. Costs a TUI startup and a silence timeout per turn — a live "+
+			"turn has no exit to end it, so it ends on quiet")
 }
 
 func (sf *sessionFlags) newState() (*State, error) {
@@ -234,7 +240,8 @@ func (sf *sessionFlags) newState() (*State, error) {
 		Human:        humanName(),
 		Initiator:    sf.initiator,
 		DecisionMode: sf.decisionMode, MinTurnChars: sf.minTurnChars, Context: sf.context,
-		MaxTurns: sf.maxTurns, MaxStalls: sf.maxStalls,
+		Steerable: sf.steerable,
+		MaxTurns:  sf.maxTurns, MaxStalls: sf.maxStalls,
 		Status: "open", Cwd: cwd, Out: sf.out,
 		TurnTimeout: sf.turnTimeout, Created: nowFn(),
 	}

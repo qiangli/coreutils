@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
@@ -19,6 +20,14 @@ type Options struct {
 	Sandbox  string
 	ReadOnly bool
 	DryRun   bool
+
+	// Steer resolves the tool's INTERACTIVE launch (steer_exec) instead of its
+	// headless one-shot, because a one-shot has nothing to interrupt: it runs the
+	// prompt and exits before any steer could arrive.
+	//
+	// Fails loudly when the tool has no steerable launch. A caller that asked to
+	// be able to interrupt an agent must not be silently handed one it cannot.
+	Steer bool
 }
 
 // Launch is a fully resolved agent invocation. Args excludes the prompt.
@@ -29,6 +38,11 @@ type Launch struct {
 	Model     string
 	ModelName string
 	Args      []string
+
+	// TakesPrompt reports whether the prompt goes on the command line. A steerable
+	// launch may open an EMPTY session (codex, opencode) and expect the first
+	// message to arrive over the control channel instead.
+	TakesPrompt bool
 }
 
 func (l Launch) Binding() string {
@@ -119,13 +133,22 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			return lnch, fmt.Errorf("agent launch: tool %q cannot select a model, so %q is a label, not a selection (its launch template has no %s)",
 				tool.Name, name, fleet.ModelToken)
 		}
-		if args, ok := tool.ArgvPrefix(lnch.Model); ok {
+		render := tool.ArgvPrefix
+		if opt.Steer {
+			render = tool.SteerArgvPrefix
+		}
+		if args, ok := render(lnch.Model); ok {
 			out, err := FinalizeArgs(tool.Name, args, opt)
 			if err != nil {
 				return lnch, err
 			}
 			lnch.Args = out
+			lnch.TakesPrompt = !opt.Steer || tool.SteerTakesPrompt()
 			return lnch, nil
+		}
+		if opt.Steer {
+			return lnch, fmt.Errorf("agent launch: %q cannot be steered — tool %q declares no interactive launch (steer_exec). "+
+				"Its headless launch is a one-shot: it runs the prompt and exits, so there is nothing to interrupt", name, tool.Name)
 		}
 	}
 
@@ -133,6 +156,28 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		return lnch, fmt.Errorf("agent launch: no launch template for tool %q, so model %q cannot be passed to it; add it with `bashy tools add`",
 			toolName, modelName)
 	}
+
+	// A STEER cannot be resolved from a fallback.
+	//
+	// Below this line is the unknown-tool path: no catalog entry, so no launch
+	// template, so no `steer_exec` — we are guessing an argv from a seeded profile
+	// or from nothing at all. That guess is a reasonable headless one-shot (it is
+	// how you run an agent CLI the registry has never heard of), and it is a
+	// catastrophic steerable session: the caller would get a process that exits
+	// immediately and a control socket nobody is listening on, and every symptom
+	// would look like success.
+	//
+	// This was the bug. `known` is false here, so the "cannot be steered" check
+	// above never ran, and opt.Steer fell straight through to a headless argv —
+	// a steerable session resolved by the ABSENCE of a tool definition.
+	if opt.Steer {
+		if !known {
+			return lnch, fmt.Errorf("agent launch: %q cannot be steered — tool %q is not in the catalog, "+
+				"so there is no interactive launch to resolve (see `bashy tools list`)", name, toolName)
+		}
+		return lnch, fmt.Errorf("agent launch: %q cannot be steered — tool %q declares no interactive launch (steer_exec)", name, toolName)
+	}
+
 	prof := SeededProfiles[toolName]
 	base := append([]string{}, prof.Args...)
 	if len(prof.UnsafeArgs) > 0 {
@@ -145,6 +190,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		return lnch, err
 	}
 	lnch.Args = out
+	lnch.TakesPrompt = true // a headless one-shot always takes its prompt on the command line
 	return lnch, nil
 }
 
@@ -290,28 +336,15 @@ func LaunchFrom(ctx context.Context) (Launch, bool) {
 	return l, ok
 }
 
+// SendControlFrame is agentpty.SendFrame.
+//
+// This package used to carry its own copy of the transport — the same twenty
+// lines, dialling the same socket, with the same file fallback. Two copies of one
+// protocol is one protocol that will drift, and the comment in agentpty explaining
+// why they were kept apart ("a terminal does not need to know what claude is") had
+// the dependency backwards: agentpty depends on nothing, so anyone may import IT.
 func SendControlFrame(path, frame string) error {
-	conn, err := net.DialTimeout("unix", path, 3*time.Second)
-	if err == nil {
-		defer conn.Close()
-		if _, err := conn.Write([]byte(frame)); err != nil {
-			return fmt.Errorf("control socket write: %w", err)
-		}
-		return nil
-	}
-	st, statErr := os.Stat(path)
-	if statErr == nil && st.Mode().IsRegular() {
-		f, openErr := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
-		if openErr != nil {
-			return fmt.Errorf("control file open: %w", openErr)
-		}
-		defer f.Close()
-		if _, writeErr := f.WriteString(frame); writeErr != nil {
-			return fmt.Errorf("control file write: %w", writeErr)
-		}
-		return nil
-	}
-	return fmt.Errorf("control socket dial: %w", err)
+	return agentpty.SendFrame(path, frame)
 }
 
 func SendControlLine(path, line string) error {

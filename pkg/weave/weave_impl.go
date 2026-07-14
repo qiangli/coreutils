@@ -9,7 +9,6 @@ package weave
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/qiangli/coreutils/pkg/agentlaunch"
+	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/gate"
 	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/weave/memory"
@@ -2789,15 +2788,18 @@ func runWeaveSay(cmd *cobra.Command, id int64, text string, tab, enter bool, raw
 		payload = append(payload, '\r')
 	}
 
-	// Send using the verbatim protocol for all special modes,
-	// or plain line protocol for plain text.
+	// The wire is agentpty's, not weave's. Two encodings of one protocol is one
+	// protocol that will drift — and this one had: weave built its own base64
+	// frames here while `meet say` went through BrokerSay, so the two commands
+	// meant subtly different things by "send this to the agent".
+	//
+	// A special mode is a KEYSTROKE (raw bytes, Enter, Tab), which only the
+	// verbatim frame can carry. Plain text is a SENTENCE, which the line protocol
+	// delivers as typing.
 	var frame string
 	if raw != "" || enter || tab {
-		// Verbatim frame: \x00R<base64>\n
-		enc := base64.StdEncoding.EncodeToString(payload)
-		frame = fmt.Sprintf("\x00R%s\n", enc)
+		frame = agentpty.VerbatimFrame(payload)
 	} else {
-		// Plain line protocol: the line is written to PTY with \r appended.
 		frame = string(payload) + "\n"
 	}
 	if err := weaveWriteControlFrame(it.CtlSock, frame); err != nil {
@@ -2816,8 +2818,10 @@ func runWeaveSay(cmd *cobra.Command, id int64, text string, tab, enter bool, raw
 	return nil
 }
 
+// weaveWriteControlFrame writes a frame to a run's control channel. The frame is
+// built by agentpty (TextFrame / VerbatimFrame); weave no longer encodes its own.
 func weaveWriteControlFrame(path, frame string) error {
-	return agentlaunch.SendControlFrame(path, frame)
+	return agentpty.SendFrame(path, frame)
 }
 
 // decodeCescape decodes C-style escape sequences: \t, \r, \n, \xNN, \\.
@@ -4367,8 +4371,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 			gracefulState := ""
 		verbs:
 			for _, verb := range []string{"/exit", "/quit"} {
-				frame := "\x00R" + base64.StdEncoding.EncodeToString([]byte(verb+"\n")) + "\n"
-				_ = weaveWriteControlFrame(it0.CtlSock, frame)
+				_ = weaveWriteControlFrame(it0.CtlSock, agentpty.VerbatimFrame([]byte(verb+"\n")))
 				deadline := time.Now().Add(6 * time.Second)
 				for time.Now().Before(deadline) {
 					time.Sleep(300 * time.Millisecond)

@@ -193,6 +193,45 @@ func (t Tool) Binary() string {
 	return t.Name
 }
 
+// SteerArgvPrefix renders the STEERABLE launch — the interactive session, not the
+// headless one-shot.
+//
+// Reports false when the tool has no steer_exec, i.e. it has no session to open.
+// A caller that wants to interrupt an agent must be told that plainly rather than
+// handed a one-shot that will exit before the first steer arrives.
+func (t Tool) SteerArgvPrefix(modelID string) ([]string, bool) {
+	tmpl := t.CLI.Launch.SteerExec
+	if strings.TrimSpace(tmpl) == "" {
+		return nil, false
+	}
+	// The steer template may carry {prompt} (agy -i takes an opening prompt) or
+	// not (codex/opencode open an empty session). Both are legal; the caller
+	// appends the prompt only when the template asked for it.
+	fields := strings.Fields(tmpl)
+	out := make([]string, 0, len(fields))
+	for _, f := range fields[1:] { // drop the binary
+		switch f {
+		case ModelToken:
+			if modelID != "" {
+				out = append(out, modelID)
+			} else if n := len(out); n > 0 && strings.HasPrefix(out[n-1], "-") {
+				out = out[:n-1]
+			}
+		case PromptToken:
+			// left for the caller
+		default:
+			out = append(out, f)
+		}
+	}
+	return out, true
+}
+
+// SteerTakesPrompt reports whether the steerable launch accepts an opening prompt
+// on the command line (agy -i does; codex and opencode open an empty session).
+func (t Tool) SteerTakesPrompt() bool {
+	return strings.Contains(t.CLI.Launch.SteerExec, PromptToken)
+}
+
 // ArgvPrefix renders everything between the binary and the prompt, for
 // launchers that append the prompt themselves.
 //

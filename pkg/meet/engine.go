@@ -56,60 +56,15 @@ func briefRef(e Event) string {
 	return t
 }
 
-// ansiEscape matches the escape sequences that leak into an agent CLI's captured
-// output.
+// sanitizeTurn is chat.SanitizeTurn.
 //
-// Three alternatives, and the first two both matter:
-//
-//   - CSI — `\x1b[ … final`. The parameter class INCLUDES the private markers
-//     `<>=?`, which the original pattern omitted. Under a pty a tool resets the
-//     terminal on exit and emits `\x1b[>4m` and `\x1b[<u`; without the private
-//     markers those did not match, and the tail of every claude turn was recorded
-//     as literal `(B[>4m[<u78`.
-//   - OSC — `\x1b] … BEL|ST`.
-//   - Two-character escapes — `\x1b7`, `\x1b8` (save/restore cursor) and
-//     `\x1b(B` (charset select). Not CSI at all, so nothing else catches them.
-//
-// This runs on the recorded turn AND on each live line, so a watcher and the
-// transcript never disagree about what was said.
-var ansiEscape = regexp.MustCompile(
-	"\x1b\\[[0-9;?<>=]*[ -/]*[@-~]" + // CSI, incl. private-mode params
-		"|\x1b\\][^\x07\x1b]*(\x07|\x1b\\\\)" + // OSC
-		"|\x1b[()][0-9A-Za-z]" + // charset select: ESC ( B
-		"|\x1b[0-9A-Za-z><=]") // two-char: ESC 7, ESC 8, ESC =
-
-// sanitizeTurn makes captured agent output safe to STORE and to REPLAY as prompt
-// context. Agent CLIs emit banners/warnings on the combined stream, sometimes with
-// invalid UTF-8 (truncated box-drawing) and ANSI/control bytes. Fed back verbatim
-// as the next agent's argv these crash downstream tools — codex exec rejects
-// "invalid UTF-8 in arguments"; aider throws UnicodeEncodeError writing its input
-// history. So: coerce to valid UTF-8, strip ANSI escapes and C0/C1 control chars
-// (keeping \n and \t), and trim. Preserves ordinary prose (incl. legitimate
-// non-ASCII).
-func sanitizeTurn(s string) string {
-	s = strings.ToValidUTF8(s, "")
-	s = ansiEscape.ReplaceAllString(s, "")
-	s = strings.Map(func(r rune) rune {
-		switch {
-		case r == '\n' || r == '\t':
-			return r
-		case r < 0x20 || (r >= 0x7f && r < 0xa0): // C0/C1 control
-			return -1
-		case r >= 0xd800 && r <= 0xdfff: // surrogates (never valid in UTF-8 argv)
-			return -1
-		case r >= 0x2500 && r <= 0x259f: // box-drawing + block elements — CLI banner chrome
-			return -1
-		case r == 0xfffd: // replacement char from an earlier lossy decode
-			return -1
-		default:
-			return r
-		}
-	}, s)
-	// Collapse runs of blank lines/spaces left by stripped banners.
-	s = regexp.MustCompile(`[ \t]{2,}`).ReplaceAllString(s, " ")
-	s = regexp.MustCompile(`\n{3,}`).ReplaceAllString(s, "\n\n")
-	return strings.TrimSpace(s)
-}
+// It used to live here, with its own ANSI regex — and that is exactly why it had
+// to move. The pty's merged-stream problem belongs to EVERY consumer of a pty
+// turn (a meeting's minutes, a foreman's history, a weave attribution), but each
+// had grown its own copy. Only this one ever got the private-mode CSI fix, so
+// only meetings stopped recording `(B[>4m[<u78` at the tail of every claude turn.
+// One implementation, in the package that produces the bytes.
+func sanitizeTurn(s string) string { return chat.SanitizeTurn(s) }
 
 func transcriptContext(events []Event) string {
 	// Keep only the relevant events (agenda is already in turnPrompt).
@@ -214,6 +169,16 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		usePTY = true
 		sock = ctlSockPath(st, name)
 	}
+
+	// A STEERABLE meeting holds each speaker open instead, so `meet say` reaches a
+	// running agent rather than a socket its one-shot never listened on. Same
+	// classification below either way — a turn is a turn, however it was produced.
+	if st.Steerable && runner == nil {
+		if ok, _ := chat.CanSteer(name); ok {
+			return sessionTurn(ctx, st, name, role, instruction, question, budget, start)
+		}
+	}
+
 	live := newLiveWriter(st, name, role, sock)
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       name,
@@ -247,12 +212,27 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		// meeting, and nobody has to weaken a host to watch one.
 		ReadOnly: true,
 	}, runner)
-	elapsed := time.Since(start)
 
+	ev := classifyTurn(st, name, question, res.Output, res.ExitCode, err, time.Since(start), budget)
+	// Free the floor, and say how the turn ended. A watcher must be able to tell
+	// a timeout from a crash from a considered silence — the same distinction the
+	// transcript preserves, which is why the status is carried on both channels.
+	live.close(ev.Status)
+	return ev, err
+}
+
+// classifyTurn turns "what came back" into a transcript event.
+//
+// It is shared by BOTH turn paths — the headless one-shot and the live steerable
+// session — because how a turn was produced must not change how it is judged. A
+// meeting whose minutes said "opencode returned no content" in one mode and
+// "opencode timed out" in the other, for the same underlying silence, would be
+// reporting on its own plumbing rather than on the discussion.
+func classifyTurn(st *State, name, question, out string, exit int, err error, elapsed, budget time.Duration) Event {
 	ev := Event{
 		Round: st.Round, Speaker: name, Role: string(RoleParticipant), Kind: "turn",
 		Question: question, TS: nowFn(),
-		ExitCode: res.ExitCode, DurMS: elapsed.Milliseconds(),
+		ExitCode: exit, DurMS: elapsed.Milliseconds(),
 	}
 	switch {
 	case err != nil && isTimeout(err, elapsed, budget):
@@ -263,9 +243,9 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		// output (agent CLI banners/tracebacks would pollute the transcript and,
 		// replayed as context, crash the next agent). It is not offloaded.
 		ev.Status = statusError
-		ev.Text = fmt.Sprintf("(%s unavailable this turn: %s)", name, oneLine(sanitizeTurn(shortErr(res.Output, err))))
+		ev.Text = fmt.Sprintf("(%s unavailable this turn: %s)", name, oneLine(sanitizeTurn(shortErr(out, err))))
 	default:
-		text := sanitizeTurn(res.Output)
+		text := sanitizeTurn(out)
 		ev.Chars = len(text)
 		switch {
 		case text == "":
@@ -281,11 +261,7 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 			ev.File = writeTurnFile(st.ID, ev) // offload full text for read-on-demand
 		}
 	}
-	// Free the floor, and say how the turn ended. A watcher must be able to tell
-	// a timeout from a crash from a considered silence — the same distinction the
-	// transcript preserves, which is why the status is carried on both channels.
-	live.close(ev.Status)
-	return ev, err
+	return ev
 }
 
 // runTurn invokes one participant and appends its turn to the transcript.

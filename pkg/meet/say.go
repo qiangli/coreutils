@@ -63,6 +63,18 @@ func newSayCmd() *cobra.Command {
 				return err
 			}
 
+			// A meeting whose turns are headless one-shots has nothing to steer. Say
+			// so, rather than writing into a socket that will accept the bytes and
+			// drop them: `say` used to print "→ Sable (round 2): stay on the gate
+			// question" and deliver precisely nothing. A control channel that reports
+			// success and delivers nothing is worse than one that refuses.
+			if st, err := loadState(id); err == nil && !st.Steerable {
+				return fmt.Errorf("meet: this meeting's turns are headless one-shots — the agent runs its "+
+					"prompt and exits, so there is nobody to interrupt.\n"+
+					"Start a meeting with --steerable to hold each speaker open for its turn:\n"+
+					"  bashy meet start --steerable --topic %q …", st.Topic)
+			}
+
 			floor, err := currentSpeaker(id)
 			if err != nil {
 				return err

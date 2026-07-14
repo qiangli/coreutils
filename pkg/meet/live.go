@@ -127,6 +127,25 @@ func newLiveWriter(st *State, speaker, role, ctlSock string) *liveWriter {
 	return w
 }
 
+// setCtlSock publishes where this speaker can be reached, once it is actually
+// reachable.
+//
+// A live turn has a chicken-and-egg: the session needs the writer (to stream
+// into), and the writer needs the session's socket (to advertise). So the floor is
+// claimed first WITHOUT an address, and the address is added the moment the agent
+// is up. Re-emitting `speaking` is the whole mechanism — currentSpeaker reads the
+// last one — and it means a chair is never handed a socket to steer an agent that
+// has not started yet.
+func (w *liveWriter) setCtlSock(sock string) {
+	if sock == "" {
+		return
+	}
+	appendLive(w.id, LiveEvent{
+		Kind: liveSpeaking, Round: w.round, Speaker: w.speaker, Role: w.role,
+		CtlSock: sock, TS: nowFn(),
+	})
+}
+
 // ctlSockPath is where this turn's steer socket lives.
 //
 // Deliberately SHORT, and NOT under the meeting's own directory. A unix socket

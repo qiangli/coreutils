@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -119,7 +120,11 @@ loop:
 			if detach {
 				break loop
 			}
-			if err := weaveWriteControlFrame(it.CtlSock, frame+"\r\n"); err != nil {
+			// agentpty.TextFrame, not `frame + "\r\n"`. Attach used to hand-append
+			// the terminator and send whatever the operator typed verbatim — so an
+			// embedded newline or NUL (a paste, most obviously) went down the socket
+			// raw, where `weave say` and `meet say` would both have escaped it.
+			if err := weaveWriteControlFrame(it.CtlSock, agentpty.TextFrame(frame)); err != nil {
 				attachErr = err
 				break loop
 			}
