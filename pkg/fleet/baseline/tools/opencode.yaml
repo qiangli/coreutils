@@ -7,7 +7,8 @@ cli:
     exec: opencode run --model {model} {prompt}
     prompt_position: last
     trust_preseed: opencode.json
-    supports_say: false
+    steer_exec: opencode --model {model}
+    supports_say: true
     supports_graceful_quit: true
     notes: headless `run`; judge by committed artifacts, not exit code. --model takes provider/model.
     watchdog:

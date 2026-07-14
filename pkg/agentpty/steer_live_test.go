@@ -47,6 +47,13 @@ func TestSteerLive(t *testing.T) {
 	case "codex":
 		// Bare codex (no `exec`) is the interactive CLI.
 		argv = []string{"codex", "--model", os.Getenv("STEER_MODEL")}
+	case "opencode":
+		// `opencode [project]` (no `run`) is the TUI — the launch I never tried
+		// when I recorded opencode as un-steerable.
+		argv = []string{"opencode", "--model", os.Getenv("STEER_MODEL")}
+	case "aider":
+		// aider's REPL: --message makes it a one-shot; without it, it prompts.
+		argv = []string{"aider", "--yes-always", "--no-git", "--model", os.Getenv("STEER_MODEL")}
 	default:
 		t.Fatalf("unknown STEER_TOOL %q", tool)
 	}

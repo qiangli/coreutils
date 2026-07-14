@@ -7,7 +7,8 @@ cli:
     exec: aider --yes-always --no-git --model {model} --message {prompt}
     prompt_position: last
     trust_preseed: none
-    supports_say: false
+    steer_exec: aider --yes-always --no-git --model {model}
+    supports_say: true
     supports_graceful_quit: true
     notes: >-
       aider takes its prompt as the value of --message, so the prompt must stay the final

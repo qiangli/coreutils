@@ -37,11 +37,60 @@ func ApplyTrustPreseed(workspace, preseed string) error {
 	case ".claude.json":
 		return preseedClaudeTrust(workspace)
 	case "opencode.json":
-		return os.WriteFile(filepath.Join(workspace, "opencode.json"),
-			[]byte(`{"permission":{"edit":"allow","bash":"allow","webfetch":"allow","external_directory":"allow"}}`), 0o600)
+		return preseedOpencodeTrust(workspace)
 	default:
 		return nil
 	}
+}
+
+// preseedOpencodeTrust grants opencode its permissions WITHOUT destroying the
+// project's own config.
+//
+// This used to be a blind os.WriteFile of a permissions-only blob, which
+// overwrote any existing opencode.json — taking the project's provider settings
+// with it. That matters more than it sounds: opencode reads its model endpoints
+// from that file (a Moonshot baseURL, say — the API has separate international
+// and China hosts, and the wrong one fails opaquely). So bashy would silently
+// delete the very configuration the agent needed, and the agent would fail with
+// an "Unexpected server error" that pointed nowhere near the cause.
+//
+// The claude preseed has always merged. This one did not, and nobody noticed
+// because the failure surfaced as somebody else's bug.
+func preseedOpencodeTrust(workspace string) error {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return fmt.Errorf("agentctl: empty workspace")
+	}
+	path := filepath.Join(workspace, "opencode.json")
+
+	doc := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+		if err := json.Unmarshal(b, &doc); err != nil {
+			// A config we cannot parse is a config we must not replace. Leave it
+			// alone and let opencode complain about its own file — that error at
+			// least points at the truth.
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+	}
+
+	// Only touch `permission`, and only the keys we actually need. Anything else
+	// in the file — provider, model, mcp, agent — is the project's business.
+	perm, _ := doc["permission"].(map[string]any)
+	if perm == nil {
+		perm = map[string]any{}
+	}
+	for _, k := range []string{"edit", "bash", "webfetch", "external_directory"} {
+		if _, set := perm[k]; !set {
+			perm[k] = "allow"
+		}
+	}
+	doc["permission"] = perm
+
+	b, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
 // preseedClaudeTrust marks one workspace as already-trusted in ~/.claude.json.
