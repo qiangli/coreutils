@@ -1,0 +1,8 @@
+agents:
+  - name: aider-kimi-k2.6
+    tool: aider
+    model: kimi-k2.6
+    display: "aider · kimi-k2.6"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung; live-probed

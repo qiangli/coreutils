@@ -35,14 +35,14 @@ func TestFactorization(t *testing.T) {
 	withTempStore(t)
 	m, _ := Load()
 	// Same model, different tool → close QUALITY (deep-research) column.
-	ad := m.Agents["aider:deepseek-v4"][CapCoding].Quality
-	od := m.Agents["opencode:deepseek-v4"][CapCoding].Quality
+	ad := m.Agents["aider:deepseek-v4-pro"][CapCoding].Quality
+	od := m.Agents["opencode:deepseek-v4-pro"][CapCoding].Quality
 	if diff := ad - od; diff > 0.06 || diff < -0.06 {
 		t.Errorf("same-model coding quality should be close: aider=%.2f opencode=%.2f", ad, od)
 	}
 	// Same tool, different model → HARNESS column (operability) identical.
 	ok := m.Agents["opencode:kimi-k2.7-code"][CapOperability].Quality
-	od2 := m.Agents["opencode:deepseek-v4"][CapOperability].Quality
+	od2 := m.Agents["opencode:deepseek-v4-pro"][CapOperability].Quality
 	if ok != od2 {
 		t.Errorf("same-tool operability should match: %.2f vs %.2f", ok, od2)
 	}
@@ -119,7 +119,7 @@ func TestCostSeededAndValueRanking(t *testing.T) {
 	NowRFC = func() string { return "2026-07-09T00:00:00Z" }
 	m, _ := Load()
 	// cost is seeded per model tier: premium codex > commodity opencode.
-	if m.Agents["codex:gpt-5.5"][CapCoding].CostMicro <= m.Agents["opencode:deepseek-v4"][CapCoding].CostMicro {
+	if m.Agents["codex:gpt-5.5"][CapCoding].CostMicro <= m.Agents["opencode:deepseek-v4-pro"][CapCoding].CostMicro {
 		t.Errorf("premium model should cost more than commodity")
 	}
 	// codex leads coding by QUALITY (meeting correction).

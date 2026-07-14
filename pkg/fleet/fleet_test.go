@@ -40,16 +40,18 @@ func TestBaselineParses(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("model parse errors: %v", errs)
 	}
-	if len(models) < 9 {
-		t.Errorf("baseline has %d models, want the 9 capability priors", len(models))
+	if len(models) < 15 {
+		t.Errorf("baseline has %d models, want the full L1-L4 ladder", len(models))
 	}
 
 	agents, errs := c.Agents()
 	if len(errs) != 0 {
 		t.Fatalf("agent parse errors: %v", errs)
 	}
-	if len(agents) != 8 {
-		t.Errorf("baseline has %d agents, want the 8 seeded tool:model pairs", len(agents))
+	// The ladder grows as providers ship models; the floor is what matters — every
+	// provider must reach at least L1..L3, so an L3 role always has a candidate.
+	if len(agents) < 15 {
+		t.Errorf("baseline has %d agents, want at least the 15 ladder rungs", len(agents))
 	}
 }
 
@@ -133,7 +135,7 @@ func TestArgvSubstitutesModel(t *testing.T) {
 
 	// opencode wants provider/model — the upstream id, not the alias.
 	oc, _ := c.Tool("opencode")
-	m, _ := c.Model("deepseek-v4")
+	m, _ := c.Model("deepseek-v4-pro")
 	got = oc.Argv(m.Target(), "hi")
 	want = []string{"opencode", "run", "--model", "deepseek/deepseek-v4-pro", "hi"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {

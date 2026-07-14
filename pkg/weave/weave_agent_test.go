@@ -62,7 +62,7 @@ func TestExpandAgentByAlias(t *testing.T) {
 // worker is stamped with it, because `whois opencode-deepseek-v4` resolves.
 func TestBindingResolvesToItsCanonicalNickname(t *testing.T) {
 	pinAgentFleet(t)
-	l, argv, err := weaveExpandAgent([]string{"opencode:deepseek-v4"}, "body", "title")
+	l, argv, err := weaveExpandAgent([]string{"opencode:deepseek-v4-pro"}, "body", "title")
 	if err != nil || l == nil {
 		t.Fatalf("l=%+v err=%v", l, err)
 	}
@@ -70,10 +70,10 @@ func TestBindingResolvesToItsCanonicalNickname(t *testing.T) {
 	if !strings.Contains(strings.Join(argv, " "), "--model deepseek/deepseek-v4-pro") {
 		t.Fatalf("argv = %q", argv)
 	}
-	if l.Nick != "opencode-deepseek-v4" {
+	if l.Nick != "opencode-deepseek-v4-pro" {
 		t.Fatalf("nick = %q, want the canonical nickname of the seeded pair", l.Nick)
 	}
-	if got := weaveAgentEnv(nil, l); !hasKV(got, "BASHY_PRINCIPAL=dhnt:agent/opencode-deepseek-v4") {
+	if got := weaveAgentEnv(nil, l); !hasKV(got, "BASHY_PRINCIPAL=dhnt:agent/opencode-deepseek-v4-pro") {
 		t.Fatalf("env = %q", got)
 	}
 }

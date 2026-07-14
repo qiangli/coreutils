@@ -1,7 +1,9 @@
 name: opus4.8
 family: opus
 version: "4.8"
-band: 3
+band: 4
+band_source: operator
+# operator: serves BOTH conductor and steward
 display: Claude Opus 4.8
 provider: anthropic
 kind: subscription

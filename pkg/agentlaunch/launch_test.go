@@ -35,7 +35,7 @@ func TestResolveWithCatalogRendersNicknameFromFleetTemplate(t *testing.T) {
 
 func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	t.Setenv(UnsafeLaunchEnv, "1")
-	l, err := ResolveWithCatalog("opencode:deepseek-v4", Options{}, testCatalog(t.TempDir()))
+	l, err := ResolveWithCatalog("opencode:deepseek-v4-pro", Options{}, testCatalog(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}

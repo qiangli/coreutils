@@ -171,14 +171,49 @@ func BandLabel(band int) string {
 	return "L" + strconv.Itoa(band)
 }
 
+// How a band came to be believed, weakest evidence first.
+//
+// The distinction is load-bearing, because this fleet has already spent months
+// trusting numbers that nothing had ever checked. A band with no evidence behind
+// it must not READ like one that has some.
+const (
+	// BandDeclared — a considered guess from vendor tier and priors. Nothing has
+	// tested it. Shown with a `~`.
+	BandDeclared = "declared"
+
+	// BandOperator — pegged from an operator's lived experience across real runs.
+	// Not a controlled experiment, but evidence from work that actually shipped,
+	// which beats a prior. This is what corrected Gemini Pro and DeepSeek Pro from
+	// L3 to L2: their VENDOR's top tier is not this fleet's L3.
+	BandOperator = "operator"
+
+	// BandMeasured — earned by running the model up a difficulty ladder to the
+	// rung where it FAILED. The only thing a band really means.
+	BandMeasured = "measured"
+)
+
+// BandLabelWithSource marks an unmeasured band with a `~`.
+//
+// A band is the highest rung a model CLEARS, and until something has watched a
+// model fail, it has not been placed — it has been guessed at. The tilde is one
+// character and it is the difference between a fact and an opinion.
+func BandLabelWithSource(band int, source string) string {
+	l := BandLabel(band)
+	if band >= 1 && source != BandMeasured {
+		return l + "~"
+	}
+	return l
+}
+
 type modelRow struct {
-	Name     string   `json:"name"`
-	Band     int      `json:"band,omitempty"`
-	Kind     string   `json:"kind,omitempty"`
-	Provider string   `json:"provider,omitempty"`
-	Target   string   `json:"target,omitempty"`
-	Aliases  []string `json:"aliases,omitempty"`
-	Ring     string   `json:"ring"`
+	Name       string   `json:"name"`
+	Band       int      `json:"band,omitempty"`
+	BandSource string   `json:"band_source,omitempty"`
+	Kind       string   `json:"kind,omitempty"`
+	Provider   string   `json:"provider,omitempty"`
+	Target     string   `json:"target,omitempty"`
+	Aliases    []string `json:"aliases,omitempty"`
+	Ring       string   `json:"ring"`
 }
 
 func newModelsList(opts []Option) *cobra.Command {
@@ -198,7 +233,7 @@ func newModelsList(opts []Option) *cobra.Command {
 			rows := make([]modelRow, 0, len(models))
 			for _, m := range models {
 				rows = append(rows, modelRow{
-					Name: m.Name, Band: m.Band, Kind: m.Kind, Provider: m.Provider,
+					Name: m.Name, Band: m.Band, BandSource: m.BandSource, Kind: m.Kind, Provider: m.Provider,
 					Target: m.Target(), Aliases: m.Names()[1:], Ring: m.Ring.String(),
 				})
 			}
@@ -208,7 +243,7 @@ func newModelsList(opts []Option) *cobra.Command {
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tBAND\tKIND\tPROVIDER\tTARGET\tALIASES\tRING")
 			for _, r := range rows {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, BandLabel(r.Band),
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Name, BandLabelWithSource(r.Band, r.BandSource),
 					r.Kind, r.Provider, r.Target, strings.Join(r.Aliases, ","), r.Ring)
 			}
 			tw.Flush()
@@ -249,6 +284,7 @@ type agentRow struct {
 	Name        string   `json:"name"`
 	Nick        string   `json:"nick,omitempty"`
 	Band        int      `json:"band,omitempty"`
+	BandSource  string   `json:"band_source,omitempty"`
 	Tool        string   `json:"tool"`
 	Model       string   `json:"model"`
 	Binding     string   `json:"binding"`
@@ -296,7 +332,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 				if _, _, m, err := cat.Binding(a.Name); err != nil {
 					r.Resolves, r.Reason = false, err.Error()
 				} else {
-					r.Band = m.Band
+					r.Band, r.BandSource = m.Band, m.BandSource
 				}
 				if !r.Resolves && !all {
 					continue
@@ -318,7 +354,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 			fmt.Fprintln(tw, "NAME\tNICK\tBAND\tTOOL\tMODEL\tRELIAB\tRESOLVES\tRING")
 			for _, r := range rows {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					r.Name, dashIfEmpty(r.Nick), BandLabel(r.Band), r.Tool, r.Model,
+					r.Name, dashIfEmpty(r.Nick), BandLabelWithSource(r.Band, r.BandSource), r.Tool, r.Model,
 					dashIfEmpty(r.Reliability), yesNo(r.Resolves), r.Ring)
 			}
 			tw.Flush()

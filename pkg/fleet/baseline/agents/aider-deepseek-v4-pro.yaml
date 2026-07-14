@@ -1,8 +1,8 @@
 agents:
-  - name: aider-deepseek-v4
+  - name: aider-deepseek-v4-pro
     tool: aider
-    model: deepseek-v4
-    display: "aider · deepseek-v4"
+    model: deepseek-v4-pro
+    display: "aider · deepseek-v4-pro"
     ledger:
       reliability: medium
       notes: surgical one-shots; auto-commits; pin exact cases

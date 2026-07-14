@@ -88,7 +88,7 @@ func TestBindingPassesModel(t *testing.T) {
 func TestModelIsTheProviderSideID(t *testing.T) {
 	permitUnsafeLaunch(t)
 	pinCatalog(t)
-	tool, args, model := argv(t, "opencode:deepseek-v4", Options{})
+	tool, args, model := argv(t, "opencode:deepseek-v4-pro", Options{})
 	if tool != "opencode" || model != "deepseek/deepseek-v4-pro" {
 		t.Fatalf("tool=%q model=%q", tool, model)
 	}
@@ -400,7 +400,7 @@ func TestBindingUsesRegistryNamesNotThePath(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.SaveAgent(fleet.Agent{Name: "007", Tool: "echoer", Model: "deepseek-v4"}); err != nil {
+	if err := cat.SaveAgent(fleet.Agent{Name: "007", Tool: "echoer", Model: "deepseek-v4-pro"}); err != nil {
 		t.Fatal(err)
 	}
 	prev := newCatalog
@@ -414,7 +414,7 @@ func TestBindingUsesRegistryNamesNotThePath(t *testing.T) {
 	if l.Tool != "/opt/bin/echoer-v2" {
 		t.Fatalf("the executable is the declared binary: %q", l.Tool)
 	}
-	if l.Binding() != "echoer:deepseek-v4" {
+	if l.Binding() != "echoer:deepseek-v4-pro" {
 		t.Fatalf("Binding() = %q, want the registry names", l.Binding())
 	}
 	// The provider-side id is what reaches --model.
@@ -422,7 +422,7 @@ func TestBindingUsesRegistryNamesNotThePath(t *testing.T) {
 		t.Fatalf("Model = %q", l.Model)
 	}
 	env := principalEnv(nil, l)
-	if !hasEnv(env, "BASHY_AGENT_BINDING=echoer:deepseek-v4") {
+	if !hasEnv(env, "BASHY_AGENT_BINDING=echoer:deepseek-v4-pro") {
 		t.Fatalf("env = %q", env)
 	}
 }

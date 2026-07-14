@@ -229,6 +229,21 @@ type Model struct {
 	// land in one band. Agents inherit it; they never carry their own.
 	Band int `yaml:"band,omitempty" json:"band,omitempty"`
 
+	// BandSource says whether the band was MEASURED or merely DECLARED, and it
+	// exists because the fleet has already been burned once by not knowing.
+	//
+	// "declared" is a considered guess from provider tier + priors. "measured"
+	// means the model was run up a difficulty ladder and pegged at the highest
+	// rung it reliably cleared — which is the only thing a band actually means.
+	//
+	// The distinction is load-bearing: a quiz cannot validate a band. Every agent
+	// in this fleet scores 5/5 on L1-difficulty questions, so passing an easy test
+	// is evidence of nothing. A band is the highest rung you CLEAR, not a score,
+	// and until a model has failed something it has not been placed.
+	//
+	// Empty means declared. Nothing should present an unmeasured band as fact.
+	BandSource string `yaml:"band_source,omitempty" json:"band_source,omitempty"`
+
 	// Tier is the provider's own word for its tier, carried from an org
 	// overlay. It is not Band and is not routable.
 	Tier          string   `yaml:"tier,omitempty" json:"tier,omitempty"`
