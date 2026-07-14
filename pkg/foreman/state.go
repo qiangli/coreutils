@@ -25,6 +25,12 @@ const (
 	CommandSkip   = "skip"
 	CommandPrio   = "prio"
 	CommandStop   = "stop"
+
+	// CommandKey presses a KEY at the running agent (esc / enter / ctrl-c) instead
+	// of saying something to it. The one control that reaches an agent stuck in a
+	// tool loop, whose turn is never going to end and which will therefore never
+	// read a queued message.
+	CommandKey = "key"
 )
 
 type State struct {

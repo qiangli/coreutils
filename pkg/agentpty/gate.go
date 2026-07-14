@@ -30,6 +30,7 @@ type GateKind string
 const (
 	GateNone         GateKind = "none"
 	GateTrust        GateKind = "trust"
+	GateNag          GateKind = "nag"
 	GateBrowserOAuth GateKind = "browser_oauth"
 	GateDeviceCode   GateKind = "device_code"
 	GateAPIKey       GateKind = "api_key"
@@ -106,6 +107,30 @@ var authGateSignatures = []string{
 	"you must log in", "session expired", "no api key", "api key not",
 }
 
+// nagGateSignatures are prompts that are not gates at all in spirit — a vendor
+// asking for feedback, a "what's new" splash, a rate-us nag — but which block an
+// unattended run exactly as hard as an auth gate does, because the TUI is waiting
+// on a keypress and does not care that the question is trivial.
+//
+// Found the hard way: an agy conductor, mid-campaign, stopped dead on
+//
+//	How's the CLI experience so far?
+//	 [1] Good  [2] Fine  [3] Bad  [0] Skip
+//
+// An agent that is 40 minutes into a task cannot answer a survey, and nothing in
+// the fleet knew how to skip it. It would have sat there until the watchdog killed
+// it, and the kill would have been reported as a timeout — a wedged run blamed on
+// the model, caused by a questionnaire.
+var nagGateSignatures = []string{
+	"how's the cli experience", "how is the cli experience",
+	"rate your experience", "help us improve",
+	"[0] skip", "[0] dismiss",
+}
+
+// GateNagClearPayload dismisses a nag. "0" is Skip in every menu we have seen;
+// answering the survey for the operator would be putting words in their mouth.
+const GateNagClearPayload = "0"
+
 // ClassifyGate classifies a live PTY tail into the kind of gate the agent
 // appears blocked on. Deliberately pure, so the broker is testable without a
 // live tool, a browser, or a terminal.
@@ -113,6 +138,11 @@ func ClassifyGate(tail string) GateVerdict {
 	low := strings.ToLower(tail)
 	if strings.TrimSpace(low) == "" {
 		return GateVerdict{Kind: GateNone}
+	}
+	// Nags first: they are unambiguous, and cheap to be wrong about (a stray "0"
+	// into a prompt that was not a nag is a no-op in every TUI here).
+	if sig, ok := findSignature(low, nagGateSignatures); ok {
+		return GateVerdict{Kind: GateNag, Signature: sig}
 	}
 	if sig, ok := findSignature(low, []string{
 		"do you trust", "trust the contents", "trust this directory",
@@ -206,6 +236,10 @@ func RouteGate(verdict GateVerdict, deps RouteDeps) (action string, err error) {
 	state.seen[key] = true
 
 	switch verdict.Kind {
+	case GateNag:
+		// Skip it and get back to work. This is not an authorization decision; it is
+		// a questionnaire standing between an agent and its job.
+		return "say_nag", callSay(deps, GateNagClearPayload)
 	case GateTrust:
 		if exceededAutoRouteCap(state, deps.AutoRouteCap) {
 			return "escalate", callEscalate(deps, "trust gate auto-route cap reached; human should inspect the worker log before clearing another trust prompt")

@@ -2,11 +2,13 @@ package foreman
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/chat"
 )
 
@@ -103,6 +105,48 @@ func (s *Session) noteSteer(msg string) {
 	s.liveMu.Lock()
 	s.steers = append(s.steers, "human (mid-turn): "+msg)
 	s.liveMu.Unlock()
+}
+
+// Keystroke names TrySendKey accepts. These are the keys that mean something to
+// every agent TUI in the fleet, and nothing else is offered — this is a control
+// channel, not a remote keyboard.
+const (
+	KeyEsc   = "esc"    // interrupt: abandon the current turn, keep the session
+	KeyEnter = "enter"  // submit whatever is sitting in the input box
+	KeyCtrlC = "ctrl-c" // harder stop; most TUIs need it twice to quit
+)
+
+var keyBytes = map[string][]byte{
+	KeyEsc:   {0x1b},
+	KeyEnter: {'\r'},
+	KeyCtrlC: {0x03},
+}
+
+// TrySendKey presses a KEY at the running agent, rather than saying something to
+// it.
+//
+// A steer is a word in the agent's ear. It is delivered mid-turn, but every agent
+// TUI in this fleet QUEUES it and reads it only when the current turn ends — which
+// is fine for a course correction and useless for the one case where you most need
+// control: an agent stuck in a tool loop, whose turn is never going to end.
+//
+// Observed live: an agy conductor made 224 tool calls of which only 22 were
+// distinct, re-reading the same file 26 times. A queued message would have sat
+// there forever, because the agent was never going to pause long enough to read
+// it. Escape is the only thing that reaches an agent in that state.
+//
+// This is what agentpty.VerbatimFrame is FOR — a keystroke, not a sentence. The
+// wire has always had two frame kinds; foreman only ever used one.
+func (s *Session) TrySendKey(name string) (bool, error) {
+	b, ok := keyBytes[strings.ToLower(strings.TrimSpace(name))]
+	if !ok {
+		return false, fmt.Errorf("foreman: unknown key %q (want: esc, enter, ctrl-c)", name)
+	}
+	live := s.getLive()
+	if live == nil || !live.Live() {
+		return false, nil
+	}
+	return true, agentpty.SendFrame(live.CtlSock, agentpty.VerbatimFrame(b))
 }
 
 // attach opens the live session, using the first message as its opening prompt.

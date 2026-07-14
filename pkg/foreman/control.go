@@ -87,6 +87,23 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 			}
 		}
 
+		// A KEY only ever goes to a live agent. There is no "queue a keystroke for
+		// the next agent" — a keypress is meaningless without something to press it
+		// at, and pretending otherwise would be the same lie in a new costume.
+		if strings.EqualFold(strings.TrimSpace(cmd.Verb), CommandKey) {
+			sent, err := s.TrySendKey(cmd.Message)
+			if err != nil {
+				fmt.Fprintf(conn, `{"ok":false,"error":%q}`+"\n", err.Error())
+				continue
+			}
+			if !sent {
+				fmt.Fprintf(conn, `{"ok":false,"error":%q}`+"\n", "no live agent to press a key at")
+				continue
+			}
+			fmt.Fprintln(conn, `{"ok":true,"steered":true}`)
+			continue
+		}
+
 		// No live agent: this command STARTS a turn, which can take many minutes.
 		// Ack that it was accepted and run it in the background — the caller asked us
 		// to do a thing, not to hold its connection open while an LLM thinks.

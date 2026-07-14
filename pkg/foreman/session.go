@@ -206,6 +206,10 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 		} else {
 			s.state.DriveLease = strings.TrimSpace(cmd.Priority)
 		}
+	case CommandKey:
+		// Handled on the control path, which does not take s.mu — a key exists to
+		// interrupt a turn, and Apply is holding the lock for that very turn.
+		return nil
 	case CommandStop:
 		s.state.Stopped = true
 		s.state.Status = StatusDone

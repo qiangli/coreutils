@@ -19,7 +19,7 @@ import (
 var cmd = &tool.Tool{
 	Name:     "foreman",
 	Synopsis: "Drive a persistent, steerable agent session.",
-	Usage:    "foreman start [--detach] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status <id>\n   or: foreman log <id> [-f]\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
+	Usage:    "foreman start [--detach] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
 }
 
 var runner chat.Runner
@@ -68,6 +68,10 @@ func run(rc *tool.RunContext, args []string) int {
 		return runStatus(rc, subArgs, jsonOut)
 	case "log":
 		return runLog(rc, subFlags, subArgs)
+	case "interrupt":
+		return runKey(rc, subArgs, foreman.KeyEsc, jsonOut)
+	case "key":
+		return runKeyNamed(rc, subArgs, jsonOut)
 	case "list":
 		return runList(rc, jsonOut)
 	case "pause", "resume", "skip", "stop":
@@ -215,6 +219,33 @@ func runLog(rc *tool.RunContext, flags map[string]string, args []string) int {
 			return 0
 		}
 	}
+}
+
+// runKey presses a key at the running agent.
+//
+// `foreman tell` says something to the agent; every agent TUI in this fleet queues
+// it and reads it when the current turn ends. That is the right behaviour for a
+// course correction and completely useless for an agent stuck in a tool loop,
+// because that turn is never going to end. Escape is the only thing that reaches
+// it. (Measured: an agy conductor made 224 tool calls of which 22 were distinct.)
+func runKey(rc *tool.RunContext, args []string, key string, jsonOut bool) int {
+	if len(args) != 1 {
+		return usage(rc, "interrupt requires id")
+	}
+	if _, err := foreman.SendCommand("", args[0], foreman.Command{Verb: foreman.CommandKey, Message: key}); err != nil {
+		return fail(rc, jsonOut, err)
+	}
+	if !jsonOut {
+		fmt.Fprintf(rc.Out, "→ %s: pressed %s at the running agent\n", args[0], key)
+	}
+	return ok(rc, jsonOut, map[string]any{"id": args[0], "key": key})
+}
+
+func runKeyNamed(rc *tool.RunContext, args []string, jsonOut bool) int {
+	if len(args) != 2 {
+		return usage(rc, "key requires id and one of: esc, enter, ctrl-c")
+	}
+	return runKey(rc, args[:1], args[1], jsonOut)
 }
 
 func runStatus(rc *tool.RunContext, args []string, jsonOut bool) int {
