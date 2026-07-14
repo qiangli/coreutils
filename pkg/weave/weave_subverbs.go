@@ -639,7 +639,7 @@ so the dirty and verify-exit gates still apply. It is not a blind force.`,
 func newWeavePruneCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var yes bool
-	var stale bool
+	var stale, force bool
 	cmd := &cobra.Command{
 		Use:   "prune",
 		Short: "Remove workspace directories and merged branches for terminal items",
@@ -647,14 +647,25 @@ func newWeavePruneCmd() *cobra.Command {
 - Removes lingering workspace directories for done, abandoned, failed, and killed items
 - Deletes agent/weave-issue-N branches from the user repo if fully merged
 
-Use --yes to skip the confirmation prompt. This is safe: branches are only
-deleted with -d (lowercase), which refuses if not fully merged.`,
+It REFUSES to delete a workspace that still holds work: unmerged commits, or an
+uncommitted tree. Those are skipped with a reason, and --force is required to
+delete them anyway.
+
+That guard is the load-bearing one. An agent branch lives ONLY inside its
+workspace clone until "weave pull" fetches it — so deleting the workspace does
+not leave the commits "unmerged", it DESTROYS them. (The old help called prune
+safe because branches are deleted with -d, which refuses unmerged. True, and
+beside the point: -d protects the branch in the USER repo, which is not where
+the work is.)
+
+Use --yes to skip the confirmation prompt.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeavePrune(cmd, yes, stale, &flags)
+			return runWeavePrune(cmd, yes, stale, force, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
+	cmd.Flags().BoolVar(&force, "force", false, "Delete workspaces even if they hold unmerged commits or uncommitted changes (destroys that work permanently — an agent branch exists only in its workspace)")
 	cmd.Flags().BoolVar(&stale, "stale", false, "Also sweep orphaned 'allocated' items (workspace created but never launched / launched-and-died with no commits) — clears leftover clutter from prior sessions; never touches items with committed work")
 	return cmd
 }

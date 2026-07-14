@@ -4632,7 +4632,7 @@ func weavePrunableForSweep(state string, stale bool) bool {
 	return stale && state == "allocated"
 }
 
-func runWeavePrune(cmd *cobra.Command, yes, stale bool, flags *weaveOutputFlags) error {
+func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -4698,6 +4698,40 @@ func runWeavePrune(cmd *cobra.Command, yes, stale bool, flags *weaveOutputFlags)
 			// user-repo branch lookup that's a no-op for unfetched
 			// agent branches. Read before the workspace is removed.
 			merged := weaveItemMerged(root, base, it)
+
+			// REFUSE TO DELETE WORK THAT HAS NOWHERE ELSE TO LIVE.
+			//
+			// The branch half of this function has always been careful: `git branch
+			// -d`, never -D, so git itself refuses to drop an unmerged branch. The
+			// WORKSPACE half had no such guard, and it is the half that matters —
+			// an agent branch lives ONLY inside its workspace clone until `weave
+			// pull` fetches it. Delete the workspace and the commits are not
+			// "unmerged", they are GONE.
+			//
+			// Found with two live runs sitting in the queue: #3 had crashed on exit
+			// with a complete, tested feature committed on its branch; #4 had the
+			// same feature's tests passing in an uncommitted tree. Both were
+			// `failed`. `weave prune` classified both by their STATE LABEL alone and
+			// would have erased the lot, announcing only "will clean up 3 terminal
+			// item(s)".
+			//
+			// A destructive sweep may not decide what is expendable from a label. It
+			// has to look at the artifact.
+			if !force && it.Workspace != "" && !merged {
+				if _, statErr := os.Stat(it.Workspace); statErr == nil {
+					ahead, _ := weaveMeasureBranch(it.Workspace, base)
+					dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace)
+					if ahead > 0 || dirty {
+						why := weavePruneHoldReason(ahead, dirtyFiles, untracked)
+						results = append(results, pruneResult{
+							Issue: it.ID, State: it.State, Workspace: it.Workspace,
+							Merged: false, Action: "skipped: " + why,
+						})
+						continue
+					}
+				}
+			}
+
 			if it.Workspace != "" {
 				if _, statErr := os.Stat(it.Workspace); statErr == nil {
 					if rmErr := safeRemoveWorkspace(dir, it.Workspace); rmErr == nil {
@@ -4743,11 +4777,34 @@ func runWeavePrune(cmd *cobra.Command, yes, stale bool, flags *weaveOutputFlags)
 			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): removed workspace%s\n", r.Issue, r.State, merged)
 		case r.Action == "branch_deleted":
 			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): deleted merged branch %s\n", r.Issue, r.State, r.Branch)
+		case strings.HasPrefix(r.Action, "skipped:"):
+			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): KEPT — %s\n", r.Issue, r.State,
+				strings.Replace(strings.TrimPrefix(r.Action, "skipped: "), "<id>", fmt.Sprint(r.Issue), 1))
 		case strings.HasPrefix(r.Action, "failed:"):
 			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): %s\n", r.Issue, r.State, r.Action)
 		}
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave prune: cleaned up %d item(s)\n", swept)
+	// COUNT WHAT HAPPENED, NOT WHAT WAS CONSIDERED.
+	//
+	// `swept` counts every item the sweep LOOKED at — including the ones it
+	// refused to touch. Reporting that as "cleaned up N" told the operator their
+	// workspaces were gone while two of them were quietly still there holding
+	// unmerged work. A summary that overstates a destructive action is worse than
+	// no summary: it is the number people check instead of the list.
+	removed, kept := 0, 0
+	for _, r := range results {
+		switch {
+		case r.Action == "removed":
+			removed++
+		case strings.HasPrefix(r.Action, "skipped:"):
+			kept++
+		}
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "weave prune: cleaned up %d item(s)", removed)
+	if kept > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "; KEPT %d holding unmerged work (see above; --force to delete anyway)", kept)
+	}
+	fmt.Fprintln(cmd.OutOrStdout())
 	return nil
 }
 
@@ -4875,4 +4932,23 @@ func weavePrintSalvageableFooter(w io.Writer, ids []int64) {
 		fmt.Fprintf(&b, "#%d", id)
 	}
 	fmt.Fprintf(w, "%s committed work before dying — `weave salvage <id>` to keep it (do NOT re-run: the diff is already there)\n", b.String())
+}
+
+// weavePruneHoldReason says, in one line, why a workspace was not deleted.
+//
+// "skipped" with no reason is how a safety check becomes a mystery, and a
+// mystery is how people learn to pass --force by reflex.
+func weavePruneHoldReason(ahead, dirtyFiles, untracked int) string {
+	var parts []string
+	if ahead > 0 {
+		// This is the dangerous one. The commits exist ONLY here.
+		parts = append(parts, fmt.Sprintf("%d unmerged commit(s) — `weave salvage %s` to keep them", ahead, "<id>"))
+	}
+	if n := dirtyFiles + untracked; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d uncommitted file(s)", n))
+	}
+	if len(parts) == 0 {
+		return "holds unmerged work"
+	}
+	return strings.Join(parts, "; ") + " (--force to delete anyway)"
 }
