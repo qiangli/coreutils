@@ -75,12 +75,12 @@ func SanitizeOwner(owner string) string {
 	return owner
 }
 
-// RepoSub is the committed per-repo todo list's location — home of the SAME record
-// format and vocabulary as the personal list, but inside the repo (travels with the
-// clone). Deliberately distinct from issue's `.bashy/issues/` (the FORMAL register
-// with triage/kinds/weave-linkage): `todo --repo` is the lightweight checked-in list,
-// issue is the formal one. One command, two scopes; two levels of formality.
-const RepoSub = ".bashy/todo"
+// RepoSub is the committed per-repo todo list's location: docs/todo/, inside the repo
+// and CHECKED IN. It is the formal, structured replacement for an ad-hoc TODO.md — a
+// human- and git-visible directory of one file per item that travels with the clone,
+// shows up in diffs, and is the single per-repo tracker (`bashy todo --repo`). Visible
+// on purpose (not hidden under .bashy/), because it replaces the file a human reads.
+const RepoSub = "docs/todo"
 
 // UserStore returns the host-scoped personal store (~/.bashy/todo/<owner>/).
 func UserStore(owner string) (*issue.Store, error) {
@@ -96,19 +96,47 @@ func RepoStore(repoRoot string) *issue.Store {
 	return &issue.Store{Root: repoRoot, Sub: RepoSub}
 }
 
-// ResolveStore picks the store for the requested scope. When repo is true, repoRoot
-// is consulted to locate the committed list; otherwise the personal owner list is
-// used. It returns the store and a short human label for the scope.
-func ResolveStore(owner string, repo bool, repoRoot func() (string, error)) (*issue.Store, string, error) {
-	if repo {
-		if repoRoot == nil {
-			return nil, "", fmt.Errorf("--repo is not available here")
+// FindGitRoot walks up from the current directory for a `.git` entry (a directory,
+// or a file for worktrees/submodules). Returns the repo root and true, or "" and
+// false when the cwd is not inside a git repo.
+func FindGitRoot() (string, bool) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, true
 		}
-		r, err := repoRoot()
-		if err != nil {
-			return nil, "", err
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
 		}
-		return RepoStore(r), "repo " + r, nil
+		dir = parent
+	}
+}
+
+// ResolveStore picks the store. The DEFAULT (no flag) auto-detects, so an agent can
+// just `bashy todo add …` and it lands in the right place; --base-dir lets the same
+// agent inspect OTHER repos' lists in one session without cd-ing into them:
+//
+//	--base-dir <root>  → that project root's list (<root>/docs/todo/). Travel any repo.
+//	--user             → force the personal list (~/.bashy/todo/<owner>/), even in a repo
+//	default            → THIS repo's docs/todo/ if in a git repo, else the personal list
+//	--repo             → force the repo list (errors if not inside a git repo)
+//
+// It returns the store and a short human label for the scope.
+func ResolveStore(owner string, forceRepo, forceUser bool, baseDir string) (*issue.Store, string, error) {
+	if b := strings.TrimSpace(baseDir); b != "" {
+		return RepoStore(b), "repo " + b, nil
+	}
+	if !forceUser {
+		if root, ok := FindGitRoot(); ok {
+			return RepoStore(root), "repo " + root, nil
+		}
+		if forceRepo {
+			return nil, "", fmt.Errorf("--repo: not inside a git repo (a .git was not found here or in any parent)")
+		}
 	}
 	st, err := UserStore(owner)
 	if err != nil {

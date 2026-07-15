@@ -6,6 +6,7 @@ package todo
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -15,44 +16,48 @@ import (
 	"github.com/qiangli/coreutils/pkg/issue"
 )
 
-// storeFunc resolves the store for the current scope (--owner / --repo).
-type storeFunc func() (*issue.Store, error)
+// storeFunc resolves the store for the current scope, returning it and a short scope
+// label so every command can print WHICH list it is acting on.
+type storeFunc func() (*issue.Store, string, error)
 
-// NewTodoCmd builds `bashy todo` — the task list, in TWO scopes over one item model:
+// NewTodoCmd builds `bashy todo` — the task list over one item model. The scope is
+// AUTO-DETECTED so an agent can just `bashy todo add …` and it lands correctly:
 //
-//	default   your personal, host-scoped list (~/.bashy/todo/<owner>/, not committed)
-//	--repo    THIS repo's committed list   (<repo>/.bashy/todo/, travels with the clone)
+//	default   inside a git repo → THAT repo's docs/todo/ (committed); otherwise your
+//	          personal host list (~/.bashy/todo/<owner>/)
+//	--user    force the personal list even inside a repo
+//	--repo    force the repo list (error if not in a git repo)
+//	--dir P   point the list at any base directory P
 //
-// One command; the scope is an explicit flag, never inferred from cwd (so a personal
-// note never lands in a repo's history by accident, or vice versa). repoRoot resolves
-// the repo for --repo; pass nil to disable that scope.
-func NewTodoCmd(repoRoot func() (string, error)) *cobra.Command {
-	var owner string
-	var repo bool
+// Every command prints a one-line header with the resolved folder, so there is never
+// any doubt about which list you are on.
+func NewTodoCmd() *cobra.Command {
+	var owner, baseDir string
+	var forceRepo, forceUser bool
 	root := &cobra.Command{
 		Use:   "todo",
-		Short: "the task list — personal (default) or --repo (committed)",
-		Long: "todo tracks work as simple items (todo -> doing -> done, or blocked) in one of\n" +
-			"two SCOPES, chosen by flag:\n\n" +
-			"  bashy todo …          your PERSONAL list, per host/user (~/.bashy/todo/<owner>/,\n" +
-			"                        NOT committed). Use --owner to keep separate lists (the\n" +
-			"                        steward is the default; a fixer uses its run id; a human\n" +
-			"                        uses their own).\n" +
-			"  bashy todo --repo …   THIS repo's COMMITTED list (<repo>/.bashy/todo/), which\n" +
-			"                        travels with the clone and shows up in diffs.\n\n" +
-			"The scope is always an explicit flag, never guessed from the working directory.\n\n" +
+		Short: "the task list — auto: repo docs/todo/ if in a git repo, else your host list",
+		Long: "todo tracks work as simple items (todo -> doing -> done, or blocked). The SCOPE is\n" +
+			"auto-detected from where you are, so no flag is needed for the common case:\n\n" +
+			"  in a git repo    → THAT repo's docs/todo/ (committed, travels with the clone) —\n" +
+			"                     the structured replacement for an ad-hoc TODO.md.\n" +
+			"  not in a repo    → your personal host list (~/.bashy/todo/<owner>/, not committed).\n\n" +
+			"Overrides: --base-dir <root> shows ANOTHER project's list (<root>/docs/todo/) —\n" +
+			"so one agent can travel between repos in a single session; --user forces the\n" +
+			"personal list even inside a repo; --repo forces the repo list. Every command prints\n" +
+			"a header showing the resolved folder, so which list you are on is never in doubt.\n\n" +
 			"Relation to the other trackers: `bashy sprint` is a TIME-BOX (a window grouping\n" +
-			"items); `bashy issue` is the FORMAL committed register (triage, kinds, weave\n" +
-			"linkage). todo is the lightweight everyday list — personal or checked in.",
+			"items); `bashy weave` is the execution queue (`weave add --from-todo` seeds a run).",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVar(&owner, "owner", DefaultOwner, "personal-list owner (steward | a fixer id | a human name)")
-	root.PersistentFlags().BoolVar(&repo, "repo", false, "use THIS repo's committed list (.bashy/todo/) instead of your personal list")
+	root.PersistentFlags().BoolVar(&forceRepo, "repo", false, "force THIS repo's committed list (docs/todo/); error if not in a git repo")
+	root.PersistentFlags().BoolVar(&forceUser, "user", false, "force your personal host list (~/.bashy/todo/<owner>/), even inside a repo")
+	root.PersistentFlags().StringVar(&baseDir, "base-dir", "", "show the list of ANOTHER project root (<root>/docs/todo/) — travel repos without cd")
 
-	sf := func() (*issue.Store, error) {
-		st, _, err := ResolveStore(owner, repo, repoRoot)
-		return st, err
+	sf := func() (*issue.Store, string, error) {
+		return ResolveStore(owner, forceRepo, forceUser, baseDir)
 	}
 
 	root.AddCommand(
@@ -66,6 +71,20 @@ func NewTodoCmd(repoRoot func() (string, error)) *cobra.Command {
 		newRmCmd(sf),
 	)
 	return root
+}
+
+// folder is the resolved on-disk directory of a store (where the item files live).
+func folder(st *issue.Store) string { return filepath.Join(st.Root, st.Sub) }
+
+// header is the "which list am I on" line printed before command output. scope is the
+// label ResolveStore returns ("repo <root>" | "user <owner>" | "dir <path>"); the
+// folder makes the exact location unambiguous.
+func header(scope string, st *issue.Store) string {
+	word := scope
+	if i := strings.IndexByte(scope, ' '); i > 0 {
+		word = scope[:i]
+	}
+	return fmt.Sprintf("todo [%s] %s", word, folder(st))
 }
 
 func emitJSON(cmd *cobra.Command, v any) error {
@@ -85,7 +104,7 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 		Short: "add a task to the list",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := sf()
+			st, _, err := sf()
 			if err != nil {
 				return err
 			}
@@ -114,7 +133,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 		Short: "list tasks (open by default; --all includes done)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := sf()
+			st, scope, err := sf()
 			if err != nil {
 				return err
 			}
@@ -134,6 +153,9 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			if jsonOut {
 				return emitJSON(cmd, items)
 			}
+			// The header names WHICH list — auto-detected scope + exact folder — so
+			// there is never confusion about where these tasks live.
+			fmt.Fprintln(cmd.OutOrStdout(), header(scope, st))
 			if len(items) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no tasks (bashy todo add \"...\")")
 				return nil
@@ -160,7 +182,7 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 		Short: "show one task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := sf()
+			st, _, err := sf()
 			if err != nil {
 				return err
 			}
@@ -197,7 +219,7 @@ func newStatusCmd(sf storeFunc) *cobra.Command {
 		Short: "update a task's status",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := sf()
+			st, _, err := sf()
 			if err != nil {
 				return err
 			}
@@ -217,7 +239,7 @@ func newDoneCmd(sf storeFunc) *cobra.Command {
 		Short: "mark a task done (alias for status done)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := sf()
+			st, _, err := sf()
 			if err != nil {
 				return err
 			}
@@ -237,7 +259,7 @@ func newStartCmd(sf storeFunc) *cobra.Command {
 		Short: "mark a task in progress (alias for status doing)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := sf()
+			st, _, err := sf()
 			if err != nil {
 				return err
 			}
@@ -258,7 +280,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 		Short: "modify a task's title/priority/note",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := sf()
+			st, _, err := sf()
 			if err != nil {
 				return err
 			}
@@ -294,7 +316,7 @@ func newRmCmd(sf storeFunc) *cobra.Command {
 		Short: "remove a task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := sf()
+			st, _, err := sf()
 			if err != nil {
 				return err
 			}

@@ -5,6 +5,7 @@ package todo
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,31 +57,53 @@ func TestTodoLifecycle(t *testing.T) {
 	}
 }
 
+func TestRepoStoreIsDocsTodo(t *testing.T) {
+	rs := RepoStore("/some/repo")
+	if rs.Sub != RepoSub || RepoSub != "docs/todo" {
+		t.Fatalf("repo sub = %q, want docs/todo", rs.Sub)
+	}
+	if got := filepath.Join(rs.Root, rs.Sub); got != filepath.Join("/some/repo", "docs/todo") {
+		t.Fatalf("repo dir = %q", got)
+	}
+}
+
 func TestScopeResolution(t *testing.T) {
 	t.Setenv("BASHY_TODO_DIR", t.TempDir())
-	repoRoot := t.TempDir()
-	rst, label, err := ResolveStore("steward", true, func() (string, error) { return repoRoot, nil })
+
+	// --base-dir targets another project root's docs/todo, without cd.
+	base := t.TempDir()
+	bst, label, err := ResolveStore("steward", false, false, base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rst.Sub != RepoSub || rst.Root != repoRoot {
-		t.Fatalf("repo store = %s/%s, want %s/%s", rst.Root, rst.Sub, repoRoot, RepoSub)
+	if bst.Root != base || bst.Sub != RepoSub {
+		t.Fatalf("base-dir store = %s/%s, want %s/%s", bst.Root, bst.Sub, base, RepoSub)
 	}
-	if label != "repo "+repoRoot {
-		t.Fatalf("repo label = %q", label)
+	if label != "repo "+base {
+		t.Fatalf("label %q", label)
 	}
-	if _, err := Add(rst, "checked-in task", "", ""); err != nil {
+
+	// --user forces the personal list.
+	ust, ulabel, err := ResolveStore("steward", false, true, "")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := List(rst, ""); len(got) != 1 {
-		t.Fatalf("repo store has %d, want 1", len(got))
+	if ust.Sub != "steward" {
+		t.Fatalf("user sub = %q, want steward", ust.Sub)
 	}
-	ust, _, _ := ResolveStore("steward", false, nil)
+	if !strings.HasPrefix(ulabel, "user ") {
+		t.Fatalf("user label %q", ulabel)
+	}
+
+	// Items in the base-dir store don't leak into the personal list.
+	if _, err := Add(bst, "checked-in task", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := List(bst, ""); len(got) != 1 {
+		t.Fatalf("base-dir store has %d, want 1", len(got))
+	}
 	if got, _ := List(ust, ""); len(got) != 0 {
 		t.Fatalf("personal store leaked repo items: %d", len(got))
-	}
-	if got := filepath.Join(rst.Root, rst.Sub); got != filepath.Join(repoRoot, RepoSub) {
-		t.Fatalf("repo dir = %q", got)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/qiangli/coreutils/pkg/issue"
+	todopkg "github.com/qiangli/coreutils/pkg/todo"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -35,19 +35,17 @@ func runWeaveAddFromIssue(cmd *cobra.Command, ref string, flags *weaveOutputFlag
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitPrecondFail, err))
 	}
 
-	reg := issue.New(root)
+	// The per-repo todo list (docs/todo/) is the register: a listed todo IS an accepted,
+	// wanted task, so there is no separate triage gate — being on the repo's committed
+	// list is the acceptance. A done item is the only thing that must not seed a run.
+	reg := todopkg.RepoStore(root)
 	it, err := reg.Resolve(ref)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitInvalidArg, err))
 	}
-	if it.Status == issue.StatusClosed {
+	if it.Status == todopkg.StatusDone {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitInvalidArg,
-			fmt.Errorf("issue %s is closed (%s) — `bashy issue reopen %s` first", it.ID[:8], it.Resolution, it.ID[:8])))
-	}
-	if it.Status != issue.StatusTriaged {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitPrecondFail,
-			fmt.Errorf("issue %s is %s, not triaged\n\nAn untriaged issue is a thought nobody has accepted or scoped. Handing it\nstraight to an agent is how a fleet spends an afternoon building something\nnobody wanted.\n\n  bashy issue triage %s --stage <plan|code|test|deploy>",
-				it.ID[:8], it.Status, it.ID[:8])))
+			fmt.Errorf("todo %s is already done — `bashy todo --repo status %s doing` to reopen it first", it.ID[:8], it.ID[:8])))
 	}
 	if it.Weave != 0 {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitPrecondFail,
@@ -123,13 +121,13 @@ func weaveCloseRegisterOnMerge(root, base string, it *weaveItem) {
 	if it.CommitsAhead <= 0 || !weaveItemMerged(root, base, it) {
 		return
 	}
-	reg := issue.New(root)
+	reg := todopkg.RepoStore(root)
 	ri, err := reg.Resolve(it.Register)
-	if err != nil || ri.Status == issue.StatusClosed {
+	if err != nil || ri.Status == todopkg.StatusDone {
 		return
 	}
 	now := timeNowUTC()
-	ri.Status = issue.StatusClosed
+	ri.Status = todopkg.StatusDone
 	ri.Closed = &now
 	ri.Resolution = "fixed"
 	ri.ClosedBy = it.Owner

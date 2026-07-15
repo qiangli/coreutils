@@ -31,8 +31,7 @@ import (
 // theLoop is the local-first SDLC spine — the verbs that must work in an air-gapped
 // room with no account, no forge, and no cloud.
 var theLoop = []string{
-	"issue",  // PLAN   — what is wrong / wanted. A committed register, no forge.
-	"todo",   // PLAN   — the steward's/human's per-host personal task list. No forge.
+	"todo",   // PLAN   — what is wanted, per repo (docs/todo/) or per host. No forge.
 	"sprint", // PLAN  — the board.
 	"weave",  // CODE   — isolated workspaces, real git, local branches.
 	"gate",   // TEST   — run the command; the exit status is the verdict.

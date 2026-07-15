@@ -632,16 +632,12 @@ func init() {
 	// suite-gate file, sdlc's healthcheck: key, supervise's :: string, and a
 	// dag target that happens to fail. All four mean the same thing; they only
 	// disagreed about where the command lives. This is the one place it lives.
-	// The Plan stage's intake verb: the durable, committed register of bugs,
-	// features and requirements — filed BEFORE anyone starts work. Plan had only
-	// sprint (a conductor's live board) and meet (deliberation); neither can hold
-	// an untriaged thought, so those lived as bullets in docs/TODO.md.
-	addVerb("issue", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	// todo is level 1 of the tracking hierarchy: issue is per-repo committed, sprint
-	// is cross-repo, todo is the per-host/user personal list (~/.bashy/todo/<owner>/,
-	// NOT committed) — the steward's/human's/fixer's own running list of what they are
-	// doing across every thread. Userland tier: one host, no repo, no forge, no cloud.
-	addVerb("todo", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierUserland, Caps: []string{CapJSON}})
+	// The Plan stage's task tracker (subsumes the old `issue` register). Auto-scoped:
+	// inside a git repo it is THAT repo's committed docs/todo/ (the structured
+	// replacement for an ad-hoc TODO.md); otherwise the per-host/user personal list
+	// (~/.bashy/todo/<owner>/). `weave add --from-todo` seeds a run from a repo todo.
+	// No forge, no cloud — a committed directory of one file per item.
+	addVerb("todo", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	// judge is gate's SEMANTIC twin: gate asks "does it PASS" (mechanical,
 	// reproducible); judge asks "is it GOOD" (an LLM opinion, advisory unless
 	// --gate). Together they finally encode "sandbox-green is not mergeable".
@@ -718,21 +714,16 @@ func init() {
 		// what agents did on this machine, and its transcripts can carry real
 		// conversation.
 		"steward",
-		// issue READS the committed register (`list`/`show`) and WRITES it (below).
-		"issue",
-		// todo READS the host-scoped personal task list (`list`/`show`) and WRITES it
-		// (below). A privacy surface: ~/.bashy/todo/ is a durable account of what the
-		// steward/user is doing across every thread.
+		// todo READS the task list (`list`/`show`) — a repo's docs/todo/ or the per-host
+		// list — and WRITES it (below). A privacy surface: it is a durable account of
+		// what the steward/user is doing across every thread.
 		"todo",
 	)
 
 	// write — mutates the filesystem or host state (short of irreversible loss).
 	eff(EffWrite,
-		// issue writes the project's COMMITTED issue register (.bashy/issues/) —
-		// source, not scratch, so a write here lands in the repo's history.
-		"issue",
-		// todo writes the host-scoped personal task list (~/.bashy/todo/<owner>/) —
-		// home, not a repo; NOT committed. Level 1 of the tracking hierarchy.
+		// todo writes the task list: a repo's COMMITTED docs/todo/ (a write here lands
+		// in the repo's history) or the per-host personal list (~/.bashy/todo/<owner>/).
 		"todo",
 		"clip", "cp", "install", "link", "ln", "mkdir", "mkfifo", "mknod",
 		"mktemp", "mv", "rmdir", "tar", "touch",
