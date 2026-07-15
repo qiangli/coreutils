@@ -549,10 +549,14 @@ func TestWildcardSSHConfigStanzaIsNotExistenceEvidence(t *testing.T) {
 	if ans := r.Resolve("007"); ans.Resolved {
 		t.Fatalf("a Host * stanza made %q resolve as a host: %+v", "007", ans.Matches)
 	}
-	// But a real host still picks up the wildcard's User.
-	if _, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600); err != nil {
+	// But a real host still picks up the wildcard's User. (Close the handle
+	// immediately — a leaked *os.File blocks t.TempDir's RemoveAll cleanup on
+	// Windows, where an open file "is being used by another process.")
+	fh, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
+	fh.Close()
 	_, cat := testResolver(t, env)
 	if err := cat.SaveHost(fleet.Host{Name: "host-a"}); err != nil {
 		t.Fatal(err)
