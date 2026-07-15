@@ -213,7 +213,14 @@ func assertNoHostFacts(t *testing.T, what, s string) {
 			}
 		}
 	}
-	if u, err := user.Current(); err == nil && len(u.Username) >= 4 {
+	// Ephemeral CI accounts (GitHub Actions runs as "runner", Windows runners as
+	// "runneradmin") are not a personal or machine identity — every runner shares
+	// the name, so it fingerprints nothing, and it collides with the common word
+	// (a manifest's "runner": "<harness>" field, a "test runner", …). Treating it
+	// as a host fact turns every CI run into a false positive; skip it. Real host
+	// paths still surface through the hostname and home-directory probes.
+	genericCIUser := map[string]bool{"runner": true, "runneradmin": true}
+	if u, err := user.Current(); err == nil && len(u.Username) >= 4 && !genericCIUser[strings.ToLower(u.Username)] {
 		probes["username"] = u.Username
 	}
 	if home, err := os.UserHomeDir(); err == nil && len(home) >= 5 {
