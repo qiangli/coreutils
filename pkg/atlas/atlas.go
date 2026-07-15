@@ -637,6 +637,11 @@ func init() {
 	// sprint (a conductor's live board) and meet (deliberation); neither can hold
 	// an untriaged thought, so those lived as bullets in docs/TODO.md.
 	addVerb("issue", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
+	// todo is level 1 of the tracking hierarchy: issue is per-repo committed, sprint
+	// is cross-repo, todo is the per-host/user personal list (~/.bashy/todo/<owner>/,
+	// NOT committed) — the steward's/human's/fixer's own running list of what they are
+	// doing across every thread. Userland tier: one host, no repo, no forge, no cloud.
+	addVerb("todo", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierUserland, Caps: []string{CapJSON}})
 	// judge is gate's SEMANTIC twin: gate asks "does it PASS" (mechanical,
 	// reproducible); judge asks "is it GOOD" (an LLM opinion, advisory unless
 	// --gate). Together they finally encode "sandbox-green is not mergeable".
@@ -715,6 +720,10 @@ func init() {
 		"steward",
 		// issue READS the committed register (`list`/`show`) and WRITES it (below).
 		"issue",
+		// todo READS the host-scoped personal task list (`list`/`show`) and WRITES it
+		// (below). A privacy surface: ~/.bashy/todo/ is a durable account of what the
+		// steward/user is doing across every thread.
+		"todo",
 	)
 
 	// write — mutates the filesystem or host state (short of irreversible loss).
@@ -722,6 +731,9 @@ func init() {
 		// issue writes the project's COMMITTED issue register (.bashy/issues/) —
 		// source, not scratch, so a write here lands in the repo's history.
 		"issue",
+		// todo writes the host-scoped personal task list (~/.bashy/todo/<owner>/) —
+		// home, not a repo; NOT committed. Level 1 of the tracking hierarchy.
+		"todo",
 		"clip", "cp", "install", "link", "ln", "mkdir", "mkfifo", "mknod",
 		"mktemp", "mv", "rmdir", "tar", "touch",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "graph",

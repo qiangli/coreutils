@@ -183,12 +183,25 @@ func (it *Issue) Marshal() ([]byte, error) {
 
 func (it *Issue) Open() bool { return it.Status != StatusClosed }
 
-// Store is the register in one repo.
-type Store struct{ Root string } // the repo root, not the .bashy/issues dir
+// Store is the register. Root is the base directory the register lives under; Sub
+// is the subdirectory beneath it that holds the item files. Sub defaults to Dir
+// (".bashy/issues") — the committed, per-repo register. A host-scoped, personal
+// register (see pkg/todo) sets Root to a home directory and Sub to its own subtree,
+// reusing every method here without duplicating the parse/marshal/store mechanics.
+type Store struct {
+	Root string
+	Sub  string // "" → Dir (the committed per-repo register)
+}
 
 func New(repoRoot string) *Store { return &Store{Root: repoRoot} }
 
-func (s *Store) dir() string { return filepath.Join(s.Root, Dir) }
+func (s *Store) dir() string {
+	sub := s.Sub
+	if sub == "" {
+		sub = Dir
+	}
+	return filepath.Join(s.Root, sub)
+}
 
 func (s *Store) path(it *Issue) string {
 	return filepath.Join(s.dir(), it.ID+"-"+slugify(it.Title)+".md")
@@ -310,6 +323,20 @@ func (s *Store) Add(it *Issue) (string, error) {
 		it.Created = time.Now().UTC()
 	}
 	return s.Save(it)
+}
+
+// Remove deletes an issue's file. The committed register prefers Close (a settled
+// record still travels with the clone); a host-scoped personal register (pkg/todo)
+// uses this to drop an item outright.
+func (s *Store) Remove(it *Issue) error {
+	p, err := s.find(it.ID)
+	if err != nil {
+		return err
+	}
+	if p == "" {
+		return fmt.Errorf("issue %s not on the register", it.ID)
+	}
+	return os.Remove(p)
 }
 
 func slugify(s string) string {
