@@ -20,6 +20,7 @@ type ProxyServer struct {
 	listenAddr  string
 	mu          sync.RWMutex
 	routes      map[string]*url.URL
+	otlpRoutes  map[string]*url.URL
 	handlers    map[string]http.Handler
 	rawHandlers map[string]http.Handler
 	server      *http.Server
@@ -30,6 +31,7 @@ func NewProxyServer(bindAddr string, port int) *ProxyServer {
 	return &ProxyServer{
 		listenAddr:  fmt.Sprintf("%s:%d", bindAddr, port),
 		routes:      make(map[string]*url.URL),
+		otlpRoutes:  make(map[string]*url.URL),
 		handlers:    make(map[string]http.Handler),
 		rawHandlers: make(map[string]http.Handler),
 	}
@@ -39,6 +41,15 @@ func (p *ProxyServer) AddRoute(pathPrefix string, backend *url.URL) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.routes[pathPrefix] = backend
+}
+
+// AddOTLPRoute registers an exact-path reverse proxy. Unlike query routes, an
+// OTLP request must be sent to the backend URL as-is rather than joined with
+// the incoming /v1/{signal} path.
+func (p *ProxyServer) AddOTLPRoute(path string, backend *url.URL) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.otlpRoutes[path] = backend
 }
 
 func (p *ProxyServer) AddHandler(pathPrefix string, handler http.Handler) {
@@ -72,6 +83,9 @@ func (p *ProxyServer) Start(_ context.Context) error {
 	p.mu.RLock()
 	for _, prefix := range sortedURLPrefixes(p.routes) {
 		mux.Handle(prefix, p.reverseProxy(p.routes[prefix]))
+	}
+	for _, path := range sortedURLPrefixes(p.otlpRoutes) {
+		mux.Handle(path, p.otlpReverseProxy(p.otlpRoutes[path]))
 	}
 	for _, prefix := range sortedHandlerPrefixes(p.handlers) {
 		mux.Handle(prefix, http.StripPrefix(strings.TrimSuffix(prefix, "/"), p.handlers[prefix]))
@@ -115,6 +129,18 @@ func (p *ProxyServer) reverseProxy(target *url.URL) http.Handler {
 	return proxy
 }
 
+func (p *ProxyServer) otlpReverseProxy(target *url.URL) http.Handler {
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	orig := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		orig(req)
+		req.URL.Path = target.Path
+		req.URL.RawPath = target.RawPath
+		req.Host = target.Host
+	}
+	return proxy
+}
+
 func (p *ProxyServer) landingPage(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -146,8 +172,11 @@ type routeInfo struct {
 func (p *ProxyServer) routeList() []routeInfo {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	out := make([]routeInfo, 0, len(p.routes)+len(p.handlers)+len(p.rawHandlers))
+	out := make([]routeInfo, 0, len(p.routes)+len(p.otlpRoutes)+len(p.handlers)+len(p.rawHandlers))
 	for path := range p.routes {
+		out = append(out, routeInfo{Path: path, Name: displayName(path), Kind: "proxy"})
+	}
+	for path := range p.otlpRoutes {
 		out = append(out, routeInfo{Path: path, Name: displayName(path), Kind: "proxy"})
 	}
 	for path := range p.handlers {
