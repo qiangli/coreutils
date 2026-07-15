@@ -91,7 +91,7 @@ func (s *StackManager) Start(ctx context.Context) error {
 	s.proxy = NewProxyServer(s.cfg.proxyBindAddr(), s.cfg.proxyPort())
 	s.registerRoutes()
 	for path, backend := range s.otlpRoutes {
-		s.proxy.AddRoute(path, backend)
+		s.proxy.AddOTLPRoute(path, backend)
 	}
 	if err := s.proxy.Start(ctx); err != nil {
 		return fmt.Errorf("start proxy: %w", err)
@@ -231,14 +231,14 @@ func (s *StackManager) AddLateComponent(ctx context.Context, c Component) error 
 
 // componentPathMap defines the proxy path prefix for each well-known component.
 var componentPathMap = map[string]string{
-	"otel-collector": "/collector/",
-	"prometheus":     "/prometheus/",
-	"alertmanager":   "/alerts/",
-	"perses":         "/dashboard/",
-	"victoria-logs":  "/logs/",
-	"victoria-traces": "/traces/",
+	"otel-collector":   "/collector/",
+	"prometheus":       "/prometheus/",
+	"alertmanager":     "/alerts/",
+	"perses":           "/dashboard/",
+	"victoria-logs":    "/logs/",
+	"victoria-traces":  "/traces/",
 	"victoria-metrics": "/metrics/",
-	"jaeger":         "/traces/",
+	"jaeger":           "/traces/",
 }
 
 // registerRoutes mounts each component's HTTP handler on the proxy mux.

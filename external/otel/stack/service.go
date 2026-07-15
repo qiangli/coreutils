@@ -70,9 +70,9 @@ func NewService(cfg *Config, dataDir string) (*Service, error) {
 	//
 	// A middleman that only forwards is a dependency, not a feature.
 	otlpRoutes := map[string]string{
-		"/v1/traces":  fmt.Sprintf("http://127.0.0.1:%d/insert/opentelemetry/v1/traces", vtracesPort),
-		"/v1/logs":    fmt.Sprintf("http://127.0.0.1:%d/insert/opentelemetry/v1/logs", vlogsPort),
-		"/v1/metrics": fmt.Sprintf("http://127.0.0.1:%d/opentelemetry/v1/metrics", vmetricsPort),
+		"/v1/traces":  fmt.Sprintf("http://127.0.0.1:%d%sinsert/opentelemetry/v1/traces", vtracesPort, componentPathMap["victoria-traces"]),
+		"/v1/logs":    fmt.Sprintf("http://127.0.0.1:%d%sinsert/opentelemetry/v1/logs", vlogsPort, componentPathMap["victoria-logs"]),
+		"/v1/metrics": fmt.Sprintf("http://127.0.0.1:%d%sopentelemetry/v1/metrics", vmetricsPort, componentPathMap["victoria-metrics"]),
 	}
 	for path, backend := range otlpRoutes {
 		u, perr := url.Parse(backend)
