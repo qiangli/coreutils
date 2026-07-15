@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/issue"
+	todopkg "github.com/qiangli/coreutils/pkg/todo"
 )
 
 // TestWeaveQueueSummariesActiveOnly locks in the cross-repo hint fix:
@@ -392,12 +393,12 @@ func TestWeaveKilledRunResumeClearsStaleEvidenceAndPullsFreshSubmission(t *testi
 
 func TestWeaveCloseRegisterOnMergeRequiresMergedDiff(t *testing.T) {
 	root, workspace, sha := setupMergeFixture(t)
-	reg := issue.New(root)
+	reg := &issue.Store{Root: root, Sub: todopkg.RepoSub}
 	ri := &issue.Issue{
 		ID:      "abcdef123456",
 		Kind:    issue.KindBug,
 		Title:   "fix real bug",
-		Status:  issue.StatusTriaged,
+		Status:  todopkg.StatusDoing,
 		Created: time.Now().UTC(),
 	}
 	if _, err := reg.Save(ri); err != nil {
@@ -410,7 +411,7 @@ func TestWeaveCloseRegisterOnMergeRequiresMergedDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status == issue.StatusClosed {
+	if got.Status == todopkg.StatusDone {
 		t.Fatal("empty run closed the register")
 	}
 
@@ -420,7 +421,7 @@ func TestWeaveCloseRegisterOnMergeRequiresMergedDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status == issue.StatusClosed {
+	if got.Status == todopkg.StatusDone {
 		t.Fatal("unmerged run closed the register")
 	}
 
@@ -431,7 +432,7 @@ func TestWeaveCloseRegisterOnMergeRequiresMergedDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != issue.StatusClosed || got.Resolution != "fixed" {
+	if got.Status != todopkg.StatusDone || got.Resolution != "fixed" {
 		t.Fatalf("merged diff did not close as fixed: %+v", got)
 	}
 }
