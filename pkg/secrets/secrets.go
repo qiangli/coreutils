@@ -60,6 +60,7 @@ disk (at the cost of the offline fallback).`,
 	cmd.AddCommand(newEnvCmd(&cfg))
 	cmd.AddCommand(newLsCmd(&cfg))
 	cmd.AddCommand(newGetCmd(&cfg))
+	cmd.AddCommand(newCheckCmd(&cfg))
 	cmd.AddCommand(newSetCmd(&cfg))
 	cmd.AddCommand(newImportCmd(&cfg))
 	cmd.AddCommand(newRmCmd(&cfg))
