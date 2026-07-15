@@ -288,6 +288,11 @@ type agentRow struct {
 	Tool        string   `json:"tool"`
 	Model       string   `json:"model"`
 	Binding     string   `json:"binding"`
+	// Kind + Provider are inherited from the model (the cost lane): kind is
+	// subscription | api | local-ollama, so a consumer can prefer flat-cost
+	// subscriptions over metered API keys without a second `models` lookup.
+	Kind        string   `json:"kind,omitempty"`
+	Provider    string   `json:"provider,omitempty"`
 	Reliability string   `json:"reliability,omitempty"`
 	Aliases     []string `json:"aliases,omitempty"`
 	Resolves    bool     `json:"resolves"`
@@ -333,6 +338,7 @@ func newAgentsList(opts []Option) *cobra.Command {
 					r.Resolves, r.Reason = false, err.Error()
 				} else {
 					r.Band, r.BandSource = m.Band, m.BandSource
+					r.Kind, r.Provider = m.Kind, m.Provider
 				}
 				if !r.Resolves && !all {
 					continue
