@@ -29,7 +29,16 @@ type Store struct {
 	dir string
 }
 
-// DefaultDir resolves the store location: $BASHY_KB_DIR, else ~/.bashy/kb
+// RepoSub is the committed per-repo kb: docs/kb/, inside the repo and CHECKED
+// IN — the structured replacement for ad-hoc docs/*.md notes, for knowledge that
+// is TRUE OF THIS REPO (its gate command, its conventions) and should travel with
+// the clone. The host store (DefaultDir) keeps cross-repo / this-machine
+// knowledge. Same wiki format at both scopes; `kb search --federate` reads across.
+// Visible on purpose (not hidden under .bashy/), because it replaces a file a
+// human reads and reviews.
+const RepoSub = "docs/kb"
+
+// DefaultDir resolves the HOST store location: $BASHY_KB_DIR, else ~/.bashy/kb
 // (the host data dotdir, beside ~/.bashy/weave).
 func DefaultDir() string {
 	if d := strings.TrimSpace(os.Getenv("BASHY_KB_DIR")); d != "" {
@@ -253,6 +262,15 @@ func (s *Store) RebuildIndex() error {
 // failure is silently skipped — journal.jsonl remains the durable trail.
 func (s *Store) gitSnapshot(msg string) {
 	if _, err := os.Stat(filepath.Join(s.dir, ".git")); err != nil {
+		// No own repo yet. If an ANCESTOR already versions this dir — the
+		// committed repo store, docs/kb/ inside a project — do NOT nest a .git:
+		// the parent repo is the version control, and a nested repo would make
+		// git treat docs/kb/ as an embedded repo whose files never track. The
+		// journal.jsonl + the parent's own commits are the trail. Only the
+		// otherwise-unversioned host store (~/.bashy/kb) self-inits.
+		if repoRootOf(filepath.Dir(s.dir)) != "" {
+			return
+		}
 		if _, err := git.Init(git.InitOptions{Path: s.dir}); err != nil {
 			return
 		}

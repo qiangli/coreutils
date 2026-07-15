@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/issue"
+	"github.com/qiangli/coreutils/pkg/scope"
 )
 
 // Statuses — a personal task's lifecycle. Unlike the committed issue register (which
@@ -63,16 +64,13 @@ func Root() (string, error) {
 	return filepath.Join(home, ".bashy", "todo"), nil
 }
 
-// SanitizeOwner reduces an owner to one safe path segment (no traversal).
+// SanitizeOwner reduces an owner to one safe path segment (no traversal),
+// defaulting to the steward's list when empty.
 func SanitizeOwner(owner string) string {
-	owner = strings.TrimSpace(owner)
-	owner = strings.ReplaceAll(owner, "..", "-")
-	owner = strings.ReplaceAll(owner, "/", "-")
-	owner = strings.ReplaceAll(owner, "\\", "-")
-	if owner == "" {
-		return DefaultOwner
+	if s := scope.SanitizeSegment(owner); s != "" {
+		return s
 	}
-	return owner
+	return DefaultOwner
 }
 
 // RepoSub is the committed per-repo todo list's location: docs/todo/, inside the repo
@@ -96,53 +94,30 @@ func RepoStore(repoRoot string) *issue.Store {
 	return &issue.Store{Root: repoRoot, Sub: RepoSub}
 }
 
-// FindGitRoot walks up from the current directory for a `.git` entry (a directory,
-// or a file for worktrees/submodules). Returns the repo root and true, or "" and
-// false when the cwd is not inside a git repo.
-func FindGitRoot() (string, bool) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", false
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
-}
+// FindGitRoot walks up from the current directory for a `.git` entry.
+func FindGitRoot() (string, bool) { return scope.FindGitRoot() }
 
-// ResolveStore picks the store. The DEFAULT (no flag) auto-detects, so an agent can
-// just `bashy todo add …` and it lands in the right place; --base-dir lets the same
-// agent inspect OTHER repos' lists in one session without cd-ing into them:
-//
-//	--base-dir <root>  → that project root's list (<root>/docs/todo/). Travel any repo.
-//	--user             → force the personal list (~/.bashy/todo/<owner>/), even in a repo
-//	default            → THIS repo's docs/todo/ if in a git repo, else the personal list
-//	--repo             → force the repo list (errors if not inside a git repo)
-//
-// It returns the store and a short human label for the scope.
+// ResolveStore picks the store via the shared scope resolver (the same rule kb
+// uses). The DEFAULT (no flag) auto-detects: THIS repo's docs/todo/ inside a git
+// repo, else the personal host list. --base-dir travels to another repo, --user
+// forces the personal list, --repo forces the repo list. It returns the store
+// and a short human label for the scope.
 func ResolveStore(owner string, forceRepo, forceUser bool, baseDir string) (*issue.Store, string, error) {
-	if b := strings.TrimSpace(baseDir); b != "" {
-		return RepoStore(b), "repo " + b, nil
+	if owner == "" {
+		owner = DefaultOwner
 	}
-	if !forceUser {
-		if root, ok := FindGitRoot(); ok {
-			return RepoStore(root), "repo " + root, nil
-		}
-		if forceRepo {
-			return nil, "", fmt.Errorf("--repo: not inside a git repo (a .git was not found here or in any parent)")
-		}
-	}
-	st, err := UserStore(owner)
+	sc, err := scope.Resolve(scope.Options{
+		RepoSub:   RepoSub,
+		Owner:     owner,
+		HostDir:   Root,
+		ForceRepo: forceRepo,
+		ForceUser: forceUser,
+		BaseDir:   baseDir,
+	})
 	if err != nil {
 		return nil, "", err
 	}
-	return st, "user " + SanitizeOwner(owner), nil
+	return &issue.Store{Root: sc.Root, Sub: sc.Sub}, sc.Label(), nil
 }
 
 // Add files a new todo item (status: todo) into the given store. It files via Save

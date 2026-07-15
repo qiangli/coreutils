@@ -28,18 +28,59 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/scope"
 )
+
+// resolveKBDir picks the kb store directory using the shared scope resolver and
+// reports a one-word scope label ("repo" | "user" | "dir"). Precedence: an
+// explicit --dir wins; then $BASHY_KB_DIR forces the host store (tests, relocated
+// homes) unless --repo/--base-dir asked otherwise; otherwise auto-detect (this
+// repo's docs/kb/ inside a git repo, else the host store).
+func resolveKBDir(dir *string, forceRepo, forceUser bool, baseDir string) (string, error) {
+	if strings.TrimSpace(*dir) != "" {
+		return "dir", nil
+	}
+	if env := strings.TrimSpace(os.Getenv("BASHY_KB_DIR")); env != "" && baseDir == "" && !forceRepo {
+		*dir = env
+		return "user", nil
+	}
+	sc, err := scope.Resolve(scope.Options{
+		RepoSub:   RepoSub,
+		HostDir:   func() (string, error) { return DefaultDir(), nil },
+		ForceRepo: forceRepo,
+		ForceUser: forceUser,
+		BaseDir:   baseDir,
+	})
+	if err != nil {
+		return "", err
+	}
+	*dir = sc.Dir()
+	return string(sc.Kind), nil
+}
 
 // NewKBCmd returns the `kb` cobra command tree — the host-agnostic entry
 // point a front end mounts (e.g. `bashy kb`).
 func NewKBCmd() *cobra.Command {
-	var dir string
+	var dir, baseDir string
+	var forceRepo, forceUser bool
 	cmd := &cobra.Command{
 		Use:   "kb",
-		Short: "Host-shared knowledge base for agents (search before a task, retro after)",
-		Long: `kb is the collective memory of all agents on this host, across all repos:
-a wiki of small markdown pages (YAML frontmatter + a distilled body) under
-~/.bashy/kb ($BASHY_KB_DIR to override), shared by every agent tool.
+		Short: "Knowledge base for agents — auto: repo docs/kb/ if in a git repo, else your host store",
+		Long: `kb is agent memory as a wiki of small markdown pages (YAML frontmatter + a
+distilled body). Like todo, the SCOPE is git-repo aware, so no flag is needed
+for the common case:
+
+  in a git repo   → THAT repo's docs/kb/ (committed, travels with the clone) —
+                    knowledge TRUE OF THIS REPO; the structured replacement for
+                    ad-hoc docs/*.md notes.
+  not in a repo   → the host store (~/.bashy/kb, $BASHY_KB_DIR to override) —
+                    cross-repo / this-machine knowledge, shared by every agent.
+
+Overrides: --base-dir <root> reads ANOTHER project's store (<root>/docs/kb/) so
+one agent can travel repos in a session; --user forces the host store even inside
+a repo; --repo forces the repo store; --dir <path> points at any store directly.
+'kb search --federate' additionally reads the current repo's graph/weave rings.
 
 The loop: SEARCH before undertaking a task; if nothing relevant, ADD a
 candidate entry; after the task, RETRO — validate or correct what you
@@ -50,9 +91,23 @@ Write distilled strategy, not transcripts. Capture failures as guardrails
 phrase it as "what + WHEN this applies" with trigger keywords.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Resolve the scope ONCE, before any subcommand runs, and populate `dir`
+		// so every subcommand's Open(*dir) lands on the right store. A header on
+		// stderr names WHICH store, so which kb you are on is never in doubt.
+		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
+			label, err := resolveKBDir(&dir, forceRepo, forceUser, baseDir)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(c.ErrOrStderr(), "kb [%s] %s\n", label, dir)
+			return nil
+		},
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.PersistentFlags().StringVar(&dir, "dir", "", "kb store directory (default $BASHY_KB_DIR, else ~/.bashy/kb)")
+	cmd.PersistentFlags().StringVar(&dir, "dir", "", "point at a kb store directory directly (bypasses scope detection)")
+	cmd.PersistentFlags().BoolVar(&forceRepo, "repo", false, "force THIS repo's committed store (docs/kb/); error if not in a git repo")
+	cmd.PersistentFlags().BoolVar(&forceUser, "user", false, "force the host store (~/.bashy/kb), even inside a repo")
+	cmd.PersistentFlags().StringVar(&baseDir, "base-dir", "", "read ANOTHER project root's store (<root>/docs/kb/) — travel repos without cd")
 
 	cmd.AddCommand(newSearchCmd(&dir))
 	cmd.AddCommand(newShowCmd(&dir))
