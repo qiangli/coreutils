@@ -15,38 +15,55 @@ import (
 	"github.com/qiangli/coreutils/pkg/issue"
 )
 
-// NewTodoCmd builds `bashy todo` — the host-scoped, personal task list. A single
-// --owner namespace lets one tool serve the steward (default), a conductor/fixer,
-// or a human without forking.
-func NewTodoCmd() *cobra.Command {
+// storeFunc resolves the store for the current scope (--owner / --repo).
+type storeFunc func() (*issue.Store, error)
+
+// NewTodoCmd builds `bashy todo` — the task list, in TWO scopes over one item model:
+//
+//	default   your personal, host-scoped list (~/.bashy/todo/<owner>/, not committed)
+//	--repo    THIS repo's committed list   (<repo>/.bashy/todo/, travels with the clone)
+//
+// One command; the scope is an explicit flag, never inferred from cwd (so a personal
+// note never lands in a repo's history by accident, or vice versa). repoRoot resolves
+// the repo for --repo; pass nil to disable that scope.
+func NewTodoCmd(repoRoot func() (string, error)) *cobra.Command {
 	var owner string
+	var repo bool
 	root := &cobra.Command{
 		Use:   "todo",
-		Short: "the host-scoped personal task list (steward / fixer / human)",
-		Long: "todo is level 1 of the tracking hierarchy — a per-host, per-user, NON-committed\n" +
-			"task list, the equivalent of a human's todo-list app. It complements the other\n" +
-			"two levels rather than replacing them:\n\n" +
-			"  issue   what is wrong/wanted, per repo, COMMITTED   (`bashy issue`)\n" +
-			"  sprint  what a conductor is planning across repos    (`bashy sprint`)\n" +
-			"  todo    what YOU/the steward are doing, per host      (this)\n\n" +
-			"It reuses the issue register's record format at home scope (~/.bashy/todo/<owner>/):\n" +
-			"YAML-frontmatter markdown, content-addressed ids, resolve-by-prefix. Statuses are a\n" +
-			"personal lifecycle: todo -> doing -> done (or blocked). Use --owner to keep separate\n" +
-			"lists (steward is the default; a fixer uses its run id; a human uses their own).",
+		Short: "the task list — personal (default) or --repo (committed)",
+		Long: "todo tracks work as simple items (todo -> doing -> done, or blocked) in one of\n" +
+			"two SCOPES, chosen by flag:\n\n" +
+			"  bashy todo …          your PERSONAL list, per host/user (~/.bashy/todo/<owner>/,\n" +
+			"                        NOT committed). Use --owner to keep separate lists (the\n" +
+			"                        steward is the default; a fixer uses its run id; a human\n" +
+			"                        uses their own).\n" +
+			"  bashy todo --repo …   THIS repo's COMMITTED list (<repo>/.bashy/todo/), which\n" +
+			"                        travels with the clone and shows up in diffs.\n\n" +
+			"The scope is always an explicit flag, never guessed from the working directory.\n\n" +
+			"Relation to the other trackers: `bashy sprint` is a TIME-BOX (a window grouping\n" +
+			"items); `bashy issue` is the FORMAL committed register (triage, kinds, weave\n" +
+			"linkage). todo is the lightweight everyday list — personal or checked in.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.PersistentFlags().StringVar(&owner, "owner", DefaultOwner, "task-list owner (steward | a fixer id | a human name)")
+	root.PersistentFlags().StringVar(&owner, "owner", DefaultOwner, "personal-list owner (steward | a fixer id | a human name)")
+	root.PersistentFlags().BoolVar(&repo, "repo", false, "use THIS repo's committed list (.bashy/todo/) instead of your personal list")
+
+	sf := func() (*issue.Store, error) {
+		st, _, err := ResolveStore(owner, repo, repoRoot)
+		return st, err
+	}
 
 	root.AddCommand(
-		newAddCmd(&owner),
-		newListCmd(&owner),
-		newShowCmd(&owner),
-		newStatusCmd(&owner),
-		newDoneCmd(&owner),
-		newStartCmd(&owner),
-		newEditCmd(&owner),
-		newRmCmd(&owner),
+		newAddCmd(sf),
+		newListCmd(sf),
+		newShowCmd(sf),
+		newStatusCmd(sf),
+		newDoneCmd(sf),
+		newStartCmd(sf),
+		newEditCmd(sf),
+		newRmCmd(sf),
 	)
 	return root
 }
@@ -60,7 +77,7 @@ func emitJSON(cmd *cobra.Command, v any) error {
 	return nil
 }
 
-func newAddCmd(owner *string) *cobra.Command {
+func newAddCmd(sf storeFunc) *cobra.Command {
 	var priority, note string
 	var jsonOut bool
 	cmd := &cobra.Command{
@@ -68,13 +85,16 @@ func newAddCmd(owner *string) *cobra.Command {
 		Short: "add a task to the list",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			title := strings.Join(args, " ")
-			it, err := Add(*owner, title, note, priority)
+			st, err := sf()
+			if err != nil {
+				return err
+			}
+			it, err := Add(st, strings.Join(args, " "), note, priority)
 			if err != nil {
 				return err
 			}
 			if jsonOut {
-				return emitJSON(cmd, map[string]any{"id": it.ID, "owner": SanitizeOwner(*owner), "status": it.Status, "title": it.Title})
+				return emitJSON(cmd, map[string]any{"id": it.ID, "status": it.Status, "title": it.Title})
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "added %s [%s] — %s\n", it.ID[:8], it.Status, it.Title)
 			return nil
@@ -86,7 +106,7 @@ func newAddCmd(owner *string) *cobra.Command {
 	return cmd
 }
 
-func newListCmd(owner *string) *cobra.Command {
+func newListCmd(sf storeFunc) *cobra.Command {
 	var status string
 	var jsonOut, all bool
 	cmd := &cobra.Command{
@@ -94,7 +114,11 @@ func newListCmd(owner *string) *cobra.Command {
 		Short: "list tasks (open by default; --all includes done)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			items, err := List(*owner, status)
+			st, err := sf()
+			if err != nil {
+				return err
+			}
+			items, err := List(st, status)
 			if err != nil {
 				return err
 			}
@@ -129,14 +153,14 @@ func newListCmd(owner *string) *cobra.Command {
 	return cmd
 }
 
-func newShowCmd(owner *string) *cobra.Command {
+func newShowCmd(sf storeFunc) *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "show <id|prefix>",
 		Short: "show one task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := Store(*owner)
+			st, err := sf()
 			if err != nil {
 				return err
 			}
@@ -167,13 +191,17 @@ func newShowCmd(owner *string) *cobra.Command {
 	return cmd
 }
 
-func newStatusCmd(owner *string) *cobra.Command {
+func newStatusCmd(sf storeFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status <id|prefix> <todo|doing|blocked|done>",
 		Short: "update a task's status",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			it, err := SetStatus(*owner, args[0], args[1])
+			st, err := sf()
+			if err != nil {
+				return err
+			}
+			it, err := SetStatus(st, args[0], args[1])
 			if err != nil {
 				return err
 			}
@@ -183,13 +211,17 @@ func newStatusCmd(owner *string) *cobra.Command {
 	}
 }
 
-func newDoneCmd(owner *string) *cobra.Command {
+func newDoneCmd(sf storeFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "done <id|prefix>",
 		Short: "mark a task done (alias for status done)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			it, err := SetStatus(*owner, args[0], StatusDone)
+			st, err := sf()
+			if err != nil {
+				return err
+			}
+			it, err := SetStatus(st, args[0], StatusDone)
 			if err != nil {
 				return err
 			}
@@ -199,13 +231,17 @@ func newDoneCmd(owner *string) *cobra.Command {
 	}
 }
 
-func newStartCmd(owner *string) *cobra.Command {
+func newStartCmd(sf storeFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "start <id|prefix>",
 		Short: "mark a task in progress (alias for status doing)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			it, err := SetStatus(*owner, args[0], StatusDoing)
+			st, err := sf()
+			if err != nil {
+				return err
+			}
+			it, err := SetStatus(st, args[0], StatusDoing)
 			if err != nil {
 				return err
 			}
@@ -215,14 +251,14 @@ func newStartCmd(owner *string) *cobra.Command {
 	}
 }
 
-func newEditCmd(owner *string) *cobra.Command {
+func newEditCmd(sf storeFunc) *cobra.Command {
 	var title, priority, note string
 	cmd := &cobra.Command{
 		Use:   "edit <id|prefix>",
 		Short: "modify a task's title/priority/note",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := Store(*owner)
+			st, err := sf()
 			if err != nil {
 				return err
 			}
@@ -252,13 +288,17 @@ func newEditCmd(owner *string) *cobra.Command {
 	return cmd
 }
 
-func newRmCmd(owner *string) *cobra.Command {
+func newRmCmd(sf storeFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "rm <id|prefix>",
 		Short: "remove a task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			it, err := Remove(*owner, args[0])
+			st, err := sf()
+			if err != nil {
+				return err
+			}
+			it, err := Remove(st, args[0])
 			if err != nil {
 				return err
 			}

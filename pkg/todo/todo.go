@@ -75,8 +75,15 @@ func SanitizeOwner(owner string) string {
 	return owner
 }
 
-// Store returns the issue-register store rooted at the owner's host-scoped subtree.
-func Store(owner string) (*issue.Store, error) {
+// RepoSub is the committed per-repo todo list's location — home of the SAME record
+// format and vocabulary as the personal list, but inside the repo (travels with the
+// clone). Deliberately distinct from issue's `.bashy/issues/` (the FORMAL register
+// with triage/kinds/weave-linkage): `todo --repo` is the lightweight checked-in list,
+// issue is the formal one. One command, two scopes; two levels of formality.
+const RepoSub = ".bashy/todo"
+
+// UserStore returns the host-scoped personal store (~/.bashy/todo/<owner>/).
+func UserStore(owner string) (*issue.Store, error) {
 	root, err := Root()
 	if err != nil {
 		return nil, err
@@ -84,17 +91,39 @@ func Store(owner string) (*issue.Store, error) {
 	return &issue.Store{Root: root, Sub: SanitizeOwner(owner)}, nil
 }
 
-// Add files a new todo item (status: todo) for owner. It files via the store's Save
-// directly rather than issue.Add, because the committed register deliberately births
-// every issue "open" (triage is a separate act) — a personal todo has no triage step,
-// so it is born ready in its own vocabulary.
-func Add(owner, title, body, priority string) (*issue.Issue, error) {
+// RepoStore returns the committed per-repo store (<repoRoot>/.bashy/todo/).
+func RepoStore(repoRoot string) *issue.Store {
+	return &issue.Store{Root: repoRoot, Sub: RepoSub}
+}
+
+// ResolveStore picks the store for the requested scope. When repo is true, repoRoot
+// is consulted to locate the committed list; otherwise the personal owner list is
+// used. It returns the store and a short human label for the scope.
+func ResolveStore(owner string, repo bool, repoRoot func() (string, error)) (*issue.Store, string, error) {
+	if repo {
+		if repoRoot == nil {
+			return nil, "", fmt.Errorf("--repo is not available here")
+		}
+		r, err := repoRoot()
+		if err != nil {
+			return nil, "", err
+		}
+		return RepoStore(r), "repo " + r, nil
+	}
+	st, err := UserStore(owner)
+	if err != nil {
+		return nil, "", err
+	}
+	return st, "user " + SanitizeOwner(owner), nil
+}
+
+// Add files a new todo item (status: todo) into the given store. It files via Save
+// directly rather than issue.Add, because the committed issue REGISTER deliberately
+// births every issue "open" (triage is a separate act) — a todo, personal or checked
+// in, has no triage step, so it is born ready in its own vocabulary.
+func Add(st *issue.Store, title, body, priority string) (*issue.Issue, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("a title is required")
-	}
-	st, err := Store(owner)
-	if err != nil {
-		return nil, err
 	}
 	it := &issue.Issue{
 		ID:       issue.NewID(),
@@ -112,13 +141,9 @@ func Add(owner, title, body, priority string) (*issue.Issue, error) {
 }
 
 // SetStatus moves an item to a new status (done stamps Closed).
-func SetStatus(owner, ref, status string) (*issue.Issue, error) {
+func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 	if !ValidStatus(status) {
 		return nil, fmt.Errorf("unknown status %q (want one of: %s)", status, strings.Join(statuses, ", "))
-	}
-	st, err := Store(owner)
-	if err != nil {
-		return nil, err
 	}
 	it, err := st.Resolve(ref)
 	if err != nil {
@@ -138,11 +163,7 @@ func SetStatus(owner, ref, status string) (*issue.Issue, error) {
 }
 
 // Remove drops an item outright.
-func Remove(owner, ref string) (*issue.Issue, error) {
-	st, err := Store(owner)
-	if err != nil {
-		return nil, err
-	}
+func Remove(st *issue.Store, ref string) (*issue.Issue, error) {
 	it, err := st.Resolve(ref)
 	if err != nil {
 		return nil, err
@@ -150,12 +171,8 @@ func Remove(owner, ref string) (*issue.Issue, error) {
 	return it, st.Remove(it)
 }
 
-// List returns an owner's items, newest first, optionally filtered by status.
-func List(owner, status string) ([]*issue.Issue, error) {
-	st, err := Store(owner)
-	if err != nil {
-		return nil, err
-	}
+// List returns a store's items, newest first, optionally filtered by status.
+func List(st *issue.Store, status string) ([]*issue.Issue, error) {
 	all, err := st.List()
 	if err != nil {
 		return nil, err
