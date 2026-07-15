@@ -40,6 +40,21 @@ func NewCommand() *cobra.Command {
 			return runServe(cmd.Context(), opts)
 		},
 	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "ui",
+		Short: "Print the observability web UIs (traces / logs / metrics)",
+		Long: "Print the human-facing Victoria vmui URLs served by a running `otel serve`.\n" +
+			"These are the RICH explorer views — trace waterfalls, log search, metric\n" +
+			"graphs — as opposed to the agent-facing `otel failed/guessed/bounds` summaries.\n" +
+			"Filter by service.name + trace_id in each UI to follow one session end to end.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			base := fmt.Sprintf("http://127.0.0.1:%d", opts.ProxyPort)
+			fmt.Fprintf(cmd.OutOrStdout(), "traces   %s/traces/select/vmui/\n", base)
+			fmt.Fprintf(cmd.OutOrStdout(), "logs     %s/logs/select/vmui/\n", base)
+			fmt.Fprintf(cmd.OutOrStdout(), "metrics  %s/metrics/vmui/\n", base)
+			return nil
+		},
+	})
 	return cmd
 }
 
