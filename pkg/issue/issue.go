@@ -99,6 +99,13 @@ type Issue struct {
 	Kind  string `yaml:"kind" json:"kind"`
 	Title string `yaml:"title" json:"title"`
 
+	// Seq is a stable, human-friendly running number within a store (like an issue
+	// number: #1, #2, …), assigned on creation and never reused. The content-addressed
+	// ID stays the canonical identity; Seq is the short handle a human types to
+	// reference an item ("todo show 3"). 0 means unassigned (legacy items get one
+	// backfilled in creation order).
+	Seq int `yaml:"seq,omitempty" json:"seq,omitempty"`
+
 	Status string `yaml:"status" json:"status"`
 	// Stage is the SDLC stage the WORK will belong to, using the atlas vocabulary
 	// (plan|code|test|deploy). Set at triage: deciding what part of the lifecycle an

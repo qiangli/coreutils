@@ -23,6 +23,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,9 +130,14 @@ func Add(st *issue.Store, title, body, priority string) (*issue.Issue, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("a title is required")
 	}
+	next := 1
+	if m, err := MaxSeq(st); err == nil {
+		next = m + 1
+	}
 	it := &issue.Issue{
 		ID:       issue.NewID(),
 		Kind:     issue.KindTask,
+		Seq:      next,
 		Title:    title,
 		Body:     body,
 		Priority: priority,
@@ -143,12 +150,79 @@ func Add(st *issue.Store, title, body, priority string) (*issue.Issue, error) {
 	return it, nil
 }
 
+// MaxSeq is the highest running number assigned in the store (0 if none).
+func MaxSeq(st *issue.Store) (int, error) {
+	items, err := st.List()
+	if err != nil {
+		return 0, err
+	}
+	max := 0
+	for _, it := range items {
+		if it.Seq > max {
+			max = it.Seq
+		}
+	}
+	return max, nil
+}
+
+// EnsureSeq backfills a stable running number onto any items that predate the Seq
+// field, in creation order, so a store always shows consistent numbers. Idempotent —
+// a no-op once every item has one.
+func EnsureSeq(st *issue.Store) error {
+	items, err := st.List()
+	if err != nil {
+		return err
+	}
+	max := 0
+	var missing []*issue.Issue
+	for _, it := range items {
+		if it.Seq > max {
+			max = it.Seq
+		}
+		if it.Seq == 0 {
+			missing = append(missing, it)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Slice(missing, func(i, j int) bool { return missing[i].Created.Before(missing[j].Created) })
+	for _, it := range missing {
+		max++
+		it.Seq = max
+		if _, err := st.Save(it); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ResolveRef resolves a reference that may be a running NUMBER (Seq, e.g. "3") or a
+// content-id PREFIX (git-style, e.g. "a1148df4"). A bare positive integer is tried as
+// a number first — the short handle a human reads off `todo list`.
+func ResolveRef(st *issue.Store, ref string) (*issue.Issue, error) {
+	ref = strings.TrimSpace(ref)
+	if n, err := strconv.Atoi(ref); err == nil && n > 0 {
+		items, err := st.List()
+		if err != nil {
+			return nil, err
+		}
+		for _, it := range items {
+			if it.Seq == n {
+				return it, nil
+			}
+		}
+		return nil, fmt.Errorf("no task with number %d (run `bashy todo list`)", n)
+	}
+	return st.Resolve(ref)
+}
+
 // SetStatus moves an item to a new status (done stamps Closed).
 func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 	if !ValidStatus(status) {
 		return nil, fmt.Errorf("unknown status %q (want one of: %s)", status, strings.Join(statuses, ", "))
 	}
-	it, err := st.Resolve(ref)
+	it, err := ResolveRef(st, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +241,7 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 
 // Remove drops an item outright.
 func Remove(st *issue.Store, ref string) (*issue.Issue, error) {
-	it, err := st.Resolve(ref)
+	it, err := ResolveRef(st, ref)
 	if err != nil {
 		return nil, err
 	}

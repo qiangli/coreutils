@@ -57,7 +57,14 @@ func NewTodoCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&baseDir, "base-dir", "", "show the list of ANOTHER project root (<root>/docs/todo/) — travel repos without cd")
 
 	sf := func() (*issue.Store, string, error) {
-		return ResolveStore(owner, forceRepo, forceUser, baseDir)
+		st, label, err := ResolveStore(owner, forceRepo, forceUser, baseDir)
+		if err != nil {
+			return nil, "", err
+		}
+		// Assign stable running numbers to any legacy items, once, so every command
+		// (list, show 3, done 3, …) sees consistent handles. Best-effort.
+		_ = EnsureSeq(st)
+		return st, label, nil
 	}
 
 	root.AddCommand(
@@ -161,10 +168,12 @@ func newListCmd(sf storeFunc) *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tSTATUS\tPRIO\tAGE\tTITLE")
+			// #  is the stable running number — the short handle for `todo show 3`,
+			// `todo done 3`, etc. ID stays for scripts / cross-tool references.
+			fmt.Fprintln(w, "#\tID\tSTATUS\tPRIO\tAGE\tTITLE")
 			for _, it := range items {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					it.ID[:8], it.Status, dash(it.Priority), age(it.Created), trunc(it.Title, 60))
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
+					it.Seq, it.ID[:8], it.Status, dash(it.Priority), age(it.Created), trunc(it.Title, 60))
 			}
 			return w.Flush()
 		},
@@ -186,7 +195,7 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			it, err := st.Resolve(args[0])
+			it, err := ResolveRef(st, args[0])
 			if err != nil {
 				return err
 			}
@@ -194,7 +203,7 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 				return emitJSON(cmd, it)
 			}
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "%s  %s\n\n", it.ID, it.Title)
+			fmt.Fprintf(w, "#%d  %s  %s\n\n", it.Seq, it.ID, it.Title)
 			fmt.Fprintf(w, "  status    %s\n", it.Status)
 			if it.Priority != "" {
 				fmt.Fprintf(w, "  priority  %s\n", it.Priority)
@@ -284,7 +293,7 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			it, err := st.Resolve(args[0])
+			it, err := ResolveRef(st, args[0])
 			if err != nil {
 				return err
 			}
