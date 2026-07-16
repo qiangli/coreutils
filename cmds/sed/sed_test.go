@@ -83,6 +83,15 @@ func TestSedEREMode(t *testing.T) {
 	if out, _, _ := runSed(t, "sword word words\n", "-E", `s/\<word\>/X/g`); out != "sword X words\n" {
 		t.Errorf(`-E s/\<word\>/X/g = %q, want sword X words`, out)
 	}
+	if out, _, _ := runSed(t, "aa\nab\n", "-E", `s/(a)\1/X/`); out != "X\nab\n" {
+		t.Errorf(`-E s/(a)\1/X/ = %q, want X then ab`, out)
+	}
+	if out, _, _ := runSed(t, ".\n\\\na\n", "-E", `s/[\.]/X/`); out != "X\nX\na\n" {
+		t.Errorf(`-E s/[\.]/X/ = %q, want dot and backslash replaced`, out)
+	}
+	if out, _, _ := runSed(t, "e\nx\n", "-E", `s/[[=e=]]/X/`); out != "X\nx\n" {
+		t.Errorf(`-E s/[[=e=]]/X/ = %q, want e replaced`, out)
+	}
 }
 
 func TestSedCaseInsensitiveFlag(t *testing.T) {

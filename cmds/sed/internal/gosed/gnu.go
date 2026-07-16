@@ -11,7 +11,6 @@
 package gosed
 
 import (
-	"regexp"
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/bre"
@@ -44,11 +43,7 @@ func compileRE(pattern, flags string) (sedRegexp, error) {
 	pattern = bre.SedEscapes(pattern)
 	flags = sedFlags(flags)
 	if ExtendedRegex {
-		translated, err := bre.ToGoERE(pattern)
-		if err != nil {
-			return nil, err
-		}
-		re, err := regexp.Compile(flags + translated)
+		re, err := bre.CompileEREWithFlags(pattern, flags)
 		if err != nil {
 			return nil, err
 		}

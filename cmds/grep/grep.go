@@ -6,12 +6,9 @@
 //   - Default (BRE) is translated construct-by-construct — see bre.go.
 //     Patterns without back-references use RE2; patterns with \1..\9 use
 //     pkg/bre's bounded backtracking matcher.
-//   - -E (ERE): Go regexp syntax is a near-superset of POSIX ERE, so
-//     patterns pass through after rejecting back-references and \< \>.
-//     Corner deviations from GNU: a malformed interval such as "a{1,"
-//     is a compile error here where GNU falls back to a literal; and
-//     escape handling inside bracket expressions follows RE2, not
-//     POSIX (where backslash is literal inside [...]).
+//   - -E (ERE): patterns without back-references use RE2 after translation of
+//     POSIX bracket expressions and GNU word-edge anchors; patterns with
+//     \1..\9 use pkg/bre's bounded backtracking matcher.
 //   - -F: fixed strings.
 //
 // Binary files (NUL byte within the first 32 KiB) print one
@@ -326,6 +323,36 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase, longest 
 			return out, nil
 		}
 	}
+	if !fixed && extended {
+		needBRE := false
+		for _, p := range pats {
+			if ereNeedsPackageMatcher(p) {
+				needBRE = true
+				break
+			}
+		}
+		if needBRE {
+			out := make(multiMatcher, 0, len(pats))
+			for _, p := range pats {
+				if lineRe {
+					p = "^" + p + "$"
+				}
+				flags := ""
+				if ignoreCase {
+					flags = "(?i)"
+				}
+				re, err := bre.CompileEREWithFlags(p, flags)
+				if err != nil {
+					return nil, err
+				}
+				if longest {
+					re.Longest()
+				}
+				out = append(out, re)
+			}
+			return out, nil
+		}
+	}
 	parts := make([]string, 0, len(pats))
 	for _, p := range pats {
 		switch {
@@ -373,6 +400,37 @@ func breNeedsPackageMatcher(p string) bool {
 				return true
 			}
 			i++
+		}
+	}
+	return false
+}
+
+func ereNeedsPackageMatcher(p string) bool {
+	inBracket := false
+	firstBracket := false
+	for i := 0; i+1 < len(p); i++ {
+		switch p[i] {
+		case '[':
+			if !inBracket {
+				inBracket = true
+				firstBracket = true
+			}
+		case ']':
+			if inBracket && !firstBracket {
+				inBracket = false
+			}
+			firstBracket = false
+		case '\\':
+			if !inBracket {
+				n := p[i+1]
+				if n >= '1' && n <= '9' {
+					return true
+				}
+				i++
+			}
+			firstBracket = false
+		default:
+			firstBracket = false
 		}
 	}
 	return false

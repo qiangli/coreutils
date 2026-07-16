@@ -30,7 +30,7 @@ func Compile(pattern string) (*Regexp, error) {
 		}
 		return &Regexp{re: re}, nil
 	}
-	bt, err := compileBackref(pattern, "")
+	bt, err := compileBackref(pattern, "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,29 @@ func CompileWithFlags(pattern, flags string) (*Regexp, error) {
 		}
 		return &Regexp{re: re}, nil
 	}
-	bt, err := compileBackref(pattern, flags)
+	bt, err := compileBackref(pattern, flags, false)
+	if err != nil {
+		return nil, err
+	}
+	return &Regexp{bt: bt}, nil
+}
+
+// CompileEREWithFlags compiles a POSIX extended regular expression with an
+// optional RE2-style flag prefix. EREs without back-references stay on RE2;
+// EREs with GNU/POSIX-style \1..\9 use this package's bounded backtracker.
+func CompileEREWithFlags(pattern, flags string) (*Regexp, error) {
+	if !needsEREBacktrack(pattern) {
+		t, err := ToGoERE(pattern)
+		if err != nil {
+			return nil, err
+		}
+		re, err := regexp.Compile(flags + t)
+		if err != nil {
+			return nil, err
+		}
+		return &Regexp{re: re}, nil
+	}
+	bt, err := compileBackref(pattern, flags, true)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +144,37 @@ func needsBacktrack(p string) bool {
 				return true
 			}
 			i++
+		}
+	}
+	return false
+}
+
+func needsEREBacktrack(p string) bool {
+	inBracket := false
+	firstBracket := false
+	for i := 0; i+1 < len(p); i++ {
+		switch p[i] {
+		case '[':
+			if !inBracket {
+				inBracket = true
+				firstBracket = true
+			}
+		case ']':
+			if inBracket && !firstBracket {
+				inBracket = false
+			}
+			firstBracket = false
+		case '\\':
+			if !inBracket {
+				n := p[i+1]
+				if n >= '1' && n <= '9' {
+					return true
+				}
+				i++
+			}
+			firstBracket = false
+		default:
+			firstBracket = false
 		}
 	}
 	return false
@@ -431,15 +484,16 @@ type parser struct {
 	groups     int
 	ignoreCase bool
 	dotAll     bool
+	extended   bool
 }
 
-func compileBackref(pattern, flags string) (*btProg, error) {
+func compileBackref(pattern, flags string, extended bool) (*btProg, error) {
 	// flags is an RE2 flag prefix ("", "(?i)", "(?is)", …) — the same string the
 	// RE2 path prepends to its translated pattern, read here for the engine's
 	// own nodes.
 	ignoreCase := strings.Contains(flags, "i")
 	dotAll := strings.Contains(flags, "s")
-	p := &parser{p: pattern, ignoreCase: ignoreCase, dotAll: dotAll}
+	p := &parser{p: pattern, ignoreCase: ignoreCase, dotAll: dotAll, extended: extended}
 	root, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -467,8 +521,11 @@ func (p *parser) parseExpr() (btNode, error) {
 			return nil, err
 		}
 		alts = append(alts, seq)
-		if p.i+1 < len(p.p) && p.p[p.i] == '\\' && p.p[p.i+1] == '|' {
+		if p.isAlt() {
 			p.i += 2
+			if p.extended {
+				p.i--
+			}
 			continue
 		}
 		break
@@ -483,7 +540,7 @@ func (p *parser) parseSeq() (btNode, error) {
 	var nodes []btNode
 	state := posStart
 	for p.i < len(p.p) {
-		if p.p[p.i] == '\\' && p.i+1 < len(p.p) && (p.p[p.i+1] == ')' || p.p[p.i+1] == '|') {
+		if p.endsSeq() {
 			break
 		}
 		atom, nextState, quantifiable, err := p.parseAtom(state)
@@ -511,7 +568,7 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 		}
 		n := p.p[p.i+1]
 		switch {
-		case n == '(':
+		case n == '(' && !p.extended:
 			p.i += 2
 			p.groups++
 			num := p.groups
@@ -527,6 +584,9 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 			}
 			p.i += 2
 			return groupNode{num: num, child: child}, posAtom, true, nil
+		case n == ')' && !p.extended:
+			p.i += 2
+			return literalNode{lit: ")", ignoreCase: p.ignoreCase}, posAtom, true, nil
 		case n >= '1' && n <= '9':
 			p.i += 2
 			num := int(n - '0')
@@ -544,13 +604,44 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 			p.i += 2
 			return builtinClassNode(n), posAtom, true, nil
 		case n == '{':
+			if p.extended {
+				p.i += 2
+				return literalNode{lit: "{", ignoreCase: p.ignoreCase}, posAtom, true, nil
+			}
 			return nil, state, false, fmt.Errorf("\\{ with nothing to repeat")
 		case n == '}':
+			if p.extended {
+				p.i += 2
+				return literalNode{lit: "}", ignoreCase: p.ignoreCase}, posAtom, true, nil
+			}
 			return nil, state, false, fmt.Errorf("unmatched \\}")
 		default:
 			p.i += 2
 			return literalNode{lit: string(n), ignoreCase: p.ignoreCase}, posAtom, true, nil
 		}
+	case '(':
+		if p.extended {
+			p.i++
+			p.groups++
+			num := p.groups
+			if num > 9 {
+				return nil, state, false, fmt.Errorf("too many capture groups for ERE back-reference matcher")
+			}
+			child, err := p.parseExpr()
+			if err != nil {
+				return nil, state, false, err
+			}
+			if p.i >= len(p.p) || p.p[p.i] != ')' {
+				return nil, state, false, fmt.Errorf("unmatched (")
+			}
+			p.i++
+			return groupNode{num: num, child: child}, posAtom, true, nil
+		}
+		p.i++
+		return literalNode{lit: "(", ignoreCase: p.ignoreCase}, posAtom, true, nil
+	case ')':
+		p.i++
+		return literalNode{lit: ")", ignoreCase: p.ignoreCase}, posAtom, true, nil
 	case '.':
 		p.i++
 		return dotNode{dotAll: p.dotAll}, posAtom, true, nil
@@ -583,6 +674,9 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 	case '*':
 		p.i++
 		return literalNode{lit: "*", ignoreCase: p.ignoreCase}, posAtom, true, nil
+	case '+', '?', '{', '}', '|':
+		p.i++
+		return literalNode{lit: string(c), ignoreCase: p.ignoreCase}, posAtom, true, nil
 	default:
 		p.i++
 		return literalNode{lit: string(c), ignoreCase: p.ignoreCase}, posAtom, true, nil
@@ -590,8 +684,13 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 }
 
 func (p *parser) dollarAnchors() bool {
-	return p.i == len(p.p) ||
-		(p.i+1 < len(p.p) && p.p[p.i] == '\\' && (p.p[p.i+1] == ')' || p.p[p.i+1] == '|'))
+	if p.i == len(p.p) {
+		return true
+	}
+	if p.extended {
+		return p.p[p.i] == ')' || p.p[p.i] == '|'
+	}
+	return p.i+1 < len(p.p) && p.p[p.i] == '\\' && (p.p[p.i+1] == ')' || p.p[p.i+1] == '|')
 }
 
 func (p *parser) parseQuant(atom btNode) (btNode, error) {
@@ -601,6 +700,33 @@ func (p *parser) parseQuant(atom btNode) (btNode, error) {
 	if p.p[p.i] == '*' {
 		p.i++
 		return repeatNode{child: atom, min: 0, max: -1}, nil
+	}
+	if p.extended {
+		switch p.p[p.i] {
+		case '+':
+			p.i++
+			return repeatNode{child: atom, min: 1, max: -1}, nil
+		case '?':
+			p.i++
+			return repeatNode{child: atom, min: 0, max: 1}, nil
+		case '{':
+			end := strings.IndexByte(p.p[p.i+1:], '}')
+			if end < 0 {
+				return nil, fmt.Errorf("unmatched {")
+			}
+			inner := p.p[p.i+1 : p.i+1+end]
+			norm, ok := normalizeInterval(inner)
+			if !ok {
+				return nil, fmt.Errorf("invalid interval {%s}", inner)
+			}
+			min, max, err := parseInterval(norm)
+			if err != nil {
+				return nil, err
+			}
+			p.i += 1 + end + 1
+			return repeatNode{child: atom, min: min, max: max}, nil
+		}
+		return atom, nil
 	}
 	if p.p[p.i] != '\\' || p.i+1 >= len(p.p) {
 		return atom, nil
@@ -630,6 +756,20 @@ func (p *parser) parseQuant(atom btNode) (btNode, error) {
 		return repeatNode{child: atom, min: min, max: max}, nil
 	}
 	return atom, nil
+}
+
+func (p *parser) isAlt() bool {
+	if p.extended {
+		return p.i < len(p.p) && p.p[p.i] == '|'
+	}
+	return p.i+1 < len(p.p) && p.p[p.i] == '\\' && p.p[p.i+1] == '|'
+}
+
+func (p *parser) endsSeq() bool {
+	if p.extended {
+		return p.p[p.i] == ')' || p.p[p.i] == '|'
+	}
+	return p.p[p.i] == '\\' && p.i+1 < len(p.p) && (p.p[p.i+1] == ')' || p.p[p.i+1] == '|')
 }
 
 func parseInterval(s string) (int, int, error) {
