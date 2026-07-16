@@ -22,6 +22,12 @@ import (
 // label so every command can print WHICH list it is acting on.
 type storeFunc func() (*issue.Store, string, error)
 
+// itemJSON wraps an issue for JSON output, computing the overdue flag.
+type itemJSON struct {
+	*issue.Issue
+	Overdue bool `json:"overdue"`
+}
+
 // NewTodoCmd builds `bashy todo` — the task list over one item model. The scope is
 // AUTO-DETECTED so an agent can just `bashy todo add …` and it lands correctly:
 //
@@ -171,7 +177,11 @@ func newListCmd(sf storeFunc) *cobra.Command {
 				slices.Reverse(items)
 			}
 			if jsonOut {
-				return emitJSON(cmd, items)
+				out := make([]itemJSON, 0, len(items))
+				for _, it := range items {
+					out = append(out, itemJSON{Issue: it, Overdue: IsOverdue(it)})
+				}
+				return emitJSON(cmd, out)
 			}
 			// The header names WHICH list — auto-detected scope + exact folder — so
 			// there is never confusion about where these tasks live.
@@ -199,10 +209,9 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			for _, it := range items {
 				dueStr := "-"
 				if it.Due != nil {
-					if it.Due.Before(time.Now().UTC()) {
-						dueStr = "!" + it.Due.Format("2006-01-02")
-					} else {
-						dueStr = it.Due.Format("2006-01-02")
+					dueStr = it.Due.Format("2006-01-02")
+					if IsOverdue(it) {
+						dueStr += " (OVERDUE)"
 					}
 				}
 				row := fmt.Sprintf("%d\t%s\t%s\t%s\t%s\t%s",
@@ -239,7 +248,7 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 				return err
 			}
 			if jsonOut {
-				return emitJSON(cmd, it)
+				return emitJSON(cmd, itemJSON{Issue: it, Overdue: IsOverdue(it)})
 			}
 			w := cmd.OutOrStdout()
 			fmt.Fprintf(w, "#%d  %s  %s\n\n", it.Seq, it.ID, it.Title)
@@ -252,7 +261,11 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 				fmt.Fprintf(w, "  done      %s\n", it.Closed.Format(time.RFC3339))
 			}
 			if it.Due != nil {
-				fmt.Fprintf(w, "  due       %s\n", it.Due.Format(time.RFC3339))
+				dueLine := it.Due.Format(time.RFC3339)
+				if IsOverdue(it) {
+					dueLine += " (OVERDUE)"
+				}
+				fmt.Fprintf(w, "  due       %s\n", dueLine)
 			}
 			if it.Recurring != "" {
 				fmt.Fprintf(w, "  recurring %s\n", it.Recurring)

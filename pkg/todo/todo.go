@@ -266,6 +266,15 @@ func Remove(st *issue.Store, ref string) (*issue.Issue, error) {
 	return it, st.Remove(it)
 }
 
+// IsOverdue reports whether an item's due date is in the past. Done items are
+// never overdue, and a nil due date is never overdue.
+func IsOverdue(it *issue.Issue) bool {
+	if it.Status == StatusDone || it.Due == nil {
+		return false
+	}
+	return it.Due.Before(time.Now().UTC())
+}
+
 // List returns a store's items in SEQUENTIAL order — by running number ascending
 // (#1, #2, …), i.e. oldest first / creation order — optionally filtered by status.
 // The CLI's --reverse flips it to newest-first.
