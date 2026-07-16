@@ -170,7 +170,7 @@ func TestCommandSurfaceIncludesTriggerEntrypoint(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		have[c.Name()] = true
 	}
-	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard", "workspace", "publish", "pages"} {
+	for _, name := range []string{"guide", "init", "doctor", "config", "status", "issue", "brief", "delegate", "tick", "runs", "watch", "changes", "qa", "approve", "rollout", "resolve", "verify", "deploy-status", "guard", "workspace", "publish", "pages"} {
 		if !have[name] {
 			t.Fatalf("missing subcommand %q", name)
 		}
