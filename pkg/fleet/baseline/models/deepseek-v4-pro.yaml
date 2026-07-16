@@ -2,8 +2,20 @@ name: deepseek-v4-pro
 family: deepseek
 version: "4"
 band: 3
-band_source: declared
-# UNTESTED at L3. The vendor's reasoning tier; nobody has run it as a conductor. First candidate for the ladder bake-off.
+band_source: measured
+# L3 CONFIRMED across two harnesses, both as a conductor.
+#   opencode (2026-07): 1.2x repeat ratio, decomposed and delegated unprompted — the L3
+#     signal glm-5.2 lacks (glm is L2 precisely because it cannot converge).
+#   ycode (2026-07-16): converges the conductor gate GREEN (0->4 tool calls) once the
+#     reasoning-model turn-stall was fixed (ycode api: flush thinking + tool calls at stream
+#     boundaries). BEFORE the fix it made 0 tool calls and looked incapable — that was a
+#     HARNESS bug, not the model. The stall is the reason this line said "UNTESTED": the
+#     bake-off could not run it until the pairing bug was fixed.
+#
+#   CAVEAT — route it CONDUCTOR, not STEWARD. As a ycode steward on a review-and-decide task
+#   it drove tools (0->5) but timed out at 300s before emitting a DECISION line. It is a
+#   verbose reasoner: give it a generous budget, and prefer it where the task converges on a
+#   gate (conductor) over where it converges on a judgment call under a clock (steward).
 display: DeepSeek V4 Pro
 provider: openai-compat
 kind: api
