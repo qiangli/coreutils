@@ -31,6 +31,15 @@ cli:
     # them precisely so they cannot drift — which it duly caught when I put the
     # flag after `prompt` here and prepended it there.
     exec: ycode --danger-skip-permissions prompt --model {model} --print {prompt}
+    # Context-inheriting fork (`delegate self`). ycode's `--fork <id>` branches a NEW
+    # session from an existing one — it loads the source session's messages into a
+    # fresh id (source untouched), so the spawn inherits the full transcript — then
+    # --print runs the directive headless and exits (safe to background). This is the
+    # first-party fork paying off. Requires the session id (YCODE_SESSION_ID, exported
+    # by a running ycode). {model} is optional (drops out to inherit).
+    fork_exec: ycode --danger-skip-permissions --fork {session} prompt --model {model} --print {prompt}
+    session_env:
+      - YCODE_SESSION_ID
     prompt_position: last
     trust_preseed: none
     # Bare `ycode` is the interactive bubbletea TUI — the same shape as codex and
