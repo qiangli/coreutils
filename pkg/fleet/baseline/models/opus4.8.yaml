@@ -1,9 +1,12 @@
 name: opus4.8
 family: opus
 version: "4.8"
-band: 4
+band: 3
 band_source: operator
-# operator: serves BOTH conductor and steward
+# operator: L3 (thinking/premium). Fable5 (the Claude-5-family frontier) is the
+# sole L4; Opus 4.8 is the previous-gen frontier — a clean one-model-per-band
+# claude ladder (haiku L1, sonnet L2, opus L3, fable L4). Serves conductor and
+# high-L3 steward work.
 display: Claude Opus 4.8
 provider: anthropic
 kind: subscription
