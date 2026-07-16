@@ -4,6 +4,7 @@
 package todo
 
 import (
+	"bytes"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -201,9 +202,18 @@ func TestListShowsOverdueMarker(t *testing.T) {
 		t.Fatal("future task should not be overdue")
 	}
 
-	// Verify marker appears in list output by inspecting the dueStr logic
-	dueStr := overdueItem.Due.Format("2006-01-02") + " (OVERDUE)"
-	if !strings.Contains(dueStr, "(OVERDUE)") {
-		t.Fatal("overdue dueStr should contain (OVERDUE)")
+	// Verify the marker actually appears in the RENDERED list output — invoke the
+	// real list command, not a re-implementation of its logic. Exactly the one
+	// overdue item must be marked (the future item must not).
+	var buf bytes.Buffer
+	lc := newListCmd(func() (*issue.Store, string, error) { return st, "test", nil })
+	lc.SetOut(&buf)
+	lc.SetArgs(nil)
+	if err := lc.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if n := strings.Count(out, "(OVERDUE)"); n != 1 {
+		t.Fatalf("list output should mark exactly the one overdue item, got %d markers:\n%s", n, out)
 	}
 }
