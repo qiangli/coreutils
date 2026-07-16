@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -138,7 +139,7 @@ func PollGitHubIssueChanges(ctx context.Context, opt IssueChangesOptions) ([]Iss
 		watermark := state.Repositories[repo][key]
 		path := fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=100", repo, number)
 		if !watermark.CreatedAt.IsZero() {
-			path += "&since=" + watermark.CreatedAt.UTC().Format(time.RFC3339)
+			path += "&since=" + url.QueryEscape(watermark.CreatedAt.UTC().Format(time.RFC3339))
 		}
 		var comments []githubIssueComment
 		if err := githubJSON(ctx, "GET", path, token, nil, &comments); err != nil {
