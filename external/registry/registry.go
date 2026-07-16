@@ -44,6 +44,11 @@ type Entry struct {
 	// ExecEnv optionally augments the child env (e.g. a DKS kubeconfig default);
 	// nil = inherit the parent env.
 	ExecEnv func() []string
+	// PreferHost uses the host's own install (exec.LookPath) AHEAD of any managed
+	// download — for tools whose vendor installer + self-update is the trusted path
+	// and which bashy must not TOFU-download (e.g. gcloud's Python Cloud SDK). Only
+	// consulted when no version is pinned; a pinned version forces the managed copy.
+	PreferHost bool
 }
 
 // Ensure provisions the tool (cache-first: an already-downloaded copy is used
@@ -55,6 +60,14 @@ func (e Entry) Ensure(ctx context.Context) (string, error) {
 		version = strings.TrimSpace(os.Getenv(e.EnvVersion))
 	}
 	if version == "" {
+		// PreferHost: the vendor install + its own self-update is the trusted path
+		// (bashy must not TOFU-download a large unsigned SDK), so a host copy wins
+		// over any managed one when no version is pinned.
+		if e.PreferHost {
+			if p, err := exec.LookPath(e.Name); err == nil {
+				return p, nil
+			}
+		}
 		if p := binmgr.CachedBinary(e.Name); p != "" {
 			return p, nil
 		}
