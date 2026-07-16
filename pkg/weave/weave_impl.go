@@ -780,6 +780,62 @@ func weaveEnsureSyncedClone(orig, dst string) error {
 	return nil
 }
 
+// weaveHydrateSubmodules populates the workspace's git submodules from the LOCAL
+// origin — offline, fast, and local-first — instead of their network URLs.
+//
+// `git clone --local` (how a workspace is made) does NOT recurse submodules, so a
+// repo whose go.mod `replace`s point into a submodule can't build until the
+// submodule working trees exist. coreutils is exactly this case
+// (external/ollama/src, external/podman/src), and an empty submodule was the
+// blocker that stopped it from self-repairing: the full gate died reading a
+// missing external/ollama/src/go.mod.
+//
+// For each declared submodule whose tree the origin already has, we point the
+// submodule URL at the origin's populated working tree and update from there;
+// protocol.file.allow=always is required because git blocks the file:// transport
+// for submodules by default (CVE-2022-39253). A submodule the origin lacks is
+// left to its .gitmodules URL (network fallback). Afterwards `submodule sync`
+// resets the URLs to their canonical .gitmodules values, so the local-origin path
+// is not left as a breadcrumb an escaping agent could follow back (mirroring the
+// `git remote remove origin` isolation above).
+func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
+	if _, err := os.Stat(filepath.Join(workspace, ".gitmodules")); err != nil {
+		return nil // no submodules — nothing to hydrate
+	}
+	listed, err := exec.Command("git", "-C", workspace, "config", "-f", ".gitmodules",
+		"--get-regexp", `^submodule\..*\.path$`).Output()
+	if err != nil {
+		return nil // unparseable .gitmodules — leave the default behavior
+	}
+	anyLocal := false
+	for _, line := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
+		key, path, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(key, "submodule."), ".path")
+		localSrc := filepath.Join(root, path)
+		// Override to the local origin tree only when it is actually a populated
+		// git checkout (.git is a dir for a plain repo, a file for a submodule).
+		if _, err := os.Stat(filepath.Join(localSrc, ".git")); err == nil {
+			_ = exec.Command("git", "-C", workspace, "config", "submodule."+name+".url", localSrc).Run()
+			anyLocal = true
+		}
+	}
+	up := exec.Command("git", "-C", workspace, "-c", "protocol.file.allow=always",
+		"submodule", "update", "--init")
+	up.Stdout, up.Stderr = out, errw
+	if err := up.Run(); err != nil {
+		return fmt.Errorf("git submodule update --init: %w", err)
+	}
+	if anyLocal {
+		// Restore canonical .gitmodules URLs so the local-origin path is not a
+		// standing breadcrumb back into the source checkout.
+		_ = exec.Command("git", "-C", workspace, "submodule", "sync").Run()
+	}
+	return nil
+}
+
 func weaveRunVerify(workspace, command string) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -2391,6 +2447,16 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// was gone. git recreates reflogs as the agent works;
 			// only the clone-time entries carry the origin path.
 			_ = os.RemoveAll(filepath.Join(workspace, ".git", "logs"))
+			// Hydrate git submodules from the LOCAL origin. `git clone --local`
+			// does NOT recurse submodules, so a repo whose go.mod `replace`s point
+			// into a submodule (coreutils -> external/{ollama,podman}/src) can't
+			// build until the submodule working trees exist. This is what blocked
+			// coreutils self-repair: the full gate died on a missing
+			// external/ollama/src/go.mod.
+			if err := weaveHydrateSubmodules(root, workspace, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+					weavecli.ExitGenericFail, fmt.Errorf("hydrate submodules: %w", err)))
+			}
 		}
 		// Faithful, fast, Windows-safe sibling-dep view. A clone of the target
 		// alone can't build when its go.mod has `replace … => ../X` directives
