@@ -17,7 +17,11 @@ cli:
     # from the current one, inheriting the full transcript; -p runs it headless and it
     # exits (safe to background — the parent session keeps running). No {model}: a fork
     # inherits the session's model. Requires the session id (CLAUDE_CODE_SESSION_ID).
-    fork_exec: claude --resume {session} --fork-session --dangerously-skip-permissions -p {prompt}
+    # {model} is optional: with none, the fork inherits the session's model (the
+    # `--model {model}` pair drops out); `delegate self --model opus` transplants the
+    # inherited context onto a different model (best-effort — claude may honor or
+    # reject a model change on a resumed session).
+    fork_exec: claude --resume {session} --fork-session --dangerously-skip-permissions --model {model} -p {prompt}
     session_env:
       - CLAUDE_CODE_SESSION_ID
       - CLAUDE_SESSION_ID

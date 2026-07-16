@@ -36,6 +36,20 @@ func TestForkArgvSubstitutesSessionModelPrompt(t *testing.T) {
 	}
 }
 
+// The optional {model} in a fork template drops when no model is given (inherit the
+// session's model) and substitutes when one is (--model transplant).
+func TestForkArgvModelIsOptional(t *testing.T) {
+	tool := Tool{CLI: ToolCLI{Launch: ToolLaunch{
+		ForkExec: "claude --resume {session} --fork-session --model {model} -p {prompt}",
+	}}}
+	if got := strings.Join(tool.ForkArgv("", "s", "p"), " "); got != "claude --resume s --fork-session -p p" {
+		t.Fatalf("empty model not dropped: %q", got)
+	}
+	if got := strings.Join(tool.ForkArgv("opus-x", "s", "p"), " "); got != "claude --resume s --fork-session --model opus-x -p p" {
+		t.Fatalf("model not substituted: %q", got)
+	}
+}
+
 func TestNoForkTemplateMeansNoFork(t *testing.T) {
 	plain := Tool{CLI: ToolCLI{Launch: ToolLaunch{Exec: "codex exec {prompt}"}}}
 	if plain.CanFork() {

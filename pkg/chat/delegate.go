@@ -27,6 +27,7 @@ import (
 func NewDelegateCmd() *cobra.Command {
 	var opt Options
 	var self bool
+	var model string
 	cmd := &cobra.Command{
 		Use:   "delegate <agent|self> <instruction...>",
 		Short: "hand a task to an agent — another one, or yourself (same tool, run detached)",
@@ -58,7 +59,13 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 				if !ok || strings.TrimSpace(tool) == "" {
 					return fmt.Errorf("delegate self: cannot detect the tool driving this shell — name a target explicitly (bashy delegate <agent> ...)")
 				}
-				opt.Agent = tool
+				// --model transplants the inherited context onto a DIFFERENT model
+				// (fresh eyes); without it the fork inherits the session's model.
+				if m := strings.TrimSpace(model); m != "" {
+					opt.Agent = tool + ":" + m
+				} else {
+					opt.Agent = tool
+				}
 				// TRUE context-inheriting fork when the tool declares a headless,
 				// non-mutating fork (fork_exec) AND its session id is readable — the
 				// spawn inherits your live transcript, no re-briefing. Otherwise fall
@@ -66,7 +73,11 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 				if t, known := newCatalog().Tool(tool); known && t.CanFork() {
 					if sid := t.CurrentSession(); sid != "" {
 						opt.Fork, opt.Session = true, sid
-						fmt.Fprintf(cmd.ErrOrStderr(), "delegate self: forking your %s session (context inherited)\n", tool)
+						if model != "" {
+							fmt.Fprintf(cmd.ErrOrStderr(), "delegate self: forking your %s session onto %s (context inherited)\n", tool, model)
+						} else {
+							fmt.Fprintf(cmd.ErrOrStderr(), "delegate self: forking your %s session (context inherited)\n", tool)
+						}
 					} else {
 						fmt.Fprintf(cmd.ErrOrStderr(), "delegate self: %s can fork but its session id is not set — running a fresh instance (task = brief)\n", tool)
 					}
@@ -98,7 +109,8 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().StringVar(&opt.Agent, "agent", "", "target agent (nickname or tool:model); alternative to the first positional")
-	cmd.Flags().BoolVar(&self, "self", false, "delegate to YOURSELF — the same tool driving this shell, run detached")
+	cmd.Flags().BoolVar(&self, "self", false, "delegate to YOURSELF — the same tool driving this shell, run detached (forks your live context when the tool can)")
+	cmd.Flags().StringVar(&model, "model", "", "with --self: transplant your inherited context onto a DIFFERENT model (e.g. opus) — best-effort")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when no agent is named: conductor, reviewer, qa, release")
 	cmd.Flags().StringVar(&opt.Instruction, "instruction", "", "the instruction (or pass it as positional words)")
 	cmd.Flags().StringArrayVar(&opt.Files, "file", nil, "append file contents to the instruction")
