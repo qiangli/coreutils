@@ -127,6 +127,10 @@ type Issue struct {
 	// the join between them, and it is what stops the two from becoming parallel
 	// universes.
 	Weave int64 `yaml:"weave,omitempty" json:"weave,omitempty"`
+	Due       *time.Time `yaml:"due,omitempty" json:"due,omitempty"`
+	Recurring string     `yaml:"recurring,omitempty" json:"recurring,omitempty"`
+	Assignee  string     `yaml:"assignee,omitempty" json:"assignee,omitempty"`
+
 
 	Closed     *time.Time `yaml:"closed,omitempty" json:"closed,omitempty"`
 	Resolution string     `yaml:"resolution,omitempty" json:"resolution,omitempty"` // fixed | declined | duplicate | obsolete

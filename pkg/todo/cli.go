@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -106,6 +107,7 @@ func emitJSON(cmd *cobra.Command, v any) error {
 
 func newAddCmd(sf storeFunc) *cobra.Command {
 	var priority, note string
+	var dueStr, recurring, assignee string
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "add <title>",
@@ -116,7 +118,11 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			it, err := Add(st, strings.Join(args, " "), note, priority)
+			due, err := parseDue(dueStr)
+			if err != nil {
+				return err
+			}
+			it, err := Add(st, strings.Join(args, " "), note, priority, due, recurring, assignee)
 			if err != nil {
 				return err
 			}
@@ -129,6 +135,9 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&priority, "priority", "", "priority tier (p0|p1|p2|p3)")
 	cmd.Flags().StringVar(&note, "note", "", "task body/details")
+	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
+	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
+	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	return cmd
 }
@@ -174,10 +183,35 @@ func newListCmd(sf storeFunc) *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			// #  is the stable running number — the short handle for `todo show 3`,
 			// `todo done 3`, etc. ID stays for scripts / cross-tool references.
-			fmt.Fprintln(w, "#\tID\tSTATUS\tPRIO\tAGE\tTITLE")
+			hasAssignee := false
 			for _, it := range items {
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
-					it.Seq, it.ID[:8], it.Status, dash(it.Priority), age(it.Created), trunc(it.Title, 60))
+				if it.Assignee != "" {
+					hasAssignee = true
+					break
+				}
+			}
+			headerStr := "#\tID\tSTATUS\tPRIO\tAGE\tDUE"
+			if hasAssignee {
+				headerStr += "\tASSIGNEE"
+			}
+			headerStr += "\tTITLE"
+			fmt.Fprintln(w, headerStr)
+			for _, it := range items {
+				dueStr := "-"
+				if it.Due != nil {
+					if it.Due.Before(time.Now().UTC()) {
+						dueStr = "!" + it.Due.Format("2006-01-02")
+					} else {
+						dueStr = it.Due.Format("2006-01-02")
+					}
+				}
+				row := fmt.Sprintf("%d\t%s\t%s\t%s\t%s\t%s",
+					it.Seq, it.ID[:8], it.Status, dash(it.Priority), age(it.Created), dueStr)
+				if hasAssignee {
+					row += fmt.Sprintf("\t%s", dash(it.Assignee))
+				}
+				row += fmt.Sprintf("\t%s\n", trunc(it.Title, 60))
+				fmt.Fprint(w, row)
 			}
 			return w.Flush()
 		},
@@ -216,6 +250,15 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 			fmt.Fprintf(w, "  created   %s\n", it.Created.Format(time.RFC3339))
 			if it.Closed != nil {
 				fmt.Fprintf(w, "  done      %s\n", it.Closed.Format(time.RFC3339))
+			}
+			if it.Due != nil {
+				fmt.Fprintf(w, "  due       %s\n", it.Due.Format(time.RFC3339))
+			}
+			if it.Recurring != "" {
+				fmt.Fprintf(w, "  recurring %s\n", it.Recurring)
+			}
+			if it.Assignee != "" {
+				fmt.Fprintf(w, "  assignee  %s\n", it.Assignee)
 			}
 			if body := strings.TrimSpace(it.Body); body != "" {
 				fmt.Fprintf(w, "\n%s\n", body)
@@ -289,6 +332,7 @@ func newStartCmd(sf storeFunc) *cobra.Command {
 
 func newEditCmd(sf storeFunc) *cobra.Command {
 	var title, priority, note string
+	var dueStr, recurring, assignee string
 	cmd := &cobra.Command{
 		Use:   "edit <id|prefix>",
 		Short: "modify a task's title/priority/note",
@@ -311,6 +355,19 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 			if cmd.Flags().Changed("note") {
 				it.Body = note
 			}
+			if cmd.Flags().Changed("due") {
+				due, err := parseDue(dueStr)
+				if err != nil {
+					return err
+				}
+				it.Due = due
+			}
+			if cmd.Flags().Changed("recurring") {
+				it.Recurring = recurring
+			}
+			if cmd.Flags().Changed("assignee") {
+				it.Assignee = assignee
+			}
 			if _, err := st.Save(it); err != nil {
 				return err
 			}
@@ -321,6 +378,9 @@ func newEditCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVar(&priority, "priority", "", "new priority (p0|p1|p2|p3)")
 	cmd.Flags().StringVar(&note, "note", "", "replace the task body/details")
+	cmd.Flags().StringVar(&dueStr, "due", "", "deadline (e.g. 2026-07-20, +3d)")
+	cmd.Flags().StringVar(&recurring, "recurring", "", "cadence (daily, weekly, 24h, cron)")
+	cmd.Flags().StringVar(&assignee, "assignee", "", "who is working the item")
 	return cmd
 }
 
@@ -368,4 +428,45 @@ func age(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
+}
+
+func parseDue(s string) (*time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	if strings.HasPrefix(s, "+") {
+		s = s[1:]
+		if strings.HasSuffix(s, "d") {
+			days, err := strconv.Atoi(s[:len(s)-1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid relative days: %s", s)
+			}
+			t := time.Now().UTC().AddDate(0, 0, days)
+			return &t, nil
+		}
+		if strings.HasSuffix(s, "h") {
+			hours, err := strconv.Atoi(s[:len(s)-1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid relative hours: %s", s)
+			}
+			t := time.Now().UTC().Add(time.Duration(hours) * time.Hour)
+			return &t, nil
+		}
+		if d, err := time.ParseDuration(s); err == nil {
+			t := time.Now().UTC().Add(d)
+			return &t, nil
+		}
+		return nil, fmt.Errorf("invalid relative due: +%s", s)
+	}
+	if t, err := time.Parse("2006-01-02T15:04", s); err == nil {
+		return &t, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return &t, nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return &t, nil
+	}
+	return nil, fmt.Errorf("invalid due date format: %s", s)
 }

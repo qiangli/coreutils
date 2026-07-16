@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/qiangli/coreutils/pkg/issue"
 	"github.com/qiangli/coreutils/pkg/scope"
 )
@@ -127,7 +129,7 @@ func ResolveStore(owner string, forceRepo, forceUser bool, baseDir string) (*iss
 // directly rather than issue.Add, because the committed issue REGISTER deliberately
 // births every issue "open" (triage is a separate act) — a todo, personal or checked
 // in, has no triage step, so it is born ready in its own vocabulary.
-func Add(st *issue.Store, title, body, priority string) (*issue.Issue, error) {
+func Add(st *issue.Store, title, body, priority string, due *time.Time, recurring, assignee string) (*issue.Issue, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("a title is required")
 	}
@@ -136,14 +138,17 @@ func Add(st *issue.Store, title, body, priority string) (*issue.Issue, error) {
 		next = m + 1
 	}
 	it := &issue.Issue{
-		ID:       issue.NewID(),
-		Kind:     issue.KindTask,
-		Seq:      next,
-		Title:    title,
-		Body:     body,
-		Priority: priority,
-		Status:   StatusTodo,
-		Created:  time.Now().UTC(),
+		ID:        issue.NewID(),
+		Kind:      issue.KindTask,
+		Seq:       next,
+		Title:     title,
+		Body:      body,
+		Priority:  priority,
+		Due:       due,
+		Recurring: recurring,
+		Assignee:  assignee,
+		Status:    StatusTodo,
+		Created:   time.Now().UTC(),
 	}
 	if _, err := st.Save(it); err != nil {
 		return nil, err
@@ -227,12 +232,24 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 	if err != nil {
 		return nil, err
 	}
-	it.Status = status
-	if status == StatusDone {
-		now := time.Now().UTC()
-		it.Closed = &now
+	
+	if status == StatusDone && it.Recurring != "" {
+		it.Status = StatusTodo
+		base := time.Now().UTC()
+		if it.Due != nil {
+			base = *it.Due
+		}
+		if next, err := advanceCadence(base, it.Recurring); err == nil {
+			it.Due = &next
+		}
 	} else {
-		it.Closed = nil
+		it.Status = status
+		if status == StatusDone {
+			now := time.Now().UTC()
+			it.Closed = &now
+		} else {
+			it.Closed = nil
+		}
 	}
 	if _, err := st.Save(it); err != nil {
 		return nil, err
@@ -268,4 +285,24 @@ func List(st *issue.Store, status string) ([]*issue.Issue, error) {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
 	return out, nil
+}
+
+func advanceCadence(from time.Time, cadence string) (time.Time, error) {
+	c := strings.ToLower(strings.TrimSpace(cadence))
+	switch c {
+	case "daily":
+		return from.AddDate(0, 0, 1), nil
+	case "weekly":
+		return from.AddDate(0, 0, 7), nil
+	case "monthly":
+		return from.AddDate(0, 1, 0), nil
+	}
+	if d, err := time.ParseDuration(cadence); err == nil {
+		return from.Add(d), nil
+	}
+	sched, err := cron.ParseStandard(cadence)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid recurring cadence %q: %w", cadence, err)
+	}
+	return sched.Next(from), nil
 }

@@ -12,11 +12,11 @@ import (
 
 func TestAddAssignsIncrementingSeq(t *testing.T) {
 	st := &issue.Store{Root: t.TempDir(), Sub: RepoSub}
-	a, err := Add(st, "first", "", "")
+	a, err := Add(st, "first", "", "", nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Add(st, "second", "", "")
+	b, err := Add(st, "second", "", "", nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestEnsureSeqBackfillsInCreationOrder(t *testing.T) {
 	if err := EnsureSeq(st); err != nil {
 		t.Fatal(err)
 	}
-	next, err := Add(st, "third", "", "")
+	next, err := Add(st, "third", "", "", nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

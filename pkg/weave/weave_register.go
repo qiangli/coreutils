@@ -96,6 +96,16 @@ func runWeaveAddFromIssue(cmd *cobra.Command, ref string, flags *weaveOutputFlag
 	if it.Status == todopkg.StatusTodo || it.Status == todopkg.StatusBlocked {
 		it.Status = todopkg.StatusAssigned
 	}
+
+	agent := os.Getenv("WEAVE_AGENT")
+	if agent == "" {
+		agent = os.Getenv("WEAVE_CONDUCTOR")
+	}
+	if agent == "" {
+		agent = os.Getenv("USER")
+	}
+	it.Assignee = agent
+
 	if _, err := reg.Save(it); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitGenericFail, err))
 	}

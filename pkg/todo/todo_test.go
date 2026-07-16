@@ -15,18 +15,18 @@ func TestTodoLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := Add(stew, "wire the webhook", "details", "p1")
+	a, err := Add(stew, "wire the webhook", "details", "p1", nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.Status != StatusTodo {
 		t.Fatalf("new task status = %q, want %q", a.Status, StatusTodo)
 	}
-	if _, err := Add(stew, "fix CI", "", "p0"); err != nil {
+	if _, err := Add(stew, "fix CI", "", "p0", nil, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	other, _ := UserStore("fix-42")
-	if _, err := Add(other, "someone else's task", "", ""); err != nil {
+	if _, err := Add(other, "someone else's task", "", "", nil, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := List(stew, ""); len(got) != 2 {
@@ -96,7 +96,7 @@ func TestScopeResolution(t *testing.T) {
 	}
 
 	// Items in the base-dir store don't leak into the personal list.
-	if _, err := Add(bst, "checked-in task", "", ""); err != nil {
+	if _, err := Add(bst, "checked-in task", "", "", nil, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := List(bst, ""); len(got) != 1 {
@@ -110,7 +110,7 @@ func TestScopeResolution(t *testing.T) {
 func TestBadStatusRejected(t *testing.T) {
 	t.Setenv("BASHY_TODO_DIR", t.TempDir())
 	st, _ := UserStore("steward")
-	a, _ := Add(st, "x", "", "")
+	a, _ := Add(st, "x", "", "", nil, "", "")
 	if _, err := SetStatus(st, a.ID, "nope"); err == nil {
 		t.Fatal("an unknown status must be rejected")
 	}
