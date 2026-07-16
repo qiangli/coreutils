@@ -126,11 +126,10 @@ type Issue struct {
 	// one exists. The register is the durable truth; weave is the execution. This is
 	// the join between them, and it is what stops the two from becoming parallel
 	// universes.
-	Weave int64 `yaml:"weave,omitempty" json:"weave,omitempty"`
+	Weave     int64      `yaml:"weave,omitempty" json:"weave,omitempty"`
 	Due       *time.Time `yaml:"due,omitempty" json:"due,omitempty"`
 	Recurring string     `yaml:"recurring,omitempty" json:"recurring,omitempty"`
 	Assignee  string     `yaml:"assignee,omitempty" json:"assignee,omitempty"`
-
 
 	Closed     *time.Time `yaml:"closed,omitempty" json:"closed,omitempty"`
 	Resolution string     `yaml:"resolution,omitempty" json:"resolution,omitempty"` // fixed | declined | duplicate | obsolete

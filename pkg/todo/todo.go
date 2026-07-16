@@ -232,7 +232,7 @@ func SetStatus(st *issue.Store, ref, status string) (*issue.Issue, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if status == StatusDone && it.Recurring != "" {
 		it.Status = StatusTodo
 		base := time.Now().UTC()
