@@ -30,9 +30,9 @@ func TestPriorityRankOrder(t *testing.T) {
 	}
 }
 
-// TestListByPriority: --by-priority orders by priority first, then by number —
-// verified through the real list command, not a re-implementation.
-func TestListByPriority(t *testing.T) {
+// TestListDefaultOrderByPriority: the DEFAULT list order is priority first, then
+// by number — verified through the real list command, not a re-implementation.
+func TestListDefaultOrderByPriority(t *testing.T) {
 	t.Setenv("BASHY_TODO_DIR", t.TempDir())
 	st, _ := UserStore("steward")
 
@@ -53,7 +53,7 @@ func TestListByPriority(t *testing.T) {
 	var buf bytes.Buffer
 	lc := newListCmd(func() (*issue.Store, string, error) { return st, "test", nil })
 	lc.SetOut(&buf)
-	lc.SetArgs([]string{"--by-priority"})
+	lc.SetArgs(nil) // default order — no flag needed
 	if err := lc.Execute(); err != nil {
 		t.Fatal(err)
 	}

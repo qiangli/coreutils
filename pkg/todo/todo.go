@@ -293,9 +293,10 @@ func IsOverdue(it *issue.Issue) bool {
 	return it.Due.Before(time.Now().UTC())
 }
 
-// List returns a store's items in SEQUENTIAL order — by running number ascending
-// (#1, #2, …), i.e. oldest first / creation order — optionally filtered by status.
-// The CLI's --reverse flips it to newest-first.
+// List returns a store's items sorted by PRIORITY then sequence: most urgent
+// first (p0 < p1 < p2 < p3 < unset), and within one priority by running number
+// ascending (#1, #2, … — oldest first / creation order). Optionally filtered by
+// status. The CLI's --reverse flips the whole order.
 func List(st *issue.Store, status string) ([]*issue.Issue, error) {
 	all, err := st.List()
 	if err != nil {
@@ -310,7 +311,12 @@ func List(st *issue.Store, status string) ([]*issue.Issue, error) {
 			}
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	sort.SliceStable(out, func(i, j int) bool {
+		if ri, rj := PriorityRank(out[i].Priority), PriorityRank(out[j].Priority); ri != rj {
+			return ri < rj
+		}
+		return out[i].Seq < out[j].Seq
+	})
 	return out, nil
 }
 
