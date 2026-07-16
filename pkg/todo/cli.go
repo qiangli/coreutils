@@ -150,10 +150,10 @@ func newAddCmd(sf storeFunc) *cobra.Command {
 
 func newListCmd(sf storeFunc) *cobra.Command {
 	var status string
-	var jsonOut, all, reverse bool
+	var jsonOut, all, reverse, byPriority bool
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "list tasks (sequential #1 first; --reverse for newest first; open by default, --all includes done)",
+		Short: "list tasks (sequential #1 first; --by-priority for p0 first; --reverse for newest first; open by default, --all includes done)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, scope, err := sf()
@@ -172,6 +172,14 @@ func newListCmd(sf storeFunc) *cobra.Command {
 					}
 				}
 				items = open
+			}
+			if byPriority {
+				slices.SortStableFunc(items, func(a, b *issue.Issue) int {
+					if ra, rb := PriorityRank(a.Priority), PriorityRank(b.Priority); ra != rb {
+						return ra - rb
+					}
+					return a.Seq - b.Seq
+				})
 			}
 			if reverse {
 				slices.Reverse(items)
@@ -228,6 +236,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 	cmd.Flags().StringVar(&status, "status", "", "filter by status (todo|assigned|doing|blocked|done)")
 	cmd.Flags().BoolVar(&all, "all", false, "include done tasks")
 	cmd.Flags().BoolVar(&reverse, "reverse", false, "newest first (default is sequential, #1 first)")
+	cmd.Flags().BoolVar(&byPriority, "by-priority", false, "sort by priority (p0 first), then by number")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
 	return cmd
 }

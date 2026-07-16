@@ -156,6 +156,24 @@ func Add(st *issue.Store, title, body, priority string, due *time.Time, recurrin
 	return it, nil
 }
 
+// PriorityRank maps a priority tier to a sort rank where LOWER is more urgent:
+// p0 < p1 < p2 < p3 < unset. Used by `todo list --by-priority` so the most
+// urgent tasks surface first; ties fall through to the running number (Seq).
+func PriorityRank(p string) int {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case "p0":
+		return 0
+	case "p1":
+		return 1
+	case "p2":
+		return 2
+	case "p3":
+		return 3
+	default:
+		return 4 // unset / unrecognized sorts after every explicit tier
+	}
+}
+
 // MaxSeq is the highest running number assigned in the store (0 if none).
 func MaxSeq(st *issue.Store) (int, error) {
 	items, err := st.List()
