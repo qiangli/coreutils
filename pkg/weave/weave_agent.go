@@ -111,6 +111,49 @@ func weaveAgentEnv(env []string, l *weaveAgentLaunch) []string {
 	return agentlaunch.PrincipalEnv(env, agentlaunch.Launch(*l))
 }
 
+// weaveOwnAuthNames are environment variables that carry an AGENT's own
+// preconfigured authentication rather than an operator vault secret — set by
+// the agent's own login flow (e.g. `ycode login` writes DHNT_BASE_URL and
+// DHNT_API_KEY), not by weave or the secrets vault. secrets.ScrubAgentEnv
+// cannot tell the two apart: DHNT_API_KEY is credential-shaped (an _API_KEY
+// suffix), so its blanket shape rule strips it along with the vault's own
+// keys. That is correct for a generic third-party CLI, but weave launches the
+// operator's own preconfigured agent CLIs — stripping this breaks the exact
+// auth the agent is supposed to bring itself.
+var weaveOwnAuthNames = map[string]struct{}{
+	"DHNT_BASE_URL": {},
+	"DHNT_API_KEY":  {},
+}
+
+// weavePreserveOwnAuth restores names in weaveOwnAuthNames that
+// secrets.ScrubAgentEnv stripped, sourced from the launcher's own environ.
+// This is NOT weave granting a credential — see the removal of
+// grantAgentModelKey — it is weave declining to strip a var the agent already
+// carries in its own preconfigured environment.
+func weavePreserveOwnAuth(scrubbed, environ []string) []string {
+	present := make(map[string]struct{}, len(scrubbed))
+	for _, kv := range scrubbed {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			present[kv[:i]] = struct{}{}
+		}
+	}
+	for _, kv := range environ {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			continue
+		}
+		name := kv[:i]
+		if _, own := weaveOwnAuthNames[name]; !own {
+			continue
+		}
+		if _, already := present[name]; already {
+			continue
+		}
+		scrubbed = append(scrubbed, kv)
+	}
+	return scrubbed
+}
+
 // --- roster members ---------------------------------------------------------
 
 // weaveMember is one roster entry: an agent (a nickname, an alias, or a bare

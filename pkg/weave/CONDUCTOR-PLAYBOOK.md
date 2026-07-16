@@ -368,7 +368,13 @@ Per tool:
   [files...]` — headless one-shot, exits clean, and AUTO-COMMITS its
   own edits (no orphan-commit rescues). Model comes from
   ~/.aider.conf.yml (this machine: DeepSeek-only by owner directive —
-  do NOT pass --model); requires DEEPSEEK_API_KEY in the environment.
+  do NOT pass --model); aider brings its own DEEPSEEK_API_KEY — weave
+  never injects a provider credential (it is not weave's job to hand
+  out API keys; every agent is preconfigured with its own auth). If
+  DEEPSEEK_API_KEY lives in the operator's own environment, weave's
+  default credential-shape scrub still strips it before launch like
+  any other `*_API_KEY` name — set `BASHY_ALLOW_AGENT_SECRETS=1` for
+  that run, or preconfigure the key outside weave's env entirely.
   Litter caveat: it creates/edits .gitignore and .aider* files in the
   workspace — never stage those. Interactive mode exits on /exit.
 - **opencode**: `opencode run "<body>"` — streams live, exits clean,
