@@ -58,6 +58,14 @@ type Options struct {
 	// handing back a one-shot that will have exited before the first steer lands.
 	Steer bool
 
+	// Fork resolves the tool's context-inheriting fork launch (fork_exec): the
+	// spawned session inherits the caller's live transcript. Session is the current
+	// session id substituted into the fork template. Set by `delegate self` when the
+	// current tool CanFork and a session id is readable; otherwise it delegates to a
+	// fresh instance instead.
+	Fork    bool
+	Session string
+
 	// Stream, when set, receives the agent's stdout AS IT IS WRITTEN, in
 	// addition to the captured Result. It is a tee, not a redirect: the caller
 	// still gets the whole output at the end, so nothing downstream has to
@@ -139,6 +147,8 @@ func toAgentLaunchOptions(opt Options) agentlaunch.Options {
 		ReadOnly: opt.ReadOnly,
 		DryRun:   opt.DryRun,
 		Steer:    opt.Steer,
+		Fork:     opt.Fork,
+		Session:  opt.Session,
 	}
 }
 

@@ -58,9 +58,19 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 				if !ok || strings.TrimSpace(tool) == "" {
 					return fmt.Errorf("delegate self: cannot detect the tool driving this shell — name a target explicitly (bashy delegate <agent> ...)")
 				}
-				// Same tool. (Full live-context inheritance — the harness's native fork —
-				// is the next phase; today `self` is a detached same-tool instance.)
 				opt.Agent = tool
+				// TRUE context-inheriting fork when the tool declares a headless,
+				// non-mutating fork (fork_exec) AND its session id is readable — the
+				// spawn inherits your live transcript, no re-briefing. Otherwise fall
+				// back to a fresh same-tool instance (task = brief).
+				if t, known := newCatalog().Tool(tool); known && t.CanFork() {
+					if sid := t.CurrentSession(); sid != "" {
+						opt.Fork, opt.Session = true, sid
+						fmt.Fprintf(cmd.ErrOrStderr(), "delegate self: forking your %s session (context inherited)\n", tool)
+					} else {
+						fmt.Fprintf(cmd.ErrOrStderr(), "delegate self: %s can fork but its session id is not set — running a fresh instance (task = brief)\n", tool)
+					}
+				}
 			}
 			if strings.TrimSpace(opt.Agent) == "" && strings.TrimSpace(opt.Role) == "" {
 				return fmt.Errorf("delegate: name a target — an agent, 'self', or tool:model (bashy delegate <agent> <instruction>)")
@@ -97,6 +107,7 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 	cmd.Flags().DurationVar(&opt.Timeout, "timeout", 0, "agent timeout, e.g. 30m")
 	cmd.Flags().StringVar(&opt.Sandbox, "sandbox", "", "sandbox override, e.g. workspace-write or danger-full-access")
 	cmd.Flags().BoolVar(&opt.JSON, "json", false, "print a bashy-chat-v1 JSON result envelope")
+	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "print the resolved invocation (incl. a self-fork) without running it")
 	cmd.Flags().Bool("plain", false, "force plain output even under BASHY_AGENTIC")
 	_ = cmd.Flags().MarkHidden("plain")
 	return cmd

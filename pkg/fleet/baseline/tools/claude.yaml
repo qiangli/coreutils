@@ -13,6 +13,14 @@ cli:
     # agy -p); claude was the only one relying on the guess.
     exec: claude --dangerously-skip-permissions --model {model} -p {prompt}
     steer_exec: claude --dangerously-skip-permissions --model {model}
+    # Context-inheriting fork (`delegate self`): --fork-session branches a NEW session
+    # from the current one, inheriting the full transcript; -p runs it headless and it
+    # exits (safe to background — the parent session keeps running). No {model}: a fork
+    # inherits the session's model. Requires the session id (CLAUDE_CODE_SESSION_ID).
+    fork_exec: claude --resume {session} --fork-session --dangerously-skip-permissions -p {prompt}
+    session_env:
+      - CLAUDE_CODE_SESSION_ID
+      - CLAUDE_SESSION_ID
     prompt_position: last
     trust_preseed: .claude.json
     trust_clear: "say:1"

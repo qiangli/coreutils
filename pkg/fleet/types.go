@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"os"
 	"sort"
 	"strings"
 
@@ -87,10 +88,11 @@ const (
 	ModelSourceLocal = "local"
 )
 
-// PromptToken and ModelToken are the launch-template placeholders.
+// PromptToken, ModelToken and SessionToken are the launch-template placeholders.
 const (
-	PromptToken = "{prompt}"
-	ModelToken  = "{model}"
+	PromptToken  = "{prompt}"
+	ModelToken   = "{model}"
+	SessionToken = "{session}" // the current session id, for a context-inheriting fork
 )
 
 // Tool is an agentic CLI harness.
@@ -178,6 +180,23 @@ type ToolLaunch struct {
 	// transcript. A launcher picks by what it needs; the registry refuses to pretend
 	// one launch does both.
 	SteerExec string `yaml:"steer_exec,omitempty" json:"steer_exec,omitempty"`
+
+	// ForkExec is the argv template that FORKS the tool's current session — a new,
+	// independent session that inherits the live transcript — instead of starting
+	// fresh. {session} = the current session id, {prompt} = the directive, {model}
+	// = the model. This is what makes `delegate self` a true context-inheriting
+	// fork ("delegate to yourself, no re-briefing"). ONLY a tool with a genuine
+	// HEADLESS, NON-mutating fork declares this: claude has one
+	// (`--resume <id> --fork-session -p`), codex does NOT — its headless `resume`
+	// APPENDS to the parent thread, which would corrupt the steward's own session,
+	// so codex has no ForkExec and `delegate self` falls back to a fresh instance.
+	ForkExec string `yaml:"fork_exec,omitempty" json:"fork_exec,omitempty"`
+	// SessionEnv names the env var(s) that carry this tool's current session id
+	// when it drives a subprocess (e.g. CLAUDE_CODE_SESSION_ID). First non-empty
+	// wins. Without a readable session id, a ForkExec that needs {session} cannot
+	// fire, and delegate self falls back to a fresh instance.
+	SessionEnv []string `yaml:"session_env,omitempty" json:"session_env,omitempty"`
+
 	// SupportsGracefulQuit marks a tool that exits cleanly on a quit signal.
 	SupportsGracefulQuit bool `yaml:"supports_graceful_quit,omitempty" json:"supports_graceful_quit,omitempty"`
 	// TrustClear is the steering input that clears a trust prompt.
@@ -309,6 +328,59 @@ func (t Tool) ArgvPrefix(modelID string) ([]string, bool) {
 		return nil, false
 	}
 	argv := t.Argv(modelID, PromptToken)
+	if len(argv) < 2 || argv[len(argv)-1] != PromptToken {
+		return nil, false
+	}
+	return argv[1 : len(argv)-1], true
+}
+
+// CanFork reports whether the tool declares a native context-inheriting fork.
+func (t Tool) CanFork() bool { return strings.TrimSpace(t.CLI.Launch.ForkExec) != "" }
+
+// CurrentSession returns the tool's current session id from the first SessionEnv
+// var that is set, or "" — the id needed to fork THIS session rather than start
+// a fresh one.
+func (t Tool) CurrentSession() string {
+	for _, k := range t.CLI.Launch.SessionEnv {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// ForkArgv renders the ForkExec template. Like Argv, but also substitutes
+// {session} with the current session id.
+func (t Tool) ForkArgv(modelID, session, prompt string) []string {
+	fields := strings.Fields(t.CLI.Launch.ForkExec)
+	out := make([]string, 0, len(fields)+1)
+	for _, f := range fields {
+		switch f {
+		case ModelToken:
+			if modelID != "" {
+				out = append(out, modelID)
+			} else if n := len(out); n > 0 && strings.HasPrefix(out[n-1], "-") {
+				out = out[:n-1]
+			}
+		case SessionToken:
+			out = append(out, session)
+		case PromptToken:
+			out = append(out, prompt)
+		default:
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// ForkArgvPrefix is ArgvPrefix for the fork template: the argv between the binary
+// and the trailing {prompt}, with {session}/{model} already substituted. Returns
+// false when the tool declares no ForkExec (delegate self then falls back).
+func (t Tool) ForkArgvPrefix(modelID, session string) ([]string, bool) {
+	if t.CLI.Launch.ForkExec == "" || !strings.Contains(t.CLI.Launch.ForkExec, PromptToken) {
+		return nil, false
+	}
+	argv := t.ForkArgv(modelID, session, PromptToken)
 	if len(argv) < 2 || argv[len(argv)-1] != PromptToken {
 		return nil, false
 	}

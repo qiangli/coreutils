@@ -28,6 +28,16 @@ type Options struct {
 	// Fails loudly when the tool has no steerable launch. A caller that asked to
 	// be able to interrupt an agent must not be silently handed one it cannot.
 	Steer bool
+
+	// Fork resolves the tool's context-inheriting FORK launch (fork_exec) instead
+	// of the fresh headless one-shot: the spawned session inherits the caller's live
+	// transcript (this is `delegate self`). Session is the current session id the
+	// fork template substitutes for {session}. Fails loudly when the tool declares
+	// no fork_exec — the caller (delegate) checks CanFork first and falls back to a
+	// fresh instance, so reaching this error means a fork was forced on a tool that
+	// cannot do one.
+	Fork    bool
+	Session string
 }
 
 // Launch is a fully resolved agent invocation. Args excludes the prompt.
@@ -137,6 +147,9 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		render := tool.ArgvPrefix
 		if opt.Steer {
 			render = tool.SteerArgvPrefix
+		} else if opt.Fork {
+			session := opt.Session
+			render = func(m string) ([]string, bool) { return tool.ForkArgvPrefix(m, session) }
 		}
 		if args, ok := render(lnch.Model); ok {
 			out, err := FinalizeArgs(tool.Name, args, opt)
@@ -150,6 +163,10 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		if opt.Steer {
 			return lnch, fmt.Errorf("agent launch: %q cannot be steered — tool %q declares no interactive launch (steer_exec). "+
 				"Its headless launch is a one-shot: it runs the prompt and exits, so there is nothing to interrupt", name, tool.Name)
+		}
+		if opt.Fork {
+			return lnch, fmt.Errorf("agent launch: %q cannot be forked — tool %q declares no fork_exec (a headless, non-mutating context fork). "+
+				"delegate self should have detected this and started a fresh instance instead", name, tool.Name)
 		}
 	}
 
