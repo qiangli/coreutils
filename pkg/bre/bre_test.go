@@ -206,6 +206,62 @@ func TestToGoEREWordEdgeAnchors(t *testing.T) {
 	}
 }
 
+func TestToGoEREBracketExpressions(t *testing.T) {
+	cases := []struct {
+		ere, matches, notMatches string
+	}{
+		{`[[.a.]]`, "a", "b"},
+		{`[[=e=]]`, "e", "x"},
+		{`[\.]`, ".", "a"},
+		{`[\.]`, `\`, "a"},
+		{`[[.].]]`, "]", "x"},
+	}
+	for _, c := range cases {
+		goRE, err := ToGoERE(c.ere)
+		if err != nil {
+			t.Errorf("ToGoERE(%q) errored: %v", c.ere, err)
+			continue
+		}
+		re, err := regexp.Compile(goRE)
+		if err != nil {
+			t.Errorf("ToGoERE(%q)=%q not a valid RE2: %v", c.ere, goRE, err)
+			continue
+		}
+		if !re.MatchString(c.matches) {
+			t.Errorf("%q -> %q should match %q", c.ere, goRE, c.matches)
+		}
+		if re.MatchString(c.notMatches) {
+			t.Errorf("%q -> %q should NOT match %q", c.ere, goRE, c.notMatches)
+		}
+	}
+}
+
+func TestCompileEREBackrefs(t *testing.T) {
+	cases := []struct {
+		name    string
+		pattern string
+		in      string
+		want    []int
+	}{
+		{"simple group", `(a)\1`, "xaa", []int{1, 3}},
+		{"class group", `([[:alpha:]])\1`, "11bb", []int{2, 4}},
+		{"alternation group", `(a|ab)c\1`, "abcab", []int{0, 5}},
+		{"interval group", `(a{2})\1`, "xaaaa", []int{1, 5}},
+		{"empty capture", `(a*)b\1`, "b", []int{0, 1}},
+		{"word edge", `\<([[:alpha:]])\1\>`, "-aa-", []int{1, 3}},
+		{"literal escaped parens", `\((a)\1\)`, "(aa)", []int{0, 4}},
+	}
+	for _, c := range cases {
+		re, err := CompileEREWithFlags(c.pattern, "")
+		if err != nil {
+			t.Fatalf("%s: CompileEREWithFlags(%q): %v", c.name, c.pattern, err)
+		}
+		if got := re.FindStringIndex(c.in); !sameInts(got, c.want) {
+			t.Errorf("%s: %q on %q = %v, want %v", c.name, c.pattern, c.in, got, c.want)
+		}
+	}
+}
+
 func TestCompileBackrefsNoMatch(t *testing.T) {
 	re, err := Compile(`^\(.\)\1$`)
 	if err != nil {

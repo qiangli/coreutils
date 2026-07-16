@@ -330,15 +330,28 @@ func translateBracket(s string) (string, int, error) {
 }
 
 // ToGoERE translates the small GNU ERE extension set that RE2 does not parse
-// under the same spelling. ERE back-references remain unsupported.
+// under the same spelling. ERE back-references are rejected here because RE2
+// cannot express them; CompileEREWithFlags routes those patterns through the
+// bounded backtracking matcher instead.
 func ToGoERE(p string) (string, error) {
 	var b strings.Builder
-	for i := 0; i+1 < len(p); i++ {
-		if p[i] != '\\' || i+1 >= len(p) {
-			if p[i] != '\\' {
-				b.WriteByte(p[i])
+	for i := 0; i < len(p); {
+		if p[i] == '[' {
+			cls, n, err := translateBracket(p[i:])
+			if err != nil {
+				return "", err
 			}
+			b.WriteString(cls)
+			i += n
 			continue
+		}
+		if p[i] != '\\' {
+			b.WriteByte(p[i])
+			i++
+			continue
+		}
+		if i+1 >= len(p) {
+			return "", fmt.Errorf("trailing backslash (\\)")
 		}
 		n := p[i+1]
 		if n >= '1' && n <= '9' {
@@ -346,18 +359,12 @@ func ToGoERE(p string) (string, error) {
 		}
 		if n == '<' || n == '>' {
 			b.WriteString(`\b`)
-			i++
+			i += 2
 			continue
 		}
 		b.WriteByte('\\')
 		b.WriteByte(n)
-		i++
-	}
-	if len(p) > 0 {
-		last := len(p) - 1
-		if last == 0 || p[last-1] != '\\' {
-			b.WriteByte(p[last])
-		}
+		i += 2
 	}
 	return b.String(), nil
 }

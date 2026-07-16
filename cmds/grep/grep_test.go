@@ -207,10 +207,23 @@ func TestGrepEREAndFixed(t *testing.T) {
 	if out != "word\n" || code != 0 {
 		t.Errorf("-E word edge: out=%q code=%d", out, code)
 	}
-	_, errb, code := runGrep(t, "", "x\n", "-E", `(a)\1`)
-	if code != 2 || !strings.Contains(errb, "back-reference") {
-		t.Errorf("-E backref: code=%d err=%q", code, errb)
+	out, _, code = runGrep(t, "", "aa\nab\n", "-E", `(a)\1`)
+	if out != "aa\n" || code != 0 {
+		t.Errorf("-E backref: out=%q code=%d", out, code)
 	}
+	out, _, code = runGrep(t, "", "aba\nb\n", "-E", `(a*)b\1`)
+	if out != "aba\nb\n" || code != 0 {
+		t.Errorf("-E empty-capture backref: out=%q code=%d", out, code)
+	}
+	out, _, code = runGrep(t, "", ".\n\\\na\n", "-E", `[\.]`)
+	if out != ".\n\\\n" || code != 0 {
+		t.Errorf("-E POSIX bracket backslash literal: out=%q code=%d", out, code)
+	}
+	out, _, code = runGrep(t, "", "e\nx\n", "-E", `[[=e=]]`)
+	if out != "e\n" || code != 0 {
+		t.Errorf("-E equivalence class: out=%q code=%d", out, code)
+	}
+	var errb string
 	out, _, code = runGrep(t, "", "a.b\naxb\n", "-F", "a.b")
 	if out != "a.b\n" || code != 0 {
 		t.Errorf("-F: out=%q code=%d", out, code)
