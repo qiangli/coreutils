@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // The CLI is the surface a cold successor actually touches, so these tests assert
@@ -711,6 +713,111 @@ func TestCLITakeIsAnAliasForClaim(t *testing.T) {
 	if !strings.Contains(out, "--grant") {
 		t.Fatalf("claim takes a capability, and its help must say so:\n%s", out)
 	}
+}
+
+// THE HELP IS AN AUTHORITY SURFACE. It once showed
+//
+//	eval "$(bashy steward claim --intent 'on call' --export)"
+//
+// as THE way onto the seat. Pasted, it fails — no grant was presented — but the failure is
+// the smaller half of the damage: the example teaches a reader that an empty chair belongs
+// to whoever sits in it, which is the exact belief the grant requirement exists to correct,
+// and it teaches it in the one place a cold successor looks first. So the rule is stronger
+// than "the examples work": NO advertised claim, anywhere in the command tree, may be
+// spelled without the capability it spends.
+func TestCLIHelpNeverAdvertisesAClaimWithoutAGrant(t *testing.T) {
+	root := NewStewardCmd()
+
+	var walk func(*cobra.Command)
+	claims := 0
+	walk = func(c *cobra.Command) {
+		for _, src := range []struct{ where, text string }{
+			{"Example", c.Example},
+			{"Long", c.Long},
+		} {
+			for _, line := range invocations(src.text) {
+				if !strings.Contains(line, "steward claim") && !strings.Contains(line, "steward take ") {
+					continue
+				}
+				claims++
+				if !strings.Contains(line, "--grant") {
+					t.Errorf("`%s` %s advertises a claim that presents no capability — it cannot work, "+
+						"and it says claiming is free:\n  %s", c.CommandPath(), src.where, line)
+				}
+			}
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(root)
+	if claims == 0 {
+		t.Fatal("the scan found no advertised claim at all — the help changed shape and this test " +
+			"is now passing by looking at nothing")
+	}
+
+	// The sequence has to be complete, not merely grant-shaped: the reader must be told
+	// where the id comes from. A `claim --grant <id>` with no `authorize --action claim`
+	// above it is a command with an unexplained operand.
+	for _, c := range []*cobra.Command{root, findCmd(t, root, "claim")} {
+		if !strings.Contains(c.Example, "authorize --action claim") {
+			t.Errorf("`%s` Example must show where the grant comes from:\n%s", c.CommandPath(), c.Example)
+		}
+	}
+	// And the export half — the reason the example exists — is still there.
+	if !strings.Contains(root.Example, "--export") {
+		t.Errorf("the root example must still show the epoch being exported:\n%s", root.Example)
+	}
+
+	// Finally: the help matches the enforcement. The form the examples DON'T show is the
+	// form the store refuses — so the advertised grant is a requirement, not a decoration.
+	dir := t.TempDir()
+	_, err := cli(t, dir, "claim", "--intent", "on call")
+	if err == nil {
+		t.Fatal("a claim presenting no authorization must be refused, or the examples are advertising ceremony")
+	}
+	if !strings.Contains(err.Error(), "no authorization was presented") {
+		t.Fatalf("the refusal must say what was missing: %v", err)
+	}
+}
+
+// invocations returns the lines of a help block that read as a PASTEABLE COMMAND rather
+// than prose: an indented `steward …` snippet, optionally wrapped in the shell forms the
+// examples use (`eval "$(…)"`, `x=$(…)`, a `bashy ` prefix). Prose that merely NAMES a
+// command — "`USER=someone-else bashy steward claim` used to be a different seat" — is not
+// advertising it, and is deliberately not matched.
+func invocations(help string) []string {
+	var out []string
+	for _, raw := range strings.Split(help, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		t := line
+		for _, p := range []string{"$ ", "eval \"$(", "eval $("} {
+			t = strings.TrimPrefix(t, p)
+		}
+		// grant=$(bashy steward authorize …)
+		if i := strings.Index(t, "=$("); i > 0 && !strings.ContainsAny(t[:i], " \t") {
+			t = t[i+len("=$("):]
+		}
+		t = strings.TrimPrefix(t, "bashy ")
+		if strings.HasPrefix(t, "steward ") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func findCmd(t *testing.T, root *cobra.Command, name string) *cobra.Command {
+	t.Helper()
+	for _, c := range root.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	t.Fatalf("no `%s` command", name)
+	return nil
 }
 
 func TestCLIReleaseSaysItCapturedNoWork(t *testing.T) {

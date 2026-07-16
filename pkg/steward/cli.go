@@ -107,17 +107,23 @@ it anyway.
   comes back holding a stale token and is REJECTED, loudly, instead of interleaving
   its writes with its successor's.
 
-  SEIZING THE SEAT IS AUTHORIZED, AND THE AUTHORIZATION IS DURABLE.
+  ACQUIRING THE SEAT IS AUTHORIZED, AND THE AUTHORIZATION IS DURABLE.
   ` + "`steward claim`" + ` takes a VACANT or LAPSED seat. Anything else — a live seat, or one
-  whose liveness record cannot be trusted — is a TAKEOVER, which needs a capability
-  minted by ` + "`steward authorize`" + `: single-use, expiring, bound to one epoch and one
-  agent, and recorded in the journal forever.
+  whose liveness record cannot be trusted — is a TAKEOVER. BOTH are acquisitions of
+  authority and BOTH spend a capability minted by ` + "`steward authorize`" + `: single-use,
+  expiring, bound to one epoch and one agent, and recorded in the journal forever.
+  There is no unauthorized way onto this seat — a claim without a grant is refused.
 
 steward is NOT handoff. ` + "`bashy handoff`" + ` moves WORK — a diff, a working tree, a task.
 steward moves a MANDATE. Claiming the seat touches no repository, restores no working
 tree, and captures no diff.`,
 		Example: `  bashy steward status                     # who holds the seat, and is the record sound?
-  eval "$(bashy steward claim --intent 'on call' --export)"   # take the seat, export the epoch
+
+  # Taking the seat is an ACQUISITION, so it is authorized: mint the single-use grant,
+  # then spend it. Both halves are ATTENDED — each asks you to type the epoch back.
+  grant=$(bashy steward authorize --action claim --actor "$USER" --reason "on call" --json | jq -r .id)
+  eval "$(bashy steward claim --grant "$grant" --intent 'on call' --export)"   # take the seat, export the epoch
+
   bashy steward board                      # the Kanban: lanes, priorities, blockers, next actions
   bashy steward record --workstream api -m "migrated the schema" \
         --outcome success -e "command:go test ./..." -e "commit:de6485c"
@@ -271,10 +277,14 @@ rate-limited, or paused at a prompt, and the claim FENCES them. An unattended ag
 could claim a lapsed seat could simply wait out the TTL and depose a working steward —
 the takeover it was forbidden to perform, spelled differently. And a vacant seat is still
 the seat of authority for the whole machine; "whoever gets there first" is a race, not a
-policy. So:
+policy. So a claim SPENDS a capability, exactly as a takeover does — mint it first, and
+pass its id:
 
-  steward authorize --action claim --actor <who> --reason <why>
-  steward claim --grant <id>
+  steward authorize --action claim --actor <who> --reason <why>   # prints the grant id
+  steward claim --grant <id> --intent <what for>
+
+Both halves are attended: each asks you to type the current epoch back at the terminal.
+The grant is single-use, so the id above buys exactly one claim.
 
 RENEWING IS NOT CLAIMING. Re-claiming a seat you already hold used to be quietly treated
 as a heartbeat. It isn't one any more, because it was a way to refresh a held tenure
@@ -286,6 +296,15 @@ Claiming a lapsed seat BUMPS THE FENCING EPOCH, so the prior holder is fenced ra
 buried: their next write is rejected loudly instead of interleaving with yours.
 
 Claiming captures NO repository state. It is a mandate, not a checkout.`,
+		Example: `  # 1. mint the single-use grant. It prints its id (and --json puts it on stdout alone).
+  bashy steward authorize --action claim --actor "$USER" --reason "taking the seat for the day"
+
+  # 2. spend it on the seat.
+  bashy steward claim --grant g-1f4c9a2b --intent "on call"
+
+  # Or both, capturing the id — and exporting the fencing epoch every later write presents:
+  grant=$(bashy steward authorize --action claim --actor "$USER" --reason "on call" --json | jq -r .id)
+  eval "$(bashy steward claim --grant "$grant" --intent 'on call' --export)"`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			s, err := o.authStore(cmd)
@@ -322,8 +341,11 @@ Claiming captures NO repository state. It is a mandate, not a checkout.`,
 			}
 			fmt.Fprintf(out, "  store: %s\n", s.Dir())
 			if !export {
+				// NOT "re-run claim with --export": the grant that bought this seat is spent, and
+				// a seat you already hold is not claimable anyway. --export is a flag on the claim
+				// you are making, not a second, grantless way back to the epoch.
 				fmt.Fprintf(out, "\nEvery write presents this epoch. Export it to your children:\n"+
-					"  export %s=%d          (or: eval \"$(steward claim --export)\")\n", EpochEnv, v.Authority.Epoch)
+					"  export %s=%d          (--export prints exactly that line, for eval)\n", EpochEnv, v.Authority.Epoch)
 			}
 			fmt.Fprintln(out, "\nRun `steward reconcile` before acting: it reports what the record can and cannot establish.")
 			return nil
