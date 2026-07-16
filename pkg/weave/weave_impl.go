@@ -836,29 +836,6 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	return nil
 }
 
-// grantAgentModelKey adds back the ONE credential the launched model declares
-// (`api_key_ref`) after secrets.ScrubAgentEnv stripped the operator's vault from a
-// weave subagent's environment. It mirrors the chat.go launch path (agentChildEnv):
-// deny-by-default, then grant exactly what the model needs and nothing else. Without
-// it, a metered weave agent (deepseek/kimi/…) is scrubbed of its key and fails to
-// authenticate on every run — the MOONSHOT/DEEPSEEK outage grant.go documents, which
-// hid because nothing put the key back on the WEAVE path. `environ` is the operator's
-// unscrubbed environment (the source of the key); the key must be present there
-// (e.g. `eval "$(bashy secrets env)"`), same contract as chat.go.
-func grantAgentModelKey(scrubbed []string, l *weaveAgentLaunch, environ []string) []string {
-	if l == nil || l.ModelName == "" {
-		return scrubbed
-	}
-	m, found := fleetCatalog().Model(l.ModelName)
-	if !found || m.APIKeyRef == "" {
-		return scrubbed
-	}
-	if kv, granted := secrets.GrantAgentKey(environ, m.APIKeyRef); granted {
-		return append(scrubbed, kv)
-	}
-	return scrubbed
-}
-
 func weaveRunVerify(workspace, command string) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -2655,10 +2632,18 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// the vault-projected names; WEAVE_*/BASHY_* stamped above are untouched.
 	// Opt back in with secrets.AllowAgentSecretsEnv.
 	env = secrets.ScrubAgentEnv(env)
-	// Deny-by-default, then grant EXACTLY the one credential the model declares —
-	// see grantAgentModelKey. Without it the scrub above leaves a metered weave
-	// agent with no key and it fails to authenticate on every run.
-	env = grantAgentModelKey(env, agentLaunch, os.Environ())
+	// It is NEVER weave's job to hand out API keys — every agent is preconfigured
+	// with its own auth (ycode via DHNT_BASE_URL/DHNT_API_KEY from `ycode login`,
+	// opencode via its own config, …) and must authenticate from that, not from
+	// anything weave injects. Weave used to look up the launched model's
+	// api_key_ref and inject that key back from the operator's own environment
+	// (grantAgentModelKey) — but that value can go stale (a stale DEEPSEEK_API_KEY
+	// once clobbered valid auth on every ycode/opencode agent with 401s), and
+	// reading a provider key at all is exactly the "weave hands out API keys"
+	// behavior this must not do. So weave injects nothing; it only makes sure the
+	// scrub above did not strip a name that is the agent's OWN preconfigured auth
+	// rather than an operator vault secret — see weavePreserveOwnAuth.
+	env = weavePreserveOwnAuth(env, os.Environ())
 	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
 	tool.Dir = workspace
 	tool.Env = env
