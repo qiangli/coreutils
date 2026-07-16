@@ -26,7 +26,6 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/gate"
-	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/weave/memory"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -2645,51 +2644,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if err := weaveApplyTrustPreseed(workspace, trustLaunch.Preseed); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: trust preseed failed (continuing): %v\n", err)
 	}
-	// Containment: the subagent must not learn the origin repo's
-	// path from its environment. The orchestrator's shell typically
-	// sits in the origin repo, so the inherited PWD/OLDPWD point
-	// straight at it — scrub them and pin PWD to the workspace.
-	env := make([]string, 0, len(os.Environ())+8)
-	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "PWD=") || strings.HasPrefix(kv, "OLDPWD=") {
-			continue
-		}
-		env = append(env, kv)
-	}
-	env = append(env, "PWD="+workspace)
-	env = append(env,
-		fmt.Sprintf("WEAVE_ID=weave-issue-%d", it.ID),
-		fmt.Sprintf("WEAVE_BRANCH=%s", branch),
-		fmt.Sprintf("WEAVE_BASE=%s", base),
-		fmt.Sprintf("WEAVE_ISSUE=%d", it.ID),
-		fmt.Sprintf("WEAVE_ISSUE_TITLE=%s", it.Title),
-		fmt.Sprintf("WEAVE_ISSUE_BODY=%s", it.Body),
-		// The agent's own name. The skill prelude opens with
-		// "You are $WEAVE_AGENT" so it signs its thread comments and
-		// commit trailers, making reassignment + attribution legible.
-		fmt.Sprintf("WEAVE_AGENT=%s", it.Owner),
-		fmt.Sprintf("WEAVE_OWNER=%s", it.Owner),
-	)
-	// WEAVE_AGENT is the seat; BASHY_PRINCIPAL is the agent that fills it.
-	env = weaveAgentEnv(env, agentLaunch)
-	// Credential firewall: a weave subagent is a third-party CLI processing
-	// untrusted repo content with its own network egress, so it must not inherit
-	// the operator's vault secrets by default (the lethal trifecta). Removes only
-	// the vault-projected names; WEAVE_*/BASHY_* stamped above are untouched.
-	// Opt back in with secrets.AllowAgentSecretsEnv.
-	env = secrets.ScrubAgentEnv(env)
-	// It is NEVER weave's job to hand out API keys — every agent is preconfigured
-	// with its own auth (ycode via DHNT_BASE_URL/DHNT_API_KEY from `ycode login`,
-	// opencode via its own config, …) and must authenticate from that, not from
-	// anything weave injects. Weave used to look up the launched model's
-	// api_key_ref and inject that key back from the operator's own environment
-	// (grantAgentModelKey) — but that value can go stale (a stale DEEPSEEK_API_KEY
-	// once clobbered valid auth on every ycode/opencode agent with 401s), and
-	// reading a provider key at all is exactly the "weave hands out API keys"
-	// behavior this must not do. So weave injects nothing; it only makes sure the
-	// scrub above did not strip a name that is the agent's OWN preconfigured auth
-	// rather than an operator vault secret — see weavePreserveOwnAuth.
-	env = weavePreserveOwnAuth(env, os.Environ())
+	// The child's environment — containment, credential firewall, and own-auth
+	// preservation all live in weaveChildEnv so the launch assertion can test
+	// the same code path this spawn runs.
+	env := weaveChildEnv(os.Environ(), workspace, branch, base, it, agentLaunch)
 	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
 	tool.Dir = workspace
 	tool.Env = env
