@@ -528,9 +528,19 @@ func newWeavePullCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var watch bool
 	var requireReview bool
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "pull [issue]",
 		Short: "Fast-forward your local main with the merged agent branches",
+		Long: `pull merges each submitted agent branch into the base branch, after
+measuring — never merely believing — that it is mergeable: commits ahead,
+a clean workspace, a passing verify, and an intact isolation baseline.
+
+A run is "isolation-violated" when the LIVE checkout changed while the run
+held its workspace: either the agent escaped its workspace and wrote here
+directly, or you edited the repo while it ran. Either way its branch is no
+longer the whole diff, so pull refuses it and names the paths. Review them,
+then --force to merge anyway.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = watch
 			var issueID int64
@@ -548,12 +558,13 @@ func newWeavePullCmd() *cobra.Command {
 				issueID = id
 				issueSpecified = true
 			}
-			return runWeavePull(cmd, &flags, issueID, issueSpecified, requireReview)
+			return runWeavePull(cmd, &flags, issueID, issueSpecified, requireReview, force)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&watch, "watch", false, "Daemonize: fast-forward whenever a PR merges")
 	cmd.Flags().BoolVar(&requireReview, "require-review", false, "Require a passing `weave review` verdict before merging")
+	cmd.Flags().BoolVar(&force, "force", false, "Merge a run flagged isolation-violated (the live checkout changed while it ran) anyway")
 	return cmd
 }
 

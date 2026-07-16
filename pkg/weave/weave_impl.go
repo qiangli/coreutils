@@ -235,6 +235,24 @@ type weaveItem struct {
 	// "agent is waiting on input/decision" so it isn't mistaken for slow
 	// progress. Cleared when a later non-blocker comment is appended.
 	Blocked bool `json:"blocked,omitempty"`
+	// LiveRoot / LiveTreeSHA / LiveTreeLines / LiveTreeTruncated are the
+	// isolation baseline: the state of the LIVE checkout this workspace was
+	// cloned FROM, fingerprinted at claim time. Workspace isolation is soft
+	// (own clone, own cwd — but no fence against `cd ..` or an absolute
+	// path), and an agent that escapes corrupts the human's tree and leaves
+	// a branch that no longer describes the run. Re-checked at submit /
+	// status / list / pull; see weave_isolation.go.
+	LiveRoot          string   `json:"live_root,omitempty"`
+	LiveTreeSHA       string   `json:"live_tree_sha,omitempty"`
+	LiveTreeLines     []string `json:"live_tree_lines,omitempty"`
+	LiveTreeTruncated bool     `json:"live_tree_truncated,omitempty"`
+	// IsolationViolated records that the live checkout moved while this run
+	// held its workspace, with EscapedPaths naming what differs. Sticky
+	// once set (a run that tidied up after itself still escaped) and, at
+	// read time, recomputed for display like Stale/Blocked. `weave pull`
+	// refuses these without --force.
+	IsolationViolated bool     `json:"isolation_violated,omitempty"`
+	EscapedPaths      []string `json:"escaped_paths,omitempty"`
 }
 
 // weaveComment is one entry in an issue's history thread. Append-only;
@@ -1002,6 +1020,13 @@ func weaveClearCurrentRunTerminalEvidence(it *weaveItem) {
 	it.AutoCommitError = ""
 	it.Throttled = false
 	it.ThrottleSignal = ""
+	// The isolation verdict describes THIS run, like the exit code beside
+	// it. The caller re-baselines against the live checkout as it stands
+	// now, so drift the previous run left behind is baselined IN rather
+	// than blamed on its successor — otherwise one escape would wedge the
+	// issue permanently, refusing every retry for a tree nobody touched.
+	it.IsolationViolated = false
+	it.EscapedPaths = nil
 }
 
 func weaveTerminalState(exitCode int, runErr error, killedBy string, ev weaveTerminalEvidence) string {
@@ -1505,6 +1530,11 @@ func weaveRenderItemRows(w io.Writer, q *weaveQueue, items []*weaveItem) {
 		if it.Stale {
 			state = it.State + "*"
 		}
+		// "!" outranks "*": a stale wrapper is a run to re-attach, an
+		// escaped run is a tree to inspect before anything else happens.
+		if it.IsolationViolated {
+			state = it.State + "!"
+		}
 		toolCol := it.Tool
 		if toolCol == "" {
 			toolCol = "-"
@@ -1713,10 +1743,14 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	// in base shows as "done" instead of lying about pending work.
 	base := weaveBaseBranch(root)
 	weaveReconcileMerged(root, base, q)
+	// Same display-only contract as the reconcile above: one git status over
+	// the shared live root, judged against every item's baseline.
+	weaveComputeIsolation(root, q)
 	var items []*weaveItem
 	anyStale := false
 	reclaimable := 0
 	var salvageable []int64
+	var violated []*weaveItem
 	for _, it := range q.Items {
 		// A run that DIED WITH GOOD WORK INSIDE IT.
 		//
@@ -1773,6 +1807,9 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 			it.Stale = true
 			anyStale = true
 		}
+		if it.IsolationViolated {
+			violated = append(violated, it)
+		}
 		items = append(items, it)
 	}
 	var others []map[string]any
@@ -1823,6 +1860,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	if anyStale {
 		fmt.Fprintln(cmd.OutOrStdout(), "* wrapper process is dead — re-attach with `weave start --resume --issue N` or `weave abandon N`")
 	}
+	weavePrintIsolationFooter(cmd.OutOrStdout(), violated)
 	weavePrintSalvageableFooter(cmd.OutOrStdout(), salvageable)
 	weavePrintReclaimableFooter(cmd.OutOrStdout(), reclaimable)
 	return nil
@@ -2411,6 +2449,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// fields describe only the current run.
 			freshIt.State = "working"
 			weaveClearCurrentRunTerminalEvidence(freshIt)
+			// Re-baseline: this is a NEW run in the same workspace, so it
+			// is answerable for what the live checkout does from HERE, not
+			// for drift left by the run that died.
+			weaveRecordLiveBaseline(freshIt, root)
 			freshIt.StartedAt = time.Now().UTC()
 			freshIt.CtlSock = ctlSock
 			if len(toolArgs) > 0 {
@@ -2532,6 +2574,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.WrapperPid = os.Getpid()
 			freshIt.CtlSock = ctlSock
 			freshIt.StartedAt = time.Now().UTC()
+			// Isolation baseline: fingerprint the live checkout NOW, so a
+			// later re-check can tell whether this run reached back out of
+			// its workspace and touched it. See weave_isolation.go.
+			weaveRecordLiveBaseline(freshIt, root)
 			// Capture the immutable base commit the workspace was cloned
 			// at — the local `base` ref is untouched by the agent (it
 			// works on its own branch), so this is the true fork point.
@@ -2845,6 +2891,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 		}
 		weaveApplyTerminalEvidence(freshIt, ev)
+		// Isolation verdict, recorded with the rest of the terminal
+		// evidence: did the live checkout move while this run held its
+		// workspace? Measured here, under the lock, so the durable record
+		// exists even if nobody ever runs `weave status`.
+		weaveApplyIsolationCheck(freshIt)
 		freshIt.AutoCommitted = autoCommitted
 		freshIt.AutoCommitError = autoCommitErr
 		if logPath != "" {
@@ -2868,6 +2919,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if lockErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed after tool exit: %v\n", lockErr)
 	} else {
+		// Say it out loud at the moment it is found. A flag only `weave
+		// status` would show is a flag nobody reads until after the merge.
+		if w := weaveIsolationWarning(it); w != "" {
+			fmt.Fprint(cmd.ErrOrStderr(), w)
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave: `weave pull` will REFUSE run #%d without --force\n", it.ID)
+		}
 		if err := weaveRememberObservation(dir, it, ev); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory capture failed (continuing): %v\n", err)
 		}
@@ -3312,7 +3369,7 @@ func weaveRequireReviewGate(it *weaveItem) error {
 	return nil
 }
 
-func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, issueSpecified bool, requireReview bool) error {
+func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, issueSpecified bool, requireReview, force bool) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -3332,6 +3389,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 	}
 	var results []result
 	var mergedReports []*weaveItem
+	// Snapshot the live checkout ONCE, before the first merge. Pull mutates
+	// this very tree (merge commits, and a suite gate running builds in it),
+	// so re-snapshotting per item would let item #1's merge read as item
+	// #2's escape. One instant, judged against every item's baseline.
+	liveNow, liveNowErr := weaveSnapshotLiveTree(root)
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		weaveTestPauseAfterPullLoad()
 		if issueSpecified && findWeaveItem(q, issueID) == nil {
@@ -3431,6 +3493,32 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "verify-failed",
 					Detail: fmt.Sprintf("verify command exited %d — inspect with `weave shell %d`, fix or abandon", *it.VerifyExit, it.ID)})
 				continue
+			}
+			// Isolation gate. A run whose live checkout moved underneath it
+			// is one whose branch is NOT the whole diff: some of its effect
+			// is already sitting, uncommitted and unreviewed, in the user's
+			// tree. Merging that silently is how a half-applied change gets
+			// blessed as reviewed work. Refuse, name the paths, and make the
+			// operator say --force — which stays available precisely because
+			// the common cause is innocent (the human edited their own repo
+			// while the agent ran), and the guard cannot tell the two apart.
+			if liveNowErr == nil {
+				if violated, escaped := weaveIsolationStatus(it, liveNow); violated {
+					it.IsolationViolated = true
+					if len(escaped) > 0 {
+						it.EscapedPaths = escaped
+					}
+				}
+			}
+			if it.IsolationViolated && !force {
+				fmt.Fprint(cmd.ErrOrStderr(), weaveIsolationWarning(it))
+				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "isolation-violated",
+					Detail: weaveIsolationDetail(it)})
+				continue
+			}
+			if it.IsolationViolated && force {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave: --force: merging isolation-violated run #%d anyway — %s\n",
+					it.ID, weaveIsolationDetail(it))
 			}
 			// The agent's branch lives in the workspace clone, not the
 			// user's repo. Fetch it across (idempotent — already-present
@@ -3708,6 +3796,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		reconciledFrom = "submitted"
 	}
 	stale := it.State == "working" && it.WrapperPid > 0 && !pidAlive(it.WrapperPid)
+	// Read-time isolation check, like stale/blocked: nothing is persisted
+	// here (status loads without the lock), but a run that escaped WHILE
+	// still running should say so now, not only once it terminates.
+	weaveComputeIsolation(root, q)
 	workspaceExists := false
 	if it.Workspace != "" {
 		if st, statErr := os.Stat(it.Workspace); statErr == nil && st.IsDir() {
@@ -3717,18 +3809,24 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 
 	if mode == weavecli.OutputJSON {
 		res := map[string]any{
-			"issue":            it.ID,
-			"title":            it.Title,
-			"state":            displayState,
-			"recorded_state":   it.State,
-			"merged":           merged,
-			"base":             base,
-			"commits_ahead":    it.CommitsAhead,
-			"branch":           it.Branch,
-			"workspace":        it.Workspace,
-			"workspace_exists": workspaceExists,
-			"stale":            stale,
-			"dirty":            it.Dirty,
+			"issue":              it.ID,
+			"title":              it.Title,
+			"state":              displayState,
+			"recorded_state":     it.State,
+			"merged":             merged,
+			"base":               base,
+			"commits_ahead":      it.CommitsAhead,
+			"branch":             it.Branch,
+			"workspace":          it.Workspace,
+			"workspace_exists":   workspaceExists,
+			"stale":              stale,
+			"dirty":              it.Dirty,
+			"isolation_violated": it.IsolationViolated,
+		}
+		if it.IsolationViolated {
+			res["escaped_paths"] = it.EscapedPaths
+			res["isolation_detail"] = weaveIsolationDetail(it)
+			res["mergeable"] = false
 		}
 		if reconciledFrom != "" {
 			res["reconciled_from"] = reconciledFrom
@@ -3792,6 +3890,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	}
 	if it.Dirty {
 		fmt.Fprintf(w, "  dirty:    %d tracked uncommitted file(s)\n", it.DirtyFiles)
+	}
+	if it.IsolationViolated {
+		fmt.Fprintf(w, "  ISOLATION: VIOLATED — not mergeable without --force\n")
+		fmt.Fprintf(w, "             %s\n", weaveIsolationDetail(it))
 	}
 	if it.Workspace != "" {
 		state := "present"
@@ -4793,8 +4895,10 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 			weavecli.ExitInvalidArg, lockErr))
 	}
 	// Delegate to pull: re-acquires the lock and runs the full verify + merge
-	// path on the now-"submitted" item.
-	return runWeavePull(cmd, flags, issueID, true, false)
+	// path on the now-"submitted" item. force=false — salvage rescues work a
+	// run committed, which is no reason to skip the isolation gate; a flagged
+	// run still has to be reviewed and pulled with an explicit --force.
+	return runWeavePull(cmd, flags, issueID, true, false, false)
 }
 
 // weavePrunableForSweep reports whether `weave prune` (optionally --stale)
