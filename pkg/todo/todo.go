@@ -36,13 +36,14 @@ import (
 // delegates "in progress"/"done" to weave so there is one source of truth), a
 // steward/human todo OWNS its own execution, so doing/done are first-class here.
 const (
-	StatusTodo    = "todo"    // not started
-	StatusDoing   = "doing"   // in progress
-	StatusBlocked = "blocked" // waiting on something else
-	StatusDone    = "done"    // completed
+	StatusTodo     = "todo"     // not started
+	StatusAssigned = "assigned" // delegated to an agent — in that agent's hands (auto-set)
+	StatusDoing    = "doing"    // in progress by ME (the steward/human works it directly)
+	StatusBlocked  = "blocked"  // waiting on something else
+	StatusDone     = "done"     // completed
 )
 
-var statuses = []string{StatusTodo, StatusDoing, StatusBlocked, StatusDone}
+var statuses = []string{StatusTodo, StatusAssigned, StatusDoing, StatusBlocked, StatusDone}
 
 // ValidStatus reports whether s is a known todo status.
 func ValidStatus(s string) bool { return slices.Contains(statuses, s) }
@@ -248,20 +249,23 @@ func Remove(st *issue.Store, ref string) (*issue.Issue, error) {
 	return it, st.Remove(it)
 }
 
-// List returns a store's items, newest first, optionally filtered by status.
+// List returns a store's items in SEQUENTIAL order — by running number ascending
+// (#1, #2, …), i.e. oldest first / creation order — optionally filtered by status.
+// The CLI's --reverse flips it to newest-first.
 func List(st *issue.Store, status string) ([]*issue.Issue, error) {
 	all, err := st.List()
 	if err != nil {
 		return nil, err
 	}
-	if status == "" {
-		return all, nil
-	}
-	var out []*issue.Issue
-	for _, it := range all {
-		if it.Status == status {
-			out = append(out, it)
+	out := all
+	if status != "" {
+		out = out[:0:0]
+		for _, it := range all {
+			if it.Status == status {
+				out = append(out, it)
+			}
 		}
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
 	return out, nil
 }

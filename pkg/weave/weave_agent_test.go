@@ -34,9 +34,13 @@ func TestExpandAgentSelectsTheModel(t *testing.T) {
 	if l == nil {
 		t.Fatal("a nickname must expand")
 	}
-	want := "claude --dangerously-skip-permissions --model claude-fable-5 -p FIX THE GATE"
-	if strings.Join(argv, " ") != want {
-		t.Fatalf("argv =\n  %q\nwant\n  %q", strings.Join(argv, " "), want)
+	wantPrefix := "claude --dangerously-skip-permissions --model claude-fable-5 -p FIX THE GATE"
+	if got := strings.Join(argv, " "); !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("argv =\n  %q\nwant prefix\n  %q", got, wantPrefix)
+	}
+	// Every worker prompt carries the standard commit-or-it's-lost contract.
+	if !strings.Contains(argv[len(argv)-1], "WEAVE WORKER CONTRACT") {
+		t.Fatalf("worker contract not appended to the prompt: %q", argv[len(argv)-1])
 	}
 	// Bound as `fable`, recorded as `claude:fable5`: the binding is canonical
 	// however it was spelled.
@@ -115,8 +119,8 @@ func TestExpandedBodyIsTheFinalArgument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if argv[len(argv)-1] != "THE BODY" {
-		t.Fatalf("body is not last: %q", argv)
+	if !strings.HasPrefix(argv[len(argv)-1], "THE BODY") {
+		t.Fatalf("body is not the leading content of the last arg: %q", argv)
 	}
 	if argv[len(argv)-2] != "--message" {
 		t.Fatalf("aider's prompt must be the value of --message: %q", argv)
@@ -288,8 +292,8 @@ func TestEmptyBodyFallsBackToTheTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := argv[len(argv)-1]; got != "FIX THE GATE" {
-		t.Fatalf("prompt = %q, want the title", got)
+	if got := argv[len(argv)-1]; !strings.HasPrefix(got, "FIX THE GATE") {
+		t.Fatalf("prompt = %q, want the title as the leading content", got)
 	}
 }
 

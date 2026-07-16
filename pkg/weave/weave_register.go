@@ -88,8 +88,14 @@ func runWeaveAddFromIssue(cmd *cobra.Command, ref string, flags *weaveOutputFlag
 	}
 
 	// Link back, so `issue show` knows the work is in flight and a second agent
-	// cannot queue the same issue twice.
+	// cannot queue the same issue twice. Auto-status: the todo is now ASSIGNED to an
+	// agent (the delegation happened) — the list reflects live work without a manual
+	// `todo status`. weaveCloseRegisterOnMerge flips it to done; a failed/abandoned run
+	// clears the link and reverts it to todo (weaveReleaseRegister).
 	it.Weave = qi.ID
+	if it.Status == todopkg.StatusTodo || it.Status == todopkg.StatusBlocked {
+		it.Status = todopkg.StatusAssigned
+	}
 	if _, err := reg.Save(it); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add", weavecli.ExitGenericFail, err))
 	}
@@ -133,4 +139,32 @@ func weaveCloseRegisterOnMerge(root, base string, it *weaveItem) {
 	ri.ClosedBy = it.Owner
 	ri.Weave = 0
 	_, _ = reg.Save(ri)
+}
+
+// weaveReleaseRegister reverts a linked todo when its run is ABANDONED — the user
+// explicitly drops the work. A retryable failure/kill is NOT an abandonment (the item
+// stays "assigned" to be re-run); only dropping it returns the todo to the backlog.
+// Clears the link and reverts assigned -> todo, so the list never shows a stale
+// "assigned" for work nobody will do.
+func weaveReleaseRegister(root string, it *weaveItem) {
+	if it == nil || it.Register == "" {
+		return
+	}
+	reg := todopkg.RepoStore(root)
+	ri, err := reg.Resolve(it.Register)
+	if err != nil {
+		return
+	}
+	changed := false
+	if ri.Weave == it.ID {
+		ri.Weave = 0
+		changed = true
+	}
+	if ri.Status == todopkg.StatusAssigned {
+		ri.Status = todopkg.StatusTodo
+		changed = true
+	}
+	if changed {
+		_, _ = reg.Save(ri)
+	}
 }

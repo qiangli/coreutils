@@ -75,8 +75,26 @@ func weaveExpandAgent(toolArgs []string, body, title string) (*weaveAgentLaunch,
 	if prompt == "" {
 		return nil, nil, fmt.Errorf("agent %q needs a prompt: issue has neither a body nor a title", toolArgs[0])
 	}
-	return l, l.Argv(prompt), nil
+	return l, l.Argv(prompt + weaveWorkerContract), nil
 }
+
+// weaveWorkerContract is appended to EVERY worker's prompt: the non-negotiable
+// mechanics a subagent must follow for its work to be visible to the gate and
+// mergeable. Stating it here (not just in the brief) means no brief can forget it —
+// the single most common real failure is an agent doing the work but never
+// COMMITTING it, so an in-workspace verify passes while `weave pull` sees nothing and
+// records the run failed and the work looks lost (observed with a real ycode port).
+const weaveWorkerContract = `
+
+---
+WEAVE WORKER CONTRACT — non-negotiable; your work is INVISIBLE until you do these:
+1. COMMIT your changes to the CURRENT branch with git before you finish. Uncommitted
+   or untracked files do NOT merge and the run is reported failed — a passing local
+   build is not enough, the diff must be committed. Verify with 'git status' (clean)
+   and 'git log --oneline -1' (your commit) before you stop.
+2. Do NOT push, do NOT switch branches, do NOT merge to main — the conductor pulls.
+3. If you cannot finish, COMMIT what works and state briefly what remains.
+4. Run the gate yourself before declaring done; a tool exiting 0 is not proof.`
 
 // weaveAgentEnv stamps the spawned worker with the principal it is acting as.
 //

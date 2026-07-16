@@ -3657,6 +3657,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave abandon",
 			code, lockErr))
 	}
+	// Auto-status: dropping the run returns its linked todo to the backlog
+	// (assigned -> todo, link cleared), so the list stops showing a stale "assigned".
+	weaveReleaseRegister(root, it)
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave abandon", map[string]any{
 			"issue":  it.ID,
