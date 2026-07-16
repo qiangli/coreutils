@@ -79,8 +79,12 @@ func TestUserScopeNoOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sc.Kind != KindUser || sc.Dir() != "/host/kb" {
-		t.Fatalf("host store without owner = %s (%s), want /host/kb", sc.Dir(), sc.Kind)
+	// Dir() runs through filepath.Join, so the expected value must too — on
+	// Windows "/host/kb" normalizes to `\host\kb`, and a raw string literal would
+	// spuriously fail (this test was the Windows-only CI break of 2026-07-15).
+	want := filepath.Join("/host/kb")
+	if sc.Kind != KindUser || sc.Dir() != want {
+		t.Fatalf("host store without owner = %s (%s), want %s", sc.Dir(), sc.Kind, want)
 	}
 }
 
