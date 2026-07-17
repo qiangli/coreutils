@@ -550,6 +550,7 @@ func init() {
 	// knowledge
 	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 	addVerb("search", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapNeedsNetwork}})
+	addVerb("sota", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapNeedsNetwork, CapSpawnsProcesses}})
 	// lexicon: what do this project's words mean HERE? It PROJECTS the atlas and the
 	// fleet registry into the channels agents read -- it introduces NO new source of
 	// truth, which is the test it has to keep passing. The moment it starts STORING
@@ -755,7 +756,7 @@ func init() {
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch", "search",
-		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act",
+		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act", "sota",
 		"act-runner", "mirror", "podman", "docker", "ollama", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
@@ -767,7 +768,7 @@ func init() {
 	eff(EffExec,
 		"find", "awk", "xargs", "at", "batch", "chroot", "nice", "nohup",
 		"runcon", "stdbuf", "time", "timeout", "watch", "env", "foreman",
-		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act",
+		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
 		"act-runner", "skills", "podman", "docker", "ollama", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login",
@@ -798,7 +799,7 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama")
+	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama", "sota")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
