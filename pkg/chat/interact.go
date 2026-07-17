@@ -72,36 +72,16 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		return 1, err
 	}
 
-	// ycode (and any first-party harness) is already bashy-native: it speaks the
-	// event channel and applies governance itself, so it needs no wrapper, no
-	// control socket, no registry entry. What `bashy chat` still does for it is
-	// translate the fleet selection into the right model — identical to
-	// `ycode --model <model>`. So run it PLAINLY: native terminal, native env, the
-	// resolved model argv, and get out of the way.
-	if nativeHarnesses[l.ToolName] {
-		nargv := append([]string{}, l.Args...)
-		if l.TakesPrompt && strings.TrimSpace(opt.Prompt) != "" {
-			nargv = append(nargv, opt.Prompt)
-		}
-		cwd := opt.Cwd
-		if cwd == "" {
-			cwd, _ = os.Getwd()
-		}
-		native := exec.CommandContext(ctx, l.Tool, nargv...)
-		native.Dir = cwd
-		native.Stdin, native.Stdout, native.Stderr = os.Stdin, os.Stdout, os.Stderr
-		if l.ModelName != "" {
-			fmt.Fprintf(status, "chat: launching %s with model %s (native harness — governs and reports itself)\n",
-				l.ToolName, l.ModelName)
-		}
-		if err := native.Run(); err != nil {
-			if ee, ok := err.(*exec.ExitError); ok {
-				return ee.ExitCode(), nil
-			}
-			return 1, err
-		}
-		return 0, nil
-	}
+	// ycode (and any first-party harness) applies its OWN governance, so bashy does
+	// not scrub its env or force a single key — that is the only difference (native
+	// env, below). It still routes through the SAME pty + control socket + host-room
+	// membership as every other agent, because that is the whole point of
+	// `bashy chat`: an instance launched this way is DISCOVERABLE and STEERABLE.
+	// (An earlier version launched ycode with inherited stdio and no control channel
+	// — a running session was then invisible on `chat sessions` and impossible to
+	// steer. This closes that gap; the transparent pty passthrough keeps the UX
+	// identical to `ycode --model x`.)
+	native := nativeHarnesses[l.ToolName]
 
 	argv := append([]string{}, l.Args...)
 	if l.TakesPrompt && strings.TrimSpace(opt.Prompt) != "" {
@@ -128,11 +108,18 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 
 	cmd := exec.CommandContext(ctx, l.Tool, argv...)
 	cmd.Dir = cwd
-	// The whole reason a session launcher lives in this package: agentChildEnv is
-	// the one choke point that scrubs the operator's vault secrets, grants back
-	// only this model's one API key, forces the child's shell to bashy, and stamps
-	// its principal identity. Built anywhere else, all four silently drop.
-	cmd.Env = agentChildEnv(withLaunch(ctx, l))
+	if native {
+		// Native env: a first-party harness uses the operator's real env + its own
+		// key/config, so it is truly "identical to `ycode --model x`" for auth. bashy
+		// adds only the control channel + membership, never a governance override.
+		cmd.Env = os.Environ()
+	} else {
+		// agentChildEnv is the one choke point that scrubs the operator's vault
+		// secrets, grants back only this model's one API key, forces the child's
+		// shell to bashy, and stamps its principal identity. Built anywhere else, all
+		// four silently drop.
+		cmd.Env = agentChildEnv(withLaunch(ctx, l))
+	}
 	if p, ok := agentctl.ProfileFor(l.ToolName); ok && p.Preseed != "" {
 		_ = agentctl.ApplyTrustPreseed(cmd.Dir, p.Preseed)
 	}
@@ -153,9 +140,13 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	_ = registerSession(sess)
 	defer deregisterSession(sess.ID)
 
-	fmt.Fprintf(status, "chat: %s (%s) — native session, governed + steerable (id %s). Ctrl-C ends it; "+
+	posture := "governed + steerable"
+	if native {
+		posture = "native harness (self-governing) + steerable"
+	}
+	fmt.Fprintf(status, "chat: %s (%s) — %s (id %s). Ctrl-C ends it; "+
 		"from another terminal: `bashy chat steer %s \"...\"` / `attach %s`.\n",
-		sess.Nick, sess.Binding, sess.ID, sess.ID, sess.ID)
+		sess.Nick, sess.Binding, posture, sess.ID, sess.ID, sess.ID)
 
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.
