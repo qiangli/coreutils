@@ -22,9 +22,14 @@ type Options struct {
 	// Attended strips the auto-approve kill-switches (leaving the tool's own
 	// approval gate ON and its write capability intact) for a session a human is
 	// driving. Unlike ReadOnly it does NOT pin the sandbox read-only. See
-	// StripKillSwitches.
+	// StripKillSwitches. Overridden by AllowUnsafe.
 	Attended bool
-	DryRun   bool
+	// AllowUnsafe is the operator's explicit acceptance of unattended full access
+	// (the --yolo flag): keep the approval-gate kill-switches AND skip the
+	// uncontained-host guard, for a session supervised remotely via steer rather
+	// than at the agent's terminal.
+	AllowUnsafe bool
+	DryRun      bool
 
 	// Steer resolves the tool's INTERACTIVE launch (steer_exec) instead of its
 	// headless one-shot, because a one-shot has nothing to interrupt: it runs the
@@ -288,17 +293,29 @@ containing it. Choose one:
 }
 
 func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
-	if opt.ReadOnly {
-		args = ReadOnlyArgs(tool, args)
-	} else if opt.Attended {
-		args = StripKillSwitches(tool, args)
+	// "allowed" = the operator has EXPLICITLY accepted unattended full access —
+	// the --yolo flag (opt.AllowUnsafe), $BASHY_ALLOW_UNSAFE_AGENT_LAUNCH, or a
+	// container. When so, the approval gate stays OFF (keep the kill-switches): a
+	// session supervised REMOTELY via steer cannot answer a prompt at a terminal
+	// nobody is sitting at, and the uncontained-host guard has nothing to refuse.
+	allowed := opt.AllowUnsafe
+	if !allowed {
+		allowed, _ = UnsafeLaunchAllowed()
+	}
+	switch {
+	case opt.ReadOnly:
+		args = ReadOnlyArgs(tool, args) // a reviewer must never write — always strip
+	case opt.Attended && !allowed:
+		args = StripKillSwitches(tool, args) // a human is at the terminal → approval ON
 	}
 	args = ApplySandbox(tool, args, opt)
 	if opt.DryRun {
 		return args, nil
 	}
-	if err := GuardUnsafeArgs(tool, args); err != nil {
-		return nil, err
+	if !allowed {
+		if err := GuardUnsafeArgs(tool, args); err != nil {
+			return nil, err
+		}
 	}
 	return args, nil
 }

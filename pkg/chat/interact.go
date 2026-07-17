@@ -35,6 +35,9 @@ type InteractOptions struct {
 	Cwd      string
 	Timeout  time.Duration
 	ReadOnly bool
+	// Unattended (--yolo) keeps the agent's approval gate OFF for a session
+	// supervised remotely via steer — no one sits at the terminal to approve.
+	Unattended bool
 	// Status receives bashy's own one-line notices (which agent, the session id);
 	// defaults to os.Stderr so they never contaminate the tool's stdout.
 	Status io.Writer
@@ -75,10 +78,11 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	// unattended fleet launch, and it passes the uncontained-host guard exactly as
 	// running the tool by hand would. ReadOnly, when set, is stricter and wins.
 	l, err := resolveLaunch(name, Options{
-		Cwd:      opt.Cwd,
-		ReadOnly: opt.ReadOnly,
-		Attended: !opt.ReadOnly,
-		Steer:    true,
+		Cwd:         opt.Cwd,
+		ReadOnly:    opt.ReadOnly,
+		Attended:    !opt.ReadOnly,
+		AllowUnsafe: opt.Unattended,
+		Steer:       true,
 	})
 	if err != nil {
 		return 1, err

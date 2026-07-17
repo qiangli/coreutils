@@ -70,6 +70,12 @@ type Options struct {
 	// host guard, exactly as running the tool by hand would.
 	Attended bool
 
+	// AllowUnsafe is the operator's explicit --yolo acceptance: keep the approval
+	// gate OFF (do not strip the kill-switches) AND skip the uncontained-host
+	// guard — for a session supervised REMOTELY via steer, where no one sits at the
+	// agent's terminal to answer an approval prompt.
+	AllowUnsafe bool
+
 	// Fork resolves the tool's context-inheriting fork launch (fork_exec): the
 	// spawned session inherits the caller's live transcript. Session is the current
 	// session id substituted into the fork template. Set by `delegate self` when the
@@ -155,13 +161,14 @@ type LaunchProfile struct {
 
 func toAgentLaunchOptions(opt Options) agentlaunch.Options {
 	return agentlaunch.Options{
-		Sandbox:  opt.Sandbox,
-		ReadOnly: opt.ReadOnly,
-		Attended: opt.Attended,
-		DryRun:   opt.DryRun,
-		Steer:    opt.Steer,
-		Fork:     opt.Fork,
-		Session:  opt.Session,
+		Sandbox:     opt.Sandbox,
+		ReadOnly:    opt.ReadOnly,
+		Attended:    opt.Attended,
+		AllowUnsafe: opt.AllowUnsafe,
+		DryRun:      opt.DryRun,
+		Steer:       opt.Steer,
+		Fork:        opt.Fork,
+		Session:     opt.Session,
 	}
 }
 
@@ -693,11 +700,12 @@ func NewChatCmd() *cobra.Command {
 						"use -m/--instruction for a one-shot, or drop -i")
 				}
 				exit, err := Interact(cmd.Context(), opt.Agent, InteractOptions{
-					Prompt:   opt.Instruction,
-					Cwd:      opt.Cwd,
-					Timeout:  opt.Timeout,
-					ReadOnly: opt.ReadOnly,
-					Status:   cmd.ErrOrStderr(),
+					Prompt:     opt.Instruction,
+					Cwd:        opt.Cwd,
+					Timeout:    opt.Timeout,
+					ReadOnly:   opt.ReadOnly,
+					Unattended: opt.AllowUnsafe,
+					Status:     cmd.ErrOrStderr(),
 				})
 				if err != nil {
 					return err
@@ -726,6 +734,10 @@ func NewChatCmd() *cobra.Command {
 	cmd.Flags().StringVar(&toolSel, "tool", "", "launch ANY operable agent using this tool (e.g. codex)")
 	cmd.Flags().IntVar(&bandSel, "band", 0, "launch ANY operable agent pegged at this capability band or above (1-4)")
 	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "force a live interactive session even with an instruction")
+	cmd.Flags().BoolVar(&opt.AllowUnsafe, "yolo", false,
+		"disable the agent's approval gate (keep --dangerously-skip-permissions) and accept the "+
+			"uncontained-host risk — for a session you SUPERVISE REMOTELY via `chat steer`, where no one "+
+			"sits at the agent's terminal to answer an approval prompt. The steer loop is the oversight")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when --agent is omitted: conductor, reviewer, qa, release")
 	cmd.Flags().StringVar(&capStr, "capability", "", "route to the best-fit routable agent for this capability (e.g. deep-research, coding)")
 	cmd.Flags().StringVarP(&opt.Instruction, "instruction", "m", "", "instruction to send to the agent (one-shot; omit for an interactive session)")
