@@ -323,7 +323,11 @@ func translateBracket(s string) (string, int, error) {
 	for i < len(s) {
 		if s[i] == ']' && !first {
 			b.WriteByte(']')
-			return b.String(), i + 1, nil
+			cls := b.String()
+			if _, err := regexp.Compile(cls); err != nil {
+				return "", 0, fmt.Errorf("invalid bracket expression %q: %w", s[:i+1], err)
+			}
+			return cls, i + 1, nil
 		}
 		switch {
 		case s[i] == '[' && i+1 < len(s) && s[i+1] == ':':

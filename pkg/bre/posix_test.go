@@ -152,6 +152,63 @@ func TestPOSIXIntervalBounds(t *testing.T) {
 	}
 }
 
+func TestPOSIXBracketExpressions(t *testing.T) {
+	classes := map[string]string{
+		"alnum": "a", "alpha": "a", "blank": " ", "cntrl": "\t",
+		"digit": "7", "graph": "!", "lower": "a", "print": " ",
+		"punct": "!", "space": "\n", "upper": "A", "xdigit": "f",
+	}
+	for class, in := range classes {
+		pattern := "[[:" + class + ":]]"
+		re, err := Compile(pattern)
+		if err != nil {
+			t.Errorf("Compile(%q): %v", pattern, err)
+			continue
+		}
+		if !re.MatchString(in) {
+			t.Errorf("%q did not match %q", pattern, in)
+		}
+	}
+
+	for _, translate := range []struct {
+		name string
+		fn   func(string) (string, error)
+	}{
+		{"BRE", ToGo},
+		{"ERE", ToGoERE},
+	} {
+		for _, pattern := range []string{`[[:bogus:]]`, `[z-a]`} {
+			if _, err := translate.fn(pattern); err == nil {
+				t.Errorf("%s translation of %q succeeded, want bracket expression error", translate.name, pattern)
+			}
+		}
+	}
+
+	positions := []struct {
+		pattern, matches, notMatches string
+	}{
+		{`[]a]`, "]", "b"},  // ] is literal when it is the first member.
+		{`[^]a]`, "b", "]"}, // The same rule applies after leading ^.
+		{`[-a]`, "-", "b"},  // - is literal as the first member.
+		{`[a-]`, "-", "b"},  // - is literal as the last member.
+		{`[a^]`, "^", "b"},  // ^ is literal away from the first position.
+		{`[^^]`, "a", "^"},  // ^ is negation only in the first position.
+	}
+	for _, c := range positions {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Errorf("Compile(%q): %v", c.pattern, err)
+			continue
+		}
+		if !re.MatchString(c.matches) {
+			t.Errorf("%q did not match %q", c.pattern, c.matches)
+		}
+		if re.MatchString(c.notMatches) {
+			t.Errorf("%q unexpectedly matched %q", c.pattern, c.notMatches)
+		}
+	}
+}
+
 // The backtracking engine must report the leftmost match, which means trying
 // every start offset. These all take the backref path.
 func TestPOSIXBacktrackLeftmost(t *testing.T) {
