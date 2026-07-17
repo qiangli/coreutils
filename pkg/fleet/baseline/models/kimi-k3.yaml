@@ -21,10 +21,12 @@ band_source: measured
 # gemini3.1 (demoted L3->L2): L3 is judgment, and judgment includes knowing when to
 # stop. A diagnosis you never deliver is not a diagnosis.
 #
-# CONFOUND, recorded: one run per arm, and a reasoning model is slow — a much larger
-# budget might let it converge. Re-measure before trusting L2 as a ceiling. But the
-# DELIVERY test is the band test: at a normal budget, left alone, it delivers green
-# code (coder) and nothing on the orchestration roles.
+# CONFOUND RESOLVED — re-measured at 900s (2.1x the budget). NOT a budget limit: the
+# conductor repeat ratio was IDENTICAL (4.0) and the steward's WORSENED (5.0->7.0);
+# both arms kept re-issuing the SAME single call (distinct=1) and neither delivered.
+# The extra ~8 minutes bought zero new distinct progress — the steward just looped
+# more. This is a STRUCTURAL inability to stop, not a slow reasoner. L2 is the
+# confirmed ceiling for the orchestration roles; more budget does not help.
 #
 # ROUTING: coder / bounded review with a gate — strong there. Not conductor, not
 # steward: it will burn budget and (for judgment tasks) report nothing.
