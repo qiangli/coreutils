@@ -167,6 +167,7 @@ func (s *Session) attach(ctx context.Context, msg string) error {
 		Cwd:      s.state.Cwd,
 		Stream:   sink,
 		ReadOnly: false, // a foreman's agent is here to DO the work
+		Mode:     "foreman",
 	})
 	if err != nil {
 		return err

@@ -70,6 +70,7 @@ func sessionTurn(ctx context.Context, st *State, name, role, instruction, questi
 		// exactly one thing, which is text. Read-only also passes the launch guard by
 		// construction, so nobody has to weaken a host to hold a meeting.
 		ReadOnly: true,
+		Mode:     "meet",
 	})
 	if err != nil {
 		ev := classifyTurn(st, name, question, "", 2, err, time.Since(start), budget)

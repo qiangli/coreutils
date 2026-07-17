@@ -15,6 +15,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/room"
 )
 
 // A Session is a live agent you can talk to.
@@ -85,6 +86,11 @@ type SessionOptions struct {
 	// TALK needs no write authority, and read-only passes the launch guard by
 	// construction on an ordinary host.
 	ReadOnly bool
+
+	// Mode labels this instance on its host-room card (foreman | meet | coach | …).
+	// Empty defaults to "session". It is how `bashy chat sessions` shows WHAT a
+	// member is doing, not just that it exists.
+	Mode string
 }
 
 // Start launches an agent's interactive session.
@@ -181,8 +187,33 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		sink = io.MultiWriter(sink, opt.Stream)
 	}
 
+	// Join the host room so a Session — the primitive foreman/meet/coach steer
+	// through — is a discoverable, steerable member like any other instance. Left
+	// when the run goroutine ends. (No LogPath: a Session captures in memory, so it
+	// is steer/observe-able via the ctlsock, not `chat attach`.)
+	mode := strings.TrimSpace(opt.Mode)
+	if mode == "" {
+		mode = "session"
+	}
+	card := room.Card{
+		ID:        sessionID(l),
+		Principal: principalName(),
+		Tool:      l.ToolName,
+		Model:     l.ModelName,
+		Binding:   l.Binding(),
+		Nick:      l.Nick,
+		Band:      bindingBand(name),
+		Mode:      mode,
+		CtlSock:   sock,
+		PID:       os.Getpid(),
+		Cwd:       cwd,
+		Events:    tail != nil,
+	}
+	_ = room.Join(card)
+
 	go func() {
 		defer close(s.done)
+		defer room.Leave(card.ID)
 		exit, killed, err := agentpty.Run(cmd, sink, agentpty.Options{
 			CtlSock:    sock,
 			Capture:    true, // the caller records this; the human watches via observe
