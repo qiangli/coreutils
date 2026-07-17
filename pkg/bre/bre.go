@@ -233,7 +233,10 @@ func normalizeInterval(s string) (string, bool) {
 	}
 	comma := strings.IndexByte(s, ',')
 	if comma < 0 {
-		return s, digits(s)
+		if !digits(s) || !withinDupMax(s) {
+			return "", false
+		}
+		return stripZeros(s), true
 	}
 	lo, hi := s[:comma], s[comma+1:]
 	if strings.Contains(hi, ",") || (lo == "" && hi == "") {
@@ -245,10 +248,46 @@ func normalizeInterval(s string) (string, bool) {
 	if !digits(lo) || (hi != "" && !digits(hi)) {
 		return "", false
 	}
+	// POSIX RE_DUP_MAX: interval bounds are capped at 255 (the portable
+	// ceiling GNU documents and bash 5.3 enforces). Check before atoi so a
+	// literal larger than an int (e.g. \{999999999999999999999999999999\})
+	// is rejected rather than overflowing the magnitude comparison below.
+	if !withinDupMax(lo) || (hi != "" && !withinDupMax(hi)) {
+		return "", false
+	}
 	if hi != "" && atoi(lo) > atoi(hi) {
 		return "", false
 	}
-	return lo + "," + hi, true
+	// Emit canonical decimal: leading zeros (\{0002\}) are valid POSIX spelling
+	// but Go's regexp engine, which the compiled form delegates to, rejects them.
+	hiN := hi
+	if hi != "" {
+		hiN = stripZeros(hi)
+	}
+	return stripZeros(lo) + "," + hiN, true
+}
+
+// reDupMax is POSIX RE_DUP_MAX — the portable ceiling for interval bounds.
+const reDupMax = 255
+
+// withinDupMax reports whether an all-digit bound is <= RE_DUP_MAX, computed
+// without overflowing on a huge literal: more than three significant digits
+// already exceeds 255, so it is rejected before atoi is called.
+func withinDupMax(x string) bool {
+	if len(strings.TrimLeft(x, "0")) > 3 {
+		return false
+	}
+	return atoi(x) <= reDupMax
+}
+
+// stripZeros removes leading zeros from an all-digit bound, leaving canonical
+// decimal ("0002" -> "2", "000" -> "0").
+func stripZeros(x string) string {
+	x = strings.TrimLeft(x, "0")
+	if x == "" {
+		return "0"
+	}
+	return x
 }
 
 func atoi(s string) int {

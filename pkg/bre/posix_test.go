@@ -1,6 +1,9 @@
 package bre
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The behaviors pinned here are the POSIX-specified ones (XBD 9.3 Basic
 // Regular Expressions, XCU sed), each of which this package previously got
@@ -106,6 +109,45 @@ func TestPOSIXBackrefEmptyGroup(t *testing.T) {
 		}
 		if got := re.FindStringIndex(c.in); !sameInts(got, c.want) {
 			t.Errorf("%s: %q on %q = %v, want %v", c.name, c.pattern, c.in, got, c.want)
+		}
+	}
+}
+
+// POSIX requires interval bounds through RE_DUP_MAX (255). GNU grep documents
+// 255 as the portable limit (while extending its own implementation to 32767),
+// and GNU bash 5.3 rejects 256 as an invalid regular expression. Keep the
+// package at the portable ceiling. Leading zeroes are valid decimal spelling;
+// {,m} remains the documented GNU extension supported by this package.
+func TestPOSIXIntervalBounds(t *testing.T) {
+	valid := []struct {
+		pattern string
+		in      string
+	}{
+		{`^a\{255\}$`, strings.Repeat("a", 255)},
+		{`^a\{0002\}$`, "aa"},
+		{`^a\{0002,0003\}$`, "aaa"},
+		{`^a\{,3\}$`, "aaa"},
+		{`^a\{2,\}$`, "aa"},
+	}
+	for _, c := range valid {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Errorf("Compile(%q): %v", c.pattern, err)
+			continue
+		}
+		if !re.MatchString(c.in) {
+			t.Errorf("%q did not match %q", c.pattern, c.in)
+		}
+	}
+
+	for _, pattern := range []string{
+		`a\{256\}`,
+		`a\{1,256\}`,
+		`a\{999999999999999999999999999999\}`,
+		`a\{3,2\}`,
+	} {
+		if _, err := Compile(pattern); err == nil {
+			t.Errorf("Compile(%q) succeeded, want invalid interval error", pattern)
 		}
 	}
 }
