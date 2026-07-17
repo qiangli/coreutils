@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 
 	"golang.org/x/term"
 
@@ -32,7 +31,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	// a no-op when there is no control socket to steer through.
 	sink := logSink
 	var coach *chat.Coach
-	if guards.ctlSock != "" && coachReflexEnabled() {
+	if guards.ctlSock != "" && chat.ReflexEnabled() {
 		coach = chat.NewLineCoach(chat.DefaultCoachPolicy(), chat.NewCtlSteerer(guards.ctlSock))
 		sink = io.MultiWriter(logSink, coach)
 	}
@@ -60,17 +59,6 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		}
 	}
 	return code, reason, err
-}
-
-// coachReflexEnabled is the default-on gate for the weave reflex coach. It is on
-// unless BASHY_NO_COACH is set to a truthy value — the discoverability principle
-// is that loop protection is a property of delegation, not a verb to remember.
-func coachReflexEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("BASHY_NO_COACH"))) {
-	case "1", "true", "yes", "on":
-		return false
-	}
-	return true
 }
 
 // weaveStdinIsTTY reports whether the calling process's stdin is a real

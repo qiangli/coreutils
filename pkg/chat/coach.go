@@ -189,21 +189,36 @@ func NewLineCoach(pol CoachPolicy, steer Steerer) *Coach {
 
 // Write feeds streamed output to the pty detector, line by line. It is an
 // io.Writer so a caller can `io.MultiWriter(log, coach)` a run's output into it.
-// Called from the single output-pump goroutine; feedPty locks the shared state.
+// Safe to tee from more than one stream (e.g. a pipe run's stdout AND stderr):
+// the partial-line buffer is guarded, and feedPty locks the shared counters.
 func (c *Coach) Write(p []byte) (int, error) {
+	c.mu.Lock()
 	c.ptyPartial += string(p)
 	idx := strings.LastIndexByte(c.ptyPartial, '\n')
 	if idx < 0 {
+		c.mu.Unlock()
 		return len(p), nil // no complete line yet
 	}
 	complete := c.ptyPartial[:idx]
 	c.ptyPartial = c.ptyPartial[idx+1:]
+	c.mu.Unlock()
 	for _, ln := range strings.Split(complete, "\n") {
 		if rec := c.feedPty(ln); rec != nil {
 			c.intervene(rec)
 		}
 	}
 	return len(p), nil
+}
+
+// ReflexEnabled is the default-on gate for the auto-attached reflex coach in the
+// delegation verbs (weave/invoke/delegate). On unless BASHY_NO_COACH is truthy —
+// loop protection is a property of delegation, not a verb to remember.
+func ReflexEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BASHY_NO_COACH"))) {
+	case "1", "true", "yes", "on":
+		return false
+	}
+	return true
 }
 
 // StartCoach attaches a coach to a running session and begins watching. It

@@ -231,6 +231,20 @@ type execRunner struct {
 // A PTY merges stdout and stderr — a terminal has one stream — so the captured
 // turn includes whatever chrome the CLI prints. That is the price of being able
 // to answer the agent's questions and steer it, and it is why PTY is opt-in.
+// noteCoach writes a one-line notice to the live watcher when the reflex coach
+// intervened on (or, on a socket-less pipe run, detected) a suspected loop. It
+// writes ONLY to the observer stream, never the recorded turn — observing must
+// not change the record.
+func noteCoach(c *Coach, stream io.Writer) {
+	if c == nil || stream == nil {
+		return
+	}
+	if rep := c.Report(); len(rep.Steers) > 0 {
+		fmt.Fprintf(stream, "\n[coach] suspected loop — %d intervention(s) over %d output lines (%d distinct)\n",
+			len(rep.Steers), rep.Total, rep.Distinct)
+	}
+}
+
 func (r execRunner) runPTY(cmd *exec.Cmd) (string, int, error) {
 	var buf bytes.Buffer
 	sink := io.Writer(&buf)
@@ -238,12 +252,21 @@ func (r execRunner) runPTY(cmd *exec.Cmd) (string, int, error) {
 		// Tee to the live watcher, exactly as the pipe path does.
 		sink = io.MultiWriter(&buf, r.stream)
 	}
+	// Reflex coach (P2a): a pty invoke/delegate HAS a control socket, so this is
+	// the full detect+steer path — the same protection weave gets. Off with
+	// BASHY_NO_COACH.
+	var coach *Coach
+	if ReflexEnabled() {
+		coach = NewLineCoach(DefaultCoachPolicy(), NewCtlSteerer(r.ctlSock))
+		sink = io.MultiWriter(sink, coach)
+	}
 	exit, killReason, err := agentpty.Run(cmd, sink, agentpty.Options{
 		CtlSock: r.ctlSock,
 		// Always capture. The caller records this turn; the human, if there is
 		// one, is watching through an observer rather than typing at the agent.
 		Capture: true,
 	})
+	noteCoach(coach, r.stream)
 	out := buf.String()
 	if err != nil {
 		return out, exit, err
@@ -314,6 +337,16 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		cmd.Stdout = io.MultiWriter(&stdout, r.stream)
 	}
 	cmd.Stderr = &stderr
+	// Reflex coach (P2a), pipe path: a plain one-shot has NO control socket, so
+	// the coach is DETECT-ONLY here (NewCtlSteerer("") is a no-op) — it watches
+	// STDERR, where an agent's tool-call/progress chrome (and thus a loop) shows,
+	// and notes it. A one-shot rarely loops (the finding), but when it does this
+	// records it for observability + the training seed. Off with BASHY_NO_COACH.
+	var coach *Coach
+	if ReflexEnabled() {
+		coach = NewLineCoach(DefaultCoachPolicy(), NewCtlSteerer(""))
+		cmd.Stderr = io.MultiWriter(&stderr, coach)
+	}
 	// Because Stdout/Stderr are buffers rather than *os.File, os/exec pipes them
 	// through copying goroutines, and Wait blocks until EVERY writer closes the
 	// pipe. An agent CLI that spawns children (a shell, a language server) leaves
@@ -323,6 +356,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	// ends, Wait gives the pipes this long to drain, then closes them and returns.
 	cmd.WaitDelay = 5 * time.Second
 	err := cmd.Run()
+	noteCoach(coach, r.stream)
 	out := stdout.String()
 	if ctx.Err() != nil {
 		return appendStderr(out, stderr.String()), 124, ctx.Err()
