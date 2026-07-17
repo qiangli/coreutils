@@ -45,7 +45,15 @@ cli:
     # Bare `ycode` is the interactive bubbletea TUI — the same shape as codex and
     # opencode, and it reads stdin the same way, so agentpty's control socket
     # reaches it through the pty master with NO ycode change at all.
-    steer_exec: ycode --model {model}
+    # --danger-skip-permissions is here for the SAME reason it is on `exec` and
+    # `fork_exec`, and it was MISSING here alone: a steerable session that drives
+    # real work (a coach's conductor, a foreman worker) needs write authority, or
+    # it reasons out the answer, cannot write it, and sits at its prompt — the very
+    # "flatters the model" failure documented on `exec` above. Review-only steerable
+    # sessions (meet, judge) pass ReadOnly, which strips it (agentlaunch.
+    # UnsafeLaunchFlags), so this is safe: write by default, stripped when only
+    # talking.
+    steer_exec: ycode --danger-skip-permissions --model {model}
     # THE FIRST-PARTY DIVIDEND. ycode reports when a turn ends; every other tool
     # in this fleet leaves bashy to infer it from 25 seconds of silence — which is
     # wrong for an agent that pauses to think, wrong for one that renders a

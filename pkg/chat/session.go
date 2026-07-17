@@ -447,6 +447,31 @@ func (s *Session) Wait() (int, error) {
 	return s.exit, nil
 }
 
+// EventsPath is the tool's structured event file for this session, or "" when
+// the tool has no event channel (only ycode declares `events_arg:` today). A
+// coach tails this to see tool.call as STRUCTURED DATA rather than scraping the
+// terminal — the difference between the two the whole event channel exists for.
+func (s *Session) EventsPath() string {
+	if s.events != nil {
+		return s.events.path
+	}
+	return ""
+}
+
+// Interrupt breaks the agent out of the turn it is running (ESC).
+//
+// A Say is a word in the agent's ear, and every agent TUI in this fleet QUEUES
+// it and reads it only when the current turn ends — useless for the one case a
+// coach exists for: an agent stuck in a tool loop whose turn is never going to
+// end. Escape is the only thing that reaches it there. Mirrors foreman's
+// TrySendKey("esc"). No-op if the session is not live.
+func (s *Session) Interrupt() error {
+	if !s.Live() {
+		return nil
+	}
+	return agentpty.SendFrame(s.CtlSock, agentpty.VerbatimFrame([]byte{0x1b}))
+}
+
 // Quit asks the agent to leave, rather than killing it.
 //
 // Asking is not the same as making it go: a tool that ignores the request is
