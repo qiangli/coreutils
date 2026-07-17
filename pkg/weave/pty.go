@@ -32,7 +32,13 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	sink := logSink
 	var coach *chat.Coach
 	if guards.ctlSock != "" && chat.ReflexEnabled() {
-		coach = chat.NewLineCoach(chat.DefaultCoachPolicy(), chat.NewCtlSteerer(guards.ctlSock))
+		pol := chat.DefaultCoachPolicy()
+		// Tie the wall-clock budget to this run's watchdog: nudge at 25/50/75% so
+		// the coach steers (and escalates) well BEFORE the hard max-runtime kill.
+		if guards.maxRuntime > 0 {
+			pol.SoftTimeBudget = guards.maxRuntime / 4
+		}
+		coach = chat.NewLineCoach(pol, chat.NewCtlSteerer(guards.ctlSock))
 		// P2b: after the generic steer fails, escalate to an agent one band above
 		// this run's agent for a content-full steer.
 		coach.SetEscalation(context.Background(), guards.coachee, chat.BandGraduatedEscalator)

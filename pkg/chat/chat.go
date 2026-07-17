@@ -20,6 +20,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/secrets"
+	"github.com/qiangli/coreutils/pkg/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -239,24 +240,36 @@ type execRunner struct {
 // writes ONLY to the observer stream, never the recorded turn — observing must
 // not change the record.
 func NoteCoach(c *Coach, stream io.Writer) {
-	if c == nil || stream == nil {
+	if c == nil {
 		return
 	}
+	// Token/time tracking: record the run's spend estimate + intervention count on
+	// the OTel plane EVERY run (even a clean one), so a supervisor watching the
+	// plane sees the shape of every delegated run, not only the ones that looped.
 	rep := c.Report()
-	if len(rep.Steers) == 0 {
+	telemetry.Provenance(c.telCtx(), "coach.output_tokens", int64(c.OutputTokens()), "coach-estimate")
+	telemetry.Provenance(c.telCtx(), "coach.interventions", int64(len(rep.Steers)), "coach")
+	if stream == nil || len(rep.Steers) == 0 {
 		return
 	}
+	unresolved := c.Unresolved()
 	if agenticMode() {
+		dim, suggest := "agent-loop", "the coach steered it off; if a loop recurs, the task is likely unsatisfiable or mis-scoped — re-scope rather than retry"
+		if unresolved {
+			dim = "coach-unresolved"
+			suggest = "SUPERVISOR ACTION: the reflex and agent-coach did not resolve this loop — kill, reassign, or re-scope the run; inject a steer via `weave say`/`foreman say` if you can see the fix"
+		}
 		adv := map[string]any{
 			"schema_version": "bashy-advice-v1",
 			"kind":           "advice",
-			"dimension":      "agent-loop",
+			"dimension":      dim,
 			"interventions":  len(rep.Steers),
 			"lines":          rep.Total,
 			"distinct":       rep.Distinct,
-			"hint": fmt.Sprintf("the reflex coach detected a loop: %d intervention(s) over %d output lines (%d distinct)",
-				len(rep.Steers), rep.Total, rep.Distinct),
-			"suggest": "the coach steered it off; if a loop recurs, the task is likely unsatisfiable or mis-scoped — re-scope rather than retry",
+			"output_tokens":  c.OutputTokens(),
+			"hint": fmt.Sprintf("the reflex coach detected a loop: %d intervention(s) over %d output lines (%d distinct, ~%d output tokens)",
+				len(rep.Steers), rep.Total, rep.Distinct, c.OutputTokens()),
+			"suggest": suggest,
 			"off":     "BASHY_NO_COACH",
 		}
 		if b, err := json.Marshal(adv); err == nil {
@@ -264,8 +277,12 @@ func NoteCoach(c *Coach, stream io.Writer) {
 			return
 		}
 	}
-	fmt.Fprintf(stream, "\n[coach] suspected loop — %d intervention(s) over %d output lines (%d distinct)\n",
-		len(rep.Steers), rep.Total, rep.Distinct)
+	tag := "[coach] suspected loop"
+	if unresolved {
+		tag = "[coach] ⚠ UNRESOLVED LOOP — supervisor attention needed"
+	}
+	fmt.Fprintf(stream, "\n%s — %d intervention(s) over %d output lines (%d distinct, ~%d output tokens)\n",
+		tag, len(rep.Steers), rep.Total, rep.Distinct, c.OutputTokens())
 }
 
 // agenticMode reports whether an agentic tool is driving bashy, so hints go out

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/telemetry"
 )
 
 // LIVE AGENT COACHING — P0, the LLM-free auto-coach.
@@ -81,6 +82,33 @@ type CoachPolicy struct {
 	// below this — i.e. the last PtyWindow lines are mostly repeats of each other.
 	// Healthy work runs ~0.7–1.0; a churning loop collapses toward 0.
 	PtyNoveltyFloor float64
+
+	// --- error-rate signal: thrash where each step DIFFERS but all FAIL ---
+	// This catches the loop repetition misses (varying edits, every test red).
+	// ErrorRateThreshold trips when the recent error fraction reaches it (0 = off).
+	ErrorRateThreshold float64
+	// ErrorWindow is how many recent significant lines the error fraction is over.
+	ErrorWindow int
+
+	// --- budget-box: "you are burning budget without converging" ---
+	// This catches the junior that tries combinations forever: distinct steps, no
+	// errors, no progress — nothing else fires. It RE-FIRES at each budget
+	// increment (not once), so a persistent grinder accumulates trips toward the
+	// agent-coach, who can name the structural problem. All three budgets nudge; a
+	// nudge to "converge or report" is benign even on a legitimately long task.
+	//
+	// Cost is the economical signal and it is measurable mid-stream, so it comes
+	// FIRST: SoftTokenBudget is estimated OUTPUT tokens (~bytes/4) per increment —
+	// a proxy for spend that the coach can see without an API usage feed (0 = off).
+	// A precise cost signal (real input+output usage from the gateway) is a later
+	// refinement fed in from the API layer.
+	SoftTokenBudget int
+	// SoftTimeBudget re-fires at each elapsed-wall-clock increment (0 = off). Wire
+	// it to a fraction of the run's watchdog so the coach nudges before the kill.
+	SoftTimeBudget time.Duration
+	// SoftStepBudget re-fires at each N significant output lines (0 = off) — a
+	// deterministic, env-free backstop for runaway output.
+	SoftStepBudget int
 }
 
 // DefaultCoachPolicy is the P0 "you have the answer, stop" coach.
@@ -96,8 +124,20 @@ func DefaultCoachPolicy() CoachPolicy {
 		Steer:           "You appear to be repeating work you have already completed. If you already have the answer, STOP investigating and deliver your final result now.",
 		PtyWindow:       40,
 		PtyNoveltyFloor: 0.35,
+
+		ErrorRateThreshold: 0.6,
+		ErrorWindow:        20,
+		SoftTokenBudget:    50000, // ~50k output tokens per nudge — spend/quota proxy
+		SoftTimeBudget:     0,     // wired to a fraction of the run's watchdog by the caller
+		SoftStepBudget:     400,   // backstop for runaway output
 	}
 }
+
+// Steer messages, per signal. churn/repeat use the policy's Steer.
+const (
+	errorRateSteer = "Most of your recent actions are FAILING. The current approach is not working — stop, reconsider whether the goal is achievable as stated, and either try a fundamentally different approach or report the blocker instead of retrying."
+	budgetSteer    = "You have burned a large part of your budget (tokens/quota/time) without converging. If you are exploring options without a plan, STOP and reason about the structure of the problem; then deliver your best result or report clearly what is blocking you."
+)
 
 // SteerRecord is one intervention: the signal that triggered it and what was said.
 type SteerRecord struct {
@@ -177,6 +217,15 @@ type Coach struct {
 	ptySeen    map[string]struct{} // CUMULATIVE distinct lines, for the report
 	recent     []string            // rolling recent significant lines, for escalation context
 
+	// signal-panel state
+	errWin     []bool    // recent significant lines: was each an error line?
+	errCount   int       // errors currently in errWin
+	outBytes   int       // cumulative output bytes, for the token/spend estimate
+	started    time.Time // first-line time, for the wall-clock budget
+	tokenMarks int       // token-budget increments already fired
+	timeMarks  int       // time-budget increments already fired
+	stepMarks  int       // step-budget increments already fired
+
 	// P2b escalation
 	escalate  EscalateFunc    // the agent-coach; nil = reflex only
 	escCtx    context.Context // context for the (slow) agent-coach invoke
@@ -220,6 +269,7 @@ func NewLineCoach(pol CoachPolicy, steer Steerer) *Coach {
 // the partial-line buffer is guarded, and feedPty locks the shared counters.
 func (c *Coach) Write(p []byte) (int, error) {
 	c.mu.Lock()
+	c.outBytes += len(p) // ALL output bytes, for the token/spend estimate
 	c.ptyPartial += string(p)
 	idx := strings.LastIndexByte(c.ptyPartial, '\n')
 	if idx < 0 {
@@ -327,8 +377,11 @@ func (c *Coach) watchPty(ctx context.Context) {
 	}
 }
 
-// feedPty runs one raw terminal line through the novelty detector and returns a
-// SteerRecord when the window has collapsed into a loop (else nil).
+// feedPty runs one raw terminal line through the SIGNAL PANEL and returns a
+// SteerRecord when any signal trips (else nil). The panel: churn (repetition),
+// error-rate (varying-but-failing), and the budget (cost/quota/time/steps —
+// "burning budget without converging", the catch-all for a brute-forcer that
+// makes distinct, error-free, progress-free moves). All share the trip machinery.
 func (c *Coach) feedPty(raw string) *SteerRecord {
 	norm := normalizeLine(raw)
 	if !significant(norm) {
@@ -336,6 +389,9 @@ func (c *Coach) feedPty(raw string) *SteerRecord {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.started.IsZero() {
+		c.started = time.Now()
+	}
 	if norm == c.ptyLast {
 		return nil // an in-place redraw of the same line — not progress, not a loop
 	}
@@ -349,6 +405,7 @@ func (c *Coach) feedPty(raw string) *SteerRecord {
 	c.window = append(c.window, norm)
 	c.winCount[norm]++
 	c.total++
+	c.pushErr(isErrorLine(norm))
 	w := c.pol.PtyWindow
 	if w <= 0 {
 		w = 40
@@ -360,41 +417,120 @@ func (c *Coach) feedPty(raw string) *SteerRecord {
 			delete(c.winCount, old)
 		}
 	}
-	if len(c.window) < w {
-		return nil // not enough to judge yet
-	}
-	distinct := len(c.winCount)
-	novelty := float64(distinct) / float64(len(c.window))
-	floor := c.pol.PtyNoveltyFloor
-	if floor <= 0 {
-		floor = 0.35
-	}
-	if novelty > floor {
-		return nil // still making progress
-	}
 	if len(c.steers) >= c.pol.MaxSteers {
 		return nil
 	}
-	// The offending line is whichever repeats the most in the window.
-	trigger, hi := norm, 0
-	for k, n := range c.winCount {
+	distinct := len(c.winCount)
+
+	// signal 1 — CHURN: the window has collapsed into repetition.
+	if len(c.window) >= w {
+		floor := c.pol.PtyNoveltyFloor
+		if floor <= 0 {
+			floor = 0.35
+		}
+		if float64(distinct)/float64(len(c.window)) <= floor {
+			return c.tripPty("churn", mostRepeated(c.winCount), c.pol.Steer, distinct, int64(len(c.window)), int64(distinct))
+		}
+	}
+	// signal 2 — ERROR-RATE: distinct steps, but most are failing.
+	if c.pol.ErrorRateThreshold > 0 && len(c.errWin) >= c.errWindow() &&
+		float64(c.errCount)/float64(len(c.errWin)) >= c.pol.ErrorRateThreshold {
+		return c.tripPty("error-rate", "errors", errorRateSteer, distinct, int64(len(c.errWin)), int64(c.errCount))
+	}
+	// signal 3 — BUDGET: burning cost/quota/time/steps without converging. Cost
+	// first (mid-stream, and what an api-key OR subscription-quota run actually
+	// spends); re-fires at each increment so a grinder escalates.
+	if b := c.pol.SoftTokenBudget; b > 0 && c.outBytes/4 >= (c.tokenMarks+1)*b {
+		c.tokenMarks++
+		return c.tripPty("budget-cost", "output-tokens", budgetSteer, distinct, int64(b), int64(c.outBytes/4))
+	}
+	if b := c.pol.SoftTimeBudget; b > 0 && !c.started.IsZero() &&
+		time.Since(c.started) >= time.Duration(c.timeMarks+1)*b {
+		c.timeMarks++
+		return c.tripPty("budget-time", "elapsed", budgetSteer, distinct, int64(b.Seconds()), int64(time.Since(c.started).Seconds()))
+	}
+	if b := c.pol.SoftStepBudget; b > 0 && c.total >= (c.stepMarks+1)*b {
+		c.stepMarks++
+		return c.tripPty("budget-steps", "steps", budgetSteer, distinct, int64(b), int64(c.total))
+	}
+	return nil
+}
+
+// tripPty builds a steer record, records the trip as an OTel BoundHit (a limit
+// that BOUND — the coach's whole reason to exist is that a loop/budget limit
+// bound silently), and resets the per-window signal state (churn + error) so each
+// must rebuild before firing again. Budget marks persist (they count total burn),
+// so a budget signal re-fires on schedule. Caller holds c.mu.
+func (c *Coach) tripPty(reason, trigger, steerMsg string, distinct int, limit, actual int64) *SteerRecord {
+	rec := SteerRecord{
+		At: time.Now().UTC(), Reason: reason, Trigger: trigger, Count: c.errCount,
+		Total: c.total, Distinct: distinct, Repeat: ratioOf(len(c.window), distinct),
+		Steer: steerMsg, Agent: c.agent,
+	}
+	c.steers = append(c.steers, rec)
+	telemetry.BoundHit(c.telCtx(), "coach."+reason, limit, actual, c.coachee)
+	// Top of the ladder: when the reflex + agent-coach are exhausted and the loop
+	// PERSISTS, raise a distinct SUPERVISOR ALERT — a bound the conductor/steward/
+	// foreman must see and act on (kill, reassign, re-scope). The coach reports; it
+	// does not author the action (report/author split).
+	if len(c.steers) >= c.pol.MaxSteers {
+		telemetry.BoundHit(c.telCtx(), "coach.unresolved", int64(c.pol.MaxSteers), int64(len(c.steers)),
+			c.coachee+": persistent loop; reflex+agent-coach did not resolve — supervisor attention needed")
+	}
+	c.window = c.window[:0]
+	c.winCount = map[string]int{}
+	c.ptyLast = ""
+	c.errWin = c.errWin[:0]
+	c.errCount = 0
+	return &rec
+}
+
+// telCtx is the context the coach emits telemetry through — the run's context
+// when escalation armed it, else Background (BoundHit/Provenance record on a
+// standalone span either way; they never silently drop).
+func (c *Coach) telCtx() context.Context {
+	if c.escCtx != nil {
+		return c.escCtx
+	}
+	return context.Background()
+}
+
+func (c *Coach) errWindow() int {
+	if c.pol.ErrorWindow > 0 {
+		return c.pol.ErrorWindow
+	}
+	return 20
+}
+
+// pushErr slides one line into the error window. Caller holds c.mu.
+func (c *Coach) pushErr(isErr bool) {
+	c.errWin = append(c.errWin, isErr)
+	if isErr {
+		c.errCount++
+	}
+	if len(c.errWin) > c.errWindow() {
+		if c.errWin[0] {
+			c.errCount--
+		}
+		c.errWin = c.errWin[1:]
+	}
+}
+
+func mostRepeated(counts map[string]int) string {
+	trigger, hi := "", 0
+	for k, n := range counts {
 		if n > hi {
 			trigger, hi = k, n
 		}
 	}
-	rec := SteerRecord{
-		At: time.Now().UTC(), Reason: "churn", Trigger: trigger, Count: hi,
-		Total: c.total, Distinct: distinct, Repeat: ratioOf(len(c.window), distinct),
-		Steer: c.pol.Steer, Agent: c.agent,
-	}
-	c.steers = append(c.steers, rec)
-	// Reset the window so novelty must re-collapse before another steer — the
-	// pty-mode cooldown, and it stops one loop from tripping every poll.
-	c.window = c.window[:0]
-	c.winCount = map[string]int{}
-	c.ptyLast = ""
-	return &rec
+	return trigger
 }
+
+// errMarkers matches a line that reports a failure — the signal that an agent's
+// distinct-but-fruitless steps are actually erroring, not progressing.
+var errMarkers = regexp.MustCompile(`(?i)\b(error|errors|fail|failed|failing|failure|panic|traceback|exception|fatal|refused|denied|timed out|timeout)\b`)
+
+func isErrorLine(norm string) bool { return errMarkers.MatchString(norm) }
 
 // toolCallData is the payload we key on: same name AND same input is the same
 // call. Same tool with different args is progress, not a loop.
@@ -540,6 +676,22 @@ func (c *Coach) decide(ev Event) *SteerRecord {
 
 // Wait blocks until the watcher goroutine has drained after the context ended.
 func (c *Coach) Wait() { <-c.done }
+
+// OutputTokens is the coach's estimate of output tokens generated (~bytes/4) —
+// the spend/quota proxy.
+func (c *Coach) OutputTokens() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.outBytes / 4
+}
+
+// Unresolved reports whether the coach exhausted its interventions (reflex +
+// agent-coach) and the loop persisted — the supervisor-alert condition.
+func (c *Coach) Unresolved() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pol.MaxSteers > 0 && len(c.steers) >= c.pol.MaxSteers
+}
 
 // Report summarizes the session so far.
 func (c *Coach) Report() CoachReport {

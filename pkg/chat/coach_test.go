@@ -296,6 +296,56 @@ func TestLineCoachWriteQuietOnHealthyStream(t *testing.T) {
 	}
 }
 
+func TestPtyErrorRateCatchesFailingThrash(t *testing.T) {
+	// Distinct steps (no churn), no repetition, but EVERY step fails. Only the
+	// error-rate signal can catch this — the gap repetition misses.
+	pol := DefaultCoachPolicy()
+	pol.SoftTokenBudget, pol.SoftStepBudget, pol.SoftTimeBudget = 0, 0, 0 // isolate error-rate
+	c := NewLineCoach(pol, &fakeSteerer{})
+	for i := 0; i < 40; i++ {
+		_, _ = c.Write([]byte("build failed: cannot compile module_" +
+			string(rune('a'+i%26)) + string(rune('a'+i/26)) + "\n"))
+	}
+	steers := c.Report().Steers
+	if len(steers) == 0 || steers[0].Reason != "error-rate" {
+		t.Fatalf("failing-but-distinct thrash must trip error-rate, got %v", steers)
+	}
+}
+
+func TestPtyBudgetCatchesBruteForce(t *testing.T) {
+	// The junior brute-forcer: distinct steps, NO errors, no repetition, no
+	// progress. Churn and error-rate stay silent; only the budget catches it.
+	pol := DefaultCoachPolicy()
+	pol.SoftStepBudget = 30
+	pol.SoftTokenBudget, pol.SoftTimeBudget, pol.ErrorRateThreshold = 0, 0, 0 // isolate step budget
+	c := NewLineCoach(pol, &fakeSteerer{})
+	for i := 0; i < 35; i++ {
+		_, _ = c.Write([]byte("trying a distinct combination approach variant " +
+			string(rune('a'+i%26)) + string(rune('a'+i/26)) + "xy\n"))
+	}
+	steers := c.Report().Steers
+	if len(steers) == 0 || steers[0].Reason != "budget-steps" {
+		t.Fatalf("brute-force (distinct, error-free) must trip the step budget, got %v", steers)
+	}
+}
+
+func TestPtyBudgetCostTripsOnTokenBurn(t *testing.T) {
+	// Cost-first budget: a run generating a lot of output trips budget-cost even
+	// with distinct, error-free lines — the spend/quota signal.
+	pol := DefaultCoachPolicy()
+	pol.SoftTokenBudget = 100 // ~100 output tokens ≈ 400 bytes
+	pol.SoftStepBudget, pol.SoftTimeBudget, pol.ErrorRateThreshold = 0, 0, 0
+	c := NewLineCoach(pol, &fakeSteerer{})
+	for i := 0; i < 25; i++ {
+		_, _ = c.Write([]byte("distinct progress output line making steady headway variant " +
+			string(rune('a'+i)) + "\n"))
+	}
+	steers := c.Report().Steers
+	if len(steers) == 0 || steers[0].Reason != "budget-cost" {
+		t.Fatalf("token/quota burn must trip budget-cost, got %v", steers)
+	}
+}
+
 func TestCoachTripsOnRatioAcrossFewCalls(t *testing.T) {
 	// A loop spread across two calls: never 3 of ONE, but ratio climbs.
 	pol := CoachPolicy{RepeatThreshold: 99, RatioThreshold: 3.0, MinCalls: 3, MaxSteers: 3, Cooldown: 1}
