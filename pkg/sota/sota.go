@@ -24,11 +24,16 @@ import (
 // art and return a cited, date-grounded report.
 func NewSotaCmd() *cobra.Command {
 	var (
-		agent     string
-		maxSrc    int
-		hitchhike bool
-		asJSON    bool
-		timeout   time.Duration
+		agent        string
+		maxSrc       int
+		hitchhike    bool
+		gate         bool
+		maxAge       time.Duration
+		noCache      bool
+		noVerify     bool
+		verifySample int
+		asJSON       bool
+		timeout      time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "sota QUESTION...",
@@ -42,6 +47,29 @@ func NewSotaCmd() *cobra.Command {
 		RunE: func(c *cobra.Command, args []string) error {
 			q := strings.Join(args, " ")
 			ctx := c.Context()
+			store := kbStore()
+			slug := slugify(q)
+
+			// STEWARD GATE: a design/direction decision must be SOTA-grounded. The
+			// gate is a CHECK (exit 0/1), not a ritual — it passes iff fresh research
+			// already exists, and points at how to get it otherwise.
+			if gate {
+				if p, ok := cachedFresh(store, slug, maxAge); ok {
+					fmt.Fprintf(os.Stderr, "sota gate: OK — fresh research exists for %q (updated %s)\n", q, firstNonEmpty(p.Updated, p.Created))
+					return nil
+				}
+				return fmt.Errorf("sota gate: NO fresh research for %q — run `bashy sota %q` before committing this design", q, q)
+			}
+
+			// CACHE REUSE: research once, many read; do not re-spend on a fresh topic.
+			if !noCache {
+				if p, ok := cachedFresh(store, slug, maxAge); ok {
+					telemetry.Provenance(ctx, "sota.cache_hit", 1, "kb")
+					fmt.Fprintf(os.Stderr, "sota: cached (updated %s; --no-cache to refresh)\n", firstNonEmpty(p.Updated, p.Created))
+					fmt.Println(p.Body)
+					return nil
+				}
+			}
 
 			var sources []search.Result
 			var backend string
@@ -49,8 +77,6 @@ func NewSotaCmd() *cobra.Command {
 				var err error
 				sources, backend, err = search.Web(ctx, q, search.Options{MaxResults: maxSrc})
 				if err != nil {
-					// No search backend → fall back to the agent's own search rather
-					// than failing. Say so; do not pretend we grounded it.
 					fmt.Fprintf(os.Stderr, "sota: no search backend (%v) — hitchhiking on the agent's web search\n", err)
 					hitchhike = true
 				}
@@ -73,6 +99,26 @@ func NewSotaCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("sota: %w", err)
 			}
+			report := res.Output
+
+			// CITATION VERIFY: fetch-check a sample of cited URLs actually resolve.
+			// A citation that does not resolve is a plausible-but-unreal source — the
+			// exact thing a research tool must never hide.
+			if !noVerify {
+				vs, okN, total, dead := verifyCitations(ctx, report, verifySample)
+				report += vs
+				telemetry.Provenance(ctx, "sota.citations_ok", int64(okN), "verify")
+				if len(dead) > 0 {
+					telemetry.BoundHit(ctx, "sota.dead_citations", int64(total), int64(len(dead)), q)
+				}
+			}
+
+			// Cache as a kb page (reused + discoverable via `bashy search --kb`).
+			if !noCache {
+				if err := cacheReport(store, slug, q, report); err == nil && store != nil {
+					telemetry.Provenance(ctx, "sota.cache_write", 1, "kb")
+				}
+			}
 
 			if asJSON {
 				out := struct {
@@ -80,14 +126,15 @@ func NewSotaCmd() *cobra.Command {
 					Question      string          `json:"question"`
 					Agent         string          `json:"agent"`
 					Grounded      bool            `json:"grounded"`
+					Slug          string          `json:"slug"`
 					Sources       []search.Result `json:"sources,omitempty"`
 					Report        string          `json:"report"`
-				}{"bashy-sota-v1", q, agent, !hitchhike, sources, res.Output}
+				}{"bashy-sota-v1", q, agent, !hitchhike, slug, sources, report}
 				b, _ := json.MarshalIndent(out, "", "  ")
 				fmt.Println(string(b))
 				return nil
 			}
-			fmt.Println(res.Output)
+			fmt.Println(report)
 			return nil
 		},
 	}
@@ -95,6 +142,11 @@ func NewSotaCmd() *cobra.Command {
 	f.StringVar(&agent, "agent", "", "synthesis/research agent (default: claude)")
 	f.IntVar(&maxSrc, "max", 8, "web sources to ground the report on")
 	f.BoolVar(&hitchhike, "hitchhike", false, "skip `bashy search`; let the agent use its OWN web-search tool")
+	f.BoolVar(&gate, "gate", false, "STEWARD GATE: exit 0 iff fresh research exists for the topic, else exit 1 (does not research)")
+	f.DurationVar(&maxAge, "max-age", 7*24*time.Hour, "cached research older than this is stale (reuse + gate)")
+	f.BoolVar(&noCache, "no-cache", false, "ignore the kb cache: always re-research")
+	f.BoolVar(&noVerify, "no-verify", false, "skip the citation-resolves check")
+	f.IntVar(&verifySample, "verify-sample", 12, "how many cited URLs to fetch-check")
 	f.BoolVar(&asJSON, "json", false, "print a bashy-sota-v1 JSON envelope")
 	f.DurationVar(&timeout, "timeout", 0, "agent timeout, e.g. 10m")
 	return cmd
