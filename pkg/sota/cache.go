@@ -6,21 +6,19 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/kb"
-	"github.com/qiangli/coreutils/pkg/scope"
 )
 
-// kbStore resolves the active kb store (repo docs/kb/ or host), or nil if none.
-// A sota report is cached AS A KB PAGE — so it is reused, discoverable via
-// `bashy search --kb`, and the same durable memory the fleet already shares.
+// kbStore resolves the HOST kb store (never the committed repo docs/kb/). A sota
+// report is GENERAL knowledge — "the SOTA on X" is the same in every repo and is
+// not "true of THIS repo" — so it caches host-wide (reused across repos) and must
+// NOT pollute a repo's committed kb. Cached as a kb page so it stays discoverable
+// and the same durable memory the fleet shares.
 func kbStore() *kb.Store {
-	sc, err := scope.Resolve(scope.Options{
-		RepoSub: kb.RepoSub,
-		HostDir: func() (string, error) { return kb.DefaultDir(), nil },
-	})
-	if err != nil {
+	dir := strings.TrimSpace(kb.DefaultDir())
+	if dir == "" {
 		return nil
 	}
-	return kb.Open(sc.Dir())
+	return kb.Open(dir)
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
