@@ -545,7 +545,7 @@ func init() {
 	addVerb("schedule", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("act", staged(StageTest, managed(GroupOrch, TierSandbox)))
 	addVerb("act-runner", staged(StageTest, managed(GroupOrch, TierSandbox, CapDaemon)))
-	addVerb("mirror", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapDaemon, CapSpawnsProcesses}})
+	addVerb("mirror", staged(StageCross, managed(GroupStorage, TierUserland, CapDaemon, CapNeedsNetwork)))
 
 	// knowledge
 	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
