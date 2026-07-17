@@ -549,6 +549,7 @@ func init() {
 
 	// knowledge
 	addVerb("kb", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
+	addVerb("search", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapNeedsNetwork}})
 	// lexicon: what do this project's words mean HERE? It PROJECTS the atlas and the
 	// fleet registry into the channels agents read -- it introduces NO new source of
 	// truth, which is the test it has to keep passing. The moment it starts STORING
@@ -753,7 +754,7 @@ func init() {
 
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,
-		"ntp", "sntp", "browser", "fetch",
+		"ntp", "sntp", "browser", "fetch", "search",
 		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act",
 		"act-runner", "mirror", "podman", "docker", "ollama", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
