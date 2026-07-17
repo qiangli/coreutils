@@ -671,9 +671,17 @@ func NewChatCmd() *cobra.Command {
 			// A question (--instruction/--file/--context) is a one-shot Invoke. No
 			// question, at a terminal, is a CONVERSATION — the native interactive
 			// session. --interactive forces the conversation even with a prompt.
+			// --dry-run never launches, so it always takes the Invoke print path.
 			asked := strings.TrimSpace(opt.Instruction) != "" || len(opt.Files) > 0 || len(opt.Context) > 0
-			wantInteractive := interactive || (!asked && stdinIsTTY(cmd))
+			wantInteractive := !opt.DryRun && (interactive || (!asked && stdinIsTTY(cmd)))
 			if wantInteractive {
+				// An interactive session IS the terminal — without a TTY it would
+				// launch the agent with a closed stdin and hang. Refuse loudly instead
+				// (a programmatic caller wants Invoke, or chat.Session over a socket).
+				if !stdinIsTTY(cmd) {
+					return fmt.Errorf("chat: an interactive session needs a controlling terminal; " +
+						"use -m/--instruction for a one-shot, or drop -i")
+				}
 				exit, err := Interact(cmd.Context(), opt.Agent, InteractOptions{
 					Prompt:   opt.Instruction,
 					Cwd:      opt.Cwd,
