@@ -73,6 +73,79 @@ func TestCoachRespectsMaxSteersAndCooldown(t *testing.T) {
 	}
 }
 
+// feedLines runs raw terminal lines through the pty detector, returns steer count.
+func feedLines(c *Coach, lines []string) int {
+	n := 0
+	for _, ln := range lines {
+		if c.feedPty(ln) != nil {
+			n++
+		}
+	}
+	return n
+}
+
+func TestPtyNormalizeScrubsVolatile(t *testing.T) {
+	// A spinner's changing timer/counter must collapse to ONE key, or it reads as
+	// new content every frame and masks the loop.
+	a := normalizeLine("\x1b[32m▸ Thought for 5s, 386 tokens\x1b[0m")
+	b := normalizeLine("▸ Thought for 12s, 1904 tokens")
+	if a != b {
+		t.Errorf("volatile tokens not scrubbed to a common key:\n  %q\n  %q", a, b)
+	}
+}
+
+func TestPtyIgnoresRedrawsAndHealthyWork(t *testing.T) {
+	c := newCoach(DefaultCoachPolicy())
+	var lines []string
+	// In-place redraws of the SAME line (a spinner) — consecutive, must collapse.
+	for i := 0; i < 30; i++ {
+		lines = append(lines, "Working on the task, please wait")
+	}
+	// Then genuinely distinct progress — every line new.
+	for i := 0; i < 60; i++ {
+		lines = append(lines, "editing distinct source file number "+string(rune('a'+i%26))+"xyz")
+	}
+	if n := feedLines(c, lines); n != 0 {
+		t.Fatalf("redraws + healthy distinct work must not trip pty coach, got %d steers", n)
+	}
+}
+
+func TestPtyDetectsChurnLoop(t *testing.T) {
+	c := newCoach(DefaultCoachPolicy()) // window 40, novelty floor 0.35
+	var lines []string
+	// A churn loop: the agent cycles through the SAME 4 actions over and over,
+	// interleaved (not consecutive, so dedup won't hide it). 4 distinct / 40 window
+	// = novelty 0.10, well below 0.35.
+	acts := []string{
+		"run_tests on package ./foobar",
+		"read_file internal/median/median.go",
+		"the tests are still failing here",
+		"let me check the implementation again",
+	}
+	for i := 0; i < 60; i++ {
+		lines = append(lines, acts[i%len(acts)])
+	}
+	if n := feedLines(c, lines); n < 1 {
+		t.Fatalf("a churn loop (4 distinct actions cycling) must trip the pty coach, got %d", n)
+	}
+	if c.Report().Steers[0].Reason != "churn" {
+		t.Errorf("reason = %q, want churn", c.Report().Steers[0].Reason)
+	}
+}
+
+func TestPtyReportHasCumulativeDistinct(t *testing.T) {
+	// Regression: the report must show pty-mode distinct (cumulative lines), not
+	// the event map — which read 0 and looked like the coach saw nothing.
+	c := newCoach(DefaultCoachPolicy())
+	for i := 0; i < 20; i++ {
+		c.feedPty("distinct progress line number " + string(rune('a'+i)) + "abcdef")
+	}
+	rep := c.Report()
+	if rep.Total != 20 || rep.Distinct != 20 {
+		t.Fatalf("pty report total/distinct = %d/%d, want 20/20", rep.Total, rep.Distinct)
+	}
+}
+
 func TestCoachTripsOnRatioAcrossFewCalls(t *testing.T) {
 	// A loop spread across two calls: never 3 of ONE, but ratio climbs.
 	pol := CoachPolicy{RepeatThreshold: 99, RatioThreshold: 3.0, MinCalls: 3, MaxSteers: 3, Cooldown: 1}

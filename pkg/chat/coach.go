@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -59,6 +61,19 @@ type CoachPolicy struct {
 	// LogPath, if set, receives one JSON line per steer — the (state -> steer)
 	// record that seeds the training loop (P3).
 	LogPath string
+
+	// --- pty-scrape mode (event-less tools: agy, and any third-party CLI) ---
+	// When the tool has no event channel, the coach cannot see tool.call as data.
+	// It falls back to a GENERIC signal over the terminal output: a loop is
+	// "output flowing but distinct content not growing" — the pty analog of the
+	// repeat ratio, needing no per-TUI syntax. These tune that detector.
+	//
+	// PtyWindow is the sliding window of recent significant output lines.
+	PtyWindow int
+	// PtyNoveltyFloor trips when distinct/window (the novelty ratio) falls to or
+	// below this — i.e. the last PtyWindow lines are mostly repeats of each other.
+	// Healthy work runs ~0.7–1.0; a churning loop collapses toward 0.
+	PtyNoveltyFloor float64
 }
 
 // DefaultCoachPolicy is the P0 "you have the answer, stop" coach.
@@ -71,6 +86,8 @@ func DefaultCoachPolicy() CoachPolicy {
 		MaxSteers:       3,
 		Interrupt:       true,
 		Steer:           "You appear to be repeating work you have already completed. If you already have the answer, STOP investigating and deliver your final result now.",
+		PtyWindow:       40,
+		PtyNoveltyFloor: 0.35,
 	}
 }
 
@@ -107,13 +124,21 @@ type Coach struct {
 	distinctAtLast int // distinct count when we last steered
 	steers         []SteerRecord
 	done           chan struct{}
+
+	// pty-scrape mode state
+	ptyOffset  int                 // byte cursor into Session.Output()
+	ptyPartial string              // trailing incomplete line carried between polls
+	ptyLast    string              // last KEPT normalized line (consecutive-dedup)
+	window     []string            // sliding window of significant normalized lines
+	winCount   map[string]int      // multiset count for the window
+	ptySeen    map[string]struct{} // CUMULATIVE distinct lines, for the report
 }
 
 // newCoach builds a coach with no session attached — the form the signal test
 // drives directly, feeding it events and asserting the trip decision without
 // any live agent or socket IO.
 func newCoach(pol CoachPolicy) *Coach {
-	return &Coach{pol: pol, counts: map[string]int{}, done: make(chan struct{})}
+	return &Coach{pol: pol, counts: map[string]int{}, winCount: map[string]int{}, ptySeen: map[string]struct{}{}, done: make(chan struct{})}
 }
 
 // StartCoach attaches a coach to a running session and begins watching. It
@@ -129,16 +154,25 @@ func (s *Session) StartCoach(ctx context.Context, pol CoachPolicy) *Coach {
 
 func (c *Coach) watch(ctx context.Context) {
 	defer close(c.done)
-	path := c.sess.EventsPath()
-	if path == "" {
-		// No event channel: the coach cannot see tool calls as structured data,
-		// so P0 is a no-op here. A silence-based coach is imprecise and belongs to
-		// a later phase; refusing to guess is the honest behavior.
+	if c.sess == nil {
 		return
 	}
+	if c.sess.EventsPath() != "" {
+		c.watchEvents(ctx) // precise: structured tool.call stream (ycode)
+		return
+	}
+	c.watchPty(ctx) // generic fallback: loop-from-terminal-output (agy & any pty CLI)
+}
+
+// PtyMode reports whether this coach is watching the terminal output (no event
+// channel) rather than the structured tool.call stream.
+func (c *Coach) PtyMode() bool { return c.sess != nil && c.sess.EventsPath() == "" }
+
+// watchEvents follows the tool's NDJSON event file — the precise path.
+func (c *Coach) watchEvents(ctx context.Context) {
 	// An INDEPENDENT tail: its own offset, so it never races the session's own
 	// eventTail (which WaitIdle drains). Two readers of one append-only file.
-	tail := &eventTail{path: path}
+	tail := &eventTail{path: c.sess.EventsPath()}
 	tick := time.NewTicker(300 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -157,6 +191,99 @@ func (c *Coach) watch(ctx context.Context) {
 	}
 }
 
+// watchPty is the GENERIC, event-less signal. It polls the accumulating terminal
+// scrape, normalizes each new line, and feeds the significant ones to a novelty
+// detector. No per-TUI syntax: a loop is "output flowing, distinct content not
+// growing", which every agent CLI exhibits when it churns.
+func (c *Coach) watchPty(ctx context.Context) {
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		full := c.sess.Output()
+		if len(full) > c.ptyOffset {
+			chunk := c.ptyPartial + full[c.ptyOffset:]
+			c.ptyOffset = len(full)
+			lines := strings.Split(chunk, "\n")
+			c.ptyPartial = lines[len(lines)-1] // last segment is still being written
+			for _, ln := range lines[:len(lines)-1] {
+				if rec := c.feedPty(ln); rec != nil {
+					c.intervene(rec)
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// feedPty runs one raw terminal line through the novelty detector and returns a
+// SteerRecord when the window has collapsed into a loop (else nil).
+func (c *Coach) feedPty(raw string) *SteerRecord {
+	norm := normalizeLine(raw)
+	if !significant(norm) {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if norm == c.ptyLast {
+		return nil // an in-place redraw of the same line — not progress, not a loop
+	}
+	c.ptyLast = norm
+
+	c.ptySeen[norm] = struct{}{} // cumulative, for the report
+	c.window = append(c.window, norm)
+	c.winCount[norm]++
+	c.total++
+	w := c.pol.PtyWindow
+	if w <= 0 {
+		w = 40
+	}
+	if len(c.window) > w {
+		old := c.window[0]
+		c.window = c.window[1:]
+		if c.winCount[old]--; c.winCount[old] <= 0 {
+			delete(c.winCount, old)
+		}
+	}
+	if len(c.window) < w {
+		return nil // not enough to judge yet
+	}
+	distinct := len(c.winCount)
+	novelty := float64(distinct) / float64(len(c.window))
+	floor := c.pol.PtyNoveltyFloor
+	if floor <= 0 {
+		floor = 0.35
+	}
+	if novelty > floor {
+		return nil // still making progress
+	}
+	if len(c.steers) >= c.pol.MaxSteers {
+		return nil
+	}
+	// The offending line is whichever repeats the most in the window.
+	trigger, hi := norm, 0
+	for k, n := range c.winCount {
+		if n > hi {
+			trigger, hi = k, n
+		}
+	}
+	rec := SteerRecord{
+		At: time.Now().UTC(), Reason: "churn", Trigger: trigger, Count: hi,
+		Total: c.total, Distinct: distinct, Repeat: ratioOf(len(c.window), distinct),
+		Steer: c.pol.Steer, Agent: c.agent,
+	}
+	c.steers = append(c.steers, rec)
+	// Reset the window so novelty must re-collapse before another steer — the
+	// pty-mode cooldown, and it stops one loop from tripping every poll.
+	c.window = c.window[:0]
+	c.winCount = map[string]int{}
+	c.ptyLast = ""
+	return &rec
+}
+
 // toolCallData is the payload we key on: same name AND same input is the same
 // call. Same tool with different args is progress, not a loop.
 type toolCallData struct {
@@ -165,12 +292,16 @@ type toolCallData struct {
 }
 
 func (c *Coach) onToolCall(ev Event) {
-	rec := c.decide(ev)
-	if rec == nil {
-		return
+	if rec := c.decide(ev); rec != nil {
+		c.intervene(rec)
 	}
-	// Intervene OUTSIDE the lock — Say/Interrupt do socket IO. ESC first (break
-	// the loop), then the sentence (now read, because the loop was broken).
+}
+
+// intervene delivers the steer. ESC first (a queued Say is read only between
+// turns, useless to an agent stuck mid-loop), then the sentence (now read,
+// because the loop was broken), then the training-log line. Runs OUTSIDE the
+// lock — Say/Interrupt do socket IO.
+func (c *Coach) intervene(rec *SteerRecord) {
 	if c.sess != nil {
 		if c.pol.Interrupt {
 			_ = c.sess.Interrupt()
@@ -179,6 +310,33 @@ func (c *Coach) onToolCall(ev Event) {
 		_ = c.sess.Say(rec.Steer)
 	}
 	c.logSteer(*rec)
+}
+
+var (
+	reDigits = regexp.MustCompile(`\d+`)
+	reSpace  = regexp.MustCompile(`\s+`)
+	reAlnum  = regexp.MustCompile(`[a-zA-Z]`)
+)
+
+// normalizeLine turns a raw terminal line into a stable key: strip ANSI/control
+// bytes, collapse whitespace, and scrub digit runs to "N" so a spinner's timer
+// ("Thought for 5s") and a re-run's counter ("attempt 2") do not read as new
+// content each time — which is exactly what would MASK a loop.
+func normalizeLine(raw string) string {
+	s := SanitizeLine(raw)
+	s = reDigits.ReplaceAllString(s, "N")
+	s = reSpace.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
+
+// significant drops the noise that must not fill the window: blanks, decoration
+// (box-drawing, spinner glyphs, pure punctuation), and lines too short to carry
+// an action. Generic — no per-tool knowledge.
+func significant(norm string) bool {
+	if len(norm) < 8 {
+		return false
+	}
+	return reAlnum.MatchString(norm)
 }
 
 // decide records one tool.call, updates the loop counters, and returns a
@@ -229,10 +387,16 @@ func (c *Coach) Wait() { <-c.done }
 func (c *Coach) Report() CoachReport {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Distinct is cumulative per mode: event mode counts tool calls, pty mode
+	// counts normalized output lines. Only one is populated.
+	distinct := len(c.counts)
+	if distinct == 0 {
+		distinct = len(c.ptySeen)
+	}
 	return CoachReport{
 		Total:    c.total,
-		Distinct: len(c.counts),
-		Repeat:   ratioOf(c.total, len(c.counts)),
+		Distinct: distinct,
+		Repeat:   ratioOf(c.total, distinct),
 		Steers:   append([]SteerRecord(nil), c.steers...),
 	}
 }

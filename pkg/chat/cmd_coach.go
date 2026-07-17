@@ -94,7 +94,7 @@ func NewCoachCmd() *cobra.Command {
 			defer sess.Close()
 
 			if sess.EventsPath() == "" {
-				fmt.Fprintf(os.Stderr, "coach: %s has no event channel — the coach cannot see tool calls and will not steer (use ycode)\n", agent)
+				fmt.Fprintf(os.Stderr, "coach: %s has no event channel — using the GENERIC pty-scrape loop signal (imprecise; a first-party tool like ycode gives precise tool.call tracking)\n", agent)
 			}
 
 			// Agent exit cancels the context, so a converged run returns at once
