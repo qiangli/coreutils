@@ -1,13 +1,16 @@
 package weave
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 
 	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/chat"
 )
 
 // The PTY runner used to live here. It moved to pkg/agentpty because `chat`
@@ -22,7 +25,19 @@ import (
 // control socket. Kept as weave's name for it so the call sites — and the tests
 // that gate this move — read exactly as they did before.
 func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int, string, error) {
-	return agentpty.Run(cmd, logSink, agentpty.Options{
+	// The reflex coach (P2a): attach the LLM-free loop detector to every run by
+	// default. It tees the run's DECODED prose (below) into a pty-novelty
+	// detector and, when a run churns without progress, ESC+Says it off the loop
+	// through the same control socket `weave attach` uses. Off with BASHY_NO_COACH;
+	// a no-op when there is no control socket to steer through.
+	sink := logSink
+	var coach *chat.Coach
+	if guards.ctlSock != "" && coachReflexEnabled() {
+		coach = chat.NewLineCoach(chat.DefaultCoachPolicy(), chat.NewCtlSteerer(guards.ctlSock))
+		sink = io.MultiWriter(logSink, coach)
+	}
+
+	code, reason, err := agentpty.Run(cmd, sink, agentpty.Options{
 		IdleTimeout:   guards.idleTimeout,
 		MaxRuntime:    guards.maxRuntime,
 		MemLimitBytes: guards.memLimitBytes,
@@ -37,6 +52,25 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 			return sj, sj.Flush
 		},
 	})
+
+	if coach != nil {
+		if rep := coach.Report(); len(rep.Steers) > 0 {
+			fmt.Fprintf(logSink, "\n[coach] steered this run %d time(s) off a suspected loop (%d output lines, %d distinct)\n",
+				len(rep.Steers), rep.Total, rep.Distinct)
+		}
+	}
+	return code, reason, err
+}
+
+// coachReflexEnabled is the default-on gate for the weave reflex coach. It is on
+// unless BASHY_NO_COACH is set to a truthy value — the discoverability principle
+// is that loop protection is a property of delegation, not a verb to remember.
+func coachReflexEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BASHY_NO_COACH"))) {
+	case "1", "true", "yes", "on":
+		return false
+	}
+	return true
 }
 
 // weaveStdinIsTTY reports whether the calling process's stdin is a real

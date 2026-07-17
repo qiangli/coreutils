@@ -146,6 +146,53 @@ func TestPtyReportHasCumulativeDistinct(t *testing.T) {
 	}
 }
 
+// fakeSteerer records what a coach did, so the weave-style path can be tested
+// without a live agent or a control socket.
+type fakeSteerer struct {
+	interrupts int
+	says       []string
+}
+
+func (f *fakeSteerer) Interrupt() error      { f.interrupts++; return nil }
+func (f *fakeSteerer) Say(text string) error { f.says = append(f.says, text); return nil }
+
+func TestLineCoachWriteSteersOnChurn(t *testing.T) {
+	// This is exactly the weave reflex path: a coach fed a run's output via Write,
+	// steering through a Steerer (not a Session). A churning stream must produce
+	// an ESC + a Say.
+	fs := &fakeSteerer{}
+	c := NewLineCoach(DefaultCoachPolicy(), fs)
+	acts := []string{
+		"run_tests on package ./svc\n",
+		"read_file internal/svc/svc.go\n",
+		"the tests are still failing here\n",
+		"let me check the implementation again\n",
+	}
+	for i := 0; i < 60; i++ {
+		if _, err := c.Write([]byte(acts[i%len(acts)])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(fs.says) < 1 {
+		t.Fatalf("weave reflex path must steer on a churn stream, got %d says", len(fs.says))
+	}
+	if fs.interrupts < 1 {
+		t.Errorf("ESC (Interrupt) should precede the Say, got %d interrupts", fs.interrupts)
+	}
+}
+
+func TestLineCoachWriteQuietOnHealthyStream(t *testing.T) {
+	fs := &fakeSteerer{}
+	c := NewLineCoach(DefaultCoachPolicy(), fs)
+	for i := 0; i < 60; i++ {
+		line := "editing a distinct file path number " + string(rune('a'+i%26)) + string(rune('a'+i/26)) + "z\n"
+		_, _ = c.Write([]byte(line))
+	}
+	if len(fs.says) != 0 {
+		t.Fatalf("healthy distinct stream must not steer, got %d says", len(fs.says))
+	}
+}
+
 func TestCoachTripsOnRatioAcrossFewCalls(t *testing.T) {
 	// A loop spread across two calls: never 3 of ONE, but ratio climbs.
 	pol := CoachPolicy{RepeatThreshold: 99, RatioThreshold: 3.0, MinCalls: 3, MaxSteers: 3, Cooldown: 1}

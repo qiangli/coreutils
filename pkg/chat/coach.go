@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/agentpty"
 )
 
 // LIVE AGENT COACHING — P0, the LLM-free auto-coach.
@@ -112,9 +114,43 @@ type CoachReport struct {
 	Steers   []SteerRecord `json:"steers"`
 }
 
-// Coach is a live, LLM-free watcher over one Session's tool.call stream.
+// Steerer is the minimal control surface a coach needs to intervene: break the
+// current turn (ESC) and inject a line. *Session implements it; so does any run
+// with an agentpty control socket (weave), via NewCtlSteerer.
+type Steerer interface {
+	Interrupt() error
+	Say(text string) error
+}
+
+var _ Steerer = (*Session)(nil)
+
+// ctlSteerer steers a run straight through its agentpty control socket — the
+// weave path, where there is no chat.Session, only a ctlSock.
+type ctlSteerer struct{ ctlSock string }
+
+// NewCtlSteerer builds a Steerer over an agentpty control socket. A "" socket
+// makes every intervention a no-op (detect-and-log without steering).
+func NewCtlSteerer(ctlSock string) Steerer { return ctlSteerer{ctlSock: ctlSock} }
+
+func (s ctlSteerer) Interrupt() error {
+	if s.ctlSock == "" {
+		return nil
+	}
+	return agentpty.SendFrame(s.ctlSock, agentpty.VerbatimFrame([]byte{0x1b}))
+}
+
+func (s ctlSteerer) Say(text string) error {
+	if s.ctlSock == "" {
+		return nil
+	}
+	return agentpty.BrokerSay(s.ctlSock, text)
+}
+
+// Coach is a live, LLM-free watcher over an agent run's tool.call stream (event
+// mode) or terminal output (pty mode).
 type Coach struct {
 	sess  *Session
+	steer Steerer
 	agent string
 	pol   CoachPolicy
 
@@ -141,12 +177,42 @@ func newCoach(pol CoachPolicy) *Coach {
 	return &Coach{pol: pol, counts: map[string]int{}, winCount: map[string]int{}, ptySeen: map[string]struct{}{}, done: make(chan struct{})}
 }
 
+// NewLineCoach builds a coach fed one line at a time (its Write method) and
+// steering through the given Steerer — the form weave uses: it tees a run's
+// decoded output into the coach and lets the pty-novelty detector run over it,
+// with no chat.Session involved. Always pty-mode.
+func NewLineCoach(pol CoachPolicy, steer Steerer) *Coach {
+	c := newCoach(pol)
+	c.steer = steer
+	return c
+}
+
+// Write feeds streamed output to the pty detector, line by line. It is an
+// io.Writer so a caller can `io.MultiWriter(log, coach)` a run's output into it.
+// Called from the single output-pump goroutine; feedPty locks the shared state.
+func (c *Coach) Write(p []byte) (int, error) {
+	c.ptyPartial += string(p)
+	idx := strings.LastIndexByte(c.ptyPartial, '\n')
+	if idx < 0 {
+		return len(p), nil // no complete line yet
+	}
+	complete := c.ptyPartial[:idx]
+	c.ptyPartial = c.ptyPartial[idx+1:]
+	for _, ln := range strings.Split(complete, "\n") {
+		if rec := c.feedPty(ln); rec != nil {
+			c.intervene(rec)
+		}
+	}
+	return len(p), nil
+}
+
 // StartCoach attaches a coach to a running session and begins watching. It
 // returns immediately; the coach runs until the context ends. Call Wait to
 // block for the watcher to drain after cancelling.
 func (s *Session) StartCoach(ctx context.Context, pol CoachPolicy) *Coach {
 	c := newCoach(pol)
 	c.sess = s
+	c.steer = s
 	c.agent = s.Agent
 	go c.watch(ctx)
 	return c
@@ -302,12 +368,12 @@ func (c *Coach) onToolCall(ev Event) {
 // because the loop was broken), then the training-log line. Runs OUTSIDE the
 // lock — Say/Interrupt do socket IO.
 func (c *Coach) intervene(rec *SteerRecord) {
-	if c.sess != nil {
+	if c.steer != nil {
 		if c.pol.Interrupt {
-			_ = c.sess.Interrupt()
+			_ = c.steer.Interrupt()
 			time.Sleep(150 * time.Millisecond) // let the TUI return to its input box
 		}
-		_ = c.sess.Say(rec.Steer)
+		_ = c.steer.Say(rec.Steer)
 	}
 	c.logSteer(*rec)
 }
