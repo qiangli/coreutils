@@ -55,6 +55,11 @@ type CoachPolicy struct {
 	Cooldown int
 	// MaxSteers is a hard cap on interventions per session.
 	MaxSteers int
+	// EscalateAfter is how many GENERIC reflex steers to try before escalating to
+	// an agent-coach (P2b). 0 = never escalate (reflex only). The escalation is
+	// one-shot and needs both an EscalateFunc and a live steerer. It must be <
+	// MaxSteers, so the escalation trip is not swallowed by the cap.
+	EscalateAfter int
 	// Steer is the line injected after the interrupt.
 	Steer string
 	// Interrupt sends ESC before the Steer. On by default; the only reason to
@@ -86,6 +91,7 @@ func DefaultCoachPolicy() CoachPolicy {
 		MinCalls:        3,
 		Cooldown:        2,
 		MaxSteers:       3,
+		EscalateAfter:   2, // 2 generic steers, then escalate to an agent-coach
 		Interrupt:       true,
 		Steer:           "You appear to be repeating work you have already completed. If you already have the answer, STOP investigating and deliver your final result now.",
 		PtyWindow:       40,
@@ -104,6 +110,7 @@ type SteerRecord struct {
 	Repeat   float64   `json:"repeat"`
 	Steer    string    `json:"steer"`
 	Agent    string    `json:"agent"`
+	Coach    string    `json:"coach,omitempty"` // the agent-coach that produced an escalated steer (P2b)
 }
 
 // CoachReport summarizes a session after it ends.
@@ -168,6 +175,26 @@ type Coach struct {
 	window     []string            // sliding window of significant normalized lines
 	winCount   map[string]int      // multiset count for the window
 	ptySeen    map[string]struct{} // CUMULATIVE distinct lines, for the report
+	recent     []string            // rolling recent significant lines, for escalation context
+
+	// P2b escalation
+	escalate  EscalateFunc    // the agent-coach; nil = reflex only
+	escCtx    context.Context // context for the (slow) agent-coach invoke
+	coachee   string          // the looping agent's binding, for band lookup
+	escalated bool            // one-shot: escalate at most once
+}
+
+// SetEscalation arms the band-graduated agent coach (P2b): after EscalateAfter
+// generic steers fail to break the loop, the reflex invokes esc — an agent one
+// band above coachee — for a content-full steer. coachee is the looping agent's
+// binding (for the band lookup); ctx bounds the agent-coach invoke. A nil esc or
+// an empty coachee leaves the coach reflex-only.
+func (c *Coach) SetEscalation(ctx context.Context, coachee string, esc EscalateFunc) {
+	c.mu.Lock()
+	c.escCtx = ctx
+	c.coachee = coachee
+	c.escalate = esc
+	c.mu.Unlock()
 }
 
 // newCoach builds a coach with no session attached — the form the signal test
@@ -315,6 +342,10 @@ func (c *Coach) feedPty(raw string) *SteerRecord {
 	c.ptyLast = norm
 
 	c.ptySeen[norm] = struct{}{} // cumulative, for the report
+	c.recent = append(c.recent, norm)
+	if len(c.recent) > 30 {
+		c.recent = c.recent[len(c.recent)-30:]
+	}
 	c.window = append(c.window, norm)
 	c.winCount[norm]++
 	c.total++
@@ -382,15 +413,61 @@ func (c *Coach) onToolCall(ev Event) {
 // turns, useless to an agent stuck mid-loop), then the sentence (now read,
 // because the loop was broken), then the training-log line. Runs OUTSIDE the
 // lock — Say/Interrupt do socket IO.
+//
+// On the escalation trip (EscalateAfter generic steers have not worked), it hands
+// off to the band-graduated agent coach ASYNCHRONOUSLY — an inference call is
+// slow and must not stall the output pump the coach watches. The generic steer is
+// the fallback if no agent-coach is available.
 func (c *Coach) intervene(rec *SteerRecord) {
-	if c.steer != nil {
-		if c.pol.Interrupt {
-			_ = c.steer.Interrupt()
-			time.Sleep(150 * time.Millisecond) // let the TUI return to its input box
-		}
-		_ = c.steer.Say(rec.Steer)
+	if c.steer == nil {
+		c.logSteer(*rec)
+		return
 	}
-	c.logSteer(*rec)
+	if c.pol.Interrupt {
+		_ = c.steer.Interrupt()
+		time.Sleep(150 * time.Millisecond) // let the TUI return to its input box
+	}
+
+	c.mu.Lock()
+	trip := len(c.steers) // rec is already appended, so this counts it
+	doEsc := c.escalate != nil &&
+		!c.escalated &&
+		c.pol.EscalateAfter > 0 &&
+		trip == c.pol.EscalateAfter+1
+	if doEsc {
+		c.escalated = true
+	}
+	recent := append([]string(nil), c.recent...)
+	coachee := c.coachee
+	escCtx := c.escCtx
+	c.mu.Unlock()
+
+	if !doEsc {
+		_ = c.steer.Say(rec.Steer)
+		c.logSteer(*rec)
+		return
+	}
+
+	// P2b: the generic steer has failed; escalate to an agent one band up. Async,
+	// so the watch loop keeps running while the coach thinks.
+	if escCtx == nil {
+		escCtx = context.Background()
+	}
+	base := *rec
+	go func() {
+		steer, coach, ok := c.escalate(escCtx, EscalationRequest{Coachee: coachee, Recent: recent, Trip: trip})
+		if !ok || steer == "" {
+			_ = c.steer.Say(base.Steer) // fall back to the generic steer
+			c.logSteer(base)
+			return
+		}
+		_ = c.steer.Say(steer)
+		esc := base
+		esc.Reason = "escalate"
+		esc.Steer = steer
+		esc.Coach = coach
+		c.logSteer(esc)
+	}()
 }
 
 var (

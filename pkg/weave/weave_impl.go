@@ -2249,6 +2249,9 @@ type weaveGuards struct {
 	// PTY master with a trailing \r — keystrokes, as far as the
 	// subagent can tell.
 	ctlSock string
+	// coachee is the binding of the agent running this item, used by the reflex
+	// coach's P2b escalation to pick an agent-coach one band above it.
+	coachee string
 }
 
 // errWeaveWrapperLive is returned from inside the queue-lock callback
@@ -2673,6 +2676,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		maxRuntime:    opts.maxRuntime,
 		memLimitBytes: memLimitBytes,
 		ctlSock:       ctlSock,
+		coachee:       it.Tool,
 	}
 	if ctlSock != "" {
 		if err := os.MkdirAll(filepath.Dir(ctlSock), 0o755); err != nil {

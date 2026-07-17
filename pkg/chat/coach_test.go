@@ -2,10 +2,69 @@ package chat
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
+
+func TestCoachEscalatesAfterGenericSteers(t *testing.T) {
+	// P2b: after EscalateAfter (2) generic steers, the reflex hands off to the
+	// agent-coach on the next trip, with the coachee + recent context.
+	fs := &fakeSteerer{}
+	c := NewLineCoach(DefaultCoachPolicy(), fs) // EscalateAfter 2, MaxSteers 3
+	got := make(chan EscalationRequest, 1)
+	c.SetEscalation(context.Background(), "codex-gpt-5.5", func(ctx context.Context, req EscalationRequest) (string, string, bool) {
+		got <- req
+		return "the two tests are contradictory; report that instead of retrying", "claude-fable5", true
+	})
+	acts := []string{"run_tests on ./x", "read foo.go again", "still failing here", "let me try once more"}
+	for i := 0; i < 240; i++ {
+		_, _ = c.Write([]byte(acts[i%len(acts)] + "\n"))
+	}
+	select {
+	case req := <-got:
+		if req.Coachee != "codex-gpt-5.5" {
+			t.Errorf("coachee = %q, want codex-gpt-5.5", req.Coachee)
+		}
+		if req.Trip != 3 {
+			t.Errorf("escalation trip = %d, want 3 (after 2 generic steers)", req.Trip)
+		}
+		if len(req.Recent) == 0 {
+			t.Errorf("escalation must carry the recent output for context")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("agent-coach was never escalated to after the generic steers")
+	}
+	// the content-full steer should reach the agent (async).
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !fs.saidContains("contradictory") {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !fs.saidContains("contradictory") {
+		t.Errorf("escalated steer not injected into the agent")
+	}
+}
+
+func TestPickCoachAgentIsAboveAndNotSelf(t *testing.T) {
+	// Light live-catalog check: a coach is >= target band and never the coachee.
+	cat := newCatalog()
+	b := coacheeBand(cat, "ycode-glm-5.2")
+	if b == 0 {
+		t.Skip("catalog did not resolve a band in this env")
+	}
+	coach := pickCoachAgent(cat, b+1, "ycode-glm-5.2")
+	if coach == "ycode-glm-5.2" {
+		t.Errorf("a coach must never be the coachee itself")
+	}
+	if coach != "" {
+		if cb := coacheeBand(cat, coach); cb < b+1 {
+			t.Errorf("coach %q band %d is below target %d", coach, cb, b+1)
+		}
+	}
+}
 
 func TestNoteCoachAgenticEmitsStructuredAdvice(t *testing.T) {
 	t.Setenv("BASHY_AGENTIC", "1")
@@ -173,14 +232,32 @@ func TestPtyReportHasCumulativeDistinct(t *testing.T) {
 }
 
 // fakeSteerer records what a coach did, so the weave-style path can be tested
-// without a live agent or a control socket.
+// without a live agent or a control socket. Thread-safe: the escalation path Says
+// from a goroutine.
 type fakeSteerer struct {
+	mu         sync.Mutex
 	interrupts int
 	says       []string
 }
 
-func (f *fakeSteerer) Interrupt() error      { f.interrupts++; return nil }
-func (f *fakeSteerer) Say(text string) error { f.says = append(f.says, text); return nil }
+func (f *fakeSteerer) Interrupt() error { f.mu.Lock(); f.interrupts++; f.mu.Unlock(); return nil }
+func (f *fakeSteerer) Say(text string) error {
+	f.mu.Lock()
+	f.says = append(f.says, text)
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeSteerer) saidCount() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.says) }
+func (f *fakeSteerer) saidContains(sub string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.says {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
 
 func TestLineCoachWriteSteersOnChurn(t *testing.T) {
 	// This is exactly the weave reflex path: a coach fed a run's output via Write,

@@ -278,7 +278,7 @@ func agenticMode() bool {
 	return false
 }
 
-func (r execRunner) runPTY(cmd *exec.Cmd) (string, int, error) {
+func (r execRunner) runPTY(cmd *exec.Cmd, agent string) (string, int, error) {
 	var buf bytes.Buffer
 	sink := io.Writer(&buf)
 	if r.stream != nil {
@@ -291,6 +291,8 @@ func (r execRunner) runPTY(cmd *exec.Cmd) (string, int, error) {
 	var coach *Coach
 	if ReflexEnabled() {
 		coach = NewLineCoach(DefaultCoachPolicy(), NewCtlSteerer(r.ctlSock))
+		// P2b: a steerable invoke can escalate to an agent one band above `agent`.
+		coach.SetEscalation(context.Background(), agent, BandGraduatedEscalator)
 		sink = io.MultiWriter(sink, coach)
 	}
 	exit, killReason, err := agentpty.Run(cmd, sink, agentpty.Options{
@@ -352,7 +354,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		if p, ok := agentctl.ProfileFor(agent); ok && p.Preseed != "" {
 			_ = agentctl.ApplyTrustPreseed(cmd.Dir, p.Preseed)
 		}
-		return r.runPTY(cmd)
+		return r.runPTY(cmd, agent)
 	}
 
 	// Capture stdout and stderr SEPARATELY. The agent's actual answer is on

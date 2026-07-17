@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -32,6 +33,9 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	var coach *chat.Coach
 	if guards.ctlSock != "" && chat.ReflexEnabled() {
 		coach = chat.NewLineCoach(chat.DefaultCoachPolicy(), chat.NewCtlSteerer(guards.ctlSock))
+		// P2b: after the generic steer fails, escalate to an agent one band above
+		// this run's agent for a content-full steer.
+		coach.SetEscalation(context.Background(), guards.coachee, chat.BandGraduatedEscalator)
 		sink = io.MultiWriter(logSink, coach)
 	}
 
