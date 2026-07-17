@@ -759,7 +759,7 @@ func NewChatCmd() *cobra.Command {
 	// The host-room control surface: observe (sessions/timeline/attach) and
 	// participate (steer/interrupt). Every launch path joins the same room.
 	cmd.AddCommand(newChatSessionsCmd(), newChatTimelineCmd(), newChatSteerCmd(),
-		newChatInterruptCmd(), newChatAttachCmd())
+		newChatGrantCmd(), newChatInterruptCmd(), newChatAttachCmd())
 	return cmd
 }
 

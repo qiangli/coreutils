@@ -60,6 +60,7 @@ const (
 	EventLeave     = "leave"
 	EventSteer     = "steer"
 	EventInterrupt = "interrupt"
+	EventGrant     = "grant"
 	EventStatus    = "status"
 	EventNote      = "note"
 )

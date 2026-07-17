@@ -124,6 +124,63 @@ func newChatSteerCmd() *cobra.Command {
 	return cmd
 }
 
+// grantKeys returns the keystroke(s) that answer a tool's approval prompt —
+// always-allow-for-session, or just this one action. Per-tool because each TUI's
+// confirm dialog reads different keys; the y/n/a family is the common default.
+func grantKeys(tool string, always bool) string {
+	switch tool {
+	case "ycode":
+		if always {
+			return "a" // "always allow for this session"
+		}
+		return "y"
+	}
+	if always {
+		return "a"
+	}
+	return "y"
+}
+
+// newChatGrantCmd answers a running instance's PENDING approval prompt remotely,
+// so a supervisor can elevate an attended session to unattended LIVE — no exit,
+// no relaunch (the usability killer). The steer channel already reaches the
+// agent's confirm dialog; this makes it a first-class, discoverable action
+// instead of "type `a` into the prompt yourself".
+func newChatGrantCmd() *cobra.Command {
+	var once bool
+	cmd := &cobra.Command{
+		Use:   "grant <id>",
+		Short: "approve a running instance's pending prompt remotely (always-allow; --once for one action) — no relaunch",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := ""
+			if len(args) > 0 {
+				id = args[0]
+			}
+			c, err := findMember(id)
+			if err != nil {
+				return err
+			}
+			keys := grantKeys(c.Tool, !once)
+			if keys == "" {
+				return fmt.Errorf("chat: don't know how to grant approval for tool %q — approve at its terminal", c.Tool)
+			}
+			if err := agentpty.SendFrame(c.CtlSock, agentpty.VerbatimFrame([]byte(keys))); err != nil {
+				return fmt.Errorf("chat: could not grant %s: %w", c.ID, err)
+			}
+			mode := "always-allow"
+			if once {
+				mode = "allow-once"
+			}
+			_ = room.Emit(room.Event{Type: room.EventGrant, Actor: principalName(), Target: c.ID, Body: mode})
+			fmt.Fprintf(cmd.ErrOrStderr(), "chat: granted %s (%s)\n", c.ID, mode)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&once, "once", false, "allow just this one action (default: always-allow for the session)")
+	return cmd
+}
+
 // newChatInterruptCmd sends ESC — the only thing that breaks a tool loop mid-turn.
 func newChatInterruptCmd() *cobra.Command {
 	cmd := &cobra.Command{
