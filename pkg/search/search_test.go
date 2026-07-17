@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 )
 
@@ -72,5 +73,42 @@ func TestWebForcedBackendMissingKey(t *testing.T) {
 func TestWebEmptyQuery(t *testing.T) {
 	if _, _, err := Web(context.Background(), "   ", Options{}); err == nil {
 		t.Fatal("empty query must error")
+	}
+}
+
+func TestLocalContentScan(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/a.go", []byte("package a\n// TODO fix the widget\nfunc F(){}\n"), 0o644)
+	os.WriteFile(dir+"/b.txt", []byte("nothing here\n"), 0o644)
+	res, err := Local("todo", LocalOptions{Dir: dir, Domain: "content"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Kind != "content" || res[0].Line != 2 {
+		t.Fatalf("content scan: want 1 hit at a.go:2, got %+v", res)
+	}
+}
+
+func TestLocalFilesScan(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/widget_test.go", []byte("x"), 0o644)
+	os.WriteFile(dir+"/other.go", []byte("y"), 0o644)
+	res, err := Local("widget", LocalOptions{Dir: dir, Domain: "files"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Kind != "file" {
+		t.Fatalf("files scan: want 1 file hit, got %+v", res)
+	}
+}
+
+func TestLocalSkipsBinaryAndNoise(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(dir+"/.git", 0o755)
+	os.WriteFile(dir+"/.git/todo.txt", []byte("todo in git"), 0o644)  // must be skipped
+	os.WriteFile(dir+"/bin.dat", []byte("todo\x00\x01binary"), 0o644) // binary, skipped
+	res, _ := Local("todo", LocalOptions{Dir: dir, Domain: "content"})
+	if len(res) != 0 {
+		t.Fatalf(".git + binary must be skipped, got %+v", res)
 	}
 }

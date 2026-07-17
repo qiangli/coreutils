@@ -17,6 +17,10 @@ func NewSearchCmd() *cobra.Command {
 	var (
 		asJSON  bool
 		local   bool
+		content bool
+		files   bool
+		kb      bool
+		dir     string
 		max     int
 		backend string
 	)
@@ -33,11 +37,60 @@ func NewSearchCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		RunE: func(c *cobra.Command, args []string) error {
-			if local {
-				return fmt.Errorf("search: --local is not implemented yet (P0b) — use grep/find/ast/kb/graph for now")
-			}
 			query := strings.Join(args, " ")
 			ctx := c.Context()
+
+			// --- local (P0b): content/files scan + kb facts ---
+			if local || files || kb || content {
+				domain := ""
+				switch {
+				case files:
+					domain = "files"
+				case kb:
+					domain = "kb"
+				case content:
+					domain = "content"
+				}
+				lmax := max
+				if lmax <= 8 {
+					lmax = 40 // local wants more than the web default
+				}
+				res, err := Local(query, LocalOptions{Dir: dir, MaxResults: lmax, Domain: domain})
+				if err != nil {
+					return err
+				}
+				dom := domain
+				if dom == "" {
+					dom = "content+kb"
+				}
+				telemetry.Provenance(ctx, "search.local_results", int64(len(res)), dom)
+				if asJSON {
+					out := struct {
+						SchemaVersion string        `json:"schema_version"`
+						Query         string        `json:"query"`
+						Domain        string        `json:"domain"`
+						Count         int           `json:"count"`
+						Results       []LocalResult `json:"results"`
+					}{"bashy-search-v1", query, dom, len(res), res}
+					b, _ := json.MarshalIndent(out, "", "  ")
+					fmt.Println(string(b))
+					return nil
+				}
+				for _, r := range res {
+					switch r.Kind {
+					case "content":
+						fmt.Printf("%s:%d: %s\n", r.Path, r.Line, truncate(r.Text, 160))
+					case "kb":
+						fmt.Printf("kb: %s\n", r.Path)
+					default:
+						fmt.Println(r.Path)
+					}
+				}
+				fmt.Fprintf(os.Stderr, "(%d local results · %s)\n", len(res), dom)
+				return nil
+			}
+
+			// --- web (P0a): provider ladder ---
 			results, used, err := Web(ctx, query, Options{MaxResults: max, Backend: backend})
 			if err != nil {
 				return err
@@ -67,10 +120,14 @@ func NewSearchCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.BoolVar(&local, "local", false, "local search (grep/find/ast/kb/graph) — P0b, not yet implemented")
+	f.BoolVar(&local, "local", false, "local search: file content + kb facts (default domain content+kb)")
+	f.BoolVar(&content, "content", false, "local: file-content scan only (implies --local)")
+	f.BoolVar(&files, "files", false, "local: filename scan only (implies --local)")
+	f.BoolVar(&kb, "kb", false, "local: kb facts only (implies --local)")
+	f.StringVar(&dir, "dir", "", "local: root to scan (default: cwd)")
 	f.BoolVar(&asJSON, "json", false, "print a bashy-search-v1 JSON envelope")
-	f.IntVar(&max, "max", 8, "maximum results")
-	f.StringVar(&backend, "backend", "", "force a backend: tavily | brave | serper (default: auto by available key)")
+	f.IntVar(&max, "max", 8, "maximum results (local defaults to 40)")
+	f.StringVar(&backend, "backend", "", "web: force a backend: tavily | brave | serper (default: auto)")
 	return cmd
 }
 
