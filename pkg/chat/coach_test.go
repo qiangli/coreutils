@@ -1,9 +1,35 @@
 package chat
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestNoteCoachAgenticEmitsStructuredAdvice(t *testing.T) {
+	t.Setenv("BASHY_AGENTIC", "1")
+	c := newCoach(DefaultCoachPolicy())
+	c.total = 40
+	c.steers = append(c.steers, SteerRecord{Reason: "churn"})
+	var buf bytes.Buffer
+	NoteCoach(c, &buf)
+	if !strings.Contains(buf.String(), "bashy-advice-v1") || !strings.Contains(buf.String(), "agent-loop") {
+		t.Fatalf("agentic NoteCoach must emit a bashy-advice-v1 agent-loop line, got: %q", buf.String())
+	}
+}
+
+func TestNoteCoachHumanEmitsProse(t *testing.T) {
+	t.Setenv("BASHY_AGENTIC", "")
+	c := newCoach(DefaultCoachPolicy())
+	c.total = 40
+	c.steers = append(c.steers, SteerRecord{Reason: "churn"})
+	var buf bytes.Buffer
+	NoteCoach(c, &buf)
+	if !strings.Contains(buf.String(), "[coach]") || strings.Contains(buf.String(), "bashy-advice-v1") {
+		t.Fatalf("non-agentic NoteCoach must emit a prose line, got: %q", buf.String())
+	}
+}
 
 // toolCall builds a tool.call event with the given name+input.
 func toolCall(name, input string) Event {

@@ -231,18 +231,51 @@ type execRunner struct {
 // A PTY merges stdout and stderr — a terminal has one stream — so the captured
 // turn includes whatever chrome the CLI prints. That is the price of being able
 // to answer the agent's questions and steer it, and it is why PTY is opt-in.
-// noteCoach writes a one-line notice to the live watcher when the reflex coach
-// intervened on (or, on a socket-less pipe run, detected) a suspected loop. It
+// NoteCoach surfaces a reflex-coach loop trip to the live watcher when the coach
+// intervened on (or, on a socket-less pipe run, detected) a suspected loop. In
+// agent mode it emits a structured `bashy-advice-v1` line — the same wire shape
+// the space-time advisor uses, so an agentic tool parses a coach loop-trip
+// exactly as it parses any other advice; otherwise a human-readable line. It
 // writes ONLY to the observer stream, never the recorded turn — observing must
 // not change the record.
-func noteCoach(c *Coach, stream io.Writer) {
+func NoteCoach(c *Coach, stream io.Writer) {
 	if c == nil || stream == nil {
 		return
 	}
-	if rep := c.Report(); len(rep.Steers) > 0 {
-		fmt.Fprintf(stream, "\n[coach] suspected loop — %d intervention(s) over %d output lines (%d distinct)\n",
-			len(rep.Steers), rep.Total, rep.Distinct)
+	rep := c.Report()
+	if len(rep.Steers) == 0 {
+		return
 	}
+	if agenticMode() {
+		adv := map[string]any{
+			"schema_version": "bashy-advice-v1",
+			"kind":           "advice",
+			"dimension":      "agent-loop",
+			"interventions":  len(rep.Steers),
+			"lines":          rep.Total,
+			"distinct":       rep.Distinct,
+			"hint": fmt.Sprintf("the reflex coach detected a loop: %d intervention(s) over %d output lines (%d distinct)",
+				len(rep.Steers), rep.Total, rep.Distinct),
+			"suggest": "the coach steered it off; if a loop recurs, the task is likely unsatisfiable or mis-scoped — re-scope rather than retry",
+			"off":     "BASHY_NO_COACH",
+		}
+		if b, err := json.Marshal(adv); err == nil {
+			fmt.Fprintf(stream, "%s\n", b)
+			return
+		}
+	}
+	fmt.Fprintf(stream, "\n[coach] suspected loop — %d intervention(s) over %d output lines (%d distinct)\n",
+		len(rep.Steers), rep.Total, rep.Distinct)
+}
+
+// agenticMode reports whether an agentic tool is driving bashy, so hints go out
+// as structured lines rather than prose.
+func agenticMode() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BASHY_AGENTIC"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func (r execRunner) runPTY(cmd *exec.Cmd) (string, int, error) {
@@ -266,7 +299,7 @@ func (r execRunner) runPTY(cmd *exec.Cmd) (string, int, error) {
 		// one, is watching through an observer rather than typing at the agent.
 		Capture: true,
 	})
-	noteCoach(coach, r.stream)
+	NoteCoach(coach, r.stream)
 	out := buf.String()
 	if err != nil {
 		return out, exit, err
@@ -356,7 +389,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	// ends, Wait gives the pipes this long to drain, then closes them and returns.
 	cmd.WaitDelay = 5 * time.Second
 	err := cmd.Run()
-	noteCoach(coach, r.stream)
+	NoteCoach(coach, r.stream)
 	out := stdout.String()
 	if ctx.Err() != nil {
 		return appendStderr(out, stderr.String()), 124, ctx.Err()

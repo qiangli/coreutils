@@ -1,7 +1,6 @@
 package weave
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -52,12 +51,7 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		},
 	})
 
-	if coach != nil {
-		if rep := coach.Report(); len(rep.Steers) > 0 {
-			fmt.Fprintf(logSink, "\n[coach] steered this run %d time(s) off a suspected loop (%d output lines, %d distinct)\n",
-				len(rep.Steers), rep.Total, rep.Distinct)
-		}
-	}
+	chat.NoteCoach(coach, logSink)
 	return code, reason, err
 }
 
