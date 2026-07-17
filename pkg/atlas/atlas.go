@@ -59,6 +59,7 @@ const (
 	GroupStorage      = "storage"
 	GroupClusterCloud = "cluster-cloud"
 	GroupPlatform     = "platform"
+	GroupDiagnostics  = "diagnostics"
 	GroupAccount      = "account"
 )
 
@@ -164,9 +165,9 @@ var (
 // Groups returns the closed group vocabulary, sorted.
 func Groups() []string {
 	return []string{
-		GroupAccount, GroupClusterCloud, GroupCodeIntel, GroupEngines,
-		GroupFileutils, GroupForge, GroupKnowledge, GroupNet, GroupOrch,
-		GroupPlatform, GroupShell, GroupShellutils, GroupStorage,
+		GroupAccount, GroupClusterCloud, GroupCodeIntel, GroupDiagnostics,
+		GroupEngines, GroupFileutils, GroupForge, GroupKnowledge, GroupNet,
+		GroupOrch, GroupPlatform, GroupShell, GroupShellutils, GroupStorage,
 		GroupTextutils, GroupToolchains,
 	}
 }
@@ -626,10 +627,10 @@ func init() {
 	// platform
 	addVerb("commands", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("context", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("doctor", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapReadOnly}})
+	addVerb("doctor", Entry{Stage: StageCross, Group: GroupDiagnostics, Caps: []string{CapReadOnly}})
 	addVerb("otel", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly, CapNeedsNetwork}})
 	addVerb("audit", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
-	addVerb("check", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("check", Entry{Stage: StageTest, Group: GroupDiagnostics, Caps: []string{CapJSON, CapReadOnly}})
 	// gate: THE Test verb. Before it, the Test stage was EMPTY -- not because
 	// nobody tested, but because the gate (the command that decides pass/fail)
 	// was spelled four incompatible ways across four packages: weave's
@@ -647,15 +648,15 @@ func init() {
 	// --gate). Together they finally encode "sandbox-green is not mergeable".
 	addVerb("pair", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("judge", Entry{Stage: StageTest, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("gate", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("gate", Entry{Stage: StageTest, Group: GroupDiagnostics, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	// conform: BASHY'S OWN fidelity batteries (bash-5.3 compat / POSIX conformance /
 	// VSC-PCTS compliance / benchmark). Renamed from `verify` 2026-07-12: it had
 	// claimed the most general word in the vocabulary for the narrowest possible
 	// thing — verifying BASHY ITSELF. A project that ADOPTS bashy would reach for
 	// `bashy verify` to ask "does MY code pass?" and get bash's conformance suites.
 	// The general pass/fail question is `bashy gate`.
-	addVerb("conform", Entry{Stage: StageTest, Group: GroupPlatform, Caps: []string{CapSpawnsProcesses}})
-	addVerb("verify", Entry{Stage: StageTest, Group: GroupPlatform, AliasOf: "conform", Caps: []string{CapSpawnsProcesses}})
+	addVerb("conform", Entry{Stage: StageTest, Group: GroupDiagnostics, Caps: []string{CapSpawnsProcesses}})
+	addVerb("verify", Entry{Stage: StageTest, Group: GroupDiagnostics, AliasOf: "conform", Caps: []string{CapSpawnsProcesses}})
 	addVerb("self", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapCached, CapNeedsNetwork}})
 	addVerb("bootstrap", Entry{Stage: StageCross, Group: GroupPlatform, AliasOf: "self",
 		Caps: []string{CapCached, CapNeedsNetwork}})
