@@ -18,6 +18,15 @@ func setupIsolationFixture(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("BASHY_AGENTIC", "")
+	// The isolated HOME has no ~/.gitconfig, so the seed commit here and weave's
+	// own internal merge commits would fail with "Committer identity unknown" on a
+	// host whose identity lives only in the (now-hidden) global config. Give the
+	// isolated HOME its own identity so the fixture is HERMETIC — it must not
+	// depend on the developer's machine having a global git user configured.
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"),
+		[]byte("[user]\n\tname = Weave Test\n\temail = weave-test@example.invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
 	gitT(t, dir, "init", "-q", "-b", "main")
 	if err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
