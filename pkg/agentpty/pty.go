@@ -332,8 +332,20 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "agentpty: term.MakeRaw: %v\n", err)
 		}
+		// A human at the keyboard sees the tool's native TUI on os.Stdout.
+		// When a logSink is also supplied, tee the raw PTY bytes to it too —
+		// that capture is what makes a foreground, human-driven session
+		// OBSERVABLE and ATTACHABLE (`chat attach`/`observe`) instead of a
+		// black box. Without it, an interactive session steers (the ctlsock
+		// works in both branches) but nobody else can watch it. The capture
+		// is raw ANSI, so it follows and steers but is not a clean transcript
+		// — headless capture (Capture:true) remains the path for that.
+		dst := io.Writer(os.Stdout)
+		if logSink != nil {
+			dst = io.MultiWriter(os.Stdout, logSink)
+		}
 		go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
-		_, _ = io.Copy(tap(trustTap(os.Stdout)), ptmx)
+		_, _ = io.Copy(tap(trustTap(dst)), ptmx)
 	} else {
 		// Non-TTY parent (orchestrator pipe / backgrounded by `cmd &`).
 		// Subagent gets a PTY but stdin is closed; PTY output is

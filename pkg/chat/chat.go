@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/agentpty"
@@ -614,9 +616,12 @@ var roleDefaults = map[string]string{
 func NewChatCmd() *cobra.Command {
 	var opt Options
 	var capStr string
+	var toolSel string
+	var bandSel int
+	var interactive bool
 	cmd := &cobra.Command{
-		Use:   "chat --agent AGENT --instruction TEXT",
-		Short: "invoke an agent with a single unattended instruction",
+		Use:   "chat [--agent AGENT | --band N | --tool T] [--instruction TEXT]",
+		Short: "talk to an agent — a live governed session (no instruction) or a one-shot (with --instruction)",
 		// A failed launch is a runtime error, not a usage error. Dumping the
 		// flag list on "this tool cannot select a model" buries the sentence
 		// that explains what to do about it.
@@ -648,6 +653,41 @@ func NewChatCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "chat: capability %s → %s (q=%.2f)\n",
 					c, best.Agent, best.Cell.Quality)
 			}
+
+			// --band/--tool pick ONE operable agent for you (a specific --agent names
+			// it). This resolves both the interactive and the one-shot path, so `chat
+			// --band 3` and `chat --band 3 -m "..."` select the same agent.
+			if bandSel != 0 || strings.TrimSpace(toolSel) != "" {
+				picked, err := PickAgent(Selector{Agent: opt.Agent, Tool: toolSel, Band: bandSel})
+				if err != nil {
+					return err
+				}
+				if picked != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "chat: selected %s\n", picked)
+					opt.Agent = picked
+				}
+			}
+
+			// A question (--instruction/--file/--context) is a one-shot Invoke. No
+			// question, at a terminal, is a CONVERSATION — the native interactive
+			// session. --interactive forces the conversation even with a prompt.
+			asked := strings.TrimSpace(opt.Instruction) != "" || len(opt.Files) > 0 || len(opt.Context) > 0
+			wantInteractive := interactive || (!asked && stdinIsTTY(cmd))
+			if wantInteractive {
+				exit, err := Interact(cmd.Context(), opt.Agent, InteractOptions{
+					Prompt:   opt.Instruction,
+					Cwd:      opt.Cwd,
+					Timeout:  opt.Timeout,
+					ReadOnly: opt.ReadOnly,
+					Status:   cmd.ErrOrStderr(),
+				})
+				if err != nil {
+					return err
+				}
+				_ = exit // a human saw the tool exit; the launcher's own exit stays 0
+				return nil
+			}
+
 			plain, _ := cmd.Flags().GetBool("plain")
 			opt.JSON = opt.JSON || (os.Getenv("BASHY_AGENTIC") != "" && !plain)
 			res, err := Invoke(cmd.Context(), opt, execRunner{})
@@ -665,9 +705,12 @@ func NewChatCmd() *cobra.Command {
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().StringVar(&opt.Agent, "agent", "", "agent command to run, such as claude, codex, agy, or opencode")
+	cmd.Flags().StringVar(&toolSel, "tool", "", "launch ANY operable agent using this tool (e.g. codex)")
+	cmd.Flags().IntVar(&bandSel, "band", 0, "launch ANY operable agent pegged at this capability band or above (1-4)")
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "force a live interactive session even with an instruction")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when --agent is omitted: conductor, reviewer, qa, release")
 	cmd.Flags().StringVar(&capStr, "capability", "", "route to the best-fit routable agent for this capability (e.g. deep-research, coding)")
-	cmd.Flags().StringVar(&opt.Instruction, "instruction", "", "instruction to send to the agent")
+	cmd.Flags().StringVarP(&opt.Instruction, "instruction", "m", "", "instruction to send to the agent (one-shot; omit for an interactive session)")
 	cmd.Flags().StringArrayVar(&opt.Files, "file", nil, "append file contents to the instruction")
 	cmd.Flags().StringArrayVar(&opt.Context, "context", nil, "append context text to the instruction")
 	cmd.Flags().StringVar(&opt.Cwd, "cwd", "", "working directory for the agent process")
@@ -682,7 +725,21 @@ func NewChatCmd() *cobra.Command {
 			"flags rather than asking permission to keep them, it passes the launch guard on an ordinary uncontained "+
 			"host, so nobody has to weaken a machine just to ask an agent a question")
 	_ = cmd.Flags().MarkHidden("plain")
+
+	// The control surface for live sessions launched by `bashy chat`.
+	cmd.AddCommand(newChatSessionsCmd(), newChatSteerCmd(), newChatInterruptCmd(), newChatAttachCmd())
 	return cmd
+}
+
+// stdinIsTTY reports whether the command's stdin is an interactive terminal — the
+// signal that "no instruction" means "open a conversation" rather than "read a
+// piped prompt". Falls back to the process stdin when the cobra stream is not a
+// *os.File (tests inject buffers, which are correctly treated as non-interactive).
+func stdinIsTTY(cmd *cobra.Command) bool {
+	if f, ok := cmd.InOrStdin().(*os.File); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+	return false
 }
 
 // Invoke resolves the agent, builds the prompt, and runs it.
