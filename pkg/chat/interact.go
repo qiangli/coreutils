@@ -12,7 +12,19 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/room"
 )
+
+// principalName is the human/agent this session is attributed to on its room card.
+// Optional (best-effort from the environment) — the card omits it when unknown.
+func principalName() string {
+	for _, k := range []string{"BASHY_PRINCIPAL", "USER", "LOGNAME"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 // InteractOptions configures a foreground, human-driven session.
 type InteractOptions struct {
@@ -124,21 +136,23 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		_ = agentctl.ApplyTrustPreseed(cmd.Dir, p.Preseed)
 	}
 
-	sess := LiveSession{
-		ID:      sessionID(l),
-		Binding: l.Binding(),
-		Nick:    l.Nick,
-		Tool:    l.ToolName,
-		Model:   l.ModelName,
-		Band:    bindingBand(name),
-		CtlSock: sock,
-		LogPath: logPath,
-		PID:     os.Getpid(),
-		Cwd:     cwd,
-		Started: time.Now().Format(time.RFC3339),
+	card := room.Card{
+		ID:        sessionID(l),
+		Principal: principalName(),
+		Tool:      l.ToolName,
+		Model:     l.ModelName,
+		Binding:   l.Binding(),
+		Nick:      l.Nick,
+		Band:      bindingBand(name),
+		Mode:      "interactive",
+		CtlSock:   sock,
+		LogPath:   logPath,
+		PID:       os.Getpid(),
+		Cwd:       cwd,
+		Native:    native,
 	}
-	_ = registerSession(sess)
-	defer deregisterSession(sess.ID)
+	_ = room.Join(card)
+	defer room.Leave(card.ID)
 
 	posture := "governed + steerable"
 	if native {
@@ -146,7 +160,7 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	}
 	fmt.Fprintf(status, "chat: %s (%s) — %s (id %s). Ctrl-C ends it; "+
 		"from another terminal: `bashy chat steer %s \"...\"` / `attach %s`.\n",
-		sess.Nick, sess.Binding, posture, sess.ID, sess.ID, sess.ID)
+		card.Nick, card.Binding, posture, card.ID, card.ID, card.ID)
 
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.

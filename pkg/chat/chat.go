@@ -744,8 +744,10 @@ func NewChatCmd() *cobra.Command {
 			"host, so nobody has to weaken a machine just to ask an agent a question")
 	_ = cmd.Flags().MarkHidden("plain")
 
-	// The control surface for live sessions launched by `bashy chat`.
-	cmd.AddCommand(newChatSessionsCmd(), newChatSteerCmd(), newChatInterruptCmd(), newChatAttachCmd())
+	// The host-room control surface: observe (sessions/timeline/attach) and
+	// participate (steer/interrupt). Every launch path joins the same room.
+	cmd.AddCommand(newChatSessionsCmd(), newChatTimelineCmd(), newChatSteerCmd(),
+		newChatInterruptCmd(), newChatAttachCmd())
 	return cmd
 }
 

@@ -26,6 +26,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/gate"
+	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/qiangli/coreutils/pkg/weave/memory"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
@@ -2716,6 +2717,26 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// user at a terminal expects to be able to ^C their own
 	// invocation, which Setsid would break.
 	weaveMaybeSetsid(parentStdinTTY)
+
+	// Join the host room so a weave worker is discoverable + steerable like every
+	// other agent instance — the same board `bashy chat sessions` shows and the
+	// same ctlsock `weave attach`/`chat steer` reach (docs/agent-room-mesh-design.md).
+	wtool, wmodel, _ := strings.Cut(guards.coachee, ":")
+	weaveCard := room.Card{
+		ID:        fmt.Sprintf("weave-%d-%d", it.ID, os.Getpid()),
+		Principal: "conductor",
+		Tool:      wtool,
+		Model:     wmodel,
+		Binding:   guards.coachee,
+		Mode:      "weave",
+		Task:      fmt.Sprintf("#%d %s", it.ID, it.Title),
+		CtlSock:   guards.ctlSock,
+		LogPath:   logPath,
+		PID:       os.Getpid(),
+		Cwd:       tool.Dir,
+	}
+	_ = room.Join(weaveCard)
+	defer room.Leave(weaveCard.ID)
 
 	var (
 		exitCode   int
