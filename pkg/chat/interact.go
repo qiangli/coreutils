@@ -58,8 +58,16 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	}
 	// Deliberately the SAME resolver and launch Start/Invoke use — a session
 	// differs only in which launch template it renders, and governance must not
-	// be able to drift.
-	l, err := resolveLaunch(name, Options{Cwd: opt.Cwd, ReadOnly: opt.ReadOnly, Steer: true})
+	// be able to drift. Attended: a human is driving, so the tool's own approval
+	// gate stays ON (the auto-approve kill-switches are stripped) — safer than an
+	// unattended fleet launch, and it passes the uncontained-host guard exactly as
+	// running the tool by hand would. ReadOnly, when set, is stricter and wins.
+	l, err := resolveLaunch(name, Options{
+		Cwd:      opt.Cwd,
+		ReadOnly: opt.ReadOnly,
+		Attended: !opt.ReadOnly,
+		Steer:    true,
+	})
 	if err != nil {
 		return 1, err
 	}

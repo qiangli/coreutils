@@ -61,6 +61,15 @@ type Options struct {
 	// handing back a one-shot that will have exited before the first steer lands.
 	Steer bool
 
+	// Attended marks a session a HUMAN is driving (bashy chat interactive). It
+	// strips the auto-approve kill-switches (--dangerously-skip-permissions and
+	// kin) from the launch — WITHOUT pinning read-only like ReadOnly does — so the
+	// tool runs in its normal interactive mode with its OWN approval gate active
+	// and full write capability. The human is the containment, so the launch is
+	// both safer (it prompts instead of auto-approving) and passes the uncontained-
+	// host guard, exactly as running the tool by hand would.
+	Attended bool
+
 	// Fork resolves the tool's context-inheriting fork launch (fork_exec): the
 	// spawned session inherits the caller's live transcript. Session is the current
 	// session id substituted into the fork template. Set by `delegate self` when the
@@ -148,6 +157,7 @@ func toAgentLaunchOptions(opt Options) agentlaunch.Options {
 	return agentlaunch.Options{
 		Sandbox:  opt.Sandbox,
 		ReadOnly: opt.ReadOnly,
+		Attended: opt.Attended,
 		DryRun:   opt.DryRun,
 		Steer:    opt.Steer,
 		Fork:     opt.Fork,

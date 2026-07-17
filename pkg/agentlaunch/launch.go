@@ -19,6 +19,11 @@ import (
 type Options struct {
 	Sandbox  string
 	ReadOnly bool
+	// Attended strips the auto-approve kill-switches (leaving the tool's own
+	// approval gate ON and its write capability intact) for a session a human is
+	// driving. Unlike ReadOnly it does NOT pin the sandbox read-only. See
+	// StripKillSwitches.
+	Attended bool
 	DryRun   bool
 
 	// Steer resolves the tool's INTERACTIVE launch (steer_exec) instead of its
@@ -285,6 +290,8 @@ containing it. Choose one:
 func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 	if opt.ReadOnly {
 		args = ReadOnlyArgs(tool, args)
+	} else if opt.Attended {
+		args = StripKillSwitches(tool, args)
 	}
 	args = ApplySandbox(tool, args, opt)
 	if opt.DryRun {
@@ -294,6 +301,28 @@ func FinalizeArgs(tool string, args []string, opt Options) ([]string, error) {
 		return nil, err
 	}
 	return args, nil
+}
+
+// StripKillSwitches removes ONLY the auto-approve kill-switch flags
+// (--dangerously-skip-permissions and kin), leaving write capability and the
+// tool's sandbox default intact. It is the attended-session transform: a human
+// is present, so the tool's own approval gate should be ON (prompting the human)
+// rather than skipped — which also means the uncontained-host guard has nothing
+// to refuse. A `--sandbox danger-full-access` pair is downgraded to the tool's
+// default (drop both tokens), since that too disables containment.
+func StripKillSwitches(tool string, args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if _, unsafe := UnsafeLaunchFlags[args[i]]; unsafe {
+			continue
+		}
+		if args[i] == "--sandbox" && i+1 < len(args) && args[i+1] == "danger-full-access" {
+			i++ // drop the value too; the tool falls back to its default sandbox
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 func ReadOnlyArgs(tool string, args []string) []string {

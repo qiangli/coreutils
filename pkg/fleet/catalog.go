@@ -301,6 +301,16 @@ func (c *Catalog) Agent(name string) (Agent, bool) {
 			}
 		}
 	}
+	// Case-insensitive fallback, exact match having failed: a nickname is a
+	// human name (`Elif`), and a human types `elif`. Only reached when nothing
+	// matched exactly, so it never shadows a precise binding.
+	for _, a := range agents {
+		for _, n := range a.Names() {
+			if strings.EqualFold(n, name) {
+				return a, true
+			}
+		}
+	}
 	return Agent{}, false
 }
 
