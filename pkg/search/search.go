@@ -16,12 +16,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/secrets"
 )
 
 // Result is one web hit, carrying its provenance (URL + when it was retrieved) so
@@ -39,6 +43,7 @@ type Options struct {
 	MaxResults int           // default 8
 	Backend    string        // "" = auto (ladder by available key); else force one
 	Timeout    time.Duration // default 20s
+	NoVault    bool          // do not consult the secrets vault (env-only) — keeps tests hermetic
 }
 
 // ErrNoBackend is returned when no web-search backend is configured.
@@ -46,19 +51,23 @@ var ErrNoBackend = errors.New("search: no web backend configured — set one of 
 	"TAVILY_API_KEY / BRAVE_API_KEY / SERPER_API_KEY (via `bashy secrets`), " +
 	"or BASHY_SEARCH_BACKEND to name one")
 
-// backend is one rung of the provider ladder.
+// backend is one rung of the provider ladder. The key is resolved from the
+// environment first (the conventional API-key vars), then from the secrets vault
+// under `secret` — so a key stored with `bashy secrets set brave …` is found with
+// no manual `BRAVE_API_KEY=…` mapping.
 type backend struct {
 	name    string
 	envKeys []string
+	secret  string // vault secret name
 	run     func(ctx context.Context, client *http.Client, key, query string, max int) ([]Result, error)
 }
 
 // ladder is the preference order. Tavily first (it is built for agent research and
 // returns clean summaries), then Brave (independent index), then Serper (Google).
 var ladder = []backend{
-	{name: "tavily", envKeys: []string{"TAVILY_API_KEY"}, run: runTavily},
-	{name: "brave", envKeys: []string{"BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY"}, run: runBrave},
-	{name: "serper", envKeys: []string{"SERPER_API_KEY"}, run: runSerper},
+	{name: "tavily", envKeys: []string{"TAVILY_API_KEY"}, secret: "tavily", run: runTavily},
+	{name: "brave", envKeys: []string{"BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY"}, secret: "brave", run: runBrave},
+	{name: "serper", envKeys: []string{"SERPER_API_KEY"}, secret: "serper", run: runSerper},
 }
 
 // Web runs a web search through the first available backend. It returns the
@@ -79,16 +88,17 @@ func Web(ctx context.Context, query string, opt Options) ([]Result, string, erro
 	client := &http.Client{Timeout: timeout}
 
 	forced := strings.ToLower(strings.TrimSpace(firstNonEmpty(opt.Backend, os.Getenv("BASHY_SEARCH_BACKEND"))))
+	keyFor := newKeyResolver(!opt.NoVault)
 	var lastErr error
 	tried := false
 	for _, b := range ladder {
 		if forced != "" && forced != b.name {
 			continue
 		}
-		key := firstEnv(b.envKeys)
+		key := keyFor(b)
 		if key == "" {
 			if forced == b.name {
-				return nil, "", fmt.Errorf("search: backend %q selected but its key (%s) is not set", b.name, strings.Join(b.envKeys, "/"))
+				return nil, "", fmt.Errorf("search: backend %q selected but its key is not set (env %s or vault secret %q)", b.name, strings.Join(b.envKeys, "/"), b.secret)
 			}
 			continue
 		}
@@ -144,7 +154,7 @@ func parseTavily(raw []byte) ([]Result, error) {
 	now := time.Now().UTC()
 	out := make([]Result, 0, len(r.Results))
 	for _, x := range r.Results {
-		out = append(out, Result{Title: x.Title, URL: x.URL, Snippet: x.Content, RetrievedAt: now, Backend: "tavily"})
+		out = append(out, Result{Title: cleanSnippet(x.Title), URL: x.URL, Snippet: cleanSnippet(x.Content), RetrievedAt: now, Backend: "tavily"})
 	}
 	return out, nil
 }
@@ -182,7 +192,7 @@ func parseBrave(raw []byte) ([]Result, error) {
 	now := time.Now().UTC()
 	out := make([]Result, 0, len(r.Web.Results))
 	for _, x := range r.Web.Results {
-		out = append(out, Result{Title: x.Title, URL: x.URL, Snippet: x.Description, RetrievedAt: now, Backend: "brave"})
+		out = append(out, Result{Title: cleanSnippet(x.Title), URL: x.URL, Snippet: cleanSnippet(x.Description), RetrievedAt: now, Backend: "brave"})
 	}
 	return out, nil
 }
@@ -218,7 +228,7 @@ func parseSerper(raw []byte) ([]Result, error) {
 	now := time.Now().UTC()
 	out := make([]Result, 0, len(r.Organic))
 	for _, x := range r.Organic {
-		out = append(out, Result{Title: x.Title, URL: x.Link, Snippet: x.Snippet, RetrievedAt: now, Backend: "serper"})
+		out = append(out, Result{Title: cleanSnippet(x.Title), URL: x.Link, Snippet: cleanSnippet(x.Snippet), RetrievedAt: now, Backend: "serper"})
 	}
 	return out, nil
 }
@@ -248,6 +258,42 @@ func firstEnv(names []string) string {
 	}
 	return ""
 }
+
+// newKeyResolver returns a per-call resolver: environment first, then the secrets
+// vault (client resolved once, lazily — a missing pairing simply means env-only).
+func newKeyResolver(useVault bool) func(backend) string {
+	var client secrets.Client
+	var have, triedVault bool
+	return func(b backend) string {
+		if k := firstEnv(b.envKeys); k != "" {
+			return k
+		}
+		if !useVault {
+			return ""
+		}
+		if !triedVault {
+			triedVault = true
+			if c, err := (secrets.Config{}).Resolve(); err == nil {
+				client, have = c, true
+			}
+		}
+		if !have || b.secret == "" {
+			return ""
+		}
+		if v, err := client.Get(b.secret); err == nil {
+			return strings.TrimSpace(v)
+		}
+		return ""
+	}
+}
+
+// cleanSnippet strips the HTML some backends (Brave) return in descriptions.
+func cleanSnippet(s string) string {
+	s = htmlTag.ReplaceAllString(s, "")
+	return strings.TrimSpace(html.UnescapeString(s))
+}
+
+var htmlTag = regexp.MustCompile(`<[^>]*>`)
 
 func firstNonEmpty(vs ...string) string {
 	for _, v := range vs {

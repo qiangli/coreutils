@@ -47,7 +47,7 @@ func clearKeys(t *testing.T) {
 
 func TestWebNoBackendConfigured(t *testing.T) {
 	clearKeys(t)
-	_, _, err := Web(context.Background(), "anything", Options{})
+	_, _, err := Web(context.Background(), "anything", Options{NoVault: true})
 	if !errors.Is(err, ErrNoBackend) {
 		t.Fatalf("want ErrNoBackend, got %v", err)
 	}
@@ -55,7 +55,7 @@ func TestWebNoBackendConfigured(t *testing.T) {
 
 func TestWebForcedUnknownBackend(t *testing.T) {
 	clearKeys(t)
-	_, _, err := Web(context.Background(), "q", Options{Backend: "bing"})
+	_, _, err := Web(context.Background(), "q", Options{Backend: "bing", NoVault: true})
 	if err == nil {
 		t.Fatal("forcing an unknown backend must error")
 	}
@@ -63,7 +63,7 @@ func TestWebForcedUnknownBackend(t *testing.T) {
 
 func TestWebForcedBackendMissingKey(t *testing.T) {
 	clearKeys(t)
-	_, _, err := Web(context.Background(), "q", Options{Backend: "tavily"})
+	_, _, err := Web(context.Background(), "q", Options{Backend: "tavily", NoVault: true})
 	if err == nil {
 		t.Fatal("forcing a backend whose key is unset must error clearly")
 	}
