@@ -8,11 +8,10 @@ import (
 	"context"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
 // This is the FLEET half of fleet execution — how a chunk reaches a worker. It
@@ -56,8 +55,45 @@ type Worker struct {
 	CPU      int    // slot ceiling
 	MemBytes uint64 // the other half of the capacity formula
 
+	// Facts is a timestamped observation of this worker. When present it wins
+	// over static configuration; stale facts make the worker ineligible rather
+	// than allowing scheduling from inventory that is no longer trustworthy.
+	Facts       *HostFacts
+	MaxFactsAge time.Duration
+
 	Transport Transport // nil => the pool's default transport
 }
+
+// PlacementRefusal explains why one worker cannot accept a task. It is kept
+// deliberately small and machine-readable so callers can report every worker
+// deterministically instead of flattening an unknown capability into a vague
+// "no worker" string.
+type PlacementRefusal struct {
+	Worker      string `json:"worker"`
+	Code        string `json:"code"`
+	Requirement string `json:"requirement"`
+	Missing     string `json:"missing,omitempty"`
+	Available   string `json:"available,omitempty"`
+}
+
+// PlacementError carries the complete, ordered set of per-worker refusals.
+type PlacementError struct {
+	Constraints Constraints
+	Refusals    []PlacementRefusal
+}
+
+func (e *PlacementError) Error() string {
+	if len(e.Refusals) == 0 {
+		return "no eligible worker"
+	}
+	parts := make([]string, 0, len(e.Refusals))
+	for _, r := range e.Refusals {
+		parts = append(parts, r.Worker+": "+r.Code+" "+r.Requirement)
+	}
+	return "no worker offers " + describeConstraints(e.Constraints) + ": " + strings.Join(parts, "; ")
+}
+
+const defaultFactsMaxAge = 5 * time.Minute
 
 // offers reports whether the worker can host the given venue. An empty venue
 // means "unconstrained", which resolves to userland.
@@ -81,6 +117,84 @@ func (w *Worker) matches(want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func (w *Worker) memoryBytes() uint64 {
+	if w.Facts != nil {
+		return w.Facts.MemBytes
+	}
+	return w.MemBytes
+}
+
+func (w *Worker) staleFacts(now time.Time) bool {
+	if w.Facts == nil {
+		return false
+	}
+	maxAge := w.MaxFactsAge
+	if maxAge == 0 {
+		maxAge = defaultFactsMaxAge
+	}
+	return w.Facts.Stale(now, maxAge)
+}
+
+// fact looks up a capability from observed facts first, then static labels.
+// OS and architecture are typed observed facts, but labels remain the fallback
+// for workers configured before host observation was introduced.
+func (w *Worker) fact(key string) string {
+	if w.Facts != nil {
+		switch strings.ToLower(key) {
+		case "os":
+			if w.Facts.OS != "" {
+				return w.Facts.OS
+			}
+		case "arch":
+			if w.Facts.Arch != "" {
+				return w.Facts.Arch
+			}
+		default:
+			if v := w.Facts.Labels[key]; v != "" {
+				return v
+			}
+		}
+	}
+	return w.Labels[key]
+}
+
+func (w *Worker) refusal(c Constraints, now time.Time) *PlacementRefusal {
+	if w.staleFacts(now) {
+		return &PlacementRefusal{Worker: w.ID, Code: "unknown-capability", Requirement: "fresh host facts", Missing: "observed_at"}
+	}
+	venue := c.Venue
+	if venue == "" {
+		venue = VenueUserland
+	}
+	if !w.offers(venue) {
+		return &PlacementRefusal{Worker: w.ID, Code: "missing-capability", Requirement: "venue=" + venue, Missing: "venue"}
+	}
+	keys := make([]string, 0, len(c.Match))
+	for k := range c.Match {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		want, got := c.Match[k], w.fact(k)
+		if got == "" {
+			return &PlacementRefusal{Worker: w.ID, Code: "unknown-capability", Requirement: k + "=" + want, Missing: k}
+		}
+		if got != want {
+			return &PlacementRefusal{Worker: w.ID, Code: "capability-mismatch", Requirement: k + "=" + want, Available: got}
+		}
+	}
+	if c.MemPerTask > 0 {
+		mem := w.memoryBytes()
+		if mem == 0 {
+			return &PlacementRefusal{Worker: w.ID, Code: "unknown-capability", Requirement: "mem_bytes>=" + strconv.FormatUint(c.MemPerTask, 10), Missing: "mem_bytes"}
+		}
+		if mem < c.MemPerTask {
+			return &PlacementRefusal{Worker: w.ID, Code: "insufficient-capacity", Requirement: "mem_bytes>=" + strconv.FormatUint(c.MemPerTask, 10), Available: strconv.FormatUint(mem, 10)}
+		}
+	}
+	return nil
 }
 
 // Constraints is what a task demands of a worker. It is derived from task
@@ -132,9 +246,6 @@ func NewPool(transport Transport, workers ...*Worker) *Pool {
 		if w.ID == "" {
 			w.ID = LocalWorkerID
 		}
-		if len(w.Venues) == 0 {
-			w.Venues = []string{VenueUserland}
-		}
 		p.workers = append(p.workers, w)
 		p.free = append(p.free, max(1, w.CPU))
 		p.busy = append(p.busy, 0)
@@ -175,8 +286,8 @@ func (p *Pool) SetDefaultTransport(tr Transport) {
 // gated by memory as often as by cores.
 func (p *Pool) Slots(w *Worker, memPerTask uint64) int {
 	slots := max(1, w.CPU)
-	if memPerTask > 0 && w.MemBytes > 0 {
-		if byMem := int(w.MemBytes / memPerTask); byMem < slots {
+	if memPerTask > 0 && w.memoryBytes() > 0 {
+		if byMem := int(w.memoryBytes() / memPerTask); byMem < slots {
 			slots = byMem
 		}
 	}
@@ -208,11 +319,33 @@ func (p *Pool) Eligible(c Constraints) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, w := range p.workers {
-		if w.offers(c.Venue) && w.matches(c.Match) && p.Slots(w, c.MemPerTask) > 0 {
+		if w.refusal(c, time.Now()) == nil && p.Slots(w, c.MemPerTask) > 0 {
 			return true
 		}
 	}
 	return false
+}
+
+// Refusals returns one deterministic explanation per worker that cannot ever
+// run c. A nil result means at least one worker is eligible.
+func (p *Pool) Refusals(c Constraints) []PlacementRefusal {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	refusals := make([]PlacementRefusal, 0, len(p.workers))
+	now := time.Now()
+	for _, w := range p.workers {
+		if r := w.refusal(c, now); r != nil {
+			refusals = append(refusals, *r)
+			continue
+		}
+		if p.Slots(w, c.MemPerTask) == 0 {
+			refusals = append(refusals, PlacementRefusal{Worker: w.ID, Code: "insufficient-capacity", Requirement: "slots>0", Available: "0"})
+		}
+	}
+	if len(refusals) == len(p.workers) {
+		return refusals
+	}
+	return nil
 }
 
 // TryAcquire reserves one qualifying slot and returns the worker plus its
@@ -234,7 +367,7 @@ func (p *Pool) TryAcquire(c Constraints) (*Worker, func()) {
 
 	for _, i := range idx {
 		w := p.workers[i]
-		if !w.offers(c.Venue) || !w.matches(c.Match) {
+		if w.refusal(c, time.Now()) != nil {
 			continue
 		}
 		if p.Slots(w, c.MemPerTask) <= 0 {
@@ -260,12 +393,14 @@ func (p *Pool) TryAcquire(c Constraints) (*Worker, func()) {
 // Acquire blocks until a qualifying slot frees up or ctx ends. It fails fast
 // (without waiting) when no worker could ever qualify.
 func (p *Pool) Acquire(ctx context.Context, c Constraints) (*Worker, func(), error) {
-	if !p.Eligible(c) {
-		return nil, nil, errf(weavecli.ExitDepUnhealthy, "no worker offers %s", describeConstraints(c))
-	}
 	for {
 		if w, release := p.TryAcquire(c); w != nil {
 			return w, release, nil
+		}
+		// Facts may become stale while this call is waiting for a slot. Recheck
+		// before sleeping so stale inventory turns into a refusal, never a hang.
+		if refusals := p.Refusals(c); refusals != nil {
+			return nil, nil, &PlacementError{Constraints: c, Refusals: refusals}
 		}
 		select {
 		case <-p.freed:
