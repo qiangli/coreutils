@@ -11,6 +11,7 @@ import (
 	"context"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/tool"
@@ -86,6 +87,13 @@ func parseInterval(s string) (float64, error) {
 			mult = 24 * 60 * 60
 			s = s[:len(s)-1]
 		}
+	}
+	// strconv.ParseFloat accepts Go's "_" digit-separator literal syntax
+	// (e.g. "1_000"), which POSIX/GNU strtod-based number parsing does
+	// not: reject it so "1_000" errors like it does upstream instead of
+	// silently parsing as 1000.
+	if strings.ContainsRune(s, '_') {
+		return 0, strconv.ErrSyntax
 	}
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil || v < 0 || math.IsNaN(v) {

@@ -79,6 +79,8 @@ func TestSleepErrors(t *testing.T) {
 		{"1S"},         // GNU suffixes are lowercase only
 		{"s"},          // suffix without number
 		{"1", "bogus"}, // any bad operand fails
+		{"1_000"},      // Go-only digit-separator syntax; not valid strtod/POSIX input
+		{"1_0s"},       // digit separator before a suffix
 	}
 	for _, args := range cases {
 		_, errb, code := runTool(t, context.Background(), args...)
