@@ -30,8 +30,8 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "xargs",
-	Synopsis: "Build and run command lines from standard input (GNU-subset xargs).",
-	Usage:    "xargs [-0rt] [-n MAX] [-I REPL] [-P N] [-E EOF] [-d DELIM] [command [initial-args...]]",
+	Synopsis: "Build and run command lines from standard input.",
+	Usage:    "xargs [-0rtx] [-n MAX] [-L MAX-LINES] [-s SIZE] [-I REPL] [-P N] [-E EOF] [-d DELIM] [command [initial-args...]]",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -41,6 +41,9 @@ type options struct {
 	noRunEmpty bool
 	trace      bool
 	maxArgs    int // <=0 means unlimited (one batch)
+	maxLines   int // <=0 means unlimited
+	maxChars   int // <=0 means unlimited
+	exactSize  bool
 	replace    string
 	maxProcs   int
 	eof        string
@@ -83,21 +86,39 @@ func run(rc *tool.RunContext, args []string) int {
 			if !ok {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
-			o.maxArgs = atoiOr(v)
+			o.maxArgs, o.maxLines, o.replace = atoiOr(v), 0, ""
 		case strings.HasPrefix(a, "--max-args="):
-			o.maxArgs = atoiOr(a[len("--max-args="):])
+			o.maxArgs, o.maxLines, o.replace = atoiOr(a[len("--max-args="):]), 0, ""
 		case strings.HasPrefix(a, "-n") && len(a) > 2:
-			o.maxArgs = atoiOr(a[2:])
+			o.maxArgs, o.maxLines, o.replace = atoiOr(a[2:]), 0, ""
+		case a == "-L":
+			v, ok := val()
+			if !ok {
+				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
+			}
+			o.maxLines, o.maxArgs, o.replace = atoiOr(v), -1, ""
+		case strings.HasPrefix(a, "-L") && len(a) > 2:
+			o.maxLines, o.maxArgs, o.replace = atoiOr(a[2:]), -1, ""
+		case a == "-s":
+			v, ok := val()
+			if !ok {
+				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
+			}
+			o.maxChars = atoiOr(v)
+		case strings.HasPrefix(a, "-s") && len(a) > 2:
+			o.maxChars = atoiOr(a[2:])
+		case a == "-x":
+			o.exactSize = true
 		case a == "-I" || a == "--replace" || a == "-i":
 			if v, ok := val(); ok {
-				o.replace = v
+				o.replace, o.maxArgs, o.maxLines = v, -1, 1
 			} else {
-				o.replace = "{}"
+				o.replace, o.maxArgs, o.maxLines = "{}", -1, 1
 			}
 		case strings.HasPrefix(a, "-I") && len(a) > 2:
-			o.replace = a[2:]
+			o.replace, o.maxArgs, o.maxLines = a[2:], -1, 1
 		case strings.HasPrefix(a, "--replace="):
-			o.replace = a[len("--replace="):]
+			o.replace, o.maxArgs, o.maxLines = a[len("--replace="):], -1, 1
 		case a == "-P" || a == "--max-procs":
 			v, ok := val()
 			if !ok {
@@ -132,6 +153,12 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if o.maxArgs != -1 && o.maxArgs < 1 { // -1 = unlimited; otherwise positive
 		return tool.UsageError(rc, cmd, "-n requires a positive number")
+	}
+	if o.maxLines < 0 {
+		return tool.UsageError(rc, cmd, "-L requires a positive number")
+	}
+	if o.maxChars != 0 && o.maxChars < 1 {
+		return tool.UsageError(rc, cmd, "-s requires a positive number")
 	}
 	if o.maxProcs == -2 {
 		return tool.UsageError(rc, cmd, "-P requires a non-negative number")
@@ -171,31 +198,55 @@ func atoiOr(s string) int {
 }
 
 // readItems splits stdin into items per the delimiter rules.
-func readItems(r io.Reader, o options) ([]string, error) {
+type inputItem struct {
+	value string
+	line  int
+}
+
+func readItems(r io.Reader, o options) ([]inputItem, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
-	var items []string
+	var items []inputItem
 	switch {
+	case o.replace != "":
+		lines := strings.Split(string(data), "\n")
+		for line, text := range lines {
+			if line == len(lines)-1 && text == "" {
+				continue
+			}
+			items = append(items, inputItem{value: strings.TrimSuffix(text, "\r"), line: line + 1})
+		}
 	case o.null:
-		items = splitOn(string(data), '\x00')
+		items = plainItems(splitOn(string(data), '\x00'))
 	case o.delim != "":
 		d := unescapeDelim(o.delim)
-		items = splitOn(string(data), d)
+		items = plainItems(splitOn(string(data), d))
 	default:
-		items = splitQuoted(string(data))
+		items, err = splitQuoted(string(data))
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Honor a logical EOF string: stop at the first item equal to it.
 	if o.eof != "" {
 		for k, it := range items {
-			if it == o.eof {
+			if it.value == o.eof {
 				items = items[:k]
 				break
 			}
 		}
 	}
 	return items, nil
+}
+
+func plainItems(values []string) []inputItem {
+	items := make([]inputItem, len(values))
+	for i, value := range values {
+		items[i] = inputItem{value: value, line: i + 1}
+	}
+	return items
 }
 
 func splitOn(s string, delim rune) []string {
@@ -211,13 +262,14 @@ func splitOn(s string, delim rune) []string {
 // splitQuoted implements GNU xargs default word splitting: blanks/newlines
 // separate items; single and double quotes group; backslash escapes the next
 // character (outside quotes).
-func splitQuoted(s string) []string {
-	var items []string
+func splitQuoted(s string) ([]inputItem, error) {
+	var items []inputItem
 	var cur strings.Builder
 	inItem := false
+	line, itemLine := 1, 1
 	flush := func() {
 		if inItem {
-			items = append(items, cur.String())
+			items = append(items, inputItem{value: cur.String(), line: itemLine})
 			cur.Reset()
 			inItem = false
 		}
@@ -225,23 +277,34 @@ func splitQuoted(s string) []string {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch c {
-		case ' ', '\t', '\n', '\r', '\v', '\f':
+		case ' ', '\t', '\r', '\v', '\f':
 			flush()
+		case '\n':
+			flush()
+			line++
+			itemLine = line
 		case '\\':
-			if i+1 < len(s) {
-				i++
-				cur.WriteByte(s[i])
-				inItem = true
+			if i+1 == len(s) {
+				return nil, fmt.Errorf("unmatched backslash")
 			}
+			i++
+			cur.WriteByte(s[i])
+			inItem = true
 		case '\'':
 			inItem = true
 			for i++; i < len(s) && s[i] != '\''; i++ {
 				cur.WriteByte(s[i])
 			}
+			if i == len(s) {
+				return nil, fmt.Errorf("unmatched single quote")
+			}
 		case '"':
 			inItem = true
 			for i++; i < len(s) && s[i] != '"'; i++ {
 				cur.WriteByte(s[i])
+			}
+			if i == len(s) {
+				return nil, fmt.Errorf("unmatched double quote")
 			}
 		default:
 			cur.WriteByte(c)
@@ -249,7 +312,7 @@ func splitQuoted(s string) []string {
 		}
 	}
 	flush()
-	return items
+	return items, nil
 }
 
 func unescapeDelim(s string) rune {
@@ -275,14 +338,14 @@ func unescapeDelim(s string) rune {
 }
 
 // plan turns items into concrete argv batches.
-func plan(command, items []string, o options) ([][]string, error) {
+func plan(command []string, items []inputItem, o options) ([][]string, error) {
 	// Replace mode: one invocation per item, substituting the replace-str.
 	if o.replace != "" {
 		var batches [][]string
 		for _, it := range items {
 			argv := make([]string, len(command))
 			for k, a := range command {
-				argv[k] = strings.ReplaceAll(a, o.replace, it)
+				argv[k] = strings.ReplaceAll(a, o.replace, it.value)
 			}
 			batches = append(batches, argv)
 		}
@@ -296,22 +359,62 @@ func plan(command, items []string, o options) ([][]string, error) {
 		return [][]string{append([]string(nil), command...)}, nil // run once, no extra args
 	}
 
-	step := o.maxArgs
-	if step <= 0 {
-		step = len(items) // unlimited ⇒ one batch
-	}
 	var batches [][]string
-	for s := 0; s < len(items); s += step {
-		e := min(s+step, len(items))
+	baseSize := argvSize(command)
+	if o.maxChars > 0 && baseSize > o.maxChars {
+		return nil, fmt.Errorf("command exceeds -s size limit")
+	}
+	for start := 0; start < len(items); {
 		argv := append([]string(nil), command...)
-		argv = append(argv, items[s:e]...)
+		size, lines, end := baseSize, 0, start
+		lastLine := -1
+		for end < len(items) {
+			it := items[end]
+			newLine := it.line != lastLine
+			if newLine && o.maxLines > 0 && lines == o.maxLines {
+				break
+			}
+			if o.maxArgs > 0 && end-start == o.maxArgs {
+				break
+			}
+			itemSize := len(it.value) + 1
+			if o.maxChars > 0 && size+itemSize > o.maxChars && end > start {
+				break
+			}
+			if o.maxChars > 0 && size+itemSize > o.maxChars && o.exactSize {
+				return nil, fmt.Errorf("input item exceeds -s size limit")
+			}
+			argv = append(argv, it.value)
+			size += itemSize
+			if newLine {
+				lines++
+				lastLine = it.line
+			}
+			end++
+		}
+		if end == start { // A single large input item is permitted unless -x was set.
+			argv = append(argv, items[end].value)
+			end++
+		}
 		batches = append(batches, argv)
+		start = end
 	}
 	return batches, nil
 }
 
+// argvSize is the byte budget occupied by a command argument vector.  The
+// terminating NUL for each argument is included so -s batches cannot exceed
+// the requested command size.
+func argvSize(argv []string) int {
+	n := 0
+	for _, arg := range argv {
+		n += len(arg) + 1
+	}
+	return n
+}
+
 // execBatches runs the planned invocations (parallel when -P>1) and returns the
-// GNU xargs exit status.
+// xargs exit status.
 func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	var mu sync.Mutex
 	worst := 0
@@ -324,7 +427,7 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	}
 
 	// runOne executes one invocation, writing its output to stdout/stderr.
-	runOne := func(argv []string, stdout, stderr io.Writer) {
+	runOne := func(argv []string, stdout, stderr io.Writer) (stop bool) {
 		if o.trace {
 			fmt.Fprintln(stderr, strings.Join(argv, " "))
 		}
@@ -332,7 +435,7 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 		if path == "" {
 			fmt.Fprintf(stderr, "xargs: %s: command not found\n", argv[0])
 			note(127)
-			return
+			return false
 		}
 		c := exec.Command(path, argv[1:]...)
 		c.Dir = rc.Dir
@@ -345,6 +448,7 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 			switch ec := err.ExitCode(); {
 			case ec == 255:
 				note(124)
+				return true
 			case ec < 0:
 				note(125) // killed by signal
 			default:
@@ -353,6 +457,7 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 		default:
 			note(126) // could not run
 		}
+		return false
 	}
 
 	procs := o.maxProcs
@@ -361,7 +466,9 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	}
 	if procs <= 1 {
 		for _, argv := range batches {
-			runOne(argv, rc.Out, rc.Err) // stream directly when sequential
+			if runOne(argv, rc.Out, rc.Err) { // exit 255 stops further input
+				break
+			}
 		}
 		return worst
 	}

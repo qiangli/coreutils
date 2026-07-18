@@ -119,3 +119,44 @@ func TestXargsInteractiveUnsupported(t *testing.T) {
 		t.Error("-p should fail loudly (unsupported)")
 	}
 }
+
+func TestXargsLogicalLines(t *testing.T) {
+	out, _, code := runXargs(t, "a b\nc\nd e\n", "-L", "2", "echo")
+	if code != 0 || out != "a b c\nd e\n" {
+		t.Fatalf("-L 2: out=%q code=%d", out, code)
+	}
+}
+
+func TestXargsLastInputLimitOptionWins(t *testing.T) {
+	out, _, code := runXargs(t, "a b\nc d\n", "-n", "1", "-L", "2", "echo")
+	if code != 0 || out != "a b c d\n" {
+		t.Fatalf("last input limit option: out=%q code=%d", out, code)
+	}
+}
+
+func TestXargsReplaceUsesWholeLine(t *testing.T) {
+	out, _, code := runXargs(t, "a b\nc d\n", "-I", "{}", "echo", "[{}]")
+	if code != 0 || out != "[a b]\n[c d]\n" {
+		t.Fatalf("-I line replacement: out=%q code=%d", out, code)
+	}
+}
+
+func TestXargsRejectsMalformedQuotedInput(t *testing.T) {
+	for _, input := range []string{"'unterminated", "trailing\\"} {
+		_, errOut, code := runXargs(t, input, "echo")
+		if code == 0 || !strings.Contains(errOut, "unmatched") {
+			t.Errorf("input %q: code=%d stderr=%q, want unmatched-input failure", input, code, errOut)
+		}
+	}
+}
+
+func TestXargsSizeLimitAndExactMode(t *testing.T) {
+	out, _, code := runXargs(t, "a bb ccc\n", "-s", "10", "echo")
+	if code != 0 || out != "a bb\nccc\n" {
+		t.Fatalf("-s batching: out=%q code=%d", out, code)
+	}
+	_, errOut, code := runXargs(t, "oversized\n", "-s", "5", "-x", "echo")
+	if code == 0 || !strings.Contains(errOut, "size") {
+		t.Fatalf("-s -x oversize: code=%d stderr=%q", code, errOut)
+	}
+}
