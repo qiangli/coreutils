@@ -37,6 +37,7 @@ type Engine struct {
 
 // ReadFileFunc reads filenames named by sed's r command.
 type ReadFileFunc func(string) ([]byte, error)
+type WriteFileFunc func(string, string) error
 
 // vm is the virtual machine state for a running sed program.
 type vm struct {
@@ -64,15 +65,22 @@ func makeEngine(program io.Reader, isQuiet bool) (*Engine, error) {
 }
 
 func makeEngineWithReadFile(program io.Reader, isQuiet bool, readFile ReadFileFunc) (*Engine, error) {
+	return makeEngineWithReadWriteFile(program, isQuiet, readFile, defaultWriteFile)
+}
+
+func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadFileFunc, writeFile WriteFileFunc) (*Engine, error) {
 	if readFile == nil {
 		readFile = os.ReadFile
+	}
+	if writeFile == nil {
+		writeFile = defaultWriteFile
 	}
 	bufprog := bufio.NewReader(program)
 	ch := make(chan *token, 128)
 	errch := make(chan error, 1)
 	go lex(bufprog, ch, errch)
 
-	instructions, parseErr := parse(ch, isQuiet, readFile)
+	instructions, parseErr := parse(ch, isQuiet, readFile, writeFile)
 	var err = <-errch // look for lexing errors first...
 	if err == nil {
 		// if there were no lex errors, look for a parsing error
@@ -106,6 +114,14 @@ func NewWithReadFile(program io.Reader, readFile ReadFileFunc) (*Engine, error) 
 // NewQuietWithReadFile is NewWithReadFile with automatic printing disabled.
 func NewQuietWithReadFile(program io.Reader, readFile ReadFileFunc) (*Engine, error) {
 	return makeEngineWithReadFile(program, true, readFile)
+}
+
+func NewWithReadWriteFile(program io.Reader, readFile ReadFileFunc, writeFile WriteFileFunc) (*Engine, error) {
+	return makeEngineWithReadWriteFile(program, false, readFile, writeFile)
+}
+
+func NewQuietWithReadWriteFile(program io.Reader, readFile ReadFileFunc, writeFile WriteFileFunc) (*Engine, error) {
+	return makeEngineWithReadWriteFile(program, true, readFile, writeFile)
 }
 
 // Wrap supplies an io.Reader that applies the sed Engine to the given

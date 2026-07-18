@@ -28,13 +28,14 @@ type parseState struct {
 	b_labels   map[string]instruction // named b branch labels
 	t_labels   map[string]instruction // named t branch labels
 	readFile   ReadFileFunc           // file reader for the r command
+	writeFile  WriteFileFunc          // file writer for the w command
 	blockLevel int                    // how deeply nested are our blocks?
 	quiet      bool                   // are we building a quiet engine (-n sed)?
 	err        error                  // record any errors we encounter
 }
 
-func parse(input <-chan *token, quiet bool, readFile ReadFileFunc) ([]instruction, error) {
-	ps := &parseState{toks: input, b_labels: make(map[string]instruction), t_labels: make(map[string]instruction), readFile: readFile, quiet: quiet}
+func parse(input <-chan *token, quiet bool, readFile ReadFileFunc, writeFile WriteFileFunc) ([]instruction, error) {
+	ps := &parseState{toks: input, b_labels: make(map[string]instruction), t_labels: make(map[string]instruction), readFile: readFile, writeFile: writeFile, quiet: quiet}
 
 	ps.ins = append(ps.ins, cmd_fillNext)
 	parse_toplevel(ps)
@@ -89,6 +90,8 @@ func parse_toplevel(ps *parseState) {
 			n, err := strconv.Atoi(tok.args[0])
 			if err != nil {
 				ps.err = fmt.Errorf("Bad number <%s> %v", tok.args[0], &tok.location)
+			} else if n == 0 {
+				ps.err = fmt.Errorf("Address 0 is not a positive line number %v", &tok.location)
 				break
 			}
 			compile_cond(ps, numbercond(n))
@@ -170,6 +173,8 @@ func compile_twocond(ps *parseState, c1 condition) {
 		n, err := strconv.Atoi(tok.args[0])
 		if err != nil {
 			ps.err = fmt.Errorf("Bad number <%s> %v", tok.args[0], &tok.location)
+		} else if n == 0 {
+			ps.err = fmt.Errorf("Address 0 is not a positive line number %v", &tok.location)
 			break
 		}
 		c2 = numbercond(n)
@@ -241,6 +246,8 @@ func compile_cmd(ps *parseState, cmd *token) {
 	switch cmd.letter {
 	case '=':
 		ps.ins = append(ps.ins, cmd_lineno)
+	case 'l':
+		ps.ins = append(ps.ins, cmd_list)
 	case 'D':
 		ps.ins = append(ps.ins, cmd_deleteFirstLine)
 	case 'G':
@@ -288,7 +295,7 @@ func compile_cmd(ps *parseState, cmd *token) {
 		}
 		ps.ins = append(ps.ins, subst)
 	case 'w':
-		ps.ins = append(ps.ins, cmd_newWriter(cmd.args[0]))
+		ps.ins = append(ps.ins, cmd_newWriter(cmd.args[0], ps.writeFile))
 	case 'x':
 		ps.ins = append(ps.ins, cmd_swap)
 	case 'y':

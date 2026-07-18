@@ -290,6 +290,22 @@ func readIdentifier(r *locReader) (string, error) {
 	return buffer.String(), err
 }
 
+// readFilename reads the argument to r and w. Unlike labels and branch
+// targets, POSIX filenames may contain blanks; the argument ends at the next
+// command separator or newline.
+func readFilename(r *locReader) (string, error) {
+	var buffer bytes.Buffer
+	character, err := skipWS(r)
+	for err == nil && character != ';' && character != '\n' {
+		buffer.WriteRune(character)
+		character, _, err = r.ReadRune()
+	}
+	if err == nil && character == ';' {
+		err = r.UnreadRune()
+	}
+	return strings.TrimRightFunc(buffer.String(), unicode.IsSpace), err
+}
+
 func readSubstitution(r *locReader) ([]string, error) {
 	var ans = make([]string, 3)
 	var err error
@@ -409,7 +425,7 @@ func lex(r *bufio.Reader, ch chan<- *token, errch chan<- error) {
 			ch <- &token{topLoc, tok_CMD, cur, []string{txt}}
 		case 'r', 'w':
 			var fname string
-			fname, err = readIdentifier(&rdr)
+			fname, err = readFilename(&rdr)
 			ch <- &token{topLoc, tok_CMD, cur, []string{fname}}
 		default:
 			if unicode.IsDigit(cur) {
