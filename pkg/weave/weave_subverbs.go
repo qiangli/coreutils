@@ -770,6 +770,32 @@ agentic environments.`,
 	return cmd
 }
 
+func newWeaveFinalizeCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var observedIdle bool
+	cmd := &cobra.Command{
+		Use:   "finalize <issue>",
+		Short: "Terminalize an explicitly observed-idle interactive run",
+		Long: `finalize is the narrow escape hatch for an interactive agent that has
+reported completion and returned to its prompt but keeps its TUI process open.
+It never parses terminal prose or guesses that an idle prompt is success: the
+conductor must pass --observed-idle, then weave stops only the named wrapper and
+measures its isolated workspace. A clean committed branch becomes submitted;
+anything else remains failed for inspection.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("issue must be an integer: %q", args[0])
+			}
+			return runWeaveFinalize(cmd, id, observedIdle, &flags)
+		},
+	}
+	flags.attach(cmd)
+	cmd.Flags().BoolVar(&observedIdle, "observed-idle", false, "Attest that the named interactive agent has returned idle")
+	return cmd
+}
+
 func newWeaveShellCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	cmd := &cobra.Command{

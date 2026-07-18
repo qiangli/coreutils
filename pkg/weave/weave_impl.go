@@ -209,9 +209,16 @@ type weaveItem struct {
 	AutoCommitError string    `json:"auto_commit_error,omitempty"`
 	ExitCode        *int      `json:"exit_code,omitempty"`
 	KilledBy        string    `json:"killed_by,omitempty"`
-	LogPath         string    `json:"log_path,omitempty"`
-	Throttled       bool      `json:"throttled,omitempty"`
-	ThrottleSignal  string    `json:"throttle_signal,omitempty"`
+	// Completion records an explicit terminalization that did not come from the
+	// agent process exiting. It is deliberately distinct from ExitCode: a
+	// conductor may observe an interactive TUI return idle, but weave never
+	// infers success from that prose or prompt alone.
+	Completion     string    `json:"completion,omitempty"`
+	FinalizerPID   int       `json:"finalizer_pid,omitempty"`
+	FinalizingAt   time.Time `json:"finalizing_at,omitempty"`
+	LogPath        string    `json:"log_path,omitempty"`
+	Throttled      bool      `json:"throttled,omitempty"`
+	ThrottleSignal string    `json:"throttle_signal,omitempty"`
 	// WrapperPid is the PID of the `bashy weave start` process
 	// supervising this item (NOT the subagent's PID — the wrapper
 	// is the session leader after auto-setsid and signals propagate
@@ -932,6 +939,43 @@ func weaveRecoverOrphanedAllocations(dir string) error {
 	})
 }
 
+// weaveRecoverAbandonedFinalizations releases the short finalizer lease when
+// its conductor disappears. A surviving wrapper resumes ownership of the run;
+// once both are gone, failed state preserves the workspace for explicit
+// salvage rather than leaving phantom capacity in finalizing forever.
+func weaveRecoverAbandonedFinalizations(dir string) error {
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		now := time.Now().UTC()
+		for _, it := range q.Items {
+			if !weaveWrapperTerminalClaimed(it) {
+				continue
+			}
+			expired := it.FinalizingAt.IsZero() || now.Sub(it.FinalizingAt) >= weaveFinalizationLease
+			if !expired && it.FinalizerPID > 0 && pidAlive(it.FinalizerPID) {
+				continue
+			}
+			it.FinalizerPID = 0
+			it.FinalizingAt = time.Time{}
+			if it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
+				it.State = "working"
+				it.Completion = ""
+				continue
+			}
+			it.State = "failed"
+			it.Completion = "failed: finalizer exited before terminal evidence"
+			it.FinishedAt = now
+			it.WrapperPid = 0
+			it.CtlSock = ""
+		}
+		return nil
+	})
+}
+
+// weaveFinalizationLease exceeds the 10-minute verify ceiling plus process
+// shutdown grace. An expired claim is recovered even if its numeric PID now
+// happens to exist, because PIDs can be reused after a conductor crash.
+const weaveFinalizationLease = 15 * time.Minute
+
 func weaveAllocatedLaunchOrphaned(it *weaveItem, now time.Time) bool {
 	if it == nil || it.State != "allocated" {
 		return false
@@ -1080,6 +1124,9 @@ func weaveApplyTerminalEvidence(it *weaveItem, ev weaveTerminalEvidence) {
 func weaveClearCurrentRunTerminalEvidence(it *weaveItem) {
 	it.ExitCode = nil
 	it.KilledBy = ""
+	it.Completion = ""
+	it.FinalizerPID = 0
+	it.FinalizingAt = time.Time{}
 	it.FinishedAt = time.Time{}
 	it.CommitsAhead = 0
 	it.Head = ""
@@ -1831,6 +1878,10 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	}
 	dir, _ := weaveQueueDir(root)
 	if err := weaveRecoverOrphanedAllocations(dir); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
+			weavecli.ExitGenericFail, err))
+	}
+	if err := weaveRecoverAbandonedFinalizations(dir); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
 			weavecli.ExitGenericFail, err))
 	}
@@ -3021,10 +3072,19 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), it.VerifyCommand, true)
 		}
 	}
+	finalizationClaimed := false
 	lockErr := withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
 		freshIt := findWeaveItem(freshQ, it.ID)
 		if freshIt == nil {
 			return fmt.Errorf("queue lock: run #%d disappeared", it.ID)
+		}
+		if weaveWrapperTerminalClaimed(freshIt) {
+			// A conductor explicitly claimed this interactive run before
+			// stopping our process tree. Do not race its measured finalization
+			// with an inferred exit outcome from the forced stop.
+			finalizationClaimed = true
+			it = freshIt
+			return nil
 		}
 		freshIt.FinishedAt = finishedAt
 		freshIt.ExitCode = &exitCode
@@ -3068,6 +3128,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		it = freshIt
 		return nil
 	})
+	if finalizationClaimed {
+		return nil
+	}
 	if lockErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed after tool exit: %v\n", lockErr)
 	} else {
@@ -3930,6 +3993,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
 			weavecli.ExitGenericFail, err))
 	}
+	if err := weaveRecoverAbandonedFinalizations(dir); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
+			weavecli.ExitGenericFail, err))
+	}
 	q, err := loadWeaveQueue(dir)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
@@ -3973,6 +4040,7 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			"base":               base,
 			"base_sha":           it.BaseSHA,
 			"launch_phase":       it.LaunchPhase,
+			"completion":         it.Completion,
 			"commits_ahead":      it.CommitsAhead,
 			"branch":             it.Branch,
 			"workspace":          it.Workspace,
@@ -4826,6 +4894,10 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 			weavecli.ExitPrecondFail, err))
 	}
 	dir, _ := weaveQueueDir(root)
+	if err := weaveRecoverAbandonedFinalizations(dir); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill",
+			weavecli.ExitGenericFail, err))
+	}
 	if err := weaveConfirmTargeted(cmd, mode,
 		fmt.Sprintf("weave kill: stops the running subagent for run #%d (workspace + branch preserved).", id), yes); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill",
@@ -4887,7 +4959,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 		if it == nil {
 			return fmt.Errorf("run #%d not found%s", id, notFoundHint)
 		}
-		if it.State != "working" {
+		if it.State != "working" && !weaveWrapperTerminalClaimed(it) {
 			return fmt.Errorf("run #%d state is %q (kill requires working)", id, it.State)
 		}
 		wrapperPid = it.WrapperPid
@@ -4921,7 +4993,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 			if it == nil {
 				return fmt.Errorf("run #%d not found%s", id, notFoundHint)
 			}
-			if it.State != "working" && it.State != "killed" {
+			if it.State != "working" && !weaveWrapperTerminalClaimed(it) && it.State != "killed" {
 				return fmt.Errorf("run #%d state is %q (kill requires working)", id, it.State)
 			}
 			it.CommitsAhead = ahead
@@ -4935,6 +5007,9 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 				it.VerifyTree = verifyTree
 			}
 			it.State = "killed"
+			it.Completion = ""
+			it.FinalizerPID = 0
+			it.FinalizingAt = time.Time{}
 			finalState = it.State
 			killCode := -1
 			if it.ExitCode == nil {
@@ -4992,6 +5067,116 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 		fmt.Fprintf(cmd.OutOrStdout(), "weave kill: run #%d wrapper_pid=%d killed=%v state=%s\n", id, wrapperPid, killed, finalState)
 	}
 	return nil
+}
+
+// runWeaveFinalize records a conductor-observed idle interactive session without
+// guessing from PTY output. It is intentionally opt-in: the caller attests that
+// the named TUI returned idle, then weave stops only that wrapper and measures
+// the isolated branch to determine submitted versus failed.
+func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *weaveOutputFlags) error {
+	mode := flags.mode()
+	if !observedIdle {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave finalize",
+			weavecli.ExitInvalidArg, fmt.Errorf("refusing to infer interactive completion; pass --observed-idle after observing the named agent return idle")))
+	}
+	cwd, _ := os.Getwd()
+	root, err := weaveRepoRoot(cwd)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave finalize",
+			weavecli.ExitPrecondFail, err))
+	}
+	dir, _ := weaveQueueDir(root)
+	base := weaveBaseBranch(root)
+	var wrapperPID int
+	var workspace, verifyCommand string
+	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, id)
+		if it == nil {
+			return fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))
+		}
+		if it.State != "working" {
+			return fmt.Errorf("run #%d state is %q (finalize requires working)", id, it.State)
+		}
+		wrapperPID, workspace, verifyCommand = it.WrapperPid, it.Workspace, it.VerifyCommand
+		// Claim the terminal write BEFORE stopping the wrapper. Its normal
+		// exit path then yields to this explicit finalizer instead of racing
+		// us to write a killed/failed inference.
+		it.State = "finalizing"
+		it.Completion = "conductor-finalizing-observed-idle"
+		it.FinalizerPID = os.Getpid()
+		it.FinalizingAt = time.Now().UTC()
+		return nil
+	})
+	if lockErr != nil {
+		code := weavecli.ExitGenericFail
+		if strings.Contains(lockErr.Error(), "not found") || strings.Contains(lockErr.Error(), "requires working") {
+			code = weavecli.ExitStateConflict
+		}
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave finalize", code, lockErr))
+	}
+	weaveTestPauseAfterFinalizeClaim()
+	if wrapperPID > 0 && pidAlive(wrapperPID) {
+		weaveStopWrapper(wrapperPID)
+	}
+	ev := weaveCollectTerminalEvidence(workspace, base, "", false)
+	if verifyCommand != "" && (ev.CommitsAhead > 0 || ev.Dirty || ev.UntrackedFiles > 0) {
+		ev = weaveCollectTerminalEvidence(workspace, base, verifyCommand, true)
+	}
+	state := "failed"
+	if ev.CommitsAhead > 0 && !ev.Dirty && ev.UntrackedFiles == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) {
+		state = "submitted"
+	}
+	lockErr = withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, id)
+		if it == nil {
+			return fmt.Errorf("run #%d disappeared while finalizing", id)
+		}
+		if !weaveWrapperTerminalClaimed(it) {
+			return fmt.Errorf("run #%d transitioned to %q while finalizing", id, it.State)
+		}
+		weaveApplyTerminalEvidence(it, ev)
+		weaveApplyIsolationCheck(it)
+		it.State = state
+		it.Completion = "conductor-finalized-observed-idle"
+		it.FinalizerPID = 0
+		it.FinalizingAt = time.Time{}
+		it.FinishedAt = time.Now().UTC()
+		it.WrapperPid = 0
+		it.CtlSock = ""
+		weaveAppendComment(it, "conductor", "system", "finalized after explicit observed-idle attestation; terminal state measured from workspace evidence")
+		return nil
+	})
+	if lockErr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave finalize", weavecli.ExitGenericFail, lockErr))
+	}
+	result := map[string]any{"issue": id, "state": state, "completion": "conductor-finalized-observed-idle"}
+	if ev.VerifyExit != nil {
+		result["verify_exit"] = *ev.VerifyExit
+	}
+	if mode == weavecli.OutputJSON {
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave finalize", result))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "weave finalize: run #%d state=%s completion=conductor-finalized-observed-idle\n", id, state)
+	return nil
+}
+
+func weaveWrapperTerminalClaimed(it *weaveItem) bool {
+	return it != nil && it.State == "finalizing" && it.Completion == "conductor-finalizing-observed-idle"
+}
+
+func weaveTestPauseAfterFinalizeClaim() {
+	pause := os.Getenv("WEAVE_TEST_FINALIZE_AFTER_CLAIM_FILE")
+	if pause == "" {
+		return
+	}
+	_ = os.WriteFile(pause+".ready", []byte("ready"), 0o644)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(pause); os.IsNotExist(err) || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // runWeavePrune removes workspace directories for terminal items (done,

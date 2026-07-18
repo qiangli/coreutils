@@ -77,6 +77,7 @@ Common-case usage:
 	cmd.AddCommand(newWeavePruneCmd())
 	cmd.AddCommand(newWeaveAbandonCmd())
 	cmd.AddCommand(newWeaveKillCmd())
+	cmd.AddCommand(newWeaveFinalizeCmd())
 	cmd.AddCommand(newWeaveShellCmd())
 	cmd.AddCommand(newWeaveOpenCmd())
 	cmd.AddCommand(newWeaveResetCmd())
