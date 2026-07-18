@@ -664,13 +664,12 @@ func (e *Engine) executeTask(ctx context.Context, task *Task, worker *Worker, ti
 	return e.executor().Execute(ctx, task, tio)
 }
 
-// constraintsFor derives what a task demands of a worker. P2 has no Venue: or
-// Requires-host: metadata on Task yet, so every task asks for the userland venue
-// — which the local worker offers, making --fleet on one box behave exactly like
-// -j N. The seam is here so that adding the metadata is a parser change, not a
-// scheduler change.
+// constraintsFor derives what a task demands of a worker, through the
+// versioned TaskSpec contract so the in-memory scheduler and a serialized spec
+// can never disagree. P2 specs always ask for the userland venue — which the
+// local worker offers, making --fleet on one box behave exactly like -j N.
 func constraintsFor(t *Task) Constraints {
-	return Constraints{Venue: VenueUserland}
+	return SpecFor(t).Constraints()
 }
 
 func (e *Engine) sandboxEnabled() bool {
