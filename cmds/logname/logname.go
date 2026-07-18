@@ -2,7 +2,6 @@ package lognamecmd
 
 import (
 	"fmt"
-	"os"
 	"os/user"
 	"runtime"
 	"strings"
@@ -38,13 +37,8 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func loginName() string {
-	for _, key := range []string{"LOGNAME", "USER", "LNAME", "USERNAME"} {
-		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			return bareUser(v)
-		}
-	}
 	if u, err := user.Current(); err == nil {
-		return bareUser(u.Username)
+		return bareUser(strings.TrimSpace(u.Username))
 	}
 	return ""
 }
