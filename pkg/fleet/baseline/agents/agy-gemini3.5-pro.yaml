@@ -1,8 +1,0 @@
-agents:
-  - name: agy-gemini3.5-pro
-    tool: agy
-    model: gemini3.5-pro
-    display: "agy · gemini3.5-pro"
-    ledger:
-      reliability: unmeasured
-      notes: L3 rung (declared, provisional); conductor/steward suitability under test
