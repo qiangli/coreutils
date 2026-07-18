@@ -265,15 +265,19 @@ func TestChownNoDereference(t *testing.T) {
 		t.Skip("chown is unix-only")
 	}
 	u := currentUser(t)
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
-		t.Skipf("symlinks not supported: %v", err)
-	}
-	_, errb, code := runTool(t, dir, "--no-dereference", u.Uid, "link")
-	if code != 0 || errb != "" {
-		t.Fatalf("chown --no-dereference: code=%d err=%q", code, errb)
+	for _, option := range []string{"-h", "--no-dereference"} {
+		t.Run(option, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+				t.Skipf("symlinks not supported: %v", err)
+			}
+			_, errb, code := runTool(t, dir, option, u.Uid, "link")
+			if code != 0 || errb != "" {
+				t.Fatalf("chown %s: code=%d err=%q", option, code, errb)
+			}
+		})
 	}
 }

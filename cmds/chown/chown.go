@@ -37,7 +37,7 @@ func run(rc *tool.RunContext, args []string) int {
 	reference := fs.String("reference", "", "use RFILE's owner and group rather than specifying OWNER[:GROUP]")
 	fromRef := fs.String("from", "", "change only if current owner:group matches FROM")
 	fs.Bool("dereference", false, "affect the referent of each symbolic link (the default)")
-	noDereference := fs.Bool("no-dereference", false, "affect symbolic links instead of their referents")
+	noDereference := fs.BoolP("no-dereference", "h", false, "affect symbolic links instead of their referents")
 	noTraverse := fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
 	cmdLineH := fs.BoolP("H", "H", false, "follow command-line symbolic links (with -R)")
 	followL := fs.BoolP("L", "L", false, "follow every symbolic link encountered (with -R)")
