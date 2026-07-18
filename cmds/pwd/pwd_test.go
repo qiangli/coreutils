@@ -13,11 +13,16 @@ import (
 )
 
 func runIn(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
+	return runInEnv(t, dir, []string{"PWD=" + dir}, args...)
+}
+
+func runInEnv(t *testing.T, dir string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -72,6 +77,65 @@ func TestPwdPhysicalResolvesSymlinks(t *testing.T) {
 	out, _, _ = runIn(t, link, "-LP")
 	if out != want+"\n" {
 		t.Errorf("pwd -LP = %q, want physical %q", out, want+"\n")
+	}
+}
+
+func TestPwdLogicalUsesValidatedPWD(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "lnk")
+	if err := os.Symlink(real, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink creation not permitted: %v", err)
+		}
+		t.Fatal(err)
+	}
+	physical, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{nil, {"-L"}} {
+		out, errb, code := runInEnv(t, physical, []string{"PWD=" + link}, args...)
+		if code != 0 || out != link+"\n" || errb != "" {
+			t.Errorf("pwd %v = (%q, %q, %d), want logical path", args, out, errb, code)
+		}
+	}
+
+	out, errb, code := runInEnv(t, physical, []string{"PWD=" + link}, "-P")
+	if code != 0 || out != physical+"\n" || errb != "" {
+		t.Errorf("pwd -P = (%q, %q, %d), want %q", out, errb, code, physical+"\n")
+	}
+}
+
+func TestPwdLogicalRejectsInvalidPWD(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	physical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+
+	cases := []struct {
+		name string
+		env  []string
+	}{
+		{name: "unset"},
+		{name: "relative", env: []string{"PWD=relative"}},
+		{name: "dot component", env: []string{"PWD=" + dir + string(filepath.Separator) + "."}},
+		{name: "dot dot component", env: []string{"PWD=" + dir + string(filepath.Separator) + "child" + string(filepath.Separator) + ".."}},
+		{name: "different directory", env: []string{"PWD=" + other}},
+		{name: "last assignment wins", env: []string{"PWD=" + dir, "PWD=" + other}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runInEnv(t, dir, tc.env, "-L")
+			if code != 0 || out != physical+"\n" || errb != "" {
+				t.Errorf("pwd -L = (%q, %q, %d), want physical fallback %q", out, errb, code, physical+"\n")
+			}
+		})
 	}
 }
 

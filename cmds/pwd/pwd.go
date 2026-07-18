@@ -1,18 +1,18 @@
 // Package pwdcmd implements pwd(1) per the GNU coreutils manual:
 // print the name of the current working directory.
 //
-// Framework note: the "current working directory" is the invocation's
-// rc.Dir — never the process cwd (the embedding shell owns its own
-// cwd). The default and -L therefore print rc.Dir itself: rc.Dir is
-// the authoritative logical directory name, playing the role the
-// validated $PWD plays in standalone GNU pwd. -P resolves every
-// symlink in rc.Dir. When both -L and -P are given, the last one
-// takes precedence (GNU rule).
+// The "current working directory" is the invocation's rc.Dir, never the
+// process cwd (the embedding shell owns its own cwd). Logical mode uses
+// PWD from the invocation environment when it is a valid name for rc.Dir;
+// physical mode and invalid logical names resolve every symlink in rc.Dir.
+// When both -L and -P are given, the last one takes precedence.
 package pwdcmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -44,17 +44,58 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Err, "pwd: cannot determine current directory")
 		return 1
 	}
-	if lastLP(args) == 'P' {
-		resolved, err := filepath.EvalSymlinks(rc.Dir)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "pwd: %v\n", err)
-			return 1
+	if lastLP(args) == 'L' {
+		if logical := logicalDir(rc); logical != "" {
+			fmt.Fprintln(rc.Out, logical)
+			return 0
 		}
-		fmt.Fprintln(rc.Out, resolved)
-		return 0
 	}
-	fmt.Fprintln(rc.Out, rc.Dir)
+
+	resolved, err := physicalDir(rc.Dir)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pwd: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(rc.Out, resolved)
 	return 0
+}
+
+// logicalDir returns PWD only when it satisfies the POSIX invariants for a
+// logical working-directory name and identifies rc.Dir.
+func logicalDir(rc *tool.RunContext) string {
+	pwd := rc.Getenv("PWD")
+	if !filepath.IsAbs(pwd) || hasDotComponent(pwd) {
+		return ""
+	}
+	pwdInfo, err := os.Stat(pwd)
+	if err != nil {
+		return ""
+	}
+	dirInfo, err := os.Stat(rc.Dir)
+	if err != nil || !os.SameFile(pwdInfo, dirInfo) {
+		return ""
+	}
+	return pwd
+}
+
+func hasDotComponent(path string) bool {
+	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
+		if component == "." || component == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func physicalDir(dir string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("cannot determine absolute path for %q", dir)
+	}
+	return resolved, nil
 }
 
 // lastLP scans args for the last occurrence of -L/-P (or their long
