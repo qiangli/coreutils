@@ -122,15 +122,11 @@ func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spac
 	br := bufio.NewReader(r)
 	var line []rune
 	col := 0
-	lastWidth := 0
 	adjust := func(c int, ch rune) int {
 		switch ch {
 		case '\b':
 			if c > 0 {
-				c -= lastWidth
-				if c < 0 {
-					c = 0
-				}
+				c--
 			}
 		case '\r':
 			c = 0
@@ -144,7 +140,6 @@ func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spac
 					cw = 1
 				}
 			}
-			lastWidth = cw
 			c += cw
 		}
 		return c

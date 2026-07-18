@@ -94,6 +94,16 @@ func TestFoldBackspaceDecrementsColumn(t *testing.T) {
 	}
 }
 
+func TestFoldBackspaceMovesOneColumnAfterWideRune(t *testing.T) {
+	out, stderr, code := runFold(t, "界\bXX\n", "-w", "2")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "界\bX\nX\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestFoldCarriageReturnResetsColumn(t *testing.T) {
 	out, stderr, code := runFold(t, "abc\rdef\n", "-w", "4")
 	if code != 0 || stderr != "" {
