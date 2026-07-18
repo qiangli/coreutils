@@ -187,16 +187,17 @@ func run(rc *tool.RunContext, args []string) int {
 		if comp && set2.hasCaseClass {
 			return fail("when translating with complemented character classes,\nstring2 must map all characters in the domain to one")
 		}
+		// Expand a [c*] fill construct to make SET2 as long as literal SET1.
+		set2.applyFill(len(set1.bytes) - len(set2.bytes))
 		if *truncateSet1 {
 			if len(set2.bytes) == 0 {
-				return fail("when not truncating set1, string2 must be non-empty")
-			}
-			if len(eff1.bytes) > len(set2.bytes) {
+				eff1.bytes = eff1.bytes[:0]
+				eff1.tags = eff1.tags[:0]
+			} else if len(eff1.bytes) > len(set2.bytes) {
 				eff1.bytes = eff1.bytes[:len(set2.bytes)]
 				eff1.tags = eff1.tags[:len(set2.bytes)]
 			}
 		} else {
-			set2.applyFill(len(eff1.bytes) - len(set2.bytes))
 			if len(set2.bytes) == 0 {
 				return fail("when not truncating set1, string2 must be non-empty")
 			}
@@ -229,7 +230,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if squeezing {
 		src := eff1.bytes
 		if nset == 2 {
-			set2.applyFill(0)
+			if !translating {
+				// In delete+squeeze mode SET2 is the squeeze set; a [c*]
+				// fill construct still expands to the length of SET1.
+				set2.applyFill(len(set1.bytes) - len(set2.bytes))
+			}
 			src = set2.bytes
 		}
 		for _, b := range src {
@@ -444,8 +449,8 @@ func matchEquiv(s string) (byte, int, bool, string) {
 }
 
 // matchRepeat matches a leading "[c*n]" / "[c*]". n is decimal, or
-// octal with a leading 0; n omitted or 0 means "pad SET2 to the length
-// of SET1" (fill).
+// octal with a leading 0; n omitted means "pad SET2 to the length of
+// SET1" (fill). n=0 is a valid explicit repeat count of zero.
 func matchRepeat(s string) (b byte, count int, fill bool, adv int, ok bool, errMsg string) {
 	if len(s) < 2 {
 		return
@@ -477,7 +482,7 @@ func matchRepeat(s string) (b byte, count int, fill bool, adv int, ok bool, errM
 		}
 		n = int(v)
 	}
-	return c, n, n == 0, j + 1, true, ""
+	return c, n, digits == "", j + 1, true, ""
 }
 
 // classBytes returns the C-locale members of a POSIX character class in

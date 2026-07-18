@@ -50,6 +50,10 @@ func TestTrTranslate(t *testing.T) {
 		{"aligned case classes inside sets", []string{"1[:lower:]", "2[:upper:]"}, "1ab\n", "2AB\n"},
 		// 'x' is also a member of [:lower:]; the later mapping wins (GNU order)
 		{"class overlap, last wins", []string{"x[:lower:]", "y[:upper:]"}, "xab\n", "XAB\n"},
+		{"truncate with empty set2", []string{"-t", "abc", ""}, "abc\n", "abc\n"},
+		{"truncate with explicit zero repeat", []string{"-t", "abc", "[x*0]"}, "abc\n", "abc\n"},
+		{"truncate with fill", []string{"-t", "abcdef", "[x*]yz"}, "abcdef\n", "xxxxyz\n"},
+		{"fill counts literal set1 length under complement", []string{"-c", "a", "[x*]y"}, "abc\n", "ayyy"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, c.stdin, c.args...)
