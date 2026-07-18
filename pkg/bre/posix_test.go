@@ -209,6 +209,90 @@ func TestPOSIXBracketExpressions(t *testing.T) {
 	}
 }
 
+func TestPOSIXAnchorTranslation(t *testing.T) {
+	breCases := []struct{ pattern, want string }{
+		{`^a$`, `^a$`},
+		{`a^b`, `a\^b`},
+		{`a$b`, `a\$b`},
+		{`\(^a\)`, `(^a)`},
+		{`\(a$\)`, `(a$)`},
+		{`a\|^b`, `a|^b`},
+		{`a$\|b`, `a$|b`},
+	}
+	for _, c := range breCases {
+		got, err := ToGo(c.pattern)
+		if err != nil {
+			t.Errorf("ToGo(%q): %v", c.pattern, err)
+		} else if got != c.want {
+			t.Errorf("ToGo(%q) = %q, want %q", c.pattern, got, c.want)
+		}
+	}
+
+	// Unlike BRE, ^ and $ are anchors wherever they occur in an ERE. GNU
+	// bash 5.3 therefore agrees with Go regexp that these spellings cannot
+	// match literal ^ or $ characters.
+	for _, pattern := range []string{
+		`^a$`, `a^b`, `a$b`, `(^a)`, `(a$)`, `a|^b`, `a$|b`,
+	} {
+		got, err := ToGoERE(pattern)
+		if err != nil {
+			t.Errorf("ToGoERE(%q): %v", pattern, err)
+		} else if got != pattern {
+			t.Errorf("ToGoERE(%q) = %q, want anchors unchanged", pattern, got)
+		}
+	}
+}
+
+func TestPOSIXAnchorBackrefParity(t *testing.T) {
+	breCases := []struct {
+		pattern, in string
+		want        []int
+	}{
+		{`^\(a\)\1$`, "aa", []int{0, 2}},
+		{`a^\(b\)\1`, "a^bb", []int{0, 4}}, // mid-expression ^ is literal
+		{`a$\(b\)\1`, "a$bb", []int{0, 4}}, // mid-expression $ is literal
+		{`\(^a\)\1`, "aa", []int{0, 2}},
+		{`\(a$\)\1`, "aa", nil},
+		{`\(^a\|b\)\1`, "aa", []int{0, 2}},
+		{`\(a$\|b\)\1`, "bb", []int{0, 2}},
+	}
+	for _, c := range breCases {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Errorf("Compile(%q): %v", c.pattern, err)
+			continue
+		}
+		if got := re.FindStringIndex(c.in); !sameInts(got, c.want) {
+			t.Errorf("BRE %q on %q = %v, want %v", c.pattern, c.in, got, c.want)
+		}
+	}
+
+	ereCases := []struct {
+		pattern, in string
+		want        []int
+	}{
+		{`^(a)\1$`, "aa", []int{0, 2}},
+		{`(a)\1^`, "aa^", nil},
+		{`(a)$\1`, "a$a", nil},
+		{`(a^)\1`, "a^a^", nil},
+		{`($a)\1`, "$a$a", nil},
+		{`(^a)\1`, "aa", []int{0, 2}},
+		{`(a$)\1`, "aa", nil},
+		{`(a^|b)\1`, "a^a^", nil},
+		{`($a|b)\1`, "$a$a", nil},
+	}
+	for _, c := range ereCases {
+		re, err := CompileEREWithFlags(c.pattern, "")
+		if err != nil {
+			t.Errorf("CompileEREWithFlags(%q): %v", c.pattern, err)
+			continue
+		}
+		if got := re.FindStringIndex(c.in); !sameInts(got, c.want) {
+			t.Errorf("ERE %q on %q = %v, want %v", c.pattern, c.in, got, c.want)
+		}
+	}
+}
+
 // The backtracking engine must report the leftmost match, which means trying
 // every start offset. These all take the backref path.
 func TestPOSIXBacktrackLeftmost(t *testing.T) {
