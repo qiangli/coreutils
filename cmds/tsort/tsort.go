@@ -1,26 +1,33 @@
-// Package tsortcmd implements tsort(1) per POSIX and the GNU coreutils
-// manual: write a totally ordered list of items consistent with the
-// partial ordering given as whitespace-separated pairs in FILE (or
-// standard input; "-" means standard input).
+// Package tsortcmd implements tsort(1) per POSIX.1-2024 and the GNU
+// coreutils manual: write a totally ordered list of items consistent
+// with the partial ordering given as whitespace-separated pairs in
+// FILE (or standard input; "-" means standard input).
 //
 // Cycle handling matches GNU: each loop found is reported to standard
 // error as "tsort: FILE: input contains a loop:" followed by one
 // "tsort: ITEM" line per member, an edge of the loop is deleted, and
 // the sort presses on — every item still appears in the output, and
-// the exit status is 1. An odd number of input tokens is the GNU
-// "input contains an odd number of tokens" error. Tie order among
-// unconstrained items is first-seen input order (POSIX allows any
-// valid total order; GNU's differs).
+// the exit status is non-zero. The POSIX -w option makes cycle
+// diagnostics into errors and sets the exit status to the number of
+// cycles found (capped at an implementation-defined maximum). An odd
+// number of input tokens is the GNU "input contains an odd number of
+// tokens" error. Tie order among unconstrained items is lexicographic,
+// matching the order shown in the POSIX example.
 package tsortcmd
 
 import (
 	"bufio"
+	"container/heap"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+// maxCycleExit is the implementation-defined maximum returned by -w
+// when more cycles are found; POSIX urges a cap of at most 124.
+const maxCycleExit = 124
 
 var cmd = &tool.Tool{
 	Name:     "tsort",
@@ -35,6 +42,7 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
+	warn := fs.BoolP("warnings-are-errors", "w", false, "exit with the number of cycles found")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -86,12 +94,21 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	bw := bufio.NewWriter(rc.Out)
-	exit := g.topoSort(bw, rc.Err, name)
+	cycles := g.topoSort(bw, rc.Err, name)
 	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "tsort: write failed: %v\n", err)
 		return 1
 	}
-	return exit
+	if cycles == 0 {
+		return 0
+	}
+	if *warn {
+		if cycles > maxCycleExit {
+			return maxCycleExit
+		}
+		return cycles
+	}
+	return 1
 }
 
 // graph is a string digraph in insertion order. Duplicate edges are
@@ -103,6 +120,24 @@ type graph struct {
 	succ  [][]int
 	indeg []int
 	done  []bool
+}
+
+// nodeHeap orders ready node IDs lexicographically by name.
+type nodeHeap struct {
+	ids   []int
+	names []string
+}
+
+func (h nodeHeap) Len() int            { return len(h.ids) }
+func (h nodeHeap) Less(i, j int) bool  { return h.names[h.ids[i]] < h.names[h.ids[j]] }
+func (h nodeHeap) Swap(i, j int)       { h.ids[i], h.ids[j] = h.ids[j], h.ids[i] }
+func (h *nodeHeap) Push(x interface{}) { h.ids = append(h.ids, x.(int)) }
+func (h *nodeHeap) Pop() interface{} {
+	old := h.ids
+	n := len(old)
+	x := old[n-1]
+	h.ids = old[:n-1]
+	return x
 }
 
 func newGraph() *graph { return &graph{ids: map[string]int{}} }
@@ -137,20 +172,21 @@ func (g *graph) removeEdge(u, v int) {
 	}
 }
 
-// topoSort is Kahn's algorithm with a FIFO frontier seeded in input
-// order. On a stall (cycle), it reports the loop GNU-style, deletes
-// the closing edge, and continues. Returns the exit code.
+// topoSort is Kahn's algorithm with a lexicographically-ordered
+// frontier. On a stall (cycle), it reports the loop GNU-style, deletes
+// the closing edge, and continues. Returns the number of cycles found.
 func (g *graph) topoSort(out *bufio.Writer, errw io.Writer, name string) int {
-	exit := 0
-	var queue []int
+	cycles := 0
+	h := &nodeHeap{names: g.names}
 	for id := range g.names {
 		if g.indeg[id] == 0 {
-			queue = append(queue, id)
+			h.ids = append(h.ids, id)
 		}
 	}
+	heap.Init(h)
 	remaining := len(g.names)
 	for remaining > 0 {
-		if len(queue) == 0 {
+		if h.Len() == 0 {
 			cycle := g.findCycle()
 			if len(cycle) == 0 {
 				// Cannot happen: a stalled Kahn frontier implies a cycle
@@ -165,7 +201,7 @@ func (g *graph) topoSort(out *bufio.Writer, errw io.Writer, name string) int {
 				}
 				return 1
 			}
-			exit = 1
+			cycles++
 			fmt.Fprintf(errw, "tsort: %s: input contains a loop:\n", name)
 			for _, id := range cycle {
 				fmt.Fprintf(errw, "tsort: %s\n", g.names[id])
@@ -173,12 +209,11 @@ func (g *graph) topoSort(out *bufio.Writer, errw io.Writer, name string) int {
 			u, v := cycle[len(cycle)-1], cycle[0]
 			g.removeEdge(u, v)
 			if g.indeg[v] == 0 {
-				queue = append(queue, v)
+				heap.Push(h, v)
 			}
 			continue
 		}
-		id := queue[0]
-		queue = queue[1:]
+		id := heap.Pop(h).(int)
 		out.WriteString(g.names[id])
 		out.WriteByte('\n')
 		g.done[id] = true
@@ -189,11 +224,11 @@ func (g *graph) topoSort(out *bufio.Writer, errw io.Writer, name string) int {
 			}
 			g.indeg[s]--
 			if g.indeg[s] == 0 {
-				queue = append(queue, s)
+				heap.Push(h, s)
 			}
 		}
 	}
-	return exit
+	return cycles
 }
 
 // findCycle runs an iterative DFS over the not-yet-output subgraph and

@@ -3,6 +3,7 @@ package tsortcmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,6 +164,51 @@ func TestTsortErrors(t *testing.T) {
 	}
 }
 
+func TestTsortPOSIXExample(t *testing.T) {
+	// POSIX.1-2024 example; the standard lists this exact order.
+	out, errb, code := runTool(t, "a b c c d e\ng g\nf g e f\nh h\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("posix example: code=%d err=%q", code, errb)
+	}
+	want := "a\nb\nc\nd\ne\nf\ng\nh\n"
+	if out != want {
+		t.Errorf("posix example: out=%q, want %q", out, want)
+	}
+}
+
+func TestTsortWarn(t *testing.T) {
+	// -w with no cycles exits 0.
+	out, errb, code := runTool(t, "a b\n", "-w")
+	if code != 0 || errb != "" || out != "a\nb\n" {
+		t.Errorf("no cycles -w: out=%q err=%q code=%d", out, errb, code)
+	}
+
+	// -w with one cycle exits 1 and still emits the diagnostic.
+	_, errb, code = runTool(t, "a b\nb a\n", "-w")
+	if code != 1 || !strings.Contains(errb, "input contains a loop:") {
+		t.Errorf("one cycle -w: code=%d err=%q", code, errb)
+	}
+
+	// -w with multiple cycles exits the cycle count.
+	_, errb, code = runTool(t, "a b\nb a\nc d\nd c\n", "-w")
+	if code != 2 || strings.Count(errb, "input contains a loop:") != 2 {
+		t.Errorf("two cycles -w: code=%d err=%q", code, errb)
+	}
+
+	// -w caps the exit status at the implementation-defined maximum.
+	var b strings.Builder
+	for i := 0; i < 130; i++ {
+		fmt.Fprintf(&b, "%d %d\n%d %d\n", i*2, i*2+1, i*2+1, i*2)
+	}
+	_, errb, code = runTool(t, b.String(), "-w")
+	if code != 124 {
+		t.Errorf("many cycles -w: code=%d, want 124", code)
+	}
+	if strings.Count(errb, "input contains a loop:") != 130 {
+		t.Errorf("many cycles -w: reported %d loops, want 130", strings.Count(errb, "input contains a loop:"))
+	}
+}
+
 func TestTsortHelpAndVersion(t *testing.T) {
 	out, _, code := runTool(t, "", "--help")
 	if code != 0 || !strings.Contains(out, "Usage: tsort") {
@@ -171,5 +217,15 @@ func TestTsortHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, "", "--version")
 	if code != 0 || !strings.Contains(out, "tsort") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+
+	// -h and -V are accepted as aliases for --help and --version.
+	out, _, code = runTool(t, "", "-h")
+	if code != 0 || !strings.Contains(out, "Usage: tsort") {
+		t.Errorf("-h: code=%d out=%q", code, out)
+	}
+	out, _, code = runTool(t, "", "-V")
+	if code != 0 || !strings.Contains(out, "tsort") {
+		t.Errorf("-V: code=%d out=%q", code, out)
 	}
 }
