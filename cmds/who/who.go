@@ -2,7 +2,8 @@ package whocmd
 
 import (
 	"fmt"
-	"os/user"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,7 +20,7 @@ func run(rc *tool.RunContext, args []string) int {
 	all := fs.BoolP("all", "a", false, "same as -b -d --login -p -r -t -T -u")
 	heading := fs.BoolP("heading", "H", false, "print line of column headings")
 	count := fs.BoolP("count", "q", false, "list login names and count")
-	short := fs.BoolP("short", "s", false, "short format")
+	_ = fs.BoolP("short", "s", false, "short format")
 	usersOnly := fs.BoolP("users", "u", false, "list users logged in")
 	mesg := fs.BoolP("mesg", "T", false, "add user's message status")
 	fs.BoolP("boot", "b", false, "time of last system boot")
@@ -36,17 +37,18 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	if len(operands) == 2 {
-		fmt.Fprintf(rc.Out, "%s %s\n", operands[0], operands[1])
-		return 0
+
+	path, sameHost, errMsg := parseOperands(operands)
+	if errMsg != "" {
+		return tool.UsageError(rc, cmd, "%s", errMsg)
 	}
-	if len(operands) > 2 {
-		return tool.UsageError(rc, cmd, "extra operand %q", operands[2])
+	if sameHost {
+		*onlyMe = true
 	}
-	path := ""
-	if len(operands) == 1 {
-		path = rc.Path(operands[0])
+	if path != "" {
+		path = rc.Path(path)
 	}
+
 	records, err := session.Read(path)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "who: %v\n", err)
@@ -58,20 +60,21 @@ func run(rc *tool.RunContext, args []string) int {
 			live = append(live, r)
 		}
 	}
-	showMesg := *mesg || *writable
+	showMesg := *mesg || *writable || *all
+	showIdle := *usersOnly || *all
 
 	if *onlyMe {
-		u, err := user.Current()
-		if err != nil {
-			fmt.Fprintf(rc.Err, "who: cannot get current user: %v\n", err)
-			return 1
+		tty, ok := stdinTTY(rc)
+		if !ok {
+			return 0
 		}
-		live = nil
-		for _, r := range records {
-			if session.IsUser(r) && r.User == u.Username {
-				live = append(live, r)
+		var filtered []session.Record
+		for _, r := range live {
+			if ttyMatch(r.TTY, tty) {
+				filtered = append(filtered, r)
 			}
 		}
+		live = filtered
 		if len(live) == 0 {
 			return 0
 		}
@@ -88,28 +91,123 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Out, "# users=%d\n", len(names))
 		return 0
 	}
+
 	if *heading || *all {
-		fmt.Fprintln(rc.Out, "NAME     LINE         TIME             COMMENT")
-	}
-	_ = short
-	_ = usersOnly
-	for _, r := range live {
-		prefix := ""
-		if showMesg || *all {
-			prefix = "+ "
+		if showMesg {
+			fmt.Fprintln(rc.Out, "NAME     STATE LINE         TIME             IDLE   PID  COMMENT")
+		} else if showIdle {
+			fmt.Fprintln(rc.Out, "NAME     LINE         TIME             IDLE   PID  COMMENT")
+		} else {
+			fmt.Fprintln(rc.Out, "NAME     LINE         TIME             COMMENT")
 		}
-		fmt.Fprintf(rc.Out, "%-8s %s%-12s %-16s", r.User, prefix, r.TTY, formatTime(r.Time))
-		if r.Host != "" {
-			fmt.Fprintf(rc.Out, " (%s)", r.Host)
+	}
+
+	for _, r := range live {
+		state := byte(' ')
+		if showMesg {
+			state = messageStatus(r.TTY)
+		}
+		idle := ""
+		if showIdle {
+			idle = formatIdle(r.TTY, r.Time)
+		}
+		comment := r.Host
+		if *onlyMe && comment == "" {
+			if h, err := os.Hostname(); err == nil {
+				comment = h
+			}
+		}
+
+		if showMesg {
+			fmt.Fprintf(rc.Out, "%-8s %c   %-12s %-16s", r.User, state, r.TTY, formatTime(r.Time))
+		} else {
+			fmt.Fprintf(rc.Out, "%-8s %-12s %-16s", r.User, r.TTY, formatTime(r.Time))
+		}
+		if showIdle {
+			fmt.Fprintf(rc.Out, " %-5s", idle)
+			if r.PID > 0 {
+				fmt.Fprintf(rc.Out, " %5d", r.PID)
+			} else {
+				fmt.Fprintf(rc.Out, "      ")
+			}
+		}
+		if comment != "" {
+			fmt.Fprintf(rc.Out, " (%s)", comment)
 		}
 		fmt.Fprintln(rc.Out)
 	}
 	return 0
 }
 
+func parseOperands(operands []string) (file string, sameHost bool, errMsg string) {
+	switch len(operands) {
+	case 0:
+		return "", false, ""
+	case 1:
+		return operands[0], false, ""
+	case 2:
+		if operands[0] == "am" && (operands[1] == "i" || operands[1] == "I") {
+			return "", true, ""
+		}
+		return "", false, fmt.Sprintf("extra operand %q", operands[1])
+	case 3:
+		if operands[1] == "am" && (operands[2] == "i" || operands[2] == "I") {
+			return operands[0], true, ""
+		}
+		return "", false, fmt.Sprintf("extra operand %q", operands[2])
+	default:
+		return "", false, fmt.Sprintf("extra operand %q", operands[3])
+	}
+}
+
+func ttyMatch(recordTTY, stdinTTY string) bool {
+	record := filepath.Base(recordTTY)
+	stdin := filepath.Base(stdinTTY)
+	return record != "" && stdin != "" && record == stdin
+}
+
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.Local().Format("2006-01-02 15:04")
+	return t.Local().Format("Jan _2 15:04")
+}
+
+func formatIdle(tty string, loginTime time.Time) string {
+	path := session.TTYPath(tty)
+	if path == "" {
+		return "old"
+	}
+	at, ok := accessTime(path)
+	if !ok {
+		return "old"
+	}
+	if at.Before(loginTime) {
+		at = loginTime
+	}
+	idle := time.Since(at)
+	if idle < time.Minute {
+		return "."
+	}
+	if idle > 24*time.Hour {
+		return "old"
+	}
+	h := int(idle.Hours())
+	m := int(idle.Minutes()) % 60
+	return fmt.Sprintf("%02d:%02d", h, m)
+}
+
+func messageStatus(tty string) byte {
+	path := session.TTYPath(tty)
+	if path == "" {
+		return '?'
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return '?'
+	}
+	if fi.Mode()&0o020 != 0 {
+		return '+'
+	}
+	return '-'
 }
