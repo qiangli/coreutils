@@ -164,10 +164,15 @@ type weaveItem struct {
 	// local "main" ref drifts (origin is removed; the root branch may
 	// advance after clone), which is what made `weave status` miscount
 	// "0 commits ahead" when the branch actually had a commit.
-	BaseSHA    string    `json:"base_sha,omitempty"`
-	Created    time.Time `json:"created"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	FinishedAt time.Time `json:"finished_at,omitempty"`
+	BaseSHA string `json:"base_sha,omitempty"`
+	// LaunchPhase is durable, operator-visible progress while a workspace is
+	// being provisioned.  In particular, hydration can legitimately take a
+	// while; leaving an item as todo until it finishes makes an active launch
+	// indistinguishable from a forgotten one.
+	LaunchPhase string    `json:"launch_phase,omitempty"`
+	Created     time.Time `json:"created"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	FinishedAt  time.Time `json:"finished_at,omitempty"`
 	// CommitsAhead and Head are the wrapper's own git measurement of
 	// the workspace branch at terminal time (rev-list count over base,
 	// plus HEAD). They are the EVIDENCE behind a submitted state for
@@ -843,10 +848,18 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 			anyLocal = true
 		}
 	}
-	up := exec.Command("git", "-C", workspace, "-c", "protocol.file.allow=always",
+	// A local checkout must never wait forever on a broken submodule transport.
+	// The queue has already recorded the hydration phase before reaching here,
+	// so timeout failure is both bounded and diagnosable by the conductor.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	up := exec.CommandContext(ctx, "git", "-C", workspace, "-c", "protocol.file.allow=always",
 		"submodule", "update", "--init")
 	up.Stdout, up.Stderr = out, errw
 	if err := up.Run(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("git submodule update --init timed out after 2m: %w", ctx.Err())
+		}
 		return fmt.Errorf("git submodule update --init: %w", err)
 	}
 	if anyLocal {
@@ -855,6 +868,22 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 		_ = exec.Command("git", "-C", workspace, "submodule", "sync").Run()
 	}
 	return nil
+}
+
+// weaveMarkLaunchFailed makes provisioning failures durable.  A timed out
+// clone/hydration used to return while the item still looked todo, leaving a
+// conductor with no observable worker or actionable terminal evidence.
+func weaveMarkLaunchFailed(dir string, issueID int64, cause error) {
+	_ = withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		if it := findWeaveItem(q, issueID); it != nil {
+			it.State = "failed"
+			it.LaunchPhase = "failed: " + cause.Error()
+			it.FinishedAt = time.Now().UTC()
+			it.WrapperPid = 0
+			it.CtlSock = ""
+		}
+		return nil
+	})
 }
 
 func weaveRunVerify(workspace, command string) (int, string) {
@@ -2420,6 +2449,16 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 	}
 	base := weaveBaseBranch(root)
+	// Snapshot the actual source commit before provisioning. `--branch main`
+	// resolves through the clone's shared refs and can silently select a newer
+	// main than a detached conductor checkout. A run's base is a commit, not a
+	// moving branch name.
+	baseOut, baseErr := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if baseErr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+			weavecli.ExitPrecondFail, fmt.Errorf("resolve source HEAD: %w", baseErr)))
+	}
+	baseSHA := strings.TrimSpace(string(baseOut))
 	workspace := filepath.Join(dir, "workspaces", fmt.Sprintf("issue-%d", it.ID))
 	branch := fmt.Sprintf("agent/weave-issue-%d", it.ID)
 	if opts.resume {
@@ -2466,6 +2505,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// body/comments keep the old killed/failed facts; the item
 			// fields describe only the current run.
 			freshIt.State = "working"
+			freshIt.LaunchPhase = "launching agent"
 			weaveClearCurrentRunTerminalEvidence(freshIt)
 			// Re-baseline: this is a NEW run in the same workspace, so it
 			// is answerable for what the live checkout does from HERE, not
@@ -2489,6 +2529,27 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 	}
 	if !opts.resume {
+		// Persist before clone/hydration. This is deliberately allocated rather
+		// than working: no child has launched yet, but list/status can now name
+		// the workspace, immutable base, and the operation holding progress.
+		if err := withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
+			freshIt := findWeaveItem(freshQ, it.ID)
+			if freshIt == nil {
+				return fmt.Errorf("queue lock: run #%d disappeared", it.ID)
+			}
+			freshIt.State = "allocated"
+			freshIt.Workspace = workspace
+			freshIt.Branch = branch
+			freshIt.BaseSHA = baseSHA
+			freshIt.LaunchPhase = "provisioning workspace"
+			freshIt.StartedAt = time.Now().UTC()
+			it = freshIt
+			return nil
+		}); err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start", weavecli.ExitGenericFail, err))
+		}
+	}
+	if !opts.resume {
 		if _, err := os.Stat(workspace); err != nil {
 			if err := os.MkdirAll(filepath.Dir(workspace), 0o755); err != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
@@ -2502,18 +2563,20 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// clone, the workspace has its own `.git`; refs and HEAD
 			// can't cross the boundary, and a wandering agent hits a
 			// different git repo entirely.
-			gw := exec.Command("git", "clone", "--local", "--no-hardlinks", "--branch", base, root, workspace)
+			gw := exec.Command("git", "clone", "--local", "--no-hardlinks", "--no-checkout", root, workspace)
 			gw.Stdout = cmd.OutOrStdout()
 			gw.Stderr = cmd.ErrOrStderr()
 			if err := gw.Run(); err != nil {
+				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("clone workspace: %w", err))
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, fmt.Errorf("git clone --local --no-hardlinks: %w", err)))
 			}
 			// Check out the per-issue agent branch in the clone.
-			ck := exec.Command("git", "-C", workspace, "checkout", "-b", branch)
+			ck := exec.Command("git", "-C", workspace, "checkout", "-b", branch, baseSHA)
 			ck.Stdout = cmd.OutOrStdout()
 			ck.Stderr = cmd.ErrOrStderr()
 			if err := ck.Run(); err != nil {
+				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("checkout immutable base %s: %w", baseSHA, err))
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, fmt.Errorf("git checkout -b %s: %w", branch, err)))
 			}
@@ -2536,7 +2599,14 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// build until the submodule working trees exist. This is what blocked
 			// coreutils self-repair: the full gate died on a missing
 			// external/ollama/src/go.mod.
+			_ = withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
+				if freshIt := findWeaveItem(freshQ, it.ID); freshIt != nil {
+					freshIt.LaunchPhase = "hydrating submodules"
+				}
+				return nil
+			})
 			if err := weaveHydrateSubmodules(root, workspace, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+				weaveMarkLaunchFailed(dir, it.ID, fmt.Errorf("hydrate submodules: %w", err))
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 					weavecli.ExitGenericFail, fmt.Errorf("hydrate submodules: %w", err)))
 			}
@@ -2553,6 +2623,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		// workspace built against an old sibling SHA (the #1 weave friction).
 		// Nested replaces resolve too: <workspaces>/coreutils's own `../sh` lands
 		// on <workspaces>/sh, which we also provision.
+		_ = withWeaveQueueLock(dir, func(freshQ *weaveQueue) error {
+			if freshIt := findWeaveItem(freshQ, it.ID); freshIt != nil {
+				freshIt.LaunchPhase = "syncing sibling dependencies"
+			}
+			return nil
+		})
 		if synced, failed := weaveSyncSiblingDeps(root, workspace); len(synced) > 0 || len(failed) > 0 {
 			if len(synced) > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "weave: sibling deps synced to source HEAD: %s\n", strings.Join(synced, ", "))
@@ -2587,6 +2663,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 			prevOwner := freshIt.Owner
 			freshIt.State = "working"
+			freshIt.LaunchPhase = "launching agent"
 			freshIt.Workspace = workspace
 			freshIt.Branch = branch
 			freshIt.WrapperPid = os.Getpid()
@@ -2596,16 +2673,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// later re-check can tell whether this run reached back out of
 			// its workspace and touched it. See weave_isolation.go.
 			weaveRecordLiveBaseline(freshIt, root)
-			// Capture the immutable base commit the workspace was cloned
-			// at — the local `base` ref is untouched by the agent (it
-			// works on its own branch), so this is the true fork point.
-			// weaveMeasureBranch counts against this, not the base NAME,
-			// which can drift and read "0 commits ahead" falsely.
-			if freshIt.BaseSHA == "" {
-				if out, gerr := exec.Command("git", "-C", workspace, "rev-parse", base).Output(); gerr == nil {
-					freshIt.BaseSHA = strings.TrimSpace(string(out))
-				}
-			}
+			// BaseSHA was captured from the source HEAD before clone/hydration;
+			// never resolve a mutable branch ref here.
 			if len(toolArgs) > 0 {
 				freshIt.Tool = displayTool
 				// The OWNER is the per-issue seat (`007-a`), not the agent.
