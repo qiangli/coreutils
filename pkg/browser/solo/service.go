@@ -86,7 +86,13 @@ func (c *Client) EnsureReady(ctx context.Context) error {
 	if c.cfg.Headed {
 		opts = append(opts, chromedp.Flag("headless", false))
 	} else {
-		opts = append(opts, chromedp.Headless)
+		// --headless=new, NOT chromedp.Headless (which emits the bare
+		// --headless == old headless). Chrome 132+ removed old headless and
+		// IGNORES the bare flag, so the browser boots HEADED and then aborts in
+		// _RegisterApplication (SIGABRT) when it can't reach the WindowServer
+		// from a non-GUI context (CI, a fleet worker, ssh) — firing a crash
+		// report each time. New headless never registers as a GUI app.
+		opts = append(opts, chromedp.Flag("headless", "new"))
 	}
 	allocCtx, allocStop := chromedp.NewExecAllocator(context.Background(), opts...)
 	cdpCtx, cdpStop := chromedp.NewContext(allocCtx)
