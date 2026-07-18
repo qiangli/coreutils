@@ -2,11 +2,11 @@ package exprcmd
 
 import (
 	"fmt"
-	"regexp"
+	"math/big"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -80,10 +80,13 @@ func (p *parser) parseOr() (value, error) {
 		if err != nil {
 			return "", err
 		}
-		if truthy(left) {
-			return left, nil
+		if !truthy(left) {
+			if right == "" {
+				left = "0"
+			} else {
+				left = right
+			}
 		}
-		left = right
 	}
 	return left, nil
 }
@@ -100,7 +103,7 @@ func (p *parser) parseAnd() (value, error) {
 			return "", err
 		}
 		if truthy(left) && truthy(right) {
-			left = right
+			// POSIX &: return expr1 when both operands are true.
 		} else {
 			left = "0"
 		}
@@ -144,14 +147,14 @@ func (p *parser) parseAdd() (value, error) {
 		if err != nil {
 			return "", err
 		}
-		a, b, err := ints(left, right)
+		a, b, err := integers(left, right)
 		if err != nil {
 			return "", err
 		}
 		if op == "+" {
-			left = value(strconv.FormatInt(a+b, 10))
+			left = value(new(big.Int).Add(a, b).String())
 		} else {
-			left = value(strconv.FormatInt(a-b, 10))
+			left = value(new(big.Int).Sub(a, b).String())
 		}
 	}
 	return left, nil
@@ -168,23 +171,23 @@ func (p *parser) parseMul() (value, error) {
 		if err != nil {
 			return "", err
 		}
-		a, b, err := ints(left, right)
+		a, b, err := integers(left, right)
 		if err != nil {
 			return "", err
 		}
 		switch op {
 		case "*":
-			left = value(strconv.FormatInt(a*b, 10))
+			left = value(new(big.Int).Mul(a, b).String())
 		case "/":
-			if b == 0 {
+			if b.Sign() == 0 {
 				return "", fmt.Errorf("division by zero")
 			}
-			left = value(strconv.FormatInt(a/b, 10))
+			left = value(new(big.Int).Quo(a, b).String())
 		case "%":
-			if b == 0 {
+			if b.Sign() == 0 {
 				return "", fmt.Errorf("division by zero")
 			}
-			left = value(strconv.FormatInt(a%b, 10))
+			left = value(new(big.Int).Rem(a, b).String())
 		}
 	}
 	return left, nil
@@ -205,20 +208,22 @@ func (p *parser) parseMatch() (value, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid regular expression")
 		}
-		m := re.FindStringSubmatchIndex(string(left))
-		if len(m) == 0 {
+		matches := re.FindAllStringSubmatchIndex(string(left), 1)
+		if len(matches) == 0 || matches[0][0] != 0 {
 			if captures {
 				left = ""
 			} else {
 				left = "0"
 			}
 		} else if captures {
+			m := matches[0]
 			if len(m) > 3 && m[2] >= 0 {
 				left = value(string(left)[m[2]:m[3]])
 			} else {
 				left = ""
 			}
 		} else {
+			m := matches[0]
 			left = value(strconv.Itoa(utf8.RuneCountInString(string(left)[m[0]:m[1]])))
 		}
 	}
@@ -230,6 +235,11 @@ func (p *parser) parsePrimary() (value, error) {
 		return "", fmt.Errorf("missing operand")
 	}
 	t := p.next()
+	if t == "+" && p.more() {
+		// GNU's leading-+ guard forces an operator-looking token to be an
+		// ordinary string operand: `expr + length` prints "length".
+		return value(p.next()), nil
+	}
 	if t == "(" {
 		v, err := p.parseOr()
 		if err != nil {
@@ -292,20 +302,23 @@ func (p *parser) parseFunction(name string) (value, error) {
 		if err != nil {
 			return "", err
 		}
-		pos, ln, err := ints(posv, lenv)
+		pos, ln, err := integers(posv, lenv)
 		if err != nil {
 			return "", err
 		}
 		rs := []rune(s)
-		start := int(pos) - 1
-		if start < 0 || start >= len(rs) || ln <= 0 {
+		if !pos.IsInt64() || !ln.IsInt64() || pos.Sign() <= 0 || ln.Sign() <= 0 {
 			return "", nil
 		}
-		end := start + int(ln)
-		if end > len(rs) {
-			end = len(rs)
+		start := pos.Int64() - 1
+		if start >= int64(len(rs)) {
+			return "", nil
 		}
-		return value(string(rs[start:end])), nil
+		end := int64(len(rs))
+		if ln.Int64() < end-start {
+			end = start + ln.Int64()
+		}
+		return value(string(rs[int(start):int(end)])), nil
 	case "match":
 		s, err := arg()
 		if err != nil {
@@ -322,29 +335,44 @@ func (p *parser) parseFunction(name string) (value, error) {
 	}
 }
 
-func ints(a, b value) (int64, int64, error) {
-	ai, err := strconv.ParseInt(string(a), 10, 64)
-	if err != nil {
-		return 0, 0, fmt.Errorf("non-integer argument")
+func integers(a, b value) (*big.Int, *big.Int, error) {
+	ai, ok := integer(a)
+	if !ok {
+		return nil, nil, fmt.Errorf("non-integer argument")
 	}
-	bi, err := strconv.ParseInt(string(b), 10, 64)
-	if err != nil {
-		return 0, 0, fmt.Errorf("non-integer argument")
+	bi, ok := integer(b)
+	if !ok {
+		return nil, nil, fmt.Errorf("non-integer argument")
 	}
 	return ai, bi, nil
 }
 
+func integer(v value) (*big.Int, bool) {
+	s := string(v)
+	if s == "" {
+		return nil, false
+	}
+	i := 0
+	if s[0] == '-' {
+		i = 1
+	}
+	if i == len(s) {
+		return nil, false
+	}
+	for ; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return nil, false
+		}
+	}
+	n, ok := new(big.Int).SetString(s, 10)
+	return n, ok
+}
+
 func compare(a, b value) int {
-	ai, ea := strconv.ParseInt(string(a), 10, 64)
-	bi, eb := strconv.ParseInt(string(b), 10, 64)
-	if ea == nil && eb == nil {
-		if ai < bi {
-			return -1
-		}
-		if ai > bi {
-			return 1
-		}
-		return 0
+	ai, aok := integer(a)
+	bi, bok := integer(b)
+	if aok && bok {
+		return ai.Cmp(bi)
 	}
 	if a < b {
 		return -1
@@ -360,46 +388,37 @@ func truthy(v value) bool {
 	if s == "" {
 		return false
 	}
-	if s == "-" {
-		return true
+	if n, ok := integer(v); ok {
+		return n.Sign() != 0
 	}
-	if strings.HasPrefix(s, "-") {
-		return strings.Trim(s[1:], "0") != ""
-	}
-	return strings.Trim(s, "0") != ""
+	return true
 }
 
-func compileBRE(pattern string) (*regexp.Regexp, bool, error) {
-	converted := convertBRE(pattern)
-	captures := strings.Contains(pattern, `\(`)
-	if !strings.HasPrefix(converted, "^") {
-		converted = "^" + converted
+func compileBRE(pattern string) (*bre.Regexp, bool, error) {
+	re, err := bre.Compile(pattern)
+	if err != nil {
+		return nil, false, err
 	}
-	re, err := regexp.Compile(converted)
-	return re, captures, err
+	re.Longest()
+	return re, hasBRECapture(pattern), nil
 }
 
-func convertBRE(pattern string) string {
-	var b strings.Builder
+func hasBRECapture(pattern string) bool {
+	inBracket := false
 	for i := 0; i < len(pattern); i++ {
-		if pattern[i] == '\\' && i+1 < len(pattern) {
-			i++
-			switch pattern[i] {
-			case '(', ')', '{', '}', '|':
-				b.WriteByte(pattern[i])
-			default:
-				b.WriteByte('\\')
-				b.WriteByte(pattern[i])
-			}
-			continue
-		}
 		switch pattern[i] {
-		case '+', '?', '|', '(', ')', '{', '}':
-			b.WriteByte('\\')
-			b.WriteByte(pattern[i])
-		default:
-			b.WriteByte(pattern[i])
+		case '[':
+			inBracket = true
+		case ']':
+			inBracket = false
+		case '\\':
+			if i+1 < len(pattern) {
+				i++
+				if !inBracket && pattern[i] == '(' {
+					return true
+				}
+			}
 		}
 	}
-	return b.String()
+	return false
 }
