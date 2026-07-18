@@ -24,14 +24,16 @@ import (
 // agentpty.Run's killTree); this is the pipe path's half, deliberately kept to
 // process-group signalling so it stays pure-Go syscall with no `ps` snapshot.
 
-// setProcessGroup puts the child in a new process group whose id equals its pid,
-// so a later kill(-pid) reaches every descendant that has not deliberately
-// setpgid'd itself away.
+// setProcessGroup puts a pipe-run child in a new session. Besides giving it a
+// process group whose id equals its pid (so kill(-pid) reaches its ordinary
+// descendants), this deliberately detaches it from the caller's controlling
+// terminal. A headless child with inherited /dev/tty could otherwise run stty
+// itself, corrupting the operator terminal even though its stdio is pipes.
 func setProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	cmd.SysProcAttr.Setpgid = true
+	cmd.SysProcAttr.Setsid = true
 }
 
 // killProcessTree signals the child's whole process group.
