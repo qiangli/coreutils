@@ -502,7 +502,7 @@ func parseFormat(s string) (dumpFormat, error) {
 	if s == "c" || s == "a" {
 		return dumpFormat{kind: s, size: 1}, nil
 	}
-	if len(s) < 2 {
+	if len(s) < 1 {
 		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
 	}
 	prefix := s[:1]
@@ -519,6 +519,19 @@ func parseFormat(s string) (dumpFormat, error) {
 	}
 	if alias, ok := sizeAliases[sizeText]; ok {
 		sizeText = alias
+	}
+	if sizeText == "" {
+		// POSIX: a type letter with no explicit size takes the type's
+		// natural C size — "int" (4 bytes) for d/o/u/x, "double" (8
+		// bytes) for f — never a 2-byte default.
+		switch prefix {
+		case "f":
+			sizeText = "8"
+		case "x", "o", "u", "d":
+			sizeText = "4"
+		default:
+			return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
+		}
 	}
 	size, err := strconv.Atoi(sizeText)
 	if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
@@ -648,7 +661,9 @@ func namedChar(c byte) string {
 
 var multipliers = map[string]int64{
 	"":    1,
-	"b":   512,
+	"b":   512,         // POSIX
+	"k":   1024,        // POSIX
+	"m":   1024 * 1024, // POSIX
 	"kB":  1000,
 	"K":   1024,
 	"KB":  1000,
@@ -676,6 +691,9 @@ func parseBytes(s string) (int64, error) {
 	m, ok := multipliers[s[i:]]
 	if !ok {
 		return 0, strconv.ErrSyntax
+	}
+	if m != 0 && n > math.MaxInt64/m {
+		return 0, strconv.ErrRange
 	}
 	return n * m, nil
 }

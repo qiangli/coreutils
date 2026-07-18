@@ -227,6 +227,88 @@ func TestODTraditionalOffsetBeforeFile(t *testing.T) {
 	}
 }
 
+// POSIX: a bare -t type letter with no explicit size takes the type's
+// natural C size — d/o/u/x default to "int" (4 bytes), f defaults to
+// "double" (8 bytes) — never the 2-byte "short" default.
+func TestODBareTypeDefaultsToIntWidth(t *testing.T) {
+	cases := []struct {
+		format string
+		data   string
+		want   string
+	}{
+		{"d", "ABCD", " 1145258561\n"},
+		{"o", "ABCD", " 010420641101\n"},
+		{"u", "ABCD", " 1145258561\n"},
+		{"x", "ABCD", " 44434241\n"},
+		{"f", "\x00\x00\x00\x00\x00\x00\xf0\x3f", " 1\n"},
+		// Bare word-form aliases go through the same default-size path.
+		{"octal", "ABCD", " 010420641101\n"},
+		{"hex", "ABCD", " 44434241\n"},
+		{"signed", "ABCD", " 1145258561\n"},
+		{"unsigned", "ABCD", " 1145258561\n"},
+	}
+	for _, tc := range cases {
+		out, errb, code := runOD(t, t.TempDir(), tc.data, "-A", "n", "-t", tc.format)
+		if out != tc.want || errb != "" || code != 0 {
+			t.Fatalf("od -t %s = (%q, %q, %d), want (%q, \"\", 0)", tc.format, out, errb, code, tc.want)
+		}
+	}
+}
+
+func TestODByteCountLowercaseSuffixes(t *testing.T) {
+	cases := []struct {
+		text string
+		want int64
+	}{
+		{"1", 1},
+		{"1b", 512},
+		{"2b", 1024},
+		{"1k", 1024},
+		{"3k", 3072},
+		{"1m", 1048576},
+		{"2m", 2097152},
+	}
+	for _, tc := range cases {
+		got, err := parseBytes(tc.text)
+		if err != nil || got != tc.want {
+			t.Fatalf("parseBytes(%q) = (%d, %v), want (%d, nil)", tc.text, got, err, tc.want)
+		}
+	}
+}
+
+func TestODByteCountOverflowIsUsageError(t *testing.T) {
+	// "G" (1024^3) is already a recognized multiplier; a count this large
+	// overflows int64 on multiplication and must fail cleanly rather than
+	// silently wrapping.
+	if _, err := parseBytes("9223372036854775807G"); err == nil {
+		t.Fatalf("parseBytes(overflow) = nil error, want an error")
+	}
+
+	_, errb, code := runOD(t, t.TempDir(), "hi", "-N", "9223372036854775807G")
+	if code != 2 || !strings.Contains(errb, "invalid byte count") {
+		t.Fatalf("od -N overflow: code=%d err=%q, want code 2 and invalid byte count", code, errb)
+	}
+
+	_, errb, code = runOD(t, t.TempDir(), "hi", "-j", "9223372036854775807G")
+	if code != 2 || !strings.Contains(errb, "invalid skip count") {
+		t.Fatalf("od -j overflow: code=%d err=%q, want code 2 and invalid skip count", code, errb)
+	}
+
+	// Also confirm overflow via the newly accepted lowercase "m" suffix.
+	if _, err := parseBytes("9223372036854775807m"); err == nil {
+		t.Fatalf("parseBytes(overflow via m) = nil error, want an error")
+	}
+}
+
+func TestODJSkipWithLowercaseSuffix(t *testing.T) {
+	data := strings.Repeat("a", 1024) + "bc"
+	out, errb, code := runOD(t, t.TempDir(), data, "-A", "n", "-t", "c", "-j", "1k", "-w", "2")
+	want := "   b   c\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("od -j 1k = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
 func TestODShortTypeAliases(t *testing.T) {
 	cases := []struct {
 		flag string
