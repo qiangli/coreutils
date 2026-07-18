@@ -153,6 +153,12 @@ func runPoll(ctx context.Context, st *State, question string, choices, participa
 		return nil, fmt.Errorf("meet: poll needs at least one participant")
 	}
 
+	lease, err := acquireRunLease(st.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+
 	st.Round++
 	_ = st.save()
 	if _, err := recordFull(st, Event{
@@ -164,24 +170,33 @@ func runPoll(ctx context.Context, st *State, question string, choices, participa
 
 	res := &PollResult{Question: question, Choices: choices, Tally: map[string]int{}}
 	for _, name := range participants {
-		ev, _ := invokeAgent(ctx, st, name, "", pollPrompt(st, question, choices), question, runner)
-		ev.Kind = "vote"
-		ev.Choices = choices
-		if statusOf(ev) == statusOK {
-			if c := normalizeChoice(ev.Text, choices); c != "" {
-				ev.Choice = c
-				res.Tally[c]++
-			} else {
-				// The agent answered, but not with a ballot. That is a failure of
-				// the poll, not of the agent's availability — surface it as such.
-				ev.Status = statusInvalid
-			}
-		}
-		if ev.Choice == "" {
-			res.Tally[statusOf(ev)]++
-		}
-		_ = appendEvent(st.ID, ev)
-		res.Votes = append(res.Votes, ev)
+		// The ballot is finished and tallied INSIDE the persist callback, so the
+		// vote reaches the transcript before the live channel's `spoke` claims it
+		// did — and so the status published on the live channel is the ballot's
+		// real one (an off-menu answer is `invalid`, not `ok`).
+		var vote Event
+		_, _ = invokeAgent(ctx, st, name, "", pollPrompt(st, question, choices), question, runner,
+			func(e Event) (Event, error) {
+				e.Kind = "vote"
+				e.Choices = choices
+				if statusOf(e) == statusOK {
+					if c := normalizeChoice(e.Text, choices); c != "" {
+						e.Choice = c
+						res.Tally[c]++
+					} else {
+						// The agent answered, but not with a ballot. That is a failure
+						// of the poll, not of the agent's availability — surface it as
+						// such.
+						e.Status = statusInvalid
+					}
+				}
+				if e.Choice == "" {
+					res.Tally[statusOf(e)]++
+				}
+				vote = e
+				return e, appendEvent(st.ID, e)
+			})
+		res.Votes = append(res.Votes, vote)
 	}
 	return res, nil
 }
@@ -199,6 +214,12 @@ func runAsk(ctx context.Context, st *State, question string, optional bool, part
 		return nil, fmt.Errorf("meet: ask needs at least one participant")
 	}
 
+	lease, err := acquireRunLease(st.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+
 	st.Round++
 	_ = st.save()
 	if _, err := recordFull(st, Event{
@@ -210,13 +231,21 @@ func runAsk(ctx context.Context, st *State, question string, optional bool, part
 
 	var out []Event
 	for _, name := range participants {
-		ev, _ := invokeAgent(ctx, st, name, "", askPrompt(st, question, optional), question, runner)
-		if optional && isNoComment(ev) {
-			ev.Status = statusAbstain
-			ev.Text = fmt.Sprintf("(%s: no comment)", name)
-		}
-		_ = appendEvent(st.ID, ev)
-		out = append(out, ev)
+		// Same shape as a poll: the abstain reclassification happens before the
+		// append, and the append before the floor is freed, so the live channel's
+		// `spoke` reports `abstain` for a declined optional question rather than the
+		// `empty` that silence classified as.
+		var answer Event
+		_, _ = invokeAgent(ctx, st, name, "", askPrompt(st, question, optional), question, runner,
+			func(e Event) (Event, error) {
+				if optional && isNoComment(e) {
+					e.Status = statusAbstain
+					e.Text = fmt.Sprintf("(%s: no comment)", name)
+				}
+				answer = e
+				return e, appendEvent(st.ID, e)
+			})
+		out = append(out, answer)
 	}
 	return out, nil
 }

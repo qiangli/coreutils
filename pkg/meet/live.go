@@ -116,6 +116,12 @@ type liveWriter struct {
 
 	mu  sync.Mutex
 	buf bytes.Buffer
+
+	// closeOnce makes `spoke` exactly-once. Every path out of a turn now closes
+	// the floor — including a deferred close that fires on a panic or an early
+	// return someone adds later — and a floor freed twice would show a watcher two
+	// endings for one turn, or leave `currentSpeaker` reading a stale record.
+	closeOnce sync.Once
 }
 
 func newLiveWriter(st *State, speaker, role, ctlSock string) *liveWriter {
@@ -204,15 +210,28 @@ func (w *liveWriter) emit(line string) {
 }
 
 // close flushes a trailing line with no newline and marks the floor free.
+//
+// The trailing flush is what makes a killed turn's last words survive. An agent
+// that is timed out or cancelled mid-sentence leaves a partial line in the
+// buffer with no '\n' behind it; without this flush the watcher's last view of
+// that agent stops one line earlier than the transcript does, and the two
+// channels disagree exactly when someone is trying to work out what happened.
+// It is sanitized through the same emit() as every other line, so the view
+// still cannot show anything the record would not.
+//
+// Idempotent: the first caller wins and later ones are no-ops, so a deferred
+// close behind an explicit one never doubles the `spoke`.
 func (w *liveWriter) close(status string) {
-	w.mu.Lock()
-	if rest := w.buf.String(); rest != "" {
-		w.buf.Reset()
-		w.emit(rest)
-	}
-	w.mu.Unlock()
-	appendLive(w.id, LiveEvent{
-		Kind: liveSpoke, Round: w.round, Speaker: w.speaker, Role: w.role,
-		Status: status, TS: nowFn(),
+	w.closeOnce.Do(func() {
+		w.mu.Lock()
+		if rest := w.buf.String(); rest != "" {
+			w.buf.Reset()
+			w.emit(rest)
+		}
+		w.mu.Unlock()
+		appendLive(w.id, LiveEvent{
+			Kind: liveSpoke, Round: w.round, Speaker: w.speaker, Role: w.role,
+			Status: status, TS: nowFn(),
+		})
 	})
 }

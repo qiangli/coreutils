@@ -137,7 +137,18 @@ func isTimeout(err error, elapsed, budget time.Duration) bool {
 // invokeAgent runs one agent turn and classifies the outcome. The classification
 // is the whole point: "opencode returned no content" is useless to an operator
 // who cannot tell a timeout from a crash from a considered silence.
-func invokeAgent(ctx context.Context, st *State, name, role, instruction, question string, runner chat.Runner) (Event, error) {
+//
+// The persist callback is what makes `spoke` mean what the live channel says it
+// means: "it finished; the whole turn is now in the transcript". Before this,
+// invokeAgent freed the floor and its CALLER appended the event afterwards, so
+// every turn had a window in which the view claimed a durable record that did
+// not exist yet — and a process that died in that window (or an append that
+// failed) left a `spoke` permanently lying about the transcript. Callers hand in
+// how to durably record the turn; invokeAgent runs it BEFORE closing the floor
+// and downgrades the reported status if it fails. A caller with nothing to
+// persist (the chair's selector turns, which are deliberately off the record)
+// passes nil.
+func invokeAgent(ctx context.Context, st *State, name, role, instruction, question string, runner chat.Runner, persist func(Event) (Event, error)) (Event, error) {
 	events, _ := readTranscript(st.ID)
 	budget := turnTimeout(st)
 	start := time.Now()
@@ -175,11 +186,18 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 	// classification below either way — a turn is a turn, however it was produced.
 	if st.Steerable && runner == nil {
 		if ok, _ := chat.CanSteer(name); ok {
-			return sessionTurn(ctx, st, name, role, instruction, question, budget, start)
+			return sessionTurn(ctx, st, name, role, instruction, question, budget, start, persist)
 		}
 	}
 
 	live := newLiveWriter(st, name, role, sock)
+	// Pair the floor unconditionally. Every ordinary path below closes it
+	// explicitly with a real status; this deferred close is the backstop for the
+	// ones that are not ordinary — a panic in the runner, or an early return added
+	// later — so a `speaking` without a `spoke` can no longer strand the floor and
+	// make `meet say` address an agent that is long gone. close is once-only, so
+	// the explicit close still wins.
+	defer live.close(statusError)
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent:       name,
 		Role:        role,
@@ -214,11 +232,41 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 	}, runner)
 
 	ev := classifyTurn(st, name, question, res.Output, res.ExitCode, err, time.Since(start), budget)
-	// Free the floor, and say how the turn ended. A watcher must be able to tell
-	// a timeout from a crash from a considered silence — the same distinction the
-	// transcript preserves, which is why the status is carried on both channels.
-	live.close(ev.Status)
+	// Record first, then free the floor, and say how the turn ended. A watcher
+	// must be able to tell a timeout from a crash from a considered silence — the
+	// same distinction the transcript preserves, which is why the status is
+	// carried on both channels.
+	live.close(persistThenStatus(ev, persist))
 	return ev, err
+}
+
+// persistThenStatus durably records the turn and reports the status the live
+// channel should publish.
+//
+// The status it returns is about the RECORD, not only about the agent: when the
+// append fails, `spoke` says statusUnrecorded rather than "ok", because the one
+// thing `spoke` promises a reader is that the transcript now contains this turn.
+// Reporting the agent's own status there would be a claim about durable state
+// that nobody checked — the failure mode that makes a transcript gap look like
+// an agent that never spoke.
+//
+// It returns the event the caller actually RECORDED, not the one classifyTurn
+// produced, because several callers finish the event before storing it — a poll
+// turns an off-menu answer into `invalid`, an optional ask turns silence into
+// `abstain`. Publishing the pre-finalization status would make the live channel
+// and the transcript disagree about the same turn.
+func persistThenStatus(ev Event, persist func(Event) (Event, error)) string {
+	if persist == nil {
+		return ev.Status
+	}
+	recorded, err := persist(ev)
+	if err != nil {
+		return statusUnrecorded
+	}
+	if recorded.Status != "" {
+		return recorded.Status
+	}
+	return ev.Status
 }
 
 // classifyTurn turns "what came back" into a transcript event.
@@ -265,9 +313,20 @@ func classifyTurn(st *State, name, question, out string, exit int, err error, el
 }
 
 // runTurn invokes one participant and appends its turn to the transcript.
+//
+// The append is handed DOWN as invokeAgent's persist callback rather than done
+// here afterwards, so the transcript entry lands before the live channel says it
+// did. The append error is captured out of the closure so the caller's contract
+// is unchanged: a failed append is still returned in preference to the turn's
+// own error.
 func runTurn(ctx context.Context, st *State, name, question string, runner chat.Runner) (Event, error) {
-	ev, err := invokeAgent(ctx, st, name, "", turnPrompt(st, question), question, runner)
-	if aerr := appendEvent(st.ID, ev); aerr != nil {
+	var aerr error
+	ev, err := invokeAgent(ctx, st, name, "", turnPrompt(st, question), question, runner,
+		func(e Event) (Event, error) {
+			aerr = appendEvent(st.ID, e)
+			return e, aerr
+		})
+	if aerr != nil {
 		return ev, aerr
 	}
 	return ev, err
@@ -288,7 +347,19 @@ func shortErr(out string, err error) string {
 }
 
 // runRound runs one sequential round across all participants.
-func runRound(ctx context.Context, st *State, question string, runner chat.Runner) []Event {
+//
+// It returns an error only for a refused lease — the per-turn outcomes are
+// carried on the events, as they always have been, because a participant that
+// failed is a fact about the meeting rather than a failure of running it.
+func runRound(ctx context.Context, st *State, question string, runner chat.Runner) ([]Event, error) {
+	lease, err := acquireRunLease(st.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+
+	// Bumped under the lease. This increment plus the turn loop below is the
+	// read-modify-write two concurrent runners used to interleave.
 	st.Round++
 	_ = st.save()
 	out := make([]Event, 0, len(st.Participants))
@@ -296,7 +367,7 @@ func runRound(ctx context.Context, st *State, question string, runner chat.Runne
 		ev, _ := runTurn(ctx, st, name, question, runner)
 		out = append(out, ev)
 	}
-	return out
+	return out, nil
 }
 
 // record appends a marker/human event. Human/marker text is sanitized too — it
@@ -748,7 +819,9 @@ func confirmConclusion(ctx context.Context, st *State, in io.Reader, out io.Writ
 			"You convened this meeting (topic: %q). It has run %s. The secretary's synthesis is in the transcript below.\n\n"+
 				"Has the meeting achieved what you convened it for? Reply on the FIRST line with EXACTLY one word: "+
 				"CONCLUDE or CONTINUE. On the next line give one sentence of reason.", st.Topic, brief)
-		ev, err := invokeAgent(ctx, st, who, "", instr, "conclude?", runner)
+		// nil persist: the initiator's CONCLUDE/CONTINUE reply is not a transcript
+		// turn — what gets recorded below is the derived `confirm` event.
+		ev, err := invokeAgent(ctx, st, who, "", instr, "conclude?", runner, nil)
 		if err != nil {
 			return fmt.Errorf("meet: could not reach initiator %s to confirm conclusion: %w", who, err)
 		}

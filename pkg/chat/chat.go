@@ -393,6 +393,17 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		return r.runPTY(cmd, agent)
 	}
 
+	// Own process group, so cancelling this turn can reach the agent's CHILDREN.
+	// Set only on the pipe path: the PTY path needs Setsid (the subagent must be a
+	// session leader to own the terminal), Setsid and Setpgid together are invalid,
+	// and agentpty.Run already does its own tree teardown.
+	setProcessGroup(cmd)
+	// Replace CommandContext's default cancel — Process.Kill, which is exactly one
+	// pid — with a group kill. Without it, a wedged agent's shell/MCP grandchildren
+	// survive the deadline still holding the stdout pipe, and the turn runs past
+	// its budget while they orphan.
+	cmd.Cancel = func() error { return killProcessTree(cmd) }
+
 	// Capture stdout and stderr SEPARATELY. The agent's actual answer is on
 	// stdout; CLI chrome (banners, warnings, progress) goes to stderr and would
 	// otherwise pollute a captured turn — and a truncated multibyte char in that

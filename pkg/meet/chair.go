@@ -146,8 +146,12 @@ func resolveSpeaker(name string, roster []string) (string, bool) {
 func nextLedger(ctx context.Context, st *State, roster []string, fallback string, runner chat.Runner) *Ledger {
 	correction := ""
 	for attempt := 0; attempt < maxSelectorAttempts; attempt++ {
+		// nil persist: a selector turn is the chair deciding who speaks next, not a
+		// contribution to the discussion. It has never been in the transcript and
+		// must not start being — replayed as context it would teach the next agent
+		// to emit ledgers instead of arguments.
 		ev, err := invokeAgent(ctx, st, st.chair(), string(RoleChair),
-			chairPrompt(st, roster, correction), "", runner)
+			chairPrompt(st, roster, correction), "", runner, nil)
 		if err != nil || statusOf(ev) != statusOK {
 			correction = "you did not reply"
 			continue
@@ -197,6 +201,16 @@ func runChaired(ctx context.Context, st *State, runner chat.Runner) (*Deliberati
 	if len(roster) == 0 {
 		return nil, fmt.Errorf("meet: a chaired meeting needs participants")
 	}
+	// Held for the WHOLE deliberation, not per round: a chaired meeting's rounds
+	// are a single control loop (the ledger from one round picks the speaker for
+	// the next), so letting a second process in between rounds would interleave
+	// exactly the state the chair is reasoning over.
+	lease, err := acquireRunLease(st.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+
 	res := &Deliberation{StoppedBy: "max_turns"}
 	prev := roster[0]
 	stalls, replans := 0, 0
@@ -238,13 +252,20 @@ func runChaired(ctx context.Context, st *State, runner chat.Runner) (*Deliberati
 						fmt.Sprintf("(meeting stopped: stalled through %d re-plans)", replans))
 					return res, nil
 				}
-				ev, err := invokeAgent(ctx, st, st.chair(), string(RoleChair),
-					replanPrompt(st, roster), "", runner)
-				if err == nil && statusOf(ev) == statusOK {
-					ev.Kind = "replan"
-					ev.Role = string(RoleChair)
-					_ = appendEvent(st.ID, ev)
-				}
+				// A replan IS recorded, so it persists through the callback — and
+				// only when it is a usable replan, exactly as before. An unusable
+				// one records nothing, which is a legitimate "nothing to persist"
+				// rather than a failure, so the closure returns nil.
+				_, _ = invokeAgent(ctx, st, st.chair(), string(RoleChair),
+					replanPrompt(st, roster), "", runner,
+					func(e Event) (Event, error) {
+						if statusOf(e) != statusOK {
+							return e, nil
+						}
+						e.Kind = "replan"
+						e.Role = string(RoleChair)
+						return e, appendEvent(st.ID, e)
+					})
 				stalls = 0
 				continue // re-derive the ledger against the new plan
 			}

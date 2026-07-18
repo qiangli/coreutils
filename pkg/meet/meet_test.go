@@ -72,7 +72,10 @@ func TestTranscriptRoundTrip(t *testing.T) {
 
 func TestRunRoundAppendsTurns(t *testing.T) {
 	st := newTestSession(t)
-	got := runRound(context.Background(), st, "verb set", fakeRunner{reply: "agree"})
+	got, err := runRound(context.Background(), st, "verb set", fakeRunner{reply: "agree"})
+	if err != nil {
+		t.Fatalf("runRound: %v", err)
+	}
 	if len(got) != 2 {
 		t.Fatalf("want 2 turns, got %d", len(got))
 	}

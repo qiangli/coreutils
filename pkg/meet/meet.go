@@ -274,7 +274,11 @@ func deliberate(ctx context.Context, st *State, w io.Writer, rounds int, questio
 		if q == "" && i < len(st.Agenda) {
 			q = st.Agenda[i]
 		}
-		for _, e := range runRound(ctx, st, q, nil) {
+		evs, err := runRound(ctx, st, q, nil)
+		if err != nil {
+			return err
+		}
+		for _, e := range evs {
 			if verbose {
 				fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
 			}
@@ -651,7 +655,12 @@ func repl(cmd *cobra.Command, st *State) error {
 			fmt.Fprintf(w, "wrote %s\n", redactHome(path))
 			return nil
 		case line == "/round":
-			for _, e := range runRound(cmd.Context(), st, currentAgenda(st), nil) {
+			evs, err := runRound(cmd.Context(), st, currentAgenda(st), nil)
+			if err != nil {
+				fmt.Fprintf(w, "⏺ %v\n", err)
+				break
+			}
+			for _, e := range evs {
 				fmt.Fprintf(w, "%s> %s\n", e.Speaker, oneLine(e.Text))
 			}
 		case line == "/chair":
@@ -747,7 +756,11 @@ func newRoundCmd() *cobra.Command {
 				return err
 			}
 			markDepth()
-			for _, e := range runRound(cmd.Context(), st, currentAgenda(st), nil) {
+			evs, err := runRound(cmd.Context(), st, currentAgenda(st), nil)
+			if err != nil {
+				return err
+			}
+			for _, e := range evs {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s> %s\n", e.Speaker, oneLine(e.Text))
 			}
 			return nil
