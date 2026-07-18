@@ -1,6 +1,9 @@
 package weave
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -59,6 +62,73 @@ func TestExpandAgentByAlias(t *testing.T) {
 	if l.Nick != "007" {
 		t.Fatalf("alias must resolve to the canonical nickname, got %q", l.Nick)
 	}
+}
+
+func TestExpandAGYCarriesGenericWorkspacePlaceholder(t *testing.T) {
+	pinAgentFleet(t)
+	l, argv, err := weaveExpandAgent([]string{"agy:gemini3.1"}, "body", "title")
+	if err != nil || l == nil {
+		t.Fatalf("launch=%+v err=%v", l, err)
+	}
+	got := strings.Join(argv, " ")
+	if !strings.Contains(got, "agy --add-dir {workspace} --dangerously-skip-permissions") {
+		t.Fatalf("agy expansion did not carry workspace binding before writer args: %q", got)
+	}
+	if len(l.WorkspacePreflight) == 0 {
+		t.Fatal("agy expansion must carry its named workspace preflight command")
+	}
+	bound, err := weaveBindAgentWorkspace(l, argv, "/tmp/allocated-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(bound, " "); strings.Contains(got, fleet.WorkspaceToken) || !strings.Contains(got, "--add-dir /tmp/allocated-work") {
+		t.Fatalf("bound argv = %q", got)
+	}
+}
+
+func TestWorkspacePreflightVerificationFailsClosed(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "allocated")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, report := range []string{workspace, "PWD=" + workspace, "PROJECT_DIR=" + workspace} {
+		if err := weaveVerifyReportedWorkspace(report, workspace); err != nil {
+			t.Errorf("valid report %q: %v", report, err)
+		}
+	}
+	for _, report := range []string{"", "PWD=/somewhere/else", "PWD=" + workspace + "\nextra"} {
+		if err := weaveVerifyReportedWorkspace(report, workspace); err == nil {
+			t.Errorf("invalid report %q was accepted", report)
+		}
+	}
+}
+
+func TestWorkspacePreflightRunsDeclaredCommand(t *testing.T) {
+	workspace := t.TempDir()
+	l := &weaveAgentLaunch{WorkspacePreflight: []string{os.Args[0], "-test.run=TestWorkspacePreflightHelper", "--"}}
+	if err := weaveRunWorkspacePreflight(l, workspace, append(os.Environ(), "WEAVE_TEST_PREFLIGHT=1")); err != nil {
+		t.Fatal(err)
+	}
+	wrong := append(os.Environ(), "WEAVE_TEST_PREFLIGHT=1", "WEAVE_TEST_PREFLIGHT_REPORT=/wrong/project")
+	if err := weaveRunWorkspacePreflight(l, workspace, wrong); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("mismatched reported project must fail closed: %v", err)
+	}
+}
+
+func TestWorkspacePreflightHelper(t *testing.T) {
+	if os.Getenv("WEAVE_TEST_PREFLIGHT") != "1" {
+		return
+	}
+	report := os.Getenv("WEAVE_TEST_PREFLIGHT_REPORT")
+	if report == "" {
+		var err error
+		report, err = os.Getwd()
+		if err != nil {
+			os.Exit(2)
+		}
+	}
+	fmt.Printf("PWD=%s\n", report)
+	os.Exit(0)
 }
 
 // A tool:model binding resolves through the registry. The baseline nicknames

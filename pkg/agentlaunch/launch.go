@@ -19,6 +19,11 @@ import (
 type Options struct {
 	Sandbox  string
 	ReadOnly bool
+	// Workspace is the orchestrator-allocated project directory. Tools opt in to
+	// receiving it through their fleet launch metadata; an empty value leaves
+	// historical argv unchanged. Callers may pass fleet.WorkspaceToken when the
+	// concrete path will only be known immediately before exec.
+	Workspace string
 	// Attended strips the auto-approve kill-switches (leaving the tool's own
 	// approval gate ON and its write capability intact) for a session a human is
 	// driving. Unlike ReadOnly it does NOT pin the sandbox read-only. See
@@ -58,6 +63,10 @@ type Launch struct {
 	Model     string
 	ModelName string
 	Args      []string
+	// WorkspacePreflight is a fully resolved, read-only command (including its
+	// reporting prompt) whose {workspace} token is bound immediately before exec.
+	// Empty means the tool does not declare a workspace preflight.
+	WorkspacePreflight []string
 
 	// TakesPrompt reports whether the prompt goes on the command line. A steerable
 	// launch may open an EMPTY session (codex, opencode) and expect the first
@@ -82,6 +91,29 @@ func (l Launch) Argv(prompt string) []string {
 	out = append(out, l.Args...)
 	return append(out, prompt)
 }
+
+// RenderWorkspace replaces the generic workspace placeholder in argv. It is
+// intentionally tool-agnostic: the fleet profile, not weave, chooses which CLI
+// flag carries the path.
+func RenderWorkspace(argv []string, workspace string) ([]string, error) {
+	if strings.TrimSpace(workspace) == "" {
+		return nil, errors.New("agent launch: allocated workspace is empty")
+	}
+	out := append([]string(nil), argv...)
+	for i, arg := range out {
+		if arg == fleet.WorkspaceToken {
+			out[i] = workspace
+		}
+	}
+	for _, arg := range out {
+		if strings.Contains(arg, fleet.WorkspaceToken) {
+			return nil, fmt.Errorf("agent launch: unresolved %s in argv", fleet.WorkspaceToken)
+		}
+	}
+	return out, nil
+}
+
+const workspacePreflightPrompt = "Report the absolute current working directory or project directory. Do not modify files. Print exactly PWD=<absolute-path> and nothing else."
 
 type LaunchProfile struct {
 	Args       []string
@@ -154,12 +186,18 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 			return lnch, fmt.Errorf("agent launch: tool %q cannot select a model, so %q is a label, not a selection (its launch template has no %s)",
 				tool.Name, name, fleet.ModelToken)
 		}
-		render := tool.ArgvPrefix
+		render := func(m string) ([]string, bool) {
+			return tool.ArgvPrefixWithWorkspace(opt.Workspace, m)
+		}
 		if opt.Steer {
-			render = tool.SteerArgvPrefix
+			render = func(m string) ([]string, bool) {
+				return tool.SteerArgvPrefixWithWorkspace(opt.Workspace, m)
+			}
 		} else if opt.Fork {
 			session := opt.Session
-			render = func(m string) ([]string, bool) { return tool.ForkArgvPrefix(m, session) }
+			render = func(m string) ([]string, bool) {
+				return tool.ForkArgvPrefixWithWorkspace(opt.Workspace, m, session)
+			}
 		}
 		if args, ok := render(lnch.Model); ok {
 			out, err := FinalizeArgs(tool.Name, args, opt)
@@ -167,6 +205,13 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 				return lnch, err
 			}
 			lnch.Args = out
+			if preflight, ok := tool.WorkspacePreflightArgv(opt.Workspace, lnch.Model, workspacePreflightPrompt); ok {
+				preflightArgs, err := FinalizeArgs(tool.Name, preflight[1:], opt)
+				if err != nil {
+					return lnch, err
+				}
+				lnch.WorkspacePreflight = append([]string{preflight[0]}, preflightArgs...)
+			}
 			lnch.TakesPrompt = !opt.Steer || tool.SteerTakesPrompt()
 			return lnch, nil
 		}

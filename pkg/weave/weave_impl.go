@@ -2395,6 +2395,19 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	base := weaveBaseBranch(root)
 	workspace := filepath.Join(dir, "workspaces", fmt.Sprintf("issue-%d", it.ID))
 	branch := fmt.Sprintf("agent/weave-issue-%d", it.ID)
+	if opts.resume {
+		workspace = it.Workspace
+		branch = it.Branch
+	}
+	if agentLaunch != nil {
+		toolArgs, err = weaveBindAgentWorkspace(agentLaunch, toolArgs, workspace)
+		if err != nil {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+				weavecli.ExitPrecondFail, err))
+		}
+		launchSpec = weaveLaunchSpecFromArgs(toolArgs, opts)
+		launchSpec.Agent, launchSpec.Model = agentLaunch.Nick, agentLaunch.Model
+	}
 	// Control socket for `weave say` — only meaningful when the
 	// subagent gets a PTY and we're actually spawning it.
 	ctlSock := ""
@@ -2402,8 +2415,6 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		ctlSock = weaveCtlSockPath(dir, it.ID)
 	}
 	if opts.resume {
-		workspace = it.Workspace
-		branch = it.Branch
 		// Re-claim the issue under the queue lock: refuse when a
 		// previous wrapper is still alive (two wrappers in one
 		// workspace = two agents fighting over the same checkout —
@@ -2652,6 +2663,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// preservation all live in weaveChildEnv so the launch assertion can test
 	// the same code path this spawn runs.
 	env := weaveChildEnv(os.Environ(), workspace, branch, base, it, agentLaunch)
+	if err := weaveRunWorkspacePreflight(agentLaunch, workspace, env); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+			weavecli.ExitPrecondFail, err))
+	}
 	tool := exec.Command(toolArgs[0], toolArgs[1:]...)
 	tool.Dir = workspace
 	tool.Env = env

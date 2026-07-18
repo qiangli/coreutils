@@ -1,8 +1,12 @@
 package weave
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/fleet"
@@ -43,7 +47,9 @@ func weaveResolveAgent(name string) (*weaveAgentLaunch, error) {
 			return nil, nil
 		}
 	}
-	l, err := agentlaunch.ResolveWithCatalog(name, agentlaunch.Options{DryRun: true}, fleetCatalog)
+	l, err := agentlaunch.ResolveWithCatalog(name, agentlaunch.Options{
+		DryRun: true, Workspace: fleet.WorkspaceToken,
+	}, fleetCatalog)
 	if err != nil {
 		return nil, err
 	}
@@ -51,6 +57,85 @@ func weaveResolveAgent(name string) (*weaveAgentLaunch, error) {
 		return nil, nil
 	}
 	return &l, nil
+}
+
+// weaveBindAgentWorkspace replaces the generic launch placeholder after weave
+// has allocated the concrete clone. No tool name is consulted here: workspace
+// binding and preflight behavior come entirely from the fleet launch metadata.
+func weaveBindAgentWorkspace(l *weaveAgentLaunch, argv []string, workspace string) ([]string, error) {
+	if l == nil {
+		return argv, nil
+	}
+	bound, err := agentlaunch.RenderWorkspace(argv, workspace)
+	if err != nil {
+		return nil, err
+	}
+	if len(l.WorkspacePreflight) > 0 {
+		l.WorkspacePreflight, err = agentlaunch.RenderWorkspace(l.WorkspacePreflight, workspace)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return bound, nil
+}
+
+// weaveRunWorkspacePreflight runs a tool-declared read-only project-directory
+// check before the source-writing worker is started. A declared check fails
+// closed: errors, timeouts, extra output, and path mismatches all refuse launch.
+func weaveRunWorkspacePreflight(l *weaveAgentLaunch, workspace string, env []string) error {
+	if l == nil || len(l.WorkspacePreflight) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	argv := l.WorkspacePreflight
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = workspace
+	cmd.Env = env
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return fmt.Errorf("workspace preflight timed out: %w", ctx.Err())
+	}
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return fmt.Errorf("workspace preflight failed: %w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return fmt.Errorf("workspace preflight failed: %w", err)
+	}
+	return weaveVerifyReportedWorkspace(string(out), workspace)
+}
+
+func weaveVerifyReportedWorkspace(report, workspace string) error {
+	report = strings.TrimSpace(report)
+	if strings.Contains(report, "\n") || strings.Contains(report, "\r") {
+		return fmt.Errorf("workspace preflight returned extra output: %q", report)
+	}
+	for _, prefix := range []string{"PWD=", "PROJECT_DIR="} {
+		if strings.HasPrefix(report, prefix) {
+			report = strings.TrimSpace(strings.TrimPrefix(report, prefix))
+			break
+		}
+	}
+	want, err := filepath.Abs(workspace)
+	if err != nil {
+		return fmt.Errorf("workspace preflight resolve allocated path: %w", err)
+	}
+	got, err := filepath.Abs(report)
+	if err == nil && filepath.IsAbs(report) {
+		// macOS commonly reports /private/var/... for a /var/... temp path.
+		// Compare filesystem-resolved paths so this harmless alias does not turn
+		// the fail-closed check into a false rejection.
+		if resolved, resolveErr := filepath.EvalSymlinks(got); resolveErr == nil {
+			got = resolved
+		}
+		if resolved, resolveErr := filepath.EvalSymlinks(want); resolveErr == nil {
+			want = resolved
+		}
+	}
+	if err != nil || !filepath.IsAbs(report) || filepath.Clean(got) != filepath.Clean(want) {
+		return fmt.Errorf("workspace preflight mismatch: tool reported %q, allocated workspace is %q", report, want)
+	}
+	return nil
 }
 
 // weaveExpandAgent expands a single agent token into a full launch argv.

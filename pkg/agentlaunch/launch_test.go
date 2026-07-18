@@ -44,6 +44,50 @@ func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	}
 }
 
+func TestResolveCarriesWorkspaceBindingAndPreflight(t *testing.T) {
+	t.Setenv(UnsafeLaunchEnv, "1")
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	tool := fleet.Tool{
+		Name: "runner", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{
+			Exec:                   "runner --unsafe --model {model} -p {prompt}",
+			WorkspaceArg:           "--project {workspace}",
+			WorkspacePreflightExec: "runner --mode plan --model {model} -p {prompt}",
+		}},
+	}
+	if err := cat.SaveTool(tool); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(fleet.Agent{Name: "worker", Tool: "runner", Model: "fable"}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := ResolveWithCatalog("worker", Options{Workspace: fleet.WorkspaceToken}, testCatalog(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := l.Argv("write source")
+	if got := strings.Join(argv, " "); !strings.Contains(got, "runner --project {workspace} --unsafe --model") {
+		t.Fatalf("worker argv = %q", got)
+	}
+	if got := strings.Join(l.WorkspacePreflight, " "); !strings.Contains(got, "runner --project {workspace} --mode plan --model") || !strings.Contains(got, "PWD=<absolute-path>") {
+		t.Fatalf("preflight argv = %q", got)
+	}
+	bound, err := RenderWorkspace(argv, "/tmp/allocated work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(bound, "\x00"); !strings.Contains(got, "--project\x00/tmp/allocated work\x00--unsafe") {
+		t.Fatalf("bound argv = %q", bound)
+	}
+}
+
+func TestRenderWorkspaceFailsClosedOnEmptyPath(t *testing.T) {
+	if _, err := RenderWorkspace([]string{"runner", fleet.WorkspaceToken}, ""); err == nil {
+		t.Fatal("empty allocated workspace must be refused")
+	}
+}
+
 func TestPrincipalEnvStampsOnlyNamedAgents(t *testing.T) {
 	base := []string{"PATH=/bin", "BASHY_AGENT_ID=old"}
 	named := PrincipalEnv(base, Launch{Nick: "007", Tool: "claude", ToolName: "claude", ModelName: "fable"})

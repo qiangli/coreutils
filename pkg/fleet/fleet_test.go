@@ -124,6 +124,49 @@ func TestArgvDropsOrphanedModelFlag(t *testing.T) {
 	}
 }
 
+func TestWorkspaceTokenRendersBeforeModelAndPrompt(t *testing.T) {
+	tool := Tool{CLI: ToolCLI{Launch: ToolLaunch{
+		Exec:                   "runner --model {model} -p {prompt}",
+		WorkspaceArg:           "--add-dir {workspace}",
+		WorkspacePreflightExec: "runner --mode plan --model {model} -p {prompt}",
+	}}}
+	got := tool.ArgvWithWorkspace("/tmp/allocated work", "m", "task")
+	want := "runner\x00--add-dir\x00/tmp/allocated work\x00--model\x00m\x00-p\x00task"
+	if strings.Join(got, "\x00") != want {
+		t.Fatalf("workspace argv = %q", got)
+	}
+	preflight, ok := tool.WorkspacePreflightArgv("/tmp/allocated work", "m", "report")
+	if !ok || strings.Join(preflight, "\x00") != "runner\x00--add-dir\x00/tmp/allocated work\x00--mode\x00plan\x00--model\x00m\x00-p\x00report" {
+		t.Fatalf("workspace preflight = %q, %v", preflight, ok)
+	}
+}
+
+func TestWorkspaceMetadataIsOptIn(t *testing.T) {
+	tool := Tool{CLI: ToolCLI{Launch: ToolLaunch{Exec: "runner --model {model} {prompt}"}}}
+	got := tool.ArgvWithWorkspace("/tmp/work", "m", "task")
+	if strings.Join(got, " ") != "runner --model m task" {
+		t.Fatalf("tool without workspace metadata changed: %q", got)
+	}
+	if _, ok := tool.WorkspacePreflightArgv("/tmp/work", "m", "report"); ok {
+		t.Fatal("tool without workspace preflight declared one")
+	}
+}
+
+func TestBaselineAGYDeclaresWorkspaceBinding(t *testing.T) {
+	agy, ok := baseline(t).Tool("agy")
+	if !ok {
+		t.Fatal("baseline agy missing")
+	}
+	argv := agy.ArgvWithWorkspace("/tmp/weave-work", "Gemini", "task")
+	got := strings.Join(argv, " ")
+	if !strings.Contains(got, "agy --add-dir /tmp/weave-work --dangerously-skip-permissions") {
+		t.Fatalf("agy workspace binding missing or misplaced: %q", got)
+	}
+	if _, ok := agy.WorkspacePreflightArgv("/tmp/weave-work", "Gemini", "report"); !ok {
+		t.Fatal("agy must declare a fail-closed workspace preflight")
+	}
+}
+
 func TestArgvSubstitutesModel(t *testing.T) {
 	c := baseline(t)
 	tool, _ := c.Tool("claude")

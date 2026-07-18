@@ -88,11 +88,13 @@ const (
 	ModelSourceLocal = "local"
 )
 
-// PromptToken, ModelToken and SessionToken are the launch-template placeholders.
+// PromptToken, ModelToken, WorkspaceToken and SessionToken are the
+// launch-template placeholders.
 const (
-	PromptToken  = "{prompt}"
-	ModelToken   = "{model}"
-	SessionToken = "{session}" // the current session id, for a context-inheriting fork
+	PromptToken    = "{prompt}"
+	ModelToken     = "{model}"
+	WorkspaceToken = "{workspace}"
+	SessionToken   = "{session}" // the current session id, for a context-inheriting fork
 )
 
 // Tool is an agentic CLI harness.
@@ -135,6 +137,17 @@ type ToolLaunch struct {
 	// {model} and the flag token immediately preceding it are dropped, so
 	// a template with a model flag degrades exactly to one without.
 	Exec string `yaml:"exec,omitempty" json:"exec,omitempty"`
+	// WorkspaceArg is an optional argv fragment that binds the launched tool to
+	// the orchestrator's allocated workspace. {workspace} is replaced by that
+	// absolute path. It is rendered immediately after the binary, before the
+	// exec template's model and prompt arguments. Tools that do not declare it
+	// retain their existing argv exactly.
+	WorkspaceArg string `yaml:"workspace_arg,omitempty" json:"workspace_arg,omitempty"`
+	// WorkspacePreflightExec is an optional read-only launch template used to
+	// ask the tool which PWD/project directory it selected. The launcher supplies
+	// a reporting prompt and refuses to start the source-writing invocation
+	// unless the reported path equals the allocated workspace.
+	WorkspacePreflightExec string `yaml:"workspace_preflight_exec,omitempty" json:"workspace_preflight_exec,omitempty"`
 	// PromptPosition records where the prompt goes for consumers that
 	// cannot read the template (cloudbox conductor). Advisory here: the
 	// {prompt} placeholder is authoritative.
@@ -229,9 +242,28 @@ func (t Tool) IsCLI() bool { return t.Kind == ToolKindCLI }
 // Tokens are whitespace-separated: launch templates are flag lists, never
 // shell. A template that needs quoting is a template in the wrong place.
 func (t Tool) Argv(modelID, prompt string) []string {
-	fields := strings.Fields(t.CLI.Launch.Exec)
+	return t.ArgvWithWorkspace("", modelID, prompt)
+}
+
+// ArgvWithWorkspace renders the headless launch and, when the tool declares a
+// workspace binding, inserts it directly after the binary. Passing an empty
+// workspace preserves the historical template rendering.
+func (t Tool) ArgvWithWorkspace(workspace, modelID, prompt string) []string {
+	return t.renderLaunch(t.CLI.Launch.Exec, workspace, modelID, "", prompt)
+}
+
+func (t Tool) renderLaunch(tmpl, workspace, modelID, session, prompt string) []string {
+	fields := strings.Fields(tmpl)
 	out := make([]string, 0, len(fields)+1)
-	for _, f := range fields {
+	for i, f := range fields {
+		if i == 1 && workspace != "" {
+			for _, wf := range strings.Fields(t.CLI.Launch.WorkspaceArg) {
+				if wf == WorkspaceToken {
+					wf = workspace
+				}
+				out = append(out, wf)
+			}
+		}
 		switch f {
 		case ModelToken:
 			if modelID != "" {
@@ -241,11 +273,24 @@ func (t Tool) Argv(modelID, prompt string) []string {
 			}
 		case PromptToken:
 			out = append(out, prompt)
+		case SessionToken:
+			out = append(out, session)
+		case WorkspaceToken:
+			out = append(out, workspace)
 		default:
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+// WorkspacePreflightArgv renders the tool-declared, read-only workspace
+// reporting command. It reports false when no command is declared.
+func (t Tool) WorkspacePreflightArgv(workspace, modelID, prompt string) ([]string, bool) {
+	if strings.TrimSpace(t.CLI.Launch.WorkspacePreflightExec) == "" {
+		return nil, false
+	}
+	return t.renderLaunch(t.CLI.Launch.WorkspacePreflightExec, workspace, modelID, "", prompt), true
 }
 
 // TakesModel reports whether the launch template can select a model. A
@@ -285,6 +330,12 @@ func (t Tool) Binary() string {
 // A caller that wants to interrupt an agent must be told that plainly rather than
 // handed a one-shot that will exit before the first steer arrives.
 func (t Tool) SteerArgvPrefix(modelID string) ([]string, bool) {
+	return t.SteerArgvPrefixWithWorkspace("", modelID)
+}
+
+// SteerArgvPrefixWithWorkspace is SteerArgvPrefix with an optional declared
+// workspace binding rendered immediately after the binary.
+func (t Tool) SteerArgvPrefixWithWorkspace(workspace, modelID string) ([]string, bool) {
 	tmpl := t.CLI.Launch.SteerExec
 	if strings.TrimSpace(tmpl) == "" {
 		return nil, false
@@ -292,20 +343,12 @@ func (t Tool) SteerArgvPrefix(modelID string) ([]string, bool) {
 	// The steer template may carry {prompt} (agy -i takes an opening prompt) or
 	// not (codex/opencode open an empty session). Both are legal; the caller
 	// appends the prompt only when the template asked for it.
-	fields := strings.Fields(tmpl)
-	out := make([]string, 0, len(fields))
-	for _, f := range fields[1:] { // drop the binary
-		switch f {
-		case ModelToken:
-			if modelID != "" {
-				out = append(out, modelID)
-			} else if n := len(out); n > 0 && strings.HasPrefix(out[n-1], "-") {
-				out = out[:n-1]
-			}
-		case PromptToken:
-			// left for the caller
-		default:
-			out = append(out, f)
+	argv := t.renderLaunch(tmpl, workspace, modelID, "", PromptToken)
+	out := argv[1:]
+	for i, arg := range out {
+		if arg == PromptToken {
+			out = append(out[:i], out[i+1:]...)
+			break
 		}
 	}
 	return out, true
@@ -324,10 +367,14 @@ func (t Tool) SteerTakesPrompt() bool {
 // not the final token. Both cases mean the launcher cannot simply append —
 // and quietly appending anyway would hand the task text to the wrong flag.
 func (t Tool) ArgvPrefix(modelID string) ([]string, bool) {
+	return t.ArgvPrefixWithWorkspace("", modelID)
+}
+
+func (t Tool) ArgvPrefixWithWorkspace(workspace, modelID string) ([]string, bool) {
 	if t.CLI.Launch.Exec == "" || !strings.Contains(t.CLI.Launch.Exec, PromptToken) {
 		return nil, false
 	}
-	argv := t.Argv(modelID, PromptToken)
+	argv := t.ArgvWithWorkspace(workspace, modelID, PromptToken)
 	if len(argv) < 2 || argv[len(argv)-1] != PromptToken {
 		return nil, false
 	}
@@ -352,35 +399,29 @@ func (t Tool) CurrentSession() string {
 // ForkArgv renders the ForkExec template. Like Argv, but also substitutes
 // {session} with the current session id.
 func (t Tool) ForkArgv(modelID, session, prompt string) []string {
-	fields := strings.Fields(t.CLI.Launch.ForkExec)
-	out := make([]string, 0, len(fields)+1)
-	for _, f := range fields {
-		switch f {
-		case ModelToken:
-			if modelID != "" {
-				out = append(out, modelID)
-			} else if n := len(out); n > 0 && strings.HasPrefix(out[n-1], "-") {
-				out = out[:n-1]
-			}
-		case SessionToken:
-			out = append(out, session)
-		case PromptToken:
-			out = append(out, prompt)
-		default:
-			out = append(out, f)
-		}
-	}
-	return out
+	return t.ForkArgvWithWorkspace("", modelID, session, prompt)
+}
+
+// ForkArgvWithWorkspace is ForkArgv with an optional declared workspace
+// binding rendered immediately after the binary.
+func (t Tool) ForkArgvWithWorkspace(workspace, modelID, session, prompt string) []string {
+	return t.renderLaunch(t.CLI.Launch.ForkExec, workspace, modelID, session, prompt)
 }
 
 // ForkArgvPrefix is ArgvPrefix for the fork template: the argv between the binary
 // and the trailing {prompt}, with {session}/{model} already substituted. Returns
 // false when the tool declares no ForkExec (delegate self then falls back).
 func (t Tool) ForkArgvPrefix(modelID, session string) ([]string, bool) {
+	return t.ForkArgvPrefixWithWorkspace("", modelID, session)
+}
+
+// ForkArgvPrefixWithWorkspace is ForkArgvPrefix with an optional declared
+// workspace binding rendered immediately after the binary.
+func (t Tool) ForkArgvPrefixWithWorkspace(workspace, modelID, session string) ([]string, bool) {
 	if t.CLI.Launch.ForkExec == "" || !strings.Contains(t.CLI.Launch.ForkExec, PromptToken) {
 		return nil, false
 	}
-	argv := t.ForkArgv(modelID, session, PromptToken)
+	argv := t.ForkArgvWithWorkspace(workspace, modelID, session, PromptToken)
 	if len(argv) < 2 || argv[len(argv)-1] != PromptToken {
 		return nil, false
 	}
