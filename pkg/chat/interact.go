@@ -15,6 +15,28 @@ import (
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
+// readOpeningLine reads one line from f byte-by-byte (no read-ahead), so the raw
+// pty passthrough that follows does not lose the operator's subsequent keystrokes.
+func readOpeningLine(f *os.File) string {
+	var b []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			if buf[0] == '\n' {
+				break
+			}
+			if buf[0] != '\r' {
+				b = append(b, buf[0])
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return strings.TrimSpace(string(b))
+}
+
 // principalName is the human/agent this session is attributed to on its room card.
 // Optional (best-effort from the environment) — the card omits it when unknown.
 func principalName() string {
@@ -100,8 +122,21 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	native := nativeHarnesses[l.ToolName]
 
 	argv := append([]string{}, l.Args...)
-	if l.TakesPrompt && strings.TrimSpace(opt.Prompt) != "" {
-		argv = append(argv, opt.Prompt)
+	if l.TakesPrompt {
+		prompt := strings.TrimSpace(opt.Prompt)
+		if prompt == "" {
+			// This tool bakes the opening prompt into its interactive launch (agy's
+			// `-i <prompt>`), so it CANNOT open an empty session — an empty prompt
+			// dangles the flag ("flag needs an argument: -i"). Read the operator's
+			// first line and seed the session with it; the tool continues from there.
+			fmt.Fprintf(status, "chat: %s opens with an initial message — type it, then Enter:\n> ", l.Nick)
+			prompt = readOpeningLine(os.Stdin)
+			if prompt == "" {
+				return 1, fmt.Errorf("chat: %s cannot open an empty session; give an opening message "+
+					"(next time: `bashy chat --agent %s -m \"...\"`)", l.Nick, l.Nick)
+			}
+		}
+		argv = append(argv, prompt)
 	}
 
 	cwd := opt.Cwd
