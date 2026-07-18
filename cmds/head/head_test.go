@@ -63,12 +63,31 @@ func TestHead(t *testing.T) {
 		{"final partial line counts", "a\nb", []string{"-n", "2"}, "a\nb"},
 		{"c overrides n", "abc\ndef\n", []string{"-n", "1", "-c", "2"}, "ab"},
 		{"n after c wins", "abc\ndef\n", []string{"-c", "2", "-n", "1"}, "abc\n"},
+		{"abbreviated lines after bytes wins", "abc\ndef\n", []string{"--bytes=2", "--l=1"}, "abc\n"},
+		{"abbreviated bytes after lines wins", "abc\ndef\n", []string{"--lines=1", "--b=2"}, "ab"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, "", c.stdin, c.args...)
 		if out != c.want || code != 0 {
 			t.Errorf("%s: head %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
 		}
+	}
+}
+
+func TestHeadAbbreviatedHeaderOptionsRespectOrder(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "1\n")
+	writeFile(t, dir, "b", "2\n")
+
+	out, _, code := runTool(t, dir, "", "--verb", "--q", "a", "b")
+	if code != 0 || out != "1\n2\n" {
+		t.Errorf("--verb --q: out=%q code=%d", out, code)
+	}
+
+	out, _, code = runTool(t, dir, "", "--q", "--verb", "a", "b")
+	want := "==> a <==\n1\n\n==> b <==\n2\n"
+	if code != 0 || out != want {
+		t.Errorf("--q --verb: out=%q code=%d want=%q", out, code, want)
 	}
 }
 

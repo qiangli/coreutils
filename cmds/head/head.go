@@ -232,16 +232,16 @@ func scanOrder(args []string) (mode, hdr byte) {
 			if i := strings.IndexByte(name, '='); i >= 0 {
 				name, hasVal = name[:i], true
 			}
-			switch name {
-			case "lines":
+			switch {
+			case longOptionPrefix(name, "lines"):
 				mode = 'n'
 				skip = !hasVal
-			case "bytes":
+			case longOptionPrefix(name, "bytes"):
 				mode = 'c'
 				skip = !hasVal
-			case "quiet", "silent":
+			case longOptionPrefix(name, "quiet"), longOptionPrefix(name, "silent"):
 				hdr = 'q'
-			case "verbose":
+			case longOptionPrefix(name, "verbose"):
 				hdr = 'v'
 			}
 			continue
@@ -264,6 +264,14 @@ func scanOrder(args []string) (mode, hdr byte) {
 		}
 	}
 	return mode, hdr
+}
+
+// longOptionPrefix mirrors tool.Parse's accepted unambiguous long-option
+// prefixes for the head-specific options that affect last-option-wins
+// behavior. scanOrder runs on the original arguments, before tool.Parse has
+// expanded those prefixes.
+func longOptionPrefix(name, option string) bool {
+	return name != "" && strings.HasPrefix(option, name)
 }
 
 // parseCount parses a GNU NUM with optional leading sign and
