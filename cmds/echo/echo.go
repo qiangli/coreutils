@@ -28,7 +28,8 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	// GNU echo recognizes --help / --version only as the sole argument;
 	// otherwise they are operands and printed literally.
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "--version" || args[0] == "-V") {
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
+	if !posix && len(args) == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "--version" || args[0] == "-V") {
 		if args[0] == "--help" || args[0] == "-h" {
 			printHelp(rc)
 			return 0
@@ -39,6 +40,15 @@ func run(rc *tool.RunContext, args []string) int {
 
 	noNewline := false
 	escapes := false // -E is the documented default
+	if posix {
+		// In POSIX compatibility mode GNU echo recognizes only an
+		// initial, exact -n as an option. Escapes are always enabled,
+		// including when -E appears after that -n.
+		escapes = true
+		if len(args) == 0 || args[0] != "-n" {
+			return writeOperands(rc, args, escapes, noNewline)
+		}
+	}
 
 	// GNU echo's option scan: consume leading args that are exactly
 	// '-' followed by one or more of [neE]. Anything else (including
@@ -68,8 +78,16 @@ scan:
 			}
 		}
 	}
-	operands := args[i:]
+	if posix {
+		// POSIXLY_CORRECT forces escape interpretation even if -E was
+		// accepted while scanning after the initial -n.
+		escapes = true
+	}
 
+	return writeOperands(rc, args[i:], escapes, noNewline)
+}
+
+func writeOperands(rc *tool.RunContext, operands []string, escapes, noNewline bool) int {
 	var buf bytes.Buffer
 	stopped := false
 	for k, s := range operands {
@@ -90,6 +108,16 @@ scan:
 	}
 	rc.Out.Write(buf.Bytes())
 	return 0
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if len(entry) >= len(prefix) && entry[:len(prefix)] == prefix {
+			return true
+		}
+	}
+	return false
 }
 
 func printHelp(rc *tool.RunContext) {

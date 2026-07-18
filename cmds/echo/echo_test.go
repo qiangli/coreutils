@@ -92,3 +92,28 @@ func TestEchoHelpVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+func TestEchoPOSIXLYCORRECT(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--help"}, "--help\n"},
+		{[]string{"-ne", "foo"}, "-ne foo\n"},
+		{[]string{"foo\\n"}, "foo\n\n"},
+		{[]string{"-n", "-E", "foo\\cbar"}, "foo"},
+	}
+	for _, c := range cases {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   t.TempDir(),
+			Env:   []string{"POSIXLY_CORRECT="},
+			Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		}
+		code := cmd.Run(rc, c.args)
+		if out.String() != c.want || errb.Len() != 0 || code != 0 {
+			t.Errorf("POSIXLY_CORRECT echo %q = (%q, %q, %d), want (%q, \"\", 0)", c.args, out.String(), errb.String(), code, c.want)
+		}
+	}
+}
