@@ -42,7 +42,7 @@ const turnQuiet = 25 * time.Second
 
 // sessionTurn runs one participant's turn as a live, steerable session.
 func sessionTurn(ctx context.Context, st *State, name, role, instruction, question string,
-	budget time.Duration, start time.Time) (Event, error) {
+	budget time.Duration, start time.Time, persist func(Event) (Event, error)) (Event, error) {
 
 	events, _ := readTranscript(st.ID)
 
@@ -56,10 +56,17 @@ func sessionTurn(ctx context.Context, st *State, name, role, instruction, questi
 		Cwd:         st.Cwd,
 	})
 	if err != nil {
-		return classifyTurn(st, name, question, "", 2, err, time.Since(start), budget), err
+		// No floor was ever claimed, so there is nothing to pair — but the turn is
+		// still a turn and still belongs in the record.
+		ev := classifyTurn(st, name, question, "", 2, err, time.Since(start), budget)
+		_ = persistThenStatus(ev, persist)
+		return ev, err
 	}
 
 	live := newLiveWriter(st, name, role, "")
+	// Backstop pairing, as on the headless path: no exit from here may leave a
+	// `speaking` without a `spoke`. Once-only, so the explicit closes below win.
+	defer live.close(statusError)
 
 	sess, err := chat.Start(ctx, name, chat.SessionOptions{
 		Prompt:  prompt,
@@ -74,7 +81,7 @@ func sessionTurn(ctx context.Context, st *State, name, role, instruction, questi
 	})
 	if err != nil {
 		ev := classifyTurn(st, name, question, "", 2, err, time.Since(start), budget)
-		live.close(ev.Status)
+		live.close(persistThenStatus(ev, persist))
 		return ev, err
 	}
 	defer sess.Close()
@@ -86,11 +93,11 @@ func sessionTurn(ctx context.Context, st *State, name, role, instruction, questi
 
 	if err := sess.WaitIdle(ctx, turnQuiet); err != nil {
 		ev := classifyTurn(st, name, question, sess.Output(), 124, err, time.Since(start), budget)
-		live.close(ev.Status)
+		live.close(persistThenStatus(ev, persist))
 		return ev, err
 	}
 
 	ev := classifyTurn(st, name, question, sess.Turn(), 0, nil, time.Since(start), budget)
-	live.close(ev.Status)
+	live.close(persistThenStatus(ev, persist))
 	return ev, nil
 }

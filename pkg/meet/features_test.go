@@ -156,7 +156,11 @@ func TestTurnStatusDistinguishesFailureModes(t *testing.T) {
 	want := map[string]string{
 		"crasher": statusError, "quiet": statusEmpty, "terse": statusShort, "slow": statusTimeout,
 	}
-	for _, e := range runRound(context.Background(), st, "q", runner) {
+	evs, err := runRound(context.Background(), st, "q", runner)
+	if err != nil {
+		t.Fatalf("runRound: %v", err)
+	}
+	for _, e := range evs {
 		if got := statusOf(e); got != want[e.Speaker] {
 			t.Errorf("%s status = %q, want %q", e.Speaker, got, want[e.Speaker])
 		}

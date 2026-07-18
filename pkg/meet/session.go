@@ -36,6 +36,14 @@ const (
 	statusShort   = "short"   // below --min-turn-chars
 	statusAbstain = "abstain" // optional question, explicitly no comment
 	statusInvalid = "invalid" // poll answer outside the choice set
+
+	// statusUnrecorded appears ONLY on the live channel, never in the transcript —
+	// by definition, since it means the transcript append is what failed. It is
+	// how `spoke` stays truthful: a reader of the live channel takes `spoke` to
+	// mean the whole turn is now durable, and when it is not, saying so is the
+	// only honest option. Publishing the agent's own status here instead would
+	// turn a storage failure into a silent transcript gap.
+	statusUnrecorded = "unrecorded"
 )
 
 // Event is one append-only entry in a meeting transcript.
