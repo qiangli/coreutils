@@ -1,11 +1,11 @@
-// Package prcmd implements a single-column pr(1) subset: GNU page
+// Package prcmd implements a pr(1) subset: GNU page
 // structure (66-line pages: 5-line header, body, 5-line trailer, with
 // the last page padded to full length), form-feed page breaks, page
 // ranges (--pages and the +FIRST[:LAST] operand), line numbering,
 // margins, and -t/-T.
 //
-// Multi-column output (--columns, -a) and merging (-m) are not
-// implemented and fail loudly.
+// Across-column output (-a) and merging (-m) are not implemented and
+// fail loudly.
 //
 // Documented deviation: like GNU pr, the header timestamp for standard
 // input (or when stat fails) is the current wall-clock time, so that
@@ -26,7 +26,7 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "pr",
-	Synopsis: "Paginate files for printing. This pure-Go subset formats files sequentially in a single column.",
+	Synopsis: "Paginate files for printing.",
 	Usage:    "pr [OPTION]... [FILE]...",
 }
 
@@ -56,9 +56,12 @@ type options struct {
 	pageStart      int
 	pageEnd        int
 	firstLineNum   int
+	columns        int
+	separator      string
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	args = scanColumnOption(args)
 	fs := tool.NewFlags(cmd.Name)
 	pageLength := fs.IntP("length", "l", 66, "set page length to PAGE_LENGTH lines (<= 10 implies -t)")
 	width := fs.IntP("width", "w", 72, "set page width to PAGE_WIDTH columns for multi-column output")
@@ -73,10 +76,10 @@ func run(rc *tool.RunContext, args []string) int {
 	pages := fs.String("pages", "", "print only pages in FIRST[:LAST] range")
 	expandTabs := fs.BoolP("expand-tabs", "e", false, "expand input tabs to spaces")
 	across := fs.BoolP("across", "a", false, "(not supported) fill columns across rather than down")
-	columns := fs.Int("columns", 1, "(not supported above 1) produce COLUMN columns")
-	fs.IntP("column", "", 1, "alias for --columns (not supported above 1)")
-	_ = fs.StringP("separator", "s", "\t", "separate columns by CHAR (multi-column output only; no effect here)")
-	_ = fs.StringP("sep-string", "S", "", "separate columns by STRING (multi-column output only; no effect here)")
+	columns := fs.Int("columns", 1, "produce COLUMN columns, filled down")
+	fs.IntP("column", "", 1, "alias for --columns")
+	separator := fs.StringP("separator", "s", "", "separate columns by CHAR")
+	sepString := fs.StringP("sep-string", "S", "", "separate columns by STRING")
 	merge := fs.BoolP("merge", "m", false, "(not supported) print files in parallel, one per column")
 	formFeed := fs.BoolP("form-feed", "F", false, "use form feed instead of blank lines to end pages")
 	formFeedLower := fs.BoolP("f", "f", false, "use form feed instead of blank lines to end pages")
@@ -100,9 +103,6 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if *columns <= 0 {
 		return tool.UsageError(rc, cmd, "invalid column count: %d", *columns)
-	}
-	if *columns > 1 {
-		return tool.NotSupported(rc, cmd, "--columns greater than 1 (multi-column output)")
 	}
 	if *pageLength <= 0 {
 		return tool.UsageError(rc, cmd, "invalid page length: %d", *pageLength)
@@ -134,6 +134,10 @@ func run(rc *tool.RunContext, args []string) int {
 		ffBreaks:  !*omitPagination,
 		pageStart: pageStart, pageEnd: pageEnd,
 		firstLineNum: *firstLineNum,
+		columns:      *columns, separator: *separator,
+	}
+	if *sepString != "" {
+		o.separator = *sepString
 	}
 	_ = joinLines
 	_ = indentStyle
@@ -201,6 +205,36 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
+// scanColumnOption recognizes pr's standalone -N column shorthand. It is
+// deliberately a small pre-scan: values belonging to options such as -o are
+// left alone, so a negative numeric value is still reported by that option's
+// normal validation.
+func scanColumnOption(args []string) []string {
+	const requiresValue = "-D -N -S -W -h -l -o -s -w --date-format --first-line-number --header --indent --length --page-width --separator --sep-string --width --pages --columns --column"
+	needValue := map[string]bool{}
+	for _, name := range strings.Fields(requiresValue) {
+		needValue[name] = true
+	}
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if i > 0 && needValue[args[i-1]] {
+			out = append(out, arg)
+			continue
+		}
+		if len(arg) > 1 && arg[0] == '-' && strings.Trim(arg[1:], "0123456789") == "" {
+			out = append(out, "--columns="+arg[1:])
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
 func open(rc *tool.RunContext, name string) (io.Reader, io.Closer, string, time.Time, error) {
 	if name == "-" {
 		if rc.In == nil {
@@ -250,6 +284,9 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 		physPerLine = 2
 	}
 	physBudget := o.bodyLines * physPerLine
+	if o.columns > 1 {
+		return printVertical(segments, w, headerLabel, stamp, o, physPerLine)
+	}
 
 	page := 1
 	lineNo := o.firstLineNum
@@ -295,6 +332,89 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 				if _, werr := w.WriteString("\f"); werr != nil {
 					return werr
 				}
+			}
+		}
+	}
+	return nil
+}
+
+func printVertical(segments [][]string, w *bufio.Writer, headerLabel string, stamp time.Time, o options, physPerLine int) error {
+	page := 1
+	lineNo := o.firstLineNum
+	pageSize := o.bodyLines * o.columns
+	columnWidth := o.width / o.columns
+	if columnWidth < 1 {
+		columnWidth = 1
+	}
+	for si, seg := range segments {
+		for _, chunk := range chunkLines(seg, pageSize) {
+			emit := inPageRange(page, o)
+			if emit && !o.omitHeader {
+				if _, err := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(headerLabel, stamp, page, o)); err != nil {
+					return err
+				}
+			}
+			rows := (len(chunk) + o.columns - 1) / o.columns
+			formatted := make([]string, len(chunk))
+			cellOptions := o
+			cellOptions.indent = 0
+			for i, inputLine := range chunk {
+				line := formatLine(inputLine, lineNo+i, cellOptions)
+				line = strings.TrimSuffix(line, "\n")
+				if len(line) > columnWidth {
+					line = line[:columnWidth]
+				}
+				formatted[i] = line
+			}
+			lineNo += len(chunk)
+			for row := 0; row < rows; row++ {
+				if !emit {
+					continue
+				}
+				if _, err := w.WriteString(strings.Repeat(" ", o.indent)); err != nil {
+					return err
+				}
+				for col := 0; col < o.columns; col++ {
+					index := row + col*rows
+					if index >= len(formatted) {
+						continue
+					}
+					line := formatted[index]
+					if col > 0 {
+						if _, err := w.WriteString(o.separator); err != nil {
+							return err
+						}
+					}
+					if o.separator == "" && col < o.columns-1 && index+rows < len(formatted) {
+						line += strings.Repeat(" ", columnWidth-len(line))
+					}
+					if _, err := w.WriteString(line); err != nil {
+						return err
+					}
+				}
+				if _, err := w.WriteString("\n"); err != nil {
+					return err
+				}
+				if o.doubleSpace {
+					if _, err := w.WriteString("\n"); err != nil {
+						return err
+					}
+				}
+			}
+			if emit && !o.omitHeader {
+				if o.formFeed {
+					if _, err := w.WriteString("\f"); err != nil {
+						return err
+					}
+				} else if _, err := w.WriteString(strings.Repeat("\n", (o.bodyLines-rows)*physPerLine+linesPerTrailer)); err != nil {
+					return err
+				}
+			}
+			page++
+		}
+		if o.omitHeader && o.ffBreaks && si < len(segments)-1 && inPageRange(page-1, o) {
+			if _, err := w.WriteString("\f"); err != nil {
+				return err
 			}
 		}
 	}

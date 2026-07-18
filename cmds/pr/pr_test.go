@@ -186,12 +186,39 @@ func TestPRInputFormFeedsBreakPages(t *testing.T) {
 	}
 }
 
-func TestPRColumnsAndMergeNotSupported(t *testing.T) {
-	_, errb, code := runPR(t, t.TempDir(), "a\n", "--columns", "2")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Fatalf("pr --columns 2 code=%d err=%q", code, errb)
+func TestPRVerticalColumns(t *testing.T) {
+	input := "a\nbb\nc\ndd\ne\n"
+	want := "a    dd\nbb   e\nc\n"
+	for _, args := range [][]string{{"-t", "-w", "10", "-2"}, {"-t", "-w", "10", "--columns=2"}, {"-t", "-w", "10", "--column", "2"}} {
+		out, errb, code := runPR(t, t.TempDir(), input, args...)
+		if out != want || errb != "" || code != 0 {
+			t.Errorf("pr %v = (%q, %q, %d), want (%q, \"\", 0)", args, out, errb, code, want)
+		}
 	}
-	_, errb, code = runPR(t, t.TempDir(), "a\n", "-a")
+}
+
+func TestPRVerticalColumnsUnevenFinalPage(t *testing.T) {
+	out, errb, code := runPR(t, t.TempDir(), "a\nb\nc\nd\ne\nf\ng\n", "-t", "-l", "3", "-w", "10", "--columns=2")
+	want := "a    d\nb    e\nc    f\ng\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("pr vertical uneven final page = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestPRVerticalColumnsInteractions(t *testing.T) {
+	out, errb, code := runPR(t, t.TempDir(), "a\nb\n", "-t", "-w", "10", "-o", "2", "-s:", "-2")
+	if want := "  a:b\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr vertical separator/margin = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+
+	out, errb, code = runPR(t, t.TempDir(), "a\nb\nc\nd\n", "-t", "-w", "10", "-d", "-2")
+	if want := "a    c\n\nb    d\n\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr vertical double-space = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestPRColumnsAndMergeNotSupported(t *testing.T) {
+	_, errb, code := runPR(t, t.TempDir(), "a\n", "-a")
 	if code != 2 || !strings.Contains(errb, "not supported") {
 		t.Fatalf("pr -a code=%d err=%q", code, errb)
 	}
@@ -244,13 +271,13 @@ func TestPRFirstLineNumber(t *testing.T) {
 
 func TestPRNewFlagAliases(t *testing.T) {
 	// --column is an alias for --columns
-	_, errb, code := runPR(t, t.TempDir(), "a\n", "--column", "2")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Fatalf("pr --column 2 code=%d err=%q", code, errb)
+	out, errb, code := runPR(t, t.TempDir(), "a\nb\n", "-t", "-w", "10", "--column", "2")
+	if out != "a    b\n" || errb != "" || code != 0 {
+		t.Fatalf("pr --column 2 = (%q, %q, %d)", out, errb, code)
 	}
 
 	// -J is accepted (join-lines, no-op)
-	out, _, code := runPR(t, t.TempDir(), "a\nb\n", "-J", "-t")
+	out, _, code = runPR(t, t.TempDir(), "a\nb\n", "-J", "-t")
 	if out != "a\nb\n" || code != 0 {
 		t.Fatalf("pr -J = (%q, %d)", out, code)
 	}
