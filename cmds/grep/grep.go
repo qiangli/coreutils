@@ -60,6 +60,7 @@ type grepper struct {
 	filesWith  bool
 	filesWout  bool
 	quiet      bool
+	silent     bool
 	lineNum    bool
 	showName   bool
 	maxCount   int // -1 = unlimited
@@ -96,6 +97,8 @@ func run(rc *tool.RunContext, args []string) int {
 	maxCount := fs.IntP("max-count", "m", -1, "stop after NUM selected lines")
 	quiet := fs.BoolP("quiet", "q", false, "suppress all normal output")
 	silent := fs.Bool("silent", false, "same as --quiet")
+	suppressErrors := fs.BoolP("no-messages", "s", false, "suppress error messages")
+	patternFiles := fs.StringArrayP("file", "f", nil, "obtain patterns from FILE")
 	lineNum := fs.BoolP("line-number", "n", false, "print line number with output lines")
 	noFilename := fs.BoolP("no-filename", "h", false, "suppress the file name prefix on output")
 	withFilename := fs.BoolP("with-filename", "H", false, "print file name with output lines")
@@ -122,14 +125,42 @@ func run(rc *tool.RunContext, args []string) int {
 		return 2
 	}
 
-	pats := *patterns
+	pats := append([]string(nil), *patterns...)
 	files := operands
-	if len(pats) == 0 {
+	var err error
+	if len(pats) == 0 && len(*patternFiles) == 0 {
 		if len(operands) == 0 {
 			return tool.UsageError(rc, cmd, "missing pattern; usage: %s [OPTION]... PATTERNS [FILE]...", cmd.Name)
 		}
 		pats = operands[:1]
 		files = operands[1:]
+	}
+	for _, name := range *patternFiles {
+		var r io.Reader
+		var f *os.File
+		if name == "-" {
+			r = rc.In
+		} else {
+			f, err = os.Open(rc.Path(name))
+			if err != nil {
+				if !*suppressErrors {
+					fmt.Fprintf(rc.Err, "%s: %s: %s\n", cmd.Name, name, pathErrMsg(err))
+				}
+				return 2
+			}
+			r = f
+		}
+		filePats, readErr := readPatternFile(r)
+		if f != nil {
+			f.Close()
+		}
+		if readErr != nil {
+			if !*suppressErrors {
+				fmt.Fprintf(rc.Err, "%s: %s: %s\n", cmd.Name, name, pathErrMsg(readErr))
+			}
+			return 2
+		}
+		pats = append(pats, filePats...)
 	}
 	// A pattern argument containing newlines is a list of patterns.
 	var split []string
@@ -164,6 +195,7 @@ func run(rc *tool.RunContext, args []string) int {
 		filesWith:  *filesWith,
 		filesWout:  *filesWout,
 		quiet:      *quiet || *silent,
+		silent:     *suppressErrors,
 		lineNum:    *lineNum,
 		maxCount:   *maxCount,
 		include:    *include,
@@ -209,7 +241,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		if st.IsDir() {
 			if !recursive {
-				fmt.Fprintf(rc.Err, "%s: %s: Is a directory\n", cmd.Name, f)
+				if !g.silent {
+					fmt.Fprintf(rc.Err, "%s: %s: Is a directory\n", cmd.Name, f)
+				}
 				g.anyErr = true
 				continue
 			}
@@ -231,7 +265,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	// Transparency: announce what --agentic hid, so a short/empty result is never
 	// silently misleading. stderr only (stdout stays pure matches).
-	if n := g.matcher.Hidden(); n > 0 && !g.quiet {
+	if n := g.matcher.Hidden(); n > 0 && !g.quiet && !g.silent {
 		fmt.Fprintf(rc.Err, "%s: --agentic skipped %d ignored path(s) (run without --agentic to include them)\n", cmd.Name, n)
 	}
 
@@ -293,6 +327,9 @@ func (m multiMatcher) FindStringIndex(s string) []int {
 // which `grep -w 'a\|ab'` would report the "a" alternative, fail the
 // word-boundary test, and wrongly reject the line "ab".
 func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase, longest bool) (grepMatcher, error) {
+	if len(pats) == 0 {
+		return noMatcher{}, nil
+	}
 	if !fixed && !extended {
 		needBRE := false
 		for _, p := range pats {
@@ -390,6 +427,22 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase, longest 
 		re.Longest()
 	}
 	return re, nil
+}
+
+type noMatcher struct{}
+
+func (noMatcher) MatchString(string) bool      { return false }
+func (noMatcher) FindStringIndex(string) []int { return nil }
+
+func readPatternFile(r io.Reader) ([]string, error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
+	sc.Split(scanLinesKeepCR)
+	var pats []string
+	for sc.Scan() {
+		pats = append(pats, sc.Text())
+	}
+	return pats, sc.Err()
 }
 
 func breNeedsPackageMatcher(p string) bool {
@@ -667,6 +720,9 @@ func (g *grepper) printLine(name string, n int, line string) {
 
 func (g *grepper) report(name string, err error) {
 	g.anyErr = true
+	if g.silent {
+		return
+	}
 	fmt.Fprintf(g.rc.Err, "%s: %s: %s\n", cmd.Name, name, pathErrMsg(err))
 }
 
