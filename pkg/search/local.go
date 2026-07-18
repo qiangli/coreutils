@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/qiangli/coreutils/pkg/kb"
@@ -19,7 +20,7 @@ import (
 
 // LocalResult is one local hit, in a uniform shape across domains.
 type LocalResult struct {
-	Kind string `json:"kind"` // "content" | "file" | "kb"
+	Kind string `json:"kind"` // "content" | "file" | "kb" | "route"
 	Path string `json:"path"`
 	Line int    `json:"line,omitempty"`
 	Text string `json:"text,omitempty"`
@@ -53,7 +54,9 @@ func Local(query string, opt LocalOptions) ([]LocalResult, error) {
 		dir, _ = os.Getwd()
 	}
 
-	var out []LocalResult
+	// An explicit --domain (content|files|kb) is honored for back-compat. With no
+	// domain, the router classifies the query into a lane and dispatches to the
+	// cheapest primitive that can answer it (docs/bashy-search-design.md).
 	switch strings.ToLower(strings.TrimSpace(opt.Domain)) {
 	case "kb":
 		return searchKB(q, max)
@@ -61,10 +64,27 @@ func Local(query string, opt LocalOptions) ([]LocalResult, error) {
 		return scanTree(dir, q, max, true)
 	case "content":
 		return scanTree(dir, q, max, false)
-	default: // content + kb
-		out, _ = scanTree(dir, q, max, false)
+	}
+
+	lane, term := Classify(q)
+	switch lane {
+	case LaneFiles:
+		return scanTree(dir, term, max, true)
+	case LaneKB:
+		return searchKB(term, max)
+	case LaneSymbol, LaneRefs:
+		// Not yet answered in-process — these need ast/graph exposed as a callable
+		// library (the P0.5 extraction). Until then, route: name the verb that
+		// answers it so the caller (or agent) runs it directly.
+		return []LocalResult{{
+			Kind: "route",
+			Path: laneVerb(lane),
+			Text: "run `bashy " + laneVerb(lane) + " " + term + "` — " + string(lane) + " intent is a code-intel lane, not a text scan",
+		}}, nil
+	default: // LaneContent → content scan + kb backfill (a scan answers or narrows anything)
+		out, _ := scanTree(dir, term, max, false)
 		if len(out) < max {
-			if kbHits, _ := searchKB(q, max-len(out)); len(kbHits) > 0 {
+			if kbHits, _ := searchKB(term, max-len(out)); len(kbHits) > 0 {
 				out = append(out, kbHits...)
 			}
 		}
@@ -76,7 +96,7 @@ func Local(query string, opt LocalOptions) ([]LocalResult, error) {
 // the usual noise and binary files. Case-insensitive substring — a scan, not a
 // regex index.
 func scanTree(dir, query string, max int, byName bool) ([]LocalResult, error) {
-	needle := strings.ToLower(query)
+	match := buildMatcher(query)
 	var out []LocalResult
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || len(out) >= max {
@@ -92,7 +112,7 @@ func scanTree(dir, query string, max int, byName bool) ([]LocalResult, error) {
 			return nil
 		}
 		if byName {
-			if strings.Contains(strings.ToLower(d.Name()), needle) {
+			if match(d.Name()) {
 				out = append(out, LocalResult{Kind: "file", Path: rel(dir, path)})
 			}
 			return nil
@@ -111,7 +131,7 @@ func scanTree(dir, query string, max int, byName bool) ([]LocalResult, error) {
 		for sc.Scan() {
 			ln++
 			line := sc.Text()
-			if strings.Contains(strings.ToLower(line), needle) {
+			if match(line) {
 				out = append(out, LocalResult{Kind: "content", Path: rel(dir, path), Line: ln, Text: strings.TrimSpace(line)})
 				if len(out) >= max {
 					return filepath.SkipAll
@@ -150,4 +170,24 @@ func rel(base, path string) string {
 		return r
 	}
 	return path
+}
+
+// buildMatcher returns a line/name predicate for a query. When the query carries
+// regex metacharacters and compiles cleanly, it is a case-insensitive regex;
+// otherwise (and on a bad pattern) it is a case-insensitive literal substring —
+// the fast, no-surprise default. This is the interim in-process matcher; the
+// design's endpoint is to delegate to the coreutils grep engine once that is
+// exposed as a callable library (`grep.Search`) rather than a cobra command.
+func buildMatcher(query string) func(string) bool {
+	if hasRegexMeta(query) {
+		if re, err := regexp.Compile("(?i)" + query); err == nil {
+			return re.MatchString
+		}
+	}
+	needle := strings.ToLower(query)
+	return func(s string) bool { return strings.Contains(strings.ToLower(s), needle) }
+}
+
+func hasRegexMeta(s string) bool {
+	return strings.ContainsAny(s, `.*+?()[]{}|^$\`)
 }
