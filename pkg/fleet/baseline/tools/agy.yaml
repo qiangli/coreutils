@@ -7,7 +7,12 @@ cli:
   binary: agy
   launch:
     exec: agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}
-    steer_exec: agy --dangerously-skip-permissions --model {model} -i {prompt}
+    # Bare `agy --model X` (no -i, no -p) opens agy's OWN interactive TUI — that is
+    # the native steerable session, so the operator sees agy's real UI (not a bashy
+    # wrapper) and the first message arrives over the control channel (supports_say).
+    # `-i <prompt>` REQUIRES an initial-prompt argument and is only for a one-shot
+    # seed; using it here dangled the flag when a human opened an empty session.
+    steer_exec: agy --dangerously-skip-permissions --model {model}
     prompt_position: last
     trust_preseed: none
 
@@ -19,7 +24,7 @@ cli:
     # submitted. Two writes (text, pause, Enter) and it submits.
     supports_say: true
     supports_graceful_quit: true
-    notes: headless `-p` (use `-i` for a steerable TUI). Bump --print-timeout (default 5m).
+    notes: headless `-p`; bare `agy --model X` opens the steerable TUI (`-i` is a one-shot seed only). Bump --print-timeout (default 5m).
     auth_hint: >-
       Antigravity requires a browser sign-in: run `agy` once interactively and complete the
       login, then it works headless. Not usable in a headless fleet until signed in.
