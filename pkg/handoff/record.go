@@ -114,13 +114,15 @@ type Record struct {
 	//                 point of contact across EVERY project on the machine. A
 	//                 headless `codex exec`/`--print` is deaf to the human and
 	//                 cannot steward, so a steward is NEVER launched headless.
-	//   - conductor = PROJECT-scoped (one project, possibly a superproject/
-	//                 umbrella spanning repos) + HEADLESS OR INTERACTIVE. The
+	//   - conductor = bounded-WORKSTREAM-scoped (one repo, one project, or a
+	//                 cross-repo initiative) + HEADLESS OR INTERACTIVE. The
 	//                 execution loop (decompose → isolate → gate → converge to a
 	//                 verifier); the GATE is its safety, not dialogue, so either
 	//                 mode is fine.
-	// A steward owns the host and LAUNCHES conductors (one per project); it does
-	// not become one.
+	// A steward owns the host and chooses how many disjoint conductor workstreams
+	// are warranted. It may also retain or delegate separate direct work. Ownership
+	// never overlaps: a conductor exclusively manages its workers until an explicit
+	// transfer is recorded.
 	Role string `json:"role,omitempty"`
 
 	// Work is the in-flight state — the piece nothing else captured, and the
