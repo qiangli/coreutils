@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"unicode"
 
@@ -61,10 +62,13 @@ func run(rc *tool.RunContext, args []string) int {
 		// filesystem root itself is never attempted. Clean first so
 		// a trailing separator does not yield the operand itself as
 		// its own first "ancestor".
-		cur := filepath.Clean(op)
+		cur := parentStart(op)
 		for {
 			parent := filepath.Dir(cur)
-			if parent == cur || parent == "." || filepath.Dir(parent) == parent {
+			if strings.HasPrefix(cur, "."+string(filepath.Separator)) && parent != "." && !strings.HasPrefix(parent, "."+string(filepath.Separator)) {
+				parent = "." + string(filepath.Separator) + parent
+			}
+			if parent == cur || (parent == "." && !strings.HasPrefix(cur, "."+string(filepath.Separator))) || (parent != "." && filepath.Dir(parent) == parent) {
 				break
 			}
 			cur = parent
@@ -79,6 +83,18 @@ func run(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
+// parentStart cleans trailing separators without discarding an explicit
+// current-directory prefix. The prefix is significant to -p: for ./a/b,
+// the current directory is an ancestor that rmdir must try after a and
+// report if it cannot be removed.
+func parentStart(op string) string {
+	cur := filepath.Clean(op)
+	if strings.HasPrefix(op, "."+string(filepath.Separator)) && cur != "." && !strings.HasPrefix(cur, "."+string(filepath.Separator)) {
+		return "." + string(filepath.Separator) + cur
+	}
+	return cur
+}
+
 // remove1 removes one empty directory, reporting success. The -v
 // diagnostic is printed before the attempt, as GNU rmdir does.
 func (r *rm) remove1(op string) bool {
@@ -87,6 +103,13 @@ func (r *rm) remove1(op string) bool {
 	}
 	if op == "" {
 		r.errf("failed to remove '': No such file or directory")
+		return false
+	}
+	// RunContext.Path normalizes a relative operand before the filesystem
+	// call, so resolving "." would otherwise turn it into the working
+	// directory itself and permit os.Remove to remove that directory.
+	if op == "." {
+		r.errf("failed to remove '.': Invalid argument")
 		return false
 	}
 	rp := r.rc.Path(op)

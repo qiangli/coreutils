@@ -111,6 +111,23 @@ func TestRmdirParents(t *testing.T) {
 	}
 }
 
+func TestRmdirParentsExplicitCurrentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-p", "./a/b")
+	if code != 1 || !strings.Contains(errb, "failed to remove '.'") {
+		t.Errorf("code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
+		t.Error("explicit current-directory path did not remove its empty ancestors")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("working directory was removed: %v", err)
+	}
+}
+
 func TestRmdirParentsStopsOnNonEmpty(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
