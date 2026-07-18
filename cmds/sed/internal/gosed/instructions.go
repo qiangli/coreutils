@@ -100,7 +100,10 @@ func cmd_print(svm *vm) error {
 	svm.ip++
 
 	writeString(svm, svm.pat)
-	return writeString(svm, "\n")
+	if svm.patNL {
+		return writeString(svm, "\n")
+	}
+	return nil
 }
 
 // ---------------------------------------------------
@@ -114,7 +117,10 @@ func cmd_printFirstLine(svm *vm) error {
 	}
 
 	writeString(svm, svm.pat[:idx])
-	return writeString(svm, "\n")
+	if idx < len(svm.pat) || svm.patNL {
+		return writeString(svm, "\n")
+	}
+	return nil
 }
 
 // ---------------------------------------------------
@@ -207,25 +213,22 @@ func cmd_fillNext(svm *vm) error {
 	svm.ip++
 
 	svm.pat = svm.nxtl
+	svm.patNL = svm.nxtlNL
 	svm.lineno++
 	svm.modified = false
 
-	var prefix = true
-	var line []byte
-
-	var lines []string
-
-	for prefix {
-		line, prefix, err = svm.input.ReadLine()
-		if err != nil {
-			break
+	var line string
+	line, err = svm.input.ReadString('\n')
+	if len(line) > 0 {
+		svm.nxtlNL = strings.HasSuffix(line, "\n")
+		if svm.nxtlNL {
+			line = strings.TrimSuffix(line, "\n")
 		}
-		// buf := make([]byte, len(line))
-		// copy(buf, line)
-		lines = append(lines, string(line))
+		svm.nxtl = line
+	} else {
+		svm.nxtl = ""
+		svm.nxtlNL = false
 	}
-
-	svm.nxtl = strings.Join(lines, "")
 
 	if err == io.EOF {
 		if len(svm.nxtl) == 0 {

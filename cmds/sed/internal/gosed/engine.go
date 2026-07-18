@@ -47,6 +47,8 @@ type vm struct {
 	appl     *string       // any lines we've been asked to 'a\'ppend, usually nil
 	overflow string        // any overflow we might have accumulated
 	lastl    bool          // true if it's the last line
+	patNL    bool          // true if the current pattern space's final input line ended in a newline
+	nxtlNL   bool          // true if the lookahead line ended in a newline
 	ins      []instruction // the instruction stream
 	ip       int           // the current locaiton in the instruction stream
 	input    *bufio.Reader // the input stream
