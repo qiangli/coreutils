@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -58,15 +59,34 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	if fs.Changed("files0-from") {
+	fromFiles0 := fs.Changed("files0-from")
+	badNames := 0
+	if fromFiles0 {
 		if len(operands) > 0 {
 			return tool.UsageError(rc, cmd, "file operands cannot be combined with --files0-from")
 		}
-		var err error
-		operands, err = readFiles0(rc, *files0From)
+		names, err := readFiles0(rc, *files0From)
 		if err != nil {
-			fmt.Fprintf(rc.Err, "wc: %s: %v\n", *files0From, sysErr(err))
+			// GNU reports an unreadable name list as a fatal error with
+			// its own "cannot open ... for reading" phrasing.
+			fmt.Fprintf(rc.Err, "wc: cannot open %s for reading: %v\n", quote(*files0From), sysErr(err))
 			return 1
+		}
+		// Validate each record before counting: GNU diagnoses zero-length
+		// names, and "-" when the list itself came from standard input,
+		// then keeps going with the remaining names.
+		operands = nil
+		for i, name := range names {
+			switch {
+			case name == "":
+				fmt.Fprintf(rc.Err, "wc: %s:%d: invalid zero-length file name\n", *files0From, i+1)
+				badNames++
+			case name == "-" && *files0From == "-":
+				fmt.Fprintf(rc.Err, "wc: when reading file names from stdin, no file name of %s allowed\n", quote(name))
+				badNames++
+			default:
+				operands = append(operands, name)
+			}
 		}
 	}
 	switch *totalWhen {
@@ -83,24 +103,22 @@ func run(rc *tool.RunContext, args []string) int {
 	width := numberWidth(rc, operands, sel.enabled())
 	w := bufio.NewWriter(rc.Out)
 	exit := 0
+	if badNames > 0 {
+		exit = 1
+	}
 
-	if len(operands) == 0 && !fs.Changed("files0-from") {
-		var in io.Reader = rc.In
-		if in == nil {
-			in = strings.NewReader("")
-		}
-		c, err := countReader(in, sel)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "wc: %v\n", err)
-			exit = 1
-		}
-		printRow(w, sel, c, width, "")
-		w.Flush()
-		return exit
+	// With no operands wc reads standard input as a single unnamed input.
+	// It still flows through the loop below so --total applies to it: GNU
+	// documents "always" as a total line for any number of inputs, and
+	// "only" as suppressing the per-input rows.
+	inputs := operands
+	stdinOnly := len(operands) == 0 && !fromFiles0
+	if stdinOnly {
+		inputs = []string{"-"}
 	}
 
 	var total counts
-	for _, name := range operands {
+	for _, name := range inputs {
 		var r io.Reader
 		var closer io.Closer
 		if name == "-" {
@@ -134,10 +152,14 @@ func run(rc *tool.RunContext, args []string) int {
 			total.maxLine = c.maxLine
 		}
 		if *totalWhen != "only" {
-			printRow(w, sel, c, width, name)
+			label := name
+			if stdinOnly {
+				label = ""
+			}
+			printRow(w, sel, c, width, label)
 		}
 	}
-	if shouldPrintTotal(*totalWhen, len(operands)) {
+	if shouldPrintTotal(*totalWhen, len(inputs)) {
 		printRow(w, sel, total, width, "total")
 	}
 	if err := w.Flush(); err != nil {
@@ -158,30 +180,45 @@ func shouldPrintTotal(mode string, nfiles int) bool {
 	}
 }
 
+// readFiles0 splits F's NUL-separated records. Empty records are kept so
+// the caller can diagnose them individually the way GNU does; only the
+// optional empty tail after a trailing NUL is dropped.
 func readFiles0(rc *tool.RunContext, name string) ([]string, error) {
 	var data []byte
 	var err error
-	if name == "-" {
+	switch name {
+	case "-":
+		if rc.In == nil {
+			return nil, nil
+		}
 		data, err = io.ReadAll(rc.In)
-	} else {
+	case "":
+		// rc.Path("") would resolve to the working directory; an empty
+		// operand names no file at all, so report it as ENOENT the way
+		// fopen("") does rather than stat'ing the directory.
+		return nil, syscall.ENOENT
+	default:
 		data, err = os.ReadFile(rc.Path(name))
 	}
 	if err != nil {
 		return nil, err
 	}
+	if len(data) == 0 {
+		return nil, nil
+	}
 	parts := bytes.Split(data, []byte{0})
+	if len(parts[len(parts)-1]) == 0 {
+		parts = parts[:len(parts)-1]
+	}
 	names := make([]string, 0, len(parts))
-	for i, p := range parts {
-		if len(p) == 0 {
-			if i == len(parts)-1 {
-				continue
-			}
-			return nil, fmt.Errorf("invalid zero-length file name")
-		}
+	for _, p := range parts {
 		names = append(names, string(p))
 	}
 	return names, nil
 }
+
+// quote renders a name the way GNU's quoteaf does in the C locale.
+func quote(s string) string { return "'" + s + "'" }
 
 // countReader makes one pass computing the counts sel needs. Only -m
 // (chars) and -L (max-line-length) require decoding UTF-8 runes; for

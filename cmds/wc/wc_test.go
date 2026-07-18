@@ -165,6 +165,113 @@ func TestWcErrors(t *testing.T) {
 	}
 }
 
+// --total applies to standard input too: "always" adds a total line for a
+// single input, "only" suppresses the per-input row.
+func TestWcTotalModesStdin(t *testing.T) {
+	out, _, code := runTool(t, "", "a b\nc\n", "-l", "--total=only")
+	if code != 0 || out != "2 total\n" {
+		t.Errorf("stdin --total=only: out=%q code=%d", out, code)
+	}
+	out, _, code = runTool(t, "", "a b\nc\n", "-l", "--total=always")
+	if code != 0 || out != "2\n2 total\n" {
+		t.Errorf("stdin --total=always: out=%q code=%d", out, code)
+	}
+	out, _, code = runTool(t, "", "hi\n", "-l", "--total=never")
+	if code != 0 || out != "1\n" {
+		t.Errorf("stdin --total=never: out=%q code=%d", out, code)
+	}
+	// auto stays a bare row: one input, no total.
+	out, _, code = runTool(t, "", "hi there\n")
+	if code != 0 || out != "      1       2       9\n" {
+		t.Errorf("stdin --total=auto: out=%q code=%d", out, code)
+	}
+}
+
+func TestWcFiles0FromUnreadable(t *testing.T) {
+	dir := t.TempDir()
+
+	// The errno text after the colon is the platform's; the GNU-shaped
+	// "cannot open X for reading" prefix is what this asserts.
+	_, errb, code := runTool(t, dir, "", "--files0-from=nosuch")
+	if code != 1 || !strings.Contains(errb, "wc: cannot open 'nosuch' for reading: ") {
+		t.Errorf("missing name list: err=%q code=%d", errb, code)
+	}
+
+	// An empty argument names no file; it must not resolve to the cwd
+	// (which would misreport the failure as "Is a directory").
+	_, errb, code = runTool(t, dir, "", "--files0-from=")
+	if code != 1 || !strings.Contains(errb, "wc: cannot open '' for reading: ") {
+		t.Errorf("empty name list: err=%q code=%d", errb, code)
+	}
+	if strings.Contains(errb, "Is a directory") {
+		t.Errorf("empty name list resolved to the cwd: err=%q", errb)
+	}
+}
+
+func TestWcFiles0FromBadNames(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "x\n")
+	writeFile(t, dir, "b", "y\n")
+
+	// A zero-length record is diagnosed by record number; the remaining
+	// names are still counted and the exit status is 1.
+	writeFile(t, dir, "zl", "a\x00\x00b\x00")
+	out, errb, code := runTool(t, dir, "", "-l", "--files0-from=zl")
+	if code != 1 || !strings.Contains(errb, "zl:2: invalid zero-length file name") {
+		t.Errorf("zero-length name: err=%q code=%d", errb, code)
+	}
+	if out != "1 a\n1 b\n2 total\n" {
+		t.Errorf("zero-length name survivors: out=%q", out)
+	}
+
+	// "-" is rejected only when the list itself came from standard input.
+	out, errb, code = runTool(t, dir, "a\x00-\x00b\x00", "-l", "--files0-from=-")
+	if code != 1 || !strings.Contains(errb, "when reading file names from stdin, no file name of '-' allowed") {
+		t.Errorf("dash from stdin list: err=%q code=%d", errb, code)
+	}
+	if out != "1 a\n1 b\n2 total\n" {
+		t.Errorf("dash from stdin survivors: out=%q", out)
+	}
+
+	// From a file list, "-" is an ordinary name meaning standard input.
+	writeFile(t, dir, "dashlist", "a\x00-\x00")
+	out, _, code = runTool(t, dir, "zz\n", "-l", "--files0-from=dashlist")
+	if code != 0 || out != "      1 a\n      1 -\n      2 total\n" {
+		t.Errorf("dash from file list: out=%q code=%d", out, code)
+	}
+}
+
+func TestWcFiles0FromEmptyList(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "empty", "")
+
+	out, errb, code := runTool(t, dir, "", "--files0-from=empty")
+	if code != 0 || out != "" || errb != "" {
+		t.Errorf("empty list: out=%q err=%q code=%d", out, errb, code)
+	}
+}
+
+func TestWcDirectoryOperand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "a", "x\n")
+
+	// The errno text is the platform's (GNU says "Is a directory"; Windows
+	// denies the read), so only the diagnostic shape is asserted here.
+	out, errb, code := runTool(t, dir, "", "d", "a")
+	if code != 1 || !strings.Contains(errb, "wc: d: ") {
+		t.Errorf("directory operand: err=%q code=%d", errb, code)
+	}
+	// GNU still emits a zero row for the directory, and the non-regular
+	// operand widens every column to 7.
+	want := "      0       0       0 d\n      1       1       2 a\n      1       1       2 total\n"
+	if out != want {
+		t.Errorf("directory operand: out=%q want %q", out, want)
+	}
+}
+
 func TestWcHelpVersion(t *testing.T) {
 	out, _, code := runTool(t, "", "", "--help")
 	if code != 0 || !strings.Contains(out, "Usage: wc") {
