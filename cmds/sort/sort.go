@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 	"unsafe"
@@ -192,6 +191,10 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	if *check || *checkSilent {
+		if s.merge {
+			fmt.Fprintf(rc.Err, "sort: options '-cm' are incompatible\n")
+			return 2
+		}
 		if *output != "" {
 			fmt.Fprintf(rc.Err, "sort: options '-co' are incompatible\n")
 			return 2
@@ -520,18 +523,49 @@ func (s *sorter) checkSorted(rc *tool.RunContext, op string) int {
 	return 0
 }
 
+// mergeFiles implements POSIX -m: a true k-way merge of runs that are
+// each assumed already sorted by the active ordering options. The runs
+// are interleaved lazily — disorder inside a run is passed through, not
+// re-sorted — and ties take the earlier file, so the merge is stable
+// across operands. Global -r is already reflected in s.compare, so
+// reverse-sorted runs merge without a separate reversal pass.
 func (s *sorter) mergeFiles(rc *tool.RunContext, operands []string, output string) int {
-	var lines lineSet
+	runs := make([][]string, 0, len(operands))
 	for _, op := range operands {
-		if err := lines.read(rc, op, s.zeroTerm); err != nil {
+		var ls lineSet
+		if err := ls.read(rc, op, s.zeroTerm); err != nil {
 			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
 			return 2
 		}
+		runs = append(runs, ls.lines)
 	}
-	if s.reverse {
-		slices.Reverse(lines.lines)
+	// Pairwise-merge the sorted runs until one remains; mergeRuns
+	// prefers the left (earlier-file) run on ties.
+	for len(runs) > 1 {
+		next := make([][]string, 0, len(runs)/2+1)
+		i := 0
+		for ; i+1 < len(runs); i += 2 {
+			a, b := runs[i], runs[i+1]
+			dst := make([]string, len(a)+len(b))
+			mergeRuns(dst, a, b, s.compare)
+			next = append(next, dst)
+		}
+		if i < len(runs) {
+			next = append(next, runs[i])
+		}
+		runs = next
 	}
-	return writeStringLines(rc, output, lines.lines, s.zeroTerm)
+	merged := runs[0]
+	if s.unique {
+		out := merged[:0]
+		for i, l := range merged {
+			if i == 0 || s.compareEqual(out[len(out)-1], l) != 0 {
+				out = append(out, l)
+			}
+		}
+		merged = out
+	}
+	return writeStringLines(rc, output, merged, s.zeroTerm)
 }
 
 func (s *sorter) randomShuffle(rc *tool.RunContext, operands []string, output string) int {

@@ -266,7 +266,7 @@ func TestSortNewFlags(t *testing.T) {
 		t.Errorf("-i: got=%q", out)
 	}
 
-	// --merge / -m: passes input through (already sorted)
+	// --merge / -m: a single sorted run passes through unchanged.
 	out, _, code = runTool(t, "a\nb\nc\n", "-m")
 	if code != 0 || out != "a\nb\nc\n" {
 		t.Errorf("-m: got=%q", out)
@@ -311,5 +311,93 @@ func TestSortNewFlags(t *testing.T) {
 	out, _, code = runToolDir(t, dir, "", "--files0-from", "list")
 	if code != 0 || out != "a\nb\nc\n" {
 		t.Errorf("--files0-from: got=%q code=%d", out, code)
+	}
+}
+
+// TestSortMerge pins POSIX -m: "merge only; the input files shall be
+// assumed to be already sorted". Merging is a true k-way interleave of
+// the sorted runs (not a concatenation, not a full re-sort), honoring
+// the active ordering options.
+func TestSortMerge(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("f1", "a\nc\n")
+	write("f2", "b\n")
+	write("f3", "a\nc\n")
+	write("empty", "")
+	write("u1", "a\nb\n")
+	write("u2", "b\nc\n")
+	write("r1", "c\na\n")
+	write("r2", "b\n")
+	write("k1", "b 1\na 2\n")
+	write("k2", "c 0\n")
+	write("bad1", "b\na\n")
+
+	cases := []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+	}{
+		{"two sorted runs interleave", "", []string{"-m", "f1", "f2"}, "a\nb\nc\n"},
+		{"three runs keep file order on ties", "", []string{"-m", "f1", "f2", "f3"}, "a\na\nb\nc\nc\n"},
+		{"empty run merges away", "", []string{"-m", "empty", "f2"}, "b\n"},
+		{"merge from standard input", "a\nz\n", []string{"-m", "f2", "-"}, "a\nb\nz\n"},
+		{"reverse merges reverse-sorted runs", "", []string{"-mr", "r1", "r2"}, "c\nb\na\n"},
+		{"unique suppresses duplicates across runs", "", []string{"-mu", "u1", "u2"}, "a\nb\nc\n"},
+		{"merge honors keys", "", []string{"-m", "-k2,2n", "k1", "k2"}, "c 0\nb 1\na 2\n"},
+		// POSIX assumes sorted input; a lazy merge must not re-sort
+		// disorder within a run (contrast with plain sort).
+		{"unsorted run is not re-sorted", "", []string{"-m", "bad1", "f3"}, "a\nb\na\nc\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runToolDir(t, dir, c.stdin, c.args...)
+		if out != c.want || code != 0 {
+			t.Errorf("%s: sort %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
+		}
+	}
+
+	// -m -o writes the merged stream to the file.
+	out, _, code := runToolDir(t, dir, "", "-m", "-o", "mout", "f1", "f2")
+	if code != 0 || out != "" {
+		t.Errorf("-m -o: out=%q code=%d", out, code)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "mout"))
+	if err != nil || string(got) != "a\nb\nc\n" {
+		t.Errorf("-m -o content = (%q, %v)", got, err)
+	}
+
+	// -c/-C check a single input file; -m is a different operation.
+	_, errb, code := runToolDir(t, dir, "", "-cm", "f1")
+	if code != 2 || !strings.Contains(errb, "'-cm' are incompatible") {
+		t.Errorf("-cm: code=%d err=%q", code, errb)
+	}
+}
+
+// TestSortIgnoreNonprintingTab pins POSIX -i: ignore all characters
+// that are non-printable in the C locale. A tab is not printable
+// (isprint(3) false), so it takes no part in the key comparison.
+func TestSortIgnoreNonprintingTab(t *testing.T) {
+	cases := []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+	}{
+		{"tab ignored in key", "ab\na\tc\n", []string{"-i"}, "ab\na\tc\n"},
+		{"equal keys fall to last resort", "ab\na\tb\n", []string{"-i"}, "a\tb\nab\n"},
+		{"unique keeps first of equal run", "ab\na\tb\n", []string{"-iu"}, "ab\n"},
+		{"control bytes still ignored", "a\x01b\nab\n", []string{"-i"}, "a\x01b\nab\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, c.stdin, c.args...)
+		if out != c.want || code != 0 {
+			t.Errorf("%s: sort %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
+		}
 	}
 }

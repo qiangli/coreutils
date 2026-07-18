@@ -174,11 +174,13 @@ func dictCompare(a, b string) int {
 	return strings.Compare(stripNonDict(a), stripNonDict(b))
 }
 
+// stripNonPrinting drops characters that are non-printable in the C
+// locale (isprint(3): 0x20–0x7E). Tab and control bytes take no part
+// in -i comparisons; newline never appears inside a line.
 func stripNonPrinting(s string) string {
 	b := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 32 && c <= 126 || c == '\t' || c == '\n' {
+		if c := s[i]; c >= 32 && c <= 126 {
 			b = append(b, c)
 		}
 	}
