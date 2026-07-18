@@ -48,11 +48,6 @@ func Supported() bool { return true }
 // the wrap helper), the first wrapper-initiated kill reason, if any.
 func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 	rows, cols := ptySize()
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: rows, Cols: cols})
-	if err != nil {
-		return 127, "", fmt.Errorf("pty.Start: %w", err)
-	}
-	defer ptmx.Close()
 
 	// killTree terminates the subagent and every transitive child.
 	// pty.Start put the subagent in its own session (it must be a
@@ -103,6 +98,23 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 			}()
 		})
 	}
+	// CommandContext otherwise kills only the immediate child. The PTY child is
+	// a session leader, so that can leave descendants holding its slave open;
+	// io.Copy then cannot return and a foreground caller stays in raw mode.
+	// Install this before Start: os/exec captures Cancel during Start when it
+	// arms the context watcher.
+	if cmd.Cancel != nil {
+		cmd.Cancel = func() error {
+			killTree("context cancelled", 2*time.Second)
+			return nil
+		}
+	}
+
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: rows, Cols: cols})
+	if err != nil {
+		return 127, "", fmt.Errorf("pty.Start: %w", err)
+	}
+	defer ptmx.Close()
 
 	// Forward termination signals from the wrapper to the subagent
 	// tree. Without this, SIGTERM kills the wrapper instantly
