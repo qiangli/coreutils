@@ -130,6 +130,13 @@ func TestCmpStdinAndSkips(t *testing.T) {
 	}
 }
 
+func TestCmpRejectsRepeatedStandardInput(t *testing.T) {
+	out, errb, code := runTool(t, "", "abc", "-", "-")
+	if code != 2 || out != "" || !strings.Contains(errb, "standard input") {
+		t.Errorf("repeated stdin: out=%q err=%q code=%d", out, errb, code)
+	}
+}
+
 func TestCmpErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a", "x")

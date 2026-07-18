@@ -60,6 +60,14 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		skip[i] = v
 	}
+	if sameSpecialSource(rc, name1, name2) {
+		if name1 == "-" && name2 == "-" {
+			fmt.Fprintln(rc.Err, "cmp: standard input may only be specified once")
+		} else {
+			fmt.Fprintf(rc.Err, "cmp: %s and %s are the same non-regular file\n", name1, name2)
+		}
+		return 2
+	}
 
 	s1, size1, code := openSrc(rc, name1, skip[0])
 	if code >= 0 {
@@ -80,6 +88,36 @@ func run(rc *tool.RunContext, args []string) int {
 	default:
 		return cmpFirstDiff(rc, name1, name2, s1, s2)
 	}
+}
+
+// sameSpecialSource reports whether both operands designate the same input
+// stream. Comparing a stream with itself would consume alternating bytes
+// rather than compare the stream's contents, so POSIX requires an error for
+// standard input and for the same FIFO, block device, or character device.
+func sameSpecialSource(rc *tool.RunContext, name1, name2 string) bool {
+	if name1 == "-" && name2 == "-" {
+		return true
+	}
+	info1, ok1 := sourceInfo(rc, name1)
+	info2, ok2 := sourceInfo(rc, name2)
+	if !ok1 || !ok2 || !os.SameFile(info1, info2) {
+		return false
+	}
+	mode := info1.Mode()
+	return mode&(os.ModeNamedPipe|os.ModeDevice|os.ModeCharDevice) != 0
+}
+
+func sourceInfo(rc *tool.RunContext, name string) (os.FileInfo, bool) {
+	if name == "-" {
+		f, ok := rc.In.(*os.File)
+		if !ok {
+			return nil, false
+		}
+		info, err := f.Stat()
+		return info, err == nil
+	}
+	info, err := os.Stat(rc.Path(name))
+	return info, err == nil
 }
 
 type src struct {
