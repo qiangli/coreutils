@@ -428,15 +428,15 @@ func RecordAttempt(t *Task, w *Worker, attempt int, res TaskResult) RunRecord {
 }
 
 // classifiedBy takes a producer's own classification, but does not take it on
-// trust: a carrier that returns an unknown status or code is downgraded to an
-// unclassified infra failure rather than allowed to write a verdict. Failure
-// reasons contain no prose, so reach details cannot enter a record through this
-// carrier surface.
+// trust: a carrier that returns success, an unknown status, or an unknown code
+// is downgraded to an unclassified infra failure rather than allowed to write a
+// verdict. Failure reasons contain no prose, so reach details cannot enter a
+// record through this carrier surface.
 func classifiedBy(c FleetFailure) (RunStatus, *FailureReason) {
 	status, reason := c.FleetFailure()
 	switch status {
 	case RunPassed:
-		return RunPassed, nil
+		return RunInfraFailed, &FailureReason{Code: FailUnclassified}
 	case RunFailed, RunInfraFailed:
 	default:
 		return RunInfraFailed, &FailureReason{Code: FailUnclassified}
