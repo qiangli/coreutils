@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -71,7 +72,7 @@ func run(rc *tool.RunContext, args []string) int {
 	operands = maybeStripTrailingSlashes(operands, fs.Changed("strip-trailing-slashes"))
 	backupMode := *backup
 	switch backupMode {
-	case "", "simple", "existing", "nil", "numbered", "t":
+	case "", "none", "off", "simple", "existing", "nil", "never", "numbered", "t":
 	default:
 		return tool.UsageError(rc, cmd, "invalid --backup value '%s'", backupMode)
 	}
@@ -154,16 +155,16 @@ func (m *mover) move(src, dst string) {
 		if m.update && !sourceNewer(sp, dp) {
 			return
 		}
+		if si, e1 := os.Stat(sp); e1 == nil {
+			if dsi, e2 := os.Stat(dp); e2 == nil && os.SameFile(si, dsi) {
+				m.errf("'%s' and '%s' are the same file", src, dst)
+				return
+			}
+		}
 		if m.interactive && !m.confirm(dst) {
 			return
 		}
 		if m.backup && !m.backupDest(dst) {
-			return
-		}
-	}
-	if si, e1 := os.Stat(sp); e1 == nil {
-		if dsi, e2 := os.Stat(dp); e2 == nil && os.SameFile(si, dsi) {
-			m.errf("'%s' and '%s' are the same file", src, dst)
 			return
 		}
 	}
@@ -202,23 +203,65 @@ func inputReader(r io.Reader) *bufio.Reader {
 
 func (m *mover) backupDest(dst string) bool {
 	dp := m.rc.Path(dst)
-	bp := dp + m.suffix
-	if m.backupMode == "numbered" || m.backupMode == "t" {
-		for i := 1; i < 1000; i++ {
-			candidate := fmt.Sprintf("%s%s.%d~", dp, m.suffix, i)
-			if _, err := os.Stat(candidate); os.IsNotExist(err) {
-				bp = candidate
-				break
-			}
+	mode := m.backupMode
+	if mode == "none" || mode == "off" || mode == "nil" {
+		return true
+	}
+	if mode == "" {
+		mode = "existing"
+	}
+	if mode == "existing" {
+		if hasNumberedBackup(dp) {
+			mode = "numbered"
+		} else {
+			mode = "simple"
 		}
+	}
+	bp := dp + m.suffix
+	if mode == "numbered" || mode == "t" {
+		n, err := nextNumberedBackup(dp)
+		if err != nil {
+			m.errf("cannot backup '%s': %s", dst, reason(err))
+			return false
+		}
+		bp = fmt.Sprintf("%s.~%d~", dp, n)
 	} else {
-		_ = os.Remove(bp)
+		if err := os.Remove(bp); err != nil && !os.IsNotExist(err) {
+			m.errf("cannot backup '%s': %s", dst, reason(err))
+			return false
+		}
 	}
 	if err := os.Rename(dp, bp); err != nil {
 		m.errf("cannot backup '%s': %s", dst, reason(err))
 		return false
 	}
 	return true
+}
+
+func hasNumberedBackup(path string) bool {
+	n, err := nextNumberedBackup(path)
+	return err == nil && n > 1
+}
+
+func nextNumberedBackup(path string) (int, error) {
+	dir, base := filepath.Dir(path), filepath.Base(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	max := 0
+	prefix := base + ".~"
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, "~") {
+			continue
+		}
+		n, err := strconv.Atoi(name[len(prefix) : len(name)-1])
+		if err == nil && n > max {
+			max = n
+		}
+	}
+	return max + 1, nil
 }
 
 func sourceNewer(src, dst string) bool {
@@ -348,7 +391,7 @@ func normalizeOptionalArgs(args []string) []string {
 		case a == "-Z" || a == "--context":
 			out[i] = "--context="
 		case a == "--backup":
-			out[i] = "--backup=simple"
+			out[i] = "--backup=existing"
 		case a == "--interactive=always" || a == "--interactive=yes":
 			out[i] = "--interactive"
 		case a == "--interactive=never" || a == "--interactive=no" || a == "--interactive=none":

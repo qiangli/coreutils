@@ -241,7 +241,7 @@ func TestMvNumberedBackupForm(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "new")
 	write(t, filepath.Join(dir, "dst"), "old")
-	write(t, filepath.Join(dir, "dst~.1~"), "previous")
+	write(t, filepath.Join(dir, "dst.~1~"), "previous")
 	_, errb, code := runTool(t, dir, "--backup=numbered", "src", "dst")
 	if code != 0 {
 		t.Fatalf("mv --backup=numbered: code=%d err=%q", code, errb)
@@ -249,8 +249,40 @@ func TestMvNumberedBackupForm(t *testing.T) {
 	if read(t, filepath.Join(dir, "dst")) != "new" {
 		t.Fatal("destination not moved")
 	}
-	if read(t, filepath.Join(dir, "dst~.2~")) != "old" {
+	if read(t, filepath.Join(dir, "dst.~2~")) != "old" {
 		t.Fatal("numbered backup was not created")
+	}
+}
+
+func TestMvBackupControlAndSameFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	_, errb, code := runTool(t, dir, "--backup=none", "src", "dst")
+	if code != 0 || errb != "" || read(t, filepath.Join(dir, "dst")) != "new" {
+		t.Fatalf("--backup=none: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "dst~")); !os.IsNotExist(err) {
+		t.Fatal("--backup=none created a backup")
+	}
+
+	write(t, filepath.Join(dir, "src"), "newer")
+	write(t, filepath.Join(dir, "dst.~1~"), "previous")
+	_, errb, code = runTool(t, dir, "--backup=existing", "src", "dst")
+	if code != 0 || errb != "" || read(t, filepath.Join(dir, "dst.~2~")) != "new" {
+		t.Fatalf("--backup=existing: code=%d err=%q", code, errb)
+	}
+
+	write(t, filepath.Join(dir, "same"), "keep")
+	_, errb, code = runTool(t, dir, "--backup", "same", "same")
+	if code != 1 || !strings.Contains(errb, "'same' and 'same' are the same file") {
+		t.Fatalf("same-file backup: code=%d err=%q", code, errb)
+	}
+	if read(t, filepath.Join(dir, "same")) != "keep" {
+		t.Fatal("same-file move changed the source")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "same~")); !os.IsNotExist(err) {
+		t.Fatal("same-file move created a backup")
 	}
 }
 
