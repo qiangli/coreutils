@@ -46,7 +46,7 @@ func run(rc *tool.RunContext, args []string) int {
 	skipFields := fs.IntP("skip-fields", "f", 0, "avoid comparing the first N fields")
 	skipChars := fs.IntP("skip-chars", "s", 0, "avoid comparing the first N characters")
 	checkChars := fs.IntP("check-chars", "w", 0, "compare no more than N characters in lines")
-	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	operands, code := tool.Parse(rc, cmd, fs, normalizeOptionalShortArgs(tool.AliasHelpVersion(args)))
 	if code >= 0 {
 		return code
 	}
@@ -183,6 +183,27 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// normalizeOptionalShortArgs supports GNU's -D[delimit-method] spelling.
+// pflag treats the suffix of an optional-argument shorthand as more short
+// flags, while GNU treats it as the argument to -D.
+func normalizeOptionalShortArgs(args []string) []string {
+	out := append([]string(nil), args...)
+	rest := false
+	for i, arg := range out {
+		if arg == "--" {
+			rest = true
+			continue
+		}
+		if rest {
+			continue
+		}
+		if len(arg) > 2 && arg[0] == '-' && arg[1] == 'D' && arg[2] != '=' {
+			out[i] = "-D=" + arg[2:]
+		}
+	}
+	return out
 }
 
 type delimiterMode int

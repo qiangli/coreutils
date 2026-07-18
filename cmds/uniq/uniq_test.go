@@ -53,6 +53,7 @@ func TestUniq(t *testing.T) {
 		{"zero terminated", "a\x00a\x00b\x00", []string{"-z"}, "a\x00b\x00"},
 		{"all repeated", "a\na\nb\nc\nc\nc\n", []string{"-D"}, "a\na\nc\nc\nc\n"},
 		{"all repeated separate", "a\na\nb\nc\nc\n", []string{"--all-repeated=separate"}, "a\na\n\nc\nc\n"},
+		{"all repeated attached prepend", "a\na\nb\nc\nc\n", []string{"-Dprepend"}, "\na\na\n\nc\nc\n"},
 		{"group prepend", "a\na\nb\n", []string{"--group=prepend"}, "\na\na\n\nb\n"},
 		{"group both", "a\na\nb\n", []string{"--group=both"}, "\na\na\n\n\nb\n\n"},
 	}
@@ -118,6 +119,10 @@ func TestUniqErrors(t *testing.T) {
 	_, errb, code = runTool(t, "", "--group=bad")
 	if code != 2 || !strings.Contains(errb, "invalid group method") {
 		t.Errorf("--group=bad: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, "", "-Dbad")
+	if code != 2 || !strings.Contains(errb, "invalid delimit method") {
+		t.Errorf("-Dbad: code=%d err=%q", code, errb)
 	}
 }
 
