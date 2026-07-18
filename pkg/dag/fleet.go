@@ -93,6 +93,10 @@ func (e *PlacementError) Error() string {
 	return "no worker offers " + describeConstraints(e.Constraints) + ": " + strings.Join(parts, "; ")
 }
 
+func (e *PlacementError) FleetFailure() (RunStatus, FailureReason) {
+	return RunInfraFailed, FailureReason{Code: FailNoWorker}
+}
+
 const defaultFactsMaxAge = 5 * time.Minute
 
 // offers reports whether the worker can host the given venue. An empty venue

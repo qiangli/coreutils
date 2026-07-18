@@ -51,13 +51,15 @@ type Engine struct {
 
 	// pool is the run-scoped worker pool, bound at the top of Run and cleared
 	// when it returns. Non-nil only under Fleet.
-	pool *Pool
+	pool     *Pool
+	attempts *attemptLog
 }
 
 // RunReport aggregates per-target results. In dry-run mode Results is empty and
 // Plan carries the ordered would-run/up-to-date plan instead.
 type RunReport struct {
 	Results []TaskResult
+	Records []RunRecord
 	Failed  bool
 	Plan    []PlanItem // populated only in DryRun mode
 }
@@ -104,6 +106,9 @@ func (e *Engine) Run(ctx context.Context, targets ...string) (RunReport, error) 
 		return RunReport{Plan: e.planFor(order, fp)}, nil
 	}
 
+	e.attempts = newAttemptLog(order)
+	defer func() { e.attempts = nil }()
+
 	// Bind the worker pool for this run. It is built once here, not per task:
 	// a pool constructed per dispatch would hand out a fresh set of slots every
 	// time and enforce no capacity at all.
@@ -127,6 +132,7 @@ func (e *Engine) Run(ctx context.Context, targets ...string) (RunReport, error) 
 	if e.Cache != nil {
 		e.Cache.Save()
 	}
+	report.Records = e.attempts.all()
 	return report, nil
 }
 
@@ -358,6 +364,7 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 					// reason instead of waiting for a slot that will never
 					// qualify, mirroring the missing-tool failure.
 					r = TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusFailed, ExitCode: 1, Err: err}
+					e.record(node.Task, worker, 1, r)
 				case e.conditionFalse(ctx, node):
 					r = TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusConditionSkipped}
 				case e.upToDate(node, fp):
@@ -530,6 +537,7 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 		attempts = 1
 	}
 	var res TaskResult
+	results := make([]TaskResult, 0, attempts)
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 && node.Task.Backoff > 0 {
 			select {
@@ -539,6 +547,7 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 		}
 		res = e.runAttempt(ctx, node, captureRun, worker)
 		res = applyExitContract(node.Task, res)
+		results = append(results, res)
 		if res.Status == StatusDone {
 			break
 		}
@@ -583,6 +592,10 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 		}
 	}
 	res.Host = node.Task.Host
+	results[len(results)-1] = res
+	for attempt, attemptResult := range results {
+		e.record(node.Task, worker, attempt+1, attemptResult)
+	}
 	return res
 }
 
