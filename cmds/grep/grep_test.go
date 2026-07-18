@@ -400,3 +400,89 @@ func TestGrepPOSIXRegexConformance(t *testing.T) {
 		}
 	}
 }
+
+func TestGrepOnlyMatching(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f1.txt", "abc 123 def 456\nno digits here\n")
+	writeFile(t, dir, "f2.txt", "789 xyz\n")
+
+	cases := []struct {
+		name  string
+		stdin string
+		dir   string
+		args  []string
+		want  string
+		code  int
+	}{
+		{
+			name:  "basic match",
+			stdin: "foo\nbar\n",
+			args:  []string{"-o", "o"},
+			want:  "o\no\n",
+			code:  0,
+		},
+		{
+			name:  "match with line numbers",
+			stdin: "foo\nbar\n",
+			args:  []string{"-o", "-n", "o"},
+			want:  "1:o\n1:o\n",
+			code:  0,
+		},
+		{
+			name: "regex match with multiple files",
+			dir:  dir,
+			args: []string{"-o", "-E", "[0-9]+", "f1.txt", "f2.txt"},
+			want: "f1.txt:123\nf1.txt:456\nf2.txt:789\n",
+			code: 0,
+		},
+		{
+			name:  "match with -w",
+			stdin: "foobar foo\n",
+			args:  []string{"-o", "-w", "foo"},
+			want:  "foo\n",
+			code:  0,
+		},
+		{
+			name:  "match with -v",
+			stdin: "foo\nbar\n",
+			args:  []string{"-o", "-v", "foo"},
+			want:  "bar\n",
+			code:  0,
+		},
+		{
+			name:  "empty match prevention",
+			stdin: "foo\n",
+			args:  []string{"-o", "o*"},
+			want:  "oo\n",
+			code:  0,
+		},
+		{
+			name:  "quiet overrides only-matching",
+			stdin: "foo\nbar\n",
+			args:  []string{"-o", "-q", "o"},
+			want:  "",
+			code:  0,
+		},
+		{
+			name:  "count overrides only-matching",
+			stdin: "foo\nbar\n",
+			args:  []string{"-o", "-c", "o"},
+			want:  "1\n",
+			code:  0,
+		},
+		{
+			name: "files-with-matches overrides only-matching",
+			dir:  dir,
+			args: []string{"-o", "-l", "123", "f1.txt", "f2.txt"},
+			want: "f1.txt\n",
+			code: 0,
+		},
+	}
+	for _, c := range cases {
+		out, errOut, code := runGrep(t, c.dir, c.stdin, c.args...)
+		if out != c.want || code != c.code {
+			t.Errorf("%s: grep %v = (%q, %d, err %q), want (%q, %d)",
+				c.name, c.args, out, code, errOut, c.want, c.code)
+		}
+	}
+}

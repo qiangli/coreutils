@@ -25,8 +25,8 @@ import (
 // excluded simply keeps the RE2 path. -x stays eligible (it becomes a
 // whole-line equality compare). The caller compiles the RE2 form
 // regardless, so every pattern-error path is unchanged.
-func literalPattern(pats []string, fixed, ignoreCase, word bool) ([]byte, bool) {
-	if ignoreCase || word || len(pats) != 1 {
+func literalPattern(pats []string, fixed, ignoreCase, word, onlyMatching bool) ([]byte, bool) {
+	if ignoreCase || word || onlyMatching || len(pats) != 1 {
 		return nil, false
 	}
 	if !fixed && strings.ContainsAny(pats[0], `.*[]^$\+?(){}|`) {
@@ -86,7 +86,7 @@ func (g *grepper) searchStreamLit(r io.Reader, name string) {
 	binary := bytes.IndexByte(buf[:min(dataLen, 32<<10)], 0) >= 0
 
 	selected, lineNo := 0, 0
-	stopped := false // scan ended early via litStop; summaries still print, pendErr never surfaced
+	stopped := false     // scan ended early via litStop; summaries still print, pendErr never surfaced
 	if g.maxCount != 0 { // -m 0 selects nothing and reads nothing
 		for {
 			done := eof || pendErr != nil

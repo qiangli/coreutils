@@ -53,17 +53,18 @@ type grepper struct {
 	rc *tool.RunContext
 	re grepMatcher
 
-	invert     bool
-	word       bool
-	lineRegexp bool
-	count      bool
-	filesWith  bool
-	filesWout  bool
-	quiet      bool
-	silent     bool
-	lineNum    bool
-	showName   bool
-	maxCount   int // -1 = unlimited
+	invert       bool
+	word         bool
+	lineRegexp   bool
+	count        bool
+	filesWith    bool
+	filesWout    bool
+	quiet        bool
+	silent       bool
+	lineNum      bool
+	showName     bool
+	maxCount     int // -1 = unlimited
+	onlyMatching bool
 
 	include    []string
 	exclude    []string
@@ -95,6 +96,7 @@ func run(rc *tool.RunContext, args []string) int {
 	filesWith := fs.BoolP("files-with-matches", "l", false, "print only names of FILEs with selected lines")
 	filesWout := fs.BoolP("files-without-match", "L", false, "print only names of FILEs with no selected lines")
 	maxCount := fs.IntP("max-count", "m", -1, "stop after NUM selected lines")
+	onlyMatching := fs.BoolP("only-matching", "o", false, "show only the part of a line matching PATTERN")
 	quiet := fs.BoolP("quiet", "q", false, "suppress all normal output")
 	silent := fs.Bool("silent", false, "same as --quiet")
 	suppressErrors := fs.BoolP("no-messages", "s", false, "suppress error messages")
@@ -186,27 +188,28 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	g := &grepper{
-		rc:         rc,
-		re:         re,
-		invert:     *invert,
-		word:       *word && !*lineRe, // -x makes -w a no-op (GNU)
-		lineRegexp: *lineRe,
-		count:      *count,
-		filesWith:  *filesWith,
-		filesWout:  *filesWout,
-		quiet:      *quiet || *silent,
-		silent:     *suppressErrors,
-		lineNum:    *lineNum,
-		maxCount:   *maxCount,
-		include:    *include,
-		exclude:    *exclude,
-		excludeDir: *excludeDir,
+		rc:           rc,
+		re:           re,
+		invert:       *invert,
+		word:         *word && !*lineRe, // -x makes -w a no-op (GNU)
+		lineRegexp:   *lineRe,
+		count:        *count,
+		filesWith:    *filesWith,
+		filesWout:    *filesWout,
+		quiet:        *quiet || *silent,
+		silent:       *suppressErrors,
+		lineNum:      *lineNum,
+		maxCount:     *maxCount,
+		include:      *include,
+		exclude:      *exclude,
+		excludeDir:   *excludeDir,
+		onlyMatching: *onlyMatching,
 	}
 	// Literal fast path: a single metachar-free pattern is plain
 	// substring work — searchStreamLit skips RE2 and per-line string
 	// allocation. Anything it can't serve byte-identically (-i, -w,
 	// multiple patterns, real regex) keeps the RE2 path unchanged.
-	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word); ok {
+	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok {
 		g.lit, g.useLit = lit, true
 	}
 	// --agentic (opt-in): a nil matcher when off skips nothing, so default
@@ -643,7 +646,11 @@ func (g *grepper) searchStream(r io.Reader, name string) {
 				if binary {
 					break // one summary line after the loop
 				}
-				g.printLine(name, lineNo, sc.Text())
+				if g.onlyMatching && !g.invert {
+					g.printMatches(name, lineNo, sc.Text())
+				} else {
+					g.printLine(name, lineNo, sc.Text())
+				}
 			}
 			if g.maxCount > 0 && selected >= g.maxCount {
 				break
@@ -701,6 +708,25 @@ func wordBoundaryOK(line string, s, e int) bool {
 
 func isWordByte(b byte) bool {
 	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func (g *grepper) printMatches(name string, lineNo int, line string) {
+	for i := 0; i <= len(line); {
+		loc := g.re.FindStringIndex(line[i:])
+		if loc == nil {
+			break
+		}
+		s, e := i+loc[0], i+loc[1]
+		matchLen := e - s
+		if matchLen > 0 {
+			if !g.word || wordBoundaryOK(line, s, e) {
+				g.printLine(name, lineNo, line[s:e])
+			}
+			i = e
+		} else {
+			i = s + 1
+		}
+	}
 }
 
 func (g *grepper) printLine(name string, n int, line string) {

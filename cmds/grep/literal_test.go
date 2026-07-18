@@ -7,32 +7,34 @@ import (
 
 func TestLiteralPattern(t *testing.T) {
 	tests := []struct {
-		pats       []string
-		fixed      bool
-		ignoreCase bool
-		word       bool
-		want       bool
+		pats         []string
+		fixed        bool
+		ignoreCase   bool
+		word         bool
+		onlyMatching bool
+		want         bool
 	}{
-		{[]string{"ERROR"}, false, false, false, true},
-		{[]string{""}, false, false, false, true},
-		{[]string{"a b/c-d_e"}, false, false, false, true},
-		{[]string{"ERROR", "WARN"}, false, false, false, false}, // multiple patterns
-		{[]string{"ERROR"}, false, true, false, false},          // -i
-		{[]string{"ERROR"}, false, false, true, false},          // -w
-		{[]string{"a.b"}, false, false, false, false},           // metachar
-		{[]string{"a*"}, false, false, false, false},
-		{[]string{`a\+`}, false, false, false, false},
-		{[]string{"a+b"}, false, false, false, false}, // ERE metachar, conservative for BRE too
-		{[]string{"a{2}"}, false, false, false, false},
-		{[]string{"a|b"}, false, false, false, false},
-		{[]string{"a.b"}, true, false, false, true}, // -F: everything is literal
-		{[]string{"a|b"}, true, false, false, true},
+		{[]string{"ERROR"}, false, false, false, false, true},
+		{[]string{""}, false, false, false, false, true},
+		{[]string{"a b/c-d_e"}, false, false, false, false, true},
+		{[]string{"ERROR", "WARN"}, false, false, false, false, false}, // multiple patterns
+		{[]string{"ERROR"}, false, true, false, false, false},          // -i
+		{[]string{"ERROR"}, false, false, true, false, false},          // -w
+		{[]string{"ERROR"}, false, false, false, true, false},          // -o
+		{[]string{"a.b"}, false, false, false, false, false},           // metachar
+		{[]string{"a*"}, false, false, false, false, false},
+		{[]string{`a\+`}, false, false, false, false, false},
+		{[]string{"a+b"}, false, false, false, false, false}, // ERE metachar, conservative for BRE too
+		{[]string{"a{2}"}, false, false, false, false, false},
+		{[]string{"a|b"}, false, false, false, false, false},
+		{[]string{"a.b"}, true, false, false, false, true}, // -F: everything is literal
+		{[]string{"a|b"}, true, false, false, false, true},
 	}
 	for _, tt := range tests {
-		lit, ok := literalPattern(tt.pats, tt.fixed, tt.ignoreCase, tt.word)
+		lit, ok := literalPattern(tt.pats, tt.fixed, tt.ignoreCase, tt.word, tt.onlyMatching)
 		if ok != tt.want {
-			t.Errorf("literalPattern(%q, fixed=%v, i=%v, w=%v) = %v, want %v",
-				tt.pats, tt.fixed, tt.ignoreCase, tt.word, ok, tt.want)
+			t.Errorf("literalPattern(%q, fixed=%v, i=%v, w=%v, o=%v) = %v, want %v",
+				tt.pats, tt.fixed, tt.ignoreCase, tt.word, tt.onlyMatching, ok, tt.want)
 		}
 		if ok && string(lit) != tt.pats[0] {
 			t.Errorf("literalPattern(%q) lit = %q", tt.pats, lit)
