@@ -108,6 +108,15 @@ func TestCatErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "x") {
 		t.Errorf("unknown short flag: err=%q code=%d", errb, code)
 	}
+
+	// -e, -t, and -u are GNU short-only options. Do not invent long
+	// spellings for them: an unknown option must remain an error.
+	for _, arg := range []string{"--show-ends-nonprinting", "--show-tabs-nonprinting", "--unbuffered"} {
+		_, errb, code = runTool(t, "", "", arg)
+		if code != 2 || !strings.Contains(errb, arg[2:]) {
+			t.Errorf("unknown short-only long spelling %q: err=%q code=%d", arg, errb, code)
+		}
+	}
 }
 
 func TestCatHelpVersion(t *testing.T) {
