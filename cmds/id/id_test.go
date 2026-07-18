@@ -182,20 +182,11 @@ func TestIDZFlag(t *testing.T) {
 }
 
 func TestIDRealFlag(t *testing.T) {
-	u := current(t)
-	out, _, code := runTool(t, "-r")
-	if code != 0 {
-		t.Fatalf("-r: code=%d", code)
-	}
-	if !strings.Contains(out, "uid="+u.Uid) {
-		t.Errorf("-r output %q missing uid", out)
-	}
-	out2, _, code := runTool(t, "--real")
-	if code != 0 {
-		t.Fatalf("--real: code=%d", code)
-	}
-	if out != out2 {
-		t.Errorf("-r vs --real mismatch: %q vs %q", out, out2)
+	for _, args := range [][]string{{"-r"}, {"--real"}, {"-r", "-G"}} {
+		_, errb, code := runTool(t, args...)
+		if code != 2 || !strings.Contains(errb, "cannot print only names or real IDs") {
+			t.Errorf("id %v: code=%d err=%q", args, code, errb)
+		}
 	}
 }
 
@@ -240,4 +231,44 @@ func TestIDPWithGN(t *testing.T) {
 		t.Errorf("-G -p output should be non-empty group names: %q", outG)
 	}
 	_ = u
+}
+
+func TestIDDefaultIncludesNames(t *testing.T) {
+	u := current(t)
+	out, _, code := runTool(t)
+	if code != 0 {
+		t.Fatalf("id: code=%d", code)
+	}
+	idName := u.Uid + "(" + u.Username + ")"
+	if !strings.Contains(out, idName) {
+		t.Errorf("default id output %q missing uid with name (expected %q)", out, idName)
+	}
+	if !strings.Contains(out, "(") {
+		t.Errorf("default id output %q should include group names in parenthesized form", out)
+	}
+}
+
+func TestIDRealFlagWithOptions(t *testing.T) {
+	u := current(t)
+	out, _, code := runTool(t, "-r", "-u")
+	if code != 0 {
+		t.Fatalf("-r -u: code=%d", code)
+	}
+	if strings.TrimSpace(out) != u.Uid {
+		t.Errorf("-r -u = %q, want uid %s", out, u.Uid)
+	}
+	out, _, code = runTool(t, "-r", "-g")
+	if code != 0 {
+		t.Fatalf("-r -g: code=%d", code)
+	}
+	if strings.TrimSpace(out) != u.Gid {
+		t.Errorf("-r -g = %q, want gid %s", out, u.Gid)
+	}
+	out, _, code = runTool(t, "-r", "-u", "-n")
+	if code != 0 {
+		t.Fatalf("-r -u -n: code=%d", code)
+	}
+	if strings.TrimSpace(out) != u.Username {
+		t.Errorf("-r -u -n = %q, want username %s", out, u.Username)
+	}
 }
