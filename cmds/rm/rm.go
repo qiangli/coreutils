@@ -48,6 +48,7 @@ type remover struct {
 func run(rc *tool.RunContext, args []string) int {
 	args = foldRShorthand(args)
 	args = normalizeOptionalArgs(args)
+	lastPromptOption := lastPromptOption(args)
 
 	fs := tool.NewFlags(cmd.Name)
 	recursive := fs.BoolP("recursive", "r", false, "remove directories and their contents recursively (-R is identical to -r)")
@@ -64,19 +65,26 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
+	forceMode, interactiveMode := *force, *interactive
+	switch lastPromptOption {
+	case promptForce:
+		interactiveMode = false
+	case promptInteractive:
+		forceMode = false
+	}
 	if len(operands) == 0 {
-		if *force {
-			return 0 // GNU: rm -f with no operands succeeds silently
+		if forceMode {
+			return 0
 		}
 		return tool.UsageError(rc, cmd, "missing operand")
 	}
 
-	ask := (*interactive || *interactiveOnce) && !*force
+	ask := (interactiveMode || *interactiveOnce) && !forceMode
 	if *interactiveOnce && !*interactive && len(operands) <= 3 && !*recursive {
 		ask = false
 	}
 	r := &remover{
-		rc: rc, recursive: *recursive, force: *force, dir: *dir,
+		rc: rc, recursive: *recursive, force: forceMode, dir: *dir,
 		interactive: ask, preserveRoot: *preserveRoot && !*noPreserveRoot,
 		verbose: *verbose, in: inputReader(rc.In),
 	}
@@ -98,6 +106,11 @@ func (r *remover) remove(op string) {
 		return
 	}
 	rp := r.rc.Path(op)
+	base := filepath.Base(filepath.Clean(op))
+	if base == "." || base == ".." {
+		r.errf("refusing to remove '%s'", op)
+		return
+	}
 	fi, err := os.Lstat(rp)
 	if err != nil {
 		if r.force && (errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)) {
@@ -152,12 +165,13 @@ func (r *remover) removeTree(op string) {
 	}
 	for _, e := range entries {
 		child := filepath.Join(op, e.Name())
-		if e.IsDir() {
-			r.removeTree(child)
-		} else {
-			r.removeFile(child)
-		}
+		r.remove(child)
 	}
+
+	if r.interactive && !r.confirm(op) {
+		return
+	}
+
 	if err := os.Remove(r.rc.Path(op)); err != nil {
 		r.errf("cannot remove '%s': %s", op, reason(err))
 		return
@@ -231,6 +245,43 @@ func normalizeOptionalArgs(args []string) []string {
 		}
 	}
 	return out
+}
+
+type promptOption int
+
+const (
+	promptNone promptOption = iota
+	promptForce
+	promptInteractive
+)
+
+// lastPromptOption implements the POSIX rule that -f and -i override each
+// other according to their last occurrence, including within short clusters.
+func lastPromptOption(args []string) promptOption {
+	last := promptNone
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		switch arg {
+		case "--force":
+			last = promptForce
+		case "--interactive":
+			last = promptInteractive
+		default:
+			if len(arg) > 1 && arg[0] == '-' && arg[1] != '-' {
+				for _, flag := range arg[1:] {
+					switch flag {
+					case 'f':
+						last = promptForce
+					case 'i':
+						last = promptInteractive
+					}
+				}
+			}
+		}
+	}
+	return last
 }
 
 // reason unwraps err to its root cause and capitalizes the first
