@@ -293,6 +293,66 @@ func TestPOSIXAnchorBackrefParity(t *testing.T) {
 	}
 }
 
+func TestPOSIXBackrefParticipationAndNumbering(t *testing.T) {
+	cases := []struct {
+		name, pattern, in string
+		want              []int
+	}{
+		{"optional group absent", `^\(a\)\{0,1\}\1$`, "", nil},
+		{"optional group participates", `^\(a\)\{0,1\}\1$`, "aa", []int{0, 2}},
+		{"optional empty group participates", `^\(a*\)\{0,1\}\1$`, "", []int{0, 0}},
+		{"nested group two", `\(\(a\)\2\)`, "aa", []int{0, 2}},
+		{"nested numbering", `^\(\(a\)b\)\1\2$`, "ababa", []int{0, 5}},
+		{"ninth group", `^\(a\)\(b\)\(c\)\(d\)\(e\)\(f\)\(g\)\(h\)\(i\)\9$`, "abcdefghii", []int{0, 10}},
+		{"interval repeats group then last capture", `^\(ab\)\{2\}\1$`, "ababab", []int{0, 6}},
+		{"interval repeats backref", `^\(a\)\1\{2\}$`, "aaa", []int{0, 3}},
+	}
+	for _, c := range cases {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Errorf("%s: Compile(%q): %v", c.name, c.pattern, err)
+			continue
+		}
+		if got := re.FindStringIndex(c.in); !sameInts(got, c.want) {
+			t.Errorf("%s: %q on %q = %v, want %v", c.name, c.pattern, c.in, got, c.want)
+		}
+	}
+}
+
+func TestPOSIXBackrefRequiresClosedGroup(t *testing.T) {
+	invalidBRE := []string{
+		`\1\(a\)`,       // forward reference
+		`\(a\1\)`,       // self-reference
+		`\(\(a\1\)\)`, // reference to the still-open outer group
+	}
+	for _, pattern := range invalidBRE {
+		if _, err := Compile(pattern); err == nil {
+			t.Errorf("Compile(%q) succeeded, want invalid back-reference error", pattern)
+		}
+	}
+
+	// ERE back-references are a GNU extension, not POSIX ERE syntax, but the
+	// package supports them and applies the same preceding-closed-group rule.
+	invalidERE := []string{`\1(a)`, `(a\1)`, `((a\1))`}
+	for _, pattern := range invalidERE {
+		if _, err := CompileEREWithFlags(pattern, ""); err == nil {
+			t.Errorf("CompileEREWithFlags(%q) succeeded, want invalid back-reference error", pattern)
+		}
+	}
+
+	for _, c := range []struct{ pattern, in string }{
+		{`((a)\2)`, "aa"},
+		{`((a)b)\1\2`, "ababa"},
+	} {
+		re, err := CompileEREWithFlags(c.pattern, "")
+		if err != nil {
+			t.Errorf("CompileEREWithFlags(%q): %v", c.pattern, err)
+		} else if got := re.FindStringIndex(c.in); !sameInts(got, []int{0, len(c.in)}) {
+			t.Errorf("ERE %q on %q = %v, want full match", c.pattern, c.in, got)
+		}
+	}
+}
+
 // The backtracking engine must report the leftmost match, which means trying
 // every start offset. These all take the backref path.
 func TestPOSIXBacktrackLeftmost(t *testing.T) {

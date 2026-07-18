@@ -450,14 +450,17 @@ func (n repeatNode) match(ctx *btCtx, st btState) []btState {
 	var levels [][]btState
 	levels = append(levels, []btState{st})
 	max := n.max
-	if max < 0 || max > len(ctx.s)-st.pos {
-		max = len(ctx.s) - st.pos
+	if max < 0 {
+		// One extra iteration lets a repeated group participate by matching
+		// empty at end of input. The unchanged-state check below prevents an
+		// unbounded empty repeat from looping forever.
+		max = len(ctx.s) - st.pos + 1
 	}
 	for i := 0; i < max; i++ {
 		var next []btState
 		for _, s := range levels[len(levels)-1] {
 			for _, out := range n.child.match(ctx, s) {
-				if out.pos == s.pos {
+				if out == s {
 					continue
 				}
 				next = append(next, out)
@@ -482,6 +485,7 @@ type parser struct {
 	p          string
 	i          int
 	groups     int
+	closed     [10]bool
 	ignoreCase bool
 	dotAll     bool
 	extended   bool
@@ -583,6 +587,7 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 				return nil, state, false, fmt.Errorf("unmatched \\(")
 			}
 			p.i += 2
+			p.closed[num] = true
 			return groupNode{num: num, child: child}, posAtom, true, nil
 		case n == ')' && !p.extended:
 			p.i += 2
@@ -590,7 +595,7 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 		case n >= '1' && n <= '9':
 			p.i += 2
 			num := int(n - '0')
-			if num > p.groups {
+			if num > p.groups || !p.closed[num] {
 				return nil, state, false, fmt.Errorf("invalid back-reference \\%c", n)
 			}
 			return backrefNode{num: num, ignoreCase: p.ignoreCase}, posAtom, true, nil
@@ -635,6 +640,7 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 				return nil, state, false, fmt.Errorf("unmatched (")
 			}
 			p.i++
+			p.closed[num] = true
 			return groupNode{num: num, child: child}, posAtom, true, nil
 		}
 		p.i++
