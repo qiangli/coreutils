@@ -309,6 +309,37 @@ func TestGrepErrors(t *testing.T) {
 	}
 }
 
+func TestGrepPOSIXDiagnosticsAndPatternFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "patterns", "foo\nbar\n")
+	writeFile(t, dir, "input", "foo\nbar\nbaz\n")
+
+	out, errb, code := runGrep(t, dir, "", "-f", "patterns", "input")
+	if out != "foo\nbar\n" || errb != "" || code != 0 {
+		t.Errorf("-f: out=%q err=%q code=%d", out, errb, code)
+	}
+
+	out, _, code = runGrep(t, dir, "", "-e", "foo", "-f", "patterns", "input")
+	if out != "foo\nbar\n" || code != 0 {
+		t.Errorf("-e with -f: out=%q code=%d", out, code)
+	}
+
+	writeFile(t, dir, "empty-line-patterns", "\nfoo\n")
+	out, _, code = runGrep(t, dir, "", "-f", "empty-line-patterns", "input")
+	if out != "foo\nbar\nbaz\n" || code != 0 {
+		t.Errorf("empty pattern line: out=%q code=%d", out, code)
+	}
+
+	_, errb, code = runGrep(t, dir, "", "-f", "missing-patterns", "input")
+	if code != 2 || !strings.Contains(errb, "missing-patterns") {
+		t.Errorf("missing pattern file: err=%q code=%d", errb, code)
+	}
+	_, errb, code = runGrep(t, dir, "", "-s", "foo", "missing-input")
+	if code != 2 || errb != "" {
+		t.Errorf("-s missing input: err=%q code=%d", errb, code)
+	}
+}
+
 func TestGrepCRPreserved(t *testing.T) {
 	// GNU grep treats \r as line data: "foo\r" does not match foo$.
 	_, _, code := runGrep(t, "", "foo\r\n", "-x", "foo")
