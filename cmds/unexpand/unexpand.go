@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -182,7 +183,7 @@ func unexpandLineBytes(line string, tabs *tabStops, all bool) string {
 //     non-blank character.
 func unexpandLine(line string, tabs *tabStops, all bool) string {
 	var b strings.Builder
-	var pending []rune // buffered blanks not yet decided
+	var pending []string // buffered blanks not yet decided
 	col := 0
 	convert := true
 	oneBlankBeforeStop := false // a single pending blank ended exactly on a stop
@@ -194,17 +195,20 @@ func unexpandLine(line string, tabs *tabStops, all bool) string {
 		if len(pending) > 1 && oneBlankBeforeStop {
 			// The run started with a blank that ended exactly on a tab
 			// stop: that first blank becomes the tab.
-			pending[0] = '\t'
+			pending[0] = "\t"
 		}
 		for _, p := range pending {
-			b.WriteRune(p)
+			b.WriteString(p)
 		}
 		pending = pending[:0]
 		oneBlankBeforeStop = false
 	}
-	for _, ch := range line {
+	for i := 0; i < len(line); {
+		ch, width := utf8.DecodeRuneInString(line[i:])
+		text := line[i : i+width]
+		i += width
 		if !convert {
-			b.WriteRune(ch)
+			b.WriteString(text)
 			continue
 		}
 		blank := ch == ' ' || ch == '\t'
@@ -220,7 +224,7 @@ func unexpandLine(line string, tabs *tabStops, all bool) string {
 				col = next
 				// A tab absorbs any pending blanks into itself…
 				if len(pending) > 0 {
-					pending[0] = '\t'
+					pending[0] = "\t"
 				}
 				// …keeping one converted blank only if a single blank
 				// ended exactly on the previous tab stop.
@@ -235,7 +239,7 @@ func unexpandLine(line string, tabs *tabStops, all bool) string {
 					if col == next {
 						oneBlankBeforeStop = true
 					}
-					pending = append(pending, ch)
+					pending = append(pending, text)
 					prevBlank = true
 					continue
 				}
@@ -244,7 +248,7 @@ func unexpandLine(line string, tabs *tabStops, all bool) string {
 				b.WriteByte('\t')
 				if oneBlankBeforeStop {
 					pending = pending[:1]
-					pending[0] = '\t'
+					pending[0] = "\t"
 				} else {
 					pending = pending[:0]
 				}
@@ -263,7 +267,7 @@ func unexpandLine(line string, tabs *tabStops, all bool) string {
 			convert = false
 		}
 		if writeCh {
-			b.WriteRune(ch)
+			b.WriteString(text)
 		}
 	}
 	flush() // a final line without '\n' still flushes its pending blanks
@@ -303,10 +307,11 @@ func parseTabStops(list []string) (*tabStops, error) {
 			if r < '0' || r > '9' {
 				return nil, fmt.Errorf("tab size contains invalid character(s): %q", entry)
 			}
-			n = n*10 + int(r-'0')
-			if n > 1<<30 {
+			digit := int(r - '0')
+			if n > (int(^uint(0)>>1)-digit)/10 {
 				return nil, fmt.Errorf("tab stop is too large %q", entry)
 			}
+			n = n*10 + digit
 		}
 		if n == 0 {
 			return nil, fmt.Errorf("tab size cannot be 0")
