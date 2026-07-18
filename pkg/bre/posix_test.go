@@ -321,8 +321,8 @@ func TestPOSIXBackrefParticipationAndNumbering(t *testing.T) {
 
 func TestPOSIXBackrefRequiresClosedGroup(t *testing.T) {
 	invalidBRE := []string{
-		`\1\(a\)`,       // forward reference
-		`\(a\1\)`,       // self-reference
+		`\1\(a\)`,     // forward reference
+		`\(a\1\)`,     // self-reference
 		`\(\(a\1\)\)`, // reference to the still-open outer group
 	}
 	for _, pattern := range invalidBRE {
