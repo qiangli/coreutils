@@ -3,6 +3,8 @@ package nicecmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -59,6 +61,29 @@ func TestParseNiceOptions(t *testing.T) {
 				t.Errorf("command=%q want %q", command, tt.command)
 			}
 		})
+	}
+}
+
+func TestNiceCommandExitStatuses(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   []string{"PATH=" + dir},
+		Stdio: tool.Stdio{Out: &out, Err: &errb},
+	}
+	if code := runCommand(rc, "nice", []string{"missing-command"}, nil); code != 127 {
+		t.Fatalf("missing command code=%d, want 127", code)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "not-executable"), []byte("ignored\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	if code := runCommand(rc, "nice", []string{"not-executable"}, nil); code != 126 {
+		t.Fatalf("non-executable command code=%d, want 126 (stderr=%q)", code, errb.String())
 	}
 }
 

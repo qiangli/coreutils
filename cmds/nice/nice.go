@@ -203,18 +203,24 @@ func runCommand(rc *tool.RunContext, name string, argv []string, env []string) i
 func lookCommand(rc *tool.RunContext, name string) string {
 	if strings.ContainsAny(name, `/\`) {
 		p := rc.Path(name)
-		if isExecFile(p) {
+		if isCommandFile(p) {
 			return p
 		}
 		return ""
 	}
+	var nonExecutable string
 	for _, dir := range filepath.SplitList(rc.Getenv("PATH")) {
 		if dir == "" {
 			continue
 		}
 		cand := filepath.Join(dir, name)
-		if isExecFile(cand) {
-			return cand
+		if isCommandFile(cand) {
+			if runtime.GOOS == "windows" || isExecFile(cand) {
+				return cand
+			}
+			if nonExecutable == "" {
+				nonExecutable = cand
+			}
 		}
 		if runtime.GOOS == "windows" {
 			for _, ext := range []string{".exe", ".bat", ".cmd", ".com"} {
@@ -224,7 +230,12 @@ func lookCommand(rc *tool.RunContext, name string) string {
 			}
 		}
 	}
-	return ""
+	return nonExecutable
+}
+
+func isCommandFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
 }
 
 func isExecFile(path string) bool {
