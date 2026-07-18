@@ -71,6 +71,19 @@ func TestWeaveHydrateSubmodulesFromLocalOrigin(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "vendor", "sub", "go.mod")); err != nil {
 		t.Fatalf("submodule not hydrated: %v", err)
 	}
+	// A prior interrupted hydration can leave untracked nested artifacts.  The
+	// next pre-agent hydration must restore a clean workspace, otherwise a later
+	// wrapper auto-commit fails despite no agent source change.
+	mustWrite(t, filepath.Join(workspace, "vendor", "sub", "hydration.tmp"), "scratch\n")
+	if got := string(gitT(t, workspace, "status", "--porcelain")); got == "" {
+		t.Fatal("precondition: nested artifact must make superproject dirty")
+	}
+	if err := weaveHydrateSubmodules(superOrigin, workspace, io.Discard, io.Discard); err != nil {
+		t.Fatalf("re-hydrate clean: %v", err)
+	}
+	if got := string(gitT(t, workspace, "status", "--porcelain")); got != "" {
+		t.Fatalf("hydration left workspace dirty: %q", got)
+	}
 
 	// 6. Isolation: the URL was synced back to its canonical .gitmodules value, not
 	//    left pointing at the superproject-origin path (a breadcrumb an escaping

@@ -70,3 +70,44 @@ func TestWeaveProvisioningFailureIsTerminalAndObservable(t *testing.T) {
 type errHydrationTestFailure struct{}
 
 func (errHydrationTestFailure) Error() string { return "hydration test timeout" }
+
+// An external kill can happen while clone/hydration is running, before the
+// item becomes working.  That must not leave a permanently allocated phantom
+// worker with no wrapper and no terminal evidence.
+func TestWeaveStatusRecoversDeadProvisioningLauncher(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	dir, _ := weaveQueueDir(root)
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{{
+		ID:          1,
+		Title:       "orphaned hydration",
+		State:       "allocated",
+		Workspace:   root + "/workspace",
+		BaseSHA:     "immutable-base",
+		LaunchPhase: "hydrating submodules",
+		WrapperPid:  2147483647, // deliberately impossible PID on supported hosts
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runWeave(t, "status", "1", "--json")
+	if code != 0 {
+		t.Fatalf("status failed (exit %d): %s", code, out)
+	}
+	for _, want := range []string{
+		`"state": "failed"`,
+		`"launch_phase": "failed: provisioning launcher exited before agent launch"`,
+		`"base_sha": "immutable-base"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status missing %s:\n%s", want, out)
+		}
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := findWeaveItem(q, 1)
+	if it == nil || it.FinishedAt.IsZero() || it.WrapperPid != 0 {
+		t.Fatalf("orphan recovery was not durable: %#v", it)
+	}
+}

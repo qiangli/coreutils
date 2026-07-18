@@ -854,7 +854,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	up := exec.CommandContext(ctx, "git", "-C", workspace, "-c", "protocol.file.allow=always",
-		"submodule", "update", "--init")
+		"submodule", "update", "--init", "--recursive")
 	up.Stdout, up.Stderr = out, errw
 	if err := up.Run(); err != nil {
 		if ctx.Err() != nil {
@@ -867,6 +867,28 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 		// standing breadcrumb back into the source checkout.
 		_ = exec.Command("git", "-C", workspace, "submodule", "sync").Run()
 	}
+	// Hydration runs before an agent exists, so it must leave the freshly
+	// allocated workspace clean. In particular, nested submodule checkout
+	// helpers can leave generated or untracked artifacts behind; those make the
+	// wrapper's later auto-commit fail even when the agent changed no source.
+	// This is safe here because the workspace has not been handed to an agent.
+	clean := exec.CommandContext(ctx, "git", "-C", workspace, "submodule", "foreach", "--recursive",
+		"git reset --hard --quiet && git clean -ffdx -q")
+	clean.Stdout, clean.Stderr = out, errw
+	if err := clean.Run(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("clean hydrated submodules timed out after 2m: %w", ctx.Err())
+		}
+		return fmt.Errorf("clean hydrated submodules: %w", err)
+	}
+	// A nested clean can change the superproject's submodule dirt marker. Reset
+	// the superproject too, which only restores its recorded gitlinks and never
+	// touches user work because this clone is still pre-agent.
+	reset := exec.CommandContext(ctx, "git", "-C", workspace, "reset", "--hard", "--quiet")
+	reset.Stdout, reset.Stderr = out, errw
+	if err := reset.Run(); err != nil {
+		return fmt.Errorf("reset hydrated workspace: %w", err)
+	}
 	return nil
 }
 
@@ -878,6 +900,26 @@ func weaveMarkLaunchFailed(dir string, issueID int64, cause error) {
 		if it := findWeaveItem(q, issueID); it != nil {
 			it.State = "failed"
 			it.LaunchPhase = "failed: " + cause.Error()
+			it.FinishedAt = time.Now().UTC()
+			it.WrapperPid = 0
+			it.CtlSock = ""
+		}
+		return nil
+	})
+}
+
+// weaveRecoverOrphanedAllocations turns a pre-agent allocation whose launcher
+// died into durable terminal evidence.  Unlike a working run, provisioning has
+// no subagent to report failure; without the launcher PID this state used to
+// remain allocated forever after an OOM or external kill.
+func weaveRecoverOrphanedAllocations(dir string) error {
+	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		for _, it := range q.Items {
+			if it.State != "allocated" || it.WrapperPid <= 0 || pidAlive(it.WrapperPid) {
+				continue
+			}
+			it.State = "failed"
+			it.LaunchPhase = "failed: provisioning launcher exited before agent launch"
 			it.FinishedAt = time.Now().UTC()
 			it.WrapperPid = 0
 			it.CtlSock = ""
@@ -1766,6 +1808,10 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		return nil
 	}
 	dir, _ := weaveQueueDir(root)
+	if err := weaveRecoverOrphanedAllocations(dir); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
+			weavecli.ExitGenericFail, err))
+	}
 	q, err := loadWeaveQueue(dir)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
@@ -2543,6 +2589,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.BaseSHA = baseSHA
 			freshIt.LaunchPhase = "provisioning workspace"
 			freshIt.StartedAt = time.Now().UTC()
+			// Record the provisioning launcher before clone/hydration. If it
+			// disappears before the working transition, list/status can turn the
+			// allocation into durable failure instead of advertising a phantom
+			// worker forever.
+			freshIt.WrapperPid = os.Getpid()
 			it = freshIt
 			return nil
 		}); err != nil {
@@ -3853,6 +3904,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			weavecli.ExitPrecondFail, err))
 	}
 	dir, _ := weaveQueueDir(root)
+	if err := weaveRecoverOrphanedAllocations(dir); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
+			weavecli.ExitGenericFail, err))
+	}
 	q, err := loadWeaveQueue(dir)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
@@ -3894,6 +3949,8 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			"recorded_state":     it.State,
 			"merged":             merged,
 			"base":               base,
+			"base_sha":           it.BaseSHA,
+			"launch_phase":       it.LaunchPhase,
 			"commits_ahead":      it.CommitsAhead,
 			"branch":             it.Branch,
 			"workspace":          it.Workspace,
