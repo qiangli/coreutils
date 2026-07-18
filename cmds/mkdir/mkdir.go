@@ -6,7 +6,7 @@
 // Changes: rewired to the tool framework; per-component -p creation
 // so -v reports each created ancestor; -m applies to the final
 // directory only (intermediates get the default mode); -m refused on
-// windows (no POSIX mode bits); symbolic modes refused (octal only).
+// windows (no POSIX mode bits); symbolic modes follow chmod syntax.
 // -Z/--context accepted as no-op on non-SELinux platforms.
 package mkdircmd
 
@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"unicode"
 
 	"github.com/qiangli/coreutils/tool"
@@ -34,12 +35,13 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type maker struct {
-	rc      *tool.RunContext
-	parents bool
-	verbose bool
-	useMode bool
-	mode    os.FileMode
-	failed  bool
+	rc       *tool.RunContext
+	parents  bool
+	verbose  bool
+	useMode  bool
+	mode     os.FileMode
+	symbolic *mkdirMode
+	failed   bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -62,12 +64,13 @@ func run(rc *tool.RunContext, args []string) int {
 		if runtime.GOOS == "windows" {
 			return tool.NotSupported(rc, cmd, "-m/--mode on windows (no POSIX mode bits; mapping to read-only would change the documented meaning)")
 		}
-		mode, errCode := parseMode(rc, *modeStr)
+		mode, symbolic, errCode := parseMode(rc, *modeStr)
 		if errCode >= 0 {
 			return errCode
 		}
 		m.useMode = true
 		m.mode = mode
+		m.symbolic = symbolic
 	}
 
 	for _, op := range operands {
@@ -80,10 +83,10 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 // parseMode accepts octal MODE arguments (including setuid/setgid/
-// sticky digits). Symbolic modes are documented GNU behavior this
-// implementation deliberately does not cover. Returns (mode, -1) on
-// success, or (0, exitCode).
-func parseMode(rc *tool.RunContext, s string) (os.FileMode, int) {
+// sticky digits) and the symbolic mode grammar shared with chmod's
+// documented behavior. Returns (mode, symbolic, -1) on success, or a
+// zero mode and an exit code on failure.
+func parseMode(rc *tool.RunContext, s string) (os.FileMode, *mkdirMode, int) {
 	if n, err := strconv.ParseUint(s, 8, 32); err == nil && n <= 0o7777 {
 		mode := os.FileMode(n & 0o777)
 		if n&0o1000 != 0 {
@@ -95,12 +98,16 @@ func parseMode(rc *tool.RunContext, s string) (os.FileMode, int) {
 		if n&0o4000 != 0 {
 			mode |= os.ModeSetuid
 		}
-		return mode, -1
+		return mode, nil, -1
 	}
-	if s == "" || allDigits(s) {
-		return 0, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
+	if s == "" || allDigits(s) || !validSymbolicMode(s) {
+		return 0, nil, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
 	}
-	return 0, tool.NotSupported(rc, cmd, fmt.Sprintf("symbolic mode '%s' for -m/--mode (only octal modes)", s))
+	m, ok := parseSymbolicMode(s)
+	if !ok {
+		return 0, nil, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
+	}
+	return 0, m, -1
 }
 
 func allDigits(s string) bool {
@@ -118,7 +125,7 @@ func (m *maker) make(op string) {
 		return
 	}
 	if m.parents {
-		ok, createdFinal := m.makeAll(op)
+		ok, createdFinal := m.makeAll(op, true)
 		if ok && createdFinal {
 			m.applyMode(op)
 		}
@@ -136,7 +143,7 @@ func (m *maker) make(op string) {
 // (ok, createdFinal). Existing directories are not an error; -m is
 // applied by the caller, and only when the final component was
 // actually created (GNU: -m affects the final directory only).
-func (m *maker) makeAll(op string) (ok, createdSelf bool) {
+func (m *maker) makeAll(op string, final bool) (ok, createdSelf bool) {
 	full := m.rc.Path(op)
 	if fi, err := os.Stat(full); err == nil {
 		if fi.IsDir() {
@@ -147,16 +154,30 @@ func (m *maker) makeAll(op string) (ok, createdSelf bool) {
 	}
 	parent := filepath.Dir(op)
 	if parent != op && parent != "." {
-		if ok, _ := m.makeAll(parent); !ok {
+		if ok, _ := m.makeAll(parent, false); !ok {
 			return false, false
 		}
 	}
 	if err := os.Mkdir(full, 0o777); err != nil {
 		if errors.Is(err, fs.ErrExist) {
-			return true, false
+			// A path may appear between the Stat and Mkdir calls. Treat the
+			// race as success only when it is now a directory; a regular file
+			// or dangling symlink still makes mkdir -p fail.
+			if fi, statErr := os.Stat(full); statErr == nil && fi.IsDir() {
+				return true, false
+			}
 		}
 		m.errf("cannot create directory '%s': %s", op, reason(err))
 		return false, false
+	}
+	if !final {
+		// POSIX requires -p ancestors to retain owner write and search so
+		// creation can descend even when the process umask masks those bits.
+		mode := os.FileMode((0o777 &^ umask()) | 0o300)
+		if err := os.Chmod(full, mode); err != nil {
+			m.errf("cannot set permissions of '%s': %s", op, reason(err))
+			return false, false
+		}
 	}
 	m.verbosef("mkdir: created directory '%s'", op)
 	return true, true
@@ -168,9 +189,179 @@ func (m *maker) applyMode(op string) {
 	if !m.useMode {
 		return
 	}
-	if err := os.Chmod(m.rc.Path(op), m.mode); err != nil {
+	mode := m.mode
+	if m.symbolic != nil {
+		// Symbolic mkdir modes are applied to the default creation mode,
+		// not to the mode left after the kernel has applied the umask. This
+		// matters for implicit-who clauses such as +x.
+		mode = bitsToFileMode(m.symbolic.apply(0o777, umask()))
+	}
+	if err := os.Chmod(m.rc.Path(op), mode); err != nil {
 		m.errf("cannot set permissions of '%s': %s", op, reason(err))
 	}
+}
+
+type mkdirOp struct {
+	who                  uint32
+	explicit             bool
+	op                   byte
+	perm                 uint32
+	copy                 byte
+	condX, setID, sticky bool
+}
+type mkdirMode struct{ ops []mkdirOp }
+
+const (
+	modeU = 1 << iota
+	modeG
+	modeO
+)
+
+func validSymbolicMode(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return !strings.ContainsRune("ugoarwxXst+-,=", r) }) == -1
+}
+
+func parseSymbolicMode(s string) (*mkdirMode, bool) {
+	var m mkdirMode
+	for _, clause := range strings.Split(s, ",") {
+		i, who := 0, uint32(0)
+		explicit := false
+		for i < len(clause) {
+			var bit uint32
+			switch clause[i] {
+			case 'u':
+				bit = modeU
+			case 'g':
+				bit = modeG
+			case 'o':
+				bit = modeO
+			case 'a':
+				bit = modeU | modeG | modeO
+			default:
+				goto operators
+			}
+			who |= bit
+			explicit = true
+			i++
+		}
+	operators:
+		if i == len(clause) {
+			return nil, false
+		}
+		for i < len(clause) {
+			op := clause[i]
+			if op != '+' && op != '-' && op != '=' {
+				return nil, false
+			}
+			i++
+			o := mkdirOp{who: who, explicit: explicit, op: op}
+			if i < len(clause) && (clause[i] == 'u' || clause[i] == 'g' || clause[i] == 'o') && (i+1 == len(clause) || strings.ContainsRune("+-=", rune(clause[i+1]))) {
+				o.copy = clause[i]
+				i++
+			} else {
+				for i < len(clause) && !strings.ContainsRune("+-=", rune(clause[i])) {
+					switch clause[i] {
+					case 'r':
+						o.perm |= 4
+					case 'w':
+						o.perm |= 2
+					case 'x':
+						o.perm |= 1
+					case 'X':
+						o.condX = true
+					case 's':
+						o.setID = true
+					case 't':
+						o.sticky = true
+					default:
+						return nil, false
+					}
+					i++
+				}
+			}
+			m.ops = append(m.ops, o)
+		}
+	}
+	return &m, len(m.ops) > 0
+}
+
+func (m *mkdirMode) apply(cur, um uint32) uint32 {
+	for _, o := range m.ops {
+		perm := o.perm
+		switch o.copy {
+		case 'u':
+			perm = (cur >> 6) & 7
+		case 'g':
+			perm = (cur >> 3) & 7
+		case 'o':
+			perm = cur & 7
+		}
+		if o.condX {
+			perm |= 1
+		}
+		who := o.who
+		if who == 0 {
+			who = modeU | modeG | modeO
+		}
+		bits := uint32(0)
+		if who&modeU != 0 {
+			bits |= perm << 6
+			if o.setID {
+				bits |= 0o4000
+			}
+		}
+		if who&modeG != 0 {
+			bits |= perm << 3
+			if o.setID {
+				bits |= 0o2000
+			}
+		}
+		if who&modeO != 0 {
+			bits |= perm
+		}
+		if o.sticky {
+			bits |= 0o1000
+		}
+		if !o.explicit {
+			bits &^= um
+		}
+		switch o.op {
+		case '+':
+			cur |= bits
+		case '-':
+			cur &^= bits
+		case '=':
+			clear := uint32(0)
+			if who&modeU != 0 {
+				clear |= 0o4700
+			}
+			if who&modeG != 0 {
+				clear |= 0o2070
+			}
+			if who&modeO != 0 {
+				clear |= 0o0007
+			}
+			if !o.explicit || who&modeO != 0 {
+				clear |= 0o1000
+			}
+			cur = cur&^clear | bits
+		}
+	}
+	return cur
+}
+
+func bitsToFileMode(b uint32) os.FileMode {
+	m := os.FileMode(b & 0o777)
+	if b&0o4000 != 0 {
+		m |= os.ModeSetuid
+	}
+	if b&0o2000 != 0 {
+		m |= os.ModeSetgid
+	}
+	if b&0o1000 != 0 {
+		m |= os.ModeSticky
+	}
+	return m
 }
 
 func (m *maker) errf(format string, a ...any) {

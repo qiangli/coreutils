@@ -143,9 +143,108 @@ func TestMkdirModeErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "invalid mode '999'") {
 		t.Errorf("-m 999: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, dir, "-m", "u+x", "d")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Errorf("-m u+x: code=%d err=%q", code, errb)
+	_, errb, code = runTool(t, dir, "-m", "u+q", "d")
+	if code != 2 || !strings.Contains(errb, "invalid mode 'u+q'") {
+		t.Errorf("-m u+q: code=%d err=%q", code, errb)
+	}
+}
+
+func TestMkdirSymbolicMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-m", "u=rwx,go=rx", "d")
+	if code != 0 {
+		t.Fatalf("symbolic mode: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o755 {
+		t.Errorf("mode=%o, want 755", fi.Mode().Perm())
+	}
+}
+
+func TestMkdirSymbolicModeStartsAtDefault(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"-m", "+x", "plain"},
+		{"-p", "-m", "+x", filepath.Join("a", "b")},
+	} {
+		_, errb, code := runTool(t, dir, args...)
+		if code != 0 {
+			t.Fatalf("mkdir %v: code=%d err=%q", args, code, errb)
+		}
+	}
+	for _, name := range []string{"plain", filepath.Join("a", "b")} {
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// +x must add execute bits to the 0777 creation default. The
+		// process umask is accounted for by mkdirMode.apply, rather than
+		// being applied a second time to an already-created directory.
+		if got := fi.Mode().Perm(); got != 0o777 {
+			t.Errorf("%s mode=%o, want 777", name, got)
+		}
+	}
+}
+
+func TestMkdirSymbolicModeSubtractsFromDefault(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-m", "a-x", "d")
+	if code != 0 {
+		t.Fatalf("mkdir -m a-x: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o666 {
+		t.Fatalf("mode=%o, want 666", got)
+	}
+}
+
+func TestMkdirSymbolicModeApply(t *testing.T) {
+	cases := []struct {
+		mode string
+		old  uint32
+		um   uint32
+		want uint32
+	}{
+		{"u=rw,go=r", 0o777, 0, 0o644},
+		{"g=u", 0o741, 0, 0o771},
+		{"o=g", 0o754, 0, 0o755},
+		{"u+s,g+s,+t", 0o755, 0, 0o7755},
+		{"a+X", 0o644, 0, 0o755}, // mkdir always operates on a directory.
+		{"+w", 0o444, 0o22, 0o644},
+		{"=rwx", 0o644, 0o22, 0o755},
+		{"u+rw-x", 0o111, 0, 0o611},
+	}
+	for _, tc := range cases {
+		m, ok := parseSymbolicMode(tc.mode)
+		if !ok {
+			t.Fatalf("parseSymbolicMode(%q) rejected valid mode", tc.mode)
+		}
+		if got := m.apply(tc.old, tc.um); got != tc.want {
+			t.Errorf("%q on %04o with umask %03o = %04o, want %04o", tc.mode, tc.old, tc.um, got, tc.want)
+		}
+	}
+}
+
+func TestMkdirSymbolicModeInvalid(t *testing.T) {
+	for _, mode := range []string{"", "u", "u+q", "u~x", "rwx", "u=gw", ","} {
+		if _, ok := parseSymbolicMode(mode); ok {
+			t.Errorf("parseSymbolicMode(%q): accepted invalid mode", mode)
+		}
 	}
 }
 
