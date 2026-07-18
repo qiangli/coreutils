@@ -1,12 +1,14 @@
 // Package lscmd implements ls(1) per the GNU coreutils manual for the
 // flag subset -l -a -A -d -R -r -t -S -1 -h -i.
 //
-// Deterministic-output contract: names sort in C-locale byte order,
-// color is never emitted, and the short format is always one entry per
-// line in a single column. This userland has no terminal, so the
-// output matches what GNU ls produces when writing to a non-tty,
-// regardless of any real terminal's width; -1 is therefore accepted
-// and is the default.
+// Deterministic-output contract: names sort in C-locale byte order and
+// color is never emitted. This userland has no terminal, so the output
+// matches what GNU ls produces when writing to a non-tty: -1 is the
+// default format, and non-printable characters are written literally
+// unless -q asks otherwise. The multi-column (-C, -x) and stream (-m)
+// formats are still available on request; because there is no terminal
+// to measure, their line width comes from -w, else COLUMNS, else the
+// 80-column fallback GNU uses off a tty.
 //
 // Platform note: owner/group in -l come from os/user on unix (falling
 // back to the numeric ID when the name cannot be resolved, as GNU
@@ -18,6 +20,7 @@ package lscmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,9 +53,53 @@ type options struct {
 	unsorted, sortExtension, sortVersion     bool
 	groupDirsFirst                           bool
 	literal, quoteName, escape               bool
+	hideControl                              bool
+	deref                                    bool
+	si                                       bool
+	format                                   fmtKind
+	width                                    int
+	sizeUnit                                 uint64 // -l size column divisor
+	blockUnit                                uint64 // -s / total block divisor
+	timeStyle                                timeStyle
 	timeSel                                  timeSel
 	hide, ignore                             []string
 }
+
+// fmtKind is the output format, selected by the last of -l/-1/-C/-x/-m/
+// -g/-o/-n/--format on the command line (POSIX: format options are
+// mutually exclusive and the last one wins).
+type fmtKind int
+
+const (
+	fmtOnePerLine fmtKind = iota
+	fmtLong
+	fmtColumns // -C: entries sorted down the columns
+	fmtAcross  // -x: entries sorted across the rows
+	fmtCommas  // -m: comma-separated stream
+)
+
+// defaultWidth is the line width ls assumes when neither -w nor
+// COLUMNS says otherwise. This userland has no terminal to query, so
+// the GNU non-tty fallback of 80 columns applies.
+const defaultWidth = 80
+
+// unlimitedWidth stands in for "-w 0", which GNU documents as no line
+// limit at all.
+const unlimitedWidth = 1 << 30
+
+// timeStyle is the -l timestamp rendering selected by --time-style.
+type timeStyle int
+
+const (
+	styleLocale  timeStyle = iota // "Jan  2 15:04" / "Jan  2  2006"
+	styleLongISO                  // "2006-01-02 15:04"
+	styleFullISO                  // "2006-01-02 15:04:05.000000000 -0700"
+	styleISO                      // "01-02 15:04" recent, "2006-01-02" otherwise
+)
+
+// defaultBlockUnit is the unit GNU counts -s blocks and the "total"
+// line in when neither --block-size nor -k says otherwise.
+const defaultBlockUnit = 1024
 
 // timeSel is the timestamp field shown in -l and used for time
 // sorting, selected by --time=WORD, -c, or -u.
@@ -206,6 +253,9 @@ func run(rc *tool.RunContext, args []string) int {
 	hide, _ := fs.GetStringArray("hide")
 	ignore, _ := fs.GetStringArray("ignore")
 
+	showControl, _ := fs.GetBool("show-control-chars")
+	hideControlFlag, _ := fs.GetBool("hide-control-chars")
+
 	opt := options{
 		long:           short['l'] > 0 || longFlag,
 		all:            all,
@@ -235,18 +285,16 @@ func run(rc *tool.RunContext, args []string) int {
 		hide:           hide,
 		ignore:         ignore,
 	}
-	if short['o'] > 0 {
-		opt.long, opt.noGroup = true, true
+	// -q / --hide-control-chars vs --show-control-chars: last one wins.
+	if short['q'] > 0 || hideControlFlag || showControl {
+		opt.hideControl = lastFlag(args, 'q', "hide-control-chars") >
+			lastFlag(args, 0, "show-control-chars")
 	}
-	if short['g'] > 0 || short['n'] > 0 {
-		opt.long = true
+	if short['o'] > 0 {
+		opt.noGroup = true
 	}
 	if short['f'] > 0 {
 		opt.all, opt.unsorted = true, true
-	}
-	if short['C'] > 0 || short['x'] > 0 {
-		// Column and row formats collapse to the existing deterministic
-		// single-column output for non-interactive tool invocations.
 	}
 	if short['Z'] > 0 {
 		// Security contexts are platform-specific; accept the flag but keep
@@ -258,16 +306,24 @@ func run(rc *tool.RunContext, args []string) int {
 	if ignoreBackups {
 		opt.ignore = append(opt.ignore, "*~")
 	}
-	switch format {
-	case "", "verbose":
-	case "long":
-		opt.long = true
-	case "single-column":
-	case "commas":
-		opt.comma = true
-	default:
-		return tool.UsageError(rc, cmd, "unsupported --format=%s", format)
+	if format != "" {
+		if _, ok := formatWord(format); !ok {
+			return tool.UsageError(rc, cmd, "unsupported --format=%s", format)
+		}
 	}
+	// The format is whichever format option came last (GNU/POSIX).
+	if kind, ok := lastFormat(args, format); ok {
+		opt.format = kind
+	}
+	if fullTime {
+		opt.format = fmtLong
+	}
+	if opt.zero {
+		// GNU: --zero implies one name per line.
+		opt.format = fmtOnePerLine
+	}
+	opt.long = opt.format == fmtLong
+	opt.comma = opt.format == fmtCommas
 	switch sortMode {
 	case "":
 	case "name":
@@ -312,8 +368,46 @@ func run(rc *tool.RunContext, args []string) int {
 	if short['H'] > 0 {
 		derefCL = true
 	}
-	if deref || derefCL || derefCLDir {
-		// These modes are handled in the command-line symlink decision below.
+	// -L applies to every entry; -H and its long spelling only to the
+	// command-line operands, handled in the operand loop below.
+	opt.deref = deref
+	opt.width = lineWidth(rc, fs)
+
+	si, _ := fs.GetBool("si")
+	blockSize, _ := fs.GetString("block-size")
+	kibibytes, _ := fs.GetBool("kibibytes")
+	opt.si = si
+	if si {
+		opt.human = true
+	}
+	// --block-size scales both the -l size column and the -s block
+	// counts; -k pins the block counts to 1 KiB units.
+	opt.sizeUnit, opt.blockUnit = 1, defaultBlockUnit
+	if blockSize != "" {
+		n, err := parseBlockSize(blockSize)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "invalid --block-size argument '%s'", blockSize)
+		}
+		opt.sizeUnit, opt.blockUnit = n, n
+	}
+	if kibibytes {
+		opt.blockUnit = defaultBlockUnit
+	}
+
+	timeStyleVal, _ := fs.GetString("time-style")
+	switch timeStyleVal {
+	case "", "locale":
+	case "long-iso":
+		opt.timeStyle = styleLongISO
+	case "full-iso":
+		opt.timeStyle = styleFullISO
+	case "iso":
+		opt.timeStyle = styleISO
+	default:
+		return tool.UsageError(rc, cmd, "unsupported --time-style=%s", timeStyleVal)
+	}
+	if fullTime {
+		opt.timeStyle = styleFullISO
 	}
 	switch timeField {
 	case "", "mtime", "modification", "atime", "access", "use",
@@ -337,9 +431,6 @@ func run(rc *tool.RunContext, args []string) int {
 		case "birth", "creation":
 			opt.timeSel = selBirth
 		}
-	}
-	if fullTime {
-		opt.long = true
 	}
 	// GNU: a non-mtime timestamp with no explicit sort choice sorts a
 	// short-format listing by that timestamp, newest first.
@@ -496,15 +587,26 @@ func (l *lister) listDir(display, full string, header bool) {
 			l.fail(1, "cannot access '%s': %s", joinDisplay(display, name), errMsg(lerr))
 			continue
 		}
+		// -L reports the referenced file rather than the link itself.
+		if l.opt.deref && fi.Mode()&os.ModeSymlink != 0 {
+			ti, terr := os.Stat(p)
+			if terr != nil {
+				l.fail(1, "cannot access '%s': %s", joinDisplay(display, name), errMsg(terr))
+			} else {
+				fi = ti
+			}
+		}
 		e := entry{name: name, path: p, info: fi}
-		if l.opt.long && fi.Mode()&os.ModeSymlink != 0 {
+		if l.opt.long && !l.opt.deref && fi.Mode()&os.ModeSymlink != 0 {
 			e.target, _ = os.Readlink(p)
 		}
 		e.tm = l.entryTime(e)
 		ents = append(ents, e)
 	}
 	sortEntries(ents, l.opt)
-	l.printBlock(ents, l.opt.long)
+	// GNU prints the total block count for a directory whenever block
+	// counts are shown, which -s does in every format.
+	l.printBlock(ents, l.opt.long || l.opt.sizeBlocks)
 	if l.opt.recursive {
 		for _, e := range ents {
 			if e.name == "." || e.name == ".." {
@@ -531,70 +633,94 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 			}
 		}
 	}
-	if !opt.long {
-		sep := "\n"
-		if opt.zero {
-			sep = "\x00"
-		} else if opt.comma {
-			sep = ", "
-		}
+	// Block counts (-s) and their total are needed by every format, not
+	// just -l.
+	var blkStrs []string
+	blocksW := 0
+	var blocks uint64
+	if opt.sizeBlocks || opt.long {
+		blkStrs = make([]string, len(ents))
 		for i, e := range ents {
-			name := displayName(e, opt)
-			if opt.inode {
-				fmt.Fprintf(out, "%*s %s%s", inoW, inoStrs[i], name, sep)
-			} else {
-				fmt.Fprint(out, name, sep)
-			}
+			b := sysOf(e.info, e.path).blocks512
+			blocks += b
+			blkStrs[i] = scaledSize(b*512, opt.blockUnit, opt)
+			blocksW = max(blocksW, len(blkStrs[i]))
 		}
-		if opt.comma && len(ents) > 0 {
-			fmt.Fprintln(out)
+	}
+	printTotal := func() {
+		if withTotal {
+			fmt.Fprintf(out, "total %s\n", scaledSize(blocks*512, opt.blockUnit, opt))
+		}
+	}
+
+	if !opt.long {
+		printTotal()
+		// Every non-long format prints the same cell — the -i and -s
+		// prefixes belong to the name they annotate.
+		cells := make([]string, len(ents))
+		for i, e := range ents {
+			var b strings.Builder
+			if opt.inode {
+				fmt.Fprintf(&b, "%*s ", inoW, inoStrs[i])
+			}
+			if opt.sizeBlocks {
+				fmt.Fprintf(&b, "%*s ", blocksW, blkStrs[i])
+			}
+			b.WriteString(displayName(e, opt))
+			cells[i] = b.String()
+		}
+		switch {
+		case opt.zero:
+			for _, c := range cells {
+				fmt.Fprint(out, c, "\x00")
+			}
+		case opt.format == fmtCommas:
+			printCommas(out, cells, opt.width)
+		case opt.format == fmtColumns:
+			printColumns(out, cells, opt.width, true)
+		case opt.format == fmtAcross:
+			printColumns(out, cells, opt.width, false)
+		default:
+			for _, c := range cells {
+				fmt.Fprintln(out, c)
+			}
 		}
 		return
 	}
 
 	type row struct {
-		mode, nlink, owner, group, blocks, size, mtime, name string
+		mode, nlink, owner, group, size, mtime, name string
 	}
 	rows := make([]row, len(ents))
-	var nlinkW, ownerW, groupW, blocksW, sizeW int
-	var blocks uint64
+	var nlinkW, ownerW, groupW, sizeW int
 	now := time.Now()
 	for i, e := range ents {
 		sys := sysOf(e.info, e.path)
-		blocks += sys.blocks512
 		r := row{
-			mode:   modeString(e.info.Mode()),
-			nlink:  strconv.FormatUint(sys.nlink, 10),
-			owner:  sys.owner,
-			group:  sys.group,
-			blocks: strconv.FormatUint((sys.blocks512+1)/2, 10),
-			size:   sizeString(e.info, sys, opt.human),
-			mtime:  timeString(e.tm, now),
-			name:   displayName(e, opt),
+			mode:  modeString(e.info.Mode()),
+			nlink: strconv.FormatUint(sys.nlink, 10),
+			owner: sys.owner,
+			group: sys.group,
+			size:  sizeString(e.info, sys, opt),
+			mtime: timeString(e.tm, now, opt.timeStyle),
+			name:  displayName(e, opt),
 		}
-		if e.info.Mode()&os.ModeSymlink != 0 {
-			r.name += " -> " + e.target
+		if e.info.Mode()&os.ModeSymlink != 0 && e.target != "" {
+			r.name += " -> " + quoteControl(e.target, opt)
 		}
 		nlinkW = max(nlinkW, len(r.nlink))
 		ownerW = max(ownerW, len(r.owner))
 		groupW = max(groupW, len(r.group))
-		blocksW = max(blocksW, len(r.blocks))
 		sizeW = max(sizeW, len(r.size))
 		rows[i] = r
 	}
-	if withTotal {
-		if opt.human {
-			fmt.Fprintf(out, "total %s\n", humanSize(blocks*512))
-		} else {
-			fmt.Fprintf(out, "total %d\n", (blocks*512+1023)/1024)
-		}
-	}
+	printTotal()
 	for i, r := range rows {
 		if opt.inode {
 			fmt.Fprintf(out, "%*s ", inoW, inoStrs[i])
 		}
 		if opt.sizeBlocks {
-			fmt.Fprintf(out, "%*s ", blocksW, r.blocks)
+			fmt.Fprintf(out, "%*s ", blocksW, blkStrs[i])
 		}
 		if opt.noGroup || opt.numeric {
 			fmt.Fprintf(out, "%s %*s %-*s %*s %s %s\n",
@@ -608,6 +734,127 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 	}
 }
 
+// colGutter is the two-space separation GNU leaves between columns.
+const colGutter = 2
+
+// printColumns writes cells in multiple columns within width. With
+// down true (-C) entries run down each column before moving right;
+// with down false (-x) they run across each row. Trailing padding is
+// never written, so a one-column layout is byte-identical to -1.
+func printColumns(out io.Writer, cells []string, width int, down bool) {
+	if len(cells) == 0 {
+		return
+	}
+	cols, rows, colW := columnLayout(cells, width, down)
+	idx := func(r, c int) int {
+		if down {
+			return r + c*rows
+		}
+		return r*cols + c
+	}
+	for r := range rows {
+		var line strings.Builder
+		for c := range cols {
+			i := idx(r, c)
+			if i >= len(cells) {
+				break
+			}
+			line.WriteString(cells[i])
+			// Pad only when a further cell follows on this line;
+			// trailing whitespace is never written.
+			if next := idx(r, c+1); c+1 < cols && next < len(cells) {
+				line.WriteString(strings.Repeat(" ", colW[c]-cellWidth(cells[i])))
+			}
+		}
+		fmt.Fprintln(out, line.String())
+	}
+}
+
+// minColumnWidth is the floor GNU gives every column when searching
+// for a layout, and so bounds the column count it will consider.
+const minColumnWidth = 3
+
+// columnLayout picks the largest number of columns whose total line
+// length stays under width, mirroring GNU's search: every column
+// starts at minColumnWidth, each entry claims a colGutter separator
+// except in the last column, and a candidate is valid only when its
+// line length is strictly less than the width.
+func columnLayout(cells []string, width int, down bool) (cols, rows int, colW []int) {
+	maxCols := min(len(cells), max(1, width/minColumnWidth))
+	cols, rows, colW = 1, len(cells), []int{minColumnWidth}
+	for n := 1; n <= maxCols; n++ {
+		r := (len(cells) + n - 1) / n
+		w := make([]int, n)
+		lineLen := 0
+		for c := range w {
+			w[c] = minColumnWidth
+			lineLen += minColumnWidth
+		}
+		for i, cell := range cells {
+			c := i / r
+			if !down {
+				c = i % n
+			}
+			cw := cellWidth(cell)
+			if c != n-1 {
+				cw += colGutter
+			}
+			if cw > w[c] {
+				lineLen += cw - w[c]
+				w[c] = cw
+			}
+		}
+		if lineLen < width {
+			cols, rows, colW = n, r, w
+		}
+	}
+	return cols, rows, colW
+}
+
+// printCommas writes cells as a comma-separated stream wrapped at
+// width (-m). The comma stays on the line it ends, and no separator
+// follows the final entry.
+func printCommas(out io.Writer, cells []string, width int) {
+	pos := 0
+	for i, c := range cells {
+		w := cellWidth(c)
+		if i > 0 {
+			if pos+w+2 < width {
+				fmt.Fprint(out, ", ")
+				pos += 2
+			} else {
+				fmt.Fprint(out, ",\n")
+				pos = 0
+			}
+		}
+		fmt.Fprint(out, c)
+		pos += w
+	}
+	if len(cells) > 0 {
+		fmt.Fprintln(out)
+	}
+}
+
+// cellWidth is the printed width of a name. Names are byte strings in
+// this userland's C-locale contract, so one byte is one column.
+func cellWidth(s string) int { return len(s) }
+
+// quoteControl applies -q: every non-printable byte becomes '?'. In
+// the C locale that is every byte outside the printable ASCII range,
+// which is what GNU writes for a name it cannot display.
+func quoteControl(s string, opt options) string {
+	if !opt.hideControl {
+		return s
+	}
+	b := []byte(s)
+	for i, c := range b {
+		if c < 0x20 || c >= 0x7f {
+			b[i] = '?'
+		}
+	}
+	return string(b)
+}
+
 func displayName(e entry, opt options) string {
 	name := e.name
 	if opt.quoteName {
@@ -618,6 +865,7 @@ func displayName(e entry, opt options) string {
 			name = name[1 : len(name)-1]
 		}
 	}
+	name = quoteControl(name, opt)
 	if opt.classify || opt.fileType || opt.slashDirs {
 		name += indicator(e, opt.classify, opt.fileType, opt.slashDirs)
 	}
@@ -646,23 +894,89 @@ func indicator(e entry, classify, fileType, slashDirs bool) string {
 	}
 }
 
-func sizeString(fi os.FileInfo, sys sysInfo, human bool) string {
+func sizeString(fi os.FileInfo, sys sysInfo, opt options) string {
 	if fi.Mode()&os.ModeDevice != 0 {
 		return fmt.Sprintf("%d, %d", sys.rdevMajor, sys.rdevMinor)
 	}
-	if human {
-		return humanSize(uint64(fi.Size()))
+	return scaledSize(uint64(fi.Size()), opt.sizeUnit, opt)
+}
+
+// scaledSize renders n bytes for display: human-readable when -h/--si
+// asked for it, otherwise in units of unit, rounded up as GNU does.
+func scaledSize(n, unit uint64, opt options) string {
+	if opt.human {
+		if opt.si {
+			return humanSizeBase(n, 1000, "kMGTPE")
+		}
+		return humanSize(n)
 	}
-	return strconv.FormatInt(fi.Size(), 10)
+	if unit <= 1 {
+		return strconv.FormatUint(n, 10)
+	}
+	return strconv.FormatUint((n+unit-1)/unit, 10)
+}
+
+// parseBlockSize accepts the GNU --block-size spellings: a plain byte
+// count, a 1024-based suffix (K, M, G, …, optionally spelled KiB), or a
+// 1000-based one (KB, MB, …).
+func parseBlockSize(s string) (uint64, error) {
+	digits := 0
+	for digits < len(s) && isDigit(s[digits]) {
+		digits++
+	}
+	n := uint64(1)
+	if digits > 0 {
+		v, err := strconv.ParseUint(s[:digits], 10, 64)
+		if err != nil || v == 0 {
+			return 0, fmt.Errorf("invalid size %q", s)
+		}
+		n = v
+	}
+	suffix := s[digits:]
+	if suffix == "" {
+		if digits == 0 {
+			return 0, fmt.Errorf("invalid size %q", s)
+		}
+		return n, nil
+	}
+	base := uint64(1024)
+	switch {
+	case strings.HasSuffix(suffix, "iB"): // KiB, MiB, …
+		suffix = suffix[:len(suffix)-2]
+	case strings.HasSuffix(suffix, "B"): // KB, MB, … are powers of 1000
+		suffix = suffix[:len(suffix)-1]
+		base = 1000
+	}
+	idx := strings.IndexByte("KMGTPE", suffix[0])
+	if len(suffix) != 1 || idx < 0 {
+		return 0, fmt.Errorf("invalid size %q", s)
+	}
+	for i := 0; i <= idx; i++ {
+		n *= base
+	}
+	return n, nil
 }
 
 // sixMonths is GNU's "recent" cutoff: half of 365.2425 days.
 const sixMonths = 15778476 * time.Second
 
-// timeString renders the -l timestamp: "Jan  2 15:04" for recent
-// files, "Jan  2  2006" for old or future ones (C locale).
-func timeString(t, now time.Time) string {
-	if t.After(now) || now.Sub(t) > sixMonths {
+// timeString renders the -l timestamp in the selected style. The
+// default (locale) style is C-locale "Jan  2 15:04" for recent files
+// and "Jan  2  2006" for old or future ones; the ISO styles are fixed.
+func timeString(t, now time.Time, style timeStyle) string {
+	recent := !t.After(now) && now.Sub(t) <= sixMonths
+	switch style {
+	case styleLongISO:
+		return t.Format("2006-01-02 15:04")
+	case styleFullISO:
+		return t.Format("2006-01-02 15:04:05.000000000 -0700")
+	case styleISO:
+		if recent {
+			return t.Format("01-02 15:04")
+		}
+		return t.Format("2006-01-02")
+	}
+	if !recent {
 		return t.Format("Jan _2  2006")
 	}
 	return t.Format("Jan _2 15:04")
@@ -875,6 +1189,109 @@ func ExtractShort(args []string, chars string) ([]string, map[byte]int) {
 	return rest, found
 }
 
+// formatWord maps a --format=WORD value to its format, reporting
+// whether the word is one GNU defines.
+func formatWord(word string) (fmtKind, bool) {
+	switch word {
+	case "long", "verbose":
+		return fmtLong, true
+	case "single-column":
+		return fmtOnePerLine, true
+	case "commas":
+		return fmtCommas, true
+	case "across", "horizontal":
+		return fmtAcross, true
+	case "vertical":
+		return fmtColumns, true
+	}
+	return fmtOnePerLine, false
+}
+
+// shortFormat maps a short format option letter to its format.
+func shortFormat(ch byte) (fmtKind, bool) {
+	switch ch {
+	case 'l', 'g', 'n', 'o':
+		return fmtLong, true
+	case '1':
+		return fmtOnePerLine, true
+	case 'C':
+		return fmtColumns, true
+	case 'x':
+		return fmtAcross, true
+	case 'm':
+		return fmtCommas, true
+	}
+	return fmtOnePerLine, false
+}
+
+// argTakingShorts are the short options whose value is attached to the
+// same argument, so a cluster scan must stop at them rather than read
+// the value's characters as further options.
+const argTakingShorts = "IwT"
+
+// lastFormat returns the format selected by the last format option in
+// args, and whether args contained one at all. formatVal is the parsed
+// --format value (already validated), used when --format is the last
+// format option. Scanning stops at "--".
+func lastFormat(args []string, formatVal string) (fmtKind, bool) {
+	kind, found := fmtOnePerLine, false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		if strings.HasPrefix(a, "--") {
+			name := a[2:]
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				name = name[:eq]
+			} else if name == "format" {
+				i++ // the value is the next argument
+			}
+			switch name {
+			case "format":
+				if k, ok := formatWord(formatVal); ok {
+					kind, found = k, true
+				}
+			case "long":
+				kind, found = fmtLong, true
+			case "full-time":
+				kind, found = fmtLong, true
+			}
+			continue
+		}
+		if len(a) > 1 && a[0] == '-' {
+			for j := 1; j < len(a); j++ {
+				if strings.IndexByte(argTakingShorts, a[j]) >= 0 {
+					break
+				}
+				if k, ok := shortFormat(a[j]); ok {
+					kind, found = k, true
+				}
+			}
+		}
+	}
+	return kind, found
+}
+
+// lineWidth resolves the output line width for the column and comma
+// formats: -w/--width, else COLUMNS, else the 80-column non-tty
+// default. GNU documents a width of 0 as "no limit".
+func lineWidth(rc *tool.RunContext, fs *pflag.FlagSet) int {
+	if fs.Changed("width") {
+		w, _ := fs.GetInt("width")
+		if w <= 0 {
+			return unlimitedWidth
+		}
+		return w
+	}
+	if c := rc.Getenv("COLUMNS"); c != "" {
+		if n, err := strconv.Atoi(c); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultWidth
+}
+
 // lastTimeSelector scans args for the last of -c, -u, or --time,
 // returning 'c', 'u', 'T' (--time), or 0 when none is present;
 // scanning stops at the "--" terminator. Only which selector came last
@@ -943,15 +1360,18 @@ func errMsg(err error) string {
 
 // humanSize renders n bytes in GNU --human-readable form: powers of
 // 1024, at most one decimal digit, always rounding up (1025 -> 1.1K).
-func humanSize(n uint64) string {
-	if n < 1024 {
+func humanSize(n uint64) string { return humanSizeBase(n, 1024, "KMGTPE") }
+
+// humanSizeBase is humanSize over an arbitrary base and unit-suffix
+// set, so --si can render the same shape in powers of 1000.
+func humanSizeBase(n, base uint64, units string) string {
+	if n < base {
 		return strconv.FormatUint(n, 10)
 	}
-	const units = "KMGTPE"
-	div := uint64(1024)
+	div := base
 	idx := 0
-	for n/div >= 1024 && idx < len(units)-1 {
-		div *= 1024
+	for n/div >= base && idx < len(units)-1 {
+		div *= base
 		idx++
 	}
 	whole, rem := n/div, n%div
@@ -966,7 +1386,7 @@ func humanSize(n uint64) string {
 	if rem > 0 {
 		v++
 	}
-	if v >= 1024 && idx < len(units)-1 {
+	if v >= base && idx < len(units)-1 {
 		return fmt.Sprintf("1.0%c", units[idx+1])
 	}
 	return fmt.Sprintf("%d%c", v, units[idx])

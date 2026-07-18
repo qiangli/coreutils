@@ -270,7 +270,8 @@ func TestUutilsDisplayOptions(t *testing.T) {
 		t.Fatalf("ls --zero --sort=extension = (%q, %d)", out, code)
 	}
 	out, _, code = runToolAt(t, dir, "--format=commas")
-	if code != 0 || out != "a.txt, b.go, skip~, sub, \n" {
+	// The comma stream has no separator after the final entry.
+	if code != 0 || out != "a.txt, b.go, skip~, sub\n" {
 		t.Fatalf("ls --format=commas = (%q, %d)", out, code)
 	}
 }
