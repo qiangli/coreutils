@@ -153,7 +153,11 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		}
 	}
 	if cfg.skip > 0 {
-		n := cfg.skip * cfg.ibs
+		n, ok := multiplyBlocks(cfg.skip, cfg.ibs)
+		if !ok {
+			fmt.Fprintln(rc.Err, "dd: skip is too large")
+			return 2
+		}
 		if inf != nil {
 			if _, err := inf.Seek(n, io.SeekStart); err != nil {
 				fmt.Fprintf(rc.Err, "dd: failed to skip '%s': %v\n", cfg.ifile, reason(err))
@@ -168,7 +172,12 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		if outf == nil {
 			return tool.NotSupported(rc, cmd, "seek= with standard output")
 		}
-		if _, err := outf.Seek(cfg.seek*cfg.obs, io.SeekStart); err != nil {
+		n, ok := multiplyBlocks(cfg.seek, cfg.obs)
+		if !ok {
+			fmt.Fprintln(rc.Err, "dd: seek is too large")
+			return 2
+		}
+		if _, err := outf.Seek(n, io.SeekStart); err != nil {
 			fmt.Fprintf(rc.Err, "dd: failed to seek '%s': %v\n", cfg.ofile, reason(err))
 			return 1
 		}
@@ -179,7 +188,11 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		blocker = &obsWriter{w: out, obs: cfg.obs}
 		out = blocker
 	}
-	buf := make([]byte, cfg.ibs)
+	buf, err := makeBuffer(cfg.ibs)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "dd: input buffer: %v\n", err)
+		return 1
+	}
 	var full, partial, bytesCopied int64
 	for cfg.count < 0 || full+partial < cfg.count {
 		n, rerr := in.Read(buf)
@@ -189,7 +202,7 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 			} else {
 				partial++
 			}
-			if _, err := out.Write(buf[:n]); err != nil {
+			if err := writeAll(out, buf[:n]); err != nil {
 				fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
 				return 1
 			}
@@ -242,7 +255,7 @@ func (o *obsWriter) Write(p []byte) (int, error) {
 	total := len(p)
 	for len(p) > 0 {
 		if len(o.buf) == 0 && int64(len(p)) >= o.obs {
-			if _, err := o.w.Write(p[:o.obs]); err != nil {
+			if err := writeAll(o.w, p[:o.obs]); err != nil {
 				return 0, err
 			}
 			o.full++
@@ -253,7 +266,7 @@ func (o *obsWriter) Write(p []byte) (int, error) {
 		o.buf = append(o.buf, p[:n]...)
 		p = p[n:]
 		if int64(len(o.buf)) == o.obs {
-			if _, err := o.w.Write(o.buf); err != nil {
+			if err := writeAll(o.w, o.buf); err != nil {
 				return 0, err
 			}
 			o.full++
@@ -267,7 +280,7 @@ func (o *obsWriter) Flush() error {
 	if len(o.buf) == 0 {
 		return nil
 	}
-	if _, err := o.w.Write(o.buf); err != nil {
+	if err := writeAll(o.w, o.buf); err != nil {
 		return err
 	}
 	o.partial++
@@ -308,6 +321,9 @@ func parseBytes(s string) (int64, error) {
 	if !ok {
 		return 0, strconv.ErrSyntax
 	}
+	if m != 0 && n > int64(^uint64(0)>>1)/m {
+		return 0, strconv.ErrRange
+	}
 	return n * m, nil
 }
 
@@ -316,7 +332,45 @@ func parseCount(s string) (int64, error) {
 	if err == nil {
 		return n, nil
 	}
-	return strconv.ParseInt(s, 10, 64)
+	n, err = strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		if err == nil {
+			err = strconv.ErrRange
+		}
+		return 0, err
+	}
+	return n, nil
+}
+
+func multiplyBlocks(blocks, size int64) (int64, bool) {
+	if blocks < 0 || size < 0 || (size != 0 && blocks > int64(^uint64(0)>>1)/size) {
+		return 0, false
+	}
+	return blocks * size, true
+}
+
+func makeBuffer(size int64) (buf []byte, err error) {
+	if size <= 0 || uint64(size) > uint64(^uint(0)>>1) {
+		return nil, strconv.ErrRange
+	}
+	defer func() {
+		if recover() != nil {
+			buf = nil
+			err = errors.New("cannot allocate memory")
+		}
+	}()
+	return make([]byte, int(size)), nil
+}
+
+func writeAll(w io.Writer, p []byte) error {
+	n, err := w.Write(p)
+	if err != nil {
+		return err
+	}
+	if n != len(p) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func reason(err error) error {

@@ -3,6 +3,7 @@ package ddcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,5 +168,31 @@ func TestDdBsWritesRecordsAsRead(t *testing.T) {
 	want := "1+1 records in\n1+1 records out\n6 bytes copied\n"
 	if errb != want {
 		t.Fatalf("status=%q want %q", errb, want)
+	}
+}
+
+func TestDdRejectsNegativeCounts(t *testing.T) {
+	for _, operand := range []string{"count=-1", "skip=-1", "seek=-1"} {
+		_, errb, code := runTool(t, t.TempDir(), "data", operand, "status=none")
+		if code != 2 || !strings.Contains(errb, "invalid number") {
+			t.Errorf("operand %s: code=%d err=%q", operand, code, errb)
+		}
+	}
+}
+
+func TestDdRejectsByteSizeOverflow(t *testing.T) {
+	_, errb, code := runTool(t, t.TempDir(), "", "bs=9223372036854775807K", "status=none")
+	if code != 2 || !strings.Contains(errb, "invalid number") {
+		t.Fatalf("overflow: code=%d err=%q", code, errb)
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+func TestDdDetectsShortWrites(t *testing.T) {
+	if err := writeAll(shortWriter{}, []byte("abc")); err != io.ErrShortWrite {
+		t.Fatalf("writeAll error=%v want %v", err, io.ErrShortWrite)
 	}
 }
