@@ -364,17 +364,27 @@ func ReadOnlyArgs(tool string, args []string) []string {
 func ApplySandbox(agent string, args []string, opt Options) []string {
 	if agent == "codex" {
 		sb := strings.TrimSpace(opt.Sandbox)
-		if sb == "danger-full-access" {
+		switch {
+		case sb == "danger-full-access":
 			return replaceSandboxFlag(args, "--dangerously-bypass-approvals-and-sandbox")
-		}
-		if sb != "" {
+		case sb != "":
+			// An explicit sandbox override always wins (a reviewer's read-only, etc.).
 			for i := 0; i < len(args)-1; i++ {
 				if args[i] == "--sandbox" {
 					args[i+1] = sb
 					return args
 				}
 			}
-			args = append(args, "--sandbox", sb)
+			return append(args, "--sandbox", sb)
+		case opt.AllowUnsafe && !opt.ReadOnly:
+			// --yolo with no explicit override. codex's approval gate is a SANDBOX
+			// VALUE, not a boolean kill-switch, so --yolo has to map it to codex's own
+			// bypass flag — otherwise an unattended codex prompts on every action (its
+			// "always allow" is per-project, so it re-prompts each new dir), and a
+			// remotely-driven fleet agent has no one at the terminal to answer. Only
+			// the explicit flag does this — merely permitting unsafe launches (the env
+			// var / a container) does NOT, so a default codex still gets workspace-write.
+			return replaceSandboxFlag(args, "--dangerously-bypass-approvals-and-sandbox")
 		}
 	}
 	return args
