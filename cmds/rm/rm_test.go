@@ -289,3 +289,50 @@ func TestRmRecursiveInteractivePrompts(t *testing.T) {
 		t.Error("directory not removed after 'y' answers")
 	}
 }
+
+func TestRmRejectsDotAndDotDotOperands(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "keep"), "x")
+	for _, operand := range []string{".", "./.", "..", "child/.."} {
+		_, errb, code := runTool(t, dir, "-r", operand)
+		if code != 1 || !strings.Contains(errb, "refusing to remove") {
+			t.Errorf("rm -r %q: code=%d err=%q", operand, code, errb)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "keep")); err != nil {
+		t.Fatalf("dot operand removed contents: %v", err)
+	}
+}
+
+func TestRmLastPromptOptionWins(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, input string
+		args        []string
+		wantPresent bool
+	}{
+		{"force after interactive", "", []string{"-i", "-f", "a"}, false},
+		{"interactive after force", "n\n", []string{"-f", "-i", "a"}, true},
+		{"cluster order", "n\n", []string{"-fi", "a"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			write(t, filepath.Join(dir, "a"), "x")
+			_, _, code := runToolIn(t, dir, tc.input, tc.args...)
+			if code != 0 {
+				t.Fatalf("code=%d", code)
+			}
+			_, err := os.Lstat(filepath.Join(dir, "a"))
+			if (err == nil) != tc.wantPresent {
+				t.Fatalf("present=%v, want %v", err == nil, tc.wantPresent)
+			}
+		})
+	}
+}
+
+func TestRmInteractiveAfterForceNeedsOperand(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-f", "-i")
+	if code != 2 || !strings.Contains(errb, "missing operand") {
+		t.Errorf("rm -f -i: code=%d err=%q", code, errb)
+	}
+}
