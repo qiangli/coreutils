@@ -312,9 +312,11 @@ func applySimpleSubstitution(subst *simpleSubstitution, in io.Reader, out io.Wri
 	dst := make([]byte, 0, 4096)
 	for len(src) > 0 {
 		line := src
+		hasNewline := false
 		if i := bytes.IndexByte(src, '\n'); i >= 0 {
 			line = src[:i]
 			src = src[i+1:]
+			hasNewline = true
 		} else {
 			src = nil
 		}
@@ -323,8 +325,10 @@ func applySimpleSubstitution(subst *simpleSubstitution, in io.Reader, out io.Wri
 		if _, err := w.Write(dst); err != nil {
 			return err
 		}
-		if err := w.WriteByte('\n'); err != nil {
-			return err
+		if hasNewline {
+			if err := w.WriteByte('\n'); err != nil {
+				return err
+			}
 		}
 	}
 	return w.Flush()

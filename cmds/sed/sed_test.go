@@ -34,6 +34,15 @@ func TestSedBasicSubstitution(t *testing.T) {
 	}
 }
 
+func TestSedPreservesMissingFinalNewline(t *testing.T) {
+	if out, errOut, code := runSed(t, "hello", "s/l/L/g"); code != 0 || errOut != "" || out != "heLLo" {
+		t.Errorf("s/l/L/g without final newline = (%q, %q, %d), want (%q, empty, 0)", out, errOut, code, "heLLo")
+	}
+	if out, errOut, code := runSed(t, "hello", "-n", "s/l/L/gp"); code != 0 || errOut != "" || out != "heLLo" {
+		t.Errorf("-n s/l/L/gp without final newline = (%q, %q, %d), want (%q, empty, 0)", out, errOut, code, "heLLo")
+	}
+}
+
 // The headline GNU-compat case: BRE \(...\) groups + \1/\2 backrefs, which the
 // upstream (Go/ERE) engine could not do — proves the translation layer.
 func TestSedBREGroupsAndBackrefs(t *testing.T) {
