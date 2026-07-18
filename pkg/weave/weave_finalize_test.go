@@ -224,6 +224,76 @@ func TestWeaveKillRecoversExpiredFinalizationWithoutList(t *testing.T) {
 	}
 }
 
+func TestWeaveAbandonRecoversExpiredFinalizationWithoutList(t *testing.T) {
+	root := setupIsolationFixture(t)
+	workspace := t.TempDir() + "/workspace"
+	gitT(t, root, "clone", "--local", "--no-hardlinks", root, workspace)
+	wrapper := exec.Command("sleep", "60")
+	if err := wrapper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = wrapper.Process.Kill()
+		_, _ = wrapper.Process.Wait()
+	}()
+	t.Chdir(root)
+	dir, _ := weaveQueueDir(root)
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{{
+		ID:           1,
+		State:        "finalizing",
+		Completion:   "conductor-finalizing-observed-idle",
+		FinalizerPID: os.Getpid(),
+		FinalizingAt: time.Now().UTC().Add(-weaveFinalizationLease - time.Second),
+		WrapperPid:   wrapper.Process.Pid,
+		Workspace:    workspace,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runWeave(t, "abandon", "1", "--json"); code != 0 {
+		t.Fatalf("direct abandon did not recover finalizing claim: exit=%d output=%s", code, out)
+	}
+	_ = wrapper.Wait()
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("abandon kept workspace after stopping wrapper: %v", err)
+	}
+}
+
+func TestWeaveFinalizeCountsAgainstImmutableBase(t *testing.T) {
+	root := setupIsolationFixture(t)
+	base := strings.TrimSpace(gitT(t, root, "rev-parse", "HEAD"))
+	workspace := t.TempDir() + "/workspace"
+	gitT(t, root, "clone", "--local", "--no-hardlinks", root, workspace)
+	gitT(t, workspace, "checkout", "-qb", "agent/weave-issue-1")
+	mustWrite(t, workspace+"/done.txt", "done\n")
+	gitT(t, workspace, "add", "done.txt")
+	gitT(t, workspace, "commit", "-qm", "agent complete")
+	// Advance the live base to the worker head. Measuring against mutable main
+	// would now report zero; the run's immutable BaseSHA still proves one commit.
+	gitT(t, root, "fetch", workspace, "agent/weave-issue-1:agent/weave-issue-1")
+	gitT(t, root, "merge", "--ff-only", "agent/weave-issue-1")
+	t.Chdir(root)
+	dir, _ := weaveQueueDir(root)
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{{
+		ID:        1,
+		State:     "working",
+		Workspace: workspace,
+		Branch:    "agent/weave-issue-1",
+		BaseSHA:   base,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runWeave(t, "finalize", "1", "--observed-idle", "--json"); code != 0 {
+		t.Fatalf("finalize failed after base advanced: exit=%d output=%s", code, out)
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findWeaveItem(q, 1); got == nil || got.State != "submitted" || got.CommitsAhead != 1 {
+		t.Fatalf("immutable base evidence was lost after live base advance: %#v", got)
+	}
+}
+
 func TestWeaveFinalizeRequiresObservedIdleAcknowledgment(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)

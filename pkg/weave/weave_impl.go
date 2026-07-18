@@ -3912,6 +3912,10 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 			weavecli.ExitPrecondFail, err))
 	}
 	dir, _ := weaveQueueDir(root)
+	if err := weaveRecoverAbandonedFinalizations(dir); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave abandon",
+			weavecli.ExitGenericFail, err))
+	}
 	if err := weaveConfirmTargeted(cmd, mode,
 		fmt.Sprintf("weave abandon: tears down run #%d's workspace + branch; any unmerged work is lost.", id), yes); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave abandon",
@@ -3932,7 +3936,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 		// running weave; the dogfood found that `pkill -f` would also
 		// catch peer ycode/claude sessions belonging to other agents,
 		// which is dangerous in a shared agentic environment.
-		if it.State == "working" && it.WrapperPid > 0 {
+		if (it.State == "working" || weaveWrapperTerminalClaimed(it)) && it.WrapperPid > 0 {
 			weaveStopWrapper(it.WrapperPid)
 		}
 		// Workspace is a real git clone now (not a worktree); delete the
@@ -3950,6 +3954,9 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 		it.State = "abandoned"
 		it.Workspace = ""
 		it.WrapperPid = 0
+		it.Completion = ""
+		it.FinalizerPID = 0
+		it.FinalizingAt = time.Time{}
 		return nil
 	})
 	if lockErr != nil {
@@ -5087,6 +5094,7 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	}
 	dir, _ := weaveQueueDir(root)
 	base := weaveBaseBranch(root)
+	var countRef string
 	var wrapperPID int
 	var workspace, verifyCommand string
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
@@ -5098,6 +5106,7 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 			return fmt.Errorf("run #%d state is %q (finalize requires working)", id, it.State)
 		}
 		wrapperPID, workspace, verifyCommand = it.WrapperPid, it.Workspace, it.VerifyCommand
+		countRef = weaveCountRef(it, base)
 		// Claim the terminal write BEFORE stopping the wrapper. Its normal
 		// exit path then yields to this explicit finalizer instead of racing
 		// us to write a killed/failed inference.
@@ -5118,9 +5127,9 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	if wrapperPID > 0 && pidAlive(wrapperPID) {
 		weaveStopWrapper(wrapperPID)
 	}
-	ev := weaveCollectTerminalEvidence(workspace, base, "", false)
+	ev := weaveCollectTerminalEvidence(workspace, countRef, "", false)
 	if verifyCommand != "" && (ev.CommitsAhead > 0 || ev.Dirty || ev.UntrackedFiles > 0) {
-		ev = weaveCollectTerminalEvidence(workspace, base, verifyCommand, true)
+		ev = weaveCollectTerminalEvidence(workspace, countRef, verifyCommand, true)
 	}
 	state := "failed"
 	if ev.CommitsAhead > 0 && !ev.Dirty && ev.UntrackedFiles == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) {
