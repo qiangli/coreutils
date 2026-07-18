@@ -73,7 +73,7 @@ func magCompare(ia, fa, ib, fb string) int {
 	if d := strings.Compare(ia, ib); d != 0 {
 		return d
 	}
-	return strings.Compare(fa, fb)
+	return compareFraction(fa, fb)
 }
 
 func numCompare(a, b string) int {
@@ -243,11 +243,19 @@ func compareFraction(a, b string) int {
 			return 1
 		}
 	}
-	if na < nb {
-		return -1
+	// Missing trailing fractional digits are zeroes: .2 and .20
+	// represent the same value, while .2 is greater than .19.
+	for na < nb {
+		if b[na] != '0' {
+			return -1
+		}
+		na++
 	}
-	if na > nb {
-		return 1
+	for nb < na {
+		if a[nb] != '0' {
+			return 1
+		}
+		nb++
 	}
 	return 0
 }

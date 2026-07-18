@@ -41,6 +41,7 @@ func TestSortBasic(t *testing.T) {
 		{"numeric", "10\n9\n-3\n2.5\n", []string{"-n"}, "-3\n2.5\n9\n10\n"},
 		{"numeric non-numbers are zero", "5\nabc\n-1\n", []string{"-n"}, "-1\nabc\n5\n"},
 		{"numeric big integers beyond float precision", "9007199254740993\n9007199254740992\n", []string{"-n"}, "9007199254740992\n9007199254740993\n"},
+		{"numeric fractional alignment", "1.2\n1.10\n-1.2\n-1.10\n", []string{"-n"}, "-1.2\n-1.10\n1.10\n1.2\n"},
 		{"human numeric", "1G\n2K\n500\n1023M\n", []string{"-h"}, "500\n2K\n1023M\n1G\n"},
 		{"human numeric negative", "1K\n-2G\n3\n", []string{"-h"}, "-2G\n3\n1K\n"},
 		// Equal-under-fold lines are ordered by the last-resort byte compare.
@@ -311,6 +312,11 @@ func TestSortNewFlags(t *testing.T) {
 	out, _, code = runToolDir(t, dir, "", "--files0-from", "list")
 	if code != 0 || out != "a\nb\nc\n" {
 		t.Errorf("--files0-from: got=%q code=%d", out, code)
+	}
+	// A file list of "-" is read from standard input.
+	out, _, code = runToolDir(t, dir, "f.txt\x00", "--files0-from", "-")
+	if code != 0 || out != "a\nb\nc\n" {
+		t.Errorf("--files0-from -: got=%q code=%d", out, code)
 	}
 }
 

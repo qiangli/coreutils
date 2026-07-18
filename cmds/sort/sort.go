@@ -178,7 +178,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	if *files0 != "" {
-		files, err := readFiles0From(rc.Path(*files0))
+		files, err := readFiles0From(rc, *files0)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "sort: %s: %v\n", *files0, err)
 			return 2
@@ -483,7 +483,7 @@ func compareNumericKey(as string, a numericKey, bs string, b numericKey) int {
 	}
 	if m == 0 {
 		af, bf := int(a.fpStart), int(b.fpStart)
-		m = strings.Compare(as[af:af+int(a.fpLen)], bs[bf:bf+int(b.fpLen)])
+		m = compareFraction(as[af:af+int(a.fpLen)], bs[bf:bf+int(b.fpLen)])
 	}
 	if a.sign < 0 {
 		return -m
@@ -708,8 +708,14 @@ func bytesString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
-func readFiles0From(path string) ([]string, error) {
-	data, err := os.ReadFile(path)
+func readFiles0From(rc *tool.RunContext, path string) ([]string, error) {
+	var data []byte
+	var err error
+	if path == "-" {
+		data, err = io.ReadAll(rc.In)
+	} else {
+		data, err = os.ReadFile(rc.Path(path))
+	}
 	if err != nil {
 		return nil, err
 	}
