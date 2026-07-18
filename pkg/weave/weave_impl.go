@@ -67,6 +67,9 @@ func weaveOtherActiveQueues(currentDir string) []map[string]any {
 		if err != nil {
 			continue
 		}
+		if !weaveQueueRootAvailable(q) {
+			continue
+		}
 		active := 0
 		for _, it := range q.Items {
 			if !isTerminalState(it.State) {
@@ -1567,6 +1570,24 @@ func weaveAllQueueDirs() []string {
 	return dirs
 }
 
+// weaveQueueRootAvailable reports whether a discovered queue still belongs to
+// a repository on disk. Test and other short-lived repositories leave queue
+// registrations behind after their temporary root is removed; those records
+// must not make `weave list --all` advertise a repository that cannot be
+// visited.
+//
+// Discovery deliberately does not delete the queue directory. It may contain
+// the only copy of an isolated workspace branch, and queue discovery has
+// neither enough evidence nor authority to decide that work is disposable.
+// Queues predating the Root field remain visible for backward compatibility.
+func weaveQueueRootAvailable(q *weaveQueue) bool {
+	if q.Root == "" {
+		return true
+	}
+	fi, err := os.Stat(q.Root)
+	return err == nil && fi.IsDir()
+}
+
 // weaveQueueSummaries prints one compact line per queue on the
 // machine: basename as the queue's name, state counts, and what is
 // actively running. Used when the current repo has no queue.
@@ -1586,6 +1607,9 @@ func weaveQueueSummaries(w io.Writer, skipDir string, activeOnly bool) int {
 		}
 		q, err := loadWeaveQueue(dir)
 		if err != nil || len(q.Items) == 0 {
+			continue
+		}
+		if !weaveQueueRootAvailable(q) {
 			continue
 		}
 		root := q.Root
@@ -1644,6 +1668,9 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 	for _, dir := range weaveAllQueueDirs() {
 		q, err := loadWeaveQueue(dir)
 		if err != nil || len(q.Items) == 0 {
+			continue
+		}
+		if !weaveQueueRootAvailable(q) {
 			continue
 		}
 		var items []*weaveItem

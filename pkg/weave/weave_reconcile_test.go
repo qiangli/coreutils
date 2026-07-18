@@ -23,7 +23,10 @@ import (
 func TestWeaveQueueSummariesActiveOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	base := filepath.Join(home, ".agents", "ycode", "weave")
+	doneRoot := t.TempDir()
+	busyRoot := t.TempDir()
 
 	writeQueue := func(tag string, q *weaveQueue) {
 		dir := filepath.Join(base, tag)
@@ -34,26 +37,70 @@ func TestWeaveQueueSummariesActiveOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeQueue("done-repo-aaaa1111", &weaveQueue{Root: "/repo/done-repo", Items: []*weaveItem{
+	writeQueue("done-repo-aaaa1111", &weaveQueue{Root: doneRoot, Items: []*weaveItem{
 		{ID: 1, State: "done"}, {ID: 2, State: "abandoned"},
 	}})
-	writeQueue("busy-repo-bbbb2222", &weaveQueue{Root: "/repo/busy-repo", Items: []*weaveItem{
+	writeQueue("busy-repo-bbbb2222", &weaveQueue{Root: busyRoot, Items: []*weaveItem{
 		{ID: 1, State: "done"}, {ID: 2, State: "working", Tool: "codex"},
 	}})
 
 	var active bytes.Buffer
 	weaveQueueSummaries(&active, "", true)
-	if strings.Contains(active.String(), "done-repo") {
+	if strings.Contains(active.String(), filepath.Base(doneRoot)) {
 		t.Errorf("activeOnly=true should skip the all-terminal queue; got:\n%s", active.String())
 	}
-	if !strings.Contains(active.String(), "busy-repo") {
+	if !strings.Contains(active.String(), filepath.Base(busyRoot)) {
 		t.Errorf("activeOnly=true should list the queue with a working item; got:\n%s", active.String())
 	}
 
 	var overview bytes.Buffer
 	weaveQueueSummaries(&overview, "", false)
-	if !strings.Contains(overview.String(), "done-repo") {
+	if !strings.Contains(overview.String(), filepath.Base(doneRoot)) {
 		t.Errorf("activeOnly=false (machine overview) should still list the all-terminal queue; got:\n%s", overview.String())
+	}
+}
+
+// A queue registered by a test repo used to survive t.TempDir cleanup and
+// appear forever in `weave list --all`. Discovery must ignore that stale
+// registration without deleting its queue/workspace, while a live repo in the
+// same registry remains visible.
+func TestWeaveListAllIgnoresMissingRepoAndPreservesLiveQueue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("BASHY_AGENTIC", "")
+
+	liveRoot := t.TempDir()
+	missingRoot := filepath.Join(t.TempDir(), "removed-repo")
+	stateRoot := weaveStateRoot(home)
+	liveDir := filepath.Join(stateRoot, "live-repo-11111111")
+	missingDir := filepath.Join(stateRoot, "removed-repo-22222222")
+	for _, dir := range []string{liveDir, missingDir} {
+		if err := os.MkdirAll(filepath.Join(dir, "workspaces", "issue-1"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := saveWeaveQueue(liveDir, &weaveQueue{Root: liveRoot, Items: []*weaveItem{{ID: 1, Title: "live marker", State: "working"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveWeaveQueue(missingDir, &weaveQueue{Root: missingRoot, Items: []*weaveItem{{ID: 2, Title: "missing marker", State: "working"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWeave(t, "list", "--all", "--history", "--json")
+	if code != 0 {
+		t.Fatalf("list --all exit=%d out=%s", code, out)
+	}
+	if !strings.Contains(out, "live marker") {
+		t.Fatalf("live repository disappeared from global discovery: %s", out)
+	}
+	if strings.Contains(out, "missing marker") {
+		t.Fatalf("missing temporary repository remained visible: %s", out)
+	}
+	for _, dir := range []string{liveDir, missingDir} {
+		if _, err := os.Stat(filepath.Join(dir, "workspaces", "issue-1")); err != nil {
+			t.Fatalf("discovery deleted workspace %s: %v", dir, err)
+		}
 	}
 }
 

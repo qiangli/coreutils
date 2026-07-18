@@ -4,7 +4,6 @@
 package weave
 
 import (
-	"os"
 	"testing"
 	"time"
 
@@ -13,6 +12,10 @@ import (
 )
 
 func TestWeaveDelegationSetsAssignee(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
 	// Setup repo with a docs/todo list
 	dir := weaveTestRepo(t)
 
@@ -33,9 +36,7 @@ func TestWeaveDelegationSetsAssignee(t *testing.T) {
 	t.Setenv("WEAVE_AGENT", "agent-smith")
 
 	// Run weave add --from-todo
-	oldCwd, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldCwd)
+	t.Chdir(dir)
 
 	cmd := newWeaveAddCmd()
 	cmd.SetArgs([]string{"--from-issue", "testabc123"})

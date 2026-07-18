@@ -34,6 +34,8 @@ func weaveTestRepo(t *testing.T) string {
 		t.Fatal(err)
 	}
 	weaveTestGit(t, repo, "init", "-q")
+	weaveTestGit(t, repo, "config", "user.name", "weave test")
+	weaveTestGit(t, repo, "config", "user.email", "weave-test@example.invalid")
 	weaveTestGit(t, repo, "checkout", "-qb", "main")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
