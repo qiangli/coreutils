@@ -73,7 +73,7 @@ var ladder = []backend{
 // Web runs a web search through the first available backend. It returns the
 // results and the backend that served them.
 func Web(ctx context.Context, query string, opt Options) ([]Result, string, error) {
-	query = strings.TrimSpace(query)
+	query = normalizeQuery(query)
 	if query == "" {
 		return nil, "", errors.New("search: empty query")
 	}
@@ -248,6 +248,36 @@ func do(client *http.Client, req *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return raw, nil
+}
+
+// Brave rejects queries over 400 characters AND over 50 words (both HTTP 422);
+// Tavily/Serper are more lenient, but a search query is keywords not prose, so
+// one conservative cap serves them all. A caller that hands over a long research
+// question (e.g. `bashy sota`) gets a usable search instead of a 422 — the
+// proper fix (decompose the question into several short queries) belongs in the
+// caller; this is the defensive floor.
+const (
+	maxQueryLen   = 380 // chars, under Brave's 400
+	maxQueryWords = 48  // under Brave's 50
+)
+
+// normalizeQuery collapses whitespace and caps the query by both word count and
+// character length (truncating at a word boundary so no term is split), so it is
+// accepted by every backend on the ladder.
+func normalizeQuery(q string) string {
+	fields := strings.Fields(q)
+	if len(fields) > maxQueryWords {
+		fields = fields[:maxQueryWords]
+	}
+	q = strings.Join(fields, " ")
+	if len(q) <= maxQueryLen {
+		return q
+	}
+	q = q[:maxQueryLen]
+	if i := strings.LastIndexByte(q, ' '); i > 0 {
+		q = q[:i]
+	}
+	return q
 }
 
 func firstEnv(names []string) string {
