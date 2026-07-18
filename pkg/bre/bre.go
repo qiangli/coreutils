@@ -341,7 +341,7 @@ func translateBracket(s string) (string, int, error) {
 			// Collating symbol [.x.] / equivalence class [=x=]. Under LC_ALL=C
 			// (the coreutils locale) the only collating elements are the single
 			// characters and no character has equivalents, so both reduce to
-			// their literal member(s). Emit them into the class, escaped.
+			// their literal member. Emit it into the class, escaped.
 			delim := s[i+1]
 			end := strings.Index(s[i+2:], string(delim)+"]")
 			if end < 0 {
@@ -351,9 +351,11 @@ func translateBracket(s string) (string, int, error) {
 			if content == "" {
 				return "", 0, fmt.Errorf("empty %s", map[byte]string{'.': "collating symbol [..]", '=': "equivalence class [==]"}[delim])
 			}
-			for _, r := range content {
-				b.WriteString(escapeClassRune(r))
+			r, size := utf8.DecodeRuneInString(content)
+			if size != len(content) || (r == utf8.RuneError && size == 1) {
+				return "", 0, fmt.Errorf("invalid collating element %q in C locale", content)
 			}
+			b.WriteString(escapeClassRune(r))
 			i += 2 + end + 2
 		case s[i] == '\\':
 			// backslash is a literal member in POSIX bracket expressions

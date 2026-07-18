@@ -209,6 +209,60 @@ func TestPOSIXBracketExpressions(t *testing.T) {
 	}
 }
 
+func TestPOSIXCollatingSymbolsCLocale(t *testing.T) {
+	cases := []struct {
+		pattern, matches, notMatches string
+	}{
+		{`[[.a.]]`, "a", "b"},
+		{`[[=a=]]`, "a", "b"},
+		{`[^[=a=]]`, "b", "a"},
+		{`[[.-.]]`, "-", "a"},
+		{`[[.].]]`, "]", "a"},
+		{`[[.^.]]`, "^", "a"},
+		{`[[.a.]-c]`, "b", "z"},
+		// POSIX's example: ] is the first literal member and the collating
+		// symbol '-' is the starting point of the range through '0'.
+		{`[][.-.]-0]`, "/", "1"},
+	}
+	for _, c := range cases {
+		re, err := Compile(c.pattern)
+		if err != nil {
+			t.Errorf("Compile(%q): %v", c.pattern, err)
+			continue
+		}
+		if !re.MatchString(c.matches) {
+			t.Errorf("%q did not match %q", c.pattern, c.matches)
+		}
+		if re.MatchString(c.notMatches) {
+			t.Errorf("%q unexpectedly matched %q", c.pattern, c.notMatches)
+		}
+	}
+}
+
+func TestPOSIXInvalidCollatingSymbolsCLocale(t *testing.T) {
+	patterns := []string{
+		`[[.ab.]]`, // no multi-character collating elements in the C locale
+		`[[=ab=]]`,
+		`[[..]]`,
+		`[[==]]`,
+		`[[.a]`,
+		`[[=a]`,
+	}
+	for _, translate := range []struct {
+		name string
+		fn   func(string) (string, error)
+	}{
+		{"BRE", ToGo},
+		{"ERE", ToGoERE},
+	} {
+		for _, pattern := range patterns {
+			if _, err := translate.fn(pattern); err == nil {
+				t.Errorf("%s translation of %q succeeded, want invalid collating element error", translate.name, pattern)
+			}
+		}
+	}
+}
+
 func TestPOSIXAnchorTranslation(t *testing.T) {
 	breCases := []struct{ pattern, want string }{
 		{`^a$`, `^a$`},
