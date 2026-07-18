@@ -2,7 +2,6 @@ package nicecmd
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,97 +16,157 @@ var cmd = &tool.Tool{Name: "nice", Synopsis: "Run a program with modified schedu
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+// Default adjustment when none is given, and the range a requested adjustment
+// is silently brought within: [1-2*NZERO, 2*NZERO-1] with NZERO == 20. This
+// mirrors what setpriority()/nice() do rather than rejecting the value.
+const (
+	defaultAdjustment = 10
+	minAdjustment     = 1 - 2*nzero
+	maxAdjustment     = 2*nzero - 1
+	nzero             = 20
+)
+
+// longOptions are matched by unambiguous prefix, GNU long-option style.
+var longOptions = []string{"--adjustment", "--help", "--version"}
+
 func run(rc *tool.RunContext, args []string) int {
-	adjust, command, code := parseNice(rc, args)
+	adjust, given, command, code := parseNice(rc, args)
 	if code >= 0 {
 		return code
 	}
-	current := currentPriority()
 	if len(command) == 0 {
-		if adjustSet(args) {
-			return tool.UsageError(rc, cmd, "a command must be given with an adjustment")
+		if given {
+			fmt.Fprintln(rc.Err, "nice: a command must be given with an adjustment")
+			return 125
 		}
-		fmt.Fprintln(rc.Out, current)
+		fmt.Fprintln(rc.Out, currentPriority())
 		return 0
 	}
-	target := current + adjust
-	if target > math.MaxInt32 {
-		target = math.MaxInt32
-	}
-	if target < math.MinInt32 {
-		target = math.MinInt32
-	}
-	if err := setPriority(target); err != nil {
+	if err := setPriority(currentPriority() + adjust); err != nil {
 		fmt.Fprintf(rc.Err, "nice: cannot set niceness: %v\n", err)
 	}
 	return runCommand(rc, "nice", command, nil)
 }
 
-func parseNice(rc *tool.RunContext, args []string) (int, []string, int) {
-	adjust := 10
+// parseNice returns the adjustment, whether one was given, the COMMAND operand
+// and its arguments, and an exit code (negative when parsing succeeded).
+func parseNice(rc *tool.RunContext, args []string) (int, bool, []string, int) {
+	adjust := defaultAdjustment
+	given := false
+	setAdjust := func(s string) bool {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "nice: invalid adjustment %q\n", s)
+			return false
+		}
+		adjust = min(max(n, minAdjustment), maxAdjustment)
+		given = true
+		return true
+	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--help" || a == "--version":
-			fs := tool.NewFlags(cmd.Name)
-			fs.IntP("adjustment", "n", 10, "add N to niceness")
-			tool.Parse(rc, cmd, fs, []string{a})
-			return 0, nil, 0
-		case a == "-n" || a == "--adjustment":
+		case a == "--":
+			return adjust, given, operands(args[i+1:]), -1
+
+		// The obsolete "-NUM", "--NUM" and "-+NUM" forms; the adjustment is
+		// everything after the leading dash, so "--5" means -5.
+		case isObsoleteAdjustment(a):
+			if !setAdjust(a[1:]) {
+				return 0, false, nil, 125
+			}
+
+		case a == "-n":
 			if i+1 >= len(args) {
-				fmt.Fprintln(rc.Err, "nice: option requires an argument -- n")
-				return 0, nil, 125
+				fmt.Fprintln(rc.Err, "nice: option requires an argument -- 'n'")
+				return 0, false, nil, 125
 			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil {
-				fmt.Fprintf(rc.Err, "nice: invalid adjustment %q\n", args[i+1])
-				return 0, nil, 125
+			if !setAdjust(args[i+1]) {
+				return 0, false, nil, 125
 			}
-			adjust = n
 			i++
+
 		case strings.HasPrefix(a, "-n") && len(a) > 2:
-			n, err := strconv.Atoi(a[2:])
+			if !setAdjust(a[2:]) {
+				return 0, false, nil, 125
+			}
+
+		case strings.HasPrefix(a, "--"):
+			name, value, hasValue := strings.Cut(a, "=")
+			long, err := matchLongOption(name)
 			if err != nil {
-				fmt.Fprintf(rc.Err, "nice: invalid adjustment %q\n", a[2:])
-				return 0, nil, 125
+				fmt.Fprintf(rc.Err, "nice: %v\n", err)
+				return 0, false, nil, 125
 			}
-			adjust = n
-		case isLegacyNice(a):
-			n, _ := strconv.Atoi(strings.TrimLeft(a, "-"))
-			if strings.HasPrefix(a, "-+") {
-				n, _ = strconv.Atoi(a[1:])
+			if long == "--help" || long == "--version" {
+				fs := tool.NewFlags(cmd.Name)
+				fs.IntP("adjustment", "n", defaultAdjustment, "add N to niceness")
+				tool.Parse(rc, cmd, fs, []string{long})
+				return 0, false, nil, 0
 			}
-			adjust = n
+			if !hasValue {
+				if i+1 >= len(args) {
+					fmt.Fprintf(rc.Err, "nice: option '%s' requires an argument\n", long)
+					return 0, false, nil, 125
+				}
+				value = args[i+1]
+				i++
+			}
+			if !setAdjust(value) {
+				return 0, false, nil, 125
+			}
+
+		// A lone "-" is an operand, not an option.
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			fmt.Fprintf(rc.Err, "nice: invalid option -- '%s'\n", strings.TrimPrefix(a, "-"))
+			return 0, false, nil, 125
+
 		default:
-			return adjust, args[i:], -1
+			return adjust, given, args[i:], -1
 		}
 	}
-	return adjust, nil, -1
+	return adjust, given, nil, -1
 }
 
-func adjustSet(args []string) bool {
-	for _, a := range args {
-		if a == "-n" || a == "--adjustment" || strings.HasPrefix(a, "-n") || isLegacyNice(a) {
-			return true
+func operands(rest []string) []string {
+	if len(rest) == 0 {
+		return nil
+	}
+	return rest
+}
+
+// matchLongOption resolves an unambiguous prefix of a long option name.
+func matchLongOption(name string) (string, error) {
+	var matches []string
+	for _, opt := range longOptions {
+		if opt == name {
+			return opt, nil
+		}
+		if strings.HasPrefix(opt, name) {
+			matches = append(matches, opt)
 		}
 	}
-	return false
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("unrecognized option '%s'", name)
+	default:
+		return "", fmt.Errorf("option '%s' is ambiguous; possibilities: %s", name, strings.Join(matches, " "))
+	}
 }
 
-func isLegacyNice(s string) bool {
-	if strings.HasPrefix(s, "--") {
-		_, err := strconv.Atoi(s[1:])
-		return err == nil
+// isObsoleteAdjustment reports whether s is the obsolete adjustment form: a
+// dash followed by a digit, optionally preceded by another sign character.
+func isObsoleteAdjustment(s string) bool {
+	if len(s) < 2 || s[0] != '-' {
+		return false
 	}
-	if strings.HasPrefix(s, "-+") {
-		_, err := strconv.Atoi(s[1:])
-		return err == nil
+	i := 1
+	if s[i] == '-' || s[i] == '+' {
+		i++
 	}
-	if strings.HasPrefix(s, "-") && len(s) > 1 {
-		_, err := strconv.Atoi(s)
-		return err == nil
-	}
-	return false
+	return i < len(s) && s[i] >= '0' && s[i] <= '9'
 }
 
 func runCommand(rc *tool.RunContext, name string, argv []string, env []string) int {
@@ -144,18 +203,24 @@ func runCommand(rc *tool.RunContext, name string, argv []string, env []string) i
 func lookCommand(rc *tool.RunContext, name string) string {
 	if strings.ContainsAny(name, `/\`) {
 		p := rc.Path(name)
-		if isExecFile(p) {
+		if isCommandFile(p) {
 			return p
 		}
 		return ""
 	}
+	var nonExecutable string
 	for _, dir := range filepath.SplitList(rc.Getenv("PATH")) {
 		if dir == "" {
 			continue
 		}
 		cand := filepath.Join(dir, name)
-		if isExecFile(cand) {
-			return cand
+		if isCommandFile(cand) {
+			if runtime.GOOS == "windows" || isExecFile(cand) {
+				return cand
+			}
+			if nonExecutable == "" {
+				nonExecutable = cand
+			}
 		}
 		if runtime.GOOS == "windows" {
 			for _, ext := range []string{".exe", ".bat", ".cmd", ".com"} {
@@ -165,7 +230,12 @@ func lookCommand(rc *tool.RunContext, name string) string {
 			}
 		}
 	}
-	return ""
+	return nonExecutable
+}
+
+func isCommandFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
 }
 
 func isExecFile(path string) bool {
