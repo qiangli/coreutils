@@ -24,37 +24,46 @@ import (
 // So round execution takes a lease. It is per-MEETING (the lock lives in the
 // meeting's own directory), so independent meetings never contend, and a second
 // runner is REFUSED with a clear message naming the owner rather than allowed
-// to interleave. Refusing is the right failure: a busy meeting is a temporary,
-// legible condition an operator can act on, where a corrupted lifecycle is
-// neither.
+// to interleave.
+//
+// The lease is a KERNEL-HELD advisory lock (flock on unix, LockFileEx on
+// Windows) on a stable run.lock inode, and that choice is the whole design:
+//
+//   - Ownership is decided by the kernel on a file DESCRIPTOR, in one atomic
+//     operation. There is no read-then-act window, so there is nothing to race.
+//     The earlier heartbeat/PID/mtime scheme could not avoid one: reading a
+//     lock, judging it stale, and then removing it are three steps, and the file
+//     at that path may be a different file by the third — no token comparison
+//     fixes that, because compare-and-remove is not atomic over a path.
+//   - Death releases it. When the owning process exits or its descriptor closes
+//     for any reason, the kernel drops the lock. That removes the entire notion
+//     of a stale lease: no heartbeat, no PID liveness probe, no stale window, no
+//     break-and-recreate. A crashed meeting is runnable again immediately.
+//   - The inode is stable. run.lock is created once and never unlinked, so two
+//     processes that open the path are always contending on the SAME inode.
+//     Deleting a lock file is what lets a successor lock a detached inode while
+//     a predecessor still believes it owns the path.
+//
+// The metadata inside run.lock is therefore purely diagnostic — it exists so an
+// operator can see who holds a busy meeting. A contender never parses it to
+// decide ownership; the kernel already answered that.
 
 // ErrMeetingBusy is returned when another process holds the meeting's run lease.
 var ErrMeetingBusy = errors.New("meet: meeting is already being run by another process")
 
-const (
-	// leaseHeartbeat is how often the owner refreshes the lock's mtime.
-	leaseHeartbeat = 20 * time.Second
-	// leaseStale is how long a lock may go unrefreshed before another process may
-	// break it. Generous relative to the heartbeat, because breaking a LIVE
-	// lease is the one outcome worse than refusing to start: a turn can block a
-	// process for the whole per-turn budget under load, and the heartbeat runs on
-	// its own goroutine precisely so that does not look like death.
-	leaseStale = 2 * time.Minute
-)
-
-// leaseInfo is what a lock file says about its owner. It is written for the
-// benefit of the NEXT process (and of a human reading the directory), so it
-// records who and since when, not just that the file exists.
+// leaseInfo is what a lock file says about its owner. It is written for a human
+// reading the directory, never for a contender's ownership decision.
 type leaseInfo struct {
 	PID   int       `json:"pid"`
 	Host  string    `json:"host"`
 	Since time.Time `json:"since"`
 }
 
-// runLease is a held lease. Release is idempotent.
+// runLease is a held lease: the open descriptor IS the lease. Release is
+// idempotent.
 type runLease struct {
+	f    *os.File
 	path string
-	stop chan struct{}
 	once sync.Once
 }
 
@@ -66,15 +75,11 @@ func leasePath(id string) (string, error) {
 	return filepath.Join(dir, "run.lock"), nil
 }
 
-// acquireRunLease takes the meeting's run lease, or reports why it could not.
+// acquireRunLease takes the meeting's run lease, or reports that it is busy.
 //
-// Ordinary case: O_EXCL creates the lock and we own it. Contended case: the
-// existing owner is inspected, and only a DEMONSTRABLY dead one is broken —
-// either its pid is gone on this same host, or its heartbeat has aged past
-// leaseStale (the cross-host / crashed-and-pid-reused case). Breaking is done by
-// removing the lock and racing for the O_EXCL create again, so two processes
-// that decide to break the same stale lock cannot both end up believing they
-// won: exactly one create succeeds and the other is told the meeting is busy.
+// Opening run.lock is unconditional — every contender opens the same stable
+// inode — and the exclusive non-blocking lock on the resulting descriptor is
+// what picks the single winner. Losers report ErrMeetingBusy and touch nothing.
 func acquireRunLease(id string) (*runLease, error) {
 	path, err := leasePath(id)
 	if err != nil {
@@ -84,97 +89,76 @@ func acquireRunLease(id string) (*runLease, error) {
 		return nil, err
 	}
 
-	if l, err := createLease(path); err == nil {
-		return l, nil
-	} else if !os.IsExist(err) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
 		return nil, err
 	}
 
-	prev, stale := inspectLease(path)
-	if !stale {
-		return nil, fmt.Errorf("%w (pid %d on %s since %s); wait for it to finish, or remove %s if you are certain it is gone",
-			ErrMeetingBusy, prev.PID, prev.Host, prev.Since.Format(time.RFC3339), path)
-	}
-	// Break it and race for the create. A failure here is not fatal on its own —
-	// the create below is what actually decides the winner.
-	_ = os.Remove(path)
-	l, err := createLease(path)
+	locked, err := tryLockFile(f)
 	if err != nil {
-		return nil, fmt.Errorf("%w (another process claimed the stale lease first)", ErrMeetingBusy)
+		_ = f.Close()
+		return nil, fmt.Errorf("meet: locking %s: %w", path, err)
 	}
+	if !locked {
+		_ = f.Close()
+		return nil, busyError(path)
+	}
+
+	l := &runLease{f: f, path: path}
+	// Diagnostics only, and deliberately AFTER the lock: writing it is what makes
+	// a busy meeting legible to an operator, and a failure to write it must not
+	// cost us a lease the kernel already granted.
+	l.writeOwner()
 	return l, nil
 }
 
-func createLease(path string) (*runLease, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, err
-	}
+// writeOwner replaces the file's contents with this owner's identity. Only the
+// lock holder ever writes here, so truncating in place is safe and keeps the
+// inode — and therefore every contender's view of it — stable.
+func (l *runLease) writeOwner() {
 	host, _ := os.Hostname()
 	b, _ := json.Marshal(leaseInfo{PID: os.Getpid(), Host: host, Since: nowFn()})
-	_, _ = f.Write(append(b, '\n'))
-	if cerr := f.Close(); cerr != nil {
-		_ = os.Remove(path)
-		return nil, cerr
+	b = append(b, '\n')
+	if err := l.f.Truncate(0); err != nil {
+		return
 	}
-
-	l := &runLease{path: path, stop: make(chan struct{})}
-	// The heartbeat is what separates "still working" from "died holding the
-	// lock". Without it a long turn would be indistinguishable from a crash, and
-	// the stale window would have to be longer than the longest legal turn —
-	// which would mean a crashed meeting stays unrunnable for 20 minutes.
-	go l.beat()
-	return l, nil
-}
-
-func (l *runLease) beat() {
-	t := time.NewTicker(leaseHeartbeat)
-	defer t.Stop()
-	for {
-		select {
-		case <-l.stop:
-			return
-		case <-t.C:
-			now := time.Now()
-			_ = os.Chtimes(l.path, now, now)
-		}
+	if _, err := l.f.WriteAt(b, 0); err != nil {
+		return
 	}
+	_ = l.f.Sync()
 }
 
 // Release drops the lease. Safe to call more than once, so callers can defer it
 // unconditionally.
+//
+// It closes only ITS OWN descriptor, which is the whole reason a released owner
+// cannot disturb its successor: the close affects one descriptor's lock and
+// nothing at the path. run.lock itself is never removed.
 func (l *runLease) Release() {
 	if l == nil {
 		return
 	}
 	l.once.Do(func() {
-		close(l.stop)
-		_ = os.Remove(l.path)
+		_ = unlockFile(l.f)
+		_ = l.f.Close()
 	})
 }
 
-// inspectLease reads a lock file and decides whether it may be broken.
-//
-// An UNREADABLE or malformed lock is treated as stale: a truncated file is the
-// signature of a process that died mid-write, and refusing forever on a file
-// nobody can parse would make a crash permanently unrecoverable without manual
-// cleanup.
-func inspectLease(path string) (leaseInfo, bool) {
-	var info leaseInfo
+// busyError names the current owner when it can, and stays useful when it
+// cannot. The metadata is best-effort by construction: it may be empty (a lock
+// taken microseconds ago, before its owner wrote), or left over from a previous
+// owner. Neither affects who holds the lease — the kernel decided that — so an
+// unreadable file degrades the message and nothing else.
+func busyError(path string) error {
+	base := fmt.Errorf("%w; wait for it to finish", ErrMeetingBusy)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return info, true
+		return base
 	}
-	if err := json.Unmarshal(b, &info); err != nil {
-		return info, true
+	var info leaseInfo
+	if err := json.Unmarshal(b, &info); err != nil || info.PID <= 0 {
+		return base
 	}
-	host, _ := os.Hostname()
-	if info.Host == host && info.PID > 0 && !processAlive(info.PID) {
-		return info, true // same host, owner gone: certain, and immediate
-	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		return info, true
-	}
-	return info, time.Since(fi.ModTime()) > leaseStale
+	return fmt.Errorf("%w (pid %d on %s since %s); wait for it to finish",
+		ErrMeetingBusy, info.PID, info.Host, info.Since.Format(time.RFC3339))
 }
