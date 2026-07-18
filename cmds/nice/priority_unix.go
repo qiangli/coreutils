@@ -12,6 +12,6 @@ func currentPriority() int {
 	return n
 }
 
-func setPriority(n int) error {
-	return unix.Setpriority(unix.PRIO_PROCESS, 0, n)
+func setPriority(pid, n int) error {
+	return unix.Setpriority(unix.PRIO_PROCESS, pid, n)
 }

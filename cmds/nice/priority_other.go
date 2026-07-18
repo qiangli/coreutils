@@ -6,6 +6,6 @@ import "fmt"
 
 func currentPriority() int { return 0 }
 
-func setPriority(int) error {
+func setPriority(int, int) error {
 	return fmt.Errorf("priority adjustment is not supported on this platform")
 }

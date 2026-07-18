@@ -73,7 +73,7 @@ func TestNiceCommandExitStatuses(t *testing.T) {
 		Env:   []string{"PATH=" + dir},
 		Stdio: tool.Stdio{Out: &out, Err: &errb},
 	}
-	if code := runCommand(rc, "nice", []string{"missing-command"}, nil); code != 127 {
+	if code := runCommand(rc, "nice", []string{"missing-command"}, nil, 0); code != 127 {
 		t.Fatalf("missing command code=%d, want 127", code)
 	}
 
@@ -82,7 +82,7 @@ func TestNiceCommandExitStatuses(t *testing.T) {
 	}
 	out.Reset()
 	errb.Reset()
-	if code := runCommand(rc, "nice", []string{"not-executable"}, nil); code != 126 {
+	if code := runCommand(rc, "nice", []string{"not-executable"}, nil, 0); code != 126 {
 		t.Fatalf("non-executable command code=%d, want 126 (stderr=%q)", code, errb.String())
 	}
 }

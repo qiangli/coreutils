@@ -42,10 +42,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Out, currentPriority())
 		return 0
 	}
-	if err := setPriority(currentPriority() + adjust); err != nil {
-		fmt.Fprintf(rc.Err, "nice: cannot set niceness: %v\n", err)
-	}
-	return runCommand(rc, "nice", command, nil)
+	return runCommand(rc, "nice", command, nil, currentPriority()+adjust)
 }
 
 // parseNice returns the adjustment, whether one was given, the COMMAND operand
@@ -169,7 +166,13 @@ func isObsoleteAdjustment(s string) bool {
 	return i < len(s) && s[i] >= '0' && s[i] <= '9'
 }
 
-func runCommand(rc *tool.RunContext, name string, argv []string, env []string) int {
+// runCommand runs argv as a child process, adjusting its scheduling priority
+// to niceness after it starts. The adjustment is applied to the child's pid,
+// never to nice's own process: nice runs in-process inside embedding hosts
+// (see shell/Handler), so changing the caller's own niceness would leak past
+// this single invocation and alter unrelated commands run later in the same
+// host process.
+func runCommand(rc *tool.RunContext, name string, argv []string, env []string, niceness int) int {
 	path := lookCommand(rc, argv[0])
 	if path == "" {
 		fmt.Fprintf(rc.Err, "%s: %s: command not found\n", name, argv[0])
@@ -185,16 +188,29 @@ func runCommand(rc *tool.RunContext, name string, argv []string, env []string) i
 	c.Stdin = rc.In
 	c.Stdout = rc.Out
 	c.Stderr = rc.Err
-	err := c.Run()
+	if err := c.Start(); err != nil {
+		if os.IsNotExist(err) || strings.Contains(err.Error(), "executable file not found") {
+			fmt.Fprintf(rc.Err, "%s: failed to run command %q: %v\n", name, argv[0], err)
+			return 127
+		}
+		fmt.Fprintf(rc.Err, "%s: failed to run command %q: %v\n", name, argv[0], err)
+		return 126
+	}
+	if err := setPriority(c.Process.Pid, niceness); err != nil {
+		fmt.Fprintf(rc.Err, "%s: cannot set niceness: %v\n", name, err)
+	}
+	err := c.Wait()
 	if err == nil {
 		return 0
 	}
 	if ee, ok := err.(*exec.ExitError); ok {
-		return ee.ExitCode()
-	}
-	if os.IsNotExist(err) || strings.Contains(err.Error(), "executable file not found") {
-		fmt.Fprintf(rc.Err, "%s: failed to run command %q: %v\n", name, argv[0], err)
-		return 127
+		if code := ee.ExitCode(); code >= 0 {
+			return code
+		}
+		if code, ok := signaledExitCode(ee); ok {
+			return code
+		}
+		return 1
 	}
 	fmt.Fprintf(rc.Err, "%s: failed to run command %q: %v\n", name, argv[0], err)
 	return 126
