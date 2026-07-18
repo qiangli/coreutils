@@ -167,6 +167,18 @@ func TestExpandRejectsBadTabs(t *testing.T) {
 	if code != 2 || !strings.Contains(stderr, "'+' specifier only allowed with the last value") {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
+	_, stderr, code = runExpand(t, "", "-t", "2,,4")
+	if code != 2 || !strings.Contains(stderr, "invalid character") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	_, stderr, code = runExpand(t, "", "-t", "")
+	if code != 2 || !strings.Contains(stderr, "invalid character") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	_, stderr, code = runExpand(t, "", "-t", "999999999999999999999999999999")
+	if code != 2 || !strings.Contains(stderr, "tab stop is too large") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
 }
 
 func TestExpandParseTabStops(t *testing.T) {

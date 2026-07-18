@@ -172,9 +172,17 @@ type tabStops struct {
 
 func parseTabStops(list []string) (*tabStops, error) {
 	ts := &tabStops{}
-	entries := strings.FieldsFunc(strings.Join(list, ","), func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t'
-	})
+	var entries []string
+	for _, value := range list {
+		parts := strings.Split(value, ",")
+		for _, part := range parts {
+			fields := strings.Fields(part)
+			if len(fields) == 0 {
+				return nil, fmt.Errorf("tab size contains invalid character(s): %q", value)
+			}
+			entries = append(entries, fields...)
+		}
+	}
 	for i, entry := range entries {
 		e := entry
 		var spec byte
@@ -189,6 +197,9 @@ func parseTabStops(list []string) (*tabStops, error) {
 		for _, r := range e {
 			if r < '0' || r > '9' {
 				return nil, fmt.Errorf("tab size contains invalid character(s): %q", entry)
+			}
+			if n > (1<<30)/10 {
+				return nil, fmt.Errorf("tab stop is too large %q", entry)
 			}
 			n = n*10 + int(r-'0')
 			if n > 1<<30 {
