@@ -1,6 +1,5 @@
 // Package mkfifocmd implements mkfifo(1): create named pipes.
 //
-// This is a conservative subset: -m/--mode accepts octal modes only.
 // The native operation is split behind build tags so non-Unix platforms
 // fail loudly instead of approximating FIFO semantics.
 // -Z/--context accepted as no-op on non-SELinux platforms.
@@ -10,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -40,7 +40,7 @@ func run(rc *tool.RunContext, args []string) int {
 	useMode := fs.Changed("mode")
 	if useMode {
 		var errCode int
-		mode, errCode = parseOctalMode(rc, *modeStr)
+		mode, errCode = parseMode(rc, *modeStr)
 		if errCode >= 0 {
 			return errCode
 		}
@@ -63,7 +63,7 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-func parseOctalMode(rc *tool.RunContext, s string) (uint32, int) {
+func parseMode(rc *tool.RunContext, s string) (uint32, int) {
 	n, err := strconv.ParseUint(s, 8, 32)
 	if err == nil && n <= 0o7777 {
 		return uint32(n), -1
@@ -71,7 +71,14 @@ func parseOctalMode(rc *tool.RunContext, s string) (uint32, int) {
 	if s == "" || allDigits(s) {
 		return 0, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
 	}
-	return 0, tool.NotSupported(rc, cmd, fmt.Sprintf("symbolic mode '%s' for -m/--mode (only octal modes)", s))
+	change, ok := parseSymbolicMode(s)
+	if !ok {
+		return 0, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
+	}
+	// POSIX specifies a symbolic mkfifo mode relative to an assumed a=rw
+	// initial mode. Unlike chmod clauses with an omitted who, -m ignores the
+	// process umask.
+	return change.apply(0o666), -1
 }
 
 func allDigits(s string) bool {
@@ -81,6 +88,139 @@ func allDigits(s string) bool {
 		}
 	}
 	return s != ""
+}
+
+const (
+	whoUser = 1 << iota
+	whoGroup
+	whoOther
+)
+
+type modeOp struct {
+	who                 uint32
+	op                  byte
+	perm                uint32
+	copy                byte
+	conditionalX, setID bool
+	sticky              bool
+}
+
+type symbolicMode struct {
+	ops []modeOp
+}
+
+func parseSymbolicMode(s string) (*symbolicMode, bool) {
+	var mode symbolicMode
+	for _, clause := range strings.Split(s, ",") {
+		i, who := 0, uint32(0)
+		for i < len(clause) {
+			switch clause[i] {
+			case 'u':
+				who |= whoUser
+			case 'g':
+				who |= whoGroup
+			case 'o':
+				who |= whoOther
+			case 'a':
+				who |= whoUser | whoGroup | whoOther
+			default:
+				goto operators
+			}
+			i++
+		}
+	operators:
+		if i == len(clause) {
+			return nil, false
+		}
+		if who == 0 {
+			who = whoUser | whoGroup | whoOther
+		}
+		for i < len(clause) {
+			op := clause[i]
+			if op != '+' && op != '-' && op != '=' {
+				return nil, false
+			}
+			i++
+			change := modeOp{who: who, op: op}
+			if i < len(clause) && strings.ContainsRune("ugo", rune(clause[i])) &&
+				(i+1 == len(clause) || strings.ContainsRune("+-=", rune(clause[i+1]))) {
+				change.copy = clause[i]
+				i++
+			} else {
+				for i < len(clause) && !strings.ContainsRune("+-=", rune(clause[i])) {
+					switch clause[i] {
+					case 'r':
+						change.perm |= 4
+					case 'w':
+						change.perm |= 2
+					case 'x':
+						change.perm |= 1
+					case 'X':
+						change.conditionalX = true
+					case 's':
+						change.setID = true
+					case 't':
+						change.sticky = true
+					default:
+						return nil, false
+					}
+					i++
+				}
+			}
+			mode.ops = append(mode.ops, change)
+		}
+	}
+	return &mode, len(mode.ops) > 0
+}
+
+func (m *symbolicMode) apply(current uint32) uint32 {
+	for _, change := range m.ops {
+		perm := change.perm
+		switch change.copy {
+		case 'u':
+			perm = current >> 6 & 7
+		case 'g':
+			perm = current >> 3 & 7
+		case 'o':
+			perm = current & 7
+		}
+		if change.conditionalX && current&0o111 != 0 {
+			perm |= 1
+		}
+
+		bits, clear := uint32(0), uint32(0)
+		if change.who&whoUser != 0 {
+			bits |= perm << 6
+			clear |= 0o4700
+			if change.setID {
+				bits |= 0o4000
+			}
+		}
+		if change.who&whoGroup != 0 {
+			bits |= perm << 3
+			clear |= 0o2070
+			if change.setID {
+				bits |= 0o2000
+			}
+		}
+		if change.who&whoOther != 0 {
+			bits |= perm
+			clear |= 0o1007
+		}
+		if change.sticky {
+			bits |= 0o1000
+		}
+
+		switch change.op {
+		case '+':
+			current |= bits
+		case '-':
+			current &^= bits
+		case '=':
+			current = current&^clear | bits
+		}
+	}
+	return current
 }
 
 func fileMode(n uint32) os.FileMode {

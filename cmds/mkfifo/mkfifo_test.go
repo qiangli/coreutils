@@ -3,6 +3,7 @@ package mkfifocmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -63,6 +64,37 @@ func TestMkfifoMode(t *testing.T) {
 	}
 }
 
+func TestMkfifoSymbolicMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native FIFO creation is unsupported on windows")
+	}
+	tests := []struct {
+		mode string
+		want os.FileMode
+	}{
+		{"u=rw,go=", 0o600},
+		{"a=rw,u+x", 0o766},
+		{"+x", 0o777},
+		{"a+X", 0o666},
+		{"u=rw,g=u,o=g", 0o666},
+	}
+	for i, tc := range tests {
+		name := fmt.Sprintf("pipe%d", i)
+		dir := t.TempDir()
+		_, errb, code := runTool(t, dir, "-m", tc.mode, name)
+		if code != 0 {
+			t.Fatalf("mkfifo -m %q: code=%d err=%q", tc.mode, code, errb)
+		}
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != tc.want {
+			t.Errorf("mkfifo -m %q mode=%03o, want %03o", tc.mode, got, tc.want)
+		}
+	}
+}
+
 func TestMkfifoErrors(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir)
@@ -73,9 +105,9 @@ func TestMkfifoErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "invalid mode '999'") {
 		t.Errorf("invalid mode: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, dir, "-m", "u+rw", "pipe")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Errorf("symbolic mode: code=%d err=%q", code, errb)
+	_, errb, code = runTool(t, dir, "-m", "u+q", "pipe")
+	if code != 2 || !strings.Contains(errb, "invalid mode 'u+q'") {
+		t.Errorf("invalid symbolic mode: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, dir, "--frobnicate", "pipe")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
