@@ -182,20 +182,11 @@ func TestIDZFlag(t *testing.T) {
 }
 
 func TestIDRealFlag(t *testing.T) {
-	u := current(t)
-	out, _, code := runTool(t, "-r")
-	if code != 0 {
-		t.Fatalf("-r: code=%d", code)
-	}
-	if !strings.Contains(out, "uid="+u.Uid) {
-		t.Errorf("-r output %q missing uid", out)
-	}
-	out2, _, code := runTool(t, "--real")
-	if code != 0 {
-		t.Fatalf("--real: code=%d", code)
-	}
-	if out != out2 {
-		t.Errorf("-r vs --real mismatch: %q vs %q", out, out2)
+	for _, args := range [][]string{{"-r"}, {"--real"}, {"-r", "-G"}} {
+		_, errb, code := runTool(t, args...)
+		if code != 2 || !strings.Contains(errb, "cannot print only names or real IDs") {
+			t.Errorf("id %v: code=%d err=%q", args, code, errb)
+		}
 	}
 }
 
@@ -272,13 +263,6 @@ func TestIDRealFlagWithOptions(t *testing.T) {
 	}
 	if strings.TrimSpace(out) != u.Gid {
 		t.Errorf("-r -g = %q, want gid %s", out, u.Gid)
-	}
-	out, _, code = runTool(t, "-r", "-G")
-	if code != 0 {
-		t.Fatalf("-r -G: code=%d", code)
-	}
-	if !strings.Contains(strings.TrimSpace(out), u.Gid) {
-		t.Errorf("-r -G = %q, missing gid %s", out, u.Gid)
 	}
 	out, _, code = runTool(t, "-r", "-u", "-n")
 	if code != 0 {

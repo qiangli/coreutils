@@ -54,6 +54,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if !*aFlag && chosen > 1 {
 		return tool.UsageError(rc, cmd, "cannot print \"only\" of more than one choice")
 	}
+	if *rFlag && !*uFlag && !*gFlag {
+		return tool.UsageError(rc, cmd, "cannot print only names or real IDs in default format")
+	}
 	if *nFlag && chosen == 0 {
 		return tool.UsageError(rc, cmd, "cannot print only names or real IDs in default format")
 	}
@@ -78,7 +81,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		results, pErr := formatOne(u, *uFlag, *gFlag, *GFlag, useName, *aFlag, *rFlag)
+		results, pErr := formatOne(u, *uFlag, *gFlag, *GFlag, useName, *aFlag, *rFlag, name == "")
 		if pErr != nil {
 			fmt.Fprintf(rc.Err, "id: %v\n", pErr)
 			status = 1
@@ -101,14 +104,20 @@ func lookupUser(name string) (*user.User, error) {
 	return user.LookupId(name)
 }
 
-func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag, rFlag bool) ([]string, error) {
+func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag, rFlag, current bool) ([]string, error) {
 	var results []string
+	uid, gid := u.Uid, u.Gid
+	if current {
+		uid, gid = processIDs(rFlag)
+	}
 
 	switch {
 	case uFlag:
-		val := u.Uid
+		val := uid
 		if useName {
-			val = u.Username
+			if resolved, err := user.LookupId(uid); err == nil {
+				val = resolved.Username
+			}
 		}
 		results = append(results, val)
 		if !aFlag {
@@ -116,9 +125,9 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag, rFlag bool) ([
 		}
 		fallthrough
 	case gFlag:
-		val := u.Gid
+		val := gid
 		if useName {
-			val = groupName(u.Gid)
+			val = groupName(gid)
 		}
 		results = append(results, val)
 		if !aFlag {
