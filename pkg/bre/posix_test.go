@@ -263,6 +263,82 @@ func TestPOSIXInvalidCollatingSymbolsCLocale(t *testing.T) {
 	}
 }
 
+func TestPOSIXBREEREOperatorDistinction(t *testing.T) {
+	translations := []struct {
+		name, pattern, want string
+		fn                  func(string) (string, error)
+	}{
+		{"BRE literals", `a+?{2}(b)|c`, `a\+\?\{2\}\(b\)\|c`, ToGo},
+		{"BRE operators", `a\+\?\{2\}\(b\|c\)`, `a+?{2}(b|c)`, ToGo},
+		{"ERE operators", `a+?{2}(b)|c`, `a+?{2}(b)|c`, ToGoERE},
+		{"ERE escaped parens", `\(a\)`, `\(a\)`, ToGoERE},
+	}
+	for _, c := range translations {
+		got, err := c.fn(c.pattern)
+		if err != nil {
+			t.Errorf("%s: translate %q: %v", c.name, c.pattern, err)
+		} else if got != c.want {
+			t.Errorf("%s: translate %q = %q, want %q", c.name, c.pattern, got, c.want)
+		}
+	}
+
+	matchCases := []struct {
+		name, pattern, in string
+		extended          bool
+	}{
+		{"BRE plus literal", `^a+$`, "a+", false},
+		{"BRE question literal", `^a?$`, "a?", false},
+		{"BRE braces literal", `^a{2}$`, "a{2}", false},
+		{"BRE parens and bar literal", `^(a|b)$`, "(a|b)", false},
+		{"BRE escaped operators", `^\(a\|b\)\+$`, "aba", false},
+		{"ERE plus", `^a+$`, "aaa", true},
+		{"ERE question", `^a?$`, "", true},
+		{"ERE interval", `^a{2}$`, "aa", true},
+		{"ERE grouping and alternation", `^(a|b)$`, "b", true},
+		{"ERE escaped paren literal", `^\($`, "(", true},
+	}
+	for _, c := range matchCases {
+		var re *Regexp
+		var err error
+		if c.extended {
+			re, err = CompileEREWithFlags(c.pattern, "")
+		} else {
+			re, err = Compile(c.pattern)
+		}
+		if err != nil {
+			t.Errorf("%s: compile %q: %v", c.name, c.pattern, err)
+		} else if !re.MatchString(c.in) {
+			t.Errorf("%s: %q did not match %q", c.name, c.pattern, c.in)
+		}
+	}
+
+	// Force each syntax through the bounded backtracker as well.
+	for _, c := range []struct {
+		pattern, in string
+		extended    bool
+	}{
+		{`^\(a\+\)\1$`, "aaaa", false},
+		{`^(a+)\1$`, "aaaa", true},
+		{`^(a?)\1$`, "aa", true},
+		{`^(a{2})\1$`, "aaaa", true},
+		{`^(a|b)\1$`, "bb", true},
+		{`^\((a)\1\)$`, "(aa)", true},
+	} {
+		var re *Regexp
+		var err error
+		if c.extended {
+			re, err = CompileEREWithFlags(c.pattern, "")
+		} else {
+			re, err = Compile(c.pattern)
+		}
+		if err != nil {
+			t.Errorf("backtracking compile %q: %v", c.pattern, err)
+		} else if !re.MatchString(c.in) {
+			t.Errorf("backtracking %q did not match %q", c.pattern, c.in)
+		}
+	}
+}
+
 func TestPOSIXAnchorTranslation(t *testing.T) {
 	breCases := []struct{ pattern, want string }{
 		{`^a$`, `^a$`},
