@@ -56,8 +56,9 @@ func run(rc *tool.RunContext, args []string) int {
 
 func checkDefault(rc *tool.RunContext, p string) bool {
 	if p == "" {
-		fmt.Fprintln(rc.Err, "pathchk: empty file name")
-		return false
+		// POSIX reserves the empty-pathname check for -P. Historically,
+		// neither the default checks nor -p diagnose an empty operand.
+		return true
 	}
 	limit := 4096
 	nameLimit := 255
@@ -74,20 +75,53 @@ func checkDefault(rc *tool.RunContext, p string) bool {
 			return false
 		}
 	}
-	dir := filepath.Dir(rc.Path(p))
-	if dir != "." && dir != "" {
-		if st, err := os.Stat(dir); err == nil && !st.IsDir() {
-			fmt.Fprintf(rc.Err, "pathchk: %q is not a directory\n", dir)
-			return false
-		}
+	if bad, reason := invalidDirectoryPrefix(filepath.Dir(rc.Path(p))); bad != "" {
+		fmt.Fprintf(rc.Err, "pathchk: %q: %s at %q\n", p, reason, bad)
+		return false
 	}
 	return true
 }
 
+// invalidDirectoryPrefix checks existing prefixes from the root down. Once a
+// prefix does not exist, the rest of the pathname is valid if those missing
+// directories were to be created, so there is nothing further to inspect.
+func invalidDirectoryPrefix(dir string) (path, reason string) {
+	var prefixes []string
+	for dir != "" && dir != "." {
+		prefixes = append(prefixes, dir)
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	for i := len(prefixes) - 1; i >= 0; i-- {
+		prefix := prefixes[i]
+		if _, err := os.Lstat(prefix); os.IsNotExist(err) {
+			return "", ""
+		} else if err != nil {
+			return prefix, "cannot access directory"
+		}
+		st, err := os.Stat(prefix)
+		if err != nil {
+			return prefix, "cannot access directory"
+		}
+		if !st.IsDir() {
+			return prefix, "not a directory"
+		}
+		// Looking up "." requires search permission on prefix without
+		// requiring read permission to enumerate it.
+		searchProbe := prefix + string(filepath.Separator) + "."
+		if _, err := os.Stat(searchProbe); err != nil {
+			return prefix, "directory is not searchable"
+		}
+	}
+	return "", ""
+}
+
 func checkPOSIX(rc *tool.RunContext, p string) bool {
 	if p == "" {
-		fmt.Fprintln(rc.Err, "pathchk: empty file name")
-		return false
+		return true
 	}
 	if len(p) > posixPathMax {
 		fmt.Fprintf(rc.Err, "pathchk: path %q has length %d; exceeds POSIX limit %d\n", p, len(p), posixPathMax)
