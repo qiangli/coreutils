@@ -3,6 +3,7 @@ package ttycmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -90,6 +91,40 @@ func TestTTYRealTerminal(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && !strings.HasPrefix(out, "/dev/") {
 		t.Errorf("terminal name %q does not start with /dev/", out)
+	}
+}
+
+// failWriter fails every write, simulating a full or closed stdout.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+func TestTTYWriteError(t *testing.T) {
+	// GNU manual: exit status 3 if a write error occurs — it takes
+	// precedence over the not-a-terminal status 1.
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: failWriter{}, Err: &errb},
+	}
+	code := cmd.Run(rc, nil)
+	if code != 3 {
+		t.Errorf("write error: code=%d, want 3", code)
+	}
+	if !strings.Contains(errb.String(), "tty: write error") {
+		t.Errorf("write error diagnostic = %q, want it to name the write error", errb.String())
+	}
+
+	// -s writes nothing, so a broken stdout cannot fail: status is
+	// still the plain not-a-terminal 1.
+	errb.Reset()
+	rc.Stdio = tool.Stdio{In: strings.NewReader(""), Out: failWriter{}, Err: &errb}
+	if code := cmd.Run(rc, []string{"-s"}); code != 1 {
+		t.Errorf("tty -s with broken stdout: code=%d, want 1", code)
+	}
+	if errb.Len() != 0 {
+		t.Errorf("tty -s with broken stdout: stderr=%q, want empty", errb.String())
 	}
 }
 
