@@ -346,6 +346,76 @@ func TestLnErrors(t *testing.T) {
 	}
 }
 
+func TestLnSameFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "keep")
+
+	// Hard link to the same path without -f.
+	_, errb, code := runTool(t, dir, "a", "a")
+	if code != 1 || !strings.Contains(errb, "'a' and 'a' are the same file") {
+		t.Errorf("ln a a: code=%d err=%q", code, errb)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a")); string(got) != "keep" {
+		t.Errorf("ln a a modified the file: %q", got)
+	}
+
+	// Hard link to the same path with -f: POSIX says do nothing and diagnose.
+	_, errb, code = runTool(t, dir, "-f", "a", "a")
+	if code != 1 || !strings.Contains(errb, "'a' and 'a' are the same file") {
+		t.Errorf("ln -f a a: code=%d err=%q", code, errb)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a")); string(got) != "keep" {
+		t.Errorf("ln -f a a modified the file: %q", got)
+	}
+}
+
+func TestLnSymbolicSameFile(t *testing.T) {
+	requireSymlinks(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "keep")
+
+	// Symbolic link to the same path without -f.
+	_, errb, code := runTool(t, dir, "-s", "a", "a")
+	if code != 1 || !strings.Contains(errb, "'a' and 'a' are the same file") {
+		t.Errorf("ln -s a a: code=%d err=%q", code, errb)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a")); string(got) != "keep" {
+		t.Errorf("ln -s a a modified the file: %q", got)
+	}
+
+	// Symbolic link to the same path with -f: must not create a self-loop.
+	_, errb, code = runTool(t, dir, "-sf", "a", "a")
+	if code != 1 || !strings.Contains(errb, "'a' and 'a' are the same file") {
+		t.Errorf("ln -sf a a: code=%d err=%q", code, errb)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a")); string(got) != "keep" {
+		t.Errorf("ln -sf a a modified the file: %q", got)
+	}
+}
+
+func TestLnSameFileDirectoryForm(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "keep")
+
+	// Linking a file into the current directory produces the same destination.
+	_, errb, code := runTool(t, dir, "a", ".")
+	if code != 1 || !strings.Contains(errb, "'a' and 'a' are the same file") {
+		t.Errorf("ln a .: code=%d err=%q", code, errb)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a")); string(got) != "keep" {
+		t.Errorf("ln a . modified the file: %q", got)
+	}
+
+	// Same through -t.
+	_, errb, code = runTool(t, dir, "-t", ".", "a")
+	if code != 1 || !strings.Contains(errb, "'a' and 'a' are the same file") {
+		t.Errorf("ln -t . a: code=%d err=%q", code, errb)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "a")); string(got) != "keep" {
+		t.Errorf("ln -t . a modified the file: %q", got)
+	}
+}
+
 func TestLnHelpAndVersion(t *testing.T) {
 	out, _, code := runTool(t, t.TempDir(), "--help")
 	if code != 0 || !strings.Contains(out, "Usage: ln") {

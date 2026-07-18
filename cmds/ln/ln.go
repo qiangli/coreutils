@@ -125,6 +125,17 @@ func run(rc *tool.RunContext, args []string) int {
 			dest = filepath.Join(dir, filepath.Base(target))
 		}
 		destPath := rc.Path(dest)
+		// POSIX: if the destination path exists and names the same directory
+		// entry as the source, write a diagnostic and do nothing -- even when
+		// -f is in effect. This prevents ln -f a a from unlinking a.
+		srcPath := rc.Path(target)
+		if _, err := os.Lstat(destPath); err == nil {
+			if sameEntry(srcPath, destPath) {
+				fmt.Fprintf(rc.Err, "ln: '%s' and '%s' are the same file\n", target, dest)
+				exit = 1
+				continue
+			}
+		}
 		linkTarget := target
 		if *symbolic && *relative {
 			var err error
@@ -373,6 +384,13 @@ func isDestDir(rc *tool.RunContext, operand string, noDeref bool) bool {
 		fi, err = os.Stat(rc.Path(operand))
 	}
 	return err == nil && fi.IsDir()
+}
+
+// sameEntry reports whether a and b name the same directory entry after
+// path normalization. Both operands have already been resolved through
+// tool.RunContext.Path, so filepath.Clean is sufficient.
+func sameEntry(a, b string) bool {
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func relativeTarget(rc *tool.RunContext, target, dest string) (string, error) {
