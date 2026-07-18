@@ -45,8 +45,6 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
-	_ = rFlag
-
 	chosen := 0
 	for _, v := range []bool{*uFlag, *gFlag, *GFlag} {
 		if v {
@@ -80,7 +78,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		results, pErr := formatOne(u, *uFlag, *gFlag, *GFlag, useName, *aFlag)
+		results, pErr := formatOne(u, *uFlag, *gFlag, *GFlag, useName, *aFlag, *rFlag)
 		if pErr != nil {
 			fmt.Fprintf(rc.Err, "id: %v\n", pErr)
 			status = 1
@@ -103,7 +101,7 @@ func lookupUser(name string) (*user.User, error) {
 	return user.LookupId(name)
 }
 
-func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag bool) ([]string, error) {
+func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag, rFlag bool) ([]string, error) {
 	var results []string
 
 	switch {
@@ -144,17 +142,9 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag bool) ([]string
 		return results, nil
 	}
 
-	// Default format: uid=U(name) gid=G(gname) groups=g1(n1),...
 	var b strings.Builder
-	uidName := u.Username
-	if !useName {
-		uidName = ""
-	}
 	gidName := lookupGroupName(u.Gid)
-	if !useName {
-		gidName = ""
-	}
-	fmt.Fprintf(&b, "uid=%s gid=%s groups=", decorate(u.Uid, uidName), decorate(u.Gid, gidName))
+	fmt.Fprintf(&b, "uid=%s gid=%s groups=", decorate(u.Uid, u.Username), decorate(u.Gid, gidName))
 	gids, err := groupIDs(u)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get groups for %q: %v", u.Username, err)
@@ -163,11 +153,7 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag bool) ([]string
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		gn := lookupGroupName(gid)
-		if !useName {
-			gn = ""
-		}
-		b.WriteString(decorate(gid, gn))
+		b.WriteString(decorate(gid, lookupGroupName(gid)))
 	}
 	results = append(results, b.String())
 	return results, nil
