@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var fullBuffer = errors.New("FullBuffer")
@@ -135,6 +137,51 @@ func cmd_lineno(svm *vm) error {
 	svm.ip++
 	var lineno = fmt.Sprintf("%d\n", svm.lineno)
 	return writeString(svm, lineno)
+}
+
+// cmd_list writes the pattern space in the unambiguous form required by the
+// POSIX l command. Embedded newlines terminate one displayed line, while
+// controls and backslashes receive their standard escapes.
+func cmd_list(svm *vm) error {
+	svm.ip++
+	var b strings.Builder
+	for i := 0; i < len(svm.pat); {
+		r, size := utf8.DecodeRuneInString(svm.pat[i:])
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&b, "\\%03o", svm.pat[i])
+			i++
+			continue
+		}
+		i += size
+		switch r {
+		case '\\':
+			b.WriteString("\\\\")
+		case '\a':
+			b.WriteString("\\a")
+		case '\b':
+			b.WriteString("\\b")
+		case '\f':
+			b.WriteString("\\f")
+		case '\n':
+			if err := writeString(svm, b.String()+"$\n"); err != nil {
+				return err
+			}
+			b.Reset()
+		case '\r':
+			b.WriteString("\\r")
+		case '\t':
+			b.WriteString("\\t")
+		case '\v':
+			b.WriteString("\\v")
+		default:
+			if unicode.IsPrint(r) {
+				b.WriteRune(r)
+			} else {
+				fmt.Fprintf(&b, "\\%03o", r)
+			}
+		}
+	}
+	return writeString(svm, b.String()+"$\n")
 }
 
 // ---------------------------------------------------
@@ -326,17 +373,22 @@ func cmd_newReader(filename string, readFile ReadFileFunc) instruction {
 // the file for appending, writes the file, and then
 // closes the filsvm.  This appears to be consistent with
 // what OS X sed does.
-func cmd_newWriter(filename string) instruction {
+func defaultWriteFile(filename, pattern string) error {
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err = f.WriteString(pattern); err != nil {
+		return err
+	}
+	_, err = f.WriteString("\n")
+	return err
+}
+
+func cmd_newWriter(filename string, writeFile WriteFileFunc) instruction {
 	return func(svm *vm) error {
 		svm.ip++
-		f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-		if err == nil {
-			defer f.Close()
-			_, err = f.WriteString(svm.pat)
-		}
-		if err == nil {
-			_, err = f.WriteString("\n")
-		}
-		return err
+		return writeFile(filename, svm.pat)
 	}
 }

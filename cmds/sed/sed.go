@@ -384,10 +384,22 @@ func newEngine(rc *tool.RunContext, program string, quiet bool) (*gosed.Engine, 
 	readFile := func(name string) ([]byte, error) {
 		return os.ReadFile(rc.Path(name))
 	}
-	if quiet {
-		return gosed.NewQuietWithReadFile(strings.NewReader(program), readFile)
+	writeFile := func(name, pattern string) error {
+		f, err := os.OpenFile(rc.Path(name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if _, err := f.WriteString(pattern); err != nil {
+			return err
+		}
+		_, err = f.WriteString("\n")
+		return err
 	}
-	return gosed.NewWithReadFile(strings.NewReader(program), readFile)
+	if quiet {
+		return gosed.NewQuietWithReadWriteFile(strings.NewReader(program), readFile, writeFile)
+	}
+	return gosed.NewWithReadWriteFile(strings.NewReader(program), readFile, writeFile)
 }
 
 func openInput(rc *tool.RunContext, f string) (io.Reader, error) {

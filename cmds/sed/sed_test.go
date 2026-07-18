@@ -141,6 +141,45 @@ func TestSedTransliterate(t *testing.T) {
 	}
 }
 
+func TestSedList(t *testing.T) {
+	if out, _, code := runSed(t, "a\tb\\c\x01\n", "-n", "l"); code != 0 || out != "a\\tb\\\\c\\001$\n" {
+		t.Errorf("-n l = %q, code %d; want escaped listing", out, code)
+	}
+	if out, _, code := runSed(t, "a\nb\n", "-n", "N;l"); code != 0 || out != "a$\nb$\n" {
+		t.Errorf("-n N;l = %q, code %d; want one listing per embedded line", out, code)
+	}
+}
+
+func TestSedFileArgumentsMayContainBlanks(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input")
+	include := filepath.Join(dir, "include file")
+	output := filepath.Join(dir, "output file")
+	if err := os.WriteFile(input, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(include, []byte("included\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runSedInDir(t, dir, "", "1r include file", input)
+	if code != 0 || errOut != "" || out != "one\nincluded\n" {
+		t.Errorf("r filename with blanks: out=%q err=%q code=%d", out, errOut, code)
+	}
+	out, errOut, code = runSedInDir(t, dir, "", "1w output file", input)
+	if code != 0 || errOut != "" || out != "one\n" {
+		t.Errorf("w filename with blanks: out=%q err=%q code=%d", out, errOut, code)
+	}
+	if b, err := os.ReadFile(output); err != nil || string(b) != "one\n" {
+		t.Errorf("written file = %q, err %v; want one newline", b, err)
+	}
+}
+
+func TestSedRejectsZeroAddress(t *testing.T) {
+	if out, errOut, code := runSed(t, "x\n", "0p"); code == 0 || out != "" || errOut == "" {
+		t.Errorf("zero address: out=%q err=%q code=%d; want parse failure", out, errOut, code)
+	}
+}
+
 func TestSedInPlace(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "f.txt")
