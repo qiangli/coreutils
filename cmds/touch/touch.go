@@ -3,6 +3,9 @@
 // time, creating missing files unless told otherwise.
 //
 // Implemented flags: -a -c -d -h -m -r -t --no-dereference --time.
+//
+// -d accepts @SECS[.FRAC], ISO/calendar timestamps, a bare time of day, and
+// relative items ("now", "yesterday", "+2 hours", "3 days ago").
 // Portions adapted from https://github.com/u-root/u-root cmds/core/touch (BSD-3-Clause).
 package touchcmd
 
@@ -115,7 +118,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing file operand")
 	}
-	if pre.tSeen && (*date != "" || *ref != "") {
+	if pre.tSeen && (fs.Changed("date") || *ref != "") {
 		return tool.UsageError(rc, cmd, "cannot specify times from more than one source")
 	}
 	if fs.Changed("stamp") {
@@ -131,7 +134,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if *modifyOnly {
 		pre.mtime = true
 	}
-	if *date != "" && *ref != "" {
+	if fs.Changed("date") && *ref != "" {
 		return tool.NotSupported(rc, cmd, "combining --date with --reference")
 	}
 
@@ -171,8 +174,8 @@ func run(rc *tool.RunContext, args []string) int {
 			return 1
 		}
 		atime, mtime = t, t
-	case *date != "":
-		t, err := parseDate(*date)
+	case fs.Changed("date"):
+		t, err := parseDate(*date, now)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "touch: invalid date format '%s'\n", *date)
 			return 1
@@ -292,29 +295,180 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 	return t, nil
 }
 
-func parseDate(s string) (time.Time, error) {
+var errBadDate = errors.New("invalid date format")
+
+// parseDate implements the subset of GNU date-string syntax that touch -d is
+// documented to accept: seconds-since-epoch (@SECS, optionally fractional),
+// calendar/ISO timestamps, bare times of day, and relative items
+// ("now", "yesterday", "+2 hours", "3 days ago").
+func parseDate(s string, now time.Time) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, errBadDate
+	}
 	if strings.HasPrefix(s, "@") {
-		secs, err := strconv.ParseInt(s[1:], 10, 64)
-		if err != nil {
-			return time.Time{}, err
-		}
-		return time.Unix(secs, 0), nil
+		return parseEpoch(s[1:])
 	}
 	layouts := []string{
 		time.RFC3339Nano,
 		"2006-01-02T15:04:05.999999999",
 		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999 -0700",
+		"2006-01-02 15:04:05.999999999 MST",
 		"2006-01-02 15:04:05.999999999",
 		"2006-01-02T15:04",
 		"2006-01-02 15:04",
 		"2006-01-02",
+		"2006/01/02 15:04:05",
+		"2006/01/02",
+		"15:04:05.999999999",
+		"15:04",
 	}
 	for _, layout := range layouts {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
-			return t, nil
+		t, err := time.ParseInLocation(layout, s, time.Local)
+		if err != nil {
+			continue
+		}
+		if t.Year() == 0 {
+			// A bare time of day: GNU anchors it to today.
+			return time.Date(now.Year(), now.Month(), now.Day(),
+				t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local), nil
+		}
+		return t, nil
+	}
+	return parseRelative(s, now)
+}
+
+func parseEpoch(s string) (time.Time, error) {
+	frac := ""
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		frac, s = s[dot+1:], s[:dot]
+		if !allDigits(frac) {
+			return time.Time{}, errBadDate
 		}
 	}
-	return time.Time{}, errors.New("invalid date format")
+	if s == "" || (s[0] == '-' && len(s) == 1) {
+		return time.Time{}, errBadDate
+	}
+	secs, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return time.Time{}, errBadDate
+	}
+	nsec := int64(0)
+	if frac != "" {
+		for len(frac) < 9 {
+			frac += "0"
+		}
+		nsec, _ = strconv.ParseInt(frac[:9], 10, 64)
+	}
+	return time.Unix(secs, nsec), nil
+}
+
+// relUnits maps the unit words GNU's parse-datetime accepts to a multiplier
+// pair: a duration (for sub-day units) or a months/days count, since calendar
+// months and years are not fixed-length.
+var relUnits = map[string]struct {
+	d      time.Duration
+	months int
+	days   int
+}{
+	"sec": {d: time.Second}, "secs": {d: time.Second},
+	"second": {d: time.Second}, "seconds": {d: time.Second},
+	"min": {d: time.Minute}, "mins": {d: time.Minute},
+	"minute": {d: time.Minute}, "minutes": {d: time.Minute},
+	"hour": {d: time.Hour}, "hours": {d: time.Hour},
+	"day": {days: 1}, "days": {days: 1},
+	"week": {days: 7}, "weeks": {days: 7}, "fortnight": {days: 14},
+	"month": {months: 1}, "months": {months: 1},
+	"year": {months: 12}, "years": {months: 12},
+}
+
+// parseRelative handles keyword and relative-item date strings such as
+// "now", "tomorrow", "+1 week", "2 days ago", or "1 hour 30 minutes ago".
+func parseRelative(s string, now time.Time) (time.Time, error) {
+	fields := strings.Fields(strings.ToLower(s))
+	if len(fields) == 0 {
+		return time.Time{}, errBadDate
+	}
+	sign := 1
+	if fields[len(fields)-1] == "ago" {
+		sign = -1
+		fields = fields[:len(fields)-1]
+	}
+
+	t := now
+	midnight := false
+	matched := false
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		switch f {
+		case "now", "today":
+			matched = true
+			continue
+		case "yesterday":
+			t, midnight, matched = t.AddDate(0, 0, -1), true, true
+			continue
+		case "tomorrow":
+			t, midnight, matched = t.AddDate(0, 0, 1), true, true
+			continue
+		}
+
+		// A relative item: an optional count, then a unit word. GNU allows the
+		// count to be attached ("+2days"), separate ("+2 days"), or absent
+		// ("next day" is not supported; a bare unit means one).
+		num, unit := splitCount(f)
+		if unit == "" {
+			if i+1 >= len(fields) {
+				return time.Time{}, errBadDate
+			}
+			i++
+			unit = fields[i]
+		}
+		u, ok := relUnits[unit]
+		if !ok {
+			return time.Time{}, errBadDate
+		}
+		n := sign * num
+		switch {
+		case u.months != 0:
+			t = t.AddDate(0, n*u.months, 0)
+		case u.days != 0:
+			t = t.AddDate(0, 0, n*u.days)
+		default:
+			t = t.Add(time.Duration(n) * u.d)
+		}
+		matched = true
+	}
+	if !matched {
+		return time.Time{}, errBadDate
+	}
+	if midnight && len(fields) == 1 {
+		// "yesterday"/"tomorrow" alone mean that day at 00:00:00.
+		t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+	}
+	return t, nil
+}
+
+// splitCount peels a leading signed integer off a field, returning the count
+// and whatever unit text was attached. A field that is only a number yields an
+// empty unit, telling the caller to consume the next field.
+func splitCount(f string) (num int, unit string) {
+	i := 0
+	if i < len(f) && (f[i] == '+' || f[i] == '-') {
+		i++
+	}
+	start := i
+	for i < len(f) && f[i] >= '0' && f[i] <= '9' {
+		i++
+	}
+	if i == start {
+		return 1, f // no digits: a bare unit word means one of it
+	}
+	n, err := strconv.Atoi(f[:i])
+	if err != nil {
+		return 0, f
+	}
+	return n, f[i:]
 }
 
 func allDigits(s string) bool {

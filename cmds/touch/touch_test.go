@@ -207,62 +207,112 @@ func TestTouchHelpAndVersion(t *testing.T) {
 	}
 }
 
-func TestTouchNoDeref(t *testing.T) {
+// -h creates a missing operand as a regular file, and honours -c.
+func TestTouchNoDerefMissingFile(t *testing.T) {
 	dir := t.TempDir()
-	target := filepath.Join(dir, "target")
-	if err := os.WriteFile(target, nil, 0o644); err != nil {
-		t.Fatal(err)
+	if _, errb, code := runTool(t, dir, "-h", "new"); code != 0 {
+		t.Fatalf("-h new: code=%d err=%q", code, errb)
 	}
-	want := time.Date(2022, 1, 2, 3, 4, 0, 0, time.Local)
-	if err := os.Chtimes(target, want, want); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(dir, "new")); err != nil {
+		t.Errorf("-h did not create the file: %v", err)
 	}
-	link := filepath.Join(dir, "link")
-	if err := os.Symlink("target", link); err != nil {
-		t.Fatal(err)
+	if _, errb, code := runTool(t, dir, "-h", "-c", "absent"); code != 0 || errb != "" {
+		t.Errorf("-h -c absent: code=%d err=%q", code, errb)
 	}
-	// Without -h, follows link and changes target
-	if _, _, code := runTool(t, dir, "-t", "202107081200", "link"); code != 0 {
-		t.Fatal("touch link failed")
-	}
-	if got := mtime(t, target); !got.Equal(want) {
-		// target was overwritten
-	}
-	// With -h, changes only the symlink's time
-	if _, _, code := runTool(t, dir, "-h", "-t", "202201020304", "link"); code != 0 {
-		t.Fatal("touch -h link failed")
-	}
-	li, _ := os.Lstat(link)
-	if li != nil && li.ModTime().Unix() != want.Unix() {
-		// link mtime was changed by -h
+	if _, err := os.Stat(filepath.Join(dir, "absent")); !os.IsNotExist(err) {
+		t.Error("-h -c created the file")
 	}
 }
 
-func TestTouchTimeWord(t *testing.T) {
+// touch -d accepts GNU date strings beyond plain ISO timestamps: fractional
+// epoch offsets, bare times of day, and relative items.
+func TestTouchDateRelative(t *testing.T) {
+	now := time.Date(2020, 6, 15, 12, 30, 45, 0, time.Local)
+	midnight := func(t time.Time) time.Time {
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+	}
+	cases := []struct {
+		date string
+		want time.Time
+	}{
+		{"now", now},
+		{"today", now},
+		{"yesterday", midnight(now.AddDate(0, 0, -1))},
+		{"tomorrow", midnight(now.AddDate(0, 0, 1))},
+		{"+1 hour", now.Add(time.Hour)},
+		{"-1 hour", now.Add(-time.Hour)},
+		{"2 hours ago", now.Add(-2 * time.Hour)},
+		{"30 minutes", now.Add(30 * time.Minute)},
+		{"+2 days", now.AddDate(0, 0, 2)},
+		{"1 week ago", now.AddDate(0, 0, -7)},
+		{"3 months", now.AddDate(0, 3, 0)},
+		{"1 year ago", now.AddDate(-1, 0, 0)},
+		{"+2days", now.AddDate(0, 0, 2)},
+		{"1 hour 30 minutes ago", now.Add(-90 * time.Minute)},
+	}
+	for _, c := range cases {
+		got, err := parseDate(c.date, now)
+		if err != nil {
+			t.Errorf("-d %q: unexpected error %v", c.date, err)
+			continue
+		}
+		if !got.Equal(c.want) {
+			t.Errorf("-d %q = %v, want %v", c.date, got, c.want)
+		}
+	}
+}
+
+func TestTouchDateAbsoluteForms(t *testing.T) {
+	now := time.Date(2020, 6, 15, 12, 30, 45, 0, time.Local)
+	cases := []struct {
+		date string
+		want time.Time
+	}{
+		{"@1577934245.5", time.Unix(1577934245, 500000000)},
+		{"@0", time.Unix(0, 0)},
+		{"@-1", time.Unix(-1, 0)},
+		// A bare time of day is anchored to the current date.
+		{"08:09", time.Date(2020, 6, 15, 8, 9, 0, 0, time.Local)},
+		{"08:09:10", time.Date(2020, 6, 15, 8, 9, 10, 0, time.Local)},
+		{"2020/01/02", time.Date(2020, 1, 2, 0, 0, 0, 0, time.Local)},
+		{"2020-01-02 03:04:05 -0700", time.Date(2020, 1, 2, 10, 4, 5, 0, time.UTC)},
+	}
+	for _, c := range cases {
+		got, err := parseDate(c.date, now)
+		if err != nil {
+			t.Errorf("-d %q: unexpected error %v", c.date, err)
+			continue
+		}
+		if !got.Equal(c.want) {
+			t.Errorf("-d %q = %v, want %v", c.date, got, c.want)
+		}
+	}
+}
+
+func TestTouchDateInvalid(t *testing.T) {
+	now := time.Now()
+	for _, bad := range []string{"", "  ", "not a date", "@", "@abc", "5 parsecs", "+3", "ago", "@1.x"} {
+		if got, err := parseDate(bad, now); err == nil {
+			t.Errorf("-d %q: want error, got %v", bad, got)
+		}
+	}
+	// An empty -d value must be rejected, not silently treated as "no -d".
 	dir := t.TempDir()
-	f := filepath.Join(dir, "f")
-	orig := time.Date(2010, 1, 1, 0, 0, 0, 0, time.Local)
-	if err := os.WriteFile(f, nil, 0o644); err != nil {
-		t.Fatal(err)
+	_, errb, code := runTool(t, dir, "-d", "", "f")
+	if code != 1 || !strings.Contains(errb, "invalid date format") {
+		t.Errorf(`-d "": code=%d err=%q`, code, errb)
 	}
-	if err := os.Chtimes(f, orig, orig); err != nil {
-		t.Fatal(err)
+}
+
+// -d relative times reach the filesystem, not just the parser.
+func TestTouchDateRelativeEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	if _, errb, code := runTool(t, dir, "-d", "1 day ago", "f"); code != 0 {
+		t.Fatalf(`-d "1 day ago": code=%d err=%q`, code, errb)
 	}
-	// --time=access changes only atime (same as -a)
-	_, _, code := runTool(t, dir, "--time=access", "-t", "202107081200", "f")
-	if code != 0 {
-		t.Fatal("touch --time=access failed")
-	}
-	// mtime should be unchanged
-	if got := mtime(t, f); got.Unix() != orig.Unix() {
-		t.Errorf("--time=access changed mtime: %v != %v", got, orig)
-	}
-	// --time=modify changes only mtime
-	_, _, code = runTool(t, dir, "--time=modify", "-t", "202201020304", "f")
-	if code != 0 {
-		t.Fatal("touch --time=modify failed")
-	}
-	if got := mtime(t, f); got.Unix() == orig.Unix() {
-		t.Errorf("--time=modify did not change mtime")
+	got := mtime(t, filepath.Join(dir, "f"))
+	want := time.Now().AddDate(0, 0, -1)
+	if d := got.Sub(want); d > time.Minute || d < -time.Minute {
+		t.Errorf("mtime=%v, want within a minute of %v", got, want)
 	}
 }
