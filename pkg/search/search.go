@@ -68,6 +68,13 @@ var ladder = []backend{
 	{name: "tavily", envKeys: []string{"TAVILY_API_KEY"}, secret: "tavily", run: runTavily},
 	{name: "brave", envKeys: []string{"BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY"}, secret: "brave", run: runBrave},
 	{name: "serper", envKeys: []string{"SERPER_API_KEY"}, secret: "serper", run: runSerper},
+	// searxng: the keyless, self-hosted rung — last, so a reliable keyed backend
+	// is always preferred when a key exists. Its "key" is the ENDPOINT URL, not a
+	// secret: set BASHY_SEARXNG_URL (e.g. http://localhost:8888) to enable it,
+	// pointing at a SearXNG instance you run (e.g. `bashy podman run … searxng/
+	// searxng` — download+exec of the unmodified official image, so its AGPL-3.0
+	// stays on that separate program; see docs/licensing-supply-chain-policy.md).
+	{name: "searxng", envKeys: []string{"BASHY_SEARXNG_URL", "SEARXNG_URL"}, secret: "searxng-url", run: runSearxng},
 }
 
 // Web runs a web search through the first available backend. It returns the
@@ -229,6 +236,52 @@ func parseSerper(raw []byte) ([]Result, error) {
 	out := make([]Result, 0, len(r.Organic))
 	for _, x := range r.Organic {
 		out = append(out, Result{Title: cleanSnippet(x.Title), URL: x.Link, Snippet: cleanSnippet(x.Snippet), RetrievedAt: now, Backend: "serper"})
+	}
+	return out, nil
+}
+
+// --- SearXNG: GET <endpoint>/search?q=…&format=json (keyless, self-hosted) ---
+//
+// The "key" here is the endpoint URL (from BASHY_SEARXNG_URL), not a secret —
+// SearXNG needs no API key. The instance must have the JSON format enabled
+// (search.formats includes `json` in its settings.yml). bashy only speaks HTTP
+// to it; the AGPL-3.0 program runs as a separate process.
+func runSearxng(ctx context.Context, client *http.Client, endpoint, query string, max int) ([]Result, error) {
+	base := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if base == "" {
+		return nil, errors.New("searxng: no endpoint (set BASHY_SEARXNG_URL)")
+	}
+	u := fmt.Sprintf("%s/search?q=%s&format=json", base, url.QueryEscape(query))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	raw, err := do(client, req)
+	if err != nil {
+		return nil, err
+	}
+	return parseSearxng(raw, max)
+}
+
+func parseSearxng(raw []byte, max int) ([]Result, error) {
+	var r struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	out := make([]Result, 0, max)
+	for i, x := range r.Results {
+		if i >= max {
+			break
+		}
+		out = append(out, Result{Title: cleanSnippet(x.Title), URL: x.URL, Snippet: cleanSnippet(x.Content), RetrievedAt: now, Backend: "searxng"})
 	}
 	return out, nil
 }
