@@ -173,8 +173,12 @@ func (f *HostFacts) Satisfies(s TaskSpec) bool {
 			}
 		}
 	}
-	if s.MemPerTask > 0 && f.MemBytes > 0 && f.MemBytes < s.MemPerTask {
-		return false
+	if s.MemPerTask > 0 {
+		// An absent observation is not evidence that the task fits. Treat it as
+		// unknown so a memory-gated task cannot be placed speculatively.
+		if f.MemBytes == 0 || f.MemBytes < s.MemPerTask {
+			return false
+		}
 	}
 	return true
 }
@@ -213,15 +217,21 @@ type TaskSpec struct {
 	Retries int           `json:"retries,omitempty"`
 }
 
-// SpecFor derives a task's demand from its metadata. P2 has no Venue: or
-// Requires-host: metadata on Task yet, so every task asks for the userland
-// venue; adding that metadata is a parser change that lands here, not a
-// scheduler change.
+// SpecFor derives a task's demand from its metadata. A task with no Venue:
+// requests the ordinary userland lane; all declared requirements travel through
+// this function before they reach the scheduler.
 func SpecFor(t *Task) TaskSpec {
+	venue := t.Venue
+	if venue == "" {
+		venue = VenueUserland
+	}
 	return TaskSpec{
 		SchemaVersion: TaskSpecSchemaVersion,
 		Task:          t.Name,
-		Venue:         VenueUserland,
+		Venue:         venue,
+		Match:         t.Match,
+		Exclusive:     t.Exclusive,
+		MemPerTask:    t.MemPerTask,
 		Timeout:       t.Timeout,
 		Retries:       t.Retries,
 	}

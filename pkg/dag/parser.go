@@ -52,6 +52,14 @@ type Task struct {
 	// P2 #13 — Host is placement intent for a future remote executor.
 	Host string
 
+	// Fleet placement requirements. These describe capability, never reach:
+	// Venue selects an isolation lane, Match names host facts, Exclusive drains
+	// the selected worker, and MemPerTask reserves memory capacity.
+	Venue      string
+	Match      map[string]string
+	Exclusive  bool
+	MemPerTask uint64
+
 	// P0 #2 — per-target execution policy enforced by the engine.
 	Timeout time.Duration // `Timeout: 90s` — 0 means no deadline
 	Retries int           // `Retries: 3` — extra attempts after the first on failure
@@ -106,6 +114,8 @@ var metaKeys = map[string]bool{
 	"matrix": true, "secrets": true, "artifacts": true, "when": true,
 	// P2 metadata.
 	"exitcodes": true, "host": true,
+	"venue": true, "lane": true, "match": true, "requires-host": true,
+	"exclusive": true, "mempertask": true, "mem-per-task": true, "memory": true,
 }
 
 // Parse reads a DAG markdown document. The format:
@@ -458,6 +468,23 @@ func (t *Task) absorb(lines []string) {
 				t.ExitCodes = parseExitCodes(v)
 			case "host":
 				t.Host = strings.TrimSpace(v)
+			case "venue", "lane":
+				t.Venue = strings.TrimSpace(v)
+			case "match", "requires-host":
+				if t.Match == nil {
+					t.Match = map[string]string{}
+				}
+				for _, f := range strings.Fields(strings.ReplaceAll(v, ",", " ")) {
+					if k, val, ok := strings.Cut(f, "="); ok && strings.TrimSpace(k) != "" && strings.TrimSpace(val) != "" {
+						t.Match[strings.TrimSpace(k)] = strings.TrimSpace(val)
+					}
+				}
+			case "exclusive":
+				t.Exclusive = strings.EqualFold(strings.TrimSpace(v), "true") || strings.TrimSpace(v) == "1"
+			case "mempertask", "mem-per-task", "memory":
+				if n, ok := parseMemoryBytes(v); ok {
+					t.MemPerTask = n
+				}
 			case "timeout":
 				if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
 					t.Timeout = d
@@ -532,6 +559,34 @@ func parseMeta(line string) (key, value string, ok bool) {
 		return "", "", false
 	}
 	return k, strings.TrimSpace(line[i+1:]), true
+}
+
+// parseMemoryBytes accepts an integer byte count and the compact binary units
+// commonly used in task metadata (for example, 4GiB or 512MiB).
+func parseMemoryBytes(v string) (uint64, bool) {
+	s := strings.ToLower(strings.TrimSpace(v))
+	multiplier := uint64(1)
+	for _, unit := range []struct {
+		suffix string
+		bytes  uint64
+	}{
+		{"gib", 1 << 30}, {"gb", 1 << 30},
+		{"mib", 1 << 20}, {"mb", 1 << 20},
+		{"kib", 1 << 10}, {"kb", 1 << 10},
+		{"b", 1},
+	} {
+		suffix, n := unit.suffix, unit.bytes
+		if strings.HasSuffix(s, suffix) {
+			s = strings.TrimSpace(strings.TrimSuffix(s, suffix))
+			multiplier = n
+			break
+		}
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil || n > ^uint64(0)/multiplier {
+		return 0, false
+	}
+	return n * multiplier, true
 }
 
 func frontmatterKV(line string) (key, value string, ok bool) {
