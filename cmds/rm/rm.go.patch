@@ -1,0 +1,28 @@
+--- rm.go
++++ rm.go
+@@ -62,10 +62,7 @@
+ 	if *interactiveOnce && !*interactive && len(operands) <= 3 && !*recursive {
+ 		ask = false
+ 	}
+-	isTerm := false
+-	if f, ok := rc.In.(interface{ Fd() uintptr }); ok {
+-		isTerm = term.IsTerminal(int(f.Fd()))
+-	}
++	isTerm := isTerminalFunc(rc.In)
+ 	r := &remover{
+ 		rc: rc, recursive: *recursive, force: *force, dir: *dir,
+ 		interactive: ask, preserveRoot: *preserveRoot && !*noPreserveRoot,
+@@ -194,6 +191,13 @@
+ 	return bufio.NewReader(r)
+ }
+ 
++var isTerminalFunc = func(r io.Reader) bool {
++	if f, ok := r.(interface{ Fd() uintptr }); ok {
++		return term.IsTerminal(int(f.Fd()))
++	}
++	return false
++}
++
+ func foldRShorthand(args []string) []string {
+ 	out := make([]string, len(args))
+ 	copy(out, args)

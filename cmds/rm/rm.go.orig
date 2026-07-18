@@ -67,7 +67,10 @@ func run(rc *tool.RunContext, args []string) int {
 	if *interactiveOnce && !*interactive && len(operands) <= 3 && !*recursive {
 		ask = false
 	}
-	isTerm := isTerminalFunc(rc.In)
+	isTerm := false
+	if f, ok := rc.In.(interface{ Fd() uintptr }); ok {
+		isTerm = term.IsTerminal(int(f.Fd()))
+	}
 	r := &remover{
 		rc: rc, recursive: *recursive, force: *force, dir: *dir,
 		interactive: ask, preserveRoot: *preserveRoot && !*noPreserveRoot,
@@ -122,12 +125,12 @@ func (r *remover) remove(op string, isChild bool) {
 			r.errf("it is dangerous to operate recursively on '%s'", op)
 			return
 		}
-
+		
 		// POSIX 2.b: Prompt before descending
 		if r.shouldPrompt(rp, r.interactive) && !r.confirm(op) {
 			return
 		}
-
+		
 		if r.dir && !r.recursive {
 			r.removeFile(op)
 			return
@@ -135,7 +138,7 @@ func (r *remover) remove(op string, isChild bool) {
 		r.removeTree(op)
 		return
 	}
-
+	
 	// POSIX 3: Prompt for files
 	if r.shouldPrompt(rp, r.interactive) && !r.confirm(op) {
 		return
@@ -161,12 +164,12 @@ func (r *remover) removeTree(op string) {
 		child := filepath.Join(op, e.Name())
 		r.remove(child, true)
 	}
-
+	
 	// POSIX 2.d: Prompt before removing the directory itself if -i is specified
 	if r.interactive && !r.confirm(op) {
 		return
 	}
-
+	
 	if err := os.Remove(r.rc.Path(op)); err != nil {
 		r.errf("cannot remove '%s': %s", op, reason(err))
 		return
@@ -200,13 +203,6 @@ func inputReader(r io.Reader) *bufio.Reader {
 		r = strings.NewReader("")
 	}
 	return bufio.NewReader(r)
-}
-
-var isTerminalFunc = func(r io.Reader) bool {
-	if f, ok := r.(interface{ Fd() uintptr }); ok {
-		return term.IsTerminal(int(f.Fd()))
-	}
-	return false
 }
 
 func foldRShorthand(args []string) []string {

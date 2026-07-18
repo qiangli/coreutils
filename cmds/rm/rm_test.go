@@ -3,6 +3,7 @@ package rmcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -224,5 +225,67 @@ func TestRmHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, dir, "--version")
 	if code != 0 || !strings.Contains(out, "rm") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+func TestRmPOSIXWriteProtectPrompt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readonly")
+	write(t, path, "x")
+	os.Chmod(path, 0444)
+
+	// Mock terminal check
+	origIsTerminal := isTerminalFunc
+	isTerminalFunc = func(r io.Reader) bool { return true }
+	defer func() { isTerminalFunc = origIsTerminal }()
+
+	// If user says no
+	_, errb, code := runToolIn(t, dir, "n\n", "readonly")
+	if code != 0 {
+		t.Errorf("expected 0 exit code on 'n', got %d", code)
+	}
+	if !strings.Contains(errb, "remove 'readonly'?") {
+		t.Errorf("missing prompt, errb=%q", errb)
+	}
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		t.Error("file removed despite 'n' answer")
+	}
+
+	// If user says yes
+	_, _, code = runToolIn(t, dir, "y\n", "readonly")
+	if code != 0 {
+		t.Errorf("expected 0 exit code on 'y', got %d", code)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Error("file not removed after 'y' answer")
+	}
+}
+
+func TestRmRecursiveInteractivePrompts(t *testing.T) {
+	dir := t.TempDir()
+	d := filepath.Join(dir, "d")
+	os.MkdirAll(d, 0755)
+	write(t, filepath.Join(d, "f"), "x")
+
+	// Answer 'y' to all prompts
+	input := "y\ny\ny\n"
+	_, errb, code := runToolIn(t, dir, input, "-ri", "d")
+	if code != 0 {
+		t.Errorf("expected 0 exit code, got %d", code)
+	}
+
+	// Should prompt for:
+	// 1. descend into directory (or just "remove 'd'?" based on our generic prompt)
+	// 2. remove file 'd/f'?
+	// 3. remove directory 'd'?
+	if strings.Count(errb, "remove '") != 3 {
+		t.Errorf("expected 3 prompts, got %d in %q", strings.Count(errb, "remove '"), errb)
+	}
+	if !strings.Contains(errb, filepath.Join("d", "f")) {
+		t.Errorf("did not prompt for file inside directory: %q", errb)
+	}
+
+	if _, err := os.Lstat(d); !os.IsNotExist(err) {
+		t.Error("directory not removed after 'y' answers")
 	}
 }
