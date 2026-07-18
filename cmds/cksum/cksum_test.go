@@ -174,10 +174,47 @@ func TestCKSumCheckMode(t *testing.T) {
 		t.Fatalf("sha2 tagged check = (%q, %q, %d)", out, errb, code)
 	}
 
+	// --ignore-missing skips the absent file, but when that leaves
+	// nothing actually verified GNU reports it and exits non-zero.
 	checks = "MD5 (missing.txt) = 900150983cd24fb0d6963f7d28e17f72\n"
 	out, errb, code = runTool(t, dir, checks, "-c", "--ignore-missing")
-	if code != 0 || out != "" || errb != "" {
+	if code != 1 || out != "" || !strings.Contains(errb, "cksum: 'standard input': no file was verified") {
 		t.Fatalf("ignore missing = (%q, %q, %d)", out, errb, code)
+	}
+
+	// One present file alongside a missing one is a verification, so
+	// --ignore-missing succeeds quietly.
+	checks = "MD5 (missing.txt) = 900150983cd24fb0d6963f7d28e17f72\n" +
+		"SHA1 (a.txt) = a9993e364706816aba3e25717850c26c9cd0d89d\n"
+	out, errb, code = runTool(t, dir, checks, "-c", "--ignore-missing")
+	if code != 0 || out != "a.txt: OK\n" || errb != "" {
+		t.Fatalf("ignore missing with a hit = (%q, %q, %d)", out, errb, code)
+	}
+
+	// --status suppresses the per-file report and the WARNING summary,
+	// but not the open/read errno diagnostic (GNU).
+	checks = "SHA1 (nope.txt) = a9993e364706816aba3e25717850c26c9cd0d89d\n"
+	out, errb, code = runTool(t, dir, checks, "-c", "--status")
+	if code != 1 || out != "" ||
+		!strings.Contains(errb, "cksum: nope.txt: No such file or directory") ||
+		strings.Contains(errb, "WARNING") {
+		t.Fatalf("status unreadable = (%q, %q, %d)", out, errb, code)
+	}
+
+	// Without --status the same case also reports FAILED open or read.
+	out, errb, code = runTool(t, dir, checks, "-c")
+	if code != 1 || out != "nope.txt: FAILED open or read\n" ||
+		!strings.Contains(errb, "cksum: nope.txt: No such file or directory") ||
+		!strings.Contains(errb, "cksum: WARNING: 1 listed file could not be read") {
+		t.Fatalf("unreadable = (%q, %q, %d)", out, errb, code)
+	}
+
+	// --status does not hide "no properly formatted checksum lines
+	// found": nothing was checkable at all.
+	out, errb, code = runTool(t, dir, "garbage\n", "-c", "--status")
+	if code != 1 || out != "" ||
+		!strings.Contains(errb, "cksum: 'standard input': no properly formatted checksum lines found") {
+		t.Fatalf("status no valid lines = (%q, %q, %d)", out, errb, code)
 	}
 
 	// --zero is rejected when verifying (GNU).

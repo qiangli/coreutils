@@ -559,7 +559,7 @@ func checkCKSumFile(rc *tool.RunContext, mode cksumMode, autoDetect bool, op str
 	}
 
 	br := bufio.NewReader(r)
-	var valid, badFormat, mismatched, unreadable int
+	var valid, badFormat, mismatched, unreadable, verified int
 	lineNo := 0
 	curLabel := mode.label
 	exit := 0
@@ -582,14 +582,19 @@ func checkCKSumFile(rc *tool.RunContext, mode cksumMode, autoDetect bool, op str
 				switch {
 				case err != nil:
 					if !(opts.ignoreMissing && errors.Is(err, fs.ErrNotExist)) {
+						// GNU reports the open/read errno even under
+						// --status; only the "FAILED open or read"
+						// report line is suppressed.
+						fmt.Fprintf(rc.Err, "cksum: %s: %s\n", entry.display, hashenc.GNUErrMsg(err))
 						if !opts.status {
-							fmt.Fprintf(rc.Err, "cksum: %s: %s\n", entry.display, hashenc.GNUErrMsg(err))
 							fmt.Fprintf(rc.Out, "%s: FAILED open or read\n", entry.display)
 						}
 						unreadable++
+						verified++
 						exit = 1
 					}
 				case match:
+					verified++
 					if !opts.status && !opts.quiet {
 						fmt.Fprintf(rc.Out, "%s: OK\n", entry.display)
 					}
@@ -598,6 +603,7 @@ func checkCKSumFile(rc *tool.RunContext, mode cksumMode, autoDetect bool, op str
 						fmt.Fprintf(rc.Out, "%s: FAILED\n", entry.display)
 					}
 					mismatched++
+					verified++
 					exit = 1
 				}
 			}
@@ -607,10 +613,15 @@ func checkCKSumFile(rc *tool.RunContext, mode cksumMode, autoDetect bool, op str
 		}
 	}
 
+	// GNU prints both of these diagnostics unconditionally: --status
+	// suppresses the per-file report and the WARNING summaries, not the
+	// "nothing was checkable" errors.
 	if valid == 0 {
-		if !opts.status {
-			fmt.Fprintf(rc.Err, "cksum: %s: no properly formatted checksum lines found\n", display)
-		}
+		fmt.Fprintf(rc.Err, "cksum: %s: no properly formatted checksum lines found\n", display)
+		return 1
+	}
+	if opts.ignoreMissing && verified == 0 {
+		fmt.Fprintf(rc.Err, "cksum: %s: no file was verified\n", display)
 		return 1
 	}
 	if badFormat > 0 && !opts.status {
