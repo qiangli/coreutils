@@ -252,6 +252,72 @@ func TestInode(t *testing.T) {
 	}
 }
 
+// entryFields runs ls with args against a single-file dir and returns
+// the whitespace-split fields of the one entry line (the total line is
+// discarded).
+func entryFields(t *testing.T, dir string, args ...string) []string {
+	t.Helper()
+	out, _, code := runToolAt(t, dir, args...)
+	if code != 0 {
+		t.Fatalf("ls %v code = %d, out = %q", args, code, out)
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("ls %v lines = %q", args, lines)
+	}
+	return strings.Fields(lines[1])
+}
+
+// TestLongOwnerGroupColumns pins -g/-o/-n/--author to their GNU
+// meanings: -g omits the OWNER column (not the group, which it looks
+// like at a glance), -o omits the group, -n renders both IDs
+// numerically without hiding either column, and --author adds an
+// owner-duplicate column right after owner.
+func TestLongOwnerGroupColumns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("owner/group column semantics are POSIX uid/gid specific")
+	}
+	dir := t.TempDir()
+	write(t, dir, "f", "hello")
+
+	base := entryFields(t, dir, "-l")
+	if len(base) != 9 {
+		t.Fatalf("ls -l fields = %v, want 9 (mode nlink owner group size mon day time name)", base)
+	}
+	owner, group := base[2], base[3]
+
+	g := entryFields(t, dir, "-g")
+	if len(g) != 8 || g[2] != group {
+		t.Fatalf("ls -g fields = %v, want owner column dropped and group %q kept", g, group)
+	}
+
+	o := entryFields(t, dir, "-o")
+	if len(o) != 8 || o[2] != owner {
+		t.Fatalf("ls -o fields = %v, want group column dropped and owner %q kept", o, owner)
+	}
+
+	both := entryFields(t, dir, "-g", "-o")
+	if len(both) != 7 {
+		t.Fatalf("ls -go fields = %v, want both owner and group columns dropped", both)
+	}
+
+	n := entryFields(t, dir, "-n")
+	if len(n) != 9 {
+		t.Fatalf("ls -n fields = %v, want 9 fields (numeric owner/group still both shown)", n)
+	}
+	if _, err := strconv.Atoi(n[2]); err != nil {
+		t.Errorf("ls -n owner field = %q, want numeric uid", n[2])
+	}
+	if _, err := strconv.Atoi(n[3]); err != nil {
+		t.Errorf("ls -n group field = %q, want numeric gid", n[3])
+	}
+
+	a := entryFields(t, dir, "-l", "--author")
+	if len(a) != 10 || a[2] != owner || a[3] != owner {
+		t.Fatalf("ls -l --author fields = %v, want an author column (%q) duplicating owner right after it", a, owner)
+	}
+}
+
 func TestUutilsDisplayOptions(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "b.go", "b")

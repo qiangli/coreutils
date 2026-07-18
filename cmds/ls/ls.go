@@ -46,7 +46,8 @@ type options struct {
 	long, all, almostAll, dirOnly, recursive bool
 	reverse, sortTime, sortSize              bool
 	inode, human                             bool
-	noGroup, numeric                         bool
+	noOwner, noGroup, numeric                bool
+	author                                   bool
 	sizeBlocks                               bool
 	classify, fileType, slashDirs            bool
 	zero, comma                              bool
@@ -117,6 +118,7 @@ const (
 type sysInfo struct {
 	nlink                uint64
 	owner, group         string
+	ownerNum, groupNum   string // -n / --numeric-uid-gid rendering
 	blocks512            uint64 // disk usage in 512-byte units
 	rdevMajor, rdevMinor uint32 // device numbers for block/char specials
 }
@@ -250,6 +252,7 @@ func run(rc *tool.RunContext, args []string) int {
 	longFlag, _ := fs.GetBool("long")
 	noGroup, _ := fs.GetBool("no-group")
 	numeric, _ := fs.GetBool("numeric-uid-gid")
+	author, _ := fs.GetBool("author")
 	hide, _ := fs.GetStringArray("hide")
 	ignore, _ := fs.GetStringArray("ignore")
 
@@ -265,8 +268,10 @@ func run(rc *tool.RunContext, args []string) int {
 		reverse:        reverse,
 		inode:          inode,
 		human:          human,
-		noGroup:        short['g'] > 0 || short['G'] > 0 || noGroup,
+		noOwner:        short['g'] > 0,
+		noGroup:        short['G'] > 0 || noGroup,
 		numeric:        short['n'] > 0 || numeric,
+		author:         author,
 		sortTime:       short['t'] > 0,
 		sortSize:       short['S'] > 0,
 		sizeBlocks:     short['s'] > 0 || sizeFlag,
@@ -689,28 +694,40 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 	}
 
 	type row struct {
-		mode, nlink, owner, group, size, mtime, name string
+		mode, nlink, owner, author, group, size, mtime, name string
 	}
 	rows := make([]row, len(ents))
-	var nlinkW, ownerW, groupW, sizeW int
+	var nlinkW, ownerW, authorW, groupW, sizeW int
 	now := time.Now()
 	for i, e := range ents {
 		sys := sysOf(e.info, e.path)
+		owner, group := sys.owner, sys.group
+		if opt.numeric {
+			owner, group = sys.ownerNum, sys.groupNum
+		}
 		r := row{
-			mode:  modeString(e.info.Mode()),
-			nlink: strconv.FormatUint(sys.nlink, 10),
-			owner: sys.owner,
-			group: sys.group,
-			size:  sizeString(e.info, sys, opt),
-			mtime: timeString(e.tm, now, opt.timeStyle),
-			name:  displayName(e, opt),
+			mode:   modeString(e.info.Mode()),
+			nlink:  strconv.FormatUint(sys.nlink, 10),
+			owner:  owner,
+			author: owner,
+			group:  group,
+			size:   sizeString(e.info, sys, opt),
+			mtime:  timeString(e.tm, now, opt.timeStyle),
+			name:   displayName(e, opt),
 		}
 		if e.info.Mode()&os.ModeSymlink != 0 && e.target != "" {
 			r.name += " -> " + quoteControl(e.target, opt)
 		}
 		nlinkW = max(nlinkW, len(r.nlink))
-		ownerW = max(ownerW, len(r.owner))
-		groupW = max(groupW, len(r.group))
+		if !opt.noOwner {
+			ownerW = max(ownerW, len(r.owner))
+		}
+		if opt.author {
+			authorW = max(authorW, len(r.author))
+		}
+		if !opt.noGroup {
+			groupW = max(groupW, len(r.group))
+		}
 		sizeW = max(sizeW, len(r.size))
 		rows[i] = r
 	}
@@ -722,15 +739,17 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 		if opt.sizeBlocks {
 			fmt.Fprintf(out, "%*s ", blocksW, blkStrs[i])
 		}
-		if opt.noGroup || opt.numeric {
-			fmt.Fprintf(out, "%s %*s %-*s %*s %s %s\n",
-				r.mode, nlinkW, r.nlink, ownerW, r.owner,
-				sizeW, r.size, r.mtime, r.name)
-		} else {
-			fmt.Fprintf(out, "%s %*s %-*s %-*s %*s %s %s\n",
-				r.mode, nlinkW, r.nlink, ownerW, r.owner, groupW, r.group,
-				sizeW, r.size, r.mtime, r.name)
+		fmt.Fprintf(out, "%s %*s", r.mode, nlinkW, r.nlink)
+		if !opt.noOwner {
+			fmt.Fprintf(out, " %-*s", ownerW, r.owner)
 		}
+		if opt.author {
+			fmt.Fprintf(out, " %-*s", authorW, r.author)
+		}
+		if !opt.noGroup {
+			fmt.Fprintf(out, " %-*s", groupW, r.group)
+		}
+		fmt.Fprintf(out, " %*s %s %s\n", sizeW, r.size, r.mtime, r.name)
 	}
 }
 

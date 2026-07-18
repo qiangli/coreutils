@@ -57,6 +57,8 @@ func sysOf(fi os.FileInfo, _ string) sysInfo {
 		nlink:     uint64(st.Nlink),
 		owner:     userName(st.Uid),
 		group:     groupName(st.Gid),
+		ownerNum:  strconv.FormatUint(uint64(st.Uid), 10),
+		groupNum:  strconv.FormatUint(uint64(st.Gid), 10),
 		blocks512: uint64(st.Blocks),
 		rdevMajor: unix.Major(uint64(st.Rdev)),
 		rdevMinor: unix.Minor(uint64(st.Rdev)),
