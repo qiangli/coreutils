@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"runtime"
 	"slices"
 	"strings"
@@ -305,13 +306,62 @@ const (
 	FailNoWorker      = "no-eligible-worker"   // infra: no worker could ever satisfy the spec
 	FailUnreachable   = "worker-unreachable"   // infra: transport could not reach the worker
 	FailCanceled      = "canceled"             // infra: orchestrator cancelled before a verdict
+	FailUnclassified  = "unclassified"         // infra: failed for a reason we cannot place on the body
 )
 
 // FailureReason is the structured half of a failed attempt: a stable code a
 // scheduler can branch on, plus a human detail it must not parse.
+//
+// Detail is the one free-text field in any of these contracts, and records
+// travel into committed artifacts — so it is NEVER derived from an arbitrary
+// error. A raw transport error is exactly the shape that carries reach details
+// ("dial tcp 203.0.113.7:22: connect: connection refused"), and no scrubber can
+// enumerate every way an address can appear in an error string. The guard is
+// therefore structural rather than sanitizing: only a reason a producer
+// deliberately CONSTRUCTED reaches a record (see FleetFailure), and everything
+// else records its stable Code with no detail at all. The full error still
+// reaches the operator through the task's stdout/stderr and the local log,
+// which are not committed artifacts.
 type FailureReason struct {
 	Code   string `json:"code"`
 	Detail string `json:"detail,omitempty"`
+}
+
+// ErrWorkerUnreachable is the sentinel a transport wraps when it could not
+// reach its worker at all. It is the difference between "the body ran and
+// failed" and "we never got a verdict", which no exit code can express: a
+// transport that cannot dial has no body exit code to report.
+var ErrWorkerUnreachable = errors.New("worker unreachable")
+
+// FleetFailure is implemented by errors that carry their OWN classification.
+// It is how a transport hands the recorder a curated reason instead of a raw
+// error string: the producer knows which parts of its failure are safe to
+// publish, and the recorder refuses to guess on its behalf.
+type FleetFailure interface {
+	FleetFailure() (status RunStatus, reason FailureReason)
+}
+
+// reachShaped reports whether a detail string looks like it carries reach
+// details. This is DEFENCE IN DEPTH, not the guard: the guard is that Detail is
+// never taken from an arbitrary error in the first place. It exists so that a
+// producer which constructs a careless reason is caught at Validate rather than
+// in a committed artifact.
+func reachShaped(detail string) bool {
+	if strings.Contains(detail, "@") { // user@host
+		return true
+	}
+	for _, f := range strings.FieldsFunc(detail, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '"' || r == '\'' || r == ',' || r == '(' || r == ')'
+	}) {
+		f = strings.Trim(f, ".:;")
+		if host, _, err := net.SplitHostPort(f); err == nil && host != "" {
+			return true // host:port
+		}
+		if net.ParseIP(f) != nil {
+			return true // bare address literal
+		}
+	}
+	return false
 }
 
 // RunRecord is the outcome of ONE attempt of one task — attempt three of a
@@ -336,12 +386,17 @@ type RunRecord struct {
 // (no fleet configured), which records the local logical worker. Only the
 // worker's logical ID enters the record — never Worker.Host, which is reach.
 //
-// Classification: an error carrying weavecli.ExitDepUnhealthy (the pool's
-// no-eligible-worker failure) or a parent cancellation is INFRASTRUCTURE — no
-// verdict was rendered. A StatusFailed result from an executed body is
-// CONFORMANCE. Everything else (done, up-to-date, condition-skipped) completed
-// without failure and records as passed; the task-level Status keeps the
-// richer lifecycle.
+// Classification obeys one rule: A VERDICT MUST BE POSITIVELY EARNED. A
+// conformance verdict (RunFailed) is recorded only when the body demonstrably
+// RAN and lost. Every failure we cannot place on the body — no eligible worker,
+// an unreachable worker, a cancellation, or an error we simply do not recognise
+// — records as RunInfraFailed, which carries no verdict at all. The asymmetry is
+// deliberate: mistaking infrastructure for a conformance failure indicts the
+// code under test for a fault that was never its own, so an unclassified error
+// must never be resolved into a verdict by default.
+//
+// Detail is never taken from res.Err (see FailureReason). An error that wants
+// to publish detail implements FleetFailure and says so explicitly.
 func RecordAttempt(t *Task, w *Worker, attempt int, res TaskResult) RunRecord {
 	worker := LocalWorkerID
 	if w != nil && w.ID != "" {
@@ -356,18 +411,27 @@ func RecordAttempt(t *Task, w *Worker, attempt int, res TaskResult) RunRecord {
 		ExitCode:      res.ExitCode,
 		Duration:      res.Duration,
 	}
-	detail := ""
-	if res.Err != nil {
-		detail = res.Err.Error()
-	}
+	var carrier FleetFailure
 	switch {
+	case res.Err != nil && errors.As(res.Err, &carrier):
+		// The producer classified its own failure and chose its own detail.
+		r.Status, r.Failure = classifiedBy(carrier)
 	case res.Err != nil && ExitCodeOf(res.Err) == weavecli.ExitDepUnhealthy:
-		r.Status = RunInfraFailed
-		r.Failure = &FailureReason{Code: FailNoWorker, Detail: detail}
+		r.Status, r.Failure = RunInfraFailed, &FailureReason{Code: FailNoWorker}
+	case res.Err != nil && errors.Is(res.Err, ErrWorkerUnreachable):
+		r.Status, r.Failure = RunInfraFailed, &FailureReason{Code: FailUnreachable}
 	case res.Err != nil && errors.Is(res.Err, context.Canceled):
-		r.Status = RunInfraFailed
-		r.Failure = &FailureReason{Code: FailCanceled, Detail: detail}
+		r.Status, r.Failure = RunInfraFailed, &FailureReason{Code: FailCanceled}
 	case res.Status == StatusFailed:
+		// The body ran and lost. Reaching StatusFailed means an executor got far
+		// enough to run the body and observe its exit, so the failure is the
+		// code's own — which is precisely why the obligation above is on the
+		// TRANSPORT: a transport that cannot deliver a task must say so with
+		// ErrWorkerUnreachable or a FleetFailure, because once an undeliverable
+		// attempt arrives here indistinguishable from a real exit, no amount of
+		// care at this layer can tell them apart. The verdict is earned by the
+		// executor having run the body; the sentinels are what keep attempts
+		// that never ran from reaching this branch at all.
 		r.Status = RunFailed
 		code := FailExitNonzero
 		switch {
@@ -376,11 +440,30 @@ func RecordAttempt(t *Task, w *Worker, attempt int, res TaskResult) RunRecord {
 		case res.Attestation != nil && !res.Attestation.Valid:
 			code = FailPostcondition
 		}
-		r.Failure = &FailureReason{Code: code, Detail: detail}
+		r.Failure = &FailureReason{Code: code}
 	default:
 		r.Status = RunPassed
 	}
 	return r
+}
+
+// classifiedBy takes a producer's own classification, but does not take it on
+// trust: a carrier that returns an unknown status, an empty code, or a detail
+// carrying reach details is downgraded to an unclassified infra failure rather
+// than allowed to write a verdict or a leak into the record.
+func classifiedBy(c FleetFailure) (RunStatus, *FailureReason) {
+	status, reason := c.FleetFailure()
+	switch status {
+	case RunPassed:
+		return RunPassed, nil
+	case RunFailed, RunInfraFailed:
+	default:
+		return RunInfraFailed, &FailureReason{Code: FailUnclassified}
+	}
+	if strings.TrimSpace(reason.Code) == "" || reachShaped(reason.Detail) {
+		return RunInfraFailed, &FailureReason{Code: FailUnclassified}
+	}
+	return status, &reason
 }
 
 // Validate rejects a record no aggregator should count: unknown schema
@@ -407,6 +490,12 @@ func (r *RunRecord) Validate() error {
 	case RunFailed, RunInfraFailed:
 		if r.Failure == nil || r.Failure.Code == "" {
 			return errf(weavecli.ExitInvalidArg, "run record for %q is %s but has no failure code", r.Task, r.Status)
+		}
+		// Defence in depth behind the structural guard: a record whose detail
+		// carries reach details must not reach an aggregator or an artifact.
+		if reachShaped(r.Failure.Detail) {
+			return errf(weavecli.ExitInvalidArg,
+				"run record for %q carries reach details in its failure detail — detail must never be derived from a raw transport error", r.Task)
 		}
 	default:
 		return errf(weavecli.ExitInvalidArg, "run record for %q has unknown status %q", r.Task, r.Status)

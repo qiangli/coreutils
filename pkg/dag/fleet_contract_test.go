@@ -256,7 +256,7 @@ func TestRecordAttemptClassification(t *testing.T) {
 		{"timeout", TaskResult{Status: StatusFailed, ExitCode: 124, Err: errf(1, "timeout after 90s")},
 			RunFailed, FailTimeout, true},
 		{"postcondition", TaskResult{Status: StatusFailed, ExitCode: weavecli.ExitPrecondFail,
-			Err: errf(weavecli.ExitPrecondFail, "postcondition failed"),
+			Err:         errf(weavecli.ExitPrecondFail, "postcondition failed"),
 			Attestation: &Attestation{Target: "suite:shard=1", Valid: false}},
 			RunFailed, FailPostcondition, true},
 		{"no-eligible-worker", TaskResult{Status: StatusFailed, ExitCode: 1,
