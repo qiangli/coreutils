@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -392,9 +393,11 @@ func TestLeaseIsPerMeeting(t *testing.T) {
 	}
 }
 
-// 7 (cont). Stale-owner recovery: a lock left behind by a process that is gone
-// must not make the meeting permanently unrunnable.
-func TestStaleLeaseIsRecovered(t *testing.T) {
+// 7 (cont). Metadata is diagnostic, never authoritative. A run.lock left behind
+// naming a live-looking owner must not block anyone once the KERNEL lock is
+// free — under the old heartbeat scheme this file was the source of truth and a
+// crash could wedge the meeting until it aged out.
+func TestStaleMetadataDoesNotBlock(t *testing.T) {
 	st := newTestSession(t)
 	path, err := leasePath(st.ID)
 	if err != nil {
@@ -403,25 +406,24 @@ func TestStaleLeaseIsRecovered(t *testing.T) {
 	if err := os.MkdirAll(dirOf(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	// A pid past the system maximum can never be live, and the host matches, so
-	// this takes the "certain and immediate" branch — no waiting for the
-	// heartbeat to age out.
+	// Our own pid and host, with a fresh timestamp: maximally "alive" looking,
+	// and completely irrelevant, because no descriptor holds the lock.
 	host, _ := os.Hostname()
-	b, _ := json.Marshal(leaseInfo{PID: 1 << 30, Host: host, Since: fixedNow()})
+	b, _ := json.Marshal(leaseInfo{PID: os.Getpid(), Host: host, Since: fixedNow()})
 	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
-		t.Fatalf("write stale lock: %v", err)
+		t.Fatalf("write stale metadata: %v", err)
 	}
 
 	l, err := acquireRunLease(st.ID)
 	if err != nil {
-		t.Fatalf("a stale lease must be recoverable, got %v", err)
+		t.Fatalf("stale metadata must not block an unlocked run.lock, got %v", err)
 	}
 	l.Release()
 }
 
-// A lock file nobody can parse is the signature of a crash mid-write. Refusing
-// forever on it would need manual cleanup to recover from a crash.
-func TestCorruptLeaseIsRecovered(t *testing.T) {
+// Unparseable metadata is the signature of a crash mid-write. It degrades the
+// busy MESSAGE and nothing else — acquisition never consults it.
+func TestCorruptMetadataDoesNotBlock(t *testing.T) {
 	st := newTestSession(t)
 	path, _ := leasePath(st.ID)
 	if err := os.MkdirAll(dirOf(path), 0o755); err != nil {
@@ -432,9 +434,190 @@ func TestCorruptLeaseIsRecovered(t *testing.T) {
 	}
 	l, err := acquireRunLease(st.ID)
 	if err != nil {
-		t.Fatalf("a corrupt lease must be recoverable, got %v", err)
+		t.Fatalf("corrupt metadata must not block, got %v", err)
 	}
+	defer l.Release()
+
+	// And a contender still gets a usable ErrMeetingBusy without the metadata.
+	if _, err := acquireRunLease(st.ID); !errors.Is(err, ErrMeetingBusy) {
+		t.Fatalf("contender err = %v, want ErrMeetingBusy", err)
+	}
+}
+
+// Exactly one winner, no matter how many contend at once. This is the property
+// the previous read/compare/rename scheme could not have: its ownership test
+// spanned multiple path operations, so two contenders could both conclude they
+// had won. Here the kernel decides in one atomic operation.
+func TestExactlyOneWinnerUnderConcurrency(t *testing.T) {
+	st := newTestSession(t)
+
+	for round := 0; round < 20; round++ {
+		const contenders = 16
+		var (
+			wg     sync.WaitGroup
+			mu     sync.Mutex
+			won    []*runLease
+			busy   int
+			others []error
+		)
+		start := make(chan struct{})
+		for i := 0; i < contenders; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start // release them together, to maximize real overlap
+				l, err := acquireRunLease(st.ID)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					won = append(won, l)
+				case errors.Is(err, ErrMeetingBusy):
+					busy++
+				default:
+					others = append(others, err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		if len(others) > 0 {
+			t.Fatalf("round %d: unexpected errors: %v", round, others)
+		}
+		if len(won) != 1 {
+			t.Fatalf("round %d: %d winners, want exactly 1", round, len(won))
+		}
+		if busy != contenders-1 {
+			t.Fatalf("round %d: %d busy, want %d", round, busy, contenders-1)
+		}
+		// Released here, so the next round starts from a free lock — which also
+		// exercises reacquisition 20 times over.
+		won[0].Release()
+	}
+}
+
+// A losing contender must not be able to disturb the owner's record of itself.
+// Under the old scheme a contender wrote (removed and recreated) the lock file
+// as part of deciding ownership; here it only ever reads.
+func TestSecondContenderCannotMutateMetadata(t *testing.T) {
+	st := newTestSession(t)
+	owner, err := acquireRunLease(st.ID)
+	if err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+	defer owner.Release()
+
+	path, _ := leasePath(st.ID)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var info leaseInfo
+	if err := json.Unmarshal(before, &info); err != nil {
+		t.Fatalf("owner metadata is not readable: %v", err)
+	}
+	if info.PID != os.Getpid() {
+		t.Errorf("metadata pid = %d, want %d", info.PID, os.Getpid())
+	}
+
+	for i := 0; i < 5; i++ {
+		if _, err := acquireRunLease(st.ID); !errors.Is(err, ErrMeetingBusy) {
+			t.Fatalf("contender %d err = %v, want ErrMeetingBusy", i, err)
+		}
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after contention: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("contenders rewrote the owner's metadata:\nbefore %q\nafter  %q", before, after)
+	}
+}
+
+// The lock path is a stable inode across ownership changes. If it were unlinked
+// and recreated, a successor could hold a lock on a detached inode while a third
+// process locked the new one — two owners, no contention between them.
+func TestLockInodeIsStableAcrossOwners(t *testing.T) {
+	st := newTestSession(t)
+	path, _ := leasePath(st.ID)
+
+	first, err := acquireRunLease(st.ID)
+	if err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+	ino1 := statFile(t, path)
+	first.Release()
+
+	// Surviving Release is the point: the lock file is never removed.
+	ino2 := statFile(t, path)
+
+	second, err := acquireRunLease(st.ID)
+	if err != nil {
+		t.Fatalf("reacquire: %v", err)
+	}
+	defer second.Release()
+	ino3 := statFile(t, path)
+
+	// os.SameFile compares identity (device+inode on unix, file index on
+	// Windows) — the portable way to say "the same inode", not merely the same
+	// path.
+	if !os.SameFile(ino1, ino2) || !os.SameFile(ino2, ino3) {
+		t.Error("run.lock was replaced across ownership changes; the inode must stay stable")
+	}
+}
+
+// Descriptor close alone releases the lease — no unlink, no metadata edit, no
+// cleanup of any kind. This is what makes process death self-healing: the
+// kernel does for a crashed owner exactly what it does here.
+func TestClosedDescriptorReleasesWithoutCleanup(t *testing.T) {
+	st := newTestSession(t)
+	l, err := acquireRunLease(st.ID)
+	if err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+	path, _ := leasePath(st.ID)
+	stamped, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Simulate death: drop the descriptor without going through Release, so no
+	// cleanup path runs at all.
+	if err := l.f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	next, err := acquireRunLease(st.ID)
+	if err != nil {
+		t.Fatalf("a dead owner's lease must be immediately reusable, got %v", err)
+	}
+	defer next.Release()
+
+	if len(stamped) == 0 {
+		t.Error("owner metadata was never written")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("run.lock must still exist after an owner dies: %v", err)
+	}
+
+	// Release on the already-closed lease must stay safe and must not disturb the
+	// successor that now legitimately owns the meeting.
 	l.Release()
+	l.Release()
+	if _, err := acquireRunLease(st.ID); !errors.Is(err, ErrMeetingBusy) {
+		t.Fatalf("a dead predecessor's Release freed its successor's lease; err = %v", err)
+	}
+}
+
+func statFile(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return fi
 }
 
 // A live owner is NEVER broken, even though its heartbeat has not ticked yet.
