@@ -3,6 +3,7 @@ package agentlaunch
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -41,6 +42,20 @@ func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	}
 	if l.Model != "deepseek/deepseek-v4-pro" || strings.Join(l.Args, " ") != "run --model deepseek/deepseek-v4-pro" {
 		t.Fatalf("launch = %+v", l)
+	}
+}
+
+func TestResolveCarriesSelectedCredentialNames(t *testing.T) {
+	t.Setenv(UnsafeLaunchEnv, "1")
+	l, err := ResolveWithCatalog("ycode:glm-5.2", Options{}, testCatalog(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(l.PreserveEnv, "ZAI_API_KEY") {
+		t.Errorf("resolved launch missing selected credential name: names=%v", l.PreserveEnv)
+	}
+	if slices.Contains(l.PreserveEnv, "OPENAI_API_KEY") {
+		t.Errorf("resolved launch widened to unrelated credential: names=%v", l.PreserveEnv)
 	}
 }
 

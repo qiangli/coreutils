@@ -8,140 +8,109 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/secrets"
 )
 
-// weave must never hand out a provider credential — it only avoids stripping
-// a name that is the agent's OWN preconfigured auth (e.g. ycode's
-// DHNT_API_KEY / DHNT_BASE_URL from `ycode login`), sourced from the
-// launcher's own environ, never manufactured or looked up by model.
-func TestWeavePreserveOwnAuthRestoresStrippedOwnAuth(t *testing.T) {
-	scrubbed := []string{"PATH=/usr/bin", "HOME=/home/x"} // vault scrub already ran
-	environ := []string{"DHNT_API_KEY=own-key-123", "DHNT_BASE_URL=https://dhnt.example", "OTHER=1"}
-	got := weavePreserveOwnAuth(scrubbed, environ)
-	if !slices.Contains(got, "DHNT_API_KEY=own-key-123") {
-		t.Fatalf("own auth key not restored after scrub: %v", got)
+func TestNamedYcodeChildEnvPreservesResolvedCredentialNames(t *testing.T) {
+	t.Setenv(secrets.AllowAgentSecretsEnv, "0")
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveAgent(fleet.Agent{Name: "disposable-ycode", Tool: "ycode", Model: "glm-5.2"}); err != nil {
+		t.Fatal(err)
 	}
-	if !slices.Contains(got, "DHNT_BASE_URL=https://dhnt.example") {
-		t.Fatalf("own auth base url not restored after scrub: %v", got)
+	previous := fleetCatalog
+	fleetCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
+	t.Cleanup(func() { fleetCatalog = previous })
+
+	launch, err := weaveResolveAgent("disposable-ycode")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Only the declared own-auth names — nothing else from environ leaks through.
-	for _, kv := range got {
-		if strings.HasPrefix(kv, "OTHER=") {
-			t.Fatalf("restored an undeclared env var: %q", kv)
-		}
+	if launch == nil {
+		t.Fatal("named ycode launch did not resolve")
+	}
+	ambient := []string{"PATH=/usr/bin", "ZAI_API_KEY=selected-model-credential", "OPENAI_API_KEY=unrelated"}
+	it := &weaveItem{ID: 48, Owner: "disposable-ycode-a"}
+	child := weaveChildEnv(ambient, "/ws/issue-48", "agent/weave-issue-48", "main", it, launch)
+	if !envHas(child, "ZAI_API_KEY") || envHas(child, "OPENAI_API_KEY") {
+		t.Errorf("resolved launch environment parity failed: names=%v", names(child))
 	}
 }
 
-// A name absent from the launcher's own environ is not manufactured — the
-// agent fails to authenticate and says so, which is a real answer, not a leak.
-func TestWeavePreserveOwnAuthNoOpsWhenAbsent(t *testing.T) {
-	base := []string{"PATH=/usr/bin"}
-	got := weavePreserveOwnAuth(base, []string{"OTHER=1"})
-	if len(got) != 1 {
-		t.Fatalf("nothing to restore should be a no-op, got %v", got)
-	}
-}
-
-// A name already present in the scrubbed env (not stripped in the first
-// place) is not duplicated.
-func TestWeavePreserveOwnAuthDoesNotDuplicate(t *testing.T) {
-	scrubbed := []string{"PATH=/usr/bin", "DHNT_API_KEY=already-here"}
-	environ := []string{"DHNT_API_KEY=different-value"}
-	got := weavePreserveOwnAuth(scrubbed, environ)
-	count := 0
-	for _, kv := range got {
-		if strings.HasPrefix(kv, "DHNT_API_KEY=") {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatalf("expected exactly one DHNT_API_KEY entry, got %v", got)
-	}
-	if !slices.Contains(got, "DHNT_API_KEY=already-here") {
-		t.Fatalf("existing value should not be overwritten: %v", got)
-	}
-}
-
-// Weave never looks at the model catalog to decide what to grant — a
-// credential-shaped name outside the own-auth allowlist is left stripped, no
-// matter which agent is launching or what model it asked for.
-func TestWeavePreserveOwnAuthDoesNotGrantProviderKeys(t *testing.T) {
-	scrubbed := []string{"PATH=/usr/bin"}
-	environ := []string{
-		"ANTHROPIC_API_KEY=sk-ant-live",
-		"OPENAI_API_KEY=sk-oai-live",
-		"GOOGLE_API_KEY=sk-goog-live",
-		"AWS_SECRET_ACCESS_KEY=aws-live",
-	}
-	got := weavePreserveOwnAuth(scrubbed, environ)
-	if len(got) != 1 {
-		t.Fatalf("weave must not grant a provider credential: %v", got)
-	}
-}
-
-// The three sanctioned third-party keys survive the scrub. They are not a
-// grant: weave manufactures nothing, it declines to strip what the launcher's
-// own environment already carries, because an agent with no persistent key
-// store (ycode) has no other place to read its auth from.
-func TestWeavePreserveOwnAuthKeepsSanctionedThirdPartyKeys(t *testing.T) {
-	for _, name := range []string{"DEEPSEEK_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY"} {
-		kv := name + "=sk-own-123"
-		got := weavePreserveOwnAuth([]string{"PATH=/usr/bin"}, []string{kv})
-		if !slices.Contains(got, kv) {
-			t.Errorf("%s is the agent's own env credential and must survive the scrub: %v", name, got)
-		}
-	}
-}
-
-// THE LIVE-LAUNCH ASSERTION.
-//
-// This asserts the env `weave start` actually assembles for a third-party
-// agent, through weaveChildEnv — the same call the spawn makes. That is the
-// whole point: run #101 regressed this exact behavior with a green build and
-// passing unit tests, because every test checked a piece in isolation and none
-// checked what the child would really receive. A test that re-creates the
-// assembly instead of calling it cannot catch the caller dropping the step.
-func TestWeaveChildEnvKeepsOwnKeyAndStripsOperatorKeys(t *testing.T) {
-	// Pin the firewall ON — an operator who has opted out in their real shell
-	// must not turn this assertion into a tautology.
+// The live launch assertion: the selected model credential survives, unrelated
+// operator credentials do not, and workspace containment remains intact.
+// Failures render names only so no ambient value can enter test output.
+func TestWeaveChildEnvPreservesOnlyResolvedCredentialNames(t *testing.T) {
 	t.Setenv(secrets.AllowAgentSecretsEnv, "0")
 
 	ambient := []string{
 		"PATH=/usr/bin",
-		"HOME=/home/op",
-		"PWD=/origin/repo", // the origin repo — containment must drop this
+		"HOME=/home/operator",
+		"PWD=/origin/repo",
 		"OLDPWD=/origin/elsewhere",
-		"DEEPSEEK_API_KEY=sk-deepseek-own",  // the agent's own auth
-		"ANTHROPIC_API_KEY=sk-ant-operator", // the operator's vault key
-		"OPENAI_API_KEY=sk-oai-operator",
-		"AWS_SECRET_ACCESS_KEY=aws-operator",
+		"DEEPSEEK_API_KEY=selected-model-credential",
+		"OPENAI_API_KEY=unrelated-operator-credential",
+		"AWS_SECRET_ACCESS_KEY=unrelated-cloud-credential",
 	}
+	launch := &weaveAgentLaunch{PreserveEnv: []string{"DEEPSEEK_API_KEY"}}
 	it := &weaveItem{ID: 105, Title: "t", Body: "b", Owner: "007-a"}
-	got := weaveChildEnv(ambient, "/ws/issue-105", "agent/weave-issue-105", "main", it, nil)
+	got := weaveChildEnv(ambient, "/ws/issue-105", "agent/weave-issue-105", "main", it, launch)
 
-	// What the agent authenticates with must be there, with its real value.
-	if !slices.Contains(got, "DEEPSEEK_API_KEY=sk-deepseek-own") {
-		t.Errorf("child env lost the agent's own DEEPSEEK_API_KEY — it will die with "+
-			"'no LLM provider configured': %v", names(got))
+	if !envHas(got, "DEEPSEEK_API_KEY") {
+		t.Errorf("child env lost selected model credential: names=%v", names(got))
 	}
-	// The operator's keyring must not be.
-	for _, banned := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY"} {
+	for _, banned := range []string{"OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY"} {
 		if envHas(got, banned) {
-			t.Errorf("child env carries the operator's %s — the credential firewall is open", banned)
+			t.Errorf("child env carries unrelated operator credential %s", banned)
 		}
 	}
-	// Containment still holds: the child is pinned to its workspace and cannot
-	// read the origin repo's path out of its environment.
-	if !slices.Contains(got, "PWD=/ws/issue-105") {
-		t.Errorf("PWD not pinned to the workspace: %v", names(got))
+	if !slices.Contains(got, "PWD=/ws/issue-105") || envHas(got, "OLDPWD") {
+		t.Errorf("workspace containment failed: names=%v", names(got))
 	}
-	if slices.Contains(got, "PWD=/origin/repo") || envHas(got, "OLDPWD") {
-		t.Errorf("the origin repo's path leaked into the child env: %v", got)
+	if !envHas(got, "WEAVE_ISSUE") || !envHas(got, "WEAVE_AGENT") {
+		t.Errorf("weave stamps missing: names=%v", names(got))
 	}
-	// And the run is still stamped.
-	if !slices.Contains(got, "WEAVE_ISSUE=105") || !slices.Contains(got, "WEAVE_AGENT=007-a") {
-		t.Errorf("weave stamps missing from child env: %v", names(got))
+}
+
+// A raw/non-agent launch has no resolved credential contract. It must remain
+// deny-by-default and must not panic or restore any credential-shaped name.
+func TestWeaveChildEnvNilLaunchPreservesNoCredentials(t *testing.T) {
+	t.Setenv(secrets.AllowAgentSecretsEnv, "0")
+	ambient := []string{"PATH=/usr/bin", "DEEPSEEK_API_KEY=operator-credential"}
+	it := &weaveItem{ID: 106, Owner: "raw-a"}
+	got := weaveChildEnv(ambient, "/ws/issue-106", "agent/weave-issue-106", "main", it, nil)
+	if envHas(got, "DEEPSEEK_API_KEY") {
+		t.Errorf("nil launch reopened a credential: names=%v", names(got))
+	}
+}
+
+// A declared name absent from the parent is not manufactured.
+func TestWeaveChildEnvAbsentCredentialIsNoOp(t *testing.T) {
+	t.Setenv(secrets.AllowAgentSecretsEnv, "0")
+	launch := &weaveAgentLaunch{PreserveEnv: []string{"DEEPSEEK_API_KEY"}}
+	it := &weaveItem{ID: 107, Owner: "007-a"}
+	got := weaveChildEnv([]string{"PATH=/usr/bin"}, "/ws/issue-107", "agent/weave-issue-107", "main", it, launch)
+	if envHas(got, "DEEPSEEK_API_KEY") {
+		t.Errorf("absent credential was manufactured: names=%v", names(got))
+	}
+}
+
+// Duplicate metadata or parent entries cannot create an ambiguous child env.
+func TestWeaveChildEnvDoesNotDuplicateCredential(t *testing.T) {
+	t.Setenv(secrets.AllowAgentSecretsEnv, "0")
+	launch := &weaveAgentLaunch{PreserveEnv: []string{"DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"}}
+	it := &weaveItem{ID: 108, Owner: "007-a"}
+	ambient := []string{"PATH=/usr/bin", "DEEPSEEK_API_KEY=first", "DEEPSEEK_API_KEY=second"}
+	got := weaveChildEnv(ambient, "/ws/issue-108", "agent/weave-issue-108", "main", it, launch)
+	count := 0
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "DEEPSEEK_API_KEY=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("credential appears %d times: names=%v", count, names(got))
 	}
 }
 
@@ -154,8 +123,7 @@ func envHas(env []string, name string) bool {
 	return false
 }
 
-// names renders an env as NAMES ONLY — a failure message must never print the
-// operator's secrets into a test log.
+// names renders an env as names only. Diagnostics must never print values.
 func names(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {

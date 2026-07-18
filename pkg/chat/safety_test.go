@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,4 +106,47 @@ func TestAgentChildEnvScrubsVaultSecret(t *testing.T) {
 			t.Fatalf("vault secret handed to spawned agent: %q", kv)
 		}
 	}
+}
+
+// PreserveEnv was added after Launch became public. Manual/legacy constructors
+// with a nil or empty slice must retain the catalog-derived single-key behavior
+// without reopening unrelated operator credentials.
+func TestAgentChildEnvLegacyLaunchFallsBackToCatalogCredential(t *testing.T) {
+	t.Setenv("BASHY_ALLOW_AGENT_SECRETS", "0")
+	t.Setenv("BASHY_FORCE_AGENT_SHELL", "0")
+	t.Setenv("DEEPSEEK_API_KEY", "selected-model-credential")
+	t.Setenv("OPENAI_API_KEY", "unrelated-operator-credential")
+
+	for _, preserve := range [][]string{nil, {}} {
+		ctx := withLaunch(context.Background(), Launch{
+			Tool: "ycode", ToolName: "ycode", ModelName: "deepseek-v4-pro", PreserveEnv: preserve,
+		})
+		env := agentChildEnv(ctx)
+		if !childEnvHasName(env, "DEEPSEEK_API_KEY") {
+			t.Errorf("legacy launch lost catalog credential: names=%v", childEnvNames(env))
+		}
+		if childEnvHasName(env, "OPENAI_API_KEY") {
+			t.Errorf("legacy fallback reopened unrelated credential: names=%v", childEnvNames(env))
+		}
+	}
+}
+
+func childEnvHasName(env []string, name string) bool {
+	prefix := name + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func childEnvNames(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			out = append(out, kv[:i])
+		}
+	}
+	return out
 }

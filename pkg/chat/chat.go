@@ -185,6 +185,9 @@ type Launch struct {
 	Model     string   // provider-side model id ("" when none was selected)
 	ModelName string   // the model's registry alias
 	Args      []string // argv after the binary, prompt NOT included
+	// PreserveEnv carries environment-variable names only. The runner copies
+	// matching entries from its own environment after scrubbing.
+	PreserveEnv []string
 
 	// TakesPrompt reports whether the prompt goes on the command line. A headless
 	// launch always does. A STEERABLE launch sometimes does not — codex and
@@ -210,6 +213,7 @@ func fromAgentLaunch(l agentlaunch.Launch) Launch {
 		Model:       l.Model,
 		ModelName:   l.ModelName,
 		Args:        l.Args,
+		PreserveEnv: append([]string(nil), l.PreserveEnv...),
 		TakesPrompt: l.TakesPrompt,
 	}
 }
@@ -222,6 +226,7 @@ func toAgentLaunch(l Launch) agentlaunch.Launch {
 		Model:       l.Model,
 		ModelName:   l.ModelName,
 		Args:        l.Args,
+		PreserveEnv: append([]string(nil), l.PreserveEnv...),
 		TakesPrompt: l.TakesPrompt,
 	}
 }
@@ -468,21 +473,28 @@ func agentChildEnv(ctx context.Context) []string {
 	parent := os.Environ()
 	env := secrets.ScrubAgentEnv(parent)
 
-	// Deny by default, then grant exactly one thing.
+	// Deny by default, then restore only names carried by the resolved launch.
 	//
 	// The scrub above strips every vault-projected credential, so an agent cannot
 	// inherit the operator's keyring. But a metered model needs ONE key in order
-	// to answer, and the registry has always said which — `api_key_ref: moonshot`
-	// on the model entry. Nothing read it, so the firewall took MOONSHOT_API_KEY
-	// away and nothing gave it back, and every kimi agent failed to authenticate
-	// on every run while the fleet wrote that down as "medium reliability".
+	// to answer, and the registry says which via `api_key_ref`. agentlaunch
+	// resolves that reference to names only; values remain opaque and are copied
+	// from this launcher's own environment.
 	//
-	// Granting the model's own declared key — and only that key — is what makes
+	// Preserving the model's own declared key — and only declared names — makes
 	// the firewall a security boundary rather than an outage.
-	if l, ok := LaunchFrom(ctx); ok && l.ModelName != "" {
-		if m, found := newCatalog().Model(l.ModelName); found && m.APIKeyRef != "" {
-			if kv, granted := secrets.GrantAgentKey(parent, m.APIKeyRef); granted {
-				env = append(env, kv)
+	if l, ok := LaunchFrom(ctx); ok {
+		if len(l.PreserveEnv) > 0 {
+			env = secrets.PreserveEnvNames(env, parent, l.PreserveEnv)
+		} else if l.ModelName != "" {
+			// Backward compatibility: callers may still construct Launch values
+			// manually. Resolve the same catalog declaration the old path used,
+			// and grant only its first matching credential rather than widening
+			// an empty contract to arbitrary operator secrets.
+			if m, found := newCatalog().Model(l.ModelName); found && m.APIKeyRef != "" {
+				if kv, granted := secrets.GrantAgentKey(parent, m.APIKeyRef); granted {
+					env = append(env, kv)
+				}
 			}
 		}
 	}

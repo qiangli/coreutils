@@ -12,6 +12,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/secrets"
 )
 
 // Options controls launch rendering for callers that need to layer local
@@ -67,6 +68,10 @@ type Launch struct {
 	// reporting prompt) whose {workspace} token is bound immediately before exec.
 	// Empty means the tool does not declare a workspace preflight.
 	WorkspacePreflight []string
+	// PreserveEnv contains environment-variable names whose launcher-owned
+	// credential entries must survive the child credential firewall. Values are
+	// never stored in a Launch.
+	PreserveEnv []string
 
 	// TakesPrompt reports whether the prompt goes on the command line. A steerable
 	// launch may open an EMPTY session (codex, opencode) and expect the first
@@ -172,6 +177,7 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
+			lnch.PreserveEnv = append(lnch.PreserveEnv, secrets.CredentialEnvNames(m.APIKeyRef)...)
 
 		}
 	}
