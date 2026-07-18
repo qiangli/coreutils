@@ -32,6 +32,10 @@ func TestBasename(t *testing.T) {
 		{[]string{"include/stdio.h", ".h"}, "stdio\n", 0},
 		{[]string{"-s", ".h", "include/stdio.h"}, "stdio\n", 0},
 		{[]string{"-a", "any/str1", "any/str2"}, "str1\nstr2\n", 0},
+		// An empty suffix is still an explicit -s, which implies -a.
+		{[]string{"-s", "", "any/str1", "any/str2"}, "str1\nstr2\n", 0},
+		{[]string{"--suffix", "", "any/str1", "any/str2"}, "str1\nstr2\n", 0},
+		{[]string{"--suffix=", "any/str1", "any/str2"}, "str1\nstr2\n", 0},
 		{[]string{"/usr/lib/"}, "lib\n", 0},
 		{[]string{"/"}, "/\n", 0},
 		{[]string{"-z", "a/b"}, "b\x00", 0},

@@ -41,8 +41,9 @@ func run(rc *tool.RunContext, args []string) int {
 	suf := *suffix
 	names := operands
 	// Two-operand classic form: basename NAME SUFFIX — only when
-	// neither -a nor -s was given (GNU semantics).
-	if !*multiple && suf == "" {
+	// neither -a nor -s was given (GNU semantics). An explicitly empty
+	// suffix still implies -a.
+	if !*multiple && !fs.Changed("suffix") {
 		if len(operands) > 2 {
 			return tool.UsageError(rc, cmd, "extra operand %q", operands[2])
 		}
