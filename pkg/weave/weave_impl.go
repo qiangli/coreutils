@@ -824,6 +824,8 @@ func weaveEnsureSyncedClone(orig, dst string) error {
 // resets the URLs to their canonical .gitmodules values, so the local-origin path
 // is not left as a breadcrumb an escaping agent could follow back (mirroring the
 // `git remote remove origin` isolation above).
+const weaveProvisioningTimeout = 2 * time.Minute
+
 func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	if _, err := os.Stat(filepath.Join(workspace, ".gitmodules")); err != nil {
 		return nil // no submodules — nothing to hydrate
@@ -851,7 +853,7 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	// A local checkout must never wait forever on a broken submodule transport.
 	// The queue has already recorded the hydration phase before reaching here,
 	// so timeout failure is both bounded and diagnosable by the conductor.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), weaveProvisioningTimeout)
 	defer cancel()
 	up := exec.CommandContext(ctx, "git", "-C", workspace, "-c", "protocol.file.allow=always",
 		"submodule", "update", "--init", "--recursive")
@@ -909,23 +911,43 @@ func weaveMarkLaunchFailed(dir string, issueID int64, cause error) {
 }
 
 // weaveRecoverOrphanedAllocations turns a pre-agent allocation whose launcher
-// died into durable terminal evidence.  Unlike a working run, provisioning has
-// no subagent to report failure; without the launcher PID this state used to
-// remain allocated forever after an OOM or external kill.
+// died into durable terminal evidence. Unlike a working run, provisioning has
+// no subagent to report failure. Legacy records did not persist the launcher
+// PID, so an aged active provisioning phase is also an orphan; intentionally
+// no-spawn/manual allocations have no start time and are preserved.
 func weaveRecoverOrphanedAllocations(dir string) error {
 	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		now := time.Now().UTC()
 		for _, it := range q.Items {
-			if it.State != "allocated" || it.WrapperPid <= 0 || pidAlive(it.WrapperPid) {
+			if !weaveAllocatedLaunchOrphaned(it, now) {
 				continue
 			}
 			it.State = "failed"
 			it.LaunchPhase = "failed: provisioning launcher exited before agent launch"
-			it.FinishedAt = time.Now().UTC()
+			it.FinishedAt = now
 			it.WrapperPid = 0
 			it.CtlSock = ""
 		}
 		return nil
 	})
+}
+
+func weaveAllocatedLaunchOrphaned(it *weaveItem, now time.Time) bool {
+	if it == nil || it.State != "allocated" {
+		return false
+	}
+	if it.WrapperPid > 0 {
+		return !pidAlive(it.WrapperPid)
+	}
+	if it.StartedAt.IsZero() || now.Sub(it.StartedAt) < weaveProvisioningTimeout {
+		return false
+	}
+	switch it.LaunchPhase {
+	case "provisioning workspace", "hydrating submodules", "syncing sibling dependencies":
+		return true
+	default:
+		return false
+	}
 }
 
 func weaveRunVerify(workspace, command string) (int, string) {

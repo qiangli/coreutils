@@ -3,6 +3,7 @@ package weave
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // A conductor commonly starts weave from a detached, reviewed commit while a
@@ -109,5 +110,54 @@ func TestWeaveStatusRecoversDeadProvisioningLauncher(t *testing.T) {
 	it := findWeaveItem(q, 1)
 	if it == nil || it.FinishedAt.IsZero() || it.WrapperPid != 0 {
 		t.Fatalf("orphan recovery was not durable: %#v", it)
+	}
+}
+
+// Older launchers recorded allocated/hydrating state before they recorded a
+// wrapper PID. Once the bounded provisioning interval elapses that is durable
+// orphan evidence, but deliberate no-spawn/manual allocations remain available
+// because they carry no active provisioning start time.
+func TestWeaveRecoverOrphanedAllocationsWithoutPID(t *testing.T) {
+	root := setupIsolationFixture(t)
+	dir, _ := weaveQueueDir(root)
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{
+		{
+			ID:          1,
+			Title:       "old hydrating launcher disappeared",
+			State:       "allocated",
+			LaunchPhase: "hydrating submodules",
+			StartedAt:   time.Now().UTC().Add(-weaveProvisioningTimeout - time.Second),
+		},
+		{
+			ID:          2,
+			Title:       "recent hydrating launcher",
+			State:       "allocated",
+			LaunchPhase: "hydrating submodules",
+			StartedAt:   time.Now().UTC(),
+		},
+		{
+			ID:          3,
+			Title:       "manual allocation",
+			State:       "allocated",
+			LaunchPhase: "hydrating submodules",
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := weaveRecoverOrphanedAllocations(dir); err != nil {
+		t.Fatal(err)
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findWeaveItem(q, 1); got == nil || got.State != "failed" || got.FinishedAt.IsZero() {
+		t.Fatalf("missing-PID hydrating allocation was not recovered: %#v", got)
+	}
+	if got := findWeaveItem(q, 2); got == nil || got.State != "allocated" || !got.FinishedAt.IsZero() {
+		t.Fatalf("recent missing-PID allocation must remain observable: %#v", got)
+	}
+	if got := findWeaveItem(q, 3); got == nil || got.State != "allocated" || !got.FinishedAt.IsZero() {
+		t.Fatalf("manual allocation must remain resumable: %#v", got)
 	}
 }
