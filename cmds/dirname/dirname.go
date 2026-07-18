@@ -9,6 +9,7 @@ package dirnamecmd
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -40,7 +41,15 @@ func run(rc *tool.RunContext, args []string) int {
 		end = "\x00"
 	}
 	for _, name := range operands {
-		fmt.Fprint(rc.Out, dirOf(name), end)
+		output := dirOf(name) + end
+		n, err := io.WriteString(rc.Out, output)
+		if err == nil && n != len(output) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			fmt.Fprintf(rc.Err, "dirname: write error: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }

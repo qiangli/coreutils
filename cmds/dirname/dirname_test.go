@@ -3,6 +3,8 @@ package dirnamecmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -70,5 +72,43 @@ func TestDirnameHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, "--version")
 	if code != 0 || !strings.Contains(out, "dirname") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+type failingWriter struct {
+	n   int
+	err error
+}
+
+func (w failingWriter) Write(p []byte) (int, error) {
+	if w.n > len(p) {
+		return len(p), w.err
+	}
+	return w.n, w.err
+}
+
+func TestDirnameWriteErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		out  io.Writer
+	}{
+		{"error", failingWriter{err: errors.New("output unavailable")}},
+		{"short write", failingWriter{n: 1}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx:   context.Background(),
+				Dir:   t.TempDir(),
+				Stdio: tool.Stdio{In: strings.NewReader(""), Out: tc.out, Err: &errb},
+			}
+			if code := cmd.Run(rc, []string{"a/b"}); code != 1 {
+				t.Errorf("write failure: code=%d, want 1", code)
+			}
+			if !strings.Contains(errb.String(), "dirname: write error:") {
+				t.Errorf("write failure: stderr=%q, want diagnostic", errb.String())
+			}
+		})
 	}
 }
