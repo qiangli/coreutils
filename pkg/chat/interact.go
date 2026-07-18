@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentctl"
@@ -100,9 +101,6 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	native := nativeHarnesses[l.ToolName]
 
 	argv := append([]string{}, l.Args...)
-	if l.TakesPrompt && strings.TrimSpace(opt.Prompt) != "" {
-		argv = append(argv, opt.Prompt)
-	}
 
 	cwd := opt.Cwd
 	if cwd == "" {
@@ -122,7 +120,9 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		defer closeLog()
 	}
 
-	cmd := exec.CommandContext(ctx, l.Tool, argv...)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, l.Tool, argv...)
 	cmd.Dir = cwd
 	if native {
 		// Native env: a first-party harness uses the operator's real env + its own
@@ -166,6 +166,36 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		"from another terminal: `bashy chat steer %s \"...\"` / `attach %s`.\n",
 		card.Nick, card.Binding, posture, card.ID, card.ID, card.ID)
 
+	// An interactive instruction must go through the live terminal, after the TUI
+	// has actually drawn and settled. Passing it on argv works for only some tools;
+	// sending it as soon as the socket appears races startup and can be swallowed.
+	var (
+		ready      *interactiveReady
+		delivered  chan error
+		runDone    chan struct{}
+		promptText = opt.Prompt
+	)
+	if strings.TrimSpace(promptText) != "" {
+		ready = &interactiveReady{}
+		if logSink != nil {
+			logSink = io.MultiWriter(logSink, ready)
+		} else {
+			logSink = ready
+		}
+		delivered = make(chan error, 1)
+		runDone = make(chan struct{})
+		go func() {
+			err := deliverInteractivePrompt(runCtx, card.Nick, sock, promptText, ready, runDone,
+				func(text string) error { return agentctl.Say(sock, text) })
+			if err != nil {
+				cancel() // do not leave a session running after silently losing its instruction
+			} else {
+				fmt.Fprintf(status, "chat: instruction delivered to %s\n", card.Nick)
+			}
+			delivered <- err
+		}()
+	}
+
 	// Foreground + parent-is-a-TTY + Capture:false → agentpty gives native raw-mode
 	// passthrough (the tool's own TUI), teeing to logSink for observers.
 	exit, killed, runErr := agentpty.Run(cmd, logSink, agentpty.Options{
@@ -173,10 +203,87 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		Capture:    false,
 		MaxRuntime: opt.Timeout,
 	})
+	if runDone != nil {
+		close(runDone)
+		if err := <-delivered; err != nil {
+			return exit, err
+		}
+	}
 	if killed != "" {
 		fmt.Fprintf(status, "chat: session ended (%s)\n", killed)
 	}
 	return exit, runErr
+}
+
+type interactiveReady struct {
+	mu        sync.Mutex
+	drawn     bool
+	lastWrite time.Time
+}
+
+func (r *interactiveReady) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	if len(p) > 0 {
+		r.drawn = true
+		r.lastWrite = time.Now()
+	}
+	r.mu.Unlock()
+	return len(p), nil
+}
+
+func (r *interactiveReady) settled(forDuration time.Duration) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.drawn && time.Since(r.lastWrite) >= forDuration
+}
+
+type interactiveDeliveryTiming struct {
+	poll, socketTimeout, settle, readyTimeout time.Duration
+}
+
+var defaultInteractiveDeliveryTiming = interactiveDeliveryTiming{
+	poll: 100 * time.Millisecond, socketTimeout: 20 * time.Second,
+	settle: 1200 * time.Millisecond, readyTimeout: 25 * time.Second,
+}
+
+func deliverInteractivePrompt(ctx context.Context, nick, sock, prompt string, ready *interactiveReady,
+	runDone <-chan struct{}, send func(string) error) error {
+	return deliverInteractivePromptWithTiming(ctx, nick, sock, prompt, ready, runDone, send,
+		defaultInteractiveDeliveryTiming)
+}
+
+func deliverInteractivePromptWithTiming(ctx context.Context, nick, sock, prompt string, ready *interactiveReady,
+	runDone <-chan struct{}, send func(string) error, timing interactiveDeliveryTiming) error {
+	wait := func(deadline time.Time, condition func() bool, failure string) error {
+		for !condition() {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("chat: %s %s", nick, failure)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-runDone:
+				return fmt.Errorf("chat: %s exited before its instruction was delivered", nick)
+			case <-time.After(timing.poll):
+			}
+		}
+		return nil
+	}
+	if err := wait(time.Now().Add(timing.socketTimeout), func() bool {
+		_, err := os.Stat(sock)
+		return err == nil
+	}, "never opened a control channel for its instruction"); err != nil {
+		return err
+	}
+	if err := wait(time.Now().Add(timing.readyTimeout), func() bool {
+		return ready.settled(timing.settle)
+	}, "TUI never became ready for its instruction"); err != nil {
+		return err
+	}
+	if err := send(prompt); err != nil {
+		return fmt.Errorf("chat: could not deliver the instruction to %s: %w", nick, err)
+	}
+	return nil
 }
 
 // sessionLog opens a per-session capture file. On any error it degrades to no
