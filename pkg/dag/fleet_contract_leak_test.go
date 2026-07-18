@@ -12,10 +12,15 @@ import (
 	"testing"
 )
 
-// These two tests cover the FAILED path of a RunRecord, which the original
+// These tests cover the FAILED path of a RunRecord, which the original
 // privacy test could not reach: it exercised a passing record, whose Failure is
 // nil by construction, so neither the leak nor the misclassification below was
-// observable through it. Both tests fail against the pre-fix contract.
+// observable through it. NeverPublishesRawErrorText,
+// UnreachableWorkerIsNeverAConformanceVerdict, and the producer-carrier test
+// discriminate against the pre-fix contract. The ran-body half of
+// TransportMustClassifyItsOwnUndeliverability and
+// CancellationIsInfraNotAVerdict are regression pins; they already passed
+// there.
 
 // unreachableErr is the shape a transport produces when it cannot dial its
 // worker: the address is in the error text, because that is what makes the
@@ -46,9 +51,6 @@ func TestRunRecordNeverPublishesRawErrorText(t *testing.T) {
 		if strings.Contains(string(data), forbidden) {
 			t.Errorf("serialized run record carries raw error text %q:\n%s", forbidden, data)
 		}
-	}
-	if rec.Failure != nil && reachShaped(rec.Failure.Detail) {
-		t.Errorf("failure detail is reach-shaped: %q", rec.Failure.Detail)
 	}
 	if err := rec.Validate(); err != nil {
 		t.Errorf("Validate rejected a record the recorder produced: %v", err)
@@ -125,32 +127,67 @@ func TestCancellationIsInfraNotAVerdict(t *testing.T) {
 	}
 }
 
-// carelessCarrier is a producer that classifies its own failure but writes a
-// reach-shaped detail — the case the structural guard cannot prevent, because
-// the producer constructed the string deliberately.
-type carelessCarrier struct{}
-
-func (carelessCarrier) Error() string { return "careless" }
-func (carelessCarrier) FleetFailure() (RunStatus, FailureReason) {
-	return RunFailed, FailureReason{Code: FailExitNonzero, Detail: "worker ci@203.0.113.7 refused"}
+// proseCarrier has useful operator-facing prose but can publish only its stable
+// classification to a RunRecord.
+type proseCarrier struct {
+	text string
+	code string
 }
 
-// TestCarelessProducerIsDowngradedNotTrusted proves a producer's own
-// classification is checked, not taken on trust: a carrier that would write a
-// leak — or a verdict it has not earned — is downgraded instead.
-func TestCarelessProducerIsDowngradedNotTrusted(t *testing.T) {
-	rec := RecordAttempt(&Task{Name: "t"}, nil, 1,
-		TaskResult{Status: StatusFailed, Err: carelessCarrier{}})
+func (e proseCarrier) Error() string { return e.text }
+func (e proseCarrier) FleetFailure() (RunStatus, FailureReason) {
+	return RunFailed, FailureReason{Code: e.code}
+}
 
-	if rec.Status != RunInfraFailed || rec.Failure.Code != FailUnclassified {
-		t.Errorf("careless carrier produced %q/%+v, want %q/%q",
+// TestProducerProseCannotReachRecord covers both directions that made a
+// content heuristic unsafe: legitimate conformance prose must retain its
+// verdict, while reach-bearing prose must be absent from serialized records.
+func TestProducerProseCannotReachRecord(t *testing.T) {
+	tests := []struct {
+		name       string
+		text       string
+		legitimate bool
+	}{
+		{"task-name", "task suite:shard=2: checksum mismatch", true},
+		{"module-pin", "module mvdan.cc/sh@v3.13.1: vet failed", true},
+		{"time", "timeout at 09:56", true},
+		{"ratio", "coverage ratio 3:2", true},
+		{"dotted-version", "expected 1.2.3.4 got 1.2.3.5", true},
+		{"hostname", "ssh internal-builder-3 refused", false},
+		{"url", "Get https://203.0.113.7:8443/api: connection refused", false},
+		{"ipv6-zone", "fe80::1%eth0", false},
+		{"ipv6-loopback", "::1", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := RecordAttempt(&Task{Name: "t"}, nil, 1, TaskResult{
+				Status: StatusFailed,
+				Err:    proseCarrier{text: tc.text, code: FailExitNonzero},
+			})
+			if rec.Status != RunFailed || rec.Failure == nil || rec.Failure.Code != FailExitNonzero {
+				t.Fatalf("record = %q/%+v, want %q/%q", rec.Status, rec.Failure, RunFailed, FailExitNonzero)
+			}
+			data, err := json.Marshal(rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), tc.text) {
+				t.Fatalf("producer prose reached serialized record: %s", data)
+			}
+			if tc.legitimate && !rec.Status.HasVerdict() {
+				t.Fatal("legitimate conformance detail was treated as a leak and voided")
+			}
+		})
+	}
+}
+
+func TestProducerUnknownCodeIsDowngraded(t *testing.T) {
+	rec := RecordAttempt(&Task{Name: "t"}, nil, 1, TaskResult{
+		Status: StatusFailed,
+		Err:    proseCarrier{text: "operator detail", code: "unknown-code"},
+	})
+	if rec.Status != RunInfraFailed || rec.Failure == nil || rec.Failure.Code != FailUnclassified {
+		t.Fatalf("unknown carrier code produced %q/%+v, want %q/%q",
 			rec.Status, rec.Failure, RunInfraFailed, FailUnclassified)
-	}
-	data, err := json.Marshal(rec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "203.0.113.7") {
-		t.Errorf("careless carrier's reach detail reached the record: %s", data)
 	}
 }

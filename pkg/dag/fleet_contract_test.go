@@ -52,7 +52,7 @@ func validRecord() *RunRecord {
 		Status:        RunFailed,
 		ExitCode:      1,
 		Duration:      3 * time.Second,
-		Failure:       &FailureReason{Code: FailExitNonzero, Detail: "exit 1"},
+		Failure:       &FailureReason{Code: FailExitNonzero},
 	}
 }
 
@@ -307,6 +307,7 @@ func TestRunRecordValidate(t *testing.T) {
 		{"passed-with-failure", func(r *RunRecord) { r.Status = RunPassed }},
 		{"failed-without-reason", func(r *RunRecord) { r.Failure = nil }},
 		{"infra-without-code", func(r *RunRecord) { r.Status = RunInfraFailed; r.Failure = &FailureReason{} }},
+		{"unknown-failure-code", func(r *RunRecord) { r.Failure.Code = "new-and-unknown" }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
