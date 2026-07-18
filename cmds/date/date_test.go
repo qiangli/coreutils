@@ -45,6 +45,13 @@ func TestDateFormats(t *testing.T) {
 		{[]string{"-u", "-d", "2026-06-14", "+%u %w"}, "7 0\n"},
 		// Midnight: %I is 12, %p is AM.
 		{[]string{"-u", "-d", "2026-06-12 00:30:00", "+%I %p"}, "12 AM\n"},
+		// Missing POSIX strftime directives.
+		{[]string{"-u", "-d", "@0", "+%c"}, "Thu Jan  1 00:00:00 1970\n"},
+		{[]string{"-u", "-d", "@0", "+%C %g %G %r %U %V %W %x %X"}, "19 70 1970 12:00:00 AM 00 01 00 01/01/70 00:00:00\n"},
+		// Week numbers for specific edge cases.
+		{[]string{"-u", "-d", "2023-01-01", "+%U %W %V"}, "01 00 52\n"},
+		{[]string{"-u", "-d", "2022-01-01", "+%U %W %V"}, "00 00 52\n"},
+		{[]string{"-u", "-d", "2024-01-01", "+%U %W %V"}, "00 01 01\n"},
 		// Unknown directive passes through literally, like GNU.
 		{[]string{"-u", "-d", "@0", "+%q"}, "%q\n"},
 		// RFC 3339 input with explicit zone.

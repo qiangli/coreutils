@@ -300,6 +300,18 @@ func strftime(t time.Time, f string) string {
 			b.WriteString(t.Format("Jan"))
 		case 'B':
 			b.WriteString(t.Format("January"))
+		case 'c':
+			b.WriteString(t.Format("Mon Jan _2 15:04:05 2006"))
+		case 'C':
+			fmt.Fprintf(&b, "%02d", t.Year()/100)
+		case 'g':
+			y, _ := t.ISOWeek()
+			fmt.Fprintf(&b, "%02d", y%100)
+		case 'G':
+			y, _ := t.ISOWeek()
+			fmt.Fprintf(&b, "%04d", y)
+		case 'r':
+			b.WriteString(t.Format("03:04:05 PM"))
 		case 'p':
 			if t.Hour() < 12 {
 				b.WriteString("AM")
@@ -321,9 +333,20 @@ func strftime(t time.Time, f string) string {
 				wd = 7
 			}
 			fmt.Fprintf(&b, "%d", wd)
+		case 'U':
+			fmt.Fprintf(&b, "%02d", weekNumber(t, time.Sunday))
+		case 'V':
+			_, w := t.ISOWeek()
+			fmt.Fprintf(&b, "%02d", w)
 		case 'w':
 			// Weekday, Sunday=0.
 			fmt.Fprintf(&b, "%d", int(t.Weekday()))
+		case 'W':
+			fmt.Fprintf(&b, "%02d", weekNumber(t, time.Monday))
+		case 'x':
+			b.WriteString(t.Format("01/02/06"))
+		case 'X':
+			b.WriteString(t.Format("15:04:05"))
 		case 'z':
 			b.WriteString(t.Format("-0700"))
 		case ':':
@@ -348,4 +371,20 @@ func strftime(t time.Time, f string) string {
 		}
 	}
 	return b.String()
+}
+
+// weekNumber computes the week number (00-53) for the given time.
+// firstDay is time.Sunday for %U, time.Monday for %W.
+func weekNumber(t time.Time, firstDay time.Weekday) int {
+	yd := t.YearDay() - 1
+	jan1 := time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
+	jan1_wd := jan1.Weekday()
+
+	// Days until the first target day of the week
+	offset := (int(firstDay) - int(jan1_wd) + 7) % 7
+
+	if yd < offset {
+		return 0
+	}
+	return 1 + (yd-offset)/7
 }
