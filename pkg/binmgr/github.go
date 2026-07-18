@@ -274,8 +274,15 @@ func httpGetBody(ctx context.Context, url, accept string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 }
 
+// githubToken finds a token to authenticate GitHub API calls (release lookup +
+// asset download), so binmgr isn't limited to the 60/hr unauthenticated rate —
+// which returns HTTP 403 in CI and breaks tool resolution (e.g. installing gh
+// itself from cli/cli). GH_TOKEN comes FIRST to match gh's own precedence
+// (GH_TOKEN > GITHUB_TOKEN): callers that set the gh-convention var — like the
+// ci-failure workflow, which exports GH_TOKEN but not GITHUB_TOKEN — were
+// otherwise seen as tokenless here and rate-limited.
 func githubToken() string {
-	for _, k := range []string{"GITHUB_TOKEN", "GIT_TOKEN"} {
+	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GIT_TOKEN"} {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 			return v
 		}
