@@ -78,6 +78,18 @@ func TestPasteParallel(t *testing.T) {
 			"a\nb\tc\n",
 		},
 		{
+			"multibyte delimiter characters",
+			map[string]string{"f1": "a\nA\n", "f2": "b\nB\n", "f3": "c\nC\n"},
+			[]string{"-d", "αβ", "f1", "f2", "f3"},
+			"aαbβc\nAαBβC\n",
+		},
+		{
+			"escaped multibyte delimiter character",
+			map[string]string{"f1": "a\n", "f2": "b\n", "f3": "c\n"},
+			[]string{"-d", "\\αβ", "f1", "f2", "f3"},
+			"aαbβc\n",
+		},
+		{
 			"single file passthrough adds final newline",
 			map[string]string{"f1": "a\nb"},
 			[]string{"f1"},
@@ -165,8 +177,13 @@ func TestPasteZeroTerminated(t *testing.T) {
 
 func TestPasteErrors(t *testing.T) {
 	dir := writeFiles(t, map[string]string{"f1": "a\n"})
+	// the delimiter list must contain at least one delimiter
+	_, errb, code := runToolDir(t, dir, "", "-d", "", "f1")
+	if code != 1 || !strings.Contains(errb, "paste: no delimiters specified") {
+		t.Errorf("empty -d: code=%d err=%q", code, errb)
+	}
 	// trailing unescaped backslash in -d
-	_, errb, code := runToolDir(t, dir, "", "-d", "x\\", "f1")
+	_, errb, code = runToolDir(t, dir, "", "-d", "x\\", "f1")
 	if code != 1 || !strings.Contains(errb, "delimiter list ends with an unescaped backslash: x\\") {
 		t.Errorf("bad -d: code=%d err=%q", code, errb)
 	}

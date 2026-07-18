@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -88,11 +89,17 @@ func run(rc *tool.RunContext, args []string) int {
 // \n \t \\ \b \f \r \v, and \0 meaning "no delimiter at this position".
 // Any other backslash-escaped character stands for itself.
 func parseDelims(list string) ([][]byte, string) {
+	if list == "" {
+		return nil, "no delimiters specified"
+	}
+
 	var out [][]byte
 	for i := 0; i < len(list); i++ {
 		c := list[i]
 		if c != '\\' {
-			out = append(out, []byte{c})
+			_, size := utf8.DecodeRuneInString(list[i:])
+			out = append(out, []byte(list[i:i+size]))
+			i += size - 1
 			continue
 		}
 		i++
@@ -117,7 +124,9 @@ func parseDelims(list string) ([][]byte, string) {
 		case '\\':
 			out = append(out, []byte{'\\'})
 		default:
-			out = append(out, []byte{list[i]})
+			_, size := utf8.DecodeRuneInString(list[i:])
+			out = append(out, []byte(list[i:i+size]))
+			i += size - 1
 		}
 	}
 	return out, ""
