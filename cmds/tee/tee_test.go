@@ -3,6 +3,8 @@ package teecmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -157,5 +159,142 @@ func TestTeeHelpAndVersion(t *testing.T) {
 	out, _, code = runToolDir(t, t.TempDir(), "", "--version")
 	if code != 0 || !strings.Contains(out, "tee") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+// errWriter is an io.Writer that always returns err.
+type errWriter struct{ err error }
+
+func (e errWriter) Write(p []byte) (int, error) { return 0, e.err }
+
+// pipeErrWriter wraps an io.Writer and reports itself as a pipe via the
+// local pipeMarker interface, letting tests exercise --output-error pipe
+// behavior without creating real OS pipes.
+type pipeErrWriter struct {
+	io.Writer
+	err error
+}
+
+func (pipeErrWriter) isPipe() bool { return true }
+
+func (p pipeErrWriter) Write(b []byte) (int, error) {
+	if p.err != nil {
+		return 0, p.err
+	}
+	return p.Writer.Write(b)
+}
+
+// pipeWriter is a non-failing pipe-marked writer.
+type pipeWriter struct{ io.Writer }
+
+func (pipeWriter) isPipe() bool { return true }
+
+func runToolRaw(t *testing.T, dir string, in io.Reader, out, errOut io.Writer, args ...string) int {
+	t.Helper()
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: in, Out: out, Err: errOut},
+	}
+	return cmd.Run(rc, args)
+}
+
+func TestTeeStdoutWriteErrorPOSIX(t *testing.T) {
+	// POSIX default: an error writing to standard output is fatal and
+	// must not produce a diagnostic on standard error.
+	var errb bytes.Buffer
+	code := runToolRaw(t, t.TempDir(), strings.NewReader("x\n"), errWriter{errors.New("broken")}, &errb)
+	if code != 1 {
+		t.Errorf("stdout error: code=%d, want 1", code)
+	}
+	if errb.String() != "" {
+		t.Errorf("stdout error: stderr=%q, want empty", errb.String())
+	}
+}
+
+func TestTeeStdoutWriteErrorGNUWarn(t *testing.T) {
+	// GNU --output-error=warn: diagnose errors writing to any output,
+	// including standard output.
+	var errb bytes.Buffer
+	code := runToolRaw(t, t.TempDir(), strings.NewReader("x\n"), errWriter{errors.New("broken")}, &errb, "--output-error=warn")
+	if code != 1 {
+		t.Errorf("stdout warn: code=%d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "tee: standard output: Broken") {
+		t.Errorf("stdout warn: stderr=%q, want diagnostic", errb.String())
+	}
+}
+
+func TestTeeStdoutPipeErrorIgnoredWithP(t *testing.T) {
+	// -p (--output-error=warn-nopipe) ignores write errors to pipes,
+	// including when standard output itself is a pipe.
+	var errb bytes.Buffer
+	out := pipeErrWriter{Writer: io.Discard, err: errors.New("broken pipe")}
+	code := runToolRaw(t, t.TempDir(), strings.NewReader("x\n"), out, &errb, "-p")
+	if code != 0 {
+		t.Errorf("stdout pipe -p: code=%d, want 0", code)
+	}
+	if errb.String() != "" {
+		t.Errorf("stdout pipe -p: stderr=%q, want empty", errb.String())
+	}
+}
+
+func TestTeePWithNormalFile(t *testing.T) {
+	// -p must not interfere with normal (non-pipe) file output.
+	dir := t.TempDir()
+	var errb bytes.Buffer
+	out := &bytes.Buffer{}
+	code := runToolRaw(t, dir, strings.NewReader("data\n"), out, &errb, "-p", "f")
+	if code != 0 || errb.String() != "" || out.String() != "data\n" {
+		t.Errorf("-p normal file: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+	if got := readFile(t, filepath.Join(dir, "f")); got != "data\n" {
+		t.Errorf("file content = %q", got)
+	}
+}
+
+func TestTeeOutputErrorPipeModes(t *testing.T) {
+	broken := errors.New("broken pipe")
+	tests := []struct {
+		name      string
+		args      []string
+		wantCode  int
+		wantErr   bool
+		wantEmpty bool
+	}{
+		{"warn-nopipe pipe", []string{"--output-error=warn-nopipe"}, 0, false, true},
+		{"exit-nopipe pipe", []string{"--output-error=exit-nopipe"}, 0, false, true},
+		{"warn pipe", []string{"--output-error=warn"}, 1, true, false},
+		{"exit pipe", []string{"--output-error=exit"}, 1, true, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			out := pipeErrWriter{Writer: io.Discard, err: broken}
+			code := runToolRaw(t, t.TempDir(), strings.NewReader("x\n"), out, &errb, tc.args...)
+			if code != tc.wantCode {
+				t.Errorf("code=%d, want %d", code, tc.wantCode)
+			}
+			hasErr := strings.Contains(errb.String(), "tee: standard output:")
+			if hasErr != tc.wantErr {
+				t.Errorf("stderr=%q, wantErr=%v", errb.String(), tc.wantErr)
+			}
+			if tc.wantEmpty && errb.String() != "" {
+				t.Errorf("stderr=%q, want empty", errb.String())
+			}
+		})
+	}
+}
+
+func TestTeeOutputErrorExitNoPipeNonPipe(t *testing.T) {
+	// A non-pipe write error with --output-error=exit-nopipe should be
+	// diagnosed and cause immediate exit.
+	var errb bytes.Buffer
+	code := runToolRaw(t, t.TempDir(), strings.NewReader("x\n"), errWriter{errors.New("broken")}, &errb, "--output-error=exit-nopipe")
+	if code != 1 {
+		t.Errorf("code=%d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "tee: standard output: Broken") {
+		t.Errorf("stderr=%q, want diagnostic", errb.String())
 	}
 }
