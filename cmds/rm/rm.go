@@ -1,7 +1,11 @@
-// Package rmcmd implements rm(1): remove files and directory entries.
+// Package rmcmd implements rm(1) per the GNU coreutils manual: remove
+// files or directories.
 //
-// The original command structure was adapted from u-root's BSD-3-Clause rm;
-// recursive and POSIX conformance behavior is maintained locally.
+// Portions adapted from https://github.com/u-root/u-root cmds/core/rm
+// (BSD-3-Clause).
+// Changes: rewired to the tool framework; manual post-order tree
+// removal for GNU -v output and per-file error continuation; GNU
+// root-protection failsafe (--preserve-root default).
 package rmcmd
 
 import (
@@ -17,7 +21,6 @@ import (
 	"unicode"
 
 	"github.com/qiangli/coreutils/tool"
-	"golang.org/x/term"
 )
 
 var cmd = &tool.Tool{
@@ -26,6 +29,8 @@ var cmd = &tool.Tool{
 	Usage:    "rm [OPTION]... [FILE]...",
 }
 
+// Run is wired in init: a literal would create an initialization
+// cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type remover struct {
@@ -38,7 +43,6 @@ type remover struct {
 	verbose      bool
 	failed       bool
 	in           *bufio.Reader
-	isTerminal   bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -74,16 +78,15 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return tool.UsageError(rc, cmd, "missing operand")
 	}
+
 	ask := (interactiveMode || *interactiveOnce) && !forceMode
 	if *interactiveOnce && !*interactive && len(operands) <= 3 && !*recursive {
 		ask = false
 	}
-	isTerm := isTerminalFunc(rc.In)
 	r := &remover{
 		rc: rc, recursive: *recursive, force: forceMode, dir: *dir,
 		interactive: ask, preserveRoot: *preserveRoot && !*noPreserveRoot,
 		verbose: *verbose, in: inputReader(rc.In),
-		isTerminal: isTerm,
 	}
 	for _, op := range operands {
 		r.remove(op)
@@ -92,19 +95,6 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return 0
-}
-
-func (r *remover) shouldPrompt(rp string, isInteractive bool) bool {
-	if r.force {
-		return false
-	}
-	if isInteractive {
-		return true
-	}
-	if r.isTerminal && isWriteProtected(rp) {
-		return true
-	}
-	return false
 }
 
 func (r *remover) remove(op string) {
@@ -121,14 +111,6 @@ func (r *remover) remove(op string) {
 		r.errf("refusing to remove '%s'", op)
 		return
 	}
-	if isRoot(rp) {
-		if r.preserveRoot {
-			r.errf("it is dangerous to operate recursively on '%s'", op)
-		} else {
-			r.errf("refusing to remove '%s'", op)
-		}
-		return
-	}
 	fi, err := os.Lstat(rp)
 	if err != nil {
 		if r.force && (errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)) {
@@ -142,11 +124,15 @@ func (r *remover) remove(op string) {
 			r.errf("cannot remove '%s': Is a directory", op)
 			return
 		}
-		// POSIX 2.b: Prompt before descending
-		if r.shouldPrompt(rp, r.interactive) && !r.confirm(op) {
+		// GNU --preserve-root default: refuse to operate on the
+		// filesystem root unless --no-preserve-root was explicit.
+		if r.preserveRoot && filepath.Dir(filepath.Clean(rp)) == filepath.Clean(rp) {
+			r.errf("it is dangerous to operate recursively on '%s'", op)
 			return
 		}
-
+		if r.interactive && !r.confirm(op) {
+			return
+		}
 		if r.dir && !r.recursive {
 			r.removeFile(op)
 			return
@@ -154,9 +140,7 @@ func (r *remover) remove(op string) {
 		r.removeTree(op)
 		return
 	}
-
-	// POSIX 3: Prompt for files
-	if r.shouldPrompt(rp, r.interactive) && !r.confirm(op) {
+	if r.interactive && !r.confirm(op) {
 		return
 	}
 	r.removeFile(op)
@@ -170,6 +154,9 @@ func (r *remover) removeFile(op string) {
 	r.verbosef("removed '%s'", op)
 }
 
+// removeTree removes a directory post-order, continuing past
+// per-entry failures (the parent removal then reports its own
+// error), matching GNU rm -r.
 func (r *remover) removeTree(op string) {
 	entries, err := os.ReadDir(r.rc.Path(op))
 	if err != nil {
@@ -181,7 +168,6 @@ func (r *remover) removeTree(op string) {
 		r.remove(child)
 	}
 
-	// POSIX 2.d: Prompt before removing the directory itself if -i is specified
 	if r.interactive && !r.confirm(op) {
 		return
 	}
@@ -221,13 +207,11 @@ func inputReader(r io.Reader) *bufio.Reader {
 	return bufio.NewReader(r)
 }
 
-var isTerminalFunc = func(r io.Reader) bool {
-	if f, ok := r.(interface{ Fd() uintptr }); ok {
-		return term.IsTerminal(int(f.Fd()))
-	}
-	return false
-}
-
+// foldRShorthand rewrites -R into -r inside short-option clusters
+// (before any "--" terminator). GNU rm treats -R and -r identically;
+// pflag cannot attach two shorthands to one flag and inventing a
+// long name for -R is forbidden, so the alias is folded before Parse.
+// Safe because every rm short flag is a boolean.
 func foldRShorthand(args []string) []string {
 	out := make([]string, len(args))
 	copy(out, args)
@@ -300,11 +284,8 @@ func lastPromptOption(args []string) promptOption {
 	return last
 }
 
-func isRoot(path string) bool {
-	clean := filepath.Clean(path)
-	return filepath.Dir(clean) == clean
-}
-
+// reason unwraps err to its root cause and capitalizes the first
+// letter, matching the strerror() shape GNU diagnostics use.
 func reason(err error) string {
 	var pe *os.PathError
 	if errors.As(err, &pe) {

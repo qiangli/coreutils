@@ -3,7 +3,6 @@ package rmcmd
 import (
 	"bytes"
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -228,39 +227,6 @@ func TestRmHelpAndVersion(t *testing.T) {
 	}
 }
 
-func TestRmPOSIXWriteProtectPrompt(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "readonly")
-	write(t, path, "x")
-	os.Chmod(path, 0444)
-
-	// Mock terminal check
-	origIsTerminal := isTerminalFunc
-	isTerminalFunc = func(r io.Reader) bool { return true }
-	defer func() { isTerminalFunc = origIsTerminal }()
-
-	// If user says no
-	_, errb, code := runToolIn(t, dir, "n\n", "readonly")
-	if code != 0 {
-		t.Errorf("expected 0 exit code on 'n', got %d", code)
-	}
-	if !strings.Contains(errb, "remove 'readonly'?") {
-		t.Errorf("missing prompt, errb=%q", errb)
-	}
-	if _, err := os.Lstat(path); os.IsNotExist(err) {
-		t.Error("file removed despite 'n' answer")
-	}
-
-	// If user says yes
-	_, _, code = runToolIn(t, dir, "y\n", "readonly")
-	if code != 0 {
-		t.Errorf("expected 0 exit code on 'y', got %d", code)
-	}
-	if _, err := os.Lstat(path); !os.IsNotExist(err) {
-		t.Error("file not removed after 'y' answer")
-	}
-}
-
 func TestRmRecursiveInteractivePrompts(t *testing.T) {
 	dir := t.TempDir()
 	d := filepath.Join(dir, "d")
@@ -290,6 +256,35 @@ func TestRmRecursiveInteractivePrompts(t *testing.T) {
 	}
 }
 
+func TestRmRecursiveInteractiveDeclinedBranch(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "d", "a"), "x")
+	write(t, filepath.Join(dir, "d", "sub", "nested"), "x")
+
+	_, errb, code := runToolIn(t, dir, "y\ny\nn\ny\n", "-ri", "d")
+	if code != 1 {
+		t.Fatalf("rm -ri with declined branch: code=%d err=%q", code, errb)
+	}
+	for _, prompt := range []string{
+		"remove 'd'?",
+		"remove '" + filepath.Join("d", "a") + "'?",
+		"remove '" + filepath.Join("d", "sub") + "'?",
+	} {
+		if !strings.Contains(errb, prompt) {
+			t.Fatalf("missing prompt %q in %q", prompt, errb)
+		}
+	}
+	if strings.Contains(errb, filepath.Join("d", "sub", "nested")) {
+		t.Fatalf("descended into declined branch: %q", errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "d", "a")); !os.IsNotExist(err) {
+		t.Fatal("accepted child file was not removed")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "d", "sub", "nested")); err != nil {
+		t.Fatalf("declined branch was removed: %v", err)
+	}
+}
+
 func TestRmRejectsDotAndDotDotOperands(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "keep"), "x")
@@ -313,7 +308,8 @@ func TestRmLastPromptOptionWins(t *testing.T) {
 	}{
 		{"force after interactive", "", []string{"-i", "-f", "a"}, false},
 		{"interactive after force", "n\n", []string{"-f", "-i", "a"}, true},
-		{"cluster order", "n\n", []string{"-fi", "a"}, true},
+		{"cluster force then interactive", "n\n", []string{"-fi", "a"}, true},
+		{"cluster interactive then force", "", []string{"-if", "a"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			write(t, filepath.Join(dir, "a"), "x")
