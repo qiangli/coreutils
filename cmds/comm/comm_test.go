@@ -70,6 +70,27 @@ func TestCommStdin(t *testing.T) {
 	if code != 0 || out != "a\n\t\tb\n" {
 		t.Errorf("comm - f2 = (%q, %d)", out, code)
 	}
+
+	if err := os.WriteFile(filepath.Join(dir, "f1"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runRaw(t, dir, "a\nb\n", "f1", "-")
+	if code != 0 || errb != "" || out != "\t\ta\n\tb\n" {
+		t.Errorf("comm f1 - = (%q, %q, %d)", out, errb, code)
+	}
+
+	out, errb, code = runRaw(t, dir, "a\n", "-", "-")
+	if code != 2 || out != "" || !strings.Contains(errb, "both files cannot be standard input") {
+		t.Errorf("comm - - = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestCommDuplicateAndEmptyLines(t *testing.T) {
+	out, errb, code := runTool(t, "\na\na\nc\n", "\na\nb\nc\nc\n")
+	want := "\t\t\n\t\ta\na\n\tb\n\t\tc\n\tc\n"
+	if code != 0 || errb != "" || out != want {
+		t.Errorf("comm duplicate lines = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
 }
 
 func TestCommOrderCheck(t *testing.T) {

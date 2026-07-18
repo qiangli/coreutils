@@ -95,6 +95,9 @@ func run(rc *tool.RunContext, args []string) int {
 	case len(operands) > 2:
 		return tool.UsageError(rc, cmd, "extra operand '%s'", operands[2])
 	}
+	if operands[0] == "-" && operands[1] == "-" {
+		return tool.UsageError(rc, cmd, "both files cannot be standard input")
+	}
 
 	var lines [2][]string
 	for i, op := range operands {
