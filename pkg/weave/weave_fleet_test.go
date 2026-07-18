@@ -53,3 +53,19 @@ func TestFleetRowFindsInstalledTool(t *testing.T) {
 		t.Fatalf("resolved path = %q, want %q", r.Path, exe)
 	}
 }
+
+// A declared probe supplies arguments, never an executable path: fleet must
+// run the exact path LookPath resolved for this host.
+func TestYcodeDeclaredProbeUsesResolvedPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	path := filepath.Join(t.TempDir(), "resolved-ycode")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n[ \"$1\" = version ] || exit 9\necho resolved-ycode-version\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ent := probeToolCapability("ycode", path, time.Now())
+	if !ent.Capable || ent.Version != "resolved-ycode-version" {
+		t.Fatalf("declared ycode probe did not execute resolved path: %+v", ent)
+	}
+}

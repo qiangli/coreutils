@@ -101,9 +101,7 @@ func RenderWorkspace(argv []string, workspace string) ([]string, error) {
 	}
 	out := append([]string(nil), argv...)
 	for i, arg := range out {
-		if arg == fleet.WorkspaceToken {
-			out[i] = workspace
-		}
+		out[i] = strings.ReplaceAll(arg, fleet.WorkspaceToken, workspace)
 	}
 	for _, arg := range out {
 		if strings.Contains(arg, fleet.WorkspaceToken) {

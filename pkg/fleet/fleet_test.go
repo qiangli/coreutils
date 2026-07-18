@@ -167,6 +167,23 @@ func TestBaselineAGYDeclaresWorkspaceBinding(t *testing.T) {
 	}
 }
 
+func TestBaselineYcodeDeclaresProbeAndWorkspaceContracts(t *testing.T) {
+	ycode, ok := baseline(t).Tool("ycode")
+	if !ok {
+		t.Fatal("baseline ycode missing")
+	}
+	if got := strings.Join(ycode.VersionProbeArgv(), " "); got != "ycode version" {
+		t.Fatalf("ycode version probe = %q", got)
+	}
+	argv := strings.Join(ycode.ArgvWithWorkspace("/tmp/weave-work", "deepseek-v4-pro", "task"), "\x00")
+	if !strings.Contains(argv, "--session-dir\x00/tmp/weave-work/.git/ycode-sessions") {
+		t.Fatalf("workspace session binding missing: %q", argv)
+	}
+	if direct := strings.Join(ycode.Argv("deepseek-v4-pro", "task"), " "); direct != "ycode --danger-skip-permissions prompt --model deepseek-v4-pro --print task" {
+		t.Fatalf("direct ycode argv changed: %q", direct)
+	}
+}
+
 func TestArgvSubstitutesModel(t *testing.T) {
 	c := baseline(t)
 	tool, _ := c.Tool("claude")

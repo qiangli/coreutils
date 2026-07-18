@@ -468,7 +468,14 @@ func probeToolCapability(tool, path string, now time.Time) fleetProbeEntry {
 	ent := fleetProbeEntry{Path: path, ProbedAt: now}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	args := []string{"--version"}
+	if declared, ok := fleetCatalog().Tool(tool); ok {
+		argv := declared.VersionProbeArgv()
+		if len(argv) > 0 {
+			args = argv[1:]
+		}
+	}
+	out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
 	if err == nil {
 		ent.Capable = true
 		if line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]); line != "" {

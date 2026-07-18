@@ -148,6 +148,9 @@ type ToolLaunch struct {
 	// a reporting prompt and refuses to start the source-writing invocation
 	// unless the reported path equals the allocated workspace.
 	WorkspacePreflightExec string `yaml:"workspace_preflight_exec,omitempty" json:"workspace_preflight_exec,omitempty"`
+	// VersionProbeExec is an optional provider-declared, read-only command used
+	// by fleet capability probing instead of assuming every CLI accepts --version.
+	VersionProbeExec string `yaml:"version_probe_exec,omitempty" json:"version_probe_exec,omitempty"`
 	// PromptPosition records where the prompt goes for consumers that
 	// cannot read the template (cloudbox conductor). Advisory here: the
 	// {prompt} placeholder is authoritative.
@@ -258,9 +261,7 @@ func (t Tool) renderLaunch(tmpl, workspace, modelID, session, prompt string) []s
 	for i, f := range fields {
 		if i == 1 && workspace != "" {
 			for _, wf := range strings.Fields(t.CLI.Launch.WorkspaceArg) {
-				if wf == WorkspaceToken {
-					wf = workspace
-				}
+				wf = strings.ReplaceAll(wf, WorkspaceToken, workspace)
 				out = append(out, wf)
 			}
 		}
@@ -278,7 +279,7 @@ func (t Tool) renderLaunch(tmpl, workspace, modelID, session, prompt string) []s
 		case WorkspaceToken:
 			out = append(out, workspace)
 		default:
-			out = append(out, f)
+			out = append(out, strings.ReplaceAll(f, WorkspaceToken, workspace))
 		}
 	}
 	return out
@@ -291,6 +292,15 @@ func (t Tool) WorkspacePreflightArgv(workspace, modelID, prompt string) ([]strin
 		return nil, false
 	}
 	return t.renderLaunch(t.CLI.Launch.WorkspacePreflightExec, workspace, modelID, "", prompt), true
+}
+
+// VersionProbeArgv renders the provider-declared capability probe. Tools with
+// no declaration retain the universal --version convention.
+func (t Tool) VersionProbeArgv() []string {
+	if strings.TrimSpace(t.CLI.Launch.VersionProbeExec) == "" {
+		return []string{t.CLI.Binary, "--version"}
+	}
+	return t.renderLaunch(t.CLI.Launch.VersionProbeExec, "", "", "", "")
 }
 
 // TakesModel reports whether the launch template can select a model. A

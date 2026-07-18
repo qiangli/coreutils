@@ -88,6 +88,16 @@ func TestRenderWorkspaceFailsClosedOnEmptyPath(t *testing.T) {
 	}
 }
 
+func TestRenderWorkspaceReplacesEmbeddedWorkspaceToken(t *testing.T) {
+	got, err := RenderWorkspace([]string{"ycode", "--session-dir", "{workspace}/.git/ycode-sessions"}, "/tmp/allocated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[2] != "/tmp/allocated/.git/ycode-sessions" {
+		t.Fatalf("embedded workspace = %q", got[2])
+	}
+}
+
 func TestPrincipalEnvStampsOnlyNamedAgents(t *testing.T) {
 	base := []string{"PATH=/bin", "BASHY_AGENT_ID=old"}
 	named := PrincipalEnv(base, Launch{Nick: "007", Tool: "claude", ToolName: "claude", ModelName: "fable"})
