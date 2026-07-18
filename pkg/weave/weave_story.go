@@ -658,10 +658,17 @@ successor can take over.
 			}
 			who := weaveConductorName("")
 			return runWeaveStoryMutate(cmd, id, "sprint checkpoint", &flags, func(s *weaveStory) (string, error) {
+				prev, stale, free := weaveStoryLeaseState(s)
+				if free {
+					return "", fmt.Errorf("sprint #%d lease is unclaimed — take it explicitly before checkpointing", id)
+				}
+				if stale {
+					return "", fmt.Errorf("sprint #%d lease is STALE (was %s) — take it explicitly to recover", id, prev)
+				}
 				s.Continuity = message
-				s.Lease = &weaveStoryLease{Holder: who, At: time.Now().UTC()}
+				s.Lease = &weaveStoryLease{Holder: prev, At: time.Now().UTC()}
 				weaveStoryAppend(s, who, "progress", "checkpoint")
-				return fmt.Sprintf("sprint #%d: continuity updated, lease refreshed (%s)", id, who), nil
+				return fmt.Sprintf("sprint #%d: continuity updated, lease refreshed (%s)", id, prev), nil
 			})
 		},
 	}
