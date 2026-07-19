@@ -1,0 +1,8 @@
+agents:
+  - name: ycode-sonnet5
+    tool: ycode
+    model: sonnet5
+    display: "ycode · sonnet5"
+    ledger:
+      reliability: unmeasured
+      notes: L2 rung — the cheap Anthropic base for the claude X-cascades.
