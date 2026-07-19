@@ -206,8 +206,5 @@ func messageStatus(tty string) byte {
 	if err != nil {
 		return '?'
 	}
-	if fi.Mode()&0o020 != 0 {
-		return '+'
-	}
-	return '-'
+	return ttyMessageStatus(fi)
 }

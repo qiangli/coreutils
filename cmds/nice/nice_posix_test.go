@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -82,8 +83,20 @@ func TestNiceCommandExitStatuses(t *testing.T) {
 	}
 	out.Reset()
 	errb.Reset()
-	if code := runCommand(rc, "nice", []string{"not-executable"}, nil, 0); code != 126 {
-		t.Fatalf("non-executable command code=%d, want 126 (stderr=%q)", code, errb.String())
+	// POSIX distinguishes "found but not executable" (126) from "not found"
+	// (127). On Unix the file exists with no exec bit, so nice resolves it and
+	// exec fails with EACCES -> 126. Windows has no exec-permission bit:
+	// executability is determined solely by a PATHEXT extension, so a file
+	// named "not-executable" (no extension) is not an executable command at
+	// all and Go's LookPath reports "executable file not found" -> 127. That is
+	// the legitimately correct status on Windows; a 126 case is unconstructable
+	// there because "exists but not executable" does not exist as a state.
+	wantCode := 126
+	if runtime.GOOS == "windows" {
+		wantCode = 127
+	}
+	if code := runCommand(rc, "nice", []string{"not-executable"}, nil, 0); code != wantCode {
+		t.Fatalf("non-executable command code=%d, want %d (stderr=%q)", code, wantCode, errb.String())
 	}
 }
 

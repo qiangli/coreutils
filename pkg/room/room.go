@@ -17,7 +17,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -246,16 +245,4 @@ func Timeline(n int) ([]Event, error) {
 		all = all[len(all)-n:]
 	}
 	return all, nil
-}
-
-// PidAlive reports whether a process exists (signal 0 probes without delivering).
-func PidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
 }

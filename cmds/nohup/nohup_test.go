@@ -3,6 +3,7 @@ package nohupcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,18 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+// TestMain lets the test binary re-exec itself as a trivial cross-platform
+// "helper" command: when GO_NOHUP_HELPER is set it prints that value to stdout
+// and exits 0. This gives OS-neutral tests a real external command to run under
+// nohup without depending on a Unix shell (`sh` is absent on Windows).
+func TestMain(m *testing.M) {
+	if v, ok := os.LookupEnv("GO_NOHUP_HELPER"); ok {
+		io.WriteString(os.Stdout, v)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 func TestNohupMissing(t *testing.T) {
 	var out, errb bytes.Buffer
@@ -108,8 +121,17 @@ func TestNohupFallsBackToHomeNohupOut(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "nohup.out"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"PATH=/bin:/usr/bin", "HOME=" + home}, Stdio: tool.Stdio{}}
-	if code := run(rc, []string{"sh", "-c", "printf home"}); code != 0 {
+	// Use the test binary itself as the command (see TestMain) so the
+	// fallback-to-$HOME path is exercised on every OS. The prior `sh -c`
+	// form resolved to 127 on Windows, where /bin:/usr/bin and `sh` don't
+	// exist; this stays byte-exact ("home") and shell-free.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + filepath.Dir(exe), "HOME=" + home, "GO_NOHUP_HELPER=home"}
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: env, Stdio: tool.Stdio{}}
+	if code := run(rc, []string{filepath.Base(exe)}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	data, err := os.ReadFile(filepath.Join(home, "nohup.out"))

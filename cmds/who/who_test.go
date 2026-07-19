@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,15 @@ func TestWhoWritable(t *testing.T) {
 	code := run(rc, []string{"--writable", "utmp"})
 	if code != 0 {
 		t.Fatalf("--writable: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+	if runtime.GOOS == "windows" {
+		// Windows has no Unix tty group-write permission model, so the
+		// writable status is unknowable ('?'), and os.Chmod cannot flip
+		// it (chmod only toggles the read-only attribute).
+		if !strings.Contains(out.String(), "bob      ?   "+tty) {
+			t.Fatalf("expected writable status '?' for bob on windows, got %q", out.String())
+		}
+		return
 	}
 	if !strings.Contains(out.String(), "bob      +   "+tty) {
 		t.Fatalf("expected writable status '+' for bob, got %q", out.String())

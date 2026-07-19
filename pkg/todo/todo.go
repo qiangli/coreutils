@@ -224,6 +224,11 @@ func EnsureSeq(st *issue.Store) error {
 // ResolveRef resolves a reference that may be a running NUMBER (Seq, e.g. "3") or a
 // content-id PREFIX (git-style, e.g. "a1148df4"). A bare positive integer is tried as
 // a number first — the short handle a human reads off `todo list`.
+//
+// The two namespaces overlap: a hex content-id prefix can be all decimal digits (e.g.
+// "580789"), so it parses as an integer yet is really an id. When no task carries the
+// requested Seq, fall back to resolving the ref as an id prefix before giving up —
+// otherwise an all-digit id prefix is misrouted to a Seq lookup that can never match.
 func ResolveRef(st *issue.Store, ref string) (*issue.Issue, error) {
 	ref = strings.TrimSpace(ref)
 	if n, err := strconv.Atoi(ref); err == nil && n > 0 {
@@ -235,6 +240,9 @@ func ResolveRef(st *issue.Store, ref string) (*issue.Issue, error) {
 			if it.Seq == n {
 				return it, nil
 			}
+		}
+		if it, err := st.Resolve(ref); err == nil {
+			return it, nil
 		}
 		return nil, fmt.Errorf("no task with number %d (run `bashy todo list`)", n)
 	}

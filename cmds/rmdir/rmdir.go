@@ -51,6 +51,12 @@ func run(rc *tool.RunContext, args []string) int {
 
 	r := &rm{rc: rc, verbose: *verbose, ignoreNonEmpty: *ignoreNonEmpty}
 	for _, op := range operands {
+		// Normalize slashes to the OS separator so the explicit
+		// current-directory ("./") ancestor logic below is separator-
+		// consistent on every platform. On Unix this is a no-op; on
+		// Windows it rewrites an operand typed with "/" (e.g. "./a/b")
+		// to native form so the -p walk still reaches ".".
+		op = filepath.FromSlash(op)
 		if !r.remove1(op) {
 			continue
 		}
@@ -105,11 +111,14 @@ func (r *rm) remove1(op string) bool {
 		r.errf("failed to remove '': No such file or directory")
 		return false
 	}
-	// RunContext.Path normalizes a relative operand before the filesystem
-	// call, so resolving "." would otherwise turn it into the working
-	// directory itself and permit os.Remove to remove that directory.
-	if op == "." {
-		r.errf("failed to remove '.': Invalid argument")
+	// POSIX rmdir must reject a path whose final component is "." or ".."
+	// with EINVAL ("Invalid argument") on every platform — it is a portable
+	// semantic guarantee, not an OS accident. This must happen BEFORE the
+	// filesystem call: RunContext.Path normalizes a relative operand, so a
+	// bare "." would otherwise resolve to the working directory itself and
+	// (on some platforms, notably Windows) let os.Remove succeed against it.
+	if base := filepath.Base(filepath.Clean(op)); base == "." || base == ".." {
+		r.errf("failed to remove '%s': Invalid argument", op)
 		return false
 	}
 	rp := r.rc.Path(op)
