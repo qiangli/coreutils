@@ -190,14 +190,26 @@ const (
 	// BandMeasured — earned by running the model up a difficulty ladder to the
 	// rung where it FAILED. The only thing a band really means.
 	BandMeasured = "measured"
+
+	// BandCascade — not a single model's band at all: a COMPOSITE agent that
+	// SERVES at the numeric band by escalation. A cheap base does the work and
+	// escalates to premium help (a model ladder) only when stuck. Rendered `X4`,
+	// not `L4`, so it never reads like one frontier model — it is a cascade that
+	// reaches L4 when it must and runs cheap the rest of the time.
+	BandCascade = "cascade"
 )
 
-// BandLabelWithSource marks an unmeasured band with a `~`.
+// BandLabelWithSource marks an unmeasured band with a `~`, and a composite
+// cascade band with an `X` prefix (X4 = "serves L4 by escalation", vs L4 = a
+// single model pegged there).
 //
 // A band is the highest rung a model CLEARS, and until something has watched a
 // model fail, it has not been placed — it has been guessed at. The tilde is one
 // character and it is the difference between a fact and an opinion.
 func BandLabelWithSource(band int, source string) string {
+	if source == BandCascade && band >= 1 {
+		return "X" + strconv.Itoa(band)
+	}
 	l := BandLabel(band)
 	if band >= 1 && source != BandMeasured {
 		return l + "~"
@@ -339,6 +351,11 @@ func newAgentsList(opts []Option) *cobra.Command {
 				} else {
 					r.Band, r.BandSource = m.Band, m.BandSource
 					r.Kind, r.Provider = m.Kind, m.Provider
+				}
+				// A cascade agent shows its SERVED band (X4), not the base
+				// model's peg — the ladder is what reaches L4, not glm-5.2.
+				if a.BandSource == BandCascade && a.Band > 0 {
+					r.Band, r.BandSource = a.Band, a.BandSource
 				}
 				if !r.Resolves && !all {
 					continue

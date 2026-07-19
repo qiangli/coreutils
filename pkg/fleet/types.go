@@ -597,6 +597,22 @@ type Agent struct {
 	Tool  string `yaml:"tool" json:"tool"`   // → Tool.Name
 	Model string `yaml:"model" json:"model"` // → Model.Name
 
+	// A CASCADE agent (band_source: cascade) is not a plain tool:model binding.
+	// It runs a cheap Base agent and, when the base gets stuck, escalates through
+	// Escalation (a ladder of agent names, tried in order — e.g. an L3 then an L4)
+	// for a content-full steer. It SERVES at Band via that ladder while running
+	// cheap most of the time. When Base is set, Model is ignored.
+	Base       string   `yaml:"base,omitempty" json:"base,omitempty"`
+	Escalation []string `yaml:"escalation,omitempty" json:"escalation,omitempty"`
+
+	// Band + BandSource are the SERVED band of a cascade agent (BandSource
+	// "cascade") — the level the ladder REACHES, not the base model's peg. This
+	// is the one legitimate agent-level band: it is the cascade's contract, not a
+	// stored model peg that would rot. For a plain tool:model agent these are
+	// empty and the band is inherited from the model, as always.
+	Band       int    `yaml:"band,omitempty" json:"band,omitempty"`
+	BandSource string `yaml:"band_source,omitempty" json:"band_source,omitempty"`
+
 	Role        *AgentRole        `yaml:"role,omitempty" json:"role,omitempty"`
 	Ledger      *AgentLedger      `yaml:"ledger,omitempty" json:"ledger,omitempty"`
 	Instruction *AgentInstruction `yaml:"instruction,omitempty" json:"instruction,omitempty"`
@@ -610,6 +626,12 @@ type Agent struct {
 	Derived  []string `yaml:"-" json:"derived,omitempty"`
 
 	Ring assetring.Ring `yaml:"-" json:"ring"`
+}
+
+// IsCascade reports whether this agent is a composite cascade (a cheap Base that
+// escalates through a ladder), as opposed to a plain tool:model binding.
+func (a *Agent) IsCascade() bool {
+	return a.BandSource == "cascade" && a.Base != ""
 }
 
 type AgentRole struct {

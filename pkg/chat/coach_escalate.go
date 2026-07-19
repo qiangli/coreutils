@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/capability"
@@ -66,6 +67,64 @@ func BandGraduatedEscalator(ctx context.Context, req EscalationRequest) (string,
 		return "", "", false
 	}
 	return steer, coach, true
+}
+
+// LadderEscalator escalates through an EXPLICIT ladder of agents (e.g. an L3
+// then an L4, possibly cross-provider) instead of auto-picking one band up. Each
+// escalation trip advances one rung: the base gets stuck → cheap reflex steer →
+// still stuck → the first ladder agent diagnoses and steers → still stuck → the
+// next. This is the cascade agent's engine: a cheap base served up to a target
+// band by calling in progressively senior help only when it has demonstrably
+// failed to progress. Returns ok=false once the ladder is exhausted (fall back
+// to the reflex).
+func LadderEscalator(ladder []string) EscalateFunc {
+	var (
+		mu   sync.Mutex
+		rung int
+	)
+	return func(ctx context.Context, req EscalationRequest) (string, string, bool) {
+		mu.Lock()
+		if rung >= len(ladder) {
+			mu.Unlock()
+			return "", "", false
+		}
+		coach := ladder[rung]
+		rung++
+		mu.Unlock()
+		if strings.TrimSpace(coach) == "" {
+			return "", "", false
+		}
+		// Self-bound: a coach must not run longer than the loop it is diagnosing.
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+		res, err := Invoke(ctx, Options{
+			Agent:       coach,
+			Instruction: escalationPrompt(req),
+			Timeout:     3 * time.Minute,
+		}, execRunner{})
+		if err != nil {
+			return "", "", false
+		}
+		steer := collapseSteer(res.Output)
+		if steer == "" {
+			return "", "", false
+		}
+		return steer, coach, true
+	}
+}
+
+// cascadeLadder returns the base agent and escalation ladder for a cascade agent
+// by name, or ok=false if the name is not a cascade agent. The coach launches
+// the base and escalates through the ladder.
+func cascadeLadder(name string) (base string, ladder []string, ok bool) {
+	cat := newCatalog()
+	agents, _ := cat.Agents()
+	for i := range agents {
+		if agents[i].Name == name && agents[i].IsCascade() {
+			return agents[i].Base, agents[i].Escalation, true
+		}
+	}
+	return "", nil, false
 }
 
 // coacheeBand resolves the coachee binding to its model's band (0 if unknown).

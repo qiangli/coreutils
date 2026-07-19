@@ -67,6 +67,18 @@ func NewCoachCmd() *cobra.Command {
 			pol.Interrupt = !noInt
 			pol.LogPath = logPath
 
+			// A cascade agent (X4) is not launched directly: run its cheap BASE
+			// and arm the EXPLICIT escalation ladder (e.g. glm-5.2 → terra → sol)
+			// so premium help is called in only when the base has demonstrably
+			// stalled. A plain agent uses the auto-picked band-graduated coach.
+			launchAgent := agent
+			escalator := BandGraduatedEscalator
+			if base, ladder, ok := cascadeLadder(agent); ok {
+				launchAgent = base
+				escalator = LadderEscalator(ladder)
+				fmt.Fprintf(os.Stderr, "coach: cascade %q → base %q, escalation ladder %v\n", agent, base, ladder)
+			}
+
 			// Enforce --timeout as a hard context deadline. Without it, WaitIdle
 			// blocks forever on a turn.end that a stuck agent never sends — the coach
 			// exists precisely for agents that loop, so an unbounded wait is the one
@@ -81,7 +93,7 @@ func NewCoachCmd() *cobra.Command {
 			}
 			defer cancel()
 
-			sess, err := Start(ctx, agent, SessionOptions{
+			sess, err := Start(ctx, launchAgent, SessionOptions{
 				Prompt:   message,
 				Cwd:      cwd,
 				Timeout:  timeout,
@@ -89,7 +101,7 @@ func NewCoachCmd() *cobra.Command {
 				ReadOnly: readOnly,
 			})
 			if err != nil {
-				return fmt.Errorf("coach: start %s: %w", agent, err)
+				return fmt.Errorf("coach: start %s: %w", launchAgent, err)
 			}
 			defer sess.Close()
 
@@ -102,6 +114,7 @@ func NewCoachCmd() *cobra.Command {
 			go func() { _, _ = sess.Wait(); cancel() }()
 
 			coach := sess.StartCoach(ctx, pol)
+			coach.SetEscalation(ctx, launchAgent, escalator)
 
 			// Drive the single task to completion: wait for the turn to end (the
 			// tool reports it), then read the answer.
