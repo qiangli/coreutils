@@ -120,6 +120,13 @@ func NewCoachCmd() *cobra.Command {
 			// tool reports it), then read the answer.
 			werr := sess.WaitIdle(ctx, quiet)
 			answer := sess.Turn()
+			// The turn is over — tear down NOW. The coach's watch goroutine loops
+			// until ctx.Done(), and a steerable TUI agent never exits on its own
+			// (the early cancel-on-agent-exit never fires), so without this
+			// coach.Wait() would block until the whole --timeout even though
+			// WaitIdle returned on turn.end. Cancelling ends the watcher and kills
+			// the lingering agent at once.
+			cancel()
 			coach.Wait()
 			rep := coach.Report()
 
