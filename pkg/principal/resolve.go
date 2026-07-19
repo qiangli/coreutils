@@ -131,7 +131,12 @@ func (r *Resolver) resolveAgent(name string) (Resolution, bool) {
 	}
 
 	cli := Contact{
-		Method: "cli", Address: strings.Join(tool.Argv(model.Target(), "{prompt}"), " "),
+		// TargetFor, not Target: the id a model answers to is a property of the
+		// TOOL asking (see Model.TargetFor). Rendering the global Target() here
+		// handed ycode `moonshot/kimi-k3` — which the moonshot API 404s, so ycode
+		// silently fell back to kimi-k2.5. The contact whois shows must be the id
+		// that actually reaches the model, matching agentlaunch and verify.
+		Method: "cli", Address: strings.Join(tool.Argv(model.TargetFor(tool.Name), "{prompt}"), " "),
 		Source: "fleet", Confidence: Declared, Live: chk.OK, Cost: 10,
 	}
 	if !chk.OK {
