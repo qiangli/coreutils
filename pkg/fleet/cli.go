@@ -199,6 +199,23 @@ const (
 	BandCascade = "cascade"
 )
 
+// cascadeModelChain renders a cascade agent's members as base→esc1→esc2, using
+// each member agent's resolved model name — so `agents list` shows all the models
+// behind a band-X agent, not just the base.
+func cascadeModelChain(cat *Catalog, a Agent) string {
+	part := func(agentName, fallback string) string {
+		if _, _, m, err := cat.Binding(agentName); err == nil {
+			return m.Name
+		}
+		return fallback
+	}
+	parts := []string{part(a.Base, a.Model)}
+	for _, e := range a.Escalation {
+		parts = append(parts, part(e, e))
+	}
+	return strings.Join(parts, "→")
+}
+
 // BandLabelWithSource marks an unmeasured band with a `~`, and a composite
 // cascade band with an `X` prefix (X4 = "serves L4 by escalation", vs L4 = a
 // single model pegged there).
@@ -353,9 +370,12 @@ func newAgentsList(opts []Option) *cobra.Command {
 					r.Kind, r.Provider = m.Kind, m.Provider
 				}
 				// A cascade agent shows its SERVED band (X4), not the base
-				// model's peg — the ladder is what reaches L4, not glm-5.2.
+				// model's peg — the ladder is what reaches L4, not glm-5.2 — and
+				// its MODEL column shows the whole ladder (base → escalation
+				// models) so `agents list` makes the cascade's members visible.
 				if a.BandSource == BandCascade && a.Band > 0 {
 					r.Band, r.BandSource = a.Band, a.BandSource
+					r.Model = cascadeModelChain(cat, a)
 				}
 				if !r.Resolves && !all {
 					continue

@@ -1,5 +1,5 @@
 agents:
-  - name: cascade-glm-x3
+  - name: ycode-cascade-x3
     tool: ycode
     model: glm-5.2
     display: "cascade · glm-5.2 → terra (serves L3)"

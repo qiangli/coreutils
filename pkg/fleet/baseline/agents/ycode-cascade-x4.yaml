@@ -1,5 +1,5 @@
 agents:
-  - name: cascade-glm-x4
+  - name: ycode-cascade-x4
     tool: ycode
     # Nominal binding (= the base's model) so the catalog resolves it like any
     # agent; the cascade behavior is driven by base + escalation below.
