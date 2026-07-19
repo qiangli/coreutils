@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/gate"
@@ -1395,7 +1396,30 @@ func weaveResumeMemoryPrefix(workspace string) string {
 	return "## Resuming — last context\n\n```text\n" + trailer + "\n```"
 }
 
+// weaveEnsureBashyExclude adds bashy's own skill-export markers to the clone's
+// .git/info/exclude so the wrapper's auto-commit never captures them. The
+// `.bashy-export.json` ownership marker is written into a worker's workspace
+// (under .agents/skills/…, .claude/skills/…) as agent scaffolding at launch —
+// not worker code — and it carries workspace-specific content, so committing it
+// per-branch makes `weave pull` add/add-CONFLICT across parallel workers on an
+// identical artifact path, silently blocking every merge. Excluding the basename
+// (gitignore matches it at any depth) keeps it untracked so `git add -A` skips it.
+func weaveEnsureBashyExclude(workspace string) {
+	excl := filepath.Join(workspace, ".git", "info", "exclude")
+	existing, _ := os.ReadFile(excl)
+	if strings.Contains(string(existing), ".bashy-export.json") {
+		return
+	}
+	f, err := os.OpenFile(excl, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return // best-effort; a missing exclude only reinstates the old behavior
+	}
+	defer f.Close()
+	_, _ = f.WriteString("\n# bashy skill-export marker — never commit (weave: causes add/add merge conflicts)\n.bashy-export.json\n")
+}
+
 func maybeAutoCommit(workspace, msg string) (bool, error) {
+	weaveEnsureBashyExclude(workspace)
 	dirty, _, untrackedFiles := weaveMeasureDirtiness(workspace)
 	if !dirty && untrackedFiles == 0 {
 		return false, nil
@@ -2540,6 +2564,21 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if aerr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitInvalidArg, aerr))
+	}
+	// Bare-tool launch guard. A single tool token that did not resolve to a fleet
+	// agent (agentLaunch==nil, len==1) is launched VERBATIM under a PTY — deliberately
+	// interactive, which is correct at a real terminal. But in a headless run (a
+	// conductor driving `weave start` over a pipe, no controlling TTY) that interactive
+	// TUI has no one to answer it and hangs until the watchdog kills it — burning the
+	// conductor's whole budget on a silent stall (observed live). Fail loud instead,
+	// and say exactly how to fix it: pin a fleet AGENT, which expands to the tool's
+	// headless argv.
+	if agentLaunch == nil && len(toolArgs) == 1 && !opts.noSpawn && opts.ptyMode() != "never" &&
+		!term.IsTerminal(int(os.Stdin.Fd())) {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+			weavecli.ExitInvalidArg, fmt.Errorf(
+				"pinned worker %q is a bare tool, not a headless agent — with no controlling terminal it launches an interactive TUI that hangs. Pin a fleet AGENT instead (a nickname, or tool:model like %q); `bashy agents list` shows the choices",
+				toolArgs[0], toolArgs[0]+":<model>")))
 	}
 	// displayTool is what the queue records; for an agent launch it is the
 	// tool's registry name, not the resolved executable path.
