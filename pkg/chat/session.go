@@ -248,44 +248,58 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 // So: send, then look for the agent to actually start writing. If it does not,
 // send once more. Confirmation is cheap; a false verdict about a model is not.
 func (s *Session) openConversation(ctx context.Context, prompt string) error {
-	for attempt := 1; attempt <= 2; attempt++ {
-		s.mu.Lock()
-		before := s.buf.Len()
-		s.mu.Unlock()
+	// RE-SEND until the agent CONFIRMS it began a turn — do not send twice and hope.
+	//
+	// A TUI still finishing startup silently swallows whatever you type: ycode paints
+	// a splash, then an LSP/memory/OTel/spinner sequence that can run for several
+	// seconds and never fully goes quiet, so waitReady's settle heuristic gives up and
+	// sends anyway (by design) — straight into a TUI that eats the keystrokes. The old
+	// two-shot × 45s send raced that startup and lost often enough that a coached run
+	// looked, from every angle, like a model that had nothing to say (calls=0 at a
+	// splash screen — a false verdict about the MODEL for a HARNESS delivery bug).
+	//
+	// Re-sending every few seconds lands the prompt the instant the input box is live.
+	// `turn.start` (a fact the agent reports) is the only accept signal we trust; a
+	// byte-growth fallback covers tools that cannot say. Once accepted we stop at once,
+	// so at most one or two extra copies are ever sent, and only while nothing has
+	// begun — never on top of a running turn.
+	s.mu.Lock()
+	before := s.buf.Len()
+	s.mu.Unlock()
 
-		if err := s.Say(prompt); err != nil {
-			return fmt.Errorf("chat: could not open the conversation with %s: %w", s.Nick, err)
+	if err := s.Say(prompt); err != nil {
+		return fmt.Errorf("chat: could not open the conversation with %s: %w", s.Nick, err)
+	}
+	sends := 1 // CAP re-sends: a swallowed send gets another chance, but a working
+	// agent (or one whose turn.start we simply failed to parse) is never spammed
+	// with the prompt over and over. maxOpenSends keeps the initial burst bounded;
+	// after it we only WAIT for confirmation, up to the deadline.
+	poll := time.NewTicker(400 * time.Millisecond)
+	defer poll.Stop()
+	// Re-send on an EXPONENTIAL BACKOFF (5s, 10s, 20s, 40s, 80s…), not a fixed tick.
+	// A steerable TUI can be slow to reach input-ready (LSP/memory/provider startup),
+	// and a fixed 5s tick either gives up too early (a low cap) or queues a dozen
+	// duplicate prompts the agent replays when it finally wakes (no cap). Backoff
+	// spreads a HANDFUL of sends across a long window: early ones catch a fast start,
+	// later ones catch a slow one, and there are never many. The window is generous
+	// because a false "never acknowledged" gets recorded as a model failure.
+	backoff := 5 * time.Second
+	nextResend := time.Now().Add(backoff)
+	deadline := time.Now().Add(180 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.done:
+			return fmt.Errorf("chat: %s exited before it could be asked anything", s.Nick)
+		case <-poll.C:
 		}
 
-		// DID IT TAKE? Ask for evidence, not for a byte count.
-		//
-		// A tool with an event channel answers this exactly: `turn.start` means the
-		// agent received a prompt and began a turn. That is a fact it reported, and
-		// it cannot be confused with anything else.
-		//
-		// The byte-count fallback below is for tools that cannot say. It is a poor
-		// signal and it failed in exactly the way you would expect: ycode's TUI
-		// redraws a splash screen, a spinner, and its LSP/OTel startup logs, which
-		// sailed past the threshold while the prompt sat unsubmitted. The session
-		// then waited three minutes for a turn that had never begun. Counting bytes
-		// measures that SOMETHING happened, never that the RIGHT thing did.
-		deadline := time.Now().Add(45 * time.Second)
-		for time.Now().Before(deadline) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-s.done:
-				return fmt.Errorf("chat: %s exited before it could be asked anything", s.Nick)
-			case <-time.After(500 * time.Millisecond):
+		if s.events != nil {
+			if s.events.SawTurnStart() {
+				return nil // the agent SAID it started. No guessing.
 			}
-
-			if s.events != nil {
-				if s.events.SawTurnStart() {
-					return nil // the agent SAID it started. No guessing.
-				}
-				continue // it can tell us; do not fall back on a worse signal
-			}
-
+		} else {
 			s.mu.Lock()
 			grew := s.buf.Len() - before
 			s.mu.Unlock()
@@ -293,15 +307,32 @@ func (s *Session) openConversation(ctx context.Context, prompt string) error {
 				return nil
 			}
 		}
+
+		// Not begun yet — the startup most likely ate the last send. Resend on backoff.
+		if sends < maxOpenSends && time.Now().After(nextResend) {
+			if err := s.Say(prompt); err != nil {
+				return fmt.Errorf("chat: could not re-open the conversation with %s: %w", s.Nick, err)
+			}
+			sends++
+			backoff *= 2
+			nextResend = time.Now().Add(backoff)
+		}
 	}
-	return fmt.Errorf("chat: %s never acknowledged the opening prompt — it accepted the keystrokes "+
-		"and produced nothing. Its TUI was most likely still starting up. This is a HARNESS failure, "+
-		"not a model failure: do not record it as one", s.Nick)
+	return fmt.Errorf("chat: %s never acknowledged the opening prompt after 180s of retries — it "+
+		"accepted the keystrokes and produced nothing. Its TUI was most likely still starting up, or "+
+		"its provider auth failed silently. This is a HARNESS failure, not a model failure: do not "+
+		"record it as one", s.Nick)
 }
 
 // openAckBytes is how much output proves the agent actually took the prompt,
 // rather than merely echoing it into its input box.
 const openAckBytes = 400
+
+// maxOpenSends bounds how many times the opening prompt is (re)sent before we stop
+// and only wait for confirmation. Enough to outlast a slow TUI startup swallowing
+// the first keystrokes; few enough that a working agent whose turn.start we failed
+// to parse is never spammed. With controlled-mode fast startup it rarely exceeds 1.
+const maxOpenSends = 6
 
 // Say puts a line in front of the agent WHILE it is working.
 //
