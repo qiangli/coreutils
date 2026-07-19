@@ -24,6 +24,7 @@ package grepcmd
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -65,6 +66,7 @@ type grepper struct {
 	showName     bool
 	maxCount     int // -1 = unlimited
 	onlyMatching bool
+	jsonOut      bool // --json: NDJSON one object per match
 
 	include    []string
 	exclude    []string
@@ -110,6 +112,7 @@ func run(rc *tool.RunContext, args []string) int {
 	exclude := fs.StringArray("exclude", nil, "skip files whose base name matches GLOB")
 	excludeDir := fs.StringArray("exclude-dir", nil, "skip directories whose base name matches GLOB")
 	agentic := fs.Bool("agentic", false, "opt-in: skip .gitignore'd and noise paths (node_modules, .git, vendor, …) during recursive search")
+	jsonOut := fs.Bool("json", false, "opt-in: emit one NDJSON object per match ({\"file\",\"line\",\"text\"}) instead of text — composable with jq")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -204,12 +207,15 @@ func run(rc *tool.RunContext, args []string) int {
 		exclude:      *exclude,
 		excludeDir:   *excludeDir,
 		onlyMatching: *onlyMatching,
+		jsonOut:      *jsonOut,
 	}
 	// Literal fast path: a single metachar-free pattern is plain
 	// substring work — searchStreamLit skips RE2 and per-line string
 	// allocation. Anything it can't serve byte-identically (-i, -w,
 	// multiple patterns, real regex) keeps the RE2 path unchanged.
-	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok {
+	// --json routes every match through printLine (the structured emitter),
+	// so it never takes the byte-oriented literal path.
+	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok && !g.jsonOut {
 		g.lit, g.useLit = lit, true
 	}
 	// --agentic (opt-in): a nil matcher when off skips nothing, so default
@@ -730,6 +736,16 @@ func (g *grepper) printMatches(name string, lineNo int, line string) {
 }
 
 func (g *grepper) printLine(name string, n int, line string) {
+	if g.jsonOut {
+		rec, _ := json.Marshal(struct {
+			File string `json:"file"`
+			Line int    `json:"line"`
+			Text string `json:"text"`
+		}{File: name, Line: n, Text: line})
+		g.rc.Out.Write(rec)
+		io.WriteString(g.rc.Out, "\n")
+		return
+	}
 	var b strings.Builder
 	if g.showName {
 		b.WriteString(name)
