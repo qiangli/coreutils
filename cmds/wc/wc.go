@@ -160,7 +160,16 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	if shouldPrintTotal(*totalWhen, len(inputs)) {
-		printRow(w, sel, total, width, "total")
+		// "only" prints the counts bare: it is the scripting-oriented mode,
+		// and the "total" label would be the sole thing standing between
+		// the caller and a directly-parseable number. Every other mode
+		// prints the total alongside per-input rows, where the label is
+		// what tells the two apart.
+		label := "total"
+		if *totalWhen == "only" {
+			label = ""
+		}
+		printRow(w, sel, total, width, label)
 	}
 	if err := w.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "wc: write error: %v\n", err)
@@ -220,15 +229,12 @@ func readFiles0(rc *tool.RunContext, name string) ([]string, error) {
 // quote renders a name the way GNU's quoteaf does in the C locale.
 func quote(s string) string { return "'" + s + "'" }
 
-// countReader makes one pass computing the counts sel needs. Only -L
-// (max-line-length) requires decoding UTF-8 runes for display width.
-// Lines, words, bytes, and C-locale characters are byte properties, so
-// a block-wise byte scan produces identical counts far faster.
+// countReader makes one pass computing the counts sel needs. Every count
+// wc produces is a byte property in the C locale — lines, words, bytes,
+// characters, and (since display width is one column per byte here) the
+// maximum line length — so a single block-wise byte scan serves them all.
 func countReader(r io.Reader, sel selection) (counts, error) {
-	if sel.maxLine {
-		return countRunes(r)
-	}
-	return countBytes(r, sel.words)
+	return countBytes(r, sel.words, sel.maxLine)
 }
 
 // isSpaceByte marks the C-locale whitespace bytes (word separators).
@@ -240,13 +246,30 @@ func init() {
 	}
 }
 
-// countBytes computes lines, words, and bytes with a block byte scan.
-// Newlines are counted with bytes.Count (vectorized); word boundaries
-// with a byte-indexed table. inWord carries across block boundaries.
-func countBytes(r io.Reader, words bool) (counts, error) {
+// countBytes computes every count with a block byte scan. Newlines are
+// counted with bytes.Count (vectorized); word boundaries and line widths
+// with byte-indexed rules. inWord and linepos carry across block
+// boundaries. The per-byte loop runs only when -w or -L is selected, so
+// plain "wc -l"/"wc -c" stay on the vectorized path.
+//
+// Line width follows GNU's C-locale rules: \n, \r and \f end the current
+// line, \t advances to the next multiple of 8, \v advances nothing, and
+// every other byte occupies one column — including non-printable bytes
+// and each byte of a multi-byte sequence, since a character IS a byte in
+// the C locale (see countReader).
+func countBytes(r io.Reader, words, maxLine bool) (counts, error) {
 	var c counts
 	buf := make([]byte, 64*1024)
 	inWord := false
+	var linepos int64
+	// finishLine closes the line in progress; also called at EOF so a
+	// final line with no trailing newline still counts toward -L.
+	finishLine := func() {
+		if linepos > c.maxLine {
+			c.maxLine = linepos
+		}
+		linepos = 0
+	}
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
@@ -254,8 +277,20 @@ func countBytes(r io.Reader, words bool) (counts, error) {
 			c.bytes += int64(n)
 			c.chars = c.bytes
 			c.lines += int64(bytes.Count(b, []byte{'\n'}))
-			if words {
+			if words || maxLine {
 				for _, ch := range b {
+					if maxLine {
+						switch ch {
+						case '\n', '\r', '\f':
+							finishLine()
+						case '\t':
+							linepos += 8 - linepos%8
+						case '\v':
+							// vertical tab advances no column
+						default:
+							linepos++
+						}
+					}
 					if isSpaceByte[ch] {
 						inWord = false
 					} else if !inWord {
@@ -266,67 +301,12 @@ func countBytes(r io.Reader, words bool) (counts, error) {
 			}
 		}
 		if err == io.EOF {
-			return c, nil
-		}
-		if err != nil {
-			return c, err
-		}
-	}
-}
-
-// countRunes is the full rune-decoding pass, needed when -L is
-// selected. Word boundaries and line-length widths use C-locale rules
-// (ASCII whitespace; only printable ASCII has width 1, tab advances
-// to the next multiple of 8, \r and \f reset the position — matching
-// GNU in the C locale). Characters are counted as bytes in the C
-// locale; each byte in a valid or invalid UTF-8 sequence contributes
-// one character.
-func countRunes(r io.Reader) (counts, error) {
-	br := bufio.NewReaderSize(r, 64*1024)
-	var c counts
-	inWord := false
-	var linepos int64
-	finishLine := func() {
-		if linepos > c.maxLine {
-			c.maxLine = linepos
-		}
-		linepos = 0
-	}
-	for {
-		r0, size, err := br.ReadRune()
-		if err == io.EOF {
 			finishLine()
 			return c, nil
 		}
 		if err != nil {
 			finishLine()
 			return c, err
-		}
-		c.bytes += int64(size)
-		c.chars += int64(size)
-
-		switch r0 {
-		case '\n':
-			c.lines++
-			finishLine()
-		case '\r', '\f':
-			finishLine()
-		case '\t':
-			linepos += 8 - linepos%8
-		default:
-			if r0 >= 32 && r0 <= 126 {
-				linepos++
-			}
-		}
-
-		switch r0 {
-		case ' ', '\t', '\n', '\v', '\f', '\r':
-			inWord = false
-		default:
-			if !inWord {
-				c.words++
-			}
-			inWord = true
 		}
 	}
 }
