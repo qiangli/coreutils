@@ -34,13 +34,13 @@ func TestTTYNotAFile(t *testing.T) {
 }
 
 func TestTTYSilent(t *testing.T) {
-	out, errb, code := runTool(t, strings.NewReader("data"), "-s")
-	if code != 1 || out != "" || errb != "" {
-		t.Errorf("tty -s = (%q, %q, %d), want quiet status 1", out, errb, code)
-	}
-	out, errb, code = runTool(t, strings.NewReader("data"), "--quiet")
-	if code != 1 || out != "" || errb != "" {
-		t.Errorf("tty --quiet = (%q, %q, %d), want quiet status 1", out, errb, code)
+	// All three spellings (-s, --silent, --quiet) are the same flag:
+	// suppress output and report only the terminal/non-terminal status.
+	for _, flag := range []string{"-s", "--silent", "--quiet"} {
+		out, errb, code := runTool(t, strings.NewReader("data"), flag)
+		if code != 1 || out != "" || errb != "" {
+			t.Errorf("tty %s = (%q, %q, %d), want quiet status 1", flag, out, errb, code)
+		}
 	}
 }
 
@@ -143,5 +143,14 @@ func TestTTYHelp(t *testing.T) {
 	out, _, code := runTool(t, strings.NewReader(""), "--help")
 	if code != 0 || !strings.Contains(out, "Usage: tty") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+}
+
+func TestTTYVersion(t *testing.T) {
+	for _, flag := range []string{"--version", "-V"} {
+		out, _, code := runTool(t, strings.NewReader(""), flag)
+		if code != 0 || !strings.Contains(out, "tty") || !strings.Contains(out, "coreutils") {
+			t.Errorf("%s: code=%d out=%q, want a 'tty ... coreutils' line and 0", flag, code, out)
+		}
 	}
 }

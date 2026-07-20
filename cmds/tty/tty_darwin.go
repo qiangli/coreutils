@@ -4,16 +4,29 @@ package ttycmd
 
 import (
 	"os"
-	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
 // ttyName reports the terminal path for f, or ok=false when f is not
-// a terminal. Darwin has no /proc; the device node is found by
-// matching the descriptor's rdev against /dev/tty* entries (the same
-// scan ttyname(3) performs over /dev).
+// a terminal. Darwin has no /proc; the device node is found by scanning
+// /dev — the same approach ttyname(3) takes when it cannot use the
+// kernel devname() path.
+//
+// Every character device in /dev is a candidate. The scan is NOT
+// limited to names beginning with "tty": real terminals such as
+// /dev/console and serial callout devices (/dev/cu.*) would otherwise
+// be missed and misreported as "not a tty" even though the termios
+// ioctl already confirmed the fd is a terminal. Symlinks (/dev/stdin,
+// /dev/fd/*) are skipped via Lstat so they cannot resolve to the
+// terminal and shadow the actual device node.
+//
+// Both rdev and inode must match. rdev alone is insufficient on Darwin:
+// several special devices (/dev/console, /dev/fbt, /dev/lockstat,
+// /dev/profile, …) share rdev 0, so rdev matching alone could return
+// the wrong node. The inode uniquely identifies the device node that
+// fstat saw on the descriptor.
 func ttyName(f *os.File) (string, bool) {
 	fd := int(f.Fd())
 	if _, err := unix.IoctlGetTermios(fd, unix.TIOCGETA); err != nil {
@@ -28,19 +41,19 @@ func ttyName(f *os.File) (string, bool) {
 		return "", false
 	}
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), "tty") {
+		path := "/dev/" + e.Name()
+		fi, err := os.Lstat(path)
+		if err != nil {
 			continue
 		}
-		path := "/dev/" + e.Name()
-		fi, err := os.Stat(path)
-		if err != nil {
+		if fi.Mode()&os.ModeCharDevice == 0 {
 			continue
 		}
 		sys, ok := fi.Sys().(*syscall.Stat_t)
 		if !ok {
 			continue
 		}
-		if uint64(sys.Rdev) == uint64(st.Rdev) && fi.Mode()&os.ModeCharDevice != 0 {
+		if uint64(sys.Rdev) == uint64(st.Rdev) && sys.Ino == st.Ino {
 			return path, true
 		}
 	}
