@@ -2,8 +2,7 @@
 // manual: print the sequences of printable characters in files.
 //
 // Portions adapted from https://github.com/u-root/u-root cmds/core/strings/strings.go (BSD-3-Clause).
-// Changes: rewired to tool framework; tab counted as printable (GNU
-// includes isblank characters); 7-wide right-aligned -t offsets per
+// Changes: rewired to tool framework; 7-wide right-aligned -t offsets per
 // GNU output shape; offsets reset per file; removed the partial-flush
 // optimization (it broke -t offset math).
 package stringscmd
@@ -57,6 +56,17 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	for _, name := range operands {
+		if name == "-" {
+			in := rc.In
+			if in == nil {
+				in = strings.NewReader("")
+			}
+			if err := scan(in, w, *minLen, *radix); err != nil {
+				fmt.Fprintf(rc.Err, "strings: -: %v\n", sysErr(err))
+				exit = 1
+			}
+			continue
+		}
 		f, err := os.Open(rc.Path(name))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "strings: %s: %v\n", name, sysErr(err))
@@ -77,10 +87,9 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-// printable matches GNU strings' default character set: graphic ASCII
-// plus blank characters (space is in 32..126; tab is the other blank).
+// printable matches GNU strings' default character set: isprint(3) ASCII set.
 func printable(c byte) bool {
-	return (c >= 32 && c <= 126) || c == '\t'
+	return c >= 32 && c <= 126
 }
 
 func scan(r io.Reader, w *bufio.Writer, minLen int, radix string) error {
