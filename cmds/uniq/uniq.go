@@ -46,7 +46,7 @@ func run(rc *tool.RunContext, args []string) int {
 	skipFields := fs.IntP("skip-fields", "f", 0, "avoid comparing the first N fields")
 	skipChars := fs.IntP("skip-chars", "s", 0, "avoid comparing the first N characters")
 	checkChars := fs.IntP("check-chars", "w", 0, "compare no more than N characters in lines")
-	operands, code := tool.Parse(rc, cmd, fs, normalizeOptionalShortArgs(tool.AliasHelpVersion(args)))
+	operands, code := tool.Parse(rc, cmd, fs, normalizeArgs(tool.AliasHelpVersion(args)))
 	if code >= 0 {
 		return code
 	}
@@ -185,25 +185,85 @@ func run(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-// normalizeOptionalShortArgs supports GNU's -D[delimit-method] spelling.
-// pflag treats the suffix of an optional-argument shorthand as more short
-// flags, while GNU treats it as the argument to -D.
-func normalizeOptionalShortArgs(args []string) []string {
-	out := append([]string(nil), args...)
+// normalizeArgs supports GNU's -D[delimit-method] spelling and POSIX's
+// obsolescent -N/+N forms for skipping fields/chars.
+func normalizeArgs(args []string) []string {
+	out := make([]string, 0, len(args))
 	rest := false
-	for i, arg := range out {
+	needsValue := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" {
 			rest = true
+			out = append(out, arg)
+			needsValue = false
 			continue
 		}
 		if rest {
+			out = append(out, arg)
+			continue
+		}
+		if needsValue {
+			out = append(out, arg)
+			needsValue = false
 			continue
 		}
 		if len(arg) > 2 && arg[0] == '-' && arg[1] == 'D' && arg[2] != '=' {
-			out[i] = "-D=" + arg[2:]
+			out = append(out, "-D="+arg[2:])
+			continue
 		}
+		// uutils documents the delimiter method as a separate argument to
+		// -D, while GNU also accepts the optional argument attached to it.
+		// Consume only recognized methods so an ordinary operand after -D
+		// keeps its normal meaning.
+		if arg == "-D" && i+1 < len(args) && isDelimiterMethod(args[i+1]) {
+			out = append(out, "-D="+args[i+1])
+			i++
+			continue
+		}
+		if legacySkipNumber(arg) {
+			switch arg[0] {
+			case '-':
+				out = append(out, "-f", arg[1:])
+			case '+':
+				out = append(out, "-s", arg[1:])
+			}
+			continue
+		}
+		out = append(out, arg)
+		needsValue = optionNeedsValue(arg)
 	}
 	return out
+}
+
+func optionNeedsValue(arg string) bool {
+	switch arg {
+	case "-f", "--skip-fields", "-s", "--skip-chars", "-w", "--check-chars":
+		return true
+	default:
+		return false
+	}
+}
+
+func legacySkipNumber(arg string) bool {
+	if len(arg) < 2 || (arg[0] != '-' && arg[0] != '+') {
+		return false
+	}
+	for i := 1; i < len(arg); i++ {
+		if arg[i] < '0' || arg[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isDelimiterMethod(s string) bool {
+	switch s {
+	case "none", "prepend", "separate":
+		return true
+	default:
+		return false
+	}
 }
 
 type delimiterMode int

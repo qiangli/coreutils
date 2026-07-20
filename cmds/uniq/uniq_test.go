@@ -48,11 +48,15 @@ func TestUniq(t *testing.T) {
 		{"check chars", "ab\nac\nbd\n", []string{"-w", "1"}, "ab\nbd\n"},
 		{"check chars zero compares nothing", "a\nb\nc\n", []string{"-w", "0"}, "a\n"},
 		{"fields skipped before chars", "x 1same\ny 2same\n", []string{"-f", "1", "-s", "2"}, "x 1same\n"},
+		{"legacy skip fields", "x a\ny a\nz b\n", []string{"-1"}, "x a\nz b\n"},
+		{"legacy skip chars", "1a\n2a\n3b\n", []string{"+1"}, "1a\n3b\n"},
+		{"legacy skip fields and chars", "f1 1same\nf2 2same\nf3 3diff\n", []string{"-1", "+2"}, "f1 1same\nf3 3diff\n"},
 		{"no trailing newline", "a\na", nil, "a\n"},
 		{"empty input", "", nil, ""},
 		{"zero terminated", "a\x00a\x00b\x00", []string{"-z"}, "a\x00b\x00"},
 		{"all repeated", "a\na\nb\nc\nc\nc\n", []string{"-D"}, "a\na\nc\nc\nc\n"},
 		{"all repeated separate", "a\na\nb\nc\nc\n", []string{"--all-repeated=separate"}, "a\na\n\nc\nc\n"},
+		{"all repeated spaced separate", "a\na\nb\nc\nc\n", []string{"-D", "separate"}, "a\na\n\nc\nc\n"},
 		{"all repeated attached prepend", "a\na\nb\nc\nc\n", []string{"-Dprepend"}, "\na\na\n\nc\nc\n"},
 		{"group prepend", "a\na\nb\n", []string{"--group=prepend"}, "\na\na\n\nb\n"},
 		{"group both", "a\na\nb\n", []string{"--group=both"}, "\na\na\n\n\nb\n\n"},
@@ -102,6 +106,10 @@ func TestUniqErrors(t *testing.T) {
 	_, errb, code = runTool(t, "", "-f", "-1")
 	if code != 2 || !strings.Contains(errb, "invalid number of fields to skip") {
 		t.Errorf("-f -1: code=%d err=%q", code, errb)
+	}
+	out, errb, code := runTool(t, "x a\ny a\n", "--", "-1")
+	if code != 1 || out != "" || !strings.Contains(errb, "-1") {
+		t.Errorf("-- -1 is operand: out=%q code=%d err=%q", out, code, errb)
 	}
 	_, errb, code = runTool(t, "", "-w", "-2")
 	if code != 2 || !strings.Contains(errb, "invalid number of bytes to compare") {
