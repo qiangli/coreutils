@@ -3,6 +3,8 @@ package basenamecmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -63,6 +65,76 @@ func TestBasenameErrors(t *testing.T) {
 	_, errb, code = runTool(t, "--frobnicate", "x")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+}
+
+type failingWriter struct {
+	n   int
+	err error
+}
+
+func (w failingWriter) Write(p []byte) (int, error) {
+	if w.n > len(p) {
+		return len(p), w.err
+	}
+	return w.n, w.err
+}
+
+type failAfterWriter struct {
+	okWrites int
+	err      error
+}
+
+func (w *failAfterWriter) Write(p []byte) (int, error) {
+	if w.okWrites > 0 {
+		w.okWrites--
+		return len(p), nil
+	}
+	return 0, w.err
+}
+
+func TestBasenameWriteErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		out  io.Writer
+	}{
+		{"error", failingWriter{err: errors.New("output unavailable")}},
+		{"short write", failingWriter{n: 1}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx:   context.Background(),
+				Dir:   t.TempDir(),
+				Stdio: tool.Stdio{In: strings.NewReader(""), Out: tc.out, Err: &errb},
+			}
+			if code := cmd.Run(rc, []string{"a/b"}); code != 1 {
+				t.Errorf("write failure: code=%d, want 1", code)
+			}
+			if !strings.Contains(errb.String(), "basename: write error:") {
+				t.Errorf("write failure: stderr=%q, want diagnostic", errb.String())
+			}
+		})
+	}
+}
+
+func TestBasenameWriteErrorAfterMultipleOutput(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: t.TempDir(),
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: &failAfterWriter{okWrites: 1, err: errors.New("output unavailable")},
+			Err: &errb,
+		},
+	}
+	if code := cmd.Run(rc, []string{"-a", "a/b", "c/d"}); code != 1 {
+		t.Errorf("write failure after partial output: code=%d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "basename: write error:") {
+		t.Errorf("write failure after partial output: stderr=%q, want diagnostic", errb.String())
 	}
 }
 
