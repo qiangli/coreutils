@@ -141,10 +141,7 @@ func run(rc *tool.RunContext, args []string) int {
 	ps := c.ProcessState
 	userT, sysT := ps.UserTime(), ps.SystemTime()
 	maxRSS, haveRSS := maxRSSKB(ps) // platform helper
-	status := ps.ExitCode()
-	if status < 0 {
-		status = 128 // killed by signal; GNU encodes 128+sig, best-effort
-	}
+	status := exitStatus(ps)        // 128+signum for signal-terminated commands
 
 	// Report to -o FILE or stderr (GNU writes the report to stderr by default).
 	w := rc.Err
