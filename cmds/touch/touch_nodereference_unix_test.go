@@ -1,8 +1,8 @@
 //go:build darwin || linux
 
 // Symlink-based -h coverage. os.Symlink needs elevated privileges on Windows,
-// and the non-unix applyChtimesNoDeref fallback refuses symlinks outright, so
-// these cases are unix-only by construction.
+// and the non-unix setFileTimes fallback refuses symlinks outright, so these
+// cases are unix-only by construction.
 
 package touchcmd
 

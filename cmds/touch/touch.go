@@ -153,6 +153,12 @@ func run(rc *tool.RunContext, args []string) int {
 
 	now := time.Now()
 	atime, mtime := now, now
+	// useNow records that no explicit time source (-r/-t/-d) was given, so the
+	// changed timestamps must be set to the current time. POSIX requires this
+	// form to work for anyone with write permission (like utime(path, NULL));
+	// setting an explicit timestamp instead would demand file ownership. It is
+	// realized on unix with UTIME_NOW — see setFileTimes.
+	useNow := true
 	switch {
 	case *ref != "":
 		var fi os.FileInfo
@@ -167,6 +173,7 @@ func run(rc *tool.RunContext, args []string) int {
 			return 1
 		}
 		atime, mtime = statAtime(fi), fi.ModTime()
+		useNow = false
 	case pre.tSeen:
 		t, err := parseStamp(pre.stamp, now)
 		if err != nil {
@@ -174,6 +181,7 @@ func run(rc *tool.RunContext, args []string) int {
 			return 1
 		}
 		atime, mtime = t, t
+		useNow = false
 	case fs.Changed("date"):
 		t, err := parseDate(*date, now)
 		if err != nil {
@@ -181,6 +189,7 @@ func run(rc *tool.RunContext, args []string) int {
 			return 1
 		}
 		atime, mtime = t, t
+		useNow = false
 	}
 
 	changeA := pre.atime || !pre.mtime
@@ -222,24 +231,9 @@ func run(rc *tool.RunContext, args []string) int {
 			f.Close()
 		}
 
-		var at, mt time.Time
-		if changeA {
-			at = atime
-		}
-		if changeM {
-			mt = mtime
-		}
-
-		if *noDeref {
-			if err := applyChtimesNoDeref(path, at, mt); err != nil {
-				fmt.Fprintf(rc.Err, "touch: setting times of '%s': %v\n", name, reason(err))
-				exit = 1
-			}
-		} else {
-			if err := os.Chtimes(path, at, mt); err != nil {
-				fmt.Fprintf(rc.Err, "touch: setting times of '%s': %v\n", name, reason(err))
-				exit = 1
-			}
+		if err := setFileTimes(path, changeA, changeM, useNow, atime, mtime, !*noDeref); err != nil {
+			fmt.Fprintf(rc.Err, "touch: setting times of '%s': %v\n", name, reason(err))
+			exit = 1
 		}
 	}
 	return exit

@@ -34,6 +34,15 @@ func mtime(t *testing.T, path string) time.Time {
 	return fi.ModTime()
 }
 
+func atime(t *testing.T, path string) time.Time {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return statAtime(fi)
+}
+
 func TestTouchCreates(t *testing.T) {
 	dir := t.TempDir()
 	before := time.Now().Add(-2 * time.Second)
@@ -161,6 +170,75 @@ func TestTouchAccessOnly(t *testing.T) {
 	want = time.Date(2021, 3, 4, 5, 6, 0, 0, time.Local)
 	if got := mtime(t, f); got.Unix() != want.Unix() {
 		t.Errorf("-am mtime=%v want %v", got, want)
+	}
+}
+
+// With no -t/-d/-r, touch sets the current time. It must update both
+// timestamps of an existing file, and it must do so via the current-time
+// primitive (UTIME_NOW on unix) rather than an explicit stamp — the path
+// separate from every -t-based case above.
+func TestTouchCurrentTimeExisting(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	old := time.Date(2001, 2, 3, 4, 5, 6, 0, time.Local)
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(f, old, old); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().Add(-2 * time.Second)
+	if _, errb, code := runTool(t, dir, "f"); code != 0 {
+		t.Fatalf("touch f: code=%d err=%q", code, errb)
+	}
+	after := time.Now().Add(2 * time.Second)
+	if got := mtime(t, f); got.Before(before) || got.After(after) {
+		t.Errorf("mtime %v not near now", got)
+	}
+	if got := atime(t, f); got.Before(before) || got.After(after) {
+		t.Errorf("atime %v not near now", got)
+	}
+}
+
+// The current-time path must also honour -a/-m: -a moves only the access time
+// to now and leaves the modification time; -m does the reverse. This exercises
+// UTIME_NOW paired with UTIME_OMIT, distinct from the explicit-stamp -a/-m
+// cases in TestTouchAccessOnly.
+func TestTouchCurrentTimePartial(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f")
+	old := time.Date(2001, 2, 3, 4, 5, 6, 0, time.Local)
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(f, old, old); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().Add(-2 * time.Second)
+	// -a: access moves to now, modification stays.
+	if _, errb, code := runTool(t, dir, "-a", "f"); code != 0 {
+		t.Fatalf("touch -a f: code=%d err=%q", code, errb)
+	}
+	if got := mtime(t, f); got.Unix() != old.Unix() {
+		t.Errorf("-a changed mtime: got %v want %v", got, old)
+	}
+	if got := atime(t, f); got.Before(before) {
+		t.Errorf("-a did not move atime to now: %v", got)
+	}
+	// -m: modification moves to now, access stays where -a left it.
+	priorA := atime(t, f)
+	if err := os.Chtimes(f, priorA, old); err != nil {
+		t.Fatal(err)
+	}
+	before = time.Now().Add(-2 * time.Second)
+	if _, errb, code := runTool(t, dir, "-m", "f"); code != 0 {
+		t.Fatalf("touch -m f: code=%d err=%q", code, errb)
+	}
+	if got := mtime(t, f); got.Before(before) {
+		t.Errorf("-m did not move mtime to now: %v", got)
+	}
+	if got := atime(t, f); got.Unix() != priorA.Unix() {
+		t.Errorf("-m changed atime: got %v want %v", got, priorA)
 	}
 }
 
