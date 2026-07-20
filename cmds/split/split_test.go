@@ -176,6 +176,43 @@ func TestSplitChunks(t *testing.T) {
 		t.Errorf("l/2 lost data: %q", whole)
 	}
 
+	// l/2 honors --separator when splitting by lines.
+	dir2b := t.TempDir()
+	if _, _, code := runTool(t, dir2b, "aa:bb:cc", "-n", "l/2", "-t", ":"); code != 0 {
+		t.Fatal("split -n l/2 -t: failed")
+	}
+	got := listFiles(t, dir2b)
+	if len(got) != 2 {
+		t.Fatalf("-n l/2 -t wrong file count: %v", got)
+	}
+	if got[0] != "xaa" || got[1] != "xab" {
+		t.Fatalf("-n l/2 -t files: %v", got)
+	}
+	var merged strings.Builder
+	for _, name := range got {
+		c := readFile(t, dir2b, name)
+		merged.WriteString(c)
+		if name != got[len(got)-1] && !strings.HasSuffix(c, ":") {
+			t.Errorf("-n l/2 -t split inside separator in %s: %q", name, c)
+		}
+	}
+	if merged.String() != "aa:bb:cc" {
+		t.Errorf("-n l/2 -t merged wrong: %q", merged.String())
+	}
+
+	// --elide-empty-files suppresses empty files for line-chunks.
+	dir2c := t.TempDir()
+	if _, _, code := runTool(t, dir2c, "x\n", "-n", "l/3", "-e"); code != 0 {
+		t.Fatal("split -n l/3 -e failed")
+	}
+	got2c := listFiles(t, dir2c)
+	if len(got2c) != 1 || got2c[0] != "xaa" {
+		t.Fatalf("-n l/3 -e files: %v", got2c)
+	}
+	if readFile(t, dir2c, "xaa") != "x\n" {
+		t.Errorf("-n l/3 -e wrong contents: %q", readFile(t, dir2c, "xaa"))
+	}
+
 	// Unsupported chunk forms fail loudly.
 	_, errb, code := runTool(t, "", "x", "-n", "2/4")
 	if code != 2 || !strings.Contains(errb, "not supported") {

@@ -160,7 +160,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if code >= 0 {
 			return code
 		}
-		err = splitChunks(in, out, n, byLines, *elideEmpty)
+		err = splitChunks(in, out, n, byLines, *elideEmpty, []byte(*separator))
 	default:
 		lines := int64(1000)
 		if fs.Changed("lines") {
@@ -489,7 +489,7 @@ func splitLineBytes(in io.Reader, out *outFiles, perFile int64, sepStr string) e
 	}
 }
 
-func splitChunks(in io.Reader, out *outFiles, n int64, byLines, elideEmpty bool) error {
+func splitChunks(in io.Reader, out *outFiles, n int64, byLines, elideEmpty bool, separator []byte) error {
 	data, err := io.ReadAll(in)
 	if err != nil {
 		return err
@@ -516,45 +516,55 @@ func splitChunks(in io.Reader, out *outFiles, n int64, byLines, elideEmpty bool)
 		}
 		return nil
 	}
+	if len(separator) == 0 {
+		separator = []byte{'\n'}
+	}
 	chunk := size / n
 	if chunk == 0 {
 		chunk = 1
+	}
+	if size == 0 {
+		if elideEmpty {
+			return nil
+		}
+		for i := int64(0); i < n; i++ {
+			if err := out.nextFile(); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if err := out.nextFile(); err != nil {
 		return err
 	}
 	cur := int64(0)
 	var pos int64
-	var fileStarted bool
 	for pos < size {
 		nl := int64(-1)
-		if i := bytes.IndexByte(data[pos:], '\n'); i >= 0 {
-			nl = pos + int64(i)
+		if i := bytes.Index(data[pos:], separator); i >= 0 {
+			nl = pos + int64(i) + int64(len(separator))
 		}
 		end := size
 		if nl >= 0 {
-			end = nl + 1
+			end = nl
 		}
-		if !fileStarted {
-			out.write(data[pos:end])
-			fileStarted = true
-		} else {
-			if err := out.write(data[pos:end]); err != nil {
-				return err
-			}
+		if err := out.write(data[pos:end]); err != nil {
+			return err
 		}
 		pos = end
-		for cur < n-1 && pos >= (cur+1)*chunk {
+		for cur < n-1 && pos < size && pos >= (cur+1)*chunk {
 			cur++
 			if err := out.nextFile(); err != nil {
 				return err
 			}
 		}
 	}
-	for cur < n-1 {
-		cur++
-		if err := out.nextFile(); err != nil {
-			return err
+	if !elideEmpty {
+		for cur < n-1 {
+			cur++
+			if err := out.nextFile(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
