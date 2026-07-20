@@ -234,11 +234,19 @@ func TestLnInteractiveAcceptsAndDeclines(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "new")
 	write(t, filepath.Join(dir, "dest"), "old")
-	_, errb, code := runToolIn(t, dir, "n\n", "-i", "src", "dest")
+	_, errb, code := runToolIn(t, dir, "", "-i", "src", "dest")
+	if code != 0 || !strings.Contains(errb, "replace 'dest'?") || strings.Contains(errb, "cannot read response") {
+		t.Fatalf("ln -i default EOF: code=%d err=%q", code, errb)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "dest"))
+	if string(got) != "old" {
+		t.Errorf("declined replacement content=%q", got)
+	}
+	_, errb, code = runToolIn(t, dir, "n\n", "-i", "src", "dest")
 	if code != 0 || !strings.Contains(errb, "replace 'dest'?") {
 		t.Fatalf("ln -i decline: code=%d err=%q", code, errb)
 	}
-	got, _ := os.ReadFile(filepath.Join(dir, "dest"))
+	got, _ = os.ReadFile(filepath.Join(dir, "dest"))
 	if string(got) != "old" {
 		t.Errorf("declined replacement content=%q", got)
 	}
