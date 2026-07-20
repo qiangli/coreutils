@@ -45,16 +45,17 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.Bool("no-preserve-root", false, "do not treat '/' specially (the default)")
 	reference := fs.String("reference", "", "use RFILE's mode instead of MODE")
 	fs.Bool("dereference", false, "affect the referent of each symbolic link (the default)")
-	noDereference := fs.Bool("no-dereference", false, "do not affect the referent of symbolic links")
-	noTraverse := fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
-	cmdLineH := fs.BoolP("H", "H", false, "follow command-line symbolic links (with -R)")
-	followL := fs.BoolP("L", "L", false, "follow every symbolic link encountered (with -R)")
+	fs.Bool("no-dereference", false, "do not affect the referent of symbolic links")
+	fs.BoolP("P", "P", false, "never follow symbolic links (with -R)")
+	fs.BoolP("H", "H", false, "follow command-line symbolic links (with -R)")
+	fs.BoolP("L", "L", false, "follow every symbolic link encountered (with -R)")
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
 	}
 
 	isSilent := *silent || isBool(fs, "quiet")
+	noDereference, cmdLineH, followAll := derefFlags(rest, *recursive)
 
 	if *reference != "" {
 		if modeArg != "" {
@@ -74,7 +75,7 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Err, "chmod: invalid mode from reference: '%s'\n", refMode)
 			return 1
 		}
-		return apply(rc, change, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference, *noTraverse, *cmdLineH, *followL || isBool(fs, "dereference"))
+		return apply(rc, change, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot, noDereference, false, cmdLineH, followAll)
 	}
 	if modeArg != "" {
 		operands = append([]string{modeArg}, operands...)
@@ -90,7 +91,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "chmod: invalid mode: '%s'\n", operands[0])
 		return 1
 	}
-	return apply(rc, change, operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, *noDereference, *noTraverse, *cmdLineH, *followL || isBool(fs, "dereference"))
+	return apply(rc, change, operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, noDereference, false, cmdLineH, followAll)
 }
 
 func isBool(fs interface{ GetBool(string) (bool, error) }, name string) bool {
@@ -125,6 +126,33 @@ func isModeBody(s string) bool {
 		}
 	}
 	return true
+}
+
+// derefFlags returns the effective symlink policy after chmod's
+// order-sensitive dereference options have been applied.
+func derefFlags(args []string, recursive bool) (noDereference, cmdLineH, followAll bool) {
+	mode := byte('L')
+	if recursive {
+		mode = 'P'
+	}
+	for _, a := range args {
+		switch {
+		case a == "--":
+			return mode == 'P', mode == 'H', mode == 'L'
+		case a == "--dereference":
+			mode = 'L'
+		case a == "--no-dereference":
+			mode = 'P'
+		case len(a) > 1 && a[0] == '-' && a[1] != '-':
+			for _, c := range a[1:] {
+				switch c {
+				case 'H', 'L', 'P':
+					mode = byte(c)
+				}
+			}
+		}
+	}
+	return mode == 'P', mode == 'H', mode == 'L'
 }
 
 const (
