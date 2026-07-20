@@ -112,6 +112,9 @@ func TestFastSortByteIdentical(t *testing.T) {
 		{"-k3n", "-k1,1"},
 		{"-t", " ", "-k2"},
 		{"-f"},
+		{"-df"},
+		{"-if"},
+		{"-k2df"},
 		{"-b", "-k2"},
 	}
 	sizes := []int{500, 60_000} // below and above parallelMinLines

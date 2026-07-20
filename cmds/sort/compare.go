@@ -7,9 +7,7 @@ package sortcmd
 //   - humanCompare implements -h: sign first, then SI suffix order.
 //   - monthCompare implements -M: three-letter month abbreviation order.
 //   - versionCompare implements -V: natural comparison of version strings.
-//   - dictCompare implements -d: blanks and alphanumerics only.
-//   - ignoreNPCompare implements -i: skip non-printing characters.
-//   - foldCompare implements -f: bytewise after ASCII upcasing.
+//   - textKeyCompare composes -d, -f, and -i for bytewise text keys.
 
 import (
 	"math"
@@ -141,54 +139,30 @@ func upperByte(c byte) byte {
 	return c
 }
 
-func foldCompare(a, b string) int {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
+func textKeyCompare(a, b string, o keyOpts) int {
+	if !o.dict && !o.ignoreNP && !o.fold {
+		return strings.Compare(a, b)
 	}
-	for i := 0; i < n; i++ {
-		ca, cb := upperByte(a[i]), upperByte(b[i])
-		if ca != cb {
-			if ca < cb {
-				return -1
-			}
-			return 1
-		}
-	}
-	return cmpInt(len(a), len(b))
+	return strings.Compare(normalizeTextKey(a, o), normalizeTextKey(b, o))
 }
 
-func stripNonDict(s string) string {
+func normalizeTextKey(s string, o keyOpts) string {
 	b := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if c == ' ' || c == '\t' || (c >= '0' && c <= '9') ||
-			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
-			b = append(b, c)
+		if o.dict && !(c == ' ' || c == '\t' || (c >= '0' && c <= '9') ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+			continue
 		}
+		if o.ignoreNP && (c < 32 || c > 126) {
+			continue
+		}
+		if o.fold {
+			c = upperByte(c)
+		}
+		b = append(b, c)
 	}
 	return string(b)
-}
-
-func dictCompare(a, b string) int {
-	return strings.Compare(stripNonDict(a), stripNonDict(b))
-}
-
-// stripNonPrinting drops characters that are non-printable in the C
-// locale (isprint(3): 0x20–0x7E). Tab and control bytes take no part
-// in -i comparisons; newline never appears inside a line.
-func stripNonPrinting(s string) string {
-	b := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c >= 32 && c <= 126 {
-			b = append(b, c)
-		}
-	}
-	return string(b)
-}
-
-func ignoreNPCompare(a, b string) int {
-	return strings.Compare(stripNonPrinting(a), stripNonPrinting(b))
 }
 
 var months = map[string]int{
@@ -200,26 +174,14 @@ var months = map[string]int{
 func monthOrder(a, b string) int {
 	ua := strings.ToUpper(strings.TrimLeft(a, " \t"))
 	ub := strings.ToUpper(strings.TrimLeft(b, " \t"))
-	if len(ua) >= 3 && len(ub) >= 3 {
-		ma, oka := months[ua[:3]]
-		mb, okb := months[ub[:3]]
-		if oka && okb {
-			if ma < mb {
-				return -1
-			}
-			if ma > mb {
-				return 1
-			}
-			return 0
-		}
-		if oka && !okb {
-			return -1
-		}
-		if !oka && okb {
-			return 1
-		}
+	ma, mb := 0, 0
+	if len(ua) >= 3 {
+		ma = months[ua[:3]]
 	}
-	return 0
+	if len(ub) >= 3 {
+		mb = months[ub[:3]]
+	}
+	return cmpInt(ma, mb)
 }
 
 func monthCompare(a, b string) int {
@@ -333,11 +295,52 @@ func generalNumParse(s string) (float64, bool) {
 	if len(t) >= 4 && (t[:4] == "-inf" || t[:4] == "-Inf" || t[:4] == "-INF") {
 		return math.Inf(-1), true
 	}
-	v, err := strconv.ParseFloat(t, 64)
+	end, ok := generalNumPrefix(t)
+	if !ok {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(t[:end], 64)
 	if err != nil {
 		return 0, false
 	}
 	return v, true
+}
+
+func generalNumPrefix(s string) (int, bool) {
+	i := 0
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	digits := 0
+	for i < len(s) && isDigit(s[i]) {
+		i++
+		digits++
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && isDigit(s[i]) {
+			i++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return 0, false
+	}
+	end := i
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		j := i + 1
+		if j < len(s) && (s[j] == '+' || s[j] == '-') {
+			j++
+		}
+		expStart := j
+		for j < len(s) && isDigit(s[j]) {
+			j++
+		}
+		if j > expStart {
+			end = j
+		}
+	}
+	return end, true
 }
 
 func generalNumCompare(a, b string) int {

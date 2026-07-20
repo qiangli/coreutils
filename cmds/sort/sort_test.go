@@ -320,6 +320,98 @@ func TestSortNewFlags(t *testing.T) {
 	}
 }
 
+func TestSortComposesTextOrderingModifiers(t *testing.T) {
+	cases := []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+	}{
+		{
+			name:  "ignore nonprinting with fold",
+			stdin: "a-b\nAB\nAb\na\x01c\nac\n",
+			args:  []string{"-if"},
+			want:  "a-b\nAB\nAb\na\x01c\nac\n",
+		},
+		{
+			name:  "dictionary with fold",
+			stdin: "b-c\nAB\nac\n",
+			args:  []string{"-df"},
+			want:  "AB\nac\nb-c\n",
+		},
+		{
+			name:  "dictionary ignores punctuation before folding",
+			stdin: "a-b\nA+C\n",
+			args:  []string{"-df"},
+			want:  "a-b\nA+C\n",
+		},
+		{
+			name:  "per-key text modifiers compose",
+			stdin: "x b-c\ny AB\nz ac\n",
+			args:  []string{"-k2,2df"},
+			want:  "y AB\nz ac\nx b-c\n",
+		},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, c.stdin, c.args...)
+		if out != c.want || code != 0 {
+			t.Errorf("%s: sort %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
+		}
+	}
+}
+
+func TestSortMonthUnknownBeforeMonths(t *testing.T) {
+	out, errb, code := runTool(t, "JAN\nfoo\nFEB\nbar\n", "-M")
+	if out != "bar\nfoo\nJAN\nFEB\n" || code != 0 {
+		t.Fatalf("sort -M = (%q, %q, %d), want unknown names before months", out, errb, code)
+	}
+
+	out, errb, code = runTool(t, "x JAN\ny foo\nz FEB\n", "-k2,2M")
+	if out != "y foo\nx JAN\nz FEB\n" || code != 0 {
+		t.Fatalf("sort -k2,2M = (%q, %q, %d), want unknown key before month keys", out, errb, code)
+	}
+}
+
+func TestSortGeneralNumericUsesNumericPrefix(t *testing.T) {
+	cases := []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+	}{
+		{
+			name:  "whole line prefix",
+			stdin: "2x\n10\n1e2foo\nabc\n",
+			args:  []string{"-g"},
+			want:  "abc\n2x\n10\n1e2foo\n",
+		},
+		{
+			name:  "invalid exponent keeps mantissa",
+			stdin: "2\n1e\n3\n",
+			args:  []string{"-g"},
+			want:  "1e\n2\n3\n",
+		},
+		{
+			name:  "key prefix",
+			stdin: "x 2x\ny 10\nz 1e2foo\nw abc\n",
+			args:  []string{"-k2,2g"},
+			want:  "w abc\nx 2x\ny 10\nz 1e2foo\n",
+		},
+		{
+			name:  "signed fraction and exponent prefixes",
+			stdin: "+.5tail\n-2suffix\n1e+1rest\n",
+			args:  []string{"-g"},
+			want:  "-2suffix\n+.5tail\n1e+1rest\n",
+		},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, c.stdin, c.args...)
+		if out != c.want || code != 0 {
+			t.Errorf("%s: sort %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
+		}
+	}
+}
+
 // TestSortMerge pins POSIX -m: "merge only; the input files shall be
 // assumed to be already sorted". Merging is a true k-way interleave of
 // the sorted runs (not a concatenation, not a full re-sort), honoring
