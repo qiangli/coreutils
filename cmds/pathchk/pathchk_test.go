@@ -86,3 +86,51 @@ func TestPathchkAllowsMissingDirectoryPrefix(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, errText)
 	}
 }
+
+func TestPathchkSpecialAlsoChecksFilesystemPrefixes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, errText := runPathchk(t, dir, "-P", "file/child")
+	if code != 1 || !strings.Contains(errText, "not a directory") {
+		t.Fatalf("code=%d stderr=%q", code, errText)
+	}
+}
+
+func TestPathchkPosixPathLimitIncludesTerminator(t *testing.T) {
+	// _POSIX_PATH_MAX (256) counts the terminating NUL, so a pathname of
+	// exactly posixPathMax characters is already too long under -p. Use
+	// single-character components so the component-length limit (14) does
+	// not fire first.
+	atLimit := strings.Repeat("a/", posixPathMax/2)
+	if len(atLimit) != posixPathMax {
+		t.Fatalf("test setup: len=%d, want %d", len(atLimit), posixPathMax)
+	}
+	code, errText := runPathchk(t, t.TempDir(), "-p", atLimit)
+	if code != 1 || !strings.Contains(errText, "exceeds POSIX limit") {
+		t.Fatalf("at limit: code=%d stderr=%q", code, errText)
+	}
+
+	belowLimit := atLimit[:len(atLimit)-1] // 255 bytes
+	code, errText = runPathchk(t, t.TempDir(), "-p", belowLimit)
+	if code != 0 || errText != "" {
+		t.Fatalf("below limit: code=%d stderr=%q", code, errText)
+	}
+}
+
+func TestPathchkDefaultPathLimitIncludesTerminator(t *testing.T) {
+	limit := defaultPathMax()
+	pathAtLimit := strings.Repeat("a/", limit/2)
+	code, errText := runPathchk(t, t.TempDir(), pathAtLimit)
+	if code != 1 || !strings.Contains(errText, "exceeds limit") {
+		t.Fatalf("code=%d stderr=%q", code, errText)
+	}
+
+	pathBelowLimit := pathAtLimit[:len(pathAtLimit)-1]
+	code, errText = runPathchk(t, t.TempDir(), pathBelowLimit)
+	if code != 0 || errText != "" {
+		t.Fatalf("code=%d stderr=%q", code, errText)
+	}
+}

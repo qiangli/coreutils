@@ -44,7 +44,10 @@ func run(rc *tool.RunContext, args []string) int {
 		if *portability || *special {
 			ok = checkSpecial(rc, p) && ok
 		}
-		if !*portability && !*posix && !*special {
+		// -P adds the special portability checks to the ordinary
+		// filesystem checks. Only -p (and --portability, which includes it)
+		// replaces those checks with the POSIX portability limits.
+		if !*portability && !*posix {
 			ok = checkDefault(rc, p) && ok
 		}
 		if !ok {
@@ -60,12 +63,10 @@ func checkDefault(rc *tool.RunContext, p string) bool {
 		// neither the default checks nor -p diagnose an empty operand.
 		return true
 	}
-	limit := 4096
+	limit := defaultPathMax()
 	nameLimit := 255
-	if runtime.GOOS == "windows" {
-		limit = 260
-	}
-	if len(p) > limit {
+	// PATH_MAX includes the terminating NUL byte, unlike NAME_MAX.
+	if len(p) >= limit {
 		fmt.Fprintf(rc.Err, "pathchk: path %q has length %d; exceeds limit %d\n", p, len(p), limit)
 		return false
 	}
@@ -80,6 +81,17 @@ func checkDefault(rc *tool.RunContext, p string) bool {
 		return false
 	}
 	return true
+}
+
+func defaultPathMax() int {
+	switch runtime.GOOS {
+	case "windows":
+		return 260
+	case "darwin", "dragonfly", "freebsd", "ios", "netbsd", "openbsd":
+		return 1024
+	default:
+		return 4096
+	}
 }
 
 // invalidDirectoryPrefix checks existing prefixes from the root down. Once a
@@ -123,7 +135,10 @@ func checkPOSIX(rc *tool.RunContext, p string) bool {
 	if p == "" {
 		return true
 	}
-	if len(p) > posixPathMax {
+	// _POSIX_PATH_MAX counts the terminating NUL byte, so a pathname of
+	// exactly posixPathMax characters needs posixPathMax+1 bytes of storage
+	// and is already too long. _POSIX_NAME_MAX, checked below, does not.
+	if len(p) >= posixPathMax {
 		fmt.Fprintf(rc.Err, "pathchk: path %q has length %d; exceeds POSIX limit %d\n", p, len(p), posixPathMax)
 		return false
 	}
