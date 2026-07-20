@@ -18,12 +18,16 @@ func listMounts() ([]mountEntry, error) {
 	for i := 0; i < n; i++ {
 		st := &buf[i]
 		bs := uint64(st.Bsize)
+		used := uint64(0)
+		if st.Blocks > st.Bfree {
+			used = (st.Blocks - st.Bfree) * bs
+		}
 		out = append(out, mountEntry{
 			device: unix.ByteSliceToString(st.Mntfromname[:]),
 			point:  unix.ByteSliceToString(st.Mntonname[:]),
 			fstype: unix.ByteSliceToString(st.Fstypename[:]),
 			total:  st.Blocks * bs,
-			used:   (st.Blocks - st.Bfree) * bs,
+			used:   used,
 			avail:  uint64(st.Bavail) * bs,
 			files:  st.Files,
 			ifree:  st.Ffree,

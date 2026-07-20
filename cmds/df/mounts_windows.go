@@ -38,12 +38,16 @@ func listMounts() ([]mountEntry, error) {
 		if err := windows.GetDiskFreeSpaceEx(p, &availCaller, &total, &totalFree); err != nil {
 			continue
 		}
+		used := uint64(0)
+		if total > totalFree {
+			used = total - totalFree
+		}
 		out = append(out, mountEntry{
 			device: root[:2],
 			point:  root,
 			fstype: "fixed",
 			total:  total,
-			used:   total - totalFree,
+			used:   used,
 			avail:  availCaller,
 		})
 	}
