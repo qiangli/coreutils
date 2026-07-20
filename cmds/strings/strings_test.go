@@ -36,11 +36,12 @@ func TestStrings(t *testing.T) {
 		{"default min 4", "\x00abc\x01hello\x02hi\x00", nil, "hello\n"},
 		{"min 2", "\x00abc\x01hi\x00z\x00", []string{"-n", "2"}, "abc\nhi\n"},
 		{"string at eof", "\x00world", nil, "world\n"},
-		{"tab is printable", "\x00ab\tcd\x00", []string{"-n", "5"}, "ab\tcd\n"},
+		{"space is printable", "\x00ab cd\x00", []string{"-n", "5"}, "ab cd\n"},
 		{"newline terminates", "abcd\nefgh\n", nil, "abcd\nefgh\n"},
 		{"offsets decimal", "\x00\x00cool\x00", []string{"-t", "d"}, "      2 cool\n"},
 		{"offsets hex", strings.Repeat("\x00", 16) + "cool", []string{"-t", "x"}, "     10 cool\n"},
 		{"offsets octal", strings.Repeat("\x00", 8) + "cool", []string{"-t", "o"}, "     10 cool\n"},
+		{"tab is not printable", "\x00ab\tcd\x00", []string{"-n", "5"}, ""},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, "", c.stdin, c.args...)
@@ -65,6 +66,13 @@ func TestStringsFiles(t *testing.T) {
 	want := "      1 first\n      8 second\n      1 first\n      8 second\n"
 	if out != want {
 		t.Errorf("two files offsets: got %q, want %q", out, want)
+	}
+}
+
+func TestStringsDashStdin(t *testing.T) {
+	out, errb, code := runTool(t, "", "abc\x00def", "-n", "3", "-")
+	if errb != "" || code != 0 || out != "abc\ndef\n" {
+		t.Errorf("dash stdin: (%q, %q, %d), want (%q, _, 0)", out, errb, code, "abc\ndef\n")
 	}
 }
 
