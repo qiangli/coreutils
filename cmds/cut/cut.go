@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -37,6 +38,8 @@ type rangePair struct{ lo, hi int }
 type cutter struct {
 	pairs               []rangePair
 	complement          bool
+	charMode            bool
+	noSplit             bool
 	fieldMode           bool
 	delim               byte
 	onlyDelimited       bool
@@ -58,7 +61,7 @@ func run(rc *tool.RunContext, args []string) int {
 	onlyDelimited := fs.BoolP("only-delimited", "s", false, "do not print lines not containing delimiters")
 	outputDelimiter := fs.StringP("output-delimiter", "O", "", "use STRING as the output delimiter")
 	zeroTerminated := fs.BoolP("zero-terminated", "z", false, "line delimiter is NUL, not newline")
-	fs.BoolP("ignored-n", "n", false, "do not split multi-byte characters (ignored)")
+	noSplit := fs.BoolP("ignored-n", "n", false, "do not split multi-byte characters")
 	whitespaceDelimited := fs.BoolP("whitespace-delimited", "w", false, "use any consecutive spaces and/or tabs as the field delimiter")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
@@ -69,13 +72,17 @@ func run(rc *tool.RunContext, args []string) int {
 	nmodes := 0
 	var list string
 	fieldMode := false
+	charMode := false
+	byteMode := false
 	if fs.Changed("bytes") {
 		nmodes++
 		list = *bytesList
+		byteMode = true
 	}
 	if fs.Changed("characters") {
 		nmodes++
 		list = *charsList
+		charMode = true
 	}
 	if fs.Changed("fields") {
 		nmodes++
@@ -141,6 +148,8 @@ func run(rc *tool.RunContext, args []string) int {
 	c := &cutter{
 		pairs:               pairs,
 		complement:          *complement,
+		charMode:            charMode,
+		noSplit:             byteMode && *noSplit,
 		fieldMode:           fieldMode,
 		delim:               delimByte,
 		onlyDelimited:       *onlyDelimited,
@@ -485,6 +494,15 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 		return
 	}
 
+	if c.charMode {
+		c.emitChars(line, hadNL, out)
+		return
+	}
+	if c.noSplit {
+		c.emitBytesNoSplit(line, hadNL, out)
+		return
+	}
+
 	c.scratch = c.scratch[:0]
 	printDelim := false
 	for _, p := range c.pairs {
@@ -508,6 +526,128 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 	if len(c.scratch) > 0 {
 		out.Write(c.scratch)
 	}
+}
+
+func (c *cutter) emitChars(line []byte, hadNL bool, out *bufio.Writer) {
+	spans := utf8Spans(line)
+	c.scratch = c.scratch[:0]
+	printDelim := false
+	for _, p := range c.pairs {
+		if p.lo > len(spans) {
+			break
+		}
+		end := p.hi
+		if end > len(spans) {
+			end = len(spans)
+		}
+		if printDelim {
+			c.scratch = append(c.scratch, c.outDelim...)
+		} else if c.hasOutDelim {
+			printDelim = true
+		}
+		startByte := spans[p.lo-1].start
+		endByte := spans[end-1].end
+		c.scratch = append(c.scratch, line[startByte:endByte]...)
+	}
+	if hadNL {
+		c.scratch = append(c.scratch, c.lineTerm)
+	}
+	if len(c.scratch) > 0 {
+		out.Write(c.scratch)
+	}
+}
+
+func (c *cutter) emitBytesNoSplit(line []byte, hadNL bool, out *bufio.Writer) {
+	spans := utf8Spans(line)
+	c.scratch = c.scratch[:0]
+	printDelim := false
+	for _, p := range c.pairs {
+		start, end, ok := adjustNoSplitRange(spans, len(line), p)
+		if !ok {
+			continue
+		}
+		if printDelim {
+			c.scratch = append(c.scratch, c.outDelim...)
+		} else if c.hasOutDelim {
+			printDelim = true
+		}
+		c.scratch = append(c.scratch, line[start:end]...)
+	}
+	if hadNL {
+		c.scratch = append(c.scratch, c.lineTerm)
+	}
+	if len(c.scratch) > 0 {
+		out.Write(c.scratch)
+	}
+}
+
+type byteSpan struct {
+	start int
+	end   int
+}
+
+func utf8Spans(line []byte) []byteSpan {
+	spans := make([]byteSpan, 0, len(line))
+	for i := 0; i < len(line); {
+		_, size := utf8.DecodeRune(line[i:])
+		if size <= 0 {
+			size = 1
+		}
+		spans = append(spans, byteSpan{start: i, end: i + size})
+		i += size
+	}
+	return spans
+}
+
+func adjustNoSplitRange(spans []byteSpan, lineLen int, p rangePair) (int, int, bool) {
+	if lineLen == 0 || p.lo > lineLen {
+		return 0, 0, false
+	}
+	lo := p.lo - 1
+	if lo < 0 {
+		lo = 0
+	}
+	hi := p.hi
+	if hi > lineLen {
+		hi = lineLen
+	}
+	if hi < p.lo {
+		return 0, 0, false
+	}
+
+	loSpan := spanContaining(spans, lo)
+	if loSpan < 0 {
+		return 0, 0, false
+	}
+	lo = spans[loSpan].start
+
+	hiIdx := hi - 1
+	hiSpan := spanContaining(spans, hiIdx)
+	if hiSpan < 0 {
+		return 0, 0, false
+	}
+	if hiIdx != spans[hiSpan].end-1 {
+		if hiSpan == 0 {
+			return 0, 0, false
+		}
+		hi = spans[hiSpan-1].end
+	} else {
+		hi = spans[hiSpan].end
+	}
+	if lo >= hi {
+		return 0, 0, false
+	}
+	return lo, hi, true
+}
+
+func spanContaining(spans []byteSpan, idx int) int {
+	i := sort.Search(len(spans), func(i int) bool {
+		return spans[i].end > idx
+	})
+	if i < len(spans) && spans[i].start <= idx {
+		return i
+	}
+	return -1
 }
 
 func splitWhitespace(line []byte) [][]byte {
