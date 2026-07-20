@@ -102,6 +102,26 @@ func TestCsplitSuffixSuppressRepeatAndElideEmpty(t *testing.T) {
 	assertFile(t, dir, "xx002.out", "c\n")
 }
 
+func TestCsplitSuffixIntegerAliases(t *testing.T) {
+	dir := t.TempDir()
+	stdout, errb, code := runTool(t, dir, "a\nb\n", "-s", "-b", "%03i", "-", "2")
+	if code != 0 || stdout != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout, errb)
+	}
+	assertFile(t, dir, "xx000", "a\n")
+	assertFile(t, dir, "xx001", "b\n")
+}
+
+func TestCsplitZeroRepeatIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	stdout, errb, code := runTool(t, dir, "a\nb\nc\n", "-s", "-", "2", "{0}")
+	if code != 0 || stdout != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout, errb)
+	}
+	assertFile(t, dir, "xx00", "a\n")
+	assertFile(t, dir, "xx01", "b\nc\n")
+}
+
 func TestCsplitElidesEmptyInitialPiece(t *testing.T) {
 	dir := t.TempDir()
 	stdout, errb, code := runTool(t, dir, "match\nbody\n", "-s", "-z", "-", "/match/")
@@ -127,6 +147,14 @@ func TestCsplitErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "line number out of range") {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
+	_, errb, code = runTool(t, t.TempDir(), "a\n", "-b", "%s", "-", "/a/")
+	if code != 2 || !strings.Contains(errb, "requires one integer conversion") {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, t.TempDir(), "a\n", "-b", "%d-%d", "-", "/a/")
+	if code != 2 || !strings.Contains(errb, "requires one integer conversion") {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
 }
 
 func assertFile(t *testing.T, dir, name, want string) {
@@ -140,8 +168,7 @@ func assertFile(t *testing.T, dir, name, want string) {
 	}
 }
 
-// POSIX: a repeated line-number pattern advances by N lines each round
-// (verified against BSD/GNU csplit: pieces 1-2 / 3-5 / rest).
+// POSIX: a repeated line-number pattern advances by N lines each round.
 func TestCsplitLineNumberRepeatAdvances(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n"), 0o644); err != nil {

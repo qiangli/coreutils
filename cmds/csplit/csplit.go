@@ -62,7 +62,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if format == "" {
 		format = "%0" + strconv.Itoa(*digits) + "d"
 	}
-	if _, err := formatSuffix(format, 0); err != nil {
+	if err := validateSuffixFormat(format); err != nil {
 		return tool.UsageError(rc, cmd, "invalid suffix format '%s': %v", format, err)
 	}
 
@@ -372,15 +372,91 @@ func writePiece(rc *tool.RunContext, lines []string, prefix, suffixFormat string
 }
 
 func formatSuffix(format string, seq int) (suffix string, err error) {
+	if err := validateSuffixFormat(format); err != nil {
+		return "", err
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			suffix = ""
 			err = fmt.Errorf("requires one integer conversion")
 		}
 	}()
-	suffix = fmt.Sprintf(format, seq)
+	suffix = fmt.Sprintf(goSuffixFormat(format), seq)
 	if strings.Contains(suffix, "%!") {
 		return "", fmt.Errorf("requires one integer conversion")
 	}
 	return suffix, nil
+}
+
+func goSuffixFormat(format string) string {
+	var b strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			b.WriteByte(format[i])
+			continue
+		}
+		if i+1 < len(format) && format[i+1] == '%' {
+			b.WriteString("%%")
+			i++
+			continue
+		}
+		b.WriteByte(format[i])
+		for i++; i < len(format); i++ {
+			c := format[i]
+			if c == 'i' || c == 'u' {
+				b.WriteByte('d')
+				break
+			}
+			b.WriteByte(c)
+			if strings.ContainsRune("doxX", rune(c)) {
+				break
+			}
+		}
+	}
+	return b.String()
+}
+
+// validateSuffixFormat accepts the printf subset specified by csplit: one
+// integer conversion, with optional flags, width, and precision. A literal
+// percent (%%) does not count as a conversion.
+func validateSuffixFormat(format string) error {
+	conversions := 0
+	for i := 0; i < len(format); {
+		if format[i] != '%' {
+			i++
+			continue
+		}
+		i++
+		if i == len(format) {
+			return fmt.Errorf("requires one integer conversion")
+		}
+		if format[i] == '%' {
+			i++
+			continue
+		}
+		if conversions != 0 {
+			return fmt.Errorf("requires one integer conversion")
+		}
+		conversions++
+		for i < len(format) && strings.ContainsRune("#0- +", rune(format[i])) {
+			i++
+		}
+		for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+			i++
+		}
+		if i < len(format) && format[i] == '.' {
+			i++
+			for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				i++
+			}
+		}
+		if i == len(format) || !strings.ContainsRune("diuoxX", rune(format[i])) {
+			return fmt.Errorf("requires one integer conversion")
+		}
+		i++
+	}
+	if conversions != 1 {
+		return fmt.Errorf("requires one integer conversion")
+	}
+	return nil
 }
