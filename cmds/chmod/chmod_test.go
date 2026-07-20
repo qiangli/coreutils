@@ -253,6 +253,68 @@ func TestChmodNoDereferenceSkipsSymlinkOperand(t *testing.T) {
 	}
 }
 
+func TestChmodDefaultDereferencesSymlinkOperand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "target"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "u+x", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod symlink operand: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "target"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o744 {
+		t.Fatalf("target mode=%#o want 0744", fi.Mode().Perm())
+	}
+}
+
+func TestChmodDereferenceOptionsLastWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "target"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "--no-dereference", "--dereference", "u+x", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod --dereference last: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "target"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o744 {
+		t.Fatalf("target mode after --dereference last=%#o want 0744", fi.Mode().Perm())
+	}
+	if err := os.Chmod(filepath.Join(dir, "target"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir, "--dereference", "--no-dereference", "u+x", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod --no-dereference last: code=%d err=%q", code, errb)
+	}
+	fi, err = os.Stat(filepath.Join(dir, "target"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("target mode after --no-dereference last=%#o want 0644", fi.Mode().Perm())
+	}
+}
+
 func TestChmodRecursiveSymlinkTraversalFlags(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod is unix-only")
@@ -289,6 +351,48 @@ func TestChmodRecursiveSymlinkTraversalFlags(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o744 {
 		t.Fatalf("-H did not follow command-line symlink: mode=%#o", fi.Mode().Perm())
+	}
+}
+
+func TestChmodRecursiveTraversalOptionsLastWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(dir, "target", "child")
+	if err := os.WriteFile(child, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "linkdir")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "-R", "-P", "-H", "u+x", "linkdir")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod -P -H: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o744 {
+		t.Fatalf("-H last did not follow command-line symlink: mode=%#o", fi.Mode().Perm())
+	}
+	if err := os.Chmod(child, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir, "-R", "-H", "-P", "u+x", "linkdir")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod -H -P: code=%d err=%q", code, errb)
+	}
+	fi, err = os.Stat(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("-P last followed command-line symlink: mode=%#o", fi.Mode().Perm())
 	}
 }
 
