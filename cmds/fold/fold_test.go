@@ -29,6 +29,26 @@ func TestFoldWidthRunes(t *testing.T) {
 	}
 }
 
+func TestFoldFirstWideUnitPreservesLeadingBreak(t *testing.T) {
+	out, stderr, code := runFold(t, "\tCajkKP", "-w", "1")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "\n\t\nC\na\nj\nk\nK\nP"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldWideUnitAfterTextDoesNotAddEmptySegment(t *testing.T) {
+	out, stderr, code := runFold(t, "a\t", "-w", "1")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "a\n\t"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestFoldSpacesAndFile(t *testing.T) {
 	dir := t.TempDir()
 	name := filepath.Join(dir, "in.txt")
@@ -126,6 +146,26 @@ func TestFoldBytesCountsControlCharsAsOne(t *testing.T) {
 	}
 }
 
+func TestFoldBytesPreservesUtf8UnitsAtSmallWidth(t *testing.T) {
+	out, stderr, code := runFold(t, "界界", "-w", "1", "-b")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "\n界\n界"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestFoldBytesWideUnitAfterTextDoesNotAddEmptySegment(t *testing.T) {
+	out, stderr, code := runFold(t, "a界", "-w", "1", "-b")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "a\n界"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestFoldCharactersKeepsUTF8RunesWhole(t *testing.T) {
 	out, stderr, code := runFold(t, "ééé\n", "-w", "2", "-c")
 	if code != 0 || stderr != "" {
@@ -166,7 +206,7 @@ func TestFoldCharactersTabStillAdvances(t *testing.T) {
 	}
 }
 
-func TestFoldBytesCanSplitUTF8(t *testing.T) {
+func TestFoldBytesCountsUTF8EncodingWidth(t *testing.T) {
 	out, stderr, code := runFold(t, "éé\n", "-w", "2", "-b")
 	if code != 0 || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
