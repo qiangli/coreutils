@@ -292,20 +292,40 @@ func normalizeBlockSizeArgs(args []string) []string {
 			out = append(out, args[i:]...)
 			break
 		}
-		if len(a) > 2 && strings.HasPrefix(a, "-B") && !strings.HasPrefix(a, "--") {
-			out = append(out, "--block-size="+a[2:])
-			continue
+		if len(a) > 2 && a[0] == '-' && a[1] != '-' {
+			if idx := strings.IndexByte(a[1:], 'B'); idx >= 0 {
+				idx++
+				if idx < len(a)-1 {
+					if idx > 1 {
+						out = append(out, "-"+a[1:idx])
+					}
+					out = append(out, "--block-size="+a[idx+1:])
+					continue
+				}
+			}
+			if strings.Contains(a, "M") {
+				var cluster strings.Builder
+				flush := func() {
+					if cluster.Len() == 0 {
+						return
+					}
+					out = append(out, "-"+cluster.String())
+					cluster.Reset()
+				}
+				for j := 1; j < len(a); j++ {
+					if a[j] == 'M' {
+						flush()
+						out = append(out, "--block-size=1M")
+						continue
+					}
+					cluster.WriteByte(a[j])
+				}
+				flush()
+				continue
+			}
 		}
 		if a == "-M" {
 			out = append(out, "--block-size=1M")
-			continue
-		}
-		if len(a) > 2 && a[0] == '-' && a[1] != '-' && strings.Contains(a, "M") {
-			out = append(out, "--block-size=1M")
-			kept := strings.ReplaceAll(a, "M", "")
-			if kept != "-" {
-				out = append(out, kept)
-			}
 			continue
 		}
 		out = append(out, a)
