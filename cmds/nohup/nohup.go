@@ -42,20 +42,22 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	c.Dir = rc.Dir
 	c.Env = rc.Env
 	c.Stdin = rc.In
-	c.Stdout = rc.Out
-	c.Stderr = rc.Err
-	if rc.Out == nil {
+	stdout := rc.Out
+	if stdout == nil {
 		f, err := openNohupOutput(rc)
 		if err != nil {
 			fmt.Fprintf(errOut, "nohup: failed to open 'nohup.out': %v\n", err)
 			return 125
 		}
 		defer f.Close()
-		c.Stdout = f
-		if rc.Err == nil {
-			c.Stderr = f
-		}
+		stdout = f
 	}
+	stderr := rc.Err
+	if stderr == nil {
+		stderr = stdout
+	}
+	c.Stdout = stdout
+	c.Stderr = stderr
 	err := c.Run()
 	if err == nil {
 		return 0

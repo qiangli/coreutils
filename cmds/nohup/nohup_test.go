@@ -116,6 +116,25 @@ func TestNohupRedirectsTerminalEquivalentOutput(t *testing.T) {
 	}
 }
 
+func TestNohupRedirectsStderrToStdoutWhenErrIsNil(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell command differs on windows")
+	}
+	var out bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Env:   []string{"PATH=/bin:/usr/bin"},
+		Stdio: tool.Stdio{Out: &out, In: strings.NewReader("")},
+	}
+	if code := run(rc, []string{"sh", "-c", "printf out; printf err >&2"}); code != 0 {
+		t.Fatalf("code=%d out=%q", code, out.String())
+	}
+	if out.String() != "outerr" {
+		t.Fatalf("stdout=%q", out.String())
+	}
+}
+
 func TestNohupFallsBackToHomeNohupOut(t *testing.T) {
 	dir, home := t.TempDir(), t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "nohup.out"), 0o755); err != nil {
