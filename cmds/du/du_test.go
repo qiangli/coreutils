@@ -104,10 +104,14 @@ func TestApparentSizeDoesNotForceBytes(t *testing.T) {
 
 func TestBlockSizeCluster(t *testing.T) {
 	dir := t.TempDir()
-	write(t, dir, "f", "x")
+	write(t, dir, "f", strings.Repeat("x", 1536))
 	out, errb, code := runToolAt(t, dir, "-A", "-BM", "f")
 	if code != 0 || errb != "" || out != "1\tf\n" {
 		t.Fatalf("du -A -BM f = (%q, %q, %d), want 1 MiB block", out, errb, code)
+	}
+	out, errb, code = runToolAt(t, dir, "-A", "-aBM", "f")
+	if code != 0 || errb != "" || out != "1\tf\n" {
+		t.Fatalf("du -A -aBM f = (%q, %q, %d), want leading flags preserved in cluster", out, errb, code)
 	}
 }
 
