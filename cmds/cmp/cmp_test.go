@@ -130,6 +130,87 @@ func TestCmpStdinAndSkips(t *testing.T) {
 	}
 }
 
+func TestCmpIgnoreInitial(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "XXpayload")
+	writeFile(t, dir, "b", "YYpayload")
+	if _, _, code := runTool(t, dir, "", "--ignore-initial=2:2", "a", "b"); code != 0 {
+		t.Errorf("--ignore-initial equal: code=%d", code)
+	}
+	if _, _, code := runTool(t, dir, "", "-i", "1:2", "a", "b"); code != 1 {
+		t.Errorf("-i mismatch: code=%d", code)
+	}
+	// A single SKIP value applies to both files (GNU form).
+	if _, _, code := runTool(t, dir, "", "--ignore-initial=2", "a", "b"); code != 0 {
+		t.Errorf("single-value -i equal: code=%d", code)
+	}
+	if _, _, code := runTool(t, dir, "", "-i", "1", "a", "b"); code != 1 {
+		t.Errorf("single-value -i mismatch: code=%d", code)
+	}
+	_, errb, code := runTool(t, dir, "", "-i", "bad", "a", "b")
+	if code != 2 || !strings.Contains(errb, "invalid --ignore-initial value") {
+		t.Errorf("bad -i: err=%q code=%d", errb, code)
+	}
+	// Positional skip operands override a preceding -i.
+	if _, _, code := runTool(t, dir, "", "-i", "0", "a", "b", "2", "2"); code != 0 {
+		t.Errorf("positional overrides -i: code=%d", code)
+	}
+}
+
+func TestCmpPrintBytes(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "abc\n")
+	writeFile(t, dir, "b", "abd\n")
+	out, _, code := runTool(t, dir, "", "-b", "a", "b")
+	want := "a b differ: byte 3, line 1 is 143 c 144 d\n"
+	if out != want || code != 1 {
+		t.Errorf("-b: out=%q code=%d, want %q", out, code, want)
+	}
+
+	// -b in verbose mode adds the character column per line.
+	writeFile(t, dir, "v1", "abc")
+	writeFile(t, dir, "v2", "aXd")
+	out, _, code = runTool(t, dir, "", "-lb", "v1", "v2")
+	want = "2 142 b 130 X\n3 143 c 144 d\n"
+	if out != want || code != 1 {
+		t.Errorf("-lb: out=%q code=%d, want %q", out, code, want)
+	}
+
+	// Control and high-bit bytes use caret / M- notation.
+	writeFile(t, dir, "c1", "\x00")
+	writeFile(t, dir, "c2", "\xff")
+	out, _, code = runTool(t, dir, "", "-b", "c1", "c2")
+	want = "c1 c2 differ: byte 1, line 1 is   0 ^@ 377 M-^?\n"
+	if out != want || code != 1 {
+		t.Errorf("-b control: out=%q code=%d, want %q", out, code, want)
+	}
+}
+
+func TestCmpBytesLimit(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "same-prefix-a")
+	writeFile(t, dir, "b", "same-prefix-b")
+	if _, _, code := runTool(t, dir, "", "--bytes=11", "a", "b"); code != 0 {
+		t.Errorf("limited equal: code=%d", code)
+	}
+	out, errb, code := runTool(t, dir, "", "-n", "13", "a", "b")
+	if code != 1 || out == "" || errb != "" {
+		t.Errorf("limited difference: out=%q err=%q code=%d", out, errb, code)
+	}
+	writeFile(t, dir, "short", "same")
+	writeFile(t, dir, "long", "same-long")
+	if _, errb, code := runTool(t, dir, "", "-n", "4", "short", "long"); code != 0 || errb != "" {
+		t.Errorf("limit suppresses EOF: err=%q code=%d", errb, code)
+	}
+	// A multiplier suffix is accepted, as on the SKIP operands.
+	if _, _, code := runTool(t, dir, "", "--bytes=1K", "a", "b"); code != 1 {
+		t.Errorf("suffixed limit: code=%d", code)
+	}
+	if _, errb, code := runTool(t, dir, "", "--bytes=bad", "a", "b"); code != 2 || !strings.Contains(errb, "invalid --bytes value") {
+		t.Errorf("bad limit: err=%q code=%d", errb, code)
+	}
+}
+
 func TestCmpRejectsRepeatedStandardInput(t *testing.T) {
 	out, errb, code := runTool(t, "", "abc", "-", "-")
 	if code != 2 || out != "" || !strings.Contains(errb, "standard input") {
