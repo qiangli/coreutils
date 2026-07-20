@@ -120,6 +120,12 @@ func run(rc *tool.RunContext, args []string) int {
 	if *tag && *check {
 		return tool.UsageError(rc, cmd, "the --tag option is meaningless when verifying checksums")
 	}
+	if *untagged && *check {
+		return tool.UsageError(rc, cmd, "the --untagged option is meaningless when verifying checksums")
+	}
+	if *tag && fs.Changed("text") {
+		return tool.UsageError(rc, cmd, "--tag does not support --text mode")
+	}
 	if *zero && *check {
 		return tool.UsageError(rc, cmd, "the --zero option is not supported when verifying checksums")
 	}
