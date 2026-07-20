@@ -32,15 +32,20 @@ func TestDirname(t *testing.T) {
 		{[]string{"stdio.h"}, ".\n"},
 		{[]string{"/"}, "/\n"},
 		{[]string{"//"}, "/\n"},
+		{[]string{"////foo"}, "/\n"},
+		{[]string{"////////foo//bar//"}, "////////foo\n"},
 		{[]string{"/usr/"}, "/\n"},
 		{[]string{"a/b/"}, "a\n"},
 		{[]string{"a//b"}, "a\n"},
+		{[]string{"//././/"}, "//.\n"},
 		{[]string{"dir/file"}, "dir\n"},
 		// GNU does not clean: the "." component survives.
 		{[]string{"a/./b"}, "a/.\n"},
 		{[]string{""}, ".\n"},
 		// multiple operands, one line each
 		{[]string{"a/b", "/c/d", "e"}, "a\n/c\n.\n"},
+		// explicit end-of-options support for path-like names beginning with '-'
+		{[]string{"--", "-z", "-a"}, ".\n.\n"},
 		// -z: NUL terminators
 		{[]string{"-z", "a/b", "c/d"}, "a\x00c\x00"},
 		{[]string{"--zero", "a/b"}, "a\x00"},

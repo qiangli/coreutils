@@ -10,6 +10,7 @@ package dirnamecmd
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -59,21 +60,21 @@ func run(rc *tool.RunContext, args []string) int {
 // cleaning beyond that — "a/./b" yields "a/." like GNU, which is why
 // filepath.Dir (which Cleans) is not used.
 func dirOf(name string) string {
-	i := len(name)
-	for i > 0 && name[i-1] == '/' {
-		i--
-	}
-	for i > 0 && name[i-1] != '/' {
-		i--
-	}
-	for i > 0 && name[i-1] == '/' {
-		i--
-	}
-	if i == 0 {
-		if len(name) > 0 && name[0] == '/' {
-			return "/"
-		}
+	if name == "" {
 		return "."
 	}
-	return name[:i]
+
+	name = strings.TrimRight(name, "/")
+	if name == "" {
+		return "/"
+	}
+	i := strings.LastIndex(name, "/")
+	if i < 0 {
+		return "."
+	}
+	result := strings.TrimRight(name[:i], "/")
+	if result == "" {
+		return "/"
+	}
+	return result
 }
