@@ -3,6 +3,7 @@ package commcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,56 @@ func TestCommDuplicateAndEmptyLines(t *testing.T) {
 	want := "\t\t\n\t\ta\na\n\tb\n\t\tc\n\tc\n"
 	if code != 0 || errb != "" || out != want {
 		t.Errorf("comm duplicate lines = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
+type gatedReader struct {
+	first *strings.Reader
+	rest  *strings.Reader
+	allow func() bool
+}
+
+func (r *gatedReader) Read(p []byte) (int, error) {
+	if r.first.Len() > 0 {
+		return r.first.Read(p)
+	}
+	if !r.allow() {
+		return 0, errors.New("read requested before earlier output")
+	}
+	return r.rest.Read(p)
+}
+
+func TestCommStreamsBeforeEOF(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first := strings.Repeat("a", 5000) + "\n"
+	var out, errb bytes.Buffer
+	in := &gatedReader{
+		first: strings.NewReader(first),
+		rest:  strings.NewReader("y\n"),
+		allow: func() bool { return out.Len() > 0 },
+	}
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: in, Out: &out, Err: &errb},
+	}
+
+	code := cmd.Run(rc, []string{"-", "f2"})
+	want := first + "y\n\tz\n"
+	if code != 0 || errb.String() != "" || out.String() != want {
+		t.Errorf("streaming comm = (%q, %q, %d), want (%q, %q, 0)", out.String(), errb.String(), code, want, "")
+	}
+}
+
+func TestCommFinalRecordWithoutDelimiter(t *testing.T) {
+	out, errb, code := runTool(t, "a\nb", "b\nc")
+	want := "a\n\t\tb\n\tc\n"
+	if code != 0 || errb != "" || out != want {
+		t.Errorf("unterminated inputs = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
 	}
 }
 
