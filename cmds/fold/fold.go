@@ -193,7 +193,11 @@ func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spac
 				}
 			}
 			if len(line) == 0 {
-				// A single unit wider than the width still goes out.
+				// A single unit wider than the width still goes out, but
+				// preserves the empty segment before it.
+				if _, err := io.WriteString(w, "\n"); err != nil {
+					return err
+				}
 				line = append(line, ch)
 				col = newCol
 				continue
@@ -203,6 +207,13 @@ func foldColumnsStream(r io.Reader, w io.Writer, width int, mode countMode, spac
 			}
 			line = line[:0]
 			col = 0
+			if adjust(0, ch) > width {
+				// The preceding segment already supplied the break before
+				// this over-width unit; do not emit another empty segment.
+				line = append(line, ch)
+				col = adjust(0, ch)
+				continue
+			}
 			goto rescan
 		}
 		line = append(line, ch)
@@ -227,7 +238,7 @@ func foldBytesStream(r io.Reader, w io.Writer, width int, spaces bool) error {
 		return nil
 	}
 	for {
-		c, err := br.ReadByte()
+		ch, sz, err := br.ReadRune()
 		if err == io.EOF {
 			if len(line) > 0 {
 				return writeLine(line, false)
@@ -237,15 +248,22 @@ func foldBytesStream(r io.Reader, w io.Writer, width int, spaces bool) error {
 		if err != nil {
 			return err
 		}
-		if c == '\n' {
+		if ch == '\n' {
 			if err := writeLine(line, true); err != nil {
 				return err
 			}
 			line = line[:0]
 			continue
 		}
+		if err := br.UnreadRune(); err != nil {
+			return err
+		}
+		chunk := make([]byte, sz)
+		if _, err := io.ReadFull(br, chunk); err != nil {
+			return err
+		}
 	rescan:
-		if len(line)+1 > width {
+		if len(line)+len(chunk) > width {
 			if spaces {
 				if i := lastBlankByte(line); i >= 0 {
 					if err := writeLine(line[:i+1], true); err != nil {
@@ -256,16 +274,23 @@ func foldBytesStream(r io.Reader, w io.Writer, width int, spaces bool) error {
 				}
 			}
 			if len(line) == 0 {
-				line = append(line, c)
+				if _, err := io.WriteString(w, "\n"); err != nil {
+					return err
+				}
+				line = append(line[:0], chunk...)
 				continue
 			}
 			if err := writeLine(line, true); err != nil {
 				return err
 			}
 			line = line[:0]
+			if len(chunk) > width {
+				line = append(line, chunk...)
+				continue
+			}
 			goto rescan
 		}
-		line = append(line, c)
+		line = append(line, chunk...)
 	}
 }
 
