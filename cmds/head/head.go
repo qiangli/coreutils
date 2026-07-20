@@ -207,10 +207,53 @@ func rewriteObsoleteNum(args []string, flag string) []string {
 	if len(a) < 2 || a[0] != '-' || a[1] < '0' || a[1] > '9' {
 		return args
 	}
-	if _, _, _, err := parseCount(a[1:]); err != nil {
+	digitsEnd := 1
+	for digitsEnd < len(a) && a[digitsEnd] >= '0' && a[digitsEnd] <= '9' {
+		digitsEnd++
+	}
+
+	modeFlag := flag
+	countText := a[1:digitsEnd]
+	var options string
+	if digitsEnd < len(a) {
+		switch a[digitsEnd] {
+		case 'b':
+			modeFlag = "--bytes="
+			countText += "b"
+			options = a[digitsEnd+1:]
+		case 'k', 'K':
+			modeFlag = "--bytes="
+			countText += "K"
+			options = a[digitsEnd+1:]
+		case 'm', 'M':
+			modeFlag = "--bytes="
+			countText += "M"
+			options = a[digitsEnd+1:]
+		case 'c':
+			modeFlag = "--bytes="
+			options = a[digitsEnd+1:]
+		case 'l':
+			options = a[digitsEnd+1:]
+		case 'q', 'v':
+			options = a[digitsEnd:]
+		default:
+			return args
+		}
+		for i := 0; i < len(options); i++ {
+			if options[i] != 'q' && options[i] != 'v' {
+				return args
+			}
+		}
+	}
+
+	if _, _, _, err := parseCount(countText); err != nil {
 		return args
 	}
-	return append([]string{flag + a[1:]}, args[1:]...)
+	rewritten := []string{modeFlag + countText}
+	if options != "" {
+		rewritten = append(rewritten, "-"+options)
+	}
+	return append(rewritten, args[1:]...)
 }
 
 // scanOrder reports which of -n/-c ('n'/'c') and which of -q/-v
