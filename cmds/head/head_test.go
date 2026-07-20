@@ -53,6 +53,9 @@ func TestHead(t *testing.T) {
 			"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"},
 		{"n two", "a\nb\nc\n", []string{"-n", "2"}, "a\nb\n"},
 		{"obsolete shorthand", "a\nb\nc\n", []string{"-2"}, "a\nb\n"},
+		{"obsolete bytes", "abcdef", []string{"-2c"}, "ab"},
+		{"obsolete byte blocks", strings.Repeat("x", 600), []string{"-1b"}, strings.Repeat("x", 512)},
+		{"obsolete kibibytes", strings.Repeat("x", 1200), []string{"-1k"}, strings.Repeat("x", 1024)},
 		{"n zero", "a\nb\n", []string{"-n", "0"}, ""},
 		{"all but last two", "a\nb\nc\nd\n", []string{"-n", "-2"}, "a\nb\n"},
 		{"all but last zero", "a\nb\n", []string{"-n", "-0"}, "a\nb\n"},
@@ -88,6 +91,29 @@ func TestHeadAbbreviatedHeaderOptionsRespectOrder(t *testing.T) {
 	want := "==> a <==\n1\n\n==> b <==\n2\n"
 	if code != 0 || out != want {
 		t.Errorf("--q --verb: out=%q code=%d want=%q", out, code, want)
+	}
+}
+
+func TestHeadObsoleteHeaderOptionsRespectOrder(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "1\n2\n")
+	writeFile(t, dir, "b", "3\n4\n")
+
+	out, _, code := runTool(t, dir, "", "-1q", "a", "b")
+	if code != 0 || out != "1\n3\n" {
+		t.Errorf("-1q: out=%q code=%d", out, code)
+	}
+
+	out, _, code = runTool(t, dir, "", "-1v", "a")
+	want := "==> a <==\n1\n"
+	if code != 0 || out != want {
+		t.Errorf("-1v: out=%q code=%d want=%q", out, code, want)
+	}
+
+	out, _, code = runTool(t, dir, "", "-1qv", "a", "b")
+	want = "==> a <==\n1\n\n==> b <==\n3\n"
+	if code != 0 || out != want {
+		t.Errorf("-1qv: out=%q code=%d want=%q", out, code, want)
 	}
 }
 
