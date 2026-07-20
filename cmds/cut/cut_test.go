@@ -73,6 +73,9 @@ func TestCutBytesAndChars(t *testing.T) {
 		{[]string{"-b", "-2"}, "abcdef\n", "ab\n"},
 		{[]string{"-b", "1,3,5"}, "abcdef\n", "ace\n"},
 		{[]string{"-c", "1-3"}, "abcdef\n", "abc\n"},
+		{[]string{"-c", "1"}, "éx\n", "é\n"},
+		{[]string{"-c", "2"}, "éx\n", "x\n"},
+		{[]string{"-c", "1,3"}, "éx日\n", "é日\n"},
 		{[]string{"-b", "10-"}, "abc\n", "\n"},
 		{[]string{"--complement", "-b", "2-4"}, "abcdef\n", "aef\n"},
 		{[]string{"-b", "1-2"}, "abc\ndefgh\n", "ab\nde\n"},
@@ -82,6 +85,28 @@ func TestCutBytesAndChars(t *testing.T) {
 		out, _, code := runTool(t, c.stdin, c.args...)
 		if out != c.want || code != 0 {
 			t.Errorf("cut %v = (%q, %d), want (%q, 0)", c.args, out, code, c.want)
+		}
+	}
+}
+
+func TestCutBytesNoSplit(t *testing.T) {
+	cases := []struct {
+		name  string
+		args  []string
+		stdin string
+		want  string
+	}{
+		{"drops range ending inside first character", []string{"-b", "1", "-n"}, "éx\n", "\n"},
+		{"expands start inside character", []string{"-b", "2", "-n"}, "éx\n", "é\n"},
+		{"keeps complete multibyte and ASCII", []string{"-b", "2-3", "-n"}, "éx\n", "éx\n"},
+		{"separate partial and complete selections", []string{"-b", "1,3", "-n"}, "éx\n", "x\n"},
+		{"trims end inside later character", []string{"-b", "1-3", "-n"}, "x日\n", "x\n"},
+		{"open range", []string{"-b", "2-", "-n"}, "éx\n", "éx\n"},
+	}
+	for _, c := range cases {
+		out, _, code := runTool(t, c.stdin, c.args...)
+		if out != c.want || code != 0 {
+			t.Errorf("%s: cut %v = (%q, %d), want (%q, 0)", c.name, c.args, out, code, c.want)
 		}
 	}
 }
