@@ -237,6 +237,7 @@ func pasteSerial(rc *tool.RunContext, names []string, open opener, dc *delimCycl
 		}
 		buf = buf[:0]
 		dc.reset()
+		wrote := false
 		for {
 			chunk, rerr := r.ReadBytes(lineEnd)
 			if len(chunk) == 0 {
@@ -246,11 +247,18 @@ func pasteSerial(rc *tool.RunContext, names []string, open opener, dc *delimCycl
 				}
 				break
 			}
+			wrote = true
 			if chunk[len(chunk)-1] == lineEnd {
 				chunk = chunk[:len(chunk)-1]
 			}
 			buf = append(buf, chunk...)
 			dc.write(&buf)
+		}
+		if !wrote {
+			if closer != nil {
+				closer.Close()
+			}
+			continue
 		}
 		dc.trimTrailing(&buf)
 		buf = append(buf, lineEnd)
