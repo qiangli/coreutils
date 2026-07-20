@@ -84,7 +84,7 @@ func TestWcTotalModes(t *testing.T) {
 		t.Errorf("--total=never: out=%q code=%d", out, code)
 	}
 	out, _, code = runTool(t, dir, "", "-l", "--total=only", "a", "b")
-	if code != 0 || out != "2 total\n" {
+	if code != 0 || out != "2\n" {
 		t.Errorf("--total=only: out=%q code=%d", out, code)
 	}
 	out, _, code = runTool(t, dir, "", "-l", "--total=always", "a")
@@ -104,7 +104,7 @@ func TestWcFiles0From(t *testing.T) {
 		t.Errorf("--files0-from file: out=%q code=%d", out, code)
 	}
 	out, _, code = runTool(t, dir, "a\x00b\x00", "-w", "--files0-from=-", "--total=only")
-	if code != 0 || out != "3 total\n" {
+	if code != 0 || out != "3\n" {
 		t.Errorf("--files0-from stdin: out=%q code=%d", out, code)
 	}
 	_, errb, code := runTool(t, dir, "", "--files0-from=list", "a")
@@ -115,15 +115,27 @@ func TestWcFiles0From(t *testing.T) {
 
 func TestWcCharsAndMaxLine(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "u", "héllo\n") // 7 bytes, 6 chars
+	writeFile(t, dir, "u", "héllo\n") // deterministic C locale: 7 bytes, 7 chars
 
 	out, _, _ := runTool(t, dir, "", "-m", "u")
-	if out != "6 u\n" {
+	if out != "7 u\n" {
 		t.Errorf("wc -m: got %q", out)
 	}
 	out, _, _ = runTool(t, dir, "", "-c", "u")
 	if out != "7 u\n" {
 		t.Errorf("wc -c: got %q", out)
+	}
+
+	out, _, _ = runTool(t, "", "é\n", "-lwmc")
+	if out != "      1       1       3       3\n" {
+		t.Errorf("wc multibyte in C locale: got %q", out)
+	}
+
+	// -m and -L agree in the C locale: a character is a byte, and so is a
+	// column. "aé" is 3 bytes, so its line is 3 columns wide.
+	out, _, _ = runTool(t, "", "aé\n", "-mL")
+	if out != "      4       3\n" {
+		t.Errorf("wc -mL multibyte in C locale: got %q", out)
 	}
 
 	// -L: tab advances to the next multiple of 8.
@@ -169,7 +181,7 @@ func TestWcErrors(t *testing.T) {
 // single input, "only" suppresses the per-input row.
 func TestWcTotalModesStdin(t *testing.T) {
 	out, _, code := runTool(t, "", "a b\nc\n", "-l", "--total=only")
-	if code != 0 || out != "2 total\n" {
+	if code != 0 || out != "2\n" {
 		t.Errorf("stdin --total=only: out=%q code=%d", out, code)
 	}
 	out, _, code = runTool(t, "", "a b\nc\n", "-l", "--total=always")
@@ -280,5 +292,97 @@ func TestWcHelpVersion(t *testing.T) {
 	out, _, code = runTool(t, "", "", "--version")
 	if code != 0 || !strings.Contains(out, "wc") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+// -L measures columns in bytes, the way every other wc count does in the
+// C locale. A byte that is not a column-advancing character is the
+// exception, not the rule: \n, \r and \f end the line, \t advances to the
+// next multiple of 8, and \v advances nothing.
+func TestWcMaxLineLengthIsByteWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name, in, want string
+	}{
+		// Each byte of a multi-byte sequence occupies a column, so -L
+		// agrees with -c/-m rather than reporting a rune count.
+		{"multibyte", "café naïve\n", "12\n"},
+		// Non-printable bytes are columns too.
+		{"control bytes", "a\x01\x02b\n", "4\n"},
+		// \v advances nothing; \r ends the line without counting as one.
+		{"vertical tab", "ab\vcd\n", "4\n"},
+		{"carriage return", "abcdef\rxy\n", "6\n"},
+		// \f ends the line the same way \r does.
+		{"form feed", "abcd\fxy\n", "4\n"},
+		// A tab jumps to the next multiple of 8 from the current column.
+		{"tab from column 2", "ab\tc\n", "9\n"},
+		{"tab at column 0", "\tx\n", "9\n"},
+		// The longest line wins, not the last one.
+		{"longest not last", "aaaa\nbb\n", "4\n"},
+		// A final line with no trailing newline still counts.
+		{"no trailing newline", "abc", "3\n"},
+		{"empty input", "", "0\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _, code := runTool(t, "", tc.in, "-L")
+			if code != 0 || out != tc.want {
+				t.Errorf("wc -L %q: got (%q, %d), want %q", tc.in, out, code, tc.want)
+			}
+		})
+	}
+}
+
+// -L must survive a line that straddles the reader's block boundary: the
+// column position carries across reads rather than restarting at zero.
+func TestWcMaxLineLengthAcrossBlocks(t *testing.T) {
+	// One line far longer than the 64 KiB scan buffer.
+	long := strings.Repeat("x", 200_000)
+	out, _, code := runTool(t, "", long+"\nshort\n", "-L")
+	if code != 0 || out != "200000\n" {
+		t.Errorf("wc -L long line: got (%q, %d)", out, code)
+	}
+	// Word state must carry across the boundary too: one unbroken run of
+	// non-whitespace is a single word no matter how many reads it spans.
+	out, _, code = runTool(t, "", long+"\n", "-w")
+	if code != 0 || out != "1\n" {
+		t.Errorf("wc -w long word: got (%q, %d)", out, code)
+	}
+}
+
+// The total across inputs is the maximum of their line lengths, not a sum.
+func TestWcMaxLineLengthTotal(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "short", "ab\n")
+	writeFile(t, dir, "long", "abcdefg\n")
+
+	out, _, code := runTool(t, dir, "", "-L", "short", "long")
+	if code != 0 || out != " 2 short\n 7 long\n 7 total\n" {
+		t.Errorf("wc -L total: got (%q, %d)", out, code)
+	}
+}
+
+// --total=only prints the counts bare. It is the machine-readable mode;
+// the "total" label only earns its place when per-input rows are printed
+// alongside it and something has to distinguish them.
+func TestWcTotalOnlyOmitsLabel(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "one two\n")
+	writeFile(t, dir, "b", "three\n")
+
+	// No label. The column width still follows the usual rule (digits of
+	// the summed input sizes), which is why this is padded to 2.
+	out, _, code := runTool(t, dir, "", "-w", "--total=only", "a", "b")
+	if code != 0 || out != " 3\n" {
+		t.Errorf("--total=only -w: got (%q, %d)", out, code)
+	}
+	// Multiple counts stay column-aligned, still unlabelled.
+	out, _, code = runTool(t, dir, "", "--total=only", "a", "b")
+	if code != 0 || out != " 2  3 14\n" {
+		t.Errorf("--total=only default counts: got (%q, %d)", out, code)
+	}
+	// The other modes keep the label, which is what tells the total row
+	// apart from the per-input rows printed above it.
+	out, _, code = runTool(t, dir, "", "-w", "--total=always", "a", "b")
+	if code != 0 || out != " 2 a\n 1 b\n 3 total\n" {
+		t.Errorf("--total=always keeps label: got (%q, %d)", out, code)
 	}
 }
