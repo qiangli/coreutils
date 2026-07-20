@@ -23,14 +23,14 @@ func run(rc *tool.RunContext, args []string) int {
 	_ = fs.BoolP("short", "s", false, "short format")
 	usersOnly := fs.BoolP("users", "u", false, "list users logged in")
 	mesg := fs.BoolP("mesg", "T", false, "add user's message status")
-	fs.BoolP("boot", "b", false, "time of last system boot")
-	fs.BoolP("dead", "d", false, "print dead processes")
-	fs.BoolP("login", "l", false, "print system login processes")
+	boot := fs.BoolP("boot", "b", false, "time of last system boot")
+	dead := fs.BoolP("dead", "d", false, "print dead processes")
+	login := fs.BoolP("login", "l", false, "print system login processes")
 	fs.Bool("lookup", false, "attempt to canonicalize hostnames")
-	fs.BoolP("process", "p", false, "print active processes spawned by init")
-	fs.BoolP("runlevel", "r", false, "print current runlevel")
-	fs.BoolP("time", "t", false, "print last system clock change")
-	fs.BoolP("message", "w", false, "same as -T")
+	process := fs.BoolP("process", "p", false, "print active processes spawned by init")
+	runlevel := fs.BoolP("runlevel", "r", false, "print current runlevel")
+	timeChange := fs.BoolP("time", "t", false, "print last system clock change")
+	message := fs.BoolP("message", "w", false, "same as -T")
 	onlyMe := fs.BoolP("same-host", "m", false, "only hostname and user associated with stdin")
 	writable := fs.Bool("writable", false, "same as -T")
 	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
@@ -55,12 +55,40 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	var live []session.Record
+	needBoot := *boot || *all
+	needDead := *dead || *all
+	needLogin := *login || *all
+	needProcess := *process || *all
+	needRunlevel := *runlevel || *all
+	needTime := *timeChange || *all
+	needUsers := *usersOnly || *all || !(needBoot || needDead || needLogin || needProcess || needRunlevel || needTime)
+
 	for _, r := range records {
 		if session.IsUser(r) {
-			live = append(live, r)
+			if needUsers {
+				live = append(live, r)
+			}
+			continue
+		}
+		
+		switch r.Type {
+		case "BOOT_TIME", "boot", "2":
+			if needBoot { live = append(live, r) }
+		case "DEAD_PROCESS", "dead", "8":
+			if needDead { live = append(live, r) }
+		case "LOGIN_PROCESS", "login", "6":
+			if needLogin { live = append(live, r) }
+		case "INIT_PROCESS", "init", "5":
+			if needProcess { live = append(live, r) }
+		case "RUN_LVL", "runlevel", "1":
+			if needRunlevel { live = append(live, r) }
+		case "NEW_TIME", "time", "3", "OLD_TIME", "4":
+			if needTime { live = append(live, r) }
+		default:
+			if *all { live = append(live, r) }
 		}
 	}
-	showMesg := *mesg || *writable || *all
+	showMesg := *mesg || *writable || *all || *message
 	showIdle := *usersOnly || *all
 
 	if *onlyMe {
@@ -146,15 +174,9 @@ func parseOperands(operands []string) (file string, sameHost bool, errMsg string
 	case 1:
 		return operands[0], false, ""
 	case 2:
-		if operands[0] == "am" && (operands[1] == "i" || operands[1] == "I") {
-			return "", true, ""
-		}
-		return "", false, fmt.Sprintf("extra operand %q", operands[1])
+		return "", true, ""
 	case 3:
-		if operands[1] == "am" && (operands[2] == "i" || operands[2] == "I") {
-			return operands[0], true, ""
-		}
-		return "", false, fmt.Sprintf("extra operand %q", operands[2])
+		return operands[0], true, ""
 	default:
 		return "", false, fmt.Sprintf("extra operand %q", operands[3])
 	}
