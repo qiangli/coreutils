@@ -220,14 +220,12 @@ func readFiles0(rc *tool.RunContext, name string) ([]string, error) {
 // quote renders a name the way GNU's quoteaf does in the C locale.
 func quote(s string) string { return "'" + s + "'" }
 
-// countReader makes one pass computing the counts sel needs. Only -m
-// (chars) and -L (max-line-length) require decoding UTF-8 runes; for
-// every other combination, lines/words/bytes are pure byte properties
-// under C-locale rules (all word separators are ASCII whitespace
-// bytes, which never occur inside a multi-byte UTF-8 sequence), so a
-// block-wise byte scan produces identical counts far faster.
+// countReader makes one pass computing the counts sel needs. Only -L
+// (max-line-length) requires decoding UTF-8 runes for display width.
+// Lines, words, bytes, and C-locale characters are byte properties, so
+// a block-wise byte scan produces identical counts far faster.
 func countReader(r io.Reader, sel selection) (counts, error) {
-	if sel.chars || sel.maxLine {
+	if sel.maxLine {
 		return countRunes(r)
 	}
 	return countBytes(r, sel.words)
@@ -254,6 +252,7 @@ func countBytes(r io.Reader, words bool) (counts, error) {
 		if n > 0 {
 			b := buf[:n]
 			c.bytes += int64(n)
+			c.chars = c.bytes
 			c.lines += int64(bytes.Count(b, []byte{'\n'}))
 			if words {
 				for _, ch := range b {
@@ -275,12 +274,13 @@ func countBytes(r io.Reader, words bool) (counts, error) {
 	}
 }
 
-// countRunes is the full rune-decoding pass, needed when -m or -L is
+// countRunes is the full rune-decoding pass, needed when -L is
 // selected. Word boundaries and line-length widths use C-locale rules
 // (ASCII whitespace; only printable ASCII has width 1, tab advances
 // to the next multiple of 8, \r and \f reset the position — matching
-// GNU in the C locale). Characters are counted as UTF-8 runes; each
-// invalid byte counts as one character.
+// GNU in the C locale). Characters are counted as bytes in the C
+// locale; each byte in a valid or invalid UTF-8 sequence contributes
+// one character.
 func countRunes(r io.Reader) (counts, error) {
 	br := bufio.NewReaderSize(r, 64*1024)
 	var c counts
@@ -303,7 +303,7 @@ func countRunes(r io.Reader) (counts, error) {
 			return c, err
 		}
 		c.bytes += int64(size)
-		c.chars++
+		c.chars += int64(size)
 
 		switch r0 {
 		case '\n':

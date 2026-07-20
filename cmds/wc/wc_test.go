@@ -115,15 +115,27 @@ func TestWcFiles0From(t *testing.T) {
 
 func TestWcCharsAndMaxLine(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "u", "héllo\n") // 7 bytes, 6 chars
+	writeFile(t, dir, "u", "héllo\n") // deterministic C locale: 7 bytes, 7 chars
 
 	out, _, _ := runTool(t, dir, "", "-m", "u")
-	if out != "6 u\n" {
+	if out != "7 u\n" {
 		t.Errorf("wc -m: got %q", out)
 	}
 	out, _, _ = runTool(t, dir, "", "-c", "u")
 	if out != "7 u\n" {
 		t.Errorf("wc -c: got %q", out)
+	}
+
+	out, _, _ = runTool(t, "", "é\n", "-lwmc")
+	if out != "      1       1       3       3\n" {
+		t.Errorf("wc multibyte in C locale: got %q", out)
+	}
+
+	// Combining -m with -L takes the display-width scanning path, but
+	// character counting remains byte-based in the C locale.
+	out, _, _ = runTool(t, "", "aé\n", "-mL")
+	if out != "      4       1\n" {
+		t.Errorf("wc -mL multibyte in C locale: got %q", out)
 	}
 
 	// -L: tab advances to the next multiple of 8.
