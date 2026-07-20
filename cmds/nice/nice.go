@@ -225,10 +225,15 @@ func lookCommand(rc *tool.RunContext, name string) string {
 		return ""
 	}
 	var nonExecutable string
-	for _, dir := range filepath.SplitList(rc.Getenv("PATH")) {
-		if dir == "" {
-			continue
-		}
+	pathDirs := filepath.SplitList(rc.Getenv("PATH"))
+	if len(pathDirs) == 0 {
+		pathDirs = []string{""}
+	}
+	for _, dir := range pathDirs {
+		// As with execvp(3), an empty PATH entry names the current directory.
+		// Both it and relative entries are relative to the invocation's working
+		// directory, not the embedding process's working directory.
+		dir = rc.Path(dir)
 		cand := filepath.Join(dir, name)
 		if isCommandFile(cand) {
 			if runtime.GOOS == "windows" || isExecFile(cand) {

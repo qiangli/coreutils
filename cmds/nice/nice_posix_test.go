@@ -100,6 +100,38 @@ func TestNiceCommandExitStatuses(t *testing.T) {
 	}
 }
 
+func TestLookCommandResolvesPathEntriesFromRunContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "command"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "command"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"relative entry", "bin", filepath.Join(dir, "bin", "command")},
+		{"empty path", "", filepath.Join(dir, "command")},
+		{"leading empty entry", string(os.PathListSeparator) + "missing", filepath.Join(dir, "command")},
+		{"trailing empty entry", "missing" + string(os.PathListSeparator), filepath.Join(dir, "command")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rc := &tool.RunContext{Dir: dir, Env: []string{"PATH=" + tt.path}}
+			if got := lookCommand(rc, "command"); got != tt.want {
+				t.Fatalf("lookCommand()=%q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseNiceInvalidAdjustment(t *testing.T) {
 	tests := []struct {
 		name string
