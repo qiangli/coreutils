@@ -55,7 +55,16 @@ func TestExprPOSIXArithmeticAndComparison(t *testing.T) {
 	checkExpr(t, "-1\n", 0, "-7", "%", "3")
 	checkExpr(t, "1\n", 0, "0000000000000000000002", ">", "1")
 	checkExpr(t, "1\n", 0, "01", "=", "1")
-	checkExpr(t, "", 2, "1", "/", "0")
+	// Division/modulo by zero is a well-formed expression that fails at
+	// evaluation: GNU expr reports EXPR_FAILURE and POSIX mandates an exit
+	// status greater than 2 ("an error occurred"), distinct from the exit 2
+	// used for a syntactically invalid expression.
+	checkExpr(t, "", 3, "1", "/", "0")
+	checkExpr(t, "", 3, "1", "%", "0")
+	checkExpr(t, "", 3, "5", "+", "3", "*", "0", "/", "0")
+	// A genuinely invalid expression still exits 2.
+	checkExpr(t, "", 2, "1", "+")
+	checkExpr(t, "", 2, "3.5", "+", "1")
 }
 
 func TestExprPOSIXBooleanAndExitStatus(t *testing.T) {
@@ -82,6 +91,9 @@ func TestExprPOSIXMatchAndStringFunctions(t *testing.T) {
 	checkExpr(t, "\n", 1, "abc", ":", `a\(z\)`)
 	checkExpr(t, "2\n", 0, "length", "éx")
 	checkExpr(t, "bc\n", 0, "substr", "abc", "2", "5")
+	checkExpr(t, "abc\n", 0, "substr", "abc", "1", "9223372036854775808")
+	checkExpr(t, "bc\n", 0, "substr", "abc", "2", "999999999999999999999999999999")
+	checkExpr(t, "\n", 1, "substr", "abc", "999999999999999999999999999999", "1")
 	checkExpr(t, "\n", 1, "substr", "abc", "0", "2")
 	checkExpr(t, "2\n", 0, "index", "abc", "xcb")
 	checkExpr(t, "b\n", 0, "match", "abc", `a\(b\)`)

@@ -1,6 +1,7 @@
 package exprcmd
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -19,6 +20,15 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type value string
+
+// evalError marks a runtime evaluation failure — a well-formed expression that
+// cannot be evaluated, such as division by zero. GNU expr reports these with
+// EXPR_FAILURE (exit 3), distinct from EXPR_INVALID (exit 2) used for a
+// syntactically invalid expression; POSIX likewise mandates ">2" for an error
+// that occurs versus "2" for an invalid expression.
+type evalError struct{ msg string }
+
+func (e *evalError) Error() string { return e.msg }
 
 func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -42,6 +52,10 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if err != nil {
 		fmt.Fprintf(rc.Err, "expr: %v\n", err)
+		var ee *evalError
+		if errors.As(err, &ee) {
+			return 3
+		}
 		return 2
 	}
 	fmt.Fprintln(rc.Out, string(v))
@@ -180,12 +194,12 @@ func (p *parser) parseMul() (value, error) {
 			left = value(new(big.Int).Mul(a, b).String())
 		case "/":
 			if b.Sign() == 0 {
-				return "", fmt.Errorf("division by zero")
+				return "", &evalError{"division by zero"}
 			}
 			left = value(new(big.Int).Quo(a, b).String())
 		case "%":
 			if b.Sign() == 0 {
-				return "", fmt.Errorf("division by zero")
+				return "", &evalError{"division by zero"}
 			}
 			left = value(new(big.Int).Rem(a, b).String())
 		}
@@ -307,17 +321,22 @@ func (p *parser) parseFunction(name string) (value, error) {
 			return "", err
 		}
 		rs := []rune(s)
-		if !pos.IsInt64() || !ln.IsInt64() || pos.Sign() <= 0 || ln.Sign() <= 0 {
+		if pos.Sign() <= 0 || ln.Sign() <= 0 {
+			return "", nil
+		}
+		// Compare the arbitrary-precision position before converting it to an
+		// index. A length larger than the remaining input is valid: it selects
+		// through the end of the string.
+		available := big.NewInt(int64(len(rs)))
+		if pos.Cmp(available) > 0 {
 			return "", nil
 		}
 		start := pos.Int64() - 1
-		if start >= int64(len(rs)) {
-			return "", nil
+		remaining := int64(len(rs)) - start
+		if ln.Cmp(big.NewInt(remaining)) >= 0 {
+			return value(string(rs[int(start):])), nil
 		}
-		end := int64(len(rs))
-		if ln.Int64() < end-start {
-			end = start + ln.Int64()
-		}
+		end := start + ln.Int64()
 		return value(string(rs[int(start):int(end)])), nil
 	case "match":
 		s, err := arg()
