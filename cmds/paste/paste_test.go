@@ -132,10 +132,14 @@ func TestPasteSerial(t *testing.T) {
 	if out != "a,b;c\n1,2\n" || code != 0 {
 		t.Errorf("serial cycle: out=%q code=%d", out, code)
 	}
-	// an empty file yields a bare line terminator
+	// an empty serial input file produces no output
 	out, _, code = runToolDir(t, dir, "", "-s", "empty")
-	if out != "\n" || code != 0 {
+	if out != "" || code != 0 {
 		t.Errorf("serial empty: out=%q code=%d", out, code)
+	}
+	out, _, code = runToolDir(t, dir, "", "-s", "empty", "f1")
+	if out != "a\tb\tc\n" || code != 0 {
+		t.Errorf("serial empty + file: out=%q code=%d", out, code)
 	}
 }
 
