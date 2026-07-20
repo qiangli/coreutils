@@ -109,6 +109,17 @@ func TestUnameCombinedAndAll(t *testing.T) {
 	if strings.Count(all, "\n") != 1 {
 		t.Errorf("-a output is not a single line: %q", all)
 	}
+	if runtime.GOOS == "darwin" {
+		info, err := probe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, part := range []string{info.processor, info.hardwarePlatform} {
+			if !strings.Contains(all, part) {
+				t.Errorf("-a output %q missing %q", all, part)
+			}
+		}
+	}
 }
 
 func TestUnameErrors(t *testing.T) {
@@ -132,6 +143,16 @@ func TestUnameHelp(t *testing.T) {
 func TestNewFlagsAndAliases(t *testing.T) {
 	sOut, _, _ := runTool(t, "-s")
 	rOut, _, _ := runTool(t, "-r")
+	processorOut := "unknown\n"
+	hardwarePlatformOut := "unknown\n"
+	if runtime.GOOS == "darwin" {
+		info, err := probe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		processorOut = info.processor + "\n"
+		hardwarePlatformOut = info.hardwarePlatform + "\n"
+	}
 
 	tests := []struct {
 		name     string
@@ -143,25 +164,25 @@ func TestNewFlagsAndAliases(t *testing.T) {
 		{
 			name:     "processor short flag",
 			args:     []string{"-p"},
-			wantOut:  "unknown\n",
+			wantOut:  processorOut,
 			wantCode: 0,
 		},
 		{
 			name:     "processor long flag",
 			args:     []string{"--processor"},
-			wantOut:  "unknown\n",
+			wantOut:  processorOut,
 			wantCode: 0,
 		},
 		{
 			name:     "hardware-platform short flag",
 			args:     []string{"-i"},
-			wantOut:  "unknown\n",
+			wantOut:  hardwarePlatformOut,
 			wantCode: 0,
 		},
 		{
 			name:     "hardware-platform long flag",
 			args:     []string{"--hardware-platform"},
-			wantOut:  "unknown\n",
+			wantOut:  hardwarePlatformOut,
 			wantCode: 0,
 		},
 		{
@@ -191,7 +212,17 @@ func TestNewFlagsAndAliases(t *testing.T) {
 			args:     []string{"-a", "-p"},
 			wantCode: 0,
 			checkOut: func(t *testing.T, out string) {
-				// Since -p is explicitly requested, "unknown" should be printed
+				if runtime.GOOS == "darwin" {
+					info, err := probe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(out, info.processor) {
+						t.Errorf("-a -p output %q should contain %q", out, info.processor)
+					}
+					return
+				}
+				// Since -p is explicitly requested, "unknown" should be printed.
 				if !strings.Contains(out, "unknown") {
 					t.Errorf("-a -p output %q should contain 'unknown'", out)
 				}
@@ -225,6 +256,24 @@ func TestNewFlagsAndAliases(t *testing.T) {
 			if tt.checkOut != nil {
 				tt.checkOut(t, out)
 			} else {
+				if runtime.GOOS == "darwin" {
+					info, err := probe()
+					if err != nil {
+						t.Fatal(err)
+					}
+					switch tt.args[0] {
+					case "-p", "--processor":
+						if out != info.processor+"\n" {
+							t.Errorf("args=%v output=%q, want %q", tt.args, out, info.processor+"\n")
+						}
+						return
+					case "-i", "--hardware-platform":
+						if out != info.hardwarePlatform+"\n" {
+							t.Errorf("args=%v output=%q, want %q", tt.args, out, info.hardwarePlatform+"\n")
+						}
+						return
+					}
+				}
 				if out != tt.wantOut {
 					t.Errorf("args=%v output=%q, want %q", tt.args, out, tt.wantOut)
 				}
