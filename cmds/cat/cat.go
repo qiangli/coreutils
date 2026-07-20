@@ -33,13 +33,15 @@ type catOpts struct {
 	showEnds       bool // -E
 	showTabs       bool // -T
 	showNP         bool // -v
+	unbuffered     bool // -u
 }
 
 // catState persists across files: GNU cat numbers lines and squeezes
 // blank runs across the whole concatenated output.
 type catState struct {
-	lineNo   int64
-	blankRun int
+	lineNo      int64
+	blankRun    int
+	atLineStart bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -67,6 +69,7 @@ func run(rc *tool.RunContext, args []string) int {
 		showEnds:       *showEnds,
 		showTabs:       *showTabs,
 		showNP:         *showNP,
+		unbuffered:     optU,
 	}
 	if *showAll {
 		o.showNP, o.showEnds, o.showTabs = true, true, true
@@ -87,7 +90,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	w := bufio.NewWriter(rc.Out)
-	st := &catState{}
+	st := &catState{atLineStart: true}
 	exit := 0
 	for _, name := range files {
 		var r io.Reader
@@ -172,10 +175,35 @@ func catStream(r io.Reader, w *bufio.Writer, o catOpts, st *catState) error {
 		_, err := io.Copy(w, br)
 		return err
 	}
+	if o == (catOpts{unbuffered: true}) {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := br.Read(buf)
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					return werr
+				}
+				if ferr := w.Flush(); ferr != nil {
+					return ferr
+				}
+			}
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
 			emitLine(w, line, o, st)
+			if o.unbuffered {
+				if ferr := w.Flush(); ferr != nil {
+					return ferr
+				}
+			}
 		}
 		if err == io.EOF {
 			return nil
@@ -192,7 +220,7 @@ func emitLine(w *bufio.Writer, line []byte, o catOpts, st *catState) {
 	if hasNL {
 		content = line[:len(line)-1]
 	}
-	blank := hasNL && len(content) == 0
+	blank := hasNL && len(content) == 0 && st.atLineStart
 
 	if o.squeeze {
 		if blank {
@@ -205,14 +233,16 @@ func emitLine(w *bufio.Writer, line []byte, o catOpts, st *catState) {
 		}
 	}
 
-	if o.numberNonblank {
-		if !blank {
+	if st.atLineStart {
+		if o.numberNonblank {
+			if !blank {
+				st.lineNo++
+				fmt.Fprintf(w, "%6d\t", st.lineNo)
+			}
+		} else if o.numberAll {
 			st.lineNo++
 			fmt.Fprintf(w, "%6d\t", st.lineNo)
 		}
-	} else if o.numberAll {
-		st.lineNo++
-		fmt.Fprintf(w, "%6d\t", st.lineNo)
 	}
 
 	end := len(content)
@@ -234,6 +264,9 @@ func emitLine(w *bufio.Writer, line []byte, o catOpts, st *catState) {
 			w.WriteByte('$')
 		}
 		w.WriteByte('\n')
+		st.atLineStart = true
+	} else if len(content) > 0 {
+		st.atLineStart = false
 	}
 }
 

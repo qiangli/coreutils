@@ -3,10 +3,13 @@ package catcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -31,6 +34,23 @@ func writeFile(t *testing.T, dir, name, content string) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }
 
 func TestCat(t *testing.T) {
@@ -87,6 +107,73 @@ func TestCatFiles(t *testing.T) {
 	out, _, code = runTool(t, dir, "in\n", "a.txt", "-")
 	if out != "one\nin\n" || code != 0 {
 		t.Errorf("cat file - = (%q, %d)", out, code)
+	}
+}
+
+func TestCatLineStateAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "no-nl", "left")
+	writeFile(t, dir, "right", "right\n")
+	writeFile(t, dir, "blank-prefix", "\n\nnext\n")
+
+	out, _, code := runTool(t, dir, "", "-n", "no-nl", "right")
+	if out != "     1\tleftright\n" || code != 0 {
+		t.Errorf("cat -n files without boundary newline = (%q, %d)", out, code)
+	}
+
+	out, _, code = runTool(t, dir, "", "-b", "no-nl", "right")
+	if out != "     1\tleftright\n" || code != 0 {
+		t.Errorf("cat -b files without boundary newline = (%q, %d)", out, code)
+	}
+
+	out, _, code = runTool(t, dir, "", "-s", "no-nl", "blank-prefix")
+	if out != "left\n\nnext\n" || code != 0 {
+		t.Errorf("cat -s files without boundary newline = (%q, %d)", out, code)
+	}
+}
+
+func TestCatUnbufferedFlushesBeforeEOF(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	defer pw.Close()
+
+	var out lockedBuffer
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: pr, Out: &out, Err: &errb},
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- cmd.Run(rc, []string{"-u"})
+	}()
+
+	if _, err := pw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for out.String() != "x" {
+		select {
+		case <-deadline:
+			t.Fatalf("cat -u did not flush before EOF; out=%q err=%q", out.String(), errb.String())
+		case <-tick.C:
+		}
+	}
+
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 || errb.String() != "" {
+			t.Fatalf("cat -u after close: code=%d err=%q", code, errb.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cat -u did not finish after stdin close")
 	}
 }
 
