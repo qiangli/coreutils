@@ -99,15 +99,20 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "both files cannot be standard input")
 	}
 
-	var lines [2][]string
+	var inputs [2]*recordReader
 	for i, op := range operands {
-		ls, err := readLines(rc, op, *zeroTerminated)
+		input, err := openRecordReader(rc, op, *zeroTerminated)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "comm: %s: %v\n", op, pathErr(err))
+			if inputs[0] != nil {
+				inputs[0].close()
+			}
 			return 1
 		}
-		lines[i] = ls
+		inputs[i] = input
 	}
+	defer inputs[0].close()
+	defer inputs[1].close()
 
 	delim := "\t"
 	if fs.Changed("output-delimiter") {
@@ -141,15 +146,18 @@ func run(rc *tool.RunContext, args []string) int {
 	// diagnosed (once per file) after an unpairable line has been seen.
 	seenUnpairable := false
 	var warned [2]bool
-	i, j := 0, 0
+	var current [2]string
+	var have [2]bool
 	advance := func(file int) bool {
-		pos := &i
-		if file == 2 {
-			pos = &j
+		idx := file - 1
+		previous, hadPrevious := current[idx], have[idx]
+		next, ok, err := inputs[idx].next()
+		if err != nil {
+			fmt.Fprintf(rc.Err, "comm: %s: %v\n", operands[idx], pathErr(err))
+			return false
 		}
-		*pos++
-		ls := lines[file-1]
-		if *pos < len(ls) && ls[*pos-1] > ls[*pos] {
+		current[idx], have[idx] = next, ok
+		if hadPrevious && ok && previous > next {
 			if !*nocheckOrder {
 				if *checkOrder {
 					fmt.Fprintf(rc.Err, "comm: file %d is not in sorted order\n", file)
@@ -163,31 +171,34 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return true
 	}
-	for i < len(lines[0]) || j < len(lines[1]) {
+	if !advance(1) || !advance(2) {
+		return 1
+	}
+	for have[0] || have[1] {
 		var d int
 		switch {
-		case i >= len(lines[0]):
+		case !have[0]:
 			d = 1
-		case j >= len(lines[1]):
+		case !have[1]:
 			d = -1
 		default:
-			d = strings.Compare(lines[0][i], lines[1][j])
+			d = strings.Compare(current[0], current[1])
 		}
 		switch {
 		case d < 0:
 			seenUnpairable = true
-			emit(1, lines[0][i])
+			emit(1, current[0])
 			if !advance(1) {
 				return 1
 			}
 		case d > 0:
 			seenUnpairable = true
-			emit(2, lines[1][j])
+			emit(2, current[1])
 			if !advance(2) {
 				return 1
 			}
 		default:
-			emit(3, lines[0][i])
+			emit(3, current[0])
 			if !advance(1) || !advance(2) {
 				return 1
 			}
@@ -225,25 +236,52 @@ func run(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-func readLines(rc *tool.RunContext, operand string, zeroTerminated bool) ([]string, error) {
-	var data []byte
-	var err error
+type recordReader struct {
+	reader    *bufio.Reader
+	closer    io.Closer
+	delimiter byte
+}
+
+func openRecordReader(rc *tool.RunContext, operand string, zeroTerminated bool) (*recordReader, error) {
+	var input io.Reader
+	var closer io.Closer
 	if operand == "-" {
-		data, err = io.ReadAll(rc.In)
+		input = rc.In
 	} else {
-		data, err = os.ReadFile(rc.Path(operand))
+		file, err := os.Open(rc.Path(operand))
+		if err != nil {
+			return nil, err
+		}
+		input, closer = file, file
 	}
-	if err != nil {
-		return nil, err
-	}
-	if len(data) == 0 {
-		return nil, nil
-	}
-	sep := "\n"
+	delimiter := byte('\n')
 	if zeroTerminated {
-		sep = "\x00"
+		delimiter = 0
 	}
-	return strings.Split(strings.TrimSuffix(string(data), sep), sep), nil
+	return &recordReader{reader: bufio.NewReader(input), closer: closer, delimiter: delimiter}, nil
+}
+
+func (r *recordReader) next() (string, bool, error) {
+	record, err := r.reader.ReadString(r.delimiter)
+	if len(record) > 0 {
+		if record[len(record)-1] == r.delimiter {
+			record = record[:len(record)-1]
+		}
+		if err == io.EOF {
+			err = nil
+		}
+		return record, true, err
+	}
+	if err == io.EOF {
+		return "", false, nil
+	}
+	return "", false, err
+}
+
+func (r *recordReader) close() {
+	if r.closer != nil {
+		_ = r.closer.Close()
+	}
 }
 
 func pathErr(err error) error {
