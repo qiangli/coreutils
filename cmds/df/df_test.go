@@ -212,11 +212,37 @@ func TestUsePct(t *testing.T) {
 		{1, 199, "1%"}, // 0.5 rounds up
 		{99, 1, "99%"},
 		{100, 0, "100%"},
+		{^uint64(0), 1, "100%"},
+		{^uint64(0), ^uint64(0), "50%"},
 	}
 	for _, c := range cases {
 		if got := usePct(c.used, c.avail); got != c.want {
 			t.Errorf("usePct(%d, %d) = %q, want %q", c.used, c.avail, got, c.want)
 		}
+	}
+}
+
+func TestDivCeilDoesNotOverflow(t *testing.T) {
+	for _, tc := range []struct {
+		n, d, want uint64
+	}{
+		{0, 1, 0},
+		{1, 1, 1},
+		{^uint64(0), 2, 1 << 63},
+		{^uint64(0), ^uint64(0), 1},
+	} {
+		if got := divCeil(tc.n, tc.d); got != tc.want {
+			t.Errorf("divCeil(%d, %d) = %d, want %d", tc.n, tc.d, got, tc.want)
+		}
+	}
+}
+
+func TestHumanSizeMaximumValue(t *testing.T) {
+	if got := humanSize(^uint64(0), 1024); got != "16E" {
+		t.Errorf("humanSize(max uint64, 1024) = %q, want 16E", got)
+	}
+	if got := humanSize(^uint64(0), 1000); got != "19E" {
+		t.Errorf("humanSize(max uint64, 1000) = %q, want 19E", got)
 	}
 }
 

@@ -13,6 +13,7 @@ package dfcmd
 import (
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -249,11 +250,21 @@ func fmtValue(b uint64, scale scaleMode) string {
 // usePct is GNU's Use%: used/(used+avail) rounded up; "-" when both
 // are zero.
 func usePct(used, avail uint64) string {
-	if used+avail == 0 {
+	if used == 0 && avail == 0 {
 		return "-"
 	}
-	pct := (used*100 + used + avail - 1) / (used + avail)
-	return strconv.FormatUint(pct, 10) + "%"
+	// Keep the calculation exact even when the byte counters sum past
+	// uint64. Filesystem counters are commonly uint64 values, and a
+	// wrapped sum would otherwise produce a misleading '-' or percentage.
+	numerator := new(big.Int).SetUint64(used)
+	numerator.Mul(numerator, big.NewInt(100))
+	denominator := new(big.Int).SetUint64(used)
+	denominator.Add(denominator, new(big.Int).SetUint64(avail))
+	quotient := new(big.Int).Quo(numerator, denominator)
+	if new(big.Int).Mod(numerator, denominator).Sign() != 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return quotient.String() + "%"
 }
 
 func inodeUsed(m mountEntry) uint64 {
@@ -264,10 +275,10 @@ func inodeUsed(m mountEntry) uint64 {
 }
 
 func divCeil(n, d uint64) uint64 {
-	if d == 0 {
+	if d == 0 || n == 0 {
 		return 0
 	}
-	return (n + d - 1) / d
+	return 1 + (n-1)/d
 }
 
 func normalizeBlockSizeArgs(args []string) []string {
@@ -346,6 +357,9 @@ func humanSize(n, base uint64) string {
 	div := base
 	idx := 0
 	for n/div >= base && idx < len(units)-1 {
+		if div > ^uint64(0)/base {
+			break
+		}
 		div *= base
 		idx++
 	}

@@ -30,12 +30,16 @@ func listMounts() ([]mountEntry, error) {
 			continue // unreadable mount (permissions, stale) — skip, as GNU does
 		}
 		bs := uint64(st.Bsize)
+		used := uint64(0)
+		if st.Blocks > st.Bfree {
+			used = (st.Blocks - st.Bfree) * bs
+		}
 		out = append(out, mountEntry{
 			device: unescapeMount(f[0]),
 			point:  point,
 			fstype: f[2],
 			total:  st.Blocks * bs,
-			used:   (st.Blocks - st.Bfree) * bs,
+			used:   used,
 			avail:  uint64(st.Bavail) * bs,
 			files:  st.Files,
 			ifree:  st.Ffree,
