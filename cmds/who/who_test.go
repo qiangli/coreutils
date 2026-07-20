@@ -154,11 +154,63 @@ func TestWhoOperands(t *testing.T) {
 	out.Reset()
 	errbuf := &bytes.Buffer{}
 	rc.Err = errbuf
-	code := run(rc, []string{"am", "x"})
+	code := run(rc, []string{"am", "x", "y", "z"})
 	if code == 0 {
-		t.Fatalf("expected error for 'am x', got code=0")
+		t.Fatalf("expected error for 'am x y z', got code=0")
 	}
 	if !strings.Contains(errbuf.String(), "extra operand") {
 		t.Fatalf("expected extra operand error, got %q", errbuf.String())
+	}
+}
+
+func TestWhoBootTime(t *testing.T) {
+	dir := t.TempDir()
+	content := "reboot ~ 1720000000 ~ BOOT_TIME\nbob pts/1 1720000000 host\n"
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	code := run(rc, []string{"-b", "utmp"})
+	if code != 0 {
+		t.Fatalf("-b: code=%d err=%q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "reboot") {
+		t.Fatalf("expected reboot record in output, got %q", out.String())
+	}
+	if strings.Contains(out.String(), "bob") {
+		t.Fatalf("did not expect bob in output for -b, got %q", out.String())
+	}
+}
+
+func TestWhoMessageOption(t *testing.T) {
+	dir := t.TempDir()
+	tty := filepath.Join(dir, "faketty")
+	if err := os.WriteFile(tty, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tty, 0o660); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "utmp"), []byte("bob "+tty+" 1 host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	code := run(rc, []string{"-w", "utmp"})
+	if code != 0 {
+		t.Fatalf("-w: code=%d err=%q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "bob") {
+		t.Fatalf("expected bob in output, got %q", out.String())
+	}
+	if runtime.GOOS == "windows" {
+		if !strings.Contains(out.String(), "bob      ?   "+tty) {
+			t.Fatalf("expected message status '?' on windows, got %q", out.String())
+		}
+		return
+	}
+	if !strings.Contains(out.String(), "bob      +   "+tty) {
+		t.Fatalf("expected message status '+' for bob, got %q", out.String())
 	}
 }
