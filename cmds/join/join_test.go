@@ -164,6 +164,10 @@ func TestJoinErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("--frobnicate: code=%d err=%q", code, errb)
 	}
+	_, errb, code = runRaw(t, dir, "", "-o", "1.2x", "a", "b")
+	if code != 2 || !strings.Contains(errb, "invalid field specification") {
+		t.Errorf("-o malformed field: code=%d err=%q", code, errb)
+	}
 }
 
 func TestJoinNewOptions(t *testing.T) {
@@ -173,10 +177,25 @@ func TestJoinNewOptions(t *testing.T) {
 		t.Errorf("-o formatting: out=%q code=%d", out, code)
 	}
 
+	out, _, code = runTool(t, "1 a b\n", "1 x y\n", "-o", "1.2", "-o", "2.2")
+	if code != 0 || out != "a x\n" {
+		t.Errorf("repeated -o formatting: out=%q code=%d", out, code)
+	}
+
 	// 2. Empty filler (-e)
 	out, _, code = runTool(t, "1 a\n", "1 x y\n", "-o", "1.1,1.2,2.2,2.4", "-e", "MISSING")
 	if code != 0 || out != "1 a x MISSING\n" {
 		t.Errorf("-e formatting: out=%q code=%d", out, code)
+	}
+
+	out, _, code = runTool(t, "1:\n", "1:x\n", "-t", ":", "-o", "1.1,1.2,2.2", "-e", "EMPTY")
+	if code != 0 || out != "1:EMPTY:x\n" {
+		t.Errorf("-e existing empty field: out=%q code=%d", out, code)
+	}
+
+	out, _, code = runTool(t, ":a\n", ":x\n", "-t", ":", "-o", "0,1.2,2.2", "-e", "EMPTY")
+	if code != 0 || out != "EMPTY:a:x\n" {
+		t.Errorf("-e empty join field: out=%q code=%d", out, code)
 	}
 
 	// 3. Header (--header)

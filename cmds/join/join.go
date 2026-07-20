@@ -62,8 +62,8 @@ type options struct {
 	nocheckOrder   bool
 	header         bool
 	zeroTerminated bool
-	format         string // -o FORMAT
-	empty          string // -e EMPTY
+	formats        []string // -o FORMAT, accumulated in option order
+	empty          string   // -e EMPTY
 	orderError     bool
 }
 
@@ -149,9 +149,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	var specs []spec
-	if opt.format != "" {
+	if len(opt.formats) > 0 {
 		var err error
-		specs, err = parseFormat(opt.format)
+		specs, err = parseFormats(opt.formats)
 		if err != nil {
 			return tool.UsageError(rc, cmd, "%v", err)
 		}
@@ -312,7 +312,7 @@ func (o *options) apply(rc *tool.RunContext, c byte, val string) int {
 			return tool.UsageError(rc, cmd, "multi-character tab '%s'", val)
 		}
 	case 'o':
-		o.format = val
+		o.formats = append(o.formats, val)
 	case 'e':
 		o.empty = val
 	}
@@ -324,28 +324,46 @@ type spec struct {
 	field int // 0-based field index
 }
 
-func parseFormat(s string) ([]spec, error) {
-	s = strings.ReplaceAll(s, " ", ",")
-	s = strings.ReplaceAll(s, "\t", ",")
-	parts := strings.Split(s, ",")
+func parseFormats(formats []string) ([]spec, error) {
 	var specs []spec
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
+	for _, s := range formats {
+		s = strings.ReplaceAll(s, " ", ",")
+		s = strings.ReplaceAll(s, "\t", ",")
+		parts := strings.Split(s, ",")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if p == "0" {
+				specs = append(specs, spec{file: 0})
+				continue
+			}
+			fileText, fieldText, ok := strings.Cut(p, ".")
+			field, fieldOK := parsePositive(fieldText)
+			if !ok || fieldText == "" || !fieldOK {
+				return nil, fmt.Errorf("invalid field specification: %q", p)
+			}
+			file := 0
+			switch fileText {
+			case "1":
+				file = 1
+			case "2":
+				file = 2
+			default:
+				return nil, fmt.Errorf("invalid field specification: %q", p)
+			}
+			specs = append(specs, spec{file: file, field: field - 1})
 		}
-		if p == "0" {
-			specs = append(specs, spec{file: 0})
-			continue
-		}
-		var file, field int
-		_, err := fmt.Sscanf(p, "%d.%d", &file, &field)
-		if err != nil || (file != 1 && file != 2) || field <= 0 {
-			return nil, fmt.Errorf("invalid field specification: %q", p)
-		}
-		specs = append(specs, spec{file: file, field: field - 1})
 	}
 	return specs, nil
+}
+
+func selectedField(fields []string, idx int, opt *options) string {
+	if idx >= 0 && idx < len(fields) && fields[idx] != "" {
+		return fields[idx]
+	}
+	return opt.empty
 }
 
 func buildOutput(flds1, flds2 []string, field1, field2 int, opt *options, specs []spec, isPaired bool) []string {
@@ -379,16 +397,20 @@ func buildOutput(flds1, flds2 []string, field1, field2 int, opt *options, specs 
 
 	for i, sp := range specs {
 		if sp.file == 0 {
-			res[i] = joinVal
+			if joinVal == "" {
+				res[i] = opt.empty
+			} else {
+				res[i] = joinVal
+			}
 		} else if sp.file == 1 {
-			if flds1 != nil && sp.field < len(flds1) {
-				res[i] = flds1[sp.field]
+			if flds1 != nil {
+				res[i] = selectedField(flds1, sp.field, opt)
 			} else {
 				res[i] = opt.empty
 			}
 		} else if sp.file == 2 {
-			if flds2 != nil && sp.field < len(flds2) {
-				res[i] = flds2[sp.field]
+			if flds2 != nil {
+				res[i] = selectedField(flds2, sp.field, opt)
 			} else {
 				res[i] = opt.empty
 			}
