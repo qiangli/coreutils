@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -107,6 +108,10 @@ func lastLP(args []string) byte {
 		switch {
 		case a == "--":
 			return mode
+		case isLogicalLong(a):
+			mode = 'L'
+		case isPhysicalLong(a):
+			mode = 'P'
 		case a == "--logical":
 			mode = 'L'
 		case a == "--physical":
@@ -123,4 +128,34 @@ func lastLP(args []string) byte {
 		}
 	}
 	return mode
+}
+
+func isLogicalLong(arg string) bool {
+	return longBoolFlagHasValue(arg, "logical")
+}
+
+func isPhysicalLong(arg string) bool {
+	return longBoolFlagHasValue(arg, "physical")
+}
+
+func longBoolFlagHasValue(arg, name string) bool {
+	if !strings.HasPrefix(arg, "--") || arg == "--" || len(arg) <= 2 {
+		return false
+	}
+	if arg[2] == '-' {
+		return false
+	}
+	nameAndValue := arg[2:]
+	flagName, rawValue, hasValue := strings.Cut(nameAndValue, "=")
+	if !strings.HasPrefix(name, flagName) {
+		return false
+	}
+	if !hasValue {
+		return true
+	}
+	if rawValue == "" {
+		return false
+	}
+	value, err := strconv.ParseBool(rawValue)
+	return err == nil && value
 }

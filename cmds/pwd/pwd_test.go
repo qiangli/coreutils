@@ -80,6 +80,36 @@ func TestPwdPhysicalResolvesSymlinks(t *testing.T) {
 	}
 }
 
+func TestPwdLongOptionAbbreviations(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "lnk")
+	if err := os.Symlink(real, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink creation not permitted: %v", err)
+		}
+		t.Fatal(err)
+	}
+	physical, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := runInEnv(t, link, []string{"PWD=" + link}, "--phys")
+	if code != 0 || out != physical+"\n" {
+		t.Errorf("pwd --phys = %q, want physical %q", out, physical+"\n")
+	}
+
+	out, _, code = runInEnv(t, link, []string{"PWD=" + link}, "--log")
+	if code != 0 || out != link+"\n" {
+		t.Errorf("pwd --log = %q, want logical %q", out, link+"\n")
+	}
+
+	out, _, code = runInEnv(t, link, []string{"PWD=" + link}, "--log", "--physical=false", "--phys")
+	if code != 0 || out != physical+"\n" {
+		t.Errorf("pwd --log --physical=false --phys = %q, want physical %q", out, physical+"\n")
+	}
+}
+
 func TestPwdLogicalUsesValidatedPWD(t *testing.T) {
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "lnk")
