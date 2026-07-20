@@ -27,9 +27,12 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
+	printBytes := fs.BoolP("print-bytes", "b", false, "print differing bytes")
 	verbose := fs.BoolP("verbose", "l", false, "output byte numbers and differing byte values")
 	silent := fs.BoolP("silent", "s", false, "suppress all normal output")
 	quiet := fs.Bool("quiet", false, "same as -s/--silent")
+	ignoreInitial := fs.StringP("ignore-initial", "i", "", "skip the first SKIP1 bytes of FILE1 and SKIP2 bytes of FILE2")
+	bytesLimit := fs.StringP("bytes", "n", "", "compare at most LIMIT bytes")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -52,7 +55,24 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) >= 2 {
 		name2 = operands[1]
 	}
+	limit := int64(-1)
+	if *bytesLimit != "" {
+		v, err := parseSkip(*bytesLimit)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "invalid --bytes value %q", *bytesLimit)
+		}
+		limit = v
+	}
 	var skip [2]int64
+	if *ignoreInitial != "" {
+		var ok bool
+		skip[0], skip[1], ok = parseInitialPair(*ignoreInitial)
+		if !ok {
+			return tool.UsageError(rc, cmd, "invalid --ignore-initial value %q", *ignoreInitial)
+		}
+	}
+	// Positional SKIP1/SKIP2 operands set (and override) the per-file
+	// skips, matching GNU cmp's argument handling.
 	for i := 0; i < 2 && i+2 < len(operands); i++ {
 		v, err := parseSkip(operands[i+2])
 		if err != nil {
@@ -82,11 +102,11 @@ func run(rc *tool.RunContext, args []string) int {
 
 	switch {
 	case sil:
-		return cmpSilent(rc, s1, s2)
+		return cmpSilent(rc, s1, s2, limit)
 	case listAll:
-		return cmpVerbose(rc, name1, name2, s1, s2, size1, size2)
+		return cmpVerbose(rc, name1, name2, s1, s2, size1, size2, limit, *printBytes)
 	default:
-		return cmpFirstDiff(rc, name1, name2, s1, s2)
+		return cmpFirstDiff(rc, name1, name2, s1, s2, limit, *printBytes)
 	}
 }
 
@@ -175,10 +195,13 @@ func openSrc(rc *tool.RunContext, name string, skip int64) (*src, int64, int) {
 // "FILE1 FILE2 differ: byte N, line L" (stdout, exit 1), or the GNU
 // EOF diagnostic (stderr, exit 1) when one file is a prefix of the
 // other.
-func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src) int {
+func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit int64, printBytes bool) int {
 	var matched, newlines int64
 	lastWasNL := false
 	for {
+		if limit >= 0 && matched >= limit {
+			return 0
+		}
 		b1, err1 := s1.r.ReadByte()
 		b2, err2 := s2.r.ReadByte()
 		if err1 == io.EOF && err2 == io.EOF {
@@ -201,7 +224,12 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src) int {
 			return 2
 		}
 		if b1 != b2 {
-			fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d\n", name1, name2, matched+1, newlines+1)
+			if printBytes {
+				fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n",
+					name1, name2, matched+1, newlines+1, b1, sprintc(b1), b2, sprintc(b2))
+			} else {
+				fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d\n", name1, name2, matched+1, newlines+1)
+			}
 			return 1
 		}
 		matched++
@@ -216,7 +244,7 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src) int {
 // The offset column is right-aligned to the width of the largest
 // possible byte number — min(file sizes) when both are regular files,
 // else the width of the largest off_t, matching GNU.
-func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, size2 int64) int {
+func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, size2, limit int64, printBytes bool) int {
 	width := 19 // digits in max int64, GNU's fallback for unseekable inputs
 	if size1 >= 0 && size2 >= 0 {
 		m := size1
@@ -231,6 +259,12 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 	var pos int64
 	differed := false
 	for {
+		if limit >= 0 && pos >= limit {
+			if differed {
+				return 1
+			}
+			return 0
+		}
 		b1, err1 := s1.r.ReadByte()
 		b2, err2 := s2.r.ReadByte()
 		if err1 == io.EOF && err2 == io.EOF {
@@ -258,13 +292,21 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 		pos++
 		if b1 != b2 {
 			differed = true
-			fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2)
+			if printBytes {
+				fmt.Fprintf(rc.Out, "%*d %3o %s %3o %s\n", width, pos, b1, sprintc(b1), b2, sprintc(b2))
+			} else {
+				fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2)
+			}
 		}
 	}
 }
 
-func cmpSilent(rc *tool.RunContext, s1, s2 *src) int {
+func cmpSilent(rc *tool.RunContext, s1, s2 *src, limit int64) int {
+	var compared int64
 	for {
+		if limit >= 0 && compared >= limit {
+			return 0
+		}
 		b1, err1 := s1.r.ReadByte()
 		b2, err2 := s2.r.ReadByte()
 		if err1 == io.EOF && err2 == io.EOF {
@@ -279,6 +321,7 @@ func cmpSilent(rc *tool.RunContext, s1, s2 *src) int {
 		if b1 != b2 {
 			return 1
 		}
+		compared++
 	}
 }
 
@@ -332,6 +375,46 @@ func parseSkip(s string) (int64, error) {
 		return 0, fmt.Errorf("value too large: %q", s)
 	}
 	return v * mult, nil
+}
+
+// parseInitialPair parses a --ignore-initial value: either a single SKIP
+// applied to both files, or SKIP1:SKIP2 for a per-file skip, matching GNU.
+func parseInitialPair(s string) (int64, int64, bool) {
+	left, right, hasColon := strings.Cut(s, ":")
+	if !hasColon {
+		v, err := parseSkip(s)
+		if err != nil {
+			return 0, 0, false
+		}
+		return v, v, true
+	}
+	if left == "" || right == "" || strings.Contains(right, ":") {
+		return 0, 0, false
+	}
+	a, err1 := parseSkip(left)
+	b, err2 := parseSkip(right)
+	return a, b, err1 == nil && err2 == nil
+}
+
+// sprintc renders a byte the way GNU cmp -b does: printable bytes as
+// themselves, bytes with the high bit set prefixed "M-", and control
+// bytes (and DEL) in caret notation.
+func sprintc(c byte) string {
+	var b strings.Builder
+	if c >= 128 {
+		b.WriteString("M-")
+		c -= 128
+	}
+	switch {
+	case c < 32:
+		b.WriteByte('^')
+		b.WriteByte(c + 64)
+	case c == 127:
+		b.WriteString("^?")
+	default:
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 func multiplier(suf string) (int64, bool) {
