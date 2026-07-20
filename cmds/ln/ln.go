@@ -252,10 +252,10 @@ func createHardLink(targetPath, destPath string, logical, physical bool) error {
 
 func readYes(reader *bufio.Reader) (bool, error) {
 	line, err := reader.ReadString('\n')
-	if err != nil && len(line) == 0 {
+	if err != nil && line == "" {
 		return false, err
 	}
-	line = strings.TrimLeft(line, " \t")
+	line = strings.TrimSpace(line)
 	return strings.HasPrefix(line, "y") || strings.HasPrefix(line, "Y"), err
 }
 
