@@ -117,7 +117,13 @@ func (r *rm) remove1(op string) bool {
 	// filesystem call: RunContext.Path normalizes a relative operand, so a
 	// bare "." would otherwise resolve to the working directory itself and
 	// (on some platforms, notably Windows) let os.Remove succeed against it.
-	if base := filepath.Base(filepath.Clean(op)); base == "." || base == ".." {
+	//
+	// The base is taken from the ORIGINAL operand (filepath.Base), NOT from
+	// filepath.Clean(op): Clean collapses "a/." to "a" and "a/b/.." to "a",
+	// silently swallowing the trailing dot/dotdot that POSIX mandates the
+	// kernel reject. Using Base on the raw path preserves the true last
+	// component so "a/.", "a/./", "a/b/..", etc. are all caught here.
+	if base := filepath.Base(op); base == "." || base == ".." {
 		r.errf("failed to remove '%s': Invalid argument", op)
 		return false
 	}
