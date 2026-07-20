@@ -133,17 +133,22 @@ func TestIDAliasHelpVersion(t *testing.T) {
 }
 
 func TestIDAFlag(t *testing.T) {
+	want, wantErr, wantCode := runTool(t)
+	out, errb, code := runTool(t, "-a")
+	if code != wantCode || out != want || errb != wantErr {
+		t.Errorf("-a = (out=%q err=%q code=%d), want (out=%q err=%q code=%d)", out, errb, code, want, wantErr, wantCode)
+	}
+	_, errb, code = runTool(t, "-a", "-u", "-g")
+	if code != 2 || !strings.Contains(errb, "more than one choice") {
+		t.Errorf("-a -u -g: code=%d err=%q", code, errb)
+	}
+}
+
+func TestIDRejectsExtraUserOperand(t *testing.T) {
 	u := current(t)
-	out, _, code := runTool(t, "-a", "-u", "-g")
-	if code != 0 {
-		t.Fatalf("-a -u -g: code=%d", code)
-	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("-a -u -g output too short: %q", out)
-	}
-	if lines[0] != u.Uid || lines[1] != u.Gid {
-		t.Errorf("-a -u -g lines: %q want uid=%s then gid=%s", out, u.Uid, u.Gid)
+	out, errb, code := runTool(t, "-u", u.Username, u.Username)
+	if code != 2 || out != "" || !strings.Contains(errb, "extra operand") {
+		t.Errorf("id -u USER USER = (out=%q err=%q code=%d), want extra-operand usage error", out, errb, code)
 	}
 }
 

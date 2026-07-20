@@ -1,5 +1,5 @@
 // Package idcmd implements id(1) per the GNU coreutils manual: print
-// user and group information for each specified USER, or for the
+// user and group information for a specified USER, or for the
 // current process when no USER is given.
 //
 // IDs come from os/user, so they are strings throughout: numeric
@@ -19,8 +19,8 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "id",
-	Synopsis: "Print user and group information for each USER, or the current process.",
-	Usage:    "id [OPTION]... [USER]...",
+	Synopsis: "Print user and group information for a USER, or the current process.",
+	Usage:    "id [OPTION]... [USER]",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
@@ -31,7 +31,7 @@ func run(rc *tool.RunContext, args []string) int {
 	gFlag := fs.BoolP("group", "g", false, "print only the effective group ID")
 	GFlag := fs.BoolP("groups", "G", false, "print all group IDs")
 	nFlag := fs.BoolP("name", "n", false, "print a name instead of a number, for -ugG")
-	aFlag := fs.BoolP("all-compat", "a", false, "ignore, for compatibility with other versions")
+	fs.BoolP("all-compat", "a", false, "ignore, for compatibility with other versions")
 	rFlag := fs.BoolP("real", "r", false, "print the real ID instead of the effective ID")
 	pFlag := fs.BoolP("pretty", "p", false, "make output human-readable")
 	zFlag := fs.BoolP("zero", "z", false, "delimit entries with NUL, not newline")
@@ -51,7 +51,7 @@ func run(rc *tool.RunContext, args []string) int {
 			chosen++
 		}
 	}
-	if !*aFlag && chosen > 1 {
+	if chosen > 1 {
 		return tool.UsageError(rc, cmd, "cannot print \"only\" of more than one choice")
 	}
 	if *rFlag && !*uFlag && !*gFlag {
@@ -59,6 +59,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if *nFlag && chosen == 0 {
 		return tool.UsageError(rc, cmd, "cannot print only names or real IDs in default format")
+	}
+	if len(operands) > 1 {
+		return tool.UsageError(rc, cmd, "extra operand %q", operands[1])
 	}
 	useName := *nFlag || *pFlag
 	term := "\n"
@@ -81,7 +84,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		results, pErr := formatOne(u, *uFlag, *gFlag, *GFlag, useName, *aFlag, *rFlag, name == "")
+		results, pErr := formatOne(u, *uFlag, *gFlag, *GFlag, useName, *rFlag, name == "")
 		if pErr != nil {
 			fmt.Fprintf(rc.Err, "id: %v\n", pErr)
 			status = 1
@@ -104,7 +107,7 @@ func lookupUser(name string) (*user.User, error) {
 	return user.LookupId(name)
 }
 
-func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag, rFlag, current bool) ([]string, error) {
+func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, rFlag, current bool) ([]string, error) {
 	var results []string
 	uid, gid := u.Uid, u.Gid
 	if current {
@@ -120,20 +123,14 @@ func formatOne(u *user.User, uFlag, gFlag, GFlag, useName, aFlag, rFlag, current
 			}
 		}
 		results = append(results, val)
-		if !aFlag {
-			return results, nil
-		}
-		fallthrough
+		return results, nil
 	case gFlag:
 		val := gid
 		if useName {
 			val = groupName(gid)
 		}
 		results = append(results, val)
-		if !aFlag {
-			return results, nil
-		}
-		fallthrough
+		return results, nil
 	case GFlag:
 		gids, err := groupIDs(u)
 		if err != nil {
