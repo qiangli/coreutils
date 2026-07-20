@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/issue"
+	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
 // storeFunc resolves the store for the current scope, returning it and a short scope
@@ -26,6 +27,68 @@ type storeFunc func() (*issue.Store, string, error)
 type itemJSON struct {
 	*issue.Issue
 	Overdue bool `json:"overdue"`
+}
+
+// listItem is one row of the `todo list` result envelope — a projection of an
+// issue into the fields a list consumer needs, rather than the full issue
+// record (which drags in register-only fields like kind/stage/refs/weave).
+//
+//	state    — the lifecycle vocabulary (todo|assigned|doing|blocked|done);
+//	           this is the issue's Status under the name a list consumer reads.
+//	scope    — the resolved scope label, repeated per row so an item stays
+//	           self-describing once rows from several lists are merged.
+//	age      — the human-readable duration the text view shows (3d, 5h, 12m);
+//	created  — the machine timestamp behind it.
+type listItem struct {
+	ID        string     `json:"id"`
+	Seq       int        `json:"seq,omitempty"`
+	Title     string     `json:"title"`
+	State     string     `json:"state"`
+	Priority  string     `json:"priority,omitempty"`
+	Scope     string     `json:"scope"`
+	Created   time.Time  `json:"created"`
+	Age       string     `json:"age"`
+	Due       *time.Time `json:"due,omitempty"`
+	Overdue   bool       `json:"overdue,omitempty"`
+	Recurring string     `json:"recurring,omitempty"`
+	Assignee  string     `json:"assignee,omitempty"`
+	Closed    *time.Time `json:"closed,omitempty"`
+}
+
+// listResult is the result object of the `todo list --json` envelope: the
+// resolved scope/folder (which list this is — the same context the text header
+// prints) and the projected rows. Wrapping items under result keeps the shape
+// aligned with the other bashy verbs (weave list --json -> result.items).
+type listResult struct {
+	Scope  string     `json:"scope"`
+	Folder string     `json:"folder"`
+	Count  int        `json:"count"`
+	Items  []listItem `json:"items"`
+}
+
+// toListItems projects the store's issues into list-envelope rows, stamping each
+// with the resolved scope so a row is self-describing out of context. age is
+// computed here (not stored) so it stays consistent with the text view.
+func toListItems(items []*issue.Issue, scope string) []listItem {
+	out := make([]listItem, 0, len(items))
+	for _, it := range items {
+		out = append(out, listItem{
+			ID:        it.ID,
+			Seq:       it.Seq,
+			Title:     it.Title,
+			State:     it.Status,
+			Priority:  it.Priority,
+			Scope:     scope,
+			Created:   it.Created,
+			Age:       age(it.Created),
+			Due:       it.Due,
+			Overdue:   IsOverdue(it),
+			Recurring: it.Recurring,
+			Assignee:  it.Assignee,
+			Closed:    it.Closed,
+		})
+	}
+	return out
 }
 
 // NewTodoCmd builds `bashy todo` — the task list over one item model. The scope is
@@ -177,11 +240,18 @@ func newListCmd(sf storeFunc) *cobra.Command {
 				slices.Reverse(items)
 			}
 			if jsonOut {
-				out := make([]itemJSON, 0, len(items))
-				for _, it := range items {
-					out = append(out, itemJSON{Issue: it, Overdue: IsOverdue(it)})
+				// Machine-readable envelope — same versioned shape the other bashy
+				// verbs use (schema_version + command + status + result.items), via
+				// the shared weavecli emitter so schema_version stays pinned to the
+				// one constant every verb agrees on. Text output below is unchanged.
+				res := listResult{
+					Scope:  scope,
+					Folder: folder(st),
+					Count:  len(items),
+					Items:  toListItems(items, scope),
 				}
-				return emitJSON(cmd, out)
+				weavecli.EmitOK(cmd.OutOrStdout(), weavecli.OutputJSON, "todo list", res)
+				return nil
 			}
 			// The header names WHICH list — auto-detected scope + exact folder — so
 			// there is never confusion about where these tasks live.
