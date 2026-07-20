@@ -379,14 +379,8 @@ func (s *sorter) compareKeys(a, b string) int {
 			d = monthCompare(ka, kb)
 		case k.opts.version:
 			d = versionCompare(ka, kb)
-		case k.opts.dict:
-			d = dictCompare(ka, kb)
-		case k.opts.ignoreNP:
-			d = ignoreNPCompare(ka, kb)
-		case k.opts.fold:
-			d = foldCompare(ka, kb)
 		default:
-			d = strings.Compare(ka, kb)
+			d = textKeyCompare(ka, kb, k.opts)
 		}
 		if d != 0 {
 			if k.opts.reverse {
