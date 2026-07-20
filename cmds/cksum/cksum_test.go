@@ -154,6 +154,10 @@ func TestCKSumCheckMode(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "--check is not supported with --algorithm={bsd,sysv,crc,crc32b}") {
 		t.Fatalf("bsd -c = (%q, %d)", errb, code)
 	}
+	_, errb, code = runTool(t, dir, "", "-c", "--untagged")
+	if code != 2 || !strings.Contains(errb, "the --untagged option is meaningless when verifying checksums") {
+		t.Fatalf("untagged -c = (%q, %d)", errb, code)
+	}
 
 	checks = "SHA1 (a.txt) = a9993e364706816aba3e25717850c26c9cd0d89d\n"
 	out, errb, code = runTool(t, dir, checks, "--algorithm=sha1", "-c")
@@ -162,7 +166,7 @@ func TestCKSumCheckMode(t *testing.T) {
 	}
 
 	checks = "900150983cd24fb0d6963f7d28e17f72  a.txt\n"
-	out, errb, code = runTool(t, dir, checks, "--algorithm=md5", "--untagged", "-c", "--quiet")
+	out, errb, code = runTool(t, dir, checks, "--algorithm=md5", "-c", "--quiet")
 	if code != 0 || out != "" || errb != "" {
 		t.Fatalf("md5 quiet check = (%q, %q, %d)", out, errb, code)
 	}
@@ -256,6 +260,10 @@ func TestCKSumErrors(t *testing.T) {
 	_, errb, code = runTool(t, "", "", "--algorithm=sha1", "--raw", "--base64")
 	if code != 2 || !strings.Contains(errb, "mutually exclusive") {
 		t.Fatalf("conflicting encodings = (%q, %d)", errb, code)
+	}
+	_, errb, code = runTool(t, "", "abc", "--algorithm=sha1", "--tag", "--text")
+	if code != 2 || !strings.Contains(errb, "--tag does not support --text mode") {
+		t.Fatalf("tag text = (%q, %d)", errb, code)
 	}
 	// --debug information goes to stderr, not stdout (GNU).
 	out, errb, code := runTool(t, "", "", "--debug")
