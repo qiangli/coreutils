@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -35,7 +36,7 @@ type CloudConfig struct {
 // Resolve fills the base URL and Bearer token, in order:
 //
 //	URL:   --url flag > $BASHY_CLOUDBOX_URL > https://ai.dhnt.io
-//	Token: --token flag > $BASHY_FLEET_TOKEN > $BASHY_API_KEY
+//	Token: --token flag > $BASHY_FLEET_TOKEN > $BASHY_API_KEY > paired outpost
 //
 // The token needs the read scopes for the nouns being synced. Minting it
 // read-only is the point: a token that pulls a catalog should not be able to
@@ -44,9 +45,24 @@ func (c CloudConfig) Resolve() (CloudClient, error) {
 	base := strings.TrimRight(firstNonEmptyStr(c.URL, os.Getenv("BASHY_CLOUDBOX_URL"), "https://ai.dhnt.io"), "/")
 	tok := firstNonEmptyStr(c.Token, os.Getenv("BASHY_FLEET_TOKEN"), os.Getenv("BASHY_API_KEY"))
 	if tok == "" {
+		tok = outpostToken()
+	}
+	if tok == "" {
 		return CloudClient{}, fmt.Errorf("fleet: no cloudbox token (set $BASHY_FLEET_TOKEN or pass --token); the registry works fine without one")
 	}
 	return CloudClient{BaseURL: base, Token: tok, HTTP: &http.Client{Timeout: 20 * time.Second}}, nil
+}
+
+func outpostToken() string {
+	path, err := exec.LookPath("outpost")
+	if err != nil {
+		return ""
+	}
+	out, err := exec.Command(path, "token", "print").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func firstNonEmptyStr(vals ...string) string {

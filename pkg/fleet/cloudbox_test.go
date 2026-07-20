@@ -1,41 +1,55 @@
 package fleet
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/assetring"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
 // fakePlane serves the Bearer asset API with canned bodies.
 func fakePlane(t *testing.T, bodies map[string]string) (CloudClient, *int) {
 	t.Helper()
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
+		status := http.StatusOK
+		body := ""
 		if r.Header.Get("Authorization") != "Bearer tok" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
+			status = http.StatusUnauthorized
+		} else if canned, ok := bodies[r.URL.Path]; !ok {
+			status = http.StatusNotFound
+		} else {
+			body = canned
 		}
-		body, ok := bodies[r.URL.Path]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-	return CloudClient{BaseURL: srv.URL, Token: "tok", HTTP: srv.Client()}, &calls
+		return &http.Response{
+			StatusCode: status,
+			Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    r,
+		}, nil
+	})}
+	return CloudClient{BaseURL: "https://cloudbox.test", Token: "tok", HTTP: httpClient}, &calls
 }
 
 func TestResolveNeedsAToken(t *testing.T) {
 	t.Setenv("BASHY_FLEET_TOKEN", "")
 	t.Setenv("BASHY_API_KEY", "")
+	t.Setenv("PATH", t.TempDir())
 	_, err := CloudConfig{}.Resolve()
 	if err == nil || !strings.Contains(err.Error(), "works fine without one") {
 		t.Fatalf("err = %v — the message must say the registry does not need it", err)
@@ -51,6 +65,30 @@ func TestResolveNeedsAToken(t *testing.T) {
 	c, _ = CloudConfig{URL: "https://flag.example", Token: "flagtok"}.Resolve()
 	if c.BaseURL != "https://flag.example" || c.Token != "flagtok" {
 		t.Fatalf("client = %+v", c)
+	}
+}
+
+func TestResolveGetsTokenFromPairedOutpost(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	t.Setenv("BASHY_FLEET_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+
+	bindir := t.TempDir()
+	outpost := filepath.Join(bindir, "outpost")
+	fixture := "#!/bin/sh\n[ \"$1\" = token ] && [ \"$2\" = print ] || exit 9\nprintf '  paired-token\\n'\n"
+	if err := os.WriteFile(outpost, []byte(fixture), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bindir)
+
+	c, err := CloudConfig{}.Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Token != "paired-token" {
+		t.Fatalf("token = %q, want paired-token", c.Token)
 	}
 }
 
@@ -164,7 +202,13 @@ func TestUnreachablePlaneDegradesToTheCachedRing(t *testing.T) {
 	}
 
 	// The plane is now gone; the catalog still answers from the cache.
-	dead := CloudClient{BaseURL: "http://127.0.0.1:1", Token: "tok", HTTP: client.HTTP}
+	dead := CloudClient{
+		BaseURL: "https://cloudbox.test",
+		Token:   "tok",
+		HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("control plane unavailable")
+		})},
+	}
 	if _, err := dead.Sync(CloudCacheRoot(root), dirModels); err == nil {
 		t.Fatal("sync must report an unreachable plane")
 	}
