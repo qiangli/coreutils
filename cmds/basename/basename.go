@@ -9,6 +9,7 @@ package basenamecmd
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -58,7 +59,15 @@ func run(rc *tool.RunContext, args []string) int {
 		end = "\x00"
 	}
 	for _, name := range names {
-		fmt.Fprint(rc.Out, base(name, suf), end)
+		output := base(name, suf) + end
+		n, err := io.WriteString(rc.Out, output)
+		if err == nil && n != len(output) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			fmt.Fprintf(rc.Err, "basename: write error: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }
