@@ -91,17 +91,23 @@ func writeOperands(rc *tool.RunContext, operands []string, escapes, noNewline bo
 	var buf bytes.Buffer
 	stopped := false
 	for k, s := range operands {
-		if k > 0 {
-			buf.WriteByte(' ')
-		}
+		var operand bytes.Buffer
 		if escapes {
-			if interpretEscapes(&buf, s) {
+			if interpretEscapes(&operand, s) {
 				stopped = true
+				if k > 0 && operand.Len() > 0 {
+					buf.WriteByte(' ')
+				}
+				buf.Write(operand.Bytes())
 				break
 			}
 		} else {
-			buf.WriteString(s)
+			operand.WriteString(s)
 		}
+		if k > 0 {
+			buf.WriteByte(' ')
+		}
+		buf.Write(operand.Bytes())
 	}
 	if !stopped && !noNewline {
 		buf.WriteByte('\n')

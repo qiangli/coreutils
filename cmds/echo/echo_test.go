@@ -40,6 +40,10 @@ func TestEcho(t *testing.T) {
 		{[]string{"-e", `\e[m`}, "\x1b[m\n"},
 		// \c stops all output, including the trailing newline.
 		{[]string{"-e", `ab\cde`, "never"}, "ab"},
+		{[]string{"-e", "ab", `\cde`}, "ab"},
+		{[]string{"-e", "ab", `c\cde`}, "ab c"},
+		{[]string{"-e", "ab", "", `\cde`}, "ab "},
+		{[]string{"-e", "ab", "cd", `\cde`}, "ab cd"},
 		// Octal: \0NNN with 0-3 digits.
 		{[]string{"-e", `\0101`}, "A\n"},
 		{[]string{"-e", `\07`}, "\a\n"},
