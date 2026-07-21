@@ -103,6 +103,27 @@ func TestMissingFlagArgumentDoesNotSuggestSameFlag(t *testing.T) {
 	}
 }
 
+func TestMissingFlagArgumentJSONDoesNotSuggestSameFlag(t *testing.T) {
+	t.Setenv("BASHY_AGENTIC", "")
+	_, stderr, code, _ := runWeaveStreams(t, "start", "--json", "--tool")
+	if code != weavecli.ExitInvalidArg {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, weavecli.ExitInvalidArg, stderr)
+	}
+	var env weavecli.Envelope
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stderr)), &env); err != nil {
+		t.Fatalf("stderr should be a JSON envelope, got %q (%v)", stderr, err)
+	}
+	if env.Error == nil {
+		t.Fatalf("envelope should carry an error, got %+v", env)
+	}
+	if !strings.Contains(env.Error.Message, "flag needs an argument: --tool") {
+		t.Fatalf("message should report the missing value for --tool, got %q", env.Error.Message)
+	}
+	if strings.Contains(env.Error.Message, "did you mean --tool?") {
+		t.Fatalf("message should not suggest the same valid flag for a missing value, got %q", env.Error.Message)
+	}
+}
+
 func TestNearestFlagSuggestion(t *testing.T) {
 	cmd := newWeaveBatonWriteCmd()
 	for _, tc := range []struct {
