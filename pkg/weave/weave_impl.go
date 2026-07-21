@@ -274,6 +274,18 @@ type weaveItem struct {
 	// refuses these without --force.
 	IsolationViolated bool     `json:"isolation_violated,omitempty"`
 	EscapedPaths      []string `json:"escaped_paths,omitempty"`
+	// Salvageable and NeedsSteward are the REAPER's durable flags — the two
+	// places the lifecycle ends in a decision a machine may not make for you
+	// (see weave_reaper.go). Unlike Stale/Blocked they ARE persisted: the
+	// whole failure they fix is that "somebody must decide this" existed only
+	// for as long as one command's output was on screen.
+	//
+	// NeedsSteward: submitted, past the steward threshold, with no merge;
+	// StewardReason names the decision that is owed. (Salvageable — this
+	// stopped run is sitting on committed work — is declared above with
+	// UnmergedCommits, the projection it is measured alongside.)
+	NeedsSteward  bool   `json:"needs_steward,omitempty"`
+	StewardReason string `json:"steward_reason,omitempty"`
 }
 
 // weaveComment is one entry in an issue's history thread. Append-only;
@@ -993,56 +1005,21 @@ func weaveMarkLaunchFailed(dir string, issueID int64, cause error) {
 	})
 }
 
-// weaveRecoverOrphanedAllocations turns a pre-agent allocation whose launcher
-// died into durable terminal evidence. Unlike a working run, provisioning has
-// no subagent to report failure. Legacy records did not persist the launcher
-// PID, so an aged active provisioning phase is also an orphan; intentionally
-// no-spawn/manual allocations have no start time and are preserved.
+// weaveRecoverOrphanedAllocations and weaveRecoverAbandonedFinalizations are
+// the locked, single-rule entry points kept for callers that want exactly one
+// recovery. The rules themselves now live in weave_reaper.go, where they are
+// two of the passes weaveReapQueue applies together — see the lifecycle
+// invariant at the top of weave_lifecycle.go.
 func weaveRecoverOrphanedAllocations(dir string) error {
 	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
-		now := time.Now().UTC()
-		for _, it := range q.Items {
-			if !weaveAllocatedLaunchOrphaned(it, now) {
-				continue
-			}
-			it.State = "failed"
-			it.LaunchPhase = "failed: provisioning launcher exited before agent launch"
-			it.FinishedAt = now
-			it.WrapperPid = 0
-			it.CtlSock = ""
-		}
+		weaveReapOrphanedAllocations(q, time.Now().UTC())
 		return nil
 	})
 }
 
-// weaveRecoverAbandonedFinalizations releases the short finalizer lease when
-// its conductor disappears. A surviving wrapper resumes ownership of the run;
-// once both are gone, failed state preserves the workspace for explicit
-// salvage rather than leaving phantom capacity in finalizing forever.
 func weaveRecoverAbandonedFinalizations(dir string) error {
 	return withWeaveQueueLock(dir, func(q *weaveQueue) error {
-		now := time.Now().UTC()
-		for _, it := range q.Items {
-			if !weaveWrapperTerminalClaimed(it) {
-				continue
-			}
-			expired := it.FinalizingAt.IsZero() || now.Sub(it.FinalizingAt) >= weaveFinalizationLease
-			if !expired && it.FinalizerPID > 0 && pidAlive(it.FinalizerPID) {
-				continue
-			}
-			it.FinalizerPID = 0
-			it.FinalizingAt = time.Time{}
-			if it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
-				it.State = "working"
-				it.Completion = ""
-				continue
-			}
-			it.State = "failed"
-			it.Completion = "failed: finalizer exited before terminal evidence"
-			it.FinishedAt = now
-			it.WrapperPid = 0
-			it.CtlSock = ""
-		}
+		weaveReapAbandonedFinalizations(q, time.Now().UTC())
 		return nil
 	})
 }
@@ -1983,11 +1960,11 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		return nil
 	}
 	dir, _ := weaveQueueDir(root)
-	if err := weaveRecoverOrphanedAllocations(dir); err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
-			weavecli.ExitGenericFail, err))
-	}
-	if err := weaveRecoverAbandonedFinalizations(dir); err != nil {
+	// THE REAPER (weave_reaper.go). Every read of the queue is an
+	// opportunity to end a limbo, and `weave list` is the read that happens
+	// most: a dead-wrapper run must not survive being LOOKED AT. Idempotent,
+	// and it destroys nothing — it only writes state fields and flags.
+	if _, err := weaveReapQueue(dir, root, weaveBaseBranch(root)); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
 			weavecli.ExitGenericFail, err))
 	}
@@ -2009,6 +1986,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	reclaimable := 0
 	var salvageable []int64
 	var violated []*weaveItem
+	var needsSteward []*weaveItem
 	for _, it := range q.Items {
 		// A run that DIED WITH GOOD WORK INSIDE IT.
 		//
@@ -2035,6 +2013,11 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		// That is the fleet-evidence rule inverted: we would be concluding "no
 		// work" from the ABSENCE OF A REPORT BY A PROCESS THAT DID NOT SURVIVE TO
 		// REPORT. The artifact is right there on disk. Go and look at it.
+		//
+		// The reaper persists it.Salvageable so the decision outlives this one
+		// screenful; this re-measures for a queue read before any reap. Both
+		// sides go through weaveClassifySalvageable, so the displayed answer
+		// and the persisted one can never disagree.
 		weaveAnnotateSalvageable(root, base, it)
 		if it.Salvageable {
 			salvageable = append(salvageable, it.ID)
@@ -2061,6 +2044,11 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		if it.IsolationViolated {
 			violated = append(violated, it)
 		}
+		// The reaper's other determinate outcome: a submission nobody
+		// pulled. Without this it is indistinguishable from work in flight.
+		if it.NeedsSteward && it.State == "submitted" {
+			needsSteward = append(needsSteward, it)
+		}
 		items = append(items, it)
 	}
 	var others []map[string]any
@@ -2077,6 +2065,13 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		}
 		if reclaimable > 0 {
 			res["reclaimable"] = reclaimable
+		}
+		if len(needsSteward) > 0 {
+			rows := make([]map[string]any, 0, len(needsSteward))
+			for _, it := range needsSteward {
+				rows = append(rows, map[string]any{"issue": it.ID, "reason": it.StewardReason})
+			}
+			res["needs_steward"] = rows
 		}
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave list", res))
 	}
@@ -2113,8 +2108,23 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	}
 	weavePrintIsolationFooter(cmd.OutOrStdout(), violated)
 	weavePrintSalvageableFooter(cmd.OutOrStdout(), salvageable)
+	weavePrintStewardFooter(cmd.OutOrStdout(), needsSteward)
 	weavePrintReclaimableFooter(cmd.OutOrStdout(), reclaimable)
 	return nil
+}
+
+// weavePrintStewardFooter names submissions that have been sitting unmerged
+// past the steward threshold. A `submitted` item has no process behind it and
+// no timeout: without this line it is indistinguishable from work in flight,
+// which is exactly how a finished branch waits forever.
+func weavePrintStewardFooter(w io.Writer, items []*weaveItem) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "needs steward decision (%d):\n", len(items))
+	for _, it := range items {
+		fmt.Fprintf(w, "  #%d %s\n", it.ID, it.StewardReason)
+	}
 }
 
 type weavePauseResult struct {
@@ -4157,11 +4167,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			weavecli.ExitPrecondFail, err))
 	}
 	dir, _ := weaveQueueDir(root)
-	if err := weaveRecoverOrphanedAllocations(dir); err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
-			weavecli.ExitGenericFail, err))
-	}
-	if err := weaveRecoverAbandonedFinalizations(dir); err != nil {
+	// Same contract as `weave list`: asking about a run reaps it. A status
+	// that reported "working" for a run whose wrapper died hours ago was the
+	// most convincing version of the limbo.
+	if _, err := weaveReapQueue(dir, root, weaveBaseBranch(root)); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
 			weavecli.ExitGenericFail, err))
 	}
@@ -4240,6 +4249,18 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		if it.VerifyExit != nil {
 			res["verify_exit"] = *it.VerifyExit
 		}
+		if it.Salvageable {
+			res["salvageable"] = true
+		}
+		if it.NeedsSteward {
+			res["needs_steward"] = true
+			res["steward_reason"] = it.StewardReason
+		}
+		// The lifecycle invariant, per-item: an open run always answers
+		// "what closes this?".
+		if !weaveIsClosedState(it.State) {
+			res["next_steps"] = weaveNextSteps(it)
+		}
 		res["auto_committed"] = it.AutoCommitted
 		if it.AutoCommitError != "" {
 			res["auto_commit_error"] = it.AutoCommitError
@@ -4259,6 +4280,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		stateLine += " (stale — wrapper pid dead)"
 	}
 	fmt.Fprintf(w, "  state:    %s\n", stateLine)
+	if !weaveIsClosedState(it.State) {
+		fmt.Fprintf(w, "  next:     %s\n", weaveNextSteps(it))
+	}
 	if it.Register != "" {
 		regStr := it.Register
 		if len(regStr) > 8 {

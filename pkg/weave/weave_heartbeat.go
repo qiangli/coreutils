@@ -102,6 +102,14 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 	for {
 		// Define the tick body as a closure to use early returns safely
 		shouldExit := func() bool {
+			// Reap BEFORE reading. A dead-wrapper run still recorded as
+			// "working" would otherwise keep hasWork true forever: the
+			// heartbeat would never idle out, and the queue would never
+			// close. The idle-shutdown promise depends on the lifecycle
+			// actually terminating (see weave_reaper.go).
+			if _, err := weaveReapQueue(queueDir, root, weaveBaseBranch(root)); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "heartbeat: reaper: %v\n", err)
+			}
 			q, err := loadWeaveQueue(queueDir)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "heartbeat: failed to load queue: %v\n", err)
