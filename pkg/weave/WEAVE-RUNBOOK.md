@@ -434,6 +434,25 @@ bashy weave reset
 
 ## Common situations cheat sheet
 
+### A merge is running and you need the board
+
+You do not have to wait, and you must never kill the autopilot to get in.
+`weave list`, `weave show`/`status`, `weave add` and `weave comment` all work
+while a `weave pull --review-agent` cycle is in flight: reads are lock-free and
+writes take the queue lock only for the milliseconds of their own mutation. An
+issue you file mid-merge survives — the pull writes back only the runs it
+actually changed.
+
+The one thing that is genuinely exclusive is a second merge, because a pull
+mutates the shared live checkout. It refuses immediately rather than blocking:
+
+```
+weave: a merge is already in progress in this repo (pull.lock held) — retry when it finishes
+```
+
+Retry once the first pull reports. If a crashed process ever leaves a lock
+behind, the wait is bounded (`queue busy … retry`), not indefinite.
+
 ### Tool crashed mid-work
 
 Wrap detected the exit. Workspace is intact for 30 minutes idle grace. Re-attach:

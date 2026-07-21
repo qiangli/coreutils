@@ -2011,7 +2011,9 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
 			weavecli.ExitGenericFail, err))
 	}
-	q, err := loadWeaveQueue(dir)
+	// Lock-free read (weave_lock_common.go): a board read must return even
+	// while a multi-minute merge is running.
+	q, err := readWeaveQueue(dir)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
 			weavecli.ExitGenericFail, err))
@@ -3891,11 +3893,39 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 	// so re-snapshotting per item would let item #1's merge read as item
 	// #2's escape. One instant, judged against every item's baseline.
 	liveNow, liveNowErr := weaveSnapshotLiveTree(root)
-	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
-		weaveTestPauseAfterPullLoad()
-		if issueSpecified && findWeaveItem(q, issueID) == nil {
-			return fmt.Errorf("run #%d not found%s", issueID, weaveOtherActiveQueuesHintSuffix(dir))
+	// LOCK DISCIPLINE (see weave_lock_common.go). Pull is the long operation:
+	// with --review-agent it runs an adversarial-review AGENT SUBPROCESS and a
+	// suite gate, minutes apiece. It used to do all of that holding the queue
+	// lock, which froze `weave list`, `weave add` and every other command in
+	// the repo for the whole cycle — a steward could not even read the board
+	// while the autopilot ran.
+	//
+	// So: pull takes pull.lock (exclusive because it merges into the ONE
+	// shared live checkout, non-blocking so a second caller is told "busy,
+	// retry" instead of waiting minutes), works on a PRIVATE COPY of the
+	// queue, and touches queue.lock only twice — briefly to load, briefly to
+	// record outcomes onto the queue as it stands at the end. Items added or
+	// commented while the merge ran survive, because the merge-back applies
+	// only the items this pull actually changed, by ID.
+	lockErr := withWeavePullLock(dir, func() error {
+		var q *weaveQueue
+		if err := withWeaveQueueLock(dir, func(fresh *weaveQueue) error {
+			if issueSpecified && findWeaveItem(fresh, issueID) == nil {
+				return fmt.Errorf("run #%d not found%s", issueID, weaveOtherActiveQueuesHintSuffix(dir))
+			}
+			q = fresh
+			return nil
+		}); err != nil {
+			return err
 		}
+		// Test hook: simulate a long pull. Deliberately OUTSIDE the queue lock —
+		// what it now models is a merge in flight, which other commands must be
+		// able to read and write straight through.
+		weaveTestPauseAfterPullLoad()
+		// What the items looked like when we took our copy. Anything unchanged
+		// is not written back, so a concurrent writer's edit to an untouched
+		// item is never clobbered.
+		before := weaveItemFingerprints(q)
 		for _, it := range q.Items {
 			if issueSpecified && it.ID != issueID {
 				continue
@@ -4237,9 +4267,14 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				gateDecisions = append(gateDecisions, *it)
 			}
 		}
-		return nil
+		// Re-acquire briefly and record the outcomes onto the CURRENT queue.
+		return weaveWriteBackChangedItems(dir, q, before)
 	})
 	if lockErr != nil {
+		if weaveIsBusy(lockErr) {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave pull",
+				weavecli.ExitStateConflict, lockErr))
+		}
 		code := weavecli.ExitGenericFail
 		if strings.Contains(lockErr.Error(), "not found") {
 			code = weavecli.ExitInvalidArg
@@ -4463,7 +4498,7 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
 			weavecli.ExitGenericFail, err))
 	}
-	q, err := loadWeaveQueue(dir)
+	q, err := readWeaveQueue(dir)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
 			weavecli.ExitGenericFail, err))
