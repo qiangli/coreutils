@@ -22,7 +22,14 @@ func newWeaveCmd() *cobra.Command {
 		// human line) and propagates an *exitCodeError carrying a
 		// stable weavecli exit code. cobra's default "Error: ..." +
 		// usage dump would double-print on top of the envelope, so we
-		// silence both at the parent level — subverbs inherit.
+		// silence both at the parent level — subverbs inherit. This
+		// also silences cobra's own structural errors (unknown
+		// subcommand, bad flag), which never reach a subverb and so
+		// never get printed anywhere — a host driving this command
+		// (e.g. bashy's `case "weave"` dispatch) MUST check the error
+		// Execute() returns with IsStructuredExit/ExitCode (export.go)
+		// and print it itself when it is not a structured exit, or a
+		// typo'd subcommand silently does nothing.
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: `weave is the per-repo EXECUTION engine: a local, filesystem-based

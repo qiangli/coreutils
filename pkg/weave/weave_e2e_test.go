@@ -119,6 +119,78 @@ func TestWeaveCommandSurface(t *testing.T) {
 	}
 }
 
+// TestWeaveExecuteErrorClassification pins the host-facing contract
+// IsStructuredExit/ExitCode exist to fix: a real subverb failure (`prio 1
+// --auto`, exercised above) already prints its own envelope and returns an
+// *exitCodeError, so a host must NOT print err again — but an unknown
+// subcommand never reaches a subverb, prints nothing on its own (the root's
+// SilenceErrors), and is NOT a structured exit, so a host MUST print err
+// itself or the failure is silent (the bug this pins down: a typo'd verb
+// used to exit 1 with zero output).
+func TestWeaveExecuteErrorClassification(t *testing.T) {
+	t.Setenv("BASHY_AGENTIC", "") // force human rows, not the agent JSON envelope
+
+	// Unknown subcommand: cobra raises a structural error before any
+	// subverb runs. Nothing is printed to the command's own out/err, the
+	// error is NOT a structured exit, and its message names the bad verb.
+	{
+		cmd := newWeaveCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetErr(&buf)
+		cmd.SetArgs([]string{"zzz"})
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("unknown subcommand should error")
+		}
+		if IsStructuredExit(err) {
+			t.Errorf("unknown subcommand should not be a structured exit, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "unknown command") {
+			t.Errorf("error should name the bad verb, got %q", err.Error())
+		}
+		if buf.String() != "" {
+			t.Errorf("cobra should not have printed anything itself (SilenceErrors), got %q", buf.String())
+		}
+		if code := ExitCode(err); code == 0 {
+			t.Errorf("ExitCode should be non-zero for an unknown subcommand, got %d", code)
+		}
+	}
+
+	// Real subverb failure: `prio <issue> --auto` already emits its own
+	// invalid_arg envelope and propagates a structured exit. A host must
+	// recognize this and stay silent to avoid double-printing.
+	{
+		out, code := runWeave(t, "prio", "1", "--auto", "--json")
+		if code == 0 {
+			t.Fatalf("prio 1 --auto should fail, got exit=0 out=%s", out)
+		}
+		cmd := newWeaveCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetErr(&buf)
+		cmd.SetArgs([]string{"prio", "1", "--auto", "--json"})
+		err := cmd.Execute()
+		if !IsStructuredExit(err) {
+			t.Errorf("prio 1 --auto failure should be a structured exit, got %v", err)
+		}
+		if ExitCode(err) != code {
+			t.Errorf("ExitCode(err)=%d should match the subverb's own exit=%d", ExitCode(err), code)
+		}
+		if strings.Count(buf.String(), "invalid_arg") != 1 {
+			t.Errorf("subverb output should contain exactly one envelope, got %q", buf.String())
+		}
+	}
+
+	// Success: unaffected.
+	if err := ExitCode(nil); err != 0 {
+		t.Errorf("ExitCode(nil) should be 0, got %d", err)
+	}
+	if IsStructuredExit(nil) {
+		t.Error("IsStructuredExit(nil) should be false")
+	}
+}
+
 // TestWeaveCheckReportsStatus drives `weave check` and asserts it reports
 // open as fully implemented (local-only now) and prio as the lone
 // LLM-gated path, with no init-board row. check walks the command tree
