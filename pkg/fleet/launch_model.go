@@ -15,6 +15,12 @@ func ResolveLaunchModel(tool, launchModelDisplay string) (band int, canonical st
 	return resolveLaunchModel(New(), tool, launchModelDisplay)
 }
 
+// ResolveLaunchModel is the catalog-bound form of ResolveLaunchModel, for
+// callers that already hold a (possibly pinned) catalog.
+func (c *Catalog) ResolveLaunchModel(tool, launchModelDisplay string) (band int, canonical string) {
+	return resolveLaunchModel(c, tool, launchModelDisplay)
+}
+
 func resolveLaunchModel(cat *Catalog, tool, display string) (int, string) {
 	want := normalizeModelName(display)
 	if want == "" {
