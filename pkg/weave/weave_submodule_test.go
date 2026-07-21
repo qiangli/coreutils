@@ -4,10 +4,13 @@
 package weave
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -102,6 +105,176 @@ func TestWeaveHydrateSubmodulesNoGitmodules(t *testing.T) {
 		t.Fatalf("expected no-op for a repo without submodules, got %v", err)
 	}
 }
+
+// TestWeaveHydrateNestedSubmodulesCleanliness reproduces live wave #22:
+// workspace hydration of a repo with nested submodules (e.g. external/podman/src
+// containing its own submodules) must leave all submodule levels and the superproject
+// completely clean so that auto-commit does not fail.
+func TestWeaveHydrateNestedSubmodulesCleanliness(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	base := t.TempDir()
+
+	// 1. Level 2 submodule origin (stands in for nested dependency inside podman).
+	sub2Origin := filepath.Join(base, "sub2origin")
+	mustMkdir(t, sub2Origin)
+	gitRun(t, sub2Origin, "init", "-q")
+	gitIdent(t, sub2Origin)
+	mustWrite(t, filepath.Join(sub2Origin, "nested.txt"), "nested content\n")
+	gitRun(t, sub2Origin, "add", ".")
+	gitRun(t, sub2Origin, "commit", "-qm", "init sub2")
+
+	// 2. Level 1 submodule origin (stands in for external/podman/src).
+	sub1Origin := filepath.Join(base, "sub1origin")
+	mustMkdir(t, sub1Origin)
+	gitRun(t, sub1Origin, "init", "-q")
+	gitIdent(t, sub1Origin)
+	mustWrite(t, filepath.Join(sub1Origin, "podman.txt"), "podman content\n")
+	gitRun(t, sub1Origin, "add", ".")
+	gitRun(t, sub1Origin, "commit", "-qm", "init sub1")
+	gitRun(t, sub1Origin, "-c", "protocol.file.allow=always", "submodule", "add", sub2Origin, "vendor/sub2")
+	gitRun(t, sub1Origin, "commit", "-qm", "add sub2 to sub1")
+
+	// 3. Superproject origin (stands in for coreutils).
+	superOrigin := filepath.Join(base, "superorigin")
+	mustMkdir(t, superOrigin)
+	gitRun(t, superOrigin, "init", "-q")
+	gitIdent(t, superOrigin)
+	mustWrite(t, filepath.Join(superOrigin, "root.txt"), "root content\n")
+	gitRun(t, superOrigin, "add", ".")
+	gitRun(t, superOrigin, "commit", "-qm", "root")
+	gitRun(t, superOrigin, "-c", "protocol.file.allow=always", "submodule", "add", sub1Origin, "external/podman/src")
+	gitRun(t, superOrigin, "commit", "-qm", "add sub1 to super")
+
+	// Ensure sub1 inside superOrigin has its nested submodule sub2 populated.
+	gitRun(t, superOrigin, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive")
+
+	// 4. Create workspace using `git clone --local --no-hardlinks`.
+	workspace := filepath.Join(base, "workspace")
+	gitRun(t, base, "clone", "--local", "--no-hardlinks", superOrigin, workspace)
+
+	// 5. Hydrate from local origin.
+	if err := weaveHydrateSubmodules(superOrigin, workspace, io.Discard, io.Discard); err != nil {
+		t.Fatalf("hydrate nested submodules: %v", err)
+	}
+
+	// 6. Verify nested files exist.
+	if _, err := os.Stat(filepath.Join(workspace, "external", "podman", "src", "vendor", "sub2", "nested.txt")); err != nil {
+		t.Fatalf("nested submodule file not hydrated: %v", err)
+	}
+
+	// 7. Verify workspace and all submodules are completely clean.
+	if got := string(gitT(t, workspace, "status", "--porcelain")); got != "" {
+		t.Fatalf("hydration left workspace dirty: %q", got)
+	}
+	if got := string(gitT(t, filepath.Join(workspace, "external", "podman", "src"), "status", "--porcelain")); got != "" {
+		t.Fatalf("hydration left sub1 dirty: %q", got)
+	}
+
+	// 8. Re-hydration with tracked modification and commit mismatch in nested submodule must clean it up.
+	mustWrite(t, filepath.Join(workspace, "external", "podman", "src", "vendor", "sub2", "nested.txt"), "modified\n")
+	// Advance sub2Origin with a new commit and check it out in workspace sub2 to simulate nested commit drift.
+	gitWriteAndCommit(t, sub2Origin, "nested.txt", "v2\n", "sub2 v2")
+	gitRun(t, filepath.Join(workspace, "external", "podman", "src", "vendor", "sub2"), "fetch", sub2Origin, "HEAD")
+	gitRun(t, filepath.Join(workspace, "external", "podman", "src", "vendor", "sub2"), "checkout", "-f", "FETCH_HEAD")
+
+	if got := string(gitT(t, workspace, "status", "--porcelain")); got == "" {
+		t.Fatal("precondition: drifted nested submodule must make workspace dirty")
+	}
+	if err := weaveHydrateSubmodules(superOrigin, workspace, io.Discard, io.Discard); err != nil {
+		t.Fatalf("re-hydrate clean: %v", err)
+	}
+	if got := string(gitT(t, workspace, "status", "--porcelain")); got != "" {
+		t.Fatalf("re-hydration left workspace dirty: %q", got)
+	}
+	if got := string(gitT(t, filepath.Join(workspace, "external", "podman", "src"), "status", "--porcelain")); got != "" {
+		t.Fatalf("re-hydration left sub1 dirty: %q", got)
+	}
+}
+
+func gitWriteAndCommit(t *testing.T, dir, file, content, msg string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(dir, file), content)
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-qm", msg)
+}
+
+// TestWeaveHydrateNestedSubmodulesRace verifies concurrent safety of nested submodule
+// hydration across parallel workers.
+func TestWeaveHydrateNestedSubmodulesRace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	base := t.TempDir()
+
+	sub2Origin := filepath.Join(base, "sub2origin")
+	mustMkdir(t, sub2Origin)
+	gitRun(t, sub2Origin, "init", "-q")
+	gitIdent(t, sub2Origin)
+	mustWrite(t, filepath.Join(sub2Origin, "nested.txt"), "nested content\n")
+	gitRun(t, sub2Origin, "add", ".")
+	gitRun(t, sub2Origin, "commit", "-qm", "init sub2")
+
+	sub1Origin := filepath.Join(base, "sub1origin")
+	mustMkdir(t, sub1Origin)
+	gitRun(t, sub1Origin, "init", "-q")
+	gitIdent(t, sub1Origin)
+	mustWrite(t, filepath.Join(sub1Origin, "podman.txt"), "podman content\n")
+	gitRun(t, sub1Origin, "add", ".")
+	gitRun(t, sub1Origin, "commit", "-qm", "init sub1")
+	gitRun(t, sub1Origin, "-c", "protocol.file.allow=always", "submodule", "add", sub2Origin, "vendor/sub2")
+	gitRun(t, sub1Origin, "commit", "-qm", "add sub2")
+
+	superOrigin := filepath.Join(base, "superorigin")
+	mustMkdir(t, superOrigin)
+	gitRun(t, superOrigin, "init", "-q")
+	gitIdent(t, superOrigin)
+	mustWrite(t, filepath.Join(superOrigin, "root.txt"), "root content\n")
+	gitRun(t, superOrigin, "add", ".")
+	gitRun(t, superOrigin, "commit", "-qm", "root")
+	gitRun(t, superOrigin, "-c", "protocol.file.allow=always", "submodule", "add", sub1Origin, "external/podman/src")
+	gitRun(t, superOrigin, "commit", "-qm", "add sub1")
+	gitRun(t, superOrigin, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive")
+
+	const workers = 3
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		ws := filepath.Join(base, fmt.Sprintf("workspace_%d", i))
+		gitRun(t, base, "clone", "--local", "--no-hardlinks", superOrigin, ws)
+		go func(w string) {
+			defer wg.Done()
+			if err := weaveHydrateSubmodules(superOrigin, w, io.Discard, io.Discard); err != nil {
+				errCh <- fmt.Errorf("worker %s hydrate failed: %w", w, err)
+				return
+			}
+			mustWrite(t, filepath.Join(w, "external", "podman", "src", "vendor", "sub2", "scratch.tmp"), "temp\n")
+			if err := weaveHydrateSubmodules(superOrigin, w, io.Discard, io.Discard); err != nil {
+				errCh <- fmt.Errorf("worker %s re-hydrate failed: %w", w, err)
+				return
+			}
+			out, err := exec.Command("git", "-C", w, "status", "--porcelain").Output()
+			if err != nil {
+				errCh <- fmt.Errorf("worker %s git status failed: %w", w, err)
+				return
+			}
+			if len(strings.TrimSpace(string(out))) > 0 {
+				errCh <- fmt.Errorf("worker %s left dirty: %s", w, out)
+				return
+			}
+		}(ws)
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
+	}
+}
+
 
 func mustMkdir(t *testing.T, p string) {
 	t.Helper()

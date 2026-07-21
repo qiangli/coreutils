@@ -838,31 +838,44 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 	if _, err := os.Stat(filepath.Join(workspace, ".gitmodules")); err != nil {
 		return nil // no submodules — nothing to hydrate
 	}
-	listed, err := exec.Command("git", "-C", workspace, "config", "-f", ".gitmodules",
-		"--get-regexp", `^submodule\..*\.path$`).Output()
-	if err != nil {
-		return nil // unparseable .gitmodules — leave the default behavior
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), weaveProvisioningTimeout)
+	defer cancel()
+
 	anyLocal := false
-	for _, line := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
-		key, path, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if !ok {
-			continue
+	// Configure local origin URL overrides for submodules at all levels.
+	_ = filepath.WalkDir(workspace, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.Name() != ".gitmodules" {
+			return nil
 		}
-		name := strings.TrimSuffix(strings.TrimPrefix(key, "submodule."), ".path")
-		localSrc := filepath.Join(root, path)
-		// Override to the local origin tree only when it is actually a populated
-		// git checkout (.git is a dir for a plain repo, a file for a submodule).
-		if _, err := os.Stat(filepath.Join(localSrc, ".git")); err == nil {
-			_ = exec.Command("git", "-C", workspace, "config", "submodule."+name+".url", localSrc).Run()
-			anyLocal = true
+		subDir := filepath.Dir(p)
+		listed, err := exec.Command("git", "-C", subDir, "config", "-f", ".gitmodules",
+			"--get-regexp", `^submodule\..*\.path$`).Output()
+		if err != nil {
+			return nil
 		}
-	}
+		relSubDir, err := filepath.Rel(workspace, subDir)
+		if err != nil || relSubDir == "." {
+			relSubDir = ""
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
+			key, path, ok := strings.Cut(strings.TrimSpace(line), " ")
+			if !ok {
+				continue
+			}
+			name := strings.TrimSuffix(strings.TrimPrefix(key, "submodule."), ".path")
+			relPath := filepath.Join(relSubDir, path)
+			localSrc := filepath.Join(root, relPath)
+			if _, err := os.Stat(filepath.Join(localSrc, ".git")); err == nil {
+				_ = exec.Command("git", "-C", subDir, "config", "submodule."+name+".url", localSrc).Run()
+				anyLocal = true
+			}
+		}
+		return nil
+	})
+
 	// A local checkout must never wait forever on a broken submodule transport.
 	// The queue has already recorded the hydration phase before reaching here,
 	// so timeout failure is both bounded and diagnosable by the conductor.
-	ctx, cancel := context.WithTimeout(context.Background(), weaveProvisioningTimeout)
-	defer cancel()
 	up := exec.CommandContext(ctx, "git", "-C", workspace, "-c", "protocol.file.allow=always",
 		"submodule", "update", "--init", "--recursive")
 	up.Stdout, up.Stderr = out, errw
@@ -873,9 +886,9 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 		return fmt.Errorf("git submodule update --init: %w", err)
 	}
 	if anyLocal {
-		// Restore canonical .gitmodules URLs so the local-origin path is not a
-		// standing breadcrumb back into the source checkout.
-		_ = exec.Command("git", "-C", workspace, "submodule", "sync").Run()
+		// Restore canonical .gitmodules URLs recursively so local-origin paths are not
+		// left as breadcrumbs in any submodule config.
+		_ = exec.CommandContext(ctx, "git", "-C", workspace, "submodule", "sync", "--recursive").Run()
 	}
 	// Hydration runs before an agent exists, so it must leave the freshly
 	// allocated workspace clean. In particular, nested submodule checkout
@@ -891,8 +904,19 @@ func weaveHydrateSubmodules(root, workspace string, out, errw io.Writer) error {
 		}
 		return fmt.Errorf("clean hydrated submodules: %w", err)
 	}
-	// A nested clean can change the superproject's submodule dirt marker. Reset
-	// the superproject too, which only restores its recorded gitlinks and never
+	// A nested clean can change parent submodules' gitlink markers and status caches.
+	// Reset all submodules recursively after cleaning so parent submodules update
+	// their gitlink markers after child submodules are cleaned.
+	resetSubs := exec.CommandContext(ctx, "git", "-C", workspace, "submodule", "foreach", "--recursive",
+		"git reset --hard --quiet")
+	resetSubs.Stdout, resetSubs.Stderr = out, errw
+	if err := resetSubs.Run(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("reset hydrated submodules timed out after 2m: %w", ctx.Err())
+		}
+		return fmt.Errorf("reset hydrated submodules: %w", err)
+	}
+	// Reset the superproject too, which only restores its recorded gitlinks and never
 	// touches user work because this clone is still pre-agent.
 	reset := exec.CommandContext(ctx, "git", "-C", workspace, "reset", "--hard", "--quiet")
 	reset.Stdout, reset.Stderr = out, errw
