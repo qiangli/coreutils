@@ -89,21 +89,30 @@ func TestUnknownFlagJSONEnvelope(t *testing.T) {
 	}
 }
 
-func TestUnknownFlagJSONEnvelopeCoversGuideSubverb(t *testing.T) {
+// A subverb that does not DEFINE --json must reject it as the unknown
+// flag it is — loudly, in plain text — rather than pretend to speak the
+// envelope. `--json` is not a root persistent flag: each subverb opts in,
+// and `guide` (a plain-text playbook printer) deliberately does not. The
+// first unknown flag on the line is the one reported, so `guide --json
+// --bogus` names --json, not --bogus.
+//
+// This pins the boundary of the flagErrOutputMode contract: it honors
+// --json only where --json is real, and an unsupported --json is itself
+// a loud invalid_arg — never a silent exit or a fabricated envelope.
+func TestUnknownFlagOnSubverbWithoutJSONStaysPlain(t *testing.T) {
 	t.Setenv("BASHY_AGENTIC", "")
 	_, stderr, code, _ := runWeaveStreams(t, "guide", "--json", "--bogus")
 	if code != weavecli.ExitInvalidArg {
 		t.Fatalf("exit = %d, want %d; stderr=%q", code, weavecli.ExitInvalidArg, stderr)
 	}
-	var env weavecli.Envelope
-	if err := json.Unmarshal([]byte(strings.TrimSpace(stderr)), &env); err != nil {
-		t.Fatalf("guide should honor --json for flag errors, got %q (%v)", stderr, err)
+	if strings.HasPrefix(strings.TrimSpace(stderr), "{") {
+		t.Fatalf("guide does not define --json; it must not emit an envelope, got %q", stderr)
 	}
-	if env.Error == nil {
-		t.Fatalf("envelope should carry an error, got %+v", env)
+	if !strings.Contains(stderr, "unknown flag: --json") {
+		t.Fatalf("stderr should name --json as the unknown flag, got %q", stderr)
 	}
-	if !strings.Contains(env.Error.Message, "--bogus") {
-		t.Fatalf("message should name the offending flag after --json, got %q", env.Error.Message)
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatalf("the whole point of #131: a flag error is never silent")
 	}
 }
 
