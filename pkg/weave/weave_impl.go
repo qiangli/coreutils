@@ -4135,6 +4135,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			res["isolation_detail"] = weaveIsolationDetail(it)
 			res["mergeable"] = false
 		}
+		if it.Register != "" {
+			res["register"] = it.Register
+		}
 		if reconciledFrom != "" {
 			res["reconciled_from"] = reconciledFrom
 		}
@@ -4166,6 +4169,13 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		stateLine += " (stale — wrapper pid dead)"
 	}
 	fmt.Fprintf(w, "  state:    %s\n", stateLine)
+	if it.Register != "" {
+		regStr := it.Register
+		if len(regStr) > 8 {
+			regStr = regStr[:8]
+		}
+		fmt.Fprintf(w, "  register: %s\n", regStr)
+	}
 	if it.Tool != "" {
 		fmt.Fprintf(w, "  tool:     %s   dur: %s\n", it.Tool, weaveDurationCol(it))
 	}

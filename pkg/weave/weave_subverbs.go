@@ -35,6 +35,7 @@ func newWeaveAddCmd() *cobra.Command {
 	var title, body, tool, priority string
 	var fromFile string
 	var fromIssue string
+	var fromTodo string
 	var verify string
 	var suiteGate string
 	var stage string
@@ -57,6 +58,9 @@ the lifecycle. It defaults to "code", which is what every existing issue is.`,
 				title = args[0]
 			}
 			_ = tool
+			if fromTodo != "" {
+				return runWeaveAddFromTodo(cmd, fromTodo, &flags)
+			}
 			if fromIssue != "" {
 				return runWeaveAddFromIssue(cmd, fromIssue, &flags)
 			}
@@ -74,6 +78,7 @@ the lifecycle. It defaults to "code", which is what every existing issue is.`,
 	cmd.Flags().IntVar(&points, "points", 0, "Story points (1,2,3,5,8; 8 = ~30m cap — `weave split` bigger work)")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "Bulk seed: markdown (`- [ ] title`) or JSON list of {title,body,priority}")
 	cmd.Flags().StringVar(&fromIssue, "from-issue", "", "Seed from a TRIAGED `bashy issue` register entry (id or unique prefix); links both ways")
+	cmd.Flags().StringVar(&fromTodo, "from-todo", "", "Seed from a repo/host `bashy todo` entry (id, unique prefix, or #seq); links both ways")
 	cmd.Flags().StringVar(&verify, "verify", "", "Verify command the wrapper runs (`bash -c`) in the workspace at terminal time; verify_exit/verify_output recorded on the item, non-zero blocks `weave pull`")
 	cmd.Flags().StringVar(&suiteGate, "suite-gate", "", "Integration suite command run (`bash -c`) at the base repo root after merge; non-zero resets the merge and records suite_gate_exit/suite_gate_output")
 	return cmd

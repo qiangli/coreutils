@@ -268,7 +268,11 @@ func newShowCmd(repoRoot func() (string, error)) *cobra.Command {
 				fmt.Fprintf(w, "  refs      %s\n", strings.Join(it.Refs, ", "))
 			}
 			if it.Weave != 0 {
-				fmt.Fprintf(w, "  weave     #%d (in flight)\n", it.Weave)
+				if it.Status == StatusClosed {
+					fmt.Fprintf(w, "  weave     #%d\n", it.Weave)
+				} else {
+					fmt.Fprintf(w, "  weave     #%d (in flight)\n", it.Weave)
+				}
 			}
 			fmt.Fprintf(w, "  reporter  %s\n", dash(it.Reporter))
 			fmt.Fprintf(w, "  created   %s\n", it.Created.Format(time.RFC3339))
