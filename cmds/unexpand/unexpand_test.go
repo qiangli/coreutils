@@ -174,6 +174,17 @@ func TestUnexpandRejectsBadTabs(t *testing.T) {
 	}
 }
 
+func TestUnexpandRejectsEmptyTabListFields(t *testing.T) {
+	for _, tabs := range []string{"", "4,,8", "4,"} {
+		t.Run(tabs, func(t *testing.T) {
+			_, stderr, code := runUnexpand(t, "", "--tabs="+tabs)
+			if code != 2 || !strings.Contains(stderr, "invalid character") {
+				t.Fatalf("tabs=%q code=%d stderr=%q", tabs, code, stderr)
+			}
+		})
+	}
+}
+
 func TestUnexpandAcceptsLargeTabStop(t *testing.T) {
 	out, stderr, code := runUnexpand(t, "x\n", "-t", "1073741825")
 	if code != 0 || stderr != "" {
