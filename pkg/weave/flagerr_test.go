@@ -89,6 +89,20 @@ func TestUnknownFlagJSONEnvelope(t *testing.T) {
 	}
 }
 
+func TestMissingFlagArgumentDoesNotSuggestSameFlag(t *testing.T) {
+	t.Setenv("BASHY_AGENTIC", "")
+	_, stderr, code, _ := runWeaveStreams(t, "start", "--tool")
+	if code != weavecli.ExitInvalidArg {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, weavecli.ExitInvalidArg, stderr)
+	}
+	if !strings.Contains(stderr, "flag needs an argument: --tool") {
+		t.Fatalf("stderr should report the missing value for --tool, got %q", stderr)
+	}
+	if strings.Contains(stderr, "did you mean --tool?") {
+		t.Fatalf("stderr should not suggest the same valid flag for a missing value, got %q", stderr)
+	}
+}
+
 func TestNearestFlagSuggestion(t *testing.T) {
 	cmd := newWeaveBatonWriteCmd()
 	for _, tc := range []struct {
