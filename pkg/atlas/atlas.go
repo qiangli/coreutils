@@ -469,18 +469,19 @@ func init() {
 	addTools(GroupCodeIntel, "ast", "graph")
 	addTools(GroupNet, "browser", "fetch")
 	addTools(GroupOrch, "foreman")
+	addTools(GroupDiagnostics, "resources")
 
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
 		"ast", "graph",
 		"browser", "fetch", "duration", "tz", "ntp", "sntp", "tokens",
-		"foreman",
+		"foreman", "resources",
 	)
 	capTools(CapDryRun, "rm")
 	capTools(CapDestructive, "rm", "dd", "shred", "truncate")
 	capTools(CapReadOnly,
 		"cat", "cmp", "comm", "df", "diff", "du", "grep", "head", "hexdump",
-		"ls", "od", "readlink", "realpath", "stat", "strings", "tac", "tail",
+		"ls", "od", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
 		"tokens", "tree", "wc", "which",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
 		"ast",
@@ -693,7 +694,7 @@ func init() {
 	// read — reads filesystem, host state, or input data (the privacy surface).
 	eff(EffRead,
 		// fileutils/inspection
-		"df", "du", "ls", "dir", "vdir", "stat", "readlink", "realpath", "tree",
+		"df", "du", "ls", "dir", "vdir", "resources", "stat", "readlink", "realpath", "tree",
 		"find", "clip",
 		// textutils (transform/read input)
 		"awk", "cat", "cmp", "comm", "csplit", "cut", "diff", "expand", "fmt",

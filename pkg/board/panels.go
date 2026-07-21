@@ -1,10 +1,13 @@
 package board
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/resources"
 )
 
 type panel struct {
@@ -16,7 +19,7 @@ func (p panel) ID() string               { return p.id }
 func (p panel) Build(b *Board) PanelView { return p.build(b) }
 
 func DefaultPanels() *Registry {
-	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), salvagePanel())
+	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), salvagePanel(), fleetPanel())
 }
 
 func agentPanel() Panel {
@@ -151,3 +154,54 @@ func ageSince(now, created time.Time) string {
 	}
 	return fmt.Sprintf("%dm", int(d/time.Minute))
 }
+
+func fleetPanel() Panel {
+	return panel{id: "fleet", build: func(b *Board) PanelView {
+		var bAgents []resources.BoardAgent
+		for _, a := range b.Agents {
+			bAgents = append(bAgents, resources.BoardAgent{
+				Name:         a.Name,
+				Tool:         a.Tool,
+				Model:        a.Model,
+				Band:         a.Band,
+				Available:    a.Available,
+				Found:        a.Found,
+				Availability: a.Availability,
+				State:        a.State,
+			})
+		}
+		var bRuns []resources.BoardRun
+		for _, r := range b.Runs {
+			bRuns = append(bRuns, resources.BoardRun{
+				State: r.State,
+				Tool:  r.Tool,
+				Agent: r.Agent,
+				Model: r.Model,
+			})
+		}
+		fr, err := resources.CollectFleetResourcesFromBoard(context.Background(), b.GeneratedAt, bAgents, bRuns)
+		if err != nil || fr == nil {
+			return PanelView{ID: "fleet", Title: "Fleet resources", Collapsed: "unavailable"}
+		}
+		v := PanelView{
+			ID:        "fleet",
+			Title:     "Fleet resources",
+			Collapsed: fmt.Sprintf("%d total; %d busy; %d idle; %d cooling; %d unavailable", fr.Totals.Total, fr.Totals.Busy, fr.Totals.Idle, fr.Totals.Cooling, fr.Totals.Unavailable),
+			Columns:   []string{"PROVIDER", "BAND", "TOTAL", "BUSY", "IDLE", "COOLING", "UNAVAIL", "SUB", "API", "TOKENS", "COST"},
+		}
+		for _, g := range fr.Groups {
+			tokStr, costStr := "N/A", "N/A"
+			if g.MeterPresent && g.Tokens != nil && g.CostUSD != nil {
+				tokStr = fmt.Sprint(*g.Tokens)
+				costStr = fmt.Sprintf("$%.4f", *g.CostUSD)
+			}
+			v.Rows = append(v.Rows, []string{
+				g.Provider, g.Band, fmt.Sprint(g.Total), fmt.Sprint(g.Busy),
+				fmt.Sprint(g.Idle), fmt.Sprint(g.Cooling), fmt.Sprint(g.Unavailable),
+				fmt.Sprint(g.Subscription), fmt.Sprint(g.APIKey), tokStr, costStr,
+			})
+		}
+		return v
+	}}
+}
+
