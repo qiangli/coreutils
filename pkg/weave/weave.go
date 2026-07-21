@@ -56,6 +56,15 @@ Common-case usage:
 	// fit the structured-envelope contract. Drop them.
 	cmd.CompletionOptions.DisableDefaultCmd = true
 
+	// A flag-parse error never reaches a subverb's RunE, so nothing in
+	// the envelope path prints it — and SilenceErrors above hides
+	// cobra's own message. That combination made a misspelled flag
+	// (`weave baton write --note ...`) exit non-zero with ZERO output,
+	// which is indistinguishable from success. cobra's FlagErrorFunc()
+	// climbs to the parent, so installing it here covers EVERY subverb
+	// in the tree at once. See flagerr.go.
+	cmd.SetFlagErrorFunc(weaveFlagErrorFunc)
+
 	cmd.AddCommand(newWeaveAddCmd())
 	cmd.AddCommand(newWeaveSplitCmd())
 	cmd.AddCommand(newWeaveLinkCmd())
