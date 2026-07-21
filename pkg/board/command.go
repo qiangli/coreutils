@@ -21,12 +21,12 @@ func NewCommand(sources []Source) *cobra.Command {
 			return fmt.Errorf("--json and --html are mutually exclusive")
 		}
 		expand := map[string]bool{}
-		valid := map[string]bool{"agents": true, "todo": true, "sprints": true, "runs": true, "salvage": true, "all": true}
+		valid := map[string]bool{"agents": true, "todo": true, "sprints": true, "runs": true, "salvage": true, "fleet": true, "all": true}
 		for _, part := range expands {
 			for _, id := range strings.Split(part, ",") {
 				if id = strings.TrimSpace(id); id != "" {
 					if !valid[id] {
-						return fmt.Errorf("unknown panel %q (want agents, todo, sprints, runs, salvage, or all)", id)
+						return fmt.Errorf("unknown panel %q (want agents, todo, sprints, runs, salvage, fleet, or all)", id)
 					}
 					expand[id] = true
 				}

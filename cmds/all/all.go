@@ -99,6 +99,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/pwd"
 	_ "github.com/qiangli/coreutils/cmds/readlink"
 	_ "github.com/qiangli/coreutils/cmds/realpath"
+	_ "github.com/qiangli/coreutils/cmds/resources"
 	_ "github.com/qiangli/coreutils/cmds/rm"
 	_ "github.com/qiangli/coreutils/cmds/rmdir"
 	_ "github.com/qiangli/coreutils/cmds/runcon"
