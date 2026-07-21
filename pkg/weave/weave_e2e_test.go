@@ -165,9 +165,11 @@ func TestWeaveExecuteErrorClassification(t *testing.T) {
 		}
 	}
 
-	// Unknown subcommand: cobra raises a structural error before any
-	// subverb runs. Nothing is printed to the command's own out/err, the
-	// error is NOT a structured exit, and its message names the bad verb.
+	// Unknown subcommand: since #142 weave reports this itself (argerr.go
+	// wraps every Args validator), same as flag errors — the message goes
+	// to the command's own stderr naming the bad verb, and the error is a
+	// structured ExitInvalidArg exit so a host driving Execute() stays
+	// silent and never double-prints.
 	{
 		cmd := newWeaveCmd()
 		var buf bytes.Buffer
@@ -178,17 +180,14 @@ func TestWeaveExecuteErrorClassification(t *testing.T) {
 		if err == nil {
 			t.Fatal("unknown subcommand should error")
 		}
-		if IsStructuredExit(err) {
-			t.Errorf("unknown subcommand should not be a structured exit, got %v", err)
+		if !IsStructuredExit(err) {
+			t.Errorf("unknown subcommand should be a structured exit (weave already reported it), got %v", err)
 		}
-		if !strings.Contains(err.Error(), "unknown command") {
-			t.Errorf("error should name the bad verb, got %q", err.Error())
+		if code := ExitCode(err); code != weavecli.ExitInvalidArg {
+			t.Errorf("ExitCode = %d, want %d for an unknown subcommand", code, weavecli.ExitInvalidArg)
 		}
-		if buf.String() != "" {
-			t.Errorf("cobra should not have printed anything itself (SilenceErrors), got %q", buf.String())
-		}
-		if code := ExitCode(err); code == 0 {
-			t.Errorf("ExitCode should be non-zero for an unknown subcommand, got %d", code)
+		if !strings.Contains(buf.String(), "unknown command") || !strings.Contains(buf.String(), "zzz") {
+			t.Errorf("weave should name the bad verb on its own stderr, got %q", buf.String())
 		}
 	}
 
