@@ -3370,7 +3370,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 			if reset, ok := parseThrottleReset(msg, time.Now()); ok {
 				coolTool := weaveThrottleToolFromSignal(it.Tool, throttleLogTail)
-				if err := recordToolCooldown(dir, coolTool, reset); err != nil {
+				if err := recordToolCooldownCause(dir, coolTool, reset, weaveThrottleCause(msg)); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "weave start: cooldown record failed (continuing): %v\n", err)
 				}
 			}
@@ -4008,6 +4008,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				}
 				pr, reviewErr := weavePairReviewRunner(it.Workspace, weaveCountRef(it, base), gateCommand, reviewAgent, it)
 				pr = weaveNormalizePairReview(pr, reviewErr)
+				// A reviewer that died on its provider quota must land on
+				// cooldown NOW, or `weave fleet` keeps reporting it available
+				// and the orchestrator dispatches review after review into the
+				// same wall (runs #140/#146).
+				weaveRecordPairThrottle(dir, pr, time.Now())
 				it.CodingAgent = pr.CodingAgent
 				it.ReviewAgent = pr.ReviewAgent
 				it.ReviewAddedTest = pr.AddedTest

@@ -35,6 +35,27 @@ var weaveThrottleGenericSignals = []string{
 
 var weaveThrottleToolSignals = map[string][]string{}
 
+// Cooldown causes, recorded alongside the reset instant so `weave fleet` can
+// say WHY a member is unassignable, not just until when.
+const (
+	weaveCooldownQuota = "quota-exhausted" // a spent usage cap / credits — resets on the provider's schedule
+	weaveCooldownRate  = "cooling-down"    // a transient rate limit / overload
+)
+
+// weaveThrottleCause classifies a matched throttle signal for the cooldown
+// record: a spent quota (usage cap, credits) is QUOTA-EXHAUSTED, distinct from
+// a transient rate-limit COOLING-DOWN.
+func weaveThrottleCause(signal string) string {
+	s := strings.ToLower(signal)
+	for _, q := range []string{"usage limit", "quota", "weekly limit", "daily limit",
+		"limit reached", "you've reached your", "credit", "exhausted"} {
+		if strings.Contains(s, q) {
+			return weaveCooldownQuota
+		}
+	}
+	return weaveCooldownRate
+}
+
 // weaveClassifyThrottle reports whether a worker's termination looks like a
 // provider/subscription throttle (vs a normal finish or a crash), and the
 // matched signal string for the audit trail. tool is the argv[0] basename
@@ -69,6 +90,18 @@ var (
 	// "at 11:41 am" / "at 11:41 pm" / "at 11 am" (am/pm required so we
 	// don't swallow unrelated colon-separated numbers like a URL port).
 	reThrottleClock = regexp.MustCompile(`\bat\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?`)
+	// "at Jul 24th, 2026 9:45 PM" — a DATED reset (codex phrases multi-day
+	// quota resets this way; the bare-clock form above cannot see it, so a
+	// 3-day quota outage used to record no cooldown at all). Month by its
+	// first three letters, ordinal suffix and year optional.
+	reThrottleDate = regexp.MustCompile(`\bat\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?`)
+
+	throttleMonths = map[string]time.Month{
+		"jan": time.January, "feb": time.February, "mar": time.March,
+		"apr": time.April, "may": time.May, "jun": time.June,
+		"jul": time.July, "aug": time.August, "sep": time.September,
+		"oct": time.October, "nov": time.November, "dec": time.December,
+	}
 	// "in 5 minutes" / "in 30 seconds" / "in 2 hours" (+ singular forms).
 	reThrottleRelative = regexp.MustCompile(`\bin\s+(\d+)\s*(second|minute|hour|sec|min|hr)s?\b`)
 	// "retry-after: 120" / "retry after 120" (seconds, per RFC 9110).
@@ -109,6 +142,34 @@ func parseThrottleReset(msg string, now time.Time) (time.Time, bool) {
 		}
 	}
 
+	// Dated wall-clock ("at Jul 24th, 2026 9:45 PM") in now's local zone.
+	// Checked before the bare-clock form: it names the day, so it must win
+	// over a today/tomorrow guess. A dateless year resolves to now's year,
+	// rolling forward one if that instant is already past.
+	if m := reThrottleDate.FindStringSubmatch(lower); m != nil {
+		day, derr := strconv.Atoi(m[2])
+		hour, herr := strconv.Atoi(m[4])
+		if derr == nil && herr == nil && day >= 1 && day <= 31 && hour >= 1 && hour <= 12 {
+			minute := 0
+			if m[5] != "" {
+				minute, _ = strconv.Atoi(m[5])
+			}
+			if minute >= 0 && minute < 60 {
+				month := throttleMonths[m[1]]
+				hour = throttleHour24(hour, m[6])
+				if m[3] != "" {
+					year, _ := strconv.Atoi(m[3])
+					return time.Date(year, month, day, hour, minute, 0, 0, now.Location()), true
+				}
+				reset := time.Date(now.Year(), month, day, hour, minute, 0, 0, now.Location())
+				if !reset.After(now) {
+					reset = reset.AddDate(1, 0, 0)
+				}
+				return reset, true
+			}
+		}
+	}
+
 	// Wall-clock ("at HH[:MM] am|pm") in now's local zone. Resolve to
 	// today; if that instant is already in the past, roll to tomorrow.
 	if m := reThrottleClock.FindStringSubmatch(lower); m != nil {
@@ -119,17 +180,7 @@ func parseThrottleReset(msg string, now time.Time) (time.Time, bool) {
 				minute, _ = strconv.Atoi(m[2])
 			}
 			if minute >= 0 && minute < 60 {
-				switch m[3] {
-				case "a": // 12 AM == 00:00
-					if hour == 12 {
-						hour = 0
-					}
-				case "p": // 12 PM == 12:00; 1-11 PM == +12
-					if hour != 12 {
-						hour += 12
-					}
-				}
-				reset := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+				reset := time.Date(now.Year(), now.Month(), now.Day(), throttleHour24(hour, m[3]), minute, 0, 0, now.Location())
 				if !reset.After(now) {
 					reset = reset.AddDate(0, 0, 1)
 				}
@@ -139,6 +190,22 @@ func parseThrottleReset(msg string, now time.Time) (time.Time, bool) {
 	}
 
 	return time.Time{}, false
+}
+
+// throttleHour24 converts a 1-12 hour + "a"/"p" meridiem to 24h clock
+// (12 AM == 00:00; 12 PM == 12:00).
+func throttleHour24(hour int, meridiem string) int {
+	switch meridiem {
+	case "a":
+		if hour == 12 {
+			return 0
+		}
+	case "p":
+		if hour != 12 {
+			return hour + 12
+		}
+	}
+	return hour
 }
 
 func weaveThrottleTail(s string, maxBytes int) string {

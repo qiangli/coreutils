@@ -23,9 +23,13 @@ import (
 
 const weaveCooldownFile = "tool_cooldowns.json"
 
-// toolCooldowns is the on-disk shape: tool name → RFC3339 available-at.
+// toolCooldowns is the on-disk shape: tool name → RFC3339 available-at,
+// plus (optionally) tool name → cause (quota-exhausted | cooling-down).
+// Causes is additive: files written before it existed parse fine, and a
+// record with no cause reads as plain cooling-down.
 type toolCooldowns struct {
-	Tools map[string]string `json:"tools"`
+	Tools  map[string]string `json:"tools"`
+	Causes map[string]string `json:"causes,omitempty"`
 }
 
 func weaveCooldownPath(queueDir string) string {
@@ -45,6 +49,7 @@ func loadToolCooldowns(queueDir string) toolCooldowns {
 		return tc
 	}
 	tc.Tools = parsed.Tools
+	tc.Causes = parsed.Causes
 	return tc
 }
 
@@ -68,12 +73,28 @@ func saveToolCooldowns(queueDir string, tc toolCooldowns) error {
 // for the same tool overwrites an earlier one (a re-throttle extends the
 // cooldown). Concurrency-safe: read-modify-write under the cooldown lock.
 func recordToolCooldown(queueDir, tool string, until time.Time) error {
+	return recordToolCooldownCause(queueDir, tool, until, "")
+}
+
+// recordToolCooldownCause is recordToolCooldown with the WHY on record:
+// cause is weaveCooldownQuota or weaveCooldownRate (empty clears any prior
+// cause), so `weave fleet` can report QUOTA-EXHAUSTED distinctly from a
+// transient rate limit.
+func recordToolCooldownCause(queueDir, tool string, until time.Time, cause string) error {
 	tool = normalizeToolName(tool)
-	if tool == "" {
+	if tool == "" || tool == "." {
 		return nil
 	}
 	return withWeaveCooldownLock(queueDir, func(tc *toolCooldowns) error {
 		tc.Tools[tool] = until.UTC().Format(time.RFC3339)
+		if tc.Causes == nil {
+			tc.Causes = map[string]string{}
+		}
+		if cause == "" {
+			delete(tc.Causes, tool)
+		} else {
+			tc.Causes[tool] = cause
+		}
 		return nil
 	})
 }
@@ -81,17 +102,29 @@ func recordToolCooldown(queueDir, tool string, until time.Time) error {
 // toolAvailableAt returns the recorded available-at instant for tool and
 // whether one is on record. A garbled timestamp is treated as no record.
 func toolAvailableAt(queueDir, tool string) (time.Time, bool) {
+	t, _, ok := toolCooldownStatus(queueDir, tool)
+	return t, ok
+}
+
+// toolCooldownStatus returns the recorded available-at instant and cause for
+// tool. Cause defaults to weaveCooldownRate for records written before causes
+// existed. A garbled timestamp is treated as no record.
+func toolCooldownStatus(queueDir, tool string) (time.Time, string, bool) {
 	tool = normalizeToolName(tool)
 	tc := loadToolCooldowns(queueDir)
 	raw, ok := tc.Tools[tool]
 	if !ok {
-		return time.Time{}, false
+		return time.Time{}, "", false
 	}
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
-		return time.Time{}, false
+		return time.Time{}, "", false
 	}
-	return t, true
+	cause := tc.Causes[tool]
+	if cause == "" {
+		cause = weaveCooldownRate
+	}
+	return t, cause, true
 }
 
 // availableTools filters fleet down to the tools that are not on cooldown
