@@ -217,6 +217,21 @@ func weavePairVerdictFromOutput(output string) (weavePairReviewResult, bool) {
 	return res, true
 }
 
+// weaveAutopilotJudgePreflight is the autopilot-side twin of the pull merge
+// loop's fail-closed pre-pass: it loads the durable queue and refuses to proceed
+// when a submitted, verdict-required item cannot be matched to an eligible judge
+// for the configured reviewer. A queue-load failure is itself fail-closed.
+func weaveAutopilotJudgePreflight(queueDir, reviewAgent string) error {
+	if strings.TrimSpace(reviewAgent) == "" {
+		return nil
+	}
+	q, err := loadWeaveQueue(queueDir)
+	if err != nil {
+		return fmt.Errorf("weave autopilot: judge preflight could not read the queue: %w", err)
+	}
+	return weaveRequireEligibleJudge(q.Items, reviewAgent, 0, false)
+}
+
 func weaveRecordPairHarnessError(queueDir, reason string) {
 	_ = withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
 		for _, it := range q.Items {
@@ -271,6 +286,14 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 	for {
 		if opts.maxRuns > 0 && runs >= opts.maxRuns {
 			return weaveAutopilotResult{Runs: runs, QueueDir: opts.queueDir, LastReason: lastReason}, nil
+		}
+		// FAIL-CLOSED judge preflight. When review is in force, the autopilot must
+		// not drive another merge run if any submitted, verdict-required item has no
+		// eligible judge for the configured reviewer: it HALTS loudly and the
+		// process exits non-zero rather than looping into a merge that can never
+		// produce a verdict. Judge=="none" items are exempt (their probe suffices).
+		if err := weaveAutopilotJudgePreflight(opts.queueDir, opts.reviewAgent); err != nil {
+			return weaveAutopilotResult{Runs: runs, QueueDir: opts.queueDir, LastReason: lastReason}, err
 		}
 		member := opts.fleet[index]
 		acquired, lease, err := acquireWeaveAutopilotLease(opts.queueDir, opts.holder, member, os.Getpid(), opts.leaseTTL, opts.now)

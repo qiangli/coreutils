@@ -9,9 +9,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// pinPassthroughJudge makes the fail-closed judge vet a no-op for tests that
+// exercise the pair RUNNER directly (they stub weavePairReviewRunner and pass a
+// placeholder reviewer name). It echoes the requested reviewer back as eligible,
+// so those tests keep testing the runner/verdict path rather than the fleet
+// catalog's band/family eligibility, which has its own dedicated tests.
+func pinPassthroughJudge(t *testing.T) {
+	t.Helper()
+	prev := weaveVetJudge
+	weaveVetJudge = func(requested string, it *weaveItem) (string, string, error) {
+		coder, _, _ := weaveCodingIdentity(it)
+		return requested, coder, nil
+	}
+	t.Cleanup(func() { weaveVetJudge = prev })
+}
+
 func TestWeavePullPairEvidenceBlocksMerge(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
+	pinPassthroughJudge(t)
 	if out, code := runWeave(t, "add", "buggy work", "--verify", "test ! -f adversarial_test.go", "--json"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
@@ -67,6 +83,7 @@ git -c user.email=a@a -c user.name=a commit -qm "buggy feature"`
 func TestWeavePullReviewOptInAndCleanMerge(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
+	pinPassthroughJudge(t)
 	if out, code := runWeave(t, "add", "clean work", "--verify", "test -f feature.txt", "--json"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
@@ -100,6 +117,7 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 func TestWeavePullPairRunnerWithoutVerdictIsHarnessError(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
+	pinPassthroughJudge(t)
 	if out, code := runWeave(t, "add", "review harness regression", "--verify", "test -f feature.txt", "--json"); code != 0 {
 		t.Fatalf("add exit=%d: %s", code, out)
 	}
