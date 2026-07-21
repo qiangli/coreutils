@@ -69,6 +69,10 @@ type FleetResources struct {
 	Groups        []FleetGroup `json:"groups"`
 	Totals        FleetTotals  `json:"totals"`
 	MeterPresent  bool         `json:"meter_present"`
+	// IdleAgents names the agents counted in Totals.Idle. The counts alone
+	// cannot answer "which agent could take this issue" — the utilization
+	// verdict needs the names, so the collector records them here.
+	IdleAgents []IdleAgent `json:"idle_agents,omitempty"`
 }
 
 type BoardAgent struct {
@@ -409,6 +413,7 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 		bandNum  int
 	}
 	groupsMap := map[groupKey]*FleetGroup{}
+	var idleAgents []IdleAgent
 
 	for _, a := range records {
 		provName := CanonicalProvider(a.Model, a.Provider)
@@ -479,6 +484,9 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 			grp.Unavailable++
 		default:
 			grp.Idle++
+			idleAgents = append(idleAgents, IdleAgent{
+				Name: a.Name, Tool: a.Tool, Model: a.Model, Provider: provName, Band: bNum,
+			})
 		}
 
 		if meterPresent {
@@ -562,12 +570,20 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 		}
 	}
 
+	sort.Slice(idleAgents, func(i, j int) bool {
+		if idleAgents[i].Band != idleAgents[j].Band {
+			return idleAgents[i].Band < idleAgents[j].Band
+		}
+		return idleAgents[i].Name < idleAgents[j].Name
+	})
+
 	return &FleetResources{
 		SchemaVersion: SchemaVersion,
 		GeneratedAt:   at,
 		Groups:        resultGroups,
 		Totals:        totals,
 		MeterPresent:  meterPresent,
+		IdleAgents:    idleAgents,
 	}, nil
 }
 

@@ -25,6 +25,9 @@ func (TerminalRenderer) Render(b *Board, opts Options) ([]byte, error) {
 	var out bytes.Buffer
 	fmt.Fprintf(&out, "%s\n", strings.ToUpper(b.Title))
 	fmt.Fprintf(&out, "%d todos · %d sprints · %d runs · %d need steward · %d unattended · ETA median %s\n", b.Summary.Todos, b.Summary.Sprints, b.Summary.Runs, b.Summary.NeedsSteward, b.Summary.Unattended, duration(b.Summary.ETAMedianSeconds))
+	if b.Utilization != nil {
+		fmt.Fprintf(&out, "%s\n", b.Utilization.Banner())
+	}
 	for _, lane := range b.Lanes {
 		fmt.Fprintf(&out, "\n%s (%d):\n", lane.Title, len(lane.Cards))
 		if len(lane.Cards) == 0 {

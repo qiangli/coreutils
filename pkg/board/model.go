@@ -37,7 +37,10 @@ type Board struct {
 	// Resources is the host reading (nil when the collector is not wired
 	// into the source set, e.g. a test board).
 	Resources *resources.System `json:"resources,omitempty"`
-	Warnings  []string          `json:"warnings,omitempty"`
+	// Utilization is the fleet-invariant verdict: idle capacity is only
+	// acceptable when the board reads 0 open work.
+	Utilization *resources.Utilization `json:"utilization,omitempty"`
+	Warnings    []string               `json:"warnings,omitempty"`
 }
 
 // Row is the normalized record shared by every source. The richer typed
@@ -308,6 +311,7 @@ func (b *Board) finalize(now time.Time) {
 			b.Rollup.Merged++
 		}
 	}
+	b.evaluateUtilization()
 	for _, id := range []string{"needs-steward", "working", "review", "backlog", "done"} {
 		if len(lanes[id]) > 0 || id != "done" {
 			b.Lanes = append(b.Lanes, Lane{ID: id, Title: laneTitle(id), Cards: lanes[id]})

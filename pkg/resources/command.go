@@ -23,6 +23,9 @@ func NewCommand() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(NewSystemCommand())
+	// Hosts with a board reader should re-mount this with their provider:
+	//   cmd.AddCommand(resources.NewUtilizationCommand(board.PendingWork))
+	cmd.AddCommand(NewUtilizationCommand(nil))
 	return cmd
 }
 
