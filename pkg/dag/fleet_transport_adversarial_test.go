@@ -192,6 +192,49 @@ func TestFakeTransportCapacitySaturationNeverExceedsSlots(t *testing.T) {
 	}
 }
 
+func TestMemoryDerivedSlotsAreEnforcedDuringSaturation(t *testing.T) {
+	const memPerTask = 4 << 30
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	transport := &adversarialTransport{exec: func(_ context.Context, _ *Worker, task *Task, _ TaskIO) TaskResult {
+		started <- struct{}{}
+		<-release
+		return TaskResult{Name: task.Name, Status: StatusDone}
+	}}
+	worker := &Worker{
+		ID: "memory-bound", Venues: []string{VenueUserland},
+		CPU: 4, MemBytes: 8 << 30, Transport: transport,
+	}
+	pool := NewPool(nil, worker)
+	constraints := Constraints{MemPerTask: memPerTask}
+	if slots := pool.Slots(worker, memPerTask); slots != 2 {
+		t.Fatalf("derived slots = %d, want 2", slots)
+	}
+
+	results := make(chan TaskResult, 2)
+	for i := range 2 {
+		go func() {
+			results <- pool.Exec(context.Background(), constraints, &Task{Name: fmt.Sprintf("memory-task-%d", i)}, TaskIO{})
+		}()
+	}
+	<-started
+	<-started
+
+	third, releaseThird := pool.TryAcquire(constraints)
+	if third != nil {
+		// Clean up every reservation and blocked transport before failing so the
+		// race detector observes a quiescent test, even on the defective path.
+		releaseThird()
+		close(release)
+		waitResult(t, results)
+		waitResult(t, results)
+		t.Fatal("pool admitted a third 4GiB task into 8GiB; derived two-slot limit is not enforced")
+	}
+	close(release)
+	waitResult(t, results)
+	waitResult(t, results)
+}
+
 func TestFakeTransportExclusiveTaskActuallyRunsAlone(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{}, 2)
@@ -294,6 +337,33 @@ func TestIneligibleWorkerIsInfraNeverSkipOrConformance(t *testing.T) {
 				t.Fatal("ineligible target was counted as a conformance failure")
 			}
 		})
+	}
+}
+
+func TestFreshObservedFactsOverrideStaticVenueAndCPU(t *testing.T) {
+	now := time.Now().UTC()
+	worker := &Worker{
+		ID: "observed", Venues: []string{VenueUserland}, CPU: 8,
+		Facts: &HostFacts{
+			SchemaVersion: HostFactsSchemaVersion, Worker: "observed",
+			OS: "linux", Arch: "arm64", CPU: 2, Venues: []string{VenueSandbox}, ObservedAt: now,
+		},
+	}
+	pool := NewPool(nil, worker)
+
+	if pool.Eligible(Constraints{Venue: VenueUserland}) {
+		t.Error("static userland venue overrode fresh facts that offer only sandbox")
+	} else {
+		refusals := pool.Refusals(Constraints{Venue: VenueUserland})
+		if len(refusals) != 1 || refusals[0].Code != "missing-capability" || refusals[0].Missing != "venue" {
+			t.Errorf("venue refusals = %+v, want structured missing venue", refusals)
+		}
+	}
+	if !pool.Eligible(Constraints{Venue: VenueSandbox}) {
+		t.Error("fresh observed sandbox venue was ignored")
+	}
+	if slots := pool.Slots(worker, 0); slots != 2 {
+		t.Errorf("slots = %d, want fresh observed CPU limit 2", slots)
 	}
 }
 
