@@ -105,7 +105,11 @@ func (w *Worker) offers(venue string) bool {
 	if venue == "" {
 		venue = VenueUserland
 	}
-	for _, v := range w.Venues {
+	venues := w.Venues
+	if facts := w.observedFacts(time.Now()); facts != nil && len(facts.Venues) > 0 {
+		venues = facts.Venues
+	}
+	for _, v := range venues {
 		if v == venue {
 			return true
 		}
@@ -123,9 +127,30 @@ func (w *Worker) matches(want map[string]string) bool {
 	return true
 }
 
+func (w *Worker) observedFacts(now time.Time) *HostFacts {
+	if w.Facts != nil && !w.Facts.Stale(now, w.maxFactsAgeOrDefault()) {
+		return w.Facts
+	}
+	return nil
+}
+
+func (w *Worker) maxFactsAgeOrDefault() time.Duration {
+	if w.MaxFactsAge == 0 {
+		return defaultFactsMaxAge
+	}
+	return w.MaxFactsAge
+}
+
+func (w *Worker) cpuCount() int {
+	if facts := w.observedFacts(time.Now()); facts != nil && facts.CPU > 0 {
+		return facts.CPU
+	}
+	return w.CPU
+}
+
 func (w *Worker) memoryBytes() uint64 {
-	if w.Facts != nil {
-		return w.Facts.MemBytes
+	if facts := w.observedFacts(time.Now()); facts != nil {
+		return facts.MemBytes
 	}
 	return w.MemBytes
 }
@@ -134,29 +159,25 @@ func (w *Worker) staleFacts(now time.Time) bool {
 	if w.Facts == nil {
 		return false
 	}
-	maxAge := w.MaxFactsAge
-	if maxAge == 0 {
-		maxAge = defaultFactsMaxAge
-	}
-	return w.Facts.Stale(now, maxAge)
+	return w.Facts.Stale(now, w.maxFactsAgeOrDefault())
 }
 
 // fact looks up a capability from observed facts first, then static labels.
 // OS and architecture are typed observed facts, but labels remain the fallback
 // for workers configured before host observation was introduced.
 func (w *Worker) fact(key string) string {
-	if w.Facts != nil {
+	if facts := w.observedFacts(time.Now()); facts != nil {
 		switch strings.ToLower(key) {
 		case "os":
-			if w.Facts.OS != "" {
-				return w.Facts.OS
+			if facts.OS != "" {
+				return facts.OS
 			}
 		case "arch":
-			if w.Facts.Arch != "" {
-				return w.Facts.Arch
+			if facts.Arch != "" {
+				return facts.Arch
 			}
 		default:
-			if v := w.Facts.Labels[key]; v != "" {
+			if v := facts.Labels[key]; v != "" {
 				return v
 			}
 		}
@@ -265,7 +286,7 @@ func NewPool(transport Transport, workers ...*Worker) *Pool {
 			w.ID = LocalWorkerID
 		}
 		p.workers = append(p.workers, w)
-		p.free = append(p.free, max(1, w.CPU))
+		p.free = append(p.free, max(1, w.cpuCount()))
 		p.busy = append(p.busy, 0)
 	}
 	return p
@@ -303,7 +324,7 @@ func (p *Pool) SetDefaultTransport(tr Transport) {
 // running a suite with a 4 GB/task watchdog offers 4 slots, not 10 — slots are
 // gated by memory as often as by cores.
 func (p *Pool) Slots(w *Worker, memPerTask uint64) int {
-	slots := max(1, w.CPU)
+	slots := max(1, w.cpuCount())
 	if memPerTask > 0 && w.memoryBytes() > 0 {
 		if byMem := int(w.memoryBytes() / memPerTask); byMem < slots {
 			slots = byMem
@@ -321,7 +342,7 @@ func (p *Pool) Capacity() int {
 	defer p.mu.Unlock()
 	total := 0
 	for _, w := range p.workers {
-		total += max(1, w.CPU)
+		total += max(1, w.cpuCount())
 	}
 	return max(1, total)
 }
@@ -388,13 +409,14 @@ func (p *Pool) TryAcquire(c Constraints) (*Worker, func()) {
 		if w.refusal(c, time.Now()) != nil {
 			continue
 		}
-		if p.Slots(w, c.MemPerTask) <= 0 {
+		limit := p.Slots(w, c.MemPerTask)
+		if limit <= 0 {
 			continue
 		}
 		if c.Exclusive && p.busy[i] > 0 {
 			continue // an exclusive task never shares a worker (perfbench, cert)
 		}
-		if p.free[i] <= 0 {
+		if p.free[i] <= 0 || p.busy[i] >= limit {
 			continue
 		}
 		take := 1
@@ -413,6 +435,13 @@ func (p *Pool) TryAcquire(c Constraints) (*Worker, func()) {
 func (p *Pool) Acquire(ctx context.Context, c Constraints) (*Worker, func(), error) {
 	for {
 		if w, release := p.TryAcquire(c); w != nil {
+			// Pass the baton: another waiter might be sleeping because freed drops
+			// signals when full. If we woke up and took a slot, there might be
+			// MORE slots free that we didn't take. Wake up the next waiter.
+			select {
+			case p.freed <- struct{}{}:
+			default:
+			}
 			return w, release, nil
 		}
 		// Facts may become stale while this call is waiting for a slot. Recheck
