@@ -130,6 +130,33 @@ func TestWeaveCommandSurface(t *testing.T) {
 func TestWeaveExecuteErrorClassification(t *testing.T) {
 	t.Setenv("BASHY_AGENTIC", "") // force human rows, not the agent JSON envelope
 
+	// The root is a command group, not a successful no-op. Without an
+	// explicit Args check Cobra accepts bare `weave`, returns nil, and
+	// the host exits 0 without producing a result or diagnostic.
+	{
+		cmd := newWeaveCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetErr(&buf)
+		cmd.SetArgs(nil)
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("bare weave should require a subcommand")
+		}
+		if IsStructuredExit(err) {
+			t.Errorf("bare weave should be host-surfaced, got structured exit %v", err)
+		}
+		if !strings.Contains(err.Error(), "subcommand is required") {
+			t.Errorf("bare weave error should require a subcommand, got %q", err.Error())
+		}
+		if code := ExitCode(err); code != 2 {
+			t.Errorf("ExitCode(bare weave) = %d, want 2", code)
+		}
+		if buf.String() != "" {
+			t.Errorf("root leaves host-facing errors to its caller, got command output %q", buf.String())
+		}
+	}
+
 	// Unknown subcommand: cobra raises a structural error before any
 	// subverb runs. Nothing is printed to the command's own out/err, the
 	// error is NOT a structured exit, and its message names the bad verb.
