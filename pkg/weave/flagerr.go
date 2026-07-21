@@ -57,18 +57,29 @@ func flagErrOutputMode(cmd *cobra.Command) weavecli.OutputMode {
 	return weavecli.ResolveOutputModeEx(jsonSet, jsonVal, plain, quiet)
 }
 
-// unknownFlagName extracts the offending flag name from pflag's error
-// text ("unknown flag: --note", "unknown shorthand flag: 'z' in -z",
-// "flag needs an argument: --tool"). Returns ok=false when the message
-// carries no recoverable name — the raw error is still reported.
+// unknownFlagName extracts the offending flag name from pflag's
+// "unknown flag: --note" / "unknown flag: --note=x" error text. Returns
+// ok=false when the message carries no recoverable name — the raw error
+// is still reported.
+//
+// ONLY unknown-flag messages qualify, because the name is used solely to
+// look up a did-you-mean suggestion. "flag needs an argument: --tool"
+// names a flag that is perfectly VALID and merely missing its value:
+// feeding it to nearestFlag matched it against itself at edit distance 0
+// and produced the nonsense "flag needs an argument: --tool; did you
+// mean --tool?". A missing value is not a spelling problem, so it gets
+// no suggestion. Shorthand errors ("unknown shorthand flag: 'z' in -z")
+// carry no long name and fall out on the "--" check.
 func unknownFlagName(msg string) (string, bool) {
+	if !strings.Contains(msg, "unknown flag") {
+		return "", false
+	}
 	i := strings.Index(msg, "--")
 	if i < 0 {
 		return "", false
 	}
 	name := msg[i+2:]
-	// "flag needs an argument: --tool" style messages end at the name;
-	// defensive trim for any trailing clause.
+	// Defensive trim for any trailing clause after the name.
 	if j := strings.IndexAny(name, " \t'\""); j >= 0 {
 		name = name[:j]
 	}
