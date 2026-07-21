@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
@@ -39,6 +41,9 @@ type InteractOptions struct {
 	// Unattended (--yolo) keeps the agent's approval gate OFF for a session
 	// supervised remotely via steer — no one sits at the terminal to approve.
 	Unattended bool
+	// AllowPremium explicitly bypasses LLM budget/subscription gates for urgent
+	// human-authorized work.
+	AllowPremium bool
 	// Status receives bashy's own one-line notices (which agent, the session id);
 	// defaults to os.Stderr so they never contaminate the tool's stdout.
 	Status io.Writer
@@ -88,6 +93,24 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	if err != nil {
 		return 1, err
 	}
+	next, d, err := governLaunch(ctx, name, l, opt.Prompt, Options{
+		Cwd:          opt.Cwd,
+		ReadOnly:     opt.ReadOnly,
+		Attended:     !opt.ReadOnly,
+		AllowUnsafe:  opt.Unattended,
+		AllowPremium: opt.AllowPremium,
+		Steer:        true,
+	})
+	if err != nil {
+		return 1, err
+	}
+	if d.Action == llmbudget.Queue {
+		return 75, fmt.Errorf("chat: LLM budget queued %s for %s: %s", d.Delay, l.Binding(), d.Reason)
+	}
+	if d.Action == llmbudget.Block {
+		return 75, fmt.Errorf("chat: LLM budget blocked %s: %s", l.Binding(), d.Reason)
+	}
+	l = next
 
 	// ycode (and any first-party harness) applies its OWN governance, so bashy does
 	// not scrub its env or force a single key — that is the only difference (native
@@ -118,6 +141,12 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	logPath, logSink, closeLog := sessionLog(l.Binding(), cwd)
 	if closeLog != nil {
 		defer closeLog()
+	}
+	usage := &usageCountingWriter{}
+	if logSink != nil {
+		logSink = io.MultiWriter(logSink, usage)
+	} else {
+		logSink = usage
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -212,7 +241,25 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 	if killed != "" {
 		fmt.Fprintf(status, "chat: session ended (%s)\n", killed)
 	}
+	recordLaunchUsageTokens(ctx, l, estimateTokens(opt.Prompt), usage.Tokens())
 	return exit, runErr
+}
+
+type usageCountingWriter struct {
+	bytes atomic.Int64
+}
+
+func (w *usageCountingWriter) Write(p []byte) (int, error) {
+	w.bytes.Add(int64(len(p)))
+	return len(p), nil
+}
+
+func (w *usageCountingWriter) Tokens() int64 {
+	n := w.bytes.Load() / 4
+	if w.bytes.Load() > 0 && n == 0 {
+		n = 1
+	}
+	return n
 }
 
 type interactiveReady struct {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
@@ -87,6 +88,11 @@ type SessionOptions struct {
 	// construction on an ordinary host.
 	ReadOnly bool
 
+	// AllowPremium explicitly bypasses LLM budget/subscription gates for urgent
+	// human-authorized work. Usage is still recorded when the session produces
+	// text.
+	AllowPremium bool
+
 	// Mode labels this instance on its host-room card (foreman | meet | coach | …).
 	// Empty defaults to "session". It is how `bashy chat sessions` shows WHAT a
 	// member is doing, not just that it exists.
@@ -119,6 +125,22 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	if err != nil {
 		return nil, err
 	}
+	next, d, err := governLaunch(ctx, name, l, opt.Prompt, Options{
+		Cwd:          opt.Cwd,
+		ReadOnly:     opt.ReadOnly,
+		AllowPremium: opt.AllowPremium,
+		Steer:        true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if d.Action == llmbudget.Queue {
+		return nil, fmt.Errorf("chat: LLM budget queued %s for %s: %s", d.Delay, l.Binding(), d.Reason)
+	}
+	if d.Action == llmbudget.Block {
+		return nil, fmt.Errorf("chat: LLM budget blocked %s: %s", l.Binding(), d.Reason)
+	}
+	l = next
 
 	argv := append([]string{}, l.Args...)
 
@@ -221,6 +243,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		})
 		s.mu.Lock()
 		s.exit, s.killed, s.err = exit, killed, err
+		recordLaunchUsage(ctx, l, opt.Prompt, s.buf.String())
 		s.mu.Unlock()
 	}()
 
