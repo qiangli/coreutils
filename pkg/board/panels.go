@@ -19,7 +19,7 @@ func (p panel) ID() string               { return p.id }
 func (p panel) Build(b *Board) PanelView { return p.build(b) }
 
 func DefaultPanels() *Registry {
-	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), salvagePanel(), fleetPanel())
+	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), salvagePanel(), fleetPanel(), resourcePanel())
 }
 
 func agentPanel() Panel {

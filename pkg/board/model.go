@@ -7,6 +7,8 @@ import (
 	"context"
 	"sort"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/resources"
 )
 
 const SchemaVersion = "bashy-board-v1"
@@ -32,7 +34,10 @@ type Board struct {
 	Todos         []Todo      `json:"todos"`
 	Sprints       []Sprint    `json:"sprints"`
 	Runs          []Run       `json:"runs"`
-	Warnings      []string    `json:"warnings,omitempty"`
+	// Resources is the host reading (nil when the collector is not wired
+	// into the source set, e.g. a test board).
+	Resources *resources.System `json:"resources,omitempty"`
+	Warnings  []string          `json:"warnings,omitempty"`
 }
 
 // Row is the normalized record shared by every source. The richer typed

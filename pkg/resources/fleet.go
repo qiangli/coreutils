@@ -17,8 +17,6 @@ import (
 	"github.com/qiangli/coreutils/pkg/weave"
 )
 
-const SchemaVersion = "bashy-resources-v1"
-
 // Canonical provider names in requested order.
 var CanonicalProviders = []string{
 	"Anthropic",

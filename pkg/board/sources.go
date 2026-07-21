@@ -22,7 +22,7 @@ import (
 func DefaultSources() []Source {
 	// Runs intentionally load first: the todo source uses their repo roots to
 	// discover every checked-in todo scope known to this machine.
-	return []Source{weaveSource{}, todoSource{}, sprintSource{}, fleetSource{}}
+	return []Source{weaveSource{}, todoSource{}, sprintSource{}, fleetSource{}, resourceSource{}}
 }
 
 // NewTodoSource, NewSprintSource, NewWeaveSource, and NewFleetSource expose
