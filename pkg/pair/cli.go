@@ -74,6 +74,10 @@ the work is done, because a gate is a command and a model is not.`,
 	f.StringVar(&diffRef, "diff", "", "attack this diff (a git ref; default HEAD when the tree is dirty)")
 	f.StringVar(&file, "file", "", "attack the contents of this file")
 	f.StringVar(&pairAgent, "pair", "", "agent that pairs with it — MUST be a different model family")
+	// --agent is the orchestration-facing spelling. Keep --pair as the
+	// human-facing original; both feed the same identity and therefore the same
+	// separation-of-duties checks in NewPlan.
+	f.StringVar(&pairAgent, "agent", "", "agent that pairs with it (alias for --pair)")
 	f.StringVar(&gateOvr, "verify", "", "the gate command (default: the project's gate)")
 	f.DurationVar(&timeout, "timeout", 20*time.Minute, "per-agent timeout")
 	f.BoolVar(&asJSON, "json", false, "emit "+SchemaVersion)

@@ -195,26 +195,31 @@ type weaveItem struct {
 	// VerifyOutput (last 2000 bytes) as evidence. Verify never changes
 	// the terminal state itself; `weave pull` refuses to merge
 	// submitted items whose VerifyExit is set and non-zero.
-	VerifyCommand   string    `json:"verify_command,omitempty"`
-	VerifyExit      *int      `json:"verify_exit,omitempty"`
-	VerifyOutput    string    `json:"verify_output,omitempty"`
-	VerifyTree      string    `json:"verify_tree,omitempty"`
-	ReviewVerdict   string    `json:"review_verdict,omitempty"`
-	ReviewBlocking  bool      `json:"review_blocking,omitempty"`
-	ReviewNotes     string    `json:"review_notes,omitempty"`
-	ReviewExit      int       `json:"review_exit,omitempty"`
-	ReviewBy        string    `json:"review_by,omitempty"`
-	ReviewAt        time.Time `json:"review_at,omitempty"`
-	SuiteGate       string    `json:"suite_gate,omitempty"`
-	SuiteGateExit   *int      `json:"suite_gate_exit,omitempty"`
-	SuiteGateOutput string    `json:"suite_gate_output,omitempty"`
-	Dirty           bool      `json:"dirty"`
-	DirtyFiles      int       `json:"dirty_files,omitempty"`
-	UntrackedFiles  int       `json:"untracked_files,omitempty"`
-	AutoCommitted   bool      `json:"auto_committed,omitempty"`
-	AutoCommitError string    `json:"auto_commit_error,omitempty"`
-	ExitCode        *int      `json:"exit_code,omitempty"`
-	KilledBy        string    `json:"killed_by,omitempty"`
+	VerifyCommand  string    `json:"verify_command,omitempty"`
+	VerifyExit     *int      `json:"verify_exit,omitempty"`
+	VerifyOutput   string    `json:"verify_output,omitempty"`
+	VerifyTree     string    `json:"verify_tree,omitempty"`
+	ReviewVerdict  string    `json:"review_verdict,omitempty"`
+	ReviewBlocking bool      `json:"review_blocking,omitempty"`
+	ReviewNotes    string    `json:"review_notes,omitempty"`
+	ReviewExit     int       `json:"review_exit,omitempty"`
+	ReviewBy       string    `json:"review_by,omitempty"`
+	ReviewAt       time.Time `json:"review_at,omitempty"`
+	// CodingAgent and ReviewAgent make separation of duties auditable. The
+	// reviewer is an acting pair: it may add evidence, but never a verdict.
+	CodingAgent     string `json:"coding_agent,omitempty"`
+	ReviewAgent     string `json:"review_agent,omitempty"`
+	ReviewAddedTest bool   `json:"review_added_test,omitempty"`
+	SuiteGate       string `json:"suite_gate,omitempty"`
+	SuiteGateExit   *int   `json:"suite_gate_exit,omitempty"`
+	SuiteGateOutput string `json:"suite_gate_output,omitempty"`
+	Dirty           bool   `json:"dirty"`
+	DirtyFiles      int    `json:"dirty_files,omitempty"`
+	UntrackedFiles  int    `json:"untracked_files,omitempty"`
+	AutoCommitted   bool   `json:"auto_committed,omitempty"`
+	AutoCommitError string `json:"auto_commit_error,omitempty"`
+	ExitCode        *int   `json:"exit_code,omitempty"`
+	KilledBy        string `json:"killed_by,omitempty"`
 	// Completion records an explicit terminalization that did not come from the
 	// agent process exiting. It is deliberately distinct from ExitCode: a
 	// conductor may observe an interactive TUI return idle, but weave never
@@ -1209,6 +1214,9 @@ func weaveClearCurrentRunTerminalEvidence(it *weaveItem) {
 	it.VerifyExit = nil
 	it.VerifyOutput = ""
 	it.VerifyTree = ""
+	it.CodingAgent = ""
+	it.ReviewAgent = ""
+	it.ReviewAddedTest = false
 	it.Dirty = false
 	it.DirtyFiles = 0
 	it.UntrackedFiles = 0
@@ -3698,7 +3706,11 @@ func weaveRequireReviewGate(it *weaveItem) error {
 	return nil
 }
 
-func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, issueSpecified bool, requireReview, force bool) error {
+func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, issueSpecified bool, requireReview, force bool, reviewAgents ...string) error {
+	reviewAgent := ""
+	if len(reviewAgents) > 0 {
+		reviewAgent = reviewAgents[0]
+	}
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -3715,6 +3727,8 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		Detail          string `json:"detail,omitempty"`
 		SuiteGateExit   *int   `json:"suite_gate_exit,omitempty"`
 		SuiteGateOutput string `json:"suite_gate_output,omitempty"`
+		ReviewAgent     string `json:"review_agent,omitempty"`
+		ReviewAddedTest bool   `json:"review_added_test,omitempty"`
 	}
 	var results []result
 	var mergedReports []*weaveItem
@@ -3813,6 +3827,41 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					Detail: fmt.Sprintf("working tree has %d uncommitted tracked file(s) RIGHT NOW (measured, not recorded); commit them in the workspace (`weave shell %d`) and re-run", dirtyFilesNow, it.ID)})
 				continue
 			}
+			// An acting pair augments the RUN WORKSPACE before the terminal
+			// evidence is re-collected. It has no approve/reject path: a test it
+			// adds is committed as evidence, then the existing verify/suite gate
+			// below is the only arbiter. Default-off preserves legacy pull.
+			if reviewAgent != "" && it.State == "submitted" {
+				if it.Workspace == "" {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "review-error", Detail: "no workspace recorded for adversarial review"})
+					continue
+				}
+				if _, err := os.Stat(it.Workspace); err != nil {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "review-error", Detail: fmt.Sprintf("workspace missing: %v", err)})
+					continue
+				}
+				gateCommand := it.VerifyCommand
+				if gateCommand == "" {
+					gateCommand = weaveSuiteGateCommand(root, it)
+				}
+				pr, reviewErr := weavePairReviewRunner(it.Workspace, weaveCountRef(it, base), gateCommand, reviewAgent, it)
+				it.CodingAgent = pr.CodingAgent
+				it.ReviewAgent = pr.ReviewAgent
+				it.ReviewAddedTest = pr.AddedTest
+				if reviewErr != nil {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "review-error", Detail: reviewErr.Error(), ReviewAgent: pr.ReviewAgent, ReviewAddedTest: pr.AddedTest})
+					continue
+				}
+				ev := weaveCollectTerminalEvidence(it.Workspace, weaveCountRef(it, base), it.VerifyCommand, it.VerifyCommand != "")
+				weaveApplyTerminalEvidence(it, ev)
+				if ev.VerifyExit != nil && *ev.VerifyExit != 0 {
+					it.State = "failed"
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "verify-failed",
+						Detail:      fmt.Sprintf("adversarial review by %s added_test=%v; verify command exited %d — pair evidence remains committed in the workspace", pr.ReviewAgent, pr.AddedTest, *ev.VerifyExit),
+						ReviewAgent: pr.ReviewAgent, ReviewAddedTest: pr.AddedTest})
+					continue
+				}
+			}
 			// Substrate-verified outcome gate: the wrapper ran the item's
 			// verify command at terminal time; a recorded non-zero exit
 			// means the work failed its own acceptance check. Refuse to
@@ -3910,6 +3959,9 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				suiteGateExit = &sgExit
 				suiteGateOutput = sgOutput
 				if sgExit != 0 {
+					if reviewAgent != "" && it.ReviewAgent != "" {
+						it.State = "failed"
+					}
 					_, resetErr := gitOut(root, "reset", "--hard", preMergeSHA)
 					detail := sgOutput
 					if resetErr != nil {
@@ -3922,6 +3974,8 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 						Detail:          detail,
 						SuiteGateExit:   &sgExit,
 						SuiteGateOutput: sgOutput,
+						ReviewAgent:     it.ReviewAgent,
+						ReviewAddedTest: it.ReviewAddedTest,
 					})
 					continue
 				}
@@ -3951,6 +4005,8 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				Status:          "merged",
 				SuiteGateExit:   suiteGateExit,
 				SuiteGateOutput: suiteGateOutput,
+				ReviewAgent:     it.ReviewAgent,
+				ReviewAddedTest: it.ReviewAddedTest,
 			})
 		}
 		return nil

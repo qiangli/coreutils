@@ -80,6 +80,13 @@ func TestAnAgentCannotPairWithItself(t *testing.T) {
 	}
 }
 
+func TestAgentFlagAliasesPair(t *testing.T) {
+	cmd := NewPairCmd()
+	if cmd.Flags().Lookup("agent") == nil || cmd.Flags().Lookup("pair") == nil {
+		t.Fatal("pair must accept both --agent (orchestration) and --pair (interactive) spellings")
+	}
+}
+
 // --- the payoff: an acting pair adjudicates itself ---------------------------------------
 
 // The three-way that the baseline gate buys, and the reason it is not ceremony.

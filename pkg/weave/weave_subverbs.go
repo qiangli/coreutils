@@ -285,7 +285,7 @@ func newWeaveResumeCmd() *cobra.Command {
 
 func newWeaveAutopilotCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var fleet, brief string
+	var fleet, brief, reviewAgent string
 	var standby bool
 	var leaseTTL, heartbeat, backoff time.Duration
 	cmd := &cobra.Command{
@@ -313,12 +313,13 @@ expire before taking over. This supports a second process or machine as
 a cold standby for unattended campaigns.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWeaveAutopilot(cmd, weaveAutopilotOptions{
-				fleetCSV:  fleet,
-				briefPath: brief,
-				standby:   standby,
-				leaseTTL:  leaseTTL,
-				heartbeat: heartbeat,
-				backoff:   backoff,
+				fleetCSV:    fleet,
+				briefPath:   brief,
+				standby:     standby,
+				leaseTTL:    leaseTTL,
+				heartbeat:   heartbeat,
+				backoff:     backoff,
+				reviewAgent: reviewAgent,
 			}, &flags)
 		},
 	}
@@ -329,6 +330,7 @@ a cold standby for unattended campaigns.`,
 	cmd.Flags().DurationVar(&leaseTTL, "lease-ttl", 30*time.Second, "Orchestrator lease TTL")
 	cmd.Flags().DurationVar(&heartbeat, "heartbeat", 5*time.Second, "Lease heartbeat interval while the orchestrator is alive")
 	cmd.Flags().DurationVar(&backoff, "backoff", 10*time.Second, "Backoff after a full failed fleet rotation")
+	cmd.Flags().StringVar(&reviewAgent, "review-agent", "", "Adversarial pair agent for every submitted run (default off; must differ from the coder)")
 	return cmd
 }
 
@@ -534,6 +536,7 @@ func newWeavePullCmd() *cobra.Command {
 	var watch bool
 	var requireReview bool
 	var force bool
+	var reviewAgent string
 	cmd := &cobra.Command{
 		Use:   "pull [issue]",
 		Short: "Fast-forward your local main with the merged agent branches",
@@ -563,13 +566,14 @@ then --force to merge anyway.`,
 				issueID = id
 				issueSpecified = true
 			}
-			return runWeavePull(cmd, &flags, issueID, issueSpecified, requireReview, force)
+			return runWeavePull(cmd, &flags, issueID, issueSpecified, requireReview, force, reviewAgent)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().BoolVar(&watch, "watch", false, "Daemonize: fast-forward whenever a PR merges")
 	cmd.Flags().BoolVar(&requireReview, "require-review", false, "Require a passing `weave review` verdict before merging")
 	cmd.Flags().BoolVar(&force, "force", false, "Merge a run flagged isolation-violated (the live checkout changed while it ran) anyway")
+	cmd.Flags().StringVar(&reviewAgent, "review-agent", "", "Run an adversarial pair in each submitted workspace before verification (default off)")
 	return cmd
 }
 
