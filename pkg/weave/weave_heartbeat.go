@@ -1,7 +1,9 @@
 package weave
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -169,10 +171,20 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 
 					apCmd := exec.Command(self, apArgs...)
 					apCmd.Dir = cwd // run in project directory so it can resolve repo root
-					apCmd.Stdout = cmd.OutOrStdout()
+					var apStdout bytes.Buffer
+					apCmd.Stdout = io.MultiWriter(cmd.OutOrStdout(), &apStdout)
 					apCmd.Stderr = cmd.ErrOrStderr()
 
 					if err := apCmd.Run(); err != nil {
+						if opts.reviewAgent != "" {
+							if _, ok := weavePairVerdictFromOutput(apStdout.String()); !ok {
+								reason := fmt.Sprintf("heartbeat autopilot exited without a pair verdict: %v", err)
+								weaveRecordPairHarnessError(queueDir, reason)
+								fmt.Fprintln(cmd.OutOrStdout(), (weavePairReviewResult{
+									Verdict: weavePairHarnessError, Reason: reason,
+								}).verdictLine())
+							}
+						}
 						fmt.Fprintf(cmd.ErrOrStderr(), "heartbeat: autopilot exited with error: %v\n", err)
 					} else {
 						fmt.Fprintf(cmd.OutOrStdout(), "[%s] autopilot completed a pass\n", time.Now().UTC().Format(time.RFC3339))

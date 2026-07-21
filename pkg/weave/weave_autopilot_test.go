@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -194,6 +195,43 @@ func TestWeaveAutopilotLeaseBusyWithoutStandby(t *testing.T) {
 	})
 	if !errors.Is(err, errWeaveAutopilotLeaseBusy) {
 		t.Fatalf("err = %v, want lease busy", err)
+	}
+}
+
+func TestWeaveAutopilotReviewAgentWithoutVerdictIsHarnessError(t *testing.T) {
+	dir := testWeaveAutopilotQueue(t)
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Items[0].State = "submitted"
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+	runner := &testWeaveAutopilotRunner{actions: map[string][]testWeaveAutopilotRun{
+		"codex": {{exit: 1}},
+	}}
+	var stdout bytes.Buffer
+	res, err := runWeaveAutopilotLoop(context.Background(), weaveAutopilotLoopOptions{
+		queueDir: dir, repoRoot: "/repo", fleet: testMembers("codex"),
+		leaseTTL: time.Second, heartbeat: 10 * time.Millisecond, backoff: time.Millisecond,
+		runner: runner, holder: "review-test", maxRuns: 1, reviewAgent: "reviewer", stdout: &stdout,
+	})
+	if err != nil {
+		t.Fatalf("autopilot: %v", err)
+	}
+	if res.PairVerdict != string(weavePairHarnessError) || res.PairExit != weavePairHarnessErrorExit {
+		t.Fatalf("pair result = %#v", res)
+	}
+	if !strings.Contains(stdout.String(), "PAIR HARNESS-ERROR") || !strings.Contains(stdout.String(), "without a pair verdict") {
+		t.Fatalf("stdout missing verdict and reason: %q", stdout.String())
+	}
+	q, err = loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Items[0].State != "submitted" || !q.Items[0].NeedsSteward || !strings.Contains(q.Items[0].StewardReason, "PAIR HARNESS-ERROR") {
+		t.Fatalf("submitted run did not retain named harness reason: %#v", q.Items[0])
 	}
 }
 

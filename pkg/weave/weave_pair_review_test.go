@@ -34,14 +34,17 @@ git -c user.email=a@a -c user.name=a commit -qm "buggy feature"`
 		}
 		gitT(t, workspace, "add", "adversarial_test.go")
 		gitT(t, workspace, "commit", "-qm", "pair proof")
-		return weavePairReviewResult{CodingAgent: "sh", ReviewAgent: "codex:gpt", AddedTest: true, ExitCode: weavePairProvedExit}, nil
+		return weavePairReviewResult{
+			CodingAgent: "sh", ReviewAgent: "codex:gpt", AddedTest: true,
+			Verdict: weavePairRefuted, Reason: "pair proved the regression", ExitCode: weavePairProvedExit,
+		}, nil
 	}
 
 	out, code := runWeave(t, "pull", "1", "--review-agent", "reviewer", "--json")
-	if code != 0 {
+	if code != weavePairProvedExit {
 		t.Fatalf("pull exit=%d: %s", code, out)
 	}
-	if !strings.Contains(out, `"status": "verify-failed"`) || !strings.Contains(out, `"review_added_test": true`) {
+	if !strings.Contains(out, `"status": "review-block"`) || !strings.Contains(out, `"pair_verdict": "refuted"`) || !strings.Contains(out, `"review_added_test": true`) {
 		t.Fatalf("pair proof did not block merge with durable evidence: %s", out)
 	}
 	dir, _ := weaveQueueDir(root)
@@ -80,14 +83,62 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 	called := 0
 	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
 		called++
-		return weavePairReviewResult{CodingAgent: "sh", ReviewAgent: "claude:opus", AddedTest: false}, nil
+		return weavePairReviewResult{
+			CodingAgent: "sh", ReviewAgent: "claude:opus", AddedTest: false,
+			Verdict: weavePairPass, Reason: "pair attacked the change and the gate stayed green", ExitCode: weavePairPassExit,
+		}, nil
 	}
 	out, code := runWeave(t, "pull", "1", "--review-agent", "reviewer", "--json")
-	if code != 0 || !strings.Contains(out, `"status": "merged"`) {
+	if code != 0 || !strings.Contains(out, `"status": "merged"`) || !strings.Contains(out, `"pair_verdict": "pass"`) || !strings.Contains(out, `"pair_reason":`) {
 		t.Fatalf("clean reviewed run did not merge (exit %d): %s", code, out)
 	}
 	if called != 1 {
 		t.Fatalf("pair calls=%d, want 1", called)
+	}
+}
+
+func TestWeavePullPairRunnerWithoutVerdictIsHarnessError(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if out, code := runWeave(t, "add", "review harness regression", "--verify", "test -f feature.txt", "--json"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	script := `set -e
+echo clean > feature.txt
+git add feature.txt
+git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
+	if out, code := runWeave(t, "start", "--issue", "1", "--json", "--", "sh", "-c", script); code != 0 {
+		t.Fatalf("start exit=%d: %s", code, out)
+	}
+
+	original := weavePairReviewRunner
+	t.Cleanup(func() { weavePairReviewRunner = original })
+	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
+		return weavePairReviewResult{}, nil
+	}
+
+	out, code := runWeave(t, "pull", "1", "--review-agent", "reviewer", "--json")
+	if code != weavePairHarnessErrorExit {
+		t.Fatalf("pull exit=%d, want harness exit %d: %s", code, weavePairHarnessErrorExit, out)
+	}
+	if !strings.Contains(out, `"pair_verdict": "harness-error"`) || !strings.Contains(out, "pair runner returned no verdict") {
+		t.Fatalf("missing HARNESS-ERROR verdict and reason: %s", out)
+	}
+	dir, _ := weaveQueueDir(root)
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := findWeaveItem(q, 1)
+	if it.State != "submitted" || !it.NeedsSteward || !strings.Contains(it.StewardReason, "PAIR HARNESS-ERROR") {
+		t.Fatalf("harness error must leave a named submitted run: %#v", it)
+	}
+	if got := gitT(t, root, "log", "--format=%s", "-1"); got != "seed" {
+		t.Fatalf("run merged despite harness error: %s", got)
+	}
+	plain, plainCode := runWeave(t, "pull", "1", "--review-agent", "reviewer", "--plain")
+	if plainCode != weavePairHarnessErrorExit || !strings.Contains(plain, "PAIR HARNESS-ERROR — pair runner returned no verdict") {
+		t.Fatalf("plain pull did not print the harness verdict and reason (exit %d): %s", plainCode, plain)
 	}
 }
 

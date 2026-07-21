@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -129,7 +130,17 @@ func runWeaveAutopilot(cmd *cobra.Command, opts weaveAutopilotOptions, flags *we
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave autopilot", code, err))
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, "weave autopilot", res))
+		_ = emitOK(cmd.OutOrStdout(), mode, "weave autopilot", res)
+		if res.PairExit != weavePairPassExit {
+			return ec(res.PairExit)
+		}
+		return nil
+	}
+	if res.PairVerdict != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "PAIR %s — %s\n", strings.ToUpper(res.PairVerdict), res.PairReason)
+		if res.PairExit != weavePairPassExit {
+			return ec(res.PairExit)
+		}
 	}
 	label := res.Tool
 	if res.Agent != "" {
@@ -159,12 +170,67 @@ type weaveAutopilotLoopOptions struct {
 }
 
 type weaveAutopilotResult struct {
-	Tool       string `json:"tool"`
-	Agent      string `json:"agent,omitempty"`
-	Binding    string `json:"binding,omitempty"`
-	Runs       int    `json:"runs"`
-	QueueDir   string `json:"queue_dir"`
-	LastReason string `json:"last_reason,omitempty"`
+	Tool        string `json:"tool"`
+	Agent       string `json:"agent,omitempty"`
+	Binding     string `json:"binding,omitempty"`
+	Runs        int    `json:"runs"`
+	QueueDir    string `json:"queue_dir"`
+	LastReason  string `json:"last_reason,omitempty"`
+	PairVerdict string `json:"pair_verdict,omitempty"`
+	PairReason  string `json:"pair_reason,omitempty"`
+	PairExit    int    `json:"pair_exit,omitempty"`
+}
+
+var (
+	weavePairJSONVerdict = regexp.MustCompile(`"pair_verdict"\s*:\s*"(pass|broken-before|refuted|harness-error)"`)
+	weavePairJSONReason  = regexp.MustCompile(`"pair_reason"\s*:\s*"((?:\\.|[^"\\])*)"`)
+)
+
+func weavePairVerdictFromOutput(output string) (weavePairReviewResult, bool) {
+	res := weavePairReviewResult{}
+	if m := weavePairJSONVerdict.FindStringSubmatch(output); len(m) == 2 {
+		res.Verdict = weavePairVerdict(m[1])
+		if reason := weavePairJSONReason.FindStringSubmatch(output); len(reason) == 2 {
+			if decoded, err := strconv.Unquote(`"` + reason[1] + `"`); err == nil {
+				res.Reason = decoded
+			}
+		}
+	} else {
+		for _, line := range strings.Split(output, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "PAIR ") {
+				continue
+			}
+			head, reason, ok := strings.Cut(strings.TrimPrefix(line, "PAIR "), " — ")
+			if !ok {
+				continue
+			}
+			res.Verdict = weavePairVerdict(strings.ToLower(strings.TrimSpace(head)))
+			res.Reason = strings.TrimSpace(reason)
+			break
+		}
+	}
+	res.ExitCode, _ = weavePairExitForVerdict(res.Verdict)
+	if res.Verdict == "" || res.Reason == "" {
+		return weavePairReviewResult{}, false
+	}
+	return res, true
+}
+
+func weaveRecordPairHarnessError(queueDir, reason string) {
+	_ = withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
+		for _, it := range q.Items {
+			if it.State != "submitted" {
+				continue
+			}
+			it.PairVerdict = string(weavePairHarnessError)
+			it.PairReason = reason
+			it.PairExit = weavePairHarnessErrorExit
+			it.NeedsSteward = true
+			it.StewardReason = (weavePairReviewResult{Verdict: weavePairHarnessError, Reason: reason}).verdictLine()
+		}
+		return nil
+	})
 }
 
 var errWeaveAutopilotLeaseBusy = errors.New("orchestrator lease is held")
@@ -252,11 +318,13 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 		}()
 
 		overload := false
+		var runOutput strings.Builder
 		exitCode, runErr := opts.runner.Run(runCtx, member, prompt, opts.queueDir, func(s string) {
 			if s == "" {
 				return
 			}
 			_, _ = io.WriteString(opts.stdout, s)
+			runOutput.WriteString(s)
 			if weaveAutopilotOverloaded(s) {
 				overload = true
 				cancel()
@@ -265,6 +333,40 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 		cancel()
 		<-hbDone
 		runs++
+
+		if opts.reviewAgent != "" {
+			pairResult, hasPairVerdict := weavePairVerdictFromOutput(runOutput.String())
+			if hasPairVerdict {
+				if pairResult.Verdict != weavePairPass || (runErr == nil && exitCode == 0) {
+					_ = releaseWeaveAutopilotLease(opts.queueDir, opts.holder)
+					return weaveAutopilotResult{
+						Tool: member.Tool, Agent: member.agentNick(), Binding: member.Binding(),
+						Runs: runs, QueueDir: opts.queueDir, PairVerdict: string(pairResult.Verdict),
+						PairReason: pairResult.Reason, PairExit: pairResult.ExitCode,
+					}, nil
+				}
+			}
+			if !overload && (runErr != nil || exitCode != 0) {
+				reason := fmt.Sprintf("autopilot member %s exited without a pair verdict", member.Label())
+				if hasPairVerdict {
+					reason = fmt.Sprintf("autopilot member %s failed after pair PASS", member.Label())
+				}
+				if runErr != nil {
+					reason += ": " + runErr.Error()
+				} else {
+					reason += fmt.Sprintf(" (exit %d)", exitCode)
+				}
+				weaveRecordPairHarnessError(opts.queueDir, reason)
+				pairResult := weavePairReviewResult{Verdict: weavePairHarnessError, Reason: reason, ExitCode: weavePairHarnessErrorExit}
+				fmt.Fprintln(opts.stdout, pairResult.verdictLine())
+				_ = releaseWeaveAutopilotLease(opts.queueDir, opts.holder)
+				return weaveAutopilotResult{
+					Tool: member.Tool, Agent: member.agentNick(), Binding: member.Binding(),
+					Runs: runs, QueueDir: opts.queueDir, PairVerdict: string(pairResult.Verdict),
+					PairReason: pairResult.Reason, PairExit: pairResult.ExitCode,
+				}, nil
+			}
+		}
 
 		if overload {
 			lastReason = "api-overload signature"
