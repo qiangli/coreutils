@@ -56,6 +56,13 @@ type Session struct {
 	// the difference between KNOWING a turn ended and guessing from silence.
 	events *eventTail
 
+	// launch is the resolved, already-governed launch this session runs under. It
+	// is retained because a session is not one LLM call — every steer that lands
+	// on Say is ANOTHER billable turn against the same model, and the gate needs
+	// the model name and lane to judge it.
+	launch       Launch
+	allowPremium bool
+
 	mu         sync.Mutex
 	buf        strings.Builder
 	mark       int       // end of the last Turn
@@ -193,11 +200,13 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	}
 
 	s := &Session{
-		Agent:   l.Binding(),
-		Nick:    l.Nick,
-		CtlSock: sock,
-		events:  tail,
-		done:    make(chan struct{}),
+		Agent:        l.Binding(),
+		Nick:         l.Nick,
+		CtlSock:      sock,
+		events:       tail,
+		launch:       l,
+		allowPremium: opt.AllowPremium,
+		done:         make(chan struct{}),
 		// Seed the idle clock at launch. An agent that says NOTHING must still go
 		// idle — otherwise WaitIdle would hang forever on the one failure it most
 		// needs to report, which is an agent that never spoke.
@@ -290,7 +299,8 @@ func (s *Session) openConversation(ctx context.Context, prompt string) error {
 	before := s.buf.Len()
 	s.mu.Unlock()
 
-	if err := s.Say(prompt); err != nil {
+	// Unmetered: Start already gated and will record this opening prompt.
+	if err := s.say(prompt); err != nil {
 		return fmt.Errorf("chat: could not open the conversation with %s: %w", s.Nick, err)
 	}
 	sends := 1 // CAP re-sends: a swallowed send gets another chance, but a working
@@ -333,7 +343,7 @@ func (s *Session) openConversation(ctx context.Context, prompt string) error {
 
 		// Not begun yet — the startup most likely ate the last send. Resend on backoff.
 		if sends < maxOpenSends && time.Now().After(nextResend) {
-			if err := s.Say(prompt); err != nil {
+			if err := s.say(prompt); err != nil {
 				return fmt.Errorf("chat: could not re-open the conversation with %s: %w", s.Nick, err)
 			}
 			sends++
@@ -362,14 +372,55 @@ const maxOpenSends = 6
 // This is the one control surface. `meet say`, `weave say`, `foreman tell` and an
 // operator at a keyboard all land here, so they cannot drift into meaning
 // different things.
+//
+// It is also a METERED LLM CALL, and used not to be. Start gates the opening
+// prompt and records usage once when the session ends — but a session is a
+// CONVERSATION, and every steer that lands here buys another turn against the
+// same model. A long coached run could therefore spend an unbounded amount past
+// an exhausted budget, because only its first turn was ever asked. Say now goes
+// through the same gate as Invoke and Start: refused when the budget is gone,
+// recorded when it is spent.
 func (s *Session) Say(text string) error {
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("chat: nothing to say")
 	}
+	if d := s.governTurn(text); !d.Allowed() {
+		if d.Action == llmbudget.Queue {
+			return fmt.Errorf("chat: LLM budget queued %s for %s: %s", d.Delay, s.Agent, d.Reason)
+		}
+		return fmt.Errorf("chat: LLM budget blocked %s: %s", s.Agent, d.Reason)
+	}
+	if err := s.say(text); err != nil {
+		return err
+	}
+	// Charged on SEND, not on reply: the turn is bought the moment the agent
+	// accepts it, and a session's reply text has no boundary we could bill
+	// against anyway (that is what WaitIdle exists to guess at).
+	recordLaunchUsageTokens(context.Background(), s.launch, estimateTokens(text), 0)
+	return nil
+}
+
+// say is the unmetered write to the control channel — for traffic that is not a
+// billable turn (the opening prompt, already gated by Start; /quit).
+func (s *Session) say(text string) error {
 	if s.CtlSock == "" {
 		return fmt.Errorf("chat: %s has no control channel", s.Nick)
 	}
 	return agentctl.Say(s.CtlSock, text)
+}
+
+// governTurn asks the budget gate about ONE mid-session turn.
+//
+// Unlike governLaunch it cannot re-route: the session is already running under a
+// launched process, so Downgrade/RouteAlt to a different model is not available
+// mid-conversation. Those are therefore treated as what they are here — the
+// model is allowed to finish this turn, and the routing decision belongs to the
+// NEXT Start. Only Block and Queue stop a steer.
+func (s *Session) governTurn(text string) llmbudget.Decision {
+	if s.launch.ModelName == "" {
+		return llmbudget.Decision{Action: llmbudget.Allow}
+	}
+	return llmbudget.CheckWithOverride(context.Background(), s.launch.ModelName, estimateTokens(text), s.allowPremium)
 }
 
 // Output is everything the agent has said so far. Safe to call while it is still
@@ -562,7 +613,9 @@ func (s *Session) Interrupt() error {
 // Asking is not the same as making it go: a tool that ignores the request is
 // ended by the caller's timeout or by Close. But an agent given the chance to
 // finish writing usually leaves a cleaner tree than one shot mid-edit.
-func (s *Session) Quit() error { return s.Say("/quit") }
+// Quit is a control command, not a turn: it buys no model work, so it is never
+// gated. An exhausted budget must still be able to shut a session down.
+func (s *Session) Quit() error { return s.say("/quit") }
 
 // Close ends the session now.
 func (s *Session) Close() {

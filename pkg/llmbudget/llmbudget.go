@@ -119,6 +119,43 @@ type Bucket struct {
 
 var defaultGate = DefaultFromEnv()
 
+// SetDefault swaps the process-wide gate that the package-level Check/Record
+// helpers consult, and returns a function that puts the previous one back.
+//
+// It exists so a call site can be PROVEN to refuse when the budget is gone. The
+// default gate is built from the environment once, at init, so a test cannot
+// reach it by setting variables — and a budget gate whose refusal path is never
+// exercised is exactly the kind of capability that quietly does not work.
+// Inject a Gate with a fixed clock and pre-loaded counters instead of sleeping
+// or spending real money to reach a limit.
+func SetDefault(g *Gate) (restore func()) {
+	prev := defaultGate
+	if g != nil {
+		defaultGate = g
+	}
+	return func() { defaultGate = prev }
+}
+
+// Load seeds the gate's counters directly, so a test can start from an
+// already-exhausted budget without issuing the calls that would exhaust it.
+func (g *Gate) Load(s State) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ensureLoaded()
+	if s.Models != nil {
+		g.state.Models = s.Models
+	}
+	if s.Plans != nil {
+		g.state.Plans = s.Plans
+	}
+	if s.Providers != nil {
+		g.state.Providers = s.Providers
+	}
+	if s.Buckets != nil {
+		g.state.Buckets = s.Buckets
+	}
+}
+
 func New(cfg Config) *Gate {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
