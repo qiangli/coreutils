@@ -69,16 +69,18 @@ func (weaveSource) Load(_ context.Context, b *Board, o Options) error {
 		Queues []struct {
 			Root  string `json:"root"`
 			Items []struct {
-				ID         int64     `json:"id"`
-				Title      string    `json:"title"`
-				State      string    `json:"state"`
-				Tool       string    `json:"tool"`
-				Owner      string    `json:"owner"`
-				Points     int       `json:"points"`
-				StartedAt  time.Time `json:"started_at"`
-				FinishedAt time.Time `json:"finished_at"`
-				Blocked    bool      `json:"blocked"`
-				Launch     *struct {
+				ID              int64     `json:"id"`
+				Title           string    `json:"title"`
+				State           string    `json:"state"`
+				Tool            string    `json:"tool"`
+				Owner           string    `json:"owner"`
+				Points          int       `json:"points"`
+				StartedAt       time.Time `json:"started_at"`
+				FinishedAt      time.Time `json:"finished_at"`
+				Blocked         bool      `json:"blocked"`
+				Salvageable     bool      `json:"salvageable"`
+				UnmergedCommits int       `json:"unmerged_commits"`
+				Launch          *struct {
 					Agent      string        `json:"agent"`
 					Model      string        `json:"model"`
 					MaxRuntime time.Duration `json:"max_runtime"`
@@ -91,7 +93,7 @@ func (weaveSource) Load(_ context.Context, b *Board, o Options) error {
 	}
 	for _, q := range result.Queues {
 		for _, x := range q.Items {
-			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Agent: x.Owner, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked}
+			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Agent: x.Owner, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits}
 			if x.Launch != nil {
 				if x.Launch.Agent != "" {
 					r.Agent = x.Launch.Agent

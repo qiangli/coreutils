@@ -183,6 +183,11 @@ type weaveItem struct {
 	// the run ended is hidden.
 	CommitsAhead int    `json:"commits_ahead,omitempty"`
 	Head         string `json:"head,omitempty"`
+	// Salvageable and UnmergedCommits are read-time projections. They are
+	// recomputed from the workspace and the repository's current base branch by
+	// list/status; a terminal label must never hide commits that have not landed.
+	Salvageable     bool `json:"salvageable,omitempty"`
+	UnmergedCommits int  `json:"unmerged_commits,omitempty"`
 	// VerifyCommand is the substrate-verified outcome hook, supplied
 	// at `weave add --verify "<cmd>"`. The WRAPPER runs it via
 	// `bash -c` inside the workspace at terminal time — when the tool
@@ -586,6 +591,41 @@ func weaveMeasureBranch(workspace, base string) (ahead int, head string) {
 		head = strings.TrimSpace(string(out))
 	}
 	return ahead, head
+}
+
+// weaveClassifySalvageable reports committed work held by a terminal run that
+// is not reachable from the repository's current base branch. It deliberately
+// interrogates Git instead of trusting CommitsAhead: the wrapper that records
+// terminal evidence may be the process that was killed after the agent commit.
+//
+// Counting each workspace commit against the root is slightly more work than a
+// single rev-list count, but it is exact when main has advanced or absorbed only
+// part of a branch. The root clone knows every commit that has actually landed;
+// an unknown object and a known-but-unmerged object both correctly count as
+// unmerged.
+func weaveClassifySalvageable(root, base string, it *weaveItem) (bool, int) {
+	if it == nil || (it.State != "killed" && it.State != "failed" && it.State != "submitted") || it.Workspace == "" {
+		return false, 0
+	}
+	if st, err := os.Stat(it.Workspace); err != nil || !st.IsDir() {
+		return false, 0
+	}
+	ref := weaveCountRef(it, base)
+	out, err := exec.Command("git", "-C", it.Workspace, "rev-list", ref+"..HEAD").Output()
+	if err != nil {
+		return false, 0
+	}
+	unmerged := 0
+	for _, sha := range strings.Fields(string(out)) {
+		if exec.Command("git", "-C", root, "merge-base", "--is-ancestor", sha, base).Run() != nil {
+			unmerged++
+		}
+	}
+	return unmerged > 0, unmerged
+}
+
+func weaveAnnotateSalvageable(root, base string, it *weaveItem) {
+	it.Salvageable, it.UnmergedCommits = weaveClassifySalvageable(root, base, it)
 }
 
 // weaveItemMerged reports whether an item's work is already contained
@@ -1690,9 +1730,13 @@ func weaveRenderItemRows(w io.Writer, q *weaveQueue, items []*weaveItem) {
 		if it.Points > 0 {
 			pts = strconv.Itoa(it.Points)
 		}
-		fmt.Fprintf(w, "%-4d %-4s %-6s %-3s %-14s %-9s %-8s %-8s %-40s %s\n",
+		work := "-"
+		if it.Salvageable {
+			work = fmt.Sprintf("%d commits", it.UnmergedCommits)
+		}
+		fmt.Fprintf(w, "%-4d %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %s\n",
 			it.ID, it.Priority, itemStage(it), pts, state, toolCol,
-			weaveStartedCol(it), weaveDurationCol(it), title, weaveTildePath(it.Workspace))
+			work, weaveStartedCol(it), weaveDurationCol(it), title, weaveTildePath(it.Workspace))
 	}
 }
 
@@ -1837,8 +1881,15 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 		if !weaveQueueRootAvailable(q) {
 			continue
 		}
+		root := q.Root
+		if root == "" {
+			root = filepath.Base(dir)
+		}
+		base := weaveBaseBranch(root)
+		weaveReconcileMerged(root, base, q)
 		var items []*weaveItem
 		for _, it := range q.Items {
+			weaveAnnotateSalvageable(root, base, it)
 			if activeOnly && isTerminalState(it.State) {
 				continue
 			}
@@ -1852,10 +1903,6 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 		}
 		if len(items) == 0 {
 			continue
-		}
-		root := q.Root
-		if root == "" {
-			root = filepath.Base(dir)
 		}
 		views = append(views, queueView{Root: root, Dir: dir, Items: items})
 	}
@@ -1874,7 +1921,7 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "%s\n", weaveTildePath(v.Root))
-		fmt.Fprintf(w, "%-4s %-4s %-6s %-3s %-14s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "WORKSPACE")
+		fmt.Fprintf(w, "%-4s %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "UNMERGED", "STARTED", "DUR", "TITLE", "WORKSPACE")
 		// The graph columns (epic, blocked) are facts about the WHOLE queue, so the
 		// renderer needs one — this view carries the same items under another name.
 		weaveRenderItemRows(w, &weaveQueue{Root: v.Root, Items: v.Items}, v.Items)
@@ -1953,16 +2000,9 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		// That is the fleet-evidence rule inverted: we would be concluding "no
 		// work" from the ABSENCE OF A REPORT BY A PROCESS THAT DID NOT SURVIVE TO
 		// REPORT. The artifact is right there on disk. Go and look at it.
-		if (it.State == "failed" || it.State == "killed") && it.Workspace != "" {
-			ahead := it.CommitsAhead
-			if ahead == 0 {
-				if st, err := os.Stat(it.Workspace); err == nil && st.IsDir() {
-					ahead, _ = weaveMeasureBranch(it.Workspace, base)
-				}
-			}
-			if ahead > 0 {
-				salvageable = append(salvageable, it.ID)
-			}
+		weaveAnnotateSalvageable(root, base, it)
+		if it.Salvageable {
+			salvageable = append(salvageable, it.ID)
 		}
 		// Terminal items whose workspace clone still occupies disk are
 		// reclaimable via `weave prune` — surfaced in a footer so the
@@ -2031,7 +2071,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		weavePrintReclaimableFooter(w, reclaimable)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-6s %-3s %-14s %-9s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "STARTED", "DUR", "TITLE", "WORKSPACE")
+	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "UNMERGED", "STARTED", "DUR", "TITLE", "WORKSPACE")
 	weaveRenderItemRows(cmd.OutOrStdout(), q, items)
 	if anyStale {
 		fmt.Fprintln(cmd.OutOrStdout(), "* wrapper process is dead — re-attach with `weave start --resume --issue N` or `weave abandon N`")
@@ -4055,6 +4095,7 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	}
 	base := weaveBaseBranch(root)
 	merged := weaveItemMerged(root, base, it)
+	weaveAnnotateSalvageable(root, base, it)
 	// Reconcile for display: a submitted item already in base reads as
 	// done (and reconciledFrom records the drift so the operator sees
 	// why prune would now sweep it).
@@ -4088,6 +4129,8 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			"launch_phase":       it.LaunchPhase,
 			"completion":         it.Completion,
 			"commits_ahead":      it.CommitsAhead,
+			"salvageable":        it.Salvageable,
+			"unmerged_commits":   it.UnmergedCommits,
 			"branch":             it.Branch,
 			"workspace":          it.Workspace,
 			"workspace_exists":   workspaceExists,
@@ -4142,6 +4185,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		branchInfo += " @ " + it.Head[:12]
 	}
 	fmt.Fprintf(w, "  commits:  %s\n", branchInfo)
+	if it.Salvageable {
+		fmt.Fprintf(w, "  salvage:  SALVAGEABLE — has %d unmerged commit(s); `weave salvage %d` to inspect and merge\n", it.UnmergedCommits, it.ID)
+	}
 	if it.ExitCode != nil {
 		fmt.Fprintf(w, "  exit:     %d\n", *it.ExitCode)
 	}
@@ -5586,7 +5632,7 @@ func runWeaveWait(cmd *cobra.Command, issueID int64, all bool, timeout time.Dura
 	}
 }
 
-// weavePrintSalvageableFooter says that a dead run left work behind.
+// weavePrintSalvageableFooter says that a terminal run left work behind.
 //
 // A `failed` row with a green diff on its branch looks exactly like a `failed`
 // row with nothing on it. That silence is expensive: the obvious response to a
@@ -5603,7 +5649,7 @@ func weavePrintSalvageableFooter(w io.Writer, ids []int64) {
 		}
 		fmt.Fprintf(&b, "#%d", id)
 	}
-	fmt.Fprintf(w, "%s committed work before dying — `weave salvage <id>` to keep it (do NOT re-run: the diff is already there)\n", b.String())
+	fmt.Fprintf(w, "SALVAGEABLE: %s hold committed work not merged to the base branch — inspect with `weave status <id>`; pull submitted runs or salvage killed/failed runs (do NOT re-run: the diff is already there)\n", b.String())
 }
 
 // weavePruneHoldReason says, in one line, why a workspace was not deleted.

@@ -14,7 +14,7 @@ func fixture(t *testing.T) *Board {
 	t.Helper()
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	sources := []Source{SourceFunc{SourceName: "fixture", Func: func(_ context.Context, b *Board, _ Options) error {
-		b.Runs = []Run{{ID: 7, Label: "ship board", Repo: "coreutils", State: "working", Tool: "codex", Agent: "sol", Model: "gpt-5.6-sol", Band: 4, StartedAt: now.Add(-5 * time.Minute), MaxRuntime: 1800}, {ID: 8, Label: "merge me", Repo: "bashy", State: "submitted", Tool: "claude", Model: "opus4.8", Band: 4}}
+		b.Runs = []Run{{ID: 7, Label: "ship board", Repo: "coreutils", State: "working", Tool: "codex", Agent: "sol", Model: "gpt-5.6-sol", Band: 4, StartedAt: now.Add(-5 * time.Minute), MaxRuntime: 1800}, {ID: 8, Label: "merge me", Repo: "bashy", State: "submitted", Tool: "claude", Model: "opus4.8", Band: 4}, {ID: 9, Label: "commit survived watchdog", Repo: "coreutils", State: "killed", Tool: "codex", Salvageable: true, UnmergedCommits: 2}}
 		b.Todos = []Todo{{ID: "abc", Number: 3, Title: "blocked chore", Status: "blocked", Scope: "user steward"}}
 		b.Sprints = []Sprint{{ID: 2, Title: "board sprint", Column: "review"}}
 		b.Agents = []Agent{{Name: "sol", Tool: "codex", Band: 4, Model: "gpt-5.6-sol", Available: true, Availability: "available", State: "working"}}
@@ -33,7 +33,7 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "b696e19d68b58fc08b5a86b970867a38ae218a47615bc6c219d089181c559d23"; got != want {
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "29340581cc139cd993472e7041c36bfd86bfc88cd0ef5b220075f3ecdc1f85ae"; got != want {
 		t.Errorf("terminal golden changed: got %s\n%s", got, text)
 	}
 	raw, err := (JSONRenderer{}).Render(b, Options{})
@@ -44,11 +44,40 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if err = json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 3 {
+	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 4 {
 		t.Fatalf("bad JSON envelope: %+v", got.Summary)
 	}
-	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "a34d0042b480a656507fdcc77e278c8947b8e984d77810d15c2390f857e05996"; sum != want {
+	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "0c0d7e4e2a1d09d28d5cd618ff989d1f2ffb58d1b6f33e0b3bddd86b107579cc"; sum != want {
 		t.Errorf("JSON golden changed: got %s\n%s", sum, raw)
+	}
+}
+
+func TestSalvageableRunRoutesToNeedsStewardAndPanel(t *testing.T) {
+	b := fixture(t)
+	var inLane bool
+	for _, lane := range b.Lanes {
+		if lane.ID != "needs-steward" {
+			continue
+		}
+		for _, card := range lane.Cards {
+			inLane = inLane || card.ID == "9" && card.Salvageable && card.Unmerged == 2
+		}
+	}
+	if !inLane {
+		t.Fatal("salvageable killed run was not routed to needs-steward")
+	}
+	var salvage PanelView
+	for _, panel := range b.Panels {
+		if panel.ID == "salvage" {
+			salvage = panel
+		}
+	}
+	if len(salvage.Rows) != 1 || salvage.Rows[0][0] != "#9" {
+		t.Fatalf("salvage panel = %+v, want exactly run #9", salvage)
+	}
+	text, err := (TerminalRenderer{}).Render(b, Options{Expand: map[string]bool{"salvage": true}})
+	if err != nil || !strings.Contains(string(text), "#9") || !strings.Contains(string(text), "2 commits") {
+		t.Fatalf("expanded salvage panel did not list the steward decision: err=%v\n%s", err, text)
 	}
 }
 

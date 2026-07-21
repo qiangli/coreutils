@@ -21,12 +21,12 @@ func NewCommand(sources []Source) *cobra.Command {
 			return fmt.Errorf("--json and --html are mutually exclusive")
 		}
 		expand := map[string]bool{}
-		valid := map[string]bool{"agents": true, "todo": true, "sprints": true, "runs": true, "all": true}
+		valid := map[string]bool{"agents": true, "todo": true, "sprints": true, "runs": true, "salvage": true, "all": true}
 		for _, part := range expands {
 			for _, id := range strings.Split(part, ",") {
 				if id = strings.TrimSpace(id); id != "" {
 					if !valid[id] {
-						return fmt.Errorf("unknown panel %q (want agents, todo, sprints, runs, or all)", id)
+						return fmt.Errorf("unknown panel %q (want agents, todo, sprints, runs, salvage, or all)", id)
 					}
 					expand[id] = true
 				}
@@ -61,7 +61,7 @@ func NewCommand(sources []Source) *cobra.Command {
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the bashy-board-v1 JSON envelope")
 	cmd.Flags().BoolVar(&htmlOut, "html", false, "emit a self-contained responsive HTML dashboard")
 	cmd.Flags().StringVar(&outPath, "out", "", "write rendered output to a file")
-	cmd.Flags().StringSliceVar(&expands, "expand", nil, "expand panel(s): agents,todo,sprints,runs,all")
+	cmd.Flags().StringSliceVar(&expands, "expand", nil, "expand panel(s): agents,todo,sprints,runs,salvage,all")
 	return cmd
 }
 
