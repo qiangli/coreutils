@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -98,7 +99,7 @@ func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool, noUTF8
 						col--
 					}
 				} else {
-					col++
+					col += runeWidth(ch)
 				}
 				// Under -i, only tabs preceding all non-blank
 				// characters are converted; a backspace also ends
@@ -110,6 +111,14 @@ func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool, noUTF8
 			}
 		}
 	}
+}
+
+func runeWidth(ch rune) int {
+	w := runewidth.RuneWidth(ch)
+	if w < 0 {
+		return 1
+	}
+	return w
 }
 
 func expandStreamBytes(r io.Reader, w io.Writer, tabs *tabStops, initial bool) error {

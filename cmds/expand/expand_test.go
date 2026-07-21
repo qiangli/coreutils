@@ -85,6 +85,26 @@ func TestExpandNoUTF8CountsBytes(t *testing.T) {
 	}
 }
 
+func TestExpandWideRuneCountsDisplayColumns(t *testing.T) {
+	out, stderr, code := runExpand(t, "漢\tx\n", "-t", "8")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "漢      x\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestExpandCombiningMarkIsZeroWidth(t *testing.T) {
+	out, stderr, code := runExpand(t, "e\u0301\tx\n", "-t", "8")
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if want := "e\u0301       x\n"; out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
 func TestExpandBackspaceDecrementsColumn(t *testing.T) {
 	// "ab\b\t": the backspace moves back to column 1, so the tab
 	// expands from there to column 4 (3 spaces).
