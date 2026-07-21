@@ -51,9 +51,12 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -70,10 +73,11 @@ const ServiceName = "bashy"
 const instrumentationName = "github.com/qiangli/coreutils/pkg/telemetry"
 
 var (
-	initOnce sync.Once
-	provider *sdktrace.TracerProvider
-	tracer   trace.Tracer = noop.NewTracerProvider().Tracer(ServiceName)
-	enabled  bool
+	initOnce   sync.Once
+	provider   *sdktrace.TracerProvider
+	mprovider  *sdkmetric.MeterProvider
+	tracer     trace.Tracer = noop.NewTracerProvider().Tracer(ServiceName)
+	enabled    bool
 )
 
 // Enabled reports whether telemetry is actually exporting. Callers should not need this
@@ -145,6 +149,21 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 		)
 		otel.SetTracerProvider(provider)
 		tracer = provider.Tracer("github.com/qiangli/coreutils/pkg/telemetry")
+		var mexp sdkmetric.Exporter
+		switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL"))) {
+		case "grpc":
+			mexp, _ = otlpmetricgrpc.New(ctx)
+		default:
+			mexp, _ = otlpmetrichttp.New(ctx)
+		}
+		if mexp != nil {
+			mprovider = sdkmetric.NewMeterProvider(
+				sdkmetric.WithReader(sdkmetric.NewPeriodicReader(mexp)),
+				sdkmetric.WithResource(res),
+			)
+			otel.SetMeterProvider(mprovider)
+		}
+
 		enabled = true
 
 		// SAY SO. A feature that is silently on is as hard to debug as one that is
@@ -157,6 +176,9 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 		shutdown = func(ctx context.Context) error {
 			ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
+			if mprovider != nil {
+				_ = mprovider.Shutdown(ctx)
+			}
 			return provider.Shutdown(ctx)
 		}
 	})

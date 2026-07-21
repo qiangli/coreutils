@@ -26,10 +26,18 @@ import (
 	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/gate"
 	"github.com/qiangli/coreutils/pkg/room"
+	"github.com/qiangli/coreutils/pkg/telemetry"
 	"github.com/qiangli/coreutils/pkg/weave/memory"
 	"github.com/qiangli/coreutils/pkg/weavecli"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 type weaveQueue struct {
@@ -3011,10 +3019,19 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if err := weaveApplyTrustPreseed(workspace, trustLaunch.Preseed); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: trust preseed failed (continuing): %v\n", err)
 	}
+	ctx, span := telemetry.Tracer().Start(context.Background(), "weave.run")
+	defer span.End()
+
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+
 	// The child's environment — containment, credential firewall, and own-auth
 	// preservation all live in weaveChildEnv so the launch assertion can test
 	// the same code path this spawn runs.
 	env := weaveChildEnv(os.Environ(), workspace, branch, base, it, agentLaunch)
+	for k, v := range carrier {
+		env = append(env, fmt.Sprintf("%s=%s", strings.ToUpper(k), v))
+	}
 	if err := weaveRunWorkspacePreflight(agentLaunch, workspace, env); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitPrecondFail, err))
@@ -3294,6 +3311,65 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 					fmt.Fprintf(cmd.ErrOrStderr(), "weave start: cooldown record failed (continuing): %v\n", err)
 				}
 			}
+		}
+	}
+
+	var turns int64
+	if logPath != "" {
+		if b, err := os.ReadFile(logPath); err == nil {
+			lines := strings.Split(string(b), "\n")
+			for i := len(lines) - 1; i >= 0; i-- {
+				line := strings.TrimSpace(lines[i])
+				if line == "" || !strings.HasPrefix(line, "{") {
+					continue
+				}
+				var parseEv struct {
+					Type     string `json:"type"`
+					NumTurns int64  `json:"num_turns"`
+				}
+				if json.Unmarshal([]byte(line), &parseEv) == nil && parseEv.Type == "result" {
+					turns = parseEv.NumTurns
+					break
+				}
+			}
+		}
+	}
+
+	modelArg := ""
+	if it.LaunchSpec != nil {
+		modelArg = it.LaunchSpec.Model
+	}
+	band, canonicalModel := fleet.ResolveLaunchModel(it.Tool, modelArg)
+
+	gateRes := -1
+	if ev.VerifyExit != nil {
+		gateRes = *ev.VerifyExit
+	} else if it.VerifyExit != nil {
+		gateRes = *it.VerifyExit
+	}
+
+	span.SetAttributes(
+		attribute.String("agent", it.Owner),
+		attribute.String("nick", it.Owner),
+		attribute.Int("band", band),
+		attribute.String("tool:model", it.Tool+":"+canonicalModel),
+		attribute.Int64("issue", it.ID),
+		attribute.Bool("converged", it.State == "submitted" || it.State == "verified" || it.State == "done" || it.State == "merged"),
+		attribute.Int("gate_result", gateRes),
+		attribute.Int64("turns", turns),
+		attribute.Float64("duration", finishedAt.Sub(it.StartedAt).Seconds()),
+	)
+	if exitCode != 0 || runErr != nil || killReason != "" {
+		span.SetStatus(codes.Error, "failed")
+	}
+
+	if turns > 0 {
+		m, _ := otel.Meter("github.com/qiangli/coreutils/pkg/weave").Int64Histogram("fleet.run.turns")
+		if m != nil {
+			m.Record(context.Background(), turns, metric.WithAttributes(
+				attribute.String("agent", it.Owner),
+				attribute.Int("band", band),
+			))
 		}
 	}
 
