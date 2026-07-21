@@ -504,7 +504,11 @@ WHAT THE SCREEN ASKS:
   Resume works from any state with a preserved workspace.
 - A run marked `failed`/`killed` that is flagged **salvageable** has committed
   work on its branch — measured from git, not from the record the dead wrapper
-  never wrote. `weave salvage N`, do NOT re-run it.
+  never wrote. `weave salvage N --review-agent <agent>`, do NOT re-run it.
+  Salvage handles the least trustworthy work in the fleet (killed mid-flight,
+  auto-committed WIP nobody declared finished), so it REFUSES to merge without
+  a passing adversarial verdict unless you name `--no-review` explicitly. It
+  shows the diff before merging, and never pushes.
 - A `submitted` run flagged **needs-steward** has been sitting unmerged past the
   threshold; the flag names the decision owed (pull, reverify, or abandon). The
   reaper deliberately does not merge for you — `weave pull` owns the verify /

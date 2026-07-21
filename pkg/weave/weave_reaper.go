@@ -328,7 +328,7 @@ func weaveReapSalvageable(q *weaveQueue, root, base string) []weaveReapAction {
 			continue
 		}
 		it.Salvageable, it.UnmergedCommits = true, unmerged
-		reason := fmt.Sprintf("%d commit(s) on the branch survive the %s run — `weave salvage %d`, do NOT re-run", unmerged, it.State, it.ID)
+		reason := fmt.Sprintf("%d commit(s) on the branch survive the %s run — `weave salvage %d --review-agent <agent>`, do NOT re-run", unmerged, it.State, it.ID)
 		actions = append(actions, weaveReapAction{Issue: it.ID, From: it.State, To: it.State,
 			Flag: "salvageable", Reason: reason})
 	}

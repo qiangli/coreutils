@@ -4626,7 +4626,7 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	}
 	fmt.Fprintf(w, "  commits:  %s\n", branchInfo)
 	if it.Salvageable {
-		fmt.Fprintf(w, "  salvage:  SALVAGEABLE — has %d unmerged commit(s); `weave salvage %d` to inspect and merge\n", it.UnmergedCommits, it.ID)
+		fmt.Fprintf(w, "  salvage:  SALVAGEABLE — has %d unmerged commit(s); inspect with `weave shell %d`, then `weave salvage %d --review-agent <agent>` to review and merge\n", it.UnmergedCommits, it.ID, it.ID)
 	}
 	if it.ExitCode != nil {
 		fmt.Fprintf(w, "  exit:     %d\n", *it.ExitCode)
@@ -5734,7 +5734,23 @@ func weaveTestPauseAfterFinalizeClaim() {
 // runWeavePull — so pull's dirty / verify-exit gates still apply. This is the
 // supported path for "the agent did good work but its TUI was killed, so it
 // landed in `killed` state."
-func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64) error {
+//
+// REVIEW IS NOT OPTIONAL HERE. Salvage is the path taken for exactly the runs
+// that are LEAST trustworthy: killed mid-flight, holding auto-committed WIP that
+// no agent ever declared finished. That is the code most in need of adversarial
+// review, and before this gate it was the code that got the least — salvage
+// merged around the fleet's `pull --review-agent` gate entirely, landing
+// unreviewed dead code on the base branch with a single line of output. So
+// salvage now REFUSES to merge unless one of these holds:
+//
+//	--review-agent <agent>   run the adversarial pair (same gate as pull)
+//	a recorded pair PASS     a previous reviewed attempt already passed
+//	--no-review              the explicit escape, named loudly in the output
+//
+// Salvage never pushes: merging and publishing are separate decisions, and
+// nothing in weave contacts a remote. Publishing salvaged work is the operator's
+// deliberate, separate act.
+func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, reviewAgent string, noReview bool) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -5742,8 +5758,14 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave salvage",
 			weavecli.ExitPrecondFail, err))
 	}
+	reviewAgent = strings.TrimSpace(reviewAgent)
+	if reviewAgent != "" && noReview {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave salvage", weavecli.ExitInvalidArg,
+			fmt.Errorf("--review-agent and --no-review are mutually exclusive: pick review or name the escape, not both")))
+	}
 	dir, _ := weaveQueueDir(root)
 	base := weaveBaseBranch(root)
+	var diffStat string
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, issueID)
 		if it == nil {
@@ -5751,11 +5773,20 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 		}
 		switch it.State {
 		case "submitted", "working":
-			return nil // already a normal pull target; let pull handle it
+			// Already a normal pull target; let pull handle it — but the review
+			// gate below still applies, because salvage is the verb that was
+			// asked for and it must not be a cheaper door into the same merge.
 		case "killed", "failed":
 			// promotable below
 		default:
 			return fmt.Errorf("run #%d is %q — salvage applies to killed/failed items holding committed work (done/abandoned/allocated have nothing to merge)", issueID, it.State)
+		}
+		if err := weaveSalvageReviewGate(it, reviewAgent, noReview); err != nil {
+			return err
+		}
+		if it.State == "submitted" || it.State == "working" {
+			diffStat = weaveSalvageDiffStat(it, base)
+			return nil
 		}
 		if it.Workspace == "" {
 			return fmt.Errorf("run #%d has no workspace to salvage from", issueID)
@@ -5767,6 +5798,7 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 		if ahead <= 0 {
 			return fmt.Errorf("run #%d has 0 commits ahead of %s — nothing to salvage", issueID, base)
 		}
+		diffStat = weaveSalvageDiffStat(it, base)
 		it.State = "submitted"
 		it.Body = fmt.Sprintf("[salvaged: promoted from killed/failed to submitted at %.12s (%d commit(s) ahead); merging via pull's verify gate]\n\n", head, ahead) + it.Body
 		return nil
@@ -5775,11 +5807,60 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64)
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave salvage",
 			weavecli.ExitInvalidArg, lockErr))
 	}
+	// Salvage claims to let you inspect. Show what is about to be merged before
+	// merging it, so the claim is true. JSON mode stays machine-shaped: pull's
+	// envelope is the whole document, so the diff goes to stderr there.
+	if diffStat != "" {
+		w := cmd.OutOrStdout()
+		if mode == weavecli.OutputJSON {
+			w = cmd.ErrOrStderr()
+		}
+		fmt.Fprintf(w, "weave salvage: run #%d — the diff about to be merged into %s:\n%s\n", issueID, base, diffStat)
+	}
+	if noReview {
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave salvage: --no-review — MERGING UNREVIEWED WORK for run #%d; no adversarial pair ran and no verdict is recorded\n", issueID)
+	}
 	// Delegate to pull: re-acquires the lock and runs the full verify + merge
 	// path on the now-"submitted" item. force=false — salvage rescues work a
 	// run committed, which is no reason to skip the isolation gate; a flagged
 	// run still has to be reviewed and pulled with an explicit --force.
-	return runWeavePull(cmd, flags, issueID, true, false, false)
+	return runWeavePull(cmd, flags, issueID, true, false, false, reviewAgent)
+}
+
+// weaveSalvageReviewGate is the refusal half of salvage's review contract. It
+// returns nil only when the merge that follows will be reviewed, has already
+// been reviewed with a passing verdict, or was explicitly waived.
+func weaveSalvageReviewGate(it *weaveItem, reviewAgent string, noReview bool) error {
+	if reviewAgent != "" || noReview {
+		return nil
+	}
+	if weavePairVerdict(it.PairVerdict) == weavePairPass {
+		return nil
+	}
+	recorded := "none recorded"
+	if v := strings.TrimSpace(it.PairVerdict); v != "" {
+		recorded = "recorded verdict " + v
+	}
+	return fmt.Errorf("run #%d has no passing adversarial review (%s) — salvage merges the LEAST trustworthy work in the fleet (killed mid-flight, auto-committed WIP nobody declared finished), so it will not merge unreviewed: re-run with `--review-agent <agent>` to put it through the same gate as `weave pull`, or `--no-review` to merge it unreviewed on your own authority",
+		it.ID, recorded)
+}
+
+// weaveSalvageDiffStat renders what salvage is about to merge. Best-effort: a
+// missing workspace or a git hiccup must not block the merge path, only the
+// courtesy of showing it.
+func weaveSalvageDiffStat(it *weaveItem, base string) string {
+	if it == nil || it.Workspace == "" {
+		return ""
+	}
+	if st, err := os.Stat(it.Workspace); err != nil || !st.IsDir() {
+		return ""
+	}
+	ref := weaveCountRef(it, base)
+	out, err := gitOut(it.Workspace, "diff", "--stat", ref+"...HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(out, "\n")
 }
 
 // weavePrunableForSweep reports whether `weave prune` (optionally --stale)
@@ -6095,7 +6176,7 @@ func weavePruneHoldReason(ahead, dirtyFiles, untracked int) string {
 	var parts []string
 	if ahead > 0 {
 		// This is the dangerous one. The commits exist ONLY here.
-		parts = append(parts, fmt.Sprintf("%d unmerged commit(s) — `weave salvage %s` to keep them", ahead, "<id>"))
+		parts = append(parts, fmt.Sprintf("%d unmerged commit(s) — `weave salvage %s --review-agent <agent>` to keep them", ahead, "<id>"))
 	}
 	if n := dirtyFiles + untracked; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d uncommitted file(s)", n))
@@ -6125,6 +6206,6 @@ func weaveCrashedAutoCommitMessage(it *weaveItem, exitCode int, killReason strin
 		"commit asserts nothing about whether the work is correct or complete.\n"+
 		"It exists so the work is not lost: it was sitting uncommitted in a\n"+
 		"workspace, and an unreviewed tree is one `weave prune` away from gone.\n\n"+
-		"Review it, then `weave salvage %d` to put it through the gate.",
+		"Review it, then `weave salvage %d --review-agent <agent>` to put it through the gate.",
 		it.ID, how, strings.TrimSpace(it.Title), it.ID)
 }

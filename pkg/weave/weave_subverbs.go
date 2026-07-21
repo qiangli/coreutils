@@ -630,15 +630,27 @@ clean HEAD instead of the stale terminal-time dirty record.`,
 
 func newWeaveSalvageCmd() *cobra.Command {
 	var flags weaveOutputFlags
+	var reviewAgent string
+	var noReview bool
 	cmd := &cobra.Command{
 		Use:   "salvage <issue>",
-		Short: "Merge the committed work of a killed/failed item (via pull's verify gate)",
+		Short: "Review and merge the committed work of a killed/failed item (via pull's gate)",
 		Long: `salvage rescues an item whose committed work weave pull won't auto-merge
 because its tool's (TUI) session was killed, leaving it in 'killed' state.
 
 It promotes the item to 'submitted' only after confirming it has commits ahead
 of the base branch and a clean working tree, then runs the normal pull merge —
-so the dirty and verify-exit gates still apply. It is not a blind force.`,
+so the dirty and verify-exit gates still apply. It is not a blind force.
+
+Salvage handles the LEAST trustworthy work in the fleet: runs killed mid-flight,
+holding auto-committed WIP that no agent ever declared finished. So it refuses to
+merge without adversarial review — pass --review-agent <agent> to run the same
+pair gate as 'weave pull', or --no-review to merge unreviewed on your own
+authority (named loudly in the output). A run that already carries a passing pair
+verdict needs neither.
+
+Salvage shows the diff it is about to merge, and never pushes: publishing
+salvaged work to a remote is a separate, deliberate decision.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave salvage",
@@ -649,10 +661,12 @@ so the dirty and verify-exit gates still apply. It is not a blind force.`,
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave salvage",
 					weavecli.ExitInvalidArg, fmt.Errorf("invalid issue %q", args[0])))
 			}
-			return runWeaveSalvage(cmd, &flags, id)
+			return runWeaveSalvage(cmd, &flags, id, reviewAgent, noReview)
 		},
 	}
 	flags.attach(cmd)
+	cmd.Flags().StringVar(&reviewAgent, "review-agent", "", "Run an adversarial pair in the workspace before merging (same gate as `weave pull --review-agent`)")
+	cmd.Flags().BoolVar(&noReview, "no-review", false, "Merge without any adversarial review — the explicit escape; salvage names it loudly in its output")
 	return cmd
 }
 

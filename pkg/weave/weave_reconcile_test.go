@@ -385,7 +385,10 @@ func TestWeaveSalvagePromotesKilledWorkThroughPullGate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, code := runWeave(t, "salvage", "1")
+	// --no-review is the named escape: salvage refuses to merge unreviewed work
+	// without it (TestWeaveSalvageRefusesMergeWithoutReviewVerdict pins that).
+	// What this test is about is the promotion + forensic-evidence path.
+	out, code := runWeave(t, "salvage", "1", "--no-review")
 	if code != 0 || !strings.Contains(out, "merged") {
 		t.Fatalf("salvage must merge killed committed work through pull's gate: exit=%d out=%s", code, out)
 	}

@@ -224,7 +224,7 @@ func weaveNextSteps(it *weaveItem) string {
 		return it.StewardReason
 	}
 	if it.Salvageable {
-		return fmt.Sprintf("committed work survives this %s run — `weave salvage %d` then `weave pull`, or `weave abandon %d`", it.State, it.ID, it.ID)
+		return fmt.Sprintf("committed work survives this %s run — `weave salvage %d --review-agent <agent>`, or `weave abandon %d`", it.State, it.ID, it.ID)
 	}
 	var steps []string
 	for _, t := range weaveLifecycleTransitionsFrom(it.State) {
