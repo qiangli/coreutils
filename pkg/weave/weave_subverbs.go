@@ -686,10 +686,13 @@ func newWeaveAbandonCmd() *cobra.Command {
 	var reason string
 	var yes bool
 	cmd := &cobra.Command{
-		Use:   "abandon <issue>",
-		Short: "Tear down a weave (workspace + branch + any running wrapper)",
+		Use:     "abandon <issue>",
+		Aliases: []string{"resolve", "done", "dispose"},
+		Short:   "Tear down a weave (workspace + branch + any running wrapper)",
 		Long: `abandon stops the running wrapper (if any) AND removes the workspace
-+ branch. Use this when giving up on an issue entirely.
++ branch. Use this when giving up on an issue entirely, OR to dispose a run
+whose issue is already satisfied (merged/superseded elsewhere) so it stops
+inflating the board — hence the ` + "`resolve`/`done`/`dispose`" + ` aliases.
 
 For "stop the runaway but keep the partial work for inspection",
 use ` + "`weave kill`" + ` instead.
