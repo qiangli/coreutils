@@ -21,6 +21,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/telemetry"
 	"github.com/spf13/cobra"
@@ -75,6 +76,9 @@ type Options struct {
 	// guard — for a session supervised REMOTELY via steer, where no one sits at the
 	// agent's terminal to answer an approval prompt.
 	AllowUnsafe bool
+	// AllowPremium is the explicit human override for urgent work that may cross
+	// LLM budget or subscription exhaustion bounds.
+	AllowPremium bool
 
 	// Fork resolves the tool's context-inheriting fork launch (fork_exec): the
 	// spawned session inherits the caller's live transcript. Session is the current
@@ -723,12 +727,13 @@ func NewChatCmd() *cobra.Command {
 						"use -m/--instruction for a one-shot, or drop -i")
 				}
 				exit, err := Interact(cmd.Context(), opt.Agent, InteractOptions{
-					Prompt:     opt.Instruction,
-					Cwd:        opt.Cwd,
-					Timeout:    opt.Timeout,
-					ReadOnly:   opt.ReadOnly,
-					Unattended: opt.AllowUnsafe,
-					Status:     cmd.ErrOrStderr(),
+					Prompt:       opt.Instruction,
+					Cwd:          opt.Cwd,
+					Timeout:      opt.Timeout,
+					ReadOnly:     opt.ReadOnly,
+					Unattended:   opt.AllowUnsafe,
+					AllowPremium: opt.AllowPremium,
+					Status:       cmd.ErrOrStderr(),
 				})
 				if err != nil {
 					return err
@@ -761,6 +766,7 @@ func NewChatCmd() *cobra.Command {
 		"disable the agent's approval gate (keep --dangerously-skip-permissions) and accept the "+
 			"uncontained-host risk — for a session you SUPERVISE REMOTELY via `chat steer`, where no one "+
 			"sits at the agent's terminal to answer an approval prompt. The steer loop is the oversight")
+	cmd.Flags().BoolVar(&opt.AllowPremium, "allow-premium", false, "explicitly bypass LLM budget/subscription gates for urgent human-authorized work")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when --agent is omitted: conductor, reviewer, qa, release")
 	cmd.Flags().StringVar(&capStr, "capability", "", "route to the best-fit routable agent for this capability (e.g. deep-research, coding)")
 	cmd.Flags().StringVarP(&opt.Instruction, "instruction", "m", "", "instruction to send to the agent (one-shot; omit for an interactive session)")
@@ -814,6 +820,19 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	if err != nil {
 		return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
 	}
+	if !opt.DryRun {
+		var d llmbudget.Decision
+		lnch, d, err = governLaunch(ctx, name, lnch, prompt, opt)
+		if err != nil {
+			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, err
+		}
+		if d.Action == llmbudget.Queue {
+			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 75}, fmt.Errorf("chat: LLM budget queued %s for %s: %s", d.Delay, lnch.Binding(), d.Reason)
+		}
+		if d.Action == llmbudget.Block {
+			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 75}, fmt.Errorf("chat: LLM budget blocked %s: %s", lnch.Binding(), d.Reason)
+		}
+	}
 	args := append(lnch.Args, prompt)
 	cwd := opt.Cwd
 	if cwd == "" {
@@ -846,7 +865,70 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// is. execRunner reads this back out to stamp the child's environment.
 	out, code, err := runner.Run(withLaunch(ctx, lnch), lnch.Tool, args, cwd)
 	res.Output, res.ExitCode = out, code
+	recordLaunchUsage(ctx, lnch, prompt, out)
 	return res, err
+}
+
+func governLaunch(ctx context.Context, originalName string, l Launch, prompt string, opt Options) (Launch, llmbudget.Decision, error) {
+	if l.ModelName == "" {
+		return l, llmbudget.Decision{Action: llmbudget.Allow, Model: l.ModelName}, nil
+	}
+	seen := map[string]bool{}
+	for hops := 0; hops < 4; hops++ {
+		if seen[l.ModelName] {
+			return l, llmbudget.Decision{Action: llmbudget.Block, Model: l.ModelName, Reason: "budget route cycle"}, nil
+		}
+		seen[l.ModelName] = true
+		d := llmbudget.CheckWithOverride(ctx, l.ModelName, estimateTokens(prompt), opt.AllowPremium)
+		switch d.Action {
+		case "", llmbudget.Allow:
+			return l, d, nil
+		case llmbudget.Downgrade, llmbudget.RouteAlt:
+			target := d.Model
+			if target == "" {
+				return l, d, fmt.Errorf("chat: LLM budget returned %s without a target for %s", d.Action, l.Binding())
+			}
+			if !strings.Contains(target, ":") {
+				target = l.ToolName + ":" + target
+			}
+			next, err := resolveLaunch(target, opt)
+			if err != nil {
+				return l, d, fmt.Errorf("chat: LLM budget %s from %s to %s, but target cannot launch: %w", d.Action, originalName, target, err)
+			}
+			if d.Action == llmbudget.RouteAlt && d.Lane == llmbudget.LaneSubscription && !opt.AllowPremium {
+				if lane, known := llmbudget.LaneForModel(next.ModelName); known && lane == llmbudget.LaneAPIKey {
+					return l, llmbudget.Decision{Action: llmbudget.Block, Model: l.ModelName, Lane: d.Lane, Reason: "subscription exhaustion may use API-key fallback only with --allow-premium"}, nil
+				}
+			}
+			l = next // The alternate is a new LLM call and must pass the same gate.
+		default:
+			return l, d, nil
+		}
+	}
+	return l, llmbudget.Decision{Action: llmbudget.Block, Model: l.ModelName, Reason: "budget route hop limit"}, nil
+}
+
+func recordLaunchUsage(ctx context.Context, l Launch, prompt, output string) {
+	recordLaunchUsageTokens(ctx, l, estimateTokens(prompt), estimateTokens(output))
+}
+
+func recordLaunchUsageTokens(ctx context.Context, l Launch, promptTokens, completionTokens int64) {
+	if l.ModelName == "" {
+		return
+	}
+	cost, ok := llmbudget.EstimatedCostUSD(l.ModelName, promptTokens+completionTokens)
+	if !ok {
+		cost = 0
+	}
+	llmbudget.RecordContext(ctx, l.ModelName, promptTokens, completionTokens, cost)
+}
+
+func estimateTokens(s string) int64 {
+	n := int64(len([]rune(s)) / 4)
+	if strings.TrimSpace(s) != "" && n == 0 {
+		n = 1
+	}
+	return n
 }
 
 func withLaunch(ctx context.Context, l Launch) context.Context {
