@@ -25,14 +25,15 @@ func TestRunWeaveToolPTYMaxRuntimeFires(t *testing.T) {
 	}
 	cmd := exec.Command("sleep", "60")
 	type res struct {
-		exit   int
-		reason string
-		err    error
+		exit      int
+		reason    string
+		coachMode string
+		err       error
 	}
 	done := make(chan res, 1)
 	go func() {
-		exit, reason, err := runWeaveToolPTY(cmd, io.Discard, weaveGuards{maxRuntime: time.Second})
-		done <- res{exit, reason, err}
+		exit, reason, _, coachMode, err := runWeaveToolPTY(cmd, io.Discard, weaveGuards{maxRuntime: time.Second})
+		done <- res{exit, reason, coachMode, err}
 	}()
 	select {
 	case r := <-done:

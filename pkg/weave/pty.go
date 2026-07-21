@@ -23,7 +23,7 @@ import (
 // runWeaveToolPTY launches a subagent under a PTY with weave's watchdogs and
 // control socket. Kept as weave's name for it so the call sites — and the tests
 // that gate this move — read exactly as they did before.
-func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int, string, error) {
+func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int, string, chat.CoachReport, string, error) {
 	// The reflex coach (P2a): attach the LLM-free loop detector to every run by
 	// default. It tees the run's DECODED prose (below) into a pty-novelty
 	// detector and, when a run churns without progress, ESC+Says it off the loop
@@ -61,8 +61,14 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		},
 	})
 
+	var coachRep chat.CoachReport
+	var coachMode string
+	if coach != nil {
+		coachRep = coach.Report()
+		coachMode = coach.Mode()
+	}
 	chat.NoteCoach(coach, logSink)
-	return code, reason, err
+	return code, reason, coachRep, coachMode, err
 }
 
 // weaveStdinIsTTY reports whether the calling process's stdin is a real

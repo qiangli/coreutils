@@ -20,7 +20,7 @@ func TestRunWeaveToolPTYClearsTrustPromptReactively(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	exit, reason, err := runWeaveToolPTY(
+	exit, reason, _, _, err := runWeaveToolPTY(
 		exec.Command(script, out),
 		io.Discard,
 		weaveGuards{
