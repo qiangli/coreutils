@@ -129,8 +129,9 @@ repos (~/.bashy/kb). The discipline that stops the fleet repeating errors:
    ` + "`-p`/`exec`" + ` ignore injected input).
 5. CONVERGE — ` + "`bashy weave status <N>`" + ` → ` + "`bashy weave pull <N>`" + ` (verified,
    ONE at a time). Then RE-VERIFY the merged result YOURSELF — the tool's
-   self-report is not the gate. ` + "`bashy weave salvage <N>`" + ` recovers a
-   killed item's committed work through the same verify gate.
+   self-report is not the gate. ` + "`bashy weave salvage <N> --review-agent <agent>`" + `
+   recovers a killed item's committed work through the same review + verify gate;
+   salvage REFUSES to merge unreviewed unless you name ` + "`--no-review`" + `.
    Opt-in adversarial review: ` + "`weave pull <N> --review-agent <agent>`" + ` runs
    ` + "`bashy pair`" + ` in the run workspace before terminal verification. The pair may
    add and commit a failing test but may never approve; verify/suite_gate alone
@@ -153,7 +154,7 @@ forget is why a run comes back empty.
    the conductor's core duty — an unanswered question is a wasted run.
 3. ABORTED / failed / killed — reassign to another tool
    (` + "`weave start --issue N -- <other-tool> …`" + `) or recover committed partial work
-   with ` + "`weave salvage <N>`" + `.
+   with ` + "`weave salvage <N> --review-agent <agent>`" + `.
 4. COMPLETED — verify + merge (loop step 5); if todo issues remain, assign the
    freed tool the next one (work-stealing) — keep the fleet busy.
 After EVERY such action, UPDATE THE BATON (` + "`weave baton write …`" + `). This is the
