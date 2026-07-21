@@ -23,9 +23,10 @@ import (
 const weaveAutopilotLeaseFile = "orchestrator-lease.json"
 
 type weaveAutopilotOptions struct {
-	fleetCSV  string
-	briefPath string
-	standby   bool
+	fleetCSV    string
+	briefPath   string
+	reviewAgent string
+	standby     bool
 
 	leaseTTL  time.Duration
 	heartbeat time.Duration
@@ -107,17 +108,18 @@ func runWeaveAutopilot(cmd *cobra.Command, opts weaveAutopilotOptions, flags *we
 	}
 
 	res, err := runWeaveAutopilotLoop(context.Background(), weaveAutopilotLoopOptions{
-		queueDir:  dir,
-		repoRoot:  root,
-		fleet:     fleet,
-		brief:     brief,
-		standby:   opts.standby,
-		leaseTTL:  opts.leaseTTL,
-		heartbeat: opts.heartbeat,
-		backoff:   opts.backoff,
-		stdout:    cmd.OutOrStdout(),
-		stderr:    cmd.ErrOrStderr(),
-		runner:    weaveAutopilotRunnerDefault,
+		queueDir:    dir,
+		repoRoot:    root,
+		fleet:       fleet,
+		brief:       brief,
+		standby:     opts.standby,
+		leaseTTL:    opts.leaseTTL,
+		heartbeat:   opts.heartbeat,
+		backoff:     opts.backoff,
+		reviewAgent: opts.reviewAgent,
+		stdout:      cmd.OutOrStdout(),
+		stderr:      cmd.ErrOrStderr(),
+		runner:      weaveAutopilotRunnerDefault,
 	})
 	if err != nil {
 		code := weavecli.ExitGenericFail
@@ -138,21 +140,22 @@ func runWeaveAutopilot(cmd *cobra.Command, opts weaveAutopilotOptions, flags *we
 }
 
 type weaveAutopilotLoopOptions struct {
-	queueDir  string
-	repoRoot  string
-	fleet     []weaveMember
-	brief     string
-	standby   bool
-	leaseTTL  time.Duration
-	heartbeat time.Duration
-	backoff   time.Duration
-	maxRuns   int
-	stdout    io.Writer
-	stderr    io.Writer
-	runner    weaveAutopilotRunner
-	now       func() time.Time
-	sleep     func(time.Duration)
-	holder    string
+	queueDir    string
+	repoRoot    string
+	fleet       []weaveMember
+	brief       string
+	standby     bool
+	leaseTTL    time.Duration
+	heartbeat   time.Duration
+	backoff     time.Duration
+	maxRuns     int
+	stdout      io.Writer
+	stderr      io.Writer
+	runner      weaveAutopilotRunner
+	now         func() time.Time
+	sleep       func(time.Duration)
+	holder      string
+	reviewAgent string
 }
 
 type weaveAutopilotResult struct {
@@ -224,7 +227,7 @@ func runWeaveAutopilotLoop(ctx context.Context, opts weaveAutopilotLoopOptions) 
 		}
 
 		leaseLog(opts.queueDir, "takeover", fmt.Sprintf("%s holder=%s generation=%d reason=%s", memberLogFields(member), opts.holder, lease.Generation, lastReasonOrInitial(lastReason)))
-		prompt, err := buildWeaveAutopilotPrompt(opts.repoRoot, opts.queueDir, opts.brief)
+		prompt, err := buildWeaveAutopilotPrompt(opts.repoRoot, opts.queueDir, opts.brief, opts.reviewAgent)
 		if err != nil {
 			_ = releaseWeaveAutopilotLease(opts.queueDir, opts.holder)
 			return weaveAutopilotResult{}, err
@@ -435,7 +438,11 @@ func releaseWeaveAutopilotLease(dir, holder string) error {
 	})
 }
 
-func buildWeaveAutopilotPrompt(repoRoot, queueDir, brief string) (string, error) {
+func buildWeaveAutopilotPrompt(repoRoot, queueDir, brief string, reviewAgents ...string) (string, error) {
+	reviewAgent := ""
+	if len(reviewAgents) > 0 {
+		reviewAgent = reviewAgents[0]
+	}
 	q, err := loadWeaveQueue(queueDir)
 	if err != nil {
 		return "", err
@@ -449,6 +456,9 @@ func buildWeaveAutopilotPrompt(repoRoot, queueDir, brief string) (string, error)
 	b.WriteString("Resume from durable queue state. Do not assume prior in-memory context survived.\n\n")
 	fmt.Fprintf(&b, "Repo root: %s\nQueue dir: %s\n\n", repoRoot, queueDir)
 	b.WriteString("At safe top-of-loop boundaries, inspect the queue and run the normal weave gate/merge/launch flow. Never hand off mid-merge.\n\n")
+	if reviewAgent != "" {
+		fmt.Fprintf(&b, "Adversarial review is REQUIRED fleet-wide: merge submitted runs only with `bashy weave pull <issue> --review-agent %s`. The pair writes evidence; the gate alone decides.\n\n", reviewAgent)
+	}
 	b.WriteString("Current queue:\n")
 	for _, it := range q.Items {
 		fmt.Fprintf(&b, "- #%d [%s/%s] %s", it.ID, it.Priority, it.State, it.Title)

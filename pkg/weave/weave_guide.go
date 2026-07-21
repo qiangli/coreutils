@@ -131,6 +131,13 @@ repos (~/.bashy/kb). The discipline that stops the fleet repeating errors:
    ONE at a time). Then RE-VERIFY the merged result YOURSELF — the tool's
    self-report is not the gate. ` + "`bashy weave salvage <N>`" + ` recovers a
    killed item's committed work through the same verify gate.
+   Opt-in adversarial review: ` + "`weave pull <N> --review-agent <agent>`" + ` runs
+   ` + "`bashy pair`" + ` in the run workspace before terminal verification. The pair may
+   add and commit a failing test but may never approve; verify/suite_gate alone
+   decides whether merge proceeds. The reviewer is forced to differ from the coder
+   (use ` + "`--review-agent auto`" + ` to derive one). Passing ` + "`--review-agent`" + ` to
+   autopilot or heartbeat applies the same requirement fleet-wide. Omitting it keeps
+   today's behavior unchanged.
 6. REASSIGN failures to another tool; reseed early finishers (work-stealing).
 
 ## Active supervision — do NOT fire-and-forget

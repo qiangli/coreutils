@@ -17,13 +17,14 @@ type weaveHeartbeatOptions struct {
 	idleTimeout time.Duration
 	background  bool
 	fleetCSV    string
+	reviewAgent string
 }
 
 func newWeaveHeartbeatCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var interval, idleTimeout time.Duration
 	var background bool
-	var fleetCSV string
+	var fleetCSV, reviewAgent string
 	cmd := &cobra.Command{
 		Use:   "heartbeat",
 		Short: "Periodically drive autopilot in the background with idle shutdown",
@@ -41,6 +42,7 @@ duration specified by --idle-timeout, preventing background resource leaks.`,
 				idleTimeout: idleTimeout,
 				background:  background,
 				fleetCSV:    fleetCSV,
+				reviewAgent: reviewAgent,
 			}, &flags)
 		},
 	}
@@ -49,6 +51,7 @@ duration specified by --idle-timeout, preventing background resource leaks.`,
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 15*time.Minute, "Idle shutdown threshold (e.g. 15m, 1h)")
 	cmd.Flags().BoolVar(&background, "background", false, "Run in background (detaches process)")
 	cmd.Flags().StringVar(&fleetCSV, "orchestrator-fleet", "", "Roster of agents (007, claude:opus) or tools, comma-separated (default: claude,codex,opencode,agy)")
+	cmd.Flags().StringVar(&reviewAgent, "review-agent", "", "Adversarial pair agent for every submitted run (default off; must differ from the coder)")
 	return cmd
 }
 
@@ -159,6 +162,9 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 						apArgs = append(apArgs, "--orchestrator-fleet", opts.fleetCSV)
 					} else {
 						apArgs = append(apArgs, "--orchestrator-fleet", strings.Join(weaveDefaultFleet, ","))
+					}
+					if opts.reviewAgent != "" {
+						apArgs = append(apArgs, "--review-agent", opts.reviewAgent)
 					}
 
 					apCmd := exec.Command(self, apArgs...)
