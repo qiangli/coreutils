@@ -16,7 +16,7 @@ func (p panel) ID() string               { return p.id }
 func (p panel) Build(b *Board) PanelView { return p.build(b) }
 
 func DefaultPanels() *Registry {
-	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel())
+	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), salvagePanel())
 }
 
 func agentPanel() Panel {
@@ -80,10 +80,29 @@ func runPanel() Panel {
 		}
 		v := PanelView{ID: "runs", Title: "Runs",
 			Collapsed: fmt.Sprintf("%d total; %d working; %d ready to merge", len(b.Runs), counts["working"], counts["submitted"]),
-			Columns:   []string{"ID", "STATE", "TOOL", "BAND", "MODEL", "REPO", "TITLE"}}
+			Columns:   []string{"ID", "STATE", "UNMERGED", "TOOL", "BAND", "MODEL", "REPO", "TITLE"}}
 		for _, x := range b.Runs {
-			v.Rows = append(v.Rows, []string{"#" + itoa(x.ID), x.State, dash(x.Tool), band(x.Band), dash(x.Model), x.Repo, x.Label})
+			unmerged := "-"
+			if x.Salvageable {
+				unmerged = fmt.Sprintf("%d commits", x.UnmergedCommits)
+			}
+			v.Rows = append(v.Rows, []string{"#" + itoa(x.ID), x.State, unmerged, dash(x.Tool), band(x.Band), dash(x.Model), x.Repo, x.Label})
 		}
+		return v
+	}}
+}
+
+func salvagePanel() Panel {
+	return panel{id: "salvage", build: func(b *Board) PanelView {
+		v := PanelView{ID: "salvage", Title: "Salvageable runs",
+			Columns: []string{"ID", "STATE", "UNMERGED", "TOOL", "REPO", "TITLE"}}
+		for _, x := range b.Runs {
+			if !x.Salvageable {
+				continue
+			}
+			v.Rows = append(v.Rows, []string{"#" + itoa(x.ID), x.State, fmt.Sprintf("%d commits", x.UnmergedCommits), dash(x.Tool), x.Repo, x.Label})
+		}
+		v.Collapsed = fmt.Sprintf("%d terminal run(s) hold unmerged commits", len(v.Rows))
 		return v
 	}}
 }

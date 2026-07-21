@@ -50,6 +50,8 @@ type Row struct {
 	ElapsedSecs int64  `json:"elapsed_secs,omitempty"`
 	DurSecs     int64  `json:"dur_secs,omitempty"`
 	SprintID    int64  `json:"sprint_id,omitempty"`
+	Salvageable bool   `json:"salvageable,omitempty"`
+	Unmerged    int    `json:"unmerged_commits,omitempty"`
 }
 
 type Rollup struct {
@@ -77,16 +79,18 @@ type Lane struct {
 }
 
 type Card struct {
-	Layer   string `json:"layer"`
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	State   string `json:"state"`
-	Tool    string `json:"tool,omitempty"`
-	Band    int    `json:"band,omitempty"`
-	Model   string `json:"model,omitempty"`
-	Elapsed int64  `json:"elapsed_seconds,omitempty"`
-	ETA     int64  `json:"eta_seconds,omitempty"`
-	Scope   string `json:"scope,omitempty"`
+	Layer       string `json:"layer"`
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	State       string `json:"state"`
+	Tool        string `json:"tool,omitempty"`
+	Band        int    `json:"band,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Elapsed     int64  `json:"elapsed_seconds,omitempty"`
+	ETA         int64  `json:"eta_seconds,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	Salvageable bool   `json:"salvageable,omitempty"`
+	Unmerged    int    `json:"unmerged_commits,omitempty"`
 }
 
 type Agent struct {
@@ -133,20 +137,22 @@ type RunRef struct {
 }
 
 type Run struct {
-	ID         int64     `json:"id"`
-	Label      string    `json:"label"`
-	Repo       string    `json:"repo"`
-	State      string    `json:"state"`
-	Tool       string    `json:"tool,omitempty"`
-	Agent      string    `json:"agent,omitempty"`
-	Model      string    `json:"model,omitempty"`
-	Band       int       `json:"band,omitempty"`
-	StartedAt  time.Time `json:"started_at,omitempty,omitzero"`
-	MaxRuntime int64     `json:"max_runtime_seconds,omitempty"`
-	FinishedAt time.Time `json:"finished_at,omitempty,omitzero"`
-	Points     int       `json:"points,omitempty"`
-	SprintID   int64     `json:"sprint_id,omitempty"`
-	Blocked    bool      `json:"blocked,omitempty"`
+	ID              int64     `json:"id"`
+	Label           string    `json:"label"`
+	Repo            string    `json:"repo"`
+	State           string    `json:"state"`
+	Tool            string    `json:"tool,omitempty"`
+	Agent           string    `json:"agent,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	Band            int       `json:"band,omitempty"`
+	StartedAt       time.Time `json:"started_at,omitempty,omitzero"`
+	MaxRuntime      int64     `json:"max_runtime_seconds,omitempty"`
+	FinishedAt      time.Time `json:"finished_at,omitempty,omitzero"`
+	Points          int       `json:"points,omitempty"`
+	SprintID        int64     `json:"sprint_id,omitempty"`
+	Blocked         bool      `json:"blocked,omitempty"`
+	Salvageable     bool      `json:"salvageable,omitempty"`
+	UnmergedCommits int       `json:"unmerged_commits,omitempty"`
 }
 
 type Source interface {
@@ -244,14 +250,14 @@ func (b *Board) finalize(now time.Time) {
 				eta = estimate - elapsed
 			}
 		}
-		c := Card{Layer: "run", ID: itoa(r.ID), Label: r.Label, State: r.State, Tool: r.Tool, Band: r.Band, Model: r.Model, Elapsed: elapsed, ETA: eta, Scope: r.Repo}
+		c := Card{Layer: "run", ID: itoa(r.ID), Label: r.Label, State: r.State, Tool: r.Tool, Band: r.Band, Model: r.Model, Elapsed: elapsed, ETA: eta, Scope: r.Repo, Salvageable: r.Salvageable, Unmerged: r.UnmergedCommits}
 		dur := int64(0)
 		if !r.StartedAt.IsZero() && !r.FinishedAt.IsZero() && r.FinishedAt.After(r.StartedAt) {
 			dur = int64(r.FinishedAt.Sub(r.StartedAt).Seconds())
 		}
-		b.Rows = append(b.Rows, Row{Source: "run", Repo: r.Repo, ID: itoa(r.ID), State: r.State, Tool: r.Tool, Band: r.Band, Model: r.Model, Label: r.Label, Points: r.Points, ElapsedSecs: elapsed, DurSecs: dur, SprintID: r.SprintID})
+		b.Rows = append(b.Rows, Row{Source: "run", Repo: r.Repo, ID: itoa(r.ID), State: r.State, Tool: r.Tool, Band: r.Band, Model: r.Model, Label: r.Label, Points: r.Points, ElapsedSecs: elapsed, DurSecs: dur, SprintID: r.SprintID, Salvageable: r.Salvageable, Unmerged: r.UnmergedCommits})
 		lane := runLane(r.State)
-		if r.State == "submitted" {
+		if r.State == "submitted" || r.Salvageable {
 			lane = "needs-steward"
 		}
 		lanes[lane] = append(lanes[lane], c)
