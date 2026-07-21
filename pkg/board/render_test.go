@@ -14,7 +14,7 @@ func fixture(t *testing.T) *Board {
 	t.Helper()
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	sources := []Source{SourceFunc{SourceName: "fixture", Func: func(_ context.Context, b *Board, _ Options) error {
-		b.Runs = []Run{{ID: 7, Label: "ship board", Repo: "coreutils", State: "working", Tool: "codex", Agent: "sol", Model: "gpt-5.6-sol", Band: 4, StartedAt: now.Add(-5 * time.Minute), MaxRuntime: 1800}, {ID: 8, Label: "merge me", Repo: "bashy", State: "submitted", Tool: "claude", Model: "opus4.8", Band: 4}, {ID: 9, Label: "commit survived watchdog", Repo: "coreutils", State: "killed", Tool: "codex", Salvageable: true, UnmergedCommits: 2}}
+		b.Runs = []Run{{ID: 7, Label: "ship board", Repo: "coreutils", State: "working", Tool: "codex", Agent: "sol", Model: "gpt-5.6-sol", Band: 4, StartedAt: now.Add(-5 * time.Minute), MaxRuntime: 1800}, {ID: 8, Label: "merge me", Repo: "bashy", State: "submitted", Tool: "claude", Model: "opus4.8", Band: 4, AgeSeconds: int64((5 * time.Hour) / time.Second), Stale: true}, {ID: 9, Label: "commit survived watchdog", Repo: "coreutils", State: "killed", Tool: "codex", Salvageable: true, UnmergedCommits: 2}}
 		b.Todos = []Todo{{ID: "abc", Number: 3, Title: "blocked chore", Status: "blocked", Scope: "user steward"}}
 		b.Sprints = []Sprint{{ID: 2, Title: "board sprint", Column: "review"}}
 		b.Agents = []Agent{{Name: "sol", Tool: "codex", Band: 4, Model: "gpt-5.6-sol", Available: true, Availability: "available", State: "working"}}
@@ -33,7 +33,10 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "86fd6a87da296cd98b1c01f7fc1c90e7f8f20b53d1b9a8ce656446154df8e1b9"; got != want {
+	if !strings.Contains(string(text), "age 5h0m0s") || !strings.Contains(string(text), "STALE") {
+		t.Fatalf("terminal did not render unattended age and flag:\n%s", text)
+	}
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "24756a56672dcc00ac560ff29d8629cdbecc795db15fbcad47b96b75ca625b1e"; got != want {
 		t.Errorf("terminal golden changed: got %s\n%s", got, text)
 	}
 	raw, err := (JSONRenderer{}).Render(b, Options{})
@@ -44,10 +47,10 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if err = json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 4 {
+	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 4 || got.Summary.Unattended != 1 {
 		t.Fatalf("bad JSON envelope: %+v", got.Summary)
 	}
-	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "059ca5f313a6111565bbc8e802d6ca7ec320b06a0d3cae16c4ca43cba6e6e97b"; sum != want {
+	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "01e0a4f23a4404f49bdc3a04a574419dc1474c2f0b073cf02f9037ba7a8a6def"; sum != want {
 		t.Errorf("JSON golden changed: got %s\n%s", sum, raw)
 	}
 }
@@ -87,7 +90,7 @@ func TestHTMLIsSelfContained(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(raw)
-	for _, want := range []string{"<!doctype html>", "<style>", "prefers-color-scheme", "<details id=\"agents\" open"} {
+	for _, want := range []string{"<!doctype html>", "<style>", "prefers-color-scheme", "<details id=\"agents\" open", "age 5h0m0s", "STALE"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("html missing %q", want)
 		}

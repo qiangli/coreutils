@@ -1902,6 +1902,8 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 		Items []*weaveItem `json:"items"`
 	}
 	var views []queueView
+	now := time.Now().UTC()
+	totalUnattended := 0
 	for _, dir := range weaveAllQueueDirs() {
 		q, err := loadWeaveQueue(dir)
 		if err != nil || len(q.Items) == 0 {
@@ -1933,6 +1935,8 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 		if len(items) == 0 {
 			continue
 		}
+		unattended := weaveDoctorStaleCount(q, defaultWeaveDoctorThresholds(), now)
+		totalUnattended += unattended
 		views = append(views, queueView{Root: root, Dir: dir, Items: items})
 	}
 	if mode == weavecli.OutputJSON {
@@ -1945,6 +1949,9 @@ func runWeaveListAll(cmd *cobra.Command, includeHistory bool, activeOnly bool, f
 		return nil
 	}
 	w := cmd.OutOrStdout()
+	if totalUnattended > 0 {
+		fmt.Fprintf(w, "ATTENTION: %d unattended item(s) — see `weave doctor`\n", totalUnattended)
+	}
 	for i, v := range views {
 		if i > 0 {
 			fmt.Fprintln(w)
@@ -1990,6 +1997,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave list",
 			weavecli.ExitGenericFail, err))
 	}
+	unattended := weaveDoctorStaleCount(q, defaultWeaveDoctorThresholds(), time.Now().UTC())
 	// Reconcile for display (not persisted here — prune/pull hold the
 	// lock and persist): a "submitted" item whose work already landed
 	// in base shows as "done" instead of lying about pending work.
@@ -2117,6 +2125,9 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		weavePrintSalvageableFooter(w, salvageable)
 		weavePrintReclaimableFooter(w, reclaimable)
 		return nil
+	}
+	if unattended > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "ATTENTION: %d unattended item(s) — see `weave doctor`\n", unattended)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%-4s %-4s %-6s %-3s %-14s %-9s %-10s %-8s %-8s %-40s %s\n", "ID", "PRIO", "STAGE", "PTS", "STATE", "TOOL", "UNMERGED", "STARTED", "DUR", "TITLE", "WORKSPACE")
 	weaveRenderItemRows(cmd.OutOrStdout(), q, items)
