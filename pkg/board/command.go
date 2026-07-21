@@ -77,23 +77,35 @@ func NewDashboardCommand(sources []Source) *cobra.Command {
 // SkillRenderer prints the host's existing embedded role skill.
 type SkillRenderer func(io.Writer) error
 
-// NewStewardCommand constructs the backwards-compatible role namespace:
-// bare `steward` and `steward skill` both render the existing skill, while
-// `steward dashboard` mounts this package's read-only global projection.
-func NewStewardCommand(skill SkillRenderer, sources []Source) *cobra.Command {
+// newRoleCommand builds the backwards-compatible role namespace: bare `<role>`
+// and `<role> skill` both render the existing operating skill, while `<role>
+// dashboard` mounts this package's read-only board projection.
+func newRoleCommand(role, short string, skill SkillRenderer, sources []Source) *cobra.Command {
 	renderSkill := func(cmd *cobra.Command, _ []string) error {
 		if skill == nil {
-			return fmt.Errorf("steward skill renderer is not configured")
+			return fmt.Errorf("%s skill renderer is not configured", role)
 		}
 		return skill(cmd.OutOrStdout())
 	}
 	root := &cobra.Command{
-		Use: "steward", Short: "The steward role: its operating skill and machine-global dashboard",
+		Use: role, Short: short,
 		Args: cobra.NoArgs, RunE: renderSkill, SilenceUsage: true, SilenceErrors: true,
 	}
 	root.AddCommand(
-		&cobra.Command{Use: "skill", Short: "Print the existing steward operating skill", Args: cobra.NoArgs, RunE: renderSkill},
+		&cobra.Command{Use: "skill", Short: "Print the existing " + role + " operating skill", Args: cobra.NoArgs, RunE: renderSkill},
 		NewDashboardCommand(sources),
 	)
 	return root
+}
+
+// NewStewardCommand mounts the steward role: skill + machine-global dashboard.
+func NewStewardCommand(skill SkillRenderer, sources []Source) *cobra.Command {
+	return newRoleCommand("steward", "The steward role: its operating skill and machine-global dashboard", skill, sources)
+}
+
+// NewConductorCommand mounts the conductor role: skill + dashboard. Sprint-scoping
+// (one initiative) is a future refinement; today `conductor dashboard` shows the
+// same board projection as the steward view.
+func NewConductorCommand(skill SkillRenderer, sources []Source) *cobra.Command {
+	return newRoleCommand("conductor", "The conductor role: its operating skill and dashboard", skill, sources)
 }
