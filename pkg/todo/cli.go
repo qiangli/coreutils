@@ -343,6 +343,13 @@ func newShowCmd(sf storeFunc) *cobra.Command {
 			if it.Assignee != "" {
 				fmt.Fprintf(w, "  assignee  %s\n", it.Assignee)
 			}
+			if it.Weave != 0 {
+				if it.Status == StatusDone {
+					fmt.Fprintf(w, "  weave     #%d\n", it.Weave)
+				} else {
+					fmt.Fprintf(w, "  weave     #%d (in flight)\n", it.Weave)
+				}
+			}
 			if body := strings.TrimSpace(it.Body); body != "" {
 				fmt.Fprintf(w, "\n%s\n", body)
 			}
