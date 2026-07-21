@@ -12,6 +12,7 @@ package room
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -46,12 +47,16 @@ type Card struct {
 
 // Event is one timeline entry — a join/leave/steer/status/note the room records.
 type Event struct {
-	Seq    int64  `json:"seq"`
-	TS     string `json:"ts"`
-	Type   string `json:"type"` // join | leave | steer | interrupt | status | note
-	Actor  string `json:"actor,omitempty"`
-	Target string `json:"target,omitempty"`
-	Body   string `json:"body,omitempty"`
+	Seq       int64  `json:"seq"`
+	TS        string `json:"ts"`
+	Type      string `json:"type"` // join | leave | steer | interrupt | status | note | notify
+	Actor     string `json:"actor,omitempty"`
+	Target    string `json:"target,omitempty"`
+	Body      string `json:"body,omitempty"`
+	Principal string `json:"principal,omitempty"` // who sent this notification (REQUIRED for notify)
+	Topic     string `json:"topic,omitempty"`     // topic broadcast key
+	Room      string `json:"room,omitempty"`      // room-scoped addressing
+	To        string `json:"to,omitempty"`        // 1:1 recipient (session or role)
 }
 
 const (
@@ -62,6 +67,7 @@ const (
 	EventGrant     = "grant"
 	EventStatus    = "status"
 	EventNote      = "note"
+	EventNotify    = "notify"
 )
 
 var appendMu sync.Mutex
@@ -245,4 +251,17 @@ func Timeline(n int) ([]Event, error) {
 		all = all[len(all)-n:]
 	}
 	return all, nil
+}
+
+// Notify publishes a notification event to the timeline after enforcing the
+// REPORT/AUTHOR invariant: every notification must carry a non-empty Principal
+// asserting who sent it. A notification with no principal is rejected.
+func Notify(e Event) error {
+	if strings.TrimSpace(e.Principal) == "" {
+		return fmt.Errorf("notify: principal is required (REPORT/AUTHOR invariant)")
+	}
+	if e.Type == "" {
+		e.Type = EventNotify
+	}
+	return Emit(e)
 }
