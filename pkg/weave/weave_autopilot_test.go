@@ -200,6 +200,7 @@ func TestWeaveAutopilotLeaseBusyWithoutStandby(t *testing.T) {
 
 func TestWeaveAutopilotReviewAgentWithoutVerdictIsHarnessError(t *testing.T) {
 	dir := testWeaveAutopilotQueue(t)
+	pinPassthroughJudge(t)
 	q, err := loadWeaveQueue(dir)
 	if err != nil {
 		t.Fatal(err)

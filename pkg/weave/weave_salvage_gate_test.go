@@ -76,6 +76,7 @@ func TestWeaveSalvageRefusesMergeWithoutReviewVerdict(t *testing.T) {
 // defect blocks the merge, exactly as it does for `weave pull --review-agent`.
 func TestWeaveSalvageReviewAgentBlocksOnRefutedVerdict(t *testing.T) {
 	root := setupSalvageableRun(t, "test -f feature.txt")
+	pinPassthroughJudge(t)
 
 	original := weavePairReviewRunner
 	t.Cleanup(func() { weavePairReviewRunner = original })
@@ -110,6 +111,7 @@ func TestWeaveSalvageReviewAgentBlocksOnRefutedVerdict(t *testing.T) {
 // the verify gate merges — and the merge is attributed to the reviewer.
 func TestWeaveSalvageReviewAgentMergesOnPass(t *testing.T) {
 	root := setupSalvageableRun(t, "test -f feature.txt")
+	pinPassthroughJudge(t)
 
 	original := weavePairReviewRunner
 	t.Cleanup(func() { weavePairReviewRunner = original })

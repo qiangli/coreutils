@@ -224,6 +224,19 @@ type weaveItem struct {
 	PairVerdict     string `json:"pair_verdict,omitempty"`
 	PairReason      string `json:"pair_reason,omitempty"`
 	PairExit        int    `json:"pair_exit,omitempty"`
+	// Judge is the item's VERIFIABILITY TIER — how much evidence a merge needs
+	// beyond the deterministic gate. "none" means the probe (build+test / suite /
+	// clean-room verify) is sufficient on its own: work whose correctness a machine
+	// can settle needs no LLM arbiter. "required" (the conservative DEFAULT — an
+	// empty value reads as required) means a merge ALSO needs a passing adversarial
+	// judge verdict. It never relaxes the probe (see weaveJudgeMode); it only decides
+	// whether the extra LLM judge runs, so deterministically-testable work stops
+	// paying for a judge on every merge and stops blocking when the judge is down.
+	Judge string `json:"judge,omitempty"`
+	// Band is the issue's DIFFICULTY band (L1-L4; 0 = unpegged). It raises the
+	// judge floor: a verdict-required merge needs a judge at max(L3, Band). When
+	// unset, the difficulty is inferred from the coding agent's band (weaveIssueBand).
+	Band            int    `json:"band,omitempty"`
 	SuiteGate       string `json:"suite_gate,omitempty"`
 	SuiteGateExit   *int   `json:"suite_gate_exit,omitempty"`
 	SuiteGateOutput string `json:"suite_gate_output,omitempty"`
@@ -1620,13 +1633,13 @@ func ec(code int) error {
 // issue in one queue transaction. Points used to be stamped in a
 // second read-modify-write after add returned; that made add --points
 // sensitive to concurrent queue writers and to "last item" races.
-func runWeaveAddStaged(cmd *cobra.Command, title, body, priority, verify, suiteGate, stage string, points int, flags *weaveOutputFlags) error {
+func runWeaveAddStaged(cmd *cobra.Command, title, body, priority, verify, suiteGate, stage, judge string, points, band int, flags *weaveOutputFlags) error {
 	st, err := normalizeStage(stage)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "weave add",
 			weavecli.ExitInvalidArg, err))
 	}
-	return runWeaveAddFull(cmd, title, body, priority, verify, suiteGate, st, points, flags)
+	return runWeaveAddFullTiered(cmd, title, body, priority, verify, suiteGate, st, judge, points, band, flags)
 }
 
 func runWeaveAddPointed(cmd *cobra.Command, title, body, priority, verify, suiteGate string, points int, flags *weaveOutputFlags) error {
@@ -1646,11 +1659,24 @@ func runWeaveAddWithPoints(cmd *cobra.Command, title, body, priority, verify, su
 }
 
 func runWeaveAddFull(cmd *cobra.Command, title, body, priority, verify, suiteGate, stage string, points int, flags *weaveOutputFlags) error {
+	return runWeaveAddFullTiered(cmd, title, body, priority, verify, suiteGate, stage, "", points, 0, flags)
+}
+
+func runWeaveAddFullTiered(cmd *cobra.Command, title, body, priority, verify, suiteGate, stage, judge string, points, band int, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	if title == "" {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add",
 			weavecli.ExitInvalidArg, fmt.Errorf("title required")))
 	}
+	if !weaveValidJudgeTier(judge) {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add",
+			weavecli.ExitInvalidArg, fmt.Errorf("--judge must be %q or %q (empty defaults to %q)", weaveJudgeNone, weaveJudgeRequired, weaveJudgeRequired)))
+	}
+	if band < 0 || band > fleet.MaxBand {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave add",
+			weavecli.ExitInvalidArg, fmt.Errorf("--band must be 1-%d (0 = unpegged)", fleet.MaxBand)))
+	}
+	judge = strings.ToLower(strings.TrimSpace(judge))
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
 	if err != nil {
@@ -1678,6 +1704,8 @@ func runWeaveAddFull(cmd *cobra.Command, title, body, priority, verify, suiteGat
 			VerifyCommand: verify,
 			SuiteGate:     suiteGate,
 			Points:        points,
+			Judge:         judge,
+			Band:          band,
 			Created:       time.Now().UTC(),
 		}
 		q.NextID++
@@ -1697,6 +1725,8 @@ func runWeaveAddFull(cmd *cobra.Command, title, body, priority, verify, suiteGat
 			"stage":    itemStage(it),
 			"state":    it.State,
 			"points":   it.Points,
+			"judge":    weaveJudgeMode(it),
+			"band":     it.Band,
 		}))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "weave add: run #%d created (%s/%s, todo) — %q\n",
@@ -3926,6 +3956,16 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		// is not written back, so a concurrent writer's edit to an untouched
 		// item is never clobbered.
 		before := weaveItemFingerprints(q)
+		// FAIL-CLOSED pre-pass. When review is in force, refuse to BEGIN the merge
+		// loop unless every verdict-required item in scope has an eligible,
+		// band-matched, different-family judge. Running this before any merge means
+		// the loop never proceeds per-run: a required item that cannot be judged
+		// HALTS the whole pull (non-zero exit) instead of silently merging its
+		// peers around it. Judge=="none" items are skipped here — their probe is
+		// enough, and the tier gate below never invokes the pair runner for them.
+		if err := weaveRequireEligibleJudge(q.Items, reviewAgent, issueID, issueSpecified); err != nil {
+			return err
+		}
 		for _, it := range q.Items {
 			if issueSpecified && it.ID != issueID {
 				continue
@@ -4021,7 +4061,13 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// evidence is re-collected. It has no approve/reject path: a test it
 			// adds is committed as evidence, then the existing verify/suite gate
 			// below is the only arbiter. Default-off preserves legacy pull.
-			if reviewAgent != "" && it.State == "submitted" {
+			//
+			// CONDITIONAL by verifiability tier: the pair runner is invoked ONLY
+			// for verdict-required items. A Judge=="none" item skips it entirely
+			// and merges on the deterministic gate alone — no LLM invocation, no
+			// block when the judge is down. Eligibility was already vetted by the
+			// fail-closed pre-pass above, so reaching the runner here is safe.
+			if reviewAgent != "" && it.State == "submitted" && weaveJudgeIsRequired(it) {
 				if it.Workspace == "" {
 					pr := weaveNormalizePairReview(weavePairReviewResult{}, errors.New("no workspace recorded for adversarial review"))
 					it.PairVerdict, it.PairReason, it.PairExit = string(pr.Verdict), pr.Reason, pr.ExitCode
