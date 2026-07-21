@@ -215,10 +215,14 @@ type weaveItem struct {
 	ReviewBy       string    `json:"review_by,omitempty"`
 	ReviewAt       time.Time `json:"review_at,omitempty"`
 	// CodingAgent and ReviewAgent make separation of duties auditable. The
-	// reviewer is an acting pair: it may add evidence, but never a verdict.
+	// reviewer is an acting pair: it may add evidence, while PairVerdict records
+	// the harness/gate outcome (never a model approval).
 	CodingAgent     string `json:"coding_agent,omitempty"`
 	ReviewAgent     string `json:"review_agent,omitempty"`
 	ReviewAddedTest bool   `json:"review_added_test,omitempty"`
+	PairVerdict     string `json:"pair_verdict,omitempty"`
+	PairReason      string `json:"pair_reason,omitempty"`
+	PairExit        int    `json:"pair_exit,omitempty"`
 	SuiteGate       string `json:"suite_gate,omitempty"`
 	SuiteGateExit   *int   `json:"suite_gate_exit,omitempty"`
 	SuiteGateOutput string `json:"suite_gate_output,omitempty"`
@@ -1203,6 +1207,13 @@ func weaveClearCurrentRunTerminalEvidence(it *weaveItem) {
 	it.CodingAgent = ""
 	it.ReviewAgent = ""
 	it.ReviewAddedTest = false
+	it.PairVerdict = ""
+	it.PairReason = ""
+	it.PairExit = 0
+	if strings.HasPrefix(it.StewardReason, "PAIR ") {
+		it.NeedsSteward = false
+		it.StewardReason = ""
+	}
 	it.Dirty = false
 	it.DirtyFiles = 0
 	it.UntrackedFiles = 0
@@ -3839,9 +3850,13 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		SuiteGateOutput string `json:"suite_gate_output,omitempty"`
 		ReviewAgent     string `json:"review_agent,omitempty"`
 		ReviewAddedTest bool   `json:"review_added_test,omitempty"`
+		PairVerdict     string `json:"pair_verdict,omitempty"`
+		PairReason      string `json:"pair_reason,omitempty"`
+		PairExit        int    `json:"pair_exit,omitempty"`
 	}
 	var results []result
 	var mergedReports []*weaveItem
+	pairExit := weavePairPassExit
 	// Snapshot the live checkout ONCE, before the first merge. Pull mutates
 	// this very tree (merge commits, and a suite gate running builds in it),
 	// so re-snapshotting per item would let item #1's merge read as item
@@ -3943,11 +3958,21 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// below is the only arbiter. Default-off preserves legacy pull.
 			if reviewAgent != "" && it.State == "submitted" {
 				if it.Workspace == "" {
-					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "review-error", Detail: "no workspace recorded for adversarial review"})
+					pr := weaveNormalizePairReview(weavePairReviewResult{}, errors.New("no workspace recorded for adversarial review"))
+					it.PairVerdict, it.PairReason, it.PairExit = string(pr.Verdict), pr.Reason, pr.ExitCode
+					it.NeedsSteward, it.StewardReason = true, pr.verdictLine()
+					pairExit = pr.ExitCode
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "harness-error", Detail: pr.Reason,
+						PairVerdict: string(pr.Verdict), PairReason: pr.Reason, PairExit: pr.ExitCode})
 					continue
 				}
 				if _, err := os.Stat(it.Workspace); err != nil {
-					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "review-error", Detail: fmt.Sprintf("workspace missing: %v", err)})
+					pr := weaveNormalizePairReview(weavePairReviewResult{}, fmt.Errorf("workspace missing: %v", err))
+					it.PairVerdict, it.PairReason, it.PairExit = string(pr.Verdict), pr.Reason, pr.ExitCode
+					it.NeedsSteward, it.StewardReason = true, pr.verdictLine()
+					pairExit = pr.ExitCode
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "harness-error", Detail: pr.Reason,
+						PairVerdict: string(pr.Verdict), PairReason: pr.Reason, PairExit: pr.ExitCode})
 					continue
 				}
 				gateCommand := it.VerifyCommand
@@ -3955,11 +3980,54 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					gateCommand = weaveSuiteGateCommand(root, it)
 				}
 				pr, reviewErr := weavePairReviewRunner(it.Workspace, weaveCountRef(it, base), gateCommand, reviewAgent, it)
+				pr = weaveNormalizePairReview(pr, reviewErr)
 				it.CodingAgent = pr.CodingAgent
 				it.ReviewAgent = pr.ReviewAgent
 				it.ReviewAddedTest = pr.AddedTest
-				if reviewErr != nil {
-					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "review-error", Detail: reviewErr.Error(), ReviewAgent: pr.ReviewAgent, ReviewAddedTest: pr.AddedTest})
+				it.PairVerdict = string(pr.Verdict)
+				it.PairReason = pr.Reason
+				it.PairExit = pr.ExitCode
+				if pr.ExitCode != weavePairPassExit && pairExit == weavePairPassExit {
+					pairExit = pr.ExitCode
+				}
+				pairResult := result{
+					Issue: it.ID, Branch: it.Branch, Detail: pr.Reason,
+					ReviewAgent: pr.ReviewAgent, ReviewAddedTest: pr.AddedTest,
+					PairVerdict: string(pr.Verdict), PairReason: pr.Reason, PairExit: pr.ExitCode,
+				}
+				switch pr.Verdict {
+				case weavePairHarnessError:
+					// A broken harness has neither approved nor blocked the work. Keep
+					// the submission intact and name the decision still owed.
+					it.State = "submitted"
+					it.NeedsSteward = true
+					it.StewardReason = pr.verdictLine()
+					pairResult.Status = "harness-error"
+					results = append(results, pairResult)
+					continue
+				case weavePairBrokenBefore:
+					it.State = "submitted"
+					it.NeedsSteward = true
+					it.StewardReason = pr.verdictLine()
+					pairResult.Status = "broken-before"
+					results = append(results, pairResult)
+					continue
+				case weavePairRefuted:
+					it.State = "failed"
+					pairResult.Status = "review-block"
+					results = append(results, pairResult)
+					continue
+				case weavePairPass:
+					// Only a named pass reaches the existing substrate gate below.
+				default:
+					pr = weaveNormalizePairReview(pr, fmt.Errorf("unknown pair verdict %q", pr.Verdict))
+					it.State = "submitted"
+					it.NeedsSteward = true
+					it.StewardReason = pr.verdictLine()
+					pairExit = pr.ExitCode
+					pairResult.Status, pairResult.Detail = "harness-error", pr.Reason
+					pairResult.PairVerdict, pairResult.PairReason, pairResult.PairExit = string(pr.Verdict), pr.Reason, pr.ExitCode
+					results = append(results, pairResult)
 					continue
 				}
 				ev := weaveCollectTerminalEvidence(it.Workspace, weaveCountRef(it, base), it.VerifyCommand, it.VerifyCommand != "")
@@ -3968,7 +4036,8 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					it.State = "failed"
 					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "verify-failed",
 						Detail:      fmt.Sprintf("adversarial review by %s added_test=%v; verify command exited %d — pair evidence remains committed in the workspace", pr.ReviewAgent, pr.AddedTest, *ev.VerifyExit),
-						ReviewAgent: pr.ReviewAgent, ReviewAddedTest: pr.AddedTest})
+						ReviewAgent: pr.ReviewAgent, ReviewAddedTest: pr.AddedTest,
+						PairVerdict: string(pr.Verdict), PairReason: pr.Reason, PairExit: pr.ExitCode})
 					continue
 				}
 			}
@@ -4086,6 +4155,9 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 						SuiteGateOutput: sgOutput,
 						ReviewAgent:     it.ReviewAgent,
 						ReviewAddedTest: it.ReviewAddedTest,
+						PairVerdict:     it.PairVerdict,
+						PairReason:      it.PairReason,
+						PairExit:        it.PairExit,
 					})
 					continue
 				}
@@ -4117,6 +4189,9 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				SuiteGateOutput: suiteGateOutput,
 				ReviewAgent:     it.ReviewAgent,
 				ReviewAddedTest: it.ReviewAddedTest,
+				PairVerdict:     it.PairVerdict,
+				PairReason:      it.PairReason,
+				PairExit:        it.PairExit,
 			})
 		}
 		return nil
@@ -4147,9 +4222,13 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		}
 	}
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, "weave pull", map[string]any{
+		_ = emitOK(cmd.OutOrStdout(), mode, "weave pull", map[string]any{
 			"results": results,
-		}))
+		})
+		if pairExit != weavePairPassExit {
+			return ec(pairExit)
+		}
+		return nil
 	}
 	if len(results) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "weave pull: nothing to merge")
@@ -4161,6 +4240,12 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			detail = " — " + r.Detail
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): %s%s\n", r.Issue, r.Branch, r.Status, detail)
+		if r.PairVerdict != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "    PAIR %s — %s\n", strings.ToUpper(r.PairVerdict), r.PairReason)
+		}
+	}
+	if pairExit != weavePairPassExit {
+		return ec(pairExit)
 	}
 	return nil
 }
