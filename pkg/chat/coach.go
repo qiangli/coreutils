@@ -200,6 +200,7 @@ type Coach struct {
 	steer Steerer
 	agent string
 	pol   CoachPolicy
+	mode  string // "events" or "pty"
 
 	mu             sync.Mutex
 	counts         map[string]int // (tool|inputhash) -> times seen
@@ -250,7 +251,7 @@ func (c *Coach) SetEscalation(ctx context.Context, coachee string, esc EscalateF
 // drives directly, feeding it events and asserting the trip decision without
 // any live agent or socket IO.
 func newCoach(pol CoachPolicy) *Coach {
-	return &Coach{pol: pol, counts: map[string]int{}, winCount: map[string]int{}, ptySeen: map[string]struct{}{}, done: make(chan struct{})}
+	return &Coach{pol: pol, mode: "events", counts: map[string]int{}, winCount: map[string]int{}, ptySeen: map[string]struct{}{}, done: make(chan struct{})}
 }
 
 // NewLineCoach builds a coach fed one line at a time (its Write method) and
@@ -260,6 +261,7 @@ func newCoach(pol CoachPolicy) *Coach {
 func NewLineCoach(pol CoachPolicy, steer Steerer) *Coach {
 	c := newCoach(pol)
 	c.steer = steer
+	c.mode = "pty"
 	return c
 }
 
@@ -316,9 +318,15 @@ func (c *Coach) watch(ctx context.Context) {
 		return
 	}
 	if c.sess.EventsPath() != "" {
+		c.mu.Lock()
+		c.mode = "events"
+		c.mu.Unlock()
 		c.watchEvents(ctx) // precise: structured tool.call stream (ycode)
 		return
 	}
+	c.mu.Lock()
+	c.mode = "pty"
+	c.mu.Unlock()
 	c.watchPty(ctx) // generic fallback: loop-from-terminal-output (agy & any pty CLI)
 }
 
@@ -709,6 +717,15 @@ func (c *Coach) Report() CoachReport {
 		Repeat:   ratioOf(c.total, distinct),
 		Steers:   append([]SteerRecord(nil), c.steers...),
 	}
+}
+
+// Mode reports the detection mode: "events" (structured tool.call stream) or
+// "pty" (normalized output-line scraping). The two modes measure different
+// dimensions and must never be compared directly as one metric.
+func (c *Coach) Mode() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mode
 }
 
 func (c *Coach) logSteer(rec SteerRecord) {

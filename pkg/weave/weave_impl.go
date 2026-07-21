@@ -27,6 +27,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/chat"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/gate"
 	"github.com/qiangli/coreutils/pkg/room"
@@ -304,6 +305,13 @@ type weaveItem struct {
 	// UnmergedCommits, the projection it is measured alongside.)
 	NeedsSteward  bool   `json:"needs_steward,omitempty"`
 	StewardReason string `json:"steward_reason,omitempty"`
+
+	CoachTotalCalls    int     `json:"coach_total_calls,omitempty"`
+	CoachDistinctCalls int     `json:"coach_distinct_calls,omitempty"`
+	CoachRepeatRatio   float64 `json:"coach_repeat_ratio,omitempty"`
+	CoachSteers        int     `json:"coach_steers,omitempty"`
+	CoachRecovered     bool    `json:"coach_recovered,omitempty"`
+	CoachMode          string  `json:"coach_mode,omitempty"`
 }
 
 // weaveComment is one entry in an issue's history thread. Append-only;
@@ -3168,6 +3176,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		killReason string
 		runErr     error
 		toolStdout bytes.Buffer
+		coachRep   chat.CoachReport
+		coachMode  string
 	)
 	if ptyMode == "never" {
 		tool.Stdin = os.Stdin
@@ -3187,11 +3197,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// Subagent stdio: PTY ↔ log file. stdin is the PTY slave
 			// (no user input source); stdout/stderr go to the PTY
 			// master which we copy to logFile.
-			exitCode, killReason, runErr = runWeaveToolPTY(tool, logFile, guards)
+			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, logFile, guards)
 			_ = logFile.Close()
 		} else {
 			// Interactive TTY pass-through.
-			exitCode, killReason, runErr = runWeaveToolPTY(tool, nil, guards)
+			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, nil, guards)
 		}
 	}
 
@@ -3315,6 +3325,17 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				freshIt.Body = fmt.Sprintf("[killed exit %d with %d wrapper-verified commit(s) ahead at %.12s — inspect, then resume or merge deliberately]\n\n",
 					exitCode, ev.CommitsAhead, ev.Head) + freshIt.Body
 			}
+		}
+		// Coach evidence from the reflex loop detector.
+		freshIt.CoachTotalCalls = coachRep.Total
+		freshIt.CoachDistinctCalls = coachRep.Distinct
+		freshIt.CoachRepeatRatio = coachRep.Repeat
+		freshIt.CoachSteers = len(coachRep.Steers)
+		freshIt.CoachMode = coachMode
+		steered := len(coachRep.Steers) >= 1
+		converged := freshIt.State == "submitted" || freshIt.State == "done" || freshIt.State == "merged"
+		if steered && converged {
+			freshIt.CoachRecovered = true
 		}
 		it = freshIt
 		return nil
