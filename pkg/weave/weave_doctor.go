@@ -107,7 +107,9 @@ func runWeaveDoctorWithOptions(cmd *cobra.Command, flags *weaveOutputFlags, thre
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
 	}
 	base := weaveBaseBranch(root)
-	actions, err := weaveReapQueue(dir, root, base)
+	// doctor's whole job is the reap + the report, so unlike list/show it
+	// waits for the lock rather than skipping the pass.
+	actions, err := weaveReapQueueBlocking(dir, root, base)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
 	}

@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -84,9 +85,32 @@ func weaveReapPass(q *weaveQueue, root, base string, now time.Time) []weaveReapA
 // weaveReapQueue is the locked, persisting entry point. Safe to call on any
 // read path: with nothing to reap it takes the lock, finds no change and
 // writes the queue back unchanged.
+//
+// OPPORTUNISTIC BY DESIGN. This runs on the read paths (`weave list`, `weave
+// show`, the heartbeat), and a read must never wait on a writer — that is what
+// made the board unreadable while a merge ran. So it waits only
+// weaveReapLockWait for the lock and, if a writer holds it, returns no actions
+// and no error: the caller proceeds with a lock-free read of the queue. The
+// pass is idempotent, so whatever needed reaping gets reaped on the next read.
+// Callers that actually need the reap to have happened (weave doctor) use
+// weaveReapQueueBlocking.
 func weaveReapQueue(dir, root, base string) ([]weaveReapAction, error) {
+	actions, err := weaveReapQueueWait(dir, root, base, weaveReapLockWait)
+	if errors.Is(err, errWeaveQueueBusy) {
+		return nil, nil
+	}
+	return actions, err
+}
+
+// weaveReapQueueBlocking waits the ordinary write patience for the lock. For
+// callers whose whole purpose is the reap.
+func weaveReapQueueBlocking(dir, root, base string) ([]weaveReapAction, error) {
+	return weaveReapQueueWait(dir, root, base, weaveQueueLockWait)
+}
+
+func weaveReapQueueWait(dir, root, base string, wait time.Duration) ([]weaveReapAction, error) {
 	var actions []weaveReapAction
-	err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+	err := withWeaveQueueLockWait(dir, wait, func(q *weaveQueue) error {
 		actions = weaveReapPass(q, root, base, time.Now().UTC())
 		return nil
 	})
