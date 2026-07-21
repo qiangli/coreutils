@@ -333,14 +333,15 @@ type FailureReason struct {
 // failed" and "we never got a verdict", which no exit code can express: a
 // transport that cannot dial has no body exit code to report. Transport.Exec
 // implementations wrap it so RecordAttempt cannot mistake non-delivery for a
-// conformance verdict.
+// conformance verdict. See Transport.Exec and RecordAttempt for the recorder
+// side of this contract.
 var ErrWorkerUnreachable = errors.New("worker unreachable")
 
 // FleetFailure is implemented by errors that carry their OWN classification.
 // It is how a transport hands the recorder a curated reason instead of a raw
 // error string. Transport.Exec implementations may return one for failures
 // that need a classification other than ErrWorkerUnreachable; RecordAttempt
-// accepts only its known stable code and never its Error text.
+// accepts only known stable status+codes and never its Error text.
 type FleetFailure interface {
 	FleetFailure() (status RunStatus, reason FailureReason)
 }
@@ -372,7 +373,8 @@ type RunRecord struct {
 // status only after the body ran and lost. A transport that could not deliver
 // the body MUST instead wrap ErrWorkerUnreachable or return an error implementing
 // FleetFailure; otherwise its StatusFailed result is indistinguishable here
-// from a real body failure and records as RunFailed. See Transport.Exec.
+// from a real body failure and records as RunFailed against code that never
+// ran. See Transport.Exec for the producer side.
 //
 // No text is ever taken from res.Err. A FleetFailure may publish only a known,
 // stable FailureReason.Code; operator-facing prose stays in stdout/stderr and
