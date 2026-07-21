@@ -537,6 +537,7 @@ func init() {
 	addVerb("handoff", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("resume", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	addVerb("agent", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON}})
+	addVerb("notify", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON}})
 
 	// the fleet registry: what this host runs with
 	addVerb("tools", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
@@ -748,7 +749,7 @@ func init() {
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent",
 		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
-		"rclone",
+		"rclone", "notify",
 		// steward APPENDS to the host's journal and rewrites the seat/grant files. It is
 		// write, not destroy: the one thing that removes bytes (`steward repair`) refuses
 		// anything but a torn final append, and quarantines the exact bytes it discards
