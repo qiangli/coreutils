@@ -57,6 +57,8 @@ type Row struct {
 	SprintID    int64  `json:"sprint_id,omitempty"`
 	Salvageable bool   `json:"salvageable,omitempty"`
 	Unmerged    int    `json:"unmerged_commits,omitempty"`
+	AgeSeconds  int64  `json:"age_seconds,omitempty"`
+	Stale       bool   `json:"stale,omitempty"`
 }
 
 type Rollup struct {
@@ -71,6 +73,7 @@ type Summary struct {
 	Sprints          int         `json:"sprints"`
 	Runs             int         `json:"runs"`
 	NeedsSteward     int         `json:"needs_steward"`
+	Unattended       int         `json:"unattended"`
 	InFlight         int         `json:"in_flight"`
 	ETAMedianSeconds int64       `json:"eta_median_seconds,omitempty"`
 	AgentLoadByBand  map[int]int `json:"agent_load_by_band"`
@@ -96,6 +99,8 @@ type Card struct {
 	Scope       string `json:"scope,omitempty"`
 	Salvageable bool   `json:"salvageable,omitempty"`
 	Unmerged    int    `json:"unmerged_commits,omitempty"`
+	AgeSeconds  int64  `json:"age_seconds,omitempty"`
+	Stale       bool   `json:"stale,omitempty"`
 }
 
 type Agent struct {
@@ -158,6 +163,8 @@ type Run struct {
 	Blocked         bool      `json:"blocked,omitempty"`
 	Salvageable     bool      `json:"salvageable,omitempty"`
 	UnmergedCommits int       `json:"unmerged_commits,omitempty"`
+	AgeSeconds      int64     `json:"age_seconds,omitempty"`
+	Stale           bool      `json:"stale,omitempty"`
 }
 
 type Source interface {
@@ -255,17 +262,20 @@ func (b *Board) finalize(now time.Time) {
 				eta = estimate - elapsed
 			}
 		}
-		c := Card{Layer: "run", ID: itoa(r.ID), Label: r.Label, State: r.State, Tool: r.Tool, Band: r.Band, Model: r.Model, Elapsed: elapsed, ETA: eta, Scope: r.Repo, Salvageable: r.Salvageable, Unmerged: r.UnmergedCommits}
+		c := Card{Layer: "run", ID: itoa(r.ID), Label: r.Label, State: r.State, Tool: r.Tool, Band: r.Band, Model: r.Model, Elapsed: elapsed, ETA: eta, Scope: r.Repo, Salvageable: r.Salvageable, Unmerged: r.UnmergedCommits, AgeSeconds: r.AgeSeconds, Stale: r.Stale}
 		dur := int64(0)
 		if !r.StartedAt.IsZero() && !r.FinishedAt.IsZero() && r.FinishedAt.After(r.StartedAt) {
 			dur = int64(r.FinishedAt.Sub(r.StartedAt).Seconds())
 		}
-		b.Rows = append(b.Rows, Row{Source: "run", Repo: r.Repo, ID: itoa(r.ID), State: r.State, Tool: r.Tool, Band: r.Band, Model: r.Model, Label: r.Label, Points: r.Points, ElapsedSecs: elapsed, DurSecs: dur, SprintID: r.SprintID, Salvageable: r.Salvageable, Unmerged: r.UnmergedCommits})
+		b.Rows = append(b.Rows, Row{Source: "run", Repo: r.Repo, ID: itoa(r.ID), State: r.State, Tool: r.Tool, Band: r.Band, Model: r.Model, Label: r.Label, Points: r.Points, ElapsedSecs: elapsed, DurSecs: dur, SprintID: r.SprintID, Salvageable: r.Salvageable, Unmerged: r.UnmergedCommits, AgeSeconds: r.AgeSeconds, Stale: r.Stale})
 		lane := runLane(r.State)
-		if r.State == "submitted" || r.Salvageable {
+		if r.State == "submitted" || r.Salvageable || r.Stale {
 			lane = "needs-steward"
 		}
 		lanes[lane] = append(lanes[lane], c)
+		if r.Stale {
+			b.Summary.Unattended++
+		}
 		if r.State == "working" {
 			loads[r.Band]++
 			b.Summary.InFlight++

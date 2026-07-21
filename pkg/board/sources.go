@@ -52,7 +52,7 @@ type wireEnvelope struct {
 type weaveSource struct{}
 
 func (weaveSource) Name() string { return "weave" }
-func (weaveSource) Load(_ context.Context, b *Board, o Options) error {
+func (weaveSource) Load(ctx context.Context, b *Board, o Options) error {
 	args := []string{"list", "--all", "--json"}
 	if o.All {
 		args = append(args, "--history")
@@ -92,8 +92,13 @@ func (weaveSource) Load(_ context.Context, b *Board, o Options) error {
 		return err
 	}
 	for _, q := range result.Queues {
+		findings, doctorErr := loadWeaveDoctorFindings(ctx, q.Root)
+		if doctorErr != nil {
+			b.Warnings = append(b.Warnings, "weave doctor ("+q.Root+"): "+doctorErr.Error())
+		}
 		for _, x := range q.Items {
-			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Agent: x.Owner, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits}
+			finding := findings[x.ID]
+			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Agent: x.Owner, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: finding.AgeSeconds, Stale: finding.Stale}
 			if x.Launch != nil {
 				if x.Launch.Agent != "" {
 					r.Agent = x.Launch.Agent
@@ -106,6 +111,54 @@ func (weaveSource) Load(_ context.Context, b *Board, o Options) error {
 		}
 	}
 	return nil
+}
+
+type weaveDoctorFinding struct {
+	AgeSeconds int64
+	Stale      bool
+}
+
+// loadWeaveDoctorFindings deliberately crosses the package boundary through
+// the command's JSON contract. Doctor owns lifecycle policy; board only knows
+// that an open row has an age and may carry the "stale" flag.
+func loadWeaveDoctorFindings(ctx context.Context, root string) (map[int64]weaveDoctorFinding, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	c := exec.CommandContext(ctx, self, "weave", "doctor", "--json")
+	c.Dir = root
+	raw, err := c.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("weave doctor --json: %w: %s", err, bytes.TrimSpace(raw))
+	}
+	return decodeWeaveDoctorFindings(raw)
+}
+
+func decodeWeaveDoctorFindings(raw []byte) (map[int64]weaveDoctorFinding, error) {
+	var env wireEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, fmt.Errorf("decode weave doctor envelope: %w", err)
+	}
+	var result struct {
+		Open []struct {
+			Issue      int64    `json:"issue"`
+			AgeSeconds int64    `json:"age_seconds"`
+			Flags      []string `json:"flags"`
+		} `json:"open"`
+	}
+	if err := json.Unmarshal(env.Result, &result); err != nil {
+		return nil, fmt.Errorf("decode weave doctor result: %w", err)
+	}
+	findings := make(map[int64]weaveDoctorFinding, len(result.Open))
+	for _, row := range result.Open {
+		finding := weaveDoctorFinding{AgeSeconds: row.AgeSeconds}
+		for _, flag := range row.Flags {
+			finding.Stale = finding.Stale || flag == "stale"
+		}
+		findings[row.Issue] = finding
+	}
+	return findings, nil
 }
 
 type sprintSource struct{}

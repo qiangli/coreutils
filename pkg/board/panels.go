@@ -83,13 +83,13 @@ func runPanel() Panel {
 		}
 		v := PanelView{ID: "runs", Title: "Runs",
 			Collapsed: fmt.Sprintf("%d total; %d working; %d ready to merge", len(b.Runs), counts["working"], counts["submitted"]),
-			Columns:   []string{"ID", "STATE", "UNMERGED", "TOOL", "BAND", "MODEL", "REPO", "TITLE"}}
+			Columns:   []string{"ID", "STATE", "AGE", "UNMERGED", "TOOL", "BAND", "MODEL", "REPO", "TITLE"}}
 		for _, x := range b.Runs {
 			unmerged := "-"
 			if x.Salvageable {
 				unmerged = fmt.Sprintf("%d commits", x.UnmergedCommits)
 			}
-			v.Rows = append(v.Rows, []string{"#" + itoa(x.ID), x.State, unmerged, dash(x.Tool), band(x.Band), dash(x.Model), x.Repo, x.Label})
+			v.Rows = append(v.Rows, []string{"#" + itoa(x.ID), x.State, duration(x.AgeSeconds), unmerged, dash(x.Tool), band(x.Band), dash(x.Model), x.Repo, x.Label})
 		}
 		return v
 	}}

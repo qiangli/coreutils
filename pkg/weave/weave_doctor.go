@@ -3,6 +3,8 @@ package weave
 import (
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -19,6 +21,7 @@ import (
 
 func newWeaveDoctorCmd() *cobra.Command {
 	var flags weaveOutputFlags
+	thresholds := defaultWeaveDoctorThresholds()
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Reap limbo states and audit the lifecycle of every open item",
@@ -44,23 +47,53 @@ next step that will close it. Every state has one; see
 docs/weave-lifecycle-state-machine.md for the whole machine.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWeaveDoctor(cmd, &flags)
+			if thresholds.Todo < 0 || thresholds.Submitted < 0 || thresholds.Allocated < 0 {
+				return fmt.Errorf("age thresholds must be non-negative (0 disables a check)")
+			}
+			return runWeaveDoctorWithOptions(cmd, &flags, thresholds, time.Now)
 		},
 	}
 	flags.attach(cmd)
+	cmd.Flags().DurationVar(&thresholds.Todo, "todo-after", thresholds.Todo, "Flag todo/queued work untouched longer than this (0 disables)")
+	cmd.Flags().DurationVar(&thresholds.Submitted, "submitted-after", thresholds.Submitted, "Flag submitted work unmerged longer than this (0 disables)")
+	cmd.Flags().DurationVar(&thresholds.Allocated, "allocated-after", thresholds.Allocated, "Flag allocated work unlaunched longer than this (0 disables)")
 	return cmd
+}
+
+const (
+	weaveDoctorDefaultTodoAfter      = 168 * time.Hour
+	weaveDoctorDefaultSubmittedAfter = 4 * time.Hour
+	weaveDoctorDefaultAllocatedAfter = 30 * time.Minute
+)
+
+type weaveDoctorThresholds struct {
+	Todo      time.Duration
+	Submitted time.Duration
+	Allocated time.Duration
+}
+
+func defaultWeaveDoctorThresholds() weaveDoctorThresholds {
+	return weaveDoctorThresholds{
+		Todo: weaveDoctorDefaultTodoAfter, Submitted: weaveDoctorDefaultSubmittedAfter,
+		Allocated: weaveDoctorDefaultAllocatedAfter,
+	}
 }
 
 // weaveOpenItem is one not-yet-closed item plus the named step that closes it.
 type weaveOpenItem struct {
-	Issue     int64  `json:"issue"`
-	State     string `json:"state"`
-	Title     string `json:"title,omitempty"`
-	NextSteps string `json:"next_steps"`
-	Flag      string `json:"flag,omitempty"`
+	Issue      int64    `json:"issue"`
+	State      string   `json:"state"`
+	Title      string   `json:"title,omitempty"`
+	AgeSeconds int64    `json:"age_seconds"`
+	NextSteps  string   `json:"next_steps"`
+	Flags      []string `json:"flags,omitempty"`
 }
 
 func runWeaveDoctor(cmd *cobra.Command, flags *weaveOutputFlags) error {
+	return runWeaveDoctorWithOptions(cmd, flags, defaultWeaveDoctorThresholds(), time.Now)
+}
+
+func runWeaveDoctorWithOptions(cmd *cobra.Command, flags *weaveOutputFlags, thresholds weaveDoctorThresholds, now func() time.Time) error {
 	mode := flags.mode()
 	const op = "weave doctor"
 
@@ -83,17 +116,7 @@ func runWeaveDoctor(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
 	}
 
-	open := make([]weaveOpenItem, 0, len(q.Items))
-	for _, it := range weaveLimboItems(q) {
-		row := weaveOpenItem{Issue: it.ID, State: it.State, Title: it.Title, NextSteps: weaveNextSteps(it)}
-		switch {
-		case it.NeedsSteward:
-			row.Flag = "needs-steward"
-		case it.Salvageable:
-			row.Flag = "salvageable"
-		}
-		open = append(open, row)
-	}
+	open := weaveDoctorOpenItems(q, thresholds, now().UTC())
 
 	if mode == weavecli.OutputJSON {
 		reaped := make([]map[string]any, 0, len(actions))
@@ -122,14 +145,72 @@ func runWeaveDoctor(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		return nil
 	}
 	fmt.Fprintf(w, "open (%d) — each with the step that closes it:\n", len(open))
+	fmt.Fprintf(w, "  %-5s %-11s %-9s %s\n", "ISSUE", "STATE", "AGE", "NEXT STEP")
 	for _, o := range open {
 		flag := ""
-		if o.Flag != "" {
-			flag = " [" + o.Flag + "]"
+		if len(o.Flags) > 0 {
+			flag = " [" + strings.Join(o.Flags, ", ") + "]"
 		}
-		fmt.Fprintf(w, "  #%-4d %-11s%s %s\n", o.Issue, o.State, flag, o.NextSteps)
+		fmt.Fprintf(w, "  #%-4d %-11s %-9s%s %s\n", o.Issue, o.State, weaveDoctorRoundedAge(o.AgeSeconds), flag, o.NextSteps)
 	}
 	return nil
+}
+
+func weaveDoctorOpenItems(q *weaveQueue, thresholds weaveDoctorThresholds, now time.Time) []weaveOpenItem {
+	open := make([]weaveOpenItem, 0, len(q.Items))
+	for _, it := range weaveLimboItems(q) {
+		age := weaveDoctorItemAge(it, now)
+		row := weaveOpenItem{Issue: it.ID, State: it.State, Title: it.Title, AgeSeconds: int64(age / time.Second), NextSteps: weaveNextSteps(it)}
+		if it.NeedsSteward {
+			row.Flags = append(row.Flags, "needs-steward")
+		}
+		if it.Salvageable {
+			row.Flags = append(row.Flags, "salvageable")
+		}
+		if weaveDoctorItemStale(it, age, thresholds) {
+			row.Flags = append(row.Flags, "stale")
+		}
+		open = append(open, row)
+	}
+	return open
+}
+
+func weaveDoctorItemAge(it *weaveItem, now time.Time) time.Duration {
+	since := it.Created
+	if it.State == "submitted" && !it.FinishedAt.IsZero() {
+		since = it.FinishedAt
+	}
+	if since.IsZero() || now.Before(since) {
+		return 0
+	}
+	return now.Sub(since)
+}
+
+func weaveDoctorItemStale(it *weaveItem, age time.Duration, thresholds weaveDoctorThresholds) bool {
+	var threshold time.Duration
+	switch it.State {
+	case "todo", "queued":
+		threshold = thresholds.Todo
+	case "submitted":
+		threshold = thresholds.Submitted
+	case "allocated":
+		threshold = thresholds.Allocated
+	}
+	return threshold > 0 && age > threshold
+}
+
+func weaveDoctorStaleCount(q *weaveQueue, thresholds weaveDoctorThresholds, now time.Time) int {
+	n := 0
+	for _, it := range weaveLimboItems(q) {
+		if weaveDoctorItemStale(it, weaveDoctorItemAge(it, now), thresholds) {
+			n++
+		}
+	}
+	return n
+}
+
+func weaveDoctorRoundedAge(seconds int64) string {
+	return weaveRoundDuration(time.Duration(seconds) * time.Second).String()
 }
 
 // weaveNextSteps names what will close an item from its current state. It is
