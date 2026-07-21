@@ -577,6 +577,10 @@ func init() {
 	// TREE, and steward holds a MANDATE. Claiming the seat restores no diff and touches
 	// no repository — work is a diff, a seat is not.
 	addVerb("steward", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// board is the read-only projection of todo, sprint, weave, and fleet state.
+	// It reports across the machine but never starts, merges, or kills work.
+	addVerb("board", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace,
+		Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 
 	// engines
@@ -713,7 +717,7 @@ func init() {
 		// verbs that read stores / remote state
 		"capability", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
-		"doctor", "otel", "audit", "check", "sprint",
+		"doctor", "otel", "audit", "check", "sprint", "board",
 		// steward READS the host's authority record (status/board/log/history/reconcile)
 		// and WRITES it (below). A privacy surface: the journal is a durable account of
 		// what agents did on this machine, and its transcripts can carry real

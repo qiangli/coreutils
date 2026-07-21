@@ -1,0 +1,99 @@
+package board
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+// NewCommand constructs the top-level, read-only `bashy board` command. A host
+// mounts it beside todo/sprint/weave. Passing nil uses the machine-global P1
+// sources; tests and P2 can inject a conductor-specific source set.
+func NewCommand(sources []Source) *cobra.Command {
+	var jsonOut, htmlOut bool
+	var outPath string
+	var expands []string
+	cmd := &cobra.Command{Use: "board", Short: "Show the machine-global steward board across todo, sprint, and weave", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true, RunE: func(cmd *cobra.Command, _ []string) error {
+		if jsonOut && htmlOut {
+			return fmt.Errorf("--json and --html are mutually exclusive")
+		}
+		expand := map[string]bool{}
+		valid := map[string]bool{"agents": true, "todo": true, "sprints": true, "runs": true, "all": true}
+		for _, part := range expands {
+			for _, id := range strings.Split(part, ",") {
+				if id = strings.TrimSpace(id); id != "" {
+					if !valid[id] {
+						return fmt.Errorf("unknown panel %q (want agents, todo, sprints, runs, or all)", id)
+					}
+					expand[id] = true
+				}
+			}
+		}
+		// Steward scope is always the machine-global union, including completed
+		// records. Panels never silently hide a subset of the underlying stores.
+		opts := Options{All: true, Expand: expand}
+		if sources == nil {
+			sources = DefaultSources()
+		}
+		b, err := Collect(cmd.Context(), opts, sources, nil)
+		if err != nil {
+			return err
+		}
+		var renderer Renderer = TerminalRenderer{}
+		if jsonOut {
+			renderer = JSONRenderer{}
+		} else if htmlOut {
+			renderer = HTMLRenderer{}
+		}
+		payload, err := renderer.Render(b, opts)
+		if err != nil {
+			return err
+		}
+		if outPath != "" {
+			return os.WriteFile(outPath, payload, 0o644)
+		}
+		_, err = cmd.OutOrStdout().Write(payload)
+		return err
+	}}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the bashy-board-v1 JSON envelope")
+	cmd.Flags().BoolVar(&htmlOut, "html", false, "emit a self-contained responsive HTML dashboard")
+	cmd.Flags().StringVar(&outPath, "out", "", "write rendered output to a file")
+	cmd.Flags().StringSliceVar(&expands, "expand", nil, "expand panel(s): agents,todo,sprints,runs,all")
+	return cmd
+}
+
+// NewDashboardCommand builds the role-scoped front door mounted as
+// `bashy steward dashboard`. It is deliberately the same engine as `board`.
+func NewDashboardCommand(sources []Source) *cobra.Command {
+	cmd := NewCommand(sources)
+	cmd.Use = "dashboard"
+	cmd.Short = "Show the machine-global steward dashboard across todo, sprint, weave, and fleet"
+	return cmd
+}
+
+// SkillRenderer prints the host's existing embedded role skill.
+type SkillRenderer func(io.Writer) error
+
+// NewStewardCommand constructs the backwards-compatible role namespace:
+// bare `steward` and `steward skill` both render the existing skill, while
+// `steward dashboard` mounts this package's read-only global projection.
+func NewStewardCommand(skill SkillRenderer, sources []Source) *cobra.Command {
+	renderSkill := func(cmd *cobra.Command, _ []string) error {
+		if skill == nil {
+			return fmt.Errorf("steward skill renderer is not configured")
+		}
+		return skill(cmd.OutOrStdout())
+	}
+	root := &cobra.Command{
+		Use: "steward", Short: "The steward role: its operating skill and machine-global dashboard",
+		Args: cobra.NoArgs, RunE: renderSkill, SilenceUsage: true, SilenceErrors: true,
+	}
+	root.AddCommand(
+		&cobra.Command{Use: "skill", Short: "Print the existing steward operating skill", Args: cobra.NoArgs, RunE: renderSkill},
+		NewDashboardCommand(sources),
+	)
+	return root
+}
