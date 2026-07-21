@@ -18,15 +18,17 @@ func newWeaveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "weave",
 		Short: "Run agentic tools in isolated, convergent workspaces (v2)",
-		// A command group with neither Run nor Args accepts an empty argv
-		// as a successful no-op. `weave` is not useful without a subcommand,
-		// and that silent success makes callers mistake a misspelled or
-		// truncated invocation for completed work.
-		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				return fmt.Errorf("a subcommand is required (run `%s --help` for available commands)", cmd.CommandPath())
-			}
-			return nil
+		// A command group with neither Run nor RunE is not Runnable, and
+		// cobra bails out with flag.ErrHelp (command.go:955) BEFORE it ever
+		// reaches ValidateArgs — so an Args validator here would be dead
+		// code and bare `weave` would exit non-zero with no diagnostic,
+		// indistinguishable from success to a caller that only checks
+		// output. Giving the root a RunE makes it Runnable, so empty argv
+		// lands here and emits the same structured envelope every subverb
+		// does.
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), weavecli.ResolveOutputMode(false, false, false),
+				"weave", weavecli.ExitInvalidArg, fmt.Errorf("missing command; run 'weave --help'")))
 		},
 		// Every weave subverb emits its own structured envelope (or
 		// human line) and propagates an *exitCodeError carrying a
