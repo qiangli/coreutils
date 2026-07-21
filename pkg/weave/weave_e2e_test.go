@@ -138,7 +138,7 @@ func TestWeaveExecuteErrorClassification(t *testing.T) {
 		var buf bytes.Buffer
 		cmd.SetOut(&buf)
 		cmd.SetErr(&buf)
-		cmd.SetArgs(nil)
+		cmd.SetArgs([]string{})
 		err := cmd.Execute()
 		if err == nil {
 			t.Fatal("bare weave should require a subcommand")
