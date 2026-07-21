@@ -90,6 +90,7 @@ Common-case usage:
 	cmd.AddCommand(newWeaveResetCmd())
 	cmd.AddCommand(newWeaveWaitCmd())
 	cmd.AddCommand(newWeaveCheckCmd())
+	cmd.AddCommand(newWeaveDoctorCmd())
 	cmd.AddCommand(newWeaveGuideCmd())
 	cmd.AddCommand(newWeaveHeartbeatCmd())
 	// baton = the per-repo campaign single-driver lock (execution

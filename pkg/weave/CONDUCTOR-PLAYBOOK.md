@@ -491,9 +491,24 @@ WHAT THE SCREEN ASKS:
 
 ## Phase 6 — Recover
 
-- Wrapper died / machine restarted: `weave list` flags stale items →
+- `bashy weave doctor` is the one-shot recovery pass: it runs the lifecycle
+  REAPER and then lists every open run with the step that closes it. The reaper
+  also runs on every `weave list` / `weave status` / heartbeat tick, so you
+  rarely need it — but it is where "why is this run stuck?" gets an answer
+  instead of a shrug. It never removes a workspace, branch, or commit; disposal
+  stays `weave prune` / `weave abandon`. See
+  `docs/weave-lifecycle-state-machine.md` for the whole state machine.
+- Wrapper died / machine restarted: the reaper transitions the run to
+  `failed` (`wrapper-died`) instead of leaving it "working" forever →
   `weave start --resume --issue N -- <tool> "<follow-up body>"`.
   Resume works from any state with a preserved workspace.
+- A run marked `failed`/`killed` that is flagged **salvageable** has committed
+  work on its branch — measured from git, not from the record the dead wrapper
+  never wrote. `weave salvage N`, do NOT re-run it.
+- A `submitted` run flagged **needs-steward** has been sitting unmerged past the
+  threshold; the flag names the decision owed (pull, reverify, or abandon). The
+  reaper deliberately does not merge for you — `weave pull` owns the verify /
+  review / isolation gates.
 - Watchdog killed mid-work: the workspace survives. Inspect
   uncommitted changes — they are often real progress (one killed run
   held a 3x diff reduction uncommitted). Verify, commit them as the
