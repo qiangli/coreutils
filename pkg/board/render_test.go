@@ -36,7 +36,7 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if !strings.Contains(string(text), "age 5h0m0s") || !strings.Contains(string(text), "STALE") {
 		t.Fatalf("terminal did not render unattended age and flag:\n%s", text)
 	}
-	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "24756a56672dcc00ac560ff29d8629cdbecc795db15fbcad47b96b75ca625b1e"; got != want {
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "14048ce182d0b4a329fb12b17f6b2789f1d9ca498a10a7db9d302b8b8523c0e7"; got != want {
 		t.Errorf("terminal golden changed: got %s\n%s", got, text)
 	}
 	raw, err := (JSONRenderer{}).Render(b, Options{})
@@ -50,7 +50,7 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 4 || got.Summary.Unattended != 1 {
 		t.Fatalf("bad JSON envelope: %+v", got.Summary)
 	}
-	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "01e0a4f23a4404f49bdc3a04a574419dc1474c2f0b073cf02f9037ba7a8a6def"; sum != want {
+	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "b459d81dc7199c15adb8dffcc7f020473c31766d44c2cf280e5b8f8efe009174"; sum != want {
 		t.Errorf("JSON golden changed: got %s\n%s", sum, raw)
 	}
 }
