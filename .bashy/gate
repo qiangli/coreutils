@@ -1,0 +1,11 @@
+# The gate: the command that decides whether this project passes.
+#
+# CI scope — EXCLUDES the vendored external/ forks (ollama, podman): they pull
+# cgo + platform backends and need hydrated submodules, so they cannot be a
+# precondition for merging ordinary work. Mirrors the commands in CLAUDE.md.
+#
+# Without this file `bashy pair` has no ruler, so every
+# `weave pull --review-agent ...` returns harness-error and the fleet-wide
+# adversarial review mandate cannot be satisfied.
+go vet $(go list ./... | grep -v /external/)
+go test $(go list ./... | grep -v /external/)
