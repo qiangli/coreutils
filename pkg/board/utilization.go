@@ -58,6 +58,13 @@ func PendingWork(ctx context.Context) (resources.PendingWork, error) {
 // and the fleet capacity derived from the board's agents and runs. It is
 // called during finalize so every renderer (terminal, JSON, HTML) sees it.
 func (b *Board) evaluateUtilization() {
+	// No agents source means no capacity reading, and a verdict without one
+	// would be a guess. Leave it nil rather than fall through to the
+	// collector's LIVE branch, which spawns weave subprocesses — finalize
+	// must stay a pure projection of what the sources already loaded.
+	if len(b.Agents) == 0 {
+		return
+	}
 	fr, err := resources.CollectFleetResourcesFromBoard(context.Background(), b.GeneratedAt, boardAgents(b), boardRuns(b))
 	if err != nil {
 		fr = nil
