@@ -3977,7 +3977,7 @@ func weaveTestPauseAfterPullLoad() {
 	}
 }
 
-func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flags *weaveOutputFlags) error {
+func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force bool, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
@@ -3995,12 +3995,51 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave abandon",
 			weavecli.ExitInvalidArg, err))
 	}
+	base := weaveBaseBranch(root)
 	var it *weaveItem
+	var preservedRef string
 	notFoundHint := weaveOtherActiveQueuesHintSuffix(dir)
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it = findWeaveItem(q, id)
 		if it == nil {
 			return fmt.Errorf("run #%d not found%s", id, notFoundHint)
+		}
+		// REFUSE TO DESTROY WORK THAT HAS NOWHERE ELSE TO LIVE.
+		//
+		// `weave prune` already refuses to sweep a workspace holding unmerged
+		// commits or an uncommitted tree — that guard is load-bearing because an
+		// agent branch lives ONLY inside its workspace clone until `weave pull`
+		// fetches it. `weave abandon` tears down the very same workspace and
+		// branch but had no such guard: `abandon --yes` on a run with a
+		// finished, committed feature destroyed it outright, with only a
+		// manually-preserved ref (not enforced by anything) standing between
+		// that work and gone for good.
+		//
+		// Mirror prune's check here. Without --force, refuse and name the
+		// commits. With --force, fetch the branch tip into the user's repo as
+		// refs/salvage/abandoned-<id> BEFORE anything is destroyed, so --force
+		// means "I accept the risk" rather than "make it disappear."
+		if it.Workspace != "" {
+			if st, statErr := os.Stat(it.Workspace); statErr == nil && st.IsDir() {
+				if !weaveItemMerged(root, base, it) {
+					ahead, head := weaveMeasureBranch(it.Workspace, weaveCountRef(it, base))
+					dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace)
+					if ahead > 0 || dirty {
+						if !force {
+							why := strings.Replace(weavePruneHoldReason(ahead, dirtyFiles, untracked), "<id>", fmt.Sprint(id), 1)
+							return fmt.Errorf("run #%d holds unmerged work — refusing to abandon: %s", id, why)
+						}
+						if ahead > 0 && it.Branch != "" && head != "" {
+							ref := fmt.Sprintf("refs/salvage/abandoned-%d", id)
+							fetchSpec := fmt.Sprintf("%s:%s", it.Branch, ref)
+							if _, ferr := gitOut(root, "fetch", "--no-tags", it.Workspace, fetchSpec); ferr != nil {
+								return fmt.Errorf("run #%d: --force could not preserve %d unmerged commit(s) as %s, refusing to destroy them: %w", id, ahead, ref, ferr)
+							}
+							preservedRef = ref
+						}
+					}
+				}
+			}
 		}
 		// If a wrapper PID is recorded and the item is still working,
 		// signal precisely — SIGTERM the recorded PID, wait briefly,
@@ -4035,7 +4074,7 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 	})
 	if lockErr != nil {
 		code := weavecli.ExitGenericFail
-		if strings.Contains(lockErr.Error(), "not found") {
+		if strings.Contains(lockErr.Error(), "not found") || strings.Contains(lockErr.Error(), "refusing to") {
 			code = weavecli.ExitInvalidArg
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave abandon",
@@ -4045,13 +4084,21 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes bool, flag
 	// (assigned -> todo, link cleared), so the list stops showing a stale "assigned".
 	weaveReleaseRegister(root, it)
 	if mode == weavecli.OutputJSON {
-		return ec(emitOK(cmd.OutOrStdout(), mode, "weave abandon", map[string]any{
+		res := map[string]any{
 			"issue":  it.ID,
 			"state":  it.State,
 			"reason": reason,
-		}))
+		}
+		if preservedRef != "" {
+			res["preserved_ref"] = preservedRef
+		}
+		return ec(emitOK(cmd.OutOrStdout(), mode, "weave abandon", res))
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned\n", it.ID)
+	if preservedRef != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned (unmerged commits preserved at %s)\n", it.ID, preservedRef)
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "weave abandon: run #%d abandoned\n", it.ID)
+	}
 	return nil
 }
 

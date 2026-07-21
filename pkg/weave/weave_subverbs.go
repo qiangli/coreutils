@@ -684,7 +684,7 @@ Use --yes to skip the confirmation prompt.`,
 func newWeaveAbandonCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var reason string
-	var yes bool
+	var yes, force bool
 	cmd := &cobra.Command{
 		Use:     "abandon <issue>",
 		Aliases: []string{"resolve", "done", "dispose"},
@@ -697,20 +697,29 @@ inflating the board — hence the ` + "`resolve`/`done`/`dispose`" + ` aliases.
 For "stop the runaway but keep the partial work for inspection",
 use ` + "`weave kill`" + ` instead.
 
+It REFUSES to tear down a workspace that still holds work not yet merged into
+base: unmerged commits, or an uncommitted tree (the same guard ` + "`weave prune`" + `
+has, and for the same reason — the branch lives ONLY inside the workspace
+clone). Pass --force to destroy it anyway; --force first fetches the branch
+tip into the user's repo as refs/salvage/abandoned-<issue>, so the commits
+survive the teardown even when forced.
+
 At a TTY this prompts before tearing down; pass --yes to skip the
-prompt (required in non-interactive / --json invocations).`,
+prompt (required in non-interactive / --json invocations). --yes only skips
+the prompt — it does not bypass the unmerged-work guard; use --force for that.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return fmt.Errorf("issue must be an integer: %q", args[0])
 			}
-			return runWeaveAbandon(cmd, id, reason, yes, &flags)
+			return runWeaveAbandon(cmd, id, reason, yes, force, &flags)
 		},
 	}
 	flags.attach(cmd)
 	cmd.Flags().StringVar(&reason, "reason", "", "Optional human-readable reason for logs")
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
+	cmd.Flags().BoolVar(&force, "force", false, "Destroy the workspace even if it holds unmerged commits or uncommitted changes; unmerged commits are first preserved as refs/salvage/abandoned-<issue>")
 	return cmd
 }
 
