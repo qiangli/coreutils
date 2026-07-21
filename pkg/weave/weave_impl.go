@@ -8,6 +8,7 @@ package weave
 // docs/loom-v2-implementation.md for the broader plan.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2614,6 +2615,24 @@ func weaveLaunchSpecFromArgs(toolArgs []string, opts weaveStartOptions) *weaveLa
 	}
 }
 
+func weaveResultTurns(s string) int64 {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var ev struct {
+			Type     string `json:"type"`
+			NumTurns int64  `json:"num_turns"`
+		}
+		if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == "result" {
+			return ev.NumTurns
+		}
+	}
+	return 0
+}
+
 func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs []string, opts weaveStartOptions, flags *weaveOutputFlags) error {
 	mode := flags.mode()
 	if len(toolArgs) == 0 && toolFlag != "" {
@@ -3126,11 +3145,12 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		exitCode   int
 		killReason string
 		runErr     error
+		toolStdout bytes.Buffer
 	)
 	if ptyMode == "never" {
 		tool.Stdin = os.Stdin
-		tool.Stdout = os.Stdout
-		tool.Stderr = os.Stderr
+		tool.Stdout = io.MultiWriter(cmd.OutOrStdout(), &toolStdout)
+		tool.Stderr = cmd.ErrOrStderr()
 		runErr = tool.Run()
 		if runErr != nil {
 			if ee, ok := runErr.(*exec.ExitError); ok {
@@ -3317,27 +3337,19 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	var turns int64
 	if logPath != "" {
 		if b, err := os.ReadFile(logPath); err == nil {
-			lines := strings.Split(string(b), "\n")
-			for i := len(lines) - 1; i >= 0; i-- {
-				line := strings.TrimSpace(lines[i])
-				if line == "" || !strings.HasPrefix(line, "{") {
-					continue
-				}
-				var parseEv struct {
-					Type     string `json:"type"`
-					NumTurns int64  `json:"num_turns"`
-				}
-				if json.Unmarshal([]byte(line), &parseEv) == nil && parseEv.Type == "result" {
-					turns = parseEv.NumTurns
-					break
-				}
-			}
+			turns = weaveResultTurns(string(b))
 		}
+	} else if toolStdout.Len() > 0 {
+		turns = weaveResultTurns(toolStdout.String())
 	}
 
 	modelArg := ""
+	nick := it.Owner
 	if it.LaunchSpec != nil {
 		modelArg = it.LaunchSpec.Model
+		if it.LaunchSpec.Agent != "" {
+			nick = it.LaunchSpec.Agent
+		}
 	}
 	band, canonicalModel := fleet.ResolveLaunchModel(it.Tool, modelArg)
 
@@ -3350,10 +3362,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 
 	span.SetAttributes(
 		attribute.String("agent", it.Owner),
-		attribute.String("nick", it.Owner),
+		attribute.String("nick", nick),
 		attribute.Int("band", band),
 		attribute.String("tool:model", it.Tool+":"+canonicalModel),
 		attribute.Int64("issue", it.ID),
+		attribute.String("outcome", it.State),
 		attribute.Bool("converged", it.State == "submitted" || it.State == "verified" || it.State == "done" || it.State == "merged"),
 		attribute.Int("gate_result", gateRes),
 		attribute.Int64("turns", turns),
