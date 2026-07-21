@@ -402,6 +402,8 @@ func RecordAttempt(t *Task, w *Worker, attempt int, res TaskResult) RunRecord {
 		r.Status, r.Failure = RunInfraFailed, &FailureReason{Code: FailUnreachable}
 	case res.Err != nil && errors.Is(res.Err, context.Canceled):
 		r.Status, r.Failure = RunInfraFailed, &FailureReason{Code: FailCanceled}
+	case res.Err != nil && errors.Is(res.Err, context.DeadlineExceeded):
+		r.Status, r.Failure = RunInfraFailed, &FailureReason{Code: FailCanceled}
 	case res.Status == StatusFailed:
 		// The body ran and lost. Reaching StatusFailed means an executor got far
 		// enough to run the body and observe its exit, so the failure is the

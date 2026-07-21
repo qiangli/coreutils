@@ -428,6 +428,13 @@ func (p *Pool) TryAcquire(c Constraints) (*Worker, func()) {
 func (p *Pool) Acquire(ctx context.Context, c Constraints) (*Worker, func(), error) {
 	for {
 		if w, release := p.TryAcquire(c); w != nil {
+			// Pass the baton: another waiter might be sleeping because freed drops
+			// signals when full. If we woke up and took a slot, there might be
+			// MORE slots free that we didn't take. Wake up the next waiter.
+			select {
+			case p.freed <- struct{}{}:
+			default:
+			}
 			return w, release, nil
 		}
 		// Facts may become stale while this call is waiting for a slot. Recheck
