@@ -3358,6 +3358,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if err := weaveReportTerminal(context.Background(), root, it, ev); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: reporter: terminal report failed (continuing): %v\n", err)
 		}
+		// Fold the terminal gate evidence into the capability matrix.
+		// Best-effort, like the memory/reporter calls above.
+		weaveRecordCapability(it)
 		// Throttle-aware cooldown: when the run terminated as a throttle and
 		// a reset time is parseable, record the underlying tool on cooldown
 		// so the orchestrator (`weave fleet`) fails over now and re-engages
@@ -3877,6 +3880,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 	}
 	var results []result
 	var mergedReports []*weaveItem
+	// gateDecisions snapshots items whose pull produced FRESH gate evidence
+	// (a pair verdict, a verify re-run on pair evidence, or a suite-gate
+	// exit) so the capability matrix can fold them in after the lock —
+	// best-effort, without double-counting the finalize-time record.
+	var gateDecisions []weaveItem
 	pairExit := weavePairPassExit
 	// Snapshot the live checkout ONCE, before the first merge. Pull mutates
 	// this very tree (merge commits, and a suite gate running builds in it),
@@ -4043,6 +4051,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					it.State = "failed"
 					pairResult.Status = "review-block"
 					results = append(results, pairResult)
+					gateDecisions = append(gateDecisions, *it)
 					continue
 				case weavePairPass:
 					// Only a named pass reaches the existing substrate gate below.
@@ -4065,6 +4074,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 						Detail:      fmt.Sprintf("adversarial review by %s added_test=%v; verify command exited %d — pair evidence remains committed in the workspace", pr.ReviewAgent, pr.AddedTest, *ev.VerifyExit),
 						ReviewAgent: pr.ReviewAgent, ReviewAddedTest: pr.AddedTest,
 						PairVerdict: string(pr.Verdict), PairReason: pr.Reason, PairExit: pr.ExitCode})
+					gateDecisions = append(gateDecisions, *it)
 					continue
 				}
 			}
@@ -4186,6 +4196,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 						PairReason:      it.PairReason,
 						PairExit:        it.PairExit,
 					})
+					gateDecisions = append(gateDecisions, *it)
 					continue
 				}
 			}
@@ -4220,6 +4231,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				PairReason:      it.PairReason,
 				PairExit:        it.PairExit,
 			})
+			// A merge with no suite gate and no pair verdict adds no evidence
+			// beyond what the finalize path already recorded; skip those.
+			if suiteGateExit != nil || it.PairVerdict != "" {
+				gateDecisions = append(gateDecisions, *it)
+			}
 		}
 		return nil
 	})
@@ -4247,6 +4263,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		if err := weaveReportTerminal(context.Background(), root, it, ev); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave pull: reporter: merge report failed (continuing): %v\n", err)
 		}
+	}
+	// Fold pull's fresh gate evidence (pair verdicts, suite-gate exits) into
+	// the capability matrix — best-effort, like the reporter loop above.
+	for i := range gateDecisions {
+		weaveRecordCapability(&gateDecisions[i])
 	}
 	if mode == weavecli.OutputJSON {
 		_ = emitOK(cmd.OutOrStdout(), mode, "weave pull", map[string]any{
@@ -5604,6 +5625,7 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	if ev.CommitsAhead > 0 && !ev.Dirty && ev.UntrackedFiles == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) {
 		state = "submitted"
 	}
+	var finalized *weaveItem
 	lockErr = withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
 		if it == nil {
@@ -5622,11 +5644,14 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 		it.WrapperPid = 0
 		it.CtlSock = ""
 		weaveAppendComment(it, "conductor", "system", "finalized after explicit observed-idle attestation; terminal state measured from workspace evidence")
+		finalized = it
 		return nil
 	})
 	if lockErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave finalize", weavecli.ExitGenericFail, lockErr))
 	}
+	// Fold the terminal gate evidence into the capability matrix (best-effort).
+	weaveRecordCapability(finalized)
 	result := map[string]any{"issue": id, "state": state, "completion": "conductor-finalized-observed-idle"}
 	if ev.VerifyExit != nil {
 		result["verify_exit"] = *ev.VerifyExit
