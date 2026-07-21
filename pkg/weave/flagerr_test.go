@@ -148,7 +148,7 @@ func TestUnknownFlagName(t *testing.T) {
 		ok        bool
 	}{
 		{"unknown flag: --note", "note", true},
-		{"flag needs an argument: --tool", "tool", true},
+		{"flag needs an argument: --tool", "", false},
 		{"unknown flag: --note=x", "note", true},
 		{"unknown shorthand flag: 'Z' in -Z", "", false},
 	} {
