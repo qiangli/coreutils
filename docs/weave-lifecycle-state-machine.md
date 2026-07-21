@@ -65,7 +65,8 @@ Legend: **A** = automatic (the substrate fires it, no human in the loop);
 | `submitted` | `done` | work already contained in base (merged out-of-band) | **R** |
 | `submitted` | `working` | `weave start --resume` (branch kicked back) | S |
 | `submitted` | `abandoned` | `weave abandon` | S |
-| `failed` / `killed` | `working` | `weave start --resume` | S |
+| `failed` / `killed` | `working` | `weave start --resume` (workspace still on disk) | S |
+| `failed` / `killed` | `allocated` | `weave start --run N -- <agent>` (no workspace to resume) | S |
 | `failed` / `killed` | `done` | `weave salvage` + `weave pull` | S |
 | `failed` / `killed` | `abandoned` | `weave abandon` / `weave prune --stale` | S |
 
@@ -95,7 +96,13 @@ failed/killed with commits      -> FLAG salvageable    (state unchanged)
    flags. It removes no workspace, no branch, no commit. Disposal stays an
    explicit guarded step (`weave prune`, `weave abandon`). A run reaped to
    `failed` is still resumable — `weave start --resume` reattaches to exactly
-   the workspace it left.
+   the workspace it left. The reaper **verifies** that workspace is on disk
+   before saying so (`weaveWorkspaceLive`): a wrapper that died mid-teardown
+   can leave the record pointing at a directory that is gone, and `--resume`
+   refuses without one. In that case the comment says "workspace lost" and
+   names `weave start --run N -- <agent>`, and `weave doctor` derives the same
+   NEXT STEP from the on-disk state. Advertised recovery must be recovery that
+   works.
 2. **It never invents success.** A dead wrapper becomes `failed`, never
    `submitted`: success still requires a clean exit **and** measured commits.
    Where work exists behind a failure, the reaper *surfaces* it (salvageable)

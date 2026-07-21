@@ -3,6 +3,7 @@ package weave
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -178,6 +179,29 @@ func weaveReapAbandonedFinalizations(q *weaveQueue, now time.Time) []weaveReapAc
 	return actions
 }
 
+// weaveWorkspaceLive answers the only question that makes `weave start
+// --resume` viable: is the run's workspace STILL A DIRECTORY ON DISK?
+//
+// It deliberately mirrors the precondition `weave start --resume` enforces
+// (recorded path, and that path stats) so recovery advice and the command it
+// advertises can never disagree. Everything that writes "workspace preserved"
+// or derives a NEXT STEP must ask this first — asserting a preserved workspace
+// without checking is how a run becomes unrecoverable-by-instruction.
+func weaveWorkspaceLive(it *weaveItem) bool {
+	if it == nil || it.Workspace == "" {
+		return false
+	}
+	st, err := os.Stat(it.Workspace)
+	return err == nil && st.IsDir()
+}
+
+// weaveFreshStartHint is the recovery command for a run with no workspace left:
+// re-run the same issue into a newly provisioned one. `--resume` cannot serve
+// here — it refuses without a workspace — so it must never be advertised.
+func weaveFreshStartHint(id int64) string {
+	return fmt.Sprintf("`weave start --run %d -- <agent>` to start fresh", id)
+}
+
 // weaveReapDeadWrappers is the rule the observed limbo needed most.
 //
 // A `working` item whose wrapper PID is gone has, by definition, no process
@@ -188,8 +212,11 @@ func weaveReapAbandonedFinalizations(q *weaveQueue, now time.Time) []weaveReapAc
 // completely inert: it described the limbo instead of ending it.
 //
 // So end it. failed, with the cause named. The workspace, branch and commits
-// are untouched — `weave start --resume` still reattaches to a failed run, and
-// weaveReapSalvageable will surface any work the dead wrapper never got to
+// are untouched by the reaper — where the workspace is still on disk,
+// `weave start --resume` reattaches to the failed run; where it is NOT (the
+// wrapper died mid-teardown, or the workspace was pruned), the comment says so
+// and names the fresh-start command, because --resume would refuse. Either
+// way weaveReapSalvageable will surface any work the dead wrapper never got to
 // report.
 func weaveReapDeadWrappers(q *weaveQueue, now time.Time) []weaveReapAction {
 	var actions []weaveReapAction
@@ -209,7 +236,15 @@ func weaveReapDeadWrappers(q *weaveQueue, now time.Time) []weaveReapAction {
 		it.WrapperPid = 0
 		it.CtlSock = ""
 		it.Stale = false
-		weaveAppendComment(it, "reaper", "system", "reaped working -> failed ("+reason+"); workspace preserved, `weave start --resume --issue "+fmt.Sprint(it.ID)+"` to retry")
+		// Only claim preservation the reaper actually verified. A wrapper that
+		// died mid-teardown (or a workspace pruned since) leaves nothing to
+		// reattach to, and `--resume` refuses — so in that case name the
+		// fresh-start command instead of a dead end.
+		recovery := "workspace preserved, `weave start --resume --issue " + fmt.Sprint(it.ID) + "` to retry"
+		if !weaveWorkspaceLive(it) {
+			recovery = "workspace lost (nothing to reattach), " + weaveFreshStartHint(it.ID)
+		}
+		weaveAppendComment(it, "reaper", "system", "reaped working -> failed ("+reason+"); "+recovery)
 		actions = append(actions, weaveReapAction{Issue: it.ID, From: "working", To: "failed", Reason: reason})
 	}
 	return actions
