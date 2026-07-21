@@ -212,15 +212,22 @@ type Constraints struct {
 
 // Transport delivers one task to one worker and returns its result. This is the
 // seam every venue plugs into: localTransport runs it in-process here, and a
-// remote transport (ssh, sandbox exec, cluster job) is another implementation of
-// this one method. P2 implements the local one only.
+// remote transport (ssh, sandbox exec, cluster job) is another implementation
+// of this one method. P2 implements the local one only.
 //
-// Exec implementations MUST distinguish failure to deliver from failure of a
-// body that ran: an undeliverable attempt must wrap ErrWorkerUnreachable or
-// return an error implementing FleetFailure. If an implementation instead
-// returns an unmarked StatusFailed result, RecordAttempt must treat it as a
-// conformance verdict against code that may never have run. See RecordAttempt
-// for the recorder side of this obligation.
+// # EXEC CONTRACT
+//
+// An implementation MUST distinguish failure to deliver from failure of a body
+// that ran. Undeliverable attempts must return a TaskResult with an Err that
+// wraps `ErrWorkerUnreachable` (errors.Is(err, ErrWorkerUnreachable)) or
+// returns an error implementing `FleetFailure`:
+//
+//	result.Err = fmt.Errorf("worker %q: tls: no route to host: %w", w.ID, ErrWorkerUnreachable)
+//
+// If an implementation instead returns an unmarked StatusFailed result, RecordAttempt
+// cannot separate it from a genuine body failure and records it as a conformance
+// RunFailed verdict against code that never ran. See RecordAttempt and
+// ErrWorkerUnreachable/FleetFailure.
 type Transport interface {
 	Exec(ctx context.Context, w *Worker, t *Task, io TaskIO) TaskResult
 	// Close releases the transport's resources. It must be idempotent: a
