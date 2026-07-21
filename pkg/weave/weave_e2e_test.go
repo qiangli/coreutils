@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
 // runWeave drives a FRESH weave command tree (cobra flag state is
@@ -129,6 +131,39 @@ func TestWeaveCommandSurface(t *testing.T) {
 // used to exit 1 with zero output).
 func TestWeaveExecuteErrorClassification(t *testing.T) {
 	t.Setenv("BASHY_AGENTIC", "") // force human rows, not the agent JSON envelope
+
+	// Bare `weave` with no subcommand. A root with neither Run nor RunE is
+	// not Runnable, so cobra returns flag.ErrHelp before ValidateArgs ever
+	// runs — an Args validator there is dead code and the invocation exits
+	// with no diagnostic at all. The root's RunE makes it Runnable, so empty
+	// argv emits the same structured envelope every subverb does: a
+	// weavecli exit carrying ExitInvalidArg, with the message written to the
+	// command's own stderr rather than left to the host.
+	//
+	// SetArgs([]string{}) — NOT nil: with nil, cobra falls back to
+	// os.Args[1:] (command.go:1105 exempts only a binary named
+	// "cobra.test"), so the test would run go test's own argv and never
+	// exercise empty argv at all.
+	{
+		cmd := newWeaveCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetErr(&buf)
+		cmd.SetArgs([]string{})
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("bare weave should require a subcommand")
+		}
+		if !IsStructuredExit(err) {
+			t.Errorf("bare weave should be a structured weavecli exit, got %v", err)
+		}
+		if code := ExitCode(err); code != weavecli.ExitInvalidArg {
+			t.Errorf("ExitCode(bare weave) = %d, want %d", code, weavecli.ExitInvalidArg)
+		}
+		if !strings.Contains(buf.String(), "missing command") {
+			t.Errorf("bare weave should name the missing command on stderr, got %q", buf.String())
+		}
+	}
 
 	// Unknown subcommand: cobra raises a structural error before any
 	// subverb runs. Nothing is printed to the command's own out/err, the

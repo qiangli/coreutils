@@ -18,6 +18,18 @@ func newWeaveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "weave",
 		Short: "Run agentic tools in isolated, convergent workspaces (v2)",
+		// A command group with neither Run nor RunE is not Runnable, and
+		// cobra bails out with flag.ErrHelp (command.go:955) BEFORE it ever
+		// reaches ValidateArgs — so an Args validator here would be dead
+		// code and bare `weave` would exit non-zero with no diagnostic,
+		// indistinguishable from success to a caller that only checks
+		// output. Giving the root a RunE makes it Runnable, so empty argv
+		// lands here and emits the same structured envelope every subverb
+		// does.
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), weavecli.ResolveOutputMode(false, false, false),
+				"weave", weavecli.ExitInvalidArg, fmt.Errorf("missing command; run 'weave --help'")))
+		},
 		// Every weave subverb emits its own structured envelope (or
 		// human line) and propagates an *exitCodeError carrying a
 		// stable weavecli exit code. cobra's default "Error: ..." +
