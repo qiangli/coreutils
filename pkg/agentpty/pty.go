@@ -25,6 +25,18 @@ import (
 	"golang.org/x/term"
 )
 
+// wrapperKillSignals are the signals the wrapper forwards to the subagent tree
+// as a deliberate termination — the `weave kill`/`abandon` path (SIGTERM) and an
+// interactive ^C (SIGINT). SIGHUP is intentionally absent: see wrapperIgnoreSignals.
+var wrapperKillSignals = []os.Signal{syscall.SIGTERM, syscall.SIGINT}
+
+// wrapperIgnoreSignals are the signals the wrapper intercepts and DROPS so they
+// neither kill the subagent nor terminate the wrapper by default disposition.
+// SIGHUP lives here because it means "the launcher/terminal that started me went
+// away" — an orchestrator exit/restart/idle-timeout — which must not kill a
+// worker that is actively producing.
+var wrapperIgnoreSignals = []os.Signal{syscall.SIGHUP}
+
 // Supported reports whether this host can run an agent under a PTY. The Windows
 // build returns false and callers fall back to a plain exec.
 func Supported() bool { return true }
@@ -116,18 +128,40 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 	}
 	defer ptmx.Close()
 
-	// Forward termination signals from the wrapper to the subagent
-	// tree. Without this, SIGTERM kills the wrapper instantly
-	// (default disposition) and the subagent — in its own session —
-	// survives as an orphan that `weave kill`/`abandon` can never
-	// reach again. Short grace: weaveStopWrapper SIGKILLs the
-	// wrapper 5s after its SIGTERM, and our escalation goroutine
-	// must fire before we die.
+	// Forward EXPLICIT termination signals (SIGTERM/SIGINT) from the wrapper
+	// to the subagent tree. Without this, SIGTERM kills the wrapper instantly
+	// (default disposition) and the subagent — in its own session — survives
+	// as an orphan that `weave kill`/`abandon` can never reach again. Short
+	// grace: weaveStopWrapper SIGKILLs the wrapper 5s after its SIGTERM, and
+	// our escalation goroutine must fire before we die.
 	termSigs := make(chan os.Signal, 1)
-	signal.Notify(termSigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	signal.Notify(termSigs, wrapperKillSignals...)
 	go func() {
 		for s := range termSigs {
 			killTree(fmt.Sprintf("signal %v forwarded from wrapper", s), 2*time.Second)
+		}
+	}()
+
+	// SIGHUP is deliberately NOT a kill signal. SIGHUP is the launcher /
+	// controlling-terminal death signal: the orchestrator (weave autopilot,
+	// itself spawned by weave heartbeat) that launched this worker exiting,
+	// restarting, idle-timing-out, or its terminal closing delivers SIGHUP to
+	// a still-attached worker. Forwarding it — OR letting the wrapper's default
+	// SIGHUP disposition (terminate) stand — kills an actively-working subagent
+	// whose only sin is that its launcher went away, producing the "killed, ~0
+	// commits" orphan the fleet kept losing runs to. We intercept SIGHUP and
+	// DROP it so an in-flight worker outlives the death of whatever launched it;
+	// an explicit `weave kill`/`abandon` still reaches it via SIGTERM.
+	hupSigs := make(chan os.Signal, 1)
+	signal.Notify(hupSigs, wrapperIgnoreSignals...)
+	go func() {
+		for range hupSigs {
+			slog.Info("agentpty: ignoring SIGHUP (launcher/terminal death); subagent keeps working", "pid", func() int {
+				if cmd.Process != nil {
+					return cmd.Process.Pid
+				}
+				return 0
+			}())
 		}
 	}()
 	defer func() {
@@ -136,6 +170,8 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 		// a closed channel panics.
 		signal.Stop(termSigs)
 		close(termSigs)
+		signal.Stop(hupSigs)
+		close(hupSigs)
 	}()
 
 	// Idle-timeout watchdog: tracks the time of the most recent PTY
