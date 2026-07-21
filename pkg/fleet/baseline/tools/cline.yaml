@@ -1,6 +1,7 @@
 name: cline
 kind: cli
 display: Cline
+hidden: true
 cli:
   binary: cline
   launch:

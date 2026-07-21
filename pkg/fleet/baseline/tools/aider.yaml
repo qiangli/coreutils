@@ -1,6 +1,7 @@
 name: aider
 kind: cli
 display: Aider
+hidden: true
 
 # RETIRED FROM THE FLEET — 2026-07-14. There are deliberately NO aider agents.
 #

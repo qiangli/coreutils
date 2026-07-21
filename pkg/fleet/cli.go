@@ -113,6 +113,9 @@ func newToolsList(opts []Option) *cobra.Command {
 			tools, errs := c.Tools(all)
 			rows := make([]toolRow, 0, len(tools))
 			for _, t := range tools {
+				if t.Hidden && !all {
+					continue // kept in the registry (detected/resolvable), just not listed
+				}
 				rows = append(rows, toolRow{
 					Name: t.Name, Kind: t.Kind, Aliases: t.Aliases,
 					Binary: t.CLI.Binary, Model: t.TakesModel(), Ring: t.Ring.String(),

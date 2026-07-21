@@ -1,6 +1,7 @@
 name: goose
 kind: cli
 display: Goose
+hidden: true
 cli:
   binary: goose
   launch:

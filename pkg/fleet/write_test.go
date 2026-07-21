@@ -235,7 +235,7 @@ func TestVerifyAgentRejectsToolThatCannotSelectAModel(t *testing.T) {
 // A recognized-but-not-drivable harness (detection only) is not launchable.
 func TestVerifyToolWithoutLaunchTemplate(t *testing.T) {
 	c, _ := store(t)
-	chk := c.VerifyTool("cursor", Probes(nil))
+	chk := c.VerifyTool("cline", Probes(nil))
 	if chk.OK || !strings.Contains(chk.Reason, "no launch template") {
 		t.Fatalf("check = %+v", chk)
 	}

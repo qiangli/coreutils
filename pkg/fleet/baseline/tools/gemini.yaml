@@ -1,6 +1,7 @@
 name: gemini
 kind: cli
 display: Gemini CLI
+hidden: true
 cli:
   binary: gemini
   launch:

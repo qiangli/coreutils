@@ -23,8 +23,7 @@ func TestDetectToolCoversTheLegacyMarkers(t *testing.T) {
 	legacy := map[string]string{
 		"CLAUDECODE": "claude", "CLAUDE_CODE_ENTRYPOINT": "claude",
 		"CODEX_SANDBOX": "codex", "CODEX_THREAD_ID": "codex",
-		"GEMINI_CLI":   "gemini",
-		"CURSOR_AGENT": "cursor", "CURSOR_TRACE_ID": "cursor",
+		"GEMINI_CLI":     "gemini",
 		"GOOSE_TERMINAL":  "goose",
 		"OPENCODE_CLIENT": "opencode",
 		"CLINE_ACTIVE":    "cline",

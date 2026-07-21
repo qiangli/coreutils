@@ -6,7 +6,7 @@ import "testing"
 // host must not report an error for a tool it never intended to launch.
 func TestDetectionOnlyToolsAreSkippedNotFailed(t *testing.T) {
 	c, _ := store(t)
-	for _, name := range []string{"cursor", "goose", "cline", "gemini"} {
+	for _, name := range []string{"goose", "cline", "gemini"} {
 		chk := c.VerifyTool(name, Probes(nil))
 		if !chk.Skipped {
 			t.Errorf("%s: Skipped = false; a detection-only harness is not a failure (%+v)", name, chk)

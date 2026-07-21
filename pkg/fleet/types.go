@@ -107,8 +107,11 @@ type Tool struct {
 	Kind    string   `yaml:"kind" json:"kind"` // cli | func | web | system
 	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
 	Display string   `yaml:"display,omitempty" json:"display,omitempty"`
-	CLI     ToolCLI  `yaml:"cli,omitempty" json:"cli"`
-	Quirks  string   `yaml:"quirks,omitempty" json:"quirks,omitempty"`
+	// Hidden keeps a tool in the registry (still detected, still resolvable by
+	// explicit name) but omits it from `bashy tools` list/help unless --all.
+	Hidden bool    `yaml:"hidden,omitempty" json:"hidden,omitempty"`
+	CLI    ToolCLI `yaml:"cli,omitempty" json:"cli"`
+	Quirks string  `yaml:"quirks,omitempty" json:"quirks,omitempty"`
 
 	// Harness scores the capabilities a tool governs regardless of the
 	// model behind it (operability, shell, tool-use, isolation). The

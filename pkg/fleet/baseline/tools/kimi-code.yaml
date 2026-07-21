@@ -1,0 +1,26 @@
+name: kimi-code
+kind: cli
+display: Kimi Code
+cli:
+  binary: kimi
+  launch:
+    exec: kimi --print {prompt}
+    prompt_position: last
+    supports_say: true
+    supports_graceful_quit: true
+    notes: >-
+      Moonshot Kimi Code (github.com/MoonshotAI/kimi-code) — a Claude-Code-family
+      agentic CLI (interactive TUI is `kimi`). VERIFY the headless flag against the
+      installed version before staffing: the `--print {prompt}` template here is a
+      best-effort default and has not been confirmed live.
+    watchdog:
+      max_runtime: 45m
+      mem_limit: 12g
+    env_markers:
+      - KIMI_CODE
+quirks: Moonshot agentic CLI; headless launch template UNVERIFIED — confirm flags before delegating
+harness:
+  operability: 0.8
+  shell: 0.8
+  tool-use: 0.8
+  isolation: 0.7

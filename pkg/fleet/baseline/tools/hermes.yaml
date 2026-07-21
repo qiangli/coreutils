@@ -1,0 +1,13 @@
+name: hermes
+kind: cli
+display: Hermes
+cli:
+  binary: hermes
+  launch:
+    notes: >-
+      Agentic CLI ("hermes agent") added to the registry. Headless launch template TBD —
+      confirm the binary name and non-interactive invocation before staffing. Resolvable/
+      detectable by name meanwhile.
+    env_markers:
+      - HERMES_AGENT
+quirks: registered; launch template unverified (name-resolution/detection only until confirmed)

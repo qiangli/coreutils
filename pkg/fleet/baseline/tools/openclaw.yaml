@@ -1,0 +1,13 @@
+name: openclaw
+kind: cli
+display: OpenClaw
+cli:
+  binary: openclaw
+  launch:
+    notes: >-
+      Agentic CLI added to the registry. Headless launch template TBD — confirm the
+      binary name and non-interactive invocation before staffing. Resolvable/detectable
+      by name meanwhile.
+    env_markers:
+      - OPENCLAW
+quirks: registered; launch template unverified (name-resolution/detection only until confirmed)
