@@ -89,6 +89,24 @@ func TestUnknownFlagJSONEnvelope(t *testing.T) {
 	}
 }
 
+func TestUnknownFlagJSONEnvelopeCoversGuideSubverb(t *testing.T) {
+	t.Setenv("BASHY_AGENTIC", "")
+	_, stderr, code, _ := runWeaveStreams(t, "guide", "--json", "--bogus")
+	if code != weavecli.ExitInvalidArg {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, weavecli.ExitInvalidArg, stderr)
+	}
+	var env weavecli.Envelope
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stderr)), &env); err != nil {
+		t.Fatalf("guide should honor --json for flag errors, got %q (%v)", stderr, err)
+	}
+	if env.Error == nil {
+		t.Fatalf("envelope should carry an error, got %+v", env)
+	}
+	if !strings.Contains(env.Error.Message, "--bogus") {
+		t.Fatalf("message should name the offending flag after --json, got %q", env.Error.Message)
+	}
+}
+
 func TestMissingFlagArgumentDoesNotSuggestSameFlag(t *testing.T) {
 	t.Setenv("BASHY_AGENTIC", "")
 	_, stderr, code, _ := runWeaveStreams(t, "start", "--tool")
