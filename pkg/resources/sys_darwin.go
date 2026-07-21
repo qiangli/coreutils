@@ -76,8 +76,17 @@ func memoryStats() (Memory, error) {
 		m.AvailableBytes = total / 100 * uint64(level)
 		m.Source = "sysctl:memorystatus_level"
 	} else {
-		page := uint64(sysctlInt("hw.pagesize"))
-		free := uint64(sysctlInt("vm.page_free_count")) + uint64(sysctlInt("vm.page_speculative_count"))
+		pageSize := sysctlInt("hw.pagesize")
+		if pageSize <= 0 {
+			pageSize = unix.Getpagesize()
+		}
+		page := uint64(pageSize)
+		var free uint64
+		for _, name := range []string{"vm.page_free_count", "vm.page_speculative_count"} {
+			if pages := sysctlInt(name); pages > 0 {
+				free += uint64(pages)
+			}
+		}
 		m.AvailableBytes = free * page
 		m.Source = "sysctl:page_free_count"
 	}
