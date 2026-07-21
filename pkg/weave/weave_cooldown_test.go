@@ -91,6 +91,27 @@ func TestParseThrottleReset(t *testing.T) {
 			wantStr: now.Add(60 * time.Second).Format(time.RFC3339),
 		},
 		{
+			// The exact live codex phrasing observed 2026-07-21: a DATED reset
+			// days out. The bare-clock parser could not see it, so no cooldown
+			// was ever recorded and `weave fleet` kept saying "available".
+			name:    "codex dated reset (month day ordinal, year)",
+			msg:     "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Jul 24th, 2026 9:45 PM.",
+			wantOK:  true,
+			wantStr: time.Date(2026, 7, 24, 21, 45, 0, 0, loc).Format(time.RFC3339),
+		},
+		{
+			name:    "dated reset without year, later this year",
+			msg:     "try again at July 24 9:45 PM",
+			wantOK:  true,
+			wantStr: time.Date(2026, 7, 24, 21, 45, 0, 0, loc).Format(time.RFC3339),
+		},
+		{
+			name:    "dated reset without year, already past rolls to next year",
+			msg:     "try again at Jan 2nd 9:00 AM",
+			wantOK:  true,
+			wantStr: time.Date(2027, 1, 2, 9, 0, 0, 0, loc).Format(time.RFC3339),
+		},
+		{
 			name:   "unparseable",
 			msg:    "You've reached your weekly limit. Upgrade your plan.",
 			wantOK: false,
@@ -151,6 +172,20 @@ func TestCooldownRoundTrip(t *testing.T) {
 	got, _ = toolAvailableAt(dir, "codex")
 	if !got.Equal(later) {
 		t.Fatalf("after re-record cooldown=%v want %v", got, later)
+	}
+
+	// A cause-less record (the pre-causes on-disk shape) reads as plain
+	// cooling-down, never as available.
+	if _, cause, ok := toolCooldownStatus(dir, "codex"); !ok || cause != weaveCooldownRate {
+		t.Fatalf("cause-less record: ok=%v cause=%q, want ok with %q", ok, cause, weaveCooldownRate)
+	}
+
+	// A caused record carries its cause back out.
+	if err := recordToolCooldownCause(dir, "codex", later, weaveCooldownQuota); err != nil {
+		t.Fatalf("record with cause: %v", err)
+	}
+	if _, cause, _ := toolCooldownStatus(dir, "codex"); cause != weaveCooldownQuota {
+		t.Fatalf("cause=%q want %q", cause, weaveCooldownQuota)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -79,6 +80,38 @@ func weaveNormalizePairReview(res weavePairReviewResult, runErr error) weavePair
 // weavePairReviewRunner is replaceable in tests so pull's merge behavior can
 // be exercised without spending an agent invocation.
 var weavePairReviewRunner = runWeavePairReview
+
+// weaveRecordPairThrottle records the REVIEWER's tool on cooldown when a pair
+// invocation died on a provider quota/rate limit. Without this write, `weave
+// fleet` — the check the orchestrator trusts before dispatching — kept saying
+// "available" while every `weave pull --review` burned a workspace pull and a
+// PAIR HARNESS-ERROR (observed live with codex's exhausted quota, 2026-07-21).
+// Best-effort: a cooldown write failure never fails the pull.
+func weaveRecordPairThrottle(queueDir string, pr weavePairReviewResult, now time.Time) {
+	if pr.Verdict != weavePairHarnessError || queueDir == "" {
+		return
+	}
+	tool := pr.ReviewAgent // a binding ("codex:gpt-5.5") or bare tool name
+	if i := strings.IndexByte(tool, ':'); i >= 0 {
+		tool = tool[:i]
+	}
+	tool = normalizeToolName(tool)
+	if tool == "" || tool == "." {
+		return
+	}
+	evidence := pr.Reason + "\n" + pr.Output
+	throttled, signal := weaveClassifyThrottle(tool, pr.ExitCode, evidence)
+	if !throttled {
+		return
+	}
+	reset, ok := parseThrottleReset(evidence, now)
+	if !ok {
+		// No parseable reset time: a short conservative cooldown still stops
+		// the dispatch loop; the next real invocation refreshes the record.
+		reset = now.Add(30 * time.Minute)
+	}
+	_ = recordToolCooldownCause(queueDir, tool, reset, weaveThrottleCause(signal))
+}
 
 func weaveCodingIdentity(it *weaveItem) (identity, tool, model string) {
 	if it == nil {

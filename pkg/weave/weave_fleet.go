@@ -43,9 +43,11 @@ can:
               not installed/not on PATH is reported NOT FOUND, so the
               orchestrator never wastes a launch on it (the failure mode that
               otherwise surfaces only as a 0-second 'weave start' failure).
-  cooldown    a tool that hit a provider/subscription throttle is recorded on
-              cooldown by 'weave start'; fleet shows when it becomes
-              assignable again.
+  cooldown    a tool whose last real invocation hit a provider quota or
+              rate limit (a throttled 'weave start', or a pair review whose
+              reviewer died on its usage cap) is recorded on cooldown; fleet
+              reports it QUOTA-EXHAUSTED or COOLING-DOWN with the reset
+              date+time — never 'available' — until the reset passes.
   capability  with --probe, run '<tool> --version' once (3s timeout) and CACHE
               the result (` + fleetProbeTTL.String() + ` TTL) under the queue dir, so repeated
               preflights are instant.
@@ -212,10 +214,11 @@ type fleetRow struct {
 	// why it may not assign the agent.
 	Reason string `json:"reason,omitempty"`
 
-	Available   bool   `json:"available"` // installed AND not cooling down AND its model is usable
-	Found       bool   `json:"found"`     // binary resolves on PATH
-	Path        string `json:"path,omitempty"`
-	CoolingUnit string `json:"cooling_until,omitempty"` // RFC3339 local
+	Available     bool   `json:"available"` // installed AND not cooling down AND its model is usable
+	Found         bool   `json:"found"`     // binary resolves on PATH
+	Path          string `json:"path,omitempty"`
+	CoolingUnit   string `json:"cooling_until,omitempty"`  // RFC3339 local
+	CooldownCause string `json:"cooldown_cause,omitempty"` // quota-exhausted | cooling-down
 	Probed      bool   `json:"probed,omitempty"`
 	Capable     bool   `json:"capable,omitempty"` // --version exited cleanly
 	Version     string `json:"version,omitempty"`
@@ -227,6 +230,9 @@ type fleetRow struct {
 	// launch is the resolved agent, when the entry named one. Unexported: it
 	// is machinery, not part of the wire shape.
 	launch *weaveAgentLaunch
+	// coolingUntil is CoolingUnit as an instant, kept so the human printer
+	// can show the full local date+time without re-reading the store.
+	coolingUntil time.Time
 }
 
 // fleetProbeEntry is one tool's cached capability probe.
@@ -304,6 +310,9 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 			if r.CoolingUnit != "" {
 				m["cooling_until"] = r.CoolingUnit
 			}
+			if r.CooldownCause != "" {
+				m["cooldown_cause"] = r.CooldownCause
+			}
 			if r.Probed {
 				m["probed"], m["capable"] = true, r.Capable
 				if r.Version != "" {
@@ -329,21 +338,7 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 		if r.Agent != "" {
 			label = r.Agent
 		}
-		switch {
-		case r.Reason != "":
-			fmt.Fprintf(cmd.OutOrStdout(), "%-16s UNAVAILABLE  %s\n", label, r.Reason)
-		case !r.Found:
-			fmt.Fprintf(cmd.OutOrStdout(), "%-16s NOT FOUND on PATH\n", label)
-		case r.CoolingUnit != "":
-			until, _ := toolAvailableAt(dir, r.Tool)
-			fmt.Fprintf(cmd.OutOrStdout(), "%-16s cooling until %s\n", label, until.Local().Format("15:04"))
-		case r.Probed && !r.Capable:
-			fmt.Fprintf(cmd.OutOrStdout(), "%-16s installed but --version failed (%s)\n", label, r.Path)
-		case r.Probed:
-			fmt.Fprintf(cmd.OutOrStdout(), "%-16s available  %s (%s)\n", label, r.Version, r.Path)
-		default:
-			fmt.Fprintf(cmd.OutOrStdout(), "%-16s available  (%s)\n", label, r.Path)
-		}
+		fmt.Fprintln(cmd.OutOrStdout(), r.statusLine(label))
 		if r.Binding != "" {
 			fmt.Fprintf(cmd.OutOrStdout(), "%-16s   binding: %s → %s\n", "", r.Binding, r.Model)
 		}
@@ -362,6 +357,28 @@ func runWeaveFleet(cmd *cobra.Command, fleetCSV string, probe, auth, agents bool
 		}
 	}
 	return ec(emitOK(cmd.OutOrStdout(), mode, "weave fleet", nil))
+}
+
+// statusLine is one row's human report. An active cooldown is a DISTINCT
+// status (QUOTA-EXHAUSTED / COOLING-DOWN) carrying the full local reset
+// date+time — a quota reset can be days out, so a bare clock time (let alone
+// "available") would lie about assignability.
+func (r fleetRow) statusLine(label string) string {
+	switch {
+	case r.Reason != "":
+		return fmt.Sprintf("%-16s UNAVAILABLE  %s", label, r.Reason)
+	case !r.Found:
+		return fmt.Sprintf("%-16s NOT FOUND on PATH", label)
+	case r.CoolingUnit != "":
+		return fmt.Sprintf("%-16s %s until %s — last invocation hit a provider limit; not assignable",
+			label, strings.ToUpper(r.CooldownCause), r.coolingUntil.Local().Format("2006-01-02 15:04"))
+	case r.Probed && !r.Capable:
+		return fmt.Sprintf("%-16s installed but --version failed (%s)", label, r.Path)
+	case r.Probed:
+		return fmt.Sprintf("%-16s available  %s (%s)", label, r.Version, r.Path)
+	default:
+		return fmt.Sprintf("%-16s available  (%s)", label, r.Path)
+	}
 }
 
 // headlessArgs is the flag list an auth probe should launch with: the agent's
@@ -440,11 +457,17 @@ func fleetRowForBinary(dir, tool, binary string, now time.Time, probe bool, cach
 	if p, lookErr := exec.LookPath(binary); lookErr == nil {
 		row.Found, row.Path = true, p
 	}
-	// Cooldown: recorded by a prior throttled `weave start`.
+	// Cooldown: recorded by the last real invocation that hit a provider
+	// quota/rate limit (a throttled `weave start`, or a pair review whose
+	// reviewer died on its usage cap). This is what keeps fleet honest about
+	// usability, not just presence: a member whose last invocation failed on
+	// quota and whose reset has not passed is NEVER "available".
 	cooling := false
-	if until, ok := toolAvailableAt(dir, tool); ok && until.After(now) {
+	if until, cause, ok := toolCooldownStatus(dir, tool); ok && until.After(now) {
 		cooling = true
 		row.CoolingUnit = until.Local().Format(time.RFC3339)
+		row.CooldownCause = cause
+		row.coolingUntil = until
 	}
 	// Capability (opt-in, cached): only meaningful if the binary exists.
 	if probe && row.Found {
