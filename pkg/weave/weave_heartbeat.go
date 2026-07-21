@@ -110,7 +110,7 @@ func runWeaveHeartbeat(cmd *cobra.Command, opts weaveHeartbeatOptions, flags *we
 
 			hasWork := false
 			for _, it := range q.Items {
-				if it.State == "todo" || it.State == "working" {
+				if weaveRunConsumesCapacity(it.State) {
 					hasWork = true
 					break
 				}
