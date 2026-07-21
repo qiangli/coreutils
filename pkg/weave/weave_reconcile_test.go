@@ -255,9 +255,13 @@ func TestWeaveTerminalStateRequiresEvidence(t *testing.T) {
 	}
 }
 
-func TestWeavePullRefusesEmptyAndKilledSubmittedEvidence(t *testing.T) {
+func TestWeavePullRefusesEmptyButMergesSubmittedKilledEvidence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@t")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@t")
 	root, workspace, baseSHA := setupEmptyBranchFixture(t)
 	t.Chdir(root)
 	root, err := weaveRepoRoot(root)
@@ -268,13 +272,29 @@ func TestWeavePullRefusesEmptyAndKilledSubmittedEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	committedWorkspace := filepath.Join(dir, "workspaces", "issue-2")
+	if err := os.MkdirAll(filepath.Dir(committedWorkspace), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(workspace, committedWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	workspace = committedWorkspace
+	gitT(t, workspace, "commit", "--allow-empty", "-qm", "salvaged work")
+	head := gitT(t, workspace, "rev-parse", "HEAD")
+	emptyWorkspace := filepath.Join(dir, "workspaces", "issue-1")
+	if err := os.MkdirAll(emptyWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, emptyWorkspace, "clone", "-q", root, ".")
+	gitT(t, emptyWorkspace, "checkout", "-q", "-b", "agent/weave-issue-empty")
 	q := &weaveQueue{NextID: 3, Root: root, Items: []*weaveItem{
 		{
 			ID:           1,
 			Title:        "empty run",
 			State:        "submitted",
-			Workspace:    workspace,
-			Branch:       "agent/weave-issue-1",
+			Workspace:    emptyWorkspace,
+			Branch:       "agent/weave-issue-empty",
 			BaseSHA:      baseSHA,
 			Head:         baseSHA,
 			CommitsAhead: 0,
@@ -282,12 +302,12 @@ func TestWeavePullRefusesEmptyAndKilledSubmittedEvidence(t *testing.T) {
 		},
 		{
 			ID:           2,
-			Title:        "killed run",
+			Title:        "previously killed submitted run",
 			State:        "submitted",
 			Workspace:    workspace,
 			Branch:       "agent/weave-issue-1",
 			BaseSHA:      baseSHA,
-			Head:         baseSHA,
+			Head:         head,
 			CommitsAhead: 1,
 			KilledBy:     "watchdog",
 			Created:      time.Now().UTC(),
@@ -307,10 +327,74 @@ func TestWeavePullRefusesEmptyAndKilledSubmittedEvidence(t *testing.T) {
 
 	out, code = runWeave(t, "pull", "2")
 	if code != 0 {
-		t.Fatalf("pull killed exit=%d out=%s", code, out)
+		t.Fatalf("pull submitted killed evidence exit=%d out=%s", code, out)
 	}
-	if !strings.Contains(out, "killed") || !strings.Contains(out, "watchdog") {
-		t.Fatalf("pull killed output did not refuse killed evidence:\n%s", out)
+	if !strings.Contains(out, "merged") {
+		t.Fatalf("pull must merge a deliberately submitted item despite preserved killed_by evidence:\n%s", out)
+	}
+	q, err = loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findWeaveItem(q, 2); got == nil || got.State != "done" || got.KilledBy != "watchdog" {
+		t.Fatalf("pull must finish and preserve forensic killed_by evidence: %+v", got)
+	}
+}
+
+func TestWeaveSalvagePromotesKilledWorkThroughPullGate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@t")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@t")
+	root, workspace, baseSHA := setupEmptyBranchFixture(t)
+	t.Chdir(root)
+	root, err := weaveRepoRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	salvageWorkspace := filepath.Join(dir, "workspaces", "issue-1")
+	if err := os.MkdirAll(filepath.Dir(salvageWorkspace), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(workspace, salvageWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	workspace = salvageWorkspace
+	gitT(t, workspace, "commit", "--allow-empty", "-qm", "killed work salvaged")
+	head := gitT(t, workspace, "rev-parse", "HEAD")
+	q := &weaveQueue{NextID: 2, Root: root, Items: []*weaveItem{{
+		ID:           1,
+		Title:        "killed committed run",
+		State:        "killed",
+		Workspace:    workspace,
+		Branch:       "agent/weave-issue-1",
+		BaseSHA:      baseSHA,
+		Head:         head,
+		CommitsAhead: 1,
+		KilledBy:     "watchdog",
+		Created:      time.Now().UTC(),
+	}}}
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWeave(t, "salvage", "1")
+	if code != 0 || !strings.Contains(out, "merged") {
+		t.Fatalf("salvage must merge killed committed work through pull's gate: exit=%d out=%s", code, out)
+	}
+	q, err = loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findWeaveItem(q, 1); got == nil || got.State != "done" || got.KilledBy != "watchdog" {
+		t.Fatalf("salvage must merge and retain forensic killed_by evidence: %+v", got)
 	}
 }
 
@@ -423,7 +507,11 @@ func TestWeaveKilledRunResumeClearsStaleEvidenceAndPullsFreshSubmission(t *testi
 		t.Fatal(err)
 	}
 	q.Items = append(q.Items,
-		&weaveItem{ID: 2, Title: "still killed", State: "submitted", Workspace: workspace, Branch: "agent/weave-issue-2", BaseSHA: baseSHA, Head: submitted.Head, CommitsAhead: 1, KilledBy: "agy", Created: time.Now().UTC()},
+		// Truly killed = state "killed". killed_by alone no longer vetoes a
+		// pull: an item that reached "submitted" did so by a deliberate
+		// transition (salvage, or a fresh resume), and pull honors it. Only
+		// a run still sitting in "killed" is refused here.
+		&weaveItem{ID: 2, Title: "still killed", State: "killed", Workspace: workspace, Branch: "agent/weave-issue-2", BaseSHA: baseSHA, Head: submitted.Head, CommitsAhead: 1, KilledBy: "agy", Created: time.Now().UTC()},
 		&weaveItem{ID: 3, Title: "still empty", State: "submitted", Workspace: workspace, Branch: "agent/weave-issue-3", BaseSHA: baseSHA, Head: baseSHA, CommitsAhead: 0, Created: time.Now().UTC()},
 	)
 	q.NextID = 4

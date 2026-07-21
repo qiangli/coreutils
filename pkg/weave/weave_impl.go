@@ -3871,7 +3871,13 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			if issueSpecified && it.ID != issueID {
 				continue
 			}
-			if it.KilledBy != "" {
+			// killed_by is durable forensic evidence, not a permanent merge
+			// veto. A killed item still needs an explicit `weave salvage` to
+			// reach submitted; once it does, pull must honor that deliberate
+			// state transition and run the ordinary verification/merge gates.
+			// This also repairs items stranded by older salvage versions, which
+			// promoted State but retained KilledBy.
+			if it.KilledBy != "" && it.State != "submitted" {
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "killed",
 					Detail: fmt.Sprintf("run recorded killed_by=%q; inspect or salvage committed work explicitly", it.KilledBy)})
 				continue
