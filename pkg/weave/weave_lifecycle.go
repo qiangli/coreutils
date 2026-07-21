@@ -100,9 +100,13 @@ var weaveLifecycleTransitions = []weaveTransition{
 	{From: "failed", To: "working", By: "weave start --resume"},
 	{From: "failed", To: "done", By: "weave salvage + weave pull"},
 	{From: "failed", To: "abandoned", By: "weave abandon / weave prune --stale"},
+	// --resume needs a workspace to reattach to. Without one the run is still
+	// recoverable, by re-provisioning: `weave start --run N -- <agent>`.
+	{From: "failed", To: "allocated", By: "weave start --run N -- <agent> (no workspace to resume)"},
 	{From: "killed", To: "working", By: "weave start --resume"},
 	{From: "killed", To: "done", By: "weave salvage + weave pull"},
 	{From: "killed", To: "abandoned", By: "weave abandon / weave prune --stale"},
+	{From: "killed", To: "allocated", By: "weave start --run N -- <agent> (no workspace to resume)"},
 }
 
 // weaveLifecycleNeedsSteward lists the non-closed states whose exit is

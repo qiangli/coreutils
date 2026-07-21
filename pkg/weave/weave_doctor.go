@@ -224,6 +224,13 @@ func weaveNextSteps(it *weaveItem) string {
 	if it.Salvageable {
 		return fmt.Sprintf("committed work survives this %s run — `weave salvage %d` then `weave pull`, or `weave abandon %d`", it.State, it.ID, it.ID)
 	}
+	// The declared first edge out of failed/killed is `weave start --resume`,
+	// which is only real while the workspace is. When it is gone the run is
+	// still recoverable — but by re-provisioning, not reattaching — so derive
+	// the step from the ACTUAL on-disk state rather than the table's default.
+	if (it.State == "failed" || it.State == "killed") && !weaveWorkspaceLive(it) {
+		return fmt.Sprintf("%s -> allocated (weave start --run %d -- <agent>) — no workspace remains to resume", it.State, it.ID)
+	}
 	var steps []string
 	for _, t := range weaveLifecycleTransitionsFrom(it.State) {
 		steps = append(steps, fmt.Sprintf("%s -> %s (%s)", t.From, t.To, t.By))
