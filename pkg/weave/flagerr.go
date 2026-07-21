@@ -94,6 +94,11 @@ func unknownFlagName(msg string) (string, bool) {
 	return name, name != ""
 }
 
+// prefixSlack bounds the prefix/extension shortcut in nearestFlag: how
+// many characters a name may differ by and still count as a typo of a
+// real flag rather than a distinct option.
+const prefixSlack = 2
+
 // nearestFlag picks the closest valid long flag (local + inherited) to
 // the misspelled one: an edit distance within a third of the name's
 // length, ties broken alphabetically for determinism.
