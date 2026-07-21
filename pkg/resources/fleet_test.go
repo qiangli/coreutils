@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCanonicalProvider(t *testing.T) {
@@ -78,5 +79,51 @@ func TestCollectFleetResourcesSchema(t *testing.T) {
 	tableStr := FormatTable(fr)
 	if !strings.Contains(tableStr, "PROVIDER") || !strings.Contains(tableStr, "BAND") {
 		t.Errorf("FormatTable output missing expected header columns:\n%s", tableStr)
+	}
+}
+
+func TestToolOnlyRunIsAttributedToDeterministicCatalogAgent(t *testing.T) {
+	agents := []BoardAgent{
+		{Name: "claude-sonnet5", Tool: "claude", Model: "sonnet5", Band: 2, Found: true, Available: true},
+		{Name: "claude-opus4.8", Tool: "claude", Model: "opus4.8", Band: 3, Found: true, Available: true},
+		{Name: "claude-haiku4.5", Tool: "claude", Model: "haiku4.5", Band: 1, Found: true, Available: true},
+		{Name: "claude-fable5", Tool: "claude", Model: "fable5", Band: 4, Found: true, Available: true},
+	}
+	// This is the #116 record shape: the live identity has only a tool;
+	// model and agent are absent (and the separately persisted owner is not an
+	// agent identity). The catalog order rule selects claude-fable5.
+	runs := []BoardRun{{State: "working", Tool: "claude"}}
+
+	fr, err := CollectFleetResourcesFromBoard(context.Background(), time.Now(), agents, runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fr.Totals.Busy != 1 || fr.Totals.Idle != 3 || fr.Totals.Unattributed != 0 {
+		t.Fatalf("totals = %+v, want 1 busy, 3 idle, 0 unattributed", fr.Totals)
+	}
+	for _, group := range fr.Groups {
+		if group.Provider == "Anthropic" && group.Band == "L4" {
+			if group.Busy != 1 {
+				t.Fatalf("Anthropic L4 busy = %d, want 1", group.Busy)
+			}
+			return
+		}
+	}
+	t.Fatal("Anthropic L4 group not found")
+}
+
+func TestUnknownToolRunIsVisibleAsUnattributed(t *testing.T) {
+	agents := []BoardAgent{{Name: "claude-fable5", Tool: "claude", Model: "fable5", Band: 4, Found: true, Available: true}}
+	runs := []BoardRun{{State: "allocated", Tool: "not-in-the-catalog"}}
+
+	fr, err := CollectFleetResourcesFromBoard(context.Background(), time.Now(), agents, runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fr.Totals.Busy != 0 || fr.Totals.Unattributed != 1 {
+		t.Fatalf("totals = %+v, want 0 busy and 1 unattributed", fr.Totals)
+	}
+	if table := FormatTable(fr); !strings.Contains(table, "UNATTRIBUTED") || !strings.Contains(table, "Totals") {
+		t.Fatalf("unattributed run is not visible in table:\n%s", table)
 	}
 }

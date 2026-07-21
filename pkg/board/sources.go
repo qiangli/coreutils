@@ -98,7 +98,9 @@ func (weaveSource) Load(ctx context.Context, b *Board, o Options) error {
 		}
 		for _, x := range q.Items {
 			finding := findings[x.ID]
-			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Agent: x.Owner, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: finding.AgeSeconds, Stale: finding.Stale}
+			// Owner is the conductor principal and may be stale; it is not the
+			// launched agent. Agent identity comes only from launch_spec.
+			r := Run{ID: x.ID, Label: x.Title, Repo: q.Root, State: x.State, Tool: x.Tool, Points: x.Points, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Blocked: x.Blocked, Salvageable: x.Salvageable, UnmergedCommits: x.UnmergedCommits, AgeSeconds: finding.AgeSeconds, Stale: finding.Stale}
 			if x.Launch != nil {
 				if x.Launch.Agent != "" {
 					r.Agent = x.Launch.Agent

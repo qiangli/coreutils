@@ -56,6 +56,10 @@ type FleetTotals struct {
 	Tokens       *int64   `json:"tokens,omitempty"`
 	CostUSD      *float64 `json:"cost_usd,omitempty"`
 	MeterPresent bool     `json:"meter_present"`
+	// Unattributed is the number of live runs whose agent, model, and tool do
+	// not resolve to any catalog agent. It is separate from Busy because those
+	// runs consume no identifiable catalog slot, but must remain visible.
+	Unattributed int `json:"unattributed"`
 }
 
 // FleetResources represents the complete `bashy resources fleet` envelope.
@@ -80,6 +84,12 @@ type BoardAgent struct {
 
 type BoardRun struct {
 	State string
+	Tool  string
+	Agent string
+	Model string
+}
+
+type busyRun struct {
 	Tool  string
 	Agent string
 	Model string
@@ -148,6 +158,62 @@ type agentRecord struct {
 	Aliases     []string
 }
 
+func attributeBusyRuns(records []agentRecord, runs []busyRun) (map[string]bool, int) {
+	busy := make(map[string]bool)
+	unattributed := 0
+
+	matching := func(run busyRun, mode string) []int {
+		var matches []int
+		for i, rec := range records {
+			matched := false
+			switch mode {
+			case "agent":
+				if run.Agent != "" {
+					for _, name := range append([]string{rec.Name}, rec.Aliases...) {
+						if normStr(name) == normStr(run.Agent) {
+							matched = true
+							break
+						}
+					}
+				}
+			case "model":
+				matched = run.Model != "" && normStr(rec.Model) == normStr(run.Model)
+			case "tool":
+				matched = run.Tool != "" && normStr(rec.Tool) == normStr(run.Tool)
+			}
+			if matched {
+				matches = append(matches, i)
+			}
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			return records[matches[i]].Name < records[matches[j]].Name
+		})
+		return matches
+	}
+
+	for _, run := range runs {
+		var candidates []int
+		for _, mode := range []string{"agent", "model", "tool"} {
+			if candidates = matching(run, mode); len(candidates) > 0 {
+				break
+			}
+		}
+		if len(candidates) == 0 {
+			unattributed++
+			continue
+		}
+		chosen := candidates[0]
+		for _, candidate := range candidates {
+			if !busy[records[candidate].Name] {
+				chosen = candidate
+				break
+			}
+		}
+		busy[records[chosen].Name] = true
+	}
+	return busy, unattributed
+}
+
 // CollectFleetResourcesFromBoard builds FleetResources from provided board agents/runs,
 // or queries the live catalog and weave state if nil.
 func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents []BoardAgent, bRuns []BoardRun) (*FleetResources, error) {
@@ -157,16 +223,7 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 	cat := fleet.New()
 
 	availMap := map[string]liveAvailInfo{}
-	busyMap := map[string]int{}
-
-	markBusy := func(keys ...string) {
-		for _, k := range keys {
-			if k != "" {
-				busyMap[k]++
-				busyMap[normStr(k)]++
-			}
-		}
-	}
+	var busyRuns []busyRun
 
 	var records []agentRecord
 
@@ -183,10 +240,6 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 					return ""
 				}(),
 			}
-			if a.State == "working" {
-				markBusy(a.Name, a.Tool, a.Model)
-			}
-
 			// Try resolving from catalog for richer metadata
 			rec := agentRecord{
 				Name:  a.Name,
@@ -209,7 +262,16 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 		}
 		for _, r := range bRuns {
 			if r.State == "working" || r.State == "allocated" {
-				markBusy(r.Agent, r.Tool, r.Model)
+				busyRuns = append(busyRuns, busyRun{Agent: r.Agent, Tool: r.Tool, Model: r.Model})
+			}
+		}
+		// Runs are authoritative when supplied. Agent state is retained as a
+		// fallback for callers that have an agent snapshot but no run records.
+		if bRuns == nil {
+			for _, a := range bAgents {
+				if a.State == "working" {
+					busyRuns = append(busyRuns, busyRun{Agent: a.Name, Tool: a.Tool, Model: a.Model})
+				}
 			}
 		}
 	} else {
@@ -248,10 +310,9 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 			var res struct {
 				Queues []struct {
 					Items []struct {
-						State string `json:"state"`
-						Tool  string `json:"tool"`
-						Owner string `json:"owner"`
-						Model string `json:"model"`
+						State  string `json:"state"`
+						Tool   string `json:"tool"`
+						Model  string `json:"model"`
 						Launch *struct {
 							Agent string `json:"agent"`
 							Model string `json:"model"`
@@ -263,7 +324,9 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 				for _, q := range res.Queues {
 					for _, x := range q.Items {
 						if x.State == "working" || x.State == "allocated" {
-							agentName := x.Owner
+							// Owner is the conductor principal, not the launched
+							// agent. Only launch_spec carries agent identity.
+							agentName := ""
 							modelName := x.Model
 							if x.Launch != nil {
 								if x.Launch.Agent != "" {
@@ -273,7 +336,7 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 									modelName = x.Launch.Model
 								}
 							}
-							markBusy(agentName, x.Tool, modelName)
+							busyRuns = append(busyRuns, busyRun{Agent: agentName, Tool: x.Tool, Model: modelName})
 						}
 					}
 				}
@@ -302,6 +365,15 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 			})
 		}
 	}
+
+	// Attribute each live run to one catalog agent before grouping. Explicit
+	// agent/model identity wins. A tool-only record is assigned to the
+	// lexicographically first not-yet-busy agent bound to that tool (the same
+	// merged fleet catalog used by `weave fleet --agents`); if all are busy,
+	// the first binding is reused. This stable rule makes ambiguous bare tools
+	// such as claude observable without pretending that weave recorded a model.
+	// A tool with no catalog binding is counted separately as unattributed.
+	busyRecords, unattributed := attributeBusyRuns(records, busyRuns)
 
 	// OTel metric store
 	otelClient := otelquery.NewClient("")
@@ -395,19 +467,7 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 			isAvail = isFound
 		}
 
-		// Check busy state by agent name, aliases, or model name
-		isBusy := false
-		for _, name := range names {
-			if busyMap[name] > 0 || busyMap[normStr(name)] > 0 {
-				isBusy = true
-				break
-			}
-		}
-		if !isBusy {
-			if busyMap[a.Model] > 0 || busyMap[normStr(a.Model)] > 0 {
-				isBusy = true
-			}
-		}
+		isBusy := busyRecords[a.Name]
 
 		grp.Total++
 		switch {
@@ -470,6 +530,7 @@ func CollectFleetResourcesFromBoard(ctx context.Context, at time.Time, bAgents [
 	var resultGroups []FleetGroup
 	var totals FleetTotals
 	totals.MeterPresent = meterPresent
+	totals.Unattributed = unattributed
 
 	for _, k := range groupKeys {
 		g := *groupsMap[k]
@@ -526,7 +587,7 @@ func runCobraJSON(args ...string) ([]byte, error) {
 func FormatTable(fr *FleetResources) string {
 	var out bytes.Buffer
 	w := tabwriter.NewWriter(&out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tBAND\tTOTAL\tBUSY\tIDLE\tCOOLING\tUNAVAIL\tSUB\tAPI\tTOKENS\tCOST")
+	fmt.Fprintln(w, "PROVIDER\tBAND\tTOTAL\tBUSY\tIDLE\tCOOLING\tUNAVAIL\tUNATTRIBUTED\tSUB\tAPI\tTOKENS\tCOST")
 
 	for _, g := range fr.Groups {
 		tokStr, costStr := "N/A", "N/A"
@@ -534,7 +595,7 @@ func FormatTable(fr *FleetResources) string {
 			tokStr = formatTokens(*g.Tokens)
 			costStr = fmt.Sprintf("$%.4f", *g.CostUSD)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%d\t0\t%d\t%d\t%s\t%s\n",
 			g.Provider, g.Band, g.Total, g.Busy, g.Idle, g.Cooling, g.Unavailable,
 			g.Subscription, g.APIKey, tokStr, costStr)
 	}
@@ -544,9 +605,9 @@ func FormatTable(fr *FleetResources) string {
 		tokTot = formatTokens(*fr.Totals.Tokens)
 		costTot = fmt.Sprintf("$%.4f", *fr.Totals.CostUSD)
 	}
-	fmt.Fprintf(w, "Totals\t\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
+	fmt.Fprintf(w, "Totals\t\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
 		fr.Totals.Total, fr.Totals.Busy, fr.Totals.Idle, fr.Totals.Cooling, fr.Totals.Unavailable,
-		fr.Totals.Subscription, fr.Totals.APIKey, tokTot, costTot)
+		fr.Totals.Unattributed, fr.Totals.Subscription, fr.Totals.APIKey, tokTot, costTot)
 
 	_ = w.Flush()
 	return out.String()

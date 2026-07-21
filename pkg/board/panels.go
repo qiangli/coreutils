@@ -204,4 +204,3 @@ func fleetPanel() Panel {
 		return v
 	}}
 }
-
