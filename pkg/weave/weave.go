@@ -36,12 +36,13 @@ func newWeaveCmd() *cobra.Command {
 		// usage dump would double-print on top of the envelope, so we
 		// silence both at the parent level — subverbs inherit. This
 		// also silences cobra's own structural errors (unknown
-		// subcommand, bad flag), which never reach a subverb and so
-		// never get printed anywhere — a host driving this command
-		// (e.g. bashy's `case "weave"` dispatch) MUST check the error
-		// Execute() returns with IsStructuredExit/ExitCode (export.go)
-		// and print it itself when it is not a structured exit, or a
-		// typo'd subcommand silently does nothing.
+		// subcommand, bad flag), which never reach a subverb — so weave
+		// reports those itself rather than leaving them to the host:
+		// flags via SetFlagErrorFunc below (flagerr.go), positional
+		// args via installArgsErrorReporting (argerr.go). Both emit an
+		// envelope on this command's stderr and return a structured
+		// exit, so a host that prints only when IsStructuredExit is
+		// false (export.go) stays silent and never double-prints.
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: `weave is the per-repo EXECUTION engine: a local, filesystem-based
@@ -119,6 +120,16 @@ Common-case usage:
 	// cross-repo conductor-coordination verbs (cloudbox shared sessions
 	// + conduct) moved to `bashy sprint` (the plan/handoff layer).
 	cmd.AddCommand(newWeaveBatonCmd())
+
+	// LAST, after the whole tree exists: give positional arguments the
+	// same self-reporting treatment SetFlagErrorFunc gives flags.
+	// Unlike FlagErrorFunc there is no inheritance to lean on — cobra has
+	// no ArgsErrorFunc — so this walks every command and wraps its Args
+	// validator in place. Covers the unknown subcommand (`weave bogus`,
+	// and `weave baton bogus`, which cobra does not even check) and the
+	// missing operand (`weave status`), both of which used to exit
+	// non-zero with ZERO output. See argerr.go.
+	installArgsErrorReporting(cmd)
 
 	return cmd
 }
