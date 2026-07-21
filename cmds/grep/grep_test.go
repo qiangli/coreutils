@@ -486,3 +486,22 @@ func TestGrepOnlyMatching(t *testing.T) {
 		}
 	}
 }
+
+func TestGrepOnlyMatchingUsesLeftmostLongest(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "basic alternation", args: []string{"-o", `a\|ab`}},
+		{name: "extended alternation", args: []string{"-o", "-E", `a|ab`}},
+		{name: "separate expressions", args: []string{"-o", "-e", "a", "-e", "ab"}},
+		{name: "fixed expressions", args: []string{"-o", "-F", "-e", "a", "-e", "ab"}},
+	}
+	for _, c := range cases {
+		out, errOut, code := runGrep(t, "", "ab ab\n", c.args...)
+		if out != "ab\nab\n" || errOut != "" || code != 0 {
+			t.Errorf("%s: grep %v = (%q, %q, %d), want (%q, %q, 0)",
+				c.name, c.args, out, errOut, code, "ab\nab\n", "")
+		}
+	}
+}

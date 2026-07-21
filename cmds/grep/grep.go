@@ -24,7 +24,6 @@ package grepcmd
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -66,7 +65,6 @@ type grepper struct {
 	showName     bool
 	maxCount     int // -1 = unlimited
 	onlyMatching bool
-	jsonOut      bool // --json: NDJSON one object per match
 
 	include    []string
 	exclude    []string
@@ -112,7 +110,6 @@ func run(rc *tool.RunContext, args []string) int {
 	exclude := fs.StringArray("exclude", nil, "skip files whose base name matches GLOB")
 	excludeDir := fs.StringArray("exclude-dir", nil, "skip directories whose base name matches GLOB")
 	agentic := fs.Bool("agentic", false, "opt-in: skip .gitignore'd and noise paths (node_modules, .git, vendor, …) during recursive search")
-	jsonOut := fs.Bool("json", false, "opt-in: emit one NDJSON object per match ({\"file\",\"line\",\"text\"}) instead of text — composable with jq")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -173,9 +170,10 @@ func run(rc *tool.RunContext, args []string) int {
 		split = append(split, strings.Split(p, "\n")...)
 	}
 
-	// -w is the only mode that reads a match's extent rather than just its
-	// existence, so it is the only one that needs POSIX leftmost-longest.
-	re, err := compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase, *word)
+	// -w and -o read a match's extent rather than just its existence, so they
+	// need POSIX leftmost-longest matching. In particular, -o must print "ab"
+	// rather than "a" when equally-leftmost alternatives are "a" and "ab".
+	re, err := compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase, *word || *onlyMatching)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
 		return 2
@@ -207,15 +205,12 @@ func run(rc *tool.RunContext, args []string) int {
 		exclude:      *exclude,
 		excludeDir:   *excludeDir,
 		onlyMatching: *onlyMatching,
-		jsonOut:      *jsonOut,
 	}
 	// Literal fast path: a single metachar-free pattern is plain
 	// substring work — searchStreamLit skips RE2 and per-line string
 	// allocation. Anything it can't serve byte-identically (-i, -w,
 	// multiple patterns, real regex) keeps the RE2 path unchanged.
-	// --json routes every match through printLine (the structured emitter),
-	// so it never takes the byte-oriented literal path.
-	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok && !g.jsonOut {
+	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok {
 		g.lit, g.useLit = lit, true
 	}
 	// --agentic (opt-in): a nil matcher when off skips nothing, so default
@@ -332,9 +327,10 @@ func (m multiMatcher) FindStringIndex(s string) []int {
 // longest selects POSIX leftmost-longest matching. It is off by default: a
 // leftmost-first and a leftmost-longest engine always agree on whether a line
 // matches, so grep's usual boolean question is unaffected and RE2 keeps its
-// faster lanes. Callers that read a match's extent (-w) pass true, without
-// which `grep -w 'a\|ab'` would report the "a" alternative, fail the
-// word-boundary test, and wrongly reject the line "ab".
+// faster lanes. Callers that read a match's extent (-w and -o) pass true,
+// without which `grep -w 'a\|ab'` would report the "a" alternative, fail
+// the word-boundary test, and wrongly reject the line "ab"; -o would likewise
+// print the shorter alternative.
 func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase, longest bool) (grepMatcher, error) {
 	if len(pats) == 0 {
 		return noMatcher{}, nil
@@ -736,16 +732,6 @@ func (g *grepper) printMatches(name string, lineNo int, line string) {
 }
 
 func (g *grepper) printLine(name string, n int, line string) {
-	if g.jsonOut {
-		rec, _ := json.Marshal(struct {
-			File string `json:"file"`
-			Line int    `json:"line"`
-			Text string `json:"text"`
-		}{File: name, Line: n, Text: line})
-		g.rc.Out.Write(rec)
-		io.WriteString(g.rc.Out, "\n")
-		return
-	}
 	var b strings.Builder
 	if g.showName {
 		b.WriteString(name)
