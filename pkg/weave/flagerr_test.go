@@ -151,6 +151,23 @@ func TestMissingFlagArgumentJSONDoesNotSuggestSameFlag(t *testing.T) {
 	}
 }
 
+func TestUnknownFlagLongPrefixDoesNotSuggestShorterDangerousFlag(t *testing.T) {
+	t.Setenv("BASHY_AGENTIC", "")
+	_, stderr, code, _ := runWeaveStreams(t, "abandon", "1", "--force-delete")
+	if code != weavecli.ExitInvalidArg {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, weavecli.ExitInvalidArg, stderr)
+	}
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatalf("stderr must not be empty for an unknown flag")
+	}
+	if !strings.Contains(stderr, "unknown flag: --force-delete") {
+		t.Fatalf("stderr should name --force-delete as the unknown flag, got %q", stderr)
+	}
+	if strings.Contains(stderr, "did you mean --force?") {
+		t.Fatalf("stderr suggested a shorter destructive flag for a distinct unknown option, got %q", stderr)
+	}
+}
+
 func TestNearestFlagSuggestion(t *testing.T) {
 	cmd := newWeaveBatonWriteCmd()
 	for _, tc := range []struct {

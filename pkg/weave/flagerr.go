@@ -120,11 +120,21 @@ func nearestFlag(cmd *cobra.Command, name string) (string, bool) {
 	limit := len(name)/3 + 1
 	best, bestD := "", limit+1
 	for _, c := range candidates {
-		// A misspelling that is a prefix/extension of a real flag
-		// (--note vs --notes) is the common conductor typo: treat it as
-		// distance 1 regardless of length.
+		// A misspelling that is a prefix/extension of a real flag by a
+		// character or two (--note vs --notes) is the common conductor
+		// typo: treat it as distance 1 even when the names are short
+		// enough that the ratio limit would reject it.
+		//
+		// Bounded by prefixSlack ON PURPOSE. An unbounded prefix rule
+		// collapsed EVERY longer option onto its shorter namesake, and
+		// the dangerous direction is the shorter one: `weave abandon
+		// --force-delete` answered "did you mean --force?" — offering a
+		// DESTRUCTIVE flag as the correction for an option the user
+		// never asked for. A long extension is a different option, not a
+		// typo; it gets no suggestion at all.
 		d := editDistance(name, c)
-		if strings.HasPrefix(c, name) || strings.HasPrefix(name, c) {
+		if delta := len(name) - len(c); delta <= prefixSlack && -delta <= prefixSlack &&
+			(strings.HasPrefix(c, name) || strings.HasPrefix(name, c)) {
 			d = 1
 		}
 		if d <= limit && d < bestD {
