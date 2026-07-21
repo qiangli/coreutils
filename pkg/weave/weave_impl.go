@@ -377,6 +377,17 @@ func isPrunableState(s string) bool {
 	return false
 }
 
+// weaveRunConsumesCapacity reports whether a queue item still occupies an
+// active execution slot. Finalizing items remain live until the conductor
+// records the measured terminal state, so they still count here.
+func weaveRunConsumesCapacity(s string) bool {
+	switch s {
+	case "todo", "allocated", "working", "finalizing":
+		return true
+	}
+	return false
+}
+
 func weaveRepoRoot(cwd string) (string, error) {
 	out, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -5542,30 +5553,21 @@ func runWeaveWait(cmd *cobra.Command, issueID int64, all bool, timeout time.Dura
 				}))
 			}
 		} else {
-			// --all: ready when every non-terminal item is gone.
-			// We count both `todo` and `working` as pending so the
-			// orchestrator pattern "add N issues → background N
-			// `weave start` calls → `weave wait --all`" doesn't
-			// race: the wait survives until each todo has been
-			// claimed (transitioned through working) and reached
-			// a terminal state. If the user has unintended todos
-			// that no `start` will ever claim, wait blocks until
-			// --timeout — surfacing the gap explicitly rather
-			// than silently returning early.
+			// --all: ready only when every non-terminal item is gone.
+			// A finalizing run is still in flight until the conductor
+			// records its terminal evidence, so it must keep the wait
+			// blocked just like todo/allocated/working items do.
 			var ready []readyItem
 			pending := 0
 			for _, it := range q.Items {
-				switch it.State {
-				case "todo", "working":
+				if !isTerminalState(it.State) {
 					pending++
 					if broker && it.State == "working" {
 						runGateBrokerForItem(brokers, cmd.ErrOrStderr(), dir, it, time.Now())
 					}
-				default:
-					if isTerminalState(it.State) {
-						ready = append(ready, readyItem{ID: it.ID, State: it.State, ExitCode: it.ExitCode, LogPath: it.LogPath})
-					}
+					continue
 				}
+				ready = append(ready, readyItem{ID: it.ID, State: it.State, ExitCode: it.ExitCode, LogPath: it.LogPath})
 			}
 			if pending == 0 {
 				return ec(emitOK(cmd.OutOrStdout(), mode, "weave wait", map[string]any{

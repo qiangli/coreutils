@@ -865,7 +865,7 @@ func newWeaveWaitCmd() *cobra.Command {
 		Short: "Block until issue(s) reach a terminal state",
 		Long: `wait polls the queue every 1s until the target reaches a terminal
 state (submitted, failed, done, or abandoned). Use --issue N to wait
-on one issue or --all to wait until no working items remain.
+on one issue or --all to wait until no non-terminal items remain.
 
 Pairs with --detach-style backgrounding (` + "`bashy weave start ... &`" + `).
 A typical orchestrator flow:

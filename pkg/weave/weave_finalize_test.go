@@ -9,6 +9,51 @@ import (
 	"time"
 )
 
+func TestWeaveRunConsumesCapacity(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+		want  bool
+	}{
+		{name: "todo", state: "todo", want: true},
+		{name: "allocated", state: "allocated", want: true},
+		{name: "working", state: "working", want: true},
+		{name: "finalizing", state: "finalizing", want: true},
+		{name: "paused", state: "paused", want: false},
+		{name: "submitted", state: "submitted", want: false},
+		{name: "failed", state: "failed", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := weaveRunConsumesCapacity(tt.state); got != tt.want {
+				t.Fatalf("weaveRunConsumesCapacity(%q) = %v, want %v", tt.state, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWeaveWaitAllTreatsFinalizingAsInFlight(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	dir, _ := weaveQueueDir(root)
+	if err := saveWeaveQueue(dir, &weaveQueue{Root: root, Items: []*weaveItem{{
+		ID:         1,
+		Title:      "terminal evidence still pending",
+		State:      "finalizing",
+		Completion: "conductor-finalizing-observed-idle",
+		Workspace:  root + "/workspace",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runWeave(t, "wait", "--all", "--timeout", "100ms", "--json")
+	if code == 0 {
+		t.Fatalf("wait --all returned success for a finalizing run:\n%s", out)
+	}
+	if !strings.Contains(out, "timeout after 100ms") {
+		t.Fatalf("wait --all did not time out on a finalizing run:\n%s", out)
+	}
+}
+
 // An interactive TUI can report Done and return to its prompt while its process
 // remains open.  A conductor may explicitly attest that idle state, but weave
 // must derive the terminal result from the workspace branch, never that prose.
