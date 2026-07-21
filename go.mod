@@ -42,6 +42,7 @@ require (
 	go.podman.io/common v0.67.2-0.20260423135811-cbaa5f41e643
 	go.podman.io/podman/v6 v6.0.0-20260424181651-a8c36318565d
 	golang.org/x/crypto v0.51.0
+	golang.org/x/net v0.55.0
 	golang.org/x/sys v0.46.0
 	golang.org/x/term v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -269,7 +270,6 @@ require (
 	golang.org/x/arch v0.20.0 // indirect
 	golang.org/x/image v0.25.0 // indirect
 	golang.org/x/mod v0.35.0 // indirect
-	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
