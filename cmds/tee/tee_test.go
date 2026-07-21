@@ -87,7 +87,7 @@ func TestTeeAppend(t *testing.T) {
 }
 
 func TestTeeIgnoreInterruptsAccepted(t *testing.T) {
-	// -i is accepted (and a documented no-op in this in-process userland)
+	// -i is accepted (and now actually ignores interrupts during the run)
 	dir := t.TempDir()
 	out, errb, code := runToolDir(t, dir, "x\n", "-i", "f")
 	if out != "x\n" || errb != "" || code != 0 {

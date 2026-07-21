@@ -8,9 +8,7 @@
 // instead of aborting the whole copy. POSIX default behavior makes
 // standard-output write errors fatal and silent, while GNU
 // --output-error modes (and the -p shorthand) diagnose or exit on
-// non-pipe errors and ignore pipe errors. -i is accepted as a
-// documented no-op (no process signals exist in this in-process
-// userland).
+// non-pipe errors and ignore pipe errors. -i ignores interrupt signals.
 package teecmd
 
 import (
@@ -18,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -36,7 +35,7 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	appendMode := fs.BoolP("append", "a", false, "append to the given FILEs, do not overwrite")
-	fs.BoolP("ignore-interrupts", "i", false, "ignore interrupt signals")
+	ignoreInterrupts := fs.BoolP("ignore-interrupts", "i", false, "ignore interrupt signals")
 	ignorePipeErrors := fs.BoolP("ignore-pipe-errors", "p", false, "diagnose errors writing to non pipe outputs")
 	outputError := fs.String("output-error", "", "set behavior on write error: warn, warn-nopipe, exit, or exit-nopipe")
 	fs.Lookup("output-error").NoOptDefVal = "warn-nopipe"
@@ -44,9 +43,12 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	// -i is accepted for upstream compatibility but has no effect here:
-	// tools run in-process and never receive a SIGINT of their own to
-	// ignore, which matches the documented effect for this embedding.
+	if *ignoreInterrupts {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		defer signal.Stop(c)
+	}
+
 	if *ignorePipeErrors && !fs.Changed("output-error") {
 		*outputError = "warn-nopipe"
 	}
