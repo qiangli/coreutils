@@ -161,6 +161,7 @@ func TestNearestFlagSuggestion(t *testing.T) {
 		{"noets", "notes", true},
 		{"stag", "stage", true},
 		{"zzzzzzzzzzzzz", "", false},
+		{"forcefully", "", false},
 	} {
 		got, ok := nearestFlag(cmd, tc.in)
 		if ok != tc.ok || got != tc.want {
