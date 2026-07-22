@@ -1,0 +1,107 @@
+package telemetry
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// sanitizeField exists so LogsQL can FILTER on a field. "exit.code" parses as a
+// field access in a query, so a dotted key is unqueryable — which would reduce
+// the otel verbs to substring matching on the message.
+func TestSanitizeFieldMakesKeysQueryable(t *testing.T) {
+	for in, want := range map[string]string{
+		"cmd.exit_code": "cmd_exit_code",
+		"service.name":  "service_name",
+		"a.b.c":         "a_b_c",
+		"already_plain": "already_plain",
+	} {
+		if got := sanitizeField(in); got != want {
+			t.Errorf("sanitizeField(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestIsFileExporter(t *testing.T) {
+	for _, tc := range []struct {
+		val  string
+		want bool
+	}{
+		{"file", true},
+		{"console", true}, // synonym: never write spans to stdout, see spool.go
+		{"FILE", true},
+		{" file ", true},
+		{"otlp", false},
+		{"none", false},
+		{"", false},
+	} {
+		t.Setenv("OTEL_TRACES_EXPORTER", tc.val)
+		if got := isFileExporter(); got != tc.want {
+			t.Errorf("OTEL_TRACES_EXPORTER=%q -> %v, want %v", tc.val, got, tc.want)
+		}
+	}
+}
+
+// The spool must be append-only: several processes share one file, and a
+// truncating open would silently discard another process's spans.
+func TestSpoolExporterAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "spans.jsonl")
+	if err := os.WriteFile(filepath.Dir(path)+"x", nil, 0o644); err == nil {
+		_ = os.Remove(filepath.Dir(path) + "x")
+	}
+	e1, err := newSpoolExporter(path) // also proves parent dirs are created
+	if err != nil {
+		t.Fatalf("newSpoolExporter: %v", err)
+	}
+	if err := e1.ExportSpans(context.Background(), nil); err != nil {
+		t.Errorf("empty batch should be a no-op, got %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{\"_msg\":\"pre-existing\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = e1.Shutdown(context.Background())
+
+	e2, err := newSpoolExporter(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer e2.Shutdown(context.Background())
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "pre-existing") {
+		t.Error("reopening the spool truncated it; it must append")
+	}
+}
+
+// Shutdown must tolerate being called twice — the SDK may shut an exporter down
+// on a path that already closed it, and a panic there would take the shell out.
+func TestSpoolExporterShutdownIdempotent(t *testing.T) {
+	e, err := newSpoolExporter(filepath.Join(t.TempDir(), "s.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Shutdown(context.Background()); err != nil {
+		t.Errorf("first shutdown: %v", err)
+	}
+	if err := e.Shutdown(context.Background()); err != nil {
+		t.Errorf("second shutdown must be a no-op, got %v", err)
+	}
+}
+
+// Records must be one JSON object per line: that is exactly what VictoriaLogs
+// /insert/jsonline consumes, and it is why no translation step is needed.
+func TestSpoolPathHonoursOverride(t *testing.T) {
+	t.Setenv("BASHY_OTEL_SPOOL", "/tmp/custom-spool.jsonl")
+	if got := SpoolPath(); got != "/tmp/custom-spool.jsonl" {
+		t.Errorf("SpoolPath()=%q, want the override", got)
+	}
+	t.Setenv("BASHY_OTEL_SPOOL", "")
+	if got := SpoolPath(); !strings.HasSuffix(got, filepath.Join("otel", "spool", "spans.jsonl")) {
+		t.Errorf("default SpoolPath()=%q, want it beside the stack's data", got)
+	}
+	var probe map[string]any
+	if err := json.Unmarshal([]byte(`{"_msg":"x","cmd_exit_code":"127"}`), &probe); err != nil {
+		t.Fatalf("record shape must be plain JSON: %v", err)
+	}
+}

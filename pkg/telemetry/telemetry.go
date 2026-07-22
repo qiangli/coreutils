@@ -98,6 +98,47 @@ func Init(ctx context.Context) (shutdown func(context.Context) error) {
 			propagation.Baggage{},
 		))
 
+		// File sink, chosen by the standard OTEL_TRACES_EXPORTER=file.
+		//
+		// Checked BEFORE the endpoint gate because it deliberately needs no
+		// endpoint: the point is telemetry that works with nothing running.
+		// An OTLP endpoint requires a collector to be up at the instant a span
+		// is produced — anything running before it, or while it is down, or on
+		// a host that never started it, exports into a closed port and is lost
+		// silently. Spooling to a file removes that precondition; the stack
+		// becomes an optional upgrade for retention and alerting.
+		if isFileExporter() {
+			spoolPath := SpoolPath()
+			sexp, serr := newSpoolExporter(spoolPath)
+			if serr != nil {
+				os.Stderr.WriteString("bashy: telemetry disabled — spool: " + serr.Error() + "\n")
+				return
+			}
+			svc := os.Getenv("OTEL_SERVICE_NAME")
+			if svc == "" {
+				svc = ServiceName
+			}
+			res, _ := resource.Merge(resource.Default(), resource.NewWithAttributes(
+				semconv.SchemaURL,
+				semconv.ServiceName(svc),
+			))
+			provider = sdktrace.NewTracerProvider(
+				sdktrace.WithBatcher(sexp),
+				sdktrace.WithResource(res),
+			)
+			otel.SetTracerProvider(provider)
+			enabled = true
+			if os.Getenv("BASHY_TELEMETRY_QUIET") == "" {
+				os.Stderr.WriteString("bashy: telemetry on → " + spoolPath + " (service=" + svc + ")\n")
+			}
+			shutdown = func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				defer cancel()
+				return provider.Shutdown(ctx)
+			}
+			return
+		}
+
 		endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 		if endpoint == "" {
 			return // no-op mode. Deliberately, and completely.
