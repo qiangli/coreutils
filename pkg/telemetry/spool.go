@@ -107,7 +107,11 @@ func (e *spoolExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnly
 		b.Write(line)
 		b.WriteByte('\n')
 	}
+	if e.f == nil {
+		return nil // rotation failed to reopen; drop rather than crash the host process
+	}
 	_, err := e.f.WriteString(b.String())
+	e.rotateIfLarge()
 	return err
 }
 
@@ -155,4 +159,65 @@ func isFileExporter() bool {
 		return true
 	}
 	return false
+}
+
+// maxSpoolBytes bounds the spool so telemetry cannot fill a disk when nothing
+// ever imports it — the realistic long-running case, since importing requires
+// someone to start the stack. 64 MiB holds on the order of a hundred thousand
+// exec spans, far more than any debugging session needs, and is small enough
+// that losing the oldest half is not a real loss.
+const maxSpoolBytes = 64 << 20
+
+// rotateIfLarge keeps the newest half of an oversized spool and drops the rest.
+//
+// Dropping the OLDEST is deliberate: when telemetry is being used to explain
+// something that just happened, recent spans are the ones that matter. The
+// alternative — refusing to write once full — would silently stop recording at
+// exactly the moment a long session got interesting.
+//
+// Called with the lock held.
+func (e *spoolExporter) rotateIfLarge() {
+	if e.f == nil {
+		return
+	}
+	fi, err := e.f.Stat()
+	if err != nil || fi.Size() < maxSpoolBytes {
+		return
+	}
+	data, err := os.ReadFile(e.path)
+	if err != nil {
+		return
+	}
+	// Cut at a line boundary so the survivor is still valid jsonline; a
+	// half-record would make the whole import fail.
+	keep := data[len(data)/2:]
+	if i := indexByte(keep, '\n'); i >= 0 {
+		keep = keep[i+1:]
+	}
+	tmp := e.path + ".rotating"
+	if err := os.WriteFile(tmp, keep, 0o644); err != nil {
+		return
+	}
+	if err := e.f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return
+	}
+	if err := os.Rename(tmp, e.path); err != nil {
+		_ = os.Remove(tmp)
+	}
+	f, err := os.OpenFile(e.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		e.f = nil // writes become no-ops rather than panicking
+		return
+	}
+	e.f = f
+}
+
+func indexByte(b []byte, c byte) int {
+	for i := range b {
+		if b[i] == c {
+			return i
+		}
+	}
+	return -1
 }

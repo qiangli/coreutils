@@ -105,3 +105,50 @@ func TestSpoolPathHonoursOverride(t *testing.T) {
 		t.Fatalf("record shape must be plain JSON: %v", err)
 	}
 }
+
+// Rotation must keep the spool importable: cutting mid-record would make the
+// whole file fail to ingest, turning a size problem into total data loss.
+func TestRotateKeepsValidJSONLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.jsonl")
+	e, err := newSpoolExporter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Shutdown(context.Background())
+
+	// Write past the bound with distinguishable records.
+	line := `{"_msg":"pad","filler":"` + strings.Repeat("x", 512) + `"}` + "\n"
+	var buf strings.Builder
+	for buf.Len() < maxSpoolBytes+(1<<20) {
+		buf.WriteString(line)
+	}
+	if _, err := e.f.WriteString(buf.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	e.mu.Lock()
+	e.rotateIfLarge()
+	e.mu.Unlock()
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() >= maxSpoolBytes {
+		t.Errorf("spool not rotated: size=%d, bound=%d", fi.Size(), maxSpoolBytes)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ln := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		var v map[string]any
+		if err := json.Unmarshal([]byte(ln), &v); err != nil {
+			t.Fatalf("line %d is not valid JSON after rotation: %v", i, err)
+		}
+	}
+	// The exporter must still be writable afterwards.
+	if _, err := e.f.WriteString(`{"_msg":"after"}` + "\n"); err != nil {
+		t.Errorf("spool not writable after rotation: %v", err)
+	}
+}
