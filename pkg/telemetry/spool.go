@@ -157,8 +157,39 @@ func isFileExporter() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("OTEL_TRACES_EXPORTER"))) {
 	case "file", "console":
 		return true
+	case "none":
+		return false // explicit opt-out
+	case "otlp", "grpc", "http", "http/protobuf":
+		return false // caller wants the network exporter
+	case "":
+		// DEFAULT ON. Unset means "nobody configured anything", and the useful
+		// behaviour there is to record — to a file, which needs no service, no
+		// port and no setup.
+		//
+		// The old default was total no-op, on the reasoning that a shell should
+		// not pay for telemetry it is not exporting. True of a network exporter,
+		// which buys nothing when no collector is listening. Not true of a file:
+		// the spool is an append on an already-open handle, bounded at 64 MiB,
+		// and it is what makes a failure explicable AFTER the fact rather than
+		// only while someone happened to be watching.
+		//
+		// That distinction is the whole lesson of this subsystem: every silent
+		// failure found here — a QA poller dead for ten days, a red CI nobody
+		// saw, a stack up for eight days with zero data — was invisible because
+		// telemetry defaulted to off and somebody had to opt in first.
+		//
+		// Opt out with OTEL_TRACES_EXPORTER=none.
+		return !hasOTLPEndpoint()
 	}
 	return false
+}
+
+// hasOTLPEndpoint reports whether a network collector was configured. When one
+// is, it wins the unset-exporter case: an operator who set an endpoint asked
+// for the network path, and quietly spooling to a file instead would be its own
+// silent surprise.
+func hasOTLPEndpoint() bool {
+	return strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) != ""
 }
 
 // maxSpoolBytes bounds the spool so telemetry cannot fill a disk when nothing
