@@ -73,6 +73,12 @@ func NewService(cfg *Config, dataDir string) (*Service, error) {
 		"/v1/traces":  fmt.Sprintf("http://127.0.0.1:%d%sinsert/opentelemetry/v1/traces", vtracesPort, componentPathMap["victoria-traces"]),
 		"/v1/logs":    fmt.Sprintf("http://127.0.0.1:%d%sinsert/opentelemetry/v1/logs", vlogsPort, componentPathMap["victoria-logs"]),
 		"/v1/metrics": fmt.Sprintf("http://127.0.0.1:%d%sopentelemetry/v1/metrics", vmetricsPort, componentPathMap["victoria-metrics"]),
+
+		// Newline-delimited JSON ingest, so a spool file written while nothing
+		// was running can be absorbed later. The component ports are ephemeral,
+		// so without a stable route here an importer would have to discover
+		// them — which is precisely the coupling the proxy exists to remove.
+		"/insert/jsonline": fmt.Sprintf("http://127.0.0.1:%d%sinsert/jsonline", vlogsPort, componentPathMap["victoria-logs"]),
 	}
 	for path, backend := range otlpRoutes {
 		u, perr := url.Parse(backend)

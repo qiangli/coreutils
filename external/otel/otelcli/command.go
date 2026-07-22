@@ -41,6 +41,34 @@ func NewCommand() *cobra.Command {
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
+		Use:   "import [spool-file]",
+		Short: "Import spans spooled while nothing was running",
+		Long: "Absorb a jsonline spool written by the file sink\n" +
+			"(OTEL_TRACES_EXPORTER=file) into a running stack, so spans captured\n" +
+			"with no collector up become queryable. Defaults to the standard\n" +
+			"spool path; $BASHY_OTEL_SPOOL overrides. The spool is truncated only\n" +
+			"after the store accepts it, so a failure loses nothing and can be\n" +
+			"retried.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := SpoolPath()
+			if len(args) == 1 {
+				path = args[0]
+			}
+			base := fmt.Sprintf("http://127.0.0.1:%d", opts.ProxyPort)
+			n, err := importSpool(base, path)
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no spooled spans to import")
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "imported %d spooled records from %s\n", n, path)
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
 		Use:   "ui",
 		Short: "Print the observability web UIs (traces / logs / metrics)",
 		Long: "Print the human-facing Victoria vmui URLs served by a running `otel serve`.\n" +
@@ -76,6 +104,19 @@ func runServe(ctx context.Context, opts Options) error {
 	}
 	fmt.Fprintf(os.Stdout, "OTEL at http://%s/\n", svc.HTTPAddr)
 	fmt.Fprintf(os.Stdout, "OTLP gRPC at %s\n", svc.CollectorAddr)
+
+	// Absorb anything the file sink captured while no stack was running.
+	// Without this the spool is written and never read — the data would be
+	// collected and still invisible, which is the same silent gap the sink
+	// exists to close, just moved one step later. Best-effort: a stack that
+	// refuses to start because an old spool is malformed would be a worse
+	// failure than a spool that waits for the next attempt.
+	if n, ierr := importSpool(fmt.Sprintf("http://%s", svc.HTTPAddr), SpoolPath()); ierr != nil {
+		fmt.Fprintf(os.Stderr, "otel: spooled spans not imported (left in place): %v\n", ierr)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stdout, "imported %d spooled records\n", n)
+	}
+
 	<-ctx.Done()
 	return svc.Manager.Stop(context.Background())
 }
