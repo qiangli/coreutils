@@ -69,6 +69,39 @@ func NewCommand() *cobra.Command {
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
+		Use:   "import-ycode [instances-dir]",
+		Short: "Import ycode's per-session trace archive",
+		Long: "Convert ycode's stdouttrace session files\n" +
+			"(~/.agents/ycode/otel/instances/<id>/traces/) into the store so an\n" +
+			"existing history becomes queryable. ycode has always written these;\n" +
+			"nothing ever read them.\n\n" +
+			"Files are NOT deleted — a session archive is a record, not a buffer.\n" +
+			"Progress is tracked with a .imported marker, so re-running only picks\n" +
+			"up what is new or changed.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := YcodeInstancesDir()
+			if len(args) == 1 {
+				dir = args[0]
+			}
+			if dir == "" {
+				return fmt.Errorf("cannot locate ycode instances dir; pass it explicitly")
+			}
+			base := fmt.Sprintf("http://127.0.0.1:%d", opts.ProxyPort)
+			logf := func(f string, a ...any) { fmt.Fprintf(cmd.ErrOrStderr(), f+"\n", a...) }
+			recs, files, err := importYcodeDir(base, dir, logf)
+			if err != nil {
+				return err
+			}
+			if recs == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no new ycode spans to import")
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "imported %d spans from %d ycode trace files\n", recs, files)
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
 		Use:   "ui",
 		Short: "Print the observability web UIs (traces / logs / metrics)",
 		Long: "Print the human-facing Victoria vmui URLs served by a running `otel serve`.\n" +
