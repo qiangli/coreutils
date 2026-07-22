@@ -27,6 +27,32 @@
 // (P3 — go/python/starlark via RegisterInterpreter). The `Ensure:`/`Effects:`
 // metadata is already parsed-and-ignored here so a P2 file parses cleanly today.
 //
+// # Includes: sharing one build graph across repositories
+//
+// A file's frontmatter may pull in targets defined elsewhere, so several
+// projects share one graph instead of each copying the same build/test/release
+// targets. Local definitions win name collisions, so a repo overrides only what
+// differs from the shared set.
+//
+//	---
+//	include:
+//	  - gh:qiangli/bashy@v0.19.0/ci.dag.md   # shared, pinned
+//	  - ./local-overrides.dag.md             # relative to this file
+//	---
+//
+// The inline form (`include: a.md b.md`) is equivalent for short lists.
+// Include resolution is cycle-safe and dedupes diamonds: a file reached twice
+// is merged once.
+//
+// Remote includes must be pinned with `@ref` (tag, branch, or commit SHA);
+// bare URLs are rejected. An included target's body is executed, so an
+// unpinned reference would let a shared graph change the behavior of every
+// dependent repo with no commit in that repo. Resolution is offline-first —
+// a pinned ref is immutable by convention, so a cached copy is reused without
+// a network call, which is what lets a CI runner or QA host parse the graph
+// with no network. Cached under DAG_CACHE_DIR (else the user cache dir),
+// keyed by owner/repo/ref/path.
+//
 // # Incremental fingerprint cache
 //
 // dag's up-to-date skip is content-hashed, not mtime-based (make's prerequisite

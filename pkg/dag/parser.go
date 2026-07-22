@@ -138,8 +138,22 @@ func Parse(r io.Reader, path string) (*Document, error) {
 	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
 		j := 1
 		inVars := false
+		inIncludes := false
 		for j < len(lines) && strings.TrimSpace(lines[j]) != "---" {
 			ln := lines[j]
+			// An `include:` block: indented `- entry` items until the next
+			// non-indented key. The inline form (`include: a.md b.md`) still
+			// works; this is the readable shape once there is more than one.
+			if inIncludes {
+				if t := strings.TrimSpace(ln); indented(ln) && t != "" {
+					if item := strings.TrimSpace(strings.TrimPrefix(t, "-")); t != item && item != "" {
+						doc.Includes = append(doc.Includes, item)
+						j++
+						continue
+					}
+				}
+				inIncludes = false // dedent, blank, or a non-item line ends the block
+			}
 			// A `vars:` block: indented `NAME = value` lines until the next
 			// non-indented key. Parsed case-sensitively (var names keep their case).
 			if inVars {
@@ -161,7 +175,13 @@ func Parse(r io.Reader, path string) (*Document, error) {
 				case "default", "default_goal":
 					doc.Default = v
 				case "include", "includes":
-					doc.Includes = append(doc.Includes, splitList(v)...)
+					// `include:` with nothing after it opens a `- entry` block;
+					// otherwise the value is an inline list.
+					if strings.TrimSpace(v) == "" {
+						inIncludes = true
+					} else {
+						doc.Includes = append(doc.Includes, splitList(v)...)
+					}
 				case "vars", "variables":
 					inVars = true
 					// Allow an inline form too: `vars: A=1 B=2`.
@@ -301,9 +321,27 @@ func parseFileSeen(path string, seen map[string]bool) (*Document, error) {
 	}
 	dir := filepath.Dir(path)
 	for _, inc := range doc.Includes {
-		incPath := filepath.Join(dir, inc)
-		if cabs, _ := filepath.Abs(incPath); seen[cabs] {
-			continue // already merged (dedupe + cycle break)
+		incPath := inc
+		if isRemoteInclude(inc) {
+			// Remote includes are keyed by their pinned spec, not by the
+			// cache path: the same pin reached from two files must dedupe
+			// even though the cache file is shared.
+			spec, err := parseRemoteInclude(inc)
+			if err != nil {
+				return nil, err
+			}
+			if seen[spec.key()] {
+				continue
+			}
+			seen[spec.key()] = true
+			if incPath, err = resolveRemoteInclude(spec); err != nil {
+				return nil, err
+			}
+		} else {
+			incPath = filepath.Join(dir, inc)
+			if cabs, _ := filepath.Abs(incPath); seen[cabs] {
+				continue // already merged (dedupe + cycle break)
+			}
 		}
 		child, err := parseFileSeen(incPath, seen)
 		if err != nil {
