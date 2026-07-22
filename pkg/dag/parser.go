@@ -338,7 +338,11 @@ func parseFileSeen(path string, seen map[string]bool) (*Document, error) {
 				return nil, err
 			}
 		} else {
-			incPath = filepath.Join(dir, inc)
+			// An absolute include is used as-is; filepath.Join would splice
+			// it onto the including file's directory and lose the root.
+			if !filepath.IsAbs(inc) {
+				incPath = filepath.Join(dir, inc)
+			}
 			if cabs, _ := filepath.Abs(incPath); seen[cabs] {
 				continue // already merged (dedupe + cycle break)
 			}

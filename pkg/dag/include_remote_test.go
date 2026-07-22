@@ -206,3 +206,25 @@ func TestRemoteIncludeDedupesAcrossFiles(t *testing.T) {
 		t.Errorf("diamond include should fetch once, got %d fetches", *calls)
 	}
 }
+
+// An absolute include path must be used as-is: filepath.Join would splice it
+// onto the including file's directory and lose the root.
+func TestIncludeAbsolutePath(t *testing.T) {
+	shared := filepath.Join(t.TempDir(), "shared.md")
+	if err := os.WriteFile(shared,
+		[]byte("## Tasks\n\n### compile\n"+block("bash", "echo compile")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	main := "---\ninclude: " + shared + "\n---\n\n## Tasks\n\n### build\n" + block("bash", "echo build")
+	if err := os.WriteFile(filepath.Join(dir, "DAG.md"), []byte(main), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ParseFile(filepath.Join(dir, "DAG.md"))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if _, ok := doc.Lookup("compile"); !ok {
+		t.Errorf("absolute include not merged; order=%v", doc.Order)
+	}
+}
