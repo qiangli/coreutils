@@ -102,12 +102,32 @@ func CachedBinary(name string) string {
 	if err != nil {
 		return ""
 	}
-	matches, _ := filepath.Glob(filepath.Join(root, name, "*", binaryName(name)))
+	// This package writes managed tools two ways, and a lookup that knows only
+	// one of them silently reports "not installed" for a binary sitting in the
+	// cache:
+	//
+	//   Ensure           -> <root>/<name>/<version>/<binary>   (version-pinned)
+	//   ProvisionManaged -> <root>/<binary>                    (latest-wins)
+	//
+	// podman, ollama and the other engine tools come from ProvisionManaged, so
+	// globbing only the versioned form missed every one of them — callers then
+	// fell back to $PATH, which made a service definition's PATH load-bearing
+	// and cost a host its container runtime when that PATH was regenerated
+	// without the usual package-manager prefixes.
+	//
+	// Both layouts are searched here so this stays the single answer to "where
+	// is managed tool X"; newest mtime wins across both, so a freshly-pinned
+	// version supersedes an older flat drop and vice versa. Callers must not
+	// reconstruct either path themselves.
+	candidates, _ := filepath.Glob(filepath.Join(root, name, "*", binaryName(name)))
+	if flat := filepath.Join(root, binaryName(name)); flat != "" {
+		candidates = append(candidates, flat)
+	}
 	best := ""
 	var bestMod int64
-	for _, m := range matches {
+	for _, m := range candidates {
 		fi, err := os.Stat(m)
-		if err != nil || fi.IsDir() {
+		if err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
 			continue
 		}
 		if mt := fi.ModTime().UnixNano(); best == "" || mt > bestMod {

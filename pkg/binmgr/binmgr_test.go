@@ -251,3 +251,55 @@ func TestEnsure_ExtractTarGz_NestedMember(t *testing.T) {
 		t.Fatalf("nested extract mismatch: %q", got)
 	}
 }
+
+// CachedBinary must find tools written by EITHER writer in this package.
+// ProvisionManaged drops a flat <root>/<binary>; Ensure writes a versioned
+// <root>/<name>/<ver>/<binary>. Globbing only the versioned form reported
+// "not installed" for podman/ollama, pushing callers onto $PATH.
+func TestCachedBinaryFindsBothLayouts(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", root)
+
+	write := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Flat layout only — the ProvisionManaged shape (podman, ollama, …).
+	flat := filepath.Join(root, binaryName("podman"))
+	write(flat)
+	if got := CachedBinary("podman"); got != flat {
+		t.Errorf("flat layout: CachedBinary(podman)=%q, want %q", got, flat)
+	}
+
+	// Versioned layout only — the Ensure shape.
+	versioned := filepath.Join(root, "bashy", "v1.2.3", binaryName("bashy"))
+	write(versioned)
+	if got := CachedBinary("bashy"); got != versioned {
+		t.Errorf("versioned layout: CachedBinary(bashy)=%q, want %q", got, versioned)
+	}
+
+	// Absent tool stays absent — no false positive from the flat probe.
+	if got := CachedBinary("definitely-not-installed"); got != "" {
+		t.Errorf("absent tool: CachedBinary()=%q, want empty", got)
+	}
+}
+
+// A non-executable file of the right name must not be reported as the tool —
+// otherwise a stray sha256/README beside the binary could win.
+func TestCachedBinaryIgnoresNonExecutable(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BASHY_BIN_CACHE", root)
+	p := filepath.Join(root, binaryName("podman"))
+	if err := os.WriteFile(p, []byte("not a binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := CachedBinary("podman"); got != "" {
+		t.Errorf("non-executable should be ignored, got %q", got)
+	}
+}
