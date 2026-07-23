@@ -35,11 +35,13 @@ const DKSMachineName = "dks"
 // bashy default; host-aware sizing may raise this, never lower it.
 const dksMinMemoryMB = 4096
 
-// dksMinDiskGB is the disk floor for the DKS VM. The VM image + containerd
-// image store (k3s pause + workload images) + ephemeral pod storage need
-// meaningfully more than the general default (which host-aware sizing can
-// drop to ~10GB on a full host). Below this, k3s image pulls fill the disk.
-const dksMinDiskGB = 30
+// dksRecommendDiskGB is the RECOMMENDED disk for a real k3s workload (VM image
+// + containerd image store + ephemeral pod storage). It is a WARNING
+// threshold, NOT a hard floor: podman's preflight already requires ~2x the VM
+// disk free, so hard-flooring to 30GB made disk-tight hosts unprovisionable
+// (30GB disk → 60GB required free). Host-aware sizing picks the actual value;
+// we only warn when it lands below this.
+const dksRecommendDiskGB = 30
 
 // NewDKSCmd builds the `dks` front-door verb. Cross-platform via the podman
 // machine provider (AppleHV on macOS, WSL/Hyper-V on Windows). On Linux
@@ -69,9 +71,8 @@ func dksConfig() MachineConfig {
 	if cfg.Memory < dksMinMemoryMB {
 		cfg.Memory = dksMinMemoryMB
 	}
-	if cfg.Disk < dksMinDiskGB {
-		cfg.Disk = dksMinDiskGB
-	}
+	// Disk is NOT floored — see dksRecommendDiskGB. Host-aware sizing decides;
+	// the preflight refuses if there's genuinely too little.
 	return cfg
 }
 
@@ -95,8 +96,10 @@ Idempotent: safe to run repeatedly. On first run it downloads the VM image
 			if cfg.Memory < dksMinMemoryMB {
 				cfg.Memory = dksMinMemoryMB
 			}
-			if cfg.Disk < dksMinDiskGB {
-				cfg.Disk = dksMinDiskGB
+			if cfg.Disk < dksRecommendDiskGB {
+				fmt.Printf("dks: WARNING — VM disk %d GB is below the %d GB recommended for real "+
+					"k3s workloads (image store fills fast). Provisioning anyway; pass --disk-size to raise.\n",
+					cfg.Disk, dksRecommendDiskGB)
 			}
 			if err := EnsureMachine(cmd.Context(), cfg); err != nil {
 				return fmt.Errorf("dks provision: %w", err)
