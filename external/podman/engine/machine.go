@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -443,7 +444,34 @@ func ListMachines(ctx context.Context) ([]*ociMachine.ListResponse, error) {
 //
 // Doing both means users get a working podman machine with no manual
 // containers.conf edits.
+// isolateMachineDirs points podman's MACHINE registry (and config) at
+// bashy-owned XDG dirs so bashy's VM lives entirely apart from any podman a
+// user installed independently (brew, curl|sh). Without this, bashy's machine
+// and the user's both live under ~/.local/share/containers/podman/machine and
+// collide on podman's one-active-VM-per-provider guard (checkExclusiveActiveVM)
+// — and it would look like bashy has to stop/replace the user's VM (a hostile,
+// adoption-killing prompt). With separate registries, bashy provisions and runs
+// its own VM invisibly; the user's `podman machine ls` never even shows it, and
+// nothing of theirs is touched.
+//
+// podman's DataDirPrefix()/ConfDirPrefix() resolve via homedir.GetDataHome()
+// /GetConfigHome(), which honour XDG_DATA_HOME / XDG_CONFIG_HOME. We set them
+// unconditionally for bashy's own machine operations — this runs inside the
+// dedicated `bashy podman`/`bashy dks` invocation, so overriding XDG here does
+// not leak into the user's other tools. Idempotent.
+func isolateMachineDirs() {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return
+	}
+	// A bashy-owned marker suffix so re-entrancy is a no-op and so the paths
+	// are obviously ours in `ls`.
+	os.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share", "bashy"))
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config", "bashy"))
+}
+
 func ensureHelperBinariesOnPath() {
+	isolateMachineDirs()
 	cacheDir := defaultBinCacheDir()
 
 	vfkitOK := false
@@ -528,6 +556,7 @@ func machineDataDir() string {
 
 // findMachine looks up a machine config by name from the provider.
 func findMachine(name string, mp ociMachine.VMProvider) (*ociMachine.MachineConfig, bool) {
+	isolateMachineDirs()
 	dirs, err := ociMachine.GetMachineDirs(mp.VMType())
 	if err != nil {
 		return nil, false
