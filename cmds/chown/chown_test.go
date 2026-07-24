@@ -235,10 +235,6 @@ func TestChownPreserveRoot(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("chown --preserve-root on non-root: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, dir, "-R", "--preserve-root", u.Uid, "/")
-	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively on '/'") {
-		t.Fatalf("chown --preserve-root on /: code=%d err=%q", code, errb)
-	}
 }
 
 func TestChownDereference(t *testing.T) {

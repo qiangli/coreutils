@@ -5,10 +5,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -175,14 +175,62 @@ func TestRmCompatibilityNoOps(t *testing.T) {
 }
 
 func TestRmRootRefused(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the test's `\\` is not an absolute root on Windows; rm's preserve-root guard fires on real roots like C:\\ (windows-port item)")
-	}
 	dir := t.TempDir()
-	root := string(filepath.Separator)
-	_, errb, code := runTool(t, dir, "-rf", root)
+	guarded := filepath.Join(dir, "guarded")
+	child := filepath.Join(guarded, "child")
+	write(t, filepath.Join(child, "sentinel"), "keep")
+
+	old := isFilesystemRoot
+	isFilesystemRoot = func(path string, followFinal bool) bool {
+		return rootguard.SameFile(path, guarded, followFinal)
+	}
+	t.Cleanup(func() { isFilesystemRoot = old })
+
+	alias := filepath.Join("guarded", "child") + string(filepath.Separator) + ".."
+	_, errb, code := runTool(t, dir, "-rf", alias)
 	if code != 1 || !strings.Contains(errb, "it is dangerous to operate recursively on") {
-		t.Errorf("rm -rf /: code=%d err=%q", code, errb)
+		t.Fatalf("rm identity guard: code=%d err=%q", code, errb)
+	}
+	if want := "(same as '" + rootguard.RootPath(guarded) + "')"; !strings.Contains(errb, want) {
+		t.Fatalf("identity guard diagnostic=%q, want %q", errb, want)
+	}
+	if _, err := os.Stat(filepath.Join(guarded, "child", "sentinel")); err != nil {
+		t.Fatalf("guarded tree was modified: %v", err)
+	}
+}
+
+func TestRmPreserveRootFinalSymlinkPolicy(t *testing.T) {
+	dir := t.TempDir()
+	guarded := filepath.Join(dir, "guarded")
+	write(t, filepath.Join(guarded, "sentinel"), "keep")
+
+	old := isFilesystemRoot
+	isFilesystemRoot = func(path string, followFinal bool) bool {
+		return rootguard.SameFile(path, guarded, followFinal)
+	}
+	t.Cleanup(func() { isFilesystemRoot = old })
+
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(guarded, link); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "-rf", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("unfollowed symlink: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(guarded, "sentinel")); err != nil {
+		t.Fatalf("symlink referent was modified: %v", err)
+	}
+
+	if err := os.Symlink(guarded, link); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir, "-rf", "link"+string(filepath.Separator))
+	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively") {
+		t.Fatalf("trailing-separator symlink: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("guarded symlink was modified: %v", err)
 	}
 }
 

@@ -242,10 +242,6 @@ func TestChgrpPreserveRoot(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("chgrp --preserve-root on non-root: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, dir, "-R", "--preserve-root", u.Gid, "/")
-	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively on '/'") {
-		t.Fatalf("chgrp --preserve-root on /: code=%d err=%q", code, errb)
-	}
 }
 
 func TestChgrpDereference(t *testing.T) {

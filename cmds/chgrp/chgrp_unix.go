@@ -14,8 +14,11 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 	"github.com/qiangli/coreutils/tool"
 )
+
+var isFilesystemRoot = rootguard.IsRoot
 
 type derefMode int
 
@@ -82,8 +85,9 @@ func apply(rc *tool.RunContext, spec string, files []string, recursive, verbose,
 	exit := 0
 	for _, name := range files {
 		path := rc.Path(name)
-		if opts.recursive && opts.preserveRoot && path == "/" {
-			fmt.Fprintf(rc.Err, "chgrp: it is dangerous to operate recursively on '/'\n")
+		if opts.recursive && opts.preserveRoot && isFilesystemRoot(path, opts.deref != derefNever) {
+			fmt.Fprintf(rc.Err, "chgrp: it is dangerous to operate recursively on '%s'%s\n",
+				name, rootguard.AliasSuffix(name, path))
 			fmt.Fprintf(rc.Err, "chgrp: use --no-preserve-root to override this failsafe\n")
 			exit = 1
 			continue

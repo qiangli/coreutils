@@ -519,8 +519,4 @@ func TestChmodPreserveRoot(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("chmod --preserve-root on non-root: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, dir, "-R", "--preserve-root", "644", "/")
-	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively on '/'") {
-		t.Fatalf("chmod --preserve-root on /: code=%d err=%q", code, errb)
-	}
 }

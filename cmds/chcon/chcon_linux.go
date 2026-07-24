@@ -9,10 +9,13 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 	"github.com/qiangli/coreutils/tool"
 )
 
 const selinuxXattr = "security.selinux"
+
+var isFilesystemRoot = rootguard.IsRoot
 
 func applyContext(rc *tool.RunContext, op chconOp) int {
 	if op.mode == modeReference {
@@ -27,8 +30,12 @@ func applyContext(rc *tool.RunContext, op chconOp) int {
 	exit := 0
 	for _, name := range op.files {
 		path := rc.Path(name)
-		if op.recursive && op.preserveRoot && path == "/" {
-			fmt.Fprintln(rc.Err, "chcon: it is dangerous to operate recursively on '/'")
+		// --dereference controls whether a symlink's referent is changed;
+		// -H/-L separately control whether recursive traversal follows it.
+		followFinal := op.deref == derefCmdLine || op.deref == derefAlways
+		if op.recursive && op.preserveRoot && isFilesystemRoot(path, followFinal) {
+			fmt.Fprintf(rc.Err, "chcon: it is dangerous to operate recursively on '%s'%s\n",
+				name, rootguard.AliasSuffix(name, path))
 			fmt.Fprintln(rc.Err, "chcon: use --no-preserve-root to override this failsafe")
 			exit = 1
 			continue

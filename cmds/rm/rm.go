@@ -20,8 +20,11 @@ import (
 	"syscall"
 	"unicode"
 
+	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 	"github.com/qiangli/coreutils/tool"
 )
+
+var isFilesystemRoot = rootguard.IsRoot
 
 var cmd = &tool.Tool{
 	Name:     "rm",
@@ -119,15 +122,19 @@ func (r *remover) remove(op string) {
 		r.errf("cannot remove '%s': %s", op, reason(err))
 		return
 	}
+	// A trailing separator requires the final component to resolve as a
+	// directory. rc.Path normalizes that separator away, so retain the
+	// operand-level signal for the preserve-root identity check.
+	trailingSeparator := len(op) > 0 && os.IsPathSeparator(op[len(op)-1])
+	if r.recursive && r.preserveRoot && (fi.IsDir() || trailingSeparator) &&
+		isFilesystemRoot(rp, true) {
+		r.errf("it is dangerous to operate recursively on '%s'%s",
+			op, rootguard.AliasSuffix(op, rp))
+		return
+	}
 	if fi.IsDir() {
 		if !r.recursive && !r.dir {
 			r.errf("cannot remove '%s': Is a directory", op)
-			return
-		}
-		// GNU --preserve-root default: refuse to operate on the
-		// filesystem root unless --no-preserve-root was explicit.
-		if r.preserveRoot && filepath.Dir(filepath.Clean(rp)) == filepath.Clean(rp) {
-			r.errf("it is dangerous to operate recursively on '%s'", op)
 			return
 		}
 		if r.interactive && !r.confirm(op) {

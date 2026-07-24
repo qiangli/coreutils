@@ -10,8 +10,11 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 	"github.com/qiangli/coreutils/tool"
 )
+
+var isFilesystemRoot = rootguard.IsRoot
 
 type derefMode int
 
@@ -63,8 +66,9 @@ func apply(rc *tool.RunContext, change *modeChange, files []string, recursive, v
 
 	for _, name := range files {
 		root := rc.Path(name)
-		if opts.recursive && opts.preserveRoot && root == "/" {
-			fmt.Fprintf(rc.Err, "chmod: it is dangerous to operate recursively on '/'\n")
+		if opts.recursive && opts.preserveRoot && isFilesystemRoot(root, opts.deref != derefNever) {
+			fmt.Fprintf(rc.Err, "chmod: it is dangerous to operate recursively on '%s'%s\n",
+				name, rootguard.AliasSuffix(name, root))
 			fmt.Fprintf(rc.Err, "chmod: use --no-preserve-root to override this failsafe\n")
 			exit = 1
 			continue

@@ -1,6 +1,6 @@
-//go:build linux
+//go:build unix
 
-package chconcmd
+package chowncmd
 
 import (
 	"os"
@@ -11,15 +11,8 @@ import (
 	"github.com/qiangli/coreutils/cmds/internal/rootguard"
 )
 
-func TestChconLinuxReportsSetxattrErrors(t *testing.T) {
-	dir := t.TempDir()
-	_, errb, code := runTool(t, dir, "system_u:object_r:tmp_t:s0", "missing")
-	if code != 1 || !strings.Contains(errb, "missing") || !strings.Contains(errb, "system_u:object_r:tmp_t:s0") {
-		t.Fatalf("missing file: code=%d err=%q", code, errb)
-	}
-}
-
-func TestChconPreserveRootUsesIdentity(t *testing.T) {
+func TestChownPreserveRootUsesIdentity(t *testing.T) {
+	u := currentUser(t)
 	dir := t.TempDir()
 	guarded := filepath.Join(dir, "guarded")
 	child := filepath.Join(guarded, "child")
@@ -36,7 +29,7 @@ func TestChconPreserveRootUsesIdentity(t *testing.T) {
 	t.Cleanup(func() { isFilesystemRoot = old })
 
 	alias := filepath.Join("guarded", "child") + string(filepath.Separator) + ".."
-	_, errb, code := runTool(t, dir, "-R", "--preserve-root", "system_u:object_r:tmp_t:s0", alias)
+	_, errb, code := runTool(t, dir, "-R", "--preserve-root", u.Uid, alias)
 	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively") {
 		t.Fatalf("identity guard: code=%d err=%q", code, errb)
 	}
@@ -46,7 +39,7 @@ func TestChconPreserveRootUsesIdentity(t *testing.T) {
 	if len(followFinal) != 1 || followFinal[0] {
 		t.Fatalf("default -R followFinal calls=%v, want [false]", followFinal)
 	}
-	_, errb, code = runTool(t, dir, "-R", "-H", "--preserve-root", "system_u:object_r:tmp_t:s0", alias)
+	_, errb, code = runTool(t, dir, "-R", "-H", "--preserve-root", u.Uid, alias)
 	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively") {
 		t.Fatalf("-H identity guard: code=%d err=%q", code, errb)
 	}
