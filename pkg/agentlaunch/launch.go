@@ -177,7 +177,8 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 		lnch.Model, lnch.ModelName = modelName, modelName
 		if m, ok := cat.Model(modelName); ok {
 			lnch.Model, lnch.ModelName = m.TargetFor(toolName), m.Name
-			lnch.PreserveEnv = append(lnch.PreserveEnv, secrets.CredentialEnvNames(m.APIKeyRef)...)
+			lnch.PreserveEnv = append(lnch.PreserveEnv,
+				secrets.CredentialEnvNames(tool.CredentialRefFor(m))...)
 
 		}
 	}

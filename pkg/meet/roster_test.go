@@ -1,6 +1,7 @@
 package meet
 
 import (
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -97,6 +98,47 @@ func TestSeatByBandEdges(t *testing.T) {
 	seats, skips := SeatByBand(cat, 4, fakeOperable)
 	if len(seats) != 1 || len(skips) != 1 {
 		t.Errorf("L4 = 1 seat + 1 skip, got %d seats %d skips", len(seats), len(skips))
+	}
+}
+
+func TestSeatByBandSkipsDirectProviderHarnessWithoutItsKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "available")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	cat := fleet.New(fleet.WithRoot(t.TempDir()), fleet.WithBaselineFS(fstest.MapFS{}))
+	tool := fleet.Tool{
+		Name: "direct", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{
+			Exec: "direct --model {model} {prompt}", Credential: fleet.ToolCredentialModelProvider,
+		}},
+	}
+	if err := cat.SaveTool(tool); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []fleet.Model{
+		{Name: "openai-frontier", Provider: "openai", Kind: fleet.ModelKindSubscription, Band: 4},
+		{Name: "anthropic-frontier", Provider: "anthropic", Kind: fleet.ModelKindSubscription, Band: 4},
+	} {
+		if err := cat.SaveModel(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, a := range []fleet.Agent{
+		{Name: "openai-seat", Tool: "direct", Model: "openai-frontier"},
+		{Name: "anthropic-seat", Tool: "direct", Model: "anthropic-frontier"},
+	} {
+		if err := cat.SaveAgent(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	seats, skips := SeatByBand(cat, 4, func(string) (bool, string) { return true, "installed" })
+	if len(seats) != 1 || seats[0].Agent != "openai-seat" {
+		t.Fatalf("seats = %+v, want only openai-seat", seats)
+	}
+	if len(skips) != 1 || skips[0].Agent != "anthropic-seat" ||
+		!strings.Contains(skips[0].Reason, "anthropic") {
+		t.Fatalf("skips = %+v, want missing anthropic credential", skips)
 	}
 }
 

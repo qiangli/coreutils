@@ -26,6 +26,12 @@ const (
 	ToolKindFunc   = "func"
 	ToolKindWeb    = "web"
 	ToolKindSystem = "system"
+
+	// ToolCredentialModelProvider means the harness calls the bound model's
+	// provider API directly and therefore needs that provider's credential in
+	// its child environment. Subscription-native CLIs such as claude and codex
+	// leave this empty because they authenticate through their own login.
+	ToolCredentialModelProvider = "model-provider"
 )
 
 // Model kind — HOW YOU AUTHENTICATE. Nothing else.
@@ -140,6 +146,11 @@ type ToolLaunch struct {
 	// {model} and the flag token immediately preceding it are dropped, so
 	// a template with a model flag degrades exactly to one without.
 	Exec string `yaml:"exec,omitempty" json:"exec,omitempty"`
+	// Credential declares how this harness authenticates a bound model.
+	// "model-provider" grants only the credential named by Model.APIKeyRef, or
+	// by Model.Provider when no explicit key reference exists. Values remain in
+	// the launcher environment; this field carries names and policy only.
+	Credential string `yaml:"credential,omitempty" json:"credential,omitempty"`
 	// WorkspaceArg is an optional argv fragment that binds the launched tool to
 	// the orchestrator's allocated workspace. {workspace} is replaced by that
 	// absolute path. It is rendered immediately after the binary, before the
@@ -310,6 +321,20 @@ func (t Tool) VersionProbeArgv() []string {
 // tool without a {model} placeholder cannot: binding it to a model is a
 // label, not a selection.
 func (t Tool) TakesModel() bool { return strings.Contains(t.CLI.Launch.Exec, ModelToken) }
+
+// CredentialRefFor returns the single credential reference this tool needs to
+// invoke m. An explicit model key always wins. A direct-provider harness may
+// derive the conventional key name from the provider; subscription-native
+// tools receive nothing.
+func (t Tool) CredentialRefFor(m Model) string {
+	if strings.TrimSpace(m.APIKeyRef) != "" {
+		return m.APIKeyRef
+	}
+	if t.CLI.Launch.Credential == ToolCredentialModelProvider {
+		return m.Provider
+	}
+	return ""
+}
 
 // ModelFlag is the flag token that carries the model — the token immediately
 // before {model} in the launch template, when it is a flag.

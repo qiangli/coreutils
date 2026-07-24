@@ -4,6 +4,10 @@ display: ycode
 cli:
   binary: ycode
   launch:
+    # ycode calls the selected model's provider API directly. The launcher uses
+    # this declaration to restore exactly that provider's key after the agent
+    # credential firewall has scrubbed the operator environment.
+    credential: model-provider
     # --print is an EXPLICIT headless flag, which is the whole point: ycode does
     # not infer print mode from "stdout is not a terminal", so a PTY (which it
     # needs in order to be steerable) cannot flip it into a REPL. claude had to

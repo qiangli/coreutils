@@ -3,10 +3,12 @@ package meet
 import (
 	"fmt"
 	"io"
+	"os"
 	"sort"
 
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
+	"github.com/qiangli/coreutils/pkg/secrets"
 )
 
 // Seating a meeting used to mean naming everyone: --participant this,
@@ -59,6 +61,15 @@ func SeatByBand(cat *fleet.Catalog, minBand int, operable func(string) (bool, st
 		if ok, reason := operable(tool.Name); !ok {
 			skips = append(skips, Skip{Agent: a.Name, Band: model.Band, Reason: reason})
 			continue
+		}
+		if ref := tool.CredentialRefFor(model); ref != "" {
+			if _, ok := secrets.GrantAgentKey(os.Environ(), ref); !ok {
+				skips = append(skips, Skip{
+					Agent: a.Name, Band: model.Band,
+					Reason: fmt.Sprintf("%s requires the %s provider credential", tool.Name, model.Provider),
+				})
+				continue
+			}
 		}
 		s := Seat{
 			Nick: a.NickName(), Agent: a.Name, Binding: a.MatrixKey(), Band: model.Band,

@@ -36,6 +36,9 @@ func TestGrantAgentKeyMissingRef(t *testing.T) {
 	if _, ok := GrantAgentKey([]string{"PATH=/usr/bin"}, "moonshot"); ok {
 		t.Error("a ref with no key on this host must not resolve")
 	}
+	if _, ok := GrantAgentKey([]string{"MOONSHOT_API_KEY="}, "moonshot"); ok {
+		t.Error("an empty credential must not make a provider operable")
+	}
 	if _, ok := GrantAgentKey([]string{"X=1"}, ""); ok {
 		t.Error("an empty ref must not resolve")
 	}

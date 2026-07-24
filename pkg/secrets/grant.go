@@ -87,6 +87,9 @@ func GrantAgentKey(parentEnv []string, ref string) (string, bool) {
 	have := map[string]string{}
 	for _, kv := range parentEnv {
 		if i := strings.IndexByte(kv, '='); i > 0 {
+			if strings.TrimSpace(kv[i+1:]) == "" {
+				continue
+			}
 			have[kv[:i]] = kv
 		}
 	}

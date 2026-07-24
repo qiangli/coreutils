@@ -59,6 +59,39 @@ func TestResolveCarriesSelectedCredentialNames(t *testing.T) {
 	}
 }
 
+func TestResolveCarriesProviderCredentialForDirectAPIHarness(t *testing.T) {
+	t.Setenv(UnsafeLaunchEnv, "1")
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveModel(fleet.Model{
+		Name: "frontier", Kind: fleet.ModelKindSubscription, Provider: "openai", UpstreamID: "frontier-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "direct", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{
+			Exec: "direct --model {model} {prompt}", Credential: fleet.ToolCredentialModelProvider,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SaveAgent(fleet.Agent{Name: "reviewer", Tool: "direct", Model: "frontier"}); err != nil {
+		t.Fatal(err)
+	}
+
+	l, err := ResolveWithCatalog("reviewer", Options{}, testCatalog(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(l.PreserveEnv, "OPENAI_API_KEY") {
+		t.Errorf("direct-provider launch missing OPENAI_API_KEY: names=%v", l.PreserveEnv)
+	}
+	if slices.Contains(l.PreserveEnv, "ANTHROPIC_API_KEY") {
+		t.Errorf("direct-provider launch widened to unrelated credential: names=%v", l.PreserveEnv)
+	}
+}
+
 func TestResolveCarriesWorkspaceBindingAndPreflight(t *testing.T) {
 	t.Setenv(UnsafeLaunchEnv, "1")
 	root := t.TempDir()
