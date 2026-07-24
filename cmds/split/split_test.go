@@ -3,7 +3,9 @@ package splitcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -217,6 +219,47 @@ func TestSplitChunks(t *testing.T) {
 	_, errb, code := runTool(t, "", "x", "-n", "2/4")
 	if code != 2 || !strings.Contains(errb, "not supported") {
 		t.Errorf("-n K/N: err=%q code=%d", errb, code)
+	}
+}
+
+func TestSplitChunksRejectsUnboundedNamedDevice(t *testing.T) {
+	if _, err := os.Stat("/dev/zero"); err != nil {
+		t.Skip("/dev/zero is unavailable")
+	}
+
+	originalRead := readChunkInput
+	materialized := false
+	readChunkInput = func(io.Reader) ([]byte, error) {
+		materialized = true
+		return nil, errors.New("unexpected materialization")
+	}
+	t.Cleanup(func() { readChunkInput = originalRead })
+
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "", "-n", "2", "/dev/zero")
+	if code != 1 || errb != "split: /dev/zero: cannot determine file size\n" {
+		t.Fatalf("split -n /dev/zero: code=%d stderr=%q", code, errb)
+	}
+	if materialized {
+		t.Fatal("split materialized an input whose size cannot be determined")
+	}
+	if got := listFiles(t, dir); len(got) != 0 {
+		t.Fatalf("split created output files for rejected input: %v", got)
+	}
+}
+
+func TestSplitChunksAllowsNullDevice(t *testing.T) {
+	if _, err := os.Stat(os.DevNull); err != nil {
+		t.Skip("null device is unavailable")
+	}
+
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "", "-n", "2", os.DevNull)
+	if code != 0 {
+		t.Fatalf("split -n null device: code=%d stderr=%q", code, errb)
+	}
+	if got := listFiles(t, dir); !equal(got, []string{"xaa", "xab"}) {
+		t.Fatalf("null-device outputs: %v", got)
 	}
 }
 

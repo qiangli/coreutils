@@ -109,7 +109,12 @@ func run(rc *tool.RunContext, args []string) int {
 			in = strings.NewReader("")
 		}
 	} else {
-		f, err := os.Open(rc.Path(file))
+		path := rc.Path(file)
+		if fs.Changed("number") && !chunkInputHasKnownSize(path) {
+			fmt.Fprintf(rc.Err, "split: %s: cannot determine file size\n", file)
+			return 1
+		}
+		f, err := os.Open(path)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "split: cannot open '%s' for reading: %v\n", file, sysErr(err))
 			return 1
@@ -185,6 +190,23 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// chunkInputHasKnownSize reports whether a named input is safe to materialize
+// for -n. Regular files have a meaningful stat size. The null device is also
+// safe because it is defined to be empty; other devices and special files may
+// produce an unbounded stream despite reporting a size of zero.
+func chunkInputHasKnownSize(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		// Preserve the normal open diagnostic for missing or inaccessible paths.
+		return true
+	}
+	if info.Mode().IsRegular() {
+		return true
+	}
+	nullInfo, err := os.Stat(os.DevNull)
+	return err == nil && os.SameFile(info, nullInfo)
 }
 
 func rewriteObsoleteNum(args []string) []string {
@@ -489,8 +511,10 @@ func splitLineBytes(in io.Reader, out *outFiles, perFile int64, sepStr string) e
 	}
 }
 
+var readChunkInput = io.ReadAll
+
 func splitChunks(in io.Reader, out *outFiles, n int64, byLines, elideEmpty bool, separator []byte) error {
-	data, err := io.ReadAll(in)
+	data, err := readChunkInput(in)
 	if err != nil {
 		return err
 	}
