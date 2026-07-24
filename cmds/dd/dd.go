@@ -129,6 +129,7 @@ func run(rc *tool.RunContext, args []string) int {
 func copyDD(rc *tool.RunContext, cfg config) int {
 	var in io.Reader = rc.In
 	var inf *os.File
+	inputFIFO := false
 	if cfg.ifile != "" {
 		f, err := os.Open(rc.Path(cfg.ifile))
 		if err != nil {
@@ -138,24 +139,66 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		defer f.Close()
 		inf = f
 		in = f
+		if fi, err := f.Stat(); err == nil {
+			inputFIFO = fi.Mode()&os.ModeNamedPipe != 0
+		}
 	}
 	var out io.Writer = rc.Out
 	var outf *os.File
-	if cfg.ofile != "" {
-		f, err := os.OpenFile(rc.Path(cfg.ofile), os.O_WRONLY|os.O_CREATE, 0o666)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "dd: failed to open '%s': %v\n", cfg.ofile, reason(err))
-			return 1
+	outputFIFO := false
+	var seekBytes int64
+	if cfg.seek > 0 {
+		var ok bool
+		seekBytes, ok = multiplyBlocks(cfg.seek, cfg.obs)
+		if !ok {
+			fmt.Fprintln(rc.Err, "dd: seek is too large")
+			return 2
 		}
-		outf = f
-		out = f
-		if !cfg.notrunc {
+	}
+	if cfg.ofile != "" {
+		path := rc.Path(cfg.ofile)
+		if fi, err := os.Stat(path); err == nil {
+			outputFIFO = fi.Mode()&os.ModeNamedPipe != 0
+		}
+		// A seek on a FIFO is simulated by reading and discarding output
+		// blocks. Opening it write-only first would deadlock with the writer
+		// which supplies those blocks. For count=0 no write-side open is
+		// needed after the simulated seek.
+		if outputFIFO && cfg.seek > 0 {
+			f, err := os.Open(path)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "dd: failed to open '%s': %v\n", cfg.ofile, reason(err))
+				return 1
+			}
+			_, err = io.CopyN(io.Discard, f, seekBytes)
+			closeErr := f.Close()
+			if err != nil && !errors.Is(err, io.EOF) {
+				fmt.Fprintf(rc.Err, "dd: failed to seek '%s': %v\n", cfg.ofile, reason(err))
+				return 1
+			}
+			if closeErr != nil {
+				fmt.Fprintf(rc.Err, "dd: error closing '%s': %v\n", cfg.ofile, reason(closeErr))
+				return 1
+			}
+		}
+		if outputFIFO && cfg.count == 0 {
+			out = io.Discard
+		} else {
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
+			if err != nil {
+				fmt.Fprintf(rc.Err, "dd: failed to open '%s': %v\n", cfg.ofile, reason(err))
+				return 1
+			}
+			outf = f
+			out = f
+		}
+		if outf != nil && !outputFIFO && !cfg.notrunc {
 			// POSIX: truncate at the seek offset, preserving the blocks
 			// dd seeks over. Truncate can fail on special files
 			// (/dev/null); GNU ignores that, so only surface the error
 			// for regular files where it would mean silent stale data.
-			if err := f.Truncate(cfg.seek * cfg.obs); err != nil {
-				if fi, serr := f.Stat(); serr == nil && fi.Mode().IsRegular() {
+			if err := outf.Truncate(seekBytes); err != nil {
+				if fi, serr := outf.Stat(); serr == nil && fi.Mode().IsRegular() {
 					fmt.Fprintf(rc.Err, "dd: failed to truncate '%s': %v\n", cfg.ofile, reason(err))
 					return 1
 				}
@@ -168,7 +211,7 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 			fmt.Fprintln(rc.Err, "dd: skip is too large")
 			return 2
 		}
-		if inf != nil {
+		if inf != nil && !inputFIFO {
 			if _, err := inf.Seek(n, io.SeekStart); err != nil {
 				fmt.Fprintf(rc.Err, "dd: failed to skip '%s': %v\n", cfg.ifile, reason(err))
 				return 1
@@ -179,15 +222,13 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		}
 	}
 	if cfg.seek > 0 {
-		if outf == nil {
+		if outf == nil && !outputFIFO {
 			return tool.NotSupported(rc, cmd, "seek= with standard output")
 		}
-		n, ok := multiplyBlocks(cfg.seek, cfg.obs)
-		if !ok {
-			fmt.Fprintln(rc.Err, "dd: seek is too large")
-			return 2
-		}
-		if _, err := outf.Seek(n, io.SeekStart); err != nil {
+		if outputFIFO {
+			// The offset was consumed from the FIFO before its write side was
+			// opened; FIFOs themselves are not seekable.
+		} else if _, err := outf.Seek(seekBytes, io.SeekStart); err != nil {
 			fmt.Fprintf(rc.Err, "dd: failed to seek '%s': %v\n", cfg.ofile, reason(err))
 			return 1
 		}

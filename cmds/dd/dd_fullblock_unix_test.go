@@ -134,3 +134,86 @@ func TestDdFullblockAccumulatesIrregularFIFOReads(t *testing.T) {
 		t.Fatalf("status=%q want=%q", stderr.String(), wantStatus)
 	}
 }
+
+func runDdFIFOOffsetCase(t *testing.T, args ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ddTestLimit)
+	defer cancel()
+	var stderr bytes.Buffer
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDdFIFOHelperProcess$")
+	child.Env = append(os.Environ(), ddHelperEnv+"=1", ddDirEnv+"="+dir, ddArgsEnv+"="+string(encoded))
+	child.Stderr = &stderr
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited && child.Process != nil {
+			_ = child.Process.Signal(syscall.SIGKILL)
+			_ = child.Wait()
+		}
+	}()
+
+	var fd int
+	for {
+		fd, err = unix.Open(fifo, unix.O_WRONLY|unix.O_NONBLOCK, 0)
+		if err == nil {
+			break
+		}
+		if err != unix.ENXIO {
+			t.Fatal(err)
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("dd did not open FIFO for reading before deadline; child killed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	payload := make([]byte, 512)
+	for len(payload) > 0 {
+		n, werr := unix.Write(fd, payload)
+		if werr == unix.EAGAIN || (werr == nil && n == 0) {
+			if ctx.Err() != nil {
+				_ = unix.Close(fd)
+				t.Fatalf("FIFO write exceeded deadline")
+			}
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		if werr != nil {
+			_ = unix.Close(fd)
+			t.Fatal(werr)
+		}
+		payload = payload[n:]
+	}
+	if err := unix.Close(fd); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Wait(); err != nil {
+		waited = true
+		if ctx.Err() != nil {
+			t.Fatalf("dd blocked past deadline; child killed")
+		}
+		t.Fatalf("dd failed: %v: %s", err, stderr.String())
+	}
+	waited = true
+	if want := "0+0 records in\n0+0 records out\n"; stderr.String() != want {
+		t.Fatalf("status=%q want=%q", stderr.String(), want)
+	}
+}
+
+func TestDdSeekOutputFIFOConsumesOutputBlock(t *testing.T) {
+	runDdFIFOOffsetCase(t, "count=0", "seek=1", "of=fifo", "status=noxfer")
+}
+
+func TestDdSkipInputFIFOConsumesInputBlock(t *testing.T) {
+	runDdFIFOOffsetCase(t, "count=0", "skip=1", "if=fifo", "status=noxfer")
+}
