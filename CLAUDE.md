@@ -106,6 +106,15 @@ uutils, hyperfine — kept for conformance/benchmark reference;
 bashy-vs-GNU A/B perf harness (out of `cmds/all`; see the umbrella's
 fidelity-perf harness spec).
 
+**Foreign-suite safety:** do not run the full uutils suite natively. Its
+adversarial cases include infinite devices and root-equivalent recursive
+operands. On 2026-07-24, `split -n /dev/zero` and
+`sort /dev/random <missing>` exhausted memory while `chmod`/`chgrp
+--preserve-root` variants bypassed string-only root guards. Use only a
+disposable non-root container/VM with hard memory/PID/time limits and no
+host-root/home mount. See `../docs/conformance-test-landmines.md`; never set the
+bashy runner's unsafe overrides on a fleet or steward host.
+
 ## Architecture
 
 ### git/ — the pure-Go git client
