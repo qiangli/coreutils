@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/qiangli/coreutils/pkg/assetring"
 )
@@ -229,6 +230,40 @@ func TestVerifyAgentRejectsToolThatCannotSelectAModel(t *testing.T) {
 	chk := c.VerifyAgent("mislabelled", Probes(nil))
 	if chk.OK || !strings.Contains(chk.Reason, "label, not a selection") {
 		t.Fatalf("check = %+v", chk)
+	}
+}
+
+func TestVerifyAgentRequiresDirectProviderCredential(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("ANTHROPIC_TOKEN", "")
+	t.Setenv("ANTHROPIC_KEY", "")
+	t.Setenv("ANTHROPIC", "")
+
+	c := New(WithRoot(t.TempDir()), WithBaselineFS(fstest.MapFS{}))
+	if err := c.SaveTool(Tool{
+		Name: "direct", Kind: ToolKindCLI,
+		CLI: ToolCLI{Binary: "sh", Launch: ToolLaunch{
+			Exec: "sh --model {model} {prompt}", Credential: ToolCredentialModelProvider,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SaveModel(Model{
+		Name: "frontier", Kind: ModelKindSubscription, Provider: "anthropic", UpstreamID: "frontier-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SaveAgent(Agent{Name: "reviewer", Tool: "direct", Model: "frontier"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if chk := c.VerifyAgent("reviewer", Probes(nil)); chk.OK ||
+		!strings.Contains(chk.Reason, "anthropic provider credential") {
+		t.Fatalf("missing provider credential check = %+v", chk)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "available")
+	if chk := c.VerifyAgent("reviewer", Probes(nil)); !chk.OK {
+		t.Fatalf("provider credential did not make binding launchable: %+v", chk)
 	}
 }
 

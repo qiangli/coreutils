@@ -2,9 +2,11 @@ package fleet
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/spacetime"
 )
 
@@ -170,6 +172,12 @@ func (c *Catalog) VerifyAgent(name string, ps *spacetime.ProbeSet) Check {
 	if !tool.TakesModel() {
 		chk.Reason = fmt.Sprintf("tool %s has no {model} placeholder, so it cannot select %s — the binding is a label, not a selection", tool.Name, model.Name)
 		return chk
+	}
+	if ref := tool.CredentialRefFor(model); ref != "" {
+		if _, ok := secrets.GrantAgentKey(os.Environ(), ref); !ok {
+			chk.Reason = fmt.Sprintf("tool %s requires the %s provider credential for model %s", tool.Name, model.Provider, model.Name)
+			return chk
+		}
 	}
 
 	chk.OK = true
