@@ -83,6 +83,66 @@ func TestDdErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "unrecognized operand") {
 		t.Fatalf("bad operand: code=%d err=%q", code, errb)
 	}
+	_, errb, code = runTool(t, dir, "", "iflag=nonblock")
+	if code != 2 || !strings.Contains(errb, "not supported") {
+		t.Fatalf("iflag unsupported: code=%d err=%q", code, errb)
+	}
+}
+
+type chunkReader struct {
+	data   []byte
+	chunks []int
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if len(r.chunks) > 0 {
+		n = min(n, r.chunks[0])
+		r.chunks = r.chunks[1:]
+	}
+	n = min(n, len(r.data))
+	copy(p, r.data[:n])
+	r.data = r.data[n:]
+	return n, nil
+}
+
+func TestReadInputBlockFullblockAccumulatesShortReads(t *testing.T) {
+	r := &chunkReader{data: []byte("abcdefghij"), chunks: []int{1, 2, 1, 4, 2}}
+	buf := make([]byte, 4)
+	n, err := readInputBlock(r, buf, true)
+	if n != 4 || err != nil || string(buf) != "abcd" {
+		t.Fatalf("first block: n=%d err=%v data=%q", n, err, buf)
+	}
+	n, err = readInputBlock(r, buf, true)
+	if n != 4 || err != nil || string(buf) != "efgh" {
+		t.Fatalf("second block: n=%d err=%v data=%q", n, err, buf)
+	}
+	n, err = readInputBlock(r, buf, true)
+	if n != 2 || err != io.EOF || string(buf[:n]) != "ij" {
+		t.Fatalf("tail: n=%d err=%v data=%q", n, err, buf[:n])
+	}
+}
+
+func TestDdFullblockPreservesSkipAndCount(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Stdio: tool.Stdio{
+			In:  &chunkReader{data: []byte("abcdefghijkl"), chunks: []int{1, 2, 1, 3, 1, 2, 2}},
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	cfg := config{ibs: 4, obs: 2, skip: 1, count: 1, fullblock: true, reblock: true, status: "none"}
+	if code := copyDD(rc, cfg); code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb.String())
+	}
+	if got := out.String(); got != "efgh" {
+		t.Fatalf("output=%q want efgh", got)
+	}
 }
 
 // POSIX: seek= preserves the skipped-over output blocks; without

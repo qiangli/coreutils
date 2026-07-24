@@ -37,6 +37,7 @@ type config struct {
 	count        int64
 	skip, seek   int64
 	notrunc      bool
+	fullblock    bool
 	status       string
 	reblock      bool
 }
@@ -103,6 +104,15 @@ func run(rc *tool.RunContext, args []string) int {
 				return tool.NotSupported(rc, cmd, "status="+v)
 			}
 			cfg.status = v
+		case "iflag":
+			for _, flag := range strings.Split(v, ",") {
+				switch flag {
+				case "fullblock":
+					cfg.fullblock = true
+				default:
+					return tool.NotSupported(rc, cmd, "iflag="+flag)
+				}
+			}
 		case "conv":
 			if v == "notrunc" {
 				cfg.notrunc = true
@@ -195,7 +205,7 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 	}
 	var full, partial, bytesCopied int64
 	for cfg.count < 0 || full+partial < cfg.count {
-		n, rerr := in.Read(buf)
+		n, rerr := readInputBlock(in, buf, cfg.fullblock)
 		if n > 0 {
 			if int64(n) == cfg.ibs {
 				full++
@@ -240,6 +250,20 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		fmt.Fprintf(rc.Err, "%d bytes copied\n", bytesCopied)
 	}
 	return 0
+}
+
+// readInputBlock implements GNU iflag=fullblock. A normal read is one input
+// record even when the underlying reader returns a short read. With fullblock,
+// short reads are accumulated until ibs bytes have been read or EOF is seen.
+func readInputBlock(in io.Reader, buf []byte, fullblock bool) (int, error) {
+	if !fullblock {
+		return in.Read(buf)
+	}
+	n, err := io.ReadFull(in, buf)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return n, io.EOF
+	}
+	return n, err
 }
 
 // obsWriter re-blocks writes into obs-sized output records, counting
