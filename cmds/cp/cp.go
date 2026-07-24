@@ -32,29 +32,30 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type copier struct {
-	rc          *tool.RunContext
-	recursive   bool
-	preserve    preserveSet
-	force       bool
-	noClobber   bool
-	update      bool
-	backup      bool
-	suffix      string
-	link        bool
-	symlink     bool
-	deref       bool
-	derefArgs   bool
-	attrsOnly   bool
-	debug       bool
-	oneFS       bool
-	parents     bool
-	removeDest  bool
-	interactive bool
-	verbose     bool
-	failed      bool
-	in          *bufio.Reader
-	rootDev     devID
-	haveRootDev bool
+	rc           *tool.RunContext
+	recursive    bool
+	preserve     preserveSet
+	force        bool
+	noClobber    bool
+	update       bool
+	backup       bool
+	suffix       string
+	link         bool
+	symlink      bool
+	deref        bool
+	derefArgs    bool
+	attrsOnly    bool
+	copyContents bool
+	debug        bool
+	oneFS        bool
+	parents      bool
+	removeDest   bool
+	interactive  bool
+	verbose      bool
+	failed       bool
+	in           *bufio.Reader
+	rootDev      devID
+	haveRootDev  bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -90,7 +91,7 @@ func run(rc *tool.RunContext, args []string) int {
 	removeDest := fs.Bool("remove-destination", false, "remove each existing destination before opening it")
 	sparse := fs.String("sparse", "auto", "control sparse file creation: auto, always, never")
 	fs.Bool("strip-trailing-slashes", false, "strip trailing slashes from operands")
-	fs.Bool("copy-contents", false, "copy contents of special files when recursive (compatibility no-op)")
+	copyContents := fs.Bool("copy-contents", false, "copy contents of special files when recursive")
 	fs.Bool("preserve-default-attributes", false, "preserve default attributes (compatibility no-op)")
 	fs.BoolP("progress", "g", false, "accepted for compatibility; progress output is a no-op")
 	fs.StringP("context", "Z", "", "accepted for compatibility; SELinux context is a no-op")
@@ -135,26 +136,27 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	c := &copier{
-		rc:          rc,
-		recursive:   *recursive || *recursiveUpper || *archive,
-		preserve:    preserve,
-		force:       *force,
-		noClobber:   *noClobber,
-		update:      *update,
-		backup:      *backup != "",
-		suffix:      *suffix,
-		link:        *link,
-		symlink:     *symlink,
-		deref:       *deref && !*archive,
-		derefArgs:   *derefArgs,
-		attrsOnly:   *attrsOnly,
-		debug:       *debug,
-		oneFS:       *oneFS,
-		parents:     *parents,
-		removeDest:  *removeDest,
-		interactive: *interactive,
-		verbose:     *verbose,
-		in:          inputReader(rc.In),
+		rc:           rc,
+		recursive:    *recursive || *recursiveUpper || *archive,
+		preserve:     preserve,
+		force:        *force,
+		noClobber:    *noClobber,
+		update:       *update,
+		backup:       *backup != "",
+		suffix:       *suffix,
+		link:         *link,
+		symlink:      *symlink,
+		deref:        *deref && !*archive,
+		derefArgs:    *derefArgs,
+		attrsOnly:    *attrsOnly,
+		copyContents: *copyContents,
+		debug:        *debug,
+		oneFS:        *oneFS,
+		parents:      *parents,
+		removeDest:   *removeDest,
+		interactive:  *interactive,
+		verbose:      *verbose,
+		in:           inputReader(rc.In),
 	}
 	if *noDeref || *archive || fs.Changed("no-dereference-preserve-links") {
 		c.deref = false
@@ -251,6 +253,8 @@ func (c *copier) copyEntry(src, dst string) {
 		c.copyDir(src, dst, fi)
 	case fi.Mode()&os.ModeSymlink != 0:
 		c.copySymlink(src, dst)
+	case c.recursive && isSpecial(fi.Mode()) && !c.copyContents:
+		c.copySpecial(src, dst, fi)
 	default:
 		c.copyFile(src, dst, fi)
 	}
@@ -273,7 +277,17 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 		// Created writable regardless of the source mode so children
 		// can land; the final mode is applied after the tree is
 		// populated (the GNU manual's read-only-source-dir behavior).
-		if err := os.Mkdir(c.rc.Path(dst), fi.Mode().Perm()|0o700); err != nil {
+		mode := fi.Mode().Perm() | 0o700
+		if c.preserve.ownership {
+			// Ownership may change after population. Until then, do not
+			// expose the incomplete tree to the source group or others.
+			mode &= 0o700
+		} else if c.preserve.mode {
+			// Mode is restored after population; suppress group/other
+			// write access while children are still being copied.
+			mode &^= 0o022
+		}
+		if err := os.Mkdir(c.rc.Path(dst), mode); err != nil {
 			c.errf("cannot create directory '%s': %s", dst, reason(err))
 			return
 		}
@@ -297,6 +311,8 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 				c.copyDir(csrc, cdst, ci)
 			case ci.Mode()&os.ModeSymlink != 0:
 				c.copySymlink(csrc, cdst)
+			case isSpecial(ci.Mode()) && !c.copyContents:
+				c.copySpecial(csrc, cdst, ci)
 			default:
 				c.copyFile(csrc, cdst, ci)
 			}
@@ -304,7 +320,8 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 	}
 	if c.preserve.any() {
 		c.preserveAttrs(src, dst, fi)
-	} else if created {
+	}
+	if created && !c.preserve.mode {
 		if err := os.Chmod(c.rc.Path(dst), fi.Mode().Perm()); err != nil {
 			c.errf("setting permissions for '%s': %s", dst, reason(err))
 		}
