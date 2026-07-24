@@ -8,7 +8,7 @@ import "sort"
 // They have to be computed at the catalog level rather than on the entry
 // because they are a question about the whole set, not about one row: "is
 // this the newest opus?" cannot be answered by looking at one opus. And they
-// have to stay out of the store because they float: baking `opus -> opus4.8`
+// have to stay out of the store because they float: baking `opus -> opus5`
 // into a file freezes the pointer the next release is supposed to move.
 //
 // One rule governs all of it: A DERIVED NAME NEVER SHADOWS A DECLARED ONE.

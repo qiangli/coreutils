@@ -164,7 +164,7 @@ func TestUnNicknamedBindingIsNotAPrincipal(t *testing.T) {
 	if l.Nick != "aider:opus" {
 		t.Fatalf("nick = %q", l.Nick)
 	}
-	if !strings.Contains(strings.Join(argv, " "), "--model claude-opus-4-8") {
+	if !strings.Contains(strings.Join(argv, " "), "--model claude-opus-5") {
 		t.Fatalf("argv = %q", argv)
 	}
 	base := []string{"PATH=/bin"}

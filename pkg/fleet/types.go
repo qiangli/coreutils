@@ -513,7 +513,7 @@ type Model struct {
 	// Family and Version make the canonical name version-explicit. The
 	// catalog derives the floating family alias from them: `opus` names
 	// whichever member of family `opus` has the highest Version. A record
-	// therefore stores `claude:opus4.8`, which is true forever, while the
+	// therefore stores `claude:opus5`, which is true forever, while the
 	// convenient `opus` re-points on its own when a release lands.
 	//
 	// Family is declared, never parsed out of the name: `kimi-k2.7-code`
@@ -648,7 +648,7 @@ type Agent struct {
 
 	// AutoNick and Derived are computed by the catalog at load: the
 	// assigned human name (when Nick is empty) and the floating family
-	// alias (`claude-opus` for a binding on `opus4.8`). Both are functions
+	// alias (`claude-opus` for a binding on `opus5`). Both are functions
 	// of the whole catalog, so neither is ever persisted.
 	AutoNick string   `yaml:"-" json:"auto_nick,omitempty"`
 	Derived  []string `yaml:"-" json:"derived,omitempty"`

@@ -320,14 +320,14 @@ func newModelsAdd(opts []Option) *cobra.Command {
 		Use:   "add (<name> --provider P --kind K | <file>|-)",
 		Short: "Add an inference backend to the local store",
 		Long: "Add an inference backend to the local store.\n\n" +
-			"Name a model for the exact version it is (`opus4.9`), not the family it\n" +
+			"Name a model for the exact version it is (`opus5`), not the family it\n" +
 			"belongs to (`opus`). Declare --family and --version and the catalog will\n" +
 			"point the bare family name at whichever version is newest — so the alias\n" +
 			"follows the releases and the name in a record never changes meaning.\n\n" +
 			"--band is the model's capability peg, 1 (basic) to 4 (frontier), measured\n" +
 			"across providers rather than taken from the vendor's own tier ladder.",
-		Example: "  bashy models add opus4.9 --family opus --version 4.9 --band 3 \\\n" +
-			"      --provider anthropic --kind subscription --upstream claude-opus-4-9\n" +
+		Example: "  bashy models add opus5 --family opus --version 5 --band 3 \\\n" +
+			"      --provider anthropic --kind subscription --upstream claude-opus-5\n" +
 			"  bashy models add ./deepseek.yaml",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
@@ -509,7 +509,7 @@ func newVerify(noun string, opts []Option, check func(*Catalog, string) Check) *
 			"binding the registry believes in and the tool does not.",
 		Example: "  bashy agents verify\n" +
 			"  bashy agents verify --live\n" +
-			"  bashy agents verify --live claude-opus4.8",
+			"  bashy agents verify --live claude-opus5",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,

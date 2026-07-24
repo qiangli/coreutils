@@ -299,7 +299,7 @@ func TestVerifyModelKinds(t *testing.T) {
 	if chk := c.VerifyModel("keyless", Probes(nil)); chk.OK {
 		t.Fatalf("an api model without api_key_ref must fail: %+v", chk)
 	}
-	if chk := c.VerifyModel("opus", Probes(nil)); !chk.OK || chk.Detail != "claude-opus-4-8" {
+	if chk := c.VerifyModel("opus", Probes(nil)); !chk.OK || chk.Detail != "claude-opus-5" {
 		t.Fatalf("subscription model check = %+v", chk)
 	}
 	// An unpegged model still verifies — it is usable, just not band-routable.

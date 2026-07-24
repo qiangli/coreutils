@@ -289,7 +289,7 @@ func (c *Catalog) Agent(name string) (Agent, bool) {
 	}
 	if tool, model, ok := strings.Cut(name, ":"); ok {
 		// The model half is resolved through the catalog, not string-matched,
-		// so `claude:opus` finds the agent bound to opus4.8 the same way the
+		// so `claude:opus` finds the agent bound to the newest Opus the same way the
 		// bare name `opus` finds the model. A binding you can type is worth
 		// little if it only accepts the exact version string.
 		if m, found := c.Model(model); found {

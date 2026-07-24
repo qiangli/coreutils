@@ -164,7 +164,7 @@ func pinFleet(t *testing.T) func(string) string {
 
 // A seat name is stamped onto every Event as its Speaker and lands in the
 // minutes. Typing an alias must be free; STORING one must be impossible —
-// `claude-opus` re-points the day opus4.9 ships, and minutes that recorded it
+// `claude-opus` re-points when a newer Opus ships, and minutes that recorded it
 // would silently re-attribute what was said to a model that never said it.
 func TestRosterIsCanonicalizedBeforeItIsRecorded(t *testing.T) {
 	nickOf := pinFleet(t)
@@ -178,7 +178,7 @@ func TestRosterIsCanonicalizedBeforeItIsRecorded(t *testing.T) {
 	}
 	sf.canonicalizeRoster()
 
-	want := []string{"claude-fable5", "claude-opus4.8", "claude-opus4.8"}
+	want := []string{"claude-fable5", "claude-opus5", "claude-opus5"}
 	for i, got := range sf.participants {
 		if got != want[i] {
 			t.Errorf("participant %d = %q, want the canonical %q", i, got, want[i])

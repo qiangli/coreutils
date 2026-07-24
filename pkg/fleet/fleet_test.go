@@ -89,10 +89,13 @@ func TestMatrixKeyIsTheBinding(t *testing.T) {
 // family alias works in a binding just as it does on its own.
 func TestAgentResolvesByBinding(t *testing.T) {
 	c := baseline(t)
-	for _, q := range []string{"claude:opus4.8", "claude:opus"} {
+	for q, want := range map[string]string{
+		"claude:opus4.8": "opus4.8", // exact IDs remain stable
+		"claude:opus":    "opus5",   // family alias follows the newest release
+	} {
 		a, ok := c.Agent(q)
-		if !ok || a.Tool != "claude" || a.Model != "opus4.8" {
-			t.Fatalf("Agent(%s) = %+v, %v", q, a, ok)
+		if !ok || a.Tool != "claude" || a.Model != want {
+			t.Fatalf("Agent(%s) = %+v, %v; want claude:%s", q, a, ok, want)
 		}
 	}
 }
