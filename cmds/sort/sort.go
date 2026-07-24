@@ -203,25 +203,38 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Err, "sort: extra operand '%s' not allowed with -c\n", operands[1])
 			return 2
 		}
-		return s.checkSorted(rc, operands[0])
+	}
+
+	if s.merge && s.random {
+		return tool.NotSupported(rc, cmd, "combining --merge with --random-sort")
+	}
+
+	inputs, badOperand, err := openOperands(rc, operands, func(path string) (io.ReadCloser, error) {
+		return os.Open(path)
+	})
+	if err != nil {
+		fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", badOperand, pathErr(err))
+		return 2
+	}
+	defer closeOperands(inputs)
+
+	if *check || *checkSilent {
+		return s.checkSorted(rc, inputs[0])
 	}
 
 	if s.merge {
-		if s.random {
-			return tool.NotSupported(rc, cmd, "combining --merge with --random-sort")
-		}
-		return s.mergeFiles(rc, operands, *output)
+		return s.mergeFiles(rc, inputs, *output)
 	}
 
 	if s.random && !s.hasNonTrivialKeys() {
-		return s.randomShuffle(rc, operands, *output)
+		return s.randomShuffle(rc, inputs, *output)
 	}
 
 	if s.canUsePreparedNumeric() {
 		nlines := numericLineSet{allInt: true}
-		for _, op := range operands {
-			if err := nlines.read(rc, op, s.zeroTerm); err != nil {
-				fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
+		for _, input := range inputs {
+			if err := nlines.read(input.reader, s.zeroTerm); err != nil {
+				fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", input.name, pathErr(err))
 				return 2
 			}
 		}
@@ -244,9 +257,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	var lines lineSet
-	for _, op := range operands {
-		if err := lines.read(rc, op, s.zeroTerm); err != nil {
-			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
+	for _, input := range inputs {
+		if err := lines.read(input.reader, s.zeroTerm); err != nil {
+			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", input.name, pathErr(err))
 			return 2
 		}
 	}
@@ -409,8 +422,8 @@ type numericLineSet struct {
 	allInt  bool
 }
 
-func (ls *numericLineSet) read(rc *tool.RunContext, operand string, zeroTerm bool) error {
-	data, err := readOperand(rc, operand)
+func (ls *numericLineSet) read(r io.Reader, zeroTerm bool) error {
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
@@ -499,17 +512,17 @@ func (s *sorter) compareNumericLines(a, b numericLine) int {
 	return d
 }
 
-func (s *sorter) checkSorted(rc *tool.RunContext, op string) int {
+func (s *sorter) checkSorted(rc *tool.RunContext, input inputOperand) int {
 	var lines lineSet
-	if err := lines.read(rc, op, s.zeroTerm); err != nil {
-		fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
+	if err := lines.read(input.reader, s.zeroTerm); err != nil {
+		fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", input.name, pathErr(err))
 		return 2
 	}
 	for i := 1; i < len(lines.lines); i++ {
 		d := s.compare(lines.lines[i-1], lines.lines[i])
 		if d > 0 || (s.unique && d == 0) {
 			if !s.checkSilent {
-				fmt.Fprintf(rc.Err, "sort: %s:%d: disorder: %s\n", op, i+1, lines.lines[i])
+				fmt.Fprintf(rc.Err, "sort: %s:%d: disorder: %s\n", input.name, i+1, lines.lines[i])
 			}
 			return 1
 		}
@@ -523,12 +536,12 @@ func (s *sorter) checkSorted(rc *tool.RunContext, op string) int {
 // re-sorted — and ties take the earlier file, so the merge is stable
 // across operands. Global -r is already reflected in s.compare, so
 // reverse-sorted runs merge without a separate reversal pass.
-func (s *sorter) mergeFiles(rc *tool.RunContext, operands []string, output string) int {
-	runs := make([][]string, 0, len(operands))
-	for _, op := range operands {
+func (s *sorter) mergeFiles(rc *tool.RunContext, inputs []inputOperand, output string) int {
+	runs := make([][]string, 0, len(inputs))
+	for _, input := range inputs {
 		var ls lineSet
-		if err := ls.read(rc, op, s.zeroTerm); err != nil {
-			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
+		if err := ls.read(input.reader, s.zeroTerm); err != nil {
+			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", input.name, pathErr(err))
 			return 2
 		}
 		runs = append(runs, ls.lines)
@@ -562,11 +575,11 @@ func (s *sorter) mergeFiles(rc *tool.RunContext, operands []string, output strin
 	return writeStringLines(rc, output, merged, s.zeroTerm)
 }
 
-func (s *sorter) randomShuffle(rc *tool.RunContext, operands []string, output string) int {
+func (s *sorter) randomShuffle(rc *tool.RunContext, inputs []inputOperand, output string) int {
 	var lines lineSet
-	for _, op := range operands {
-		if err := lines.read(rc, op, s.zeroTerm); err != nil {
-			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", op, pathErr(err))
+	for _, input := range inputs {
+		if err := lines.read(input.reader, s.zeroTerm); err != nil {
+			fmt.Fprintf(rc.Err, "sort: cannot read: %s: %v\n", input.name, pathErr(err))
 			return 2
 		}
 	}
@@ -603,8 +616,8 @@ type lineSet struct {
 	lines   []string
 }
 
-func (ls *lineSet) read(rc *tool.RunContext, operand string, zeroTerm bool) error {
-	data, err := readOperand(rc, operand)
+func (ls *lineSet) read(r io.Reader, zeroTerm bool) error {
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
@@ -613,11 +626,43 @@ func (ls *lineSet) read(rc *tool.RunContext, operand string, zeroTerm bool) erro
 	return nil
 }
 
-func readOperand(rc *tool.RunContext, operand string) ([]byte, error) {
-	if operand == "-" {
-		return io.ReadAll(rc.In)
+type inputOperand struct {
+	name   string
+	reader io.Reader
+	closer io.Closer
+}
+
+// openOperands validates every named operand before any operand is consumed.
+// This prevents an endless first input from hiding an invalid later operand.
+// Each "-" retains the shared stdin reader so duplicate stdin operands keep
+// their normal sequential EOF behavior.
+func openOperands(
+	rc *tool.RunContext,
+	operands []string,
+	open func(string) (io.ReadCloser, error),
+) ([]inputOperand, string, error) {
+	inputs := make([]inputOperand, 0, len(operands))
+	for _, operand := range operands {
+		if operand == "-" {
+			inputs = append(inputs, inputOperand{name: operand, reader: rc.In})
+			continue
+		}
+		f, err := open(rc.Path(operand))
+		if err != nil {
+			closeOperands(inputs)
+			return nil, operand, err
+		}
+		inputs = append(inputs, inputOperand{name: operand, reader: f, closer: f})
 	}
-	return os.ReadFile(rc.Path(operand))
+	return inputs, "", nil
+}
+
+func closeOperands(inputs []inputOperand) {
+	for _, input := range inputs {
+		if input.closer != nil {
+			_ = input.closer.Close()
+		}
+	}
 }
 
 func splitLines(data []byte, lines *[]string, zeroTerm bool) {

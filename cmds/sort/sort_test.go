@@ -3,6 +3,8 @@ package sortcmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,22 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type observedReadCloser struct {
+	name   string
+	events *[]string
+	reader io.Reader
+}
+
+func (r *observedReadCloser) Read(p []byte) (int, error) {
+	*r.events = append(*r.events, "read:"+r.name)
+	return r.reader.Read(p)
+}
+
+func (r *observedReadCloser) Close() error {
+	*r.events = append(*r.events, "close:"+r.name)
+	return nil
+}
 
 // runTool is the canonical test harness shape for cmds packages.
 func runTool(t *testing.T, stdin string, args ...string) (stdout, stderr string, code int) {
@@ -27,6 +45,67 @@ func runToolDir(t *testing.T, dir, stdin string, args ...string) (stdout, stderr
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
+}
+
+func TestOpenOperandsValidatesAllBeforeReading(t *testing.T) {
+	var events []string
+	rc := &tool.RunContext{Dir: "/work", Stdio: tool.Stdio{In: strings.NewReader("stdin")}}
+	open := func(path string) (io.ReadCloser, error) {
+		name := filepath.Base(path)
+		events = append(events, "open:"+name)
+		if name == "missing" {
+			return nil, errors.New("missing")
+		}
+		return &observedReadCloser{
+			name: name, events: &events, reader: strings.NewReader("finite\n"),
+		}, nil
+	}
+
+	inputs, bad, err := openOperands(rc, []string{"first", "missing"}, open)
+	if err == nil || bad != "missing" || inputs != nil {
+		t.Fatalf("openOperands = (%v, %q, %v), want (nil, missing, error)", inputs, bad, err)
+	}
+	want := []string{"open:first", "open:missing", "close:first"}
+	if strings.Join(events, ",") != strings.Join(want, ",") {
+		t.Fatalf("events = %v, want %v (the first operand must not be read)", events, want)
+	}
+}
+
+func TestOpenOperandsPreservesSharedStdinAndClosesFiles(t *testing.T) {
+	var events []string
+	stdin := strings.NewReader("stdin")
+	rc := &tool.RunContext{Dir: "/work", Stdio: tool.Stdio{In: stdin}}
+	open := func(path string) (io.ReadCloser, error) {
+		name := filepath.Base(path)
+		events = append(events, "open:"+name)
+		return &observedReadCloser{
+			name: name, events: &events, reader: strings.NewReader("file"),
+		}, nil
+	}
+
+	inputs, _, err := openOperands(rc, []string{"-", "named", "-"}, open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 3 || inputs[0].reader != stdin || inputs[2].reader != stdin {
+		t.Fatalf("stdin operands did not retain the shared input reader: %#v", inputs)
+	}
+	closeOperands(inputs)
+	if got, want := strings.Join(events, ","), "open:named,close:named"; got != want {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
+
+func TestSortRunReportsMissingLaterOperand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "finite"), []byte("b\na\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errb, code := runToolDir(t, dir, "", "finite", "missing")
+	if code != 2 || out != "" || !strings.Contains(errb, "cannot read: missing") {
+		t.Fatalf("sort finite missing = (%q, %q, %d), want no output and missing-file error", out, errb, code)
+	}
 }
 
 func TestSortBasic(t *testing.T) {
