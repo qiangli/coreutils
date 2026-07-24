@@ -34,10 +34,14 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 type config struct {
 	ifile, ofile string
 	ibs, obs     int64
+	cbs          int64
 	count        int64
 	skip, seek   int64
 	notrunc      bool
 	fullblock    bool
+	sync         bool
+	block        bool
+	unblock      bool
 	status       string
 	reblock      bool
 }
@@ -49,6 +53,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 	cfg := config{ibs: 512, obs: 512, count: -1, reblock: true}
+	var bs int64
 	for _, op := range operands {
 		k, v, ok := strings.Cut(op, "=")
 		if !ok || k == "" {
@@ -64,9 +69,7 @@ func run(rc *tool.RunContext, args []string) int {
 			if err != nil || n <= 0 {
 				return tool.UsageError(rc, cmd, "invalid number: '%s'", v)
 			}
-			cfg.ibs, cfg.obs = n, n
-			// bs= writes each input block as read — no re-blocking (GNU).
-			cfg.reblock = false
+			bs = n
 		case "ibs":
 			n, err := parseBytes(v)
 			if err != nil || n <= 0 {
@@ -81,6 +84,12 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 			cfg.obs = n
 			cfg.reblock = true
+		case "cbs":
+			n, err := parseBytes(v)
+			if err != nil || n <= 0 {
+				return tool.UsageError(rc, cmd, "invalid number: '%s'", v)
+			}
+			cfg.cbs = n
 		case "count":
 			n, err := parseCount(v)
 			if err != nil {
@@ -114,14 +123,36 @@ func run(rc *tool.RunContext, args []string) int {
 				}
 			}
 		case "conv":
-			if v == "notrunc" {
-				cfg.notrunc = true
-				continue
+			for _, conversion := range strings.Split(v, ",") {
+				switch conversion {
+				case "notrunc":
+					cfg.notrunc = true
+				case "sync":
+					cfg.sync = true
+				case "block":
+					cfg.block = true
+				case "unblock":
+					cfg.unblock = true
+				default:
+					return tool.NotSupported(rc, cmd, "conv="+conversion)
+				}
 			}
-			return tool.NotSupported(rc, cmd, "conv="+v)
 		default:
 			return tool.UsageError(rc, cmd, "unrecognized operand '%s'", op)
 		}
+	}
+	if cfg.block && cfg.unblock {
+		return tool.UsageError(rc, cmd, "conv=block and conv=unblock are mutually exclusive")
+	}
+	if (cfg.block || cfg.unblock) && cfg.cbs == 0 {
+		return tool.UsageError(rc, cmd, "cbs= is required with conv=block or conv=unblock")
+	}
+	if bs > 0 {
+		// bs= takes precedence over ibs=/obs= regardless of operand order.
+		// With the currently supported conversions, GNU writes each input
+		// block as read rather than aggregating short blocks.
+		cfg.ibs, cfg.obs = bs, bs
+		cfg.reblock = cfg.block || cfg.unblock
 	}
 	return copyDD(rc, cfg)
 }
@@ -234,17 +265,36 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		}
 	}
 
+	counter := &countWriter{w: out}
+	out = counter
 	var blocker *obsWriter
 	if cfg.reblock {
 		blocker = &obsWriter{w: out, obs: cfg.obs}
 		out = blocker
+	}
+	var blockConv *blockWriter
+	var unblockConv *unblockWriter
+	if cfg.block || cfg.unblock {
+		conversionBuf, err := makeBuffer(cfg.cbs)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "dd: conversion buffer: %v\n", err)
+			return 1
+		}
+		if cfg.block {
+			blockConv = &blockWriter{w: out, record: conversionBuf[:0], width: len(conversionBuf)}
+			out = blockConv
+		} else {
+			unblockConv = &unblockWriter{w: out, record: conversionBuf[:0], width: len(conversionBuf)}
+			out = unblockConv
+		}
 	}
 	buf, err := makeBuffer(cfg.ibs)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "dd: input buffer: %v\n", err)
 		return 1
 	}
-	var full, partial, bytesCopied int64
+	var full, partial int64
+	var outFull, outPartial int64
 	for cfg.count < 0 || full+partial < cfg.count {
 		n, rerr := readInputBlock(in, buf, cfg.fullblock)
 		if n > 0 {
@@ -253,11 +303,30 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 			} else {
 				partial++
 			}
+			if cfg.sync && int64(n) < cfg.ibs {
+				// POSIX conv=sync pads each input record before any output
+				// reblocking. The normal fill byte is NUL; block/unblock
+				// select a space.
+				if cfg.block || cfg.unblock {
+					for i := n; i < len(buf); i++ {
+						buf[i] = ' '
+					}
+				} else {
+					clear(buf[n:])
+				}
+				n = len(buf)
+			}
 			if err := writeAll(out, buf[:n]); err != nil {
 				fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
 				return 1
 			}
-			bytesCopied += int64(n)
+			if blocker == nil {
+				if int64(n) == cfg.obs {
+					outFull++
+				} else {
+					outPartial++
+				}
+			}
 		}
 		if errors.Is(rerr, io.EOF) {
 			break
@@ -267,7 +336,18 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 			return 1
 		}
 	}
-	outFull, outPartial := full, partial
+	if blockConv != nil {
+		if err := blockConv.Flush(); err != nil {
+			fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
+			return 1
+		}
+	}
+	if unblockConv != nil {
+		if err := unblockConv.Flush(); err != nil {
+			fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
+			return 1
+		}
+	}
 	if blocker != nil {
 		if err := blocker.Flush(); err != nil {
 			fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
@@ -287,8 +367,15 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 	}
 	fmt.Fprintf(rc.Err, "%d+%d records in\n", full, partial)
 	fmt.Fprintf(rc.Err, "%d+%d records out\n", outFull, outPartial)
+	if blockConv != nil && blockConv.truncated > 0 {
+		suffix := "s"
+		if blockConv.truncated == 1 {
+			suffix = ""
+		}
+		fmt.Fprintf(rc.Err, "%d truncated record%s\n", blockConv.truncated, suffix)
+	}
 	if cfg.status != "noxfer" {
-		fmt.Fprintf(rc.Err, "%d bytes copied\n", bytesCopied)
+		fmt.Fprintf(rc.Err, "%d bytes copied\n", counter.n)
 	}
 	return 0
 }
@@ -305,6 +392,109 @@ func readInputBlock(in io.Reader, buf []byte, fullblock bool) (int, error) {
 		return n, io.EOF
 	}
 	return n, err
+}
+
+type countWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// blockWriter converts newline-terminated variable-length records to fixed
+// width, space-padded records. Bytes beyond the conversion width are counted
+// as one truncated record and discarded through the next newline.
+type blockWriter struct {
+	w         io.Writer
+	record    []byte
+	width     int
+	overflow  bool
+	truncated int64
+}
+
+func (b *blockWriter) Write(p []byte) (int, error) {
+	for _, c := range p {
+		if c == '\n' {
+			if err := b.emit(); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if len(b.record) < b.width {
+			b.record = append(b.record, c)
+		} else {
+			b.overflow = true
+		}
+	}
+	return len(p), nil
+}
+
+func (b *blockWriter) emit() error {
+	for len(b.record) < b.width {
+		b.record = append(b.record, ' ')
+	}
+	if err := writeAll(b.w, b.record); err != nil {
+		return err
+	}
+	if b.overflow {
+		b.truncated++
+	}
+	b.record = b.record[:0]
+	b.overflow = false
+	return nil
+}
+
+func (b *blockWriter) Flush() error {
+	if len(b.record) == 0 && !b.overflow {
+		return nil
+	}
+	return b.emit()
+}
+
+// unblockWriter converts fixed-width records to newline-terminated records,
+// removing trailing spaces from each record.
+type unblockWriter struct {
+	w      io.Writer
+	record []byte
+	width  int
+}
+
+func (u *unblockWriter) Write(p []byte) (int, error) {
+	for _, c := range p {
+		u.record = append(u.record, c)
+		if len(u.record) == u.width {
+			if err := u.emit(); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return len(p), nil
+}
+
+func (u *unblockWriter) emit() error {
+	end := len(u.record)
+	for end > 0 && u.record[end-1] == ' ' {
+		end--
+	}
+	if err := writeAll(u.w, u.record[:end]); err != nil {
+		return err
+	}
+	if err := writeAll(u.w, []byte{'\n'}); err != nil {
+		return err
+	}
+	u.record = u.record[:0]
+	return nil
+}
+
+func (u *unblockWriter) Flush() error {
+	if len(u.record) == 0 {
+		return nil
+	}
+	return u.emit()
 }
 
 // obsWriter re-blocks writes into obs-sized output records, counting

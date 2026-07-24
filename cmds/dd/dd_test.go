@@ -75,7 +75,7 @@ func TestDdSkipSeekNotrunc(t *testing.T) {
 
 func TestDdErrors(t *testing.T) {
 	dir := t.TempDir()
-	_, errb, code := runTool(t, dir, "", "conv=sync")
+	_, errb, code := runTool(t, dir, "", "conv=swab")
 	if code != 2 || !strings.Contains(errb, "not supported") {
 		t.Fatalf("conv unsupported: code=%d err=%q", code, errb)
 	}
@@ -142,6 +142,118 @@ func TestDdFullblockPreservesSkipAndCount(t *testing.T) {
 	}
 	if got := out.String(); got != "efgh" {
 		t.Fatalf("output=%q want efgh", got)
+	}
+}
+
+func TestDdSyncPadsEachShortInputRecordBeforeReblocking(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Stdio: tool.Stdio{
+			In:  &chunkReader{data: []byte("abcde"), chunks: []int{2, 3}},
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	cfg := config{ibs: 4, obs: 3, count: -1, sync: true, reblock: true, status: "noxfer"}
+	if code := copyDD(rc, cfg); code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb.String())
+	}
+	if got, want := out.Bytes(), []byte{'a', 'b', 0, 0, 'c', 'd', 'e', 0}; !bytes.Equal(got, want) {
+		t.Fatalf("output=%v want=%v", got, want)
+	}
+	if want := "0+2 records in\n2+1 records out\n"; errb.String() != want {
+		t.Fatalf("status=%q want=%q", errb.String(), want)
+	}
+}
+
+func TestDdSyncPreservesFullblockAndCount(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Stdio: tool.Stdio{
+			In:  &chunkReader{data: []byte("abcdef"), chunks: []int{1, 1, 2, 1, 1}},
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	cfg := config{
+		ibs: 4, obs: 2, count: 2, fullblock: true, sync: true,
+		reblock: true, status: "noxfer",
+	}
+	if code := copyDD(rc, cfg); code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb.String())
+	}
+	if got, want := out.Bytes(), []byte{'a', 'b', 'c', 'd', 'e', 'f', 0, 0}; !bytes.Equal(got, want) {
+		t.Fatalf("output=%v want=%v", got, want)
+	}
+	if want := "1+1 records in\n4+0 records out\n"; errb.String() != want {
+		t.Fatalf("status=%q want=%q", errb.String(), want)
+	}
+}
+
+func TestDdSyncWithBsCountsPaddedOutputRecord(t *testing.T) {
+	out, errb, code := runTool(t, t.TempDir(), "abc", "bs=4", "conv=sync")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if got, want := []byte(out), []byte{'a', 'b', 'c', 0}; !bytes.Equal(got, want) {
+		t.Fatalf("output=%v want=%v", got, want)
+	}
+	if want := "0+1 records in\n1+0 records out\n4 bytes copied\n"; errb != want {
+		t.Fatalf("status=%q want=%q", errb, want)
+	}
+}
+
+func TestDdBlockSyncUsesSpacePadding(t *testing.T) {
+	out, errb, code := runTool(
+		t, t.TempDir(), "012\nabcde\n",
+		"ibs=5", "cbs=5", "conv=block,sync", "status=noxfer",
+	)
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if out != "012  abcde" {
+		t.Fatalf("output=%q want %q", out, "012  abcde")
+	}
+	if want := "2+0 records in\n0+1 records out\n"; errb != want {
+		t.Fatalf("status=%q want=%q", errb, want)
+	}
+
+	out, errb, code = runTool(
+		t, t.TempDir(), "012\nabcdefg\n",
+		"ibs=5", "cbs=5", "conv=block,sync", "status=noxfer",
+	)
+	if code != 0 {
+		t.Fatalf("partial code=%d err=%q", code, errb)
+	}
+	if out != "012  abcde     " {
+		t.Fatalf("partial output=%q want %q", out, "012  abcde     ")
+	}
+	if want := "2+1 records in\n0+1 records out\n1 truncated record\n"; errb != want {
+		t.Fatalf("partial status=%q want=%q", errb, want)
+	}
+}
+
+func TestDdBlockAndUnblockConversions(t *testing.T) {
+	out, errb, code := runTool(
+		t, t.TempDir(), "a\nbb\n", "cbs=3", "conv=block", "status=none",
+	)
+	if code != 0 || errb != "" || out != "a  bb " {
+		t.Fatalf("block: code=%d out=%q err=%q", code, out, errb)
+	}
+	out, errb, code = runTool(
+		t, t.TempDir(), "a  bb ", "cbs=3", "conv=unblock", "status=none",
+	)
+	if code != 0 || errb != "" || out != "a\nbb\n" {
+		t.Fatalf("unblock: code=%d out=%q err=%q", code, out, errb)
+	}
+	out, errb, code = runTool(
+		t, t.TempDir(), "a",
+		"ibs=5", "cbs=5", "conv=unblock,sync", "status=none",
+	)
+	if code != 0 || errb != "" || out != "a\n" {
+		t.Fatalf("unblock sync: code=%d out=%q err=%q", code, out, errb)
 	}
 }
 
@@ -228,6 +340,21 @@ func TestDdBsWritesRecordsAsRead(t *testing.T) {
 	want := "1+1 records in\n1+1 records out\n6 bytes copied\n"
 	if errb != want {
 		t.Fatalf("status=%q want %q", errb, want)
+	}
+}
+
+func TestDdBsTakesPrecedenceRegardlessOfOperandOrder(t *testing.T) {
+	out, errb, code := runTool(
+		t, t.TempDir(), "abcd", "bs=3", "ibs=1", "obs=1", "status=noxfer",
+	)
+	if code != 0 {
+		t.Fatalf("dd bs precedence: code=%d err=%q", code, errb)
+	}
+	if out != "abcd" {
+		t.Fatalf("output=%q want abcd", out)
+	}
+	if want := "1+1 records in\n1+1 records out\n"; errb != want {
+		t.Fatalf("status=%q want=%q", errb, want)
 	}
 }
 
