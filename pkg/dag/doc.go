@@ -124,6 +124,36 @@
 // DAG_CHUNK_MEMBERS; a manifest that reaches no target is an error, because
 // silently dropping corpus produces a flattering pass rate.
 //
+// # Run journal
+//
+// Without a journal dag is write-only to the terminal: [Cache] keeps
+// fingerprints and durations, [RunReport] is returned and dropped, and per-step
+// output has no file at all — so when a run ends there is nothing left to look
+// at. [Journal] records each run under the SAME root the fingerprint cache uses
+// (see [ResolveCacheDir]), one directory per run: report.json ([RunEntry]),
+// graph.json ([RunGraph], with each target's topological layer precomputed so a
+// renderer needs no graph algorithm), and logs/<target>.<attempt>.log.
+//
+// Read it back with `--runs` (newest first) and `--show <run-id>|last`, or via
+// [ListRuns]/[LoadRun]/[ReadRunLog]. Both flags run nothing.
+//
+// Three properties are load-bearing:
+//
+//   - It is best-effort. A journal that cannot be written never fails a run that
+//     otherwise succeeded, exactly as a missing cache dir only means "everything
+//     is out of date". Engine.Journal == nil disables it entirely.
+//   - It inherits [RunRecord]'s discipline. report.json carries no hostname and
+//     no raw error text — a record stamped with the machine that produced it
+//     cannot be compared against one produced elsewhere, and free error text is
+//     where hostnames and paths leak. Classification lives in the records; prose
+//     lives in the log file, which is local and never travels.
+//   - Retention is not optional. dag runs on hosts nobody is watching, so
+//     [Journal.Finish] prunes to the newest [DefaultKeepRuns] (--keep-runs).
+//
+// Targets declaring Secrets are journaled differently on purpose: their output
+// is redacted only after capture, so it is never teed live (see [journalMayTee])
+// and is written once, redacted, when the target finishes.
+//
 // # dag-v1 schema stability
 //
 // Every dag envelope stamps schema_version = "dag-v1" (see [SchemaVersion]).

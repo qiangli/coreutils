@@ -44,7 +44,8 @@ type Engine struct {
 	RemoteCmd   string // remote-exec command for mesh; default "ssh" / DAG_REMOTE_EXEC
 	RemoteShell string // shell argv appended after host; default "bash -s"; "none" feeds stdin directly
 	Executor    Executor
-	Cache       *Cache // nil = no incremental skip
+	Cache       *Cache   // nil = no incremental skip
+	Journal     *Journal // nil = no run journal (history/logs are not recorded)
 
 	Stdout io.Writer
 	Stderr io.Writer
@@ -133,6 +134,12 @@ func (e *Engine) Run(ctx context.Context, targets ...string) (RunReport, error) 
 		e.Cache.Save()
 	}
 	report.Records = e.attempts.all()
+	// The journal is best-effort by design: a run that produced results must not
+	// be reported as failed because its history could not be written.
+	if e.Journal != nil {
+		_ = e.Journal.WriteGraph(order)
+		_ = e.Journal.Finish(targets, report)
+	}
 	return report, nil
 }
 
@@ -545,7 +552,7 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 			case <-ctx.Done():
 			}
 		}
-		res = e.runAttempt(ctx, node, captureRun, worker)
+		res = e.runAttempt(ctx, node, captureRun, worker, attempt+1)
 		res = applyExitContract(node.Task, res)
 		results = append(results, res)
 		if res.Status == StatusDone {
@@ -560,6 +567,14 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 	}
 
 	if len(secretVals) > 0 {
+		// Journal the REDACTED output of every attempt. runAttempt deliberately
+		// skipped the live tee for secret-declaring targets, so this is the only
+		// place their logs can be written without putting the secret on disk.
+		for i := range results {
+			results[i].Stdout = redactSecrets(results[i].Stdout, secretVals)
+			results[i].Stderr = redactSecrets(results[i].Stderr, secretVals)
+			e.Journal.writeAttemptLog(node.Task.Name, i+1, results[i].Stdout, results[i].Stderr)
+		}
 		res.Stdout = redactSecrets(res.Stdout, secretVals)
 		res.Stderr = redactSecrets(res.Stderr, secretVals)
 		if res.Err != nil {
@@ -625,7 +640,7 @@ func applyExitContract(t *Task, res TaskResult) TaskResult {
 
 // runAttempt runs the body once, wrapping it in a context.WithTimeout when the
 // target declares a Timeout. A deadline hit is reported as exit 124 "timeout".
-func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worker *Worker) TaskResult {
+func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worker *Worker, attempt int) TaskResult {
 	runCtx := ctx
 	if node.Task.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -637,6 +652,18 @@ func (e *Engine) runAttempt(ctx context.Context, node *Node, capture bool, worke
 	if capture {
 		ob, eb = new(bytes.Buffer), new(bytes.Buffer)
 		stdout, stderr = ob, eb
+	}
+	// Tee this attempt's output into the journal. Secret-declaring targets are
+	// excluded HERE and journaled by runOne instead: their output is redacted
+	// only after capture, so streaming raw bytes to a file would write exactly
+	// the values redaction exists to remove. The journal writer comes last in
+	// each MultiWriter, so the real stdout/stderr still sees its bytes first
+	// and terminal ordering is unchanged.
+	if e.Journal != nil && journalMayTee(node.Task) {
+		if w := e.Journal.attemptLogWriter(node.Task.Name, attempt); w != nil {
+			stdout = io.MultiWriter(stdout, w)
+			stderr = io.MultiWriter(stderr, w)
+		}
 	}
 	// Builtin Tools: preflight — prepend a presence + version check to the body
 	// so it runs wherever the body runs (local, remote via --mesh, or sandbox).

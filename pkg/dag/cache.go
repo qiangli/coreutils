@@ -29,26 +29,47 @@ type Cache struct {
 	Durations map[string]time.Duration `json:"durations,omitempty"`
 }
 
+// ResolveCacheDir resolves dag's on-disk root: an explicit cacheDir wins, then
+// $DAG_CACHE_DIR, then os.UserCacheDir()/bashy/dag. It returns "" when no cache
+// directory can be determined; callers degrade (no cache, no journal) rather
+// than failing, because neither is required to run a graph.
+//
+// The fingerprint cache and the run journal deliberately share this one
+// resolution so a host configures dag's storage location once.
+func ResolveCacheDir(cacheDir string) string {
+	if cacheDir != "" {
+		return cacheDir
+	}
+	if d := os.Getenv("DAG_CACHE_DIR"); d != "" {
+		return d
+	}
+	ucd, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(ucd, "bashy", "dag")
+}
+
+// docKey is the stable per-document key: the hex sha256 of the document's
+// absolute path. It names the cache file and the journal's per-document
+// directory, so both land in one predictable place per DAG file.
+func docKey(docPath string) string {
+	abs, _ := filepath.Abs(docPath)
+	sum := sha256.Sum256([]byte(abs))
+	return hex.EncodeToString(sum[:])
+}
+
 // LoadCache opens (or starts) the fingerprint cache for docPath. cacheDir wins,
 // then DAG_CACHE_DIR, then os.UserCacheDir()/bashy/dag. A read error yields an
 // empty cache rather than failing — a missing/garbage cache just means
 // "everything is out of date".
 func LoadCache(docPath, cacheDir string) *Cache {
 	c := &Cache{Hashes: map[string]string{}, Durations: map[string]time.Duration{}}
-	abs, _ := filepath.Abs(docPath)
-	dir := cacheDir
+	dir := ResolveCacheDir(cacheDir)
 	if dir == "" {
-		dir = os.Getenv("DAG_CACHE_DIR")
+		return c // no cache dir -> always-run cache
 	}
-	if dir == "" {
-		ucd, err := os.UserCacheDir()
-		if err != nil {
-			return c // no cache dir -> always-run cache
-		}
-		dir = filepath.Join(ucd, "bashy", "dag")
-	}
-	sum := sha256.Sum256([]byte(abs))
-	c.path = filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
+	c.path = filepath.Join(dir, docKey(docPath)+".json")
 	c.load()
 	return c
 }

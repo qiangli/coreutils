@@ -25,10 +25,10 @@ import (
 func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
-		sandboxF, fleetF, meshF, timingsF                                                             bool
-		fileArg                                                                                       string
+		sandboxF, fleetF, meshF, timingsF, runsF, noJournalF                                          bool
+		fileArg, showRunF                                                                             string
 		cacheDir, cacheExport, cacheImport, chunksPath, remoteCmd, remoteShell                        string
-		jobs                                                                                          int
+		jobs, keepRuns                                                                                int
 	)
 	cmd := &cobra.Command{
 		Use:   "dag [flags] [target ...]",
@@ -120,6 +120,35 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			if listF {
 				return runList(out, mode, doc)
 			}
+			// Read-only reporters (--timings, --runs, --show) report what is on
+			// disk and run nothing, so they belong here with --check/--list:
+			// BEFORE the default-goal resolution below, which falls back to
+			// listing targets when a file has no default and no target was
+			// named. Placed after it, `dag --timings` on such a file silently
+			// printed the target list instead of the timings.
+			absPath, _ := filepath.Abs(path)
+			cache := LoadCache(absPath, cacheDir)
+			if cacheImport != "" {
+				if err := cache.ImportFromDir(cacheImport); err != nil {
+					return emitErr(errOut, mode, errf(weavecli.ExitInvalidArg, "cache import: %v", err))
+				}
+			}
+			// After --cache-import, so an imported baseline is what gets reported.
+			if timingsF {
+				return runTimings(out, mode, doc, cache)
+			}
+			if runsF {
+				if err := runRuns(out, mode, doc, cacheDir, 0); err != nil {
+					return emitErr(errOut, mode, err)
+				}
+				return nil
+			}
+			if showRunF != "" {
+				if err := runShow(out, mode, doc, cacheDir, showRunF); err != nil {
+					return emitErr(errOut, mode, err)
+				}
+				return nil
+			}
 
 			if len(targets) == 0 {
 				d := defaultTarget(doc)
@@ -139,18 +168,6 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			// Actions. Suppressed in JSON mode, which emits a single envelope.
 			outputGroup := (outGroupF || os.Getenv("GITHUB_ACTIONS") == "true") &&
 				mode != weavecli.OutputJSON
-			absPath, _ := filepath.Abs(path)
-			cache := LoadCache(absPath, cacheDir)
-			if cacheImport != "" {
-				if err := cache.ImportFromDir(cacheImport); err != nil {
-					return emitErr(errOut, mode, errf(weavecli.ExitInvalidArg, "cache import: %v", err))
-				}
-			}
-			// Reads the cache, runs nothing — so it sits after the cache is loaded
-			// (and after --cache-import, to report an imported baseline).
-			if timingsF {
-				return runTimings(out, mode, doc, cache)
-			}
 			// Body env: process env, then frontmatter vars (so ${HOST} etc. are
 			// available to bodies, not just metadata), then CLI overrides (win).
 			bodyEnv := os.Environ()
@@ -186,6 +203,16 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 					return emitErr(errOut, mode, err)
 				}
 				return runExplain(out, mode, path, targets, items)
+			}
+
+			// Open the journal only once we know a run is actually happening —
+			// --list/--check/--explain/--dryrun all return above, and opening it
+			// earlier would litter the store with empty run directories.
+			if !noJournalF {
+				if j, jerr := OpenJournal(absPath, cacheDir, keepRuns); jerr == nil && j != nil {
+					eng.Journal = j
+					defer j.Close()
+				}
 			}
 
 			report, err := eng.Run(cmd.Context(), targets...)
@@ -225,6 +252,10 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&checkF, "check", false, "Validate the file (parse, deps, cycles, effects) and exit; runs nothing")
 	cmd.Flags().BoolVar(&timingsF, "timings", false, "Report recorded per-target durations, total (T) and longest (L); runs nothing")
 	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
+	cmd.Flags().BoolVar(&runsF, "runs", false, "List recorded runs for this file, newest first; runs nothing")
+	cmd.Flags().StringVar(&showRunF, "show", "", "Show one recorded run by id (or 'last'); runs nothing")
+	cmd.Flags().IntVar(&keepRuns, "keep-runs", DefaultKeepRuns, "Recorded runs to retain per file (older ones are pruned)")
+	cmd.Flags().BoolVar(&noJournalF, "no-journal", false, "Do not record this run's report, graph, or logs")
 	cmd.Flags().BoolVar(&sandboxF, "sandbox", false, "Run target bodies through DAG_SANDBOX_CMD wrapper constraints")
 	cmd.Flags().BoolVar(&fleetF, "fleet", false, "Run targets through the capacity-aware worker pool (local same-host workers only)")
 	cmd.Flags().StringVar(&chunksPath, "chunks", "", "Committed chunk manifest pinning case→chunk membership (default: chunks.json next to the DAG file)")
