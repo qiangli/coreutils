@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -290,16 +291,23 @@ func TestCachedBinaryFindsBothLayouts(t *testing.T) {
 	}
 }
 
-// A non-executable file of the right name must not be reported as the tool —
-// otherwise a stray sha256/README beside the binary could win.
-func TestCachedBinaryIgnoresNonExecutable(t *testing.T) {
+// Unix execute bits distinguish binaries from adjacent data files. Windows has
+// no equivalent mode bit, so an existing non-directory .exe is executable.
+func TestCachedBinaryExecutablePolicy(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("BASHY_BIN_CACHE", root)
 	p := filepath.Join(root, binaryName("podman"))
 	if err := os.WriteFile(p, []byte("not a binary"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := CachedBinary("podman"); got != "" {
+	got := CachedBinary("podman")
+	if runtime.GOOS == "windows" {
+		if got != p {
+			t.Errorf("windows .exe should not require a Unix execute bit, got %q", got)
+		}
+		return
+	}
+	if got != "" {
 		t.Errorf("non-executable should be ignored, got %q", got)
 	}
 }

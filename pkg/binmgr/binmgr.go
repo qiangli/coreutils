@@ -127,7 +127,7 @@ func CachedBinary(name string) string {
 	var bestMod int64
 	for _, m := range candidates {
 		fi, err := os.Stat(m)
-		if err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		if err != nil || fi.IsDir() || (runtime.GOOS != "windows" && fi.Mode()&0o111 == 0) {
 			continue
 		}
 		if mt := fi.ModTime().UnixNano(); best == "" || mt > bestMod {

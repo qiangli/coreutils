@@ -51,13 +51,16 @@ func run(rc *tool.RunContext, args []string) int {
 
 	r := &rm{rc: rc, verbose: *verbose, ignoreNonEmpty: *ignoreNonEmpty}
 	for _, op := range operands {
+		displayOp := op
 		// Normalize slashes to the OS separator so the explicit
 		// current-directory ("./") ancestor logic below is separator-
 		// consistent on every platform. On Unix this is a no-op; on
 		// Windows it rewrites an operand typed with "/" (e.g. "./a/b")
-		// to native form so the -p walk still reaches ".".
+		// to native form so the -p walk still reaches ".". Keep the
+		// original spelling for diagnostics: GNU reports the operand as
+		// supplied, even when the host uses a different path separator.
 		op = filepath.FromSlash(op)
-		if !r.remove1(op) {
+		if !r.remove1(op, displayOp) {
 			continue
 		}
 		if !*parents {
@@ -78,7 +81,7 @@ func run(rc *tool.RunContext, args []string) int {
 				break
 			}
 			cur = parent
-			if !r.remove1(cur) {
+			if !r.remove1(cur, cur) {
 				break
 			}
 		}
@@ -101,11 +104,12 @@ func parentStart(op string) string {
 	return cur
 }
 
-// remove1 removes one empty directory, reporting success. The -v
-// diagnostic is printed before the attempt, as GNU rmdir does.
-func (r *rm) remove1(op string) bool {
+// remove1 removes one empty directory. op is the native filesystem path;
+// displayOp preserves the user's spelling for diagnostics. The -v diagnostic
+// is printed before the attempt, as GNU rmdir does.
+func (r *rm) remove1(op, displayOp string) bool {
 	if r.verbose {
-		fmt.Fprintf(r.rc.Out, "rmdir: removing directory, '%s'\n", op)
+		fmt.Fprintf(r.rc.Out, "rmdir: removing directory, '%s'\n", displayOp)
 	}
 	if op == "" {
 		r.errf("failed to remove '': No such file or directory")
@@ -118,30 +122,30 @@ func (r *rm) remove1(op string) bool {
 	// bare "." would otherwise resolve to the working directory itself and
 	// (on some platforms, notably Windows) let os.Remove succeed against it.
 	//
-	// The base is taken from the ORIGINAL operand (filepath.Base), NOT from
+	// The base is taken from the uncleaned native path, NOT from
 	// filepath.Clean(op): Clean collapses "a/." to "a" and "a/b/.." to "a",
 	// silently swallowing the trailing dot/dotdot that POSIX mandates the
-	// kernel reject. Using Base on the raw path preserves the true last
-	// component so "a/.", "a/./", "a/b/..", etc. are all caught here.
+	// kernel reject. Separator normalization preserves path components, so
+	// "a/.", "a/./", "a/b/..", etc. are all caught here.
 	if base := filepath.Base(op); base == "." || base == ".." {
-		r.errf("failed to remove '%s': Invalid argument", op)
+		r.errf("failed to remove '%s': Invalid argument", displayOp)
 		return false
 	}
 	rp := r.rc.Path(op)
 	fi, err := os.Lstat(rp)
 	if err != nil {
-		r.errf("failed to remove '%s': %s", op, reason(err))
+		r.errf("failed to remove '%s': %s", displayOp, reason(err))
 		return false
 	}
 	if !fi.IsDir() {
-		r.errf("failed to remove '%s': Not a directory", op)
+		r.errf("failed to remove '%s': Not a directory", displayOp)
 		return false
 	}
 	if err := os.Remove(rp); err != nil {
 		if r.ignoreNonEmpty && isNonEmpty(err) {
 			return false
 		}
-		r.errf("failed to remove '%s': %s", op, reason(err))
+		r.errf("failed to remove '%s': %s", displayOp, reason(err))
 		return false
 	}
 	return true

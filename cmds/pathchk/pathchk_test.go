@@ -122,7 +122,7 @@ func TestPathchkPosixPathLimitIncludesTerminator(t *testing.T) {
 
 func TestPathchkDefaultPathLimitIncludesTerminator(t *testing.T) {
 	limit := defaultPathMax()
-	pathAtLimit := strings.Repeat("a/", limit/2)
+	pathAtLimit := strings.Repeat("a"+string(filepath.Separator), limit/2)
 	code, errText := runPathchk(t, t.TempDir(), pathAtLimit)
 	if code != 1 || !strings.Contains(errText, "exceeds limit") {
 		t.Fatalf("code=%d stderr=%q", code, errText)

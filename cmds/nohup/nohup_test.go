@@ -3,6 +3,7 @@ package nohupcmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -122,13 +123,22 @@ func TestNohupRedirectsStderrToStdoutWhenErrIsNil(t *testing.T) {
 	}
 }
 
+func TestNohupOutputHelper(t *testing.T) {
+	if os.Getenv("GO_WANT_NOHUP_OUTPUT_HELPER") != "1" {
+		return
+	}
+	fmt.Fprint(os.Stdout, "home")
+	os.Exit(0)
+}
+
 func TestNohupFallsBackToHomeNohupOut(t *testing.T) {
 	dir, home := t.TempDir(), t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "nohup.out"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"PATH=/bin:/usr/bin", "HOME=" + home}, Stdio: tool.Stdio{}}
-	if code := run(rc, []string{"sh", "-c", "printf home"}); code != 0 {
+	env := append(os.Environ(), "GO_WANT_NOHUP_OUTPUT_HELPER=1", "HOME="+home)
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: env, Stdio: tool.Stdio{}}
+	if code := run(rc, []string{os.Args[0], "-test.run=^TestNohupOutputHelper$"}); code != 0 {
 		t.Fatalf("code=%d", code)
 	}
 	data, err := os.ReadFile(filepath.Join(home, "nohup.out"))
