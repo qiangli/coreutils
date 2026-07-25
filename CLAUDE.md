@@ -297,7 +297,17 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   points, pure Go, sample-and-diff for rates; see docs/resources.md),
   `pkg/schedule` (bashy's modern cron, robfig/cron), `pkg/sdlc`
   (the label-driven SDLC control plane), `pkg/secrets` (the
-  cloudbox-vault client behind `bashy secrets`), `pkg/skills` (the dhnt
+  cloudbox-vault client behind `bashy secrets`),
+  `pkg/ctty` + `pkg/ask` (reach the HUMAN OPERATOR from a process whose
+  stdio belongs to an agent harness — `pkg/ctty` is the channel ladder
+  (controlling terminal with an `O_NOCTTY` + foreground-pgrp check → GUI
+  askpass → nothing), `pkg/ask` is the `bashy ask` verb: the request, the
+  out-of-band rendezvous, and the 0600 sinks. Local-first: no network, no
+  pairing — it is NOT a local vault and must not become one. Two rules run
+  through both: a GUI counts only when it is ATTENDED by the caller (a
+  dialog on a remote machine's screen is worse than none), and a prompt
+  result needs POSITIVE evidence (osascript exits 0 when nobody answers).
+  See dhnt/docs/bashy-ask-human-input-design.md), `pkg/skills` (the dhnt
   skill-CNL mechanism), `pkg/kb` (the host-scope shared knowledge base
   behind `bashy kb`: OKF-style wiki pages under `~/.bashy/kb` — the
   collective memory of all agents on the host across all repos;

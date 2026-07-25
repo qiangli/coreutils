@@ -351,7 +351,7 @@ func newSetCmd(cfg *Config) *cobra.Command {
 				value = v
 			}
 			if value == "" {
-				return fmt.Errorf("refusing to store an empty value for %s", args[0])
+				return emptyValueError(c, args[0])
 			}
 			if err := client.Put([]Item{{Name: args[0], Value: value}}); err != nil {
 				return err
@@ -361,6 +361,28 @@ func newSetCmd(cfg *Config) *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+// emptyValueError explains an empty value in terms of WHY it was empty.
+//
+// The bare "refusing to store an empty value" is accurate and useless in the one
+// situation that produces it most often. Inside an agentic session, stdin is a
+// pipe the harness owns and it is usually already at EOF, so readSecretValue's
+// non-terminal branch reads nothing and returns instantly. What the operator sees
+// is an immediate, unexplained refusal from the vault — so it reads as a bug in
+// `secrets`, or in their token, rather than as "there was no way to ask you".
+//
+// That misdiagnosis is exactly what sends people to a scratch file in /tmp. Naming
+// the command that CAN reach them turns a dead end into a next step.
+func emptyValueError(c *cobra.Command, name string) error {
+	if f, ok := c.InOrStdin().(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		return fmt.Errorf("refusing to store an empty value for %s", name)
+	}
+	return fmt.Errorf(
+		"refusing to store an empty value for %s: nothing arrived on stdin.\n"+
+			"If you are inside an agent session, stdin belongs to the agent, not to you —\n"+
+			"use `bashy ask` to be prompted directly, then store the result:\n"+
+			"    bashy ask --name %s --stdout | bashy secrets set %s", name, name, name)
 }
 
 // readSecretValue gets the value for `secrets set NAME` when none was given on the

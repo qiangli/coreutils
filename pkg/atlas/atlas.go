@@ -672,6 +672,14 @@ func init() {
 		Caps: []string{CapCached, CapNeedsNetwork}})
 	addVerb("run", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("secrets", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapNeedsNetwork, CapNeedsPairing}})
+	// ask declares NO caps beyond --json, and that is the point of it being its own
+	// verb rather than `secrets input`. Caps say what a verb REQUIRES: `secrets`
+	// genuinely requires a network and a paired cloudbox, because every one of its
+	// subcommands is a vault RPC. Prompting the human at this keyboard requires
+	// neither, and filing it under a verb that claims otherwise would make the
+	// atlas lie — an agent on an air-gapped host reads these caps and would skip a
+	// capability that works perfectly there.
+	addVerb("ask", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON}})
 
 	// account
 	addVerb("tessaro", Entry{Stage: StageCross, Group: GroupAccount, Tier: TierAccount,
@@ -747,6 +755,10 @@ func init() {
 		// dispatch PRINTS the command to launch a successor rather than spawning
 		// one behind the user's back.
 		"handoff", "resume",
+		// ask WRITES the answered value to a 0600 file (its default destination) and
+		// a metadata record while a request is pending. It never writes the value
+		// anywhere the caller chose without validating the path first.
+		"ask",
 		// verbs
 		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent", "dks",
 		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
@@ -786,7 +798,7 @@ func init() {
 	// cred — reads or writes credentials / secrets. `env`/`printenv` are here
 	// because they emit the whole environment, secrets included — the reason the
 	// context-redaction allowlist must also cover them.
-	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secrets", "tessaro", "login")
+	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secrets", "ask", "tessaro", "login")
 
 	// priv — changes privilege, ownership, or a security label.
 	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod", "chroot", "runcon")
