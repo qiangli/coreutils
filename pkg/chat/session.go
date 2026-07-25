@@ -15,6 +15,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/room"
 )
@@ -384,6 +385,24 @@ func (s *Session) Say(text string) error {
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("chat: nothing to say")
 	}
+	// The bus turn-boundary hook.
+	//
+	// A queued notification is defined as "read at a turn boundary", and this is
+	// that boundary: the instant an agent is handed something to do is the one
+	// moment it is guaranteed to be listening. Reading the buffer here — rather
+	// than asking the agent to remember to run `bus pending` — is the whole point
+	// of the sidecar, which exists because an agent heads-down in a turn cannot
+	// reliably decide to go check a channel.
+	//
+	// It lands in Say for the same reason everything else does: this is the ONE
+	// control surface, so meet, weave, foreman and an operator at a keyboard all
+	// get the behaviour without four copies that can drift.
+	//
+	// Before the budget gate, deliberately: the notification text is really sent,
+	// so it is really billed. Metering the caller's message alone would understate
+	// the turn.
+	text = bus.Prepend(s.CtlSock, text)
+
 	if d := s.governTurn(text); !d.Allowed() {
 		if d.Action == llmbudget.Queue {
 			return fmt.Errorf("chat: LLM budget queued %s for %s: %s", d.Delay, s.Agent, d.Reason)

@@ -337,7 +337,11 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   Interrupt-tier delivery is ESC + steer over the coach's control socket. The
   rule everything hangs off: DEMOTE, NEVER DROP — an unauthorized, rate-limited,
   undeliverable or failed interrupt becomes a queued notification with a recorded
-  reason, because a dropped message leaves an agent on stale assumptions),
+  reason, because a dropped message leaves an agent on stale assumptions. The
+  turn-boundary hook is `bus.Prepend` in `chat.Session.Say` — the one control
+  surface every steer lands on, so meet/weave/foreman/operator all get it once;
+  sessions are matched by CONTROL SOCKET, never by name, since names are reused
+  across runs and a stale subscription would cross-deliver),
   `pkg/chat` + `pkg/ollm` (agent chat / Ollama
   client isolation), `pkg/browser` + `pkg/webinspect` (browser automation
   for `cmds/browser`/`fetch`, three modes: `probe` = attach to a Chrome on
