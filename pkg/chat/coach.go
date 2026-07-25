@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/telemetry"
 )
 
@@ -232,6 +233,10 @@ type Coach struct {
 	escCtx    context.Context // context for the (slow) agent-coach invoke
 	coachee   string          // the looping agent's binding, for band lookup
 	escalated bool            // one-shot: escalate at most once
+
+	// unresolvedRaised latches the supervisor alert to ONE per session — see
+	// noteUnresolved. A notification wants the transition, not every occurrence.
+	unresolvedRaised bool
 }
 
 // SetEscalation arms the band-graduated agent coach (P2b): after EscalateAfter
@@ -481,16 +486,63 @@ func (c *Coach) tripPty(reason, trigger, steerMsg string, distinct int, limit, a
 	// PERSISTS, raise a distinct SUPERVISOR ALERT — a bound the conductor/steward/
 	// foreman must see and act on (kill, reassign, re-scope). The coach reports; it
 	// does not author the action (report/author split).
-	if len(c.steers) >= c.pol.MaxSteers {
-		telemetry.BoundHit(c.telCtx(), "coach.unresolved", int64(c.pol.MaxSteers), int64(len(c.steers)),
-			c.coachee+": persistent loop; reflex+agent-coach did not resolve — supervisor attention needed")
-	}
+	c.noteUnresolved()
 	c.window = c.window[:0]
 	c.winCount = map[string]int{}
 	c.ptyLast = ""
 	c.errWin = c.errWin[:0]
 	c.errCount = 0
 	return &rec
+}
+
+// noteUnresolved raises the supervisor alert: the intervention ladder is
+// exhausted and the loop PERSISTS.
+//
+// Shared by both detection modes, and it did not used to be. The alert lived
+// inline in tripPty, the pty-scrape path — so an events-mode agent (a first-party
+// harness reporting tool.call as data) could loop past MaxSteers and raise
+// NOTHING, no telemetry and no notification, even though Unresolved() reported
+// true for it. The condition is mode-independent, so the alert has to be too.
+//
+// It emits on two channels, deliberately, because they answer different
+// questions. OTel RECORDS WHAT HAPPENED for a human reading a dashboard later —
+// but by the time anyone reads a dashboard, the looping agent has burned the
+// budget the alert was warning about. The bus TELLS AN INTERESTED AGENT TO ACT:
+// the conductor, steward or foreman who can kill, reassign or re-scope this run.
+// Observability and coordination fan out from the same trip.
+//
+// The bus notification requests the INTERRUPT tier, because a loop that both the
+// reflex and the agent-coach failed to resolve is a direction-changer for whoever
+// is supervising — the definition of what may push rather than queue. It stays a
+// request: a subscriber names whose interrupts it honours, and one that has not
+// named the coach receives this queued instead. Reporting an urgency is not
+// authoring an action, so the report/author split the ladder already observes
+// holds here too.
+//
+// Latched to fire ONCE per session. Both callers happen to be guarded — each trip
+// path stops at MaxSteers — but the latch makes the once-ness a property of the
+// alert itself rather than of whatever guard happens to sit above it. A
+// notification wants the TRANSITION; a metric would want every occurrence, and if
+// that guard ever moves, an unlatched alert would spray the bus for as long as the
+// agent kept looping: the pollution failure mode, produced by the very signal
+// meant to rescue it.
+//
+// Best-effort on the bus: a store that cannot be written must never break
+// coaching. Caller holds c.mu.
+func (c *Coach) noteUnresolved() {
+	if c.unresolvedRaised || c.pol.MaxSteers <= 0 || len(c.steers) < c.pol.MaxSteers {
+		return
+	}
+	c.unresolvedRaised = true
+
+	alert := c.coachee + ": persistent loop; reflex+agent-coach did not resolve — supervisor attention needed"
+	telemetry.BoundHit(c.telCtx(), "coach.unresolved", int64(c.pol.MaxSteers), int64(len(c.steers)), alert)
+	_ = bus.Publish(bus.Notification{
+		Principal: "coach",
+		Topic:     "fleet.unresolved",
+		Body:      alert,
+		Priority:  bus.DeliveryInterrupt,
+	})
 }
 
 // telCtx is the context the coach emits telemetry through — the run's context
@@ -679,6 +731,7 @@ func (c *Coach) decide(ev Event) *SteerRecord {
 	}
 	c.steers = append(c.steers, rec)
 	c.distinctAtLast = distinct
+	c.noteUnresolved()
 	return &rec
 }
 

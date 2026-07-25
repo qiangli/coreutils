@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/qiangli/coreutils/pkg/room"
 )
 
 // PublishEnvelope is the structured response in --json mode.
@@ -65,23 +63,17 @@ attributed to is not a notification.`,
 					topic, roomID, to, msg)
 			}
 
-			switch priority {
-			case "", DeliveryQueued, DeliveryInterrupt:
-			default:
-				return publishErr(cmd, jsonOut,
-					fmt.Sprintf("unknown --priority %q (use %s or %s)", priority, DeliveryQueued, DeliveryInterrupt),
-					topic, roomID, to, msg)
-			}
-
-			ev := room.Event{
+			// One enforcement path: the CLI and every programmatic publisher go
+			// through Publish, so the principal/addressing rules cannot hold for a
+			// human and quietly not hold for the coach.
+			if err := Publish(Notification{
 				Principal: who,
 				Topic:     topic,
-				Room:      roomID,
 				To:        to,
+				Room:      roomID,
 				Body:      msg,
 				Priority:  priority,
-			}
-			if err := room.Notify(ev); err != nil {
+			}); err != nil {
 				return publishErr(cmd, jsonOut, err.Error(), topic, roomID, to, msg)
 			}
 
