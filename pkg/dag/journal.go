@@ -398,6 +398,55 @@ func ListRuns(docPath, cacheDir string, limit int) ([]RunEntry, error) {
 	return out, nil
 }
 
+// ListAllRuns returns recent runs across EVERY dag document on this host,
+// newest first, at most perDoc runs per document. It is the machine-global
+// view a steward board needs: the journal is keyed by a hash of the document
+// path, so the path itself is recovered from each report's File field rather
+// than from the directory name.
+//
+// A cacheDir that does not exist yet is not an error — it means nothing has
+// run, which is a perfectly good answer.
+func ListAllRuns(cacheDir string, perDoc int) ([]RunEntry, error) {
+	root := ResolveCacheDir(cacheDir)
+	if root == "" {
+		return nil, nil
+	}
+	base := filepath.Join(root, "runs")
+	docs, err := os.ReadDir(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []RunEntry
+	for _, d := range docs {
+		if !d.IsDir() {
+			continue
+		}
+		ids, ierr := runIDs(filepath.Join(base, d.Name()))
+		if ierr != nil {
+			continue
+		}
+		n := 0
+		for _, id := range ids {
+			if perDoc > 0 && n >= perDoc {
+				break
+			}
+			e, rerr := readRunEntry(filepath.Join(base, d.Name(), id))
+			if rerr != nil {
+				continue
+			}
+			out = append(out, *e)
+			n++
+		}
+	}
+	// Run ids carry a nanosecond prefix, so a descending string sort across
+	// documents is a descending chronological sort.
+	sort.Slice(out, func(i, j int) bool { return out[i].RunID > out[j].RunID })
+	return out, nil
+}
+
 // LoadRun reads one journaled run and the graph it executed. The graph is
 // optional — a run interrupted before it was written still has a report.
 func LoadRun(docPath, cacheDir, runID string) (*RunEntry, *RunGraph, error) {
@@ -515,9 +564,71 @@ type showRunResult struct {
 	Graph *RunGraph `json:"graph,omitempty"`
 }
 
+type statusResult struct {
+	File       string `json:"file"`
+	RunID      string `json:"run_id"`
+	StartedAt  string `json:"started_at"`
+	DurationMS int64  `json:"duration_ms"`
+	Failed     bool   `json:"failed"`
+	Total      int    `json:"total"`
+	OK         int    `json:"ok"`
+	Failedn    int    `json:"failed_count"`
+	Targets    string `json:"targets,omitempty"`
+}
+
+// runStatus prints ONE line about the most recent run and exits non-zero if it
+// failed, so it composes in a shell (`dag --status || notify-me`). --runs is
+// the list, --show is the detail; this is the glance.
+func runStatus(out io.Writer, mode weavecli.OutputMode, doc *Document, cacheDir string) error {
+	entries, err := ListRuns(doc.Path, cacheDir, 1)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		if mode == weavecli.OutputJSON {
+			emitOK(out, statusResult{File: doc.Path})
+			return nil
+		}
+		fmt.Fprintf(out, "dag: no runs recorded yet for %s\n", doc.Path)
+		return nil
+	}
+	e := entries[0]
+	res := statusResult{
+		File: doc.Path, RunID: e.RunID, StartedAt: e.StartedAt.Format(time.RFC3339),
+		DurationMS: e.DurationMS, Failed: e.Failed, Total: len(e.Tasks),
+		Targets: strings.Join(e.Targets, " "),
+	}
+	for _, t := range e.Tasks {
+		switch t.Status {
+		case "done", "up-to-date":
+			res.OK++
+		case "failed":
+			res.Failedn++
+		}
+	}
+	if mode == weavecli.OutputJSON {
+		emitOK(out, res)
+	} else if mode != weavecli.OutputQuiet {
+		verdict := "ok"
+		if res.Failed {
+			verdict = "FAILED"
+		}
+		fmt.Fprintf(out, "%s  %d/%d targets  %s  %s  %s\n",
+			verdict, res.OK, res.Total, fmtMS(res.DurationMS),
+			e.StartedAt.Format(time.RFC3339), res.RunID)
+	}
+	// A status verb that reports failure with exit 0 is the absence-of-evidence
+	// shape this repo refuses elsewhere; make the verdict actionable.
+	if res.Failed {
+		return &Error{Code: weavecli.ExitGenericFail, Msg: "last run failed"}
+	}
+	return nil
+}
+
 // runShow prints one journaled run. runID may be "last" for the newest run,
-// which is what an operator actually wants after a failure.
-func runShow(out io.Writer, mode weavecli.OutputMode, doc *Document, cacheDir, runID string) error {
+// which is what an operator actually wants after a failure. htmlOut renders the
+// standalone page instead (redirect it to a file, or pipe it to a browser).
+func runShow(out io.Writer, mode weavecli.OutputMode, doc *Document, cacheDir, runID string, htmlOut bool) error {
 	if runID == "last" {
 		entries, err := ListRuns(doc.Path, cacheDir, 1)
 		if err != nil {
@@ -531,6 +642,14 @@ func runShow(out io.Writer, mode weavecli.OutputMode, doc *Document, cacheDir, r
 	entry, graph, err := LoadRun(doc.Path, cacheDir, runID)
 	if err != nil {
 		return errf(weavecli.ExitInvalidArg, "no such run %q for %s", runID, doc.Path)
+	}
+	if htmlOut {
+		page, rerr := renderRunHTML(entry, graph)
+		if rerr != nil {
+			return rerr
+		}
+		_, werr := out.Write(page)
+		return werr
 	}
 	res := showRunResult{File: doc.Path, Run: entry, Graph: graph}
 	if mode == weavecli.OutputJSON {

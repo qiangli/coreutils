@@ -365,6 +365,169 @@ func TestReportersRunWithoutDefaultGoal(t *testing.T) {
 	}
 }
 
+// --status is the glance: one line, and a non-zero exit when the last run
+// failed. A status verb that reports failure with exit 0 is the
+// absence-of-evidence shape this repo refuses everywhere else.
+func TestStatusReportsVerdictAndExitCode(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("DAG_CACHE_DIR", cacheDir)
+
+	green := writeDAG(t, "## Tasks\n\n### fine\n"+block("bash", "echo fine"))
+	red := writeDAG(t, "## Tasks\n\n### boom\n"+block("bash", "exit 7"))
+
+	// Name the target explicitly: a file with no `default:` frontmatter and no
+	// target named "default" lists its targets instead of running anything.
+	for _, tc := range []struct{ path, target string }{{green, "fine"}, {red, "boom"}} {
+		seed := NewDagCmd()
+		seed.SetOut(new(bytes.Buffer))
+		seed.SetErr(new(bytes.Buffer))
+		seed.SetArgs([]string{"--file", tc.path, tc.target})
+		_ = seed.Execute() // the red one fails on purpose
+	}
+
+	t.Run("green", func(t *testing.T) {
+		cmd := NewDagCmd()
+		out := new(bytes.Buffer)
+		cmd.SetOut(out)
+		cmd.SetErr(new(bytes.Buffer))
+		cmd.SetArgs([]string{"--file", green, "--status"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("green --status returned error: %v", err)
+		}
+		if got := out.String(); !strings.HasPrefix(got, "ok  1/1 targets") {
+			t.Errorf("status = %q, want an ok verdict", got)
+		}
+		if n := strings.Count(strings.TrimSpace(out.String()), "\n"); n != 0 {
+			t.Errorf("status printed %d extra lines; it is meant to be one", n)
+		}
+	})
+
+	t.Run("red", func(t *testing.T) {
+		cmd := NewDagCmd()
+		out := new(bytes.Buffer)
+		cmd.SetOut(out)
+		cmd.SetErr(new(bytes.Buffer))
+		cmd.SetArgs([]string{"--file", red, "--status"})
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("red --status exited 0; a failed last run must be actionable")
+		}
+		if code := ExitCodeOf(err); code == 0 {
+			t.Errorf("exit code = %d, want non-zero", code)
+		}
+		if got := out.String(); !strings.HasPrefix(got, "FAILED") {
+			t.Errorf("status = %q, want a FAILED verdict on stdout", got)
+		}
+	})
+
+	t.Run("no runs", func(t *testing.T) {
+		fresh := writeDAG(t, "## Tasks\n\n### never\n"+block("bash", "echo x"))
+		cmd := NewDagCmd()
+		out := new(bytes.Buffer)
+		cmd.SetOut(out)
+		cmd.SetErr(new(bytes.Buffer))
+		cmd.SetArgs([]string{"--file", fresh, "--status"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("--status with no history should not error: %v", err)
+		}
+		if !strings.Contains(out.String(), "no runs recorded") {
+			t.Errorf("status = %q", out.String())
+		}
+	})
+}
+
+// The HTML view must be self-contained (no network) and must escape whatever
+// a DAG file happens to name its targets — a DAG file is untrusted input.
+func TestRunHTMLIsSelfContainedAndEscaped(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("DAG_CACHE_DIR", cacheDir)
+
+	path := writeDAG(t, "## Tasks\n\n"+
+		"### <script>alert(1)</script>\n"+block("bash", "echo xss")+
+		"### second\nRequires: <script>alert(1)</script>\n"+block("bash", "echo two"))
+
+	seed := NewDagCmd()
+	seed.SetOut(new(bytes.Buffer))
+	seed.SetErr(new(bytes.Buffer))
+	seed.SetArgs([]string{"--file", path, "second"})
+	if err := seed.Execute(); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	cmd := NewDagCmd()
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"--file", path, "--show", "last", "--html"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("--show --html: %v", err)
+	}
+	page := out.String()
+
+	if !strings.HasPrefix(page, "<!doctype html>") {
+		t.Errorf("not an HTML document: %.60q", page)
+	}
+	// A target named <script> must never reach the page as markup.
+	if strings.Contains(page, "<script>") {
+		t.Errorf("unescaped script tag in rendered page:\n%s", page)
+	}
+	if !strings.Contains(page, "&lt;script&gt;") {
+		t.Errorf("target name not present in escaped form:\n%s", page)
+	}
+	// Self-contained: nothing may be fetched at view time.
+	for _, bad := range []string{"http://", "https://", "src=", "<script"} {
+		if strings.Contains(page, bad) {
+			t.Errorf("page is not self-contained, found %q", bad)
+		}
+	}
+	// The layered graph is the point of the view: two layers, L0 and L1.
+	if !strings.Contains(page, ">L0</th>") || !strings.Contains(page, ">L1</th>") {
+		t.Errorf("layered graph columns missing:\n%s", page)
+	}
+}
+
+// The machine-global reader is what the steward board consumes; it must span
+// documents and sort newest-first across all of them.
+func TestListAllRunsSpansDocuments(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("DAG_CACHE_DIR", cacheDir)
+
+	var last string
+	for _, body := range []string{"echo one", "echo two", "echo three"} {
+		p := writeDAG(t, "## Tasks\n\n### go\n"+block("bash", body))
+		cmd := NewDagCmd()
+		cmd.SetOut(new(bytes.Buffer))
+		cmd.SetErr(new(bytes.Buffer))
+		cmd.SetArgs([]string{"--file", p, "go"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("seed %q: %v", body, err)
+		}
+		last = p
+	}
+
+	all, err := ListAllRuns(cacheDir, 5)
+	if err != nil {
+		t.Fatalf("ListAllRuns: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("want 3 runs across 3 documents, got %d", len(all))
+	}
+	if all[0].File != last {
+		t.Errorf("newest run is from %q, want %q", all[0].File, last)
+	}
+	for i := 1; i < len(all); i++ {
+		if all[i-1].RunID < all[i].RunID {
+			t.Errorf("runs not sorted newest-first at %d", i)
+		}
+	}
+
+	// An empty root is "nothing has run", not an error.
+	empty, err := ListAllRuns(t.TempDir(), 5)
+	if err != nil || len(empty) != 0 {
+		t.Errorf("empty root: got %d runs, err %v", len(empty), err)
+	}
+}
+
 // Distinct target names must never share a log file, however they are spelled.
 func TestSafeFileNameDisambiguates(t *testing.T) {
 	cases := []struct{ a, b string }{

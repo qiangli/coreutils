@@ -19,7 +19,38 @@ func (p panel) ID() string               { return p.id }
 func (p panel) Build(b *Board) PanelView { return p.build(b) }
 
 func DefaultPanels() *Registry {
-	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), salvagePanel(), fleetPanel(), resourcePanel(), utilizationPanel())
+	return NewRegistry(agentPanel(), todoPanel(), sprintPanel(), runPanel(), salvagePanel(), dagPanel(), fleetPanel(), resourcePanel(), utilizationPanel())
+}
+
+// dagPanel projects recent `bashy dag` pipeline runs. Failures are what a
+// steward is scanning for, so the collapsed summary leads with them.
+func dagPanel() Panel {
+	return panel{id: "dag", build: func(b *Board) PanelView {
+		failed := 0
+		for _, x := range b.DagRuns {
+			if x.Failed {
+				failed++
+			}
+		}
+		v := PanelView{ID: "dag", Title: "Dag runs",
+			Collapsed: fmt.Sprintf("%d recent run(s); %d failed", len(b.DagRuns), failed),
+			Columns:   []string{"RESULT", "TARGETS", "AGE", "DURATION", "FILE", "RUN"}}
+		for _, x := range b.DagRuns {
+			result := "ok"
+			if x.Failed {
+				result = fmt.Sprintf("FAILED %d/%d", x.FailedN, x.Total)
+			}
+			age := int64(0)
+			if !x.StartedAt.IsZero() {
+				age = int64(time.Since(x.StartedAt).Seconds())
+			}
+			v.Rows = append(v.Rows, []string{
+				result, dash(x.Targets), duration(age), millis(x.DurationMS),
+				dash(x.File), x.RunID,
+			})
+		}
+		return v
+	}}
 }
 
 func agentPanel() Panel {
@@ -108,6 +139,15 @@ func salvagePanel() Panel {
 		v.Collapsed = fmt.Sprintf("%d terminal run(s) hold unmerged commits", len(v.Rows))
 		return v
 	}}
+}
+
+// millis renders a millisecond duration, keeping sub-second values visible
+// where the whole-second `duration` helper would collapse them to "-".
+func millis(ms int64) string {
+	if ms <= 0 {
+		return "0s"
+	}
+	return (time.Duration(ms) * time.Millisecond).Round(time.Millisecond).String()
 }
 
 func band(n int) string {

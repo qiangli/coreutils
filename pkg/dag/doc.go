@@ -134,8 +134,25 @@
 // graph.json ([RunGraph], with each target's topological layer precomputed so a
 // renderer needs no graph algorithm), and logs/<target>.<attempt>.log.
 //
-// Read it back with `--runs` (newest first) and `--show <run-id>|last`, or via
-// [ListRuns]/[LoadRun]/[ReadRunLog]. Both flags run nothing.
+// Read it back three ways, none of which runs anything:
+//
+//   - `--runs`   — the list, newest first ([ListRuns]).
+//   - `--status` — the glance: ONE line for the most recent run, exiting
+//     non-zero when it failed, so it composes in a shell. A status verb that
+//     reported failure with exit 0 would be the same absence-of-evidence shape
+//     this package refuses in RecordAttempt.
+//   - `--show <run-id>|last` — the detail ([LoadRun]); add `--html` for a
+//     standalone page with the graph laid out by layer.
+//
+// [ListAllRuns] is the machine-global view across every dag document on the
+// host, which is what a steward board consumes; [ReadRunLog] reads one
+// attempt's output back.
+//
+// The HTML view is deliberately a layered TABLE, not a drawn graph: each node
+// already carries its topological layer, so there is no layout algorithm and
+// nothing to get wrong. It embeds its own stylesheet and loads nothing at view
+// time — a viewer that needs the network is a viewer that does not work on the
+// machine that ran the job.
 //
 // Three properties are load-bearing:
 //

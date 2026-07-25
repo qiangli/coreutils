@@ -36,8 +36,14 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if !strings.Contains(string(text), "age 5h0m0s") || !strings.Contains(string(text), "STALE") {
 		t.Fatalf("terminal did not render unattended age and flag:\n%s", text)
 	}
-	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "14048ce182d0b4a329fb12b17f6b2789f1d9ca498a10a7db9d302b8b8523c0e7"; got != want {
+	// Golden rebased 2026-07-25 for the dag panel. The ONLY delta is one added
+	// panel line; rows/lanes/summary are untouched because dag runs are a
+	// separate Board field, not new Rows.
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(text)), "57603a691568d506ff5d1b19e4a39b680a44eefa1fb12da0e8ea93516464584f"; got != want {
 		t.Errorf("terminal golden changed: got %s\n%s", got, text)
+	}
+	if !strings.Contains(string(text), "Dag runs") {
+		t.Errorf("dag panel missing from the terminal board:\n%s", text)
 	}
 	raw, err := (JSONRenderer{}).Render(b, Options{})
 	if err != nil {
@@ -50,8 +56,52 @@ func TestTerminalAndJSONGoldens(t *testing.T) {
 	if got.SchemaVersion != SchemaVersion || got.Summary.NeedsSteward != 4 || got.Summary.Unattended != 1 {
 		t.Fatalf("bad JSON envelope: %+v", got.Summary)
 	}
-	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "b459d81dc7199c15adb8dffcc7f020473c31766d44c2cf280e5b8f8efe009174"; sum != want {
+	// Rebased with the terminal golden above: one new entry in .panels. A board
+	// with no dag runs omits dag_runs entirely (omitempty), so the wire shape is
+	// unchanged for every existing consumer.
+	if sum, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "522132b64bcb25b517ca2248970efdaacd350c1fb869c38c1be149a9c278637d"; sum != want {
 		t.Errorf("JSON golden changed: got %s\n%s", sum, raw)
+	}
+	if strings.Contains(string(raw), "dag_runs") {
+		t.Errorf("empty dag_runs must be omitted from the wire shape:\n%s", raw)
+	}
+}
+
+// The dag panel projects the run journal; failures are what a steward scans
+// for, so they must surface in the collapsed summary without expanding it.
+func TestDagPanelSurfacesFailures(t *testing.T) {
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	sources := []Source{SourceFunc{SourceName: "fixture", Func: func(_ context.Context, b *Board, _ Options) error {
+		b.DagRuns = []DagRun{
+			{RunID: "2-aaa", File: "/w/DAG.md", Targets: "train", StartedAt: now.Add(-time.Hour), DurationMS: 90000, Total: 3, OK: 3},
+			{RunID: "1-bbb", File: "/w/DAG.md", Targets: "test", StartedAt: now.Add(-2 * time.Hour), DurationMS: 5, Total: 2, OK: 1, FailedN: 1, Failed: true},
+		}
+		return nil
+	}}}
+	b, err := Collect(context.Background(), Options{Now: now}, sources, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view *PanelView
+	for i := range b.Panels {
+		if b.Panels[i].ID == "dag" {
+			view = &b.Panels[i]
+		}
+	}
+	if view == nil {
+		t.Fatal("no dag panel built")
+	}
+	if !strings.Contains(view.Collapsed, "2 recent run(s); 1 failed") {
+		t.Errorf("collapsed summary = %q", view.Collapsed)
+	}
+	if len(view.Rows) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(view.Rows))
+	}
+	if view.Rows[0][0] != "ok" {
+		t.Errorf("first row result = %q, want ok", view.Rows[0][0])
+	}
+	if view.Rows[1][0] != "FAILED 1/2" {
+		t.Errorf("failed row result = %q, want the failed/total count", view.Rows[1][0])
 	}
 }
 

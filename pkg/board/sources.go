@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/dag"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/todo"
 	"github.com/qiangli/coreutils/pkg/weave"
@@ -22,7 +23,44 @@ import (
 func DefaultSources() []Source {
 	// Runs intentionally load first: the todo source uses their repo roots to
 	// discover every checked-in todo scope known to this machine.
-	return []Source{weaveSource{}, todoSource{}, sprintSource{}, fleetSource{}, resourceSource{}}
+	return []Source{weaveSource{}, todoSource{}, sprintSource{}, fleetSource{}, resourceSource{}, dagSource{}}
+}
+
+// NewDagSource exposes the dag run-journal source for callers assembling a
+// custom source set.
+func NewDagSource() Source { return dagSource{} }
+
+// dagRunsPerFile bounds how many runs each dag document contributes to the
+// board. The board is a glance across the machine, not a history browser —
+// `dag --runs` is the history browser.
+const dagRunsPerFile = 5
+
+type dagSource struct{}
+
+func (dagSource) Name() string { return "dag" }
+
+func (dagSource) Load(_ context.Context, b *Board, _ Options) error {
+	entries, err := dag.ListAllRuns("", dagRunsPerFile)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		r := DagRun{
+			RunID: e.RunID, File: e.File, Targets: strings.Join(e.Targets, " "),
+			StartedAt: e.StartedAt, DurationMS: e.DurationMS,
+			Failed: e.Failed, Total: len(e.Tasks),
+		}
+		for _, t := range e.Tasks {
+			switch t.Status {
+			case "done", "up-to-date":
+				r.OK++
+			case "failed":
+				r.FailedN++
+			}
+		}
+		b.DagRuns = append(b.DagRuns, r)
+	}
+	return nil
 }
 
 // NewTodoSource, NewSprintSource, NewWeaveSource, and NewFleetSource expose

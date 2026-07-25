@@ -34,6 +34,10 @@ type Board struct {
 	Todos         []Todo      `json:"todos"`
 	Sprints       []Sprint    `json:"sprints"`
 	Runs          []Run       `json:"runs"`
+	// DagRuns are `bashy dag` pipeline runs from the local run journal. They
+	// are a separate layer from Runs (which are agentic weave runs): a dag run
+	// is a task graph on this host, not an agent working an issue.
+	DagRuns []DagRun `json:"dag_runs,omitempty"`
 	// Resources is the host reading (nil when the collector is not wired
 	// into the source set, e.g. a test board).
 	Resources *resources.System `json:"resources,omitempty"`
@@ -168,6 +172,22 @@ type Run struct {
 	UnmergedCommits int       `json:"unmerged_commits,omitempty"`
 	AgeSeconds      int64     `json:"age_seconds,omitempty"`
 	Stale           bool      `json:"stale,omitempty"`
+}
+
+// DagRun is one `bashy dag` run as recorded by that package's run journal.
+type DagRun struct {
+	RunID     string    `json:"run_id"`
+	File      string    `json:"file"`
+	Targets   string    `json:"targets,omitempty"`
+	StartedAt time.Time `json:"started_at,omitempty,omitzero"`
+	// Milliseconds, not seconds: a dag target is routinely sub-second, and the
+	// board's whole-second duration helper renders those as "-", which hides
+	// exactly the number someone opened the panel to see.
+	DurationMS int64 `json:"duration_ms,omitempty"`
+	Failed     bool  `json:"failed,omitempty"`
+	Total     int       `json:"total"`
+	OK        int       `json:"ok"`
+	FailedN   int       `json:"failed_count,omitempty"`
 }
 
 type Source interface {

@@ -25,7 +25,7 @@ import (
 func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
-		sandboxF, fleetF, meshF, timingsF, runsF, noJournalF                                          bool
+		sandboxF, fleetF, meshF, timingsF, runsF, noJournalF, statusF, htmlF                          bool
 		fileArg, showRunF                                                                             string
 		cacheDir, cacheExport, cacheImport, chunksPath, remoteCmd, remoteShell                        string
 		jobs, keepRuns                                                                                int
@@ -144,7 +144,18 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 				return nil
 			}
 			if showRunF != "" {
-				if err := runShow(out, mode, doc, cacheDir, showRunF); err != nil {
+				if err := runShow(out, mode, doc, cacheDir, showRunF, htmlF); err != nil {
+					return emitErr(errOut, mode, err)
+				}
+				return nil
+			}
+			if statusF {
+				if err := runStatus(out, mode, doc, cacheDir); err != nil {
+					// A failing last run is a verdict, not a usage error: report
+					// the line already printed and carry the exit code out.
+					if e, ok := err.(*Error); ok && e.Code == weavecli.ExitGenericFail {
+						return err
+					}
 					return emitErr(errOut, mode, err)
 				}
 				return nil
@@ -253,7 +264,9 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&timingsF, "timings", false, "Report recorded per-target durations, total (T) and longest (L); runs nothing")
 	cmd.Flags().BoolVar(&watchF, "watch", false, "Poll Sources/Inputs and re-run affected targets until interrupted")
 	cmd.Flags().BoolVar(&runsF, "runs", false, "List recorded runs for this file, newest first; runs nothing")
+	cmd.Flags().BoolVar(&statusF, "status", false, "One-line verdict for the most recent run (exit 1 if it failed); runs nothing")
 	cmd.Flags().StringVar(&showRunF, "show", "", "Show one recorded run by id (or 'last'); runs nothing")
+	cmd.Flags().BoolVar(&htmlF, "html", false, "Render --show as a standalone HTML page (graph + targets)")
 	cmd.Flags().IntVar(&keepRuns, "keep-runs", DefaultKeepRuns, "Recorded runs to retain per file (older ones are pruned)")
 	cmd.Flags().BoolVar(&noJournalF, "no-journal", false, "Do not record this run's report, graph, or logs")
 	cmd.Flags().BoolVar(&sandboxF, "sandbox", false, "Run target bodies through DAG_SANDBOX_CMD wrapper constraints")
