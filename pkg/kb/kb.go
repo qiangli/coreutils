@@ -390,9 +390,15 @@ func newUpdateCmd(dir *string) *cobra.Command {
 			set(&p.Title, title)
 			set(&p.Description, strings.TrimSpace(desc))
 			set(&p.Evidence, evidence)
+			// supersededHere records a status flip INTO superseded, so the
+			// announcement fires from this route too — `update --status
+			// superseded` invalidates a fact exactly as `supersede` does, just
+			// without a replacement to point at.
+			supersededHere := false
 			if status != "" {
 				switch status {
 				case StatusCandidate, StatusValidated, StatusStale, StatusSuperseded:
+					supersededHere = status == StatusSuperseded && p.Status != StatusSuperseded
 					p.Status = status
 					changed = true
 				default:
@@ -425,6 +431,10 @@ func newUpdateCmd(dir *string) *cobra.Command {
 			}
 			if err := store.Write(p, "update"); err != nil {
 				return err
+			}
+			if supersededHere {
+				// Same invalidation, different route — no replacement to name.
+				publishSuperseded(p, nil)
 			}
 			fmt.Fprintf(c.OutOrStdout(), "updated %s\n", p.Slug)
 			return nil
@@ -473,6 +483,12 @@ invalidated lesson plus its correction is itself knowledge.`,
 			if err := store.Write(old, "supersede"); err != nil {
 				return err
 			}
+			// Announce it: a superseded page is the one kb operation an agent
+			// cannot afford to discover on its next pull, because it may already
+			// have read and believed the page being invalidated. Published after
+			// both writes land, so the notification never points at a correction
+			// that is not on disk yet.
+			publishSuperseded(old, p)
 			fmt.Fprintf(c.OutOrStdout(), "superseded %s -> %s\n", old.Slug, p.Slug)
 			return nil
 		},
