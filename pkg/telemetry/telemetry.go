@@ -35,11 +35,10 @@
 // # Discipline
 //
 // Configuration is pure standard OTEL env vars (OTEL_EXPORTER_OTLP_ENDPOINT,
-// OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES, OTEL_TRACES_SAMPLER). When the endpoint
-// is unset, everything here is a NO-OP with no allocation and no goroutine — bashy is a
-// shell, and a shell that pays for telemetry it is not exporting is a shell nobody uses.
-// The global propagator is still installed even in no-op mode, so the wire-format
-// contract survives without a collector.
+// OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES, OTEL_TRACES_SAMPLER). With no endpoint
+// configured, spans default to the bounded local file spool; set
+// OTEL_TRACES_EXPORTER=none for a complete no-op. The global propagator is installed
+// even in no-op mode, so the wire-format contract survives without a collector.
 package telemetry
 
 import (
@@ -85,8 +84,9 @@ func Enabled() bool { return enabled }
 
 // Init wires the OTel plane from standard env vars, once.
 //
-// With OTEL_EXPORTER_OTLP_ENDPOINT unset it installs the global propagator (so the wire
-// contract holds) and nothing else: no exporter, no batcher, no goroutine, no cost.
+// With no exporter or endpoint configured it uses the bounded local file spool.
+// OTEL_TRACES_EXPORTER=none installs only the global propagator: no exporter, batcher,
+// or goroutine.
 func Init(ctx context.Context) (shutdown func(context.Context) error) {
 	shutdown = func(context.Context) error { return nil }
 

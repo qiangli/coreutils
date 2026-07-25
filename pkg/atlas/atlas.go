@@ -629,6 +629,8 @@ func init() {
 	// cluster
 	addVerb("kubectl", staged(StageDeploy, managed(GroupClusterCloud, TierCluster, CapJSON, CapNeedsNetwork)))
 	addVerb("helm", staged(StageDeploy, managed(GroupClusterCloud, TierCluster, CapNeedsNetwork)))
+	addVerb("dks", Entry{Stage: StageDeploy, Group: GroupClusterCloud, Tier: TierCluster,
+		Caps: []string{CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
 
 	// platform
 	addVerb("commands", Entry{Stage: StageCross, Group: GroupPlatform, Caps: []string{CapJSON, CapReadOnly}})
@@ -746,7 +748,7 @@ func init() {
 		// one behind the user's back.
 		"handoff", "resume",
 		// verbs
-		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent",
+		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent", "dks",
 		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		"rclone", "notify",
@@ -764,7 +766,7 @@ func init() {
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch", "search",
 		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act", "sota",
-		"act-runner", "mirror", "podman", "docker", "ollama", "sphere", "git",
+		"act-runner", "mirror", "podman", "docker", "ollama", "dks", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
 		"otel", "tessaro", "login",
@@ -776,7 +778,7 @@ func init() {
 		"find", "awk", "xargs", "at", "batch", "chroot", "nice", "nohup",
 		"runcon", "stdbuf", "time", "timeout", "watch", "env", "foreman",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
-		"act-runner", "skills", "podman", "docker", "ollama", "sphere",
+		"act-runner", "skills", "podman", "docker", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login",
 	)
@@ -798,7 +800,7 @@ func init() {
 	// daemon, an installed/upgraded binary.
 	eff(EffPersist,
 		"at", "batch", "crontab", "nohup", "foreman",
-		"schedule", "act-runner", "mirror", "podman", "docker", "ollama",
+		"schedule", "act-runner", "mirror", "podman", "docker", "ollama", "dks",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
 	)
 

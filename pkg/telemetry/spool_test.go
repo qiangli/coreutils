@@ -27,21 +27,28 @@ func TestSanitizeFieldMakesKeysQueryable(t *testing.T) {
 
 func TestIsFileExporter(t *testing.T) {
 	for _, tc := range []struct {
-		val  string
-		want bool
+		name     string
+		exporter string
+		endpoint string
+		want     bool
 	}{
-		{"file", true},
-		{"console", true}, // synonym: never write spans to stdout, see spool.go
-		{"FILE", true},
-		{" file ", true},
-		{"otlp", false},
-		{"none", false},
-		{"", false},
+		{"file", "file", "", true},
+		{"console", "console", "", true}, // synonym: never write spans to stdout, see spool.go
+		{"case insensitive", "FILE", "", true},
+		{"trimmed", " file ", "", true},
+		{"otlp", "otlp", "", false},
+		{"explicit opt-out", "none", "", false},
+		{"default file sink", "", "", true},
+		{"configured endpoint wins", "", "http://collector:4318", false},
 	} {
-		t.Setenv("OTEL_TRACES_EXPORTER", tc.val)
-		if got := isFileExporter(); got != tc.want {
-			t.Errorf("OTEL_TRACES_EXPORTER=%q -> %v, want %v", tc.val, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OTEL_TRACES_EXPORTER", tc.exporter)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", tc.endpoint)
+			if got := isFileExporter(); got != tc.want {
+				t.Errorf("OTEL_TRACES_EXPORTER=%q OTEL_EXPORTER_OTLP_ENDPOINT=%q -> %v, want %v",
+					tc.exporter, tc.endpoint, got, tc.want)
+			}
+		})
 	}
 }
 

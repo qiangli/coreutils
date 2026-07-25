@@ -224,14 +224,16 @@ func TestWeaveOtelNoop(t *testing.T) {
 		return
 	}
 
-	// Ensure no endpoint is set
+	// Telemetry defaults to the local file spool. The standard "none" exporter
+	// value is the explicit no-op contract.
+	os.Setenv("OTEL_TRACES_EXPORTER", "none")
 	os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 
-	// This should not panic or start any exporters
+	// This should not panic or start any exporters.
 	shutdown := telemetry.Init(context.Background())
 	defer shutdown(context.Background())
 
 	if telemetry.Enabled() {
-		t.Fatalf("telemetry should be disabled when endpoint is unset")
+		t.Fatalf("telemetry should be disabled when OTEL_TRACES_EXPORTER=none")
 	}
 }
