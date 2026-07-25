@@ -57,6 +57,12 @@ type Event struct {
 	Topic     string `json:"topic,omitempty"`     // topic broadcast key
 	Room      string `json:"room,omitempty"`      // room-scoped addressing
 	To        string `json:"to,omitempty"`        // 1:1 recipient (session or role)
+	// Priority selects the DELIVERY TIER a subscriber's sidecar uses: "" or
+	// "queued" is read at a turn boundary, "interrupt" may break into a running
+	// turn. It is a REQUEST, not a guarantee — the subscriber decides whose
+	// interrupts it accepts, so an unauthorized or rate-limited interrupt is
+	// demoted to queued rather than honoured or dropped.
+	Priority string `json:"priority,omitempty"`
 }
 
 const (

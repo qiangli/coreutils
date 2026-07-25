@@ -62,7 +62,13 @@ be down and silently swallow a message.`,
 		SilenceErrors: true,
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
-	cmd.AddCommand(newPublishCmd(), newWatchCmd())
+	cmd.AddCommand(
+		newPublishCmd(), newWatchCmd(),
+		// The sidecar half: an agent mid-turn cannot watch a channel, so these
+		// hold the subscription for it and hand it a pre-resolved buffer.
+		newSubscribeCmd(), newUnsubscribeCmd(), newSubscriptionsCmd(),
+		newSidecarCmd(), newPendingCmd(),
+	)
 	return cmd
 }
 

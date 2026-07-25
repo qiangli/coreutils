@@ -329,7 +329,15 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   down and a watcher that was not running still drains what it missed; drain
   cursors are per-subscriber, which is what makes it a bus and not a queue.
   Replaces the never-reachable `pkg/notify`, whose intended subscriber name
-  `watch` collided with the classic watch(1) — hence the `bus` parent),
+  `watch` collided with the classic watch(1) — hence the `bus` parent. The
+  SIDECAR (`bus subscribe`/`sidecar`/`pending`) is the attention half: an agent
+  mid-turn cannot decide to go check a channel, so the sidecar holds its
+  subscription, matches topics, applies governance + rate rules OFF its critical
+  path, and leaves it a pre-resolved buffer to read at a turn boundary.
+  Interrupt-tier delivery is ESC + steer over the coach's control socket. The
+  rule everything hangs off: DEMOTE, NEVER DROP — an unauthorized, rate-limited,
+  undeliverable or failed interrupt becomes a queued notification with a recorded
+  reason, because a dropped message leaves an agent on stale assumptions),
   `pkg/chat` + `pkg/ollm` (agent chat / Ollama
   client isolation), `pkg/browser` + `pkg/webinspect` (browser automation
   for `cmds/browser`/`fetch`, three modes: `probe` = attach to a Chrome on

@@ -26,8 +26,15 @@ func newWatchCmd() *cobra.Command {
 	var since int64
 
 	cmd := &cobra.Command{
-		Use:     "watch [flags]",
-		Aliases: []string{"sub", "subscribe"},
+		Use: "watch [flags]",
+		// NOT aliased to "subscribe"/"sub". Cobra resolves an alias ahead of a
+		// sibling's real name, so those aliases silently shadowed the `subscribe`
+		// command — typing `bus subscribe` ran `watch` and rejected its flags.
+		// The two are also genuinely different operations: watch reads the stream
+		// yourself, subscribe registers a standing interest for the sidecar to hold
+		// on your behalf. Sharing a name would blur exactly the distinction the
+		// sidecar exists to make.
+		Aliases: []string{"follow", "tail"},
 		Short:   "watch the bus for notifications (follow, or drain what you missed)",
 		Long: `watch reads notifications off the host room's timeline.
 

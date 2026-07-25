@@ -24,7 +24,7 @@ type PublishEnvelope struct {
 }
 
 func newPublishCmd() *cobra.Command {
-	var topic, to, roomID, principal string
+	var topic, to, roomID, principal, priority string
 	var jsonOut bool
 
 	cmd := &cobra.Command{
@@ -65,12 +65,21 @@ attributed to is not a notification.`,
 					topic, roomID, to, msg)
 			}
 
+			switch priority {
+			case "", DeliveryQueued, DeliveryInterrupt:
+			default:
+				return publishErr(cmd, jsonOut,
+					fmt.Sprintf("unknown --priority %q (use %s or %s)", priority, DeliveryQueued, DeliveryInterrupt),
+					topic, roomID, to, msg)
+			}
+
 			ev := room.Event{
 				Principal: who,
 				Topic:     topic,
 				Room:      roomID,
 				To:        to,
 				Body:      msg,
+				Priority:  priority,
 			}
 			if err := room.Notify(ev); err != nil {
 				return publishErr(cmd, jsonOut, err.Error(), topic, roomID, to, msg)
@@ -98,6 +107,9 @@ attributed to is not a notification.`,
 	f.StringVar(&to, "to", "", "recipient session or role (1:1)")
 	f.StringVar(&roomID, "room", "", "room ID for room-scoped publish")
 	f.StringVar(&principal, "principal", "", "sender principal (who is publishing)")
+	f.StringVar(&priority, "priority", DeliveryQueued,
+		"delivery tier to REQUEST: queued (read at a turn boundary) | interrupt (break into a running turn). "+
+			"A subscriber decides whose interrupts it honours, so this is a request, not a guarantee")
 	f.BoolVar(&jsonOut, "json", false, "emit a "+SchemaVersion+" JSON envelope")
 	return cmd
 }
