@@ -67,6 +67,50 @@ func newChatSessionsCmd() *cobra.Command {
 	return cmd
 }
 
+// formatEvent renders one timeline entry.
+//
+// The addressing fields are not decoration. A `notify` event carries WHO sent it
+// (Principal — required, the REPORT/AUTHOR invariant) and WHERE it was addressed
+// (Topic / To / Room), and the original renderer printed none of them: it showed
+// Type, Target and Body only, so every notification appeared as an anonymous line
+// of text with no sender and no topic. Publishing into a log that cannot show who
+// published or what they addressed is publishing into a void — the notification
+// exists, and carries no more information than silence.
+func formatEvent(e room.Event) string {
+	line := fmt.Sprintf("%s  %-9s", e.TS, e.Type)
+
+	// Who: Actor for session events, Principal for notifications.
+	switch {
+	case e.Principal != "":
+		line += "  <" + e.Principal + ">"
+	case e.Actor != "":
+		line += "  <" + e.Actor + ">"
+	}
+
+	// Where: the addressing that decides who this was meant for.
+	var addr []string
+	if e.Topic != "" {
+		addr = append(addr, "#"+e.Topic)
+	}
+	if e.To != "" {
+		addr = append(addr, "→"+e.To)
+	}
+	if e.Room != "" {
+		addr = append(addr, "@"+e.Room)
+	}
+	if e.Target != "" {
+		addr = append(addr, e.Target)
+	}
+	if len(addr) > 0 {
+		line += "  " + strings.Join(addr, " ")
+	}
+
+	if e.Body != "" {
+		line += "  " + e.Body
+	}
+	return line
+}
+
 // newChatTimelineCmd prints the host room's event log — join/leave/steer/status.
 func newChatTimelineCmd() *cobra.Command {
 	var n int
@@ -85,14 +129,7 @@ func newChatTimelineCmd() *cobra.Command {
 				return nil
 			}
 			for _, e := range events {
-				line := fmt.Sprintf("%s  %-9s %s", e.TS, e.Type, e.Target)
-				if e.Actor != "" {
-					line += "  <" + e.Actor + ">"
-				}
-				if e.Body != "" {
-					line += "  " + e.Body
-				}
-				fmt.Fprintln(w, line)
+				fmt.Fprintln(w, formatEvent(e))
 			}
 			return nil
 		},
