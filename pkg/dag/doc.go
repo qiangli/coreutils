@@ -175,6 +175,16 @@
 // [Journal.Observer] to record; note it is called from the scheduler's
 // goroutines, so an implementation must be concurrency-safe and must not block.
 //
+// EVERY target reports, including ones that never run a body: a cache hit, a
+// dependency-skip, and a false condition all emit their terminal event (see
+// noteResult). Omitting them would leave a live viewer showing "pending" for
+// most of an incremental re-run, which is the common case.
+//
+// Output is watchable too, which is the point for a long stage: task.start
+// carries the attempt's log path, and the server tails that file over SSE. Per-
+// target status changes a handful of times in three hours; the output is what
+// an operator actually watches.
+//
 // Three properties are load-bearing:
 //
 //   - It is best-effort. A journal that cannot be written never fails a run that

@@ -269,6 +269,145 @@ func TestEventStreamEndsWithTheRun(t *testing.T) {
 	}
 }
 
+// Targets that never run a body still have to report. A cache hit or a
+// dependency-skip that emits nothing leaves a live viewer showing "pending"
+// for the whole run — and on an incremental re-run that is most of the graph,
+// which is exactly the common case.
+func TestEventsCoverSkippedAndUpToDateTargets(t *testing.T) {
+	md := "## Tasks\n\n" +
+		"### compile\nSources: in.txt\nGenerates: out.txt\n" + block("bash", "cp in.txt out.txt") +
+		"### boom\nRequires: compile\n" + block("bash", "exit 3") +
+		"### after\nRequires: boom\n" + block("bash", "echo never")
+
+	for _, jobs := range []string{"1", "4"} {
+		t.Run("jobs="+jobs, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("DAG_CACHE_DIR", root)
+			path := writeDAG(t, md)
+			if err := os.WriteFile(filepath.Join(filepath.Dir(path), "in.txt"), []byte("seed\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			run := func() {
+				cmd := NewDagCmd()
+				cmd.SetOut(new(bytes.Buffer))
+				cmd.SetErr(new(bytes.Buffer))
+				cmd.SetArgs([]string{"--file", path, "after", "-k", "-j", jobs})
+				_ = cmd.Execute() // fails on purpose
+			}
+			run() // first run populates the cache
+			run() // second: compile is up-to-date
+
+			base := filepath.Join(root, "runs")
+			docs, _ := os.ReadDir(base)
+			ids, _ := runIDs(filepath.Join(base, docs[0].Name()))
+			events, err := ReadEvents(filepath.Join(base, docs[0].Name(), ids[0]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]string{}
+			for _, ev := range events {
+				if ev.Kind == EventTaskEnd {
+					got[ev.Task] = ev.Status
+				}
+			}
+			for task, want := range map[string]string{
+				"compile": "up-to-date", // cache hit — never enters runOne
+				"boom":    "failed",
+				"after":   "skipped", // dependency failed — never enters runOne
+			} {
+				if got[task] != want {
+					t.Errorf("task %q reported %q, want %q (events: %+v)", task, got[task], want, got)
+				}
+			}
+		})
+	}
+}
+
+// task.start must carry the log path: only the engine knows the sanitized
+// filename, and without it a viewer cannot begin tailing a running target.
+func TestTaskStartCarriesLogPath(t *testing.T) {
+	root, docKey, runID := serveFixture(t,
+		"## Tasks\n\n### my/odd name\n"+block("bash", "echo hi"), "my/odd name")
+
+	events, err := ReadEvents(filepath.Join(root, "runs", docKey, runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logPath string
+	for _, ev := range events {
+		if ev.Kind == EventTaskStart {
+			logPath = ev.Log
+		}
+	}
+	if logPath == "" {
+		t.Fatal("task.start carried no log path")
+	}
+	if _, err := os.Stat(filepath.Join(root, "runs", docKey, runID, logPath)); err != nil {
+		t.Errorf("advertised log path %q does not resolve: %v", logPath, err)
+	}
+}
+
+// Tailing streams appended lines and terminates once the run is over and the
+// file is fully read.
+func TestLogTailStreamsAndTerminates(t *testing.T) {
+	root, docKey, runID := serveFixture(t,
+		"## Tasks\n\n### go\n"+block("bash", "echo alpha; echo beta"), "go")
+	srv := httptest.NewServer((&server{root: root}).routes())
+	defer srv.Close()
+
+	st, err := loadRunState(filepath.Join(root, "runs"), docKey, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := st.orderedTasks()[0].Logs
+	if len(logs) == 0 {
+		t.Fatal("no log to tail")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		srv.URL+"/logtail?doc="+docKey+"&run="+runID+"&path="+logs[0], nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body := new(bytes.Buffer)
+	done := make(chan error, 1)
+	go func() { _, err := body.ReadFrom(resp.Body); done <- err }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("log tail did not terminate after the run finished")
+	}
+	s := body.String()
+	// Lines are JSON-encoded: log content is arbitrary bytes, and a raw newline
+	// would end the SSE frame early.
+	if !strings.Contains(s, `{"line":"alpha"}`) || !strings.Contains(s, `{"line":"beta"}`) {
+		t.Errorf("tail did not deliver the log lines:\n%s", s)
+	}
+}
+
+// The tail endpoint takes an untrusted path just like the static reader.
+func TestLogTailRejectsEscape(t *testing.T) {
+	root, docKey, runID := serveFixture(t,
+		"## Tasks\n\n### go\n"+block("bash", "echo go"), "go")
+	srv := httptest.NewServer((&server{root: root}).routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/logtail?doc=" + docKey + "&run=" + runID +
+		"&path=../../../../etc/passwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Error("logtail accepted a path escaping the run directory")
+	}
+}
+
 // A nil observer must be exactly today's engine.
 func TestNilObserverIsInert(t *testing.T) {
 	e := &Engine{}

@@ -28,6 +28,10 @@ th{color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.
 .pill.live{color:var(--accent);border-color:var(--accent)}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem;overflow-wrap:anywhere}
 .empty{color:var(--muted)}
+#logpane{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin:0;
+  max-height:22rem;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.82rem;
+  white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
+#logwho{font-weight:400;font-size:.85rem}
 @media(max-width:700px){main{padding:14px}}
 </style></head><body><main>
 {{if .Live}}<p class="sub"><a href="/">&larr; all runs</a></p>{{end}}
@@ -45,6 +49,11 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem;ov
 <div class="scroll"><table class="graph"><thead><tr>{{range .Levels}}<th>L{{.}}</th>{{end}}</tr></thead><tbody>
 {{range .Grid}}<tr>{{range .}}<td>{{with .Task}}<div class="node s-{{cls .Status}}" data-task="{{.Name}}"><div class="nm">{{.Name}}</div><div class="meta"><span data-field="status">{{.Status}}</span> · <span data-field="dur">{{dur .DurationMS}}</span></div></div>{{else}}<span class="empty">·</span>{{end}}</td>{{end}}</tr>{{end}}
 </tbody></table></div>
+{{end}}
+
+{{if .Live}}
+<h2>Output <span class="empty" id="logwho">— waiting for a target to start</span></h2>
+<pre id="logpane">·</pre>
 {{end}}
 
 <h2>Targets</h2>
@@ -73,9 +82,32 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem;ov
       if (field === "status") el.className = el.className.replace(/s-[a-z-]+/, "s-" + value);
     });
   }
+  // Tail the running target's output. Status changes a handful of times in a
+  // long run; the output is what you actually watch.
+  var pane = document.getElementById("logpane");
+  var who = document.getElementById("logwho");
+  var tail = null, lines = [];
+  var MAX = 500; // keep the DOM bounded when a stage is chatty
+  function follow(task, path) {
+    if (tail) tail.close();
+    lines = [];
+    pane.textContent = "";
+    who.textContent = "— " + task;
+    tail = new EventSource({{.LogTailBase}} + "&path=" + encodeURIComponent(path));
+    tail.onmessage = function (m) {
+      var atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40;
+      lines.push(JSON.parse(m.data).line);
+      if (lines.length > MAX) lines = lines.slice(-MAX);
+      pane.textContent = lines.join("\n");
+      if (atBottom) pane.scrollTop = pane.scrollHeight; // don't yank a reader who scrolled up
+    };
+  }
   src.onmessage = function (m) {
     var ev = JSON.parse(m.data);
-    if (ev.t === "task.start") set(ev.task, "status", "running");
+    if (ev.t === "task.start") {
+      set(ev.task, "status", "running");
+      if (ev.log) follow(ev.task, ev.log);
+    }
     if (ev.t === "task.end") {
       set(ev.task, "status", ev.status);
       set(ev.task, "dur", (ev.ms || 0) + "ms");
@@ -83,6 +115,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem;ov
     }
     if (ev.t === "run.end") {
       src.close();
+      if (tail) tail.close();
       // The finished run has artifacts and log paths the event stream does not
       // carry; reload once to pick up the authoritative report.
       location.reload();

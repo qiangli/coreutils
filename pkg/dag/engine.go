@@ -289,6 +289,7 @@ func (e *Engine) runSerial(ctx context.Context, order []*Node, fp map[string]str
 			node.Status = StatusUpToDate
 			res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusUpToDate, UpToDate: true}
 			node.Result = &res
+			e.noteResult(node.Task.Name, res)
 			report.add(res)
 			if e.OutputGroup {
 				e.flushGroup(node, res)
@@ -362,6 +363,7 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 		queued[n.Task.Name] = true
 		r := TaskResult{Name: n.Task.Name, Host: n.Task.Host, Status: status}
 		n.Status, n.Result, results[n.Task.Name] = status, &r, &r
+		e.noteResult(n.Task.Name, r)
 		go func() { done <- n }()
 	}
 
@@ -389,6 +391,9 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 				// runs inside it, exactly as it did under the bare semaphore.
 				worker, release, err := e.acquireSlot(ctx, node.Task, sem)
 				var r TaskResult
+				// runOne brackets the body with its own start/end events; the
+				// other branches never run one, so they emit the end below.
+				ran := false
 				switch {
 				case err != nil:
 					// No worker can ever host this target: fail fast with the
@@ -401,7 +406,11 @@ func (e *Engine) runParallel(ctx context.Context, order []*Node, fp map[string]s
 				case e.upToDate(node, fp):
 					r = TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusUpToDate, UpToDate: true}
 				default:
+					ran = true
 					r = e.runOne(ctx, node, true, worker)
+				}
+				if !ran {
+					e.noteResult(node.Task.Name, r)
 				}
 				if release != nil {
 					release()
@@ -576,7 +585,10 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 			case <-ctx.Done():
 			}
 		}
-		e.emitEvent(Event{Kind: EventTaskStart, Task: node.Task.Name, Attempt: attempt + 1})
+		e.emitEvent(Event{
+			Kind: EventTaskStart, Task: node.Task.Name, Attempt: attempt + 1,
+			Log: filepath.ToSlash(attemptLogPath(node.Task.Name, attempt+1)),
+		})
 		res = e.runAttempt(ctx, node, captureRun, worker, attempt+1)
 		res = applyExitContract(node.Task, res)
 		e.emitEvent(Event{
@@ -1002,6 +1014,7 @@ func (e *Engine) markSkipped(node *Node, blocker string) TaskResult {
 	node.Status = StatusSkipped
 	res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusSkipped}
 	node.Result = &res
+	e.noteResult(node.Task.Name, res)
 	if e.Verbose && !e.OutputGroup {
 		fmt.Fprintf(e.Stderr, "==> skip %s (dependency %s did not succeed)\n", node.Task.Name, blocker)
 	}
@@ -1027,6 +1040,7 @@ func (e *Engine) markConditionSkipped(node *Node) TaskResult {
 	node.Status = StatusConditionSkipped
 	res := TaskResult{Name: node.Task.Name, Host: node.Task.Host, Status: StatusConditionSkipped}
 	node.Result = &res
+	e.noteResult(node.Task.Name, res)
 	if e.Verbose && !e.OutputGroup {
 		fmt.Fprintf(e.Stderr, "==> %s (skipped: condition false)\n", node.Task.Name)
 	}

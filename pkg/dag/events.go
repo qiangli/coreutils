@@ -26,8 +26,13 @@ type Event struct {
 	At         time.Time `json:"at"`
 	File       string    `json:"file,omitempty"`    // run.start only
 	Targets    []string  `json:"targets,omitempty"` // run.start only
-	Task       string    `json:"task,omitempty"`
-	Attempt    int       `json:"attempt,omitempty"`
+	Task    string `json:"task,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
+	// Log is the journal-relative path of this attempt's log, carried on
+	// task.start so a viewer can begin tailing the output immediately. Only the
+	// engine knows the sanitized filename, so publishing it here saves every
+	// consumer from reimplementing safeFileName.
+	Log string `json:"log,omitempty"`
 	Status     string    `json:"status,omitempty"`
 	ExitCode   int       `json:"exit,omitempty"`
 	DurationMS int64     `json:"ms,omitempty"`
@@ -104,6 +109,24 @@ func ReadEvents(dir string) ([]Event, error) {
 		}
 	}
 	return out, nil
+}
+
+// noteResult emits the terminal event for a target that reached a result
+// WITHOUT running a body — up-to-date, skipped, condition-skipped, or
+// unplaceable. runOne emits its own start/end pair around the body; these paths
+// have no body to bracket, so they emit only the end.
+//
+// This is not a detail. Without it a live viewer shows a cache hit as "pending"
+// for the whole run, and on an incremental re-run that is most of the graph —
+// a monitor that misreports the common case is one nobody trusts.
+func (e *Engine) noteResult(name string, res TaskResult) {
+	e.emitEvent(Event{
+		Kind:       EventTaskEnd,
+		Task:       name,
+		Status:     res.Status.String(),
+		ExitCode:   res.ExitCode,
+		DurationMS: res.Duration.Milliseconds(),
+	})
 }
 
 // emitEvent is the engine's nil-safe observer call.

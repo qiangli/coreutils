@@ -80,8 +80,10 @@ type htmlRunView struct {
 	RunID  string
 	// StreamURL is built in Go rather than concatenated in the template so the
 	// page interpolates ONE escaped value into script context instead of
-	// stitching a URL together from three.
-	StreamURL string
+	// stitching a URL together from three. LogTailBase is the same for the log
+	// stream; the page appends only the (encodeURIComponent'd) log path.
+	StreamURL   string
+	LogTailBase string
 }
 
 // htmlIndexView is the served index's template data.
@@ -128,8 +130,9 @@ func renderRunPage(entry *RunEntry, graph *RunGraph, live bool, docKey, runID st
 		Live: live, DocKey: docKey, RunID: runID,
 	}
 	if live {
-		view.StreamURL = fmt.Sprintf("/events?doc=%s&run=%s&from=%d",
-			url.QueryEscape(docKey), url.QueryEscape(runID), eventCount)
+		q := fmt.Sprintf("doc=%s&run=%s", url.QueryEscape(docKey), url.QueryEscape(runID))
+		view.StreamURL = fmt.Sprintf("/events?%s&from=%d", q, eventCount)
+		view.LogTailBase = "/logtail?" + q
 	}
 	return renderRunView(view, entry, graph)
 }

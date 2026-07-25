@@ -247,7 +247,110 @@ func (s *server) routes() *http.ServeMux {
 	mux.HandleFunc("/run", s.handleRun)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/log", s.handleLog)
+	mux.HandleFunc("/logtail", s.handleLogTail)
 	return mux
+}
+
+// handleLogTail streams a log file as it is appended (SSE).
+//
+// This is what makes a long stage watchable. Per-target status changes a
+// handful of times in three hours; the output is the thing you actually watch,
+// so a monitor that shows only status is not monitoring a long job.
+//
+// Each line is delivered as its own JSON-encoded event. Log content is
+// arbitrary bytes from somebody's build, so it is encoded rather than
+// interpolated: a raw newline would end the SSE frame early and invalid UTF-8
+// would corrupt the stream.
+func (s *server) handleLogTail(w http.ResponseWriter, r *http.Request) {
+	docKey, runID, ok := runParams(w, r)
+	if !ok {
+		return
+	}
+	dir := filepath.Join(s.root, "runs", docKey, runID)
+	rel := r.URL.Query().Get("path")
+	// Resolve through the same guard the static log reader uses, then keep the
+	// verified absolute path — never re-join the untrusted value.
+	path, err := resolveWithin(dir, rel)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ctx := r.Context()
+	var offset int64
+	var pending []byte
+	for {
+		data, size := readFrom(path, offset)
+		if len(data) > 0 {
+			offset = size
+			pending = append(pending, data...)
+			// Emit only whole lines; a partial trailing line is held until the
+			// rest arrives, so a line is never split across two events.
+			for {
+				i := indexByte(pending, '\n')
+				if i < 0 {
+					break
+				}
+				line := strings.TrimRight(string(pending[:i]), "\r")
+				pending = pending[i+1:]
+				if enc, err := json.Marshal(map[string]string{"line": line}); err == nil {
+					fmt.Fprintf(w, "data: %s\n\n", enc)
+				}
+			}
+			flusher.Flush()
+		}
+		// Stop once the run is over AND the file has been fully read: there
+		// will never be more. While the run is live, silence is normal.
+		if _, err := os.Stat(filepath.Join(dir, "report.json")); err == nil && len(data) == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// readFrom reads whatever has been appended past offset, returning the new
+// bytes and the file's current size. A file that has not appeared yet reads as
+// empty rather than as an error: a target's log is created when it starts
+// writing, which can be after the viewer subscribed.
+func readFrom(path string, offset int64) ([]byte, int64) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, offset
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Size() <= offset {
+		return nil, offset
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return nil, offset
+	}
+	buf := make([]byte, fi.Size()-offset)
+	n, _ := io.ReadFull(f, buf)
+	return buf[:n], offset + int64(n)
+}
+
+func indexByte(b []byte, c byte) int {
+	for i := range b {
+		if b[i] == c {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -411,21 +514,32 @@ func safePathElement(s string) bool {
 	return true
 }
 
-// readWithin reads rel under dir, refusing anything that escapes it.
-func readWithin(dir, rel string) ([]byte, error) {
+// resolveWithin turns an untrusted relative path into a verified absolute one
+// under dir, refusing anything that escapes. Callers keep the RETURNED path;
+// re-joining the untrusted value afterwards would defeat the check.
+func resolveWithin(dir, rel string) (string, error) {
 	if rel == "" {
-		return nil, os.ErrNotExist
+		return "", os.ErrNotExist
 	}
 	root, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	p, err := filepath.Abs(filepath.Join(dir, filepath.FromSlash(rel)))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if p != root && !strings.HasPrefix(p, root+string(os.PathSeparator)) {
-		return nil, os.ErrNotExist
+		return "", os.ErrNotExist
+	}
+	return p, nil
+}
+
+// readWithin reads rel under dir, refusing anything that escapes it.
+func readWithin(dir, rel string) ([]byte, error) {
+	p, err := resolveWithin(dir, rel)
+	if err != nil {
+		return nil, err
 	}
 	return os.ReadFile(p)
 }
