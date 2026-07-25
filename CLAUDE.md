@@ -321,7 +321,16 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   pages + literal commands); both write NOTHING — the hard rule "kb reads
   foreign stores, never writes them" is pinned by tests, and the judgment
   half lives in bashy's embedded `knowledge-transfer` skill — see
-  dhnt/docs/kb-knowledge-transfer-design.md), `pkg/chat` + `pkg/ollm` (agent chat / Ollama
+  dhnt/docs/kb-knowledge-transfer-design.md),
+  `pkg/bus` (the agent notification bus behind `bashy bus`: `publish` a change,
+  `watch` for one. The PUSH half of how agents coordinate, where `pkg/kb` is the
+  durable PULL half — kb holds what is TRUE, the bus carries what just CHANGED.
+  Transport is the pkg/room append-only timeline, so there is no daemon to be
+  down and a watcher that was not running still drains what it missed; drain
+  cursors are per-subscriber, which is what makes it a bus and not a queue.
+  Replaces the never-reachable `pkg/notify`, whose intended subscriber name
+  `watch` collided with the classic watch(1) — hence the `bus` parent),
+  `pkg/chat` + `pkg/ollm` (agent chat / Ollama
   client isolation), `pkg/browser` + `pkg/webinspect` (browser automation
   for `cmds/browser`/`fetch`, three modes: `probe` = attach to a Chrome on
   `--remote-debugging-port`, `solo` = launch a headless Chrome, and `live`
