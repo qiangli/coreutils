@@ -304,11 +304,27 @@ secretary pass is not fatal:
 ```bash
 bashy meet amend <id> --resynthesize                 # re-run the secretary, rewrite minutes
 bashy meet amend <id> --decision-mode explicit       # re-run under a stricter mode
+bashy meet amend <id> --secretary AGENT              # a DIFFERENT secretary (implies --resynthesize)
 bashy meet amend <id>                                # just re-render (e.g. after a code change)
 ```
 
 `converge` writes `synthesis.json` (latest pass wins) and **never appends markers to
 the transcript**, so amending is idempotent and cannot double-count.
+
+### When the secretary could not launch at all
+
+A secretary that *ran* and found nothing files `(none — the meeting reached no
+decision)`. A secretary that **never ran** files an explicit `UNKNOWN` notice
+instead — because "the meeting decided nothing" is a claim about the meeting,
+and reaching it through the *absence* of the recorder would be a success-shaped
+state built on missing evidence (see `fleet-evidence-invariant`). The minutes
+say what is actually known, and name the recovery.
+
+`--secretary` on `converge`/`amend` is that recovery: it seats a replacement
+without re-running the deliberation, so a launch refusal costs a synthesis pass
+rather than the whole meeting. The replacement is still bound by the separation
+of powers — naming a participant or the chair is refused, and a refused
+override leaves the session untouched.
 
 ## Failure reporting
 

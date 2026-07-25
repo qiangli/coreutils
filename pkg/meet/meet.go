@@ -256,6 +256,14 @@ func (sf *sessionFlags) newState() (*State, error) {
 // flag: an agent chair runs the ledger loop, no chair runs a round-robin.
 func deliberate(ctx context.Context, st *State, w io.Writer, rounds int, question string, verbose bool) error {
 	if st.chaired() {
+		if rounds > 1 {
+			// --rounds is a round-robin control. Under a chair the ledger loop
+			// decides how many turns to run, so honouring it is impossible —
+			// say so rather than silently running a shorter meeting than asked.
+			fmt.Fprintf(w, "meet: ⚠ --rounds %d ignored — %s is chairing, and a chair decides "+
+				"turn count itself (bounded by --max-turns %d). Drop --chair for round-robin rounds.\n",
+				rounds, st.chair(), st.MaxTurns)
+		}
 		res, err := runChaired(ctx, st, nil)
 		if err != nil {
 			return err
@@ -845,7 +853,7 @@ func newAskCmd() *cobra.Command {
 }
 
 func newConvergeCmd() *cobra.Command {
-	var mode string
+	var mode, secretary string
 	cmd := &cobra.Command{
 		Use:   "converge <id>",
 		Short: "secretary pass: extract decisions, actions, risks, open questions, corrections",
@@ -853,6 +861,9 @@ func newConvergeCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := loadState(args[0])
 			if err != nil {
+				return err
+			}
+			if err := overrideSecretary(st, secretary); err != nil {
 				return err
 			}
 			if mode != "" {
@@ -873,7 +884,9 @@ func newConvergeCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&mode, "decision-mode", "", "override the session's decision mode: infer | explicit")
+	f := cmd.Flags()
+	f.StringVar(&mode, "decision-mode", "", "override the session's decision mode: infer | explicit")
+	f.StringVar(&secretary, "secretary", "", "record with this agent instead of the session's secretary (recovery when the original could not launch)")
 	return cmd
 }
 
@@ -908,7 +921,7 @@ func newCloseCmd() *cobra.Command {
 // minutes. The fix for a weak secretary pass: the transcript is the durable
 // artifact, the minutes are a projection of it, and a projection can be redone.
 func newAmendCmd() *cobra.Command {
-	var mode string
+	var mode, secretary string
 	var resynthesize bool
 	cmd := &cobra.Command{
 		Use:   "amend <id>",
@@ -918,6 +931,12 @@ func newAmendCmd() *cobra.Command {
 			st, err := loadState(args[0])
 			if err != nil {
 				return err
+			}
+			if err := overrideSecretary(st, secretary); err != nil {
+				return err
+			}
+			if secretary != "" {
+				resynthesize = true // naming a new secretary is a request to re-run it
 			}
 			if mode != "" {
 				st.DecisionMode = mode
@@ -942,6 +961,7 @@ func newAmendCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&mode, "decision-mode", "", "re-run the secretary with this mode: infer | explicit")
+	f.StringVar(&secretary, "secretary", "", "re-run with this agent instead of the session's secretary (implies --resynthesize)")
 	f.BoolVar(&resynthesize, "resynthesize", false, "re-run the secretary before rewriting the minutes")
 	return cmd
 }

@@ -478,6 +478,14 @@ func blockquote(text, file string) string {
 // Decisions and action items come from explicit human markers in the transcript
 // PLUS the secretary's synthesis; inferred decisions are labelled so a reader can
 // always tell what was stated from what was read out of a consensus.
+// noSynthesisNotice is what the minutes say when the secretary pass never
+// completed. It must never read like a finding: the transcript may well hold
+// decisions that nothing has extracted yet. `meet amend --resynthesize
+// [--secretary AGENT]` is the recovery.
+const noSynthesisNotice = "**UNKNOWN — the secretary pass did not complete, so nothing was extracted.** " +
+	"This is NOT a finding that the meeting decided nothing; read the turns below. " +
+	"Recover with `bashy meet amend <id> --resynthesize [--secretary AGENT]`.\n"
+
 func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Meeting — %s\n", st.Topic)
@@ -522,9 +530,16 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	}
 
 	b.WriteString("## Decisions\n")
-	if len(decisions) == 0 {
+	switch {
+	case len(decisions) == 0 && syn == nil:
+		// The secretary never produced a synthesis, so nothing extracted the
+		// decisions. "No decision" would be a success-shaped claim reached by
+		// the ABSENCE of evidence — the exact shape the fleet-evidence
+		// invariant forbids. Say what is actually known: nothing.
+		b.WriteString(noSynthesisNotice)
+	case len(decisions) == 0:
 		b.WriteString("(none — the meeting reached no decision)\n")
-	} else {
+	default:
 		for i, d := range decisions {
 			tag := ""
 			if d.Inferred {
@@ -539,9 +554,12 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	}
 
 	b.WriteString("\n## Action items\n")
-	if len(actions) == 0 {
+	switch {
+	case len(actions) == 0 && syn == nil:
+		b.WriteString(noSynthesisNotice)
+	case len(actions) == 0:
 		b.WriteString("(none)\n")
-	} else {
+	default:
 		for _, a := range actions {
 			fmt.Fprintf(&b, "- [ ] %s\n", redactHome(a))
 		}
@@ -660,6 +678,25 @@ func convergeInstruction(mode string) string {
 // converge runs the secretary's synthesis pass and persists the result to
 // synthesis.json (latest pass wins). Safe to re-run: it never appends markers to
 // the transcript, so `meet amend` cannot duplicate anything.
+// overrideSecretary swaps in a replacement secretary and re-validates, so a
+// meeting whose secretary could not launch is recoverable without re-running
+// the whole deliberation. The role invariants still apply: the replacement may
+// not be a participant or the chair, or the record would gain a stake in what
+// it records.
+func overrideSecretary(st *State, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	prev := st.Secretary
+	st.Secretary = name
+	if err := st.Validate(); err != nil {
+		st.Secretary = prev
+		return err
+	}
+	return st.save()
+}
+
 func converge(ctx context.Context, st *State, runner chat.Runner) (*Synthesis, error) {
 	if st.Secretary == "" {
 		return nil, fmt.Errorf("meet: no secretary configured for %s", st.ID)

@@ -590,3 +590,90 @@ func TestInitiatorKindDerivedNeverStored(t *testing.T) {
 		t.Error("an initiator who is not at the meeting must be rejected")
 	}
 }
+
+// A failed secretary pass must never file minutes that READ like a finding.
+// "the meeting reached no decision" is a success-shaped claim; reaching it
+// because the secretary could not launch is the fleet-evidence-invariant bug
+// (a state that asserts an outcome, arrived at by the ABSENCE of evidence).
+func TestFailedSecretaryFilesUnknownNotNoDecision(t *testing.T) {
+	st := newTestSession(t)
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st.Cwd = repo
+	_ = st.save()
+	runRound(context.Background(), st, "q", scriptRunner{replies: map[string]string{
+		"codex": "ship the tap first", "opencode": "agreed, tap first",
+	}})
+
+	// The secretary cannot launch at all — exactly the observed failure.
+	broken := scriptRunner{errs: map[string]error{"claude": errors.New("refusing to launch")}}
+	if _, err := closeMeeting(context.Background(), st, closeOptions{Synthesize: true}, broken); err != nil {
+		t.Fatal(err)
+	}
+	md, _ := os.ReadFile(minutesPath(st))
+	if strings.Contains(string(md), "reached no decision") {
+		t.Fatal("a failed secretary pass filed minutes claiming the meeting decided nothing")
+	}
+	if !strings.Contains(string(md), "UNKNOWN") {
+		t.Fatalf("expected an explicit UNKNOWN notice, got:\n%s", md)
+	}
+	if !strings.Contains(string(md), "--resynthesize") {
+		t.Fatal("the notice must name the recovery command")
+	}
+}
+
+// A meeting whose secretary died is recoverable by naming another one, without
+// re-running the deliberation.
+func TestOverrideSecretaryRecoversSynthesis(t *testing.T) {
+	st := newTestSession(t)
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st.Cwd = repo
+	_ = st.save()
+	runRound(context.Background(), st, "q", scriptRunner{replies: map[string]string{
+		"codex": "ship the tap first", "opencode": "agreed",
+	}})
+
+	if err := overrideSecretary(st, "gemini"); err != nil {
+		t.Fatalf("override: %v", err)
+	}
+	if st.Secretary != "gemini" {
+		t.Fatalf("secretary = %q", st.Secretary)
+	}
+	syn, err := converge(context.Background(), st, scriptRunner{
+		replies: map[string]string{"gemini": "DECISIONS:\n- ship the homebrew tap first\nSUMMARY:\nClear."},
+	})
+	if err != nil {
+		t.Fatalf("converge: %v", err)
+	}
+	if len(syn.Decisions) != 1 {
+		t.Fatalf("decisions = %v", syn.Decisions)
+	}
+	path, err := fileMinutes(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, _ := os.ReadFile(path)
+	if !strings.Contains(string(md), "ship the homebrew tap first") {
+		t.Fatalf("recovered synthesis not in minutes:\n%s", md)
+	}
+	if strings.Contains(string(md), "UNKNOWN") {
+		t.Fatal("the unknown notice survived a successful recovery pass")
+	}
+}
+
+// The replacement secretary is still bound by the separation of powers.
+func TestOverrideSecretaryRefusesAParticipant(t *testing.T) {
+	st := newTestSession(t)
+	err := overrideSecretary(st, "codex") // already a participant
+	if err == nil {
+		t.Fatal("expected a refusal: the secretary must not have a stake in the record")
+	}
+	if st.Secretary != "claude" {
+		t.Fatalf("a refused override must not mutate the session; secretary = %q", st.Secretary)
+	}
+}
