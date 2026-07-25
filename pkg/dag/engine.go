@@ -47,6 +47,13 @@ type Engine struct {
 	Cache       *Cache   // nil = no incremental skip
 	Journal     *Journal // nil = no run journal (history/logs are not recorded)
 
+	// Observer, when set, is called as the run progresses. It exists so a run
+	// can be WATCHED while it happens; the report only exists once it is over.
+	// It is called from the scheduler's goroutines, so an implementation must
+	// be safe for concurrent use, and it must not block: the engine calls it
+	// on the path that runs targets.
+	Observer func(Event)
+
 	Stdout io.Writer
 	Stderr io.Writer
 
@@ -110,6 +117,14 @@ func (e *Engine) Run(ctx context.Context, targets ...string) (RunReport, error) 
 	e.attempts = newAttemptLog(order)
 	defer func() { e.attempts = nil }()
 
+	// The graph is recorded BEFORE anything runs, not at the end: a live viewer
+	// needs the shape of the run while it is still happening, and a run that is
+	// killed halfway should still leave behind what it was trying to do.
+	if e.Journal != nil {
+		_ = e.Journal.WriteGraph(order)
+	}
+	e.emitEvent(Event{Kind: EventRunStart, File: e.docPath(), Targets: targets})
+
 	// Bind the worker pool for this run. It is built once here, not per task:
 	// a pool constructed per dispatch would hand out a fresh set of slots every
 	// time and enforce no capacity at all.
@@ -134,13 +149,22 @@ func (e *Engine) Run(ctx context.Context, targets ...string) (RunReport, error) 
 		e.Cache.Save()
 	}
 	report.Records = e.attempts.all()
+	e.emitEvent(Event{Kind: EventRunEnd, Failed: report.Failed})
 	// The journal is best-effort by design: a run that produced results must not
 	// be reported as failed because its history could not be written.
 	if e.Journal != nil {
-		_ = e.Journal.WriteGraph(order)
 		_ = e.Journal.Finish(targets, report)
 	}
 	return report, nil
+}
+
+// docPath is the DAG document this engine is running, when known. The journal
+// is keyed by it, so a viewer can name a live run before its report exists.
+func (e *Engine) docPath() string {
+	if e.Journal != nil {
+		return e.Journal.docPath
+	}
+	return ""
 }
 
 // ExplainItem is one target's would-run/up-to-date decision and the reason,
@@ -552,8 +576,14 @@ func (e *Engine) runOne(ctx context.Context, node *Node, capture bool, worker *W
 			case <-ctx.Done():
 			}
 		}
+		e.emitEvent(Event{Kind: EventTaskStart, Task: node.Task.Name, Attempt: attempt + 1})
 		res = e.runAttempt(ctx, node, captureRun, worker, attempt+1)
 		res = applyExitContract(node.Task, res)
+		e.emitEvent(Event{
+			Kind: EventTaskEnd, Task: node.Task.Name, Attempt: attempt + 1,
+			Status: res.Status.String(), ExitCode: res.ExitCode,
+			DurationMS: res.Duration.Milliseconds(),
+		})
 		results = append(results, res)
 		if res.Status == StatusDone {
 			break

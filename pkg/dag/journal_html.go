@@ -6,7 +6,9 @@ package dag
 import (
 	"bytes"
 	_ "embed"
+	"fmt"
 	"html/template"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -19,11 +21,26 @@ import (
 //go:embed ui/run.html.tmpl
 var runHTMLSource string
 
-var runHTML = template.Must(template.New("run").Funcs(template.FuncMap{
+// indexHTMLSource is the served run index.
+//
+//go:embed ui/index.html.tmpl
+var indexHTMLSource string
+
+var htmlFuncs = template.FuncMap{
 	"dur": fmtMS,
-	"ts":  func(t time.Time) string { return t.Format("2006-01-02 15:04:05") },
-	"cls": statusClass,
-}).Parse(runHTMLSource))
+	"ts": func(t time.Time) string {
+		if t.IsZero() {
+			return "—"
+		}
+		return t.Format("2006-01-02 15:04:05")
+	},
+	"cls":  statusClass,
+	"join": func(s []string) string { return strings.Join(s, " ") },
+}
+
+var runHTML = template.Must(template.New("run").Funcs(htmlFuncs).Parse(runHTMLSource))
+
+var indexHTML = template.Must(template.New("index").Funcs(htmlFuncs).Parse(indexHTMLSource))
 
 // statusClass maps a status onto a CSS class token. Statuses are a closed set
 // produced by Status.String(), but this is defensive on purpose: the value
@@ -46,12 +63,40 @@ func statusClass(s string) string {
 type htmlCell struct{ Task *RunTask }
 
 // htmlRunView is the run page's template data.
+//
+// Live drives the one behavioural difference between the exported page and the
+// served one: the export is a static artifact you can mail to someone, so it
+// carries no script; the served page adds an SSE listener. Both render the same
+// server-side markup first, so the served page is correct and readable before
+// any script runs — and if scripting is off it simply stops updating.
 type htmlRunView struct {
-	Title  string
-	Run    *RunEntry
-	Tasks  []RunTask
-	Levels []int
-	Grid   [][]htmlCell
+	Title      string
+	Run        *RunEntry
+	Tasks      []RunTask
+	Levels     []int
+	Grid       [][]htmlCell
+	Live   bool
+	DocKey string
+	RunID  string
+	// StreamURL is built in Go rather than concatenated in the template so the
+	// page interpolates ONE escaped value into script context instead of
+	// stitching a URL together from three.
+	StreamURL string
+}
+
+// htmlIndexView is the served index's template data.
+type htmlIndexView struct {
+	Runs []RunSummary
+	Live int
+}
+
+// renderIndexHTML renders the list of runs the viewer knows about.
+func renderIndexHTML(runs []RunSummary, live int) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := indexHTML.Execute(&buf, htmlIndexView{Runs: runs, Live: live}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // renderRunHTML renders one journaled run as a standalone page: a layered graph
@@ -62,11 +107,34 @@ type htmlRunView struct {
 // algorithm, no edge routing, and nothing to get wrong — and for the mostly
 // linear pipelines dag runs it reads better than a spaghetti diagram would.
 func renderRunHTML(entry *RunEntry, graph *RunGraph) ([]byte, error) {
-	view := htmlRunView{
+	return renderRunView(htmlRunView{
 		Title: "dag run — " + runTitle(entry),
 		Run:   entry,
 		Tasks: entry.Tasks,
+	}, entry, graph)
+}
+
+// renderRunPage renders a run for the server. When live is set the page adds
+// the SSE listener; docKey/runID/eventCount let it resume the stream from where
+// the server-side render already got to, so no event is shown twice and none is
+// missed between render and subscribe.
+func renderRunPage(entry *RunEntry, graph *RunGraph, live bool, docKey, runID string, eventCount int) ([]byte, error) {
+	title := "dag run — " + runTitle(entry)
+	if live {
+		title = "▶ " + title
 	}
+	view := htmlRunView{
+		Title: title, Run: entry, Tasks: entry.Tasks,
+		Live: live, DocKey: docKey, RunID: runID,
+	}
+	if live {
+		view.StreamURL = fmt.Sprintf("/events?doc=%s&run=%s&from=%d",
+			url.QueryEscape(docKey), url.QueryEscape(runID), eventCount)
+	}
+	return renderRunView(view, entry, graph)
+}
+
+func renderRunView(view htmlRunView, entry *RunEntry, graph *RunGraph) ([]byte, error) {
 	if graph != nil {
 		view.Levels, view.Grid = layerGrid(entry.Tasks, graph)
 	}

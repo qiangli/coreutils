@@ -26,7 +26,7 @@ func newDagCmd() *cobra.Command {
 	var (
 		listF, jsonF, plainF, quietF, keepGoing, forceF, explainF, dryRunF, outGroupF, checkF, watchF bool
 		sandboxF, fleetF, meshF, timingsF, runsF, noJournalF, statusF, htmlF                          bool
-		fileArg, showRunF                                                                             string
+		fileArg, showRunF, serveF                                                                     string
 		cacheDir, cacheExport, cacheImport, chunksPath, remoteCmd, remoteShell                        string
 		jobs, keepRuns                                                                                int
 	)
@@ -58,6 +58,27 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			// Changed("json") lets an explicit --json=false override BASHY_AGENTIC.
 			mode := weavecli.ResolveOutputModeEx(cmd.Flags().Changed("json"), jsonF, plainF, quietF)
 			out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+
+			// --serve needs no DAG file: it serves the whole run journal, so it
+			// short-circuits before discovery. A directory with no DAG.md can
+			// still watch runs started from anywhere else on the machine.
+			if serveF != "" {
+				// --serve carries an optional value, which pflag only accepts
+				// as --serve=ADDR. Written as `--serve ADDR` the address lands
+				// here as a positional instead, and the server would silently
+				// bind the default — so refuse rather than mis-bind.
+				if len(args) > 0 {
+					return emitErr(errOut, mode, errf(weavecli.ExitInvalidArg,
+						"--serve takes its address attached: --serve=%s (got stray argument %q)",
+						args[0], args[0]))
+				}
+				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				if err := runServeCmd(ctx, out, serveF, cacheDir); err != nil {
+					return emitErr(errOut, mode, err)
+				}
+				return nil
+			}
 
 			// make-style invocation: KEY=VALUE args are variable overrides
 			// (injected into every target's environment), the rest are targets.
@@ -222,6 +243,10 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 			if !noJournalF {
 				if j, jerr := OpenJournal(absPath, cacheDir, keepRuns); jerr == nil && j != nil {
 					eng.Journal = j
+					// Without this the journal records only the final report and
+					// a live viewer sees a run in flight with every target stuck
+					// on "pending" — the events ARE the live half.
+					eng.Observer = j.Observer()
 					defer j.Close()
 				}
 			}
@@ -267,6 +292,9 @@ targets (like a Makefile whose .DEFAULT_GOAL is help).`,
 	cmd.Flags().BoolVar(&statusF, "status", false, "One-line verdict for the most recent run (exit 1 if it failed); runs nothing")
 	cmd.Flags().StringVar(&showRunF, "show", "", "Show one recorded run by id (or 'last'); runs nothing")
 	cmd.Flags().BoolVar(&htmlF, "html", false, "Render --show as a standalone HTML page (graph + targets)")
+	cmd.Flags().StringVar(&serveF, "serve", "", "Serve the run journal for live monitoring at ADDR (default "+DefaultServeAddr+"); runs nothing")
+	// A bare --serve takes the loopback default; --serve host:port overrides it.
+	cmd.Flags().Lookup("serve").NoOptDefVal = DefaultServeAddr
 	cmd.Flags().IntVar(&keepRuns, "keep-runs", DefaultKeepRuns, "Recorded runs to retain per file (older ones are pruned)")
 	cmd.Flags().BoolVar(&noJournalF, "no-journal", false, "Do not record this run's report, graph, or logs")
 	cmd.Flags().BoolVar(&sandboxF, "sandbox", false, "Run target bodies through DAG_SANDBOX_CMD wrapper constraints")

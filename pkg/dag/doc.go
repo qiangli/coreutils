@@ -154,6 +154,27 @@
 // time — a viewer that needs the network is a viewer that does not work on the
 // machine that ran the job.
 //
+// # Live monitoring
+//
+// `--serve[=ADDR]` starts a read-only viewer over the journal (loopback by
+// default — that is the security model, not a default to relax). It is a
+// VIEWER, not a runner: runs are started from a terminal or CI exactly as
+// before, and the server shows whatever the journal records from any shell on
+// the machine. A server that could start work would be a second execution
+// engine with its own scheduling and its own divergence from the CLI.
+//
+// What makes a run watchable while it happens is [Engine.Observer]: report.json
+// only exists once a run is over, so the engine also appends [Event]s to
+// events.jsonl as it goes, and the graph is written BEFORE anything runs. A run
+// directory holding events but no report is therefore in flight (or was
+// killed) — that is how the viewer knows. The server tails the log and pushes
+// it over SSE; the page is fully rendered server-side first and the stream
+// resumes from that position, so nothing is shown twice or missed.
+//
+// Observer is nil by default and the engine is inert without it. Set it to
+// [Journal.Observer] to record; note it is called from the scheduler's
+// goroutines, so an implementation must be concurrency-safe and must not block.
+//
 // Three properties are load-bearing:
 //
 //   - It is best-effort. A journal that cannot be written never fails a run that
