@@ -90,8 +90,5 @@ func checkParentDir(dir string) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("ask: %s is not a directory", dir)
 	}
-	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
-		return fmt.Errorf("ask: refusing to write a secret into %s — it is mode %#o and other users can write there", dir, perm)
-	}
-	return nil
+	return checkParentDirAccess(dir, fi)
 }
