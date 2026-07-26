@@ -96,6 +96,21 @@ type SessionOptions struct {
 	// construction on an ordinary host.
 	ReadOnly bool
 
+	// Attended marks a session a HUMAN is driving turn by turn through a proxying
+	// front end — ycode's /agent attach is the case this exists for: the operator
+	// stays in their own TUI, every message is theirs, and the agent's output is
+	// rendered straight back to them.
+	//
+	// It is the same contract Interact carries for `bashy chat -i` (there the
+	// human's terminal IS the session; here a front end relays it), and it means
+	// the same thing to the launcher: strip the auto-approve kill-switches so the
+	// tool's OWN approval gate stays on, keeping full write capability without
+	// asking the uncontained-host guard to allow unattended full access.
+	//
+	// A session with no human on the other end must leave this false. Foreman,
+	// meet and coach drive agents programmatically, so they do.
+	Attended bool
+
 	// AllowPremium explicitly bypasses LLM budget/subscription gates for urgent
 	// human-authorized work. Usage is still recorded when the session produces
 	// text.
@@ -105,6 +120,23 @@ type SessionOptions struct {
 	// Empty defaults to "session". It is how `bashy chat sessions` shows WHAT a
 	// member is doing, not just that it exists.
 	Mode string
+}
+
+// launchOptions is the ONE translation from a session's options to the launcher's.
+//
+// Resolution and governance both take it, and they must be handed the identical
+// value: resolveLaunch is what strips or refuses argv, governLaunch is what judges
+// the same launch against budget. Building the two separately is how an attended
+// session comes to be resolved as attended and governed as something else.
+func (o SessionOptions) launchOptions() Options {
+	return Options{
+		Cwd:      o.Cwd,
+		ReadOnly: o.ReadOnly,
+		// ReadOnly is stricter and wins — same precedence as Interact.
+		Attended:     o.Attended && !o.ReadOnly,
+		AllowPremium: o.AllowPremium,
+		Steer:        true, // the interactive launch, never the one-shot
+	}
 }
 
 // Start launches an agent's interactive session.
@@ -125,20 +157,12 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	// a turn in exactly one respect — which launch template it renders — and
 	// everything else (the containerized guard, the read-only argv stripping, the
 	// canonical binding) must not be able to drift.
-	l, err := resolveLaunch(name, Options{
-		Cwd:      opt.Cwd,
-		ReadOnly: opt.ReadOnly,
-		Steer:    true, // the interactive launch, never the one-shot
-	})
+	lo := opt.launchOptions()
+	l, err := resolveLaunch(name, lo)
 	if err != nil {
 		return nil, err
 	}
-	next, d, err := governLaunch(ctx, name, l, opt.Prompt, Options{
-		Cwd:          opt.Cwd,
-		ReadOnly:     opt.ReadOnly,
-		AllowPremium: opt.AllowPremium,
-		Steer:        true,
-	})
+	next, d, err := governLaunch(ctx, name, l, opt.Prompt, lo)
 	if err != nil {
 		return nil, err
 	}

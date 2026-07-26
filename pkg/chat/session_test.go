@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // Start must REFUSE a tool it cannot steer, rather than quietly handing back a
@@ -93,5 +95,83 @@ func TestSayWithoutAControlChannelFails(t *testing.T) {
 	}
 	if err := s.Say("   "); err == nil {
 		t.Fatal("Say accepted an empty steer")
+	}
+}
+
+// --- attended sessions ----------------------------------------------------
+
+// steerableKillSwitchTool registers a tool whose INTERACTIVE launch carries an
+// auto-approve kill-switch — the shape every real coding CLI ships (claude's
+// --dangerously-skip-permissions is the one in the wild).
+func steerableKillSwitchTool(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "killswitcher", Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{Launch: fleet.ToolLaunch{
+			Exec:      "killswitcher --dangerously-skip-permissions -p {prompt}",
+			SteerExec: "killswitcher --dangerously-skip-permissions",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prev := newCatalog
+	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
+	t.Cleanup(func() { newCatalog = prev })
+}
+
+// THE REGRESSION. ycode's /agent attach is a human driving another agent through
+// a proxying front end, and it was refused outright on an ordinary host: the
+// launcher saw a kill-switch with nothing containing it, and SessionOptions had
+// no way to say that a person was sitting right there. Every /agent attach to a
+// kill-switch tool failed on exactly the machine where it is most obviously safe.
+//
+// Attended is that signal, and it must reach the launcher.
+func TestAttendedSessionLaunchesOnAnUncontainedHost(t *testing.T) {
+	steerableKillSwitchTool(t)
+	stubContainerized(t, false)
+
+	l, err := resolveLaunch("killswitcher", SessionOptions{Attended: true}.launchOptions())
+	if err != nil {
+		t.Fatalf("an attended session must launch on an uncontained host: %v", err)
+	}
+	for _, a := range l.Args {
+		if a == "--dangerously-skip-permissions" {
+			t.Fatalf("attended must STRIP the kill-switch, not carry it: %q", l.Args)
+		}
+	}
+}
+
+// The guard is not weakened for everyone else. A session nobody is watching —
+// foreman, meet, coach — still cannot hand an agent its own kill-switch.
+func TestUnattendedSessionIsStillRefused(t *testing.T) {
+	steerableKillSwitchTool(t)
+	stubContainerized(t, false)
+
+	if _, err := resolveLaunch("killswitcher", SessionOptions{}.launchOptions()); err == nil {
+		t.Fatal("an unattended session was permitted with its approval gate disabled")
+	}
+}
+
+// ReadOnly is stricter than Attended and wins, so plan mode stays read-only even
+// with a human driving. Same precedence Interact uses.
+func TestReadOnlyBeatsAttended(t *testing.T) {
+	if got := (SessionOptions{Attended: true, ReadOnly: true}).launchOptions(); got.Attended {
+		t.Fatalf("ReadOnly must win over Attended: %+v", got)
+	}
+}
+
+// Resolution and governance must be handed the IDENTICAL options — a session
+// resolved as attended and governed as something else is the drift this helper
+// exists to prevent.
+func TestLaunchOptionsCarriesTheSessionsIntent(t *testing.T) {
+	opt := SessionOptions{Cwd: "/w", Attended: true, AllowPremium: true}
+	got := opt.launchOptions()
+	if !got.Steer {
+		t.Error("a session always resolves the interactive launch")
+	}
+	if got.Cwd != "/w" || !got.Attended || !got.AllowPremium {
+		t.Errorf("launchOptions dropped the session's intent: %+v", got)
 	}
 }
