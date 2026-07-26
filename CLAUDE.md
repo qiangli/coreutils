@@ -428,6 +428,23 @@ identical cross-platform behavior:
   `embed_*` build tags (default build uses the stub → host/PATH fallback).
   **The forks pull the go floor up (currently 1.26.4)** — all consumers
   must match.
+- **`external/podman/winhelper`** — the Windows helper provisioner
+  (gvproxy + win-sshproxy from containers/gvisor-tap-vsock, binmgr-fetched
+  and digest-pinned), deliberately kept OUT of `engine` so it imports only
+  `pkg/binmgr` + stdlib. It has to be reachable from the build that does
+  NOT link the engine: bashy's shipped Windows binary is the lean worker,
+  so `bashy podman` *execs* a podman rather than linking libpod, and that
+  exec path needs the same provisioning. `Apply(cacheDir)` stages the
+  helpers and exports `$CONTAINERS_HELPER_BINARY_DIR` (+ PATH).
+  **Why it is load-bearing:** on Windows podman does not serve its API
+  itself — `podman machine start` launches `win-sshproxy.exe` to forward
+  the VM socket onto `\\.\pipe\podman-<machine>`,
+  `\\.\pipe\docker_engine`, and `%TEMP%\podman\<machine>-api.sock`. It
+  finds that helper only via `helper_binaries_dir` /
+  `$CONTAINERS_HELPER_BINARY_DIR`, and with neither the start still
+  **reports success while publishing no endpoint at all**. `engine`'s
+  `ensurePlatformHelperBinaries` delegates here so the pinned version +
+  digests can't drift between the linked and exec'd paths.
 
 The forks are why the canonical test scope excludes `external/` (see
 Build & test): they pull cgo + platform backends (MLX, btrfs) and are
