@@ -175,3 +175,64 @@ func TestLaunchOptionsCarriesTheSessionsIntent(t *testing.T) {
 		t.Errorf("launchOptions dropped the session's intent: %+v", got)
 	}
 }
+
+// --- the idle clock -------------------------------------------------------
+
+// THE REGRESSION. A turn boundary guessed from silence must not be satisfied by
+// silence that happened BEFORE the agent was asked anything.
+//
+// An agent sitting idle since the session opened is already well past `quiet` at
+// the instant a steer reaches it, so the first tick after Say returned "the turn
+// is over" before the model had produced a character. The caller read an empty
+// Turn() and told the operator the agent produced no output — true of the bytes,
+// false of the agent, and the failure looked exactly like a broken agent rather
+// than a broken clock. ycode's /agent attach hit it on EVERY message.
+func TestWaitIdleDoesNotCountSilenceFromBeforeTheSteer(t *testing.T) {
+	s := &Session{done: make(chan struct{}), lastWrite: time.Now().Add(-time.Minute)}
+
+	// Say without a control channel fails, so stamp the steer the way say() does.
+	s.mu.Lock()
+	s.lastSteer = time.Now()
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	defer cancel()
+	if err := s.WaitIdle(ctx, 30*time.Second); err == nil {
+		t.Fatal("WaitIdle declared the turn over using silence that predated the steer")
+	}
+}
+
+// Each write buys the agent another `quiet`, so a turn that streams with pauses
+// shorter than the budget is not cut in half.
+func TestWaitIdleEndsOneQuietPeriodAfterTheLastWrite(t *testing.T) {
+	s := &Session{done: make(chan struct{})}
+	s.mu.Lock()
+	s.lastSteer = time.Now().Add(-time.Minute)
+	s.lastWrite = time.Now().Add(-time.Minute)
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.WaitIdle(ctx, 600*time.Millisecond); err != nil {
+		t.Fatalf("a long-quiet agent must yield a boundary: %v", err)
+	}
+}
+
+// An agent that answers NOTHING still has to end the wait — one quiet period
+// after being asked, not never. Silence is a bad answer, but a hang is worse.
+func TestWaitIdleTerminatesOnAnAgentThatNeverAnswers(t *testing.T) {
+	s := &Session{done: make(chan struct{}), lastWrite: time.Now().Add(-time.Hour)}
+	s.mu.Lock()
+	s.lastSteer = time.Now()
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := s.WaitIdle(ctx, 700*time.Millisecond); err != nil {
+		t.Fatalf("WaitIdle hung on a silent agent: %v", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("boundary took %s — it must arrive one quiet period after the steer", time.Since(start))
+	}
+}

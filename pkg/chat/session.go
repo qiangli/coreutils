@@ -70,10 +70,13 @@ type Session struct {
 	reported   string    // the answer the tool ASSERTED on its event channel
 	eventsOnce sync.Once // the silent-degradation warning fires once per session, not per turn
 	lastWrite  time.Time
-	done       chan struct{}
-	exit       int
-	err        error
-	killed     string
+	// lastSteer is when we last SPOKE to the agent. WaitIdle measures silence from
+	// whichever came later, this or lastWrite — see the comment there.
+	lastSteer time.Time
+	done      chan struct{}
+	exit      int
+	err       error
+	killed    string
 }
 
 // SessionOptions configures a live agent session.
@@ -449,7 +452,15 @@ func (s *Session) say(text string) error {
 	if s.CtlSock == "" {
 		return fmt.Errorf("chat: %s has no control channel", s.Nick)
 	}
-	return agentctl.Say(s.CtlSock, text)
+	if err := agentctl.Say(s.CtlSock, text); err != nil {
+		return err
+	}
+	// Restart the idle clock. Without this the NEXT WaitIdle can be satisfied by
+	// silence that happened BEFORE the agent was ever asked — see WaitIdle.
+	s.mu.Lock()
+	s.lastSteer = time.Now()
+	s.mu.Unlock()
+	return nil
 }
 
 // governTurn asks the budget gate about ONE mid-session turn.
@@ -504,7 +515,8 @@ func (s *Session) Turn() string {
 	return out
 }
 
-// WaitIdle blocks until the agent has written nothing for `quiet`, or until it
+// WaitIdle blocks until the agent has written nothing for `quiet` — counted from
+// the later of its last write and the last thing WE said to it — or until it
 // exits, or until ctx ends.
 //
 // # This is a heuristic and it is named like one
@@ -592,9 +604,27 @@ func (s *Session) WaitIdle(ctx context.Context, quiet time.Duration) error {
 			events = nil // stop selecting on a closed channel
 
 		case <-tick.C:
+			// SILENCE COUNTS ONLY FROM THE MOMENT WE SPOKE.
+			//
+			// The reference point is the LATER of "it last wrote" and "we last
+			// steered it", and the difference is the whole correctness of this
+			// function. Measured from the last write alone, an agent that has been
+			// thinking — or simply idle since the session opened — is already past
+			// `quiet` at the instant a steer is handed to it, so the very first tick
+			// after Say declares the turn over before the agent has typed a
+			// character. The caller gets an empty Turn() and reports that the agent
+			// produced no output, which is true of the bytes and false of the agent.
+			//
+			// Restarting the clock at the steer makes `quiet` mean what every caller
+			// already assumed: the agent gets that long to START, and each write buys
+			// it that long again to continue. An agent that really does answer
+			// nothing still terminates the wait, one `quiet` after being asked.
 			s.mu.Lock()
-			last := s.lastWrite
+			last, steer := s.lastWrite, s.lastSteer
 			s.mu.Unlock()
+			if steer.After(last) {
+				last = steer
+			}
 			if !last.IsZero() && time.Since(last) >= quiet {
 				return nil
 			}
