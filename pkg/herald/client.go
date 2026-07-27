@@ -3,6 +3,7 @@ package herald
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -192,11 +193,60 @@ func newClient(ctx context.Context, p Peer, card Card) (*a2aclient.Client, error
 	if err != nil {
 		return nil, fmt.Errorf("herald: %w", err)
 	}
-	c, err := a2aclient.NewFromCard(ctx, raw)
+	c, err := a2aclient.NewFromCard(ctx, raw, protocolOptions()...)
 	if err != nil {
-		return nil, fmt.Errorf("herald: client for %s: %w", p.Name, err)
+		return nil, fmt.Errorf("herald: client for %s (herald speaks A2A %s): %w", p.Name, ProtocolVersion, err)
 	}
 	return c, nil
+}
+
+// protocolOptions pins the client to the A2A version herald declares.
+//
+// This is the single call site of ProtocolVersion, and it is what makes the
+// constant load-bearing rather than decorative. The mechanics are indirect
+// enough to be worth spelling out:
+//
+// a2a-go has no "set the version" knob. The A2A-Version service parameter it
+// puts on every request — a2aclient.Client sends
+// serviceParams[a2a.SvcParamVersion] on each call, and the JSON-RPC/REST
+// transports turn service params into HTTP headers — is taken from the version
+// of the TRANSPORT it negotiated. Transports are registered in a factory keyed
+// by (protocol, version), and the SDK's own defaults (WithJSONRPCTransport /
+// WithRESTTransport) register at the SDK's a2a.Version. So calling
+// NewFromCard with no options delegates the wire version to whatever constant
+// the compiled-in dependency happens to carry.
+//
+// Registering the same two transports at ProtocolVersion instead has three
+// consequences, all of them the point:
+//
+//   - the A2A-Version herald sends is herald's, stated here;
+//   - a card advertising only a major version herald does not speak — v0.3,
+//     whose wire format is incompatible — matches no transport and fails
+//     loudly at construction, rather than being silently negotiated;
+//   - an SDK release that moves a2a.Version cannot change our wire behind our
+//     back; the version test fails first.
+//
+// Defaults are disabled so the SDK's a2a.Version registrations do not sit
+// alongside ours: an extra registration at a different version would give
+// selectTransport a second candidate to pick.
+func protocolOptions() []a2aclient.FactoryOption {
+	v := a2a.ProtocolVersion(ProtocolVersion)
+	return []a2aclient.FactoryOption{
+		a2aclient.WithDefaultsDisabled(),
+		// Order mirrors the SDK's defaults: JSON-RPC first, then REST.
+		a2aclient.WithCompatTransport(v, a2a.TransportProtocolJSONRPC,
+			a2aclient.TransportFactoryFn(func(ctx context.Context, card *a2a.AgentCard, iface *a2a.AgentInterface) (a2aclient.Transport, error) {
+				return a2aclient.NewJSONRPCTransport(iface.URL, nil), nil
+			})),
+		a2aclient.WithCompatTransport(v, a2a.TransportProtocolHTTPJSON,
+			a2aclient.TransportFactoryFn(func(ctx context.Context, card *a2a.AgentCard, iface *a2a.AgentInterface) (a2aclient.Transport, error) {
+				u, err := url.Parse(iface.URL)
+				if err != nil {
+					return nil, fmt.Errorf("herald: peer endpoint %q is not a URL: %w", iface.URL, err)
+				}
+				return a2aclient.NewRESTTransport(u, nil), nil
+			})),
+	}
 }
 
 // Credential resolves a peer's API key WITHOUT ever returning it to a caller

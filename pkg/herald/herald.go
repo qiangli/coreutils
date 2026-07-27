@@ -76,6 +76,13 @@ const CardPath = "/.well-known/agent-card.json"
 // ProtocolVersion is the A2A version herald speaks. It MUST be sent on every
 // request: a server that receives no A2A-Version assumes "0.3", whose wire
 // format is incompatible with this one.
+//
+// It is not a label. protocolOptions in client.go registers herald's A2A
+// transports at this version, which is what the SDK derives the outgoing
+// A2A-Version header from — so changing this constant changes the wire, and a
+// peer that speaks only an incompatible major version fails at client
+// construction instead of being silently negotiated down.
+// TestA2AVersionOnTheWire pins the header a peer actually receives.
 const ProtocolVersion = "1.0"
 
 // Peer is an external agent herald can reach: the projection of a fleet Model
