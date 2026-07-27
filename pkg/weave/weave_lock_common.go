@@ -3,6 +3,11 @@ package weave
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -42,9 +47,81 @@ var errWeaveQueueBusy = errors.New("weave: queue busy — another weave command 
 
 // errWeavePullBusy is returned when another merge/pull already owns this
 // repo's pull lock. A pull mutates the shared live checkout, so it is
-// genuinely exclusive; reporting busy immediately is the contract, because
-// waiting means waiting minutes.
-var errWeavePullBusy = errors.New("weave: a merge is already in progress in this repo (pull.lock held) — retry when it finishes")
+// genuinely exclusive; reporting busy immediately is the try-lock contract.
+var errWeavePullBusy = errors.New("weave: a merge is already in progress")
+
+var errWeavePullStale = errors.New("weave: merge target moved while review/gate ran")
+
+type weavePullHolder struct {
+	Holder     string    `json:"holder"`
+	PID        int       `json:"pid"`
+	Intent     string    `json:"intent"`
+	AcquiredAt time.Time `json:"acquired_at"`
+}
+
+var weavePullNow = time.Now
+var weaveTestObservePullLockHeld func(time.Duration)
+
+func weavePullHolderPath(dir string) string {
+	return filepath.Join(dir, "pull.lock.holder")
+}
+
+// weaveWritePullHolder records diagnostics only after the kernel has granted
+// pull.lock. Failure is deliberately ignored: flock, never this sidecar,
+// decides whether a merge may proceed.
+func weaveWritePullHolder(dir, holder string) {
+	info := weavePullHolder{
+		Holder:     holder,
+		PID:        os.Getpid(),
+		Intent:     "merge",
+		AcquiredAt: weavePullNow(),
+	}
+	b, err := json.Marshal(info)
+	if err != nil {
+		return
+	}
+	b = append(b, '\n')
+	_ = os.WriteFile(weavePullHolderPath(dir), b, 0o644)
+}
+
+func weavePullBusyError(dir string) error {
+	b, err := os.ReadFile(weavePullHolderPath(dir))
+	if err != nil {
+		return fmt.Errorf("%w — retry when it finishes", errWeavePullBusy)
+	}
+	var info weavePullHolder
+	if err := json.Unmarshal(b, &info); err != nil || info.AcquiredAt.IsZero() ||
+		(info.Holder == "" && info.PID <= 0) {
+		return fmt.Errorf("%w — retry when it finishes", errWeavePullBusy)
+	}
+	holder := strings.TrimSpace(info.Holder)
+	if holder == "" {
+		holder = "pid " + strconv.Itoa(info.PID)
+	}
+	since := info.AcquiredAt.Local().Format("15:04")
+	age := weavePullNow().Sub(info.AcquiredAt)
+	if age < 0 {
+		age = 0
+	}
+	return fmt.Errorf("%w (%s, since %s, %s ago) — retry when it finishes",
+		errWeavePullBusy, holder, since, age.Round(time.Second))
+}
+
+// withWeaveNamedPullLock adds human-readable ownership to the platform lock.
+// The sidecar remains diagnostic: it is written only inside the kernel-owned
+// critical section and is never consulted to grant entry.
+func withWeaveNamedPullLock(dir, holder string, fn func() error) error {
+	return withWeavePullLock(dir, func() error {
+		started := time.Now()
+		defer func() {
+			if weaveTestObservePullLockHeld != nil {
+				weaveTestObservePullLockHeld(time.Since(started))
+			}
+		}()
+		weaveWritePullHolder(dir, holder)
+		return fn()
+	})
+}
 
 // weaveQueueLockWait bounds how long an ordinary write waits for the lock. It
 // is a safety valve against a crashed-but-not-yet-reaped holder, not a tuning

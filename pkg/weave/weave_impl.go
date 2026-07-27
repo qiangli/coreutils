@@ -1616,6 +1616,72 @@ func weaveRunSuiteGate(root, command string) (int, string) {
 	return weaveRunVerify(root, command)
 }
 
+// weaveRunCandidateSuiteGate proves the candidate against one exact base SHA
+// without touching the shared live checkout. A private clone gives the gate
+// the same merged tree it historically saw after the live merge; the caller
+// later revalidates that SHA under pull.lock before committing.
+func weaveRunCandidateSuiteGate(root, workspace, branch, baseSHA, command string) (exit int, output string, conflict bool, err error) {
+	tmp, err := os.MkdirTemp("", "weave-pull-gate-*")
+	if err != nil {
+		return 0, "", false, fmt.Errorf("create isolated suite-gate checkout: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+	if out, err := exec.Command("git", "clone", "--quiet", "--no-local", root, tmp).CombinedOutput(); err != nil {
+		return 0, "", false, fmt.Errorf("clone isolated suite-gate checkout: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", tmp, "checkout", "--quiet", "--detach", baseSHA).CombinedOutput(); err != nil {
+		return 0, "", false, fmt.Errorf("checkout suite-gate base %s: %w: %s", baseSHA, err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", tmp, "fetch", "--quiet", "--no-tags", workspace, branch).CombinedOutput(); err != nil {
+		return 0, "", false, fmt.Errorf("fetch candidate for suite gate: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	merge := exec.Command("git", "-C", tmp,
+		"-c", "user.name=weave", "-c", "user.email=weave@localhost",
+		"merge", "--no-ff", "--no-edit", "FETCH_HEAD")
+	if out, err := merge.CombinedOutput(); err != nil {
+		return 0, strings.TrimSpace(string(out)), true, nil
+	}
+	exit, output = weaveRunSuiteGate(tmp, command)
+	return exit, output, false, nil
+}
+
+// weaveValidatePullEvidence runs only while pull.lock is held. It refuses to
+// apply a verdict to any target other than the base/live tree and queue item
+// that produced that verdict.
+func weaveValidatePullEvidence(root, dir string, issueID int64, wantHead string, wantLive weaveLiveSnapshot, wantItem string) error {
+	headOut, err := gitOut(root, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("run #%d: revalidate merge target: %w", issueID, err)
+	}
+	gotHead := strings.TrimSpace(headOut)
+	if gotHead != wantHead {
+		return fmt.Errorf("%w: run #%d base HEAD %s -> %s; verdict is stale, retry pull",
+			errWeavePullStale, issueID, wantHead, gotHead)
+	}
+	gotLive, err := weaveSnapshotLiveTree(root)
+	if err != nil {
+		return fmt.Errorf("run #%d: revalidate live checkout: %w", issueID, err)
+	}
+	if gotLive.SHA != wantLive.SHA {
+		return fmt.Errorf("%w: run #%d live working-tree fingerprint changed; verdict is stale, retry pull",
+			errWeavePullStale, issueID)
+	}
+	fresh, err := readWeaveQueue(dir)
+	if err != nil {
+		return fmt.Errorf("run #%d: revalidate queue item: %w", issueID, err)
+	}
+	gotItem, ok := weaveItemFingerprints(fresh)[issueID]
+	if !ok {
+		return fmt.Errorf("%w: run #%d queue item was removed; verdict is stale, retry pull",
+			errWeavePullStale, issueID)
+	}
+	if gotItem != wantItem {
+		return fmt.Errorf("%w: run #%d queue record fingerprint changed; verdict is stale, retry pull",
+			errWeavePullStale, issueID)
+	}
+	return nil
+}
+
 func findWeaveItem(q *weaveQueue, id int64) *weaveItem {
 	for _, it := range q.Items {
 		if it.ID == id {
@@ -3998,10 +4064,10 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 	// best-effort, without double-counting the finalize-time record.
 	var gateDecisions []weaveItem
 	pairExit := weavePairPassExit
-	// Snapshot the live checkout ONCE, before the first merge. Pull mutates
-	// this very tree (merge commits, and a suite gate running builds in it),
-	// so re-snapshotting per item would let item #1's merge read as item
-	// #2's escape. One instant, judged against every item's baseline.
+	// Snapshot the live checkout ONCE for the isolation guard. Pull mutates
+	// this very tree, so re-snapshotting per item would let item #1's merge
+	// read as item #2's escape. One instant is judged against every item's
+	// claim-time baseline.
 	liveNow, liveNowErr := weaveSnapshotLiveTree(root)
 	// LOCK DISCIPLINE (see weave_lock_common.go). Pull is the long operation:
 	// with --review-agent it runs an adversarial-review AGENT SUBPROCESS and a
@@ -4010,14 +4076,12 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 	// the repo for the whole cycle — a steward could not even read the board
 	// while the autopilot ran.
 	//
-	// So: pull takes pull.lock (exclusive because it merges into the ONE
-	// shared live checkout, non-blocking so a second caller is told "busy,
-	// retry" instead of waiting minutes), works on a PRIVATE COPY of the
-	// queue, and touches queue.lock only twice — briefly to load, briefly to
-	// record outcomes onto the queue as it stands at the end. Items added or
-	// commented while the merge ran survive, because the merge-back applies
-	// only the items this pull actually changed, by ID.
-	lockErr := withWeavePullLock(dir, func() error {
+	// So: pull does review and suite-gate work on a PRIVATE COPY without
+	// pull.lock. Only the seconds-long live fetch/merge commit takes that
+	// exclusive lock. Immediately after acquiring it we revalidate both the
+	// live checkout and the queue item against the evidence used by the gate;
+	// a moved target invalidates the verdict and is refused.
+	lockErr := func() error {
 		var q *weaveQueue
 		if err := withWeaveQueueLock(dir, func(fresh *weaveQueue) error {
 			if issueSpecified && findWeaveItem(fresh, issueID) == nil {
@@ -4028,9 +4092,8 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		}); err != nil {
 			return err
 		}
-		// Test hook: simulate a long pull. Deliberately OUTSIDE the queue lock —
-		// what it now models is a merge in flight, which other commands must be
-		// able to read and write straight through.
+		// Test hook: simulate a long review/gate. Deliberately outside both
+		// queue.lock and pull.lock.
 		weaveTestPauseAfterPullLoad()
 		// What the items looked like when we took our copy. Anything unchanged
 		// is not written back, so a concurrent writer's edit to an untouched
@@ -4159,6 +4222,20 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					Detail: fmt.Sprintf("working tree has %d uncommitted tracked file(s) RIGHT NOW (measured, not recorded); commit them in the workspace (`weave shell %d`) and re-run", dirtyFilesNow, it.ID)})
 				continue
 			}
+			// Bind every slow verdict below to the exact target it was computed
+			// against. The working-tree snapshot and queue fingerprint use the
+			// same evidence machinery as other long queue operations; HEAD names
+			// the base commit whose integration result the suite gate observes.
+			gateLive, err := weaveSnapshotLiveTree(root)
+			if err != nil {
+				return fmt.Errorf("run #%d: snapshot merge target before review: %w", it.ID, err)
+			}
+			gateHeadOut, err := gitOut(root, "rev-parse", "HEAD")
+			if err != nil {
+				return fmt.Errorf("run #%d: identify merge target before review: %w", it.ID, err)
+			}
+			gateHead := strings.TrimSpace(gateHeadOut)
+			gateItemFingerprint := before[it.ID]
 			// An acting pair augments the RUN WORKSPACE before the terminal
 			// evidence is re-collected. It has no approve/reject path: a test it
 			// adds is committed as evidence, then the existing verify/suite gate
@@ -4318,41 +4395,19 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					Detail: fmt.Sprintf("workspace has %d tracked uncommitted file(s); resume the agent to commit the work (or commit manually in the workspace) and re-verify", liveDirtyFiles)})
 				continue
 			}
-			fetchSpec := fmt.Sprintf("%s:%s", it.Branch, it.Branch)
-			if _, err := gitOut(root, "fetch", "--no-tags", it.Workspace, fetchSpec); err != nil {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: fmt.Sprintf("fetch from workspace: %v", err)})
-				continue
-			}
-			cnt, err := gitOut(root, "rev-list", "--count", fmt.Sprintf("HEAD..%s", it.Branch))
-			if err != nil {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: err.Error()})
-				continue
-			}
-			ahead, _ := strconv.Atoi(strings.TrimSpace(cnt))
-			if ahead == 0 {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "empty",
-					Detail: "branch has 0 commits ahead of HEAD; nothing mergeable"})
-				continue
-			}
-			preMergeOut, err := gitOut(root, "rev-parse", "HEAD")
-			if err != nil {
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: err.Error()})
-				continue
-			}
-			preMergeSHA := strings.TrimSpace(preMergeOut)
-			mergeMsg := fmt.Sprintf("weave: merge run #%d — %s", it.ID, it.Title)
-			mc := exec.Command("git", "-C", root, "merge", "--no-ff", "-m", mergeMsg, it.Branch)
-			out, err := mc.CombinedOutput()
-			if err != nil {
-				_ = exec.Command("git", "-C", root, "merge", "--abort").Run()
-				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "conflict", Detail: strings.TrimSpace(string(out))})
-				continue
-			}
 			suiteGate := weaveSuiteGateCommand(root, it)
 			var suiteGateExit *int
 			var suiteGateOutput string
 			if suiteGate != "" {
-				sgExit, sgOutput := weaveRunSuiteGate(root, suiteGate)
+				sgExit, sgOutput, conflict, gateErr := weaveRunCandidateSuiteGate(root, it.Workspace, it.Branch, gateHead, suiteGate)
+				if gateErr != nil {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: gateErr.Error()})
+					continue
+				}
+				if conflict {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "conflict", Detail: sgOutput})
+					continue
+				}
 				it.SuiteGateExit = &sgExit
 				it.SuiteGateOutput = sgOutput
 				suiteGateExit = &sgExit
@@ -4361,16 +4416,11 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					if reviewAgent != "" && it.ReviewAgent != "" {
 						it.State = "failed"
 					}
-					_, resetErr := gitOut(root, "reset", "--hard", preMergeSHA)
-					detail := sgOutput
-					if resetErr != nil {
-						detail = strings.TrimSpace(detail + "\n[weave: failed to reset base to pre-merge SHA " + preMergeSHA + ": " + resetErr.Error() + "]")
-					}
 					results = append(results, result{
 						Issue:           it.ID,
 						Branch:          it.Branch,
 						Status:          "suite-gate-failed",
-						Detail:          detail,
+						Detail:          sgOutput,
 						SuiteGateExit:   &sgExit,
 						SuiteGateOutput: sgOutput,
 						ReviewAgent:     it.ReviewAgent,
@@ -4383,6 +4433,53 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					continue
 				}
 			}
+
+			// COMMIT is the serialization point. The expensive review and suite
+			// gate above ran without pull.lock in an isolated checkout. Once the
+			// kernel grants the lock, refuse a verdict whose base, live tree, or
+			// queue item moved before touching the shared checkout.
+			merged := false
+			mergeErr := withWeaveNamedPullLock(dir, fmt.Sprintf("run #%d", it.ID), func() error {
+				if err := weaveValidatePullEvidence(root, dir, it.ID, gateHead, gateLive, gateItemFingerprint); err != nil {
+					return err
+				}
+				fetchSpec := fmt.Sprintf("%s:%s", it.Branch, it.Branch)
+				if _, err := gitOut(root, "fetch", "--no-tags", it.Workspace, fetchSpec); err != nil {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: fmt.Sprintf("fetch from workspace: %v", err)})
+					return nil
+				}
+				cnt, err := gitOut(root, "rev-list", "--count", fmt.Sprintf("HEAD..%s", it.Branch))
+				if err != nil {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "skipped", Detail: err.Error()})
+					return nil
+				}
+				ahead, _ := strconv.Atoi(strings.TrimSpace(cnt))
+				if ahead == 0 {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "empty",
+						Detail: "branch has 0 commits ahead of HEAD; nothing mergeable"})
+					return nil
+				}
+				mergeMsg := fmt.Sprintf("weave: merge run #%d — %s", it.ID, it.Title)
+				mc := exec.Command("git", "-C", root, "merge", "--no-ff", "-m", mergeMsg, it.Branch)
+				out, err := mc.CombinedOutput()
+				if err != nil {
+					_ = exec.Command("git", "-C", root, "merge", "--abort").Run()
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "conflict", Detail: strings.TrimSpace(string(out))})
+					return nil
+				}
+				// Delete the fetched branch from user repo if fully merged (-d,
+				// never -D), while the same live-checkout lock is still held.
+				_ = exec.Command("git", "-C", root, "branch", "-d", it.Branch).Run()
+				weaveCloseRegisterOnMerge(root, base, it)
+				merged = true
+				return nil
+			})
+			if mergeErr != nil {
+				return mergeErr
+			}
+			if !merged {
+				continue
+			}
 			// Workspace is a full clone (not a worktree) — use safeRemoveAll with
 			// containment check to prevent accidental deletion outside the queue dir.
 			if it.Workspace != "" {
@@ -4392,15 +4489,12 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				}
 			}
 			reportIt := *it
-			// Delete the fetched branch from user repo if fully merged (-d, never -D).
-			_ = exec.Command("git", "-C", root, "branch", "-d", it.Branch).Run()
 			it.State = "done"
 			it.Workspace = ""
 			reportIt.State = "done"
 			// The work landed, so the register entry it implements is settled. A
 			// register that stays open after its fix merges is worse than none —
 			// people trust it, and it lies.
-			weaveCloseRegisterOnMerge(root, base, it)
 			mergedReports = append(mergedReports, &reportIt)
 			results = append(results, result{
 				Issue:           it.ID,
@@ -4422,7 +4516,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		}
 		// Re-acquire briefly and record the outcomes onto the CURRENT queue.
 		return weaveWriteBackChangedItems(dir, q, before)
-	})
+	}()
 	if lockErr != nil {
 		if weaveIsBusy(lockErr) {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave pull",
@@ -4431,7 +4525,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 		code := weavecli.ExitGenericFail
 		if strings.Contains(lockErr.Error(), "not found") {
 			code = weavecli.ExitInvalidArg
-		} else if strings.Contains(lockErr.Error(), "has no passing review") {
+		} else if strings.Contains(lockErr.Error(), "has no passing review") || errors.Is(lockErr, errWeavePullStale) {
 			code = weavecli.ExitStateConflict
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave pull",

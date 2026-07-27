@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -96,10 +97,25 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 	}
 
 	original := weavePairReviewRunner
-	t.Cleanup(func() { weavePairReviewRunner = original })
+	originalObserve := weaveTestObservePullLockHeld
+	t.Cleanup(func() {
+		weavePairReviewRunner = original
+		weaveTestObservePullLockHeld = originalObserve
+	})
 	called := 0
+	var lockHeld time.Duration
+	weaveTestObservePullLockHeld = func(d time.Duration) { lockHeld = d }
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
 		called++
+		release, err := weaveFlock(filepath.Join(dir, "pull.lock"), 0)
+		if err != nil {
+			t.Fatalf("pull.lock held for adversarial review: %v", err)
+		}
+		release()
 		return weavePairReviewResult{
 			CodingAgent: "sh", ReviewAgent: "claude:opus", AddedTest: false,
 			Verdict: weavePairPass, Reason: "pair attacked the change and the gate stayed green", ExitCode: weavePairPassExit,
@@ -111,6 +127,54 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 	}
 	if called != 1 {
 		t.Fatalf("pair calls=%d, want 1", called)
+	}
+	if lockHeld <= 0 {
+		t.Fatal("merge lock hold was not observed")
+	}
+	t.Logf("measured pull.lock hold after review: %s", lockHeld)
+}
+
+func TestWeavePullRefusesVerdictWhenBaseMovesDuringReview(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	pinPassthroughJudge(t)
+	if out, code := runWeave(t, "add", "reviewed against old base", "--verify", "test -f feature.txt", "--json"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	script := `set -e
+echo candidate > feature.txt
+git add feature.txt
+git -c user.email=a@a -c user.name=a commit -qm "candidate feature"`
+	if out, code := runWeave(t, "start", "--issue", "1", "--json", "--", "sh", "-c", script); code != 0 {
+		t.Fatalf("start exit=%d: %s", code, out)
+	}
+
+	original := weavePairReviewRunner
+	t.Cleanup(func() { weavePairReviewRunner = original })
+	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
+		if err := os.WriteFile(filepath.Join(root, "peer.txt"), []byte("peer\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitT(t, root, "add", "peer.txt")
+		gitT(t, root, "commit", "-qm", "peer moved base")
+		return weavePairReviewResult{
+			CodingAgent: "sh", ReviewAgent: "claude:opus",
+			Verdict: weavePairPass, Reason: "candidate passed against the old base", ExitCode: weavePairPassExit,
+		}, nil
+	}
+
+	out, code := runWeave(t, "pull", "1", "--review-agent", "reviewer", "--json")
+	if code == 0 {
+		t.Fatalf("stale verdict merged after base moved: %s", out)
+	}
+	if !strings.Contains(out, "merge target moved") || !strings.Contains(out, "verdict is stale") {
+		t.Fatalf("refusal did not name the moved evidence target: %s", out)
+	}
+	if got := gitT(t, root, "log", "--format=%s", "-1"); got != "peer moved base" {
+		t.Fatalf("candidate merged on stale verdict; base tip is %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "feature.txt")); !os.IsNotExist(err) {
+		t.Fatalf("candidate file landed despite stale verdict: stat err=%v", err)
 	}
 }
 
