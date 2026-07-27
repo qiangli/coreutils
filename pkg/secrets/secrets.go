@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -49,7 +48,12 @@ revocable token; the rc file itself holds no secret material. For resilience
 back to that cache when cloudbox is unreachable, so opening a shell never
 blocks or breaks — so the decrypted values DO persist there, at the same
 0600 protection an rc file would have. Pass --no-cache to keep nothing on
-disk (at the cost of the offline fallback).`,
+disk (at the cost of the offline fallback).
+
+To enter a secret interactively without exposing it to an agent or shell
+history, compose the separate ask command with set:
+
+  bashy ask --name OPENAI_API_KEY --stdout | bashy secrets set openai`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -94,20 +98,20 @@ casing; cloudbox only resolves @ref -> value. Only the references you list
 are materialized — nothing else in the vault leaks into your shell.
 
 Default template: $XDG_CONFIG_HOME/bashy/secrets.map (else
-~/.config/bashy/secrets.map); pass a path to override. Output is cached
-(mode 0600, TTL $BASHY_SECRETS_TTL, default 1h) and the last good cache is
-reused when cloudbox is unreachable, so env never breaks shell startup —
-it always exits 0 and prints a leading comment on degraded paths.`,
+~/.config/bashy/secrets.map); pass a path to override. The last successful
+render is cached (mode 0600) and reused only when cloudbox is unreachable,
+so env never breaks shell startup — it always exits 0 and prints a leading
+comment on degraded paths.`,
 		Args: cobra.RangeArgs(0, 1),
 		RunE: func(c *cobra.Command, args []string) error {
 			tmpl := ""
 			if len(args) == 1 {
 				tmpl = args[0]
 			}
-			return runEnv(c.OutOrStdout(), c.ErrOrStderr(), *cfg, tmpl, refresh, noCache)
+			return runEnv(c.OutOrStdout(), c.ErrOrStderr(), *cfg, tmpl, noCache)
 		},
 	}
-	cmd.Flags().BoolVar(&refresh, "refresh", false, "ignore the cache and fetch fresh")
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "fetch fresh (the default; retained for compatibility)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "do not read or write the cache")
 	return cmd
 }
@@ -122,7 +126,7 @@ type binding struct {
 	isRef   bool
 }
 
-func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, refresh, noCache bool) error {
+func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, noCache bool) error {
 	// env must never break shell startup: on any error fall back to cache,
 	// and if even that fails emit a harmless comment and exit 0.
 	usingDefault := tmplPath == ""
@@ -136,13 +140,6 @@ func runEnv(out, errOut io.Writer, cfg Config, tmplPath string, refresh, noCache
 	if usingDefault {
 		cachePath = cacheFile()
 	}
-	if cachePath != "" && !noCache && !refresh {
-		if data, ok := freshCache(cachePath, tmplPath, cacheTTL()); ok {
-			_, _ = out.Write(data)
-			return nil
-		}
-	}
-
 	bindings, terr := readTemplate(tmplPath)
 	if terr != nil {
 		// No template yet (or unreadable) — guide the user, don't break.
@@ -334,7 +331,13 @@ func newSetCmd(cfg *Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set NAME [VALUE]",
 		Short: "Set one secret; with no VALUE, read it from stdin (keeps it out of shell history)",
-		Args:  cobra.RangeArgs(1, 2),
+		Long: `Set one secret in the cloudbox vault. With no VALUE, read it from
+stdin so the value stays out of shell history.
+
+To enter a secret interactively on a channel an agent cannot read:
+
+  bashy ask --name OPENAI_API_KEY --stdout | bashy secrets set openai`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(c *cobra.Command, args []string) error {
 			client, err := cfg.Resolve()
 			if err != nil {
@@ -354,6 +357,9 @@ func newSetCmd(cfg *Config) *cobra.Command {
 				return emptyValueError(c, args[0])
 			}
 			if err := client.Put([]Item{{Name: args[0], Value: value}}); err != nil {
+				return err
+			}
+			if err := invalidateCache(); err != nil {
 				return err
 			}
 			fmt.Fprintf(c.OutOrStdout(), "set %s\n", args[0])
@@ -466,6 +472,9 @@ overwrites in place.`,
 			if err := client.Put(items); err != nil {
 				return err
 			}
+			if err := invalidateCache(); err != nil {
+				return err
+			}
 			fmt.Fprintf(c.OutOrStdout(), "imported %d secret(s)\n", len(items))
 			return nil
 		},
@@ -563,6 +572,9 @@ func newRmCmd(cfg *Config) *cobra.Command {
 			if err := client.Delete(args[0]); err != nil {
 				return err
 			}
+			if err := invalidateCache(); err != nil {
+				return err
+			}
 			fmt.Fprintf(c.OutOrStdout(), "deleted %s\n", args[0])
 			return nil
 		},
@@ -583,45 +595,6 @@ func cacheFile() string {
 	return filepath.Join(dir, "bashy", "secrets-env.sh")
 }
 
-func cacheTTL() time.Duration {
-	if v := os.Getenv("BASHY_SECRETS_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
-	}
-	return time.Hour
-}
-
-func freshCache(path, tmplPath string, ttl time.Duration) ([]byte, bool) {
-	if path == "" {
-		return nil, false
-	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		return nil, false
-	}
-	if fileAge(fi.ModTime()) > ttl {
-		return nil, false
-	}
-	// Invalidate when the binding template has been edited since the cache
-	// was written — otherwise a secrets.map change wouldn't take effect
-	// until the TTL lapsed.
-	if tmplPath != "" {
-		if tfi, terr := os.Stat(tmplPath); terr == nil && tfi.ModTime().After(fi.ModTime()) {
-			return nil, false
-		}
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false
-	}
-	return data, true
-}
-
-// fileAge is split out so tests can reason about it; time.Since uses the
-// monotonic clock which is fine for a TTL check.
-func fileAge(mod time.Time) time.Duration { return time.Since(mod) }
-
 func writeCache(path string, data []byte) error {
 	if path == "" {
 		return nil
@@ -630,4 +603,15 @@ func writeCache(path string, data []byte) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+func invalidateCache() error {
+	path := cacheFile()
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("invalidate secrets render cache: %w", err)
+	}
+	return nil
 }

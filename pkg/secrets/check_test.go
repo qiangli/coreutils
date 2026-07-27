@@ -23,6 +23,47 @@ func TestResolveProvider(t *testing.T) {
 	}
 }
 
+func TestLookupCheckKeyPrefersReachableVault(t *testing.T) {
+	fv := newFakeVault(t)
+	t.Setenv("OPENAI_API_KEY", "synthetic-stale")
+	fv.data["openai"] = "synthetic-current"
+
+	got, err := lookupCheckKey(fv.cfg(), "openai")
+	if err != nil {
+		t.Fatalf("lookupCheckKey: %v", err)
+	}
+	if digest(got) != digest("synthetic-current") {
+		t.Fatal("check key digest did not match the reachable vault")
+	}
+}
+
+func TestLookupCheckKeyFallsBackToEnvironment(t *testing.T) {
+	fv := newFakeVault(t)
+	t.Setenv("OPENAI_API_KEY", "synthetic-fallback")
+	fv.server.Close()
+
+	got, err := lookupCheckKey(fv.cfg(), "openai")
+	if err != nil {
+		t.Fatalf("lookupCheckKey fallback: %v", err)
+	}
+	if digest(got) != digest("synthetic-fallback") {
+		t.Fatal("check key digest did not match the environment fallback")
+	}
+}
+
+func TestLookupCheckKeyDoesNotMaskReachableVaultError(t *testing.T) {
+	fv := newFakeVault(t)
+	t.Setenv("OPENAI_API_KEY", "synthetic-stale")
+
+	got, err := lookupCheckKey(fv.cfg(), "openai")
+	if err == nil {
+		t.Fatal("lookupCheckKey unexpectedly masked a reachable vault error")
+	}
+	if got != "" {
+		t.Fatal("lookupCheckKey returned an environment value after a reachable vault error")
+	}
+}
+
 func TestProbeProviderStatus(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

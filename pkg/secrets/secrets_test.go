@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // fakeVault is an in-memory stand-in for cloudbox's /api/v1/secrets.
@@ -96,6 +96,45 @@ func run(t *testing.T, cfg Config, args ...string) (string, string, error) {
 	cmd.SetArgs(full)
 	err := cmd.Execute()
 	return out.String(), errb.String(), err
+}
+
+func configureSecretsTestEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("BASHY_SECRETS_TOKEN", "")
+	t.Setenv("BASHY_API_KEY", "")
+	t.Setenv("BASHY_CLOUDBOX_URL", "")
+}
+
+func executeSecrets(t *testing.T, cfg Config, in io.Reader, args ...string) (string, string, error) {
+	t.Helper()
+	cmd := newSecretsCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	if in != nil {
+		cmd.SetIn(in)
+	}
+	full := append([]string{"--url", cfg.URL, "--token", cfg.Token}, args...)
+	cmd.SetArgs(full)
+	err := cmd.Execute()
+	return out.String(), errOut.String(), err
+}
+
+func writeDefaultTemplate(t *testing.T, contents string) {
+	t.Helper()
+	path := defaultTemplatePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func digest(s string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(s))
 }
 
 func TestImportThenEnvRoundTrip(t *testing.T) {
@@ -192,75 +231,147 @@ func TestEnvCacheFallbackWhenServerDown(t *testing.T) {
 		t.Fatalf("env(1): %v", err)
 	}
 	if !strings.Contains(out.String(), "export DEEPSEEK_API_KEY='sk-d'") {
-		t.Fatalf("env(1) = %q", out.String())
+		t.Fatal("env(1) render digest did not contain the vault fixture")
 	}
 
-	// Server goes away; a refresh must fall back to cache and still exit 0.
+	// Server goes away; the normal fetch-first path must fall back to cache
+	// and still exit 0.
 	fv.server.Close()
 	cmd = newSecretsCmd()
 	var out2, err2 bytes.Buffer
 	cmd.SetOut(&out2)
 	cmd.SetErr(&err2)
-	cmd.SetArgs([]string{"--url", fv.server.URL, "--token", "test-token", "env", "--refresh"})
+	cmd.SetArgs([]string{"--url", fv.server.URL, "--token", "test-token", "env"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("env(2) should not error (degrade gracefully): %v", err)
 	}
 	if !strings.Contains(out2.String(), "export DEEPSEEK_API_KEY='sk-d'") {
-		t.Fatalf("env(2) cache fallback = %q", out2.String())
+		t.Fatal("env(2) cache fallback digest did not contain the cached fixture")
 	}
 	if !strings.Contains(out2.String(), "served from cache") {
-		t.Fatalf("env(2) should note cache fallback: %q", out2.String())
+		t.Fatal("env(2) did not identify the degraded cache fallback")
 	}
 }
 
-// TestEnvCacheInvalidatedOnTemplateEdit: editing secrets.map must take
-// effect immediately, not after the TTL — the cache is invalidated when the
-// template is newer than the cache file.
-func TestEnvCacheInvalidatedOnTemplateEdit(t *testing.T) {
+func TestEnvRevalidatesReachableVault(t *testing.T) {
 	fv := newFakeVault(t)
-	fv.data["host-a-openai"] = "sk-a"
-	fv.data["host-a-deepseek"] = "sk-b"
+	configureSecretsTestEnv(t)
+	writeDefaultTemplate(t, "OPENAI_API_KEY=@openai\n")
 
-	cfgdir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", cfgdir)
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	t.Setenv("BASHY_SECRETS_TOKEN", "")
-	t.Setenv("BASHY_API_KEY", "")
-	t.Setenv("BASHY_CLOUDBOX_URL", "")
-	mapPath := filepath.Join(cfgdir, "bashy", "secrets.map")
-	if err := os.MkdirAll(filepath.Dir(mapPath), 0o700); err != nil {
-		t.Fatal(err)
+	const before = "synthetic-before"
+	const after = "synthetic-after"
+	fv.data["openai"] = before
+
+	first, _, err := executeSecrets(t, fv.cfg(), nil, "env")
+	if err != nil {
+		t.Fatalf("first env: %v", err)
 	}
-	if err := os.WriteFile(mapPath, []byte("OPENAI_API_KEY=@host-a-openai\n"), 0o600); err != nil {
-		t.Fatal(err)
+	if digest(first) != digest("export OPENAI_API_KEY='"+before+"'\n") {
+		t.Fatal("first env render digest did not match the vault fixture")
 	}
 
-	runEnvCmd := func() string {
-		cmd := newSecretsCmd()
-		var out bytes.Buffer
-		cmd.SetOut(&out)
-		cmd.SetArgs([]string{"--url", fv.server.URL, "--token", "test-token", "env"})
-		if err := cmd.Execute(); err != nil {
-			t.Fatalf("env: %v", err)
+	// Simulate a rotation performed by another process. The existing render
+	// cache remains present, so only a reachable-vault revalidation can see it.
+	fv.data["openai"] = after
+	second, _, err := executeSecrets(t, fv.cfg(), nil, "env")
+	if err != nil {
+		t.Fatalf("second env: %v", err)
+	}
+	if digest(second) != digest("export OPENAI_API_KEY='"+after+"'\n") {
+		t.Fatal("second env render digest was stale while cloudbox was reachable")
+	}
+}
+
+func TestSetInvalidatesCacheAndRotationTakesEffect(t *testing.T) {
+	fv := newFakeVault(t)
+	configureSecretsTestEnv(t)
+	writeDefaultTemplate(t, "OPENAI_API_KEY=@openai\n")
+
+	const before = "synthetic-before"
+	const after = "synthetic-after"
+	fv.data["openai"] = before
+
+	if _, _, err := executeSecrets(t, fv.cfg(), nil, "env"); err != nil {
+		t.Fatalf("initial env: %v", err)
+	}
+	if _, err := os.Stat(cacheFile()); err != nil {
+		t.Fatalf("initial env did not populate the render cache: %v", err)
+	}
+
+	if _, _, err := executeSecrets(t, fv.cfg(), nil, "set", "openai", after); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if _, err := os.Stat(cacheFile()); !os.IsNotExist(err) {
+		t.Fatalf("set left the render cache present: %v", err)
+	}
+
+	got, _, err := executeSecrets(t, fv.cfg(), nil, "env")
+	if err != nil {
+		t.Fatalf("env after set: %v", err)
+	}
+	if digest(got) != digest("export OPENAI_API_KEY='"+after+"'\n") {
+		t.Fatal("env render digest did not reflect the rotated value")
+	}
+}
+
+func TestImportInvalidatesCache(t *testing.T) {
+	fv := newFakeVault(t)
+	configureSecretsTestEnv(t)
+	if err := writeCache(cacheFile(), []byte("# synthetic render\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	const fixture = "synthetic-import"
+	if _, _, err := executeSecrets(t, fv.cfg(), strings.NewReader("OPENAI_API_KEY="+fixture+"\n"), "import"); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if _, err := os.Stat(cacheFile()); !os.IsNotExist(err) {
+		t.Fatalf("import left the render cache present: %v", err)
+	}
+}
+
+func TestRmInvalidatesCache(t *testing.T) {
+	fv := newFakeVault(t)
+	configureSecretsTestEnv(t)
+	fv.data["openai"] = "synthetic-delete"
+	if err := writeCache(cacheFile(), []byte("# synthetic render\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := executeSecrets(t, fv.cfg(), nil, "rm", "openai"); err != nil {
+		t.Fatalf("rm: %v", err)
+	}
+	if _, err := os.Stat(cacheFile()); !os.IsNotExist(err) {
+		t.Fatalf("rm left the render cache present: %v", err)
+	}
+}
+
+func TestSecretsHelpPointsToAskWithoutAddingAlias(t *testing.T) {
+	cmd := newSecretsCmd()
+	var rootHelp bytes.Buffer
+	cmd.SetOut(&rootHelp)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("secrets help: %v", err)
+	}
+	if !strings.Contains(rootHelp.String(), "bashy ask --name OPENAI_API_KEY --stdout | bashy secrets set openai") {
+		t.Fatal("secrets help does not show how to compose bashy ask with secrets set")
+	}
+
+	cmd = newSecretsCmd()
+	var setHelp bytes.Buffer
+	cmd.SetOut(&setHelp)
+	cmd.SetArgs([]string{"set", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("secrets set help: %v", err)
+	}
+	if !strings.Contains(setHelp.String(), "bashy ask --name OPENAI_API_KEY --stdout | bashy secrets set openai") {
+		t.Fatal("secrets set help does not show how to compose bashy ask with secrets set")
+	}
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "ask" {
+			t.Fatal("secrets ask alias must not exist")
 		}
-		return out.String()
-	}
-
-	if got := runEnvCmd(); !strings.Contains(got, "export OPENAI_API_KEY='sk-a'") {
-		t.Fatalf("first env = %q", got)
-	}
-
-	// Edit the template (add a binding) and stamp it newer than the cache.
-	if err := os.WriteFile(mapPath, []byte("OPENAI_API_KEY=@host-a-openai\nDEEPSEEK_API_KEY=@host-a-deepseek\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	future := time.Now().Add(2 * time.Second)
-	if err := os.Chtimes(mapPath, future, future); err != nil {
-		t.Fatal(err)
-	}
-	got := runEnvCmd()
-	if !strings.Contains(got, "export DEEPSEEK_API_KEY='sk-b'") {
-		t.Fatalf("edited template not picked up (stale cache?): %q", got)
 	}
 }
 
