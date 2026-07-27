@@ -153,15 +153,19 @@ func TestConcurrentWeaveAddKeepsEveryEntry(t *testing.T) {
 	}
 }
 
-// TestPullHoldsNoQueueLockWhileItsLongWorkRuns is done-criterion 2, end to
-// end: with a pull parked in its long phase (the review/merge window), the
-// steward can still read the board AND write to it. Before the fix both of
-// these blocked for the whole cycle.
-func TestPullHoldsNoQueueLockWhileItsLongWorkRuns(t *testing.T) {
+// TestPullHoldsNoLocksWhileReviewGateRuns parks pull in its slow pre-commit
+// phase and proves both locks remain available. In particular, acquiring
+// pull.lock here pins the P0 fix: review/gate time is no longer merge-lock
+// hold time.
+func TestPullHoldsNoLocksWhileReviewGateRuns(t *testing.T) {
 	root := weaveTestRepo(t)
 	t.Chdir(root)
 	if out, code := runWeave(t, "add", "first run", "--json"); code != 0 {
 		t.Fatalf("weave add failed (%d): %s", code, out)
+	}
+	dir, err := weaveQueueDir(root)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	pause := filepath.Join(t.TempDir(), "pull-parked")
@@ -201,17 +205,16 @@ func TestPullHoldsNoQueueLockWhileItsLongWorkRuns(t *testing.T) {
 		}
 	})
 
-	// A second pull is refused promptly rather than blocking on the first
-	// (done-criterion 4).
-	withinDeadline(t, 2*time.Second, "second weave pull during a pull", func() {
-		out, code := runWeave(t, "pull", "--json")
-		if code == 0 {
-			t.Errorf("a second concurrent pull must be refused, not silently merge:\n%s", out)
-		}
-		if !strings.Contains(out, "merge is already in progress") {
-			t.Errorf("the refusal must name the reason so a steward can retry:\n%s", out)
-		}
-	})
+	lockStarted := time.Now()
+	releasePull, err := weaveFlock(filepath.Join(dir, "pull.lock"), 0)
+	if err != nil {
+		t.Fatalf("pull.lock held during slow review/gate phase: %v", err)
+	}
+	lockElapsed := time.Since(lockStarted)
+	releasePull()
+	if lockElapsed > time.Second {
+		t.Fatalf("taking pull.lock during review/gate took %s; want under 1s", lockElapsed)
+	}
 
 	if err := os.Remove(pause); err != nil {
 		t.Fatal(err)
@@ -220,10 +223,6 @@ func TestPullHoldsNoQueueLockWhileItsLongWorkRuns(t *testing.T) {
 
 	// The issue filed mid-pull survived the pull's write-back: pull persists
 	// only the items IT changed, onto the queue as it stands at the end.
-	dir, err := weaveQueueDir(root)
-	if err != nil {
-		t.Fatal(err)
-	}
 	q, err := readWeaveQueue(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -332,5 +331,103 @@ func TestQueueLockWaitIsBounded(t *testing.T) {
 	}
 	if !weaveIsBusy(err) {
 		t.Error("weaveIsBusy must classify the busy error as retryable")
+	}
+}
+
+func TestPullBusyErrorNamesMeasuredHolder(t *testing.T) {
+	dir := t.TempDir()
+	originalNow := weavePullNow
+	t.Cleanup(func() { weavePullNow = originalNow })
+	acquiredAt := time.Date(2026, 7, 27, 10, 43, 0, 0, time.Local)
+	weavePullNow = func() time.Time { return acquiredAt }
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- withWeaveNamedPullLock(dir, "run #169", func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	defer func() {
+		close(release)
+		if err := <-done; err != nil {
+			t.Errorf("holder failed: %v", err)
+		}
+	}()
+	weavePullNow = func() time.Time { return acquiredAt.Add(4*time.Minute + 12*time.Second) }
+
+	err := withWeavePullLock(dir, func() error {
+		t.Error("contender entered while holder owned pull.lock")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("contender was admitted while pull.lock was held")
+	}
+	for _, want := range []string{"merge is already in progress", "run #169", "since 10:43", "4m12s ago", "retry when it finishes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("busy error %q does not contain %q", err, want)
+		}
+	}
+	if !errors.Is(err, errWeavePullBusy) {
+		t.Fatalf("named busy error must retain retryable identity: %v", err)
+	}
+}
+
+func TestPullBusyErrorDoesNotInventUnreadableHolder(t *testing.T) {
+	dir := t.TempDir()
+	// A directory at the sidecar path makes both the holder's diagnostic write
+	// and the contender's read fail on every platform/user, including root.
+	if err := os.Mkdir(weavePullHolderPath(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	held := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- withWeaveNamedPullLock(dir, "run #999", func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	defer func() {
+		close(release)
+		if err := <-done; err != nil {
+			t.Errorf("holder failed: %v", err)
+		}
+	}()
+
+	err := withWeavePullLock(dir, func() error {
+		t.Error("contender entered while holder owned pull.lock")
+		return nil
+	})
+	if !errors.Is(err, errWeavePullBusy) {
+		t.Fatalf("unreadable sidecar changed correct kernel refusal: %v", err)
+	}
+	if strings.Contains(err.Error(), "run #999") || strings.Contains(err.Error(), "since ") || strings.Contains(err.Error(), "pid ") {
+		t.Fatalf("unreadable sidecar produced invented holder evidence: %v", err)
+	}
+}
+
+func TestStalePullHolderNeverBlocksKernelAdmittedCaller(t *testing.T) {
+	dir := t.TempDir()
+	stale := []byte(`{"holder":"run #1","pid":1,"intent":"merge","acquired_at":"2026-01-01T00:00:00Z"}`)
+	if err := os.WriteFile(weavePullHolderPath(dir), stale, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err := withWeaveNamedPullLock(dir, "run #2", func() error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatalf("stale diagnostics blocked a kernel-admitted caller: %v", err)
+	}
+	if !called {
+		t.Fatal("kernel-admitted pull callback did not run")
 	}
 }

@@ -87,14 +87,14 @@ func withWeaveQueueLock(dir string, fn func(*weaveQueue) error) error {
 
 // withWeavePullLock guards the genuinely exclusive part of a pull: merging
 // into the ONE shared live checkout. Non-blocking on purpose — a second caller
-// is told to retry instead of blocking for the minutes an agent review takes.
+// is told to retry instead of overlapping the short live merge commit.
 // It does NOT hold queue.lock, so `weave list`/`add`/`comment` stay live for
 // the whole merge cycle.
 func withWeavePullLock(dir string, fn func() error) error {
 	release, err := weaveFlock(filepath.Join(dir, "pull.lock"), 0)
 	if err != nil {
 		if errors.Is(err, errWeaveQueueBusy) {
-			return errWeavePullBusy
+			return weavePullBusyError(dir)
 		}
 		return fmt.Errorf("pull %w", err)
 	}
