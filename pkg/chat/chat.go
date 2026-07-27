@@ -369,19 +369,7 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 	if p, err := exec.LookPath(agent); err == nil {
 		stripQuarantine(p)
 	}
-	cmd := exec.CommandContext(ctx, agent, args...)
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
-	// Force the spawned agent to run its shell commands through bashy (this
-	// running binary) rather than the system shell — so the pure-Go userland,
-	// the space-time advisor, and OTel apply to every command the agent runs.
-	// Covers claude (CLAUDE_CODE_SHELL), aider/opencode ($SHELL), and agy and any
-	// bare-name `bash`/`sh`/`zsh` shell-out (PATH shim). codex reads /etc/passwd
-	// and is unreachable this way — see `bashy install-agent codex`. On by
-	// default; BASHY_FORCE_AGENT_SHELL=0 disables. cmd.Path is already resolved
-	// against the real PATH, so prepending the shim dir never shadows the agent.
-	cmd.Env = agentChildEnv(ctx)
+	cmd := agentCommand(ctx, agent, args, cwd)
 
 	// Attach to a PTY once the command — and above all its environment — is
 	// fully built, so the PTY path cannot diverge from the pipe path in what the
@@ -461,6 +449,26 @@ func (r execRunner) Run(ctx context.Context, agent string, args []string, cwd st
 		return out, exitErr.ExitCode(), err
 	}
 	return out, 127, err
+}
+
+// agentCommand is the single child-process construction path for both a chat
+// turn and a steerable Session (coach). The caller chooses argv and attachment;
+// cwd and environment must not drift with that choice.
+func agentCommand(ctx context.Context, agent string, args []string, cwd string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, agent, args...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
+	// Force the spawned agent to run its shell commands through bashy (this
+	// running binary) rather than the system shell — so the pure-Go userland,
+	// the space-time advisor, and OTel apply to every command the agent runs.
+	// Covers claude (CLAUDE_CODE_SHELL), aider/opencode ($SHELL), and agy and any
+	// bare-name `bash`/`sh`/`zsh` shell-out (PATH shim). codex reads /etc/passwd
+	// and is unreachable this way — see `bashy install-agent codex`. On by
+	// default; BASHY_FORCE_AGENT_SHELL=0 disables. cmd.Path is already resolved
+	// against the real PATH, so prepending the shim dir never shadows the agent.
+	cmd.Env = agentChildEnv(ctx)
+	return cmd
 }
 
 // agentChildEnv builds the environment for a spawned agent process.
