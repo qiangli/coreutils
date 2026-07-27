@@ -97,9 +97,14 @@ func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly 
 				c.steer = steer
 				c.agent = card.Binding
 				c.mode = "events"
+				tail := &eventTail{path: evPath}
+				if evs, err := tail.drain(); err == nil {
+					c.recordPriorToolCalls(evs)
+				}
+				tail.skipToEnd()
 				go func() {
 					defer func() { close(c.done) }()
-					watchAttachedEvents(ctx, c, evPath)
+					watchAttachedEvents(ctx, c, tail, card.PID)
 				}()
 				return c, nil
 			}
@@ -160,11 +165,12 @@ func watchAttachedLog(ctx context.Context, coach *Coach, card room.Card) {
 	}
 }
 
-// watchAttachedEvents tails a reconstructed NDJSON events file and feeds each
-// tool.call through onToolCall → decide → intervene — the precise event path,
-// identical to a launched coach's watchEvents.
-func watchAttachedEvents(ctx context.Context, coach *Coach, evPath string) {
-	tail := &eventTail{path: evPath}
+// watchAttachedEvents tails a reconstructed NDJSON events file from the point
+// of attachment and feeds each new tool.call through onToolCall → decide →
+// intervene — the precise event path, identical to a launched coach's
+// watchEvents. Calls already present remain reportable session history, but
+// never seed the live detector or cause an intervention.
+func watchAttachedEvents(ctx context.Context, coach *Coach, tail *eventTail, pid int) {
 	tick := time.NewTicker(300 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -175,11 +181,22 @@ func watchAttachedEvents(ctx context.Context, coach *Coach, evPath string) {
 				}
 			}
 		}
+		if !room.PidAlive(pid) {
+			return // coachee ended on its own — do not disturb it
+		}
 		select {
 		case <-ctx.Done():
-			return
+			return // detach: leave the coachee running
 		case <-tick.C:
 		}
+	}
+}
+
+// skipToEnd mirrors pkg/meet's lineTail.skipToEnd: attaching observes future
+// appends, rather than replaying an already-running session from byte zero.
+func (e *eventTail) skipToEnd() {
+	if fi, err := os.Stat(e.path); err == nil {
+		e.offset = fi.Size()
 	}
 }
 

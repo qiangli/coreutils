@@ -206,6 +206,8 @@ type Coach struct {
 	mu             sync.Mutex
 	counts         map[string]int // (tool|inputhash) -> times seen
 	total          int
+	priorCounts    map[string]struct{} // calls present before an attached watch began
+	priorTotal     int
 	distinctAtLast int // distinct count when we last steered
 	steers         []SteerRecord
 	done           chan struct{}
@@ -735,6 +737,26 @@ func (c *Coach) decide(ev Event) *SteerRecord {
 	return &rec
 }
 
+// recordPriorToolCalls preserves already-completed calls in an attached coach's
+// report without feeding them into decide. Attachment starts a fresh detection
+// window: past work is useful context, but can never justify a new steer.
+func (c *Coach) recordPriorToolCalls(evs []Event) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.priorCounts == nil {
+		c.priorCounts = make(map[string]struct{})
+	}
+	for _, ev := range evs {
+		if ev.Type != EventToolCall {
+			continue
+		}
+		var d toolCallData
+		_ = json.Unmarshal(ev.Data, &d)
+		c.priorCounts[d.Name+"|"+hashInput(d.Input)] = struct{}{}
+		c.priorTotal++
+	}
+}
+
 // Wait blocks until the watcher goroutine has drained after the context ended.
 func (c *Coach) Wait() { <-c.done }
 
@@ -761,13 +783,24 @@ func (c *Coach) Report() CoachReport {
 	// Distinct is cumulative per mode: event mode counts tool calls, pty mode
 	// counts normalized output lines. Only one is populated.
 	distinct := len(c.counts)
+	if len(c.priorCounts) > 0 {
+		all := make(map[string]struct{}, len(c.counts)+len(c.priorCounts))
+		for key := range c.counts {
+			all[key] = struct{}{}
+		}
+		for key := range c.priorCounts {
+			all[key] = struct{}{}
+		}
+		distinct = len(all)
+	}
 	if distinct == 0 {
 		distinct = len(c.ptySeen)
 	}
+	total := c.total + c.priorTotal
 	return CoachReport{
-		Total:    c.total,
+		Total:    total,
 		Distinct: distinct,
-		Repeat:   ratioOf(c.total, distinct),
+		Repeat:   ratioOf(total, distinct),
 		Steers:   append([]SteerRecord(nil), c.steers...),
 	}
 }
