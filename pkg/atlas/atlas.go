@@ -541,6 +541,21 @@ func init() {
 	// reachable `notify`: the subscriber could not be `bashy watch`, because that
 	// name belongs to the classic watch(1), so both halves live under one parent.
 	addVerb("bus", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON}})
+	// herald — reach an agent that is NOT on this host, over A2A.
+	//
+	// The stage question this verb has to answer ("which stage do you serve
+	// that nothing else already does?" — the one `fanout` could not answer) is
+	// CROSS, and the distinguishing property is not the stage but the
+	// PARTICIPANT: every other coordination verb resolves a participant through
+	// capability.ResolveTool to a binary HERE. herald is the only path to a
+	// capability that does not exist on this host and cannot be installed on it.
+	// Tier is userland because it operates a client on this node — an external
+	// third party is neither `sphere` (your own machines) nor `cloud` (a
+	// hyperscaler control plane).
+	addVerb("herald", Entry{
+		Stage: StageCross, Group: GroupOrch, Tier: TierUserland,
+		Caps: []string{CapJSON, CapNeedsNetwork, CapSpawnsProcesses},
+	})
 
 	// the fleet registry: what this host runs with
 	addVerb("tools", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
@@ -781,6 +796,7 @@ func init() {
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch", "search",
 		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act", "sota",
+		"herald",
 		"act-runner", "mirror", "podman", "docker", "ollama", "dks", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
@@ -796,6 +812,9 @@ func init() {
 		"act-runner", "skills", "podman", "docker", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login",
+		// herald runs the GATE — an operator-supplied command that decides
+		// whether a peer's returned work is good.
+		"herald",
 	)
 
 	// cred — reads or writes credentials / secrets. `env`/`printenv` are here
@@ -809,7 +828,9 @@ func init() {
 	// remote — executes on ANOTHER host (crosses the machine boundary). `dag`
 	// pipes a Host:-tagged target body to a remote `bash -s`; sphere runs pooled
 	// compute on peers; mirror/rclone push to a remote endpoint.
-	eff(EffRemote, "dag", "mirror", "sphere", "rclone", "kubectl", "helm")
+	// herald delegates a TASK to an agent on someone else's infrastructure —
+	// the machine boundary is the whole point of the verb.
+	eff(EffRemote, "dag", "mirror", "sphere", "rclone", "kubectl", "helm", "herald")
 
 	// persist — leaves something that OUTLIVES the session: a cron entry, a
 	// daemon, an installed/upgraded binary.
@@ -823,7 +844,7 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama", "sota")
+	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama", "sota", "herald")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
