@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -210,7 +211,12 @@ func weaveAgentEnv(env []string, l *weaveAgentLaunch) []string {
 // Order matters: stamp, then scrub, then preserve. The scrub must run over the
 // finished env (so nothing sneaks a credential in after it), and the preserve
 // must run last (so it can restore what the scrub took).
-func weaveChildEnv(environ []string, workspace, branch, base string, it *weaveItem, l *weaveAgentLaunch) []string {
+//
+// queueDir is the weave state directory for this repo (NOT the git workspace):
+// it is where the per-run ycode data store is placed, so two concurrent ycode
+// workers each get their own store without polluting the workspace or the diff.
+// A resumed run re-derives the same path from the same issue id and reuses it.
+func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, it *weaveItem, l *weaveAgentLaunch) []string {
 	// Containment: the subagent must not learn the origin repo's path from its
 	// environment. The orchestrator's shell typically sits in the origin repo,
 	// so the inherited PWD/OLDPWD point straight at it — drop them and pin PWD
@@ -238,10 +244,21 @@ func weaveChildEnv(environ []string, workspace, branch, base string, it *weaveIt
 	)
 	// WEAVE_AGENT is the seat; BASHY_PRINCIPAL is the agent that fills it.
 	env = weaveAgentEnv(env, l)
+	// Per-run agent store isolation. ycode locks its data dir, so two workers
+	// sharing one store is a hidden concurrency limit of 1 — the second dies on
+	// launch. Derive a per-issue store under the queue dir (NOT the workspace),
+	// keyed by issue id so a --resume reuses it. Non-ycode tools, a bare/raw
+	// (nil) launch, and any operator-set YCODE_DATA_DIR/YCODE_HOME are left
+	// untouched. See agentlaunch.ApplyYcodeDataDir.
+	var resolvedLaunch agentlaunch.Launch
+	if l != nil {
+		resolvedLaunch = agentlaunch.Launch(*l)
+	}
+	env = agentlaunch.ApplyYcodeDataDir(env, environ, resolvedLaunch, queueDir, strconv.FormatInt(it.ID, 10))
 	// Credential firewall: a weave subagent is a third-party CLI processing
 	// untrusted repo content with its own network egress, so it must not inherit
 	// the operator's vault secrets by default (the lethal trifecta). Removes only
-	// the vault-projected names; WEAVE_*/BASHY_* stamped above are untouched.
+	// the vault-projected names; WEAVE_*/BASHY_*/YCODE_* stamped above are untouched.
 	// Opt back in with secrets.AllowAgentSecretsEnv.
 	env = secrets.ScrubAgentEnv(env)
 	// It is NEVER weave's job to hand out API keys — every agent is preconfigured

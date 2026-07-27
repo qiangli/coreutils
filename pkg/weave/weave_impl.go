@@ -3121,8 +3121,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 
 	// The child's environment — containment, credential firewall, and own-auth
 	// preservation all live in weaveChildEnv so the launch assertion can test
-	// the same code path this spawn runs.
-	env := weaveChildEnv(os.Environ(), workspace, branch, base, it, agentLaunch)
+	// the same code path this spawn runs. dir is the queue (state) dir, passed
+	// so each ycode run gets its own data store under it.
+	env := weaveChildEnv(os.Environ(), workspace, branch, base, dir, it, agentLaunch)
 	for k, v := range carrier {
 		env = append(env, fmt.Sprintf("%s=%s", strings.ToUpper(k), v))
 	}

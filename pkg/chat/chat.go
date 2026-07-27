@@ -509,8 +509,28 @@ func agentChildEnv(ctx context.Context) []string {
 	}
 	if l, ok := LaunchFrom(ctx); ok {
 		env = principalEnv(env, l)
+		// Per-run agent store isolation. ycode locks its data dir, so two
+		// concurrent ycode sessions (two `bashy chat` processes, or a weave
+		// worker started via chat) sharing one store die on launch. Derive a
+		// per-session store under the bashy state dir, keyed by the session
+		// handle so a resume/reattach reuses it. Non-ycode tools and any
+		// operator-set YCODE_DATA_DIR/YCODE_HOME are left untouched. Shares the
+		// SAME helper weave uses so the two launch surfaces cannot drift.
+		env = agentlaunch.ApplyYcodeDataDir(env, parent, toAgentLaunch(l), chatStateDir(), sessionID(l))
 	}
 	return env
+}
+
+// chatStateDir is the bashy state root used for per-run agent stores launched by
+// `bashy chat`. It is a sibling of the other ~/.bashy subdirs (sessions/logs,
+// ctl, events) so a chat-launched store lives next to them rather than under the
+// caller's working tree.
+func chatStateDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".bashy", "chat")
 }
 
 // appendStderr joins captured stderr onto stdout for error reporting.

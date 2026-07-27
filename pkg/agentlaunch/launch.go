@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -473,6 +474,111 @@ func WithLaunch(ctx context.Context, l Launch) context.Context {
 func LaunchFrom(ctx context.Context) (Launch, bool) {
 	l, ok := ctx.Value(launchKey{}).(Launch)
 	return l, ok
+}
+
+// Per-run agent store isolation.
+//
+// ycode locks its data directory: a second ycode process pointed at the same
+// store dies on launch with "storage ... is locked by another ycode process".
+// An orchestrator that runs N agents concurrently (weave workers, parallel chat
+// sessions) must therefore give each ycode run its OWN store, or it inherits a
+// hidden per-tool concurrency limit of 1 — exactly the bug two weave workers
+// hit, where each worker got an isolated git workspace but they still shared one
+// global data store.
+//
+// ycode names the knobs: YCODE_DATA_DIR (just the store) and YCODE_HOME (the
+// whole tree). This helper derives a per-run YCODE_DATA_DIR so the operator
+// never has to know it exists. It lives in agentlaunch — the shared launch
+// layer — so every launch surface (weave start, bashy chat, coach) applies the
+// SAME rule rather than each growing its own copy that would drift. The
+// related #160 (env not reaching a coach-launched child) is the same family of
+// "two env-construction paths diverged" bug; centralizing this here keeps this
+// fix from being the third.
+
+// YcodeToolName is the fleet registry tool name ycode is keyed under. The
+// per-run store injection is gated on the TOOL, not an agent nickname or a
+// hardcoded argv sniff, so a non-ycode tool is untouched and any ycode binding
+// (every nickname on tool=ycode) qualifies.
+const YcodeToolName = "ycode"
+
+// The two ycode environment knobs a launcher may set to relocate the store. An
+// operator who set either one already has made a deliberate choice; a launcher
+// must NEVER override it (it would silently relocate or collide their store).
+const (
+	YcodeDataDirEnv = "YCODE_DATA_DIR"
+	YcodeHomeEnv    = "YCODE_HOME"
+)
+
+// YcodeDataDir derives a per-run data directory for a ycode-family agent, so two
+// concurrently-launched ycode workers do not share one locked store.
+//
+// It returns "" (inject nothing) when:
+//   - the launch is not a ycode tool — non-ycode tools are left untouched;
+//   - stateDir or runID is empty — no stable identity to derive from;
+//   - the operator already set YCODE_DATA_DIR or YCODE_HOME in parentEnv — a
+//     deliberate choice is never overridden (this is why the bug is invisible
+//     to an operator who happened to set one: their binding keeps working).
+//
+// The returned path is stateDir + runID-derived: stable across a --resume of
+// the SAME run (a resumed run reuses its store rather than orphaning a new one
+// every time), and distinct between two DIFFERENT runs. The caller MUST pass an
+// out-of-tree stateDir (e.g. the weave queue dir, or a ~/.bashy state dir) —
+// never the agent's git workspace, or the store pollutes the tree and the diff.
+func YcodeDataDir(parentEnv []string, l Launch, stateDir, runID string) string {
+	if l.ToolName != YcodeToolName {
+		return ""
+	}
+	stateDir = strings.TrimSpace(stateDir)
+	runID = strings.TrimSpace(runID)
+	if stateDir == "" || runID == "" {
+		return ""
+	}
+	if envHasName(parentEnv, YcodeDataDirEnv) || envHasName(parentEnv, YcodeHomeEnv) {
+		return ""
+	}
+	return filepath.Join(stateDir, "agent-data", "ycode-"+sanitizeRunID(runID))
+}
+
+// ApplyYcodeDataDir appends YCODE_DATA_DIR to env when YcodeDataDir derives a
+// path for this launch, and returns env unchanged otherwise. An existing entry
+// is never duplicated or overwritten. parentEnv is the launcher's own (pre-scrub)
+// environment, used only to honor an operator-set value.
+func ApplyYcodeDataDir(env, parentEnv []string, l Launch, stateDir, runID string) []string {
+	dir := YcodeDataDir(parentEnv, l, stateDir, runID)
+	if dir == "" || envHasName(env, YcodeDataDirEnv) {
+		return env
+	}
+	return append(env, YcodeDataDirEnv+"="+dir)
+}
+
+var runIDSep = strings.NewReplacer(
+	string(filepath.Separator), "_",
+	string(os.PathListSeparator), "_",
+	" ", "_",
+)
+
+// sanitizeRunID flattens a run identity into a single path component so a
+// caller-supplied id (an issue number, a "tool-pid" session handle) can never
+// escape the agent-data/<name> slot or collide with a sibling directory.
+func sanitizeRunID(id string) string {
+	s := runIDSep.Replace(id)
+	s = strings.Trim(s, "-_.")
+	if s == "" {
+		s = "run"
+	}
+	return s
+}
+
+// envHasName reports whether env contains a NAME=... entry for name. Shared by
+// the store-isolation helpers; values are never inspected.
+func envHasName(env []string, name string) bool {
+	prefix := name + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // SendControlFrame is agentpty.SendFrame.
