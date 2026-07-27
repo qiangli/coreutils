@@ -206,7 +206,7 @@ type Coach struct {
 	mu             sync.Mutex
 	counts         map[string]int // (tool|inputhash) -> times seen
 	total          int
-	priorCounts    map[string]struct{} // calls present before an attached watch began
+	priorCounts    map[string]struct{} // calls/lines present before an attached watch began
 	priorTotal     int
 	distinctAtLast int // distinct count when we last steered
 	steers         []SteerRecord
@@ -757,6 +757,34 @@ func (c *Coach) recordPriorToolCalls(evs []Event) {
 	}
 }
 
+// recordPriorPty preserves complete, significant output lines that predate an
+// attached watch in its report without feeding the live novelty detector.
+// Attachment starts with an empty window, recent context, and ptyLast, so past
+// output can never seed or justify a new steer.
+func (c *Coach) recordPriorPty(output []byte) {
+	text := string(output)
+	lastNewline := strings.LastIndexByte(text, '\n')
+	if lastNewline < 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.priorCounts == nil {
+		c.priorCounts = make(map[string]struct{})
+	}
+	priorLast := ""
+	for _, raw := range strings.Split(text[:lastNewline], "\n") {
+		norm := normalizeLine(raw)
+		if !significant(norm) || norm == priorLast {
+			continue
+		}
+		priorLast = norm
+		c.priorCounts[norm] = struct{}{}
+		c.priorTotal++
+	}
+}
+
 // Wait blocks until the watcher goroutine has drained after the context ended.
 func (c *Coach) Wait() { <-c.done }
 
@@ -781,21 +809,21 @@ func (c *Coach) Report() CoachReport {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Distinct is cumulative per mode: event mode counts tool calls, pty mode
-	// counts normalized output lines. Only one is populated.
-	distinct := len(c.counts)
-	if len(c.priorCounts) > 0 {
-		all := make(map[string]struct{}, len(c.counts)+len(c.priorCounts))
-		for key := range c.counts {
-			all[key] = struct{}{}
-		}
-		for key := range c.priorCounts {
-			all[key] = struct{}{}
-		}
-		distinct = len(all)
+	// counts normalized output lines. Include report-only pre-attach history in
+	// either mode without feeding it into the live detector. Direct detector
+	// tests may feed pty lines without first switching mode, so aggregate the
+	// mutually exclusive live sets instead of selecting one by the mode label.
+	all := make(map[string]struct{}, len(c.counts)+len(c.ptySeen)+len(c.priorCounts))
+	for key := range c.counts {
+		all[key] = struct{}{}
 	}
-	if distinct == 0 {
-		distinct = len(c.ptySeen)
+	for key := range c.ptySeen {
+		all[key] = struct{}{}
 	}
+	for key := range c.priorCounts {
+		all[key] = struct{}{}
+	}
+	distinct := len(all)
 	total := c.total + c.priorTotal
 	return CoachReport{
 		Total:    total,

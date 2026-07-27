@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -121,9 +122,33 @@ func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly 
 	}
 	coach := NewLineCoach(pol, steer)
 	coach.agent = card.Binding
+	log, err := os.Open(card.LogPath)
+	if err == nil {
+		// Fix the attachment boundary before the watcher starts. Preserve bytes
+		// already present as report-only history, then return to that exact
+		// boundary so appends racing with setup are still observed live.
+		var end int64
+		end, err = skipToEnd(log)
+		if err == nil && end > 0 {
+			if _, err = log.Seek(0, io.SeekStart); err == nil {
+				var prior []byte
+				prior, err = io.ReadAll(io.LimitReader(log, end))
+				if err == nil {
+					coach.recordPriorPty(prior)
+				}
+			}
+		}
+		if err == nil {
+			_, err = log.Seek(end, io.SeekStart)
+		}
+		if err != nil {
+			_ = log.Close()
+			log = nil
+		}
+	}
 	go func() {
 		defer func() { close(coach.done) }()
-		watchAttachedLog(ctx, coach, card)
+		watchAttachedLog(ctx, coach, card, log)
 	}()
 	return coach, nil
 }
@@ -132,9 +157,8 @@ func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly 
 // Write (which normalizes lines, runs the signal panel, and intervenes through
 // the shared (*Coach).intervene). It ends when the coachee's pid is gone or ctx
 // is cancelled — and in both cases it leaves the coachee alone (no kill, no ESC).
-func watchAttachedLog(ctx context.Context, coach *Coach, card room.Card) {
-	f, err := os.Open(card.LogPath)
-	if err != nil {
+func watchAttachedLog(ctx context.Context, coach *Coach, card room.Card, f *os.File) {
+	if f == nil {
 		return // nothing to tail; the coach simply has no signal
 	}
 	defer f.Close()
@@ -192,11 +216,22 @@ func watchAttachedEvents(ctx context.Context, coach *Coach, tail *eventTail, pid
 	}
 }
 
-// skipToEnd mirrors pkg/meet's lineTail.skipToEnd: attaching observes future
-// appends, rather than replaying an already-running session from byte zero.
+// skipToEnd establishes the common attachment boundary for append-only files:
+// bytes after the returned offset are live output; bytes before it are history.
+func skipToEnd(f *os.File) (int64, error) {
+	return f.Seek(0, io.SeekEnd)
+}
+
+// eventTail.skipToEnd mirrors pkg/meet's lineTail discipline using the same
+// attachment-boundary helper as the pty capture tail.
 func (e *eventTail) skipToEnd() {
-	if fi, err := os.Stat(e.path); err == nil {
-		e.offset = fi.Size()
+	f, err := os.Open(e.path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if end, err := skipToEnd(f); err == nil {
+		e.offset = end
 	}
 }
 
