@@ -882,6 +882,111 @@ func TestAttachCoachEventsFollowsTruncationAndRotation(t *testing.T) {
 	}
 }
 
+// When a same-inode log file is truncated to a smaller size while a coach is
+// attached, the tail resets to offset 0 and re-reads the truncated content as
+// live data. Lines that were already recorded as prior BEFORE the truncation
+// are counted a second time as NEW live data — inflating the report total.
+//
+// This is a real defect: skipToEnd correctly positions at EOF and recordPriorPty
+// preserves prior content, but the same-inode size-shrink path in next() resets
+// t.off to 0 without accounting for already-seen content. A truncation that
+// leaves a complete prior line intact replays that line through feedPty, which
+// counts it in c.total. Since recordPriorPty does not set c.ptyLast, the
+// consecutive-duplicate gate in feedPty does not catch it either.
+func TestAttachCoachPtyReplaysContentAfterSameInodeTruncation(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	card, logF := attachCard(t, srv, false)
+
+	// Write two lines BEFORE attaching — these become prior content.
+	preData := "abcdefgh_content_alpha\nabcdefgh_content_beta\n"
+	if _, err := logF.WriteString(preData); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// skipToEnd read both lines, recordPriorPty recorded them: priorTotal=2.
+	// Truncate the file to include only the first line (same inode, smaller size).
+	firstLineLen := int64(len("abcdefgh_content_alpha\n"))
+	if err := os.Truncate(card.LogPath, firstLineLen); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the watcher's first poll (500ms). The size-shrink resets t.off to 0,
+	// re-reads the truncated prefix, and feeds the first line through feedPty as if
+	// it were new live data.
+	time.Sleep(700 * time.Millisecond)
+
+	cancel()
+	coach.Wait()
+
+	rep := coach.Report()
+	// Without the defect: total=2 (prior only — a truncation is less data,
+	// not new data). Distinct=2 (both unique lines from prior).
+	// With the defect: total=3 (priorTotal=2 + 1 replayed live line).
+	t.Logf("total=%d distinct=%d steers=%d", rep.Total, rep.Distinct, len(rep.Steers))
+	if rep.Total != 2 {
+		t.Errorf("same-inode truncation replayed prior content as live: total=%d distinct=%d, want total=2 (prior only, no live data from truncation)", rep.Total, rep.Distinct)
+	}
+}
+
+// Events path: same-inode truncation of the NDJSON events file replays prior
+// tool.call events through decide, inflating both total and — critically —
+// seeding the live detector with already-completed calls. A truncated events file
+// whose prefix is a single prior call (once, never seen by the live detector) will
+// not trip; but if the prefix contains repeated calls, a coach that attached after
+// a long run will spuriously intervene on work done before it arrived.
+func TestAttachCoachEventsReplaysContentAfterSameInodeTruncation(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+
+	binding := "ycode:test-events-trunc-replay"
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: os.Getpid(), Events: true})
+	os.MkdirAll(filepath.Dir(evPath), 0o700)
+
+	data := toolCallLine("event_alpha") + "\n" + toolCallLine("event_beta") + "\n"
+	os.WriteFile(evPath, []byte(data), 0o600)
+	defer os.Remove(evPath)
+
+	firstLineLen := int64(len(toolCallLine("event_alpha") + "\n"))
+
+	card := room.Card{
+		ID:      "test-events-trunc-replay-" + shortHash(srv.path),
+		Binding: binding,
+		CtlSock: srv.path,
+		LogPath: "/dev/null",
+		PID:     os.Getpid(),
+		Events:  true,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	os.Truncate(evPath, firstLineLen)
+
+	time.Sleep(700 * time.Millisecond)
+	cancel()
+	coach.Wait()
+
+	rep := coach.Report()
+	t.Logf("events: total=%d distinct=%d steers=%d", rep.Total, rep.Distinct, len(rep.Steers))
+	if rep.Total != 2 {
+		t.Errorf("events: same-inode truncation replayed prior event as live: total=%d distinct=%d, want total=2 (prior only)", rep.Total, rep.Distinct)
+	}
+}
+
 func TestAttachCoachDropsIncompleteLineWhenCoacheeDies(t *testing.T) {
 	t.Run("pty", func(t *testing.T) {
 		f, err := os.CreateTemp("", "coach-dead-partial-pty-*.log")
