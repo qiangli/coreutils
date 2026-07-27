@@ -230,7 +230,7 @@ func TestWeaveTerminalStateRequiresEvidence(t *testing.T) {
 			name:     "clean exit with zero commits",
 			exitCode: 0,
 			ev:       weaveTerminalEvidence{CommitsAhead: 0, Head: "abc"},
-			want:     "failed",
+			want:     "no-op",
 		},
 		{
 			name:     "killed reason wins over clean exit",

@@ -185,7 +185,7 @@ func weaveBlockers(q *weaveQueue, it *weaveItem) []*weaveItem {
 
 func weaveDepDead(dep *weaveItem) bool {
 	switch dep.State {
-	case "failed", "killed", "abandoned":
+	case "failed", "killed", "no-op", "abandoned":
 		return true
 	}
 	return false

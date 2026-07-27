@@ -67,7 +67,7 @@ func TestPreservingACrashNeverPromotesItToSubmitted(t *testing.T) {
 	if got := weaveTerminalState(0, nil, "", withWork); got != "submitted" {
 		t.Errorf("clean exit with commits = %q, want submitted", got)
 	}
-	if got := weaveTerminalState(0, nil, "", weaveTerminalEvidence{}); got != "failed" {
-		t.Errorf("clean exit with NO commits = %q, want failed", got)
+	if got := weaveTerminalState(0, nil, "", weaveTerminalEvidence{}); got != "no-op" {
+		t.Errorf("clean exit with NO commits = %q, want no-op", got)
 	}
 }

@@ -306,6 +306,10 @@ type weaveItem struct {
 	// refuses these without --force.
 	IsolationViolated bool     `json:"isolation_violated,omitempty"`
 	EscapedPaths      []string `json:"escaped_paths,omitempty"`
+	// OutsideWorkspacePaths is an advisory extracted from the PTY log when a
+	// worker exits without commit evidence. It does not prove a write occurred
+	// and never blocks a merge; it points operators at likely wrong-directory work.
+	OutsideWorkspacePaths []string `json:"outside_workspace_paths,omitempty"`
 	// Salvageable and NeedsSteward are the REAPER's durable flags — the two
 	// places the lifecycle ends in a decision a machine may not make for you
 	// (see weave_reaper.go). Unlike Stale/Blocked they ARE persisted: the
@@ -410,11 +414,11 @@ func weaveCtlSockPath(dir string, id int64) string {
 // Terminal states for queue items — used by `weave wait` and similar
 // orchestrator-side polling. "submitted" means the subagent exited
 // cleanly and weave measured committed work ready to be merged by `weave pull`.
-// "failed" means the subagent exited non-zero; the branch is left
-// alone (no merge) and the user can inspect the log to decide.
+// "no-op" means the subagent exited cleanly but produced no diff evidence.
+// "failed" means the subagent exited non-zero (or left an uncommitted tree).
 func isTerminalState(s string) bool {
 	switch s {
-	case "submitted", "failed", "killed", "done", "abandoned":
+	case "submitted", "no-op", "failed", "killed", "done", "abandoned":
 		return true
 	}
 	return false
@@ -427,7 +431,7 @@ func isTerminalState(s string) bool {
 // weaveReconcileMerged).
 func isPrunableState(s string) bool {
 	switch s {
-	case "done", "abandoned", "failed", "killed":
+	case "done", "abandoned", "no-op", "failed", "killed":
 		return true
 	}
 	return false
@@ -1249,6 +1253,7 @@ func weaveClearCurrentRunTerminalEvidence(it *weaveItem) {
 	// issue permanently, refusing every retry for a tree nobody touched.
 	it.IsolationViolated = false
 	it.EscapedPaths = nil
+	it.OutsideWorkspacePaths = nil
 }
 
 func weaveTerminalState(exitCode int, runErr error, killedBy string, ev weaveTerminalEvidence) string {
@@ -1257,6 +1262,9 @@ func weaveTerminalState(exitCode int, runErr error, killedBy string, ev weaveTer
 	}
 	if exitCode == 0 && runErr == nil && ev.CommitsAhead > 0 {
 		return "submitted"
+	}
+	if exitCode == 0 && runErr == nil && ev.CommitsAhead == 0 && !ev.Dirty && ev.UntrackedFiles == 0 {
+		return "no-op"
 	}
 	return "failed"
 }
@@ -1298,7 +1306,7 @@ func weaveRememberObservation(dir string, it *weaveItem, ev weaveTerminalEvidenc
 	if outcome == "done" {
 		outcome = "merged"
 	}
-	if outcome != "submitted" && outcome != "failed" && outcome != "killed" && outcome != "merged" {
+	if outcome != "submitted" && outcome != "no-op" && outcome != "failed" && outcome != "killed" && outcome != "merged" {
 		return nil
 	}
 	verifyExit := 0
@@ -1923,7 +1931,7 @@ func weaveQueueSummaries(w io.Writer, skipDir string, activeOnly bool) int {
 			continue
 		}
 		summary := fmt.Sprintf("  %-12s %d total", name, len(q.Items))
-		order := []string{"working", "paused", "allocated", "todo", "submitted", "killed", "failed", "done", "abandoned"}
+		order := []string{"working", "paused", "allocated", "todo", "submitted", "no-op", "killed", "failed", "done", "abandoned"}
 		for _, st := range order {
 			if counts[st] > 0 {
 				summary += fmt.Sprintf(", %d %s", counts[st], st)
@@ -2062,6 +2070,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 	reclaimable := 0
 	var salvageable []int64
 	var violated []*weaveItem
+	var outsideRefs []*weaveItem
 	var needsSteward []*weaveItem
 	for _, it := range q.Items {
 		// A run that DIED WITH GOOD WORK INSIDE IT.
@@ -2119,6 +2128,9 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		}
 		if it.IsolationViolated {
 			violated = append(violated, it)
+		}
+		if len(it.OutsideWorkspacePaths) > 0 {
+			outsideRefs = append(outsideRefs, it)
 		}
 		// The reaper's other determinate outcome: a submission nobody
 		// pulled. Without this it is indistinguishable from work in flight.
@@ -2186,6 +2198,7 @@ func runWeaveList(cmd *cobra.Command, includeHistory bool, flags *weaveOutputFla
 		fmt.Fprintln(cmd.OutOrStdout(), "* wrapper process is dead — re-attach with `weave start --resume --issue N` or `weave abandon N`")
 	}
 	weavePrintIsolationFooter(cmd.OutOrStdout(), violated)
+	weavePrintOutsideWorkspaceRefs(cmd.OutOrStdout(), outsideRefs)
 	weavePrintSalvageableFooter(cmd.OutOrStdout(), salvageable)
 	weavePrintStewardFooter(cmd.OutOrStdout(), needsSteward)
 	weavePrintReclaimableFooter(cmd.OutOrStdout(), reclaimable)
@@ -3262,6 +3275,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if it.VerifyCommand != "" && (exitCode == 0 || ev.CommitsAhead > 0) {
 		ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), it.VerifyCommand, true)
 	}
+	var outsideWorkspacePaths []string
+	if ev.CommitsAhead == 0 && logPath != "" {
+		outsideWorkspacePaths = weaveOutsideWorkspacePaths(weaveReadThrottleLogTail(logPath), workspace)
+	}
 	autoCommitted := false
 	autoCommitErr := ""
 	// throttleLogTail carries the matched throttle log chunk out of the
@@ -3336,6 +3353,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			}
 		}
 		weaveApplyTerminalEvidence(freshIt, ev)
+		freshIt.OutsideWorkspacePaths = outsideWorkspacePaths
 		// Isolation verdict, recorded with the rest of the terminal
 		// evidence: did the live checkout move while this run held its
 		// workspace? Measured here, under the lock, so the durable record
@@ -3365,7 +3383,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		freshIt.CoachSteers = len(coachRep.Steers)
 		freshIt.CoachMode = coachMode
 		steered := len(coachRep.Steers) >= 1
-		converged := freshIt.State == "submitted" || freshIt.State == "done" || freshIt.State == "merged"
+		converged := weaveStateAssertsSuccess(freshIt.State)
 		if steered && converged {
 			freshIt.CoachRecovered = true
 		}
@@ -3383,6 +3401,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		if w := weaveIsolationWarning(it); w != "" {
 			fmt.Fprint(cmd.ErrOrStderr(), w)
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave: `weave pull` will REFUSE run #%d without --force\n", it.ID)
+		}
+		if w := weaveOutsideWorkspaceWarning(it); w != "" {
+			fmt.Fprint(cmd.ErrOrStderr(), w)
 		}
 		if err := weaveRememberObservation(dir, it, ev); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "weave start: memory capture failed (continuing): %v\n", err)
@@ -4604,6 +4625,9 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			"dirty":              it.Dirty,
 			"isolation_violated": it.IsolationViolated,
 		}
+		if len(it.OutsideWorkspacePaths) > 0 {
+			res["outside_workspace_paths"] = it.OutsideWorkspacePaths
+		}
 		if it.IsolationViolated {
 			res["escaped_paths"] = it.EscapedPaths
 			res["isolation_detail"] = weaveIsolationDetail(it)
@@ -4703,6 +4727,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	if it.IsolationViolated {
 		fmt.Fprintf(w, "  ISOLATION: VIOLATED — not mergeable without --force\n")
 		fmt.Fprintf(w, "             %s\n", weaveIsolationDetail(it))
+	}
+	if len(it.OutsideWorkspacePaths) > 0 {
+		fmt.Fprintf(w, "  advisory: worker referenced paths outside its workspace: %s\n",
+			strings.Join(it.OutsideWorkspacePaths, ", "))
 	}
 	if it.Workspace != "" {
 		state := "present"
@@ -5707,9 +5735,9 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	if verifyCommand != "" && (ev.CommitsAhead > 0 || ev.Dirty || ev.UntrackedFiles > 0) {
 		ev = weaveCollectTerminalEvidence(workspace, countRef, verifyCommand, true)
 	}
-	state := "failed"
-	if ev.CommitsAhead > 0 && !ev.Dirty && ev.UntrackedFiles == 0 && (ev.VerifyExit == nil || *ev.VerifyExit == 0) {
-		state = "submitted"
+	state := weaveTerminalState(0, nil, "", ev)
+	if state == "submitted" && (ev.Dirty || ev.UntrackedFiles > 0 || (ev.VerifyExit != nil && *ev.VerifyExit != 0)) {
+		state = "failed"
 	}
 	var finalized *weaveItem
 	lockErr = withWeaveQueueLock(dir, func(q *weaveQueue) error {
@@ -6103,7 +6131,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 }
 
 // runWeaveWait blocks until issue(s) reach a terminal state
-// (submitted, failed, done, abandoned). With --issue N, waits on
+// (submitted, no-op, failed, killed, done, abandoned). With --issue N, waits on
 // one issue; with --all, waits until no working items remain.
 // Times out after timeout (default 1h); on timeout, emits
 // precondition_failed and returns ExitPrecondFail so the

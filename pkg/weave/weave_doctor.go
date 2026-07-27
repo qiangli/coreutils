@@ -230,7 +230,7 @@ func weaveNextSteps(it *weaveItem) string {
 	// which is only real while the workspace is. When it is gone the run is
 	// still recoverable — but by re-provisioning, not reattaching — so derive
 	// the step from the ACTUAL on-disk state rather than the table's default.
-	if (it.State == "failed" || it.State == "killed") && !weaveWorkspaceLive(it) {
+	if (it.State == "failed" || it.State == "killed" || it.State == "no-op") && !weaveWorkspaceLive(it) {
 		return fmt.Sprintf("%s -> allocated (weave start --run %d -- <agent>) — no workspace remains to resume", it.State, it.ID)
 	}
 	var steps []string

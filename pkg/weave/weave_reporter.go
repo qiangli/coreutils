@@ -146,6 +146,8 @@ func weaveReporterStatus(it *weaveItem) string {
 		return "merged"
 	case "killed":
 		return "killed"
+	case "no-op":
+		return "no-op"
 	default:
 		return "failed"
 	}

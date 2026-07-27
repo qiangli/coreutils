@@ -131,8 +131,9 @@ when it isn't (orchestrator pipe / backgrounded by shell &) the
 PTY output goes to a per-issue log file under the queue dir and
 the file path appears in the result envelope.
 
-On exit, the queue item's state becomes "submitted" (exit 0) or
-"failed" (non-zero), with exit_code and finished_at persisted.
+On exit, the queue item's state becomes "submitted" (exit 0 with commits),
+"no-op" (exit 0 with a clean tree and no commits), or "failed" (non-zero
+or uncommitted changes), with exit_code and finished_at persisted.
 "weave pull" picks up submitted branches; "weave wait --issue N"
 blocks until N reaches a terminal state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -900,7 +901,7 @@ func newWeaveWaitCmd() *cobra.Command {
 		Use:   "wait [--issue N | --all]",
 		Short: "Block until issue(s) reach a terminal state",
 		Long: `wait polls the queue every 1s until the target reaches a terminal
-state (submitted, failed, done, or abandoned). Use --issue N to wait
+state (submitted, no-op, failed, killed, done, or abandoned). Use --issue N to wait
 on one issue or --all to wait until no non-terminal items remain.
 
 Pairs with --detach-style backgrounding (` + "`bashy weave start ... &`" + `).
