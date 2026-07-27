@@ -12,8 +12,14 @@ the agent-first equivalent, runnable with the `bashy dag` task runner:
 bashy dag --list            # available targets
 bashy dag build             # build the multicall binary into ./bin
 bashy dag test              # test coreutils' own packages (CI scope)
+bashy dag crossvet          # cross-OS compile gate (windows/linux/darwin)
 bashy dag --json test       # machine-readable envelope for an agent
 ```
+
+**Two gates, not one.** `test` proves the host platform; `crossvet` proves the
+ones you are not on. A change is gated by BOTH — `go test` on darwin cannot
+see a build-tag break, because the offending file never compiles for windows.
+Windows is a shipping target here, so a darwin-only green is not a green.
 
 The default `test`/`vet` scope **excludes the vendored `external/` forks**
 (ollama, podman) — they pull cgo + platform-specific backends (MLX, btrfs) and
@@ -56,28 +62,20 @@ Cross-OS typecheck of the CI scope WITHOUT needing a Windows/Linux box —
 `go vet` compiles every package (tests included) for the target GOOS, which
 is exactly the class of break the CI windows leg keeps catching after
 darwin-only local work (unix-only types like syscall.Stat_t in untagged
-files). Run before every push; the pre-push hook (scripts/hooks/pre-push)
-runs this automatically once installed.
+files, or a `//go:build !windows` helper referenced from an untagged test).
+`go test` on darwin structurally cannot see that: the file never compiles
+for the other platform. Run it alongside `test` before every merge — it is
+a gate, not a lint.
 
-The `aix` build is a DELIBERATE canary, not a shipping target. A build tag
-that says `!windows` is a claim that every other OS is a unix with flock —
-and aix and solaris lock through fcntl, so such a tag does not merely
-mislabel them, it fails to COMPILE. Locking code is where this keeps
-happening (pkg/steward, pkg/policy/coord), and the fail-closed
-implementations those packages ship for unsupported platforms are only
-reachable if the package builds there at all. `go build` rather than
-`go vet`, since aix has no test-runner story and the point is the tag
-selection.
+The body delegates to `scripts/crossvet.sh`, which is also what the pre-push
+hook (`scripts/hooks/pre-push`) execs. One script, two callers: the target
+list cannot drift between the manual gate and the automatic one. Read that
+script for the target rationale (including the deliberate `aix`
+fail-closed-lock canary).
 Effects: read
 
 ```bash
-set -e
-for os in windows linux darwin; do
-  echo "crossvet: GOOS=$os"
-  GOOS=$os go vet $(go list ./... | grep -v /external/)
-done
-echo "crossvet: GOOS=aix (fail-closed-lock canary)"
-GOOS=aix GOARCH=ppc64 go build ./pkg/steward/ ./pkg/policy/coord/
+scripts/crossvet.sh
 ```
 
 ### vet

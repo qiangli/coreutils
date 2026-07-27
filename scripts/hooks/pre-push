@@ -4,10 +4,9 @@
 # push instead of 10 minutes after. Install once per clone:
 #   git config core.hooksPath scripts/hooks
 # Bypass in an emergency with: git push --no-verify
+#
+# The gate itself lives in scripts/crossvet.sh — the SAME script DAG.md's
+# `crossvet` task runs, so the hook and `bashy dag crossvet` can never check
+# different target lists. Do not inline the loop here again.
 set -e
-cd "$(git rev-parse --show-toplevel)"
-pkgs=$(go list ./... | grep -v /external/)
-for os in windows linux; do
-  echo "pre-push: GOOS=$os go vet (CI scope)" >&2
-  GOOS=$os go vet $pkgs
-done
+exec "$(git rev-parse --show-toplevel)/scripts/crossvet.sh"

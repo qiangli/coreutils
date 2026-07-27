@@ -97,7 +97,20 @@ go test $(go list ./... | grep -v /external/)
 go test ./cmds/ls/       # one command's tests
 go test -short ./...     # skips the slower e2e-ish cases
 go test ./...            # full incl. external/ — unix + submodules only
+
+# THE CROSS-OS GATE — run this alongside `go test`, not instead of it.
+# ~6-8s warm. Compiles every package AND its tests for each target GOOS.
+scripts/crossvet.sh      # or: bashy dag crossvet
 ```
+
+**A change is gated by BOTH `go test` and `scripts/crossvet.sh`.** `go test` on
+your host structurally cannot see a build-tag break: a `//go:build !windows`
+file never compiles for windows, so referencing it from an untagged `_test.go`
+passes a darwin suite and fails the windows leg. Windows is a shipping target
+(the whole point is working where system tools do not), so a host-only green is
+not a green. `scripts/crossvet.sh` is the single implementation — the pre-push
+hook execs the same script, so the manual and automatic gates cannot drift.
+Install the hook once per clone: `git config core.hooksPath scripts/hooks`.
 
 Tests are hermetic: no network, no system git required. `reference/`
 (like `priorart/`) is gitignored local source — GNU coreutils, bash,
@@ -465,11 +478,14 @@ client-side git through `coreutils/git` (pure-Go-first, host-git fallback).
 - New tools land with: implementation + table tests + a `--help` text +
   README catalog line. Cross-platform CI (ubuntu/macos/windows) must pass —
   the windows leg is the product, not an afterthought. Catch its compile
-  breaks BEFORE pushing: `bashy dag crossvet` (GOOS=windows/linux/darwin
-  `go vet` over the CI scope — vet cross-typechecks tests too, no Windows
-  box needed), enforced automatically once the committed hook is installed:
-  `git config core.hooksPath scripts/hooks`. The recurring offender is a
-  unix-only type (`syscall.Stat_t` etc.) in an untagged `_test.go`.
+  breaks at MERGE time, not push time: `scripts/crossvet.sh` (equivalently
+  `bashy dag crossvet`) — GOOS=windows/linux/darwin `go vet` over the CI
+  scope plus an aix canary; vet cross-typechecks tests too, so no Windows
+  box is needed. That script is the one implementation; the pre-push hook
+  execs it (`git config core.hooksPath scripts/hooks` installs the hook),
+  so there is no second copy to drift. The recurring offenders are a
+  unix-only type (`syscall.Stat_t` etc.) in an untagged `_test.go`, and an
+  untagged test calling a `//go:build !windows` helper.
 - Dependency budget is deliberately tight: go-git (for `git/`), pflag, and
   the stdlib for the userland core. The AgentOS hub adds deps **used only
   by the packages that need them** (per-import compilation keeps them out
