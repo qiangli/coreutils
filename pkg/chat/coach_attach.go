@@ -235,7 +235,33 @@ func (t *attachLineTail) next() ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.file == nil || !os.SameFile(t.file, fi) || fi.Size() < t.off || !t.sameEnd(f) {
+	// Three ways the stream can break, and they do NOT get the same treatment.
+	// The distinction is whether the bytes now in the file are ones this tail has
+	// already delivered.
+	switch {
+	case fi.Size() < t.off && t.file != nil && os.SameFile(t.file, fi):
+		// SAME INODE, SMALLER: a truncation. What remains is a PREFIX of what we
+		// already consumed and delivered. Re-anchor at the new end and deliver
+		// NOTHING — replaying it would feed the detector output the coachee
+		// produced earlier and can trip a steer on already-finished work. A
+		// truncation is less data, never new data. (Reporting it as prior history
+		// would be a second lie: the coach did observe it, once, already.)
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return nil, err
+		}
+		t.file = fi
+		t.off = int64(len(data))
+		t.rem = nil
+		t.end = nil
+		t.rememberEnd(data)
+		return nil, nil
+	case t.file == nil || !os.SameFile(t.file, fi) || !t.sameEnd(f):
+		// A REPLACEMENT: either a new inode (rotation), or the same inode whose
+		// content no longer matches our anchor (rewritten in place). These bytes
+		// are content we have never delivered, so the new generation is read from
+		// byte zero and delivered normally. A stale fragment from the old
+		// generation must not be joined to it.
 		t.file = fi
 		t.off = 0
 		t.rem = nil
