@@ -111,11 +111,7 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 	}
 	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
 		called++
-		release, err := weaveFlock(filepath.Join(dir, "pull.lock"), 0)
-		if err != nil {
-			t.Fatalf("pull.lock held for adversarial review: %v", err)
-		}
-		release()
+		assertPullLockFree(t, dir)
 		return weavePairReviewResult{
 			CodingAgent: "sh", ReviewAgent: "claude:opus", AddedTest: false,
 			Verdict: weavePairPass, Reason: "pair attacked the change and the gate stayed green", ExitCode: weavePairPassExit,
