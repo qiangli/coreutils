@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -406,5 +407,125 @@ func TestCardEventsFileMatchesSessionConvention(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, ".ndjson") {
 		t.Errorf("cardEventsFile = %q, want an .ndjson path", got)
+	}
+}
+
+// The events watcher starts its eventTail at offset 0 — it replays the ENTIRE
+// events-file history on the first drain(), including tool calls the coachee made
+// BEFORE the coach attached. An attach to a session that has been running for 20
+// minutes trips on its past — a coach must tail from the CURRENT position, not
+// from the session's birth.
+func TestAttachCoachEventsModeReplaysPastHistory(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+
+	binding := "ycode:test-events-past"
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: os.Getpid(), Events: true})
+	os.MkdirAll(filepath.Dir(evPath), 0o700)
+
+	// A coachee that has been running for a while: 5 identical tool.call events,
+	// well past the RepeatThreshold of 3. A coach that attaches now must NOT trip
+	// on work that was already done.
+	var b strings.Builder
+	for i := 0; i < 5; i++ {
+		b.WriteString(`{"type":"tool.call","timestamp":"2025-07-27T00:00:00Z","data":{"name":"read_file","input":{"path":"foo.go"}}}` + "\n")
+	}
+	os.WriteFile(evPath, []byte(b.String()), 0o600)
+	defer os.Remove(evPath)
+
+	card := room.Card{
+		ID:      "test-events-past",
+		Binding: binding,
+		CtlSock: srv.path,
+		LogPath: "/dev/null",
+		PID:     os.Getpid(),
+		Events:  true,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(time.Second) // let the watcher drain the file
+	cancel()
+	coach.Wait()
+
+	rep := coach.Report()
+	if rep.Total == 0 {
+		t.Fatal("events watcher read zero tool calls — the watcher did not tail the events file at all")
+	}
+	if len(rep.Steers) > 0 {
+		t.Fatalf("coach tripped on %d historical steers from past tool calls: the events watcher must tail from the CURRENT position, not replay the session's entire history. total=%d distinct=%d steers=%v",
+			len(rep.Steers), rep.Total, rep.Distinct, rep.Steers)
+	}
+}
+
+// The events watcher exits ONLY on ctx.Done(). Unlike watchAttachedLog, it has
+// NO pid-liveness check — a coachee that exits on its own never causes the
+// attached events-mode coach to return. The doc says "the watcher exits on …
+// the coachee's pid going away"; events mode violates that invariant.
+func TestAttachCoachEventsModeHangsWhenCoacheeExits(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+
+	// Start a real child process — it provides a pid that attachCoach's
+	// liveness check accepts, and that we can kill to simulate "exit."
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	childPID := cmd.Process.Pid
+	defer func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+		}
+	}()
+
+	binding := "ycode:test-events-die"
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: childPID, Events: true})
+	os.MkdirAll(filepath.Dir(evPath), 0o700)
+	if err := os.WriteFile(evPath, []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(evPath)
+
+	card := room.Card{
+		ID:      "test-events-die",
+		Binding: binding,
+		CtlSock: srv.path,
+		LogPath: "/dev/null",
+		PID:     childPID,
+		Events:  true,
+	}
+
+	ctx := context.Background() // never cancelled — coachee death should end the watch
+
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The coachee "exits on its own." The documented invariant: "a coachee
+	// that exits on its own — pid gone — ends the watch too."
+	cmd.Process.Kill()
+	cmd.Wait()
+	cmd.Process = nil
+
+	done := make(chan struct{})
+	go func() {
+		coach.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Watcher returned — the pid-liveness invariant holds for events mode too.
+	case <-time.After(4 * time.Second):
+		t.Fatal("coach.Wait() hung after coachee died: the events watcher has no pid-liveness check and never exits without ctx cancellation, violating the documented invariant")
 	}
 }
