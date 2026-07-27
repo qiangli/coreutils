@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/room"
@@ -65,25 +66,56 @@ import (
 // detachSafe by construction: the watcher only tails the member's output/events
 // and (at most) writes frames to its control socket; cancelling ctx ends the
 // watch and leaves the coachee untouched.
+//
+// It is the readOnly-shaped front door onto attachCoachAs, retained for callers
+// that predate roles: readOnly IS RoleObserver (watch, emit nothing) and
+// everything else IS RoleSupervisor (watch, say, ESC). Those two roles are not an
+// approximation of the old behavior — they are it, which is what makes the role
+// generalization a widening rather than a change.
 func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly bool) (*Coach, error) {
+	role := RoleSupervisor
+	if readOnly {
+		role = RoleObserver
+	}
+	coach, _, err := attachCoachAs(ctx, card, pol, role)
+	return coach, err
+}
+
+// attachCoachAs is attachCoach with the participation ROLE made explicit — the
+// generalization of the shipped attach. Everything about the watch is identical
+// for every role (same resolution, same refusals, same ONE line-aware tail, same
+// trip implementation); the role changes only what may reach the coachee, and it
+// changes it by choosing the Steerer rather than by asking the coach to behave.
+// See attach_roles.go for the capability table and why ESC is the dividing line.
+//
+// It returns the capped steerer alongside the coach so a caller can report how
+// many interventions the role demoted to report-only — the "demote, never drop"
+// half of the contract is only useful if someone can see it happened.
+//
+// Audit: a room note is emitted here on attach and by the watcher on detach,
+// carrying actor, role, and target. Refusals below are NOT audited as
+// participation — an attach that never happened had no effect to bound.
+func attachCoachAs(ctx context.Context, card room.Card, pol CoachPolicy, role AttachRole) (*Coach, *roleSteerer, error) {
+	if !role.CanObserve() {
+		return nil, nil, fmt.Errorf("attach: unknown role %q — valid roles are %s (least to most power)",
+			string(role), strings.Join(AttachRoleNames(), ", "))
+	}
 	if card.CtlSock == "" {
-		return nil, fmt.Errorf("coach attach: %s has no control socket — nothing to steer through (it is not a steerable member)", card.ID)
+		return nil, nil, fmt.Errorf("coach attach: %s has no control socket — nothing to steer through (it is not a steerable member)", card.ID)
 	}
 	if !room.PidAlive(card.PID) {
-		return nil, fmt.Errorf("coach attach: %s is not running (pid %d is gone)", card.ID, card.PID)
+		return nil, nil, fmt.Errorf("coach attach: %s is not running (pid %d is gone)", card.ID, card.PID)
 	}
 
-	// Build the steerer BEFORE starting the watcher, so there is no race between a
-	// read-only swap and intervene() reading c.steer from the watch goroutine.
-	// read-only uses a no-op steerer (NewCtlSteerer("") sends nothing); the real
-	// path steers through the member's control socket.
-	var steer Steerer = NewCtlSteerer(card.CtlSock)
-	if readOnly {
-		steer = NewCtlSteerer("")
-	}
+	// Build the steerer BEFORE starting the watcher, so there is no race between
+	// choosing the role's cap and intervene() reading c.steer from the watch
+	// goroutine. The cap is the enforcement: an observer is handed the existing
+	// no-op steerer and an advisor's Interrupt cannot reach the socket at all.
+	steer := newRoleSteerer(role, card.CtlSock)
 	if pol.Steer == "" {
 		pol.Steer = DefaultCoachPolicy().Steer
 	}
+	actor := attachActor()
 
 	// Event path: the member speaks a structured event channel (a first-party
 	// harness reporting tool.call as data). Tail its events file and feed
@@ -102,11 +134,17 @@ func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly 
 				c.agent = card.Binding
 				c.mode = "events"
 				c.recordPriorToolCalls(eventsFromLines(lines))
+				emitAttachAudit(attachAuditAttach, role, card, actor)
 				go func() {
-					defer func() { close(c.done) }()
+					// Emit the detach BEFORE closing done, so a caller that Waits and
+					// then reads the timeline always sees the boundary it waited for.
+					defer func() {
+						emitAttachAudit(attachAuditDetach, role, card, actor)
+						close(c.done)
+					}()
 					watchAttachedEvents(ctx, c, tail, card.PID)
 				}()
-				return c, nil
+				return c, steer, nil
 			}
 		}
 	}
@@ -117,21 +155,25 @@ func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly 
 	// This is the same feedPty/tripPty/intervene path the launched pty-mode coach
 	// drives through watchPty.
 	if card.LogPath == "" {
-		return nil, fmt.Errorf("coach attach: %s has no log to tail and no reachable event channel — nothing to watch", card.ID)
+		return nil, nil, fmt.Errorf("coach attach: %s has no log to tail and no reachable event channel — nothing to watch", card.ID)
 	}
 	coach := NewLineCoach(pol, steer)
 	coach.agent = card.Binding
 	tail := &attachLineTail{path: card.LogPath}
 	prior, err := tail.skipToEnd()
 	if err != nil {
-		return nil, fmt.Errorf("coach attach: %s cannot open log %q — nothing to watch: %w", card.ID, card.LogPath, err)
+		return nil, nil, fmt.Errorf("coach attach: %s cannot open log %q — nothing to watch: %w", card.ID, card.LogPath, err)
 	}
 	coach.recordPriorPty(completeLines(prior))
+	emitAttachAudit(attachAuditAttach, role, card, actor)
 	go func() {
-		defer func() { close(coach.done) }()
+		defer func() {
+			emitAttachAudit(attachAuditDetach, role, card, actor)
+			close(coach.done)
+		}()
 		watchAttachedLog(ctx, coach, card, tail)
 	}()
-	return coach, nil
+	return coach, steer, nil
 }
 
 // watchAttachedLog tails card.LogPath and pumps every new byte into the coach's
