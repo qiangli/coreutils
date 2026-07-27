@@ -3162,7 +3162,8 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// preservation all live in weaveChildEnv so the launch assertion can test
 	// the same code path this spawn runs. dir is the queue (state) dir, passed
 	// so each ycode run gets its own data store under it.
-	env := weaveChildEnv(os.Environ(), workspace, branch, base, dir, it, agentLaunch)
+	launcherEnv := os.Environ()
+	env := weaveChildEnv(launcherEnv, workspace, branch, base, dir, it, agentLaunch)
 	for k, v := range carrier {
 		env = append(env, fmt.Sprintf("%s=%s", strings.ToUpper(k), v))
 	}
@@ -3222,6 +3223,10 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 		logFile = f
 	}
+	var captureRedaction weaveCaptureRedaction
+	if useLogFile || ptyMode == "never" {
+		captureRedaction = newWeaveCaptureRedaction(launcherEnv, cmd.ErrOrStderr())
+	}
 	if mode != weavecli.OutputJSON && useLogFile {
 		fmt.Fprintf(cmd.OutOrStdout(), "weave start: PTY → %s\n", logPath)
 	}
@@ -3265,10 +3270,18 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		coachMode  string
 	)
 	if ptyMode == "never" {
+		stdoutCapture := captureRedaction.Writer(io.MultiWriter(cmd.OutOrStdout(), &toolStdout))
+		stderrCapture := captureRedaction.Writer(cmd.ErrOrStderr())
 		tool.Stdin = os.Stdin
-		tool.Stdout = io.MultiWriter(cmd.OutOrStdout(), &toolStdout)
-		tool.Stderr = cmd.ErrOrStderr()
+		tool.Stdout = stdoutCapture
+		tool.Stderr = stderrCapture
 		runErr = tool.Run()
+		if err := stdoutCapture.Close(); runErr == nil && err != nil {
+			runErr = fmt.Errorf("flush redacted tool stdout: %w", err)
+		}
+		if err := stderrCapture.Close(); runErr == nil && err != nil {
+			runErr = fmt.Errorf("flush redacted tool stderr: %w", err)
+		}
 		if runErr != nil {
 			if ee, ok := runErr.(*exec.ExitError); ok {
 				exitCode = ee.ExitCode()
@@ -3282,8 +3295,14 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			// Subagent stdio: PTY ↔ log file. stdin is the PTY slave
 			// (no user input source); stdout/stderr go to the PTY
 			// master which we copy to logFile.
-			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, logFile, guards)
-			_ = logFile.Close()
+			logCapture := captureRedaction.Writer(logFile)
+			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, logCapture, guards)
+			if err := logCapture.Close(); runErr == nil && err != nil {
+				runErr = fmt.Errorf("flush redacted PTY log: %w", err)
+			}
+			if err := logFile.Close(); runErr == nil && err != nil {
+				runErr = fmt.Errorf("close PTY log: %w", err)
+			}
 		} else {
 			// Interactive TTY pass-through.
 			exitCode, killReason, coachRep, coachMode, runErr = runWeaveToolPTY(tool, nil, guards)

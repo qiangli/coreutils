@@ -158,3 +158,20 @@ func TestRedactorMergesOverlapChain(t *testing.T) {
 		t.Fatalf("non-secret trailing text was consumed by the merged span (output %d bytes)", len(got))
 	}
 }
+
+func BenchmarkRedactorLargeChunk(b *testing.B) {
+	const fixture = "synthetic-benchmark-secret-0001"
+
+	r := NewRedactor()
+	if err := r.Register("BENCHMARK_SECRET", fixture); err != nil {
+		b.Fatalf("Register failed: %v", err)
+	}
+	input := bytes.Repeat([]byte("ordinary captured output\n"), (1<<20)/len("ordinary captured output\n"))
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(input)))
+	b.ResetTimer()
+	for range b.N {
+		_ = r.Redact(input)
+	}
+}
