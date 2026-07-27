@@ -143,6 +143,21 @@ func resolveMeeting(ref string) (string, error) {
 	}
 }
 
+// loadMeeting resolves whatever a caller typed — a room number, an id, or an
+// unambiguous prefix — and loads that session.
+//
+// It is the front door for anything that takes a room REFERENCE rather than an
+// id: a human typing `2`, and an HTTP layer receiving `:ref` from a URL, are the
+// same lookup, and duplicating it would let the two drift apart on which
+// spellings are accepted.
+func loadMeeting(ref string) (*State, error) {
+	id, err := resolveMeeting(ref)
+	if err != nil {
+		return nil, err
+	}
+	return loadState(id)
+}
+
 // roomLabel renders a room for the list. A meeting from before rooms existed,
 // or one whose room was never assigned, shows a dash rather than a fake 0.
 func roomLabel(s *State) string {

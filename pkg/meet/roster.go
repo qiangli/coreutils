@@ -1,15 +1,22 @@
 package meet
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/secrets"
 )
+
+// operableFn is the host-routability gate, indirected so a test can seat agents
+// this machine cannot launch. Production always uses capability.Operable — the
+// same gate the router and the attendee warnings share.
+var operableFn = capability.Operable
 
 // Seating a meeting used to mean naming everyone: --participant this,
 // --participant that, and you had to already know which of the fleet were
@@ -187,6 +194,191 @@ func canonAgent(name string) string {
 		return a.Name
 	}
 	return name
+}
+
+// --- the mutable roster ------------------------------------------------------
+//
+// A room is a conversation, and a conversation gains and loses people while it is
+// running. The roster is therefore not fixed at `start`: the organizer invites a
+// second agent mid-thread and it joins the next round, with no new session and no
+// re-seating of the ones already talking.
+//
+// Two rules hold it together. Every mutation goes through Validate(), so a seat
+// added at minute forty is held to exactly the invariants a seat named at minute
+// zero was — the roster cannot decay into a state `start` would have refused. And
+// every mutation is RECORDED as a transcript event: a roster that changed
+// silently would leave the minutes attributing a round to a table that was never
+// seated that way, which is the same claim-by-absence-of-evidence the band-skip
+// list exists to prevent.
+
+// ErrNotOrganizer is returned when someone other than the organizer tries to
+// change the roster or close the room. Any member may post; only the organizer
+// convenes and dissolves.
+//
+// It is a sentinel, and wrapped rather than replaced by the callers below, so a
+// transport can classify it (the HTTP layer answers 403) instead of matching on
+// prose that will be reworded.
+var ErrNotOrganizer = errors.New("meet: only the organizer may change the roster")
+
+// requireOrganizer enforces the organizer privilege for a roster change.
+//
+// An EMPTY initiator is the unnamed agent that called `meet consult` — there is
+// nobody to check the actor against, and refusing everybody would freeze that
+// room's roster permanently with no way to recover it. So the check does not
+// apply rather than failing closed; a room that wants the privilege names its
+// organizer, which `meet start` always does.
+func requireOrganizer(st *State, actor string) error {
+	org := st.initiatorName()
+	if org == "" {
+		return nil
+	}
+	who := strings.TrimSpace(actor)
+	// Compared canonically as well as literally: the organizer may have been
+	// named by nickname at `start` and be addressed by its canonical name here.
+	if strings.EqualFold(who, org) || (who != "" && strings.EqualFold(canonAgent(who), canonAgent(org))) {
+		return nil
+	}
+	if who == "" {
+		who = "an unnamed caller"
+	}
+	return fmt.Errorf("meet: %s cannot change the roster of %s — %s convened it. "+
+		"Any member may post; only the organizer invites, removes, or closes: %w",
+		who, st.ID, org, ErrNotOrganizer)
+}
+
+// routableSeat refuses a name nothing on this host can be addressed as.
+//
+// The gate is deliberately the WEAKER of two questions, because they fail in
+// opposite directions. A name the fleet knows is routable by definition, whether
+// or not its binary is installed today — that is an operability warning
+// (attendeeWarnings), not a reason to refuse a seat, and a laptop with codex
+// uninstalled must still be able to build a roster for a host that has it. A name
+// the fleet does NOT know is only meaningful if it is a tool that exists here.
+// Everything else — a typo, a human's name, a channel — is not an agent at all,
+// and seating it would mean every round from then on records a failed turn for a
+// participant that was never real.
+func routableSeat(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("meet: no agent named")
+	}
+	if _, ok := fleet.New().Agent(name); ok {
+		return nil
+	}
+	if ok, _ := operableFn(capability.ResolveTool(name)); ok {
+		return nil
+	}
+	return fmt.Errorf("meet: %q is not an agent this host can drive — "+
+		"it is not in the fleet (`bashy agents list`) and there is no such tool on PATH", name)
+}
+
+// Invite seats an agent in a running room. Organizer-only.
+//
+// It is IDEMPOTENT: inviting someone already at the table is a no-op, not a
+// second seat. A duplicate seat dilutes a vote while looking like diversity, and
+// a caller retrying after a dropped response must not be the way one appears.
+func Invite(ref, actor, agent string) error {
+	st, err := loadMeeting(ref)
+	if err != nil {
+		return err
+	}
+	return inviteTo(st, actor, agent)
+}
+
+// inviteTo is Invite against an already-loaded session, so an in-process caller
+// (the REPL) mutates the same State it is about to run a round with, rather than
+// a second copy of it that its own next save would clobber.
+func inviteTo(st *State, actor, agent string) error {
+	if err := requireOrganizer(st, actor); err != nil {
+		return err
+	}
+	if err := routableSeat(agent); err != nil {
+		return err
+	}
+	// Canonicalized before it is stored, for the reason canonicalizeRoster gives:
+	// the seat name is stamped onto every Event this agent produces, and an alias
+	// re-attributes those turns the day it floats to another model.
+	name := canonAgent(strings.TrimSpace(agent))
+	for _, p := range st.Participants {
+		if strings.EqualFold(p, name) {
+			return nil // already seated
+		}
+	}
+
+	prev := st.Participants
+	st.Participants = append(append([]string(nil), prev...), name)
+	// The full role invariants, not a subset: a seat added mid-meeting must not
+	// be able to make the secretary a participant or duplicate the chair.
+	if err := st.Validate(); err != nil {
+		st.Participants = prev
+		return err
+	}
+	if err := st.save(); err != nil {
+		st.Participants = prev
+		return err
+	}
+	_, err := record(st, "invite", actorLabel(st, actor), "", fmt.Sprintf("invited %s", seatLabel(name)))
+	return err
+}
+
+// Kick removes an agent from a running room. Organizer-only.
+func Kick(ref, actor, agent string) error {
+	st, err := loadMeeting(ref)
+	if err != nil {
+		return err
+	}
+	return kickFrom(st, actor, agent)
+}
+
+// kickFrom is Kick against an already-loaded session — see inviteTo.
+//
+// Unlike Invite this is NOT a silent no-op when the name is absent. Inviting
+// twice and inviting once are the same intent; removing somebody who was never
+// there means the caller is looking at a roster that does not exist, and saying
+// so is cheaper than letting them believe they trimmed the table.
+func kickFrom(st *State, actor, agent string) error {
+	if err := requireOrganizer(st, actor); err != nil {
+		return err
+	}
+	name := canonAgent(strings.TrimSpace(agent))
+	kept := make([]string, 0, len(st.Participants))
+	found := ""
+	for _, p := range st.Participants {
+		if found == "" && strings.EqualFold(p, name) {
+			found = p
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if found == "" {
+		return fmt.Errorf("meet: %s is not seated in %s — participants: %s",
+			agent, st.ID, strings.Join(st.Participants, ", "))
+	}
+
+	prev := st.Participants
+	st.Participants = kept
+	// A chair with nobody left to call on is the invariant this can violate.
+	if err := st.Validate(); err != nil {
+		st.Participants = prev
+		return err
+	}
+	if err := st.save(); err != nil {
+		st.Participants = prev
+		return err
+	}
+	_, err := record(st, "kick", actorLabel(st, actor), "", fmt.Sprintf("removed %s", seatLabel(found)))
+	return err
+}
+
+// actorLabel names the speaker of a roster event. An unnamed caller is recorded
+// as such rather than as the room's human, who did not do it.
+func actorLabel(st *State, actor string) string {
+	if a := strings.TrimSpace(actor); a != "" {
+		return a
+	}
+	if org := st.initiatorName(); org != "" {
+		return org
+	}
+	return "an unnamed caller"
 }
 
 // toolOf resolves a seat to the tool behind it, so the registry can be asked what

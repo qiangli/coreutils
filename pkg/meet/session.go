@@ -51,7 +51,7 @@ type Event struct {
 	Round   int       `json:"round"`
 	Speaker string    `json:"speaker"`
 	Role    string    `json:"role,omitempty"`
-	Kind    string    `json:"kind"` // agenda|human|turn|vote|poll|question|ledger|replan|note|decision|action|confirm
+	Kind    string    `json:"kind"` // agenda|human|turn|vote|poll|question|ledger|replan|note|decision|action|confirm|invite|kick
 	Text    string    `json:"text"`
 	File    string    `json:"file,omitempty"` // per-turn full-text file (context-offloading target)
 	TS      time.Time `json:"ts"`
@@ -170,7 +170,9 @@ func writeTurnFile(id string, e Event) string {
 //   - SECRETARY decides NOTHING. It records, and extracts what was decided.
 //
 // The chair may be an agent, the human, or absent (a fixed round-robin fan-out
-// where nobody directs). The secretary is always an agent and always exactly one.
+// where nobody directs). The secretary is at most one agent, and may also be
+// absent: a room that is a conversation rather than a meeting keeps no minutes,
+// and inventing a recorder for it would file a synthesis nobody asked for.
 //
 // Separation of powers is enforced in Validate(), not merely documented: a
 // recorder that also chairs can declare the meeting over and then write the
@@ -198,9 +200,15 @@ type State struct {
 	Topic  string   `json:"topic"`
 	Agenda []string `json:"agenda,omitempty"`
 
-	// The roster. Secretary is required. Chair is optional: empty means nobody
-	// directs (a fixed round-robin), and the turn model follows from that rather
-	// than from a separate mode knob.
+	// The roster. Both Chair and Secretary are optional, and both encode a mode
+	// rather than a knob: empty Chair means nobody directs (a fixed round-robin),
+	// empty Secretary means nobody records (no minutes, no synthesis pass). One
+	// room type covers a two-seat conversation and a formal meeting, and which
+	// one you are in follows from who is seated — see
+	// dhnt/docs/meet-web-chatroom-design.md §4.
+	//
+	// Participants is MUTABLE at runtime: Invite/Kick grow and shrink it while
+	// the room is open (roster.go). Every reader takes it as it is at call time.
 	Participants []string `json:"participants"`
 	Secretary    string   `json:"secretary"`
 	Chair        string   `json:"chair,omitempty"`
@@ -275,6 +283,18 @@ func (s *State) chair() string { return strings.TrimSpace(s.Chair) }
 // contradict the roster.
 func (s *State) chaired() bool { return s.chair() != "" }
 
+// secretary returns the agent recording the room, or "" when nobody does.
+func (s *State) secretary() string { return strings.TrimSpace(s.Secretary) }
+
+// recorded reports whether the room has a secretary. When false there is no
+// synthesis pass and the minutes say so — the same shape as chaired(): the
+// behaviour follows from the roster rather than from a separate mode flag.
+//
+// A room without one is not a broken meeting, it is a conversation. Refusing to
+// open one would mean a human who wants to talk to a single assistant must first
+// nominate a second agent to take notes on it.
+func (s *State) recorded() bool { return s.secretary() != "" }
+
 // turnModel describes the turn model for humans.
 func (s *State) turnModel() string {
 	if s.chaired() {
@@ -288,8 +308,8 @@ func (s *State) turnModel() string {
 func (s *State) attendees() []string {
 	out := make([]string, 0, len(s.Participants)+3)
 	out = append(out, s.Participants...)
-	if s.Secretary != "" {
-		out = append(out, s.Secretary)
+	if s.recorded() {
+		out = append(out, s.secretary())
 	}
 	if s.chaired() {
 		out = append(out, s.chair())
@@ -320,9 +340,9 @@ func (s *State) Validate() error {
 	if strings.TrimSpace(s.Topic) == "" {
 		return fmt.Errorf("meet: a meeting needs a --topic")
 	}
-	if strings.TrimSpace(s.Secretary) == "" {
-		return fmt.Errorf("meet: a meeting needs a --secretary to record it")
-	}
+	// No secretary check: an empty secretary is a room that keeps no minutes,
+	// not an invalid one. Every invariant below that mentions the secretary is
+	// therefore conditional on there being one.
 
 	seen := map[string]bool{}
 	for _, p := range s.Participants {
@@ -339,11 +359,11 @@ func (s *State) Validate() error {
 	// The secretary records what was decided. A secretary that also argues has an
 	// interest in the record; a secretary that also chairs can declare the meeting
 	// over and then write the minutes saying so.
-	if seen[strings.ToLower(s.Secretary)] {
+	if s.recorded() && seen[strings.ToLower(s.secretary())] {
 		return fmt.Errorf("meet: %s cannot be both secretary and participant — "+
 			"the secretary records the decisions and must not have a stake in them", s.Secretary)
 	}
-	if s.chaired() && strings.EqualFold(s.chair(), s.Secretary) {
+	if s.recorded() && s.chaired() && strings.EqualFold(s.chair(), s.secretary()) {
 		return fmt.Errorf("meet: %s cannot be both chair and secretary — "+
 			"the chair decides when the meeting is done and the secretary writes down what it decided; "+
 			"one agent doing both can conclude a meeting and then author the record of it.\n"+

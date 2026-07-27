@@ -301,9 +301,6 @@ func TestRoleSeparationIsEnforced(t *testing.T) {
 		{"a participant is seated twice",
 			sessionFlags{topic: "t", secretary: "claude", participants: []string{"codex", "codex"}},
 			"seated twice"},
-		{"no secretary",
-			sessionFlags{topic: "t", secretary: "", participants: []string{"codex"}},
-			"needs a --secretary"},
 		{"no topic",
 			sessionFlags{topic: "", secretary: "claude", participants: []string{"codex"}},
 			"needs a --topic"},
@@ -323,5 +320,17 @@ func TestRoleSeparationIsEnforced(t *testing.T) {
 	if _, err := (&sessionFlags{topic: "t", secretary: "claude", chair: "gemini",
 		participants: []string{"codex", "opencode"}}).newState(); err != nil {
 		t.Fatalf("a well-separated roster must be accepted: %v", err)
+	}
+
+	// And the smallest legal roster: no secretary at all. Separation of powers
+	// governs agents that hold two roles at once — it has nothing to say about a
+	// role nobody holds, and a room with no recorder is a conversation, not a
+	// malformed meeting.
+	st, err := (&sessionFlags{topic: "t", secretary: "", participants: []string{"codex"}}).newState()
+	if err != nil {
+		t.Fatalf("a room with no secretary must be accepted: %v", err)
+	}
+	if st.recorded() {
+		t.Errorf("secretary = %q, want none", st.Secretary)
 	}
 }
