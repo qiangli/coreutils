@@ -3,8 +3,10 @@ package secrets
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -61,16 +63,9 @@ func newCheckCmd(cfg *Config) *cobra.Command {
 				return fmt.Errorf("unknown provider for %q (supported: %s)", name, strings.Join(supportedProviderNames(), ", "))
 			}
 
-			key, ok := lookupEnvironmentKey(name)
-			if !ok {
-				client, err := cfg.Resolve()
-				if err != nil {
-					return err
-				}
-				key, err = client.Get(name)
-				if err != nil {
-					return err
-				}
+			key, err := lookupCheckKey(*cfg, name)
+			if err != nil {
+				return err
 			}
 
 			result := probeProvider(c.Context(), &http.Client{Timeout: 10 * time.Second}, name, provider, key, providerProbes[provider])
@@ -83,6 +78,29 @@ func newCheckCmd(cfg *Config) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit a JSON verdict")
 	return cmd
+}
+
+func lookupCheckKey(cfg Config, name string) (string, error) {
+	client, err := cfg.Resolve()
+	if err == nil {
+		key, getErr := client.Get(name)
+		if getErr == nil {
+			return key, nil
+		}
+		var transportErr *url.Error
+		if !errors.As(getErr, &transportErr) {
+			return "", getErr
+		}
+		err = getErr
+	}
+
+	// An inherited environment value may be the last usable copy while
+	// cloudbox is down, but it must never outrank a reachable vault: rotations
+	// cannot update the parent shell's environment.
+	if key, ok := lookupEnvironmentKey(name); ok {
+		return key, nil
+	}
+	return "", err
 }
 
 func lookupEnvironmentKey(name string) (string, bool) {
