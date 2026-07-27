@@ -206,6 +206,8 @@ type Coach struct {
 	mu             sync.Mutex
 	counts         map[string]int // (tool|inputhash) -> times seen
 	total          int
+	priorCounts    map[string]struct{} // calls/lines present before an attached watch began
+	priorTotal     int
 	distinctAtLast int // distinct count when we last steered
 	steers         []SteerRecord
 	done           chan struct{}
@@ -735,6 +737,54 @@ func (c *Coach) decide(ev Event) *SteerRecord {
 	return &rec
 }
 
+// recordPriorToolCalls preserves already-completed calls in an attached coach's
+// report without feeding them into decide. Attachment starts a fresh detection
+// window: past work is useful context, but can never justify a new steer.
+func (c *Coach) recordPriorToolCalls(evs []Event) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.priorCounts == nil {
+		c.priorCounts = make(map[string]struct{})
+	}
+	for _, ev := range evs {
+		if ev.Type != EventToolCall {
+			continue
+		}
+		var d toolCallData
+		_ = json.Unmarshal(ev.Data, &d)
+		c.priorCounts[d.Name+"|"+hashInput(d.Input)] = struct{}{}
+		c.priorTotal++
+	}
+}
+
+// recordPriorPty preserves complete, significant output lines that predate an
+// attached watch in its report without feeding the live novelty detector.
+// Attachment starts with an empty window, recent context, and ptyLast, so past
+// output can never seed or justify a new steer.
+func (c *Coach) recordPriorPty(output []byte) {
+	text := string(output)
+	lastNewline := strings.LastIndexByte(text, '\n')
+	if lastNewline < 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.priorCounts == nil {
+		c.priorCounts = make(map[string]struct{})
+	}
+	priorLast := ""
+	for _, raw := range strings.Split(text[:lastNewline], "\n") {
+		norm := normalizeLine(raw)
+		if !significant(norm) || norm == priorLast {
+			continue
+		}
+		priorLast = norm
+		c.priorCounts[norm] = struct{}{}
+		c.priorTotal++
+	}
+}
+
 // Wait blocks until the watcher goroutine has drained after the context ended.
 func (c *Coach) Wait() { <-c.done }
 
@@ -759,15 +809,26 @@ func (c *Coach) Report() CoachReport {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Distinct is cumulative per mode: event mode counts tool calls, pty mode
-	// counts normalized output lines. Only one is populated.
-	distinct := len(c.counts)
-	if distinct == 0 {
-		distinct = len(c.ptySeen)
+	// counts normalized output lines. Include report-only pre-attach history in
+	// either mode without feeding it into the live detector. Direct detector
+	// tests may feed pty lines without first switching mode, so aggregate the
+	// mutually exclusive live sets instead of selecting one by the mode label.
+	all := make(map[string]struct{}, len(c.counts)+len(c.ptySeen)+len(c.priorCounts))
+	for key := range c.counts {
+		all[key] = struct{}{}
 	}
+	for key := range c.ptySeen {
+		all[key] = struct{}{}
+	}
+	for key := range c.priorCounts {
+		all[key] = struct{}{}
+	}
+	distinct := len(all)
+	total := c.total + c.priorTotal
 	return CoachReport{
-		Total:    c.total,
+		Total:    total,
 		Distinct: distinct,
-		Repeat:   ratioOf(c.total, distinct),
+		Repeat:   ratioOf(total, distinct),
 		Steers:   append([]SteerRecord(nil), c.steers...),
 	}
 }

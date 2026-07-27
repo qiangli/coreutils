@@ -35,10 +35,16 @@ func NewCoachCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "coach --agent AGENT -m TASK",
 		Short: "run an agent under an LLM-free auto-coach that steers it off doomed loops",
-		Long: "Coach starts a steerable session, watches its tool.call stream, and when the " +
-			"agent loops (re-issuing the same call without progress) it presses ESC to break " +
-			"the loop and tells it to deliver. LLM-free; a report channel, never an author. " +
-			"Needs a tool that reports turn/tool events (ycode).",
+		Long: "Coach starts a steerable session, watches for a doomed loop, and when the agent " +
+			"loops (re-issuing the same call without progress) it presses ESC to break the loop " +
+			"and tells it to deliver. LLM-free; a report channel, never an author.\n\n" +
+			"It watches through one of two signals: the STRUCTURED event channel when the tool " +
+			"reports one (precise tool.call tracking — e.g. ycode), or the GENERIC pty-scrape " +
+			"loop signal otherwise (output flowing but distinct content not growing — works for " +
+			"any tool, including event-less ones like agy and any third-party CLI). Both signals " +
+			"share one trip implementation.\n\n" +
+			"To coach a session that is ALREADY RUNNING (instead of launching one), use " +
+			"`coach attach <session>` — see `coach attach --help`.",
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -177,5 +183,8 @@ func NewCoachCmd() *cobra.Command {
 	f.StringVar(&logPath, "log", "", "append one JSON line per steer here (the training record)")
 	f.BoolVar(&readOnly, "read-only", false, "strip write authority (a talk-only session)")
 	f.BoolVar(&asJSON, "json", false, "print a JSON result with the coach report")
+
+	// attach: coach a session that is ALREADY RUNNING, rather than launching one.
+	cmd.AddCommand(newCoachAttachCmd())
 	return cmd
 }
