@@ -1,0 +1,327 @@
+package herald
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestPeerValidate(t *testing.T) {
+	cases := []struct {
+		name string
+		p    Peer
+		ok   bool
+	}{
+		{"good", Peer{Name: "reviewer", URL: "https://a.example.com"}, true},
+		{"good http", Peer{Name: "reviewer", URL: "http://127.0.0.1:8080"}, true},
+		{"no name", Peer{URL: "https://a.example.com"}, false},
+		{"no url", Peer{Name: "reviewer"}, false},
+		{"bad scheme", Peer{Name: "reviewer", URL: "ftp://a.example.com"}, false},
+		// A colon would collide with the tool:model binding syntax, and a
+		// slash would break the on-disk entry name.
+		{"colon in name", Peer{Name: "herald:x", URL: "https://a.example.com"}, false},
+		{"slash in name", Peer{Name: "a/b", URL: "https://a.example.com"}, false},
+		{"space in name", Peer{Name: "a b", URL: "https://a.example.com"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.p.Validate()
+			if c.ok && err != nil {
+				t.Fatalf("want valid, got %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Fatal("want invalid, got nil")
+			}
+		})
+	}
+}
+
+func TestPeerBindingAndCardURL(t *testing.T) {
+	p := Peer{Name: "reviewer", URL: "https://a.example.com/"}
+	if got, want := p.Binding(), "herald:reviewer"; got != want {
+		t.Errorf("Binding() = %q, want %q", got, want)
+	}
+	// Trailing slash must not produce a doubled slash, and the path must be
+	// the v1.0 spelling — /.well-known/agent.json is the pre-v0.2 location
+	// and reaching it silently talks the wrong protocol version.
+	if got, want := p.CardURL(), "https://a.example.com/.well-known/agent-card.json"; got != want {
+		t.Errorf("CardURL() = %q, want %q", got, want)
+	}
+}
+
+// TestUnrunGateIsNotSuccess is the central invariant of this package.
+//
+// A2A's COMPLETED is self-reported. If an absent gate could read as success,
+// herald would reproduce the exact defect it exists to prevent — the one the
+// three-harness A/B measured, where all three harnesses exited 0 on failure.
+func TestUnrunGateIsNotSuccess(t *testing.T) {
+	o := GateOutcome{}
+	if o.Trusted() {
+		t.Fatal("an unrun gate must never be trusted")
+	}
+	// Even explicitly "passed" is meaningless without having run.
+	o = GateOutcome{Passed: true}
+	if o.Trusted() {
+		t.Fatal("Passed without Ran must not be trusted")
+	}
+	if !strings.Contains(o.Summary(), "UNVERIFIED") {
+		t.Errorf("Summary() = %q, want it to say UNVERIFIED", o.Summary())
+	}
+}
+
+func TestResultSucceededIgnoresPeerClaim(t *testing.T) {
+	// The peer says it finished. No gate ran. That is NOT success.
+	r := Result{State: "completed"}
+	if r.Succeeded() {
+		t.Fatal("a peer's own completed state must not count as success")
+	}
+	if got, want := r.ExitCode(), 2; got != want {
+		t.Errorf("ExitCode() = %d, want %d (completed but unverified)", got, want)
+	}
+
+	// Gate ran and passed: success.
+	r = Result{State: "completed", Gate: GateOutcome{Ran: true, Passed: true}}
+	if !r.Succeeded() {
+		t.Fatal("gate pass must count as success")
+	}
+	if got := r.ExitCode(); got != 0 {
+		t.Errorf("ExitCode() = %d, want 0", got)
+	}
+
+	// Peer claims completed, gate disagrees. The gate wins.
+	r = Result{State: "completed", Gate: GateOutcome{Ran: true, Passed: false}}
+	if r.Succeeded() {
+		t.Fatal("gate failure must override a peer's completed claim")
+	}
+	if got := r.ExitCode(); got == 0 {
+		t.Error("ExitCode() must be non-zero when the gate failed")
+	}
+}
+
+func TestRunLocalGate(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	t.Run("empty gate does not run", func(t *testing.T) {
+		o := RunLocalGate(ctx, dir, "  ", "completed")
+		if o.Ran {
+			t.Fatal("blank gate must not report as run")
+		}
+		if o.Trusted() {
+			t.Fatal("blank gate must not be trusted")
+		}
+	})
+
+	t.Run("passing gate", func(t *testing.T) {
+		o := RunLocalGate(ctx, dir, "exit 0", "completed")
+		if !o.Ran || !o.Passed || !o.Trusted() {
+			t.Fatalf("want trusted pass, got %+v", o)
+		}
+		if o.Where != "local" {
+			t.Errorf("Where = %q, want local", o.Where)
+		}
+		if o.PeerClaimed != "completed" {
+			t.Errorf("PeerClaimed = %q, want completed", o.PeerClaimed)
+		}
+	})
+
+	t.Run("failing gate records exit code", func(t *testing.T) {
+		o := RunLocalGate(ctx, dir, "exit 7", "completed")
+		if !o.Ran {
+			t.Fatal("gate should report as run")
+		}
+		if o.Passed || o.Trusted() {
+			t.Fatal("failing gate must not be trusted")
+		}
+		if o.ExitCode != 7 {
+			t.Errorf("ExitCode = %d, want 7", o.ExitCode)
+		}
+	})
+
+	t.Run("gate runs in the given dir", func(t *testing.T) {
+		marker := filepath.Join(dir, "marker")
+		if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o := RunLocalGate(ctx, dir, "test -f marker", "completed")
+		if !o.Trusted() {
+			t.Fatalf("gate should see files in dir, got %+v", o)
+		}
+	})
+
+	t.Run("gate output is captured", func(t *testing.T) {
+		o := RunLocalGate(ctx, dir, "echo hello-from-gate; exit 3", "completed")
+		if !strings.Contains(o.Output, "hello-from-gate") {
+			t.Errorf("Output = %q, want it to contain the gate's output", o.Output)
+		}
+	})
+
+	t.Run("unrunnable gate is a failure, never a pass", func(t *testing.T) {
+		o := RunLocalGate(ctx, dir, "this-command-does-not-exist-anywhere", "completed")
+		if o.Passed || o.Trusted() {
+			t.Fatal("a gate that cannot run must not pass")
+		}
+	})
+}
+
+// TestGateEnvExcludesSecrets pins that a gate does not inherit the operator's
+// vault. A gate is operator-supplied code run to judge a REMOTE party's work;
+// handing it every credential in the environment would be a needless blast
+// radius.
+func TestGateEnvExcludesSecrets(t *testing.T) {
+	t.Setenv("HERALD_TEST_FAKE_SECRET", "super-secret-value")
+	env := gateEnv("/tmp")
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "HERALD_TEST_FAKE_SECRET=") {
+			t.Fatal("gate environment must not carry arbitrary parent env vars")
+		}
+	}
+	var sawPath bool
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			sawPath = true
+		}
+	}
+	if !sawPath {
+		t.Error("gate environment should preserve PATH so build/test gates work")
+	}
+}
+
+func TestCardSupportsGate(t *testing.T) {
+	if (Card{}).SupportsGate() {
+		t.Error("empty card must not claim gate support")
+	}
+	c := Card{Extensions: []string{"https://example.com/other", GateExtensionURI}}
+	if !c.SupportsGate() {
+		t.Error("card declaring the extension URI should report support")
+	}
+}
+
+func TestBookRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	b := NewBook(root)
+
+	if peers, err := b.List(); err == nil && len(peers) != 0 {
+		t.Fatalf("fresh book should be empty, got %d", len(peers))
+	}
+
+	p := Peer{Name: "reviewer", URL: "https://a.example.com", APIKeyRef: "ACME_TOKEN"}
+	if err := b.Add(p); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := b.Get("reviewer")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.URL != p.URL {
+		t.Errorf("URL = %q, want %q", got.URL, p.URL)
+	}
+	if got.APIKeyRef != "ACME_TOKEN" {
+		t.Errorf("APIKeyRef = %q, want ACME_TOKEN", got.APIKeyRef)
+	}
+	// A freshly added peer is UNPEGGED. Its card's skills[] are a claim, and
+	// recording a self-declared capability is exactly what leveling forbids.
+	if got.Band != 0 {
+		t.Errorf("Band = %d, want 0 (unpegged until host-measured)", got.Band)
+	}
+
+	if err := b.Add(p); err == nil {
+		t.Error("adding a duplicate peer should fail")
+	}
+
+	peers, err := b.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("List returned %d peers, want 1", len(peers))
+	}
+
+	if err := b.Remove("reviewer"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := b.Get("reviewer"); err == nil {
+		t.Error("Get should fail after Remove")
+	}
+}
+
+// TestBookIgnoresNonPeerModels pins the discriminator: the same catalog holds
+// LLM models, and offering an inference endpoint as an agent would be wrong.
+func TestBookIgnoresNonPeerModels(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "models")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	llm := "name: some-llm\nkind: api\nprovider: openai\nbase_url: https://api.example.com/v1\n"
+	if err := os.WriteFile(filepath.Join(dir, "some-llm.yaml"), []byte(llm), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := NewBook(root)
+	peers, err := b.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, p := range peers {
+		if p.Name == "some-llm" {
+			t.Fatal("an LLM model must not be listed as an A2A peer")
+		}
+	}
+
+	// And the error should say WHY, not merely "unknown".
+	_, err = b.Get("some-llm")
+	if err == nil {
+		t.Fatal("Get on a non-peer model should fail")
+	}
+	if !strings.Contains(err.Error(), "is a model") {
+		t.Errorf("error should explain it is a model, got: %v", err)
+	}
+}
+
+func TestCredential(t *testing.T) {
+	if _, ok := Credential(Peer{Name: "x"}); ok {
+		t.Error("peer without APIKeyRef should report no credential")
+	}
+	t.Setenv("HERALD_TEST_TOKEN", "tok")
+	v, ok := Credential(Peer{Name: "x", APIKeyRef: "HERALD_TEST_TOKEN"})
+	if !ok || v != "tok" {
+		t.Errorf("Credential = (%q,%v), want (tok,true)", v, ok)
+	}
+	if _, ok := Credential(Peer{Name: "x", APIKeyRef: "HERALD_TEST_MISSING"}); ok {
+		t.Error("missing env var should report no credential")
+	}
+}
+
+// TestCLIAddListRemove exercises the verb tree end to end against a temp
+// fleet root, so the cobra wiring is covered and not merely the library.
+func TestCLIAddListRemove(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+
+	// add: the peer URL is unreachable, which must NOT prevent recording it —
+	// a peer that is merely asleep should still be addressable.
+	if code := Run(ctx, []string{"add", "reviewer", "https://127.0.0.1:1/", "--fleet-root", root}); code != 0 {
+		t.Fatalf("add exited %d, want 0", code)
+	}
+	if code := Run(ctx, []string{"list", "--fleet-root", root}); code != 0 {
+		t.Fatalf("list exited %d, want 0", code)
+	}
+	// Duplicate must fail loudly rather than silently overwrite.
+	if code := Run(ctx, []string{"add", "reviewer", "https://other.example.com", "--fleet-root", root}); code == 0 {
+		t.Error("adding a duplicate peer should exit non-zero")
+	}
+	if code := Run(ctx, []string{"rm", "reviewer", "--fleet-root", root}); code != 0 {
+		t.Fatalf("rm exited %d, want 0", code)
+	}
+	if code := Run(ctx, []string{"rm", "reviewer", "--fleet-root", root}); code == 0 {
+		t.Error("removing an unknown peer should exit non-zero")
+	}
+	// An unknown peer must be a clear error, not a crash.
+	if code := Run(ctx, []string{"send", "nobody", "do a thing", "--fleet-root", root}); code == 0 {
+		t.Error("sending to an unknown peer should exit non-zero")
+	}
+}
