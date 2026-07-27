@@ -1,8 +1,9 @@
 //go:build !windows
 
-// These tests exercise the OS-level queue/pull flocks, which unix has and
-// Windows does not (weave_lock_windows.go is deliberately best-effort). On
-// Windows there is nothing here to assert.
+// These tests exercise the OS-level queue/pull flocks, which Unix has and
+// Windows does not: withWeaveQueueLock is currently a no-op there. Adopting
+// pkg/steward/lock_windows.go's LockFileEx approach is the documented drop-in
+// fix and is tracked separately. Until then, Windows has nothing here to assert.
 
 package weave
 
