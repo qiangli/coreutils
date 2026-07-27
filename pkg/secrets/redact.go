@@ -289,7 +289,12 @@ func (cfg redactorConfig) transformPrefix(b []byte, boundary int) ([]byte, int, 
 		boundary = len(b)
 	}
 
-	best := make([]matchCandidate, len(b))
+	// Matches are normally sparse. A dense []matchCandidate costs roughly
+	// 40 bytes for every input byte even when the chunk contains no secret,
+	// turning a 1 MiB capture write into a ~40 MiB allocation. Keep only match
+	// starts instead; the output buffer is then the only input-sized allocation
+	// on the common path.
+	best := make(map[int]matchCandidate)
 	if cfg.matcher != nil {
 		cfg.matcher.addCandidates(b, best)
 	}
@@ -356,8 +361,8 @@ func (cfg redactorConfig) report(findings []ShapeMatch) {
 	}
 }
 
-func setCandidate(best []matchCandidate, start int, candidate matchCandidate) {
-	if start < 0 || start >= len(best) {
+func setCandidate(best map[int]matchCandidate, start int, candidate matchCandidate) {
+	if start < 0 {
 		return
 	}
 	current := best[start]
@@ -427,7 +432,7 @@ func newValueMatcher(values []registeredSecret) *valueMatcher {
 	return m
 }
 
-func (m *valueMatcher) addCandidates(b []byte, best []matchCandidate) {
+func (m *valueMatcher) addCandidates(b []byte, best map[int]matchCandidate) {
 	state := 0
 	for offset, c := range b {
 		for state != 0 {
