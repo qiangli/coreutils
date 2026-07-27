@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -211,15 +210,9 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, l.Tool, argv...)
-	cmd.Dir = cwd
-	// agentChildEnv is the whole reason Session lives in this package and not in
-	// agentpty: it is what scrubs the operator's vault secrets out of the child,
-	// grants back only the one API key this model declared, forces the agent's
-	// shell to be bashy, and stamps its principal identity. A session launcher
-	// built anywhere else would silently drop all four, and nothing would fail
-	// loudly enough for anyone to notice.
-	cmd.Env = agentChildEnv(withLaunch(ctx, l))
+	// The one-shot runner uses this same constructor. Session chooses steer_exec
+	// argv and a PTY below; neither choice gets a separate environment policy.
+	cmd := agentCommand(withLaunch(ctx, l), l.Tool, argv, cwd)
 
 	// Prevention before cure: seed the tool's own config so its trust prompt never
 	// appears. agentpty's gate classifier is the backstop for the ones it misses.

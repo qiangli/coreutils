@@ -131,6 +131,61 @@ func TestAgentChildEnvLegacyLaunchFallsBackToCatalogCredential(t *testing.T) {
 	}
 }
 
+// Coach uses Session/steer_exec while chat uses the one-shot exec template.
+// Those are deliberately different argv attached differently, but they must
+// never become different credential environments again.
+func TestCoachAndChatChildProviderEnvironmentMatch(t *testing.T) {
+	pinCatalog(t)
+	t.Setenv("BASHY_ALLOW_AGENT_SECRETS", "0")
+	t.Setenv("BASHY_FORCE_AGENT_SHELL", "0")
+	t.Setenv("ZAI_API_KEY", "selected-model-credential")
+	t.Setenv("OPENAI_API_KEY", "unrelated-operator-credential")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	chatLaunch, err := resolveLaunch("ycode-glm-5.2", Options{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coachLaunch, err := resolveLaunch("ycode-glm-5.2", Options{ReadOnly: true, Steer: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chatCmd := agentCommand(withLaunch(context.Background(), chatLaunch),
+		chatLaunch.Tool, append(chatLaunch.Args, "task"), ".")
+	coachCmd := agentCommand(withLaunch(context.Background(), coachLaunch),
+		coachLaunch.Tool, coachLaunch.Args, ".")
+
+	names := []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ZAI_API_KEY"}
+	chatProviders := selectedEnv(chatCmd.Env, names)
+	coachProviders := selectedEnv(coachCmd.Env, names)
+	if strings.Join(chatProviders, "\x00") != strings.Join(coachProviders, "\x00") {
+		t.Fatalf("provider environment diverged:\nchat: %v\ncoach: %v", chatProviders, coachProviders)
+	}
+	if !contains(chatProviders, "ZAI_API_KEY=selected-model-credential") {
+		t.Errorf("shared child environment missing selected provider credential: %v", chatProviders)
+	}
+	for _, unrelated := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"} {
+		if childEnvHasName(chatProviders, unrelated) {
+			t.Errorf("shared child environment leaked unrelated %s: %v", unrelated, chatProviders)
+		}
+	}
+}
+
+func selectedEnv(env, names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		prefix := name + "="
+		for _, kv := range env {
+			if strings.HasPrefix(kv, prefix) {
+				out = append(out, kv)
+				break
+			}
+		}
+	}
+	return out
+}
+
 func childEnvHasName(env []string, name string) bool {
 	prefix := name + "="
 	for _, kv := range env {
