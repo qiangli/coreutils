@@ -183,3 +183,99 @@ func hasKV(env []string, want string) bool {
 	}
 	return false
 }
+
+// --- per-run ycode store isolation ------------------------------------------
+
+// envHas is a local lookup for the store-isolation tests.
+func envHas(env []string, name string) bool {
+	prefix := name + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Two different run identities on the same state dir must yield two different
+// stores; one identity must be stable across calls (resume reuse).
+func TestYcodeDataDirDistinctPerRunAndStablePerResume(t *testing.T) {
+	stateDir := t.TempDir()
+	l := Launch{ToolName: YcodeToolName}
+	parent := []string{"PATH=/usr/bin"}
+
+	d7 := YcodeDataDir(parent, l, stateDir, "7")
+	d8 := YcodeDataDir(parent, l, stateDir, "8")
+	d7Again := YcodeDataDir(parent, l, stateDir, "7")
+
+	if d7 == "" || d8 == "" {
+		t.Fatalf("expected derived dirs, got %q %q", d7, d8)
+	}
+	if d7 == d8 {
+		t.Fatalf("two runs share one store %q — second worker would die on the lock", d7)
+	}
+	if d7 != d7Again {
+		t.Fatalf("resume of run 7 got a different dir: %q then %q — a resume must reuse, not orphan", d7, d7Again)
+	}
+	if !strings.HasPrefix(d7, stateDir) {
+		t.Errorf("store %q not under state dir %q", d7, stateDir)
+	}
+}
+
+// A non-ycode tool is never injected — the gate is the tool name, not a
+// hardcoded agent name, so claude/codex/opencode are untouched.
+func TestYcodeDataDirLeavesNonYcodeToolsAlone(t *testing.T) {
+	parent := []string{"PATH=/usr/bin"}
+	for _, tool := range []string{"claude", "codex", "opencode", "aider", ""} {
+		l := Launch{ToolName: tool}
+		if got := YcodeDataDir(parent, l, t.TempDir(), "1"); got != "" {
+			t.Errorf("tool %q got a ycode data dir %q — non-ycode tools must be untouched", tool, got)
+		}
+	}
+}
+
+// An operator who set YCODE_DATA_DIR or YCODE_HOME already chose deliberately;
+// never override it.
+func TestYcodeDataDirRespectsOperatorChoice(t *testing.T) {
+	l := Launch{ToolName: YcodeToolName}
+	stateDir := t.TempDir()
+
+	for _, setEnv := range [][]string{
+		{"PATH=/usr/bin", YcodeDataDirEnv + "=/explicit"},
+		{"PATH=/usr/bin", YcodeHomeEnv + "=/explicit/home"},
+	} {
+		if got := YcodeDataDir(setEnv, l, stateDir, "1"); got != "" {
+			t.Errorf("operator choice %v was overridden with %q", setEnv, got)
+		}
+	}
+}
+
+// ApplyYcodeDataDir injects exactly one entry, and never duplicates when called
+// twice (idempotent on the same env).
+func TestApplyYcodeDataDirInjectsOnceAndIsIdempotent(t *testing.T) {
+	l := Launch{ToolName: YcodeToolName}
+	parent := []string{"PATH=/usr/bin"}
+	env := []string{"PATH=/usr/bin"}
+
+	env = ApplyYcodeDataDir(env, parent, l, t.TempDir(), "5")
+	if !envHas(env, YcodeDataDirEnv) {
+		t.Fatalf("expected %s injected, got %v", YcodeDataDirEnv, env)
+	}
+	before := len(env)
+	env = ApplyYcodeDataDir(env, parent, l, t.TempDir(), "5")
+	if len(env) != before {
+		t.Fatalf("ApplyYcodeDataDir duplicated the entry: %v", env)
+	}
+}
+
+// ApplyYcodeDataDir is a no-op for a non-ycode launch and never panics on a
+// zero Launch (the nil/bare-tool path).
+func TestApplyYcodeDataDirNoOpForNonYcodeAndZeroLaunch(t *testing.T) {
+	parent := []string{"PATH=/usr/bin"}
+	for _, l := range []Launch{{ToolName: "claude"}, {}} {
+		env := ApplyYcodeDataDir([]string{"PATH=/usr/bin"}, parent, l, t.TempDir(), "9")
+		if envHas(env, YcodeDataDirEnv) {
+			t.Errorf("launch %+v got an unwanted %s", l, YcodeDataDirEnv)
+		}
+	}
+}

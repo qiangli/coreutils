@@ -32,7 +32,7 @@ func TestNamedYcodeChildEnvPreservesResolvedCredentialNames(t *testing.T) {
 	}
 	ambient := []string{"PATH=/usr/bin", "ZAI_API_KEY=selected-model-credential", "OPENAI_API_KEY=unrelated"}
 	it := &weaveItem{ID: 48, Owner: "disposable-ycode-a"}
-	child := weaveChildEnv(ambient, "/ws/issue-48", "agent/weave-issue-48", "main", it, launch)
+	child := weaveChildEnv(ambient, "/ws/issue-48", "agent/weave-issue-48", "main", t.TempDir(), it, launch)
 	if !envHas(child, "ZAI_API_KEY") || envHas(child, "OPENAI_API_KEY") {
 		t.Errorf("resolved launch environment parity failed: names=%v", names(child))
 	}
@@ -55,7 +55,7 @@ func TestWeaveChildEnvPreservesOnlyResolvedCredentialNames(t *testing.T) {
 	}
 	launch := &weaveAgentLaunch{PreserveEnv: []string{"DEEPSEEK_API_KEY"}}
 	it := &weaveItem{ID: 105, Title: "t", Body: "b", Owner: "007-a"}
-	got := weaveChildEnv(ambient, "/ws/issue-105", "agent/weave-issue-105", "main", it, launch)
+	got := weaveChildEnv(ambient, "/ws/issue-105", "agent/weave-issue-105", "main", t.TempDir(), it, launch)
 
 	if !envHas(got, "DEEPSEEK_API_KEY") {
 		t.Errorf("child env lost selected model credential: names=%v", names(got))
@@ -79,7 +79,7 @@ func TestWeaveChildEnvNilLaunchPreservesNoCredentials(t *testing.T) {
 	t.Setenv(secrets.AllowAgentSecretsEnv, "0")
 	ambient := []string{"PATH=/usr/bin", "DEEPSEEK_API_KEY=operator-credential"}
 	it := &weaveItem{ID: 106, Owner: "raw-a"}
-	got := weaveChildEnv(ambient, "/ws/issue-106", "agent/weave-issue-106", "main", it, nil)
+	got := weaveChildEnv(ambient, "/ws/issue-106", "agent/weave-issue-106", "main", t.TempDir(), it, nil)
 	if envHas(got, "DEEPSEEK_API_KEY") {
 		t.Errorf("nil launch reopened a credential: names=%v", names(got))
 	}
@@ -90,7 +90,7 @@ func TestWeaveChildEnvAbsentCredentialIsNoOp(t *testing.T) {
 	t.Setenv(secrets.AllowAgentSecretsEnv, "0")
 	launch := &weaveAgentLaunch{PreserveEnv: []string{"DEEPSEEK_API_KEY"}}
 	it := &weaveItem{ID: 107, Owner: "007-a"}
-	got := weaveChildEnv([]string{"PATH=/usr/bin"}, "/ws/issue-107", "agent/weave-issue-107", "main", it, launch)
+	got := weaveChildEnv([]string{"PATH=/usr/bin"}, "/ws/issue-107", "agent/weave-issue-107", "main", t.TempDir(), it, launch)
 	if envHas(got, "DEEPSEEK_API_KEY") {
 		t.Errorf("absent credential was manufactured: names=%v", names(got))
 	}
@@ -102,7 +102,7 @@ func TestWeaveChildEnvDoesNotDuplicateCredential(t *testing.T) {
 	launch := &weaveAgentLaunch{PreserveEnv: []string{"DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"}}
 	it := &weaveItem{ID: 108, Owner: "007-a"}
 	ambient := []string{"PATH=/usr/bin", "DEEPSEEK_API_KEY=first", "DEEPSEEK_API_KEY=second"}
-	got := weaveChildEnv(ambient, "/ws/issue-108", "agent/weave-issue-108", "main", it, launch)
+	got := weaveChildEnv(ambient, "/ws/issue-108", "agent/weave-issue-108", "main", t.TempDir(), it, launch)
 	count := 0
 	for _, kv := range got {
 		if strings.HasPrefix(kv, "DEEPSEEK_API_KEY=") {
