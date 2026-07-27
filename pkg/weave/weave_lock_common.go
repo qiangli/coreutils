@@ -137,6 +137,76 @@ var weaveReapLockWait = 250 * time.Millisecond
 // weaveQueueLockPoll is the retry interval while waiting for the lock.
 const weaveQueueLockPoll = 20 * time.Millisecond
 
+// withWeaveQueueLockWait takes the exclusive queue lock (waiting at most
+// wait), loads the queue, hands it to fn for mutation, saves it back, then
+// releases. This is the ONLY sanctioned read-modify-write path.
+//
+// fn must be short. Anything that shells out to an agent, runs a suite gate or
+// merges must happen outside this call and re-enter it to record the outcome —
+// see the lock-discipline note above.
+func withWeaveQueueLockWait(dir string, wait time.Duration, fn func(*weaveQueue) error) error {
+	release, err := weaveFlock(filepath.Join(dir, "queue.lock"), wait)
+	if err != nil {
+		if errors.Is(err, errWeaveQueueBusy) {
+			return err
+		}
+		return fmt.Errorf("queue %w", err)
+	}
+	defer release()
+
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		return fmt.Errorf("queue lock: load: %w", err)
+	}
+	if err := fn(q); err != nil {
+		return err
+	}
+	if err := saveWeaveQueue(dir, q); err != nil {
+		return fmt.Errorf("queue lock: save: %w", err)
+	}
+	return nil
+}
+
+// withWeaveQueueLock is the ordinary write path: bounded wait, then
+// load/mutate/save. See withWeaveQueueLockWait.
+func withWeaveQueueLock(dir string, fn func(*weaveQueue) error) error {
+	return withWeaveQueueLockWait(dir, weaveQueueLockWait, fn)
+}
+
+// withWeavePullLock guards the genuinely exclusive part of a pull: merging
+// into the ONE shared live checkout. Non-blocking on purpose — a second caller
+// is told to retry instead of overlapping the short live merge commit.
+// It does NOT hold queue.lock, so `weave list`/`add`/`comment` stay live for
+// the whole merge cycle.
+func withWeavePullLock(dir string, fn func() error) error {
+	release, err := weaveFlock(filepath.Join(dir, "pull.lock"), 0)
+	if err != nil {
+		if errors.Is(err, errWeaveQueueBusy) {
+			return weavePullBusyError(dir)
+		}
+		return fmt.Errorf("pull %w", err)
+	}
+	defer release()
+	return fn()
+}
+
+// withWeaveCooldownLock serialises cooldown read-modify-write on its own
+// bounded lock, separate from queue.lock so a best-effort cooldown update never
+// contends with a queue state transition.
+func withWeaveCooldownLock(dir string, fn func(*toolCooldowns) error) error {
+	release, err := weaveFlock(filepath.Join(dir, "cooldown.lock"), weaveQueueLockWait)
+	if err != nil {
+		return fmt.Errorf("cooldown %w", err)
+	}
+	defer release()
+
+	tc := loadToolCooldowns(dir)
+	if err := fn(&tc); err != nil {
+		return err
+	}
+	return saveToolCooldowns(dir, tc)
+}
+
 // readWeaveQueue is the LOCK-FREE read path onto the queue. It exists to make
 // the contract explicit at call sites: reads never take queue.lock, because
 // saveWeaveQueue's write-temp-then-rename makes every visible queue.json a

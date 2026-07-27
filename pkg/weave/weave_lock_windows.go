@@ -3,34 +3,60 @@
 package weave
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
-// withWeaveQueueLockWait on Windows is best-effort: we simply load, mutate,
-// save without an OS-level mutex. The MVP orchestrator flow targets unix;
-// concurrent weave writes on Windows have undefined behavior pending a real
-// LockFileEx implementation. The `wait` argument is accepted so the call sites
-// are identical across platforms.
-func withWeaveQueueLockWait(dir string, wait time.Duration, fn func(*weaveQueue) error) error {
-	_ = wait
-	q, err := loadWeaveQueue(dir)
+// weaveFlock takes an exclusive LockFileEx lock on byte 0 of path, waiting at
+// most wait for it. It polls with LOCKFILE_FAIL_IMMEDIATELY rather than
+// blocking in LockFileEx so the wait stays bounded: a holder that is simply
+// slow must not wedge every other weave command in the repo forever.
+//
+// wait == 0 means one attempt, the try-lock used by pull.lock.
+//
+// pull.lock is a pure sentinel; its readable holder metadata lives in the
+// separate weavePullHolderPath sidecar. Unlike meet's lease lock, this lock
+// therefore does not need a range past EOF to leave byte-zero metadata
+// readable.
+//
+// Returns errWeaveQueueBusy when the deadline passes with the lock still held.
+// The returned func releases the handle-scoped lock and closes the file.
+func weaveFlock(path string, wait time.Duration) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("lock: ensure dir: %w", err)
+	}
+	lf, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return fmt.Errorf("queue lock: load: %w", err)
+		return nil, fmt.Errorf("lock: open: %w", err)
 	}
-	if err := fn(q); err != nil {
-		return err
+	deadline := time.Now().Add(wait)
+	for {
+		ol := new(windows.Overlapped)
+		err := windows.LockFileEx(
+			windows.Handle(lf.Fd()),
+			windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+			0, 1, 0, ol,
+		)
+		if err == nil {
+			return func() {
+				_ = windows.UnlockFileEx(windows.Handle(lf.Fd()), 0, 1, 0, ol)
+				_ = lf.Close()
+			}, nil
+		}
+		if !errors.Is(err, windows.ERROR_LOCK_VIOLATION) &&
+			!errors.Is(err, windows.ERROR_IO_PENDING) {
+			_ = lf.Close()
+			return nil, fmt.Errorf("lock: LockFileEx: %w", err)
+		}
+		if !time.Now().Before(deadline) {
+			_ = lf.Close()
+			return nil, errWeaveQueueBusy
+		}
+		time.Sleep(weaveQueueLockPoll)
 	}
-	return saveWeaveQueue(dir, q)
-}
-
-func withWeaveQueueLock(dir string, fn func(*weaveQueue) error) error {
-	return withWeaveQueueLockWait(dir, weaveQueueLockWait, fn)
-}
-
-// withWeavePullLock has no OS-level mutex on Windows, matching the queue lock
-// above; it exists so pull's structure is one code path on every platform.
-func withWeavePullLock(dir string, fn func() error) error {
-	_ = dir
-	return fn()
 }
