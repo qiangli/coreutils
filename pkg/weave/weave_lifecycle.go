@@ -32,6 +32,7 @@ var weaveLifecycleStates = []string{
 	"paused",
 	"finalizing",
 	"submitted",
+	"no-op",
 	"failed",
 	"killed",
 	"done",
@@ -40,10 +41,17 @@ var weaveLifecycleStates = []string{
 
 // weaveClosedStates are the two states that END the lifecycle: the work landed
 // (done) or was deliberately given up (abandoned). Note this is NARROWER than
-// isTerminalState, which additionally counts submitted/failed/killed — those
+// isTerminalState, which additionally counts submitted/no-op/failed/killed — those
 // mean "the run stopped", not "the item is closed", and conflating the two is
 // precisely what let a submitted item hang forever.
 func weaveIsClosedState(s string) bool { return s == "done" || s == "abandoned" }
+
+// weaveStateAssertsSuccess centralizes the success-shaped states used by
+// evidence ratchets. "merged" is retained for legacy/reporting outcomes even
+// though the queue lifecycle now calls that state "done".
+func weaveStateAssertsSuccess(s string) bool {
+	return s == "submitted" || s == "done" || s == "merged"
+}
 
 // weaveTransition is one legal edge of the state machine.
 type weaveTransition struct {
@@ -74,7 +82,8 @@ var weaveLifecycleTransitions = []weaveTransition{
 
 	// --- running -------------------------------------------------------
 	{From: "working", To: "submitted", By: "wrapper terminal: exit 0 AND commits ahead", Auto: true},
-	{From: "working", To: "failed", By: "wrapper terminal: non-zero exit or no commits", Auto: true},
+	{From: "working", To: "no-op", By: "wrapper terminal: exit 0, clean tree, and no commits", Auto: true},
+	{From: "working", To: "failed", By: "wrapper terminal: non-zero exit or uncommitted tree", Auto: true},
 	{From: "working", To: "killed", By: "weave kill / runtime+idle watchdog", Auto: true},
 	{From: "working", To: "failed", By: "REAPER: wrapper pid dead without terminal evidence", Auto: true},
 	{From: "working", To: "paused", By: "weave pause"},
@@ -86,6 +95,7 @@ var weaveLifecycleTransitions = []weaveTransition{
 
 	// --- finalizing (short lease) ---------------------------------------
 	{From: "finalizing", To: "submitted", By: "finalizer records terminal evidence", Auto: true},
+	{From: "finalizing", To: "no-op", By: "finalizer records a clean tree with no commits", Auto: true},
 	{From: "finalizing", To: "failed", By: "finalizer records terminal evidence", Auto: true},
 	{From: "finalizing", To: "working", By: "REAPER: lease expired, wrapper still alive", Auto: true},
 	{From: "finalizing", To: "failed", By: "REAPER: finalizer died before terminal evidence", Auto: true},
@@ -95,6 +105,11 @@ var weaveLifecycleTransitions = []weaveTransition{
 	{From: "submitted", To: "done", By: "REAPER: work already merged into base out-of-band", Auto: true},
 	{From: "submitted", To: "working", By: "weave start --resume (branch kicked back)"},
 	{From: "submitted", To: "abandoned", By: "weave abandon"},
+
+	// --- stopped-with-no-evidence -----------------------------------------
+	{From: "no-op", To: "working", By: "weave start --resume"},
+	{From: "no-op", To: "allocated", By: "weave start --run N -- <agent> (no workspace to resume)"},
+	{From: "no-op", To: "abandoned", By: "weave abandon / weave prune --stale"},
 
 	// --- stopped-with-a-branch -------------------------------------------
 	{From: "failed", To: "working", By: "weave start --resume"},
@@ -116,6 +131,7 @@ var weaveLifecycleTransitions = []weaveTransition{
 // the decision is pending-and-visible instead of pending-and-invisible.
 var weaveLifecycleNeedsSteward = map[string]string{
 	"submitted": "past the steward threshold with no merge",
+	"no-op":     "worker stopped without diff evidence; rerun or abandon",
 	"failed":    "committed work on the branch (salvageable)",
 	"killed":    "committed work on the branch (salvageable)",
 	// paused is a deliberate hold: the steward stopped this run and is the

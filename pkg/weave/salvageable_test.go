@@ -67,8 +67,8 @@ func TestACrashNeverClaimsSubmittedEvenWithCommits(t *testing.T) {
 		t.Errorf("clean exit with commits = %q, want submitted", got)
 	}
 	// And the load-bearing half: no commits means no success, whatever the exit.
-	if got := weaveTerminalState(0, nil, "", weaveTerminalEvidence{CommitsAhead: 0}); got != "failed" {
-		t.Errorf("clean exit with NO commits = %q, want failed — success may not be reached by an absence of work", got)
+	if got := weaveTerminalState(0, nil, "", weaveTerminalEvidence{CommitsAhead: 0}); got != "no-op" {
+		t.Errorf("clean exit with NO commits = %q, want no-op — success may not be reached by an absence of work", got)
 	}
 }
 
