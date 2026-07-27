@@ -659,35 +659,74 @@ func weaveMeasureBranch(workspace, base string) (ahead int, head string) {
 	return ahead, head
 }
 
-// weaveClassifySalvageable reports committed work held by a terminal run that
-// is not reachable from the repository's current base branch. It deliberately
-// interrogates Git instead of trusting CommitsAhead: the wrapper that records
-// terminal evidence may be the process that was killed after the agent commit.
+// weaveUnmergedAhead is THE measurement of "work this run holds that is not on
+// the base branch": the number of commits in the run's workspace that the user
+// repo cannot reach from base, plus the workspace HEAD sha.
+//
+// ONE FUNCTION, ON PURPOSE. `weave list` used to compute this and print
+// "SALVAGEABLE: #169 ... hold committed work not merged to the base branch"
+// while `weave pull`, one line later in the same session, printed "nothing to
+// merge" for that same run — because pull never asked. Two code paths that
+// answer the same question separately WILL drift, and when the question is
+// "does this run still hold work", the drift reads as "the work is gone" and
+// the reasonable next action is `weave abandon`. So every verb that reports on,
+// refuses, or destroys held work measures through here: list (via
+// weaveClassifySalvageable), pull's refusal path, prune's and abandon's guards.
+//
+// It deliberately interrogates Git instead of trusting CommitsAhead: the
+// wrapper that records terminal evidence may be the process that was killed
+// after the agent commit.
 //
 // Counting each workspace commit against the root is slightly more work than a
 // single rev-list count, but it is exact when main has advanced or absorbed only
 // part of a branch. The root clone knows every commit that has actually landed;
 // an unknown object and a known-but-unmerged object both correctly count as
-// unmerged.
-func weaveClassifySalvageable(root, base string, it *weaveItem) (bool, int) {
-	if it == nil || (it.State != "killed" && it.State != "failed" && it.State != "submitted") || it.Workspace == "" {
-		return false, 0
+// unmerged — the conservative direction for a guard that stands in front of
+// `rm -rf`.
+func weaveUnmergedAhead(root, base string, it *weaveItem) (ahead int, head string) {
+	if it == nil || it.Workspace == "" {
+		return 0, ""
 	}
 	if st, err := os.Stat(it.Workspace); err != nil || !st.IsDir() {
-		return false, 0
+		return 0, ""
+	}
+	if out, err := exec.Command("git", "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
+		head = strings.TrimSpace(string(out))
 	}
 	ref := weaveCountRef(it, base)
 	out, err := exec.Command("git", "-C", it.Workspace, "rev-list", ref+"..HEAD").Output()
 	if err != nil {
-		return false, 0
+		return 0, head
 	}
-	unmerged := 0
 	for _, sha := range strings.Fields(string(out)) {
 		if exec.Command("git", "-C", root, "merge-base", "--is-ancestor", sha, base).Run() != nil {
-			unmerged++
+			ahead++
 		}
 	}
+	return ahead, head
+}
+
+// weaveClassifySalvageable reports committed work held by a TERMINAL run —
+// weaveUnmergedAhead plus the state gate that decides whether `weave salvage`
+// is the verb that applies.
+func weaveClassifySalvageable(root, base string, it *weaveItem) (bool, int) {
+	if it == nil || (it.State != "killed" && it.State != "failed" && it.State != "submitted") {
+		return false, 0
+	}
+	unmerged, _ := weaveUnmergedAhead(root, base, it)
 	return unmerged > 0, unmerged
+}
+
+// weaveSalvageableState reports whether `weave salvage <id>` accepts a run in
+// this state (see runWeaveSalvage's switch). It is what lets a refusal name the
+// verb that WOULD work instead of leaving the operator to guess — and guessing,
+// from a message shaped like absence, means `weave abandon`.
+func weaveSalvageableState(state string) bool {
+	switch state {
+	case "killed", "failed", "submitted", "working":
+		return true
+	}
+	return false
 }
 
 func weaveAnnotateSalvageable(root, base string, it *weaveItem) {
@@ -4022,7 +4061,29 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// finished with committed evidence (submitted). Items in "failed", "done",
 			// or "abandoned" are skipped: failed shouldn't auto-merge,
 			// done is already merged, abandoned was torn down.
+			//
+			// A SKIP IS NOT AN EMPTINESS. This `continue` used to be silent, and a
+			// silent skip on the only in-scope item left `results` empty — so pull
+			// finished by printing:
+			//
+			//	weave pull: nothing to merge
+			//
+			// for run #169, which held three commits of gate-passing work that
+			// existed nowhere but its workspace. The same weave printed
+			// "SALVAGEABLE: #169 ... hold committed work not merged to the base
+			// branch" one line later, from weaveClassifySalvageable. Pull was
+			// reporting "this run is not in a state I accept" in the words of "there
+			// is nothing here" — and the reasonable next action for someone who
+			// reads that is `weave abandon`, which destroys the work.
+			//
+			// So: before skipping, ASK — through the same weaveUnmergedAhead that
+			// feeds the SALVAGEABLE line, never a second count that can drift from
+			// it. Zero commits ahead still skips silently; that run really is empty.
 			if it.State != "working" && it.State != "submitted" {
+				if ahead, _ := weaveUnmergedAhead(root, base, it); ahead > 0 {
+					results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "not-pullable",
+						Detail: weaveNotPullableDetail(it, base, ahead)})
+				}
 				continue
 			}
 			if requireReview {
@@ -4469,7 +4530,8 @@ func runWeaveAbandon(cmd *cobra.Command, id int64, reason string, yes, force boo
 		if it.Workspace != "" {
 			if st, statErr := os.Stat(it.Workspace); statErr == nil && st.IsDir() {
 				if !weaveItemMerged(root, base, it) {
-					ahead, head := weaveMeasureBranch(it.Workspace, weaveCountRef(it, base))
+					// Same single measurement as list / pull / prune.
+					ahead, head := weaveUnmergedAhead(root, base, it)
 					dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace)
 					if ahead > 0 || dirty {
 						if !force {
@@ -6040,9 +6102,17 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			//
 			// A destructive sweep may not decide what is expendable from a label. It
 			// has to look at the artifact.
+			//
+			// The measurement goes through weaveUnmergedAhead — the same one behind
+			// `weave list`'s SALVAGEABLE line and pull's refusal — and NOT through a
+			// local rev-list of its own. This half used to count `base..HEAD` with
+			// the base BRANCH NAME as read inside the workspace clone, ignoring the
+			// item's clone-point BaseSHA; a workspace whose local base ref had moved
+			// on to include the agent's commits counts 0 that way, and 0 is the
+			// number that lets a destructive sweep proceed.
 			if !force && it.Workspace != "" && !merged {
 				if _, statErr := os.Stat(it.Workspace); statErr == nil {
-					ahead, _ := weaveMeasureBranch(it.Workspace, base)
+					ahead, _ := weaveUnmergedAhead(root, base, it)
 					dirty, dirtyFiles, untracked := weaveMeasureDirtiness(it.Workspace)
 					if ahead > 0 || dirty {
 						why := weavePruneHoldReason(ahead, dirtyFiles, untracked)
@@ -6246,6 +6316,23 @@ func weavePrintSalvageableFooter(w io.Writer, ids []int64) {
 		fmt.Fprintf(&b, "#%d", id)
 	}
 	fmt.Fprintf(w, "SALVAGEABLE: %s hold committed work not merged to the base branch — inspect with `weave status <id>`; pull submitted runs or salvage killed/failed runs (do NOT re-run: the diff is already there)\n", b.String())
+}
+
+// weaveNotPullableDetail explains a pull refusal for a run that pull does not
+// merge but that IS holding committed work.
+//
+// Three things it must say, because their absence is what made the old silent
+// skip dangerous: the run's REAL state (never anything that reads as empty),
+// the COMMIT COUNT (proof the work is there), and the VERB THAT WOULD WORK. A
+// refusal with no next step is how an operator ends up at `weave abandon`,
+// which is the one command that turns "not merged yet" into "gone".
+func weaveNotPullableDetail(it *weaveItem, base string, ahead int) string {
+	next := fmt.Sprintf("inspect with `weave status %d`", it.ID)
+	if weaveSalvageableState(it.State) {
+		next = fmt.Sprintf("a killed/failed run needs review: `weave salvage %d --review-agent <agent>`", it.ID)
+	}
+	return fmt.Sprintf("run is %q and holds %d commit(s) not on %s — NOT empty; pull merges `submitted` runs, so %s. Do NOT abandon/prune: those commits exist only in this run's workspace clone",
+		it.State, ahead, base, next)
 }
 
 // weavePruneHoldReason says, in one line, why a workspace was not deleted.
