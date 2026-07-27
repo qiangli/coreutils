@@ -1,15 +1,19 @@
 package meet
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,6 +49,14 @@ import (
 // serviceSchema is the envelope version of `meet service status --json`.
 const serviceSchema = "bashy-meet-service-v1"
 
+const (
+	serviceStateRunning      = "running"
+	serviceStateStopped      = "stopped"
+	serviceStateNotRunning   = "not_running"
+	serviceStateStaleRemoved = "stale_pidfile_removed"
+	serviceStateUnidentified = "unidentified_listener"
+)
+
 // stopGrace is how long stop waits after SIGTERM before SIGKILL.
 const stopGrace = 5 * time.Second
 
@@ -72,12 +84,18 @@ type ServiceStatus struct {
 	PidFile       string `json:"pid_file"`
 	Addr          string `json:"addr,omitempty"`
 	LogFile       string `json:"log_file,omitempty"`
+	State         string `json:"state,omitempty"`
+	Detail        string `json:"detail,omitempty"`
 }
 
 // ErrServiceStopped is what `status` returns when the daemon is not running, so
 // the command's EXIT CODE carries the answer too. A supervisor should not have to
 // parse prose to learn whether the thing it supervises is up.
 var ErrServiceStopped = errors.New("meet service: not running")
+
+// ErrServiceUnidentified means the configured port is occupied, but no visible
+// pidfile safely identifies a process that stop is authorized to signal.
+var ErrServiceUnidentified = errors.New("meet service: listener could not be identified or stopped")
 
 func (o ServiceOptions) port() int {
 	if o.Port > 0 {
@@ -139,25 +157,109 @@ func readPid(path string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
-// ServiceStatusOf reports whether the daemon is running: a pidfile alone proves
-// nothing (a crashed server leaves one behind), so the pid is probed.
-func ServiceStatusOf(opt ServiceOptions) ServiceStatus {
+type serviceProbe int
+
+const (
+	probeClear serviceProbe = iota
+	probeMeet
+	probeOccupied
+)
+
+// probeServicePort uses the port as the cross-store liveness identity. A TCP
+// listener is evidence that stop cannot claim success; /healthz tells us whether
+// that listener is bashy-meet without granting permission to kill an unknown
+// process.
+func probeServicePort(opt ServiceOptions) serviceProbe {
+	host := opt.bind()
+	switch host {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::", "[::]":
+		host = "::1"
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(opt.port()))
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		// Only an explicit refusal proves the address was reached and had no
+		// listener. A timeout, DNS failure, or unreachable address is absence of
+		// evidence and therefore cannot authorize a success claim.
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			return probeClear
+		}
+		return probeOccupied
+	}
+	_ = conn.Close()
+
+	client := &http.Client{
+		Timeout: 500 * time.Millisecond,
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+"/healthz", nil)
+	if err != nil {
+		return probeOccupied
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return probeOccupied
+	}
+	defer resp.Body.Close()
+	var health struct {
+		OK      bool   `json:"ok"`
+		Service string `json:"service"`
+	}
+	if resp.StatusCode == http.StatusOK &&
+		json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&health) == nil &&
+		health.OK && health.Service == otelServiceName {
+		return probeMeet
+	}
+	return probeOccupied
+}
+
+// serviceStatusOf reports whether the daemon is running. When the current store
+// has no usable pidfile, the configured port supplies the missing evidence.
+func serviceStatusOf(opt ServiceOptions) (ServiceStatus, error) {
 	st := ServiceStatus{SchemaVersion: serviceSchema, Addr: opt.addr()}
 	p, err := servicePidPath()
 	if err != nil {
-		return st
+		return st, err
 	}
 	st.PidFile = p
 	if lp, err := serviceLogPath(); err == nil {
 		st.LogFile = lp
 	}
 	pid, err := readPid(p)
-	if err != nil || pid <= 0 {
-		return st
+	if err == nil && pid > 0 && processAlive(pid) {
+		st.Running, st.PID, st.State = true, pid, serviceStateRunning
+		return st, nil
 	}
-	if processAlive(pid) {
-		st.Running, st.PID = true, pid
+	switch probeServicePort(opt) {
+	case probeMeet:
+		st.Running = true
+		st.State = serviceStateRunning
+		st.Detail = fmt.Sprintf("bashy-meet answered on port %d; pidfile is not visible", opt.port())
+		return st, nil
+	case probeOccupied:
+		st.State = serviceStateUnidentified
+		st.Detail = fmt.Sprintf("port %d is in use by an unidentified listener", opt.port())
+		return st, ErrServiceUnidentified
+	default:
+		st.State = serviceStateNotRunning
+		if err == nil || !os.IsNotExist(err) {
+			st.Detail = "pidfile is stale"
+		}
+		return st, nil
 	}
+}
+
+// ServiceStatusOf is the compatibility form used by callers that only need the
+// status envelope. Command paths use serviceStatusOf so an unidentified listener
+// also affects the exit code.
+func ServiceStatusOf(opt ServiceOptions) ServiceStatus {
+	st, _ := serviceStatusOf(opt)
 	return st
 }
 
@@ -167,7 +269,9 @@ func ServiceStatusOf(opt ServiceOptions) ServiceStatus {
 // second start against a live pid must be a silent no-op rather than a second
 // server racing for the port.
 func StartService(opt ServiceOptions) (ServiceStatus, error) {
-	if st := ServiceStatusOf(opt); st.Running {
+	if st, err := serviceStatusOf(opt); err != nil {
+		return st, err
+	} else if st.Running {
 		return st, nil
 	}
 	p, err := servicePidPath()
@@ -224,8 +328,10 @@ func StopService(opt ServiceOptions) (ServiceStatus, error) {
 		return st, err
 	}
 	st.PidFile = p
-	pid, err := readPid(p)
-	if err == nil && pid > 0 && processAlive(pid) {
+	pid, readErr := readPid(p)
+	hadPidfile := readErr == nil || !os.IsNotExist(readErr)
+	livePID := readErr == nil && pid > 0 && processAlive(pid)
+	if livePID {
 		_ = signalStop(pid)
 		if !waitGone(pid, opt.grace()) {
 			// The room's WebSocket loops are polling tails; a server wedged past
@@ -235,10 +341,33 @@ func StopService(opt ServiceOptions) (ServiceStatus, error) {
 			_ = waitGone(pid, time.Second)
 		}
 	}
+	probe := probeServicePort(opt)
+	if probe != probeClear {
+		st.Running = probe == probeMeet
+		st.PID = pid
+		st.State = serviceStateUnidentified
+		if livePID {
+			st.Detail = fmt.Sprintf("pid=%d or another listener is still using port %d", pid, opt.port())
+		} else if probe == probeMeet {
+			st.Detail = fmt.Sprintf("bashy-meet is running on port %d, but no visible pidfile identifies its pid", opt.port())
+		} else {
+			st.Detail = fmt.Sprintf("port %d is in use by an unidentified listener", opt.port())
+		}
+		return st, ErrServiceUnidentified
+	}
 	// Remove last: a pidfile dropped before the signal would strand the process
 	// with nothing left pointing at it.
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return st, err
+	}
+	switch {
+	case livePID:
+		st.State = serviceStateStopped
+	case hadPidfile:
+		st.State = serviceStateStaleRemoved
+		st.Detail = "stale pidfile removed"
+	default:
+		st.State = serviceStateNotRunning
 	}
 	return st, nil
 }
@@ -301,8 +430,11 @@ It is NOT ` + "`meet start`" + `, which convenes a deliberation session.`),
 			SilenceUsage:  true,
 			SilenceErrors: true,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				st := ServiceStatusOf(opt)
+				st, err := serviceStatusOf(opt)
 				printServiceStatus(cmd.OutOrStdout(), st, asJSON, "")
+				if err != nil {
+					return err
+				}
 				if !st.Running {
 					return ErrServiceStopped
 				}
@@ -310,15 +442,17 @@ It is NOT ` + "`meet start`" + `, which convenes a deliberation session.`),
 			},
 		},
 		&cobra.Command{
-			Use:   "stop",
-			Short: "stop the meet web server (SIGTERM, then SIGKILL)",
-			Args:  cobra.NoArgs,
+			Use:           "stop",
+			Short:         "stop the meet web server (SIGTERM, then SIGKILL)",
+			Args:          cobra.NoArgs,
+			SilenceUsage:  true,
+			SilenceErrors: true,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				st, err := StopService(opt)
+				printServiceStatus(cmd.OutOrStdout(), st, asJSON, "stop")
 				if err != nil {
 					return err
 				}
-				printServiceStatus(cmd.OutOrStdout(), st, asJSON, "stop")
 				return nil
 			},
 		},
@@ -326,27 +460,40 @@ It is NOT ` + "`meet start`" + `, which convenes a deliberation session.`),
 	return cmd
 }
 
-// printServiceStatus prints a line containing "running" or "stopped" — the exact
-// token outpost's bashyServiceRunning greps for. Keep the word intact.
+// printServiceStatus distinguishes an observed stop from an already-idle
+// service. In particular, absence of a pidfile never prints "stopped".
 func printServiceStatus(w io.Writer, st ServiceStatus, asJSON bool, action string) {
 	if asJSON {
 		b, _ := json.Marshal(st)
 		fmt.Fprintln(w, string(b))
 		return
 	}
-	state := "stopped"
-	if st.Running {
-		state = "running"
-	}
-	// A stopped daemon has no pid; printing "pid=0" would invite somebody to
-	// signal it.
 	prefix := ""
 	if action != "" {
 		prefix = "meet service " + action + ": "
 	}
-	if st.Running {
-		fmt.Fprintf(w, "%s%s (pid=%d) http://%s/\n", prefix, state, st.PID, st.Addr)
+	if st.State == serviceStateUnidentified {
+		fmt.Fprintf(w, "%sFAILED: %s\n", prefix, st.Detail)
 		return
 	}
-	fmt.Fprintf(w, "%s%s\n", prefix, state)
+	if st.Running {
+		if st.PID > 0 {
+			fmt.Fprintf(w, "%srunning (pid=%d) http://%s/\n", prefix, st.PID, st.Addr)
+		} else {
+			fmt.Fprintf(w, "%srunning on port %s (pid unknown)\n", prefix, st.Addr)
+		}
+		return
+	}
+	switch st.State {
+	case serviceStateStopped:
+		fmt.Fprintf(w, "%sstopped\n", prefix)
+	case serviceStateStaleRemoved:
+		fmt.Fprintf(w, "%sstale pidfile removed\n", prefix)
+	default:
+		if st.Detail != "" {
+			fmt.Fprintf(w, "%snot running (%s)\n", prefix, st.Detail)
+		} else {
+			fmt.Fprintf(w, "%snot running\n", prefix)
+		}
+	}
 }

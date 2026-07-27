@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -44,7 +47,8 @@ func TestServiceStatusLifecycle(t *testing.T) {
 	var opt ServiceOptions
 
 	// Nothing started yet.
-	if st := ServiceStatusOf(opt); st.Running {
+	clearOpt := ServiceOptions{Port: freeServicePort(t)}
+	if st := ServiceStatusOf(clearOpt); st.Running {
 		t.Fatalf("no pidfile must read as stopped, got %+v", st)
 	}
 
@@ -67,7 +71,7 @@ func TestServiceStatusLifecycle(t *testing.T) {
 	if err := writePid(pidPath(t), deadPID); err != nil {
 		t.Fatal(err)
 	}
-	if st := ServiceStatusOf(opt); st.Running {
+	if st := ServiceStatusOf(clearOpt); st.Running {
 		t.Fatalf("a dead pid must read as stopped, got %+v", st)
 	}
 }
@@ -121,7 +125,7 @@ func TestStopServiceStalePidfile(t *testing.T) {
 	if err := writePid(pidPath(t), deadPID); err != nil {
 		t.Fatal(err)
 	}
-	st, err := StopService(ServiceOptions{})
+	st, err := StopService(ServiceOptions{Port: freeServicePort(t)})
 	if err != nil {
 		t.Fatalf("a stale pidfile must stop cleanly: %v", err)
 	}
@@ -133,11 +137,16 @@ func TestStopServiceStalePidfile(t *testing.T) {
 	}
 }
 
-// Stopping something that was never started is also success — same reasoning.
+// Nothing listening and no pidfile is success, but it is not evidence that this
+// invocation stopped anything.
 func TestStopServiceNoPidfile(t *testing.T) {
 	serviceTestDir(t)
-	if _, err := StopService(ServiceOptions{}); err != nil {
+	st, err := StopService(ServiceOptions{Port: freeServicePort(t)})
+	if err != nil {
 		t.Fatalf("stop with no pidfile must succeed: %v", err)
+	}
+	if st.State != serviceStateNotRunning {
+		t.Fatalf("state = %q, want %q", st.State, serviceStateNotRunning)
 	}
 }
 
@@ -240,6 +249,7 @@ func TestStopServiceEscalatesToKill(t *testing.T) {
 // serviceHelperEnv selects the child half below: "term" dies on SIGTERM like a
 // well-behaved server, "ignore" refuses it and has to be killed.
 const serviceHelperEnv = "MEET_TEST_SERVICE_HELPER"
+const serviceHelperPortEnv = "MEET_TEST_SERVICE_PORT"
 
 func helperCmd(t *testing.T, ignoreTerm bool) *exec.Cmd {
 	t.Helper()
@@ -253,6 +263,53 @@ func helperCmd(t *testing.T, ignoreTerm bool) *exec.Cmd {
 	return cmd
 }
 
+func freeServicePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+// invisibleServingHelper starts a real health-serving process while store A is
+// selected, writes its pidfile there, then switches the caller to store B. This
+// is the reported failure mode: the pidfile is invisible but the port is live.
+func invisibleServingHelper(t *testing.T) (*exec.Cmd, int) {
+	t.Helper()
+	serviceTestDir(t)
+	port := freeServicePort(t)
+	cmd := exec.Command(os.Args[0], "-test.run=TestServiceDaemonHelperProcess", "-test.v=false")
+	cmd.Env = append(os.Environ(),
+		serviceHelperEnv+"=serve",
+		serviceHelperPortEnv+"="+strconv.Itoa(port))
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	buf := make([]byte, len("ready\n"))
+	if _, err := io.ReadFull(stdout, buf); err != nil || string(buf) != "ready\n" {
+		t.Fatalf("serving helper never reported ready (%q, err %v)", buf, err)
+	}
+	if err := writePid(pidPath(t), cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_MEET_DIR", t.TempDir())
+	return cmd, port
+}
+
 // TestServiceDaemonHelperProcess is not a test. It is the child half of the stop
 // tests, and does nothing unless re-exec'd with serviceHelperEnv set.
 func TestServiceDaemonHelperProcess(t *testing.T) {
@@ -264,6 +321,26 @@ func TestServiceDaemonHelperProcess(t *testing.T) {
 		// Notified-but-unhandled: SIGTERM stops terminating this process, which is
 		// exactly the wedged server the escalation exists for.
 		signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
+	}
+	if mode == "serve" {
+		port, err := strconv.Atoi(os.Getenv(serviceHelperPortEnv))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ok":true,"service":"bashy-meet"}`)
+		})
+		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = os.Stdout.WriteString("ready\n")
+		if err := http.Serve(ln, mux); err != nil {
+			t.Fatal(err)
+		}
+		return
 	}
 	_, _ = os.Stdout.WriteString("ready\n")
 	// Sleep rather than block on a channel: a parked goroutine with no timer can
@@ -279,13 +356,14 @@ func TestServiceDaemonHelperProcess(t *testing.T) {
 // exit code and the "running"/"stopped" token.
 func TestServiceStatusCommandExitCode(t *testing.T) {
 	serviceTestDir(t)
+	port := freeServicePort(t)
 
-	out, err := runMeet(t, "service", "status")
+	out, err := runMeet(t, "service", "status", "--port", strconv.Itoa(port))
 	if !errors.Is(err, ErrServiceStopped) {
 		t.Fatalf("status of a stopped daemon must fail; err = %v", err)
 	}
-	if !strings.Contains(out, "stopped") {
-		t.Fatalf("status must print the token 'stopped', got %q", out)
+	if out != "not running\n" {
+		t.Fatalf("status must distinguish absence from a completed stop, got %q", out)
 	}
 
 	if err := writePid(pidPath(t), os.Getpid()); err != nil {
@@ -326,12 +404,67 @@ func TestServiceStopCommandStalePidfile(t *testing.T) {
 	if err := writePid(pidPath(t), deadPID); err != nil {
 		t.Fatal(err)
 	}
-	out, err := runMeet(t, "service", "stop")
+	out, err := runMeet(t, "service", "stop", "--port", strconv.Itoa(freeServicePort(t)))
 	if err != nil {
 		t.Fatalf("stop with a stale pidfile must exit 0; err = %v", err)
 	}
-	if !strings.Contains(out, "stopped") {
-		t.Errorf("stop must print the token 'stopped', got %q", out)
+	if out != "meet service stop: stale pidfile removed\n" {
+		t.Errorf("stop must identify the stale pidfile outcome, got %q", out)
+	}
+}
+
+func TestServiceStopCommandNotRunning(t *testing.T) {
+	serviceTestDir(t)
+	port := freeServicePort(t)
+	out, err := runMeet(t, "service", "stop", "--port", strconv.Itoa(port))
+	if err != nil {
+		t.Fatalf("stop with no daemon must exit 0; err = %v", err)
+	}
+	if out != "meet service stop: not running\n" {
+		t.Fatalf("stop must not claim it stopped something, got %q", out)
+	}
+}
+
+func TestServiceStopCommandStopsLiveDaemon(t *testing.T) {
+	serviceTestDir(t)
+	cmd := stopHelper(t, false)
+	port := freeServicePort(t)
+	out, err := runMeet(t, "service", "stop", "--port", strconv.Itoa(port))
+	if err != nil {
+		t.Fatalf("stop of a live daemon must exit 0; err = %v", err)
+	}
+	if out != "meet service stop: stopped\n" {
+		t.Fatalf("stop of a live daemon output = %q", out)
+	}
+	if sig := waitExit(t, cmd, 5*time.Second); sig != syscall.SIGTERM {
+		t.Errorf("a well-behaved daemon must go on SIGTERM, got signal %v", sig)
+	}
+}
+
+func TestServiceStopFailsForPidfileInvisibleDaemon(t *testing.T) {
+	cmd, port := invisibleServingHelper(t)
+	out, err := runMeet(t, "service", "stop", "--port", strconv.Itoa(port))
+	if !errors.Is(err, ErrServiceUnidentified) {
+		t.Fatalf("stop must fail when the serving daemon has no visible pidfile; err = %v", err)
+	}
+	if !strings.Contains(out, "FAILED: bashy-meet is running on port "+strconv.Itoa(port)) ||
+		strings.Contains(out, ": stopped") {
+		t.Fatalf("stop must name the live port and must not claim stopped, got %q", out)
+	}
+	if !processAlive(cmd.Process.Pid) {
+		t.Fatalf("stop without the daemon's pidfile killed pid %d", cmd.Process.Pid)
+	}
+}
+
+func TestServiceStatusFindsPidfileInvisibleDaemon(t *testing.T) {
+	_, port := invisibleServingHelper(t)
+	out, err := runMeet(t, "service", "status", "--port", strconv.Itoa(port))
+	if err != nil {
+		t.Fatalf("status of the serving daemon must exit 0; err = %v", err)
+	}
+	if !strings.Contains(out, "running on port 127.0.0.1:"+strconv.Itoa(port)) ||
+		strings.Contains(out, "stopped") {
+		t.Fatalf("status must report port evidence, not stopped, got %q", out)
 	}
 }
 
