@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -464,68 +463,44 @@ func TestAttachCoachEventsModeReplaysPastHistory(t *testing.T) {
 	}
 }
 
-// The events watcher exits ONLY on ctx.Done(). Unlike watchAttachedLog, it has
-// NO pid-liveness check — a coachee that exits on its own never causes the
-// attached events-mode coach to return. The doc says "the watcher exits on …
-// the coachee's pid going away"; events mode violates that invariant.
-func TestAttachCoachEventsModeHangsWhenCoacheeExits(t *testing.T) {
+// The pty watcher (watchAttachedLog) opens the log and reads from byte 0 — no
+// seek-to-end, no skip. A coach attached to a coachee that has been running for
+// 20 minutes replays the ENTIRE log history through feedPty, and when that
+// history contains a looping pattern the coach trips on work done before it
+// arrived. The events path correctly preserves history for the report via
+// recordPriorToolCalls+skipToEnd; the pty path must do the same but does not.
+func TestAttachCoachPtyModeReplaysPastHistory(t *testing.T) {
 	isolateRoom(t)
 	srv := newCtlSockServer(t)
+	card, logF := attachCard(t, srv, false /* pty */)
 
-	// Start a real child process — it provides a pid that attachCoach's
-	// liveness check accepts, and that we can kill to simulate "exit."
-	cmd := exec.Command("sleep", "30")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	childPID := cmd.Process.Pid
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-			cmd.Wait()
-		}
-	}()
+	// A coachee that has been running for a while: 120 lines of churn — a
+	// rotating set of 4 distinct patterns repeated 30 times each. In a fresh
+	// 40-line sliding window, 4 distinct / 40 windowed = 0.10, well below the
+	// PtyNoveltyFloor of 0.35. The coach WILL trip on this loop.
+	appendLines(t, logF, churnLines(120))
 
-	binding := "ycode:test-events-die"
-	evPath := cardEventsFile(room.Card{Binding: binding, PID: childPID, Events: true})
-	os.MkdirAll(filepath.Dir(evPath), 0o700)
-	if err := os.WriteFile(evPath, []byte{}, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(evPath)
+	pol := DefaultCoachPolicy()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	card := room.Card{
-		ID:      "test-events-die",
-		Binding: binding,
-		CtlSock: srv.path,
-		LogPath: "/dev/null",
-		PID:     childPID,
-		Events:  true,
-	}
-
-	ctx := context.Background() // never cancelled — coachee death should end the watch
-
-	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	coach, err := attachCoach(ctx, card, pol, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The coachee "exits on its own." The documented invariant: "a coachee
-	// that exits on its own — pid gone — ends the watch too."
-	cmd.Process.Kill()
-	cmd.Wait()
-	cmd.Process = nil
+	// Give the watcher time to read history. It reads from byte 0, so it
+	// processes all 120 pre-written lines.
+	time.Sleep(2 * time.Second)
+	cancel()
+	coach.Wait()
 
-	done := make(chan struct{})
-	go func() {
-		coach.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Watcher returned — the pid-liveness invariant holds for events mode too.
-	case <-time.After(4 * time.Second):
-		t.Fatal("coach.Wait() hung after coachee died: the events watcher has no pid-liveness check and never exits without ctx cancellation, violating the documented invariant")
+	rep := coach.Report()
+	if rep.Total == 0 {
+		t.Fatal("pty watcher read zero lines — the watcher did not tail the log at all")
+	}
+	if len(rep.Steers) > 0 {
+		t.Fatalf("pty coach tripped on %d historical steers from past output: the pty watcher must tail from the CURRENT position, not replay the session's entire history. total=%d distinct=%d steers=%v",
+			len(rep.Steers), rep.Total, rep.Distinct, rep.Steers)
 	}
 }
