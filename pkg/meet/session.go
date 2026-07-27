@@ -379,14 +379,24 @@ func (s *State) Validate() error {
 	}
 
 	// The initiator must be someone at the table, so `close` knows who to ask.
+	//
+	// The message is written for whoever is READING it, which is no longer only
+	// somebody at a terminal: this same check answers a browser opening a room
+	// through the API. It therefore names no flag — a web user has no `--initiator`
+	// to correct — and lists who IS in the room, which is the one fact that makes
+	// the refusal actionable from either surface.
 	if n := strings.TrimSpace(s.Initiator); n != "" && !strings.EqualFold(n, s.Human) {
 		for _, a := range s.attendees() {
 			if strings.EqualFold(a, n) {
 				return nil
 			}
 		}
-		return fmt.Errorf("meet: --initiator %s is not at this meeting; "+
-			"name the human, a participant, the chair, or the secretary", n)
+		where := "this room has nobody in it yet"
+		if at := s.attendees(); len(at) > 0 {
+			where = "in this room: " + strings.Join(at, ", ")
+		}
+		return fmt.Errorf("meet: %s is not in this room, so cannot be the one who convened it — "+
+			"whoever opens a room is in it, and only someone in it may close it (%s)", n, where)
 	}
 	return nil
 }

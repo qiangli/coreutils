@@ -105,6 +105,93 @@ func TestCreateHoldsTheRoleInvariants(t *testing.T) {
 	}
 }
 
+// Create seats the identity its caller authenticated, and does not require that
+// identity to look like an OS username.
+//
+// This is the api.go half of the tunnel defect: an email is a legitimate
+// principal, and Validate's "the initiator must be at this meeting" holds because
+// the caller IS at the meeting — it is the human seat — not because the check was
+// waived for the creation path.
+func TestCreateSeatsTheAuthenticatedCaller(t *testing.T) {
+	newRoom(t) // isolate the store; the OS user here is "qiangli"
+
+	const cloudUser = "qiangli@example.com"
+	st, err := Create(CreateOptions{Topic: "tunnel verification", Human: cloudUser})
+	if err != nil {
+		t.Fatalf("a cloud-authenticated create must succeed: %v", err)
+	}
+	if st.Human != cloudUser || st.Initiator != cloudUser {
+		t.Fatalf("human = %q initiator = %q, want %q", st.Human, st.Initiator, cloudUser)
+	}
+	// Seated means seated: the room's member list has them in it, which is what
+	// every later check reads.
+	if !contains(st.attendees(), cloudUser) {
+		t.Errorf("attendees = %v, want the creator among them", st.attendees())
+	}
+	// And the organizer privilege follows the recorded name, not the OS user.
+	if err := requireOrganizer(st, cloudUser); err != nil {
+		t.Errorf("the creator must be the organizer: %v", err)
+	}
+	if err := requireOrganizer(st, "qiangli"); !errors.Is(err, ErrNotOrganizer) {
+		t.Errorf("the host's OS user did not convene this room: %v", err)
+	}
+
+	// The CLI/loopback path is unchanged: no Human means the OS user.
+	local, err := Create(CreateOptions{Topic: "loopback control"})
+	if err != nil {
+		t.Fatalf("the loopback create must still work: %v", err)
+	}
+	if local.Human != "qiangli" || local.Initiator != "qiangli" {
+		t.Errorf("human = %q initiator = %q, want the OS user", local.Human, local.Initiator)
+	}
+
+	// An explicitly named initiator still wins, and is still held to being someone
+	// at the table — seating the creator widened who is at the table, nothing else.
+	seatEverything(t)
+	agentLed, err := Create(CreateOptions{
+		Topic: "an agent convened this", Human: cloudUser,
+		Participants: []string{"codex"}, Initiator: "codex",
+	})
+	if err != nil {
+		t.Fatalf("naming a seated agent as initiator: %v", err)
+	}
+	if agentLed.Initiator != "codex" || agentLed.Human != cloudUser {
+		t.Errorf("initiator = %q human = %q", agentLed.Initiator, agentLed.Human)
+	}
+	if _, err := Create(CreateOptions{
+		Topic: "a ghost convened this", Human: cloudUser,
+		Participants: []string{"codex"}, Initiator: "ghost",
+	}); err == nil {
+		t.Error("an initiator who is at no seat must still be refused")
+	}
+}
+
+// The refusal is read by somebody who has never seen the CLI. It names no flag —
+// a web user has no `--initiator` to correct — and lists who is actually in the
+// room, which is the one fact that makes it actionable from either surface.
+func TestInitiatorRefusalSpeaksToAWebUser(t *testing.T) {
+	st := &State{
+		Topic: "x", Participants: []string{"codex"},
+		Human: "qiangli@example.com", Initiator: "somebody-else@example.com",
+	}
+	err := st.Validate()
+	if err == nil {
+		t.Fatal("an initiator at no seat must be refused")
+	}
+	msg := err.Error()
+	for _, jargon := range []string{"--initiator", "the chair, or the secretary"} {
+		if strings.Contains(msg, jargon) {
+			t.Errorf("the message still speaks CLI at a browser (%q): %s", jargon, msg)
+		}
+	}
+	// It must still say who it is talking about, and who IS in the room.
+	for _, want := range []string{"somebody-else@example.com", "qiangli@example.com", "codex"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the message must name %q: %s", want, msg)
+		}
+	}
+}
+
 // Close is organizer-only and must never reach for stdin: an HTTP handler has no
 // terminal, and confirmConclusion would either error or block on a closed pipe.
 func TestCloseIsOrganizerOnlyAndNeverPrompts(t *testing.T) {

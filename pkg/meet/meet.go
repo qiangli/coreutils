@@ -188,6 +188,12 @@ type sessionFlags struct {
 	turnTimeout  string
 	decisionMode string
 	initiator    string
+	// human is who occupies the room's HUMAN seat. It is not a flag — `start` and
+	// `consult` leave it empty and get the OS user, which is the only identity a
+	// terminal has. A transport that authenticated its caller sets it, because
+	// through the tunnel the person opening the room is a cloudbox account and the
+	// OS user is merely whoever the server happens to run as. See Create.
+	human        string
 	minTurnChars int
 	maxTurns     int
 	maxStalls    int
@@ -224,6 +230,22 @@ func (sf *sessionFlags) bind(cmd *cobra.Command) {
 			"turn has no exit to end it, so it ends on quiet")
 }
 
+// humanSeat resolves who takes the human seat: whoever the caller authenticated,
+// falling back to the OS user.
+//
+// The fallback is not a default identity so much as the only one a terminal can
+// offer — on loopback the caller has already proved the single thing loopback
+// proves, that it is the machine owner. It is deliberately NOT applied when a
+// name was supplied: silently substituting the OS user for an authenticated
+// account would file the room under the wrong person and hand them the
+// organizer privilege that goes with it.
+func (sf *sessionFlags) humanSeat() string {
+	if h := strings.TrimSpace(sf.human); h != "" {
+		return h
+	}
+	return humanName()
+}
+
 func (sf *sessionFlags) newState() (*State, error) {
 	for _, f := range sf.context {
 		if _, err := os.Stat(f); err != nil {
@@ -244,7 +266,7 @@ func (sf *sessionFlags) newState() (*State, error) {
 	st := &State{
 		ID: newID(sf.topic, nowFn()), Room: assignRoom(), Topic: sf.topic, Agenda: sf.agenda,
 		Participants: sf.participants, Secretary: sf.secretary, Chair: sf.chair,
-		Human:        humanName(),
+		Human:        sf.humanSeat(),
 		Initiator:    sf.initiator,
 		DecisionMode: sf.decisionMode, MinTurnChars: sf.minTurnChars, Context: sf.context,
 		Steerable: sf.steerable,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -381,6 +382,199 @@ func TestAPIRoomCreate(t *testing.T) {
 	resp, body = doJSON(t, srv, "POST", "/api/rooms", map[string]any{"Participants": []string{"codex"}})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a topicless room = %d, body %s", resp.StatusCode, body)
+	}
+}
+
+// doVouchedJSON is doJSON arriving THROUGH THE TUNNEL as a named cloud account —
+// the outpost wire contract: X-Forwarded-Prefix marks it cloud-arrived, Remote-User
+// carries the identity cloudbox vouched for. With no BASHY_MEET_SSO_SECRET set
+// there is no HMAC to satisfy, which is the same shape a paired host without a
+// configured secret presents.
+func doVouchedJSON(t *testing.T, srv *httptest.Server, user, method, path string, body any) (*http.Response, []byte) {
+	t.Helper()
+	var rdr *strings.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rdr = strings.NewReader(string(b))
+	} else {
+		rdr = strings.NewReader("")
+	}
+	req, err := http.NewRequest(method, srv.URL+path, rdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(coopauth.HdrForwardedPrefix, "/matrix/h/box/app/meet")
+	req.Header.Set(coopauth.HdrRemoteUser, user)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	buf, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, buf
+}
+
+// The reported defect: the FIRST thing a non-technical user does through Tessaro —
+// create a room — failed, because the initiator resolved to this host's OS user
+// while the caller was a cloudbox email, and Validate refused an initiator who was
+// not at the table.
+//
+// Nothing was wrong with that check. It was being applied at the one moment there
+// is no table to check against. The caller is now SEATED as the room's human, so
+// it passes for the honest reason rather than by being waived.
+func TestAPIRoomCreateSeatsTheCloudIdentity(t *testing.T) {
+	// Create stamps the SERVER's cwd onto the room, and the close below files the
+	// minutes relative to it. Without this the suite writes into the repo's docs/.
+	t.Chdir(t.TempDir())
+	newRoom(t) // isolate the store; its human is the OS user "qiangli"
+	srv := serveTest(t)
+
+	const cloudUser = "qiangli@example.com"
+	resp, body := doVouchedJSON(t, srv, cloudUser, "POST", "/api/rooms",
+		map[string]any{"Topic": "tunnel verification"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("creating a room as a cloud identity = %d, body %s", resp.StatusCode, body)
+	}
+	var st State
+	if err := json.Unmarshal(body, &st); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+	// An email is a legitimate principal — the identity that called is the identity
+	// recorded, not an OS-shaped approximation of it.
+	if st.Human != cloudUser {
+		t.Errorf("human = %q, want the authenticated caller %q", st.Human, cloudUser)
+	}
+	if st.Initiator != cloudUser {
+		t.Errorf("initiator = %q, want the authenticated caller %q", st.Initiator, cloudUser)
+	}
+	// Derived, never stored: an initiator who IS the human is a human.
+	if st.initiatorKind() != "human" {
+		t.Errorf("initiatorKind = %q, want human", st.initiatorKind())
+	}
+
+	// And it is durable — the check that matters is what a LATER request loads,
+	// since requireOrganizer has nothing to compare against but the recorded name.
+	saved, err := loadState(st.ID)
+	if err != nil {
+		t.Fatalf("the created room must be on disk: %v", err)
+	}
+	if saved.Human != cloudUser || saved.Initiator != cloudUser {
+		t.Fatalf("saved header = human %q initiator %q", saved.Human, saved.Initiator)
+	}
+
+	// The whole point of recording it: the creator can now act on their own room.
+	if resp, body := doVouchedJSON(t, srv, cloudUser, "POST", "/api/rooms/"+st.ID+"/close", nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("the creator's close = %d, want 204 (body %s)", resp.StatusCode, body)
+	}
+}
+
+// A vouched-but-unnamed caller opens nothing. Falling back to this host's user
+// would file the room under the machine owner and hand THEM the organizer
+// privilege — a room the actual caller could never close.
+func TestAPIRoomCreateRefusesAnUnnamedVouch(t *testing.T) {
+	newRoom(t)
+	srv := serveTest(t)
+
+	req, err := http.NewRequest("POST", srv.URL+"/api/rooms", strings.NewReader(`{"Topic":"who am i"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(coopauth.HdrForwardedPrefix, "/matrix/h/box/app/meet")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	// The gate refuses it before the handler is even reached — an unauthenticated
+	// cloud arrival is not a caller. Either way it must not open a room.
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("an unnamed cloud arrival = %d, want 403", resp.StatusCode)
+	}
+	rooms, _ := Rooms()
+	if len(rooms) != 1 {
+		t.Errorf("a refused create must open no room: %+v", rooms)
+	}
+}
+
+// The loopback control from the defect report: no cloud identity, so the room is
+// this host's — the local-first path must be untouched by the fix.
+func TestAPIRoomCreateOnLoopbackIsTheOSUser(t *testing.T) {
+	newRoom(t) // sets $USER=qiangli
+	srv := serveTest(t)
+
+	resp, body := doJSON(t, srv, "POST", "/api/rooms", map[string]any{"Topic": "loopback control"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, body)
+	}
+	var st State
+	if err := json.Unmarshal(body, &st); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+	if st.Human != "qiangli" || st.Initiator != "qiangli" {
+		t.Errorf("human = %q initiator = %q, want the OS user", st.Human, st.Initiator)
+	}
+	if st.Status != "open" {
+		t.Errorf("status = %q", st.Status)
+	}
+}
+
+// #155's organizer check is unchanged for every verb that acts on an EXISTING
+// room. Seating the creator gave the check something true to compare against; it
+// did not relax it, and a second cloud account is still a stranger to the room.
+func TestAPIOrganizerCheckStillRefusesAnotherCloudIdentity(t *testing.T) {
+	seatEverything(t)
+	newRoom(t)
+	srv := serveTest(t)
+
+	const owner, intruder = "owner@example.com", "intruder@example.com"
+	resp, body := doVouchedJSON(t, srv, owner, "POST", "/api/rooms",
+		map[string]any{"Topic": "whose room is this", "Participants": []string{"codex"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create = %d, body %s", resp.StatusCode, body)
+	}
+	var st State
+	if err := json.Unmarshal(body, &st); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+
+	// Every organizer-gated verb, refused for the intruder — and the body cannot
+	// buy the privilege back, because a vouched caller's stated actor is ignored.
+	for _, c := range []struct {
+		verb string
+		body any
+	}{
+		{"invite", map[string]string{"agent": "opencode", "actor": owner}},
+		{"kick", map[string]string{"agent": "codex", "actor": owner}},
+		{"close", map[string]string{"actor": owner}},
+	} {
+		resp, body := doVouchedJSON(t, srv, intruder, "POST", "/api/rooms/"+st.ID+"/"+c.verb, c.body)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s by a non-organizer = %d, want 403 (body %s)", c.verb, resp.StatusCode, body)
+			continue
+		}
+		if msg := apiErrorOf(t, body); !strings.Contains(msg, "organizer") {
+			t.Errorf("the %s 403 must say why: %q", c.verb, msg)
+		}
+	}
+	// Nothing moved.
+	after, _ := loadState(st.ID)
+	if len(after.Participants) != 1 || after.Participants[0] != "codex" || after.Status != "open" {
+		t.Fatalf("a refused act must not mutate the room: %+v", after)
+	}
+
+	// The organizer's own invite still lands, so the 403s above are the check
+	// working rather than the route being broken.
+	if resp, body := doVouchedJSON(t, srv, owner, "POST", "/api/rooms/"+st.ID+"/invite",
+		map[string]string{"agent": "opencode"}); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("the organizer's invite = %d, body %s", resp.StatusCode, body)
 	}
 }
 
