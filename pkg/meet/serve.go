@@ -323,14 +323,38 @@ func handleRoomGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"state": st, "synthesis": syn})
 }
 
+// handleRoomCreate opens a room in the NAME OF WHOEVER ASKED FOR IT.
+//
+// Create is the one route where the caller's identity is not checked against a
+// roster but becomes one: there is no room yet, so there is nobody it could be
+// checked against. Through the tunnel that identity is a cloudbox account — an
+// email — and it is seated as the room's human, which is both true (the person
+// who opened the room is in it) and what every later privilege check needs, since
+// requireOrganizer has nothing to compare against but the name the room recorded.
+//
+// actorOf decides who that is on the same terms as every other route: a vouched
+// caller is its VERIFIED identity and the body is ignored; only ungated loopback —
+// which has already proved it is the machine owner — may say who it is.
 func handleRoomCreate(w http.ResponseWriter, r *http.Request) {
 	var opts CreateOptions
 	if err := decodeBody(r, &opts); err != nil {
 		apiErr(w, err)
 		return
 	}
+	opts.Human = actorOf(r, opts.Human)
+	if strings.TrimSpace(opts.Human) == "" {
+		// Vouched but unnamed. Falling back to this host's user would file the room
+		// under the machine owner and hand them an organizer privilege the actual
+		// caller then could not exercise — a room nobody present can close.
+		writeErr(w, http.StatusForbidden, errors.New(
+			"meet: this request is vouched for but carries no account name, so there is nobody to open the room as"))
+		return
+	}
+	// An explicitly named initiator still wins — that is `--initiator <agent>`,
+	// naming a seat other than the human as the one who must agree to conclude.
+	// Validate holds it to being someone at the table, as it always has.
 	if strings.TrimSpace(opts.Initiator) == "" {
-		opts.Initiator = actorOf(r, "")
+		opts.Initiator = opts.Human
 	}
 	st, err := Create(opts)
 	if err != nil {

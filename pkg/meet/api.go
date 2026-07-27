@@ -110,6 +110,16 @@ type CreateOptions struct {
 	Agenda       []string
 	Context      []string
 	Initiator    string
+	// Human is the identity that takes the room's human seat — and, unless
+	// Initiator names somebody else at the table, convenes it.
+	//
+	// A transport that AUTHENTICATED its caller sets this to whoever that was. It
+	// is not required to look like an OS username: through the tunnel the caller
+	// is a cloudbox account, so `qiangli@example.com` is the honest answer and the
+	// only one the organizer check can later be applied against. Empty means the
+	// caller has no identity beyond the machine it is running on — the loopback
+	// and CLI case — and the OS user is used.
+	Human        string
 	Out          string
 	TurnTimeout  string
 	DecisionMode string
@@ -178,12 +188,20 @@ func Room(ref string) (*State, *Synthesis, error) {
 // recursion that forks exponentially. An HTTP client is not a turn, and a server
 // process that marked its own depth (so the agents it spawns are correctly
 // inside a meeting) would otherwise be unable to open a room at all.
+//
+// Opts.Human is what makes the room OPENABLE by a cloud-authenticated caller.
+// Validate insists the initiator be somebody at the table, and at CREATE time the
+// table is whatever this call is about to build — so a caller whose identity was
+// not seated could not possibly pass it. Nothing about that check was wrong; it
+// was being applied to an identity the room had not been told about. Seating the
+// authenticated caller as the room's human is what tells it, and it is also the
+// truth: the person who opened the room is in it.
 func Create(opts CreateOptions) (*State, error) {
 	sf := sessionFlags{
 		topic: opts.Topic, participants: opts.Participants,
 		secretary: opts.Secretary, chair: opts.Chair,
 		agenda: opts.Agenda, context: opts.Context,
-		initiator: opts.Initiator, out: opts.Out,
+		initiator: opts.Initiator, human: opts.Human, out: opts.Out,
 		turnTimeout: opts.TurnTimeout, decisionMode: opts.DecisionMode,
 		minBand: opts.MinBand, minTurnChars: opts.MinTurnChars,
 		maxTurns: opts.MaxTurns, maxStalls: opts.MaxStalls,
@@ -199,8 +217,13 @@ func Create(opts CreateOptions) (*State, error) {
 	// requireOrganizer gives: an unnamed initiator disables the privilege check
 	// permanently, and a room reachable from a browser is exactly the one that
 	// needs it.
+	//
+	// It defaults to the room's own human rather than to humanName(). Those are
+	// the same string on loopback and different ones through the tunnel, and using
+	// the host's OS user there was the bug: the room got an organizer nobody had
+	// seated, and Validate — correctly — refused to open it.
 	if strings.TrimSpace(sf.initiator) == "" {
-		sf.initiator = humanName()
+		sf.initiator = sf.humanSeat()
 	}
 	st, err := sf.newState()
 	if err != nil {
