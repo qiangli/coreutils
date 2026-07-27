@@ -767,15 +767,14 @@ func repl(cmd *cobra.Command, st *State) error {
 
 func newTellCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "tell <id> <text...>",
+		Use:   "tell <room>|<id> <text...>",
 		Short: "append a human contribution to a session",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := loadState(args[0])
-			if err != nil {
-				return err
-			}
-			_, err = record(st, "human", st.Human, "human", strings.Join(args[1:], " "))
+			// Through api.go, not a second copy of the append: Post is what the
+			// HTTP layer calls too, and a human message must mean the same thing
+			// whichever surface it arrives on. Empty author = the room's human.
+			_, err := Post(args[0], "", strings.Join(args[1:], " "))
 			return err
 		},
 	}
@@ -783,16 +782,12 @@ func newTellCmd() *cobra.Command {
 
 func newRoundCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "round <id>",
+		Use:   "round <room>|<id>",
 		Short: "run one moderated round across participants",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := loadState(args[0])
-			if err != nil {
-				return err
-			}
 			markDepth()
-			evs, err := runRound(cmd.Context(), st, currentAgenda(st), nil)
+			evs, err := Round(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -943,11 +938,15 @@ func newKickCmd() *cobra.Command {
 func newConvergeCmd() *cobra.Command {
 	var mode, secretary string
 	cmd := &cobra.Command{
-		Use:   "converge <id>",
+		Use:   "converge <room>|<id>",
 		Short: "secretary pass: extract decisions, actions, risks, open questions, corrections",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := loadState(args[0])
+			// The overrides are applied and PERSISTED first, then the shared verb
+			// runs off what is on disk — so `converge` and the HTTP route execute
+			// the identical pass rather than one of them carrying a private
+			// in-memory tweak the other cannot see.
+			st, err := roomOf(args[0])
 			if err != nil {
 				return err
 			}
@@ -956,10 +955,12 @@ func newConvergeCmd() *cobra.Command {
 			}
 			if mode != "" {
 				st.DecisionMode = mode
-				_ = st.save()
+				if err := st.save(); err != nil {
+					return err
+				}
 			}
 			markDepth()
-			syn, err := converge(cmd.Context(), st, nil)
+			syn, err := Converge(cmd.Context(), st.ID)
 			if err != nil {
 				return err
 			}
@@ -981,19 +982,19 @@ func newConvergeCmd() *cobra.Command {
 func newCloseCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
-		Use:   "close <id>",
+		Use:   "close <room>|<id>",
 		Short: "secretary pass, confirm with the initiator, then write and file the minutes",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := loadState(args[0])
-			if err != nil {
-				return err
-			}
 			markDepth()
-			path, err := closeMeeting(cmd.Context(), st, closeOptions{
+			// closeRoom is the body api.Close shares with this command. The actor
+			// is empty here — this is the ATTENDED path, where the terminal prompt
+			// is itself the privilege check: confirmConclusion asks the room's
+			// initiator, not whoever typed the command.
+			path, err := closeRoom(cmd.Context(), args[0], "", closeOptions{
 				Synthesize: true, Confirm: true, Yes: yes,
 				In: cmd.InOrStdin(), Out: cmd.OutOrStdout(),
-			}, nil)
+			})
 			if err != nil {
 				return err
 			}

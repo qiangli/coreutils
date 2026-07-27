@@ -20,6 +20,11 @@ func newRoom(t *testing.T) *State {
 	t.Setenv("BASHY_MEET_DIR", t.TempDir())
 	t.Setenv("BASHY_CAPABILITY_DIR", t.TempDir())
 	t.Setenv("BASHY_FLEET_DIR", t.TempDir()) // the compiled-in baseline, not the developer's store
+	// The fixture names its organizer "qiangli", and humanName() reads $USER. Any
+	// path that compares the two — the organizer check, and every transport that
+	// defaults an actor to the host's human — would otherwise pass or fail
+	// depending on who is running the suite.
+	t.Setenv("USER", "qiangli")
 	old := nowFn
 	nowFn = fixedNow
 	t.Cleanup(func() { nowFn = old })
