@@ -987,6 +987,477 @@ func TestAttachCoachEventsReplaysContentAfterSameInodeTruncation(t *testing.T) {
 	}
 }
 
+// ── ROLES ──────────────────────────────────────────────────────────────────
+//
+// The role is an ENFORCED EFFECT CAP, so every role test asserts the cap at the
+// wire — what did or did not cross the coachee's control socket — rather than
+// asserting that some flag was set. The capability table under test:
+//
+//	role         observe   say   interrupt (ESC)
+//	observer     yes       no    no
+//	advisor      yes       yes   no
+//	supervisor   yes       yes   yes
+
+// writeChurn feeds a looping stream into a coachee's log from a goroutine (where
+// t.Fatal is not allowed), so the tail picks it up as LIVE output.
+func writeChurn(w io.Writer, n int) {
+	var b strings.Builder
+	for _, ln := range churnLines(n) {
+		b.WriteString(ln)
+		b.WriteByte('\n')
+	}
+	_, _ = io.WriteString(w, b.String())
+}
+
+// runAttachRole attaches in the given role to a fake coachee, drives it into a
+// loop, and waits until the reflex policy has actually TRIPPED (or the deadline
+// passes). Returning only after a trip is what makes the per-role assertions
+// meaningful: "observer sent nothing" proves a cap only if there was something to
+// send.
+func runAttachRole(t *testing.T, role AttachRole) (*ctlSockServer, CoachReport, *roleSteerer) {
+	t.Helper()
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	card, logF := attachCard(t, srv, false /* pty path */)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, steer, err := attachCoachAs(ctx, card, DefaultCoachPolicy(), role)
+	if err != nil {
+		cancel()
+		t.Fatalf("attachCoachAs(%s): %v", role, err)
+	}
+
+	// Feed the loop AFTER attaching: the tail sits at EOF, so this arrives as live
+	// output, exactly as a running agent would produce it.
+	writeChurn(logF, 120)
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(coach.Report().Steers) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The Say follows the ESC after a 150ms settle inside intervene; let the frames
+	// that a trip produces finish crossing before the socket is inspected.
+	settle(srv)
+	cancel()
+	coach.Wait()
+
+	rep := coach.Report()
+	if len(rep.Steers) == 0 {
+		t.Fatalf("role %s: the reflex policy never tripped, so this test proves nothing about its cap: total=%d distinct=%d", role, rep.Total, rep.Distinct)
+	}
+	return srv, rep, steer
+}
+
+// SUCCESS CRITERIA 2 (observer): an observer emits NOTHING even when the policy
+// trips. Not a quieter steer, not a Say without the ESC — zero bytes. The trip is
+// still detected and recorded, which is the "demote, never drop" half: the
+// operator learns the agent is looping, the agent is not touched.
+func TestAttachRoleObserverEmitsNothingWhenPolicyTrips(t *testing.T) {
+	srv, rep, steer := runAttachRole(t, RoleObserver)
+
+	got := settle(srv)
+	if len(got) != 0 {
+		t.Errorf("observer emitted %d bytes across the control socket — an observer must not be able to affect the coachee at all: %q", len(got), got)
+	}
+	// It observed: the trip is in the report even though nothing was sent.
+	if rep.Total == 0 {
+		t.Errorf("observer saw no output — an observer must still WATCH (the report is the whole point)")
+	}
+	// And the prevented effects were counted, not silently discarded.
+	if n := steer.Demotions(); n < len(rep.Steers) {
+		t.Errorf("observer demotions = %d for %d trips — every capped effect must be recorded, not dropped", n, len(rep.Steers))
+	}
+}
+
+// SUCCESS CRITERIA 2 (advisor): an advisor MAY say a sentence and may NEVER send
+// the raw escape byte. This is the load-bearing distinction of the whole feature:
+// a Say is queued and read at a turn boundary, so an advisor can change where the
+// agent goes next; only ESC breaks into the turn already running.
+func TestAttachRoleAdvisorSaysButNeverSendsEsc(t *testing.T) {
+	srv, rep, steer := runAttachRole(t, RoleAdvisor)
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if bytes.Contains(srv.mu.get(), []byte("STOP investigating")) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	got := settle(srv)
+	if !bytes.Contains(got, []byte("STOP investigating")) {
+		t.Errorf("advisor's steer never crossed the control socket — an advisor MAY say a sentence. got=%q", got)
+	}
+	// VerbatimFrame("\x1b") is encoded as the "\x00R" frame prefix; a TextFrame Say
+	// never contains it. Its absence is the proof no ESC was sent.
+	if n := countEsc(got); n != 0 {
+		t.Errorf("advisor sent %d ESC frame(s) — an advisor that can reach Interrupt IS a supervisor. got=%q", n, got)
+	}
+	if bytes.Contains(got, []byte{0x1b}) {
+		t.Errorf("advisor put a raw escape byte on the wire: %q", got)
+	}
+	// The ESC the policy asked for was demoted, once per trip, not dropped.
+	if n := steer.Demotions(); n < len(rep.Steers) {
+		t.Errorf("advisor demotions = %d for %d trips — a capped ESC must be recorded as demoted", n, len(rep.Steers))
+	}
+}
+
+// SUCCESS CRITERIA 2 (supervisor): a supervisor does BOTH — the shipped behavior,
+// unchanged by the introduction of roles.
+func TestAttachRoleSupervisorSaysAndInterrupts(t *testing.T) {
+	srv, _, steer := runAttachRole(t, RoleSupervisor)
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		got := srv.mu.get()
+		if countEsc(got) > 0 && bytes.Contains(got, []byte("STOP investigating")) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	got := settle(srv)
+	if countEsc(got) == 0 {
+		t.Errorf("supervisor sent no ESC frame — breaking into a running turn is the power that defines the role. got=%q", got)
+	}
+	if !bytes.Contains(got, []byte("STOP investigating")) {
+		t.Errorf("supervisor's steer never crossed the control socket. got=%q", got)
+	}
+	if n := steer.Demotions(); n != 0 {
+		t.Errorf("supervisor had %d effect(s) demoted — a supervisor is capped by nothing", n)
+	}
+}
+
+// The capability table itself, asserted directly. The wire tests above prove the
+// caps are enforced; this pins the table they are enforcing, so a future role
+// cannot quietly acquire ESC by being added to the wrong branch.
+func TestAttachRoleCapabilityTable(t *testing.T) {
+	for _, tc := range []struct {
+		role                        AttachRole
+		observe, say, interruptable bool
+	}{
+		{RoleObserver, true, false, false},
+		{RoleAdvisor, true, true, false},
+		{RoleSupervisor, true, true, true},
+	} {
+		if got := tc.role.CanObserve(); got != tc.observe {
+			t.Errorf("%s.CanObserve() = %v, want %v", tc.role, got, tc.observe)
+		}
+		if got := tc.role.CanSay(); got != tc.say {
+			t.Errorf("%s.CanSay() = %v, want %v", tc.role, got, tc.say)
+		}
+		if got := tc.role.CanInterrupt(); got != tc.interruptable {
+			t.Errorf("%s.CanInterrupt() = %v, want %v", tc.role, got, tc.interruptable)
+		}
+	}
+	// Least-powerful first: the ladder order is what help texts and errors show.
+	want := []AttachRole{RoleObserver, RoleAdvisor, RoleSupervisor}
+	got := AttachRoles()
+	if len(got) != len(want) {
+		t.Fatalf("AttachRoles() = %v, want the three P1 roles %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("AttachRoles() = %v, want least-to-most power %v", got, want)
+		}
+	}
+}
+
+// SUCCESS CRITERIA 3: `coach attach` still means --as supervisor. It is
+// documented and in use; adding a role flag must not change what an existing
+// invocation does. Asserted end to end through the real cobra command against a
+// real room member — the flag default AND the effect it produces.
+func TestCoachAttachDefaultsToSupervisor(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	card, logF := attachCard(t, srv, false)
+	if err := room.Join(card); err != nil {
+		t.Fatal(err)
+	}
+	defer room.Leave(card.ID)
+
+	cmd := newCoachAttachCmd()
+	if def := cmd.Flags().Lookup("as").DefValue; def != string(RoleSupervisor) {
+		t.Fatalf("`coach attach` --as default = %q, want %q — the shipped alias must keep its meaning", def, RoleSupervisor)
+	}
+
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{card.ID, "--timeout", "3s"})
+
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		writeChurn(logF, 120)
+	}()
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("coach attach: %v", err)
+	}
+
+	got := settle(srv)
+	if countEsc(got) == 0 {
+		t.Errorf("`coach attach` with no --as sent no ESC — it must still behave as --as supervisor. got=%q", got)
+	}
+	if !bytes.Contains(got, []byte("STOP investigating")) {
+		t.Errorf("`coach attach` with no --as spoke no steer. got=%q", got)
+	}
+	if !strings.Contains(out.String(), "as supervisor") {
+		t.Errorf("`coach attach` did not report the role it joined with: %q", out.String())
+	}
+}
+
+// The new front door defaults to the LEAST powerful role. `coach attach` keeps
+// supervisor because that is what it already meant; a fresh verb has no such
+// history, and "let me join this session" must not hand over the power to stop it.
+func TestAttachCmdDefaultsToObserver(t *testing.T) {
+	cmd := NewAttachCmd()
+	if def := cmd.Flags().Lookup("as").DefValue; def != string(RoleObserver) {
+		t.Fatalf("`attach` --as default = %q, want %q — a new front door must default to the least power", def, RoleObserver)
+	}
+}
+
+// attachAudit collects the participation notes this feature emits on the room
+// timeline, in order.
+func attachAudit(t *testing.T, kind string) []room.Event {
+	t.Helper()
+	events, err := room.Timeline(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []room.Event
+	for _, e := range events {
+		if e.Type == room.EventNote && strings.HasPrefix(e.Body, kind+" role=") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// SUCCESS CRITERIA 4: attaching and detaching each leave a timeline record
+// carrying actor, role, and target. A participant nobody can attribute is not a
+// participant — the same rule bus.Publish enforces with its required Principal —
+// and only the PAIR bounds the window in which the attachment could have acted.
+func TestAttachEmitsRoomEventsOnAttachAndDetach(t *testing.T) {
+	isolateRoom(t)
+	t.Setenv("BASHY_PRINCIPAL", "audit-tester")
+	srv := newCtlSockServer(t)
+	card, _ := attachCard(t, srv, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, _, err := attachCoachAs(ctx, card, DefaultCoachPolicy(), RoleAdvisor)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+
+	// The attach note is emitted synchronously, before the watcher starts, so it is
+	// already on the timeline here — and the detach note is not.
+	joins := attachAudit(t, "attach")
+	if len(joins) != 1 {
+		t.Fatalf("attach emitted %d timeline notes, want exactly 1", len(joins))
+	}
+	if joins[0].Actor != "audit-tester" || joins[0].Principal != "audit-tester" {
+		t.Errorf("attach note actor=%q principal=%q, want the attributed principal", joins[0].Actor, joins[0].Principal)
+	}
+	if joins[0].Target != card.ID {
+		t.Errorf("attach note target=%q, want the session %q", joins[0].Target, card.ID)
+	}
+	if !strings.Contains(joins[0].Body, "role=advisor") {
+		t.Errorf("attach note body=%q, want it to carry the role it joined with", joins[0].Body)
+	}
+	if n := len(attachAudit(t, "detach")); n != 0 {
+		t.Fatalf("%d detach notes before detaching — the pair must bound the actual window", n)
+	}
+
+	cancel()
+	coach.Wait()
+
+	leaves := attachAudit(t, "detach")
+	if len(leaves) != 1 {
+		t.Fatalf("detach emitted %d timeline notes, want exactly 1", len(leaves))
+	}
+	if leaves[0].Actor != "audit-tester" || leaves[0].Target != card.ID {
+		t.Errorf("detach note actor=%q target=%q, want actor and target attributed", leaves[0].Actor, leaves[0].Target)
+	}
+	if !strings.Contains(leaves[0].Body, "role=advisor") {
+		t.Errorf("detach note body=%q, want it to carry the role", leaves[0].Body)
+	}
+}
+
+// A refused attach is NOT audited as participation: it never happened, so there
+// is no window to bound and nothing it could have affected.
+func TestAttachRefusalEmitsNoAudit(t *testing.T) {
+	isolateRoom(t)
+	card := room.Card{ID: "no-sock", Binding: "agy:nosock", PID: os.Getpid(), LogPath: "/dev/null"}
+	if _, _, err := attachCoachAs(context.Background(), card, DefaultCoachPolicy(), RoleSupervisor); err == nil {
+		t.Fatal("attach must refuse a member with no control socket")
+	}
+	if n := len(attachAudit(t, "attach")); n != 0 {
+		t.Errorf("a refused attach wrote %d participation notes — nothing joined, so nothing to record", n)
+	}
+}
+
+// SUCCESS CRITERIA 5: an unknown --as is REFUSED, with a message that lists the
+// valid roles. Never defaulted — silently promoting a typo to a powerful role is
+// exactly the failure roles exist to prevent, and silently demoting it would hide
+// the typo behind an attachment that quietly does nothing.
+func TestAttachRefusesUnknownRole(t *testing.T) {
+	for _, bad := range []string{"root", "admin", "SUPERVISER", "", "obs"} {
+		got, err := ParseAttachRole(bad)
+		if err == nil {
+			t.Fatalf("ParseAttachRole(%q) = %q with no error — an unknown role must be refused, never defaulted", bad, got)
+		}
+		for _, name := range AttachRoleNames() {
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("ParseAttachRole(%q) error %q does not list the valid role %q", bad, err, name)
+			}
+		}
+	}
+	// The P1 boundary is stated rather than left to read as a typo: judge and pair
+	// author, and attaching an author needs an isolation story that does not exist.
+	for _, notYet := range []string{"judge", "pair"} {
+		_, err := ParseAttachRole(notYet)
+		if err == nil {
+			t.Fatalf("ParseAttachRole(%q) must be refused — it is not implemented", notYet)
+		}
+		if !strings.Contains(err.Error(), "not implemented") {
+			t.Errorf("ParseAttachRole(%q) error %q should say it is not implemented, not that it is unknown", notYet, err)
+		}
+	}
+	// Valid spellings still parse, case-insensitively and with surrounding space.
+	for _, ok := range []string{"observer", "Advisor", " supervisor "} {
+		if _, err := ParseAttachRole(ok); err != nil {
+			t.Errorf("ParseAttachRole(%q) = %v, want it accepted", ok, err)
+		}
+	}
+}
+
+// The refusal reaches the operator through the command, before any session is
+// resolved or watched — an attach with a bad role must not run at all.
+func TestAttachCmdRefusesUnknownRole(t *testing.T) {
+	isolateRoom(t)
+	cmd := NewAttachCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{"some-session", "--as", "root"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("`attach --as root` must fail — an unknown role is never silently defaulted")
+	}
+	for _, name := range AttachRoleNames() {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error %q does not list the valid role %q", err, name)
+		}
+	}
+}
+
+// attachCoachAs refuses a role it does not recognize even when called directly —
+// the cap cannot be bypassed by constructing an AttachRole value in Go. Its zero
+// value is deliberately not a role.
+func TestAttachCoachAsRefusesUnknownRoleValue(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	card, _ := attachCard(t, srv, false)
+	if _, _, err := attachCoachAs(context.Background(), card, DefaultCoachPolicy(), AttachRole("root")); err == nil {
+		t.Fatal("attachCoachAs must refuse an unrecognized role rather than treat it as observable")
+	}
+	if _, _, err := attachCoachAs(context.Background(), card, DefaultCoachPolicy(), AttachRole("")); err == nil {
+		t.Fatal("the zero AttachRole must not be a valid role — a role is chosen, never inferred")
+	}
+}
+
+// --read-only predates --as and means observer. When both are given they must
+// agree: capping an explicit `--as supervisor` down would hide a contradiction the
+// operator wrote on purpose, and honouring it would defeat --read-only.
+func TestAttachReadOnlyAndRoleMustAgree(t *testing.T) {
+	// --read-only alone still resolves to observer, whatever the command's default.
+	cmd := newCoachAttachCmd()
+	if err := cmd.Flags().Parse([]string{"--read-only"}); err != nil {
+		t.Fatal(err)
+	}
+	role, err := resolveAttachRole(cmd, cmd.Flags().Lookup("as").Value.String(), true, RoleSupervisor)
+	if err != nil {
+		t.Fatalf("--read-only alone: %v", err)
+	}
+	if role != RoleObserver {
+		t.Errorf("--read-only resolved to %q, want %q", role, RoleObserver)
+	}
+
+	// --read-only with an explicit contradicting --as is refused, naming both.
+	cmd = newCoachAttachCmd()
+	if err := cmd.Flags().Parse([]string{"--read-only", "--as", "supervisor"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveAttachRole(cmd, "supervisor", true, RoleSupervisor); err == nil {
+		t.Fatal("`--read-only --as supervisor` must be refused — the two flags contradict")
+	} else if !strings.Contains(err.Error(), "--read-only") || !strings.Contains(err.Error(), "supervisor") {
+		t.Errorf("contradiction error %q must name both flags", err)
+	}
+
+	// --read-only with an explicit --as observer agrees, and is allowed.
+	cmd = newCoachAttachCmd()
+	if err := cmd.Flags().Parse([]string{"--read-only", "--as", "observer"}); err != nil {
+		t.Fatal(err)
+	}
+	if role, err := resolveAttachRole(cmd, "observer", true, RoleSupervisor); err != nil || role != RoleObserver {
+		t.Errorf("`--read-only --as observer` = %q,%v; the two agree and must be accepted", role, err)
+	}
+}
+
+// The role cap sits on the Steerer — the only surface an attachment can emit
+// through — so it holds for any caller, not just the attach path. Asserted
+// without a socket: an observer's and an advisor's capped calls must not even
+// reach the inner steerer.
+func TestRoleSteererCapsAtTheSteerer(t *testing.T) {
+	for _, tc := range []struct {
+		role                 AttachRole
+		wantSay, wantInterru bool
+	}{
+		{RoleObserver, false, false},
+		{RoleAdvisor, true, false},
+		{RoleSupervisor, true, true},
+	} {
+		inner := &recordingSteerer{}
+		s := &roleSteerer{role: tc.role, inner: inner}
+		if err := s.Interrupt(); err != nil {
+			t.Fatalf("%s.Interrupt: %v", tc.role, err)
+		}
+		if err := s.Say("hello"); err != nil {
+			t.Fatalf("%s.Say: %v", tc.role, err)
+		}
+		if got := inner.interrupts > 0; got != tc.wantInterru {
+			t.Errorf("%s: reached inner Interrupt = %v, want %v", tc.role, got, tc.wantInterru)
+		}
+		if got := len(inner.said) > 0; got != tc.wantSay {
+			t.Errorf("%s: reached inner Say = %v, want %v", tc.role, got, tc.wantSay)
+		}
+		wantDemotions := 0
+		if !tc.wantInterru {
+			wantDemotions++
+		}
+		if !tc.wantSay {
+			wantDemotions++
+		}
+		if got := s.Demotions(); got != wantDemotions {
+			t.Errorf("%s: demotions = %d, want %d — every capped effect is recorded, never dropped", tc.role, got, wantDemotions)
+		}
+	}
+}
+
+// recordingSteerer is a Steerer that records rather than sends, so the cap can be
+// asserted without a control socket.
+type recordingSteerer struct {
+	interrupts int
+	said       []string
+}
+
+func (r *recordingSteerer) Interrupt() error      { r.interrupts++; return nil }
+func (r *recordingSteerer) Say(text string) error { r.said = append(r.said, text); return nil }
+
 func TestAttachCoachDropsIncompleteLineWhenCoacheeDies(t *testing.T) {
 	t.Run("pty", func(t *testing.T) {
 		f, err := os.CreateTemp("", "coach-dead-partial-pty-*.log")
