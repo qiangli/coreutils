@@ -602,3 +602,334 @@ func TestAttachCoachPtyModeReplaysPastHistory(t *testing.T) {
 			len(rep.Steers), rep.Total, rep.Distinct, rep.Steers)
 	}
 }
+
+func waitForAttachReport(t *testing.T, coach *Coach, wantTotal int) CoachReport {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		rep := coach.Report()
+		if rep.Total >= wantTotal {
+			return rep
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	rep := coach.Report()
+	t.Fatalf("coach report never reached %d total entries: total=%d distinct=%d", wantTotal, rep.Total, rep.Distinct)
+	return CoachReport{}
+}
+
+func toolCallLine(name string) string {
+	return `{"type":"tool.call","data":{"name":"` + name + `","input":{}}}`
+}
+
+func TestAttachCoachPtyMidLineDeliveredOnceWhole(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	card, logF := attachCard(t, srv, false)
+	if _, err := logF.WriteString("prior_complete\nboundary"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logF.WriteString("_completed\nlive_new\n"); err != nil {
+		t.Fatal(err)
+	}
+	rep := waitForAttachReport(t, coach, 3)
+	cancel()
+	coach.Wait()
+
+	if rep.Total != 3 || rep.Distinct != 3 {
+		t.Fatalf("partial PTY line must be delivered once and whole: total=%d distinct=%d, want 3/3", rep.Total, rep.Distinct)
+	}
+}
+
+func TestAttachCoachEventsMidLineDeliveredOnceWhole(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	binding := "ycode:test-partial-once"
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: os.Getpid(), Events: true})
+	if err := os.MkdirAll(filepath.Dir(evPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evPath, []byte(toolCallLine("prior")+"\n"+toolCallLine("boundary")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(evPath)
+
+	card := room.Card{
+		ID: "events-partial-once", Binding: binding, CtlSock: srv.path,
+		LogPath: "/dev/null", PID: os.Getpid(), Events: true,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(evPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("\n" + toolCallLine("live_new") + "\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	rep := waitForAttachReport(t, coach, 3)
+	cancel()
+	coach.Wait()
+
+	if rep.Total != 3 || rep.Distinct != 3 {
+		t.Fatalf("partial event must be delivered once and whole: total=%d distinct=%d, want 3/3", rep.Total, rep.Distinct)
+	}
+}
+
+func TestAttachCoachErrorsWhenEventsAndLogCannotBeOpened(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	binding := "ycode:test-no-signal-" + shortHash(srv.path)
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: os.Getpid(), Events: true})
+	_ = os.Remove(evPath)
+	card := room.Card{
+		ID: "events-no-signal", Binding: binding, CtlSock: srv.path,
+		LogPath: filepath.Join(t.TempDir(), "missing", "capture.log"),
+		PID:     os.Getpid(), Events: true,
+	}
+	_, err := attachCoach(context.Background(), card, DefaultCoachPolicy(), false)
+	if err == nil {
+		t.Fatal("attachCoach succeeded with neither a readable events source nor a readable PTY source")
+	}
+	if !strings.Contains(err.Error(), "nothing to watch") {
+		t.Fatalf("error %q must clearly say there is nothing to watch", err)
+	}
+}
+
+func TestAttachCoachEventsEmptyAtAttach(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	binding := "ycode:test-empty-at-attach"
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: os.Getpid(), Events: true})
+	if err := os.MkdirAll(filepath.Dir(evPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(evPath)
+	card := room.Card{
+		ID: "events-empty", Binding: binding, CtlSock: srv.path,
+		LogPath: "/dev/null", PID: os.Getpid(), Events: true,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evPath, []byte(toolCallLine("after_empty")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep := waitForAttachReport(t, coach, 1)
+	cancel()
+	coach.Wait()
+	if rep.Total != 1 || rep.Distinct != 1 {
+		t.Fatalf("empty events source did not begin tailing at byte zero: total=%d distinct=%d", rep.Total, rep.Distinct)
+	}
+}
+
+func TestAttachCoachPtyRecoversWhenSourceDisappears(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	card, logF := attachCard(t, srv, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(card.LogPath); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(650 * time.Millisecond)
+	if err := os.WriteFile(card.LogPath, []byte("after_recreate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep := waitForAttachReport(t, coach, 1)
+	cancel()
+	coach.Wait()
+	logF.Close()
+	if rep.Total != 1 || rep.Distinct != 1 {
+		t.Fatalf("PTY tail did not recover after its path reappeared: total=%d distinct=%d", rep.Total, rep.Distinct)
+	}
+}
+
+func TestAttachCoachEventsRecoversWhenSourceDisappears(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	binding := "ycode:test-events-reappear"
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: os.Getpid(), Events: true})
+	if err := os.MkdirAll(filepath.Dir(evPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(evPath)
+	card := room.Card{
+		ID: "events-reappear", Binding: binding, CtlSock: srv.path,
+		LogPath: "/dev/null", PID: os.Getpid(), Events: true,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(evPath); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(400 * time.Millisecond)
+	if err := os.WriteFile(evPath, []byte(toolCallLine("after_recreate")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep := waitForAttachReport(t, coach, 1)
+	cancel()
+	coach.Wait()
+	if rep.Total != 1 || rep.Distinct != 1 {
+		t.Fatalf("events tail did not recover after its path reappeared: total=%d distinct=%d", rep.Total, rep.Distinct)
+	}
+}
+
+func TestAttachCoachPtyFollowsTruncationAndRotation(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	card, logF := attachCard(t, srv, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLines(t, logF, []string{"first_generation_line"})
+	waitForAttachReport(t, coach, 1)
+
+	if err := os.Truncate(card.LogPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(card.LogPath, []byte("second_after_truncate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForAttachReport(t, coach, 2)
+
+	if err := os.Remove(card.LogPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(card.LogPath, []byte("third_after_rotation\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep := waitForAttachReport(t, coach, 3)
+	cancel()
+	coach.Wait()
+	if rep.Total != 3 || rep.Distinct != 3 {
+		t.Fatalf("PTY tail lost or duplicated a generation: total=%d distinct=%d, want 3/3", rep.Total, rep.Distinct)
+	}
+}
+
+func TestAttachCoachEventsFollowsTruncationAndRotation(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	binding := "ycode:test-events-generations"
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: os.Getpid(), Events: true})
+	if err := os.MkdirAll(filepath.Dir(evPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(evPath)
+	card := room.Card{
+		ID: "events-generations", Binding: binding, CtlSock: srv.path,
+		LogPath: "/dev/null", PID: os.Getpid(), Events: true,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evPath, []byte(toolCallLine("first")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForAttachReport(t, coach, 1)
+
+	if err := os.Truncate(evPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evPath, []byte(toolCallLine("second_after_truncate")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForAttachReport(t, coach, 2)
+
+	if err := os.Remove(evPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evPath, []byte(toolCallLine("third_after_rotation")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep := waitForAttachReport(t, coach, 3)
+	cancel()
+	coach.Wait()
+	if rep.Total != 3 || rep.Distinct != 3 {
+		t.Fatalf("events tail lost or duplicated a generation: total=%d distinct=%d, want 3/3", rep.Total, rep.Distinct)
+	}
+}
+
+func TestAttachCoachDropsIncompleteLineWhenCoacheeDies(t *testing.T) {
+	t.Run("pty", func(t *testing.T) {
+		f, err := os.CreateTemp("", "coach-dead-partial-pty-*.log")
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := f.Name()
+		defer os.Remove(path)
+		if _, err := f.WriteString("never_completed"); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		tail := &attachLineTail{path: path}
+		if _, err := tail.skipToEnd(); err != nil {
+			t.Fatal(err)
+		}
+		coach := NewLineCoach(DefaultCoachPolicy(), NewCtlSteerer(""))
+		watchAttachedLog(context.Background(), coach, room.Card{PID: 999999}, tail)
+		if rep := coach.Report(); rep.Total != 0 {
+			t.Fatalf("incomplete PTY line from a dead coachee was treated as complete: total=%d", rep.Total)
+		}
+		if string(tail.rem) != "never_completed" {
+			t.Fatalf("pending PTY remainder changed: %q", tail.rem)
+		}
+	})
+
+	t.Run("events", func(t *testing.T) {
+		f, err := os.CreateTemp("", "coach-dead-partial-events-*.ndjson")
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := f.Name()
+		defer os.Remove(path)
+		if _, err := f.WriteString(toolCallLine("never_completed")); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		tail := &attachLineTail{path: path}
+		if _, err := tail.skipToEnd(); err != nil {
+			t.Fatal(err)
+		}
+		coach := newCoach(DefaultCoachPolicy())
+		watchAttachedEvents(context.Background(), coach, tail, 999999)
+		if rep := coach.Report(); rep.Total != 0 {
+			t.Fatalf("incomplete event from a dead coachee was treated as complete: total=%d", rep.Total)
+		}
+		if string(tail.rem) != toolCallLine("never_completed") {
+			t.Fatalf("pending event remainder changed: %q", tail.rem)
+		}
+	})
+}

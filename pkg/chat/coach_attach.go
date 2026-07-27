@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -89,20 +91,17 @@ func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly 
 	// drives for a launched coach. The events file is not carried on the card
 	// (the card shape is read-only here), so it is reconstructed from the card's
 	// binding+pid — the exact key sessionEventsPath used when the member joined.
-	// Falls back to pty when the file is not reachable (a card that claims events
-	// but whose file is gone, e.g. after a host restart).
+	// Falls back to pty when the file is not reachable, but only if that fallback
+	// itself can be opened: attach must never succeed without a signal source.
 	if card.Events {
 		if evPath := cardEventsFile(card); evPath != "" {
-			if _, err := os.Stat(evPath); err == nil {
+			tail := &attachLineTail{path: evPath}
+			if lines, err := tail.skipToEnd(); err == nil {
 				c := newCoach(pol)
 				c.steer = steer
 				c.agent = card.Binding
 				c.mode = "events"
-				tail := &eventTail{path: evPath}
-				if evs, err := tail.drain(); err == nil {
-					c.recordPriorToolCalls(evs)
-				}
-				tail.skipToEnd()
+				c.recordPriorToolCalls(eventsFromLines(lines))
 				go func() {
 					defer func() { close(c.done) }()
 					watchAttachedEvents(ctx, c, tail, card.PID)
@@ -122,33 +121,15 @@ func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly 
 	}
 	coach := NewLineCoach(pol, steer)
 	coach.agent = card.Binding
-	log, err := os.Open(card.LogPath)
-	if err == nil {
-		// Fix the attachment boundary before the watcher starts. Preserve bytes
-		// already present as report-only history, then return to that exact
-		// boundary so appends racing with setup are still observed live.
-		var end int64
-		end, err = skipToEnd(log)
-		if err == nil && end > 0 {
-			if _, err = log.Seek(0, io.SeekStart); err == nil {
-				var prior []byte
-				prior, err = io.ReadAll(io.LimitReader(log, end))
-				if err == nil {
-					coach.recordPriorPty(prior)
-				}
-			}
-		}
-		if err == nil {
-			_, err = log.Seek(end, io.SeekStart)
-		}
-		if err != nil {
-			_ = log.Close()
-			log = nil
-		}
+	tail := &attachLineTail{path: card.LogPath}
+	prior, err := tail.skipToEnd()
+	if err != nil {
+		return nil, fmt.Errorf("coach attach: %s cannot open log %q — nothing to watch: %w", card.ID, card.LogPath, err)
 	}
+	coach.recordPriorPty(completeLines(prior))
 	go func() {
 		defer func() { close(coach.done) }()
-		watchAttachedLog(ctx, coach, card, log)
+		watchAttachedLog(ctx, coach, card, tail)
 	}()
 	return coach, nil
 }
@@ -157,25 +138,16 @@ func attachCoach(ctx context.Context, card room.Card, pol CoachPolicy, readOnly 
 // Write (which normalizes lines, runs the signal panel, and intervenes through
 // the shared (*Coach).intervene). It ends when the coachee's pid is gone or ctx
 // is cancelled — and in both cases it leaves the coachee alone (no kill, no ESC).
-func watchAttachedLog(ctx context.Context, coach *Coach, card room.Card, f *os.File) {
-	if f == nil {
-		return // nothing to tail; the coach simply has no signal
-	}
-	defer f.Close()
+func watchAttachedLog(ctx context.Context, coach *Coach, card room.Card, tail *attachLineTail) {
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
-	buf := make([]byte, 4096)
 	for {
-		// Drain whatever has been appended since the last poll. A regular file
-		// keeps its offset, so a read that hit EOF picks up new appends on the
-		// next tick — the same follow loop cmd_interact.go's attach uses.
-		for {
-			nr, rerr := f.Read(buf)
-			if nr > 0 {
-				_, _ = coach.Write(buf[:nr])
-			}
-			if rerr != nil || nr == 0 {
-				break
+		// A path-based tail can follow truncation and rotation. Errors are
+		// transient while a writer replaces a file, so keep polling; an attach
+		// whose source is absent from the start is rejected synchronously.
+		if lines, err := tail.next(); err == nil {
+			for _, line := range lines {
+				_, _ = coach.Write(append(append([]byte{}, line...), '\n'))
 			}
 		}
 		if !room.PidAlive(card.PID) {
@@ -194,12 +166,12 @@ func watchAttachedLog(ctx context.Context, coach *Coach, card room.Card, f *os.F
 // intervene — the precise event path, identical to a launched coach's
 // watchEvents. Calls already present remain reportable session history, but
 // never seed the live detector or cause an intervention.
-func watchAttachedEvents(ctx context.Context, coach *Coach, tail *eventTail, pid int) {
+func watchAttachedEvents(ctx context.Context, coach *Coach, tail *attachLineTail, pid int) {
 	tick := time.NewTicker(300 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if evs, err := tail.drain(); err == nil {
-			for _, ev := range evs {
+		if lines, err := tail.next(); err == nil {
+			for _, ev := range eventsFromLines(lines) {
 				if ev.Type == EventToolCall {
 					coach.onToolCall(ev)
 				}
@@ -216,23 +188,123 @@ func watchAttachedEvents(ctx context.Context, coach *Coach, tail *eventTail, pid
 	}
 }
 
-// skipToEnd establishes the common attachment boundary for append-only files:
-// bytes after the returned offset are live output; bytes before it are history.
-func skipToEnd(f *os.File) (int64, error) {
-	return f.Seek(0, io.SeekEnd)
+// attachLineTail mirrors pkg/meet's lineTail discipline for both attach signal
+// paths. It reads only complete lines, carries a trailing fragment in rem until
+// a later poll completes it, and follows a path across truncation or rotation.
+type attachLineTail struct {
+	path string
+	off  int64
+	rem  []byte
+	file os.FileInfo
+	end  []byte
 }
 
-// eventTail.skipToEnd mirrors pkg/meet's lineTail discipline using the same
-// attachment-boundary helper as the pty capture tail.
-func (e *eventTail) skipToEnd() {
-	f, err := os.Open(e.path)
+// skipToEnd snapshots the attachment boundary in one open/read. Complete lines
+// are returned as report-only history; a trailing incomplete line is retained
+// in rem so its future continuation is delivered once, whole.
+func (t *attachLineTail) skipToEnd() ([][]byte, error) {
+	f, err := os.Open(t.path)
 	if err != nil {
-		return
+		return nil, err
 	}
 	defer f.Close()
-	if end, err := skipToEnd(f); err == nil {
-		e.offset = end
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
 	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	t.file = fi
+	t.off = int64(len(data))
+	t.rememberEnd(data)
+	return t.split(data), nil
+}
+
+// next returns complete lines appended since the previous call. A replacement
+// inode or a shorter same-inode file establishes a fresh stream boundary:
+// an unfinished record from the old generation cannot be joined to the new one.
+func (t *attachLineTail) next() ([][]byte, error) {
+	f, err := os.Open(t.path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if t.file == nil || !os.SameFile(t.file, fi) || fi.Size() < t.off || !t.sameEnd(f) {
+		t.file = fi
+		t.off = 0
+		t.rem = nil
+		t.end = nil
+	}
+	if _, err := f.Seek(t.off, io.SeekStart); err != nil {
+		return nil, err
+	}
+	chunk, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	t.off += int64(len(chunk))
+	t.rememberEnd(chunk)
+	return t.split(chunk), nil
+}
+
+func (t *attachLineTail) sameEnd(f *os.File) bool {
+	if len(t.end) == 0 {
+		return true
+	}
+	got := make([]byte, len(t.end))
+	n, err := f.ReadAt(got, t.off-int64(len(t.end)))
+	return err == nil && n == len(got) && bytes.Equal(got, t.end)
+}
+
+func (t *attachLineTail) rememberEnd(chunk []byte) {
+	const anchor = 64
+	data := append(append([]byte{}, t.end...), chunk...)
+	if len(data) > anchor {
+		data = data[len(data)-anchor:]
+	}
+	t.end = data
+}
+
+func (t *attachLineTail) split(chunk []byte) [][]byte {
+	data := append(t.rem, chunk...)
+	cut := bytes.LastIndexByte(data, '\n')
+	if cut < 0 {
+		t.rem = append([]byte{}, data...)
+		return nil
+	}
+	t.rem = append([]byte{}, data[cut+1:]...)
+	var lines [][]byte
+	for _, line := range bytes.Split(data[:cut], []byte{'\n'}) {
+		lines = append(lines, append([]byte{}, line...))
+	}
+	return lines
+}
+
+func eventsFromLines(lines [][]byte) []Event {
+	var events []Event
+	for _, line := range lines {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var ev Event
+		if err := json.Unmarshal(line, &ev); err == nil {
+			events = append(events, ev)
+		}
+	}
+	return events
+}
+
+func completeLines(lines [][]byte) []byte {
+	if len(lines) == 0 {
+		return nil
+	}
+	return append(bytes.Join(lines, []byte{'\n'}), '\n')
 }
 
 // cardEventsFile reconstructs the structured-events file path a member writes, by
