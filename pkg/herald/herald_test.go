@@ -2,11 +2,146 @@ package herald
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/a2aproject/a2a-go/v2/a2a"
 )
+
+// fakePeer serves an A2A agent card advertising cardVersion over JSON-RPC, and
+// answers SendMessage. It records the A2A-Version header of every non-card
+// request, which is the only place herald's declared protocol version becomes
+// observable: a2a-go exposes no accessor for the version a client negotiated,
+// so the wire is the assertion surface.
+func fakePeer(t *testing.T, cardVersion string) (base string, versions func() []string) {
+	t.Helper()
+
+	var mu sync.Mutex
+	var seen []string
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	mux.HandleFunc(CardPath, func(w http.ResponseWriter, r *http.Request) {
+		card := a2a.AgentCard{
+			Name:        "fake-peer",
+			Description: "a peer that only records what it was told",
+			Version:     "0.0.1",
+			SupportedInterfaces: []*a2a.AgentInterface{{
+				URL:             srv.URL + "/a2a",
+				ProtocolBinding: a2a.TransportProtocolJSONRPC,
+				ProtocolVersion: a2a.ProtocolVersion(cardVersion),
+			}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(card); err != nil {
+			t.Errorf("encoding card: %v", err)
+		}
+	})
+
+	mux.HandleFunc("/a2a", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get(a2a.SvcParamVersion))
+		mu.Unlock()
+
+		msg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("ok"))
+		result, err := json.Marshal(a2a.StreamResponse{Event: msg})
+		if err != nil {
+			t.Errorf("marshalling result: %v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      "1",
+			"result":  json.RawMessage(result),
+		}); err != nil {
+			t.Errorf("encoding response: %v", err)
+		}
+	})
+
+	return srv.URL, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+}
+
+// TestA2AVersionOnTheWire is the claim ProtocolVersion exists to make: every
+// request herald sends carries A2A-Version: 1.0.
+//
+// It is asserted end to end, against the header a peer really receives, rather
+// than against the constant — the constant agreeing with itself proves nothing,
+// and the defect this replaces was precisely a constant with no call site while
+// the SDK silently decided the wire.
+func TestA2AVersionOnTheWire(t *testing.T) {
+	base, versions := fakePeer(t, ProtocolVersion)
+
+	res, err := Send(context.Background(), Peer{Name: "fake", URL: base}, "hello", SendOptions{})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if res.Text != "ok" {
+		t.Errorf("Text = %q, want %q", res.Text, "ok")
+	}
+
+	got := versions()
+	if len(got) == 0 {
+		t.Fatal("peer received no A2A request")
+	}
+	for i, v := range got {
+		if v != "1.0" {
+			t.Errorf("request %d carried %s: %q, want %q", i, a2a.SvcParamVersion, v, "1.0")
+		}
+	}
+	// And the constant is the thing being sent, not a coincidence.
+	if ProtocolVersion != "1.0" {
+		t.Errorf("ProtocolVersion = %q, want 1.0", ProtocolVersion)
+	}
+}
+
+// TestSDKDefaultVersionAgrees is a canary, not a requirement.
+//
+// a2a-go's own transport defaults register at a2a.Version, so before herald
+// stated a version the wire carried whatever that constant said — which today
+// is also 1.0. The two agreeing is why the missing call site was invisible: the
+// header was right by coincidence, not by declaration.
+//
+// If an SDK bump breaks this, nothing is wrong: herald keeps sending
+// ProtocolVersion, which is the point of owning it. It means a decision is due
+// — adopt the new version here, or record why herald stays behind.
+func TestSDKDefaultVersionAgrees(t *testing.T) {
+	if string(a2a.Version) != ProtocolVersion {
+		t.Errorf("a2a-go now defaults to %q, herald declares %q — decide which herald speaks "+
+			"and update ProtocolVersion (herald's wire is unchanged either way)",
+			a2a.Version, ProtocolVersion)
+	}
+}
+
+// TestIncompatiblePeerIsRefused pins the other half of owning the version: a
+// peer advertising only v0.3 — the wire format the package doc calls out as
+// incompatible — must fail at client construction, loudly, rather than be
+// negotiated down or talked to in the wrong dialect.
+func TestIncompatiblePeerIsRefused(t *testing.T) {
+	base, versions := fakePeer(t, "0.3")
+
+	_, err := Send(context.Background(), Peer{Name: "legacy", URL: base}, "hello", SendOptions{})
+	if err == nil {
+		t.Fatal("a v0.3-only peer must not be dialled")
+	}
+	if !strings.Contains(err.Error(), ProtocolVersion) {
+		t.Errorf("error should name the version herald speaks, got: %v", err)
+	}
+	if n := len(versions()); n != 0 {
+		t.Errorf("peer received %d requests, want 0 — nothing may go on an unnegotiated wire", n)
+	}
+}
 
 func TestPeerValidate(t *testing.T) {
 	cases := []struct {
