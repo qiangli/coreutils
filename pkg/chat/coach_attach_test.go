@@ -383,6 +383,29 @@ func TestAttachCoachReadOnlySendsNothing(t *testing.T) {
 	}
 }
 
+// When the card's log file cannot be opened (the file is gone or the path is
+// unreachable), attachCoach must return an error — not a coach that silently
+// watches nothing. A coach whose watcher returns immediately (log is nil) is
+// indistinguishable from one that legitimately saw zero output, which means an
+// operator gets a report of "0 lines" with no sign that the attach was
+// dead-on-arrival.
+func TestAttachCoachErrorsWhenLogCannotBeOpened(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+	card := room.Card{
+		ID:      "test-missing-log-" + shortHash(srv.path),
+		Binding: "agy:test",
+		CtlSock: srv.path,
+		LogPath: "/tmp/definitely/does/not/exist/coach-attach-log-" + shortHash(srv.path) + ".log",
+		PID:     os.Getpid(),
+		Events:  false,
+	}
+	_, err := attachCoach(context.Background(), card, DefaultCoachPolicy(), false)
+	if err == nil {
+		t.Fatal("attachCoach must return an error when the log file cannot be opened — the coach would watch nothing, and the caller has no way to know")
+	}
+}
+
 // The structured-event path reconstructs the events file from the card's
 // binding+pid — the exact key sessionEventsPath used when the member joined. A
 // session-launched card (PID = os.Getpid() of the launcher, here the test) must
@@ -406,6 +429,81 @@ func TestCardEventsFileMatchesSessionConvention(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, ".ndjson") {
 		t.Errorf("cardEventsFile = %q, want an .ndjson path", got)
+	}
+}
+
+// The events watcher calls drain() (which advances offset to after the last \n),
+// then skipToEnd() (which sets offset to EOF). Content written BETWEEN those two
+// calls — or a partial line whose bytes sit between drain's offset and the EOF —
+// is permanently lost: the live watcher starts reading from skipToEnd's offset
+// and never revisits the bytes behind it.
+//
+// Reproducer: an events file with a trailing partial line (no closing \n).
+// drain() consumes the complete lines, advances offset past the last \n, and
+// skipToEnd() leaps over the partial bytes. When the writer later appends \n to
+// finish the line, the watcher reads the lone \n — but the payload of the line
+// (the name, the input) sits before its offset and is forever invisible.
+func TestAttachCoachEventsLosesPartialLineContent(t *testing.T) {
+	isolateRoom(t)
+	srv := newCtlSockServer(t)
+
+	binding := "ycode:test-partial-loss"
+	evPath := cardEventsFile(room.Card{Binding: binding, PID: os.Getpid(), Events: true})
+	os.MkdirAll(filepath.Dir(evPath), 0o700)
+
+	// Two complete tool calls, plus a third whose trailing \n is deliberately
+	// absent — the file shape a live writer produces between the write(2) of the
+	// JSON bytes and the write(2) of the newline.
+	data := `{"type":"tool.call","data":{"name":"prior_a","input":{}}}` + "\n" +
+		`{"type":"tool.call","data":{"name":"prior_b","input":{}}}` + "\n" +
+		`{"type":"tool.call","data":{"name":"lost","input":{}}}`
+	os.WriteFile(evPath, []byte(data), 0o600)
+	defer os.Remove(evPath)
+
+	card := room.Card{
+		ID:      "test-partial-loss-" + shortHash(srv.path),
+		Binding: binding,
+		CtlSock: srv.path,
+		LogPath: "/dev/null",
+		PID:     os.Getpid(),
+		Events:  true,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	coach, err := attachCoach(ctx, card, DefaultCoachPolicy(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The writer finishes the partial line (appends a closing \n) AND writes one
+	// new complete event — the watcher should observe BOTH. With the bug, the \n
+	// is observed alone and the "lost" payload is behind skipToEnd's offset.
+	f, err := os.OpenFile(evPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write([]byte("\n"))
+	f.Write([]byte(`{"type":"tool.call","data":{"name":"live_new","input":{}}}` + "\n"))
+	f.Close()
+
+	// Wait for the watcher's tick (300ms) to drain new content.
+	time.Sleep(time.Second)
+	cancel()
+	coach.Wait()
+
+	rep := coach.Report()
+	t.Logf("total=%d distinct=%d steers=%d", rep.Total, rep.Distinct, len(rep.Steers))
+
+	// The bug: skipToEnd leapt over "lost". Without it, all four distinct tool
+	// calls (prior_a, prior_b, lost, live_new) should be visible. With the bug,
+	// only prior_a, prior_b, and live_new are — distinct=3 instead of 4.
+	if rep.Distinct < 4 {
+		t.Errorf("expected at least 4 distinct tool calls (prior_a, prior_b, lost, live_new), got %d — the partial-line payload was lost", rep.Distinct)
+	}
+	if rep.Total < 4 {
+		t.Errorf("expected at least 4 total tool calls, got %d — the partial-line event is missing from the report", rep.Total)
 	}
 }
 
