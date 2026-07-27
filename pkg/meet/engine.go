@@ -486,6 +486,23 @@ const noSynthesisNotice = "**UNKNOWN — the secretary pass did not complete, so
 	"This is NOT a finding that the meeting decided nothing; read the turns below. " +
 	"Recover with `bashy meet amend <id> --resynthesize [--secretary AGENT]`.\n"
 
+// noSecretaryNotice is the same honesty for a room that never had a secretary.
+// It has to READ differently from noSynthesisNotice: nothing failed here, and
+// telling a reader to recover from a pass that was never meant to run would send
+// them looking for a fault that does not exist. Both say the one true thing —
+// nothing extracted this — and differ only on why.
+const noSecretaryNotice = "**NOT EXTRACTED — this room has no secretary, so nothing read the discussion for decisions.** " +
+	"This is NOT a finding that the room decided nothing; read the turns below. " +
+	"To extract them now, name a recorder: `bashy meet amend <id> --secretary AGENT`.\n"
+
+// unextracted returns the notice that fits why nothing was extracted.
+func unextracted(st *State) string {
+	if st.recorded() {
+		return noSynthesisNotice
+	}
+	return noSecretaryNotice
+}
+
 func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Meeting — %s\n", st.Topic)
@@ -499,7 +516,9 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	if st.chaired() {
 		attendees = append(attendees, st.chair()+" (chair)")
 	}
-	attendees = append(attendees, st.Secretary+" (secretary)")
+	if st.recorded() {
+		attendees = append(attendees, st.secretary()+" (secretary)")
+	}
 	fmt.Fprintf(&b, "Attendees: %s\n", strings.Join(attendees, " · "))
 	if len(st.Context) > 0 {
 		fmt.Fprintf(&b, "Context reviewed: %s\n", strings.Join(st.Context, " · "))
@@ -532,11 +551,12 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	b.WriteString("## Decisions\n")
 	switch {
 	case len(decisions) == 0 && syn == nil:
-		// The secretary never produced a synthesis, so nothing extracted the
-		// decisions. "No decision" would be a success-shaped claim reached by
-		// the ABSENCE of evidence — the exact shape the fleet-evidence
-		// invariant forbids. Say what is actually known: nothing.
-		b.WriteString(noSynthesisNotice)
+		// Nothing extracted the decisions — either the secretary pass failed or
+		// the room has no secretary at all. "No decision" would be a
+		// success-shaped claim reached by the ABSENCE of evidence, the exact
+		// shape the fleet-evidence invariant forbids. Say what is actually
+		// known: nothing.
+		b.WriteString(unextracted(st))
 	case len(decisions) == 0:
 		b.WriteString("(none — the meeting reached no decision)\n")
 	default:
@@ -556,7 +576,7 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 	b.WriteString("\n## Action items\n")
 	switch {
 	case len(actions) == 0 && syn == nil:
-		b.WriteString(noSynthesisNotice)
+		b.WriteString(unextracted(st))
 	case len(actions) == 0:
 		b.WriteString("(none)\n")
 	default:
@@ -598,6 +618,11 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 			fmt.Fprintf(&b, "\n**%s** (chair re-plan after a stall):\n\n%s", e.Speaker, blockquote(redactHome(e.Text), e.File))
 		case "note":
 			fmt.Fprintf(&b, "\n*%s*\n", oneLine(redactHome(e.Text)))
+		case "invite", "kick":
+			// A roster change belongs in the record for the same reason a turn
+			// does: a reader who sees an agent answer from round 4 onward must
+			// be able to tell "it joined then" from "it failed rounds 1-3".
+			fmt.Fprintf(&b, "\n*roster — %s %s*\n", e.Speaker, oneLine(redactHome(e.Text)))
 		}
 	}
 
@@ -698,8 +723,9 @@ func overrideSecretary(st *State, name string) error {
 }
 
 func converge(ctx context.Context, st *State, runner chat.Runner) (*Synthesis, error) {
-	if st.Secretary == "" {
-		return nil, fmt.Errorf("meet: no secretary configured for %s", st.ID)
+	if !st.recorded() {
+		return nil, fmt.Errorf("meet: %s has no secretary, so there is nothing to run a synthesis pass with — "+
+			"name one with `bashy meet amend %s --secretary AGENT`", st.ID, st.ID)
 	}
 	events, _ := readTranscript(st.ID)
 	res, err := chat.Invoke(ctx, chat.Options{
@@ -852,10 +878,17 @@ func confirmConclusion(ctx context.Context, st *State, in io.Reader, out io.Writ
 	brief := fmt.Sprintf("%d rounds, %d turns, %d decisions, %d action items", st.Round, countKind(events, "turn"), dec, act)
 
 	if kind == "agent" {
+		// Only claim a synthesis exists when one does — a room with no secretary
+		// has none, and pointing the initiator at it would send it looking for
+		// something that was never written.
+		where := "The transcript is below."
+		if syn != nil {
+			where = "The secretary's synthesis is in the transcript below."
+		}
 		instr := fmt.Sprintf(
-			"You convened this meeting (topic: %q). It has run %s. The secretary's synthesis is in the transcript below.\n\n"+
+			"You convened this meeting (topic: %q). It has run %s. %s\n\n"+
 				"Has the meeting achieved what you convened it for? Reply on the FIRST line with EXACTLY one word: "+
-				"CONCLUDE or CONTINUE. On the next line give one sentence of reason.", st.Topic, brief)
+				"CONCLUDE or CONTINUE. On the next line give one sentence of reason.", st.Topic, brief, where)
 		// nil persist: the initiator's CONCLUDE/CONTINUE reply is not a transcript
 		// turn — what gets recorded below is the derived `confirm` event.
 		ev, err := invokeAgent(ctx, st, who, "", instr, "conclude?", runner, nil)
@@ -936,7 +969,10 @@ func closeMeeting(ctx context.Context, st *State, opt closeOptions, runner chat.
 	if opt.Out == nil {
 		opt.Out = io.Discard
 	}
-	if opt.Synthesize {
+	// A room with no secretary has no pass to run. Skipping it silently is the
+	// point: warning that the "secretary pass failed" would report a fault for a
+	// room that was never asked to keep minutes.
+	if opt.Synthesize && st.recorded() {
 		if _, err := converge(ctx, st, runner); err != nil {
 			fmt.Fprintf(opt.Out, "meet: ⚠ secretary pass failed, filing without a synthesis: %v\n", err)
 		}

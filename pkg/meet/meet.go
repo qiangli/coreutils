@@ -63,7 +63,7 @@ func NewMeetCmd() *cobra.Command {
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.AddCommand(
 		newStartCmd(), newConsultCmd(), newTellCmd(), newRoundCmd(),
-		newPollCmd(), newAskCmd(),
+		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
 		newConvergeCmd(), newCloseCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
 		newObserveCmd(), newServeCmd(), newSayCmd(),
@@ -128,7 +128,12 @@ func printPreview(w io.Writer, st *State) {
 		fmt.Fprintf(w, "  room         %d   ← `bashy meet observe %d` to watch it live\n", st.Room, st.Room)
 	}
 	fmt.Fprintf(w, "  initiator    %s\n", st.initiatorLabel())
-	fmt.Fprintf(w, "  secretary    %s  records only, decides nothing — %s · %s\n", st.Secretary, drivability(st.Secretary), shellRouting(st.Secretary))
+	if st.recorded() {
+		fmt.Fprintf(w, "  secretary    %s  records only, decides nothing — %s · %s\n",
+			st.secretary(), drivability(st.secretary()), shellRouting(st.secretary()))
+	} else {
+		fmt.Fprintln(w, "  secretary    (none — this room keeps no minutes; nothing extracts its decisions)")
+	}
 	if st.chaired() {
 		fmt.Fprintf(w, "  chair        %s  directs, never argues — %s · %s\n", st.chair(), drivability(st.chair()), shellRouting(st.chair()))
 	} else {
@@ -199,7 +204,9 @@ func (sf *sessionFlags) bind(cmd *cobra.Command) {
 	f.StringVar(&sf.topic, "topic", "", "meeting topic (required)")
 	f.StringArrayVar(&sf.participants, "participant", nil, "participant agent — decides content (repeatable)")
 	f.IntVar(&sf.minBand, "min-band", 0, "seat every operable agent at this capability band or above (1-4), instead of naming them")
-	f.StringVar(&sf.secretary, "secretary", "claude", "secretary agent — records, decides nothing; never a participant or the chair")
+	f.StringVar(&sf.secretary, "secretary", "claude",
+		"secretary agent — records, decides nothing; never a participant or the chair. "+
+			"Pass --secretary \"\" for a room that keeps no minutes: a conversation rather than a meeting")
 	f.StringVar(&sf.chair, "chair", "", "chair agent — directs the discussion and judges done-ness; empty means round-robin with no chair")
 	f.StringArrayVar(&sf.agenda, "agenda", nil, "agenda item (repeatable)")
 	f.StringArrayVar(&sf.context, "context", nil, "file every participant reads before its first turn (repeatable)")
@@ -623,9 +630,14 @@ func repl(cmd *cobra.Command, st *State) error {
 	w := cmd.OutOrStdout()
 	sc := bufio.NewScanner(cmd.InOrStdin())
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	fmt.Fprintf(w, "\nmeet %s · secretary=%s(notes-only) · participants: %s\n",
-		st.ID, st.Secretary, strings.Join(st.Participants, ", "))
+	secretary := "none (this room keeps no minutes)"
+	if st.recorded() {
+		secretary = st.secretary() + "(notes-only)"
+	}
+	fmt.Fprintf(w, "\nmeet %s · secretary=%s · participants: %s\n",
+		st.ID, secretary, strings.Join(st.Participants, ", "))
 	fmt.Fprintln(w, "commands: <text> | @name <text> | /round | /chair | /poll <q> | /ask <q> |")
+	fmt.Fprintln(w, "          /invite <agent> | /kick <agent> |")
 	fmt.Fprintln(w, "          /decision <t> | /action owner: task | /agenda <t> | /show | /converge | /close")
 	fmt.Fprint(w, "you> ")
 	for sc.Scan() {
@@ -720,6 +732,22 @@ func repl(cmd *cobra.Command, st *State) error {
 			t := strings.TrimSpace(line[len("/action "):])
 			_, _ = record(st, "action", st.Human, "", t)
 			fmt.Fprintf(w, "⏺ recorded ACTION: %s\n", t)
+		case strings.HasPrefix(line, "/invite "):
+			// The actor is whoever is at this keyboard — the room's human. If
+			// somebody else convened the room, requireOrganizer says so.
+			name := strings.TrimSpace(line[len("/invite "):])
+			if err := inviteTo(st, st.Human, name); err != nil {
+				fmt.Fprintf(w, "⏺ %v\n", err)
+				break
+			}
+			fmt.Fprintf(w, "⏺ %s joined — participants: %s\n", seatLabel(canonAgent(name)), strings.Join(st.Participants, ", "))
+		case strings.HasPrefix(line, "/kick "):
+			name := strings.TrimSpace(line[len("/kick "):])
+			if err := kickFrom(st, st.Human, name); err != nil {
+				fmt.Fprintf(w, "⏺ %v\n", err)
+				break
+			}
+			fmt.Fprintf(w, "⏺ %s left — participants: %s\n", seatLabel(canonAgent(name)), strings.Join(st.Participants, ", "))
 		case strings.HasPrefix(line, "/agenda "):
 			t := strings.TrimSpace(line[len("/agenda "):])
 			st.Agenda = append(st.Agenda, t)
@@ -849,6 +877,66 @@ func newAskCmd() *cobra.Command {
 	f.StringVar(&question, "question", "", "the open question (required)")
 	f.StringArrayVar(&participants, "participant", nil, "ask only these participants (default: all)")
 	f.BoolVar(&required, "required", false, "an empty answer is a failure, not an abstention")
+	return cmd
+}
+
+// newInviteCmd and newKickCmd change the roster of a RUNNING room. Both take a
+// room reference rather than an id, because the human doing it is looking at
+// `bashy meet list` and will type the room number.
+func newInviteCmd() *cobra.Command {
+	var as string
+	cmd := &cobra.Command{
+		Use:   "invite <ref> <agent>",
+		Short: "seat an agent in a running room (organizer only)",
+		Long: "Add an agent to a room that is already open. It speaks from the next round on.\n\n" +
+			"Only the organizer — whoever convened the room — may change its roster.\n" +
+			"Inviting somebody already seated is a no-op, not a second seat.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			actor := strings.TrimSpace(as)
+			if actor == "" {
+				actor = humanName()
+			}
+			if err := Invite(args[0], actor, args[1]); err != nil {
+				return err
+			}
+			st, err := loadMeeting(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s is in %s — participants: %s\n",
+				seatLabel(canonAgent(args[1])), st.ID, strings.Join(st.Participants, ", "))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&as, "as", "", "act as this member (default: the human); must be the room's organizer")
+	return cmd
+}
+
+func newKickCmd() *cobra.Command {
+	var as string
+	cmd := &cobra.Command{
+		Use:   "kick <ref> <agent>",
+		Short: "remove an agent from a running room (organizer only)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			actor := strings.TrimSpace(as)
+			if actor == "" {
+				actor = humanName()
+			}
+			if err := Kick(args[0], actor, args[1]); err != nil {
+				return err
+			}
+			st, err := loadMeeting(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s left %s — participants: %s\n",
+				seatLabel(canonAgent(args[1])), st.ID, strings.Join(st.Participants, ", "))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&as, "as", "", "act as this member (default: the human); must be the room's organizer")
 	return cmd
 }
 
