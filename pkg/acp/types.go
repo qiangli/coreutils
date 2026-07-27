@@ -1,7 +1,6 @@
-// Package acp is a small, bashy-owned client for the Agent Client Protocol
-// (ACP). It launches an ACP agent subprocess, drives a prompt turn, and
-// surfaces what the turn did — streamed text and, crucially, the files the
-// agent reported touching (see RecordingHandler).
+// Package acp is a small, bashy-owned adapter for the Agent Client Protocol
+// (ACP). It can both launch and drive an ACP agent subprocess and serve a
+// bashy runner as an ACP agent over newline-delimited JSON-RPC.
 //
 // The public surface of this package is deliberately SDK-free: no type here
 // is an alias to, and no exported signature mentions, the underlying
@@ -11,7 +10,11 @@
 // need to import it. api_external_test.go pins this invariant.
 package acp
 
-import "context"
+import (
+	"context"
+
+	"github.com/qiangli/coreutils/pkg/herald"
+)
 
 // ProtocolVersionNumber is the ACP protocol version this client speaks.
 const ProtocolVersionNumber = 1
@@ -72,6 +75,70 @@ type ContentBlock struct {
 
 // TextBlock creates a text content block for use in prompts.
 func TextBlock(s string) ContentBlock { return ContentBlock{Text: s} }
+
+// ClientCapabilities is the stable v1 client surface visible to a served
+// agent. Omitted capabilities remain false: absence never implies support.
+//
+// Only the stable filesystem and terminal capabilities are modelled here.
+// Unstable SDK additions deliberately do not leak into bashy's internal API.
+type ClientCapabilities struct {
+	FSReadTextFile  bool
+	FSWriteTextFile bool
+	Terminal        bool
+}
+
+// TurnRequest is one prompt delivered to a Runner.
+type TurnRequest struct {
+	SessionID    string
+	Cwd          string
+	Prompt       []ContentBlock
+	Capabilities ClientCapabilities
+}
+
+// TurnResponse is the runner's self-reported result before verification.
+type TurnResponse struct {
+	Text       string
+	StopReason StopReason
+}
+
+// Runner executes turns for an ACP agent. The context is cancelled when the
+// ACP client sends session/cancel.
+type Runner interface {
+	Run(context.Context, TurnRequest) (TurnResponse, error)
+}
+
+// RunnerFunc adapts a function to Runner.
+type RunnerFunc func(context.Context, TurnRequest) (TurnResponse, error)
+
+// Run implements Runner.
+func (f RunnerFunc) Run(ctx context.Context, req TurnRequest) (TurnResponse, error) {
+	return f(ctx, req)
+}
+
+// AgentOptions configures the agent-side ACP adapter.
+type AgentOptions struct {
+	// Gate is the local command that decides whether an end_turn claim passed.
+	// An empty gate leaves the turn conformant but unverified.
+	Gate string
+	// GateDir overrides the gate working directory. When empty, the session
+	// working directory is used.
+	GateDir string
+	// OnResult receives the verified result after every completed prompt.
+	OnResult func(AgentResult)
+}
+
+// AgentResult is the verified outcome of a served prompt.
+type AgentResult struct {
+	SessionID         string
+	Text              string
+	ClaimedStopReason StopReason
+	StopReason        StopReason
+	Gate              herald.GateOutcome
+}
+
+// Succeeded is the only success predicate callers should use. As with
+// herald.Result, an absent gate is unverified and therefore not success.
+func (r AgentResult) Succeeded() bool { return r.Gate.Trusted() }
 
 // ToolCallStatus is the execution state of a tool call.
 type ToolCallStatus string

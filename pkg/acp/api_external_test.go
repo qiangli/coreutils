@@ -9,6 +9,7 @@ package acp_test
 
 import (
 	"context"
+	"io"
 	"os/exec"
 	"reflect"
 	"testing"
@@ -26,6 +27,9 @@ var (
 	_ func(*acp.Client) error                                                    = (*acp.Client).Close
 	_ func(*acp.Client) error                                                    = (*acp.Client).Kill
 	_ func(*acp.Client) int                                                      = (*acp.Client).ProtocolVersion
+	_ func(acp.Runner, acp.AgentOptions, io.Reader, io.Writer) *acp.Agent        = acp.NewAgent
+	_ func(*acp.Agent) <-chan struct{}                                           = (*acp.Agent).Done
+	_ func(*acp.Agent, string) (acp.AgentResult, bool)                           = (*acp.Agent).LastResult
 )
 
 // extHandler proves the public Handler interface is implementable from outside
@@ -93,6 +97,26 @@ func TestPublicAPIIsSDKFree(t *testing.T) {
 	_ = acp.PermissionResponse{OptionID: "x", Cancelled: false}
 	_ = acp.PermissionAllowAlways
 	_ = acp.PermissionRejectOnce
+
+	// Agent-side request/result types remain SDK-free.
+	var runner acp.Runner = acp.RunnerFunc(func(_ context.Context, req acp.TurnRequest) (acp.TurnResponse, error) {
+		_ = req.SessionID
+		_ = req.Cwd
+		_ = req.Prompt
+		_ = req.Capabilities.FSReadTextFile
+		_ = req.Capabilities.FSWriteTextFile
+		_ = req.Capabilities.Terminal
+		return acp.TurnResponse{Text: "done", StopReason: acp.StopReasonEndTurn}, nil
+	})
+	_ = runner
+	_ = acp.AgentOptions{Gate: "go test ./...", GateDir: ".", OnResult: func(result acp.AgentResult) {
+		_ = result.SessionID
+		_ = result.Text
+		_ = result.ClaimedStopReason
+		_ = result.StopReason
+		_ = result.Gate
+		_ = result.Succeeded()
+	}}
 
 	// RecordingHandler over bashy SessionNotification / SessionUpdate /
 	// ToolCall / ToolCallLocation, then read back bashy-owned results.

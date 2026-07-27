@@ -2,10 +2,15 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os/exec"
+	"sync"
+	"sync/atomic"
 
 	sdk "github.com/coder/acp-go-sdk"
+	"github.com/qiangli/coreutils/pkg/herald"
 )
 
 // This is the ONE file that imports the ACP SDK. Every SDK type stays behind
@@ -42,14 +47,25 @@ func NewClient(ctx context.Context, handler Handler, cmd *exec.Cmd) (*Client, er
 	conn := sdk.NewClientSideConnection(sdkAdapter{h: handler}, stdin, stdout)
 
 	initResp, err := conn.Initialize(ctx, sdk.InitializeRequest{
-		ProtocolVersion:    sdk.ProtocolVersionNumber,
-		ClientCapabilities: sdk.ClientCapabilities{},
+		ProtocolVersion: sdk.ProtocolVersion(ProtocolVersionNumber),
+		ClientCapabilities: sdk.ClientCapabilities{
+			Fs:       sdk.FileSystemCapabilities{},
+			Terminal: false,
+		},
 	})
 	if err != nil {
 		// Reap the subprocess we just started so it does not linger.
 		cmd.Process.Kill()
 		cmd.Wait()
 		return nil, fmt.Errorf("acp: initialize: %w", err)
+	}
+	if int(initResp.ProtocolVersion) != ProtocolVersionNumber {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return nil, fmt.Errorf(
+			"acp: incompatible protocol version %d (want %d)",
+			initResp.ProtocolVersion, ProtocolVersionNumber,
+		)
 	}
 
 	return &Client{
@@ -59,9 +75,7 @@ func NewClient(ctx context.Context, handler Handler, cmd *exec.Cmd) (*Client, er
 	}, nil
 }
 
-// ProtocolVersion reports the protocol version the agent negotiated during
-// initialize. A value the caller does not speak (e.g. a v2-only peer) is how
-// an incompatible agent is detected.
+// ProtocolVersion reports the strictly negotiated protocol version.
 func (c *Client) ProtocolVersion() int { return c.protocolVersion }
 
 // NewSession creates a session with the given absolute working directory.
@@ -120,6 +134,208 @@ func (c *Client) Close() error {
 		return killErr
 	}
 	return waitErr
+}
+
+// Agent serves a Runner through the ACP v1 agent-side connection.
+type Agent struct {
+	conn   *sdk.AgentSideConnection
+	runner Runner
+	opts   AgentOptions
+
+	mu           sync.RWMutex
+	sessions     map[string]string
+	capabilities ClientCapabilities
+	results      map[string]AgentResult
+	nextSession  atomic.Uint64
+}
+
+// NewAgent exposes runner as an ACP v1 agent over input/output. The SDK owns
+// newline-delimited JSON-RPC framing; callers should normally pass os.Stdin
+// and os.Stdout from the eventual "bashy acp" command.
+func NewAgent(runner Runner, opts AgentOptions, input io.Reader, output io.Writer) *Agent {
+	a := &Agent{
+		runner:   runner,
+		opts:     opts,
+		sessions: make(map[string]string),
+		results:  make(map[string]AgentResult),
+	}
+	a.conn = sdk.NewAgentSideConnection(a, output, input)
+	return a
+}
+
+// Done is closed when the ACP connection stops.
+func (a *Agent) Done() <-chan struct{} { return a.conn.Done() }
+
+// LastResult returns the latest verified result for sessionID.
+func (a *Agent) LastResult(sessionID string) (AgentResult, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	r, ok := a.results[sessionID]
+	return r, ok
+}
+
+// Compile-time check that Agent satisfies the SDK's agent interface.
+var _ sdk.Agent = (*Agent)(nil)
+
+func (a *Agent) Initialize(_ context.Context, req sdk.InitializeRequest) (sdk.InitializeResponse, error) {
+	if int(req.ProtocolVersion) != ProtocolVersionNumber {
+		return sdk.InitializeResponse{}, fmt.Errorf(
+			"acp: unsupported protocol version %d (want %d)",
+			req.ProtocolVersion, ProtocolVersionNumber,
+		)
+	}
+
+	// Fail closed: the SDK's zero values preserve the v1 rule that omitted
+	// capabilities are unsupported.
+	a.mu.Lock()
+	a.capabilities = ClientCapabilities{
+		FSReadTextFile:  req.ClientCapabilities.Fs.ReadTextFile,
+		FSWriteTextFile: req.ClientCapabilities.Fs.WriteTextFile,
+		Terminal:        req.ClientCapabilities.Terminal,
+	}
+	a.mu.Unlock()
+
+	return sdk.InitializeResponse{
+		ProtocolVersion:   sdk.ProtocolVersion(ProtocolVersionNumber),
+		AgentCapabilities: sdk.AgentCapabilities{},
+		AuthMethods:       []sdk.AuthMethod{},
+	}, nil
+}
+
+func (a *Agent) NewSession(_ context.Context, req sdk.NewSessionRequest) (sdk.NewSessionResponse, error) {
+	id := fmt.Sprintf("bashy-%d", a.nextSession.Add(1))
+	a.mu.Lock()
+	a.sessions[id] = req.Cwd
+	a.mu.Unlock()
+	return sdk.NewSessionResponse{SessionId: sdk.SessionId(id)}, nil
+}
+
+func (a *Agent) Prompt(ctx context.Context, req sdk.PromptRequest) (sdk.PromptResponse, error) {
+	sessionID := string(req.SessionId)
+	a.mu.RLock()
+	cwd, ok := a.sessions[sessionID]
+	caps := a.capabilities
+	a.mu.RUnlock()
+	if !ok {
+		return sdk.PromptResponse{}, fmt.Errorf("acp: unknown session %q", sessionID)
+	}
+	if a.runner == nil {
+		return sdk.PromptResponse{}, fmt.Errorf("acp: no runner configured")
+	}
+
+	prompt := make([]ContentBlock, 0, len(req.Prompt))
+	for _, block := range req.Prompt {
+		prompt = append(prompt, fromSDKContent(block))
+	}
+	claimed, err := a.runner.Run(ctx, TurnRequest{
+		SessionID:    sessionID,
+		Cwd:          cwd,
+		Prompt:       prompt,
+		Capabilities: caps,
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			claimed.StopReason = StopReasonCancelled
+		} else {
+			return sdk.PromptResponse{}, fmt.Errorf("acp: run prompt: %w", err)
+		}
+	}
+	if claimed.StopReason == "" && errors.Is(ctx.Err(), context.Canceled) {
+		claimed.StopReason = StopReasonCancelled
+	}
+	if !validStopReason(claimed.StopReason) {
+		return sdk.PromptResponse{}, fmt.Errorf("acp: invalid stop reason %q", claimed.StopReason)
+	}
+
+	// Cancellation is a successful prompt response. Do not attempt output or
+	// gate work with a cancelled context.
+	if claimed.StopReason != StopReasonCancelled && claimed.Text != "" {
+		if err := a.conn.SessionUpdate(ctx, sdk.SessionNotification{
+			SessionId: req.SessionId,
+			Update: sdk.SessionUpdate{
+				AgentMessageChunk: &sdk.SessionUpdateAgentMessageChunk{
+					Content:       toSDKContent(TextBlock(claimed.Text)),
+					SessionUpdate: "agent_message_chunk",
+				},
+			},
+		}); err != nil {
+			return sdk.PromptResponse{}, fmt.Errorf("acp: stream response: %w", err)
+		}
+	}
+
+	result := a.verifyTurn(ctx, sessionID, cwd, claimed)
+	a.mu.Lock()
+	a.results[sessionID] = result
+	a.mu.Unlock()
+	if a.opts.OnResult != nil {
+		a.opts.OnResult(result)
+	}
+	return sdk.PromptResponse{StopReason: sdk.StopReason(result.StopReason)}, nil
+}
+
+func (a *Agent) verifyTurn(ctx context.Context, sessionID, cwd string, claimed TurnResponse) AgentResult {
+	result := AgentResult{
+		SessionID:         sessionID,
+		Text:              claimed.Text,
+		ClaimedStopReason: claimed.StopReason,
+		StopReason:        claimed.StopReason,
+	}
+	if claimed.StopReason == StopReasonCancelled {
+		return result
+	}
+
+	gateDir := a.opts.GateDir
+	if gateDir == "" {
+		gateDir = cwd
+	}
+	result.Gate = herald.RunLocalGate(ctx, gateDir, a.opts.Gate, string(claimed.StopReason))
+	if claimed.StopReason == StopReasonEndTurn && result.Gate.Ran && !result.Gate.Passed {
+		// ACP v1 has no generic "verification failed" stop reason. Refusal is
+		// the fail-closed legal response: never preserve an unverified
+		// end_turn claim as success.
+		result.StopReason = StopReasonRefusal
+	}
+	return result
+}
+
+func validStopReason(reason StopReason) bool {
+	switch reason {
+	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonMaxTurnRequests,
+		StopReasonRefusal, StopReasonCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func (*Agent) Cancel(context.Context, sdk.CancelNotification) error { return nil }
+
+func (*Agent) Authenticate(context.Context, sdk.AuthenticateRequest) (sdk.AuthenticateResponse, error) {
+	return sdk.AuthenticateResponse{}, fmt.Errorf("acp: authentication not offered")
+}
+
+func (*Agent) Logout(context.Context, sdk.LogoutRequest) (sdk.LogoutResponse, error) {
+	return sdk.LogoutResponse{}, fmt.Errorf("acp: logout not offered")
+}
+
+func (*Agent) CloseSession(context.Context, sdk.CloseSessionRequest) (sdk.CloseSessionResponse, error) {
+	return sdk.CloseSessionResponse{}, fmt.Errorf("acp: session close not offered")
+}
+
+func (*Agent) ListSessions(context.Context, sdk.ListSessionsRequest) (sdk.ListSessionsResponse, error) {
+	return sdk.ListSessionsResponse{}, fmt.Errorf("acp: session list not offered")
+}
+
+func (*Agent) ResumeSession(context.Context, sdk.ResumeSessionRequest) (sdk.ResumeSessionResponse, error) {
+	return sdk.ResumeSessionResponse{}, fmt.Errorf("acp: session resume not offered")
+}
+
+func (*Agent) SetSessionConfigOption(context.Context, sdk.SetSessionConfigOptionRequest) (sdk.SetSessionConfigOptionResponse, error) {
+	return sdk.SetSessionConfigOptionResponse{}, fmt.Errorf("acp: session configuration not offered")
+}
+
+func (*Agent) SetSessionMode(context.Context, sdk.SetSessionModeRequest) (sdk.SetSessionModeResponse, error) {
+	return sdk.SetSessionModeResponse{}, fmt.Errorf("acp: session modes not offered")
 }
 
 // sdkAdapter bridges a bashy-owned Handler to the SDK's acp.Client interface.

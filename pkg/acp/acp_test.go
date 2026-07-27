@@ -3,7 +3,9 @@ package acp
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/coder/acp-go-sdk"
 )
@@ -67,6 +69,27 @@ func newPipeClient(t *testing.T, handler Handler, agent *fakeAgent) *Client {
 		t.Fatalf("initialize: %v", err)
 	}
 	return &Client{conn: conn, protocolVersion: int(initResp.ProtocolVersion)}
+}
+
+func newPipeAgentClient(t *testing.T, runner Runner, opts AgentOptions, caps sdk.ClientCapabilities) (*Agent, *sdk.ClientSideConnection) {
+	t.Helper()
+
+	c2aR, c2aW := io.Pipe()
+	a2cR, a2cW := io.Pipe()
+	agent := NewAgent(runner, opts, c2aR, a2cW)
+	client := sdk.NewClientSideConnection(sdkAdapter{h: &BaseHandler{}}, c2aW, a2cR)
+
+	initResp, err := client.Initialize(context.Background(), sdk.InitializeRequest{
+		ProtocolVersion:    sdk.ProtocolVersion(ProtocolVersionNumber),
+		ClientCapabilities: caps,
+	})
+	if err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	if got := int(initResp.ProtocolVersion); got != ProtocolVersionNumber {
+		t.Fatalf("protocol version = %d, want %d", got, ProtocolVersionNumber)
+	}
+	return agent, client
 }
 
 func defaultInit(r sdk.InitializeRequest) (sdk.InitializeResponse, error) {
@@ -207,5 +230,182 @@ func TestPrompt_StreamsThroughRecorder(t *testing.T) {
 	events := rec.ToolCallEvents()
 	if len(events) != 1 || events[0].Status != ToolCallInProgress || events[0].ID != "tc-1" {
 		t.Errorf("ToolCallEvents() = %+v, want one in_progress tc-1", events)
+	}
+}
+
+func TestAgentInitializeV1CapabilitiesFailClosed(t *testing.T) {
+	var got TurnRequest
+	runner := RunnerFunc(func(_ context.Context, req TurnRequest) (TurnResponse, error) {
+		got = req
+		return TurnResponse{StopReason: StopReasonEndTurn}, nil
+	})
+
+	// fs:{} and terminal:false are the minimal v1 client surface. The SDK
+	// encodes false-valued capabilities according to ACP's omission-is-false
+	// rule; the agent must never promote an omitted field to supported.
+	agent, client := newPipeAgentClient(t, runner, AgentOptions{}, sdk.ClientCapabilities{
+		Fs:       sdk.FileSystemCapabilities{},
+		Terminal: false,
+	})
+
+	cwd := t.TempDir()
+	session, err := client.NewSession(context.Background(), sdk.NewSessionRequest{
+		Cwd:        cwd,
+		McpServers: []sdk.McpServer{},
+	})
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	response, err := client.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: session.SessionId,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock("hello")},
+	})
+	if err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if response.StopReason != sdk.StopReasonEndTurn {
+		t.Fatalf("stop reason = %q, want end_turn", response.StopReason)
+	}
+	if got.Capabilities.FSReadTextFile || got.Capabilities.FSWriteTextFile || got.Capabilities.Terminal {
+		t.Errorf("omitted capabilities became supported: %+v", got.Capabilities)
+	}
+	if got.Cwd != cwd {
+		t.Errorf("cwd = %q, want %q", got.Cwd, cwd)
+	}
+	if result, ok := agent.LastResult(string(session.SessionId)); !ok || result.Succeeded() {
+		t.Errorf("ungated result = (%+v, %v), want present and unverified", result, ok)
+	}
+}
+
+func TestAgentInitializeRejectsNonV1(t *testing.T) {
+	c2aR, c2aW := io.Pipe()
+	a2cR, a2cW := io.Pipe()
+	NewAgent(RunnerFunc(func(context.Context, TurnRequest) (TurnResponse, error) {
+		return TurnResponse{StopReason: StopReasonEndTurn}, nil
+	}), AgentOptions{}, c2aR, a2cW)
+	client := sdk.NewClientSideConnection(sdkAdapter{h: &BaseHandler{}}, c2aW, a2cR)
+
+	_, err := client.Initialize(context.Background(), sdk.InitializeRequest{
+		ProtocolVersion: sdk.ProtocolVersion(2),
+	})
+	if err == nil {
+		t.Fatal("initialize protocolVersion 2 succeeded, want strict v1 rejection")
+	}
+	if !strings.Contains(err.Error(), "unsupported protocol version 2") {
+		t.Fatalf("initialize error = %q, want agent's strict v1 rejection", err)
+	}
+}
+
+func TestAgentCancelledTurnIsSuccessfulResponse(t *testing.T) {
+	started := make(chan struct{})
+	runner := RunnerFunc(func(ctx context.Context, _ TurnRequest) (TurnResponse, error) {
+		close(started)
+		<-ctx.Done()
+		return TurnResponse{}, ctx.Err()
+	})
+	_, client := newPipeAgentClient(t, runner, AgentOptions{}, sdk.ClientCapabilities{})
+	session, err := client.NewSession(context.Background(), sdk.NewSessionRequest{
+		Cwd:        t.TempDir(),
+		McpServers: []sdk.McpServer{},
+	})
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	type promptResult struct {
+		response sdk.PromptResponse
+		err      error
+	}
+	done := make(chan promptResult, 1)
+	go func() {
+		response, err := client.Prompt(context.Background(), sdk.PromptRequest{
+			SessionId: session.SessionId,
+			Prompt:    []sdk.ContentBlock{sdk.TextBlock("stop")},
+		})
+		done <- promptResult{response: response, err: err}
+	}()
+
+	<-started
+	if err := client.Cancel(context.Background(), sdk.CancelNotification{SessionId: session.SessionId}); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("cancelled prompt returned JSON-RPC error: %v", got.err)
+		}
+		if got.response.StopReason != sdk.StopReasonCancelled {
+			t.Errorf("stop reason = %q, want cancelled", got.response.StopReason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled prompt did not return")
+	}
+}
+
+func TestAgentFailedGateOverridesEndTurnClaim(t *testing.T) {
+	runner := RunnerFunc(func(context.Context, TurnRequest) (TurnResponse, error) {
+		return TurnResponse{Text: "claimed done", StopReason: StopReasonEndTurn}, nil
+	})
+	agent, client := newPipeAgentClient(t, runner, AgentOptions{Gate: "exit 7"}, sdk.ClientCapabilities{})
+	session, err := client.NewSession(context.Background(), sdk.NewSessionRequest{
+		Cwd:        t.TempDir(),
+		McpServers: []sdk.McpServer{},
+	})
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	response, err := client.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: session.SessionId,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock("finish")},
+	})
+	if err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if response.StopReason != sdk.StopReasonRefusal {
+		t.Errorf("wire stop reason = %q, want legal fail-closed refusal", response.StopReason)
+	}
+	result, ok := agent.LastResult(string(session.SessionId))
+	if !ok {
+		t.Fatal("verified result was not recorded")
+	}
+	if result.ClaimedStopReason != StopReasonEndTurn {
+		t.Errorf("claimed stop reason = %q, want end_turn", result.ClaimedStopReason)
+	}
+	if !result.Gate.Ran || result.Gate.Passed || result.Gate.ExitCode != 7 {
+		t.Errorf("gate = %+v, want ran, failed, exit 7", result.Gate)
+	}
+	if result.Succeeded() {
+		t.Error("failed gate reported success")
+	}
+}
+
+func TestAgentUngatedClientDegradesToConformantACP(t *testing.T) {
+	runner := RunnerFunc(func(context.Context, TurnRequest) (TurnResponse, error) {
+		return TurnResponse{StopReason: StopReasonEndTurn}, nil
+	})
+	agent, client := newPipeAgentClient(t, runner, AgentOptions{}, sdk.ClientCapabilities{})
+	session, err := client.NewSession(context.Background(), sdk.NewSessionRequest{
+		Cwd:        t.TempDir(),
+		McpServers: []sdk.McpServer{},
+	})
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	// This stock SDK client never negotiates or mentions a gate.
+	response, err := client.Prompt(context.Background(), sdk.PromptRequest{
+		SessionId: session.SessionId,
+		Prompt:    []sdk.ContentBlock{sdk.TextBlock("ordinary ACP")},
+	})
+	if err != nil {
+		t.Fatalf("ordinary ACP prompt: %v", err)
+	}
+	if response.StopReason != sdk.StopReasonEndTurn {
+		t.Errorf("stop reason = %q, want conformant end_turn", response.StopReason)
+	}
+	result, ok := agent.LastResult(string(session.SessionId))
+	if !ok || result.Gate.Ran || result.Succeeded() {
+		t.Errorf("degraded result = (%+v, %v), want present and unverified", result, ok)
 	}
 }
