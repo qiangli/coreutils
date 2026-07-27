@@ -122,3 +122,39 @@ func TestRedactingWriterFlushesTailOnClose(t *testing.T) {
 		t.Fatal("Close produced unexpected output")
 	}
 }
+
+// TestRedactorMergesOverlapChain extends the pair case proven by
+// TestOverlappingSecretsSuffixLeak to a CHAIN: A overlaps B, B overlaps C, and C
+// reaches furthest. Merging only the first overlap would still emit C's tail in
+// plaintext, so this pins the behaviour the merge loop actually claims — that the
+// span keeps growing while later matches begin inside it.
+//
+// On failure it reports LENGTHS and a marker, never the surviving text: a test
+// that prints the material it is guarding is the leak it exists to prevent.
+func TestRedactorMergesOverlapChain(t *testing.T) {
+	const a = "AAAAAAAAmmmmmmmm" // 0..15
+	const b = "mmmmmmmmnnnnnnnn" // 8..23
+	const c = "nnnnnnnnZZZZZZZZ" // 16..31
+
+	r := NewRedactor()
+	for name, value := range map[string]string{"A": a, "B": b, "C": c} {
+		if err := r.Register(name, value); err != nil {
+			t.Fatalf("Register(%s) failed: %v", name, err)
+		}
+	}
+
+	input := a + b[8:] + c[8:] + "_tail"
+	got := string(r.Redact([]byte(input)))
+
+	for _, probe := range []struct{ name, frag string }{
+		{"A", "AAAAAAAA"}, {"B", "nnnnnnnn"}, {"C", "ZZZZZZZZ"},
+	} {
+		if strings.Contains(got, probe.frag) {
+			t.Fatalf("chain overlap leaked %d bytes of registered secret %s (output %d bytes)",
+				len(probe.frag), probe.name, len(got))
+		}
+	}
+	if !strings.HasSuffix(got, "_tail") {
+		t.Fatalf("non-secret trailing text was consumed by the merged span (output %d bytes)", len(got))
+	}
+}

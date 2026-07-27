@@ -313,8 +313,25 @@ func (cfg redactorConfig) transformPrefix(b []byte, boundary int) ([]byte, int, 
 	for pos < boundary {
 		candidate := best[pos]
 		if candidate.end > pos {
+			// MERGE OVERLAPPING MATCHES. Taking this match and jumping straight to
+			// its end leaks the TAIL of any registered value that starts inside it
+			// and reaches further: with secrets "AAAAbbbb…" at 0 and "bbbb…CCCC" at
+			// 4, consuming 0..15 emits "CCCC" — real secret material — in plaintext.
+			// So extend the redacted span across every match that begins within it.
+			// `end` grows as we scan, and the loop condition re-reads it, so a chain
+			// of overlaps collapses into one span. `pos` then jumps past the whole
+			// span, making this linear overall rather than quadratic.
+			end := candidate.end
+			for scan := pos + 1; scan < end; scan++ {
+				if best[scan].end > end {
+					end = best[scan].end
+				}
+			}
+			// One placeholder names the value that STARTS the span. A merged span can
+			// involve several secrets; naming the first keeps the output stable, and
+			// an operator who sees it should treat every overlapping value as exposed.
 			out = append(out, candidate.replacement...)
-			pos = candidate.end
+			pos = end
 			continue
 		}
 		out = append(out, b[pos])
