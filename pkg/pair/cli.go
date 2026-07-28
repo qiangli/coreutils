@@ -28,6 +28,10 @@ const ExitProved = 4
 // Nothing the pair did can be attributed. Fix the baseline, then pair.
 const ExitBrokenBefore = 5
 
+// ExitUnmeasured is returned when the after gate was red but no baseline gate was measured.
+// The work is red, but its before state is unknown.
+const ExitUnmeasured = 7
+
 // NewPairCmd builds `bashy pair`.
 //
 // It REPLACES `bashy judge`, which could only ever talk. `judge` remains as a hidden alias
@@ -218,6 +222,8 @@ func runPair(cmd *cobra.Command, task, roleName, proposer, pairAgent, gateOvr, d
 	//                    Send it back to the proposer with the failing test attached.
 	//   ExitBrokenBefore the baseline was already red. The pair's work is unattributable.
 	//                    Fix the baseline, then pair.
+	//   ExitUnmeasured   no baseline was measured and the after gate was red. The work is
+	//                    red, but its before state is unknown.
 	//   1                the plumbing failed. Retry is legitimate.
 	//
 	// Collapsing these into "nonzero" is how a conductor retries a proof nine times.
@@ -226,6 +232,8 @@ func runPair(cmd *cobra.Command, task, roleName, proposer, pairAgent, gateOvr, d
 		os.Exit(ExitProved)
 	case OutcomeBrokenBefore:
 		os.Exit(ExitBrokenBefore)
+	case OutcomeUnmeasured:
+		os.Exit(ExitUnmeasured)
 	}
 	return nil
 }

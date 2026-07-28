@@ -16,6 +16,7 @@ const (
 	weavePairProvedExit       = 4
 	weavePairBrokenBeforeExit = 5
 	weavePairHarnessErrorExit = 6
+	weavePairUnmeasuredExit   = 7
 )
 
 type weavePairVerdict string
@@ -23,6 +24,7 @@ type weavePairVerdict string
 const (
 	weavePairPass         weavePairVerdict = "pass"
 	weavePairBrokenBefore weavePairVerdict = "broken-before"
+	weavePairUnmeasured   weavePairVerdict = "unmeasured"
 	weavePairRefuted      weavePairVerdict = "refuted"
 	weavePairHarnessError weavePairVerdict = "harness-error"
 )
@@ -44,7 +46,8 @@ func (r weavePairReviewResult) verdictLine() string {
 func weavePairExitForVerdict(verdict weavePairVerdict) (int, bool) {
 	code, ok := map[weavePairVerdict]int{
 		weavePairPass: weavePairPassExit, weavePairBrokenBefore: weavePairBrokenBeforeExit,
-		weavePairRefuted: weavePairProvedExit, weavePairHarnessError: weavePairHarnessErrorExit,
+		weavePairUnmeasured: weavePairUnmeasuredExit, weavePairRefuted: weavePairProvedExit,
+		weavePairHarnessError: weavePairHarnessErrorExit,
 	}[verdict]
 	return code, ok
 }
@@ -251,6 +254,8 @@ func runWeavePairReview(workspace, diffRef, gateCommand, requested string, it *w
 		res.Verdict, res.ExitCode, res.Reason = weavePairRefuted, weavePairProvedExit, "pair proved a defect against a green baseline"
 	case "broken-before", "repaired":
 		res.Verdict, res.ExitCode, res.Reason = weavePairBrokenBefore, weavePairBrokenBeforeExit, "verification was already broken before the pair could produce attributable evidence"
+	case "unmeasured":
+		res.Verdict, res.ExitCode, res.Reason = weavePairUnmeasured, weavePairUnmeasuredExit, "the baseline was never measured; the after gate found the work red"
 	default:
 		return weaveNormalizePairReview(res, fmt.Errorf("bashy pair returned unsupported outcome %q", pairResult.Outcome)), nil
 	}
@@ -266,6 +271,7 @@ func runWeavePairReview(workspace, diffRef, gateCommand, requested string, it *w
 
 	if want := map[weavePairVerdict]int{
 		weavePairPass: weavePairPassExit, weavePairRefuted: weavePairProvedExit, weavePairBrokenBefore: weavePairBrokenBeforeExit,
+		weavePairUnmeasured: weavePairUnmeasuredExit,
 	}[res.Verdict]; res.ExitCode != want {
 		return weaveNormalizePairReview(res, fmt.Errorf("bashy pair outcome %q disagrees with exit %d (want %d): %s", pairResult.Outcome, res.ExitCode, want, strings.TrimSpace(stderr.String()))), nil
 	}

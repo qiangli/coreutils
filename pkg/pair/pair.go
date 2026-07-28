@@ -23,6 +23,10 @@ const (
 	// the absence-of-evidence bug. Fix the baseline first.
 	OutcomeBrokenBefore Outcome = "broken-before"
 
+	// OutcomeUnmeasured: the after gate was red, but no baseline gate was measured.
+	// The work is red, but there is no evidence that it was already red before the pair.
+	OutcomeUnmeasured Outcome = "unmeasured"
+
 	// OutcomeProved: the gate was GREEN, the pair acted, and now it is RED.
 	//
 	// This is the money case, and it is a PROOF, not an opinion: the pair wrote something
@@ -95,6 +99,9 @@ func (r *Result) Headline() string {
 	case OutcomeBrokenBefore:
 		return "BROKEN BEFORE — the gate was already red when the pair started. Nothing it did can be " +
 			"attributed. Fix the baseline, then pair."
+	case OutcomeUnmeasured:
+		return "UNMEASURED BASELINE — the baseline gate never ran. The after gate found the work red, " +
+			"but there is no measured before state."
 	case OutcomeUngated:
 		return fmt.Sprintf("UNGATED — %s (%s) produced a claim that nothing checked. Believe it at your own risk.", r.Pair, r.Role)
 	}
@@ -334,13 +341,22 @@ func classify(before, after *GateRun, acts bool) Outcome {
 		return OutcomeUngated
 	}
 
-	// A commentator changed nothing, so there is nothing to attribute. The gate result is a
-	// fact about the PROPOSER's work, not about the pair.
-	if !acts || before == nil {
+	// A commentator changed nothing. A red after gate is therefore a fact about the
+	// PROPOSER's work, but it is not evidence that the unmeasured baseline was red.
+	if !acts {
 		if after.Passed {
 			return OutcomeHeld
 		}
-		return OutcomeBrokenBefore
+		return OutcomeUnmeasured
+	}
+
+	// An acting pair needs a measured baseline to attribute a red after gate. Without one,
+	// the work is red but there is no evidence for either a green or red before state.
+	if before == nil {
+		if after.Passed {
+			return OutcomeHeld
+		}
+		return OutcomeUnmeasured
 	}
 
 	switch {
