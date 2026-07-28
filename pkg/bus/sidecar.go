@@ -8,6 +8,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/room"
+	"github.com/qiangli/coreutils/pkg/spacetime"
 )
 
 // Deliverer performs an INTERRUPT — breaking into a running turn.
@@ -95,6 +96,10 @@ func (s *Sidecar) now() time.Time {
 
 // Run polls until the context is cancelled.
 func (s *Sidecar) Run(ctx context.Context) error {
+	coordinate := spacetime.DefaultProbes(spacetime.NopCache())
+	coordinate.StartMovementMonitor()
+	defer coordinate.Close()
+
 	t := time.NewTicker(s.Poll)
 	defer t.Stop()
 	for {
