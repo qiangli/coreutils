@@ -9,23 +9,33 @@ import (
 
 // THE RUNG LADDER — how well can we hear this tool?
 //
-// Every agent CLI in the fleet is driven through one of four transports, and
+// Every agent CLI in the fleet is driven through one of three transports, and
 // they are not equivalent: they differ in whether bashy KNOWS a turn ended or
 // GUESSES it. The ladder is ordered by that, best first:
 //
 //	1  ACP native     the tool speaks the Agent Client Protocol itself
-//	2  ACP via adapter the tool speaks ACP through an external bridge (a Node
-//	                  adapter, say) — a DEPENDENCY the host may not have, which
-//	                  is the only reason it ranks below native
-//	3  native events   the tool streams NDJSON and says `turn.end` (ycode today)
-//	4  PTY scrape      the tool says nothing; a turn boundary is inferred from
-//	                   25 seconds of silence (chat.Session.WaitIdle)
+//	2  native events  the tool streams NDJSON and says `turn.end` (ycode today)
+//	3  PTY scrape     the tool says nothing; a turn boundary is inferred from
+//	                  25 seconds of silence (chat.Session.WaitIdle)
 //
-// Rungs 1 and 2 are the prize: ACP answers a prompt with a structured
-// StopReason, so the end of a turn is a fact the agent REPORTED rather than a
-// silence bashy interpreted. Rung 3 has the same virtue over a side channel.
-// Rung 4 is the status quo for every third-party CLI, and it stays exactly as
-// it is — the retrofit degrades, it never drops.
+// Rung 1 is the prize: ACP answers a prompt with a structured StopReason, so
+// the end of a turn is a fact the agent REPORTED rather than a silence bashy
+// interpreted. Rung 2 has the same virtue over a side channel. Rung 3 is the
+// status quo for every third-party CLI, and it stays exactly as it is — the
+// retrofit degrades, it never drops.
+//
+// NO ADAPTER RUNG, deliberately. An earlier draft had a rung between 1 and 2
+// for a tool reached through an external ACP bridge (a Node adapter for claude
+// or codex). It is gone by design decision, for two reasons that compound:
+//
+//   - The binary bashy execs must be the TOOL named in the tool:model binding.
+//     An adapter rung necessarily execs something else — the bridge — so the
+//     process running the work is no longer the tool the binding names.
+//   - Nothing was on it. The probe in run #190 found neither claude-agent-acp
+//     nor codex-acp installed, and no catalog entry ever declared one.
+//
+// A tool that cannot speak ACP itself takes rung 3, like any other tool that
+// says nothing. That is the ladder working, not a gap in it.
 //
 // The declaration is the whole input: a tool lands on the highest rung its
 // fleet entry can support, and a tool that declares nothing new lands on the
@@ -33,14 +43,13 @@ import (
 type Rung int
 
 const (
-	// RungACPNative is rung 1: acp_exec set, acp_rung "native".
+	// RungACPNative is rung 1: acp_exec set. The tool speaks ACP itself;
+	// there is no other way onto this rung.
 	RungACPNative Rung = 1
-	// RungACPAdapter is rung 2: acp_exec set, acp_rung "adapter".
-	RungACPAdapter Rung = 2
-	// RungEvents is rung 3: events_arg set (a real turn.end over NDJSON).
-	RungEvents Rung = 3
-	// RungPTY is rung 4: a pty and the silence heuristic. Everything else.
-	RungPTY Rung = 4
+	// RungEvents is rung 2: events_arg set (a real turn.end over NDJSON).
+	RungEvents Rung = 2
+	// RungPTY is rung 3: a pty and the silence heuristic. Everything else.
+	RungPTY Rung = 3
 )
 
 // String names the rung the way the design doc does.
@@ -48,8 +57,6 @@ func (r Rung) String() string {
 	switch r {
 	case RungACPNative:
 		return "acp-native"
-	case RungACPAdapter:
-		return "acp-adapter"
 	case RungEvents:
 		return "events"
 	case RungPTY:
@@ -59,23 +66,18 @@ func (r Rung) String() string {
 }
 
 // IsACP reports whether this rung drives the tool over the Agent Client
-// Protocol — the two rungs with a real end-of-turn signal.
-func (r Rung) IsACP() bool { return r == RungACPNative || r == RungACPAdapter }
+// Protocol — the one rung with a real end-of-turn signal from the tool itself.
+func (r Rung) IsACP() bool { return r == RungACPNative }
 
 // RungFor is THE rung-selection function: given a tool's launch declaration,
 // which transport does it get?
 //
 // It reads declarations only — no env, no host probing, no catalog lookup — so
 // it is a pure function of what the registry says, and a test can pin all four
-// answers. ACPExec is authoritative for the ACP rungs; ACPRung only decides
-// WHICH of the two, and an unrecognized (or empty) value means native, because
-// the field is documented as advisory and a tool that declares an exec and no
-// rung is claiming to speak ACP itself.
+// answers. ACPExec alone is authoritative: a tool that declares one is claiming
+// to speak ACP itself, and there is no second ACP rung to disambiguate.
 func RungFor(l fleet.ToolLaunch) Rung {
 	if strings.TrimSpace(l.ACPExec) != "" {
-		if strings.EqualFold(strings.TrimSpace(l.ACPRung), "adapter") {
-			return RungACPAdapter
-		}
 		return RungACPNative
 	}
 	if strings.TrimSpace(l.EventsArg) != "" {
@@ -124,31 +126,27 @@ func ACPEnabled() bool {
 // it. It reports false when the tool declares no acp_exec, i.e. it is not on an
 // ACP rung and the caller must fall to the next one.
 //
-// {model} substitutes exactly as it does in Exec, including dropping an
-// orphaned flag when no model was selected. There is no {prompt}: an ACP prompt
-// travels in the session, not in argv, which is the whole reason the transport
-// has a real turn boundary at all.
+// The binary is ALWAYS the tool's declared binary — the tool named in the
+// tool:model binding, never something else. There is no adapter rung, so there
+// is no case in which the process bashy launches is not the tool itself.
 //
-// # Which executable
+// # No {prompt}, and no {model}
 //
-// The two ACP rungs answer this DIFFERENTLY, and getting it wrong is silent:
+// There is no {prompt}: an ACP prompt travels in the session, not in argv,
+// which is the whole reason the transport has a real turn boundary at all.
 //
-//   - rung 1 (native): the tool speaks ACP itself, so the process to spawn is
-//     the tool. The template's first field names it the way every other launch
-//     template does, and the executable is the tool's declared binary — the
-//     registry's binary path is authoritative over a bare name in a template.
-//   - rung 2 (adapter): ACP is reached through an EXTERNAL BRIDGE — `npx
-//     @zed/claude-code-acp`, say — and the tool's own binary is not in that
-//     argv at all. The process to spawn is the ADAPTER, which is exactly what
-//     the template's first field names.
+// There is no {model} either, and that is a DESIGN DECISION rather than an
+// omission. Over ACP a tool is driven with its binding already fixed: an agent
+// IS a tool:model pair, chosen by tool and band, and the protocol carries no
+// model-selection call for a client to override it with. The one ACP-native
+// tool in the catalog agrees — `opencode acp` accepts no model flag at all
+// (--print-logs --log-level --pure --port --hostname --mdns --cors --cwd).
 //
-// Resolving rung 2 to the tool binary would exec the tool and then speak
-// JSON-RPC at something that does not answer it: the tool would open its
-// ordinary interface, the handshake would hang or fail, and the failure would
-// look like "the agent would not start" rather than "we launched the wrong
-// program". No adapter is installed on any host in the fleet today, so nothing
-// at runtime will catch this — it has to be right in code.
-func ACPArgv(t fleet.Tool, modelID string) (bin string, args []string, ok bool) {
+// The practical consequence, stated plainly because it constrains routing: on
+// an ACP rung a tool:model binding collapses to the tool. The model is whatever
+// that tool is configured to use. A caller that needs a specific model must
+// pick a tool whose configuration provides it, or take a non-ACP rung.
+func ACPArgv(t fleet.Tool, _ string) (bin string, args []string, ok bool) {
 	tmpl := strings.TrimSpace(t.CLI.Launch.ACPExec)
 	if tmpl == "" {
 		return "", nil, false
@@ -157,37 +155,5 @@ func ACPArgv(t fleet.Tool, modelID string) (bin string, args []string, ok bool) 
 	if len(fields) == 0 {
 		return "", nil, false
 	}
-	out := make([]string, 0, len(fields)-1)
-	for _, f := range fields[1:] {
-		if f == fleet.ModelToken {
-			if modelID != "" {
-				out = append(out, modelID)
-			} else if n := len(out); n > 0 && strings.HasPrefix(out[n-1], "-") {
-				out = out[:n-1] // drop the orphaned flag, as renderLaunch does
-			}
-			continue
-		}
-		out = append(out, f)
-	}
-	if RungFor(t.CLI.Launch) == RungACPAdapter {
-		return fields[0], out, true
-	}
-	return t.Binary(), out, true
-}
-
-// ACPTakesModel reports whether a tool can select a model on an ACP rung.
-//
-// fleet.Tool.TakesModel looks at the HEADLESS template alone, which is the
-// right question for a headless launch and the wrong one here: a tool reachable
-// ONLY over ACP declares its {model} slot in acp_exec and may have no exec at
-// all. Asked the headless question, the launcher refuses `tool:model` outright
-// — "cannot select a model, so this is a label, not a selection" — and an
-// ACP-only tool loses model selection entirely, which is the one thing a
-// binding exists to do.
-//
-// Either template counts. Widening rather than switching is deliberate: a tool
-// whose exec takes a model and whose acp_exec does not keeps resolving exactly
-// as it does today, so nothing that works now starts failing.
-func ACPTakesModel(t fleet.Tool) bool {
-	return t.TakesModel() || strings.Contains(t.CLI.Launch.ACPExec, fleet.ModelToken)
+	return t.Binary(), append([]string(nil), fields[1:]...), true
 }

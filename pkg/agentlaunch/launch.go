@@ -202,11 +202,27 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	}
 	if known {
 		lnch.Tool = tool.Binary()
-		takesModel := tool.TakesModel()
-		if opt.ACP {
-			takesModel = ACPTakesModel(tool)
+		// A BOUND MODEL REFUSES ACP, and the caller falls to the rung below —
+		// which delivers the model the way it always has.
+		//
+		// ACP carries no model-selection call, and the ACP-native tools take no
+		// model flag: `opencode acp --model moonshot/kimi-k3` prints its help
+		// instead of speaking the protocol (measured 2026-07-27 with a real
+		// binding out of `bashy agents list`, not an invented one). So driving
+		// opencode-kimi-k3 over ACP would exec byte-for-byte the same
+		// `opencode acp` process as opencode-deepseek-v4-pro, and all four
+		// opencode agents — L2 through L3 — would collapse into whatever model
+		// that install happens to be configured for.
+		//
+		// That is the fleet-evidence invariant violated exactly: `--min-band 3`
+		// would be SATISFIED BY THE ABSENCE of any check. A slower transport is a
+		// cost; a band that silently lies is a defect. So ACP serves tool-level
+		// bindings only, and a tool:model binding takes a rung that can honour it.
+		if opt.ACP && lnch.Model != "" {
+			return lnch, fmt.Errorf("agent launch: %q binds model %q, which cannot be delivered over ACP — the protocol has no model selection and %q takes no model flag in ACP mode; use a rung that can carry it",
+				name, lnch.Model, tool.Name)
 		}
-		if lnch.Model != "" && !takesModel {
+		if lnch.Model != "" && !tool.TakesModel() {
 			return lnch, fmt.Errorf("agent launch: tool %q cannot select a model, so %q is a label, not a selection (its launch template has no %s)",
 				tool.Name, name, fleet.ModelToken)
 		}

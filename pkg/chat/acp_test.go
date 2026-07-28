@@ -72,7 +72,7 @@ func pinACPCatalog(t *testing.T) {
 				// Deliberately NO steer_exec: a tool can speak ACP and have no
 				// interactive pty launch at all, and that must still be drivable.
 				ACPExec: "fakeacp -test.run=^TestFakeACPAgentHelper$",
-				ACPRung: "native",
+
 			},
 		},
 	}
@@ -81,46 +81,6 @@ func pinACPCatalog(t *testing.T) {
 	}
 }
 
-func pinACPOnlyModelCatalog(t *testing.T) {
-	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("BASHY_FORCE_AGENT_SHELL", "0")
-	t.Setenv("CHAT_FAKE_ACP_AGENT", "1")
-
-	root := t.TempDir()
-	prev := newCatalog
-	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
-	t.Cleanup(func() { newCatalog = prev })
-
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
-	}
-	cat := newCatalog()
-	if err := cat.SaveTool(fleet.Tool{
-		Name: "acponly",
-		Kind: fleet.ToolKindCLI,
-		CLI: fleet.ToolCLI{
-			Binary: self,
-			Launch: fleet.ToolLaunch{
-				ACPExec: "acponly -test.run=^TestFakeACPAgentHelper$ {model}",
-				ACPRung: "native",
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SaveTool: %v", err)
-	}
-	if err := cat.SaveModel(fleet.Model{
-		Name:       "tiny",
-		Kind:       fleet.ModelKindSubscription,
-		Provider:   "test",
-		UpstreamID: "provider-tiny",
-	}); err != nil {
-		t.Fatalf("SaveModel: %v", err)
-	}
-}
-
-// THE ACP PATH, END TO END, over a subprocess and a protocol.
 func TestACPSessionIsDrivenOverTheProtocol(t *testing.T) {
 	pinACPCatalog(t)
 	t.Setenv(agentlaunch.ACPEnv, "1")
@@ -203,33 +163,6 @@ func TestACPSessionIsDrivenOverTheProtocol(t *testing.T) {
 	}
 }
 
-func TestACPOnlyToolCanSelectModelThroughACPExec(t *testing.T) {
-	pinACPOnlyModelCatalog(t)
-	t.Setenv(agentlaunch.ACPEnv, "1")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	s, mine, err := startACPSession(ctx, "acponly:tiny", SessionOptions{Cwd: t.TempDir()})
-	if err != nil {
-		t.Fatalf("startACPSession: %v", err)
-	}
-	if !mine {
-		t.Fatal("startACPSession did not claim an ACP-only model binding")
-	}
-	defer s.Close()
-	if got := s.Rung(); got != agentlaunch.RungACPNative {
-		t.Fatalf("Rung = %s, want %s", got, agentlaunch.RungACPNative)
-	}
-}
-
-// THE NON-REGRESSION TEST, and the one that matters most.
-//
-// It would fail if the ACP branch leaked into the path every session in the
-// fleet takes today. Both halves are checked at the branch point itself
-// (startACPSession reports mine=false, having done NOTHING — no governance, no
-// process, no room card) and at the outcome (Start produces the identical
-// pre-ACP error for a tool with no steerable launch).
 func TestNonACPLaunchesTakeExactlyTheOldPath(t *testing.T) {
 	t.Run("gate off: even an ACP-declaring tool is untouched", func(t *testing.T) {
 		pinACPCatalog(t)
@@ -286,4 +219,53 @@ func acpToolLaunch(t *testing.T) fleet.ToolLaunch {
 		t.Fatal("fakeacp is not in the pinned catalog")
 	}
 	return tool.CLI.Launch
+}
+
+// A BOUND MODEL REFUSES ACP — the routing-correctness guard.
+//
+// ACP carries no model-selection call, and the ACP-native tools take no model
+// flag in ACP mode: `opencode acp --model moonshot/kimi-k3` prints its help
+// instead of speaking the protocol. If a tool:model binding were driven over
+// ACP anyway, every agent sharing that tool would exec the identical process,
+// and their DIFFERENT BANDS would collapse into whatever model the install is
+// configured for. `--min-band 3` would then be satisfied by the absence of any
+// check, which is the fleet-evidence invariant inverted.
+//
+// So a bound model must fall to the rung below, which delivers it. This test
+// exists because that refusal is invisible when it works: the session simply
+// starts on the pty path and looks completely normal.
+func TestBoundModelRefusesACPAndFallsToTheRungBelow(t *testing.T) {
+	pinACPCatalog(t)
+	t.Setenv(agentlaunch.ACPEnv, "1")
+
+	if err := newCatalog().SaveModel(fleet.Model{
+		Name:       "somemodel",
+		Kind:       fleet.ModelKindSubscription,
+		Provider:   "test",
+		UpstreamID: "provider/somemodel",
+	}); err != nil {
+		t.Fatalf("SaveModel: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// The tool itself IS on rung 1 — this is not a tool that lacks acp_exec.
+	tool, ok := newCatalog().Tool("fakeacp")
+	if !ok {
+		t.Fatal("fakeacp missing from the pinned catalog")
+	}
+	if got := agentlaunch.RungFor(tool.CLI.Launch); got != agentlaunch.RungACPNative {
+		t.Fatalf("fakeacp is on rung %s, want acp-native — the test would prove nothing", got)
+	}
+
+	// Tool-only binding: ACP claims it.
+	if _, mine, _ := startACPSession(ctx, "fakeacp", SessionOptions{Cwd: t.TempDir()}); !mine {
+		t.Error("a tool-level binding was NOT driven over ACP; the guard is too broad")
+	}
+
+	// tool:model binding: ACP declines, so the caller falls to the rung below.
+	if _, mine, err := startACPSession(ctx, "fakeacp:somemodel", SessionOptions{Cwd: t.TempDir()}); mine {
+		t.Errorf("a bound model was driven over ACP, collapsing the binding (err=%v)", err)
+	}
 }

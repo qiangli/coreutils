@@ -7,8 +7,8 @@ import (
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
-// THE LADDER TEST. All four rungs, chosen from declarations alone.
-func TestRungForCoversAllFourRungs(t *testing.T) {
+// THE LADDER TEST. All three rungs, chosen from declarations alone.
+func TestRungForCoversEveryRung(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		launch fleet.ToolLaunch
@@ -16,36 +16,22 @@ func TestRungForCoversAllFourRungs(t *testing.T) {
 		str    string
 	}{
 		{
-			name:   "rung 1: acp_exec with acp_rung native",
-			launch: fleet.ToolLaunch{ACPExec: "bashy acp", ACPRung: "native"},
+			name:   "rung 1: acp_exec",
+			launch: fleet.ToolLaunch{ACPExec: "bashy acp"},
 			want:   RungACPNative,
 			str:    "acp-native",
 		},
 		{
-			name:   "rung 2: acp_exec with acp_rung adapter",
-			launch: fleet.ToolLaunch{ACPExec: "npx @zed/claude-acp", ACPRung: "adapter"},
-			want:   RungACPAdapter,
-			str:    "acp-adapter",
-		},
-		{
-			name:   "rung 3: events_arg, no acp_exec",
+			name:   "rung 2: events_arg, no acp_exec",
 			launch: fleet.ToolLaunch{Exec: "ycode prompt {prompt}", EventsArg: "--events {path}"},
 			want:   RungEvents,
 			str:    "events",
 		},
 		{
-			name:   "rung 4: neither",
+			name:   "rung 3: neither",
 			launch: fleet.ToolLaunch{Exec: "agy -p {prompt}"},
 			want:   RungPTY,
 			str:    "pty",
-		},
-		{
-			// ACPExec is AUTHORITATIVE; ACPRung is advisory. A tool that declares
-			// an exec and no rung is claiming to speak ACP itself.
-			name:   "acp_exec with no acp_rung is native",
-			launch: fleet.ToolLaunch{ACPExec: "thing acp"},
-			want:   RungACPNative,
-			str:    "acp-native",
 		},
 		{
 			// The prize outranks the side channel: a tool that can do both is
@@ -56,10 +42,10 @@ func TestRungForCoversAllFourRungs(t *testing.T) {
 			str:    "acp-native",
 		},
 		{
-			// Advisory means advisory: a rung nobody recognizes does not silently
-			// demote a tool that declared an exec.
-			name:   "unknown acp_rung falls to native",
-			launch: fleet.ToolLaunch{ACPExec: "thing acp", ACPRung: "carrier-pigeon"},
+			// There is no adapter rung to demote to: declaring an acp_exec IS
+			// the claim to speak ACP, and it is the only way onto rung 1.
+			name:   "acp_exec alone is the whole claim",
+			launch: fleet.ToolLaunch{ACPExec: "thing acp"},
 			want:   RungACPNative,
 			str:    "acp-native",
 		},
@@ -77,10 +63,9 @@ func TestRungForCoversAllFourRungs(t *testing.T) {
 
 func TestRungIsACP(t *testing.T) {
 	for r, want := range map[Rung]bool{
-		RungACPNative:  true,
-		RungACPAdapter: true,
-		RungEvents:     false,
-		RungPTY:        false,
+		RungACPNative: true,
+		RungEvents:    false,
+		RungPTY:       false,
 	} {
 		if got := r.IsACP(); got != want {
 			t.Errorf("%s.IsACP() = %v, want %v", r, got, want)
@@ -92,7 +77,7 @@ func TestRungIsACP(t *testing.T) {
 // driven on the rung it was already on — one step down the SAME ladder, never
 // a drop.
 func TestEffectiveRungIsGatedByTheOptIn(t *testing.T) {
-	acpOnly := fleet.ToolLaunch{ACPExec: "thing acp", ACPRung: "native"}
+	acpOnly := fleet.ToolLaunch{ACPExec: "thing acp"}
 	acpAndEvents := fleet.ToolLaunch{ACPExec: "ycode acp", EventsArg: "--events {path}"}
 	events := fleet.ToolLaunch{EventsArg: "--events {path}"}
 	pty := fleet.ToolLaunch{Exec: "agy -p {prompt}"}
@@ -178,56 +163,39 @@ func TestBaselineToolsStayOnTheRungTheyAreOnToday(t *testing.T) {
 func TestACPArgvRendersTheTemplate(t *testing.T) {
 	tool := fleet.Tool{
 		Name: "thing",
-		CLI:  fleet.ToolCLI{Binary: "/opt/thing/bin/thing", Launch: fleet.ToolLaunch{ACPExec: "thing acp --model {model}"}},
+		CLI:  fleet.ToolCLI{Binary: "/opt/thing/bin/thing", Launch: fleet.ToolLaunch{ACPExec: "thing acp --pure"}},
 	}
 	bin, args, ok := ACPArgv(tool, "gpt-9")
 	if !ok {
 		t.Fatal("ACPArgv reported false for a declared template")
 	}
+	// The BINARY is the tool's, always: on an ACP rung the process bashy
+	// launches is the tool named in the tool:model binding, never a bridge.
 	if bin != "/opt/thing/bin/thing" {
 		t.Errorf("bin = %q, want the tool's declared binary", bin)
 	}
-	if got, want := len(args), 3; got != want {
-		t.Fatalf("args = %q, want %d", args, want)
-	}
-	if args[0] != "acp" || args[1] != "--model" || args[2] != "gpt-9" {
-		t.Errorf("args = %q", args)
+	if got, want := strings.Join(args, " "), "acp --pure"; got != want {
+		t.Errorf("args = %q, want %q", got, want)
 	}
 
-	// No model selected: {model} and the flag holding it both go, exactly as
-	// the headless template renders it.
-	_, args, _ = ACPArgv(tool, "")
-	if len(args) != 1 || args[0] != "acp" {
-		t.Errorf("no-model args = %q, want [acp]", args)
+	// A model argument is IGNORED, not substituted. An ACP rung drives a tool
+	// with its binding already fixed; the protocol has no model-selection call
+	// and `opencode acp` accepts no model flag. Passing one changes nothing.
+	_, noModel, _ := ACPArgv(tool, "")
+	if strings.Join(noModel, " ") != strings.Join(args, " ") {
+		t.Errorf("model argument changed the argv: %q vs %q", noModel, args)
 	}
 
-	// There is no {prompt} in an ACP template: the prompt travels in the
-	// session. A template carrying one is rendered literally, never as a slot.
+	// A {model} token in an acp_exec is rendered LITERALLY — it is not a slot.
+	// This pins the decision: a template author who writes one gets a visibly
+	// wrong argv rather than a silent, model-less launch that looks correct.
+	lit := fleet.Tool{Name: "y", CLI: fleet.ToolCLI{Binary: "y", Launch: fleet.ToolLaunch{ACPExec: "y acp --model {model}"}}}
+	_, litArgs, _ := ACPArgv(lit, "gpt-9")
+	if got, want := strings.Join(litArgs, " "), "acp --model {model}"; got != want {
+		t.Errorf("args = %q, want %q — {model} must not be substituted", got, want)
+	}
+
 	if _, _, ok := ACPArgv(fleet.Tool{Name: "x"}, "m"); ok {
 		t.Error("ACPArgv reported true for a tool with no acp_exec")
-	}
-}
-
-func TestACPArgvUsesAdapterExecutableFromACPExec(t *testing.T) {
-	tool := fleet.Tool{
-		Name: "claude",
-		CLI: fleet.ToolCLI{
-			Binary: "claude",
-			Launch: fleet.ToolLaunch{
-				ACPExec: "npx @zed/claude-code-acp --model {model}",
-				ACPRung: "adapter",
-			},
-		},
-	}
-
-	bin, args, ok := ACPArgv(tool, "opus")
-	if !ok {
-		t.Fatal("ACPArgv reported false for an adapter template")
-	}
-	if bin != "npx" {
-		t.Fatalf("bin = %q, want the adapter executable from acp_exec", bin)
-	}
-	if got := strings.Join(args, " "); got != "@zed/claude-code-acp --model opus" {
-		t.Fatalf("args = %q, want the adapter argv after the executable", args)
 	}
 }
