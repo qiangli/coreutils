@@ -279,14 +279,14 @@ func TestMarshalEmitsCanonicalSpelling(t *testing.T) {
 // is a fixed point, so a definition round-trips to a catalog and back.
 func TestMarshalRoundTrips(t *testing.T) {
 	c := baseline(t)
-	tl, _ := c.Tool("codex")
+	tl, _ := c.Tool("opencode")
 	tl.Ring = assetring.RingEmbedded
 
 	out, err := Marshal(tl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := ParseTool("codex", out, nil)
+	again, err := ParseTool("opencode", out, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,6 +299,12 @@ func TestMarshalRoundTrips(t *testing.T) {
 	}
 	if again.CLI.Launch.Exec != tl.CLI.Launch.Exec {
 		t.Fatalf("launch template lost in round trip: %q", again.CLI.Launch.Exec)
+	}
+	if again.CLI.Launch.ACPExec != tl.CLI.Launch.ACPExec {
+		t.Fatalf("ACP launch template lost in round trip: %q", again.CLI.Launch.ACPExec)
+	}
+	if again.CLI.Launch.ACPRung != tl.CLI.Launch.ACPRung {
+		t.Fatalf("ACP rung lost in round trip: %q", again.CLI.Launch.ACPRung)
 	}
 }
 
