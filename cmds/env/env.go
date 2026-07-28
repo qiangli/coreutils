@@ -1,22 +1,20 @@
 // Package envcmd implements env(1) per the GNU coreutils manual:
 // print the environment, optionally modified by -i, -u NAME, and
-// NAME=VALUE assignments.
-//
-// Running a COMMAND operand is documented-but-unsupported (process
-// execution; revisits with the sh ExecHandler) and fails with the
-// clear contract error.
+// NAME=VALUE assignments, or run a command in that environment.
 //
 // Portions adapted from https://github.com/guonaihong/coreutils env/env.go (Apache-2.0).
 // Changes: rewired to the tool framework over RunContext.Env (no
-// os.Environ/os.Setenv globals); COMMAND execution removed per repo
-// rules; '-' first-operand alias for -i; -u made repeatable.
+// os.Environ/os.Setenv globals); direct COMMAND execution; '-' first-
+// operand alias for -i; -u made repeatable.
 package envcmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
+	"runtime"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -47,10 +45,12 @@ func run(rc *tool.RunContext, args []string) int {
 	splitStrings := fs.StringArrayP("split-string", "S", nil, "process and split S into separate arguments")
 	envFiles := fs.StringArrayP("file", "f", nil, "read variables from a .env-style configuration file before other changes")
 	ignoreSignals := fs.StringArray("ignore-signal", nil, "set handling of SIGNAL to ignore before running COMMAND")
-	defaultSignals := fs.StringArray("default-signal", nil, "set handling of SIGNAL to default before running COMMAND")
-	blockSignals := fs.StringArray("block-signal", nil, "block delivery of SIGNAL before running COMMAND")
-	listSignalHandling := fs.Bool("list-signal-handling", false, "list non-default signal handling to stderr")
+	fs.Lookup("ignore-signal").NoOptDefVal = "all"
 	debug := fs.BoolP("debug", "v", false, "print verbose information for each processing step")
+	// The first non-option operand begins NAME=VALUE processing and then
+	// COMMAND. Options belonging to COMMAND (for example, sh -c) must not be
+	// parsed as env options.
+	fs.SetInterspersed(false)
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -74,17 +74,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		rc.Dir = filepath.Clean(rc.Path(*chdir))
 	}
-	for _, sigs := range [][]string{*ignoreSignals, *defaultSignals, *blockSignals} {
-		for _, spec := range sigs {
-			if err := validateSignals(spec); err != nil {
-				return tool.UsageError(rc, cmd, "%v", err)
-			}
-		}
-	}
-	if *listSignalHandling {
-		// In-process command execution is not available, and this
-		// implementation has not altered signal state. GNU prints only
-		// non-default dispositions, so the pure-Go data-mode output is empty.
+	signals, err := commandSignals(*ignoreSignals)
+	if err != nil {
+		return tool.UsageError(rc, cmd, "%v", err)
 	}
 
 	// Build the environment in environ order, like a real process
@@ -135,12 +127,6 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
-	// Leading operands containing '=' are assignments; the first
-	// operand without '=' starts a COMMAND, which is not supported.
-	for len(operands) > 0 && strings.Contains(operands[0], "=") {
-		set(operands[0])
-		operands = operands[1:]
-	}
 	if len(*splitStrings) > 0 {
 		var split []string
 		for _, s := range *splitStrings {
@@ -152,11 +138,22 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		operands = append(split, operands...)
 	}
+	// Leading operands containing '=' are assignments; the first operand
+	// without '=' starts COMMAND. Split-string fields participate in the same
+	// assignment scan.
+	for len(operands) > 0 && strings.Contains(operands[0], "=") {
+		set(operands[0])
+		operands = operands[1:]
+	}
 	if len(operands) > 0 {
 		if *debug {
 			fmt.Fprintf(rc.Err, "env: executing: %s\n", strings.Join(commandDebugArgv(*argv0, operands), " "))
 		}
-		return tool.NotSupported(rc, cmd, fmt.Sprintf("running a COMMAND (%q)", operands[0]))
+		rawEnv := make([]string, len(env))
+		for i, e := range env {
+			rawEnv[i] = e.raw
+		}
+		return runCommand(rc, operands, rawEnv, *argv0, signals)
 	}
 	if fs.Changed("argv0") {
 		return tool.UsageError(rc, cmd, "--argv0 requires a COMMAND")
@@ -243,37 +240,80 @@ func splitString(s string) ([]string, error) {
 	return out, nil
 }
 
-func validateSignals(spec string) error {
-	if spec == "" {
-		return nil
+func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals []os.Signal) int {
+	path, found := lookCommand(rc, argv[0], env)
+	if !found {
+		fmt.Fprintf(rc.Err, "env: %s: No such file or directory\n", argv[0])
+		return 127
 	}
-	for _, part := range strings.Split(spec, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
+
+	c := exec.Command(path, argv[1:]...)
+	if argv0 != "" {
+		c.Args[0] = argv0
+	}
+	c.Dir = rc.Dir
+	c.Env = env
+	c.Stdin = rc.In
+	c.Stdout = rc.Out
+	c.Stderr = rc.Err
+
+	restoreSignals := ignoreForCommandStart(signals)
+	err := c.Start()
+	restoreSignals()
+	if err != nil {
+		fmt.Fprintf(rc.Err, "env: %s: %v\n", argv[0], err)
+		if errors.Is(err, exec.ErrNotFound) || os.IsNotExist(err) {
+			return 127
 		}
-		if n, err := strconv.Atoi(part); err == nil {
-			if n <= 0 {
-				return fmt.Errorf("invalid signal %q", part)
+		return 126
+	}
+	if err := c.Wait(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			if code := ee.ExitCode(); code >= 0 {
+				return code
 			}
-			continue
+			return commandSignalStatus(ee.ProcessState)
 		}
-		name := strings.TrimPrefix(strings.ToUpper(part), "SIG")
-		if _, ok := knownSignals[name]; !ok {
-			return fmt.Errorf("unknown signal %q", part)
-		}
+		fmt.Fprintf(rc.Err, "env: %s: %v\n", argv[0], err)
+		return 126
 	}
-	return nil
+	return 0
 }
 
-var knownSignals = func() map[string]struct{} {
-	names := []string{"HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2", "PIPE", "ALRM", "TERM", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "IO", "SYS"}
-	m := make(map[string]struct{}, len(names))
-	for _, n := range names {
-		m[n] = struct{}{}
+func lookCommand(rc *tool.RunContext, name string, env []string) (string, bool) {
+	if strings.ContainsAny(name, `/\`) {
+		path := rc.ResolveExecutable(name)
+		_, err := os.Stat(path)
+		return path, err == nil || !os.IsNotExist(err)
 	}
-	return m
-}()
+
+	pathValue, present := envValue(env, "PATH")
+	if !present {
+		pathValue = defaultCommandPath()
+	}
+	var firstFound string
+	for _, dir := range filepath.SplitList(pathValue) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, name)
+		if !filepath.IsAbs(candidate) {
+			candidate = rc.Path(candidate)
+		}
+		candidate = resolveCommandCandidate(rc, candidate)
+		info, err := os.Stat(candidate)
+		if err != nil {
+			continue
+		}
+		if firstFound == "" {
+			firstFound = candidate
+		}
+		if info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode()&0o111 != 0) {
+			return candidate, true
+		}
+	}
+	return firstFound, firstFound != ""
+}
 
 func commandDebugArgv(argv0 string, operands []string) []string {
 	out := append([]string{}, operands...)
@@ -281,4 +321,14 @@ func commandDebugArgv(argv0 string, operands []string) []string {
 		out[0] = argv0
 	}
 	return out
+}
+
+func envValue(env []string, name string) (string, bool) {
+	prefix := name + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return env[i][len(prefix):], true
+		}
+	}
+	return "", false
 }
