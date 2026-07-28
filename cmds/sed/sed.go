@@ -23,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/cmds/sed/internal/gosed"
+	"github.com/qiangli/coreutils/pkg/nudge"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -35,6 +36,14 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	code := runCommand(rc, args)
+	if code != 0 {
+		nudge.OnFailure(rc.Err, append([]string{cmd.Name}, args...), rc.Env)
+	}
+	return code
+}
+
+func runCommand(rc *tool.RunContext, args []string) int {
 	// GNU's -i takes an OPTIONAL attached suffix (`-i.bak`), which getopt-style
 	// flag parsers don't model. Pre-strip that form so pflag only sees bare -i /
 	// --in-place[=SUFFIX].

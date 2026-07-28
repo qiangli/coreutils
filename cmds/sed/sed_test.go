@@ -18,10 +18,16 @@ func runSed(t *testing.T, in string, args ...string) (out, errOut string, code i
 
 func runSedInDir(t *testing.T, dir, in string, args ...string) (out, errOut string, code int) {
 	t.Helper()
+	return runSedInDirEnv(t, dir, nil, in, args...)
+}
+
+func runSedInDirEnv(t *testing.T, dir string, env []string, in string, args ...string) (out, errOut string, code int) {
+	t.Helper()
 	var o, e bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(in), Out: &o, Err: &e},
 	}
 	code = cmd.Run(rc, args)
@@ -215,6 +221,38 @@ func TestSedInPlaceBackup(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(f + ".bak"); string(b) != "x\n" {
 		t.Errorf("backup = %q, want x (original)", b)
+	}
+}
+
+func TestSedBSDInPlaceHintOnlyOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env := []string{"BASHY_AGENTIC=1", "BASHY_HINTS=on"}
+	_, errOut, code := runSedInDirEnv(t, dir, env, "", "-i", "", "-e", "s/x/y/", f)
+	const hint = "{\"schema_version\":\"bashy-hint-v1\",\"kind\":\"hint\",\"tool\":\"sed\",\"suggest\":\"GNU sed takes -i with no argument; BSD's `-i ''` is just `-i`\",\"off\":\"BASHY_HINTS=off\"}\n"
+	if code == 0 || !strings.HasSuffix(errOut, hint) {
+		t.Fatalf("BSD sed failure = (code %d, stderr %q), want exact hint suffix %q", code, errOut, hint)
+	}
+
+	_, errOut, code = runSedInDirEnv(t, dir, env, "", "-i", "-e", "s/y/z/", f)
+	if code != 0 || errOut != "" {
+		t.Fatalf("GNU sed in-place use = (code %d, stderr %q), want success with no hint", code, errOut)
+	}
+
+	_, errOut, code = runSedInDirEnv(t, dir, env, "", "-i", "-e", "s/x/y/", "missing")
+	if code == 0 || strings.Contains(errOut, "bashy-hint-v1") {
+		t.Fatalf("GNU sed in-place failure = (code %d, stderr %q), want failure without BSD hint", code, errOut)
+	}
+}
+
+func TestSedBSDInPlaceHintRespectsOptOut(t *testing.T) {
+	_, errOut, code := runSedInDirEnv(t, t.TempDir(), []string{"BASHY_AGENTIC=1", "BASHY_HINTS=off"}, "", "-i", "", "-e", "s/x/y/", "missing")
+	if code == 0 || strings.Contains(errOut, "bashy-hint-v1") {
+		t.Fatalf("opted-out BSD sed failure = (code %d, stderr %q), want failure without hint", code, errOut)
 	}
 }
 

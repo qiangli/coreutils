@@ -59,3 +59,41 @@ func TestOnAuditSilentWhenDisabled(t *testing.T) {
 		t.Fatalf("expected no output when disabled, got %q", buf.String())
 	}
 }
+
+func TestSuggestFailureBSDIdioms(t *testing.T) {
+	cases := []struct {
+		desc string
+		args []string
+		want string
+	}{
+		{"BSD stat format", []string{"stat", "-f", "%Sm", "file"}, "-f is --file-system in GNU; BSD's format string is -c/--format"},
+		{"GNU stat filesystem", []string{"stat", "-f", "."}, ""},
+		{"GNU stat format", []string{"stat", "-c", "%y", "file"}, ""},
+		{"BSD sed in-place", []string{"sed", "-i", "", "-e", "s/x/y/", "file"}, "GNU sed takes -i with no argument; BSD's `-i ''` is just `-i`"},
+		{"GNU sed in-place", []string{"sed", "-i", "-e", "s/x/y/", "file"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			if got := SuggestFailure(tc.args); got != tc.want {
+				t.Fatalf("SuggestFailure(%q) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOnFailureAgentOutputExact(t *testing.T) {
+	var buf bytes.Buffer
+	OnFailure(&buf, []string{"stat", "-f", "%Sm", "file"}, []string{"BASHY_AGENTIC=1", "BASHY_HINTS=on"})
+	const want = "{\"schema_version\":\"bashy-hint-v1\",\"kind\":\"hint\",\"tool\":\"stat\",\"suggest\":\"-f is --file-system in GNU; BSD's format string is -c/--format\",\"off\":\"BASHY_HINTS=off\"}\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("OnFailure output:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestOnFailureSilentWhenDisabled(t *testing.T) {
+	var buf bytes.Buffer
+	OnFailure(&buf, []string{"sed", "-i", "", "-e", "s/x/y/", "file"}, []string{"BASHY_AGENTIC=1", "BASHY_HINTS=off"})
+	if buf.Len() != 0 {
+		t.Fatalf("expected no output when disabled, got %q", buf.String())
+	}
+}
