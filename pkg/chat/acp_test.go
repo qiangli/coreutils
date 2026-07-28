@@ -81,6 +81,45 @@ func pinACPCatalog(t *testing.T) {
 	}
 }
 
+func pinACPOnlyModelCatalog(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BASHY_FORCE_AGENT_SHELL", "0")
+	t.Setenv("CHAT_FAKE_ACP_AGENT", "1")
+
+	root := t.TempDir()
+	prev := newCatalog
+	newCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
+	t.Cleanup(func() { newCatalog = prev })
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	cat := newCatalog()
+	if err := cat.SaveTool(fleet.Tool{
+		Name: "acponly",
+		Kind: fleet.ToolKindCLI,
+		CLI: fleet.ToolCLI{
+			Binary: self,
+			Launch: fleet.ToolLaunch{
+				ACPExec: "acponly -test.run=^TestFakeACPAgentHelper$ {model}",
+				ACPRung: "native",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveTool: %v", err)
+	}
+	if err := cat.SaveModel(fleet.Model{
+		Name:       "tiny",
+		Kind:       fleet.ModelKindSubscription,
+		Provider:   "test",
+		UpstreamID: "provider-tiny",
+	}); err != nil {
+		t.Fatalf("SaveModel: %v", err)
+	}
+}
+
 // THE ACP PATH, END TO END, over a subprocess and a protocol.
 func TestACPSessionIsDrivenOverTheProtocol(t *testing.T) {
 	pinACPCatalog(t)
@@ -161,6 +200,26 @@ func TestACPSessionIsDrivenOverTheProtocol(t *testing.T) {
 	s.Close()
 	if s.Live() {
 		t.Error("session still live after Close")
+	}
+}
+
+func TestACPOnlyToolCanSelectModelThroughACPExec(t *testing.T) {
+	pinACPOnlyModelCatalog(t)
+	t.Setenv(agentlaunch.ACPEnv, "1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	s, mine, err := startACPSession(ctx, "acponly:tiny", SessionOptions{Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatalf("startACPSession: %v", err)
+	}
+	if !mine {
+		t.Fatal("startACPSession did not claim an ACP-only model binding")
+	}
+	defer s.Close()
+	if got := s.Rung(); got != agentlaunch.RungACPNative {
+		t.Fatalf("Rung = %s, want %s", got, agentlaunch.RungACPNative)
 	}
 }
 

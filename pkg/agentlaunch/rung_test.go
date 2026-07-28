@@ -1,6 +1,7 @@
 package agentlaunch
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
@@ -204,5 +205,29 @@ func TestACPArgvRendersTheTemplate(t *testing.T) {
 	// session. A template carrying one is rendered literally, never as a slot.
 	if _, _, ok := ACPArgv(fleet.Tool{Name: "x"}, "m"); ok {
 		t.Error("ACPArgv reported true for a tool with no acp_exec")
+	}
+}
+
+func TestACPArgvUsesAdapterExecutableFromACPExec(t *testing.T) {
+	tool := fleet.Tool{
+		Name: "claude",
+		CLI: fleet.ToolCLI{
+			Binary: "claude",
+			Launch: fleet.ToolLaunch{
+				ACPExec: "npx @zed/claude-code-acp --model {model}",
+				ACPRung: "adapter",
+			},
+		},
+	}
+
+	bin, args, ok := ACPArgv(tool, "opus")
+	if !ok {
+		t.Fatal("ACPArgv reported false for an adapter template")
+	}
+	if bin != "npx" {
+		t.Fatalf("bin = %q, want the adapter executable from acp_exec", bin)
+	}
+	if got := strings.Join(args, " "); got != "@zed/claude-code-acp --model opus" {
+		t.Fatalf("args = %q, want the adapter argv after the executable", args)
 	}
 }
