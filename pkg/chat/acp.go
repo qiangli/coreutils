@@ -82,33 +82,33 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		return nil, false, nil // the ordinary path reports this identically
 	}
 
-	// The ACP launch is its OWN template, so resolve without Steer: a tool can
-	// speak ACP and have no interactive pty launch at all, and demanding a
-	// steer_exec it does not need would refuse a session we can actually drive.
+	// The ACP launch is its OWN template, so resolve with ACP and without Steer.
+	//
+	// Both halves matter. A tool can speak ACP and have no interactive pty launch
+	// at all, and demanding a steer_exec it does not need would refuse a session
+	// we can actually drive. And a tool can speak ACP and have no HEADLESS launch
+	// either — an ACP-only tool declares its {model} slot in acp_exec, so a
+	// resolution that reads the headless template would report that the tool
+	// "cannot select a model" and throw the binding's model away.
+	//
 	// Everything else about the resolution — the containerized guard, read-only
-	// argv stripping, the credential firewall's PreserveEnv — is the same call
-	// the pty path makes.
+	// argv stripping, the kill-switch guard, the credential firewall's
+	// PreserveEnv — is the same call, on the same options, the pty path makes.
+	// An ACP transport is not a licence to hand an agent unattended full access.
 	lo := opt.launchOptions()
 	lo.Steer = false
+	lo.ACP = true
 	l, err := resolveLaunch(name, lo)
 	if err != nil {
+		// Not an ACP launch (no acp_exec, unknown tool, a model this tool cannot
+		// take): report "not mine" and let the caller fall to the rung below,
+		// exactly as it did before ACP existed.
 		return nil, false, nil
 	}
 	tool, known := newCatalog().Tool(l.ToolName)
 	if !known || !agentlaunch.EffectiveRung(tool.CLI.Launch).IsACP() {
 		return nil, false, nil
 	}
-	bin, args, ok := agentlaunch.ACPArgv(tool, l.Model)
-	if !ok {
-		return nil, false, nil
-	}
-	// The same kill-switch guard and read-only stripping the other launches get.
-	// An ACP transport is not a licence to hand an agent unattended full access.
-	args, err = agentlaunch.FinalizeArgs(l.ToolName, args, toAgentLaunchOptions(lo))
-	if err != nil {
-		return nil, true, err
-	}
-	l.Tool, l.Args, l.TakesPrompt = bin, args, false
 
 	// From here we are committed, and errors are real errors: falling through to
 	// the pty path after governing would bill the turn twice.

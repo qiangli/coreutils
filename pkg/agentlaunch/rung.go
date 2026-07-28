@@ -128,6 +128,26 @@ func ACPEnabled() bool {
 // orphaned flag when no model was selected. There is no {prompt}: an ACP prompt
 // travels in the session, not in argv, which is the whole reason the transport
 // has a real turn boundary at all.
+//
+// # Which executable
+//
+// The two ACP rungs answer this DIFFERENTLY, and getting it wrong is silent:
+//
+//   - rung 1 (native): the tool speaks ACP itself, so the process to spawn is
+//     the tool. The template's first field names it the way every other launch
+//     template does, and the executable is the tool's declared binary — the
+//     registry's binary path is authoritative over a bare name in a template.
+//   - rung 2 (adapter): ACP is reached through an EXTERNAL BRIDGE — `npx
+//     @zed/claude-code-acp`, say — and the tool's own binary is not in that
+//     argv at all. The process to spawn is the ADAPTER, which is exactly what
+//     the template's first field names.
+//
+// Resolving rung 2 to the tool binary would exec the tool and then speak
+// JSON-RPC at something that does not answer it: the tool would open its
+// ordinary interface, the handshake would hang or fail, and the failure would
+// look like "the agent would not start" rather than "we launched the wrong
+// program". No adapter is installed on any host in the fleet today, so nothing
+// at runtime will catch this — it has to be right in code.
 func ACPArgv(t fleet.Tool, modelID string) (bin string, args []string, ok bool) {
 	tmpl := strings.TrimSpace(t.CLI.Launch.ACPExec)
 	if tmpl == "" {
@@ -149,7 +169,25 @@ func ACPArgv(t fleet.Tool, modelID string) (bin string, args []string, ok bool) 
 		}
 		out = append(out, f)
 	}
-	// The template's first field names the tool; the executable is the tool's
-	// declared binary, exactly as the headless and steerable launches resolve it.
+	if RungFor(t.CLI.Launch) == RungACPAdapter {
+		return fields[0], out, true
+	}
 	return t.Binary(), out, true
+}
+
+// ACPTakesModel reports whether a tool can select a model on an ACP rung.
+//
+// fleet.Tool.TakesModel looks at the HEADLESS template alone, which is the
+// right question for a headless launch and the wrong one here: a tool reachable
+// ONLY over ACP declares its {model} slot in acp_exec and may have no exec at
+// all. Asked the headless question, the launcher refuses `tool:model` outright
+// — "cannot select a model, so this is a label, not a selection" — and an
+// ACP-only tool loses model selection entirely, which is the one thing a
+// binding exists to do.
+//
+// Either template counts. Widening rather than switching is deliberate: a tool
+// whose exec takes a model and whose acp_exec does not keeps resolving exactly
+// as it does today, so nothing that works now starts failing.
+func ACPTakesModel(t fleet.Tool) bool {
+	return t.TakesModel() || strings.Contains(t.CLI.Launch.ACPExec, fleet.ModelToken)
 }
