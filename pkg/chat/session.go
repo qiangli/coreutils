@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/acp"
 	"github.com/qiangli/coreutils/pkg/agentctl"
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/bus"
@@ -55,6 +56,15 @@ type Session struct {
 	// events is the tool's structured channel, when it has one. Its presence is
 	// the difference between KNOWING a turn ended and guessing from silence.
 	events *eventTail
+
+	// acp is the Agent Client Protocol transport, when the tool speaks it and an
+	// operator has opted in (BASHY_ACP=1). Non-nil replaces the pty and the
+	// silence heuristic with a real request/response carrying a StopReason. Nil
+	// — which is every session the fleet runs today — leaves every path below
+	// exactly as it was. See acp.go.
+	acp     *acpDriver
+	acpCard string // the host-room card an ACP session joined, left on close
+	acpStop acp.StopReason
 
 	// launch is the resolved, already-governed launch this session runs under. It
 	// is retained because a session is not one LLM call — every steer that lands
@@ -147,6 +157,18 @@ func (o SessionOptions) launchOptions() Options {
 // starting a one-shot that will exit before the first steer arrives. A caller
 // that asked for a conversation must not be handed a monologue.
 func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, error) {
+	// THE ACP RUNG, and the one line of Start that ACP added.
+	//
+	// It reports mine=false — having done nothing at all — for every launch that
+	// is not on an ACP rung, which is every launch in the fleet until a tool
+	// declares acp_exec AND an operator sets BASHY_ACP=1. Everything below this
+	// point is byte-for-byte the function that ran before ACP existed, including
+	// the pty requirement: an ACP agent needs no pty, so its branch must be
+	// decided before a platform without one refuses the session.
+	if s, mine, err := startACPSession(ctx, agent, opt); mine {
+		return s, err
+	}
+
 	if !agentpty.Supported() {
 		return nil, fmt.Errorf("chat: a steerable session needs a pty, which this platform has no support for")
 	}
@@ -442,6 +464,17 @@ func (s *Session) Say(text string) error {
 // say is the unmetered write to the control channel — for traffic that is not a
 // billable turn (the opening prompt, already gated by Start; /quit).
 func (s *Session) say(text string) error {
+	// On an ACP rung the control channel IS the protocol: a steer is the next
+	// prompt in the same session, delivered as a request rather than typed at a
+	// TUI that may or may not be listening. Say's budget gate above is unchanged
+	// — a turn is billed the same whichever transport carries it.
+	if s.acp != nil {
+		s.acp.prompt(text)
+		s.mu.Lock()
+		s.lastSteer = time.Now()
+		s.mu.Unlock()
+		return nil
+	}
 	if s.CtlSock == "" {
 		return fmt.Errorf("chat: %s has no control channel", s.Nick)
 	}
@@ -527,6 +560,13 @@ func (s *Session) Turn() string {
 // and the honest reason the first-party harness (structured events, not a scraped
 // terminal) is worth building.
 func (s *Session) WaitIdle(ctx context.Context, quiet time.Duration) error {
+	// AN ACP SESSION DOES NOT GUESS. It waits for the agent to report the turn
+	// ended, with a reason attached, and `quiet` is meaningless to it — there is
+	// nothing to size against a silence that is not being measured.
+	if s.acp != nil {
+		return s.waitACPTurn(ctx)
+	}
+
 	if quiet <= 0 {
 		quiet = 20 * time.Second
 	}
@@ -671,6 +711,12 @@ func (s *Session) Interrupt() error {
 	if !s.Live() {
 		return nil
 	}
+	// ACP has a first-class cancellation: the turn comes back with
+	// StopReasonCancelled as a SUCCESSFUL response, so an interrupt is
+	// acknowledged rather than merely sent into a terminal and hoped for.
+	if s.acp != nil {
+		return s.acp.client.Cancel(context.Background(), s.acp.session)
+	}
 	return agentpty.SendFrame(s.CtlSock, agentpty.VerbatimFrame([]byte{0x1b}))
 }
 
@@ -681,10 +727,23 @@ func (s *Session) Interrupt() error {
 // finish writing usually leaves a cleaner tree than one shot mid-edit.
 // Quit is a control command, not a turn: it buys no model work, so it is never
 // gated. An exhausted budget must still be able to shut a session down.
-func (s *Session) Quit() error { return s.say("/quit") }
+func (s *Session) Quit() error {
+	// "/quit" is a TUI slash command, and an ACP agent has no TUI: sending it
+	// would buy a turn in which the agent dutifully explains that it cannot quit.
+	// The protocol's own shutdown is closing the connection.
+	if s.acp != nil {
+		s.closeACP()
+		return nil
+	}
+	return s.say("/quit")
+}
 
 // Close ends the session now.
 func (s *Session) Close() {
+	if s.acp != nil {
+		s.closeACP()
+		return
+	}
 	select {
 	case <-s.done:
 	default:
