@@ -3,7 +3,14 @@
 
 package steward
 
-import "errors"
+import (
+	"errors"
+	"os"
+	"runtime"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
+)
 
 // ErrLockUnsupported is returned by every MUTATION on a platform with no file locking
 // (js/wasm, plan9, …). Reads keep working: they never take the lock.
@@ -28,3 +35,26 @@ import "errors"
 var ErrLockUnsupported = errors.New(
 	"steward: this platform has no file locking, so the seat's read-decide-write cycle cannot be serialized — " +
 		"refusing to mutate rather than risk two stewards on one host. Reads (status, board, log, reconcile) still work")
+
+func lockFile(f *os.File) (func(), error) {
+	if !LockSupported() {
+		return nil, ErrLockUnsupported
+	}
+	l, err := lockfile.Acquire(f.Name(), lockfile.Holder{
+		Name: "steward-seat", PID: os.Getpid(), Intent: "update steward state", Since: time.Now(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = l.Release() }, nil
+}
+
+// LockSupported reports whether this platform can host a steward seat.
+func LockSupported() bool {
+	switch runtime.GOOS {
+	case "linux", "darwin", "freebsd", "netbsd", "openbsd", "dragonfly", "solaris", "windows":
+		return true
+	default:
+		return false
+	}
+}

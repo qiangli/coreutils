@@ -239,13 +239,16 @@ var packages = map[string]Package{
 	"bre":         supPkg("POSIX BRE → Go regexp, shared by grep and sed"),
 	"ignore":      supPkg("the opt-in agentic path filter shared by grep and find"),
 	"jobs":        supPkg("job control for the embedding shell's builtins, which the shell owns"),
-	"nudge":       supPkg("the proactive half of the agent-hint subsystem; emitted, never invoked"),
-	"oci":         supPkg("separate module wrapping podman's OCI bindings for external/podman"),
-	"ollm":        supPkg("Ollama API client wrapper, isolating the SDK from the rest of the tree"),
-	"pricing":     supPkg("local token price catalog consumed by pkg/llmbudget"),
-	"recommend":   supPkg("the shell's did-you-mean; reached on command-not-found, never typed"),
-	"scope":       supPkg("the git-repo-aware store resolver shared by every store"),
-	"weavecli":    supPkg("the agent-friendly CLI conventions every front-door verb tree adopts"),
+	"lockfile": supPkg("the ONE process file-lock primitive — Acquire/TryAcquire/AcquireWithin, " +
+		"one platform pair for the whole tree. Five packages hand-rolled their own and " +
+		"three of five had been ported to Windows while two were no-ops"),
+	"nudge":     supPkg("the proactive half of the agent-hint subsystem; emitted, never invoked"),
+	"oci":       supPkg("separate module wrapping podman's OCI bindings for external/podman"),
+	"ollm":      supPkg("Ollama API client wrapper, isolating the SDK from the rest of the tree"),
+	"pricing":   supPkg("local token price catalog consumed by pkg/llmbudget"),
+	"recommend": supPkg("the shell's did-you-mean; reached on command-not-found, never typed"),
+	"scope":     supPkg("the git-repo-aware store resolver shared by every store"),
+	"weavecli":  supPkg("the agent-friendly CLI conventions every front-door verb tree adopts"),
 
 	// --- unwired: capability that reaches nothing ---------------------------
 	//

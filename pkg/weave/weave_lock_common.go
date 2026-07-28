@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 // LOCK DISCIPLINE — why this file exists.
@@ -54,13 +55,16 @@ var errWeaveQueueBusy = errors.New("weave: lock busy — another weave command h
 // weaveLockBusy reports which lock was actually contended while staying
 // errors.Is-compatible with errWeaveQueueBusy, so every existing check keeps
 // working unchanged.
-type weaveLockBusy struct{ lock string }
+type weaveLockBusy struct {
+	lock  string
+	cause error
+}
 
 func (e weaveLockBusy) Error() string {
 	return fmt.Sprintf("weave: %s is held by another weave command; retry", e.lock)
 }
 
-func (e weaveLockBusy) Unwrap() error { return errWeaveQueueBusy }
+func (e weaveLockBusy) Unwrap() []error { return []error{errWeaveQueueBusy, e.cause} }
 
 // errWeavePullBusy is returned when another merge/pull already owns this
 // repo's pull lock. A pull mutates the shared live checkout, so it is
@@ -69,73 +73,49 @@ var errWeavePullBusy = errors.New("weave: a merge is already in progress")
 
 var errWeavePullStale = errors.New("weave: merge target moved while review/gate ran")
 
-type weavePullHolder struct {
-	Holder     string    `json:"holder"`
-	PID        int       `json:"pid"`
-	Intent     string    `json:"intent"`
-	AcquiredAt time.Time `json:"acquired_at"`
-}
-
 var weavePullNow = time.Now
 var weaveTestObservePullLockHeld func(time.Duration)
 
-func weavePullHolderPath(dir string) string {
-	return filepath.Join(dir, "pull.lock.holder")
+type weavePullHeld struct {
+	message string
+	cause   error
 }
 
-// weaveWritePullHolder records diagnostics only after the kernel has granted
-// pull.lock. Failure is deliberately ignored: flock, never this sidecar,
-// decides whether a merge may proceed.
-func weaveWritePullHolder(dir, holder string) {
-	info := weavePullHolder{
-		Holder:     holder,
-		PID:        os.Getpid(),
-		Intent:     "merge",
-		AcquiredAt: weavePullNow(),
-	}
-	b, err := json.Marshal(info)
-	if err != nil {
-		return
-	}
-	b = append(b, '\n')
-	_ = os.WriteFile(weavePullHolderPath(dir), b, 0o644)
-}
+func (e weavePullHeld) Error() string   { return e.message }
+func (e weavePullHeld) Unwrap() []error { return []error{errWeavePullBusy, e.cause} }
 
-func weavePullBusyError(dir string) error {
-	b, err := os.ReadFile(weavePullHolderPath(dir))
-	if err != nil {
-		return fmt.Errorf("%w — retry when it finishes", errWeavePullBusy)
+func weavePullBusyError(err error) error {
+	info, ok := lockfile.HeldBy(err)
+	if !ok || info.Since.IsZero() || (info.Name == "" && info.PID <= 0) {
+		return weavePullHeld{message: errWeavePullBusy.Error() + " — retry when it finishes", cause: err}
 	}
-	var info weavePullHolder
-	if err := json.Unmarshal(b, &info); err != nil || info.AcquiredAt.IsZero() ||
-		(info.Holder == "" && info.PID <= 0) {
-		return fmt.Errorf("%w — retry when it finishes", errWeavePullBusy)
-	}
-	holder := strings.TrimSpace(info.Holder)
+	holder := strings.TrimSpace(info.Name)
 	if holder == "" {
-		holder = "pid " + strconv.Itoa(info.PID)
+		holder = fmt.Sprintf("pid %d", info.PID)
 	}
-	since := info.AcquiredAt.Local().Format("15:04")
-	age := weavePullNow().Sub(info.AcquiredAt)
+	since := info.Since.Local().Format("15:04")
+	age := weavePullNow().Sub(info.Since)
 	if age < 0 {
 		age = 0
 	}
-	return fmt.Errorf("%w (%s, since %s, %s ago) — retry when it finishes",
-		errWeavePullBusy, holder, since, age.Round(time.Second))
+	return weavePullHeld{
+		message: fmt.Sprintf("%s (%s, since %s, %s ago) — retry when it finishes",
+			errWeavePullBusy, holder, since, age.Round(time.Second)),
+		cause: err,
+	}
 }
 
-// withWeaveNamedPullLock adds human-readable ownership to the platform lock.
-// The sidecar remains diagnostic: it is written only inside the kernel-owned
-// critical section and is never consulted to grant entry.
+// withWeaveNamedPullLock adds human-readable ownership to the shared lock.
+// The holder record remains diagnostic: it is written only after the kernel
+// grants the lock and is never consulted to grant entry.
 func withWeaveNamedPullLock(dir, holder string, fn func() error) error {
-	return withWeavePullLock(dir, func() error {
+	return withWeavePullLockHolder(dir, holder, func() error {
 		started := time.Now()
 		defer func() {
 			if weaveTestObservePullLockHeld != nil {
 				weaveTestObservePullLockHeld(time.Since(started))
 			}
 		}()
-		weaveWritePullHolder(dir, holder)
 		return fn()
 	})
 }
@@ -151,9 +131,6 @@ var weaveQueueLockWait = 120 * time.Second
 // nothing because the pass is idempotent.
 var weaveReapLockWait = 250 * time.Millisecond
 
-// weaveQueueLockPoll is the retry interval while waiting for the lock.
-const weaveQueueLockPoll = 20 * time.Millisecond
-
 // withWeaveQueueLockWait takes the exclusive queue lock (waiting at most
 // wait), loads the queue, hands it to fn for mutation, saves it back, then
 // releases. This is the ONLY sanctioned read-modify-write path.
@@ -162,14 +139,16 @@ const weaveQueueLockPoll = 20 * time.Millisecond
 // merges must happen outside this call and re-enter it to record the outcome —
 // see the lock-discipline note above.
 func withWeaveQueueLockWait(dir string, wait time.Duration, fn func(*weaveQueue) error) error {
-	release, err := weaveFlock(filepath.Join(dir, "queue.lock"), wait)
+	l, err := lockfile.AcquireWithin(filepath.Join(dir, "queue.lock"), wait, lockfile.Holder{
+		Name: "weave-queue", PID: os.Getpid(), Intent: "update queue", Since: time.Now(),
+	})
 	if err != nil {
-		if errors.Is(err, errWeaveQueueBusy) {
-			return err
+		if errors.Is(err, lockfile.ErrHeld) {
+			return weaveLockBusy{lock: "queue.lock", cause: err}
 		}
 		return fmt.Errorf("queue %w", err)
 	}
-	defer release()
+	defer l.Release()
 
 	q, err := loadWeaveQueue(dir)
 	if err != nil {
@@ -196,14 +175,20 @@ func withWeaveQueueLock(dir string, fn func(*weaveQueue) error) error {
 // It does NOT hold queue.lock, so `weave list`/`add`/`comment` stay live for
 // the whole merge cycle.
 func withWeavePullLock(dir string, fn func() error) error {
-	release, err := weaveFlock(filepath.Join(dir, "pull.lock"), 0)
+	return withWeavePullLockHolder(dir, "weave-pull", fn)
+}
+
+func withWeavePullLockHolder(dir, holder string, fn func() error) error {
+	l, err := lockfile.TryAcquire(filepath.Join(dir, "pull.lock"), lockfile.Holder{
+		Name: holder, PID: os.Getpid(), Intent: "merge", Since: weavePullNow(),
+	})
 	if err != nil {
-		if errors.Is(err, errWeaveQueueBusy) {
-			return weavePullBusyError(dir)
+		if errors.Is(err, lockfile.ErrHeld) {
+			return weavePullBusyError(err)
 		}
 		return fmt.Errorf("pull %w", err)
 	}
-	defer release()
+	defer l.Release()
 	return fn()
 }
 
@@ -211,11 +196,16 @@ func withWeavePullLock(dir string, fn func() error) error {
 // bounded lock, separate from queue.lock so a best-effort cooldown update never
 // contends with a queue state transition.
 func withWeaveCooldownLock(dir string, fn func(*toolCooldowns) error) error {
-	release, err := weaveFlock(filepath.Join(dir, "cooldown.lock"), weaveQueueLockWait)
+	l, err := lockfile.AcquireWithin(filepath.Join(dir, "cooldown.lock"), weaveQueueLockWait, lockfile.Holder{
+		Name: "weave-cooldown", PID: os.Getpid(), Intent: "update cooldown", Since: time.Now(),
+	})
 	if err != nil {
+		if errors.Is(err, lockfile.ErrHeld) {
+			err = weaveLockBusy{lock: "cooldown.lock", cause: err}
+		}
 		return fmt.Errorf("cooldown %w", err)
 	}
-	defer release()
+	defer l.Release()
 
 	tc := loadToolCooldowns(dir)
 	if err := fn(&tc); err != nil {

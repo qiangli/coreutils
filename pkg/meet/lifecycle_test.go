@@ -568,10 +568,10 @@ func TestLockInodeIsStableAcrossOwners(t *testing.T) {
 	}
 }
 
-// Descriptor close alone releases the lease — no unlink, no metadata edit, no
-// cleanup of any kind. This is what makes process death self-healing: the
-// kernel does for a crashed owner exactly what it does here.
-func TestClosedDescriptorReleasesWithoutCleanup(t *testing.T) {
+// Releasing the shared lock leaves the stable inode and metadata in place while
+// immediately admitting a successor. The subprocess test separately proves
+// that process death closes the primitive's descriptor with the same result.
+func TestReleasedLockReleasesWithoutCleanup(t *testing.T) {
 	st := newTestSession(t)
 	l, err := acquireRunLease(st.ID)
 	if err != nil {
@@ -583,9 +583,8 @@ func TestClosedDescriptorReleasesWithoutCleanup(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// Simulate death: drop the descriptor without going through Release, so no
-	// cleanup path runs at all.
-	if err := l.f.Close(); err != nil {
+	// Drop the kernel lock without unlinking or editing any metadata.
+	if err := l.lock.Release(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
