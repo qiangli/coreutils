@@ -57,7 +57,9 @@ Every tool in this repo follows the same rules:
   system info (date, uname, id, …), checksums (md5/sha\*sum,
   base64/32), and archives (tar, gzip). Each command is its own
   importable package registered into `tool/`'s registry; `cmds/all`
-  pulls in everything.
+  pulls in everything. Agent-traffic compatibility includes GNU grep
+  `-A`/`-B`/`-C` context and ordered `--include` filtering, plus sed
+  `addr,+N` ranges and `-i[SUFFIX]` in-place editing.
 - `tool/` — the framework: registry + per-invocation RunContext
   (stdio, working directory, environment — tools never touch process
   globals) + strict GNU-style flags with automatic `--help`/`--version`.

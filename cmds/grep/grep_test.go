@@ -234,6 +234,80 @@ func TestGrepEREAndFixed(t *testing.T) {
 	}
 }
 
+func TestGrepContext(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "input", "zero\nbefore\nhit\nafter\ngap\nbefore2\nhit\nlast\ntail\n")
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "after separate argument",
+			args: []string{"-n", "-A", "1", "hit", "input"},
+			want: "3:hit\n4-after\n--\n7:hit\n8-last\n",
+		},
+		{
+			name: "before attached argument",
+			args: []string{"-n", "-B1", "hit", "input"},
+			want: "2-before\n3:hit\n--\n6-before2\n7:hit\n",
+		},
+		{
+			name: "both sides merge overlapping groups",
+			args: []string{"-n", "-C2", "hit", "input"},
+			want: "1-zero\n2-before\n3:hit\n4-after\n5-gap\n6-before2\n7:hit\n8-last\n9-tail\n",
+		},
+		{
+			name: "later after overrides context trailing side",
+			args: []string{"-n", "-C2", "-A1", "hit", "input"},
+			want: "1-zero\n2-before\n3:hit\n4-after\n5-gap\n6-before2\n7:hit\n8-last\n",
+		},
+		{
+			name: "later context overrides both sides",
+			args: []string{"-n", "-A1", "-C2", "hit", "input"},
+			want: "1-zero\n2-before\n3:hit\n4-after\n5-gap\n6-before2\n7:hit\n8-last\n9-tail\n",
+		},
+		{
+			name: "max count retains trailing context",
+			args: []string{"-n", "-m1", "-A2", "hit", "input"},
+			want: "3:hit\n4-after\n5-gap\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runGrep(t, dir, "", tc.args...)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Errorf("grep %v = (%q, %q, %d), want (%q, empty, 0)",
+					tc.args, out, errOut, code, tc.want)
+			}
+		})
+	}
+}
+
+func TestGrepContextWithFilenamesAndOnlyMatching(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "one", "before\nhit\nafter\n")
+	writeFile(t, dir, "two", "hit\n")
+
+	out, errOut, code := runGrep(t, dir, "", "-n", "-A1", "hit", "one", "two")
+	want := "one:2:hit\none-3-after\n--\ntwo:1:hit\n"
+	if code != 0 || errOut != "" || out != want {
+		t.Errorf("multi-file context = (%q, %q, %d), want (%q, empty, 0)", out, errOut, code, want)
+	}
+
+	out, errOut, code = runGrep(t, dir, "", "-o", "-A1", "hit", "one")
+	if code != 0 || out != "hit\n" || !strings.Contains(errOut, "context options are ignored") {
+		t.Errorf("-o -A1 = (%q, %q, %d), want match plus GNU warning", out, errOut, code)
+	}
+}
+
+func TestGrepContextRejectsNegativeLength(t *testing.T) {
+	_, errOut, code := runGrep(t, "", "hit\n", "--after-context=-1", "hit")
+	if code != 2 || !strings.Contains(errOut, "context length") {
+		t.Errorf("negative context = (%q, %d), want exit 2 naming context length", errOut, code)
+	}
+}
+
 func TestGrepMultiplePatterns(t *testing.T) {
 	out, _, code := runGrep(t, "", "aaa\nbbb\nccc\n", "-e", "aaa", "-e", "ccc")
 	if out != "aaa\nccc\n" || code != 0 {
@@ -269,10 +343,27 @@ func TestGrepRecursive(t *testing.T) {
 	if out != "./f1.txt:foo bar\n" {
 		t.Errorf("--exclude-dir: out=%q", out)
 	}
+	out, _, _ = runGrep(t, dir, "", "-r", "--exclude=*.go", "--include=f3.go", "foo", ".")
+	if out != "Binary file ./bin.dat matches\n./f1.txt:foo bar\n./sub/f3.go:foo bar baz\n" {
+		t.Errorf("last matching include wins: out=%q", out)
+	}
+	out, _, _ = runGrep(t, dir, "", "-r", "--include=*.go", "--exclude=f3.go", "foo", ".")
+	if out != "" {
+		t.Errorf("last matching exclude wins: out=%q", out)
+	}
 	// -r with no FILE operand searches "."
 	out, _, code = runGrep(t, dir, "", "-r", "--include=*.go", "foo")
 	if out != "./sub/f3.go:foo bar baz\n" || code != 0 {
 		t.Errorf("-r default .: out=%q code=%d", out, code)
+	}
+}
+
+func TestGrepIncludeMatchesCommandLineNameSuffix(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "sub/input.go", "match\n")
+	out, errOut, code := runGrep(t, dir, "", "--include=sub/*.go", "match", "sub/input.go")
+	if code != 0 || errOut != "" || out != "match\n" {
+		t.Errorf("command-line suffix include = (%q, %q, %d), want match", out, errOut, code)
 	}
 }
 
@@ -350,7 +441,8 @@ func TestGrepCRPreserved(t *testing.T) {
 
 func TestGrepHelpAndVersion(t *testing.T) {
 	out, _, code := runGrep(t, "", "", "--help")
-	if code != 0 || !strings.Contains(out, "Usage: grep") {
+	if code != 0 || !strings.Contains(out, "Usage: grep") ||
+		!strings.Contains(out, "--after-context") || !strings.Contains(out, "--include") {
 		t.Errorf("--help: code=%d out=%q", code, out)
 	}
 	out, _, code = runGrep(t, "", "", "--version")

@@ -150,7 +150,8 @@ Extensions (beyond coreutils, prior art in tree):
 
 | Command | Sources | Notes |
 |---|---|---|
-| grep | aict, u-root | -r, -i, -l, -n, -v, -E, -F, -c, -q, -m, --include/--exclude |
+| grep | aict, u-root | -r, -i, -l, -n, -v, -E, -F, -c, -q, -m, -A/-B/-C context, ordered --include/--exclude |
+| sed | Go.Sed engine (MIT), GNU compatibility adaptations | GNU BRE/ERE scripts, addr,+N ranges, -i[SUFFIX] temporary-file in-place editing |
 | find | aict, u-root | -name, -type, -maxdepth, -mtime, -size, -path, -prune, -print0; **-exec is NO** |
 | diff | aict | -u, -r, -q (unified output) |
 | jq | gojq | pure-Go JSON filters; initial flags -c, -e, -n, -r |

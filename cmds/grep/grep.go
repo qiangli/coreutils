@@ -15,10 +15,9 @@
 // "Binary file NAME matches" line instead of the matching lines, per
 // GNU behavior. -c/-l/-L/-q are unaffected by binary detection.
 //
-// --include/--exclude/--exclude-dir match the base name of each file
-// or directory with shell-glob wildcards (GNU fnmatch globs whose
-// wildcards may also match '/' degenerate to the same thing on base
-// names; globs containing '/' are not supported and never match).
+// --include/--exclude rules are applied in command-line order; the last
+// matching rule wins. Recursive entries match by base name, while explicit
+// command-line files match any slash-delimited name suffix, per GNU.
 package grepcmd
 
 import (
@@ -65,9 +64,10 @@ type grepper struct {
 	showName     bool
 	maxCount     int // -1 = unlimited
 	onlyMatching bool
+	before       int
+	after        int
 
-	include    []string
-	exclude    []string
+	fileRules  []fileRule
 	excludeDir []string
 
 	matcher *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
@@ -80,6 +80,12 @@ type grepper struct {
 	anyMatch   bool
 	anyErr     bool
 	listedWout bool
+	wroteGroup bool
+}
+
+type fileRule struct {
+	glob    string
+	include bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -104,6 +110,9 @@ func run(rc *tool.RunContext, args []string) int {
 	lineNum := fs.BoolP("line-number", "n", false, "print line number with output lines")
 	noFilename := fs.BoolP("no-filename", "h", false, "suppress the file name prefix on output")
 	withFilename := fs.BoolP("with-filename", "H", false, "print file name with output lines")
+	beforeContext := fs.IntP("before-context", "B", 0, "print NUM lines of leading context")
+	afterContext := fs.IntP("after-context", "A", 0, "print NUM lines of trailing context")
+	contextLines := fs.IntP("context", "C", 0, "print NUM lines of output context")
 	recurse := fs.BoolP("recursive", "r", false, "read all files under each directory, recursively")
 	deref := fs.BoolP("dereference-recursive", "R", false, "likewise, but follow all symlinks")
 	include := fs.StringArray("include", nil, "search only files whose base name matches GLOB")
@@ -125,6 +134,14 @@ func run(rc *tool.RunContext, args []string) int {
 	if matchers > 1 {
 		fmt.Fprintf(rc.Err, "%s: conflicting matchers specified\n", cmd.Name)
 		return 2
+	}
+	if *beforeContext < 0 || *afterContext < 0 || *contextLines < 0 {
+		return tool.UsageError(rc, cmd, "context length must be nonnegative")
+	}
+	before, after := contextLengths(args, *beforeContext, *afterContext, *contextLines)
+	if *onlyMatching && (before > 0 || after > 0) {
+		fmt.Fprintln(rc.Err, "grep: warning: --only-matching is specified, but context options are ignored")
+		before, after = 0, 0
 	}
 
 	pats := append([]string(nil), *patterns...)
@@ -201,8 +218,9 @@ func run(rc *tool.RunContext, args []string) int {
 		silent:       *suppressErrors,
 		lineNum:      *lineNum,
 		maxCount:     *maxCount,
-		include:      *include,
-		exclude:      *exclude,
+		before:       before,
+		after:        after,
+		fileRules:    orderedFileRules(args, *include, *exclude),
 		excludeDir:   *excludeDir,
 		onlyMatching: *onlyMatching,
 	}
@@ -210,7 +228,7 @@ func run(rc *tool.RunContext, args []string) int {
 	// substring work — searchStreamLit skips RE2 and per-line string
 	// allocation. Anything it can't serve byte-identically (-i, -w,
 	// multiple patterns, real regex) keeps the RE2 path unchanged.
-	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok {
+	if lit, ok := literalPattern(split, *fixed, *ignoreCase, g.word, g.onlyMatching); ok && before == 0 && after == 0 {
 		g.lit, g.useLit = lit, true
 	}
 	// --agentic (opt-in): a nil matcher when off skips nothing, so default
@@ -261,7 +279,7 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 			continue
 		}
-		if !g.fileAllowed(filepath.Base(f)) {
+		if !g.fileAllowed(f, false) {
 			continue
 		}
 		g.grepPath(full, f)
@@ -439,6 +457,94 @@ type noMatcher struct{}
 func (noMatcher) MatchString(string) bool      { return false }
 func (noMatcher) FindStringIndex(string) []int { return nil }
 
+// contextLengths replays context options in command-line order. GNU lets -C
+// set both values and a later -A or -B replace just one side, so the final
+// pflag values alone are not enough to recover the requested behavior.
+func contextLengths(args []string, parsedBefore, parsedAfter, parsedContext int) (before, after int) {
+	seen := false
+	set := func(kind byte, value int) {
+		seen = true
+		switch kind {
+		case 'A':
+			after = value
+		case 'B':
+			before = value
+		case 'C':
+			before, after = value, value
+		}
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if strings.HasPrefix(arg, "--") {
+			name, value, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+			kind := byte(0)
+			switch {
+			case strings.HasPrefix("after-context", name):
+				kind = 'A'
+			case strings.HasPrefix("before-context", name):
+				kind = 'B'
+			case strings.HasPrefix("context", name):
+				kind = 'C'
+			}
+			if kind != 0 {
+				if !hasValue && i+1 < len(args) {
+					i++
+					value = args[i]
+				}
+				if n, err := strconv.Atoi(value); err == nil {
+					set(kind, n)
+				}
+				continue
+			}
+			// Do not mistake a value belonging to another option for a
+			// context flag.
+			if !hasValue {
+				switch name {
+				case "regexp", "file", "max-count", "include", "exclude", "exclude-dir":
+					i++
+				}
+			}
+			continue
+		}
+		if len(arg) < 2 || arg[0] != '-' {
+			continue
+		}
+		cluster := arg[1:]
+		for j := 0; j < len(cluster); j++ {
+			ch := cluster[j]
+			switch ch {
+			case 'A', 'B', 'C':
+				value := cluster[j+1:]
+				if value == "" && i+1 < len(args) {
+					i++
+					value = args[i]
+				}
+				if n, err := strconv.Atoi(value); err == nil {
+					set(ch, n)
+				}
+				j = len(cluster)
+			case 'e', 'f', 'm':
+				if j+1 == len(cluster) {
+					i++
+				}
+				j = len(cluster)
+			}
+		}
+	}
+	if !seen {
+		// This fallback also covers any future spelling accepted by the flag
+		// layer that the replay above does not recognize.
+		if parsedContext != 0 {
+			return parsedContext, parsedContext
+		}
+		return parsedBefore, parsedAfter
+	}
+	return before, after
+}
+
 func readPatternFile(r io.Reader) ([]string, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
@@ -518,7 +624,7 @@ func (g *grepper) walk(root, display string) {
 		if g.matcher.Skip(p, false) {
 			return nil
 		}
-		if !g.fileAllowed(d.Name()) {
+		if !g.fileAllowed(d.Name(), true) {
 			return nil
 		}
 		g.grepPath(p, disp)
@@ -561,21 +667,76 @@ func (g *grepper) walkFollow(dir, display string, seen map[string]bool) {
 			}
 			g.walkFollow(p, disp, seen)
 		case st.Mode().IsRegular():
-			if !g.matcher.Skip(p, false) && g.fileAllowed(e.Name()) {
+			if !g.matcher.Skip(p, false) && g.fileAllowed(e.Name(), true) {
 				g.grepPath(p, disp)
 			}
 		}
 	}
 }
 
-func (g *grepper) fileAllowed(base string) bool {
-	if matchAnyGlob(g.exclude, base) {
-		return false
-	}
-	if len(g.include) == 0 {
+func (g *grepper) fileAllowed(name string, recursive bool) bool {
+	if len(g.fileRules) == 0 {
 		return true
 	}
-	return matchAnyGlob(g.include, base)
+	allowed := !g.fileRules[0].include
+	for _, rule := range g.fileRules {
+		if matchFileGlob(rule.glob, name, recursive) {
+			allowed = rule.include
+		}
+	}
+	return allowed
+}
+
+func matchFileGlob(glob, name string, recursive bool) bool {
+	name = filepath.ToSlash(name)
+	if recursive {
+		ok, err := path.Match(glob, path.Base(name))
+		return err == nil && ok
+	}
+	for {
+		if ok, err := path.Match(glob, name); err == nil && ok {
+			return true
+		}
+		slash := strings.IndexByte(name, '/')
+		if slash < 0 {
+			return false
+		}
+		name = name[slash+1:]
+	}
+}
+
+func orderedFileRules(args, includes, excludes []string) []fileRule {
+	var rules []fileRule
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if !strings.HasPrefix(arg, "--") {
+			continue
+		}
+		name, value, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		include := strings.HasPrefix("include", name)
+		exclude := name == "exclude" ||
+			(strings.HasPrefix("exclude", name) && !strings.HasPrefix("exclude-dir", name))
+		if !include && !exclude {
+			continue
+		}
+		if !hasValue && i+1 < len(args) {
+			i++
+			value = args[i]
+		}
+		rules = append(rules, fileRule{glob: value, include: include})
+	}
+	if len(rules) == 0 {
+		for _, glob := range includes {
+			rules = append(rules, fileRule{glob: glob, include: true})
+		}
+		for _, glob := range excludes {
+			rules = append(rules, fileRule{glob: glob})
+		}
+	}
+	return rules
 }
 
 func matchAnyGlob(globs []string, base string) bool {
@@ -624,38 +785,72 @@ func (g *grepper) searchStream(r io.Reader, name string) {
 	peek, _ := br.Peek(32 * 1024)
 	binary := bytes.IndexByte(peek, 0) >= 0
 
+	type bufferedLine struct {
+		number int
+		text   string
+	}
+
 	selected := 0
 	if g.maxCount != 0 { // -m 0 selects nothing and reads nothing
 		sc := bufio.NewScanner(br)
 		sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
 		sc.Split(scanLinesKeepCR)
 		lineNo := 0
+		lastPrinted := 0
+		afterRemaining := 0
+		var leading []bufferedLine
+		contextOutput := (g.before > 0 || g.after > 0) &&
+			!g.count && !g.filesWith && !g.filesWout && !g.onlyMatching
+		stopMatching := false
 		for sc.Scan() {
 			lineNo++
-			if g.matchLine(sc.Text()) == g.invert {
-				continue
-			}
-			selected++
-			g.anyMatch = true
-			if g.quiet {
-				return
-			}
-			if g.filesWith {
-				fmt.Fprintln(g.rc.Out, name)
-				return
-			}
-			if !g.count && !g.filesWout {
-				if binary {
-					break // one summary line after the loop
+			line := sc.Text()
+			matched := !stopMatching && g.matchLine(line) != g.invert
+			if matched {
+				selected++
+				g.anyMatch = true
+				if g.quiet {
+					return
 				}
-				if g.onlyMatching && !g.invert {
-					g.printMatches(name, lineNo, sc.Text())
-				} else {
-					g.printLine(name, lineNo, sc.Text())
+				if g.filesWith {
+					fmt.Fprintln(g.rc.Out, name)
+					return
+				}
+				if !g.count && !g.filesWout {
+					if binary {
+						break // one summary line after the loop
+					}
+					if contextOutput {
+						for _, prev := range leading {
+							g.printContextLine(name, prev.number, prev.text, false, &lastPrinted)
+						}
+						g.printContextLine(name, lineNo, line, true, &lastPrinted)
+						afterRemaining = max(afterRemaining, g.after)
+					} else if g.onlyMatching && !g.invert {
+						g.printMatches(name, lineNo, line)
+					} else {
+						g.printLine(name, lineNo, line)
+					}
+				}
+				if g.maxCount > 0 && selected >= g.maxCount {
+					stopMatching = true
+					if !contextOutput || afterRemaining == 0 {
+						break
+					}
+				}
+			} else if contextOutput && afterRemaining > 0 {
+				g.printContextLine(name, lineNo, line, false, &lastPrinted)
+				afterRemaining--
+				if stopMatching && afterRemaining == 0 {
+					break
 				}
 			}
-			if g.maxCount > 0 && selected >= g.maxCount {
-				break
+
+			if g.before > 0 {
+				leading = append(leading, bufferedLine{lineNo, line})
+				if len(leading) > g.before {
+					leading = leading[len(leading)-g.before:]
+				}
 			}
 		}
 		if err := sc.Err(); err != nil {
@@ -678,6 +873,36 @@ func (g *grepper) searchStream(r io.Reader, name string) {
 		fmt.Fprintln(g.rc.Out, name)
 		g.listedWout = true
 	}
+}
+
+// printContextLine prints one line in a context group. Prefix fields use ':'
+// for selected lines and '-' for context lines, and non-adjacent groups are
+// separated by the GNU default "--" marker.
+func (g *grepper) printContextLine(name string, n int, line string, matched bool, lastPrinted *int) {
+	if n <= *lastPrinted {
+		return
+	}
+	if (*lastPrinted == 0 && g.wroteGroup) || (*lastPrinted > 0 && n > *lastPrinted+1) {
+		fmt.Fprintln(g.rc.Out, "--")
+	}
+	sep := byte('-')
+	if matched {
+		sep = ':'
+	}
+	var b strings.Builder
+	if g.showName {
+		b.WriteString(name)
+		b.WriteByte(sep)
+	}
+	if g.lineNum {
+		b.WriteString(strconv.Itoa(n))
+		b.WriteByte(sep)
+	}
+	b.WriteString(line)
+	b.WriteByte('\n')
+	io.WriteString(g.rc.Out, b.String())
+	*lastPrinted = n
+	g.wroteGroup = true
 }
 
 func (g *grepper) matchLine(line string) bool {

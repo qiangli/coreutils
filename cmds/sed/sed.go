@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -28,29 +29,18 @@ import (
 
 var cmd = &tool.Tool{
 	Name:     "sed",
-	Synopsis: "Stream editor: apply a sed script to each line of input (GNU sed drop-in).",
+	Synopsis: "Stream editor with GNU addr,+N ranges and in-place editing.",
 	Usage:    "sed [-nErs] [-e SCRIPT]... [-f FILE]... [-i[SUFFIX]] [SCRIPT] [FILE...]",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
-	// GNU's -i takes an OPTIONAL attached suffix (`-i.bak`), which getopt-style
-	// flag parsers don't model. Pre-strip that form so pflag only sees bare -i /
-	// --in-place[=SUFFIX].
-	var inPlacePre bool
-	var inPlaceSuffix string
-	{
-		filtered := args[:0:0]
-		for _, a := range args {
-			if len(a) > 2 && strings.HasPrefix(a, "-i") && !strings.HasPrefix(a, "--") {
-				inPlacePre, inPlaceSuffix = true, a[2:]
-				continue
-			}
-			filtered = append(filtered, a)
-		}
-		args = filtered
-	}
+	// GNU's -i takes an optional attached suffix (`-i.bak`), which pflag
+	// cannot model without displaying an internal sentinel in --help.
+	// Extract every supported spelling before ordinary flag parsing.
+	helpRequested := hasHelpFlag(args)
+	args, inPlaceFlag, inPlaceSuffix := extractInPlace(args)
 
 	fs := tool.NewFlags(cmd.Name)
 	quiet := fs.BoolP("quiet", "n", false, "suppress automatic printing of pattern space")
@@ -62,9 +52,12 @@ func run(rc *tool.RunContext, args []string) int {
 	ereE := fs.BoolP("regexp-extended", "E", false, "use extended regular expressions")
 	ereR := fs.BoolP("regexp-extended-r", "r", false, "same as -E")
 	separate := fs.BoolP("separate", "s", false, "consider files as separate rather than one continuous stream")
-	// -i takes an optional suffix; pflag NoOptDefVal lets `-i` work without a value.
+	// This flag remains registered for the generated help text. extractInPlace
+	// removes it before parsing during normal execution.
 	inPlace := fs.StringP("in-place", "i", "", "edit files in place (optional backup SUFFIX)")
-	fs.Lookup("in-place").NoOptDefVal = "\x00" // sentinel: -i given with no suffix
+	if helpRequested {
+		fs.Lookup("in-place").NoOptDefVal = "SUFFIX"
+	}
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -95,7 +88,6 @@ func run(rc *tool.RunContext, args []string) int {
 
 	gosed.ExtendedRegex = *ereE || *ereR
 
-	inPlaceFlag := inPlacePre || fs.Lookup("in-place").Changed
 	files := operands
 
 	// In-place editing requires real files; rewrite each independently.
@@ -104,11 +96,8 @@ func run(rc *tool.RunContext, args []string) int {
 			return tool.UsageError(rc, cmd, "-i may not be used with stdin")
 		}
 		suffix := inPlaceSuffix
-		if !inPlacePre {
+		if fs.Lookup("in-place").Changed {
 			suffix = *inPlace
-			if suffix == "\x00" {
-				suffix = ""
-			}
 		}
 		rc2 := 0
 		for _, f := range files {
@@ -171,6 +160,62 @@ func run(rc *tool.RunContext, args []string) int {
 		c.Close()
 	}
 	return status
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
+// extractInPlace recognizes GNU's optional-argument spellings. A short
+// optional argument must be attached: "-i .bak" means no backup suffix and
+// leaves ".bak" as an operand, while "-i.bak" supplies the suffix.
+func extractInPlace(args []string) (filtered []string, changed bool, suffix string) {
+	filtered = make([]string, 0, len(args))
+	for i, arg := range args {
+		if arg == "--" {
+			filtered = append(filtered, args[i:]...)
+			break
+		}
+		switch {
+		case strings.HasPrefix(arg, "--"):
+			name, value, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+			if name != "" && strings.HasPrefix("in-place", name) {
+				changed, suffix = true, ""
+				if hasValue {
+					suffix = value
+				}
+				continue
+			}
+			filtered = append(filtered, arg)
+			continue
+		case arg == "-i":
+			changed, suffix = true, ""
+			continue
+		case len(arg) > 2 && arg[0] == '-' && arg[1] != '-':
+			cluster := arg[1:]
+			pos := strings.IndexByte(cluster, 'i')
+			if pos < 0 || strings.ContainsAny(cluster[:pos], "ef") {
+				filtered = append(filtered, arg)
+				continue
+			}
+			changed, suffix = true, cluster[pos+1:]
+			if pos > 0 {
+				filtered = append(filtered, "-"+cluster[:pos])
+			}
+			continue
+		default:
+			filtered = append(filtered, arg)
+		}
+	}
+	return filtered, changed, suffix
 }
 
 // apply compiles the program and streams input→output through the engine.
@@ -355,7 +400,12 @@ func applySimpleSubstitutionLine(dst []byte, subst *simpleSubstitution, line []b
 
 func editInPlace(rc *tool.RunContext, program string, quiet bool, file, suffix string) error {
 	path := rc.Path(file)
-	src, err := os.ReadFile(path)
+	src, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	fi, err := src.Stat()
 	if err != nil {
 		return err
 	}
@@ -363,25 +413,91 @@ func editInPlace(rc *tool.RunContext, program string, quiet bool, file, suffix s
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, eng.Wrap(bytes.NewReader(src))); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".sed-*")
+	if err != nil {
 		return err
 	}
+	tmpName := tmp.Name()
+	keepTemp := false
+	defer func() {
+		tmp.Close()
+		if !keepTemp {
+			os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
+		return err
+	}
+	if _, err := io.Copy(tmp, eng.Wrap(src)); err != nil {
+		return err
+	}
+	if err := src.Close(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
 	if suffix != "" {
 		backup := path + suffix
 		if strings.Contains(suffix, "*") {
 			backup = strings.ReplaceAll(suffix, "*", path)
 		}
-		if err := os.WriteFile(backup, src, 0o644); err != nil {
+		if filepath.Clean(backup) == filepath.Clean(path) {
+			if err := replaceExisting(tmpName, path); err != nil {
+				return err
+			}
+			keepTemp = true
+			return nil
+		}
+		// GNU replaces an existing backup of the same name.
+		if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+		if err := os.Rename(path, backup); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpName, path); err != nil {
+			_ = os.Rename(backup, path)
+			return err
+		}
+		keepTemp = true
+		return nil
 	}
-	fi, _ := os.Stat(path)
-	mode := os.FileMode(0o644)
-	if fi != nil {
-		mode = fi.Mode()
+
+	if err := replaceExisting(tmpName, path); err != nil {
+		return err
 	}
-	return os.WriteFile(path, buf.Bytes(), mode)
+	keepTemp = true
+	return nil
+}
+
+func replaceExisting(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	// Windows cannot rename over an existing file. Displace the destination
+	// first, but retain it until the replacement succeeds so a failed rename
+	// never destroys the original.
+	placeholder, err := os.CreateTemp(filepath.Dir(dst), ".sed-old-*")
+	if err != nil {
+		return err
+	}
+	old := placeholder.Name()
+	if err := placeholder.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(old); err != nil {
+		return err
+	}
+	if err := os.Rename(dst, old); err != nil {
+		return err
+	}
+	if err := os.Rename(src, dst); err != nil {
+		_ = os.Rename(old, dst)
+		return err
+	}
+	return os.Remove(old)
 }
 
 func newEngine(rc *tool.RunContext, program string, quiet bool) (*gosed.Engine, error) {

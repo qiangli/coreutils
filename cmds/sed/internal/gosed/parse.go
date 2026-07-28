@@ -178,6 +178,13 @@ func compile_twocond(ps *parseState, c1 condition) {
 			break
 		}
 		c2 = numbercond(n)
+	case tok_RELNUM:
+		n, err := strconv.Atoi(tok.args[0])
+		if err != nil {
+			ps.err = fmt.Errorf("Bad relative number <%s> %v", tok.args[0], &tok.location)
+			break
+		}
+		c2 = &relativecond{lines: n}
 	case tok_DOLLAR:
 		c2 = eofcond{}
 	case tok_RX:
