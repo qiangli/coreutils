@@ -37,7 +37,7 @@ would convince you; herald runs it and reports the verdict, so a delegated
 task composes with && like any other command.`),
 		SilenceUsage: true,
 	}
-	root.AddCommand(newDiscoverCmd(), newAddCmd(), newListCmd(), newRemoveCmd(), newSendCmd())
+	root.AddCommand(newDiscoverCmd(), newAddCmd(), newListCmd(), newRemoveCmd(), newSendCmd(), newACPCmd())
 	return root
 }
 
