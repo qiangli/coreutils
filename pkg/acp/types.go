@@ -13,7 +13,7 @@ package acp
 import (
 	"context"
 
-	"github.com/qiangli/coreutils/pkg/herald"
+	"github.com/qiangli/coreutils/pkg/gate"
 )
 
 // ProtocolVersionNumber is the ACP protocol version this client speaks.
@@ -133,7 +133,7 @@ type AgentResult struct {
 	Text              string
 	ClaimedStopReason StopReason
 	StopReason        StopReason
-	Gate              herald.GateOutcome
+	Gate              gate.Outcome
 }
 
 // Succeeded is the only success predicate callers should use. As with

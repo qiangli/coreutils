@@ -1,0 +1,150 @@
+package gate
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// WHY THIS LIVES HERE AND NOT IN pkg/herald.
+//
+// A self-reported completion is a claim, and running a command to settle it is
+// the same primitive whatever protocol carried the claim: A2A's
+// TASK_STATE_COMPLETED and ACP's end_turn are both the agent's own word that it
+// finished, with no way for the driver to disagree.
+//
+// It was written in pkg/herald because A2A needed it first, and pkg/acp then
+// imported herald to reach it — which pinned the arrow herald -> acp shut. ACP
+// is the protocol a HOST speaks to drive us, so `herald acp` has to construct
+// an acp.Agent, and herald could not import acp while acp imported herald.
+//
+// The cycle was never structural. The gate simply belonged one level down, in
+// the package that already owns "run a command, let its exit status be the
+// verdict". Both protocol packages now import gate, and neither imports the
+// other.
+//
+// Distinct from Run/Definition in this same package: those resolve and execute
+// the PROJECT's declared gate. This runs one arbitrary command supplied for a
+// single delegated task, and reports a verdict shaped for that.
+
+// Outcome is the verdict on one delegated task.
+type Outcome struct {
+	// Ran reports whether a gate was executed at all. False means the task
+	// was delegated with no gate — permitted, but the result is unverified
+	// and callers must not report it as success.
+	Ran bool `json:"ran"`
+	// Passed is the verdict. Meaningless unless Ran.
+	Passed bool `json:"passed"`
+	// Where records who ran it: "peer" (the extension) or "local" (fallback).
+	Where string `json:"where"`
+	// Command is the gate as given.
+	Command string `json:"command,omitempty"`
+	// ExitCode is the gate's exit status when run locally.
+	ExitCode int `json:"exit_code"`
+	// Output is captured combined output, truncated for transport.
+	Output string `json:"output,omitempty"`
+	// PeerClaimed is what the counterparty said before the gate ran. Recorded
+	// because the gap between claim and verdict is the interesting signal — a
+	// peer that habitually claims COMPLETED on a failing gate is a peer whose
+	// reliability ledger should say so.
+	PeerClaimed string `json:"peer_claimed,omitempty"`
+	// Elapsed is how long the gate took.
+	Elapsed time.Duration `json:"elapsed_ns,omitempty"`
+}
+
+// Trusted reports whether the outcome may be treated as success.
+//
+// The whole point: an unrun gate is NOT success. Callers must branch on this,
+// never on the counterparty's reported state.
+func (o Outcome) Trusted() bool { return o.Ran && o.Passed }
+
+// Summary is a one-line human rendering.
+func (o Outcome) Summary() string {
+	switch {
+	case !o.Ran:
+		return "UNVERIFIED (no gate ran)"
+	case o.Passed:
+		return fmt.Sprintf("PASS (%s gate)", o.Where)
+	default:
+		return fmt.Sprintf("FAIL (%s gate, exit %d)", o.Where, o.ExitCode)
+	}
+}
+
+// maxAttestOutput caps captured output so a runaway gate cannot balloon a task
+// record. The tail is kept: failures print last.
+const maxAttestOutput = 16 << 10
+
+// RunLocal executes the gate command in dir and returns the verdict.
+//
+// Shelling out here is correct and not a violation of the no-shell-out rule:
+// that rule forbids a tool from spawning programs to implement ITS OWN
+// behavior. A gate's entire documented purpose IS to run the operand command,
+// exactly like timeout(1) or xargs(1) — the same carve-out those tools use.
+func RunLocal(ctx context.Context, dir, command, peerClaimed string) Outcome {
+	out := Outcome{Where: "local", Command: command, PeerClaimed: peerClaimed}
+	if strings.TrimSpace(command) == "" {
+		return out // Ran stays false: no gate, no verdict, no success.
+	}
+	if dir == "" {
+		dir, _ = os.Getwd()
+	}
+
+	start := time.Now()
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = dir
+	// The gate must not inherit the operator's secrets: it is arbitrary
+	// operator-supplied code being run to judge ANOTHER party's output.
+	cmd.Env = attestEnv(dir)
+	raw, err := cmd.CombinedOutput()
+	out.Elapsed = time.Since(start)
+	out.Ran = true
+	out.Output = truncateTail(string(raw), maxAttestOutput)
+
+	if err == nil {
+		out.Passed = true
+		return out
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		out.ExitCode = ee.ExitCode()
+	} else {
+		// The gate could not be executed at all (missing shell, bad dir).
+		// That is NOT a pass, and it is not a counterparty failure either — it
+		// is an unusable gate, which must be loud rather than silently
+		// permissive.
+		out.ExitCode = -1
+		out.Output = strings.TrimSpace(out.Output + "\ngate: could not run: " + err.Error())
+	}
+	return out
+}
+
+// attestEnv builds a minimal environment for gate execution. PATH and HOME are
+// preserved because a gate is usually a build or test command; the vault
+// variables are not.
+//
+// HERALD_GATE_DIR is kept under its original name deliberately: it is an
+// observable a gate script may already read, and renaming it to match this
+// package would break those scripts for no gain.
+func attestEnv(dir string) []string {
+	keep := []string{"PATH", "HOME", "LANG", "TMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH"}
+	env := make([]string, 0, len(keep)+2)
+	for _, k := range keep {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	env = append(env, "LC_ALL=C", "HERALD_GATE_DIR="+dir)
+	return env
+}
+
+// truncateTail keeps the last n bytes, which is where a failure explains itself.
+func truncateTail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "…(truncated)…\n" + s[len(s)-n:]
+}

@@ -2,11 +2,8 @@ package herald
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
-	"strings"
-	"time"
+
+	"github.com/qiangli/coreutils/pkg/gate"
 )
 
 // GateExtensionURI identifies herald's evidence extension.
@@ -35,132 +32,23 @@ const GateExtensionURI = "https://dhnt.io/ext/gate/v1"
 // private dialect.
 
 // GateOutcome is the verdict on one delegated task.
-type GateOutcome struct {
-	// Ran reports whether a gate was executed at all. False means the task
-	// was delegated with no gate — permitted, but the result is unverified
-	// and callers must not report it as success.
-	Ran bool `json:"ran"`
-	// Passed is the verdict. Meaningless unless Ran.
-	Passed bool `json:"passed"`
-	// Where records who ran it: "peer" (the extension) or "local" (fallback).
-	Where string `json:"where"`
-	// Command is the gate as given.
-	Command string `json:"command,omitempty"`
-	// ExitCode is the gate's exit status when run locally.
-	ExitCode int `json:"exit_code"`
-	// Output is captured combined output, truncated for transport.
-	Output string `json:"output,omitempty"`
-	// PeerClaimed is what the peer said before the gate ran. Recorded
-	// because the gap between claim and verdict is the interesting signal —
-	// a peer that habitually claims COMPLETED on a failing gate is a peer
-	// whose reliability ledger should say so.
-	PeerClaimed string `json:"peer_claimed,omitempty"`
-	// Elapsed is how long the gate took.
-	Elapsed time.Duration `json:"elapsed_ns,omitempty"`
-}
-
-// Trusted reports whether the outcome may be treated as success.
 //
-// The whole point: an unrun gate is NOT success. Callers must branch on this,
-// never on the peer's task state.
-func (o GateOutcome) Trusted() bool { return o.Ran && o.Passed }
-
-// Summary is a one-line human rendering.
-func (o GateOutcome) Summary() string {
-	switch {
-	case !o.Ran:
-		return "UNVERIFIED (no gate ran)"
-	case o.Passed:
-		return fmt.Sprintf("PASS (%s gate)", o.Where)
-	default:
-		return fmt.Sprintf("FAIL (%s gate, exit %d)", o.Where, o.ExitCode)
-	}
-}
-
-// maxGateOutput caps captured output so a runaway gate cannot balloon a task
-// record. The tail is kept: failures print last.
-const maxGateOutput = 16 << 10
+// An ALIAS, not a wrapper. The implementation moved to pkg/gate so pkg/acp can
+// reach it without importing herald — that import was the only thing stopping
+// herald from importing acp, and `herald acp` must construct an acp.Agent.
+// ACP's end_turn is the same self-reported claim as A2A's COMPLETED, so both
+// protocol packages want this primitive and neither should own it.
+//
+// Alias rather than a distinct type is load-bearing: gate.Outcome and
+// herald.GateOutcome are the SAME type, so every existing value already
+// flowing between acp and herald keeps working with no conversion.
+type GateOutcome = gate.Outcome
 
 // RunLocalGate executes the gate in dir and returns the verdict.
 //
-// Shelling out here is correct and not a violation of the no-shell-out rule:
-// that rule forbids a tool from spawning programs to implement ITS OWN
-// behavior. A gate's entire documented purpose IS to run the operand command,
-// exactly like timeout(1) or xargs(1) — the same carve-out those tools use.
-func RunLocalGate(ctx context.Context, dir, gate string, peerClaimed string) GateOutcome {
-	out := GateOutcome{Where: "local", Command: gate, PeerClaimed: peerClaimed}
-	if strings.TrimSpace(gate) == "" {
-		return out // Ran stays false: no gate, no verdict, no success.
-	}
-	if dir == "" {
-		dir, _ = os.Getwd()
-	}
-
-	start := time.Now()
-	cmd := exec.CommandContext(ctx, "sh", "-c", gate)
-	cmd.Dir = dir
-	// The gate must not inherit the operator's secrets: it is arbitrary
-	// operator-supplied code being run to judge a REMOTE party's output.
-	cmd.Env = gateEnv(dir)
-	raw, err := cmd.CombinedOutput()
-	out.Elapsed = time.Since(start)
-	out.Ran = true
-	out.Output = truncateTail(string(raw), maxGateOutput)
-
-	if err == nil {
-		out.Passed = true
-		return out
-	}
-	var ee *exec.ExitError
-	if errorsAs(err, &ee) {
-		out.ExitCode = ee.ExitCode()
-	} else {
-		// The gate could not be executed at all (missing shell, bad dir).
-		// That is NOT a pass, and it is not a peer failure either — it is an
-		// unusable gate, which must be loud rather than silently permissive.
-		out.ExitCode = -1
-		out.Output = strings.TrimSpace(out.Output + "\nherald: gate could not run: " + err.Error())
-	}
-	return out
-}
-
-// gateEnv builds a minimal environment for gate execution. PATH and HOME are
-// preserved because a gate is usually a build or test command; the vault
-// variables are not.
-func gateEnv(dir string) []string {
-	keep := []string{"PATH", "HOME", "LANG", "TMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH"}
-	env := make([]string, 0, len(keep)+2)
-	for _, k := range keep {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
-	}
-	env = append(env, "LC_ALL=C", "HERALD_GATE_DIR="+dir)
-	return env
-}
-
-// truncateTail keeps the last n bytes, which is where a failure explains
-// itself.
-func truncateTail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "…(truncated)…\n" + s[len(s)-n:]
-}
-
-// errorsAs is errors.As, wrapped so this file states its one dependency
-// explicitly rather than importing errors for a single call.
-func errorsAs(err error, target **exec.ExitError) bool {
-	for err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			*target = ee
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
+// herald's spelling of gate.RunLocal, kept because herald is where the gate
+// DISCIPLINE is documented and where A2A callers look for it. The mechanism
+// lives one level down so ACP can share it.
+func RunLocalGate(ctx context.Context, dir, gateCmd string, peerClaimed string) GateOutcome {
+	return gate.RunLocal(ctx, dir, gateCmd, peerClaimed)
 }

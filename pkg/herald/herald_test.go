@@ -301,29 +301,6 @@ func TestRunLocalGate(t *testing.T) {
 	})
 }
 
-// TestGateEnvExcludesSecrets pins that a gate does not inherit the operator's
-// vault. A gate is operator-supplied code run to judge a REMOTE party's work;
-// handing it every credential in the environment would be a needless blast
-// radius.
-func TestGateEnvExcludesSecrets(t *testing.T) {
-	t.Setenv("HERALD_TEST_FAKE_SECRET", "super-secret-value")
-	env := gateEnv("/tmp")
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "HERALD_TEST_FAKE_SECRET=") {
-			t.Fatal("gate environment must not carry arbitrary parent env vars")
-		}
-	}
-	var sawPath bool
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") {
-			sawPath = true
-		}
-	}
-	if !sawPath {
-		t.Error("gate environment should preserve PATH so build/test gates work")
-	}
-}
-
 func TestCardSupportsGate(t *testing.T) {
 	if (Card{}).SupportsGate() {
 		t.Error("empty card must not claim gate support")

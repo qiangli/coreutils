@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 
 	sdk "github.com/coder/acp-go-sdk"
-	"github.com/qiangli/coreutils/pkg/herald"
+	"github.com/qiangli/coreutils/pkg/gate"
 )
 
 // This is the ONE file that imports the ACP SDK. Every SDK type stays behind
@@ -329,7 +329,7 @@ func (a *Agent) verifyTurn(ctx context.Context, sessionID, cwd string, claimed T
 	if gateDir == "" {
 		gateDir = cwd
 	}
-	result.Gate = herald.RunLocalGate(ctx, gateDir, a.opts.Gate, string(claimed.StopReason))
+	result.Gate = gate.RunLocal(ctx, gateDir, a.opts.Gate, string(claimed.StopReason))
 	if claimed.StopReason == StopReasonEndTurn && result.Gate.Ran && !result.Gate.Passed {
 		// ACP v1 has no generic "verification failed" stop reason. Refusal is
 		// the fail-closed legal response: never preserve an unverified
