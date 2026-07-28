@@ -55,7 +55,7 @@ func weaveFlock(path string, wait time.Duration) (func(), error) {
 		}
 		if !time.Now().Before(deadline) {
 			_ = lf.Close()
-			return nil, errWeaveQueueBusy
+			return nil, weaveLockBusy{filepath.Base(path)}
 		}
 		time.Sleep(weaveQueueLockPoll)
 	}

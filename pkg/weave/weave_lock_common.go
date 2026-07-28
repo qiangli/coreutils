@@ -40,10 +40,27 @@ import (
 //     second caller gets an immediate "busy, retry" instead of an indefinite
 //     block. That is pull.lock, not queue.lock.
 
-// errWeaveQueueBusy is returned when the queue lock could not be taken within
-// the caller's patience. Callers either report it (write paths) or degrade to
-// a lock-free read (maintenance paths).
-var errWeaveQueueBusy = errors.New("weave: queue busy — another weave command holds the queue lock; retry")
+// errWeaveQueueBusy is the SENTINEL every bounded weave lock returns when its
+// wait expires. Callers either report it (write paths) or degrade to a
+// lock-free read (maintenance paths).
+//
+// Its message is deliberately lock-NEUTRAL. weaveFlock is now shared by
+// queue.lock, pull.lock and cooldown.lock, so a message naming the queue would
+// be printed verbatim to an operator who actually lost a race for cooldown.lock
+// — sending them to inspect a lock nobody holds. Callers get the specific name
+// via weaveLockBusy; the sentinel exists for errors.Is, not for reading.
+var errWeaveQueueBusy = errors.New("weave: lock busy — another weave command holds it; retry")
+
+// weaveLockBusy reports which lock was actually contended while staying
+// errors.Is-compatible with errWeaveQueueBusy, so every existing check keeps
+// working unchanged.
+type weaveLockBusy struct{ lock string }
+
+func (e weaveLockBusy) Error() string {
+	return fmt.Sprintf("weave: %s is held by another weave command; retry", e.lock)
+}
+
+func (e weaveLockBusy) Unwrap() error { return errWeaveQueueBusy }
 
 // errWeavePullBusy is returned when another merge/pull already owns this
 // repo's pull lock. A pull mutates the shared live checkout, so it is
