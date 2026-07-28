@@ -92,13 +92,13 @@ func cardFrom(raw *a2a.AgentCard) Card {
 
 // Result is the outcome of delegating one task to a peer.
 type Result struct {
-	SchemaVersion string      `json:"schema_version"`
-	Peer          string      `json:"peer"`
-	TaskID        string      `json:"task_id,omitempty"`
-	State         string      `json:"state"`
-	Text          string      `json:"text,omitempty"`
-	Artifacts     []string    `json:"artifacts,omitempty"`
-	Gate          GateOutcome `json:"gate"`
+	SchemaVersion string        `json:"schema_version"`
+	Peer          string        `json:"peer"`
+	TaskID        string        `json:"task_id,omitempty"`
+	State         string        `json:"state"`
+	Text          string        `json:"text,omitempty"`
+	Artifacts     []string      `json:"artifacts,omitempty"`
+	Gate          GateOutcome   `json:"gate"`
 	Elapsed       time.Duration `json:"elapsed_ns,omitempty"`
 }
 
