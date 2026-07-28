@@ -197,6 +197,18 @@ type ToolLaunch struct {
 	//     {"type":"turn.start"} {"type":"tool.call"} {"type":"turn.end", ...}
 	EventsArg string `yaml:"events_arg,omitempty" json:"events_arg,omitempty"`
 
+	// ACPExec is the argv template that launches this tool as an ACP AGENT
+	// speaking JSON-RPC on stdio. Empty means the tool does not speak ACP and
+	// the launcher falls to the next rung. {model} substitutes as in Exec;
+	// there is no {prompt} -- the prompt travels in the ACP session, not argv.
+	ACPExec string `yaml:"acp_exec,omitempty" json:"acp_exec,omitempty"`
+
+	// ACPRung records HOW ACP is reached: "native" (rung 1, the tool speaks it
+	// itself) or "adapter" (rung 2, via an external bridge such as a Node
+	// adapter, which is a DEPENDENCY the host may not have). Advisory only --
+	// ACPExec is authoritative. Empty when ACPExec is empty.
+	ACPRung string `yaml:"acp_rung,omitempty" json:"acp_rung,omitempty"`
+
 	// SteerExec is the argv template that ACTUALLY accepts steering, and it is
 	// usually NOT Exec.
 	//
