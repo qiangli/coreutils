@@ -571,7 +571,7 @@ then --force to merge anyway.`,
 				issueID = id
 				issueSpecified = true
 			}
-			return runWeavePull(cmd, &flags, issueID, issueSpecified, requireReview, force, reviewAgent)
+			return runWeavePull(cmd, &flags, issueID, issueSpecified, requireReview, force, false, reviewAgent)
 		},
 	}
 	flags.attach(cmd)
