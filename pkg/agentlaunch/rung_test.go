@@ -145,7 +145,6 @@ func TestBaselineToolsStayOnTheRungTheyAreOnToday(t *testing.T) {
 		"claude": RungPTY,
 		"codex":  RungPTY,
 		"aider":  RungPTY,
-		"ycode":  RungEvents,
 	} {
 		tool, ok := cat.Tool(name)
 		if !ok {
@@ -165,28 +164,45 @@ func TestBaselineToolsStayOnTheRungTheyAreOnToday(t *testing.T) {
 }
 
 // DECLARED is not EFFECTIVE, and the baseline catalog is where that stops being
-// theoretical. opencode ships `acp_exec: opencode acp` — measured on the wire in
-// run #190 — so it DECLARES rung 1. With the opt-in gate off it is still driven
-// on the rung it was on before ACP existed, because that gate is the merge
-// safety for a transport with no fleet mileage.
+// theoretical.
+//
+// Both ACP-declaring tools were measured on the wire, not asserted: `opencode
+// acp` in run #190, `ycode acp` after run #24 merged. With the opt-in gate off
+// each is still driven on the rung it was on before ACP existed — and they fall
+// to DIFFERENT rungs, which is the point of the ladder being a ladder:
+//
+//	opencode  declares acp only            -> gate off: pty
+//	ycode     declares acp AND events      -> gate off: events
+//
+// A single-step fallback would have collapsed both to pty and quietly cost
+// ycode its structured turn boundaries.
 func TestOpencodeDeclaresACPButIsGatedUntilOptedIn(t *testing.T) {
 	cat := fleet.New(fleet.WithRoot(t.TempDir()))
-	tool, ok := cat.Tool("opencode")
-	if !ok {
-		t.Fatal("opencode is not in the baseline catalog")
-	}
-	if got := RungFor(tool.CLI.Launch); got != RungACPNative {
-		t.Errorf("RungFor = %s, want acp-native — run #190 measured `opencode acp` speaking the protocol", got)
+	for _, tc := range []struct {
+		name        string
+		whenGateOff Rung
+	}{
+		{"opencode", RungPTY}, // no events_arg: falls all the way to pty
+		{"ycode", RungEvents}, // has events_arg: falls one step, to events
+	} {
+		tool, ok := cat.Tool(tc.name)
+		if !ok {
+			t.Fatalf("%s is not in the baseline catalog", tc.name)
+		}
+		if got := RungFor(tool.CLI.Launch); got != RungACPNative {
+			t.Errorf("%s: RungFor = %s, want acp-native — measured on the wire", tc.name, got)
+		}
+		t.Setenv(ACPEnv, "0")
+		if got := EffectiveRung(tool.CLI.Launch); got != tc.whenGateOff {
+			t.Errorf("%s: gate off EffectiveRung = %s, want %s", tc.name, got, tc.whenGateOff)
+		}
+		t.Setenv(ACPEnv, "1")
+		if got := EffectiveRung(tool.CLI.Launch); got != RungACPNative {
+			t.Errorf("%s: gate on EffectiveRung = %s, want acp-native", tc.name, got)
+		}
 	}
 
-	t.Setenv(ACPEnv, "0")
-	if got := EffectiveRung(tool.CLI.Launch); got != RungPTY {
-		t.Errorf("gate off: EffectiveRung = %s, want pty", got)
-	}
-	t.Setenv(ACPEnv, "1")
-	if got := EffectiveRung(tool.CLI.Launch); got != RungACPNative {
-		t.Errorf("gate on: EffectiveRung = %s, want acp-native", got)
-	}
+	tool, _ := cat.Tool("opencode")
 
 	// The argv is the TOOL, never a bridge: there is no adapter rung.
 	bin, args, ok := ACPArgv(tool, "")

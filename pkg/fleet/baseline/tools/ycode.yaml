@@ -73,6 +73,20 @@ cli:
     # rule has been asking for from the beginning: a tool call as a fact, not a
     # line scraped back out of a terminal and guessed at.
     events_arg: --events {path}
+    # RUNG 1. `ycode acp` speaks the Agent Client Protocol on stdio, so an
+    # external orchestrator can drive this host over a standard rather than over
+    # ycode's private --events convention. Measured on the wire 2026-07-28
+    # against the merged binary, not asserted from a commit message:
+    #
+    #   $ printf '{"jsonrpc":"2.0","id":1,"method":"initialize",...}' | ycode acp
+    #   {"jsonrpc":"2.0","id":1,"result":{"agentCapabilities":{...},
+    #    "protocolVersion":1}}
+    #
+    # events_arg STAYS. A bound model refuses the ACP rung (the protocol carries
+    # no model selection), so `ycode-deepseek-v4-pro` and friends keep taking
+    # rung 2 and lose nothing. Only the bare tool-level `ycode` binding reaches
+    # rung 1 — which is what makes this the fleet's first one.
+    acp_exec: ycode acp
     supports_say: true
     supports_graceful_quit: true
     notes: >-
