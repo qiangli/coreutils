@@ -1621,11 +1621,26 @@ func weaveRunSuiteGate(root, command string) (int, string) {
 // the same merged tree it historically saw after the live merge; the caller
 // later revalidates that SHA under pull.lock before committing.
 func weaveRunCandidateSuiteGate(root, workspace, branch, baseSHA, command string) (exit int, output string, conflict bool, err error) {
-	tmp, err := os.MkdirTemp("", "weave-pull-gate-*")
+	// THE CLONE GOES INSIDE A TEMP PARENT, under the repo's own directory name,
+	// so a sibling-path replace still resolves.
+	//
+	// `replace mvdan.cc/sh/v3 => ../sh` is resolved relative to the module
+	// directory. Cloning straight into /tmp/weave-pull-gate-XXXX makes ../sh
+	// mean /tmp/sh, which does not exist, and EVERY package fails to load —
+	// measured at 40 copies of "replacement directory ../sh does not exist".
+	// The gate then reported suite-gate-failed for candidates that are green in
+	// their workspace, which is exactly where a human goes to reproduce it and
+	// where it passes. It failed closed, so nothing bad merged; it also said
+	// nothing true about any candidate.
+	tmpParent, err := os.MkdirTemp("", "weave-pull-gate-*")
 	if err != nil {
 		return 0, "", false, fmt.Errorf("create isolated suite-gate checkout: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	defer os.RemoveAll(tmpParent)
+	tmp := filepath.Join(tmpParent, filepath.Base(root))
+	if err := weaveLinkSiblingReplaces(root, tmpParent); err != nil {
+		return 0, "", false, err
+	}
 	if out, err := exec.Command("git", "clone", "--quiet", "--no-local", root, tmp).CombinedOutput(); err != nil {
 		return 0, "", false, fmt.Errorf("clone isolated suite-gate checkout: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -1641,8 +1656,65 @@ func weaveRunCandidateSuiteGate(root, workspace, branch, baseSHA, command string
 	if out, err := merge.CombinedOutput(); err != nil {
 		return 0, strings.TrimSpace(string(out)), true, nil
 	}
+	// Hydrate submodules with the SAME helper a workspace uses. `git clone`
+	// leaves a submodule directory EMPTY, so an internal `=> ./external/...`
+	// replace cannot resolve — weaveHydrateSubmodules' own doc names this exact
+	// failure in this exact repo. Only visible once the sibling break above was
+	// fixed: it was masking this behind a louder one.
+	//
+	// It must be a real hydration, never a symlink. git refuses ("expected
+	// submodule path ... not to be a symbolic link") and that breaks go's VCS
+	// stamping for the WHOLE module, taking `go list ./...` from 255 packages
+	// to 0 — strictly worse than the empty submodule. Measured, not reasoned.
+	//
+	// After the merge, because the candidate may move the pin. Best-effort: a
+	// gate that refuses to run is worse than one reporting what the compiler says.
+	_ = weaveHydrateSubmodules(root, tmp, io.Discard, io.Discard)
 	exit, output = weaveRunSuiteGate(tmp, command)
 	return exit, output, false, nil
+}
+
+// weaveLinkSiblingReplaces symlinks every `=> ../x` replace target named by
+// root's go.mod into dst, so a module cloned to dst/<name> resolves them.
+//
+// It reads the DECLARED replaces rather than linking every sibling it can see:
+// the umbrella has a dozen projects next to each other, and a gate that quietly
+// exposed all of them would pass on a dependency the module never declared.
+//
+// A missing target is not an error. A repo may point at a sibling that is not
+// checked out here, and the gate's job is to report what the compiler says
+// about that, not to refuse to run.
+func weaveLinkSiblingReplaces(root, dst string) error {
+	b, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil // no go.mod: nothing to resolve
+	}
+	parent := filepath.Dir(root)
+	linked := map[string]bool{}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		i := strings.Index(line, "=> ../")
+		if i < 0 || strings.HasPrefix(line, "//") {
+			continue
+		}
+		fields := strings.Fields(line[i+len("=> "):])
+		if len(fields) == 0 {
+			continue
+		}
+		name := filepath.Base(filepath.Clean(fields[0]))
+		if name == "" || name == "." || name == ".." || linked[name] {
+			continue
+		}
+		src := filepath.Join(parent, name)
+		if _, err := os.Stat(src); err != nil {
+			continue // not checked out here; let the compiler say so
+		}
+		if err := os.Symlink(src, filepath.Join(dst, name)); err != nil && !os.IsExist(err) {
+			return fmt.Errorf("link sibling %q for suite gate: %w", name, err)
+		}
+		linked[name] = true
+	}
+	return nil
 }
 
 // weaveValidatePullEvidence runs only while pull.lock is held. It refuses to
