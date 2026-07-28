@@ -1164,10 +1164,58 @@ func weaveRunVerify(workspace, command string) (int, string) {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		s += "\n[weave: verify command timed out after 10m]"
 	}
-	if len(s) > 2000 {
-		s = s[len(s)-2000:]
+	return exit, weaveTrimVerifyOutput(s, 2000)
+}
+
+// weaveTrimVerifyOutput shortens verify output to about max bytes WITHOUT
+// discarding the lines that say what went wrong.
+//
+// It used to be `s = s[len(s)-2000:]` — keep the tail. For `go test ./...`
+// over 200 packages that is catastrophic: the run ends with the alphabetically
+// last packages passing, so the tail is all `ok` lines and a bare `FAIL`, while
+// every `FAIL <pkg>` and every `# <pkg>` build error sits in the discarded
+// head. The stored verdict then reads like a failure with no cause, and the
+// summary line quotes a fragment of whatever `ok` line the cut landed in
+// ("suite-gate-failed — dge 2.817s").
+//
+// That is the same defect this repo keeps finding in its own checks: a result
+// that survives while the evidence for it is thrown away. It cost two separate
+// multi-hour diagnoses in one session — once chasing a sibling-replace break,
+// once chasing this.
+//
+// So: salient lines first, in order, then as much of the tail as still fits.
+// A reader gets the failures even when the run is enormous.
+func weaveTrimVerifyOutput(s string, max int) string {
+	if len(s) <= max {
+		return s
 	}
-	return exit, s
+	var salient []string
+	for _, ln := range strings.Split(s, "\n") {
+		switch {
+		case strings.HasPrefix(ln, "FAIL"),
+			strings.HasPrefix(ln, "--- FAIL"),
+			strings.HasPrefix(ln, "# "),
+			strings.HasPrefix(ln, "panic:"),
+			strings.Contains(ln, "[weave: verify command timed out"):
+			salient = append(salient, ln)
+		}
+	}
+	head := strings.Join(salient, "\n")
+	if len(head) > max {
+		// More failures than budget: keep the FIRST ones. The first failure is
+		// usually the cause; later ones are often its consequences.
+		head = head[:max] + "\n[weave: +more failures truncated]"
+		return head
+	}
+	room := max - len(head)
+	tail := s
+	if len(tail) > room {
+		tail = tail[len(tail)-room:]
+	}
+	if head == "" {
+		return tail
+	}
+	return head + "\n[weave: ...output trimmed, failures above...]\n" + tail
 }
 
 func weaveCollectVerifyEvidence(workspace, command string, dirty bool, dirtyFiles int) (verifyExit *int, verifyOutput, verifyTree string) {
