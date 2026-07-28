@@ -186,6 +186,27 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	_ = room.Join(card)
 	s.acpCard = card.ID
 
+	// WATCH FOR A DEATH NOBODY ASKED FOR.
+	//
+	// closeACP is the caller's path out, so before this every route to
+	// close(s.done) began with the caller deciding to leave. An agent that
+	// crashed — or was OOM-killed, or exited on its own — closed nothing: the
+	// protocol just went quiet, Live() kept answering true, and anything
+	// waiting on the session waited forever. The pty path never had this hole
+	// because a dead child closes the pty and the reader returns EOF; ACP has
+	// no equivalent symptom, which is exactly why it needs an explicit watcher.
+	//
+	// Started AFTER the room join so a death cannot race past the card and skip
+	// room.Leave, which would strand a member card for a process that is gone.
+	// closeACP is sync.Once-guarded, so the ordinary caller path and this one
+	// cannot double-close.
+	if dead := client.Done(); dead != nil {
+		go func() {
+			<-dead
+			s.closeACP()
+		}()
+	}
+
 	// The opening prompt needs no waitReady and no re-send ladder. Those exist
 	// because a TUI silently swallows keystrokes it is not ready for; a JSON-RPC
 	// request is either answered or it is an error.
