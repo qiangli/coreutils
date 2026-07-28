@@ -20,7 +20,7 @@ Provide a unified, single-trace view of an entire agent run by establishing a "t
    The trace context (Traceparent/Tracestate) of the `weave.run` span is injected into the child environment (`weaveChildEnv`, the `weave start` launch environment path) using standard W3C trace context format (`TRACEPARENT` env var).
 
 3. **Child Spans**
-   Any traceparent-aware agent, harness, or gateway will extract the trace context from the environment. Harness spans (`agent.turn`) and gateway spans (`llm.request`) will automatically nest under the root `weave.run` span, creating a single unified trace tree.
+   Any traceparent-aware agent, harness, or gateway will extract the trace context from the environment. Bashy's model-call path emits an internal `gen_ai.turn` span with a `chat {model}` client span beneath it. Those spans automatically nest under an active orchestrator span, creating a single trace tree.
 
 4. **Outcome Attributes**
    The `weave.run` span is enriched with terminal evidence at the end of the run. It captures:
@@ -38,7 +38,35 @@ Provide a unified, single-trace view of an entire agent run by establishing a "t
    A histogram metric `fleet.run.turns` is emitted upon completion, tagged by `agent` and `band`. This enables fleet-level visibility into agent efficiency and loops.
 
 6. **Configuration & No-Op**
-   Telemetry must remain free when disabled. We rely purely on standard OpenTelemetry environment variables (e.g. `OTEL_EXPORTER_OTLP_ENDPOINT`). If `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, the telemetry subsystem is a pure NO-OP: it allocates no exporters, starts no goroutines, and drops all spans, though the global propagator remains installed so wire context survives hops.
+   Telemetry relies on standard OpenTelemetry environment variables. With no OTLP endpoint, spans go to the bounded local spool; `OTEL_TRACES_EXPORTER=none` selects the pure no-op path. The global propagator remains installed in either mode so wire context survives hops.
+
+## GenAI Tier 1 coverage
+
+The model-call emitter targets OpenTelemetry GenAI semantic conventions schema
+1.42.0. It records structure and accounting metadata only: operation, provider,
+requested model, token counts, finish reason when the harness reports one, span
+duration, and bashy-private cost, pricing-known, usage-source, venue, and
+coverage fields. It has no API for prompts, completions, system instructions,
+tool arguments, or tool results.
+
+Bashy's `chat.Invoke` and ACP prompt paths launch another vendor's executable.
+The actual provider calls happen inside that subprocess, so these spans cover
+the harness-observed turn, not every internal retry or tool-loop model call.
+Every such span therefore carries
+`bashy.gen_ai.coverage.scope=subprocess_harness_turn` and
+`bashy.gen_ai.coverage.complete=false`. ACP supplies a structured finish reason;
+other subprocess paths leave it unknown. Token usage is marked
+`bashy.gen_ai.usage.source=harness_estimate`.
+
+Claude, Codex, OpenCode, agy, and other vendor binaries are not claimed as
+directly instrumented. Provider-reported usage from their event or summary
+surfaces is not captured here. Fleet panels must filter or group by the coverage
+fields rather than treating these observations as a complete provider-call
+inventory.
+
+The execution venue is supplied through context with
+`telemetry.WithGenAIVenue`. When the host does not provide one, the emitter
+writes `bashy.execution.venue=UNKNOWN`; it never invents a tier.
 
 ## Implementation Notes
 

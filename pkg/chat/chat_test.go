@@ -2,22 +2,67 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type fakeRunner struct {
-	agent string
-	args  []string
-	cwd   string
+	agent  string
+	args   []string
+	cwd    string
+	output string
 }
 
 func (f *fakeRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
 	f.agent, f.args, f.cwd = agent, append([]string{}, args...), cwd
+	if f.output != "" {
+		return f.output, 0, nil
+	}
 	return "ok\n", 0, nil
+}
+
+func TestInvokeEmitsNestedTier1SpansWithoutContent(t *testing.T) {
+	const promptSecret = "PROMPT_SECRET_sk-live-callsite"
+	const completionSecret = "COMPLETION_SECRET_ghp_callsite"
+
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	old := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(old) })
+
+	r := &fakeRunner{output: completionSecret}
+	if _, err := Invoke(context.Background(), Options{
+		Agent: "codex", Instruction: promptSecret, Cwd: t.TempDir(),
+	}, r); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := sr.Ended()
+	if len(spans) != 2 {
+		t.Fatalf("ended spans = %d, want turn + call", len(spans))
+	}
+	call, turn := spans[0], spans[1]
+	if call.Parent().SpanID() != turn.SpanContext().SpanID() {
+		t.Fatalf("call parent = %s, want turn %s", call.Parent().SpanID(), turn.SpanContext().SpanID())
+	}
+	wire, err := json.Marshal(spans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{promptSecret, completionSecret, "gen_ai.input.messages", "gen_ai.output.messages"} {
+		if strings.Contains(string(wire), forbidden) {
+			t.Errorf("call-site span leaked Tier 2/3 content %q", forbidden)
+		}
+	}
 }
 
 func TestResolveAgentRole(t *testing.T) {

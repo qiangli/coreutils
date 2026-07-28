@@ -5,17 +5,17 @@
 // Keep the list alphabetical; it is the shipped-tool inventory
 // (docs/commands.md is the plan, this is the build).
 //
-// Deliberately EXCLUDED (like cmds/graph): cmds/foreman. It imports
-// pkg/foreman → pkg/dag, and pkg/dag's own tests blank-import this package —
-// so listing foreman here forms an import cycle (pkg/dag test → cmds/all →
-// cmds/foreman → pkg/foreman → pkg/dag). foreman is an AgentOS front-door verb
-// (like weave/dag/chat), not a bare userland tool: bashy registers it by
-// importing cmds/foreman directly in internal/agentos, reachable as
-// `bashy foreman`. Keep it out of here.
+// Deliberately EXCLUDED (like cmds/graph): cmds/foreman and cmds/resources.
+// foreman imports pkg/dag, whose tests import this package, so including it
+// creates an import cycle. resources imports the AgentOS weave/chat/telemetry
+// stack. Both are host front-door verbs rather than bare userland tools; hosts
+// register them directly. Keeping them out also prevents cmd/coreutils from
+// linking an observability engine it never initializes.
 package all
 
 import (
 	_ "github.com/qiangli/coreutils/cmds/arch"
+	_ "github.com/qiangli/coreutils/cmds/ast"
 	_ "github.com/qiangli/coreutils/cmds/at"
 	_ "github.com/qiangli/coreutils/cmds/atq"
 	_ "github.com/qiangli/coreutils/cmds/atrm"
@@ -99,7 +99,6 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/pwd"
 	_ "github.com/qiangli/coreutils/cmds/readlink"
 	_ "github.com/qiangli/coreutils/cmds/realpath"
-	_ "github.com/qiangli/coreutils/cmds/resources"
 	_ "github.com/qiangli/coreutils/cmds/rm"
 	_ "github.com/qiangli/coreutils/cmds/rmdir"
 	_ "github.com/qiangli/coreutils/cmds/runcon"
@@ -149,6 +148,5 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/who"
 	_ "github.com/qiangli/coreutils/cmds/whoami"
 	_ "github.com/qiangli/coreutils/cmds/xargs"
-	_ "github.com/qiangli/coreutils/cmds/ast"
 	_ "github.com/qiangli/coreutils/cmds/yes"
 )

@@ -898,7 +898,9 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// The launcher is the only place that knows which principal is about to
 	// act, so it is the only place that can tell the spawned process who it
 	// is. execRunner reads this back out to stamp the child's environment.
-	out, code, err := runner.Run(withLaunch(ctx, lnch), lnch.Tool, args, cwd)
+	callCtx, endObservation := startGenAIObservation(ctx, lnch)
+	out, code, err := runner.Run(withLaunch(callCtx, lnch), lnch.Tool, args, cwd)
+	endGenAIObservation(endObservation, lnch, prompt, out, "", err)
 	res.Output, res.ExitCode = out, code
 	recordLaunchUsage(ctx, lnch, prompt, out)
 	return res, err
