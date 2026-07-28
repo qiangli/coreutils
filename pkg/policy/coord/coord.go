@@ -48,13 +48,16 @@ package coord
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/lockfile"
 	"github.com/qiangli/coreutils/pkg/principal"
 )
 
@@ -69,6 +72,12 @@ const SchemaVersion = "bashy-claim-v1"
 // until someone forces it. A stale claim is RECLAIMABLE without --force, so the
 // cost of erring long is a wait, not a deadlock.
 const TTL = 30 * time.Minute
+
+// ErrLockUnsupported is returned by claim mutations on platforms where the
+// shared lockfile primitive cannot provide a real advisory lock.
+var ErrLockUnsupported = errors.New(
+	"coord: this platform has no advisory file locking, so a claim's read-decide-write cycle cannot be serialized — " +
+		"refusing to mutate rather than let two agents both acquire the same project")
 
 // Claim is one agent's hold on a project.
 type Claim struct {
@@ -321,4 +330,30 @@ func writeClaim(path string, c *Claim) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func withLock(dir string, fn func() (*Claim, error)) (*Claim, error) {
+	if !lockPlatformSupported() {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("claim lock: %w", err)
+		}
+		return nil, ErrLockUnsupported
+	}
+	l, err := lockfile.Acquire(filepath.Join(dir, "claims.lock"), lockfile.Holder{
+		Name: "coord-claims", PID: os.Getpid(), Intent: "update claims", Since: time.Now(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim lock: %w", err)
+	}
+	defer l.Release()
+	return fn()
+}
+
+func lockPlatformSupported() bool {
+	switch runtime.GOOS {
+	case "linux", "darwin", "freebsd", "netbsd", "openbsd", "dragonfly", "solaris", "windows":
+		return true
+	default:
+		return false
+	}
 }

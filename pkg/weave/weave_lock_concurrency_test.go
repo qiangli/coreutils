@@ -373,11 +373,6 @@ func TestPullBusyErrorNamesMeasuredHolder(t *testing.T) {
 
 func TestPullBusyErrorDoesNotInventUnreadableHolder(t *testing.T) {
 	dir := t.TempDir()
-	// A directory at the sidecar path makes both the holder's diagnostic write
-	// and the contender's read fail on every platform/user, including root.
-	if err := os.Mkdir(weavePullHolderPath(dir), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	held := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan error, 1)
@@ -389,6 +384,12 @@ func TestPullBusyErrorDoesNotInventUnreadableHolder(t *testing.T) {
 		})
 	}()
 	<-held
+	// Holder metadata is diagnostic and lives beside the sentinel range inside
+	// the stable lock file. Corrupting it must only degrade the busy message;
+	// the kernel refusal remains authoritative.
+	if err := os.WriteFile(filepath.Join(dir, "pull.lock"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		close(release)
 		if err := <-done; err != nil {
@@ -410,8 +411,8 @@ func TestPullBusyErrorDoesNotInventUnreadableHolder(t *testing.T) {
 
 func TestStalePullHolderNeverBlocksKernelAdmittedCaller(t *testing.T) {
 	dir := t.TempDir()
-	stale := []byte(`{"holder":"run #1","pid":1,"intent":"merge","acquired_at":"2026-01-01T00:00:00Z"}`)
-	if err := os.WriteFile(weavePullHolderPath(dir), stale, 0o644); err != nil {
+	stale := []byte(`{"name":"run #1","pid":1,"intent":"merge","since":"2026-01-01T00:00:00Z"}`)
+	if err := os.WriteFile(filepath.Join(dir, "pull.lock"), stale, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	called := false

@@ -41,6 +41,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 // SchemaVersion identifies the record shape for consumers. Bump on a
@@ -103,9 +106,10 @@ func (r Record) computeHash(prevHash string) string {
 
 // Writer appends records to a JSONL log as an unbroken hash chain. It is safe
 // for concurrent processes writing the same file: every append takes an
-// exclusive file lock, re-reads the current head under that lock, links to it,
-// and writes — so two bashy processes sharing one agent's log cannot fork the
-// chain or interleave a torn line.
+// exclusive file lock adjacent to the log, re-reads the current head under
+// that lock, links to it, and writes — so two bashy processes sharing one
+// agent's log cannot fork the chain or interleave a torn line. Keeping the
+// lock adjacent lets it carry Holder metadata without overwriting the JSONL.
 type Writer struct {
 	path string
 }
@@ -140,11 +144,17 @@ func (w *Writer) Append(r Record) (Record, error) {
 		return Record{}, err
 	}
 	defer f.Close()
-	unlock, err := lockFile(f)
+	holder := r.Actor.Agent
+	if holder == "" {
+		holder = "audit"
+	}
+	l, err := lockfile.Acquire(w.path+".lock", lockfile.Holder{
+		Name: holder, PID: r.Actor.PID, Intent: "append audit log", Since: time.Now(),
+	})
 	if err != nil {
 		return Record{}, fmt.Errorf("audit: lock: %w", err)
 	}
-	defer unlock()
+	defer l.Release()
 
 	prevHash, prevSeq, err := lastHead(f)
 	if err != nil {

@@ -1,13 +1,13 @@
 package meet
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 // A meeting has ONE floor, so it may have only one runner.
@@ -62,9 +62,8 @@ type leaseInfo struct {
 // runLease is a held lease: the open descriptor IS the lease. Release is
 // idempotent.
 type runLease struct {
-	f    *os.File
+	lock *lockfile.Lock
 	path string
-	once sync.Once
 }
 
 func leasePath(id string) (string, error) {
@@ -85,47 +84,18 @@ func acquireRunLease(id string) (*runLease, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	host, _ := os.Hostname()
+	l, err := lockfile.TryAcquire(path, lockfile.Holder{
+		Name: host, PID: os.Getpid(), Intent: "run meeting", Since: nowFn(),
+	})
 	if err != nil {
-		return nil, err
-	}
-
-	locked, err := tryLockFile(f)
-	if err != nil {
-		_ = f.Close()
+		if errors.Is(err, lockfile.ErrHeld) {
+			return nil, busyError(err)
+		}
 		return nil, fmt.Errorf("meet: locking %s: %w", path, err)
 	}
-	if !locked {
-		_ = f.Close()
-		return nil, busyError(path)
-	}
 
-	l := &runLease{f: f, path: path}
-	// Diagnostics only, and deliberately AFTER the lock: writing it is what makes
-	// a busy meeting legible to an operator, and a failure to write it must not
-	// cost us a lease the kernel already granted.
-	l.writeOwner()
-	return l, nil
-}
-
-// writeOwner replaces the file's contents with this owner's identity. Only the
-// lock holder ever writes here, so truncating in place is safe and keeps the
-// inode — and therefore every contender's view of it — stable.
-func (l *runLease) writeOwner() {
-	host, _ := os.Hostname()
-	b, _ := json.Marshal(leaseInfo{PID: os.Getpid(), Host: host, Since: nowFn()})
-	b = append(b, '\n')
-	if err := l.f.Truncate(0); err != nil {
-		return
-	}
-	if _, err := l.f.WriteAt(b, 0); err != nil {
-		return
-	}
-	_ = l.f.Sync()
+	return &runLease{lock: l, path: path}, nil
 }
 
 // Release drops the lease. Safe to call more than once, so callers can defer it
@@ -138,10 +108,7 @@ func (l *runLease) Release() {
 	if l == nil {
 		return
 	}
-	l.once.Do(func() {
-		_ = unlockFile(l.f)
-		_ = l.f.Close()
-	})
+	_ = l.lock.Release()
 }
 
 // busyError names the current owner when it can, and stays useful when it
@@ -149,16 +116,26 @@ func (l *runLease) Release() {
 // taken microseconds ago, before its owner wrote), or left over from a previous
 // owner. Neither affects who holds the lease — the kernel decided that — so an
 // unreadable file degrades the message and nothing else.
-func busyError(path string) error {
-	base := fmt.Errorf("%w; wait for it to finish", ErrMeetingBusy)
-	b, err := os.ReadFile(path)
-	if err != nil {
+type meetingBusyError struct {
+	message string
+	cause   error
+}
+
+func (e meetingBusyError) Error() string   { return e.message }
+func (e meetingBusyError) Unwrap() []error { return []error{ErrMeetingBusy, e.cause} }
+
+func busyError(err error) error {
+	base := meetingBusyError{
+		message: ErrMeetingBusy.Error() + "; wait for it to finish",
+		cause:   err,
+	}
+	info, ok := lockfile.HeldBy(err)
+	if !ok || info.PID <= 0 {
 		return base
 	}
-	var info leaseInfo
-	if err := json.Unmarshal(b, &info); err != nil || info.PID <= 0 {
-		return base
+	return meetingBusyError{
+		message: fmt.Sprintf("%s (pid %d on %s since %s); wait for it to finish",
+			ErrMeetingBusy, info.PID, info.Name, info.Since.Format(time.RFC3339)),
+		cause: err,
 	}
-	return fmt.Errorf("%w (pid %d on %s since %s); wait for it to finish",
-		ErrMeetingBusy, info.PID, info.Host, info.Since.Format(time.RFC3339))
 }
