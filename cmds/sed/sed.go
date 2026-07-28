@@ -24,6 +24,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/cmds/sed/internal/gosed"
+	"github.com/qiangli/coreutils/pkg/nudge"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -36,6 +37,16 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	// A failed sed is where a BSD idiom shows up (`sed -i ''` leaves the
+	// real script read as a filename). Hint on the ERROR PATH only.
+	code := runCommand(rc, args)
+	if code != 0 {
+		nudge.OnFailure(rc.Err, append([]string{cmd.Name}, args...), rc.Env)
+	}
+	return code
+}
+
+func runCommand(rc *tool.RunContext, args []string) int {
 	// GNU's -i takes an optional attached suffix (`-i.bak`), which pflag
 	// cannot model without displaying an internal sentinel in --help.
 	// Extract every supported spelling before ordinary flag parsing.

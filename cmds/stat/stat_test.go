@@ -17,10 +17,16 @@ import (
 // with an explicit working directory.
 func runToolAt(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolAtEnv(t, dir, nil, args...)
+}
+
+func runToolAtEnv(t *testing.T, dir string, env []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -266,5 +272,41 @@ func TestFileSystem(t *testing.T) {
 	}
 	if !strings.Contains(out2, " ") {
 		t.Errorf("-f -t: got=%q", out2)
+	}
+}
+
+func TestBSDFormatHintOnlyOnFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skipf("--file-system not supported on windows")
+	}
+	dir := t.TempDir()
+	write(t, dir, "f", "x")
+
+	env := []string{"BASHY_AGENTIC=1", "BASHY_HINTS=on"}
+	_, errOut, code := runToolAtEnv(t, dir, env, "-f", "%Sm", "f")
+	const hint = "{\"schema_version\":\"bashy-hint-v1\",\"kind\":\"hint\",\"tool\":\"stat\",\"suggest\":\"-f is --file-system in GNU; BSD's format string is -c/--format\",\"off\":\"BASHY_HINTS=off\"}\n"
+	if code == 0 || !strings.HasSuffix(errOut, hint) {
+		t.Fatalf("BSD stat failure = (code %d, stderr %q), want exact hint suffix %q", code, errOut, hint)
+	}
+
+	_, errOut, code = runToolAtEnv(t, dir, env, "-f", ".")
+	if code != 0 || errOut != "" {
+		t.Fatalf("GNU stat filesystem use = (code %d, stderr %q), want success with no hint", code, errOut)
+	}
+
+	write(t, dir, "%Sm", "real GNU operand")
+	_, errOut, code = runToolAtEnv(t, dir, env, "-f", "%Sm", "missing")
+	if code == 0 || strings.Contains(errOut, "bashy-hint-v1") {
+		t.Fatalf("GNU stat mixed failure = (code %d, stderr %q), want failure without BSD hint", code, errOut)
+	}
+}
+
+func TestBSDFormatHintRespectsOptOut(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skipf("--file-system not supported on windows")
+	}
+	_, errOut, code := runToolAtEnv(t, t.TempDir(), []string{"BASHY_AGENTIC=1", "BASHY_HINTS=off"}, "-f", "%Sm")
+	if code == 0 || strings.Contains(errOut, "bashy-hint-v1") {
+		t.Fatalf("opted-out BSD stat failure = (code %d, stderr %q), want failure without hint", code, errOut)
 	}
 }

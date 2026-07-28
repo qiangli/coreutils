@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/nudge"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -79,11 +80,16 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	exit := 0
+	hinted := false
 	for _, op := range operands {
 		full := rc.Path(op)
 		if *fileSystem {
 			if d := showFileSystem(rc, full, op, *terse); d != 0 {
 				exit = 1
+				if !hinted && strings.HasPrefix(op, "%") {
+					nudge.OnFailure(rc.Err, append([]string{cmd.Name}, args...), rc.Env)
+					hinted = true
+				}
 			}
 			continue
 		}
