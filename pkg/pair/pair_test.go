@@ -118,14 +118,18 @@ func TestClassify(t *testing.T) {
 			why: "a second failure on top of a failure is NOT a signal. The pair cannot be credited.",
 		},
 		{
-			name: "no baseline at all", before: nil, after: fail, acts: true, want: OutcomeBrokenBefore,
-			why: "THE LOAD-BEARING CASE. Without a green baseline, a red gate is unattributable — " +
-				"crediting the pair here would be a finding reached by the ABSENCE of evidence, " +
-				"which is the exact bug this tool exists to catch.",
+			name: "no baseline at all", before: nil, after: fail, acts: true, want: OutcomeUnmeasured,
+			why: "without a measured baseline, the after gate proves the work is red but cannot " +
+				"prove that the baseline was red.",
 		},
 		{
 			name: "commentator, gate green", before: nil, after: pass, acts: false, want: OutcomeHeld,
 			why: "a commentator changed nothing, so the gate speaks about the proposer only.",
+		},
+		{
+			name: "commentator, gate red", before: nil, after: fail, acts: false, want: OutcomeUnmeasured,
+			why: "a commentator changed nothing, so the after gate proves the proposer's work is red; " +
+				"it does not prove an unmeasured baseline was red.",
 		},
 		{
 			name: "no gate", before: nil, after: nil, acts: true, want: OutcomeUngated,

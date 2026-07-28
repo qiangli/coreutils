@@ -4379,6 +4379,13 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					pairResult.Status = "broken-before"
 					results = append(results, pairResult)
 					continue
+				case weavePairUnmeasured:
+					it.State = "submitted"
+					it.NeedsSteward = true
+					it.StewardReason = pr.verdictLine()
+					pairResult.Status = "unmeasured"
+					results = append(results, pairResult)
+					continue
 				case weavePairRefuted:
 					it.State = "failed"
 					pairResult.Status = "review-block"
