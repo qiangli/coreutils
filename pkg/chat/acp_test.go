@@ -33,6 +33,9 @@ func TestFakeACPAgentHelper(t *testing.T) {
 			if strings.Contains(b.String(), "refuse") {
 				return acp.TurnResponse{Text: "no", StopReason: acp.StopReasonRefusal}, nil
 			}
+			if os.Getenv("CHAT_FAKE_ACP_EXIT_AFTER_PROMPT") == "1" {
+				time.AfterFunc(100*time.Millisecond, func() { os.Exit(0) })
+			}
 			return acp.TurnResponse{Text: "ack:" + b.String(), StopReason: acp.StopReasonEndTurn}, nil
 		}),
 		acp.AgentOptions{},
@@ -160,6 +163,40 @@ func TestACPSessionIsDrivenOverTheProtocol(t *testing.T) {
 	s.Close()
 	if s.Live() {
 		t.Error("session still live after Close")
+	}
+}
+
+func TestACPSessionNoticesAgentProcessExit(t *testing.T) {
+	pinACPCatalog(t)
+	t.Setenv(agentlaunch.ACPEnv, "1")
+	t.Setenv("CHAT_FAKE_ACP_EXIT_AFTER_PROMPT", "1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s, err := Start(ctx, "fakeacp", SessionOptions{
+		Prompt: "exit after this turn",
+		Cwd:    t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Close()
+
+	if err := s.WaitIdle(ctx, 30*time.Second); err != nil {
+		t.Fatalf("WaitIdle: %v", err)
+	}
+	if got := s.Turn(); got != "ack:exit after this turn" {
+		t.Fatalf("Turn = %q, want helper response before it exits", got)
+	}
+
+	select {
+	case <-s.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ACP agent process exited, but Session.done never closed")
+	}
+	if s.Live() {
+		t.Fatal("Live() = true after the ACP agent process exited")
 	}
 }
 
