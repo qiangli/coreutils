@@ -34,11 +34,42 @@ func TestAttestEnvExcludesSecrets(t *testing.T) {
 	}
 }
 
-func TestRunLocalSilentSuccessAbstains(t *testing.T) {
+// SILENCE IS RECORDED, NOT PUNISHED.
+//
+// An earlier draft of this package flipped Passed to false whenever a gate
+// exited 0 with no output. That breaks the Unix convention it was trying to
+// police: `go build ./...`, `go vet` and `test -f x` all say nothing when they
+// succeed, and THIS PROJECT'S OWN GATE is `go vet ... && go test ...`. Under
+// that rule a clean vet abstained, and every quiet gate in the tree stopped
+// passing.
+//
+// The signal is still worth keeping — a gate that is ALWAYS silent is a
+// vacuity candidate — so it is reported as an observation the caller can act
+// on, while the verdict stays the command's own.
+func TestRunLocalSilentSuccessPassesAndIsFlagged(t *testing.T) {
 	requirePOSIXShell(t)
 	o := RunLocal(context.Background(), t.TempDir(), "exit 0", "completed")
-	if !o.Ran || o.Passed || !o.Abstained || o.Trusted() {
-		t.Fatalf("silent local gate must abstain, got %+v", o)
+	if !o.Ran {
+		t.Fatalf("gate did not run: %+v", o)
+	}
+	if !o.Passed || !o.Trusted() {
+		t.Errorf("a silent exit 0 is a PASS — flipping it abstains on a clean `go vet`: %+v", o)
+	}
+	if !o.Silent {
+		t.Errorf("silence was not recorded; the caller cannot see it: %+v", o)
+	}
+	if o.Abstained {
+		t.Errorf("Abstained is for an unproved PROBE, not for silence: %+v", o)
+	}
+}
+
+// A gate that speaks keeps Silent false, so the flag distinguishes the two
+// rather than being permanently on.
+func TestRunLocalNoisySuccessIsNotSilent(t *testing.T) {
+	requirePOSIXShell(t)
+	o := RunLocal(context.Background(), t.TempDir(), "echo evidence", "completed")
+	if !o.Passed || o.Silent {
+		t.Fatalf("a gate that produced output must not be flagged Silent: %+v", o)
 	}
 }
 

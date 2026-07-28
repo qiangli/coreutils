@@ -39,10 +39,24 @@ type Outcome struct {
 	Ran bool `json:"ran"`
 	// Passed is the verdict. Meaningless unless Ran.
 	Passed bool `json:"passed"`
-	// Abstained means the command ran but produced no trustworthy verdict:
-	// either it was silent on exit 0 or an opted-in mutation probe was not
-	// detected. This is distinct from both success and failure.
+	// Abstained means an OPTED-IN mutation probe ran and did not prove the
+	// gate can fail. The pass is therefore unbelievable and is withheld: a
+	// caller who switched probing on asked for exactly that strictness.
+	//
+	// Silence does NOT abstain. See Silent.
 	Abstained bool `json:"abstained"`
+	// Silent reports that the gate passed while producing no output.
+	//
+	// It is an OBSERVATION, NOT A VERDICT — Passed stays true. Silence on
+	// success is the Unix convention, not a defect: `go build ./...`,
+	// `go vet`, and `test -f x` all say nothing when they work, and this
+	// project's own gate is `go vet ... && go test ...`. Flipping Passed here
+	// would abstain on a clean vet and break every quiet gate in the tree.
+	//
+	// It is still worth recording. A gate that is ALWAYS silent is a
+	// candidate for vacuity, and a caller comparing runs can see that. The
+	// judgement belongs to the caller; the flag just refuses to hide it.
+	Silent bool `json:"silent,omitempty"`
 	// Where records who ran it: "peer" (the extension) or "local" (fallback).
 	Where string `json:"where"`
 	// Command is the gate as given.
@@ -76,7 +90,9 @@ func (o Outcome) Summary() string {
 	case !o.Ran:
 		return "UNVERIFIED (no gate ran)"
 	case o.Abstained:
-		return "ABSTAINED (gate produced no trustworthy evidence)"
+		return "ABSTAINED (probe did not prove this gate can fail)"
+	case o.Passed && o.Silent:
+		return fmt.Sprintf("PASS (%s gate, no output)", o.Where)
 	case o.Passed:
 		return fmt.Sprintf("PASS (%s gate)", o.Where)
 	default:
@@ -112,10 +128,8 @@ func RunLocalWithProbe(ctx context.Context, dir, command, peerClaimed string, pr
 
 	if probe == nil {
 		out = runLocal(ctx, dir, command, peerClaimed)
-		if out.Passed && out.OutputBytes == 0 {
-			out.Passed = false
-			out.Abstained = true
-		}
+		// Record silence; do not punish it. See Outcome.Silent.
+		out.Silent = out.Passed && out.OutputBytes == 0
 		return out
 	}
 
@@ -133,7 +147,11 @@ func RunLocalWithProbe(ctx context.Context, dir, command, peerClaimed string, pr
 		out = Outcome{Ran: runs > 0, Where: "local", Command: command, PeerClaimed: peerClaimed}
 	}
 	out.Probe = probeResult
-	if out.Ran && (!out.Probe.Proved || out.OutputBytes == 0) {
+	// Only an unproved PROBE withholds the pass. Probing is opt-in, so a
+	// caller who enabled it has asked not to believe a gate that was never
+	// shown capable of failing. Silence alone is recorded, never punished.
+	out.Silent = out.Passed && out.OutputBytes == 0
+	if out.Ran && !out.Probe.Proved {
 		out.Passed = false
 		out.Abstained = true
 	}
