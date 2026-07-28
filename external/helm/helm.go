@@ -113,6 +113,7 @@ through to helm.`,
 		DisableFlagParsing: true,
 		SilenceUsage:       true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			kube.RefreshDKSKubeconfig(cmd.Context(), os.Stderr)
 			bin, err := Ensure(cmd.Context(), strings.TrimSpace(os.Getenv(EnvVersion)))
 			if err != nil {
 				return err
