@@ -178,6 +178,18 @@ type ToolLaunch struct {
 	// about the tool, MEASURED (pkg/agentpty/steer_live_test.go), not asserted.
 	SupportsSay bool `yaml:"supports_say,omitempty" json:"supports_say,omitempty"`
 
+	// ACPExec is the argv template that launches this tool as an ACP AGENT
+	// speaking JSON-RPC on stdio. Empty means the tool does not speak ACP and
+	// the launcher falls to the next rung. {model} substitutes as in Exec;
+	// there is no {prompt} -- the prompt travels in the ACP session, not argv.
+	ACPExec string `yaml:"acp_exec,omitempty" json:"acp_exec,omitempty"`
+
+	// ACPRung records HOW ACP is reached: "native" (rung 1, the tool speaks it
+	// itself) or "adapter" (rung 2, via an external bridge such as a Node
+	// adapter, which is a DEPENDENCY the host may not have). Advisory only --
+	// ACPExec is authoritative. Empty when ACPExec is empty.
+	ACPRung string `yaml:"acp_rung,omitempty" json:"acp_rung,omitempty"`
+
 	// EventsArg is how this tool is told to stream STRUCTURED EVENTS, if it can.
 	//
 	// This is the difference between a first-party harness and a third-party one,

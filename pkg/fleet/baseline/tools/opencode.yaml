@@ -5,6 +5,8 @@ cli:
   binary: opencode
   launch:
     exec: opencode run --model {model} {prompt}
+    acp_exec: opencode acp
+    acp_rung: native
     prompt_position: last
     trust_preseed: opencode.json
     steer_exec: opencode --model {model}
