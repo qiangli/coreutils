@@ -46,6 +46,7 @@ type acpDriver struct {
 	session string
 	ctx     context.Context
 	sink    io.Writer
+	launch  Launch
 
 	// end carries the completed turn. Buffered by one and drained before each
 	// prompt, so a WaitIdle can never be satisfied by the PREVIOUS turn's report
@@ -141,7 +142,7 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 	if opt.Stream != nil {
 		sink = io.MultiWriter(sink, opt.Stream)
 	}
-	drv := &acpDriver{ctx: ctx, sink: sink, end: make(chan acpTurn, 1)}
+	drv := &acpDriver{ctx: ctx, sink: sink, launch: l, end: make(chan acpTurn, 1)}
 
 	// Same trust preseed as the pty path: an ACP agent that stops to ask about
 	// trust on stdio would deadlock the protocol rather than merely stall a TUI.
@@ -231,7 +232,8 @@ func (d *acpDriver) prompt(text string) {
 	d.mu.Unlock()
 
 	go func() {
-		reason, err := d.client.Prompt(d.ctx, d.session, text)
+		callCtx, endObservation := startGenAIObservation(d.ctx, d.launch)
+		reason, err := d.client.Prompt(callCtx, d.session, text)
 		d.mu.Lock()
 		said := d.turn.String()
 		d.turn.Reset()
@@ -240,6 +242,7 @@ func (d *acpDriver) prompt(text string) {
 		case d.end <- acpTurn{text: said, reason: reason, err: err}:
 		default:
 		}
+		endGenAIObservation(endObservation, d.launch, text, said, string(reason), err)
 	}()
 }
 

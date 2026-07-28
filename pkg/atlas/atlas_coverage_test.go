@@ -2,10 +2,10 @@
 // See LICENSE for licensing information
 
 // The atlas coverage ratchet: the tool table must stay exactly in sync with
-// the live tool registry (cmds/all + the bashy-only cmds/graph and
-// cmds/foreman), vocabularies are closed, and idioms reference only known
-// commands. Adding a tool without an atlas entry — or leaving a stale entry
-// behind — fails here by name.
+// the live tool registry (cmds/all + the bashy-only cmds/graph, cmds/foreman,
+// and cmds/resources), vocabularies are closed, and idioms reference only
+// known commands. Adding a tool without an atlas entry — or leaving a stale
+// entry behind — fails here by name.
 package atlas_test
 
 import (
@@ -15,6 +15,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/all"
 	_ "github.com/qiangli/coreutils/cmds/foreman"
 	_ "github.com/qiangli/coreutils/cmds/graph"
+	_ "github.com/qiangli/coreutils/cmds/resources"
 
 	"github.com/qiangli/coreutils/pkg/atlas"
 	"github.com/qiangli/coreutils/tool"
