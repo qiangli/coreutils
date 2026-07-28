@@ -118,6 +118,34 @@ func TestSedDeleteAndRange(t *testing.T) {
 	}
 }
 
+func TestSedRelativeRangeAddress(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  string
+		script string
+		want   string
+	}{
+		{"numeric start", "1\n2\n3\n4\n5\n", "2,+2p", "2\n3\n4\n"},
+		{"zero extra lines", "1\n2\n3\n", "2,+0p", "2\n"},
+		{"regexp start", "a\nstart\nb\nc\n", "/start/,+1p", "start\nb\n"},
+		{"range can start again", "start\na\ngap\nstart\nb\n", "/start/,+1p", "start\na\nstart\nb\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, tc.input, "-n", tc.script)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Errorf("sed -n %q = (%q, %q, %d), want (%q, empty, 0)",
+					tc.script, out, errOut, code, tc.want)
+			}
+		})
+	}
+
+	out, errOut, code := runSed(t, "1\n", "-n", "1,+p")
+	if code != 2 || out != "" || !strings.Contains(errOut, "expected a number after +") {
+		t.Errorf("malformed +N address = (%q, %q, %d), want loud parse error", out, errOut, code)
+	}
+}
+
 func TestSedReadCommandUsesRunDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "include.txt"), []byte("included\n"), 0o644); err != nil {
@@ -215,6 +243,73 @@ func TestSedInPlaceBackup(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(f + ".bak"); string(b) != "x\n" {
 		t.Errorf("backup = %q, want x (original)", b)
+	}
+}
+
+func TestSedInPlaceFormsAndPerFileStreams(t *testing.T) {
+	cases := []struct {
+		name   string
+		option string
+		backup string
+	}{
+		{"short", "-i", ""},
+		{"short attached suffix", "-i.bak", "f.txt.bak"},
+		{"long", "--in-place", ""},
+		{"long suffix", "--in-place=.old", "f.txt.old"},
+		{"asterisk suffix", "-i*.orig", "f.txt.orig"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("one\ntwo\n"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			beforeInfo, err := os.Stat(filepath.Join(dir, "f.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, errOut, code := runSedInDir(t, dir, "", tc.option, "s/one/ONE/", "f.txt")
+			if code != 0 || errOut != "" || out != "" {
+				t.Fatalf("sed %s = (%q, %q, %d), want no output and exit 0", tc.option, out, errOut, code)
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, "f.txt")); err != nil || string(got) != "ONE\ntwo\n" {
+				t.Errorf("edited file = %q, err %v", got, err)
+			}
+			if got, err := os.Stat(filepath.Join(dir, "f.txt")); err != nil {
+				t.Errorf("stat edited file: %v", err)
+			} else if got.Mode().Perm() != beforeInfo.Mode().Perm() {
+				t.Errorf("edited mode = %v, want original %v", got.Mode().Perm(), beforeInfo.Mode().Perm())
+			}
+			if tc.backup != "" {
+				if got, err := os.ReadFile(filepath.Join(dir, tc.backup)); err != nil || string(got) != "one\ntwo\n" {
+					t.Errorf("backup = %q, err %v; want original contents", got, err)
+				}
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	for _, name := range []string{"one", "two"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("first\nsecond\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, errOut, code := runSedInDir(t, dir, "", "-ni", "1p", "one", "two")
+	if code != 0 || errOut != "" || out != "" {
+		t.Fatalf("sed -ni on two files = (%q, %q, %d)", out, errOut, code)
+	}
+	for _, name := range []string{"one", "two"} {
+		if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != "first\n" {
+			t.Errorf("%s after -ni 1p = %q, err %v; want first line", name, got, err)
+		}
+	}
+}
+
+func TestSedHelpDocumentsGNUAdditions(t *testing.T) {
+	out, errOut, code := runSed(t, "", "--help")
+	if code != 0 || errOut != "" || !strings.Contains(out, "addr,+N") ||
+		!strings.Contains(out, "-i, --in-place") || strings.ContainsRune(out, '\x00') {
+		t.Errorf("sed --help = (%q, %q, %d), want addr,+N and clean -i line", out, errOut, code)
 	}
 }
 

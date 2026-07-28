@@ -39,6 +39,7 @@ const (
 	tok_CMD
 	tok_CHANGE
 	tok_LABEL
+	tok_RELNUM
 )
 
 type token struct {
@@ -387,6 +388,18 @@ func lex(r *bufio.Reader, ch chan<- *token, errch chan<- error) {
 			ch <- &token{topLoc, tok_EOL, cur, nil}
 		case ',':
 			ch <- &token{topLoc, tok_COMMA, cur, nil}
+		case '+':
+			next, _, nextErr := rdr.ReadRune()
+			if nextErr != nil || !unicode.IsDigit(next) {
+				if nextErr == nil {
+					nextErr = fmt.Errorf("expected a number after +")
+				}
+				err = nextErr
+				break
+			}
+			var num string
+			num, err = readNumber(&rdr, next)
+			ch <- &token{topLoc, tok_RELNUM, cur, []string{num}}
 		case '{':
 			ch <- &token{topLoc, tok_LBRACE, cur, nil}
 		case '}':

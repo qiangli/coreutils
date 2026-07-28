@@ -302,6 +302,9 @@ func (c *cmd_twocond) run(svm *vm) error {
 		if c.start.isMet(svm) {
 			svm.ip = c.metloc
 			c.isOn = true
+			if relative, ok := c.end.(*relativecond); ok && relative.startRange(svm) {
+				c.offFrom = svm.lineno
+			}
 		} else {
 			svm.ip = c.unmetloc
 		}
