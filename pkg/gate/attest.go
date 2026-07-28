@@ -39,6 +39,10 @@ type Outcome struct {
 	Ran bool `json:"ran"`
 	// Passed is the verdict. Meaningless unless Ran.
 	Passed bool `json:"passed"`
+	// Abstained means the command ran but produced no trustworthy verdict:
+	// either it was silent on exit 0 or an opted-in mutation probe was not
+	// detected. This is distinct from both success and failure.
+	Abstained bool `json:"abstained"`
 	// Where records who ran it: "peer" (the extension) or "local" (fallback).
 	Where string `json:"where"`
 	// Command is the gate as given.
@@ -47,6 +51,10 @@ type Outcome struct {
 	ExitCode int `json:"exit_code"`
 	// Output is captured combined output, truncated for transport.
 	Output string `json:"output,omitempty"`
+	// OutputBytes records evidence without requiring consumers to retain it.
+	OutputBytes int `json:"output_bytes"`
+	// Probe records whether this run demonstrated that the command can fail.
+	Probe ProbeResult `json:"probe"`
 	// PeerClaimed is what the counterparty said before the gate ran. Recorded
 	// because the gap between claim and verdict is the interesting signal — a
 	// peer that habitually claims COMPLETED on a failing gate is a peer whose
@@ -67,6 +75,8 @@ func (o Outcome) Summary() string {
 	switch {
 	case !o.Ran:
 		return "UNVERIFIED (no gate ran)"
+	case o.Abstained:
+		return "ABSTAINED (gate produced no trustworthy evidence)"
 	case o.Passed:
 		return fmt.Sprintf("PASS (%s gate)", o.Where)
 	default:
@@ -85,6 +95,13 @@ const maxAttestOutput = 16 << 10
 // behavior. A gate's entire documented purpose IS to run the operand command,
 // exactly like timeout(1) or xargs(1) — the same carve-out those tools use.
 func RunLocal(ctx context.Context, dir, command, peerClaimed string) Outcome {
+	return RunLocalWithProbe(ctx, dir, command, peerClaimed, nil)
+}
+
+// RunLocalWithProbe executes a local gate with an optional reversible
+// perturbation. The same command must fail under the mutation and pass after
+// restoration before its green result is trusted.
+func RunLocalWithProbe(ctx context.Context, dir, command, peerClaimed string, probe *MutationProbe) Outcome {
 	out := Outcome{Where: "local", Command: command, PeerClaimed: peerClaimed}
 	if strings.TrimSpace(command) == "" {
 		return out // Ran stays false: no gate, no verdict, no success.
@@ -93,6 +110,38 @@ func RunLocal(ctx context.Context, dir, command, peerClaimed string) Outcome {
 		dir, _ = os.Getwd()
 	}
 
+	if probe == nil {
+		out = runLocal(ctx, dir, command, peerClaimed)
+		if out.Passed && out.OutputBytes == 0 {
+			out.Passed = false
+			out.Abstained = true
+		}
+		return out
+	}
+
+	runs := 0
+	out.Probe = ProveGuardMutation(ctx, *probe, func(ctx context.Context) (bool, error) {
+		runs++
+		got := runLocal(ctx, dir, command, peerClaimed)
+		if runs == 2 {
+			out = got
+		}
+		return got.Passed, nil
+	})
+	probeResult := out.Probe
+	if runs < 2 {
+		out = Outcome{Ran: runs > 0, Where: "local", Command: command, PeerClaimed: peerClaimed}
+	}
+	out.Probe = probeResult
+	if out.Ran && (!out.Probe.Proved || out.OutputBytes == 0) {
+		out.Passed = false
+		out.Abstained = true
+	}
+	return out
+}
+
+func runLocal(ctx context.Context, dir, command, peerClaimed string) Outcome {
+	out := Outcome{Where: "local", Command: command, PeerClaimed: peerClaimed}
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = dir
@@ -103,6 +152,7 @@ func RunLocal(ctx context.Context, dir, command, peerClaimed string) Outcome {
 	out.Elapsed = time.Since(start)
 	out.Ran = true
 	out.Output = truncateTail(string(raw), maxAttestOutput)
+	out.OutputBytes = len(raw)
 
 	if err == nil {
 		out.Passed = true

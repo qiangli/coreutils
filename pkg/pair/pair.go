@@ -10,7 +10,7 @@ import (
 )
 
 // SchemaVersion for `bashy pair --json`.
-const SchemaVersion = "bashy-pair-v1"
+const SchemaVersion = "bashy-pair-v2"
 
 // Outcome is what the run PROVED. Note that none of these is "approved" — that is not a
 // thing a pair run can conclude, because a pair cannot approve and a gate does not know
@@ -23,8 +23,8 @@ const (
 	// the absence-of-evidence bug. Fix the baseline first.
 	OutcomeBrokenBefore Outcome = "broken-before"
 
-	// OutcomeUnmeasured: the after gate was red, but no baseline gate was measured.
-	// The work is red, but there is no evidence that it was already red before the pair.
+	// OutcomeUnmeasured: a required gate state was absent or abstained.
+	// There is not enough evidence to call the work green or red.
 	OutcomeUnmeasured Outcome = "unmeasured"
 
 	// OutcomeProved: the gate was GREEN, the pair acted, and now it is RED.
@@ -80,10 +80,11 @@ type Result struct {
 
 // GateRun is one execution of the real gate — a command, not a model.
 type GateRun struct {
-	Command  string `json:"command"`
-	ExitCode int    `json:"exit_code"`
-	Passed   bool   `json:"passed"`
-	Output   string `json:"output,omitempty"`
+	Command   string `json:"command"`
+	ExitCode  int    `json:"exit_code"`
+	Passed    bool   `json:"passed"`
+	Abstained bool   `json:"abstained"`
+	Output    string `json:"output,omitempty"`
 }
 
 // Headline is the one line a human or a conductor reads.
@@ -100,8 +101,8 @@ func (r *Result) Headline() string {
 		return "BROKEN BEFORE — the gate was already red when the pair started. Nothing it did can be " +
 			"attributed. Fix the baseline, then pair."
 	case OutcomeUnmeasured:
-		return "UNMEASURED BASELINE — the baseline gate never ran. The after gate found the work red, " +
-			"but there is no measured before state."
+		return "UNMEASURED — a required gate state was absent or abstained. There is not enough " +
+			"evidence to call the work green or red."
 	case OutcomeUngated:
 		return fmt.Sprintf("UNGATED — %s (%s) produced a claim that nothing checked. Believe it at your own risk.", r.Pair, r.Role)
 	}
@@ -339,6 +340,9 @@ func (p *Plan) Run(ctx context.Context, run Runner, gate GateRunner) (*Result, e
 func classify(before, after *GateRun, acts bool) Outcome {
 	if after == nil {
 		return OutcomeUngated
+	}
+	if after.Abstained || before != nil && before.Abstained {
+		return OutcomeUnmeasured
 	}
 
 	// A commentator changed nothing. A red after gate is therefore a fact about the
