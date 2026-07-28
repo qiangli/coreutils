@@ -32,6 +32,7 @@ type Clause struct {
 type Requires struct{ Clauses []Clause }
 
 var wordRe = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
+var valueRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // ParseRequires parses a metadata.requires string. It errors loudly on
 // syntax it does not understand — callers decide whether to degrade
@@ -54,7 +55,7 @@ func ParseRequires(s string) (Requires, error) {
 			}
 			var vs []string
 			for _, v := range strings.Split(vals, ",") {
-				if !wordRe.MatchString(v) {
+				if !valueRe.MatchString(v) {
 					return Requires{}, fmt.Errorf("spacetime: bad requires value %q in %q", v, tok)
 				}
 				vs = append(vs, v)

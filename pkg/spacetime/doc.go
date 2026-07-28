@@ -19,5 +19,13 @@
 // process runs: a laptop is on the LAN one minute and remote the next.
 // A volatile Probe is re-evaluated on every read; a volatile Resolver's
 // namespace bypasses the persistent Cache entirely. Serving `net.same_lan`
-// from a 24h cache would be worse than not probing it at all.
+// from a 24h cache would be worse than not probing it at all. The time.*
+// probes and place.id are volatile core probes and therefore re-evaluate on
+// every read.
+//
+// # Place privacy
+//
+// place.id is an opaque hash of network identity signals such as the default
+// gateway's link-layer address and DNS search suffixes. Raw SSIDs, MACs,
+// addresses, and real-world location are neither returned nor persisted.
 package spacetime

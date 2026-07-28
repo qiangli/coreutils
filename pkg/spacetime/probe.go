@@ -9,6 +9,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	busevent "github.com/qiangli/coreutils/pkg/bus/event"
 )
 
 // ErrNotApplicable marks a probe that has no meaningful value on this
@@ -57,10 +60,24 @@ type ProbeSet struct {
 	memoDone  map[string]bool
 	cache     Cache
 	pathHash  string
+
+	movementOnce     sync.Once
+	movementStop     chan struct{}
+	movementDone     chan struct{}
+	movementPoll     time.Duration
+	movementDebounce time.Duration
+	publishMovement  func([]string) error
+
+	localityMu        sync.Mutex
+	localityBaseline  string
+	localityCandidate string
+	localitySet       bool
+	localityTimer     *time.Timer
 }
 
 // DefaultProbes returns the pinned probe set: the always-on core
-// (os, arch, os.release, libc, container, tty, elevated) plus the lazy
+// (os, arch, os.release, libc, container, tty, elevated, time.*, place.id)
+// plus the lazy
 // tool.* / engine.* / mesh.* resolvers. cache may be nil (no
 // persistence). Static host facts (e.g. the bashy version) are added by
 // the caller via SetStatic.
@@ -69,15 +86,20 @@ func DefaultProbes(cache Cache) *ProbeSet {
 		cache = NopCache()
 	}
 	ps := &ProbeSet{
-		core:      map[string]Probe{},
-		coreVal:   map[string]string{},
-		coreDone:  map[string]bool{},
-		resolvers: map[string]Resolver{},
-		volatile:  map[string]bool{},
-		memo:      map[string]string{},
-		memoDone:  map[string]bool{},
-		cache:     cache,
-		pathHash:  hashOf(os.Getenv("PATH")),
+		core:             map[string]Probe{},
+		coreVal:          map[string]string{},
+		coreDone:         map[string]bool{},
+		resolvers:        map[string]Resolver{},
+		volatile:         map[string]bool{},
+		memo:             map[string]string{},
+		memoDone:         map[string]bool{},
+		cache:            cache,
+		pathHash:         hashOf(os.Getenv("PATH")),
+		movementStop:     make(chan struct{}),
+		movementDone:     make(chan struct{}),
+		movementPoll:     2 * time.Second,
+		movementDebounce: 10 * time.Second,
+		publishMovement:  busevent.PublishSpacetimeMovement,
 	}
 	for _, p := range []Probe{
 		{Name: "os", Eval: func() (string, error) { return runtime.GOOS, nil }},
@@ -87,6 +109,11 @@ func DefaultProbes(cache Cache) *ProbeSet {
 		{Name: "container", Eval: probeContainer},
 		{Name: "tty", Eval: probeTTY},
 		{Name: "elevated", Eval: probeElevated},
+		{Name: "time.hour", Eval: probeTimeHour, Volatile: true},
+		{Name: "time.weekday", Eval: probeTimeWeekday, Volatile: true},
+		{Name: "time.zone", Eval: probeTimeZone, Volatile: true},
+		{Name: "time.attended", Eval: probeTimeAttended, Volatile: true},
+		{Name: "place.id", Eval: probePlaceID, Volatile: true},
 	} {
 		ps.core[p.Name] = p
 	}
@@ -142,8 +169,12 @@ func (ps *ProbeSet) SetProbe(p Probe) {
 // applicable, unknown, or (for lazy namespaces) has no resolver.
 func (ps *ProbeSet) Value(name string) (string, bool) {
 	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	return ps.valueLocked(name)
+	v, ok := ps.valueLocked(name)
+	ps.mu.Unlock()
+	if name == "net.same_lan" {
+		ps.observeLocality(v, ok)
+	}
+	return v, ok
 }
 
 func (ps *ProbeSet) valueLocked(name string) (string, bool) {
@@ -203,11 +234,18 @@ func (ps *ProbeSet) valueLocked(name string) (string, bool) {
 // Snapshot evaluates the named probes and returns the present ones.
 func (ps *ProbeSet) Snapshot(names []string) map[string]string {
 	ps.mu.Lock()
-	defer ps.mu.Unlock()
 	out := make(map[string]string, len(names))
 	for _, n := range names {
 		if v, ok := ps.valueLocked(n); ok {
 			out[n] = v
+		}
+	}
+	ps.mu.Unlock()
+	for _, n := range names {
+		switch n {
+		case "net.same_lan":
+			value, ok := out[n]
+			ps.observeLocality(value, ok)
 		}
 	}
 	return out
@@ -235,6 +273,33 @@ func (ps *ProbeSet) Forget(name string) {
 		delete(ps.coreVal, name)
 		delete(ps.coreDone, name)
 	}
+}
+
+// StartMovementMonitor begins active place observation. The bus sidecar calls
+// this for its lifetime; embedding long-lived processes may do the same.
+// Repeated calls are harmless.
+func (ps *ProbeSet) StartMovementMonitor() {
+	initial, _ := ps.Value("place.id")
+	ps.movementOnce.Do(func() {
+		go ps.watchMovement(initial)
+	})
+}
+
+// Close stops the movement watcher. Short-lived commands may let process exit
+// do this; long-lived owners should defer Close.
+func (ps *ProbeSet) Close() {
+	ps.movementOnce.Do(func() { close(ps.movementDone) })
+	select {
+	case <-ps.movementStop:
+	default:
+		close(ps.movementStop)
+	}
+	ps.localityMu.Lock()
+	if ps.localityTimer != nil {
+		ps.localityTimer.Stop()
+	}
+	ps.localityMu.Unlock()
+	<-ps.movementDone
 }
 
 // PathHash identifies the PATH the lazy probes were resolved under.

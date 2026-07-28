@@ -62,6 +62,42 @@ func TestPublishLandsOnTheTimeline(t *testing.T) {
 	}
 }
 
+func TestPublishSpacetimeMovementCarriesNoCoordinateValues(t *testing.T) {
+	isolate(t)
+	if err := PublishSpacetimeMovement([]string{"place.id", "net.same_lan"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := room.Timeline(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	event := events[0]
+	if event.Topic != TopicSpacetimeMovement || event.Principal != "spacetime" {
+		t.Fatalf("movement event = %+v", event)
+	}
+	if event.Body != "network coordinate changed: place.id, net.same_lan" {
+		t.Fatalf("movement body = %q", event.Body)
+	}
+}
+
+func TestPublishSpacetimeMovementRejectsValues(t *testing.T) {
+	isolate(t)
+	raw := "ssid=Cafe WiFi Secret"
+	if err := PublishSpacetimeMovement([]string{raw}); err == nil {
+		t.Fatal("movement publisher accepted a raw coordinate value")
+	}
+	events, err := room.Timeline(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("rejected raw value reached timeline: %+v", events)
+	}
+}
+
 // An unaddressed notification has no topic to match, no recipient to route to
 // and no room to scope it. Accepting it would report success for something that
 // cannot be delivered.
