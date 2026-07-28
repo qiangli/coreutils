@@ -136,8 +136,19 @@ func TestWeaveSalvageReviewAgentMergesOnPass(t *testing.T) {
 
 // The escape exists, but it must never be quiet: an operator merging unreviewed
 // WIP on their own authority has to see that named in the output.
-func TestWeaveSalvageNoReviewEscapeIsNamedLoudly(t *testing.T) {
+func TestWeaveSalvageNoReviewOverridesStoredReviewAgent(t *testing.T) {
 	root := setupSalvageableRun(t, "test -f feature.txt")
+	dir, _ := weaveQueueDir(root)
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, 1)
+		it.ReviewAgent = "opencode:deepseek-v4-pro"
+		it.PairVerdict = string(weavePairHarnessError)
+		it.PairReason = "pair opencode:deepseek-v4-pro: context deadline exceeded"
+		it.PairExit = weavePairHarnessErrorExit
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	original := weavePairReviewRunner
 	t.Cleanup(func() { weavePairReviewRunner = original })
@@ -152,6 +163,9 @@ func TestWeaveSalvageNoReviewEscapeIsNamedLoudly(t *testing.T) {
 	}
 	if !strings.Contains(out, "--no-review") || !strings.Contains(strings.ToUpper(out), "UNREVIEWED") {
 		t.Fatalf("the escape was taken silently: %s", out)
+	}
+	if strings.Contains(out, "PAIR HARNESS-ERROR") || strings.Contains(out, "context deadline exceeded") {
+		t.Fatalf("--no-review presented stored pair evidence as though a pair ran now: %s", out)
 	}
 	if got := salvageMainSubject(t, root); got == "seed" {
 		t.Fatalf("--no-review salvage did not merge: %s", got)

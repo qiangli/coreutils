@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,7 +175,7 @@ git -c user.email=a@a -c user.name=a commit -qm "candidate feature"`
 	}
 }
 
-func TestWeavePullPairRunnerWithoutVerdictIsHarnessError(t *testing.T) {
+func TestWeavePullPairHarnessErrorDoesNotMerge(t *testing.T) {
 	root := setupIsolationFixture(t)
 	t.Chdir(root)
 	pinPassthroughJudge(t)
@@ -192,14 +193,17 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 	original := weavePairReviewRunner
 	t.Cleanup(func() { weavePairReviewRunner = original })
 	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
-		return weavePairReviewResult{}, nil
+		return weavePairReviewResult{
+			CodingAgent: "sh",
+			ReviewAgent: "opencode:deepseek-v4-pro",
+		}, errors.New("pair opencode:deepseek-v4-pro: context deadline exceeded")
 	}
 
 	out, code := runWeave(t, "pull", "1", "--review-agent", "reviewer", "--json")
 	if code != weavePairHarnessErrorExit {
 		t.Fatalf("pull exit=%d, want harness exit %d: %s", code, weavePairHarnessErrorExit, out)
 	}
-	if !strings.Contains(out, `"pair_verdict": "harness-error"`) || !strings.Contains(out, "pair runner returned no verdict") {
+	if !strings.Contains(out, `"pair_verdict": "harness-error"`) || !strings.Contains(out, "context deadline exceeded") {
 		t.Fatalf("missing HARNESS-ERROR verdict and reason: %s", out)
 	}
 	dir, _ := weaveQueueDir(root)
@@ -215,8 +219,42 @@ git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
 		t.Fatalf("run merged despite harness error: %s", got)
 	}
 	plain, plainCode := runWeave(t, "pull", "1", "--review-agent", "reviewer", "--plain")
-	if plainCode != weavePairHarnessErrorExit || !strings.Contains(plain, "PAIR HARNESS-ERROR — pair runner returned no verdict") {
+	if plainCode != weavePairHarnessErrorExit || !strings.Contains(plain, "PAIR HARNESS-ERROR — pair opencode:deepseek-v4-pro: context deadline exceeded") {
 		t.Fatalf("plain pull did not print the harness verdict and reason (exit %d): %s", plainCode, plain)
+	}
+}
+
+func TestWeavePullDoesNotBypassRecordedHarnessError(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if out, code := runWeave(t, "add", "review retry required", "--verify", "test -f feature.txt", "--json"); code != 0 {
+		t.Fatalf("add exit=%d: %s", code, out)
+	}
+	script := `set -e
+echo clean > feature.txt
+git add feature.txt
+git -c user.email=a@a -c user.name=a commit -qm "clean feature"`
+	if out, code := runWeave(t, "start", "--issue", "1", "--json", "--", "sh", "-c", script); code != 0 {
+		t.Fatalf("start exit=%d: %s", code, out)
+	}
+	dir, _ := weaveQueueDir(root)
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, 1)
+		it.ReviewAgent = "opencode:deepseek-v4-pro"
+		it.PairVerdict = string(weavePairHarnessError)
+		it.PairReason = "pair opencode:deepseek-v4-pro: context deadline exceeded"
+		it.PairExit = weavePairHarnessErrorExit
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWeave(t, "pull", "1", "--plain")
+	if code == 0 || !strings.Contains(out, "not a named pass") {
+		t.Fatalf("bare pull bypassed or misreported the recorded harness error (exit %d): %s", code, out)
+	}
+	if got := gitT(t, root, "log", "--format=%s", "-1"); got != "seed" {
+		t.Fatalf("run merged without replacing the recorded harness error with a pass: %s", got)
 	}
 }
 

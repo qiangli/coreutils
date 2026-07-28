@@ -4029,7 +4029,7 @@ func weaveRequireReviewGate(it *weaveItem) error {
 	return nil
 }
 
-func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, issueSpecified bool, requireReview, force bool, reviewAgents ...string) error {
+func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, issueSpecified bool, requireReview, force, waiveRecordedPair bool, reviewAgents ...string) error {
 	reviewAgent := ""
 	if len(reviewAgents) > 0 {
 		reviewAgent = reviewAgents[0]
@@ -4172,6 +4172,16 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 				if err := weaveRequireReviewGate(it); err != nil {
 					return err
 				}
+			}
+			// A recorded pair verdict means adversarial review was put in force
+			// for this submission. A later bare pull must not turn a missing pass
+			// into approval merely because --review-agent was omitted this time.
+			// Salvage --no-review is the one explicit waiver and is threaded here
+			// separately from an empty reviewer.
+			hasRecordedPair := strings.TrimSpace(it.ReviewAgent) != "" || strings.TrimSpace(it.PairVerdict) != ""
+			if !waiveRecordedPair && reviewAgent == "" && hasRecordedPair && !weaveHasNamedPairPass(it) {
+				return fmt.Errorf("run #%d has recorded adversarial verdict %q, not a named pass — re-run with `--review-agent <agent>`, or explicitly waive review with `weave salvage %d --no-review`",
+					it.ID, it.PairVerdict, it.ID)
 			}
 			if it.State == "working" && it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
 				results = append(results, result{Issue: it.ID, Branch: it.Branch, Status: "running",
@@ -4416,19 +4426,22 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					if reviewAgent != "" && it.ReviewAgent != "" {
 						it.State = "failed"
 					}
-					results = append(results, result{
+					suiteResult := result{
 						Issue:           it.ID,
 						Branch:          it.Branch,
 						Status:          "suite-gate-failed",
 						Detail:          sgOutput,
 						SuiteGateExit:   &sgExit,
 						SuiteGateOutput: sgOutput,
-						ReviewAgent:     it.ReviewAgent,
-						ReviewAddedTest: it.ReviewAddedTest,
-						PairVerdict:     it.PairVerdict,
-						PairReason:      it.PairReason,
-						PairExit:        it.PairExit,
-					})
+					}
+					if !waiveRecordedPair {
+						suiteResult.ReviewAgent = it.ReviewAgent
+						suiteResult.ReviewAddedTest = it.ReviewAddedTest
+						suiteResult.PairVerdict = it.PairVerdict
+						suiteResult.PairReason = it.PairReason
+						suiteResult.PairExit = it.PairExit
+					}
+					results = append(results, suiteResult)
 					gateDecisions = append(gateDecisions, *it)
 					continue
 				}
@@ -4496,18 +4509,24 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 			// register that stays open after its fix merges is worse than none —
 			// people trust it, and it lies.
 			mergedReports = append(mergedReports, &reportIt)
-			results = append(results, result{
+			mergedResult := result{
 				Issue:           it.ID,
 				Branch:          it.Branch,
 				Status:          "merged",
 				SuiteGateExit:   suiteGateExit,
 				SuiteGateOutput: suiteGateOutput,
-				ReviewAgent:     it.ReviewAgent,
-				ReviewAddedTest: it.ReviewAddedTest,
-				PairVerdict:     it.PairVerdict,
-				PairReason:      it.PairReason,
-				PairExit:        it.PairExit,
-			})
+			}
+			// An explicit no-review salvage may retain old forensic evidence on
+			// the queue item, but that evidence did not authorize this merge and
+			// must not be rendered as though the pair ran in this invocation.
+			if !waiveRecordedPair {
+				mergedResult.ReviewAgent = it.ReviewAgent
+				mergedResult.ReviewAddedTest = it.ReviewAddedTest
+				mergedResult.PairVerdict = it.PairVerdict
+				mergedResult.PairReason = it.PairReason
+				mergedResult.PairExit = it.PairExit
+			}
+			results = append(results, mergedResult)
 			// A merge with no suite gate and no pair verdict adds no evidence
 			// beyond what the finalize path already recorded; skip those.
 			if suiteGateExit != nil || it.PairVerdict != "" {
@@ -6073,13 +6092,13 @@ func runWeaveSalvage(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64,
 		fmt.Fprintf(w, "weave salvage: run #%d — the diff about to be merged into %s:\n%s\n", issueID, base, diffStat)
 	}
 	if noReview {
-		fmt.Fprintf(cmd.ErrOrStderr(), "weave salvage: --no-review — MERGING UNREVIEWED WORK for run #%d; no adversarial pair ran and no verdict is recorded\n", issueID)
+		fmt.Fprintf(cmd.ErrOrStderr(), "weave salvage: --no-review — MERGING UNREVIEWED WORK for run #%d; no adversarial pair ran and no fresh verdict is recorded\n", issueID)
 	}
 	// Delegate to pull: re-acquires the lock and runs the full verify + merge
 	// path on the now-"submitted" item. force=false — salvage rescues work a
 	// run committed, which is no reason to skip the isolation gate; a flagged
 	// run still has to be reviewed and pulled with an explicit --force.
-	return runWeavePull(cmd, flags, issueID, true, false, false, reviewAgent)
+	return runWeavePull(cmd, flags, issueID, true, false, false, noReview, reviewAgent)
 }
 
 // weaveSalvageReviewGate is the refusal half of salvage's review contract. It
@@ -6089,7 +6108,7 @@ func weaveSalvageReviewGate(it *weaveItem, reviewAgent string, noReview bool) er
 	if reviewAgent != "" || noReview {
 		return nil
 	}
-	if weavePairVerdict(it.PairVerdict) == weavePairPass {
+	if weaveHasNamedPairPass(it) {
 		return nil
 	}
 	recorded := "none recorded"
@@ -6098,6 +6117,12 @@ func weaveSalvageReviewGate(it *weaveItem, reviewAgent string, noReview bool) er
 	}
 	return fmt.Errorf("run #%d has no passing adversarial review (%s) — salvage merges the LEAST trustworthy work in the fleet (killed mid-flight, auto-committed WIP nobody declared finished), so it will not merge unreviewed: re-run with `--review-agent <agent>` to put it through the same gate as `weave pull`, or `--no-review` to merge it unreviewed on your own authority",
 		it.ID, recorded)
+}
+
+func weaveHasNamedPairPass(it *weaveItem) bool {
+	return it != nil &&
+		weavePairVerdict(it.PairVerdict) == weavePairPass &&
+		strings.TrimSpace(it.ReviewAgent) != ""
 }
 
 // weaveSalvageDiffStat renders what salvage is about to merge. Best-effort: a
