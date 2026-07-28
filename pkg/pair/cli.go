@@ -191,10 +191,11 @@ func runPair(cmd *cobra.Command, task, roleName, proposer, pairAgent, gateOvr, d
 			return nil, err
 		}
 		return &GateRun{
-			Command:  gateCmd,
-			Passed:   r.Passed,
-			ExitCode: boolExit(r.Passed),
-			Output:   failedChecks(r),
+			Command:   gateCmd,
+			Passed:    r.Passed,
+			Abstained: r.Verdict == gate.VerdictAbstained,
+			ExitCode:  gateExit(r),
+			Output:    failedChecks(r),
 		}, nil
 	}
 	if def == nil {
@@ -274,9 +275,9 @@ func render(cmd *cobra.Command, r *Result) {
 	fmt.Fprintf(out, "  proposer  %s\n", r.Proposer)
 	fmt.Fprintf(out, "  pair      %s\n", r.Pair)
 	if r.GateBefore != nil {
-		fmt.Fprintf(out, "  gate      before=%s  after=%s\n", passWord(r.GateBefore.Passed), passWord(r.GateAfter.Passed))
+		fmt.Fprintf(out, "  gate      before=%s  after=%s\n", gateWord(r.GateBefore), gateWord(r.GateAfter))
 	} else if r.GateAfter != nil {
-		fmt.Fprintf(out, "  gate      %s\n", passWord(r.GateAfter.Passed))
+		fmt.Fprintf(out, "  gate      %s\n", gateWord(r.GateAfter))
 	}
 	if r.DiversityNote != "" {
 		fmt.Fprintf(out, "\n  ! %s\n", r.DiversityNote)
@@ -290,6 +291,16 @@ func render(cmd *cobra.Command, r *Result) {
 // reader nothing they can act on.
 func failedChecks(r *gate.Result) string {
 	var b strings.Builder
+	if r.Verdict == gate.VerdictAbstained {
+		for _, c := range r.Checks {
+			if c.Passed && c.OutputBytes == 0 {
+				fmt.Fprintf(&b, "ABSTAIN (exit 0, no output): %s\n", c.Command)
+			}
+		}
+		if r.Probe.Ran && !r.Probe.Proved {
+			fmt.Fprintf(&b, "ABSTAIN (mutation probe unproved): %s\n", r.Probe.Error)
+		}
+	}
 	for _, c := range r.Checks {
 		if !c.Passed {
 			fmt.Fprintf(&b, "FAIL (exit %d): %s\n%s\n", c.Exit, c.Command, strings.TrimSpace(c.Output))
@@ -298,16 +309,22 @@ func failedChecks(r *gate.Result) string {
 	return strings.TrimSpace(b.String())
 }
 
-func passWord(b bool) string {
-	if b {
+func gateWord(r *GateRun) string {
+	if r.Abstained {
+		return "ABSTAIN"
+	}
+	if r.Passed {
 		return "green"
 	}
 	return "RED"
 }
 
-func boolExit(passed bool) int {
-	if passed {
+func gateExit(r *gate.Result) int {
+	if r.Passed {
 		return 0
+	}
+	if r.Verdict == gate.VerdictAbstained {
+		return 2
 	}
 	return 1
 }

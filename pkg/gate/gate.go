@@ -47,7 +47,7 @@ import (
 
 // SchemaVersion is the result contract. One schema, so that weave, sdlc, dag and
 // a human at a terminal all read the same verdict in the same shape.
-const SchemaVersion = "bashy-gate-v1"
+const SchemaVersion = "bashy-gate-v2"
 
 // DefinitionFile is where a project's gate lives. One file, one command per line
 // (blank lines and #-comments ignored), so a gate can be several checks without
@@ -61,22 +61,35 @@ const LegacyWeaveFile = ".agents/weave/suite-gate"
 
 // Check is one command in the gate.
 type Check struct {
-	Name     string `json:"name"`
-	Command  string `json:"command"`
-	Exit     int    `json:"exit"`
-	Passed   bool   `json:"passed"`
-	Duration string `json:"duration"`
-	Output   string `json:"output,omitempty"` // captured on FAILURE only — a passing gate is not interesting
+	Name        string `json:"name"`
+	Command     string `json:"command"`
+	Exit        int    `json:"exit"`
+	Passed      bool   `json:"passed"`
+	Duration    string `json:"duration"`
+	OutputBytes int    `json:"output_bytes"`
+	Output      string `json:"output,omitempty"` // captured on FAILURE only
 }
+
+// Verdict distinguishes measured success and failure from abstention. In
+// particular, exit 0 with no output is not evidence of success.
+type Verdict string
+
+const (
+	VerdictPassed    Verdict = "passed"
+	VerdictFailed    Verdict = "failed"
+	VerdictAbstained Verdict = "abstained"
+)
 
 // Result is the verdict.
 type Result struct {
-	SchemaVersion string  `json:"schema_version"`
-	Project       string  `json:"project"`
-	Source        string  `json:"source"` // where the definition came from
-	Checks        []Check `json:"checks"`
-	Passed        bool    `json:"passed"`
-	Duration      string  `json:"duration"`
+	SchemaVersion string      `json:"schema_version"`
+	Project       string      `json:"project"`
+	Source        string      `json:"source"` // where the definition came from
+	Checks        []Check     `json:"checks"`
+	Passed        bool        `json:"passed"`
+	Verdict       Verdict     `json:"verdict"`
+	Probe         ProbeResult `json:"probe"`
+	Duration      string      `json:"duration"`
 }
 
 // Definition is a project's gate: the commands, and where they were found.
@@ -84,6 +97,11 @@ type Definition struct {
 	Root     string
 	Source   string
 	Commands []string
+	// Probe is an opt-in, reversible perturbation. Run executes the same gate
+	// against the mutation first and trusts green only if that run goes red.
+	// Resolve deliberately leaves it nil: choosing a safe project mutation
+	// requires caller knowledge and cannot be inferred from a shell command.
+	Probe *MutationProbe
 }
 
 // ErrNoGate is returned when a project has not defined one.
@@ -145,37 +163,100 @@ func Run(ctx context.Context, def *Definition, shell string) (*Result, error) {
 		SchemaVersion: SchemaVersion,
 		Project:       def.Root,
 		Source:        def.Source,
-		Passed:        true,
+		Verdict:       VerdictAbstained,
 	}
 	if shell == "" {
 		shell = "/bin/sh"
 	}
+
+	var runErr error
+	if def.Probe != nil {
+		var restored runResult
+		runs := 0
+		res.Probe = ProveGuardMutation(ctx, *def.Probe, func(ctx context.Context) (bool, error) {
+			runs++
+			r := runCommands(ctx, def, shell)
+			if runs == 2 {
+				restored = r
+			}
+			return r.exitedZero, r.err
+		})
+		if !res.Probe.Proved {
+			// The restored run is still recorded, but its green cannot be
+			// trusted: the same command stayed green under its mutation.
+			res.Checks = restored.checks
+			res.Duration = time.Since(start).Round(time.Millisecond).String()
+			return res, nil
+		}
+		res.Checks = restored.checks
+		runErr = restored.err
+	} else {
+		r := runCommands(ctx, def, shell)
+		res.Checks = r.checks
+		runErr = r.err
+	}
+
+	if runErr != nil {
+		return nil, runErr
+	}
+	res.Verdict = verdictFor(res.Checks)
+	res.Passed = res.Verdict == VerdictPassed
+	res.Duration = time.Since(start).Round(time.Millisecond).String()
+	return res, nil
+}
+
+type runResult struct {
+	checks     []Check
+	exitedZero bool
+	err        error
+}
+
+func runCommands(ctx context.Context, def *Definition, shell string) runResult {
+	r := runResult{exitedZero: true}
 	for _, cmdline := range def.Commands {
 		cs := time.Now()
 		c := exec.CommandContext(ctx, shell, "-c", cmdline)
 		c.Dir = def.Root
 		out, err := c.CombinedOutput()
-		code := c.ProcessState.ExitCode()
+		code := -1
+		if c.ProcessState != nil {
+			code = c.ProcessState.ExitCode()
+		}
 		if err != nil && code == 0 {
 			code = 1 // could not even start it: that is a failure, not a pass
 		}
 		chk := Check{
-			Name:     firstWord(cmdline),
-			Command:  cmdline,
-			Exit:     code,
-			Passed:   code == 0,
-			Duration: time.Since(cs).Round(time.Millisecond).String(),
+			Name:        firstWord(cmdline),
+			Command:     cmdline,
+			Exit:        code,
+			Passed:      code == 0,
+			Duration:    time.Since(cs).Round(time.Millisecond).String(),
+			OutputBytes: len(out),
 		}
 		if !chk.Passed {
 			chk.Output = tail(string(out), 4000)
-			res.Checks = append(res.Checks, chk)
-			res.Passed = false
+			r.checks = append(r.checks, chk)
+			r.exitedZero = false
 			break
 		}
-		res.Checks = append(res.Checks, chk)
+		r.checks = append(r.checks, chk)
 	}
-	res.Duration = time.Since(start).Round(time.Millisecond).String()
-	return res, nil
+	return r
+}
+
+func verdictFor(checks []Check) Verdict {
+	for _, chk := range checks {
+		if !chk.Passed {
+			return VerdictFailed
+		}
+		if chk.OutputBytes == 0 {
+			return VerdictAbstained
+		}
+	}
+	if len(checks) == 0 {
+		return VerdictAbstained
+	}
+	return VerdictPassed
 }
 
 // JSON renders the verdict.

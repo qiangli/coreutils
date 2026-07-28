@@ -90,14 +90,23 @@ to say what passing MEANS. That is how a green check mark comes to mean nothing.
 					mark := "PASS"
 					if !c.Passed {
 						mark = "FAIL"
+					} else if c.OutputBytes == 0 {
+						mark = "ABSTAIN"
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "  %s  %s  (%s)\n", mark, c.Command, c.Duration)
 					if !c.Passed && c.Output != "" {
 						fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", c.Output)
 					}
 				}
+				if res.Probe.Ran {
+					fmt.Fprintf(cmd.OutOrStdout(), "  PROBE  %s  (proved=%t)\n", res.Probe.Name, res.Probe.Proved)
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "  PROBE  not run (opt-in)")
+				}
 				if res.Passed {
 					fmt.Fprintf(cmd.OutOrStdout(), "\ngate: PASS (%s, from %s)\n", res.Duration, res.Source)
+				} else if res.Verdict == VerdictAbstained {
+					fmt.Fprintf(cmd.OutOrStdout(), "\ngate: ABSTAIN (%s, from %s)\n", res.Duration, res.Source)
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "\ngate: FAIL (%s, from %s)\n", res.Duration, res.Source)
 				}
@@ -115,7 +124,7 @@ to say what passing MEANS. That is how a green check mark comes to mean nothing.
 		},
 	}
 	cmd.Flags().StringVar(&command, "command", "", "run this instead of the project's gate")
-	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the verdict as bashy-gate-v1")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the verdict as "+SchemaVersion)
 	cmd.Flags().BoolVar(&show, "show", false, "print what would run, without running it")
 	return cmd
 }

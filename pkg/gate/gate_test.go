@@ -138,9 +138,8 @@ func TestFailureCarriesOutput(t *testing.T) {
 	}
 }
 
-// A passing gate does NOT carry output. A green gate is not interesting, and
-// dumping a successful build log into an agent's context window is pure cost.
-func TestPassCarriesNoOutput(t *testing.T) {
+// A passing gate records that output existed without carrying the chatter.
+func TestPassRecordsEvidenceWithoutCarryingIt(t *testing.T) {
 	requirePOSIXShell(t)
 	dir := t.TempDir()
 	write(t, dir, DefinitionFile, "echo lots and lots of chatter\n")
@@ -152,6 +151,79 @@ func TestPassCarriesNoOutput(t *testing.T) {
 	}
 	if res.Checks[0].Output != "" {
 		t.Fatalf("a passing check carried output: %q", res.Checks[0].Output)
+	}
+	if res.Checks[0].OutputBytes == 0 {
+		t.Fatal("a passing check forgot that it produced evidence")
+	}
+}
+
+func TestSilentZeroExitAbstains(t *testing.T) {
+	requirePOSIXShell(t)
+	dir := t.TempDir()
+	write(t, dir, DefinitionFile, "exit 0\n")
+
+	def, _ := Resolve(dir, "")
+	res, err := Run(context.Background(), def, "/bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Passed || res.Verdict != VerdictAbstained {
+		t.Fatalf("silent exit 0 = passed %t, verdict %q; want abstention", res.Passed, res.Verdict)
+	}
+	if res.Checks[0].OutputBytes != 0 {
+		t.Fatalf("silent check reported %d output bytes", res.Checks[0].OutputBytes)
+	}
+}
+
+// This is the mechanism's own mutation test. The vacuous gate stays green when
+// the structure-preserving marker mutation is present and therefore abstains.
+// The real gate sees the same mutation, goes red, is restored, and only then
+// earns green.
+func TestMutationProbeRejectsVacuousGateAndProvesRealGate(t *testing.T) {
+	requirePOSIXShell(t)
+	for _, tc := range []struct {
+		name    string
+		command string
+		proved  bool
+	}{
+		{name: "vacuous", command: "echo always-green", proved: false},
+		{name: "real", command: "if test -f MUTATED; then echo mutation >&2; exit 9; else echo healthy; fi", proved: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, dir, DefinitionFile, tc.command+"\n")
+			def, err := Resolve(dir, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(dir, "MUTATED")
+			def.Probe = &MutationProbe{
+				Name: "marker appears",
+				Mutate: func() (func() error, error) {
+					if err := os.WriteFile(marker, []byte("mutation"), 0o644); err != nil {
+						return nil, err
+					}
+					return func() error { return os.Remove(marker) }, nil
+				},
+			}
+
+			res, err := Run(context.Background(), def, "/bin/sh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Probe.Proved != tc.proved {
+				t.Fatalf("probe proved = %t, want %t: %+v", res.Probe.Proved, tc.proved, res.Probe)
+			}
+			if res.Passed != tc.proved {
+				t.Fatalf("gate passed = %t, want %t: %+v", res.Passed, tc.proved, res)
+			}
+			if !tc.proved && res.Verdict != VerdictAbstained {
+				t.Fatalf("vacuous gate verdict = %q, want abstained", res.Verdict)
+			}
+			if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("mutation was not restored: %v", err)
+			}
+		})
 	}
 }
 

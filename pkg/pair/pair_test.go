@@ -93,6 +93,7 @@ func TestAgentFlagAliasesPair(t *testing.T) {
 func TestClassify(t *testing.T) {
 	pass := &GateRun{Passed: true}
 	fail := &GateRun{Passed: false}
+	abstain := &GateRun{Abstained: true}
 
 	for _, tc := range []struct {
 		name          string
@@ -121,6 +122,14 @@ func TestClassify(t *testing.T) {
 			name: "no baseline at all", before: nil, after: fail, acts: true, want: OutcomeUnmeasured,
 			why: "without a measured baseline, the after gate proves the work is red but cannot " +
 				"prove that the baseline was red.",
+		},
+		{
+			name: "baseline abstained", before: abstain, after: pass, acts: true, want: OutcomeUnmeasured,
+			why: "a silent zero-exit baseline is not evidence of red or green.",
+		},
+		{
+			name: "after abstained", before: pass, after: abstain, acts: true, want: OutcomeUnmeasured,
+			why: "a gate that cannot demonstrate a verdict cannot prove the pair held or broke it.",
 		},
 		{
 			name: "commentator, gate green", before: nil, after: pass, acts: false, want: OutcomeHeld,
