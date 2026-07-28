@@ -22,7 +22,7 @@ This repo is OSS (MIT) and is consumed by other OSS repos. Two hard rules:
    returns a clear error naming what's unsupported. Partial flag coverage
    is fine — silent approximation is not. The one documented exception:
    command wrappers whose upstream-documented purpose IS running the
-   COMMAND operand (timeout, time, watch, xargs) spawn that command
+   COMMAND operand (env, timeout, time, watch, xargs) spawn that command
    directly, exactly as the GNU binary does — see docs/commands.md's
    NO-list preamble.
 3. **Upstream semantics are immutable.** Every flag, option, and argument

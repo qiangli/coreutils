@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -104,22 +105,69 @@ func TestEnvRealShortAliases(t *testing.T) {
 	}
 }
 
-func TestEnvChdirAndSplitStringCommandContract(t *testing.T) {
+func TestEnvRunsCommandWithModifiedEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
+	path := os.Getenv("PATH")
+	out, errb, code := runTool(t, []string{"PATH=" + path}, "FOO=1", "sh", "-c", `printf %s "$FOO"`)
+	if code != 0 || errb != "" || out != "1" {
+		t.Fatalf("assignment command = (%q, %q, %d)", out, errb, code)
+	}
+
+	out, errb, code = runTool(t, []string{"PATH=" + path}, "-u", "PATH", "sh", "-c", "exit 0")
+	if code != 0 || errb != "" || out != "" {
+		t.Fatalf("unset PATH command lookup = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runTool(t, []string{"PATH=" + path}, "-u", "PATH", "/usr/bin/env")
+	if code != 0 || errb != "" || strings.Contains(out, "PATH=") {
+		t.Fatalf("unset PATH child environment = (%q, %q, %d)", out, errb, code)
+	}
+
+	out, errb, code = runTool(t, []string{"PATH=" + path, "ENV_SENTINEL=present"}, "-i", "sh", "-c", "env")
+	if code != 0 || errb != "" || strings.Contains(out, "ENV_SENTINEL=") {
+		t.Fatalf("empty command environment = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestEnvChdirArgv0AndSplitString(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
 	dir := t.TempDir()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   t.TempDir(),
+		Env:   []string{"PATH=" + os.Getenv("PATH")},
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
 	}
-	code := cmd.Run(rc, []string{"--chdir", dir, "-S", "printf 'two words'"})
-	if code != 2 || !strings.Contains(errb.String(), "printf") || rc.Dir != dir {
-		t.Fatalf("code=%d err=%q dir=%q", code, errb.String(), rc.Dir)
+	code := cmd.Run(rc, []string{"--chdir", dir, "--argv0", "chosen-argv0", "sh", "-c", `printf '%s\n%s' "$PWD" "$0"`})
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || errb.String() != "" || out.String() != realDir+"\nchosen-argv0" || rc.Dir != dir {
+		t.Fatalf("chdir/argv0 = (%q, %q, %d, dir=%q)", out.String(), errb.String(), code, rc.Dir)
+	}
+
+	out.Reset()
+	code = cmd.Run(rc, []string{"-S", `SPLIT_VALUE=split sh -c 'printf %s "$SPLIT_VALUE"'`})
+	if code != 0 || errb.String() != "" || out.String() != "split" {
+		t.Fatalf("split-string = (%q, %q, %d)", out.String(), errb.String(), code)
 	}
 }
 
-func TestEnvSignalOptionsValidateInDataMode(t *testing.T) {
-	out, errb, code := runTool(t, []string{"A=1"}, "--ignore-signal=INT,TERM", "--default-signal=HUP", "--block-signal=USR1", "--list-signal-handling")
+func TestEnvIgnoreSignal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX signal and shell semantics")
+	}
+	out, errb, code := runTool(t, []string{"PATH=" + os.Getenv("PATH")}, "--ignore-signal=TERM", "sh", "-c", `kill -TERM $$; printf survived`)
+	if code != 0 || errb != "" || out != "survived" {
+		t.Fatalf("ignore signal = (%q, %q, %d)", out, errb, code)
+	}
+
+	out, errb, code = runTool(t, []string{"A=1"}, "--ignore-signal=INT")
 	if code != 0 || errb != "" || out != "A=1\n" {
 		t.Fatalf("signal data mode = (%q, %q, %d)", out, errb, code)
 	}
@@ -129,10 +177,61 @@ func TestEnvSignalOptionsValidateInDataMode(t *testing.T) {
 	}
 }
 
-func TestEnvCommandNotSupported(t *testing.T) {
-	_, errb, code := runTool(t, []string{"A=1"}, "X=2", "printenv", "X")
-	if code != 2 || !strings.Contains(errb, "not supported") || !strings.Contains(errb, "printenv") {
-		t.Errorf("COMMAND operand: code=%d err=%q, want contract error naming the command", code, errb)
+func TestEnvCommandStdioAndExitStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
+	for _, want := range []int{0, 7} {
+		_, errb, code := runTool(t, []string{"PATH=" + os.Getenv("PATH")}, "sh", "-c", "exit "+string(rune('0'+want)))
+		if code != want || errb != "" {
+			t.Errorf("exit %d = code %d, stderr %q", want, code, errb)
+		}
+	}
+	_, _, code := runTool(t, []string{"PATH=" + os.Getenv("PATH")}, "sh", "-c", "kill -TERM $$")
+	if code != 143 {
+		t.Errorf("signal exit = code %d, want 143", code)
+	}
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: t.TempDir(),
+		Env: []string{"PATH=" + os.Getenv("PATH")},
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("streamed\n"),
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	code = cmd.Run(rc, []string{"sh", "-c", `read value; printf %s "$value"; printf err >&2`})
+	if code != 0 || out.String() != "streamed" || errb.String() != "err" {
+		t.Fatalf("stdio = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+}
+
+func TestEnvCommandNotFoundAndNotExecutable(t *testing.T) {
+	_, errb, code := runTool(t, []string{"PATH="}, "definitely-not-an-env-test-command")
+	if code != 127 || !strings.Contains(errb, "No such file or directory") {
+		t.Fatalf("not found = code %d, stderr %q", code, errb)
+	}
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "not-executable")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut},
+	}
+	code = cmd.Run(rc, []string{"./not-executable"})
+	if code != 126 || !strings.Contains(errOut.String(), "permission denied") {
+		t.Fatalf("not executable = code %d, stderr %q", code, errOut.String())
 	}
 }
 
@@ -151,5 +250,10 @@ func TestEnvHelp(t *testing.T) {
 	out, _, code := runTool(t, nil, "--help")
 	if code != 0 || !strings.Contains(out, "Usage: env") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+	for _, removed := range []string{"--default-signal", "--block-signal", "--list-signal-handling"} {
+		if strings.Contains(out, removed) {
+			t.Errorf("--help advertises unsupported option %q:\n%s", removed, out)
+		}
 	}
 }
