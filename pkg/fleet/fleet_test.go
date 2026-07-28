@@ -303,9 +303,6 @@ func TestMarshalRoundTrips(t *testing.T) {
 	if again.CLI.Launch.ACPExec != tl.CLI.Launch.ACPExec {
 		t.Fatalf("ACP launch template lost in round trip: %q", again.CLI.Launch.ACPExec)
 	}
-	if again.CLI.Launch.ACPRung != tl.CLI.Launch.ACPRung {
-		t.Fatalf("ACP rung lost in round trip: %q", again.CLI.Launch.ACPRung)
-	}
 }
 
 // Function kits share the tool namespace with agentic CLIs. They are not

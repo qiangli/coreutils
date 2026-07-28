@@ -88,6 +88,12 @@ type Options struct {
 	Fork    bool
 	Session string
 
+	// ACP resolves the tool's ACP launch (acp_exec) instead of its headless or
+	// steerable one. Set only by startACPSession, and only behind the BASHY_ACP
+	// gate; every other launch in the fleet leaves it false and is resolved by
+	// the identical code that ran before ACP existed.
+	ACP bool
+
 	// Stream, when set, receives the agent's stdout AS IT IS WRITTEN, in
 	// addition to the captured Result. It is a tee, not a redirect: the caller
 	// still gets the whole output at the end, so nothing downstream has to
@@ -173,6 +179,7 @@ func toAgentLaunchOptions(opt Options) agentlaunch.Options {
 		Steer:       opt.Steer,
 		Fork:        opt.Fork,
 		Session:     opt.Session,
+		ACP:         opt.ACP,
 	}
 }
 

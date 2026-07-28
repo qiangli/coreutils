@@ -23,6 +23,17 @@ type Client struct {
 	conn            *sdk.ClientSideConnection
 	cmd             *exec.Cmd
 	protocolVersion int
+
+	// waited is closed when the subprocess has been reaped, and waitErr holds
+	// what Wait returned. There is EXACTLY ONE cmd.Wait() for a client — the
+	// goroutine NewClient starts — because a second call returns "Wait was
+	// already called" and would corrupt the first one's result.
+	//
+	// This exists so a caller can learn the agent DIED ON ITS OWN. Without it
+	// the only signal was Close(), which the caller invokes, so an agent that
+	// crashed mid-turn left its session looking permanently live.
+	waited  chan struct{}
+	waitErr error
 }
 
 // NewClient starts the given command as an ACP agent subprocess, connects to
@@ -68,11 +79,37 @@ func NewClient(ctx context.Context, handler Handler, cmd *exec.Cmd) (*Client, er
 		)
 	}
 
-	return &Client{
+	c := &Client{
 		conn:            conn,
 		cmd:             cmd,
 		protocolVersion: int(initResp.ProtocolVersion),
-	}, nil
+		waited:          make(chan struct{}),
+	}
+	// THE ONLY cmd.Wait() for this client. Started here, on the success path
+	// only: the failure paths above reap the subprocess themselves before any
+	// Client exists to own it.
+	go func() {
+		c.waitErr = cmd.Wait()
+		close(c.waited)
+	}()
+	return c, nil
+}
+
+// Done is closed when the agent subprocess has exited, however it exited —
+// crashed, killed by Close, or finished on its own.
+//
+// Watch it to notice an agent that DIED WITHOUT BEING ASKED TO. An ACP session
+// has no other symptom for that: the protocol simply goes quiet, and a caller
+// waiting on a turn that will never arrive cannot tell a dead agent from a slow
+// one. Callers that own a session lifecycle must select on this.
+func (c *Client) Done() <-chan struct{} {
+	if c.waited == nil {
+		// A client with no subprocess (pipe transport in tests) never dies on
+		// its own, so a nil channel — which blocks forever — is the honest
+		// answer rather than a channel that closes immediately.
+		return nil
+	}
+	return c.waited
 }
 
 // ProtocolVersion reports the strictly negotiated protocol version.
@@ -129,11 +166,15 @@ func (c *Client) Close() error {
 		return nil
 	}
 	killErr := c.cmd.Process.Kill()
-	waitErr := c.cmd.Wait()
+	// Wait on the ONE reaper rather than calling cmd.Wait() again: a second
+	// Wait returns "Wait was already called" and races the first.
+	if c.waited != nil {
+		<-c.waited
+	}
 	if killErr != nil {
 		return killErr
 	}
-	return waitErr
+	return c.waitErr
 }
 
 // Agent serves a Runner through the ACP v1 agent-side connection.

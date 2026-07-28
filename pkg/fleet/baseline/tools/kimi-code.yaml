@@ -6,7 +6,6 @@ cli:
   launch:
     exec: kimi -m {model} -p {prompt} --auto
     acp_exec: kimi acp
-    acp_rung: native
     prompt_position: last
     supports_say: true
     supports_graceful_quit: true

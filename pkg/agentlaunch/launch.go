@@ -55,6 +55,20 @@ type Options struct {
 	// cannot do one.
 	Fork    bool
 	Session string
+
+	// ACP resolves the tool's ACP launch (acp_exec) instead of its headless or
+	// steerable one — the transport in pkg/chat/acp.go, rungs 1 and 2.
+	//
+	// It is a launch KIND like Steer and Fork, and for the same reason: the ACP
+	// argv is its own template with its own {model} slot, and a tool may declare
+	// it and NOTHING else. Resolving such a tool through the headless template
+	// asks a question it has no answer to, and the launcher refuses a perfectly
+	// drivable binding on the strength of a template it will never run.
+	//
+	// Fails loudly when the tool declares no acp_exec. chat's ACP branch treats
+	// that failure as "not mine" and falls through to the rung below, so a tool
+	// that never declared ACP is untouched.
+	ACP bool
 }
 
 // Launch is a fully resolved agent invocation. Args excludes the prompt.
@@ -188,9 +202,44 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	}
 	if known {
 		lnch.Tool = tool.Binary()
+		// A BOUND MODEL REFUSES ACP, and the caller falls to the rung below —
+		// which delivers the model the way it always has.
+		//
+		// ACP carries no model-selection call, and the ACP-native tools take no
+		// model flag: `opencode acp --model moonshot/kimi-k3` prints its help
+		// instead of speaking the protocol (measured 2026-07-27 with a real
+		// binding out of `bashy agents list`, not an invented one). So driving
+		// opencode-kimi-k3 over ACP would exec byte-for-byte the same
+		// `opencode acp` process as opencode-deepseek-v4-pro, and all four
+		// opencode agents — L2 through L3 — would collapse into whatever model
+		// that install happens to be configured for.
+		//
+		// That is the fleet-evidence invariant violated exactly: `--min-band 3`
+		// would be SATISFIED BY THE ABSENCE of any check. A slower transport is a
+		// cost; a band that silently lies is a defect. So ACP serves tool-level
+		// bindings only, and a tool:model binding takes a rung that can honour it.
+		if opt.ACP && lnch.Model != "" {
+			return lnch, fmt.Errorf("agent launch: %q binds model %q, which cannot be delivered over ACP — the protocol has no model selection and %q takes no model flag in ACP mode; use a rung that can carry it",
+				name, lnch.Model, tool.Name)
+		}
 		if lnch.Model != "" && !tool.TakesModel() {
 			return lnch, fmt.Errorf("agent launch: tool %q cannot select a model, so %q is a label, not a selection (its launch template has no %s)",
 				tool.Name, name, fleet.ModelToken)
+		}
+		// The ACP launch resolves from its own template and returns here: it has
+		// no workspace preflight (that is a headless, prompt-carrying command) and
+		// no prompt in argv at all — an ACP prompt travels in the session.
+		if opt.ACP {
+			bin, args, ok := ACPArgv(tool, lnch.Model)
+			if !ok {
+				return lnch, fmt.Errorf("agent launch: %q cannot be driven over ACP — tool %q declares no ACP launch (acp_exec)", name, tool.Name)
+			}
+			out, err := FinalizeArgs(tool.Name, args, opt)
+			if err != nil {
+				return lnch, err
+			}
+			lnch.Tool, lnch.Args, lnch.TakesPrompt = bin, out, false
+			return lnch, nil
 		}
 		render := func(m string) ([]string, bool) {
 			return tool.ArgvPrefixWithWorkspace(opt.Workspace, m)
@@ -234,6 +283,15 @@ func ResolveWithCatalog(name string, opt Options, newCatalog CatalogFunc) (Launc
 	if lnch.Model != "" {
 		return lnch, fmt.Errorf("agent launch: no launch template for tool %q, so model %q cannot be passed to it; add it with `bashy tools add`",
 			toolName, modelName)
+	}
+
+	// Neither can an ACP launch, and for the same reason the steer guard below
+	// spells out: below this line there is no catalog entry, so no acp_exec, and
+	// the seeded-profile fallback would hand back a headless argv for a caller
+	// that is about to speak JSON-RPC at it.
+	if opt.ACP {
+		return lnch, fmt.Errorf("agent launch: %q cannot be driven over ACP — tool %q is not in the catalog, "+
+			"so there is no ACP launch to resolve (see `bashy tools list`)", name, toolName)
 	}
 
 	// A STEER cannot be resolved from a fallback.
