@@ -37,6 +37,20 @@ const (
 	VenueUserland  = "userland"  // venue 1 — in-process on this host
 	VenueWorkspace = "workspace" // venue 2 — private HOME/TMPDIR clone (not in P2)
 	VenueSandbox   = "sandbox"   // venue 3 — container (not in P2)
+	VenueCluster   = "cluster"   // venue 4 — scheduler-selected cluster worker
+	VenueCloud     = "cloud"     // venue 5 — provisioned cloud worker
+)
+
+// Distribution is the dhnt.pipeline/v1 closed vocabulary describing how a
+// task may be expanded by a pipeline executor. The DAG runner preserves this
+// intent but does not itself invent an execution or lowering strategy.
+type Distribution string
+
+const (
+	DistributionSingle          Distribution = "single"
+	DistributionShardable       Distribution = "shardable"
+	DistributionReplicated      Distribution = "replicated"
+	DistributionTopologyCoupled Distribution = "topology-coupled"
 )
 
 // LocalWorkerID is the logical name of the same-host worker. It is deliberately

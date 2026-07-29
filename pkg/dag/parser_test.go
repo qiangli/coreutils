@@ -138,6 +138,27 @@ func TestParseExitCodes(t *testing.T) {
 	}
 }
 
+func TestParseDistributionAndClusterLane(t *testing.T) {
+	md := "## Tasks\n\n### pretrain\n" +
+		"Distribution: shardable\n" +
+		"Lane: cluster\n" +
+		block("bash", "python train.py")
+	doc, err := Parse(strings.NewReader(md), "dag.md")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	got := doc.Tasks[0]
+	if got.Distribution != DistributionShardable {
+		t.Errorf("distribution = %q, want %q", got.Distribution, DistributionShardable)
+	}
+	if got.Venue != VenueCluster {
+		t.Errorf("venue = %q, want %q", got.Venue, VenueCluster)
+	}
+	if strings.Contains(got.Desc, "Distribution:") || strings.Contains(got.Desc, "Lane:") {
+		t.Errorf("recognized metadata leaked into description: %q", got.Desc)
+	}
+}
+
 func TestParseFrontmatter(t *testing.T) {
 	md := "---\nname: demo\ndescription: A demo pipeline\n---\n\n" +
 		"## Tasks\n\n### t\n" + block("", "echo t")

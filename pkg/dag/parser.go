@@ -55,10 +55,11 @@ type Task struct {
 	// Fleet placement requirements. These describe capability, never reach:
 	// Venue selects an isolation lane, Match names host facts, Exclusive drains
 	// the selected worker, and MemPerTask reserves memory capacity.
-	Venue      string
-	Match      map[string]string
-	Exclusive  bool
-	MemPerTask uint64
+	Venue        string
+	Distribution Distribution
+	Match        map[string]string
+	Exclusive    bool
+	MemPerTask   uint64
 
 	// P0 #2 — per-target execution policy enforced by the engine.
 	Timeout time.Duration // `Timeout: 90s` — 0 means no deadline
@@ -115,7 +116,8 @@ var metaKeys = map[string]bool{
 	// P2 metadata.
 	"exitcodes": true, "host": true,
 	"venue": true, "lane": true, "match": true, "requires-host": true,
-	"exclusive": true, "mempertask": true, "mem-per-task": true, "memory": true,
+	"distribution": true,
+	"exclusive":    true, "mempertask": true, "mem-per-task": true, "memory": true,
 }
 
 // Parse reads a DAG markdown document. The format:
@@ -512,6 +514,8 @@ func (t *Task) absorb(lines []string) {
 				t.Host = strings.TrimSpace(v)
 			case "venue", "lane":
 				t.Venue = strings.TrimSpace(v)
+			case "distribution":
+				t.Distribution = Distribution(strings.TrimSpace(v))
 			case "match", "requires-host":
 				if t.Match == nil {
 					t.Match = map[string]string{}

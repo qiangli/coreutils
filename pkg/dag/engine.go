@@ -170,9 +170,11 @@ func (e *Engine) docPath() string {
 // ExplainItem is one target's would-run/up-to-date decision and the reason,
 // as produced by Explain without running any body.
 type ExplainItem struct {
-	Name     string
-	WouldRun bool
-	Reason   string
+	Name         string
+	Venue        string
+	Distribution Distribution
+	WouldRun     bool
+	Reason       string
 }
 
 // Explain computes, for the transitive closure of targets in topological order,
@@ -200,7 +202,11 @@ func (e *Engine) Explain(targets ...string) ([]ExplainItem, error) {
 	items := make([]ExplainItem, 0, len(order))
 	for _, n := range order {
 		run, reason := e.explainOne(n, fp[n.Task.Name])
-		items = append(items, ExplainItem{Name: n.Task.Name, WouldRun: run, Reason: reason})
+		spec := SpecFor(n.Task)
+		items = append(items, ExplainItem{
+			Name: n.Task.Name, Venue: spec.Venue, Distribution: spec.Distribution,
+			WouldRun: run, Reason: reason,
+		})
 	}
 	return items, nil
 }

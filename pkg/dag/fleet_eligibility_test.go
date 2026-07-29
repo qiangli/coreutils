@@ -11,12 +11,13 @@ import (
 )
 
 func TestTaskPlacementMetadataFlowsThroughSpec(t *testing.T) {
-	d := doc(t, "## Tasks\n\n### bench\nVenue: sandbox\nMatch: os=linux arch=arm64 libc=musl\nExclusive: true\nMemPerTask: 4GiB\n```bash\ntrue\n```\n")
+	d := doc(t, "## Tasks\n\n### bench\nVenue: sandbox\nDistribution: shardable\nMatch: os=linux arch=arm64 libc=musl\nExclusive: true\nMemPerTask: 4GiB\n```bash\ntrue\n```\n")
 	got := SpecFor(d.Tasks[0])
 	want := TaskSpec{
 		SchemaVersion: TaskSpecSchemaVersion, Task: "bench", Venue: VenueSandbox,
-		Match:     map[string]string{"os": "linux", "arch": "arm64", "libc": "musl"},
-		Exclusive: true, MemPerTask: 4 << 30,
+		Distribution: DistributionShardable,
+		Match:        map[string]string{"os": "linux", "arch": "arm64", "libc": "musl"},
+		Exclusive:    true, MemPerTask: 4 << 30,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SpecFor = %+v, want %+v", got, want)

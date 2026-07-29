@@ -35,10 +35,66 @@ func validSpec() *TaskSpec {
 		SchemaVersion: TaskSpecSchemaVersion,
 		Task:          "suite:shard=3",
 		Venue:         VenueUserland,
+		Distribution:  DistributionShardable,
 		Match:         map[string]string{"os": "linux", "libc": "musl"},
 		MemPerTask:    4 << 30,
 		Timeout:       90 * time.Second,
 		Retries:       2,
+	}
+}
+
+func TestTaskSpecDistributionValidationModes(t *testing.T) {
+	legacy := validSpec()
+	legacy.Distribution = ""
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("legacy validation rejected missing distribution: %v", err)
+	}
+	if err := legacy.ValidateForPipeline(); err == nil || !strings.Contains(err.Error(), "no distribution") {
+		t.Fatalf("strict validation error = %v, want missing-distribution refusal", err)
+	}
+
+	for _, distribution := range []Distribution{
+		DistributionSingle,
+		DistributionShardable,
+		DistributionReplicated,
+		DistributionTopologyCoupled,
+	} {
+		spec := validSpec()
+		spec.Distribution = distribution
+		if err := spec.ValidateForPipeline(); err != nil {
+			t.Errorf("strict validation rejected %q: %v", distribution, err)
+		}
+	}
+
+	unknown := validSpec()
+	unknown.Distribution = "scatter"
+	if err := unknown.Validate(); err == nil || !strings.Contains(err.Error(), "unknown distribution") {
+		t.Fatalf("ordinary validation error = %v, want unknown-distribution refusal", err)
+	}
+}
+
+func TestTaskSpecAcceptsClusterAndCloudVenues(t *testing.T) {
+	for _, venue := range []string{VenueCluster, VenueCloud} {
+		spec := validSpec()
+		spec.Venue = venue
+		if err := spec.Validate(); err != nil {
+			t.Errorf("Validate rejected venue %q: %v", venue, err)
+		}
+	}
+}
+
+func TestParseTaskSpecForPipelineRequiresDistribution(t *testing.T) {
+	spec := validSpec()
+	spec.Distribution = ""
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseTaskSpec(data); err != nil {
+		t.Fatalf("legacy parser rejected missing distribution: %v", err)
+	}
+	if _, err := ParseTaskSpecForPipeline(data); err == nil {
+		t.Fatal("strict pipeline parser accepted missing distribution")
 	}
 }
 

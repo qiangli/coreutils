@@ -170,7 +170,7 @@ func TestCommandExplain(t *testing.T) {
 	// must not execute the body (no side-effect file appears).
 	dir := t.TempDir()
 	p := filepath.Join(dir, "DAG.md")
-	md := "## Tasks\n\n### gen\nGenerates: out.txt\n" + block("bash", "echo hi > ran.txt")
+	md := "## Tasks\n\n### gen\nVenue: cloud\nDistribution: replicated\nGenerates: out.txt\n" + block("bash", "echo hi > ran.txt")
 	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -188,9 +188,11 @@ func TestCommandExplain(t *testing.T) {
 		Status string `json:"status"`
 		Result struct {
 			Plan []struct {
-				Name     string `json:"name"`
-				WouldRun bool   `json:"would_run"`
-				Reason   string `json:"reason"`
+				Name         string       `json:"name"`
+				Venue        string       `json:"venue"`
+				Distribution Distribution `json:"distribution"`
+				WouldRun     bool         `json:"would_run"`
+				Reason       string       `json:"reason"`
 			} `json:"plan"`
 		} `json:"result"`
 	}
@@ -202,6 +204,9 @@ func TestCommandExplain(t *testing.T) {
 	}
 	if !env.Result.Plan[0].WouldRun || env.Result.Plan[0].Reason == "" {
 		t.Errorf("want would_run with a reason, got %+v", env.Result.Plan[0])
+	}
+	if env.Result.Plan[0].Venue != VenueCloud || env.Result.Plan[0].Distribution != DistributionReplicated {
+		t.Errorf("placement metadata not explained: %+v", env.Result.Plan[0])
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ran.txt")); err == nil {
 		t.Errorf("--explain executed the body (ran.txt created)")

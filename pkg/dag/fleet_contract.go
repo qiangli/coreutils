@@ -207,10 +207,11 @@ type TaskSpec struct {
 	SchemaVersion int    `json:"schema_version"`
 	Task          string `json:"task"`
 
-	Venue      string            `json:"venue"`
-	Match      map[string]string `json:"match,omitempty"` // host capability labels
-	Exclusive  bool              `json:"exclusive,omitempty"`
-	MemPerTask uint64            `json:"mem_per_task,omitempty"`
+	Venue        string            `json:"venue"`
+	Distribution Distribution      `json:"distribution,omitempty"`
+	Match        map[string]string `json:"match,omitempty"` // host capability labels
+	Exclusive    bool              `json:"exclusive,omitempty"`
+	MemPerTask   uint64            `json:"mem_per_task,omitempty"`
 
 	Timeout time.Duration `json:"timeout_ns,omitempty"`
 	Retries int           `json:"retries,omitempty"`
@@ -228,6 +229,7 @@ func SpecFor(t *Task) TaskSpec {
 		SchemaVersion: TaskSpecSchemaVersion,
 		Task:          t.Name,
 		Venue:         venue,
+		Distribution:  t.Distribution,
 		Match:         t.Match,
 		Exclusive:     t.Exclusive,
 		MemPerTask:    t.MemPerTask,
@@ -251,6 +253,18 @@ func (s TaskSpec) Constraints() Constraints {
 // unnamed task, unknown venue, or a match key that would demand reach details
 // rather than capability.
 func (s *TaskSpec) Validate() error {
+	return s.validate(false)
+}
+
+// ValidateForPipeline applies the strict dhnt.pipeline/v1 boundary: unlike
+// ordinary DAG execution, a pipeline lowering must state how every task may be
+// distributed. This opt-in preserves compatibility with legacy DAG files while
+// giving DKS and other pipeline consumers a fail-closed contract.
+func (s *TaskSpec) ValidateForPipeline() error {
+	return s.validate(true)
+}
+
+func (s *TaskSpec) validate(requireDistribution bool) error {
 	if err := checkSchemaVersion("task spec", s.SchemaVersion, TaskSpecSchemaVersion); err != nil {
 		return err
 	}
@@ -258,9 +272,18 @@ func (s *TaskSpec) Validate() error {
 		return errf(weavecli.ExitInvalidArg, "task spec has no task name")
 	}
 	switch s.Venue {
-	case VenueUserland, VenueWorkspace, VenueSandbox:
+	case VenueUserland, VenueWorkspace, VenueSandbox, VenueCluster, VenueCloud:
 	default:
 		return errf(weavecli.ExitInvalidArg, "task spec for %q names unknown venue %q", s.Task, s.Venue)
+	}
+	switch s.Distribution {
+	case DistributionSingle, DistributionShardable, DistributionReplicated, DistributionTopologyCoupled:
+	case "":
+		if requireDistribution {
+			return errf(weavecli.ExitInvalidArg, "task spec for %q has no distribution", s.Task)
+		}
+	default:
+		return errf(weavecli.ExitInvalidArg, "task spec for %q names unknown distribution %q", s.Task, s.Distribution)
 	}
 	for k := range s.Match {
 		if reachKey(k) {
@@ -278,6 +301,19 @@ func ParseTaskSpec(data []byte) (*TaskSpec, error) {
 		return nil, errf(weavecli.ExitInvalidArg, "parse task spec: %v", err)
 	}
 	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// ParseTaskSpecForPipeline reads a serialized task spec at the strict
+// dhnt.pipeline/v1 boundary, where Distribution is required.
+func ParseTaskSpecForPipeline(data []byte) (*TaskSpec, error) {
+	s := &TaskSpec{}
+	if err := json.Unmarshal(data, s); err != nil {
+		return nil, errf(weavecli.ExitInvalidArg, "parse task spec: %v", err)
+	}
+	if err := s.ValidateForPipeline(); err != nil {
 		return nil, err
 	}
 	return s, nil

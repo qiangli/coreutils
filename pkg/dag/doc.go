@@ -104,9 +104,17 @@
 //
 // `--fleet` runs targets through a [Pool] of [Worker]s instead of a bare -j
 // semaphore. A worker offers one or more execution venues; a [Transport] is how
-// a target reaches one. Only the userland venue ships today — same host, in
-// process — so `--fleet` on one box is `-j N` by construction: `Pool == nil`
-// degrades to LocalPool(Concurrency), and there is no second code path to drift.
+// a target reaches one. `Venue:` / `Lane:` accepts userland, workspace,
+// sandbox, cluster, and cloud as placement intent. Only the userland transport
+// ships today — same host, in process — so `--fleet` on one box is `-j N` by
+// construction: `Pool == nil` degrades to LocalPool(Concurrency), and there is
+// no second code path to drift.
+//
+// `Distribution:` preserves the dhnt.pipeline/v1 expansion intent: single,
+// shardable, replicated, or topology-coupled. Legacy DAG execution permits it
+// to be absent; a DKS/pipeline lowering opts into [TaskSpec.ValidateForPipeline]
+// and fails closed when it is missing or unknown. The DAG package records and
+// explains this contract but does not invent a lowering or executor for it.
 //
 // The pool is the gate, not an addition to one. It owns placement and per-worker
 // slot accounting, which a single global semaphore cannot express ("4 slots

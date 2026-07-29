@@ -458,16 +458,18 @@ func applyChunkManifest(doc *Document, chunksPath, dagPath string) error {
 // --- result shapes (envelope Result payloads) ---
 
 type taskSummary struct {
-	Name      string   `json:"name"`
-	Desc      string   `json:"description,omitempty"`
-	Requires  []string `json:"requires,omitempty"`
-	Inputs    []string `json:"inputs,omitempty"`
-	Sources   []string `json:"sources,omitempty"`
-	Generates []string `json:"generates,omitempty"`
-	Lang      string   `json:"lang,omitempty"`
-	Timeout   string   `json:"timeout,omitempty"`
-	Retries   int      `json:"retries,omitempty"`
-	Host      string   `json:"host,omitempty"`
+	Name         string       `json:"name"`
+	Desc         string       `json:"description,omitempty"`
+	Requires     []string     `json:"requires,omitempty"`
+	Inputs       []string     `json:"inputs,omitempty"`
+	Sources      []string     `json:"sources,omitempty"`
+	Generates    []string     `json:"generates,omitempty"`
+	Lang         string       `json:"lang,omitempty"`
+	Timeout      string       `json:"timeout,omitempty"`
+	Retries      int          `json:"retries,omitempty"`
+	Host         string       `json:"host,omitempty"`
+	Venue        string       `json:"venue,omitempty"`
+	Distribution Distribution `json:"distribution,omitempty"`
 }
 
 type listResult struct {
@@ -496,9 +498,11 @@ type runResult struct {
 }
 
 type explainItem struct {
-	Name     string `json:"name"`
-	WouldRun bool   `json:"would_run"`
-	Reason   string `json:"reason"`
+	Name         string       `json:"name"`
+	Venue        string       `json:"venue,omitempty"`
+	Distribution Distribution `json:"distribution,omitempty"`
+	WouldRun     bool         `json:"would_run"`
+	Reason       string       `json:"reason"`
 }
 
 type explainResult struct {
@@ -512,7 +516,10 @@ type explainResult struct {
 func runExplain(out io.Writer, mode weavecli.OutputMode, path string, targets []string, items []ExplainItem) error {
 	res := explainResult{File: path, Targets: targets}
 	for _, it := range items {
-		res.Plan = append(res.Plan, explainItem{Name: it.Name, WouldRun: it.WouldRun, Reason: it.Reason})
+		res.Plan = append(res.Plan, explainItem{
+			Name: it.Name, Venue: it.Venue, Distribution: it.Distribution,
+			WouldRun: it.WouldRun, Reason: it.Reason,
+		})
 	}
 	if mode == weavecli.OutputJSON {
 		emitOK(out, res)
@@ -524,6 +531,9 @@ func runExplain(out io.Writer, mode weavecli.OutputMode, path string, targets []
 			decision = "run"
 		}
 		fmt.Fprintf(out, "%-10s %-24s %s\n", decision, it.Name, it.Reason)
+		if it.Venue != "" || it.Distribution != "" {
+			fmt.Fprintf(out, "           %-24s venue=%s distribution=%s\n", "", it.Venue, it.Distribution)
+		}
 	}
 	return nil
 }
@@ -580,7 +590,7 @@ func runList(out io.Writer, mode weavecli.OutputMode, doc *Document) error {
 		summary := taskSummary{
 			Name: t.Name, Desc: t.Desc, Requires: t.Requires,
 			Inputs: t.Inputs, Sources: t.Sources, Generates: t.Generates, Lang: t.Lang,
-			Retries: t.Retries, Host: t.Host,
+			Retries: t.Retries, Host: t.Host, Venue: t.Venue, Distribution: t.Distribution,
 		}
 		if t.Timeout > 0 {
 			summary.Timeout = t.Timeout.String()
