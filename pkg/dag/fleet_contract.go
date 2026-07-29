@@ -272,7 +272,7 @@ func (s *TaskSpec) validate(requireDistribution bool) error {
 		return errf(weavecli.ExitInvalidArg, "task spec has no task name")
 	}
 	switch s.Venue {
-	case VenueUserland, VenueWorkspace, VenueSandbox, VenueCluster, VenueCloud:
+	case VenueUserland, VenueWorkspace, VenueSandbox, VenueNative, VenueCluster, VenueCloud:
 	default:
 		return errf(weavecli.ExitInvalidArg, "task spec for %q names unknown venue %q", s.Task, s.Venue)
 	}

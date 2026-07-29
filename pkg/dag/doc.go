@@ -105,10 +105,10 @@
 // `--fleet` runs targets through a [Pool] of [Worker]s instead of a bare -j
 // semaphore. A worker offers one or more execution venues; a [Transport] is how
 // a target reaches one. `Venue:` / `Lane:` accepts userland, workspace,
-// sandbox, cluster, and cloud as placement intent. Only the userland transport
-// ships today — same host, in process — so `--fleet` on one box is `-j N` by
-// construction: `Pool == nil` degrades to LocalPool(Concurrency), and there is
-// no second code path to drift.
+// sandbox, native, cluster, and cloud as placement intent. Only the userland
+// transport ships today — same host, in process — so `--fleet` on one box is
+// `-j N` by construction: `Pool == nil` degrades to LocalPool(Concurrency),
+// and there is no second code path to drift.
 //
 // `Distribution:` preserves the dhnt.pipeline/v1 expansion intent: single,
 // shardable, replicated, or topology-coupled. Legacy DAG execution permits it

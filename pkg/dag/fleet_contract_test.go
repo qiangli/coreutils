@@ -74,7 +74,7 @@ func TestTaskSpecDistributionValidationModes(t *testing.T) {
 }
 
 func TestTaskSpecAcceptsClusterAndCloudVenues(t *testing.T) {
-	for _, venue := range []string{VenueCluster, VenueCloud} {
+	for _, venue := range []string{VenueNative, VenueCluster, VenueCloud} {
 		spec := validSpec()
 		spec.Venue = venue
 		if err := spec.Validate(); err != nil {

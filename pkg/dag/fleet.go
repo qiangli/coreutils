@@ -37,8 +37,9 @@ const (
 	VenueUserland  = "userland"  // venue 1 — in-process on this host
 	VenueWorkspace = "workspace" // venue 2 — private HOME/TMPDIR clone (not in P2)
 	VenueSandbox   = "sandbox"   // venue 3 — container (not in P2)
-	VenueCluster   = "cluster"   // venue 4 — scheduler-selected cluster worker
-	VenueCloud     = "cloud"     // venue 5 — provisioned cloud worker
+	VenueNative    = "native"    // venue 4 — native-process virtual node
+	VenueCluster   = "cluster"   // venue 5 — scheduler-selected cluster worker
+	VenueCloud     = "cloud"     // venue 6 — provisioned cloud worker
 )
 
 // Distribution is the dhnt.pipeline/v1 closed vocabulary describing how a
