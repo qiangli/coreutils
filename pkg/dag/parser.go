@@ -55,11 +55,17 @@ type Task struct {
 	// Fleet placement requirements. These describe capability, never reach:
 	// Venue selects an isolation lane, Match names host facts, Exclusive drains
 	// the selected worker, and MemPerTask reserves memory capacity.
-	Venue        string
-	Distribution Distribution
-	Match        map[string]string
-	Exclusive    bool
-	MemPerTask   uint64
+	Venue           string
+	Distribution    Distribution
+	Match           map[string]string
+	Exclusive       bool
+	CPUPerTask      int
+	MemPerTask      uint64
+	Accelerator     AcceleratorRequest
+	MinimumCapacity map[string]uint64
+	TopologyClass   string
+	CohortSize      int
+	Reducer         string
 
 	// P0 #2 — per-target execution policy enforced by the engine.
 	Timeout time.Duration // `Timeout: 90s` — 0 means no deadline
@@ -117,7 +123,15 @@ var metaKeys = map[string]bool{
 	"exitcodes": true, "host": true,
 	"venue": true, "lane": true, "match": true, "requires-host": true,
 	"distribution": true,
-	"exclusive":    true, "mempertask": true, "mem-per-task": true, "memory": true,
+	"exclusive":    true, "cpupertask": true, "cpu-per-task": true,
+	"mempertask": true, "mem-per-task": true, "memory": true,
+	"accelerator": true, "acceleratorfamily": true, "accelerator-family": true,
+	"acceleratorcount": true, "accelerator-count": true,
+	"acceleratormemory": true, "accelerator-memory": true,
+	"capacity": true, "resources": true,
+	"topology": true, "topologyclass": true, "topology-class": true,
+	"cohort": true, "cohortsize": true, "cohort-size": true,
+	"reducer": true, "reduce": true,
 }
 
 // Parse reads a DAG markdown document. The format:
@@ -527,10 +541,54 @@ func (t *Task) absorb(lines []string) {
 				}
 			case "exclusive":
 				t.Exclusive = strings.EqualFold(strings.TrimSpace(v), "true") || strings.TrimSpace(v) == "1"
+			case "cpupertask", "cpu-per-task":
+				var err error
+				t.CPUPerTask, err = strconv.Atoi(strings.TrimSpace(v))
+				if err != nil {
+					t.CPUPerTask = -1
+				}
 			case "mempertask", "mem-per-task", "memory":
 				if n, ok := parseMemoryBytes(v); ok {
 					t.MemPerTask = n
 				}
+			case "accelerator":
+				t.Accelerator.Kind = strings.TrimSpace(v)
+			case "acceleratorfamily", "accelerator-family":
+				t.Accelerator.Family = strings.TrimSpace(v)
+			case "acceleratorcount", "accelerator-count":
+				var err error
+				t.Accelerator.Count, err = strconv.Atoi(strings.TrimSpace(v))
+				if err != nil {
+					t.Accelerator.Count = -1
+				}
+			case "acceleratormemory", "accelerator-memory":
+				if n, ok := parseMemoryBytes(v); ok {
+					t.Accelerator.MemoryBytes = n
+				} else {
+					t.Accelerator.invalid = true
+				}
+			case "capacity", "resources":
+				if t.MinimumCapacity == nil {
+					t.MinimumCapacity = map[string]uint64{}
+				}
+				for _, field := range strings.Fields(strings.ReplaceAll(v, ",", " ")) {
+					key, quantity, ok := strings.Cut(field, "=")
+					if !ok || strings.TrimSpace(key) == "" {
+						t.MinimumCapacity["invalid"] = 0
+						continue
+					}
+					if n, ok := parseCapacityQuantity(quantity); ok {
+						t.MinimumCapacity[strings.TrimSpace(key)] = n
+					} else {
+						t.MinimumCapacity[strings.TrimSpace(key)] = 0
+					}
+				}
+			case "topology", "topologyclass", "topology-class":
+				t.TopologyClass = strings.TrimSpace(v)
+			case "cohort", "cohortsize", "cohort-size":
+				t.CohortSize, _ = strconv.Atoi(strings.TrimSpace(v))
+			case "reducer", "reduce":
+				t.Reducer = strings.TrimSpace(v)
 			case "timeout":
 				if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
 					t.Timeout = d
@@ -616,9 +674,9 @@ func parseMemoryBytes(v string) (uint64, bool) {
 		suffix string
 		bytes  uint64
 	}{
-		{"gib", 1 << 30}, {"gb", 1 << 30},
-		{"mib", 1 << 20}, {"mb", 1 << 20},
-		{"kib", 1 << 10}, {"kb", 1 << 10},
+		{"gib", 1 << 30}, {"gi", 1 << 30}, {"gb", 1 << 30},
+		{"mib", 1 << 20}, {"mi", 1 << 20}, {"mb", 1 << 20},
+		{"kib", 1 << 10}, {"ki", 1 << 10}, {"kb", 1 << 10},
 		{"b", 1},
 	} {
 		suffix, n := unit.suffix, unit.bytes
@@ -633,6 +691,10 @@ func parseMemoryBytes(v string) (uint64, bool) {
 		return 0, false
 	}
 	return n * multiplier, true
+}
+
+func parseCapacityQuantity(v string) (uint64, bool) {
+	return parseMemoryBytes(v)
 }
 
 func frontmatterKV(line string) (key, value string, ok bool) {

@@ -88,6 +88,38 @@ func TestPoolUsesObservedFactsBeforeStaticWorkerConfiguration(t *testing.T) {
 	}
 }
 
+func TestPoolRejectsMalformedDirectConstraintsWithoutPanicking(t *testing.T) {
+	now := time.Now().UTC()
+	p := NewPool(localTransport{}, &Worker{
+		ID: "observed", MaxFactsAge: time.Hour,
+		Facts: &HostFacts{
+			SchemaVersion: HostFactsSchemaVersion, Worker: "observed",
+			OS: "linux", Arch: "amd64", CPU: 8, Venues: []string{VenueUserland},
+			Accelerators: []AcceleratorFacts{{Kind: "cuda", Count: 1}},
+			Capacities:   map[string]uint64{"example.com/device": 1},
+			ObservedAt:   now,
+		},
+	})
+	tests := []Constraints{
+		{Accelerator: AcceleratorRequest{Kind: "cuda"}},
+		{MinimumCapacity: map[string]uint64{"example.com/device": 0}},
+		{CPUPerTask: -1},
+	}
+	for _, constraints := range tests {
+		if p.Eligible(constraints) {
+			t.Fatalf("Eligible(%+v) = true, want false", constraints)
+		}
+		if worker, release := p.TryAcquire(constraints); worker != nil || release != nil {
+			t.Fatalf("TryAcquire(%+v) returned worker=%v release-present=%v, want neither",
+				constraints, worker, release != nil)
+		}
+		refusals := p.Refusals(constraints)
+		if len(refusals) != 1 || refusals[0].Code != "invalid-constraint" {
+			t.Fatalf("Refusals(%+v) = %+v, want one invalid-constraint", constraints, refusals)
+		}
+	}
+}
+
 func TestPoolRefusalOrderIsDeterministic(t *testing.T) {
 	p := NewPool(localTransport{},
 		&Worker{ID: "b", Venues: []string{VenueUserland}, CPU: 1},

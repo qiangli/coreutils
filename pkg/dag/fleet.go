@@ -6,6 +6,7 @@ package dag
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"sort"
 	"strconv"
@@ -201,6 +202,17 @@ func (w *Worker) fact(key string) string {
 }
 
 func (w *Worker) refusal(c Constraints, now time.Time) *PlacementRefusal {
+	if c.CPUPerTask < 0 {
+		return &PlacementRefusal{Worker: w.ID, Code: "invalid-constraint", Requirement: "cpu_per_task>=0"}
+	}
+	if err := c.Accelerator.validate(); err != nil {
+		return &PlacementRefusal{Worker: w.ID, Code: "invalid-constraint", Requirement: "valid accelerator request", Available: err.Error()}
+	}
+	for resource, minimum := range c.MinimumCapacity {
+		if strings.TrimSpace(resource) == "" || minimum == 0 {
+			return &PlacementRefusal{Worker: w.ID, Code: "invalid-constraint", Requirement: "positive named minimum capacity"}
+		}
+	}
 	if w.staleFacts(now) {
 		return &PlacementRefusal{Worker: w.ID, Code: "unknown-capability", Requirement: "fresh host facts", Missing: "observed_at"}
 	}
@@ -234,16 +246,94 @@ func (w *Worker) refusal(c Constraints, now time.Time) *PlacementRefusal {
 			return &PlacementRefusal{Worker: w.ID, Code: "insufficient-capacity", Requirement: "mem_bytes>=" + strconv.FormatUint(c.MemPerTask, 10), Available: strconv.FormatUint(mem, 10)}
 		}
 	}
+	if c.CPUPerTask > 0 && w.cpuCount() < c.CPUPerTask {
+		return &PlacementRefusal{Worker: w.ID, Code: "insufficient-capacity", Requirement: "cpu>=" + strconv.Itoa(c.CPUPerTask), Available: strconv.Itoa(w.cpuCount())}
+	}
+	facts := w.observedFacts(now)
+	if c.Accelerator.Kind != "" {
+		if facts == nil {
+			return &PlacementRefusal{Worker: w.ID, Code: "unknown-capability", Requirement: "accelerator=" + c.Accelerator.Kind, Missing: "accelerators"}
+		}
+		if !acceleratorSatisfies(facts.Accelerators, c.Accelerator) {
+			return &PlacementRefusal{Worker: w.ID, Code: "insufficient-capacity", Requirement: describeAccelerator(c.Accelerator)}
+		}
+	}
+	if c.TopologyClass != "" {
+		if facts == nil || facts.Topology.Class == "" {
+			return &PlacementRefusal{Worker: w.ID, Code: "unknown-capability", Requirement: "topology=" + c.TopologyClass, Missing: "topology"}
+		}
+		if facts.Topology.Class != c.TopologyClass {
+			return &PlacementRefusal{Worker: w.ID, Code: "capability-mismatch", Requirement: "topology=" + c.TopologyClass, Available: facts.Topology.Class}
+		}
+	}
+	for resource, minimum := range c.MinimumCapacity {
+		if facts == nil {
+			return &PlacementRefusal{Worker: w.ID, Code: "unknown-capability", Requirement: resource + ">=" + strconv.FormatUint(minimum, 10), Missing: resource}
+		}
+		available, ok := facts.Capacities[resource]
+		if !ok {
+			return &PlacementRefusal{Worker: w.ID, Code: "unknown-capability", Requirement: resource + ">=" + strconv.FormatUint(minimum, 10), Missing: resource}
+		}
+		if available < minimum {
+			return &PlacementRefusal{Worker: w.ID, Code: "insufficient-capacity", Requirement: resource + ">=" + strconv.FormatUint(minimum, 10), Available: strconv.FormatUint(available, 10)}
+		}
+	}
 	return nil
 }
 
 // Constraints is what a task demands of a worker. It is derived from task
 // metadata, never from the pool.
 type Constraints struct {
-	Venue      string            // userland | workspace | sandbox | ... ("" => userland)
-	Match      map[string]string // worker HOST labels; venues 1-2 only
-	Exclusive  bool              // drain the worker; nothing co-schedules
-	MemPerTask uint64            // 0 => not memory-gated
+	Venue           string             // userland | workspace | sandbox | ... ("" => userland)
+	Match           map[string]string  // worker capability labels
+	Exclusive       bool               // drain the worker; nothing co-schedules
+	CPUPerTask      int                // 0 => one scheduler slot
+	MemPerTask      uint64             // 0 => not memory-gated
+	Accelerator     AcceleratorRequest // zero value => no accelerator requirement
+	MinimumCapacity map[string]uint64  // Kubernetes-style scalar/extended resources
+	TopologyClass   string             // empty => unconstrained
+}
+
+// AcceleratorRequest is a quantitative device requirement. MemoryBytes is
+// per-device, so aggregate memory can never make one undersized GPU appear
+// eligible.
+type AcceleratorRequest struct {
+	Kind        string `json:"kind,omitempty"`
+	Family      string `json:"family,omitempty"`
+	Count       int    `json:"count,omitempty"`
+	MemoryBytes uint64 `json:"memory_bytes,omitempty"`
+	invalid     bool
+}
+
+func (r AcceleratorRequest) validate() error {
+	if r.invalid {
+		return errors.New("accelerator quantity is invalid")
+	}
+	if r.Count < 0 {
+		return errors.New("accelerator count must not be negative")
+	}
+	if r.Kind == "" && (r.Family != "" || r.Count != 0 || r.MemoryBytes != 0) {
+		return errors.New("accelerator kind is required when accelerator capacity is requested")
+	}
+	if r.Kind != "" && r.Count < 1 {
+		return errors.New("accelerator count must be positive")
+	}
+	return nil
+}
+
+func acceleratorSatisfies(have []AcceleratorFacts, want AcceleratorRequest) bool {
+	if want.Kind == "" {
+		return true
+	}
+	for _, accelerator := range have {
+		if accelerator.Kind == want.Kind &&
+			(want.Family == "" || accelerator.Family == want.Family) &&
+			accelerator.Count >= want.Count &&
+			(want.MemoryBytes == 0 || accelerator.MemoryBytes >= want.MemoryBytes) {
+			return true
+		}
+	}
+	return false
 }
 
 // Transport delivers one task to one worker and returns its result. This is the
@@ -348,6 +438,37 @@ func (p *Pool) Slots(w *Worker, memPerTask uint64) int {
 	return max(0, slots)
 }
 
+func (p *Pool) slotsFor(w *Worker, c Constraints) int {
+	slots := p.Slots(w, c.MemPerTask)
+	if c.CPUPerTask > 0 {
+		slots = min(slots, w.cpuCount()/c.CPUPerTask)
+	}
+	if c.Accelerator.Kind != "" {
+		if c.Accelerator.Count <= 0 {
+			return 0
+		}
+		facts := w.observedFacts(time.Now())
+		if facts == nil {
+			return 0
+		}
+		for _, accelerator := range facts.Accelerators {
+			if accelerator.Kind == c.Accelerator.Kind &&
+				(c.Accelerator.Family == "" || accelerator.Family == c.Accelerator.Family) {
+				slots = min(slots, accelerator.Count/c.Accelerator.Count)
+			}
+		}
+	}
+	if facts := w.observedFacts(time.Now()); facts != nil {
+		for resource, minimum := range c.MinimumCapacity {
+			if minimum == 0 {
+				return 0
+			}
+			slots = min(slots, int(facts.Capacities[resource]/minimum))
+		}
+	}
+	return max(0, slots)
+}
+
 // Capacity is the pool's total slot count across all workers.
 func (p *Pool) Capacity() int {
 	if p == nil {
@@ -373,7 +494,7 @@ func (p *Pool) Eligible(c Constraints) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, w := range p.workers {
-		if w.refusal(c, time.Now()) == nil && p.Slots(w, c.MemPerTask) > 0 {
+		if w.refusal(c, time.Now()) == nil && p.slotsFor(w, c) > 0 {
 			return true
 		}
 	}
@@ -392,7 +513,7 @@ func (p *Pool) Refusals(c Constraints) []PlacementRefusal {
 			refusals = append(refusals, *r)
 			continue
 		}
-		if p.Slots(w, c.MemPerTask) == 0 {
+		if p.slotsFor(w, c) == 0 {
 			refusals = append(refusals, PlacementRefusal{Worker: w.ID, Code: "insufficient-capacity", Requirement: "slots>0", Available: "0"})
 		}
 	}
@@ -424,7 +545,7 @@ func (p *Pool) TryAcquire(c Constraints) (*Worker, func()) {
 		if w.refusal(c, time.Now()) != nil {
 			continue
 		}
-		limit := p.Slots(w, c.MemPerTask)
+		limit := p.slotsFor(w, c)
 		if limit <= 0 {
 			continue
 		}
@@ -568,7 +689,38 @@ func describeConstraints(c Constraints) string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+c.Match[k])
 	}
+	if c.CPUPerTask > 0 {
+		parts = append(parts, "cpu>="+strconv.Itoa(c.CPUPerTask))
+	}
+	if c.MemPerTask > 0 {
+		parts = append(parts, "mem_bytes>="+strconv.FormatUint(c.MemPerTask, 10))
+	}
+	if c.Accelerator.Kind != "" {
+		parts = append(parts, describeAccelerator(c.Accelerator))
+	}
+	if c.TopologyClass != "" {
+		parts = append(parts, "topology="+c.TopologyClass)
+	}
+	resourceKeys := make([]string, 0, len(c.MinimumCapacity))
+	for resource := range c.MinimumCapacity {
+		resourceKeys = append(resourceKeys, resource)
+	}
+	sort.Strings(resourceKeys)
+	for _, resource := range resourceKeys {
+		parts = append(parts, resource+">="+strconv.FormatUint(c.MinimumCapacity[resource], 10))
+	}
 	return strings.Join(parts, " ")
+}
+
+func describeAccelerator(r AcceleratorRequest) string {
+	parts := []string{"accelerator=" + r.Kind, "count>=" + strconv.Itoa(r.Count)}
+	if r.Family != "" {
+		parts = append(parts, "family="+r.Family)
+	}
+	if r.MemoryBytes > 0 {
+		parts = append(parts, "device_memory_bytes>="+strconv.FormatUint(r.MemoryBytes, 10))
+	}
+	return strings.Join(parts, ",")
 }
 
 // localTransport is venue 1: the task runs in-process on this host, through the

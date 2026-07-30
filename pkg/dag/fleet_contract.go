@@ -86,9 +86,28 @@ type HostFacts struct {
 	// keys are rejected by Validate — see reachKeys.
 	Labels map[string]string `json:"labels,omitempty"`
 
+	// Accelerator and topology are observed scheduling facts. Domain is a
+	// logical fabric identifier (for example "dragon-local"), never a hostname
+	// or address. A coupled cohort may only span one domain.
+	Accelerators []AcceleratorFacts `json:"accelerators,omitempty"`
+	Topology     TopologyFacts      `json:"topology,omitempty"`
+	Capacities   map[string]uint64  `json:"capacities,omitempty"`
+
 	// ObservedAt is when the probe ran, in UTC. Facts are a snapshot, not a
 	// registry: a scheduler must treat old facts as stale (see Stale), not true.
 	ObservedAt time.Time `json:"observed_at"`
+}
+
+type AcceleratorFacts struct {
+	Kind        string `json:"kind"`                   // cuda | mps | rocm | ...
+	Family      string `json:"family,omitempty"`       // exact homogeneous family
+	Count       int    `json:"count"`                  // schedulable devices
+	MemoryBytes uint64 `json:"memory_bytes,omitempty"` // minimum bytes per device
+}
+
+type TopologyFacts struct {
+	Class  string `json:"class,omitempty"`  // grouping key, e.g. kubernetes.io/hostname
+	Domain string `json:"domain,omitempty"` // logical cohort domain, not reach
 }
 
 // ObserveLocalHost probes the machine this process runs on and returns its
@@ -131,6 +150,19 @@ func (f *HostFacts) Validate() error {
 			return errf(weavecli.ExitInvalidArg,
 				"host facts for %q carry reach label %q — reach details belong in pkg/fleet.Host, not in facts", f.Worker, k)
 		}
+	}
+	for k := range f.Capacities {
+		if reachKey(k) {
+			return errf(weavecli.ExitInvalidArg, "host facts for %q carry reach capacity %q", f.Worker, k)
+		}
+	}
+	for i, accelerator := range f.Accelerators {
+		if accelerator.Kind == "" || accelerator.Count < 1 {
+			return errf(weavecli.ExitInvalidArg, "host facts for %q have invalid accelerator %d", f.Worker, i)
+		}
+	}
+	if (f.Topology.Class == "") != (f.Topology.Domain == "") {
+		return errf(weavecli.ExitInvalidArg, "host facts for %q must declare topology class and domain together", f.Worker)
 	}
 	return nil
 }
@@ -179,6 +211,20 @@ func (f *HostFacts) Satisfies(s TaskSpec) bool {
 			return false
 		}
 	}
+	if s.CPUPerTask > 0 && f.CPU < s.CPUPerTask {
+		return false
+	}
+	if !acceleratorSatisfies(f.Accelerators, s.Accelerator) {
+		return false
+	}
+	if s.TopologyClass != "" && f.Topology.Class != s.TopologyClass {
+		return false
+	}
+	for resource, minimum := range s.MinimumCapacity {
+		if f.Capacities[resource] < minimum {
+			return false
+		}
+	}
 	return true
 }
 
@@ -207,11 +253,17 @@ type TaskSpec struct {
 	SchemaVersion int    `json:"schema_version"`
 	Task          string `json:"task"`
 
-	Venue        string            `json:"venue"`
-	Distribution Distribution      `json:"distribution,omitempty"`
-	Match        map[string]string `json:"match,omitempty"` // host capability labels
-	Exclusive    bool              `json:"exclusive,omitempty"`
-	MemPerTask   uint64            `json:"mem_per_task,omitempty"`
+	Venue           string             `json:"venue"`
+	Distribution    Distribution       `json:"distribution,omitempty"`
+	Match           map[string]string  `json:"match,omitempty"` // host capability labels
+	Exclusive       bool               `json:"exclusive,omitempty"`
+	CPUPerTask      int                `json:"cpu_per_task,omitempty"`
+	MemPerTask      uint64             `json:"mem_per_task,omitempty"`
+	Accelerator     AcceleratorRequest `json:"accelerator,omitempty"`
+	MinimumCapacity map[string]uint64  `json:"minimum_capacity,omitempty"`
+	TopologyClass   string             `json:"topology_class,omitempty"`
+	CohortSize      int                `json:"cohort_size,omitempty"`
+	Reducer         string             `json:"reducer,omitempty"`
 
 	Timeout time.Duration `json:"timeout_ns,omitempty"`
 	Retries int           `json:"retries,omitempty"`
@@ -226,15 +278,21 @@ func SpecFor(t *Task) TaskSpec {
 		venue = VenueUserland
 	}
 	return TaskSpec{
-		SchemaVersion: TaskSpecSchemaVersion,
-		Task:          t.Name,
-		Venue:         venue,
-		Distribution:  t.Distribution,
-		Match:         t.Match,
-		Exclusive:     t.Exclusive,
-		MemPerTask:    t.MemPerTask,
-		Timeout:       t.Timeout,
-		Retries:       t.Retries,
+		SchemaVersion:   TaskSpecSchemaVersion,
+		Task:            t.Name,
+		Venue:           venue,
+		Distribution:    t.Distribution,
+		Match:           t.Match,
+		Exclusive:       t.Exclusive,
+		CPUPerTask:      t.CPUPerTask,
+		MemPerTask:      t.MemPerTask,
+		Accelerator:     t.Accelerator,
+		MinimumCapacity: t.MinimumCapacity,
+		TopologyClass:   t.TopologyClass,
+		CohortSize:      t.CohortSize,
+		Reducer:         t.Reducer,
+		Timeout:         t.Timeout,
+		Retries:         t.Retries,
 	}
 }
 
@@ -242,10 +300,14 @@ func SpecFor(t *Task) TaskSpec {
 // This is the one bridge between the committed contract and the scheduler.
 func (s TaskSpec) Constraints() Constraints {
 	return Constraints{
-		Venue:      s.Venue,
-		Match:      s.Match,
-		Exclusive:  s.Exclusive,
-		MemPerTask: s.MemPerTask,
+		Venue:           s.Venue,
+		Match:           s.Match,
+		Exclusive:       s.Exclusive,
+		CPUPerTask:      s.CPUPerTask,
+		MemPerTask:      s.MemPerTask,
+		Accelerator:     s.Accelerator,
+		MinimumCapacity: s.MinimumCapacity,
+		TopologyClass:   s.TopologyClass,
 	}
 }
 
@@ -289,6 +351,50 @@ func (s *TaskSpec) validate(requireDistribution bool) error {
 		if reachKey(k) {
 			return errf(weavecli.ExitInvalidArg,
 				"task spec for %q matches on reach key %q — specs demand capability, never reach", s.Task, k)
+		}
+	}
+	for k, minimum := range s.MinimumCapacity {
+		if reachKey(k) {
+			return errf(weavecli.ExitInvalidArg, "task spec for %q requests reach capacity %q", s.Task, k)
+		}
+		if strings.TrimSpace(k) == "" || minimum == 0 {
+			return errf(weavecli.ExitInvalidArg, "task spec for %q has invalid minimum capacity %q", s.Task, k)
+		}
+	}
+	if s.CPUPerTask < 0 {
+		return errf(weavecli.ExitInvalidArg, "task spec for %q has negative cpu_per_task", s.Task)
+	}
+	if err := s.Accelerator.validate(); err != nil {
+		return errf(weavecli.ExitInvalidArg, "task spec for %q: %v", s.Task, err)
+	}
+	if s.CohortSize < 0 {
+		return errf(weavecli.ExitInvalidArg, "task spec for %q has negative cohort_size", s.Task)
+	}
+	return nil
+}
+
+// ValidateForPlacement is the fail-closed scheduler boundary. Legacy DAG and
+// pipeline readers remain additive-compatible, while an executor that claims
+// topology/chunk safety opts into these stronger requirements.
+func (s *TaskSpec) ValidateForPlacement() error {
+	if err := s.ValidateForPipeline(); err != nil {
+		return err
+	}
+	switch s.Distribution {
+	case DistributionTopologyCoupled:
+		if s.TopologyClass == "" {
+			return errf(weavecli.ExitInvalidArg, "task spec for %q topology-coupled work requires topology_class", s.Task)
+		}
+		if s.CohortSize < 1 {
+			return errf(weavecli.ExitInvalidArg, "task spec for %q topology-coupled work requires positive cohort_size", s.Task)
+		}
+	case DistributionShardable:
+		if strings.TrimSpace(s.Reducer) == "" {
+			return errf(weavecli.ExitInvalidArg, "task spec for %q shardable work requires a reducer", s.Task)
+		}
+	default:
+		if s.CohortSize > 1 {
+			return errf(weavecli.ExitInvalidArg, "task spec for %q non-coupled work cannot request cohort_size %d", s.Task, s.CohortSize)
 		}
 	}
 	return nil
