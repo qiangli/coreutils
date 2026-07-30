@@ -32,6 +32,14 @@
 > - `weave start` refuses an issue whose previous wrapper is still
 >   alive; `weave list` flags `working` items whose wrapper died
 >   (`stale` in JSON, `*` in the table).
+> - `weave start` also refuses a named fleet AGENT that is already
+>   working another run — an agent is one identity (one store, one
+>   kb attribution, one bus cursor), so two live runs under it mix
+>   context. The run stays `todo` for it to pick up next. Pass
+>   `--clone` to mint a per-issue ephemeral agent (`007-w3`) with
+>   its own name and context and run them in parallel instead.
+>   (Bare tool names are unaffected: `-- codex` is not an identity,
+>   so the three-terminal walk-through below still works as written.)
 
 Worked example: one human user, three issues, three different agentic CLIs, parallel execution, converged result pushed to GitHub. Use this as the canonical walk-through when teaching the feature or testing it end-to-end.
 
