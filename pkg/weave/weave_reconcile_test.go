@@ -44,18 +44,24 @@ func TestWeaveQueueSummariesActiveOnly(t *testing.T) {
 		{ID: 1, State: "done"}, {ID: 2, State: "working", Tool: "codex"},
 	}})
 
+	// Match on the FULL root path, not its basename. t.TempDir numbers its
+	// subdirectories 001/002/003 under one random parent, so a basename like
+	// "002" is a substring of a sibling's path whenever the random component
+	// happens to contain it ("...ActiveOnly3788002406/003" contains "002").
+	// That made this test fail for a reason having nothing to do with weave,
+	// on roughly whichever runs drew an unlucky number.
 	var active bytes.Buffer
 	weaveQueueSummaries(&active, "", true)
-	if strings.Contains(active.String(), filepath.Base(doneRoot)) {
+	if strings.Contains(active.String(), doneRoot) {
 		t.Errorf("activeOnly=true should skip the all-terminal queue; got:\n%s", active.String())
 	}
-	if !strings.Contains(active.String(), filepath.Base(busyRoot)) {
+	if !strings.Contains(active.String(), busyRoot) {
 		t.Errorf("activeOnly=true should list the queue with a working item; got:\n%s", active.String())
 	}
 
 	var overview bytes.Buffer
 	weaveQueueSummaries(&overview, "", false)
-	if !strings.Contains(overview.String(), filepath.Base(doneRoot)) {
+	if !strings.Contains(overview.String(), doneRoot) {
 		t.Errorf("activeOnly=false (machine overview) should still list the all-terminal queue; got:\n%s", overview.String())
 	}
 }
