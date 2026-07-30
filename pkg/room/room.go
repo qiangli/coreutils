@@ -21,8 +21,20 @@ import (
 	"time"
 )
 
-// Card is one live instance's membership record — who it is, what it is bound to,
-// and how to reach it on this host.
+// Card is one live member's record — who it is, what it is bound to, and how to
+// reach it on this host.
+//
+// Two kinds of card share the board, and the difference is the ID:
+//
+//   - an AGENT SESSION card is keyed by the agent's NAME, because an agent is a
+//     singleton identity on a host (one conversation store, one kb attribution,
+//     one bus cursor, one API key). Mode is "interactive".
+//   - a TASK card is keyed by the WORK (`weave-<issue>-<pid>`), because a task is
+//     not an identity — many may run at once. Mode is "weave"/"foreman"/"meet".
+//
+// Keeping both in one board is deliberate: `chat sessions` should show
+// everything live on the host. Keeping their ID SHAPES apart is what makes Join
+// able to enforce the singleton without also refusing legitimate parallel tasks.
 type Card struct {
 	ID        string   `json:"id"`
 	Principal string   `json:"principal,omitempty"` // who launched it
@@ -36,6 +48,13 @@ type Card struct {
 	Caps      []string `json:"caps,omitempty"`
 	CtlSock   string   `json:"ctl_sock,omitempty"` // same-host reach
 	LogPath   string   `json:"log_path,omitempty"`
+	// EventsPath is the structured-event stream this member writes, when Events.
+	//
+	// It is ADVERTISED rather than recomputed. A reader used to reconstruct it
+	// from binding+pid, which meant two functions had to agree on a hash forever
+	// and a card could not move its own stream. A card already publishes its
+	// socket and its log; its event stream is the same category of fact.
+	EventsPath string `json:"events_path,omitempty"`
 	// PID is the process whose liveness the membership tracks — the room prunes a
 	// card whose pid is gone on read, so it never asserts a dead member is live.
 	PID    int    `json:"pid"`
@@ -105,11 +124,40 @@ func timelinePath() (string, error) {
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
-// Join publishes a membership card and records a join event.
+// ErrLive reports that the id being joined is already held by a LIVE member.
+// Callers unwrap it to tell "someone else is already this" apart from an I/O
+// failure, and to say something useful about it.
+type ErrLive struct {
+	ID  string
+	PID int
+}
+
+func (e *ErrLive) Error() string {
+	return fmt.Sprintf("room: %q is already live (pid %d)", e.ID, e.PID)
+}
+
+// Join CLAIMS a membership id and records a join event.
+//
+// It is a claim, not a write. It used to be an unconditional WriteFile, so a
+// second member taking an id already in use silently overwrote the first's card
+// — and the first's Leave then deleted the survivor's. Nothing reported it,
+// which is how two processes came to share one identity, one control socket and
+// one bus cursor while looking like two healthy members.
+//
+// Re-joining an id this process already holds is an UPDATE and still succeeds:
+// a member revises its own card (task, caps) as it works.
+//
+// A stale card left by a crash is not a conflict — its pid is dead, so it is
+// reclaimed here exactly as Members would prune it on read. Reading is the
+// reconciliation; there is still no sweeper.
 func Join(c Card) error {
 	dir, err := membersDir()
 	if err != nil {
 		return err
+	}
+	path := filepath.Join(dir, c.ID+".json")
+	if prior, ok := readCard(path); ok && prior.PID != c.PID && PidAlive(prior.PID) {
+		return &ErrLive{ID: c.ID, PID: prior.PID}
 	}
 	if c.Joined == "" {
 		c.Joined = now()
@@ -118,19 +166,43 @@ func Join(c Card) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, c.ID+".json"), b, 0o600); err != nil {
+	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return err
 	}
 	return Emit(Event{Type: EventJoin, Actor: c.Principal, Target: c.ID, Body: c.Binding})
 }
 
-// Leave removes a membership card and records a leave event.
+// readCard loads one card file. A missing or unreadable card is "no card" —
+// membership is advisory and a garbled file must never wedge a claim.
+func readCard(path string) (Card, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Card{}, false
+	}
+	var c Card
+	if json.Unmarshal(b, &c) != nil || c.ID == "" {
+		return Card{}, false
+	}
+	return c, true
+}
+
+// Leave removes THIS PROCESS'S membership card and records a leave event.
+//
+// The pid check is load-bearing, not defensive dressing. Every caller pairs
+// `Join` with a deferred `Leave`, and that defer runs whether the Join was
+// granted or REFUSED — so without this, a process that lost a claim would
+// evict the winner's card on its way out and hand the id back to nobody.
+// Leaving an id you do not hold is a no-op, not an error.
 func Leave(id string) {
 	dir, err := membersDir()
 	if err != nil {
 		return
 	}
-	_ = os.Remove(filepath.Join(dir, id+".json"))
+	path := filepath.Join(dir, id+".json")
+	if prior, ok := readCard(path); ok && prior.PID != os.Getpid() && PidAlive(prior.PID) {
+		return
+	}
+	_ = os.Remove(path)
 	_ = Emit(Event{Type: EventLeave, Target: id})
 }
 
@@ -152,12 +224,8 @@ func Members() ([]Card, error) {
 			continue
 		}
 		p := filepath.Join(dir, e.Name())
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var c Card
-		if json.Unmarshal(b, &c) != nil || c.ID == "" {
+		c, ok := readCard(p)
+		if !ok {
 			continue
 		}
 		if !PidAlive(c.PID) {

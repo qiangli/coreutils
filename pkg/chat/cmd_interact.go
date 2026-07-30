@@ -17,6 +17,10 @@ import (
 
 // findMember resolves an id/nick to a live room member, with a helpful error when
 // nothing (or more than one thing) matches — a control verb must never guess.
+//
+// An AGENT is named by its identity (`elif`), so it resolves exactly. A TASK is
+// named by its work (`weave-412-9931`), and several may be live at once, which
+// is why the ambiguous case still has to be reported rather than guessed at.
 func findMember(id string) (room.Card, error) {
 	c, ok, err := room.Find(id)
 	if err != nil {
@@ -27,9 +31,9 @@ func findMember(id string) (room.Card, error) {
 	}
 	members, _ := room.Members()
 	if strings.TrimSpace(id) == "" {
-		return room.Card{}, fmt.Errorf("chat: name an instance id (%d live) — `bashy chat sessions`", len(members))
+		return room.Card{}, fmt.Errorf("chat: name an agent or task id (%d live) — `bashy chat sessions`", len(members))
 	}
-	return room.Card{}, fmt.Errorf("chat: no live instance %q (or it is ambiguous) — `bashy chat sessions`", id)
+	return room.Card{}, fmt.Errorf("chat: nothing live matches %q (or it is ambiguous) — `bashy chat sessions`", id)
 }
 
 // newChatSessionsCmd lists the host room's members — the live-agent board.
@@ -37,7 +41,7 @@ func newChatSessionsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "sessions",
 		Aliases: []string{"ls"},
-		Short:   "list live agent instances in the host room (all launch paths)",
+		Short:   "list live agents and tasks in the host room (all launch paths)",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			members, err := room.Members()
@@ -46,7 +50,7 @@ func newChatSessionsCmd() *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			if len(members) == 0 {
-				fmt.Fprintln(w, "no live instances — start one with `bashy chat --agent NICK` or `--band N`")
+				fmt.Fprintln(w, "nothing live — start an agent with `bashy chat --agent NICK` or `--band N`")
 				return nil
 			}
 			fmt.Fprintf(w, "%-24s %-22s %-4s %-11s %-8s %s\n", "ID", "BINDING", "BAND", "MODE", "PID", "JOINED")
@@ -138,11 +142,11 @@ func newChatTimelineCmd() *cobra.Command {
 	return cmd
 }
 
-// newChatSteerCmd injects a line into a running instance mid-turn.
+// newChatSteerCmd injects a line into a live session mid-turn.
 func newChatSteerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "steer <id> <text>",
-		Short: "inject a line into a running instance (the one control surface: mid-turn steering)",
+		Short: "inject a line into a live session (the one control surface: mid-turn steering)",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := findMember(args[0])
@@ -178,7 +182,7 @@ func grantKeys(tool string, always bool) string {
 	return "y"
 }
 
-// newChatGrantCmd answers a running instance's PENDING approval prompt remotely,
+// newChatGrantCmd answers a live session's PENDING approval prompt remotely,
 // so a supervisor can elevate an attended session to unattended LIVE — no exit,
 // no relaunch (the usability killer). The steer channel already reaches the
 // agent's confirm dialog; this makes it a first-class, discoverable action
@@ -187,7 +191,7 @@ func newChatGrantCmd() *cobra.Command {
 	var once bool
 	cmd := &cobra.Command{
 		Use:   "grant <id>",
-		Short: "approve a running instance's pending prompt remotely (always-allow; --once for one action) — no relaunch",
+		Short: "approve a live session's pending prompt remotely (always-allow; --once for one action) — no relaunch",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := ""
@@ -222,7 +226,7 @@ func newChatGrantCmd() *cobra.Command {
 func newChatInterruptCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "interrupt <id>",
-		Short: "send ESC to a running instance — breaks a tool loop a queued line cannot reach",
+		Short: "send ESC to a live session — breaks a tool loop a queued line cannot reach",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := ""
@@ -246,11 +250,11 @@ func newChatInterruptCmd() *cobra.Command {
 
 // newChatAttachCmd follows an instance's capture and forwards typed lines as steers
 // — the `weave attach` pattern over any room member, so a SECOND party can watch
-// and instruct an instance someone else (or a coach) is driving.
+// and instruct a session someone else (or a coach) is driving.
 func newChatAttachCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "attach <id>",
-		Short: "watch and steer a running instance (type to instruct, /detach to leave)",
+		Short: "watch and steer a live session (type to instruct, /detach to leave)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := ""
@@ -261,9 +265,6 @@ func newChatAttachCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if c.LogPath == "" {
-				return fmt.Errorf("chat: instance %s has no capture to follow (it may have launched without a log)", c.ID)
-			}
 			return attachSession(cmd, c)
 		},
 	}
@@ -271,24 +272,34 @@ func newChatAttachCmd() *cobra.Command {
 }
 
 func attachSession(cmd *cobra.Command, c room.Card) error {
+	return AttachTo(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), c)
+}
+
+// AttachTo follows a live member's capture and forwards typed lines as steers.
+//
+// Split out of the cobra verb so the launcher can reach it too: `chat --agent X
+// --attach` on an already-live X lands here rather than reimplementing the
+// follow loop, which is how the two would drift.
+func AttachTo(parent context.Context, in io.Reader, out, errOut io.Writer, c room.Card) error {
+	if strings.TrimSpace(c.LogPath) == "" {
+		return fmt.Errorf("chat: %s has no capture to follow (it may have launched without a log)", c.ID)
+	}
 	f, err := os.Open(c.LogPath)
 	if err != nil {
 		return fmt.Errorf("chat: capture missing on disk: %s", c.LogPath)
 	}
 	defer f.Close()
 
-	errOut := cmd.ErrOrStderr()
 	fmt.Fprintf(errOut, "attached to %s (%s) — type to instruct, /detach to leave (the agent keeps running)\n",
 		c.ID, c.Binding)
 
-	ctx, cancel := context.WithCancel(cmd.Context())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	// Follower: dump what's there, then poll for growth. Raw ANSI, so a native-TUI
 	// capture looks like a redraw stream — good enough to see activity and steer,
 	// not a clean transcript (that is what invoke's headless capture is for).
 	go func() {
-		out := cmd.OutOrStdout()
 		_, _ = io.Copy(out, f)
 		buf := make([]byte, 4096)
 		for {
@@ -298,7 +309,7 @@ func attachSession(cmd *cobra.Command, c room.Card) error {
 			case <-time.After(200 * time.Millisecond):
 			}
 			if !room.PidAlive(c.PID) {
-				fmt.Fprintln(errOut, "\nchat: instance ended")
+				fmt.Fprintln(errOut, "\nchat: session ended")
 				cancel()
 				return
 			}
@@ -314,7 +325,7 @@ func attachSession(cmd *cobra.Command, c room.Card) error {
 		}
 	}()
 
-	scanner := bufio.NewScanner(cmd.InOrStdin())
+	scanner := bufio.NewScanner(in)
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():

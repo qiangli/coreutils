@@ -375,12 +375,18 @@ func completeLines(lines [][]byte) []byte {
 	return append(bytes.Join(lines, []byte{'\n'}), '\n')
 }
 
-// cardEventsFile reconstructs the structured-events file path a member writes, by
-// mirroring sessionEventsPath with the card's own pid (a card's PID is the
-// session-owner pid — set to os.Getpid() when the member joined). Returns "" when
-// the home directory is unavailable. Best-effort: a missing file makes the caller
-// fall back to the pty path.
+// cardEventsFile is where a member streams its structured events.
+//
+// A card ADVERTISES this now (EventsPath), so the common path is simply to read
+// what the member published. The fallback below reconstructs the pre-EventsPath
+// key — binding+pid — for a card written by an older binary, which is exactly
+// the behaviour such a card had when it was written. Returns "" when neither is
+// available. Best-effort: a missing file makes the caller fall back to the pty
+// path.
 func cardEventsFile(card room.Card) string {
+	if p := strings.TrimSpace(card.EventsPath); p != "" {
+		return p
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""

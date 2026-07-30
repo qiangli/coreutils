@@ -2,12 +2,10 @@ package chat
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -204,9 +202,11 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	// everything else here infers a turn boundary from 25 seconds of silence,
 	// which is wrong for an agent that pauses to think and wrong for one that
 	// renders a spinner.
+	id := agentID(l)
+
 	var tail *eventTail
 	if tl, ok := newCatalog().Tool(l.ToolName); ok && tl.ReportsTurnEnd() {
-		evPath, err := sessionEventsPath(l.Binding())
+		evPath, err := sessionEventsPath(id)
 		if err == nil {
 			if extra := tl.EventsArgv(evPath); len(extra) > 0 {
 				argv = append(argv, extra...)
@@ -227,7 +227,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	// The socket is short and hashed, NOT under a long workspace path: a unix
 	// socket address caps at ~104 bytes, and blowing that degrades steering to a
 	// polling file channel without saying so.
-	sock, err := sessionSock(l.Binding(), cwd)
+	sock, err := sessionSock(id)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +270,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		mode = "session"
 	}
 	card := room.Card{
-		ID:        sessionID(l),
+		ID:        id,
 		Principal: principalName(),
 		Tool:      l.ToolName,
 		Model:     l.ModelName,
@@ -283,7 +283,21 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 		Cwd:       cwd,
 		Events:    tail != nil,
 	}
-	_ = room.Join(card)
+	if tail != nil {
+		card.EventsPath = tail.path
+	}
+	// CLAIM BEFORE SPAWNING. The claim is what enforces one live session per
+	// identity, and it has to happen before the child exists — starting the
+	// process first and discovering the conflict afterwards would leave a real
+	// agent running with no card, unsteerable and invisible to `chat sessions`.
+	if err := room.Join(card); err != nil {
+		var live *room.ErrLive
+		if errors.As(err, &live) {
+			prior, _, _ := room.Find(live.ID)
+			return nil, errAgentLive(live.ID, live.PID, prior.Cwd)
+		}
+		return nil, err
+	}
 
 	go func() {
 		defer close(s.done)
@@ -831,26 +845,6 @@ func (w *sessionWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// sessionSock is short by construction. A unix socket address caps at ~104 bytes,
-// and a workspace path plus a binding blows straight past it — at which point
-// agentpty degrades to a polling file channel and steering silently gets worse.
-func sessionSock(binding, cwd string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".bashy", "ctl")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, shortHash(binding+"\x00"+cwd+"\x00"+fmt.Sprint(os.Getpid()))+".sock"), nil
-}
-
-func shortHash(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])[:12]
-}
-
 // CanSteer reports whether an agent has an interactive launch, and if not, why.
 //
 // Callers use this to degrade LOUDLY. A conductor that silently falls back to
@@ -871,15 +865,3 @@ func CanSteer(agent string) (bool, string) {
 	return true, ""
 }
 
-// sessionEventsPath is where a tool streams its structured events for this run.
-func sessionEventsPath(binding string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".bashy", "events")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, shortHash(binding+"\x00"+fmt.Sprint(os.Getpid()))+".ndjson"), nil
-}

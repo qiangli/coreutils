@@ -172,7 +172,7 @@ func startACPSession(ctx context.Context, agent string, opt SessionOptions) (*Se
 		mode = "session"
 	}
 	card := room.Card{
-		ID:        sessionID(l),
+		ID:        agentID(l),
 		Principal: principalName(),
 		Tool:      l.ToolName,
 		Model:     l.ModelName,

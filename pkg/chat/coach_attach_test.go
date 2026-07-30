@@ -406,26 +406,26 @@ func TestAttachCoachErrorsWhenLogCannotBeOpened(t *testing.T) {
 	}
 }
 
-// The structured-event path reconstructs the events file from the card's
-// binding+pid — the exact key sessionEventsPath used when the member joined. A
-// session-launched card (PID = os.Getpid() of the launcher, here the test) must
-// resolve to the SAME path sessionEventsPath would produce, so the precise event
-// signal is reachable from a card without widening the card shape.
-func TestCardEventsFileMatchesSessionConvention(t *testing.T) {
+// A card written BEFORE cards advertised their own EventsPath still resolves,
+// by reconstructing the old binding+pid key.
+//
+// This used to be the only path, and the comment here used to say the two
+// functions "must agree" — which was the hazard, not the guarantee: one hash
+// spelled out in two places, forever. A card now publishes EventsPath and
+// readers use it; what survives is this fallback, and it is correct precisely
+// because it reproduces the behaviour such a card had when it was written.
+func TestCardEventsFileFallsBackToBindingAndPid(t *testing.T) {
 	binding := "ycode:glm-5.2"
 	pid := os.Getpid()
-	card := room.Card{Binding: binding, PID: pid, Events: true}
+	card := room.Card{Binding: binding, PID: pid, Events: true} // no EventsPath: legacy
 	got := cardEventsFile(card)
-	// sessionEventsPath keys on binding + os.Getpid(); with the card's pid set to
-	// the current pid, the two must agree, so the precise event signal is reachable
-	// from a card without widening the card shape.
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := filepath.Join(home, ".bashy", "events", shortHash(binding+"\x00"+strconv.Itoa(pid))+".ndjson")
 	if got != want {
-		t.Errorf("cardEventsFile = %q\nwant sessionEventsPath-style %q", got, want)
+		t.Errorf("cardEventsFile = %q\nwant the legacy binding+pid path %q", got, want)
 	}
 	if !strings.HasSuffix(got, ".ndjson") {
 		t.Errorf("cardEventsFile = %q, want an .ndjson path", got)

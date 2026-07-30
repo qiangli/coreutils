@@ -524,14 +524,22 @@ func agentChildEnv(ctx context.Context) []string {
 	}
 	if l, ok := LaunchFrom(ctx); ok {
 		env = principalEnv(env, l)
-		// Per-run agent store isolation. ycode locks its data dir, so two
-		// concurrent ycode sessions (two `bashy chat` processes, or a weave
-		// worker started via chat) sharing one store die on launch. Derive a
-		// per-session store under the bashy state dir, keyed by the session
-		// handle so a resume/reattach reuses it. Non-ycode tools and any
-		// operator-set YCODE_DATA_DIR/YCODE_HOME are left untouched. Shares the
-		// SAME helper weave uses so the two launch surfaces cannot drift.
-		env = agentlaunch.ApplyYcodeDataDir(env, parent, toAgentLaunch(l), chatStateDir(), sessionID(l))
+		// PER-AGENT conversation store, keyed by the agent's identity.
+		//
+		// ycode locks its data dir, so two ycode processes sharing one store die
+		// on launch — which is why this exists at all. It used to key on
+		// `<nick>-<pid>`, and that made the cure worse than the disease in slow
+		// motion: every launch of one agent got a BRAND NEW store, so an agent
+		// remembered nothing across runs and orphaned a directory each time.
+		//
+		// Keyed on the identity, the store is what an agent's memory should be:
+		// one per agent, durable across runs, and — because room.Join permits
+		// only one live session per identity — never contended. An agent that
+		// should start from nothing is a different agent: `bashy agents clone`.
+		// Non-ycode tools and any operator-set YCODE_DATA_DIR/YCODE_HOME are left
+		// untouched. Shares the SAME helper weave uses so the two launch surfaces
+		// cannot drift.
+		env = agentlaunch.ApplyYcodeDataDir(env, parent, toAgentLaunch(l), chatStateDir(), agentID(l))
 	}
 	return env
 }
@@ -698,6 +706,7 @@ func NewChatCmd() *cobra.Command {
 	var toolSel string
 	var bandSel int
 	var interactive bool
+	var attachLive bool
 	cmd := &cobra.Command{
 		Use:   "chat [--agent AGENT | --band N | --tool T] [--instruction TEXT]",
 		Short: "talk to an agent — a live governed session (no instruction) or a one-shot (with --instruction)",
@@ -769,6 +778,7 @@ func NewChatCmd() *cobra.Command {
 					Unattended:   opt.AllowUnsafe,
 					AllowPremium: opt.AllowPremium,
 					Status:       cmd.ErrOrStderr(),
+					Attach:       attachLive,
 				})
 				if err != nil {
 					return err
@@ -797,6 +807,7 @@ func NewChatCmd() *cobra.Command {
 	cmd.Flags().StringVar(&toolSel, "tool", "", "launch ANY operable agent using this tool (e.g. codex)")
 	cmd.Flags().IntVar(&bandSel, "band", 0, "launch ANY operable agent pegged at this capability band or above (1-4)")
 	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "force a live interactive session even with an instruction")
+	cmd.Flags().BoolVar(&attachLive, "attach", false, "if the agent is already live, watch and steer that session instead of being refused")
 	cmd.Flags().BoolVar(&opt.AllowUnsafe, "yolo", false,
 		"disable the agent's approval gate (keep --dangerously-skip-permissions) and accept the "+
 			"uncontained-host risk — for a session you SUPERVISE REMOTELY via `chat steer`, where no one "+
@@ -890,6 +901,23 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		res.Output = strings.Join(append([]string{lnch.Tool}, args...), " ")
 		return res, nil
 	}
+	// A one-shot is a TURN, not a session, so it does not take a seat in the
+	// room. It does, however, open the agent's conversation store — and for a
+	// store-locking tool that means firing a turn at an agent who is mid-session
+	// dies inside the tool with "storage is locked by another ycode process",
+	// naming neither the agent nor the session holding it.
+	//
+	// So: say it ourselves, in our own vocabulary, before launching. This is
+	// ADVISORY and read-only — it takes no card and writes no timeline event,
+	// because a turn every few seconds must not bloat the board it reports to.
+	// The honest limit: it catches a turn racing a SESSION, which is the case
+	// operators actually hit. Two simultaneous one-shots of one agent still race,
+	// and the loser still gets the tool's own error.
+	if err := refuseIfSessionLive(lnch); err != nil {
+		res.ExitCode = 2
+		return res, err
+	}
+
 	if opt.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, opt.Timeout)

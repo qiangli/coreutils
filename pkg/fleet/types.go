@@ -660,6 +660,30 @@ type Agent struct {
 	Instruction *AgentInstruction `yaml:"instruction,omitempty" json:"instruction,omitempty"`
 	Functions   []string          `yaml:"functions,omitempty" json:"functions,omitempty"`
 
+	// ClonedFrom and ClonedAt record that this agent was BRANCHED off another,
+	// and when.
+	//
+	// An agent is a singleton identity — one conversation store, one kb
+	// attribution, one bus cursor — so two concurrent tasks cannot be given to
+	// one agent without mixing their context, and mixed context produces
+	// confidently wrong answers. Parallelism is therefore expressed as MORE
+	// AGENTS, and a clone is how you get one that starts from somewhere rather
+	// than from nothing: it inherits its parent's context as of ClonedAt and
+	// diverges from that moment on.
+	//
+	// The provenance is kept because the alternative is a fleet of same-binding
+	// agents with no way to tell which was the original, which was branched off
+	// what, or when their histories parted.
+	ClonedFrom string `yaml:"cloned_from,omitempty" json:"cloned_from,omitempty"`
+	ClonedAt   string `yaml:"cloned_at,omitempty" json:"cloned_at,omitempty"`
+
+	// Ephemeral marks a clone minted for ONE task, to be removed when that task
+	// closes. It is hidden from `agents list` unless --all, because a fleet
+	// roster listing every in-flight task's worker is a roster nobody reads.
+	// Task, when set, names the work it was minted for.
+	Ephemeral bool   `yaml:"ephemeral,omitempty" json:"ephemeral,omitempty"`
+	Task      string `yaml:"task,omitempty" json:"task,omitempty"`
+
 	// AutoNick and Derived are computed by the catalog at load: the
 	// assigned human name (when Nick is empty) and the floating family
 	// alias (`claude-opus` for a binding on `opus5`). Both are functions

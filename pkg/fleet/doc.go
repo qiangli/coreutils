@@ -18,6 +18,31 @@
 // collapse to one capability-matrix row, because that matrix is keyed by
 // the binding, never by the nickname.
 //
+// # Two identities, and they answer different questions
+//
+// The paragraph above is about CAPABILITY: what an agent can do is its
+// binding, so aliasing never fragments the matrix.
+//
+// At RUNTIME the identity is the agent's NAME, and that is a different
+// question with a different answer. A running agent has one conversation
+// store, one kb attribution, one bus cursor and one API key, and all four
+// hang off its name. So a name is a singleton on a host: `bashy chat
+// --agent X` while X is live is refused, not duplicated. Handing one
+// identity two live tasks mixes their context, and an agent answering
+// about one task from the other's history is confidently, plausibly
+// wrong — the failure mode that is worse than a crash because nothing
+// reports it.
+//
+// The two views meet at the useful conclusion: two NAMES on one BINDING
+// are one capability and two identities. That is a legal, ordinary thing
+// to write here — claimName only guards names — and it is the answer to
+// "can I run two of these at once". You do not run one agent twice; you
+// give the second one a name. `bashy agents clone` is that write, plus
+// the parent's context as of now (see CloneAgent), plus provenance.
+//
+// An agent minted for a single task carries Ephemeral, which keeps it out
+// of the roster and marks it for removal when its task closes.
+//
 // # Rings, and where the truth lives
 //
 // Entries are merged over pkg/assetring's rings — embedded baseline,

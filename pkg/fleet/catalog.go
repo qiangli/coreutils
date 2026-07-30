@@ -21,7 +21,8 @@ type Config struct {
 	noLocal bool
 	noCloud bool
 
-	liveProbe LiveProbe
+	liveProbe     LiveProbe
+	contextCloner ContextCloner
 }
 
 // LiveProbe launches an agent on a trivial prompt and reports whether it can
@@ -35,8 +36,27 @@ type Config struct {
 // which also imports this package. Naming its type here would close the cycle.
 type LiveProbe func(ctx context.Context, agent string, timeout time.Duration) (status, note string, ok bool)
 
+// ContextCloner copies an agent's conversation context to a clone, as of now.
+//
+// INJECTED, for the same import-graph reason as LiveProbe: knowing where an
+// agent's store lives means pkg/chat + pkg/agentlaunch, and both read this
+// registry. The registry declares the hole; the binary fills it.
+//
+// It returns a NOTE describing what actually happened, and that return is the
+// point. Only a tool whose store bashy relocates can have its context copied;
+// for every other tool the clone starts fresh, and the caller must be able to
+// say which of the two it got. A clone that reports inherited context it did
+// not inherit is the same class of lie as an agent answering from another
+// task's history — the failure this whole model exists to prevent.
+type ContextCloner func(parent, clone Agent) (note string, err error)
+
 // Option configures a Catalog.
 type Option func(*Config)
+
+// WithContextCloner supplies the copier `agents clone` uses to branch an
+// agent's context. Without it, cloning still mints the record and says plainly
+// that the clone starts fresh.
+func WithContextCloner(f ContextCloner) Option { return func(c *Config) { c.contextCloner = f } }
 
 // WithLiveProbe supplies the launcher `agents verify --live` uses.
 //

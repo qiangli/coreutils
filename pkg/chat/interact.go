@@ -2,11 +2,11 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +47,16 @@ type InteractOptions struct {
 	// Status receives bashy's own one-line notices (which agent, the session id);
 	// defaults to os.Stderr so they never contaminate the tool's stdout.
 	Status io.Writer
+	// Attach opts in to joining the agent's LIVE session when it already has one,
+	// instead of being refused.
+	//
+	// Opt-IN, not the default. An agent is one identity, so `--agent X` when X is
+	// live cannot mean "start a second X" — but silently making it mean "watch the
+	// session someone else is driving" would be its own surprise: the operator
+	// asked to start an agent and would get a spectator seat, with their typing
+	// going somewhere they did not expect. So the default refuses and names this
+	// flag, and the flag does exactly what it says.
+	Attach bool
 }
 
 // nativeHarnesses are first-party tools that already speak bashy's event channel
@@ -130,15 +140,54 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		cwd, _ = os.Getwd()
 	}
 
-	sock, err := sessionSock(l.Binding(), cwd)
+	id := agentID(l)
+
+	sock, err := sessionSock(id)
 	if err != nil {
 		return 1, err
 	}
 
+	// CLAIM THE IDENTITY FIRST, before anything with a side effect.
+	//
+	// The claim has to precede sessionLog in particular: that call TRUNCATES the
+	// capture, so checking afterwards would have already destroyed the live
+	// session's transcript on its way to telling the operator it could not start.
+	// The card is completed and re-joined below once the log path exists —
+	// re-joining an id this process already holds is an update, by design.
+	card := room.Card{
+		ID:        id,
+		Principal: principalName(),
+		Tool:      l.ToolName,
+		Model:     l.ModelName,
+		Binding:   l.Binding(),
+		Nick:      l.Nick,
+		Band:      bindingBand(name),
+		Mode:      "interactive",
+		CtlSock:   sock,
+		PID:       os.Getpid(),
+		Cwd:       cwd,
+		Native:    native,
+	}
+	if err := room.Join(card); err != nil {
+		var live *room.ErrLive
+		if errors.As(err, &live) {
+			prior, _, _ := room.Find(live.ID)
+			if opt.Attach {
+				if err := AttachTo(ctx, os.Stdin, os.Stdout, status, prior); err != nil {
+					return 1, err
+				}
+				return 0, nil
+			}
+			return 1, errAgentLive(live.ID, live.PID, prior.Cwd)
+		}
+		return 1, err
+	}
+	defer room.Leave(card.ID)
+
 	// A capture log ALONGSIDE the native TUI is what makes a live human session
 	// observable/attachable. Best-effort: if it cannot be opened the session still
 	// runs (native UX intact), it just is not followable.
-	logPath, logSink, closeLog := sessionLog(l.Binding(), cwd)
+	logPath, logSink, closeLog := sessionLog(id)
 	if closeLog != nil {
 		defer closeLog()
 	}
@@ -169,23 +218,8 @@ func Interact(ctx context.Context, agent string, opt InteractOptions) (int, erro
 		_ = agentctl.ApplyTrustPreseed(cmd.Dir, p.Preseed)
 	}
 
-	card := room.Card{
-		ID:        sessionID(l),
-		Principal: principalName(),
-		Tool:      l.ToolName,
-		Model:     l.ModelName,
-		Binding:   l.Binding(),
-		Nick:      l.Nick,
-		Band:      bindingBand(name),
-		Mode:      "interactive",
-		CtlSock:   sock,
-		LogPath:   logPath,
-		PID:       os.Getpid(),
-		Cwd:       cwd,
-		Native:    native,
-	}
-	_ = room.Join(card)
-	defer room.Leave(card.ID)
+	card.LogPath = logPath
+	_ = room.Join(card) // update: we already hold this id
 
 	posture := "governed + steerable"
 	if native {
@@ -331,26 +365,6 @@ func deliverInteractivePromptWithTiming(ctx context.Context, nick, sock, prompt 
 		return fmt.Errorf("chat: could not deliver the instruction to %s: %w", nick, err)
 	}
 	return nil
-}
-
-// sessionLog opens a per-session capture file. On any error it degrades to no
-// capture (nil sink) rather than failing the launch — an unobservable session is
-// worse than none only if it also refuses to start.
-func sessionLog(binding, cwd string) (path string, sink io.Writer, closeFn func()) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", nil, nil
-	}
-	dir := filepath.Join(home, ".bashy", "sessions", "logs")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", nil, nil
-	}
-	path = filepath.Join(dir, shortHash(binding+"\x00"+cwd+"\x00"+fmt.Sprint(os.Getpid()))+".log")
-	f, err := os.Create(path)
-	if err != nil {
-		return "", nil, nil
-	}
-	return path, f, func() { _ = f.Close() }
 }
 
 // bindingBand is the capability band of a resolved agent name, or 0 when the name

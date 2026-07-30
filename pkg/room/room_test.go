@@ -1,6 +1,7 @@
 package room
 
 import (
+	"errors"
 	"os"
 	"testing"
 )
@@ -75,5 +76,119 @@ func TestTimelineTail(t *testing.T) {
 	got, _ := Timeline(2)
 	if len(got) != 2 || got[0].Body != "b" || got[1].Body != "c" {
 		t.Fatalf("tail(2) = %+v, want [b c]", got)
+	}
+}
+
+// --- the singleton claim -----------------------------------------------------
+
+// TestJoinRefusesLiveDuplicate is the regression test for the whole
+// agent-identity model: an id held by a LIVE member cannot be taken by a second
+// one. Before Join was a claim this silently overwrote the first card, which is
+// how two processes came to share one identity while looking like two healthy
+// members.
+func TestJoinRefusesLiveDuplicate(t *testing.T) {
+	isolate(t)
+	first := Card{ID: "elif", Binding: "ycode:glm-5.2", Nick: "elif", Tool: "ycode", PID: os.Getpid()}
+	if err := Join(first); err != nil {
+		t.Fatalf("first join: %v", err)
+	}
+
+	// A DIFFERENT live pid — stand in for a second process. os.Getppid() is alive
+	// by construction (it is this test's parent).
+	second := first
+	second.PID = os.Getppid()
+	err := Join(second)
+	if err == nil {
+		t.Fatal("second join of a live id must be refused, got nil")
+	}
+	var live *ErrLive
+	if !errors.As(err, &live) {
+		t.Fatalf("want *ErrLive, got %T: %v", err, err)
+	}
+	if live.ID != "elif" || live.PID != os.Getpid() {
+		t.Fatalf("ErrLive = %+v, want the FIRST holder's id and pid", live)
+	}
+
+	// The incumbent's card is untouched — a refused claim must not have written.
+	got, ok, _ := Find("elif")
+	if !ok || got.PID != os.Getpid() {
+		t.Fatalf("incumbent card = %+v (%v), want the original pid %d", got, ok, os.Getpid())
+	}
+}
+
+// TestJoinSameProcessIsAnUpdate — a member revises its own card as it works
+// (task, caps, log path), so re-joining an id this process already holds must
+// succeed rather than being mistaken for a rival.
+func TestJoinSameProcessIsAnUpdate(t *testing.T) {
+	isolate(t)
+	c := Card{ID: "elif", Binding: "ycode:glm-5.2", Tool: "ycode", PID: os.Getpid()}
+	if err := Join(c); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	c.LogPath = "/tmp/elif.log"
+	c.Task = "#412 fix the parser"
+	if err := Join(c); err != nil {
+		t.Fatalf("re-join by the same pid must be an update, got: %v", err)
+	}
+	got, ok, _ := Find("elif")
+	if !ok || got.LogPath != "/tmp/elif.log" || got.Task != "#412 fix the parser" {
+		t.Fatalf("card = %+v, want the updated fields", got)
+	}
+	if members, _ := Members(); len(members) != 1 {
+		t.Fatalf("an update must not add a member, got %d", len(members))
+	}
+}
+
+// TestJoinReclaimsStaleCard — a card left behind by a crash is not a conflict.
+// Its pid is dead, so the id is free, exactly as Members would prune it on read.
+func TestJoinReclaimsStaleCard(t *testing.T) {
+	isolate(t)
+	stale := Card{ID: "elif", Binding: "ycode:glm-5.2", Tool: "ycode", PID: 2147483000}
+	if err := Join(stale); err != nil {
+		t.Fatalf("seed stale card: %v", err)
+	}
+	fresh := stale
+	fresh.PID = os.Getpid()
+	if err := Join(fresh); err != nil {
+		t.Fatalf("claiming an id held only by a DEAD pid must succeed, got: %v", err)
+	}
+	if got, ok, _ := Find("elif"); !ok || got.PID != os.Getpid() {
+		t.Fatalf("card = %+v (%v), want the live claimant", got, ok)
+	}
+}
+
+// TestLeaveDoesNotEvictAnotherHolder is the other half of the claim, and it is
+// why Leave checks the pid at all: every caller pairs Join with a deferred
+// Leave, and that defer runs even when the Join was REFUSED. Without the check,
+// the process that lost the claim would delete the winner's card on its way out.
+func TestLeaveDoesNotEvictAnotherHolder(t *testing.T) {
+	isolate(t)
+	// The incumbent is some other live process, not us.
+	if err := Join(Card{ID: "elif", Binding: "ycode:glm-5.2", Tool: "ycode", PID: os.Getppid()}); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	Leave("elif") // us — we never held it
+	if got, ok, _ := Find("elif"); !ok || got.PID != os.Getppid() {
+		t.Fatalf("incumbent must survive a loser's Leave; card = %+v (%v)", got, ok)
+	}
+}
+
+// TestTaskCardsCoexistWithAgentCard — the singleton is on the IDENTITY, not on
+// the board. Many tasks of one agent may be live at once; they are keyed by work
+// and must not be refused.
+func TestTaskCardsCoexistWithAgentCard(t *testing.T) {
+	isolate(t)
+	for _, c := range []Card{
+		{ID: "elif", Binding: "ycode:glm-5.2", Nick: "elif", Mode: "interactive", PID: os.Getpid()},
+		{ID: "weave-412-9931", Binding: "ycode:glm-5.2", Mode: "weave", PID: os.Getpid()},
+		{ID: "weave-413-9932", Binding: "ycode:glm-5.2", Mode: "weave", PID: os.Getpid()},
+	} {
+		if err := Join(c); err != nil {
+			t.Fatalf("join %s: %v", c.ID, err)
+		}
+	}
+	members, _ := Members()
+	if len(members) != 3 {
+		t.Fatalf("want 3 live members (1 agent + 2 tasks), got %d: %+v", len(members), members)
 	}
 }

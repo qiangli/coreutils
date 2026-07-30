@@ -57,6 +57,7 @@ func NewAgentsCmd(opts ...Option) *cobra.Command {
 		newAgentsList(opts),
 		newAgentsShow(opts),
 		newAgentsAdd(opts),
+		newAgentsClone(opts),
 		newAgentsSet(opts),
 		newRm(KindAgent, opts, (*Catalog).RemoveAgent),
 		newEdit(KindAgent, opts, (*Catalog).MaterializeAgent),
@@ -340,7 +341,8 @@ func newAgentsList(opts []Option) *cobra.Command {
 		Short: "List named tool:model bindings",
 		Long: "List named tool:model bindings.\n\n" +
 			"An agent resolves when both halves of its binding are in the catalog.\n" +
-			"Dangling agents are hidden unless --all is given.\n\n" +
+			"Dangling agents, and ephemeral clones minted for a single task, are\n" +
+			"hidden unless --all is given.\n\n" +
 			"BAND is inherited from the model — L1 (basic) to L4 (frontier) — and is\n" +
 			"how you select a roster without naming anyone: --min-band 3 is every\n" +
 			"agent worth seating at a design discussion. NICK is the agent's human\n" +
@@ -381,6 +383,13 @@ func newAgentsList(opts []Option) *cobra.Command {
 					r.Model = cascadeModelChain(cat, a)
 				}
 				if !r.Resolves && !all {
+					continue
+				}
+				// An EPHEMERAL clone is a worker minted for one task, not a
+				// member of the roster. A fleet listing that grows a row per
+				// in-flight task is a listing nobody reads, and the roster is
+				// what an operator picks from.
+				if a.Ephemeral && !all {
 					continue
 				}
 				// An unpegged or dangling agent is never silently swept into a
