@@ -2824,9 +2824,15 @@ func truncate(s string, n int) string {
 // when launched without -p) never exit on their own and need a
 // heuristic kill on idle.
 type weaveStartOptions struct {
-	noSpawn     bool
-	resume      bool
-	autoCommit  bool
+	noSpawn    bool
+	resume     bool
+	autoCommit bool
+	// clone runs this issue under a per-issue EPHEMERAL clone of the named agent
+	// instead of the agent itself, so several issues can run in parallel without
+	// sharing one identity's cursor, kb attribution and ledger. Without it, an
+	// agent already working another issue is left to finish it — see
+	// weave_agent_singleton.go.
+	clone       bool
 	pty         string // "auto" (default), "always", "never"
 	idleTimeout time.Duration
 	maxRuntime  time.Duration
@@ -2985,6 +2991,42 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitInvalidArg, aerr))
 	}
+
+	// ONE AGENT, ONE LIVE ISSUE. Two issues under one identity mix context, and
+	// a worker answering about this issue using what it learned on another is
+	// wrong in the way that looks right. See weave_agent_singleton.go.
+	//
+	// Ephemeral workers of FINISHED issues are reclaimed here rather than by a
+	// sweeper — reading is the reconciliation, as everywhere else in this queue.
+	weaveReapIssueClones(q)
+	if agentLaunch != nil && agentLaunch.Named() {
+		if busy := weaveAgentWorkingOn(q, agentLaunch.Nick, it.ID); busy != nil {
+			if !opts.clone {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+					weavecli.ExitStateConflict, weaveAgentBusyErr(agentLaunch.Nick, busy, it)))
+			}
+			cloneName, cerr := weaveCloneAgentForIssue(agentLaunch.Nick, it.ID)
+			if cerr != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+					weavecli.ExitGenericFail, cerr))
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave: %s is on #%d; running #%d as %s (its own context)\n",
+				agentLaunch.Nick, busy.ID, it.ID, cloneName)
+			toolArgs = []string{cloneName}
+			launchSpec = weaveLaunchSpecFromArgs(toolArgs, opts)
+			agentLaunch, agentArgv, aerr = weaveExpandAgent(toolArgs, it.Body, it.Title)
+			if aerr != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+					weavecli.ExitInvalidArg, aerr))
+			}
+		}
+	}
+	// Record WHICH AGENT is working this issue. The field was declared for this
+	// and never filled, so the queue could say which tool was running but not
+	// which identity — which is exactly what the check above needs to read.
+	if agentLaunch != nil && launchSpec != nil {
+		launchSpec.Agent = agentLaunch.Nick
+	}
 	// Bare-tool launch guard. A single tool token that did not resolve to a fleet
 	// agent (agentLaunch==nil, len==1) is launched VERBATIM under a PTY — deliberately
 	// interactive, which is correct at a real terminal. But in a headless run (a
@@ -3115,6 +3157,19 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			if freshIt == nil {
 				return fmt.Errorf("queue lock: run #%d disappeared", it.ID)
 			}
+			// CONFIRM THE CLAIM UNDER THE LOCK.
+			//
+			// The item was chosen by nextTodo well above this, outside any lock,
+			// so two `weave start` calls racing for top-of-queue can both have
+			// selected it. Without this check the loser wrote its own WrapperPid
+			// over the winner's and both proceeded into the same workspace — two
+			// agents on one checkout, and the pid that `weave kill` would signal
+			// belonging to only one of them. The same guard the --resume path has
+			// always had; it was simply never applied to a fresh claim.
+			if freshIt.WrapperPid > 0 && freshIt.WrapperPid != os.Getpid() && pidAlive(freshIt.WrapperPid) {
+				return fmt.Errorf("run #%d was claimed by another start (pid %d) while this one was preparing; retry to take the next run: %w",
+					it.ID, freshIt.WrapperPid, errWeaveWrapperLive)
+			}
 			freshIt.State = "allocated"
 			freshIt.Workspace = workspace
 			freshIt.Branch = branch
@@ -3129,7 +3184,14 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			it = freshIt
 			return nil
 		}); err != nil {
-			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start", weavecli.ExitGenericFail, err))
+			code := weavecli.ExitGenericFail
+			if errors.Is(err, errWeaveWrapperLive) {
+				// A lost race is a STATE CONFLICT, not a generic failure: the
+				// caller's correct response is to retry for the next run, and
+				// the exit code is what tells a scripted fan-out that.
+				code = weavecli.ExitStateConflict
+			}
+			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start", code, err))
 		}
 	}
 	if !opts.resume {

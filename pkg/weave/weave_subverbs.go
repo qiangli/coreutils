@@ -94,6 +94,7 @@ func newWeaveStartCmd() *cobra.Command {
 	var tool string
 	var resume bool
 	var noSpawn bool
+	var cloneAgent bool
 	var autoCommit bool
 	var ptyMode string
 	var idleTimeout time.Duration
@@ -121,6 +122,17 @@ The worker is stamped with the principal it acts as, so what it writes
 resolves: BASHY_PRINCIPAL=dhnt:agent/007. WEAVE_AGENT stays the per-issue
 SEAT (007-a) — the slot, not the agent. See "bashy agents" / "bashy whois".
 
+ONE AGENT WORKS ONE RUN AT A TIME. An agent is a single identity — one
+conversation store, one kb attribution, one bus cursor — so handing it two
+live runs mixes their context and produces answers that look right and are
+not. Starting an agent that is already working another run is therefore
+refused, and the run simply stays queued for it to pick up next.
+
+To actually run several at once, use --clone: it mints a per-issue
+ephemeral agent (007-w3) with its own name and its own context, so the
+runs are parallel because they are separate. Those workers are hidden from
+"bashy agents list" (see --all) and are reclaimed when their run finishes.
+
 Anything else is passed through untouched. A bare tool name (-- claude)
 still launches raw, and a multi-token argv is honored exactly as written.
 
@@ -141,6 +153,7 @@ blocks until N reaches a terminal state.`,
 				noSpawn:     noSpawn,
 				resume:      resume,
 				autoCommit:  autoCommit,
+				clone:       cloneAgent,
 				pty:         ptyMode,
 				idleTimeout: idleTimeout,
 				maxRuntime:  maxRuntime,
@@ -153,6 +166,7 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().StringVar(&tool, "tool", "", "Agent nickname, tool:model, or tool name (alternative to trailing -- <agent>)")
 	cmd.Flags().BoolVar(&resume, "resume", false, "Reattach to an existing lease for the given issue")
 	cmd.Flags().BoolVar(&noSpawn, "no-spawn", false, "Allocate the workspace but do not exec the tool")
+	cmd.Flags().BoolVar(&cloneAgent, "clone", false, "If the named agent is already working another run, mint a per-issue ephemeral clone (own name, own context) instead of waiting for it")
 	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "After a clean run and passing verify, commit dirty workspace changes before recording terminal state")
 	cmd.Flags().StringVar(&ptyMode, "pty", "auto", "PTY allocation: auto (default) | always | never")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "Kill the subagent tree if no PTY output for this long (e.g. 5m); default off — caught the claude-TUI stuck case in the dogfood")
