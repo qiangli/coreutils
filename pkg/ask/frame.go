@@ -40,23 +40,39 @@ func renderFrame(r Request) string {
 	}
 
 	b.WriteString("┌ bashy ask — a program is requesting a value from YOU\n")
-	line("requested by", requesterLabel(r.Requester))
-	line("principal", r.Requester.Principal)
-	line("working dir", r.Requester.Cwd)
-	line("command line", strings.Join(r.Requester.Argv, " "))
-	if r.Name != "" {
-		line("label", r.Name)
-	}
-	// Upper case, and phrased as a destination rather than a setting, because this
-	// is the line a hurried human must not skim past.
-	line("THE VALUE GOES", r.Sink.Describe())
 
-	b.WriteString("├ message from the requesting program — UNTRUSTED, may be attacker-controlled:\n")
+	// ORDERING IS DELIBERATE: the two things a human needs in order to decide —
+	// what this is for, and where the answer goes — come FIRST, and provenance
+	// follows. The earlier layout led with pid/cwd/argv and buried the actual
+	// question at the bottom, which in a GUI dialog renders as a wall of text
+	// whose only interesting line is last. A frame nobody reads protects nobody.
+	//
+	// The untrusted banner stays welded to the caller's text: the banner is a
+	// chrome line and the message is indented beneath it, so moving the pair up
+	// does not let caller text masquerade as chrome.
+	b.WriteString("├ WHAT FOR — from the requesting program, UNTRUSTED, may be attacker-controlled:\n")
 	prompt := r.Prompt
 	if prompt == "" {
 		prompt = "(no message supplied)"
 	}
 	fmt.Fprintf(&b, "│   %s\n", prompt)
+
+	// Upper case, and phrased as a destination rather than a setting, because this
+	// is the line a hurried human must not skim past. Kept adjacent to the message
+	// so "what it is for" and "where it goes" read as one thought.
+	line("THE VALUE GOES", r.Sink.Describe())
+	if r.Name != "" {
+		line("label", r.Name)
+	}
+
+	b.WriteString("├ who is asking:\n")
+	line("requested by", requesterLabel(r.Requester))
+	line("principal", r.Requester.Principal)
+	line("working dir", r.Requester.Cwd)
+	// Truncated because an agent-invoked command line is routinely hundreds of
+	// characters and, left whole, it was the single largest source of noise in the
+	// dialog. The head is what identifies the caller; the tail is arguments.
+	line("command line", ellipsize(strings.Join(r.Requester.Argv, " "), 120))
 	b.WriteString("└")
 	return b.String()
 }
@@ -80,4 +96,23 @@ func promptLine(r Request) string {
 		return fmt.Sprintf(" %s (input hidden): ", what)
 	}
 	return fmt.Sprintf(" %s: ", what)
+}
+
+// ellipsize shortens s to at most max runes, marking that it was cut.
+//
+// Rune-aware rather than byte-aware so a multi-byte character cannot be sliced in
+// half and render as a replacement glyph — the frame is chrome, and mojibake in
+// chrome undermines the thing it exists to convey.
+func ellipsize(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max <= 3 {
+		return string(r[:max])
+	}
+	return string(r[:max-3]) + "..."
 }
