@@ -44,14 +44,28 @@ func Spec(version string) binmgr.GitHubSpec {
 	}
 }
 
-// assetMatch picks the full `zot-<os>-<arch>` binary, excluding the -minimal and
-// -exporter variants that also carry the os/arch tokens.
+// assetMatch picks the full `zot-<os>-<arch>` binary by EXACT name.
+//
+// Substring matching is wrong here and shipped a real bug: a zot release
+// publishes several per-platform binaries that ALL carry the os/arch tokens —
+//
+//	zb-darwin-arm64           the load-test BENCHMARK tool
+//	zli-darwin-arm64          the CLI
+//	zot-darwin-arm64          the registry server (what we want)
+//	zot-darwin-arm64-debug    debug build
+//	zot-darwin-arm64-minimal  reduced build
+//	zxp-darwin-arm64          the metrics exporter
+//
+// The previous predicate excluded only "minimal" and "exporter", so FOUR of
+// those still matched — and the resolver cached `zb`, which runs benchmarks
+// instead of serving. `bashy zot serve` printed "Preparing test data ... /
+// Starting tests ..." and nothing ever listened on the registry port. Note the
+// "exporter" exclusion was also dead code: the asset is named `zxp`.
+//
+// An exact match is both correct and immune to new sibling binaries appearing
+// in a future release.
 func assetMatch(name, goos, goarch string) bool {
-	n := strings.ToLower(name)
-	if strings.Contains(n, "minimal") || strings.Contains(n, "exporter") {
-		return false
-	}
-	return strings.Contains(n, goos) && strings.Contains(n, goarch)
+	return strings.EqualFold(name, "zot-"+goos+"-"+goarch)
 }
 
 // DefaultDataDir is zot's storage root (the registry blob store + config).
