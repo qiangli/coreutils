@@ -96,8 +96,93 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 	history.Flags().BoolVar(&histAll, "all", false, "list individual runs, not just the summary")
 	history.Flags().StringVar(&histCapability, "capability", "", "pool evidence across implementations of this capability key")
 
-	root.AddCommand(history)
+	var studyLicense, studyOrigin, studyRef string
+	var studyJSON bool
+	study := &cobra.Command{
+		Use:   "study <dir>",
+		Short: "absorb a directory of external skills — digest, do not memorize",
+		Long: "study reads a directory of skill folders and resolves each against what is\n" +
+			"already known, BY CAPABILITY rather than by name:\n\n" +
+			"  novel        a guarantee nothing here makes yet   -> the catalog grows\n" +
+			"  alternative  same guarantee, another implementation\n" +
+			"  duplicate    same guarantee, same implementation\n" +
+			"  quarantined  no contract, so no capability is knowable — held, not merged\n" +
+			"  refused      license, or a face that will not parse — nothing is stored\n\n" +
+			"Only `novel` grows the catalog, and the ratio of growth to input is the\n" +
+			"DIGESTION RATIO. At 1:1 nothing was digested: each external skill became\n" +
+			"its own entry, which is how a catalog turns into a pile that makes an\n" +
+			"agent measurably worse rather than better.\n\n" +
+			"The license gate is fail-closed. Absence of a license is not permission —\n" +
+			"it is all-rights-reserved by default — and licence is read PER SKILL, never\n" +
+			"inherited from a repository.\n\n" +
+			"Prose with no contract is QUARANTINED, not guessed at: inventing a contract\n" +
+			"would file a skill under a promise nobody verified. Normalising prose into a\n" +
+			"typed skill needs a model and is not wired here yet.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStudy(cmd, cfg, args[0], Source{
+				Origin:  studyOrigin,
+				Ref:     studyRef,
+				License: studyLicense,
+			}, studyJSON)
+		},
+	}
+	study.Flags().StringVar(&studyLicense, "license", "", "SPDX id these skills are under (required; absence is not permission)")
+	study.Flags().StringVar(&studyOrigin, "origin", "", "upstream repo or URL, recorded as provenance")
+	study.Flags().StringVar(&studyRef, "ref", "", "upstream commit sha, recorded as provenance")
+	study.Flags().BoolVar(&studyJSON, "json", false, "machine-readable report")
+
+	root.AddCommand(history, study)
 	return root
+}
+
+func runStudy(cmd *cobra.Command, cfg *config, dir string, src Source, asJSON bool) error {
+	cands, err := LoadDir(dir, src)
+	if err != nil {
+		return fmt.Errorf("craft: reading %s: %w", dir, err)
+	}
+	if len(cands) == 0 {
+		return fmt.Errorf("craft: no skill folders found under %s (a candidate is a directory holding a SKILL.md)", dir)
+	}
+
+	// Absorption resolves against the capabilities already held. Reading the
+	// ledger is a stand-in until the catalog itself is capability-indexed:
+	// evidence is where capabilities are currently observable.
+	known := map[string][]string{}
+	if l, err := ReadLedger(cfg.storeDir); err == nil {
+		for _, o := range l.Observations {
+			if o.Capability != "" {
+				known[o.Capability] = appendDistinct(known[o.Capability], o.Identity)
+			}
+		}
+	}
+
+	rep := Study(cands, known, nil)
+
+	if asJSON {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(rep)
+	}
+
+	out := cmd.OutOrStdout()
+	for _, o := range rep.Outcomes {
+		line := fmt.Sprintf("%-12s %-28s", o.Disposition, craftTruncate(o.Name, 28))
+		if o.Capability != "" {
+			line += " " + skills.ShortID(o.Capability)
+		}
+		fmt.Fprintln(out, line)
+		if o.Reason != "" {
+			fmt.Fprintf(out, "%-12s   %s\n", "", o.Reason)
+		}
+	}
+	fmt.Fprintf(out, "\n%d absorbed, %d capabilities added — digestion ratio %.2f\n",
+		rep.Absorbed, rep.Grew, rep.DigestionRatio())
+	if rep.DigestionRatio() >= 1.0 && rep.Absorbed > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"craft: ratio is 1.00 — every skill became its own capability, so nothing was digested\n")
+	}
+	return nil
 }
 
 // ExitCode maps an Execute error to the repo exit convention.
@@ -262,4 +347,3 @@ func writeHistoryText(cmd *cobra.Command, rep historyReport, name, capability st
 			"skills: %d ledger line(s) could not be decoded and are NOT counted above\n", rep.Malformed)
 	}
 }
-
