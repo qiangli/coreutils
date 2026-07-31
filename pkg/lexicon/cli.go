@@ -254,6 +254,16 @@ func writeConcept(out io.Writer, c *Concept) {
 	if len(c.AltLabels) > 0 {
 		fmt.Fprintf(out, "  also: %s\n", strings.Join(c.AltLabels, ", "))
 	}
+	if c.Location != "" {
+		// The `which` half of the answer. An agent told only "it is a command"
+		// still cannot act; it needs to know WHICH binary, and an alias changes
+		// what a name runs entirely.
+		label := "at:  "
+		if c.Kind == KindAlias {
+			label = "runs:"
+		}
+		fmt.Fprintf(out, "  %s %s\n", label, c.Location)
+	}
 	if c.Use != "" {
 		fmt.Fprintf(out, "  use:  %s\n", c.Use)
 	}

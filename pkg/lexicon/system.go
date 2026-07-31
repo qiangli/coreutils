@@ -44,6 +44,7 @@ package lexicon
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -56,6 +57,7 @@ const (
 	KindCommand      Kind = "command"       // an executable on PATH that is not standard
 	KindPathSegment  Kind = "path-segment"  // a directory name that carries local meaning
 	KindStandardTool Kind = "standard-tool" // part of the pure-Go userland, standard everywhere
+	KindAlias        Kind = "alias"         // a shell alias defined in this host's rc files
 )
 
 const (
@@ -65,6 +67,9 @@ const (
 		"userland. On another machine the same name may be absent or mean something else."
 	pathScopeNote = "A directory name that carries local meaning in this workspace, not its " +
 		"ordinary English sense."
+	aliasScopeNote = "A shell alias defined on THIS host. Typing the name does NOT run the " +
+		"command of the same name — it runs the expansion, which may add flags that change " +
+		"behaviour substantially."
 )
 
 // SystemInventory is the enumerated term set. It holds NAMES only.
@@ -81,6 +86,12 @@ type SystemInventory struct {
 	// returned separately as Discoveries.
 	Interfaces []string `json:"interfaces,omitempty"`
 	Mounts     []string `json:"mounts,omitempty"`
+	// CommandPaths maps a local command to where it was found, and Aliases maps
+	// an alias to what it expands to. These are LOCATIONS, not terms: they
+	// answer "where is it" and "what does it really run", which is the half a
+	// bare name cannot.
+	CommandPaths map[string]string `json:"command_paths,omitempty"`
+	Aliases      map[string]string `json:"aliases,omitempty"`
 }
 
 // EnumOptions configures enumeration. Every input is injectable so the whole
@@ -101,6 +112,8 @@ type EnumOptions struct {
 	// keeps this package usable outside bashy (the same reason Build takes
 	// synopses).
 	KnownCommands []string
+	// RCFiles are shell startup files to read alias definitions from.
+	RCFiles []string
 	// Scrubber removes identity-bearing terms. Required in practice: a home
 	// directory's own path carries a username, so path segments leak identity
 	// unless filtered. Nil disables the filter, which is only appropriate in
@@ -169,6 +182,30 @@ func Enumerate(o EnumOptions) SystemInventory {
 				continue
 			}
 			inv.Commands = appendUnique(inv.Commands, name)
+			// FIRST match wins, exactly as PATH resolution does — reporting a
+			// later one would name a binary the shell would never actually run.
+			if inv.CommandPaths == nil {
+				inv.CommandPaths = map[string]string{}
+			}
+			if _, seen := inv.CommandPaths[name]; !seen {
+				inv.CommandPaths[name] = filepath.Join(dir, name)
+			}
+		}
+	}
+
+	// --- aliases: what a name REALLY runs.
+	//
+	// Worth collecting precisely because an alias is invisible: typing `codex`
+	// may run `codex --sandbox danger-full-access`, and an agent reasoning about
+	// what a command will do has no way to see that from the name.
+	for _, rc := range o.RCFiles {
+		for name, expansion := range parseAliases(rc) {
+			if inv.Aliases == nil {
+				inv.Aliases = map[string]string{}
+			}
+			if _, seen := inv.Aliases[name]; !seen {
+				inv.Aliases[name] = expansion
+			}
 		}
 	}
 
@@ -204,6 +241,44 @@ func dropIdentifying(s *redact.Scrubber, terms []string) []string {
 	for _, t := range terms {
 		if s.Clean(t) {
 			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// aliasLine matches `alias NAME=VALUE`, with or without quotes. Deliberately
+// simple: this reads a declaration, it does not interpret shell, and anything
+// it cannot parse is skipped rather than guessed at.
+var aliasLine = regexp.MustCompile(`^\s*alias\s+([A-Za-z_][A-Za-z0-9_.-]*)=(.*)$`)
+
+// parseAliases reads alias declarations from one shell startup file.
+//
+// A missing or unreadable file is normal — most hosts have only some of the
+// conventional rc files — so it yields nothing rather than an error.
+func parseAliases(path string) map[string]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if i := strings.Index(line, "#"); i == 0 {
+			continue
+		}
+		m := aliasLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		name := m[1]
+		val := strings.TrimSpace(m[2])
+		// Strip one layer of matching quotes; leave anything else alone.
+		if len(val) >= 2 {
+			if (val[0] == '\'' && val[len(val)-1] == '\'') || (val[0] == '"' && val[len(val)-1] == '"') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		if name != "" && val != "" {
+			out[name] = val
 		}
 	}
 	return out
@@ -262,7 +337,21 @@ func (s *Store) AddSystem(inv SystemInventory, ov Overlay) {
 			ID: "command:" + name, Kind: KindCommand, PrefLabel: name,
 			Definition: "an executable on this host's PATH, outside the standard userland",
 			ScopeNote:  commandScopeNote,
+			Location:   inv.CommandPaths[name],
 			Source:     "system:path",
+		}, ov)
+	}
+	// Aliases are added AFTER commands so both readings survive: a name that is
+	// both an alias and a binary is genuinely two things, and which one runs
+	// depends on how it is invoked. Hiding either is how a caller reasons about
+	// the wrong one.
+	for name, expansion := range inv.Aliases {
+		s.add(Concept{
+			ID: "alias:" + name, Kind: KindAlias, PrefLabel: name,
+			Definition: "a shell alias on this host — typing this runs the expansion, not the bare command",
+			ScopeNote:  aliasScopeNote,
+			Location:   expansion,
+			Source:     "system:rc",
 		}, ov)
 	}
 	for _, name := range inv.PathSegments {
@@ -274,6 +363,20 @@ func (s *Store) AddSystem(inv SystemInventory, ov Overlay) {
 		}, ov)
 	}
 	s.reindex()
+}
+
+// defaultRCFiles are the shell startup files aliases are conventionally
+// declared in. A path that does not exist costs nothing.
+func defaultRCFiles() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, name := range []string{".bashrc", ".bash_profile", ".bash_aliases", ".profile", ".zshrc"} {
+		out = append(out, filepath.Join(home, name))
+	}
+	return out
 }
 
 // AddStandardTools projects the standard userland — the tools every bashy has,
@@ -309,6 +412,7 @@ func EnumerateHost(roots []string, knownCommands []string) SystemInventory {
 	return Enumerate(EnumOptions{
 		Environ:       os.Environ(),
 		PathDirs:      filepath.SplitList(os.Getenv("PATH")),
+		RCFiles:       defaultRCFiles(),
 		Roots:         roots,
 		KnownCommands: knownCommands,
 		Scrubber:      redact.FromHost(),

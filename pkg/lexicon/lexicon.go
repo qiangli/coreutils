@@ -101,7 +101,15 @@ type Concept struct {
 	ScopeNote  string   `json:"scope_note,omitempty"` // "here, this is NEVER the English word"
 	Use        string   `json:"use,omitempty"`        // the command that acts on it
 	Source     string   `json:"source"`               // which registry it was projected from
-	Host       string   `json:"host,omitempty"`       // bindings are host-scoped; say so
+	// Location is WHERE the thing is — a command's resolved path, an alias's
+	// expansion. It answers the `which` half of "what is this word".
+	//
+	// NEVER rendered by emit. A path carries the operator's home directory and
+	// therefore their username, and emit writes into files that get committed;
+	// a term set is shareable, a filesystem layout is not. Pinned by
+	// TestEmit_NeverLeaksLocation.
+	Location string `json:"location,omitempty"`
+	Host     string `json:"host,omitempty"` // bindings are host-scoped; say so
 }
 
 // Store is the projected lexicon. It is rebuilt on every call — there is no
