@@ -33,8 +33,11 @@ type weaveStory struct {
 	Lease      *weaveStoryLease `json:"lease,omitempty"`      // current conductor + heartbeat
 	Thread     []weaveComment   `json:"thread,omitempty"`     // sprint-level history
 	Runs       []sprintRun      `json:"runs,omitempty"`       // linked weave runs, CROSS-REPO
-	Created    time.Time        `json:"created"`
-	UpdatedAt  time.Time        `json:"updated_at,omitempty"`
+	// Box is the TIME commitment, orthogonal to Column (which is position) and
+	// to Lease (which is conductor liveness). See weave_story_box.go.
+	Box       *weaveStoryBox `json:"box,omitempty"`
+	Created   time.Time      `json:"created"`
+	UpdatedAt time.Time      `json:"updated_at,omitempty"`
 }
 
 // sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
@@ -144,6 +147,7 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 		fmt.Fprintln(out, "sprint board is empty — `sprint add \"<title>\" --spec <doc>`")
 		return nil
 	}
+	now := time.Now().UTC()
 	fmt.Fprintln(out, "SPRINT BOARD")
 	for _, col := range weaveStoryColumns {
 		fmt.Fprintf(out, "%s:\n", col)
@@ -165,10 +169,39 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 			if s.Epic != "" {
 				epicTag = "(" + s.Epic + ") "
 			}
-			fmt.Fprintf(out, "  #%d %s%s%s\n", s.ID, epicTag, weaveTruncate(s.Title, 56), lease)
+			// The box rides on the same row as the lease, because a
+			// conductor scanning several concurrent sprints needs "which of
+			// these is out of time" answerable at a glance rather than one
+			// `sprint show` at a time.
+			box := ""
+			if st := s.Box.Status(now); st != "" {
+				box = "  [" + st + "]"
+			}
+			fmt.Fprintf(out, "  #%d %s%s%s%s\n", s.ID, epicTag, weaveTruncate(s.Title, 52), lease, box)
 		}
 		if !any {
 			fmt.Fprintln(out, "  —")
+		}
+	}
+	// The kanban scatters running sprints across columns, but "what is on the
+	// clock right now, and is any of it over" is a question about the set —
+	// which is exactly the question a cadence asks, and the reason several
+	// simultaneous boxes stay manageable.
+	var running, overdue []string
+	for _, s := range stories {
+		if !s.Box.Running() {
+			continue
+		}
+		running = append(running, fmt.Sprintf("#%d %s", s.ID, s.Box.Status(now)))
+		if s.Box.Overdue(now) {
+			overdue = append(overdue, fmt.Sprintf("#%d", s.ID))
+		}
+	}
+	if len(running) > 0 {
+		fmt.Fprintf(out, "\non the clock: %s\n", strings.Join(running, " · "))
+		if len(overdue) > 0 {
+			fmt.Fprintf(out, "  %s past cutoff — `sprint stop <id>` or `sprint extend <id> --by <dur>`\n",
+				strings.Join(overdue, ", "))
 		}
 	}
 	return nil
@@ -207,6 +240,10 @@ exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
 		newWeaveStoryAddCmd(),
 		newWeaveStoryShowCmd(),
 		newWeaveStoryMoveCmd(),
+		newSprintStatusCmd(),
+		newSprintStartCmd(),
+		newSprintStopCmd(),
+		newSprintExtendCmd(),
 		newWeaveStoryTakeCmd(),
 		newWeaveStoryHandoffCmd(),
 		newSprintAbortCmd(),
@@ -700,11 +737,23 @@ func weaveStoryAppend(s *weaveStory, author, kind, body string) {
 // (only its Sprints field) + the same flock, just at a repo-less dir. No
 // git repo is required to manage the board.
 func weaveStoryDir(cmd *cobra.Command, mode weavecli.OutputMode, op string) (string, error) {
-	home, err := os.UserHomeDir()
+	// THE STORE MUST BE REDIRECTABLE, and not only for tidiness.
+	//
+	// This resolved to $HOME/.bashy/sprint with no override of any kind, which
+	// means there was no way to exercise sprint against a scratch board — and
+	// the obvious guess ($BASHY_HOME, which the audit log, foreman state and
+	// skills store all honour) silently did nothing. Anyone testing the verbs
+	// was therefore editing the real board while believing they were not, and
+	// `sprint add` plus `sprint start` are exactly the verbs someone reaches for
+	// when trying a feature out. That happened during this feature's own
+	// development, on live sprints.
+	//
+	// The ladder matches audit, foreman and the skills store, so the guess is
+	// now the right one.
+	dir, err := sprintStoreDir()
 	if err != nil {
 		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
 	}
-	dir := filepath.Join(home, ".bashy", "sprint")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, op, weavecli.ExitGenericFail, err))
 	}
@@ -744,4 +793,23 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", op, line)
 	return nil
+}
+
+// sprintStoreDir resolves the sprint board's location:
+//
+//	$BASHY_SPRINT_DIR   the specific override, most precise
+//	$BASHY_HOME/sprint  the whole bashy home relocated (tests, sandboxed runs)
+//	~/.bashy/sprint     the default, unchanged
+func sprintStoreDir() (string, error) {
+	if d := strings.TrimSpace(os.Getenv("BASHY_SPRINT_DIR")); d != "" {
+		return d, nil
+	}
+	if h := strings.TrimSpace(os.Getenv("BASHY_HOME")); h != "" {
+		return filepath.Join(h, "sprint"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".bashy", "sprint"), nil
 }

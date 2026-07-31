@@ -1,0 +1,447 @@
+package weave
+
+// THE TIME-BOX — the half of a sprint the kanban column cannot express.
+//
+// A column says WHERE work is (backlog, doing, review, done). Nothing says how
+// long it has. That gap is not cosmetic when the worker is an agent: a session
+// has no natural end. It does not get hungry, notice the light change, or feel
+// a day turning into an evening. Left alone it will follow the next reasonable
+// thread, and the one after that, and each step is defensible while the whole
+// drifts far from what was agreed.
+//
+// So a sprint gets a START and a CUTOFF, and the cutoff is a DECISION POINT
+// rather than a kill switch. Refusing to work past it would be wrong — the
+// gate might be one fix from green, and stopping there wastes the run. What
+// the cutoff buys is that the moment ARRIVES VISIBLY instead of passing
+// unnoticed: every sprint command says how long is left, and says OVERDUE
+// after, so continuing is a choice somebody makes rather than a default nobody
+// observed.
+//
+// # Cadence comes from the record, not the plan
+//
+// `stop` writes what actually happened next to what was planned. That is the
+// only thing that makes a cadence real: a two-hour box that consistently runs
+// four hours is not a two-hour cadence, it is a four-hour cadence with a
+// misleading label, and only the record can tell you which one you have.
+//
+// # Many boxes at once, each on its own clock
+//
+// The box lives on the CARD, never in a global "current sprint". There is no
+// single active sprint anywhere in this package, and that is deliberate: real
+// work runs several initiatives side by side on different rhythms — a 45-minute
+// fix box beside a 4-hour migration box beside something opened yesterday and
+// still going. Each start/stop cycle is independent, and starting one says
+// nothing about any other.
+//
+// The one thing `start` refuses is restarting THE SAME card while its box is
+// still running, because that would discard the original estimate — the single
+// number the record exists to keep honest.
+//
+// # Why this is separate from the conductor lease
+//
+// The lease already carries a timestamp, and reusing it would have been
+// tempting. It answers a different question. The lease asks "is a conductor
+// still alive?" — a liveness heartbeat that a graceful handoff clears and a
+// successor takes over. The box asks "should this work still be running?" —
+// which stays true across a handoff, because the commitment belongs to the
+// sprint and not to whoever is currently holding it. Collapsing them would
+// mean a conductor switch silently reset the deadline.
+
+import (
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/qiangli/coreutils/pkg/weavecli"
+)
+
+// DefaultSprintBox is the cadence when none is given. Two hours is chosen to
+// be a REVIEW interval rather than a day's work: long enough to finish
+// something and short enough that a wrong direction is caught while it is
+// still cheap to abandon.
+const DefaultSprintBox = 2 * time.Hour
+
+// weaveStoryBox is a sprint's time commitment.
+//
+// StoppedAt being nil is what makes a sprint "running", so the zero value is
+// correctly "never started" rather than "started at the epoch".
+type weaveStoryBox struct {
+	StartedAt time.Time  `json:"started_at"`
+	Cutoff    time.Time  `json:"cutoff"`
+	StoppedAt *time.Time `json:"stopped_at,omitempty"`
+	// Planned is stored rather than derived from Cutoff-StartedAt so that
+	// extending a running box keeps the ORIGINAL commitment visible. What was
+	// promised and what was taken are different facts, and a cadence tuned from
+	// the second one alone would only ever ratchet upward.
+	Planned time.Duration `json:"planned"`
+}
+
+// Running reports a box that has started and not stopped.
+func (b *weaveStoryBox) Running() bool {
+	return b != nil && !b.StartedAt.IsZero() && b.StoppedAt == nil
+}
+
+// Remaining is time left before the cutoff; negative once past it.
+func (b *weaveStoryBox) Remaining(now time.Time) time.Duration {
+	if b == nil {
+		return 0
+	}
+	return b.Cutoff.Sub(now)
+}
+
+// Overdue reports a running box past its cutoff.
+func (b *weaveStoryBox) Overdue(now time.Time) bool {
+	return b.Running() && now.After(b.Cutoff)
+}
+
+// Elapsed is how long the box has actually been open — to the stop if it
+// stopped, to now if it is still running.
+func (b *weaveStoryBox) Elapsed(now time.Time) time.Duration {
+	if b == nil || b.StartedAt.IsZero() {
+		return 0
+	}
+	if b.StoppedAt != nil {
+		return b.StoppedAt.Sub(b.StartedAt)
+	}
+	return now.Sub(b.StartedAt)
+}
+
+// Status is the one-line marker every sprint surface shows, so the cutoff is
+// never something a caller has to remember to ask about.
+//
+// An empty string means there is nothing to say — a sprint that was never
+// boxed reads exactly as it did before this existed.
+func (b *weaveStoryBox) Status(now time.Time) string {
+	switch {
+	case b == nil || b.StartedAt.IsZero():
+		return ""
+	case b.StoppedAt != nil:
+		return fmt.Sprintf("stopped after %s (planned %s)",
+			roundDur(b.Elapsed(now)), roundDur(b.Planned))
+	case b.Overdue(now):
+		// Stated as time PAST the cutoff, not as a negative remaining: "overdue
+		// by 40m" is a fact somebody can act on, "-40m left" is arithmetic they
+		// have to finish themselves.
+		return fmt.Sprintf("OVERDUE by %s (box was %s)",
+			roundDur(now.Sub(b.Cutoff)), roundDur(b.Planned))
+	default:
+		return fmt.Sprintf("%s left of %s", roundDur(b.Remaining(now)), roundDur(b.Planned))
+	}
+}
+
+// roundDur trims a duration to something a human reads at a glance. Sub-minute
+// precision on a two-hour box is noise, but it matters on a box measured in
+// minutes, so the unit follows the magnitude.
+func roundDur(d time.Duration) string {
+	if d < 0 {
+		d = -d
+	}
+	if d < time.Minute {
+		return d.Round(time.Second).String()
+	}
+	d = d.Round(time.Minute)
+	h, m := int(d/time.Hour), int((d%time.Hour)/time.Minute)
+	switch {
+	case h == 0:
+		return fmt.Sprintf("%dm", m)
+	case m == 0:
+		// "4h", not Go's "4h0m0s" — a cadence is read at a glance dozens of
+		// times a day, and the zero components are pure noise in every one.
+		return fmt.Sprintf("%dh", h)
+	default:
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+}
+
+// newSprintStartCmd opens a sprint's time-box.
+func newSprintStartCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var forDur time.Duration
+	cmd := &cobra.Command{
+		Use:   "start <sprint>",
+		Short: "Open a sprint's time-box: start the clock and set a cutoff",
+		Long: "start commits a sprint to a length of time.\n\n" +
+			"The cutoff is a DECISION POINT, not a kill switch. Nothing refuses to run\n" +
+			"past it — the gate might be one fix from green, and stopping there wastes\n" +
+			"the run. What it buys is that the moment ARRIVES VISIBLY: every sprint\n" +
+			"command reports the time left, and says OVERDUE after, so continuing is a\n" +
+			"choice somebody makes rather than a default nobody noticed.\n\n" +
+			"This matters most when the worker is an agent. A session has no natural\n" +
+			"end — it will follow the next reasonable thread, and the one after that,\n" +
+			"each step defensible while the whole drifts from what was agreed.\n\n" +
+			"A sprint in `backlog` also moves to `doing`, because starting the clock and\n" +
+			"starting the work are the same act.",
+		Example: "  bashy sprint start 3            # the default cadence\n" +
+			"  bashy sprint start 3 --for 45m\n" +
+			"  bashy sprint start 3 --for 4h",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
+			}
+			if forDur <= 0 {
+				return fmt.Errorf("--for must be positive (got %s)", forDur)
+			}
+			now := time.Now().UTC()
+			return runWeaveStoryMutate(cmd, id, "sprint start", &flags, func(s *weaveStory) (string, error) {
+				// Restarting a RUNNING box would silently discard the original
+				// commitment, which is the one number the record exists to keep
+				// honest. Extending is a different, explicit act.
+				if s.Box.Running() {
+					return "", fmt.Errorf("sprint #%d is already running (%s) — `sprint stop %d` first, or `sprint extend %d --by <dur>`",
+						id, s.Box.Status(now), id, id)
+				}
+				// A BOX IN FLIGHT MUST HAVE AN OWNER. The conductor holding the
+				// lease is the sprint's scrum master: accountable for its
+				// delivery, for calling the stop, and for the decision when the
+				// cutoff arrives. A running box nobody holds is how a deadline
+				// passes with everyone assuming someone else was watching — and
+				// with several sprints running at once, that is the normal way
+				// to lose one rather than an unlucky one.
+				//
+				// So start CLAIMS a free (or stale) lease, and refuses to take a
+				// live one from someone else: quietly reassigning delivery
+				// ownership is not something a start command should do.
+				who := weaveConductorName("")
+				if prev, stale, free := weaveStoryLeaseState(s); !free && !stale && prev != who {
+					return "", fmt.Errorf("sprint #%d is held by %s — `sprint take %d` to assume delivery first",
+						id, prev, id)
+				}
+				s.Lease = &weaveStoryLease{Holder: who, At: now}
+				s.Box = &weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur}
+				moved := ""
+				if s.Column == "backlog" {
+					s.Column = "doing"
+					moved = " (backlog → doing)"
+				}
+				weaveStoryAppend(s, weaveConductorName(""), "system",
+					fmt.Sprintf("started a %s box, cutoff %s", roundDur(forDur), now.Add(forDur).Format(time.RFC3339)))
+				return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s",
+					id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who), nil
+			})
+		},
+	}
+	cmd.Flags().DurationVar(&forDur, "for", DefaultSprintBox, "how long this sprint gets")
+	flags.attach(cmd)
+	return cmd
+}
+
+// newSprintStopCmd closes the box and records what actually happened.
+func newSprintStopCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var note string
+	cmd := &cobra.Command{
+		Use:   "stop <sprint>",
+		Short: "Close a sprint's time-box and record planned vs actual",
+		Long: "stop closes the clock and writes what ACTUALLY happened beside what was\n" +
+			"planned.\n\n" +
+			"That record is the only thing that makes a cadence real. A two-hour box\n" +
+			"that consistently runs four hours is not a two-hour cadence — it is a\n" +
+			"four-hour cadence with a misleading label, and only the record tells you\n" +
+			"which one you have. Tune the next `--for` from this, not from intent.\n\n" +
+			"Stopping does not move the sprint's column: the clock and the work are\n" +
+			"different questions, and a box can close with the work unfinished. That is\n" +
+			"a normal outcome and worth seeing as one.",
+		Example: "  bashy sprint stop 3\n" +
+			"  bashy sprint stop 3 --note \"gate green, docs left\"",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
+			}
+			now := time.Now().UTC()
+			return runWeaveStoryMutate(cmd, id, "sprint stop", &flags, func(s *weaveStory) (string, error) {
+				if !s.Box.Running() {
+					// Saying "stopped" about a sprint that was never running
+					// would be a small lie of exactly the kind this feature is
+					// meant to remove.
+					return "", fmt.Errorf("sprint #%d has no running box — `sprint start %d` opens one", id, id)
+				}
+				s.Box.StoppedAt = &now
+				elapsed := s.Box.Elapsed(now)
+				verdict := "within the box"
+				if elapsed > s.Box.Planned {
+					verdict = fmt.Sprintf("OVER by %s", roundDur(elapsed-s.Box.Planned))
+				} else if d := s.Box.Planned - elapsed; d > time.Minute {
+					verdict = fmt.Sprintf("under by %s", roundDur(d))
+				}
+				msg := fmt.Sprintf("stopped after %s (planned %s) — %s",
+					roundDur(elapsed), roundDur(s.Box.Planned), verdict)
+				if strings.TrimSpace(note) != "" {
+					msg += ": " + strings.TrimSpace(note)
+				}
+				weaveStoryAppend(s, weaveConductorName(""), "system", msg)
+				return fmt.Sprintf("sprint #%d %s", id, msg), nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&note, "note", "", "what the box actually produced")
+	flags.attach(cmd)
+	return cmd
+}
+
+// newSprintExtendCmd lengthens a running box WITHOUT rewriting the original
+// commitment.
+//
+// Extending exists so that the honest move — "this needs longer" — is one
+// command, rather than something people route around by restarting the box and
+// quietly losing the first estimate. Planned is deliberately left alone: the
+// gap between what was promised and what was taken is the whole signal.
+func newSprintExtendCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	var by time.Duration
+	cmd := &cobra.Command{
+		Use:     "extend <sprint>",
+		Short:   "Push a running sprint's cutoff back, keeping the original estimate on record",
+		Example: "  bashy sprint extend 3 --by 30m",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("sprint must be an integer: %q", args[0])
+			}
+			if by <= 0 {
+				return fmt.Errorf("--by must be positive (got %s)", by)
+			}
+			now := time.Now().UTC()
+			return runWeaveStoryMutate(cmd, id, "sprint extend", &flags, func(s *weaveStory) (string, error) {
+				if !s.Box.Running() {
+					return "", fmt.Errorf("sprint #%d has no running box to extend", id)
+				}
+				s.Box.Cutoff = s.Box.Cutoff.Add(by)
+				weaveStoryAppend(s, weaveConductorName(""), "system",
+					fmt.Sprintf("extended by %s (original estimate %s stands)", roundDur(by), roundDur(s.Box.Planned)))
+				return fmt.Sprintf("sprint #%d extended by %s — %s", id, roundDur(by), s.Box.Status(now)), nil
+			})
+		},
+	}
+	cmd.Flags().DurationVar(&by, "by", 30*time.Minute, "how much longer")
+	flags.attach(cmd)
+	return cmd
+}
+
+// newSprintStatusCmd is THE STEWARD'S VIEW: every sprint on this host at once,
+// answered as a set rather than one card at a time.
+//
+// The kanban is organised for the person doing one thing — it groups by column,
+// which is where a sprint is. A steward asks a different question, and it is
+// always about the whole: what is on the clock right now, what has run past
+// what it promised, and what has been left open. Those sprints are scattered
+// across columns by construction, so the board can show them and still not
+// answer it.
+//
+// It reads, and changes nothing. A steward deciding to stop or extend does that
+// deliberately, per sprint; a status view that also acted would make the survey
+// and the intervention the same keystroke.
+func newSprintStatusCmd() *cobra.Command {
+	var flags weaveOutputFlags
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Every sprint on this host: what is on the clock, what is over, what is idle",
+		Long: "status is the steward's cross-sprint view — the whole host in one answer.\n\n" +
+			"The board groups by kanban column, which is where each sprint IS. This\n" +
+			"groups by clock, which is what a steward is accountable for: several\n" +
+			"initiatives run at once on different cadences, and the ones needing a\n" +
+			"decision are scattered across columns where no single column shows them.\n\n" +
+			"It reports and changes nothing — stopping or extending stays a deliberate\n" +
+			"act on a named sprint.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mode := flags.mode()
+			dir, err := weaveStoryDir(cmd, mode, "sprint status")
+			if err != nil {
+				return err
+			}
+			q, lerr := loadWeaveQueue(dir)
+			if lerr != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "sprint status", weavecli.ExitGenericFail, lerr))
+			}
+			now := time.Now().UTC()
+
+			type row struct {
+				ID      int64  `json:"id"`
+				Title   string `json:"title"`
+				Epic    string `json:"epic,omitempty"`
+				Column  string `json:"column"`
+				Status  string `json:"box_status,omitempty"`
+				Overdue bool   `json:"overdue,omitempty"`
+				Holder  string `json:"lease_holder,omitempty"`
+				Stale   bool   `json:"lease_stale,omitempty"`
+			}
+			var onClock, over, idle []row
+			for _, s := range q.Stories {
+				h, stale, free := weaveStoryLeaseState(s)
+				if free {
+					h = ""
+				}
+				r := row{ID: s.ID, Title: s.Title, Epic: s.Epic, Column: s.Column,
+					Status: s.Box.Status(now), Overdue: s.Box.Overdue(now), Holder: h, Stale: stale}
+				switch {
+				case s.Box.Overdue(now):
+					over = append(over, r)
+				case s.Box.Running():
+					onClock = append(onClock, r)
+				case s.Column != "done":
+					idle = append(idle, r)
+				}
+			}
+			sortRows := func(rs []row) { sort.Slice(rs, func(i, j int) bool { return rs[i].ID < rs[j].ID }) }
+			sortRows(onClock)
+			sortRows(over)
+			sortRows(idle)
+
+			if mode == weavecli.OutputJSON {
+				return ec(emitOK(cmd.OutOrStdout(), mode, "sprint status", map[string]any{
+					"now": now, "overdue": over, "on_clock": onClock, "idle": idle,
+				}))
+			}
+
+			out := cmd.OutOrStdout()
+			line := func(r row) {
+				lease := "  [unowned]"
+				if r.Holder != "" {
+					mark := "✓"
+					if r.Stale {
+						mark = "STALE"
+					}
+					lease = fmt.Sprintf("  [%s %s]", r.Holder, mark)
+				}
+				st := ""
+				if r.Status != "" {
+					st = "  " + r.Status
+				}
+				fmt.Fprintf(out, "  #%d %s (%s)%s%s\n", r.ID, weaveTruncate(r.Title, 46), r.Column, st, lease)
+			}
+			// Overdue first: it is the only group that is asking for something.
+			if len(over) > 0 {
+				fmt.Fprintf(out, "PAST CUTOFF (%d) — the conductor named on each decides: stop, or extend\n", len(over))
+				for _, r := range over {
+					line(r)
+				}
+				fmt.Fprintln(out)
+			}
+			fmt.Fprintf(out, "ON THE CLOCK (%d)\n", len(onClock))
+			if len(onClock) == 0 {
+				fmt.Fprintln(out, "  — nothing running; `sprint start <id> --for <dur>`")
+			}
+			for _, r := range onClock {
+				line(r)
+			}
+			if len(idle) > 0 {
+				fmt.Fprintf(out, "\nOPEN, NOT ON THE CLOCK (%d)\n", len(idle))
+				for _, r := range idle {
+					line(r)
+				}
+			}
+			return nil
+		},
+	}
+	flags.attach(cmd)
+	return cmd
+}
