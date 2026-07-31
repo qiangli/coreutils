@@ -1,0 +1,283 @@
+package lexicon
+
+// THE SYSTEM INVENTORY — jargon that is ENUMERATED, never guessed.
+//
+// The rest of this package projects from software registries (the atlas, the
+// fleet, skills) because those are declared and maintained. The terms an
+// operator actually trips over are often not declared anywhere: an env var only
+// this fleet sets, a command only this host has, a path element that means
+// something here and nothing in general. `WEAVE_AGENT`, `outpost`, `.agents`.
+//
+// The tempting way to find those is statistical — mine the logs for strings
+// that look unusual. That approach has a specific and serious failure: the
+// highest-scoring "unusual string" on any real machine is a credential. An
+// extractor tuned to prefer rare, non-dictionary tokens is a secret harvester
+// with a glossary's name on it, and persisting its output makes the leak
+// indexed rather than merely present.
+//
+// So this enumerates instead. Every term here came from asking a subsystem what
+// exists, which means:
+//
+//   - it is real by construction — no scoring, no guessing;
+//   - a secret is never in the answer, because secrets are not in the
+//     environment's KEYS, the PATH's FILENAMES, or a directory's STRUCTURE.
+//
+// # Keys, never values
+//
+// The split this file is built around. `WEAVE_AGENT` is jargon; its value may be
+// anything. `gh` is a command name; its argv may carry a token. Every enumerator
+// below takes the left-hand side only, and the types cannot hold the right-hand
+// side — a value has nowhere to go, so none can leak by oversight.
+//
+// # Enumeration gives existence; observation gives salience
+//
+// A host has hundreds of binaries and thousands of path segments. Emitting all
+// of them is noise, which is the opposite of a glossary. Enumeration answers
+// "is this term REAL"; ranking it by how much it MATTERS is a separate,
+// later problem — and the safe division of labour, because the risky corpora
+// (traces, logs) then only rank terms that were already validated, and never
+// introduce new ones.
+//
+// The cut applied here is the cheap, closed-vocabulary one: subtract what is
+// standard. What is left over is, by definition, local.
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/qiangli/coreutils/pkg/redact"
+)
+
+// Kinds contributed by the system inventory.
+const (
+	KindEnvVar      Kind = "env-var"      // an environment variable NAME
+	KindCommand     Kind = "command"      // an executable on PATH that is not standard
+	KindPathSegment Kind = "path-segment" // a directory name that carries local meaning
+)
+
+const (
+	envScopeNote = "An environment variable this host or fleet sets. The NAME is the term; " +
+		"its value is not recorded here and may be a credential."
+	commandScopeNote = "An executable present on THIS host's PATH and not part of the standard " +
+		"userland. On another machine the same name may be absent or mean something else."
+	pathScopeNote = "A directory name that carries local meaning in this workspace, not its " +
+		"ordinary English sense."
+)
+
+// SystemInventory is the enumerated term set. It holds NAMES only.
+//
+// There is deliberately no field for a value, a path, or a full command line.
+// Enforcing the keys-only rule in the type is what makes it hold under later
+// edits, rather than depending on every future caller remembering it.
+type SystemInventory struct {
+	EnvVars      []string `json:"env_vars,omitempty"`
+	Commands     []string `json:"commands,omitempty"`
+	PathSegments []string `json:"path_segments,omitempty"`
+}
+
+// EnumOptions configures enumeration. Every input is injectable so the whole
+// thing is hermetic under test: nothing here reads the host unless asked to.
+type EnumOptions struct {
+	// Environ is the environment, in "KEY=VALUE" form (os.Environ() shape).
+	// Only the keys are read; values are discarded immediately.
+	Environ []string
+	// PathDirs are directories to scan for executables (filepath.SplitList of
+	// $PATH). Unreadable entries are skipped, not fatal — a stale PATH entry is
+	// normal and must not fail enumeration.
+	PathDirs []string
+	// Roots are directories whose segment names are candidate terms (the repo
+	// root, the workspace).
+	Roots []string
+	// KnownCommands is the standard command set to subtract, supplied by the
+	// host rather than hard-coded — the atlas knows this, and passing it in
+	// keeps this package usable outside bashy (the same reason Build takes
+	// synopses).
+	KnownCommands []string
+	// Scrubber removes identity-bearing terms. Required in practice: a home
+	// directory's own path carries a username, so path segments leak identity
+	// unless filtered. Nil disables the filter, which is only appropriate in
+	// tests with synthetic input.
+	Scrubber *redact.Scrubber
+}
+
+// standardEnvVars is the POSIX/ubiquitous set. Anything NOT here is, on an
+// ordinary machine, something a person or a project chose to define — which is
+// exactly the definition of local jargon.
+var standardEnvVars = map[string]bool{
+	"_": true, "COLUMNS": true, "DISPLAY": true, "EDITOR": true, "ENV": true,
+	"HOME": true, "HOSTNAME": true, "IFS": true, "LANG": true, "LINES": true,
+	"LOGNAME": true, "MAIL": true, "OLDPWD": true, "PAGER": true, "PATH": true,
+	"PS1": true, "PS2": true, "PWD": true, "SHELL": true, "SHLVL": true,
+	"TERM": true, "TMPDIR": true, "TZ": true, "USER": true, "VISUAL": true,
+	"GOPATH": true, "GOROOT": true, "LESS": true, "MANPATH": true, "SSH_AUTH_SOCK": true,
+	"XDG_CONFIG_HOME": true, "XDG_CACHE_HOME": true, "XDG_DATA_HOME": true,
+	"XDG_RUNTIME_DIR": true, "XDG_STATE_HOME": true,
+}
+
+// genericSegments are directory names that mean the same thing everywhere, so
+// they carry no local information and would only dilute the term set.
+var genericSegments = map[string]bool{
+	"bin": true, "build": true, "cmd": true, "config": true, "dist": true,
+	"doc": true, "docs": true, "etc": true, "examples": true, "home": true,
+	"include": true, "internal": true, "lib": true, "libexec": true, "local": true,
+	"opt": true, "pkg": true, "private": true, "sbin": true, "scripts": true,
+	"share": true, "src": true, "target": true, "test": true, "tests": true,
+	"tmp": true, "usr": true, "var": true, "vendor": true, "node_modules": true,
+	"projects": true, "users": true, "work": true, "workspace": true,
+}
+
+// Enumerate asks the system what exists, and subtracts what is standard.
+func Enumerate(o EnumOptions) SystemInventory {
+	var inv SystemInventory
+
+	// --- env: KEYS only. The value is split off and dropped on the same line
+	// it is produced, so it is never held in a variable that could be logged.
+	for _, kv := range o.Environ {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if name := strings.TrimSpace(k); isLocalEnvVar(name) {
+			inv.EnvVars = appendUnique(inv.EnvVars, name)
+		}
+	}
+
+	// --- PATH: executable NAMES, minus the standard userland.
+	known := map[string]bool{}
+	for _, c := range o.KnownCommands {
+		known[strings.TrimSpace(c)] = true
+	}
+	for _, dir := range o.PathDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue // a stale or unreadable PATH entry is normal
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if known[name] || !isLocalCommandName(name) {
+				continue
+			}
+			inv.Commands = appendUnique(inv.Commands, name)
+		}
+	}
+
+	// --- paths: SEGMENT names, minus the generic ones.
+	for _, root := range o.Roots {
+		for _, seg := range strings.Split(filepath.ToSlash(root), "/") {
+			if isLocalSegment(seg) {
+				inv.PathSegments = appendUnique(inv.PathSegments, seg)
+			}
+		}
+	}
+
+	// --- identity filter. A home directory's own path contains a username, so
+	// without this the "path segments" of any real machine include the operator's
+	// login. Applied last, over everything, so no enumerator can bypass it.
+	if o.Scrubber != nil {
+		inv.EnvVars = dropIdentifying(o.Scrubber, inv.EnvVars)
+		inv.Commands = dropIdentifying(o.Scrubber, inv.Commands)
+		inv.PathSegments = dropIdentifying(o.Scrubber, inv.PathSegments)
+	}
+
+	sort.Strings(inv.EnvVars)
+	sort.Strings(inv.Commands)
+	sort.Strings(inv.PathSegments)
+	return inv
+}
+
+// dropIdentifying removes terms the scrubber recognises as host identity. A term
+// that IS someone's name or address is not vocabulary — it is a fact about a
+// machine, and belongs in the host-local fact layer, not a shareable glossary.
+func dropIdentifying(s *redact.Scrubber, terms []string) []string {
+	out := terms[:0:0]
+	for _, t := range terms {
+		if s.Clean(t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func isLocalEnvVar(name string) bool {
+	if name == "" || standardEnvVars[name] {
+		return false
+	}
+	// LC_* and similar locale families are standard by prefix.
+	if strings.HasPrefix(name, "LC_") {
+		return false
+	}
+	// A single letter is not a term.
+	return len(name) >= 3
+}
+
+func isLocalCommandName(name string) bool {
+	if len(name) < 2 {
+		return false
+	}
+	// Versioned duplicates (python3.12, gcc-14) denote the same concept as their
+	// base name and would triple the term set without adding meaning.
+	if strings.ContainsAny(name, ".") {
+		return false
+	}
+	return true
+}
+
+func isLocalSegment(seg string) bool {
+	seg = strings.TrimSpace(seg)
+	if len(seg) < 3 || genericSegments[strings.ToLower(seg)] {
+		return false
+	}
+	// A leading dot is meaningful (.agents, .bashy) but the dot itself is not
+	// part of the term.
+	return true
+}
+
+// AddSystem projects an enumerated inventory into the store.
+//
+// A separate method rather than a parameter on Build: the system inventory is
+// optional, host-specific, and slower to gather than the registry projections,
+// and a caller that only wants verb resolution should not pay for a PATH scan.
+func (s *Store) AddSystem(inv SystemInventory, ov Overlay) {
+	for _, name := range inv.EnvVars {
+		s.add(Concept{
+			ID: "env:" + name, Kind: KindEnvVar, PrefLabel: name,
+			Definition: "an environment variable set on this host or by this fleet",
+			ScopeNote:  envScopeNote,
+			Source:     "system:env",
+		}, ov)
+	}
+	for _, name := range inv.Commands {
+		s.add(Concept{
+			ID: "command:" + name, Kind: KindCommand, PrefLabel: name,
+			Definition: "an executable on this host's PATH, outside the standard userland",
+			ScopeNote:  commandScopeNote,
+			Source:     "system:path",
+		}, ov)
+	}
+	for _, name := range inv.PathSegments {
+		s.add(Concept{
+			ID: "path:" + name, Kind: KindPathSegment, PrefLabel: name,
+			Definition: "a directory name carrying local meaning in this workspace",
+			ScopeNote:  pathScopeNote,
+			Source:     "system:path",
+		}, ov)
+	}
+	s.reindex()
+}
+
+// EnumerateHost is the live-machine convenience wrapper: the real environment,
+// the real PATH, and the given roots, with the host scrubber applied.
+func EnumerateHost(roots []string, knownCommands []string) SystemInventory {
+	return Enumerate(EnumOptions{
+		Environ:       os.Environ(),
+		PathDirs:      filepath.SplitList(os.Getenv("PATH")),
+		Roots:         roots,
+		KnownCommands: knownCommands,
+		Scrubber:      redact.FromHost(),
+	})
+}
