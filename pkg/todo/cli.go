@@ -285,7 +285,7 @@ func newListCmd(sf storeFunc) *cobra.Command {
 					}
 				}
 				row := fmt.Sprintf("%d\t%s\t%s\t%s\t%s\t%s",
-					it.Seq, it.ID[:8], it.Status, dash(it.Priority), age(it.Created), dueStr)
+					it.Seq, shortID(it.ID), it.Status, dash(it.Priority), age(it.Created), dueStr)
 				if hasAssignee {
 					row += fmt.Sprintf("\t%s", dash(it.Assignee))
 				}
@@ -559,4 +559,26 @@ func parseDue(s string) (*time.Time, error) {
 		return &t, nil
 	}
 	return nil, fmt.Errorf("invalid due date format: %s", s)
+}
+
+// shortID renders an item's id for a table, and survives one that has none.
+//
+// `it.ID[:8]` panicked the whole command on the first record with an empty id,
+// which is reachable from ordinary data: the loader skips malformed files with a
+// warning and keeps going, so a partially-parsed item reaches the renderer with
+// nothing in its id. Crashing `todo list` because ONE record is malformed loses
+// every other item on the list — the failure is total where the fault was local.
+//
+// A missing id is shown rather than hidden. It means a record nothing can
+// address — `todo show`, `done` and `rm` all take an id — so silently printing a
+// blank column would leave someone wondering why the row will not respond.
+func shortID(id string) string {
+	switch {
+	case id == "":
+		return "(no-id)"
+	case len(id) < 8:
+		return id
+	default:
+		return id[:8]
+	}
 }
