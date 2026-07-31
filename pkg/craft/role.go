@@ -144,6 +144,12 @@ type CommandSpec struct {
 	// that take it as a flag rather than a positional. Its value is consumed
 	// into the entity and never kept as a fact.
 	EntityFrom Role
+	// ExitModel is this tool's exit-status convention, and TransportExits the
+	// statuses meaning it never established the session. Together they separate
+	// "the connection failed" from "the thing it carried failed" — see
+	// outcome.go for why that distinction earns a table.
+	ExitModel      ExitModel
+	TransportExits map[int]bool
 	// EntityKind is what that target is. It defaults to a host, and the default
 	// is not cosmetic: a host has a grammar (`user@host:port`) that gets parsed,
 	// while every other kind is an OPAQUE TOKEN taken verbatim. Parsing a
@@ -175,6 +181,10 @@ type CommandSpec struct {
 // pkg/telemetry and pkg/policy/audit, on the paths that actually write.
 var commandSpecs = map[string]CommandSpec{
 	"ssh": {
+		// 255 is ssh's OWN failure; every other status is the remote command's,
+		// which is why `ssh host make` returning 2 says nothing about the host.
+		ExitModel:      ExitPassThrough,
+		TransportExits: map[int]bool{255: true},
 		Realm:          RealmSSH,
 		Flags:          map[string]Role{"-p": RolePort, "-l": RoleUser, "-i": RoleIdentity, "-J": RoleJump},
 		BoolFlags:      map[string]bool{"-v": true, "-vv": true, "-vvv": true, "-q": true, "-t": true, "-T": true, "-A": true, "-N": true, "-f": true, "-4": true, "-6": true, "-C": true},
@@ -182,6 +192,7 @@ var commandSpecs = map[string]CommandSpec{
 		HostPositional: true,
 	},
 	"scp": {
+		ExitModel:   ExitToolOnly,
 		HostHasPath: true,
 		Realm:       RealmSSH,
 		// -P, capital. The single most-forgotten flag difference in this family,
@@ -192,6 +203,7 @@ var commandSpecs = map[string]CommandSpec{
 		HostPositional: true,
 	},
 	"sftp": {
+		ExitModel:      ExitToolOnly,
 		HostHasPath:    true,
 		Realm:          RealmSSH,
 		Flags:          map[string]Role{"-P": RolePort, "-i": RoleIdentity, "-J": RoleJump},
@@ -200,16 +212,25 @@ var commandSpecs = map[string]CommandSpec{
 		HostPositional: true,
 	},
 	"rsync": {
-		HostHasPath: true,
-		Realm:       RealmSSH,
-		Flags:       map[string]Role{},
-		BoolFlags:   map[string]bool{"-a": true, "-v": true, "-z": true, "-r": true, "-P": true, "-n": true},
+		// rsync's own table: 10 socket I/O, 12 protocol stream, 30/35 timeouts,
+		// 255 the ssh underneath. Its other codes are file-level (11 file I/O,
+		// 23/24 partial transfer) — the link worked, the payload did not.
+		ExitModel:      ExitPassThrough,
+		TransportExits: map[int]bool{10: true, 12: true, 30: true, 35: true, 255: true},
+		HostHasPath:    true,
+		Realm:          RealmSSH,
+		Flags:          map[string]Role{},
+		BoolFlags:      map[string]bool{"-a": true, "-v": true, "-z": true, "-r": true, "-P": true, "-n": true},
 		// rsync carries the port INSIDE its transport string, which is why the
 		// render map is a direction of its own rather than a mirror of Flags.
 		Render:         map[Role]string{},
 		HostPositional: true,
 	},
 	"psql": {
+		// psql documents 2 as "connection to the server went bad"; 1 is a fatal
+		// SQL error and 3 a script error, both of which mean it connected.
+		ExitModel:      ExitPassThrough,
+		TransportExits: map[int]bool{2: true},
 		// A DIFFERENT realm. `-U` is a database role; transferring an ssh login
 		// here would be a confident wrong answer.
 		Realm: RealmPostgres,
@@ -235,6 +256,7 @@ var commandSpecs = map[string]CommandSpec{
 		EntityFrom:     RoleHost,
 	},
 	"sshfs": {
+		ExitModel:      ExitToolOnly,
 		HostHasPath:    true,
 		Realm:          RealmSSH,
 		Flags:          map[string]Role{"-p": RolePort},
@@ -244,6 +266,7 @@ var commandSpecs = map[string]CommandSpec{
 		HostPositional: true,
 	},
 	"ssh-copy-id": {
+		ExitModel:      ExitToolOnly,
 		Realm:          RealmSSH,
 		Flags:          map[string]Role{"-p": RolePort, "-i": RoleIdentity},
 		BoolFlags:      map[string]bool{"-f": true, "-n": true, "-x": true},
@@ -251,6 +274,7 @@ var commandSpecs = map[string]CommandSpec{
 		HostPositional: true,
 	},
 	"ssh-keyscan": {
+		ExitModel:  ExitToolOnly,
 		Realm:      RealmSSH,
 		Flags:      map[string]Role{"-p": RolePort},
 		ValueFlags: map[string]bool{"-t": true, "-T": true, "-f": true},
