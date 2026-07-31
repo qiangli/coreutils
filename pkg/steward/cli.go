@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"os/user"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -185,9 +186,21 @@ func SeatSummary(w io.Writer, dir string, base ...Option) error {
 	if err != nil {
 		return err
 	}
+	// THE SEAT IS PER (HOST, ACCOUNT), NOT PER HOST — say so.
+	//
+	// The store key is <host>-<account>-<digest>, so two login users on one
+	// machine hold two independent seats. Printing only the hostname implies a
+	// machine-wide seat, which would let a second user read "no steward" and
+	// believe the machine is unattended while somebody else is stewarding their
+	// own account. The distinction only matters on shared machines, which is
+	// exactly where getting it wrong costs the most.
 	host := hostLabel()
+	seat := host
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		seat = host + "/" + u.Username
+	}
 	if view.Authority.Vacant {
-		fmt.Fprintf(w, "%s has NO steward — the seat is open.\n", host)
+		fmt.Fprintf(w, "%s has NO steward — the seat is open.\n", seat)
 		// The real flow is TWO steps, and saying otherwise sends someone into a
 		// refusal. Taking the seat needs a capability first, deliberately:
 		// an agent that could decide to become the steward would eventually
@@ -196,7 +209,7 @@ func SeatSummary(w io.Writer, dir string, base ...Option) error {
 		fmt.Fprintf(w, "             bashy steward claim --grant <id> --intent \"<what you are here to do>\"\n\n")
 		return nil
 	}
-	fmt.Fprintf(w, "%s steward: %s (epoch %d)\n", host, view.Authority.Holder, view.Authority.Epoch)
+	fmt.Fprintf(w, "%s steward: %s (epoch %d)\n", seat, view.Authority.Holder, view.Authority.Epoch)
 	switch view.Liveness {
 	case LivenessLive:
 		fmt.Fprintf(w, "  alive — reach them on bus %s before taking anything over\n\n",
