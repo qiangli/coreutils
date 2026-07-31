@@ -86,6 +86,81 @@ func TestIndex_NoMatchIsEmpty(t *testing.T) {
 	}
 }
 
+// THE MEASURED FAILURE, pinned. `find "ssh into a machine"` returned the Go
+// build-and-test gate with a confident score, because the gate's prose says
+// "machine-verified". One incidental word out of two, in the least specific
+// half of the question, and nothing in the answer had anything to do with ssh.
+//
+// Nothing is the correct answer here, and it is not a lesser one: "this host
+// has no skill for that" is a state a caller can act on, while a plausible
+// wrong row is acted on as if it were right — `compose` renders it as a
+// runnable script.
+func TestIndex_IncidentalWordIsNotAMatch(t *testing.T) {
+	ix := NewIndex([]Implementation{
+		impl(t, "go-repo-health", goBuildTest,
+			"Verify a Go repository is healthy with one machine-verified, attested command", nil),
+	})
+	if got := ix.Resolve(Query{Text: "ssh into a machine"}); len(got) != 0 {
+		t.Errorf("query about ssh matched %q (score %.0f, %v) — one incidental word is not an answer",
+			got[0].Name, got[0].Score, got[0].Why)
+	}
+	// The control: the same index still answers the question it CAN answer.
+	// Without this, the assertion above would pass on an index that matches
+	// nothing at all.
+	if got := ix.Resolve(Query{Text: "verify the repository is healthy"}); len(got) != 1 {
+		t.Fatalf("the on-topic query returned %d matches, want 1", len(got))
+	}
+}
+
+// Substring matching makes every field a haystack in which short words are
+// always found. Matching is per WORD, so a term reaches "repository" from
+// "repo" but never reaches "concatenate" from "cat".
+func TestIndex_MatchesWordsNotSubstrings(t *testing.T) {
+	ix := NewIndex([]Implementation{
+		impl(t, "text-joiner", goBuildTest, "concatenate the fragments", nil),
+	})
+	if got := ix.Resolve(Query{Text: "cat"}); len(got) != 0 {
+		t.Errorf("\"cat\" matched %q through a substring of \"concatenate\"", got[0].Name)
+	}
+	if got := ix.Resolve(Query{Text: "concatenate"}); len(got) != 1 {
+		t.Errorf("the whole word did not match; the rule is per-word, not no-match")
+	}
+}
+
+// A ranking must say how much of the question it answered. A score alone cannot
+// distinguish "answered all of it" from "recognised one word", which is exactly
+// the distinction that made the wrong answer above look right.
+func TestIndex_ReportsTermCoverage(t *testing.T) {
+	got := testIndex(t).Resolve(Query{Text: "rust crate compiles"})
+	if len(got) == 0 {
+		t.Fatal("no match")
+	}
+	if got[0].Terms != 3 || got[0].Covered != 3 {
+		t.Errorf("covered %d/%d terms, want 3/3", got[0].Covered, got[0].Terms)
+	}
+}
+
+// A capability with three implementations must not outrank a better answer with
+// one. Scored per implementation it did — an artefact of how the catalog is
+// written rather than of what was asked.
+func TestIndex_ScoreIsPerCapabilityNotPerImplementation(t *testing.T) {
+	one := NewIndex([]Implementation{
+		impl(t, "go-repo-health", goBuildTest, "verify tests pass", nil),
+	}).Resolve(Query{Text: "verify tests pass"})
+	many := NewIndex([]Implementation{
+		impl(t, "go-repo-health", goBuildTest, "verify tests pass", nil),
+		impl(t, "rust-repo-health", goBuildTest, "verify tests pass", nil),
+		impl(t, "zig-repo-health", goBuildTest, "verify tests pass", nil),
+	}).Resolve(Query{Text: "verify tests pass"})
+	if len(one) != 1 || len(many) != 1 {
+		t.Fatalf("got %d and %d matches, want 1 each", len(one), len(many))
+	}
+	if one[0].Score != many[0].Score {
+		t.Errorf("score %.0f vs %.0f — implementation count changed the ranking",
+			one[0].Score, many[0].Score)
+	}
+}
+
 // The index is derived, so two identical queries must agree exactly.
 func TestIndex_Deterministic(t *testing.T) {
 	ix := testIndex(t)

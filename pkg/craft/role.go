@@ -395,6 +395,30 @@ func SpecFor(binary string) (CommandSpec, bool) {
 	return s, ok
 }
 
+// TransferableRoles is the closed vocabulary a fact KEY must be spelled in to
+// travel between commands.
+//
+// It is exported because the hand-written path cannot otherwise know it. A fact
+// learned by watching is keyed by role automatically; one typed at the prompt is
+// keyed by whatever the operator wrote, and `remote_user` — the spelling this
+// command's own example used to suggest — is not `user`, so nothing would ever
+// offer it. The fact is still worth storing; the point is to SAY so, because a
+// key that silently never transfers is indistinguishable from one that does
+// until the day it is needed.
+func TransferableRoles() []Role {
+	return []Role{RoleUser, RolePort, RoleIdentity, RoleJump, RoleDatabase, RoleNamespace}
+}
+
+// IsTransferableRole reports whether a fact key is spelled as a role.
+func IsTransferableRole(key string) bool {
+	for _, r := range TransferableRoles() {
+		if Role(strings.TrimSpace(key)) == r {
+			return true
+		}
+	}
+	return false
+}
+
 // Extraction is what one invocation taught.
 type Extraction struct {
 	// Entity is what the facts are ABOUT — the target host. Zero when the

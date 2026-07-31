@@ -45,6 +45,20 @@ func (c *config) index() *Index {
 	return NewIndex(LoadImplementations(cat, ps))
 }
 
+// coordinate is THIS host's space-time coordinate, used wherever a caller does
+// not name one.
+//
+// It reads the same helper `skills probe` prints, rather than computing a
+// second one: a fold written at a coordinate the reader never computes is
+// invisible, and nothing about it looks broken — the write succeeds, the store
+// grows, and every read returns nothing.
+//
+// Defaulting at all is what makes the fold half of this usable day to day.
+// Requiring a 65-character hash on the command line for "what I just learned
+// about this machine" is a cost paid at exactly the moment somebody has one
+// thing to write down and no patience for a second command.
+func (c *config) coordinate() string { return skills.HostCoordinate(c.skillOpts...) }
+
 func defaultStoreDir() string {
 	if h, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(h, ".config", "bashy", "skills")
@@ -236,10 +250,14 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 			"With --forget the fact is invalidated WITHOUT asserting a replacement.\n" +
 			"\"This is now wrong\" and \"this is now X\" are different claims, and a run that\n" +
 			"failed has learned only the first — being made to invent a replacement is how\n" +
-			"a guess gets into the store.",
-		Example: "  bashy craft learn host:workshop remote_user svc-build\n" +
-			"  bashy craft learn host:workshop address 10.0.0.41 --source remote-shell\n" +
-			"  bashy craft learn host:workshop address --forget",
+			"a guess gets into the store.\n\n" +
+			"KEYS SPELLED AS ROLES TRAVEL; other keys are remembered but never offered.\n" +
+			"`user` is the login a command will be handed; `remote_user` is a note to\n" +
+			"yourself. Both are stored, only the first can be suggested — so the command\n" +
+			"says which one you wrote.",
+		Example: "  bashy craft learn host:workshop user svc-build\n" +
+			"  bashy craft learn host:workshop port 2222 --source remote-shell\n" +
+			"  bashy craft learn host:workshop user --forget",
 		Args: cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var value string
@@ -310,14 +328,15 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 			"Record the EVIDENCE too. A fold asserted without it is an opinion, and\n" +
 			"opinions should not outlive the session that formed them.",
 		Example: "  bashy craft fold \"mDNS is unreliable here; resolve the address first\" \\\n" +
-			"      --coordinate $(bashy skills probe --json | jq -r .context_key) \\\n" +
-			"      --evidence \"three consecutive lookup timeouts\"",
+			"      --evidence \"three consecutive lookup timeouts\"\n" +
+			"  bashy craft folds          # what is folded here, and where else\n" +
+			"  bashy craft fold \"…\" --coordinate <key>   # file it at another coordinate",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFold(cmd, cfg, args[0], foldCoord, foldCapability, foldEvidence, foldSource, foldRetire)
 		},
 	}
-	fold.Flags().StringVar(&foldCoord, "coordinate", "", "the space-time context key this holds at (required)")
+	fold.Flags().StringVar(&foldCoord, "coordinate", "", "the space-time context key this holds at (default: this host's)")
 	fold.Flags().StringVar(&foldCapability, "capability", "", "scope to one capability; omit for an environment truth")
 	fold.Flags().StringVar(&foldEvidence, "evidence", "", "what happened that taught this")
 	fold.Flags().StringVar(&foldSource, "source", "", "what learned it")
@@ -356,7 +375,7 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 		},
 	}
 	promoteCmd.Flags().IntVar(&promoteMin, "min", DefaultPromotionMin, "entities a fact must hold for before it is proposed")
-	promoteCmd.Flags().StringVar(&promoteCoord, "coordinate", "", "coordinate to record the promoted fold at (required with --accept)")
+	promoteCmd.Flags().StringVar(&promoteCoord, "coordinate", "", "coordinate to record the promoted fold at (default: this host's)")
 	promoteCmd.Flags().StringVar(&promoteAccept, "accept", "", "promote the candidate with this key")
 
 	root.AddCommand(history, study, find, compose, learn, importCmd, factsCmd, fold, foldsCmd, promoteCmd)
@@ -434,6 +453,14 @@ func runLearn(cmd *cobra.Command, cfg *config, entity, key, value, source string
 	}
 	store := OpenFacts(cfg.storeDir)
 	if forget {
+		// Say what actually happened. Invalidating something never believed is
+		// a no-op rather than an error — but reporting it as "forgot" is a
+		// statement that a claim was withdrawn, and a caller correcting a
+		// mistyped key would read that as done and move on.
+		if !believes(store, e, key) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "craft: nothing believed about %s for %s — nothing to forget\n", key, e.ID())
+			return nil
+		}
 		if err := store.Invalidate(e, key, time.Now().UTC()); err != nil {
 			return err
 		}
@@ -447,7 +474,29 @@ func runLearn(cmd *cobra.Command, cfg *config, entity, key, value, source string
 		return err
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "craft: learned %s about %s (host-local; never shared)\n", key, e.ID())
+	if !IsTransferableRole(key) {
+		// Stored, and honestly labelled. A key outside the role vocabulary is
+		// recorded and shown by `craft facts`, but the suggestion path keys on
+		// ROLES, so nothing will ever offer this one to a command.
+		names := make([]string, 0, len(TransferableRoles()))
+		for _, r := range TransferableRoles() {
+			names = append(names, string(r))
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"craft: %q is not a role, so it is remembered but never offered to a command (roles: %s)\n",
+			key, strings.Join(names, ", "))
+	}
 	return nil
+}
+
+// believes reports whether the store currently holds a value for (entity, key).
+func believes(store *FactStore, e Entity, key string) bool {
+	for _, f := range store.For(e) {
+		if f.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func runPromote(cmd *cobra.Command, cfg *config, min int, coord, accept string) error {
@@ -462,6 +511,9 @@ func runPromote(cmd *cobra.Command, cfg *config, min int, coord, accept string) 
 	}
 
 	if accept != "" {
+		if strings.TrimSpace(coord) == "" {
+			coord = cfg.coordinate()
+		}
 		for _, c := range cands {
 			if c.Key != accept {
 				continue
@@ -500,8 +552,11 @@ func runPromote(cmd *cobra.Command, cfg *config, min int, coord, accept string) 
 
 func runFold(cmd *cobra.Command, cfg *config, note, coord, capability, evidence, source string, retire bool) error {
 	if strings.TrimSpace(coord) == "" {
-		return fmt.Errorf("craft: --coordinate is required — a fold that holds nowhere in particular holds nowhere " +
-			"(`bashy skills probe --json` prints this host's)")
+		coord = cfg.coordinate()
+	}
+	if strings.TrimSpace(coord) == "" {
+		return fmt.Errorf("craft: no coordinate given and this host's could not be read — a fold that holds " +
+			"nowhere in particular holds nowhere (`bashy skills probe` prints this host's)")
 	}
 	store := OpenFolds(cfg.storeDir, HostScrubber(cfg.storeDir))
 	if retire {
@@ -531,8 +586,17 @@ func runFolds(cmd *cobra.Command, cfg *config, coord string) error {
 			fmt.Fprintln(out, "folds accrue from `craft fold`, and unlike facts they CAN be shared")
 			return nil
 		}
+		// Which of these is HERE is the one thing the list cannot be read
+		// without: a coordinate is a hash, and a reader comparing it by eye to
+		// the one in another command's output is a reader about to get it
+		// wrong.
+		here := cfg.coordinate()
 		for _, c := range coords {
-			fmt.Fprintf(out, "%-20s %d fold(s)\n", skills.ShortID(c), len(store.For("", c)))
+			mark := ""
+			if c == here {
+				mark = "  (here)"
+			}
+			fmt.Fprintf(out, "%-20s %d fold(s)%s\n", skills.ShortID(c), len(store.For("", c)), mark)
 		}
 		return nil
 	}
@@ -587,18 +651,31 @@ func runFacts(cmd *cobra.Command, cfg *config, entity string) error {
 }
 
 func runFind(cmd *cobra.Command, cfg *config, query string, limit int, asJSON bool) error {
-	matches := cfg.index().Resolve(Query{Text: query, Limit: limit})
+	ix := cfg.index()
+	matches := ix.Resolve(Query{Text: query, Limit: limit})
 	if asJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]any{"schema": "bashy-craft-find-v1", "query": query, "matches": matches})
+		return enc.Encode(map[string]any{
+			"schema": "bashy-craft-find-v1", "query": query,
+			"indexed": ix.Len(), "matches": matches,
+		})
 	}
 	out := cmd.OutOrStdout()
 	if len(matches) == 0 {
 		// Nothing, rather than the least-bad row: a confident wrong answer
 		// propagates, and the agent acts on it with nothing reporting the error.
 		fmt.Fprintf(out, "no capability matches %q\n", query)
-		fmt.Fprintf(out, "only skills carrying a contract are indexed; `bashy skills list` shows the catalog\n")
+		if ix.Len() == 0 {
+			// A different statement of fact, and the difference matters: an
+			// empty index means the question was never really asked. Reported
+			// as "no match" it reads as "this host cannot do that", which is a
+			// conclusion drawn from an absence of evidence.
+			fmt.Fprintf(out, "nothing in the catalog carries a contract yet, so there is nothing to search\n")
+			return nil
+		}
+		fmt.Fprintf(out, "%d capabilit%s indexed; only skills carrying a contract are searchable, and a match must "+
+			"account for more than half your question\n", ix.Len(), plural(ix.Len(), "y is", "ies are"))
 		return nil
 	}
 	for _, m := range matches {
@@ -608,10 +685,21 @@ func runFind(cmd *cobra.Command, cfg *config, query string, limit int, asJSON bo
 		}
 		fmt.Fprintln(out)
 		if len(m.Why) > 0 {
-			fmt.Fprintf(out, "%-28s   matched on: %s\n", "", strings.Join(m.Why, ", "))
+			// The coverage is printed beside the signals because it is the half
+			// that says how much of the QUESTION was answered — a high score on
+			// one word out of five is exactly the shape of a wrong answer.
+			fmt.Fprintf(out, "%-28s   matched on: %s (%d/%d terms)\n", "",
+				strings.Join(m.Why, ", "), m.Covered, m.Terms)
 		}
 	}
 	return nil
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON bool, forEntity, coordinate string) error {
@@ -627,6 +715,13 @@ func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON 
 		}
 		opts.Entity = e
 		opts.Facts = OpenFacts(cfg.storeDir).For(e)
+	}
+	// Compose HERE unless told otherwise. A rendering that silently omitted the
+	// workarounds this host already knows about would be the same lie in the
+	// other direction: correct-looking, and missing the part a fresh agent would
+	// otherwise rediscover by failing.
+	if strings.TrimSpace(coordinate) == "" {
+		coordinate = cfg.coordinate()
 	}
 	if strings.TrimSpace(coordinate) != "" {
 		opts.Coordinate = coordinate
@@ -646,8 +741,8 @@ func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON 
 	// Provenance on stderr so stdout stays the artifact — a caller piping this
 	// into a file or an agent's context must get the skill, not a header.
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f folds=%d facts=%d stamp=%s\n",
-		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, c.Folds, c.Facts, c.Stamp)
+		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f coordinate=%s folds=%d facts=%d stamp=%s\n",
+		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, skills.ShortID(c.Coordinate), c.Folds, c.Facts, c.Stamp)
 	return nil
 }
 

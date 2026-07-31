@@ -31,6 +31,16 @@ package craft
 // floor, so results are reproducible. A tier that needs a network is an
 // accelerator, never a requirement.
 //
+// # Nothing beats the least-bad row
+//
+// Scoring alone will always rank something first, so a ranker with no admission
+// rule answers every question, including the ones this host has no answer to. A
+// result must therefore account for more than half the meaningful words in the
+// question before it is returned at all, and matching is per WORD rather than
+// per substring. Both rules exist because of one measured answer: `find "ssh
+// into a machine"` returned a Go build-and-test gate, on the strength of the
+// word "machine-verified" in its prose.
+//
 // # Name is a matcher, not a key
 //
 // An exact name match is simply the highest-precedence signal inside Resolve,
@@ -77,6 +87,12 @@ type Match struct {
 	// than trusted. A retrieval system nobody can interrogate is one nobody can
 	// debug when it starts returning the wrong thing.
 	Why []string `json:"why,omitempty"`
+	// Terms is how many distinct meaningful words the question carried; Covered
+	// is how many of them this capability accounted for. The pair is what a
+	// score alone cannot say: whether the answer addressed the QUESTION or
+	// merely recognised one incidental word in it.
+	Terms   int `json:"terms,omitempty"`
+	Covered int `json:"covered,omitempty"`
 	// Alternatives counts the other implementations of the same guarantee.
 	Alternatives int `json:"alternatives,omitempty"`
 }
@@ -179,44 +195,77 @@ func (ix *Index) score(c *Capability, q Query, terms []string) (Match, bool) {
 	var why []string
 
 	lowerQ := strings.ToLower(strings.TrimSpace(q.Text))
+	exact := false
 	for _, im := range c.Implementations {
 		if strings.EqualFold(im.Name, lowerQ) {
 			score += wExact
 			why = append(why, "exact name match")
 			primary = im
+			exact = true
 			break
 		}
 	}
 
+	covered := 0
 	for _, t := range terms {
-		for _, im := range c.Implementations {
-			if strings.Contains(strings.ToLower(im.Name), t) {
-				score += wName
-				why = appendOnce(why, "name")
-			}
-			if strings.Contains(strings.ToLower(im.Description), t) {
-				score += wDesc
-				why = appendOnce(why, "description")
-			}
+		hit := false
+		// A signal counts ONCE per capability, not once per implementation.
+		// Scored per-implementation, a guarantee with three implementations
+		// outranked a better answer with one — an artefact of how the catalog
+		// happens to be written rather than of what was asked.
+		if anyImpl(c, func(im Implementation) bool { return fieldHas(im.Name, t) }) {
+			score += wName
+			why = appendOnce(why, "name")
+			hit = true
+		}
+		if anyImpl(c, func(im Implementation) bool { return fieldHas(im.Description, t) }) {
+			score += wDesc
+			why = appendOnce(why, "description")
+			hit = true
 		}
 		// GRAPH EXPANSION: a capability is also described by what it
 		// GUARANTEES, so contract predicates and effect atoms are searchable
 		// text. This is what lets "verify the build" find a skill whose prose
-		// never says "verify" — the contract says `builida`.
+		// never says "verify" — the contract says `builida`. The contract is
+		// read off the primary because it is what the capability key is
+		// computed over: every implementation under one key states the same
+		// guarantee.
 		for _, chk := range primary.Skill.Contract {
-			if strings.Contains(strings.ToLower(chk.Predicate), t) {
+			if fieldHas(chk.Predicate, t) {
 				score += wPredicate
 				why = appendOnce(why, "contract")
+				hit = true
 			}
 		}
 		for _, e := range primary.Skill.EffectCap {
-			if strings.Contains(strings.ToLower(e.String()), t) {
+			if fieldHas(e.String(), t) {
 				score += wEffect
 				why = appendOnce(why, "effect")
+				hit = true
 			}
+		}
+		if hit {
+			covered++
 		}
 	}
 
+	// THE RELEVANCE FLOOR, and it is the whole point of this function.
+	//
+	// A capability must account for MORE THAN HALF the meaningful words in the
+	// question. Without it, one incidental word was a match: `find "ssh into a
+	// machine"` returned a Go build-and-test gate, because its prose happens to
+	// say "machine-verified" — full marks for confidence, no relation to ssh.
+	//
+	// That is worse than returning nothing. Nothing is a state the caller can
+	// act on ("this host cannot do that yet"); a plausible wrong row is acted
+	// on as an answer, and `compose` will happily render the wrong skill as a
+	// runnable script. Silence beats a wrong answer.
+	//
+	// An exact name is exempt: it is not a guess, and bare-name dispatch has to
+	// keep working.
+	if !exact && 2*covered <= len(terms) {
+		return Match{}, false
+	}
 	if score == 0 {
 		return Match{}, false
 	}
@@ -227,8 +276,62 @@ func (ix *Index) score(c *Capability, q Query, terms []string) (Match, bool) {
 		Name:         primary.Name,
 		Score:        score,
 		Why:          why,
+		Terms:        len(terms),
+		Covered:      covered,
 		Alternatives: len(c.Implementations) - 1,
 	}, true
+}
+
+func anyImpl(c *Capability, pred func(Implementation) bool) bool {
+	for _, im := range c.Implementations {
+		if pred(im) {
+			return true
+		}
+	}
+	return false
+}
+
+// fieldHas reports whether a query term matches any WORD of a field.
+//
+// Substring matching over the raw field was the other half of the wrong answer
+// above: it makes every field a haystack in which short words are always found
+// ("cat" inside "concatenate", "art" inside "start"), and those hits are
+// indistinguishable from real ones by the time they reach the score.
+//
+// Matching is per word, and prefix-tolerant only where a prefix carries real
+// information: "repo" reaches "repository" and "build" reaches "builds", while
+// a token shorter than four characters must match a word exactly. Three-letter
+// words are where substring matching does its damage, and they are also the
+// ones a reader most expects to be precise.
+func fieldHas(field, term string) bool {
+	if field == "" || term == "" {
+		return false
+	}
+	for _, w := range words(field) {
+		if w == term {
+			return true
+		}
+		short := len(w)
+		if len(term) < short {
+			short = len(term)
+		}
+		if short < 4 {
+			continue
+		}
+		if strings.HasPrefix(w, term) || strings.HasPrefix(term, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// words splits a field into lowercase word tokens, on the same boundaries
+// tokenize uses so a query and the text it is matched against are cut the same
+// way.
+func words(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
 }
 
 // elect picks the implementation to answer with.
@@ -255,15 +358,22 @@ func elect(c *Capability, coordinate string) Implementation {
 // tokenize lowercases and splits on non-letter/digit runs, dropping tokens
 // shorter than three characters — below that a token matches everything and
 // ranks nothing.
+//
+// Repeats are dropped too, and that is not tidiness: terms are the denominator
+// of the relevance floor, so a question that says "build" twice must not become
+// a question that is half-answered by matching "build" once.
 func tokenize(s string) []string {
 	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 	out := make([]string, 0, len(fields))
+	seen := make(map[string]bool, len(fields))
 	for _, f := range fields {
-		if len(f) >= 3 && !stopWords[f] {
-			out = append(out, f)
+		if len(f) < 3 || stopWords[f] || seen[f] {
+			continue
 		}
+		seen[f] = true
+		out = append(out, f)
 	}
 	return out
 }
@@ -271,11 +381,26 @@ func tokenize(s string) []string {
 // stopWords are the words a natural-language question is made of. They carry no
 // retrieval signal and, left in, they match everything equally — which is worse
 // than useless because it flattens the ranking.
+//
+// They are also the DENOMINATOR of the relevance floor, which is what makes the
+// list worth maintaining rather than merely tidy: "make sure the build
+// compiles" is a two-word question wearing five words, and counting the filler
+// against the answer rejects a skill that answered everything asked.
+//
+// The bar for adding one is that it can never be the CONTENT of a question
+// about a skill. "make", "run", "build" and "use" all can be, and are
+// deliberately absent — a catalog that cannot be asked about `make` because
+// somebody classified it as filler is the same failure as a subcommand
+// stealing a word.
 var stopWords = map[string]bool{
 	"the": true, "and": true, "for": true, "with": true, "how": true,
 	"can": true, "you": true, "that": true, "this": true, "get": true,
 	"into": true, "from": true, "want": true, "need": true, "does": true,
 	"what": true, "when": true, "where": true, "have": true, "are": true,
+	"please": true, "would": true, "could": true, "should": true, "sure": true,
+	"also": true, "then": true, "will": true, "was": true, "were": true,
+	"but": true, "not": true, "any": true, "who": true, "why": true,
+	"did": true,
 }
 
 func appendOnce(dst []string, v string) []string {
