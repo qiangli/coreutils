@@ -314,13 +314,13 @@ func newModelsShow(opts []Option) *cobra.Command {
 // --- agents -------------------------------------------------------------
 
 type agentRow struct {
-	Name        string   `json:"name"`
-	Nick        string   `json:"nick,omitempty"`
-	Band        int      `json:"band,omitempty"`
-	BandSource  string   `json:"band_source,omitempty"`
-	Tool        string   `json:"tool"`
-	Model       string   `json:"model"`
-	Binding     string   `json:"binding"`
+	Name       string `json:"name"`
+	Nick       string `json:"nick,omitempty"`
+	Band       int    `json:"band,omitempty"`
+	BandSource string `json:"band_source,omitempty"`
+	Tool       string `json:"tool"`
+	Model      string `json:"model"`
+	Binding    string `json:"binding"`
 	// Kind + Provider are inherited from the model (the cost lane): kind is
 	// subscription | api | local-ollama, so a consumer can prefer flat-cost
 	// subscriptions over metered API keys without a second `models` lookup.

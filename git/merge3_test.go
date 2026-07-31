@@ -1,10 +1,10 @@
 package git
 
 import (
-	"runtime"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 

@@ -48,8 +48,8 @@ func Enabled() bool { return nudge.Enabled() }
 var transientPatterns = []struct{ pat, class string }{
 	{"connection refused", "connection-refused"},
 	{"connection reset", "connection-reset"},
-	{"failed to connect", "connect-failed"},   // curl (Linux)
-	{"couldn't connect", "connect-failed"},     // curl (macOS)
+	{"failed to connect", "connect-failed"}, // curl (Linux)
+	{"couldn't connect", "connect-failed"},  // curl (macOS)
 	{"could not connect", "connect-failed"},
 	{"connection closed", "connection-closed"},
 	{"connection timed out", "timeout"},

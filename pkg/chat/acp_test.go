@@ -78,7 +78,6 @@ func pinACPCatalog(t *testing.T) {
 				// Deliberately NO steer_exec: a tool can speak ACP and have no
 				// interactive pty launch at all, and that must still be drivable.
 				ACPExec: "fakeacp -test.run=^TestFakeACPAgentHelper$",
-
 			},
 		},
 	}

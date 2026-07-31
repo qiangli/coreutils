@@ -70,11 +70,11 @@ type htmlCell struct{ Task *RunTask }
 // server-side markup first, so the served page is correct and readable before
 // any script runs — and if scripting is off it simply stops updating.
 type htmlRunView struct {
-	Title      string
-	Run        *RunEntry
-	Tasks      []RunTask
-	Levels     []int
-	Grid       [][]htmlCell
+	Title  string
+	Run    *RunEntry
+	Tasks  []RunTask
+	Levels []int
+	Grid   [][]htmlCell
 	Live   bool
 	DocKey string
 	RunID  string

@@ -162,7 +162,7 @@ func (p *probeWrapper) kill() {
 func newProbeWrapper(t *testing.T) *probeWrapper {
 	t.Helper()
 	c := exec.Command(os.Args[0], "-test.run=^TestWeaveProbeWrapperHelper$",
-		"-test.timeout="+(2 * weaveProbeWrapperLifetime).String())
+		"-test.timeout="+(2*weaveProbeWrapperLifetime).String())
 	c.Env = append(os.Environ(), weaveProbeWrapperEnv+"=1")
 	if err := c.Start(); err != nil {
 		t.Skipf("cannot spawn a probe wrapper: %v", err)

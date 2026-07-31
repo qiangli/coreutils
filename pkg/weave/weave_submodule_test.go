@@ -275,7 +275,6 @@ func TestWeaveHydrateNestedSubmodulesRace(t *testing.T) {
 	}
 }
 
-
 func mustMkdir(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o755); err != nil {

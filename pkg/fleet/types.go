@@ -189,7 +189,6 @@ type ToolLaunch struct {
 	// (see agentlaunch.ACPArgv). A {model} token here renders LITERALLY.
 	ACPExec string `yaml:"acp_exec,omitempty" json:"acp_exec,omitempty"`
 
-
 	// EventsArg is how this tool is told to stream STRUCTURED EVENTS, if it can.
 	//
 	// This is the difference between a first-party harness and a third-party one,
@@ -208,8 +207,6 @@ type ToolLaunch struct {
 	// The events are NDJSON, one object per line, with at minimum:
 	//     {"type":"turn.start"} {"type":"tool.call"} {"type":"turn.end", ...}
 	EventsArg string `yaml:"events_arg,omitempty" json:"events_arg,omitempty"`
-
-
 
 	// SteerExec is the argv template that ACTUALLY accepts steering, and it is
 	// usually NOT Exec.

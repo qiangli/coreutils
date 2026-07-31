@@ -22,21 +22,21 @@ const EventsFile = "events.jsonl"
 // earlier, and an event stream is exactly where a hostname would sneak into a
 // view someone screenshots.
 type Event struct {
-	Kind       string    `json:"t"`
-	At         time.Time `json:"at"`
-	File       string    `json:"file,omitempty"`    // run.start only
-	Targets    []string  `json:"targets,omitempty"` // run.start only
-	Task    string `json:"task,omitempty"`
-	Attempt int    `json:"attempt,omitempty"`
+	Kind    string    `json:"t"`
+	At      time.Time `json:"at"`
+	File    string    `json:"file,omitempty"`    // run.start only
+	Targets []string  `json:"targets,omitempty"` // run.start only
+	Task    string    `json:"task,omitempty"`
+	Attempt int       `json:"attempt,omitempty"`
 	// Log is the journal-relative path of this attempt's log, carried on
 	// task.start so a viewer can begin tailing the output immediately. Only the
 	// engine knows the sanitized filename, so publishing it here saves every
 	// consumer from reimplementing safeFileName.
-	Log string `json:"log,omitempty"`
-	Status     string    `json:"status,omitempty"`
-	ExitCode   int       `json:"exit,omitempty"`
-	DurationMS int64     `json:"ms,omitempty"`
-	Failed     bool      `json:"failed,omitempty"` // run.end only
+	Log        string `json:"log,omitempty"`
+	Status     string `json:"status,omitempty"`
+	ExitCode   int    `json:"exit,omitempty"`
+	DurationMS int64  `json:"ms,omitempty"`
+	Failed     bool   `json:"failed,omitempty"` // run.end only
 }
 
 // Event kinds. Kept few on purpose: a viewer needs to know a run started, what

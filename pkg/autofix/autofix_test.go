@@ -21,7 +21,7 @@ func TestSedDialect(t *testing.T) {
 		{[]string{"sed", "-r", "s/a/b/", "f"}, "-E", true},
 		{[]string{"sed", "-nr", "s/a/b/p", "f"}, "-nE", true},
 		{[]string{"sed", "--regexp-extended", "s/a/b/", "f"}, "-E", true},
-		{[]string{"sed", "-E", "s/a/b/", "f"}, "", false},   // already portable
+		{[]string{"sed", "-E", "s/a/b/", "f"}, "", false},       // already portable
 		{[]string{"sed", "-i", "-r", "s/a/b/", "f"}, "", false}, // WRITE — never adapt
 		{[]string{"sed", "-ri", "s/a/b/", "f"}, "", false},      // combined write cluster
 		{[]string{"sed", "s/a/b/", "f"}, "", false},             // no -r

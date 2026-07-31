@@ -3,8 +3,8 @@ package vdircmd
 import (
 	"fmt"
 
-	"github.com/qiangli/coreutils/tool"
 	"github.com/qiangli/coreutils/cmds/ls"
+	"github.com/qiangli/coreutils/tool"
 )
 
 var cmd = &tool.Tool{

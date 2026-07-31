@@ -30,13 +30,13 @@ func TestTeeIgnoreInterruptsActual(t *testing.T) {
 	out, errb := new(strings.Builder), new(strings.Builder)
 
 	in := &blockingReader{ch: make(chan string)}
-	
+
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
 		Stdio: tool.Stdio{In: in, Out: out, Err: errb},
 	}
-	
+
 	done := make(chan int)
 	go func() {
 		done <- cmd.Run(rc, []string{"-i"})

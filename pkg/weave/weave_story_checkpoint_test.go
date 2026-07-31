@@ -32,7 +32,6 @@ func TestBeatrixSprintCheckpointRegression(t *testing.T) {
 		t.Fatalf("sprint add exit=%d out=%s", code, out)
 	}
 
-
 	// 1. Unclaimed lease should fail checkpoint
 	t.Setenv("WEAVE_CONDUCTOR", "Charlie")
 	out, code = runSprint(t, "checkpoint", "1", "-m", "test")

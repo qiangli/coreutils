@@ -77,8 +77,8 @@ func VaultEnvNames() map[string]struct{} {
 //
 // It removes a variable if EITHER:
 //
-//	1. the vault projects that name (an exact, operator-declared secret), OR
-//	2. the name LOOKS like a credential (*_API_KEY, *_TOKEN, *_SECRET, …)
+//  1. the vault projects that name (an exact, operator-declared secret), OR
+//  2. the name LOOKS like a credential (*_API_KEY, *_TOKEN, *_SECRET, …)
 //
 // Rule 2 is the one that makes this a firewall rather than a filter, and it was not
 // here. Removal used to be by vault name ALONE — "a variable the vault does not project

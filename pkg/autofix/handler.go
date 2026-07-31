@@ -37,11 +37,11 @@ func Handler() func(interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 }
 
 type line struct {
-	Schema  string   `json:"schema_version"`
-	Kind    string   `json:"kind"` // "autofix"
-	Note    string   `json:"note"`
-	Ran     []string `json:"ran"`
-	Off     string   `json:"off"`
+	Schema string   `json:"schema_version"`
+	Kind   string   `json:"kind"` // "autofix"
+	Note   string   `json:"note"`
+	Ran    []string `json:"ran"`
+	Off    string   `json:"off"`
 }
 
 // emit writes the note to the command's captured stderr (interp.HandlerCtx), so

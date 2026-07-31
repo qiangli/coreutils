@@ -36,12 +36,12 @@ func NotFoundTargets(stderr string) []string {
 }
 
 type noteLine struct {
-	Schema  string   `json:"schema_version"`
-	Kind    string   `json:"kind"` // "recommend"
-	Missing string   `json:"missing"`
+	Schema     string   `json:"schema_version"`
+	Kind       string   `json:"kind"` // "recommend"
+	Missing    string   `json:"missing"`
 	DidYouMean []string `json:"did_you_mean"`
-	Note    string   `json:"note"`
-	Off     string   `json:"off"`
+	Note       string   `json:"note"`
+	Off        string   `json:"off"`
 }
 
 // Note builds the recommendation appended to a command's stderr: "no <missing>;

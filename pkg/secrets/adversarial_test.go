@@ -16,7 +16,7 @@ func TestOverlappingSecretsSuffixLeak(t *testing.T) {
 	// After the shorter match at pos 0, longer's suffix "CCCC" at pos 16-19
 	// falls outside any match and appears in plaintext.
 	const shorter = "AAAAbbbbbbbbbbbb"
-	const longer  = "bbbbbbbbbbbbCCCC"
+	const longer = "bbbbbbbbbbbbCCCC"
 
 	r := NewRedactor()
 	if err := r.Register("SHORT_SECRET", shorter); err != nil {

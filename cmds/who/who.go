@@ -70,22 +70,36 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 			continue
 		}
-		
+
 		switch r.Type {
 		case "BOOT_TIME", "boot", "2":
-			if needBoot { live = append(live, r) }
+			if needBoot {
+				live = append(live, r)
+			}
 		case "DEAD_PROCESS", "dead", "8":
-			if needDead { live = append(live, r) }
+			if needDead {
+				live = append(live, r)
+			}
 		case "LOGIN_PROCESS", "login", "6":
-			if needLogin { live = append(live, r) }
+			if needLogin {
+				live = append(live, r)
+			}
 		case "INIT_PROCESS", "init", "5":
-			if needProcess { live = append(live, r) }
+			if needProcess {
+				live = append(live, r)
+			}
 		case "RUN_LVL", "runlevel", "1":
-			if needRunlevel { live = append(live, r) }
+			if needRunlevel {
+				live = append(live, r)
+			}
 		case "NEW_TIME", "time", "3", "OLD_TIME", "4":
-			if needTime { live = append(live, r) }
+			if needTime {
+				live = append(live, r)
+			}
 		default:
-			if *all { live = append(live, r) }
+			if *all {
+				live = append(live, r)
+			}
 		}
 	}
 	showMesg := *mesg || *writable || *all || *message

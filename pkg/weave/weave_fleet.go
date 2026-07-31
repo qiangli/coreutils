@@ -219,13 +219,13 @@ type fleetRow struct {
 	Path          string `json:"path,omitempty"`
 	CoolingUnit   string `json:"cooling_until,omitempty"`  // RFC3339 local
 	CooldownCause string `json:"cooldown_cause,omitempty"` // quota-exhausted | cooling-down
-	Probed      bool   `json:"probed,omitempty"`
-	Capable     bool   `json:"capable,omitempty"` // --version exited cleanly
-	Version     string `json:"version,omitempty"`
-	AuthProbed  bool   `json:"auth_probed,omitempty"`
-	Auth        string `json:"auth,omitempty"`      // ready | needs-login | stale-contract
-	AuthNote    string `json:"auth_note,omitempty"` // why
-	AuthHint    string `json:"auth_hint,omitempty"` // how to fix (needs-login only)
+	Probed        bool   `json:"probed,omitempty"`
+	Capable       bool   `json:"capable,omitempty"` // --version exited cleanly
+	Version       string `json:"version,omitempty"`
+	AuthProbed    bool   `json:"auth_probed,omitempty"`
+	Auth          string `json:"auth,omitempty"`      // ready | needs-login | stale-contract
+	AuthNote      string `json:"auth_note,omitempty"` // why
+	AuthHint      string `json:"auth_hint,omitempty"` // how to fix (needs-login only)
 
 	// launch is the resolved agent, when the entry named one. Unexported: it
 	// is machinery, not part of the wire shape.

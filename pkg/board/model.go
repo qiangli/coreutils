@@ -185,9 +185,9 @@ type DagRun struct {
 	// exactly the number someone opened the panel to see.
 	DurationMS int64 `json:"duration_ms,omitempty"`
 	Failed     bool  `json:"failed,omitempty"`
-	Total     int       `json:"total"`
-	OK        int       `json:"ok"`
-	FailedN   int       `json:"failed_count,omitempty"`
+	Total      int   `json:"total"`
+	OK         int   `json:"ok"`
+	FailedN    int   `json:"failed_count,omitempty"`
 }
 
 type Source interface {
