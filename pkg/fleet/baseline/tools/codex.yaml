@@ -15,6 +15,10 @@ cli:
     # Two launcher notes measured at the same time: codex REFUSES outside a git
     # repo without --skip-git-repo-check, and reads stdin unless it is closed.
     events_stdout: --json
+    # NO events_outcome, deliberately. turn.completed carries usage and nothing
+    # that reads as a verdict, and no failing terminal event has been observed —
+    # so there is nothing to declare. A tool with no path yields `unverified`,
+    # which is the honest answer and still sends the caller to the gate.
     events_done:
       field: type
       values: [turn.completed]

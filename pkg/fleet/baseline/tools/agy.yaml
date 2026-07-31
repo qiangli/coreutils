@@ -18,6 +18,12 @@ cli:
     # so silently — a boundary that never arrives is indistinguishable from a
     # tool still thinking. That asymmetry is why events_done declares its field.
     events_stdout: --output-format stream-json
+    # Nested one level deeper than claude's, which is why the path is declared
+    # rather than assumed. Measured on a success; the failing status has not
+    # been seen, so it is not guessed at.
+    events_outcome:
+      path: result.status
+      ok: [SUCCESS]
     events_done:
       field: event
       values: [result]

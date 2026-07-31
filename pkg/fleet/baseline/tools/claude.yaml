@@ -21,6 +21,12 @@ cli:
     # --verbose is REQUIRED alongside stream-json in print mode; without it the
     # stream is refused. The terminal event is `result`, not `turn.end`.
     events_stdout: --output-format stream-json --verbose
+    # The verdict the exit code does not carry. `is_error` was false on the
+    # measured success; its FAILING spelling has not been observed, so only the
+    # success value is declared and anything else reads as unverified.
+    events_outcome:
+      path: is_error
+      ok: ["false"]
     events_done:
       field: type
       values: [result]

@@ -258,6 +258,14 @@ type ToolLaunch struct {
 	// breaks on the next release with nobody watching.
 	EventsDone EventsDone `yaml:"events_done,omitempty" json:"events_done,omitempty"`
 
+	// EventsOutcome locates the VERDICT inside that terminal event.
+	//
+	// The exit code is not it. "All three harnesses EXITED 0 WHEN THEY FAILED"
+	// is recorded in the umbrella's own notes, so a caller reading the status
+	// learns nothing and reports success. The stream carries what the exit does
+	// not. See eventsoutcome.go for why only SUCCESS is declarable.
+	EventsOutcome EventsOutcome `yaml:"events_outcome,omitempty" json:"events_outcome,omitempty"`
+
 	// SteerExec is the argv template that ACTUALLY accepts steering, and it is
 	// usually NOT Exec.
 	//

@@ -123,3 +123,80 @@ func TestBaseline_ThreeToolsReportTurnEndOnStdout(t *testing.T) {
 		}
 	}
 }
+
+// THE EXIT CODE IS NOT THE VERDICT — "all three harnesses EXITED 0 WHEN THEY
+// FAILED" is recorded in the umbrella's own notes. These lines are the real
+// terminal events captured 2026-07-31, and the point is that the stream says
+// something the status does not.
+func TestEventsOutcome_ReadsTheVerdictFromTheRealEvent(t *testing.T) {
+	claude := EventsOutcome{Path: "is_error", OK: []string{"false"}}
+	if got := claude.Read([]byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`)); got != VerdictSucceeded {
+		t.Errorf("claude success = %v, want succeeded", got)
+	}
+	// A bool and an enum must compare the same way, which is why the leaf is
+	// rendered as a string.
+	if got := claude.Read([]byte(`{"type":"result","is_error":true}`)); got != VerdictUnverified {
+		t.Errorf("claude is_error:true = %v, want unverified", got)
+	}
+
+	// agy nests one level deeper — the reason the path is declared, not assumed.
+	agy := EventsOutcome{Path: "result.status", OK: []string{"SUCCESS"}}
+	if got := agy.Read([]byte(`{"event":"result","result":{"status":"SUCCESS","num_turns":1}}`)); got != VerdictSucceeded {
+		t.Errorf("agy success = %v, want succeeded", got)
+	}
+	if got := agy.Read([]byte(`{"event":"result","result":{"status":"CANCELLED"}}`)); got != VerdictUnverified {
+		t.Errorf("agy CANCELLED = %v — an undeclared value is unverified", got)
+	}
+}
+
+// THERE IS NO WAY TO RETURN "FAILED", and that is the design. Only the success
+// spellings were observed; a failure spelling would be a guess, and putting an
+// unverified string on the path whose purpose is to stop trusting unverified
+// claims would defeat the exercise. Absence of success is not evidence of
+// failure — it means the caller still owes a gate.
+func TestEventsOutcome_AbsenceIsNeverFailure(t *testing.T) {
+	o := EventsOutcome{Path: "is_error", OK: []string{"false"}}
+	for _, line := range []string{
+		`{"type":"result"}`,          // path missing
+		`{"is_error":"maybe"}`,       // value nobody declared
+		`{"result":{"nested":true}}`, // wrong shape
+		"not json",
+		"",
+	} {
+		if got := o.Read([]byte(line)); got != VerdictUnverified {
+			t.Errorf("%q = %v, want unverified — never a failure verdict", line, got)
+		}
+	}
+	// And an undeclared rule says nothing at all rather than defaulting either way.
+	var none EventsOutcome
+	if none.Declared() {
+		t.Error("an empty rule is not declared")
+	}
+	if got := none.Read([]byte(`{"type":"result","is_error":false}`)); got != VerdictUnverified {
+		t.Errorf("undeclared = %v, want unverified", got)
+	}
+}
+
+// codex declares no outcome path on purpose: turn.completed carries usage and
+// no verdict, and no failing terminal event has been observed. Pinning it stops
+// somebody "completing" the table with a guess.
+func TestBaseline_CodexHasNoGuessedOutcome(t *testing.T) {
+	cat := New()
+	codex, ok := cat.Tool("codex")
+	if !ok {
+		t.Skip("codex not in the baseline")
+	}
+	if codex.CLI.Launch.EventsOutcome.Declared() {
+		t.Error("codex declares an outcome path — none was ever measured, so it can only be a guess")
+	}
+	// The tools whose success WAS measured must carry it.
+	for _, name := range []string{"claude", "agy"} {
+		tool, ok := cat.Tool(name)
+		if !ok {
+			continue
+		}
+		if !tool.CLI.Launch.EventsOutcome.Declared() {
+			t.Errorf("%s: measured success spelling is not declared", name)
+		}
+	}
+}
