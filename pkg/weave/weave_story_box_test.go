@@ -98,3 +98,29 @@ func TestBox_StatusReadsForEachPhase(t *testing.T) {
 		t.Errorf("stopped status = %q, want actual AND planned — one without the other tunes nothing", got)
 	}
 }
+
+// ONE CONDUCTOR IS ACCOUNTABLE FOR EVERY IN-PROGRESS SPRINT. `start` enforces
+// that by claiming the lease — but a lease is a heartbeat with a TTL, so a
+// running box can outlive its conductor. That state must be distinguishable
+// from healthy work, because it is the only one where nothing improves until a
+// person acts.
+func TestBox_RunningSprintCanOutliveItsConductor(t *testing.T) {
+	base := time.Date(2026, 7, 31, 9, 0, 0, 0, time.UTC)
+	s := &weaveStory{
+		ID: 1, Column: "doing",
+		Boxes: []weaveStoryBox{{StartedAt: base, Cutoff: base.Add(4 * time.Hour), Planned: 4 * time.Hour}},
+		Lease: &weaveStoryLease{Holder: "some-conductor", At: base},
+	}
+	// Well inside the box, but far past the lease TTL.
+	now := base.Add(2 * time.Hour)
+	if !s.currentBox().Running() {
+		t.Fatal("box should still be running")
+	}
+	if s.currentBox().Overdue(now) {
+		t.Fatal("box is not overdue — this is precisely the case that would hide")
+	}
+	_, stale, free := weaveStoryLeaseState(s)
+	if !stale || free {
+		t.Errorf("lease should read STALE %v/%v after %s with a %s TTL", stale, free, 2*time.Hour, sprintLeaseTTL)
+	}
+}

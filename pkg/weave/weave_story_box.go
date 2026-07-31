@@ -377,7 +377,18 @@ func newSprintStatusCmd() *cobra.Command {
 				Holder  string `json:"lease_holder,omitempty"`
 				Stale   bool   `json:"lease_stale,omitempty"`
 			}
-			var onClock, over, idle, done []row
+			// ONE CONDUCTOR IS ACCOUNTABLE FOR EVERY IN-PROGRESS SPRINT — that
+			// is the rule `start` enforces by claiming the lease. But a lease
+			// is a heartbeat with a TTL, so it can go STALE while the box is
+			// still running: the conductor died (SIGKILL, token exhaustion,
+			// a closed laptop) and delivery is now nobody's.
+			//
+			// That state is invisible if it is filed under "running" — it
+			// looks exactly like healthy work. It is the steward's most
+			// actionable signal, because it is the only one where nothing will
+			// improve until a person acts: an overdue sprint at least has
+			// someone to make the call.
+			var onClock, over, idle, done, orphaned []row
 			for _, s := range q.Stories {
 				h, stale, free := weaveStoryLeaseState(s)
 				if free {
@@ -386,6 +397,8 @@ func newSprintStatusCmd() *cobra.Command {
 				r := row{ID: s.ID, Title: s.Title, Epic: s.Epic, Column: s.Column,
 					Status: s.lastBox().Status(now), Cycles: len(s.Boxes), Overdue: s.currentBox().Overdue(now), Holder: h, Stale: stale}
 				switch {
+				case s.currentBox().Running() && (stale || free):
+					orphaned = append(orphaned, r)
 				case s.currentBox().Overdue(now):
 					over = append(over, r)
 				case s.currentBox().Running():
@@ -405,10 +418,11 @@ func newSprintStatusCmd() *cobra.Command {
 			sortRows(over)
 			sortRows(idle)
 			sortRows(done)
+			sortRows(orphaned)
 
 			if mode == weavecli.OutputJSON {
 				return ec(emitOK(cmd.OutOrStdout(), mode, "sprint status", map[string]any{
-					"now": now, "overdue": over, "on_clock": onClock, "idle": idle, "stopped": done,
+					"now": now, "overdue": over, "on_clock": onClock, "idle": idle, "stopped": done, "unowned_delivery": orphaned,
 				}))
 			}
 
@@ -434,7 +448,15 @@ func newSprintStatusCmd() *cobra.Command {
 				}
 				fmt.Fprintf(out, "  #%d %s (%s)%s%s%s\n", r.ID, weaveTruncate(r.Title, 46), r.Column, st, cyc, lease)
 			}
-			// Overdue first: it is the only group that is asking for something.
+			// Unowned delivery first: a running sprint with no live conductor
+			// is the one state that cannot resolve itself.
+			if len(orphaned) > 0 {
+				fmt.Fprintf(out, "RUNNING, NO LIVE CONDUCTOR (%d) — delivery is unowned; `sprint take <id>`\n", len(orphaned))
+				for _, r := range orphaned {
+					line(r)
+				}
+				fmt.Fprintln(out)
+			}
 			if len(over) > 0 {
 				fmt.Fprintf(out, "PAST CUTOFF (%d) — the conductor named on each decides: stop, or extend\n", len(over))
 				for _, r := range over {
