@@ -90,12 +90,12 @@ func TestExtract_RefusesSecrets(t *testing.T) {
 	})
 
 	t.Run("next word", func(t *testing.T) {
-		x, _ := Extract([]string{"curl", "-u", "alice:hunter2", "https://example.com"})
+		x, _ := Extract([]string{"redis-cli", "-h", "cache-host", "-a", "hunter2"})
 		if x.Redacted == 0 {
 			t.Error("a credential flag's value was not refused")
 		}
 		for _, v := range x.Roles {
-			if v == "alice:hunter2" {
+			if v == "hunter2" {
 				t.Fatal("a credential was captured")
 			}
 		}

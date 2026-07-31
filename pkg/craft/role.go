@@ -52,6 +52,19 @@ const (
 	RoleIdentity Role = "identity_file" // a private key or credential FILE (a path, never a secret)
 	RoleJump     Role = "jump_host"     // an intermediate host to route through
 	RoleDatabase Role = "database"      // the database/namespace to select
+
+	// RoleHost is the target itself, named by a flag rather than a positional
+	// (`psql -h`, `docker -H`). It is consumed INTO the entity and never stored
+	// as a fact about it — "this host's host is itself" says nothing.
+	RoleHost Role = "host"
+	// RoleContext names a cluster/config context. Like RoleHost it identifies
+	// the entity rather than describing it.
+	RoleContext Role = "context"
+	// RoleNamespace is the namespace to work in. Unlike a port it is genuinely
+	// multi-valued in the world, and the store holds one value per slot — so
+	// this is the most-recent namespace, which is a useful default and not a
+	// complete answer. See the kubectl spec.
+	RoleNamespace Role = "namespace"
 )
 
 // Realm is an authentication namespace. A fact transfers only within one.
@@ -62,7 +75,8 @@ const (
 	RealmPostgres Realm = "postgres" // psql — `-U` is a DB role, NOT a login
 	RealmMySQL    Realm = "mysql"
 	RealmRedis    Realm = "redis"
-	RealmHTTP     Realm = "http" // curl, wget
+	RealmDocker   Realm = "docker" // a daemon endpoint, not a login
+	RealmKube     Realm = "kube"   // a cluster context; kubeconfig holds the credential
 )
 
 // CommandSpec is what bashy knows about one command's argument semantics.
@@ -126,6 +140,16 @@ type CommandSpec struct {
 	// applying one flag table across all of them is how `-m` in `git commit`
 	// gets read as something it is not.
 	Subcommands map[string]bool
+	// EntityFrom names the role whose value IDENTIFIES the target, for commands
+	// that take it as a flag rather than a positional. Its value is consumed
+	// into the entity and never kept as a fact.
+	EntityFrom Role
+	// EntityKind is what that target is. It defaults to a host, and the default
+	// is not cosmetic: a host has a grammar (`user@host:port`) that gets parsed,
+	// while every other kind is an OPAQUE TOKEN taken verbatim. Parsing a
+	// cluster context named `user@cluster` as a host would silently truncate it
+	// to `cluster` and bind every fact to a name that does not exist.
+	EntityKind EntityKind
 }
 
 // commandSpecs is the per-command table. Small on purpose: a dozen commands
@@ -134,10 +158,21 @@ type CommandSpec struct {
 //
 // The ssh realm is deliberately the widest, because that is where transfer
 // actually pays: eight commands share one credential world, so a port learned
-// from any of them renders correctly for the rest. Commands whose realm has no
-// partners (redis-cli, wget) earn their entry differently — they are here for
-// the secret deny-list, since a password in argv is a hazard whether or not the
-// fact ever travels.
+// from any of them renders correctly for the rest.
+//
+// # A command with no target does not belong here
+//
+// Every entry must NAME A TARGET, as an operand or a flag. Facts bind to an
+// entity, so a spec with no entity extracts nothing, suggests nothing, and
+// changes no behaviour — it is inert.
+//
+// That is worth a rule rather than a shrug, because an inert entry is not
+// merely useless: it reads as coverage while providing none. curl and wget were
+// briefly listed here on the theory that a secret deny-list earned them a place
+// even without a target. It does not. With no entity nothing was ever going to
+// be stored, so there was nothing for the deny-list to prevent — and argv
+// secrets for those commands are already handled where it counts, in
+// pkg/telemetry and pkg/policy/audit, on the paths that actually write.
 var commandSpecs = map[string]CommandSpec{
 	"ssh": {
 		Realm:          RealmSSH,
@@ -177,21 +212,27 @@ var commandSpecs = map[string]CommandSpec{
 	"psql": {
 		// A DIFFERENT realm. `-U` is a database role; transferring an ssh login
 		// here would be a confident wrong answer.
-		Realm:          RealmPostgres,
-		Flags:          map[string]Role{"-p": RolePort, "-U": RoleUser, "-h": RoleJump, "-d": RoleDatabase},
-		BoolFlags:      map[string]bool{"-l": true, "-q": true, "-t": true},
+		Realm: RealmPostgres,
+		Flags: map[string]Role{"-p": RolePort, "-U": RoleUser, "-h": RoleHost, "-d": RoleDatabase},
+		// -W and -w force/suppress the password PROMPT; neither takes a value.
+		// Listing -W as a secret flag made it eat the next argument, so
+		// `psql -W -U bob` quietly lost the role. psql has no password flag at
+		// all — the credential arrives via PGPASSWORD or .pgpass — so there is
+		// nothing here for a deny-list to catch.
+		BoolFlags:      map[string]bool{"-l": true, "-q": true, "-t": true, "-W": true, "-w": true},
 		Render:         map[Role]string{RolePort: "-p", RoleUser: "-U", RoleDatabase: "-d"},
-		SecretFlags:    map[string]bool{"-W": true},
 		HostPositional: false,
+		EntityFrom:     RoleHost,
 	},
 	"mysql": {
 		Realm:     RealmMySQL,
-		Flags:     map[string]Role{"-P": RolePort, "-u": RoleUser, "-h": RoleJump, "-D": RoleDatabase},
+		Flags:     map[string]Role{"-P": RolePort, "-u": RoleUser, "-h": RoleHost, "-D": RoleDatabase},
 		BoolFlags: map[string]bool{"-e": false},
 		Render:    map[Role]string{RolePort: "-P", RoleUser: "-u", RoleDatabase: "-D"},
 		// `mysql -pSECRET` attaches the password to the flag itself.
 		AttachedSecret: []string{"-p", "--password="},
 		HostPositional: false,
+		EntityFrom:     RoleHost,
 	},
 	"sshfs": {
 		HostHasPath:    true,
@@ -210,7 +251,7 @@ var commandSpecs = map[string]CommandSpec{
 		HostPositional: true,
 	},
 	"ssh-keyscan": {
-		Realm: RealmSSH,
+		Realm:      RealmSSH,
 		Flags:      map[string]Role{"-p": RolePort},
 		ValueFlags: map[string]bool{"-t": true, "-T": true, "-f": true},
 		// -H hashes the output. It is NOT a header flag, and mistaking it for
@@ -229,14 +270,14 @@ var commandSpecs = map[string]CommandSpec{
 		// no flag that expresses a port, so git gives facts and never receives
 		// them. Declaring that honestly is better than inventing a
 		// `-c core.sshCommand=...` suggestion nobody asked for.
-		Realm:           RealmSSH,
-		Subcommands:     map[string]bool{"clone": true, "fetch": true, "pull": true, "push": true, "ls-remote": true, "archive": true},
-		Flags: map[string]Role{},
+		Realm:       RealmSSH,
+		Subcommands: map[string]bool{"clone": true, "fetch": true, "pull": true, "push": true, "ls-remote": true, "archive": true},
+		Flags:       map[string]Role{},
 		// -C and -c are git's global options and appear BEFORE the subcommand,
 		// so they have to be consumed correctly or the subcommand gate reads
 		// their value as the subcommand and refuses a legitimate clone.
-		ValueFlags: map[string]bool{"-C": true, "-c": true, "-b": true, "--branch": true, "--depth": true, "-o": true, "--origin": true, "--reference": true, "-u": true},
-		BoolFlags:  map[string]bool{"--bare": true, "--mirror": true, "-v": true, "-q": true, "--all": true, "--tags": true, "--force": true, "-f": true, "--recurse-submodules": true},
+		ValueFlags:      map[string]bool{"-C": true, "-c": true, "-b": true, "--branch": true, "--depth": true, "-o": true, "--origin": true, "--reference": true, "-u": true},
+		BoolFlags:       map[string]bool{"--bare": true, "--mirror": true, "-v": true, "-q": true, "--all": true, "--tags": true, "--force": true, "-f": true, "--recurse-submodules": true},
 		Render:          map[Role]string{},
 		HostPositional:  true,
 		HostRequiresURL: true,
@@ -246,7 +287,7 @@ var commandSpecs = map[string]CommandSpec{
 	},
 	"redis-cli": {
 		Realm: RealmRedis,
-		Flags: map[string]Role{"-h": RoleJump, "-p": RolePort, "-n": RoleDatabase, "--user": RoleUser},
+		Flags: map[string]Role{"-h": RoleHost, "-p": RolePort, "-n": RoleDatabase, "--user": RoleUser},
 		BoolFlags: map[string]bool{
 			"--askpass": true, "--tls": true, "--no-auth-warning": true, "-c": true,
 		},
@@ -255,26 +296,73 @@ var commandSpecs = map[string]CommandSpec{
 		// are exactly the argv-carries-a-secret case this deny-list exists for.
 		SecretFlags:    map[string]bool{"-a": true, "--pass": true, "-u": true},
 		HostPositional: false,
+		EntityFrom:     RoleHost,
 	},
-	"curl": {
-		Realm:          RealmHTTP,
-		Flags:          map[string]Role{},
-		SecretFlags:    map[string]bool{"-u": true, "--user": true, "-H": true, "--header": true},
-		Render:         map[Role]string{},
-		HostPositional: false,
+	// podman is the name that ACTUALLY ARRIVES on a bashy shell: the `docker`
+	// shim does not re-spell the command, it replaces it with `bashy podman`.
+	// Both spellings are registered because both are real — `podman` is what the
+	// shim produces, `docker` is what a directly-invoked binary is called.
+	"podman":  dockerSpec,
+	"docker":  dockerSpec,
+	"kubectl": kubectlSpec,
+}
+
+// dockerSpec is shared by the two names above.
+var dockerSpec = CommandSpec{
+	// A daemon endpoint, not a login: the credential is a TLS cert or an
+	// ssh key held elsewhere, so nothing here shares a realm with anything
+	// else. What it contributes is the endpoint's port, learned from the
+	// URL — and, more usefully, the fact that a machine runs a daemon at all.
+	Realm: RealmDocker,
+	Flags: map[string]Role{"-H": RoleHost, "--host": RoleHost},
+	// `docker -H ssh://user@build-host` really does use the ssh credential,
+	// but docker declares ONE realm and folding ssh into it would let a
+	// docker fact answer an ssh question. Restricting to tcp keeps the
+	// realm honest; the same invocation's ssh facts are better learned from
+	// ssh itself, which is where they will render correctly anyway.
+	Schemes:    map[string]bool{"tcp": true},
+	ValueFlags: map[string]bool{"--context": true, "--config": true, "-c": true, "--log-level": true},
+	BoolFlags:  map[string]bool{"--debug": true, "-D": true, "--tls": true, "--tlsverify": true},
+	// docker cannot express a port apart from rebuilding the whole -H URL,
+	// so it gives facts and takes none.
+	Render:         map[Role]string{},
+	HostPositional: false,
+	EntityFrom:     RoleHost,
+}
+
+var kubectlSpec = CommandSpec{
+	// THE ENTITY IS THE CONTEXT, NOT A HOST, and that is the whole reason
+	// this entry needed a design decision rather than another table row. A
+	// cluster is reached through kubeconfig; no hostname appears in a normal
+	// invocation, and the credential belongs to the context. So the target
+	// is a SERVICE named by --context, and the useful fact about it is the
+	// namespace — the thing agents forget most.
+	//
+	// Two honest limits, both worth knowing before trusting this:
+	//
+	//   - With no --context there is no entity and nothing is learned. The
+	//     current context could only be found by running kubectl, which
+	//     this package must not do.
+	//   - A context has MANY namespaces and the store holds one value per
+	//     slot, so what comes back is the most recent. That is a useful
+	//     default and not a complete answer, and it is why the suggestion
+	//     only ever fires on a failure that did not name one.
+	Realm: RealmKube,
+	Flags: map[string]Role{
+		"-n": RoleNamespace, "--namespace": RoleNamespace,
+		"--context": RoleContext,
 	},
-	"wget": {
-		Realm: RealmHTTP,
-		Flags: map[string]Role{},
-		SecretFlags: map[string]bool{
-			"--user": true, "--password": true,
-			"--http-user": true, "--http-password": true,
-			"--ftp-user": true, "--ftp-password": true,
-			"--header": true,
-		},
-		Render:         map[Role]string{},
-		HostPositional: false,
-	},
+	// Deliberately no ValueFlags. kubectl's grammar changes per subcommand
+	// — `-f` is a filename for apply and a follow switch for logs — and
+	// guessing wrong there consumes the next word. Since positionals are
+	// discarded anyway (the entity comes from a flag), leaving them
+	// undeclared is strictly safer: an undeclared flag is skipped and its
+	// value becomes an ignored positional, which is correct under both
+	// readings.
+	Render:         map[Role]string{RoleNamespace: "-n"},
+	HostPositional: false,
+	EntityFrom:     RoleContext,
+	EntityKind:     EntityService,
 }
 
 // SpecFor returns what is known about a command's arguments.
@@ -400,14 +488,46 @@ func Extract(argv []string) (Extraction, bool) {
 			}
 			break
 		}
-	} else if h, hasHost := out.Roles[RoleJump]; hasHost {
-		// For commands where the host arrives as a flag (-h), that flag IS the
-		// entity rather than a jump host.
-		out.Entity = Entity{Kind: EntityHost, Name: h}
-		delete(out.Roles, RoleJump)
+	} else if spec.EntityFrom != "" {
+		if v, named := out.Roles[spec.EntityFrom]; named {
+			out.Entity = entityFromValue(spec, v)
+			// Whatever named the target is consumed into it. Keeping it as a
+			// fact would record that a thing is itself.
+			delete(out.Roles, spec.EntityFrom)
+			// A flag value can carry more than the name (`-H tcp://host:2375`),
+			// and the extra should not be thrown away just because it arrived
+			// inside a URL.
+			if _, already := out.Roles[RolePort]; !already && out.Entity.Kind == EntityHost {
+				if _, _, port := splitTarget(v); port != "" {
+					out.Roles[RolePort] = port
+				}
+			}
+		}
 	}
 
 	return out, out.Entity.Valid() && len(out.Roles) > 0
+}
+
+// entityFromValue turns a flag value into the entity it names.
+//
+// The kind decides how much grammar to assume. A HOST has one and it is worth
+// parsing: `-H tcp://build-host:2375` names a machine and a port. Everything
+// else is an opaque token — a cluster context named `user@cluster` or
+// `gke_proj_zone_cluster` is one string, and applying host grammar to it would
+// truncate it at the `@` and bind facts to a name nobody can look up.
+func entityFromValue(spec CommandSpec, value string) Entity {
+	kind := spec.EntityKind
+	if kind == "" {
+		kind = EntityHost
+	}
+	if kind != EntityHost {
+		return Entity{Kind: kind, Name: strings.TrimSpace(value)}
+	}
+	if !schemeAllowed(spec, value) {
+		return Entity{}
+	}
+	host, _, _ := splitTarget(value)
+	return Entity{Kind: kind, Name: host}
 }
 
 // remoteOperands narrows positionals to the ones that can name a remote target.

@@ -149,14 +149,14 @@ func TestExtract_ValueFlagsConsumeTheirValue(t *testing.T) {
 	}
 }
 
-// A PASSWORD IN argv IS THE HAZARD, whether or not the fact ever travels. These
-// commands earn their table entry on the deny-list alone.
+// A PASSWORD IN argv IS THE HAZARD. The deny-list refuses the value at
+// extraction rather than filtering it downstream, because filtering later would
+// mean the secret had already been read into something that could store it.
 func TestExtract_SecretsNeverCaptured(t *testing.T) {
 	cases := [][]string{
 		{"redis-cli", "-h", "cache-host", "-p", "6380", "-a", "hunter2"},
 		{"redis-cli", "-u", "redis://user:hunter2@cache-host:6380"},
-		{"wget", "--password", "hunter2", "https://example.test/f"},
-		{"wget", "--password=hunter2", "https://example.test/f"},
+		{"mysql", "-h", "db-host", "--password=hunter2"},
 		{"git", "clone", "ssh://xuser:hunter2@remote-host:2222/r.git"},
 	}
 	for _, argv := range cases {
@@ -175,7 +175,7 @@ func TestExtract_SecretsNeverCaptured(t *testing.T) {
 // The `--flag=value` spelling must reach the SAME deny-list as the separate
 // form. Filtering it later would mean the secret had already been read.
 func TestExtract_AttachedLongFormSecretIsCounted(t *testing.T) {
-	x, _ := Extract([]string{"wget", "--http-password=hunter2", "https://example.test/f"})
+	x, _ := Extract([]string{"redis-cli", "-h", "cache-host", "--pass=hunter2"})
 	if x.Redacted == 0 {
 		t.Error("--flag=value secret was not refused by the deny-list")
 	}
@@ -303,6 +303,118 @@ func TestDeclaredSourceRealms_HaveConsumers(t *testing.T) {
 	}
 }
 
+// THE DESIGN DECISION THIS SPEC ENCODES. kubectl's target is a CONTEXT, not a
+// host: a cluster is reached through kubeconfig and no hostname appears in a
+// normal invocation. So the entity is a service, and the fact worth keeping is
+// the namespace — the thing that actually gets forgotten.
+func TestExtract_Kubectl(t *testing.T) {
+	x, ok := Extract([]string{"kubectl", "--context", "prod-cluster", "-n", "payments", "get", "pods"})
+	if !ok {
+		t.Fatalf("extraction failed: %+v", x)
+	}
+	if x.Entity.Kind != EntityService || x.Entity.Name != "prod-cluster" {
+		t.Errorf("entity = %+v, want service:prod-cluster", x.Entity)
+	}
+	if x.Roles[RoleNamespace] != "payments" {
+		t.Errorf("namespace = %q", x.Roles[RoleNamespace])
+	}
+	// The context NAMED the entity; keeping it as a fact would record that a
+	// thing is itself.
+	if _, kept := x.Roles[RoleContext]; kept {
+		t.Error("the context was kept as a fact about itself")
+	}
+	if got, ok := RenderRole("kubectl", RoleNamespace, "payments"); !ok || got != "-n payments" {
+		t.Errorf("render = %q ok=%v", got, ok)
+	}
+}
+
+// A cluster context is an OPAQUE TOKEN. Real ones look like `gke_proj_zone_x`
+// and `user@cluster` — applying host grammar would truncate the second at the
+// `@` and bind every fact to a name nobody can look up.
+func TestExtract_KubectlContextIsNotParsedAsAHost(t *testing.T) {
+	for _, ctx := range []string{"user@cluster.local", "gke_proj_us-east1_prod", "arn:aws:eks:us-east-1:1234:cluster/x"} {
+		x, ok := Extract([]string{"kubectl", "--context", ctx, "-n", "app", "get", "pods"})
+		if !ok {
+			t.Fatalf("%q: extraction failed", ctx)
+		}
+		if x.Entity.Name != ctx {
+			t.Errorf("context %q was rewritten to %q", ctx, x.Entity.Name)
+		}
+	}
+}
+
+// THE HONEST LIMIT, pinned so nobody later reads silence as a bug. Without
+// --context there is no entity: the current context could only be found by
+// running kubectl, which this package must not do.
+func TestExtract_KubectlWithoutContextLearnsNothing(t *testing.T) {
+	if x, ok := Extract([]string{"kubectl", "-n", "payments", "get", "pods"}); ok {
+		t.Errorf("extracted %+v with no context to bind it to", x)
+	}
+}
+
+// kubectl's grammar changes per subcommand — `-f` is a filename for apply and a
+// follow switch for logs. Leaving such flags undeclared is safer than guessing,
+// because an undeclared flag is skipped and its value becomes an ignored
+// positional, which is correct under BOTH readings.
+func TestExtract_KubectlAmbiguousFlagsDoNotShadowRoles(t *testing.T) {
+	for _, argv := range [][]string{
+		{"kubectl", "apply", "-f", "deploy.yaml", "--context", "prod-cluster", "-n", "app"},
+		{"kubectl", "logs", "-f", "mypod", "--context", "prod-cluster", "-n", "app"},
+		{"kubectl", "--context", "prod-cluster", "get", "pods", "-o", "wide", "-n", "app"},
+	} {
+		x, ok := Extract(argv)
+		if !ok || x.Entity.Name != "prod-cluster" || x.Roles[RoleNamespace] != "app" {
+			t.Errorf("%v: ok=%v entity=%q roles=%+v", argv, ok, x.Entity.Name, x.Roles)
+		}
+	}
+}
+
+func TestExtract_DockerEndpoint(t *testing.T) {
+	x, ok := Extract([]string{"docker", "-H", "tcp://build-host:2375", "ps"})
+	if !ok {
+		t.Fatalf("extraction failed: %+v", x)
+	}
+	if x.Entity.Kind != EntityHost || x.Entity.Name != "build-host" {
+		t.Errorf("entity = %+v, want host:build-host", x.Entity)
+	}
+	if x.Roles[RolePort] != "2375" {
+		t.Errorf("port = %q — the flag value carried it and it should not be thrown away", x.Roles[RolePort])
+	}
+	// docker cannot express a port apart from rebuilding the whole -H URL, so
+	// it gives facts and takes none.
+	if _, ok := RenderRole("docker", RolePort, "2375"); ok {
+		t.Error("docker rendered a port it cannot express")
+	}
+}
+
+// `docker -H ssh://user@host` really does use the ssh credential, but docker
+// declares ONE realm — folding ssh into it would let a docker fact answer an
+// ssh question.
+func TestExtract_DockerSSHSchemeIsRefused(t *testing.T) {
+	if x, ok := Extract([]string{"docker", "-H", "ssh://xuser@build-host", "ps"}); ok {
+		t.Errorf("extracted %+v across a realm boundary", x)
+	}
+	if Transfers(RolePort, "docker", "ssh") || Transfers(RolePort, "ssh", "docker") {
+		t.Error("docker and ssh are different credential worlds")
+	}
+	if Transfers(RoleNamespace, "kubectl", "docker") {
+		t.Error("kube and docker are different credential worlds")
+	}
+}
+
+// psql's -W forces a password PROMPT and takes no value. Declared as a secret
+// flag it ate the next argument, so `psql -W -U bob` quietly lost the role —
+// the kind of silent loss that looks like the feature simply not working.
+func TestExtract_PsqlDashWTakesNoValue(t *testing.T) {
+	x, ok := Extract([]string{"psql", "-h", "db-host", "-W", "-U", "bob", "-d", "sales"})
+	if !ok {
+		t.Fatalf("extraction failed: %+v", x)
+	}
+	if x.Roles[RoleUser] != "bob" || x.Roles[RoleDatabase] != "sales" {
+		t.Errorf("roles = %+v — -W must not consume the next flag", x.Roles)
+	}
+}
+
 // RATCHET. Every spec must be internally consistent, because each of these
 // mistakes fails SILENTLY — a role that cannot render, or a flag counted twice,
 // simply stops teaching, and nothing reports it.
@@ -332,8 +444,33 @@ func TestSpecs_Consistent(t *testing.T) {
 		if spec.HostRequiresURL && !spec.HostPositional {
 			t.Errorf("%s: HostRequiresURL is meaningless without HostPositional", name)
 		}
-		if len(spec.Schemes) > 0 && !spec.HostPositional {
-			t.Errorf("%s: Schemes is meaningless without HostPositional", name)
+		// Schemes applies wherever a HOST is parsed — as an operand or as a flag
+		// value. It is meaningless for an opaque-token entity, which is never
+		// parsed at all.
+		hostFromFlag := spec.EntityFrom != "" && (spec.EntityKind == "" || spec.EntityKind == EntityHost)
+		if len(spec.Schemes) > 0 && !spec.HostPositional && !hostFromFlag {
+			t.Errorf("%s: Schemes is meaningless where no host is parsed", name)
+		}
+		if spec.EntityFrom != "" && spec.HostPositional {
+			t.Errorf("%s: the target cannot arrive as both a flag and an operand", name)
+		}
+		if !spec.HostPositional && spec.EntityFrom == "" {
+			t.Errorf("%s: names no target — every fact it extracts would have nothing to bind to", name)
+		}
+		if _, isRole := spec.Flags[""]; isRole {
+			t.Errorf("%s: has an empty flag", name)
+		}
+		if spec.EntityFrom != "" {
+			found := false
+			for _, role := range spec.Flags {
+				if role == spec.EntityFrom {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s: EntityFrom is %s, which no flag produces — the entity would never be set", name, spec.EntityFrom)
+			}
 		}
 	}
 }
