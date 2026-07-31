@@ -33,6 +33,19 @@ jobs:
         run: |
           git config --global user.email ci@example.com
           git config --global user.name CI
+      # Formatting is platform-independent, so this runs on ONE leg — three
+      # would be waste, and the windows leg would additionally have to reason
+      # about line endings.
+      #
+      # It REPORTS and never rewrites, deliberately. gofmt changes doc-comment
+      # TEXT as well as whitespace (a pair of ASCII single-quotes becomes a
+      # curly closing quote), which has already silently corrupted a comment
+      # quoting shell syntax in this tree. An auto-fixing gate would land that
+      # class of change unreviewed, disguised as formatting.
+      - name: gofmt check (reports; never rewrites)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./scripts/fmtcheck.sh
       # The vendored external/ forks (ollama, podman) pull cgo + Apple MLX
       # (darwin-only) and are upstream's to test. Vet + test coreutils' OWN
       # packages on every platform — that pure-Go userland is the product.

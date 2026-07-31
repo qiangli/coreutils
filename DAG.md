@@ -13,6 +13,7 @@ bashy dag --list            # available targets
 bashy dag build             # build the multicall binary into ./bin
 bashy dag test              # test coreutils' own packages (CI scope)
 bashy dag crossvet          # cross-OS compile gate (windows/linux/darwin)
+bashy dag fmtcheck          # gofmt gate — reports, never rewrites
 bashy dag --json test       # machine-readable envelope for an agent
 ```
 
@@ -76,6 +77,28 @@ Effects: read
 
 ```bash
 scripts/crossvet.sh
+```
+
+### fmtcheck
+The formatting gate. **Reports; never rewrites** — and that is the whole
+design, not caution. gofmt changes doc-comment TEXT as well as whitespace:
+godoc's legacy typographic substitution turns a pair of ASCII single-quotes
+into a curly closing quote. That has already silently corrupted a comment in
+this tree which quoted shell syntax, leaving it documenting a form that does
+not exist. An auto-fixing gate lands that class of change unreviewed, wearing
+the disguise reviewers skim past.
+
+So the gate fails and a human decides. When a file legitimately cannot take
+gofmt's output, restructure it — move the literal into an indented doc-comment
+code block, where the characters survive verbatim.
+
+The body delegates to `scripts/fmtcheck.sh`, which is also what the CI ubuntu
+leg runs. One script, two callers. Tracked `.go` files only; `external/` is
+excluded as vendored upstream.
+Effects: read
+
+```bash
+scripts/fmtcheck.sh
 ```
 
 ### vet
