@@ -160,6 +160,7 @@ tree, and captures no diff.`,
 		newRecordCmd(o),
 		newDecideCmd(o),
 		newVerifyCmd(o),
+		newPingCmd(o),
 		newTranscriptCmd(o),
 		newWorkstreamCmd(o),
 	)
@@ -194,11 +195,7 @@ func SeatSummary(w io.Writer, dir string, base ...Option) error {
 	// believe the machine is unattended while somebody else is stewarding their
 	// own account. The distinction only matters on shared machines, which is
 	// exactly where getting it wrong costs the most.
-	host := hostLabel()
-	seat := host
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		seat = host + "/" + u.Username
-	}
+	seat := seatLabel()
 	if view.Authority.Vacant {
 		fmt.Fprintf(w, "%s has NO steward — the seat is open.\n", seat)
 		// The real flow is TWO steps, and saying otherwise sends someone into a
@@ -2472,4 +2469,52 @@ func seatHolderName() string {
 		return r.URN
 	}
 	return "steward"
+}
+
+// newPingCmd is how anything reaches this host's point of contact.
+func newPingCmd(o *opts) *cobra.Command {
+	var body, priority string
+	cmd := &cobra.Command{
+		Use:   "ping",
+		Short: "interrupt the steward holding this host's seat",
+		Long: `ping reaches the steward: the single point of contact for this login on this host.
+
+It addresses the SEAT, not the holder, so a message survives a handoff or a
+takeover — the holder changes, the responsibility does not. Sent to a name, a
+message would arrive for whoever held the seat when it was written.
+
+The bus carries it, and that is the half that is actually hard: an agent mid-turn
+cannot decide to go and look somewhere, so its sidecar holds the subscription off
+the critical path and hands it a buffer at a turn boundary. An interrupt that
+cannot be delivered is DEMOTED to a queued notification with a reason, never
+dropped.
+
+A seat that has not heartbeated still accepts a ping — the bus holds it — and the
+reply says so, because "queued" and "read" are different claims.`,
+		Example: "  bashy steward ping --body \"need the GPU for the incident\"\n" +
+			"  bashy steward ping --body \"can you release coreutils?\" --priority interrupt",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			line, err := Ping(o.dir, seatHolderName(), body, priority)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), line)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&body, "body", "", "what you need")
+	cmd.Flags().StringVar(&priority, "priority", "", "queued (default) or interrupt")
+	return cmd
+}
+
+// seatLabel is the human-readable name of this seat: which machine, which
+// login. Distinct from the scope id, which is what an ADDRESS needs — a person
+// reading "no steward" has to know which of their machines is being described.
+func seatLabel() string {
+	host := hostLabel()
+	if u, err := user.Current(); err == nil && strings.TrimSpace(u.Username) != "" {
+		return host + "/" + u.Username
+	}
+	return host
 }
