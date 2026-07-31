@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -97,6 +98,8 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 	history.Flags().StringVar(&histCapability, "capability", "", "pool evidence across implementations of this capability key")
 
 	var studyLicense, studyOrigin, studyRef string
+	var studyAgent, studyLang string
+	var studyBand int
 	var studyJSON bool
 	study := &cobra.Command{
 		Use:   "study <dir>",
@@ -116,17 +119,25 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 			"it is all-rights-reserved by default — and licence is read PER SKILL, never\n" +
 			"inherited from a repository.\n\n" +
 			"Prose with no contract is QUARANTINED, not guessed at: inventing a contract\n" +
-			"would file a skill under a promise nobody verified. Normalising prose into a\n" +
-			"typed skill needs a model and is not wired here yet.",
+			"would file a skill under a promise nobody verified.\n\n" +
+			"To decompose prose into a typed contract, pass --normalise-agent with the\n" +
+			"model's --band. This is the one step that genuinely needs a model, and it is\n" +
+			"the work worth paying for once: the contract it produces is checked for free\n" +
+			"by every later run. It requires band >= 3 and REFUSES below that — an\n" +
+			"under-banded decomposition is worse than none, because a plausible-but-wrong\n" +
+			"contract is a promise nobody verified that every later reader inherits.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStudy(cmd, cfg, args[0], Source{
 				Origin:  studyOrigin,
 				Ref:     studyRef,
 				License: studyLicense,
-			}, studyJSON)
+			}, studyJSON, studyAgent, studyBand, studyLang)
 		},
 	}
+	study.Flags().StringVar(&studyAgent, "normalise-agent", "", "headless agent CLI that decomposes prose into a typed contract; the prompt is appended as the last argument (e.g. \"claude -p\")")
+	study.Flags().IntVar(&studyBand, "band", 0, "capability band of the normalise-agent's model (must be >= 3; an unverified band is not a passing band)")
+	study.Flags().StringVar(&studyLang, "lang", "en", "source natural language of the prose (the canonical form is language-neutral)")
 	study.Flags().StringVar(&studyLicense, "license", "", "SPDX id these skills are under (required; absence is not permission)")
 	study.Flags().StringVar(&studyOrigin, "origin", "", "upstream repo or URL, recorded as provenance")
 	study.Flags().StringVar(&studyRef, "ref", "", "upstream commit sha, recorded as provenance")
@@ -136,7 +147,20 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 	return root
 }
 
-func runStudy(cmd *cobra.Command, cfg *config, dir string, src Source, asJSON bool) error {
+func runStudy(cmd *cobra.Command, cfg *config, dir string, src Source, asJSON bool, agent string, band int, lang string) error {
+	// Build the normaliser BEFORE reading anything. An under-banded or
+	// misconfigured agent must fail here, loudly and with nothing absorbed —
+	// not halfway through a run with part of a catalog already quarantined
+	// under a reason that blames the content rather than the configuration.
+	var norm Normaliser
+	if strings.TrimSpace(agent) != "" {
+		n, err := NewNormaliser(ExecCompleter(agent), NormaliserOptions{Band: band, Lang: lang})
+		if err != nil {
+			return err
+		}
+		norm = n
+	}
+
 	cands, err := LoadDir(dir, src)
 	if err != nil {
 		return fmt.Errorf("craft: reading %s: %w", dir, err)
@@ -157,7 +181,7 @@ func runStudy(cmd *cobra.Command, cfg *config, dir string, src Source, asJSON bo
 		}
 	}
 
-	rep := Study(cands, known, nil)
+	rep := Study(cands, known, norm)
 
 	if asJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
