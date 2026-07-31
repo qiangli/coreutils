@@ -213,7 +213,7 @@ func SeatSummary(w io.Writer, dir string, base ...Option) error {
 	switch view.Liveness {
 	case LivenessLive:
 		fmt.Fprintf(w, "  alive — reach them on bus %s before taking anything over\n\n",
-			role.Assignment{Kind: role.Steward, Ref: host}.Topic())
+			stewardAssignment().Topic())
 	case LivenessVacant:
 		fmt.Fprintf(w, "  the journal says vacant — bashy steward claim\n\n")
 	default:
@@ -2398,8 +2398,36 @@ var (
 )
 
 // hostAssignment is this host's steward seat as a role assignment.
-func hostAssignment() role.Assignment {
-	return role.Assignment{Kind: role.Steward, Ref: hostLabel(), Title: "host steward"}
+// stewardAssignment addresses the steward as the USER'S TWIN, not as a machine.
+//
+// The topic is keyed on the login, deliberately. A steward is the person's
+// digital twin — the thing that acts on their behalf and the messenger every
+// other agent routes through — so "reach the user" must not require knowing
+// which of their machines they happen to be at. Keyed on the hostname (as this
+// first was), an agent wanting the user would have to guess the host, and guess
+// again when they moved.
+//
+// This is the half of the twin model that the SEAT deliberately does not carry.
+// The seat is a local resource with a single live holder, a heartbeat and a
+// fencing epoch, so it stays per (machine, account) — merging it across
+// machines produces two live holders in one epoch ladder, which is a fencing
+// war rather than a twin (see TestSharedHomeDoesNotMergeSeatsAcrossMachines).
+// The ADDRESS has no such constraint: nothing about a topic requires one
+// listener on one box, so it can name the person while the seat names the
+// place.
+func stewardAssignment() role.Assignment {
+	return role.Assignment{Kind: role.Steward, Ref: stewardUserRef(), Title: "digital twin"}
+}
+
+// stewardUserRef is the stable, readable name of the person this twin serves.
+//
+// It comes from the OS, never the environment, for the same reason the scope
+// does: an address an agent can set is an address an agent can impersonate.
+func stewardUserRef() string {
+	if u, err := user.Current(); err == nil && strings.TrimSpace(u.Username) != "" {
+		return slug(u.Username)
+	}
+	return slug(accountLabel(Self().Name))
 }
 
 // assumeSeatRoom opens the steward's room, returning a line to print.
@@ -2411,9 +2439,9 @@ func assumeSeatRoom(holder string) string {
 	if OpenRoom == nil {
 		return ""
 	}
-	c, err := OpenRoom(hostAssignment(), holder)
+	c, err := OpenRoom(stewardAssignment(), holder)
 	if err != nil {
-		return fmt.Sprintf("  no room (%v) — reachable on bus %s only\n", err, hostAssignment().Topic())
+		return fmt.Sprintf("  no room (%v) — reachable on bus %s only\n", err, stewardAssignment().Topic())
 	}
 	if err := saveSeatContact(c); err != nil {
 		return fmt.Sprintf("  room open at %s but not recorded (%v)\n", c.String(), err)

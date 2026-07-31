@@ -2,6 +2,7 @@ package steward
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -62,5 +63,30 @@ func TestSeatRoom_HookIsUsedAndFailuresAreReported(t *testing.T) {
 	}
 	if c, _ := loadSeatContact(); c != nil {
 		t.Error("the address must be forgotten after release")
+	}
+}
+
+// THE ADDRESS NAMES THE PERSON; THE SEAT NAMES THE PLACE.
+//
+// A steward is the user's digital twin and the messenger every other agent
+// routes through, so "reach the user" must not require knowing which of their
+// machines they are at. The SEAT stays per (machine, account) — it has one live
+// holder, a heartbeat and a fencing epoch, and merging that across machines is
+// a fencing war rather than a twin. A topic has no such constraint.
+func TestStewardAddress_NamesTheUserNotTheHost(t *testing.T) {
+	topic := stewardAssignment().Topic()
+	if !strings.HasPrefix(topic, "steward.") {
+		t.Fatalf("topic = %q, want a steward topic", topic)
+	}
+	if h, err := os.Hostname(); err == nil && h != "" {
+		if strings.Contains(topic, strings.ToLower(h)) {
+			t.Errorf("topic %q is keyed on the HOST — an agent wanting the user "+
+				"would have to know which machine they are at, and guess again when they move", topic)
+		}
+	}
+	// And it is stable: an address that moved would strand every message in
+	// flight to it.
+	if stewardAssignment().Topic() != topic {
+		t.Error("the twin's address must be deterministic")
 	}
 }
