@@ -98,8 +98,13 @@ stricter, because it is one more thing the scrubber can recognise.
 
 Numbers are deliberately not collected. CPU load and bytes free are telemetry,
 not vocabulary; ` + "`bashy resources`" + ` already reports them.`,
-		Example: `  bashy define study            # collect, record, and report
-  bashy define study --dry-run  # show what WOULD be collected`,
+		// `bashy lexicon study`, NOT `bashy define study` — the latter asks what
+		// the WORD "study" means, and always will. `define` takes an arbitrary
+		// token and therefore has no subcommands; an example that spells it the
+		// other way teaches the one mistake this command tree is shaped to
+		// prevent.
+		Example: `  bashy lexicon study            # collect, record, and report
+  bashy lexicon study --dry-run  # show what WOULD be collected`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			inv, found := Discover(CollectOptions{})
 
@@ -191,8 +196,20 @@ somewhere permanent.`,
   bashy define WEAVE_AGENT    # an environment variable this fleet sets
   bashy define outpost        # a local command, outside the standard userland
   bashy define sk-proj-...    # classified as a credential, and not echoed`,
-		Args: cobra.ExactArgs(1),
+		// MaximumNArgs, not ExactArgs: `--list-kinds` takes no term, and under
+		// ExactArgs it could not be reached at all — `bashy define --list-kinds`
+		// failed with "accepts 1 arg(s), received 0". That is the flag the
+		// unknown-term advice points a caller at, so the one path out of "I
+		// don't know" ended in a usage error.
+		//
+		// Still NO subcommands, and that is unrelated to arity: the argument is
+		// an arbitrary token either way.
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 && !listKinds {
+				return fmt.Errorf("define needs exactly one term — the word to look up " +
+					"(`--list-kinds` lists the namespaces this host can answer for instead)")
+			}
 			s := buildFull(opts)
 			if listKinds {
 				fmt.Fprintln(cmd.OutOrStdout(), strings.Join(s.Kinds(), "\n"))

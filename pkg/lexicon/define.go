@@ -128,10 +128,17 @@ func (s *Store) DefineKinds(term string, kinds []Kind) Definition {
 				"Drop the filter to see whether it is known as something else.",
 		}
 	}
+	// The advice names the namespaces this host CAN answer for, not just the
+	// project vocabulary: `lexicon list` shows only the registry projections
+	// (verbs, bindings, skills), so pointing a caller there after an unknown
+	// env var or command sends them somewhere the answer could never have been.
+	// Saying "I don't know" is only useful when it comes with what IS known.
 	return Definition{
 		Term: t,
-		Advice: "not a known term on this host. It may be ordinary English, or " +
-			"jargon this host has no registry for — `bashy lexicon list` shows what IS known.",
+		Advice: "not a known term on this host. It may be ordinary English, or jargon " +
+			"this host has no registry for — `bashy define --list-kinds` shows every " +
+			"namespace this host can answer for, and `bashy lexicon list` the project's " +
+			"own vocabulary.",
 	}
 }
 

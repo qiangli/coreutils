@@ -58,6 +58,11 @@ const (
 	KindPathSegment  Kind = "path-segment"  // a directory name that carries local meaning
 	KindStandardTool Kind = "standard-tool" // part of the pure-Go userland, standard everywhere
 	KindAlias        Kind = "alias"         // a shell alias defined in this host's rc files
+	// KindStandardEnvVar is an environment variable from the POSIX/ubiquitous
+	// set that is actually SET on this host. Not local jargon — and that is
+	// precisely why it is projected, for the same reason KindStandardTool is: a
+	// resolver that answers "unknown here" for PATH is wrong on its own terms.
+	KindStandardEnvVar Kind = "standard-env-var"
 )
 
 const (
@@ -70,6 +75,9 @@ const (
 	aliasScopeNote = "A shell alias defined on THIS host. Typing the name does NOT run the " +
 		"command of the same name — it runs the expansion, which may add flags that change " +
 		"behaviour substantially."
+	standardEnvScopeNote = "A standard environment variable, present on almost every POSIX " +
+		"host — not local jargon. The NAME is the term; its value is not recorded here, and " +
+		"on this host it may be anything."
 )
 
 // SystemInventory is the enumerated term set. It holds NAMES only.
@@ -78,9 +86,22 @@ const (
 // Enforcing the keys-only rule in the type is what makes it hold under later
 // edits, rather than depending on every future caller remembering it.
 type SystemInventory struct {
-	EnvVars      []string `json:"env_vars,omitempty"`
-	Commands     []string `json:"commands,omitempty"`
-	PathSegments []string `json:"path_segments,omitempty"`
+	EnvVars []string `json:"env_vars,omitempty"`
+	// StandardEnvVars are the keys from the POSIX/ubiquitous set that this host
+	// actually SETS. They are not jargon, and they are collected for the same
+	// reason the standard userland is: `define` is asked "what is PATH" far more
+	// often than it is asked about any fleet variable, and answering "unknown
+	// here" for the most standard name on the machine reads as a broken tool
+	// rather than as the honest silence it is meant to be.
+	//
+	// Kept in a SEPARATE field rather than merged into EnvVars because the
+	// glossary and the resolver want different sets: `lexicon emit` teaches
+	// local jargon and must not spend its ~15-term budget on HOME, while
+	// `define` must answer for both. One list could not serve both without a
+	// caller-side filter, and a filter is what goes out of date.
+	StandardEnvVars []string `json:"standard_env_vars,omitempty"`
+	Commands        []string `json:"commands,omitempty"`
+	PathSegments    []string `json:"path_segments,omitempty"`
 	// Interfaces and Mounts come from Discover, which asks the OS rather than
 	// the shell. Names only — an interface's ADDRESSES are identity and are
 	// returned separately as Discoveries.
@@ -158,8 +179,14 @@ func Enumerate(o EnumOptions) SystemInventory {
 		if !ok {
 			continue
 		}
-		if name := strings.TrimSpace(k); isLocalEnvVar(name) {
+		// Two buckets, one pass. Which bucket a key lands in is decided by the
+		// closed standard set, never by the key's shape — so a name cannot be
+		// promoted to "standard" by looking ordinary.
+		switch name := strings.TrimSpace(k); {
+		case isLocalEnvVar(name):
 			inv.EnvVars = appendUnique(inv.EnvVars, name)
+		case isStandardEnvVar(name):
+			inv.StandardEnvVars = appendUnique(inv.StandardEnvVars, name)
 		}
 	}
 
@@ -221,6 +248,14 @@ func Enumerate(o EnumOptions) SystemInventory {
 	// --- identity filter. A home directory's own path contains a username, so
 	// without this the "path segments" of any real machine include the operator's
 	// login. Applied last, over everything, so no enumerator can bypass it.
+	//
+	// StandardEnvVars is deliberately NOT filtered. It is a compile-time closed
+	// set that contains no identity by construction, and running the scrubber
+	// over it can only ever REMOVE a true answer: the scrubber matches this
+	// host's own login and hostname case-insensitively, so an operator whose
+	// username happens to be `term` or `home` would silently lose `TERM` and
+	// `HOME` from the resolver. Filtering a set that cannot leak buys nothing
+	// and costs correctness.
 	if o.Scrubber != nil {
 		inv.EnvVars = dropIdentifying(o.Scrubber, inv.EnvVars)
 		inv.Commands = dropIdentifying(o.Scrubber, inv.Commands)
@@ -228,6 +263,7 @@ func Enumerate(o EnumOptions) SystemInventory {
 	}
 
 	sort.Strings(inv.EnvVars)
+	sort.Strings(inv.StandardEnvVars)
 	sort.Strings(inv.Commands)
 	sort.Strings(inv.PathSegments)
 	return inv
@@ -285,15 +321,21 @@ func parseAliases(path string) map[string]string {
 }
 
 func isLocalEnvVar(name string) bool {
-	if name == "" || standardEnvVars[name] {
-		return false
-	}
-	// LC_* and similar locale families are standard by prefix.
-	if strings.HasPrefix(name, "LC_") {
+	if name == "" || isStandardEnvVar(name) {
 		return false
 	}
 	// A single letter is not a term.
 	return len(name) >= 3
+}
+
+// isStandardEnvVar reports a key from the POSIX/ubiquitous set — the exact
+// complement of isLocalEnvVar's first rejection, factored out so the two can
+// never disagree about what "standard" means. When they disagreed, a key could
+// be rejected as jargon by one and not recognised as standard by the other, and
+// it would simply vanish.
+func isStandardEnvVar(name string) bool {
+	// LC_* and similar locale families are standard by prefix.
+	return standardEnvVars[name] || strings.HasPrefix(name, "LC_")
 }
 
 func isLocalCommandName(name string) bool {
@@ -329,6 +371,18 @@ func (s *Store) AddSystem(inv SystemInventory, ov Overlay) {
 			ID: "env:" + name, Kind: KindEnvVar, PrefLabel: name,
 			Definition: "an environment variable set on this host or by this fleet",
 			ScopeNote:  envScopeNote,
+			Source:     "system:env",
+		}, ov)
+	}
+	// The standard ones share the `env:` id namespace with the local ones. They
+	// cannot collide — Enumerate puts every key in exactly one bucket — and one
+	// namespace is what makes `bashy define env:PATH` work without the caller
+	// having to know which bucket a name fell into.
+	for _, name := range inv.StandardEnvVars {
+		s.add(Concept{
+			ID: "env:" + name, Kind: KindStandardEnvVar, PrefLabel: name,
+			Definition: "a standard environment variable, set on this host",
+			ScopeNote:  standardEnvScopeNote,
 			Source:     "system:env",
 		}, ov)
 	}

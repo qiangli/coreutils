@@ -53,6 +53,43 @@ func TestEnumerate_SubtractsStandardEnvVars(t *testing.T) {
 	}
 }
 
+// Subtracted from the GLOSSARY, kept for the RESOLVER. The two want different
+// sets and the split is the whole point: emit teaches jargon, define answers
+// questions — and "what is PATH" is a question a host must be able to answer.
+func TestEnumerate_StandardEnvVarsAreKeptSeparately(t *testing.T) {
+	inv := Enumerate(EnumOptions{
+		Environ: []string{
+			"PATH=/usr/bin", "HOME=/home/x", "LC_ALL=C", "WEAVE_AGENT=elif",
+		},
+	})
+
+	wantStd := []string{"HOME", "LC_ALL", "PATH"}
+	if !slices.Equal(inv.StandardEnvVars, wantStd) {
+		t.Errorf("StandardEnvVars = %v, want %v", inv.StandardEnvVars, wantStd)
+	}
+	if slices.Contains(inv.EnvVars, "PATH") {
+		t.Error("a standard key leaked into the local-jargon bucket")
+	}
+	// Keys only, here too: the bucket a name lands in must not change the rule.
+	for _, term := range inv.StandardEnvVars {
+		for _, leak := range []string{"/usr/bin", "/home/x", "C"} {
+			if term == leak {
+				t.Fatalf("an env VALUE %q was collected as a standard term", leak)
+			}
+		}
+	}
+}
+
+// A standard key that this host does NOT set is not a term here. Enumeration is
+// what makes every answer real by construction; emitting the whole standard set
+// unconditionally would be a hard-coded list wearing an inventory's name.
+func TestEnumerate_UnsetStandardEnvVarsAreNotCollected(t *testing.T) {
+	inv := Enumerate(EnumOptions{Environ: []string{"PATH=/usr/bin"}})
+	if slices.Contains(inv.StandardEnvVars, "HOME") {
+		t.Error("HOME was collected although this environment does not set it")
+	}
+}
+
 // Standard userland commands are subtracted; what remains is local.
 func TestEnumerate_SubtractsKnownCommands(t *testing.T) {
 	if runtime.GOOS == "windows" {

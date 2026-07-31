@@ -1,6 +1,7 @@
 package lexicon
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -11,9 +12,10 @@ func testStore(t *testing.T) *Store {
 	s := &Store{byTerm: map[string]int{}, byTermAll: map[string][]int{}}
 	s.AddStandardTools([]string{"ls", "grep"}, Overlay{})
 	s.AddSystem(SystemInventory{
-		EnvVars:      []string{"WEAVE_AGENT"},
-		Commands:     []string{"outpost", "dragon"},
-		PathSegments: []string{"dhnt", "dragon"}, // dragon is BOTH — the ambiguous case
+		EnvVars:         []string{"WEAVE_AGENT"},
+		StandardEnvVars: []string{"HOME", "PATH"},
+		Commands:        []string{"outpost", "host-a"},
+		PathSegments:    []string{"dhnt", "host-a"}, // host-a is BOTH — the ambiguous case
 	}, Overlay{})
 	return s
 }
@@ -34,12 +36,59 @@ func TestDefine_AnswersForStandardTools(t *testing.T) {
 	}
 }
 
+// The same gap, one layer over: `define PATH` answered "unknown here" from a
+// fully populated host, because the enumerator subtracts the standard set to
+// keep the GLOSSARY free of noise and the RESOLVER inherited that subtraction.
+// The most standard name on the machine is also the one most often asked about.
+func TestDefine_AnswersForStandardEnvVars(t *testing.T) {
+	for _, name := range []string{"PATH", "HOME"} {
+		d := testStore(t).Define(name)
+		if !d.Found {
+			t.Fatalf("%s was not found: %+v", name, d)
+		}
+		if d.Concept.Kind != KindStandardEnvVar {
+			t.Errorf("%s: kind = %s, want %s", name, d.Concept.Kind, KindStandardEnvVar)
+		}
+		if !strings.Contains(d.Concept.ScopeNote, "not local jargon") {
+			t.Errorf("%s: the scope note should distinguish standard from local: %q",
+				name, d.Concept.ScopeNote)
+		}
+	}
+	// The local bucket keeps its own kind — the two must stay distinguishable,
+	// because "this fleet sets it" and "every host has it" are different facts.
+	if d := testStore(t).Define("WEAVE_AGENT"); d.Concept.Kind != KindEnvVar {
+		t.Errorf("local env var kind = %s, want %s", d.Concept.Kind, KindEnvVar)
+	}
+}
+
+// The SEAM, on the live machine. The two halves above are injected, and both
+// passed while `bashy define PATH` on a fully populated host still answered
+// "unknown here" — because the wiring between them dropped the set. A test that
+// only ever sees synthetic input cannot see that, so this one runs the real
+// enumerator, including the host scrubber, against the one environment variable
+// every machine has.
+func TestEnumerateHost_FeedsDefineOnThisMachine(t *testing.T) {
+	if os.Getenv("PATH") == "" {
+		t.Skip("no PATH in this environment; nothing to enumerate")
+	}
+	s := &Store{byTerm: map[string]int{}, byTermAll: map[string][]int{}}
+	s.AddSystem(EnumerateHost(nil, nil), Overlay{})
+
+	d := s.Define("PATH")
+	if !d.Found {
+		t.Fatalf("PATH is set on this host but define does not know it: %+v", d)
+	}
+	if d.Concept.Kind != KindStandardEnvVar {
+		t.Errorf("kind = %s, want %s", d.Concept.Kind, KindStandardEnvVar)
+	}
+}
+
 // One string genuinely IS several things on a real host. Reporting only the
 // first is how a caller confidently acts in the wrong world.
 func TestDefine_ReportsEveryReading(t *testing.T) {
-	d := testStore(t).Define("dragon")
+	d := testStore(t).Define("host-a")
 	if !d.Found {
-		t.Fatal("dragon was not found")
+		t.Fatal("host-a was not found")
 	}
 	if len(d.Concepts) != 2 {
 		t.Fatalf("got %d readings, want 2 (a command AND a path segment): %+v", len(d.Concepts), d.Concepts)
@@ -71,14 +120,14 @@ func TestDefine_SingleReading(t *testing.T) {
 func TestDefineKinds_Filter(t *testing.T) {
 	s := testStore(t)
 
-	only := s.DefineKinds("dragon", []Kind{KindCommand})
+	only := s.DefineKinds("host-a", []Kind{KindCommand})
 	if len(only.Concepts) != 1 || only.Concepts[0].Kind != KindCommand {
 		t.Fatalf("filtered result = %+v, want exactly the command reading", only.Concepts)
 	}
 
 	// Asking for a kind the term does not have is "not known AS THAT" — a
 	// different and more useful statement than "not known".
-	none := s.DefineKinds("dragon", []Kind{KindVerb})
+	none := s.DefineKinds("host-a", []Kind{KindVerb})
 	if none.Found {
 		t.Error("a filter invented a reading the term does not have")
 	}
@@ -154,7 +203,7 @@ func TestDefine_Empty(t *testing.T) {
 // cannot drift from what the host can actually answer for.
 func TestStore_Kinds(t *testing.T) {
 	got := testStore(t).Kinds()
-	for _, want := range []string{"command", "env-var", "path-segment", "standard-tool"} {
+	for _, want := range []string{"command", "env-var", "path-segment", "standard-tool", "standard-env-var"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("Kinds() = %v, missing %q", got, want)
 		}
@@ -183,5 +232,88 @@ func TestDefineCmd_HasNoSubcommands(t *testing.T) {
 		}
 		t.Fatalf("define has subcommands %v — each one steals that word from the vocabulary; "+
 			"put the action under `lexicon` instead", names)
+	}
+}
+
+// `define study` must keep meaning "what is the word study".
+//
+// The companion to the ratchet above, asserted through the command rather than
+// its shape: a subcommand would make cobra intercept the token before Args ever
+// ran, and the caller would get a help screen instead of an answer. Asserting
+// the shape alone would not catch a `study` mounted on a PARENT that passes
+// through.
+func TestDefineCmd_TreatsAVerbNameAsAWord(t *testing.T) {
+	cmd := NewDefineCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"study"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("define study: %v", err)
+	}
+	if strings.Contains(out.String(), "Usage:") {
+		t.Fatalf("`define study` printed a help screen — the word is no longer definable:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "study") {
+		t.Errorf("the answer does not mention the term asked about:\n%s", out.String())
+	}
+}
+
+// The way OUT of "unknown here" has to work.
+//
+// The unknown-term advice names `define --list-kinds` as the place to look, and
+// under ExactArgs(1) that command answered "accepts 1 arg(s), received 0" — so
+// the honest "I don't know" pointed at a dead end, which is a worse failure
+// than the unknown answer it was trying to soften.
+func TestDefineCmd_ListKindsNeedsNoTerm(t *testing.T) {
+	cmd := NewDefineCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--list-kinds"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("define --list-kinds: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), string(KindStandardTool)) {
+		t.Errorf("--list-kinds did not name the namespaces:\n%s", out.String())
+	}
+}
+
+// ...but a bare `define` with no term is still an error, said plainly. The
+// relaxed arity is for the flag, not a licence to answer nothing.
+func TestDefineCmd_BareInvocationIsAnError(t *testing.T) {
+	cmd := NewDefineCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(nil)
+	if err := cmd.Execute(); err == nil {
+		t.Fatalf("bare `define` succeeded:\n%s", out.String())
+	}
+}
+
+// The RENDERED answer is where a credential would actually leak — into a
+// terminal, a scrollback buffer, an agent transcript. Definition.Term being
+// empty is the mechanism; this is the property, asserted on both output modes
+// because --json is the one an agent pipes somewhere permanent.
+func TestDefineCmd_CredentialIsNotRenderedInEitherMode(t *testing.T) {
+	const key = "sk-proj-Ab3xK9mQ7zR2vN8pL4wT6yH1jF5dG0sE"
+	for _, args := range [][]string{{key}, {key, "--json"}} {
+		cmd := NewDefineCmd()
+		var out strings.Builder
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("define %v: %v", args, err)
+		}
+		if strings.Contains(out.String(), key) {
+			t.Fatalf("define %v echoed the credential:\n%s", args, out.String())
+		}
+		// Silence would be worse than useless here: "that is a credential" is
+		// the whole value of the answer.
+		if !strings.Contains(out.String(), "credential") {
+			t.Errorf("define %v did not classify the term:\n%s", args, out.String())
+		}
 	}
 }
