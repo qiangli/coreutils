@@ -6,6 +6,7 @@ package lexicon
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/atlas"
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
@@ -62,6 +64,8 @@ plainly, like any jargon. The marker is optional emphasis, never required syntax
 // burying it two words deep costs more than the namespace is worth.
 func NewDefineCmd(opts ...fleet.Option) *cobra.Command {
 	var asJSON bool
+	var kindFilter []string
+	var listKinds bool
 	cmd := &cobra.Command{
 		Use:   "define <term>",
 		Short: "what is this word on THIS system? (verb, agent, env var, command, path, address — or unknown)",
@@ -90,7 +94,16 @@ somewhere permanent.`,
   bashy define sk-proj-...    # classified as a credential, and not echoed`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d := buildFull(opts).Define(args[0])
+			s := buildFull(opts)
+			if listKinds {
+				fmt.Fprintln(cmd.OutOrStdout(), strings.Join(s.Kinds(), "\n"))
+				return nil
+			}
+			kinds := make([]Kind, 0, len(kindFilter))
+			for _, k := range kindFilter {
+				kinds = append(kinds, Kind(strings.TrimSpace(k)))
+			}
+			d := s.DefineKinds(args[0], kinds)
 			if asJSON {
 				b, _ := json.MarshalIndent(d, "", "  ")
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
@@ -103,25 +116,17 @@ somewhere permanent.`,
 				fmt.Fprintf(out, "‹not shown›  %s\n", d.Classification)
 				fmt.Fprintf(out, "  %s\n", d.Advice)
 			case d.Found:
-				c := d.Concept
-				fmt.Fprintf(out, "%s  (%s)\n", c.PrefLabel, c.Kind)
-				if c.Definition != "" {
-					fmt.Fprintf(out, "  %s\n", c.Definition)
+				// EVERY reading, not just the first: one string is often several
+				// things at once, and which one the caller meant is not ours to
+				// decide for them.
+				if len(d.Concepts) > 1 {
+					fmt.Fprintf(out, "%s is %d things here:\n\n", d.Term, len(d.Concepts))
 				}
-				if c.Host != "" {
-					fmt.Fprintf(out, "  host: %s\n", c.Host)
-				}
-				if len(c.AltLabels) > 0 {
-					fmt.Fprintf(out, "  also: %s\n", strings.Join(c.AltLabels, ", "))
-				}
-				if c.Use != "" {
-					fmt.Fprintf(out, "  use:  %s\n", c.Use)
-				}
-				if c.ScopeNote != "" {
-					fmt.Fprintf(out, "  note: %s\n", c.ScopeNote)
-				}
-				if c.Source != "" {
-					fmt.Fprintf(out, "  from: %s\n", c.Source)
+				for i, c := range d.Concepts {
+					if i > 0 {
+						fmt.Fprintln(out)
+					}
+					writeConcept(out, c)
 				}
 			case d.Classification != "":
 				fmt.Fprintf(out, "%s  — %s\n", d.Term, d.Classification)
@@ -134,7 +139,31 @@ somewhere permanent.`,
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable answer")
+	cmd.Flags().StringSliceVar(&kindFilter, "kind", nil, "only these namespaces (repeatable); --list-kinds shows what is available")
+	cmd.Flags().BoolVar(&listKinds, "list-kinds", false, "print the namespaces this host can answer for")
 	return cmd
+}
+
+func writeConcept(out io.Writer, c *Concept) {
+	fmt.Fprintf(out, "%s  (%s)\n", c.PrefLabel, c.Kind)
+	if c.Definition != "" {
+		fmt.Fprintf(out, "  %s\n", c.Definition)
+	}
+	if c.Host != "" {
+		fmt.Fprintf(out, "  host: %s\n", c.Host)
+	}
+	if len(c.AltLabels) > 0 {
+		fmt.Fprintf(out, "  also: %s\n", strings.Join(c.AltLabels, ", "))
+	}
+	if c.Use != "" {
+		fmt.Fprintf(out, "  use:  %s\n", c.Use)
+	}
+	if c.ScopeNote != "" {
+		fmt.Fprintf(out, "  note: %s\n", c.ScopeNote)
+	}
+	if c.Source != "" {
+		fmt.Fprintf(out, "  from: %s\n", c.Source)
+	}
 }
 
 // KnownCommands is set by the embedding shell: the standard command set to
@@ -156,11 +185,23 @@ func build(opts []fleet.Option) *Store {
 // registry declared.
 func buildFull(opts []fleet.Option) *Store {
 	s := build(opts)
+
+	// The standard userland. NOT jargon — and that is why it belongs: a verb
+	// called `define` that answers "unknown" for `ls` is wrong on its own terms.
+	s.AddStandardTools(atlas.ToolNames(), Overlay{})
+
 	roots := []string{}
 	if wd, err := os.Getwd(); err == nil {
 		roots = append(roots, wd)
 	}
-	s.AddSystem(EnumerateHost(roots, KnownCommands), Overlay{})
+	// The standard set is subtracted from the LOCAL command enumeration, so a
+	// name is either standard or peculiar to this host, never both. Sourced from
+	// the atlas directly rather than from the embedding shell: the atlas is
+	// ratcheted (its coverage tests fail the build when a tool has no entry), so
+	// it cannot fall behind, and nothing has to remember to wire it.
+	known := append(atlas.ToolNames(), atlas.VerbNames()...)
+	known = append(known, KnownCommands...)
+	s.AddSystem(EnumerateHost(roots, known), Overlay{})
 	return s
 }
 

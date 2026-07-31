@@ -52,9 +52,10 @@ import (
 
 // Kinds contributed by the system inventory.
 const (
-	KindEnvVar      Kind = "env-var"      // an environment variable NAME
-	KindCommand     Kind = "command"      // an executable on PATH that is not standard
-	KindPathSegment Kind = "path-segment" // a directory name that carries local meaning
+	KindEnvVar       Kind = "env-var"       // an environment variable NAME
+	KindCommand      Kind = "command"       // an executable on PATH that is not standard
+	KindPathSegment  Kind = "path-segment"  // a directory name that carries local meaning
+	KindStandardTool Kind = "standard-tool" // part of the pure-Go userland, standard everywhere
 )
 
 const (
@@ -265,6 +266,33 @@ func (s *Store) AddSystem(inv SystemInventory, ov Overlay) {
 			Definition: "a directory name carrying local meaning in this workspace",
 			ScopeNote:  pathScopeNote,
 			Source:     "system:path",
+		}, ov)
+	}
+	s.reindex()
+}
+
+// AddStandardTools projects the standard userland — the tools every bashy has,
+// as opposed to the local commands only this host has.
+//
+// They are NOT jargon, and that is exactly why they belong here. A verb called
+// `define` that answers "unknown" for `ls` is wrong on its own terms: `ls` is
+// applicable to this system, and an agent asking about it deserves the right
+// pointer rather than a shrug. Keeping them a distinct Kind preserves the
+// distinction that matters — standard everywhere vs peculiar to here — while
+// still answering the question.
+func (s *Store) AddStandardTools(names []string, ov Overlay) {
+	for _, name := range names {
+		n := strings.TrimSpace(name)
+		if n == "" {
+			continue
+		}
+		s.add(Concept{
+			ID: "tool:" + n, Kind: KindStandardTool, PrefLabel: n,
+			Definition: "a standard tool in bashy's pure-Go userland, run in-process",
+			ScopeNote: "Standard everywhere bashy runs — not local jargon. It resolves " +
+				"in-process rather than from PATH, so `which` may not find it.",
+			Use:    "bashy commands " + n,
+			Source: "atlas",
 		}, ov)
 	}
 	s.reindex()

@@ -34,6 +34,7 @@ package lexicon
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -43,8 +44,15 @@ type Definition struct {
 	// cannot be echoed back through a JSON pipeline or a log.
 	Term string `json:"term,omitempty"`
 	// Found reports a hit in a projected registry.
-	Found   bool     `json:"found"`
+	Found bool `json:"found"`
+	// Concept is the PRIMARY reading — the most authoritative one, first in
+	// projection order.
 	Concept *Concept `json:"concept,omitempty"`
+	// Concepts is every reading, because on a real host one string genuinely is
+	// several things at once: a name can be a username AND a hostname AND a
+	// command. Reporting only the first is how a caller confidently acts in the
+	// wrong world; the ambiguity is information, not noise to be resolved away.
+	Concepts []*Concept `json:"concepts,omitempty"`
 	// Classification describes the term's shape when it is not a known term.
 	Classification string `json:"classification,omitempty"`
 	// Advice is what to do about it.
@@ -72,8 +80,15 @@ var (
 	uuidish  = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 )
 
-// Define answers what a term means on this host.
-func (s *Store) Define(term string) Definition {
+// Define answers what a term means on this host, across every namespace.
+func (s *Store) Define(term string) Definition { return s.DefineKinds(term, nil) }
+
+// DefineKinds is Define restricted to certain kinds — the namespace filter.
+//
+// A filter NARROWS the answer; it never invents one. Asking for a kind the term
+// does not have yields "not known AS THAT", which is a different and more useful
+// statement than "not known".
+func (s *Store) DefineKinds(term string, kinds []Kind) Definition {
 	t := strings.TrimSpace(term)
 	if t == "" {
 		return Definition{Advice: "nothing to define"}
@@ -92,19 +107,74 @@ func (s *Store) Define(term string) Definition {
 		}
 	}
 
-	if c, ok := s.Resolve(t); ok {
-		return Definition{Term: t, Found: true, Concept: c}
+	all := filterKinds(s.ResolveAll(t), kinds)
+	if len(all) > 0 {
+		return Definition{Term: t, Found: true, Concept: all[0], Concepts: all}
 	}
 
-	if class, advice, ok := shapeOf(t); ok {
-		return Definition{Term: t, Classification: class, Advice: advice}
+	// A shape classification is about the STRING, so a kind filter does not
+	// apply to it — reporting "that is an IP address" when the caller asked for
+	// commands would answer a question nobody asked.
+	if len(kinds) == 0 {
+		if class, advice, ok := shapeOf(t); ok {
+			return Definition{Term: t, Classification: class, Advice: advice}
+		}
 	}
 
+	if len(kinds) > 0 {
+		return Definition{
+			Term: t,
+			Advice: "not known as " + kindList(kinds) + " on this host. " +
+				"Drop the filter to see whether it is known as something else.",
+		}
+	}
 	return Definition{
 		Term: t,
 		Advice: "not a known term on this host. It may be ordinary English, or " +
 			"jargon this host has no registry for — `bashy lexicon list` shows what IS known.",
 	}
+}
+
+// filterKinds narrows readings to the requested kinds; nil keeps everything.
+func filterKinds(in []*Concept, kinds []Kind) []*Concept {
+	if len(kinds) == 0 {
+		return in
+	}
+	want := make(map[Kind]bool, len(kinds))
+	for _, k := range kinds {
+		want[k] = true
+	}
+	out := in[:0:0]
+	for _, c := range in {
+		if want[c.Kind] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func kindList(kinds []Kind) string {
+	parts := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		parts = append(parts, string(k))
+	}
+	return strings.Join(parts, " or ")
+}
+
+// Kinds returns every kind the store currently holds, sorted — the closed
+// vocabulary a --kind filter may name, derived rather than hard-coded so it
+// cannot drift from what is actually projected.
+func (s *Store) Kinds() []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := range s.Concepts {
+		if k := string(s.Concepts[i].Kind); k != "" && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // credentialShape reports a term that looks like a secret.

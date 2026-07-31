@@ -115,6 +115,19 @@ type Concept struct {
 type Store struct {
 	Concepts []Concept `json:"concepts"`
 	byTerm   map[string]int
+	// byTermAll keeps EVERY concept a term denotes, where byTerm keeps only the
+	// first. Both are needed and they answer different questions.
+	//
+	// byTerm is "what does this word mean here" — one answer, first-writer-wins,
+	// which is what a resolver must give: a verb's own name is never stolen by a
+	// later binding that happens to share it.
+	//
+	// byTermAll is "what could this word be" — and on a real host one string
+	// genuinely IS several things at once. A name can be a username AND a
+	// hostname AND a command, and an agent that sees it in a log has no way to
+	// know which. Collapsing that to one answer is how a caller confidently
+	// picks the wrong world.
+	byTermAll map[string][]int
 }
 
 // Overlay is the ONLY hand-written input: the colloquialisms a team says, and the
@@ -251,17 +264,57 @@ func Build(cat *fleet.Catalog, synopses map[string]string, host string, ov Overl
 // slice order, so the result is deterministic.
 func (s *Store) reindex() {
 	s.byTerm = map[string]int{}
+	s.byTermAll = map[string][]int{}
 	for i := range s.Concepts {
 		c := &s.Concepts[i]
 		if _, taken := s.byTerm[strings.ToLower(c.PrefLabel)]; !taken {
 			s.byTerm[strings.ToLower(c.PrefLabel)] = i
 		}
+		s.indexAll(c.PrefLabel, i)
 		for _, alt := range c.AltLabels {
 			if _, taken := s.byTerm[strings.ToLower(alt)]; !taken {
 				s.byTerm[strings.ToLower(alt)] = i
 			}
+			s.indexAll(alt, i)
 		}
 	}
+}
+
+// indexAll records one more meaning for a term, without displacing the others.
+func (s *Store) indexAll(term string, i int) {
+	if s.byTermAll == nil {
+		s.byTermAll = map[string][]int{}
+	}
+	k := strings.ToLower(term)
+	for _, have := range s.byTermAll[k] {
+		if have == i {
+			return
+		}
+	}
+	s.byTermAll[k] = append(s.byTermAll[k], i)
+}
+
+// ResolveAll returns EVERY concept a term denotes, in projection order.
+//
+// The plural counterpart to Resolve, for the case Resolve cannot express: a
+// string that is legitimately several things at once. Order is the order the
+// registries were projected in, so the most authoritative reading comes first
+// and a caller that only wants one can take the head.
+func (s *Store) ResolveAll(term string) []*Concept {
+	k := strings.ToLower(strings.Trim(strings.TrimSpace(term), "[]"))
+	if k == "" {
+		return nil
+	}
+	// A namespaced form ([[agent:codex]]) names exactly one concept.
+	if i := s.indexOf(k); i >= 0 {
+		return []*Concept{&s.Concepts[i]}
+	}
+	idx := s.byTermAll[k]
+	out := make([]*Concept, 0, len(idx))
+	for _, i := range idx {
+		out = append(out, &s.Concepts[i])
+	}
+	return out
 }
 
 func (s *Store) add(c Concept, ov Overlay) {
@@ -274,12 +327,16 @@ func (s *Store) add(c Concept, ov Overlay) {
 	s.Concepts = append(s.Concepts, c)
 	i := len(s.Concepts) - 1
 	s.byTerm[strings.ToLower(c.PrefLabel)] = i
+	s.indexAll(c.PrefLabel, i)
 	for _, alt := range c.AltLabels {
 		// First writer wins: a verb's own name must not be stolen by a later
 		// binding that happens to share it.
 		if _, taken := s.byTerm[strings.ToLower(alt)]; !taken {
 			s.byTerm[strings.ToLower(alt)] = i
 		}
+		// ...but every meaning is still RECORDED, so `define` can report that
+		// the word is ambiguous instead of hiding the readings it did not pick.
+		s.indexAll(alt, i)
 	}
 }
 
