@@ -291,6 +291,19 @@ func (ps *ProbeSet) Close() {
 // PathHash identifies the PATH the lazy probes were resolved under.
 func (ps *ProbeSet) PathHash() string { return ps.pathHash }
 
+// EnvironmentCoordinate is this host's coordinate for knowledge that belongs to
+// no particular skill: ContextKey over EnvironmentProbes, and nothing else.
+//
+// It is deliberately narrower than "the probes this host can see". Keying over
+// everything observable produced a coordinate that moved with the clock, with
+// which lazy probes happened to be cached, and with whether the caller had a
+// terminal — so every observation landed at a fresh address and the store
+// filled with singletons. Nothing errors when that happens, which is why the
+// probe list is pinned here rather than assembled at each call site.
+func (ps *ProbeSet) EnvironmentCoordinate() string {
+	return ContextKey(ps.Snapshot(EnvironmentProbes()))
+}
+
 // ContextKey fingerprints a probe snapshot. It is byte-compatible with
 // the dhnt skill-CNL runtime: sorted "name=value" lines joined by \n,
 // sha256, "c" + hex.

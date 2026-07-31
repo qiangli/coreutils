@@ -49,3 +49,16 @@ func NewFileCache(dir string, ttl time.Duration) *FileCache {
 
 // ContextKey fingerprints a probe snapshot (dhnt-runtime byte-compatible).
 func ContextKey(vals map[string]string) string { return spacetime.ContextKey(vals) }
+
+// HostCoordinate returns THIS host's environment coordinate — the key
+// `skills probe` reports, and the one `craft fold` files a coordinate-keyed
+// note under when the caller names none.
+//
+// Exported so those two cannot drift. A default coordinate computed beside the
+// one the CLI prints would be an invisible failure: notes would be written at a
+// key nothing ever reads back, and the only symptom would be an accumulating
+// store that never answers anything.
+func HostCoordinate(opts ...Option) string {
+	_, ps := NewCatalog(opts...)
+	return ps.EnvironmentCoordinate()
+}

@@ -98,3 +98,28 @@ func KeyableProbes(names []string) []string {
 	}
 	return out
 }
+
+// EnvironmentProbes names the probes that describe the MACHINE — the
+// coordinate to file knowledge under when no particular skill is in hand.
+//
+// A skill's own coordinate is {os, arch} plus the probes its `requires`
+// references, and that is the right key for its attestations. But knowledge
+// that is not about one skill — "resolve the address first, mDNS is unreliable
+// here" — still has to be filed somewhere findable, and "everything the host
+// can currently observe" is the wrong somewhere. Three exclusions, each for a
+// different reason:
+//
+//	time.*             the clock advances unboundedly; already unkeyable
+//	tty, elevated      properties of the SESSION, not the machine — the same
+//	                   discovery recorded from an agent (no tty) would be
+//	                   invisible to the same operator in a terminal
+//	place.id           the network the host is on right now; a truth about the
+//	                   toolchain does not stop holding because someone moved
+//
+// What is left is stable across the hour, the session and the walk to the
+// office, which is the only way a second observation ever lands on the first.
+// A probe that legitimately varies the answer is still reachable the correct
+// way: by a skill that REFERENCES it.
+func EnvironmentProbes() []string {
+	return KeyableProbes([]string{"os", "arch", "os.release", "libc", "container"})
+}

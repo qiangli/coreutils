@@ -130,6 +130,32 @@ func TestContextKey_UnmovedByTheClock(t *testing.T) {
 	}
 }
 
+// The environment coordinate is where knowledge belonging to no particular
+// skill gets filed, so it must be readable back tomorrow, from an agent session
+// as well as a terminal, and after the walk to the office. Each excluded probe
+// is named here so that adding one to the list is a deliberate act with a test
+// to answer to.
+func TestEnvironmentProbes_ExcludeWhatChurns(t *testing.T) {
+	for _, banned := range []string{"time.hour", "time.weekday", "time.zone", "time.attended", "tty", "elevated", "place.id"} {
+		if slices.Contains(EnvironmentProbes(), banned) {
+			t.Errorf("%q is in the environment coordinate; it changes without the machine changing", banned)
+		}
+	}
+	if !slices.Contains(EnvironmentProbes(), "os") || !slices.Contains(EnvironmentProbes(), "arch") {
+		t.Error("the environment coordinate no longer carries os/arch, so it distinguishes nothing")
+	}
+}
+
+// Two probe sets over one host must agree. This is the property the CLI depends
+// on when it defaults a coordinate rather than asking for one.
+func TestEnvironmentCoordinate_StableAcrossProbeSets(t *testing.T) {
+	a := DefaultProbes(NopCache()).EnvironmentCoordinate()
+	b := DefaultProbes(NopCache()).EnvironmentCoordinate()
+	if a != b {
+		t.Errorf("one host produced two environment coordinates: %s and %s", a, b)
+	}
+}
+
 // coreProbeList is the single source both DefaultProbes and the keying rules
 // read; this asserts they agree rather than trusting the arrangement.
 func TestCoreProbeList_BackstopsDefaultProbes(t *testing.T) {

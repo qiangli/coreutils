@@ -316,7 +316,14 @@ func runProbe(cmd *cobra.Command, cfg *config, refresh, asJSON bool) error {
 			}
 		}
 	}
-	key := ContextKey(vals)
+	// The reported coordinate is NOT a hash of everything printed below, and
+	// the difference is the point. `probes` is a diagnostic — everything this
+	// host can observe, including the clock, the terminal, and whichever lazy
+	// probes happen to be cached. A COORDINATE is an address knowledge is filed
+	// under, so it may only carry what does not churn: hashing the full map
+	// produced a key that changed every hour and on the first cache warm-up, so
+	// each observation was written to an address nothing would ever read again.
+	key := ps.EnvironmentCoordinate()
 	if asJSON {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
 			Probes     map[string]string `json:"probes"`

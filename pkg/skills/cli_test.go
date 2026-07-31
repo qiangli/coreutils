@@ -86,6 +86,53 @@ func TestCLIListJSON(t *testing.T) {
 	}
 }
 
+// The coordinate `probe` prints and the one HostCoordinate returns must be the
+// same string. They are the write and read ends of the same address: a fold
+// filed under one and looked up under the other is written, stored, and never
+// found again — with nothing to see but a store that answers nothing.
+func TestHostCoordinateIsWhatProbePrints(t *testing.T) {
+	dir := t.TempDir()
+	r := &cobraRunner{t: t, opts: []Option{WithConfigDir(dir)}}
+	out, _, err := r.run("probe", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		ContextKey string `json:"context_key"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json: %v\n%s", err, out)
+	}
+	if want := HostCoordinate(WithConfigDir(dir)); got.ContextKey != want {
+		t.Errorf("probe printed %s, HostCoordinate returned %s", got.ContextKey, want)
+	}
+}
+
+// The reported coordinate must not move because a probe cache warmed up. It did:
+// the first run keyed over the core probes and every later one over the core
+// probes PLUS whatever the cache had since resolved, so a host's very first
+// observation was always filed at an address it would never use again.
+func TestProbeCoordinateSurvivesCacheWarmUp(t *testing.T) {
+	dir := t.TempDir()
+	r := &cobraRunner{t: t, opts: []Option{WithConfigDir(dir)}}
+	key := func() string {
+		out, _, err := r.run("probe", "--json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			ContextKey string `json:"context_key"`
+		}
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("bad json: %v\n%s", err, out)
+		}
+		return got.ContextKey
+	}
+	if cold, warm := key(), key(); cold != warm {
+		t.Errorf("coordinate moved between runs: %s then %s", cold, warm)
+	}
+}
+
 func TestCLIProbe(t *testing.T) {
 	f := cliFixture(t)
 	out, _, err := f.run("probe", "--json")
