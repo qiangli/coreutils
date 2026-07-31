@@ -80,6 +80,10 @@ type ComposeOptions struct {
 	// Compose stays a pure function — the same inputs must always give the same
 	// bytes, and a function that reads a store cannot promise that.
 	Facts []Fact
+	// Folds are the generalisable amendments that hold at Coordinate. Where
+	// facts say what is true of one machine, folds say what is true of every
+	// machine like this one — so they render as guidance rather than as values.
+	Folds []Fold
 }
 
 // Composition is a rendered skill plus the stamp that makes it reproducible.
@@ -114,6 +118,8 @@ type Composition struct {
 	// a Composition is a value that gets logged, marshalled, and passed around,
 	// and facts are identity that must not travel with it.
 	Facts int `json:"facts,omitempty"`
+	// Folds counts the coordinate-keyed amendments applied.
+	Folds int `json:"folds,omitempty"`
 }
 
 // ErrBandUnavailable reports a band below the artifact's floor.
@@ -169,8 +175,9 @@ func Compose(im Implementation, opts ComposeOptions) (Composition, error) {
 	}
 	c.Entity = opts.Entity
 	c.Facts = len(opts.Facts)
-	c.Body = render(im, band) + renderFacts(opts)
-	c.Stamp = stamp(c, opts.Facts)
+	c.Folds = len(opts.Folds)
+	c.Body = render(im, band) + renderFolds(opts) + renderFacts(opts)
+	c.Stamp = stamp(c, opts.Facts, opts.Folds)
 	return c, nil
 }
 
@@ -180,6 +187,27 @@ func Compose(im Implementation, opts ComposeOptions) (Composition, error) {
 // interprets — it is a value the procedure needs, and a script that has to ask
 // for the login is not runnable without a model, which would defeat the band
 // entirely.
+// renderFolds appends what is known to hold at this coordinate.
+//
+// Rendered as guidance, not as values: a fold says what tends to go wrong here
+// and what to do instead, which is a thing a reader must UNDERSTAND. That is
+// also why folds are worth carrying at every band — the workaround is the part
+// a fresh agent would otherwise have to rediscover by failing.
+func renderFolds(opts ComposeOptions) string {
+	if len(opts.Folds) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n# known to hold at this coordinate:\n")
+	for _, f := range opts.Folds {
+		fmt.Fprintf(&b, "#   %s\n", f.Note)
+		if f.Evidence != "" {
+			fmt.Fprintf(&b, "#     (learned from: %s)\n", f.Evidence)
+		}
+	}
+	return b.String()
+}
+
 func renderFacts(opts ComposeOptions) string {
 	if len(opts.Facts) == 0 {
 		return ""
@@ -363,7 +391,7 @@ func writeEffects(b *strings.Builder, im Implementation) {
 // stamp is the reproducibility receipt: the inputs a composition was derived
 // from, hashed. Given the same stamp the bytes are the same, which is what makes
 // a dynamic artifact auditable rather than merely current.
-func stamp(c Composition, facts []Fact) string {
+func stamp(c Composition, facts []Fact, folds []Fold) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "impl=%s\ncap=%s\nband=%d\ncoord=%s\ngraph=%s\nentity=%s\n",
 		c.Identity, c.Capability, c.Band, c.Coordinate, c.GraphVersion, c.Entity.ID())
@@ -373,6 +401,9 @@ func stamp(c Composition, facts []Fact) string {
 	// themselves. A hash says "the inputs differed" without saying how.
 	for _, f := range facts {
 		fmt.Fprintf(h, "fact=%s/%s=%s\n", f.Entity.ID(), f.Key, f.Value)
+	}
+	for _, f := range folds {
+		fmt.Fprintf(h, "fold=%s/%s\n", f.Coordinate, f.Note)
 	}
 	return "s" + hex.EncodeToString(h.Sum(nil))[:16]
 }

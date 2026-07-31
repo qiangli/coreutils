@@ -188,7 +188,7 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 
 	var composeBand int
 	var composeJSON bool
-	var composeFor string
+	var composeFor, composeCoord string
 	compose := &cobra.Command{
 		Use:   "compose <query>",
 		Short: "render the best-matching skill on demand, cut at a band",
@@ -210,12 +210,13 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 			"would stop being reproducible.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCompose(cmd, cfg, strings.Join(args, " "), composeBand, composeJSON, composeFor)
+			return runCompose(cmd, cfg, strings.Join(args, " "), composeBand, composeJSON, composeFor, composeCoord)
 		},
 	}
 	compose.Flags().IntVar(&composeBand, "band", -1, "cut point 0-4 (default: the artifact's floor)")
 	compose.Flags().BoolVar(&composeJSON, "json", false, "machine-readable composition")
 	compose.Flags().StringVar(&composeFor, "for", "", "scope to what this host has learned about an entity (host:name, service:name)")
+	compose.Flags().StringVar(&composeCoord, "coordinate", "", "apply the folds that hold at this space-time coordinate")
 
 	var learnSource string
 	var forget bool
@@ -264,7 +265,50 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 		},
 	}
 
-	root.AddCommand(history, study, find, compose, learn, factsCmd)
+	var foldCoord, foldCapability, foldEvidence, foldSource string
+	var foldRetire bool
+	fold := &cobra.Command{
+		Use:   "fold <note>",
+		Short: "record what generally holds at this coordinate (shareable, identity-free)",
+		Long: "fold records a GENERALISABLE thing — \"mDNS is unreliable here, resolve by IP\"\n" +
+			"— keyed on a space-time COORDINATE rather than on a machine. That is what\n" +
+			"makes it worth sharing: two hosts with the same OS and toolchain share a\n" +
+			"coordinate, so one machine's discovery is useful on another.\n\n" +
+			"The classification is CHECKED, not trusted. A note naming a hostname, a user,\n" +
+			"an address or a home path is a FACT wearing a fold's clothes — it is true on\n" +
+			"one machine, not at a coordinate — and it is REFUSED with a pointer to\n" +
+			"`craft learn`. That is what keeps the shareable store free of identity\n" +
+			"without anyone having to remember which half they are writing.\n\n" +
+			"Record the EVIDENCE too. A fold asserted without it is an opinion, and\n" +
+			"opinions should not outlive the session that formed them.",
+		Example: "  bashy craft fold \"mDNS is unreliable here; resolve the address first\" \\\n" +
+			"      --coordinate $(bashy skills probe --json | jq -r .context_key) \\\n" +
+			"      --evidence \"three consecutive lookup timeouts\"",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFold(cmd, cfg, args[0], foldCoord, foldCapability, foldEvidence, foldSource, foldRetire)
+		},
+	}
+	fold.Flags().StringVar(&foldCoord, "coordinate", "", "the space-time context key this holds at (required)")
+	fold.Flags().StringVar(&foldCapability, "capability", "", "scope to one capability; omit for an environment truth")
+	fold.Flags().StringVar(&foldEvidence, "evidence", "", "what happened that taught this")
+	fold.Flags().StringVar(&foldSource, "source", "", "what learned it")
+	fold.Flags().BoolVar(&foldRetire, "retire", false, "mark this fold as no longer holding")
+
+	foldsCmd := &cobra.Command{
+		Use:   "folds [coordinate]",
+		Short: "what generally holds, per coordinate",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var coord string
+			if len(args) == 1 {
+				coord = args[0]
+			}
+			return runFolds(cmd, cfg, coord)
+		},
+	}
+
+	root.AddCommand(history, study, find, compose, learn, factsCmd, fold, foldsCmd)
 	return root
 }
 
@@ -312,6 +356,58 @@ func runLearn(cmd *cobra.Command, cfg *config, entity, key, value, source string
 		return err
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "craft: learned %s about %s (host-local; never shared)\n", key, e.ID())
+	return nil
+}
+
+func runFold(cmd *cobra.Command, cfg *config, note, coord, capability, evidence, source string, retire bool) error {
+	if strings.TrimSpace(coord) == "" {
+		return fmt.Errorf("craft: --coordinate is required — a fold that holds nowhere in particular holds nowhere " +
+			"(`bashy skills probe --json` prints this host's)")
+	}
+	store := OpenFolds(cfg.storeDir, HostScrubber(cfg.storeDir))
+	if retire {
+		if err := store.Retire(capability, coord, note, time.Now().UTC()); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "craft: retired that fold at %s\n", skills.ShortID(coord))
+		return nil
+	}
+	if err := store.Record(Fold{
+		Capability: capability, Coordinate: coord,
+		Note: note, Evidence: evidence, Source: source,
+	}); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "craft: folded at %s (generalisable; shareable)\n", skills.ShortID(coord))
+	return nil
+}
+
+func runFolds(cmd *cobra.Command, cfg *config, coord string) error {
+	store := OpenFolds(cfg.storeDir, HostScrubber(cfg.storeDir))
+	out := cmd.OutOrStdout()
+	if coord == "" {
+		coords := store.Coordinates()
+		if len(coords) == 0 {
+			fmt.Fprintln(out, "nothing folded yet")
+			fmt.Fprintln(out, "folds accrue from `craft fold`, and unlike facts they CAN be shared")
+			return nil
+		}
+		for _, c := range coords {
+			fmt.Fprintf(out, "%-20s %d fold(s)\n", skills.ShortID(c), len(store.For("", c)))
+		}
+		return nil
+	}
+	folds := store.For("", coord)
+	if len(folds) == 0 {
+		fmt.Fprintf(out, "nothing folded at %s\n", skills.ShortID(coord))
+		return nil
+	}
+	for _, f := range folds {
+		fmt.Fprintf(out, "%s\n", f.Note)
+		if f.Evidence != "" {
+			fmt.Fprintf(out, "    evidence: %s\n", f.Evidence)
+		}
+	}
 	return nil
 }
 
@@ -379,7 +475,7 @@ func runFind(cmd *cobra.Command, cfg *config, query string, limit int, asJSON bo
 	return nil
 }
 
-func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON bool, forEntity string) error {
+func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON bool, forEntity, coordinate string) error {
 	matches := cfg.index().Resolve(Query{Text: query, Limit: 1})
 	if len(matches) == 0 {
 		return fmt.Errorf("craft: no capability matches %q — nothing to compose", query)
@@ -392,6 +488,10 @@ func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON 
 		}
 		opts.Entity = e
 		opts.Facts = OpenFacts(cfg.storeDir).For(e)
+	}
+	if strings.TrimSpace(coordinate) != "" {
+		opts.Coordinate = coordinate
+		opts.Folds = OpenFolds(cfg.storeDir, HostScrubber(cfg.storeDir)).For(matches[0].Key, coordinate)
 	}
 	c, err := Compose(matches[0].Primary, opts)
 	if err != nil {
@@ -407,8 +507,8 @@ func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON 
 	// Provenance on stderr so stdout stays the artifact — a caller piping this
 	// into a file or an agent's context must get the skill, not a header.
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f facts=%d stamp=%s\n",
-		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, c.Facts, c.Stamp)
+		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f folds=%d facts=%d stamp=%s\n",
+		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, c.Folds, c.Facts, c.Stamp)
 	return nil
 }
 
