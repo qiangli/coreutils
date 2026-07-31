@@ -188,7 +188,12 @@ func SeatSummary(w io.Writer, dir string, base ...Option) error {
 	host := hostLabel()
 	if view.Authority.Vacant {
 		fmt.Fprintf(w, "%s has NO steward — the seat is open.\n", host)
-		fmt.Fprintf(w, "  claim it:  bashy steward claim --intent \"<what you are here to do>\"\n\n")
+		// The real flow is TWO steps, and saying otherwise sends someone into a
+		// refusal. Taking the seat needs a capability first, deliberately:
+		// an agent that could decide to become the steward would eventually
+		// decide to do it to a healthy one.
+		fmt.Fprintf(w, "  claim it:  bashy steward authorize --action claim --actor <who> --reason <why>\n")
+		fmt.Fprintf(w, "             bashy steward claim --grant <id> --intent \"<what you are here to do>\"\n\n")
 		return nil
 	}
 	fmt.Fprintf(w, "%s steward: %s (epoch %d)\n", host, view.Authority.Holder, view.Authority.Epoch)
@@ -202,7 +207,8 @@ func SeatSummary(w io.Writer, dir string, base ...Option) error {
 		// Held on paper, nobody breathing. The actionable case, and the one
 		// worth surfacing first.
 		fmt.Fprintf(w, "  NOT ALIVE (%s) — held on paper only\n", view.Liveness)
-		fmt.Fprintf(w, "  take it:   bashy steward takeover --intent \"<what you are here to do>\"\n\n")
+		fmt.Fprintf(w, "  take it:   bashy steward authorize --action takeover --actor <who> --reason <why>\n")
+		fmt.Fprintf(w, "             bashy steward takeover --grant <id> --intent \"<what you are here to do>\"\n\n")
 	}
 	return nil
 }
@@ -369,6 +375,12 @@ Claiming captures NO repository state. It is a mandate, not a checkout.`,
 			}, time.Now())
 			if err != nil {
 				return err
+			}
+			// The seat is held; open the room that makes its holder reachable.
+			// Failure is reported, never fatal — a host with an accountable
+			// steward and no intercom is strictly better than one with neither.
+			if line := assumeSeatRoom(seatHolderName()); line != "" && !o.asJSON {
+				defer fmt.Fprint(cmd.OutOrStdout(), line)
 			}
 			if err := ExportEpoch(v.Authority.Epoch); err != nil {
 				return err
@@ -676,6 +688,12 @@ cannot corrupt the record.`,
 			if err != nil {
 				return err
 			}
+			// The seat is held; open the room that makes its holder reachable.
+			// Failure is reported, never fatal — a host with an accountable
+			// steward and no intercom is strictly better than one with neither.
+			if line := assumeSeatRoom(seatHolderName()); line != "" && !o.asJSON {
+				defer fmt.Fprint(cmd.OutOrStdout(), line)
+			}
 			if err := ExportEpoch(v.Authority.Epoch); err != nil {
 				return err
 			}
@@ -740,6 +758,14 @@ because it is a different thing.`,
 			}
 			if err := s.Release(Self(), ep, note, time.Now()); err != nil {
 				return err
+			}
+			// The seat is vacated; close its room. A released seat whose room
+			// stays open leaves a channel addressed to somebody who has
+			// explicitly stepped away — worse than no channel, because it
+			// still looks live.
+			roomLine := releaseSeatRoom(seatHolderName())
+			if roomLine != "" && !o.asJSON {
+				defer fmt.Fprint(cmd.OutOrStdout(), roomLine)
 			}
 			if o.asJSON {
 				v, err := s.Status(time.Now())
@@ -2336,4 +2362,83 @@ func short(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
 	}
+}
+
+// ─── the role room ────────────────────────────────────────────────────────────
+
+// OpenRoom and CloseRoom are the seam to pkg/role/meetroom, injected by the
+// host rather than imported here.
+//
+// The reason is a build constraint with teeth: pkg/steward sits in the cross-OS
+// canary (see scripts/crossvet.sh), and meet transitively pulls the shell
+// interpreter, which the canary target cannot build. Importing the room
+// implementation directly broke that gate the first time it was tried. A hook
+// keeps the words — role.Assignment, role.Contact — free to use while the
+// transport stays outside.
+//
+// Both default to nil, which means NO ROOM, reported rather than pretended.
+// This is the same shape as lexicon.RecordDiscovery: one narrow, auditable path
+// between two packages that must not import each other.
+var (
+	OpenRoom  func(a role.Assignment, holder string) (*role.Contact, error)
+	CloseRoom func(c *role.Contact, holder string) error
+)
+
+// hostAssignment is this host's steward seat as a role assignment.
+func hostAssignment() role.Assignment {
+	return role.Assignment{Kind: role.Steward, Ref: hostLabel(), Title: "host steward"}
+}
+
+// assumeSeatRoom opens the steward's room, returning a line to print.
+//
+// A failure is REPORTED, never fatal. Holding the seat is the point; the room
+// is how people reach the holder, and a host with an accountable steward and no
+// intercom is strictly better than one with neither.
+func assumeSeatRoom(holder string) string {
+	if OpenRoom == nil {
+		return ""
+	}
+	c, err := OpenRoom(hostAssignment(), holder)
+	if err != nil {
+		return fmt.Sprintf("  no room (%v) — reachable on bus %s only\n", err, hostAssignment().Topic())
+	}
+	if err := saveSeatContact(c); err != nil {
+		return fmt.Sprintf("  room open at %s but not recorded (%v)\n", c.String(), err)
+	}
+	return fmt.Sprintf("  reachable at %s\n", c.String())
+}
+
+// releaseSeatRoom closes the steward's room on a clean vacate.
+//
+// A seat released without closing its room leaves a channel addressed to
+// somebody who has explicitly stepped away — worse than no channel, because it
+// looks live.
+func releaseSeatRoom(holder string) string {
+	c, err := loadSeatContact()
+	if err != nil || c == nil {
+		return ""
+	}
+	if CloseRoom != nil {
+		if err := CloseRoom(c, holder); err != nil {
+			return fmt.Sprintf("  room %s could not be closed (%v)\n", c.String(), err)
+		}
+	}
+	_ = clearSeatContact()
+	return "  room closed\n"
+}
+
+// seatHolderName is the acting steward as a room participant.
+//
+// The room wants a name a human recognises; the journal wants a full principal
+// ref. Rendering one from the other here keeps meet from needing to understand
+// principals, and keeps the ref canonical where it matters.
+func seatHolderName() string {
+	r := Self()
+	if r.Name != "" {
+		return r.Name
+	}
+	if r.URN != "" {
+		return r.URN
+	}
+	return "steward"
 }
