@@ -309,6 +309,9 @@ func runWeaveBatonShow(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		if hasLock {
 			out["conductor"] = lock
 		}
+		if c, _ := loadAutopilotRoom(dir); c != nil {
+			out["contact"] = c
+		}
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave baton", out))
 	}
 	now := time.Now()
@@ -317,8 +320,16 @@ func runWeaveBatonShow(cmd *cobra.Command, flags *weaveOutputFlags) error {
 		if lock.stale(now) {
 			st = "STALE — takeable without --force"
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Conductor: %s (epoch %d, %s; last heartbeat %s)\n\n",
+		fmt.Fprintf(cmd.OutOrStdout(), "Conductor: %s (epoch %d, %s; last heartbeat %s)\n",
 			lock.Holder, lock.Epoch, st, lock.HeartbeatAt.Local().Format("15:04:05"))
+		// WHERE to reach them, next to WHO they are. Baton is what an agent
+		// reads before touching this repo, so the two facts belong on adjacent
+		// lines — knowing a campaign has a driver and not how to ask them
+		// anything is most of the way to interrupting it instead.
+		if c, _ := loadAutopilotRoom(dir); c != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Reach them: %s\n", c.String())
+		}
+		fmt.Fprintln(cmd.OutOrStdout())
 	} else {
 		fmt.Fprint(cmd.OutOrStdout(), "Conductor: none — `weave baton take --as <name>` to claim\n\n")
 	}

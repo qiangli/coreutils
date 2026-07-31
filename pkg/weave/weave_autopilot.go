@@ -524,6 +524,15 @@ func acquireWeaveAutopilotLease(dir, holder string, m weaveMember, pid int, ttl 
 		if err := saveWeaveAutopilotLease(dir, out); err != nil {
 			return err
 		}
+		// A lease taken from an EXPIRED holder inherits their room. They are by
+		// definition not coming back to close it, so the successor does —
+		// otherwise the repo advertises a channel to somebody gone.
+		if ok && cur.Holder != holder {
+			_ = closeAutopilotRoom(dir, holder)
+		}
+		if cur.Holder != holder {
+			_, _ = openAutopilotRoom(dir, holder)
+		}
 		acquired = true
 		return nil
 	})
@@ -559,6 +568,9 @@ func releaseWeaveAutopilotLease(dir, holder string) error {
 		if !ok || cur.Holder != holder {
 			return nil
 		}
+		// Releasing the lease closes the campaign room: a repo with no
+		// driver and an open room is a channel nobody answers.
+		_ = closeAutopilotRoom(dir, holder)
 		return os.Remove(weaveAutopilotLeasePath(dir))
 	})
 }
