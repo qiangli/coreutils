@@ -53,13 +53,115 @@ plainly, like any jargon. The marker is optional emphasis, never required syntax
   bashy lexicon emit --write AGENTS.md   # seed every tool's always-on tier
   bashy lexicon scan docs/               # find [[terms]] that resolve to NOTHING`,
 	}
-	cmd.AddCommand(newListCmd(opts), newResolveCmd(opts), newEmitCmd(opts), newScanCmd(opts))
+	cmd.AddCommand(newListCmd(opts), newResolveCmd(opts), newEmitCmd(opts), newScanCmd(opts), NewDefineCmd(opts...))
 	return cmd
 }
+
+// NewDefineCmd builds the `define` verb. Exported so a host can mount it at top
+// level as well as under `lexicon` — it is the question agents ask most, and
+// burying it two words deep costs more than the namespace is worth.
+func NewDefineCmd(opts ...fleet.Option) *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "define <term>",
+		Short: "what is this word on THIS system? (verb, agent, env var, command, path, address — or unknown)",
+		Long: `define answers "what is this word, here?" for any token.
+
+Three kinds of answer, and the third is the one that matters:
+
+  KNOWN    the term is in a projected registry — a bashy verb, an agent binding,
+           a skill, an environment variable, a local command, a path segment.
+  SHAPED   no registry knows it, but its FORM is recognisable: an address, a
+           UUID, a git sha — or something shaped like a CREDENTIAL.
+  UNKNOWN  genuinely not known. Said plainly.
+
+Saying "I don't know" is a feature. A resolver that guesses is worse than no
+resolver, because a confident wrong definition propagates: the agent acts on it
+and nothing reports the error.
+
+A term that looks like a credential is classified but NEVER echoed back, never
+stored, and never looked up. "That is an API key" is a useful answer; repeating
+the key into a terminal, a log, or an agent transcript is how it ends up
+somewhere permanent.`,
+		Example: `  bashy define handoff        # a bashy verb
+  bashy define codex          # an agent binding ON THIS HOST
+  bashy define WEAVE_AGENT    # an environment variable this fleet sets
+  bashy define outpost        # a local command, outside the standard userland
+  bashy define sk-proj-...    # classified as a credential, and not echoed`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			d := buildFull(opts).Define(args[0])
+			if asJSON {
+				b, _ := json.MarshalIndent(d, "", "  ")
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				return nil
+			}
+			out := cmd.OutOrStdout()
+			switch {
+			case d.Sensitive:
+				// The term is deliberately absent from this output.
+				fmt.Fprintf(out, "‹not shown›  %s\n", d.Classification)
+				fmt.Fprintf(out, "  %s\n", d.Advice)
+			case d.Found:
+				c := d.Concept
+				fmt.Fprintf(out, "%s  (%s)\n", c.PrefLabel, c.Kind)
+				if c.Definition != "" {
+					fmt.Fprintf(out, "  %s\n", c.Definition)
+				}
+				if c.Host != "" {
+					fmt.Fprintf(out, "  host: %s\n", c.Host)
+				}
+				if len(c.AltLabels) > 0 {
+					fmt.Fprintf(out, "  also: %s\n", strings.Join(c.AltLabels, ", "))
+				}
+				if c.Use != "" {
+					fmt.Fprintf(out, "  use:  %s\n", c.Use)
+				}
+				if c.ScopeNote != "" {
+					fmt.Fprintf(out, "  note: %s\n", c.ScopeNote)
+				}
+				if c.Source != "" {
+					fmt.Fprintf(out, "  from: %s\n", c.Source)
+				}
+			case d.Classification != "":
+				fmt.Fprintf(out, "%s  — %s\n", d.Term, d.Classification)
+				fmt.Fprintf(out, "  %s\n", d.Advice)
+			default:
+				fmt.Fprintf(out, "%s  — unknown here\n", d.Term)
+				fmt.Fprintf(out, "  %s\n", d.Advice)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable answer")
+	return cmd
+}
+
+// KnownCommands is set by the embedding shell: the standard command set to
+// subtract when enumerating this host's local commands. Same reasoning as
+// Synopses — the atlas knows this, and passing it in keeps the package usable
+// by any project rather than hard-wiring bashy.
+var KnownCommands []string
 
 func build(opts []fleet.Option) *Store {
 	host, _ := os.Hostname()
 	return Build(fleet.New(opts...), Synopses, host, Overlay{})
+}
+
+// buildFull adds the host's system inventory to the registry projections.
+//
+// Separate from build because it costs a PATH scan: a caller that only wants
+// verb resolution should not pay for one. Lookup paths use it, because the
+// whole point of the inventory is that `bashy define` can answer for terms no
+// registry declared.
+func buildFull(opts []fleet.Option) *Store {
+	s := build(opts)
+	roots := []string{}
+	if wd, err := os.Getwd(); err == nil {
+		roots = append(roots, wd)
+	}
+	s.AddSystem(EnumerateHost(roots, KnownCommands), Overlay{})
+	return s
 }
 
 func newListCmd(opts []fleet.Option) *cobra.Command {

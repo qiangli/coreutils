@@ -603,6 +603,7 @@ func init() {
 		Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 	addVerb("craft", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
+	addVerb("define", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 
 	// engines
 	addVerb("podman", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox,
@@ -749,7 +750,7 @@ func init() {
 		"capability", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
-		"craft",
+		"craft", "define",
 		"doctor", "otel", "audit", "check", "sprint", "board",
 		// steward READS the host's authority record (status/board/log/history/reconcile)
 		// and WRITES it (below). A privacy surface: the journal is a durable account of
