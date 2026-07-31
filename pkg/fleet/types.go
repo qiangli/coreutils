@@ -224,6 +224,22 @@ type ToolLaunch struct {
 	//	claude   -p {prompt} --output-format stream-json --verbose
 	//	codex    exec --json
 	//	agy      -p {prompt} --output-format stream-json
+	//
+	// THESE ARE PRINT-MODE FLAGS, AND THAT BOUNDS WHAT THEY BUY. All three
+	// belong to the one-shot Exec path (`-p`, `exec`) — claude states outright
+	// that stream-json works only with --print — and none is available on
+	// SteerExec, the bare interactive TUI.
+	//
+	// So they do NOT remove the 25-second silence tax, and it would be wrong to
+	// wire them expecting that. The tax lives on the STEERING path (coach,
+	// foreman, meet, herald all call Session.WaitIdle), where a session persists
+	// across turns and these flags cannot be passed. A one-shot already has an
+	// exact boundary: the process exits.
+	//
+	// What they buy instead is the fleet-evidence property — a tool call, a
+	// stop_reason and an error status as STRUCTURED FACTS rather than lines
+	// scraped back out of a terminal and guessed at. That is worth having, and
+	// it is a different thing from turn detection.
 	EventsStdout string `yaml:"events_stdout,omitempty" json:"events_stdout,omitempty"`
 
 	// EventsDone declares how THIS tool spells "the turn ended".
