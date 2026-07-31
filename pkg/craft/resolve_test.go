@@ -9,7 +9,7 @@ func testIndex(t *testing.T) *Index {
 	t.Helper()
 	return NewIndex([]Implementation{
 		impl(t, "go-repo-health", goBuildTest, "Verify a Go repository builds and its tests pass",
-			map[string]string{"check-builida": "go build ./...", "check-gereeni": "go test ./..."}),
+			map[string]string{"check-build": "go build ./...", "check-tests": "go test ./..."}),
 		impl(t, "rust-repo-health", rustBuildTest, "Verify a Rust crate compiles and its tests pass", nil),
 		impl(t, "force-agent-shell", wiredForced, "Check agent CLIs route their shell through bashy",
 			map[string]string{"check-wireda": "bashy install-agent --check"}),

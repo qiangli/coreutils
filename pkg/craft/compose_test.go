@@ -21,7 +21,7 @@ func impl(t *testing.T, name, canon, desc string, bindings map[string]string) Im
 // thing asserted.
 func TestCompose_FullyBoundRendersBandZero(t *testing.T) {
 	im := impl(t, "go-repo-health", goBuildTest, "verify a Go repo is healthy",
-		map[string]string{"check-builida": "go build ./...", "check-gereeni": "go test ./..."})
+		map[string]string{"check-build": "go build ./...", "check-tests": "go test ./..."})
 
 	c, err := Compose(im, ComposeOptions{Band: -1})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestCompose_BandFourAlwaysAvailable(t *testing.T) {
 // convenient-sounding claim the design does not make.
 func TestCompose_CommandContentFallsWithBand(t *testing.T) {
 	im := impl(t, "go-repo-health", goBuildTest, "verify a Go repo",
-		map[string]string{"check-builida": "go build ./...", "check-gereeni": "go test ./..."})
+		map[string]string{"check-build": "go build ./...", "check-tests": "go test ./..."})
 
 	countCommands := func(body string) int {
 		n := 0
@@ -142,7 +142,7 @@ func TestCompose_CommandContentFallsWithBand(t *testing.T) {
 // Every band renders from ONE identity: it is a cut point, not a variant.
 func TestCompose_AllBandsShareOneIdentity(t *testing.T) {
 	im := impl(t, "go-repo-health", goBuildTest, "d",
-		map[string]string{"check-builida": "go build ./...", "check-gereeni": "go test ./..."})
+		map[string]string{"check-build": "go build ./...", "check-tests": "go test ./..."})
 
 	var id, capKey string
 	for band := BandScript; band <= BandIntent; band++ {
@@ -167,7 +167,7 @@ func TestCompose_AllBandsShareOneIdentity(t *testing.T) {
 // changes the stamp.
 func TestCompose_Reproducible(t *testing.T) {
 	im := impl(t, "go-repo-health", goBuildTest, "d",
-		map[string]string{"check-builida": "go build ./...", "check-gereeni": "go test ./..."})
+		map[string]string{"check-build": "go build ./...", "check-tests": "go test ./..."})
 	opts := ComposeOptions{Band: 2, Coordinate: "cdarwin", GraphVersion: "g1"}
 
 	a, err := Compose(im, opts)
@@ -204,7 +204,7 @@ func TestCompose_Reproducible(t *testing.T) {
 }
 
 func TestCompose_PartialBindingsRatio(t *testing.T) {
-	im := impl(t, "half", goBuildTest, "", map[string]string{"check-builida": "go build ./..."})
+	im := impl(t, "half", goBuildTest, "", map[string]string{"check-build": "go build ./..."})
 	c, err := Compose(im, ComposeOptions{Band: -1})
 	if err != nil {
 		t.Fatal(err)

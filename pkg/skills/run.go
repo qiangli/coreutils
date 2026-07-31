@@ -124,22 +124,8 @@ func bindEnv(sk dhntskills.Skill, meta map[string]string, dir string, log io.Wri
 		if _, done := env.Predicates[id]; done {
 			return
 		}
-		key := "check-" + id
-		switch id {
-		case "gereeni":
-			key = "check-tests"
-		case "builida":
-			key = "check-build"
-		}
 		env.Predicates[id] = func(args []dhntskills.Arg) (bool, []dhntskills.Effect, error) {
-			k := key
-			if id == "exito" {
-				k = "check"
-				if n := refArg(args, "name"); n != "" {
-					k = "check-" + n
-				}
-			}
-			return runMeta(id, k, readOnly)
+			return runMeta(id, CheckBindingKey(id, refArg(args, "name")), readOnly)
 		}
 	}
 	bindPrimitive := func(id string) {
@@ -374,6 +360,38 @@ func shortID(id string) string {
 	}
 	return id
 }
+
+// CheckBindingKey returns the SKILL.md metadata key a contract predicate's
+// concrete command is bound under. nameArg is the predicate's `name` argument
+// when it has one (only `exito` uses it); pass "" otherwise.
+//
+// The starter predicates keep FRIENDLY keys — `gereeni` binds `check-tests`,
+// `builida` binds `check-build` — because an author writing frontmatter should
+// not have to spell canonical dhnt to say "here is how you run the tests".
+//
+// Exported so the executor and pkg/craft (which measures how much of a skill is
+// bound, and renders the bound commands) agree by construction. This mapping
+// existed inline in one function; a second copy would have drifted, and the
+// symptom would have been a fully-bound skill silently reporting a determinism
+// ratio of zero — which is exactly what it did before this was shared.
+func CheckBindingKey(predicate, nameArg string) string {
+	switch predicate {
+	case "gereeni":
+		return "check-tests"
+	case "builida":
+		return "check-build"
+	case "exito":
+		if nameArg != "" {
+			return "check-" + nameArg
+		}
+		return "check"
+	}
+	return "check-" + predicate
+}
+
+// StepBindingKey returns the metadata key a step primitive's command is bound
+// under. Step primitives have no friendly aliases.
+func StepBindingKey(primitive string) string { return "step-" + primitive }
 
 // ShortID abbreviates a content address (identity, capability key, context
 // key) for display. Exported for pkg/craft, which renders the same addresses

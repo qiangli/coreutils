@@ -242,6 +242,26 @@ func (c *config) catalog() *Catalog {
 	return cat
 }
 
+// NewCatalog assembles the catalog and probe set from the same Options
+// NewSkillsCmd consumes.
+//
+// Exported so a second consumer — pkg/craft, which indexes these skills by
+// capability — sees EXACTLY the catalog the skills CLI sees, rather than
+// reassembling the source list and drifting from it. Two views of one store
+// that disagree about what is in it is a bug that only shows up as a skill
+// mysteriously not being found.
+func NewCatalog(opts ...Option) (*Catalog, *ProbeSet) {
+	cfg := &config{statics: map[string]string{}, cacheTTL: 24 * time.Hour}
+	for _, o := range opts {
+		o(cfg)
+	}
+	if cfg.cfgDir == "" {
+		cfg.cfgDir = defaultConfigDir()
+	}
+	ps, _ := cfg.probes(false)
+	return cfg.catalog(), ps
+}
+
 func runList(cmd *cobra.Command, cfg *config, all, asJSON bool) error {
 	ps, _ := cfg.probes(false)
 	rows, err := cfg.catalog().List(ps)

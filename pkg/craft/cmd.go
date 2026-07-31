@@ -15,6 +15,10 @@ import (
 
 // config is assembled from Options by NewCraftCmd.
 type config struct {
+	// skillOpts are the SAME options the skills CLI is built with, so both see
+	// one catalog rather than two views that can disagree about what exists.
+	skillOpts []skills.Option
+
 	// storeDir is the ring-1 skills store craft reads evidence from. It is
 	// deliberately the SAME directory pkg/skills writes to: craft is a layer
 	// over the catalog, not a parallel store. A second store would be an
@@ -28,6 +32,18 @@ type Option func(*config)
 // WithStoreDir overrides the skills store craft reads
 // (default ~/.config/bashy/skills).
 func WithStoreDir(dir string) Option { return func(c *config) { c.storeDir = dir } }
+
+// WithSkillOptions passes the host's skill-catalog options through, so craft
+// indexes exactly the skills `bashy skills list` shows.
+func WithSkillOptions(opts ...skills.Option) Option {
+	return func(c *config) { c.skillOpts = append(c.skillOpts, opts...) }
+}
+
+// index builds the queryable view over the applicable catalog.
+func (c *config) index() *Index {
+	cat, ps := skills.NewCatalog(c.skillOpts...)
+	return NewIndex(LoadImplementations(cat, ps))
+}
 
 func defaultStoreDir() string {
 	if h, err := os.UserHomeDir(); err == nil {
@@ -143,8 +159,116 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 	study.Flags().StringVar(&studyRef, "ref", "", "upstream commit sha, recorded as provenance")
 	study.Flags().BoolVar(&studyJSON, "json", false, "machine-readable report")
 
-	root.AddCommand(history, study)
+	var findJSON bool
+	var findLimit int
+	find := &cobra.Command{
+		Use:   "find <query>",
+		Short: "ask for a capability in your own words, not by skill name",
+		Long: "find ranks CAPABILITIES against a query — what a skill guarantees, not what\n" +
+			"it is called.\n\n" +
+			"Two implementations of one guarantee return as ONE result with an\n" +
+			"alternative, never as two rows competing for selection. That competition is\n" +
+			"the failure mode this exists to remove: semantically-overlapping entries\n" +
+			"displacing each other is what makes a large catalog worse than a small one.\n\n" +
+			"Matching runs on a stdlib floor with no model and no network: field-weighted\n" +
+			"scoring plus graph expansion over the typed neighbourhood. Because a\n" +
+			"capability is described by what it GUARANTEES, contract predicates are\n" +
+			"searchable text — which is how a query finds a skill whose prose never uses\n" +
+			"the query's words.\n\n" +
+			"Every match reports WHY it scored. A ranking nobody can interrogate is one\n" +
+			"nobody can debug when it starts returning the wrong thing. A query that\n" +
+			"matches nothing returns nothing, rather than the least-bad row.",
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFind(cmd, cfg, strings.Join(args, " "), findLimit, findJSON)
+		},
+	}
+	find.Flags().BoolVar(&findJSON, "json", false, "machine-readable matches")
+	find.Flags().IntVar(&findLimit, "limit", 5, "maximum matches")
+
+	var composeBand int
+	var composeJSON bool
+	compose := &cobra.Command{
+		Use:   "compose <query>",
+		Short: "render the best-matching skill on demand, cut at a band",
+		Long: "compose resolves a query and renders the elected implementation.\n\n" +
+			"There is no stored file: the artifact is assembled now, and anything on disk\n" +
+			"is a cache.\n\n" +
+			"BAND is a cut point, not a variant — one artifact, one identity, rendered at\n" +
+			"a different depth:\n\n" +
+			"  0  pure script, runnable with NO model\n" +
+			"  1  script plus preconditions and known failures\n" +
+			"  2  imperative steps with the bound commands inline\n" +
+			"  3  contract and effect cap — the WHAT, not the HOW\n" +
+			"  4  intent and contract — maximum latitude\n\n" +
+			"The default is the artifact's FLOOR, not the model's ceiling. A premium model\n" +
+			"handed a deterministic script is cheaper, faster, and reproducible; high band\n" +
+			"is the fallback for what genuinely cannot be pinned down.\n\n" +
+			"A band below the floor is REFUSED, never synthesized. A model writing a\n" +
+			"script at render time would put a model back on the read path, and the result\n" +
+			"would stop being reproducible.",
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCompose(cmd, cfg, strings.Join(args, " "), composeBand, composeJSON)
+		},
+	}
+	compose.Flags().IntVar(&composeBand, "band", -1, "cut point 0-4 (default: the artifact's floor)")
+	compose.Flags().BoolVar(&composeJSON, "json", false, "machine-readable composition")
+
+	root.AddCommand(history, study, find, compose)
 	return root
+}
+
+func runFind(cmd *cobra.Command, cfg *config, query string, limit int, asJSON bool) error {
+	matches := cfg.index().Resolve(Query{Text: query, Limit: limit})
+	if asJSON {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]any{"schema": "bashy-craft-find-v1", "query": query, "matches": matches})
+	}
+	out := cmd.OutOrStdout()
+	if len(matches) == 0 {
+		// Nothing, rather than the least-bad row: a confident wrong answer
+		// propagates, and the agent acts on it with nothing reporting the error.
+		fmt.Fprintf(out, "no capability matches %q\n", query)
+		fmt.Fprintf(out, "only skills carrying a contract are indexed; `bashy skills list` shows the catalog\n")
+		return nil
+	}
+	for _, m := range matches {
+		fmt.Fprintf(out, "%-28s %s  score %.0f", craftTruncate(m.Name, 28), skills.ShortID(m.Key), m.Score)
+		if m.Alternatives > 0 {
+			fmt.Fprintf(out, "  (+%d alternative)", m.Alternatives)
+		}
+		fmt.Fprintln(out)
+		if len(m.Why) > 0 {
+			fmt.Fprintf(out, "%-28s   matched on: %s\n", "", strings.Join(m.Why, ", "))
+		}
+	}
+	return nil
+}
+
+func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON bool) error {
+	matches := cfg.index().Resolve(Query{Text: query, Limit: 1})
+	if len(matches) == 0 {
+		return fmt.Errorf("craft: no capability matches %q — nothing to compose", query)
+	}
+	c, err := Compose(matches[0].Primary, ComposeOptions{Band: band})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(c)
+	}
+	out := cmd.OutOrStdout()
+	fmt.Fprint(out, c.Body)
+	// Provenance on stderr so stdout stays the artifact — a caller piping this
+	// into a file or an agent's context must get the skill, not a header.
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f stamp=%s\n",
+		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, c.Stamp)
+	return nil
 }
 
 func runStudy(cmd *cobra.Command, cfg *config, dir string, src Source, asJSON bool, agent string, band int, lang string) error {

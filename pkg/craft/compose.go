@@ -162,13 +162,13 @@ func Compose(im Implementation, opts ComposeOptions) (Composition, error) {
 func determinism(im Implementation) (ratio float64, bound, total int) {
 	for _, chk := range im.Skill.Contract {
 		total++
-		if boundFor(im, "check-"+chk.Predicate) != "" {
+		if checkCmd(im, chk) != "" {
 			bound++
 		}
 	}
 	for _, st := range flattenSteps(im.Skill.Steps) {
 		total++
-		if boundFor(im, "step-"+st.Primitive) != "" {
+		if boundFor(im, skills.StepBindingKey(st.Primitive)) != "" {
 			bound++
 		}
 	}
@@ -179,6 +179,22 @@ func determinism(im Implementation) (ratio float64, bound, total int) {
 }
 
 func boundFor(im Implementation, key string) string { return im.Bindings[key] }
+
+// checkCmd resolves a contract predicate's bound command through the SAME key
+// mapping the executor uses, friendly aliases included.
+func checkCmd(im Implementation, chk dhntskills.Check) string {
+	return boundFor(im, skills.CheckBindingKey(chk.Predicate, refName(chk.Args)))
+}
+
+// refName returns the `name` argument's reference, which `exito` binds on.
+func refName(args []dhntskills.Arg) string {
+	for _, a := range args {
+		if a.Name == "name" && a.Value.Kind == dhntskills.ExprRef {
+			return a.Value.Ref
+		}
+	}
+	return ""
+}
 
 // flattenSteps walks branches so a conditional's arms count too.
 func flattenSteps(steps []dhntskills.Step) []dhntskills.Step {
@@ -246,12 +262,12 @@ func render(im Implementation, band int) string {
 func writeScript(b *strings.Builder, im Implementation) {
 	fmt.Fprintf(b, "#!/usr/bin/env bash\n# %s — composed at band 0; no model required.\nset -euo pipefail\n\n", im.Name)
 	for _, st := range flattenSteps(im.Skill.Steps) {
-		if cmd := boundFor(im, "step-"+st.Primitive); cmd != "" {
+		if cmd := boundFor(im, skills.StepBindingKey(st.Primitive)); cmd != "" {
 			fmt.Fprintf(b, "%s\n", cmd)
 		}
 	}
 	for _, chk := range im.Skill.Contract {
-		if cmd := boundFor(im, "check-"+chk.Predicate); cmd != "" {
+		if cmd := checkCmd(im, chk); cmd != "" {
 			fmt.Fprintf(b, "%s\n", cmd)
 		}
 	}
@@ -265,7 +281,7 @@ func writeSteps(b *strings.Builder, im Implementation) {
 		return
 	}
 	for i, st := range steps {
-		cmd := boundFor(im, "step-"+st.Primitive)
+		cmd := boundFor(im, skills.StepBindingKey(st.Primitive))
 		if cmd != "" {
 			fmt.Fprintf(b, "%d. `%s` — %s\n", i+1, cmd, st.Primitive)
 			continue
@@ -285,7 +301,7 @@ func writeContract(b *strings.Builder, im Implementation, prefix string, withCom
 		fmt.Fprintf(b, "Must hold when done:\n")
 	}
 	for _, chk := range im.Skill.Contract {
-		if cmd := boundFor(im, "check-"+chk.Predicate); withCommands && cmd != "" {
+		if cmd := checkCmd(im, chk); withCommands && cmd != "" {
 			fmt.Fprintf(b, "%s  - %s  (`%s`)\n", prefix, chk.Predicate, cmd)
 			continue
 		}
