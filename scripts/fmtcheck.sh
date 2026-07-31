@@ -29,13 +29,23 @@
 # # Scope
 #
 # Tracked .go files only, so build output and scratch files never fail the gate.
-# external/ is excluded: those are vendored upstream forks and theirs to format.
+#
+# The only exclusions are the two VENDORED SUBMODULES (external/ollama/src,
+# external/podman/src) — upstream code, upstream formatting. Everything else
+# under external/ is ours (the binmgr wrappers and toolchain provisioners) and is
+# gated like any other package. A blanket ^external/ skip was letting our own
+# code through unchecked.
+#
+# This scope is deliberately WIDER than the test scope, which skips all of
+# external/ because those packages pull cgo and platform backends. Formatting is
+# not compilation: gofmt parses, it does not build, so there is no reason for our
+# own code to escape the gate just because running it needs a Linux box.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$root"
 
-files="$(git ls-files '*.go' | grep -v '^external/' || true)"
+files="$(git ls-files '*.go' | grep -Ev '^external/(ollama|podman)/src/' || true)"
 if [ -z "$files" ]; then
 	echo "fmtcheck: no tracked Go files"
 	exit 0

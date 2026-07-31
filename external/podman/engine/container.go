@@ -18,7 +18,6 @@ import (
 	"github.com/qiangli/coreutils/pkg/oci/nettypes"
 	ociSpec "github.com/qiangli/coreutils/pkg/oci/spec"
 	"github.com/qiangli/coreutils/pkg/oci/specgen"
-
 )
 
 // ContainerConfig holds the configuration for creating a container.

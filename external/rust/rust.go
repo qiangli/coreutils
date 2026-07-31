@@ -142,7 +142,9 @@ func ensureToolchain(ctx context.Context) (binDir string, env []string, err erro
 
 // NewCargoCmd / NewRustcCmd / NewRustupCmd are the `bashy cargo|rustc|rustup`
 // front-doors; NewRustCmd is an alias that runs rustc.
-func NewCargoCmd() *cobra.Command  { return newCmd("cargo", "Rust build tool / package manager", "cargo") }
+func NewCargoCmd() *cobra.Command {
+	return newCmd("cargo", "Rust build tool / package manager", "cargo")
+}
 func NewRustcCmd() *cobra.Command  { return newCmd("rustc", "Rust compiler", "rustc") }
 func NewRustupCmd() *cobra.Command { return newCmd("rustup", "Rust toolchain manager", "rustup") }
 func NewRustCmd() *cobra.Command   { return newCmd("rust", "Rust compiler (alias of rustc)", "rustc") }
