@@ -58,9 +58,10 @@ const (
 type Realm string
 
 const (
-	RealmSSH      Realm = "ssh"      // ssh, scp, sftp, rsync — one credential world
+	RealmSSH      Realm = "ssh"      // ssh, scp, sftp, rsync, sshfs, git-over-ssh — one credential world
 	RealmPostgres Realm = "postgres" // psql — `-U` is a DB role, NOT a login
 	RealmMySQL    Realm = "mysql"
+	RealmRedis    Realm = "redis"
 	RealmHTTP     Realm = "http" // curl, wget
 )
 
@@ -73,8 +74,19 @@ type CommandSpec struct {
 	// mistaken for one — without this, `ssh -v host` would record the host as
 	// the value of -v.
 	BoolFlags map[string]bool
+	// ValueFlags take a value that means nothing here (`sshfs -o reconnect`,
+	// `ssh-keyscan -t rsa`). They must still be declared, because the reason to
+	// list them is not what they hold but what follows them: an undeclared
+	// value-taking flag leaves its value looking like a positional, and the
+	// operand after it looking like nothing.
+	ValueFlags map[string]bool
 	// Render maps a role back to this command's flag, which is where the
 	// ssh/scp capitalisation trap is actually solved.
+	//
+	// An empty map is a meaningful declaration, not an omission: it says the
+	// command CONTRIBUTES facts but cannot receive them. git is the clearest
+	// case — a clone over ssh:// teaches the port, and nothing in git's own
+	// surface can express that port back as a flag.
 	Render map[Role]string
 	// SecretFlags are flags whose value must never be captured.
 	SecretFlags map[string]bool
@@ -88,11 +100,44 @@ type CommandSpec struct {
 	// `scp file.txt remote-host:/tmp` records "file.txt" as the host, because a
 	// bare filename parses as a hostname perfectly well.
 	HostHasPath bool
+	// HostRequiresURL demands a `scheme://` or a `user@` in the operand before
+	// it is read as a target.
+	//
+	// This is a STRICTER test than HostHasPath, and git is why it exists: a
+	// colon means "remote" for scp but means almost anything for git.
+	// `git push origin HEAD:main` is a refspec, `git commit -m "fix: thing"` is
+	// a message, and both would parse as `host:path` perfectly well. Demanding a
+	// scheme or a login costs the bare `git clone host:repo` form — a real miss,
+	// accepted deliberately, because a missed fact is recoverable on the next
+	// invocation and a fabricated host named HEAD is not.
+	HostRequiresURL bool
+	// Schemes limits which URL schemes yield facts. Empty means any.
+	//
+	// The case is git again, and it is about REALMS rather than parsing: git
+	// speaks ssh and https through one command, but a fact learned over https
+	// belongs to a different credential world than one learned over ssh.
+	// Restricting the scheme is how a multi-transport command still declares a
+	// single honest realm.
+	Schemes map[string]bool
+	// Subcommands, when non-empty, requires argv[1] to be a member before
+	// anything is extracted.
+	//
+	// A command with subcommands has a different grammar per subcommand, so
+	// applying one flag table across all of them is how `-m` in `git commit`
+	// gets read as something it is not.
+	Subcommands map[string]bool
 }
 
-// commandSpecs is the per-command table. Small on purpose: fifteen commands
+// commandSpecs is the per-command table. Small on purpose: a dozen commands
 // cover nearly every connection an operator makes, and each entry is the one
 // place per-command knowledge genuinely earns its cost.
+//
+// The ssh realm is deliberately the widest, because that is where transfer
+// actually pays: eight commands share one credential world, so a port learned
+// from any of them renders correctly for the rest. Commands whose realm has no
+// partners (redis-cli, wget) earn their entry differently — they are here for
+// the secret deny-list, since a password in argv is a hazard whether or not the
+// fact ever travels.
 var commandSpecs = map[string]CommandSpec{
 	"ssh": {
 		Realm:          RealmSSH,
@@ -148,10 +193,85 @@ var commandSpecs = map[string]CommandSpec{
 		AttachedSecret: []string{"-p", "--password="},
 		HostPositional: false,
 	},
+	"sshfs": {
+		HostHasPath:    true,
+		Realm:          RealmSSH,
+		Flags:          map[string]Role{"-p": RolePort},
+		ValueFlags:     map[string]bool{"-o": true},
+		BoolFlags:      map[string]bool{"-d": true, "-f": true, "-s": true, "-v": true},
+		Render:         map[Role]string{RolePort: "-p"},
+		HostPositional: true,
+	},
+	"ssh-copy-id": {
+		Realm:          RealmSSH,
+		Flags:          map[string]Role{"-p": RolePort, "-i": RoleIdentity},
+		BoolFlags:      map[string]bool{"-f": true, "-n": true, "-x": true},
+		Render:         map[Role]string{RolePort: "-p", RoleIdentity: "-i"},
+		HostPositional: true,
+	},
+	"ssh-keyscan": {
+		Realm: RealmSSH,
+		Flags:      map[string]Role{"-p": RolePort},
+		ValueFlags: map[string]bool{"-t": true, "-T": true, "-f": true},
+		// -H hashes the output. It is NOT a header flag, and mistaking it for
+		// one would consume the host operand as its value.
+		BoolFlags:      map[string]bool{"-H": true, "-v": true, "-4": true, "-6": true, "-D": true},
+		Render:         map[Role]string{RolePort: "-p"},
+		HostPositional: true,
+	},
+	"git": {
+		// git over ssh IS the ssh realm — the port and login a clone uses are
+		// the same ones ssh needs, which makes this the clearest cross-command
+		// transfer in the table: `git clone ssh://user@host:2222/repo` teaches a
+		// fact that `ssh host` can then be reminded of.
+		//
+		// The direction is one-way by design. Render is empty because git has
+		// no flag that expresses a port, so git gives facts and never receives
+		// them. Declaring that honestly is better than inventing a
+		// `-c core.sshCommand=...` suggestion nobody asked for.
+		Realm:           RealmSSH,
+		Subcommands:     map[string]bool{"clone": true, "fetch": true, "pull": true, "push": true, "ls-remote": true, "archive": true},
+		Flags: map[string]Role{},
+		// -C and -c are git's global options and appear BEFORE the subcommand,
+		// so they have to be consumed correctly or the subcommand gate reads
+		// their value as the subcommand and refuses a legitimate clone.
+		ValueFlags: map[string]bool{"-C": true, "-c": true, "-b": true, "--branch": true, "--depth": true, "-o": true, "--origin": true, "--reference": true, "-u": true},
+		BoolFlags:  map[string]bool{"--bare": true, "--mirror": true, "-v": true, "-q": true, "--all": true, "--tags": true, "--force": true, "-f": true, "--recurse-submodules": true},
+		Render:          map[Role]string{},
+		HostPositional:  true,
+		HostRequiresURL: true,
+		// https:// is a different credential world (a token, not a key), so it
+		// is left out rather than folded into the ssh realm.
+		Schemes: map[string]bool{"ssh": true, "git": true},
+	},
+	"redis-cli": {
+		Realm: RealmRedis,
+		Flags: map[string]Role{"-h": RoleJump, "-p": RolePort, "-n": RoleDatabase, "--user": RoleUser},
+		BoolFlags: map[string]bool{
+			"--askpass": true, "--tls": true, "--no-auth-warning": true, "-c": true,
+		},
+		Render: map[Role]string{RolePort: "-p", RoleDatabase: "-n", RoleUser: "--user"},
+		// -a is the password and -u is a URI with the password embedded. Both
+		// are exactly the argv-carries-a-secret case this deny-list exists for.
+		SecretFlags:    map[string]bool{"-a": true, "--pass": true, "-u": true},
+		HostPositional: false,
+	},
 	"curl": {
 		Realm:          RealmHTTP,
 		Flags:          map[string]Role{},
 		SecretFlags:    map[string]bool{"-u": true, "--user": true, "-H": true, "--header": true},
+		Render:         map[Role]string{},
+		HostPositional: false,
+	},
+	"wget": {
+		Realm: RealmHTTP,
+		Flags: map[string]Role{},
+		SecretFlags: map[string]bool{
+			"--user": true, "--password": true,
+			"--http-user": true, "--http-password": true,
+			"--ftp-user": true, "--ftp-password": true,
+			"--header": true,
+		},
 		Render:         map[Role]string{},
 		HostPositional: false,
 	},
@@ -192,6 +312,7 @@ func Extract(argv []string) (Extraction, bool) {
 
 	out := Extraction{Realm: spec.Realm, Roles: map[Role]string{}}
 	var positionals []string
+	needSub := len(spec.Subcommands) > 0
 
 	for i := 1; i < len(argv); i++ {
 		a := argv[i]
@@ -202,50 +323,79 @@ func Extract(argv []string) (Extraction, bool) {
 			out.Redacted++
 			continue
 		}
-		if spec.SecretFlags[a] {
+		// A `--flag=value` word is split before anything looks at it, so a
+		// secret written that way is refused by the same deny-list rather than
+		// slipping through as an unrecognised flag.
+		name, attached, isAttached := strings.Cut(a, "=")
+		if !isAttached || !strings.HasPrefix(a, "-") {
+			name, attached = a, ""
+		}
+
+		if spec.SecretFlags[name] {
 			out.Redacted++
-			i++ // consume the value without reading it
+			if !isAttached {
+				i++ // consume the separate value without reading it
+			}
 			continue
 		}
-		if role, isRole := spec.Flags[a]; isRole {
-			if i+1 < len(argv) {
+		if role, isRole := spec.Flags[name]; isRole {
+			switch {
+			case isAttached:
+				out.Roles[role] = attached
+			case i+1 < len(argv):
 				out.Roles[role] = argv[i+1]
 				i++
 			}
 			continue
 		}
-		if spec.BoolFlags[a] {
+		if spec.ValueFlags[name] {
+			if !isAttached {
+				i++ // consumed so the value is not mistaken for an operand
+			}
+			continue
+		}
+		if spec.BoolFlags[name] {
 			continue
 		}
 		if strings.HasPrefix(a, "-") {
 			continue // an unknown flag is skipped, never guessed at
 		}
+		if needSub {
+			// The first bare word is the subcommand. A command with
+			// subcommands has a different grammar under each, so an unknown one
+			// yields nothing rather than being parsed with the wrong table.
+			needSub = false
+			if !spec.Subcommands[a] {
+				return Extraction{}, false
+			}
+			continue
+		}
 		positionals = append(positionals, a)
 	}
 
 	if spec.HostPositional {
-		// For the host:path form, the REMOTE operand is the one carrying a
-		// colon; everything else is a local file.
-		if spec.HostHasPath {
-			var remote []string
-			for _, p := range positionals {
-				if strings.Contains(p, ":") {
-					remote = append(remote, p)
-				}
-			}
-			positionals = remote
-		}
+		positionals = remoteOperands(spec, positionals)
 		for _, p := range positionals {
-			host, user := splitTarget(p)
+			host, user, port := splitTarget(p)
 			if host == "" {
 				continue
 			}
+			if !schemeAllowed(spec, p) {
+				continue
+			}
 			out.Entity = Entity{Kind: EntityHost, Name: host}
-			// `user@host` states the login inline, and it should not be lost
-			// just because it was not given as a flag.
+			// `user@host` and `ssh://host:2222` state the login and port
+			// inline, and they should not be lost just because they were not
+			// given as flags. An explicit flag still wins: it is the more
+			// deliberate statement of the two.
 			if user != "" {
 				if _, already := out.Roles[RoleUser]; !already {
 					out.Roles[RoleUser] = user
+				}
+			}
+			if port != "" {
+				if _, already := out.Roles[RolePort]; !already {
+					out.Roles[RolePort] = port
 				}
 			}
 			break
@@ -260,13 +410,65 @@ func Extract(argv []string) (Extraction, bool) {
 	return out, out.Entity.Valid() && len(out.Roles) > 0
 }
 
-// splitTarget pulls host and optional user out of a target operand, handling
-// `user@host`, `host:/path`, and `user@host:/path`.
-func splitTarget(p string) (host, user string) {
+// remoteOperands narrows positionals to the ones that can name a remote target.
+//
+// Two strictnesses, because a colon means different things in different
+// grammars. For scp and friends it reliably separates host from path. For git
+// it separates almost anything from anything else — refspecs, commit messages,
+// URLs — so a scheme or a login is demanded instead.
+func remoteOperands(spec CommandSpec, positionals []string) []string {
+	if spec.HostRequiresURL {
+		var out []string
+		for _, p := range positionals {
+			if strings.Contains(p, "://") || strings.Contains(p, "@") {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	if !spec.HostHasPath {
+		return positionals
+	}
+	var out []string
+	for _, p := range positionals {
+		if strings.Contains(p, ":") {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// schemeAllowed enforces a spec's scheme restriction.
+//
+// A scheme-less operand passes: `user@host:path` is the scp form, which for
+// every command in this table means the command's declared realm.
+func schemeAllowed(spec CommandSpec, operand string) bool {
+	if len(spec.Schemes) == 0 {
+		return true
+	}
+	i := strings.Index(operand, "://")
+	if i < 0 {
+		return true
+	}
+	return spec.Schemes[operand[:i]]
+}
+
+// splitTarget pulls host, optional user and optional port out of a target
+// operand, handling `user@host`, `host:/path`, `user@host:/path`, and the URL
+// form `scheme://user@host:port/path`.
+//
+// The scheme is what discriminates the two colon meanings: in `host:/path` the
+// colon introduces a PATH, in `ssh://host:2222/repo` it introduces a PORT.
+// Reading one as the other would either invent a port named "/tmp" or throw
+// away a real one.
+func splitTarget(p string) (host, user, port string) {
+	if i := strings.Index(p, "://"); i >= 0 {
+		return splitURLTarget(p[i+3:])
+	}
 	// A local path is not a host. Checking the separator rather than the
 	// filesystem keeps this a pure function.
 	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, ".") {
-		return "", ""
+		return "", "", ""
 	}
 	if i := strings.Index(p, ":"); i >= 0 {
 		p = p[:i]
@@ -275,9 +477,57 @@ func splitTarget(p string) (host, user string) {
 		user, p = p[:i], p[i+1:]
 	}
 	if p == "" || strings.Contains(p, "/") {
-		return "", user
+		return "", user, ""
 	}
-	return p, user
+	return p, user, ""
+}
+
+// splitURLTarget parses the authority of a URL: `[user[:pass]@]host[:port]`.
+func splitURLTarget(rest string) (host, user, port string) {
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	if i := strings.LastIndex(rest, "@"); i >= 0 {
+		user, rest = rest[:i], rest[i+1:]
+		// `user:password@host` puts a password in argv. It is dropped here
+		// rather than downstream, so it never reaches a variable that could be
+		// stored: this function's callers write what it returns.
+		if j := strings.Index(user, ":"); j >= 0 {
+			user = user[:j]
+		}
+	}
+	if strings.HasPrefix(rest, "[") { // IPv6 literal
+		j := strings.Index(rest, "]")
+		if j < 0 {
+			return "", user, ""
+		}
+		host = rest[1:j]
+		if tail := rest[j+1:]; strings.HasPrefix(tail, ":") {
+			port = numericPort(tail[1:])
+		}
+		return host, user, port
+	}
+	if i := strings.LastIndex(rest, ":"); i >= 0 {
+		host, port = rest[:i], numericPort(rest[i+1:])
+	} else {
+		host = rest
+	}
+	return host, user, port
+}
+
+// numericPort returns s only if it is digits. A non-numeric authority tail is
+// not a port, and recording it as one would put a string where every consumer
+// expects a number.
+func numericPort(s string) string {
+	if s == "" {
+		return ""
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return s
 }
 
 func hasAttachedSecret(spec CommandSpec, arg string) bool {
@@ -312,6 +562,48 @@ func Transfers(role Role, from, to string) bool {
 		return false
 	}
 	return a.Realm == b.Realm
+}
+
+// declaredSourceRealms maps non-command provenance to a realm.
+//
+// A fact learned by WATCHING carries the command that taught it, and that
+// command's spec names the realm. A fact read from DECLARED config has no
+// command behind it, so the realm has to be stated here instead — without this
+// an imported ssh config lands in the store and is then never suggested for
+// anything, which looks exactly like the import having silently failed.
+var declaredSourceRealms = map[string]Realm{
+	"ssh-config": RealmSSH,
+}
+
+// SourceRealm resolves the credential realm a fact's provenance belongs to,
+// for both `exec:<binary>` and declared sources.
+//
+// An unrecognised source yields false rather than a default. A fact whose realm
+// is unknown must not be suggested anywhere: "we don't know which credential
+// world this belongs to" is a reason to stay quiet, not a reason to guess.
+func SourceRealm(source string) (Realm, bool) {
+	s := strings.TrimSpace(source)
+	if bin, isExec := strings.CutPrefix(s, "exec:"); isExec {
+		spec, ok := SpecFor(bin)
+		if !ok {
+			return "", false
+		}
+		return spec.Realm, true
+	}
+	r, ok := declaredSourceRealms[s]
+	return r, ok
+}
+
+// TransfersTo reports whether a fact with the given provenance may be suggested
+// for a command. It is the provenance-aware form of Transfers, and the one
+// callers holding a Fact should use.
+func TransfersTo(source, to string) bool {
+	from, ok := SourceRealm(source)
+	if !ok {
+		return false
+	}
+	spec, ok := SpecFor(to)
+	return ok && spec.Realm == from
 }
 
 // RenderRole formats a known fact as the target command's flag.

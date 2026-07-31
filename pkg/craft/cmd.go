@@ -252,6 +252,34 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 	learn.Flags().StringVar(&learnSource, "source", "", "what learned it (a skill, a run) — provenance for a fact that turns out wrong")
 	learn.Flags().BoolVar(&forget, "forget", false, "invalidate without asserting a replacement")
 
+	var importSSHConfig string
+	var importDryRun bool
+	importCmd := &cobra.Command{
+		Use:   "import",
+		Short: "read facts from config this host already DECLARES (ssh config)",
+		Long: "Every other path into the store learns by watching: a command runs, it\n" +
+			"succeeds, and what it used is recorded. That is patient and it works, but it\n" +
+			"only ever knows about hosts somebody has already reached from here.\n\n" +
+			"An ssh config is the opposite — a curated map of hosts to the port, login and\n" +
+			"key each one needs, written deliberately. So it fills the store at once, and\n" +
+			"it covers machines this host has never contacted.\n\n" +
+			"Host ALIASES are the interesting part. `Host dev-box` with `HostName 10.0.0.41`\n" +
+			"means \"dev-box\" is a name that exists here and nowhere else — exactly the local\n" +
+			"jargon worth being able to answer for, arriving with its meaning attached.\n\n" +
+			"Wildcard blocks are skipped (they declare defaults for everything rather than\n" +
+			"facts about anything) and Include is not followed. What lands are facts, so it\n" +
+			"stays host-local and is never shared.",
+		Example: "  bashy craft import --dry-run\n" +
+			"  bashy craft import\n" +
+			"  bashy craft import --ssh-config /path/to/config",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runImport(cmd, cfg, importSSHConfig, importDryRun)
+		},
+	}
+	importCmd.Flags().StringVar(&importSSHConfig, "ssh-config", "", "ssh config to read (default: the caller's own)")
+	importCmd.Flags().BoolVar(&importDryRun, "dry-run", false, "show what would be recorded without writing")
+
 	factsCmd := &cobra.Command{
 		Use:   "facts [entity]",
 		Short: "what this host has learned about things (host-local)",
@@ -331,7 +359,7 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 	promoteCmd.Flags().StringVar(&promoteCoord, "coordinate", "", "coordinate to record the promoted fold at (required with --accept)")
 	promoteCmd.Flags().StringVar(&promoteAccept, "accept", "", "promote the candidate with this key")
 
-	root.AddCommand(history, study, find, compose, learn, factsCmd, fold, foldsCmd, promoteCmd)
+	root.AddCommand(history, study, find, compose, learn, importCmd, factsCmd, fold, foldsCmd, promoteCmd)
 	return root
 }
 
@@ -357,6 +385,46 @@ func parseEntity(s string) (Entity, error) {
 		return Entity{}, fmt.Errorf("craft: entity %q has no name", s)
 	}
 	return e, nil
+}
+
+func runImport(cmd *cobra.Command, cfg *config, sshConfig string, dryRun bool) error {
+	path := strings.TrimSpace(sshConfig)
+	if path == "" {
+		path = DefaultSSHConfigPath()
+	}
+	if path == "" {
+		return fmt.Errorf("craft: no ssh config to read and no home directory to find one in")
+	}
+
+	entries := ParseSSHConfig(path)
+	facts := SSHConfigFacts(entries, "ssh-config")
+	if len(facts) == 0 {
+		// Not an error. An operator with no ssh config, or one holding only
+		// wildcard defaults, has simply declared nothing — and reporting that as
+		// a failure would make a clean machine look broken.
+		fmt.Fprintf(cmd.ErrOrStderr(), "craft: nothing declared in %s\n", path)
+		return nil
+	}
+
+	out := cmd.OutOrStdout()
+	store := OpenFacts(cfg.storeDir)
+	for _, f := range facts {
+		if dryRun {
+			fmt.Fprintf(out, "%s\t%s\t%s\n", f.Entity.ID(), f.Key, f.Value)
+			continue
+		}
+		if err := store.Record(f); err != nil {
+			return err
+		}
+	}
+
+	verb := "recorded"
+	if dryRun {
+		verb = "would record"
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "craft: %s %d facts about %d host(s) from %s (host-local; never shared)\n",
+		verb, len(facts), len(entries), path)
+	return nil
 }
 
 func runLearn(cmd *cobra.Command, cfg *config, entity, key, value, source string, forget bool) error {
