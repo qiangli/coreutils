@@ -155,6 +155,7 @@ var packages = map[string]Package{
 	"search":     cmdPkg("search"),
 	"secrets":    cmdPkg("secrets"),
 	"skills":     cmdPkg("skills"),
+	"craft":      cmdPkg("craft"),
 	"sota":       cmdPkg("sota"),
 	"steward":    cmdPkg("steward"),
 	"supervise":  cmdPkg("supervise"),

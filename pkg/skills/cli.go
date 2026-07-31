@@ -174,6 +174,9 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 	export.Flags().BoolVar(&expRepo, "repo", false, "install at repo scope (explicit consent)")
 	export.Flags().BoolVar(&expForce, "force", false, "replace folders not exported by us")
 
+	// NOTE: the evidence ledger these runs write is READ by `bashy craft`
+	// (coreutils/pkg/craft), not here. skills manages the catalog; craft is
+	// what running it accumulates into.
 	root.AddCommand(list, probe, show, add, verify, run, learn, promote, export)
 	return root
 }

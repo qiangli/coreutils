@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -125,6 +126,44 @@ func TestKeyProbes(t *testing.T) {
 	// No requires → coarse {os, arch} only.
 	if kp := KeyProbes(Skill{}); len(kp) != 2 {
 		t.Fatalf("KeyProbes(no requires) = %v", kp)
+	}
+}
+
+// A skill may GATE on the clock but must never be KEYED by it: a coordinate that
+// advances with the hour files every run under a fresh address, so no skill ever
+// accumulates the evidence that election and retirement depend on. The failure is
+// silent — the store just fills with singletons — so it is pinned here, at the one
+// place a skill's coordinate is minted.
+func TestKeyProbes_ExcludesTheClock(t *testing.T) {
+	req, err := ParseRequires("os=linux time.attended has=git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk := Skill{Requires: &req}
+
+	// The gate still sees it — dropping it from the KEY must not drop it from
+	// applicability, or a skill needing a human present would run unattended.
+	refs := req.ProbeRefs()
+	if !slices.Contains(refs, "time.attended") {
+		t.Fatalf("ProbeRefs = %v, want the clause preserved for gating", refs)
+	}
+
+	got := KeyProbes(sk)
+	if slices.Contains(got, "time.attended") {
+		t.Errorf("KeyProbes = %v; a clock probe reached the context key", got)
+	}
+	if want := []string{"os", "arch", "tool.git"}; !slices.Equal(got, want) {
+		t.Errorf("KeyProbes = %v, want %v", got, want)
+	}
+
+	// Network locality is deliberately still keyable — reachability is a real
+	// capability difference, unlike the hour of the day.
+	roam, err := ParseRequires("os=linux net.same_lan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kp := KeyProbes(Skill{Requires: &roam}); !slices.Contains(kp, "net.same_lan") {
+		t.Errorf("KeyProbes = %v; network locality must stay in the key", kp)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -101,20 +100,7 @@ func DefaultProbes(cache Cache) *ProbeSet {
 		movementDebounce: 10 * time.Second,
 		publishMovement:  busevent.PublishSpacetimeMovement,
 	}
-	for _, p := range []Probe{
-		{Name: "os", Eval: func() (string, error) { return runtime.GOOS, nil }},
-		{Name: "arch", Eval: func() (string, error) { return runtime.GOARCH, nil }},
-		{Name: "os.release", Eval: probeOSRelease},
-		{Name: "libc", Eval: probeLibc},
-		{Name: "container", Eval: probeContainer},
-		{Name: "tty", Eval: probeTTY},
-		{Name: "elevated", Eval: probeElevated},
-		{Name: "time.hour", Eval: probeTimeHour, Volatile: true},
-		{Name: "time.weekday", Eval: probeTimeWeekday, Volatile: true},
-		{Name: "time.zone", Eval: probeTimeZone, Volatile: true},
-		{Name: "time.attended", Eval: probeTimeAttended, Volatile: true},
-		{Name: "place.id", Eval: probePlaceID, Volatile: true},
-	} {
+	for _, p := range coreProbeList() {
 		ps.core[p.Name] = p
 	}
 	ps.Register(&toolResolver{})

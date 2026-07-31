@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/qiangli/coreutils/pkg/assetring"
+	"github.com/qiangli/coreutils/pkg/spacetime"
 )
 
 // The ring machinery (Ring, Source, the merge order, shadowing) lives in
@@ -133,7 +134,24 @@ func verdictOf(sk Skill, ps *ProbeSet) Verdict {
 }
 
 // KeyProbes returns the probe names a skill's context key is computed
-// over: {os, arch} ∪ the requires-referenced subset (pinned rule).
+// over: {os, arch} ∪ the requires-referenced subset (pinned rule),
+// minus any probe that must not be keyed on.
+//
+// Two pins meet here, and both are load-bearing:
+//
+// The subset rule (§11.5) keys on the probes a skill actually references
+// rather than the whole host snapshot. Keying on everything would make
+// every host unique, so no two machines could ever share a coordinate
+// and no overlay would ever be reused.
+//
+// The keyability rule is the same failure along the time axis instead of
+// the space axis. A skill may legitimately GATE on `time.attended`; it
+// may never be KEYED by it, because a coordinate that moves with the
+// clock files every run under a fresh address and the evidence corpus
+// fragments to n=1 — silently, since nothing is broken, only useless.
+// Network locality is deliberately NOT filtered: reachability is a real
+// capability difference, so an entry referencing it should re-key on a
+// roam. See spacetime.IsUnkeyableProbe for where that line falls.
 func KeyProbes(sk Skill) []string {
 	names := []string{"os", "arch"}
 	if sk.Requires != nil {
@@ -143,5 +161,5 @@ func KeyProbes(sk Skill) []string {
 			}
 		}
 	}
-	return names
+	return spacetime.KeyableProbes(names)
 }

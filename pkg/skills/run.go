@@ -36,10 +36,19 @@ import (
 
 // AttestRecord is one stored run receipt (JSONL, ring-1 store).
 type AttestRecord struct {
-	At         time.Time              `json:"at"`
-	Name       string                 `json:"name"`
-	Tier       string                 `json:"tier"`
-	ContextKey string                 `json:"context_key"`
+	At         time.Time `json:"at"`
+	Name       string    `json:"name"`
+	Tier       string    `json:"tier"`
+	ContextKey string    `json:"context_key"`
+	// Capability is what the skill GUARANTEES (see CapabilityKey), stamped so
+	// evidence can be pooled across interchangeable implementations rather
+	// than only per-name. Omitted when the skill declares no contract.
+	//
+	// Attest.Skill already carries the exact Identity that ran, so a receipt
+	// records both halves: which version ran, and which promise it was
+	// keeping. Older receipts predate this field and legitimately lack it —
+	// the reader leaves those empty rather than inferring one.
+	Capability string                 `json:"capability,omitempty"`
 	Attest     dhntskills.Attestation `json:"attest"`
 }
 
@@ -310,11 +319,16 @@ func runEffective(name string, effective dhntskills.Skill, p runPrep, dir string
 	if err != nil {
 		return AttestRecord{}, err
 	}
+	// Stamp what the skill GUARANTEES alongside what ran. A contract-less
+	// skill has no capability key, and that is recorded as absence rather
+	// than failing the run — the receipt is still evidence.
+	capKey, _ := CapabilityKey(effective)
 	return AttestRecord{
 		At:         time.Now().UTC(),
 		Name:       name,
 		Tier:       p.tier,
 		ContextKey: p.ctxKey,
+		Capability: capKey,
 		Attest:     att,
 	}, nil
 }
@@ -360,3 +374,9 @@ func shortID(id string) string {
 	}
 	return id
 }
+
+// ShortID abbreviates a content address (identity, capability key, context
+// key) for display. Exported for pkg/craft, which renders the same addresses
+// and must abbreviate them identically — two spellings of one address in two
+// views is how an operator concludes they are looking at two things.
+func ShortID(id string) string { return shortID(id) }

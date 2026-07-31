@@ -15,11 +15,16 @@ import (
 
 // DhntInfo is the parsed summary of a skill's canonical face.
 type DhntInfo struct {
-	Identity  string   // "h" + sha256(canonical form) — the content address
-	Contract  []string // contract predicate ids (dhnt-canonical)
-	EffectCap []string // declared effect-cap atoms
-	Steps     int
-	Err       string // non-empty when skill.dhnt is invalid (parse/identity)
+	Identity string // "h" + sha256(canonical form) — the content address
+	// Capability is "k" + sha256(contract+cap projection) — what the skill
+	// GUARANTEES, ignoring how. Empty when the skill declares no contract
+	// (see ErrNoContract): a skill that has not said what it is for cannot be
+	// matched by guarantee, and must not be merged with one that has.
+	Capability string
+	Contract   []string // contract predicate ids (dhnt-canonical)
+	EffectCap  []string // declared effect-cap atoms
+	Steps      int
+	Err        string // non-empty when skill.dhnt is invalid (parse/identity)
 }
 
 // Valid reports whether the canonical face parsed and hashed cleanly.
@@ -41,6 +46,11 @@ func parseDhntInfo(canon []byte) *DhntInfo {
 		return &DhntInfo{Err: err.Error()}
 	}
 	info := &DhntInfo{Identity: id, Steps: len(sk.Steps)}
+	// A missing capability key is a legitimate state (no contract), not a
+	// parse failure — it must never invalidate an otherwise-good face.
+	if key, err := CapabilityKey(sk); err == nil {
+		info.Capability = key
+	}
 	for _, c := range sk.Contract {
 		info.Contract = append(info.Contract, c.Predicate)
 	}
