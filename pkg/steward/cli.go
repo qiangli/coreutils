@@ -2398,36 +2398,26 @@ var (
 )
 
 // hostAssignment is this host's steward seat as a role assignment.
-// stewardAssignment addresses the steward as the USER'S TWIN, not as a machine.
+// stewardAssignment addresses ONE steward: a login on a machine.
 //
-// The topic is keyed on the login, deliberately. A steward is the person's
-// digital twin — the thing that acts on their behalf and the messenger every
-// other agent routes through — so "reach the user" must not require knowing
-// which of their machines they happen to be at. Keyed on the hostname (as this
-// first was), an agent wanting the user would have to guess the host, and guess
-// again when they moved.
+// The Ref is the scope id — <host>-<account>-<digest> — and not the bare login,
+// because a steward is NOT the user's twin. It manages the resources of one
+// local login on one host, so two machines the same person is logged into hold
+// two different stewards with two different journals, and an address that named
+// only the login would be ambiguous between them: a message meant for the work
+// on one machine would be delivered to whichever listener answered first.
 //
-// This is the half of the twin model that the SEAT deliberately does not carry.
-// The seat is a local resource with a single live holder, a heartbeat and a
-// fencing epoch, so it stays per (machine, account) — merging it across
-// machines produces two live holders in one epoch ladder, which is a fencing
-// war rather than a twin (see TestSharedHomeDoesNotMergeSeatsAcrossMachines).
-// The ADDRESS has no such constraint: nothing about a topic requires one
-// listener on one box, so it can name the person while the seat names the
-// place.
+// The twin — the identity tied to the cloudbox account, which manages the
+// stewards of every host registered or shared with it — is a LEVEL UP and is
+// not built. When it exists it gets its own address keyed on that account, and
+// this one stays what it is: how to reach the steward of a particular machine.
+// See docs/agent-identity-model.md.
 func stewardAssignment() role.Assignment {
-	return role.Assignment{Kind: role.Steward, Ref: stewardUserRef(), Title: "digital twin"}
-}
-
-// stewardUserRef is the stable, readable name of the person this twin serves.
-//
-// It comes from the OS, never the environment, for the same reason the scope
-// does: an address an agent can set is an address an agent can impersonate.
-func stewardUserRef() string {
-	if u, err := user.Current(); err == nil && strings.TrimSpace(u.Username) != "" {
-		return slug(u.Username)
+	sc, err := OSScope{}.Scope()
+	if err != nil {
+		return role.Assignment{Kind: role.Steward, Ref: hostLabel(), Title: "host steward"}
 	}
-	return slug(accountLabel(Self().Name))
+	return role.Assignment{Kind: role.Steward, Ref: sc.ID, Title: "host steward"}
 }
 
 // assumeSeatRoom opens the steward's room, returning a line to print.

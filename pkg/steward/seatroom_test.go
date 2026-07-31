@@ -2,7 +2,6 @@ package steward
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -66,27 +65,29 @@ func TestSeatRoom_HookIsUsedAndFailuresAreReported(t *testing.T) {
 	}
 }
 
-// THE ADDRESS NAMES THE PERSON; THE SEAT NAMES THE PLACE.
+// A STEWARD'S ADDRESS MUST DISTINGUISH ONE MACHINE'S STEWARD FROM ANOTHER'S.
 //
-// A steward is the user's digital twin and the messenger every other agent
-// routes through, so "reach the user" must not require knowing which of their
-// machines they are at. The SEAT stays per (machine, account) — it has one live
-// holder, a heartbeat and a fencing epoch, and merging that across machines is
-// a fencing war rather than a twin. A topic has no such constraint.
-func TestStewardAddress_NamesTheUserNotTheHost(t *testing.T) {
+// A steward manages the resources of one login on one host, so the same person
+// logged into two machines has two stewards with two journals. An address keyed
+// on the bare login would be ambiguous between them, and a message meant for
+// the work on one machine would reach whichever listener answered first.
+//
+// (The user's TWIN — the cloudbox-account identity that manages those stewards
+// — is a level up and is not built. See docs/agent-identity-model.md.)
+func TestStewardAddress_DistinguishesMachines(t *testing.T) {
 	topic := stewardAssignment().Topic()
 	if !strings.HasPrefix(topic, "steward.") {
 		t.Fatalf("topic = %q, want a steward topic", topic)
 	}
-	if h, err := os.Hostname(); err == nil && h != "" {
-		if strings.Contains(topic, strings.ToLower(h)) {
-			t.Errorf("topic %q is keyed on the HOST — an agent wanting the user "+
-				"would have to know which machine they are at, and guess again when they move", topic)
-		}
+	sc, err := OSScope{}.Scope()
+	if err != nil {
+		t.Skip("no scope on this host")
 	}
-	// And it is stable: an address that moved would strand every message in
-	// flight to it.
+	if !strings.Contains(topic, sc.ID) {
+		t.Errorf("topic %q must carry the scope id %q — otherwise two machines' "+
+			"stewards share one address", topic, sc.ID)
+	}
 	if stewardAssignment().Topic() != topic {
-		t.Error("the twin's address must be deterministic")
+		t.Error("the address must be deterministic")
 	}
 }
