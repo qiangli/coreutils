@@ -315,7 +315,31 @@ func newSprintStopCmd() *cobra.Command {
 				rep.GateRan, rep.GatePassed, rep.GateCmd = out.Ran, out.Passed, out.Command
 				b.GateRan, b.GatePassed, b.GateCmd = out.Ran, out.Passed, out.Command
 
+				// CLOSING CONDITIONS: committed, pushed, pinned. A green gate
+				// says the code works; it says nothing about whether the work
+				// was PUT anywhere the next sprint will find it.
+				var repoPath = func(name string) (string, bool) {
+					dir, ok := queueDirForRepoName(name)
+					if !ok {
+						return "", false
+					}
+					return weaveRepoRootForQueue(dir)
+				}
+				repos := checkClosingConditions(s, currentBoard, repoPath)
+				rep.Repos = repos
+				var unclean []string
+				for i := range repos {
+					if !repos[i].OK() {
+						unclean = append(unclean, repos[i].Describe())
+					}
+				}
+
 				if !force {
+					if len(unclean) > 0 {
+						return "", fmt.Errorf("sprint #%d NOT stopped — the repos are not wrapped up:\n  %s\n"+
+							"  commit, push, and bump pins, then `sprint stop %d` again (--force records it unwrapped)",
+							id, strings.Join(unclean, "\n  "), id)
+					}
 					if len(problems) > 0 {
 						return "", fmt.Errorf("sprint #%d NOT stopped — could not park: %s\n  fix, then `sprint stop %d` again (or --force to close anyway)",
 							id, strings.Join(problems, "; "), id)

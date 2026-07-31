@@ -84,6 +84,7 @@ type drainReport struct {
 	GateCmd    string
 	GateOutput string
 	Failures   []string // repos whose gate failed
+	Repos      []repoState
 }
 
 // Clean reports a drain that satisfies every condition for a good handoff: a
@@ -111,7 +112,18 @@ func pauseLinkedRepos(s *weaveStory) (paused []string, problems []string) {
 			problems = append(problems, fmt.Sprintf("%s: no unique queue on this host", r.Repo))
 			continue
 		}
-		n, err := pauseWorkersIn(dir)
+		// ONLY THIS SPRINT'S RUNS. Parking is per-queue at the weave layer, so
+		// pausing a whole repo would stop ANOTHER running sprint's workers —
+		// the exact cross-sprint damage the shared-repo exemption exists to
+		// avoid one check later. A sprint may stop its own work and nobody
+		// else's.
+		mine := map[int64]bool{}
+		for _, rr := range s.Runs {
+			if rr.Repo == r.Repo {
+				mine[rr.ID] = true
+			}
+		}
+		n, err := pauseWorkersIn(dir, mine)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", r.Repo, err))
 			continue
@@ -151,16 +163,20 @@ func queueDirForRepoName(repo string) (string, bool) {
 	return hits[0], true
 }
 
-// pauseWorkersIn stops every running wrapper recorded in one queue directory
-// and marks its items paused, so `weave resume` picks them up unchanged.
-func pauseWorkersIn(dir string) (int, error) {
+// pauseWorkersIn stops the running wrappers for the GIVEN runs in one queue,
+// leaving every other worker in that repo alone.
+//
+// The filter is the whole point. Two sprints can share a repo, and a drain that
+// paused the queue would stop work its sprint does not own — silently, since a
+// paused worker looks the same however it got there.
+func pauseWorkersIn(dir string, only map[int64]bool) (int, error) {
 	var stopped int
 	q, err := loadWeaveQueue(dir)
 	if err != nil {
 		return 0, err
 	}
 	for _, it := range q.Items {
-		if it.State != "working" {
+		if it.State != "working" || !only[it.ID] {
 			continue
 		}
 		if it.WrapperPid > 0 && pidAlive(it.WrapperPid) {
@@ -202,6 +218,15 @@ func drainSummary(r *drainReport, elapsed, planned time.Duration) string {
 		b.WriteString("gate green")
 	default:
 		b.WriteString("GATE FAILED")
+	}
+	if n := len(r.Repos); n > 0 {
+		clean := 0
+		for i := range r.Repos {
+			if r.Repos[i].OK() {
+				clean++
+			}
+		}
+		fmt.Fprintf(&b, "; %d/%d repo(s) wrapped up", clean, n)
 	}
 	fmt.Fprintf(&b, "; ran %s of %s", roundDur(elapsed), roundDur(planned))
 	return b.String()

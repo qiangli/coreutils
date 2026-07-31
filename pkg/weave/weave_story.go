@@ -244,6 +244,7 @@ exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
 		newWeaveStoryShowCmd(),
 		newWeaveStoryMoveCmd(),
 		newSprintStatusCmd(),
+		newSprintWhoCmd(),
 		newSprintStartCmd(),
 		newSprintStopCmd(),
 		newSprintExtendCmd(),
@@ -777,6 +778,12 @@ func runWeaveStoryMutate(cmd *cobra.Command, id int64, op string, flags *weaveOu
 		if s == nil {
 			return fmt.Errorf("sprint #%d not found", id)
 		}
+		// The board is visible to the callback for the duration of the lock:
+		// the closing check must know which repos another RUNNING sprint also
+		// holds, and that is a property of the set, not of one card.
+		prevBoard := currentBoard
+		currentBoard = q.Stories
+		defer func() { currentBoard = prevBoard }()
 		msg, merr := mut(s)
 		if merr != nil {
 			return merr
@@ -852,3 +859,10 @@ func (s *weaveStory) cadence() (cycles int, planned, actual time.Duration) {
 	}
 	return cycles, planned, actual
 }
+
+// currentBoard is the sibling stories visible during a locked mutation. It is a
+// package var rather than a parameter because every existing mutate callback
+// takes one story and threading a second argument through all of them would
+// churn a dozen call sites to serve one. It is only ever set while the queue
+// lock is held, and restored on the way out.
+var currentBoard []*weaveStory
