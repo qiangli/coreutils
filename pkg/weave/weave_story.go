@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/role"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -90,10 +91,41 @@ func findWeaveStory(q *weaveQueue, id int64) *weaveStory {
 // weaveStoryLeaseState returns a short human marker for a sprint's lease:
 // holder + fresh/STALE/free. Stale = heartbeat older than sprintLeaseTTL.
 func weaveStoryLeaseState(s *weaveStory) (holder string, stale bool, free bool) {
-	if s.Lease == nil || s.Lease.Holder == "" {
+	l := s.seat()
+	switch l.Live(time.Now()) {
+	case role.LivenessVacant:
 		return "", false, true
+	case role.LivenessLive:
+		return l.Holder, false, false
+	default:
+		// Lapsed AND unknown both read as stale to this caller, which only has
+		// two words. They are not the same thing — see role.LivenessUnknown —
+		// and a caller that can act on the difference should ask seat() directly.
+		return l.Holder, true, false
 	}
-	return s.Lease.Holder, time.Since(s.Lease.At) > sprintLeaseTTL, false
+}
+
+// seat expresses a sprint's conductor lease as the shared occupancy type, so
+// "is this held, and by whom" is answered by one rule rather than three.
+//
+// The stored shape is unchanged: a sprint lease records only a holder and a
+// timestamp, and the TTL is this package's constant. What changes is the
+// VERDICT — a lease with no timestamp now reads as unknown rather than as
+// silently fresh, which is what a zero time compared against a TTL used to
+// produce.
+func (s *weaveStory) seat() role.Seat {
+	if s == nil || s.Lease == nil {
+		return role.Seat{TTL: sprintLeaseTTL}
+	}
+	return role.Seat{
+		Holder: s.Lease.Holder,
+		// A sprint lease has one timestamp doing both jobs: it is stamped on
+		// take and refreshed on checkpoint, so it is the heartbeat. Reporting
+		// it as the acquisition time too would make every refresh look like a
+		// new tenure.
+		HeartbeatAt: s.Lease.At,
+		TTL:         sprintLeaseTTL,
+	}
 }
 
 // weaveConductorName resolves the acting conductor's name: --as flag >

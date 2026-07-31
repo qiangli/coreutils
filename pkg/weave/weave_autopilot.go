@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/qiangli/coreutils/pkg/role"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 )
 
@@ -693,4 +694,27 @@ func (weaveExecAutopilotRunner) Run(ctx context.Context, m weaveMember, prompt, 
 		return 1, waitErr
 	}
 	return 0, nil
+}
+
+// seat expresses the orchestrator lease as the shared occupancy type.
+//
+// The stored record is unchanged — Generation, Tool, Agent and Binding are real
+// and specific to a campaign, and a common type would have to drop them. What
+// is shared is the VERDICT: given a holder, a heartbeat and a TTL, is this
+// live, lapsed, or unanswerable.
+//
+// The TTL is derived from the record rather than taken from a constant, because
+// this lease stores its own ExpiresAt: the holder chose the window, and reading
+// it back is the only way to honour the one they actually chose.
+func (l weaveOrchestratorLease) seat() role.Seat {
+	ttl := time.Duration(0)
+	if !l.ExpiresAt.IsZero() && !l.HeartbeatAt.IsZero() {
+		ttl = l.ExpiresAt.Sub(l.HeartbeatAt)
+	}
+	return role.Seat{
+		Holder:      l.Holder,
+		AcquiredAt:  l.AcquiredAt,
+		HeartbeatAt: l.HeartbeatAt,
+		TTL:         ttl,
+	}
 }

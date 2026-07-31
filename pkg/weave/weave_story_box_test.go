@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/role"
 )
 
 // THE REQUIREMENT THAT SHAPES THE DESIGN: several sprints run at once, each on
@@ -122,5 +124,21 @@ func TestBox_RunningSprintCanOutliveItsConductor(t *testing.T) {
 	_, stale, free := weaveStoryLeaseState(s)
 	if !stale || free {
 		t.Errorf("lease should read STALE %v/%v after %s with a %s TTL", stale, free, 2*time.Hour, sprintLeaseTTL)
+	}
+}
+
+// The three seats now answer "is this held, and by whom" with ONE rule. The
+// property worth pinning is the one the sprint lease could not express before:
+// a lease with no timestamp is UNKNOWN, not silently fresh.
+func TestSprintSeat_MissingHeartbeatIsUnknownNotFresh(t *testing.T) {
+	s := &weaveStory{ID: 1, Lease: &weaveStoryLease{Holder: "a"}} // no At
+	if got := s.seat().Live(time.Now()); got != role.LivenessUnknown {
+		t.Errorf("a lease with no heartbeat = %v, want unknown — comparing a zero "+
+			"time against a TTL used to read as fresh, which keeps a dead holder alive forever", got)
+	}
+	// And a real heartbeat still reads live.
+	s.Lease.At = time.Now()
+	if got := s.seat().Live(time.Now()); got != role.LivenessLive {
+		t.Errorf("a fresh lease = %v, want live", got)
 	}
 }
