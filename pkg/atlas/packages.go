@@ -156,6 +156,7 @@ var packages = map[string]Package{
 	"secrets":    cmdPkg("secrets"),
 	"skills":     cmdPkg("skills"),
 	"craft":      cmdPkg("craft"),
+	"redact":     libPkg("craft", "strips host identity (hostnames, users, home paths, IPs, MACs, emails) before learned knowledge leaves the machine"),
 	"sota":       cmdPkg("sota"),
 	"steward":    cmdPkg("steward"),
 	"supervise":  cmdPkg("supervise"),
