@@ -38,9 +38,13 @@ type weaveStory struct {
 	// restarted freely over its life, so this is a LIST: one entry per
 	// start/stop cycle, the last running if it has no StoppedAt. The history is
 	// the point — see weave_story_box.go.
-	Boxes     []weaveStoryBox `json:"boxes,omitempty"`
-	Created   time.Time       `json:"created"`
-	UpdatedAt time.Time       `json:"updated_at,omitempty"`
+	Boxes []weaveStoryBox `json:"boxes,omitempty"`
+	// Contact is how to reach the conductor while this sprint runs — a meet
+	// room to talk in, and a bus topic to make someone notice. See
+	// weave_story_contact.go.
+	Contact   *sprintContact `json:"contact,omitempty"`
+	Created   time.Time      `json:"created"`
+	UpdatedAt time.Time      `json:"updated_at,omitempty"`
 }
 
 // sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
@@ -245,6 +249,7 @@ exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
 		newWeaveStoryMoveCmd(),
 		newSprintStatusCmd(),
 		newSprintWhoCmd(),
+		newSprintPingCmd(),
 		newSprintStartCmd(),
 		newSprintStopCmd(),
 		newSprintExtendCmd(),

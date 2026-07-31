@@ -224,6 +224,29 @@ func newSprintStartCmd() *cobra.Command {
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: now}
 				s.Boxes = append(s.Boxes, weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur})
+				// A room is opened automatically, because an OPTIONAL room is
+				// empty exactly when it is needed: at the moment somebody
+				// urgent arrives and the conductor is mid-turn elsewhere.
+				// Failure is not fatal — a conductor with no intercom still
+				// has a box to run, and the surfaces say "no contact" rather
+				// than implying one.
+				roomNote := ""
+				if s.Contact == nil {
+					c, cerr := openSprintRoom(s, who)
+					switch {
+					case cerr != nil:
+						// Reported, never swallowed. A contact that silently
+						// failed to open reads identically to one nobody has
+						// tried to use yet, and the difference matters at
+						// exactly the moment someone needs to reach in.
+						roomNote = fmt.Sprintf("; no room (%v)", cerr)
+					default:
+						s.Contact = c
+						roomNote = "; " + c.String()
+					}
+				} else {
+					roomNote = "; " + s.Contact.String()
+				}
 				moved := ""
 				if s.Column == "backlog" {
 					s.Column = "doing"
@@ -231,8 +254,8 @@ func newSprintStartCmd() *cobra.Command {
 				}
 				weaveStoryAppend(s, weaveConductorName(""), "system",
 					fmt.Sprintf("started a %s box, cutoff %s", roundDur(forDur), now.Add(forDur).Format(time.RFC3339)))
-				return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s",
-					id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who), nil
+				return fmt.Sprintf("sprint #%d started%s — %s, cutoff %s; conducted by %s%s",
+					id, moved, roundDur(forDur), now.Add(forDur).Format("15:04 MST"), who, roomNote), nil
 			})
 		},
 	}
@@ -477,6 +500,7 @@ func newSprintStatusCmd() *cobra.Command {
 				Cycles  int    `json:"cycles,omitempty"`
 				Overdue bool   `json:"overdue,omitempty"`
 				Holder  string `json:"lease_holder,omitempty"`
+				Contact string `json:"contact,omitempty"`
 				Stale   bool   `json:"lease_stale,omitempty"`
 			}
 			// ONE CONDUCTOR IS ACCOUNTABLE FOR EVERY IN-PROGRESS SPRINT — that
@@ -497,7 +521,7 @@ func newSprintStatusCmd() *cobra.Command {
 					h = ""
 				}
 				r := row{ID: s.ID, Title: s.Title, Epic: s.Epic, Column: s.Column,
-					Status: s.lastBox().Status(now), Cycles: len(s.Boxes), Overdue: s.currentBox().Overdue(now), Holder: h, Stale: stale}
+					Status: s.lastBox().Status(now), Cycles: len(s.Boxes), Contact: s.Contact.String(), Overdue: s.currentBox().Overdue(now), Holder: h, Stale: stale}
 				switch {
 				case s.currentBox().Running() && (stale || free):
 					orphaned = append(orphaned, r)
@@ -548,7 +572,11 @@ func newSprintStatusCmd() *cobra.Command {
 					// and put down — which a single planned-vs-actual cannot show.
 					cyc = fmt.Sprintf("  ×%d", r.Cycles)
 				}
-				fmt.Fprintf(out, "  #%d %s (%s)%s%s%s\n", r.ID, weaveTruncate(r.Title, 46), r.Column, st, cyc, lease)
+				contact := ""
+				if r.Contact != "" {
+					contact = "  → " + r.Contact
+				}
+				fmt.Fprintf(out, "  #%d %s (%s)%s%s%s%s\n", r.ID, weaveTruncate(r.Title, 40), r.Column, st, cyc, lease, contact)
 			}
 			// Unowned delivery first: a running sprint with no live conductor
 			// is the one state that cannot resolve itself.
