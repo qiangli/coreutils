@@ -188,6 +188,7 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 
 	var composeBand int
 	var composeJSON bool
+	var composeFor string
 	compose := &cobra.Command{
 		Use:   "compose <query>",
 		Short: "render the best-matching skill on demand, cut at a band",
@@ -209,14 +210,145 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 			"would stop being reproducible.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCompose(cmd, cfg, strings.Join(args, " "), composeBand, composeJSON)
+			return runCompose(cmd, cfg, strings.Join(args, " "), composeBand, composeJSON, composeFor)
 		},
 	}
 	compose.Flags().IntVar(&composeBand, "band", -1, "cut point 0-4 (default: the artifact's floor)")
 	compose.Flags().BoolVar(&composeJSON, "json", false, "machine-readable composition")
+	compose.Flags().StringVar(&composeFor, "for", "", "scope to what this host has learned about an entity (host:name, service:name)")
 
-	root.AddCommand(history, study, find, compose)
+	var learnSource string
+	var forget bool
+	learn := &cobra.Command{
+		Use:   "learn <entity> <key> [value]",
+		Short: "record what this host learned about one thing (host-local, never shared)",
+		Long: "learn records a PARTICULAR fact — the login on that box, the port that\n" +
+			"service answers on. Facts bind to an ENTITY and are true nowhere else, which\n" +
+			"is what separates them from a fold (an OS-specific workaround, keyed on a\n" +
+			"coordinate, and freely shareable).\n\n" +
+			"Facts NEVER leave this host. Not scrubbed-then-shared — not shared. A fact is\n" +
+			"by definition a statement about someone's machine, and values are stored raw\n" +
+			"because a redacted login is useless. The boundary therefore has to hold at\n" +
+			"the store, not at the reader.\n\n" +
+			"Recording the same key again SUPERSEDES: the old value is closed off, never\n" +
+			"rewritten, so you can still ask what this host believed last Tuesday.\n\n" +
+			"With --forget the fact is invalidated WITHOUT asserting a replacement.\n" +
+			"\"This is now wrong\" and \"this is now X\" are different claims, and a run that\n" +
+			"failed has learned only the first — being made to invent a replacement is how\n" +
+			"a guess gets into the store.",
+		Example: "  bashy craft learn host:workshop remote_user svc-build\n" +
+			"  bashy craft learn host:workshop address 10.0.0.41 --source remote-shell\n" +
+			"  bashy craft learn host:workshop address --forget",
+		Args: cobra.RangeArgs(2, 3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var value string
+			if len(args) == 3 {
+				value = args[2]
+			}
+			return runLearn(cmd, cfg, args[0], args[1], value, learnSource, forget)
+		},
+	}
+	learn.Flags().StringVar(&learnSource, "source", "", "what learned it (a skill, a run) — provenance for a fact that turns out wrong")
+	learn.Flags().BoolVar(&forget, "forget", false, "invalidate without asserting a replacement")
+
+	factsCmd := &cobra.Command{
+		Use:   "facts [entity]",
+		Short: "what this host has learned about things (host-local)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var ent string
+			if len(args) == 1 {
+				ent = args[0]
+			}
+			return runFacts(cmd, cfg, ent)
+		},
+	}
+
+	root.AddCommand(history, study, find, compose, learn, factsCmd)
 	return root
+}
+
+// parseEntity reads the `kind:name` form. A bare word is a host, because that
+// is what an operator means nine times in ten and demanding a prefix for the
+// common case is friction with no payoff.
+func parseEntity(s string) (Entity, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return Entity{}, fmt.Errorf("craft: no entity given (try host:workshop)")
+	}
+	kind, name, ok := strings.Cut(s, ":")
+	if !ok {
+		return Entity{Kind: EntityHost, Name: s}, nil
+	}
+	e := Entity{Kind: EntityKind(strings.ToLower(kind)), Name: name}
+	switch e.Kind {
+	case EntityHost, EntityService, EntityAccount, EntityEndpoint:
+	default:
+		return Entity{}, fmt.Errorf("craft: unknown entity kind %q (host, service, account, endpoint)", kind)
+	}
+	if !e.Valid() {
+		return Entity{}, fmt.Errorf("craft: entity %q has no name", s)
+	}
+	return e, nil
+}
+
+func runLearn(cmd *cobra.Command, cfg *config, entity, key, value, source string, forget bool) error {
+	e, err := parseEntity(entity)
+	if err != nil {
+		return err
+	}
+	store := OpenFacts(cfg.storeDir)
+	if forget {
+		if err := store.Invalidate(e, key, time.Now().UTC()); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "craft: forgot %s about %s\n", key, e.ID())
+		return nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("craft: no value given for %q (use --forget to invalidate instead)", key)
+	}
+	if err := store.Record(Fact{Entity: e, Key: key, Value: value, Source: source}); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "craft: learned %s about %s (host-local; never shared)\n", key, e.ID())
+	return nil
+}
+
+func runFacts(cmd *cobra.Command, cfg *config, entity string) error {
+	store := OpenFacts(cfg.storeDir)
+	out := cmd.OutOrStdout()
+
+	if entity == "" {
+		ents := store.Entities()
+		if len(ents) == 0 {
+			fmt.Fprintln(out, "nothing learned yet")
+			fmt.Fprintln(out, "facts accrue from `craft learn`, and never leave this host")
+			return nil
+		}
+		for _, e := range ents {
+			fmt.Fprintf(out, "%-28s %d fact(s)\n", e.ID(), len(store.For(e)))
+		}
+		return nil
+	}
+
+	e, err := parseEntity(entity)
+	if err != nil {
+		return err
+	}
+	facts := store.For(e)
+	if len(facts) == 0 {
+		fmt.Fprintf(out, "nothing learned about %s\n", e.ID())
+		return nil
+	}
+	for _, f := range facts {
+		fmt.Fprintf(out, "%-20s %s", f.Key, f.Value)
+		if f.Source != "" {
+			fmt.Fprintf(out, "   (from %s)", f.Source)
+		}
+		fmt.Fprintln(out)
+	}
+	return nil
 }
 
 func runFind(cmd *cobra.Command, cfg *config, query string, limit int, asJSON bool) error {
@@ -247,12 +379,21 @@ func runFind(cmd *cobra.Command, cfg *config, query string, limit int, asJSON bo
 	return nil
 }
 
-func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON bool) error {
+func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON bool, forEntity string) error {
 	matches := cfg.index().Resolve(Query{Text: query, Limit: 1})
 	if len(matches) == 0 {
 		return fmt.Errorf("craft: no capability matches %q — nothing to compose", query)
 	}
-	c, err := Compose(matches[0].Primary, ComposeOptions{Band: band})
+	opts := ComposeOptions{Band: band}
+	if strings.TrimSpace(forEntity) != "" {
+		e, err := parseEntity(forEntity)
+		if err != nil {
+			return err
+		}
+		opts.Entity = e
+		opts.Facts = OpenFacts(cfg.storeDir).For(e)
+	}
+	c, err := Compose(matches[0].Primary, opts)
 	if err != nil {
 		return err
 	}
@@ -266,8 +407,8 @@ func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON 
 	// Provenance on stderr so stdout stays the artifact — a caller piping this
 	// into a file or an agent's context must get the skill, not a header.
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f stamp=%s\n",
-		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, c.Stamp)
+		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f facts=%d stamp=%s\n",
+		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, c.Facts, c.Stamp)
 	return nil
 }
 

@@ -71,6 +71,15 @@ type ComposeOptions struct {
 	// GraphVersion identifies the evidence state this was composed against, so
 	// the result is reproducible.
 	GraphVersion string
+	// Entity scopes the composition to what this host has learned about one
+	// thing — the login on that box, the port that service answers on. This is
+	// what makes a composed skill LIVING rather than merely current: the second
+	// agent inherits what the first one learned, without anyone writing it down.
+	Entity Entity
+	// Facts are the live facts for Entity. Passed in rather than read here so
+	// Compose stays a pure function — the same inputs must always give the same
+	// bytes, and a function that reads a store cannot promise that.
+	Facts []Fact
 }
 
 // Composition is a rendered skill plus the stamp that makes it reproducible.
@@ -99,6 +108,12 @@ type Composition struct {
 	Floor int `json:"floor"`
 	// Bands is the renderable range.
 	Bands []int `json:"bands"`
+	// Entity is what the composition was scoped to, if anything.
+	Entity Entity `json:"entity,omitzero"`
+	// Facts counts the host-local facts folded in. The COUNT, never the values:
+	// a Composition is a value that gets logged, marshalled, and passed around,
+	// and facts are identity that must not travel with it.
+	Facts int `json:"facts,omitempty"`
 }
 
 // ErrBandUnavailable reports a band below the artifact's floor.
@@ -152,9 +167,33 @@ func Compose(im Implementation, opts ComposeOptions) (Composition, error) {
 	for b := floor; b <= BandIntent; b++ {
 		c.Bands = append(c.Bands, b)
 	}
-	c.Body = render(im, band)
-	c.Stamp = stamp(c)
+	c.Entity = opts.Entity
+	c.Facts = len(opts.Facts)
+	c.Body = render(im, band) + renderFacts(opts)
+	c.Stamp = stamp(c, opts.Facts)
 	return c, nil
+}
+
+// renderFacts appends what this host knows about the entity in scope.
+//
+// Present at EVERY band, including band 0. A fact is not guidance a model
+// interprets — it is a value the procedure needs, and a script that has to ask
+// for the login is not runnable without a model, which would defeat the band
+// entirely.
+func renderFacts(opts ComposeOptions) string {
+	if len(opts.Facts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n# known about %s %s (learned on this host):\n", opts.Entity.Kind, opts.Entity.Name)
+	for _, f := range opts.Facts {
+		fmt.Fprintf(&b, "#   %s = %s", f.Key, f.Value)
+		if f.Source != "" {
+			fmt.Fprintf(&b, "   (from %s)", f.Source)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // determinism reports the fraction of contract predicates and steps bound to
@@ -324,9 +363,16 @@ func writeEffects(b *strings.Builder, im Implementation) {
 // stamp is the reproducibility receipt: the inputs a composition was derived
 // from, hashed. Given the same stamp the bytes are the same, which is what makes
 // a dynamic artifact auditable rather than merely current.
-func stamp(c Composition) string {
+func stamp(c Composition, facts []Fact) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "impl=%s\ncap=%s\nband=%d\ncoord=%s\ngraph=%s\n",
-		c.Identity, c.Capability, c.Band, c.Coordinate, c.GraphVersion)
+	fmt.Fprintf(h, "impl=%s\ncap=%s\nband=%d\ncoord=%s\ngraph=%s\nentity=%s\n",
+		c.Identity, c.Capability, c.Band, c.Coordinate, c.GraphVersion, c.Entity.ID())
+	// Facts are hashed, never carried: two compositions that saw different
+	// facts must stamp differently (or the stamp would claim a reproducibility
+	// it does not have), but the stamp must not become a channel for the values
+	// themselves. A hash says "the inputs differed" without saying how.
+	for _, f := range facts {
+		fmt.Fprintf(h, "fact=%s/%s=%s\n", f.Entity.ID(), f.Key, f.Value)
+	}
 	return "s" + hex.EncodeToString(h.Sum(nil))[:16]
 }
