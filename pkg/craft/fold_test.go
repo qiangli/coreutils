@@ -266,3 +266,35 @@ func TestHostScrubber_CatchesAddressesWithoutLearning(t *testing.T) {
 		}
 	}
 }
+
+// The note and the evidence are held to different standards, and conflating
+// them rejected general claims for citing their sources — which is what
+// happened the first time promotion ran for real.
+func TestFolds_EvidenceIsScrubbedNotRefused(t *testing.T) {
+	fs := testFolds(t)
+
+	err := fs.Record(Fold{
+		Coordinate: winCoord,
+		Note:       "the protocol is https on every service here",
+		Evidence:   "observed on workshop and two others",
+	})
+	if err != nil {
+		t.Fatalf("a clean NOTE was refused because its evidence named a host: %v", err)
+	}
+
+	got := fs.For("", winCoord)
+	if len(got) != 1 {
+		t.Fatalf("got %d folds", len(got))
+	}
+	if strings.Contains(got[0].Evidence, "workshop") {
+		t.Errorf("the evidence still names the host: %q", got[0].Evidence)
+	}
+	if !strings.Contains(got[0].Evidence, "‹host:") {
+		t.Errorf("the evidence should keep a co-reference-preserving tag: %q", got[0].Evidence)
+	}
+	// A dirty NOTE is still refused — the standard did not slacken.
+	var notGen *ErrNotGeneralisable
+	if err := fs.Record(Fold{Coordinate: winCoord, Note: "ssh to workshop"}); !errors.As(err, &notGen) {
+		t.Errorf("a note naming a host was admitted: %v", err)
+	}
+}

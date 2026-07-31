@@ -182,10 +182,26 @@ func (s *FoldStore) Record(f Fold) error {
 	if strings.TrimSpace(f.Coordinate) == "" {
 		return errors.New("craft: fold has no coordinate — a fold that holds nowhere in particular holds nowhere")
 	}
+	// The NOTE and the EVIDENCE are held to different standards, because they
+	// do different jobs.
+	//
+	// The note is the CLAIM, and it is what a reader acts on. If it names a
+	// machine it is not general, and no amount of rewriting makes it so — so a
+	// note carrying identity is refused outright.
+	//
+	// The evidence is PROVENANCE: what the claim rested on, so a doubted fold
+	// can be checked rather than argued about. It legitimately names the
+	// entities observed, and refusing on that would reject perfectly general
+	// claims for citing their sources — which is exactly what happened the
+	// first time this ran for real. So evidence is SCRUBBED instead: the tags
+	// preserve co-reference (the same entity reads the same everywhere) while
+	// carrying no identity, so the count and the shape of the evidence survive
+	// and the names do not.
 	if s.scrub != nil {
-		if _, found := s.scrub.Scrub(f.Note + "\n" + f.Evidence); len(found) > 0 {
+		if _, found := s.scrub.Scrub(f.Note); len(found) > 0 {
 			return &ErrNotGeneralisable{Found: found}
 		}
+		f.Evidence = s.scrub.String(f.Evidence)
 	}
 
 	now := time.Now().UTC()

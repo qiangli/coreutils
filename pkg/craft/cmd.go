@@ -308,7 +308,30 @@ func NewCraftCmd(opts ...Option) *cobra.Command {
 		},
 	}
 
-	root.AddCommand(history, study, find, compose, learn, factsCmd, fold, foldsCmd)
+	var promoteMin int
+	var promoteCoord, promoteAccept string
+	promoteCmd := &cobra.Command{
+		Use:   "promote",
+		Short: "facts that have repeated often enough to look general",
+		Long: "promote finds facts that hold identically across several entities. When the\n" +
+			"same thing is true of the third host in a row, it has probably stopped being\n" +
+			"particular: said of one service it is a fact; said of every service here, it\n" +
+			"is how this place works.\n\n" +
+			"It PROPOSES and never decides. Nothing is recorded without --accept.\n\n" +
+			"A proposal does not bypass the fold admission gate, and the interlock is the\n" +
+			"point: `remote_user = svc-build` on three hosts IS a real regularity, and the\n" +
+			"note stating it names a username — so it is refused and stays local. Being\n" +
+			"widespread on your machines does not make something shareable; it makes it a\n" +
+			"widespread local fact. Blocked candidates are still listed, with the reason.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPromote(cmd, cfg, promoteMin, promoteCoord, promoteAccept)
+		},
+	}
+	promoteCmd.Flags().IntVar(&promoteMin, "min", DefaultPromotionMin, "entities a fact must hold for before it is proposed")
+	promoteCmd.Flags().StringVar(&promoteCoord, "coordinate", "", "coordinate to record the promoted fold at (required with --accept)")
+	promoteCmd.Flags().StringVar(&promoteAccept, "accept", "", "promote the candidate with this key")
+
+	root.AddCommand(history, study, find, compose, learn, factsCmd, fold, foldsCmd, promoteCmd)
 	return root
 }
 
@@ -356,6 +379,54 @@ func runLearn(cmd *cobra.Command, cfg *config, entity, key, value, source string
 		return err
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "craft: learned %s about %s (host-local; never shared)\n", key, e.ID())
+	return nil
+}
+
+func runPromote(cmd *cobra.Command, cfg *config, min int, coord, accept string) error {
+	facts := OpenFacts(cfg.storeDir)
+	folds := OpenFolds(cfg.storeDir, HostScrubber(cfg.storeDir))
+	cands := facts.PromotionCandidates(min, folds)
+
+	out := cmd.OutOrStdout()
+	if len(cands) == 0 {
+		fmt.Fprintf(out, "nothing has repeated across %d entities yet\n", min)
+		return nil
+	}
+
+	if accept != "" {
+		for _, c := range cands {
+			if c.Key != accept {
+				continue
+			}
+			if err := Promote(c, coord, folds); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "craft: promoted %q to a fold at %s\n", c.Note, skills.ShortID(coord))
+			return nil
+		}
+		return fmt.Errorf("craft: no candidate with key %q (run without --accept to list)", accept)
+	}
+
+	for _, c := range cands {
+		mark := "  "
+		if !c.Promotable() {
+			mark = "! "
+		}
+		fmt.Fprintf(out, "%s%s\n", mark, c.Note)
+		fmt.Fprintf(out, "    seen on %d: ", len(c.Entities))
+		names := make([]string, 0, len(c.Entities))
+		for _, e := range c.Entities {
+			names = append(names, e.ID())
+		}
+		fmt.Fprintln(out, strings.Join(names, ", "))
+		if !c.Promotable() {
+			// Reported, never hidden: "this repeats but cannot travel" is
+			// itself worth knowing.
+			fmt.Fprintf(out, "    BLOCKED: names host identity, so it stays a fact\n")
+			continue
+		}
+		fmt.Fprintf(out, "    accept: bashy craft promote --accept %s --coordinate <key>\n", c.Key)
+	}
 	return nil
 }
 
