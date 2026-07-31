@@ -163,3 +163,25 @@ func TestStore_Kinds(t *testing.T) {
 		t.Errorf("Kinds() is not sorted: %v", got)
 	}
 }
+
+// `define` must never gain a subcommand.
+//
+// Its argument is an arbitrary user token, so every subcommand name permanently
+// removes a word from the definable vocabulary: mount `study` and
+// `bashy define study` stops meaning "what is the word study". The failure is
+// invisible until somebody asks about that exact word and gets a help screen
+// instead of an answer — which is why this is a build-failing ratchet rather
+// than a note in a doc.
+//
+// Actions belong under `lexicon`, whose arguments are a closed set.
+func TestDefineCmd_HasNoSubcommands(t *testing.T) {
+	cmd := NewDefineCmd()
+	if subs := cmd.Commands(); len(subs) != 0 {
+		names := make([]string, 0, len(subs))
+		for _, c := range subs {
+			names = append(names, c.Name())
+		}
+		t.Fatalf("define has subcommands %v — each one steals that word from the vocabulary; "+
+			"put the action under `lexicon` instead", names)
+	}
+}

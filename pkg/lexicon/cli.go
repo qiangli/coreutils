@@ -55,13 +55,112 @@ plainly, like any jargon. The marker is optional emphasis, never required syntax
   bashy lexicon emit --write AGENTS.md   # seed every tool's always-on tier
   bashy lexicon scan docs/               # find [[terms]] that resolve to NOTHING`,
 	}
-	cmd.AddCommand(newListCmd(opts), newResolveCmd(opts), newEmitCmd(opts), newScanCmd(opts), NewDefineCmd(opts...))
+	cmd.AddCommand(newListCmd(opts), newResolveCmd(opts), newEmitCmd(opts), newScanCmd(opts),
+		NewDefineCmd(opts...), NewStudyCmd(opts...))
+	return cmd
+}
+
+// RecordDiscovery is set by the embedding shell to route identity-bearing
+// findings into a host-local fact store.
+//
+// A function var rather than an import because the two belong to different
+// layers and must not be coupled: a glossary that could write to a fact store
+// would eventually be asked to read from one, and identity would start flowing
+// the wrong way. nil means collection reports its findings and stores none —
+// which is the right default for a package whose job is vocabulary.
+var RecordDiscovery func(Discovery) error
+
+// NewStudyCmd builds the `study` verb: prepopulate the glossary by asking the
+// machine what exists.
+func NewStudyCmd(opts ...fleet.Option) *cobra.Command {
+	var asJSON, dryRun bool
+	cmd := &cobra.Command{
+		Use:   "study",
+		Short: "prepopulate the glossary by asking this machine what exists",
+		Long: `study collects the names this host actually carries — network interfaces,
+mounted volumes — and adds them to the vocabulary.
+
+It is the counterpart to enumeration, one layer down: Enumerate reads what the
+SHELL knows (env keys, PATH, the working directory), while study asks the OS.
+Interface names like en0, utun3, docker0 or tailscale0 are dense local jargon,
+and an agent that meets one in a log has nowhere to look it up.
+
+Collection finds two KINDS of thing and separates them at the source:
+
+  NAMES      an interface or volume name is VOCABULARY — utun3 means the same
+             kind of thing on any machine that has one
+  ADDRESSES  an address is IDENTITY — it says WHICH machine this is, so it goes
+             to the host-local fact store, never the glossary
+
+That split is why study can be run freely: nothing identity-bearing reaches the
+shareable side, and every address it does record makes the fold admission gate
+stricter, because it is one more thing the scrubber can recognise.
+
+Numbers are deliberately not collected. CPU load and bytes free are telemetry,
+not vocabulary; ` + "`bashy resources`" + ` already reports them.`,
+		Example: `  bashy define study            # collect, record, and report
+  bashy define study --dry-run  # show what WOULD be collected`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			inv, found := Discover(CollectOptions{})
+
+			out := cmd.OutOrStdout()
+			if asJSON {
+				b, _ := json.MarshalIndent(map[string]any{
+					"schema":      "bashy-lexicon-study-v1",
+					"terms":       inv,
+					"identities":  len(found),
+					"dry_run":     dryRun,
+					"recorded_to": "fact store (host-local)",
+				}, "", "  ")
+				fmt.Fprintln(out, string(b))
+				return nil
+			}
+
+			for _, n := range inv.Interfaces {
+				fmt.Fprintf(out, "%-20s interface\n", n)
+			}
+			for _, n := range inv.Mounts {
+				fmt.Fprintf(out, "%-20s mount\n", n)
+			}
+			fmt.Fprintf(out, "\n%d term(s) collected\n", len(inv.Interfaces)+len(inv.Mounts))
+
+			// The addresses are COUNTED here, never printed: this output is
+			// routinely piped, pasted, and read by an agent, and the whole point
+			// of separating them was to keep them off that path.
+			switch {
+			case dryRun:
+				fmt.Fprintf(out, "%d identity value(s) found; --dry-run, nothing recorded\n", len(found))
+			case RecordDiscovery == nil:
+				fmt.Fprintf(out, "%d identity value(s) found; no fact store wired, nothing recorded\n", len(found))
+			default:
+				n := 0
+				for _, d := range found {
+					if err := RecordDiscovery(d); err == nil {
+						n++
+					}
+				}
+				fmt.Fprintf(out, "%d identity value(s) recorded to the host-local fact store\n", n)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "machine-readable report")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report without recording")
 	return cmd
 }
 
 // NewDefineCmd builds the `define` verb. Exported so a host can mount it at top
 // level as well as under `lexicon` — it is the question agents ask most, and
 // burying it two words deep costs more than the namespace is worth.
+//
+// IT MUST NEVER GAIN A SUBCOMMAND. Its argument is an arbitrary user token, so
+// every subcommand name would permanently remove a word from the definable
+// vocabulary: mount `study` here and `bashy define study` stops meaning "what is
+// the word study". Worse, the hole is invisible — nothing fails until somebody
+// asks about that exact word, and then the answer is a help screen. Actions
+// belong under `lexicon`, whose arguments are a closed set.
+//
+// TestDefineCmd_HasNoSubcommands pins this.
 func NewDefineCmd(opts ...fleet.Option) *cobra.Command {
 	var asJSON bool
 	var kindFilter []string
@@ -202,6 +301,12 @@ func buildFull(opts []fleet.Option) *Store {
 	known := append(atlas.ToolNames(), atlas.VerbNames()...)
 	known = append(known, KnownCommands...)
 	s.AddSystem(EnumerateHost(roots, known), Overlay{})
+
+	// Names the OS knows but the shell does not: interfaces, mounted volumes.
+	// Only the NAMES — Discover's identity half is dropped on the floor here,
+	// because a glossary is exactly where it must not go.
+	collected, _ := Discover(CollectOptions{})
+	s.AddCollected(collected, Overlay{})
 	return s
 }
 

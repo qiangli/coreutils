@@ -76,6 +76,11 @@ type SystemInventory struct {
 	EnvVars      []string `json:"env_vars,omitempty"`
 	Commands     []string `json:"commands,omitempty"`
 	PathSegments []string `json:"path_segments,omitempty"`
+	// Interfaces and Mounts come from Discover, which asks the OS rather than
+	// the shell. Names only — an interface's ADDRESSES are identity and are
+	// returned separately as Discoveries.
+	Interfaces []string `json:"interfaces,omitempty"`
+	Mounts     []string `json:"mounts,omitempty"`
 }
 
 // EnumOptions configures enumeration. Every input is injectable so the whole
