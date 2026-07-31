@@ -53,7 +53,8 @@ func newChatSessionsCmd() *cobra.Command {
 				fmt.Fprintln(w, "nothing live — start an agent with `bashy chat --agent NICK` or `--band N`")
 				return nil
 			}
-			fmt.Fprintf(w, "%-24s %-22s %-4s %-11s %-8s %s\n", "ID", "BINDING", "BAND", "MODE", "PID", "JOINED")
+			fmt.Fprintf(w, "%-24s %-22s %-4s %-11s %-8s %-9s %s\n",
+				"ID", "BINDING", "BAND", "MODE", "PID", "REACH", "JOINED")
 			for _, c := range members {
 				band := "-"
 				if c.Band > 0 {
@@ -63,7 +64,25 @@ func newChatSessionsCmd() *cobra.Command {
 				if mode == "" {
 					mode = "-"
 				}
-				fmt.Fprintf(w, "%-24s %-22s %-4s %-11s %-8d %s\n", c.ID, c.Binding, band, mode, c.PID, c.Joined)
+				fmt.Fprintf(w, "%-24s %-22s %-4s %-11s %-8d %-9s %s\n",
+					c.ID, c.Binding, band, mode, c.PID, reachLabel(c), c.Joined)
+			}
+			// WHAT TO DO WITH A ROW. The list already answered "what is alive";
+			// it did not answer the question anyone reading it actually has,
+			// which is how to take one back. A detached session survives the
+			// terminal that started it — the pty path makes it a session leader
+			// — so after closing a TUI these rows are exactly the sessions a
+			// returning operator wants, and the reattach command was something
+			// they had to already know.
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, "reattach:  bashy chat attach <ID>          take the terminal back")
+			fmt.Fprintln(w, "           bashy coach attach --agent <ID>  steer it without taking it")
+			if unreachable(members) {
+				// A session with no control socket can still be watched through
+				// its log, and saying so is better than letting someone
+				// conclude the session is broken.
+				fmt.Fprintln(w, "  a row marked `log-only` has no control socket: `bashy chat log <ID>` follows it,")
+				fmt.Fprintln(w, "  but nothing can steer it — it was launched on a path that never opened one.")
 			}
 			return nil
 		},
@@ -345,4 +364,36 @@ func AttachTo(parent context.Context, in io.Reader, out, errOut io.Writer, c roo
 		}
 	}
 	return scanner.Err()
+}
+
+// reachLabel says how much of a live session a returning operator can actually
+// take back.
+//
+// The distinction is not cosmetic. A session with a control socket can be
+// STEERED — input reaches it — while one without can only be READ. Both are
+// "alive", and a list that showed them identically would send somebody to
+// attach to a session that will never answer, which reads as a hang rather than
+// as a missing capability.
+func reachLabel(c room.Card) string {
+	if strings.TrimSpace(c.CtlSock) == "" {
+		return "log-only"
+	}
+	if _, err := os.Stat(c.CtlSock); err != nil {
+		// The card advertises a socket that is not there. The process is alive
+		// (Members pruned it otherwise), so this is a session that lost its
+		// control channel — worth distinguishing from one that never had one.
+		return "no-ctl"
+	}
+	return "steerable"
+}
+
+// unreachable reports whether any listed session is read-only, so the footer
+// only explains that when it applies.
+func unreachable(members []room.Card) bool {
+	for _, c := range members {
+		if reachLabel(c) != "steerable" {
+			return true
+		}
+	}
+	return false
 }
