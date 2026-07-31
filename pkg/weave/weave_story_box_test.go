@@ -16,39 +16,39 @@ func TestBox_ConcurrentSprintsKeepIndependentClocks(t *testing.T) {
 	base := time.Date(2026, 7, 31, 9, 0, 0, 0, time.UTC)
 
 	quickFix := &weaveStory{ID: 1, Column: "doing",
-		Box: &weaveStoryBox{StartedAt: base, Cutoff: base.Add(45 * time.Minute), Planned: 45 * time.Minute}}
+		Boxes: []weaveStoryBox{{StartedAt: base, Cutoff: base.Add(45 * time.Minute), Planned: 45 * time.Minute}}}
 	migration := &weaveStory{ID: 2, Column: "doing",
-		Box: &weaveStoryBox{StartedAt: base, Cutoff: base.Add(4 * time.Hour), Planned: 4 * time.Hour}}
+		Boxes: []weaveStoryBox{{StartedAt: base, Cutoff: base.Add(4 * time.Hour), Planned: 4 * time.Hour}}}
 	yesterday := &weaveStory{ID: 3, Column: "review",
-		Box: &weaveStoryBox{StartedAt: base.Add(-20 * time.Hour), Cutoff: base.Add(-18 * time.Hour), Planned: 2 * time.Hour}}
+		Boxes: []weaveStoryBox{{StartedAt: base.Add(-20 * time.Hour), Cutoff: base.Add(-18 * time.Hour), Planned: 2 * time.Hour}}}
 	unboxed := &weaveStory{ID: 4, Column: "backlog"}
 
 	now := base.Add(90 * time.Minute)
 
 	// Three different cadences, three different verdicts, at one instant.
-	if !quickFix.Box.Overdue(now) {
+	if !quickFix.currentBox().Overdue(now) {
 		t.Error("the 45m box must be overdue 90m in")
 	}
-	if migration.Box.Overdue(now) {
+	if migration.currentBox().Overdue(now) {
 		t.Error("the 4h box must NOT be overdue 90m in — one sprint's cutoff says nothing about another's")
 	}
-	if !yesterday.Box.Overdue(now) {
+	if !yesterday.currentBox().Overdue(now) {
 		t.Error("a box opened yesterday and never stopped is still running, and long overdue")
 	}
-	if unboxed.Box.Running() {
+	if unboxed.currentBox().Running() {
 		t.Error("a sprint with no box is not running")
 	}
-	if got := unboxed.Box.Status(now); got != "" {
+	if got := unboxed.currentBox().Status(now); got != "" {
 		t.Errorf("an unboxed sprint must read exactly as before this feature existed, got %q", got)
 	}
 
 	// Stopping one leaves the others untouched — separate start/stop cycles.
 	stop := now
-	quickFix.Box.StoppedAt = &stop
-	if quickFix.Box.Running() {
+	quickFix.currentBox().StoppedAt = &stop
+	if quickFix.currentBox().Running() {
 		t.Error("stopped box still reports running")
 	}
-	if !migration.Box.Running() || !yesterday.Box.Running() {
+	if !migration.currentBox().Running() || !yesterday.currentBox().Running() {
 		t.Error("stopping one sprint must not close another's box")
 	}
 }

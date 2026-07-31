@@ -192,9 +192,9 @@ func newSprintStartCmd() *cobra.Command {
 				// Restarting a RUNNING box would silently discard the original
 				// commitment, which is the one number the record exists to keep
 				// honest. Extending is a different, explicit act.
-				if s.Box.Running() {
+				if s.currentBox().Running() {
 					return "", fmt.Errorf("sprint #%d is already running (%s) — `sprint stop %d` first, or `sprint extend %d --by <dur>`",
-						id, s.Box.Status(now), id, id)
+						id, s.currentBox().Status(now), id, id)
 				}
 				// A BOX IN FLIGHT MUST HAVE AN OWNER. The conductor holding the
 				// lease is the sprint's scrum master: accountable for its
@@ -213,7 +213,7 @@ func newSprintStartCmd() *cobra.Command {
 						id, prev, id)
 				}
 				s.Lease = &weaveStoryLease{Holder: who, At: now}
-				s.Box = &weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur}
+				s.Boxes = append(s.Boxes, weaveStoryBox{StartedAt: now, Cutoff: now.Add(forDur), Planned: forDur})
 				moved := ""
 				if s.Column == "backlog" {
 					s.Column = "doing"
@@ -257,22 +257,23 @@ func newSprintStopCmd() *cobra.Command {
 			}
 			now := time.Now().UTC()
 			return runWeaveStoryMutate(cmd, id, "sprint stop", &flags, func(s *weaveStory) (string, error) {
-				if !s.Box.Running() {
+				b := s.currentBox()
+				if b == nil {
 					// Saying "stopped" about a sprint that was never running
 					// would be a small lie of exactly the kind this feature is
 					// meant to remove.
 					return "", fmt.Errorf("sprint #%d has no running box — `sprint start %d` opens one", id, id)
 				}
-				s.Box.StoppedAt = &now
-				elapsed := s.Box.Elapsed(now)
+				b.StoppedAt = &now
+				elapsed := b.Elapsed(now)
 				verdict := "within the box"
-				if elapsed > s.Box.Planned {
-					verdict = fmt.Sprintf("OVER by %s", roundDur(elapsed-s.Box.Planned))
-				} else if d := s.Box.Planned - elapsed; d > time.Minute {
+				if elapsed > b.Planned {
+					verdict = fmt.Sprintf("OVER by %s", roundDur(elapsed-b.Planned))
+				} else if d := b.Planned - elapsed; d > time.Minute {
 					verdict = fmt.Sprintf("under by %s", roundDur(d))
 				}
 				msg := fmt.Sprintf("stopped after %s (planned %s) — %s",
-					roundDur(elapsed), roundDur(s.Box.Planned), verdict)
+					roundDur(elapsed), roundDur(b.Planned), verdict)
 				if strings.TrimSpace(note) != "" {
 					msg += ": " + strings.TrimSpace(note)
 				}
@@ -311,13 +312,14 @@ func newSprintExtendCmd() *cobra.Command {
 			}
 			now := time.Now().UTC()
 			return runWeaveStoryMutate(cmd, id, "sprint extend", &flags, func(s *weaveStory) (string, error) {
-				if !s.Box.Running() {
+				b := s.currentBox()
+				if b == nil {
 					return "", fmt.Errorf("sprint #%d has no running box to extend", id)
 				}
-				s.Box.Cutoff = s.Box.Cutoff.Add(by)
+				b.Cutoff = b.Cutoff.Add(by)
 				weaveStoryAppend(s, weaveConductorName(""), "system",
-					fmt.Sprintf("extended by %s (original estimate %s stands)", roundDur(by), roundDur(s.Box.Planned)))
-				return fmt.Sprintf("sprint #%d extended by %s — %s", id, roundDur(by), s.Box.Status(now)), nil
+					fmt.Sprintf("extended by %s (original estimate %s stands)", roundDur(by), roundDur(b.Planned)))
+				return fmt.Sprintf("sprint #%d extended by %s — %s", id, roundDur(by), b.Status(now)), nil
 			})
 		},
 	}
@@ -370,23 +372,30 @@ func newSprintStatusCmd() *cobra.Command {
 				Epic    string `json:"epic,omitempty"`
 				Column  string `json:"column"`
 				Status  string `json:"box_status,omitempty"`
+				Cycles  int    `json:"cycles,omitempty"`
 				Overdue bool   `json:"overdue,omitempty"`
 				Holder  string `json:"lease_holder,omitempty"`
 				Stale   bool   `json:"lease_stale,omitempty"`
 			}
-			var onClock, over, idle []row
+			var onClock, over, idle, done []row
 			for _, s := range q.Stories {
 				h, stale, free := weaveStoryLeaseState(s)
 				if free {
 					h = ""
 				}
 				r := row{ID: s.ID, Title: s.Title, Epic: s.Epic, Column: s.Column,
-					Status: s.Box.Status(now), Overdue: s.Box.Overdue(now), Holder: h, Stale: stale}
+					Status: s.lastBox().Status(now), Cycles: len(s.Boxes), Overdue: s.currentBox().Overdue(now), Holder: h, Stale: stale}
 				switch {
-				case s.Box.Overdue(now):
+				case s.currentBox().Overdue(now):
 					over = append(over, r)
-				case s.Box.Running():
+				case s.currentBox().Running():
 					onClock = append(onClock, r)
+				case len(s.Boxes) > 0:
+					// Stopped, but it HAS run — a distinct state from never
+					// started. A steward restarting work looks here, and a
+					// sprint whose cycles keep ending short is visible only
+					// from this group.
+					done = append(done, r)
 				case s.Column != "done":
 					idle = append(idle, r)
 				}
@@ -395,10 +404,11 @@ func newSprintStatusCmd() *cobra.Command {
 			sortRows(onClock)
 			sortRows(over)
 			sortRows(idle)
+			sortRows(done)
 
 			if mode == weavecli.OutputJSON {
 				return ec(emitOK(cmd.OutOrStdout(), mode, "sprint status", map[string]any{
-					"now": now, "overdue": over, "on_clock": onClock, "idle": idle,
+					"now": now, "overdue": over, "on_clock": onClock, "idle": idle, "stopped": done,
 				}))
 			}
 
@@ -416,7 +426,13 @@ func newSprintStatusCmd() *cobra.Command {
 				if r.Status != "" {
 					st = "  " + r.Status
 				}
-				fmt.Fprintf(out, "  #%d %s (%s)%s%s\n", r.ID, weaveTruncate(r.Title, 46), r.Column, st, lease)
+				cyc := ""
+				if r.Cycles > 1 {
+					// The count is the tell that a sprint keeps being picked up
+					// and put down — which a single planned-vs-actual cannot show.
+					cyc = fmt.Sprintf("  ×%d", r.Cycles)
+				}
+				fmt.Fprintf(out, "  #%d %s (%s)%s%s%s\n", r.ID, weaveTruncate(r.Title, 46), r.Column, st, cyc, lease)
 			}
 			// Overdue first: it is the only group that is asking for something.
 			if len(over) > 0 {
@@ -436,6 +452,12 @@ func newSprintStatusCmd() *cobra.Command {
 			if len(idle) > 0 {
 				fmt.Fprintf(out, "\nOPEN, NOT ON THE CLOCK (%d)\n", len(idle))
 				for _, r := range idle {
+					line(r)
+				}
+			}
+			if len(done) > 0 {
+				fmt.Fprintf(out, "\nSTOPPED — restartable (%d)\n", len(done))
+				for _, r := range done {
 					line(r)
 				}
 			}

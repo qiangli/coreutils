@@ -33,11 +33,14 @@ type weaveStory struct {
 	Lease      *weaveStoryLease `json:"lease,omitempty"`      // current conductor + heartbeat
 	Thread     []weaveComment   `json:"thread,omitempty"`     // sprint-level history
 	Runs       []sprintRun      `json:"runs,omitempty"`       // linked weave runs, CROSS-REPO
-	// Box is the TIME commitment, orthogonal to Column (which is position) and
-	// to Lease (which is conductor liveness). See weave_story_box.go.
-	Box       *weaveStoryBox `json:"box,omitempty"`
-	Created   time.Time      `json:"created"`
-	UpdatedAt time.Time      `json:"updated_at,omitempty"`
+	// Boxes are the sprint's TIME CYCLES, oldest first — orthogonal to Column
+	// (position) and Lease (conductor liveness). A sprint is stopped and
+	// restarted freely over its life, so this is a LIST: one entry per
+	// start/stop cycle, the last running if it has no StoppedAt. The history is
+	// the point — see weave_story_box.go.
+	Boxes     []weaveStoryBox `json:"boxes,omitempty"`
+	Created   time.Time       `json:"created"`
+	UpdatedAt time.Time       `json:"updated_at,omitempty"`
 }
 
 // sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
@@ -174,7 +177,7 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 			// these is out of time" answerable at a glance rather than one
 			// `sprint show` at a time.
 			box := ""
-			if st := s.Box.Status(now); st != "" {
+			if st := s.lastBox().Status(now); st != "" {
 				box = "  [" + st + "]"
 			}
 			fmt.Fprintf(out, "  #%d %s%s%s%s\n", s.ID, epicTag, weaveTruncate(s.Title, 52), lease, box)
@@ -189,11 +192,11 @@ func runWeaveBoard(cmd *cobra.Command, epic string, flags *weaveOutputFlags) err
 	// simultaneous boxes stay manageable.
 	var running, overdue []string
 	for _, s := range stories {
-		if !s.Box.Running() {
+		if !s.currentBox().Running() {
 			continue
 		}
-		running = append(running, fmt.Sprintf("#%d %s", s.ID, s.Box.Status(now)))
-		if s.Box.Overdue(now) {
+		running = append(running, fmt.Sprintf("#%d %s", s.ID, s.currentBox().Status(now)))
+		if s.currentBox().Overdue(now) {
 			overdue = append(overdue, fmt.Sprintf("#%d", s.ID))
 		}
 	}
@@ -812,4 +815,40 @@ func sprintStoreDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".bashy", "sprint"), nil
+}
+
+// currentBox is the running cycle, or nil when the sprint is not on the clock.
+func (s *weaveStory) currentBox() *weaveStoryBox {
+	if len(s.Boxes) == 0 {
+		return nil
+	}
+	if last := &s.Boxes[len(s.Boxes)-1]; last.Running() {
+		return last
+	}
+	return nil
+}
+
+// lastBox is the most recent cycle whether or not it still runs — what a view
+// spanning PAST and PRESENT reads.
+func (s *weaveStory) lastBox() *weaveStoryBox {
+	if len(s.Boxes) == 0 {
+		return nil
+	}
+	return &s.Boxes[len(s.Boxes)-1]
+}
+
+// cadence summarises what this sprint's cycles actually cost against what they
+// promised. One cycle is an anecdote; the run of them is the only thing that
+// says whether a cadence is real or a label.
+func (s *weaveStory) cadence() (cycles int, planned, actual time.Duration) {
+	for i := range s.Boxes {
+		b := &s.Boxes[i]
+		if b.StoppedAt == nil {
+			continue // an open cycle has no final cost yet
+		}
+		cycles++
+		planned += b.Planned
+		actual += b.Elapsed(*b.StoppedAt)
+	}
+	return cycles, planned, actual
 }
