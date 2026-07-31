@@ -78,6 +78,16 @@ type weaveStoryBox struct {
 	// promised and what was taken are different facts, and a cadence tuned from
 	// the second one alone would only ever ratchet upward.
 	Planned time.Duration `json:"planned"`
+	// Draining records when a graceful stop began. It survives a FAILED drain,
+	// which is the point: workers are already parked, and the sprint stays open
+	// in this state until the gate goes green. A conductor returning to it can
+	// see the stop was already attempted rather than starting the reasoning over.
+	Draining *time.Time `json:"draining,omitempty"`
+	// GateRan / GatePassed are the evidence the stop was clean. Both false means
+	// UNVERIFIED, never "fine" — absence of evidence is not success.
+	GateRan    bool   `json:"gate_ran,omitempty"`
+	GatePassed bool   `json:"gate_passed,omitempty"`
+	GateCmd    string `json:"gate_cmd,omitempty"`
 }
 
 // Running reports a box that has started and not stopped.
@@ -234,11 +244,32 @@ func newSprintStartCmd() *cobra.Command {
 // newSprintStopCmd closes the box and records what actually happened.
 func newSprintStopCmd() *cobra.Command {
 	var flags weaveOutputFlags
-	var note string
+	var note, gateCmd, gateDir string
+	var force, noVerify bool
 	cmd := &cobra.Command{
 		Use:   "stop <sprint>",
 		Short: "Close a sprint's time-box and record planned vs actual",
-		Long: "stop closes the clock and writes what ACTUALLY happened beside what was\n" +
+		Long: "stop DRAINS a sprint: it parks the workers, proves the tree still builds,\n" +
+			"and only then closes the clock.\n\n" +
+			"The reason is preemption. Something more urgent arrives, this work must\n" +
+			"yield, and it must yield in a state somebody can pick up cold. A stop is not\n" +
+			"graceful because it was polite — it is graceful because three things are TRUE\n" +
+			"when it finishes: no worker is still running (workspace and branch preserved,\n" +
+			"exactly as `weave pause` leaves them), the tree compiles and its tests pass,\n" +
+			"and there is a continuity record saying where it left off.\n\n" +
+			"A RED GATE REFUSES TO CLOSE THE SPRINT, and that is the feature. The workers\n" +
+			"are already parked so nothing is burning, and the remaining job is narrow:\n" +
+			"fix the regression and run stop again. Closing over a red gate would file the\n" +
+			"sprint as done and hand the next one damage it cannot tell from its own.\n\n" +
+			"SPRINT WORK GOES THROUGH WEAVE, NEVER DIRECT EDITS. That is what makes a\n" +
+			"hard stop survivable: unmerged branches cannot break the tree, so parking\n" +
+			"them costs nothing — and a red gate therefore means something ALREADY\n" +
+			"LANDED, which is the next sprint's inheritance either way. The escape hatch\n" +
+			"is never --force; it is to leave the weave unmerged or `weave abandon` it,\n" +
+			"losing one branch instead of a repo.\n\n" +
+			"NO GATE IS NOT A PASS. Without --gate nothing is verified, and stop says so\n" +
+			"rather than assuming; --no-verify closes anyway and records it as unverified.\n\n" +
+			"It also writes what ACTUALLY happened beside what was\n" +
 			"planned.\n\n" +
 			"That record is the only thing that makes a cadence real. A two-hour box\n" +
 			"that consistently runs four hours is not a two-hour cadence — it is a\n" +
@@ -247,8 +278,9 @@ func newSprintStopCmd() *cobra.Command {
 			"Stopping does not move the sprint's column: the clock and the work are\n" +
 			"different questions, and a box can close with the work unfinished. That is\n" +
 			"a normal outcome and worth seeing as one.",
-		Example: "  bashy sprint stop 3\n" +
-			"  bashy sprint stop 3 --note \"gate green, docs left\"",
+		Example: "  bashy sprint stop 3 --gate 'go build ./... && go test ./...'\n" +
+			"  bashy sprint stop 3 --gate 'make test' --note \"paused for the incident\"\n" +
+			"  bashy sprint stop 3 --no-verify        # nothing to gate; on the record",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
@@ -256,6 +288,8 @@ func newSprintStopCmd() *cobra.Command {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			now := time.Now().UTC()
+			requireGate := !noVerify
+			var rep drainReport
 			return runWeaveStoryMutate(cmd, id, "sprint stop", &flags, func(s *weaveStory) (string, error) {
 				b := s.currentBox()
 				if b == nil {
@@ -264,6 +298,46 @@ func newSprintStopCmd() *cobra.Command {
 					// meant to remove.
 					return "", fmt.Errorf("sprint #%d has no running box — `sprint start %d` opens one", id, id)
 				}
+				// PARK THE WORKERS FIRST. Whatever the gate says next, nothing
+				// should still be writing to the tree while it is judged — a
+				// gate racing a live agent measures neither.
+				if b.Draining == nil {
+					b.Draining = &now
+				}
+				paused, problems := pauseLinkedRepos(s)
+				rep.Paused = paused
+				rep.Failures = problems
+
+				// THE MINIMUM BAR: it compiles and the tests pass. A sprint
+				// that stops over a regression is not parked, it is a trap —
+				// the next sprint inherits damage it cannot tell from its own.
+				out := runDrainGate(cmd.Context(), gateDir, gateCmd)
+				rep.GateRan, rep.GatePassed, rep.GateCmd = out.Ran, out.Passed, out.Command
+				b.GateRan, b.GatePassed, b.GateCmd = out.Ran, out.Passed, out.Command
+
+				if !force {
+					if len(problems) > 0 {
+						return "", fmt.Errorf("sprint #%d NOT stopped — could not park: %s\n  fix, then `sprint stop %d` again (or --force to close anyway)",
+							id, strings.Join(problems, "; "), id)
+					}
+					if out.Ran && !out.Passed {
+						// The refusal is the feature. Workers are parked, so
+						// nothing is burning; the remaining job is narrow.
+						tail := out.Output
+						if len(tail) > 600 {
+							tail = tail[len(tail)-600:]
+						}
+						return "", fmt.Errorf("sprint #%d NOT stopped — the gate FAILED, so this is not a good handoff state.\n"+
+							"  workers are parked; fix the regression, then `sprint stop %d` again.\n"+
+							"  gate: %s (exit %d)\n%s",
+							id, id, out.Command, out.ExitCode, tail)
+					}
+					if !out.Ran && requireGate {
+						return "", fmt.Errorf("sprint #%d NOT stopped — no gate given, so \"it still builds\" is unverified.\n"+
+							"  pass --gate '<cmd>', or --no-verify to close it unverified on the record", id)
+					}
+				}
+
 				b.StoppedAt = &now
 				elapsed := b.Elapsed(now)
 				verdict := "within the box"
@@ -272,8 +346,8 @@ func newSprintStopCmd() *cobra.Command {
 				} else if d := b.Planned - elapsed; d > time.Minute {
 					verdict = fmt.Sprintf("under by %s", roundDur(d))
 				}
-				msg := fmt.Sprintf("stopped after %s (planned %s) — %s",
-					roundDur(elapsed), roundDur(b.Planned), verdict)
+				msg := fmt.Sprintf("stopped after %s (planned %s) — %s; %s",
+					roundDur(elapsed), roundDur(b.Planned), verdict, drainSummary(&rep, elapsed, b.Planned))
 				if strings.TrimSpace(note) != "" {
 					msg += ": " + strings.TrimSpace(note)
 				}
@@ -283,6 +357,10 @@ func newSprintStopCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&note, "note", "", "what the box actually produced")
+	cmd.Flags().StringVar(&gateCmd, "gate", "", "the command proving the tree still builds and passes")
+	cmd.Flags().StringVar(&gateDir, "gate-dir", "", "where to run the gate (default: cwd)")
+	cmd.Flags().BoolVar(&force, "force", false, "close even over a red gate or an unparked worker — recorded as not clean")
+	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "close with no gate at all, on the record as unverified")
 	flags.attach(cmd)
 	return cmd
 }
