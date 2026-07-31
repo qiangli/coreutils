@@ -156,6 +156,11 @@ var packages = map[string]Package{
 	"secrets":    cmdPkg("secrets"),
 	"skills":     cmdPkg("skills"),
 	"craft":      cmdPkg("craft"),
+	"role": libPkg("sprint", "how to REACH whoever holds a role — the bus topic and room behind the "+
+		"contact `bashy sprint` shows and `bashy steward` leads with. role is vocabulary only "+
+		"(pkg/steward imports it and sits in the cross-OS canary that meet cannot satisfy); "+
+		"role/meetroom opens and closes the rooms, and sweeps the ones whose holder died without "+
+		"releasing. Not a verb: a channel is named by the thing it reaches."),
 	"redact":     libPkg("craft", "strips host identity (hostnames, users, home paths, IPs, MACs, emails) before learned knowledge leaves the machine"),
 	"sota":       cmdPkg("sota"),
 	"steward":    cmdPkg("steward"),

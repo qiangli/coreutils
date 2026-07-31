@@ -578,6 +578,15 @@ func newSprintStatusCmd() *cobra.Command {
 				}
 				fmt.Fprintf(out, "  #%d %s (%s)%s%s%s%s\n", r.ID, weaveTruncate(r.Title, 40), r.Column, st, cyc, lease, contact)
 			}
+			// SWEEP BEFORE REPORTING. A room whose holder is dead advertises a
+			// channel to somebody who will never read it, and an unanswered
+			// room costs more than an absent one — it consumes the time of
+			// whoever trusted it. No verb can cover this case: the holder died
+			// and ran nothing.
+			if swept := sweepDeadRooms(q.Stories, now, currentActor()); len(swept) > 0 {
+				fmt.Fprintf(out, "swept %d abandoned room(s): %s\n\n", len(swept), strings.Join(swept, ", "))
+			}
+
 			// Unowned delivery first: a running sprint with no live conductor
 			// is the one state that cannot resolve itself.
 			if len(orphaned) > 0 {

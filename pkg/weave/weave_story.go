@@ -478,6 +478,18 @@ continuity record (sprint show) and resume.`,
 			}
 			who := weaveConductorName(as)
 			return runWeaveStoryMutate(cmd, id, "sprint take", &flags, func(s *weaveStory) (string, error) {
+				// THE DEAD HOLDER CANNOT CLOSE THEIR OWN ROOM. A successor
+				// taking over a stale lease inherits a channel addressed to
+				// somebody who will never read it, so the takeover closes it
+				// and opens one that answers.
+				if s.Contact != nil {
+					_ = closeSprintRoom(s, weaveConductorName(""))
+				}
+				if s.currentBox().Running() {
+					if c, err := openSprintRoom(s, weaveConductorName("")); err == nil {
+						s.Contact = c
+					}
+				}
 				prev, stale, free := weaveStoryLeaseState(s)
 				if !free && !stale && prev != who && !force {
 					return "", fmt.Errorf("sprint #%d lease is held by %s (fresh) — coordinate, or --force to take over", id, prev)
@@ -518,6 +530,11 @@ untouched — they survive in the queue for the successor.`,
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint handoff", &flags, func(s *weaveStory) (string, error) {
+				// Releasing the role closes its room. A closed room with work
+				// still running would be a dead letterbox, but a handoff is
+				// precisely the case where the work moves WITH the role — the
+				// successor opens their own.
+				_ = closeSprintRoom(s, weaveConductorName(""))
 				who := weaveConductorName("")
 				if strings.TrimSpace(message) != "" {
 					s.Continuity = message

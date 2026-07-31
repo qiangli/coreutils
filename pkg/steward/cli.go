@@ -17,6 +17,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/qiangli/coreutils/pkg/role"
 )
 
 // opts is the state every subcommand shares: which store, and whether the caller
@@ -162,6 +164,54 @@ tree, and captures no diff.`,
 	)
 	return cmd
 }
+
+// SeatSummary prints who holds this host and what to do about it.
+//
+// It is exported because the front door for the steward ROLE is `bashy
+// steward`, which renders the role's operating skill — and the first question
+// an arriving agent has is not "how do I steward" but "is anybody already
+// stewarding". Printing the manual without the seat answers the second question
+// while burying the first, so the summary goes above it.
+//
+// AUTHORITY and LIVENESS are stated separately, because a held-but-dead seat is
+// not the same situation as a held one and the action differs: the first is a
+// takeover, the second is a conversation.
+func SeatSummary(w io.Writer, dir string, base ...Option) error {
+	st, err := Open(dir, base...)
+	if err != nil {
+		return err
+	}
+	view, err := st.Status(time.Now())
+	if err != nil {
+		return err
+	}
+	host := hostLabel()
+	if view.Authority.Vacant {
+		fmt.Fprintf(w, "%s has NO steward — the seat is open.\n", host)
+		fmt.Fprintf(w, "  claim it:  bashy steward claim --intent \"<what you are here to do>\"\n\n")
+		return nil
+	}
+	fmt.Fprintf(w, "%s steward: %s (epoch %d)\n", host, view.Authority.Holder, view.Authority.Epoch)
+	switch view.Liveness {
+	case LivenessLive:
+		fmt.Fprintf(w, "  alive — reach them on bus %s before taking anything over\n\n",
+			role.Assignment{Kind: role.Steward, Ref: host}.Topic())
+	case LivenessVacant:
+		fmt.Fprintf(w, "  the journal says vacant — bashy steward claim\n\n")
+	default:
+		// Held on paper, nobody breathing. The actionable case, and the one
+		// worth surfacing first.
+		fmt.Fprintf(w, "  NOT ALIVE (%s) — held on paper only\n", view.Liveness)
+		fmt.Fprintf(w, "  take it:   bashy steward takeover --intent \"<what you are here to do>\"\n\n")
+	}
+	return nil
+}
+
+// runSeatSummary prints who holds the host, and how to take it if nobody does.
+//
+// It states AUTHORITY and LIVENESS separately, the same way `status` does,
+// because a held-but-dead seat is not the same situation as a held one and the
+// action differs: the first is a takeover, the second is a conversation.
 
 // epochFlag wires the fencing token onto a command. Every authoritative mutation has
 // one, and every one of them REFUSES to proceed without a value — from the flag, or

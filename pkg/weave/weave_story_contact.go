@@ -43,51 +43,31 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/qiangli/coreutils/pkg/weavecli"
 
 	"github.com/qiangli/coreutils/pkg/bus"
-	"github.com/qiangli/coreutils/pkg/meet"
+	"github.com/qiangli/coreutils/pkg/role"
+	"github.com/qiangli/coreutils/pkg/role/meetroom"
 )
 
 // sprintContact is how to reach the conductor responsible for a sprint.
-type sprintContact struct {
-	// Kind is the mechanism ("meet"), so a later one can be added without
-	// reinterpreting Ref.
-	Kind string `json:"kind"`
-	// Ref is meet's room ID — the identity, never the reusable room number.
-	Ref string `json:"ref"`
-	// Room is the short number, carried only for display. It is a POINTER and
-	// may be stale; nothing resolves against it.
-	Room int `json:"room,omitempty"`
-	// Topic is the bus topic that pings this sprint's conductor.
-	Topic string `json:"topic,omitempty"`
-}
+//
+// It is pkg/role's Contact: the steward holds a host the same way a conductor
+// holds a sprint, and one shape for both is what lets the sweep treat them
+// identically. The alias keeps the existing JSON and call sites unchanged.
+type sprintContact = role.Contact
 
-// Ref returns the room identity, empty when there is no contact.
-func (c *sprintContact) RefID() string {
-	if c == nil {
-		return ""
-	}
-	return c.Ref
-}
+// sprintTopic is the bus topic for one sprint's conductor.
+func sprintTopic(id int64) string { return sprintAssignment(id, "").Topic() }
 
-// String renders the contact for a human choosing how to reach someone.
-func (c *sprintContact) String() string {
-	if c == nil || c.Ref == "" {
-		return ""
-	}
-	if c.Room > 0 {
-		return fmt.Sprintf("meet #%d · bus %s", c.Room, c.Topic)
-	}
-	return fmt.Sprintf("meet %s · bus %s", c.Ref, c.Topic)
+// sprintAssignment is a sprint expressed as a role assignment.
+func sprintAssignment(id int64, title string) role.Assignment {
+	return role.Assignment{Kind: role.Conductor, Ref: strconv.FormatInt(id, 10), Title: title}
 }
-
-// sprintTopic is the bus topic for one sprint. Derived rather than stored so it
-// cannot drift from the sprint it names.
-func sprintTopic(id int64) string { return fmt.Sprintf("sprint.%d", id) }
 
 // openSprintRoom convenes the room a running sprint is reachable in.
 //
@@ -96,23 +76,17 @@ func sprintTopic(id int64) string { return fmt.Sprintf("sprint.%d", id) }
 // is down would be the wrong trade — the sprint simply records no contact, and
 // the surfaces that show contact say so rather than implying one exists.
 func openSprintRoom(s *weaveStory, conductor string) (*sprintContact, error) {
-	st, err := meet.Create(meet.CreateOptions{
-		Topic: fmt.Sprintf("sprint #%d: %s", s.ID, s.Title),
-		// The conductor is a PARTICIPANT, not the chair. A chair is required to
-		// have someone to call on, and this room has no roster at open time —
-		// the whole point is that it exists BEFORE anyone needs it. Whoever
-		// arrives joins; the conductor is simply the one guaranteed to be there.
-		Participants: []string{conductor},
-		Initiator:    conductor,
-		Agenda:       []string{"delivery of this sprint", "blockers", "handoff"},
-	})
-	if err != nil {
-		return nil, err
+	return meetroom.Assume(sprintAssignment(s.ID, s.Title), conductor)
+}
+
+// closeSprintRoom releases a sprint's room on a graceful handoff.
+func closeSprintRoom(s *weaveStory, actor string) error {
+	if s.Contact == nil {
+		return nil
 	}
-	if st == nil || st.ID == "" {
-		return nil, fmt.Errorf("meet returned no room")
-	}
-	return &sprintContact{Kind: "meet", Ref: st.ID, Room: st.Room, Topic: sprintTopic(s.ID)}, nil
+	err := meetroom.Release(s.Contact, actor)
+	s.Contact = nil
+	return err
 }
 
 // pingSprintConductor publishes an interrupt to whoever is conducting.
@@ -218,4 +192,47 @@ func newSprintPingCmd() *cobra.Command {
 	cmd.Flags().StringVar(&priority, "priority", "", "urgency hint for the sidecar's governance rules")
 	flags.attach(cmd)
 	return cmd
+}
+
+// sweepDeadRooms closes the rooms of sprints whose conductor is no longer live.
+//
+// Liveness is decided HERE, by the lease, and handed to role.Sweep as a fact.
+// The role package deliberately holds no opinion about it: the lease is weave's
+// authority, and a second opinion living one package away could disagree with
+// it invisibly.
+//
+// A sprint that is not running is not swept even if its lease went stale —
+// there is nothing in flight for anyone to reach in about, and closing a room
+// on a parked sprint would remove the channel a conductor uses when they pick
+// it back up.
+func sweepDeadRooms(stories []*weaveStory, now time.Time, actor string) []string {
+	var open []role.Occupied
+	for _, s := range stories {
+		if s == nil || s.Contact == nil || s.currentBox() == nil {
+			continue
+		}
+		_, stale, free := weaveStoryLeaseState(s)
+		open = append(open, role.Occupied{
+			Label:   fmt.Sprintf("#%d", s.ID),
+			Contact: s.Contact,
+			Live:    !stale && !free,
+		})
+	}
+	if len(open) == 0 {
+		return nil
+	}
+	res := meetroom.Sweep(open, actor)
+	// Drop the contact from any sprint whose room was closed, so the board
+	// stops advertising it. A swept room that still shows in `status` is the
+	// same lie the sweep exists to remove.
+	closed := map[string]bool{}
+	for _, l := range res.Closed {
+		closed[l] = true
+	}
+	for _, s := range stories {
+		if s != nil && closed[fmt.Sprintf("#%d", s.ID)] {
+			s.Contact = nil
+		}
+	}
+	return res.Closed
 }
