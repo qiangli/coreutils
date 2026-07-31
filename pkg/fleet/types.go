@@ -208,6 +208,40 @@ type ToolLaunch struct {
 	//     {"type":"turn.start"} {"type":"tool.call"} {"type":"turn.end", ...}
 	EventsArg string `yaml:"events_arg,omitempty" json:"events_arg,omitempty"`
 
+	// EventsStdout is the same capability for tools that stream on STDOUT
+	// rather than into a file bashy names.
+	//
+	// EventsArg above was written for ycode, which takes a path and writes
+	// NDJSON there. Every third-party tool measured on the wire does the
+	// opposite — claude, codex and agy each stream to stdout and accept no path
+	// at all — so declaring EventsArg for them would render a flag that does not
+	// exist. Two fields, because they are two different plumbing paths: one
+	// opens a side channel, the other means stdout is no longer a transcript to
+	// scrape but a stream to parse.
+	//
+	// Fixed argv, no {path} token. Measured 2026-07-31:
+	//
+	//	claude   -p {prompt} --output-format stream-json --verbose
+	//	codex    exec --json
+	//	agy      -p {prompt} --output-format stream-json
+	EventsStdout string `yaml:"events_stdout,omitempty" json:"events_stdout,omitempty"`
+
+	// EventsDone declares how THIS tool spells "the turn ended".
+	//
+	// The EventsArg contract documented `{"type":"turn.end"}` and no third-party
+	// tool says that. Measured on the wire, the same fact has three spellings —
+	// codex `type: turn.completed`, claude `type: result`, agy `event: result` —
+	// and even the KEY differs, so a matcher that assumed `type` would silently
+	// never fire on agy. Silently, because a boundary that never arrives is
+	// indistinguishable from a tool that is still thinking: the reader would
+	// fall back to the 25-second silence tax it was trying to escape, and
+	// nothing would report that the declaration was wrong.
+	//
+	// Declared per tool rather than inferred, for the reason this package
+	// declares everything else: a guess that happens to work is a guess that
+	// breaks on the next release with nobody watching.
+	EventsDone EventsDone `yaml:"events_done,omitempty" json:"events_done,omitempty"`
+
 	// SteerExec is the argv template that ACTUALLY accepts steering, and it is
 	// usually NOT Exec.
 	//
@@ -811,6 +845,18 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // EventsArgv renders the tool's event-channel flag for a given path, or nil when
 // the tool cannot stream events (which is every third-party CLI we have).
+func (t Tool) HasEventsArg() bool { return strings.TrimSpace(t.CLI.Launch.EventsArg) != "" }
+
+// EventsStdoutArgv renders the fixed argv that puts a tool's event stream on
+// stdout. No {path}: these tools take no path, which is the whole difference.
+func (t Tool) EventsStdoutArgv() []string {
+	f := strings.Fields(strings.TrimSpace(t.CLI.Launch.EventsStdout))
+	if len(f) == 0 {
+		return nil
+	}
+	return f
+}
+
 func (t Tool) EventsArgv(path string) []string {
 	tmpl := strings.TrimSpace(t.CLI.Launch.EventsArg)
 	if tmpl == "" || strings.TrimSpace(path) == "" {
@@ -825,8 +871,15 @@ func (t Tool) EventsArgv(path string) []string {
 
 // ReportsTurnEnd says whether this tool tells us when a turn is over, instead of
 // leaving us to infer it from silence.
+//
+// EITHER ROUTE COUNTS. This used to read EventsArg alone, which was true when
+// ycode's side-channel file was the only way a tool could speak — and became
+// wrong the moment a stdout streamer was declarable. Left as it was, claude,
+// codex and agy would each stream a perfectly good turn boundary while this
+// reported them silent, and every caller would keep paying the 25-second tax to
+// re-derive a fact already on the wire.
 func (t Tool) ReportsTurnEnd() bool {
-	return strings.TrimSpace(t.CLI.Launch.EventsArg) != ""
+	return t.StreamsEvents() && t.CLI.Launch.EventsDone.Declared() || strings.TrimSpace(t.CLI.Launch.EventsArg) != ""
 }
 
 // BillingMode returns how this model is paid for, deriving it from Kind when the

@@ -6,6 +6,21 @@ aliases:
 cli:
   binary: agy
   launch:
+    # RUNG 2 via stdout. Measured on the wire 2026-07-31:
+    #
+    #   $ agy -p "say ok" --output-format stream-json
+    #   {"event":"step_update","step_update":{...,"state":"ACTIVE",...}}
+    #   {"event":"step_update","step_update":{...,"state":"DONE",...}}
+    #   {"event":"result","result":{"status":"SUCCESS","num_turns":1,...}}
+    #
+    # NOTE THE KEY: agy nests its kind under `event`, where every other tool
+    # uses `type`. A matcher assuming `type` would never fire here, and would do
+    # so silently — a boundary that never arrives is indistinguishable from a
+    # tool still thinking. That asymmetry is why events_done declares its field.
+    events_stdout: --output-format stream-json
+    events_done:
+      field: event
+      values: [result]
     exec: agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}
     # AGY otherwise may retain/select a different project despite the process
     # cwd. Bind the allocated clone explicitly, before model/prompt argv.

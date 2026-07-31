@@ -11,6 +11,19 @@ cli:
     # the captured "answer" is a TUI banner. Every other tool in the fleet
     # already says so out loud (codex `exec`, opencode `run`, aider --message,
     # agy -p); claude was the only one relying on the guess.
+    # RUNG 2 via stdout. Measured on the wire 2026-07-31, not read off the help:
+    #
+    #   $ claude -p "say ok" --output-format stream-json --verbose
+    #   {"type":"system","subtype":"init",...}
+    #   {"type":"assistant","message":{...}}
+    #   {"type":"result","subtype":"success","stop_reason":"end_turn","is_error":false,...}
+    #
+    # --verbose is REQUIRED alongside stream-json in print mode; without it the
+    # stream is refused. The terminal event is `result`, not `turn.end`.
+    events_stdout: --output-format stream-json --verbose
+    events_done:
+      field: type
+      values: [result]
     exec: claude --dangerously-skip-permissions --model {model} -p {prompt}
     steer_exec: claude --dangerously-skip-permissions --model {model}
     # Context-inheriting fork (`delegate self`): --fork-session branches a NEW session

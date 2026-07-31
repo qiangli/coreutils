@@ -4,6 +4,20 @@ display: Codex
 cli:
   binary: codex
   launch:
+    # RUNG 2 via stdout. Measured on the wire 2026-07-31:
+    #
+    #   $ codex exec --json "say ok"
+    #   {"type":"thread.started","thread_id":"..."}
+    #   {"type":"turn.started"}
+    #   {"type":"item.completed","item":{...}}
+    #   {"type":"turn.completed","usage":{...}}
+    #
+    # Two launcher notes measured at the same time: codex REFUSES outside a git
+    # repo without --skip-git-repo-check, and reads stdin unless it is closed.
+    events_stdout: --json
+    events_done:
+      field: type
+      values: [turn.completed]
     exec: codex exec --skip-git-repo-check --sandbox workspace-write --model {model} {prompt}
     steer_exec: codex --model {model}
     prompt_position: last
