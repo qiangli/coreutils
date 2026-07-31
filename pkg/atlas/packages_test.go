@@ -159,7 +159,7 @@ func TestRoomIsRecordedAsALibrary(t *testing.T) {
 
 room was deliberately recorded as a library, not a verb: the atlas's verb table is
 asserted against live cobra dispatch, and a name in the atlas is a promise you can
-type it. If `+ "`bashy room`" + ` now genuinely exists (P0.5 of
+type it. If ` + "`bashy room`" + ` now genuinely exists (P0.5 of
 docs/agent-room-mesh-design.md), delete this check in the same diff that ships it.`)
 	}
 }
