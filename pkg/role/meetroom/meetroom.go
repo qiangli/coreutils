@@ -32,6 +32,10 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 		Participants: []string{holder},
 		Initiator:    holder,
 		Agenda:       agendaFor(a.Kind),
+		// Never into the repo. A role room opens on every assume, so the default
+		// (<repo>/docs/meetings/) turned lease churn into tracked files naming a
+		// real host and user — in public source. See meet.OutStore.
+		Out: meet.OutStore,
 	})
 	if err != nil {
 		return nil, err

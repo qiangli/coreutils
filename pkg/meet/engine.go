@@ -424,6 +424,13 @@ func minutesPath(st *State) string {
 	ts := st.Created.Format("2006-01-02T15-04")
 	name := fmt.Sprintf("meeting-note-%s-%s.md", ts, slugify(st.Topic))
 
+	// OutStore keeps the minutes out of the repo entirely — see its doc comment.
+	// Checked before the repo default, because the whole point is that being
+	// inside a git repo must NOT pull these into the working tree.
+	if out == OutStore {
+		dir, _ := storeDir(st.ID)
+		return filepath.Join(dir, "minutes.md")
+	}
 	if out != "" && out != "docs" && out != "kb" {
 		if fi, err := os.Stat(out); err == nil && fi.IsDir() {
 			return filepath.Join(out, name)

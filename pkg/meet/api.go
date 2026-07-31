@@ -102,6 +102,24 @@ type JobRef struct {
 // The zero value is meaningful and is the chat-room case: no secretary (the room
 // keeps no minutes), no chair (nobody directs). See the design of record §4 —
 // one room type, from a human plus one assistant up to a chaired panel.
+// OutStore is the Out sentinel for "publish the minutes to the host-local
+// session store, NEVER into the repo working tree".
+//
+// The default puts minutes in `<repo>/docs/meetings/`, which is right for a
+// meeting a person convened and wrong for a ROLE ROOM. A role room is lifecycle
+// plumbing: pkg/role opens one on every assume and closes it on release, so a
+// repo campaign acquiring its lease a dozen times in an afternoon left a dozen
+// pairs of minutes in the source tree — all of them empty, because the room
+// exists before anyone needs it and usually nobody ever speaks in it.
+//
+// The churn is the visible half. The load-bearing half is that minutes name
+// their attendees — a real hostname and a real OS user — and coreutils ships as
+// public MIT source. Auto-generating those into a tracked directory means the
+// next `git add` publishes them, with nothing in the flow prompting anyone to
+// look. The transcript already lives in the session store; the minutes belong
+// beside it.
+const OutStore = "store"
+
 type CreateOptions struct {
 	Topic        string
 	Participants []string
