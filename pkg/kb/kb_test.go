@@ -447,3 +447,38 @@ func TestSearchMinCoverageAbstains(t *testing.T) {
 		t.Fatalf("a well-covered query must still answer: %+v", hits)
 	}
 }
+
+// TestRenderResolutionLadder pins the second retrieval axis: which pages come
+// back is the ranker's job, how much of each one arrives is the renderer's.
+// The ratio is the point — the eval harness once compared rankers whose token
+// columns were really measuring this (dhnt/docs/memory-eval-plan.md §4f-bis).
+func TestRenderResolutionLadder(t *testing.T) {
+	p := &Page{
+		Slug: "renew-the-edge-certificate", Type: TypeRunbook, Status: StatusValidated,
+		Title:       "renew the edge certificate",
+		Description: "WHEN the edge certificate is within 30 days of expiry — the renewal steps and the reload order",
+		Body:        strings.Repeat("step. ", 200),
+	}
+	cue := CueRenderer().Page(p)
+	line := LineRenderer().Page(p)
+	full := Renderer{Resolution: ResFull, Sep: "  "}.Page(p)
+
+	if !strings.Contains(cue, p.Slug) || !strings.Contains(cue, p.Title) {
+		t.Fatalf("cue must carry the address: %q", cue)
+	}
+	if strings.Contains(cue, p.Description) {
+		t.Fatalf("cue must NOT carry the routing prose: %q", cue)
+	}
+	if !strings.Contains(line, p.Description) || !strings.Contains(line, "[validated/runbook]") {
+		t.Fatalf("line must carry the routing surface: %q", line)
+	}
+	if len(cue) >= len(line) || len(line) >= len(full) {
+		t.Fatalf("resolutions must be strictly increasing: cue=%d line=%d full=%d", len(cue), len(line), len(full))
+	}
+	if !strings.Contains(full, "…") {
+		t.Fatalf("a clipped body must be marked so a reader can tell: %q", full)
+	}
+	if n := len([]rune(full)) - len([]rune(line)); n > DefaultBodyCap+8 {
+		t.Fatalf("body cap not applied: full-line = %d runes", n)
+	}
+}

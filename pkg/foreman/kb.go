@@ -7,7 +7,6 @@ package foreman
 // missing kb never costs tokens or blocks a session.
 
 import (
-	"fmt"
 	"runtime"
 	"strings"
 
@@ -34,9 +33,6 @@ func composeKBNote(goal string) string {
 	}
 	var b strings.Builder
 	b.WriteString("Host kb (shared lessons from all agents on this host — `bashy kb retro` after the task):\n")
-	for _, h := range hits {
-		p := h.Page
-		fmt.Fprintf(&b, "- %s [%s/%s] %s — %s\n", p.Slug, p.Status, p.Type, p.Title, p.Description)
-	}
+	b.WriteString(kb.Renderer{Resolution: kb.ResLine, Bullet: "- ", Sep: " "}.Hits(hits))
 	return b.String()
 }

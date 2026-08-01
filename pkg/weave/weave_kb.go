@@ -9,7 +9,6 @@ package weave
 // effort throughout: a missing or empty kb never blocks a launch.
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -52,13 +51,9 @@ func weaveInjectKBFile(dir, workspace string, it *weaveItem) error {
 		b.WriteString("No existing kb pages match this issue. If the work teaches something durable, contribute it when you finish:\n")
 	} else {
 		b.WriteString("Check these before you start — they may save you a failed approach:\n\n")
-		for _, h := range hits {
-			p := h.Page
-			fmt.Fprintf(&b, "- %s [%s/%s] %s — %s\n", p.Slug, p.Status, p.Type, p.Title, p.Description)
-			if body := strings.TrimSpace(p.Body); body != "" {
-				fmt.Fprintf(&b, "  %s\n", weaveTruncate(strings.ReplaceAll(body, "\n", " "), weaveKBBodyCap))
-			}
-		}
+		b.WriteString(kb.Renderer{
+			Resolution: kb.ResFull, Bullet: "- ", Sep: " ", BodyCap: weaveKBBodyCap,
+		}.Hits(hits))
 		b.WriteString("\nMore: `bashy kb search <query>` (or `bashy kb show <slug>`).\n")
 	}
 	b.WriteString("\nAFTER this issue is done, close the loop: `bashy kb retro <a few words on what you did>`\n")

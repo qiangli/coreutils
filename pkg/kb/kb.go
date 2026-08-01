@@ -133,6 +133,7 @@ func newSearchCmd(dir *string) *cobra.Command {
 		k              int
 		all, jsonOut   bool
 		full, federate bool
+		brief          bool
 		minCov         float64
 	)
 	cmd := &cobra.Command{
@@ -183,11 +184,15 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 				fmt.Fprintln(out, "no matching kb pages — if this task teaches something durable, contribute one: bashy kb add")
 				return nil
 			}
+			res := ResLine
+			if brief {
+				res = ResCue
+			}
+			rd := Renderer{Resolution: res, Sep: "  "}
 			for _, h := range hits {
-				p := h.Page
-				fmt.Fprintf(out, "%s  [%s/%s] %s — %s\n", p.Slug, p.Status, p.Type, p.Title, p.Description)
+				fmt.Fprint(out, rd.Page(h.Page))
 				if full {
-					if body := strings.TrimSpace(p.Body); body != "" {
+					if body := strings.TrimSpace(h.Page.Body); body != "" {
 						fmt.Fprintln(out, indent(body, "    "))
 					}
 				}
@@ -205,6 +210,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 	cmd.Flags().BoolVar(&all, "all", false, "include superseded pages")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "JSON output")
 	cmd.Flags().BoolVar(&full, "full", false, "print page bodies, not just index lines")
+	cmd.Flags().BoolVar(&brief, "brief", false, "cue lines only (slug + title) — ~3.7x leaner when you already know what you are looking for")
 	cmd.Flags().BoolVar(&federate, "federate", false, "also search the current repo's contribution log + weave memory")
 	cmd.Flags().Float64Var(&minCov, "min-coverage", 0, "return NOTHING unless a page matches at least this fraction of the query terms (0 = always answer)")
 	return cmd
@@ -563,7 +569,7 @@ Deterministic (no LLM): the judgment is yours, retro structures it.`,
 			}
 			for _, h := range hits {
 				p := h.Page
-				fmt.Fprintf(out, "  %s  [%s/%s] %s — %s\n", p.Slug, p.Status, p.Type, p.Title, p.Description)
+				fmt.Fprint(out, Renderer{Resolution: ResLine, Bullet: "  ", Sep: "  "}.Page(p))
 			}
 			fmt.Fprint(out, `decide ONE:
   ADD        bashy kb add --type lesson --title "<distilled insight>" --description "<what + WHEN it applies>"   # nothing relevant existed and the task taught something durable
@@ -598,7 +604,7 @@ func newListCmd(dir *string) *cobra.Command {
 				return writeSearchJSON(c.OutOrStdout(), toHits(pages), nil)
 			}
 			for _, p := range pages {
-				fmt.Fprintf(c.OutOrStdout(), "%s  [%s/%s] %s — %s\n", p.Slug, p.Status, p.Type, p.Title, p.Description)
+				fmt.Fprint(c.OutOrStdout(), LineRenderer().Page(p))
 			}
 			return nil
 		},

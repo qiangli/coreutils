@@ -65,7 +65,7 @@ bashy skills show knowledge-transfer.`,
 				}
 				for _, h := range hits {
 					p := h.Page
-					fmt.Fprintf(out, "  %s  [%s/%s] %s — %s\n", p.Slug, p.Status, p.Type, p.Title, p.Description)
+					fmt.Fprint(out, Renderer{Resolution: ResLine, Bullet: "  ", Sep: "  "}.Page(p))
 				}
 			} else {
 				fmt.Fprintln(out, "existing pages: pass topic terms to see them (kb transfer <topic>)")
