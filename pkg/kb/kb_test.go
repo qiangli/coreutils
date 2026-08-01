@@ -394,3 +394,56 @@ func TestGitSnapshotBestEffort(t *testing.T) {
 		t.Fatalf("git HEAD missing after writes: %v", err)
 	}
 }
+
+// TestSearchIsWordAnchored guards the tokenisation half of the BM25 port: the
+// substring scorer it replaced matched INSIDE words, so a query for "rust"
+// scored every page containing "trust". Measured as a real false-recall source
+// on the host store (dhnt/docs/memory-eval-plan.md §4d).
+func TestSearchIsWordAnchored(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--title", "trust prompt hangs the agent",
+		"--description", "WHEN a headless agent waits at a directory trust prompt")
+	hits := Search(mustList(t, dir), Query{Terms: []string{"rust"}, K: 5})
+	if len(hits) != 0 {
+		t.Fatalf("`rust` must not match inside `trust`: %+v", hits)
+	}
+	if hits := Search(mustList(t, dir), Query{Terms: []string{"trust"}, K: 5}); len(hits) != 1 {
+		t.Fatalf("the whole word must still match: %+v", hits)
+	}
+}
+
+// TestSearchLengthNormalisation guards the ranking half: the substring scorer
+// counted raw occurrences, so a long page beat a short exact match. Measured:
+// on 36 real pages the top hit for an unrelated query sat in the 87th
+// percentile by length.
+func TestSearchLengthNormalisation(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--title", "cgroup weights", "--description", "WHEN sharing a host between workloads")
+	mustRun(t, dir, "add", "--title", "unrelated long page", "--description", "WHEN reading a very long page",
+		"--body", strings.Repeat("weights of many other things plus filler prose ", 60))
+	hits := Search(mustList(t, dir), Query{Terms: []string{"cgroup", "weights"}, K: 2})
+	if len(hits) == 0 || hits[0].Page.Slug != "cgroup-weights" {
+		t.Fatalf("the short exact match must win: %+v", hits)
+	}
+}
+
+// TestSearchMinCoverageAbstains guards the empty-result path. Without it the
+// shipped ranker answered every query, measured at 0% abstention over ten
+// answer-is-nothing queries — ~417 tokens of irrelevant context each.
+func TestSearchMinCoverageAbstains(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--title", "renew the edge certificate", "--description", "WHEN a cert is near expiry")
+	pages := mustList(t, dir)
+	q := Query{Terms: Terms("kafka partition rebalance certificate"), K: 3}
+	if hits := Search(pages, q); len(hits) == 0 {
+		t.Fatal("with the gate off the historical behaviour must hold: answer anyway")
+	}
+	q.MinCoverage = 0.5
+	if hits := Search(pages, q); len(hits) != 0 {
+		t.Fatalf("1 of 4 terms matched is not an answer: %+v", hits)
+	}
+	q.Terms = Terms("renew the edge certificate")
+	if hits := Search(pages, q); len(hits) != 1 {
+		t.Fatalf("a well-covered query must still answer: %+v", hits)
+	}
+}

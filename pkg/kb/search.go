@@ -5,17 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
-// Query is one deterministic search: substring terms ranked over weighted
-// fields, filtered by activation scope. Precision over recall — the default
-// K is small on purpose (the ReasoningBank ablation: retrieving more
-// memories than apply actively hurts).
+// Query is one deterministic search: BM25 over weighted fields, filtered by
+// activation scope. Precision over recall — the default K is small on purpose
+// (the ReasoningBank ablation: retrieving more memories than apply actively
+// hurts).
 type Query struct {
 	Terms []string
 	Repo  string   // current repo basename; filters pages scoped to other repos
@@ -23,10 +25,28 @@ type Query struct {
 	Tags  []string // require at least one matching tag when set
 	K     int      // max hits (0 = DefaultK)
 	All   bool     // include superseded/stale pages
+
+	// MinCoverage gates the EMPTY RESULT. When > 0, a query whose best page
+	// matches a smaller fraction of its terms than this returns nothing at
+	// all. Zero (the default) keeps the historical behaviour of always
+	// answering, because enabling the gate costs recall on its own: measured
+	// on the real host store, coverage 0.5 took hit@3 from 100% to 86% while
+	// taking abstention from 0% to 100%. Combined with a semantic tier the
+	// recall cost disappears, which is why this is a knob and not a constant.
+	// See dhnt/docs/memory-eval-plan.md §4g.
+	MinCoverage float64
 }
 
 // DefaultK caps search results.
 const DefaultK = 3
+
+// BM25 parameters. The standard defaults; they were not tuned, and the
+// measured gain comes from having length normalisation and IDF at all rather
+// than from their values.
+const (
+	bm25K1 = 1.2
+	bm25B  = 0.75
+)
 
 // Terms distills free text (an issue title, a session goal) into search
 // terms: lowercased words, punctuation-trimmed, short stopword-ish tokens
@@ -50,17 +70,45 @@ type Hit struct {
 	Matched int // how many query terms matched
 }
 
-// Search ranks pages against q. Scoring is substring-per-term over weighted
-// fields (title 4, description 3, tags 3, slug 2, type 1, body 1), summed,
-// then weighted by the validation ladder (validated 1.25, candidate 1.0,
-// stale 0.5). Pages matching more distinct terms always rank above pages
-// matching fewer. Deterministic: ties break on slug.
+// Search ranks pages against q with BM25 over weighted fields (title 4,
+// description 3, tags 3, slug 2, type 1, body 1 — applied as term repetition),
+// then weights by the validation ladder (validated 1.25, candidate 1.0, stale
+// 0.5). Deterministic: ties break on slug.
+//
+// Ranking is by SCORE ALONE, not by match count first. The substring scorer
+// this replaced sorted on distinct-terms-matched before score, which is right
+// when scores are raw occurrence counts and wrong for BM25: the IDF sum already
+// rewards covering more of the query, so a hard tie-break on count overrides a
+// better-scored page. Measured on the real host store: match-count-first gives
+// MRR 0.881 / nDCG@3 0.906, score-only gives 0.929 / 0.942 at identical hit@3.
+// Hit.Matched is still reported — callers use it, and it is the coverage input
+// to MinCoverage — it just no longer dominates the order.
+//
+// Why BM25 and not the substring scorer this replaced: the substring version
+// counted raw occurrences with no length normalisation and matched INSIDE
+// words, which produced three measured defects — long pages became attractors
+// for unrelated queries (on a 36-page store the top hit for a query about
+// nothing was in the 87th percentile by length), a term could score inside an
+// unrelated word ("rust" inside "trust"), and a rarer term counted the same as
+// a ubiquitous one. IDF is also exactly the fan penalty a spreading-activation
+// model asks for: a term carried by many records contributes less.
+//
+// Measured on the real host store (dhnt/docs/memory-eval-plan.md §4c):
+// hit@3 93% -> 100%, MRR 0.821 -> 0.929, nDCG@3 0.849 -> 0.942, tokens
+// 417 -> 117. On paraphrased queries +43 points; the shipped substring scorer
+// was already at 100% on queries that use a page's own vocabulary, so the gain
+// is entirely on the queries a person actually types.
 func Search(pages []*Page, q Query) []Hit {
 	k := q.K
 	if k <= 0 {
 		k = DefaultK
 	}
-	var hits []Hit
+
+	// Eligible set first: BM25's IDF and average length are corpus statistics,
+	// so they must be computed over the pages that could actually be returned.
+	// Including filtered-out pages would let another OS's records change this
+	// OS's ranking.
+	var elig []*Page
 	for _, p := range pages {
 		if p.Status == StatusSuperseded && !q.All {
 			continue
@@ -71,17 +119,72 @@ func Search(pages []*Page, q Query) []Hit {
 		if len(q.Tags) > 0 && !hasAnyTag(p, q.Tags) {
 			continue
 		}
-		score, matched := scorePage(p, q.Terms)
-		if len(q.Terms) > 0 && matched == 0 {
+		elig = append(elig, p)
+	}
+	if len(elig) == 0 {
+		return nil
+	}
+
+	terms := queryTerms(q.Terms)
+	tf := make([]map[string]int, len(elig))
+	dl := make([]float64, len(elig))
+	var total float64
+	for i, p := range elig {
+		tf[i] = map[string]int{}
+		for _, tok := range pageTokens(p) {
+			tf[i][tok]++
+			dl[i]++
+		}
+		total += dl[i]
+	}
+	avgdl := total / float64(len(elig))
+	if avgdl == 0 {
+		avgdl = 1
+	}
+
+	df := make(map[string]int, len(terms))
+	for _, t := range terms {
+		for i := range elig {
+			if tf[i][t] > 0 {
+				df[t]++
+			}
+		}
+	}
+
+	n := float64(len(elig))
+	var hits []Hit
+	var bestCoverage float64
+	for i, p := range elig {
+		var score float64
+		matched := 0
+		for _, t := range terms {
+			f := float64(tf[i][t])
+			if f == 0 {
+				continue
+			}
+			matched++
+			idf := math.Log(1 + (n-float64(df[t])+0.5)/(float64(df[t])+0.5))
+			score += idf * (f * (bm25K1 + 1)) / (f + bm25K1*(1-bm25B+bm25B*dl[i]/avgdl))
+		}
+		if len(terms) > 0 {
+			if cov := float64(matched) / float64(len(terms)); cov > bestCoverage {
+				bestCoverage = cov
+			}
+		}
+		if len(terms) > 0 && matched == 0 {
 			continue
 		}
 		score *= statusWeight(p.Status)
 		hits = append(hits, Hit{Page: p, Score: score, Matched: matched})
 	}
+
+	// The empty-result path. A page matching one of four query terms has not
+	// answered the question, it has recognised one incidental word.
+	if q.MinCoverage > 0 && len(terms) > 0 && bestCoverage < q.MinCoverage {
+		return nil
+	}
+
 	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].Matched != hits[j].Matched {
-			return hits[i].Matched > hits[j].Matched
-		}
 		if hits[i].Score != hits[j].Score {
 			return hits[i].Score > hits[j].Score
 		}
@@ -92,6 +195,79 @@ func Search(pages []*Page, q Query) []Hit {
 	}
 	return hits
 }
+
+// queryTerms normalises caller-supplied terms the same way pageTokens
+// normalises page text — word boundaries, lowercase, stopwords dropped — so a
+// term can never match inside an unrelated word. Duplicates collapse: asking
+// twice is not evidence.
+func queryTerms(raw []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range raw {
+		for _, tok := range tokenize(r) {
+			if !seen[tok] {
+				seen[tok] = true
+				out = append(out, tok)
+			}
+		}
+	}
+	return out
+}
+
+// pageTokens is the weighted token bag: field weight = how many times the
+// field's tokens are repeated, which is how field weighting composes with
+// BM25's term-frequency saturation without a second scoring pass.
+func pageTokens(p *Page) []string {
+	var out []string
+	add := func(text string, weight int) {
+		toks := tokenize(text)
+		for i := 0; i < weight; i++ {
+			out = append(out, toks...)
+		}
+	}
+	add(p.Title, 4)
+	add(p.Description, 3)
+	add(strings.Join(p.Tags, " "), 3)
+	add(strings.ReplaceAll(p.Slug, "-", " "), 2)
+	add(p.Type, 1)
+	add(p.Body, 1)
+	return out
+}
+
+// tokenize splits on non-alphanumeric runs, lowercases, drops tokens shorter
+// than 3 runes, and drops stopwords. The stopword list exists because a
+// natural-language query ("how do I stop a stuck process") is mostly words
+// that carry no retrieval signal but do carry BM25 weight.
+func tokenize(text string) []string {
+	var out []string
+	for _, f := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if len(f) >= 3 && !stopword(f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+var stopwords = map[string]bool{
+	"the": true, "and": true, "for": true, "are": true, "but": true, "not": true,
+	"you": true, "all": true, "can": true, "has": true, "had": true, "was": true,
+	"its": true, "out": true, "how": true, "why": true, "who": true, "what": true,
+	"when": true, "does": true, "did": true, "with": true, "from": true, "into": true,
+	"onto": true, "that": true, "this": true, "there": true, "then": true, "than": true,
+	"they": true, "them": true, "will": true, "would": true, "should": true,
+	"could": true, "about": true, "after": true, "before": true, "over": true,
+	"under": true, "very": true, "some": true, "any": true, "our": true, "your": true,
+	"their": true, "his": true, "her": true, "one": true, "two": true, "use": true,
+	"used": true, "using": true, "make": true, "makes": true, "made": true,
+	"get": true, "gets": true, "got": true, "see": true, "say": true, "says": true,
+	"way": true, "per": true, "via": true, "off": true, "yes": true, "also": true,
+	"only": true, "just": true, "even": true, "much": true, "many": true,
+	"need": true, "needs": true, "most": true, "more": true,
+}
+
+func stopword(w string) bool { return stopwords[w] }
 
 func statusWeight(status string) float64 {
 	switch status {
@@ -135,51 +311,6 @@ func hasAnyTag(p *Page, tags []string) bool {
 		}
 	}
 	return false
-}
-
-func scorePage(p *Page, terms []string) (score float64, matched int) {
-	title := strings.ToLower(p.Title)
-	desc := strings.ToLower(p.Description)
-	body := strings.ToLower(p.Body)
-	slug := strings.ToLower(p.Slug)
-	typ := strings.ToLower(p.Type)
-	var tags []string
-	for _, t := range p.Tags {
-		tags = append(tags, strings.ToLower(t))
-	}
-	for _, raw := range terms {
-		term := strings.ToLower(strings.TrimSpace(raw))
-		if term == "" {
-			continue
-		}
-		s := 0.0
-		if strings.Contains(title, term) {
-			s += 4
-		}
-		if strings.Contains(desc, term) {
-			s += 3
-		}
-		for _, t := range tags {
-			if strings.Contains(t, term) {
-				s += 3
-				break
-			}
-		}
-		if strings.Contains(slug, term) {
-			s += 2
-		}
-		if typ == term {
-			s += 1
-		}
-		if strings.Contains(body, term) {
-			s += 1
-		}
-		if s > 0 {
-			matched++
-			score += s
-		}
-	}
-	return score, matched
 }
 
 // --- federated read bridge -----------------------------------------------

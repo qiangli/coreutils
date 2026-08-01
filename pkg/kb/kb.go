@@ -133,6 +133,7 @@ func newSearchCmd(dir *string) *cobra.Command {
 		k              int
 		all, jsonOut   bool
 		full, federate bool
+		minCov         float64
 	)
 	cmd := &cobra.Command{
 		Use:   "search <term>...",
@@ -166,7 +167,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			// (as transfer.go does) so quoted task-shaped queries — "how do I
 			// gate a merge" — match per word instead of as one 5-word term.
 			terms := Terms(strings.Join(args, " "))
-			q := Query{Terms: terms, Repo: repo, OS: goos, Tags: tags, K: k, All: all}
+			q := Query{Terms: terms, Repo: repo, OS: goos, Tags: tags, K: k, All: all, MinCoverage: minCov}
 			hits := Search(pages, q)
 			var fed []FedHit
 			if federate {
@@ -205,6 +206,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "JSON output")
 	cmd.Flags().BoolVar(&full, "full", false, "print page bodies, not just index lines")
 	cmd.Flags().BoolVar(&federate, "federate", false, "also search the current repo's contribution log + weave memory")
+	cmd.Flags().Float64Var(&minCov, "min-coverage", 0, "return NOTHING unless a page matches at least this fraction of the query terms (0 = always answer)")
 	return cmd
 }
 
