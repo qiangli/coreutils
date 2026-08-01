@@ -259,6 +259,9 @@ func newShowCmd(dir *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// An OPEN is the use signal — the reader's judgement, not the
+			// ranker's own output. See pkg/kb/activation.go.
+			store.RecordOpen(args[0])
 			_, err = c.OutOrStdout().Write(b)
 			return err
 		},

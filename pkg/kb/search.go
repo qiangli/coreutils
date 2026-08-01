@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -35,6 +36,19 @@ type Query struct {
 	// recall cost disappears, which is why this is a knob and not a constant.
 	// See dhnt/docs/memory-eval-plan.md §4g.
 	MinCoverage float64
+
+	// Use is per-slug use history (Store.UseHistory()). When set together with
+	// UseWeight, ranking adds ACT-R's base-level term: a page opened often and
+	// recently outranks an equally-matching page nobody has touched. Nil (the
+	// default) leaves ranking purely lexical — the term is opt-in because it
+	// changes what a store returns based on what its readers did, and that
+	// deserves to be a caller's decision rather than a silent one.
+	Use map[string]*Use
+	// UseWeight scales the base-level term. 0 disables it.
+	UseWeight float64
+	// Now is the clock for decay; zero means time.Now(). Injectable so tests
+	// and the eval harness are deterministic.
+	Now time.Time
 }
 
 // DefaultK caps search results.
@@ -175,6 +189,15 @@ func Search(pages []*Page, q Query) []Hit {
 			continue
 		}
 		score *= statusWeight(p.Status)
+		if q.UseWeight != 0 && q.Use != nil {
+			if u := q.Use[p.Slug]; u != nil {
+				now := q.Now
+				if now.IsZero() {
+					now = time.Now()
+				}
+				score += q.UseWeight * u.BaseLevel(now, DefaultDecay)
+			}
+		}
 		hits = append(hits, Hit{Page: p, Score: score, Matched: matched})
 	}
 

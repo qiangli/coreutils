@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // run executes the kb CLI against a store dir and returns stdout.
@@ -480,5 +481,74 @@ func TestRenderResolutionLadder(t *testing.T) {
 	}
 	if n := len([]rune(full)) - len([]rune(line)); n > DefaultBodyCap+8 {
 		t.Fatalf("body cap not applied: full-line = %d runes", n)
+	}
+}
+
+// TestUseHistoryAndBaseLevel pins the growth-axis substrate. Before this,
+// nothing in the store recorded that a page had been USED, so recency and
+// frequency were unrankable and ACC/BWT/FWT were unmeasurable.
+func TestUseHistoryAndBaseLevel(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--title", "opened often", "--description", "WHEN the thing happens")
+	mustRun(t, dir, "add", "--force", "--title", "never opened", "--description", "WHEN the thing happens")
+	store := Open(dir)
+
+	if got := store.UseHistory()["never-opened"]; got != nil && got.N > 0 {
+		t.Fatalf("an unopened page must have no use history: %+v", got)
+	}
+	for i := 0; i < 3; i++ {
+		store.RecordOpen("opened-often")
+	}
+	hist := store.UseHistory()
+	u := hist["opened-often"]
+	if u == nil || u.N != 3 {
+		t.Fatalf("three opens must be recorded, got %+v", u)
+	}
+	if u.Last.IsZero() {
+		t.Fatal("last-used must be set")
+	}
+	now := time.Now()
+	if b := u.BaseLevel(now, DefaultDecay); b <= 0 {
+		t.Fatalf("recent repeated use must raise base level, got %v", b)
+	}
+	// Decay: the same three uses, a year on, must be worth less.
+	old := &Use{N: 3, Times: []time.Time{
+		now.AddDate(-1, 0, 0), now.AddDate(-1, 0, -1), now.AddDate(-1, 0, -2),
+	}}
+	if old.BaseLevel(now, DefaultDecay) >= u.BaseLevel(now, DefaultDecay) {
+		t.Fatal("year-old uses must decay below today's")
+	}
+	// Never used is neutral (0), not disqualifying: absence of evidence is not
+	// evidence of absence.
+	if (&Use{}).BaseLevel(now, DefaultDecay) != 0 {
+		t.Fatal("an unused page must be neutral, not penalised")
+	}
+}
+
+// TestUseWeightIsOptInAndBreaksTies guards that ranking is unchanged unless a
+// caller asks for the term, and that when asked for, it does what it says.
+func TestUseWeightIsOptInAndBreaksTies(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--title", "alpha widget guide", "--description", "WHEN configuring a widget")
+	// --force: reconcile-on-write correctly refuses this near-duplicate, and a
+	// near-duplicate is exactly what a tie-break test needs.
+	mustRun(t, dir, "add", "--force", "--title", "beta widget guide", "--description", "WHEN configuring a widget")
+	store := Open(dir)
+	pages := mustList(t, dir)
+	q := Query{Terms: []string{"widget"}, K: 2}
+
+	base := Search(pages, q)
+	if len(base) != 2 || base[0].Page.Slug != "alpha-widget-guide" {
+		t.Fatalf("without use history the tie breaks on slug: %+v", base)
+	}
+	store.RecordOpen("beta-widget-guide")
+	q.Use, q.UseWeight = store.UseHistory(), 1.0
+	boosted := Search(pages, q)
+	if len(boosted) != 2 || boosted[0].Page.Slug != "beta-widget-guide" {
+		t.Fatalf("the opened page must win once use is weighted: %+v", boosted)
+	}
+	q.UseWeight = 0
+	if again := Search(pages, q); again[0].Page.Slug != "alpha-widget-guide" {
+		t.Fatalf("weight 0 must restore the lexical order: %+v", again)
 	}
 }
