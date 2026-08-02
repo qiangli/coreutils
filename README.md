@@ -55,7 +55,9 @@ Every tool in this repo follows the same rules:
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),
   text (cat, head, tail, wc, sort, uniq, cut, tr, grep, diff, …),
   system info (date, uname, id, …), checksums (md5/sha\*sum,
-  base64/32), and archives (tar, gzip). Each command is its own
+  base64/32), conditionals (`test` and its `[` spelling — the full
+  POSIX primary set, `!`/`-a`/`-o`/parentheses, exit 0 true / 1 false /
+  2 malformed), and archives (tar, gzip). Each command is its own
   importable package registered into `tool/`'s registry; `cmds/all`
   pulls in everything. Agent-traffic compatibility includes GNU grep
   `-A`/`-B`/`-C` context and ordered `--include` filtering, plus sed
@@ -67,7 +69,7 @@ Every tool in this repo follows the same rules:
   or symlink a tool name to the binary for argv[0] dispatch).
 
 Planned next (see docs/commands.md): Phase B — the rest of the GNU
-manual (printf, test, expr, od, dd, …) — then sed/xargs/ps and the
+manual (printf, …) — then sed/xargs/ps and the
 `mvdan.cc/sh/v3` `ExecHandler` adapter.
 
 ## Consumers

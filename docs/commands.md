@@ -169,7 +169,8 @@ or NO.
 
 | Command | Notes |
 |---|---|
-| test / [ | standalone (the sh interp builtin covers in-shell use) |
+| printf | %s %d %x %o %c %b %% escapes, width/precision |
+| test / [ | **shipped** (`cmds/test`) — standalone, one implementation under both names, registered separately so each keeps its own option rule. Every POSIX primary: unary file tests (-e/-a, -f, -d, -s, -b, -c, -p, -S, -h/-L, -u, -g, -k, -r, -w, -x, -O, -G, -N, -t), string (-n, -z, =, ==, !=, <, >), integer (-eq/-ne/-lt/-le/-gt/-ge, arbitrary precision), file comparison (-ef, -nt, -ot), plus `!`, `-a`/`-o`, and `(`…`)`. POSIX 0–4-operand dispatch exactly as specified, with the documented recursive-descent grammar beyond it; neither operator short-circuits, so a malformed branch is always reported. `[` requires the closing `]` (a missing one is `[: missing ']'`, exit 2). Options follow upstream: `test` has none at all (`test --help` is a true string test), while `[ --help`/`[ --version` work only as the single argument, matched literally with no abbreviation — so this tool bypasses `tool.Parse`. Exit 0 true / 1 false / 2 syntax-or-usage. The sh interp builtin still covers in-shell use. |
 | tail -f | follow mode for the Phase A tail (polling, cross-platform) |
 | coreutils | the multicall binary itself (`cmd/coreutils`) |
 

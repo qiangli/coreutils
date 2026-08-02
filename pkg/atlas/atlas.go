@@ -396,6 +396,21 @@ func stageTools(stage string, names ...string) {
 	}
 }
 
+// aliasTool records that one registered tool name is a second spelling of
+// another (`[` is test). Both names are real registry entries — the alias
+// link is what tells a consumer they are one command, not two.
+func aliasTool(name, target string) {
+	e, ok := tools[name]
+	if !ok {
+		panic(fmt.Sprintf("atlas: alias %q names unknown tool", name))
+	}
+	if _, ok := tools[target]; !ok {
+		panic(fmt.Sprintf("atlas: alias %q targets unknown tool %q", name, target))
+	}
+	e.AliasOf = target
+	tools[name] = e
+}
+
 // capTools appends a capability to existing tool entries; unknown names panic
 // so the tables self-check at init.
 func capTools(capability string, names ...string) {
@@ -462,10 +477,14 @@ func init() {
 		"date", "duration", "echo", "env", "expr", "factor", "false",
 		"groups", "hostid", "hostname", "id", "logname", "ncal", "nice",
 		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "pwd",
-		"runcon", "seq", "sleep", "sntp", "stdbuf", "stty", "time",
+		"runcon", "seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
+		// `[` is test under its bracket spelling — one implementation,
+		// both names, exactly as upstream ships them.
+		"[",
 	)
+	aliasTool("[", "test")
 	addTools(GroupCodeIntel, "ast", "graph")
 	addTools(GroupNet, "browser", "fetch")
 	addTools(GroupOrch, "foreman")
@@ -482,7 +501,7 @@ func init() {
 	capTools(CapReadOnly,
 		"cat", "cmp", "comm", "df", "diff", "du", "grep", "head", "hexdump",
 		"ls", "od", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
-		"tokens", "tree", "wc", "which",
+		"test", "[", "tokens", "tree", "wc", "which",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
 		"ast",
 	)
@@ -747,6 +766,9 @@ func init() {
 		// fileutils/inspection
 		"df", "du", "ls", "dir", "vdir", "resources", "stat", "readlink", "realpath", "tree",
 		"find", "clip",
+		// test/[ answer questions ABOUT files (existence, type, permission,
+		// ownership, timestamps) — a filesystem read, never a write.
+		"test", "[",
 		// textutils (transform/read input)
 		"awk", "cat", "cmp", "comm", "csplit", "cut", "diff", "expand", "fmt",
 		"fold", "grep", "gzip", "gunzip", "head", "hexdump", "join", "jq",
