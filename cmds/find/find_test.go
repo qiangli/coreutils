@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -200,10 +202,251 @@ func TestFindErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "-mtime") {
 		t.Errorf("bad mtime: code=%d err=%q", code, errb)
 	}
-	for _, action := range []string{"-exec", "-delete", "-ok"} {
+	for _, action := range []string{"-execdir", "-okdir", "-delete"} {
 		_, errb, code = runFind(t, dir, ".", action)
 		if code != 2 || !strings.Contains(errb, "not supported") {
 			t.Errorf("%s: code=%d err=%q", action, code, errb)
+		}
+	}
+	for _, args := range [][]string{
+		{".", "-exec"},
+		{".", "-exec", "echo", "{}"}, // no terminating ';'
+		{".", "-exec", ";"},          // no utility name
+		{".", "-ok", "echo", "{}"},
+	} {
+		_, errb, code = runFind(t, dir, args...)
+		if code != 2 || !strings.Contains(errb, "missing argument") {
+			t.Errorf("find %v: code=%d err=%q, want exit 2 missing-argument", args, code, errb)
+		}
+	}
+	_, errb, code = runFind(t, dir, ".", "-perm", "97")
+	if code != 2 || !strings.Contains(errb, "invalid mode") {
+		t.Errorf("-perm 97: code=%d err=%q", code, errb)
+	}
+	if runtime.GOOS != "windows" {
+		_, errb, code = runFind(t, dir, ".", "-user", "no-such-user-xyz-12345")
+		if code != 2 || !strings.Contains(errb, "not the name of a known user") {
+			t.Errorf("-user unknown: code=%d err=%q", code, errb)
+		}
+	}
+}
+
+func TestFindDepthOrder(t *testing.T) {
+	dir := setupTree(t)
+	out, _, code := runFind(t, dir, ".", "-depth")
+	want := "./a.txt\n./b.go\n./empty.txt\n./skipme/e.txt\n./skipme\n./sub/c.txt\n./sub/deep/d.go\n./sub/deep\n./sub\n.\n"
+	if out != want || code != 0 {
+		t.Errorf("-depth = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
+func TestFindXdev(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		dir := setupTree(t)
+		_, errb, code := runFind(t, dir, ".", "-xdev")
+		if code != 2 || !strings.Contains(errb, "not supported") {
+			t.Errorf("-xdev on windows: code=%d err=%q", code, errb)
+		}
+		return
+	}
+	dir := setupTree(t)
+	plain, _, _ := runFind(t, dir, ".")
+	out, _, code := runFind(t, dir, ".", "-xdev")
+	if out != plain || code != 0 {
+		t.Errorf("-xdev on one filesystem: out=%q code=%d, want same as plain %q", out, code, plain)
+	}
+}
+
+func TestFindPerm(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no full unix permission bits")
+	}
+	dir := setupTree(t)
+	chmod := func(name string, m os.FileMode) {
+		if err := os.Chmod(filepath.Join(dir, name), m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chmod("a.txt", 0o644)
+	chmod("b.go", 0o755)
+	chmod("empty.txt", 0o600)
+	cases := []struct {
+		perm string
+		want string
+	}{
+		{"644", "./a.txt\n"},
+		{"-755", "./b.go\n"},
+		{"-u+w", "./a.txt\n./b.go\n./empty.txt\n"}, // symbolic, all-bits-set
+		{"u=rw", "./empty.txt\n"},                  // symbolic exact (0600)
+		{"/g+r", "./a.txt\n./b.go\n"},              // any-bit
+	}
+	for _, c := range cases {
+		out, errb, code := runFind(t, dir, ".", "-maxdepth", "1", "-type", "f", "-perm", c.perm)
+		if out != c.want || code != 0 {
+			t.Errorf("-perm %s = (%q, %d, err=%q), want (%q, 0)", c.perm, out, code, errb, c.want)
+		}
+	}
+}
+
+func TestFindLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		dir := setupTree(t)
+		_, errb, code := runFind(t, dir, ".", "-links", "1")
+		if code != 2 || !strings.Contains(errb, "not supported") {
+			t.Errorf("-links on windows: code=%d err=%q", code, errb)
+		}
+		return
+	}
+	dir := setupTree(t)
+	if err := os.Link(filepath.Join(dir, "a.txt"), filepath.Join(dir, "hard.txt")); err != nil {
+		t.Skipf("hard links not supported: %v", err)
+	}
+	out, _, code := runFind(t, dir, ".", "-type", "f", "-links", "2")
+	if out != "./a.txt\n./hard.txt\n" || code != 0 {
+		t.Errorf("-links 2: out=%q code=%d", out, code)
+	}
+	out, _, _ = runFind(t, dir, ".", "-maxdepth", "1", "-type", "f", "-links", "1")
+	if out != "./b.go\n./empty.txt\n" {
+		t.Errorf("-links 1: out=%q", out)
+	}
+	out, _, _ = runFind(t, dir, ".", "-type", "f", "-links", "+1")
+	if out != "./a.txt\n./hard.txt\n" {
+		t.Errorf("-links +1: out=%q", out)
+	}
+}
+
+func TestFindUserGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		dir := setupTree(t)
+		for _, args := range [][]string{{".", "-user", "x"}, {".", "-nouser"}} {
+			_, errb, code := runFind(t, dir, args...)
+			if code != 2 || !strings.Contains(errb, "not supported") {
+				t.Errorf("find %v on windows: code=%d err=%q", args, code, errb)
+			}
+		}
+		return
+	}
+	dir := setupTree(t)
+	me, err := user.Current()
+	if err != nil {
+		t.Skipf("no current user: %v", err)
+	}
+	all, _, _ := runFind(t, dir, ".")
+	// Everything in a fresh tempdir belongs to us: by name and by ID.
+	for _, spec := range []string{me.Username, me.Uid} {
+		out, _, code := runFind(t, dir, ".", "-user", spec)
+		if out != all || code != 0 {
+			t.Errorf("-user %s: out=%q code=%d, want all files", spec, out, code)
+		}
+	}
+	out, _, code := runFind(t, dir, ".", "-group", me.Gid)
+	if out != all || code != 0 {
+		t.Errorf("-group %s: out=%q code=%d, want all files", me.Gid, out, code)
+	}
+	// Our uid/gid are known, so -nouser/-nogroup match nothing.
+	for _, pred := range []string{"-nouser", "-nogroup"} {
+		out, _, code := runFind(t, dir, ".", pred)
+		if out != "" || code != 0 {
+			t.Errorf("%s: out=%q code=%d, want no matches", pred, out, code)
+		}
+	}
+	out, _, _ = runFind(t, dir, ".", "!", "-nouser")
+	if out != all {
+		t.Errorf("! -nouser: out=%q, want all files", out)
+	}
+}
+
+func TestFindAtimeCtime(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("-atime/-ctime wired on linux and darwin only")
+	}
+	dir := setupTree(t)
+	old := filepath.Join(dir, "a.txt")
+	threeDays := time.Now().Add(-72*time.Hour - time.Hour)
+	if err := os.Chtimes(old, threeDays, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runFind(t, dir, ".", "-type", "f", "-atime", "+2")
+	if out != "./a.txt\n" || code != 0 {
+		t.Errorf("-atime +2: out=%q code=%d", out, code)
+	}
+	// Every file was just created: ctime is within the current 24h period.
+	out, _, code = runFind(t, dir, ".", "-name", "b.go", "-ctime", "0")
+	if out != "./b.go\n" || code != 0 {
+		t.Errorf("-ctime 0: out=%q code=%d", out, code)
+	}
+	out, _, _ = runFind(t, dir, ".", "-name", "b.go", "-ctime", "+1")
+	if out != "" {
+		t.Errorf("-ctime +1 matched a fresh file: out=%q", out)
+	}
+}
+
+func TestFindSymlinkFollow(t *testing.T) {
+	dir := setupTree(t)
+	if err := os.Symlink("sub", filepath.Join(dir, "linkdir")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	if err := os.Symlink("missing", filepath.Join(dir, "dangle")); err != nil {
+		t.Fatal(err)
+	}
+
+	// -P (default): symlinks are never followed.
+	out, _, code := runFind(t, dir, ".", "-name", "c.txt")
+	if out != "./sub/c.txt\n" || code != 0 {
+		t.Errorf("-P -name c.txt: out=%q code=%d", out, code)
+	}
+	// -L follows: the tree under linkdir appears too.
+	out, _, code = runFind(t, dir, "-L", ".", "-name", "c.txt")
+	if out != "./linkdir/c.txt\n./sub/c.txt\n" || code != 0 {
+		t.Errorf("-L -name c.txt: out=%q code=%d", out, code)
+	}
+	// -L: a followed dir link is a directory; a dangling link stays 'l'
+	// (POSIX: broken links are evaluated as the link itself) — silently,
+	// with a success exit.
+	out, errb, code := runFind(t, dir, "-L", ".", "-type", "l")
+	if out != "./dangle\n" || code != 0 || errb != "" {
+		t.Errorf("-L -type l: out=%q code=%d err=%q", out, code, errb)
+	}
+	out, _, _ = runFind(t, dir, "-L", ".", "-name", "dangle", "-type", "f")
+	if out != "" {
+		t.Errorf("-L -type f matched dangling link: out=%q", out)
+	}
+	// -H: follow the link only when it is the start point itself.
+	out, _, code = runFind(t, dir, "-H", "linkdir", "-name", "c.txt")
+	if out != "linkdir/c.txt\n" || code != 0 {
+		t.Errorf("-H linkdir: out=%q code=%d", out, code)
+	}
+	out, _, _ = runFind(t, dir, "-H", ".", "-name", "c.txt")
+	if out != "./sub/c.txt\n" {
+		t.Errorf("-H . followed a non-operand symlink: out=%q", out)
+	}
+	// Last of -H/-L/-P wins.
+	out, _, _ = runFind(t, dir, "-L", "-P", ".", "-name", "c.txt")
+	if out != "./sub/c.txt\n" {
+		t.Errorf("-L -P: out=%q", out)
+	}
+}
+
+func TestFindSymlinkLoop(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "f.txt", "x")
+	if err := os.Symlink(".", filepath.Join(dir, "loop")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	// Must terminate, diagnose the loop, and exit non-zero.
+	out, errb, code := runFind(t, dir, "-L", ".")
+	if code != 1 || !strings.Contains(errb, "loop") {
+		t.Errorf("-L on loop: code=%d err=%q", code, errb)
+	}
+	if out != ".\n./f.txt\n" {
+		t.Errorf("-L on loop: out=%q", out)
+	}
+	// A self-referential link cannot resolve (ELOOP): diagnosed, then
+	// evaluated as the link itself — not fatal, not silent.
+	if err := os.Symlink("self", filepath.Join(dir, "self")); err == nil {
+		out, errb, code = runFind(t, dir, "-L", ".", "-name", "self", "-type", "l")
+		if code != 1 || !strings.Contains(errb, "self") || out != "./self\n" {
+			t.Errorf("-L self-loop: out=%q code=%d err=%q", out, code, errb)
 		}
 	}
 }

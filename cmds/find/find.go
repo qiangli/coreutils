@@ -1,17 +1,28 @@
-// Package findcmd implements find(1) per the GNU findutils manual:
-// walk each starting-point and evaluate an expression for every file.
+// Package findcmd implements find(1) per POSIX and the GNU findutils
+// manual: walk each starting-point and evaluate an expression for
+// every file.
 //
+// Options: -H, -L, -P (symlink handling for start points / everything;
+// -P is the default).
 // Supported tests: -name GLOB, -iname GLOB, -path GLOB, -type LETTERS
-// (b c d f l p s, comma-separated per findutils), -mtime [+-]N,
-// -newer FILE, -size [+-]N[bcwkMGTP], -empty.
-// Actions: -print (default), -print0, -prune.
+// (b c d f l p s, comma-separated per findutils), -atime/-ctime/-mtime
+// [+-]N, -newer FILE, -size [+-]N[bcwkMGTP], -empty, -perm
+// [-/]MODE (octal or chmod-style symbolic), -user/-group (name or
+// numeric ID), -nouser, -nogroup, -links [+-]N.
+// Actions: -print (default), -print0, -prune, -exec UTIL [ARG...] ;
+// (also the POSIX batched form -exec UTIL [ARG...] {} +), and the
+// interactive -ok UTIL [ARG...] ; which prompts on stderr and reads
+// the reply from the invocation stdin.
 // Operators: ( EXPR ), ! / -not, implicit and / -a / -and, -o / -or.
-// Global options: -maxdepth N, -mindepth N (positional anywhere, as
-// GNU applies them; the GNU positional warning is not emitted).
+// Global options: -depth, -xdev, -maxdepth N, -mindepth N (positional
+// anywhere, as GNU applies them; the GNU positional warning is not
+// emitted).
 //
-// -exec, -execdir, -ok, -okdir and -delete are deliberately not
-// supported (-exec needs process execution, -delete could silently
-// destroy data); they fail with the standard contract error.
+// -exec/-ok spawn the named utility directly — that is find's
+// upstream-documented purpose (the command-wrapper exception to the
+// no-shell-out rule), argv is built verbatim with {} substitution and
+// never concatenated through a shell. -execdir, -okdir and -delete
+// remain unsupported and fail with the standard contract error.
 //
 // Deviations from GNU worth knowing: traversal order is deterministic
 // lexical (GNU uses directory order); parse/usage errors exit 2 per
@@ -21,12 +32,17 @@
 package findcmd
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -39,37 +55,53 @@ import (
 var cmd = &tool.Tool{
 	Name:     "find",
 	Synopsis: "Search for files in a directory hierarchy.",
-	Usage:    "find [PATH...] [EXPRESSION]",
+	Usage:    "find [-H | -L | -P] [PATH...] [EXPRESSION]",
 }
 
 // Run is wired in init: a literal would create an initialization
 // cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
 
-const helpText = `Usage: find [PATH...] [EXPRESSION]
+const helpText = `Usage: find [-H | -L | -P] [PATH...] [EXPRESSION]
 Search for files in a directory hierarchy.
 
 Default PATH is '.'; default expression is -print.
 
+Options (before PATH):
+  -P  never follow symlinks (default); -L  follow all symlinks;
+  -H  follow symlinks given as PATH operands only
 Tests:
   -name GLOB, -iname GLOB   base name matches shell glob
   -path GLOB                whole path matches glob ('/' not special)
   -type [bcdflps][,...]     file type
-  -mtime [+-]N              data modified [more/less than] N*24h ago
+  -atime/-ctime/-mtime [+-]N  accessed/changed/modified [more/less
+                            than] N*24h ago
   -newer FILE               modified more recently than FILE
   -size [+-]N[bcwkMGTP]     size in 512-byte blocks (default), bytes, ...
   -empty                    empty regular file or directory
+  -perm [-/]MODE            permission bits (octal or symbolic) match
+                            exactly / all set (-) / any set (/)
+  -user NAME, -group NAME   owned by user/group (name or numeric ID)
+  -nouser, -nogroup         no known user/group owns the file
+  -links [+-]N              link count
 Actions:
   -print                    print path, newline-terminated (default)
   -print0                   print path, NUL-terminated
   -prune                    do not descend into matched directories
+  -exec UTIL [ARG...] ;     run UTIL, {} replaced by the current path;
+                            true when it exits 0
+  -exec UTIL [ARG...] {} +  run UTIL with batches of paths appended
+  -ok UTIL [ARG...] ;       like -exec ; but ask on stderr first,
+                            reading the y/n reply from standard input
 Operators (decreasing precedence):
   ( EXPR )   ! EXPR   -not EXPR   EXPR1 [-a] EXPR2   EXPR1 -o EXPR2
 Global options:
+  -depth                    process directory contents before the
+                            directory itself
+  -xdev                     do not descend into other file systems
   -maxdepth N, -mindepth N  depth limits (start point is depth 0)
 
--exec, -execdir, -ok, -okdir and -delete are not supported by
-pure-Go coreutils.
+-execdir, -okdir and -delete are not supported by pure-Go coreutils.
 `
 
 type notSupportedErr struct{ what string }
@@ -99,8 +131,15 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	args = kept
 
-	// Start points are everything before the first expression token.
+	// -H/-L/-P precede path operands; the last one specified applies.
+	follow := byte('P')
 	i := 0
+	for i < len(args) && (args[i] == "-H" || args[i] == "-L" || args[i] == "-P") {
+		follow = args[i][1]
+		i++
+	}
+
+	// Start points are everything before the first expression token.
 	var paths []string
 	for i < len(args) && !isExprToken(args[i]) {
 		paths = append(paths, args[i])
@@ -123,12 +162,22 @@ func run(rc *tool.RunContext, args []string) int {
 		root = &andExpr{root, &printExpr{}}
 	}
 
-	w := &walker{rc: rc, e: root, maxDepth: p.maxDepth, minDepth: p.minDepth}
+	w := &walker{
+		rc: rc, e: root,
+		maxDepth: p.maxDepth, minDepth: p.minDepth,
+		depthFirst: p.depthFirst, xdev: p.xdev,
+		follow: follow,
+		stdin:  bufio.NewReader(rc.In),
+	}
 	if agentic {
 		w.matcher = ignore.New(rc.Dir)
 	}
 	for _, sp := range paths {
 		w.walkRoot(sp)
+	}
+	// -exec ... {} + accumulates paths; run whatever is still pending.
+	for _, e := range p.execs {
+		e.flush(w)
 	}
 	// Transparency: announce what --agentic hid (stderr only).
 	if n := w.matcher.Hidden(); n > 0 {
@@ -148,13 +197,16 @@ func isExprToken(a string) bool {
 // expression parsing
 
 type parser struct {
-	rc        *tool.RunContext
-	toks      []string
-	i         int
-	maxDepth  int // -1 = unset
-	minDepth  int
-	hasAction bool
-	now       time.Time
+	rc         *tool.RunContext
+	toks       []string
+	i          int
+	maxDepth   int // -1 = unset
+	minDepth   int
+	depthFirst bool
+	xdev       bool
+	hasAction  bool
+	now        time.Time
+	execs      []*execExpr // for the end-of-run {} + flush
 }
 
 func (p *parser) parse() (expr, error) {
@@ -255,6 +307,15 @@ func (p *parser) primary() (expr, error) {
 		return &printExpr{nul: true}, nil
 	case "-prune":
 		return pruneExpr{}, nil
+	case "-depth":
+		p.depthFirst = true
+		return trueExpr{}, nil
+	case "-xdev":
+		if !haveDev {
+			return nil, &notSupportedErr{"-xdev on " + runtime.GOOS + " (no device identity)"}
+		}
+		p.xdev = true
+		return trueExpr{}, nil
 	case "-empty":
 		return emptyExpr{}, nil
 	case "-name", "-iname":
@@ -290,16 +351,20 @@ func (p *parser) primary() (expr, error) {
 			p.minDepth = n
 		}
 		return trueExpr{}, nil
-	case "-mtime":
+	case "-mtime", "-atime", "-ctime":
 		a, err := p.arg(t)
 		if err != nil {
 			return nil, err
 		}
 		cmp, n, err := parseSignedNum(a)
 		if err != nil {
-			return nil, fmt.Errorf("invalid argument '%s' to -mtime", a)
+			return nil, fmt.Errorf("invalid argument '%s' to %s", a, t)
 		}
-		return &mtimeExpr{cmp: cmp, n: n, now: p.now}, nil
+		sel := t[1] // 'm', 'a' or 'c'
+		if sel == 'a' && !haveAtime || sel == 'c' && !haveCtime {
+			return nil, &notSupportedErr{t + " on " + runtime.GOOS}
+		}
+		return &timeExpr{cmp: cmp, n: n, now: p.now, sel: sel}, nil
 	case "-newer":
 		a, err := p.arg(t)
 		if err != nil {
@@ -316,8 +381,54 @@ func (p *parser) primary() (expr, error) {
 			return nil, err
 		}
 		return parseSize(a)
-	case "-exec", "-execdir", "-ok", "-okdir", "-delete":
-		return nil, &notSupportedErr{t + " (would execute commands or delete files)"}
+	case "-links":
+		a, err := p.arg(t)
+		if err != nil {
+			return nil, err
+		}
+		if !haveSysStat {
+			return nil, &notSupportedErr{"-links on " + runtime.GOOS + " (no link count)"}
+		}
+		cmp, n, err := parseSignedNum(a)
+		if err != nil {
+			return nil, fmt.Errorf("invalid argument '%s' to -links", a)
+		}
+		return &linksExpr{cmp: cmp, n: n}, nil
+	case "-perm":
+		a, err := p.arg(t)
+		if err != nil {
+			return nil, err
+		}
+		return parsePerm(a)
+	case "-user", "-group":
+		a, err := p.arg(t)
+		if err != nil {
+			return nil, err
+		}
+		if !haveSysStat {
+			return nil, &notSupportedErr{t + " on " + runtime.GOOS + " (no unix uid/gid)"}
+		}
+		id, err := lookupOwner(a, t == "-group")
+		if err != nil {
+			return nil, err
+		}
+		return &ownerExpr{id: id, group: t == "-group"}, nil
+	case "-nouser", "-nogroup":
+		if !haveSysStat {
+			return nil, &notSupportedErr{t + " on " + runtime.GOOS + " (no unix uid/gid)"}
+		}
+		return &noOwnerExpr{group: t == "-nogroup"}, nil
+	case "-exec", "-ok":
+		tmpl, plus, err := p.execArgs(t)
+		if err != nil {
+			return nil, err
+		}
+		p.hasAction = true
+		e := &execExpr{name: t, tmpl: tmpl, plus: plus, ok: t == "-ok"}
+		p.execs = append(p.execs, e)
+		return e, nil
+	case "-execdir", "-okdir", "-delete":
+		return nil, &notSupportedErr{t + " (would execute in-directory or delete files); use -exec/-ok"}
 	case ",":
 		return nil, &notSupportedErr{"the ',' operator"}
 	default:
@@ -326,6 +437,33 @@ func (p *parser) primary() (expr, error) {
 		}
 		return nil, fmt.Errorf("paths must precede expression: '%s'", t)
 	}
+}
+
+// execArgs collects the utility name and arguments of -exec/-ok up to
+// the terminating ';' (or, for -exec, a '{}' immediately followed by
+// '+', per POSIX). The terminator is consumed; the returned template
+// includes the trailing '{}' in the + form.
+func (p *parser) execArgs(name string) (tmpl []string, plus bool, err error) {
+	for p.i < len(p.toks) {
+		t := p.toks[p.i]
+		if t == ";" {
+			p.i++
+			if len(tmpl) == 0 {
+				return nil, false, fmt.Errorf("missing argument to '%s'", name)
+			}
+			return tmpl, false, nil
+		}
+		if name == "-exec" && t == "{}" && p.i+1 < len(p.toks) && p.toks[p.i+1] == "+" {
+			p.i += 2
+			if len(tmpl) == 0 {
+				return nil, false, fmt.Errorf("missing argument to '%s'", name)
+			}
+			return append(tmpl, "{}"), true, nil
+		}
+		tmpl = append(tmpl, t)
+		p.i++
+	}
+	return nil, false, fmt.Errorf("missing argument to '%s' (no terminating ';' or '{} +')", name)
 }
 
 // parseSignedNum splits GNU's [+-]N numeric argument shape.
@@ -379,32 +517,158 @@ func parseSize(a string) (expr, error) {
 	return &sizeExpr{cmp: cmp, n: n, unit: unit}, nil
 }
 
+// parsePerm parses -perm's argument: an octal or chmod-style symbolic
+// mode, optionally prefixed with '-' (all given bits set) or the GNU
+// '/' (any given bit set); no prefix means the bits match exactly.
+func parsePerm(a string) (expr, error) {
+	s := a
+	var how byte
+	if s != "" && (s[0] == '-' || s[0] == '/') {
+		how = s[0]
+		s = s[1:]
+	}
+	bits, err := parsePermBits(s)
+	if err != nil {
+		return nil, fmt.Errorf("invalid mode '%s'", a)
+	}
+	return &permExpr{how: how, bits: bits}, nil
+}
+
+// parsePermBits resolves an octal or symbolic mode against an
+// all-zeros starting mode with no umask, as POSIX specifies for find.
+func parsePermBits(s string) (uint32, error) {
+	if s == "" {
+		return 0, errors.New("empty mode")
+	}
+	octal := true
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '7' {
+			octal = false
+			break
+		}
+	}
+	if octal {
+		v, err := strconv.ParseUint(s, 8, 32)
+		if err != nil || v > 0o7777 {
+			return 0, errors.New("invalid octal mode")
+		}
+		return uint32(v), nil
+	}
+
+	var bits uint32
+	for _, clause := range strings.Split(s, ",") {
+		i := 0
+		var who uint32 // bitmask: 4=u 2=g 1=o
+	wholoop:
+		for ; i < len(clause); i++ {
+			switch clause[i] {
+			case 'u':
+				who |= 4
+			case 'g':
+				who |= 2
+			case 'o':
+				who |= 1
+			case 'a':
+				who |= 7
+			default:
+				break wholoop
+			}
+		}
+		if who == 0 {
+			who = 7 // no who: 'a', with no umask (unlike chmod)
+		}
+		if i >= len(clause) {
+			return 0, errors.New("no operator")
+		}
+		for i < len(clause) {
+			op := clause[i]
+			if op != '+' && op != '-' && op != '=' {
+				return 0, errors.New("bad operator")
+			}
+			i++
+			var perm, special uint32
+			for ; i < len(clause); i++ {
+				switch clause[i] {
+				case 'r':
+					perm |= 4
+				case 'w':
+					perm |= 2
+				case 'x':
+					perm |= 1
+				case 's':
+					if who&4 != 0 {
+						special |= 0o4000
+					}
+					if who&2 != 0 {
+						special |= 0o2000
+					}
+				case 't':
+					special |= 0o1000
+				case '+', '-', '=':
+					goto applied
+				default:
+					return 0, errors.New("bad permission letter")
+				}
+			}
+		applied:
+			if op == '+' || op == '=' {
+				if who&4 != 0 {
+					bits |= perm << 6
+				}
+				if who&2 != 0 {
+					bits |= perm << 3
+				}
+				if who&1 != 0 {
+					bits |= perm
+				}
+				bits |= special
+			}
+			// '-' clears bits from the zero template: a no-op, but
+			// accepted per POSIX ("it shall not be an error").
+		}
+	}
+	return bits, nil
+}
+
+// lookupOwner resolves -user/-group's argument: a name first, then a
+// decimal ID per POSIX when no such name exists.
+func lookupOwner(a string, group bool) (uint32, error) {
+	var idStr string
+	if group {
+		if g, err := user.LookupGroup(a); err == nil {
+			idStr = g.Gid
+		}
+	} else {
+		if u, err := user.Lookup(a); err == nil {
+			idStr = u.Uid
+		}
+	}
+	if idStr == "" {
+		idStr = a
+	}
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		kind := "user"
+		if group {
+			kind = "group"
+		}
+		return 0, fmt.Errorf("'%s' is not the name of a known %s", a, kind)
+	}
+	return uint32(id), nil
+}
+
 // ---------------------------------------------------------------------------
 // expression evaluation
 
 type fctx struct {
-	path     string // display path (operand-rooted, forward slashes)
-	osPath   string
-	d        fs.DirEntry
-	info     fs.FileInfo
-	statDone bool
-	pruned   bool
-	w        *walker
-}
-
-// stat lazily lstats the current file (WalkDir's DirEntry.Info).
-func (c *fctx) stat() fs.FileInfo {
-	if c.statDone {
-		return c.info
-	}
-	c.statDone = true
-	info, err := c.d.Info()
-	if err != nil {
-		c.w.reportErr(c.path, err)
-		return nil
-	}
-	c.info = info
-	return c.info
+	path   string // display path (operand-rooted, forward slashes)
+	osPath string
+	// info is the effective FileInfo per the -H/-L/-P follow mode
+	// (for a dangling symlink under -L/-H it falls back to the link's
+	// own lstat data, per POSIX).
+	info   fs.FileInfo
+	pruned bool
+	w      *walker
 }
 
 type expr interface{ eval(c *fctx) bool }
@@ -439,7 +703,7 @@ func (p *printExpr) eval(c *fctx) bool {
 type pruneExpr struct{}
 
 func (pruneExpr) eval(c *fctx) bool {
-	if c.d.IsDir() {
+	if c.info.IsDir() {
 		c.pruned = true
 	}
 	return true
@@ -465,7 +729,7 @@ func (p *pathExpr) eval(c *fctx) bool {
 type typeExpr struct{ letters string }
 
 func (t *typeExpr) eval(c *fctx) bool {
-	m := c.d.Type()
+	m := c.info.Mode()
 	for i := 0; i < len(t.letters); i++ {
 		ok := false
 		switch t.letters[i] {
@@ -491,18 +755,36 @@ func (t *typeExpr) eval(c *fctx) bool {
 	return false
 }
 
-type mtimeExpr struct {
+// timeExpr is -mtime/-atime/-ctime: file time in whole 24h periods
+// ago, remainder discarded per POSIX.
+type timeExpr struct {
 	cmp byte
 	n   int64
 	now time.Time
+	sel byte // 'm', 'a', 'c'
 }
 
-func (m *mtimeExpr) eval(c *fctx) bool {
-	info := c.stat()
-	if info == nil {
-		return false
+func (m *timeExpr) eval(c *fctx) bool {
+	var ft time.Time
+	switch m.sel {
+	case 'm':
+		ft = c.info.ModTime()
+	case 'a':
+		t, err := fileAtime(c.info)
+		if err != nil {
+			c.w.reportErr(c.path, err)
+			return false
+		}
+		ft = t
+	case 'c':
+		t, err := fileCtime(c.info)
+		if err != nil {
+			c.w.reportErr(c.path, err)
+			return false
+		}
+		ft = t
 	}
-	days := int64(m.now.Sub(info.ModTime()) / (24 * time.Hour))
+	days := int64(m.now.Sub(ft) / (24 * time.Hour))
 	switch m.cmp {
 	case '+':
 		return days > m.n
@@ -516,8 +798,7 @@ func (m *mtimeExpr) eval(c *fctx) bool {
 type newerExpr struct{ ref time.Time }
 
 func (n *newerExpr) eval(c *fctx) bool {
-	info := c.stat()
-	return info != nil && info.ModTime().After(n.ref)
+	return c.info.ModTime().After(n.ref)
 }
 
 type sizeExpr struct {
@@ -527,11 +808,7 @@ type sizeExpr struct {
 }
 
 func (s *sizeExpr) eval(c *fctx) bool {
-	info := c.stat()
-	if info == nil {
-		return false
-	}
-	v := (info.Size() + s.unit - 1) / s.unit // GNU rounds up
+	v := (c.info.Size() + s.unit - 1) / s.unit // GNU rounds up
 	switch s.cmp {
 	case '+':
 		return v > s.n
@@ -545,7 +822,7 @@ func (s *sizeExpr) eval(c *fctx) bool {
 type emptyExpr struct{}
 
 func (emptyExpr) eval(c *fctx) bool {
-	if c.d.IsDir() {
+	if c.info.IsDir() {
 		ents, err := os.ReadDir(c.osPath)
 		if err != nil {
 			c.w.reportErr(c.path, err)
@@ -553,20 +830,286 @@ func (emptyExpr) eval(c *fctx) bool {
 		}
 		return len(ents) == 0
 	}
-	info := c.stat()
-	return info != nil && info.Mode().IsRegular() && info.Size() == 0
+	return c.info.Mode().IsRegular() && c.info.Size() == 0
+}
+
+type permExpr struct {
+	how  byte // 0 exact, '-' all bits, '/' any bit
+	bits uint32
+}
+
+func (p *permExpr) eval(c *fctx) bool {
+	fb := fileModeBits(c.info.Mode())
+	switch p.how {
+	case '-':
+		return fb&p.bits == p.bits
+	case '/':
+		if p.bits == 0 { // GNU: -perm /000 matches everything
+			return true
+		}
+		return fb&p.bits != 0
+	default:
+		return fb == p.bits
+	}
+}
+
+// fileModeBits maps a Go FileMode onto the POSIX 07777 bit layout.
+func fileModeBits(m fs.FileMode) uint32 {
+	b := uint32(m.Perm())
+	if m&fs.ModeSetuid != 0 {
+		b |= 0o4000
+	}
+	if m&fs.ModeSetgid != 0 {
+		b |= 0o2000
+	}
+	if m&fs.ModeSticky != 0 {
+		b |= 0o1000
+	}
+	return b
+}
+
+type linksExpr struct {
+	cmp byte
+	n   int64
+}
+
+func (l *linksExpr) eval(c *fctx) bool {
+	nl, ok := fileNlink(c.info)
+	if !ok {
+		return false
+	}
+	switch l.cmp {
+	case '+':
+		return int64(nl) > l.n
+	case '-':
+		return int64(nl) < l.n
+	default:
+		return int64(nl) == l.n
+	}
+}
+
+type ownerExpr struct {
+	id    uint32
+	group bool
+}
+
+func (o *ownerExpr) eval(c *fctx) bool {
+	var id uint32
+	var ok bool
+	if o.group {
+		id, ok = fileGID(c.info)
+	} else {
+		id, ok = fileUID(c.info)
+	}
+	return ok && id == o.id
+}
+
+// noOwnerExpr is -nouser/-nogroup: the file's numeric ID has no name.
+type noOwnerExpr struct{ group bool }
+
+var (
+	knownUIDs = map[uint32]bool{}
+	knownGIDs = map[uint32]bool{}
+)
+
+func (n *noOwnerExpr) eval(c *fctx) bool {
+	var id uint32
+	var ok bool
+	if n.group {
+		id, ok = fileGID(c.info)
+	} else {
+		id, ok = fileUID(c.info)
+	}
+	if !ok {
+		return false
+	}
+	cache := knownUIDs
+	if n.group {
+		cache = knownGIDs
+	}
+	if known, seen := cache[id]; seen {
+		return !known
+	}
+	var err error
+	if n.group {
+		_, err = user.LookupGroupId(strconv.FormatUint(uint64(id), 10))
+	} else {
+		_, err = user.LookupId(strconv.FormatUint(uint64(id), 10))
+	}
+	cache[id] = err == nil
+	return err != nil
+}
+
+// ---------------------------------------------------------------------------
+// -exec / -ok
+
+// Batch limits for the {} + form, in the ballpark of xargs defaults.
+const (
+	execBatchArgs  = 4096
+	execBatchBytes = 128 * 1024
+)
+
+type execExpr struct {
+	name string // "-exec" or "-ok", for diagnostics
+	tmpl []string
+	plus bool
+	ok   bool
+
+	batch      []string // pending paths ({} + form)
+	batchBytes int
+}
+
+func (e *execExpr) eval(c *fctx) bool {
+	if e.plus {
+		// POSIX: the batched form always evaluates true; a child's
+		// non-zero exit only makes find itself exit non-zero.
+		e.batch = append(e.batch, c.path)
+		e.batchBytes += len(c.path) + 1
+		if len(e.batch) >= execBatchArgs || e.batchBytes >= execBatchBytes {
+			e.flush(c.w)
+		}
+		return true
+	}
+	argv := make([]string, len(e.tmpl))
+	for i, a := range e.tmpl {
+		argv[i] = strings.ReplaceAll(a, "{}", c.path)
+	}
+	if e.ok && !c.w.confirm(argv[0], c.path) {
+		return false
+	}
+	code, err := c.w.runArgv(argv, e.ok)
+	if err != nil {
+		c.w.reportErr(argv[0], err)
+		return false
+	}
+	return code == 0
+}
+
+// flush runs the pending {} + batch, appending the collected paths in
+// place of the trailing '{}'.
+func (e *execExpr) flush(w *walker) {
+	if !e.plus || len(e.batch) == 0 {
+		return
+	}
+	argv := make([]string, 0, len(e.tmpl)-1+len(e.batch))
+	argv = append(argv, e.tmpl[:len(e.tmpl)-1]...)
+	argv = append(argv, e.batch...)
+	e.batch, e.batchBytes = nil, 0
+	code, err := w.runArgv(argv, false)
+	if err != nil {
+		w.reportErr(argv[0], err)
+		return
+	}
+	if code != 0 {
+		w.errored = true
+	}
+}
+
+// confirm writes the -ok prompt to stderr and reads one reply line
+// from the invocation's standard input; only a leading y/Y affirms.
+func (w *walker) confirm(util, path string) bool {
+	fmt.Fprintf(w.rc.Err, "< %s ... %s > ? ", util, path)
+	line, err := w.stdin.ReadString('\n')
+	if err != nil && line == "" {
+		return false // EOF: not affirmative
+	}
+	line = strings.TrimSpace(line)
+	return line != "" && (line[0] == 'y' || line[0] == 'Y')
+}
+
+// runArgv spawns argv verbatim — no shell, no operand concatenation.
+// The child runs in the invocation's working directory with its
+// environment; -ok children get no stdin (GNU redirects it from the
+// null device so the utility cannot eat the reply stream).
+func (w *walker) runArgv(argv []string, isOK bool) (int, error) {
+	path := lookCommand(w.rc, argv[0])
+	if path == "" {
+		return 0, errors.New("command not found")
+	}
+	ctx := w.rc.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c := exec.CommandContext(ctx, path, argv[1:]...)
+	c.Dir = w.rc.Dir
+	c.Env = w.rc.Env
+	if !isOK {
+		c.Stdin = w.rc.In
+	}
+	c.Stdout = w.rc.Out
+	c.Stderr = w.rc.Err
+	err := c.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if code := ee.ExitCode(); code >= 0 {
+			return code, nil
+		}
+		return 128, nil // killed by signal
+	}
+	if err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
+
+// lookCommand resolves a utility name against the invocation PATH
+// (rc.Env); names containing a separator resolve against rc.Dir.
+func lookCommand(rc *tool.RunContext, name string) string {
+	if strings.ContainsAny(name, `/\`) {
+		return rc.Path(name)
+	}
+	isWindows := runtime.GOOS == "windows"
+	var exts []string
+	if isWindows {
+		pathExt := rc.Getenv("PATHEXT")
+		if pathExt == "" {
+			exts = []string{".com", ".exe", ".bat", ".cmd"}
+		} else {
+			for _, e := range filepath.SplitList(pathExt) {
+				if e != "" {
+					exts = append(exts, strings.ToLower(e))
+				}
+			}
+		}
+	}
+	checkFile := func(path string) bool {
+		fi, err := os.Stat(path)
+		if err != nil || fi.IsDir() {
+			return false
+		}
+		return isWindows || fi.Mode()&0o111 != 0
+	}
+	for _, dir := range filepath.SplitList(rc.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		cand := filepath.Join(dir, name)
+		if checkFile(cand) {
+			return cand
+		}
+		for _, ext := range exts {
+			if checkFile(cand + ext) {
+				return cand + ext
+			}
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
 // traversal
 
 type walker struct {
-	rc       *tool.RunContext
-	e        expr
-	maxDepth int // -1 = unlimited
-	minDepth int
-	errored  bool
-	matcher  *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
+	rc         *tool.RunContext
+	e          expr
+	maxDepth   int // -1 = unlimited
+	minDepth   int
+	depthFirst bool
+	xdev       bool
+	follow     byte // 'P', 'H' or 'L'
+	errored    bool
+	stdin      *bufio.Reader
+	matcher    *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
 }
 
 func (w *walker) reportErr(display string, err error) {
@@ -576,51 +1119,100 @@ func (w *walker) reportErr(display string, err error) {
 
 func (w *walker) walkRoot(operand string) {
 	root := w.rc.Path(operand)
-	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		disp := displayPath(operand, root, p)
-		if err != nil {
-			w.reportErr(disp, err)
-			return nil
-		}
-		// --agentic: prune .gitignore'd / noise paths (never the start point).
-		if p != root && w.matcher.Skip(p, d.IsDir()) {
-			if d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		depth := 0
-		if rel, rerr := filepath.Rel(root, p); rerr == nil && rel != "." {
-			depth = strings.Count(rel, string(filepath.Separator)) + 1
-		}
-		var skip error
-		if d.IsDir() && w.maxDepth >= 0 && depth >= w.maxDepth {
-			skip = fs.SkipDir
-		}
-		if depth < w.minDepth {
-			return skip
-		}
-		c := &fctx{path: disp, osPath: p, d: d, w: w}
-		w.e.eval(c)
-		if c.pruned {
-			return fs.SkipDir
-		}
-		return skip
-	})
+	lst, err := os.Lstat(root)
+	if err != nil {
+		w.reportErr(operand, err)
+		return
+	}
+	info := lst
+	if w.follow != 'P' && lst.Mode()&fs.ModeSymlink != 0 {
+		info = w.followLink(operand, root, lst)
+	}
+	var dev uint64
+	if w.xdev {
+		dev, _ = fileDev(info)
+	}
+	w.visit(operand, root, info, 0, nil, dev)
 }
 
-// displayPath joins the operand as typed with the walk position,
-// using forward slashes (matches GNU output shape on unix).
-func displayPath(operand, root, p string) string {
-	rel, err := filepath.Rel(root, p)
-	if err != nil || rel == "." {
-		return operand
+// followLink stats through a symlink. A dangling link silently falls
+// back to the link's own data per POSIX (-type then matches 'l');
+// any other failure (ELOOP, permission) is diagnosed.
+func (w *walker) followLink(disp, osPath string, lst fs.FileInfo) fs.FileInfo {
+	st, err := os.Stat(osPath)
+	if err == nil {
+		return st
 	}
-	rel = filepath.ToSlash(rel)
-	if strings.HasSuffix(operand, "/") {
-		return operand + rel
+	if !errors.Is(err, fs.ErrNotExist) {
+		w.reportErr(disp, err)
 	}
-	return operand + "/" + rel
+	return lst
+}
+
+// visit evaluates one file and recurses into directories. ancestors
+// carries the FileInfo of every directory on the current path when
+// symlinks are followed, for loop detection.
+func (w *walker) visit(disp, osPath string, info fs.FileInfo, depth int, ancestors []fs.FileInfo, dev uint64) {
+	descend := info.IsDir() && (w.maxDepth < 0 || depth < w.maxDepth)
+	if descend && w.xdev {
+		if d, ok := fileDev(info); ok && d != dev {
+			descend = false // evaluate the mount point itself, never enter it
+		}
+	}
+	if descend && w.follow == 'L' {
+		// Loop detection: following symlinks can revisit an ancestor.
+		for _, a := range ancestors {
+			if os.SameFile(a, info) {
+				w.reportErr(disp, errors.New("file system loop detected"))
+				return
+			}
+		}
+	}
+
+	if !w.depthFirst && depth >= w.minDepth {
+		c := &fctx{path: disp, osPath: osPath, info: info, w: w}
+		w.e.eval(c)
+		if c.pruned {
+			descend = false
+		}
+	}
+
+	if descend {
+		ents, err := os.ReadDir(osPath) // sorted: deterministic lexical order
+		if err != nil {
+			w.reportErr(disp, err)
+		}
+		var childAnc []fs.FileInfo
+		if w.follow == 'L' {
+			childAnc = append(ancestors, info)
+		}
+		for _, ent := range ents {
+			childOS := filepath.Join(osPath, ent.Name())
+			childDisp := disp + "/" + ent.Name()
+			if strings.HasSuffix(disp, "/") {
+				childDisp = disp + ent.Name()
+			}
+			// --agentic: prune .gitignore'd / noise paths (never the start point).
+			if w.matcher.Skip(childOS, ent.IsDir()) {
+				continue
+			}
+			clst, err := ent.Info()
+			if err != nil {
+				w.reportErr(childDisp, err)
+				continue
+			}
+			cinfo := clst
+			if w.follow == 'L' && clst.Mode()&fs.ModeSymlink != 0 {
+				cinfo = w.followLink(childDisp, childOS, clst)
+			}
+			w.visit(childDisp, childOS, cinfo, depth+1, childAnc, dev)
+		}
+	}
+
+	if w.depthFirst && depth >= w.minDepth {
+		c := &fctx{path: disp, osPath: osPath, info: info, w: w}
+		w.e.eval(c)
+	}
 }
 
 // pathErrMsg strips Go's "lstat <path>: " prefix so diagnostics read

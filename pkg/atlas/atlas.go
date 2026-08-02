@@ -495,6 +495,8 @@ func init() {
 	capTools(CapSpawnsProcesses,
 		"xargs", "timeout", "time", "watch", "nice", "nohup", "chroot",
 		"runcon", "stdbuf", "at", "batch",
+		// find spawns the -exec/-ok utility (its specified behavior).
+		"find",
 	)
 	capTools(CapDaemon, "foreman")
 	// foreman drives an agent session: it is a Code-stage orchestrator, not a

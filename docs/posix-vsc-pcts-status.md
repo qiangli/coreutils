@@ -37,9 +37,10 @@ mkfifo +5  then +4/+3/+2/+1 across ~45 further sets
   at all. Either a regression or newly-exercised coverage — that run's container
   had no non-English locale, and `date` output is locale-dependent. **Start
   here.**
-- **`find` +40** is the largest absolute delta and is partly structural:
-  `-exec`/`-ok` are NO-list surfaces (they shell out) and the suite tests them
-  directly.
+- **`find` +40** is the largest absolute delta. (Since addressed, 2026-08:
+  `-exec`/`-ok` shipped under the command-wrapper exception, along with the
+  POSIX primaries the failure list implicated — time/link/user/group tests,
+  -perm, -xdev, -depth, -H/-L, loop detection. Re-measure on the next run.)
 - **`sed` +35** is what remains after the `pkg/bre` work halved it. Since `grep`
   closed almost entirely on the same engine, the residue is sed's own feature
   grammar rather than the shared BRE/ERE code.

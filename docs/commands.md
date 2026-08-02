@@ -153,7 +153,7 @@ Extensions (beyond coreutils, prior art in tree):
 |---|---|---|
 | grep | aict, u-root | -r, -i, -l, -n, -v, -E, -F, -c, -q, -m, -A/-B/-C context, ordered --include/--exclude |
 | sed | Go.Sed engine (MIT), GNU compatibility adaptations | GNU BRE/ERE scripts, addr,+N ranges, -i[SUFFIX] temporary-file in-place editing |
-| find | aict, u-root | -name, -type, -maxdepth, -mtime, -size, -path, -prune, -print0; **-exec is NO** |
+| find | aict, u-root | POSIX stream closed 2026-08: -H/-L/-P, -name/-iname/-path, -type, -atime/-ctime/-mtime, -newer, -size, -empty, -perm (octal + symbolic, -/ prefixes), -user/-group/-nouser/-nogroup, -links, -xdev, -depth, -prune, -maxdepth/-mindepth, -print/-print0, **-exec ; and -exec {} +, interactive -ok** (command-wrapper tier: running the utility is find's specified behavior; argv built directly, never through a shell). Still NO: -execdir/-okdir/-delete |
 | diff | aict | -u, -r, -q (unified output) |
 | jq | gojq | pure-Go JSON filters; initial flags -c, -e, -n, -r |
 | tar | u-root | -c, -x, -t, -z, -f (archive/tar + compress/gzip) |
@@ -192,9 +192,10 @@ Remaining: ps (agent-useful, large cross-platform surface); file
 tool from spawning programs to *implement its own behavior* (cat never
 execs /bin/cat). **Command wrappers are the documented exception**:
 tools whose upstream-documented purpose IS running the COMMAND operand
-(env, timeout, time, watch, xargs — all shipped) spawn that command
-directly, exactly as the GNU binary does — that is the upstream
-semantics, not an implementation shortcut. Still NO (↻ = revisit):
+(env, timeout, time, watch, xargs, and find's -exec/-ok primaries — all
+shipped) spawn that command directly, exactly as the GNU binary does —
+that is the upstream semantics, not an implementation shortcut. Still
+NO (↻ = revisit):
 
 - kill — already a builtin in the qiangli/sh fork; a standalone would race it
 
