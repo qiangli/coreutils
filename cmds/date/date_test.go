@@ -14,10 +14,16 @@ import (
 
 func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolEnv(t, nil, args...)
+}
+
+func runToolEnv(t *testing.T, env []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   t.TempDir(),
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -64,6 +70,100 @@ func TestDateFormats(t *testing.T) {
 		out, errb, code := runTool(t, c.args...)
 		if out != c.want || code != 0 {
 			t.Errorf("date %q = (%q, %q, %d), want (%q, \"\", 0)", c.args, out, errb, code, c.want)
+		}
+	}
+}
+
+// POSIX XBD strftime: in the C/POSIX locale the %E and %O alternative
+// modifiers render exactly as the unmodified conversion. Each case
+// pins the exact output and cross-checks it against the unmodified
+// format string at the same instant (2026-06-12 13:45:09 UTC, a
+// Friday, day 163 of the year).
+func TestDateAlternativeModifiers(t *testing.T) {
+	const instant = "2026-06-12 13:45:09"
+	cases := []struct {
+		modified, plain string
+		want            string
+	}{
+		{"%Ec", "%c", "Fri Jun 12 13:45:09 2026"},
+		{"%EC", "%C", "20"},
+		{"%Ex", "%x", "06/12/26"},
+		{"%EX", "%X", "13:45:09"},
+		{"%Ey", "%y", "26"},
+		{"%EY", "%Y", "2026"},
+		{"%Od", "%d", "12"},
+		{"%Oe", "%e", "12"},
+		{"%OH", "%H", "13"},
+		{"%OI", "%I", "01"},
+		{"%Om", "%m", "06"},
+		{"%OM", "%M", "45"},
+		{"%OS", "%S", "09"},
+		{"%Ou", "%u", "5"},
+		{"%OU", "%U", "23"},
+		{"%OV", "%V", "24"},
+		{"%Ow", "%w", "5"},
+		{"%OW", "%W", "23"},
+		{"%Oy", "%y", "26"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, "-u", "-d", instant, "+"+c.modified)
+		if code != 0 || errb != "" || out != c.want+"\n" {
+			t.Errorf("date +%s = (%q, %q, %d), want %q", c.modified, out, errb, code, c.want+"\n")
+		}
+		plain, _, _ := runTool(t, "-u", "-d", instant, "+"+c.plain)
+		if out != plain {
+			t.Errorf("date +%s = %q, differs from unmodified +%s = %q", c.modified, out, c.plain, plain)
+		}
+	}
+	// Invalid modifier combinations and a trailing modifier are not
+	// conversions; they pass through literally like other unknown
+	// sequences.
+	for _, c := range []struct{ format, want string }{
+		{"%Oz", "%Oz"},
+		{"%Ed", "%Ed"},
+		{"%EO", "%EO"},
+		{"%E", "%E"},
+		{"%O", "%O"},
+	} {
+		out, _, code := runTool(t, "-u", "-d", instant, "+"+c.format)
+		if code != 0 || out != c.want+"\n" {
+			t.Errorf("date +%s = (%q, %d), want %q", c.format, out, code, c.want+"\n")
+		}
+	}
+}
+
+// POSIX XBD 8.3: TZ selects the timezone for conversion; -u overrides
+// it. Both POSIX expansions and IANA names must work, and an
+// unusable value falls back to UTC rather than erroring.
+func TestDateTZ(t *testing.T) {
+	cases := []struct {
+		tz   string
+		args []string
+		want string
+	}{
+		{"UTC0", []string{"-d", "@0", "+%H %Z %z"}, "00 UTC +0000\n"},
+		{"EST5", []string{"-d", "@0", "+%Y-%m-%d %H:%M:%S %Z %z"}, "1969-12-31 19:00:00 EST -0500\n"},
+		// Default C-locale format with TZ applied.
+		{"EST5", []string{"-d", "@0"}, "Wed Dec 31 19:00:00 EST 1969\n"},
+		// Full spec with rules: summer instant is DST, winter is not.
+		{"EST5EDT,M3.2.0,M11.1.0", []string{"-d", "@1755000000", "+%Z %z"}, "EDT -0400\n"},
+		{"EST5EDT,M3.2.0,M11.1.0", []string{"-d", "@1735689600", "+%Z %z"}, "EST -0500\n"},
+		// Rules omitted: tzcode default US rules.
+		{"EST5EDT", []string{"-d", "@1755000000", "+%Z %z"}, "EDT -0400\n"},
+		// Quoted designation, sub-hour east-of-Greenwich offset.
+		{"<+0530>-5:30", []string{"-d", "@0", "+%H:%M %Z %z"}, "05:30 +0530 +0530\n"},
+		// Null and unusable TZ: UTC.
+		{"", []string{"-d", "@0", "+%H %Z"}, "00 UTC\n"},
+		{"bogus", []string{"-d", "@0", "+%H %Z"}, "00 UTC\n"},
+		// -u wins over TZ.
+		{"EST5", []string{"-u", "-d", "@0", "+%H %Z"}, "00 UTC\n"},
+		// TZ also governs how a zone-less -d string is interpreted.
+		{"EST5", []string{"-d", "1970-01-01 00:00:00", "+%s"}, "18000\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runToolEnv(t, []string{"TZ=" + c.tz}, c.args...)
+		if code != 0 || errb != "" || out != c.want {
+			t.Errorf("TZ=%q date %q = (%q, %q, %d), want %q", c.tz, c.args, out, errb, code, c.want)
 		}
 	}
 }
@@ -175,6 +275,38 @@ func TestDateErrors(t *testing.T) {
 	_, errb, code = runTool(t, "--frobnicate")
 	if code != 2 || !strings.Contains(errb, "frobnicate") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+}
+
+// VSC/PCTS GA39-style assertion: every invalid invocation writes a
+// diagnostic to standard error and exits with nonzero status — never
+// silent, never exit 0.
+func TestDateInvalidUsageDiagnostics(t *testing.T) {
+	cases := [][]string{
+		{"-Q"},                         // unknown short option
+		{"--frobnicate"},               // unknown long option
+		{"--iso-8601=bogus"},           // invalid timespec argument
+		{"--rfc-3339=bogus"},           // invalid timespec argument
+		{"--rfc-3339"},                 // missing required argument
+		{"-d", "not a date"},           // unparsable date string
+		{"-f", "no-such-file"},         // unreadable date file
+		{"-r", "no-such-file"},         // unreadable reference file
+		{"+%Y", "+%m"},                 // extra operand
+		{"12011030"},                   // set-date operand form (unsupported)
+		{"--set", "@0"},                // set-date option (unsupported)
+		{"-d", "@0", "-r", "x"},        // mutually exclusive date sources
+		{"--resolution", "+%Y"},        // --resolution excludes formatting
+		{"-I", "--rfc-email"},          // multiple output formats
+		{"-d", "@0", "-d", "@1", "@2"}, // repeated flag then bad operand
+	}
+	for _, args := range cases {
+		out, errb, code := runTool(t, args...)
+		if code == 0 {
+			t.Errorf("date %q: exit 0, want nonzero (out=%q err=%q)", args, out, errb)
+		}
+		if errb == "" {
+			t.Errorf("date %q: no diagnostic on stderr (out=%q code=%d)", args, out, code)
+		}
 	}
 }
 

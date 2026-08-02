@@ -3,8 +3,16 @@
 // format or per a +FORMAT operand built from strftime directives.
 //
 // Supported directives: %Y %m %d %H %M %S %y %j %a %A %b %h %B %e %T
-// %D %F %R %s %N %z %Z %p %I %u %w %n %t %%. Unknown %X sequences pass
+// %D %F %R %s %N %z %Z %p %I %u %w %n %t %%. The POSIX alternative
+// modifiers (%Ec %EC %Ex %EX %Ey %EY and %Od %Oe %OH %OI %Om %OM %OS
+// %Ou %OU %OV %Ow %OW %Oy) render as the unmodified conversion, as
+// POSIX requires in the C/POSIX locale. Unknown %X sequences pass
 // through literally, as GNU date does.
+//
+// The TZ environment variable (from the RunContext environment, per
+// the tool contract) selects the output zone unless -u is given —
+// both IANA names and POSIX "std offset dst[,rule,rule]" expansions
+// are honored; see cmds/internal/tzenv.
 //
 // -d STRING parses a documented subset (RFC 3339, @EPOCH,
 // "YYYY-MM-DD [HH:MM[:SS]]"); anything else is a clear error. Setting
@@ -25,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/cmds/internal/tzenv"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -64,7 +73,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.NotSupported(rc, cmd, "setting the system date")
 	}
 
-	loc := time.Local
+	loc := tzenv.Location(rc.Env)
 	if *utc || *universal || *uct {
 		loc = time.UTC
 	}
@@ -252,6 +261,16 @@ func parseDateString(s string, loc *time.Location) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unparsed date %q", s)
 }
 
+// Valid conversions for the POSIX %E and %O alternative modifiers
+// (XBD strftime). In the C/POSIX locale there are no alternative era
+// or digit representations, so a valid modified conversion renders
+// exactly as the unmodified one; an invalid combination is left to
+// pass through literally like any other unknown sequence.
+const (
+	eModified = "cCxXyY"
+	oModified = "deHImMSuUVwWy"
+)
+
 // strftime renders the supported GNU/strftime directive subset in the
 // C locale. Unknown %X sequences pass through literally.
 func strftime(t time.Time, f string) string {
@@ -263,6 +282,11 @@ func strftime(t time.Time, f string) string {
 			continue
 		}
 		i++
+		if i+1 < len(f) &&
+			((f[i] == 'E' && strings.IndexByte(eModified, f[i+1]) >= 0) ||
+				(f[i] == 'O' && strings.IndexByte(oModified, f[i+1]) >= 0)) {
+			i++ // C/POSIX locale: fall back to the unmodified conversion
+		}
 		switch f[i] {
 		case 'Y':
 			fmt.Fprintf(&b, "%d", t.Year())
