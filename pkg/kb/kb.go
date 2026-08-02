@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -136,6 +137,7 @@ func newSearchCmd(dir *string) *cobra.Command {
 		brief          bool
 		minCov         float64
 		useWeight      float64
+		retireAfter    time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "search <term>...",
@@ -170,6 +172,13 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			// gate a merge" — match per word instead of as one 5-word term.
 			terms := Terms(strings.Join(args, " "))
 			q := Query{Terms: terms, Repo: repo, OS: goos, Tags: tags, K: k, All: all, MinCoverage: minCov}
+			if retireAfter > 0 {
+				q.RetireUnopenedAfter = retireAfter
+				q.UseObservedFrom = store.ObservedFrom()
+				if q.Use == nil {
+					q.Use = store.UseHistory()
+				}
+			}
 			if useWeight != 0 {
 				// Opt-in: rank partly by what READERS have opened before.
 				q.Use, q.UseWeight = store.UseHistory(), useWeight
@@ -217,6 +226,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 	cmd.Flags().BoolVar(&full, "full", false, "print page bodies, not just index lines")
 	cmd.Flags().BoolVar(&brief, "brief", false, "cue lines only (slug + title) — ~3.7x leaner when you already know what you are looking for")
 	cmd.Flags().BoolVar(&federate, "federate", false, "also search the current repo's contribution log + weave memory")
+	cmd.Flags().DurationVar(&retireAfter, "retire-unopened-after", 0, "hide pages older than this that have never been opened (0 = never retire); a retrieval filter, nothing is deleted")
 	cmd.Flags().Float64Var(&useWeight, "use-weight", 0, "weight the ACT-R base-level term (recency x frequency of opens); 0 = rank purely on the query")
 	cmd.Flags().Float64Var(&minCov, "min-coverage", 0, "return NOTHING unless a page matches at least this fraction of the query terms (0 = always answer)")
 	return cmd

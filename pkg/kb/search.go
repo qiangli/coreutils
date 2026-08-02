@@ -46,6 +46,26 @@ type Query struct {
 	Use map[string]*Use
 	// UseWeight scales the base-level term. 0 disables it.
 	UseWeight float64
+
+	// RetireUnopenedAfter excludes pages that have existed for longer than
+	// this and have never been opened. Zero disables it.
+	//
+	// It is the ONE lifecycle stage the skill-graph literature says actually
+	// carried the gains ("outcome-driven retirement + a hard active cap",
+	// while explicit dedup did not pay), and the grace period is the whole
+	// design: retiring on zero opens ALONE would retire every page the moment
+	// it is written, because a new page has never been read. A page has to be
+	// given a chance to be useful before never-having-been-useful counts
+	// against it.
+	//
+	// Retirement here is a RETRIEVAL filter, not a deletion: the page stays on
+	// disk, keeps its history, and comes back the moment the rule is relaxed
+	// or someone opens it. Same stance as supersede-not-delete.
+	RetireUnopenedAfter time.Duration
+	// UseObservedFrom is when open-recording began (Store.ObservedFrom()).
+	// Retirement applies ONLY to pages created after it, so a store that never
+	// recorded reads retires nothing. Zero disables retirement entirely.
+	UseObservedFrom time.Time
 	// Now is the clock for decay; zero means time.Now(). Injectable so tests
 	// and the eval harness are deterministic.
 	Now time.Time
@@ -133,6 +153,9 @@ func Search(pages []*Page, q Query) []Hit {
 		if len(q.Tags) > 0 && !hasAnyTag(p, q.Tags) {
 			continue
 		}
+		if q.RetireUnopenedAfter > 0 && retiredUnopened(p, q) {
+			continue
+		}
 		elig = append(elig, p)
 	}
 	if len(elig) == 0 {
@@ -217,6 +240,31 @@ func Search(pages []*Page, q Query) []Hit {
 		hits = hits[:k]
 	}
 	return hits
+}
+
+// retiredUnopened reports whether p has outlived its grace period without ever
+// being opened. A page with no parseable creation time is never retired —
+// missing evidence is not evidence.
+func retiredUnopened(p *Page, q Query) bool {
+	if u := q.Use[p.Slug]; u != nil && u.N > 0 {
+		return false
+	}
+	// Only judge pages whose whole life is inside the observed period.
+	if q.UseObservedFrom.IsZero() {
+		return false
+	}
+	created, err := time.Parse(time.RFC3339, p.Created)
+	if err != nil {
+		return false
+	}
+	if created.Before(q.UseObservedFrom) {
+		return false
+	}
+	now := q.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return now.Sub(created) > q.RetireUnopenedAfter
 }
 
 // queryTerms normalises caller-supplied terms the same way pageTokens

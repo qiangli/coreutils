@@ -552,3 +552,74 @@ func TestUseWeightIsOptInAndBreaksTies(t *testing.T) {
 		t.Fatalf("weight 0 must restore the lexical order: %+v", again)
 	}
 }
+
+// TestRetireUnopenedAfter guards the grace period, which is the whole design:
+// retiring on zero opens alone would retire every page the moment it is
+// written, because a new page has never been read.
+func TestRetireUnopenedAfter(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--title", "old and unread", "--description", "WHEN nobody has ever needed this")
+	mustRun(t, dir, "add", "--force", "--title", "old and used", "--description", "WHEN nobody has ever needed this")
+	store := Open(dir)
+	pages := mustList(t, dir)
+	for _, p := range pages {
+		p.Created = "2020-01-01T00:00:00Z" // both are old
+	}
+	store.RecordOpen("old-and-used")
+
+	// Observation began before these pages existed, so both are inside the
+	// window where "was it opened?" is answerable. (The derived case — a store
+	// with no read log at all — is TestRetirementNeedsAnObservationWindow.)
+	q := Query{Terms: []string{"needed"}, K: 5, Use: store.UseHistory(),
+		UseObservedFrom: time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)}
+	if hits := Search(pages, q); len(hits) != 2 {
+		t.Fatalf("with retirement off both pages answer: %+v", hits)
+	}
+	q.RetireUnopenedAfter = time.Hour
+	hits := Search(pages, q)
+	if len(hits) != 1 || hits[0].Page.Slug != "old-and-used" {
+		t.Fatalf("the never-opened page must be retired, the used one kept: %+v", hits)
+	}
+	// Grace: a page inside its window is never retired, opened or not.
+	for _, p := range pages {
+		p.Created = time.Now().UTC().Format(time.RFC3339)
+	}
+	_ = pages
+	if hits := Search(pages, q); len(hits) != 2 {
+		t.Fatalf("a page inside its grace period must survive: %+v", hits)
+	}
+	// No parseable creation time => never retired. Missing evidence is not
+	// evidence.
+	for _, p := range pages {
+		p.Created = ""
+	}
+	if hits := Search(pages, q); len(hits) != 2 {
+		t.Fatalf("an undated page must not be retired: %+v", hits)
+	}
+}
+
+// TestRetirementNeedsAnObservationWindow is the guard for a measured near-miss:
+// pointing the retirement rule at a store that never recorded opens retired
+// ALL of it (real store, hit@3 100% -> 0%). A page older than the read log has
+// no opens because nothing was recorded, which is absence of evidence.
+func TestRetirementNeedsAnObservationWindow(t *testing.T) {
+	dir := t.TempDir()
+	mustRun(t, dir, "add", "--title", "written before anyone watched", "--description", "WHEN nobody has ever needed this")
+	store := Open(dir)
+	pages := mustList(t, dir)
+	for _, p := range pages {
+		p.Created = "2020-01-01T00:00:00Z"
+	}
+	q := Query{Terms: []string{"needed"}, K: 5, RetireUnopenedAfter: time.Hour,
+		Use: store.UseHistory(), UseObservedFrom: store.ObservedFrom()}
+	if hits := Search(pages, q); len(hits) != 1 {
+		t.Fatalf("with no read log, retirement must be inert: %+v", hits)
+	}
+	// Once recording has started, only pages created inside the window are
+	// judged — this one still predates it.
+	store.RecordOpen("some-other-page")
+	q.Use, q.UseObservedFrom = store.UseHistory(), store.ObservedFrom()
+	if hits := Search(pages, q); len(hits) != 1 {
+		t.Fatalf("a page older than the read log must not be retired: %+v", hits)
+	}
+}

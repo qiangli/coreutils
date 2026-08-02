@@ -126,6 +126,44 @@ const DefaultDecay = 0.5
 //     helped; editing it is the reader saying it did not.
 //
 // So: an open is a use. Nothing else is, until something else is measured to be.
+// ObservedFrom is the first moment the reads log recorded anything — the start
+// of the period in which "was this page opened?" is an answerable question.
+// Zero when nothing has ever been recorded.
+//
+// This exists because of a measured near-miss. Retirement asks "has this page
+// gone unopened for longer than the grace period?", and on a store where opens
+// were never recorded the answer is yes for EVERY page: pointing the rule at
+// the real 29-page host store retired all of it, taking hit@3 from 100% to 0%.
+// The bug is not the rule, it is applying it outside the window where its
+// evidence exists. A page created before the log started has no opens BECAUSE
+// NOTHING WAS RECORDED, which is absence of evidence, not evidence of disuse —
+// the same principle that makes an undated page unretirable and an unused page
+// neutral rather than penalised.
+func (s *Store) ObservedFrom() time.Time {
+	var first time.Time
+	f, err := os.Open(s.readsPath())
+	if err != nil {
+		return first
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var r useRecord
+		if json.Unmarshal([]byte(line), &r) != nil || r.At.IsZero() {
+			continue
+		}
+		if first.IsZero() || r.At.Before(first) {
+			first = r.At
+		}
+	}
+	return first
+}
+
 func (s *Store) UseHistory() map[string]*Use {
 	out := map[string]*Use{}
 	add := func(slug string, at time.Time) {
