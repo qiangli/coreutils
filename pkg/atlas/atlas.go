@@ -610,6 +610,18 @@ func init() {
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
 	addVerb("docker", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox, AliasOf: "podman",
 		Caps: []string{CapDaemon, CapSpawnsProcesses}})
+	// `sandbox` is the TIER NAME (tier 3), so the tier vocabulary and the verb
+	// surface agree: someone who reads "tier 3 = sandbox" and types it gets the
+	// engine instead of "command not found". It is the same alias as `docker`.
+	//
+	// The word is load-bearing elsewhere and this alias does NOT carry that
+	// meaning: outpost's `sandbox` app is a FILTERED libpod endpoint that strips
+	// privileged/host-namespace/host-bind/added-cap requests and injects resource
+	// caps, deliberately distinct from raw podman passthrough. This verb is the
+	// raw local engine — it refuses nothing. Anyone extending it toward the
+	// filtered semantics should make that a real capability, not a rename.
+	addVerb("sandbox", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSandbox, AliasOf: "podman",
+		Caps: []string{CapDaemon, CapSpawnsProcesses}})
 	addVerb("ollama", Entry{Stage: StageCross, Group: GroupEngines, Tier: TierSphere,
 		Caps: []string{CapDaemon, CapNeedsNetwork, CapSpawnsProcesses}})
 	addVerb("sphere", Entry{Stage: StageDeploy, Group: GroupEngines, Tier: TierSphere,
@@ -801,7 +813,7 @@ func init() {
 		"ntp", "sntp", "browser", "fetch", "search",
 		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act", "sota",
 		"herald",
-		"act-runner", "mirror", "podman", "docker", "ollama", "dks", "sphere", "git",
+		"act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
 		"kopia", "kubectl", "helm", "self", "bootstrap", "upgrade", "secrets",
 		"otel", "tessaro", "login",
@@ -813,7 +825,7 @@ func init() {
 		"find", "awk", "xargs", "at", "batch", "chroot", "nice", "nohup",
 		"runcon", "stdbuf", "time", "timeout", "watch", "env", "foreman",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
-		"act-runner", "skills", "podman", "docker", "ollama", "dks", "sphere",
+		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login",
 		// herald runs the GATE — an operator-supplied command that decides
@@ -840,7 +852,7 @@ func init() {
 	// daemon, an installed/upgraded binary.
 	eff(EffPersist,
 		"at", "batch", "crontab", "nohup", "foreman",
-		"schedule", "act-runner", "mirror", "podman", "docker", "ollama", "dks",
+		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
 	)
 
