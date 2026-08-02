@@ -34,10 +34,10 @@ import (
 //  2. **An OPEN is the signal, not an impression.** The obvious thing to record
 //     is "this page appeared in a result list", and it is wrong: the ranker
 //     would then be scoring its own past output, and every early mistake would
-//     compound. What is recorded instead is what the CALLER did — opening a
-//     page (`kb show`) and the mutations already in journal.jsonl (validate,
-//     update, supersede). Those are the reader's judgement, not the ranker's,
-//     so the loop is not closed on itself.
+//     compound. What is recorded instead is what the CALLER did: opening a page
+//     (`kb show`). That is the reader's judgement, not the ranker's, so the loop
+//     is not closed on itself. Mutations were tried as a second use signal and
+//     measured to REGRESS retrieval — see UseHistory.
 
 // useRecord is one appended line in reads.jsonl.
 type useRecord struct {
@@ -106,14 +106,26 @@ func (u Use) BaseLevel(now time.Time, d float64) float64 {
 // DefaultDecay is ACT-R's conventional d.
 const DefaultDecay = 0.5
 
-// UseHistory replays reads.jsonl plus the mutation journal into per-slug use
-// history. Both logs are append-only and tolerant: a corrupt line is skipped
-// rather than failing the read, mirroring the page-list and journal-replay
-// behaviour.
+// UseHistory replays reads.jsonl into per-slug use history. The log is
+// append-only and tolerant: a corrupt line is skipped rather than failing the
+// read, mirroring the page-list and journal-replay behaviour.
 //
-// Mutations count as uses because validating, updating or superseding a page
-// is a stronger signal of relevance than opening it — and they are already
-// being recorded, so the history starts non-empty on any store with a history.
+// MUTATIONS ARE DELIBERATELY NOT USES, and this is a correction rather than an
+// omission. The first implementation counted validate/update/supersede from
+// journal.jsonl, on the reasoning that editing a page is a stronger signal of
+// relevance than opening it. Measured on the real host store that arm scored
+// hit@3 93% / MRR 0.857 against 100% / 0.929 with the term off — a REGRESSION.
+// Two reasons, both obvious afterwards:
+//
+//   - The store's entire mutation history was 17 records across 17 distinct
+//     pages, 14 of them `validate`. So the "use" term was very nearly the
+//     indicator "has been validated" — which the ranker ALREADY applies as the
+//     status ladder's 1.25x. It was double-counting one signal, not adding one.
+//   - An edit is not evidence a page was useful. A page corrected three times is
+//     a page that was WRONG three times. Opening it is the reader saying it
+//     helped; editing it is the reader saying it did not.
+//
+// So: an open is a use. Nothing else is, until something else is measured to be.
 func (s *Store) UseHistory() map[string]*Use {
 	out := map[string]*Use{}
 	add := func(slug string, at time.Time) {
@@ -149,16 +161,6 @@ func (s *Store) UseHistory() map[string]*Use {
 	scan(s.readsPath(), func(line []byte) {
 		var r useRecord
 		if json.Unmarshal(line, &r) == nil {
-			add(r.Slug, r.At)
-		}
-	})
-	scan(s.journalPath(), func(line []byte) {
-		var r journalRecord
-		if json.Unmarshal(line, &r) != nil {
-			return
-		}
-		switch r.Op {
-		case "validate", "update", "supersede":
 			add(r.Slug, r.At)
 		}
 	})
