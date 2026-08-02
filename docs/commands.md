@@ -128,6 +128,7 @@ Environment, system, misc:
 | nproc | uutils parity | --all, --ignore, OMP_NUM_THREADS/OMP_THREAD_LIMIT, Linux cgroup quota best effort |
 | pathchk | uutils parity | -p, -P, --portability |
 | pinky | uutils parity | utmp-backed short listing and long user format; empty output when no records are available |
+| printf | written fresh | POSIX FORMAT reuse (stops after one pass if nothing was consumed) with excess/missing-operand defaults; %s %b %c %d %i %o %u %x %X plus %e/%E/%f/%F/%g/%G/%a/%A; width/precision incl. `*` argument forms (negative width left-justifies, negative precision is omitted); backslash escapes incl. `\NNN` octal and `\c` output-termination (in FORMAT and inside %b, whose own octal form is `\0NNN`); POSIX leading-quote numeric character constants; invalid numbers/conversions diagnosed with nonzero status, `--` ends option scanning |
 | runcon | uutils parity | Linux SELinux procfs contexts; clear unsupported error elsewhere |
 | stdbuf | uutils parity | -i/-o/-e parsing and COMMAND environment; depends on target program/libstdbuf support |
 | stty | uutils parity | terminal status, size, selected modes/settings; platform terminal support required |
@@ -168,7 +169,6 @@ or NO.
 
 | Command | Notes |
 |---|---|
-| printf | %s %d %x %o %c %b %% escapes, width/precision |
 | test / [ | standalone (the sh interp builtin covers in-shell use) |
 | tail -f | follow mode for the Phase A tail (polling, cross-platform) |
 | coreutils | the multicall binary itself (`cmd/coreutils`) |

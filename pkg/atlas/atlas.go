@@ -461,7 +461,7 @@ func init() {
 		"arch", "at", "atq", "atrm", "batch", "cal", "chroot", "crontab",
 		"date", "duration", "echo", "env", "expr", "factor", "false",
 		"groups", "hostid", "hostname", "id", "logname", "ncal", "nice",
-		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "pwd",
+		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "pwd",
 		"runcon", "seq", "sleep", "sntp", "stdbuf", "stty", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
@@ -735,8 +735,8 @@ func init() {
 	// pure — deterministic, touches nothing governed.
 	eff(EffPure,
 		"basename", "dirname", "dircolors", "cal", "ncal", "duration", "echo",
-		"expr", "factor", "false", "true", "numfmt", "seq", "sleep", "yes",
-		"sync",
+		"expr", "factor", "false", "printf", "true", "numfmt", "seq", "sleep",
+		"yes", "sync",
 	)
 
 	// read — reads filesystem, host state, or input data (the privacy surface).
