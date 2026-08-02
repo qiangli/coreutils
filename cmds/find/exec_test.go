@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
@@ -24,6 +25,13 @@ func TestMain(m *testing.M) {
 			for _, a := range os.Args[1:] {
 				fmt.Println(a)
 			}
+		}
+		// Optionally kill ourselves with a signal so the parent can
+		// assert the 128+signal exit-status mapping (no-op on Windows,
+		// which has no POSIX signals — the test that uses it is unix).
+		if s := os.Getenv("FIND_HELPER_SIGNAL"); s != "" {
+			n, _ := strconv.Atoi(s)
+			raiseSelfSignal(n)
 		}
 		code := 0
 		if s := os.Getenv("FIND_HELPER_EXIT"); s != "" {
@@ -180,6 +188,71 @@ func TestFindOk(t *testing.T) {
 		".", "-maxdepth", "1", "-type", "f", "-ok", bin, "{}", ";")
 	if out != "./a.txt\n" || code != 0 {
 		t.Errorf("-ok y,n,EOF: out=%q code=%d", out, code)
+	}
+}
+
+// TestFindExecPlusGrammar pins the strict POSIX grammar of the batched
+// '{} +' form: exactly one standalone '{}', immediately before '+', with
+// a preceding utility. Anything else is a usage error (exit 2), never a
+// silent pass of literal braces.
+func TestFindExecPlusGrammar(t *testing.T) {
+	dir := setupTree(t)
+	bin := helperBin(t)
+
+	bad := []struct {
+		desc string
+		args []string
+	}{
+		{"second standalone {}", []string{".", "-name", "a.txt", "-exec", bin, "{}", "{}", "+"}},
+		{"leading standalone {}", []string{".", "-name", "a.txt", "-exec", bin, "{}", "x", "{}", "+"}},
+		{"embedded {} in fixed arg", []string{".", "-name", "a.txt", "-exec", bin, "pre{}post", "{}", "+"}},
+		{"no utility before {}", []string{".", "-name", "a.txt", "-exec", "{}", "+"}},
+	}
+	for _, tc := range bad {
+		out, errb, code := runFindExec(t, dir, "", helperEnv(), tc.args...)
+		if code != 2 {
+			t.Errorf("%s: code=%d, want 2 (usage error); out=%q err=%q", tc.desc, code, out, errb)
+		}
+		if !strings.Contains(errb, "find") {
+			t.Errorf("%s: err=%q, want a find diagnostic", tc.desc, errb)
+		}
+		if out != "" {
+			t.Errorf("%s: produced output %q, want none", tc.desc, out)
+		}
+	}
+
+	// The one valid shape still works and batches every match once.
+	out, errb, code := runFindExec(t, dir, "", helperEnv(),
+		".", "-name", "*.go", "-exec", bin, "MARK", "{}", "+")
+	if out != "MARK\n./b.go\n./sub/deep/d.go\n" || code != 0 {
+		t.Errorf("valid {} +: out=%q code=%d err=%q", out, code, errb)
+	}
+}
+
+// TestOwnerCacheConcurrent exercises the per-invocation -nouser/-nogroup
+// lookup cache from many goroutines at once. Run under -race it proves
+// the cache is concurrency-safe (the former package-global maps were
+// unsynchronized). It also confirms fresh caches are independent, so a
+// lookup outcome cannot leak across unrelated find invocations.
+func TestOwnerCacheConcurrent(t *testing.T) {
+	oc := newOwnerCache()
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(base uint32) {
+			defer wg.Done()
+			for i := uint32(0); i < 256; i++ {
+				oc.nameExists(base+(i%32), i%2 == 0)
+			}
+		}(uint32(g) * 1000)
+	}
+	wg.Wait()
+
+	// A second cache shares no state with the first — the guarantee that
+	// replaced the leaky package globals.
+	other := newOwnerCache()
+	if &oc.uids == &other.uids || &oc.gids == &other.gids {
+		t.Fatal("newOwnerCache returned shared maps")
 	}
 }
 

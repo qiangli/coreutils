@@ -45,6 +45,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -168,6 +169,7 @@ func run(rc *tool.RunContext, args []string) int {
 		depthFirst: p.depthFirst, xdev: p.xdev,
 		follow: follow,
 		stdin:  bufio.NewReader(rc.In),
+		owners: newOwnerCache(),
 	}
 	if agentic {
 		w.matcher = ignore.New(rc.Dir)
@@ -440,10 +442,19 @@ func (p *parser) primary() (expr, error) {
 }
 
 // execArgs collects the utility name and arguments of -exec/-ok up to
-// the terminating ';' (or, for -exec, a '{}' immediately followed by
-// '+', per POSIX). The terminator is consumed; the returned template
-// includes the trailing '{}' in the + form.
+// the terminating ';' (or, for -exec, a standalone '{}' immediately
+// followed by '+', per POSIX). The terminator is consumed; the returned
+// template includes the trailing '{}' in the + form.
+//
+// POSIX grammar for the batched form is strict: a '+' terminates the
+// primary only when it immediately follows an argument that is exactly
+// "{}", and that standalone "{}" is the single aggregation point — there
+// must be a preceding utility and no other "{}" (standalone or embedded)
+// may appear among the fixed arguments. A '+' anywhere else is an
+// ordinary argument of the ';' form. Violations are rejected rather than
+// silently passing literal braces to the child.
 func (p *parser) execArgs(name string) (tmpl []string, plus bool, err error) {
+	start := p.i
 	for p.i < len(p.toks) {
 		t := p.toks[p.i]
 		if t == ";" {
@@ -453,12 +464,22 @@ func (p *parser) execArgs(name string) (tmpl []string, plus bool, err error) {
 			}
 			return tmpl, false, nil
 		}
-		if name == "-exec" && t == "{}" && p.i+1 < len(p.toks) && p.toks[p.i+1] == "+" {
-			p.i += 2
-			if len(tmpl) == 0 {
+		// Batched '{} +' terminator (only -exec has it; -ok does not).
+		if name == "-exec" && t == "+" && p.i > start && p.toks[p.i-1] == "{}" {
+			p.i++ // consume '+'
+			// tmpl currently ends with the standalone "{}"; everything
+			// before it is the utility plus its fixed arguments.
+			fixed := tmpl[:len(tmpl)-1]
+			if len(fixed) == 0 {
 				return nil, false, fmt.Errorf("missing argument to '%s'", name)
 			}
-			return append(tmpl, "{}"), true, nil
+			for _, a := range fixed {
+				if strings.Contains(a, "{}") {
+					return nil, false, fmt.Errorf(
+						"only one instance of '{}' is supported with -exec ... +, immediately before the terminating '+'")
+				}
+			}
+			return tmpl, true, nil
 		}
 		tmpl = append(tmpl, t)
 		p.i++
@@ -907,11 +928,6 @@ func (o *ownerExpr) eval(c *fctx) bool {
 // noOwnerExpr is -nouser/-nogroup: the file's numeric ID has no name.
 type noOwnerExpr struct{ group bool }
 
-var (
-	knownUIDs = map[uint32]bool{}
-	knownGIDs = map[uint32]bool{}
-)
-
 func (n *noOwnerExpr) eval(c *fctx) bool {
 	var id uint32
 	var ok bool
@@ -923,21 +939,45 @@ func (n *noOwnerExpr) eval(c *fctx) bool {
 	if !ok {
 		return false
 	}
-	cache := knownUIDs
-	if n.group {
-		cache = knownGIDs
+	return !c.w.owners.nameExists(id, n.group)
+}
+
+// ownerCache memoizes uid/gid → "a name resolves for this ID" lookups.
+// It is scoped to one find invocation (one walker), never package-global:
+// a transient name-service failure must not be cached as "no such name"
+// and then leak into an unrelated later run. The mutex keeps it safe if a
+// host ever evaluates the tree from more than one goroutine.
+type ownerCache struct {
+	mu   sync.Mutex
+	uids map[uint32]bool
+	gids map[uint32]bool
+}
+
+func newOwnerCache() *ownerCache {
+	return &ownerCache{uids: map[uint32]bool{}, gids: map[uint32]bool{}}
+}
+
+// nameExists reports whether id resolves to a user (or group) name,
+// memoizing the result for the lifetime of this cache.
+func (oc *ownerCache) nameExists(id uint32, group bool) bool {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	cache := oc.uids
+	if group {
+		cache = oc.gids
 	}
 	if known, seen := cache[id]; seen {
-		return !known
+		return known
 	}
 	var err error
-	if n.group {
+	if group {
 		_, err = user.LookupGroupId(strconv.FormatUint(uint64(id), 10))
 	} else {
 		_, err = user.LookupId(strconv.FormatUint(uint64(id), 10))
 	}
-	cache[id] = err == nil
-	return err != nil
+	known := err == nil
+	cache[id] = known
+	return known
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,7 +1084,13 @@ func (w *walker) runArgv(argv []string, isOK bool) (int, error) {
 		if code := ee.ExitCode(); code >= 0 {
 			return code, nil
 		}
-		return 128, nil // killed by signal
+		// Negative ExitCode means the child was terminated by a signal;
+		// report 128+signal per POSIX shell $? convention (portable
+		// helper: real mapping on unix, always false on windows).
+		if code, ok := signaledExitCode(ee.ProcessState); ok {
+			return code, nil
+		}
+		return 128, nil
 	}
 	if err != nil {
 		return 0, err
@@ -1053,11 +1099,14 @@ func (w *walker) runArgv(argv []string, isOK bool) (int, error) {
 }
 
 // lookCommand resolves a utility name against the invocation PATH
-// (rc.Env); names containing a separator resolve against rc.Dir.
+// (rc.Env). A name containing a path separator resolves against the
+// working directory (rc.Dir) and PATH is never consulted. Otherwise
+// each PATH element is searched; a zero-length element means the working
+// directory, per POSIX. An unset PATH falls back to the platform default
+// search path, while an explicitly empty PATH ("PATH=") is one
+// zero-length element — the working directory only — so the two are kept
+// distinct.
 func lookCommand(rc *tool.RunContext, name string) string {
-	if strings.ContainsAny(name, `/\`) {
-		return rc.Path(name)
-	}
 	isWindows := runtime.GOOS == "windows"
 	var exts []string
 	if isWindows {
@@ -1079,11 +1128,10 @@ func lookCommand(rc *tool.RunContext, name string) string {
 		}
 		return isWindows || fi.Mode()&0o111 != 0
 	}
-	for _, dir := range filepath.SplitList(rc.Getenv("PATH")) {
-		if dir == "" {
-			continue
+	resolve := func(cand string) string {
+		if !filepath.IsAbs(cand) {
+			cand = rc.Path(cand)
 		}
-		cand := filepath.Join(dir, name)
 		if checkFile(cand) {
 			return cand
 		}
@@ -1092,8 +1140,53 @@ func lookCommand(rc *tool.RunContext, name string) string {
 				return cand + ext
 			}
 		}
+		return ""
+	}
+
+	if strings.ContainsAny(name, `/\`) {
+		return resolve(name)
+	}
+
+	pathValue, present := lookupEnv(rc.Env, "PATH")
+	if !present {
+		pathValue = defaultCommandPath()
+	}
+	for _, dir := range commandSearchPath(pathValue) {
+		cand := name // zero-length element: search the working directory
+		if dir != "" {
+			cand = filepath.Join(dir, name)
+		}
+		if got := resolve(cand); got != "" {
+			return got
+		}
 	}
 	return ""
+}
+
+// commandSearchPath splits a PATH value into search prefixes. POSIX makes
+// a zero-length prefix mean the working directory, and a wholly empty
+// PATH is one zero-length prefix — not "nowhere to look" — so it searches
+// the working directory only. filepath.SplitList("") yields no elements,
+// hence the explicit case.
+func commandSearchPath(value string) []string {
+	dirs := filepath.SplitList(value)
+	if len(dirs) == 0 {
+		return []string{""}
+	}
+	return dirs
+}
+
+// lookupEnv reports a variable's value and whether it is present at all,
+// so an unset PATH (default search path) is distinguishable from an
+// explicitly empty one (working directory). Last assignment wins.
+func lookupEnv(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return env[i][len(prefix):], true
+		}
+	}
+	return "", false
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,6 +1203,7 @@ type walker struct {
 	errored    bool
 	stdin      *bufio.Reader
 	matcher    *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
+	owners     *ownerCache     // per-invocation -nouser/-nogroup lookup cache
 }
 
 func (w *walker) reportErr(display string, err error) {

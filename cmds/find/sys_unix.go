@@ -4,6 +4,7 @@ package findcmd
 
 import (
 	"io/fs"
+	"os"
 	"syscall"
 )
 
@@ -13,6 +14,19 @@ const (
 	haveSysStat = true
 	haveDev     = true
 )
+
+// defaultCommandPath is the -exec search path when PATH is unset (not
+// merely empty): POSIX's confstr(_CS_PATH) default, matching env's.
+func defaultCommandPath() string { return "/usr/bin:/bin" }
+
+// signaledExitCode maps a child killed by a signal onto the POSIX 128+N
+// wait-status convention. ok is false when the child was not signaled.
+func signaledExitCode(ps *os.ProcessState) (code int, ok bool) {
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal()), true
+	}
+	return 0, false
+}
 
 func statOf(info fs.FileInfo) (*syscall.Stat_t, bool) {
 	st, ok := info.Sys().(*syscall.Stat_t)
