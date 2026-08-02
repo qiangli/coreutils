@@ -105,7 +105,7 @@ Environment, system, misc:
 | echo | guonaihong, u-root | -n, -e, -E (the sh-shell builtin wins in-shell) |
 | yes | guonaihong, u-root | |
 | true / false | guonaihong, u-root | exemplars — already in tree |
-| env | aict, guonaihong | print, -i, -u, NAME=VALUE; **running COMMAND is NO for now** (process execution; revisits with the sh ExecHandler) |
+| env | aict, guonaihong | print, -i, -u, NAME=VALUE, `-`, `--`; runs COMMAND (command-wrapper tier — see the NO-list preamble): direct exec, no shell, POSIX PATH search (a zero-length prefix, including a wholly empty PATH, means the working directory), 126/127 lookup status, child killed with the invocation context |
 | printenv | u-root | |
 | date | u-root | strftime +FORMAT, -u, -d subset, -r; C locale |
 | sleep | guonaihong, u-root | suffixed durations, multiple args |
@@ -192,11 +192,10 @@ Remaining: ps (agent-useful, large cross-platform surface); file
 tool from spawning programs to *implement its own behavior* (cat never
 execs /bin/cat). **Command wrappers are the documented exception**:
 tools whose upstream-documented purpose IS running the COMMAND operand
-(timeout, time, watch, xargs — all shipped) spawn that command
+(env, timeout, time, watch, xargs — all shipped) spawn that command
 directly, exactly as the GNU binary does — that is the upstream
 semantics, not an implementation shortcut. Still NO (↻ = revisit):
 
-- env COMMAND ↻
 - kill — already a builtin in the qiangli/sh fork; a standalone would race it
 
 **Unix machinery with no cross-platform meaning:**

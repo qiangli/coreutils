@@ -2,6 +2,15 @@
 // print the environment, optionally modified by -i, -u NAME, and
 // NAME=VALUE assignments, or run a command in that environment.
 //
+// Running COMMAND is the upstream-documented purpose of env, so this is
+// one of the command wrappers exempted from the no-shell-out rule (see
+// docs/commands.md): the utility is invoked directly through exec, never
+// by concatenating a string for a shell. Exit status follows GNU: 126 if
+// COMMAND is found but cannot be invoked, 127 if it cannot be found, 125
+// if env itself fails, otherwise COMMAND's own status (128+N when it is
+// killed by a signal). Usage errors exit 2 per the repo-wide convention,
+// where GNU uses 125.
+//
 // Portions adapted from https://github.com/guonaihong/coreutils env/env.go (Apache-2.0).
 // Changes: rewired to the tool framework over RunContext.Env (no
 // os.Environ/os.Setenv globals); direct COMMAND execution; '-' first-
@@ -9,6 +18,7 @@
 package envcmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -247,7 +257,9 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 		return 127
 	}
 
-	c := exec.Command(path, argv[1:]...)
+	// argv is passed through element-for-element: no shell, no quoting, no
+	// concatenation, so metacharacters in an argument reach COMMAND as data.
+	c := exec.CommandContext(commandContext(rc), path, argv[1:]...)
 	if argv0 != "" {
 		c.Args[0] = argv0
 	}
@@ -292,7 +304,7 @@ func lookCommand(rc *tool.RunContext, name string, env []string) (string, bool) 
 		pathValue = defaultCommandPath()
 	}
 	var firstFound string
-	for _, dir := range filepath.SplitList(pathValue) {
+	for _, dir := range commandSearchPath(pathValue) {
 		if dir == "" {
 			dir = "."
 		}
@@ -313,6 +325,29 @@ func lookCommand(rc *tool.RunContext, name string, env []string) (string, bool) 
 		}
 	}
 	return firstFound, firstFound != ""
+}
+
+// commandSearchPath splits a PATH value into search prefixes. POSIX makes a
+// zero-length prefix mean the working directory, and a PATH that is entirely
+// empty is one zero-length prefix — not "nowhere to look" — so an empty PATH
+// searches the working directory only. filepath.SplitList("") returns no
+// elements at all, hence the explicit case.
+func commandSearchPath(value string) []string {
+	dirs := filepath.SplitList(value)
+	if len(dirs) == 0 {
+		return []string{""}
+	}
+	return dirs
+}
+
+// commandContext ties COMMAND's lifetime to the invocation context, so a
+// host cancelling the tool kills the child instead of leaking it. Hosts that
+// leave Ctx nil get an uncancellable child rather than a panic.
+func commandContext(rc *tool.RunContext) context.Context {
+	if rc.Ctx == nil {
+		return context.Background()
+	}
+	return rc.Ctx
 }
 
 func commandDebugArgv(argv0 string, operands []string) []string {
