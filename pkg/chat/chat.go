@@ -22,6 +22,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/capability"
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
+	"github.com/qiangli/coreutils/pkg/recall"
 	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/telemetry"
 	"github.com/spf13/cobra"
@@ -878,6 +879,24 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		if d.Action == llmbudget.Block {
 			return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 75}, fmt.Errorf("chat: LLM budget blocked %s: %s", lnch.Binding(), d.Reason)
 		}
+	}
+	// KNOWLEDGE INJECTION (stage 1 of the agent turn — see
+	// dhnt/docs/agent-turn-lifecycle-and-verb-map.md). Off unless
+	// BASHY_KNOWLEDGE=on, because this is the treatment arm of an experiment
+	// whose result is not in yet: making it the default would both change every
+	// agent's behaviour on an unproven feature AND destroy the control arm.
+	//
+	// It goes HERE rather than in agentCommand because a preamble must precede
+	// the prompt, and this is the site where the prompt is still a separate
+	// string. ArgvPrefixWithWorkspace guarantees {prompt} is the trailing token
+	// for every tool that reaches this path, so prefixing the prompt text is
+	// safe across all of them — including `aider --message {prompt}`, where
+	// appending anything AFTER the prompt would be consumed by the flag.
+	//
+	// Best-effort by construction: a memory lookup must never stop an agent from
+	// starting, so an unreadable ring yields "" and the launch is unchanged.
+	if pre := recall.PreambleForHost(prompt); pre != "" {
+		prompt = pre + prompt
 	}
 	args := append(lnch.Args, prompt)
 	cwd := opt.Cwd
