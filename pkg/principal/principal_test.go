@@ -168,8 +168,12 @@ func TestSelfDetectionYieldsToolNotAgent(t *testing.T) {
 // name directly, and detection honors them — but they still yield a TOOL, not
 // a fabricated agent nickname.
 func TestSelfHonorsTheNameValuedConvention(t *testing.T) {
+	// Clear all higher-priority ambient detector variables to isolate the
+	// test, matching TestSelfUnattributed's exhaustive list.
 	for _, k := range []string{"BASHY_PRINCIPAL", "BASHY_AGENT_ID", "BASHY_AGENT", "WEAVE_AGENT",
-		"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "AGENT"} {
+		"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID",
+		"OPENCODE_CLIENT", "GEMINI_CLI", "CURSOR_AGENT", "CURSOR_TRACE_ID", "GOOSE_TERMINAL", "CLINE_ACTIVE",
+		"AGENT"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("AI_AGENT", "amp")
