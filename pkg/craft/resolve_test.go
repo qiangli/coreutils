@@ -207,3 +207,48 @@ func TestIndex_LimitRespected(t *testing.T) {
 		t.Errorf("got %d matches, want 1", len(got))
 	}
 }
+
+// TestIndex_BindingIsACue is the regression for the gap decomposition opened.
+//
+// Decomposing a skill into dhnt predicates replaced English step names with
+// encoded ones (`fanouto`), so the shipped conductor skill became unfindable by
+// any question a human would actually ask — while its own binding read
+// `bashy weave fleet`. The English lives in the bindings now, so that is where
+// it has to be searched.
+func TestIndex_BindingIsACue(t *testing.T) {
+	ix := NewIndex([]Implementation{
+		impl(t, "conductor",
+			"sokilili gosana efefecato reada wurite fini enisure coniverogeda fini sotepo fanouto fanouto fini fini",
+			"decompose isolate gate converge",
+			map[string]string{"step-fanouto": "bashy weave fleet --auth && bashy weave start"}),
+	})
+	// Phrased in the binding's own vocabulary. NOT a paraphrase: the relevance
+	// floor still requires more than half the question to be accounted for, and
+	// no lexical index can cover a wording that shares no words with the record
+	// — that is the L2 similarity gap, unbuilt by design, not something to fix
+	// by lowering the floor (which exists because one incidental word once
+	// returned a Go build gate for "ssh into a machine").
+	got := ix.Resolve(Query{Text: "start a weave fleet"})
+	if len(got) == 0 {
+		t.Fatal("a question in the binding's own words found nothing; bindings are not being indexed")
+	}
+	if got[0].Name != "conductor" {
+		t.Fatalf("want conductor, got %q", got[0].Name)
+	}
+}
+
+// TestIndex_HarnessNameIsNotACue guards the precision half. Every binding in this
+// catalog begins with the same harness, so if argv[0] were indexed that one word
+// would match every capability, inflate coverage, and carry incidental matches
+// through the relevance floor — the exact failure the floor exists to stop.
+func TestIndex_HarnessNameIsNotACue(t *testing.T) {
+	ix := NewIndex([]Implementation{
+		impl(t, "unrelated",
+			"sokilili gosana efefecato reada fini enisure gereeni fini sotepo taso loge fini fini",
+			"something else entirely",
+			map[string]string{"step-taso": "bashy weave status"}),
+	})
+	if got := ix.Resolve(Query{Text: "bashy"}); len(got) != 0 {
+		t.Fatalf("the harness name matched %d capabilities; it must discriminate nothing", len(got))
+	}
+}

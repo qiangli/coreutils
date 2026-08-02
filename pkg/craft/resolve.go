@@ -153,6 +153,7 @@ const (
 	wName      = 4.0
 	wDesc      = 3.0
 	wPredicate = 3.0
+	wBinding   = 2.0 // below description: a binding is how, not what is guaranteed
 	wEffect    = 1.0
 	wExact     = 100.0 // an exact name match outranks everything
 )
@@ -244,6 +245,24 @@ func (ix *Index) score(c *Capability, q Query, terms []string) (Match, bool) {
 				hit = true
 			}
 		}
+		// BINDINGS ARE CUES. A decomposed skill states its steps as dhnt
+		// predicates (`fanouto`, `coniveroge`) which no English question will
+		// ever contain, so decomposition made two shipped skills LESS findable
+		// than the prose they replaced: `find "fan out work to a fleet"` missed
+		// a capability whose own binding reads `bashy weave fleet`. The English
+		// survives in the bindings, so that is where it is searched.
+		if anyImpl(c, func(im Implementation) bool {
+			for _, cmd := range im.Bindings {
+				if fieldHas(bindingCue(cmd), t) {
+					return true
+				}
+			}
+			return false
+		}) {
+			score += wBinding
+			why = appendOnce(why, "binding")
+			hit = true
+		}
 		if hit {
 			covered++
 		}
@@ -280,6 +299,30 @@ func (ix *Index) score(c *Capability, q Query, terms []string) (Match, bool) {
 		Covered:      covered,
 		Alternatives: len(c.Implementations) - 1,
 	}, true
+}
+
+// bindingCue reduces a bound command to its discriminating words.
+//
+// It drops the PROGRAM NAME of every pipeline segment. Nearly every binding in
+// this catalog starts with the same harness (`bashy …`), so indexing argv[0]
+// would make one word match every capability at once — it would inflate `covered`
+// and walk incidental matches straight through the relevance floor, which is the
+// exact failure the floor was built to stop. argv[0] names the harness; the
+// subcommand and its arguments name the capability, and those are kept.
+func bindingCue(cmd string) string {
+	var keep []string
+	for _, seg := range strings.FieldsFunc(cmd, func(r rune) bool {
+		return r == '|' || r == ';' || r == '&' || r == '\n'
+	}) {
+		f := strings.Fields(seg)
+		if len(f) < 2 {
+			continue // a bare program name carries nothing to search
+		}
+		for _, w := range f[1:] {
+			keep = append(keep, strings.TrimLeft(w, "-"))
+		}
+	}
+	return strings.Join(keep, " ")
 }
 
 func anyImpl(c *Capability, pred func(Implementation) bool) bool {
