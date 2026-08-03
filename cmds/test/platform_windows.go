@@ -23,7 +23,7 @@ const defaultPathExt = ".COM;.EXE;.BAT;.CMD"
 // the file may very well be owned by the caller.
 var errNoOwnership = errors.New("file ownership tests need POSIX uid/gid, which windows does not have")
 
-func ownedByEffective(string, bool) (bool, error) { return false, errNoOwnership }
+func ownedByEffective(*tool.RunContext, string, bool) (bool, error) { return false, errNoOwnership }
 
 // accessOK answers -r/-w/-x with the Windows notions of the three
 // permissions: everything that can be stat'ed can be read; writability
@@ -31,8 +31,13 @@ func ownedByEffective(string, bool) (bool, error) { return false, errNoOwnership
 // and executability is directory search, or an extension listed in
 // PATHEXT — the same rule RunContext.ResolveExecutable applies, and the
 // rule Windows uses to decide what it will run.
-func accessOK(rc *tool.RunContext, path string, op byte) (bool, error) {
-	fi, err := os.Stat(path)
+//
+// Resolution goes through statOperand rather than a plain os.Stat on
+// the joined path, so a long-but-valid working directory does not turn
+// a reachable relative operand into an unreachable one — see
+// openOperandDir's doc comment for why the plain join can fail here.
+func accessOK(rc *tool.RunContext, operand string, op byte) (bool, error) {
+	fi, err := statOperand(rc, operand)
 	if err != nil {
 		return false, nil
 	}
@@ -45,7 +50,7 @@ func accessOK(rc *tool.RunContext, path string, op byte) (bool, error) {
 		if fi.IsDir() {
 			return true, nil
 		}
-		ext := filepath.Ext(path)
+		ext := filepath.Ext(operand)
 		if ext == "" {
 			return false, nil
 		}
@@ -63,8 +68,8 @@ func accessOK(rc *tool.RunContext, path string, op byte) (bool, error) {
 }
 
 // fileTimes returns the access and modification times for -N.
-func fileTimes(path string) (atime, mtime time.Time, err error) {
-	fi, err := os.Stat(path)
+func fileTimes(rc *tool.RunContext, operand string) (atime, mtime time.Time, err error) {
+	fi, err := statOperand(rc, operand)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -205,5 +206,90 @@ func TestFifoAndSocketPrimaries(t *testing.T) {
 		if _, errb, code := runIn(t, cmd, dir, c.op, "sock"); code != c.want || errb != "" {
 			t.Errorf("test %s sock = (%q, %d), want %d", c.op, errb, code, c.want)
 		}
+	}
+}
+
+// TestFilePrimariesLongWorkingDirectory is the PATH_MAX conformance
+// case: a working directory built one short component at a time (every
+// step a valid, individually short mkdir, exactly like a shell's own
+// cd) can legitimately reach unix.PathMax in length. Joining that
+// directory with even a short relative operand into one materialized
+// absolute string can then exceed PathMax, even though the file is
+// perfectly reachable via a plain relative stat from the already-valid
+// directory — the lookup GNU's own libc call performs, which never
+// needs to build that string at all. Every primary that resolves a
+// path must retry against the directory itself rather than silently
+// reporting "false" for a file that does exist.
+func TestFilePrimariesLongWorkingDirectory(t *testing.T) {
+	// Resolve the platform temp dir's own symlinks (e.g. macOS's
+	// /var -> /private/var) up front: growing the *unresolved* form to
+	// just under PathMax would silently overrun once the kernel expands
+	// that prefix during lookup — a real but different limit than the
+	// one under test here.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Grown by os.Chdir + a relative os.Mkdir at every step — exactly
+	// like a shell's own `mkdir x && cd x` — so the setup itself never
+	// materializes an overlong absolute string either.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	mkdirChdir := func(name string) {
+		t.Helper()
+		if err := os.Mkdir(name, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.Chdir(name); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		dir = filepath.Join(dir, name)
+	}
+
+	comp := strings.Repeat("a", 40)
+	// Grow one component at a time while there is still room for
+	// another full one plus the eventual "/file" suffix.
+	for len(dir)+1+len(comp)+1+len("file") < unix.PathMax {
+		mkdirChdir(comp)
+	}
+	// Top up with a final, precisely-sized component so the directory
+	// itself lands just 2 bytes short of PathMax: still valid and
+	// reachable on its own, but joining it with "/file" overruns.
+	want := unix.PathMax - 2
+	if extra := want - len(dir) - 1; extra > 0 {
+		mkdirChdir(strings.Repeat("a", extra))
+	}
+	// The setup only proves anything if the naively-joined absolute
+	// path actually exceeds PathMax; the directory itself must still be
+	// valid (reachable) on its own.
+	joined := filepath.Join(dir, "file")
+	if len(joined) <= unix.PathMax {
+		t.Fatalf("setup: joined path len %d does not exceed PathMax %d", len(joined), unix.PathMax)
+	}
+	if len(dir) >= unix.PathMax {
+		t.Fatalf("setup: working directory itself len %d already exceeds PathMax %d", len(dir), unix.PathMax)
+	}
+	if err := os.WriteFile("file", []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	for _, op := range []string{"-e", "-f", "-r", "-w", "-s"} {
+		if _, errb, code := runIn(t, cmd, dir, op, "file"); code != statusTrue || errb != "" {
+			t.Errorf("test %s file (long working directory) = (%q, %d), want (\"\", 0)", op, errb, code)
+		}
+	}
+	if _, errb, code := runIn(t, cmd, dir, "-d", "."); code != statusTrue || errb != "" {
+		t.Errorf("test -d . (long working directory) = (%q, %d), want (\"\", 0)", errb, code)
+	}
+	if _, errb, code := runIn(t, cmd, dir, "file", "-ef", "file"); code != statusTrue || errb != "" {
+		t.Errorf("test file -ef file (long working directory) = (%q, %d), want (\"\", 0)", errb, code)
 	}
 }

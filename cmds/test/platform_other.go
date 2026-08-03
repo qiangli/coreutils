@@ -19,9 +19,11 @@ func accessOK(_ *tool.RunContext, _ string, _ byte) (bool, error) {
 	return false, errUnsupportedPlatform
 }
 
-func ownedByEffective(string, bool) (bool, error) { return false, errUnsupportedPlatform }
+func ownedByEffective(*tool.RunContext, string, bool) (bool, error) {
+	return false, errUnsupportedPlatform
+}
 
-func fileTimes(string) (atime, mtime time.Time, err error) {
+func fileTimes(*tool.RunContext, string) (atime, mtime time.Time, err error) {
 	return time.Time{}, time.Time{}, errUnsupportedPlatform
 }
 

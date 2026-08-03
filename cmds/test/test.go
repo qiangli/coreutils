@@ -66,6 +66,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
@@ -490,12 +491,12 @@ func (p *parser) binaryOperator() bool {
 			return c >= 0
 		}
 	case "-ef":
-		li, lerr := os.Stat(p.rc.Path(left))
-		ri, rerr := os.Stat(p.rc.Path(right))
+		li, lerr := statOperand(p.rc, left)
+		ri, rerr := statOperand(p.rc, right)
 		return lerr == nil && rerr == nil && os.SameFile(li, ri)
 	case "-nt", "-ot":
-		li, lerr := os.Stat(p.rc.Path(left))
-		ri, rerr := os.Stat(p.rc.Path(right))
+		li, lerr := statOperand(p.rc, left)
+		ri, rerr := statOperand(p.rc, right)
 		if op == "-nt" {
 			// True when FILE1 is newer, or when FILE1 exists and FILE2
 			// does not.
@@ -559,26 +560,24 @@ func (p *parser) terminalTest(operand string) bool {
 // fileTest applies a single-letter file primary to operand, resolved
 // against the invocation working directory.
 func (p *parser) fileTest(op byte, operand string) bool {
-	path := p.rc.Path(operand)
-
 	switch op {
 	case 'h', 'L':
-		fi, err := os.Lstat(path)
+		fi, err := lstatOperand(p.rc, operand)
 		return err == nil && fi.Mode()&os.ModeSymlink != 0
 	case 'r', 'w', 'x':
-		ok, err := accessOK(p.rc, path, op)
+		ok, err := accessOK(p.rc, operand, op)
 		if err != nil {
 			p.fail("-%c: %v", op, err)
 		}
 		return ok
 	case 'O', 'G':
-		owned, err := ownedByEffective(path, op == 'G')
+		owned, err := ownedByEffective(p.rc, operand, op == 'G')
 		if err != nil {
 			p.fail("-%c: %v", op, err)
 		}
 		return owned
 	case 'N':
-		atime, mtime, err := fileTimes(path)
+		atime, mtime, err := fileTimes(p.rc, operand)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return false
@@ -590,7 +589,7 @@ func (p *parser) fileTest(op byte, operand string) bool {
 
 	// The remaining primaries are pure stat questions; every one of them
 	// is false when the file does not exist.
-	fi, err := os.Stat(path)
+	fi, err := statOperand(p.rc, operand)
 	if err != nil {
 		return false
 	}
@@ -622,4 +621,67 @@ func (p *parser) fileTest(op byte, operand string) bool {
 	// unaryOps gates every caller, so this is a programming error.
 	p.fail("-%c: unary operator expected", op)
 	return false
+}
+
+// openOperandDir opens rc.Dir for a directory-relative retry. It exists
+// because rc.Path joins a relative operand onto rc.Dir into one
+// materialized absolute string: a working directory that is itself long
+// but individually valid (every component was created and entered one
+// step at a time, exactly as a shell's cd does) can, once a further
+// operand is appended, produce a string that exceeds the platform's
+// path-length limit even though the file is perfectly reachable — a
+// plain relative lookup from the already-open directory never needs
+// that string at all. Only a relative operand can benefit: an absolute
+// operand names an exact location with nothing to resolve against
+// rc.Dir.
+func openOperandDir(rc *tool.RunContext, operand string) (*os.File, bool) {
+	if !canRetryAgainstDir(rc, operand) {
+		return nil, false
+	}
+	f, err := os.Open(rc.Dir)
+	if err != nil {
+		return nil, false
+	}
+	return f, true
+}
+
+// canRetryAgainstDir reports whether operand is a relative name that a
+// directory-handle retry could help with — see openOperandDir.
+func canRetryAgainstDir(rc *tool.RunContext, operand string) bool {
+	return rc.Dir != "" && !filepath.IsAbs(operand)
+}
+
+// statOperand resolves operand the way rc.Path + os.Stat always have,
+// then — only on failure, and only for a relative operand — retries via
+// os.Root, which resolves each name against an already-open directory
+// handle instead of a materialized absolute string. See
+// openOperandDir for why the plain join can fail where GNU's test would
+// not.
+func statOperand(rc *tool.RunContext, operand string) (os.FileInfo, error) {
+	fi, err := os.Stat(rc.Path(operand))
+	if err == nil || !canRetryAgainstDir(rc, operand) {
+		return fi, err
+	}
+	if root, rerr := os.OpenRoot(rc.Dir); rerr == nil {
+		defer root.Close()
+		if fi2, err2 := root.Stat(operand); err2 == nil {
+			return fi2, nil
+		}
+	}
+	return fi, err
+}
+
+// lstatOperand is statOperand for the symlink-preserving primaries (-h/-L).
+func lstatOperand(rc *tool.RunContext, operand string) (os.FileInfo, error) {
+	fi, err := os.Lstat(rc.Path(operand))
+	if err == nil || !canRetryAgainstDir(rc, operand) {
+		return fi, err
+	}
+	if root, rerr := os.OpenRoot(rc.Dir); rerr == nil {
+		defer root.Close()
+		if fi2, err2 := root.Lstat(operand); err2 == nil {
+			return fi2, nil
+		}
+	}
+	return fi, err
 }
