@@ -1,0 +1,25 @@
+name: opus4.6
+family: opus
+version: "4.6"
+band: 3
+band_source: declared
+# declared, NOT operator: this host has run it through no gate. It is banded L3
+# by FAMILY POSITION — the claude ladder is haiku L1, sonnet L2, opus L3, fable
+# L4, and 4.6 is a previous-generation opus, so L3 is the ladder's answer rather
+# than a judgement about this model. A gated run moves it; a version number does
+# not.
+display: Claude Opus 4.6 (Thinking)
+provider: anthropic
+kind: subscription
+# Reachable on this host ONLY through agy, which serves Anthropic models to
+# Free/Pro/Ultra plans (antigravity.google/docs/models; Enterprise plans do not
+# get them). Keyed under `ids` rather than a bare `model:` because this id is
+# agy's spelling — if the same model later arrives through the claude tool it
+# will carry a different one, and a bare field would have to be rewritten.
+#
+# Verified accepted on the wire 2026-08-02:
+#   $ agy --model claude-opus-4-6-thinking -p "reply with exactly: OK"  -> OK
+ids:
+  agy: claude-opus-4-6-thinking
+quality: 0.90
+cost_micro: 15000
