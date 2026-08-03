@@ -178,34 +178,41 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 				Provider: strings.TrimSpace(provider),
 				Family:   strings.TrimSpace(family), Version: strings.TrimSpace(version),
 			}
+			from := BoardIdentity(as)
+			body := strings.Join(args, " ")
 			if !aud.Empty() {
 				// ONE post carrying the selector — not one per member. See
 				// Post.Audience: expanding made the board grow with the size of
 				// the audience.
 				if err := PostMessage(Post{
-					From: BoardIdentity(as), Audience: &aud, Topic: topic, Body: strings.Join(args, " "),
+					From: from, Audience: &aud, Topic: topic, Body: body,
 				}); err != nil {
 					return err
 				}
-				reach := "no agent currently matches — the post stands and will reach whoever does"
+				var ds []Delivery
 				if FleetSelect != nil {
-					if names, ferr := FleetSelect(aud); ferr == nil && len(names) > 0 {
-						reach = fmt.Sprintf("%d agent(s) match now: %s", len(names), strings.Join(names, ", "))
+					if names, ferr := FleetSelect(aud); ferr == nil {
+						for _, n := range names {
+							ds = append(ds, SteerLive(n, steerNotice(from, body)))
+						}
 					}
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s — %s\n", aud.describe(), reach)
+				fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s\n", aud.describe())
+				reportDelivery(cmd, ds)
 				return nil
 			}
 			if len(args) < 2 {
 				return fmt.Errorf("mb send: name an agent, or pass a selector (--band/--tool/--provider/--family/--version)")
 			}
 			to := strings.TrimSpace(args[0])
-			if err := PostMessage(Post{
-				From: BoardIdentity(as), To: to, Topic: topic, Body: strings.Join(args[1:], " "),
-			}); err != nil {
+			body = strings.Join(args[1:], " ")
+			// Board FIRST, steer second. The durable copy is the one that must
+			// not be optional: steering first would lose the message entirely
+			// if the post failed.
+			if err := PostMessage(Post{From: from, To: to, Topic: topic, Body: body}); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s — they will see it with `bashy mb`\n", to)
+			reportDelivery(cmd, []Delivery{SteerLive(to, steerNotice(from, body))})
 			return nil
 		},
 	}
@@ -242,16 +249,55 @@ Use 'mb send <agent>' when exactly one agent needs to act. A broadcast everybody
 must read is how a board becomes noise nobody reads.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := PostMessage(Post{
-				From: BoardIdentity(as), Topic: topic, Body: strings.Join(args, " "),
-			}); err != nil {
+			from := BoardIdentity(as)
+			body := strings.Join(args, " ")
+			if err := PostMessage(Post{From: from, Topic: topic, Body: body}); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.ErrOrStderr(), "posted to the board — everyone will see it with `bashy mb`")
+			fmt.Fprintln(cmd.ErrOrStderr(), "posted to the board")
+			if FleetNames != nil {
+				var ds []Delivery
+				for _, n := range FleetNames() {
+					ds = append(ds, SteerLive(n, steerNotice(from, body)))
+				}
+				reportDelivery(cmd, ds)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&topic, "topic", "mb", "topic label for the post")
 	cmd.Flags().StringVar(&as, "as", "", "sender identity (default: your principal)")
 	return cmd
+}
+
+// steerNotice is what a live agent actually receives. It says where the message
+// came from and that the durable copy exists, so an agent interrupted mid-turn
+// can defer it without losing it.
+func steerNotice(from, body string) string {
+	return "[mb] from " + from + ": " + body + "\n(also on the board — `bashy mb`)"
+}
+
+// reportDelivery tells the sender which tier reached whom.
+//
+// Both outcomes are successes and they are different successes: `steered` means
+// the agent has it in hand this turn, `posted` means it will see it when it next
+// looks. Collapsing them into one "sent" is the failure this whole line of work
+// keeps removing — a sender that cannot tell immediate from eventual will assume
+// the wrong one.
+func reportDelivery(cmd *cobra.Command, ds []Delivery) {
+	var steered, waiting []string
+	for _, d := range ds {
+		if d.Steered {
+			steered = append(steered, d.To)
+		} else {
+			waiting = append(waiting, d.To)
+		}
+	}
+	w := cmd.ErrOrStderr()
+	if len(steered) > 0 {
+		fmt.Fprintf(w, "  steered now (live session): %s\n", strings.Join(steered, ", "))
+	}
+	if len(waiting) > 0 {
+		fmt.Fprintf(w, "  waiting on the board for: %s\n", strings.Join(waiting, ", "))
+	}
 }

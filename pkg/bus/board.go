@@ -45,6 +45,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/agentpty"
+	"github.com/qiangli/coreutils/pkg/room"
 )
 
 // BoardSchema versions the on-disk post record.
@@ -369,4 +372,68 @@ const DefaultBoardLimit = 5
 // describe renders a selector for a confirmation line.
 func (a Audience) describe() string {
 	return Post{Audience: &a}.Audiences()
+}
+
+// --- the push tier: reach a live session immediately ------------------------
+
+// Delivery reports how far a post got for one recipient.
+//
+// The distinction is the whole point of having two tiers: `steered` means the
+// message is in the agent's input and it will act on it this turn; `posted`
+// means it is on the board and the agent will see it when it next looks. Both
+// are successes and they are NOT the same success, so the sender is told which.
+type Delivery struct {
+	To      string `json:"to"`
+	Steered bool   `json:"steered"`
+	Reason  string `json:"reason,omitempty"` // why it could not be steered
+}
+
+// SteerLive injects text into a recipient's live session when it has one.
+//
+// GRACEFUL DEGRADATION, in one direction only. A bashy-launched agent has a
+// control socket, so it can be reached NOW; a raw-launched TUI has none, and no
+// amount of trying changes that — writing to its tty would paint its display
+// without reaching its reasoning, which is why that path is deliberately absent
+// (see pkg/ctty: the tty reaches the HUMAN, never the agent).
+//
+// So this is best-effort by construction: the board post has already happened
+// before it is called, and a failure here costs immediacy, never the message.
+// That ordering is not incidental — steering first and posting second would
+// lose the message entirely if the post failed, and the durable copy is the one
+// that must not be optional.
+func SteerLive(agent, text string) Delivery {
+	d := Delivery{To: agent}
+	members, err := room.Members()
+	if err != nil {
+		d.Reason = "no session registry"
+		return d
+	}
+	for _, c := range members {
+		if !strings.EqualFold(c.ID, agent) && !strings.EqualFold(c.Binding, agent) {
+			continue
+		}
+		if strings.TrimSpace(c.CtlSock) == "" {
+			// A shell-only presence card: running under bashy but not launched
+			// by it, so there is no socket. This is the common case for a TUI
+			// the operator started, and it is why the board exists.
+			d.Reason = "session has no control socket (not bashy-launched)"
+			return d
+		}
+		if serr := SteerFrame(c.CtlSock, text); serr != nil {
+			d.Reason = serr.Error()
+			return d
+		}
+		d.Steered = true
+		_ = room.Emit(room.Event{Type: room.EventSteer, Target: c.ID, Body: text})
+		return d
+	}
+	d.Reason = "not running"
+	return d
+}
+
+// SteerFrame writes a text frame to a control socket. Injected so pkg/bus does
+// not depend on the pty layer's transport details, and so a test can observe a
+// steer without a live agent on the other end.
+var SteerFrame = func(sock, text string) error {
+	return agentpty.SendFrame(sock, agentpty.TextFrame(text))
 }
