@@ -72,6 +72,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/install"
 	_ "github.com/qiangli/coreutils/cmds/join"
 	_ "github.com/qiangli/coreutils/cmds/jq"
+	_ "github.com/qiangli/coreutils/cmds/kill"
 	_ "github.com/qiangli/coreutils/cmds/link"
 	_ "github.com/qiangli/coreutils/cmds/ln"
 	_ "github.com/qiangli/coreutils/cmds/logname"
