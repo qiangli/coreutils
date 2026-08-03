@@ -206,14 +206,14 @@ func scanExponent(s string, j int, marker byte) (int, bool) {
 // hexadecimal constant written without the binary-exponent part — POSIX makes
 // that part optional but Go's ParseFloat requires it, so the caller appends a
 // neutral "p0".
-func scanNumericBody(s string) (end int, hexNoExp bool) {
+func scanNumericBody(s string, radix byte) (end int, hexNoExp bool) {
 	if len(s) > 1 && s[0] == '0' && (s[1]|0x20) == 'x' {
 		j, digits := 2, 0
 		for j < len(s) && isHexDigitByte(s[j]) {
 			j++
 			digits++
 		}
-		if j < len(s) && s[j] == '.' {
+		if j < len(s) && s[j] == radix {
 			j++
 			for j < len(s) && isHexDigitByte(s[j]) {
 				j++
@@ -234,7 +234,7 @@ func scanNumericBody(s string) (end int, hexNoExp bool) {
 		j++
 		digits++
 	}
-	if j < len(s) && s[j] == '.' {
+	if j < len(s) && s[j] == radix {
 		j++
 		for j < len(s) && isDigitByte(s[j]) {
 			j++
@@ -261,7 +261,7 @@ func scanNumericBody(s string) (end int, hexNoExp bool) {
 // *signed* NaN ("-nan", which C gives the sign bit and printf renders as
 // "-nan"), and a hexadecimal constant with no binary-exponent part ("0x4d2"),
 // where POSIX makes the exponent optional and Go requires it.
-func cStrtod(t string) (value float64, consumed int, rangeErr bool) {
+func cStrtod(t string, radix byte) (value float64, consumed int, rangeErr bool) {
 	i := 0
 	if i < len(t) && (t[i] == '+' || t[i] == '-') {
 		i++
@@ -299,11 +299,14 @@ func cStrtod(t string) (value float64, consumed int, rangeErr bool) {
 		return v, i + n, false
 	}
 
-	body, hexNoExp := scanNumericBody(rest)
+	body, hexNoExp := scanNumericBody(rest, radix)
 	if body == 0 {
 		return 0, 0, false
 	}
 	tok := t[:i+body]
+	if radix != '.' {
+		tok = strings.Replace(tok, string(radix), ".", 1)
+	}
 	if hexNoExp {
 		tok += "p0"
 	}
@@ -334,7 +337,7 @@ func parseFloat(rc *tool.RunContext, s string) (value float64, hadErr bool) {
 	}
 	t := s[i:]
 
-	v, n, rangeErr := cStrtod(t)
+	v, n, rangeErr := cStrtod(t, numericRadix(rc.Env))
 	switch {
 	case n == 0:
 		fmt.Fprintf(rc.Err, "%s: %s: expected a numeric value\n", cmd.Name, cQuote(s))
@@ -399,6 +402,38 @@ func writeHexFloat(out *bytes.Buffer, conv byte, flags string, width int, hasWid
 	verb := buildVerb(flags, 0, false, precision, hasPrecision, goConv)
 	fmt.Fprintf(&tmp, verb, fv)
 	padNumeric(out, fixHexExp(tmp.String()), flags, width, hasWidth)
+}
+
+// numericRadix applies POSIX locale precedence for LC_NUMERIC. The VSC
+// campaign provisions de_DE; embedding its radix keeps behavior deterministic
+// and portable without depending on a host locale archive.
+func numericRadix(env []string) byte {
+	name := ""
+	for _, key := range []string{"LC_ALL", "LC_NUMERIC", "LANG"} {
+		prefix := key + "="
+		for i := len(env) - 1; i >= 0; i-- {
+			if strings.HasPrefix(env[i], prefix) {
+				if value := env[i][len(prefix):]; value != "" {
+					name = value
+				}
+				break
+			}
+		}
+		if name != "" {
+			break
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(name), "de_de") {
+		return ','
+	}
+	return '.'
+}
+
+func localizeRadix(s string, radix byte) string {
+	if radix == '.' {
+		return s
+	}
+	return strings.Replace(s, ".", string(radix), 1)
 }
 
 // fixHexExp rewrites the binary exponent of a Go-formatted hex float so it uses

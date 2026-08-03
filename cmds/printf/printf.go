@@ -267,14 +267,18 @@ func formatOnce(rc *tool.RunContext, out *bytes.Buffer, format string, values []
 					// "+Inf"/"NaN".
 					writeNonFinite(out, conv, flags, width, hasWidth, fv)
 				case conv == 'a' || conv == 'A':
-					writeHexFloat(out, conv, flags, width, hasWidth, precision, hasPrecision, fv)
+					var localized bytes.Buffer
+					writeHexFloat(&localized, conv, flags, width, hasWidth, precision, hasPrecision, fv)
+					out.WriteString(localizeRadix(localized.String(), numericRadix(rc.Env)))
 				default:
 					if conv == 'g' || conv == 'G' {
 						if !hasPrecision {
 							hasPrecision, precision = true, 6
 						}
 					}
-					writeGoNumeric(out, string(conv), flags, width, hasWidth, precision, hasPrecision, fv)
+					var localized bytes.Buffer
+					writeGoNumeric(&localized, string(conv), flags, width, hasWidth, precision, hasPrecision, fv)
+					out.WriteString(localizeRadix(localized.String(), numericRadix(rc.Env)))
 				}
 			default:
 				diagInvalidConversion(rc, format[specStart:i])

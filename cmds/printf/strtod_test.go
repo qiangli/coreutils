@@ -5,6 +5,32 @@ import (
 	"testing"
 )
 
+func TestPrintfLCNumericRadix(t *testing.T) {
+	cases := []struct {
+		name string
+		env  []string
+		arg  string
+		fmt  string
+		want string
+	}{
+		{"lc-numeric", []string{"LANG=POSIX", "LC_NUMERIC=de_DE.iso88591"}, "1234,5", "%.1f", "1234,5"},
+		{"lang", []string{"LANG=de_DE.iso88591"}, "1234,5", "%.1f", "1234,5"},
+		{"lc-all", []string{"LANG=POSIX", "LC_NUMERIC=POSIX", "LC_ALL=de_DE.iso88591"}, "1234,5", "%.1f", "1234,5"},
+		{"lc-all-overrides", []string{"LANG=de_DE.iso88591", "LC_NUMERIC=de_DE.iso88591", "LC_ALL=POSIX"}, "1234.5", "%.1f", "1234.5"},
+		{"empty-lc-all", []string{"LANG=POSIX", "LC_NUMERIC=de_DE.iso88591", "LC_ALL="}, "1234,5", "%.1f", "1234,5"},
+		{"exponent", []string{"LC_NUMERIC=de_DE.UTF-8"}, "1234,5", "%.1e", "1,2e+03"},
+		{"hex", []string{"LC_NUMERIC=de_DE.UTF-8"}, "0x1,4p+0", "%.1a", "0x1,4p+0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runToolEnv(t, tc.env, tc.fmt, tc.arg)
+			if code != 0 || errb != "" || out != tc.want {
+				t.Fatalf("printf locale env=%q = (%q, %q, %d), want %q", tc.env, out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
 // These cases pin the POSIX strtod subject sequence that printf's
 // floating-point ARGUMENTs are converted with. Two forms Go's
 // strconv.ParseFloat rejects outright have to be recognized here, and both were

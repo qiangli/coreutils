@@ -12,10 +12,16 @@ import (
 
 func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolEnv(t, nil, args...)
+}
+
+func runToolEnv(t *testing.T, env []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   t.TempDir(),
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
