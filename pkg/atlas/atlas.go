@@ -551,6 +551,10 @@ func init() {
 	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// leaderboard: the account of what the fleet actually did, where capability
+	// is the routing input. Read-only over the run ledger; CROSS because you
+	// ask "who has earned this" at any stage.
+	addVerb("leaderboard", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	// handoff/resume: pause a live session and pass the work on -- to another
 	// agentic tool, a scheduler, or tomorrow. CROSS, because you hand off work
 	// at any stage: a half-finished plan, a half-finished refactor, a half-run
@@ -789,7 +793,7 @@ func init() {
 		// code-intel / net
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
-		"capability", "agent", "tools", "models", "agents", "people", "whois",
+		"capability", "leaderboard", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",
@@ -824,7 +828,7 @@ func init() {
 		// anywhere the caller chose without validating the path first.
 		"ask",
 		// verbs
-		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "agent", "dks",
+		"weave", "sprint", "dag", "sdlc", "supervise", "capability", "leaderboard", "agent", "dks",
 		"tools", "models", "agents", "people", "kb", "skills", "lexicon", "claim", "mirror", "git",
 		"git-scm", "gh", "curl", "helm", "self", "bootstrap", "upgrade",
 		"rclone", "bus",

@@ -64,6 +64,60 @@ func weaveRecordCapability(it *weaveItem) {
 			_ = capability.Record(key, capability.CapCodeReview, pass, 0, 0, capability.NowRFC())
 		}
 	}
+
+	// And the RAW outcome, for the leaderboard.
+	//
+	// The matrix folds this same run into an exponential moving average, which
+	// is the right shape for routing and the wrong one for ranking: an EMA
+	// cannot be un-averaged, so a quality of 0.72 over 13 samples yields no
+	// pass count and therefore no confidence interval. The ledger keeps the
+	// outcome itself so `bashy leaderboard` can rank on a Wilson bound instead
+	// of a point estimate. Best-effort, like everything else here — evidence is
+	// a by-product of the work, and it must never fail the work.
+	_ = capability.Append(weaveLedgerRecord(it, agent, gatePass))
+}
+
+// weaveLedgerRecord projects a finalized run onto the ledger's record.
+//
+// It carries NO identity by construction: no branch, no issue title, no path,
+// no host. The published leaderboard is regenerated from these records into a
+// doc that ships in an OSS repo, and the guarantee that holds there is
+// structural — the identity-bearing fields do not exist — rather than a
+// scrubber someone has to remember to run.
+func weaveLedgerRecord(it *weaveItem, agent string, gatePass bool) capability.RunRecord {
+	r := capability.RunRecord{
+		At:     capability.NowRFC(),
+		Agent:  agent,
+		Source: capability.SourceWeave,
+		// Repo is deliberately LEFT EMPTY. The finalize path is handed an item,
+		// not a workspace, so the only repo name reachable from here would come
+		// from a path — and a path names a machine and a user. An absent
+		// basename costs one grouping dimension; a leaked path costs the OSS
+		// hygiene rule. The field stays in the schema for a caller that has a
+		// basename honestly to hand.
+		GatePass: &gatePass,
+		Review:   it.ReviewVerdict,
+		// Coach evidence is only comparable within one mode: a pty scrape
+		// counts novel output rather than tool calls, so the mode travels with
+		// the ratio and the leaderboard pools events-mode records alone.
+		CoachMode:   it.CoachMode,
+		RepeatRatio: it.CoachRepeatRatio,
+		Steers:      it.CoachSteers,
+	}
+	if it.VerifyExit != nil {
+		v := *it.VerifyExit
+		r.VerifyExit = &v
+	}
+	if it.CoachSteers > 0 {
+		recovered := it.CoachRecovered
+		r.Recovered = &recovered
+	}
+	if it.PairVerdict != "" {
+		// The adversarial pair's verdict is the stronger signal and wins, the
+		// same precedence weaveReviewOutcome applies.
+		r.Review = it.PairVerdict
+	}
+	return r
 }
 
 // weaveCapabilityAgent resolves the run's canonical matrix identity
