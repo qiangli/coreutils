@@ -32,6 +32,18 @@ func writeString(svm *vm, str string) error {
 }
 
 func cmd_quit(svm *vm) error {
+	// The VM keeps one input line of lookahead for the $ address. When stdin is
+	// seekable, return that line plus bufio's unread bytes before quitting so a
+	// following utility in the same shell can consume the untouched remainder.
+	if seeker, ok := svm.source.(io.Seeker); ok {
+		unread := svm.input.Buffered() + len(svm.nxtl)
+		if svm.nxtlNL {
+			unread++
+		}
+		if unread > 0 {
+			_, _ = seeker.Seek(-int64(unread), io.SeekCurrent)
+		}
+	}
 	return io.EOF
 }
 

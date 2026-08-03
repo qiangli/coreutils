@@ -54,6 +54,9 @@ func runCommand(rc *tool.RunContext, args []string) int {
 	args, inPlaceFlag, inPlaceSuffix := extractInPlace(args)
 
 	fs := tool.NewFlags(cmd.Name)
+	// POSIX utility syntax stops option recognition at the first operand. In
+	// particular, a later file named -n or -- is an operand, not an option.
+	fs.SetInterspersed(false)
 	quiet := fs.BoolP("quiet", "n", false, "suppress automatic printing of pattern space")
 	fs.BoolVar(quiet, "silent", false, "same as -n")
 	var scripts []string
@@ -75,16 +78,33 @@ func runCommand(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
-	// Assemble the program: -e / -f in order; else the first operand is the script.
+	// Assemble the program: -e / -f in command-line order; else the first
+	// operand is the script. pflag retains order within each StringArray but not
+	// between the two flags, so recover the mixed order from the option prefix.
 	var program string
 	switch {
 	case len(scripts) > 0 || len(scriptFiles) > 0:
 		var parts []string
-		parts = append(parts, scripts...)
-		for _, f := range scriptFiles {
-			b, err := os.ReadFile(rc.Path(f))
+		sources := orderedScriptSources(args)
+		if len(sources) != len(scripts)+len(scriptFiles) {
+			// Keep uncommon pflag spellings (notably abbreviated long options)
+			// working even if this order-only scanner does not recognize them.
+			sources = nil
+			for _, script := range scripts {
+				sources = append(sources, scriptSource{value: script})
+			}
+			for _, file := range scriptFiles {
+				sources = append(sources, scriptSource{value: file, file: true})
+			}
+		}
+		for _, source := range sources {
+			if !source.file {
+				parts = append(parts, source.value)
+				continue
+			}
+			b, err := os.ReadFile(rc.Path(source.value))
 			if err != nil {
-				fmt.Fprintf(rc.Err, "sed: %s: %v\n", f, err)
+				fmt.Fprintf(rc.Err, "sed: %s: %v\n", source.value, err)
 				return 2
 			}
 			parts = append(parts, string(b))
@@ -171,6 +191,51 @@ func runCommand(rc *tool.RunContext, args []string) int {
 		c.Close()
 	}
 	return status
+}
+
+type scriptSource struct {
+	value string
+	file  bool
+}
+
+// orderedScriptSources extracts -e/--expression and -f/--file arguments from
+// the option prefix. Flag validation remains pflag's job; this pass exists
+// solely to retain ordering across the two repeatable option kinds.
+func orderedScriptSources(args []string) []scriptSource {
+	var sources []scriptSource
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" || arg == "-" || !strings.HasPrefix(arg, "-") {
+			break
+		}
+		switch {
+		case arg == "-e" || arg == "-f" || arg == "--expression" || arg == "--file":
+			if i+1 >= len(args) {
+				continue
+			}
+			i++
+			sources = append(sources, scriptSource{value: args[i], file: arg == "-f" || arg == "--file"})
+		case strings.HasPrefix(arg, "--expression="):
+			sources = append(sources, scriptSource{value: strings.TrimPrefix(arg, "--expression=")})
+		case strings.HasPrefix(arg, "--file="):
+			sources = append(sources, scriptSource{value: strings.TrimPrefix(arg, "--file="), file: true})
+		case strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--"):
+			cluster := arg[1:]
+			for pos := 0; pos < len(cluster); pos++ {
+				if cluster[pos] != 'e' && cluster[pos] != 'f' {
+					continue
+				}
+				value := cluster[pos+1:]
+				if value == "" && i+1 < len(args) {
+					i++
+					value = args[i]
+				}
+				sources = append(sources, scriptSource{value: value, file: cluster[pos] == 'f'})
+				break // a value-taking short flag consumes the cluster remainder
+			}
+		}
+	}
+	return sources
 }
 
 func hasHelpFlag(args []string) bool {

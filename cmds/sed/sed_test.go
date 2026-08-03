@@ -3,6 +3,7 @@ package sedcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,71 @@ func runSedInDir(t *testing.T, dir, in string, args ...string) (out, errOut stri
 func TestSedBasicSubstitution(t *testing.T) {
 	if out, _, _ := runSed(t, "hello\n", "s/l/L/g"); out != "heLLo\n" {
 		t.Errorf("s/l/L/g = %q, want heLLo", out)
+	}
+}
+
+func TestSedPreservesMixedExpressionFileOrder(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.sed")
+	last := filepath.Join(dir, "last.sed")
+	if err := os.WriteFile(first, []byte("s/A/a/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(last, []byte("s/z/Z/p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := runSedInDir(t, dir, "A\nB\n", "-n", "-e", "s/A/a/", "-f", filepath.Base(first), "-e", "s/a/Z/p")
+	if code != 0 || errOut != "" || out != "Z\n" {
+		t.Errorf("-e/-f/-e order = (%q, %q, %d), want Z", out, errOut, code)
+	}
+	out, errOut, code = runSedInDir(t, dir, "A\nB\n", "-n", "-f", filepath.Base(first), "-e", "s/a/z/", "-f", filepath.Base(last))
+	if code != 0 || errOut != "" || out != "Z\n" {
+		t.Errorf("-f/-e/-f order = (%q, %q, %d), want Z", out, errOut, code)
+	}
+}
+
+func TestSedOptionLookingNamesAfterOperandAreFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "empty"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		data string
+	}{
+		{"-n", "abc\n"},
+		{"--", "def\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(dir, tc.name), []byte(tc.data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, errOut, code := runSedInDir(t, dir, "", "1p;q", "empty", tc.name)
+			if code != 0 || errOut != "" || out != tc.data+tc.data {
+				t.Errorf("file operand %q = (%q, %q, %d), want two prints of %q", tc.name, out, errOut, code, strings.TrimSpace(tc.data))
+			}
+		})
+	}
+}
+
+func TestSedQuitLeavesSeekableInputRemainder(t *testing.T) {
+	in := strings.NewReader("A\nB\nC\n")
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{In: in, Out: &out, Err: &errOut},
+	}
+	if code := cmd.Run(rc, []string{"-n", "/B/q"}); code != 0 || out.Len() != 0 || errOut.Len() != 0 {
+		t.Fatalf("sed -n /B/q = (%q, %q, %d), want quiet success", out.String(), errOut.String(), code)
+	}
+	rest, err := io.ReadAll(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rest) != "C\n" {
+		t.Errorf("input after q = %q, want C\\n", rest)
 	}
 }
 

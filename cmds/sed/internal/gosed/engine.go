@@ -53,6 +53,7 @@ type vm struct {
 	ins      []instruction // the instruction stream
 	ip       int           // the current locaiton in the instruction stream
 	input    *bufio.Reader // the input stream
+	source   io.Reader     // original input, retained to rewind q lookahead
 	output   []byte        // the output buffer
 	lineno   int           // current line number
 	modified bool          // have we modified the pattern space?
@@ -145,7 +146,7 @@ func (e *Engine) Wrap(input io.Reader) io.Reader {
 	bufin := bufio.NewReader(input)
 
 	// prime the engine by resetting the internal flags and filling nxtl...
-	return &vm{ins: e.ins, input: bufin, lineno: -1, ip: -1}
+	return &vm{ins: e.ins, input: bufin, source: input, lineno: -1, ip: -1}
 }
 
 // Read turns a vm into an io.Reader.
