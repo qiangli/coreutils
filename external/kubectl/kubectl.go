@@ -1,8 +1,8 @@
 // Package kubectl runs the kubernetes CLI (kubectl) as a managed external binary
 // (pkg/binmgr): downloaded from dl.k8s.io → sha256-verified → cached, never
-// compiled in. `bashy kubectl …` is a transparent passthrough that targets the
-// dhnt (DKS) cluster by default (external/kube: KUBECONFIG → outpost's DKS
-// kubeconfig when set up). kubernetes/kubectl is Apache-2.0.
+// compiled in. `bashy kubectl …` is a transparent passthrough whose kubeconfig
+// selection is external/kube.ResolveKubeconfig. kubernetes/kubectl is
+// Apache-2.0.
 package kubectl
 
 import (
@@ -85,28 +85,39 @@ func Ensure(ctx context.Context, version string) (string, error) {
 }
 
 // NewKubectlCmd is the `bashy kubectl` front-door: a transparent passthrough to
-// the managed kubectl binary, pointed at the DKS cluster by default. $KUBECTL_VERSION
-// pins the release; all args pass through unchanged.
+// the managed kubectl binary. $KUBECTL_VERSION pins the release; all args pass
+// through unchanged. See kube.ResolveKubeconfig for the full kubeconfig
+// precedence.
 func NewKubectlCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "kubectl",
-		Short: "Kubernetes CLI targeting the DKS cluster (managed external binary)",
+		Short: "Kubernetes CLI (managed external binary)",
 		Long: `kubectl (kubernetes/kubectl, Apache-2.0) downloaded from dl.k8s.io,
-sha256-verified, and cached by binmgr (not compiled in). By default it targets
-the dhnt/DKS cluster: an unset $KUBECONFIG falls back to outpost's DKS kubeconfig
-($OUTPOST_KUBECONFIG_PATH or ~/.kube/outpost.yaml — write it with
-'outpost cluster kubeconfig'). $KUBECTL_VERSION pins the release; all args pass
-through to kubectl.`,
+sha256-verified, and cached by binmgr (not compiled in). An explicit $KUBECONFIG
+always wins. Otherwise: $DKS_PROFILE=peer targets the local peer-plane cluster
+($DKS_PEER_KUBECONFIG or ~/.kube/outpost-control-plane/k3s.yaml, failing closed
+if missing); $DKS_PROFILE=cloudbox targets the legacy cloudbox cluster
+($OUTPOST_KUBECONFIG_PATH or ~/.kube/outpost.yaml, refreshed through outpost's
+broker); with no profile set, kubectl honors your standard ~/.kube/config and
+its current context when that file exists, falling back to the cloudbox
+kubeconfig only when it doesn't. $KUBECTL_VERSION pins the release; all args
+pass through to kubectl.`,
 		DisableFlagParsing: true,
 		SilenceUsage:       true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			kube.RefreshDKSKubeconfig(cmd.Context(), os.Stderr)
+			res, err := kube.ResolveKubeconfig()
+			if err != nil {
+				return err
+			}
+			if res.Refresh {
+				kube.RefreshKubeconfig(cmd.Context(), os.Stderr, res.KUBECONFIG)
+			}
 			bin, err := Ensure(cmd.Context(), strings.TrimSpace(os.Getenv(EnvVersion)))
 			if err != nil {
 				return err
 			}
 			c := exec.CommandContext(cmd.Context(), bin, args...)
-			c.Env = kube.ExecEnv()
+			c.Env = kube.ExecEnvFor(res.KUBECONFIG)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return c.Run()
 		},

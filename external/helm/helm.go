@@ -1,7 +1,7 @@
 // Package helm runs the Helm CLI (kubernetes package manager) as a managed
 // external binary (pkg/binmgr): downloaded from get.helm.sh → sha256-verified →
-// cached, never compiled in. `bashy helm …` is a transparent passthrough that
-// targets the dhnt (DKS) cluster by default (external/kube). helm/helm is
+// cached, never compiled in. `bashy helm …` is a transparent passthrough whose
+// kubeconfig selection is external/kube.ResolveKubeconfig. helm/helm is
 // Apache-2.0.
 package helm
 
@@ -98,28 +98,38 @@ func Ensure(ctx context.Context, version string) (string, error) {
 }
 
 // NewHelmCmd is the `bashy helm` front-door: a transparent passthrough to the
-// managed helm binary, pointed at the DKS cluster by default. $HELM_VERSION pins
-// the release; all args pass through unchanged.
+// managed helm binary. $HELM_VERSION pins the release; all args pass through
+// unchanged. See kube.ResolveKubeconfig for the full kubeconfig precedence.
 func NewHelmCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "helm",
-		Short: "Helm (kubernetes package manager) targeting the DKS cluster (managed external binary)",
+		Short: "Helm (kubernetes package manager, managed external binary)",
 		Long: `helm (helm/helm, Apache-2.0) downloaded from get.helm.sh, sha256-verified, and
-cached by binmgr (not compiled in). By default it targets the dhnt/DKS cluster:
-an unset $KUBECONFIG falls back to outpost's DKS kubeconfig
-($OUTPOST_KUBECONFIG_PATH or ~/.kube/outpost.yaml — write it with
-'outpost cluster kubeconfig'). $HELM_VERSION pins the release; all args pass
+cached by binmgr (not compiled in). An explicit $KUBECONFIG always wins.
+Otherwise: $DKS_PROFILE=peer targets the local peer-plane cluster
+($DKS_PEER_KUBECONFIG or ~/.kube/outpost-control-plane/k3s.yaml, failing closed
+if missing); $DKS_PROFILE=cloudbox targets the legacy cloudbox cluster
+($OUTPOST_KUBECONFIG_PATH or ~/.kube/outpost.yaml, refreshed through outpost's
+broker); with no profile set, helm honors your standard ~/.kube/config and its
+current context when that file exists, falling back to the cloudbox
+kubeconfig only when it doesn't. $HELM_VERSION pins the release; all args pass
 through to helm.`,
 		DisableFlagParsing: true,
 		SilenceUsage:       true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			kube.RefreshDKSKubeconfig(cmd.Context(), os.Stderr)
+			res, err := kube.ResolveKubeconfig()
+			if err != nil {
+				return err
+			}
+			if res.Refresh {
+				kube.RefreshKubeconfig(cmd.Context(), os.Stderr, res.KUBECONFIG)
+			}
 			bin, err := Ensure(cmd.Context(), strings.TrimSpace(os.Getenv(EnvVersion)))
 			if err != nil {
 				return err
 			}
 			c := exec.CommandContext(cmd.Context(), bin, args...)
-			c.Env = kube.ExecEnv()
+			c.Env = kube.ExecEnvFor(res.KUBECONFIG)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return c.Run()
 		},

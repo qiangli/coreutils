@@ -1,6 +1,8 @@
 // Package kube holds the small pieces shared by the managed kubernetes clients
 // `bashy kubectl` and `bashy helm`: cache-first binary resolution and the DKS
-// kubeconfig default so both tools target the dhnt cluster out of the box.
+// kubeconfig selection (see ResolveKubeconfig) so both tools honor the user's
+// standard local kubeconfig by default and target an explicit dhnt plane
+// (peer or cloudbox) only when asked.
 //
 // Both binaries are Apache-2.0 and are DOWNLOADED + exec'd as separate processes
 // (never linked), the same trust path as every other binmgr-managed external.
@@ -15,12 +17,29 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/binmgr"
 )
 
 const dksKubeconfigRefreshAfter = 50 * time.Minute
+
+// EnvProfile selects which implicit kubeconfig plane a managed kubectl/helm
+// targets when $KUBECONFIG is unset. See ResolveKubeconfig.
+const EnvProfile = "DKS_PROFILE"
+
+// ProfilePeer targets the local peer-plane control cluster (DKS_PEER_KUBECONFIG,
+// default ~/.kube/outpost-control-plane/k3s.yaml). Fails closed if unreadable —
+// never falls back to the cloudbox plane.
+const ProfilePeer = "peer"
+
+// ProfileCloudbox targets the legacy cloudbox plane (OUTPOST_KUBECONFIG_PATH,
+// default ~/.kube/outpost.yaml) and keeps the broker refresh.
+const ProfileCloudbox = "cloudbox"
+
+// EnvPeerKubeconfig overrides the peer-plane kubeconfig path.
+const EnvPeerKubeconfig = "DKS_PEER_KUBECONFIG"
 
 // ExecName is the on-disk basename for a tool (adds .exe on Windows) — the name
 // binmgr.Ensure caches it under (<CacheDir>/<name>/<version>/<execname>).
@@ -49,22 +68,93 @@ func CachedBinary(name string) string {
 	return ""
 }
 
-// DKSKubeconfig returns the DKS kubeconfig path to use, or "" to leave the tool's
-// own default (~/.kube/config) in place. It NEVER overrides an explicit
-// $KUBECONFIG. Otherwise it prefers the kubeconfig `outpost cluster kubeconfig`
-// writes — $OUTPOST_KUBECONFIG_PATH, else ~/.kube/outpost.yaml — when it exists,
-// so `bashy kubectl get nodes` targets the dhnt cluster with no export.
-func DKSKubeconfig() string {
+// Resolution is the outcome of ResolveKubeconfig: which kubeconfig path (if any)
+// a managed kubectl/helm exec should inject via $KUBECONFIG, and whether that
+// path is the cloudbox implicit file eligible for the broker refresh.
+type Resolution struct {
+	// KUBECONFIG is the path to inject, or "" to leave the tool's own default
+	// (its normal $KUBECONFIG / ~/.kube/config resolution) untouched.
+	KUBECONFIG string
+	// Refresh is true only when KUBECONFIG is the implicit cloudbox file — the
+	// one plane whose credentials Outpost's broker can refresh.
+	Refresh bool
+}
+
+// ResolveKubeconfig decides which kubeconfig (if any) a managed kubectl/helm
+// exec should use, in this precedence:
+//
+//  1. A non-empty explicit $KUBECONFIG always wins: nothing is injected or
+//     refreshed, and this function returns a zero Resolution.
+//  2. $DKS_PROFILE=peer selects $DKS_PEER_KUBECONFIG, defaulting to
+//     ~/.kube/outpost-control-plane/k3s.yaml. The file must exist and be
+//     readable or this fails closed — the peer plane never silently falls back
+//     to cloudbox.
+//  3. $DKS_PROFILE=cloudbox selects $OUTPOST_KUBECONFIG_PATH, defaulting to
+//     ~/.kube/outpost.yaml, with the broker refresh enabled. If the path can't
+//     be resolved (no $HOME) this also fails closed, since the profile was
+//     explicitly requested.
+//  4. No profile (unset or empty — treated the same, "auto"): if the user's
+//     standard ~/.kube/config exists, nothing is injected, so native kubectl/
+//     helm honor its current context (the Dragon case: local peer cluster via
+//     ~/.kube/config). Only when that standard file is absent does this fall
+//     back to the canonical cloudbox outpost.yaml, with refresh enabled —
+//     preserving the original zero-config behavior on hosts with no local
+//     kubeconfig at all.
+//  5. Any other $DKS_PROFILE value is unknown and fails closed with a clear
+//     error, rather than silently guessing a plane.
+func ResolveKubeconfig() (Resolution, error) {
 	if v := os.Getenv("KUBECONFIG"); v != "" {
-		return "" // honor the user's explicit choice
+		return Resolution{}, nil // honor the user's explicit choice
 	}
-	if p := dksKubeconfigPath(); fileExists(p) {
-		return p
+
+	switch profile := strings.TrimSpace(os.Getenv(EnvProfile)); profile {
+	case "":
+		if fileExists(standardKubeconfigPath()) {
+			return Resolution{}, nil
+		}
+		path := cloudboxKubeconfigPath()
+		if path == "" {
+			return Resolution{}, nil
+		}
+		return Resolution{KUBECONFIG: path, Refresh: true}, nil
+
+	case ProfilePeer:
+		path := peerKubeconfigPath()
+		if path == "" || !fileExists(path) {
+			return Resolution{}, fmt.Errorf("kube: %s=peer kubeconfig %q not found or unreadable", EnvProfile, path)
+		}
+		return Resolution{KUBECONFIG: path}, nil
+
+	case ProfileCloudbox:
+		path := cloudboxKubeconfigPath()
+		if path == "" {
+			return Resolution{}, fmt.Errorf("kube: %s=cloudbox: could not resolve kubeconfig path (no $HOME and no $OUTPOST_KUBECONFIG_PATH)", EnvProfile)
+		}
+		return Resolution{KUBECONFIG: path, Refresh: true}, nil
+
+	default:
+		return Resolution{}, fmt.Errorf("kube: unknown %s=%q (want %q or %q)", EnvProfile, profile, ProfilePeer, ProfileCloudbox)
+	}
+}
+
+func standardKubeconfigPath() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".kube", "config")
 	}
 	return ""
 }
 
-func dksKubeconfigPath() string {
+func peerKubeconfigPath() string {
+	if p := os.Getenv(EnvPeerKubeconfig); p != "" {
+		return p
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".kube", "outpost-control-plane", "k3s.yaml")
+	}
+	return ""
+}
+
+func cloudboxKubeconfigPath() string {
 	if p := os.Getenv("OUTPOST_KUBECONFIG_PATH"); p != "" {
 		return p
 	}
@@ -74,19 +164,16 @@ func dksKubeconfigPath() string {
 	return ""
 }
 
-// RefreshDKSKubeconfig refreshes the implicit DKS per-user kubeconfig through
+// RefreshKubeconfig refreshes the implicit cloudbox kubeconfig at path through
 // Outpost's credential broker when its one-hour bearer token approaches expiry.
-// Explicit KUBECONFIG always wins and is never inspected or changed.
+// Callers must only pass a Resolution.KUBECONFIG whose Refresh bit is set — the
+// peer plane and the user's standard kubeconfig are never touched.
 //
 // Outpost already owns account credentials and the cloudbox refresh protocol;
 // keeping that authority there avoids duplicating secrets or auth logic in
 // managed kubectl/helm wrappers. Hosts without Outpost retain the static
 // kubeconfig/default-client behavior.
-func RefreshDKSKubeconfig(ctx context.Context, stderr io.Writer) {
-	if os.Getenv("KUBECONFIG") != "" {
-		return
-	}
-	path := dksKubeconfigPath()
+func RefreshKubeconfig(ctx context.Context, stderr io.Writer, path string) {
 	if path == "" || fileFresh(path, dksKubeconfigRefreshAfter) {
 		return
 	}
@@ -102,17 +189,21 @@ func RefreshDKSKubeconfig(ctx context.Context, stderr io.Writer) {
 	}
 }
 
-// ExecEnv is the process env for a kubectl/helm passthrough: the inherited env
-// plus a DKS KUBECONFIG default when one applies (and KUBECONFIG is unset).
-func ExecEnv() []string {
+// ExecEnvFor is the process env for a kubectl/helm passthrough: the inherited
+// env plus KUBECONFIG=path when path is non-empty (as resolved by
+// ResolveKubeconfig).
+func ExecEnvFor(path string) []string {
 	env := os.Environ()
-	if kc := DKSKubeconfig(); kc != "" {
-		env = append(env, "KUBECONFIG="+kc)
+	if path != "" {
+		env = append(env, "KUBECONFIG="+path)
 	}
 	return env
 }
 
 func fileExists(p string) bool {
+	if p == "" {
+		return false
+	}
 	fi, err := os.Stat(p)
 	return err == nil && !fi.IsDir()
 }
