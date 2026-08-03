@@ -28,6 +28,7 @@ func setupATState(t *testing.T) string {
 	t.Helper()
 	p := t.TempDir() + "/schedule.json"
 	t.Setenv("BASHY_SCHEDULE_STATE", p)
+	allowAtForTest(t)
 	return p
 }
 
@@ -88,6 +89,44 @@ func TestAtCreateAndListAndRemove(t *testing.T) {
 	}
 	if out != "" {
 		t.Errorf("expected no output after removing all jobs: %q", out)
+	}
+}
+
+func TestAtQueueSubmissionAndListFiltering(t *testing.T) {
+	setupATState(t)
+	for _, queue := range []string{"a", "c"} {
+		if _, stderr, code := runAT(t, context.Background(), "true\n", "-q", queue, "now", "+", "1", "day"); code != 0 {
+			t.Fatalf("submit queue %s: code=%d stderr=%q", queue, code, stderr)
+		}
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 2 || jobs[0].Queue != "a" || jobs[1].Queue != "c" {
+		t.Fatalf("queued jobs=%v err=%v", jobs, err)
+	}
+	out, stderr, code := runATNoStdin(t, context.Background(), "-lq", "c")
+	if code != 0 || stderr != "" || !strings.Contains(out, jobs[1].ID) || strings.Contains(out, jobs[0].ID) {
+		t.Fatalf("filtered list: code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	out, _, code = runATNoStdin(t, context.Background(), "-l")
+	if code != 0 || !strings.Contains(out, jobs[0].ID) || !strings.Contains(out, jobs[1].ID) {
+		t.Fatalf("unfiltered list: code=%d stdout=%q", code, out)
+	}
+}
+
+func TestAtTouchTimeAndInvalidQueue(t *testing.T) {
+	setupATState(t)
+	_, stderr, code := runAT(t, context.Background(), "true\n", "-t202901051015.00")
+	if code != 0 {
+		t.Fatalf("-t: code=%d stderr=%q", code, stderr)
+	}
+	jobs, _ := schedule.LoadJobs()
+	want := time.Date(2029, time.January, 5, 10, 15, 0, 0, time.Local)
+	if len(jobs) != 1 || !jobs[0].NextRun.Equal(want) {
+		t.Fatalf("-t next=%v, want %v", jobs[0].NextRun, want)
+	}
+	_, stderr, code = runAT(t, context.Background(), "true\n", "-q", "AA", "now")
+	if code != 2 || !strings.Contains(stderr, "invalid queue") {
+		t.Fatalf("invalid queue: code=%d stderr=%q", code, stderr)
 	}
 }
 
@@ -271,6 +310,57 @@ func TestParseAtTimespec(t *testing.T) {
 		}
 		if !c.ok && err == nil {
 			t.Errorf("ParseAtTimespec(%q) = nil, want error", c.input)
+		}
+	}
+}
+
+func TestParseLicensedAtGrammar(t *testing.T) {
+	now := time.Date(2026, time.June, 1, 12, 30, 45, 0, time.UTC) // Monday
+	cases := []struct {
+		input string
+		want  time.Time
+	}{
+		{"10:15 Jan 5, 2035 + 2 years", time.Date(2037, 1, 5, 10, 15, 0, 0, time.UTC)},
+		{"10:15 Jan 5, 2035 + 2 weeks", time.Date(2035, 1, 19, 10, 15, 0, 0, time.UTC)},
+		{"10:15 Jan 5, 2035 + 2 months", time.Date(2035, 3, 5, 10, 15, 0, 0, time.UTC)},
+		{"9", time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)},
+		{"2359", time.Date(2026, 6, 1, 23, 59, 0, 0, time.UTC)},
+		{"9:0", time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)},
+		{"9 pm", time.Date(2026, 6, 1, 21, 0, 0, 0, time.UTC)},
+		{"12 am", time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)},
+		{"9 utc", time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)},
+		{"1:00 Tuesday", time.Date(2026, 6, 2, 1, 0, 0, 0, time.UTC)},
+		{"23:59 today", time.Date(2026, 6, 1, 23, 59, 0, 0, time.UTC)},
+		{"1:00 tomorrow", time.Date(2026, 6, 2, 1, 0, 0, 0, time.UTC)},
+	}
+	for _, tc := range cases {
+		got, err := schedule.ParseAtTimespecInLocation(tc.input, now, time.UTC)
+		if err != nil || !got.Equal(tc.want) {
+			t.Errorf("%q = %v, %v; want %v", tc.input, got, err, tc.want)
+		}
+	}
+	for _, input := range []string{"24:00", "12:60", "13 pm", "900", "10:15 Feb 30, 2035", "now + 0 days", "10:15 + bananas"} {
+		if got, err := schedule.ParseAtTimespecInLocation(input, now, time.UTC); err == nil {
+			t.Errorf("invalid %q parsed as %v", input, got)
+		}
+	}
+}
+
+func TestParseAtTouchTime(t *testing.T) {
+	now := time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC)
+	for input, want := range map[string]time.Time{
+		"202901051015.00": time.Date(2029, 1, 5, 10, 15, 0, 0, time.UTC),
+		"2901051015":      time.Date(2029, 1, 5, 10, 15, 0, 0, time.UTC),
+		"01051015":        time.Date(2026, 1, 5, 10, 15, 0, 0, time.UTC),
+	} {
+		got, err := schedule.ParseAtTouchTime(input, now, time.UTC)
+		if err != nil || !got.Equal(want) {
+			t.Errorf("-t %q = %v, %v; want %v", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"", "202902301015", "202901052415", "202901051015.99", "2029x1051015"} {
+		if _, err := schedule.ParseAtTouchTime(input, now, time.UTC); err == nil {
+			t.Errorf("invalid -t %q accepted", input)
 		}
 	}
 }

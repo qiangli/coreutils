@@ -33,31 +33,57 @@ func run(rc *tool.RunContext, args []string) int {
 	filename := fs.StringP("file", "f", "", "read the job from FILE rather than standard input")
 	listFlag := fs.BoolP("list", "l", false, "list pending jobs (same as atq)")
 	removeFlag := fs.BoolP("remove", "r", false, "remove job(s)")
+	queue := fs.StringP("queue", "q", "", "use the named single-letter queue")
+	touchTime := fs.StringP("time", "t", "", "schedule using [[CC]YY]MMDDhhmm[.SS]")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
 
+	if *queue != "" && !validQueue(*queue) {
+		return tool.UsageError(rc, cmd, "invalid queue %q", *queue)
+	}
 	if *listFlag {
-		return listJobs(rc, operands)
+		if code := checkAtAccess(rc); code != 0 {
+			return code
+		}
+		return listJobs(rc, operands, *queue)
 	}
 	if *removeFlag {
+		if code := checkAtAccess(rc); code != 0 {
+			return code
+		}
 		return removeJobs(rc, operands)
 	}
 
-	if len(operands) == 0 {
+	if *touchTime == "" && len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing timespec")
 	}
+	if *touchTime != "" && len(operands) != 0 {
+		return tool.UsageError(rc, cmd, "-t and a timespec operand are mutually exclusive")
+	}
+	if code := checkAtAccess(rc); code != 0 {
+		return code
+	}
 
+	loc, err := atLocation(rc.Getenv("TZ"))
+	if err != nil {
+		return tool.UsageError(rc, cmd, "%v", err)
+	}
+	now := time.Now().In(loc)
 	timespec := strings.Join(operands, " ")
-	now := time.Now()
-	when, err := schedule.ParseAtTimespec(timespec, now)
+	var when time.Time
+	if *touchTime != "" {
+		when, err = schedule.ParseAtTouchTime(*touchTime, now, loc)
+	} else {
+		when, err = schedule.ParseAtTimespecInLocation(timespec, now, loc)
+	}
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
 
-	if !when.After(now) {
+	if when.Before(now) {
 		return tool.UsageError(rc, cmd, "time %q is in the past", timespec)
 	}
 
@@ -101,6 +127,7 @@ func run(rc *tool.RunContext, args []string) int {
 		// expansions, and multi-line constructs retain their meaning.
 		Command:   []string{shell, "-c", cmdText},
 		Dir:       cwd,
+		Queue:     queueOrDefault(*queue),
 		Env:       append([]string(nil), rc.Env...),
 		EnvSet:    true,
 		Enabled:   true,
@@ -127,7 +154,7 @@ func run(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-func listJobs(rc *tool.RunContext, ids []string) int {
+func listJobs(rc *tool.RunContext, ids []string, queue string) int {
 	jobs, err := schedule.LoadJobs()
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
@@ -137,12 +164,26 @@ func listJobs(rc *tool.RunContext, ids []string) int {
 		if j.Kind != "at" || !j.Enabled {
 			continue
 		}
+		if queue != "" && queueOrDefault(j.Queue) != queue {
+			continue
+		}
 		if len(ids) > 0 && !containsID(ids, j.ID, j.Name) {
 			continue
 		}
 		fmt.Fprintf(rc.Out, "%s\t%s\n", j.ID, formatJobTime(j.NextRun))
 	}
 	return 0
+}
+
+func validQueue(queue string) bool {
+	return len(queue) == 1 && queue[0] >= 'a' && queue[0] <= 'z'
+}
+
+func queueOrDefault(queue string) string {
+	if queue == "" {
+		return "a"
+	}
+	return queue
 }
 
 func formatJobTime(t time.Time) string {

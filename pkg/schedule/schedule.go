@@ -36,6 +36,7 @@ type Job struct {
 	Spec    string   `json:"spec"`
 	Command []string `json:"command"`
 	Dir     string   `json:"dir,omitempty"`
+	Queue   string   `json:"queue,omitempty"`
 	// Env and Umask preserve the submission context for POSIX at jobs.  The
 	// corresponding Set bits distinguish an intentionally empty value from a
 	// legacy/general scheduler job, which continues to inherit daemon state.
