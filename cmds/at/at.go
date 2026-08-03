@@ -40,7 +40,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	if *listFlag {
-		return listJobs(rc)
+		return listJobs(rc, operands)
 	}
 	if *removeFlag {
 		return removeJobs(rc, operands)
@@ -82,14 +82,24 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	id := strconv.FormatInt(now.UnixNano(), 36)
-	cwd, _ := os.Getwd()
-	parts := tokenize(cmdText)
+	cwd := rc.Dir
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	shell := rc.Getenv("SHELL")
+	if shell == "" {
+		shell = "sh"
+	}
 
 	j := &schedule.Job{
-		ID:        id,
-		Kind:      "at",
-		Spec:      when.Format(time.RFC3339),
-		Command:   parts,
+		ID:   id,
+		Kind: "at",
+		Spec: when.Format(time.RFC3339),
+		// POSIX defines the input as shell command language, not an argv to
+		// split on whitespace. Preserve the complete program for a separate
+		// non-interactive shell invocation so redirections, pipelines,
+		// expansions, and multi-line constructs retain their meaning.
+		Command:   []string{shell, "-c", cmdText},
 		Dir:       cwd,
 		Enabled:   true,
 		CreatedAt: now,
@@ -106,28 +116,39 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
-	fmt.Fprintf(rc.Out, "job %s at %s\n", id, when.Format(time.RFC3339))
+	fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatJobTime(when))
 	return 0
 }
 
-func listJobs(rc *tool.RunContext) int {
+func listJobs(rc *tool.RunContext, ids []string) int {
 	jobs, err := schedule.LoadJobs()
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
 		return 1
 	}
-	found := false
 	for _, j := range jobs {
 		if j.Kind != "at" || !j.Enabled {
 			continue
 		}
-		found = true
-		fmt.Fprintf(rc.Out, "%s\t%s\t%s\n", j.ID, j.NextRun.Format(time.RFC3339), strings.Join(j.Command, " "))
-	}
-	if !found {
-		fmt.Fprintln(rc.Out, "no pending at jobs")
+		if len(ids) > 0 && !containsID(ids, j.ID, j.Name) {
+			continue
+		}
+		fmt.Fprintf(rc.Out, "%s\t%s\n", j.ID, formatJobTime(j.NextRun))
 	}
 	return 0
+}
+
+func formatJobTime(t time.Time) string {
+	return t.Format("Mon Jan _2 15:04:05 2006")
+}
+
+func containsID(ids []string, id, name string) bool {
+	for _, candidate := range ids {
+		if candidate == id || candidate == name {
+			return true
+		}
+	}
+	return false
 }
 
 func removeJobs(rc *tool.RunContext, ids []string) int {
@@ -156,8 +177,4 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 		return 1
 	}
 	return 0
-}
-
-func tokenize(s string) []string {
-	return strings.Fields(s)
 }

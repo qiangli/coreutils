@@ -1,13 +1,18 @@
 package atcmd
 
 import (
+	"bytes"
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/schedule"
+	"github.com/qiangli/coreutils/tool"
 )
 
 func runAT(t *testing.T, ctx context.Context, stdin string, args ...string) (stdout, stderr string, code int) {
@@ -51,20 +56,20 @@ func TestAtCreateAndListAndRemove(t *testing.T) {
 	setupATState(t)
 	stdin := "echo hello world\n"
 
-	out, _, code := runAT(t, context.Background(), stdin, "now", "+", "1", "hour")
+	out, errb, code := runAT(t, context.Background(), stdin, "now", "+", "1", "hour")
 	if code != 0 {
 		t.Fatalf("at now + 1 hour: code=%d", code)
 	}
-	if !strings.Contains(out, "job ") || !strings.Contains(out, " at ") {
-		t.Errorf("at output missing job info: %q", out)
+	if out != "" || !strings.Contains(errb, "job ") || !strings.Contains(errb, " at ") {
+		t.Errorf("at submission streams: stdout=%q stderr=%q", out, errb)
 	}
 
 	out, _, code = runATNoStdin(t, context.Background(), "-l")
 	if code != 0 {
 		t.Fatalf("at -l: code=%d", code)
 	}
-	if !strings.Contains(out, "echo hello world") {
-		t.Errorf("at -l missing command: %q", out)
+	if !strings.Contains(out, "\t") {
+		t.Errorf("at -l missing job/date fields: %q", out)
 	}
 
 	jobs, _ := schedule.LoadJobs()
@@ -81,8 +86,8 @@ func TestAtCreateAndListAndRemove(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("at -l after remove: code=%d", code)
 	}
-	if !strings.Contains(out, "no pending at jobs") {
-		t.Errorf("expected empty list after remove: %q", out)
+	if out != "" {
+		t.Errorf("expected no output after removing all jobs: %q", out)
 	}
 }
 
@@ -109,12 +114,12 @@ func TestAtHHMM(t *testing.T) {
 	setupATState(t)
 	stdin := "true\n"
 
-	out, _, code := runAT(t, context.Background(), stdin, "23:59")
+	out, errb, code := runAT(t, context.Background(), stdin, "23:59")
 	if code != 0 {
 		t.Fatalf("at 23:59: code=%d", code)
 	}
-	if !strings.Contains(out, "job ") {
-		t.Errorf("output missing job: %q", out)
+	if out != "" || !strings.Contains(errb, "job ") {
+		t.Errorf("submission streams: stdout=%q stderr=%q", out, errb)
 	}
 }
 
@@ -122,12 +127,12 @@ func TestAtMidnight(t *testing.T) {
 	setupATState(t)
 	stdin := "true\n"
 
-	out, _, code := runAT(t, context.Background(), stdin, "midnight")
+	out, errb, code := runAT(t, context.Background(), stdin, "midnight")
 	if code != 0 {
 		t.Fatalf("at midnight: code=%d", code)
 	}
-	if !strings.Contains(out, "job ") {
-		t.Errorf("output missing job: %q", out)
+	if out != "" || !strings.Contains(errb, "job ") {
+		t.Errorf("submission streams: stdout=%q stderr=%q", out, errb)
 	}
 }
 
@@ -135,12 +140,12 @@ func TestAtNoon(t *testing.T) {
 	setupATState(t)
 	stdin := "true\n"
 
-	out, _, code := runAT(t, context.Background(), stdin, "noon")
+	out, errb, code := runAT(t, context.Background(), stdin, "noon")
 	if code != 0 {
 		t.Fatalf("at noon: code=%d", code)
 	}
-	if !strings.Contains(out, "job ") {
-		t.Errorf("output missing job: %q", out)
+	if out != "" || !strings.Contains(errb, "job ") {
+		t.Errorf("submission streams: stdout=%q stderr=%q", out, errb)
 	}
 }
 
@@ -154,12 +159,54 @@ func TestAtFromFile(t *testing.T) {
 	f.WriteString("echo from file\n")
 	f.Close()
 
-	out, _, code := runATNoStdin(t, context.Background(), "-f", f.Name(), "midnight")
+	out, errb, code := runATNoStdin(t, context.Background(), "-f", f.Name(), "midnight")
 	if code != 0 {
 		t.Fatalf("at -f %s midnight: code=%d", f.Name(), code)
 	}
-	if !strings.Contains(out, "job ") {
-		t.Errorf("output missing job: %q", out)
+	if out != "" || !strings.Contains(errb, "job ") {
+		t.Errorf("submission streams: stdout=%q stderr=%q", out, errb)
+	}
+}
+
+func TestAtJobRetainsShellProgramAndWorkingDirectory(t *testing.T) {
+	setupATState(t)
+	dir := t.TempDir()
+	program := "printf '%s\\n' 'hello world' > marker\n"
+	var stdout, stderr bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: dir,
+		Env: []string{"SHELL=sh"},
+		Stdio: tool.Stdio{
+			In: strings.NewReader(program), Out: &stdout, Err: &stderr,
+		},
+	}
+	if code := cmd.Run(rc, []string{"now"}); code != 0 {
+		t.Fatalf("at now: code=%d stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "job ") {
+		t.Fatalf("submission streams: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	wantCommand := []string{"sh", "-c", strings.TrimSpace(program)}
+	if !reflect.DeepEqual(jobs[0].Command, wantCommand) {
+		t.Fatalf("stored command=%q, want %q", jobs[0].Command, wantCommand)
+	}
+	if jobs[0].Dir != dir {
+		t.Fatalf("stored dir=%q, want %q", jobs[0].Dir, dir)
+	}
+
+	job := exec.Command(jobs[0].Command[0], jobs[0].Command[1:]...)
+	job.Dir = jobs[0].Dir
+	if out, err := job.CombinedOutput(); err != nil {
+		t.Fatalf("execute stored shell program: %v output=%q", err, out)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "marker"))
+	if err != nil || string(got) != "hello world\n" {
+		t.Fatalf("marker=%q err=%v", got, err)
 	}
 }
 
