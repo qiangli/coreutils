@@ -1,6 +1,7 @@
 package findcmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"os"
@@ -501,5 +502,45 @@ func TestFnmatch(t *testing.T) {
 		if got := fnmatch(c.pat, c.s, c.fold); got != c.want {
 			t.Errorf("fnmatch(%q, %q, fold=%v) = %v, want %v", c.pat, c.s, c.fold, got, c.want)
 		}
+	}
+}
+
+func TestFindGermanLocaleCategories(t *testing.T) {
+	latin1Aumlaut := string([]byte{0xe4})
+	german := findLocaleFromEnv([]string{"LANG=POSIX", "LC_CTYPE=de_DE.iso88591", "LC_COLLATE=de_DE.iso88591"})
+	if !fnmatchLocale("[[:alpha:]]", latin1Aumlaut, false, german) {
+		t.Error("de_DE LC_CTYPE did not classify Latin-1 ä as alphabetic")
+	}
+	if !fnmatchLocale("[[=a=]]", latin1Aumlaut, false, german) {
+		t.Error("de_DE LC_COLLATE did not place Latin-1 ä in a's equivalence class")
+	}
+	posix := findLocaleFromEnv([]string{"LANG=de_DE.iso88591", "LC_CTYPE=de_DE.iso88591", "LC_COLLATE=de_DE.iso88591", "LC_ALL=POSIX"})
+	if fnmatchLocale("[[:alpha:]]", latin1Aumlaut, false, posix) || fnmatchLocale("[[=a=]]", latin1Aumlaut, false, posix) {
+		t.Error("non-empty LC_ALL did not override lower locale categories")
+	}
+	emptyHigher := findLocaleFromEnv([]string{"LANG=de_DE.iso88591", "LC_CTYPE=", "LC_COLLATE=", "LC_ALL="})
+	if !fnmatchLocale("[[:alpha:]]", latin1Aumlaut, false, emptyHigher) || !fnmatchLocale("[[=a=]]", latin1Aumlaut, false, emptyHigher) {
+		t.Error("empty higher-priority variables did not fall back to LANG")
+	}
+}
+
+func TestFindGermanAffirmativeResponse(t *testing.T) {
+	confirm := func(env []string, input string) bool {
+		var errb bytes.Buffer
+		w := &walker{
+			rc:     &tool.RunContext{Stdio: tool.Stdio{Err: &errb}},
+			stdin:  bufio.NewReader(strings.NewReader(input)),
+			locale: findLocaleFromEnv(env),
+		}
+		return w.confirm("echo", "file")
+	}
+	if !confirm([]string{"LC_MESSAGES=de_DE.iso88591"}, "ja\n") {
+		t.Error("de_DE LC_MESSAGES did not accept German affirmative response")
+	}
+	if confirm([]string{"LC_MESSAGES=de_DE.iso88591"}, "yes\n") {
+		t.Error("de_DE LC_MESSAGES incorrectly used the POSIX yes expression")
+	}
+	if !confirm([]string{"LANG=POSIX"}, "yes\n") {
+		t.Error("POSIX locale did not accept y/Y affirmative response")
 	}
 }

@@ -18,12 +18,11 @@
 // anywhere, as GNU applies them; the GNU positional warning is not
 // emitted). A "--" may close the leading -H/-L/-P options.
 //
-// Patterns (-name, -iname, -path) are matched in the C/POSIX locale:
-// byte by byte, with the C locale's ASCII character classes and byte
-// ordering for ranges. LC_ALL, LC_CTYPE, LC_COLLATE and LANG therefore
-// cannot change which files find reports, and LC_MESSAGES cannot change
-// a diagnostic — the determinism the agent contract requires, and what
-// GNU find does when those variables select the POSIX locale.
+// Patterns (-name, -iname, -path) honor POSIX LC_CTYPE and LC_COLLATE
+// category precedence. The C/POSIX locale is byte-oriented with ASCII
+// classes; the provisioned de_DE ISO-8859-1 locale adds its alphabetic
+// bytes and equivalence classes without depending on host locale archives.
+// LC_MESSAGES likewise controls the affirmative response accepted by -ok.
 //
 // -exec/-ok spawn the named utility directly — that is find's
 // upstream-documented purpose (the command-wrapper exception to the
@@ -195,6 +194,7 @@ leading:
 		follow: follow,
 		stdin:  bufio.NewReader(rc.In),
 		owners: newOwnerCache(),
+		locale: findLocaleFromEnv(rc.Env),
 	}
 	if agentic {
 		w.matcher = ignore.New(rc.Dir)
@@ -837,7 +837,7 @@ type nameExpr struct {
 }
 
 func (n *nameExpr) eval(c *fctx) bool {
-	return fnmatch(n.pat, baseName(c.path), n.fold)
+	return fnmatchLocale(n.pat, baseName(c.path), n.fold, c.w.locale)
 }
 
 // baseName is the last component of the operand-rooted path, which is
@@ -856,7 +856,7 @@ type pathExpr struct{ pat string }
 func (p *pathExpr) eval(c *fctx) bool {
 	// GNU -path: matched against the path as printed; wildcards and
 	// the match in general do not treat '/' specially.
-	return fnmatch(p.pat, c.path, false)
+	return fnmatchLocale(p.pat, c.path, false, c.w.locale)
 }
 
 type typeExpr struct{ letters string }
@@ -1166,7 +1166,13 @@ func (w *walker) confirm(util, path string) bool {
 		return false // EOF: not affirmative
 	}
 	line = strings.TrimSpace(line)
-	return line != "" && (line[0] == 'y' || line[0] == 'Y')
+	if line == "" {
+		return false
+	}
+	if w.locale.messagesGerman {
+		return line[0] == 'j' || line[0] == 'J'
+	}
+	return line[0] == 'y' || line[0] == 'Y'
 }
 
 // runArgv spawns argv verbatim — no shell, no operand concatenation.
@@ -1340,6 +1346,7 @@ type walker struct {
 	stdin      *bufio.Reader
 	matcher    *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
 	owners     *ownerCache     // per-invocation -nouser/-nogroup lookup cache
+	locale     findLocale      // POSIX category settings for matching and -ok
 }
 
 func (w *walker) reportErr(display string, err error) {
@@ -1473,6 +1480,10 @@ func pathErrMsg(err error) string {
 // contract requires, and what GNU find does in the POSIX locale.
 
 func fnmatch(pattern, name string, fold bool) bool {
+	return fnmatchLocale(pattern, name, fold, findLocale{})
+}
+
+func fnmatchLocale(pattern, name string, fold bool, loc findLocale) bool {
 	for len(pattern) > 0 {
 		switch pattern[0] {
 		case '*':
@@ -1483,7 +1494,7 @@ func fnmatch(pattern, name string, fold bool) bool {
 				return true
 			}
 			for i := 0; i <= len(name); i++ {
-				if fnmatch(pattern, name[i:], fold) {
+				if fnmatchLocale(pattern, name[i:], fold, loc) {
 					return true
 				}
 			}
@@ -1497,7 +1508,7 @@ func fnmatch(pattern, name string, fold bool) bool {
 			if len(name) == 0 {
 				return false
 			}
-			matched, rest, valid := matchClass(pattern, name[0], fold)
+			matched, rest, valid := matchClassLocale(pattern, name[0], fold, loc)
 			if !valid {
 				// unmatched '[' is a literal
 				if !eqByte('[', name[0], fold) {
@@ -1581,6 +1592,10 @@ func isDigitC(c byte) bool { return c >= '0' && c <= '9' }
 // the byte c against it. valid=false means the '[' had no closing ']'
 // and must be treated as a literal.
 func matchClass(p string, c byte, fold bool) (matched bool, rest string, valid bool) {
+	return matchClassLocale(p, c, fold, findLocale{})
+}
+
+func matchClassLocale(p string, c byte, fold bool, loc findLocale) (matched bool, rest string, valid bool) {
 	i := 1
 	neg := false
 	if i < len(p) && (p[i] == '!' || p[i] == '^') {
@@ -1615,9 +1630,13 @@ func matchClass(p string, c byte, fold bool) (matched bool, rest string, valid b
 					if fn(c) || (fold && fn(flipASCII(c))) {
 						matched = true
 					}
+					if loc.ctypeGerman && germanClassMatch(element, c, fold) {
+						matched = true
+					}
 				}
 			case '=', '.':
-				if len(element) == 1 && eqByte(element[0], c, fold) {
+				if len(element) == 1 && (eqByte(element[0], c, fold) ||
+					(kind == '=' && loc.collateGerman && germanEquivalent(element[0], c))) {
 					matched = true
 				}
 			}
@@ -1649,4 +1668,64 @@ func matchClass(p string, c byte, fold bool) (matched bool, rest string, valid b
 		}
 	}
 	return false, "", false
+}
+
+type findLocale struct {
+	ctypeGerman    bool
+	collateGerman  bool
+	messagesGerman bool
+}
+
+func findLocaleFromEnv(env []string) findLocale {
+	return findLocale{
+		ctypeGerman:    isGermanLocale(localeCategory(env, "LC_CTYPE")),
+		collateGerman:  isGermanLocale(localeCategory(env, "LC_COLLATE")),
+		messagesGerman: isGermanLocale(localeCategory(env, "LC_MESSAGES")),
+	}
+}
+
+func localeCategory(env []string, category string) string {
+	for _, key := range []string{"LC_ALL", category, "LANG"} {
+		if value, ok := lookupEnv(env, key); ok && value != "" {
+			return value
+		}
+	}
+	return "POSIX"
+}
+
+func isGermanLocale(name string) bool {
+	return strings.HasPrefix(strings.ToLower(name), "de_de")
+}
+
+func germanClassMatch(class string, c byte, fold bool) bool {
+	isUpper := c >= 0xc0 && c <= 0xd6 || c >= 0xd8 && c <= 0xde
+	isLower := c >= 0xdf && c <= 0xf6 || c >= 0xf8
+	switch class {
+	case "alpha":
+		return isUpper || isLower
+	case "alnum":
+		return isUpper || isLower
+	case "upper":
+		return isUpper || fold && isLower
+	case "lower":
+		return isLower || fold && isUpper
+	case "graph", "print":
+		return c >= 0xa0
+	}
+	return false
+}
+
+func germanEquivalent(pattern, candidate byte) bool {
+	base := lowerASCII(pattern)
+	switch candidate {
+	case 0xc4, 0xe4: // Ä, ä
+		return base == 'a'
+	case 0xd6, 0xf6: // Ö, ö
+		return base == 'o'
+	case 0xdc, 0xfc: // Ü, ü
+		return base == 'u'
+	case 0xdf: // ß
+		return base == 's'
+	}
+	return false
 }
