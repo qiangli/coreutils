@@ -41,10 +41,24 @@ func conductorRoles() []bus.HostRole {
 		return nil
 	}
 	q, err := loadWeaveQueue(dir)
-	if err != nil || q == nil {
+	if err != nil {
 		return nil
 	}
-	now := time.Now()
+	return rolesFromQueue(q, time.Now())
+}
+
+// rolesFromQueue is the decision, split out so it is testable without a repo.
+//
+// It was not, when this first shipped: the queue read and the lease rule were
+// one function that needed a real repo, a real queue and a live lease to
+// exercise — so it went out with no test, and on this host every lease is
+// weeks stale, meaning it resolved zero addresses and nothing said so. A rule
+// that cannot be tested without the exact conditions it is meant to handle is
+// one that ships unverified.
+func rolesFromQueue(q *weaveQueue, now time.Time) []bus.HostRole {
+	if q == nil {
+		return nil
+	}
 	var out []bus.HostRole
 	for _, s := range q.Stories {
 		if s == nil || s.Lease == nil || s.Lease.Holder == "" {
