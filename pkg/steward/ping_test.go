@@ -1,6 +1,7 @@
 package steward
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -11,12 +12,23 @@ import (
 // to see or be fenced by the first. So these tests take a store the same way
 // every other test here does, through WithRegistryRoot, rather than pointing
 // --dir somewhere fresh and tripping the singleton.
+//
+// NOTE ON IDENTITY: they also inject the SCOPE, and that is not decoration.
+// Open resolves the seat from the OS and FAILS CLOSED when it cannot — a
+// minimal container has no /etc/machine-id, so Open there returns
+// ErrNoStableIdentity and a test asserting on the vacant-seat refusal gets the
+// identity error instead, having never reached the code it meant to exercise.
+// The fix is to say which seat this is, in-process, through the trusted hook
+// (WithScopeProvider) — never to soften the fail-closed check, which is the
+// property being protected. TestPing_FailsClosedWithoutIdentity below pins that
+// the check is still there.
 
 // A ping to an empty seat would queue a message for nobody, and the bus would
 // hold it indefinitely. Refusing says the useful thing instead.
 func TestPing_VacantSeatRefuses(t *testing.T) {
 	dir, reg := t.TempDir(), t.TempDir()
-	_, err := ping(dir, "tester", "need the GPU", "", WithRegistryRoot(reg))
+	_, err := ping(dir, "tester", "need the GPU", "",
+		WithScopeProvider(testScope("ping-vacant")), WithRegistryRoot(reg))
 	if err == nil {
 		t.Fatal("pinging a vacant seat must refuse, not queue for nobody")
 	}
@@ -25,12 +37,34 @@ func TestPing_VacantSeatRefuses(t *testing.T) {
 	}
 }
 
+// THE IDENTITY CHECK IS NOT ROUTED AROUND. A seat that cannot say which machine
+// it belongs to must refuse to open at all — the alternative merges the journals
+// of every machine sharing a home directory. So a ping on such a host reports
+// THAT, rather than a cheerier answer about the seat being open, which it is in
+// no position to know.
+func TestPing_FailsClosedWithoutIdentity(t *testing.T) {
+	dir, reg := t.TempDir(), t.TempDir()
+	unresolvable := ScopeFunc(func() (Scope, error) {
+		return Scope{}, &ErrNoStableIdentity{Why: "no /etc/machine-id, no fallback"}
+	})
+	_, err := ping(dir, "tester", "need the GPU", "",
+		WithScopeProvider(unresolvable), WithRegistryRoot(reg))
+	var noID *ErrNoStableIdentity
+	if !errors.As(err, &noID) {
+		t.Fatalf("ping without a stable machine identity = %v, want ErrNoStableIdentity", err)
+	}
+	if strings.Contains(err.Error(), "seat is open") {
+		t.Error("an unidentifiable host must not report on the seat's occupancy — it cannot see it")
+	}
+}
+
 // An empty body is a mistake, not a message. Sending it would spend an
 // interrupt — the scarcest thing in this system — on nothing.
 func TestPing_EmptyBodyRefuses(t *testing.T) {
 	dir, reg := t.TempDir(), t.TempDir()
 	for _, body := range []string{"", "   ", "\n"} {
-		if _, err := ping(dir, "tester", body, "", WithRegistryRoot(reg)); err == nil {
+		opts := []Option{WithScopeProvider(testScope("ping-empty")), WithRegistryRoot(reg)}
+		if _, err := ping(dir, "tester", body, "", opts...); err == nil {
 			t.Errorf("an empty body (%q) must refuse", body)
 		} else if !strings.Contains(err.Error(), "nothing to send") {
 			t.Errorf("the refusal should name the problem: %v", err)
