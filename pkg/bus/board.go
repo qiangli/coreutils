@@ -93,14 +93,29 @@ func (p Post) Broadcast() bool {
 // Directed reports a post naming ONE agent — the only kind that carries an
 // obligation, and therefore the only kind never truncated from a default view.
 func (p Post) Directed(reader string) bool {
-	return strings.EqualFold(strings.TrimSpace(p.To), strings.TrimSpace(reader)) &&
-		strings.TrimSpace(p.To) != ""
+	to := strings.TrimSpace(p.To)
+	if to == "" {
+		return false
+	}
+	if strings.EqualFold(to, strings.TrimSpace(reader)) {
+		return true
+	}
+	// A post addressed to a ROLE on this host is directed at whoever is reading,
+	// because a seat is host-and-login scoped rather than tied to an identity.
+	// That is what lets a third-party TUI read the seat's mail with no --as, no
+	// principal and no setup — and it matches the board's existing rule that
+	// addressing says who should ACT, never who may read.
+	return AddressedToRole(to)
 }
 
 // Audiences describes a post's intended audience for display.
 func (p Post) Audiences() string {
 	if p.To != "" {
-		return p.To
+		// Render a seat address by the name people use for it. `steward` is what
+		// a reader can act on; `steward.dragon-u501-b683b300b1` is what the
+		// machine routes on, and showing the latter makes the one post that
+		// carries an obligation look like machine noise.
+		return RoleLabelFor(p.To)
 	}
 	if p.Audience == nil || p.Audience.Empty() {
 		return "all"

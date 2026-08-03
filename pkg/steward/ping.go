@@ -87,28 +87,57 @@ func ping(dir, from, body, priority string, opts ...Option) (string, error) {
 		return "", fmt.Errorf("steward ping: cannot open the seat inbox: %w", ierr)
 	}
 
-	n := bus.Notification{
-		Principal: from,
-		Topic:     topic,
-		To:        topic,
-		Body:      body,
-		Priority:  priority,
-	}
-	if c, cerr := loadSeatContact(); cerr == nil && c != nil {
-		n.Room = c.Ref
-	}
-	if err := bus.Publish(n); err != nil {
+	// THE BOARD IS THE STORE, and ping is now a board post with a steer.
+	//
+	// Reaching a role used to mean its own channel with its own store, so the
+	// host grew two verbs per role and each re-implemented addressing — which is
+	// exactly where the tool-vs-agent mismatch got in. The board already had
+	// what those channels lacked: receipts, claims, selectors, public history
+	// and live steering. So a ping writes where every other message on this host
+	// writes, and `bashy mb` reads it with everything else.
+	//
+	// Board FIRST, notification second. The durable copy must not be the
+	// optional one.
+	if err := bus.PostMessage(bus.Post{
+		From:  from,
+		To:    topic,
+		Topic: "steward",
+		Body:  body,
+	}); err != nil {
 		return "", err
 	}
 
-	line := fmt.Sprintf("pinged %s on %s", view.Authority.Holder, n.Topic)
-	if c, cerr := loadSeatContact(); cerr == nil && c != nil {
-		line += " — reply in " + c.String()
+	// ONE STORE. There is deliberately no second copy on the bus.
+	//
+	// A message addressed to the steward is an ordinary board post that happens
+	// to name the seat: it lives where every other message on this host lives,
+	// anyone can read it, and the steward reads it the same way anyone else
+	// does. It is NOT filed into a private mailbox and NOT turned into a task in
+	// somebody's queue — what to do about it is the steward's judgement, and a
+	// channel that decides that for them is a different feature wearing a
+	// message's clothes.
+	//
+	// Writing both here was the same mistake one layer up: two stores holding
+	// one conversation, so a reader who checks the wrong one concludes nothing
+	// was said.
+	if strings.EqualFold(strings.TrimSpace(priority), "interrupt") {
+		// The live tier is the board's own, not a parallel mechanism. It is
+		// best-effort by construction: the durable post above already landed, so
+		// a failed steer costs latency, never the message.
+		_ = bus.SteerLive(view.Authority.Holder.Name, body)
 	}
+
+	// Say where it went and how to follow it, in the vocabulary of the ONE store
+	// it went to. A sender who is told "pinged" and nothing else has no way to
+	// check, and the reply comes back on the same board.
+	line := fmt.Sprintf("posted to the board for the steward seat (held by %s)\n"+
+		"  it is public: `bashy mb` shows it to anyone on this host, the steward included\n"+
+		"  their reply comes back the same way — `bashy mb` to read it",
+		view.Authority.Holder.Name)
 	if view.Liveness != LivenessLive {
-		// Sent, and honest about what that means. The bus holds it; nobody has
+		// Sent, and honest about what that means. The board holds it; nobody has
 		// necessarily read it.
-		line += fmt.Sprintf("\n  note: the seat is %s, not live — the ping is QUEUED, not read", view.Liveness)
+		line += fmt.Sprintf("\n  note: the seat is %s, not live — the message is WAITING, not read", view.Liveness)
 		if view.Liveness == LivenessLapsed {
 			line += "\n  a lapsed seat is takeable: `bashy steward takeover` if this needs an answer now"
 		}

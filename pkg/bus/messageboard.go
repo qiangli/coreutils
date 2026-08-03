@@ -236,6 +236,14 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 				return fmt.Errorf("mb send: name an agent, or pass a selector (--band/--tool/--provider/--family/--version)")
 			}
 			to := strings.TrimSpace(args[0])
+			// A ROLE resolves to its seat's stable address, so the mail survives
+			// a handover: sent to the holder's name it would follow the agent
+			// rather than the responsibility. An agent name is left exactly as
+			// typed — ResolveRole only answers for roles this host actually has,
+			// so it cannot capture a name that merely looks like one.
+			if topicAddr, ok := ResolveRole(to); ok {
+				to = topicAddr
+			}
 			body = strings.Join(args[1:], " ")
 			// Board FIRST, steer second. The durable copy is the one that must
 			// not be optional: steering first would lose the message entirely
@@ -243,7 +251,13 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 			if err := PostMessage(Post{From: from, To: to, Topic: topic, Body: body}); err != nil {
 				return err
 			}
-			reportDelivery(cmd, []Delivery{SteerLive(to, steerNotice(from, body))})
+			d := SteerLive(to, steerNotice(from, body))
+			// Report the name the sender typed, not the routing address. A
+			// confirmation reading "waiting on the board for
+			// steward.dragon-u501-b683b300b1" makes a successful send look like
+			// it went somewhere unintended.
+			d.To = RoleLabelFor(d.To)
+			reportDelivery(cmd, []Delivery{d})
 			return nil
 		},
 	}

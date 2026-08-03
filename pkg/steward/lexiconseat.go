@@ -17,11 +17,32 @@ package steward
 import (
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/lexicon"
 )
 
 func init() {
 	lexicon.SeatSource = seatsForLexicon
+	bus.HostRoles = rolesForBoard
+}
+
+// rolesForBoard makes `steward` an address on the board.
+//
+// The label is the bare role name, not the topic: `bashy mb send steward` is
+// what somebody actually types, and requiring
+// `mb send steward.dragon-u501-b683b300b1` would be the same unusable
+// incantation that made the seat's own inbox go unread.
+//
+// This does NOT consult the seat's state. A vacant seat is still an address —
+// mail sent to it waits for whoever claims it next, which is the entire point
+// of addressing the role instead of its holder. Refusing to accept mail for an
+// unclaimed seat would drop exactly the message that says "nobody is stewarding
+// this host".
+func rolesForBoard() []bus.HostRole {
+	return []bus.HostRole{{
+		Label: "steward",
+		Topic: stewardAssignment().Topic(),
+	}}
 }
 
 // seatsForLexicon reports this host's steward seat.

@@ -65,10 +65,34 @@ func renderSeatInbox(w io.Writer, o *opts, peek, all bool) error {
 		return fmt.Errorf("steward inbox: cannot open the seat inbox: %w", err)
 	}
 
-	items, err := bus.SeatPending(topic, peek, all)
+	// THE SAME BOARD everyone reads — this is a FILTER, not a second store.
+	//
+	// `bashy mb` already shows these: a post addressed to the seat is directed
+	// at any reader on this host. This verb exists only to answer the narrower
+	// question "what was sent to the SEAT", for a steward who does not want the
+	// whole board. If the two ever disagree, the board is right.
+	posts, err := bus.Posts()
 	if err != nil {
 		return err
 	}
+	var items []bus.Pending
+	for _, p := range posts {
+		if !bus.AddressedToRole(p.To) {
+			continue
+		}
+		items = append(items, bus.Pending{
+			Seq: p.Seq, TS: p.At, Principal: p.From, Body: p.Body,
+		})
+	}
+
+	// Legacy: mail published to the seat's bus topic before the board carried
+	// role addresses. Merged rather than dropped — those messages were already
+	// undeliverable once, and losing them on the way to the fix would be the
+	// same failure twice.
+	if legacy, lerr := bus.SeatPending(topic, peek, all); lerr == nil {
+		items = append(items, legacy...)
+	}
+
 	if len(items) == 0 {
 		// Say WHICH seat is empty. On a host with several logins, "no messages"
 		// without a name is a claim the reader cannot check.
