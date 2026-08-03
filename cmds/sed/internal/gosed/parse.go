@@ -31,7 +31,17 @@ type parseState struct {
 	writeFile  WriteFileFunc          // file writer for the w command
 	blockLevel int                    // how deeply nested are our blocks?
 	quiet      bool                   // are we building a quiet engine (-n sed)?
+	lastRE     string                 // most recent non-null RE, for // (see rememberRE)
 	err        error                  // record any errors we encounter
+}
+
+// rememberRE records a written-out RE so a later null RE (// or s//repl/) has
+// something to compile against. Null REs themselves are not recorded — they
+// are not a new RE, they are a reference to the one already remembered.
+func (ps *parseState) rememberRE(re string) {
+	if re != "" {
+		ps.lastRE = re
+	}
 }
 
 func parse(input <-chan *token, quiet bool, readFile ReadFileFunc, writeFile WriteFileFunc) ([]instruction, error) {
@@ -99,10 +109,11 @@ func parse_toplevel(ps *parseState) {
 			compile_cond(ps, eofcond{})
 		case tok_RX:
 			var rx condition
-			rx, ps.err = newRECondition(tok.args[0], &tok.location)
+			rx, ps.err = newRECondition(tok.args[0], ps.lastRE, &tok.location)
 			if ps.err != nil {
 				break
 			}
+			ps.rememberRE(tok.args[0])
 			compile_cond(ps, rx)
 		case tok_EOL:
 			// top level empty lines are OK
@@ -188,10 +199,11 @@ func compile_twocond(ps *parseState, c1 condition) {
 	case tok_DOLLAR:
 		c2 = eofcond{}
 	case tok_RX:
-		c2, ps.err = newRECondition(tok.args[0], &tok.location)
+		c2, ps.err = newRECondition(tok.args[0], ps.lastRE, &tok.location)
 		if ps.err != nil {
 			break
 		}
+		ps.rememberRE(tok.args[0])
 	default:
 		ps.err = fmt.Errorf("Expected a second condition after comma %v", &tok.location)
 	}
@@ -295,11 +307,12 @@ func compile_cmd(ps *parseState, cmd *token) {
 	case 'r':
 		ps.ins = append(ps.ins, cmd_newReader(cmd.args[0], ps.readFile))
 	case 's':
-		subst, err := newSubstitution(cmd.args[0], cmd.args[1], cmd.args[2])
+		subst, err := newSubstitution(cmd.args[0], cmd.args[1], cmd.args[2], ps.lastRE)
 		if err != nil {
 			ps.err = fmt.Errorf("Substitution parse: %s %v", err.Error(), &cmd.location)
 			break
 		}
+		ps.rememberRE(cmd.args[0])
 		ps.ins = append(ps.ins, subst)
 	case 'w':
 		ps.ins = append(ps.ins, cmd_newWriter(cmd.args[0], ps.writeFile))

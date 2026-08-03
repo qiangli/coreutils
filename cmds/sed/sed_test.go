@@ -418,3 +418,186 @@ func runSedInDirEnv(t *testing.T, dir string, env []string, in string, args ...s
 	code = cmd.Run(rc, args)
 	return o.String(), e.String(), code
 }
+
+// ---------------------------------------------------------------------------
+// POSIX null RE and \cREc context addresses (VSC residual, 2026-08).
+// ---------------------------------------------------------------------------
+
+// A null RE stands for the last RE used, in both places one can appear: the
+// s command's pattern and a context address. Before this, `//` compiled as an
+// empty pattern, so it matched at every position — s//X/ prefixed every line
+// and //d deleted the file.
+func TestSedNullRERepeatsLastRE(t *testing.T) {
+	cases := []struct {
+		name    string
+		program string
+		in      string
+		want    string
+	}{
+		{"s reuses address RE", `/abc/s//X/`, "abc\nzabcz\nq\n", "X\nzXz\nq\n"},
+		// Line 2 substitutes only its first "abc", so the // address still
+		// finds one and deletes the line; line 1 has none left.
+		{"address reuses s RE", `s/abc/X/;//d`, "abc\nabcabc\nq\n", "X\nq\n"},
+		{"s reuses previous s RE", `s/a/1/;s//2/`, "aa\n", "12\n"},
+		{"null RE keeps its own flags", `/b/s//X/g`, "bbb\n", "XXX\n"},
+		{"alternate delimiter address", `\%abc%s%%Y%`, "abc\nq\n", "Y\nq\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, tc.in, tc.program)
+			if code != 0 || errOut != "" {
+				t.Fatalf("%s = (%q, %q, %d), want success", tc.program, out, errOut, code)
+			}
+			if out != tc.want {
+				t.Errorf("%s = %q, want %q", tc.program, out, tc.want)
+			}
+		})
+	}
+}
+
+// "The last RE used" is dynamic: the RE the program most recently APPLIED,
+// not the one lexically nearest. The same trailing s//+/ resolves to /a/ on
+// line 1 and to /b/ on line 2, because a different s command ran on each.
+func TestSedNullREIsTheLastREApplied(t *testing.T) {
+	const program = `1s/a/-/;2s/b/-/;s//+/`
+	out, errOut, code := runSed(t, "1aab\n2abb\n", program)
+	if code != 0 || errOut != "" {
+		t.Fatalf("%s = (%q, %q, %d), want success", program, out, errOut, code)
+	}
+	if want := "1-+b\n2a-+\n"; out != want {
+		t.Errorf("%s = %q, want %q", program, out, want)
+	}
+}
+
+// Evaluating a context address counts as USING its RE even when it does not
+// match — so an address that fails still becomes what a later // stands for.
+// Here /^2/ is evaluated on line 1, so the trailing s//+/ resolves to ^2 (no
+// match) rather than to the /a/ of the s command that did run.
+func TestSedNullRECountsUnmatchedAddresses(t *testing.T) {
+	const program = `/^1/s/a/-/;/^2/s/b/-/;s//+/`
+	out, errOut, code := runSed(t, "1aab\n2abb\n", program)
+	if code != 0 || errOut != "" {
+		t.Fatalf("%s = (%q, %q, %d), want success", program, out, errOut, code)
+	}
+	if want := "1-ab\n2a-+\n"; out != want {
+		t.Errorf("%s = %q, want %q", program, out, want)
+	}
+}
+
+// A null RE with no RE before it anywhere is an error, not a match-everything.
+// The one-command program also covers the s/// fast path in sed.go, which must
+// decline an empty pattern rather than compile it.
+func TestSedNullREWithoutPreviousREIsAnError(t *testing.T) {
+	for _, program := range []string{`s//X/`, `s//X/g`, `//d`, `//p`} {
+		out, errOut, code := runSed(t, "abc\n", program)
+		if code == 0 {
+			t.Errorf("%s = (%q, %q, %d), want a non-zero exit", program, out, errOut, code)
+		}
+		if !strings.Contains(errOut, "no previous regular expression") {
+			t.Errorf("%s stderr = %q, want it to name the missing previous RE", program, errOut)
+		}
+	}
+}
+
+// Modifiers would change which RE // stands for, so GNU rejects them outright.
+func TestSedNullRERejectsModifiers(t *testing.T) {
+	const program = `s/a/X/;s//Y/I`
+	_, errOut, code := runSed(t, "abc\n", program)
+	if code == 0 || !strings.Contains(errOut, "modifiers on empty regexp") {
+		t.Errorf("%s stderr = %q (exit %d), want a modifiers-on-empty-regexp error", program, errOut, code)
+	}
+}
+
+// POSIX \cREc: a context address may be delimited by any character except
+// backslash and newline, and an escaped delimiter inside is that character.
+func TestSedContextAddressAlternateDelimiter(t *testing.T) {
+	cases := []struct {
+		name    string
+		program string
+		in      string
+		want    string
+	}{
+		{"comma delimiter", `\,abc,d`, "abc\nq\n", "q\n"},
+		{"escaped delimiter is literal", `\,a\,c,d`, "a,c\nabc\n", "abc\n"},
+		{"delimiter frees the slash", `\,a/c,d`, "a/c\nabc\n", "abc\n"},
+		{"percent delimiter", `\%abc%d`, "abc\nq\n", "q\n"},
+		{"negated", `\,abc,!d`, "abc\nq\n", "abc\n"},
+		{"as a range endpoint", `\,a,,\,c,d`, "a\nb\nc\nd\n", "d\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, tc.in, tc.program)
+			if code != 0 || errOut != "" {
+				t.Fatalf("%s = (%q, %q, %d), want success", tc.program, out, errOut, code)
+			}
+			if out != tc.want {
+				t.Errorf("%s = %q, want %q", tc.program, out, tc.want)
+			}
+		})
+	}
+}
+
+func TestSedContextAddressRejectsBackslashDelimiter(t *testing.T) {
+	_, errOut, code := runSed(t, "abc\n", `\\abc\d`)
+	if code == 0 {
+		t.Errorf(`\\abc\d = exit %d, want a non-zero exit`, code)
+	}
+	if !strings.Contains(errOut, "delimit an address") {
+		t.Errorf(`\\abc\d stderr = %q, want it to reject the delimiter`, errOut)
+	}
+}
+
+// The y command's operands are compared for length AFTER escape decoding, and
+// a backslash-escaped delimiter is that delimiter as an ordinary character.
+func TestSedTransliterateEscapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		program string
+		in      string
+		want    string
+	}{
+		{"escaped backslash counts once", `y/abc/x\\z/`, "abc\n", "x\\z\n"},
+		{"newline escape", `y/abc/x\nz/`, "abc\n", "x\nz\n"},
+		{"alternate delimiter", `y,abc,xyz,`, "abc\n", "xyz\n"},
+		{"escaped delimiter in operands", `y,a\,c,x\,z,`, "a,c\n", "x,z\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, tc.in, tc.program)
+			if code != 0 || errOut != "" {
+				t.Fatalf("%s = (%q, %q, %d), want success", tc.program, out, errOut, code)
+			}
+			if out != tc.want {
+				t.Errorf("%s = %q, want %q", tc.program, out, tc.want)
+			}
+		})
+	}
+}
+
+// The blanks between an a/i/c command letter and its text on the SAME line are
+// a separator; a backslash there is the POSIX escape that makes the next
+// character ordinary, which is how leading blanks are kept when they are text.
+func TestSedTextCommandLeadingBlanks(t *testing.T) {
+	cases := []struct {
+		name    string
+		program string
+		want    string
+	}{
+		{"blanks are a separator", `1a   hello`, "x\nhello\n"},
+		{"backslash keeps the blanks", "1a\\   hello", "x\n   hello\n"},
+		{"backslash then text", `1a\hello`, "x\nhello\n"},
+		{"classic two-line form", "1a\\\nhello", "x\nhello\n"},
+		{"continuation keeps its blanks", "1a\\\n  hello", "x\n  hello\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, "x\n", tc.program)
+			if code != 0 || errOut != "" {
+				t.Fatalf("%q = (%q, %q, %d), want success", tc.program, out, errOut, code)
+			}
+			if out != tc.want {
+				t.Errorf("%q = %q, want %q", tc.program, out, tc.want)
+			}
+		})
+	}
+}

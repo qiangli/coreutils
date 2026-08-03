@@ -281,6 +281,13 @@ func parseSimpleSubstitution(program string) (*simpleSubstitution, bool, error) 
 	if !ok {
 		return nil, false, nil
 	}
+	// An empty pattern is the null RE — "the last RE used". This fast path
+	// exists only for a program that IS one s/// command, so there is no
+	// earlier RE to stand in for it; hand it to the full engine, whose
+	// null-RE handling reports that as the error it is.
+	if pattern == "" {
+		return nil, false, nil
+	}
 	replacement, next, ok := readFastDelimited(program, next, delimiter, true)
 	if !ok {
 		return nil, false, nil

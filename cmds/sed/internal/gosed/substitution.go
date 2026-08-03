@@ -20,13 +20,15 @@ type substitute struct {
 	which       int       // which pattern to replace
 	pflag       bool      // do we print upon replacement?
 	gflag       bool      // do we replace every match after 'which'?
+	null        bool      // written as s//repl/: the null RE (see resolveNullRE)
 }
 
 func (s *substitute) run(svm *vm) (err error) {
 	svm.ip++
 
 	// perform the search
-	matches := s.pattern.FindAllStringSubmatchIndex(svm.pat, -1)
+	pattern := resolveNullRE(svm, s.pattern, s.null)
+	matches := pattern.FindAllStringSubmatchIndex(svm.pat, -1)
 
 	// filter to the matches we want to replace
 	var end int = len(matches)
@@ -41,7 +43,7 @@ func (s *substitute) run(svm *vm) (err error) {
 	matches = matches[s.which:end]
 
 	// perform the replacement
-	svm.pat = subst_replaceAll(svm.pat, s, matches)
+	svm.pat = subst_replaceAll(svm.pat, pattern, s.replacement, matches)
 	svm.modified = true
 
 	// print if requested
@@ -53,11 +55,11 @@ func (s *substitute) run(svm *vm) (err error) {
 	return
 }
 
-func subst_replaceAll(src string, subst *substitute, indexes [][]int) string {
+func subst_replaceAll(src string, pattern sedRegexp, replacement string, indexes [][]int) string {
 	var substrings []string
 	endpt := 0 // where we left off in the src string
 	for _, idx := range indexes {
-		exp := string(subst.pattern.ExpandString(nil, subst.replacement, src, idx))
+		exp := string(pattern.ExpandString(nil, replacement, src, idx))
 		substrings = append(substrings, src[endpt:idx[0]], exp)
 		endpt = idx[1]
 	}
@@ -66,7 +68,7 @@ func subst_replaceAll(src string, subst *substitute, indexes [][]int) string {
 	return strings.Join(substrings, "")
 }
 
-func newSubstitution(pattern string, replacement string, mods string) (instruction, error) {
+func newSubstitution(pattern string, replacement string, mods string, last string) (instruction, error) {
 	command := &substitute{}
 	var numbers []rune
 	var flags string // RE2 flag prefix accumulated from i/m modifiers
@@ -90,6 +92,22 @@ func newSubstitution(pattern string, replacement string, mods string) (instructi
 		default:
 			return nil, fmt.Errorf("Bad regexp modifier <%v>", char)
 		}
+	}
+
+	// An empty pattern is POSIX's null RE — the last RE used. It resolves
+	// dynamically at run time (resolveNullRE); last is the lexically previous
+	// RE, compiled as the fallback for a null RE reached before any other RE
+	// has run. Modifiers would have to change the RE it stands for, so GNU
+	// rejects them here rather than silently recompiling someone else's RE.
+	if pattern == "" {
+		if flags != "" {
+			return nil, fmt.Errorf("cannot specify modifiers on empty regexp")
+		}
+		if last == "" {
+			return nil, fmt.Errorf("no previous regular expression")
+		}
+		command.null = true
+		pattern = last
 	}
 
 	prefix := ""

@@ -55,6 +55,7 @@ type vm struct {
 	output   []byte        // the output buffer
 	lineno   int           // current line number
 	modified bool          // have we modified the pattern space?
+	lastRE   sedRegexp     // the last RE actually applied, for the null-RE rule
 }
 
 // a sed instruction is mostly a function transforming an engine

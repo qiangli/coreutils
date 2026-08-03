@@ -43,17 +43,46 @@ func (_ eofcond) isMet(svm *vm) bool {
 
 // -----------------------------------------------------
 type regexpcond struct {
-	re sedRegexp // for matching regexp conditions
+	re   sedRegexp // for matching regexp conditions
+	null bool      // written as //: resolve against the last RE at run time
 }
 
 func (r *regexpcond) isMet(svm *vm) (answer bool) {
-	return r.re.MatchString(svm.pat)
+	re := resolveNullRE(svm, r.re, r.null)
+	return re.MatchString(svm.pat)
 }
 
-func newRECondition(s string, loc *location) (*regexpcond, error) {
+// newRECondition compiles a context address. An empty RE is POSIX's null RE:
+// it stands for the last RE used, so it compiles against last — the most
+// recent RE lexically before it — while remembering to prefer whatever RE the
+// program has most recently APPLIED once it is running (see resolveNullRE).
+func newRECondition(s string, last string, loc *location) (*regexpcond, error) {
+	null := s == ""
+	if null {
+		if last == "" {
+			return nil, fmt.Errorf("no previous regular expression %v", loc)
+		}
+		s = last
+	}
+
 	re, err := compileRE(s, "") // GNU BRE/ERE → RE2 (was regexp.Compile)
 	if err != nil {
 		err = fmt.Errorf("Regexp Error: %s %v", err.Error(), loc)
 	}
-	return &regexpcond{re}, err
+	return &regexpcond{re, null}, err
+}
+
+// resolveNullRE implements the null-RE rule for one use of one RE: "the last
+// RE used" is dynamic, so a // address or s//repl/ takes the RE the running
+// program applied most recently, not the one that lexically precedes it. The
+// compiled fallback covers the case where nothing has been applied yet — a
+// null RE reachable before its predecessor ever runs, e.g. behind a branch.
+//
+// Every non-null use records itself, which is what makes the rule dynamic.
+func resolveNullRE(svm *vm, re sedRegexp, null bool) sedRegexp {
+	if null && svm.lastRE != nil {
+		re = svm.lastRE
+	}
+	svm.lastRE = re
+	return re
 }

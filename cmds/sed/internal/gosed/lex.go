@@ -233,6 +233,25 @@ func readReplacement(r *locReader, delimiter rune) (string, error) {
 	}
 }
 
+// leadingTextBlanks normalises the FIRST line of an a/i/c text argument, the
+// only line where the text shares its line with the command letter.
+//
+// Two things happen there and nowhere else. Leading <blank>s between the
+// command letter and the text are separators, not text ("a hello" appends
+// "hello"), so they are dropped. And a <backslash> may then appear as the
+// POSIX escape that makes the next character ordinary — the backslash is
+// removed and what follows is taken literally, which is how "a\   x" keeps
+// its blanks while "a   x" does not.
+//
+// Continuation lines are untouched: their leading blanks are part of the text.
+func leadingTextBlanks(txt string) string {
+	txt = strings.TrimLeft(txt, " \t")
+	if strings.HasPrefix(txt, `\`) {
+		txt = txt[1:]
+	}
+	return txt
+}
+
 // readMultiLine reads until it finds an unescaped newline. It discards the
 // first line, if it is empty, because commands like "c\", "a\" and "i\" are
 // intended to be used that way.
@@ -459,6 +478,24 @@ func lex(r *bufio.Reader, ch chan<- *token, errch chan<- error) {
 			var rx string
 			rx, err = readDelimited(&rdr, '/')
 			ch <- &token{topLoc, tok_RX, cur, []string{rx}}
+		case '\\':
+			// POSIX \cREc: a context address delimited by any character c
+			// other than <backslash> or <newline>. Inside the RE, c stands
+			// for itself when escaped, which readDelimited already honours;
+			// the delimiter is reported as the token letter so error
+			// messages name the address the way it was written.
+			var delimiter rune
+			delimiter, _, err = rdr.ReadRune()
+			if err != nil {
+				break
+			}
+			if delimiter == '\n' || delimiter == '\\' {
+				err = fmt.Errorf("%c cannot delimit an address %v", delimiter, &topLoc)
+				break
+			}
+			var rx string
+			rx, err = readDelimited(&rdr, delimiter)
+			ch <- &token{topLoc, tok_RX, delimiter, []string{rx}}
 		case '$':
 			ch <- &token{topLoc, tok_DOLLAR, cur, nil}
 		case ':':
