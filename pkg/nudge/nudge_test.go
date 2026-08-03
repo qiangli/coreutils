@@ -101,9 +101,9 @@ func TestOnFailureSilentWhenDisabled(t *testing.T) {
 // The tty-messaging family is deliberately unimplemented, so an agent that
 // reaches for it must be told where the working equivalent is rather than just
 // getting "command not found".
-func TestSuggestFailure_TtyMessagingPointsAtTheBoard(t *testing.T) {
+func TestSuggest_TtyMessagingPointsAtTheBoard(t *testing.T) {
 	for _, name := range []string{"wall", "write", "mesg", "talk"} {
-		got := SuggestFailure([]string{name, "someone", "hi"})
+		got := Suggest([]string{name, "someone", "hi"}, false)
 		if got == "" {
 			t.Errorf("%s: no hint; an unimplemented tool must name its replacement", name)
 			continue
@@ -113,7 +113,7 @@ func TestSuggestFailure_TtyMessagingPointsAtTheBoard(t *testing.T) {
 		}
 	}
 	// A tool that IS implemented must not be annotated.
-	if got := SuggestFailure([]string{"ls", "-l"}); got != "" {
+	if got := Suggest([]string{"ls", "-l"}, false); got != "" {
 		t.Errorf("ls must not be hinted: %s", got)
 	}
 }

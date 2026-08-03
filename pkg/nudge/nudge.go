@@ -70,17 +70,6 @@ func SuggestFailure(args []string) string {
 		if hasBSDInPlace(args[1:]) {
 			return "GNU sed takes -i with no argument; BSD's `-i ''` is just `-i`"
 		}
-	case "wall", "write", "mesg", "talk":
-		// The classic tty-messaging family, deliberately unimplemented — see
-		// docs/commands.md's NO list. They write to a TERMINAL, so they reach
-		// only a logged-in party and leave nothing behind; `write` to a
-		// logged-out user is an outright error. Agents are usually not "logged
-		// in" at the moment you need to tell them something, which is the case
-		// these tools cannot serve and `bashy mb` exists for.
-		return "not implemented: " + args[0] + " writes to a TERMINAL, so it reaches only a " +
-			"logged-in party and stores nothing. Use `bashy mb` — a durable board: " +
-			"`bashy mb post \"...\"` broadcasts (wall), `bashy mb send <agent> \"...\"` " +
-			"messages one (write), and it reaches an agent that is not running"
 	}
 	return ""
 }
@@ -138,6 +127,21 @@ func routingHint(name string, args []string) string {
 			return ""
 		}
 		return "find walks ignored directories too. Add `--agentic` to skip .gitignore/node_modules, or use `ast symbols` / `ast map` to map the codebase structurally."
+	case "wall", "write", "mesg", "talk":
+		// The tty-messaging family — see docs/commands.md's NO list.
+		//
+		// It belongs HERE and not in SuggestFailure, which was where it first
+		// landed and was dead code: SuggestFailure runs only where a tool calls
+		// it on its own failure path (today sed and stat), so nothing would ever
+		// have invoked it for a name coreutils does not implement. routingHint
+		// is reached from the audit handler for EVERY dispatched command, which
+		// is the only place a hint about a tool we do not own can fire.
+		//
+		// It also has to fire on SUCCESS, not just failure. These binaries exist
+		// on most hosts, so `wall msg` succeeds — and a hint that waits for a
+		// failure would never appear on exactly the systems where the tool works
+		// and silently reaches nobody who is not logged in.
+		return name + " writes to a TERMINAL: it reaches only a party logged in right now and stores nothing (`write` to a logged-out user is an error). `bashy mb` is durable and reaches an agent that is not running — `mb post` broadcasts (wall), `mb send <agent>` messages one (write), `bus subscribe --interrupt-from` governs interruption (mesg)."
 	}
 	return ""
 }
