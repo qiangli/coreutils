@@ -37,6 +37,7 @@ type Engine struct {
 
 // ReadFileFunc reads filenames named by sed's r command.
 type ReadFileFunc func(string) ([]byte, error)
+type PrepareWriteFileFunc func(string) error
 type WriteFileFunc func(string, string) error
 
 // vm is the virtual machine state for a running sed program.
@@ -68,12 +69,15 @@ func makeEngine(program io.Reader, isQuiet bool) (*Engine, error) {
 }
 
 func makeEngineWithReadFile(program io.Reader, isQuiet bool, readFile ReadFileFunc) (*Engine, error) {
-	return makeEngineWithReadWriteFile(program, isQuiet, readFile, defaultWriteFile)
+	return makeEngineWithReadWriteFile(program, isQuiet, readFile, defaultPrepareWriteFile, defaultWriteFile)
 }
 
-func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadFileFunc, writeFile WriteFileFunc) (*Engine, error) {
+func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc) (*Engine, error) {
 	if readFile == nil {
 		readFile = os.ReadFile
+	}
+	if prepareWriteFile == nil {
+		prepareWriteFile = defaultPrepareWriteFile
 	}
 	if writeFile == nil {
 		writeFile = defaultWriteFile
@@ -83,7 +87,7 @@ func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadF
 	errch := make(chan error, 1)
 	go lex(bufprog, ch, errch)
 
-	instructions, parseErr := parse(ch, isQuiet, readFile, writeFile)
+	instructions, parseErr := parse(ch, isQuiet, readFile, prepareWriteFile, writeFile)
 	var err = <-errch // look for lexing errors first...
 	if err == nil {
 		// if there were no lex errors, look for a parsing error
@@ -119,12 +123,12 @@ func NewQuietWithReadFile(program io.Reader, readFile ReadFileFunc) (*Engine, er
 	return makeEngineWithReadFile(program, true, readFile)
 }
 
-func NewWithReadWriteFile(program io.Reader, readFile ReadFileFunc, writeFile WriteFileFunc) (*Engine, error) {
-	return makeEngineWithReadWriteFile(program, false, readFile, writeFile)
+func NewWithReadWriteFile(program io.Reader, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc) (*Engine, error) {
+	return makeEngineWithReadWriteFile(program, false, readFile, prepareWriteFile, writeFile)
 }
 
-func NewQuietWithReadWriteFile(program io.Reader, readFile ReadFileFunc, writeFile WriteFileFunc) (*Engine, error) {
-	return makeEngineWithReadWriteFile(program, true, readFile, writeFile)
+func NewQuietWithReadWriteFile(program io.Reader, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc) (*Engine, error) {
+	return makeEngineWithReadWriteFile(program, true, readFile, prepareWriteFile, writeFile)
 }
 
 // Wrap supplies an io.Reader that applies the sed Engine to the given

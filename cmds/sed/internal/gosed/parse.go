@@ -22,17 +22,19 @@ const (
 )
 
 type parseState struct {
-	toks       <-chan *token          // our input
-	ins        []instruction          // the compiled instructions
-	branches   []waitingBranch        // references to fix up
-	b_labels   map[string]instruction // named b branch labels
-	t_labels   map[string]instruction // named t branch labels
-	readFile   ReadFileFunc           // file reader for the r command
-	writeFile  WriteFileFunc          // file writer for the w command
-	blockLevel int                    // how deeply nested are our blocks?
-	quiet      bool                   // are we building a quiet engine (-n sed)?
-	lastRE     string                 // most recent non-null RE, for // (see rememberRE)
-	err        error                  // record any errors we encounter
+	toks             <-chan *token          // our input
+	ins              []instruction          // the compiled instructions
+	branches         []waitingBranch        // references to fix up
+	b_labels         map[string]instruction // named b branch labels
+	t_labels         map[string]instruction // named t branch labels
+	readFile         ReadFileFunc           // file reader for the r command
+	prepareWriteFile PrepareWriteFileFunc   // creates/truncates each wfile before processing
+	writeFile        WriteFileFunc          // file writer for the w command
+	writeFiles       []string               // wfiles encountered while compiling
+	blockLevel       int                    // how deeply nested are our blocks?
+	quiet            bool                   // are we building a quiet engine (-n sed)?
+	lastRE           string                 // most recent non-null RE, for // (see rememberRE)
+	err              error                  // record any errors we encounter
 }
 
 // rememberRE records a written-out RE so a later null RE (// or s//repl/) has
@@ -44,8 +46,8 @@ func (ps *parseState) rememberRE(re string) {
 	}
 }
 
-func parse(input <-chan *token, quiet bool, readFile ReadFileFunc, writeFile WriteFileFunc) ([]instruction, error) {
-	ps := &parseState{toks: input, b_labels: make(map[string]instruction), t_labels: make(map[string]instruction), readFile: readFile, writeFile: writeFile, quiet: quiet}
+func parse(input <-chan *token, quiet bool, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc) ([]instruction, error) {
+	ps := &parseState{toks: input, b_labels: make(map[string]instruction), t_labels: make(map[string]instruction), readFile: readFile, prepareWriteFile: prepareWriteFile, writeFile: writeFile, quiet: quiet}
 
 	ps.ins = append(ps.ins, cmd_fillNext)
 	parse_toplevel(ps)
@@ -65,6 +67,19 @@ func parse(input <-chan *token, quiet bool, readFile ReadFileFunc, writeFile Wri
 	}
 	ps.ins = append(ps.ins, zeroBranch)
 	parse_resolveBranches(ps)
+	if ps.err == nil {
+		seen := make(map[string]struct{}, len(ps.writeFiles))
+		for _, filename := range ps.writeFiles {
+			if _, ok := seen[filename]; ok {
+				continue
+			}
+			seen[filename] = struct{}{}
+			if err := ps.prepareWriteFile(filename); err != nil {
+				ps.err = err
+				break
+			}
+		}
+	}
 
 	return ps.ins, ps.err
 }
@@ -307,14 +322,18 @@ func compile_cmd(ps *parseState, cmd *token) {
 	case 'r':
 		ps.ins = append(ps.ins, cmd_newReader(cmd.args[0], ps.readFile))
 	case 's':
-		subst, err := newSubstitution(cmd.args[0], cmd.args[1], cmd.args[2], ps.lastRE)
+		subst, err := newSubstitution(cmd.args[0], cmd.args[1], cmd.args[2], cmd.args[3], ps.lastRE, ps.writeFile)
 		if err != nil {
 			ps.err = fmt.Errorf("Substitution parse: %s %v", err.Error(), &cmd.location)
 			break
 		}
 		ps.rememberRE(cmd.args[0])
+		if cmd.args[3] != "" {
+			ps.writeFiles = append(ps.writeFiles, cmd.args[3])
+		}
 		ps.ins = append(ps.ins, subst)
 	case 'w':
+		ps.writeFiles = append(ps.writeFiles, cmd.args[0])
 		ps.ins = append(ps.ins, cmd_newWriter(cmd.args[0], ps.writeFile))
 	case 'x':
 		ps.ins = append(ps.ins, cmd_swap)

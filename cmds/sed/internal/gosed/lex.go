@@ -332,7 +332,7 @@ func readFilename(r *locReader) (string, error) {
 }
 
 func readSubstitution(r *locReader) ([]string, error) {
-	var ans = make([]string, 3)
+	var ans = make([]string, 4)
 	var err error
 
 	// step 1.: get the delimiter character for substitutions
@@ -354,10 +354,37 @@ func readSubstitution(r *locReader) ([]string, error) {
 		return ans, err
 	}
 
-	// step 4.: read the modifiers
-	ans[2], err = readIdentifier(r)
+	// step 4.: read the modifiers and the optional `w wfile` suffix. The w
+	// flag consumes the rest of the command as a filename and must therefore
+	// be separated from ordinary one-rune modifiers here, rather than by the
+	// top-level lexer.
+	ans[2], ans[3], err = readSubstitutionModifiers(r)
 
 	return ans, err
+}
+
+func readSubstitutionModifiers(r *locReader) (mods, filename string, err error) {
+	var buffer bytes.Buffer
+	for {
+		character, _, readErr := r.ReadRune()
+		if readErr != nil {
+			return buffer.String(), "", readErr
+		}
+		if character == ';' || character == '\n' {
+			if unreadErr := r.UnreadRune(); unreadErr != nil {
+				return "", "", unreadErr
+			}
+			return buffer.String(), "", nil
+		}
+		if unicode.IsSpace(character) {
+			return buffer.String(), "", nil
+		}
+		if character == 'w' {
+			filename, readErr = readFilename(r)
+			return buffer.String(), filename, readErr
+		}
+		buffer.WriteRune(character)
+	}
 }
 
 // unescapeTranslation decodes the escapes POSIX defines for the two operands

@@ -20,7 +20,9 @@ type substitute struct {
 	which       int       // which pattern to replace
 	pflag       bool      // do we print upon replacement?
 	gflag       bool      // do we replace every match after 'which'?
-	null        bool      // written as s//repl/: the null RE (see resolveNullRE)
+	wfile       string    // write a changed pattern space to this file
+	writeFile   WriteFileFunc
+	null        bool // written as s//repl/: the null RE (see resolveNullRE)
 }
 
 func (s *substitute) run(svm *vm) (err error) {
@@ -51,6 +53,9 @@ func (s *substitute) run(svm *vm) (err error) {
 		err = cmd_print(svm)
 		svm.ip-- // roll back ip from the print command
 	}
+	if err == nil && s.wfile != "" {
+		err = s.writeFile(s.wfile, svm.pat)
+	}
 
 	return
 }
@@ -68,8 +73,8 @@ func subst_replaceAll(src string, pattern sedRegexp, replacement string, indexes
 	return strings.Join(substrings, "")
 }
 
-func newSubstitution(pattern string, replacement string, mods string, last string) (instruction, error) {
-	command := &substitute{}
+func newSubstitution(pattern string, replacement string, mods string, wfile string, last string, writeFile WriteFileFunc) (instruction, error) {
+	command := &substitute{wfile: wfile, writeFile: writeFile}
 	var numbers []rune
 	var flags string // RE2 flag prefix accumulated from i/m modifiers
 

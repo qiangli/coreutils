@@ -189,6 +189,76 @@ func TestSedReadCommandMissingFileIsEmpty(t *testing.T) {
 	}
 }
 
+func TestSedSubstitutionWriteFlag(t *testing.T) {
+	dir := t.TempDir()
+	out, errOut, code := runSedInDir(t, dir, "cat cat\nbird\ncat\n", "-n", "s/cat/dog/gw changed.txt")
+	if code != 0 || errOut != "" || out != "" {
+		t.Fatalf("s///gw = (%q, %q, %d), want quiet success", out, errOut, code)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "changed.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "dog dog\ndog\n"; string(got) != want {
+		t.Errorf("changed.txt = %q, want %q", got, want)
+	}
+
+	dir = t.TempDir()
+	out, errOut, code = runSedInDir(t, dir, "bird\n", "-n", "s/cat/dog/gw unchanged.txt")
+	if code != 0 || errOut != "" || out != "" {
+		t.Fatalf("non-matching s///gw = (%q, %q, %d), want quiet success", out, errOut, code)
+	}
+	got, err = os.ReadFile(filepath.Join(dir, "unchanged.txt"))
+	if err != nil {
+		t.Fatalf("non-matching s///gw did not create its wfile: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("unchanged.txt = %q, want empty", got)
+	}
+}
+
+func TestSedPreparesWriteFilesBeforeProcessing(t *testing.T) {
+	dir := t.TempDir()
+	out, errOut, code := runSedInDir(t, dir, "input\n", "-n", "q\nw first.txt\nw second.txt")
+	if code != 0 || errOut != "" || out != "" {
+		t.Fatalf("unreached w commands = (%q, %q, %d), want quiet success", out, errOut, code)
+	}
+	for _, name := range []string{"first.txt", "second.txt"} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Errorf("%s was not created before q: %v", name, err)
+		} else if len(got) != 0 {
+			t.Errorf("%s = %q, want empty", name, got)
+		}
+	}
+}
+
+func TestSedWriteFileTruncatedOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "capture.txt")
+	if err := os.WriteFile(path, []byte("stale contents\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runSedInDir(t, dir, "first\nsecond\n", "-n", "w capture.txt")
+	if code != 0 || errOut != "" || out != "" {
+		t.Fatalf("w capture.txt = (%q, %q, %d), want quiet success", out, errOut, code)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "first\nsecond\n"; string(got) != want {
+		t.Errorf("capture.txt = %q, want %q", got, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMode := info.Mode().Perm(); gotMode != 0o640 {
+		t.Errorf("capture.txt mode = %o, want existing mode 640 preserved", gotMode)
+	}
+}
+
 func TestSedQuietRegexAddressPrint(t *testing.T) {
 	if out, _, _ := runSed(t, "a\nbb\nc\n", "-n", "/b/p"); out != "bb\n" {
 		t.Errorf("-n /b/p = %q, want bb", out)

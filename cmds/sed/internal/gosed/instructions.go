@@ -380,11 +380,17 @@ func cmd_newReader(filename string, readFile ReadFileFunc) instruction {
 }
 
 // --------------------------------------------------
-// The 'w' command appends the current pattern space
-// to the named filsvm.  In this implementation, it opens
-// the file for appending, writes the file, and then
-// closes the filsvm.  This appears to be consistent with
-// what OS X sed does.
+func defaultPrepareWriteFile(filename string) error {
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// The 'w' command appends the current pattern space to the named file. The
+// file is created or truncated once while compiling the program; individual
+// command executions append without destroying earlier writes.
 func defaultWriteFile(filename, pattern string) error {
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
