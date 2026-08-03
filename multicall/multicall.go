@@ -58,6 +58,13 @@ func Dispatch(rc *tool.RunContext, name string, args []string) int {
 // and cwd, resolves the tool, and exits with its status. selfNames are the
 // front-end binary names under which the first operand is the tool name
 // (e.g. "coreutils", "bashy").
+//
+// Main owns its process (it calls os.Exit), so it also acts as the standalone
+// process boundary: when a command wrapper reports a signal-terminated COMMAND
+// via RunContext.ExitSignal, Main re-raises that signal on itself
+// (TerminateBySignal) so its wait status matches COMMAND's. Embedded hosts that
+// stay resident must NOT call Main; they run tools through Dispatch or
+// tool.Tool.Run, which never signal the process.
 func Main(selfNames ...string) {
 	name, args, listOnly := Resolve(os.Args[0], os.Args[1:], selfNames...)
 	if listOnly {
@@ -76,5 +83,13 @@ func Main(selfNames ...string) {
 			Err: os.Stderr,
 		},
 	}
-	os.Exit(Dispatch(rc, name, args))
+	code := Dispatch(rc, name, args)
+	// Standalone process boundary: if a wrapped COMMAND was killed by a
+	// signal, re-raise it on ourselves so our wait status matches COMMAND's,
+	// exactly as an execve-replacing env would. On a terminating signal this
+	// does not return; otherwise fall through to the normal exit.
+	if rc.ExitSignal != 0 {
+		TerminateBySignal(rc.ExitSignal)
+	}
+	os.Exit(code)
 }

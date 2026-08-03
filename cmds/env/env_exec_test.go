@@ -67,6 +67,18 @@ func helperMain(args []string) int {
 	case "exit":
 		n, _ := strconv.Atoi(args[1])
 		return n
+	case "raise":
+		// Terminate this process with the named signal, so a parent env
+		// observes a genuine signal death. Never returns on a POSIX host.
+		helperSelfRaise(args[1])
+		return 0
+	case "boundary":
+		// Act as a standalone multicall process: run env with a COMMAND that
+		// dies by the named signal, then apply the real process boundary so
+		// this process inherits COMMAND's wait status. Never returns on a
+		// POSIX host.
+		helperStandaloneBoundary(args[1])
+		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "helper: unknown mode %q\n", args[0])
 		return 2

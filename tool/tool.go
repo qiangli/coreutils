@@ -37,6 +37,24 @@ type RunContext struct {
 	Env []string // os.Environ() shape ("KEY=VALUE"); nil = empty environment
 	FS  *LocalFS // local OS filesystem with path translation; never nil in practice
 	Stdio
+
+	// ExitSignal is the process-boundary channel for a command wrapper
+	// (env, timeout, …) that ran a COMMAND which was terminated by a
+	// signal. When non-zero after Run returns, it is that signal's number.
+	//
+	// It exists because those wrappers fork-and-wait rather than
+	// execve-replacing the caller (self-replace would kill the embedding
+	// host — the whole point of this repo), so a signal that killed COMMAND
+	// cannot reach whatever waits on the wrapper the way it would for GNU's
+	// execve-based env. Run still returns the safe 128+N exit code for every
+	// caller. A *standalone* process boundary (multicall.Main) may
+	// additionally restore that signal's default disposition and re-raise it
+	// on itself so its own wait status matches COMMAND's (WIFSIGNALED with
+	// the same signal, and a core dump for the core-producing signals),
+	// exactly as an execve-replacing env would. An EMBEDDED host must ignore
+	// this field and use the returned exit code: it must never signal the
+	// host process.
+	ExitSignal int
 }
 
 // Getenv looks up key in rc.Env (last assignment wins, matching how a

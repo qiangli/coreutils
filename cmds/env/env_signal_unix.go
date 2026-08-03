@@ -115,11 +115,15 @@ func ignoreForCommandStart(signals []os.Signal) func() {
 	}
 }
 
-func commandSignalStatus(state *os.ProcessState) int {
-	if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-		return 128 + int(status.Signal())
+// commandSignalOutcome inspects a finished COMMAND's wait status. When it was
+// killed by a signal it returns that signal's number and GNU's 128+N exit
+// status; otherwise it returns (0, 125). The signal number is what a standalone
+// process boundary re-raises to reproduce COMMAND's wait status on env itself.
+func commandSignalOutcome(state *os.ProcessState) (signal, status int) {
+	if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return int(ws.Signal()), 128 + int(ws.Signal())
 	}
-	return 125
+	return 0, 125
 }
 
 func defaultCommandPath() string { return "/usr/bin:/bin" }

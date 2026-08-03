@@ -67,7 +67,10 @@ func ignoreForCommandStart(signals []os.Signal) func() {
 	}
 }
 
-func commandSignalStatus(_ *os.ProcessState) int { return 125 }
+// commandSignalOutcome: Windows has no POSIX signal wait-status model, so a
+// COMMAND that failed to yield an exit code is reported as GNU's 125 with no
+// signal for the boundary to re-raise.
+func commandSignalOutcome(_ *os.ProcessState) (signal, status int) { return 0, 125 }
 
 func defaultCommandPath() string {
 	return os.Getenv("PATH")

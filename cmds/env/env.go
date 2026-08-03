@@ -46,6 +46,9 @@ type entry struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	// A RunContext can be reused by an embedder. Never let a prior signal
+	// outcome leak into this invocation when the next COMMAND exits normally.
+	rc.ExitSignal = 0
 	fs := tool.NewFlags(cmd.Name)
 	ignore := fs.BoolP("ignore-environment", "i", false, "start with an empty environment")
 	unset := fs.StringArrayP("unset", "u", nil, "remove variable from the environment")
@@ -300,7 +303,14 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 			if code := ee.ExitCode(); code >= 0 {
 				return code
 			}
-			return commandSignalStatus(ee.ProcessState)
+			// COMMAND was killed by a signal. Report the safe 128+N exit
+			// status to every caller, and record the raw signal number so a
+			// standalone process boundary can re-raise it and inherit
+			// COMMAND's exact wait status (env self-replaces via execve
+			// upstream; we fork/wait, so this is how the signal propagates).
+			sig, status := commandSignalOutcome(ee.ProcessState)
+			rc.ExitSignal = sig
+			return status
 		}
 		fmt.Fprintf(rc.Err, "env: %s: %v\n", argv[0], err)
 		return 126
