@@ -256,7 +256,21 @@ func TestChairedNeedsParticipants(t *testing.T) {
 
 // The turn model is a CONSEQUENCE of who chairs, never a separate flag that could
 // contradict the roster.
+// seatAnyAgent relaxes the host-routability gate for tests whose subject is the
+// turn model or role separation rather than whether this machine can drive a
+// seat. The gate is indirected for exactly this reason; without it these tests
+// depend on which agent CLIs happen to be installed, which is not what they are
+// asserting. (They previously passed by accident: `meet start` did not check
+// routability at all, so an unroutable seat was silently accepted.)
+func seatAnyAgent(t *testing.T) {
+	t.Helper()
+	old := operableFn
+	operableFn = func(string) (bool, string) { return true, "test" }
+	t.Cleanup(func() { operableFn = old })
+}
+
 func TestTurnModelFollowsFromTheRoster(t *testing.T) {
+	seatAnyAgent(t)
 	plain, err := (&sessionFlags{topic: "t", secretary: "claude", participants: []string{"codex"}}).newState()
 	if err != nil {
 		t.Fatal(err)
@@ -284,6 +298,7 @@ func TestTurnModelFollowsFromTheRoster(t *testing.T) {
 // Separation of powers. Each of these is a way the design fails silently, so each
 // is a hard error rather than a warning.
 func TestRoleSeparationIsEnforced(t *testing.T) {
+	seatAnyAgent(t)
 	cases := []struct {
 		name string
 		sf   sessionFlags

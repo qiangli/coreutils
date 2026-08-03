@@ -180,6 +180,48 @@ func (sf *sessionFlags) canonicalizeRoster() {
 	sf.chair = canonAgent(sf.chair)
 }
 
+// routableRoster refuses a roster containing a seat this host cannot drive.
+//
+// routableSeat existed and was reachable from exactly ONE caller — inviteTo. So
+// `meet invite` was gated and `meet start --participant` was not, and anything
+// at all could be seated at creation time. That is not hypothetical: a live
+// conductor room on this host was created with `root-supervisor` as its sole
+// participant, a name the fleet does not know and nothing can drive. The room
+// reported `open` forever at round 0 with "no contribution", and a human message
+// sent into it was accepted and read by nobody.
+//
+// Which is precisely what routableSeat's own comment predicts: seating a name
+// that is not an agent "would mean every round from then on records a failed
+// turn for a participant that was never real". The gate was right; it was simply
+// not on the path that creates meetings.
+//
+// Creation only. Validate is deliberately left alone: it runs when an existing
+// session is LOADED, and refusing to load the rooms that already carry an
+// unroutable seat would turn a bad roster into an unreadable meeting —
+// destroying the record instead of preventing the next one.
+//
+// The human is not checked. `Human` is its own field on State and is a person,
+// not something this host drives.
+func (sf *sessionFlags) routableRoster() error {
+	for _, p := range sf.participants {
+		if err := routableSeat(p); err != nil {
+			return err
+		}
+	}
+	// Secretary and chair are agent seats too when set — Validate already
+	// forbids either from doubling as a participant — and a secretary that
+	// cannot be driven keeps no minutes.
+	for _, seat := range []string{sf.secretary, sf.chair} {
+		if strings.TrimSpace(seat) == "" {
+			continue
+		}
+		if err := routableSeat(seat); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // canonAgent resolves any name a human might type — a nickname, a family alias,
 // a tool:model binding — to the canonical agent name. A name that belongs to no
 // agent is returned untouched: it is an alias for nothing, so there is nothing

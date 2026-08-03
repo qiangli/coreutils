@@ -283,3 +283,40 @@ func TestTheGuardIsRealWithoutReadOnly(t *testing.T) {
 		t.Fatal("an uncontained host must refuse to strip claude's approval gate")
 	}
 }
+
+// THE GATE THAT WAS ONLY ON ONE PATH.
+//
+// routableSeat existed and was reachable from inviteTo alone, so `meet invite`
+// refused a name this host cannot drive while `meet start --participant`
+// accepted anything. A live conductor room on this host was created that way,
+// with `root-supervisor` as its sole participant: it reported `open` forever at
+// round 0 with no contribution, and a message sent into it was accepted and read
+// by nobody.
+func TestStart_RefusesAnUnroutableSeat(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		sf   sessionFlags
+	}{
+		{"participant", sessionFlags{topic: "t", participants: []string{"root-supervisor"}}},
+		{"secretary", sessionFlags{topic: "t", secretary: "root-supervisor", participants: []string{"claude"}}},
+		{"chair", sessionFlags{topic: "t", chair: "root-supervisor", participants: []string{"claude"}}},
+	} {
+		_, err := c.sf.newState()
+		if err == nil {
+			t.Errorf("%s: an unroutable seat must be refused at creation, not seated to fail every round", c.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "not an agent this host can drive") {
+			t.Errorf("%s: the refusal should say why: %v", c.name, err)
+		}
+	}
+}
+
+// The human is not an agent and is not checked: Human is its own field on
+// State, and a person is not something this host drives.
+func TestStart_DoesNotGateTheHumanSeat(t *testing.T) {
+	seatAnyAgent(t)
+	if _, err := (&sessionFlags{topic: "t", human: "some-person", participants: []string{"claude"}}).newState(); err != nil {
+		t.Fatalf("a human seat must not be held to agent routability: %v", err)
+	}
+}

@@ -262,6 +262,13 @@ func (sf *sessionFlags) newState() (*State, error) {
 	// claude-fable5 is ONE agent seated twice, and seating it twice would
 	// dilute the vote while looking like diversity.
 	sf.canonicalizeRoster()
+	// And every seat must be one this host can actually drive. `meet invite`
+	// has always checked; creation did not, so any name at all could be seated
+	// and then record a failed turn every round for a participant that was
+	// never real.
+	if err := sf.routableRoster(); err != nil {
+		return nil, err
+	}
 	cwd, _ := os.Getwd()
 	st := &State{
 		ID: newID(sf.topic, nowFn()), Room: assignRoom(), Topic: sf.topic, Agenda: sf.agenda,
