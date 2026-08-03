@@ -156,10 +156,171 @@ func parseUnsigned(rc *tool.RunContext, s string) (value uint64, hadErr bool) {
 	return value, numDiag(rc, s, nDigits, overflow, leftover)
 }
 
-// parseFloat converts an ARGUMENT for the floating-point conversions. It accepts
-// the same forms as C strtod (decimal, hex-float, inf/infinity/nan) via Go's
-// ParseFloat, consuming the longest valid prefix so trailing garbage yields a
-// "value not completely converted" diagnostic rather than discarding the value.
+// commonFoldLen returns the length of the longest common prefix of s and lower,
+// compared case-insensitively. lower must contain only lowercase ASCII letters
+// (|0x20 folds exactly the two cases of a letter and nothing else).
+func commonFoldLen(s, lower string) int {
+	n := 0
+	for n < len(s) && n < len(lower) && (s[n]|0x20) == lower[n] {
+		n++
+	}
+	return n
+}
+
+func isDigitByte(c byte) bool    { return c >= '0' && c <= '9' }
+func isHexDigitByte(c byte) bool { return digitValue(c) < 16 }
+
+// isNCharByte reports whether c may appear in the n-char-sequence of C's
+// "nan(n-char-sequence)" strtod form: digits, letters and underscore.
+func isNCharByte(c byte) bool {
+	return isDigitByte(c) || c == '_' ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// scanExponent consumes an exponent part starting at s[j] — the marker letter
+// ('e' or 'p', either case), an optional sign, then at least one decimal digit.
+// It reports the end offset, or ok=false when no complete exponent is present
+// (in which case the marker is not part of the subject sequence at all).
+func scanExponent(s string, j int, marker byte) (int, bool) {
+	if j >= len(s) || (s[j]|0x20) != marker {
+		return 0, false
+	}
+	k := j + 1
+	if k < len(s) && (s[k] == '+' || s[k] == '-') {
+		k++
+	}
+	d := k
+	for k < len(s) && isDigitByte(s[k]) {
+		k++
+	}
+	if k == d {
+		return 0, false
+	}
+	return k, true
+}
+
+// scanNumericBody measures the unsigned numeric part of a strtod subject
+// sequence at the start of s: either the hexadecimal form (0x, hex digits
+// optionally containing a period, optional binary exponent) or the decimal
+// form. end is 0 when there is no numeric value at all. hexNoExp marks a
+// hexadecimal constant written without the binary-exponent part — POSIX makes
+// that part optional but Go's ParseFloat requires it, so the caller appends a
+// neutral "p0".
+func scanNumericBody(s string) (end int, hexNoExp bool) {
+	if len(s) > 1 && s[0] == '0' && (s[1]|0x20) == 'x' {
+		j, digits := 2, 0
+		for j < len(s) && isHexDigitByte(s[j]) {
+			j++
+			digits++
+		}
+		if j < len(s) && s[j] == '.' {
+			j++
+			for j < len(s) && isHexDigitByte(s[j]) {
+				j++
+				digits++
+			}
+		}
+		if digits == 0 {
+			// "0x" with no hex digit after it: only the leading "0" converts.
+			return 1, false
+		}
+		if k, ok := scanExponent(s, j, 'p'); ok {
+			return k, false
+		}
+		return j, true
+	}
+	j, digits := 0, 0
+	for j < len(s) && isDigitByte(s[j]) {
+		j++
+		digits++
+	}
+	if j < len(s) && s[j] == '.' {
+		j++
+		for j < len(s) && isDigitByte(s[j]) {
+			j++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return 0, false
+	}
+	if k, ok := scanExponent(s, j, 'e'); ok {
+		return k, false
+	}
+	return j, false
+}
+
+// cStrtod converts the leading C strtod subject sequence of t (which has
+// already had leading whitespace stripped): an optional sign followed by
+// INF/INFINITY, NAN or NAN(n-char-sequence), a hexadecimal constant, or a
+// decimal constant — all matched case-insensitively, per POSIX strtod. It
+// reports the value, the number of bytes consumed (0 when t begins with no
+// subject sequence at all), and whether the magnitude was out of range.
+//
+// Two POSIX forms Go's strconv.ParseFloat rejects outright are handled here: a
+// *signed* NaN ("-nan", which C gives the sign bit and printf renders as
+// "-nan"), and a hexadecimal constant with no binary-exponent part ("0x4d2"),
+// where POSIX makes the exponent optional and Go requires it.
+func cStrtod(t string) (value float64, consumed int, rangeErr bool) {
+	i := 0
+	if i < len(t) && (t[i] == '+' || t[i] == '-') {
+		i++
+	}
+	neg := i == 1 && t[0] == '-'
+	rest := t[i:]
+
+	if n := commonFoldLen(rest, "infinity"); n >= 3 {
+		// "inf" and "infinity" both convert; anything between them ("infin")
+		// converts as "inf" and leaves the remainder unconsumed.
+		if n != 8 {
+			n = 3
+		}
+		v := math.Inf(1)
+		if neg {
+			v = math.Inf(-1)
+		}
+		return v, i + n, false
+	}
+	if commonFoldLen(rest, "nan") == 3 {
+		n := 3
+		if len(rest) > 3 && rest[3] == '(' {
+			k := 4
+			for k < len(rest) && isNCharByte(rest[k]) {
+				k++
+			}
+			if k < len(rest) && rest[k] == ')' {
+				n = k + 1
+			}
+		}
+		v := math.NaN()
+		if neg {
+			v = math.Copysign(v, -1)
+		}
+		return v, i + n, false
+	}
+
+	body, hexNoExp := scanNumericBody(rest)
+	if body == 0 {
+		return 0, 0, false
+	}
+	tok := t[:i+body]
+	if hexNoExp {
+		tok += "p0"
+	}
+	v, err := strconv.ParseFloat(tok, 64)
+	switch {
+	case errors.Is(err, strconv.ErrRange):
+		return v, i + body, true
+	case err != nil:
+		return 0, 0, false
+	}
+	return v, i + body, false
+}
+
+// parseFloat converts an ARGUMENT for the floating-point conversions, accepting
+// the same forms as C strtod and consuming only the leading subject sequence so
+// trailing garbage yields a "value not completely converted" diagnostic rather
+// than discarding the value.
 func parseFloat(rc *tool.RunContext, s string) (value float64, hadErr bool) {
 	if r, ok, warn := charConstant(s); ok {
 		if warn {
@@ -173,30 +334,19 @@ func parseFloat(rc *tool.RunContext, s string) (value float64, hadErr bool) {
 	}
 	t := s[i:]
 
-	best := -1
-	var bv float64
-	brange := false
-	for k := 1; k <= len(t); k++ {
-		v, err := strconv.ParseFloat(t[:k], 64)
-		if err == nil {
-			best, bv, brange = k, v, false
-		} else if errors.Is(err, strconv.ErrRange) {
-			best, bv, brange = k, v, true
-		}
-	}
-	if best < 0 {
+	v, n, rangeErr := cStrtod(t)
+	switch {
+	case n == 0:
 		fmt.Fprintf(rc.Err, "%s: %s: expected a numeric value\n", cmd.Name, cQuote(s))
 		return 0, true
-	}
-	if brange {
+	case rangeErr:
 		fmt.Fprintf(rc.Err, "%s: %s: Numerical result out of range\n", cmd.Name, cQuote(s))
-		return bv, true
-	}
-	if best < len(t) {
+		return v, true
+	case n < len(t):
 		fmt.Fprintf(rc.Err, "%s: %s: value not completely converted\n", cmd.Name, cQuote(s))
-		return bv, true
+		return v, true
 	}
-	return bv, false
+	return v, false
 }
 
 // writeNonFinite formats a NaN or infinity for a floating-point conversion the
