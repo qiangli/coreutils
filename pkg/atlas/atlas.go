@@ -555,6 +555,12 @@ func init() {
 	// is the routing input. Read-only over the run ledger; CROSS because you
 	// ask "who has earned this" at any stage.
 	addVerb("leaderboard", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// inbox: read the messages other agents sent you. CROSS — you check your
+	// mail at any stage — and read-only over the local bus buffer.
+	addVerb("inbox", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
+	// im: send a message to another agent on this host. CROSS, and the send half
+	// of the pair whose read half is `inbox`.
+	addVerb("im", Entry{Stage: StageCross, Group: GroupOrch})
 	// handoff/resume: pause a live session and pass the work on -- to another
 	// agentic tool, a scheduler, or tomorrow. CROSS, because you hand off work
 	// at any stage: a half-finished plan, a half-finished refactor, a half-run
@@ -793,7 +799,7 @@ func init() {
 		// code-intel / net
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
-		"capability", "leaderboard", "agent", "tools", "models", "agents", "people", "whois",
+		"capability", "leaderboard", "inbox", "im", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",

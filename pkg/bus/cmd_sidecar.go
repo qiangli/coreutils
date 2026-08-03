@@ -221,7 +221,7 @@ turn over the same control socket the coach uses. Everything else queues.
 
 func newPendingCmd() *cobra.Command {
 	var as string
-	var jsonOut, peek bool
+	var jsonOut, peek, all bool
 
 	cmd := &cobra.Command{
 		Use:   "pending [flags]",
@@ -249,7 +249,13 @@ Use --peek to read without clearing.`,
 			// does. A resolution failure is not fatal: whatever the sidecar
 			// already buffered is still worth printing.
 			_, _ = ResolveFor(who)
-			items, err := ReadPending(who)
+			var items []Pending
+			var err error
+			if all {
+				items, err = ReadPending(who)
+			} else {
+				items, err = UnreadPending(who)
+			}
 			if err != nil {
 				return err
 			}
@@ -272,15 +278,19 @@ Use --peek to read without clearing.`,
 			// was actually read: clearing first, or truncating wholesale, would
 			// discard anything the sidecar appended in between — a notification the
 			// agent never learns existed.
-			if peek || len(items) == 0 {
+			if peek || all || len(items) == 0 {
 				return nil
 			}
-			return ClearPending(who, items[len(items)-1].Seq)
+			// MARK, never delete. The message stays in the buffer with a
+			// read_at stamp, so `--all` can still answer "what was I told, and
+			// when" long after the fact.
+			return MarkRead(who, items[len(items)-1].Seq)
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&as, "as", "", "subscriber name (default: your principal)")
 	f.BoolVar(&jsonOut, "json", false, "emit one JSON object per line")
-	f.BoolVar(&peek, "peek", false, "read without clearing")
+	f.BoolVar(&peek, "peek", false, "read without marking anything read")
+	f.BoolVar(&all, "all", false, "show every message ever received, read or not (history)")
 	return cmd
 }

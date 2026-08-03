@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/room"
@@ -104,5 +105,131 @@ func TestResolveFor_ColdAgentGetsItLater(t *testing.T) {
 	}
 	if n, _ := ResolveFor("agy-gemini3.1"); n != 2 {
 		t.Fatalf("a cold agent must receive everything sent while it was away, got %d", n)
+	}
+}
+
+// UNREAD ON LOGIN. The launch path cannot use TurnPreamble — that keys on the
+// control socket, and at launch there is no socket yet, because it is created
+// by the very call that needs the mail. An agent is known by NAME first.
+func TestLaunchPreamble_DeliversToAColdAgentByName(t *testing.T) {
+	busInTempHome(t)
+	if _, err := EnsureSubscription("codex-gpt5.6-sol"); err != nil {
+		t.Fatal(err)
+	}
+	// Sent while the agent was not running, with no sidecar watching — the
+	// common case on a real host.
+	if err := room.Emit(room.Event{
+		Type: room.EventNotify, To: "codex-gpt5.6-sol", Topic: "fleet", Body: "roster changed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	block := LaunchPreamble("codex-gpt5.6-sol")
+	if block == "" {
+		t.Fatal("a cold agent must receive its mail on the way in")
+	}
+	if !strings.Contains(block, "roster changed") {
+		t.Fatalf("preamble is missing the message:\n%s", block)
+	}
+	// Rendered once: a second launch must not re-deliver what was already shown.
+	if again := LaunchPreamble("codex-gpt5.6-sol"); again != "" {
+		t.Fatalf("mail was re-delivered on the next launch:\n%s", again)
+	}
+}
+
+// Nothing to say means nothing is added, so a caller can concatenate blind.
+func TestPrependForAgent_UnchangedWhenNoMail(t *testing.T) {
+	busInTempHome(t)
+	if _, err := EnsureSubscription("claude-opus5"); err != nil {
+		t.Fatal(err)
+	}
+	if got := PrependForAgent("claude-opus5", "do the thing"); got != "do the thing" {
+		t.Fatalf("prompt was modified with no mail pending: %q", got)
+	}
+	if got := PrependForAgent("", "do the thing"); got != "do the thing" {
+		t.Fatalf("an empty agent name must be a no-op: %q", got)
+	}
+}
+
+func TestPrependForAgent_PutsMailBeforeThePrompt(t *testing.T) {
+	busInTempHome(t)
+	if _, err := EnsureSubscription("ycode-glm-5.2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Emit(room.Event{Type: room.EventNotify, To: "ycode-glm-5.2", Body: "gate is red"}); err != nil {
+		t.Fatal(err)
+	}
+	got := PrependForAgent("ycode-glm-5.2", "fix the parser")
+	if !strings.Contains(got, "gate is red") || !strings.Contains(got, "fix the parser") {
+		t.Fatalf("both the mail and the prompt must survive:\n%s", got)
+	}
+	if strings.Index(got, "gate is red") > strings.Index(got, "fix the parser") {
+		t.Fatal("mail must come BEFORE the prompt — it is context for the work, not a footnote")
+	}
+}
+
+// READING MARKS, IT DOES NOT DELETE. An inbox that erases what it shows you
+// cannot answer "what was I told, and when" — the question that comes up when a
+// fleet run goes wrong. The room timeline keeps every message forever; the
+// per-agent view must not disagree with it.
+func TestInbox_ReadingMarksAndRetains(t *testing.T) {
+	busInTempHome(t)
+	if _, err := EnsureSubscription("codex-gpt5.6-sol"); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Emit(room.Event{Type: room.EventNotify, To: "codex-gpt5.6-sol", Body: "roster changed"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveFor("codex-gpt5.6-sol"); err != nil {
+		t.Fatal(err)
+	}
+
+	unread, err := UnreadPending("codex-gpt5.6-sol")
+	if err != nil || len(unread) != 1 {
+		t.Fatalf("unread = %d, err = %v; want 1", len(unread), err)
+	}
+	if err := MarkRead("codex-gpt5.6-sol", unread[0].Seq); err != nil {
+		t.Fatal(err)
+	}
+
+	// Gone from unread...
+	if again, _ := UnreadPending("codex-gpt5.6-sol"); len(again) != 0 {
+		t.Fatalf("a read message must not come back as unread, got %d", len(again))
+	}
+	// ...but STILL THERE, with a stamp.
+	all, err := ReadPending("codex-gpt5.6-sol")
+	if err != nil || len(all) != 1 {
+		t.Fatalf("history lost: %d records, err %v", len(all), err)
+	}
+	if all[0].Body != "roster changed" {
+		t.Fatalf("body was not retained: %+v", all[0])
+	}
+	if all[0].Unread() || all[0].ReadAt == "" {
+		t.Fatalf("read_at was not stamped: %+v", all[0])
+	}
+}
+
+// Re-reading must not rewrite when the agent FIRST saw something.
+func TestInbox_MarkReadIsIdempotent(t *testing.T) {
+	busInTempHome(t)
+	if _, err := EnsureSubscription("claude-opus5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Emit(room.Event{Type: room.EventNotify, To: "claude-opus5", Body: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveFor("claude-opus5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkRead("claude-opus5", 1<<62); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := ReadPending("claude-opus5")
+	if err := MarkRead("claude-opus5", 1<<62); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := ReadPending("claude-opus5")
+	if len(first) != 1 || len(second) != 1 || first[0].ReadAt != second[0].ReadAt {
+		t.Fatalf("re-reading changed the first-seen stamp: %q -> %q", first[0].ReadAt, second[0].ReadAt)
 	}
 }

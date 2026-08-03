@@ -34,15 +34,15 @@ func TurnPreamble(ctlSock string) string {
 	if !ok {
 		return ""
 	}
-	items, err := ReadPending(sub)
+	items, err := UnreadPending(sub)
 	if err != nil || len(items) == 0 {
 		return ""
 	}
 	block := FormatPending(items)
-	// Clear only what was read, and only after it has been rendered: the sidecar
+	// Mark only what was read, and only after it has been rendered: the sidecar
 	// may append while we are here, and truncating wholesale would discard a
 	// notification the agent never learns existed.
-	_ = ClearPending(sub, items[len(items)-1].Seq)
+	_ = MarkRead(sub, items[len(items)-1].Seq)
 	return block
 }
 
@@ -77,6 +77,53 @@ func subscriberForCtlSock(ctlSock string) (string, bool) {
 // the agent commit to an approach and only then learn the ground moved.
 func Prepend(ctlSock, text string) string {
 	block := TurnPreamble(ctlSock)
+	if block == "" {
+		return text
+	}
+	return block + "\n" + text
+}
+
+// LaunchPreamble is the "unread on login" block: everything addressed to agent
+// that it has not yet been shown, rendered once and cleared.
+//
+// It exists because TurnPreamble cannot serve a LAUNCH. That one keys on the
+// control socket, and at launch there is no socket yet — it is created by the
+// very call that needs this. An agent is known by NAME before it is known by
+// address, so the launch path resolves by name.
+//
+// It RESOLVES before reading, so a cold agent — one that was not running when
+// the message was sent, and for which no sidecar was watching — picks up its
+// mail on the way in. That is the whole point: the common case on a real host
+// is that nobody was watching, and an agent that only ever learns of messages
+// sent while it happened to be up is not reachable in any useful sense.
+//
+// Empty when there is nothing, so the caller can concatenate unconditionally.
+func LaunchPreamble(agent string) string {
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		return ""
+	}
+	// Best-effort: a resolve failure still lets whatever is already buffered
+	// through. Delivering some mail beats delivering none because the timeline
+	// was briefly unreadable.
+	_, _ = ResolveFor(agent)
+
+	items, err := UnreadPending(agent)
+	if err != nil || len(items) == 0 {
+		return ""
+	}
+	block := FormatPending(items)
+	// Mark only what was rendered, and only after rendering — the same ordering
+	// TurnPreamble uses, for the same reason: anything appended in between must
+	// survive to the next read rather than being truncated away unseen.
+	_ = MarkRead(agent, items[len(items)-1].Seq)
+	return block
+}
+
+// PrependForAgent puts an agent's unread mail in front of the text it is about
+// to be given. Returns text unchanged when there is nothing.
+func PrependForAgent(agent, text string) string {
+	block := LaunchPreamble(agent)
 	if block == "" {
 		return text
 	}

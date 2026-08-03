@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/room"
 )
@@ -35,7 +36,20 @@ type Pending struct {
 	// silently applied so an operator can see that the bus withheld urgency, and
 	// why: a governance decision nobody can observe is indistinguishable from a bug.
 	Demoted string `json:"demoted,omitempty"`
+	// ReadAt stamps when this was shown to its agent. EMPTY MEANS UNREAD, which
+	// is the only state that matters for delivery.
+	//
+	// Reading MARKS, it does not delete. A message is history the moment it is
+	// sent: an inbox that erases what it shows you cannot answer "what was I
+	// told, and when" — the question that actually comes up after a fleet run
+	// goes wrong. The append-only room timeline already keeps every message
+	// forever; this keeps the per-agent VIEW of them just as long, so the two
+	// cannot disagree.
+	ReadAt string `json:"read_at,omitempty"`
 }
+
+// Unread reports whether this message has not yet been shown to its agent.
+func (p Pending) Unread() bool { return strings.TrimSpace(p.ReadAt) == "" }
 
 func pendingPath(subscriber string) (string, error) {
 	name := safeName.ReplaceAllString(subscriber, "_")
@@ -96,6 +110,77 @@ func ReadPending(subscriber string) ([]Pending, error) {
 			continue
 		}
 		out = append(out, p)
+	}
+	return out, nil
+}
+
+// writePending rewrites a subscriber's buffer. Used by the mark and clear paths;
+// the append path never calls it, so a concurrent sidecar append is never
+// serialized through a full rewrite.
+func writePending(subscriber string, items []Pending) error {
+	path, err := pendingPath(subscriber)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+			return rerr
+		}
+		return nil
+	}
+	var b strings.Builder
+	for _, p := range items {
+		line, merr := json.Marshal(p)
+		if merr != nil {
+			return merr
+		}
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+func nowRFC() string { return time.Now().UTC().Format(time.RFC3339) }
+
+// MarkRead stamps everything through throughSeq as read, RETAINING it.
+//
+// This is what a read does now. ClearPending (below) still exists and still
+// deletes, because a caller may genuinely want to drop a buffer — but nothing
+// on the read path uses it, and nothing should: an inbox that erases what it
+// shows you has no history, and history is the whole reason to keep a log.
+//
+// Already-read entries are left exactly as they were, so re-reading does not
+// rewrite a timestamp and lose when the agent FIRST saw something.
+func MarkRead(subscriber string, throughSeq int64) error {
+	all, err := ReadPending(subscriber)
+	if err != nil {
+		return err
+	}
+	now := nowRFC()
+	changed := false
+	for i := range all {
+		if all[i].Seq <= throughSeq && all[i].Unread() {
+			all[i].ReadAt = now
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return writePending(subscriber, all)
+}
+
+// UnreadPending returns only what the agent has not been shown.
+func UnreadPending(subscriber string) ([]Pending, error) {
+	all, err := ReadPending(subscriber)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Pending, 0, len(all))
+	for _, p := range all {
+		if p.Unread() {
+			out = append(out, p)
+		}
 	}
 	return out, nil
 }

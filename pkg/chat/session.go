@@ -184,6 +184,21 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	if err != nil {
 		return nil, err
 	}
+	// UNREAD ON LOGIN. Hand the agent its mail as part of the prompt it starts
+	// with, so a message sent while it was down is waiting when it comes up.
+	//
+	// Before governLaunch, deliberately — the same ordering Say uses, for the
+	// same reason: the notification text is really sent, so it is really billed,
+	// and metering the caller's prompt alone would understate the turn.
+	//
+	// Only when there IS a prompt. An interactive launch with no seed prompt has
+	// an argv shape that depends on the prompt being absent (l.TakesPrompt gates
+	// whether it is appended at all), and inventing one to carry mail would
+	// change how the tool starts. Those sessions get their mail on the first
+	// Say instead, which already prepends.
+	if strings.TrimSpace(opt.Prompt) != "" {
+		opt.Prompt = bus.PrependForAgent(name, opt.Prompt)
+	}
 	next, d, err := governLaunch(ctx, name, l, opt.Prompt, lo)
 	if err != nil {
 		return nil, err
