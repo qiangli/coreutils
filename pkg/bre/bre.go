@@ -410,6 +410,7 @@ func translateBracket(s string) (string, int, error) {
 // bounded backtracking matcher instead.
 func ToGoERE(p string) (string, error) {
 	var b strings.Builder
+	state := posStart
 	for i := 0; i < len(p); {
 		if p[i] == '[' {
 			cls, n, err := translateBracket(p[i:])
@@ -417,11 +418,41 @@ func ToGoERE(p string) (string, error) {
 				return "", err
 			}
 			b.WriteString(cls)
+			state = posAtom
 			i += n
 			continue
 		}
 		if p[i] != '\\' {
-			b.WriteByte(p[i])
+			switch p[i] {
+			case '^':
+				if state == posStart {
+					b.WriteByte('^')
+					state = posAnchor
+				} else {
+					b.WriteString(`\^`)
+					state = posAtom
+				}
+			case '$':
+				anchor := i == len(p)-1 || (i+1 < len(p) && (p[i+1] == ')' || p[i+1] == '|'))
+				if anchor {
+					b.WriteByte('$')
+					state = posAnchor
+				} else {
+					b.WriteString(`\$`)
+					state = posAtom
+				}
+			case '(', '|':
+				b.WriteByte(p[i])
+				state = posStart
+			case ')':
+				b.WriteByte(p[i])
+				state = posAtom
+			default:
+				b.WriteByte(p[i])
+				if p[i] != '*' && p[i] != '+' && p[i] != '?' && p[i] != '}' {
+					state = posAtom
+				}
+			}
 			i++
 			continue
 		}
@@ -434,11 +465,13 @@ func ToGoERE(p string) (string, error) {
 		}
 		if n == '<' || n == '>' {
 			b.WriteString(`\b`)
+			state = posAnchor
 			i += 2
 			continue
 		}
 		b.WriteByte('\\')
 		b.WriteByte(n)
+		state = posAtom
 		i += 2
 	}
 	return b.String(), nil

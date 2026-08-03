@@ -679,13 +679,13 @@ func (p *parser) parseAtom(state int) (btNode, int, bool, error) {
 		return dotNode{dotAll: p.dotAll}, posAtom, true, nil
 	case '^':
 		p.i++
-		if p.extended || state == posStart {
+		if state == posStart {
 			return anchorNode('^'), posAnchor, false, nil
 		}
 		return literalNode{lit: "^", ignoreCase: p.ignoreCase}, posAtom, true, nil
 	case '$':
 		p.i++
-		if p.extended || p.dollarAnchors() {
+		if p.dollarAnchors() {
 			return anchorNode('$'), posAnchor, false, nil
 		}
 		return literalNode{lit: "$", ignoreCase: p.ignoreCase}, posAtom, true, nil

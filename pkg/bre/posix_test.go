@@ -360,17 +360,20 @@ func TestPOSIXAnchorTranslation(t *testing.T) {
 		}
 	}
 
-	// Unlike BRE, ^ and $ are anchors wherever they occur in an ERE. GNU
-	// bash 5.3 therefore agrees with Go regexp that these spellings cannot
-	// match literal ^ or $ characters.
-	for _, pattern := range []string{
-		`^a$`, `a^b`, `a$b`, `(^a)`, `(a$)`, `a|^b`, `a$|b`,
-	} {
-		got, err := ToGoERE(pattern)
+	// POSIX ERE anchors are special only at a branch boundary: ^ at the
+	// beginning of an expression/subexpression and $ at its end. Elsewhere
+	// they are ordinary characters (GA171).
+	ereCases := []struct{ pattern, want string }{
+		{`^a$`, `^a$`}, {`a^b`, `a\^b`}, {`a$b`, `a\$b`},
+		{`(^a)`, `(^a)`}, {`(a$)`, `(a$)`}, {`a|^b`, `a|^b`},
+		{`a$|b`, `a$|b`}, {`^^+`, `^\^+`},
+	}
+	for _, tc := range ereCases {
+		got, err := ToGoERE(tc.pattern)
 		if err != nil {
-			t.Errorf("ToGoERE(%q): %v", pattern, err)
-		} else if got != pattern {
-			t.Errorf("ToGoERE(%q) = %q, want anchors unchanged", pattern, got)
+			t.Errorf("ToGoERE(%q): %v", tc.pattern, err)
+		} else if got != tc.want {
+			t.Errorf("ToGoERE(%q) = %q, want %q", tc.pattern, got, tc.want)
 		}
 	}
 }
@@ -404,14 +407,14 @@ func TestPOSIXAnchorBackrefParity(t *testing.T) {
 		want        []int
 	}{
 		{`^(a)\1$`, "aa", []int{0, 2}},
-		{`(a)\1^`, "aa^", nil},
-		{`(a)$\1`, "a$a", nil},
-		{`(a^)\1`, "a^a^", nil},
-		{`($a)\1`, "$a$a", nil},
+		{`(a)\1^`, "aa^", []int{0, 3}},
+		{`(a)$\1`, "a$a", []int{0, 3}},
+		{`(a^)\1`, "a^a^", []int{0, 4}},
+		{`($a)\1`, "$a$a", []int{0, 4}},
 		{`(^a)\1`, "aa", []int{0, 2}},
 		{`(a$)\1`, "aa", nil},
-		{`(a^|b)\1`, "a^a^", nil},
-		{`($a|b)\1`, "$a$a", nil},
+		{`(a^|b)\1`, "a^a^", []int{0, 4}},
+		{`($a|b)\1`, "$a$a", []int{0, 4}},
 	}
 	for _, c := range ereCases {
 		re, err := CompileEREWithFlags(c.pattern, "")

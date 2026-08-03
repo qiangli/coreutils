@@ -3,6 +3,7 @@ package grepcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,10 @@ import (
 // runGrep is the canonical test harness shape for cmds packages,
 // extended with a working directory and stdin contents.
 func runGrep(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
+	return runGrepEnv(t, dir, stdin, nil, args...)
+}
+
+func runGrepEnv(t *testing.T, dir, stdin string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	if dir == "" {
 		dir = t.TempDir()
@@ -22,6 +27,7 @@ func runGrep(t *testing.T, dir, stdin string, args ...string) (stdout, stderr st
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -317,6 +323,121 @@ func TestGrepMultiplePatterns(t *testing.T) {
 	out, _, code = runGrep(t, "", "aaa\nbbb\nccc\n", "aaa\nccc")
 	if out != "aaa\nccc\n" || code != 0 {
 		t.Errorf("newline patterns: out=%q code=%d", out, code)
+	}
+}
+
+func TestGrepPatternFileNamedDashAndCombinedLists(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "-", "aa\nbb\n")
+	writeFile(t, dir, "patterns2", "aa\ncc\n")
+	writeFile(t, dir, "input", "aaa111\nbbb222\nccc333\n")
+	out, errOut, code := runGrep(t, dir, "", "-f", "-", "-f", "patterns2", "input")
+	if code != 0 || errOut != "" || out != "aaa111\nbbb222\nccc333\n" {
+		t.Errorf("combined -f with file named '-': (%q, %q, %d)", out, errOut, code)
+	}
+}
+
+func TestGrepPOSIXOperandsStopOptionParsing(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "-i", "abc\n")
+	writeFile(t, dir, "--", "def\n")
+	writeFile(t, dir, "empty", "")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"abc", "empty", "-i"}, "-i:abc\n"},
+		{[]string{"def", "empty", "--"}, "--:def\n"},
+	} {
+		out, errOut, code := runGrep(t, dir, "", tc.args...)
+		if code != 0 || errOut != "" || out != tc.want {
+			t.Errorf("grep %q = (%q, %q, %d), want %q", tc.args, out, errOut, code, tc.want)
+		}
+	}
+}
+
+func TestGrepEREAnchorPositions(t *testing.T) {
+	for _, source := range []string{"argument", "-e", "-f"} {
+		t.Run(source, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "patterns", "^^+\n")
+			args := []string{"-E"}
+			switch source {
+			case "argument":
+				args = append(args, "^^+")
+			case "-e":
+				args = append(args, "-e", "^^+")
+			case "-f":
+				args = append(args, "-f", "patterns")
+			}
+			out, errOut, code := runGrep(t, dir, ".^^^^^+++++\n^^^^^+++++\n", args...)
+			if code != 0 || errOut != "" || out != "^^^^^+++++\n" {
+				t.Errorf("ERE anchor via %s = (%q, %q, %d)", source, out, errOut, code)
+			}
+		})
+	}
+}
+
+func TestGrepStandalonePreservesLexicalOperands(t *testing.T) {
+	rc := &tool.RunContext{Dir: "/work", DirIsProcessCwd: true}
+	for _, operand := range []string{"../input", "dir/../dir/input", "dir//input"} {
+		if got := operandPath(rc, operand); got != operand {
+			t.Errorf("operandPath(%q) = %q, want lexical spelling preserved", operand, got)
+		}
+	}
+}
+
+type grepFailWriter struct{ err error }
+
+func (w grepFailWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestGrepOutputErrorIsDiagnosticStatusTwo(t *testing.T) {
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("match\n"),
+			Out: grepFailWriter{err: errors.New("broken pipe")},
+			Err: &errOut,
+		},
+	}
+	if code := cmd.Run(rc, []string{"match"}); code != 2 {
+		t.Errorf("write error status = %d, want 2", code)
+	}
+	if got := errOut.String(); !strings.Contains(strings.ToLower(got), "grep: write error: broken pipe") {
+		t.Errorf("write error diagnostic = %q", got)
+	}
+}
+
+func TestGrepVSCLocalePrecedence(t *testing.T) {
+	latin1Aumlaut := string([]byte{0xe4}) + "\n"
+	cases := []struct {
+		name string
+		env  []string
+		pat  string
+		want bool
+	}{
+		{"posix-ctype", []string{"LANG=POSIX"}, "[[:alpha:]]", false},
+		{"lang-ctype", []string{"LANG=de_DE.iso88591"}, "[[:alpha:]]", true},
+		{"lc-ctype", []string{"LANG=POSIX", "LC_CTYPE=de_DE.iso88591"}, "[[:alpha:]]", true},
+		{"lc-all-ctype", []string{"LANG=POSIX", "LC_CTYPE=POSIX", "LC_ALL=de_DE.iso88591"}, "[[:alpha:]]", true},
+		{"lc-all-overrides", []string{"LANG=de_DE.iso88591", "LC_CTYPE=de_DE.iso88591", "LC_ALL=POSIX"}, "[[:alpha:]]", false},
+		{"posix-collate", []string{"LANG=POSIX"}, "[[=a=]]", false},
+		{"lang-collate", []string{"LANG=de_DE.iso88591"}, "[[=a=]]", true},
+		{"lc-collate", []string{"LANG=POSIX", "LC_CTYPE=de_DE.iso88591", "LC_COLLATE=de_DE.iso88591"}, "[[=a=]]", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runGrepEnv(t, "", latin1Aumlaut, tc.env, tc.pat)
+			wantCode := 1
+			wantOut := ""
+			if tc.want {
+				wantCode, wantOut = 0, latin1Aumlaut
+			}
+			if code != wantCode || errOut != "" || out != wantOut {
+				t.Errorf("locale grep = (%q, %q, %d), want (%q, '', %d)", out, errOut, code, wantOut, wantCode)
+			}
+		})
 	}
 }
 

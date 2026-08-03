@@ -49,8 +49,9 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 type grepper struct {
-	rc *tool.RunContext
-	re grepMatcher
+	rc  *tool.RunContext
+	re  grepMatcher
+	out io.Writer
 
 	invert       bool
 	word         bool
@@ -79,6 +80,7 @@ type grepper struct {
 
 	anyMatch   bool
 	anyErr     bool
+	outputErr  bool
 	listedWout bool
 	wroteGroup bool
 }
@@ -119,6 +121,9 @@ func run(rc *tool.RunContext, args []string) int {
 	exclude := fs.StringArray("exclude", nil, "skip files whose base name matches GLOB")
 	excludeDir := fs.StringArray("exclude-dir", nil, "skip directories whose base name matches GLOB")
 	agentic := fs.Bool("agentic", false, "opt-in: skip .gitignore'd and noise paths (node_modules, .git, vendor, …) during recursive search")
+	// POSIX utility syntax ends option recognition at the first operand. This
+	// matters for real input files named -i and -- after the pattern operand.
+	fs.SetInterspersed(false)
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -157,10 +162,10 @@ func run(rc *tool.RunContext, args []string) int {
 	for _, name := range *patternFiles {
 		var r io.Reader
 		var f *os.File
-		if name == "-" {
+		if name == "-" && !operandExists(rc, name) {
 			r = rc.In
 		} else {
-			f, err = os.Open(rc.Path(name))
+			f, err = os.Open(operandPath(rc, name))
 			if err != nil {
 				if !*suppressErrors {
 					fmt.Fprintf(rc.Err, "%s: %s: %s\n", cmd.Name, name, pathErrMsg(err))
@@ -190,6 +195,12 @@ func run(rc *tool.RunContext, args []string) int {
 	// -w and -o read a match's extent rather than just its existence, so they
 	// need POSIX leftmost-longest matching. In particular, -o must print "ab"
 	// rather than "a" when equally-leftmost alternatives are "a" and "ab".
+	locale := grepLocaleFromEnv(rc.Env)
+	if !*fixed {
+		for i := range split {
+			split[i] = locale.rewritePattern(split[i])
+		}
+	}
 	re, err := compilePattern(split, *fixed, *extended, *lineRe, *ignoreCase, *word || *onlyMatching)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, err)
@@ -224,6 +235,11 @@ func run(rc *tool.RunContext, args []string) int {
 		excludeDir:   *excludeDir,
 		onlyMatching: *onlyMatching,
 	}
+	if locale.ctypeGerman && !*fixed {
+		re = localeMatcher{inner: re}
+		g.re = re
+	}
+	g.out = grepOutput{g: g}
 	// Literal fast path: a single metachar-free pattern is plain
 	// substring work — searchStreamLit skips RE2 and per-line string
 	// allocation. Anything it can't serve byte-identically (-i, -w,
@@ -255,7 +271,7 @@ func run(rc *tool.RunContext, args []string) int {
 			g.searchStream(rc.In, "(standard input)")
 			continue
 		}
-		full := rc.Path(f)
+		full := operandPath(rc, f)
 		st, err := os.Stat(full)
 		if err != nil {
 			g.report(f, err)
@@ -306,6 +322,34 @@ func run(rc *tool.RunContext, args []string) int {
 	default:
 		return 1
 	}
+}
+
+// operandPath preserves a standalone invocation's lexical pathname. Besides
+// avoiding needless allocation, this leaves `..` and repeated separators for
+// the kernel to resolve, as POSIX pathname-resolution assertions require. An
+// embedded invocation still resolves against its virtual RunContext directory.
+func operandPath(rc *tool.RunContext, operand string) string {
+	if rc.DirIsProcessCwd && !filepath.IsAbs(operand) {
+		return operand
+	}
+	return rc.Path(operand)
+}
+
+func operandExists(rc *tool.RunContext, operand string) bool {
+	_, err := os.Stat(operandPath(rc, operand))
+	return err == nil
+}
+
+type grepOutput struct{ g *grepper }
+
+func (w grepOutput) Write(p []byte) (int, error) {
+	n, err := w.g.rc.Out.Write(p)
+	if err != nil && !w.g.outputErr {
+		w.g.outputErr = true
+		w.g.anyErr = true
+		fmt.Fprintf(w.g.rc.Err, "%s: write error: %s\n", cmd.Name, pathErrMsg(err))
+	}
+	return n, err
 }
 
 type grepMatcher interface {
@@ -813,7 +857,7 @@ func (g *grepper) searchStream(r io.Reader, name string) {
 					return
 				}
 				if g.filesWith {
-					fmt.Fprintln(g.rc.Out, name)
+					fmt.Fprintln(g.out, name)
 					return
 				}
 				if !g.count && !g.filesWout {
@@ -860,17 +904,17 @@ func (g *grepper) searchStream(r io.Reader, name string) {
 	}
 
 	if binary && selected > 0 && !g.count && !g.filesWith && !g.filesWout {
-		fmt.Fprintf(g.rc.Out, "Binary file %s matches\n", name)
+		fmt.Fprintf(g.out, "Binary file %s matches\n", name)
 	}
 	if g.count {
 		if g.showName {
-			fmt.Fprintf(g.rc.Out, "%s:%d\n", name, selected)
+			fmt.Fprintf(g.out, "%s:%d\n", name, selected)
 		} else {
-			fmt.Fprintln(g.rc.Out, selected)
+			fmt.Fprintln(g.out, selected)
 		}
 	}
 	if g.filesWout && selected == 0 {
-		fmt.Fprintln(g.rc.Out, name)
+		fmt.Fprintln(g.out, name)
 		g.listedWout = true
 	}
 }
@@ -883,7 +927,7 @@ func (g *grepper) printContextLine(name string, n int, line string, matched bool
 		return
 	}
 	if (*lastPrinted == 0 && g.wroteGroup) || (*lastPrinted > 0 && n > *lastPrinted+1) {
-		fmt.Fprintln(g.rc.Out, "--")
+		fmt.Fprintln(g.out, "--")
 	}
 	sep := byte('-')
 	if matched {
@@ -900,7 +944,7 @@ func (g *grepper) printContextLine(name string, n int, line string, matched bool
 	}
 	b.WriteString(line)
 	b.WriteByte('\n')
-	io.WriteString(g.rc.Out, b.String())
+	io.WriteString(g.out, b.String())
 	*lastPrinted = n
 	g.wroteGroup = true
 }
@@ -968,7 +1012,7 @@ func (g *grepper) printLine(name string, n int, line string) {
 	}
 	b.WriteString(line)
 	b.WriteByte('\n')
-	io.WriteString(g.rc.Out, b.String())
+	io.WriteString(g.out, b.String())
 }
 
 func (g *grepper) report(name string, err error) {

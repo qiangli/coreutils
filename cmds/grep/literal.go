@@ -132,17 +132,17 @@ func (g *grepper) searchStreamLit(r io.Reader, name string) {
 	}
 
 	if binary && selected > 0 && !g.count && !g.filesWith && !g.filesWout {
-		fmt.Fprintf(g.rc.Out, "Binary file %s matches\n", name)
+		fmt.Fprintf(g.out, "Binary file %s matches\n", name)
 	}
 	if g.count {
 		if g.showName {
-			fmt.Fprintf(g.rc.Out, "%s:%d\n", name, selected)
+			fmt.Fprintf(g.out, "%s:%d\n", name, selected)
 		} else {
-			fmt.Fprintln(g.rc.Out, selected)
+			fmt.Fprintln(g.out, selected)
 		}
 	}
 	if g.filesWout && selected == 0 {
-		fmt.Fprintln(g.rc.Out, name)
+		fmt.Fprintln(g.out, name)
 		g.listedWout = true
 	}
 }
@@ -218,7 +218,7 @@ func (g *grepper) litSelected(name string, lineNo int, line []byte, binary bool,
 	}
 	if g.filesWith {
 		g.flushOut()
-		fmt.Fprintln(g.rc.Out, name)
+		fmt.Fprintln(g.out, name)
 		return litReturn
 	}
 	if !g.count && !g.filesWout {
@@ -252,7 +252,7 @@ func (g *grepper) appendLine(name string, n int, line []byte) {
 
 func (g *grepper) flushOut() {
 	if len(g.ob) > 0 {
-		g.rc.Out.Write(g.ob)
+		g.out.Write(g.ob)
 		g.ob = g.ob[:0]
 	}
 }
