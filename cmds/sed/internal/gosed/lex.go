@@ -167,7 +167,6 @@ func readNumber(r *locReader, character rune) (string, error) {
 // because the two backslashes are themselves an escaped backslash.
 func readDelimited(r *locReader, delimiter rune) (string, error) {
 	var buffer bytes.Buffer
-	escaped := false
 
 	for {
 		character, _, err := r.ReadRune()
@@ -181,12 +180,27 @@ func readDelimited(r *locReader, delimiter rune) (string, error) {
 		if character == '\n' {
 			return buffer.String(), fmt.Errorf("end-of-line while looking for %c", delimiter)
 		}
-		if !escaped && character == delimiter {
+		if character == delimiter {
 			return buffer.String(), nil
 		}
+		if character != '\\' {
+			buffer.WriteRune(character)
+			continue
+		}
 
-		buffer.WriteRune(character)
-		escaped = !escaped && character == '\\'
+		next, _, err := r.ReadRune()
+		if err != nil {
+			return buffer.String(), err
+		}
+		if next == '\n' {
+			return buffer.String(), fmt.Errorf("end-of-line while looking for %c", delimiter)
+		}
+		if next == delimiter {
+			buffer.WriteRune(delimiter)
+		} else {
+			buffer.WriteRune('\\')
+			buffer.WriteRune(next)
+		}
 	}
 }
 

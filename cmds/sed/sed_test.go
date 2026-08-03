@@ -76,6 +76,57 @@ func TestSedBREInterval(t *testing.T) {
 	}
 }
 
+func TestSedBREIntervalsThroughAdvertisedDupMax(t *testing.T) {
+	long := strings.Repeat("a", 2048)
+	cases := []struct {
+		name   string
+		input  string
+		script string
+		want   string
+	}{
+		{"exact address", long + "\nshort\n", `/^a\{2048\}$/p`, long + "\n"},
+		{"exact substitution", long + "\n", `s/^a\{2048\}$/MATCH/p`, "MATCH\n"},
+		{"bounded substitution", long + "\n", `s/^a\{1,2048\}$/MATCH/p`, "MATCH\n"},
+		{"open interval no match", strings.Repeat("a", 2047) + "\n", `/a\{2048,\}/p`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, tc.input, "-n", tc.script)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Errorf("sed -n %q = (%q, %q, %d), want (%q, empty, 0)", tc.script, out, errOut, code, tc.want)
+			}
+		})
+	}
+}
+
+func TestSedBracketBackslashIsLiteral(t *testing.T) {
+	out, errOut, code := runSed(t, "abc\na\\c\nn\nq\n", "-n", `/[\a]/p`)
+	if code != 0 || errOut != "" || out != "abc\na\\c\n" {
+		t.Errorf(`address /[\a]/ = (%q, %q, %d), want lines containing a or backslash`, out, errOut, code)
+	}
+	out, errOut, code = runSed(t, "abc\n", "-n", `s/[\a]/MATCH/p`)
+	if code != 0 || errOut != "" || out != "MATCHbc\n" {
+		t.Errorf(`s/[\a]/MATCH/p = (%q, %q, %d), want MATCHbc`, out, errOut, code)
+	}
+	out, errOut, code = runSed(t, "a\\c\nn\nq\n", "-n", `/[\n]/p`)
+	if code != 0 || errOut != "" || out != "a\\c\nn\n" {
+		t.Errorf(`address /[\n]/ = (%q, %q, %d), want backslash and n lines`, out, errOut, code)
+	}
+}
+
+func TestSedEscapedAlphanumericDelimiter(t *testing.T) {
+	const substitutions = "sA\\AA\\AZ\\AA\ns@\\@@\\@Z\\@@"
+	out, errOut, code := runSed(t, "A\n@\n", substitutions)
+	if code != 0 || errOut != "" || out != "AZA\n@Z@\n" {
+		t.Errorf("escaped substitution delimiters = (%q, %q, %d), want wrapped literals", out, errOut, code)
+	}
+	const address = `\xabc\xdefxs/A/z/p`
+	out, errOut, code = runSed(t, "abcxdefA\nabcdefA\n", "-n", address)
+	if code != 0 || errOut != "" || out != "abcxdefz\n" {
+		t.Errorf("escaped address delimiter = (%q, %q, %d), want abcxdefz", out, errOut, code)
+	}
+}
+
 func TestSedBREWordEdgeAnchors(t *testing.T) {
 	if out, _, _ := runSed(t, "sword word words\n", `s/\<word\>/X/g`); out != "sword X words\n" {
 		t.Errorf(`s/\<word\>/X/g = %q, want sword X words`, out)
@@ -483,7 +534,9 @@ func TestSedPOSIXRegexConformance(t *testing.T) {
 		// embedded in the pattern space". This used to be a hard parse error
 		// ("unsupported escape \n"), so no N;s/…\n…/ script could run at all.
 		{"backslash-n matches embedded newline", "a\nb\n", `N;s/a\nb/X/`, "X\n"},
-		{"backslash-n in a bracket expression", "a\nb\n", `N;s/a[\n]b/X/`, "X\n"},
+		// Inside a bracket expression, backslash is literal: [\n] contains
+		// backslash and n, not an embedded newline.
+		{"backslash-n in a bracket expression is literal", "a\nb\n", `N;s/a[\n]b/X/`, "a\nb\n"},
 		{"backslash-n in the replacement is unchanged", "ab\n", `s/ab/a\nb/`, "a\nb\n"},
 		{"backslash-t matches a tab", "a\tb\n", `s/a\tb/X/`, "X\n"},
 		// An escaped backslash must not turn the next byte into an escape:

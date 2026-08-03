@@ -143,6 +143,12 @@ func needsBacktrack(p string) bool {
 			if (n >= '1' && n <= '9') || n == '<' || n == '>' {
 				return true
 			}
+			if n == '{' {
+				end := strings.Index(p[i+2:], `\}`)
+				if end >= 0 && intervalNeedsBacktrack(p[i+2:i+2+end]) {
+					return true
+				}
+			}
 			i++
 		}
 	}
@@ -173,11 +179,31 @@ func needsEREBacktrack(p string) bool {
 				i++
 			}
 			firstBracket = false
+		case '{':
+			if !inBracket {
+				end := strings.IndexByte(p[i+1:], '}')
+				if end >= 0 && intervalNeedsBacktrack(p[i+1:i+1+end]) {
+					return true
+				}
+			}
+			firstBracket = false
 		default:
 			firstBracket = false
 		}
 	}
 	return false
+}
+
+func intervalNeedsBacktrack(inner string) bool {
+	norm, ok := normalizeInterval(inner)
+	if !ok {
+		return false
+	}
+	min, max, err := parseInterval(norm)
+	if err != nil {
+		return false
+	}
+	return min > 1000 || max > 1000
 }
 
 func expandTemplate(dst []byte, template, src string, match []int) []byte {

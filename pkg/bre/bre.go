@@ -201,7 +201,37 @@ func SedEscapes(p string) string {
 	}
 	var b strings.Builder
 	b.Grow(len(p))
+	inBracket := false
+	firstBracket := false
 	for i := 0; i < len(p); i++ {
+		if p[i] == '[' && !inBracket {
+			inBracket = true
+			firstBracket = true
+			b.WriteByte(p[i])
+			continue
+		}
+		if inBracket {
+			b.WriteByte(p[i])
+			if firstBracket && p[i] == '^' {
+				continue
+			}
+			if p[i] == '[' && i+1 < len(p) && (p[i+1] == ':' || p[i+1] == '.' || p[i+1] == '=') {
+				delim := p[i+1]
+				end := strings.Index(p[i+2:], string(delim)+"]")
+				if end >= 0 {
+					end += i + 4
+					b.WriteString(p[i+1 : end])
+					i = end - 1
+				}
+				firstBracket = false
+				continue
+			}
+			if p[i] == ']' && !firstBracket {
+				inBracket = false
+			}
+			firstBracket = false
+			continue
+		}
 		if p[i] != '\\' || i+1 >= len(p) {
 			b.WriteByte(p[i])
 			continue
@@ -248,8 +278,8 @@ func normalizeInterval(s string) (string, bool) {
 	if !digits(lo) || (hi != "" && !digits(hi)) {
 		return "", false
 	}
-	// POSIX RE_DUP_MAX: interval bounds are capped at 255 (the portable
-	// ceiling GNU documents and bash 5.3 enforces). Check before atoi so a
+	// POSIX RE_DUP_MAX: interval bounds are capped at the value advertised by
+	// the target POSIX environment. Check before atoi so a
 	// literal larger than an int (e.g. \{999999999999999999999999999999\})
 	// is rejected rather than overflowing the magnitude comparison below.
 	if !withinDupMax(lo) || (hi != "" && !withinDupMax(hi)) {
@@ -267,14 +297,14 @@ func normalizeInterval(s string) (string, bool) {
 	return stripZeros(lo) + "," + hiN, true
 }
 
-// reDupMax is POSIX RE_DUP_MAX — the portable ceiling for interval bounds.
-const reDupMax = 255
+// reDupMax is the RE_DUP_MAX exposed by the Linux/POSIX certification target.
+const reDupMax = 32767
 
 // withinDupMax reports whether an all-digit bound is <= RE_DUP_MAX, computed
-// without overflowing on a huge literal: more than three significant digits
-// already exceeds 255, so it is rejected before atoi is called.
+// without overflowing on a huge literal: more than five significant digits
+// already exceeds 32767, so it is rejected before atoi is called.
 func withinDupMax(x string) bool {
-	if len(strings.TrimLeft(x, "0")) > 3 {
+	if len(strings.TrimLeft(x, "0")) > 5 {
 		return false
 	}
 	return atoi(x) <= reDupMax

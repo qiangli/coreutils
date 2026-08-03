@@ -113,11 +113,8 @@ func TestPOSIXBackrefEmptyGroup(t *testing.T) {
 	}
 }
 
-// POSIX requires interval bounds through RE_DUP_MAX (255). GNU grep documents
-// 255 as the portable limit (while extending its own implementation to 32767),
-// and GNU bash 5.3 rejects 256 as an invalid regular expression. Keep the
-// package at the portable ceiling. Leading zeroes are valid decimal spelling;
-// {,m} remains the documented GNU extension supported by this package.
+// The certification target advertises RE_DUP_MAX=32767. Go's RE2 path stops
+// at 1000, so larger valid intervals route through the bounded matcher.
 func TestPOSIXIntervalBounds(t *testing.T) {
 	valid := []struct {
 		pattern string
@@ -128,6 +125,8 @@ func TestPOSIXIntervalBounds(t *testing.T) {
 		{`^a\{0002,0003\}$`, "aaa"},
 		{`^a\{,3\}$`, "aaa"},
 		{`^a\{2,\}$`, "aa"},
+		{`^a\{2048\}$`, strings.Repeat("a", 2048)},
+		{`^a\{1,2048\}$`, strings.Repeat("a", 2048)},
 	}
 	for _, c := range valid {
 		re, err := Compile(c.pattern)
@@ -139,10 +138,13 @@ func TestPOSIXIntervalBounds(t *testing.T) {
 			t.Errorf("%q did not match %q", c.pattern, c.in)
 		}
 	}
+	if _, err := Compile(`a\{32767\}`); err != nil {
+		t.Errorf("Compile at advertised RE_DUP_MAX: %v", err)
+	}
 
 	for _, pattern := range []string{
-		`a\{256\}`,
-		`a\{1,256\}`,
+		`a\{32768\}`,
+		`a\{1,32768\}`,
 		`a\{999999999999999999999999999999\}`,
 		`a\{3,2\}`,
 	} {
@@ -508,15 +510,16 @@ func TestPOSIXBacktrackLeftmost(t *testing.T) {
 }
 
 // POSIX XCU sed: "the escape sequence '\n' shall match a <newline> embedded in
-// the pattern space". GNU sed adds \t \r \f \v \a. Everything else — including
-// \1..\9 and the BRE metacharacter escapes — must pass through untouched, and
-// an escaped backslash must not let the next byte be read as an escape.
+// the pattern space". GNU sed adds \t \r \f \v \a. These escapes are not
+// interpreted inside bracket expressions, where backslash is an ordinary
+// member. Everything else — including \1..\9 and the BRE metacharacter escapes
+// — must pass through untouched.
 func TestSedEscapes(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`a\nb`, "a\nb"},
 		{`a\tb`, "a\tb"},
 		{`\r\f\v\a`, "\r\f\v\a"},
-		{`[\n]`, "[\n]"},
+		{`[\n]`, `[\n]`},
 		// Untouched: BRE syntax.
 		{`\(a\)\1`, `\(a\)\1`},
 		{`a\{2,3\}`, `a\{2,3\}`},
