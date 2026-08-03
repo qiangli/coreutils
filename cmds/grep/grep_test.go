@@ -349,10 +349,19 @@ func TestGrepPOSIXOperandsStopOptionParsing(t *testing.T) {
 		{[]string{"abc", "empty", "-i"}, "-i:abc\n"},
 		{[]string{"def", "empty", "--"}, "--:def\n"},
 	} {
-		out, errOut, code := runGrep(t, dir, "", tc.args...)
+		out, errOut, code := runGrepEnv(t, dir, "", []string{"POSIXLY_CORRECT=1"}, tc.args...)
 		if code != 0 || errOut != "" || out != tc.want {
 			t.Errorf("grep %q = (%q, %q, %d), want %q", tc.args, out, errOut, code, tc.want)
 		}
+	}
+}
+
+func TestGrepGNUDefaultPermutesOptionsAfterOperands(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "input", "ABC\n")
+	out, errOut, code := runGrep(t, dir, "", "abc", "input", "-i")
+	if code != 0 || errOut != "" || out != "ABC\n" {
+		t.Errorf("GNU option permutation = (%q, %q, %d), want case-folded match", out, errOut, code)
 	}
 }
 
@@ -392,20 +401,35 @@ type grepFailWriter struct{ err error }
 func (w grepFailWriter) Write([]byte) (int, error) { return 0, w.err }
 
 func TestGrepOutputErrorIsDiagnosticStatusTwo(t *testing.T) {
-	var errOut bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx: context.Background(),
-		Stdio: tool.Stdio{
-			In:  strings.NewReader("match\n"),
-			Out: grepFailWriter{err: errors.New("broken pipe")},
-			Err: &errOut,
-		},
-	}
-	if code := cmd.Run(rc, []string{"match"}); code != 2 {
-		t.Errorf("write error status = %d, want 2", code)
-	}
-	if got := errOut.String(); !strings.Contains(strings.ToLower(got), "grep: write error: broken pipe") {
-		t.Errorf("write error diagnostic = %q", got)
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"literal-buffer-flush", []string{"match"}},
+		{"regexp-line", []string{"m.tch"}},
+		{"files-with-match", []string{"-l", "match"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errOut bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(),
+				Stdio: tool.Stdio{
+					In:  strings.NewReader("match\n"),
+					Out: grepFailWriter{err: errors.New("broken pipe")},
+					Err: &errOut,
+				},
+			}
+			if code := cmd.Run(rc, tc.args); code != 2 {
+				t.Errorf("write error status = %d, want 2", code)
+			}
+			got := strings.ToLower(errOut.String())
+			if !strings.Contains(got, "grep: write error: broken pipe") {
+				t.Errorf("write error diagnostic = %q", got)
+			}
+			if n := strings.Count(got, "write error"); n != 1 {
+				t.Errorf("write error diagnostic count = %d, want 1: %q", n, got)
+			}
+		})
 	}
 }
 

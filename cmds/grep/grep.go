@@ -121,9 +121,12 @@ func run(rc *tool.RunContext, args []string) int {
 	exclude := fs.StringArray("exclude", nil, "skip files whose base name matches GLOB")
 	excludeDir := fs.StringArray("exclude-dir", nil, "skip directories whose base name matches GLOB")
 	agentic := fs.Bool("agentic", false, "opt-in: skip .gitignore'd and noise paths (node_modules, .git, vendor, …) during recursive search")
-	// POSIX utility syntax ends option recognition at the first operand. This
-	// matters for real input files named -i and -- after the pattern operand.
-	fs.SetInterspersed(false)
+	// GNU grep permutes options after operands by default. POSIXLY_CORRECT
+	// switches to POSIX utility syntax, where option recognition ends at the
+	// first operand; that makes real input files named -i and -- unambiguous.
+	if _, set := localeEnv(rc.Env, "POSIXLY_CORRECT"); set {
+		fs.SetInterspersed(false)
+	}
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
