@@ -13,8 +13,12 @@ import (
 // When re-executed with this marker set to a signal number, the test binary
 // calls the real TerminateBySignal and must die by that signal.
 const terminateMarker = "COREUTILS_MULTICALL_TERMINATE_SIGNAL"
+const inheritedSignalMarker = "COREUTILS_MULTICALL_INHERITED_SIGNAL"
 
 func TestMain(m *testing.M) {
+	if v := os.Getenv(inheritedSignalMarker); v != "" {
+		runInheritedSignalHelper(v)
+	}
 	if v := os.Getenv(terminateMarker); v != "" {
 		sig, _ := strconv.Atoi(v)
 		TerminateBySignal(sig)

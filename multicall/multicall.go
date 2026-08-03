@@ -88,6 +88,7 @@ func processRunContext() *tool.RunContext {
 // stay resident must NOT call Main; they run tools through Dispatch or
 // tool.Tool.Run, which never signal the process.
 func Main(selfNames ...string) {
+	preserveInheritedSignalDispositions()
 	name, args, listOnly := Resolve(os.Args[0], os.Args[1:], selfNames...)
 	if listOnly {
 		fmt.Println(strings.Join(tool.Names(), "\n"))
