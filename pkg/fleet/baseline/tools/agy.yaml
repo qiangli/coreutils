@@ -27,6 +27,17 @@ cli:
     events_done:
       field: event
       values: [result]
+    # DO NOT ADD `--effort {effort}` HERE. agy has an `--effort (low|medium|high)`
+    # flag, but it is a SECOND SPELLING of the model id's suffix rather than a
+    # second axis, and agy rejects disagreement — measured 2026-08-02:
+    #
+    #   $ agy --model gemini-3.5-flash-low --effort high
+    #   Error: invalid model selection: --model gemini-3.5-flash-low conflicts
+    #          with --effort=high                                    (exit 1)
+    #
+    # Every binding already carries its effort in the id (gemini-3.6-flash-high,
+    # gemini-3.1-pro-low, …), so adding the flag would kill the whole agy fleet
+    # at once. To change effort, bind a different model id.
     exec: agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}
     # AGY otherwise may retain/select a different project despite the process
     # cwd. Bind the allocated clone explicitly, before model/prompt argv.
