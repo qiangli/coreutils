@@ -452,8 +452,10 @@ func TestTouchDateRelativeEndToEnd(t *testing.T) {
 // eight hours early).
 func TestTouchStampPOSIXTZ(t *testing.T) {
 	dir := t.TempDir()
-	want := time.Date(2026, time.December, 31, 23, 59, 0, 0, time.FixedZone("PST", -8*60*60))
-	_, errb, code := runToolEnv(t, dir, []string{"TZ=PST8"}, "-t", "202612312359", "f")
+	// The certification case uses SS=60 as well as a pure POSIX TZ. POSIX
+	// permits 60 and it normalizes to the first instant of the next minute.
+	want := time.Date(2026, time.January, 2, 13, 18, 0, 0, time.FixedZone("PST", -8*60*60))
+	_, errb, code := runToolEnv(t, dir, []string{"TZ=PST8"}, "-t", "202601021317.60", "f")
 	if code != 0 {
 		t.Fatalf("touch -t with TZ=PST8: code=%d err=%q", code, errb)
 	}

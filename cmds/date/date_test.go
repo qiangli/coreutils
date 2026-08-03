@@ -185,7 +185,12 @@ func TestDateLCTimePrecedence(t *testing.T) {
 		{"lc-all-overrides", []string{"LANG=de_DE.UTF-8", "LC_TIME=de_DE.UTF-8", "LC_ALL=POSIX"}, "Friday March\n"},
 		{"empty-lc-all", []string{"LANG=POSIX", "LC_TIME=de_DE.UTF-8", "LC_ALL="}, "Freitag März\n"},
 		{"empty-lc-time", []string{"LANG=de_DE.UTF-8", "LC_TIME="}, "Freitag März\n"},
-		{"latin1", []string{"LANG=de_DE.iso88591"}, "Freitag M\xe4rz\n"},
+		// The certification image selects this locale spelling. Pin all
+		// three LC_TIME precedence inputs and its ISO-8859-1 output bytes,
+		// rather than relying only on the UTF-8 spelling above.
+		{"lang-latin1", []string{"LANG=de_DE.iso88591"}, "Freitag M\xe4rz\n"},
+		{"lc-time-latin1", []string{"LANG=POSIX", "LC_TIME=de_DE.iso88591"}, "Freitag M\xe4rz\n"},
+		{"lc-all-latin1", []string{"LANG=POSIX", "LC_TIME=POSIX", "LC_ALL=de_DE.iso88591"}, "Freitag M\xe4rz\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
