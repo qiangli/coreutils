@@ -136,8 +136,17 @@ func TestPrintfPercentBEscapes(t *testing.T) {
 		// %b octal form requires the leading zero (\0ddd), unlike the format string's \NNN.
 		{[]string{"%b\n", `\0101`}, "A\n"},
 		{[]string{"%b\n", `\101`}, "\\101\n"},
+		// VSC TP33/TP36/TP52: precision truncates the converted byte string;
+		// width pads it with spaces and '-' moves that padding to the right.
+		{[]string{"<%.2b>\n", "abcde"}, "<ab>\n"},
+		{[]string{"<%7b>\n", "abcde"}, "<  abcde>\n"},
+		{[]string{"<%-7b>\n", "abcde"}, "<abcde  >\n"},
+		// Escapes are expanded before precision and width count output bytes.
+		{[]string{"<%5.2b>\n", `a\nb`}, "<   a\n>\n"},
 		// \c inside %b halts the ENTIRE printf invocation, not just this argument.
 		{[]string{"%s-%b-%s\n", "x", `a\cb`, "z"}, "x-a"},
+		// Bash applies no field truncation or padding after \c requests the halt.
+		{[]string{"X<%7.1b>Y", `abc\cdef`}, "X<abc"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, c.args...)
@@ -231,10 +240,10 @@ func TestPrintfDiagnosticsAndStatus(t *testing.T) {
 		t.Errorf("invalid conversion: out=%q err=%q code=%d", out, errb, code)
 	}
 
-	// %b rejects flags/width/precision (not part of the documented grammar).
-	_, errb, code = runTool(t, "%5b\n", "x")
-	if code != 1 || errb == "" {
-		t.Errorf("%%5b: err=%q code=%d, want fatal", errb, code)
+	// %b accepts the string-field width/precision grammar.
+	out, errb, code = runTool(t, "%5.1b\n", "xyz")
+	if code != 0 || errb != "" || out != "    x\n" {
+		t.Errorf("%%5.1b: out=%q err=%q code=%d", out, errb, code)
 	}
 }
 

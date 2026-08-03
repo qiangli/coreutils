@@ -203,18 +203,20 @@ func formatOnce(rc *tool.RunContext, out *bytes.Buffer, format string, values []
 				s, _ := nextArg()
 				writeStringField(out, s, flags, width, hasWidth, precision, hasPrecision)
 			case 'b':
-				if flags != "" || hasWidth || hasPrecision {
-					diagInvalidConversion(rc, "%b")
-					*failed = true
-					return false, true
-				}
 				s, _ := nextArg()
 				var bbuf bytes.Buffer
 				stop := writeBEscapes(&bbuf, s)
-				out.Write(bbuf.Bytes())
 				if stop {
+					// \c means produce no further output. Preserve the bytes decoded
+					// before it exactly as Bash does; field truncation/padding must not
+					// add or remove output after the halt has been requested.
+					out.Write(bbuf.Bytes())
 					return true, false
 				}
+				// POSIX specifies %b precision as the maximum number of output
+				// bytes and width over the converted value, so interpret escapes
+				// first, then apply the same binary-safe field rules as %s.
+				writeStringField(out, bbuf.String(), flags, width, hasWidth, precision, hasPrecision)
 			case 'c':
 				s, _ := nextArg()
 				// GNU %c prints the first byte of ARGUMENT, defaulting to a NUL
