@@ -248,6 +248,11 @@ Use --peek to read without clearing.`,
 			// message exists. Queueing needs no control socket; only an interrupt
 			// does. A resolution failure is not fatal: whatever the sidecar
 			// already buffered is still worth printing.
+			// Open this reader's inbox if it has none, so anyone can join the
+			// board by reading it — no subscribe step, no catalog entry. It
+			// opens at the head, so a first-time reader sees what arrives from
+			// now on rather than the whole history.
+			_, _ = EnsureSubscription(who)
 			_, _ = ResolveFor(who)
 			var items []Pending
 			var err error

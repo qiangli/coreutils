@@ -555,12 +555,11 @@ func init() {
 	// is the routing input. Read-only over the run ledger; CROSS because you
 	// ask "who has earned this" at any stage.
 	addVerb("leaderboard", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	// inbox: read the messages other agents sent you. CROSS — you check your
-	// mail at any stage — and read-only over the local bus buffer.
-	addVerb("inbox", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
-	// im: send a message to another agent on this host. CROSS, and the send half
-	// of the pair whose read half is `inbox`.
-	addVerb("im", Entry{Stage: StageCross, Group: GroupOrch})
+	// mb: the host message board — read what was posted to you, post to others.
+	// CROSS, because you check the board at any stage. NOT named inbox/im: this
+	// is a shared append-only spool with per-reader cursors, so it is neither a
+	// private mailbox nor push-delivered chat; those words stay reserved.
+	addVerb("mb", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	// handoff/resume: pause a live session and pass the work on -- to another
 	// agentic tool, a scheduler, or tomorrow. CROSS, because you hand off work
 	// at any stage: a half-finished plan, a half-finished refactor, a half-run
@@ -799,7 +798,7 @@ func init() {
 		// code-intel / net
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
-		"capability", "leaderboard", "inbox", "im", "agent", "tools", "models", "agents", "people", "whois",
+		"capability", "leaderboard", "mb", "agent", "tools", "models", "agents", "people", "whois",
 		"kb", "skills", "lexicon", "claim", "git", "web", "rclone", "kopia", "commands", "context",
 		// craft READS the attestation ledger skills writes; it never writes it.
 		"craft", "define",

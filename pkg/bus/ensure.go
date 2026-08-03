@@ -20,7 +20,9 @@ package bus
 //
 //	To             the agent's own name — the DM address, and the whole point
 //	Topics         EMPTY. An inbox is not a subscription to the firehose;
-//	               broadcast interest stays something an operator asks for.
+//	               topic interest stays something an operator asks for.
+//	Room           the public BOARD, so a post addressed to nobody in
+//	               particular reaches everybody. Membership, not interest.
 //	InterruptFrom  EMPTY, which means NOBODY. Auto-subscribe must never hand
 //	               out the power to break into a turn — that is the governance
 //	               boundary the subscription type defaults closed on purpose,
@@ -33,9 +35,13 @@ package bus
 //
 // # It never overwrites
 //
-// An existing subscription is left exactly as it is. An operator who tuned
-// InterruptFrom or MaxPerMin has expressed a policy, and a reconciliation that
-// silently reset it would be a security regression disguised as a repair.
+// An existing subscription is left exactly as it is, with ONE additive
+// exception: a subscription written before the board existed has no Room, so
+// its owner silently misses every broadcast, and reconcile joins it to the
+// board. That is adding public membership, not overriding a decision. An
+// operator who tuned InterruptFrom or MaxPerMin has expressed a policy, and a
+// reconciliation that silently reset either would be a security regression
+// disguised as a repair.
 //
 // # A new inbox starts at the HEAD, not at zero
 //
@@ -53,6 +59,16 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/room"
 )
+
+// BoardRoom is the well-known room every agent joins, so a post addressed to
+// NOBODY in particular reaches everybody.
+//
+// Subscription.Matches accepts on To, Room, or Topics. A default inbox carries
+// only `To: <name>`, which is exactly right for a directed post and useless for
+// a broadcast — with no recipient there is no To to match, so the post would
+// reach nobody while looking sent. Room membership is what makes the board
+// public.
+const BoardRoom = "board"
 
 // FleetNames is the seam to the agent catalog, injected by the host.
 //
@@ -73,11 +89,24 @@ func EnsureSubscription(subscriber string) (bool, error) {
 		return false, fmt.Errorf("bus: an inbox needs a subscriber name")
 	}
 	if existing, err := LoadSubscription(subscriber); err == nil && existing.Subscriber != "" {
+		// ADDITIVE REPAIR, and the only field this ever touches. A subscription
+		// written before the board existed has no Room, so its owner silently
+		// misses every broadcast. Joining the public room is not overriding an
+		// operator's policy the way resetting InterruptFrom or MaxPerMin would
+		// be — those are left exactly as found, here and everywhere.
+		if strings.TrimSpace(existing.Room) == "" {
+			existing.Room = BoardRoom
+			return false, SaveSubscription(existing)
+		}
 		return false, nil
 	}
 	return true, SaveSubscription(Subscription{
 		Subscriber: subscriber,
 		To:         subscriber,
+		// Everyone is in the board room, so a broadcast reaches them. This is
+		// membership, not interest: it grants no topic subscription and no
+		// interrupt rights.
+		Room: BoardRoom,
 		// Topics, InterruptFrom and MaxPerMin are deliberately left at their
 		// zero values — see the package comment. An inbox, not a doorbell.
 		Since: timelineHead(),

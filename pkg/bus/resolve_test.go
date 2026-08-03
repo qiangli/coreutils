@@ -233,3 +233,97 @@ func TestInbox_MarkReadIsIdempotent(t *testing.T) {
 		t.Fatalf("re-reading changed the first-seen stamp: %q -> %q", first[0].ReadAt, second[0].ReadAt)
 	}
 }
+
+// BROADCAST. A post with no recipient reaches everybody because every default
+// subscription joins the board room — Matches accepts on Room as readily as on
+// To. Without that membership a recipient-less post would match nothing and
+// reach nobody while reporting success.
+func TestBoard_BroadcastReachesEveryone(t *testing.T) {
+	busInTempHome(t)
+	fleet := []string{"claude-opus5", "codex-gpt5.6-sol", "ycode-glm-5.2"}
+	if _, err := ReconcileSubscriptions(fleet); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Emit(room.Event{
+		Type: room.EventNotify, Room: BoardRoom, Topic: "mb", Body: "sh/ is frozen",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range fleet {
+		n, err := ResolveFor(who)
+		if err != nil || n != 1 {
+			t.Fatalf("%s resolved %d (err %v); a broadcast must reach every board member", who, n, err)
+		}
+	}
+}
+
+// A subscription written before the board existed has no Room and would
+// silently miss every broadcast. Reconcile repairs that — and touches NOTHING
+// else, because InterruptFrom and MaxPerMin are operator policy.
+func TestBoard_ReconcileJoinsLegacySubsWithoutClobberingPolicy(t *testing.T) {
+	busInTempHome(t)
+	legacy := Subscription{
+		Subscriber:    "claude-opus5",
+		To:            "claude-opus5",
+		InterruptFrom: []string{"steward"},
+		MaxPerMin:     11,
+	}
+	if err := SaveSubscription(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcileSubscriptions([]string{"claude-opus5"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadSubscription("claude-opus5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Room != BoardRoom {
+		t.Fatalf("legacy subscription was not joined to the board: %+v", got)
+	}
+	if len(got.InterruptFrom) != 1 || got.InterruptFrom[0] != "steward" || got.MaxPerMin != 11 {
+		t.Fatalf("operator policy was clobbered by the repair: %+v", got)
+	}
+}
+
+// NO PRIOR SETUP. Posting to a name with no subscription must still reach it:
+// Matches needs a stored subscription, so without an auto-open the post reports
+// success and reaches nobody — the exit-0 lie this package exists to remove.
+func TestBoard_PostToAnUnknownNameStillArrives(t *testing.T) {
+	busInTempHome(t)
+	if _, err := LoadSubscription("never-seen-before"); err == nil {
+		if s, _ := LoadSubscription("never-seen-before"); s.Subscriber != "" {
+			t.Fatal("precondition: this name must start with no inbox")
+		}
+	}
+	// What `mb send` does: open the inbox, THEN publish.
+	if _, err := EnsureSubscription("never-seen-before"); err != nil {
+		t.Fatal(err)
+	}
+	if err := room.Emit(room.Event{
+		Type: room.EventNotify, To: "never-seen-before", Body: "hello stranger",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := ResolveFor("never-seen-before")
+	if err != nil || n != 1 {
+		t.Fatalf("resolved %d (err %v); a post to a new name must arrive", n, err)
+	}
+}
+
+// ORDER IS LOAD-BEARING. A new inbox opens at the timeline head, so opening it
+// AFTER the post would leave the cursor at or past the message and deliver
+// nothing.
+func TestBoard_InboxMustOpenBeforeThePostIsAppended(t *testing.T) {
+	busInTempHome(t)
+	if err := room.Emit(room.Event{Type: room.EventNotify, To: "late-comer", Body: "sent first"}); err != nil {
+		t.Fatal(err)
+	}
+	// Inbox opened after the fact — the wrong order, shown failing.
+	if _, err := EnsureSubscription("late-comer"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := ResolveFor("late-comer"); n != 0 {
+		t.Fatalf("resolved %d; an inbox opened at the head must not replay what predates it", n)
+	}
+}
