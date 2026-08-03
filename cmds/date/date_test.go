@@ -172,6 +172,31 @@ func TestDateTZ(t *testing.T) {
 	}
 }
 
+func TestDateLCTimePrecedence(t *testing.T) {
+	args := []string{"-u", "-d", "2026-03-06", "+%A %B"} // Friday in March.
+	cases := []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"lang", []string{"LANG=de_DE.UTF-8"}, "Freitag März\n"},
+		{"lc-time", []string{"LANG=POSIX", "LC_TIME=de_DE.UTF-8"}, "Freitag März\n"},
+		{"lc-all", []string{"LANG=POSIX", "LC_TIME=POSIX", "LC_ALL=de_DE.UTF-8"}, "Freitag März\n"},
+		{"lc-all-overrides", []string{"LANG=de_DE.UTF-8", "LC_TIME=de_DE.UTF-8", "LC_ALL=POSIX"}, "Friday March\n"},
+		{"empty-lc-all", []string{"LANG=POSIX", "LC_TIME=de_DE.UTF-8", "LC_ALL="}, "Freitag März\n"},
+		{"empty-lc-time", []string{"LANG=de_DE.UTF-8", "LC_TIME="}, "Freitag März\n"},
+		{"latin1", []string{"LANG=de_DE.iso88591"}, "Freitag M\xe4rz\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runToolEnv(t, tc.env, args...)
+			if code != 0 || errb != "" || out != tc.want {
+				t.Fatalf("date locale env=%q = (%q, %q, %d), want %q", tc.env, out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
 func TestDateFormatAliases(t *testing.T) {
 	cases := []struct {
 		args []string

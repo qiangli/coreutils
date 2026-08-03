@@ -74,6 +74,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	loc := tzenv.Location(rc.Env)
+	names := selectDateLocale(rc.Env)
 	if *utc || *universal || *uct {
 		loc = time.UTC
 	}
@@ -114,7 +115,7 @@ func run(rc *tool.RunContext, args []string) int {
 			if *debug {
 				fmt.Fprintf(rc.Err, "date: parsed date %q -> %s\n", line, t.In(loc).Format(time.RFC3339Nano))
 			}
-			if writeOutput(rc, strftime(t.In(loc), format)+"\n") != 0 {
+			if writeOutput(rc, strftime(t.In(loc), format, names)+"\n") != 0 {
 				return 1
 			}
 		}
@@ -143,7 +144,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "date: parsed date %q -> %s\n", *dstr, t.Format(time.RFC3339Nano))
 	}
 
-	return writeOutput(rc, strftime(t, format)+"\n")
+	return writeOutput(rc, strftime(t, format, names)+"\n")
 }
 
 // writeOutput makes a failed standard-output write observable. POSIX general
@@ -282,9 +283,71 @@ const (
 	oModified = "deHImMSuUVwWy"
 )
 
-// strftime renders the supported GNU/strftime directive subset in the
-// C locale. Unknown %X sequences pass through literally.
-func strftime(t time.Time, f string) string {
+type dateLocale struct {
+	weekdays      [7]string
+	weekdaysShort [7]string
+	months        [12]string
+	monthsShort   [12]string
+	latin1        bool
+}
+
+var germanDateLocale = dateLocale{
+	weekdays:      [7]string{"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"},
+	weekdaysShort: [7]string{"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"},
+	months:        [12]string{"Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"},
+	monthsShort:   [12]string{"Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"},
+}
+
+// selectDateLocale applies POSIX locale precedence for the LC_TIME category:
+// a non-empty LC_ALL, then LC_TIME, then LANG. C/POSIX and an absent locale
+// use Go's C-locale names; de_DE is embedded so standalone binaries do not
+// depend on host locale archives, which are routinely absent in containers.
+func selectDateLocale(env []string) dateLocale {
+	name := ""
+	for _, key := range []string{"LC_ALL", "LC_TIME", "LANG"} {
+		if value := lookupLastEnv(env, key); value != "" {
+			name = value
+			break
+		}
+	}
+	lower := strings.ToLower(name)
+	if !strings.HasPrefix(lower, "de_de") {
+		return dateLocale{}
+	}
+	loc := germanDateLocale
+	charset := strings.NewReplacer("-", "", "_", "").Replace(lower)
+	loc.latin1 = strings.Contains(charset, "iso88591")
+	return loc
+}
+
+func lookupLastEnv(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return env[i][len(prefix):]
+		}
+	}
+	return ""
+}
+
+func localeText(loc dateLocale, s string) string {
+	if !loc.latin1 {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if r <= 0xff {
+			b.WriteByte(byte(r))
+		} else {
+			b.WriteByte('?')
+		}
+	}
+	return b.String()
+}
+
+// strftime renders the supported GNU/strftime directive subset. Unknown %X
+// sequences pass through literally.
+func strftime(t time.Time, f string, loc dateLocale) string {
 	var b strings.Builder
 	for i := 0; i < len(f); i++ {
 		c := f[i]
@@ -328,15 +391,38 @@ func strftime(t time.Time, f string) string {
 		case 's':
 			fmt.Fprintf(&b, "%d", t.Unix())
 		case 'a':
-			b.WriteString(t.Format("Mon"))
+			if loc.weekdaysShort[0] == "" {
+				b.WriteString(t.Format("Mon"))
+			} else {
+				b.WriteString(localeText(loc, loc.weekdaysShort[t.Weekday()]))
+			}
 		case 'A':
-			b.WriteString(t.Format("Monday"))
+			if loc.weekdays[0] == "" {
+				b.WriteString(t.Format("Monday"))
+			} else {
+				b.WriteString(localeText(loc, loc.weekdays[t.Weekday()]))
+			}
 		case 'b', 'h':
-			b.WriteString(t.Format("Jan"))
+			if loc.monthsShort[0] == "" {
+				b.WriteString(t.Format("Jan"))
+			} else {
+				b.WriteString(localeText(loc, loc.monthsShort[int(t.Month())-1]))
+			}
 		case 'B':
-			b.WriteString(t.Format("January"))
+			if loc.months[0] == "" {
+				b.WriteString(t.Format("January"))
+			} else {
+				b.WriteString(localeText(loc, loc.months[int(t.Month())-1]))
+			}
 		case 'c':
-			b.WriteString(t.Format("Mon Jan _2 15:04:05 2006"))
+			if loc.weekdaysShort[0] == "" {
+				b.WriteString(t.Format("Mon Jan _2 15:04:05 2006"))
+			} else {
+				fmt.Fprintf(&b, "%s %s %2d %02d:%02d:%02d %d",
+					localeText(loc, loc.weekdaysShort[t.Weekday()]),
+					localeText(loc, loc.monthsShort[int(t.Month())-1]),
+					t.Day(), t.Hour(), t.Minute(), t.Second(), t.Year())
+			}
 		case 'C':
 			fmt.Fprintf(&b, "%02d", t.Year()/100)
 		case 'g':
