@@ -61,6 +61,71 @@ func TestFindExecShebanglessScript(t *testing.T) {
 	}
 }
 
+// TestFindOkShebanglessPathResolution applies the VSC GA60/61/64/65/66/69
+// utility-name spellings to -ok itself. The tracer deliberately has no
+// shebang: after an affirmative reply, find must preserve the spelling's
+// pathname semantics and take the same ENOEXEC shell fallback as -exec.
+// A negative reply must not execute the tracer for the second match.
+func TestFindOkShebanglessPathResolution(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(work, "find_dir_ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"A", "B"} {
+		writeScript(t, filepath.Join(work, "find_dir_ok"), name, "")
+	}
+
+	// Use only shell parameter expansion and redirection in the tracer, so
+	// this remains hermetic and does not depend on basename(1) or touch(1).
+	body := "name=${1##*/}\n: > \"$name.found\"\n"
+	writeScript(t, root, "tracer", body)
+	writeScript(t, work, "tracer", body)
+	writeScript(t, work, "find_dir_94/tracer", body)
+	writeScript(t, work, "find_dir_95/tracer", body)
+	writeScript(t, work, "find_dir_96/tracer", body)
+
+	abs, err := filepath.Abs(filepath.Join(work, "tracer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	utilities := []string{
+		abs,                                 // GA60: absolute pathname
+		"../tracer",                         // GA61: parent-relative pathname
+		"find_dir_94/tracer",                // GA64: relative subpath
+		"find_dir_95/./tracer",              // GA65: embedded dot component
+		"find_dir_96/../find_dir_96/tracer", // GA66: parent round-trip
+		"find_dir_96//tracer",               // GA66: doubled slash
+		"./tracer",                          // GA69: explicit current directory
+	}
+	for _, utility := range utilities {
+		t.Run(utility, func(t *testing.T) {
+			for _, found := range []string{"A.found", "B.found"} {
+				if err := os.Remove(filepath.Join(work, found)); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			}
+			out, errb, code := runFindExec(t, work, "y\nn\n", os.Environ(),
+				"find_dir_ok", "-name", "?", "-ok", utility, "{}", ";")
+			if code != 0 || out != "" {
+				t.Fatalf("-ok %q: out=%q err=%q code=%d, want empty output and exit 0", utility, out, errb, code)
+			}
+			if _, err := os.Stat(filepath.Join(work, "A.found")); err != nil {
+				t.Errorf("-ok %q affirmative match was not executed: %v; prompt=%q", utility, err, errb)
+			}
+			if _, err := os.Stat(filepath.Join(work, "B.found")); !os.IsNotExist(err) {
+				t.Errorf("-ok %q negative match executed; stat error=%v; prompt=%q", utility, err, errb)
+			}
+			if !strings.Contains(errb, "find_dir_ok/A") || !strings.Contains(errb, "find_dir_ok/B") {
+				t.Errorf("-ok %q prompts do not identify both paths: %q", utility, errb)
+			}
+		})
+	}
+}
+
 // TestFindExecShebanglessParentRelative covers GA61: the utility named by
 // a path that climbs out of the start directory ("../tracer"). Run find
 // from a subdirectory so the script sits one level up.

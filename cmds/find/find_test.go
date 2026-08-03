@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -14,6 +15,15 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type modeOnlyInfo fs.FileMode
+
+func (m modeOnlyInfo) Name() string       { return "fixture" }
+func (m modeOnlyInfo) Size() int64        { return 0 }
+func (m modeOnlyInfo) Mode() fs.FileMode  { return fs.FileMode(m) }
+func (m modeOnlyInfo) ModTime() time.Time { return time.Time{} }
+func (m modeOnlyInfo) IsDir() bool        { return fs.FileMode(m).IsDir() }
+func (m modeOnlyInfo) Sys() any           { return nil }
 
 // runFind is the canonical test harness shape for cmds packages.
 func runFind(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
@@ -105,6 +115,30 @@ func TestFindTests(t *testing.T) {
 		if out != c.want || code != 0 {
 			t.Errorf("find %v = (%q, %d, err=%q), want (%q, 0)", c.args, out, code, errb, c.want)
 		}
+	}
+}
+
+func TestFindTypeSpecialFiles(t *testing.T) {
+	cases := []struct {
+		name string
+		mode fs.FileMode
+		want string
+	}{
+		{"block", fs.ModeDevice, "b"},
+		{"character", fs.ModeDevice | fs.ModeCharDevice, "c"},
+		{"fifo", fs.ModeNamedPipe, "p"},
+		{"socket", fs.ModeSocket, "s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &fctx{info: modeOnlyInfo(tc.mode)}
+			for _, letter := range "bcps" {
+				got := (&typeExpr{letters: string(letter)}).eval(ctx)
+				if got != (string(letter) == tc.want) {
+					t.Errorf("mode %v -type %c = %v, want %v", tc.mode, letter, got, string(letter) == tc.want)
+				}
+			}
+		})
 	}
 }
 
@@ -425,6 +459,49 @@ func TestFindSymlinkFollow(t *testing.T) {
 	out, _, _ = runFind(t, dir, "-L", "-P", ".", "-name", "c.txt")
 	if out != "./sub/c.txt\n" {
 		t.Errorf("-L -P: out=%q", out)
+	}
+}
+
+// TestFindGeneralPathnameResolution mirrors the path shapes from POSIX
+// GA500-503: a relative symlink prefix, an absolute symlink prefix, a final
+// directory symlink with a trailing slash, and a final symlink under -H/-L.
+// The printed spelling must remain the operand spelling even though traversal
+// reads the resolved directory.
+func TestFindGeneralPathnameResolution(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(filepath.Join(target, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, target, "nested/file", "x")
+	if err := os.Symlink("target", filepath.Join(root, "relative")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "absolute")); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"ga500-default", []string{"relative/nested", "-print"}, "relative/nested\nrelative/nested/file\n"},
+		{"ga500-h", []string{"-H", "relative/nested", "-print"}, "relative/nested\nrelative/nested/file\n"},
+		{"ga500-l", []string{"-L", "relative/nested", "-print"}, "relative/nested\nrelative/nested/file\n"},
+		{"ga501", []string{"absolute/nested", "-print"}, "absolute/nested\nabsolute/nested/file\n"},
+		{"ga502-h", []string{"-H", "relative/", "-print"}, "relative/\nrelative/nested\nrelative/nested/file\n"},
+		{"ga502-l", []string{"-L", "relative/", "-print"}, "relative/\nrelative/nested\nrelative/nested/file\n"},
+		{"ga503-h", []string{"-H", "relative", "-print"}, "relative\nrelative/nested\nrelative/nested/file\n"},
+		{"ga503-l", []string{"-L", "relative", "-print"}, "relative\nrelative/nested\nrelative/nested/file\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runFind(t, root, tc.args...)
+			if code != 0 || errb != "" || out != tc.want {
+				t.Errorf("find %v = (%q, %q, %d), want (%q, empty stderr, 0)", tc.args, out, errb, code, tc.want)
+			}
+		})
 	}
 }
 
