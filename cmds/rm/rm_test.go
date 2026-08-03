@@ -177,8 +177,8 @@ func TestRmCompatibilityNoOps(t *testing.T) {
 func TestRmRootRefused(t *testing.T) {
 	dir := t.TempDir()
 	guarded := filepath.Join(dir, "guarded")
-	child := filepath.Join(guarded, "child")
-	write(t, filepath.Join(child, "sentinel"), "keep")
+	deep := filepath.Join(guarded, "child", "deep")
+	write(t, filepath.Join(deep, "sentinel"), "keep")
 
 	old := isFilesystemRoot
 	isFilesystemRoot = func(path string, followFinal bool) bool {
@@ -186,7 +186,7 @@ func TestRmRootRefused(t *testing.T) {
 	}
 	t.Cleanup(func() { isFilesystemRoot = old })
 
-	alias := filepath.Join("guarded", "child") + string(filepath.Separator) + ".."
+	alias := filepath.Join("guarded", "child", "deep") + string(filepath.Separator) + ".." + string(filepath.Separator) + ".."
 	_, errb, code := runTool(t, dir, "-rf", alias)
 	if code != 1 || !strings.Contains(errb, "it is dangerous to operate recursively on") {
 		t.Fatalf("rm identity guard: code=%d err=%q", code, errb)
@@ -194,7 +194,7 @@ func TestRmRootRefused(t *testing.T) {
 	if want := "(same as '" + rootguard.RootPath(guarded) + "')"; !strings.Contains(errb, want) {
 		t.Fatalf("identity guard diagnostic=%q, want %q", errb, want)
 	}
-	if _, err := os.Stat(filepath.Join(guarded, "child", "sentinel")); err != nil {
+	if _, err := os.Stat(filepath.Join(deep, "sentinel")); err != nil {
 		t.Fatalf("guarded tree was modified: %v", err)
 	}
 }

@@ -22,8 +22,8 @@ func TestChconLinuxReportsSetxattrErrors(t *testing.T) {
 func TestChconPreserveRootUsesIdentity(t *testing.T) {
 	dir := t.TempDir()
 	guarded := filepath.Join(dir, "guarded")
-	child := filepath.Join(guarded, "child")
-	if err := os.MkdirAll(child, 0o755); err != nil {
+	deep := filepath.Join(guarded, "child", "deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -35,7 +35,7 @@ func TestChconPreserveRootUsesIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { isFilesystemRoot = old })
 
-	alias := filepath.Join("guarded", "child") + string(filepath.Separator) + ".."
+	alias := filepath.Join("guarded", "child", "deep") + string(filepath.Separator) + ".." + string(filepath.Separator) + ".."
 	_, errb, code := runTool(t, dir, "-R", "--preserve-root", "system_u:object_r:tmp_t:s0", alias)
 	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively") {
 		t.Fatalf("identity guard: code=%d err=%q", code, errb)
@@ -46,7 +46,11 @@ func TestChconPreserveRootUsesIdentity(t *testing.T) {
 	if len(followFinal) != 1 || followFinal[0] {
 		t.Fatalf("default -R followFinal calls=%v, want [false]", followFinal)
 	}
-	_, errb, code = runTool(t, dir, "-R", "-H", "--preserve-root", "system_u:object_r:tmp_t:s0", alias)
+	link := filepath.Join(dir, "root-link")
+	if err := os.Symlink(guarded, link); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	_, errb, code = runTool(t, dir, "-R", "-H", "--preserve-root", "system_u:object_r:tmp_t:s0", "root-link")
 	if code != 1 || !strings.Contains(errb, "dangerous to operate recursively") {
 		t.Fatalf("-H identity guard: code=%d err=%q", code, errb)
 	}

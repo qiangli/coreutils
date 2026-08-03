@@ -9,11 +9,12 @@ import (
 func TestSameFileIdentity(t *testing.T) {
 	reference := t.TempDir()
 	child := filepath.Join(reference, "child")
-	if err := os.Mkdir(child, 0o755); err != nil {
+	deep := filepath.Join(child, "deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	alias := child + string(filepath.Separator) + ".."
+	alias := deep + string(filepath.Separator) + ".." + string(filepath.Separator) + ".."
 	if !SameFile(alias, reference, true) {
 		t.Fatal("lexical alias was not recognized by filesystem identity")
 	}
@@ -38,6 +39,22 @@ func TestSameFileFinalSymlinkPolicy(t *testing.T) {
 	}
 	if SameFile(link, reference, false) {
 		t.Fatal("unfollowed final symlink was classified as its referent")
+	}
+}
+
+func TestIsRootRecognizesDotDotSpellings(t *testing.T) {
+	// This exercises only the read-only identity predicate. No recursive
+	// command is invoked against either host-root spelling.
+	root := RootPath(t.TempDir())
+	sep := string(filepath.Separator)
+	aliases := []string{
+		root + ".." + sep,
+		root + "." + sep + ".." + sep + ".." + sep,
+	}
+	for _, alias := range aliases {
+		if !IsRoot(alias, true) {
+			t.Errorf("IsRoot(%q) = false, want true", alias)
+		}
 	}
 }
 
