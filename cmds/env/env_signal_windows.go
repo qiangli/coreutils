@@ -17,6 +17,12 @@ import (
 
 var commandSignalMu sync.Mutex
 
+// Windows has no ENOEXEC/"#!" scripting convention for exec() to fall back
+// on; a non-executable file simply fails to launch.
+const scriptInterpreter = ""
+
+func isExecFormatError(error) bool { return false }
+
 func commandSignals(specs []string) ([]os.Signal, error) {
 	var out []os.Signal
 	for _, spec := range specs {

@@ -3,6 +3,7 @@
 package envcmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -11,6 +12,15 @@ import (
 	"sync"
 	"syscall"
 )
+
+// scriptInterpreter is the shell used to retry a COMMAND that the kernel
+// rejects as an unrecognized executable image (ENOEXEC) — conventionally a
+// script lacking a "#!" interpreter line.
+const scriptInterpreter = "/bin/sh"
+
+func isExecFormatError(err error) bool {
+	return errors.Is(err, syscall.ENOEXEC)
+}
 
 var commandSignalMu sync.Mutex
 

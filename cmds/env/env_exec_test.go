@@ -285,6 +285,136 @@ func TestEnvExecEmptyPathSearchesWorkingDirectoryOnly(t *testing.T) {
 	}
 }
 
+// writeNoShebangScript writes an executable text file with no "#!"
+// interpreter line, so the kernel rejects a direct execve() of it with
+// ENOEXEC. POSIX makes the exec() family's response to this case
+// implementation-defined; the historical (and GNU-baseline, via glibc's
+// execvp) behavior is to retry through the system shell. VSC-PCTS exercises
+// exactly this for env's utility operand (GA60/61/64-69): env must run such
+// a script, not fail with "exec format error".
+func writeNoShebangScript(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A COMMAND with no recognized executable header is retried through the
+// system shell rather than failing with ENOEXEC, across every pathname shape
+// POSIX exercises: absolute, relative, subdirectory, "./", "..", and PATH
+// search.
+func TestEnvExecRunsScriptWithoutShebang(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOEXEC script fallback is a POSIX exec() convention; Windows has none")
+	}
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeNoShebangScript(t, filepath.Join(dir, "noshebang"), "echo plain\n")
+	writeNoShebangScript(t, filepath.Join(sub, "noshebang"), "echo insub\n")
+
+	cases := []struct {
+		name string
+		dir  string
+		arg  string
+		want string
+	}{
+		{"absolute", dir, filepath.Join(dir, "noshebang"), "plain\n"},
+		{"relative-dot-slash", dir, "./noshebang", "plain\n"},
+		{"subdirectory", dir, "sub/noshebang", "insub\n"},
+		{"dot-slash-subdirectory", dir, "sub/./noshebang", "insub\n"},
+		{"dotdot", sub, "../noshebang", "plain\n"},
+		{"double-slash", dir, "sub//noshebang", "insub\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, errb, code := runExec(t, context.Background(), c.dir, nil, c.arg)
+			if code != 0 || errb != "" || out != c.want {
+				t.Errorf("env %s = (%q, %q, %d), want (%q, \"\", 0)", c.arg, out, errb, code, c.want)
+			}
+		})
+	}
+
+	// PATH search must find and run it too, not just explicit paths.
+	out, errb, code := runExec(t, context.Background(), dir, []string{"PATH=" + dir}, "noshebang")
+	if code != 0 || errb != "" || out != "plain\n" {
+		t.Errorf("PATH-found script = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, "plain\n")
+	}
+}
+
+// -i and -- reach a no-shebang script exactly as they reach a real binary:
+// the fallback is COMMAND-transparent, not a special case that only applies
+// to bare invocations.
+func TestEnvExecScriptWithoutShebangAndOptions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOEXEC script fallback is a POSIX exec() convention; Windows has none")
+	}
+	dir := t.TempDir()
+	writeNoShebangScript(t, filepath.Join(dir, "noshebang"), "echo \"$ONLY\"\n")
+
+	out, errb, code := runExec(t, context.Background(), dir, []string{"OTHER=1"}, "-i", "--", "ONLY=me", "./noshebang")
+	if code != 0 || errb != "" || out != "me\n" {
+		t.Errorf("env -i -- ONLY=me ./noshebang = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, "me\n")
+	}
+}
+
+// Arguments still reach the script verbatim through the shell retry: no
+// double-interpretation of shell metacharacters the caller passed as data.
+func TestEnvExecScriptWithoutShebangPassesArgvVerbatim(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOEXEC script fallback is a POSIX exec() convention; Windows has none")
+	}
+	dir := t.TempDir()
+	writeNoShebangScript(t, filepath.Join(dir, "noshebang"), "for a in \"$@\"; do printf '[%s]\\n' \"$a\"; done\n")
+
+	out, errb, code := runExec(t, context.Background(), dir, nil, "./noshebang", "$(touch pwned)", "two words")
+	if code != 0 || errb != "" {
+		t.Fatalf("env ./noshebang ARGS = (%q, %d)", errb, code)
+	}
+	want := "[$(touch pwned)]\n[two words]\n"
+	if out != want {
+		t.Errorf("script argv = %q, want %q", out, want)
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 1 {
+		t.Errorf("argument was interpreted: dir entries %v (err %v)", entries, err)
+	}
+}
+
+// The exit status and stderr of the fallback-executed script are COMMAND's
+// own, exactly like a real binary.
+func TestEnvExecScriptWithoutShebangExitStatusAndStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOEXEC script fallback is a POSIX exec() convention; Windows has none")
+	}
+	dir := t.TempDir()
+	writeNoShebangScript(t, filepath.Join(dir, "noshebang"), "echo oops 1>&2\nexit 3\n")
+
+	out, errb, code := runExec(t, context.Background(), dir, nil, "./noshebang")
+	if code != 3 || errb != "oops\n" || out != "" {
+		t.Errorf("failing script = (%q, %q, %d), want (\"\", %q, 3)", out, errb, code, "oops\n")
+	}
+}
+
+// glibc's own ENOEXEC fallback (execvp) always sets the retried argv[0] to
+// the resolved path, discarding whatever argv[0] the caller asked for via
+// execv's separate argv parameter. env's --argv0 rewrites argv[0] the same
+// way, so it does not survive the fallback either — the shell always sees
+// the real path as $0.
+func TestEnvExecArgv0DoesNotSurviveScriptFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ENOEXEC script fallback is a POSIX exec() convention; Windows has none")
+	}
+	dir := t.TempDir()
+	writeNoShebangScript(t, filepath.Join(dir, "noshebang"), "printf '%s\\n' \"$0\"\n")
+
+	out, errb, code := runExec(t, context.Background(), dir, nil, "--argv0", "not-the-real-name", "./noshebang")
+	if code != 0 || errb != "" || !strings.HasSuffix(strings.TrimSuffix(out, "\n"), "noshebang") {
+		t.Errorf("argv0 override on script fallback = (%q, %q, %d), want $0 to end in %q", out, errb, code, "noshebang")
+	}
+}
+
 // Assignment/unset operand validation, and the boundary between assignments
 // and COMMAND.
 func TestEnvAssignmentOperandValidation(t *testing.T) {

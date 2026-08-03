@@ -257,20 +257,36 @@ func runCommand(rc *tool.RunContext, argv, env []string, argv0 string, signals [
 		return 127
 	}
 
+	newCmd := func(name string, args []string) *exec.Cmd {
+		c := exec.CommandContext(commandContext(rc), name, args...)
+		c.Dir = rc.Dir
+		c.Env = env
+		c.Stdin = rc.In
+		c.Stdout = rc.Out
+		c.Stderr = rc.Err
+		return c
+	}
+
 	// argv is passed through element-for-element: no shell, no quoting, no
 	// concatenation, so metacharacters in an argument reach COMMAND as data.
-	c := exec.CommandContext(commandContext(rc), path, argv[1:]...)
+	c := newCmd(path, argv[1:])
 	if argv0 != "" {
 		c.Args[0] = argv0
 	}
-	c.Dir = rc.Dir
-	c.Env = env
-	c.Stdin = rc.In
-	c.Stdout = rc.Out
-	c.Stderr = rc.Err
 
 	restoreSignals := ignoreForCommandStart(signals)
 	err := c.Start()
+	if err != nil && isExecFormatError(err) && scriptInterpreter != "" {
+		// Historical exec() behavior, relied on by the GNU baseline via
+		// glibc's execvp: a file that the kernel does not recognize as an
+		// executable image — a script with no "#!" interpreter line — is
+		// retried through the system shell, with the shell as argv[0] and
+		// the resolved path inserted ahead of the original arguments. Per
+		// glibc's own fallback, argv[0] is always the resolved path here,
+		// so an --argv0 override does not survive the retry.
+		c = newCmd(scriptInterpreter, append([]string{path}, argv[1:]...))
+		err = c.Start()
+	}
 	restoreSignals()
 	if err != nil {
 		fmt.Fprintf(rc.Err, "env: %s: %v\n", argv[0], err)
