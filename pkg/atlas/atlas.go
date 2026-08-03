@@ -475,7 +475,7 @@ func init() {
 	addTools(GroupShellutils,
 		"arch", "at", "atq", "atrm", "batch", "cal", "chroot", "crontab",
 		"date", "duration", "echo", "env", "expr", "factor", "false",
-		"groups", "hostid", "hostname", "id", "logname", "ncal", "nice",
+		"groups", "hostid", "hostname", "id", "kill", "logname", "ncal", "nice",
 		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "pwd",
 		"runcon", "seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
@@ -819,7 +819,7 @@ func init() {
 		// todo writes the task list: a repo's COMMITTED docs/todo/ (a write here lands
 		// in the repo's history) or the per-host personal list (~/.bashy/todo/<owner>/).
 		"todo",
-		"clip", "cp", "install", "link", "ln", "mkdir", "mkfifo", "mknod",
+		"clip", "cp", "install", "kill", "link", "ln", "mkdir", "mkfifo", "mknod",
 		"mktemp", "mv", "rmdir", "tar", "touch",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "graph",
 		"stty", "atrm", "crontab",
