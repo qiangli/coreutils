@@ -252,6 +252,31 @@ func leadingTextBlanks(txt string) string {
 	return txt
 }
 
+// unescapeText removes the quoting backslash before each ordinary character
+// in an a/i/c text argument. A lone final backslash represents a literal
+// backslash: the physical-line continuation backslash has already been
+// removed by readMultiLine, so this is the first half of a quoted pair.
+func unescapeText(txt string) string {
+	var out strings.Builder
+	escaped := false
+	for _, character := range txt {
+		if escaped {
+			out.WriteRune(character)
+			escaped = false
+			continue
+		}
+		if character == '\\' {
+			escaped = true
+			continue
+		}
+		out.WriteRune(character)
+	}
+	if escaped {
+		out.WriteByte('\\')
+	}
+	return out.String()
+}
+
 // readMultiLine reads until it finds an unescaped newline. It discards the
 // first line, if it is empty, because commands like "c\", "a\" and "i\" are
 // intended to be used that way.
@@ -282,7 +307,7 @@ func readMultiLine(r *locReader) (string, error) {
 			if first {
 				txt = leadingTextBlanks(txt)
 			}
-			lines = append(lines, txt)
+			lines = append(lines, unescapeText(txt))
 		}
 
 		first = false

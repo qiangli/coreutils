@@ -107,8 +107,13 @@ func parse_resolveBranches(ps *parseState) {
 func parse_toplevel(ps *parseState) {
 	for tok := range ps.toks {
 		switch tok.typ {
-		case tok_CMD:
+		case tok_CMD, tok_CHANGE:
 			compile_cmd(ps, tok)
+		case tok_LBRACE:
+			// An unaddressed brace list is a grouping construct whose body
+			// executes normally. Addressed lists enter through compile_block.
+			ps.blockLevel++
+			parse_toplevel(ps)
 		case tok_LABEL:
 			compile_label(ps, tok)
 		case tok_NUM:

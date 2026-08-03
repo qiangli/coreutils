@@ -169,6 +169,63 @@ func TestSedRelativeRangeAddress(t *testing.T) {
 	}
 }
 
+func TestSedMultilineTextEscapes(t *testing.T) {
+	const appendProgram = `a\
+one\ two\\\
+three\!`
+	out, errOut, code := runSed(t, "base\n", appendProgram)
+	if code != 0 || errOut != "" || out != "base\none two\\\nthree!\n" {
+		t.Errorf("escaped append text = (%q, %q, %d), want decoded multiline text", out, errOut, code)
+	}
+
+	const changeProgram = `c\
+first\
+second`
+	out, errOut, code = runSed(t, "old\n", "-n", changeProgram)
+	if code != 0 || errOut != "" || out != "first\nsecond\n" {
+		t.Errorf("multiline change text = (%q, %q, %d), want two replacement lines", out, errOut, code)
+	}
+}
+
+func TestSedCompoundCommandParsing(t *testing.T) {
+	// The c command is deliberately unreachable. It still has to parse inside
+	// an addressed, inverted brace list.
+	const guarded = `1,$!{
+c\
+changed
+}`
+	out, errOut, code := runSed(t, "a\nb\n", guarded)
+	if code != 0 || errOut != "" || out != "a\nb\n" {
+		t.Errorf("guarded compound command = (%q, %q, %d), want unchanged input", out, errOut, code)
+	}
+
+	out, errOut, code = runSed(t, "a\nb\nc\n", "-n", `{1d;2s/b/B/;p;}`)
+	if code != 0 || errOut != "" || out != "B\nc\n" {
+		t.Errorf("semicolon brace list = (%q, %q, %d), want B then c", out, errOut, code)
+	}
+}
+
+func TestSedScriptHashNDirective(t *testing.T) {
+	const program = "#n\n\n\ns/a/A/p\n"
+	out, errOut, code := runSed(t, "a\nb\n", program)
+	if code != 0 || errOut != "" || out != "A\n" {
+		t.Errorf("#n script = (%q, %q, %d), want only explicit print", out, errOut, code)
+	}
+}
+
+func TestSedAppendNextAtEOFTerminatesScript(t *testing.T) {
+	out, errOut, code := runSed(t, "x\n", "N;s/x/X/")
+	if code != 0 || errOut != "" || out != "" {
+		t.Errorf("N at EOF = (%q, %q, %d), want successful termination without output", out, errOut, code)
+	}
+
+	const program = "1,3s/a/b/\nN\ns/b/c/"
+	out, errOut, code = runSed(t, "a\nb\nc\nc\nb\n", program)
+	if code != 0 || errOut != "" || out != "c\nb\nc\nc\n" {
+		t.Errorf("N across input pairs = (%q, %q, %d), want completed pairs only", out, errOut, code)
+	}
+}
+
 func TestSedReadCommandUsesRunDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "include.txt"), []byte("included\n"), 0o644); err != nil {

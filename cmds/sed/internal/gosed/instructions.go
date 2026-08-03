@@ -247,11 +247,11 @@ func cmd_fillNextAppend(svm *vm) error {
 	if err == nil {
 		lines[1] = svm.pat
 		svm.pat = strings.Join(lines, "\n")
-	} else if err == io.EOF {
-		// we have to increment ip when we are ignoring EOF
-		svm.ip++
 	}
-	return nil
+	// N with no next input line branches to the end of the script. Returning
+	// EOF also prevents the ordinary end-of-cycle print of the old pattern
+	// space, as POSIX requires.
+	return err
 }
 
 // --------------------------------------------------

@@ -83,6 +83,12 @@ func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadF
 		writeFile = defaultWriteFile
 	}
 	bufprog := bufio.NewReader(program)
+	// POSIX gives a script whose first two characters are "#n" the same
+	// default-output suppression as the -n option. The line remains a comment
+	// to the lexer; only its position at the very start makes it a directive.
+	if prefix, _ := bufprog.Peek(2); string(prefix) == "#n" {
+		isQuiet = true
+	}
 	ch := make(chan *token, 128)
 	errch := make(chan error, 1)
 	go lex(bufprog, ch, errch)
