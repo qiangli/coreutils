@@ -483,6 +483,19 @@ func TestFnmatch(t *testing.T) {
 		{"[A-Z]x", "bx", true, true},
 		{"[[:digit:]]*", "7z", false, true},
 		{"[[:digit:]]*", "z7", false, false},
+		// VSC/PCTS find TP34: equivalence classes are bracket elements,
+		// equal to their single member in the C locale.
+		{"*[[=C=]b]*", "Abc", false, true},
+		{"*[[=a=]]*", "aBc", false, true},
+		{"[[=a=]]", "a", false, true},
+		{"[[=a=]]", "A", false, false},
+		{"[[=a=]]", "A", true, true},
+		// VSC/PCTS find TP38: a named collating symbol denotes the literal
+		// byte; edge-position hyphens remain literal too.
+		{"a[[.-.]]b", "a-b", false, true},
+		{"a[-xy]b", "a-b", false, true},
+		{"a[xy-]b", "a-b", false, true},
+		{"a[!-]b", "a-b", false, false},
 	}
 	for _, c := range cases {
 		if got := fnmatch(c.pat, c.s, c.fold); got != c.want {

@@ -1593,19 +1593,31 @@ func matchClass(p string, c byte, fold bool) (matched bool, rest string, valid b
 			return matched != neg, p[i+1:], true
 		}
 		first = false
-		// [:class:]
-		if p[i] == '[' && i+1 < len(p) && p[i+1] == ':' {
+		// POSIX named bracket elements: [:class:], [=equivalence=], and
+		// [.collating-symbol.]. In the C locale an equivalence class and a
+		// collating symbol each denote their single byte; the surrounding
+		// syntax is one element of this outer bracket expression.
+		if p[i] == '[' && i+1 < len(p) && (p[i+1] == ':' || p[i+1] == '=' || p[i+1] == '.') {
+			kind := p[i+1]
 			j := i + 2
-			for j+1 < len(p) && !(p[j] == ':' && p[j+1] == ']') {
+			for j+1 < len(p) && !(p[j] == kind && p[j+1] == ']') {
 				j++
 			}
 			if j+1 >= len(p) {
 				return false, "", false
 			}
-			if fn, ok := classFns[p[i+2:j]]; ok {
-				// -iname: either case of the byte satisfying the class
-				// is a match, so [[:upper:]] finds a lowercase name.
-				if fn(c) || (fold && fn(flipASCII(c))) {
+			element := p[i+2 : j]
+			switch kind {
+			case ':':
+				if fn, ok := classFns[element]; ok {
+					// -iname: either case of the byte satisfying the class
+					// is a match, so [[:upper:]] finds a lowercase name.
+					if fn(c) || (fold && fn(flipASCII(c))) {
+						matched = true
+					}
+				}
+			case '=', '.':
+				if len(element) == 1 && eqByte(element[0], c, fold) {
 					matched = true
 				}
 			}
