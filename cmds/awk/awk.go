@@ -132,7 +132,15 @@ func resolveFiles(rc *tool.RunContext, files []string) []string {
 			// Not filenames: "" is skipped, "-" is stdin, and var=value
 			// operands are assignments GoAWK executes in ARGV order.
 			out[i] = name
+		case rc.DirIsProcessCwd:
+			// At the standalone process boundary the kernel already resolves
+			// relative names against rc.Dir. Keep the operand spelling because
+			// POSIX exposes it through both ARGV and FILENAME (and requires a
+			// numeric-string filename to retain its numeric value).
+			out[i] = name
 		default:
+			// Embedded callers have a virtual cwd that may differ from the
+			// process cwd, so GoAWK needs a resolved path to open the file.
 			out[i] = rc.Path(name)
 		}
 	}

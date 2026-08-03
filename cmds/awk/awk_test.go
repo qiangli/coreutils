@@ -62,3 +62,21 @@ func TestAwkProgramFile(t *testing.T) {
 		t.Errorf("awk -f = (%q, %q, %d), want (%q, %q, 0)", out.String(), errb.String(), code, "b\n", "")
 	}
 }
+
+func TestResolveFilesPreservesStandaloneOperandSpelling(t *testing.T) {
+	files := []string{" 123456789 ", "1.234", "+12345", "-12345", "x=1", "-"}
+	rc := &tool.RunContext{Dir: filepath.Join(string(filepath.Separator), "work"), DirIsProcessCwd: true}
+	if got := resolveFiles(rc, files); strings.Join(got, "\x00") != strings.Join(files, "\x00") {
+		t.Fatalf("standalone resolveFiles() = %q, want original POSIX-visible operands %q", got, files)
+	}
+}
+
+func TestResolveFilesResolvesEmbeddedOperands(t *testing.T) {
+	dir := filepath.Join(string(filepath.Separator), "virtual", "work")
+	rc := &tool.RunContext{Dir: dir}
+	files := []string{"input", "x=1", "-"}
+	want := []string{filepath.Join(dir, "input"), "x=1", "-"}
+	if got := resolveFiles(rc, files); strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("embedded resolveFiles() = %q, want %q", got, want)
+	}
+}
