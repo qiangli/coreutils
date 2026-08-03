@@ -5,6 +5,69 @@ import (
 	"testing"
 )
 
+// TestPrintfVSCNumericResiduals pins the exact operands and formats from the
+// certification failures. The implementation is clean-room from the POSIX
+// printf rule that floating operands are converted as by strtod: an optional
+// sign applies to NaN, hexadecimal constants are accepted, and LC_NUMERIC
+// selects both the input and output radix character.
+func TestPrintfVSCNumericResiduals(t *testing.T) {
+	assert := func(t *testing.T, env []string, format, arg, want string) {
+		t.Helper()
+		out, errb, code := runToolEnv(t, env, format, arg)
+		if code != 0 || errb != "" || out != want {
+			t.Fatalf("printf %q %q env=%q = (%q, %q, %d), want (%q, \"\", 0)",
+				format, arg, env, out, errb, code, want)
+		}
+	}
+
+	// TP37/TP53/TP77: signed NaN, field width, left justification, and
+	// the rule that zero padding is ignored for a non-finite value.
+	for _, conv := range "aefgAEFG" {
+		want := "  -nan"
+		left := "-nan  "
+		if conv >= 'A' && conv <= 'Z' {
+			want, left = "  -NAN", "-NAN  "
+		}
+		assert(t, nil, "%6"+string(conv), "-NAN", want)
+		assert(t, nil, "%-6"+string(conv), "-NAN", left)
+		assert(t, nil, "%-06"+string(conv), "-NAN", left)
+		assert(t, nil, "%06"+string(conv), "-NAN", want)
+	}
+
+	// TP62/TP63/TP66: the exact locale and decimal-comma operand selected
+	// by the certification image, through each POSIX precedence input.
+	for _, env := range [][]string{
+		{"LANG=POSIX", "LC_NUMERIC=de_DE.iso88591"},
+		{"LANG=de_DE.iso88591"},
+		{"LANG=POSIX", "LC_NUMERIC=POSIX", "LC_ALL=de_DE.iso88591"},
+	} {
+		assert(t, env, "%.1f\n", "12345678,9", "12345678,9\n")
+	}
+
+	// TP74 (suite assertion 75): a hexadecimal floating operand without
+	// an explicit p exponent, in both signs and all eight conversions.
+	positive := map[string]string{
+		"%.6a": "0x1.348000p+10", "%.6A": "0X1.348000P+10",
+		"%e": "1.234000e+03", "%E": "1.234000E+03",
+		"%f": "1234.000000", "%F": "1234.000000",
+		"%g": "1234", "%G": "1234",
+	}
+	for format, want := range positive {
+		assert(t, nil, format, "0x4d2", want)
+		assert(t, nil, format, "-0x4d2", "-"+want)
+	}
+
+	// TP76: an explicit plus sign on NaN remains a valid strtod subject
+	// sequence and does not appear in the default rendering.
+	for _, conv := range "aefgAEFG" {
+		want := "nan"
+		if conv >= 'A' && conv <= 'Z' {
+			want = "NAN"
+		}
+		assert(t, nil, "%"+string(conv), "+NAN", want)
+	}
+}
+
 func TestPrintfLCNumericRadix(t *testing.T) {
 	cases := []struct {
 		name string
