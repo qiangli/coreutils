@@ -25,6 +25,12 @@ func fileDev(fs.FileInfo) (uint64, bool)   { return 0, false }
 // one zero-length element per commandSearchPath).
 func defaultCommandPath() string { return "" }
 
+// shellPath / isExecFormatError: the ENOEXEC-through-the-shell retry is a
+// POSIX execvp behavior. Windows has no /bin/sh and no such fallback, so
+// there is nothing to retry.
+func shellPath() string            { return "" }
+func isExecFormatError(error) bool { return false }
+
 // signaledExitCode: Windows has no POSIX signal wait status, so a child's
 // termination is always reported through its exit code, never here.
 func signaledExitCode(*os.ProcessState) (int, bool) { return 0, false }

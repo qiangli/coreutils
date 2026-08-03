@@ -21,8 +21,12 @@
 // -exec/-ok spawn the named utility directly — that is find's
 // upstream-documented purpose (the command-wrapper exception to the
 // no-shell-out rule), argv is built verbatim with {} substitution and
-// never concatenated through a shell. -execdir, -okdir and -delete
-// remain unsupported and fail with the standard contract error.
+// never concatenated through a shell. The one exception mirrors POSIX
+// execvp exactly: if the utility exists and is executable but is not a
+// recognized binary (ENOEXEC — e.g. a shebang-less script), it is retried
+// once as `sh <file> [args...]`, just as GNU find does via execvp.
+// -execdir, -okdir and -delete remain unsupported and fail with the
+// standard contract error.
 //
 // Deviations from GNU worth knowing: traversal order is deterministic
 // lexical (GNU uses directory order); parse/usage errors exit 2 per
@@ -1066,11 +1070,34 @@ func (w *walker) runArgv(argv []string, isOK bool) (int, error) {
 	if path == "" {
 		return 0, errors.New("command not found")
 	}
+	code, err := w.spawn(path, argv[1:], isOK)
+	// POSIX execvp semantics: a file that exists and is executable but is
+	// not a recognized binary (ENOEXEC — e.g. a shebang-less shell script)
+	// is retried through the shell as `sh <file> [args...]`. GNU find gets
+	// this for free because it execs via execvp; Go's exec does a raw
+	// execve, so reproduce the one documented fallback explicitly. The
+	// shell path is compiled in (unix only); on Windows there is no ENOEXEC
+	// retry and shellPath is "".
+	if err != nil && isExecFormatError(err) {
+		if sh := shellPath(); sh != "" {
+			shArgv := append([]string{path}, argv[1:]...)
+			return w.spawn(sh, shArgv, isOK)
+		}
+	}
+	return code, err
+}
+
+// spawn runs an already-resolved executable path with the given arguments
+// and maps its termination onto find's (exit-code, error) contract: a
+// clean or non-zero exit yields (code, nil), a signal death yields
+// (128+signal, nil), and a failure to start the process yields (0, err)
+// with err carrying the raw exec error (so runArgv can detect ENOEXEC).
+func (w *walker) spawn(path string, args []string, isOK bool) (int, error) {
 	ctx := w.rc.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	c := exec.CommandContext(ctx, path, argv[1:]...)
+	c := exec.CommandContext(ctx, path, args...)
 	c.Dir = w.rc.Dir
 	c.Env = w.rc.Env
 	if !isOK {

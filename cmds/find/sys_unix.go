@@ -3,6 +3,7 @@
 package findcmd
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"syscall"
@@ -18,6 +19,16 @@ const (
 // defaultCommandPath is the -exec search path when PATH is unset (not
 // merely empty): POSIX's confstr(_CS_PATH) default, matching env's.
 func defaultCommandPath() string { return "/usr/bin:/bin" }
+
+// shellPath is the interpreter used for the ENOEXEC retry (see runArgv):
+// execvp runs a non-binary executable through _PATH_BSHELL, "/bin/sh".
+func shellPath() string { return "/bin/sh" }
+
+// isExecFormatError reports whether starting the utility failed with
+// ENOEXEC — the file is present and executable but not a recognized
+// binary (typically a shebang-less script), which POSIX execvp retries
+// through the shell.
+func isExecFormatError(err error) bool { return errors.Is(err, syscall.ENOEXEC) }
 
 // signaledExitCode maps a child killed by a signal onto the POSIX 128+N
 // wait-status convention. ok is false when the child was not signaled.
