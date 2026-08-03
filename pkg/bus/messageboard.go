@@ -133,6 +133,7 @@ running waits on the board and is there when it next looks.`,
 					}
 					fmt.Fprintf(w, "- [%d] **%s** from `%s` → %s\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
 				}
+				fmt.Fprint(w, nextSteps(posts, labels, who))
 				if older > 0 {
 					// Say what was hidden. A cap that stays quiet is a silent
 					// drop, and a reader cannot tell "nothing else" from
@@ -373,4 +374,47 @@ func describeFor(p Post, who string) string {
 		return fmt.Sprintf("%s (seen by %d of %d)", p.Audiences(), seen, n)
 	}
 	return fmt.Sprintf("%s (seen by %d)", p.Audiences(), seen)
+}
+
+// nextSteps tells a reader what the board expects of it, in the OUTPUT rather
+// than in a skill.
+//
+// An instruction an agent has to have loaded is one it can be missing: tools
+// read different files and one reads none. An instruction printed beside the
+// messages arrives with them, every time, for every harness — the same argument
+// that puts the coordination rule in the shell rather than in a document.
+//
+// It is CONTEXTUAL and short. A fixed banner on every read is noise, and noise
+// is what teaches people to skip the thing you needed them to see: this says
+// only what the posts just shown actually require, and nothing at all when they
+// require nothing.
+func nextSteps(posts []Post, labels map[int64]string, who string) string {
+	var directed, claimed []Post
+	for _, p := range posts {
+		if p.Directed(who) {
+			directed = append(directed, p)
+			continue
+		}
+		if strings.Contains(labels[p.Seq], "CLAIMED BY YOU") {
+			claimed = append(claimed, p)
+		}
+	}
+	if len(directed) == 0 && len(claimed) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("---\n")
+	if len(directed) > 0 {
+		fmt.Fprintf(&b, "%d addressed to YOU — someone is waiting. Reply: `bashy mb send %s \"...\"`\n",
+			len(directed), directed[0].From)
+	}
+	if len(claimed) > 0 {
+		// A claim is a commitment: nobody else will see this work, so if the
+		// claimer drops it, it is dropped. Saying so is the difference between
+		// a queue that drains and one that quietly stalls.
+		fmt.Fprintf(&b, "You CLAIMED %d — nobody else can see it now, so it is yours to finish or hand back (`bashy mb post \"dropping [seq]\"`).\n",
+			len(claimed))
+	}
+	b.WriteString("Announce what you take BEFORE you start, not after you finish.\n")
+	return b.String()
 }
