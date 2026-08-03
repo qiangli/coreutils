@@ -101,9 +101,16 @@ func run(rc *tool.RunContext, args []string) int {
 		// expansions, and multi-line constructs retain their meaning.
 		Command:   []string{shell, "-c", cmdText},
 		Dir:       cwd,
+		Env:       append([]string(nil), rc.Env...),
+		EnvSet:    true,
 		Enabled:   true,
 		CreatedAt: now,
 		NextRun:   when,
+	}
+	if rc.UmaskSet {
+		j.Umask, j.UmaskSet = uint32(rc.Umask.Perm()), true
+	} else if mask, ok := processUmask(); ok {
+		j.Umask, j.UmaskSet = mask, true
 	}
 
 	jobs, err := schedule.LoadJobs()

@@ -174,9 +174,10 @@ func TestAtJobRetainsShellProgramAndWorkingDirectory(t *testing.T) {
 	program := "printf '%s\\n' 'hello world' > marker\n"
 	var stdout, stderr bytes.Buffer
 	rc := &tool.RunContext{
-		Ctx: context.Background(),
-		Dir: dir,
-		Env: []string{"SHELL=sh"},
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   []string{"PATH=/usr/bin:/bin", "SHELL=sh", "MBI_ENV=garp"},
+		Umask: 0o027, UmaskSet: true,
 		Stdio: tool.Stdio{
 			In: strings.NewReader(program), Out: &stdout, Err: &stderr,
 		},
@@ -197,6 +198,12 @@ func TestAtJobRetainsShellProgramAndWorkingDirectory(t *testing.T) {
 	}
 	if jobs[0].Dir != dir {
 		t.Fatalf("stored dir=%q, want %q", jobs[0].Dir, dir)
+	}
+	if !jobs[0].EnvSet || !reflect.DeepEqual(jobs[0].Env, rc.Env) {
+		t.Fatalf("stored env=%q (set=%v), want %q", jobs[0].Env, jobs[0].EnvSet, rc.Env)
+	}
+	if !jobs[0].UmaskSet || jobs[0].Umask != 0o027 {
+		t.Fatalf("stored umask=%04o (set=%v), want 0027", jobs[0].Umask, jobs[0].UmaskSet)
 	}
 
 	job := exec.Command(jobs[0].Command[0], jobs[0].Command[1:]...)

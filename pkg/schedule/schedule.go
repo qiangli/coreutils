@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -31,12 +30,20 @@ import (
 
 // Job is one scheduled command.
 type Job struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name,omitempty"`
-	Kind      string    `json:"kind"` // cron | every | at
-	Spec      string    `json:"spec"`
-	Command   []string  `json:"command"`
-	Dir       string    `json:"dir,omitempty"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name,omitempty"`
+	Kind    string   `json:"kind"` // cron | every | at
+	Spec    string   `json:"spec"`
+	Command []string `json:"command"`
+	Dir     string   `json:"dir,omitempty"`
+	// Env and Umask preserve the submission context for POSIX at jobs.  The
+	// corresponding Set bits distinguish an intentionally empty value from a
+	// legacy/general scheduler job, which continues to inherit daemon state.
+	// The state file is private (0600), and list output must never expose Env.
+	Env       []string  `json:"env,omitempty"`
+	EnvSet    bool      `json:"env_set,omitempty"`
+	Umask     uint32    `json:"umask,omitempty"`
+	UmaskSet  bool      `json:"umask_set,omitempty"`
 	Prompt    string    `json:"prompt,omitempty"`
 	Context   string    `json:"context,omitempty"`
 	Enabled   bool      `json:"enabled"`
@@ -93,7 +100,15 @@ func (s *store) save() error {
 		os.Remove(tmp.Name())
 		return err
 	}
-	tmp.Close()
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
 	return os.Rename(tmp.Name(), p)
 }
 
@@ -162,13 +177,22 @@ func (j *Job) fire(w *os.File) error {
 	if len(j.Command) == 0 {
 		return fmt.Errorf("job %s has no command", j.ID)
 	}
-	c := exec.Command(j.Command[0], j.Command[1:]...)
+	c := commandWithUmask(j.Command, j.Umask, j.UmaskSet)
 	c.Dir = j.Dir
-	c.Env = append(os.Environ(),
-		"BASHY_SCHEDULE_JOB="+j.ID,
-		"BASHY_SCHEDULE_PROMPT="+j.Prompt,
-		"BASHY_SCHEDULE_CONTEXT="+j.Context,
-	)
+	if j.EnvSet {
+		c.Env = append([]string(nil), j.Env...)
+	} else {
+		c.Env = os.Environ()
+	}
+	// A POSIX at-job must observe exactly the environment captured when it
+	// was submitted. Agentic scheduler jobs retain their existing metadata.
+	if j.Kind != "at" {
+		c.Env = append(c.Env,
+			"BASHY_SCHEDULE_JOB="+j.ID,
+			"BASHY_SCHEDULE_PROMPT="+j.Prompt,
+			"BASHY_SCHEDULE_CONTEXT="+j.Context,
+		)
+	}
 	c.Stdout, c.Stderr = w, w
 	return c.Run()
 }
@@ -267,7 +291,7 @@ func listCmd() *cobra.Command {
 				return err
 			}
 			if scheduleOutputJSON(cmd) {
-				b, _ := json.Marshal(map[string]any{"schema_version": "bashy-schedule-v1", "kind": "list", "jobs": s.Jobs})
+				b, _ := json.Marshal(map[string]any{"schema_version": "bashy-schedule-v1", "kind": "list", "jobs": publicJobs(s.Jobs)})
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
 				return nil
 			}
@@ -286,6 +310,19 @@ func listCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// publicJobs returns listing copies with captured environment values removed.
+// at spool state needs those values to meet POSIX, but a diagnostic/listing
+// surface must not turn that private state into a credential disclosure.
+func publicJobs(jobs []*Job) []*Job {
+	out := make([]*Job, 0, len(jobs))
+	for _, job := range jobs {
+		clone := *job
+		clone.Env = nil
+		out = append(out, &clone)
+	}
+	return out
 }
 
 func rmCmd() *cobra.Command {

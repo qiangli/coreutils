@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +86,42 @@ func TestAddListRemoveRoundTrip(t *testing.T) {
 	s2, err := load()
 	if err != nil || len(s2.Jobs) != 1 || s2.Jobs[0].ID != "j1" {
 		t.Fatalf("round-trip failed: %+v %v", s2, err)
+	}
+}
+
+func TestJSONListRedactsCapturedEnvironment(t *testing.T) {
+	state := withState(t)
+	s, _ := load()
+	s.Jobs = append(s.Jobs, &Job{
+		ID: "private-at", Kind: "at", Spec: time.Now().Add(time.Hour).Format(time.RFC3339),
+		Command: []string{"sh", "-c", "true"}, Env: []string{"TOKEN=top-secret"}, EnvSet: true,
+		Enabled: true, CreatedAt: time.Now(), NextRun: time.Now().Add(time.Hour),
+	})
+	if err := s.save(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("state mode=%v, want 0600", info.Mode().Perm())
+	}
+
+	cmd := NewScheduleCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"list", "--json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "top-secret") || strings.Contains(out.String(), "TOKEN=") {
+		t.Fatalf("JSON listing disclosed captured environment: %s", out.String())
+	}
+	loaded, err := load()
+	if err != nil || len(loaded.Jobs) != 1 || !reflect.DeepEqual(loaded.Jobs[0].Env, []string{"TOKEN=top-secret"}) {
+		t.Fatalf("private state did not retain environment: jobs=%v err=%v", loaded.Jobs, err)
 	}
 }
 
