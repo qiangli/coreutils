@@ -79,77 +79,7 @@ running waits on the board and is there when it next looks.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			who, err := BoardIdentity(as)
-			if err != nil {
-				return err
-			}
-			var posts []Post
-			var older int
-			if all {
-				posts, err = Posts()
-			} else {
-				var directed, other []Post
-				directed, other, older, err = Unseen(who, limit)
-				// Directed first: those carry an obligation, and a reader that
-				// stops after the first screen must have seen them.
-				posts = append(directed, other...)
-			}
-			if err != nil {
-				return err
-			}
-			// RESOLVE THE SIDE EFFECTS BEFORE RENDERING ANY OF THEM.
-			//
-			// Claiming and view-recording used to happen inside the print loop,
-			// which coupled them to stdout surviving: piping `mb` into a command
-			// that exits early SIGPIPEs the render halfway and the claim is lost.
-			// Observed — a failed `grep -A` killed the first reader mid-render
-			// and the SECOND reader then took work the first had been shown. A
-			// state change that depends on a pipe staying open is not one.
-			labels := make(map[int64]string, len(posts))
-			if !all && !peek {
-				for _, p := range posts {
-					labels[p.Seq] = resolveLabel(p, who)
-				}
-			}
-			w := cmd.OutOrStdout()
-			if jsonOut {
-				enc := json.NewEncoder(w)
-				for _, p := range posts {
-					if eerr := enc.Encode(p); eerr != nil {
-						return eerr
-					}
-				}
-			} else if len(posts) == 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "nothing new on the board for %s\n", who)
-			} else {
-				fmt.Fprintf(w, "## Board — %d post(s) for %s\n\n", len(posts), who)
-				for _, p := range posts {
-					to, ok := labels[p.Seq]
-					if !ok {
-						to = describeFor(p, who)
-					}
-					if seenBy {
-						if v := Viewers(p.Seq); len(v) > 0 {
-							to += " [" + strings.Join(v, ", ") + "]"
-						}
-					}
-					fmt.Fprintf(w, "- [%d] **%s** from `%s` → %s\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
-				}
-				fmt.Fprint(w, nextSteps(posts, labels, who))
-				if older > 0 {
-					// Say what was hidden. A cap that stays quiet is a silent
-					// drop, and a reader cannot tell "nothing else" from
-					// "twelve more" unless it is told.
-					fmt.Fprintf(w, "_+%d older, not addressed to you — `bashy mb --all` for the whole board._\n", older)
-				}
-			}
-			// Advance the cursor only AFTER the posts have been written out,
-			// and never on --peek or --all: a read that fails halfway must not
-			// consume what it did not show.
-			if peek || all || len(posts) == 0 {
-				return nil
-			}
-			return MarkSeen(who, posts[len(posts)-1].Seq)
+			return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, all: all, jsonOut: jsonOut, seenBy: seenBy})
 		},
 	}
 	f := cmd.Flags()
@@ -163,6 +93,103 @@ running waits on the board and is there when it next looks.`,
 	cmd.AddCommand(newMBSendCmd(), newMBPostCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	return cmd
+}
+
+// boardRead is one read of the board.
+type boardRead struct {
+	as      string
+	limit   int
+	peek    bool
+	all     bool
+	jsonOut bool
+	seenBy  bool
+}
+
+// readBoard is the ONE implementation of reading the board.
+//
+// Extracted from `mb`'s RunE so `bashy ping` with no arguments is literally the
+// same read rather than a second one that could drift. A front door that
+// reimplements what it fronts is how two views of one store start disagreeing.
+func readBoard(cmd *cobra.Command, o boardRead) error {
+	{
+		as, limit, peek, all, jsonOut, seenBy := o.as, o.limit, o.peek, o.all, o.jsonOut, o.seenBy
+		who, err := BoardIdentity(as)
+		if err != nil {
+			return err
+		}
+		var posts []Post
+		var older int
+		if all {
+			posts, err = Posts()
+		} else {
+			var directed, other []Post
+			directed, other, older, err = Unseen(who, limit)
+			// Directed first: those carry an obligation, and a reader that
+			// stops after the first screen must have seen them.
+			posts = append(directed, other...)
+		}
+		if err != nil {
+			return err
+		}
+		// RESOLVE THE SIDE EFFECTS BEFORE RENDERING ANY OF THEM.
+		//
+		// Claiming and view-recording used to happen inside the print loop,
+		// which coupled them to stdout surviving: piping `mb` into a command
+		// that exits early SIGPIPEs the render halfway and the claim is lost.
+		// Observed — a failed `grep -A` killed the first reader mid-render
+		// and the SECOND reader then took work the first had been shown. A
+		// state change that depends on a pipe staying open is not one.
+		labels := make(map[int64]string, len(posts))
+		if !all && !peek {
+			for _, p := range posts {
+				labels[p.Seq] = resolveLabel(p, who)
+			}
+		}
+		w := cmd.OutOrStdout()
+		if jsonOut {
+			enc := json.NewEncoder(w)
+			for _, p := range posts {
+				if eerr := enc.Encode(p); eerr != nil {
+					return eerr
+				}
+			}
+		} else if len(posts) == 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "nothing new on the board for %s\n", who)
+		} else {
+			fmt.Fprintf(w, "## Board — %d post(s) for %s\n\n", len(posts), who)
+			for _, p := range posts {
+				to, ok := labels[p.Seq]
+				if !ok {
+					to = describeFor(p, who)
+				}
+				if seenBy {
+					if v := Viewers(p.Seq); len(v) > 0 {
+						to += " [" + strings.Join(v, ", ") + "]"
+					}
+				}
+				fmt.Fprintf(w, "- [%d] **%s** from `%s` → %s\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
+			}
+			fmt.Fprint(w, nextSteps(posts, labels, who))
+			if older > 0 {
+				// Say what was hidden. A cap that stays quiet is a silent
+				// drop, and a reader cannot tell "nothing else" from
+				// "twelve more" unless it is told.
+				fmt.Fprintf(w, "_+%d older, not addressed to you — `bashy mb --all` for the whole board._\n", older)
+			}
+		}
+		// Advance the cursor only AFTER the posts have been written out,
+		// and never on --peek or --all: a read that fails halfway must not
+		// consume what it did not show.
+		if peek || all || len(posts) == 0 {
+			return nil
+		}
+		return MarkSeen(who, posts[len(posts)-1].Seq)
+	}
+}
+
+// runBoardRead is the front door's read: the same board, same cursor.
+func runBoardRead(cmd *cobra.Command, as string, limit int, peek, all bool) error {
+	return readBoard(cmd, boardRead{as: as, limit: limit, peek: peek, all: all})
 }
 
 // newMBSendCmd posts to one agent, or to everyone a selector matches.

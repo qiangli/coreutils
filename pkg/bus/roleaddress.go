@@ -43,12 +43,35 @@ type HostRole struct {
 // HostRoles lists the addressable roles on this host, injected by whoever owns
 // them.
 //
-// pkg/bus must not import pkg/steward — the board is transport, a seat is
-// authority state. Same seam shape as FleetNames and DetectHarness, and bound
-// from the owner's init() for the same reason lexicon.SeatSource is: a seam
-// that waits for someone to remember to wire it is the failure mode this
+// pkg/bus must not import pkg/steward or pkg/weave — the board is transport, a
+// seat is authority state. Same seam shape as FleetNames and DetectHarness, and
+// bound from the owner's init() for the same reason lexicon.SeatSource is: a
+// seam that waits for someone to remember to wire it is the failure mode this
 // codebase produces most reliably.
+//
+// Assign it directly only if you own EVERY role on the host. There is more than
+// one owner — steward holds the seat, weave holds the conductors — so use
+// RegisterHostRoles, which composes. A bare assignment from a second package
+// silently replaces the first, and last-writer-wins on a var set from two
+// init() functions is a bug whose outcome depends on link order.
 var HostRoles func() []HostRole
+
+// RegisterHostRoles adds a source of addressable roles.
+//
+// Composes rather than replaces, which is the whole reason it exists.
+func RegisterHostRoles(src func() []HostRole) {
+	if src == nil {
+		return
+	}
+	prev := HostRoles
+	HostRoles = func() []HostRole {
+		var out []HostRole
+		if prev != nil {
+			out = append(out, prev()...)
+		}
+		return append(out, src()...)
+	}
+}
 
 // ResolveRole maps a label a person typed to the role's stable address.
 //

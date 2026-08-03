@@ -23,7 +23,7 @@ import (
 
 func init() {
 	lexicon.SeatSource = seatsForLexicon
-	bus.HostRoles = rolesForBoard
+	bus.RegisterHostRoles(rolesForBoard)
 }
 
 // rolesForBoard makes `steward` an address on the board.
