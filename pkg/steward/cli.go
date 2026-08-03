@@ -162,6 +162,7 @@ tree, and captures no diff.`,
 		newDecideCmd(o),
 		newVerifyCmd(o),
 		newPingCmd(o),
+		newInboxCmd(o),
 		newTranscriptCmd(o),
 		newWorkstreamCmd(o),
 	)
@@ -945,6 +946,16 @@ never checked.`,
 				fmt.Fprintf(out, "             the %d entries above are valid and unaffected; `steward repair --plan` says what can be done\n", len(rep.Entries))
 			}
 			fmt.Fprintf(out, "  store:     %s\n", s.Dir())
+
+			// UNREAD MAIL, on the one screen a steward already looks at.
+			//
+			// The seat inbox is worthless if its holder has to know it exists.
+			// A count here is what turns `steward inbox` from a verb somebody
+			// has to be told about into one they discover the moment there is a
+			// reason to. Peeked, so looking at status never marks mail read.
+			if n, err := bus.SeatPending(stewardAssignment().Topic(), true, false); err == nil && len(n) > 0 {
+				fmt.Fprintf(out, "  inbox:     %d UNREAD — `bashy steward inbox`\n", len(n))
+			}
 
 			fmt.Fprintln(out)
 			writeBoard(out, board)

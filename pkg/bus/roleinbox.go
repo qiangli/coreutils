@@ -142,3 +142,40 @@ func hasTopic(topics []string, want string) bool {
 	}
 	return false
 }
+
+// SeatPending reads a role inbox: resolve, read, and mark — the same three
+// steps `bus pending` takes, exposed so a role's own CLI can offer a read verb
+// that does not require its holder to know the topic string.
+//
+// That mattered more than it sounds. Reading a seat meant
+// `bashy bus pending --as steward.dragon-u501-b683b300b1`, which needs both the
+// verb and a scope id nobody memorises — and a channel whose read side costs
+// that much stays unread, which fails exactly like a broken one while looking
+// healthy.
+//
+// MARK, never delete: the message keeps its place in the buffer with a read
+// stamp, so `--all` still answers "what was this seat told, and when" long
+// after the fact.
+func SeatPending(topic string, peek, all bool) ([]Pending, error) {
+	topic = strings.TrimSpace(topic)
+	if topic == "" {
+		return nil, fmt.Errorf("bus: a seat inbox needs a topic")
+	}
+	if _, err := ResolveFor(topic); err != nil {
+		// Not fatal, and deliberately so: whatever was already buffered is still
+		// worth showing. Refusing to print a real backlog because one resolution
+		// pass failed would trade a partial answer for none.
+		_ = err
+	}
+	var items []Pending
+	var err error
+	if all {
+		items, err = ReadPending(topic)
+	} else {
+		items, err = UnreadPending(topic)
+	}
+	if err != nil || peek || all || len(items) == 0 {
+		return items, err
+	}
+	return items, MarkRead(topic, items[len(items)-1].Seq)
+}
