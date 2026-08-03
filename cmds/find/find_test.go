@@ -544,3 +544,72 @@ func TestFindGermanAffirmativeResponse(t *testing.T) {
 		t.Error("POSIX locale did not accept y/Y affirmative response")
 	}
 }
+
+// TestFindVSCBracketPatterns exercises the exact directory names, patterns,
+// and printed paths from certification TP34 and TP38. POSIX equivalence-class
+// and collating-symbol syntax denotes one element of the surrounding bracket
+// expression; a hyphen in either edge position is literal.
+func TestFindVSCBracketPatterns(t *testing.T) {
+	cases := []struct {
+		name, start, pattern, want string
+		files                      []string
+	}{
+		{"equiv-C-or-b", "find_dir_35", "*[[=C=]b]*", "find_dir_35/Abc\n", []string{"Abc"}},
+		{"equiv-a-anywhere", "find_dir_35", "*[[=a=]]*", "find_dir_35/a\nfind_dir_35/aBc\n", []string{"a", "aBc"}},
+		{"equiv-a-whole", "find_dir_35", "[[=a=]]", "find_dir_35/a\n", []string{"a", "aBc"}},
+		{"hyphen-leading", "find_dir_40", "a[-xy]b", "find_dir_40/a-b\n", []string{"a-b"}},
+		{"hyphen-negated", "find_dir_40", "a[!-]b", "", []string{"a-b"}},
+		{"hyphen-trailing", "find_dir_40", "a[xy-]b", "find_dir_40/a-b\n", []string{"a-b"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range tc.files {
+				writeFile(t, dir, filepath.Join(tc.start, name), "")
+			}
+			out, errb, code := runFind(t, dir, tc.start, "-name", tc.pattern, "-print")
+			if code != 0 || errb != "" || out != tc.want {
+				t.Errorf("find %s -name %q = (%q, %q, %d), want (%q, \"\", 0)",
+					tc.start, tc.pattern, out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
+// TestFindVSCLocalePrecedence maps certification TP145-149 onto the three
+// locale-sensitive behaviors find exercises: LC_COLLATE equivalence classes,
+// LC_CTYPE character classes, and LC_MESSAGES affirmative responses. The
+// campaign locale is de_DE ISO-8859-1, so the test uses its literal ä byte.
+func TestFindVSCLocalePrecedence(t *testing.T) {
+	latin1Aumlaut := string([]byte{0xe4})
+	cases := []struct {
+		name                     string
+		env                      []string
+		collate, ctype, messages bool
+	}{
+		{"tp145-lc-all", []string{"LC_ALL=de_DE.iso88591", "LC_COLLATE=POSIX", "LC_CTYPE=POSIX", "LC_MESSAGES=POSIX", "LANG=POSIX"}, true, true, true},
+		{"tp146-lc-ctype", []string{"LC_CTYPE=de_DE.iso88591", "LANG=POSIX"}, false, true, false},
+		{"tp147-lc-messages", []string{"LC_MESSAGES=de_DE.iso88591", "LANG=POSIX"}, false, false, true},
+		{"tp148-lc-collate", []string{"LC_COLLATE=de_DE.iso88591", "LANG=POSIX"}, true, false, false},
+		{"tp149-lang", []string{"LANG=de_DE.iso88591"}, true, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			loc := findLocaleFromEnv(tc.env)
+			if got := fnmatchLocale("[[=a=]]", latin1Aumlaut, false, loc); got != tc.collate {
+				t.Errorf("LC_COLLATE match = %v, want %v", got, tc.collate)
+			}
+			if got := fnmatchLocale("[[:alpha:]]", latin1Aumlaut, false, loc); got != tc.ctype {
+				t.Errorf("LC_CTYPE match = %v, want %v", got, tc.ctype)
+			}
+			w := &walker{
+				rc:     &tool.RunContext{Stdio: tool.Stdio{Err: &bytes.Buffer{}}},
+				stdin:  bufio.NewReader(strings.NewReader("ja\n")),
+				locale: loc,
+			}
+			if got := w.confirm("echo", "file"); got != tc.messages {
+				t.Errorf("LC_MESSAGES affirmative = %v, want %v", got, tc.messages)
+			}
+		})
+	}
+}
