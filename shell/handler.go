@@ -49,11 +49,14 @@ func HandlerFunc(intercept func(name string) bool) func(interp.ExecHandlerFunc) 
 				return next(ctx, args)
 			}
 			hc := interp.HandlerCtx(ctx)
+			umask := hc.Umask()
 			rc := &tool.RunContext{
-				Ctx: ctx,
-				Dir: hc.Dir,
-				Env: envSlice(hc.Env),
-				FS:  tool.NewLocalFS(),
+				Ctx:      ctx,
+				Dir:      hc.Dir,
+				Env:      envSlice(hc.Env),
+				FS:       tool.NewLocalFS(),
+				Umask:    umask,
+				UmaskSet: true,
 				Stdio: tool.Stdio{
 					In:  hc.Stdin,
 					Out: hc.Stdout,

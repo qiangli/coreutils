@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -37,6 +38,13 @@ type RunContext struct {
 	Env []string // os.Environ() shape ("KEY=VALUE"); nil = empty environment
 	FS  *LocalFS // local OS filesystem with path translation; never nil in practice
 	Stdio
+
+	// Umask is the embedding shell's virtual file-creation mask. UmaskSet is
+	// false for standalone tools, where the child process's inherited OS umask
+	// remains authoritative. In-process adapters set both fields so creation
+	// helpers can honor the shell without changing process-global state.
+	Umask    fs.FileMode
+	UmaskSet bool
 
 	// DirIsProcessCwd is the host's guarantee that Dir IS this process's
 	// working directory for the whole invocation (true for the standalone

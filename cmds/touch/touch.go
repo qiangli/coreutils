@@ -230,7 +230,7 @@ func run(rc *tool.RunContext, args []string) int {
 					// we'd need to stat the parent. For now, just try creating a regular file.
 				}
 			}
-			f, cerr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
+			f, cerr := rc.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
 			if cerr != nil {
 				fmt.Fprintf(rc.Err, "touch: cannot touch '%s': %v\n", name, reason(cerr))
 				exit = 1
