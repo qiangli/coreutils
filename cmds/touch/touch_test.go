@@ -90,6 +90,17 @@ func TestTouchStamp(t *testing.T) {
 	}
 }
 
+func TestTouchStampRejectsOutsidePortableTimeRange(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runToolEnv(t, dir, []string{"TZ=UTC0"}, "-t", "190001010000.00", "-a", "-m", "example2.txt")
+	if code == 0 || !strings.Contains(errb, "invalid date format") {
+		t.Fatalf("pre-portable -t stamp: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "example2.txt")); !os.IsNotExist(err) {
+		t.Fatalf("invalid -t stamp created operand: %v", err)
+	}
+}
+
 func TestTouchStampUsesInvocationTZAndCurrentYear(t *testing.T) {
 	loc, err := time.LoadLocation("PST8PDT")
 	if err != nil {
@@ -154,6 +165,34 @@ func TestTouchDate(t *testing.T) {
 		if got := mtime(t, filepath.Join(dir, "f")); got.Unix() != c.want.Unix() {
 			t.Errorf("-d %q: mtime=%v want %v", c.date, got, c.want)
 		}
+	}
+}
+
+func TestTouchDateISOSeconds60AndFractions(t *testing.T) {
+	local := time.FixedZone("PST8", -8*60*60)
+	cases := []struct {
+		name string
+		date string
+		want time.Time
+	}{
+		{"local-space-seconds-60", "2026-01-02 13:17:60", time.Date(2026, 1, 2, 13, 18, 0, 0, local)},
+		{"local-dot-fraction", "2026-01-02T13:17:60.987654321", time.Date(2026, 1, 2, 13, 18, 0, 987654321, local)},
+		{"local-comma-fraction", "2026-01-02T13:17:60,987654321", time.Date(2026, 1, 2, 13, 18, 0, 987654321, local)},
+		{"zulu-dot-fraction", "2026-01-02T13:17:55.987654321Z", time.Date(2026, 1, 2, 13, 17, 55, 987654321, time.UTC)},
+		{"zulu-comma-fraction", "2026-01-02 13:17:55,987654321Z", time.Date(2026, 1, 2, 13, 17, 55, 987654321, time.UTC)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			_, errb, code := runToolEnv(t, dir, []string{"TZ=PST8"}, "-d", tc.date, "example.txt")
+			if code != 0 {
+				t.Fatalf("touch -d %q: code=%d err=%q", tc.date, code, errb)
+			}
+			got := mtime(t, filepath.Join(dir, "example.txt"))
+			if !got.Equal(tc.want) || got.Nanosecond() != tc.want.Nanosecond() {
+				t.Fatalf("touch -d %q mtime=%v, want %v", tc.date, got, tc.want)
+			}
+		})
 	}
 }
 

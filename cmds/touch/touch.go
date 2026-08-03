@@ -294,6 +294,13 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 	if t.Month() != time.Month(month) || t.Day() != day {
 		return time.Time{}, errBad
 	}
+	// Keep -t within the portable signed-32-bit time_t range. Some file
+	// systems silently clamp older values while reporting success; in that
+	// case touch would claim to have installed a timestamp that it did not.
+	// POSIX permits rejecting times outside the implementation's range.
+	if t.Unix() < -1<<31 {
+		return time.Time{}, errBad
+	}
 	return t, nil
 }
 
@@ -323,6 +330,9 @@ func parseDate(s string, now time.Time) (time.Time, error) {
 	if strings.HasPrefix(s, "@") {
 		return parseEpoch(s[1:])
 	}
+	if t, recognized, err := parseISODate(s, now.Location()); recognized {
+		return t, err
+	}
 	layouts := []string{
 		time.RFC3339Nano,
 		"2006-01-02T15:04:05.999999999",
@@ -351,6 +361,90 @@ func parseDate(s string, now time.Time) (time.Time, error) {
 		return t, nil
 	}
 	return parseRelative(s, now)
+}
+
+// parseISODate handles the POSIX touch ISO forms directly. time.Parse rejects
+// a seconds field of 60, but POSIX requires accepting it and carrying into the
+// following minute. Both '.' and ',' are valid fractional separators.
+func parseISODate(s string, local *time.Location) (time.Time, bool, error) {
+	if len(s) < 19 || s[4] != '-' || s[7] != '-' ||
+		(s[10] != 'T' && s[10] != ' ') || s[13] != ':' || s[16] != ':' {
+		return time.Time{}, false, nil
+	}
+	for _, span := range [][2]int{{0, 4}, {5, 7}, {8, 10}, {11, 13}, {14, 16}, {17, 19}} {
+		if !allDigits(s[span[0]:span[1]]) {
+			return time.Time{}, true, errBadDate
+		}
+	}
+	year, _ := strconv.Atoi(s[0:4])
+	month, _ := strconv.Atoi(s[5:7])
+	day, _ := strconv.Atoi(s[8:10])
+	hour, _ := strconv.Atoi(s[11:13])
+	minute, _ := strconv.Atoi(s[14:16])
+	second, _ := strconv.Atoi(s[17:19])
+	if month < 1 || month > 12 || day < 1 || day > 31 ||
+		hour > 23 || minute > 59 || second > 60 {
+		return time.Time{}, true, errBadDate
+	}
+
+	rest := s[19:]
+	nsec := 0
+	if len(rest) > 0 && (rest[0] == '.' || rest[0] == ',') {
+		rest = rest[1:]
+		i := 0
+		for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+			i++
+		}
+		if i == 0 {
+			return time.Time{}, true, errBadDate
+		}
+		frac := rest[:i]
+		rest = rest[i:]
+		if len(frac) > 9 {
+			frac = frac[:9]
+		}
+		for len(frac) < 9 {
+			frac += "0"
+		}
+		nsec, _ = strconv.Atoi(frac)
+	}
+
+	loc := local
+	switch {
+	case rest == "":
+	case rest == "Z":
+		loc = time.UTC
+	case len(rest) == 6 && (rest[0] == '+' || rest[0] == '-') && rest[3] == ':' &&
+		allDigits(rest[1:3]) && allDigits(rest[4:6]):
+		tzh, _ := strconv.Atoi(rest[1:3])
+		tzm, _ := strconv.Atoi(rest[4:6])
+		if tzh > 23 || tzm > 59 {
+			return time.Time{}, true, errBadDate
+		}
+		offset := (tzh*60 + tzm) * 60
+		if rest[0] == '-' {
+			offset = -offset
+		}
+		loc = time.FixedZone("", offset)
+	default:
+		// Leave date syntaxes with named or space-separated zones to the
+		// general layout parser below.
+		return time.Time{}, false, nil
+	}
+
+	baseSecond := second
+	if second == 60 {
+		baseSecond = 59
+	}
+	t := time.Date(year, time.Month(month), day, hour, minute, baseSecond, nsec, loc)
+	if t.Year() != year || t.Month() != time.Month(month) || t.Day() != day ||
+		t.Hour() != hour || t.Minute() != minute || t.Second() != baseSecond {
+		return time.Time{}, true, errBadDate
+	}
+	if second == 60 {
+		t = t.Add(time.Second)
+	}
+	return t, true, nil
 }
 
 func parseEpoch(s string) (time.Time, error) {
