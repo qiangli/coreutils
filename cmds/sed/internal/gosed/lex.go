@@ -161,31 +161,33 @@ func readNumber(r *locReader, character rune) (string, error) {
 // returning the string (not including the delimiter). It does
 // allow the delimiter to be escaped by a backslash ('\').
 // It is an error to reach EOL while looking for the delimiter.
+//
+// Escape state is tracked by parity, not by "the previous rune was a
+// backslash": in `y/a\\/b\\/` the delimiter after `\\` closes the string,
+// because the two backslashes are themselves an escaped backslash.
 func readDelimited(r *locReader, delimiter rune) (string, error) {
 	var buffer bytes.Buffer
+	escaped := false
 
-	var err error
-	var character rune
-	var previous rune
+	for {
+		character, _, err := r.ReadRune()
+		if err != nil {
+			if err == io.EOF {
+				err = fmt.Errorf("end-of-file while looking for %c", delimiter)
+			}
+			return buffer.String(), err
+		}
 
-	character, _, err = r.ReadRune()
-	for (err == nil) &&
-		(character != '\n') &&
-		((character != delimiter) || (previous == '\\')) {
+		if character == '\n' {
+			return buffer.String(), fmt.Errorf("end-of-line while looking for %c", delimiter)
+		}
+		if !escaped && character == delimiter {
+			return buffer.String(), nil
+		}
+
 		buffer.WriteRune(character)
-		previous = character
-		character, _, err = r.ReadRune()
+		escaped = !escaped && character == '\\'
 	}
-
-	if character == '\n' {
-		err = fmt.Errorf("end-of-line while looking for %c", delimiter)
-	}
-
-	if err == io.EOF {
-		err = fmt.Errorf("end-of-file while looking for %c", delimiter)
-	}
-
-	return buffer.String(), err
 }
 
 // readReplacement reads the s/// replacement up to the first UNESCAPED
@@ -258,6 +260,9 @@ func readMultiLine(r *locReader) (string, error) {
 		// If it's empty and the first line, forget it.
 		// Otherwise, add it to the line list
 		if !first || tlen > 1 {
+			if first {
+				txt = leadingTextBlanks(txt)
+			}
 			lines = append(lines, txt)
 		}
 
@@ -336,6 +341,45 @@ func readSubstitution(r *locReader) ([]string, error) {
 	return ans, err
 }
 
+// unescapeTranslation decodes the escapes POSIX defines for the two operands
+// of the y command: `\\` is one literal backslash, `\n` is a <newline>, and a
+// backslash-escaped delimiter is that delimiter as an ordinary character.
+// The lengths of string1 and string2 are compared AFTER this decoding, so
+// `y/abc/x\\z/` is a legal 3-for-3 translation.
+//
+// A backslash before anything else is undefined by POSIX; the escape is
+// dropped and the character taken literally, matching how the rest of this
+// engine treats `\x`. A trailing lone backslash is an error.
+func unescapeTranslation(s string) (string, error) {
+	if !strings.ContainsRune(s, '\\') {
+		return s, nil
+	}
+
+	var buffer strings.Builder
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '\\' {
+			buffer.WriteRune(runes[i])
+			continue
+		}
+		if i+1 >= len(runes) {
+			return "", fmt.Errorf("trailing backslash in 'y' command")
+		}
+		i++
+		switch runes[i] {
+		case 'n':
+			buffer.WriteRune('\n')
+		case 't':
+			buffer.WriteRune('\t')
+		case 'r':
+			buffer.WriteRune('\r')
+		default:
+			buffer.WriteRune(runes[i]) // covers \\ and \<delimiter>
+		}
+	}
+	return buffer.String(), nil
+}
+
 func readTranslation(r *locReader) ([]string, error) {
 	var ans = make([]string, 2)
 	var err error
@@ -358,6 +402,11 @@ func readTranslation(r *locReader) ([]string, error) {
 	if err != nil {
 		return ans, err
 	}
+
+	if ans[0], err = unescapeTranslation(ans[0]); err != nil {
+		return ans, err
+	}
+	ans[1], err = unescapeTranslation(ans[1])
 
 	return ans, err
 }
