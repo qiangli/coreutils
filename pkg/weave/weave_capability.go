@@ -13,6 +13,7 @@ package weave
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/qiangli/coreutils/pkg/capability"
 )
@@ -88,6 +89,7 @@ func weaveLedgerRecord(it *weaveItem, agent string, gatePass bool) capability.Ru
 	r := capability.RunRecord{
 		At:     capability.NowRFC(),
 		Agent:  agent,
+		Role:   weaveLedgerRole(it),
 		Source: capability.SourceWeave,
 		// Repo is deliberately LEFT EMPTY. The finalize path is handed an item,
 		// not a workspace, so the only repo name reachable from here would come
@@ -204,3 +206,53 @@ func weaveCapabilityReviewAgent(name string) (string, bool) {
 	}
 	return "", false
 }
+
+// weaveLedgerRole records WHICH SEAT this run held, which is the field
+// docs/role-capability-evidence-matrix.md §2 names as the one thing missing
+// before a conductor claim can be evidence rather than an assumption.
+//
+// The rule that doc settles on: ATTRIBUTE BY WHAT THE RUN DID, NOT BY ASSUMING
+// WHAT IT WAS. A plain worker run's repeat ratio filed under orchestration is
+// the misattribution that made gemini3.1's demotion `operator` rather than
+// `measured` — so a band-3 claim needs to know the run conducted, and a band-2
+// one needs to know it did not.
+//
+// It uses the doc's third option — "an item whose children were created during
+// its own run conducted" — and gets the timing for free rather than by
+// timestamping. An item with children is normally a CONTAINER, never claimed by
+// an agent and therefore never reaching this function at all (no VerifyExit, no
+// record). And `weave split` refuses a parent that is not `todo`. So the only
+// way an item that RAN can hold children is `weave add` from inside the run:
+// having children here already means it created them while working.
+//
+// The queue is found from the workspace path rather than threaded through three
+// call sites: a workspace is always `<queueDir>/workspaces/issue-N`. A run with
+// no workspace, or a queue that will not load, yields NO role — an unknown seat
+// must stay unknown, because a wrong one is exactly the misattribution above.
+func weaveLedgerRole(it *weaveItem) string {
+	if it == nil || it.Workspace == "" {
+		return ""
+	}
+	q, err := loadWeaveQueue(filepath.Dir(filepath.Dir(it.Workspace)))
+	if err != nil || q == nil {
+		return ""
+	}
+	for _, other := range q.Items {
+		if other != nil && other.Parent == it.ID {
+			return roleConductor
+		}
+	}
+	if it.Parent != 0 {
+		return roleWorker
+	}
+	// A solo run — no children, no parent. It did not conduct and it was not
+	// dispatched, so neither seat describes it and neither is claimed.
+	return ""
+}
+
+// The seats a weave run can be observed holding. Deliberately only two: these
+// are what the queue can WITNESS, not the full role taxonomy.
+const (
+	roleConductor = "conductor"
+	roleWorker    = "worker"
+)

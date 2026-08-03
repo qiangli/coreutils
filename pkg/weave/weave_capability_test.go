@@ -1,6 +1,8 @@
 package weave
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/capability"
@@ -332,3 +334,40 @@ func TestWeaveCapabilityUnresolvableReviewerRecordsNoReview(t *testing.T) {
 }
 
 func ptr(i int) *int { return &i }
+
+// THE SEAT MARKER. docs/role-capability-evidence-matrix.md §2 names this as the
+// one thing missing before a conductor claim can be evidence: "attribute by what
+// the run did, not by assuming what it was". A worker run's repeat ratio filed
+// under orchestration is the misattribution that made gemini3.1's demotion
+// `operator` rather than `measured`.
+func TestWeaveLedgerRole(t *testing.T) {
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "workspaces")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	q := &weaveQueue{NextID: 4, Items: []*weaveItem{
+		{ID: 1, Workspace: filepath.Join(ws, "issue-1")}, // conducted: has a child
+		{ID: 2, Parent: 1, Workspace: filepath.Join(ws, "issue-2")},
+		{ID: 3, Workspace: filepath.Join(ws, "issue-3")}, // solo
+	}}
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct {
+		name string
+		it   *weaveItem
+		want string
+	}{
+		{"an item whose children exist conducted", q.Items[0], roleConductor},
+		{"a dispatched child is a worker", q.Items[1], roleWorker},
+		{"a solo run claims neither seat", q.Items[2], ""},
+		{"no workspace means an unknown seat, never a guessed one",
+			&weaveItem{ID: 9}, ""},
+	} {
+		if got := weaveLedgerRole(c.it); got != c.want {
+			t.Errorf("%s: role = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
