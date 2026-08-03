@@ -55,6 +55,7 @@ import (
 func NewMessageBoardCmd() *cobra.Command {
 	var jsonOut, peek, all bool
 	var as string
+	var limit int
 	cmd := &cobra.Command{
 		Use:     "mb",
 		Aliases: []string{"messages"},
@@ -80,11 +81,16 @@ running waits on the board and is there when it next looks.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			who := BoardIdentity(as)
 			var posts []Post
+			var older int
 			var err error
 			if all {
 				posts, err = Posts()
 			} else {
-				posts, err = Unseen(who)
+				var directed, other []Post
+				directed, other, older, err = Unseen(who, limit)
+				// Directed first: those carry an obligation, and a reader that
+				// stops after the first screen must have seen them.
+				posts = append(directed, other...)
 			}
 			if err != nil {
 				return err
@@ -102,11 +108,17 @@ running waits on the board and is there when it next looks.`,
 			} else {
 				fmt.Fprintf(w, "## Board — %d post(s) for %s\n\n", len(posts), who)
 				for _, p := range posts {
-					to := "all"
-					if !p.Broadcast() {
-						to = p.To
+					to := p.Audiences()
+					if p.Directed(who) {
+						to = "you"
 					}
-					fmt.Fprintf(w, "- [%d] **%s** from `%s` to `%s`\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
+					fmt.Fprintf(w, "- [%d] **%s** from `%s` → %s\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
+				}
+				if older > 0 {
+					// Say what was hidden. A cap that stays quiet is a silent
+					// drop, and a reader cannot tell "nothing else" from
+					// "twelve more" unless it is told.
+					fmt.Fprintf(w, "_+%d older, not addressed to you — `bashy mb --all` for the whole board._\n", older)
 				}
 			}
 			// Advance the cursor only AFTER the posts have been written out,
@@ -123,6 +135,8 @@ running waits on the board and is there when it next looks.`,
 	f.BoolVar(&jsonOut, "json", false, "one JSON object per line")
 	f.BoolVar(&peek, "peek", false, "read without marking anything read")
 	f.BoolVar(&all, "all", false, "the whole board — every post by everyone, read or not")
+	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
+		"cap posts NOT addressed to you by name (0 = no cap); directed posts are never capped")
 	cmd.AddCommand(newMBSendCmd(), newMBPostCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	return cmd
@@ -165,7 +179,22 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 				Family:   strings.TrimSpace(family), Version: strings.TrimSpace(version),
 			}
 			if !aud.Empty() {
-				return sendToAudience(cmd, aud, BoardIdentity(as), topic, strings.Join(args, " "))
+				// ONE post carrying the selector — not one per member. See
+				// Post.Audience: expanding made the board grow with the size of
+				// the audience.
+				if err := PostMessage(Post{
+					From: BoardIdentity(as), Audience: &aud, Topic: topic, Body: strings.Join(args, " "),
+				}); err != nil {
+					return err
+				}
+				reach := "no agent currently matches — the post stands and will reach whoever does"
+				if FleetSelect != nil {
+					if names, ferr := FleetSelect(aud); ferr == nil && len(names) > 0 {
+						reach = fmt.Sprintf("%d agent(s) match now: %s", len(names), strings.Join(names, ", "))
+					}
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "posted to %s — %s\n", aud.describe(), reach)
+				return nil
 			}
 			if len(args) < 2 {
 				return fmt.Errorf("mb send: name an agent, or pass a selector (--band/--tool/--provider/--family/--version)")
@@ -189,32 +218,6 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 	f.StringVar(&family, "family", "", "post to every agent in this model family (opus, sonnet, gemini-flash, ...)")
 	f.StringVar(&version, "version", "", "post to every agent on this model version (5, 4.8, 3.6, ...)")
 	return cmd
-}
-
-// sendToAudience posts one message to every agent a selector matches.
-//
-// It reports WHO it reached, by name. A selector that silently matched nothing
-// — a band nobody holds, a misspelled tool — would otherwise print success and
-// deliver to an empty set, which is the failure mode this package spends most
-// of its design avoiding. An empty match is an ERROR here, not a quiet no-op.
-func sendToAudience(cmd *cobra.Command, aud Audience, principal, topic, body string) error {
-	if FleetSelect == nil {
-		return fmt.Errorf("mb send: no agent catalog is wired here, so a selector cannot be resolved")
-	}
-	names, err := FleetSelect(aud)
-	if err != nil {
-		return err
-	}
-	if len(names) == 0 {
-		return fmt.Errorf("mb send: no agent matches that selector — check `bashy agents list`")
-	}
-	for _, to := range names {
-		if perr := PostMessage(Post{From: principal, To: to, Topic: topic, Body: body}); perr != nil {
-			return perr
-		}
-	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "posted to %d agent(s): %s\n", len(names), strings.Join(names, ", "))
-	return nil
 }
 
 // newMBPostCmd is the BROADCAST half — a public forum post.

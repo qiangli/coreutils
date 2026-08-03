@@ -56,20 +56,103 @@ type Post struct {
 	Seq           int64  `json:"seq"`
 	At            string `json:"at"`
 	From          string `json:"from"`
-	// To is the agent expected to act. EMPTY MEANS EVERYONE — a broadcast.
-	// It is a hint about audience, never a permission: every reader can see
-	// every post.
-	To    string `json:"to,omitempty"`
-	Topic string `json:"topic,omitempty"`
-	Body  string `json:"body"`
+	// To is the single agent expected to act. Empty means the post is not
+	// directed at one agent — see Audience. It is a hint about who should act,
+	// never a permission: every reader can see every post.
+	To string `json:"to,omitempty"`
+	// Audience is a GROUP the post is for, stored as the SELECTOR rather than
+	// expanded into one post per member.
+	//
+	// Expanding was the first implementation and it made the board grow with
+	// the size of the audience: `--band 4` wrote eight identical posts, so
+	// `--all` became unreadable and every reader's scan got longer even though
+	// only one line concerned them. Storing the selector keeps the board's
+	// length independent of how many agents a message reaches.
+	//
+	// It is resolved AT READ TIME, so relevance follows the role rather than
+	// whoever held it when the post was written: "L4 agents should know this"
+	// is a statement about the seat, and an agent promoted afterwards should
+	// see it. The opposite is defensible; this is the choice.
+	Audience *Audience `json:"audience,omitempty"`
+	Topic    string    `json:"topic,omitempty"`
+	Body     string    `json:"body"`
 }
 
-// Broadcast reports a post addressed to everyone.
-func (p Post) Broadcast() bool { return strings.TrimSpace(p.To) == "" }
+// Broadcast reports a post for everyone: no named recipient and no selector.
+func (p Post) Broadcast() bool {
+	return strings.TrimSpace(p.To) == "" && (p.Audience == nil || p.Audience.Empty())
+}
 
-// ForReader reports whether a post is addressed to this reader (or to all).
+// Directed reports a post naming ONE agent — the only kind that carries an
+// obligation, and therefore the only kind never truncated from a default view.
+func (p Post) Directed(reader string) bool {
+	return strings.EqualFold(strings.TrimSpace(p.To), strings.TrimSpace(reader)) &&
+		strings.TrimSpace(p.To) != ""
+}
+
+// Audiences describes a post's intended audience for display.
+func (p Post) Audiences() string {
+	if p.To != "" {
+		return p.To
+	}
+	if p.Audience == nil || p.Audience.Empty() {
+		return "all"
+	}
+	var parts []string
+	if p.Audience.Band != 0 {
+		parts = append(parts, "band "+strconv.Itoa(p.Audience.Band))
+	}
+	for _, kv := range [][2]string{
+		{"tool", p.Audience.Tool}, {"provider", p.Audience.Provider},
+		{"family", p.Audience.Family}, {"version", p.Audience.Version},
+	} {
+		if kv[1] != "" {
+			parts = append(parts, kv[0]+" "+kv[1])
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// ForReader reports whether a post concerns this reader: addressed to it,
+// matching a selector it satisfies, or broadcast.
 func (p Post) ForReader(reader string) bool {
-	return p.Broadcast() || strings.EqualFold(strings.TrimSpace(p.To), strings.TrimSpace(reader))
+	if p.Directed(reader) || p.Broadcast() {
+		return true
+	}
+	if p.Audience != nil && !p.Audience.Empty() {
+		return InAudience(*p.Audience, reader)
+	}
+	return false
+}
+
+// audienceCache memoizes selector resolution for the life of one command, so a
+// board full of selector posts costs one catalog load per DISTINCT selector
+// rather than one per post.
+var audienceCache = map[Audience]map[string]bool{}
+
+// InAudience reports whether reader is in the set a selector names.
+//
+// An unresolvable selector matches NOBODY rather than everybody. Erring toward
+// silence costs one reader a message they can still find with --all; erring the
+// other way turns every group post into a broadcast, which is precisely the
+// clutter this design exists to prevent.
+func InAudience(aud Audience, reader string) bool {
+	if FleetSelect == nil {
+		return false
+	}
+	members, ok := audienceCache[aud]
+	if !ok {
+		names, err := FleetSelect(aud)
+		if err != nil {
+			return false
+		}
+		members = make(map[string]bool, len(names))
+		for _, n := range names {
+			members[strings.ToLower(strings.TrimSpace(n))] = true
+		}
+		audienceCache[aud] = members
+	}
+	return members[strings.ToLower(strings.TrimSpace(reader))]
 }
 
 // BoardDir is the board's store. It is deliberately NOT under the room
@@ -158,21 +241,37 @@ func Posts() ([]Post, error) {
 	return out, sc.Err()
 }
 
-// Unseen returns the posts this reader has not been shown — those addressed to
-// it or broadcast, after its cursor.
-func Unseen(reader string) ([]Post, error) {
-	all, err := Posts()
-	if err != nil {
-		return nil, err
+// Unseen returns what this reader has not been shown, split by obligation.
+//
+// directed posts NAME this reader, so somebody is waiting on it: they are
+// returned in full and never truncated. Capping them is how an assignment gets
+// dropped.
+//
+// other is everything else that concerns the reader — broadcasts and selector
+// posts — trimmed to the newest limit, with older reporting how many were left
+// out. A cap that does not say what it hid is a silent drop, and a reader who
+// cannot tell "nothing else" from "twelve more" will act on the wrong one.
+func Unseen(reader string, limit int) (directed, other []Post, older int, err error) {
+	all, e := Posts()
+	if e != nil {
+		return nil, nil, 0, e
 	}
 	at := SeenSeq(reader)
-	var out []Post
 	for _, p := range all {
-		if p.Seq > at && p.ForReader(reader) {
-			out = append(out, p)
+		if p.Seq <= at || !p.ForReader(reader) {
+			continue
 		}
+		if p.Directed(reader) {
+			directed = append(directed, p)
+			continue
+		}
+		other = append(other, p)
 	}
-	return out, nil
+	if limit > 0 && len(other) > limit {
+		older = len(other) - limit
+		other = other[len(other)-limit:]
+	}
+	return directed, other, older, nil
 }
 
 func seenPath(reader string) string {
@@ -260,4 +359,14 @@ func resolveBoardName(s string) string {
 		}
 	}
 	return s
+}
+
+// DefaultBoardLimit caps posts NOT addressed to a reader by name. Five is a
+// screenful: enough that a busy board is still scannable at a turn boundary,
+// small enough that it does not become the turn.
+const DefaultBoardLimit = 5
+
+// describe renders a selector for a confirmation line.
+func (a Audience) describe() string {
+	return Post{Audience: &a}.Audiences()
 }
