@@ -93,22 +93,23 @@ type Resolution struct {
 //     ~/.kube/outpost.yaml, with the broker refresh enabled. If the path can't
 //     be resolved (no $HOME) this also fails closed, since the profile was
 //     explicitly requested.
-//  4. No profile (unset or empty — treated the same, "auto"): if the user's
+//  4. No profile (the variable is unset, "auto"): if the user's
 //     standard ~/.kube/config exists, nothing is injected, so native kubectl/
 //     helm honor its current context (the Dragon case: local peer cluster via
 //     ~/.kube/config). Only when that standard file is absent does this fall
 //     back to the canonical cloudbox outpost.yaml, with refresh enabled —
 //     preserving the original zero-config behavior on hosts with no local
 //     kubeconfig at all.
-//  5. Any other $DKS_PROFILE value is unknown and fails closed with a clear
-//     error, rather than silently guessing a plane.
+//  5. Any set value other than peer or cloudbox, including an explicitly
+//     empty value, fails closed rather than silently guessing a plane.
 func ResolveKubeconfig() (Resolution, error) {
 	if v := os.Getenv("KUBECONFIG"); v != "" {
 		return Resolution{}, nil // honor the user's explicit choice
 	}
 
-	switch profile := strings.TrimSpace(os.Getenv(EnvProfile)); profile {
-	case "":
+	profile, profileSet := os.LookupEnv(EnvProfile)
+	profile = strings.TrimSpace(profile)
+	if !profileSet {
 		if fileExists(standardKubeconfigPath()) {
 			return Resolution{}, nil
 		}
@@ -117,10 +118,12 @@ func ResolveKubeconfig() (Resolution, error) {
 			return Resolution{}, nil
 		}
 		return Resolution{KUBECONFIG: path, Refresh: true}, nil
+	}
 
+	switch profile {
 	case ProfilePeer:
 		path := peerKubeconfigPath()
-		if path == "" || !fileExists(path) {
+		if path == "" || !fileReadable(path) {
 			return Resolution{}, fmt.Errorf("kube: %s=peer kubeconfig %q not found or unreadable", EnvProfile, path)
 		}
 		return Resolution{KUBECONFIG: path}, nil
@@ -206,6 +209,17 @@ func fileExists(p string) bool {
 	}
 	fi, err := os.Stat(p)
 	return err == nil && !fi.IsDir()
+}
+
+func fileReadable(p string) bool {
+	if !fileExists(p) {
+		return false
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return false
+	}
+	return f.Close() == nil
 }
 
 func fileFresh(path string, maxAge time.Duration) bool {

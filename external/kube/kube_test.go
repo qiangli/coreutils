@@ -19,6 +19,21 @@ func fakeHome(t *testing.T) string {
 	return home
 }
 
+func unsetenv(t *testing.T, key string) {
+	t.Helper()
+	old, had := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(key, old)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+}
+
 func TestResolveKubeconfigExplicitWins(t *testing.T) {
 	home := fakeHome(t)
 	explicit := filepath.Join(home, "explicit.yaml")
@@ -122,7 +137,7 @@ func TestResolveKubeconfigCloudboxProfile(t *testing.T) {
 func TestResolveKubeconfigAutoPrefersStandardConfig(t *testing.T) {
 	home := fakeHome(t)
 	t.Setenv("KUBECONFIG", "")
-	t.Setenv("DKS_PROFILE", "")
+	unsetenv(t, "DKS_PROFILE")
 	standard := filepath.Join(home, ".kube", "config")
 	if err := os.MkdirAll(filepath.Dir(standard), 0o700); err != nil {
 		t.Fatal(err)
@@ -148,7 +163,7 @@ func TestResolveKubeconfigAutoPrefersStandardConfig(t *testing.T) {
 func TestResolveKubeconfigAutoFallsBackToCloudboxWhenNoStandardConfig(t *testing.T) {
 	home := fakeHome(t)
 	t.Setenv("KUBECONFIG", "")
-	t.Setenv("DKS_PROFILE", "")
+	unsetenv(t, "DKS_PROFILE")
 	// No ~/.kube/config written.
 	cloudbox := filepath.Join(home, "outpost.yaml")
 	t.Setenv("OUTPOST_KUBECONFIG_PATH", cloudbox)
@@ -173,6 +188,20 @@ func TestResolveKubeconfigUnknownProfileFailsClosed(t *testing.T) {
 	res, err := ResolveKubeconfig()
 	if err == nil {
 		t.Fatalf("ResolveKubeconfig() = %+v, want an error for an unknown profile", res)
+	}
+	if res != (Resolution{}) {
+		t.Errorf("ResolveKubeconfig() = %+v, want zero Resolution on error", res)
+	}
+}
+
+func TestResolveKubeconfigEmptyProfileFailsClosed(t *testing.T) {
+	fakeHome(t)
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("DKS_PROFILE", "")
+
+	res, err := ResolveKubeconfig()
+	if err == nil {
+		t.Fatalf("ResolveKubeconfig() = %+v, want an error for explicitly empty DKS_PROFILE", res)
 	}
 	if res != (Resolution{}) {
 		t.Errorf("ResolveKubeconfig() = %+v, want zero Resolution on error", res)
