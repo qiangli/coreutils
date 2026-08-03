@@ -252,7 +252,13 @@ Use --peek to read without clearing.`,
 			// board by reading it — no subscribe step, no catalog entry. It
 			// opens at the head, so a first-time reader sees what arrives from
 			// now on rather than the whole history.
-			_, _ = EnsureSubscription(who)
+			// A ROLE opens at 0, an agent at the head — see IsRoleName. Reading a
+			// role's inbox must not skip the pings already published to it.
+			if IsRoleName(who) {
+				_, _ = EnsureRoleInbox(who)
+			} else {
+				_, _ = EnsureSubscription(who)
+			}
 			_, _ = ResolveFor(who)
 			var items []Pending
 			var err error

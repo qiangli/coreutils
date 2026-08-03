@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/role"
 )
 
@@ -2423,6 +2424,13 @@ func stewardAssignment() role.Assignment {
 // is how people reach the holder, and a host with an accountable steward and no
 // intercom is strictly better than one with neither.
 func assumeSeatRoom(holder string) string {
+	// The bus inbox comes FIRST and does not depend on the room. A room needs
+	// meet to be wired (OpenRoom is a host-injected seam and is nil in plenty of
+	// builds); the inbox needs nothing, so it must not be gated behind an
+	// intercom that may never open. Idempotent — see bus.EnsureRoleInbox.
+	if _, err := bus.EnsureRoleInbox(stewardAssignment().Topic()); err != nil {
+		return fmt.Sprintf("  seat inbox NOT open (%v) — pings to this seat will be stored and unreadable\n", err)
+	}
 	if OpenRoom == nil {
 		return ""
 	}

@@ -72,10 +72,25 @@ func ping(dir, from, body, priority string, opts ...Option) (string, error) {
 			seatLabel())
 	}
 
+	// Address the SEAT, which is what --help has always promised. The holder's
+	// name is a TOOL (`codex`), every bus subscriber is an AGENT
+	// (`codex-gpt5.6-sol`), and `To: Holder.Name` therefore matched nothing —
+	// the ping was published, durable, and unreadable by any read verb. See
+	// bus.EnsureRoleInbox.
+	topic := stewardAssignment().Topic()
+
+	// Idempotent, and called on the SEND path on purpose: a ping must not depend
+	// on a claim having run under an earlier version that did not open the inbox.
+	// A failure here is reported rather than swallowed — the whole defect being
+	// fixed is a send that looked like it worked.
+	if _, ierr := bus.EnsureRoleInbox(topic); ierr != nil {
+		return "", fmt.Errorf("steward ping: cannot open the seat inbox: %w", ierr)
+	}
+
 	n := bus.Notification{
 		Principal: from,
-		Topic:     stewardAssignment().Topic(),
-		To:        view.Authority.Holder.Name,
+		Topic:     topic,
+		To:        topic,
 		Body:      body,
 		Priority:  priority,
 	}
