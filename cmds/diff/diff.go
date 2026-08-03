@@ -1,15 +1,17 @@
 // Package diffcmd implements diff(1) per GNU diffutils
 // (https://www.gnu.org/software/diffutils/manual/): compare files
-// line by line, in the default "normal" format or unified format
-// (-u / -U NUM / --unified[=NUM]), with -r recursive directory
+// line by line, in the default "normal" format, unified format
+// (-u / -U NUM / --unified[=NUM]), or POSIX context format
+// (-c / -C NUM / --context[=NUM]), with -r recursive directory
 // comparison, -q brief mode, -N absent-as-empty, and the -i / -w / -b
 // comparison-relaxing flags. Exit status follows GNU: 0 inputs are
 // the same, 1 they differ, 2 trouble.
 //
-// -u and -U are pre-parsed from the argument list (GNU's -u has no
-// long spelling of its own and -U requires an attached or separate
-// NUM, neither of which pflag models); everything else goes through
-// the standard tool.NewFlags / tool.Parse contract.
+// -u/-U and -c/-C are pre-parsed from the argument list (the short
+// style options have no long spellings of their own and -U/-C require
+// an attached or separate NUM, neither of which pflag models);
+// everything else goes through the standard tool.NewFlags /
+// tool.Parse contract.
 package diffcmd
 
 import (
@@ -36,7 +38,9 @@ var cmd = &tool.Tool{
 		"FILES are 'FILE1 FILE2' or 'DIR1 DIR2' or 'DIR FILE' or 'FILE DIR'.\n" +
 		"'-' as a FILE means standard input.\n" +
 		"Unified format: -u, -U NUM, --unified[=NUM]\n" +
-		"                output NUM (default 3) lines of unified context",
+		"                output NUM (default 3) lines of unified context\n" +
+		"Context format: -c, -C NUM, --context[=NUM]\n" +
+		"                output NUM (default 3) lines of copied context",
 }
 
 // Run is wired in init: a literal would create an initialization
@@ -45,6 +49,7 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 type options struct {
 	unified           bool
+	contextStyle      bool
 	context           int
 	recursive         bool
 	brief             bool
@@ -62,6 +67,9 @@ func run(rc *tool.RunContext, args []string) int {
 	rest, opts, perr := prescan(args)
 	if perr != "" {
 		return tool.UsageError(rc, cmd, "%s", perr)
+	}
+	if opts.unified && opts.contextStyle {
+		return tool.UsageError(rc, cmd, "conflicting output style options")
 	}
 	flags := tool.NewFlags(cmd.Name)
 	recursive := flags.BoolP("recursive", "r", false, "recursively compare any subdirectories found")
@@ -101,9 +109,10 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-// prescan extracts -u / -U NUM / --unified[=NUM] (which pflag cannot
-// model) and records every option token verbatim for the directory-
-// mode header lines. Returns the remaining args for tool.Parse.
+// prescan extracts -u / -U NUM / --unified[=NUM] and -c / -C NUM /
+// --context[=NUM] (which pflag cannot model) and records every option
+// token verbatim for the directory-mode header lines. Returns the
+// remaining args for tool.Parse.
 func prescan(args []string) ([]string, options, string) {
 	opts := options{context: 3}
 	var rest []string
@@ -132,11 +141,25 @@ func prescan(args []string) ([]string, options, string) {
 				opts.optTokens = append(opts.optTokens, tok)
 				continue
 			}
+			if tok == "--context" {
+				opts.contextStyle = true
+				opts.optTokens = append(opts.optTokens, tok)
+				continue
+			}
+			if v, ok := strings.CutPrefix(tok, "--context="); ok {
+				n, perr := parseContext(v)
+				if perr != "" {
+					return nil, opts, perr
+				}
+				opts.contextStyle, opts.context = true, n
+				opts.optTokens = append(opts.optTokens, tok)
+				continue
+			}
 			rest = append(rest, tok)
 			opts.optTokens = append(opts.optTokens, tok)
 			continue
 		}
-		// Short-option cluster: pull out u/U, keep the rest for pflag.
+		// Short-option cluster: pull out u/U/c/C, keep the rest for pflag.
 		body := tok[1:]
 		var keep []byte
 		took := false
@@ -145,8 +168,14 @@ func prescan(args []string) ([]string, options, string) {
 			switch body[j] {
 			case 'u':
 				opts.unified = true
-			case 'U':
-				opts.unified = true
+			case 'c':
+				opts.contextStyle = true
+			case 'U', 'C':
+				if body[j] == 'U' {
+					opts.unified = true
+				} else {
+					opts.contextStyle = true
+				}
 				var v string
 				switch {
 				case j+1 < len(body):
@@ -155,7 +184,7 @@ func prescan(args []string) ([]string, options, string) {
 					v = args[i+1]
 					took = true
 				default:
-					return nil, opts, "option requires an argument -- 'U'"
+					return nil, opts, fmt.Sprintf("option requires an argument -- '%c'", body[j])
 				}
 				n, perr := parseContext(v)
 				if perr != "" {
@@ -452,9 +481,12 @@ func compareFiles(rc *tool.RunContext, opts *options, a, b string, withHeader bo
 	if withHeader {
 		printPairHeader(rc, opts, a, b)
 	}
-	if opts.unified {
+	switch {
+	case opts.unified:
 		emitUnified(rc.Out, opts, sa, sb, gs)
-	} else {
+	case opts.contextStyle:
+		emitContext(rc.Out, opts, sa, sb, gs)
+	default:
 		emitNormal(rc.Out, sa, sb, gs)
 	}
 	return 1
@@ -753,4 +785,96 @@ func unifiedRange(start0, count int) string {
 	default:
 		return fmt.Sprintf("%d,%d", start0+1, count)
 	}
+}
+
+// emitContext writes POSIX/GNU context format (-c): ***/--- headers
+// with mtimes, "***************" hunk separators, per-side 1-based
+// inclusive FIRST,LAST ranges, and "  " / "- " / "+ " / "! " line
+// markers (! on both sides of a group that changes lines, -/+ for a
+// pure deletion/insertion). A hunk half with no changes of its own
+// prints only its range line, and hunks merge when separated by at
+// most 2*context unchanged lines — both GNU rules shared with the
+// unified emitter.
+func emitContext(w io.Writer, opts *options, sa, sb *side, gs []group) {
+	fmt.Fprintf(w, "*** %s\t%s\n", sa.name, sa.mtime.Format(stampLayout))
+	fmt.Fprintf(w, "--- %s\t%s\n", sb.name, sb.mtime.Format(stampLayout))
+	line := func(s *side, mark string, i int) {
+		fmt.Fprintf(w, "%s%s\n", mark, s.lines[i])
+		if s.noEOL && i == len(s.lines)-1 {
+			fmt.Fprintln(w, noNewline)
+		}
+	}
+	ctx := opts.context
+	for i := 0; i < len(gs); {
+		j := i
+		for j+1 < len(gs) && gs[j+1].a0-gs[j].a1 <= 2*ctx {
+			j++
+		}
+		hs := gs[i].a0 - ctx
+		if hs < 0 {
+			hs = 0
+		}
+		he := gs[j].a1 + ctx
+		if he > len(sa.lines) {
+			he = len(sa.lines)
+		}
+		hbs := gs[i].b0 - (gs[i].a0 - hs)
+		hbe := gs[j].b1 + (he - gs[j].a1)
+		hasDel, hasIns := false, false
+		for g := i; g <= j; g++ {
+			hasDel = hasDel || gs[g].a1 > gs[g].a0
+			hasIns = hasIns || gs[g].b1 > gs[g].b0
+		}
+		fmt.Fprintln(w, "***************")
+		fmt.Fprintf(w, "*** %s ****\n", contextRange(hs, he-hs))
+		if hasDel {
+			ai := hs
+			for g := i; g <= j; g++ {
+				for ; ai < gs[g].a0; ai++ {
+					line(sa, "  ", ai)
+				}
+				mark := "- "
+				if gs[g].b1 > gs[g].b0 {
+					mark = "! "
+				}
+				for ; ai < gs[g].a1; ai++ {
+					line(sa, mark, ai)
+				}
+			}
+			for ; ai < he; ai++ {
+				line(sa, "  ", ai)
+			}
+		}
+		fmt.Fprintf(w, "--- %s ----\n", contextRange(hbs, hbe-hbs))
+		if hasIns {
+			bi := hbs
+			for g := i; g <= j; g++ {
+				for ; bi < gs[g].b0; bi++ {
+					line(sb, "  ", bi)
+				}
+				mark := "+ "
+				if gs[g].a1 > gs[g].a0 {
+					mark = "! "
+				}
+				for ; bi < gs[g].b1; bi++ {
+					line(sb, mark, bi)
+				}
+			}
+			for ; bi < hbe; bi++ {
+				line(sb, "  ", bi)
+			}
+		}
+		i = j + 1
+	}
+}
+
+// contextRange renders a context-format range: FIRST,LAST 1-based
+// inclusive, collapsed to a single number for a one-line range, and
+// for an empty range the line number just before the gap (GNU prints
+// LAST alone whenever LAST <= FIRST).
+func contextRange(start0, count int) string {
+	if count <= 1 {
+		return strconv.Itoa(start0 + count)
+	}
+	return fmt.Sprintf("%d,%d", start0+1, start0+count)
 }

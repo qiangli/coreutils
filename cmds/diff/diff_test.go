@@ -105,6 +105,176 @@ func TestUnifiedGolden(t *testing.T) {
 	}
 }
 
+func TestContextGolden(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt", "apple\nbanana\ncherry\n")
+	writeFile(t, dir, "b.txt", "apple\nberry\ncherry\n")
+	ta := time.Date(2026, 3, 4, 5, 6, 7, 0, time.Local)
+	tb := time.Date(2026, 3, 4, 6, 7, 8, 0, time.Local)
+	if err := os.Chtimes(filepath.Join(dir, "a.txt"), ta, ta); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "b.txt"), tb, tb); err != nil {
+		t.Fatal(err)
+	}
+	want := "*** a.txt\t" + ta.Format(stampLayout) + "\n" +
+		"--- b.txt\t" + tb.Format(stampLayout) + "\n" +
+		"***************\n" +
+		"*** 1,3 ****\n" +
+		"  apple\n" +
+		"! banana\n" +
+		"  cherry\n" +
+		"--- 1,3 ----\n" +
+		"  apple\n" +
+		"! berry\n" +
+		"  cherry\n"
+	for _, args := range [][]string{
+		{"-c", "a.txt", "b.txt"},
+		{"-C3", "a.txt", "b.txt"},
+		{"-C", "3", "a.txt", "b.txt"},
+		{"--context=3", "a.txt", "b.txt"},
+		{"--context", "a.txt", "b.txt"},
+	} {
+		out, _, code := runIn(t, dir, "", args...)
+		if out != want || code != 1 {
+			t.Errorf("diff %v:\n got (%q, %d)\nwant (%q, 1)", args, out, code, want)
+		}
+	}
+}
+
+func TestContextEdgeRanges(t *testing.T) {
+	cases := []struct {
+		name, a, b string
+		args       []string
+		wantHunks  string // output after the two header lines
+	}{
+		// pure insertion: the old half prints only its range line
+		{"insert", "1\n2\n", "1\n2\n3\n", []string{"-c"},
+			"***************\n*** 1,2 ****\n--- 1,3 ----\n  1\n  2\n+ 3\n"},
+		// pure deletion: the new half prints only its range line
+		{"delete", "1\n2\n3\n", "1\n3\n", []string{"-c"},
+			"***************\n*** 1,3 ****\n  1\n- 2\n  3\n--- 1,2 ----\n"},
+		{"empty-old", "", "a\nb\n", []string{"-c"},
+			"***************\n*** 0 ****\n--- 1,2 ----\n+ a\n+ b\n"},
+		{"empty-new", "a\nb\n", "", []string{"-c"},
+			"***************\n*** 1,2 ****\n- a\n- b\n--- 0 ----\n"},
+		// zero context: single-line and empty ranges collapse to one number
+		{"C0-delete", "1\n2\n3\n", "1\n3\n", []string{"-C0"},
+			"***************\n*** 2 ****\n- 2\n--- 1 ----\n"},
+		{"C0-insert", "1\n3\n", "1\n2\n3\n", []string{"-C0"},
+			"***************\n*** 1 ****\n--- 2 ----\n+ 2\n"},
+		// a merged hunk marks each group by its own kind: ! change, - delete
+		{"mixed-marks", "a\nb\nc\nd\ne\n", "a\nB\nc\ne\n", []string{"-c"},
+			"***************\n*** 1,5 ****\n  a\n! b\n  c\n- d\n  e\n" +
+				"--- 1,4 ----\n  a\n! B\n  c\n  e\n"},
+		{"noeol-marker", "x\n", "x", []string{"-c"},
+			"***************\n*** 1 ****\n! x\n--- 1 ----\n! x\n" + noNewline + "\n"},
+		// the marker follows each side's own last line, context included
+		{"noeol-context", "1\n2", "one\n2", []string{"-c"},
+			"***************\n*** 1,2 ****\n! 1\n  2\n" + noNewline + "\n" +
+				"--- 1,2 ----\n! one\n  2\n" + noNewline + "\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "a", c.a)
+			writeFile(t, dir, "b", c.b)
+			out, _, code := runIn(t, dir, "", append(c.args, "a", "b")...)
+			lines := strings.SplitN(out, "\n", 3)
+			if len(lines) < 3 {
+				t.Fatalf("short output %q", out)
+			}
+			if !strings.HasPrefix(lines[0], "*** a\t") || !strings.HasPrefix(lines[1], "--- b\t") {
+				t.Errorf("headers wrong: %q / %q", lines[0], lines[1])
+			}
+			if lines[2] != c.wantHunks || code != 1 {
+				t.Errorf("hunks = (%q, %d), want (%q, 1)", lines[2], code, c.wantHunks)
+			}
+		})
+	}
+}
+
+// Context format shares unified's hunk-merge rule: gaps of at most
+// 2*context unchanged lines fold into one hunk.
+func TestContextHunkMerge(t *testing.T) {
+	mk := func(n int, repl map[int]string) string {
+		var sb strings.Builder
+		for i := 1; i <= n; i++ {
+			if r, ok := repl[i]; ok {
+				sb.WriteString(r + "\n")
+			} else {
+				sb.WriteString("l" + itoa(i) + "\n")
+			}
+		}
+		return sb.String()
+	}
+	dir := t.TempDir()
+	writeFile(t, dir, "a", mk(20, nil))
+	writeFile(t, dir, "b", mk(20, map[int]string{5: "five", 12: "twelve"}))
+	out, _, _ := runIn(t, dir, "", "-c", "a", "b")
+	if strings.Count(out, "***************\n") != 1 {
+		t.Errorf("gap=2C: want 1 hunk, got:\n%s", out)
+	}
+	writeFile(t, dir, "c", mk(20, map[int]string{5: "five", 13: "thirteen"}))
+	out, _, _ = runIn(t, dir, "", "-c", "a", "c")
+	if strings.Count(out, "***************\n") != 2 {
+		t.Errorf("gap=2C+1: want 2 hunks, got:\n%s", out)
+	}
+}
+
+func TestContextNewFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "b.txt", "hi\nthere\n")
+	out, _, code := runIn(t, dir, "", "-cN", "absent.txt", "b.txt")
+	wantHead := "*** absent.txt\t" + time.Unix(0, 0).Format(stampLayout) + "\n"
+	if !strings.HasPrefix(out, wantHead) || code != 1 {
+		t.Errorf("-cN header: (%q, %d), want prefix %q", out, code, wantHead)
+	}
+	if !strings.Contains(out, "*** 0 ****\n--- 1,2 ----\n+ hi\n+ there\n") {
+		t.Errorf("-cN hunk: %q", out)
+	}
+}
+
+func TestContextErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a", "x\n")
+	// GNU rejects mixing output styles
+	_, errb, code := runIn(t, dir, "", "-c", "-u", "a", "a")
+	if code != 2 || !strings.Contains(errb, "conflicting output style options") {
+		t.Errorf("-c -u: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runIn(t, dir, "", "-cu", "a", "a")
+	if code != 2 || !strings.Contains(errb, "conflicting output style options") {
+		t.Errorf("-cu: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runIn(t, dir, "", "-C", "x", "a", "a")
+	if code != 2 || !strings.Contains(errb, "invalid context length 'x'") {
+		t.Errorf("bad -C: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runIn(t, dir, "", "a", "a", "-C")
+	if code != 2 || !strings.Contains(errb, "option requires an argument -- 'C'") {
+		t.Errorf("-C no arg: code=%d err=%q", code, errb)
+	}
+}
+
+func TestRecursiveContextHeaderEcho(t *testing.T) {
+	dir := t.TempDir()
+	makeTree(t, dir)
+	out, _, code := runIn(t, dir, "", "-rc", "old", "new")
+	if code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	for _, want := range []string{
+		"diff -rc old/diff.txt new/diff.txt\n*** old/diff.txt\t",
+		"\n! old\n",
+		"\n! new\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-rc output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // GNU stamp shape: "2026-03-04 05:06:07.000000000 -0700" (nanoseconds
 // always 9 digits, numeric zone).
 func TestStampShape(t *testing.T) {
