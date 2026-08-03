@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -170,11 +171,9 @@ func formatOnce(rc *tool.RunContext, out *bytes.Buffer, format string, values []
 			if widthFromArg {
 				s, ok := nextArg()
 				if ok {
-					v, valid := parseIntArg(rc, s)
-					if !valid {
-						diagInvalidNumber(rc, s)
+					v, hadErr := parseSigned(rc, s)
+					if hadErr {
 						*failed = true
-						v = 0
 					}
 					width = int(v)
 				}
@@ -182,11 +181,9 @@ func formatOnce(rc *tool.RunContext, out *bytes.Buffer, format string, values []
 			if precFromArg {
 				s, ok := nextArg()
 				if ok {
-					v, valid := parseIntArg(rc, s)
-					if !valid {
-						diagInvalidNumber(rc, s)
+					v, hadErr := parseSigned(rc, s)
+					if hadErr {
 						*failed = true
-						v = 0
 					}
 					precision = int(v)
 				}
@@ -220,64 +217,65 @@ func formatOnce(rc *tool.RunContext, out *bytes.Buffer, format string, values []
 				}
 			case 'c':
 				s, _ := nextArg()
-				if len(s) > 1 {
-					s = s[:1]
+				// GNU %c prints the first byte of ARGUMENT, defaulting to a NUL
+				// byte for an empty (or missing) ARGUMENT, exactly as C printf
+				// does with *argument == '\0'.
+				ch := "\x00"
+				if len(s) > 0 {
+					ch = s[:1]
 				}
-				writeStringField(out, s, flags, width, hasWidth, 0, false)
+				writeStringField(out, ch, flags, width, hasWidth, 0, false)
 			case 'd', 'i':
 				s, ok := nextArg()
 				v := int64(0)
 				if ok {
-					var valid bool
-					v, valid = parseIntArg(rc, s)
-					if !valid {
-						diagInvalidNumber(rc, s)
+					var hadErr bool
+					v, hadErr = parseSigned(rc, s)
+					if hadErr {
 						*failed = true
-						v = 0
 					}
 				}
 				writeGoNumeric(out, "d", flags, width, hasWidth, precision, hasPrecision, v)
 			case 'o', 'u', 'x', 'X':
 				s, ok := nextArg()
-				v := int64(0)
+				u := uint64(0)
 				if ok {
-					var valid bool
-					v, valid = parseIntArg(rc, s)
-					if !valid {
-						diagInvalidNumber(rc, s)
+					var hadErr bool
+					u, hadErr = parseUnsigned(rc, s)
+					if hadErr {
 						*failed = true
-						v = 0
 					}
 				}
 				goConv := string(conv)
 				if conv == 'u' {
 					goConv = "d"
 				}
-				writeGoNumeric(out, goConv, flags, width, hasWidth, precision, hasPrecision, uint64(v))
+				writeGoNumeric(out, goConv, flags, width, hasWidth, precision, hasPrecision, u)
 			case 'e', 'E', 'f', 'F', 'g', 'G', 'a', 'A':
 				s, ok := nextArg()
 				fv := 0.0
 				if ok {
-					var valid bool
-					fv, valid = parseFloatArg(rc, s)
-					if !valid {
-						diagInvalidNumber(rc, s)
+					var hadErr bool
+					fv, hadErr = parseFloat(rc, s)
+					if hadErr {
 						*failed = true
-						fv = 0
 					}
 				}
-				goConv := string(conv)
-				switch conv {
-				case 'a':
-					goConv = "x"
-				case 'A':
-					goConv = "X"
-				case 'g', 'G':
-					if !hasPrecision {
-						hasPrecision, precision = true, 6
+				switch {
+				case math.IsInf(fv, 0) || math.IsNaN(fv):
+					// C prints inf/nan (INF/NAN for uppercase verbs), never Go's
+					// "+Inf"/"NaN".
+					writeNonFinite(out, conv, flags, width, hasWidth, fv)
+				case conv == 'a' || conv == 'A':
+					writeHexFloat(out, conv, flags, width, hasWidth, precision, hasPrecision, fv)
+				default:
+					if conv == 'g' || conv == 'G' {
+						if !hasPrecision {
+							hasPrecision, precision = true, 6
+						}
 					}
+					writeGoNumeric(out, string(conv), flags, width, hasWidth, precision, hasPrecision, fv)
 				}
-				writeGoNumeric(out, goConv, flags, width, hasWidth, precision, hasPrecision, fv)
 			default:
 				diagInvalidConversion(rc, format[specStart:i])
 				*failed = true
@@ -295,15 +293,9 @@ func diagInvalidConversion(rc *tool.RunContext, spec string) {
 	fmt.Fprintf(rc.Err, "%s: %s: invalid conversion specification\n", cmd.Name, spec)
 }
 
-func diagInvalidNumber(rc *tool.RunContext, s string) {
-	fmt.Fprintf(rc.Err, "%s: invalid number: %s\n", cmd.Name, strconv.Quote(s))
-}
-
-// writeGoNumeric delegates a numeric conversion to Go's fmt package, which
-// implements the same width/precision/flag semantics as C printf for
-// integer and floating-point verbs (including precision as minimum digit
-// count for integers, and default precision 6 for %e/%f).
-func writeGoNumeric(out *bytes.Buffer, goConv, flags string, width int, hasWidth bool, precision int, hasPrecision bool, value any) {
+// buildVerb reconstructs a Go fmt verb ("%-05.2f", …) from parsed flags, width,
+// and precision.
+func buildVerb(flags string, width int, hasWidth bool, precision int, hasPrecision bool, goConv string) string {
 	var verb strings.Builder
 	verb.WriteByte('%')
 	verb.WriteString(flags)
@@ -315,7 +307,15 @@ func writeGoNumeric(out *bytes.Buffer, goConv, flags string, width int, hasWidth
 		verb.WriteString(strconv.Itoa(precision))
 	}
 	verb.WriteString(goConv)
-	fmt.Fprintf(out, verb.String(), value)
+	return verb.String()
+}
+
+// writeGoNumeric delegates a numeric conversion to Go's fmt package, which
+// implements the same width/precision/flag semantics as C printf for
+// integer and floating-point verbs (including precision as minimum digit
+// count for integers, and default precision 6 for %e/%f).
+func writeGoNumeric(out *bytes.Buffer, goConv, flags string, width int, hasWidth bool, precision int, hasPrecision bool, value any) {
+	fmt.Fprintf(out, buildVerb(flags, width, hasWidth, precision, hasPrecision, goConv), value)
 }
 
 // writeStringField applies POSIX field width/precision/left-justify to a raw
@@ -506,34 +506,6 @@ func charConstant(s string) (value rune, ok bool, warn bool) {
 	}
 	r, size := utf8.DecodeRuneInString(rest)
 	return r, true, size < len(rest)
-}
-
-func parseIntArg(rc *tool.RunContext, s string) (int64, bool) {
-	if r, ok, warn := charConstant(s); ok {
-		if warn {
-			fmt.Fprintf(rc.Err, "%s: warning: %s: character(s) following character constant have been ignored\n", cmd.Name, s)
-		}
-		return int64(r), true
-	}
-	v, err := strconv.ParseInt(strings.TrimLeft(s, " \t\n"), 0, 64)
-	if err != nil {
-		return 0, false
-	}
-	return v, true
-}
-
-func parseFloatArg(rc *tool.RunContext, s string) (float64, bool) {
-	if r, ok, warn := charConstant(s); ok {
-		if warn {
-			fmt.Fprintf(rc.Err, "%s: warning: %s: character(s) following character constant have been ignored\n", cmd.Name, s)
-		}
-		return float64(r), true
-	}
-	v, err := strconv.ParseFloat(strings.TrimLeft(s, " \t\n"), 64)
-	if err != nil {
-		return 0, false
-	}
-	return v, true
 }
 
 func printHelp(rc *tool.RunContext) {
