@@ -334,6 +334,11 @@ func buildFull(opts []fleet.Option) *Store {
 	// because a glossary is exactly where it must not go.
 	collected, _ := Discover(CollectOptions{})
 	s.AddCollected(collected, Overlay{})
+
+	// The host's own name and its role seats. Both are ADDRESSES, and both were
+	// missing: `define <this machine>` answered "unknown here", and `define
+	// steward` returned the verb rather than the seat somebody was holding.
+	s.AddReachable(Overlay{})
 	return s
 }
 
