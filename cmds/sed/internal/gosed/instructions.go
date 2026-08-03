@@ -304,6 +304,12 @@ func (c *cmd_twocond) run(svm *vm) error {
 			c.isOn = true
 			if relative, ok := c.end.(*relativecond); ok && relative.startRange(svm) {
 				c.offFrom = svm.lineno
+			} else if end, ok := c.end.(numbercond); ok && svm.lineno >= int(end) {
+				// A numeric second address at or before the line that starts
+				// the range ends the range on that same line. Unlike a
+				// regular-expression second address, it is not deferred until
+				// the following input line.
+				c.offFrom = svm.lineno
 			}
 		} else {
 			svm.ip = c.unmetloc

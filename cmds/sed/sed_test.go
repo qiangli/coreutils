@@ -118,6 +118,29 @@ func TestSedDeleteAndRange(t *testing.T) {
 	}
 }
 
+func TestSedNumericRangeEndingAtOrBeforeStart(t *testing.T) {
+	cases := []struct {
+		name  string
+		args  []string
+		input string
+		want  string
+	}{
+		{"equal addresses delete one line", []string{"2,2d"}, "1\n2\n3\n4\n", "1\n3\n4\n"},
+		{"descending addresses delete one line", []string{"3,1d"}, "1\n2\n3\n4\n", "1\n2\n4\n"},
+		{"equal addresses select one line", []string{"-n", "2,2s/A/z/p"}, "A\nA\nA\n", "z\n"},
+		{"descending addresses select one line", []string{"-n", "2,1s/A/z/p"}, "A\nA\nA\n", "z\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, tc.input, tc.args...)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Errorf("sed %q = (%q, %q, %d), want (%q, empty, 0)",
+					tc.args, out, errOut, code, tc.want)
+			}
+		})
+	}
+}
+
 func TestSedRelativeRangeAddress(t *testing.T) {
 	cases := []struct {
 		name   string
