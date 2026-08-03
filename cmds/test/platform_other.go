@@ -29,3 +29,5 @@ func fileTimes(*tool.RunContext, string) (atime, mtime time.Time, err error) {
 
 // isTerminal: never a terminal here, rather than guessing.
 func isTerminal(*os.File) bool { return false }
+
+func isTerminalDescriptor(int64) bool { return false }

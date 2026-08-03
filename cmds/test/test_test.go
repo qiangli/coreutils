@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -480,8 +481,8 @@ func TestTerminalPrimary(t *testing.T) {
 	truth(t, statusFalse, "-t", "0")
 	truth(t, statusFalse, "-t", "1")
 	truth(t, statusFalse, "-t", "2")
-	// Descriptors above 2 belong to the embedding shell, not the tool.
-	truth(t, statusFalse, "-t", "3")
+	// Out-of-range and negative descriptors are not terminals.
+	truth(t, statusFalse, "-t", "-1")
 	truth(t, statusFalse, "-t", "99999999999999999999999")
 
 	// A real file is a *os.File but not a terminal.
@@ -499,6 +500,9 @@ func TestTerminalPrimary(t *testing.T) {
 	}
 	if code := cmd.Run(rc, []string{"-t", "0"}); code != statusFalse {
 		t.Errorf("-t 0 on %s = %d, want 1", os.DevNull, code)
+	}
+	if code := cmd.Run(rc, []string{"-t", strconv.FormatUint(uint64(f.Fd()), 10)}); code != statusFalse {
+		t.Errorf("-t %d on %s = %d, want 1", f.Fd(), os.DevNull, code)
 	}
 
 	// A non-numeric descriptor is a syntax error, not a false answer.

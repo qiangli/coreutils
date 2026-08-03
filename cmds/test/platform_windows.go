@@ -85,3 +85,11 @@ func isTerminal(f *os.File) bool {
 	var mode uint32
 	return windows.GetConsoleMode(windows.Handle(f.Fd()), &mode) == nil
 }
+
+func isTerminalDescriptor(fd int64) bool {
+	if fd < 0 || uint64(fd) > uint64(^uintptr(0)) {
+		return false
+	}
+	var mode uint32
+	return windows.GetConsoleMode(windows.Handle(uintptr(fd)), &mode) == nil
+}

@@ -46,10 +46,10 @@
 //     superset, never a different answer for values GNU accepts.
 //   - `-t` resolves file descriptors 0, 1 and 2 through the
 //     RunContext streams, because an embedded tool has no process of
-//     its own (see the tool package). Descriptors above 2 belong to
-//     the embedding shell and are not visible here, so they report
-//     false — the same answer GNU gives for a descriptor that is not
-//     an open terminal.
+//     its own (see the tool package). For larger descriptors it probes
+//     the host descriptor table. That is exact at a standalone process
+//     boundary and lets an embedding shell expose its inherited/open
+//     descriptors without copying them into RunContext.
 //   - `-O`/`-G` (ownership) require POSIX uid/gid and fail loudly with
 //     exit 2 on platforms that have none, rather than answering false.
 //   - Diagnostics name the operand that is actually wrong. Where GNU
@@ -532,15 +532,17 @@ func (p *parser) integer(s string) *big.Int {
 	return n
 }
 
-// terminalTest implements -t FD. Only the three descriptors an embedded
-// tool actually owns can be answered (see the package comment).
+// terminalTest implements -t FD. Standard streams come from RunContext;
+// larger descriptors are inherited process descriptors and are probed
+// without taking ownership of (or closing) them.
 func (p *parser) terminalTest(operand string) bool {
 	fd := p.integer(operand)
-	if !fd.IsInt64() {
+	if !fd.IsInt64() || fd.Sign() < 0 {
 		return false
 	}
+	n := fd.Int64()
 	var stream any
-	switch fd.Int64() {
+	switch n {
 	case 0:
 		stream = p.rc.In
 	case 1:
@@ -548,7 +550,7 @@ func (p *parser) terminalTest(operand string) bool {
 	case 2:
 		stream = p.rc.Err
 	default:
-		return false
+		return isTerminalDescriptor(n)
 	}
 	f, ok := stream.(*os.File)
 	if !ok || f == nil {

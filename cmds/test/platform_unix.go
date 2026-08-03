@@ -94,3 +94,14 @@ func isTerminal(f *os.File) bool {
 	_, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
 	return err == nil
 }
+
+// isTerminalDescriptor probes an inherited descriptor without wrapping it in
+// os.File: an os.File wrapper would imply ownership even though test must not
+// close a descriptor that belongs to its caller.
+func isTerminalDescriptor(fd int64) bool {
+	if int64(int(fd)) != fd {
+		return false
+	}
+	_, err := unix.IoctlGetWinsize(int(fd), unix.TIOCGWINSZ)
+	return err == nil
+}
