@@ -16,7 +16,14 @@
 // Operators: ( EXPR ), ! / -not, implicit and / -a / -and, -o / -or.
 // Global options: -depth, -xdev, -maxdepth N, -mindepth N (positional
 // anywhere, as GNU applies them; the GNU positional warning is not
-// emitted).
+// emitted). A "--" may close the leading -H/-L/-P options.
+//
+// Patterns (-name, -iname, -path) are matched in the C/POSIX locale:
+// byte by byte, with the C locale's ASCII character classes and byte
+// ordering for ranges. LC_ALL, LC_CTYPE, LC_COLLATE and LANG therefore
+// cannot change which files find reports, and LC_MESSAGES cannot change
+// a diagnostic — the determinism the agent contract requires, and what
+// GNU find does when those variables select the POSIX locale.
 //
 // -exec/-ok spawn the named utility directly — that is find's
 // upstream-documented purpose (the command-wrapper exception to the
@@ -31,8 +38,8 @@
 // Deviations from GNU worth knowing: traversal order is deterministic
 // lexical (GNU uses directory order); parse/usage errors exit 2 per
 // this repo's contract (GNU find exits 1); paths are printed with
-// forward slashes on every platform; -iname folds case per Unicode
-// simple folding inside bracket ranges rather than C-locale collation.
+// forward slashes on every platform; -iname folds ASCII case only,
+// since no other byte has a case pair in the C locale.
 package findcmd
 
 import (
@@ -51,7 +58,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/qiangli/coreutils/pkg/ignore"
 	"github.com/qiangli/coreutils/tool"
@@ -75,6 +81,7 @@ Default PATH is '.'; default expression is -print.
 Options (before PATH):
   -P  never follow symlinks (default); -L  follow all symlinks;
   -H  follow symlinks given as PATH operands only
+  --  end of options; PATH operands follow
 Tests:
   -name GLOB, -iname GLOB   base name matches shell glob
   -path GLOB                whole path matches glob ('/' not special)
@@ -137,11 +144,25 @@ func run(rc *tool.RunContext, args []string) int {
 	args = kept
 
 	// -H/-L/-P precede path operands; the last one specified applies.
+	// A "--" ends the leading options (POSIX Utility Syntax Guideline
+	// 10, and what GNU find does): it is consumed, and everything after
+	// it is read as start points and expression exactly as before. It
+	// does not force a following "-foo" to be a path — GNU keeps the
+	// expression scan unchanged there, and so do we.
 	follow := byte('P')
 	i := 0
-	for i < len(args) && (args[i] == "-H" || args[i] == "-L" || args[i] == "-P") {
-		follow = args[i][1]
-		i++
+leading:
+	for i < len(args) {
+		switch args[i] {
+		case "-H", "-L", "-P":
+			follow = args[i][1]
+			i++
+		case "--":
+			i++
+			break leading
+		default:
+			break leading
+		}
 	}
 
 	// Start points are everything before the first expression token.
@@ -188,6 +209,13 @@ func run(rc *tool.RunContext, args []string) int {
 	// Transparency: announce what --agentic hid (stderr only).
 	if n := w.matcher.Hidden(); n > 0 {
 		fmt.Fprintf(rc.Err, "%s: --agentic skipped %d ignored path(s) (run without --agentic to include them)\n", cmd.Name, n)
+	}
+	// A failed write to standard output is an error like any other: one
+	// diagnostic on stderr and a non-zero status, never a silent exit 0
+	// (find > /dev/full must not look like success).
+	if w.writeErr != nil {
+		fmt.Fprintf(rc.Err, "%s: write error: %v\n", cmd.Name, w.writeErr)
+		return 1
 	}
 	if w.errored {
 		return 1
@@ -561,6 +589,15 @@ func parsePerm(a string) (expr, error) {
 
 // parsePermBits resolves an octal or symbolic mode against an
 // all-zeros starting mode with no umask, as POSIX specifies for find.
+//
+// The symbolic grammar is chmod's in full, because that is what POSIX
+// says -perm's operand is: who-list, operator, and either a permission
+// list or a permcopy ("-perm -g=u"). Clauses apply in order to the mode
+// being built, so '-' clears and '=' replaces rather than being ignored.
+// Two letters can only be resolved against a real file, which the parser
+// does not have: 's' contributes set-user/set-group-ID for the classes
+// named, and 'X' contributes the execute bit only when one is already
+// set in the mode so far (a zero template is never a directory).
 func parsePermBits(s string) (uint32, error) {
 	if s == "" {
 		return 0, errors.New("empty mode")
@@ -611,48 +648,106 @@ func parsePermBits(s string) (uint32, error) {
 				return 0, errors.New("bad operator")
 			}
 			i++
-			var perm, special uint32
-			for ; i < len(clause); i++ {
-				switch clause[i] {
-				case 'r':
-					perm |= 4
-				case 'w':
-					perm |= 2
-				case 'x':
-					perm |= 1
-				case 's':
-					if who&4 != 0 {
-						special |= 0o4000
-					}
-					if who&2 != 0 {
-						special |= 0o2000
-					}
-				case 't':
-					special |= 0o1000
-				case '+', '-', '=':
-					goto applied
-				default:
-					return 0, errors.New("bad permission letter")
-				}
+			perm, special, n, err := parsePermList(clause[i:], who, bits)
+			if err != nil {
+				return 0, err
 			}
-		applied:
-			if op == '+' || op == '=' {
-				if who&4 != 0 {
-					bits |= perm << 6
-				}
-				if who&2 != 0 {
-					bits |= perm << 3
-				}
-				if who&1 != 0 {
-					bits |= perm
-				}
-				bits |= special
+			i += n
+			val := spreadPerm(who, perm) | special
+			switch op {
+			case '+':
+				bits |= val
+			case '-':
+				bits &^= val
+			case '=':
+				// '=' replaces the named classes' bits, so an earlier
+				// clause in the same mode string can be overridden.
+				bits = bits&^permMask(who) | val
 			}
-			// '-' clears bits from the zero template: a no-op, but
-			// accepted per POSIX ("it shall not be an error").
 		}
 	}
 	return bits, nil
+}
+
+// parsePermList reads one permission list (or permcopy) from the head of
+// s, stopping at the next operator. bits is the mode built so far, which
+// a permcopy reads from and 'X' consults. It returns the who-relative
+// permission bits, the absolute special bits, and how much of s it used.
+func parsePermList(s string, who, bits uint32) (perm, special uint32, n int, err error) {
+	// permcopy: exactly one of u/g/o standing alone before the next
+	// operator or the end of the clause ("g=u", "-perm -u+g").
+	if len(s) > 0 && (s[0] == 'u' || s[0] == 'g' || s[0] == 'o') &&
+		(len(s) == 1 || s[1] == '+' || s[1] == '-' || s[1] == '=') {
+		switch s[0] {
+		case 'u':
+			perm = bits >> 6 & 7
+		case 'g':
+			perm = bits >> 3 & 7
+		default:
+			perm = bits & 7
+		}
+		return perm, 0, 1, nil
+	}
+	for ; n < len(s); n++ {
+		switch s[n] {
+		case 'r':
+			perm |= 4
+		case 'w':
+			perm |= 2
+		case 'x':
+			perm |= 1
+		case 'X':
+			// chmod's conditional execute: a directory, or a mode that
+			// already carries an execute bit. There is no file here and
+			// the template starts at zero, so only the latter can hold.
+			if bits&0o111 != 0 {
+				perm |= 1
+			}
+		case 's':
+			if who&4 != 0 {
+				special |= 0o4000
+			}
+			if who&2 != 0 {
+				special |= 0o2000
+			}
+		case 't':
+			special |= 0o1000
+		case '+', '-', '=':
+			return perm, special, n, nil
+		default:
+			return 0, 0, 0, errors.New("bad permission letter")
+		}
+	}
+	return perm, special, n, nil
+}
+
+// spreadPerm places a 3-bit permission value in each named class's slot.
+func spreadPerm(who, perm uint32) uint32 {
+	var v uint32
+	if who&4 != 0 {
+		v |= perm << 6
+	}
+	if who&2 != 0 {
+		v |= perm << 3
+	}
+	if who&1 != 0 {
+		v |= perm
+	}
+	return v
+}
+
+// permMask is every bit '=' clears for the named classes: their
+// permission bits plus the set-ID bit each owns. The sticky bit belongs
+// to no single class, so '=' leaves it alone.
+func permMask(who uint32) uint32 {
+	m := spreadPerm(who, 7)
+	if who&4 != 0 {
+		m |= 0o4000
+	}
+	if who&2 != 0 {
+		m |= 0o2000
+	}
+	return m
 }
 
 // lookupOwner resolves -user/-group's argument: a name first, then a
@@ -717,10 +812,12 @@ func (o *orExpr) eval(c *fctx) bool { return o.l.eval(c) || o.r.eval(c) }
 type printExpr struct{ nul bool }
 
 func (p *printExpr) eval(c *fctx) bool {
+	term := "\n"
 	if p.nul {
-		fmt.Fprintf(c.w.rc.Out, "%s\x00", c.path)
-	} else {
-		fmt.Fprintf(c.w.rc.Out, "%s\n", c.path)
+		term = "\x00"
+	}
+	if _, err := io.WriteString(c.w.rc.Out, c.path+term); err != nil {
+		c.w.noteWriteErr(err)
 	}
 	return true
 }
@@ -740,7 +837,18 @@ type nameExpr struct {
 }
 
 func (n *nameExpr) eval(c *fctx) bool {
-	return fnmatch(n.pat, filepath.Base(c.osPath), n.fold)
+	return fnmatch(n.pat, baseName(c.path), n.fold)
+}
+
+// baseName is the last component of the operand-rooted path, which is
+// what -name matches against. It has to come from the path as find
+// names it, not from the resolved filesystem path: for a start point
+// GNU and BSD compare the operand's own final component (with trailing
+// slashes stripped), so `find . -name .` matches while
+// `find . -name <cwd-basename>` does not. Resolving first got both
+// backwards. filepath.Base also copes with a "\" operand on Windows.
+func baseName(p string) string {
+	return filepath.Base(p)
 }
 
 type pathExpr struct{ pat string }
@@ -1228,6 +1336,7 @@ type walker struct {
 	xdev       bool
 	follow     byte // 'P', 'H' or 'L'
 	errored    bool
+	writeErr   error // first failed write to standard output
 	stdin      *bufio.Reader
 	matcher    *ignore.Matcher // --agentic path filter (nil = off, skips nothing)
 	owners     *ownerCache     // per-invocation -nouser/-nogroup lookup cache
@@ -1236,6 +1345,15 @@ type walker struct {
 func (w *walker) reportErr(display string, err error) {
 	w.errored = true
 	fmt.Fprintf(w.rc.Err, "%s: '%s': %s\n", cmd.Name, display, pathErrMsg(err))
+}
+
+// noteWriteErr records the first standard-output write failure. The walk
+// continues (a later path may still be wanted by -exec or -ok, and GNU
+// reports the failure once, at exit) but the run can no longer succeed.
+func (w *walker) noteWriteErr(err error) {
+	if w.writeErr == nil {
+		w.writeErr = err
+	}
 }
 
 func (w *walker) walkRoot(operand string) {
@@ -1343,96 +1461,126 @@ func pathErrMsg(err error) string {
 }
 
 // ---------------------------------------------------------------------------
-// fnmatch: POSIX shell glob for -name/-iname/-path. Unlike
-// path.Match, '*' and '?' also match '/' (GNU -path rule), backslash
-// escapes the next character, and [!...] negation is accepted.
+// fnmatch: POSIX pattern matching (XCU 2.13) for -name/-iname/-path.
+// Unlike path.Match, '*' and '?' also match '/' (GNU -path rule),
+// backslash escapes the next character, and [!...] negation is accepted.
+//
+// Matching is byte-oriented because that is what the C/POSIX locale
+// means: a character is a byte, so '?' matches one byte of a multi-byte
+// sequence, ranges compare byte values, and [[:alpha:]] and friends are
+// the C locale's ASCII sets. The result is therefore the same whatever
+// LC_ALL, LC_CTYPE, LC_COLLATE or LANG say — the determinism the agent
+// contract requires, and what GNU find does in the POSIX locale.
 
 func fnmatch(pattern, name string, fold bool) bool {
-	return fnmatchRunes([]rune(pattern), []rune(name), fold)
-}
-
-func fnmatchRunes(p, s []rune, fold bool) bool {
-	for len(p) > 0 {
-		switch p[0] {
+	for len(pattern) > 0 {
+		switch pattern[0] {
 		case '*':
-			for len(p) > 0 && p[0] == '*' {
-				p = p[1:]
+			for len(pattern) > 0 && pattern[0] == '*' {
+				pattern = pattern[1:]
 			}
-			if len(p) == 0 {
+			if len(pattern) == 0 {
 				return true
 			}
-			for i := 0; i <= len(s); i++ {
-				if fnmatchRunes(p, s[i:], fold) {
+			for i := 0; i <= len(name); i++ {
+				if fnmatch(pattern, name[i:], fold) {
 					return true
 				}
 			}
 			return false
 		case '?':
-			if len(s) == 0 {
+			if len(name) == 0 {
 				return false
 			}
-			p, s = p[1:], s[1:]
+			pattern, name = pattern[1:], name[1:]
 		case '[':
-			if len(s) == 0 {
+			if len(name) == 0 {
 				return false
 			}
-			matched, rest, valid := matchClass(p, s[0], fold)
+			matched, rest, valid := matchClass(pattern, name[0], fold)
 			if !valid {
 				// unmatched '[' is a literal
-				if !eqRune('[', s[0], fold) {
+				if !eqByte('[', name[0], fold) {
 					return false
 				}
-				p, s = p[1:], s[1:]
+				pattern, name = pattern[1:], name[1:]
 				continue
 			}
 			if !matched {
 				return false
 			}
-			p, s = rest, s[1:]
+			pattern, name = rest, name[1:]
 		case '\\':
-			if len(p) >= 2 {
-				p = p[1:]
+			if len(pattern) >= 2 {
+				pattern = pattern[1:]
 			}
-			if len(s) == 0 || !eqRune(p[0], s[0], fold) {
+			if len(name) == 0 || !eqByte(pattern[0], name[0], fold) {
 				return false
 			}
-			p, s = p[1:], s[1:]
+			pattern, name = pattern[1:], name[1:]
 		default:
-			if len(s) == 0 || !eqRune(p[0], s[0], fold) {
+			if len(name) == 0 || !eqByte(pattern[0], name[0], fold) {
 				return false
 			}
-			p, s = p[1:], s[1:]
+			pattern, name = pattern[1:], name[1:]
 		}
 	}
-	return len(s) == 0
+	return len(name) == 0
 }
 
-func eqRune(a, b rune, fold bool) bool {
+// eqByte compares one byte, folding case for -iname. Folding is ASCII
+// only: in the C locale no other byte has a case pair.
+func eqByte(a, b byte, fold bool) bool {
 	if a == b {
 		return true
 	}
-	return fold && unicode.ToLower(a) == unicode.ToLower(b)
+	return fold && lowerASCII(a) == lowerASCII(b)
 }
 
-var classFns = map[string]func(rune) bool{
-	"alpha":  unicode.IsLetter,
-	"digit":  unicode.IsDigit,
-	"alnum":  func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) },
-	"upper":  unicode.IsUpper,
-	"lower":  unicode.IsLower,
-	"space":  unicode.IsSpace,
-	"blank":  func(r rune) bool { return r == ' ' || r == '\t' },
-	"punct":  unicode.IsPunct,
-	"cntrl":  unicode.IsControl,
-	"graph":  unicode.IsGraphic,
-	"print":  unicode.IsPrint,
-	"xdigit": func(r rune) bool { return strings.ContainsRune("0123456789abcdefABCDEF", r) },
+func lowerASCII(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
 }
+
+func flipASCII(c byte) byte {
+	switch {
+	case c >= 'A' && c <= 'Z':
+		return c + 'a' - 'A'
+	case c >= 'a' && c <= 'z':
+		return c - 'a' + 'A'
+	}
+	return c
+}
+
+// classFns are the C locale's character classes: ASCII only, so a byte
+// of a UTF-8 sequence is never a letter, a digit or printable.
+var classFns = map[string]func(byte) bool{
+	"alpha":  isAlphaC,
+	"digit":  isDigitC,
+	"alnum":  func(c byte) bool { return isAlphaC(c) || isDigitC(c) },
+	"upper":  func(c byte) bool { return c >= 'A' && c <= 'Z' },
+	"lower":  func(c byte) bool { return c >= 'a' && c <= 'z' },
+	"space":  func(c byte) bool { return c == ' ' || (c >= '\t' && c <= '\r') },
+	"blank":  func(c byte) bool { return c == ' ' || c == '\t' },
+	"punct":  func(c byte) bool { return c > ' ' && c < 0x7f && !isAlphaC(c) && !isDigitC(c) },
+	"cntrl":  func(c byte) bool { return c < ' ' || c == 0x7f },
+	"graph":  func(c byte) bool { return c > ' ' && c < 0x7f },
+	"print":  func(c byte) bool { return c >= ' ' && c < 0x7f },
+	"xdigit": func(c byte) bool { return isDigitC(c) || (lowerASCII(c) >= 'a' && lowerASCII(c) <= 'f') },
+}
+
+func isAlphaC(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+
+func isDigitC(c byte) bool { return c >= '0' && c <= '9' }
 
 // matchClass parses one bracket expression at the head of p and tests
-// r against it. valid=false means the '[' had no closing ']' and must
-// be treated as a literal.
-func matchClass(p []rune, r rune, fold bool) (matched bool, rest []rune, valid bool) {
+// the byte c against it. valid=false means the '[' had no closing ']'
+// and must be treated as a literal.
+func matchClass(p string, c byte, fold bool) (matched bool, rest string, valid bool) {
 	i := 1
 	neg := false
 	if i < len(p) && (p[i] == '!' || p[i] == '^') {
@@ -1452,10 +1600,14 @@ func matchClass(p []rune, r rune, fold bool) (matched bool, rest []rune, valid b
 				j++
 			}
 			if j+1 >= len(p) {
-				return false, nil, false
+				return false, "", false
 			}
-			if fn, ok := classFns[string(p[i+2:j])]; ok && fn(r) {
-				matched = true
+			if fn, ok := classFns[p[i+2:j]]; ok {
+				// -iname: either case of the byte satisfying the class
+				// is a match, so [[:upper:]] finds a lowercase name.
+				if fn(c) || (fold && fn(flipASCII(c))) {
+					matched = true
+				}
 			}
 			i = j + 2
 			continue
@@ -1476,13 +1628,13 @@ func matchClass(p []rune, r rune, fold bool) (matched bool, rest []rune, valid b
 			}
 			i++
 		}
-		c := r
+		b := c
 		if fold {
-			c, lo, hi = unicode.ToLower(r), unicode.ToLower(lo), unicode.ToLower(hi)
+			b, lo, hi = lowerASCII(c), lowerASCII(lo), lowerASCII(hi)
 		}
-		if lo <= c && c <= hi {
+		if lo <= b && b <= hi {
 			matched = true
 		}
 	}
-	return false, nil, false
+	return false, "", false
 }

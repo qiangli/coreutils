@@ -153,7 +153,7 @@ Extensions (beyond coreutils, prior art in tree):
 |---|---|---|
 | grep | aict, u-root | -r, -i, -l, -n, -v, -E, -F, -c, -q, -m, -A/-B/-C context, ordered --include/--exclude |
 | sed | Go.Sed engine (MIT), GNU compatibility adaptations | GNU BRE/ERE scripts, addr,+N ranges, -i[SUFFIX] temporary-file in-place editing |
-| find | aict, u-root | POSIX stream closed 2026-08: -H/-L/-P, -name/-iname/-path, -type, -atime/-ctime/-mtime, -newer, -size, -empty, -perm (octal + symbolic, -/ prefixes), -user/-group/-nouser/-nogroup, -links, -xdev, -depth, -prune, -maxdepth/-mindepth, -print/-print0, **-exec ; and -exec {} +, interactive -ok** (command-wrapper tier: running the utility is find's specified behavior; argv built directly, never through a shell). Still NO: -execdir/-okdir/-delete |
+| find | aict, u-root | POSIX stream closed 2026-08: -H/-L/-P (and `--` closing them), -name/-iname/-path (matched in the C locale: byte-wise, ASCII classes, no LC_*/LANG variance), -type, -atime/-ctime/-mtime, -newer, -size, -empty, -perm (octal + symbolic, -/ prefixes), -user/-group/-nouser/-nogroup, -links, -xdev, -depth, -prune, -maxdepth/-mindepth, -print/-print0, **-exec ; and -exec {} +, interactive -ok** (command-wrapper tier: running the utility is find's specified behavior; argv built directly, never through a shell). Still NO: -execdir/-okdir/-delete |
 | diff | aict | -u, -r, -q (unified output) |
 | jq | gojq | pure-Go JSON filters; initial flags -c, -e, -n, -r |
 | tar | u-root | -c, -x, -t, -z, -f (archive/tar + compress/gzip) |
