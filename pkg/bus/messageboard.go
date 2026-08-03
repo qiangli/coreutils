@@ -79,10 +79,12 @@ running waits on the board and is there when it next looks.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			who := BoardIdentity(as)
+			who, err := BoardIdentity(as)
+			if err != nil {
+				return err
+			}
 			var posts []Post
 			var older int
-			var err error
 			if all {
 				posts, err = Posts()
 			} else {
@@ -200,7 +202,10 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 				Provider: strings.TrimSpace(provider),
 				Family:   strings.TrimSpace(family), Version: strings.TrimSpace(version),
 			}
-			from := BoardIdentity(as)
+			from, err := BoardIdentity(as)
+			if err != nil {
+				return err
+			}
 			body := strings.Join(args, " ")
 			if !aud.Empty() {
 				// ONE post carrying the selector — not one per member. See
@@ -277,7 +282,10 @@ Use 'mb send <agent>' when exactly one agent needs to act. A broadcast everybody
 must read is how a board becomes noise nobody reads.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			from := BoardIdentity(as)
+			from, err := BoardIdentity(as)
+			if err != nil {
+				return err
+			}
 			body := strings.Join(args, " ")
 			if err := PostMessage(Post{From: from, Topic: topic, Body: body}); err != nil {
 				return err

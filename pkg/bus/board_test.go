@@ -1,7 +1,9 @@
 package bus
 
 import (
+	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -27,18 +29,70 @@ func TestBoardIdentity_ResolvesAPrincipalToTheFleetName(t *testing.T) {
 	t.Cleanup(func() { FleetResolveName = nil })
 
 	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/Omar")
-	if got := BoardIdentity(""); got != "codex-gpt5.6-sol" {
-		t.Fatalf("identity = %q, want the fleet name", got)
+	if got, err := BoardIdentity(""); err != nil || got != "codex-gpt5.6-sol" {
+		t.Fatalf("identity = %q (%v), want the fleet name", got, err)
 	}
 	// An explicit --as still wins, and also resolves.
-	if got := BoardIdentity("Omar"); got != "codex-gpt5.6-sol" {
-		t.Fatalf("--as identity = %q", got)
+	if got, err := BoardIdentity("Omar"); err != nil || got != "codex-gpt5.6-sol" {
+		t.Fatalf("--as identity = %q (%v)", got, err)
 	}
 	// A human at a terminal is a legitimate participant under their login name,
 	// not an agent to be resolved into one.
 	t.Setenv("BASHY_PRINCIPAL", "")
-	if got := BoardIdentity(""); got != "tester" {
-		t.Fatalf("a non-agent must be used as itself, got %q", got)
+	if got, err := BoardIdentity(""); err != nil || got != "tester" {
+		t.Fatalf("a non-agent must be used as itself, got %q (%v)", got, err)
+	}
+}
+
+// THE MISATTRIBUTION BUG. An agent in a raw TUI has no BASHY_PRINCIPAL and
+// inherits the operator's environment, so the login-name fallback signed its
+// posts — and advanced its cursor, and took its claims — as the operator.
+//
+// Measured on a live board 2026-08-03: six of eight posts read `from: qiangli`,
+// spanning the operator and two different agents, and one reply arrived
+// addressed FROM its own recipient. Attribution is the board's single
+// guarantee, so a caller that is demonstrably an agent and resolves to nothing
+// must be refused rather than signed for.
+func TestBoardIdentity_RefusesToSignAnAgentWithTheLoginName(t *testing.T) {
+	boardInTempHome(t)
+	DetectHarness = func() (string, bool) { return "codex", true }
+	t.Cleanup(func() { DetectHarness = nil })
+
+	got, err := BoardIdentity("")
+	if !errors.Is(err, ErrUnattributed) {
+		t.Fatalf("an unattributed agent got identity %q, err %v — want a refusal", got, err)
+	}
+	// The refusal has to be actionable, or it just moves the failure.
+	for _, want := range []string{"--as", "codex", "tester"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not mention %q: %v", want, err)
+		}
+	}
+	// --as is the escape hatch, for an agent naming itself AND for a human who
+	// means to speak as themselves from inside an agent session.
+	if got, err := BoardIdentity("tester"); err != nil || got != "tester" {
+		t.Fatalf("explicit --as under a harness = %q (%v)", got, err)
+	}
+	// A bashy-launched agent resolves and is never refused.
+	FleetResolveName = func(string) string { return "codex-gpt5.6-sol" }
+	t.Cleanup(func() { FleetResolveName = nil })
+	t.Setenv("BASHY_PRINCIPAL", "dhnt:agent/Omar")
+	if got, err := BoardIdentity(""); err != nil || got != "codex-gpt5.6-sol" {
+		t.Fatalf("a principal-carrying agent = %q (%v)", got, err)
+	}
+}
+
+// A nil DetectHarness must not refuse: pkg/bus is importable by hosts with no
+// catalog, and breaking the board on a host that simply cannot answer the
+// question would be worse than the misattribution it prevents. The other half
+// of this contract — that bashy actually WIRES the hook — is pinned in
+// bashy's internal/agentos, because a seam nobody connects is how this class
+// of bug survives a fix.
+func TestBoardIdentity_UnwiredHostKeepsTheLoginName(t *testing.T) {
+	boardInTempHome(t)
+	DetectHarness = nil
+	if got, err := BoardIdentity(""); err != nil || got != "tester" {
+		t.Fatalf("unwired host = %q (%v), want the login name", got, err)
 	}
 }
 

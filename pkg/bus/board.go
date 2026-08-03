@@ -39,6 +39,7 @@ package bus
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -334,39 +335,102 @@ func MarkSeen(reader string, seq int64) error {
 // Injected by the host, for the same reason FleetNames and FleetSelect are.
 var FleetResolveName func(string) string
 
+// DetectHarness reports the agentic harness driving this process, injected by
+// the host for the same reason FleetNames and FleetSelect are: the marker table
+// is registry DATA owned by the catalog (`bashy tools add` extends it), and a
+// transport keeping its own copy is a second opinion that can drift.
+//
+// A nil hook means "this host cannot tell", and BoardIdentity then behaves as it
+// did before the check existed. That is the weaker of the two safe directions
+// and it is chosen deliberately: pkg/bus is importable by hosts that have no
+// catalog at all, and refusing every caller on a host that simply cannot answer
+// the question would break the board rather than protect it. The consequence is
+// that WIRING THIS IS LOAD-BEARING — an unwired host silently keeps the bug it
+// exists to prevent, which is exactly the failure shape this fix is about.
+var DetectHarness func() (string, bool)
+
+// ErrUnattributed reports a caller that is demonstrably an agent but cannot be
+// resolved to a fleet identity.
+var ErrUnattributed = errors.New("unattributed agent session")
+
 // BoardIdentity is WHO YOU ARE on the board, and it exists because the send and
 // read sides used to disagree.
 //
 // Posts are addressed to the fleet name `bashy agents list` prints. But a
-// reader's environment carries something else: a bashy-launched agent has
+// caller's environment carries something else: a bashy-launched agent has
 // BASHY_PRINCIPAL=dhnt:agent/<Nick>, and everything else falls back to $USER.
 // Resolving those to the same name is what lets a bare `bashy mb` work, instead
 // of every agent having to be told its own identity with --as.
 //
-// The ladder, most explicit first. Anything that does not resolve to a known
-// agent is used AS ITSELF rather than guessed at — a human at a terminal is a
-// legitimate board participant under their login name.
-func BoardIdentity(as string) string {
+// The ladder, most explicit first.
+//
+// # Why the login fallback can refuse
+//
+// $USER is the right answer for a human at a terminal, who is a legitimate
+// board participant under their login name. It is the WRONG answer for an agent
+// in a raw TUI, which has no BASHY_PRINCIPAL and inherits the operator's
+// environment — and the two are indistinguishable by environment alone unless
+// you ask whether a harness is driving the process.
+//
+// Left un-asked, the fallback misattributes silently, and that is worse than
+// failing on both sides of the board:
+//
+//	SEND  a post is SIGNED with the operator's name. PostMessage refuses a post
+//	      with no sender precisely because attribution is the board's one
+//	      guarantee — but it cannot detect a DEFAULT sender that is wrong. The
+//	      record is then corrupt in a way nothing on the board reports.
+//	READ  the cursor, the claim and the viewed-by receipt all land under the
+//	      operator's name. A claimed any-of-group post is the sharp edge: the
+//	      claim exists, so a second agent correctly skips work that nobody
+//	      actually took.
+//
+// Observed 2026-08-03 on this host: six of eight posts on a live board were
+// attributed to the login user, spanning the operator AND two different agents.
+// The board could not distinguish the three, and a reply arrived addressed from
+// its own recipient.
+//
+// So when a harness IS detected and nothing resolved, refuse and say what to
+// pass. No attribution is better than a guessed one — the whole point of a
+// receipt is that it names somebody.
+func BoardIdentity(as string) (string, error) {
 	if s := strings.TrimSpace(as); s != "" {
-		return resolveBoardName(s)
+		// Explicit always wins, including a human inside an agent session who
+		// means to speak as themselves: `--as qiangli`.
+		return resolveBoardName(s), nil
 	}
 	if v := strings.TrimSpace(os.Getenv("BASHY_PRINCIPAL")); v != "" {
 		// `dhnt:agent/Omar` → `Omar` → the catalog's canonical name.
 		if _, nick, ok := strings.Cut(v, "agent/"); ok {
 			if n := resolveBoardName(nick); n != "" {
-				return n
+				return n, nil
 			}
 		}
 		if n := resolveBoardName(v); n != "" {
-			return n
+			return n, nil
 		}
 	}
+	if DetectHarness != nil {
+		if tool, ok := DetectHarness(); ok {
+			return "", fmt.Errorf("%w: running under %s, with no agent identity to sign with\n"+
+				"  pass --as <agent>   (`bashy agents list` names them; `--as %s-<model>` if unsure)\n"+
+				"  a human meaning to speak as themselves here passes --as %s\n"+
+				"  refusing rather than signing as the login user: the board's one guarantee is that a post names who sent it",
+				ErrUnattributed, tool, tool, loginName())
+		}
+	}
+	if n := loginName(); n != "" {
+		return n, nil
+	}
+	return "anonymous", nil
+}
+
+func loginName() string {
 	for _, k := range []string{"USER", "LOGNAME"} {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 			return v
 		}
 	}
-	return "anonymous"
+	return ""
 }
 
 func resolveBoardName(s string) string {
