@@ -50,7 +50,13 @@ func prescan(args []string) (pre prescanned, errMsg string) {
 			rest = append(rest, args[i:]...)
 			i = len(args)
 		case arg == "-" || len(arg) < 2 || arg[0] != '-':
-			rest = append(rest, arg)
+			// POSIX utility syntax stops option recognition at the first
+			// operand. pflag normally permits interspersed GNU options, so
+			// mark the boundary explicitly and preserve every later argument
+			// (including "-m" and "--") as a pathname.
+			rest = append(rest, "--")
+			rest = append(rest, args[i:]...)
+			i = len(args)
 		case strings.HasPrefix(arg, "--"):
 			if arg == "--date" || arg == "--reference" || arg == "--time" {
 				valueNext = true
@@ -151,7 +157,8 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 
-	now := time.Now()
+	loc := touchLocation(rc)
+	now := time.Now().In(loc)
 	atime, mtime := now, now
 	// useNow records that no explicit time source (-r/-t/-d) was given, so the
 	// changed timestamps must be set to the current time. POSIX requires this
@@ -282,11 +289,46 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 	if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 {
 		return time.Time{}, errBad
 	}
-	t := time.Date(year, time.Month(month), day, hour, minute, sec, 0, time.Local)
+	t := time.Date(year, time.Month(month), day, hour, minute, sec, 0, now.Location())
 	if t.Month() != time.Month(month) || t.Day() != day {
 		return time.Time{}, errBad
 	}
 	return t, nil
+}
+
+// touchLocation resolves the time zone touch should interpret -t/-d/current-
+// time values in, from rc.Env rather than the process's own environment —
+// tools must not read os.Environ directly (see tool.RunContext), since an
+// embedding shell's env for one invocation (e.g. a "TZ=... touch ..."
+// prefix) can differ from the host process's. TZ unset defers to the host's
+// default location; TZ set to "" means UTC (matching POSIX); any other
+// value is resolved as a zoneinfo name. An unresolvable non-empty value uses
+// UTC, the same deterministic fallback as an empty TZ.
+func touchLocation(rc *tool.RunContext) *time.Location {
+	tz, ok := lookupEnv(rc.Env, "TZ")
+	if !ok {
+		return time.Local
+	}
+	if tz == "" {
+		return time.UTC
+	}
+	if loc, err := time.LoadLocation(tz); err == nil {
+		return loc
+	}
+	return time.UTC
+}
+
+// lookupEnv reports whether key is present in an os.Environ-shaped slice,
+// distinguishing "unset" from "set to the empty string" the way rc.Getenv
+// cannot.
+func lookupEnv(env []string, key string) (value string, ok bool) {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return env[i][len(prefix):], true
+		}
+	}
+	return "", false
 }
 
 var errBadDate = errors.New("invalid date format")
@@ -319,14 +361,14 @@ func parseDate(s string, now time.Time) (time.Time, error) {
 		"15:04",
 	}
 	for _, layout := range layouts {
-		t, err := time.ParseInLocation(layout, s, time.Local)
+		t, err := time.ParseInLocation(layout, s, now.Location())
 		if err != nil {
 			continue
 		}
 		if t.Year() == 0 {
 			// A bare time of day: GNU anchors it to today.
 			return time.Date(now.Year(), now.Month(), now.Day(),
-				t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local), nil
+				t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), now.Location()), nil
 		}
 		return t, nil
 	}
@@ -438,7 +480,7 @@ func parseRelative(s string, now time.Time) (time.Time, error) {
 	}
 	if midnight && len(fields) == 1 {
 		// "yesterday"/"tomorrow" alone mean that day at 00:00:00.
-		t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+		t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, now.Location())
 	}
 	return t, nil
 }

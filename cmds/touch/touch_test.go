@@ -14,11 +14,16 @@ import (
 
 // runTool is the canonical test harness shape for cmds packages.
 func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
+	return runToolEnv(t, dir, nil, args...)
+}
+
+func runToolEnv(t *testing.T, dir string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -82,6 +87,50 @@ func TestTouchStamp(t *testing.T) {
 	dir := t.TempDir()
 	if _, _, code := runTool(t, dir, "-t202001021504", "f"); code != 0 {
 		t.Errorf("-t202001021504: code=%d", code)
+	}
+}
+
+func TestTouchStampUsesInvocationTZAndCurrentYear(t *testing.T) {
+	loc, err := time.LoadLocation("PST8PDT")
+	if err != nil {
+		t.Skipf("PST8PDT zoneinfo unavailable: %v", err)
+	}
+	dir := t.TempDir()
+	year := time.Now().In(loc).Year()
+	want := time.Date(year, time.January, 2, 3, 4, 5, 0, loc)
+
+	_, errb, code := runToolEnv(t, dir, []string{"TZ=PST8PDT"}, "-t", "01020304.05", "f")
+	if code != 0 {
+		t.Fatalf("touch -t with TZ: code=%d err=%q", code, errb)
+	}
+	if got := mtime(t, filepath.Join(dir, "f")); got.Unix() != want.Unix() {
+		t.Errorf("mtime=%v (%d), want %v (%d)", got, got.Unix(), want, want.Unix())
+	}
+}
+
+func TestParseStampWithoutYearNeverRollsBack(t *testing.T) {
+	loc := time.FixedZone("test", -8*60*60)
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, loc)
+	got, err := parseStamp("12312359.58", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, time.December, 31, 23, 59, 58, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("parseStamp omitted year = %v, want current year %v", got, want)
+	}
+}
+
+func TestTouchStopsOptionParsingAtFirstOperand(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "first", "-m", "--")
+	if code != 0 {
+		t.Fatalf("touch operands after first: code=%d err=%q", code, errb)
+	}
+	for _, name := range []string{"first", "-m", "--"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("operand %q was not created: %v", name, err)
+		}
 	}
 }
 
