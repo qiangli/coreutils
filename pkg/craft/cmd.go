@@ -707,7 +707,12 @@ func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON 
 	if len(matches) == 0 {
 		return fmt.Errorf("craft: no capability matches %q — nothing to compose", query)
 	}
-	opts := ComposeOptions{Band: band}
+	// Take the revision BEFORE reading any store, so the stamp records the
+	// state the composition was read against rather than the state it ended at.
+	// The window is small and nothing here writes, but on a host several agents
+	// share it is not zero, and a rev taken afterwards would name a store the
+	// composition never saw.
+	opts := ComposeOptions{Band: band, GraphVersion: Revision(cfg.storeDir).String()}
 	if strings.TrimSpace(forEntity) != "" {
 		e, err := parseEntity(forEntity)
 		if err != nil {
@@ -741,8 +746,9 @@ func runCompose(cmd *cobra.Command, cfg *config, query string, band int, asJSON 
 	// Provenance on stderr so stdout stays the artifact — a caller piping this
 	// into a file or an agent's context must get the skill, not a header.
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f coordinate=%s folds=%d facts=%d stamp=%s\n",
-		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, skills.ShortID(c.Coordinate), c.Folds, c.Facts, c.Stamp)
+		"\ncraft: %s band=%d floor=%d bands=%v determinism=%.2f coordinate=%s folds=%d facts=%d graph=%s stamp=%s\n",
+		c.Name, c.Band, c.Floor, c.Bands, c.DeterminismRatio, skills.ShortID(c.Coordinate), c.Folds, c.Facts,
+		orUnknown(c.GraphVersion), c.Stamp)
 	return nil
 }
 
