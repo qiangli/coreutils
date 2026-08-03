@@ -12,6 +12,10 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
 func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	return runToolEnv(t, nil, args...)
@@ -307,6 +311,25 @@ func TestDateInvalidUsageDiagnostics(t *testing.T) {
 		if errb == "" {
 			t.Errorf("date %q: no diagnostic on stderr (out=%q code=%d)", args, out, code)
 		}
+	}
+}
+
+func TestDateWriteErrorDiagnostic(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: t.TempDir(),
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: failingWriter{err: os.ErrClosed},
+			Err: &errb,
+		},
+	}
+	if code := cmd.Run(rc, []string{"-u", "-d", "@0", "+%s"}); code != 1 {
+		t.Fatalf("write failure code=%d, want 1", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "date: write error:") {
+		t.Fatalf("write failure stderr=%q, want diagnostic", got)
 	}
 }
 

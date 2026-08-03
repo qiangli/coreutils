@@ -12,6 +12,10 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
 func runTool(t *testing.T, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
@@ -255,5 +259,25 @@ func TestEnvHelp(t *testing.T) {
 		if strings.Contains(out, removed) {
 			t.Errorf("--help advertises unsupported option %q:\n%s", removed, out)
 		}
+	}
+}
+
+func TestEnvWriteErrorDiagnostic(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: t.TempDir(),
+		Env: []string{"A=1"},
+		Stdio: tool.Stdio{
+			In:  strings.NewReader(""),
+			Out: failingWriter{err: os.ErrClosed},
+			Err: &errb,
+		},
+	}
+	if code := cmd.Run(rc, nil); code != 1 {
+		t.Fatalf("write failure code=%d, want 1", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "env: write error:") {
+		t.Fatalf("write failure stderr=%q, want diagnostic", got)
 	}
 }

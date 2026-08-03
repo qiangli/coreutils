@@ -91,8 +91,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if sources > 0 || len(operands) > 0 {
 			return tool.UsageError(rc, cmd, "--resolution is mutually exclusive with date formatting")
 		}
-		fmt.Fprintln(rc.Out, "0.000000001")
-		return 0
+		return writeOutput(rc, "0.000000001\n")
 	}
 	format, code := selectFormat(rc, operands, *iso8601, fs.Changed("iso-8601"), *rfc3339, *rfcEmail || *rfc822 || *rfc2822)
 	if code >= 0 {
@@ -115,7 +114,9 @@ func run(rc *tool.RunContext, args []string) int {
 			if *debug {
 				fmt.Fprintf(rc.Err, "date: parsed date %q -> %s\n", line, t.In(loc).Format(time.RFC3339Nano))
 			}
-			fmt.Fprintf(rc.Out, "%s\n", strftime(t.In(loc), format))
+			if writeOutput(rc, strftime(t.In(loc), format)+"\n") != 0 {
+				return 1
+			}
 		}
 		return status
 	}
@@ -142,7 +143,17 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "date: parsed date %q -> %s\n", *dstr, t.Format(time.RFC3339Nano))
 	}
 
-	fmt.Fprintf(rc.Out, "%s\n", strftime(t, format))
+	return writeOutput(rc, strftime(t, format)+"\n")
+}
+
+// writeOutput makes a failed standard-output write observable. POSIX general
+// assertion 39 requires a diagnostic and non-zero status for write failures;
+// ignoring fmt's error made a closed pipe look like a successful date run.
+func writeOutput(rc *tool.RunContext, s string) int {
+	if _, err := fmt.Fprint(rc.Out, s); err != nil {
+		fmt.Fprintf(rc.Err, "date: write error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 

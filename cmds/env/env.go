@@ -177,7 +177,10 @@ func run(rc *tool.RunContext, args []string) int {
 		sep = "\x00"
 	}
 	for _, e := range env {
-		fmt.Fprintf(rc.Out, "%s%s", e.raw, sep)
+		if _, err := fmt.Fprintf(rc.Out, "%s%s", e.raw, sep); err != nil {
+			fmt.Fprintf(rc.Err, "env: write error: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }
