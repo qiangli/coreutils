@@ -3,6 +3,8 @@
 package testcmd
 
 import (
+	"bytes"
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,6 +12,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/qiangli/coreutils/tool"
 )
 
 // The primaries covered here need a POSIX permission model, POSIX
@@ -291,5 +295,97 @@ func TestFilePrimariesLongWorkingDirectory(t *testing.T) {
 	}
 	if _, errb, code := runIn(t, cmd, dir, "file", "-ef", "file"); code != statusTrue || errb != "" {
 		t.Errorf("test file -ef file (long working directory) = (%q, %d), want (\"\", 0)", errb, code)
+	}
+}
+
+// TestFilePrimariesNearPathMaxRelativeOperand is the other half of the
+// GA67 case (TestFilePrimariesLongWorkingDirectory covers the deep-cwd
+// half): the operand itself is a relative pathname of nearly
+// unix.PathMax bytes. Joining it onto even a short working directory
+// overruns PathMax as one string, yet the pathname is resolvable as
+// POSIX requires. Both resolution modes must get there: the embedded
+// shape (Dir set, no process-cwd guarantee) through the os.Root retry,
+// and the standalone shape (DirIsProcessCwd, as multicall.Main runs)
+// through RunContext.Path keeping the operand relative.
+func TestFilePrimariesNearPathMaxRelativeOperand(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+
+	// Grown by relative mkdir + cd at every step, like a shell, so the
+	// setup never materializes an overlong string either.
+	dir := base
+	var parts []string
+	mkdirChdir := func(name string) {
+		t.Helper()
+		if err := os.Mkdir(name, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.Chdir(name); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		dir = filepath.Join(dir, name)
+		parts = append(parts, name)
+	}
+	comp := strings.Repeat("a", 40)
+	for len(dir)+1+len(comp)+1+len("ff") < unix.PathMax {
+		mkdirChdir(comp)
+	}
+	if extra := unix.PathMax - 2 - len(dir) - 1; extra > 0 {
+		mkdirChdir(strings.Repeat("a", extra))
+	}
+	if err := os.WriteFile("ff", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join(strings.Join(parts, "/"), "ff")
+	if joined := filepath.Join(base, rel); len(joined) < unix.PathMax {
+		t.Fatalf("setup: joined path len %d does not reach PathMax %d", len(joined), unix.PathMax)
+	}
+	if len(rel)+1 > unix.PathMax {
+		t.Fatalf("setup: relative operand len %d is not itself resolvable under PathMax %d", len(rel), unix.PathMax)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+
+	// Embedded shape: resolved via the os.Root retry against Dir.
+	for _, op := range []string{"-e", "-f", "-s"} {
+		if _, errb, code := runIn(t, cmd, base, op, rel); code != statusTrue || errb != "" {
+			t.Errorf("embedded: test %s <%d-byte operand> = (%q, %d), want (\"\", 0)", op, len(rel), errb, code)
+		}
+	}
+	if _, errb, code := runIn(t, bracketCmd, base, "-f", rel, "]"); code != statusTrue || errb != "" {
+		t.Errorf("embedded: [ -f <%d-byte operand> ] = (%q, %d), want (\"\", 0)", len(rel), errb, code)
+	}
+
+	// Standalone shape: the process cwd is base (chdir above), declared
+	// via DirIsProcessCwd exactly as multicall.Main does.
+	runNative := func(cmdt *tool.Tool, args ...string) (string, int) {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:             context.Background(),
+			Dir:             base,
+			DirIsProcessCwd: true,
+			FS:              tool.NewLocalFS(),
+			Stdio:           tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		}
+		return errb.String(), cmdt.Run(rc, args)
+	}
+	for _, op := range []string{"-e", "-f", "-s"} {
+		if errb, code := runNative(cmd, op, rel); code != statusTrue || errb != "" {
+			t.Errorf("native: test %s <%d-byte operand> = (%q, %d), want (\"\", 0)", op, len(rel), errb, code)
+		}
+	}
+	if errb, code := runNative(bracketCmd, "-f", rel, "]"); code != statusTrue || errb != "" {
+		t.Errorf("native: [ -f <%d-byte operand> ] = (%q, %d), want (\"\", 0)", len(rel), errb, code)
 	}
 }

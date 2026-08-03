@@ -726,3 +726,39 @@ func TestRunContextHasFS(t *testing.T) {
 		t.Error("FS.SysDrive() is empty")
 	}
 }
+
+// TestPathNativeProcessCwd covers the native-current-directory mode:
+// when the host guarantees Dir is the process working directory
+// (DirIsProcessCwd), a relative operand whose joined absolute form
+// would overrun the platform path-length limit is handed back relative,
+// for the kernel to resolve against the process cwd. Everything under
+// the limit — and every invocation without the guarantee — keeps the
+// joined absolute form.
+func TestPathNativeProcessCwd(t *testing.T) {
+	sep := string(filepath.Separator)
+	// Valid on its own (one byte under the limit), overlong once joined
+	// with anything.
+	deepDir := sep + strings.Repeat("d", pathLengthLimit-1)
+	operand := filepath.Join("sub", "file")
+
+	native := &RunContext{Dir: deepDir, DirIsProcessCwd: true}
+	if got := native.Path(operand); got != operand {
+		t.Errorf("native overlong join: Path(%q) = %q, want the relative operand back", operand, got)
+	}
+
+	embedded := &RunContext{Dir: deepDir}
+	if want := filepath.Join(deepDir, operand); embedded.Path(operand) != want {
+		t.Errorf("embedded host must keep the joined form even overlong: Path(%q) = %q, want %q",
+			operand, embedded.Path(operand), want)
+	}
+
+	shortNative := &RunContext{Dir: sep + "work", DirIsProcessCwd: true}
+	if want := filepath.Join(sep+"work", operand); shortNative.Path(operand) != want {
+		t.Errorf("native under-limit join: Path(%q) = %q, want %q", operand, shortNative.Path(operand), want)
+	}
+
+	abs := sep + filepath.Join("abs", "x")
+	if got := native.Path(abs); got != abs {
+		t.Errorf("absolute operand never consults Dir: Path(%q) = %q", abs, got)
+	}
+}

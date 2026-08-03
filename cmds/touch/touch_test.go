@@ -443,3 +443,21 @@ func TestTouchDateRelativeEndToEnd(t *testing.T) {
 		t.Errorf("mtime=%v, want within a minute of %v", got, want)
 	}
 }
+
+// TestTouchStampPOSIXTZ is the POSIX-TZ half of TZ handling: "PST8" is
+// a pure POSIX expansion (std + offset), not a zoneinfo name, so
+// time.LoadLocation cannot resolve it — yet GNU touch interprets -t in
+// it via tzset. touch must route TZ through tzenv's POSIX handling
+// rather than fall back to UTC (which would land the timestamp exactly
+// eight hours early).
+func TestTouchStampPOSIXTZ(t *testing.T) {
+	dir := t.TempDir()
+	want := time.Date(2026, time.December, 31, 23, 59, 0, 0, time.FixedZone("PST", -8*60*60))
+	_, errb, code := runToolEnv(t, dir, []string{"TZ=PST8"}, "-t", "202612312359", "f")
+	if code != 0 {
+		t.Fatalf("touch -t with TZ=PST8: code=%d err=%q", code, errb)
+	}
+	if got := mtime(t, filepath.Join(dir, "f")); got.Unix() != want.Unix() {
+		t.Errorf("mtime=%v (%d), want %v (%d)", got, got.Unix(), want, want.Unix())
+	}
+}

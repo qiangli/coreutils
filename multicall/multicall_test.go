@@ -3,6 +3,7 @@ package multicall
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -68,5 +69,30 @@ func TestDispatch(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "not a supported command") {
 		t.Fatalf("missing diagnostic: %q", errb.String())
+	}
+}
+
+// TestProcessRunContextNativeCwd pins the standalone process boundary's
+// guarantee: the RunContext Main dispatches against carries the real
+// process working directory AND declares it as such, so RunContext.Path
+// may keep a relative operand relative when the joined absolute string
+// would overrun the platform path-length limit (the GA67 near-PATH_MAX
+// conformance case). An embedded host must never get this flag from a
+// generic constructor — it is set here, at the one place the guarantee
+// actually holds.
+func TestProcessRunContextNativeCwd(t *testing.T) {
+	rc := processRunContext()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Dir != wd {
+		t.Errorf("Dir = %q, want process cwd %q", rc.Dir, wd)
+	}
+	if !rc.DirIsProcessCwd {
+		t.Error("DirIsProcessCwd = false, want true for the standalone process boundary")
+	}
+	if rc.FS == nil {
+		t.Error("FS is nil")
 	}
 }

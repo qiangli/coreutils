@@ -38,6 +38,17 @@ type RunContext struct {
 	FS  *LocalFS // local OS filesystem with path translation; never nil in practice
 	Stdio
 
+	// DirIsProcessCwd is the host's guarantee that Dir IS this process's
+	// working directory for the whole invocation (true for the standalone
+	// multicall binary, which inherits its cwd exactly as a GNU tool
+	// does; false for an embedding shell, whose virtual cwd routinely
+	// differs from the process's). Under that guarantee Path may hand a
+	// relative operand to the OS unjoined when materializing Dir+operand
+	// would overrun the platform's path-length limit: the kernel then
+	// resolves it against the process cwd — the same lookup an execve'd
+	// GNU tool performs, which never builds that string at all.
+	DirIsProcessCwd bool
+
 	// ExitSignal is the process-boundary channel for a command wrapper
 	// (env, timeout, …) that ran a COMMAND which was terminated by a
 	// signal. When non-zero after Run returns, it is that signal's number.
@@ -78,11 +89,26 @@ func (rc *RunContext) Getenv(key string) string {
 // letter) is recognised as drive-relative absolute (matching the
 // behaviour of every Windows API, which treats it as root on the
 // current drive).
+//
+// A valid working directory and a valid relative operand can join into
+// a single string longer than the platform's path-length limit (each
+// was built and is resolvable one component at a time — a shell's cd
+// and a near-PATH_MAX relative pathname are both legitimate), and the
+// OS would reject that materialized string with ENAMETOOLONG even
+// though the file is plainly reachable. When the host has declared
+// DirIsProcessCwd, Path keeps such an operand relative instead, so the
+// kernel resolves it against the process cwd exactly as it would for
+// the GNU binary. Below the limit the joined absolute form is returned
+// as always.
 func (rc *RunContext) Path(operand string) string {
 	if isAbsPath(operand) || rc.Dir == "" {
 		return normalizePath(operand)
 	}
-	return normalizePath(filepath.Join(rc.Dir, operand))
+	joined := normalizePath(filepath.Join(rc.Dir, operand))
+	if rc.DirIsProcessCwd && len(joined) > pathLengthLimit {
+		return normalizePath(operand)
+	}
+	return joined
 }
 
 // ResolveExecutable resolves name as an executable file against the

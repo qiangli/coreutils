@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// pathLengthLimit for Windows is the \\?\ namespace bound (~32767
+// UTF-16 units): the Go runtime rewrites long absolute paths into that
+// namespace itself, so a joined absolute string stays usable far past
+// MAX_PATH and the relative fallback in RunContext.Path is effectively
+// never needed here.
+var pathLengthLimit = 32000
+
 func isAbsPath(p string) bool {
 	if filepath.IsAbs(p) {
 		return true

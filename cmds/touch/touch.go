@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/cmds/internal/tzenv"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -300,35 +301,12 @@ func parseStamp(s string, now time.Time) (time.Time, error) {
 // time values in, from rc.Env rather than the process's own environment —
 // tools must not read os.Environ directly (see tool.RunContext), since an
 // embedding shell's env for one invocation (e.g. a "TZ=... touch ..."
-// prefix) can differ from the host process's. TZ unset defers to the host's
-// default location; TZ set to "" means UTC (matching POSIX); any other
-// value is resolved as a zoneinfo name. An unresolvable non-empty value uses
-// UTC, the same deterministic fallback as an empty TZ.
+// prefix) can differ from the host process's. Resolution is tzenv's full
+// POSIX TZ handling: unset defers to the host's default location, "" means
+// UTC, and both IANA names ("America/New_York") and POSIX expansions
+// ("PST8", "EST5EDT,M3.2.0,M11.1.0") are honored.
 func touchLocation(rc *tool.RunContext) *time.Location {
-	tz, ok := lookupEnv(rc.Env, "TZ")
-	if !ok {
-		return time.Local
-	}
-	if tz == "" {
-		return time.UTC
-	}
-	if loc, err := time.LoadLocation(tz); err == nil {
-		return loc
-	}
-	return time.UTC
-}
-
-// lookupEnv reports whether key is present in an os.Environ-shaped slice,
-// distinguishing "unset" from "set to the empty string" the way rc.Getenv
-// cannot.
-func lookupEnv(env []string, key string) (value string, ok bool) {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		if strings.HasPrefix(env[i], prefix) {
-			return env[i][len(prefix):], true
-		}
-	}
-	return "", false
+	return tzenv.Location(rc.Env)
 }
 
 var errBadDate = errors.New("invalid date format")

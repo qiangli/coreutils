@@ -54,6 +54,28 @@ func Dispatch(rc *tool.RunContext, name string, args []string) int {
 	return t.Run(rc, args)
 }
 
+// processRunContext builds the RunContext the standalone process runs
+// tools against: real stdio, real environment, and the process working
+// directory — declared as such (DirIsProcessCwd) so relative operands
+// whose joined absolute form would overrun the platform path-length
+// limit stay relative and resolve through the kernel's own cwd lookup,
+// exactly as they do for an execve'd GNU tool.
+func processRunContext() *tool.RunContext {
+	dir, _ := os.Getwd()
+	return &tool.RunContext{
+		Ctx:             context.Background(),
+		Dir:             dir,
+		DirIsProcessCwd: true,
+		Env:             os.Environ(),
+		FS:              tool.NewLocalFS(),
+		Stdio: tool.Stdio{
+			In:  os.Stdin,
+			Out: os.Stdout,
+			Err: os.Stderr,
+		},
+	}
+}
+
 // Main is a complete multicall entrypoint: it reads the process argv, env,
 // and cwd, resolves the tool, and exits with its status. selfNames are the
 // front-end binary names under which the first operand is the tool name
@@ -71,18 +93,7 @@ func Main(selfNames ...string) {
 		fmt.Println(strings.Join(tool.Names(), "\n"))
 		return
 	}
-	dir, _ := os.Getwd()
-	rc := &tool.RunContext{
-		Ctx: context.Background(),
-		Dir: dir,
-		Env: os.Environ(),
-		FS:  tool.NewLocalFS(),
-		Stdio: tool.Stdio{
-			In:  os.Stdin,
-			Out: os.Stdout,
-			Err: os.Stderr,
-		},
-	}
+	rc := processRunContext()
 	code := Dispatch(rc, name, args)
 	// Standalone process boundary: if a wrapped COMMAND was killed by a
 	// signal, re-raise it on ourselves so our wait status matches COMMAND's,
