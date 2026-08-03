@@ -79,6 +79,34 @@ const BoardRoom = "board"
 // reconcilable here rather than an error.
 var FleetNames func() []string
 
+// Audience is a selector over the address book. A zero value selects nothing;
+// the caller decides what an empty selection means.
+//
+// Fields are ANDed, so `--band 4 --tool ycode` is "L4 agents on ycode" rather
+// than the union. A union would make a wider blast radius the easier thing to
+// type, and on a board the wider blast radius is the one that turns messages
+// into noise nobody reads.
+type Audience struct {
+	Band     int    // 0 = any
+	Tool     string // "" = any
+	Provider string // "" = any (the model's provider: anthropic, gemini, …)
+	Family   string // "" = any (the model family: opus, sonnet, gemini-flash, …)
+	Version  string // "" = any (the model version: 5, 4.8, 3.6, …)
+}
+
+// Empty reports a selector that names no criterion.
+func (a Audience) Empty() bool {
+	return a.Band == 0 && a.Tool == "" && a.Provider == "" && a.Family == "" && a.Version == ""
+}
+
+// FleetSelect resolves an Audience to agent names, injected by the host for the
+// same reason FleetNames is: pkg/bus is the transport and the roster is policy.
+//
+// `bashy agents list` IS the address book, so a selector has to be answered by
+// the catalog that owns it rather than by a copy kept here — a second opinion
+// about who is L4 is a second opinion that can drift.
+var FleetSelect func(Audience) ([]string, error)
+
 // EnsureSubscription gives subscriber a default inbox if it has none.
 //
 // Returns true when one was created. Idempotent: an existing subscription is

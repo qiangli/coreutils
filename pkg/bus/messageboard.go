@@ -96,16 +96,41 @@ act (see 'bashy bus subscribe --interrupt-from').`,
 // nothing. The moment a read could destroy history it would need a permission
 // model, and a permission model is how a messaging feature stops being one.
 func newMBSendCmd() *cobra.Command {
-	var topic, as string
+	var topic, as, tool, provider, family, version string
+	var band int
 	cmd := &cobra.Command{
-		Use:   "send <agent> <message>...",
-		Short: "post a message to another agent on this host",
-		Long: `send posts a message to another agent.
+		Use:   "send [<agent>] <message>...",
+		Short: "post to one agent, or to everyone matching a selector",
+		Long: `send posts to a named agent, or to every agent a selector matches.
 
   bashy mb send codex-gpt5.6-sol "gate is red on main"
-  bashy agents list                  # who you can post to (the NAME column)`,
-		Args: cobra.MinimumNArgs(2),
+  bashy mb send --band 4 "need an L4 to review the converge gate"
+  bashy mb send --tool ycode "ycode rebuilt — re-probe your bindings"
+  bashy mb send --provider anthropic "anthropic keys rotated"
+  bashy mb send --family opus "opus family: cost_micro was corrected"
+  bashy mb send --family gemini-flash --version 3.6 "3.6 flash is now bound"
+  bashy mb send --band 4 --tool claude "..."      # all criteria ANDed
+
+'bashy agents list' is the address book: a bare name is its NAME column, and the
+selectors read the same catalog, so who is "L4" here and there can never drift.
+
+Selectors are ANDed rather than unioned. A union would make the wider blast
+radius the easier thing to type, and on a shared board the wide one is what
+turns messages into noise nobody reads. For genuinely everyone, say so:
+'bashy mb post'.`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			aud := Audience{
+				Band: band, Tool: strings.TrimSpace(tool),
+				Provider: strings.TrimSpace(provider),
+				Family:   strings.TrimSpace(family), Version: strings.TrimSpace(version),
+			}
+			if !aud.Empty() {
+				return sendToAudience(cmd, aud, resolvePrincipal(as), topic, strings.Join(args, " "))
+			}
+			if len(args) < 2 {
+				return fmt.Errorf("mb send: name an agent, or pass a selector (--band/--tool/--provider)")
+			}
 			to := strings.TrimSpace(args[0])
 			body := strings.Join(args[1:], " ")
 			// NO PRIOR SETUP. Open the recipient's inbox first if it has none:
@@ -134,7 +159,43 @@ func newMBSendCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&topic, "topic", "mb", "topic label for the post")
 	cmd.Flags().StringVar(&as, "as", "", "sender identity (default: your principal)")
+	cmd.Flags().IntVar(&band, "band", 0, "post to every agent at this band (1-4)")
+	cmd.Flags().StringVar(&tool, "tool", "", "post to every agent on this harness (claude, ycode, agy, codex, opencode)")
+	cmd.Flags().StringVar(&provider, "provider", "", "post to every agent whose model has this provider (anthropic, gemini, ...)")
+	cmd.Flags().StringVar(&family, "family", "", "post to every agent in this model family (opus, sonnet, gemini-flash, ...)")
+	cmd.Flags().StringVar(&version, "version", "", "post to every agent on this model version (5, 4.8, 3.6, ...)")
 	return cmd
+}
+
+// sendToAudience posts one message to every agent a selector matches.
+//
+// It reports WHO it reached, by name. A selector that silently matched nothing
+// — a band nobody holds, a misspelled tool — would otherwise print success and
+// deliver to an empty set, which is the failure mode this package spends most
+// of its design avoiding. An empty match is an ERROR here, not a quiet no-op.
+func sendToAudience(cmd *cobra.Command, aud Audience, principal, topic, body string) error {
+	if FleetSelect == nil {
+		return fmt.Errorf("mb send: no agent catalog is wired here, so a selector cannot be resolved")
+	}
+	names, err := FleetSelect(aud)
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("mb send: no agent matches that selector — check `bashy agents list`")
+	}
+	for _, to := range names {
+		if _, eerr := EnsureSubscription(to); eerr != nil {
+			return eerr
+		}
+		if perr := Publish(Notification{
+			Principal: principal, To: to, Topic: topic, Body: body,
+		}); perr != nil {
+			return perr
+		}
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "posted to %d agent(s): %s\n", len(names), strings.Join(names, ", "))
+	return nil
 }
 
 // newMBPostCmd is the BROADCAST half — a public forum post.
