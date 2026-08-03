@@ -229,14 +229,26 @@ func newPendingCmd() *cobra.Command {
 		Long: `pending prints an agent's pre-resolved notifications and clears them.
 
 This is the turn-boundary inject point. The agent does not evaluate
-subscriptions, match topics, check principals or apply rate limits — the sidecar
-did all of that off its critical path, and what arrives here is a short list of
-things already determined to be its business.
+subscriptions, match topics, check principals or apply rate limits — that is
+resolved for it, and what arrives here is a short list of things already
+determined to be its business.
+
+It resolves on read, so it works with NO sidecar running: a message addressed to
+this agent is delivered the next time it looks. A running sidecar only adds
+interrupts, which are the one delivery that cannot wait for the agent to ask.
 
 Use --peek to read without clearing.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			who := resolveSubscriber(as)
+			// Resolve before reading. The sidecar pre-resolves off the critical
+			// path when one is running, and on most hosts none is — so without
+			// this, a message addressed to this agent sits in the timeline
+			// forever and `pending` truthfully reports an empty buffer while the
+			// message exists. Queueing needs no control socket; only an interrupt
+			// does. A resolution failure is not fatal: whatever the sidecar
+			// already buffered is still worth printing.
+			_, _ = ResolveFor(who)
 			items, err := ReadPending(who)
 			if err != nil {
 				return err
