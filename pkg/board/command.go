@@ -100,7 +100,9 @@ func newRoleCommand(role, short string, skill SkillRenderer, sources []Source) *
 
 // NewStewardCommand mounts the steward role: skill + machine-global dashboard.
 func NewStewardCommand(skill SkillRenderer, sources []Source) *cobra.Command {
-	return newRoleCommand("steward", "The steward role: its operating skill and machine-global dashboard", skill, sources)
+	cmd := newRoleCommand("steward", "The steward role: its operating skill, host resources, and machine-global dashboard", skill, sources)
+	cmd.Long = "The host-wide steward role: its operating skill and machine-global dashboard.\n\nResource health is a standing steward duty. Before fanout or large builds, and at long-run checkpoints, inspect disk, memory, CPU/load, utilization, and active containers with `bashy steward dashboard --expand resources,utilization` plus the host's native resource tools. Reclaim derived caches first; never prune shared container stores or stop live work blindly."
+	return cmd
 }
 
 // NewConductorCommand mounts the conductor role: skill + dashboard. Sprint-scoping

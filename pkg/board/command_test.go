@@ -34,6 +34,18 @@ func TestStewardNamespaceKeepsBareAndSkill(t *testing.T) {
 	}
 }
 
+func TestStewardHelpNamesResourceDuty(t *testing.T) {
+	out, err := runCommand(t, "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Resource health is a standing steward duty", "resources,utilization", "never prune shared container stores"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("steward help missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestDashboardFormatsAndOut(t *testing.T) {
 	out, err := runCommand(t, "dashboard", "--json")
 	if err != nil || !strings.Contains(out, `"schema_version": "bashy-board-v1"`) {
