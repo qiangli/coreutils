@@ -77,8 +77,11 @@ type Post struct {
 	// is a statement about the seat, and an agent promoted afterwards should
 	// see it. The opposite is defensible; this is the choice.
 	Audience *Audience `json:"audience,omitempty"`
-	Topic    string    `json:"topic,omitempty"`
-	Body     string    `json:"body"`
+	// Mode says who OF the audience is expected to act: ModeAll (everyone,
+	// views counted) or ModeAny (the first taker claims it). Empty means all.
+	Mode  string `json:"mode,omitempty"`
+	Topic string `json:"topic,omitempty"`
+	Body  string `json:"body"`
 }
 
 // Broadcast reports a post for everyone: no named recipient and no selector.
@@ -118,14 +121,25 @@ func (p Post) Audiences() string {
 
 // ForReader reports whether a post concerns this reader: addressed to it,
 // matching a selector it satisfies, or broadcast.
+//
+// An ModeAny post already CLAIMED by somebody else concerns nobody else — that
+// is the point of offering work to a pool rather than announcing it.
 func (p Post) ForReader(reader string) bool {
 	if p.Directed(reader) || p.Broadcast() {
 		return true
 	}
-	if p.Audience != nil && !p.Audience.Empty() {
-		return InAudience(*p.Audience, reader)
+	if p.Audience == nil || p.Audience.Empty() {
+		return false
 	}
-	return false
+	if !InAudience(*p.Audience, reader) {
+		return false
+	}
+	if p.Mode == ModeAny {
+		if h := ClaimHolder(p.Seq); h != "" && !strings.EqualFold(h, reader) {
+			return false
+		}
+	}
+	return true
 }
 
 // audienceCache memoizes selector resolution for the life of one command, so a
@@ -436,4 +450,126 @@ func SteerLive(agent, text string) Delivery {
 // steer without a live agent on the other end.
 var SteerFrame = func(sock, text string) error {
 	return agentpty.SendFrame(sock, agentpty.TextFrame(text))
+}
+
+// --- delivery modes: who, of a group, is expected to act --------------------
+//
+// A post to a GROUP means one of two different things, and conflating them was
+// the gap. "Any L3 please take this" is work offered to a pool: once somebody
+// takes it, nobody else should. "Every L4 must know this" is an announcement:
+// everybody sees it, and what the sender wants back is confirmation of reach.
+//
+//	ModeAll  every member sees it; each view is counted, so the sender can ask
+//	         "have all eight seen the quota notice?"
+//	ModeAny  the FIRST member to view it CLAIMS it and the rest never see it —
+//	         a work queue, not a message
+//
+// ModeAll is the default for a selector because the failure directions are not
+// symmetric: an announcement wrongly treated as a claim is CONSUMED by the
+// first reader and the other seven never learn it, while a work offer wrongly
+// treated as an announcement merely gets done twice and is visible when it
+// happens. Silent non-delivery is worse than visible duplication.
+const (
+	ModeAll = "all"
+	ModeAny = "any"
+)
+
+func claimPath(seq int64) string {
+	return filepath.Join(BoardDir(), "claims", strconv.FormatInt(seq, 10))
+}
+
+// ClaimPost records the first reader to take an ModeAny post. It returns the
+// holder, which is the caller when the claim was granted and somebody else when
+// it was not.
+//
+// O_EXCL is the whole mechanism: the filesystem decides the winner, so two
+// agents reading the board in the same millisecond cannot both take the work.
+// This is the first shared-mutable state on the board — everything else is
+// per-reader — so it is worth being explicit that the race is handled by the
+// create, not by a lock we would have to get right.
+func ClaimPost(seq int64, reader string) (holder string, granted bool) {
+	p := claimPath(seq)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return "", false
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err == nil {
+		defer f.Close()
+		_, _ = f.WriteString(reader + " " + time.Now().UTC().Format(time.RFC3339) + "\n")
+		return reader, true
+	}
+	b, rerr := os.ReadFile(p)
+	if rerr != nil {
+		return "", false
+	}
+	return strings.Fields(strings.TrimSpace(string(b)))[0], false
+}
+
+// ClaimHolder reports who holds an ModeAny post, or "" when it is unclaimed.
+func ClaimHolder(seq int64) string {
+	b, err := os.ReadFile(claimPath(seq))
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(strings.TrimSpace(string(b)))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func viewsPath(seq int64) string {
+	return filepath.Join(BoardDir(), "views", strconv.FormatInt(seq, 10))
+}
+
+// RecordView notes that a reader has seen an ModeAll post. Idempotent per
+// reader: a second read does not inflate the count, so "5 of 8" means five
+// distinct agents rather than five reads.
+func RecordView(seq int64, reader string) error {
+	seen := Viewers(seq)
+	for _, v := range seen {
+		if strings.EqualFold(v, reader) {
+			return nil
+		}
+	}
+	p := viewsPath(seq)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(reader + "\n")
+	return err
+}
+
+// Viewers lists the distinct readers that have seen a post.
+func Viewers(seq int64) []string {
+	b, err := os.ReadFile(viewsPath(seq))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// AudienceSize is how many agents a selector currently names, for the "seen by
+// N of M" line. Zero when it cannot be resolved — and the caller renders the
+// count alone rather than inventing a denominator.
+func AudienceSize(aud Audience) int {
+	if FleetSelect == nil {
+		return 0
+	}
+	names, err := FleetSelect(aud)
+	if err != nil {
+		return 0
+	}
+	return len(names)
 }

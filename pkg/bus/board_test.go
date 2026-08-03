@@ -197,3 +197,72 @@ func TestBoard_DirectedUncappedOtherCappedWithReportedOverflow(t *testing.T) {
 		t.Fatalf("the cap must keep the NEWEST, last seq = %d", other[len(other)-1].Seq)
 	}
 }
+
+// MODE ANY — work offered to a pool. The first reader claims it and the rest
+// never see it; two agents must not do the same job.
+func TestBoard_AnyModeIsClaimedByTheFirstReader(t *testing.T) {
+	boardInTempHome(t)
+	FleetSelect = func(a Audience) ([]string, error) {
+		return []string{"a1", "a2", "a3"}, nil
+	}
+	t.Cleanup(func() { FleetSelect = nil; audienceCache = map[Audience]map[string]bool{} })
+
+	if err := PostMessage(Post{
+		From: "steward", Audience: &Audience{Band: 3}, Mode: ModeAny, Body: "take P0-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Everyone in the pool sees it while unclaimed.
+	for _, who := range []string{"a1", "a2"} {
+		if _, other, _, _ := Unseen(who, 0); len(other) != 1 {
+			t.Fatalf("%s should see an unclaimed offer", who)
+		}
+	}
+	holder, granted := ClaimPost(1, "a1")
+	if !granted || holder != "a1" {
+		t.Fatalf("first claim must be granted, got %q/%v", holder, granted)
+	}
+	// A second claimant loses and is TOLD who holds it.
+	holder, granted = ClaimPost(1, "a2")
+	if granted || holder != "a1" {
+		t.Fatalf("second claim must lose to a1, got %q/%v", holder, granted)
+	}
+	// And the offer is gone from everyone else's view.
+	if _, other, _, _ := Unseen("a2", 0); len(other) != 0 {
+		t.Fatal("a claimed offer must not be shown to others")
+	}
+	if _, other, _, _ := Unseen("a1", 0); len(other) != 1 {
+		t.Fatal("the holder must still see what it took")
+	}
+}
+
+// MODE ALL — an announcement. Everybody sees it and views are counted, so the
+// sender can ask whether it actually reached the group.
+func TestBoard_AllModeCountsDistinctViewers(t *testing.T) {
+	boardInTempHome(t)
+	FleetSelect = func(a Audience) ([]string, error) { return []string{"a1", "a2", "a3"}, nil }
+	t.Cleanup(func() { FleetSelect = nil; audienceCache = map[Audience]map[string]bool{} })
+
+	if err := PostMessage(Post{
+		From: "steward", Audience: &Audience{Band: 4}, Mode: ModeAll, Body: "quota exhausted",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range []string{"a1", "a2", "a1"} { // a1 twice
+		if err := RecordView(1, who); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(Viewers(1)); got != 2 {
+		t.Fatalf("viewers = %d, want 2 distinct (a re-read must not inflate it)", got)
+	}
+	if n := AudienceSize(Audience{Band: 4}); n != 3 {
+		t.Fatalf("audience size = %d, want 3 for the 'N of M' line", n)
+	}
+	// An announcement is never consumed: every member still sees it.
+	for _, who := range []string{"a1", "a2", "a3"} {
+		if _, other, _, _ := Unseen(who, 0); len(other) != 1 {
+			t.Fatalf("%s must still see an announcement", who)
+		}
+	}
+}

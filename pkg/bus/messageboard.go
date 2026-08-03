@@ -53,7 +53,7 @@ import (
 // Bare `bashy mb` READS, because reading is what an agent does at the start of
 // every turn and the common case should cost the fewest words.
 func NewMessageBoardCmd() *cobra.Command {
-	var jsonOut, peek, all bool
+	var jsonOut, peek, all, seenBy bool
 	var as string
 	var limit int
 	cmd := &cobra.Command{
@@ -95,6 +95,20 @@ running waits on the board and is there when it next looks.`,
 			if err != nil {
 				return err
 			}
+			// RESOLVE THE SIDE EFFECTS BEFORE RENDERING ANY OF THEM.
+			//
+			// Claiming and view-recording used to happen inside the print loop,
+			// which coupled them to stdout surviving: piping `mb` into a command
+			// that exits early SIGPIPEs the render halfway and the claim is lost.
+			// Observed — a failed `grep -A` killed the first reader mid-render
+			// and the SECOND reader then took work the first had been shown. A
+			// state change that depends on a pipe staying open is not one.
+			labels := make(map[int64]string, len(posts))
+			if !all && !peek {
+				for _, p := range posts {
+					labels[p.Seq] = resolveLabel(p, who)
+				}
+			}
 			w := cmd.OutOrStdout()
 			if jsonOut {
 				enc := json.NewEncoder(w)
@@ -108,9 +122,14 @@ running waits on the board and is there when it next looks.`,
 			} else {
 				fmt.Fprintf(w, "## Board — %d post(s) for %s\n\n", len(posts), who)
 				for _, p := range posts {
-					to := p.Audiences()
-					if p.Directed(who) {
-						to = "you"
+					to, ok := labels[p.Seq]
+					if !ok {
+						to = describeFor(p, who)
+					}
+					if seenBy {
+						if v := Viewers(p.Seq); len(v) > 0 {
+							to += " [" + strings.Join(v, ", ") + "]"
+						}
 					}
 					fmt.Fprintf(w, "- [%d] **%s** from `%s` → %s\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
 				}
@@ -135,6 +154,7 @@ running waits on the board and is there when it next looks.`,
 	f.BoolVar(&jsonOut, "json", false, "one JSON object per line")
 	f.BoolVar(&peek, "peek", false, "read without marking anything read")
 	f.BoolVar(&all, "all", false, "the whole board — every post by everyone, read or not")
+	f.BoolVar(&seenBy, "seen-by", false, "name the agents that have read each post — the receipt record, not just a count")
 	f.IntVarP(&limit, "limit", "n", DefaultBoardLimit,
 		"cap posts NOT addressed to you by name (0 = no cap); directed posts are never capped")
 	cmd.AddCommand(newMBSendCmd(), newMBPostCmd())
@@ -153,6 +173,7 @@ running waits on the board and is there when it next looks.`,
 func newMBSendCmd() *cobra.Command {
 	var topic, as, tool, provider, family, version string
 	var band int
+	var any bool
 	cmd := &cobra.Command{
 		Use:   "send [<agent>] <message>...",
 		Short: "post to one agent, or to everyone matching a selector",
@@ -184,8 +205,12 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 				// ONE post carrying the selector — not one per member. See
 				// Post.Audience: expanding made the board grow with the size of
 				// the audience.
+				mode := ModeAll
+				if any {
+					mode = ModeAny
+				}
 				if err := PostMessage(Post{
-					From: from, Audience: &aud, Topic: topic, Body: body,
+					From: from, Audience: &aud, Mode: mode, Topic: topic, Body: body,
 				}); err != nil {
 					return err
 				}
@@ -224,6 +249,8 @@ into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 	f.StringVar(&provider, "provider", "", "post to every agent whose model has this provider")
 	f.StringVar(&family, "family", "", "post to every agent in this model family (opus, sonnet, gemini-flash, ...)")
 	f.StringVar(&version, "version", "", "post to every agent on this model version (5, 4.8, 3.6, ...)")
+	f.BoolVar(&any, "any", false,
+		"offer to ANY ONE of the group: the first to read it claims it and the rest never see it (default: all of them see it, and views are counted)")
 	return cmd
 }
 
@@ -300,4 +327,50 @@ func reportDelivery(cmd *cobra.Command, ds []Delivery) {
 	if len(waiting) > 0 {
 		fmt.Fprintf(w, "  waiting on the board for: %s\n", strings.Join(waiting, ", "))
 	}
+}
+
+// resolveLabel performs a post's read side effects — claiming an offer, or
+// recording a view — and returns how to label it. Called BEFORE any output, so
+// a broken pipe cannot lose the state change.
+func resolveLabel(p Post, who string) string {
+	switch {
+	case p.Directed(who):
+		return "you"
+	case p.Mode == ModeAny:
+		// Reading an offer TAKES it: the claim is what stops two agents doing
+		// the same work, and a separate acknowledge step is one nobody would
+		// remember to run.
+		holder, granted := ClaimPost(p.Seq, who)
+		if granted {
+			return "any of " + p.Audiences() + " — CLAIMED BY YOU"
+		}
+		return "any of " + p.Audiences() + " — already taken by " + holder
+	case p.Audience != nil && !p.Audience.Empty():
+		// The view record IS the receipt: it says WHO read it, not just that
+		// somebody did, so a sender can tell who has actually been reached.
+		_ = RecordView(p.Seq, who)
+		return describeFor(p, who)
+	}
+	return p.Audiences()
+}
+
+// describeFor labels a post WITHOUT side effects, for --all and --peek.
+func describeFor(p Post, who string) string {
+	if p.Directed(who) {
+		return "you"
+	}
+	if p.Audience == nil || p.Audience.Empty() {
+		return p.Audiences()
+	}
+	if p.Mode == ModeAny {
+		if h := ClaimHolder(p.Seq); h != "" {
+			return "any of " + p.Audiences() + " — taken by " + h
+		}
+		return "any of " + p.Audiences() + " — unclaimed"
+	}
+	seen := len(Viewers(p.Seq))
+	if n := AudienceSize(*p.Audience); n > 0 {
+		return fmt.Sprintf("%s (seen by %d of %d)", p.Audiences(), seen, n)
+	}
+	return fmt.Sprintf("%s (seen by %d)", p.Audiences(), seen)
 }

@@ -87,11 +87,11 @@ var FleetNames func() []string
 // type, and on a board the wider blast radius is the one that turns messages
 // into noise nobody reads.
 type Audience struct {
-	Band     int    // 0 = any
-	Tool     string // "" = any
-	Provider string // "" = any (the model's provider: anthropic, gemini, …)
-	Family   string // "" = any (the model family: opus, sonnet, gemini-flash, …)
-	Version  string // "" = any (the model version: 5, 4.8, 3.6, …)
+	Band     int    `json:"band,omitempty"`     // 0 = any
+	Tool     string `json:"tool,omitempty"`     // "" = any
+	Provider string `json:"provider,omitempty"` // "" = any (anthropic, gemini, …)
+	Family   string `json:"family,omitempty"`   // "" = any (opus, sonnet, gemini-flash, …)
+	Version  string `json:"version,omitempty"`  // "" = any (5, 4.8, 3.6, …)
 }
 
 // Empty reports a selector that names no criterion.
