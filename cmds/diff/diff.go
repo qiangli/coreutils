@@ -356,6 +356,15 @@ func comparePair(rc *tool.RunContext, opts *options, pa, pb string) int {
 		fmt.Fprintf(rc.Out, "File %s is %s while file %s is %s\n",
 			pa, kindWord(fa), pb, kindWord(fb))
 		return 1
+	case !fa.Mode().IsRegular() || !fb.Mode().IsRegular():
+		// Directory comparison reports special entries by type.  Do not
+		// open them here: a FIFO without a writer would block forever, and
+		// devices and sockets are not file contents to compare.  Explicit
+		// special-file operands still flow through compareFiles, as POSIX
+		// permits input files of any type.
+		fmt.Fprintf(rc.Out, "File %s is %s while file %s is %s\n",
+			pa, kindWord(fa), pb, kindWord(fb))
+		return 1
 	default:
 		return compareFiles(rc, opts, pa, pb, !opts.brief)
 	}
@@ -390,10 +399,23 @@ func onlyIn(rc *tool.RunContext, opts *options, dir, name, present, absent strin
 }
 
 func kindWord(fi iofs.FileInfo) string {
-	if fi.IsDir() {
+	mode := fi.Mode()
+	switch {
+	case mode.IsDir():
 		return "a directory"
+	case mode.IsRegular():
+		return "a regular file"
+	case mode&os.ModeNamedPipe != 0:
+		return "a named pipe"
+	case mode&os.ModeSocket != 0:
+		return "a socket"
+	case mode&os.ModeDevice != 0 && mode&os.ModeCharDevice != 0:
+		return "a character special file"
+	case mode&os.ModeDevice != 0:
+		return "a block special file"
+	default:
+		return "a special file"
 	}
-	return "a regular file"
 }
 
 func joinDisplay(dir, name string) string {
