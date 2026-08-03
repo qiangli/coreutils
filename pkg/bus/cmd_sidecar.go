@@ -95,18 +95,43 @@ func newUnsubscribeCmd() *cobra.Command {
 }
 
 func newSubscriptionsCmd() *cobra.Command {
-	var jsonOut bool
+	var jsonOut, reconcile bool
 	cmd := &cobra.Command{
 		Use:     "subscriptions",
 		Aliases: []string{"subs"},
 		Short:   "list standing subscriptions",
-		Args:    cobra.NoArgs,
+		Long: "List the standing subscriptions the sidecar holds.\n\n" +
+			"--reconcile opens a default INBOX for every agent in the fleet that lacks\n" +
+			"one. Addressing was opt-in, so on a real host there were none, and a\n" +
+			"notification addressed to an agent matched nothing and reached nobody —\n" +
+			"durable and undelivered. An address book whose entries have no address is\n" +
+			"not an address book.\n\n" +
+			"What it grants is deliberately narrow: the agent's own name as a DM target,\n" +
+			"no topic interest, and NO interrupt rights. Auto-subscribe hands out an\n" +
+			"inbox, never a doorbell — the power to break into a running turn stays\n" +
+			"granted by name. An existing subscription is never overwritten, because an\n" +
+			"operator who tuned it has expressed a policy.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			w := cmd.OutOrStdout()
+			if reconcile {
+				if FleetNames == nil {
+					return fmt.Errorf("bus: no agent catalog is wired here, so the fleet cannot be reconciled")
+				}
+				made, err := ReconcileSubscriptions(FleetNames())
+				if err != nil {
+					return err
+				}
+				if len(made) == 0 {
+					fmt.Fprintln(w, "every agent already has an inbox")
+				} else {
+					fmt.Fprintf(w, "opened %d inbox(es): %s\n", len(made), strings.Join(made, ", "))
+				}
+			}
 			all, err := Subscriptions()
 			if err != nil {
 				return err
 			}
-			w := cmd.OutOrStdout()
 			if jsonOut {
 				enc := json.NewEncoder(w)
 				enc.SetIndent("", "  ")
@@ -132,6 +157,7 @@ func newSubscriptionsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit JSON")
+	cmd.Flags().BoolVar(&reconcile, "reconcile", false, "open a default inbox for every fleet agent that lacks one")
 	return cmd
 }
 
