@@ -1,6 +1,17 @@
 package bus
 
-// `bashy mb` — the MESSAGE BOARD.
+// `bashy mb` — the MESSAGE BOARD: wall + write, with selectable subsets.
+//
+// The shortest accurate description is the classic one. `mb post` is wall,
+// `mb send <agent>` is write, and the addition is that the audience between
+// "one" and "everyone" is selectable — by band, harness, provider, model family
+// or version — which is the grouping a fleet actually needs and neither classic
+// tool had.
+//
+// What it does NOT inherit from those two is the terminal. wall and write push
+// to a tty: ephemeral, logged-in-only, and `write` to a logged-out user is an
+// error. The board is durable and pull-read, which is the only shape that works
+// when the party you need to tell something is not running.
 //
 // This shipped first as `im` + `inbox`, and both names were wrong. What the
 // mechanism actually is, structurally, is a bulletin board:
@@ -30,6 +41,7 @@ package bus
 // something that is neither would cost them permanently.
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -41,60 +53,89 @@ import (
 // Bare `bashy mb` READS, because reading is what an agent does at the start of
 // every turn and the common case should cost the fewest words.
 func NewMessageBoardCmd() *cobra.Command {
+	var jsonOut, peek, all bool
+	var as string
 	cmd := &cobra.Command{
 		Use:     "mb",
 		Aliases: []string{"messages"},
-		Short:   "the host message board: read what was posted to you, post to others",
-		Long: `mb is the host's message board — a shared, append-only board every agent
-on this machine can post to and read from.
+		Short:   "the host message board: read what was posted, post to others",
+		Long: `mb is the host's message board — one shared, append-only board every agent
+and human on this machine posts to and reads from.
 
-  bashy mb                      read what is new for you (marks it read)
-  bashy mb post "..."           post to EVERYONE on the board
+  bashy mb                      what is new for you (marks it read)
+  bashy mb post "..."           post to EVERYONE
   bashy mb send <agent> "..."   post to one agent
-  bashy mb --all                every message you have received, read or not
+  bashy mb --all                the WHOLE board, everyone's posts
   bashy mb --peek               read without marking anything
 
-It is a BOARD, not a mailbox and not a chat. Everything lives in one shared
-append-only spool: nothing is private, nothing is ever deleted, and a message
-arrives when the reader looks rather than being pushed at them. Reading marks
-what you saw, so --all can still answer "what was I told, and when" long after
-the fact.
+PUBLIC BY CONSTRUCTION. Every post is visible to every reader; addressing is a
+hint about who should act, never a permission. Nothing is deleted — reading only
+advances your own cursor — so --all always answers "what was said, and when".
 
-The recipient does not have to be running. A message to an agent that is down
-waits and is delivered the next time it looks.
-
-Posts arrive QUEUED — read at the recipient's next turn boundary, never forced
-into whatever it is doing. Breaking into a running turn is a separate, governed
-act (see 'bashy bus subscribe --interrupt-from').`,
+No setup: there is nothing to subscribe to. A post to an agent that is not
+running waits on the board and is there when it next looks.`,
+		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			who := BoardIdentity(as)
+			var posts []Post
+			var err error
+			if all {
+				posts, err = Posts()
+			} else {
+				posts, err = Unseen(who)
+			}
+			if err != nil {
+				return err
+			}
+			w := cmd.OutOrStdout()
+			if jsonOut {
+				enc := json.NewEncoder(w)
+				for _, p := range posts {
+					if eerr := enc.Encode(p); eerr != nil {
+						return eerr
+					}
+				}
+			} else if len(posts) == 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "nothing new on the board for %s\n", who)
+			} else {
+				fmt.Fprintf(w, "## Board — %d post(s) for %s\n\n", len(posts), who)
+				for _, p := range posts {
+					to := "all"
+					if !p.Broadcast() {
+						to = p.To
+					}
+					fmt.Fprintf(w, "- [%d] **%s** from `%s` to `%s`\n  %s\n\n", p.Seq, p.Topic, p.From, to, p.Body)
+				}
+			}
+			// Advance the cursor only AFTER the posts have been written out,
+			// and never on --peek or --all: a read that fails halfway must not
+			// consume what it did not show.
+			if peek || all || len(posts) == 0 {
+				return nil
+			}
+			return MarkSeen(who, posts[len(posts)-1].Seq)
+		},
 	}
+	f := cmd.Flags()
+	f.StringVar(&as, "as", "", "read as this identity (default: resolved from your principal)")
+	f.BoolVar(&jsonOut, "json", false, "one JSON object per line")
+	f.BoolVar(&peek, "peek", false, "read without marking anything read")
+	f.BoolVar(&all, "all", false, "the whole board — every post by everyone, read or not")
+	cmd.AddCommand(newMBSendCmd(), newMBPostCmd())
 	cmd.CompletionOptions.DisableDefaultCmd = true
-
-	read := newPendingCmd()
-	read.Use = "read [flags]"
-	read.Short = "read what was posted to you"
-	cmd.AddCommand(read, newMBSendCmd(), newMBPostCmd())
-
-	// Bare `bashy mb` reads. The read flags are mirrored onto the parent so
-	// `mb --all` works without having to learn a subcommand first.
-	cmd.Flags().AddFlagSet(read.Flags())
-	cmd.RunE = read.RunE
-	cmd.Args = cobra.NoArgs
 	return cmd
 }
 
-// newMBSendCmd is the post half.
+// newMBSendCmd posts to one agent, or to everyone a selector matches.
 //
-// `bus publish --to X --topic t "msg"` was already the mechanism and was spelled
-// for the TRANSPORT: three flags and a noun a reader has to understand before
-// they can say anything. Posting to a colleague should cost one line.
-//
-// No authorization, deliberately. Any agent on the host may post to any other
-// and read any board view, and reading marks rather than deletes — so the worst
-// a bad actor can do is mark something read, which changes a STATUS and destroys
-// nothing. The moment a read could destroy history it would need a permission
-// model, and a permission model is how a messaging feature stops being one.
+// No authorization, deliberately. Any agent may post to any other and read any
+// view: the board is public, addressing is a hint about who should act, and
+// reading only advances your own cursor. Nothing a reader can do destroys
+// content, which is what keeps this simple enough to be used — the moment a
+// read could destroy history it would need a permission model, and a permission
+// model is how a messaging feature stops being one.
 func newMBSendCmd() *cobra.Command {
 	var topic, as, tool, provider, family, version string
 	var band int
@@ -109,15 +150,13 @@ func newMBSendCmd() *cobra.Command {
   bashy mb send --provider anthropic "anthropic keys rotated"
   bashy mb send --family opus "opus family: cost_micro was corrected"
   bashy mb send --family gemini-flash --version 3.6 "3.6 flash is now bound"
-  bashy mb send --band 4 --tool claude "..."      # all criteria ANDed
 
 'bashy agents list' is the address book: a bare name is its NAME column, and the
 selectors read the same catalog, so who is "L4" here and there can never drift.
 
-Selectors are ANDed rather than unioned. A union would make the wider blast
-radius the easier thing to type, and on a shared board the wide one is what
-turns messages into noise nobody reads. For genuinely everyone, say so:
-'bashy mb post'.`,
+Selectors are ANDed, not unioned. A union would make the wider blast radius the
+easier thing to type, and on a shared board the wide one is what turns messages
+into noise nobody reads. For genuinely everyone: 'bashy mb post'.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			aud := Audience{
@@ -126,30 +165,14 @@ turns messages into noise nobody reads. For genuinely everyone, say so:
 				Family:   strings.TrimSpace(family), Version: strings.TrimSpace(version),
 			}
 			if !aud.Empty() {
-				return sendToAudience(cmd, aud, resolvePrincipal(as), topic, strings.Join(args, " "))
+				return sendToAudience(cmd, aud, BoardIdentity(as), topic, strings.Join(args, " "))
 			}
 			if len(args) < 2 {
-				return fmt.Errorf("mb send: name an agent, or pass a selector (--band/--tool/--provider)")
+				return fmt.Errorf("mb send: name an agent, or pass a selector (--band/--tool/--provider/--family/--version)")
 			}
 			to := strings.TrimSpace(args[0])
-			body := strings.Join(args[1:], " ")
-			// NO PRIOR SETUP. Open the recipient's inbox first if it has none:
-			// Matches needs a stored subscription, so without this a post to a
-			// name outside the fleet catalog reports "posted" and reaches
-			// nobody — the exit-0 lie this package exists to remove.
-			//
-			// BEFORE Publish, and the order is the whole point: a new inbox
-			// opens at the current timeline head, so it must be created before
-			// the post is appended or the post lands at or below its own
-			// cursor and is never delivered.
-			if _, eerr := EnsureSubscription(to); eerr != nil {
-				return eerr
-			}
-			// The principal is REQUIRED — Publish refuses without one (the
-			// report/author invariant) — so a post's origin is never a guess
-			// and never blank.
-			if err := Publish(Notification{
-				Principal: resolvePrincipal(as), To: to, Topic: topic, Body: body,
+			if err := PostMessage(Post{
+				From: BoardIdentity(as), To: to, Topic: topic, Body: strings.Join(args[1:], " "),
 			}); err != nil {
 				return err
 			}
@@ -157,13 +180,14 @@ turns messages into noise nobody reads. For genuinely everyone, say so:
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&topic, "topic", "mb", "topic label for the post")
-	cmd.Flags().StringVar(&as, "as", "", "sender identity (default: your principal)")
-	cmd.Flags().IntVar(&band, "band", 0, "post to every agent at this band (1-4)")
-	cmd.Flags().StringVar(&tool, "tool", "", "post to every agent on this harness (claude, ycode, agy, codex, opencode)")
-	cmd.Flags().StringVar(&provider, "provider", "", "post to every agent whose model has this provider (anthropic, gemini, ...)")
-	cmd.Flags().StringVar(&family, "family", "", "post to every agent in this model family (opus, sonnet, gemini-flash, ...)")
-	cmd.Flags().StringVar(&version, "version", "", "post to every agent on this model version (5, 4.8, 3.6, ...)")
+	f := cmd.Flags()
+	f.StringVar(&topic, "topic", "mb", "topic label for the post")
+	f.StringVar(&as, "as", "", "sender identity (default: resolved from your principal)")
+	f.IntVar(&band, "band", 0, "post to every agent at this band (1-4)")
+	f.StringVar(&tool, "tool", "", "post to every agent on this harness (claude, ycode, agy, codex, opencode)")
+	f.StringVar(&provider, "provider", "", "post to every agent whose model has this provider")
+	f.StringVar(&family, "family", "", "post to every agent in this model family (opus, sonnet, gemini-flash, ...)")
+	f.StringVar(&version, "version", "", "post to every agent on this model version (5, 4.8, 3.6, ...)")
 	return cmd
 }
 
@@ -185,12 +209,7 @@ func sendToAudience(cmd *cobra.Command, aud Audience, principal, topic, body str
 		return fmt.Errorf("mb send: no agent matches that selector — check `bashy agents list`")
 	}
 	for _, to := range names {
-		if _, eerr := EnsureSubscription(to); eerr != nil {
-			return eerr
-		}
-		if perr := Publish(Notification{
-			Principal: principal, To: to, Topic: topic, Body: body,
-		}); perr != nil {
+		if perr := PostMessage(Post{From: principal, To: to, Topic: topic, Body: body}); perr != nil {
 			return perr
 		}
 	}
@@ -220,11 +239,8 @@ Use 'mb send <agent>' when exactly one agent needs to act. A broadcast everybody
 must read is how a board becomes noise nobody reads.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := Publish(Notification{
-				Principal: resolvePrincipal(as),
-				Room:      BoardRoom,
-				Topic:     topic,
-				Body:      strings.Join(args, " "),
+			if err := PostMessage(Post{
+				From: BoardIdentity(as), Topic: topic, Body: strings.Join(args, " "),
 			}); err != nil {
 				return err
 			}
