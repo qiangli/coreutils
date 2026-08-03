@@ -3,8 +3,10 @@
 package multicall
 
 import (
+	"bufio"
 	"debug/elf"
 	"encoding/binary"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -71,16 +73,9 @@ func loadOriginalSignals() {
 	if f.Type != elf.ET_EXEC {
 		return
 	}
-	syms, err := f.Symbols()
-	if err != nil {
+	address, size, ok := lookupSymtabSymbol(f, "runtime.fwdSig")
+	if !ok {
 		return
-	}
-	var address, size uint64
-	for _, sym := range syms {
-		if sym.Name == "runtime.fwdSig" {
-			address, size = sym.Value, sym.Size
-			break
-		}
 	}
 	wordSize := strconv.IntSize / 8
 	need := uint64(linuxNSIG * wordSize)
@@ -105,4 +100,73 @@ func loadOriginalSignals() {
 		}
 	}
 	originalSignals.ok = true
+}
+
+// lookupSymtabSymbol resolves a single symbol's virtual address and size from
+// the executable's .symtab without materializing every elf.Symbol. debug/elf's
+// File.Symbols reads the whole table, allocating a Go string and a Symbol
+// struct per entry (tens of thousands for this binary) via a reflection-based
+// binary.Read — the dominant cost on every standalone-utility startup. Here the
+// string table is loaded once and the symbol entries are streamed through a
+// bounded buffer with direct field decoding, so lookup allocates a constant
+// amount regardless of table size and stops as soon as the name matches.
+func lookupSymtabSymbol(f *elf.File, name string) (address, size uint64, ok bool) {
+	symtab := f.SectionByType(elf.SHT_SYMTAB)
+	if symtab == nil || symtab.Type == elf.SHT_NOBITS {
+		return 0, 0, false
+	}
+	if int(symtab.Link) >= len(f.Sections) {
+		return 0, 0, false
+	}
+	strtab, err := f.Sections[symtab.Link].Data()
+	if err != nil {
+		return 0, 0, false
+	}
+	// Elf{64,32}_Sym field offsets: the name index is first in both; Value and
+	// Size follow the name on 64-bit and precede Info on 32-bit.
+	var entSize, valueOff, sizeOff int
+	switch f.Class {
+	case elf.ELFCLASS64:
+		entSize, valueOff, sizeOff = 24, 8, 16
+	case elf.ELFCLASS32:
+		entSize, valueOff, sizeOff = 16, 4, 8
+	default:
+		return 0, 0, false
+	}
+	r := bufio.NewReaderSize(symtab.Open(), 1<<16)
+	buf := make([]byte, entSize)
+	target := []byte(name)
+	for {
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return 0, 0, false
+		}
+		nameOff := f.ByteOrder.Uint32(buf[0:4])
+		if nameOff == 0 || !symbolNameMatches(strtab, nameOff, target) {
+			continue
+		}
+		if f.Class == elf.ELFCLASS64 {
+			address = f.ByteOrder.Uint64(buf[valueOff : valueOff+8])
+			size = f.ByteOrder.Uint64(buf[sizeOff : sizeOff+8])
+		} else {
+			address = uint64(f.ByteOrder.Uint32(buf[valueOff : valueOff+4]))
+			size = uint64(f.ByteOrder.Uint32(buf[sizeOff : sizeOff+4]))
+		}
+		return address, size, true
+	}
+}
+
+// symbolNameMatches reports whether the NUL-terminated string at off in strtab
+// equals target, comparing bytes in place without allocating a Go string.
+func symbolNameMatches(strtab []byte, off uint32, target []byte) bool {
+	start := int(off)
+	end := start + len(target)
+	if start < 0 || end >= len(strtab) {
+		return false
+	}
+	for i := range target {
+		if strtab[start+i] != target[i] {
+			return false
+		}
+	}
+	return strtab[end] == 0
 }
