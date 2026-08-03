@@ -97,3 +97,23 @@ func TestOnFailureSilentWhenDisabled(t *testing.T) {
 		t.Fatalf("expected no output when disabled, got %q", buf.String())
 	}
 }
+
+// The tty-messaging family is deliberately unimplemented, so an agent that
+// reaches for it must be told where the working equivalent is rather than just
+// getting "command not found".
+func TestSuggestFailure_TtyMessagingPointsAtTheBoard(t *testing.T) {
+	for _, name := range []string{"wall", "write", "mesg", "talk"} {
+		got := SuggestFailure([]string{name, "someone", "hi"})
+		if got == "" {
+			t.Errorf("%s: no hint; an unimplemented tool must name its replacement", name)
+			continue
+		}
+		if !strings.Contains(got, "bashy mb") {
+			t.Errorf("%s: hint does not point at the board: %s", name, got)
+		}
+	}
+	// A tool that IS implemented must not be annotated.
+	if got := SuggestFailure([]string{"ls", "-l"}); got != "" {
+		t.Errorf("ls must not be hinted: %s", got)
+	}
+}

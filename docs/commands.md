@@ -208,6 +208,37 @@ NO (↻ = revisit):
 
 - man (interactive pager)
 
+**Terminal messaging — superseded by `bashy mb`:**
+
+- wall, write, mesg, talk
+
+  These write to a TERMINAL. The message is ephemeral, it reaches only a
+  party who is logged in *right now*, and `write` to a logged-out user is an
+  outright error. That is the one case an agent userland most needs to serve
+  and these cannot: an agent is usually not "logged in" at the moment you
+  need to tell it something.
+
+  `bashy mb` is the replacement and a strict superset for this purpose — a
+  durable append-only board with per-reader cursors, so a message to an agent
+  that is *not running* waits and is delivered when it next looks, and
+  `mb --all` still answers "what was I told, and when" afterwards.
+  `mb post` is wall; `mb send <agent>` is write; `bus subscribe
+  --interrupt-from` is mesg (it governs who may break into a running turn).
+  Invoking any of the four emits a hint naming the replacement
+  (`pkg/nudge`, `SuggestFailure`).
+
+  **POSIX status, recorded because it is the question that will be asked
+  again:** `write`, `mesg` and `talk` *are* POSIX XCU utilities, but under
+  the optional **User Portability Utilities (UP)** group — required only of
+  an implementation that claims that option. `wall` is not POSIX at all.
+  Neither affects bashy's certification: `bashy/docs/conformance-statement.md`
+  scopes bashy's claim to the **`sh` utility and its builtins**, and places
+  the ~160 standalone utilities on coreutils' own track. So these become
+  required only if coreutils elects to claim UP — a scope decision, not an
+  obligation. Verify against the VSC-PCTS utility list before acting on this
+  paragraph; it is an accurate reading of the standard, not a run of the
+  suite.
+
 **System administration (in u-root's tree, out of scope for an agent
 userland — outpost/ycode own these concerns):**
 

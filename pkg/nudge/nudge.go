@@ -70,6 +70,17 @@ func SuggestFailure(args []string) string {
 		if hasBSDInPlace(args[1:]) {
 			return "GNU sed takes -i with no argument; BSD's `-i ''` is just `-i`"
 		}
+	case "wall", "write", "mesg", "talk":
+		// The classic tty-messaging family, deliberately unimplemented — see
+		// docs/commands.md's NO list. They write to a TERMINAL, so they reach
+		// only a logged-in party and leave nothing behind; `write` to a
+		// logged-out user is an outright error. Agents are usually not "logged
+		// in" at the moment you need to tell them something, which is the case
+		// these tools cannot serve and `bashy mb` exists for.
+		return "not implemented: " + args[0] + " writes to a TERMINAL, so it reaches only a " +
+			"logged-in party and stores nothing. Use `bashy mb` — a durable board: " +
+			"`bashy mb post \"...\"` broadcasts (wall), `bashy mb send <agent> \"...\"` " +
+			"messages one (write), and it reaches an agent that is not running"
 	}
 	return ""
 }
