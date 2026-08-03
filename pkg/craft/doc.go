@@ -40,6 +40,43 @@
 // disjoint outcome records does not need another one; what it needed was a
 // reader, because the receipts were being written and never read back.
 //
+// # Three content addresses, and what each one is FOR
+//
+// A composed skill has no authoritative file — it is assembled at query time
+// and anything on disk is a cache. That is what makes it living, and it is also
+// what would make it unauditable if nothing addressed the result. Three hashes
+// do, and they answer three different questions:
+//
+//	Identity        the IMPLEMENTATION — canonical bytes. Dedups.
+//	CapabilityKey   the PROMISE — contract + effect cap, with name and steps
+//	                projected away, so two skills making one guarantee are
+//	                alternatives rather than rivals at selection time.
+//	Stamp           the RENDERING — identity, capability, band, coordinate,
+//	                graph version, entity, and every fact and fold applied.
+//	                Facts are HASHED, never carried: the stamp must separate
+//	                compositions that saw different facts without becoming a
+//	                channel for the values themselves.
+//
+// # The stamp addresses the bytes; the rev addresses the READ
+//
+// The stamp sees what a composition APPLIED. It cannot see what the composition
+// did not read — a fold at another coordinate, a fact about another entity, a
+// skill absorbed an hour ago, an attestation since accumulated. So two
+// byte-identical compositions can come from materially different stores, and
+// "which store produced this" is exactly the question asked when a gate verdict
+// lands later and is attributed back to a rendering.
+//
+// GraphVersion closes that (see rev.go). It is taken BEFORE any store is read,
+// so it names the state the composition was derived against rather than the
+// state the process ended at. Its two properties are load-bearing: sizes rather
+// than record counts, because counting would read every attest ledger on the
+// prompt-assembly path; and UNKNOWN IS NOT ZERO, because a store we could not
+// read must never be reported as a store with nothing in it.
+//
+// Verification routes for all of the above — the command that proves each
+// claim — are tabulated in
+// dhnt/docs/self-improving-loop-and-composition-provenance.md §3.
+//
 // # It reports; it does not decide
 //
 // Contribution rates are computed and displayed. Nothing is retired,
