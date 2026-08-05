@@ -12,6 +12,7 @@ package steward
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -59,6 +60,40 @@ func loadSeatContact() (*role.Contact, error) {
 	}
 	return &c, nil
 }
+
+// SeatContact is the room the seat is currently reachable on, or nil when none
+// is open. Exported for the host: `bashy steward start` has to say where a
+// background steward can be contacted, and `stop` has to close the same room it
+// found — guessing at either would advertise a channel nobody reads.
+func SeatContact() (*role.Contact, error) { return loadSeatContact() }
+
+// EnsureRoom opens the seat's room if it is not already open, returning the same
+// one-line report assumeSeatRoom does (empty when there is nothing to say).
+//
+// It is EnsureRoom rather than OpenRoom because a steward session may be started
+// against a seat that is already held — a restart, a takeover, a supervisor that
+// came back — and opening a SECOND room for one seat is worse than opening none:
+// two live addresses for a singular responsibility, with no way for a caller to
+// know which one is read.
+func EnsureRoom(holder string) string {
+	if c, err := loadSeatContact(); err == nil && c != nil {
+		return fmt.Sprintf("  already reachable at %s\n", c.String())
+	}
+	return assumeSeatRoom(holder)
+}
+
+// AssumeRoom and ReleaseRoom expose the seat's room lifecycle to the host, which
+// owns the start/stop verbs but must not reimplement where the contact is stored.
+func AssumeRoom(holder string) string  { return assumeSeatRoom(holder) }
+func ReleaseRoom(holder string) string { return releaseSeatRoom(holder) }
+
+// HolderName is the acting steward as a room participant — the name a human
+// recognises, rendered from the canonical principal ref.
+func HolderName() string { return seatHolderName() }
+
+// Assignment is this host's steward seat as a role assignment. Its Topic() is
+// the bus address anything can reach the seat on, whether or not a room is open.
+func Assignment() role.Assignment { return stewardAssignment() }
 
 func clearSeatContact() error {
 	p, err := seatContactPath()

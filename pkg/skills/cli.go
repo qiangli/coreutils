@@ -67,6 +67,10 @@ func NewSkillsCmd(opts ...Option) *cobra.Command {
 		SilenceUsage:  true,
 		RunE:          func(cmd *cobra.Command, args []string) error { return runList(cmd, cfg, false, false) },
 	}
+	// Mounted under `bashy`, so cobra's generated `completion` verb documents a
+	// `skills` binary that does not exist — and it is the one entry in an
+	// agent-facing listing that is not something the verb can do.
+	root.CompletionOptions.DisableDefaultCmd = true
 
 	var all, asJSON bool
 	list := &cobra.Command{

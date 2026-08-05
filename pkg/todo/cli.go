@@ -122,6 +122,9 @@ func NewTodoCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	// Mounted under `bashy`, so cobra's generated `completion` verb documents a
+	// `todo` binary that does not exist.
+	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().StringVar(&owner, "owner", DefaultOwner, "personal-list owner (steward | a fixer id | a human name)")
 	root.PersistentFlags().BoolVar(&forceRepo, "repo", false, "force THIS repo's committed list (docs/todo/); error if not in a git repo")
 	root.PersistentFlags().BoolVar(&forceUser, "user", false, "force your personal host list (~/.bashy/todo/<owner>/), even inside a repo")

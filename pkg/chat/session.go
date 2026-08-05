@@ -126,6 +126,20 @@ type SessionOptions struct {
 	// text.
 	AllowPremium bool
 
+	// AllowUnsafe keeps the agent CLI's approval-gate kill-switches, accepting
+	// the uncontained-host risk — the session equivalent of `bashy chat --yolo`.
+	//
+	// It exists for the case Interact already had a flag for and Session did
+	// not: a session nobody sits at, supervised REMOTELY through steer. With the
+	// tool's own approval gate on and no terminal to answer it, such a session
+	// does not fail — it STALLS, silently, looking alive. That is the worse
+	// outcome, and the operator needs to be able to choose the other one.
+	//
+	// It is NOT implied by !Attended. An unattended session is the normal case
+	// (foreman, meet, coach) and none of those wants this; the risk has to be
+	// accepted explicitly or not at all.
+	AllowUnsafe bool
+
 	// Mode labels this instance on its host-room card (foreman | meet | coach | …).
 	// Empty defaults to "session". It is how `bashy chat sessions` shows WHAT a
 	// member is doing, not just that it exists.
@@ -145,7 +159,11 @@ func (o SessionOptions) launchOptions() Options {
 		// ReadOnly is stricter and wins — same precedence as Interact.
 		Attended:     o.Attended && !o.ReadOnly,
 		AllowPremium: o.AllowPremium,
-		Steer:        true, // the interactive launch, never the one-shot
+		// ReadOnly wins here too: it removes the dangerous flags rather than
+		// asking to keep them, so "read-only and unsafe" is not a state that
+		// should be reachable by setting two fields.
+		AllowUnsafe: o.AllowUnsafe && !o.ReadOnly,
+		Steer:       true, // the interactive launch, never the one-shot
 	}
 }
 

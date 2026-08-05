@@ -138,6 +138,10 @@ tree, and captures no diff.`,
   bashy steward takeover --grant g-…`,
 		SilenceUsage: true,
 	}
+	// See the note in pkg/board's newRoleCommand: this tree is mounted under
+	// `bashy`, so cobra's generated `completion` verb documents a binary that
+	// does not exist.
+	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().StringVar(&o.dir, "dir", "",
 		"steward store (default $BASHY_STEWARD_DIR, else ~/.bashy/steward/<host>-<user>-<id>)")
 	cmd.PersistentFlags().BoolVar(&o.asJSON, "json", false, "emit machine-readable JSON")

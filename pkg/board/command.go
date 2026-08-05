@@ -91,6 +91,15 @@ func newRoleCommand(role, short string, skill SkillRenderer, sources []Source) *
 		Use: role, Short: short,
 		Args: cobra.NoArgs, RunE: renderSkill, SilenceUsage: true, SilenceErrors: true,
 	}
+	// NO `completion` IN A ROLE NAMESPACE.
+	//
+	// cobra adds a shell-completion generator to whatever command is Execute()d,
+	// and a role namespace is mounted as a subcommand tree of `bashy` — so the
+	// generator it offers ("source <(steward completion bash)") is for a binary
+	// called `steward` that does not exist. bashy owns its own completion, and an
+	// agent reading `bashy steward --help` to learn what a steward can DO should
+	// not have to work out that one of the listed verbs is scaffolding.
+	root.CompletionOptions.DisableDefaultCmd = true
 	root.AddCommand(
 		&cobra.Command{Use: "skill", Short: "Print the existing " + role + " operating skill", Args: cobra.NoArgs, RunE: renderSkill},
 		NewDashboardCommand(sources),
