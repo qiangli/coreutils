@@ -12,6 +12,7 @@ package graphcmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/craft"
 	"github.com/qiangli/coreutils/pkg/execlog"
+	"github.com/qiangli/coreutils/pkg/kb"
 	"github.com/qiangli/coreutils/pkg/spacegraph"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/tool"
@@ -40,6 +42,163 @@ func init() {
 		"graph space [--kind host|endpoint|account|repo|path|net] [--json]", runSpace)
 	addSub("reached", "which endpoints this host has reached, as whom, and when",
 		"graph reached [--json]", runReached)
+	addSub("learn", "turn observed failures into kb candidate pages (the durable claim)",
+		"graph learn [--dry-run] [--json]", runLearn)
+	addSub("evidence", "resolve a kb page's evidence pointer back to the raw records",
+		"graph evidence <exec://...> [--json]", runEvidence)
+}
+
+// ---------------------------------------------------------------------------
+// promote / evidence — the pipe from the stream to the store of record
+// ---------------------------------------------------------------------------
+
+// runLearn writes what the corpus supports into kb, as CANDIDATES.
+//
+// Named `learn` rather than `promote` on purpose. `kb promote` already means
+// something specific and different — moving a page from candidate to validated,
+// which requires evidence and human judgement. Two commands called promote,
+// doing two different rungs of the same ladder, is a footgun in a surface an
+// agent drives. `learn` also matches `skills learn`, which absorbs what an
+// invocation taught in exactly the same sense.
+//
+// kb is the entry point: the page holds the claim, and an address that indexes
+// back into the stream rather than a copy of it. This verb is the only thing
+// that makes an observation durable — before it, `graph pitfalls` recomputed on
+// every read and nothing was ever written down.
+func runLearn(rc *tool.RunContext, args []string) int {
+	asJSON := weavecli.IsAgent()
+	dry := false
+	for _, a := range args {
+		switch {
+		case a == "--json" || a == "--json=true":
+			asJSON = true
+		case a == "--json=false" || a == "--plain":
+			asJSON = false
+		case a == "--dry-run" || a == "-n":
+			dry = true
+		case strings.HasPrefix(a, "-") && a != "-":
+			return usageErr(rc, "graph learn", "unknown option "+a)
+		}
+	}
+
+	root := execStoreRoot()
+	if dry {
+		pitfalls, cov, err := execlog.Promote(root, execlog.PromoteDefaults())
+		if err != nil {
+			fmt.Fprintf(rc.Err, "graph learn: %v\n", err)
+			return 1
+		}
+		cov.Recording = recordingOn()
+		if asJSON {
+			if pitfalls == nil {
+				pitfalls = []execlog.Pitfall{}
+			}
+			return emitJSON(rc, map[string]any{
+				"schema": historySchema, "would_promote": pitfalls, "coverage": cov,
+			})
+		}
+		for _, p := range pitfalls {
+			fmt.Fprintln(rc.Out, formatPitfall(p))
+		}
+		if len(pitfalls) == 0 {
+			fmt.Fprintln(rc.Err, "nothing meets the bar yet")
+		}
+		fmt.Fprintln(rc.Err, formatCoverage(cov))
+		return 0
+	}
+
+	store := kb.Open(kb.DefaultDir())
+	res, err := execlog.PromoteToKB(root, store, execlog.PromoteDefaults())
+	if err != nil {
+		fmt.Fprintf(rc.Err, "graph learn: %v\n", err)
+		return 1
+	}
+	res.Recording = recordingOn()
+
+	if asJSON {
+		return emitJSON(rc, map[string]any{"schema": historySchema, "result": res})
+	}
+	for _, s := range res.Written {
+		fmt.Fprintf(rc.Out, "wrote    %s\n", s)
+	}
+	for _, s := range res.Updated {
+		fmt.Fprintf(rc.Out, "updated  %s\n", s)
+	}
+	for _, s := range res.Skipped {
+		// Not silent. A skip means a human took the page over, and a pipe that
+		// swallowed that would look identical to one that had nothing to do.
+		fmt.Fprintf(rc.Out, "skipped  %s (no longer a candidate — someone owns it)\n", s)
+	}
+	if len(res.Written)+len(res.Updated)+len(res.Skipped) == 0 {
+		fmt.Fprintln(rc.Err, "nothing meets the bar yet")
+	}
+	fmt.Fprintln(rc.Err, formatCoverage(res.Coverage))
+	return 0
+}
+
+// runEvidence resolves an address back to the records behind a claim.
+//
+// This is the drill-down that makes the pointer real: a page cites an address,
+// and this is how you check it. When the records have aged out it says so —
+// the claim survives its evidence, and a reader is entitled to know when it has.
+func runEvidence(rc *tool.RunContext, args []string) int {
+	asJSON := weavecli.IsAgent()
+	var refStr string
+	for _, a := range args {
+		switch {
+		case a == "--json" || a == "--json=true":
+			asJSON = true
+		case a == "--json=false" || a == "--plain":
+			asJSON = false
+		case strings.HasPrefix(a, "-") && a != "-":
+			return usageErr(rc, "graph evidence", "unknown option "+a)
+		default:
+			if refStr == "" {
+				refStr = a
+			}
+		}
+	}
+	if refStr == "" {
+		return usageErr(rc, "graph evidence", "usage: graph evidence <exec://...>")
+	}
+
+	ref, err := execlog.ParseEvidence(refStr)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "graph evidence: %v\n", err)
+		return 2
+	}
+
+	recs, cov, err := ref.Resolve(execStoreRoot())
+	cov.Recording = recordingOn()
+	if err != nil {
+		if errors.Is(err, execlog.ErrPruned) {
+			// Exit 0: this is not a malfunction. The stream has a retention
+			// policy, the claim outlived it, and saying so IS the answer.
+			if asJSON {
+				return emitJSON(rc, map[string]any{
+					"schema": historySchema, "ref": refStr,
+					"pruned": true, "coverage": cov,
+				})
+			}
+			fmt.Fprintf(rc.Out, "evidence pruned — the claim stands, its records do not\n  %s\n", refStr)
+			fmt.Fprintln(rc.Err, formatCoverage(cov))
+			return 0
+		}
+		fmt.Fprintf(rc.Err, "graph evidence: %v\n", err)
+		return 1
+	}
+
+	if asJSON {
+		return emitJSON(rc, map[string]any{
+			"schema": historySchema, "ref": refStr,
+			"records": recs, "coverage": cov,
+		})
+	}
+	for _, r := range recs {
+		fmt.Fprintln(rc.Out, formatRecord(r))
+	}
+	fmt.Fprintln(rc.Err, formatCoverage(cov))
+	return 0
 }
 
 // ---------------------------------------------------------------------------

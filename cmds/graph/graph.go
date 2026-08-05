@@ -84,11 +84,11 @@ func init() {
 
 	tool.Register(&tool.Tool{
 		Name:     "graph",
-		Synopsis: "knowledge graph: code + agentic wiki + execution (subcommands: build stats neighbors impact path hotspots query · note link observe forget recall notes pitfalls · history space reached)",
+		Synopsis: "knowledge graph: code + agentic wiki + execution (subcommands: build stats neighbors impact path hotspots query · note link observe forget recall notes pitfalls · history space reached learn evidence)",
 		Usage: "graph <subcommand> [args]\n\n" +
 			"code graph:    build stats neighbors impact path hotspots query\n" +
 			"agentic wiki:  note link observe forget recall notes pitfalls\n" +
-			"execution:     history space reached\n\n" +
+			"execution:     history space reached learn evidence\n\n" +
 			"Run `graph help` for one-line synopses, or `graph <sub> ...`.",
 		Run: runGraph,
 	})
@@ -126,7 +126,7 @@ var helpSections = []struct {
 }{
 	{"code graph", []string{"build", "stats", "neighbors", "impact", "path", "hotspots", "query"}},
 	{"agentic wiki", []string{"note", "link", "observe", "forget", "recall", "notes", "pitfalls"}},
-	{"execution", []string{"history", "space", "reached"}},
+	{"execution", []string{"history", "space", "reached", "learn", "evidence"}},
 }
 
 func printGraphHelp(rc *tool.RunContext) {
