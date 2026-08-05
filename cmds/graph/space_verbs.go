@@ -54,12 +54,12 @@ func init() {
 
 // runLearn writes what the corpus supports into kb, as CANDIDATES.
 //
-// Named `learn` rather than `promote` on purpose. `kb promote` already means
-// something specific and different — moving a page from candidate to validated,
-// which requires evidence and human judgement. Two commands called promote,
-// doing two different rungs of the same ladder, is a footgun in a surface an
-// agent drives. `learn` also matches `skills learn`, which absorbs what an
-// invocation taught in exactly the same sense.
+// Named `learn` rather than `promote` on purpose. The other rung of this ladder
+// — moving a page from candidate to validated, which requires evidence and human
+// judgement — is `kb validate`, and its help text calls that act "promote". Two
+// verbs both meaning promote, doing two different rungs of the same ladder, is a
+// footgun in a surface an agent drives. `learn` also matches `skills learn`,
+// which absorbs what an invocation taught in exactly the same sense.
 //
 // kb is the entry point: the page holds the claim, and an address that indexes
 // back into the stream rather than a copy of it. This verb is the only thing

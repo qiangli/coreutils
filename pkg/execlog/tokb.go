@@ -44,7 +44,7 @@ type PromoteResult struct {
 // Two properties matter more than the mechanics:
 //
 //  1. Every page is written as a CANDIDATE. Promotion is a candidate generator,
-//     never an author. kb already has the ladder — `kb promote` requires evidence
+//     never an author. kb already has the ladder — `kb validate` requires evidence
 //     to move a page to validated — and a recorder able to mint validated
 //     knowledge would be the confabulation vector with a store attached.
 //  2. It is idempotent by construction. The slug is derived from the command
@@ -216,7 +216,7 @@ func body(pf Pitfall, ref EvidenceRef) string {
 
 	b.WriteString("## Status\n\n")
 	b.WriteString("Written by the execution recorder as a **candidate**. ")
-	b.WriteString("It was counted, not judged. Validate it with `bashy kb promote` ")
+	b.WriteString("It was counted, not judged. Validate it with `bashy kb validate` ")
 	b.WriteString("once you have confirmed the cause, or supersede it with the fix.\n")
 
 	// Machine-readable, so a later pass can tell whether two templates collided
