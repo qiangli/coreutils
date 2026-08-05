@@ -45,7 +45,7 @@ func runInheritedSignalHelper(mode string) {
 			os.Exit(2)
 		}
 		_ = syscall.Kill(os.Getpid(), syscall.SIGTTIN)
-		os.Exit(3)
+		os.Exit(0)
 	case "ttin_ignored":
 		if err := syscall.Setpgid(0, 0); err != nil {
 			os.Exit(2)
@@ -69,6 +69,9 @@ func TestPreserveDefaultTerminalStop(t *testing.T) {
 	}
 	pid := cmd.Process.Pid
 	defer func() {
+		if pid <= 0 {
+			return
+		}
 		_ = syscall.Kill(pid, syscall.SIGCONT)
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 		var ws syscall.WaitStatus
@@ -84,6 +87,17 @@ func TestPreserveDefaultTerminalStop(t *testing.T) {
 		if got == pid {
 			if !ws.Stopped() || ws.StopSignal() != syscall.SIGTTIN {
 				t.Fatalf("child status = %v, want stopped by SIGTTIN", ws)
+			}
+			if err := syscall.Kill(pid, syscall.SIGCONT); err != nil {
+				t.Fatal(err)
+			}
+			var exit syscall.WaitStatus
+			if got, err := syscall.Wait4(pid, &exit, 0, nil); err != nil || got != pid {
+				t.Fatalf("wait after SIGCONT: pid=%d err=%v", got, err)
+			}
+			pid = -1
+			if !exit.Exited() || exit.ExitStatus() != 0 {
+				t.Fatalf("child after SIGCONT = %v, want clean exit", exit)
 			}
 			return
 		}
