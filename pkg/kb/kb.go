@@ -203,7 +203,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 			}
 
 			if jsonOut {
-				return writeSearchJSON(out, hits, fed, rep)
+				return writeSearchJSON(out, hits, fed, rep, jsonResolution(brief, full), terms)
 			}
 			if empty {
 				fmt.Fprint(out, rep.Text())
@@ -248,16 +248,48 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 	return cmd
 }
 
+// searchHitJSON is one hit on the MACHINE path. Which fields are populated is
+// governed by the Resolution ladder, exactly as on the text path — see
+// jsonResolution. Everything below Slug/Title/Score/Why is omitempty precisely
+// so a leaner resolution is leaner on the wire and not just in intent.
 type searchHitJSON struct {
 	Slug        string   `json:"slug"`
-	Type        string   `json:"type"`
-	Status      string   `json:"status"`
+	Type        string   `json:"type,omitempty"`
+	Status      string   `json:"status,omitempty"`
 	Title       string   `json:"title"`
-	Description string   `json:"description"`
+	Description string   `json:"description,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Evidence    string   `json:"evidence,omitempty"`
 	Body        string   `json:"body,omitempty"`
 	Score       float64  `json:"score"`
+	// Why explains the match: the fields that carried a query term, strongest
+	// first, then coverage. Always present — a ranking a third party cannot
+	// interrogate is one it cannot debug, and it cannot read our source.
+	Why []string `json:"why,omitempty"`
+}
+
+// jsonResolution maps the output flags onto the resolution ladder for the
+// machine path.
+//
+// It exists because --json ignored the ladder entirely: writeSearchJSON emitted
+// the whole body at every resolution, so one live-store query measured 5,316
+// bytes under --brief, the default AND --full alike — byte-identical, the flags
+// inert — against 653 for the text default and 304 for text --brief. The
+// surface an agent parses was 8.1x the surface a human reads, on the
+// search-before-every-task call this store's own help text prescribes.
+//
+// --brief wins over --full when both are given: asking for the leanest and the
+// fullest at once is a contradiction, and the lean answer is the safe one to
+// resolve it to.
+func jsonResolution(brief, full bool) Resolution {
+	switch {
+	case brief:
+		return ResCue
+	case full:
+		return ResFull
+	default:
+		return ResLine
+	}
 }
 
 type termReportJSON struct {
@@ -277,7 +309,7 @@ type searchReportJSON struct {
 	Vocab    []string         `json:"vocab,omitempty"`
 }
 
-func writeSearchJSON(w io.Writer, hits []Hit, fed []FedHit, rep *Report) error {
+func writeSearchJSON(w io.Writer, hits []Hit, fed []FedHit, rep *Report, res Resolution, terms []string) error {
 	payload := struct {
 		Pages     []searchHitJSON   `json:"pages"`
 		Federated []FedHit          `json:"federated,omitempty"`
@@ -297,11 +329,25 @@ func writeSearchJSON(w io.Writer, hits []Hit, fed []FedHit, rep *Report) error {
 	}
 	for _, h := range hits {
 		p := h.Page
-		payload.Pages = append(payload.Pages, searchHitJSON{
-			Slug: p.Slug, Type: p.Type, Status: p.Status, Title: p.Title,
-			Description: p.Description, Tags: p.Tags, Evidence: p.Evidence,
-			Body: p.Body, Score: h.Score,
-		})
+		// ResCue is the ADDRESS: enough to decide whether to open a page, not
+		// enough to decide whether it applies. Same contract as render.go.
+		hit := searchHitJSON{
+			Slug: p.Slug, Title: p.Title, Score: h.Score,
+			Why: MatchedFields(p, terms),
+		}
+		if res >= ResLine {
+			hit.Type, hit.Status = p.Type, p.Status
+			hit.Description, hit.Tags, hit.Evidence = p.Description, p.Tags, p.Evidence
+		}
+		if res == ResFull {
+			// Capped, with the same "…" marker the text path uses, so a reader
+			// can tell a short body from a clipped one. A caller that wants the
+			// whole page asks for the whole page: kb show <slug>.
+			if body := strings.TrimSpace(p.Body); body != "" {
+				hit.Body = truncateRunes(strings.ReplaceAll(body, "\n", " "), DefaultBodyCap)
+			}
+		}
+		payload.Pages = append(payload.Pages, hit)
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -666,8 +712,12 @@ func newListCmd(dir *string) *cobra.Command {
 				return err
 			}
 			if jsonOut {
-				// list has no query, so there is nothing to explain.
-				return writeSearchJSON(c.OutOrStdout(), toHits(pages), nil, nil)
+				// list has no query, so there is nothing to explain (no why).
+				// ResLine matches this verb's own contract — "one line each",
+				// which is what the text path below renders. It previously
+				// emitted every page's full body, so `list --json` on a real
+				// store was the single largest payload kb could produce.
+				return writeSearchJSON(c.OutOrStdout(), toHits(pages), nil, nil, ResLine, nil)
 			}
 			for _, p := range pages {
 				fmt.Fprint(c.OutOrStdout(), LineRenderer().Page(p))

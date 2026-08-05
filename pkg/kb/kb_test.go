@@ -228,18 +228,75 @@ func mustList(t *testing.T, dir string) []*Page {
 	return pages
 }
 
+// TestSearchJSONIsTokenLean pins the RESOLUTION LADDER on the machine path.
+//
+// The previous version of this test asserted only that one hit came back with
+// the expected slug — on a fixture page with NO BODY, so it could not have
+// observed the bug it was named for. --json emitted the whole body at every
+// resolution: one live-store query measured 5,316 bytes under --brief, the
+// default and --full alike, against 653 for the text default. A test named for
+// leanness that cannot fail when leanness breaks is worse than no test, because
+// it is read as coverage.
+//
+// So the fixture body is deliberately long, and the assertions are ORDERING
+// assertions on real byte counts, not on shape.
 func TestSearchJSONIsTokenLean(t *testing.T) {
 	dir := t.TempDir()
-	mustRun(t, dir, "add", "--title", "json check", "--description", "WHEN asserting json output")
-	out := mustRun(t, dir, "search", "--json", "json")
+	body := strings.Repeat("this sentence is here only to make the body long. ", 40) // ~2 KB
+	mustRun(t, dir, "add", "--title", "json check", "--description",
+		"WHEN asserting json output", "--tags", "json", "--body", body)
+
+	cue := mustRun(t, dir, "search", "--json", "--brief", "json")
+	line := mustRun(t, dir, "search", "--json", "json")
+	full := mustRun(t, dir, "search", "--json", "--full", "json")
+
+	// The ladder must be strictly increasing. Equality is the actual bug.
+	if !(len(cue) < len(line) && len(line) < len(full)) {
+		t.Fatalf("resolution ladder not strictly increasing on --json: cue=%d line=%d full=%d",
+			len(cue), len(line), len(full))
+	}
+	// Even --full is bounded: the body is capped, never echoed whole.
+	if len(full) >= len(body) {
+		t.Fatalf("--json --full (%d B) is not bounded below the raw body (%d B)", len(full), len(body))
+	}
+
 	var payload struct {
 		Pages []searchHitJSON `json:"pages"`
 	}
-	if err := json.Unmarshal([]byte(out), &payload); err != nil {
-		t.Fatalf("bad json: %v\n%s", err, out)
+	if err := json.Unmarshal([]byte(line), &payload); err != nil {
+		t.Fatalf("bad json: %v\n%s", err, line)
 	}
 	if len(payload.Pages) != 1 || payload.Pages[0].Slug != "json-check" {
 		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if payload.Pages[0].Body != "" {
+		t.Fatalf("default resolution must carry no body, got %d B", len(payload.Pages[0].Body))
+	}
+	// Every hit explains itself — the contract recall already holds itself to.
+	if len(payload.Pages[0].Why) == 0 {
+		t.Fatal("hit carries no why")
+	}
+
+	// Cue is the address only: no description, no body.
+	var cuePayload struct {
+		Pages []searchHitJSON `json:"pages"`
+	}
+	if err := json.Unmarshal([]byte(cue), &cuePayload); err != nil {
+		t.Fatalf("bad cue json: %v\n%s", err, cue)
+	}
+	if p := cuePayload.Pages[0]; p.Description != "" || p.Body != "" || p.Slug == "" {
+		t.Fatalf("cue resolution is not address-only: %+v", p)
+	}
+
+	// And --full's body carries the clipped marker rather than the whole thing.
+	var fullPayload struct {
+		Pages []searchHitJSON `json:"pages"`
+	}
+	if err := json.Unmarshal([]byte(full), &fullPayload); err != nil {
+		t.Fatalf("bad full json: %v\n%s", err, full)
+	}
+	if b := fullPayload.Pages[0].Body; b == "" || !strings.HasSuffix(b, "…") {
+		t.Fatalf("--full body should be present and clipped with the marker, got %q", b)
 	}
 }
 

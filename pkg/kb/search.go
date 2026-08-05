@@ -314,6 +314,58 @@ func pageTokens(p *Page) []string {
 	return out
 }
 
+// MatchedFields reports WHICH fields of a page carry a query term, plus the
+// coverage fraction — the per-hit explanation `recall` treats as contract
+// ("a ranking nobody can interrogate is one nobody can debug",
+// dhnt/docs/bashy-recall-spec.md §3) and that `kb search --json` had no
+// equivalent of.
+//
+// It re-tokenizes each field separately rather than reusing pageTokens, whose
+// bag is deliberately flattened and weighted for scoring and so cannot say
+// where a term came from. Nothing here feeds back into a score — Search is
+// untouched.
+//
+// Scope, stated because it is easy to over-read: this explains the MATCH, not
+// the ORDER. Two hits with identical field lists can still score far apart,
+// because BM25 weights by term rarity and field repetition and the status
+// ladder multiplies on top. "Why did this match" is answerable cheaply and is
+// what a caller needs to judge relevance; "why did this outrank that" needs the
+// scoring terms themselves, which is --explain's job, not this one's.
+//
+// Order is the field-weight order, so the first entry is the strongest reason.
+func MatchedFields(p *Page, terms []string) []string {
+	if p == nil || len(terms) == 0 {
+		return nil
+	}
+	fields := []struct {
+		name string
+		text string
+	}{
+		{"title", p.Title},
+		{"description", p.Description},
+		{"tags", strings.Join(p.Tags, " ")},
+		{"slug", strings.ReplaceAll(p.Slug, "-", " ")},
+		{"type", p.Type},
+		{"body", p.Body},
+	}
+	hit := map[string]bool{}
+	var why []string
+	for _, f := range fields {
+		bag := map[string]bool{}
+		for _, tok := range tokenize(f.text) {
+			bag[tok] = true
+		}
+		for _, t := range terms {
+			if bag[t] {
+				why = append(why, f.name)
+				hit[t] = true
+				break
+			}
+		}
+	}
+	return append(why, fmt.Sprintf("coverage %d/%d", len(hit), len(terms)))
+}
+
 // tokenize splits on non-alphanumeric runs, lowercases, drops tokens shorter
 // than 3 runes, and drops stopwords. The stopword list exists because a
 // natural-language query ("how do I stop a stuck process") is mostly words
