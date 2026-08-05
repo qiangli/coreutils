@@ -43,7 +43,9 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	if st == nil || st.ID == "" {
 		return nil, fmt.Errorf("role: meet returned no room")
 	}
-	return &role.Contact{Kind: "meet", Ref: st.ID, Room: st.Room, Topic: a.Topic()}, nil
+	// Record the convener: only the organizer may close a meet room, so a
+	// successor has to be able to tell whether this one is closable by it.
+	return &role.Contact{Kind: "meet", Ref: st.ID, Room: st.Room, Topic: a.Topic(), Holder: holder}, nil
 }
 
 // Release closes a role's room on a graceful handoff.

@@ -76,10 +76,26 @@ func SeatContact() (*role.Contact, error) { return loadSeatContact() }
 // two live addresses for a singular responsibility, with no way for a caller to
 // know which one is read.
 func EnsureRoom(holder string) string {
-	if c, err := loadSeatContact(); err == nil && c != nil {
-		return fmt.Sprintf("  already reachable at %s\n", c.String())
+	c, err := loadSeatContact()
+	if err != nil || c == nil {
+		return assumeSeatRoom(holder)
 	}
-	return assumeSeatRoom(holder)
+	// REUSE ONLY A ROOM THIS HOLDER CAN ALSO CLOSE.
+	//
+	// meet lets any member post but only the ORGANIZER change the roster, so a
+	// room convened by a previous steward cannot be closed by this one. Reusing
+	// it looked like the tidy thing — one seat, one room — and produced the
+	// worst outcome available: `steward stop` reported "room could not be
+	// closed", and the host went on advertising a live channel to a seat nobody
+	// held. An abandoned room is more damaging than an absent one, because it
+	// costs the time of whoever trusts it.
+	//
+	// A live run caught this the first time a second steward started against a
+	// room a previous one had opened.
+	if c.Holder != "" && c.Holder != holder {
+		return assumeSeatRoom(holder)
+	}
+	return fmt.Sprintf("  already reachable at %s\n", c.String())
 }
 
 // AssumeRoom and ReleaseRoom expose the seat's room lifecycle to the host, which

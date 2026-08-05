@@ -106,6 +106,15 @@ type Contact struct {
 	// resolves against it.
 	Room  int    `json:"room,omitempty"`
 	Topic string `json:"topic,omitempty"`
+	// Holder is who CONVENED this room, and it is recorded because meet lets any
+	// member post but only the ORGANIZER change the roster.
+	//
+	// Without it, a successor that inherited a predecessor's saved contact would
+	// happily reuse the room and then be unable to close it on release — leaving
+	// a live channel addressed to a seat nobody holds, which is worse than no
+	// channel at all because it still looks answerable. Empty means the contact
+	// predates this field; treat it as reusable, since that is what it was.
+	Holder string `json:"holder,omitempty"`
 }
 
 // RefID is the room identity, or empty when there is no contact.
