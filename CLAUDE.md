@@ -267,6 +267,27 @@ fallthrough. Note the list evolves: several early "NO ↻ revisit" entries
 have since shipped — trust docs/commands.md + `cmds/all/all.go` over any
 older skip list.
 
+**Known defect — `env` breaks the never-a-silent-fallthrough rule (found
+2026-08-05).** `env` correctly and loudly refuses to RUN a COMMAND (needs-exec,
+NO list). But its option parsing does **not stop at the first operand** the way
+POSIX/GNU `env` does, so it consumes the *command's* flags as its own:
+
+```
+env FOO=1 ls -l            -> env: unknown shorthand flag: 'l' in -l     (loud, fine)
+env FOO=1 bashy --version  -> env (qiangli/coreutils) dev                (SILENT WRONG ANSWER)
+```
+
+The second is the serious one: `--version`/`--help` are recognised by `env`, so
+it answers about *itself* while appearing to answer about the command. That is
+exactly the "recognized-but-NO names get a clear error … never a silent
+fallthrough" invariant, inverted. Fix: stop option parsing at the first
+non-option operand, then report the needs-exec refusal naming the command.
+Until then, do not use `env VAR=x <cmd> <flags>` in scripts or tests on a bashy
+shell — it will either error confusingly or answer the wrong question. (It cost
+a false bug report during the execlog work: `env -u X bashy -c '…'` never ran
+bashy at all, and with stderr redirected that was indistinguishable from the
+recorder failing to write.)
+
 ## AgentOS hub
 
 Beyond the GNU userland, coreutils is the shared **AgentOS tool hub**: one
@@ -284,7 +305,16 @@ registry, three consumption surfaces, imported by bashy/ycode/outpost.
   implementation serves every host: `pkg/treesitter` (AST symbols/search,
   gotreesitter, no cgo), `pkg/repomap` (token-budgeted file→symbol map),
   `pkg/codegraph` (gfy-backed graph — only its importer pulls gfy's
-  document-parsing deps; the bare binary stays free of them), and
+  document-parsing deps; the bare binary stays free of them),
+  `pkg/execlog` + `pkg/spacegraph` (the execution planes — the agentic
+  replacement for the interactive-only `history` builtin: every dispatched
+  command in order, and the host/endpoint/account entity graph learned from
+  it. `execlog` is a STREAM and `spacegraph` a VIEW; **kb is the store of
+  record**, and `execlog.PromoteToKB` is the one-way pipe that turns a
+  counted observation into a candidate page. The dependency direction is
+  load-bearing: a stream may import kb, kb must never import a stream, or
+  adding a feeder means editing the store of record. See
+  `../docs/knowledge-substrate-reconciliation.md`), and
   `pkg/weave` + `pkg/weavecli` (the filesystem-based multi-agent workspace
   orchestrator — pure-filesystem, depends only on weavecli/cobra/pty, no
   Gitea/loom; `NewWeaveCmd()` is the host-agnostic entry point), and
