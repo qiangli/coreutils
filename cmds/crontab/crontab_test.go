@@ -58,12 +58,16 @@ func TestCrontabInstallListRemove(t *testing.T) {
 	setupCronState(t)
 	cronContent := "*/15 * * * * echo hello\n0 9 * * * date\n"
 
-	_, _, code := runCron(t, context.Background(), cronContent, "-")
+	// POSIX crontab is silent on success: stdout must be empty.
+	out, _, code := runCron(t, context.Background(), cronContent, "-")
 	if code != 0 {
 		t.Fatalf("crontab - (install from stdin): code=%d", code)
 	}
+	if out != "" {
+		t.Errorf("stdout must be empty on successful install, got %q", out)
+	}
 
-	out, _, code := runCronNoStdin(t, context.Background(), "-l")
+	out, _, code = runCronNoStdin(t, context.Background(), "-l")
 	if code != 0 {
 		t.Fatalf("crontab -l: code=%d", code)
 	}
@@ -210,5 +214,38 @@ func TestCrontabStdinReplace(t *testing.T) {
 	}
 	if !strings.Contains(out, "echo from stdin") {
 		t.Errorf("expected 'echo from stdin', got %q", out)
+	}
+}
+
+// TestCrontabInstallSilent proves POSIX crontab is silent on success:
+// neither stdin-replace, file-install, nor reinstall produce any stdout.
+func TestCrontabInstallSilent(t *testing.T) {
+	setupCronState(t)
+
+	// stdin replace (crontab -)
+	out, _, code := runCron(t, context.Background(), "0 9 * * * echo one\n", "-")
+	if code != 0 {
+		t.Fatalf("crontab -: code=%d", code)
+	}
+	if out != "" {
+		t.Errorf("crontab - stdout must be empty, got %q", out)
+	}
+
+	// stdin replace (no operands, reads stdin)
+	out, _, code = runCron(t, context.Background(), "0 9 * * * echo two\n")
+	if code != 0 {
+		t.Fatalf("crontab (stdin): code=%d", code)
+	}
+	if out != "" {
+		t.Errorf("crontab (stdin) stdout must be empty, got %q", out)
+	}
+
+	// reinstall (replacement) also silent
+	out, _, code = runCron(t, context.Background(), "30 18 * * * echo three\n", "-")
+	if code != 0 {
+		t.Fatalf("crontab reinstall: code=%d", code)
+	}
+	if out != "" {
+		t.Errorf("crontab reinstall stdout must be empty, got %q", out)
 	}
 }

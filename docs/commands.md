@@ -187,6 +187,26 @@ Phase A via prior art.
 Remaining: ps (agent-useful, large cross-platform surface); file
 (magic detection).
 
+### at / batch / crontab — execution requires the schedule daemon
+
+`at`, `batch`, and `crontab` submit/install jobs into the persistent
+`pkg/schedule` JSON store. Their submission, listing, removal, and output
+channels (the job diagnostic on stderr in the traditional
+`Mon Jan _2 15:04:05 2006` format; crontab silent on success) are
+POSIX-conformant. Firing due jobs, however, is the responsibility of the
+schedule daemon (`schedule daemon` / `schedule tick` / `schedule run`) —
+exactly as system `atd`/`crond` fire jobs submitted by system
+`at`/`crontab`. In a standalone coreutils invocation the daemon is not
+auto-started, so persisted jobs remain pending until the daemon runs.
+
+TODO (execution semantics): full POSIX `at`/`batch`/`crontab` execution
+requires either (a) auto-starting `schedule daemon` from the submit path
+or (b) host cron-service integration. Additionally, `batch` currently
+stores its command as a whitespace-split argv rather than a shell program
+(`sh -c …`) as `at` does; that must be aligned before batch jobs fire
+correctly under the daemon. These are deliberate follow-ups, not
+approximated here.
+
 ## NO — not supported (clear error, by reason)
 
 **Requires executing other programs.** The no-shell-out rule bars a

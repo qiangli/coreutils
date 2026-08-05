@@ -81,6 +81,15 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
-	fmt.Fprintf(rc.Out, "job %s at %s\n", id, when.Format(time.RFC3339))
+	// POSIX at/batch write the job confirmation to stderr (never stdout)
+	// in the traditional "Mon Jan _2 15:04:05 2006" format — the same shape
+	// cmds/at uses.
+	fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatJobTime(when))
 	return 0
+}
+
+// formatJobTime renders the time in the traditional at/batch format,
+// matching cmds/at.formatJobTime.
+func formatJobTime(t time.Time) string {
+	return t.Format("Mon Jan _2 15:04:05 2006")
 }

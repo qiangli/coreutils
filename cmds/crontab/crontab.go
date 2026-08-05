@@ -218,9 +218,8 @@ func installCronLines(rc *tool.RunContext, content string) int {
 		return 1
 	}
 
-	if len(newJobs) > 0 {
-		fmt.Fprintf(rc.Out, "installed %d cron job(s)\n", len(newJobs))
-	}
+	// POSIX crontab is silent on successful install/replacement — no
+	// confirmation message on stdout.
 	return 0
 }
 
