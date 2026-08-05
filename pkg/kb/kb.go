@@ -134,7 +134,7 @@ func newSearchCmd(dir *string) *cobra.Command {
 		k              int
 		all, jsonOut   bool
 		full, federate bool
-		brief          bool
+		brief, why     bool
 		minCov         float64
 		useWeight      float64
 		retireAfter    time.Duration
@@ -191,12 +191,27 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 				}
 			}
 			out := c.OutOrStdout()
-			if jsonOut {
-				return writeSearchJSON(out, hits, fed)
+
+			// An empty answer explains itself: which terms no page uses, and
+			// what vocabulary this corpus does speak. The caller reformulates
+			// from that instead of guessing what the silence meant.
+			empty := len(hits) == 0 && len(fed) == 0
+			var rep *Report
+			if empty || why {
+				r := Diagnose(pages, q)
+				rep = &r
 			}
-			if len(hits) == 0 && len(fed) == 0 {
+
+			if jsonOut {
+				return writeSearchJSON(out, hits, fed, rep)
+			}
+			if empty {
+				fmt.Fprint(out, rep.Text())
 				fmt.Fprintln(out, "no matching kb pages — if this task teaches something durable, contribute one: bashy kb add")
 				return nil
+			}
+			if rep != nil {
+				fmt.Fprint(out, rep.Text())
 			}
 			res := ResLine
 			if brief {
@@ -229,6 +244,7 @@ campaign memory (~/.bashy/weave/...). No terms lists everything (use
 	cmd.Flags().DurationVar(&retireAfter, "retire-unopened-after", 0, "hide pages older than this that have never been opened (0 = never retire); a retrieval filter, nothing is deleted")
 	cmd.Flags().Float64Var(&useWeight, "use-weight", 0, "weight the ACT-R base-level term (recency x frequency of opens); 0 = rank purely on the query")
 	cmd.Flags().Float64Var(&minCov, "min-coverage", 0, "return NOTHING unless a page matches at least this fraction of the query terms (0 = always answer)")
+	cmd.Flags().BoolVar(&why, "why", false, "also explain the search: which query terms the corpus carries, and where (always shown when nothing matches)")
 	return cmd
 }
 
@@ -244,11 +260,41 @@ type searchHitJSON struct {
 	Score       float64  `json:"score"`
 }
 
-func writeSearchJSON(w io.Writer, hits []Hit, fed []FedHit) error {
+type termReportJSON struct {
+	Term     string   `json:"term"`
+	Pages    int      `json:"pages"`
+	CuePages int      `json:"cue_pages"`
+	Near     []string `json:"near,omitempty"`
+}
+
+// searchReportJSON is the machine-readable half of an empty answer. An agent
+// consuming --json gets the same explanation a human gets, so it can reformulate
+// without parsing prose.
+type searchReportJSON struct {
+	Total    int              `json:"total"`
+	Eligible int              `json:"eligible"`
+	Terms    []termReportJSON `json:"terms"`
+	Vocab    []string         `json:"vocab,omitempty"`
+}
+
+func writeSearchJSON(w io.Writer, hits []Hit, fed []FedHit, rep *Report) error {
 	payload := struct {
-		Pages     []searchHitJSON `json:"pages"`
-		Federated []FedHit        `json:"federated,omitempty"`
+		Pages     []searchHitJSON   `json:"pages"`
+		Federated []FedHit          `json:"federated,omitempty"`
+		Report    *searchReportJSON `json:"report,omitempty"`
 	}{Pages: []searchHitJSON{}, Federated: fed}
+	if rep != nil {
+		r := &searchReportJSON{
+			Total: rep.Total, Eligible: rep.Eligible,
+			Terms: []termReportJSON{}, Vocab: rep.Vocab,
+		}
+		for _, t := range rep.Terms {
+			r.Terms = append(r.Terms, termReportJSON{
+				Term: t.Term, Pages: t.Pages, CuePages: t.CuePages, Near: t.Near,
+			})
+		}
+		payload.Report = r
+	}
 	for _, h := range hits {
 		p := h.Page
 		payload.Pages = append(payload.Pages, searchHitJSON{
@@ -620,7 +666,8 @@ func newListCmd(dir *string) *cobra.Command {
 				return err
 			}
 			if jsonOut {
-				return writeSearchJSON(c.OutOrStdout(), toHits(pages), nil)
+				// list has no query, so there is nothing to explain.
+				return writeSearchJSON(c.OutOrStdout(), toHits(pages), nil, nil)
 			}
 			for _, p := range pages {
 				fmt.Fprint(c.OutOrStdout(), LineRenderer().Page(p))

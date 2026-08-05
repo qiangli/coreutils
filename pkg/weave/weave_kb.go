@@ -37,18 +37,31 @@ func weaveInjectKBFile(dir, workspace string, it *weaveItem) error {
 	if err != nil {
 		return err
 	}
+	q := kb.Query{
+		Terms: kb.Terms(it.Title),
+		Repo:  weaveRepoNameFromQueueDir(dir),
+		OS:    runtime.GOOS,
+	}
 	var hits []kb.Hit
 	if len(pages) > 0 {
-		hits = kb.Search(pages, kb.Query{
-			Terms: kb.Terms(it.Title),
-			Repo:  weaveRepoNameFromQueueDir(dir),
-			OS:    runtime.GOOS,
-		})
+		hits = kb.Search(pages, q)
 	}
 	var b strings.Builder
 	b.WriteString("# KB — host knowledge base (shared by all agents on this host, across repos)\n\n")
 	if len(hits) == 0 {
-		b.WriteString("No existing kb pages match this issue. If the work teaches something durable, contribute it when you finish:\n")
+		// "Nothing matched" is not the same as "nothing is here", and the
+		// worker cannot tell the difference from a bare sentence. The search
+		// ran on the issue TITLE alone, so a miss is as likely to be the
+		// query's wording as the corpus's silence — the report says which,
+		// and hands over the vocabulary to re-ask with.
+		if len(pages) > 0 {
+			b.WriteString("This search used the issue title only, and nothing matched:\n\n```\n")
+			b.WriteString(kb.Diagnose(pages, q).Text())
+			b.WriteString("```\n\nRe-ask in the kb's own words before assuming it is empty: `bashy kb search <query>`.\n")
+			b.WriteString("If the work still teaches something durable, contribute it when you finish:\n")
+		} else {
+			b.WriteString("The host kb is empty. If the work teaches something durable, contribute it when you finish:\n")
+		}
 	} else {
 		b.WriteString("Check these before you start — they may save you a failed approach:\n\n")
 		b.WriteString(kb.Renderer{

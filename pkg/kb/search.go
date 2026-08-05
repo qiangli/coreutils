@@ -142,22 +142,7 @@ func Search(pages []*Page, q Query) []Hit {
 	// so they must be computed over the pages that could actually be returned.
 	// Including filtered-out pages would let another OS's records change this
 	// OS's ranking.
-	var elig []*Page
-	for _, p := range pages {
-		if p.Status == StatusSuperseded && !q.All {
-			continue
-		}
-		if !scopeMatches(p, q.Repo, q.OS) {
-			continue
-		}
-		if len(q.Tags) > 0 && !hasAnyTag(p, q.Tags) {
-			continue
-		}
-		if q.RetireUnopenedAfter > 0 && retiredUnopened(p, q) {
-			continue
-		}
-		elig = append(elig, p)
-	}
+	elig := eligible(pages, q)
 	if len(elig) == 0 {
 		return nil
 	}
@@ -240,6 +225,30 @@ func Search(pages []*Page, q Query) []Hit {
 		hits = hits[:k]
 	}
 	return hits
+}
+
+// eligible is the set a query could actually return: superseded pages dropped
+// unless --all, then the scope, tag and retirement filters. Extracted so that
+// Diagnose reports on exactly the set Search scored — a report describing a
+// different set than the one that was ranked would be worse than no report.
+func eligible(pages []*Page, q Query) []*Page {
+	var elig []*Page
+	for _, p := range pages {
+		if p.Status == StatusSuperseded && !q.All {
+			continue
+		}
+		if !scopeMatches(p, q.Repo, q.OS) {
+			continue
+		}
+		if len(q.Tags) > 0 && !hasAnyTag(p, q.Tags) {
+			continue
+		}
+		if q.RetireUnopenedAfter > 0 && retiredUnopened(p, q) {
+			continue
+		}
+		elig = append(elig, p)
+	}
+	return elig
 }
 
 // retiredUnopened reports whether p has outlived its grace period without ever

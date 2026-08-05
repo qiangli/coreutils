@@ -29,6 +29,12 @@ func composeKBNote(goal string) string {
 	}
 	hits := kb.Search(pages, kb.Query{Terms: kb.Terms(goal), OS: runtime.GOOS})
 	if len(hits) == 0 {
+		// Deliberately NOT kb.Diagnose here, unlike weave's KB.md. That drop
+		// is a file the worker opens when it wants it; this is prepended to
+		// the prompt and paid on every session whether or not it is used.
+		// Explaining a miss is worth a file and not worth unconditional
+		// context — "retrieve tiny" is the budget rule, and a no-match note
+		// that costs nothing is the cheapest honest answer.
 		return ""
 	}
 	var b strings.Builder
