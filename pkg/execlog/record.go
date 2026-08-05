@@ -59,6 +59,19 @@ type Record struct {
 	DurationMs int64    `json:"duration_ms"`
 	Effects    []string `json:"effects,omitempty"`
 
+	// Benign marks a non-zero exit that is a NEGATIVE ANSWER rather than a
+	// failure: grep found nothing, test was false, diff differed. Counting
+	// these as failures would teach that grep is unreliable here — measured at
+	// 40% of all exit-1s in a real corpus.
+	Benign bool `json:"benign,omitempty"`
+
+	// Dimension is the advisor's probe-grounded diagnosis of WHY it failed
+	// (cwd | network | compute | disk | state | loop), and Retryable whether
+	// re-running as-is could ever work. Empty means unclassified — which is an
+	// honest answer, and different from "nothing was wrong".
+	Dimension string `json:"dimension,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
+
 	// Where. Neither is ever part of a key — see the clock-probe invariant in
 	// spacegraph; the same trap eats an index key here.
 	Coordinate string `json:"coordinate,omitempty"`

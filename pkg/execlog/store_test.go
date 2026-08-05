@@ -220,3 +220,20 @@ func TestArgvCapDisclosesTruncation(t *testing.T) {
 		t.Errorf("argv still over cap: %d > %d", n, maxArgv)
 	}
 }
+
+// writeRaw drops literal JSONL lines into a day file, for cases the Writer
+// cannot produce on purpose — a sequence gap, a corrupt line.
+func writeRaw(t *testing.T, root, day, episode string, lines []string) {
+	t.Helper()
+	dir := filepath.Join(root, day)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := ""
+	for _, l := range lines {
+		body += l + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, episode+".jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

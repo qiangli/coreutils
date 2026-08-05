@@ -61,6 +61,13 @@ func (w *Writer) Append(meta Record, body Scrubbed, episode string) error {
 	meta.Schema = Schema
 	meta.CanonVer = CanonVer
 	meta.Stage = "episode"
+
+	// The episode argument is the ONLY source of truth for the episode: it
+	// names the file AND fills the field. Letting a caller set meta.Episode
+	// independently gives one value two authors, and they diverge silently —
+	// records landing in ep-a.jsonl while claiming to belong to ep-b, which
+	// then reads as one session having no records and another having double.
+	meta.Episode = episode
 	meta.Argv = body.argv
 	meta.Cwd = body.cwd
 	meta.Template = body.template

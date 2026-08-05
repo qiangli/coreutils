@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/execlog"
 	"github.com/qiangli/coreutils/pkg/weavecli"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -40,6 +41,11 @@ type contribEnvelope struct {
 	Root          string         `json:"root"`
 	Count         int            `json:"count"`
 	Contributions []Contribution `json:"contributions"`
+	// Observed carries claims DERIVED from the execution corpus, kept in their
+	// own key rather than merged into Contributions. An authored note is
+	// somebody's judgement and a derived pitfall is a count of what happened;
+	// a consumer must be able to tell which kind it is acting on.
+	Observed []execlog.Pitfall `json:"observed,omitempty"`
 }
 
 type ackEnvelope struct {
@@ -440,7 +446,39 @@ func runPitfalls(rc *tool.RunContext, args []string) int {
 		}
 	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].At.After(hits[j].At) })
-	return renderContribs(rc, root, hits, asJSON, pitfallsEmptyNote(target, len(live)))
+
+	// Authored contributions first, then what the corpus actually observed.
+	//
+	// They are kept SEPARATE rather than merged into one ranked list. An
+	// authored note is somebody's judgement; a derived pitfall is a count of
+	// what happened. Sorting them together would imply the two are comparable
+	// evidence, and a reader could not tell which kind they were acting on.
+	derived := derivedPitfalls(target)
+
+	if asJSON {
+		if hits == nil {
+			hits = []Contribution{}
+		}
+		// Additive: `contributions`/`count` keep their existing meaning, so a
+		// consumer written against the old envelope reads the same authored
+		// notes it always did. `observed` is a new key it can ignore.
+		writeJSON(rc, contribEnvelope{
+			Schema: contribSchema, Root: root, Count: len(hits),
+			Contributions: hits, Observed: derived,
+		})
+		return 0
+	}
+	if len(hits) == 0 && len(derived) == 0 {
+		fmt.Fprintln(rc.Err, pitfallsEmptyNote(target, len(live)))
+		return 0
+	}
+	for _, c := range hits {
+		fmt.Fprintln(rc.Out, formatContrib(c))
+	}
+	for _, p := range derived {
+		fmt.Fprintln(rc.Out, formatPitfall(p))
+	}
+	return 0
 }
 
 // pitfallsEmptyNote refuses to answer an empty search with a claim about the
@@ -455,13 +493,39 @@ func runPitfalls(rc *tool.RunContext, args []string) int {
 func pitfallsEmptyNote(target string, corpus int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "no recorded failures for %s\n", target)
-	fmt.Fprintf(&b, "  searched: %d contributions in this repo's wiki\n", corpus)
-	// Say plainly what does NOT feed this, so an empty answer is not read as
-	// coverage the tool does not have.
-	b.WriteString("  note: this reads contributions written by `graph observe`.\n")
-	b.WriteString("        execution-derived pitfalls are not promoted yet — see\n")
-	b.WriteString("        `graph history --failed` for what actually failed here.")
+	fmt.Fprintf(&b, "  authored: %d contributions in this repo's wiki\n", corpus)
+
+	// Both halves of the search report themselves. The authored side can be
+	// empty because nobody wrote anything down; the observed side can be empty
+	// because nothing failed, because recording was off, or because the days
+	// that held the evidence were pruned. Collapsing those into one blank
+	// answer is the absence-of-evidence failure this verb used to commit.
+	_, cov, err := execlog.Promote(execStoreRoot(), execlog.PromoteDefaults())
+	switch {
+	case err != nil:
+		fmt.Fprintf(&b, "  observed: unavailable (%v)\n", err)
+	default:
+		fmt.Fprintf(&b, "  observed: %d commands recorded over %d days; recording: %s\n",
+			cov.Records, cov.Days, onOff(cov.Recording || recordingOn()))
+		if cov.Pruned > 0 {
+			fmt.Fprintf(&b, "            %d records were deleted by retention\n", cov.Pruned)
+		}
+		if cov.Lost > 0 {
+			fmt.Fprintf(&b, "            %d records were lost unflushed\n", cov.Lost)
+		}
+	}
+
+	d := execlog.PromoteDefaults()
+	fmt.Fprintf(&b, "  bar: a failure promotes at %d sessions across %d days with no later success",
+		d.MinEpisodes, d.MinDays)
 	return b.String()
+}
+
+func onOff(b bool) string {
+	if b {
+		return "ON"
+	}
+	return "OFF"
 }
 
 func contribMatches(c Contribution, lowerQuery string) bool {

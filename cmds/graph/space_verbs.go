@@ -34,6 +34,7 @@ const (
 func init() {
 	addSub("history", "the agentic command history: every command, in order, with its outcome",
 		"graph history [--episode E] [--cmd C] [--since D] [--failed] [--limit N] [--json]\n"+
+			"               [--graph]  what usually follows what, and what fixes what\n"+
 			"               [--forget --before D | --forget --episode E]", runHistory)
 	addSub("space", "what this host has learned about its environment (entities)",
 		"graph space [--kind host|endpoint|account|repo|path|net] [--json]", runSpace)
@@ -48,9 +49,10 @@ func init() {
 func runHistory(rc *tool.RunContext, args []string) int {
 	asJSON := weavecli.IsAgent()
 	var (
-		q      execlog.Query
-		forget bool
-		before string
+		q       execlog.Query
+		forget  bool
+		asGraph bool
+		before  string
 	)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -70,6 +72,8 @@ func runHistory(rc *tool.RunContext, args []string) int {
 			q.Failed = true
 		case a == "--forget":
 			forget = true
+		case a == "--graph":
+			asGraph = true
 		case a == "--episode":
 			q.Episode = next()
 		case a == "--cmd":
@@ -97,6 +101,9 @@ func runHistory(rc *tool.RunContext, args []string) int {
 	if forget {
 		return runHistoryForget(rc, root, q.Episode, before, asJSON)
 	}
+	if asGraph {
+		return runHistoryGraph(rc, root, q, asJSON)
+	}
 
 	recs, cov, err := execlog.Read(root, q)
 	if err != nil {
@@ -116,6 +123,56 @@ func runHistory(rc *tool.RunContext, args []string) int {
 	// The coverage block goes to stderr ALWAYS, not only when the result is
 	// empty. An answer drawn from a corpus is only as good as the corpus, and
 	// the reader cannot judge that from the rows alone.
+	fmt.Fprintln(rc.Err, formatCoverage(cov))
+	return 0
+}
+
+// runHistoryGraph renders the derived `then` edges.
+//
+// Recoveries lead, because they are the only transitions worth more than their
+// frequency: "when X breaks, Y fixes it" is actionable, while "cd is usually
+// followed by ls" is a transcript.
+func runHistoryGraph(rc *tool.RunContext, root string, q execlog.Query, asJSON bool) int {
+	ts, cov, err := execlog.Transitions(root, q)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "graph history --graph: %v\n", err)
+		return 1
+	}
+	cov.Recording = recordingOn()
+
+	if asJSON {
+		if ts == nil {
+			ts = []execlog.Transition{}
+		}
+		return emitJSON(rc, map[string]any{
+			"schema": historySchema, "transitions": ts, "coverage": cov,
+		})
+	}
+
+	var fixes, plain []execlog.Transition
+	for _, t := range ts {
+		if t.Recovered > 0 {
+			fixes = append(fixes, t)
+		} else {
+			plain = append(plain, t)
+		}
+	}
+	if len(fixes) > 0 {
+		fmt.Fprintln(rc.Out, "recoveries (a failure, then something that worked):")
+		for _, t := range fixes {
+			fmt.Fprintf(rc.Out, "  %s\n    then %s   recovered %d/%d\n",
+				t.Src, t.Dst, t.Recovered, t.N)
+		}
+	}
+	if len(plain) > 0 {
+		if len(fixes) > 0 {
+			fmt.Fprintln(rc.Out)
+		}
+		fmt.Fprintln(rc.Out, "sequences:")
+		for _, t := range plain {
+			fmt.Fprintf(rc.Out, "  %-40s then %-40s n=%d ok=%d\n", t.Src, t.Dst, t.N, t.OK)
+		}
+	}
 	fmt.Fprintln(rc.Err, formatCoverage(cov))
 	return 0
 }
@@ -340,6 +397,64 @@ func spaceEmptyNote(s *spacegraph.Store) string {
 	}
 	if n := s.Malformed(); n > 0 {
 		fmt.Fprintf(&b, "\n%d unreadable lines were skipped in %s", n, s.Path())
+	}
+	return b.String()
+}
+
+// ---------------------------------------------------------------------------
+// derived pitfalls — what the corpus observed, as opposed to what a human typed
+// ---------------------------------------------------------------------------
+
+// derivedPitfalls folds the execution corpus into the claims its evidence
+// supports, for one target.
+//
+// The target matches a COMMAND NAME or a template substring, because that is
+// how the question actually arrives: an agent about to run `go test` asks about
+// "go test", not about the exact canonical template it is going to produce.
+//
+// Errors are swallowed and yield nothing. That is safe here only because the
+// caller renders a coverage note when both halves are empty — otherwise this
+// would be the absence-of-evidence failure with extra steps.
+func derivedPitfalls(target string) []execlog.Pitfall {
+	all, _, err := execlog.Promote(execStoreRoot(), execlog.PromoteDefaults())
+	if err != nil {
+		return nil
+	}
+	t := strings.ToLower(strings.TrimSpace(target))
+	var out []execlog.Pitfall
+	for _, p := range all {
+		if strings.EqualFold(p.Cmd, t) || strings.Contains(strings.ToLower(p.Template), t) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// formatPitfall renders a derived claim WITH its evidence.
+//
+// The counts are not decoration. A claim backed by three episodes over two days
+// and one backed by nine over six are different claims, and a reader who cannot
+// see which is which has to trust the threshold instead of the evidence.
+func formatPitfall(p execlog.Pitfall) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "observed  %s", p.Template)
+	if p.Dimension != "" {
+		fmt.Fprintf(&b, "  [%s]", p.Dimension)
+	}
+	fmt.Fprintf(&b, "\n          %d failures across %d sessions on %d days",
+		p.Failures, p.Episodes, p.Days)
+	if p.ExitClass != "" && p.ExitClass != "generic" {
+		fmt.Fprintf(&b, ", %s", p.ExitClass)
+	}
+	fmt.Fprintf(&b, "\n          last %s", p.LastSeen.Format("2006-01-02 15:04"))
+	if !p.LastSuccess.IsZero() {
+		// Say when it last worked. A pitfall about a command that used to work
+		// is a different problem from one that never has, and hiding the
+		// success would make a regression look like a permanent property.
+		fmt.Fprintf(&b, "; last worked %s (%d successes)",
+			p.LastSuccess.Format("2006-01-02"), p.Successes)
+	} else {
+		b.WriteString("; never observed to work here")
 	}
 	return b.String()
 }
