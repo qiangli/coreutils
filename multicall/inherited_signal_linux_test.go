@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func runInheritedSignalHelper(mode string) {
@@ -37,8 +38,59 @@ func runInheritedSignalHelper(mode string) {
 			os.Exit(3)
 		}
 		os.Exit(0)
+	case "ttin":
+		// Put the child in a non-orphaned process group so POSIX permits the
+		// terminal-input signal's default stop action.
+		if err := syscall.Setpgid(0, 0); err != nil {
+			os.Exit(2)
+		}
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTTIN)
+		os.Exit(3)
+	case "ttin_ignored":
+		if err := syscall.Setpgid(0, 0); err != nil {
+			os.Exit(2)
+		}
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTTIN)
+		os.Exit(0)
 	default:
 		os.Exit(2)
+	}
+}
+
+func TestPreserveDefaultTerminalStop(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^$")
+	cmd.Env = append(os.Environ(), inheritedSignalMarker+"=ttin")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	defer func() {
+		_ = syscall.Kill(pid, syscall.SIGCONT)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		var ws syscall.WaitStatus
+		_, _ = syscall.Wait4(pid, &ws, 0, nil)
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var ws syscall.WaitStatus
+		got, err := syscall.Wait4(pid, &ws, syscall.WNOHANG|syscall.WUNTRACED, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == pid {
+			if !ws.Stopped() || ws.StopSignal() != syscall.SIGTTIN {
+				t.Fatalf("child status = %v, want stopped by SIGTTIN", ws)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child did not stop for default SIGTTIN")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -54,6 +106,7 @@ func TestPreserveInheritedIgnoredSignals(t *testing.T) {
 		{mode: "term", sig: "TERM"},
 		{mode: "abrt", sig: "ABRT"},
 		{mode: "pipe", sig: "PIPE"},
+		{mode: "ttin_ignored", sig: "TTIN"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			script := "trap '' " + tc.sig + "; exec \"$1\" -test.run=^$"

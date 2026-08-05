@@ -43,6 +43,7 @@ func preserveInheritedSignalDispositions() {
 		syscall.SIGABRT, syscall.SIGALRM, syscall.SIGBUS, syscall.SIGFPE,
 		syscall.SIGILL, syscall.SIGPIPE, syscall.SIGQUIT, syscall.SIGSEGV,
 		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM,
+		syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU,
 	} {
 		switch originalSignals.handlers[sig] {
 		case 1: // SIG_IGN
