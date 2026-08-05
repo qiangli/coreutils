@@ -43,7 +43,6 @@ func preserveInheritedSignalDispositions() {
 		syscall.SIGABRT, syscall.SIGALRM, syscall.SIGBUS, syscall.SIGFPE,
 		syscall.SIGILL, syscall.SIGPIPE, syscall.SIGQUIT, syscall.SIGSEGV,
 		syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM,
-		syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU,
 	} {
 		switch originalSignals.handlers[sig] {
 		case 1: // SIG_IGN
@@ -56,6 +55,17 @@ func preserveInheritedSignalDispositions() {
 			// replaced by runtime startup.
 			_ = setLinuxSignalHandler(sig, 0)
 		}
+	}
+	// Go leaves an inherited SIG_IGN in place for the terminal-stop signals,
+	// but installs its own handler when their inherited action was SIG_DFL.
+	// They therefore do not reliably appear in runtime.fwdSig: inspect the
+	// live kernel action before replacing only the runtime-owned case.
+	for _, sig := range []syscall.Signal{syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU} {
+		handler, err := linuxSignalHandler(sig)
+		if err != nil || handler == 1 { // preserve inherited SIG_IGN
+			continue
+		}
+		_ = setLinuxSignalHandler(sig, 0)
 	}
 }
 

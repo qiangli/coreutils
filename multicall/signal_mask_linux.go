@@ -51,3 +51,15 @@ func setLinuxSignalHandler(sig syscall.Signal, handler uintptr) error {
 	}
 	return nil
 }
+
+func linuxSignalHandler(sig syscall.Signal) (uintptr, error) {
+	var action kernelSigaction
+	_, _, errno := syscall.RawSyscall6(
+		syscall.SYS_RT_SIGACTION,
+		uintptr(sig), 0, uintptr(unsafe.Pointer(&action)), 8, 0, 0,
+	)
+	if errno != 0 {
+		return 0, errno
+	}
+	return action.handler, nil
+}
