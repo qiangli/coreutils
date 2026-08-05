@@ -162,7 +162,20 @@ var packages = map[string]Package{
 		"(pkg/steward imports it and sits in the cross-OS canary that meet cannot satisfy); "+
 		"role/meetroom opens and closes the rooms, and sweeps the ones whose holder died without "+
 		"releasing. Not a verb: a channel is named by the thing it reaches."),
-	"redact":     libPkg("craft", "strips host identity (hostnames, users, home paths, IPs, MACs, emails) before learned knowledge leaves the machine"),
+	"redact": libPkg("craft", "strips host identity (hostnames, users, home paths, IPs, MACs, emails) before learned knowledge leaves the machine"),
+	"execlog": libPkg("graph",
+		"the agentic command history — the TIME plane behind `graph history`. Records "+
+			"every dispatched command, redacted and capped, on the paths the bash "+
+			"`history` builtin structurally cannot see (script, -c, and the agent "+
+			"ExecHandler). Not a verb of its own: it is one layer of the knowledge "+
+			"graph, not a second graph, and `history` is already taken by a builtin "+
+			"that must stay bash-exact."),
+	"spacegraph": libPkg("graph",
+		"the entity graph behind `graph space` / `graph reached` — the SPACE plane. "+
+			"Hosts, endpoints and accounts, and the relations observed between them, "+
+			"accumulated over time. Not a verb of its own, and deliberately no export "+
+			"path: every node names something real about somebody's machine, which "+
+			"makes it a fact store, and facts never leave the host."),
 	"sota":       cmdPkg("sota"),
 	"steward":    cmdPkg("steward"),
 	"supervise":  cmdPkg("supervise"),

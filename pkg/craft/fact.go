@@ -60,6 +60,21 @@ const (
 	EntityService  EntityKind = "service"
 	EntityAccount  EntityKind = "account"
 	EntityEndpoint EntityKind = "endpoint"
+
+	// The kinds below name the rest of the environment a command reveals.
+	// They exist for the SPACE graph — the relations BETWEEN entities — rather
+	// than for facts, which are attributes bound to a single entity.
+	//
+	// EntityPath is deliberately coarse: a repo-relative path or an abstracted
+	// class, never an absolute one. An absolute path outside the repo is
+	// somebody's home directory, which is identity rather than structure.
+	EntityPath EntityKind = "path"
+	EntityRepo EntityKind = "repo"
+
+	// EntityNet is a network LOCALITY, not a network address. Its name is a
+	// place fingerprint, so "the same wifi as before" is expressible without
+	// anything ever recording which wifi.
+	EntityNet EntityKind = "net"
 )
 
 // Entity is the thing a fact is bound to.

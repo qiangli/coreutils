@@ -187,7 +187,23 @@ var commandSpecs = map[string]CommandSpec{
 		TransportExits: map[int]bool{255: true},
 		Realm:          RealmSSH,
 		Flags:          map[string]Role{"-p": RolePort, "-l": RoleUser, "-i": RoleIdentity, "-J": RoleJump},
-		BoolFlags:      map[string]bool{"-v": true, "-vv": true, "-vvv": true, "-q": true, "-t": true, "-T": true, "-A": true, "-N": true, "-f": true, "-4": true, "-6": true, "-C": true},
+		// Every ssh flag that CONSUMES A VALUE has to be listed, even the ones
+		// carrying no role, or the value is read as an operand — and for a
+		// HostPositional command the first operand IS the host.
+		//
+		// `ssh -o BatchMode=yes host true` recorded facts about a host named
+		// "batchmode=yes". That is worse than learning nothing: an unknown flag
+		// is skipped by design ("never guessed at"), so the flag vanished
+		// quietly and its value was promoted to the one field the whole entity
+		// binding hangs off. `-o` is the common case; the rest are here so the
+		// same silent promotion cannot happen again.
+		ValueFlags: map[string]bool{
+			"-o": true, "-F": true, "-c": true, "-b": true, "-B": true,
+			"-D": true, "-E": true, "-e": true, "-I": true, "-L": true,
+			"-m": true, "-O": true, "-Q": true, "-R": true, "-S": true,
+			"-W": true, "-w": true,
+		},
+		BoolFlags:      map[string]bool{"-v": true, "-vv": true, "-vvv": true, "-q": true, "-t": true, "-T": true, "-A": true, "-N": true, "-f": true, "-4": true, "-6": true, "-C": true, "-G": true, "-K": true, "-k": true, "-M": true, "-n": true, "-s": true, "-V": true, "-X": true, "-x": true, "-Y": true, "-y": true},
 		Render:         map[Role]string{RolePort: "-p", RoleUser: "-l", RoleIdentity: "-i", RoleJump: "-J"},
 		HostPositional: true,
 	},
@@ -197,17 +213,27 @@ var commandSpecs = map[string]CommandSpec{
 		Realm:       RealmSSH,
 		// -P, capital. The single most-forgotten flag difference in this family,
 		// and the clearest thing this table buys.
-		Flags:          map[string]Role{"-P": RolePort, "-i": RoleIdentity, "-J": RoleJump},
-		BoolFlags:      map[string]bool{"-r": true, "-v": true, "-q": true, "-C": true, "-p": true, "-3": true},
+		Flags: map[string]Role{"-P": RolePort, "-i": RoleIdentity, "-J": RoleJump},
+		// Same silent-promotion hazard as ssh's -o. Note `-l` here is a
+		// BANDWIDTH LIMIT, not a login — listing it as a value flag is what
+		// keeps it from ever being read as one.
+		ValueFlags: map[string]bool{
+			"-o": true, "-F": true, "-c": true, "-S": true, "-l": true, "-X": true,
+		},
+		BoolFlags:      map[string]bool{"-r": true, "-v": true, "-q": true, "-C": true, "-p": true, "-3": true, "-4": true, "-6": true, "-A": true, "-B": true, "-O": true, "-T": true},
 		Render:         map[Role]string{RolePort: "-P", RoleIdentity: "-i", RoleJump: "-J"},
 		HostPositional: true,
 	},
 	"sftp": {
-		ExitModel:      ExitToolOnly,
-		HostHasPath:    true,
-		Realm:          RealmSSH,
-		Flags:          map[string]Role{"-P": RolePort, "-i": RoleIdentity, "-J": RoleJump},
-		BoolFlags:      map[string]bool{"-r": true, "-v": true, "-q": true},
+		ExitModel:   ExitToolOnly,
+		HostHasPath: true,
+		Realm:       RealmSSH,
+		Flags:       map[string]Role{"-P": RolePort, "-i": RoleIdentity, "-J": RoleJump},
+		ValueFlags: map[string]bool{
+			"-o": true, "-F": true, "-c": true, "-S": true, "-s": true, "-b": true,
+			"-B": true, "-D": true, "-l": true, "-R": true, "-X": true,
+		},
+		BoolFlags:      map[string]bool{"-r": true, "-v": true, "-q": true, "-a": true, "-C": true, "-f": true, "-N": true, "-p": true, "-4": true, "-6": true},
 		Render:         map[Role]string{RolePort: "-P", RoleIdentity: "-i", RoleJump: "-J"},
 		HostPositional: true,
 	},

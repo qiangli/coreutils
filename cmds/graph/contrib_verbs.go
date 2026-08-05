@@ -440,7 +440,28 @@ func runPitfalls(rc *tool.RunContext, args []string) int {
 		}
 	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].At.After(hits[j].At) })
-	return renderContribs(rc, root, hits, asJSON, "(no known failures for "+target+")")
+	return renderContribs(rc, root, hits, asJSON, pitfallsEmptyNote(target, len(live)))
+}
+
+// pitfallsEmptyNote refuses to answer an empty search with a claim about the
+// world.
+//
+// "(no known failures for X)" is a statement about X. What the tool actually
+// knows is a statement about its own corpus, and the two are only the same if
+// the corpus is complete — which it is not. The reader cannot tell "nothing
+// ever failed" from "nobody wrote one down" or "the recorder is off" unless the
+// tool says which, and reporting the first when the truth is the third is how a
+// system reaches a confident conclusion from the ABSENCE of evidence.
+func pitfallsEmptyNote(target string, corpus int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "no recorded failures for %s\n", target)
+	fmt.Fprintf(&b, "  searched: %d contributions in this repo's wiki\n", corpus)
+	// Say plainly what does NOT feed this, so an empty answer is not read as
+	// coverage the tool does not have.
+	b.WriteString("  note: this reads contributions written by `graph observe`.\n")
+	b.WriteString("        execution-derived pitfalls are not promoted yet — see\n")
+	b.WriteString("        `graph history --failed` for what actually failed here.")
+	return b.String()
 }
 
 func contribMatches(c Contribution, lowerQuery string) bool {
