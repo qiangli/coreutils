@@ -633,11 +633,14 @@ func init() {
 		Caps: []string{CapJSON, CapReadOnly}})
 	addVerb("skills", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON}})
 	addVerb("craft", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
-	// recall is the THIRD-PARTY read surface over every memory ring. It declares
-	// read-only and — deliberately — NO net effect: it is on the irreducible
-	// local-first floor, so a build where recall needed the network would be a
-	// design regression the effect table should catch, not a feature.
-	addVerb("recall", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
+	// recall was a top-level verb until 2026-08-05 and is now `kb recall` — the
+	// cross-ring read surface mounted under the noun that owns memory. It has no
+	// entry of its own because the atlas catalogues VERBS and a subcommand is
+	// not one (`kb search` has no entry either), and because the e2e dispatch
+	// gate asserts every advertised verb actually runs: an entry for a verb that
+	// no longer dispatches is exactly the kind of stale advertisement that gate
+	// exists to catch. Its local-first property is unchanged and now rides kb's
+	// entry — neither declares `net`, which pkg/atlas/localfirst_test.go pins.
 	addVerb("define", Entry{Stage: StageCross, Group: GroupKnowledge, Caps: []string{CapJSON, CapReadOnly}})
 
 	// engines
@@ -771,7 +774,6 @@ func init() {
 
 	// read — reads filesystem, host state, or input data (the privacy surface).
 	eff(EffRead,
-		"recall",
 		// fileutils/inspection
 		"df", "du", "ls", "dir", "vdir", "resources", "stat", "readlink", "realpath", "tree",
 		"find", "clip",
