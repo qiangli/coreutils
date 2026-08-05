@@ -3,9 +3,11 @@ package crontabcmd
 import (
 	"bytes"
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/pkg/schedule"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -123,6 +125,24 @@ func TestCrontabRoundTrip(t *testing.T) {
 
 	if out != out2 {
 		t.Errorf("round-trip mismatch:\ninstall: %q\nlist after round-trip: %q", out, out2)
+	}
+}
+
+func TestCrontabPersistsShellProgramAndContext(t *testing.T) {
+	setupCronState(t)
+	_, _, code := runCron(t, context.Background(), "* * * * * echo ok > result &\n", "-")
+	if code != 0 {
+		t.Fatalf("install: code=%d", code)
+	}
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("LoadJobs: jobs=%d err=%v", len(jobs), err)
+	}
+	if got, want := jobs[0].Command, []string{"sh", "-c", "echo ok > result &"}; !slices.Equal(got, want) {
+		t.Errorf("job command=%q, want shell program %q", got, want)
+	}
+	if !jobs[0].EnvSet || !jobs[0].UmaskSet {
+		t.Errorf("submission context not captured: env_set=%v umask_set=%v", jobs[0].EnvSet, jobs[0].UmaskSet)
 	}
 }
 

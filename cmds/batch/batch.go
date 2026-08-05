@@ -58,26 +58,36 @@ func run(rc *tool.RunContext, args []string) int {
 	now := time.Now()
 	when := now.Add(1 * time.Second)
 	id := strconv.FormatInt(now.UnixNano(), 36)
-	cwd, _ := os.Getwd()
+	shell := rc.Getenv("SHELL")
+	if shell == "" {
+		shell = "sh"
+	}
+	cwd := rc.Dir
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
 
 	j := &schedule.Job{
 		ID:        id,
 		Kind:      "at",
 		Spec:      when.Format(time.RFC3339),
-		Command:   strings.Fields(cmdText),
+		Command:   []string{shell, "-c", cmdText},
 		Dir:       cwd,
+		Env:       append([]string(nil), rc.Env...),
+		EnvSet:    true,
 		Enabled:   true,
 		CreatedAt: now,
 		NextRun:   when,
 	}
-
-	jobs, err := schedule.LoadJobs()
-	if err != nil {
-		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
-		return 1
+	if rc.UmaskSet {
+		j.Umask, j.UmaskSet = uint32(rc.Umask.Perm()), true
+	} else if mask, ok := processUmask(); ok {
+		j.Umask, j.UmaskSet = mask, true
 	}
-	jobs = append(jobs, j)
-	if err := schedule.SaveJobs(jobs); err != nil {
+
+	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+		return append(jobs, j), nil
+	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}

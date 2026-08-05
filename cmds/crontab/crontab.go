@@ -131,19 +131,15 @@ func editCron(rc *tool.RunContext) int {
 }
 
 func removeCron(rc *tool.RunContext) int {
-	jobs, err := schedule.LoadJobs()
-	if err != nil {
-		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
-		return 1
-	}
-	kept := jobs[:0]
-	for _, j := range jobs {
-		if j.Kind == "cron" {
-			continue
+	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+		kept := jobs[:0]
+		for _, j := range jobs {
+			if j.Kind != "cron" {
+				kept = append(kept, j)
+			}
 		}
-		kept = append(kept, j)
-	}
-	if err := schedule.SaveJobs(kept); err != nil {
+		return kept, nil
+	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
@@ -186,34 +182,42 @@ func installCronLines(rc *tool.RunContext, content string) int {
 		}
 	}
 
-	jobs, err := schedule.LoadJobs()
-	if err != nil {
-		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
-		return 1
-	}
-
-	// Remove all existing cron jobs, keep everything else.
-	kept := jobs[:0]
-	for _, j := range jobs {
-		if j.Kind == "cron" {
-			continue
-		}
-		kept = append(kept, j)
-	}
-
 	now := time.Now()
+	shell := rc.Getenv("SHELL")
+	if shell == "" {
+		shell = "sh"
+	}
+	cwd := rc.Dir
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	mask, maskSet := uint32(rc.Umask.Perm()), rc.UmaskSet
+	if !maskSet {
+		mask, maskSet = processUmask()
+	}
 	for _, j := range newJobs {
 		j.CreatedAt = now
+		j.Command = []string{shell, "-c", strings.Join(j.Command, " ")}
+		j.Dir = cwd
+		j.Env, j.EnvSet = append([]string(nil), rc.Env...), true
+		j.Umask, j.UmaskSet = mask, maskSet
 		next, nerr := schedule.ComputeNext(j, now)
 		if nerr != nil {
 			fmt.Fprintf(rc.Err, "%s: cannot compute next run for %q: %v\n", cmd.Name, j.Spec, nerr)
 			continue
 		}
 		j.NextRun = next
-		kept = append(kept, j)
 	}
 
-	if err := schedule.SaveJobs(kept); err != nil {
+	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+		kept := jobs[:0]
+		for _, j := range jobs {
+			if j.Kind != "cron" {
+				kept = append(kept, j)
+			}
+		}
+		return append(kept, newJobs...), nil
+	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
@@ -235,7 +239,11 @@ func cronLines() ([]string, error) {
 		if j.Kind != "cron" {
 			continue
 		}
-		lines = append(lines, j.Spec+" "+strings.Join(j.Command, " "))
+		command := j.Command
+		if len(command) == 3 && command[1] == "-c" {
+			command = command[2:]
+		}
+		lines = append(lines, j.Spec+" "+strings.Join(command, " "))
 	}
 	return lines, nil
 }

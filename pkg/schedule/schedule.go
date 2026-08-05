@@ -405,32 +405,37 @@ func tickCmd() *cobra.Command {
 
 // tickOnce is the testable core: fire due jobs as of now, return their ids.
 func tickOnce(now time.Time, w *os.File) ([]string, error) {
-	s, err := load()
-	if err != nil {
-		return nil, err
-	}
 	var fired []string
-	changed := false
-	for _, j := range s.Jobs {
-		if !j.Enabled || j.NextRun.IsZero() || j.NextRun.After(now) {
-			continue
+	var due []*Job
+	err := UpdateJobs(func(jobs []*Job) ([]*Job, error) {
+		for _, j := range jobs {
+			if !j.Enabled || j.NextRun.IsZero() || j.NextRun.After(now) {
+				continue
+			}
+			j.LastRun = now
+			fired = append(fired, j.ID)
+			copy := *j
+			copy.Command = append([]string(nil), j.Command...)
+			copy.Env = append([]string(nil), j.Env...)
+			due = append(due, &copy)
+			if j.Kind == "at" {
+				j.Enabled = false // one-shot
+				continue
+			}
+			if next, nerr := j.computeNext(now); nerr == nil {
+				j.NextRun = next
+			}
 		}
-		_ = j.fire(w) // a failing job is logged via w; schedule continues
-		j.LastRun = now
-		fired = append(fired, j.ID)
-		changed = true
-		if j.Kind == "at" {
-			j.Enabled = false // one-shot
-			continue
-		}
-		if next, nerr := j.computeNext(now); nerr == nil {
-			j.NextRun = next
-		}
+		return jobs, nil
+	})
+	if err != nil {
+		return fired, err
 	}
-	if changed {
-		if err := s.save(); err != nil {
-			return fired, err
-		}
+	// The transaction claims each due job by disabling/rescheduling it before
+	// execution. Run commands after releasing the store lock so a scheduled
+	// command may submit another job without deadlocking the daemon.
+	for _, j := range due {
+		_ = j.fire(w) // a failing job is logged via w; schedule continues
 	}
 	return fired, nil
 }

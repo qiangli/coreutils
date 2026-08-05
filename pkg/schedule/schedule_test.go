@@ -6,10 +6,42 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestUpdateJobsConcurrentWritersDoNotLoseEntries(t *testing.T) {
+	withState(t)
+	const writers = 24
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			errs <- UpdateJobs(func(jobs []*Job) ([]*Job, error) {
+				return append(jobs, &Job{ID: strconv.Itoa(id)}), nil
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs, err := LoadJobs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != writers {
+		t.Fatalf("stored jobs=%d, want %d", len(jobs), writers)
+	}
+}
 
 func TestScheduleOutputModeEscape(t *testing.T) {
 	withState(t)

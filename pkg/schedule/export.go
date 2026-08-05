@@ -2,10 +2,13 @@ package schedule
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
 // ParseAtTimespec is the public timespec parser used by the `at` and
@@ -361,7 +364,30 @@ func LoadJobs() ([]*Job, error) {
 
 // SaveJobs atomically persists a job list.
 func SaveJobs(jobs []*Job) error {
-	s := &store{Jobs: jobs}
+	return UpdateJobs(func([]*Job) ([]*Job, error) { return jobs, nil })
+}
+
+// UpdateJobs applies one read-modify-write transaction while holding the
+// schedule store's cross-process lock. Writers must use this instead of a
+// LoadJobs/SaveJobs pair so a daemon tick cannot overwrite a submission from
+// a stale snapshot.
+func UpdateJobs(update func([]*Job) ([]*Job, error)) error {
+	lock, err := lockfile.Acquire(filepath.Join(filepath.Dir(statePath()), "schedule.lock"), lockfile.Holder{
+		Name: "bashy-schedule", Intent: "update schedule store",
+	})
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	s, err := load()
+	if err != nil {
+		return err
+	}
+	jobs, err := update(s.Jobs)
+	if err != nil {
+		return err
+	}
+	s.Jobs = jobs
 	return s.save()
 }
 

@@ -3,6 +3,7 @@ package batchcmd
 import (
 	"bytes"
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -97,7 +98,7 @@ func TestBatchEmptyStdin(t *testing.T) {
 // with the correct kind and enabled state.
 func TestBatchPersistsJob(t *testing.T) {
 	setupBatchState(t)
-	_, _, code := runBatch(t, context.Background(), "echo persisted\n")
+	_, _, code := runBatch(t, context.Background(), "echo persisted > result &\n")
 	if code != 0 {
 		t.Fatalf("batch: code=%d", code)
 	}
@@ -113,6 +114,12 @@ func TestBatchPersistsJob(t *testing.T) {
 	}
 	if !jobs[0].Enabled {
 		t.Errorf("job should be enabled")
+	}
+	if got, want := jobs[0].Command, []string{"sh", "-c", "echo persisted > result &"}; !slices.Equal(got, want) {
+		t.Errorf("job command=%q, want shell program %q", got, want)
+	}
+	if !jobs[0].EnvSet || !jobs[0].UmaskSet {
+		t.Errorf("submission context not captured: env_set=%v umask_set=%v", jobs[0].EnvSet, jobs[0].UmaskSet)
 	}
 }
 

@@ -140,13 +140,9 @@ func run(rc *tool.RunContext, args []string) int {
 		j.Umask, j.UmaskSet = mask, true
 	}
 
-	jobs, err := schedule.LoadJobs()
-	if err != nil {
-		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
-		return 1
-	}
-	jobs = append(jobs, j)
-	if err := schedule.SaveJobs(jobs); err != nil {
+	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+		return append(jobs, j), nil
+	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
@@ -203,24 +199,21 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 	if len(ids) == 0 {
 		return tool.UsageError(rc, cmd, "missing job ID for -r")
 	}
-	jobs, err := schedule.LoadJobs()
-	if err != nil {
-		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
-		return 1
-	}
-	for _, id := range ids {
-		found := false
-		for i := len(jobs) - 1; i >= 0; i-- {
-			if jobs[i].ID == id || jobs[i].Name == id {
-				jobs = append(jobs[:i], jobs[i+1:]...)
-				found = true
+	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+		for _, id := range ids {
+			found := false
+			for i := len(jobs) - 1; i >= 0; i-- {
+				if jobs[i].ID == id || jobs[i].Name == id {
+					jobs = append(jobs[:i], jobs[i+1:]...)
+					found = true
+				}
+			}
+			if !found {
+				fmt.Fprintf(rc.Err, "%s: no job %q\n", cmd.Name, id)
 			}
 		}
-		if !found {
-			fmt.Fprintf(rc.Err, "%s: no job %q\n", cmd.Name, id)
-		}
-	}
-	if err := schedule.SaveJobs(jobs); err != nil {
+		return jobs, nil
+	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
 		return 1
 	}
