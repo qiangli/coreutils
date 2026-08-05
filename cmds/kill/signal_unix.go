@@ -19,6 +19,7 @@ var portableSignals = []signalEntry{
 	{"PIPE", syscall.SIGPIPE}, {"ALRM", syscall.SIGALRM}, {"TERM", syscall.SIGTERM},
 	{"CHLD", syscall.SIGCHLD}, {"CONT", syscall.SIGCONT}, {"STOP", syscall.SIGSTOP},
 	{"TSTP", syscall.SIGTSTP}, {"TTIN", syscall.SIGTTIN}, {"TTOU", syscall.SIGTTOU},
+	{"URG", syscall.SIGURG},
 }
 
 func invalidSignal() nativeSignal { return syscall.Signal(-1) }
