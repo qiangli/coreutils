@@ -142,6 +142,15 @@ Concluding "no work" from the absence of a report by a process that did not
 survive to report is the fleet-evidence mistake in a different costume. The
 artifact is on disk. Ask the artifact.
 
+### Safe provider-failover sequence & route quotas (run #244 pattern)
+
+The safe provider-failover sequence (demonstrated in run #244) governs route/quota disruptions:
+- **Targeted kill**: When a worker process encounters rate limits, 429s, or route exhaustion, a targeted kill terminates the worker process tree while preserving its workspace.
+- **Retained workspace/branch/commit**: The workspace directory, git branch, and any committed work (`commits_ahead > 0`, `salvageable: true`) remain intact on disk.
+- **Guarded salvage**: `weave salvage` (or salvage evaluation) reviews and verifies the retained commit under the mandatory review + deterministic verification gate before merging or continuing.
+- **Deterministic continuation when no eligible L3 judge exists**: If no eligible L3 judge (Band 3+ reviewer from a distinct model family with available quota) exists to perform the LLM review, weave creates a deterministic continuation run that fetches the retained commit directly from the retained branch/workspace into the continuation context.
+- **Route quota separation (Native AGY Gemini vs AGY Third-Party)**: Native AGY Gemini routes (direct Google Gemini quota) and AGY third-party routes (e.g. Anthropic/OpenAI or proxy routes accessible via AGY or cloudbox gateway) operate under distinct, independent rate limits and quota allocations. A 429 or quota limit on native AGY Gemini does NOT mean AGY third-party routes are exhausted (or vice versa); failover routing evaluates availability per quota pool.
+
 ## Inspecting it
 
 ```

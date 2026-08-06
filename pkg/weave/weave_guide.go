@@ -185,6 +185,14 @@ moves the queue does NOT (goal, plan, done, next, lessons, routing).
 The baton always ends with the live-state commands, so even a stale note plus
 the queue is enough to pick up without reading code or docs.
 
+## Safe provider-failover sequence (run #244 pattern)
+When a worker encounters rate limits, 429s, or route exhaustion:
+  1. TARGETED KILL — kill the stuck worker process tree without deleting its workspace.
+  2. RETAINED COMMIT — workspace, branch, and committed work remain intact (` + "`salvageable=true`" + `).
+  3. GUARDED SALVAGE — ` + "`weave salvage <issue>`" + ` reviews and verifies retained commits before merging.
+  4. DETERMINISTIC CONTINUATION — when no eligible L3 judge exists, launch a deterministic continuation task that fetches the retained commit directly from the retained branch/workspace into the new continuation context.
+  5. ROUTE QUOTAS — native AGY Gemini (Google quota) and AGY third-party routes (OpenAI/Anthropic proxies) operate under separate quota pools; a throttle on native AGY Gemini does not exhaust third-party routes.
+
 ## Hard rules (learned the hard way)
 - Bare launch = hang. Always headless flags + body-as-prompt (step 3).
 - NEVER ` + "`git rebase`" + ` a weave agent branch — it conflicts and leaves the repo

@@ -501,6 +501,16 @@ Workspace removed, branch removed (since no PR open), lease closed, issue label 
 bashy weave start --issue 124 -- codex      # try a different tool
 ```
 
+### Safe provider-failover sequence & route quotas (run #244 pattern)
+
+When an agent hits provider rate limits, 429s, API overload, or route exhaustion during execution:
+
+1. **Targeted kill**: Execute a targeted kill of the worker process tree (`weave kill <issue>`) rather than wiping workspace state or abandoning committed work.
+2. **Retained workspace/branch/commit**: The workspace, git branch, and any committed work (`commits_ahead > 0`, `salvageable: true`) remain preserved on disk.
+3. **Guarded salvage**: Run `weave salvage <issue>` (or allow automated salvage evaluation) to review and verify the retained commit under the mandatory review + deterministic verification gate before merging or continuing.
+4. **Deterministic continuation (no eligible L3 judge)**: If no eligible L3 judge (Band 3+ model/agent from a distinct model family with available quota) exists to perform the review, create a deterministic continuation run that fetches the retained commit directly from the retained branch/workspace into the new continuation context, ensuring the campaign advances without re-executing already-completed work.
+5. **Route quota separation (Native AGY Gemini vs AGY Third-Party)**: Native AGY Gemini routes (direct Google Gemini quota) and AGY third-party routes (e.g. Anthropic/OpenAI or proxy routes accessible via AGY or cloudbox gateway) operate under separate, independent rate limits and quota pools. Quota depletion on native AGY Gemini does NOT imply third-party routes are exhausted (or vice versa); failover routing must evaluate availability across these independent quota pools.
+
 ### You want to merge #125's PR before #124's
 
 By default the merger goes in arrival order. To prioritize:

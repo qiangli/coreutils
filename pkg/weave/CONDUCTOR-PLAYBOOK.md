@@ -699,6 +699,16 @@ So the conductor loop is: `weave fleet` → assign an available tool → on
 throttle, fail over + let weave record the cooldown → re-check `weave fleet`
 next round and re-engage the recovered tool.
 
+### Safe provider-failover sequence & route quotas (run #244 pattern)
+
+When a run encounters provider-level rate limits, 429s, or route exhaustion, follow the safe provider-failover sequence (demonstrated by run #244):
+
+1. **Targeted kill**: Perform a targeted kill of the affected worker process tree when a provider failover trigger or throttle occurs, leaving the workspace intact on disk.
+2. **Retained workspace/branch/commit**: Ensure the run workspace directory, git branch, and any committed work (`commits_ahead > 0`, `salvageable: true`) remain intact on disk. The reaper and watchdog surface work on killed/failed runs rather than destroying it.
+3. **Guarded salvage**: Execute `weave salvage <issue>` (or let salvage evaluation run) to review and verify the retained commit under the mandatory review + deterministic verification gate before merging or continuing.
+4. **Deterministic continuation (when no eligible L3 judge exists)**: If no eligible L3 judge (Band 3+ model/agent from a distinct model family with available quota) exists to perform the LLM review, create a deterministic continuation run that fetches the retained commit directly from the retained branch/workspace into the new continuation context. This guarantees progress without re-executing already-completed work or stalling in limbo.
+5. **Route quota distinction (Native AGY Gemini vs AGY Third-Party)**: Native AGY Gemini routes (direct Google Gemini quota) and AGY third-party routes (e.g. Anthropic/OpenAI or proxy routes accessible via AGY or cloudbox gateway) operate under distinct, independent rate limits and quota allocations. A 429 or quota limit on native AGY Gemini does NOT mean AGY third-party routes are exhausted (or vice versa); failover selection must evaluate availability across these separate quota pools rather than assuming a global outage across distinct route types.
+
 ## Conformance / fidelity campaign patterns (learned 2026-06-24, bash-5.3 drive 86%→90%)
 
 - **Gate around a RED base.** If the target repo's full suite is red on `main` for
