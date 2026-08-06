@@ -23,12 +23,12 @@ environment in a single Go process.
 This repository is **not a complete POSIX Commands & Utilities
 implementation**. The configured VSC-PCTS2016 POSIX08 certification scenario
 requires command providers that Bashy's pure-Go userland does not currently
-ship. As of 2026-08-05, after adding `file`, `iconv`, `uudecode`, and
-`uuencode`, the remaining **27 command names** are:
+ship. As of 2026-08-06, after adding `file`, `iconv`, `ps`, `uudecode`, and
+`uuencode`, the remaining **26 command names** are:
 
 `ar`, `bc`, `ctags`, `ed`, `ex`, `getconf`, `locale`, `localedef`, `logger`,
 `lp`, `m4`, `mailx`, `make`, `man`, `mesg`, `newgrp`, `nm`, `patch`, `pax`,
-`ps`, `renice`, `strip`, `tabs`, `talk`, `tput`, `vi`, `write`.
+`renice`, `strip`, `tabs`, `talk`, `tput`, `vi`, `write`.
 
 The formal Linux certification profile supplies those commands through
 explicitly declared and pinned external providers. Any resulting certification
@@ -71,7 +71,7 @@ Every tool in this repo follows the same rules:
   design. Even local-path remotes use go-git's in-process server
   transport — `git-upload-pack` is never spawned.
 
-- `cmds/` — the userland: 140 shipped Go command packages advertising 145
+- `cmds/` — the userland: 141 shipped Go command packages advertising 146
   applet names (see the generated [applet matrix](docs/applet-matrix.md)),
   covering file operations
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),

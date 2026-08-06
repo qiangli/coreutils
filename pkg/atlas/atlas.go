@@ -476,7 +476,7 @@ func init() {
 		"arch", "at", "atq", "atrm", "batch", "cal", "crontab",
 		"date", "duration", "echo", "env", "expr", "factor", "false",
 		"groups", "hostid", "hostname", "id", "kill", "logname", "ncal", "nice",
-		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "pwd",
+		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "ps", "pwd",
 		"seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
@@ -500,7 +500,7 @@ func init() {
 	capTools(CapDestructive, "rm", "dd", "shred", "truncate")
 	capTools(CapReadOnly,
 		"cat", "cmp", "comm", "df", "diff", "du", "file", "grep", "head", "hexdump",
-		"ls", "od", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
+		"ls", "od", "ps", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
 		"test", "[", "tokens", "tree", "wc", "which",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
 		"ast",
@@ -793,7 +793,7 @@ func init() {
 		"handoff", "resume",
 		// host info
 		"arch", "groups", "hostid", "hostname", "id", "logname", "nproc",
-		"pathchk", "pinky", "pwd", "tty", "tz", "uname", "uptime", "users",
+		"pathchk", "pinky", "ps", "pwd", "tty", "tz", "uname", "uptime", "users",
 		"which", "who", "whoami", "atq", "date", "env", "printenv", "ntp",
 		"sntp",
 		// code-intel / net

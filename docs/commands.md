@@ -186,8 +186,8 @@ fetch, clip, tokens, duration, tz, ntp — see `cmds/all/all.go` for the
 authoritative shipped set). grep/find/diff/jq/tar/gzip landed in
 Phase A via prior art.
 
-Remaining: ps (agent-useful, large cross-platform surface); richer optional
-file magic/MIME coverage.
+Remaining: richer optional file magic/MIME coverage and broader `ps` format
+coverage beyond the portable POSIX foundation.
 
 ### Portable userland and certification-provider policy
 
@@ -208,7 +208,7 @@ these 31 command names:
 
 `ar`, `bc`, `ctags`, `ed`, `ex`, `file`, `getconf`, `iconv`, `locale`,
 `localedef`, `logger`, `lp`, `m4`, `mailx`, `make`, `man`, `mesg`, `newgrp`,
-`nm`, `patch`, `pax`, `ps`, `renice`, `strip`, `tabs`, `talk`, `tput`,
+`nm`, `patch`, `pax`, `renice`, `strip`, `tabs`, `talk`, `tput`,
 `uudecode`, `uuencode`, `vi`, `write`.
 
 These names are a certification-provider inventory, not an implementation
@@ -219,11 +219,11 @@ backlog. Use these decision classes when prioritizing product work:
 | portable candidates | `bc`, `ed`, `file`, `iconv`, `patch`, `pax`, `uudecode`, `uuencode` | consider pure Go when cross-platform user value and complete tests justify it |
 | specialist toolchain | `ar`, `ctags`, `m4`, `make`, `nm`, `strip` | prefer pinned toolchain providers or modern agent-oriented workflows unless an embedded implementation is compelling |
 | interactive/editor/documentation | `ex`, `mailx`, `man`, `vi` | normally external; do not add merely to reduce a certification-provider count |
-| platform or legacy facilities | `getconf`, `locale`, `localedef`, `logger`, `lp`, `mesg`, `newgrp`, `ps`, `renice`, `tabs`, `talk`, `tput`, `write` | use declared Linux providers for certification; add a capability-gated Bashy implementation only when portable semantics are honest and useful |
+| platform or legacy facilities | `getconf`, `locale`, `localedef`, `logger`, `lp`, `mesg`, `newgrp`, `renice`, `tabs`, `talk`, `tput`, `write` | use declared Linux providers for certification; add a capability-gated Bashy implementation only when portable semantics are honest and useful |
 
 The 31-name table records the 2026-08-05 staged certification snapshot. Since
-that snapshot, initial pure-Go implementations of `file`, `iconv`, `uudecode`,
-and `uuencode` have landed in this repository; they count as Bashy providers
+that snapshot, initial pure-Go implementations of `file`, `iconv`, `ps`,
+`uudecode`, and `uuencode` have landed in this repository; they count as Bashy providers
 only after a newly built certification stage proves their resolution.
 
 The classes are prioritization guidance, not permanent prohibitions. Bashy may

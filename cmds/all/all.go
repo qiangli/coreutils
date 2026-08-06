@@ -98,6 +98,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/pr"
 	_ "github.com/qiangli/coreutils/cmds/printenv"
 	_ "github.com/qiangli/coreutils/cmds/printf"
+	_ "github.com/qiangli/coreutils/cmds/ps"
 	_ "github.com/qiangli/coreutils/cmds/ptx"
 	_ "github.com/qiangli/coreutils/cmds/pwd"
 	_ "github.com/qiangli/coreutils/cmds/readlink"

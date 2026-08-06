@@ -15,6 +15,7 @@ GPL code is ever copied into this repository.
 | [synseqack/aict](https://github.com/synseqack/aict) | MIT | cmds/df (windows probe) |
 | [tjfoc/gmsm](https://github.com/tjfoc/gmsm) | Apache-2.0 | cmds/cksum (`--algorithm=sm3`) |
 | [lukechampine/blake3](https://lukechampine.com/blake3) | MIT | cmds/cksum (`--algorithm=blake3`) |
+| [tklauser/ps](https://github.com/tklauser/ps) | BSD-3-Clause | cmds/ps process discovery |
 
 Tools without a row above are fresh implementations written from the
 GNU / POSIX documentation (the per-file package comments say which).
@@ -365,6 +366,42 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+### tklauser/ps — BSD-3-Clause
+
+Used as the cross-platform, cgo-free process discovery layer for `ps`.
+
+```
+BSD 3-Clause License
+
+Copyright (c) 2021-2024, Tobias Klauser
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ## Browser automation (`pkg/browser`, `bashy browser`)
