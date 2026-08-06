@@ -79,7 +79,7 @@ const (
 // defeated the very coverage test that was meant to catch them).
 const (
 	StagePlan   = "plan"   // decide what to build: sprint, meet, kb
-	StageCode   = "code"   // build it: weave, chat, foreman
+	StageCode   = "code"   // build it: weave, chat
 	StageTest   = "test"   // decide pass/fail: dag, check, verify
 	StageDeploy = "deploy" // ship it: sdlc, cluster/cloud CLIs
 	StageCross  = "cross"  // serves every stage: skills, secrets, doctor, the userland
@@ -313,9 +313,10 @@ var idioms = []Idiom{
 	{ID: "forge-loop", Commands: []string{"git", "gh", "act"},
 		Pattern: "git push; gh pr create; act",
 		Note:    "commit/push → PR → run the workflow locally before CI", Tier: TierUserland},
-	{ID: "fleet-suite", Commands: []string{"weave", "sprint", "foreman", "dag"},
-		Pattern: "sprint (plan) → weave (isolate/run) → foreman (steer) → dag (targets)",
-		Note:    "the orchestration suite", Tier: TierWorkspace},
+	{ID: "fleet-suite", Commands: []string{"weave", "sprint", "dag"},
+		Pattern: "sprint (plan) → weave (isolate/run) → dag (targets)",
+		Note:    "the orchestration suite (sprint + weave are the public surface; " +
+			"foreman/supervise/pair are suppressed internals, Bashy #40)", Tier: TierWorkspace},
 	{ID: "cluster-deploy", Commands: []string{"kubectl", "helm"},
 		Pattern: "kubectl get ...; helm install ...",
 		Note:    "inspect the cluster, install/upgrade via charts", Tier: TierCluster},
@@ -377,11 +378,13 @@ func staged(stage string, e Entry) Entry {
 }
 
 // stageTools overrides the default StageCross for tool entries that are not
-// really userland utilities. Today that is exactly one: `foreman`, which is an
-// orchestration command registered through the tool registry (an import-cycle
-// workaround), so addTools had filed it as cross-cutting alongside `cat` and
-// `grep`. It drives an agent session — it belongs on the Code stage. The
-// misfiling was invisible until there was an axis to see it on.
+// really userland utilities. It previously corrected `foreman` — an
+// orchestration command that was filed in the tool table as an import-cycle
+// workaround — from StageCross to StageCode. foreman has since been suppressed
+// from the public atlas (Bashy #40); sprint + weave are now the public
+// assignment/orchestration surface, and foreman is an internal/compatibility
+// primitive. The helper is retained for any future tool entry that needs a
+// non-cross stage override.
 func stageTools(stage string, names ...string) {
 	for _, n := range names {
 		e, ok := tools[n]
@@ -455,7 +458,7 @@ func sortedKeys(m map[string]Entry) []string {
 func init() {
 	// In-process tools (tier userland by definition). The coverage test
 	// asserts this set == tool.Names() with cmds/all + cmds/graph +
-	// cmds/foreman registered.
+	// cmds/resources registered (the public Bashy inventory).
 	addTools(GroupFileutils,
 		"basename", "chcon", "chgrp", "chmod", "chown", "clip", "cp", "dd",
 		"df", "dir", "dircolors", "dirname", "du", "file", "find", "install", "link",
@@ -487,14 +490,15 @@ func init() {
 	aliasTool("[", "test")
 	addTools(GroupCodeIntel, "ast", "graph")
 	addTools(GroupNet, "browser", "fetch")
-	addTools(GroupOrch, "foreman")
+	// foreman was here (GroupOrch) but is now a suppressed internal (Bashy #40);
+	// sprint + weave are the public orchestration surface. See packages.go.
 	addTools(GroupDiagnostics, "resources")
 
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
 		"ast", "graph",
 		"browser", "fetch", "duration", "tz", "ntp", "sntp", "tokens",
-		"foreman", "resources",
+		"resources",
 	)
 	capTools(CapDryRun, "rm")
 	capTools(CapDestructive, "rm", "dd", "shred", "truncate")
@@ -516,11 +520,10 @@ func init() {
 		// find spawns the -exec/-ok utility (its specified behavior).
 		"find",
 	)
-	capTools(CapDaemon, "foreman")
-	// foreman drives an agent session: it is a Code-stage orchestrator, not a
-	// cross-cutting userland utility. It only lives in the tool table to dodge an
-	// import cycle (see bashy agentos.go).
-	stageTools(StageCode, "foreman")
+	// foreman was a CapDaemon + StageCode tool entry here, but has been
+	// suppressed from the public atlas (Bashy #40). Its implementation
+	// (pkg/foreman, cmds/foreman) remains as an internal/compatibility
+	// primitive; sprint + weave are the public orchestration surface.
 
 	// Front-door verbs. Shell builtins and registry CLIs are merged by the
 	// embedder (bashy); everything else lives here.
@@ -863,7 +866,7 @@ func init() {
 	// the advisor, and the audit hook do not reach across an execve).
 	eff(EffExec,
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
-		"stdbuf", "time", "timeout", "watch", "env", "foreman",
+		"stdbuf", "time", "timeout", "watch", "env",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
 		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
@@ -891,7 +894,7 @@ func init() {
 	// persist — leaves something that OUTLIVES the session: a cron entry, a
 	// daemon, an installed/upgraded binary.
 	eff(EffPersist,
-		"at", "batch", "crontab", "nohup", "foreman",
+		"at", "batch", "crontab", "nohup",
 		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",
 	)
