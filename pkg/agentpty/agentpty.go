@@ -54,6 +54,11 @@ type Options struct {
 	// MaxRuntime is for.
 	IdleTimeout time.Duration
 
+	// Activity reports structured progress that arrives outside the PTY (for
+	// example, an agent's declared event file). Each signal resets IdleTimeout
+	// exactly like a successful PTY write. The producer owns and may close it.
+	Activity <-chan struct{}
+
 	// MaxRuntime is a hard wall-clock ceiling that activity cannot reset. It is
 	// measured against real elapsed time, not a monotonic timer, because a
 	// monotonic timer PAUSES while the host sleeps — a run spanning an overnight

@@ -30,6 +30,9 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	// through the same control socket `weave attach` uses. Off with BASHY_NO_COACH;
 	// a no-op when there is no control socket to steer through.
 	sink := logSink
+	if sink != nil {
+		sink = &weaveLockedWriter{w: sink}
+	}
 	var coach *chat.Coach
 	if guards.ctlSock != "" && chat.ReflexEnabled() {
 		pol := chat.DefaultCoachPolicy()
@@ -45,8 +48,16 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		sink = io.MultiWriter(logSink, coach)
 	}
 
+	var activity <-chan struct{}
+	var stopEvents func()
+	if guards.eventsPath != "" {
+		activity, stopEvents = followWeaveEventFile(guards.eventsPath, sink)
+		defer stopEvents()
+	}
+
 	code, reason, err := agentpty.Run(cmd, sink, agentpty.Options{
 		IdleTimeout:   guards.idleTimeout,
+		Activity:      activity,
 		MaxRuntime:    guards.maxRuntime,
 		MemLimitBytes: guards.memLimitBytes,
 		CtlSock:       guards.ctlSock,

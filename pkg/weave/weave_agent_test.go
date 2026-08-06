@@ -70,6 +70,26 @@ func TestExpandedAgentEnablesDeclaredStdoutEventsOnce(t *testing.T) {
 	}
 }
 
+func TestExpandedYcodeEnablesDeclaredEventFile(t *testing.T) {
+	pinAgentFleet(t)
+	l, argv, err := weaveExpandAgent([]string{"ycode:glm-5.2"}, "body", "title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	argv = weaveAgentEventsFileArgv(l, argv, path)
+	got := strings.Join(argv, " ")
+	if !strings.Contains(got, "--events "+path) {
+		t.Fatalf("ycode event file flag missing: %q", got)
+	}
+	if !strings.HasPrefix(argv[len(argv)-1], "body") {
+		t.Fatalf("event file flags displaced the final prompt: %q", argv)
+	}
+	if twice := weaveAgentEventsFileArgv(l, argv, path); strings.Join(twice, "\x00") != strings.Join(argv, "\x00") {
+		t.Fatalf("event file flag injection is not idempotent:\n once=%q\n twice=%q", argv, twice)
+	}
+}
+
 // An alias names the same agent.
 func TestExpandAgentByAlias(t *testing.T) {
 	pinAgentFleet(t)

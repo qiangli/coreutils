@@ -2860,6 +2860,9 @@ type weaveGuards struct {
 	// coachee is the binding of the agent running this item, used by the reflex
 	// coach's P2b escalation to pick an agent-coach one band above it.
 	coachee string
+	// eventsPath is a tool-declared structured progress stream. Its follower
+	// writes concise events to the worker log and feeds the idle watchdog.
+	eventsPath string
 }
 
 // errWeaveWrapperLive is returned from inside the queue-lock callback
@@ -3085,11 +3088,16 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		workspace = it.Workspace
 		branch = it.Branch
 	}
+	agentEventsPath := ""
 	if agentLaunch != nil {
 		toolArgs, err = weaveBindAgentWorkspace(agentLaunch, toolArgs, workspace)
 		if err != nil {
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 				weavecli.ExitPrecondFail, err))
+		}
+		if fleetTool, ok := fleetCatalog().Tool(agentLaunch.ToolName); ok && fleetTool.HasEventsArg() {
+			agentEventsPath = filepath.Join(workspace, ".git", "weave-agent-events.jsonl")
+			toolArgs = weaveAgentEventsFileArgv(agentLaunch, toolArgs, agentEventsPath)
 		}
 		launchSpec = weaveLaunchSpecFromArgs(toolArgs, opts)
 		launchSpec.Agent, launchSpec.Model = agentLaunch.Nick, agentLaunch.Model
@@ -3445,6 +3453,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		memLimitBytes: memLimitBytes,
 		ctlSock:       ctlSock,
 		coachee:       it.Tool,
+		eventsPath:    agentEventsPath,
 	}
 	if ctlSock != "" {
 		if err := os.MkdirAll(filepath.Dir(ctlSock), 0o755); err != nil {
@@ -3479,6 +3488,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		}
 		fmt.Fprintf(logFile, "[weave] launch started at=%s agent=%q tool=%q\n",
 			time.Now().UTC().Format(time.RFC3339), agentName, displayTool)
+		if agentEventsPath != "" {
+			fmt.Fprintf(logFile, "[weave] structured events path=%q\n", agentEventsPath)
+		}
 	}
 	var captureRedaction weaveCaptureRedaction
 	if useLogFile || ptyMode == "never" {

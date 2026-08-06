@@ -189,6 +189,25 @@ func weaveAgentEventsStdoutArgv(l *weaveAgentLaunch, argv []string) []string {
 	return out
 }
 
+func weaveAgentEventsFileArgv(l *weaveAgentLaunch, argv []string, path string) []string {
+	if l == nil || len(argv) < 2 || strings.TrimSpace(path) == "" {
+		return argv
+	}
+	tool, ok := fleetCatalog().Tool(l.ToolName)
+	if !ok || !tool.HasEventsArg() {
+		return argv
+	}
+	events := tool.EventsArgv(path)
+	if len(events) == 0 || argvContainsSequence(argv, events) {
+		return argv
+	}
+	out := make([]string, 0, len(argv)+len(events))
+	out = append(out, argv[:len(argv)-1]...)
+	out = append(out, events...)
+	out = append(out, argv[len(argv)-1])
+	return out
+}
+
 func argvContainsSequence(argv, want []string) bool {
 	for i := 0; i+len(want) <= len(argv); i++ {
 		match := true

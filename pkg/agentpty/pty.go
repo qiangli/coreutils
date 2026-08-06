@@ -183,6 +183,21 @@ func Run(cmd *exec.Cmd, logSink io.Writer, opts Options) (int, string, error) {
 	lastWriteUnixNs.Store(time.Now().UnixNano())
 	watchdogStop := make(chan struct{})
 	defer close(watchdogStop)
+	if opts.Activity != nil {
+		go func() {
+			for {
+				select {
+				case <-watchdogStop:
+					return
+				case _, ok := <-opts.Activity:
+					if !ok {
+						return
+					}
+					lastWriteUnixNs.Store(time.Now().UnixNano())
+				}
+			}
+		}()
+	}
 	if opts.IdleTimeout > 0 {
 		go func() {
 			ticker := time.NewTicker(opts.IdleTimeout / 4)
