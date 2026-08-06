@@ -22,11 +22,11 @@ privileged integration coverage.
 
 | Measure | Count |
 |---|---:|
-| Shipped Go command packages | 136 |
-| Advertised applet names | 141 |
+| Shipped Go command packages | 140 |
+| Advertised applet names | 145 |
 | Alias applet names | 5 |
 | GNU Coreutils names | 106 |
-| Names with a configured VSC test set | 71 |
+| Names with a configured VSC test set | 75 |
 | Names without a configured VSC test set | 70 |
 | Shipped names lacking package-local tests | 0 |
 | Release-withheld implementations | 2 (`chroot`, `runcon`) |
@@ -81,6 +81,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |
+| `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 1 | 4 |
 | `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 6 | 48 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 1 | 19 |
@@ -92,6 +93,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `hexdump` | `cmds/hexdump` | — | Bashy/other extension | no | no | 1 | 6 |
 | `hostid` | `cmds/hostid` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `hostname` | `cmds/hostname` | — | GNU Coreutils | yes | no | 1 | 4 |
+| `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 1 | 8 |
 | `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `install` | `cmds/install` | — | GNU Coreutils | yes | no | 1 | 21 |
 | `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 1 | 6 |
@@ -169,6 +171,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `uptime` | `cmds/uptime` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `users` | `cmds/users` | — | GNU Coreutils | yes | no | 1 | 1 |
+| `uudecode` | `cmds/uudecode` | — | POSIX/Unix utility | no | yes | 1 | 4 |
+| `uuencode` | `cmds/uuencode` | — | POSIX/Unix utility | no | yes | 1 | 3 |
 | `vdir` | `cmds/vdir` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `watch` | `cmds/watch` | — | Bashy/other extension | no | no | 1 | 4 |
 | `wc` | `cmds/wc` | — | GNU Coreutils | yes | yes | 2 | 20 |

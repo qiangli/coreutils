@@ -177,15 +177,17 @@ or NO.
 ## Phase C — extensions (beyond coreutils)
 
 Shipped: sed; xargs (command-wrapper tier, see the NO list — spawns
-COMMAND directly; GNU subset incl. -I, -P, -0, -d); awk (goawk); plus
+COMMAND directly; GNU subset incl. -I, -P, -0, -d); awk (goawk);
+file (portable built-in signature set); iconv (Go IANA encoding registry);
+uuencode/uudecode (classic portable format); plus
 the agent-oriented extras not tracked by this GNU-manual inventory
 (watch, tree, cal, time, timeout, at/atq/atrm/batch/crontab, browser,
 fetch, clip, tokens, duration, tz, ntp — see `cmds/all/all.go` for the
 authoritative shipped set). grep/find/diff/jq/tar/gzip landed in
 Phase A via prior art.
 
-Remaining: ps (agent-useful, large cross-platform surface); file
-(magic detection).
+Remaining: ps (agent-useful, large cross-platform surface); richer optional
+file magic/MIME coverage.
 
 ### Portable userland and certification-provider policy
 
@@ -219,12 +221,38 @@ backlog. Use these decision classes when prioritizing product work:
 | interactive/editor/documentation | `ex`, `mailx`, `man`, `vi` | normally external; do not add merely to reduce a certification-provider count |
 | platform or legacy facilities | `getconf`, `locale`, `localedef`, `logger`, `lp`, `mesg`, `newgrp`, `ps`, `renice`, `tabs`, `talk`, `tput`, `write` | use declared Linux providers for certification; add a capability-gated Bashy implementation only when portable semantics are honest and useful |
 
+The 31-name table records the 2026-08-05 staged certification snapshot. Since
+that snapshot, initial pure-Go implementations of `file`, `iconv`, `uudecode`,
+and `uuencode` have landed in this repository; they count as Bashy providers
+only after a newly built certification stage proves their resolution.
+
 The classes are prioritization guidance, not permanent prohibitions. Bashy may
 also ship modern agent-oriented tools that solve current workflows better than
 a legacy interface, under distinct names and documented semantics. Any newly
 implemented POSIX/GNU name still must be registered, behaviorally and
 cross-platform tested, listed in the generated applet matrix, and proven as the
 actual staged provider before reports attribute it to Bashy.
+
+#### Portable-command implementation TODO
+
+Priority is based on cross-platform agent value, implementation risk, and the
+ability to provide honest semantics without delegating to a host executable.
+
+- **P0 — initial implementations complete:** `file`, `iconv`, `uudecode`, and
+  `uuencode`. Their useful documented subsets fail loudly for unsupported
+  formats, encodings, and variants; continue hardening them with VSC deltas and
+  cross-platform behavioral cases rather than silently broadening semantics.
+- **P1 — investigate permissive Go prior art, then scope:** `ed`, `patch`, and
+  `pax`. Record source, license, maintenance status, semantic coverage, and
+  adaptation cost before choosing implementation work. `ed` may instead become
+  a separately named modern scriptable editing primitive if that better serves
+  agents; such a primitive does not satisfy or masquerade as POSIX `ed`.
+- **Release rule:** an implementation leaves this TODO only when its command
+  package is tested, registered in `cmds/all`, classified in `pkg/atlas`,
+  present in the generated applet matrix, and passes `scripts/crossvet.sh`.
+- **Certification rule:** until that release rule is met and staged provider
+  resolution is proven, the VSC profile continues to record the corresponding
+  command as an external provider.
 
 ### at / batch / crontab — execution requires the schedule daemon
 

@@ -458,19 +458,19 @@ func init() {
 	// cmds/foreman registered.
 	addTools(GroupFileutils,
 		"basename", "chcon", "chgrp", "chmod", "chown", "clip", "cp", "dd",
-		"df", "dir", "dircolors", "dirname", "du", "find", "install", "link",
+		"df", "dir", "dircolors", "dirname", "du", "file", "find", "install", "link",
 		"ln", "ls", "mkdir", "mkfifo", "mknod", "mktemp", "mv", "readlink",
 		"realpath", "rm", "rmdir", "shred", "stat", "sync", "tar", "touch",
 		"tree", "truncate", "unlink", "vdir",
 	)
 	addTools(GroupTextutils,
 		"awk", "b2sum", "base32", "base64", "basenc", "cat", "cksum", "cmp",
-		"comm", "csplit", "cut", "diff", "expand", "fmt", "fold", "grep",
+		"comm", "csplit", "cut", "diff", "expand", "fmt", "fold", "grep", "iconv",
 		"gunzip", "gzip", "head", "hexdump", "join", "jq", "md5sum", "more",
 		"nl", "numfmt", "od", "paste", "pr", "ptx", "sed", "sha1sum",
 		"sha224sum", "sha256sum", "sha384sum", "sha512sum", "shuf", "sort",
 		"split", "strings", "sum", "tac", "tail", "tee", "tokens", "tr",
-		"tsort", "unexpand", "uniq", "wc", "xargs", "zcat",
+		"tsort", "unexpand", "uniq", "uudecode", "uuencode", "wc", "xargs", "zcat",
 	)
 	addTools(GroupShellutils,
 		"arch", "at", "atq", "atrm", "batch", "cal", "crontab",
@@ -499,7 +499,7 @@ func init() {
 	capTools(CapDryRun, "rm")
 	capTools(CapDestructive, "rm", "dd", "shred", "truncate")
 	capTools(CapReadOnly,
-		"cat", "cmp", "comm", "df", "diff", "du", "grep", "head", "hexdump",
+		"cat", "cmp", "comm", "df", "diff", "du", "file", "grep", "head", "hexdump",
 		"ls", "od", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
 		"test", "[", "tokens", "tree", "wc", "which",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
@@ -774,17 +774,17 @@ func init() {
 	// read — reads filesystem, host state, or input data (the privacy surface).
 	eff(EffRead,
 		// fileutils/inspection
-		"df", "du", "ls", "dir", "vdir", "resources", "stat", "readlink", "realpath", "tree",
+		"df", "du", "file", "ls", "dir", "vdir", "resources", "stat", "readlink", "realpath", "tree",
 		"find", "clip",
 		// test/[ answer questions ABOUT files (existence, type, permission,
 		// ownership, timestamps) — a filesystem read, never a write.
 		"test", "[",
 		// textutils (transform/read input)
 		"awk", "cat", "cmp", "comm", "csplit", "cut", "diff", "expand", "fmt",
-		"fold", "grep", "gzip", "gunzip", "head", "hexdump", "join", "jq",
+		"fold", "grep", "gzip", "gunzip", "head", "hexdump", "iconv", "join", "jq",
 		"more", "nl", "od", "paste", "pr", "ptx", "sed", "shuf", "sort",
 		"split", "strings", "tac", "tail", "tee", "tokens", "tr", "tsort",
-		"unexpand", "uniq", "wc", "xargs", "zcat",
+		"unexpand", "uniq", "uudecode", "uuencode", "wc", "xargs", "zcat",
 		"b2sum", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum",
 		"sha384sum", "sha512sum", "sum", "base32", "base64", "basenc",
 		// handoff READS the working tree (the diff + untracked files it captures);
@@ -822,7 +822,7 @@ func init() {
 		"todo",
 		"clip", "cp", "install", "kill", "link", "ln", "mkdir", "mkfifo", "mknod",
 		"mktemp", "mv", "rmdir", "tar", "touch",
-		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "graph",
+		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "uudecode", "graph",
 		"stty", "atrm", "crontab",
 		// handoff WRITES a portable record; resume WRITES the captured working
 		// tree back into a checkout. Both also read (below). Neither execs: v1

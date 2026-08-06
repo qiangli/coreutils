@@ -254,8 +254,18 @@ func TestDereferenceDirectoryEntries(t *testing.T) {
 			t.Errorf("ls -lL line = %q, want the referent's file type", line)
 		}
 	}
-	if n := strings.Count(out, " 5 "); n != 2 {
-		t.Errorf("ls -lL = %q, want both entries to report size 5", out)
+	entries := 0
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 5 && (fields[len(fields)-1] == "f" || fields[len(fields)-1] == "s") {
+			entries++
+			if fields[4] != "5" {
+				t.Errorf("ls -lL line = %q, size = %q, want 5", line, fields[4])
+			}
+		}
+	}
+	if entries != 2 {
+		t.Errorf("ls -lL = %q, found %d file entries, want 2", out, entries)
 	}
 	// Without -L the link itself is reported.
 	out, _, _ = runToolAt(t, dir, "-l")

@@ -28,10 +28,10 @@ tty uname unexpand uniq unlink uptime users vdir wc who whoami yes
 # runscen and the staged 2026-08-05 Bashy multicall inventory.
 VSC_NAMED = set("""
 at awk basename batch cat chgrp chmod chown cksum cmp comm cp crontab csplit cut
-date dd df diff dirname du echo env expand expr false find fold grep head id join
+date dd df diff dirname du echo env expand expr false file find fold grep head iconv id join
 kill ln logname ls mkdir mkfifo more mv nice nohup od paste pathchk pr printf pwd
 rm rmdir sed sleep sort split strings stty tail tee test time touch tr true tsort
-tty uname unexpand uniq wc who xargs
+tty uname unexpand uniq uudecode uuencode wc who xargs
 """.split())
 
 ALIASES = {
@@ -86,7 +86,7 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 136 or len(result) != 141:
+    if len(packages) != 140 or len(result) != 145:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -135,7 +135,7 @@ def render_markdown(data: list[dict[str, str | int]]) -> str:
         "",
         "| Measure | Count |",
         "|---|---:|",
-        f"| Shipped Go command packages | 136 |",
+        f"| Shipped Go command packages | 140 |",
         f"| Advertised applet names | {len(data)} |",
         f"| Alias applet names | {aliases} |",
         f"| GNU Coreutils names | {gnu} |",
