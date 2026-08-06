@@ -98,6 +98,30 @@ func TestWeaveDistillStreamJSONLine(t *testing.T) {
 			ok:   true,
 		},
 		{
+			name: "opencode step started",
+			line: `{"type":"step_start","part":{"type":"step-start"}}`,
+			want: "[step started]",
+			ok:   true,
+		},
+		{
+			name: "opencode tool use drops output",
+			line: `{"type":"tool_use","part":{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"README.md"},"output":"` + strings.Repeat("large", 200) + `","title":"README.md"}}}`,
+			want: "-> read README.md [completed]",
+			ok:   true,
+		},
+		{
+			name: "opencode text",
+			line: `{"type":"text","part":{"type":"text","text":"OPENCODE_JSON_OK"}}`,
+			want: "OPENCODE_JSON_OK",
+			ok:   true,
+		},
+		{
+			name: "opencode step finished",
+			line: `{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"input":6141,"output":6},"cost":0.002700045}}`,
+			want: "[step finished reason=stop input=6141 output=6 cost=$0.0027]",
+			ok:   true,
+		},
+		{
 			name: "plain text unchanged by caller",
 			line: "plain non-json text",
 			want: "",

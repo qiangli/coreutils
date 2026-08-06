@@ -100,6 +100,22 @@ type weaveStreamJSONEvent struct {
 	Error struct {
 		Message string `json:"message"`
 	} `json:"error"`
+	Part struct {
+		Type   string  `json:"type"`
+		Text   string  `json:"text"`
+		Tool   string  `json:"tool"`
+		Reason string  `json:"reason"`
+		Cost   float64 `json:"cost"`
+		Tokens struct {
+			Input  int64 `json:"input"`
+			Output int64 `json:"output"`
+		} `json:"tokens"`
+		State struct {
+			Status string         `json:"status"`
+			Input  map[string]any `json:"input"`
+			Title  string         `json:"title"`
+		} `json:"state"`
+	} `json:"part"`
 }
 
 type weaveStreamJSONContent struct {
@@ -148,9 +164,53 @@ func weaveDistillStreamJSONLine(line string) (string, bool) {
 			return "[error]", true
 		}
 		return "[error] " + message, true
+	case "step_start":
+		return "[step started]", true
+	case "tool_use":
+		return weaveDistillOpenCodeTool(event), true
+	case "text":
+		return weaveTruncateLogText(strings.TrimSpace(event.Part.Text), weaveStreamJSONTextLimit), true
+	case "step_finish":
+		return weaveDistillOpenCodeStepFinish(event), true
 	default:
 		return "", false
 	}
+}
+
+func weaveDistillOpenCodeTool(event weaveStreamJSONEvent) string {
+	name := strings.TrimSpace(event.Part.Tool)
+	if name == "" {
+		name = "tool"
+	}
+	line := "-> " + name
+	hint := strings.TrimSpace(event.Part.State.Title)
+	if hint == "" {
+		hint = weaveStreamJSONToolHint(event.Part.State.Input)
+	}
+	if hint != "" {
+		line += " " + weaveTruncateLogText(hint, weaveStreamJSONHintLimit)
+	}
+	if status := strings.TrimSpace(event.Part.State.Status); status != "" {
+		line += " [" + status + "]"
+	}
+	return line
+}
+
+func weaveDistillOpenCodeStepFinish(event weaveStreamJSONEvent) string {
+	parts := []string{"step finished"}
+	if reason := strings.TrimSpace(event.Part.Reason); reason != "" {
+		parts = append(parts, "reason="+reason)
+	}
+	if event.Part.Tokens.Input > 0 {
+		parts = append(parts, fmt.Sprintf("input=%d", event.Part.Tokens.Input))
+	}
+	if event.Part.Tokens.Output > 0 {
+		parts = append(parts, fmt.Sprintf("output=%d", event.Part.Tokens.Output))
+	}
+	if event.Part.Cost > 0 {
+		parts = append(parts, fmt.Sprintf("cost=$%.4f", event.Part.Cost))
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 func weaveDistillCodexItem(event weaveStreamJSONEvent, started bool) string {
