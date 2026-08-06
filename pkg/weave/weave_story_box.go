@@ -266,13 +266,36 @@ func newSprintStartCmd() *cobra.Command {
 
 // newSprintStopCmd closes the box and records what actually happened.
 func newSprintStopCmd() *cobra.Command {
+	return newSprintCloseCmd(false)
+}
+
+// newSprintEndCmd closes the lifecycle, not merely the current time-box.
+// It deliberately has no --force or --no-verify escape hatch: "done" must
+// mean that linked work is parked, repositories are wrapped, and a real gate
+// passed. Callers that only need to close a cadence cycle retain `stop`.
+func newSprintEndCmd() *cobra.Command {
+	return newSprintCloseCmd(true)
+}
+
+func newSprintCloseCmd(ending bool) *cobra.Command {
 	var flags weaveOutputFlags
 	var note, gateCmd, gateDir string
 	var force, noVerify bool
+	verb := "stop"
+	short := "Close a sprint's time-box and record planned vs actual"
+	if ending {
+		verb = "end"
+		short = "Finish a sprint after workers, repositories, and gates are consistent"
+	}
+	op := "sprint " + verb
+	long := "stop DRAINS a sprint: it parks the workers, proves the tree still builds,\n"
+	if ending {
+		long = "end DRAINS and closes the sprint lifecycle: it parks linked workers, requires wrapped repositories and a green gate, moves the card to done, and releases the conductor lease.\n\n"
+	}
 	cmd := &cobra.Command{
-		Use:   "stop <sprint>",
-		Short: "Close a sprint's time-box and record planned vs actual",
-		Long: "stop DRAINS a sprint: it parks the workers, proves the tree still builds,\n" +
+		Use:   verb + " <sprint>",
+		Short: short,
+		Long: long +
 			"and only then closes the clock.\n\n" +
 			"The reason is preemption. Something more urgent arrives, this work must\n" +
 			"yield, and it must yield in a state somebody can pick up cold. A stop is not\n" +
@@ -313,7 +336,7 @@ func newSprintStopCmd() *cobra.Command {
 			now := time.Now().UTC()
 			requireGate := !noVerify
 			var rep drainReport
-			return runWeaveStoryMutate(cmd, id, "sprint stop", &flags, func(s *weaveStory) (string, error) {
+			return runWeaveStoryMutate(cmd, id, op, &flags, func(s *weaveStory) (string, error) {
 				b := s.currentBox()
 				if b == nil {
 					// Saying "stopped" about a sprint that was never running
@@ -398,6 +421,13 @@ func newSprintStopCmd() *cobra.Command {
 				if strings.TrimSpace(note) != "" {
 					msg += ": " + strings.TrimSpace(note)
 				}
+				if ending {
+					from := s.Column
+					s.Column = "done"
+					_ = closeSprintRoom(s, weaveConductorName(""))
+					s.Lease = nil
+					msg += fmt.Sprintf("; lifecycle ended (%s → done), conductor lease released", from)
+				}
 				weaveStoryAppend(s, weaveConductorName(""), "system", msg)
 				return fmt.Sprintf("sprint #%d %s", id, msg), nil
 			})
@@ -406,8 +436,10 @@ func newSprintStopCmd() *cobra.Command {
 	cmd.Flags().StringVar(&note, "note", "", "what the box actually produced")
 	cmd.Flags().StringVar(&gateCmd, "gate", "", "the command proving the tree still builds and passes")
 	cmd.Flags().StringVar(&gateDir, "gate-dir", "", "where to run the gate (default: cwd)")
-	cmd.Flags().BoolVar(&force, "force", false, "close even over a red gate or an unparked worker — recorded as not clean")
-	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "close with no gate at all, on the record as unverified")
+	if !ending {
+		cmd.Flags().BoolVar(&force, "force", false, "close even over a red gate or an unparked worker — recorded as not clean")
+		cmd.Flags().BoolVar(&noVerify, "no-verify", false, "close with no gate at all, on the record as unverified")
+	}
 	flags.attach(cmd)
 	return cmd
 }

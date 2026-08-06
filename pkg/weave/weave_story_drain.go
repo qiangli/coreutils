@@ -69,6 +69,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -183,6 +184,40 @@ func pauseWorkersIn(dir string, only map[int64]bool) (int, error) {
 			weaveStopWrapper(it.WrapperPid)
 			stopped++
 		}
+	}
+	// Persist the parked state after the processes have stopped. Merely killing
+	// the wrappers while leaving queue.json at "working" makes a handoff look
+	// live forever and gives the successor no truthful resume operation.
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		found := make(map[int64]bool, len(only))
+		for _, it := range q.Items {
+			if !only[it.ID] {
+				continue
+			}
+			found[it.ID] = true
+			if it.State == "allocated" {
+				return fmt.Errorf("run #%d is allocated but has no resumable worker state", it.ID)
+			}
+			if it.State != "working" {
+				continue
+			}
+			if it.Workspace != "" {
+				if out, err := exec.Command("git", "-C", it.Workspace, "rev-parse", "HEAD").Output(); err == nil {
+					it.Head = strings.TrimSpace(string(out))
+				}
+			}
+			it.State = "paused"
+			it.WrapperPid = 0
+			it.CtlSock = ""
+		}
+		for id := range only {
+			if !found[id] {
+				return fmt.Errorf("linked run #%d is absent from its weave queue", id)
+			}
+		}
+		return nil
+	}); err != nil {
+		return stopped, err
 	}
 	return stopped, nil
 }

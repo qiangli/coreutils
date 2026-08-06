@@ -264,7 +264,8 @@ runs are executed per-repo by ` + "`bashy weave`" + `. The board is user-global;
 Each sprint card carries a spec-ref, acceptance, a kanban column, a
 CONTINUITY record (the resume brief), a conductor LEASE, and cross-repo
 run links {repo, id}. Durability (survive Ctrl+C / SIGKILL / token
-exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
+exhaustion): checkpoint often. The common lifecycle is start → pause →
+resume → end; handoff/take/stop remain the lower-level compatibility verbs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWeaveBoard(cmd, epic, &flags) // default = board
 		},
@@ -283,7 +284,10 @@ exhaustion): checkpoint often, handoff on a clean exit, take to pick up.`,
 		newSprintWhoCmd(),
 		newSprintPingCmd(),
 		newSprintStartCmd(),
+		newSprintPauseCmd(),
+		newSprintResumeCmd(),
 		newSprintStopCmd(),
+		newSprintEndCmd(),
 		newSprintExtendCmd(),
 		newWeaveStoryTakeCmd(),
 		newWeaveStoryHandoffCmd(),
