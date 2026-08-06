@@ -3470,6 +3470,15 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				weavecli.ExitGenericFail, fmt.Errorf("open log: %w", err)))
 		}
 		logFile = f
+		// A live worker must be distinguishable from a launch that never began.
+		// Agent event streams provide ongoing progress below, while this marker
+		// makes the log observable immediately, before the first provider event.
+		agentName := ""
+		if agentLaunch != nil {
+			agentName = agentLaunch.Nick
+		}
+		fmt.Fprintf(logFile, "[weave] launch started at=%s agent=%q tool=%q\n",
+			time.Now().UTC().Format(time.RFC3339), agentName, displayTool)
 	}
 	var captureRedaction weaveCaptureRedaction
 	if useLogFile || ptyMode == "never" {

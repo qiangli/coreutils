@@ -162,7 +162,47 @@ func weaveExpandAgent(toolArgs []string, body, title string) (*weaveAgentLaunch,
 	if prompt == "" {
 		return nil, nil, fmt.Errorf("agent %q needs a prompt: issue has neither a body nor a title", toolArgs[0])
 	}
-	return l, l.Argv(prompt + weaveWorkerContract), nil
+	argv := l.Argv(prompt + weaveWorkerContract)
+	return l, weaveAgentEventsStdoutArgv(l, argv), nil
+}
+
+// weaveAgentEventsStdoutArgv connects the fleet's event-stream declaration to
+// weave's stream decoder. Keep the prompt final: several agent CLIs treat the
+// last argument specially, and Launch.Argv deliberately guarantees that
+// position. Raw conductor argv never reaches this helper and remains verbatim.
+func weaveAgentEventsStdoutArgv(l *weaveAgentLaunch, argv []string) []string {
+	if l == nil || len(argv) < 2 {
+		return argv
+	}
+	tool, ok := fleetCatalog().Tool(l.ToolName)
+	if !ok {
+		return argv
+	}
+	events := tool.EventsStdoutArgv()
+	if len(events) == 0 || argvContainsSequence(argv, events) {
+		return argv
+	}
+	out := make([]string, 0, len(argv)+len(events))
+	out = append(out, argv[:len(argv)-1]...)
+	out = append(out, events...)
+	out = append(out, argv[len(argv)-1])
+	return out
+}
+
+func argvContainsSequence(argv, want []string) bool {
+	for i := 0; i+len(want) <= len(argv); i++ {
+		match := true
+		for j := range want {
+			if argv[i+j] != want[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 // weaveWorkerContract is appended to EVERY worker's prompt: the non-negotiable

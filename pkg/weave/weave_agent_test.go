@@ -37,7 +37,7 @@ func TestExpandAgentSelectsTheModel(t *testing.T) {
 	if l == nil {
 		t.Fatal("a nickname must expand")
 	}
-	wantPrefix := "claude --dangerously-skip-permissions --model claude-fable-5 -p FIX THE GATE"
+	wantPrefix := "claude --dangerously-skip-permissions --model claude-fable-5 -p --output-format stream-json --verbose FIX THE GATE"
 	if got := strings.Join(argv, " "); !strings.HasPrefix(got, wantPrefix) {
 		t.Fatalf("argv =\n  %q\nwant prefix\n  %q", got, wantPrefix)
 	}
@@ -49,6 +49,24 @@ func TestExpandAgentSelectsTheModel(t *testing.T) {
 	// however it was spelled.
 	if l.Nick != "007" || l.Binding() != "claude:fable5" {
 		t.Fatalf("launch = %+v", l)
+	}
+}
+
+func TestExpandedAgentEnablesDeclaredStdoutEventsOnce(t *testing.T) {
+	pinAgentFleet(t)
+	_, argv, err := weaveExpandAgent([]string{"007"}, "body", "title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(argv, " ")
+	if strings.Count(got, "--output-format stream-json --verbose") != 1 {
+		t.Fatalf("Claude event flags must appear exactly once: %q", got)
+	}
+	if !strings.HasPrefix(argv[len(argv)-1], "body") {
+		t.Fatalf("event flags displaced the final prompt: %q", argv)
+	}
+	if twice := weaveAgentEventsStdoutArgv(&weaveAgentLaunch{ToolName: "claude"}, argv); strings.Join(twice, "\x00") != strings.Join(argv, "\x00") {
+		t.Fatalf("event flag injection is not idempotent:\n once=%q\n twice=%q", argv, twice)
 	}
 }
 
