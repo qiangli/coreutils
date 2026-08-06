@@ -187,6 +187,29 @@ Phase A via prior art.
 Remaining: ps (agent-useful, large cross-platform surface); file
 (magic detection).
 
+### VSC Commands & Utilities self-contained backlog
+
+Long-term release policy: every named command selected by the configured
+VSC-PCTS2016 POSIX08 Commands & Utilities scenario should resolve to a
+Bashy-owned Go implementation. Host fallback remains supported during the
+transition, but must stay visible in evidence and must never be presented as a
+Bashy utility implementation.
+
+The 2026-08-05 staged certification arm still required external providers for
+these 31 command names:
+
+`ar`, `bc`, `ctags`, `ed`, `ex`, `file`, `getconf`, `iconv`, `locale`,
+`localedef`, `logger`, `lp`, `m4`, `mailx`, `make`, `man`, `mesg`, `newgrp`,
+`nm`, `patch`, `pax`, `ps`, `renice`, `strip`, `tabs`, `talk`, `tput`,
+`uudecode`, `uuencode`, `vi`, `write`.
+
+This is a burn-down inventory, not a promise that every name belongs in GNU
+Coreutils proper. This repository is the pure-Go userland implementation home,
+so non-Coreutils POSIX tools can live here in clearly named packages. Each name
+leaves the backlog only after it is registered, has package-local behavioral
+and platform coverage, appears in the generated applet matrix, and the staged
+VSC provider check proves that `/vsc/cushim/<name>` resolves to the SUT.
+
 ### at / batch / crontab — execution requires the schedule daemon
 
 `at`, `batch`, and `crontab` submit/install jobs into the persistent

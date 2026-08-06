@@ -32,3 +32,6 @@ The five additional applet names over package count are aliases registered by
 tested packages: `[` (`test`), `gunzip` and `zcat` (`gzip`), `ncal` (`cal`), and
 `sntp` (`ntp`). Alias behavior must be invoked under its own name in tests when
 name-dependent parsing or diagnostics exist.
+
+See `applet-matrix.md` for the complete applet-by-applet GNU, VSC, alias, and
+package-test matrix; `applet-matrix.tsv` is its machine-readable counterpart.

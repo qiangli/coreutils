@@ -31,6 +31,7 @@ set -e
 cd "$(git rev-parse --show-toplevel)"
 
 scripts/applet-test-coverage.sh
+scripts/applet-matrix.py --check
 
 targets=${*:-"windows linux darwin"}
 pkgs=$(go list ./... | grep -v /external/)
