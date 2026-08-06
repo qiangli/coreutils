@@ -15,8 +15,29 @@ everywhere, embedded directly into the consuming process.
 It pairs with [qiangli/sh](https://github.com/qiangli/sh) (a fork of
 `mvdan.cc/sh/v3` with an in-process bash interpreter): sh provides the
 shell, coreutils provides the userland. Wired together through the
-interpreter's `ExecHandler`, an agent gets a complete Unix-like
+interpreter's `ExecHandler`, an agent gets a portable Unix-like
 environment in a single Go process.
+
+## POSIX certification boundary
+
+This repository is **not a complete POSIX Commands & Utilities
+implementation**. The configured VSC-PCTS2016 POSIX08 certification scenario
+requires command providers that Bashy's pure-Go userland does not currently
+ship. As of 2026-08-05, after adding `file`, `iconv`, `uudecode`, and
+`uuencode`, the remaining **27 command names** are:
+
+`ar`, `bc`, `ctags`, `ed`, `ex`, `getconf`, `locale`, `localedef`, `logger`,
+`lp`, `m4`, `mailx`, `make`, `man`, `mesg`, `newgrp`, `nm`, `patch`, `pax`,
+`ps`, `renice`, `strip`, `tabs`, `talk`, `tput`, `vi`, `write`.
+
+The formal Linux certification profile supplies those commands through
+explicitly declared and pinned external providers. Any resulting certification
+evidence applies to that assembled Bashy-plus-provider configuration, not to
+this repository alone. An applet appearing in the command list means that its
+documented supported subset is implemented and tested; it does not by itself
+claim full POSIX or GNU option coverage. See
+[the portable-userland and provider policy](docs/commands.md#portable-userland-and-certification-provider-policy)
+and the generated [applet matrix](docs/applet-matrix.md).
 
 ## The agent contract
 
@@ -50,8 +71,9 @@ Every tool in this repo follows the same rules:
   design. Even local-path remotes use go-git's in-process server
   transport — `git-upload-pack` is never spawned.
 
-- `cmds/` — the userland: 74 commands (Phase A of
-  [docs/commands.md](docs/commands.md)) covering file operations
+- `cmds/` — the userland: 140 shipped Go command packages advertising 145
+  applet names (see the generated [applet matrix](docs/applet-matrix.md)),
+  covering file operations
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),
   text (cat, head, tail, wc, sort, uniq, cut, tr, grep, diff, …),
   system info (date, uname, id, …), checksums (md5/sha\*sum,
@@ -68,9 +90,8 @@ Every tool in this repo follows the same rules:
 - `cmd/coreutils` — busybox-style multicall binary (`coreutils ls …`,
   or symlink a tool name to the binary for argv[0] dispatch).
 
-Planned next (see docs/commands.md): Phase B — the rest of the GNU
-manual (printf, …) — then sed/xargs/ps and the
-`mvdan.cc/sh/v3` `ExecHandler` adapter.
+Current priorities and withheld implementations are maintained in
+[docs/commands.md](docs/commands.md).
 
 ## Consumers
 
