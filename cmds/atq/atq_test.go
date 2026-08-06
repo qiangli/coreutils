@@ -1,0 +1,63 @@
+package atqcmd
+
+import (
+	"bytes"
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/qiangli/coreutils/pkg/schedule"
+	"github.com/qiangli/coreutils/tool"
+)
+
+func runATQ(t *testing.T, args ...string) (string, string, int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+	}
+	code := cmd.Run(rc, args)
+	return out.String(), errb.String(), code
+}
+
+func TestATQListsOnlyEnabledAtJobs(t *testing.T) {
+	t.Setenv("BASHY_SCHEDULE_STATE", filepath.Join(t.TempDir(), "schedule.json"))
+	next := time.Date(2026, 8, 6, 12, 30, 0, 0, time.UTC)
+	err := schedule.UpdateJobs(func([]*schedule.Job) ([]*schedule.Job, error) {
+		return []*schedule.Job{
+			{ID: "shown", Kind: "at", Enabled: true, NextRun: next, Command: []string{"printf", "hello world"}},
+			{ID: "disabled", Kind: "at", Enabled: false, NextRun: next, Command: []string{"false"}},
+			{ID: "cron", Kind: "cron", Enabled: true, NextRun: next, Command: []string{"false"}},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, errb, code := runATQ(t)
+	if code != 0 || errb != "" {
+		t.Fatalf("atq: code=%d stderr=%q", code, errb)
+	}
+	if !strings.Contains(out, "shown\t"+next.Format(time.RFC3339)+"\tprintf hello world") {
+		t.Fatalf("atq missing enabled at job: %q", out)
+	}
+	if strings.Contains(out, "disabled") || strings.Contains(out, "cron") {
+		t.Fatalf("atq disclosed non-pending jobs: %q", out)
+	}
+}
+
+func TestATQEmptyAndUsage(t *testing.T) {
+	t.Setenv("BASHY_SCHEDULE_STATE", filepath.Join(t.TempDir(), "schedule.json"))
+	out, errb, code := runATQ(t)
+	if code != 0 || errb != "" || out != "no pending at jobs\n" {
+		t.Fatalf("empty atq: code=%d stdout=%q stderr=%q", code, out, errb)
+	}
+	_, errb, code = runATQ(t, "operand")
+	if code != 2 || !strings.Contains(errb, "extra operand") {
+		t.Fatalf("atq operand: code=%d stderr=%q", code, errb)
+	}
+}

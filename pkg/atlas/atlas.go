@@ -473,11 +473,11 @@ func init() {
 		"tsort", "unexpand", "uniq", "wc", "xargs", "zcat",
 	)
 	addTools(GroupShellutils,
-		"arch", "at", "atq", "atrm", "batch", "cal", "chroot", "crontab",
+		"arch", "at", "atq", "atrm", "batch", "cal", "crontab",
 		"date", "duration", "echo", "env", "expr", "factor", "false",
 		"groups", "hostid", "hostname", "id", "kill", "logname", "ncal", "nice",
 		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "pwd",
-		"runcon", "seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
+		"seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
 		// `[` is test under its bracket spelling — one implementation,
@@ -512,8 +512,7 @@ func init() {
 	capTools(CapBudget, "tokens", "ast")
 	capTools(CapNeedsNetwork, "fetch", "browser", "ntp", "sntp")
 	capTools(CapSpawnsProcesses,
-		"xargs", "timeout", "time", "watch", "nice", "nohup", "chroot",
-		"runcon", "stdbuf", "at", "batch",
+		"xargs", "timeout", "time", "watch", "nice", "nohup", "stdbuf", "at", "batch",
 		// find spawns the -exec/-ok utility (its specified behavior).
 		"find",
 	)
@@ -863,8 +862,8 @@ func init() {
 	// exec — spawns a process bashy no longer governs (the coreutils userland,
 	// the advisor, and the audit hook do not reach across an execve).
 	eff(EffExec,
-		"find", "awk", "xargs", "at", "batch", "chroot", "nice", "nohup",
-		"runcon", "stdbuf", "time", "timeout", "watch", "env", "foreman",
+		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
+		"stdbuf", "time", "timeout", "watch", "env", "foreman",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
 		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
@@ -880,7 +879,7 @@ func init() {
 	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secrets", "ask", "tessaro", "login")
 
 	// priv — changes privilege, ownership, or a security label.
-	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod", "chroot", "runcon")
+	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod")
 
 	// remote — executes on ANOTHER host (crosses the machine boundary). `dag`
 	// pipes a Host:-tagged target body to a remote `bash -s`; sphere runs pooled

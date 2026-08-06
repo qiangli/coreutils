@@ -21,9 +21,12 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
-	_, code := tool.Parse(rc, cmd, fs, args)
+	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+	if len(operands) != 0 {
+		return tool.UsageError(rc, cmd, "extra operand %q", operands[0])
 	}
 
 	jobs, err := schedule.LoadJobs()

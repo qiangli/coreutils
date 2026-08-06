@@ -48,6 +48,18 @@ func TestUsageValidation(t *testing.T) {
 	}
 }
 
+func TestSNTPAliasValidatesUnderItsOwnName(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+	}
+	code := sntpTool.Run(rc, []string{"--timeout", "nope"})
+	if code != 2 || !strings.HasPrefix(errb.String(), "sntp:") || strings.Contains(errb.String(), "Try 'ntp ") {
+		t.Fatalf("sntp: code=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+	}
+}
+
 func TestLiveQueryOptional(t *testing.T) {
 	t.Skip("live NTP requires network; packet parser is unit-tested")
 }

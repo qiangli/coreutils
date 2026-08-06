@@ -97,3 +97,15 @@ func TestNcalRegistered(t *testing.T) {
 		t.Fatal("ncal is not registered")
 	}
 }
+
+func TestNcalAliasExecutes(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	}
+	code := ncalCmd.Run(rc, []string{"2", "2024"})
+	if code != 0 || errb.String() != "" || !strings.Contains(out.String(), "February 2024") {
+		t.Fatalf("ncal: code=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+	}
+}

@@ -112,6 +112,14 @@ not a green. `scripts/crossvet.sh` is the single implementation — the pre-push
 hook execs the same script, so the manual and automatic gates cannot drift.
 Install the hook once per clone: `git config core.hooksPath scripts/hooks`.
 
+**Registered means tested.** Every command package imported by `cmds/all` must
+contain package-local behavioral tests. `scripts/applet-test-coverage.sh` is a
+fail-closed release check and is invoked by `crossvet.sh`; a command without a
+test must be removed from `cmds/all` (and therefore from multicall listing/help)
+until coverage lands. A registration-only assertion is not sufficient for an
+alias: execute the alias through its own registered `Tool` so its name,
+parsing, diagnostics, and dispatch are covered.
+
 Tests are hermetic: no network, no system git required. `reference/`
 (like `priorart/`) is gitignored local source — GNU coreutils, bash,
 uutils, hyperfine — kept for conformance/benchmark reference;

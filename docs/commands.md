@@ -117,7 +117,7 @@ Environment, system, misc:
 | id | u-root | unix semantics; Windows best-effort per platform note |
 | uptime | u-root | platform probes; uutils-parity additions: -p/--pretty, -s/--since |
 | arch | uutils parity | prints machine hardware name |
-| chroot | uutils parity | native chroot on Unix; --userspec, --groups, --skip-chdir; requires privileges and mutates process root as the utility semantics require |
+| chroot | release-withheld | implementation exists, but is excluded from `cmds/all` until bounded privileged integration coverage proves root change, credential handling, command status, and cleanup |
 | expr | uutils parity | arithmetic, comparison, boolean, regex match, length/index/substr/match/quote |
 | factor | uutils parity | decimal integers, stdin splitting, -h/--exponents |
 | groups | uutils parity | current user or named users via OS account database |
@@ -129,7 +129,7 @@ Environment, system, misc:
 | pathchk | uutils parity | -p, -P, --portability |
 | pinky | uutils parity | utmp-backed short listing and long user format; empty output when no records are available |
 | printf | written fresh | POSIX FORMAT reuse (stops after one pass if nothing was consumed) with excess/missing-operand defaults; %s %b %c %d %i %o %u %x %X plus %e/%E/%f/%F/%g/%G/%a/%A; width/precision incl. `*` argument forms (negative width left-justifies, negative precision is omitted); backslash escapes incl. `\NNN` octal and `\c` output-termination (in FORMAT and inside %b, whose own octal form is `\0NNN`); POSIX leading-quote numeric character constants; invalid numbers/conversions diagnosed with nonzero status, `--` ends option scanning |
-| runcon | uutils parity | Linux SELinux procfs contexts; clear unsupported error elsewhere |
+| runcon | release-withheld | implementation exists, but is excluded from `cmds/all` until bounded SELinux integration coverage proves label transition, command status, restoration, and unsupported-platform behavior |
 | stdbuf | uutils parity | -i/-o/-e parsing and COMMAND environment; depends on target program/libstdbuf support |
 | stty | uutils parity | terminal status, size, selected modes/settings; platform terminal support required |
 | users | uutils parity | utmp-backed logged-in user list; optional FILE |

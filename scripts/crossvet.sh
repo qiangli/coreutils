@@ -30,6 +30,8 @@
 set -e
 cd "$(git rev-parse --show-toplevel)"
 
+scripts/applet-test-coverage.sh
+
 targets=${*:-"windows linux darwin"}
 pkgs=$(go list ./... | grep -v /external/)
 failed=""
