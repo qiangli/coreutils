@@ -903,9 +903,25 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// stream, not a pipe around a CLI that buffers prose until exit. The fleet
 	// registry is the adapter: AGY receives stream-json flags, while tools with
 	// no stdout event contract keep their existing argv.
+	var eventPath string
 	if opt.Stream != nil {
 		args = agentlaunch.InsertBeforePrompt(args,
 			agentlaunch.EventStdoutArgs(toAgentLaunch(lnch)))
+		// ycode exposes the same structured stream through a file side-channel
+		// rather than stdout. Ask for that channel here too; the runner bridge
+		// below follows it into Stream while the process is alive.
+		if extra := agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), "<events>", newCatalog); len(extra) > 0 {
+			if !opt.DryRun {
+				dir, mkErr := os.MkdirTemp("", "bashy-chat-events-")
+				if mkErr != nil {
+					return Result{SchemaVersion: schemaVersion, Agent: lnch.Tool, Nick: name, Role: opt.Role, ExitCode: 2}, fmt.Errorf("chat: create event channel: %w", mkErr)
+				}
+				defer os.RemoveAll(dir)
+				eventPath = filepath.Join(dir, "events.ndjson")
+				extra = agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(lnch), eventPath, newCatalog)
+			}
+			args = agentlaunch.InsertBeforePrompt(args, extra)
+		}
 	}
 	cwd := opt.Cwd
 	if cwd == "" {
@@ -954,7 +970,20 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// act, so it is the only place that can tell the spawned process who it
 	// is. execRunner reads this back out to stamp the child's environment.
 	callCtx, endObservation := startGenAIObservation(ctx, lnch)
+	var stopEvents context.CancelFunc
+	var eventsDone <-chan struct{}
+	if eventPath != "" {
+		eventCtx, cancel := context.WithCancel(callCtx)
+		stopEvents = cancel
+		done := make(chan struct{})
+		eventsDone = done
+		go streamEventFile(eventCtx, eventPath, opt.Stream, done)
+	}
 	out, code, err := runner.Run(withLaunch(callCtx, lnch), lnch.Tool, args, cwd)
+	if stopEvents != nil {
+		stopEvents()
+		<-eventsDone
+	}
 	endGenAIObservation(endObservation, lnch, prompt, out, "", err)
 	res.Output, res.ExitCode = out, code
 	recordLaunchUsage(ctx, lnch, prompt, out)

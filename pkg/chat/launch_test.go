@@ -23,6 +23,20 @@ func TestInvokeLiveStreamEnablesDeclaredToolEvents(t *testing.T) {
 	}
 }
 
+func TestInvokeLiveStreamEnablesYcodeEventFile(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	res, err := Invoke(context.Background(), Options{
+		Agent: "ycode:glm-5.2", Instruction: "hi", DryRun: true, Stream: io.Discard,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "--events <events>") {
+		t.Fatalf("live ycode argv lacks declared event file: %q", res.Output)
+	}
+}
+
 // permitUnsafeLaunch opts the test host into launching agents with their own
 // safety systems disabled.
 //
