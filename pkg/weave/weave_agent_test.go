@@ -37,7 +37,7 @@ func TestExpandAgentSelectsTheModel(t *testing.T) {
 	if l == nil {
 		t.Fatal("a nickname must expand")
 	}
-	wantPrefix := "claude --dangerously-skip-permissions --model claude-fable-5 -p --output-format stream-json --verbose FIX THE GATE"
+	wantPrefix := "claude --dangerously-skip-permissions --model claude-fable-5 --output-format stream-json --verbose -p FIX THE GATE"
 	if got := strings.Join(argv, " "); !strings.HasPrefix(got, wantPrefix) {
 		t.Fatalf("argv =\n  %q\nwant prefix\n  %q", got, wantPrefix)
 	}
@@ -87,6 +87,21 @@ func TestExpandedYcodeEnablesDeclaredEventFile(t *testing.T) {
 	}
 	if twice := weaveAgentEventsFileArgv(l, argv, path); strings.Join(twice, "\x00") != strings.Join(argv, "\x00") {
 		t.Fatalf("event file flag injection is not idempotent:\n once=%q\n twice=%q", argv, twice)
+	}
+}
+
+func TestExpandedAGYKeepsPromptFlagAdjacentToPrompt(t *testing.T) {
+	pinAgentFleet(t)
+	_, argv, err := weaveExpandAgent([]string{"agy:gemini3.1"}, "THE TASK", "title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(argv, " ")
+	if !strings.Contains(got, "--output-format stream-json -p THE TASK") {
+		t.Fatalf("AGY event flags split -p from its prompt: %q", got)
+	}
+	if argv[len(argv)-2] != "-p" || !strings.HasPrefix(argv[len(argv)-1], "THE TASK") {
+		t.Fatalf("AGY prompt pair is not final and adjacent: %q", argv)
 	}
 }
 

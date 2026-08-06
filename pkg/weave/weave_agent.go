@@ -182,11 +182,7 @@ func weaveAgentEventsStdoutArgv(l *weaveAgentLaunch, argv []string) []string {
 	if len(events) == 0 || argvContainsSequence(argv, events) {
 		return argv
 	}
-	out := make([]string, 0, len(argv)+len(events))
-	out = append(out, argv[:len(argv)-1]...)
-	out = append(out, events...)
-	out = append(out, argv[len(argv)-1])
-	return out
+	return weaveInsertBeforePrompt(argv, events)
 }
 
 func weaveAgentEventsFileArgv(l *weaveAgentLaunch, argv []string, path string) []string {
@@ -201,10 +197,23 @@ func weaveAgentEventsFileArgv(l *weaveAgentLaunch, argv []string, path string) [
 	if len(events) == 0 || argvContainsSequence(argv, events) {
 		return argv
 	}
-	out := make([]string, 0, len(argv)+len(events))
-	out = append(out, argv[:len(argv)-1]...)
-	out = append(out, events...)
-	out = append(out, argv[len(argv)-1])
+	return weaveInsertBeforePrompt(argv, events)
+}
+
+// weaveInsertBeforePrompt keeps a prompt-consuming option adjacent to its
+// value. AGY's `-p PROMPT` is the important case: inserting event flags between
+// those two makes AGY answer a task literally named "--output-format". Boolean
+// print flags such as Claude's -p and ycode's --print are also valid when moved
+// after the event flags, so the conservative placement works for both shapes.
+func weaveInsertBeforePrompt(argv, extra []string) []string {
+	insertAt := len(argv) - 1
+	if insertAt > 1 && strings.HasPrefix(argv[insertAt-1], "-") {
+		insertAt--
+	}
+	out := make([]string, 0, len(argv)+len(extra))
+	out = append(out, argv[:insertAt]...)
+	out = append(out, extra...)
+	out = append(out, argv[insertAt:]...)
 	return out
 }
 
