@@ -43,7 +43,6 @@ and audited.`,
 			if message == "" {
 				return fmt.Errorf("-m <resume brief> required")
 			}
-			who := weaveConductorName("")
 			return runWeaveStoryMutate(cmd, id, "sprint pause", &flags, func(s *weaveStory) (string, error) {
 				prev, stale, free := weaveStoryLeaseState(s)
 				if free {
@@ -52,9 +51,11 @@ and audited.`,
 				if stale {
 					return "", fmt.Errorf("sprint #%d lease is STALE (was %s) — take it explicitly before pausing", id, prev)
 				}
-				if prev != who {
-					return "", fmt.Errorf("sprint #%d is conducted by %s, not %s", id, prev, who)
-				}
+				// A conductor identity is stored on the lease, not in a durable
+				// process environment: resume and pause are normally separate CLI
+				// invocations. Act as the current fresh holder rather than falling
+				// back to the generic "conductor" identity on the second command.
+				who := prev
 				s.Continuity = message
 				_ = closeSprintRoom(s, who)
 				weaveStoryAppend(s, who, "system", "paused conductor session — continuity recorded; linked workers left running")

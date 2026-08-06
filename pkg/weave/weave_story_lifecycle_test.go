@@ -70,6 +70,13 @@ func TestSprintPauseResumeCarriesContinuityWithoutStoppingBox(t *testing.T) {
 	if s.Lease == nil || s.Lease.Holder != "Grace" || !s.currentBox().Running() {
 		t.Fatalf("resume must claim the lease without restarting the box: %+v", s)
 	}
+
+	// The next CLI process may not inherit --as. Pause must use the durable
+	// lease holder, not silently fall back to the generic conductor identity.
+	t.Setenv("WEAVE_CONDUCTOR", "")
+	if out, code := runSprint(t, "pause", "1", "-m", "paused again"); code != 0 {
+		t.Fatalf("pause after resume --as must use the lease identity, exit=%d: %s", code, out)
+	}
 }
 
 func TestSprintEndRequiresGateAndClosesLifecycle(t *testing.T) {
