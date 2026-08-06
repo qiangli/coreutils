@@ -2,6 +2,7 @@ package supervise
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,37 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/chat"
 )
+
+func TestWorkerLaunchFailureCannotPassAnAlreadyGreenGate(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "g", Supervisor: "claude", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
+	}
+	r := funcRunner(func(_ context.Context, _ string, _ []string, _ string) (string, int, error) {
+		return "launch refused", 2, errors.New("launch refused")
+	})
+	v := runContract(context.Background(), p, p.Contracts[0], r, noProgress{})
+	if v.Passed || v.GateExit == 0 {
+		t.Fatalf("failed worker manufactured a passing gate verdict: %+v", v)
+	}
+}
+
+func TestUnavailableSupervisorFailsClosed(t *testing.T) {
+	testEnv(t)
+	p := &Plan{
+		Goal: "g", Supervisor: "ycode", Fleet: []string{"agy"}, MaxAttempts: 1, Cwd: os.TempDir(),
+		Contracts: []*Contract{{ID: "t1", Goal: "do", Gate: "true"}},
+	}
+	r := scriptRunner{reply: map[string]string{"agy": "done"}, code: map[string]int{"ycode": 1}}
+	res, err := Run(context.Background(), p, r, noProgress{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Converged || res.Judged {
+		t.Fatalf("missing supervisor judgment must fail closed: %+v", res)
+	}
+}
 
 // scriptRunner returns a canned reply per agent so workers/supervisor can be
 // driven deterministically without spawning real CLIs.

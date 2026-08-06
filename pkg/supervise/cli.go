@@ -13,7 +13,8 @@ import (
 // stdoutProgress narrates the run to the operator.
 type stdoutProgress struct{ w io.Writer }
 
-func (s stdoutProgress) progress(line string) { fmt.Fprintln(s.w, line) }
+func (s stdoutProgress) progress(line string)  { fmt.Fprintln(s.w, line) }
+func (s stdoutProgress) liveStream() io.Writer { return s.w }
 
 // NewSuperviseCmd returns the `bashy supervise` command.
 func NewSuperviseCmd() *cobra.Command {

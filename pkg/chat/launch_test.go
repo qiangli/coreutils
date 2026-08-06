@@ -2,11 +2,26 @@ package chat
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/fleet"
 )
+
+func TestInvokeLiveStreamEnablesDeclaredToolEvents(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
+	res, err := Invoke(context.Background(), Options{
+		Agent: "agy:gemini3.1", Instruction: "hi", DryRun: true, Stream: io.Discard,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "--output-format stream-json -p hi") {
+		t.Fatalf("live AGY argv lacks declared event stream: %q", res.Output)
+	}
+}
 
 // permitUnsafeLaunch opts the test host into launching agents with their own
 // safety systems disabled.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -120,6 +121,7 @@ func runContract(ctx context.Context, p *Plan, c *Contract, runner chat.Runner, 
 			Cwd:         p.Cwd,
 			Sandbox:     p.Sandbox,
 			Timeout:     p.turnTimeout(),
+			Stream:      liveStream(out),
 		}, runner)
 		turnText := res.Output
 		if err != nil && strings.TrimSpace(turnText) == "" {
@@ -128,6 +130,19 @@ func runContract(ctx context.Context, p *Plan, c *Contract, runner chat.Runner, 
 		file := p.writeTurnFile(c, attempt, turnText)
 		p.appendEvent(Event{Kind: "turn", Contract: c.ID, Worker: worker, Attempt: attempt,
 			Text: oneLine(turnText), File: file})
+		// A gate describes the desired tree, not proof that this worker ran. If
+		// launch failed, evaluating an already-green gate would manufacture a
+		// successful turn from no work at all.
+		if err != nil || res.ExitCode != 0 {
+			v.GateExit = res.ExitCode
+			if v.GateExit == 0 {
+				v.GateExit = 1
+			}
+			v.Detail = strings.TrimSpace(turnText)
+			out.progress(fmt.Sprintf("  ✗ %s worker failed before gate (exit %d)", c.ID, v.GateExit))
+			priorGate = v.Detail
+			continue
+		}
 
 		// The GATE decides — not the worker's exit code.
 		if !c.gated() {
@@ -192,8 +207,8 @@ func Run(ctx context.Context, p *Plan, runner chat.Runner, out chatWriter) (*Res
 		}
 	}
 
-	res.Judgment = judge(ctx, p, res.Verdicts, runner)
-	res.Converged = converged(res.Verdicts, len(p.Contracts))
+	res.Judgment, res.Judged = judge(ctx, p, res.Verdicts, runner, out)
+	res.Converged = converged(res.Verdicts, len(p.Contracts)) && res.Judged
 	path, err := p.writeReport(res)
 	if err != nil {
 		return res, err
@@ -221,7 +236,7 @@ func converged(vs []Verdict, total int) bool {
 // and render a short assessment — the "reviewed" clause of goal-met ∧ reviewed.
 // The supervisor's opinion never overrides a gate: the gate is truth, the
 // judgment is context (what's left, what's risky, what to do next).
-func judge(ctx context.Context, p *Plan, vs []Verdict, runner chat.Runner) string {
+func judge(ctx context.Context, p *Plan, vs []Verdict, runner chat.Runner, out chatWriter) (string, bool) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the supervisor. The workers finished; here are the OBJECTIVE gate results "+
 		"(the source of truth — do not override them):\n\n")
@@ -240,13 +255,13 @@ func judge(ctx context.Context, p *Plan, vs []Verdict, runner chat.Runner) strin
 
 	res, err := chat.Invoke(ctx, chat.Options{
 		Agent: p.Supervisor, Role: "supervisor", Instruction: b.String(),
-		Cwd: p.Cwd, Timeout: p.turnTimeout(),
+		Cwd: p.Cwd, Timeout: p.turnTimeout(), Stream: liveStream(out),
 	}, runner)
 	if err != nil || strings.TrimSpace(res.Output) == "" {
-		return "(supervisor judgment unavailable)"
+		return "(supervisor judgment unavailable)", false
 	}
 	p.appendEvent(Event{Kind: "judge", Worker: p.Supervisor, Text: oneLine(res.Output)})
-	return strings.TrimSpace(res.Output)
+	return strings.TrimSpace(res.Output), true
 }
 
 // Result is the machine-readable outcome of a supervision.
@@ -257,12 +272,22 @@ type Result struct {
 	Verdicts  []Verdict `json:"verdicts"`
 	Converged bool      `json:"converged"`
 	Judgment  string    `json:"judgment,omitempty"`
+	Judged    bool      `json:"judged"`
 	Report    string    `json:"report,omitempty"`
 }
 
 // chatWriter is the minimal progress sink so the engine can narrate without
 // importing cobra. The CLI passes a stdout-backed one; tests pass a no-op.
 type chatWriter interface{ progress(string) }
+
+type liveStreamer interface{ liveStream() io.Writer }
+
+func liveStream(out chatWriter) io.Writer {
+	if s, ok := out.(liveStreamer); ok {
+		return s.liveStream()
+	}
+	return nil
+}
 
 func oneLine(s string) string {
 	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")

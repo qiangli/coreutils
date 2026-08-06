@@ -899,6 +899,14 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		prompt = pre + prompt
 	}
 	args := append(lnch.Args, prompt)
+	// A caller asking to observe a turn live needs the tool's declared event
+	// stream, not a pipe around a CLI that buffers prose until exit. The fleet
+	// registry is the adapter: AGY receives stream-json flags, while tools with
+	// no stdout event contract keep their existing argv.
+	if opt.Stream != nil {
+		args = agentlaunch.InsertBeforePrompt(args,
+			agentlaunch.EventStdoutArgs(toAgentLaunch(lnch)))
+	}
 	cwd := opt.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
