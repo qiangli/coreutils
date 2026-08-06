@@ -187,13 +187,19 @@ Phase A via prior art.
 Remaining: ps (agent-useful, large cross-platform surface); file
 (magic detection).
 
-### VSC Commands & Utilities self-contained backlog
+### Portable userland and certification-provider policy
 
-Long-term release policy: every named command selected by the configured
-VSC-PCTS2016 POSIX08 Commands & Utilities scenario should resolve to a
-Bashy-owned Go implementation. Host fallback remains supported during the
-transition, but must stay visible in evidence and must never be presented as a
-Bashy utility implementation.
+Bashy's product goal is a useful, tested, pure-Go userland with coherent
+semantics on Linux, macOS, and Windows. It is **not** a promise to reproduce
+every historical POSIX utility in Go. A command belongs in the advertised
+multicall inventory only when its supported behavior is valuable on those
+platforms and its package and platform coverage satisfy the release gate.
+
+The formal POSIX Shell and Utilities profile is a separate concern. It may
+combine the Bashy shell and Bashy Go applets with explicitly declared, pinned
+Linux providers. Certification evidence and claims apply to that assembled
+configuration, not to a fictional all-Go Bashy userland. Host fallback must be
+measured and recorded and never credited as a Bashy implementation.
 
 The 2026-08-05 staged certification arm still required external providers for
 these 31 command names:
@@ -203,12 +209,22 @@ these 31 command names:
 `nm`, `patch`, `pax`, `ps`, `renice`, `strip`, `tabs`, `talk`, `tput`,
 `uudecode`, `uuencode`, `vi`, `write`.
 
-This is a burn-down inventory, not a promise that every name belongs in GNU
-Coreutils proper. This repository is the pure-Go userland implementation home,
-so non-Coreutils POSIX tools can live here in clearly named packages. Each name
-leaves the backlog only after it is registered, has package-local behavioral
-and platform coverage, appears in the generated applet matrix, and the staged
-VSC provider check proves that `/vsc/cushim/<name>` resolves to the SUT.
+These names are a certification-provider inventory, not an implementation
+backlog. Use these decision classes when prioritizing product work:
+
+| class | current names | direction |
+|---|---|---|
+| portable candidates | `bc`, `ed`, `file`, `iconv`, `patch`, `pax`, `uudecode`, `uuencode` | consider pure Go when cross-platform user value and complete tests justify it |
+| specialist toolchain | `ar`, `ctags`, `m4`, `make`, `nm`, `strip` | prefer pinned toolchain providers or modern agent-oriented workflows unless an embedded implementation is compelling |
+| interactive/editor/documentation | `ex`, `mailx`, `man`, `vi` | normally external; do not add merely to reduce a certification-provider count |
+| platform or legacy facilities | `getconf`, `locale`, `localedef`, `logger`, `lp`, `mesg`, `newgrp`, `ps`, `renice`, `tabs`, `talk`, `tput`, `write` | use declared Linux providers for certification; add a capability-gated Bashy implementation only when portable semantics are honest and useful |
+
+The classes are prioritization guidance, not permanent prohibitions. Bashy may
+also ship modern agent-oriented tools that solve current workflows better than
+a legacy interface, under distinct names and documented semantics. Any newly
+implemented POSIX/GNU name still must be registered, behaviorally and
+cross-platform tested, listed in the generated applet matrix, and proven as the
+actual staged provider before reports attribute it to Bashy.
 
 ### at / batch / crontab — execution requires the schedule daemon
 
