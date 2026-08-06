@@ -164,34 +164,21 @@ docs/agent-room-mesh-design.md), delete this check in the same diff that ships i
 	}
 }
 
-// TestForemanIsRegistered settles a recurring claim: foreman is NOT missing from
-// the atlas. It is registered through the TOOL table rather than the verb table —
-// pkg/foreman reaches the surface as cmds/foreman, a registered tool.Tool, because
-// importing it from cmds/all would form an import cycle (pkg/foreman → pkg/dag,
-// whose tests blank-import cmds/all), so bashy registers it directly.
-//
-// That indirection is what makes it look absent: it is in addTools, not addVerb,
-// and addTools files everything as StageCross. atlas.go's stageTools call already
-// corrects that to StageCode. This test pins the classification so the next reader
-// checking "is foreman registered?" gets an answer instead of a search.
-func TestForemanIsRegistered(t *testing.T) {
-	e, ok := atlas.Lookup("foreman")
+// TestForemanIsSuppressedFromAtlas asserts that foreman is suppressed from the
+// public Atlas surface (Bashy #40), while its internal implementation pkg/foreman
+// is censused as a library under weave/sprint.
+func TestForemanIsSuppressedFromAtlas(t *testing.T) {
+	if _, ok := atlas.Lookup("foreman"); ok {
+		t.Error("foreman resolves as a public command in the atlas, but should be suppressed (Bashy #40)")
+	}
+	p, ok := atlas.LookupPackage("foreman")
 	if !ok {
-		t.Fatal("foreman has no atlas entry")
+		t.Fatal("pkg/foreman has no census entry")
 	}
-	if e.Group != atlas.GroupOrch {
-		t.Errorf("foreman group = %q, want %q", e.Group, atlas.GroupOrch)
+	if p.Role != atlas.RoleLibrary {
+		t.Errorf("pkg/foreman role = %q, want %q", p.Role, atlas.RoleLibrary)
 	}
-	// §2.2a: foreman drives a LIVE, STEERABLE agent session — invoke runs one
-	// agent once and returns, weave isolates and merges workspaces, supervise
-	// conducts. foreman is the one that keeps a session alive and takes steering
-	// while it runs. That is Code, and it is not StageCross: a tool-table entry
-	// defaulting to cross is exactly the misfiling stageTools exists to fix.
-	if e.Stage != atlas.StageCode {
-		t.Errorf("foreman stage = %q, want %q (it drives a live agent session, it is not a "+
-			"cross-cutting userland utility)", e.Stage, atlas.StageCode)
-	}
-	if p, ok := atlas.LookupPackage("foreman"); !ok || p.Role != atlas.RoleCommand || p.FrontDoor != "foreman" {
-		t.Errorf("pkg/foreman census = %+v (ok=%v), want command/foreman", p, ok)
+	if p.FrontDoor != "weave" {
+		t.Errorf("pkg/foreman front door = %q, want \"weave\"", p.FrontDoor)
 	}
 }

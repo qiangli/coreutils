@@ -903,7 +903,7 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "foreman", "sphere", "ollama", "sota", "herald")
+	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "sphere", "ollama", "sota", "herald")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
