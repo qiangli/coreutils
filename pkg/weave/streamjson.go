@@ -83,6 +83,23 @@ type weaveStreamJSONEvent struct {
 	Result          string  `json:"result"`
 	UsageLimit      string  `json:"usage_limit"`
 	TotalCostUSDAlt float64 `json:"cost_usd"`
+	ThreadID        string  `json:"thread_id"`
+	Item            struct {
+		Type             string `json:"type"`
+		Text             string `json:"text"`
+		Command          string `json:"command"`
+		AggregatedOutput string `json:"aggregated_output"`
+		Status           string `json:"status"`
+		ExitCode         *int   `json:"exit_code"`
+	} `json:"item"`
+	Usage struct {
+		InputTokens       int64 `json:"input_tokens"`
+		CachedInputTokens int64 `json:"cached_input_tokens"`
+		OutputTokens      int64 `json:"output_tokens"`
+	} `json:"usage"`
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 type weaveStreamJSONContent struct {
@@ -109,9 +126,84 @@ func weaveDistillStreamJSONLine(line string) (string, bool) {
 		return "", true
 	case "result":
 		return weaveDistillResultStreamJSON(event), true
+	case "thread.started":
+		return "[thread started]", true
+	case "turn.started":
+		return "[turn started]", true
+	case "item.started":
+		return weaveDistillCodexItem(event, true), true
+	case "item.completed":
+		return weaveDistillCodexItem(event, false), true
+	case "turn.completed":
+		return weaveDistillCodexTurnCompleted(event), true
+	case "turn.failed":
+		message := weaveTruncateLogText(strings.TrimSpace(event.Error.Message), weaveStreamJSONHintLimit)
+		if message == "" {
+			return "[turn failed]", true
+		}
+		return "[turn failed] " + message, true
+	case "error":
+		message := weaveTruncateLogText(strings.TrimSpace(event.Error.Message), weaveStreamJSONTextLimit)
+		if message == "" {
+			return "[error]", true
+		}
+		return "[error] " + message, true
 	default:
 		return "", false
 	}
+}
+
+func weaveDistillCodexItem(event weaveStreamJSONEvent, started bool) string {
+	typ := strings.TrimSpace(event.Item.Type)
+	if typ == "" {
+		typ = "item"
+	}
+	if typ == "reasoning" {
+		return ""
+	}
+	if typ == "agent_message" {
+		if started {
+			return ""
+		}
+		return weaveTruncateLogText(strings.TrimSpace(event.Item.Text), weaveStreamJSONTextLimit)
+	}
+	if started {
+		line := "-> " + strings.ReplaceAll(typ, "_", " ")
+		if command := weaveTruncateLogText(strings.TrimSpace(event.Item.Command), weaveStreamJSONHintLimit); command != "" {
+			line += " " + command
+		}
+		return line
+	}
+	status := strings.TrimSpace(event.Item.Status)
+	if event.Item.ExitCode != nil {
+		if *event.Item.ExitCode == 0 {
+			status = "ok"
+		} else {
+			status = fmt.Sprintf("exit=%d", *event.Item.ExitCode)
+		}
+	}
+	if status == "" {
+		status = "done"
+	}
+	line := "   " + status
+	if output := strings.TrimSpace(event.Item.AggregatedOutput); output != "" {
+		line += ": " + weaveTruncateLogText(firstLogLine(output), weaveStreamJSONHintLimit)
+	}
+	return line
+}
+
+func weaveDistillCodexTurnCompleted(event weaveStreamJSONEvent) string {
+	parts := []string{"turn completed"}
+	if event.Usage.InputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("input=%d", event.Usage.InputTokens))
+	}
+	if event.Usage.CachedInputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("cached=%d", event.Usage.CachedInputTokens))
+	}
+	if event.Usage.OutputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("output=%d", event.Usage.OutputTokens))
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 func weaveStreamJSONMaybeObject(p []byte) bool {

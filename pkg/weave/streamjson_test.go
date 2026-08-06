@@ -62,6 +62,42 @@ func TestWeaveDistillStreamJSONLine(t *testing.T) {
 			ok:   true,
 		},
 		{
+			name: "codex thread started",
+			line: `{"type":"thread.started","thread_id":"uuid"}`,
+			want: "[thread started]",
+			ok:   true,
+		},
+		{
+			name: "codex command started",
+			line: `{"type":"item.started","item":{"type":"command_execution","command":"go test ./...","status":"in_progress"}}`,
+			want: "-> command execution go test ./...",
+			ok:   true,
+		},
+		{
+			name: "codex command completed drops bulky output",
+			line: `{"type":"item.completed","item":{"type":"command_execution","command":"go test ./...","aggregated_output":"PASS\n` + strings.Repeat("x", 500) + `","exit_code":0,"status":"completed"}}`,
+			want: "   ok: PASS",
+			ok:   true,
+		},
+		{
+			name: "codex agent message",
+			line: `{"type":"item.completed","item":{"type":"agent_message","text":"CODEX_EVENTS_OK"}}`,
+			want: "CODEX_EVENTS_OK",
+			ok:   true,
+		},
+		{
+			name: "codex reasoning dropped",
+			line: `{"type":"item.completed","item":{"type":"reasoning","text":"private"}}`,
+			want: "",
+			ok:   true,
+		},
+		{
+			name: "codex turn completed",
+			line: `{"type":"turn.completed","usage":{"input_tokens":72641,"cached_input_tokens":61440,"output_tokens":477}}`,
+			want: "[turn completed input=72641 cached=61440 output=477]",
+			ok:   true,
+		},
+		{
 			name: "plain text unchanged by caller",
 			line: "plain non-json text",
 			want: "",
