@@ -45,7 +45,10 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 		// P2b: after the generic steer fails, escalate to an agent one band above
 		// this run's agent for a content-full steer.
 		coach.SetEscalation(context.Background(), guards.coachee, chat.BandGraduatedEscalator)
-		sink = io.MultiWriter(logSink, coach)
+		// Use the normalized sink: logSink may legitimately be nil when weave is
+		// relying on a tool event file for progress. Passing a nil writer to
+		// io.MultiWriter constructs successfully but panics on the first event.
+		sink = weaveCoachSink(sink, coach)
 	}
 
 	var activity <-chan struct{}
@@ -80,6 +83,13 @@ func runWeaveToolPTY(cmd *exec.Cmd, logSink io.Writer, guards weaveGuards) (int,
 	}
 	chat.NoteCoach(coach, logSink)
 	return code, reason, coachRep, coachMode, err
+}
+
+func weaveCoachSink(sink io.Writer, coach io.Writer) io.Writer {
+	if sink == nil {
+		return coach
+	}
+	return io.MultiWriter(sink, coach)
 }
 
 // weaveStdinIsTTY reports whether the calling process's stdin is a real
