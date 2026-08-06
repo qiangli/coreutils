@@ -433,6 +433,20 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 			})
 		},
 	}
+	if ending {
+		cmd.Long = `end closes the sprint lifecycle only after it can prove a clean handoff state.
+
+It parks every linked working agent in a resumable weave state, refuses missing
+or half-allocated linked runs, verifies linked repositories are committed,
+pushed, and pinned, and requires the supplied gate to pass. It then closes the
+time box, moves the card to done, closes the conductor room, and releases the
+lease.
+
+There is deliberately no --force or --no-verify. Use sprint stop when the
+intent is only to close the current cadence cycle.`
+		cmd.Example = "  bashy sprint end 3 --gate 'go test ./...'\n" +
+			"  bashy sprint end 3 --gate 'make test' --note \"release accepted\""
+	}
 	cmd.Flags().StringVar(&note, "note", "", "what the box actually produced")
 	cmd.Flags().StringVar(&gateCmd, "gate", "", "the command proving the tree still builds and passes")
 	cmd.Flags().StringVar(&gateDir, "gate-dir", "", "where to run the gate (default: cwd)")
