@@ -290,4 +290,3 @@ func TestWeavePullBelowBandReviewerError(t *testing.T) {
 		t.Errorf("refusal error message must not suggest ineligible family reviewer samefamreviewer: %s", out)
 	}
 }
-

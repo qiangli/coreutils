@@ -315,7 +315,7 @@ var idioms = []Idiom{
 		Note:    "commit/push → PR → run the workflow locally before CI", Tier: TierUserland},
 	{ID: "fleet-suite", Commands: []string{"weave", "sprint", "dag"},
 		Pattern: "sprint (plan) → weave (isolate/run) → dag (targets)",
-		Note:    "the orchestration suite (sprint + weave are the public surface; " +
+		Note: "the orchestration suite (sprint + weave are the public surface; " +
 			"foreman/supervise/pair are suppressed internals, Bashy #40)", Tier: TierWorkspace},
 	{ID: "cluster-deploy", Commands: []string{"kubectl", "helm"},
 		Pattern: "kubectl get ...; helm install ...",
