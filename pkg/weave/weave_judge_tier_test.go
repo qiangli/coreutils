@@ -240,3 +240,54 @@ func TestWeavePullRequiredMergesWithEligibleVerdict(t *testing.T) {
 		t.Fatalf("pair runner calls=%d, want exactly 1", called)
 	}
 }
+
+func TestWeavePullBelowBandReviewerError(t *testing.T) {
+	pinTierFleet(t,
+		[]fleet.Model{
+			tierModel("coder-m", "coderfam", 3),
+			tierModel("judge-bad", "judgefam", 2),
+			tierModel("judge-good", "judgefam", 3),
+			tierModel("judge-same", "coderfam", 3),
+		},
+		[]fleet.Agent{
+			{Name: "badreviewer", Tool: "codex", Model: "judge-bad"},
+			{Name: "goodreviewer", Tool: "codex", Model: "judge-good"},
+			{Name: "samefamreviewer", Tool: "codex", Model: "judge-same"},
+		},
+	)
+	root := setupSubmittedRun(t, "test -f feature.txt")
+	dir, _ := weaveQueueDir(root)
+	patchWeaveItem(t, dir, 1, func(it *weaveItem) {
+		it.Judge = weaveJudgeRequired
+		it.Band = 3
+		it.LaunchSpec = &weaveLaunchSpec{Tool: "claude", Model: "coder-m"}
+	})
+
+	original := weavePairReviewRunner
+	t.Cleanup(func() { weavePairReviewRunner = original })
+	weavePairReviewRunner = func(workspace, diffRef, gateCommand, requested string, it *weaveItem) (weavePairReviewResult, error) {
+		t.Fatalf("pair runner must not be called for ineligible judge")
+		return weavePairReviewResult{}, nil
+	}
+
+	out, code := runWeave(t, "pull", "1", "--review-agent", "badreviewer")
+	if code == 0 {
+		t.Fatalf("pull with badreviewer succeeded; want failure: %s", out)
+	}
+
+	for _, want := range []string{
+		"judge-bad",
+		"L2",
+		"L3",
+		"goodreviewer",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("refusal error message must contain %q: %s", want, out)
+		}
+	}
+
+	if strings.Contains(out, "samefamreviewer") {
+		t.Errorf("refusal error message must not suggest ineligible family reviewer samefamreviewer: %s", out)
+	}
+}
+

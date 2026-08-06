@@ -132,8 +132,28 @@ func weaveJudgeEligibility(l *weaveAgentLaunch, coderModel string, issueBand int
 		floor = issueBand
 	}
 	if band := weaveAgentBand(l); band < floor {
-		return fmt.Errorf("judge %s serves band %s, below the required floor %s (max of L%d and the issue's band L%d)",
-			l.Binding(), fleet.BandLabel(band), fleet.BandLabel(floor), weaveJudgeBandFloor, issueBand)
+		var eligible []string
+		if cat := fleetCatalog(); cat != nil {
+			if list, err := cat.Agents(); err == nil {
+				for _, a := range list {
+					if l2, err2 := weaveResolveAgent(a.Name); err2 == nil && l2 != nil {
+						if b2 := weaveAgentBand(l2); b2 >= floor {
+							coderFam := weaveModelFamily(coderModel)
+							judgeFam := weaveModelFamily(l2.ModelName)
+							if coderFam == "" || judgeFam == "" || !strings.EqualFold(coderFam, judgeFam) {
+								eligible = append(eligible, a.Name)
+							}
+						}
+					}
+				}
+			}
+		}
+		eligibleInfo := "none available"
+		if len(eligible) > 0 {
+			eligibleInfo = strings.Join(eligible, ", ")
+		}
+		return fmt.Errorf("judge %s serves band %s, below the required floor %s (max of L%d and the issue's band L%d); eligible reviewer(s) serving >= %s: %s",
+			l.Binding(), fleet.BandLabel(band), fleet.BandLabel(floor), weaveJudgeBandFloor, issueBand, fleet.BandLabel(floor), eligibleInfo)
 	}
 	coderFam := weaveModelFamily(coderModel)
 	judgeFam := weaveModelFamily(l.ModelName)
