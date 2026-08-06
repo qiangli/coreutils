@@ -174,63 +174,16 @@ func weaveAgentEventsStdoutArgv(l *weaveAgentLaunch, argv []string) []string {
 	if l == nil || len(argv) < 2 {
 		return argv
 	}
-	tool, ok := fleetCatalog().Tool(l.ToolName)
-	if !ok {
-		return argv
-	}
-	events := tool.EventsStdoutArgv()
-	if len(events) == 0 || argvContainsSequence(argv, events) {
-		return argv
-	}
-	return weaveInsertBeforePrompt(argv, events)
+	events := agentlaunch.EventStdoutArgsWithCatalog(*l, fleetCatalog)
+	return agentlaunch.InsertBeforePrompt(argv, events)
 }
 
 func weaveAgentEventsFileArgv(l *weaveAgentLaunch, argv []string, path string) []string {
 	if l == nil || len(argv) < 2 || strings.TrimSpace(path) == "" {
 		return argv
 	}
-	tool, ok := fleetCatalog().Tool(l.ToolName)
-	if !ok || !tool.HasEventsArg() {
-		return argv
-	}
-	events := tool.EventsArgv(path)
-	if len(events) == 0 || argvContainsSequence(argv, events) {
-		return argv
-	}
-	return weaveInsertBeforePrompt(argv, events)
-}
-
-// weaveInsertBeforePrompt keeps a prompt-consuming option adjacent to its
-// value. AGY's `-p PROMPT` is the important case: inserting event flags between
-// those two makes AGY answer a task literally named "--output-format". Boolean
-// print flags such as Claude's -p and ycode's --print are also valid when moved
-// after the event flags, so the conservative placement works for both shapes.
-func weaveInsertBeforePrompt(argv, extra []string) []string {
-	insertAt := len(argv) - 1
-	if insertAt > 1 && strings.HasPrefix(argv[insertAt-1], "-") {
-		insertAt--
-	}
-	out := make([]string, 0, len(argv)+len(extra))
-	out = append(out, argv[:insertAt]...)
-	out = append(out, extra...)
-	out = append(out, argv[insertAt:]...)
-	return out
-}
-
-func argvContainsSequence(argv, want []string) bool {
-	for i := 0; i+len(want) <= len(argv); i++ {
-		match := true
-		for j := range want {
-			if argv[i+j] != want[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
+	events := agentlaunch.EventFileArgsWithCatalog(*l, path, fleetCatalog)
+	return agentlaunch.InsertBeforePrompt(argv, events)
 }
 
 // weaveWorkerContract is appended to EVERY worker's prompt: the non-negotiable

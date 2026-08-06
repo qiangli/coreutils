@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/agentlaunch"
+
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -3095,7 +3097,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 				weavecli.ExitPrecondFail, err))
 		}
-		if fleetTool, ok := fleetCatalog().Tool(agentLaunch.ToolName); ok && fleetTool.HasEventsArg() {
+		if len(agentlaunch.EventFileArgsWithCatalog(*agentLaunch, "events", fleetCatalog)) > 0 {
 			agentEventsPath = filepath.Join(workspace, ".git", "weave-agent-events.jsonl")
 			toolArgs = weaveAgentEventsFileArgv(agentLaunch, toolArgs, agentEventsPath)
 		}

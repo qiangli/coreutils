@@ -12,6 +12,7 @@ import (
 
 	"github.com/qiangli/coreutils/pkg/acp"
 	"github.com/qiangli/coreutils/pkg/agentctl"
+	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/agentpty"
 	"github.com/qiangli/coreutils/pkg/bus"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
@@ -241,7 +242,7 @@ func Start(ctx context.Context, agent string, opt SessionOptions) (*Session, err
 	if tl, ok := newCatalog().Tool(l.ToolName); ok && tl.ReportsTurnEnd() {
 		evPath, err := sessionEventsPath(id)
 		if err == nil {
-			if extra := tl.EventsArgv(evPath); len(extra) > 0 {
+			if extra := agentlaunch.EventFileArgsWithCatalog(toAgentLaunch(l), evPath, newCatalog); len(extra) > 0 {
 				argv = append(argv, extra...)
 				tail = &eventTail{path: evPath}
 			}
