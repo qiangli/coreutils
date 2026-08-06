@@ -213,8 +213,16 @@ func tailFollow(rc *tool.RunContext, w *bufio.Writer, fo followOpts) error {
 			return err
 		}
 		if !fo.followByName {
-			if _, err := f.Seek(0, io.SeekEnd); err != nil {
-				return err
+			// Regular files are seekable and following starts at their current
+			// end.  A FIFO is not seekable, but its read descriptor must remain
+			// open across writer disconnects so later writers can rendezvous with
+			// the same `tail -f` process.
+			if fi, statErr := f.Stat(); statErr != nil {
+				return statErr
+			} else if fi.Mode().IsRegular() {
+				if _, err := f.Seek(0, io.SeekEnd); err != nil {
+					return err
+				}
 			}
 		}
 	}
