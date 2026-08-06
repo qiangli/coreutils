@@ -790,11 +790,18 @@ func NewChatCmd() *cobra.Command {
 
 			plain, _ := cmd.Flags().GetBool("plain")
 			opt.JSON = opt.JSON || (os.Getenv("BASHY_AGENTIC") != "" && !plain)
-			res, err := Invoke(cmd.Context(), opt, execRunner{})
+			// A human-facing one-shot is live by default. Besides avoiding a long
+			// blank terminal, this activates each tool's registry-declared event
+			// channel (stdout for AGY/Claude/Codex, side-file for ycode). JSON mode
+			// remains a single result envelope and dry-run remains deterministic.
+			if !opt.JSON && !opt.DryRun {
+				opt.Stream = cmd.OutOrStdout()
+			}
+			res, err := Invoke(cmd.Context(), opt, nil)
 			if opt.JSON {
 				b, _ := json.Marshal(res)
 				fmt.Fprintln(cmd.OutOrStdout(), string(b))
-			} else if res.Output != "" {
+			} else if opt.Stream == nil && res.Output != "" {
 				fmt.Fprint(cmd.OutOrStdout(), res.Output)
 				if !strings.HasSuffix(res.Output, "\n") {
 					fmt.Fprintln(cmd.OutOrStdout())
