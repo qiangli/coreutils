@@ -234,6 +234,76 @@ func TestIndexHeadMatchesDistinguishesCleanAndStagedPaths(t *testing.T) {
 	}
 }
 
+func TestStatusReadsObjectsFromAbsoluteAlternates(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Init(InitOptions{Path: dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nested", "evidence"), []byte("kept\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(AddOptions{RepoPath: dir, All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(CommitOptions{RepoPath: dir, Message: "base", AuthorName: "Test", AuthorEmail: "test@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err := tree.FindEntry("nested")
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectRel := filepath.Join(nested.Hash.String()[:2], nested.Hash.String()[2:])
+	source := filepath.Join(dir, ".git", "objects", objectRel)
+	altObjects := filepath.Join(t.TempDir(), "objects")
+	dest := filepath.Join(altObjects, objectRel)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, data, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	infoDir := filepath.Join(dir, ".git", "objects", "info")
+	if err := os.MkdirAll(infoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(infoDir, "alternates"), []byte(altObjects+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, entries, err := Status(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("alternate-backed clean repository reported dirty: %+v", entries)
+	}
+}
+
 // TestBuildAuthMethodEnvFallback verifies that an empty AuthConfig
 // resolves to oauth2-style basic auth when GITHUB_TOKEN is set, and
 // nil otherwise.

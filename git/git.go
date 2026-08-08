@@ -36,13 +36,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"github.com/go-git/go-git/v5/storage/filesystem"
 )
 
 // CLIName is the command name used in user-facing hint messages
@@ -297,7 +300,7 @@ func Status(repoPath string) (*Result, []StatusEntry, error) {
 	if repoPath == "" {
 		repoPath = "."
 	}
-	r, err := gogit.PlainOpen(repoPath)
+	r, err := openStatusRepository(repoPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("not a git repository: %w", err)
 	}
@@ -340,6 +343,63 @@ func Status(repoPath string) (*Result, []StatusEntry, error) {
 		return &Result{Success: true, Message: "nothing to commit, working tree clean"}, nil, nil
 	}
 	return &Result{Success: true}, entries, nil
+}
+
+// openStatusRepository gives go-git an unconfined filesystem for Git
+// alternates. PlainOpen chroots the storage at .git; absolute alternate object
+// paths outside that root (common for submodules and shared clones) then appear
+// missing and Worktree.Status invents staged additions for otherwise-clean
+// files. Git's alternates file is trusted repository metadata, so allowing the
+// object reader to reach those declared paths matches native Git semantics.
+func openStatusRepository(repoPath string) (*gogit.Repository, error) {
+	r, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	gitDir, err := resolveGitDir(repoPath)
+	if err != nil {
+		return r, nil
+	}
+	if _, err := os.Stat(filepath.Join(gitDir, "objects", "info", "alternates")); err != nil {
+		return r, nil
+	}
+	absRepo, err := filepath.Abs(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	dot := osfs.New(gitDir)
+	store := filesystem.NewStorageWithOptions(dot, cache.NewObjectLRUDefault(), filesystem.Options{
+		AlternatesFS: osfs.New(string(filepath.Separator)),
+	})
+	return gogit.Open(store, osfs.New(absRepo))
+}
+
+func resolveGitDir(repoPath string) (string, error) {
+	absRepo, err := filepath.Abs(repoPath)
+	if err != nil {
+		return "", err
+	}
+	marker := filepath.Join(absRepo, ".git")
+	info, err := os.Stat(marker)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return marker, nil
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		return "", err
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(line, "gitdir:") {
+		return "", fmt.Errorf("invalid .git file")
+	}
+	dir := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(absRepo, dir)
+	}
+	return filepath.Clean(dir), nil
 }
 
 // indexHeadMatches returns paths whose staged representation already equals
