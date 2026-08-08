@@ -653,6 +653,7 @@ var byteMultipliers = map[string]int64{
 	"c":   1,
 	"w":   2,
 	"b":   512,
+	"k":   1024,
 	"kB":  1000,
 	"K":   1024,
 	"KB":  1000,
@@ -666,6 +667,26 @@ var byteMultipliers = map[string]int64{
 }
 
 func parseBytes(s string) (int64, error) {
+	parts := strings.Split(s, "x")
+	if len(parts) == 0 {
+		return 0, strconv.ErrSyntax
+	}
+	total := int64(1)
+	for _, part := range parts {
+		n, err := parseByteFactor(part)
+		if err != nil {
+			return 0, err
+		}
+		var ok bool
+		total, ok = checkedMul(total, n)
+		if !ok {
+			return 0, strconv.ErrRange
+		}
+	}
+	return total, nil
+}
+
+func parseByteFactor(s string) (int64, error) {
 	i := 0
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 		i++
@@ -681,10 +702,22 @@ func parseBytes(s string) (int64, error) {
 	if !ok {
 		return 0, strconv.ErrSyntax
 	}
-	if m != 0 && n > int64(^uint64(0)>>1)/m {
+	prod, ok := checkedMul(n, m)
+	if !ok {
 		return 0, strconv.ErrRange
 	}
-	return n * m, nil
+	return prod, nil
+}
+
+func checkedMul(a, b int64) (int64, bool) {
+	if a < 0 || b < 0 {
+		return 0, false
+	}
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if a != 0 && b > maxInt64/a {
+		return 0, false
+	}
+	return a * b, true
 }
 
 func parseCount(s string) (int64, error) {

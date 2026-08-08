@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -87,6 +88,68 @@ func TestDdErrors(t *testing.T) {
 	_, errb, code = runTool(t, dir, "", "iflag=nonblock")
 	if code != 2 || !strings.Contains(errb, "not supported") {
 		t.Fatalf("iflag unsupported: code=%d err=%q", code, errb)
+	}
+}
+
+func TestParseBytesSyntax(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    int64
+		wantErr error
+	}{
+		{name: "plain decimal", in: "128", want: 128},
+		{name: "lowercase k", in: "1k", want: 1024},
+		{name: "multiplication", in: "4x128", want: 512},
+		{name: "mixed factors", in: "2x1k", want: 2048},
+		{name: "empty", in: "", wantErr: strconv.ErrSyntax},
+		{name: "leading x", in: "x128", wantErr: strconv.ErrSyntax},
+		{name: "trailing x", in: "128x", wantErr: strconv.ErrSyntax},
+		{name: "negative", in: "-1", wantErr: strconv.ErrSyntax},
+		{name: "bad suffix", in: "1q", wantErr: strconv.ErrSyntax},
+		{name: "overflow", in: "9223372036854775807x2", wantErr: strconv.ErrRange},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseBytes(tc.in)
+			if tc.wantErr != nil {
+				if err != tc.wantErr {
+					t.Fatalf("parseBytes(%q) err=%v want %v", tc.in, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("parseBytes(%q) = (%d, %v), want (%d, nil)", tc.in, got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestDdOperandSizeSyntax(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "TP30 plain decimal bs", args: []string{"bs=128", "count=0", "status=none"}},
+		{name: "TP30 plain decimal ibs", args: []string{"ibs=128", "count=0", "status=none"}},
+		{name: "TP30 plain decimal obs", args: []string{"obs=128", "count=0", "status=none"}},
+		{name: "TP30 plain decimal cbs", args: []string{"cbs=128", "conv=block", "count=0", "status=none"}},
+		{name: "TP31 lowercase k bs", args: []string{"bs=1k", "count=0", "status=none"}},
+		{name: "TP31 lowercase k ibs", args: []string{"ibs=1k", "count=0", "status=none"}},
+		{name: "TP31 lowercase k obs", args: []string{"obs=1k", "count=0", "status=none"}},
+		{name: "TP31 lowercase k cbs", args: []string{"cbs=1k", "conv=block", "count=0", "status=none"}},
+		{name: "TP33 multiplicative bs", args: []string{"bs=4x128", "count=0", "status=none"}},
+		{name: "TP33 multiplicative ibs", args: []string{"ibs=4x128", "count=0", "status=none"}},
+		{name: "TP33 multiplicative obs", args: []string{"obs=4x128", "count=0", "status=none"}},
+		{name: "TP33 multiplicative cbs", args: []string{"cbs=4x128", "conv=block", "count=0", "status=none"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runTool(t, t.TempDir(), "", tc.args...)
+			if code != 0 || out != "" || errb != "" {
+				t.Fatalf("args=%v code=%d out=%q err=%q", tc.args, code, out, errb)
+			}
+		})
 	}
 }
 
