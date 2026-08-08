@@ -3,6 +3,7 @@ package ddcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -75,9 +76,9 @@ func TestDdSkipSeekNotrunc(t *testing.T) {
 
 func TestDdErrors(t *testing.T) {
 	dir := t.TempDir()
-	_, errb, code := runTool(t, dir, "", "conv=swab")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Fatalf("conv unsupported: code=%d err=%q", code, errb)
+	_, errb, code := runTool(t, dir, "", "conv=lcase,ucase")
+	if code != 2 || !strings.Contains(errb, "mutually exclusive") {
+		t.Fatalf("case conversions: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, dir, "", "bad")
 	if code != 2 || !strings.Contains(errb, "unrecognized operand") {
@@ -86,6 +87,131 @@ func TestDdErrors(t *testing.T) {
 	_, errb, code = runTool(t, dir, "", "iflag=nonblock")
 	if code != 2 || !strings.Contains(errb, "not supported") {
 		t.Fatalf("iflag unsupported: code=%d err=%q", code, errb)
+	}
+}
+
+func TestDdCaseConversionsAreSingleByteAndReblockBs(t *testing.T) {
+	for _, tc := range []struct {
+		name, conv, input, want string
+	}{
+		{"lcase", "lcase", "AbC!\xc4", "abc!\xc4"},
+		{"ucase", "ucase", "aBc!\xe4", "ABC!\xe4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runTool(t, t.TempDir(), tc.input, "bs=2", "conv="+tc.conv, "status=none")
+			if code != 0 || errb != "" || out != tc.want {
+				t.Fatalf("code=%d out=%q err=%q; want %q", code, out, errb, tc.want)
+			}
+		})
+	}
+}
+
+func TestDdSwabPreservesOddByteInEachInputRecord(t *testing.T) {
+	out, errb, code := runTool(t, t.TempDir(), "abcde", "ibs=3", "obs=4", "conv=swab", "status=none")
+	if code != 0 || errb != "" || out != "baced" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errb)
+	}
+
+	// sync precedes swab, so the padding byte participates in the final pair.
+	out, errb, code = runTool(t, t.TempDir(), "abc", "ibs=4", "conv=sync,swab", "status=none")
+	if code != 0 || errb != "" || !bytes.Equal([]byte(out), []byte{'b', 'a', 0, 'c'}) {
+		t.Fatalf("sync swab: code=%d out=%v err=%q", code, []byte(out), errb)
+	}
+}
+
+func TestDdNoerrorSyncNotruncKeepsExistingTail(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "out"), []byte("WXYZtail"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "a", "of=out", "ibs=4", "obs=1", "conv=noerror,sync,notrunc", "status=none")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte{'a', 0, 0, 0, 't', 'a', 'i', 'l'}; !bytes.Equal(got, want) {
+		t.Fatalf("out=%v want=%v", got, want)
+	}
+}
+
+type dataAndErrorReader struct{ read bool }
+
+func (r *dataAndErrorReader) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	copy(p, "ab")
+	return 2, errors.New("injected read failure")
+}
+
+func TestDdNoerrorProcessesDataReturnedWithReadError(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Stdio: tool.Stdio{In: &dataAndErrorReader{}, Out: &out, Err: &errb},
+	}
+	cfg := config{ibs: 4, obs: 4, count: -1, noerror: true, sync: true, reblock: true, status: "none"}
+	if code := copyDD(rc, cfg); code != 1 {
+		t.Fatalf("code=%d want 1; err=%q", code, errb.String())
+	}
+	if want := []byte{'a', 'b', 0, 0}; !bytes.Equal(out.Bytes(), want) {
+		t.Fatalf("output=%v want=%v", out.Bytes(), want)
+	}
+	if !strings.Contains(errb.String(), "injected read failure") {
+		t.Fatalf("missing read diagnostic: %q", errb.String())
+	}
+}
+
+type errorOnlyReader struct {
+	err error
+}
+
+func (r *errorOnlyReader) Read([]byte) (int, error) {
+	if r.err == nil {
+		return 0, io.EOF
+	}
+	err := r.err
+	r.err = nil
+	return 0, err
+}
+
+func TestDdNoerrorSyncPadsErrorOnlyInputBlock(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Stdio: tool.Stdio{In: &errorOnlyReader{err: errors.New("bad block")}, Out: &out, Err: &errb},
+	}
+	cfg := config{ibs: 4, obs: 2, count: -1, noerror: true, sync: true, reblock: true, status: "none"}
+	if code := copyDD(rc, cfg); code != 1 {
+		t.Fatalf("code=%d want 1; err=%q", code, errb.String())
+	}
+	if want := []byte{0, 0, 0, 0}; !bytes.Equal(out.Bytes(), want) {
+		t.Fatalf("output=%v want=%v", out.Bytes(), want)
+	}
+	if !strings.Contains(errb.String(), "bad block") {
+		t.Fatalf("missing read diagnostic: %q", errb.String())
+	}
+}
+
+func TestDdNoerrorWithoutSyncOmitsErrorOnlyInputBlock(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Stdio: tool.Stdio{In: &errorOnlyReader{err: errors.New("bad block")}, Out: &out, Err: &errb},
+	}
+	cfg := config{ibs: 4, obs: 2, count: -1, noerror: true, reblock: true, status: "none"}
+	if code := copyDD(rc, cfg); code != 1 {
+		t.Fatalf("code=%d want 1; err=%q", code, errb.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("output=%v want empty", out.Bytes())
+	}
+	if !strings.Contains(errb.String(), "bad block") {
+		t.Fatalf("missing read diagnostic: %q", errb.String())
 	}
 }
 

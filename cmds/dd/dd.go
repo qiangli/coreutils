@@ -38,10 +38,14 @@ type config struct {
 	count        int64
 	skip, seek   int64
 	notrunc      bool
+	noerror      bool
 	fullblock    bool
 	sync         bool
 	block        bool
 	unblock      bool
+	lcase        bool
+	ucase        bool
+	swab         bool
 	status       string
 	reblock      bool
 }
@@ -127,12 +131,20 @@ func run(rc *tool.RunContext, args []string) int {
 				switch conversion {
 				case "notrunc":
 					cfg.notrunc = true
+				case "noerror":
+					cfg.noerror = true
 				case "sync":
 					cfg.sync = true
 				case "block":
 					cfg.block = true
 				case "unblock":
 					cfg.unblock = true
+				case "lcase":
+					cfg.lcase = true
+				case "ucase":
+					cfg.ucase = true
+				case "swab":
+					cfg.swab = true
 				default:
 					return tool.NotSupported(rc, cmd, "conv="+conversion)
 				}
@@ -144,6 +156,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if cfg.block && cfg.unblock {
 		return tool.UsageError(rc, cmd, "conv=block and conv=unblock are mutually exclusive")
 	}
+	if cfg.lcase && cfg.ucase {
+		return tool.UsageError(rc, cmd, "conv=lcase and conv=ucase are mutually exclusive")
+	}
 	if (cfg.block || cfg.unblock) && cfg.cbs == 0 {
 		return tool.UsageError(rc, cmd, "cbs= is required with conv=block or conv=unblock")
 	}
@@ -152,7 +167,10 @@ func run(rc *tool.RunContext, args []string) int {
 		// With the currently supported conversions, GNU writes each input
 		// block as read rather than aggregating short blocks.
 		cfg.ibs, cfg.obs = bs, bs
-		cfg.reblock = cfg.block || cfg.unblock
+		// POSIX permits bs= to bypass output reblocking only when no data
+		// conversion is requested. sync, noerror, and notrunc are file/input
+		// handling conversions, while the following alter the byte stream.
+		cfg.reblock = cfg.block || cfg.unblock || cfg.lcase || cfg.ucase || cfg.swab
 	}
 	return copyDD(rc, cfg)
 }
@@ -295,6 +313,7 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 	}
 	var full, partial int64
 	var outFull, outPartial int64
+	var hadReadError bool
 	for cfg.count < 0 || full+partial < cfg.count {
 		n, rerr := readInputBlock(in, buf, cfg.fullblock)
 		if n > 0 {
@@ -307,16 +326,12 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 				// POSIX conv=sync pads each input record before any output
 				// reblocking. The normal fill byte is NUL; block/unblock
 				// select a space.
-				if cfg.block || cfg.unblock {
-					for i := n; i < len(buf); i++ {
-						buf[i] = ' '
-					}
-				} else {
-					clear(buf[n:])
-				}
+				padInputBlock(buf, n, cfg)
 				n = len(buf)
 			}
-			if err := writeAll(out, buf[:n]); err != nil {
+			data := buf[:n]
+			convertBytes(data, cfg)
+			if err := writeAll(out, data); err != nil {
 				fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
 				return 1
 			}
@@ -333,7 +348,44 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		}
 		if rerr != nil {
 			fmt.Fprintf(rc.Err, "dd: error reading input: %v\n", reason(rerr))
-			return 1
+			if !cfg.noerror {
+				return 1
+			}
+			hadReadError = true
+			if n == 0 {
+				if cfg.sync {
+					padInputBlock(buf, 0, cfg)
+					convertBytes(buf, cfg)
+					if err := writeAll(out, buf); err != nil {
+						fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
+						return 1
+					}
+					if blocker == nil {
+						outFull++
+					}
+				}
+				// A Reader that reports an error without data has made no
+				// progress. Regular input files can advance to the next input
+				// record; for streams there is no portable recovery operation,
+				// so stop after the required diagnostic rather than spin forever
+				// or discard arbitrary later bytes.
+				if inf != nil && !inputFIFO {
+					if _, err := inf.Seek(cfg.ibs, io.SeekCurrent); err != nil {
+						return 1
+					}
+					if cfg.sync {
+						full++
+					}
+					continue
+				}
+				break
+			}
+			// A Reader may return data and an error together. The bytes above
+			// were valid input; retry once more to continue after the error.
+			if n > 0 {
+				continue
+			}
+			break
 		}
 	}
 	if blockConv != nil {
@@ -363,6 +415,9 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		outf = nil
 	}
 	if cfg.status == "none" {
+		if hadReadError {
+			return 1
+		}
 		return 0
 	}
 	fmt.Fprintf(rc.Err, "%d+%d records in\n", full, partial)
@@ -377,7 +432,57 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 	if cfg.status != "noxfer" {
 		fmt.Fprintf(rc.Err, "%d bytes copied\n", counter.n)
 	}
+	if hadReadError {
+		return 1
+	}
 	return 0
+}
+
+func padInputBlock(buf []byte, n int, cfg config) {
+	if cfg.block || cfg.unblock {
+		for i := n; i < len(buf); i++ {
+			buf[i] = ' '
+		}
+	} else {
+		clear(buf[n:])
+	}
+}
+
+func convertBytes(p []byte, cfg config) {
+	if cfg.swab {
+		swabBytes(p)
+	}
+	if cfg.lcase {
+		lowercaseBytes(p)
+	} else if cfg.ucase {
+		uppercaseBytes(p)
+	}
+}
+
+// swabBytes swaps adjacent bytes. GNU dd preserves an odd trailing byte.
+func swabBytes(p []byte) {
+	for i := 0; i+1 < len(p); i += 2 {
+		p[i], p[i+1] = p[i+1], p[i]
+	}
+}
+
+// GNU dd's lcase and ucase conversions are single-byte conversions. Keep the
+// mapping explicit and locale-independent, as POSIX leaves multibyte behavior
+// unspecified and this command operates on byte streams.
+func lowercaseBytes(p []byte) {
+	for i, c := range p {
+		if c >= 'A' && c <= 'Z' {
+			p[i] = c + ('a' - 'A')
+		}
+	}
+}
+
+func uppercaseBytes(p []byte) {
+	for i, c := range p {
+		if c >= 'a' && c <= 'z' {
+			p[i] = c - ('a' - 'A')
+		}
+	}
 }
 
 // readInputBlock implements GNU iflag=fullblock. A normal read is one input
