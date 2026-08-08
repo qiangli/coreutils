@@ -1,6 +1,6 @@
 # Feasibility Study: A Pure-Go POSIX `ed` and a Separate Agentic Patch/Edit Surface
 
-Status: **Draft for review**
+Status: **Feasibility study for maintainer review**
 Scope: Implementation feasibility, prior-art survey, and licensing analysis for adding
 (1) a strict POSIX `ed` command and (2) a distinct, agent-safe patch/edit surface to this
 repository. Every external claim is tagged by evidence class:
@@ -83,20 +83,24 @@ licensed test material):
 - **Regular expressions.** BRE (XBD §9.3), **including `\(...\)` grouping and `\1`…`\9`
   backreferences used within the matching RE**. The null/empty RE reuses the last RE.
   **[Sourced]** — this is the crux of §4.1/§7.
-- **Text-file definition.** A *text file* is a sequence of lines each terminated by `\n`;
-  behavior on files containing NUL bytes or a final line without a trailing newline is
-  specified (warning + newline added). **[Inferred]** from the standard's line/encoding
-  description and the well-known "no newline" interop behavior.
+- **Text-file domain.** POSIX specifies text-file input. Files containing NUL bytes or an
+  unterminated final line are outside that portable input contract; compatibility behavior
+  for them must be measured and documented separately rather than presented as a POSIX
+  requirement. **[Sourced]** to the standard's INPUT FILES section and XBD text-file
+  definition.
 - **Locale.** `LC_ALL=C`-style deterministic behavior is the repository's baseline agent
   contract; collation classes (`[:alpha:]` etc.) resolve under the C locale. **[Inferred]**
   from the repo-wide contract in `README.md`/`CLAUDE.md`.
 - **Signals and EOF.** Interrupt handling and end-of-input behavior are specified; an
   interrupt returns to command mode (discarding a partial text-input line) and prints `?`.
 - **Diagnostics.** Errors produce `?` on the output; `h`/`H` optionally print a message.
-  Exit codes: `0` success, `1` an error occurred during editing, `2` usage/invalid invocation.
+  Exit status is `0` for successful completion without file or command errors and greater
+  than zero when an error occurs; POSIX does not assign portable meanings to exact non-zero
+  values. **[Sourced]** to the standard's EXIT STATUS section.
 - **File semantics.** `e`/`E` edit a named file, `f` sets/prints the remembered filename, `r`
-  reads a file into the buffer, `w`/`W` write (whole / append). The `e !cmd` and `r !cmd`
-  forms **read from a shell command** (see §3.1).
+  reads a file into the buffer, `w`/`W` write (whole / append). The specified shell-command
+  forms read command output into the buffer or write buffer content to a command
+  (see §3.1).
 - **Command set.** Includes `a c d e E f g G h H i j k l m n p P q Q r s t u v V w W x y z = !`
   and the line-addressing grammar (`.`, `$`, numbers, `+`/`-`, `/re/`, `?re?`, `;`, marks).
   Notable hard cases: `g`/`G`/`v`/`V` global mark-then-execute semantics; `s` with `%`, `g`,
@@ -110,13 +114,15 @@ rule that no tool spawns a program to implement its own behavior (the one docume
 covers wrappers like `env`/`timeout`/`xargs` whose purpose *is* running the operand).
 
 **Resolution (inference).** Keep the two surfaces separate:
-- The **POSIX `ed` CLI** may implement `!` as an explicitly documented, off-by-default
-  extension gated behind a flag/env (e.g. `ED_ALLOW_SHELL=1`), failing loudly (`ed: '!'
-  disabled`) otherwise — consistent with the repo's "unsupported fails loudly" contract.
+- A **strict POSIX `ed` CLI must implement** `!` and the other specified shell-command
+  forms. Disabling them by default would make that profile non-conforming. The repository's
+  no-shell-out policy therefore needs a narrow, documented exception analogous to utilities
+  whose specified purpose includes executing an operand; capability policy can still deny
+  launching the strict CLI in restricted agent contexts.
 - The **agentic patch/edit surface must never expose `!`** or any command-execution primitive.
 
-This must be decided by maintainers; it is flagged as an open design decision, not silently
-approximated.
+Maintainers must approve that explicit exception before implementation. It must not be
+silently replaced by an environment-gated approximation in the claimed POSIX profile.
 
 ---
 
@@ -298,7 +304,7 @@ several factual and design errors. This study corrects each:
 | D1 | Implied the BRE backreference gap is *open* and needs an "external BRE package," listed as a known limitation (§10.1). | **False.** `pkg/bre` already provides bounded-backtracking backreference matching and is used by `grep`/`sed` **[Sourced]** (§4.1, §7). |
 | D2 | Conflated `ed`, POSIX `patch`, and unified diff into a single "mutate files" concern (§4). | They are distinct surfaces with distinct contracts (§2). The agentic surface is a *new* tool, not "ed+patch". |
 | D3 | Proposed `filepath.Clean` as a "boundary" preventing path traversal (§5.1.3). | `filepath.Clean` is **not** containment; it neither stops `../` escape nor resolves symlinks (§6.11). |
-| D4 | Proposed enabling the POSIX `!` shell escape via an env var without reconciling it with the no-shell-out rule (§5.1.4). | The conflict is explicit (§3.1); the agentic surface never exposes `!`; the POSIX CLI treats it as an off-by-default extension pending maintainer decision. |
+| D4 | Proposed enabling the POSIX `!` shell escape via an env var without reconciling it with the no-shell-out rule (§5.1.4). | The conflict is explicit (§3.1); a strict POSIX CLI implements the specified shell-command forms under a narrow policy exception, while the agentic surface never exposes command execution. |
 | D5 | Relied on "the standard `regexp` package" for `g/G/v/V/s` (§7 matrix). | Must use `pkg/bre` for POSIX BRE (incl. backref matching) **[Sourced]**. |
 | D6 | Understated `go-gitdiff`'s capability (described it vaguely as supporting "precondition hashes"). | `go-gitdiff` **parses and applies** git/unified diffs via `gitdiff.Apply`, with strict-mode `*Conflict`; it does **not** do content-hash preconditioning (that is the agentic layer's job) **[Sourced]** (§10). |
 | D7 | Estimated effort in single-day point numbers (§8). | Person-week ranges with phased scope (§11). |
@@ -337,7 +343,7 @@ planning estimates, not commitments.
 | Phase | Scope | Estimate |
 |---|---|---|
 | A1 — Buffer & addressing | In-memory line buffer; line addressing (`.`,`$`,numbers,`+`/`-`,`/re/`,`?re?`,`;`,marks); commands `p n l = q Q h H P f`. `tool.RunContext` wiring + `cmds/all` registration. | 2–3 pw |
-| A2 — File I/O & edit commands | `e E r w W` with safe-path handling; text mutation `a c i d j m t u` (incl. single-level undo). | 1.5–2 pw |
+| A2 — File I/O & edit commands | `e E r w W` with normal POSIX pathname and permission semantics; text mutation `a c i d j m t u` (incl. single-level undo). Agentic workspace containment is not imposed on this CLI. | 1.5–2 pw |
 | A3 — Global commands | `g G v V` mark-then-execute semantics; undo interactions. | 1–1.5 pw |
 | A4 — Substitute & BRE | `s` with flags (`g`, count, `%`); `pkg/bre` integration; leftmost-longest; null-RE reuse; replacement backrefs via `Expand`. | 1–1.5 pw |
 | A5 — POSIX edge cases | signals/EOF; modified-flag tri-state; no-newline warnings; `?` diagnostics; exit codes; `z`; `y`. | 1–1.5 pw |
@@ -382,7 +388,7 @@ Coverage equivalent in intent is derived from **public** POSIX semantics:
 |---|---|
 | **`g`/`G`/`v`/`V` + undo interaction bugs** (classic ed hazard) | Dedicated table tests; treat global-command marking as a first-class, tested subsystem (A3). |
 | **Leftmost-longest vs leftmost-first mismatch** in `s` | Route through `pkg/bre`'s `Longest` path exactly as `sed` does; cross-test against `sed` results. |
-| **`!` shell escape in POSIX mode** vs no-shell-out rule | Off-by-default gated extension; agentic surface never exposes it (§3.1). |
+| **`!` shell escape in POSIX mode** vs no-shell-out rule | Strict CLI implements the specified behavior under an explicit narrow policy exception; agentic surface never exposes it (§3.1). |
 | **Symlink/path-traversal escape** | Real containment (resolve + reject symlinks + per-component checks), not `filepath.Clean` (§6.11). |
 | **Memory blowup on huge files** | Hard limits with loud failure steering to stream tools (§6.12). |
 | **Catastrophic regex backtracking** | Already bounded by `pkg/bre`'s backtracking matcher; fuzz-verified. |
