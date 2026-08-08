@@ -162,6 +162,7 @@ func runLocal(ctx context.Context, dir, command, peerClaimed string) Outcome {
 	out := Outcome{Where: "local", Command: command, PeerClaimed: peerClaimed}
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	prepareGateCommand(cmd)
 	cmd.Dir = dir
 	// The gate must not inherit the operator's secrets: it is arbitrary
 	// operator-supplied code being run to judge ANOTHER party's output.
