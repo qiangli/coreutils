@@ -153,6 +153,47 @@ func TestDdOperandSizeSyntax(t *testing.T) {
 	}
 }
 
+func TestDdSeekOnRedirectedStandardOutput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "redirected-output")
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: dir,
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("0123456789"),
+			Out: out,
+			Err: &errb,
+		},
+	}
+	code := cmd.Run(rc, []string{"ibs=10", "obs=10", "count=1", "seek=1", "status=none"})
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || errb.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errb.String())
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(make([]byte, 10), []byte("0123456789")...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("redirected output=%v, want one skipped output block followed by input", got)
+	}
+}
+
+func TestDdSeekRejectsNonSeekableStandardOutput(t *testing.T) {
+	_, errb, code := runTool(t, t.TempDir(), "input", "obs=2", "seek=1", "status=none")
+	if code != 2 || !strings.Contains(errb, "non-seekable standard output") {
+		t.Fatalf("code=%d stderr=%q", code, errb)
+	}
+}
+
 func TestDdCaseConversionsAreSingleByteAndReblockBs(t *testing.T) {
 	for _, tc := range []struct {
 		name, conv, input, want string

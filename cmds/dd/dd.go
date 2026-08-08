@@ -193,6 +193,7 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		}
 	}
 	var out io.Writer = rc.Out
+	stdoutSeeker, stdoutSeekable := rc.Out.(io.Seeker)
 	var outf *os.File
 	outputFIFO := false
 	var seekBytes int64
@@ -271,15 +272,21 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		}
 	}
 	if cfg.seek > 0 {
-		if outf == nil && !outputFIFO {
-			return tool.NotSupported(rc, cmd, "seek= with standard output")
-		}
 		if outputFIFO {
 			// The offset was consumed from the FIFO before its write side was
 			// opened; FIFOs themselves are not seekable.
-		} else if _, err := outf.Seek(seekBytes, io.SeekStart); err != nil {
-			fmt.Fprintf(rc.Err, "dd: failed to seek '%s': %v\n", cfg.ofile, reason(err))
-			return 1
+		} else if outf != nil {
+			if _, err := outf.Seek(seekBytes, io.SeekStart); err != nil {
+				fmt.Fprintf(rc.Err, "dd: failed to seek '%s': %v\n", cfg.ofile, reason(err))
+				return 1
+			}
+		} else if stdoutSeekable {
+			if _, err := stdoutSeeker.Seek(seekBytes, io.SeekStart); err != nil {
+				fmt.Fprintf(rc.Err, "dd: failed to seek standard output: %v\n", reason(err))
+				return 1
+			}
+		} else {
+			return tool.NotSupported(rc, cmd, "seek= with non-seekable standard output")
 		}
 	}
 

@@ -66,7 +66,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 15 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 2 | 10 |
 | `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 12 |
-| `dd` | `cmds/dd` | — | GNU Coreutils | yes | yes | 2 | 32 |
+| `dd` | `cmds/dd` | — | GNU Coreutils | yes | yes | 2 | 36 |
 | `df` | `cmds/df` | — | GNU Coreutils | yes | yes | 1 | 16 |
 | `diff` | `cmds/diff` | — | POSIX/Unix utility | no | yes | 2 | 28 |
 | `dir` | `cmds/dir` | — | GNU Coreutils | yes | no | 1 | 4 |
