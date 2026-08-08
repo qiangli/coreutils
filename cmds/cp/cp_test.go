@@ -62,6 +62,33 @@ func TestCpFile(t *testing.T) {
 	}
 }
 
+func TestCpUsesRunContextDirWhenProcessCwdDiffers(t *testing.T) {
+	invocationDir := t.TempDir()
+	processDir := t.TempDir()
+	write(t, filepath.Join(invocationDir, "source"), "invocation-data")
+	write(t, filepath.Join(processDir, "source"), "wrong-process-data")
+
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(original) }()
+	if err := os.Chdir(processDir); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, invocationDir, "source", "dest")
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(invocationDir, "dest")); got != "invocation-data" {
+		t.Fatalf("destination=%q, want invocation-directory source", got)
+	}
+	if _, err := os.Stat(filepath.Join(processDir, "dest")); !os.IsNotExist(err) {
+		t.Fatalf("process cwd was modified: err=%v", err)
+	}
+}
+
 func TestCpIntoDir(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "a"), "x")

@@ -33,6 +33,7 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 
 type copier struct {
 	rc           *tool.RunContext
+	paths        *pathResolver
 	recursive    bool
 	preserve     preserveSet
 	force        bool
@@ -137,6 +138,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	c := &copier{
 		rc:           rc,
+		paths:        newPathResolver(rc),
 		recursive:    *recursive || *recursiveUpper || *archive,
 		preserve:     preserve,
 		force:        *force,
@@ -158,6 +160,7 @@ func run(rc *tool.RunContext, args []string) int {
 		verbose:      *verbose,
 		in:           inputReader(rc.In),
 	}
+	defer c.paths.close()
 	if *noDeref || *archive || fs.Changed("no-dereference-preserve-links") {
 		c.deref = false
 	}
@@ -182,7 +185,7 @@ func run(rc *tool.RunContext, args []string) int {
 		dest = operands[len(operands)-1]
 		srcs = operands[:len(operands)-1]
 	}
-	di, err := os.Stat(rc.Path(dest))
+	di, err := os.Stat(c.path(dest))
 	todir := !*noTargetDir && err == nil && di.IsDir()
 	if *targetDir != "" && !todir {
 		fmt.Fprintf(rc.Err, "cp: target directory '%s' is not a directory\n", dest)
@@ -209,6 +212,8 @@ func run(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
+func (c *copier) path(operand string) string { return c.paths.path(operand) }
+
 // copyEntry dispatches one SOURCE operand. Without -r symlinks are
 // followed (os.Stat); with -r they are copied as symlinks, per the
 // GNU manual's -R default.
@@ -221,7 +226,7 @@ func (c *copier) copyEntry(src, dst string) {
 	if c.recursive && !c.deref && !c.derefArgs {
 		stat = os.Lstat
 	}
-	fi, err := stat(c.rc.Path(src))
+	fi, err := stat(c.path(src))
 	if err != nil {
 		c.errf("cannot stat '%s': %s", src, reason(err))
 		return
@@ -268,7 +273,7 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 		}
 	}
 	created := false
-	if di, err := os.Lstat(c.rc.Path(dst)); err == nil {
+	if di, err := os.Lstat(c.path(dst)); err == nil {
 		if !di.IsDir() {
 			c.errf("cannot overwrite non-directory '%s' with directory '%s'", dst, src)
 			return
@@ -287,21 +292,21 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 			// write access while children are still being copied.
 			mode &^= 0o022
 		}
-		if err := os.Mkdir(c.rc.Path(dst), mode); err != nil {
+		if err := os.Mkdir(c.path(dst), mode); err != nil {
 			c.errf("cannot create directory '%s': %s", dst, reason(err))
 			return
 		}
 		created = true
 	}
 	c.verbosef("'%s' -> '%s'", src, dst)
-	entries, err := os.ReadDir(c.rc.Path(src))
+	entries, err := os.ReadDir(c.path(src))
 	if err != nil {
 		c.errf("cannot access '%s': %s", src, reason(err))
 	} else {
 		for _, e := range entries {
 			csrc := filepath.Join(src, e.Name())
 			cdst := filepath.Join(dst, e.Name())
-			ci, err := os.Lstat(c.rc.Path(csrc))
+			ci, err := os.Lstat(c.path(csrc))
 			if err != nil {
 				c.errf("cannot stat '%s': %s", csrc, reason(err))
 				continue
@@ -322,14 +327,14 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 		c.preserveAttrs(src, dst, fi)
 	}
 	if created && !c.preserve.mode {
-		if err := os.Chmod(c.rc.Path(dst), fi.Mode().Perm()); err != nil {
+		if err := os.Chmod(c.path(dst), fi.Mode().Perm()); err != nil {
 			c.errf("setting permissions for '%s': %s", dst, reason(err))
 		}
 	}
 }
 
 func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
-	sp, dp := c.rc.Path(src), c.rc.Path(dst)
+	sp, dp := c.path(src), c.path(dst)
 	if _, err := os.Lstat(dp); err == nil {
 		if c.noClobber {
 			return // -n: silently skip; exit status unaffected
@@ -362,8 +367,8 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 	} else if c.symlink {
 		// Nothing to do before creating a new symbolic link.
 	}
-	if parent := filepath.Dir(dp); parent != "." && parent != dp {
-		if err := os.MkdirAll(parent, 0o777); err != nil {
+	if parent := filepath.Dir(dst); parent != "." && parent != dst {
+		if err := os.MkdirAll(c.path(parent), 0o777); err != nil {
 			c.errf("cannot create directory '%s': %s", filepath.Dir(dst), reason(err))
 			return
 		}
@@ -430,7 +435,7 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 }
 
 func (c *copier) copySymlink(src, dst string) {
-	sp, dp := c.rc.Path(src), c.rc.Path(dst)
+	sp, dp := c.path(src), c.path(dst)
 	target, err := os.Readlink(sp)
 	if err != nil {
 		c.errf("cannot read symbolic link '%s': %s", src, reason(err))
@@ -480,7 +485,7 @@ func inputReader(r io.Reader) *bufio.Reader {
 }
 
 func (c *copier) backupDest(dst string) bool {
-	dp := c.rc.Path(dst)
+	dp := c.path(dst)
 	bp := dp + c.suffix
 	_ = os.Remove(bp)
 	if err := os.Rename(dp, bp); err != nil {
@@ -503,7 +508,7 @@ func sourceNewer(src, dst string) bool {
 // to preserve ownership without the needed privilege is not an error
 // (GNU -p rule); mode/time failures are diagnosed.
 func (c *copier) preserveAttrs(src, dst string, fi os.FileInfo) {
-	dp := c.rc.Path(dst)
+	dp := c.path(dst)
 	if c.preserve.mode {
 		mode := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
 		if err := os.Chmod(dp, mode); err != nil {

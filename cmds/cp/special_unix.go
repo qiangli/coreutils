@@ -23,7 +23,7 @@ func (c *copier) copySpecial(src, dst string, fi os.FileInfo) {
 		c.copyFile(src, dst, fi)
 		return
 	}
-	dp := c.rc.Path(dst)
+	dp := c.path(dst)
 	if di, err := os.Lstat(dp); err == nil {
 		if os.SameFile(fi, di) {
 			c.errf("'%s' and '%s' are the same file", src, dst)
@@ -36,7 +36,7 @@ func (c *copier) copySpecial(src, dst string, fi os.FileInfo) {
 		if c.noClobber {
 			return
 		}
-		if c.update && !sourceNewer(c.rc.Path(src), dp) {
+		if c.update && !sourceNewer(c.path(src), dp) {
 			return
 		}
 		if c.interactive && !c.confirm(dst) {
@@ -52,8 +52,8 @@ func (c *copier) copySpecial(src, dst string, fi os.FileInfo) {
 			}
 		}
 	}
-	if parent := filepath.Dir(dp); parent != "." && parent != dp {
-		if err := os.MkdirAll(parent, 0o777); err != nil {
+	if parent := filepath.Dir(dst); parent != "." && parent != dst {
+		if err := os.MkdirAll(c.path(parent), 0o777); err != nil {
 			c.errf("cannot create directory '%s': %s", filepath.Dir(dst), reason(err))
 			return
 		}
