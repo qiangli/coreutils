@@ -46,7 +46,7 @@ ln -sf "$LEAN" "$WORK/run-lean/coreutils"
 command -v python3 >/dev/null || { echo "python3 required" >&2; exit 1; }
 
 python3 - "$WORK/run-full/coreutils" "$WORK/run-lean/coreutils" "$WORK/cmp-a" "$WORK/cmp-b" "$REPS" <<'PY'
-import os, statistics, subprocess, sys, time
+import os, shutil, statistics, subprocess, sys, time
 
 full, lean, cmp_a, cmp_b, reps = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
 
@@ -65,7 +65,8 @@ print(f"size reduction: {mb(full)/mb(lean):.1f}x smaller")
 
 def drop_cache():
     # macOS
-    subprocess.run(["purge"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if shutil.which("purge"):
+        subprocess.run(["purge"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # Linux (best-effort; needs root)
     try:
         with open("/proc/sys/vm/drop_caches", "w") as f:
