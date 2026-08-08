@@ -434,12 +434,13 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 			note(127)
 			return false
 		}
-		c := exec.Command(path, argv[1:]...)
-		c.Dir = rc.Dir
-		c.Env = rc.Env
-		c.Stdin = nil // child reads from the null device, not xargs's input
-		c.Stdout, c.Stderr = stdout, stderr
-		switch err := c.Run().(type) {
+		// The child reads from the null device, not xargs's consumed input.
+		c, startErr := rc.StartCommand(path, argv[1:], nil, stdout, stderr)
+		if startErr != nil {
+			note(126)
+			return false
+		}
+		switch err := c.Wait().(type) {
 		case nil:
 		case *exec.ExitError:
 			switch ec := err.ExitCode(); {

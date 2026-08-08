@@ -40,7 +40,7 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Out, currentPriority())
 		return 0
 	}
-	return runCommand(rc, "nice", command, nil, currentPriority()+adjust)
+	return runCommand(rc, "nice", command, currentPriority()+adjust)
 }
 
 // parseNice returns the adjustment, whether one was given, the COMMAND operand
@@ -170,23 +170,14 @@ func isObsoleteAdjustment(s string) bool {
 // (see shell/Handler), so changing the caller's own niceness would leak past
 // this single invocation and alter unrelated commands run later in the same
 // host process.
-func runCommand(rc *tool.RunContext, name string, argv []string, env []string, niceness int) int {
+func runCommand(rc *tool.RunContext, name string, argv []string, niceness int) int {
 	path := rc.ResolveCommand(argv[0])
 	if path == "" {
 		fmt.Fprintf(rc.Err, "%s: %s: command not found\n", name, argv[0])
 		return 127
 	}
-	c := exec.CommandContext(rc.Ctx, path, argv[1:]...)
-	c.Dir = rc.Dir
-	if env != nil {
-		c.Env = env
-	} else {
-		c.Env = rc.Env
-	}
-	c.Stdin = rc.In
-	c.Stdout = rc.Out
-	c.Stderr = rc.Err
-	if err := c.Start(); err != nil {
+	c, err := rc.StartCommand(path, argv[1:], rc.In, rc.Out, rc.Err)
+	if err != nil {
 		if os.IsNotExist(err) || strings.Contains(err.Error(), "executable file not found") {
 			fmt.Fprintf(rc.Err, "%s: failed to run command %q: %v\n", name, argv[0], err)
 			return 127
@@ -197,7 +188,7 @@ func runCommand(rc *tool.RunContext, name string, argv []string, env []string, n
 	if err := setPriority(c.Process.Pid, niceness); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot set niceness: %v\n", name, err)
 	}
-	err := c.Wait()
+	err = c.Wait()
 	if err == nil {
 		return 0
 	}

@@ -46,7 +46,7 @@ func TestNiceReportsSignalExitCode(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"PATH=/usr/bin:/bin"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
-	code := runCommand(rc, "nice", []string{"sh", "-c", "kill -TERM $$"}, nil, currentPriority())
+	code := runCommand(rc, "nice", []string{"sh", "-c", "kill -TERM $$"}, currentPriority())
 	const sigterm = 15
 	if want := 128 + sigterm; code != want {
 		t.Fatalf("code=%d want %d (stderr=%q)", code, want, errb.String())

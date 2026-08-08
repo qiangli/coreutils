@@ -18,7 +18,6 @@ package timecmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -116,15 +115,8 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "time: %s: command not found\n", command[0])
 		return 127
 	}
-	c := exec.Command(path, command[1:]...)
-	c.Dir = rc.Dir
-	c.Env = rc.Env
-	c.Stdin = rc.In
-	c.Stdout = rc.Out
-	c.Stderr = rc.Err
-
 	start := time.Now()
-	err := c.Start()
+	c, err := rc.StartCommand(path, command[1:], rc.In, rc.Out, rc.Err)
 	if err != nil {
 		// 127 not found / 126 not executable, like a shell.
 		fmt.Fprintf(rc.Err, "time: %s: %v\n", command[0], err)

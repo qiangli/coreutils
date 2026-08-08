@@ -111,7 +111,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 1 | 8 |
 | `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 1 | 17 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
-| `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 3 | 11 |
+| `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 16 |
 | `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `nohup` | `cmds/nohup` | — | GNU Coreutils | yes | yes | 1 | 9 |
 | `nproc` | `cmds/nproc` | — | GNU Coreutils | yes | no | 1 | 2 |
@@ -155,7 +155,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `tar` | `cmds/tar` | — | Bashy/other extension | no | no | 1 | 14 |
 | `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `test` | `cmds/test` | — | GNU Coreutils | yes | yes | 3 | 32 |
-| `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 2 | 7 |
+| `time` | `cmds/time` | — | POSIX/Unix utility | no | yes | 4 | 15 |
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 3 | 26 |
@@ -180,7 +180,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `which` | `cmds/which` | — | Bashy/other extension | no | no | 1 | 9 |
 | `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 2 | 11 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
-| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 1 | 17 |
+| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 25 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 
