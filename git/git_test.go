@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	gogit "github.com/go-git/go-git/v5"
 )
 
 // TestRoundtrip exercises the typical local-only lifecycle:
@@ -194,6 +196,41 @@ func TestRoundtrip(t *testing.T) {
 	if _, err := Checkout(CheckoutOptions{RepoPath: dir, Branch: "feature"}); err != nil {
 		// Already on feature, that's fine.
 		_ = err
+	}
+}
+
+func TestIndexHeadMatchesDistinguishesCleanAndStagedPaths(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Init(InitOptions{Path: dir}); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("kept", "same\n")
+	if _, err := Add(AddOptions{RepoPath: dir, All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(CommitOptions{RepoPath: dir, Message: "base", AuthorName: "Test", AuthorEmail: "test@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	write("added", "new\n")
+	if _, err := Add(AddOptions{RepoPath: dir, Path: "added"}); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := indexHeadMatches(repo)
+	if !matches["kept"] {
+		t.Fatal("unchanged index entry must match HEAD")
+	}
+	if matches["added"] {
+		t.Fatal("new staged path must not match HEAD")
 	}
 }
 

@@ -234,7 +234,12 @@ func runDrainGate(ctx context.Context, dir, command string) gate.Outcome {
 	if dir == "" {
 		dir, _ = os.Getwd()
 	}
-	return gate.RunLocal(ctx, dir, command, "")
+	out := gate.RunLocal(ctx, dir, command, "")
+	if err := ctx.Err(); err != nil {
+		out.Passed = false
+		out.Output = strings.TrimSpace(out.Output + "\nsprint gate: " + err.Error())
+	}
+	return out
 }
 
 // drainSummary renders what happened, in the order a reader needs it: the

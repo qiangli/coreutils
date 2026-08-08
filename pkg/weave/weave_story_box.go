@@ -48,6 +48,7 @@ package weave
 // mean a conductor switch silently reset the deadline.
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -280,6 +281,7 @@ func newSprintEndCmd() *cobra.Command {
 func newSprintCloseCmd(ending bool) *cobra.Command {
 	var flags weaveOutputFlags
 	var note, gateCmd, gateDir string
+	var gateTimeout time.Duration
 	var force, noVerify bool
 	verb := "stop"
 	short := "Close a sprint's time-box and record planned vs actual"
@@ -334,6 +336,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				return fmt.Errorf("sprint must be an integer: %q", args[0])
 			}
 			now := time.Now().UTC()
+			if gateTimeout <= 0 {
+				return fmt.Errorf("gate timeout must be positive")
+			}
 			requireGate := !noVerify
 			var rep drainReport
 			return runWeaveStoryMutate(cmd, id, op, &flags, func(s *weaveStory) (string, error) {
@@ -357,7 +362,12 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				// THE MINIMUM BAR: it compiles and the tests pass. A sprint
 				// that stops over a regression is not parked, it is a trap —
 				// the next sprint inherits damage it cannot tell from its own.
-				out := runDrainGate(cmd.Context(), gateDir, gateCmd)
+				if strings.TrimSpace(gateCmd) != "" && !flags.quietF && !flags.jsonF {
+					fmt.Fprintf(cmd.ErrOrStderr(), "%s: running gate (timeout %s): %s\n", op, gateTimeout, gateCmd)
+				}
+				gateCtx, cancelGate := context.WithTimeout(cmd.Context(), gateTimeout)
+				out := runDrainGate(gateCtx, gateDir, gateCmd)
+				cancelGate()
 				rep.GateRan, rep.GatePassed, rep.GateCmd = out.Ran, out.Passed, out.Command
 				b.GateRan, b.GatePassed, b.GateCmd = out.Ran, out.Passed, out.Command
 
@@ -450,6 +460,7 @@ intent is only to close the current cadence cycle.`
 	cmd.Flags().StringVar(&note, "note", "", "what the box actually produced")
 	cmd.Flags().StringVar(&gateCmd, "gate", "", "the command proving the tree still builds and passes")
 	cmd.Flags().StringVar(&gateDir, "gate-dir", "", "where to run the gate (default: cwd)")
+	cmd.Flags().DurationVar(&gateTimeout, "gate-timeout", 15*time.Minute, "maximum time allowed for the gate")
 	if !ending {
 		cmd.Flags().BoolVar(&force, "force", false, "close even over a red gate or an unparked worker — recorded as not clean")
 		cmd.Flags().BoolVar(&noVerify, "no-verify", false, "close with no gate at all, on the record as unverified")

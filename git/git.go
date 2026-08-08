@@ -312,6 +312,14 @@ func Status(repoPath string) (*Result, []StatusEntry, error) {
 	if status.IsClean() {
 		return &Result{Success: true, Message: "nothing to commit, working tree clean"}, nil, nil
 	}
+	// Some repositories updated by native Git carry an index cache-tree that
+	// go-git does not fully reconcile. In that case Worktree.Status can report
+	// tracked paths as staged additions even though the index entry is byte-for-
+	// byte identical to HEAD. Native `git status` correctly calls the tree clean;
+	// treating those phantom additions as dirt blocks sprint closure forever.
+	// Compare every claimed staging change to the authoritative index and HEAD
+	// objects before reporting it. Real additions/modifications still differ.
+	stagedClean := indexHeadMatches(r)
 	var entries []StatusEntry
 	for file, s := range status {
 		// go-git marks untracked files in BOTH columns; without this
@@ -324,11 +332,44 @@ func Status(repoPath string) (*Result, []StatusEntry, error) {
 		if s.Staging == gogit.Unmodified && s.Worktree != gogit.Unmodified {
 			entries = append(entries, StatusEntry{File: file, Status: StatusCode(s.Worktree), Staged: false})
 		}
-		if s.Staging != gogit.Unmodified {
+		if s.Staging != gogit.Unmodified && !stagedClean[file] {
 			entries = append(entries, StatusEntry{File: file, Status: StatusCode(s.Staging), Staged: true})
 		}
 	}
+	if len(entries) == 0 {
+		return &Result{Success: true, Message: "nothing to commit, working tree clean"}, nil, nil
+	}
 	return &Result{Success: true}, entries, nil
+}
+
+// indexHeadMatches returns paths whose staged representation already equals
+// HEAD. It is deliberately object-based, so it remains pure Go and works on
+// hosts where Bashy's embedded Git is the only Git implementation available.
+func indexHeadMatches(r *gogit.Repository) map[string]bool {
+	matches := make(map[string]bool)
+	idx, err := r.Storer.Index()
+	if err != nil {
+		return matches
+	}
+	head, err := r.Head()
+	if err != nil {
+		return matches
+	}
+	commit, err := r.CommitObject(head.Hash())
+	if err != nil {
+		return matches
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return matches
+	}
+	for _, entry := range idx.Entries {
+		headEntry, err := tree.FindEntry(entry.Name)
+		if err == nil && headEntry.Hash == entry.Hash && headEntry.Mode == entry.Mode {
+			matches[entry.Name] = true
+		}
+	}
+	return matches
 }
 
 // RevParseOptions configures a RevParse call.

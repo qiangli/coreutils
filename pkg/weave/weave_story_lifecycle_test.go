@@ -1,8 +1,10 @@
 package weave
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSprintLifecycleSurface(t *testing.T) {
@@ -22,6 +24,25 @@ func TestSprintLifecycleSurface(t *testing.T) {
 	}
 	if end.Flags().Lookup("force") != nil || end.Flags().Lookup("no-verify") != nil {
 		t.Error("sprint end must not expose force or no-verify escape hatches")
+	}
+	if end.Flags().Lookup("gate-timeout") == nil {
+		t.Error("sprint end must bound a stuck gate")
+	}
+}
+
+func TestRunDrainGateHonorsContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	out := runDrainGate(ctx, t.TempDir(), "sleep 5")
+	if out.Passed {
+		t.Fatal("timed-out gate must not pass")
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("gate ignored its context deadline")
+	}
+	if !strings.Contains(out.Output, "deadline exceeded") {
+		t.Fatalf("timeout reason missing from gate output: %q", out.Output)
 	}
 }
 
