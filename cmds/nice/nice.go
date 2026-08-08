@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -173,7 +171,7 @@ func isObsoleteAdjustment(s string) bool {
 // this single invocation and alter unrelated commands run later in the same
 // host process.
 func runCommand(rc *tool.RunContext, name string, argv []string, env []string, niceness int) int {
-	path := lookCommand(rc, argv[0])
+	path := rc.ResolveCommand(argv[0])
 	if path == "" {
 		fmt.Fprintf(rc.Err, "%s: %s: command not found\n", name, argv[0])
 		return 127
@@ -214,58 +212,4 @@ func runCommand(rc *tool.RunContext, name string, argv []string, env []string, n
 	}
 	fmt.Fprintf(rc.Err, "%s: failed to run command %q: %v\n", name, argv[0], err)
 	return 126
-}
-
-func lookCommand(rc *tool.RunContext, name string) string {
-	if strings.ContainsAny(name, `/\`) {
-		p := rc.Path(name)
-		if isCommandFile(p) {
-			return p
-		}
-		return ""
-	}
-	var nonExecutable string
-	pathDirs := filepath.SplitList(rc.Getenv("PATH"))
-	if len(pathDirs) == 0 {
-		pathDirs = []string{""}
-	}
-	for _, dir := range pathDirs {
-		// As with execvp(3), an empty PATH entry names the current directory.
-		// Both it and relative entries are relative to the invocation's working
-		// directory, not the embedding process's working directory.
-		dir = rc.Path(dir)
-		cand := filepath.Join(dir, name)
-		if isCommandFile(cand) {
-			if runtime.GOOS == "windows" || isExecFile(cand) {
-				return cand
-			}
-			if nonExecutable == "" {
-				nonExecutable = cand
-			}
-		}
-		if runtime.GOOS == "windows" {
-			for _, ext := range []string{".exe", ".bat", ".cmd", ".com"} {
-				if isExecFile(cand + ext) {
-					return cand + ext
-				}
-			}
-		}
-	}
-	return nonExecutable
-}
-
-func isCommandFile(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && !fi.IsDir()
-}
-
-func isExecFile(path string) bool {
-	fi, err := os.Stat(path)
-	if err != nil || fi.IsDir() {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return fi.Mode()&0o111 != 0
 }

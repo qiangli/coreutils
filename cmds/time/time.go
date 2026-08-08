@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -113,7 +111,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	// Resolve + run the program (external, like the GNU binary), searching the
 	// invocation's PATH (rc.Env), not the host process's.
-	path := lookCommand(rc, command[0])
+	path := rc.ResolveCommand(command[0])
 	if path == "" {
 		fmt.Fprintf(rc.Err, "time: %s: command not found\n", command[0])
 		return 127
@@ -243,73 +241,6 @@ func emitTodo(rc *tool.RunContext, command []string, elapsed, budget time.Durati
 		return
 	}
 	fmt.Fprintf(rc.Err, "time: ⏱ over budget (%s > %s): %s\n", elapsedHMS(elapsed), elapsedHMS(budget), todo)
-}
-
-// lookCommand resolves a program name against the invocation's PATH (rc.Env).
-// A name containing a separator is resolved against the working directory.
-func lookCommand(rc *tool.RunContext, name string) string {
-	if strings.ContainsAny(name, `/\`) {
-		return rc.Path(name)
-	}
-
-	pathVal := rc.Getenv("PATH")
-	isWindows := runtime.GOOS == "windows"
-	var exts []string
-	if isWindows {
-		pathExt := rc.Getenv("PATHEXT")
-		if pathExt == "" {
-			exts = []string{".com", ".exe", ".bat", ".cmd"}
-		} else {
-			for _, e := range filepath.SplitList(pathExt) {
-				if e != "" {
-					exts = append(exts, strings.ToLower(e))
-				}
-			}
-		}
-	}
-
-	hasExt := func(file string) bool {
-		if !isWindows {
-			return true
-		}
-		fileLower := strings.ToLower(file)
-		for _, ext := range exts {
-			if strings.HasSuffix(fileLower, ext) {
-				return true
-			}
-		}
-		return false
-	}
-
-	checkFile := func(path string) bool {
-		fi, err := os.Stat(path)
-		if err != nil || fi.IsDir() {
-			return false
-		}
-		if isWindows {
-			return true
-		}
-		return fi.Mode()&0o111 != 0
-	}
-
-	for _, dir := range filepath.SplitList(pathVal) {
-		if dir == "" {
-			continue
-		}
-		cand := filepath.Join(dir, name)
-		if hasExt(name) && checkFile(cand) {
-			return cand
-		}
-		if isWindows {
-			for _, ext := range exts {
-				candWithExt := cand + ext
-				if checkFile(candWithExt) {
-					return candWithExt
-				}
-			}
-		}
-	}
-	return ""
 }
 
 // isAgentMode reports whether the invocation env requests agent (JSON) output.

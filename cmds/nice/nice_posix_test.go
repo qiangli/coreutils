@@ -100,7 +100,7 @@ func TestNiceCommandExitStatuses(t *testing.T) {
 	}
 }
 
-func TestLookCommandResolvesPathEntriesFromRunContext(t *testing.T) {
+func TestResolveCommandResolvesPathEntriesFromRunContext(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "command"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -125,8 +125,8 @@ func TestLookCommandResolvesPathEntriesFromRunContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rc := &tool.RunContext{Dir: dir, Env: []string{"PATH=" + tt.path}}
-			if got := lookCommand(rc, "command"); got != tt.want {
-				t.Fatalf("lookCommand()=%q want %q", got, tt.want)
+			if got := rc.ResolveCommand("command"); got != tt.want {
+				t.Fatalf("ResolveCommand()=%q want %q", got, tt.want)
 			}
 		})
 	}

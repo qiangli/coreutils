@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,17 @@ func isRegularFile(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.Mode().IsRegular()
 }
+
+// defaultCommandPath is the search path used when PATH is unset. Windows has no
+// execvp(3)/_CS_PATH convention, so the process's own PATH is the only sensible
+// fallback (matching CreateProcess callers that defer to the environment).
+func defaultCommandPath() string {
+	return os.Getenv("PATH")
+}
+
+// pathIsExecutableBit: Windows has no Unix exec bit; any regular file is a
+// candidate to run (the CreateProcess PATHEXT lookup decides the rest).
+func pathIsExecutableBit(_ fs.FileInfo) bool { return true }
 
 func systemDrive() string {
 	sd := os.Getenv("SystemDrive")

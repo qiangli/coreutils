@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"io/fs"
 	"path/filepath"
 	"runtime"
 )
@@ -37,6 +38,14 @@ func pathextFromEnv(_ []string) []string {
 func resolveExecutable(rc *RunContext, name string) string {
 	return rc.Path(name)
 }
+
+// defaultCommandPath is the search path execvp(3) uses when PATH is unset,
+// matching glibc's confstr(_CS_PATH) default: the standard binary directories.
+func defaultCommandPath() string { return "/usr/bin:/bin" }
+
+// pathIsExecutableBit reports whether a regular file has any executable bit
+// set (the POSIX execvp permission test).
+func pathIsExecutableBit(fi fs.FileInfo) bool { return fi.Mode()&0o111 != 0 }
 
 func toOSPath(p string) string { return p }
 

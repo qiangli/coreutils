@@ -17,10 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -431,7 +428,7 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 		if o.trace {
 			fmt.Fprintln(stderr, strings.Join(argv, " "))
 		}
-		path := lookCommand(rc, argv[0])
+		path := rc.ResolveCommand(argv[0])
 		if path == "" {
 			fmt.Fprintf(stderr, "xargs: %s: command not found\n", argv[0])
 			note(127)
@@ -494,70 +491,4 @@ func execBatches(rc *tool.RunContext, batches [][]string, o options) int {
 	}
 	wg.Wait()
 	return worst
-}
-
-// lookCommand resolves a program name against the invocation PATH (rc.Env).
-func lookCommand(rc *tool.RunContext, name string) string {
-	if strings.ContainsAny(name, `/\`) {
-		return rc.Path(name)
-	}
-
-	pathVal := rc.Getenv("PATH")
-	isWindows := runtime.GOOS == "windows"
-	var exts []string
-	if isWindows {
-		pathExt := rc.Getenv("PATHEXT")
-		if pathExt == "" {
-			exts = []string{".com", ".exe", ".bat", ".cmd"}
-		} else {
-			for _, e := range filepath.SplitList(pathExt) {
-				if e != "" {
-					exts = append(exts, strings.ToLower(e))
-				}
-			}
-		}
-	}
-
-	hasExt := func(file string) bool {
-		if !isWindows {
-			return true
-		}
-		fileLower := strings.ToLower(file)
-		for _, ext := range exts {
-			if strings.HasSuffix(fileLower, ext) {
-				return true
-			}
-		}
-		return false
-	}
-
-	checkFile := func(path string) bool {
-		fi, err := os.Stat(path)
-		if err != nil || fi.IsDir() {
-			return false
-		}
-		if isWindows {
-			return true
-		}
-		return fi.Mode()&0o111 != 0
-	}
-
-	for _, dir := range filepath.SplitList(pathVal) {
-		if dir == "" {
-			continue
-		}
-		cand := filepath.Join(dir, name)
-		if hasExt(name) && checkFile(cand) {
-			return cand
-		}
-		if isWindows {
-			for _, ext := range exts {
-				candWithExt := cand + ext
-				if checkFile(candWithExt) {
-					return candWithExt
-				}
-			}
-		}
-	}
-	return ""
 }
