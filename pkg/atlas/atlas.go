@@ -492,20 +492,20 @@ func init() {
 	addTools(GroupNet, "browser", "fetch")
 	// foreman was here (GroupOrch) but is now a suppressed internal (Bashy #40);
 	// sprint + weave are the public orchestration surface. See packages.go.
-	addTools(GroupDiagnostics, "resources")
+	addTools(GroupDiagnostics, "resources", "why")
 
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
 		"ast", "graph",
 		"browser", "fetch", "duration", "tz", "ntp", "sntp", "tokens",
-		"resources",
+		"resources", "why",
 	)
 	capTools(CapDryRun, "rm")
 	capTools(CapDestructive, "rm", "dd", "shred", "truncate")
 	capTools(CapReadOnly,
 		"cat", "cmp", "comm", "df", "diff", "du", "file", "grep", "head", "hexdump",
 		"ls", "od", "ps", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
-		"test", "[", "tokens", "tree", "wc", "which",
+		"test", "[", "tokens", "tree", "wc", "which", "why",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
 		"ast",
 	)
@@ -516,7 +516,7 @@ func init() {
 	capTools(CapBudget, "tokens", "ast")
 	capTools(CapNeedsNetwork, "fetch", "browser", "ntp", "sntp")
 	capTools(CapSpawnsProcesses,
-		"xargs", "timeout", "time", "watch", "nice", "nohup", "stdbuf", "at", "batch",
+		"xargs", "timeout", "time", "watch", "nice", "nohup", "stdbuf", "at", "batch", "why",
 		// find spawns the -exec/-ok utility (its specified behavior).
 		"find",
 	)
@@ -815,7 +815,7 @@ func init() {
 		// todo READS the task list (`list`/`show`) — a repo's docs/todo/ or the per-host
 		// list — and WRITES it (below). A privacy surface: it is a durable account of
 		// what the steward/user is doing across every thread.
-		"todo",
+		"todo", "why",
 	)
 
 	// write — mutates the filesystem or host state (short of irreversible loss).
@@ -870,7 +870,7 @@ func init() {
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
 		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
-		"verify", "conform", "gate", "run", "tessaro", "login",
+		"verify", "conform", "gate", "run", "tessaro", "login", "why",
 		// herald runs the GATE — an operator-supplied command that decides
 		// whether a peer's returned work is good.
 		"herald",

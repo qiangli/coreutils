@@ -42,7 +42,19 @@ import (
 // is intentionally allowed to be sparse — an absent pin is not an error, it just
 // means that tool still resolves its checksum from the release.
 var pinnedDigests = map[string]string{
-	// (Seed entries land here as tools are pinned; empty is valid.)
+	"witr@v0.3.3/darwin/amd64":  "39934f6a8d6a0413c52324ccdbd3a0867371785b6c066005ea063a78279487ef",
+	"witr@v0.3.3/darwin/arm64":  "d05b51825604d608da8757e549a1f5322549a350f8336c593429f3f2cd507927",
+	"witr@v0.3.3/linux/amd64":   "08fc46e3f80a374476f71d0d6e6579477cd98c6df5cc59d98224adf948f5ebf5",
+	"witr@v0.3.3/linux/arm64":   "dca2be6cf56a5274de0a036b83345d055b8e94f7f4fd23dc54dd102d7669e2d8",
+	"witr@v0.3.3/windows/amd64": "1ae95a354fa7f767828ad7942497f3801e5299f8afad5844ec6d1819703a6b28",
+	"witr@v0.3.3/windows/arm64": "e644a1e152437a0aff93c672660b363de690361ca90f35a792f88b361ca569e4",
+	"witr@v0.3.3/freebsd/amd64": "0fcc966fc8adbdf901174c96901e15f4b202e8925bc2ce6d20daf11b9f12305c",
+	"witr@v0.3.3/freebsd/arm64": "41ec530a07062797d3143a286c2d094643a3c4b7f1c2171bee81e6e0345b17f1",
+}
+
+// PinnedSHA256 returns the committed sha256 for a tool tuple, if one exists.
+func PinnedSHA256(name, version, platform string) (string, bool) {
+	return pinnedSHA256(name, version, platform)
 }
 
 // pinnedSHA256 returns the committed sha256 for a tool tuple, if one exists.

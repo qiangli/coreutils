@@ -86,7 +86,7 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 141 or len(result) != 146:
+    if len(packages) != 142 or len(result) != 147:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -107,6 +107,7 @@ def render_tsv(data: list[dict[str, str | int]]) -> str:
 
 
 def render_markdown(data: list[dict[str, str | int]]) -> str:
+    packages = len(shipped_packages())
     gnu = sum(row["gnu_coreutils"] == "yes" for row in data)
     vsc = sum(row["vsc_named_tset"] == "yes" for row in data)
     aliases = sum(bool(row["alias_of"]) for row in data)
@@ -135,7 +136,7 @@ def render_markdown(data: list[dict[str, str | int]]) -> str:
         "",
         "| Measure | Count |",
         "|---|---:|",
-        f"| Shipped Go command packages | 141 |",
+        f"| Shipped Go command packages | {packages} |",
         f"| Advertised applet names | {len(data)} |",
         f"| Alias applet names | {aliases} |",
         f"| GNU Coreutils names | {gnu} |",

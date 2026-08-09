@@ -22,12 +22,12 @@ privileged integration coverage.
 
 | Measure | Count |
 |---|---:|
-| Shipped Go command packages | 141 |
-| Advertised applet names | 146 |
+| Shipped Go command packages | 142 |
+| Advertised applet names | 147 |
 | Alias applet names | 5 |
 | GNU Coreutils names | 106 |
 | Names with a configured VSC test set | 76 |
-| Names without a configured VSC test set | 70 |
+| Names without a configured VSC test set | 71 |
 | Shipped names lacking package-local tests | 0 |
 | Release-withheld implementations | 2 (`chroot`, `runcon`) |
 
@@ -180,6 +180,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `which` | `cmds/which` | — | Bashy/other extension | no | no | 1 | 9 |
 | `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 2 | 11 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
+| `why` | `cmds/why` | — | Bashy/other extension | no | no | 1 | 14 |
 | `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 27 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |

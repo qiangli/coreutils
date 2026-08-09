@@ -182,7 +182,7 @@ file (portable built-in signature set); iconv (Go IANA encoding registry);
 uuencode/uudecode (classic portable format); plus
 the agent-oriented extras not tracked by this GNU-manual inventory
 (watch, tree, cal, time, timeout, at/atq/atrm/batch/crontab, browser,
-fetch, clip, tokens, duration, tz, ntp — see `cmds/all/all.go` for the
+fetch, clip, tokens, duration, tz, ntp, why — see `cmds/all/all.go` for the
 authoritative shipped set). grep/find/diff/jq/tar/gzip landed in
 Phase A via prior art.
 
