@@ -1,11 +1,14 @@
 package binmgr
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -119,5 +122,125 @@ func TestDefaultAssetMatch(t *testing.T) {
 		if got := defaultAssetMatch(c.name, c.goos, c.goarch); got != c.want {
 			t.Errorf("match(%q, %s/%s)=%v, want %v", c.name, c.goos, c.goarch, got, c.want)
 		}
+	}
+}
+
+func TestResolveGitHub_OrderedReleaseAndInstall(t *testing.T) {
+	bin := []byte("fake-linux-raw-witr-binary")
+	sum := sha256hex(bin)
+	asset := "witr-linux-amd64"
+
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	base := srv.URL
+
+	mux.HandleFunc("/repos/pranshuparmar/witr/releases/tags/v0.3.3", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghRelease{
+			TagName: "v0.3.3",
+			Assets: []ghAsset{
+				// APK, DEB, and RPM are listed BEFORE the raw Linux asset.
+				{Name: "witr-0.3.3-linux-amd64.apk", URL: base + "/dl/witr-0.3.3-linux-amd64.apk"},
+				{Name: "witr-0.3.3-linux-amd64.deb", URL: base + "/dl/witr-0.3.3-linux-amd64.deb"},
+				{Name: "witr-0.3.3-linux-amd64.rpm", URL: base + "/dl/witr-0.3.3-linux-amd64.rpm"},
+				{Name: asset, URL: base + "/dl/" + asset},
+				{Name: asset + ".sha256", URL: base + "/dl/" + asset + ".sha256"},
+			},
+		})
+	})
+	mux.HandleFunc("/dl/"+asset, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(bin) })
+	mux.HandleFunc("/dl/"+asset+".sha256", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, "%s  %s\n", sum, asset)
+	})
+
+	old := githubAPI
+	githubAPI = base
+	defer func() { githubAPI = old }()
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+
+	spec := GitHubSpec{
+		Name:    "test-witr",
+		Repo:    "pranshuparmar/witr",
+		Version: "v0.3.3",
+		AssetMatch: func(assetName, matchOS, matchArch string) bool {
+			return assetName == "witr-linux-amd64"
+		},
+	}
+
+	tool, err := ResolveGitHub(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("ResolveGitHub: %v", err)
+	}
+	got := tool.Assets[Platform()]
+	if !strings.HasSuffix(got.URL, "/"+asset) {
+		t.Fatalf("expected exact raw asset to be chosen, got: %s", got.URL)
+	}
+	if got.SHA256 != sum {
+		t.Fatalf("sha256 mismatch: %s vs %s", got.SHA256, sum)
+	}
+
+	// Positive raw install
+	path, err := Ensure(context.Background(), tool)
+	if err != nil {
+		t.Fatalf("Ensure (raw install): %v", err)
+	}
+	gotBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read cached binary: %v", err)
+	}
+	if !bytes.Equal(gotBytes, bin) {
+		t.Fatalf("installed content mismatch")
+	}
+}
+
+func TestEnsure_WindowsZipExtract(t *testing.T) {
+	// Create a mock zip file containing witr.exe
+	var zipBuf bytes.Buffer
+	zw := zip.NewWriter(&zipBuf)
+
+	binContent := []byte("witr-windows-binary-content")
+	f, err := zw.Create("witr.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(binContent); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zipBytes := zipBuf.Bytes()
+	zipSum := sha256hex(zipBytes)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(zipBytes)
+	}))
+	defer srv.Close()
+
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	tool := Tool{
+		Name:    "test-witr",
+		Version: "v0.3.3",
+		Assets: map[string]Asset{
+			Platform(): {
+				URL:    srv.URL + "/witr-windows-amd64.zip",
+				SHA256: zipSum,
+				Binary: "witr.exe",
+			},
+		},
+	}
+
+	path, err := Ensure(context.Background(), tool)
+	if err != nil {
+		t.Fatalf("Ensure (zip extract): %v", err)
+	}
+
+	// Check that witr.exe was extracted and has the right content
+	gotBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read extracted binary: %v", err)
+	}
+	if !bytes.Equal(gotBytes, binContent) {
+		t.Fatalf("extracted member content mismatch: %q", gotBytes)
 	}
 }

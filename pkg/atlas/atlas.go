@@ -492,13 +492,13 @@ func init() {
 	addTools(GroupNet, "browser", "fetch")
 	// foreman was here (GroupOrch) but is now a suppressed internal (Bashy #40);
 	// sprint + weave are the public orchestration surface. See packages.go.
-	addTools(GroupDiagnostics, "resources")
+	addTools(GroupDiagnostics, "resources", "why")
 
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
 		"ast", "graph",
 		"browser", "fetch", "duration", "tz", "ntp", "sntp", "tokens",
-		"resources",
+		"resources", "why",
 	)
 	capTools(CapDryRun, "rm")
 	capTools(CapDestructive, "rm", "dd", "shred", "truncate")
@@ -516,10 +516,18 @@ func init() {
 	capTools(CapBudget, "tokens", "ast")
 	capTools(CapNeedsNetwork, "fetch", "browser", "ntp", "sntp")
 	capTools(CapSpawnsProcesses,
-		"xargs", "timeout", "time", "watch", "nice", "nohup", "stdbuf", "at", "batch",
+		"xargs", "timeout", "time", "watch", "nice", "nohup", "stdbuf", "at", "batch", "why",
 		// find spawns the -exec/-ok utility (its specified behavior).
 		"find",
 	)
+
+	// why is a managed external; its caps must match the managed() helper.
+	capTools(CapCached, "why")
+	capTools(CapSelfProvisioning, "why")
+	if e, ok := tools["why"]; ok {
+		e.Subclass = SubclassManagedExternal
+		tools["why"] = e
+	}
 	// foreman was a CapDaemon + StageCode tool entry here, but has been
 	// suppressed from the public atlas (Bashy #40). Its implementation
 	// (pkg/foreman, cmds/foreman) remains as an internal/compatibility
@@ -815,14 +823,14 @@ func init() {
 		// todo READS the task list (`list`/`show`) — a repo's docs/todo/ or the per-host
 		// list — and WRITES it (below). A privacy surface: it is a durable account of
 		// what the steward/user is doing across every thread.
-		"todo",
+		"todo", "why",
 	)
 
 	// write — mutates the filesystem or host state (short of irreversible loss).
 	eff(EffWrite,
 		// todo writes the task list: a repo's COMMITTED docs/todo/ (a write here lands
 		// in the repo's history) or the per-host personal list (~/.bashy/todo/<owner>/).
-		"todo",
+		"todo", "why",
 		"clip", "cp", "install", "kill", "link", "ln", "mkdir", "mkfifo", "mknod",
 		"mktemp", "mv", "rmdir", "tar", "touch",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "uudecode", "graph",
@@ -870,7 +878,7 @@ func init() {
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
 		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
-		"verify", "conform", "gate", "run", "tessaro", "login",
+		"verify", "conform", "gate", "run", "tessaro", "login", "why",
 		// herald runs the GATE — an operator-supplied command that decides
 		// whether a peer's returned work is good.
 		"herald",

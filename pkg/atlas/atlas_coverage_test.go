@@ -185,3 +185,36 @@ func TestRegistryEntryDerivation(t *testing.T) {
 		t.Errorf("TierName(0) = %q, want userland (default)", got)
 	}
 }
+
+func TestAtlasWhyMetadataPins(t *testing.T) {
+	e, ok := atlas.Lookup("why")
+	if !ok {
+		t.Fatal("expected why to be defined in atlas")
+	}
+
+	// Pin managed-external subclass
+	if e.Subclass != atlas.SubclassManagedExternal {
+		t.Errorf("why subclass = %q, want %q", e.Subclass, atlas.SubclassManagedExternal)
+	}
+
+	// Pin cache / self-provisioning / spawns-processes capabilities
+	caps := sliceSet(e.Caps)
+	for _, c := range []string{atlas.CapCached, atlas.CapSelfProvisioning, atlas.CapSpawnsProcesses} {
+		if !caps[c] {
+			t.Errorf("why caps missing capability %q", c)
+		}
+	}
+
+	// Pin no CapReadOnly
+	if caps[atlas.CapReadOnly] {
+		t.Error("why must not have CapReadOnly")
+	}
+
+	// Pin read + exec + write effects
+	effs := sliceSet(e.Effects)
+	for _, ef := range []string{atlas.EffRead, atlas.EffExec, atlas.EffWrite} {
+		if !effs[ef] {
+			t.Errorf("why effects missing effect %q", ef)
+		}
+	}
+}
