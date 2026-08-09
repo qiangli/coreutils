@@ -359,7 +359,16 @@ func writeLive(w io.Writer, l LiveEvent, streamed map[string]bool) bool {
 		if !streamed[key] {
 			return false // mid-turn attach: the record will carry the whole thing
 		}
-		fmt.Fprintf(w, "  %s\n", l.Text)
+		// A live line recorded by an older build may still be a raw transport
+		// envelope; extract the assistant text and drop machine events. Clean text
+		// passes through unchanged.
+		text, keep := normalizeLiveLine(l.Text)
+		if !keep || strings.TrimSpace(text) == "" {
+			return false
+		}
+		for ln := range strings.SplitSeq(text, "\n") {
+			fmt.Fprintf(w, "  %s\n", ln)
+		}
 		return true
 	case liveSpoke:
 		if !streamed[key] {
@@ -383,6 +392,13 @@ func writeTurnFooter(w io.Writer, e Event) {
 // right for a summary and wrong here: an observer attached to read the log wants
 // the log, not a preview of it.
 func writeEvent(w io.Writer, e Event, asJSON bool) {
+	// Normalize at render too, not only at capture: a turn recorded by an older
+	// build (or a meeting already running when this landed) still holds raw
+	// transport in its Text. Extracting the assistant prose here means both the
+	// human view AND `--json` emit the canonical meeting event with readable text,
+	// never the raw nested provider envelope. On already-clean text this is a
+	// no-op. e is a value copy, so the stored record is untouched.
+	e.Text = normalizeTurnText(e.Text)
 	if asJSON {
 		if b, err := json.Marshal(e); err == nil {
 			fmt.Fprintln(w, string(b))

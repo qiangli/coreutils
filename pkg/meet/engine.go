@@ -33,7 +33,7 @@ const (
 // preview renders one event for the replayed context: full text if short, else a
 // head/tail excerpt with a file:// link to the complete turn (read-on-demand).
 func preview(e Event) string {
-	t := sanitizeTurn(e.Text)
+	t := sanitizeTurn(normalizeTurnText(e.Text))
 	if len(t) <= previewFull || e.File == "" {
 		return oneLine(t)
 	}
@@ -45,8 +45,14 @@ func preview(e Event) string {
 }
 
 // briefRef is the collapsed form for older turns: a short lead + a file link.
+//
+// It normalizes transport just like preview does. A turn older than the recent
+// window is the LEAST scrutinized line in the replayed context, so a legacy turn
+// still holding a raw Claude/NDJSON envelope must be cleaned here too — otherwise
+// the one path that skips normalization becomes the one that poisons the next
+// agent's prompt with machine transport.
 func briefRef(e Event) string {
-	t := oneLine(sanitizeTurn(e.Text))
+	t := oneLine(sanitizeTurn(normalizeTurnText(e.Text)))
 	if len(t) > 120 {
 		t = t[:120] + "…"
 	}
@@ -207,6 +213,13 @@ func invokeAgent(ctx context.Context, st *State, name, role, instruction, questi
 		Cwd:         st.Cwd,
 		Timeout:     budget,
 		Stream:      live,
+		// The tool's structured-event side-channel gets its OWN framed sink, kept
+		// apart from the stdout prose tee above. An events-reporting tool (ycode)
+		// streams the SAME answer on both — prose on stdout, the text of its
+		// turn.end event on the side-channel — and merging them into one partial-
+		// line buffer let a torn stdout chunk splice onto a JSON envelope and leak
+		// raw transport to the watcher. Separate sinks frame each source on its own.
+		EventStream: live.eventStream(),
 		PTY:         usePTY,
 		CtlSock:     sock,
 
@@ -293,7 +306,11 @@ func classifyTurn(st *State, name, question, out string, exit int, err error, el
 		ev.Status = statusError
 		ev.Text = fmt.Sprintf("(%s unavailable this turn: %s)", name, oneLine(sanitizeTurn(shortErr(out, err))))
 	default:
-		text := sanitizeTurn(out)
+		// Extract the assistant's words from any structured transport (Claude
+		// stream-json, first-party NDJSON) BEFORE sanitizing, so the record holds
+		// prose rather than the machine envelope the CLI streamed. Plain output is
+		// passed through untouched.
+		text := sanitizeTurn(normalizeTurnText(out))
 		ev.Chars = len(text)
 		switch {
 		case text == "":
@@ -334,8 +351,17 @@ func runTurn(ctx context.Context, st *State, name, question string, runner chat.
 
 // shortErr produces a compact failure reason from an agent's output+error,
 // bounded so a multi-KB CLI banner never enters the transcript.
+//
+// A FAILED turn's stdout is still transport: a Claude/ycode turn that streamed
+// some words and then errored leaves stream-json / NDJSON envelopes in `out`. So
+// it is normalized to the assistant's prose BEFORE sanitizing — exactly as the
+// success path does — otherwise the raw envelope (session_id, {"type":"system"…},
+// turn.start/tool.call) becomes the failure marker and, recorded, poisons the
+// transcript, the minutes, the replayed context, and the default/--json views.
+// When the transport carried no human words at all, the normalized text is empty
+// and the caller falls back to the error string, never the raw stream.
 func shortErr(out string, err error) string {
-	s := strings.TrimSpace(sanitizeTurn(out))
+	s := strings.TrimSpace(sanitizeTurn(normalizeTurnText(out)))
 	if s == "" {
 		s = err.Error()
 	}
@@ -616,13 +642,13 @@ func renderMinutes(st *State, events []Event, syn *Synthesis) string {
 			}
 			label += "):\n\n"
 			b.WriteString(label)
-			b.WriteString(blockquote(redactHome(e.Text), e.File))
+			b.WriteString(blockquote(redactHome(normalizeTurnText(e.Text)), e.File))
 		case "confirm":
 			fmt.Fprintf(&b, "\n**%s** (conclusion confirmed): %s\n", e.Speaker, oneLine(redactHome(e.Text)))
 		case "ledger":
 			fmt.Fprintf(&b, "\n*chair: %s*\n", oneLine(redactHome(e.Text)))
 		case "replan":
-			fmt.Fprintf(&b, "\n**%s** (chair re-plan after a stall):\n\n%s", e.Speaker, blockquote(redactHome(e.Text), e.File))
+			fmt.Fprintf(&b, "\n**%s** (chair re-plan after a stall):\n\n%s", e.Speaker, blockquote(redactHome(normalizeTurnText(e.Text)), e.File))
 		case "note":
 			fmt.Fprintf(&b, "\n*%s*\n", oneLine(redactHome(e.Text)))
 		case "invite", "kick":

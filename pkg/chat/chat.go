@@ -108,6 +108,18 @@ type Options struct {
 	// however it likes, and it is not this package's business to make it stream.
 	Stream io.Writer
 
+	// EventStream, when set, receives the tool's STRUCTURED-EVENT side-channel
+	// (ycode's NDJSON events file), framed as complete lines, SEPARATELY from
+	// Stream (which carries the stdout prose tee). These are two concurrent
+	// sources: the stdout tee flushes arbitrary chunks that may end mid-line, while
+	// the event goroutine appends whole JSON envelopes. Teeing both into one
+	// io.Writer lets a torn stdout chunk splice onto the front of the next event
+	// line, so a consumer that frames by newline can no longer tell the two apart —
+	// giving each source its own sink lets the consumer keep per-source line
+	// boundaries. When nil, the event side-channel falls back to Stream (the prior
+	// behaviour), so a caller that does not care keeps working unchanged.
+	EventStream io.Writer
+
 	// PTY runs the agent attached to a pseudo-terminal instead of a pipe.
 	//
 	// Agent CLIs are TUIs, and several of them stop dead on a pipe: the first
@@ -984,7 +996,14 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		stopEvents = cancel
 		done := make(chan struct{})
 		eventsDone = done
-		go streamEventFile(eventCtx, eventPath, opt.Stream, done)
+		// The event side-channel gets its OWN sink when the caller offered one, so a
+		// framing consumer keeps the structured events apart from the stdout prose
+		// tee. Otherwise it folds into Stream exactly as before.
+		evSink := opt.Stream
+		if opt.EventStream != nil {
+			evSink = opt.EventStream
+		}
+		go streamEventFile(eventCtx, eventPath, evSink, done)
 	}
 	out, code, err := runner.Run(withLaunch(callCtx, lnch), lnch.Tool, args, cwd)
 	if stopEvents != nil {

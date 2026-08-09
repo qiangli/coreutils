@@ -36,6 +36,42 @@ func TestTranscriptContextCollapsesOldTurns(t *testing.T) {
 	}
 }
 
+// A turn older than the recent window is rendered by briefRef, the ONE context
+// path that used to skip transport normalization. A legacy turn whose stored Text
+// is still a raw Claude stream-json envelope must not reach the next agent's
+// prompt as machine transport (session_id/system/result JSON) — briefRef has to
+// normalize it just like preview does. With >=9 turns the oldest falls outside the
+// 8-turn recent window, so it is the collapsed briefRef line under test.
+func TestTranscriptContextNormalizesOldTransportTurn(t *testing.T) {
+	rawLegacyTransport := strings.Join([]string{
+		fxClaudeSystemInit,
+		fxClaudeRateLimit,
+		fxClaudeAssistantText, // "The cache should be write-through."
+		fxClaudeResult,
+	}, "\n")
+
+	ev := []Event{
+		// index 0 — older than the 8 most-recent turns, so it collapses via briefRef.
+		{Kind: "turn", Speaker: "claude-fable5", Text: rawLegacyTransport},
+	}
+	for i := 1; i < 9; i++ { // eight recent turns fill the window after it
+		ev = append(ev, Event{Kind: "turn", Speaker: "a", Text: "a recent point."})
+	}
+	if got := len(ev); got < 9 {
+		t.Fatalf("regression needs >=9 events to push the first past the recent window, got %d", got)
+	}
+
+	ctx := transcriptContext(ev)
+	if !strings.Contains(ctx, "The cache should be write-through.") {
+		t.Errorf("the legacy turn's assistant prose must survive normalization:\n%s", ctx)
+	}
+	for _, leak := range []string{"session_id", "rate_limit_event", `"type":"system"`, "input_tokens", "subtype"} {
+		if strings.Contains(ctx, leak) {
+			t.Errorf("raw transport %q leaked from an old turn into the replayed context:\n%s", leak, ctx)
+		}
+	}
+}
+
 func TestParseConverge(t *testing.T) {
 	out := `DECISIONS:
 - ship the P0 verbs

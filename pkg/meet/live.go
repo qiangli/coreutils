@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,21 +102,56 @@ func appendLive(id string, e LiveEvent) {
 	_, _ = f.Write(append(b, '\n'))
 }
 
-// liveWriter turns an agent's stdout into line events on the live channel.
+// liveChannel names WHICH SOURCE a live line arrived from. It is the SINK the
+// bytes came in on — not a guess made from how the line classified — which is the
+// whole point: a tool that reports its answer as structured events (ycode) streams
+// on two file descriptors that chat.Invoke tees into this one writer, the stdout
+// prose tee and the drained event side-channel (see chat's streamEventFile). Only
+// the sink honestly says which is which.
+type liveChannel int
+
+const (
+	chanProse liveChannel = iota // the agent's stdout tee (Write)
+	chanEvent                    // the tool's structured event side-channel (eventSink)
+)
+
+// liveWriter turns an agent's output into line events on the live channel.
 //
-// It is handed to chat as an io.Writer and receives whatever chunks the process
+// It is fed by chat as io.Writers and receives whatever chunks the process
 // happens to flush — which do NOT align with lines. So it buffers, emits only
 // complete lines, and holds the trailing partial one until it is finished. A
 // half-line published as a line would show a watcher a sentence the agent never
 // wrote.
+//
+// It exposes TWO sinks, because chat.Invoke feeds it from TWO concurrent sources:
+// the stdout prose tee (this type's Write) and, for an events-reporting tool, the
+// drained NDJSON side-channel (eventSink, wired via chat.Options.EventStream).
+// Each sink FRAMES INTO ITS OWN BUFFER. That separation is load-bearing: with one
+// shared partial-line buffer, a stdout chunk that ended mid-line would splice onto
+// the front of the next complete JSON event the side-channel goroutine wrote, and
+// the concatenation ("half a prose line{\"type\":\"turn.end\"…}") no longer matches
+// a transport fingerprint — so it is classified as prose and the whole envelope
+// leaks to the watcher and into live.jsonl. Per-source framing makes that splice
+// impossible; the mutex still serializes the two goroutines' emits.
 type liveWriter struct {
 	id      string
 	round   int
 	speaker string
 	role    string
 
-	mu  sync.Mutex
-	buf bytes.Buffer
+	mu       sync.Mutex
+	proseBuf bytes.Buffer // partial-line buffer for the stdout tee (chanProse)
+	eventBuf bytes.Buffer // partial-line buffer for the event side-channel (chanEvent)
+
+	// seen records, per turn, the normalized text of every line already emitted
+	// and the CHANNEL it arrived on. An events-reporting tool (ycode) streams its
+	// answer on BOTH stdout (plain prose) and its turn.end event (extracted text),
+	// so without this the watcher sees — and live.jsonl stores — the same answer
+	// twice. The map is keyed by the line so a line an agent intentionally repeats
+	// on the SAME channel is preserved; only the CROSS-channel echo is dropped. It
+	// is per-liveWriter, hence per-turn, so a line legitimately repeated in a later
+	// turn is never mistaken for the echo. Guarded by mu (emit holds it).
+	seen map[string]liveChannel
 
 	// closeOnce makes `spoke` exactly-once. Every path out of a turn now closes
 	// the floor — including a deferred close that fires on a panic or an early
@@ -173,23 +209,56 @@ func ctlSockPath(st *State, speaker string) string {
 	return filepath.Join(dir, hex.EncodeToString(sum[:])[:12]+".sock")
 }
 
+// Write is the STDOUT PROSE sink: it frames the agent's stdout tee into lines and
+// emits each on the prose channel.
 func (w *liveWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.buf.Write(p)
-	for {
-		line, err := w.buf.ReadString('\n')
-		if err != nil {
-			// Not a whole line yet — put it back and wait for the rest.
-			w.buf.Reset()
-			w.buf.WriteString(line)
-			break
-		}
-		w.emit(line)
-	}
+	w.feed(&w.proseBuf, chanProse, p)
+	w.mu.Unlock()
 	// Always report the full write: the tee must never make the agent's own
 	// stdout write appear to fail.
 	return len(p), nil
+}
+
+// eventSink is the STRUCTURED-EVENT sink: the tool's NDJSON side-channel, drained
+// by chat's streamEventFile goroutine and wired here via chat.Options.EventStream.
+// It has its OWN framing buffer so a partial stdout write on the prose channel can
+// never concatenate with a complete event line — the two concurrent sources are
+// demuxed at the byte level, not merged into one partial-line buffer where a torn
+// stdout chunk would splice onto the front of a JSON envelope and smuggle raw
+// transport into the prose sink.
+type eventSink struct{ w *liveWriter }
+
+func (e eventSink) Write(p []byte) (int, error) {
+	e.w.mu.Lock()
+	e.w.feed(&e.w.eventBuf, chanEvent, p)
+	e.w.mu.Unlock()
+	return len(p), nil
+}
+
+// eventStream returns the sink chat.Invoke should hand its event side-channel, so
+// structured events are framed and tagged separately from stdout prose.
+func (w *liveWriter) eventStream() io.Writer { return eventSink{w: w} }
+
+// feed frames whatever chunk arrived on ONE channel into complete lines and emits
+// each, holding a trailing partial line in THAT channel's own buffer. Callers hold
+// w.mu. The per-channel buffer is the fix: two goroutines write this writer (the
+// stdout tee and the event side-channel), and a single shared buffer let a torn
+// stdout chunk splice onto the front of a complete JSON event on the next write,
+// so a transport envelope was classified as prose and leaked. Separate buffers
+// keep each source's line boundaries its own.
+func (w *liveWriter) feed(buf *bytes.Buffer, ch liveChannel, p []byte) {
+	buf.Write(p)
+	for {
+		line, err := buf.ReadString('\n')
+		if err != nil {
+			// Not a whole line yet — put it back and wait for the rest.
+			buf.Reset()
+			buf.WriteString(line)
+			break
+		}
+		w.emit(line, ch)
+	}
 }
 
 // emit publishes one line, sanitized the same way the recorded turn will be.
@@ -198,8 +267,28 @@ func (w *liveWriter) Write(p []byte) (int, error) {
 // control bytes; shown verbatim they would garble the watcher's terminal, and —
 // worse — the watcher would see something different from what the transcript
 // ends up storing. The view must agree with the record.
-func (w *liveWriter) emit(line string) {
-	text := strings.TrimRight(sanitizeTurn(line), "\n")
+func (w *liveWriter) emit(line string, ch liveChannel) {
+	// A tool streaming structured transport (Claude stream-json on stdout,
+	// first-party NDJSON on the side-channel) writes one JSON envelope per line.
+	// Show only the assistant text a human would read; drop system/thinking/tool/
+	// tool-result/usage/control lines entirely. Plain output passes through
+	// unchanged. Classification is used to FILTER and to EXTRACT the words — the
+	// channel used for dedup is the SINK (ch), not this classification, because the
+	// sink is the only honest signal of which source a byte came from.
+	human, class := classifyEventLine(line)
+	if class == lineDrop {
+		return
+	}
+	text := strings.TrimRight(sanitizeTurn(human), "\n")
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	// Drop the cross-channel echo: a tool that both prints its answer on stdout
+	// and reports it on a turn.end event feeds the same words to this writer on
+	// BOTH sinks. dedup keeps whatever is genuinely new — including prose an agent
+	// intentionally repeats on its OWN channel — and returns "" when the whole
+	// line was already shown on the other channel this turn.
+	text = w.dedup(text, ch)
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -207,6 +296,34 @@ func (w *liveWriter) emit(line string) {
 		Kind: liveLine, Round: w.round, Speaker: w.speaker, Role: w.role,
 		Text: text, TS: nowFn(),
 	})
+}
+
+// dedup removes lines already shown on the OTHER channel this turn and returns
+// the surviving text (possibly empty). It works line-by-line so a multi-line
+// turn.end envelope — one event carrying prose that already streamed as several
+// stdout lines — is recognized as the same content rather than slipping through
+// as a differently-shaped whole. A line repeated on the SAME channel is kept:
+// that is real content an agent chose to say twice, not plumbing echoing itself.
+// Blank lines are structural and never treated as duplicates. Callers hold w.mu.
+func (w *liveWriter) dedup(text string, ch liveChannel) string {
+	if w.seen == nil {
+		w.seen = make(map[string]liveChannel)
+	}
+	lines := strings.Split(text, "\n")
+	out := lines[:0]
+	for _, l := range lines {
+		key := strings.TrimSpace(l)
+		if key == "" {
+			out = append(out, l) // blank line: structural, never a duplicate
+			continue
+		}
+		if prev, ok := w.seen[key]; ok && prev != ch {
+			continue // already shown on the other channel this turn — the echo
+		}
+		w.seen[key] = ch
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
 }
 
 // close flushes a trailing line with no newline and marks the floor free.
@@ -224,9 +341,16 @@ func (w *liveWriter) emit(line string) {
 func (w *liveWriter) close(status string) {
 	w.closeOnce.Do(func() {
 		w.mu.Lock()
-		if rest := w.buf.String(); rest != "" {
-			w.buf.Reset()
-			w.emit(rest)
+		// Flush each channel's trailing partial line on its OWN channel tag. Both
+		// sinks may hold a mid-sentence remainder when a turn is cut off; each is
+		// emitted through the same classify+dedup path as every other line.
+		if rest := w.proseBuf.String(); rest != "" {
+			w.proseBuf.Reset()
+			w.emit(rest, chanProse)
+		}
+		if rest := w.eventBuf.String(); rest != "" {
+			w.eventBuf.Reset()
+			w.emit(rest, chanEvent)
 		}
 		w.mu.Unlock()
 		appendLive(w.id, LiveEvent{
