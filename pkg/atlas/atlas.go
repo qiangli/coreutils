@@ -505,7 +505,7 @@ func init() {
 	capTools(CapReadOnly,
 		"cat", "cmp", "comm", "df", "diff", "du", "file", "grep", "head", "hexdump",
 		"ls", "od", "ps", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
-		"test", "[", "tokens", "tree", "wc", "which", "why",
+		"test", "[", "tokens", "tree", "wc", "which",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
 		"ast",
 	)
@@ -520,6 +520,14 @@ func init() {
 		// find spawns the -exec/-ok utility (its specified behavior).
 		"find",
 	)
+
+	// why is a managed external; its caps must match the managed() helper.
+	capTools(CapCached, "why")
+	capTools(CapSelfProvisioning, "why")
+	if e, ok := tools["why"]; ok {
+		e.Subclass = SubclassManagedExternal
+		tools["why"] = e
+	}
 	// foreman was a CapDaemon + StageCode tool entry here, but has been
 	// suppressed from the public atlas (Bashy #40). Its implementation
 	// (pkg/foreman, cmds/foreman) remains as an internal/compatibility

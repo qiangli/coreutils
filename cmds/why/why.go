@@ -80,14 +80,7 @@ func defaultResolveBin(ctx context.Context, rc *tool.RunContext) (string, error)
 	}
 
 	// 2. Resolve release metadata from GitHub and ensure binary with sha256 pin.
-	spec := binmgr.GitHubSpec{
-		Name:    UpstreamTool,
-		Repo:    "pranshuparmar/witr",
-		Version: PinnedVersion,
-	}
-	if runtime.GOOS == "windows" {
-		spec.Member = UpstreamTool
-	}
+	spec := buildSpec(runtime.GOOS, runtime.GOARCH)
 
 	toolObj, err := binmgr.ResolveGitHub(ctx, spec)
 	if err != nil {
@@ -99,6 +92,25 @@ func defaultResolveBin(ctx context.Context, rc *tool.RunContext) (string, error)
 		return "", fmt.Errorf("ensure witr: %w", err)
 	}
 	return path, nil
+}
+
+func buildSpec(goos, goarch string) binmgr.GitHubSpec {
+	spec := binmgr.GitHubSpec{
+		Name:    UpstreamTool,
+		Repo:    "pranshuparmar/witr",
+		Version: PinnedVersion,
+		AssetMatch: func(assetName, matchOS, matchArch string) bool {
+			expected := fmt.Sprintf("witr-%s-%s", matchOS, matchArch)
+			if matchOS == "windows" {
+				expected += ".zip"
+			}
+			return assetName == expected
+		},
+	}
+	if goos == "windows" {
+		spec.Member = "witr.exe"
+	}
+	return spec
 }
 
 func defaultExecCmd(ctx context.Context, binPath string, args []string, dir string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, int, error) {

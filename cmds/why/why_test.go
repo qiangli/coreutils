@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -333,22 +335,25 @@ func TestWhy_CacheBehaviorSkipsResolution(t *testing.T) {
 }
 
 func TestWhy_PinnedTuples(t *testing.T) {
-	platforms := []string{
-		"darwin/amd64", "darwin/arm64",
-		"linux/amd64", "linux/arm64",
-		"windows/amd64", "windows/arm64",
-		"freebsd/amd64", "freebsd/arm64",
+	expectedPins := map[string]string{
+		"darwin/amd64":  "39934f6a8d6a0413c52324ccdbd3a0867371785b6c066005ea063a78279487ef",
+		"darwin/arm64":  "d05b51825604d608da8757e549a1f5322549a350f8336c593429f3f2cd507927",
+		"linux/amd64":   "08fc46e3f80a374476f71d0d6e6579477cd98c6df5cc59d98224adf948f5ebf5",
+		"linux/arm64":   "dca2be6cf56a5274de0a036b83345d055b8e94f7f4fd23dc54dd102d7669e2d8",
+		"windows/amd64": "1ae95a354fa7f767828ad7942497f3801e5299f8afad5844ec6d1819703a6b28",
+		"windows/arm64": "e644a1e152437a0aff93c672660b363de690361ca90f35a792f88b361ca569e4",
+		"freebsd/amd64": "0fcc966fc8adbdf901174c96901e15f4b202e8925bc2ce6d20daf11b9f12305c",
+		"freebsd/arm64": "41ec530a07062797d3143a286c2d094643a3c4b7f1c2171bee81e6e0345b17f1",
 	}
 
-	for _, plat := range platforms {
+	for plat, wantSHA := range expectedPins {
 		toolName, version := "witr", "v0.3.3"
-		// Ensure binmgr verifies the pin
 		sha, ok := binmgr.PinnedSHA256(toolName, version, plat)
 		if !ok {
 			t.Errorf("pin missing for %s@%s/%s", toolName, version, plat)
 		}
-		if len(sha) != 64 {
-			t.Errorf("pin for %s@%s/%s has len %d, want 64 hex chars", toolName, version, plat, len(sha))
+		if sha != wantSHA {
+			t.Errorf("pin for %s@%s/%s = %q, want %q", toolName, version, plat, sha, wantSHA)
 		}
 	}
 }
@@ -396,5 +401,59 @@ func TestWhy_DefaultExecCmd_StartError(t *testing.T) {
 	}
 	if code != 126 {
 		t.Errorf("code = %d, want 126 for start error", code)
+	}
+}
+
+func TestWhy_HermeticAssetMatch(t *testing.T) {
+	linuxSpec := buildSpec("linux", "amd64")
+	if linuxSpec.AssetMatch("witr-0.3.3-linux-amd64.apk", "linux", "amd64") {
+		t.Error("Linux matched .apk instead of raw binary")
+	}
+	if linuxSpec.AssetMatch("witr-0.3.3-linux-amd64.deb", "linux", "amd64") {
+		t.Error("Linux matched .deb instead of raw binary")
+	}
+	if !linuxSpec.AssetMatch("witr-linux-amd64", "linux", "amd64") {
+		t.Error("Linux failed to match raw binary")
+	}
+
+	windowsSpec := buildSpec("windows", "amd64")
+	if windowsSpec.Member != "witr.exe" {
+		t.Errorf("Windows member = %q, want witr.exe", windowsSpec.Member)
+	}
+	if !windowsSpec.AssetMatch("witr-windows-amd64.zip", "windows", "amd64") {
+		t.Error("Windows failed to match .zip")
+	}
+}
+
+func TestWhy_UnsupportedPlatform(t *testing.T) {
+	// PinnedSHA256 returns false for unsupported platforms
+	toolName, version := "witr", "v0.3.3"
+	_, ok := binmgr.PinnedSHA256(toolName, version, "plan9/amd64")
+	if ok {
+		t.Error("expected pin to be missing for unsupported platform plan9/amd64")
+	}
+}
+
+func TestWhy_InstallChecksumMismatch(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("bad binary content"))
+	}))
+	defer ts.Close()
+
+	toolObj := binmgr.Tool{
+		Name:    "witr",
+		Version: "v0.3.3",
+		Assets: map[string]binmgr.Asset{
+			binmgr.Platform(): {URL: ts.URL, SHA256: "0000000000000000000000000000000000000000000000000000000000000000"},
+		},
+	}
+
+	t.Setenv("BASHY_BIN_CACHE", t.TempDir())
+	_, err := binmgr.Ensure(context.Background(), toolObj)
+	if err == nil {
+		t.Fatal("expected error for checksum mismatch")
+	}
+	if !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Errorf("expected sha256 mismatch error, got: %v", err)
 	}
 }
