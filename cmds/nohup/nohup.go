@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/qiangli/coreutils/tool"
+	"golang.org/x/term"
 )
 
 var cmd = &tool.Tool{Name: "nohup", Synopsis: "Run a command immune to hangups.", Usage: "nohup COMMAND [ARG]..."}
@@ -43,7 +44,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	c.Env = rc.Env
 	c.Stdin = rc.In
 	stdout := rc.Out
-	if stdout == nil {
+	if stdout == nil || isTerminal(stdout) {
 		f, err := openNohupOutput(rc)
 		if err != nil {
 			fmt.Fprintf(errOut, "nohup: failed to open 'nohup.out': %v\n", err)
@@ -53,7 +54,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		stdout = f
 	}
 	stderr := rc.Err
-	if stderr == nil {
+	if stderr == nil || isTerminal(stderr) {
 		stderr = stdout
 	}
 	c.Stdout = stdout
@@ -135,4 +136,11 @@ func isExecFile(path string) bool {
 		return true
 	}
 	return fi.Mode()&0o111 != 0
+}
+
+func isTerminal(w interface{}) bool {
+	if f, ok := w.(interface{ Fd() uintptr }); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+	return false
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/creack/pty/v2"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -147,5 +148,36 @@ func TestNohupFallsBackToHomeNohupOut(t *testing.T) {
 	}
 	if string(data) != "home" {
 		t.Fatalf("home/nohup.out=%q", data)
+	}
+}
+
+func TestNohupRedirectsTerminalOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty not supported in this test on windows")
+	}
+	ptm, pts, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty.Open failed: %v", err)
+	}
+	defer ptm.Close()
+	defer pts.Close()
+
+	dir := t.TempDir()
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   []string{"PATH=/bin:/usr/bin"},
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: pts, Err: pts},
+	}
+	if code := run(rc, []string{"sh", "-c", "printf out; printf err >&2"}); code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "nohup.out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "outerr" {
+		t.Fatalf("nohup.out=%q", data)
 	}
 }
