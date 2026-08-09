@@ -268,15 +268,14 @@ func TestWhy_VersionOverrideFailClosed(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			rc := &tool.RunContext{Env: tc.env}
-			_, err := defaultResolveBin(context.Background(), rc)
+			err := validateVersionOverride(rc)
 			if tc.wantOk {
-				// Could fail due to network/cache miss in test env, but must NOT fail with version override error
-				if err != nil && strings.Contains(err.Error(), "unsupported version override") {
-					t.Fatalf("unexpected version override error: %v", err)
+				if err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
 				}
 			} else {
 				if err == nil {
-					t.Fatal("expected version override error, got nil")
+					t.Fatal("expected validation error, got nil")
 				}
 				if !strings.Contains(err.Error(), tc.wantMsg) {
 					t.Errorf("err = %q, want substring %q", err.Error(), tc.wantMsg)

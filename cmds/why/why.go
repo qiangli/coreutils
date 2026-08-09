@@ -65,21 +65,8 @@ func defaultResolveBin(ctx context.Context, rc *tool.RunContext) (string, error)
 	}
 
 	// Reject version overrides/unpinned requests fail-closed.
-	var reqVer string
-	for _, envKey := range []string{"WHY_VERSION", "WITR_VERSION"} {
-		if v := strings.TrimSpace(rc.Getenv(envKey)); v != "" {
-			reqVer = v
-			break
-		}
-	}
-	if reqVer != "" {
-		norm := reqVer
-		if !strings.HasPrefix(norm, "v") {
-			norm = "v" + norm
-		}
-		if norm != PinnedVersion {
-			return "", fmt.Errorf("unsupported version override %q: only %s is pinned and supported", reqVer, PinnedVersion)
-		}
+	if err := validateVersionOverride(rc); err != nil {
+		return "", err
 	}
 
 	// 1. Fast cache check: if cached binary is present, skip GitHub API resolution.
@@ -103,6 +90,26 @@ func defaultResolveBin(ctx context.Context, rc *tool.RunContext) (string, error)
 		return "", fmt.Errorf("ensure witr: %w", err)
 	}
 	return path, nil
+}
+
+func validateVersionOverride(rc *tool.RunContext) error {
+	var reqVer string
+	for _, envKey := range []string{"WHY_VERSION", "WITR_VERSION"} {
+		if v := strings.TrimSpace(rc.Getenv(envKey)); v != "" {
+			reqVer = v
+			break
+		}
+	}
+	if reqVer != "" {
+		norm := reqVer
+		if !strings.HasPrefix(norm, "v") {
+			norm = "v" + norm
+		}
+		if norm != PinnedVersion {
+			return fmt.Errorf("unsupported version override %q: only %s is pinned and supported", reqVer, PinnedVersion)
+		}
+	}
+	return nil
 }
 
 func buildSpec(goos, goarch string) binmgr.GitHubSpec {
