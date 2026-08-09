@@ -343,3 +343,56 @@ func TestNohupTerminalRedirectionDiagnostics(t *testing.T) {
 		runWithTty(t, false, false, false, "")
 	})
 }
+
+func TestNohupDevNullOpenFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty not supported on windows")
+	}
+
+	// We open a PTY to simulate terminal stdin
+	_, pts, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty.Open failed: %v", err)
+	}
+	defer pts.Close()
+
+	// Mock devNullOpener to return an error
+	oldOpener := devNullOpener
+	defer func() { devNullOpener = oldOpener }()
+	mockErr := errors.New("permission denied")
+	devNullOpener = func() (*os.File, error) {
+		return nil, mockErr
+	}
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Env:   []string{"PATH=/bin:/usr/bin"},
+		Stdio: tool.Stdio{In: pts, Out: &out, Err: &errb},
+	}
+
+	// Try to execute a command that would output or do something if it ran.
+	// We'll write to a file in a temp dir if it runs, or check if it actually runs.
+	// Since we expect it not to run at all, let's use a non-existent helper or an
+	// command like "touch should_not_exist" in TempDir.
+	tempDir := rc.Dir
+	sentinelFile := filepath.Join(tempDir, "should_not_exist")
+
+	code := run(rc, []string{"touch", sentinelFile})
+
+	if code != 125 {
+		t.Errorf("expected exit code 125, got %d", code)
+	}
+
+	expectedDiag := fmt.Sprintf("nohup: failed to redirect stdin from %s: %v\n", os.DevNull, mockErr)
+	if errb.String() != expectedDiag {
+		t.Errorf("expected diagnostic %q, got %q", expectedDiag, errb.String())
+	}
+
+	// Verify no child ran: the sentinel file should not exist
+	if _, err := os.Stat(sentinelFile); err == nil {
+		t.Errorf("sentinel file %s was created, meaning child process executed!", sentinelFile)
+	}
+}
+

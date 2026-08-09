@@ -29,6 +29,10 @@ func run(rc *tool.RunContext, args []string) int {
 	return runNohup(rc, args)
 }
 
+var devNullOpener = func() (*os.File, error) {
+	return os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+}
+
 func runNohup(rc *tool.RunContext, argv []string) int {
 	errOut := rc.Err
 	if errOut == nil {
@@ -39,20 +43,25 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		fmt.Fprintf(errOut, "nohup: %s: command not found\n", argv[0])
 		return 127
 	}
-	c := newNohupCommand(rc.Ctx, path, argv[1:], rc.Env)
-	c.Dir = rc.Dir
 
 	inTerminal := rc.In != nil && isTerminal(rc.In)
 	outTerminal := rc.Out == nil || isTerminal(rc.Out)
 	errTerminal := rc.Err == nil || isTerminal(rc.Err)
 
-	c.Stdin = rc.In
+	var stdin io.Reader = rc.In
 	if inTerminal {
-		if f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
-			defer f.Close()
-			c.Stdin = f
+		f, err := devNullOpener()
+		if err != nil {
+			fmt.Fprintf(errOut, "nohup: failed to redirect stdin from %s: %v\n", os.DevNull, err)
+			return 125
 		}
+		defer f.Close()
+		stdin = f
 	}
+
+	c := newNohupCommand(rc.Ctx, path, argv[1:], rc.Env)
+	c.Dir = rc.Dir
+	c.Stdin = stdin
 
 	var displayPath string
 	stdout := rc.Out
