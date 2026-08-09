@@ -142,6 +142,109 @@ func TestContextGolden(t *testing.T) {
 	}
 }
 
+func TestEdFormats(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "old", "a\nb\nc\nd\n")
+	writeFile(t, dir, "new", "X\na\nb\nC\nd\n")
+
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-e", "old", "new"}, "3c\nC\n.\n0a\nX\n.\n"},
+		{[]string{"--ed", "old", "new"}, "3c\nC\n.\n0a\nX\n.\n"},
+		{[]string{"-f", "old", "new"}, "a0\nX\n.\nc3\nC\n.\n"},
+		{[]string{"--forward-ed", "old", "new"}, "a0\nX\n.\nc3\nC\n.\n"},
+	}
+	for _, tc := range cases {
+		out, errb, code := runIn(t, dir, "", tc.args...)
+		if out != tc.want || errb != "" || code != 1 {
+			t.Errorf("diff %v = (%q, %q, %d), want (%q, empty stderr, 1)", tc.args, out, errb, code, tc.want)
+		}
+	}
+}
+
+func TestEdFormatAddressForms(t *testing.T) {
+	cases := []struct {
+		name, old, new, ed, forward string
+	}{
+		{"append", "a\n", "a\nx\ny\n", "1a\nx\ny\n.\n", "a1\nx\ny\n.\n"},
+		{"delete-range", "a\nb\nc\nd\n", "a\nd\n", "2,3d\n", "d2 3\n"},
+		{"change-range", "a\nb\nc\nd\n", "a\nX\nY\nd\n", "2,3c\nX\nY\n.\n", "c2 3\nX\nY\n.\n"},
+		{"empty-old", "", "x\ny\n", "0a\nx\ny\n.\n", "a0\nx\ny\n.\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "old", tc.old)
+			writeFile(t, dir, "new", tc.new)
+			for _, mode := range []struct {
+				arg, want string
+			}{{"-e", tc.ed}, {"-f", tc.forward}} {
+				out, errb, code := runIn(t, dir, "", mode.arg, "old", "new")
+				if out != mode.want || errb != "" || code != 1 {
+					t.Errorf("diff %s = (%q, %q, %d), want (%q, empty stderr, 1)", mode.arg, out, errb, code, mode.want)
+				}
+			}
+		})
+	}
+}
+
+func TestEdFormatProtectsLonePeriods(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "old", "a\n")
+	writeFile(t, dir, "new", ".\n..\n")
+	out, errb, code := runIn(t, dir, "", "-e", "old", "new")
+	if want := "1c\n..\n.\ns/.//\na\n..\n.\n"; out != want || errb != "" || code != 1 {
+		t.Fatalf("diff -e = (%q, %q, %d), want (%q, empty stderr, 1)", out, errb, code, want)
+	}
+	out, errb, code = runIn(t, dir, "", "-f", "old", "new")
+	if want := "c1\n.\n..\n.\n"; out != want || errb != "" || code != 1 {
+		t.Fatalf("diff -f = (%q, %q, %d), want (%q, empty stderr, 1)", out, errb, code, want)
+	}
+}
+
+func TestEdFormatsDiagnoseIncompleteLines(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "old", "a\nb")
+	writeFile(t, dir, "new", "a\nc")
+	wantErr := "diff: old: No newline at end of file\n\n" +
+		"diff: new: No newline at end of file\n\n"
+	for _, tc := range []struct {
+		arg, want string
+	}{{"-e", "2c\nc\n.\n"}, {"-f", "c2\nc\n.\n"}} {
+		out, errb, code := runIn(t, dir, "", tc.arg, "old", "new")
+		if out != tc.want || errb != wantErr || code != 2 {
+			t.Errorf("diff %s = (%q, %q, %d), want (%q, %q, 2)", tc.arg, out, errb, code, tc.want, wantErr)
+		}
+	}
+	writeFile(t, dir, "new", "a\nb")
+	if out, errb, code := runIn(t, dir, "", "-e", "old", "new"); out != "" || errb != "" || code != 0 {
+		t.Errorf("identical incomplete files = (%q, %q, %d), want empty output and 0", out, errb, code)
+	}
+}
+
+func TestEdFormatOptionParsing(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "old", "A\n")
+	writeFile(t, dir, "new", "a\n")
+	if out, errb, code := runIn(t, dir, "", "-ie", "old", "new"); out != "" || errb != "" || code != 0 {
+		t.Errorf("diff -ie = (%q, %q, %d), want empty output and 0", out, errb, code)
+	}
+	for _, args := range [][]string{
+		{"-eu", "old", "new"},
+		{"-ef", "old", "new"},
+		{"--ed", "--context", "old", "new"},
+		{"-qe", "old", "new"},
+		{"-fq", "old", "new"},
+	} {
+		_, errb, code := runIn(t, dir, "", args...)
+		if code != 2 || !strings.Contains(errb, "conflicting output style options") {
+			t.Errorf("diff %v = (stderr %q, code %d), want style conflict and 2", args, errb, code)
+		}
+	}
+}
+
 func TestContextEdgeRanges(t *testing.T) {
 	cases := []struct {
 		name, a, b string

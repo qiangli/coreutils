@@ -1,6 +1,7 @@
 // Package diffcmd implements diff(1) per GNU diffutils
 // (https://www.gnu.org/software/diffutils/manual/): compare files
-// line by line, in the default "normal" format, unified format
+// line by line, in the default "normal" format, POSIX ed-script formats
+// (-e / -f), unified format
 // (-u / -U NUM / --unified[=NUM]), or POSIX context format
 // (-c / -C NUM / --context[=NUM]), with -r recursive directory
 // comparison, -q brief mode, -N absent-as-empty, and the -i / -w / -b
@@ -37,6 +38,7 @@ var cmd = &tool.Tool{
 	Usage: "diff [OPTION]... FILES\n" +
 		"FILES are 'FILE1 FILE2' or 'DIR1 DIR2' or 'DIR FILE' or 'FILE DIR'.\n" +
 		"'-' as a FILE means standard input.\n" +
+		"Edit scripts: -e, --ed; -f, --forward-ed\n" +
 		"Unified format: -u, -U NUM, --unified[=NUM]\n" +
 		"                output NUM (default 3) lines of unified context\n" +
 		"Context format: -c, -C NUM, --context[=NUM]\n" +
@@ -50,6 +52,8 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 type options struct {
 	unified           bool
 	contextStyle      bool
+	edStyle           bool
+	forwardEdStyle    bool
 	context           int
 	recursive         bool
 	brief             bool
@@ -68,7 +72,13 @@ func run(rc *tool.RunContext, args []string) int {
 	if perr != "" {
 		return tool.UsageError(rc, cmd, "%s", perr)
 	}
-	if opts.unified && opts.contextStyle {
+	styles := 0
+	for _, enabled := range []bool{opts.unified, opts.contextStyle, opts.edStyle, opts.forwardEdStyle} {
+		if enabled {
+			styles++
+		}
+	}
+	if styles > 1 {
 		return tool.UsageError(rc, cmd, "conflicting output style options")
 	}
 	flags := tool.NewFlags(cmd.Name)
@@ -84,6 +94,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	opts.recursive = *recursive
 	opts.brief = *brief
+	if opts.brief && styles > 0 {
+		return tool.UsageError(rc, cmd, "conflicting output style options")
+	}
 	opts.newFile = *newFile
 	opts.ignoreCase = *ignoreCase
 	opts.ignoreSpaceChange = *ignoreSpaceChange
@@ -109,8 +122,8 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-// prescan extracts -u / -U NUM / --unified[=NUM] and -c / -C NUM /
-// --context[=NUM] (which pflag cannot model) and records every option
+// prescan extracts -e / -f, -u / -U NUM / --unified[=NUM], and
+// -c / -C NUM / --context[=NUM] (which pflag cannot model) and records every option
 // token verbatim for the directory-mode header lines. Returns the
 // remaining args for tool.Parse.
 func prescan(args []string) ([]string, options, string) {
@@ -127,6 +140,16 @@ func prescan(args []string) ([]string, options, string) {
 			continue
 		}
 		if strings.HasPrefix(tok, "--") {
+			if tok == "--ed" {
+				opts.edStyle = true
+				opts.optTokens = append(opts.optTokens, tok)
+				continue
+			}
+			if tok == "--forward-ed" {
+				opts.forwardEdStyle = true
+				opts.optTokens = append(opts.optTokens, tok)
+				continue
+			}
 			if tok == "--unified" {
 				opts.unified = true
 				opts.optTokens = append(opts.optTokens, tok)
@@ -166,6 +189,10 @@ func prescan(args []string) ([]string, options, string) {
 	scan:
 		for j := 0; j < len(body); j++ {
 			switch body[j] {
+			case 'e':
+				opts.edStyle = true
+			case 'f':
+				opts.forwardEdStyle = true
 			case 'u':
 				opts.unified = true
 			case 'c':
@@ -504,12 +531,30 @@ func compareFiles(rc *tool.RunContext, opts *options, a, b string, withHeader bo
 		printPairHeader(rc, opts, a, b)
 	}
 	switch {
+	case opts.edStyle:
+		emitEd(rc.Out, sb, gs)
+	case opts.forwardEdStyle:
+		emitForwardEd(rc.Out, sb, gs)
 	case opts.unified:
 		emitUnified(rc.Out, opts, sa, sb, gs)
 	case opts.contextStyle:
 		emitContext(rc.Out, opts, sa, sb, gs)
 	default:
 		emitNormal(rc.Out, sa, sb, gs)
+	}
+	if opts.edStyle || opts.forwardEdStyle {
+		trouble := false
+		if sa.noEOL {
+			fmt.Fprintf(rc.Err, "diff: %s: No newline at end of file\n\n", a)
+			trouble = true
+		}
+		if sb.noEOL {
+			fmt.Fprintf(rc.Err, "diff: %s: No newline at end of file\n\n", b)
+			trouble = true
+		}
+		if trouble {
+			return 2
+		}
 	}
 	return 1
 }
@@ -696,6 +741,83 @@ func slideDown(changed []bool, keys []int) {
 }
 
 const noNewline = `\ No newline at end of file`
+
+// emitEd writes the POSIX -e script. Commands run from the end of file toward
+// the beginning so every address remains valid as earlier edits change line
+// counts. A lone period in inserted text must be protected from ed's input-mode
+// terminator; GNU diff inserts "..", leaves input mode, removes its first byte,
+// and resumes appending when more text follows.
+func emitEd(w io.Writer, sb *side, gs []group) {
+	for n := len(gs) - 1; n >= 0; n-- {
+		g := gs[n]
+		da, db := g.a1-g.a0, g.b1-g.b0
+		switch {
+		case da > 0 && db > 0:
+			fmt.Fprintf(w, "%sc\n", normalRange(g.a0, da))
+			emitEdBlock(w, sb.lines[g.b0:g.b1])
+		case da > 0:
+			fmt.Fprintf(w, "%sd\n", normalRange(g.a0, da))
+		default:
+			fmt.Fprintf(w, "%da\n", g.a0)
+			emitEdBlock(w, sb.lines[g.b0:g.b1])
+		}
+	}
+}
+
+func emitEdBlock(w io.Writer, lines []string) {
+	inInput := true
+	for i, line := range lines {
+		if line != "." {
+			fmt.Fprintln(w, line)
+			continue
+		}
+		fmt.Fprintln(w, "..")
+		fmt.Fprintln(w, ".")
+		fmt.Fprintln(w, "s/.//")
+		inInput = false
+		if i+1 < len(lines) {
+			fmt.Fprintln(w, "a")
+			inInput = true
+		}
+	}
+	if inInput {
+		fmt.Fprintln(w, ".")
+	}
+}
+
+// emitForwardEd writes POSIX -f format. Unlike -e, commands are ordered from
+// the beginning of the original file and put the command letter before its
+// space-separated address range. POSIX documents this as a listing format,
+// not a directly executable ed script, so lone periods are emitted literally.
+func emitForwardEd(w io.Writer, sb *side, gs []group) {
+	for _, g := range gs {
+		da, db := g.a1-g.a0, g.b1-g.b0
+		switch {
+		case da > 0 && db > 0:
+			fmt.Fprintf(w, "c%s\n", forwardEdRange(g.a0, da))
+			emitForwardEdBlock(w, sb.lines[g.b0:g.b1])
+		case da > 0:
+			fmt.Fprintf(w, "d%s\n", forwardEdRange(g.a0, da))
+		default:
+			fmt.Fprintf(w, "a%d\n", g.a0)
+			emitForwardEdBlock(w, sb.lines[g.b0:g.b1])
+		}
+	}
+}
+
+func forwardEdRange(start0, count int) string {
+	if count == 1 {
+		return strconv.Itoa(start0 + 1)
+	}
+	return fmt.Sprintf("%d %d", start0+1, start0+count)
+}
+
+func emitForwardEdBlock(w io.Writer, lines []string) {
+	for _, line := range lines {
+		fmt.Fprintln(w, line)
+	}
+	fmt.Fprintln(w, ".")
+}
 
 // emitNormal writes GNU's default format: NcM / NaM / NdM hunks with
 // "< " old lines, "---", "> " new lines.
