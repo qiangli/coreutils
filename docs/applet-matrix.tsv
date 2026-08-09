@@ -75,7 +75,7 @@ mv	cmds/mv		GNU Coreutils	yes	yes	1	17
 ncal	cmds/cal	cal	Bashy/other extension	no	no	1	6
 nice	cmds/nice		GNU Coreutils	yes	yes	5	16
 nl	cmds/nl		GNU Coreutils	yes	no	1	12
-nohup	cmds/nohup		GNU Coreutils	yes	yes	1	9
+nohup	cmds/nohup		GNU Coreutils	yes	yes	3	18
 nproc	cmds/nproc		GNU Coreutils	yes	no	1	2
 ntp	cmds/ntp		Bashy/other extension	no	no	1	4
 numfmt	cmds/numfmt		GNU Coreutils	yes	no	1	14
