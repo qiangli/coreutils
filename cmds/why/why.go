@@ -52,7 +52,18 @@ var (
 	execCmdFn    = defaultExecCmd
 )
 
+var (
+	goos   = runtime.GOOS
+	goarch = runtime.GOARCH
+)
+
 func defaultResolveBin(ctx context.Context, rc *tool.RunContext) (string, error) {
+	// 0. Fail closed BEFORE cache/network for unsupported platforms.
+	plat := goos + "/" + goarch
+	if _, ok := binmgr.PinnedSHA256(UpstreamTool, PinnedVersion, plat); !ok {
+		return "", fmt.Errorf("unsupported platform %s: no pinned digest for %s@%s", plat, UpstreamTool, PinnedVersion)
+	}
+
 	// Reject version overrides/unpinned requests fail-closed.
 	var reqVer string
 	for _, envKey := range []string{"WHY_VERSION", "WITR_VERSION"} {
@@ -80,7 +91,7 @@ func defaultResolveBin(ctx context.Context, rc *tool.RunContext) (string, error)
 	}
 
 	// 2. Resolve release metadata from GitHub and ensure binary with sha256 pin.
-	spec := buildSpec(runtime.GOOS, runtime.GOARCH)
+	spec := buildSpec(goos, goarch)
 
 	toolObj, err := binmgr.ResolveGitHub(ctx, spec)
 	if err != nil {

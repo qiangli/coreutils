@@ -830,7 +830,7 @@ func init() {
 	eff(EffWrite,
 		// todo writes the task list: a repo's COMMITTED docs/todo/ (a write here lands
 		// in the repo's history) or the per-host personal list (~/.bashy/todo/<owner>/).
-		"todo",
+		"todo", "why",
 		"clip", "cp", "install", "kill", "link", "ln", "mkdir", "mkfifo", "mknod",
 		"mktemp", "mv", "rmdir", "tar", "touch",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "uudecode", "graph",

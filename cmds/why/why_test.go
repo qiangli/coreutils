@@ -426,11 +426,22 @@ func TestWhy_HermeticAssetMatch(t *testing.T) {
 }
 
 func TestWhy_UnsupportedPlatform(t *testing.T) {
-	// PinnedSHA256 returns false for unsupported platforms
-	toolName, version := "witr", "v0.3.3"
-	_, ok := binmgr.PinnedSHA256(toolName, version, "plan9/amd64")
-	if ok {
-		t.Error("expected pin to be missing for unsupported platform plan9/amd64")
+	// Backup and restore goos/goarch
+	oldGoos, oldGoarch := goos, goarch
+	goos, goarch = "plan9", "amd64"
+	defer func() {
+		goos, goarch = oldGoos, oldGoarch
+	}()
+
+	// The early check must fail with the specific error before any cache/network calls
+	rc := &tool.RunContext{}
+	_, err := defaultResolveBin(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected error on unsupported platform plan9/amd64, got nil")
+	}
+	expectedErr := "unsupported platform plan9/amd64: no pinned digest for witr@v0.3.3"
+	if !strings.Contains(err.Error(), expectedErr) {
+		t.Errorf("expected error %q, got: %q", expectedErr, err.Error())
 	}
 }
 

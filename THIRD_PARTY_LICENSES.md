@@ -16,6 +16,7 @@ GPL code is ever copied into this repository.
 | [tjfoc/gmsm](https://github.com/tjfoc/gmsm) | Apache-2.0 | cmds/cksum (`--algorithm=sm3`) |
 | [lukechampine/blake3](https://lukechampine.com/blake3) | MIT | cmds/cksum (`--algorithm=blake3`) |
 | [tklauser/ps](https://github.com/tklauser/ps) | BSD-3-Clause | cmds/ps process discovery |
+| [pranshuparmar/witr](https://github.com/pranshuparmar/witr) | Apache-2.0 | cmds/why (managed external v0.3.3) |
 
 Tools without a row above are fresh implementations written from the
 GNU / POSIX documentation (the per-file package comments say which).
@@ -364,8 +365,8 @@ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ### tklauser/ps — BSD-3-Clause
@@ -440,21 +441,17 @@ The extension runs in the user's real Chrome profile and connects only to
 Used by `why` as a managed external binary for process and port activity inspection.
 
 ```
-                                 Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
-```
-   Copyright 2024 Pranshu Parmar
+Copyright 2025 Pranshu Parmar
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-       http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 ```
