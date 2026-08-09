@@ -118,7 +118,12 @@ func run(rc *tool.RunContext, args []string) int {
 		FS:    rc.FS,
 		Stdio: tool.Stdio{In: rc.In, Out: bw, Err: rc.Err}}
 	status := dispatch(brc, &opts, operands[0], operands[1])
-	bw.Flush()
+	if err := bw.Flush(); err != nil {
+		fmt.Fprintf(rc.Err, "diff: write error: %v\n", err)
+		if status < 2 {
+			status = 2
+		}
+	}
 	return status
 }
 

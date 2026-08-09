@@ -3,6 +3,7 @@ package diffcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -12,6 +13,16 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type flushErrorWriter struct {
+	err    error
+	writes int
+}
+
+func (w *flushErrorWriter) Write([]byte) (int, error) {
+	w.writes++
+	return 0, w.err
+}
 
 // runIn is the canonical runTool harness shape, parameterized by the
 // invocation working directory so tests can stage files first.
@@ -69,6 +80,32 @@ func TestNormalFormat(t *testing.T) {
 				t.Errorf("diff a b = (%q, %d), want (%q, %d); stderr=%q", out, code, c.want, c.code, errb)
 			}
 		})
+	}
+}
+
+func TestRunReportsBufferedFlushError(t *testing.T) {
+	dir := t.TempDir()
+	// Keep the normal-format output below bufio's buffer size so the injected
+	// writer is reached only when run performs its final Flush (VSC diff TP44).
+	writeFile(t, dir, "old", "old\n")
+	writeFile(t, dir, "new", "new\n")
+	w := &flushErrorWriter{err: errors.New("forced flush failure")}
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: w, Err: &errb},
+	}
+
+	code := cmd.Run(rc, []string{"old", "new"})
+	if code != 2 {
+		t.Fatalf("diff flush failure status = %d, want trouble status 2", code)
+	}
+	if got, want := errb.String(), "diff: write error: forced flush failure\n"; got != want {
+		t.Fatalf("diff flush failure stderr = %q, want %q", got, want)
+	}
+	if w.writes != 1 {
+		t.Fatalf("underlying writer calls = %d, want one buffered flush", w.writes)
 	}
 }
 
