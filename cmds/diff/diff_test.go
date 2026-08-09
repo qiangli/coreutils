@@ -88,6 +88,34 @@ func TestNormalFormat(t *testing.T) {
 	}
 }
 
+func TestVirtualWorkingDirectoryWinsOverProcessCWD(t *testing.T) {
+	processDir := t.TempDir()
+	virtualDir := t.TempDir()
+	writeFile(t, processDir, "old", "process\n")
+	writeFile(t, processDir, "new", "process\n")
+	writeFile(t, virtualDir, "old", "virtual-old\n")
+	writeFile(t, virtualDir, "new", "virtual-new\n")
+
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(original); err != nil {
+			t.Errorf("restore process cwd: %v", err)
+		}
+	}()
+	if err := os.Chdir(processDir); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errb, code := runIn(t, virtualDir, "", "old", "new")
+	want := "1c1\n< virtual-old\n---\n> virtual-new\n"
+	if out != want || errb != "" || code != 1 {
+		t.Fatalf("virtual-cwd diff = (%q, %q, %d), want (%q, empty stderr, 1)", out, errb, code, want)
+	}
+}
+
 func TestRunReportsBufferedFlushError(t *testing.T) {
 	dir := t.TempDir()
 	// Keep the normal-format output below bufio's buffer size so the injected
