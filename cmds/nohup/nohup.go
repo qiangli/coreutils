@@ -38,12 +38,11 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	if errOut == nil {
 		errOut = io.Discard
 	}
-	path, found := lookCommand(rc, argv[0])
-	if !found {
-		fmt.Fprintf(errOut, "nohup: %s: command not found\n", argv[0])
-		return 127
-	}
 
+	// Redirect terminal stdin before resolving the command, matching GNU
+	// nohup, which renders stdin unusable before execvp. This ordering makes a
+	// failing redirect report wrapper status 125 even when the command is also
+	// missing, so the lookup outcome 127 is never reached for that case.
 	inTerminal := rc.In != nil && isTerminal(rc.In)
 	outTerminal := rc.Out == nil || isTerminal(rc.Out)
 	errTerminal := rc.Err == nil || isTerminal(rc.Err)
@@ -52,11 +51,17 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	if inTerminal {
 		f, err := devNullOpener()
 		if err != nil {
-			fmt.Fprintf(errOut, "nohup: failed to redirect stdin from %s: %v\n", os.DevNull, err)
+			fmt.Fprintf(errOut, "nohup: failed to render standard input unusable: %v\n", err)
 			return 125
 		}
 		defer f.Close()
 		stdin = f
+	}
+
+	path, found := lookCommand(rc, argv[0])
+	if !found {
+		fmt.Fprintf(errOut, "nohup: %s: command not found\n", argv[0])
+		return 127
 	}
 
 	c := newNohupCommand(rc.Ctx, path, argv[1:], rc.Env)

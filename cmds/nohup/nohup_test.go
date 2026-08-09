@@ -349,50 +349,68 @@ func TestNohupDevNullOpenFailure(t *testing.T) {
 		t.Skip("pty not supported on windows")
 	}
 
-	// We open a PTY to simulate terminal stdin
+	// A PTY stands in for a terminal stdin so the /dev/null redirect path runs.
 	_, pts, err := pty.Open()
 	if err != nil {
 		t.Skipf("pty.Open failed: %v", err)
 	}
 	defer pts.Close()
 
-	// Mock devNullOpener to return an error
+	// Inject an opener that always fails, simulating an environment where
+	// /dev/null cannot be opened write-only.
 	oldOpener := devNullOpener
 	defer func() { devNullOpener = oldOpener }()
-	mockErr := errors.New("permission denied")
 	devNullOpener = func() (*os.File, error) {
-		return nil, mockErr
+		return nil, errors.New("permission denied")
 	}
 
-	var out, errb bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Dir:   t.TempDir(),
-		Env:   []string{"PATH=/bin:/usr/bin"},
-		Stdio: tool.Stdio{In: pts, Out: &out, Err: &errb},
+	// runNohup must redirect terminal stdin before resolving the command, so a
+	// failing opener reports wrapper status 125 with the redirect diagnostic
+	// and never reaches the lookup outcome 127 or a started child.
+	const expectedDiag = "nohup: failed to render standard input unusable: permission denied\n"
+	runCase := func(t *testing.T, env []string, command string, args ...string) {
+		tempDir := t.TempDir()
+		var out, errb bytes.Buffer
+		// Non-terminal stdout/stderr keep this on the stdin-redirect path only.
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   tempDir,
+			Env:   env,
+			Stdio: tool.Stdio{In: pts, Out: &out, Err: &errb},
+		}
+		// A sentinel proves no child ever started, even when the command is
+		// resolvable and would create it.
+		sentinel := filepath.Join(tempDir, "should_not_exist")
+		full := append(append([]string{command}, args...), sentinel)
+
+		code := run(rc, full)
+
+		if code != 125 {
+			t.Fatalf("expected exit code 125 (wrapper redirect failure), got %d err=%q", code, errb.String())
+		}
+		if got := errb.String(); got != expectedDiag {
+			t.Errorf("expected diagnostic %q, got %q", expectedDiag, got)
+		}
+		// The lookup outcome 127 ("command not found") must not be reached:
+		// the redirect runs first and wins.
+		if strings.Contains(errb.String(), "command not found") {
+			t.Errorf("command lookup ran before redirect: %q", errb.String())
+		}
+		// No child may have started.
+		if _, err := os.Stat(sentinel); err == nil {
+			t.Errorf("sentinel %s was created; child executed despite redirect failure", sentinel)
+		}
 	}
 
-	// Try to execute a command that would output or do something if it ran.
-	// We'll write to a file in a temp dir if it runs, or check if it actually runs.
-	// Since we expect it not to run at all, let's use a non-existent helper or an
-	// command like "touch should_not_exist" in TempDir.
-	tempDir := rc.Dir
-	sentinelFile := filepath.Join(tempDir, "should_not_exist")
-
-	code := run(rc, []string{"touch", sentinelFile})
-
-	if code != 125 {
-		t.Errorf("expected exit code 125, got %d", code)
-	}
-
-	expectedDiag := fmt.Sprintf("nohup: failed to redirect stdin from %s: %v\n", os.DevNull, mockErr)
-	if errb.String() != expectedDiag {
-		t.Errorf("expected diagnostic %q, got %q", expectedDiag, errb.String())
-	}
-
-	// Verify no child ran: the sentinel file should not exist
-	if _, err := os.Stat(sentinelFile); err == nil {
-		t.Errorf("sentinel file %s was created, meaning child process executed!", sentinelFile)
-	}
+	// The missing-command case is the adversarial ordering proof: if lookup ran
+	// first it would return 127 and never reach the opener. With the redirect
+	// running first, the failure is reported as 125.
+	t.Run("missing_command", func(t *testing.T) {
+		runCase(t, []string{"PATH=" + filepath.Join(t.TempDir(), "nowhere")}, "definitely-missing-command")
+	})
+	// touch is resolvable here, yet the opener failure must short-circuit before
+	// it can start, leaving the sentinel absent.
+	t.Run("found_command", func(t *testing.T) {
+		runCase(t, []string{"PATH=/bin:/usr/bin"}, "touch")
+	})
 }
-
