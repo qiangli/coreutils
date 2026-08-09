@@ -13,6 +13,8 @@ import (
 	"github.com/benhoyt/goawk/interp"
 	"github.com/benhoyt/goawk/lexer"
 	"github.com/benhoyt/goawk/parser"
+	awkregex "github.com/benhoyt/goawk/regex"
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -76,7 +78,9 @@ func run(rc *tool.RunContext, args []string) int {
 		vars = append(vars, name, unescape(value))
 	}
 
-	prog, err := parser.ParseProgram([]byte(source), nil)
+	prog, err := parser.ParseProgram([]byte(source), &parser.ParserConfig{
+		RegexCompiler: awkERECompiler{},
+	})
 	if err != nil {
 		fmt.Fprintf(rc.Err, "awk: %v\n", err)
 		return 2
@@ -101,6 +105,31 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	return status
 }
+
+// awkERECompiler adapts coreutils' POSIX ERE matcher to GoAWK's expression
+// regex seam. AWK requires period to match newline and matching to select the
+// longest of the leftmost matches. Keep the unmodified AWK source separately:
+// pkg/bre translates some ERE constructs before compiling them, but GoAWK uses
+// String for stable diagnostics and disassembly.
+type awkERECompiler struct{}
+
+func (awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
+	re, err := bre.CompileEREWithFlags(source, "(?s)")
+	if err != nil {
+		return nil, err
+	}
+	re.Longest()
+	return &awkERERegexp{source: source, re: re}, nil
+}
+
+type awkERERegexp struct {
+	source string
+	re     *bre.Regexp
+}
+
+func (r *awkERERegexp) String() string                 { return r.source }
+func (r *awkERERegexp) MatchString(s string) bool      { return r.re.MatchString(s) }
+func (r *awkERERegexp) FindStringIndex(s string) []int { return r.re.FindStringIndex(s) }
 
 func readProgramFiles(rc *tool.RunContext, names []string) (string, bool) {
 	var b strings.Builder
