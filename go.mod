@@ -62,7 +62,7 @@ require (
 replace mvdan.cc/sh/v3 => ../sh
 
 // Fork pin adds POSIX awk %a/%A/%F formatting while preserving GoAWK's API.
-replace github.com/benhoyt/goawk => github.com/qiangli/goawk v1.31.1-0.20260809113751-02c64c3594cb
+replace github.com/benhoyt/goawk => github.com/qiangli/goawk v1.31.1-0.20260809115012-d0ef5e22caa1
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
