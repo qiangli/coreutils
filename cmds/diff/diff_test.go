@@ -27,11 +27,16 @@ func (w *flushErrorWriter) Write([]byte) (int, error) {
 // runIn is the canonical runTool harness shape, parameterized by the
 // invocation working directory so tests can stage files first.
 func runIn(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
+	return runInEnv(t, dir, stdin, nil, args...)
+}
+
+func runInEnv(t *testing.T, dir, stdin string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -154,8 +159,8 @@ func TestContextGolden(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(dir, "b.txt"), tb, tb); err != nil {
 		t.Fatal(err)
 	}
-	want := "*** a.txt\t" + ta.Format(stampLayout) + "\n" +
-		"--- b.txt\t" + tb.Format(stampLayout) + "\n" +
+	want := "*** a.txt\t" + ta.Format(contextStampLayout) + "\n" +
+		"--- b.txt\t" + tb.Format(contextStampLayout) + "\n" +
 		"***************\n" +
 		"*** 1,3 ****\n" +
 		"  apple\n" +
@@ -366,7 +371,7 @@ func TestContextNewFile(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "b.txt", "hi\nthere\n")
 	out, _, code := runIn(t, dir, "", "-cN", "absent.txt", "b.txt")
-	wantHead := "*** absent.txt\t" + time.Unix(0, 0).Format(stampLayout) + "\n"
+	wantHead := "*** absent.txt\t" + time.Unix(0, 0).Format(contextStampLayout) + "\n"
 	if !strings.HasPrefix(out, wantHead) || code != 1 {
 		t.Errorf("-cN header: (%q, %d), want prefix %q", out, code, wantHead)
 	}
@@ -415,12 +420,70 @@ func TestRecursiveContextHeaderEcho(t *testing.T) {
 	}
 }
 
-// GNU stamp shape: "2026-03-04 05:06:07.000000000 -0700" (nanoseconds
-// always 9 digits, numeric zone).
-func TestStampShape(t *testing.T) {
-	s := time.Date(2026, 3, 4, 5, 6, 7, 123456789, time.UTC).Format(stampLayout)
-	if s != "2026-03-04 05:06:07.123456789 +0000" {
-		t.Errorf("stamp = %q", s)
+func TestHeaderTimestampLayouts(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "old", "old\n")
+	writeFile(t, dir, "new", "new\n")
+	at := time.Date(1995, time.January, 2, 3, 4, 5, 0, time.UTC)
+	for _, name := range []string{"old", "new"} {
+		if err := os.Chtimes(filepath.Join(dir, name), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	contextOut, _, contextCode := runInEnv(t, dir, "", []string{"TZ=UTC0"}, "-c", "old", "new")
+	contextHeaders := "*** old\tMon Jan  2 03:04:05 1995\n" +
+		"--- new\tMon Jan  2 03:04:05 1995\n"
+	if !strings.HasPrefix(contextOut, contextHeaders) || contextCode != 1 {
+		t.Fatalf("context headers = (%q, %d), want prefix %q and status 1", contextOut, contextCode, contextHeaders)
+	}
+
+	unifiedOut, _, unifiedCode := runInEnv(t, dir, "", []string{"TZ=UTC0"}, "-u", "old", "new")
+	unifiedHeaders := "--- old\t1995-01-02 03:04:05.000000000 +0000\n" +
+		"+++ new\t1995-01-02 03:04:05.000000000 +0000\n"
+	if !strings.HasPrefix(unifiedOut, unifiedHeaders) || unifiedCode != 1 {
+		t.Fatalf("unified headers = (%q, %d), want prefix %q and status 1", unifiedOut, unifiedCode, unifiedHeaders)
+	}
+}
+
+func TestHeadersHonorEnvTZMinuteOffsets(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "old", "old\n")
+	writeFile(t, dir, "new", "new\n")
+	at := time.Date(1995, time.January, 2, 3, 4, 5, 0, time.UTC)
+	for _, name := range []string{"old", "new"} {
+		if err := os.Chtimes(filepath.Join(dir, name), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		name, tz, contextHeader, unifiedHeader string
+	}{
+		{
+			name:          "east-positive-reversed-sign",
+			tz:            "<EAST>-24:59",
+			contextHeader: "*** old\tTue Jan  3 04:03:05 1995",
+			unifiedHeader: "--- old\t1995-01-03 04:03:05.000000000 +2459",
+		},
+		{
+			name:          "west-negative-reversed-sign",
+			tz:            "<WEST>24:59",
+			contextHeader: "*** old\tSun Jan  1 02:05:05 1995",
+			unifiedHeader: "--- old\t1995-01-01 02:05:05.000000000 -2459",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contextOut, _, contextCode := runInEnv(t, dir, "", []string{"TZ=" + tc.tz}, "-c", "old", "new")
+			if got := strings.SplitN(contextOut, "\n", 2)[0]; got != tc.contextHeader || contextCode != 1 {
+				t.Errorf("TZ=%s context header/status = (%q, %d), want (%q, 1)", tc.tz, got, contextCode, tc.contextHeader)
+			}
+			unifiedOut, _, unifiedCode := runInEnv(t, dir, "", []string{"TZ=" + tc.tz}, "-u", "old", "new")
+			if got := strings.SplitN(unifiedOut, "\n", 2)[0]; got != tc.unifiedHeader || unifiedCode != 1 {
+				t.Errorf("TZ=%s unified header/status = (%q, %d), want (%q, 1)", tc.tz, got, unifiedCode, tc.unifiedHeader)
+			}
+		})
 	}
 }
 

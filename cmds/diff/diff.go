@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qiangli/coreutils/cmds/internal/tzenv"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -541,9 +542,9 @@ func compareFiles(rc *tool.RunContext, opts *options, a, b string, withHeader bo
 	case opts.forwardEdStyle:
 		emitForwardEd(rc.Out, sb, gs)
 	case opts.unified:
-		emitUnified(rc.Out, opts, sa, sb, gs)
+		emitUnified(rc.Out, opts, sa, sb, gs, tzenv.Location(rc.Env))
 	case opts.contextStyle:
-		emitContext(rc.Out, opts, sa, sb, gs)
+		emitContext(rc.Out, opts, sa, sb, gs, tzenv.Location(rc.Env))
 	default:
 		emitNormal(rc.Out, sa, sb, gs)
 	}
@@ -862,16 +863,20 @@ func normalRange(start0, count int) string {
 	return fmt.Sprintf("%d,%d", start0+1, start0+count)
 }
 
-// GNU's unified header timestamp shape: mtime to nanoseconds + zone.
-const stampLayout = "2006-01-02 15:04:05.000000000 -0700"
+const (
+	// GNU's unified header timestamp shape: mtime to nanoseconds + zone.
+	stampLayout = "2006-01-02 15:04:05.000000000 -0700"
+	// POSIX context output uses the ctime-like timestamp shape.
+	contextStampLayout = "Mon Jan _2 15:04:05 2006"
+)
 
 // emitUnified writes unified format: ---/+++ headers with mtimes,
 // hunks merged when separated by at most 2*context unchanged lines
 // (GNU's rule), @@ ranges with the count omitted when 1 and the
 // preceding line number used when 0.
-func emitUnified(w io.Writer, opts *options, sa, sb *side, gs []group) {
-	fmt.Fprintf(w, "--- %s\t%s\n", sa.name, sa.mtime.Format(stampLayout))
-	fmt.Fprintf(w, "+++ %s\t%s\n", sb.name, sb.mtime.Format(stampLayout))
+func emitUnified(w io.Writer, opts *options, sa, sb *side, gs []group, loc *time.Location) {
+	fmt.Fprintf(w, "--- %s\t%s\n", sa.name, sa.mtime.In(loc).Format(stampLayout))
+	fmt.Fprintf(w, "+++ %s\t%s\n", sb.name, sb.mtime.In(loc).Format(stampLayout))
 	ctx := opts.context
 	for i := 0; i < len(gs); {
 		j := i
@@ -944,9 +949,9 @@ func unifiedRange(start0, count int) string {
 // prints only its range line, and hunks merge when separated by at
 // most 2*context unchanged lines — both GNU rules shared with the
 // unified emitter.
-func emitContext(w io.Writer, opts *options, sa, sb *side, gs []group) {
-	fmt.Fprintf(w, "*** %s\t%s\n", sa.name, sa.mtime.Format(stampLayout))
-	fmt.Fprintf(w, "--- %s\t%s\n", sb.name, sb.mtime.Format(stampLayout))
+func emitContext(w io.Writer, opts *options, sa, sb *side, gs []group, loc *time.Location) {
+	fmt.Fprintf(w, "*** %s\t%s\n", sa.name, sa.mtime.In(loc).Format(contextStampLayout))
+	fmt.Fprintf(w, "--- %s\t%s\n", sb.name, sb.mtime.In(loc).Format(contextStampLayout))
 	line := func(s *side, mark string, i int) {
 		fmt.Fprintf(w, "%s%s\n", mark, s.lines[i])
 		if s.noEOL && i == len(s.lines)-1 {
