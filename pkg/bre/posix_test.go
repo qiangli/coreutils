@@ -257,6 +257,14 @@ func TestPOSIXEREInvalidIntervals(t *testing.T) {
 			t.Errorf("CompileEREWithFlags(%q) succeeded, want invalid interval error", pattern)
 		}
 	}
+	for _, pattern := range []string{`a*{1001}`, `a{2}{1001}`, `*a{1001}`} {
+		if ERERequiresBacktracking(pattern) {
+			t.Errorf("ERERequiresBacktracking(%q) = true for invalid repeated quantifier", pattern)
+		}
+		if _, err := CompileEREWithFlags(pattern, ""); err == nil {
+			t.Errorf("CompileEREWithFlags(%q) succeeded, want repeated quantifier error", pattern)
+		}
+	}
 }
 
 func TestPOSIXERELargeIntervalDispatch(t *testing.T) {
@@ -265,9 +273,23 @@ func TestPOSIXERELargeIntervalDispatch(t *testing.T) {
 		`^a{01001}$`,
 		`^a{0002,02048}$`,
 		`^a{32767}$`,
+		`^(a)\1$`,
 	} {
-		if !needsEREBacktrack(pattern) {
-			t.Errorf("needsEREBacktrack(%q) = false, want true", pattern)
+		if !ERERequiresBacktracking(pattern) {
+			t.Errorf("ERERequiresBacktracking(%q) = false, want true", pattern)
+		}
+	}
+	for _, pattern := range []string{
+		`^a{1000}$`,
+		`^a{01000}$`,
+		`^a\{1001\}$`,
+		`^[{]1001[}]$`,
+		`^[\1]$`,
+		`{1001}`,
+		`a{32768}`,
+	} {
+		if ERERequiresBacktracking(pattern) {
+			t.Errorf("ERERequiresBacktracking(%q) = true, want false", pattern)
 		}
 	}
 

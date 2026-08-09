@@ -240,6 +240,32 @@ func TestGrepEREAndFixed(t *testing.T) {
 	}
 }
 
+func TestGrepEREIntervalDispatch(t *testing.T) {
+	a1000 := strings.Repeat("a", 1000)
+	a1001 := strings.Repeat("a", 1001)
+	input := a1000 + "\n" + a1001 + "\n" + "a{1001}\n"
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"RE2 boundary", []string{"-E", `^a{1000}$`}, a1000 + "\n"},
+		{"backtracker canonical", []string{"-E", `^a{1001}$`}, a1001 + "\n"},
+		{"backtracker padded", []string{"-E", `^a{01001}$`}, a1001 + "\n"},
+		{"escaped interval literal", []string{"-E", `^a\{1001\}$`}, "a{1001}\n"},
+		{"bracket braces literal", []string{"-E", `^a[{]1001[}]$`}, "a{1001}\n"},
+		{"large plus ordinary expressions", []string{"-E", "-e", `^a{1001}$`, "-e", `^a{1000}$`}, a1000 + "\n" + a1001 + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runGrep(t, "", input, tc.args...)
+			if out != tc.want || errOut != "" || code != 0 {
+				t.Errorf("grep %v = (%q, %q, %d), want (%q, %q, 0)", tc.args, out, errOut, code, tc.want, "")
+			}
+		})
+	}
+}
+
 func TestGrepContext(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "input", "zero\nbefore\nhit\nafter\ngap\nbefore2\nhit\nlast\ntail\n")

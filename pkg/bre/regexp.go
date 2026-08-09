@@ -62,7 +62,7 @@ func CompileWithFlags(pattern, flags string) (*Regexp, error) {
 // optional RE2-style flag prefix. EREs without back-references stay on RE2;
 // EREs with GNU/POSIX-style \1..\9 use this package's bounded backtracker.
 func CompileEREWithFlags(pattern, flags string) (*Regexp, error) {
-	if !needsEREBacktrack(pattern) {
+	if !ERERequiresBacktracking(pattern) {
 		t, err := ToGoERE(pattern)
 		if err != nil {
 			return nil, err
@@ -155,41 +155,84 @@ func needsBacktrack(p string) bool {
 	return false
 }
 
-func needsEREBacktrack(p string) bool {
-	inBracket := false
-	firstBracket := false
-	for i := 0; i+1 < len(p); i++ {
-		switch p[i] {
-		case '[':
-			if !inBracket {
-				inBracket = true
-				firstBracket = true
+// ERERequiresBacktracking reports whether pattern needs the package's bounded
+// matcher instead of the translated RE2 path. Callers that combine translated
+// EREs (grep, for example) use this same predicate so capability dispatch
+// cannot drift from CompileEREWithFlags.
+func ERERequiresBacktracking(p string) bool {
+	state := posStart
+	for i := 0; i < len(p); {
+		if p[i] == '[' {
+			_, n, err := translateBracket(p[i:])
+			if err != nil {
+				return false // ToGoERE will return the syntax error.
 			}
-		case ']':
-			if inBracket && !firstBracket {
-				inBracket = false
-			}
-			firstBracket = false
-		case '\\':
-			if !inBracket {
-				n := p[i+1]
-				if n >= '1' && n <= '9' {
-					return true
-				}
-				i++
-			}
-			firstBracket = false
-		case '{':
-			if !inBracket {
-				end := strings.IndexByte(p[i+1:], '}')
-				if end >= 0 && intervalNeedsBacktrack(p[i+1:i+1+end]) {
-					return true
-				}
-			}
-			firstBracket = false
-		default:
-			firstBracket = false
+			state = posAtom
+			i += n
+			continue
 		}
+		if p[i] == '\\' {
+			if i+1 >= len(p) {
+				return false // ToGoERE will return the syntax error.
+			}
+			n := p[i+1]
+			if n >= '1' && n <= '9' {
+				return true
+			}
+			if n == '<' || n == '>' || n == 'b' || n == 'B' {
+				state = posAnchor
+			} else {
+				state = posAtom
+			}
+			i += 2
+			continue
+		}
+		switch p[i] {
+		case '^':
+			if state == posStart {
+				state = posAnchor
+			} else {
+				state = posAtom
+			}
+		case '$':
+			if i == len(p)-1 || (i+1 < len(p) && (p[i+1] == ')' || p[i+1] == '|')) {
+				state = posAnchor
+			} else {
+				state = posAtom
+			}
+		case '(', '|':
+			state = posStart
+		case ')':
+			state = posAtom
+		case '*', '+', '?':
+			if state != posAtom {
+				return false // RE2 will reject a dangling or repeated quantifier.
+			}
+			state = posAnchor // A quantified atom cannot be quantified again.
+		case '{':
+			if state != posAtom {
+				return false // ToGoERE will reject a dangling interval.
+			}
+			end := strings.IndexByte(p[i+1:], '}')
+			if end < 0 {
+				return false // ToGoERE will return the syntax error.
+			}
+			inner := p[i+1 : i+1+end]
+			if intervalNeedsBacktrack(inner) {
+				return true
+			}
+			if _, ok := normalizeInterval(inner); !ok {
+				return false // ToGoERE will return the syntax error.
+			}
+			state = posAnchor // An interval cannot itself be quantified.
+			i += end + 2
+			continue
+		default:
+			if p[i] != '}' {
+				state = posAtom
+			}
+		}
+		i++
 	}
 	return false
 }
