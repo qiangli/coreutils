@@ -152,9 +152,9 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/watch"
 	_ "github.com/qiangli/coreutils/cmds/wc"
 	_ "github.com/qiangli/coreutils/cmds/which"
-	_ "github.com/qiangli/coreutils/cmds/why"
 	_ "github.com/qiangli/coreutils/cmds/who"
 	_ "github.com/qiangli/coreutils/cmds/whoami"
+	_ "github.com/qiangli/coreutils/cmds/why"
 	_ "github.com/qiangli/coreutils/cmds/xargs"
 	_ "github.com/qiangli/coreutils/cmds/yes"
 )
