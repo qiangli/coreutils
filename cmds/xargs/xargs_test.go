@@ -39,6 +39,27 @@ func TestXargsMaxArgsBatches(t *testing.T) {
 	}
 }
 
+func TestXargsClusteredShortOptionsWithAttachedArguments(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		clustered []string
+		split     []string
+	}{
+		{name: "max-args", input: "a b\n", clustered: []string{"-txn1", "echo"}, split: []string{"-t", "-x", "-n1", "echo"}},
+		{name: "size", input: "an-item-that-exceeds-the-limit\n", clustered: []string{"-txs24", "echo"}, split: []string{"-t", "-x", "-s24", "echo"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantOut, wantErr, wantCode := runXargs(t, tt.input, tt.split...)
+			gotOut, gotErr, gotCode := runXargs(t, tt.input, tt.clustered...)
+			if gotCode != wantCode || gotOut != wantOut || gotErr != wantErr {
+				t.Fatalf("clustered=(%d,%q,%q), split=(%d,%q,%q)", gotCode, gotOut, gotErr, wantCode, wantOut, wantErr)
+			}
+		})
+	}
+}
+
 func TestXargsNullDelimited(t *testing.T) {
 	out, _, _ := runXargs(t, "a\x00b c\x00", "-0", "echo")
 	if out != "a b c\n" { // "b c" stays one item (NUL only)
@@ -138,6 +159,15 @@ func TestXargsReplaceUsesWholeLine(t *testing.T) {
 	out, _, code := runXargs(t, "a b\nc d\n", "-I", "{}", "echo", "[{}]")
 	if code != 0 || out != "[a b]\n[c d]\n" {
 		t.Fatalf("-I line replacement: out=%q code=%d", out, code)
+	}
+}
+
+func TestXargsReplaceUnquotesEachLogicalLineBeforeEOF(t *testing.T) {
+	for _, input := range []string{"aaaa\n\"end\"\ncccc\n", "aaaa\n'end'\ncccc\n", "aaaa\n\\e\\n\\d\ncccc\n"} {
+		out, errOut, code := runXargs(t, input, "-E", "end", "-I", "{}", "echo", "{}")
+		if code != 0 || errOut != "" || out != "aaaa\n" {
+			t.Errorf("input %q: code=%d stdout=%q stderr=%q", input, code, out, errOut)
+		}
 	}
 }
 

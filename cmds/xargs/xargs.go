@@ -49,6 +49,7 @@ type options struct {
 
 func run(rc *tool.RunContext, args []string) int {
 	o := options{maxArgs: -1, maxProcs: 1}
+	args = expandShortOptionClusters(args)
 
 	// Hand-parse xargs options up to the first non-flag (the command), so the
 	// command's own flags are never consumed as ours (the wrapper rule).
@@ -184,6 +185,45 @@ func run(rc *tool.RunContext, args []string) int {
 	return execBatches(rc, batches, o)
 }
 
+// expandShortOptionClusters gives the hand-written option parser the same
+// input shape for `-txn1` as for `-t -x -n1`. Once an option that consumes an
+// argument is reached, the rest of that word is its argument rather than more
+// flags. Expansion stops at the command operand or an explicit `--`.
+func expandShortOptionClusters(args []string) []string {
+	var expanded []string
+	for i, arg := range args {
+		if arg == "--" || arg == "-" || arg == "" || arg[0] != '-' {
+			expanded = append(expanded, args[i:]...)
+			break
+		}
+		if len(arg) < 3 || arg[1] == '-' {
+			expanded = append(expanded, arg)
+			continue
+		}
+		for pos := 1; pos < len(arg); pos++ {
+			flag := arg[pos]
+			switch flag {
+			case '0', 'r', 't', 'p', 'x':
+				expanded = append(expanded, "-"+string(flag))
+			case 'n', 'L', 's', 'I', 'P', 'E', 'e', 'd':
+				if pos+1 < len(arg) {
+					expanded = append(expanded, "-"+string(flag)+arg[pos+1:])
+				} else {
+					expanded = append(expanded, "-"+string(flag))
+				}
+				pos = len(arg)
+			default:
+				expanded = append(expanded, "-"+arg[pos:])
+				pos = len(arg)
+			}
+		}
+		if i == len(args)-1 {
+			return expanded
+		}
+	}
+	return expanded
+}
+
 // atoiOr returns the parsed int, or the sentinel -2 on a malformed value (which
 // the post-parse validation rejects loudly).
 func atoiOr(s string) int {
@@ -213,7 +253,11 @@ func readItems(r io.Reader, o options) ([]inputItem, error) {
 			if line == len(lines)-1 && text == "" {
 				continue
 			}
-			items = append(items, inputItem{value: strings.TrimSuffix(text, "\r"), line: line + 1})
+			value, parseErr := unquoteReplacementLine(strings.TrimSuffix(text, "\r"))
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			items = append(items, inputItem{value: value, line: line + 1})
 		}
 	case o.null:
 		items = plainItems(splitOn(string(data), '\x00'))
@@ -236,6 +280,45 @@ func readItems(r io.Reader, o options) ([]inputItem, error) {
 		}
 	}
 	return items, nil
+}
+
+// unquoteReplacementLine applies xargs quoting and escaping to one logical
+// line without treating unquoted blanks as item separators. That distinction
+// is required by -I: the entire logical line is one replacement item, while
+// quotes and backslashes remain syntax rather than literal data.
+func unquoteReplacementLine(text string) (string, error) {
+	var out strings.Builder
+	var quote byte
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			} else {
+				out.WriteByte(c)
+			}
+			continue
+		}
+		switch c {
+		case '\\':
+			if i+1 == len(text) {
+				return "", fmt.Errorf("unmatched backslash")
+			}
+			i++
+			out.WriteByte(text[i])
+		case '\'', '"':
+			quote = c
+		default:
+			out.WriteByte(c)
+		}
+	}
+	if quote == '\'' {
+		return "", fmt.Errorf("unmatched single quote")
+	}
+	if quote == '"' {
+		return "", fmt.Errorf("unmatched double quote")
+	}
+	return out.String(), nil
 }
 
 func plainItems(values []string) []inputItem {
