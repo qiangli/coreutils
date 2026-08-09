@@ -433,7 +433,7 @@ func compilePattern(pats []string, fixed, extended, lineRe, ignoreCase, longest 
 	if !fixed && extended {
 		needBRE := false
 		for _, p := range pats {
-			if ereNeedsPackageMatcher(p) {
+			if bre.ERERequiresBacktracking(p) {
 				needBRE = true
 				break
 			}
@@ -611,37 +611,6 @@ func breNeedsPackageMatcher(p string) bool {
 				return true
 			}
 			i++
-		}
-	}
-	return false
-}
-
-func ereNeedsPackageMatcher(p string) bool {
-	inBracket := false
-	firstBracket := false
-	for i := 0; i+1 < len(p); i++ {
-		switch p[i] {
-		case '[':
-			if !inBracket {
-				inBracket = true
-				firstBracket = true
-			}
-		case ']':
-			if inBracket && !firstBracket {
-				inBracket = false
-			}
-			firstBracket = false
-		case '\\':
-			if !inBracket {
-				n := p[i+1]
-				if n >= '1' && n <= '9' {
-					return true
-				}
-				i++
-			}
-			firstBracket = false
-		default:
-			firstBracket = false
 		}
 	}
 	return false

@@ -447,6 +447,25 @@ func ToGoERE(p string) (string, error) {
 			case ')':
 				b.WriteByte(p[i])
 				state = posAtom
+			case '{':
+				if state != posAtom {
+					return "", fmt.Errorf("{ with nothing to repeat")
+				}
+				end := strings.IndexByte(p[i+1:], '}')
+				if end < 0 {
+					return "", fmt.Errorf("unmatched {")
+				}
+				inner := p[i+1 : i+1+end]
+				norm, ok := normalizeInterval(inner)
+				if !ok {
+					return "", fmt.Errorf("invalid interval {%s}", inner)
+				}
+				b.WriteByte('{')
+				b.WriteString(norm)
+				b.WriteByte('}')
+				state = posAtom
+				i += end + 2
+				continue
 			default:
 				b.WriteByte(p[i])
 				if p[i] != '*' && p[i] != '+' && p[i] != '?' && p[i] != '}' {

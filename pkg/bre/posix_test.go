@@ -1,6 +1,7 @@
 package bre
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -150,6 +151,161 @@ func TestPOSIXIntervalBounds(t *testing.T) {
 	} {
 		if _, err := Compile(pattern); err == nil {
 			t.Errorf("Compile(%q) succeeded, want invalid interval error", pattern)
+		}
+	}
+}
+
+func TestPOSIXEREIntervalCanonicalization(t *testing.T) {
+	translations := []struct {
+		pattern string
+		want    string
+	}{
+		{`a{0000}`, `a{0}`},
+		{`a{0002}`, `a{2}`},
+		{`a{0002,}`, `a{2,}`},
+		{`a{0002,0004}`, `a{2,4}`},
+		{`a{,0004}`, `a{0,4}`}, // GNU extension retained by normalizeInterval.
+		{`(ab){0002}`, `(ab){2}`},
+		{`a\{0002\}`, `a\{0002\}`},
+		{`[{]`, `[{]`},
+	}
+	for _, tc := range translations {
+		got, err := ToGoERE(tc.pattern)
+		if err != nil {
+			t.Errorf("ToGoERE(%q): %v", tc.pattern, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ToGoERE(%q) = %q, want %q", tc.pattern, got, tc.want)
+		}
+	}
+
+	matches := []struct {
+		pattern string
+		in      string
+	}{
+		{`^a{0002}$`, "aa"},
+		{`^a{0002,}$`, "aaaaa"},
+		{`^a{0002,0004}$`, "aaa"},
+		{`^a{,0004}$`, "aaa"},
+		{`^(ab){0002}$`, "abab"},
+	}
+	for _, tc := range matches {
+		re, err := CompileEREWithFlags(tc.pattern, "")
+		if err != nil {
+			t.Errorf("CompileEREWithFlags(%q): %v", tc.pattern, err)
+			continue
+		}
+		if !re.MatchString(tc.in) {
+			t.Errorf("%q did not match %q", tc.pattern, tc.in)
+		}
+	}
+}
+
+func TestPOSIXEREIntervalCanonicalParity(t *testing.T) {
+	// Leading zeroes change spelling, not numeric interval semantics. Exercise
+	// a bounded grid so exact, open, and closed forms stay in parity with their
+	// canonical spellings across matching and non-matching input lengths.
+	for lo := 0; lo <= 8; lo++ {
+		forms := [][2]string{
+			{fmt.Sprintf(`^a{%04d}$`, lo), fmt.Sprintf(`^a{%d}$`, lo)},
+			{fmt.Sprintf(`^a{%04d,}$`, lo), fmt.Sprintf(`^a{%d,}$`, lo)},
+		}
+		for hi := lo; hi <= 8; hi++ {
+			forms = append(forms, [2]string{
+				fmt.Sprintf(`^a{%04d,%04d}$`, lo, hi),
+				fmt.Sprintf(`^a{%d,%d}$`, lo, hi),
+			})
+		}
+		for _, form := range forms {
+			padded, err := CompileEREWithFlags(form[0], "")
+			if err != nil {
+				t.Fatalf("CompileEREWithFlags(%q): %v", form[0], err)
+			}
+			canonical, err := CompileEREWithFlags(form[1], "")
+			if err != nil {
+				t.Fatalf("CompileEREWithFlags(%q): %v", form[1], err)
+			}
+			for n := 0; n <= 10; n++ {
+				in := strings.Repeat("a", n)
+				if got, want := padded.MatchString(in), canonical.MatchString(in); got != want {
+					t.Errorf("%q on length %d = %v, canonical %q = %v", form[0], n, got, form[1], want)
+				}
+			}
+		}
+	}
+}
+
+func TestPOSIXEREInvalidIntervals(t *testing.T) {
+	patterns := []string{
+		`{2}`,
+		`a{`,
+		`a{}`,
+		`a{,}`,
+		`a{x}`,
+		`a{1,2,3}`,
+		`a{0004,0002}`,
+		`a{32768}`,
+		`a{0001,00032768}`,
+		`a{999999999999999999999999999999}`,
+	}
+	for _, pattern := range patterns {
+		if _, err := ToGoERE(pattern); err == nil {
+			t.Errorf("ToGoERE(%q) succeeded, want invalid interval error", pattern)
+		}
+		if _, err := CompileEREWithFlags(pattern, ""); err == nil {
+			t.Errorf("CompileEREWithFlags(%q) succeeded, want invalid interval error", pattern)
+		}
+	}
+	for _, pattern := range []string{`a*{1001}`, `a{2}{1001}`, `*a{1001}`} {
+		if ERERequiresBacktracking(pattern) {
+			t.Errorf("ERERequiresBacktracking(%q) = true for invalid repeated quantifier", pattern)
+		}
+		if _, err := CompileEREWithFlags(pattern, ""); err == nil {
+			t.Errorf("CompileEREWithFlags(%q) succeeded, want repeated quantifier error", pattern)
+		}
+	}
+}
+
+func TestPOSIXERELargeIntervalDispatch(t *testing.T) {
+	for _, pattern := range []string{
+		`^a{1001}$`,
+		`^a{01001}$`,
+		`^a{0002,02048}$`,
+		`^a{32767}$`,
+		`^(a)\1$`,
+	} {
+		if !ERERequiresBacktracking(pattern) {
+			t.Errorf("ERERequiresBacktracking(%q) = false, want true", pattern)
+		}
+	}
+	for _, pattern := range []string{
+		`^a{1000}$`,
+		`^a{01000}$`,
+		`^a\{1001\}$`,
+		`^[{]1001[}]$`,
+		`^[\1]$`,
+		`{1001}`,
+		`a{32768}`,
+	} {
+		if ERERequiresBacktracking(pattern) {
+			t.Errorf("ERERequiresBacktracking(%q) = true, want false", pattern)
+		}
+	}
+
+	for _, tc := range []struct {
+		pattern string
+		count   int
+	}{
+		{`^a{01001}$`, 1001},
+		{`^a{0002,02048}$`, 2048},
+	} {
+		re, err := CompileEREWithFlags(tc.pattern, "")
+		if err != nil {
+			t.Fatalf("CompileEREWithFlags(%q): %v", tc.pattern, err)
+		}
+		if in := strings.Repeat("a", tc.count); !re.MatchString(in) {
+			t.Errorf("%q did not match length %d", tc.pattern, tc.count)
 		}
 	}
 }
