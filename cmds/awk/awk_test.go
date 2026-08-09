@@ -68,6 +68,62 @@ func TestAwkPOSIXFloatFormats(t *testing.T) {
 	}
 }
 
+func TestAwkPOSIXEREBackendExpressions(t *testing.T) {
+	input := strings.Repeat("a", 1001) + "\n" +
+		strings.Repeat("b", 1002) + "\n" +
+		strings.Repeat("c", 1003) + "\n" +
+		strings.Repeat("d", 1004) + "\n"
+	program := `/^a{1001}$/ { print "literal" }
+$0 ~ "^b{1002}$" { print "dynamic-match" }
+$0 !~ "^z{1003}$" && /^c/ { print "dynamic-not-match" }
+match($0, "d{1004}") { print "match", RSTART, RLENGTH }`
+
+	out, errb, code := runTool(t, input, program)
+	want := "literal\ndynamic-match\ndynamic-not-match\nmatch 1 1004\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk ERE expressions = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
+func TestAwkPOSIXEREDotNewlineAndLeftmostLongest(t *testing.T) {
+	program := `BEGIN {
+		print ("a\nb" ~ /a.b/), ("a\nb" ~ "a.b")
+		print match("ab", "a|ab"), RSTART, RLENGTH
+	}`
+	out, errb, code := runTool(t, "", program)
+	want := "1 1\n1 1 2\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk ERE semantics = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
+func TestAwkEREBackendLeavesRecordAndSubstitutionRegexesUnchanged(t *testing.T) {
+	program := `BEGIN { FS = "[,:]"; RS = ";+" }
+{
+		n = split("a,b:c", parts, "[,:]")
+		s = "aaabbb"
+		sub("a+", "x", s)
+		gsub("b+", "y", s)
+		print NF, n, s
+}`
+	out, errb, code := runTool(t, "one:two;;", program)
+	want := "2 3 xy\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk FS/RS/split/sub/gsub = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
+func TestAwkEREAdapterPreservesPatternSource(t *testing.T) {
+	source := `^([[:alpha:]]|\\.){01001}$`
+	re, err := (awkERECompiler{}).Compile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := re.String(); got != source {
+		t.Fatalf("Regexp.String() = %q, want exact source %q", got, source)
+	}
+}
+
 func TestAwkProgramFile(t *testing.T) {
 	var out, errb bytes.Buffer
 	dir := t.TempDir()
