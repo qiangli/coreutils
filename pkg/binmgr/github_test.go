@@ -197,7 +197,7 @@ func TestEnsure_WindowsZipExtract(t *testing.T) {
 	// Create a mock zip file containing witr.exe
 	var zipBuf bytes.Buffer
 	zw := zip.NewWriter(&zipBuf)
-	
+
 	binContent := []byte("witr-windows-binary-content")
 	f, err := zw.Create("witr.exe")
 	if err != nil {
@@ -234,7 +234,7 @@ func TestEnsure_WindowsZipExtract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure (zip extract): %v", err)
 	}
-	
+
 	// Check that witr.exe was extracted and has the right content
 	gotBytes, err := os.ReadFile(path)
 	if err != nil {
