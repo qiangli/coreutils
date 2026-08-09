@@ -3,12 +3,14 @@ package nohupcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -138,12 +140,14 @@ func TestNohupInputHelper(t *testing.T) {
 	if os.Getenv("GO_WANT_NOHUP_INPUT_HELPER") != "1" {
 		return
 	}
-	data, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		os.Exit(2)
+	var buf [1024]byte
+	_, err := os.Stdin.Read(buf[:])
+	if err != nil && (errors.Is(err, syscall.EBADF) || strings.Contains(err.Error(), "bad file descriptor")) {
+		fmt.Fprint(os.Stdout, "read_ebadf")
+		os.Exit(0)
 	}
-	fmt.Fprintf(os.Stdout, "read:%d", len(data))
-	os.Exit(0)
+	fmt.Fprintf(os.Stdout, "err:%v", err)
+	os.Exit(2)
 }
 
 func TestNohupRedirectsTerminalInput(t *testing.T) {
@@ -173,7 +177,7 @@ func TestNohupRedirectsTerminalInput(t *testing.T) {
 
 	select {
 	case code := <-result:
-		if code != 0 || out.String() != "read:0" {
+		if code != 0 || out.String() != "read_ebadf" {
 			t.Fatalf("code=%d out=%q err=%q", code, out.String(), errb.String())
 		}
 	case <-time.After(2 * time.Second):
@@ -231,4 +235,111 @@ func TestNohupRedirectsTerminalOutput(t *testing.T) {
 	if string(data) != "outerr" {
 		t.Fatalf("nohup.out=%q", data)
 	}
+}
+
+func TestNohupTerminalRedirectionDiagnostics(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty not supported on windows")
+	}
+
+	runWithTty := func(t *testing.T, inTty, outTty, errTty bool, expectedMsg string) {
+		t.Helper()
+		var ptmIn, ptsIn *os.File
+		var ptmOut, ptsOut *os.File
+		var ptmErr, ptsErr *os.File
+		var err error
+
+		if inTty {
+			ptmIn, ptsIn, err = pty.Open()
+			if err != nil {
+				t.Skipf("pty.Open failed: %v", err)
+			}
+			defer ptmIn.Close()
+			defer ptsIn.Close()
+		}
+		if outTty {
+			ptmOut, ptsOut, err = pty.Open()
+			if err != nil {
+				t.Skipf("pty.Open failed: %v", err)
+			}
+			defer ptmOut.Close()
+			defer ptsOut.Close()
+		}
+		if errTty {
+			ptmErr, ptsErr, err = pty.Open()
+			if err != nil {
+				t.Skipf("pty.Open failed: %v", err)
+			}
+			defer ptmErr.Close()
+			defer ptsErr.Close()
+		}
+
+		var stdin io.Reader = strings.NewReader("")
+		if inTty {
+			stdin = ptsIn
+		}
+		var stdout io.Writer = &bytes.Buffer{}
+		if outTty {
+			stdout = ptsOut
+		}
+		var stderr bytes.Buffer
+
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   t.TempDir(),
+			Env:   []string{"PATH=/bin:/usr/bin"},
+			Stdio: tool.Stdio{In: stdin, Out: stdout, Err: &stderr},
+		}
+		if errTty {
+			rc.Stdio.Err = ptsErr
+		}
+
+		result := make(chan int, 1)
+		go func() {
+			result <- run(rc, []string{"true"})
+		}()
+
+		select {
+		case code := <-result:
+			if code != 0 {
+				t.Errorf("expected exit code 0, got %d", code)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for command to exit")
+		}
+
+		var gotMsg string
+		if errTty {
+			buf := make([]byte, 1024)
+			_ = ptmErr.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			n, _ := ptmErr.Read(buf)
+			gotMsg = string(buf[:n])
+		} else {
+			gotMsg = stderr.String()
+		}
+		gotMsg = strings.ReplaceAll(gotMsg, "\r\n", "\n")
+
+		if gotMsg != expectedMsg {
+			t.Errorf("inTty=%v, outTty=%v, errTty=%v: expected diagnostic %q, got %q", inTty, outTty, errTty, expectedMsg, gotMsg)
+		}
+	}
+
+	t.Run("in_out_err_all_tty", func(t *testing.T) {
+		runWithTty(t, true, true, true, "nohup: ignoring input and appending output to 'nohup.out'\n")
+	})
+	t.Run("in_err_tty", func(t *testing.T) {
+		runWithTty(t, true, false, true, "nohup: ignoring input and redirecting stderr to stdout\n")
+	})
+	t.Run("in_only_tty", func(t *testing.T) {
+		runWithTty(t, true, false, false, "nohup: ignoring input\n")
+	})
+	t.Run("out_only_tty", func(t *testing.T) {
+		runWithTty(t, false, true, false, "nohup: appending output to 'nohup.out'\n")
+	})
+	t.Run("err_only_tty", func(t *testing.T) {
+		runWithTty(t, false, false, true, "nohup: redirecting stderr to stdout\n")
+	})
+	t.Run("no_tty", func(t *testing.T) {
+		runWithTty(t, false, false, false, "")
+	})
 }

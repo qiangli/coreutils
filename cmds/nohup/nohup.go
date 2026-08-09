@@ -41,29 +41,65 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	}
 	c := newNohupCommand(rc.Ctx, path, argv[1:], rc.Env)
 	c.Dir = rc.Dir
+
+	inTerminal := rc.In != nil && isTerminal(rc.In)
+	outTerminal := rc.Out == nil || isTerminal(rc.Out)
+	errTerminal := rc.Err == nil || isTerminal(rc.Err)
+
 	c.Stdin = rc.In
-	if c.Stdin != nil && isTerminal(c.Stdin) {
-		if f, err := os.Open(os.DevNull); err == nil {
+	if inTerminal {
+		if f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
 			defer f.Close()
 			c.Stdin = f
 		}
 	}
+
+	var displayPath string
 	stdout := rc.Out
-	if stdout == nil || isTerminal(stdout) {
-		f, err := openNohupOutput(rc)
+	if outTerminal {
+		f, disp, err := openNohupOutput(rc)
 		if err != nil {
 			fmt.Fprintf(errOut, "nohup: failed to open 'nohup.out': %v\n", err)
 			return 125
 		}
 		defer f.Close()
 		stdout = f
+		displayPath = fmt.Sprintf("'%s'", disp)
 	}
+
 	stderr := rc.Err
-	if stderr == nil || isTerminal(stderr) {
+	if errTerminal {
 		stderr = stdout
 	}
+
 	c.Stdout = stdout
 	c.Stderr = stderr
+
+	var msg string
+	if inTerminal {
+		if outTerminal {
+			msg = "ignoring input and appending output to %s"
+		} else if errTerminal {
+			msg = "ignoring input and redirecting stderr to stdout"
+		} else {
+			msg = "ignoring input"
+		}
+	} else {
+		if outTerminal {
+			msg = "appending output to %s"
+		} else if errTerminal {
+			msg = "redirecting stderr to stdout"
+		}
+	}
+
+	if msg != "" {
+		if strings.Contains(msg, "%s") {
+			fmt.Fprintf(errOut, "nohup: "+msg+"\n", displayPath)
+		} else {
+			fmt.Fprintln(errOut, "nohup: "+msg)
+		}
+	}
+
 	err := c.Run()
 	if err == nil {
 		return 0
@@ -111,20 +147,21 @@ func lookCommand(rc *tool.RunContext, name string) (string, bool) {
 	return found, found != ""
 }
 
-func openNohupOutput(rc *tool.RunContext) (*os.File, error) {
-	paths := []string{rc.Path("nohup.out")}
+func openNohupOutput(rc *tool.RunContext) (*os.File, string, error) {
+	localPath := rc.Path("nohup.out")
+	f, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err == nil {
+		return f, "nohup.out", nil
+	}
+
 	if home := rc.Getenv("HOME"); home != "" {
-		paths = append(paths, rc.Path(filepath.Join(home, "nohup.out")))
-	}
-	var err error
-	for _, path := range paths {
-		f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if openErr == nil {
-			return f, nil
+		homePath := rc.Path(filepath.Join(home, "nohup.out"))
+		f, err = os.OpenFile(homePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err == nil {
+			return f, homePath, nil
 		}
-		err = openErr
 	}
-	return nil, err
+	return nil, "", err
 }
 
 func commandExists(path string) bool {
