@@ -43,6 +43,12 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 	c.Dir = rc.Dir
 	c.Env = rc.Env
 	c.Stdin = rc.In
+	if c.Stdin != nil && isTerminal(c.Stdin) {
+		if f, err := os.Open(os.DevNull); err == nil {
+			defer f.Close()
+			c.Stdin = f
+		}
+	}
 	stdout := rc.Out
 	if stdout == nil || isTerminal(stdout) {
 		f, err := openNohupOutput(rc)
@@ -52,6 +58,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		}
 		defer f.Close()
 		stdout = f
+		fmt.Fprintf(errOut, "nohup: ignoring input and appending output to '%s'\n", f.Name())
 	}
 	stderr := rc.Err
 	if stderr == nil || isTerminal(stderr) {
