@@ -116,9 +116,12 @@ func run(rc *tool.RunContext, args []string) int {
 	// Buffer diff output (it is often large and emitted line by line).
 	bw := bufio.NewWriter(rc.Out)
 	brc := &tool.RunContext{Ctx: rc.Ctx, Dir: rc.Dir, Env: rc.Env,
-		FS:    rc.FS,
-		Stdio: tool.Stdio{In: rc.In, Out: bw, Err: rc.Err}}
-	status := dispatch(brc, &opts, operands[0], operands[1])
+		FS:              rc.FS,
+		DirIsProcessCwd: rc.DirIsProcessCwd,
+		Stdio:           tool.Stdio{In: rc.In, Out: bw, Err: rc.Err}}
+	paths := newPathResolver(brc)
+	defer paths.close()
+	status := dispatch(brc, paths, &opts, operands[0], operands[1])
 	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "diff: write error: %v\n", err)
 		if status < 2 {
@@ -252,12 +255,12 @@ func parseContext(v string) (int, string) {
 // dispatch applies GNU's operand-type rules: dir+dir compares
 // directories; dir+file compares the file against the same base name
 // inside the directory; otherwise a plain file pair.
-func dispatch(rc *tool.RunContext, opts *options, a, b string) int {
+func dispatch(rc *tool.RunContext, paths *pathResolver, opts *options, a, b string) int {
 	stat := func(name string) (isDir, missing bool, err error) {
 		if name == "-" {
 			return false, false, nil
 		}
-		fi, err := os.Stat(rc.Path(name))
+		fi, err := os.Stat(paths.path(name))
 		if err != nil {
 			if opts.newFile && errors.Is(err, iofs.ErrNotExist) {
 				return false, true, nil
@@ -287,7 +290,7 @@ func dispatch(rc *tool.RunContext, opts *options, a, b string) int {
 	}
 	switch {
 	case aIsDir && bIsDir:
-		return compareDirs(rc, opts, a, b)
+		return compareDirs(rc, paths, opts, a, b)
 	case aIsDir:
 		if bMissing {
 			fmt.Fprintf(rc.Err, "diff: %s: No such file or directory\n", b)
@@ -301,15 +304,15 @@ func dispatch(rc *tool.RunContext, opts *options, a, b string) int {
 		}
 		b = joinDisplay(b, filepath.Base(a))
 	}
-	return compareFiles(rc, opts, a, b, false)
+	return compareFiles(rc, paths, opts, a, b, false)
 }
 
 // ---------------------------------------------------------------------------
 // Directory comparison
 
-func compareDirs(rc *tool.RunContext, opts *options, da, db string) int {
-	la, ea := readDirNames(rc, opts, da)
-	lb, eb := readDirNames(rc, opts, db)
+func compareDirs(rc *tool.RunContext, paths *pathResolver, opts *options, da, db string) int {
+	la, ea := readDirNames(paths, opts, da)
+	lb, eb := readDirNames(paths, opts, db)
 	if ea != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", da, errText(ea))
 	}
@@ -324,11 +327,11 @@ func compareDirs(rc *tool.RunContext, opts *options, da, db string) int {
 		var st int
 		switch {
 		case la[name] && lb[name]:
-			st = comparePair(rc, opts, joinDisplay(da, name), joinDisplay(db, name))
+			st = comparePair(rc, paths, opts, joinDisplay(da, name), joinDisplay(db, name))
 		case la[name]:
-			st = onlyIn(rc, opts, da, name, joinDisplay(da, name), joinDisplay(db, name), true)
+			st = onlyIn(rc, paths, opts, da, name, joinDisplay(da, name), joinDisplay(db, name), true)
 		default:
-			st = onlyIn(rc, opts, db, name, joinDisplay(db, name), joinDisplay(da, name), false)
+			st = onlyIn(rc, paths, opts, db, name, joinDisplay(db, name), joinDisplay(da, name), false)
 		}
 		if st > status {
 			status = st
@@ -337,8 +340,8 @@ func compareDirs(rc *tool.RunContext, opts *options, da, db string) int {
 	return status
 }
 
-func readDirNames(rc *tool.RunContext, opts *options, dir string) (map[string]bool, error) {
-	ents, err := os.ReadDir(rc.Path(dir))
+func readDirNames(paths *pathResolver, opts *options, dir string) (map[string]bool, error) {
+	ents, err := os.ReadDir(paths.path(dir))
 	if err != nil {
 		if opts.newFile && errors.Is(err, iofs.ErrNotExist) {
 			return map[string]bool{}, nil // -N: absent directory reads as empty
@@ -367,13 +370,13 @@ func sortedUnion(a, b map[string]bool) []string {
 }
 
 // comparePair handles an entry present in both directories.
-func comparePair(rc *tool.RunContext, opts *options, pa, pb string) int {
-	fa, err := os.Stat(rc.Path(pa))
+func comparePair(rc *tool.RunContext, paths *pathResolver, opts *options, pa, pb string) int {
+	fa, err := os.Stat(paths.path(pa))
 	if err != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", pa, errText(err))
 		return 2
 	}
-	fb, err := os.Stat(rc.Path(pb))
+	fb, err := os.Stat(paths.path(pb))
 	if err != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", pb, errText(err))
 		return 2
@@ -381,7 +384,7 @@ func comparePair(rc *tool.RunContext, opts *options, pa, pb string) int {
 	switch {
 	case fa.IsDir() && fb.IsDir():
 		if opts.recursive {
-			return compareDirs(rc, opts, pa, pb)
+			return compareDirs(rc, paths, opts, pa, pb)
 		}
 		fmt.Fprintf(rc.Out, "Common subdirectories: %s and %s\n", pa, pb)
 		return 0
@@ -399,18 +402,18 @@ func comparePair(rc *tool.RunContext, opts *options, pa, pb string) int {
 			pa, kindWord(fa), pb, kindWord(fb))
 		return 1
 	default:
-		return compareFiles(rc, opts, pa, pb, !opts.brief)
+		return compareFiles(rc, paths, opts, pa, pb, !opts.brief)
 	}
 }
 
 // onlyIn handles an entry present in exactly one directory: GNU's
 // "Only in DIR: name" line, or with -N a diff against the absent side.
-func onlyIn(rc *tool.RunContext, opts *options, dir, name, present, absent string, presentIsOld bool) int {
+func onlyIn(rc *tool.RunContext, paths *pathResolver, opts *options, dir, name, present, absent string, presentIsOld bool) int {
 	if !opts.newFile {
 		fmt.Fprintf(rc.Out, "Only in %s: %s\n", dir, name)
 		return 1
 	}
-	fi, err := os.Stat(rc.Path(present))
+	fi, err := os.Stat(paths.path(present))
 	if err != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", present, errText(err))
 		return 2
@@ -418,17 +421,17 @@ func onlyIn(rc *tool.RunContext, opts *options, dir, name, present, absent strin
 	if fi.IsDir() {
 		if opts.recursive {
 			if presentIsOld {
-				return compareDirs(rc, opts, present, absent)
+				return compareDirs(rc, paths, opts, present, absent)
 			}
-			return compareDirs(rc, opts, absent, present)
+			return compareDirs(rc, paths, opts, absent, present)
 		}
 		fmt.Fprintf(rc.Out, "Only in %s: %s\n", dir, name)
 		return 1
 	}
 	if presentIsOld {
-		return compareFiles(rc, opts, present, absent, !opts.brief)
+		return compareFiles(rc, paths, opts, present, absent, !opts.brief)
 	}
-	return compareFiles(rc, opts, absent, present, !opts.brief)
+	return compareFiles(rc, paths, opts, absent, present, !opts.brief)
 }
 
 func kindWord(fi iofs.FileInfo) string {
@@ -470,7 +473,7 @@ type side struct {
 	mtime time.Time
 }
 
-func loadSide(rc *tool.RunContext, opts *options, name string) (*side, error) {
+func loadSide(rc *tool.RunContext, paths *pathResolver, opts *options, name string) (*side, error) {
 	s := &side{name: name}
 	if name == "-" {
 		data, err := io.ReadAll(rc.In)
@@ -481,7 +484,7 @@ func loadSide(rc *tool.RunContext, opts *options, name string) (*side, error) {
 		s.mtime = time.Now()
 		return s, nil
 	}
-	path := rc.Path(name)
+	path := paths.path(name)
 	fi, err := os.Stat(path)
 	if err != nil {
 		if opts.newFile && errors.Is(err, iofs.ErrNotExist) {
@@ -497,13 +500,13 @@ func loadSide(rc *tool.RunContext, opts *options, name string) (*side, error) {
 	return s, nil
 }
 
-func compareFiles(rc *tool.RunContext, opts *options, a, b string, withHeader bool) int {
-	sa, err := loadSide(rc, opts, a)
+func compareFiles(rc *tool.RunContext, paths *pathResolver, opts *options, a, b string, withHeader bool) int {
+	sa, err := loadSide(rc, paths, opts, a)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", a, errText(err))
 		return 2
 	}
-	sb, err := loadSide(rc, opts, b)
+	sb, err := loadSide(rc, paths, opts, b)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "diff: %s: %s\n", b, errText(err))
 		return 2
