@@ -93,8 +93,12 @@ func bisect(a, b []int) (int, int, bool) {
 	k1start, k1end := 0, 0
 	k2start, k2end := 0, 0
 	for d := 0; d <= maxD; d++ {
-		// Forward path.
-		for k1 := -d + k1start; k1 <= d-k1end; k1 += 2 {
+		// Forward path. Scan high diagonals first so equal-cost paths retain
+		// the earliest matching line on the new side. This matters when a
+		// line is a repeated anchor: both choices are minimal, but the normal
+		// diff convention keeps the earlier occurrence and reports the later
+		// occurrence in the following change.
+		for k1 := d - k1end; k1 >= -d+k1start; k1 -= 2 {
 			ko := vOff + k1
 			var x int
 			if k1 == -d || (k1 != d && v1[ko-1] < v1[ko+1]) {
