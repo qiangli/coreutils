@@ -46,6 +46,28 @@ func TestAwk(t *testing.T) {
 	}
 }
 
+func TestAwkPOSIXFloatFormats(t *testing.T) {
+	program := `BEGIN {
+		printf "<%a><%A><%a>\n", 0, 0.125, -0.125
+		printf "<%#.0a><%.2A>\n", 0.125, 0.125
+		printf "<%015.6a><%+015.6a><% 015.6a><%-15.6a>\n", 0.125, 0.125, 0.125, 0.125
+		printf "<%F><%.2F><%#.0F><%010F><%+F><% F>\n", 0.125, 0.125, 1, 0.125, 0.125, 0.125
+		print sprintf("<%*.*a><%*.*F><%*.*a>", 12, 3, 0.125, 8, 2, -0.125, -12, -1, 0.125)
+		printf "<%.*a><%.*F><%.*f>\n", -0.5, 0.1, -0.5, 0.125, -0.5, 0.125
+	}`
+	want := "<0x0p+0><0X1P-3><-0x1p-3>\n" +
+		"<0x1.p-3><0X1.00P-3>\n" +
+		"<0x001.000000p-3><+0x01.000000p-3>< 0x01.000000p-3><0x1.000000p-3  >\n" +
+		"<0.125000><0.12><1.><000.125000><+0.125000>< 0.125000>\n" +
+		"<  0x1.000p-3><   -0.12><0x1p-3      >\n" +
+		"<0x2p-4><0><0>\n"
+
+	out, errb, code := runTool(t, "", program)
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk POSIX float formats = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
 func TestAwkProgramFile(t *testing.T) {
 	var out, errb bytes.Buffer
 	dir := t.TempDir()
