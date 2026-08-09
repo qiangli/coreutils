@@ -1,0 +1,293 @@
+package awkcmd
+
+import (
+	"strings"
+	"testing"
+)
+
+// These tests prove the AWK backend routing: expression regexes (/pat/,
+// ~, !~, match()) compile through coreutils' custom ERE backend
+// (awkERECompiler → bre.CompileEREWithFlags), while FS, RS, split(), sub(),
+// and gsub() compile through GoAWK's standard Go-RE2 path
+// (compileRegexStd → regex.Normalize, RE_DUP_MAX=255).
+//
+// The most visible behavioral consequences are:
+//
+//   - Interval bound ceiling: the custom ERE backend honors the POSIX
+//     certification target's RE_DUP_MAX=32767; the standard path caps at 255.
+//   - Adjacent quantifiers: the custom backend rejects nested repetition
+//     (strict POSIX ERE — a quantified atom cannot itself be quantified);
+//     the standard path wraps them in non-capturing groups (regex.Normalize).
+//   - Malformed intervals: the custom backend rejects them as syntax errors;
+//     the standard path defers to RE2, which treats non-interval {…} as
+//     literal text.
+
+// progOK runs prog and reports whether it exited 0 with no stderr.
+func progOK(t *testing.T, input, prog string) bool {
+	t.Helper()
+	out, errb, code := runTool(t, input, prog)
+	if code != 0 || errb != "" {
+		t.Logf("unexpected failure: prog=%q out=%q err=%q code=%d", prog, out, errb, code)
+		return false
+	}
+	return true
+}
+
+// progStdout runs prog expecting success and returns stdout.
+func progStdout(t *testing.T, input, prog string) string {
+	t.Helper()
+	out, errb, code := runTool(t, input, prog)
+	if code != 0 || errb != "" {
+		t.Fatalf("prog=%q: out=%q err=%q code=%d", prog, out, errb, code)
+	}
+	return out
+}
+
+// progFails runs prog and reports whether it exited non-zero (fail-closed).
+func progFails(t *testing.T, input, prog string) bool {
+	t.Helper()
+	_, _, code := runTool(t, input, prog)
+	return code != 0
+}
+
+// ---------------------------------------------------------------------------
+// Backend routing proof: interval bound ceiling
+// ---------------------------------------------------------------------------
+
+// TestAwkRoutingIntervalCeiling proves the routing split with a pattern whose
+// bound exceeds 255 (the standard path's RE_DUP_MAX) but not 32767 (the
+// custom ERE backend's ceiling). Expression endpoints accept it; standard
+// endpoints reject it.
+func TestAwkRoutingIntervalCeiling(t *testing.T) {
+	long256 := strings.Repeat("a", 256)
+
+	// Expression regex endpoints: a{256} is valid (ceiling 32767).
+	exprOK := []struct{ name, prog, input string }{
+		{"tilde", `BEGIN { print ("` + long256 + `" ~ "a{256}") }`, ""},
+		{"not-tilde", `BEGIN { print ("` + long256 + `" !~ "a{257}") }`, ""},
+		{"match-builtin", `BEGIN { print match("` + long256 + `", "a{256}") }`, ""},
+		{"slash-literal", `/a{256}/ { print "hit" }`, long256 + "\n"},
+	}
+	for _, c := range exprOK {
+		if !progOK(t, c.input, c.prog) {
+			t.Errorf("%s: expression regex a{256} should succeed (custom ERE backend)", c.name)
+		}
+	}
+
+	// Standard path endpoints: a{256} is rejected (ceiling 255).
+	stdFail := []struct{ name, prog string }{
+		{"split", `BEGIN { n = split("` + long256 + `", a, "a{256}"); print n }`},
+		{"sub", `BEGIN { s = "` + long256 + `"; sub("a{256}", "x", s); print s }`},
+		{"gsub", `BEGIN { s = "` + long256 + `"; gsub("a{256}", "x", s); print s }`},
+		{"FS", `BEGIN { FS = "a{256}" } { print NF }`},
+		{"RS", `BEGIN { RS = "a{256}" } { print }`},
+	}
+	for _, c := range stdFail {
+		if !progFails(t, "aaa\n", c.prog) {
+			t.Errorf("%s: standard path a{256} should fail (RE_DUP_MAX=255)", c.name)
+		}
+	}
+
+	// a{255} is within both ceilings: all endpoints succeed.
+	allOK := []struct{ name, prog string }{
+		{"expr-255", `BEGIN { print ("` + strings.Repeat("a", 255) + `" ~ "a{255}") }`},
+		{"split-255", `BEGIN { print split("` + strings.Repeat("a", 255) + `", a, "a{255}") }`},
+		{"sub-255", `BEGIN { s = "` + strings.Repeat("a", 255) + `"; sub("a{255}", "x", s); print s }`},
+	}
+	for _, c := range allOK {
+		if !progOK(t, "", c.prog) {
+			t.Errorf("%s: a{255} should succeed on both paths", c.name)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Leading-zero counts through 255 in both paths
+// ---------------------------------------------------------------------------
+
+// TestAwkRoutingLeadingZerosBothPaths verifies that leading-zero interval
+// spellings are normalized identically in the expression and standard paths.
+// A single AWK program loops 1..255 so the test stays fast.
+func TestAwkRoutingLeadingZerosBothPaths(t *testing.T) {
+	// Expression path (~): for each n 1..255, a{0NNN} matches exactly n a's
+	// and does not match n-1 a's.
+	prog := `BEGIN {
+		ok = 1
+		for (n = 1; n <= 255; n++) {
+			pat = sprintf("a{%04d}", n)
+			s = sprintf("%*s", n, ""); gsub(/ /, "a", s)
+			if ((s ~ pat) != 1) { print "FAIL match n=" n; ok = 0 }
+			if (n >= 2) {
+				short = substr(s, 2)
+				if ((short ~ pat) != 0) { print "FAIL nomatch n=" n; ok = 0 }
+			}
+		}
+		print ok
+	}`
+	if got := progStdout(t, "", prog); got != "1\n" {
+		t.Errorf("expression path leading-zero loop: got %q", got)
+	}
+
+	// Standard path (split): for each n 2..255, a{0NNN} as a separator on n
+	// a's produces exactly 2 fields (the separator matches the whole input).
+	progSplit := `BEGIN {
+		ok = 1
+		for (n = 2; n <= 255; n++) {
+			pat = sprintf("a{%04d}", n)
+			s = sprintf("%*s", n, ""); gsub(/ /, "a", s)
+			nf = split(s, a, pat)
+			if (nf != 2) { print "FAIL split n=" n " nf=" nf; ok = 0 }
+		}
+		print ok
+	}`
+	if got := progStdout(t, "", progSplit); got != "1\n" {
+		t.Errorf("standard path leading-zero loop: got %q", got)
+	}
+
+	// n=0: a{0000} matches the empty string (zero repetitions).
+	if got := progStdout(t, "", `BEGIN { print ("" ~ "a{0000}") }`); got != "1\n" {
+		t.Errorf("n=0: got %q, want 1", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Adjacent quantifiers: expression rejects, standard accepts
+// ---------------------------------------------------------------------------
+
+// TestAwkRoutingAdjacentQuantifiers verifies that adjacent quantifier
+// compositions — including some whose effective repetition exceeds 255 — are
+// handled differently by the two backends: the custom ERE path rejects them
+// (POSIX forbids repeating a quantified atom); the standard path wraps them
+// in non-capturing groups via regex.Normalize.
+func TestAwkRoutingAdjacentQuantifiers(t *testing.T) {
+	// Each individual bound is ≤ 255; some products exceed 255.
+	patterns := []string{
+		`a{2}{3}`,   // effective 6
+		`a{20}{20}`, // effective 400 > 255
+		`a*{2}`,     // star then interval
+	}
+	for _, pat := range patterns {
+		// Expression path: rejected (POSIX: cannot quantify a quantified atom).
+		exprProg := "BEGIN { print (\"aaaaaa\" ~ \"" + pat + "\") }"
+		if !progFails(t, "", exprProg) {
+			t.Errorf("expression ~ %q should fail (nested repetition)", pat)
+		}
+
+		// Standard path (split): accepted (regex.Normalize wraps in (?:...)).
+		splitProg := "BEGIN { print split(\"aaaaaa\", a, \"" + pat + "\") }"
+		if !progOK(t, "", splitProg) {
+			t.Errorf("split %q should succeed (regex.Normalize wraps)", pat)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Lazy suffix: both paths accept
+// ---------------------------------------------------------------------------
+
+// TestAwkRoutingLazySuffix verifies that lazy quantifier suffixes compile in
+// both paths. Under AWK's leftmost-longest mode the lazy modifier does not
+// change match extent; this test confirms syntactic acceptance.
+func TestAwkRoutingLazySuffix(t *testing.T) {
+	patterns := []string{`a{2}?`, `a+?`, `a??`}
+	for _, pat := range patterns {
+		// Expression path.
+		if !progOK(t, "", "BEGIN { print (\"aaab\" ~ \""+pat+"\") }") {
+			t.Errorf("expression ~ %q should succeed", pat)
+		}
+		// Standard path (split).
+		if !progOK(t, "", "BEGIN { print split(\"aaab\", a, \""+pat+"\") }") {
+			t.Errorf("split %q should succeed", pat)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// POSIX bracket atoms: both paths accept
+// ---------------------------------------------------------------------------
+
+// TestAwkRoutingBracketAtoms verifies POSIX character-class atoms work in
+// both paths.
+func TestAwkRoutingBracketAtoms(t *testing.T) {
+	if got := progStdout(t, "", `BEGIN { print ("abc" ~ "[[:alpha:]]+") }`); got != "1\n" {
+		t.Errorf("expr [[:alpha:]]+: got %q, want 1", got)
+	}
+	if got := progStdout(t, "", `BEGIN { print split("a1b2", a, "[[:digit:]]") }`); got != "3\n" {
+		t.Errorf("split [[:digit:]]: got %q, want 3", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UTF-8 atoms: both paths accept
+// ---------------------------------------------------------------------------
+
+// TestAwkRoutingUTF8Atoms verifies that multi-byte UTF-8 atoms participate in
+// intervals in both paths.
+func TestAwkRoutingUTF8Atoms(t *testing.T) {
+	if got := progStdout(t, "", `BEGIN { print ("éé" ~ "é{2}") }`); got != "1\n" {
+		t.Errorf("expr é{2}: got %q, want 1", got)
+	}
+	if got := progStdout(t, "", `BEGIN { print split("éé", a, "é{2}") }`); got != "2\n" {
+		t.Errorf("split é{2}: got %q, want 2", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Malformed / repeated quantifier fail-closed behavior
+// ---------------------------------------------------------------------------
+
+// TestAwkRoutingMalformedQuantifiers verifies that genuinely invalid quantifier
+// usage fails closed in both paths, and documents the divergence for malformed
+// interval syntax (where the custom backend rejects but the standard path
+// defers to RE2, which treats non-interval braces as literal text).
+func TestAwkRoutingMalformedQuantifiers(t *testing.T) {
+	// Both paths reject: inverted bounds and dangling quantifiers.
+	bothReject := []string{`a{3,2}`, `{2}`}
+	for _, pat := range bothReject {
+		if !progFails(t, "", "BEGIN { print (\"a\" ~ \""+pat+"\") }") {
+			t.Errorf("expr ~ %q should fail", pat)
+		}
+		if !progFails(t, "", "BEGIN { print split(\"a\", a, \""+pat+"\") }") {
+			t.Errorf("split %q should fail", pat)
+		}
+	}
+
+	// Expression rejects, standard path accepts as literal: these are
+	// non-interval brace spellings. The custom ERE backend treats them as
+	// syntax errors (strict POSIX); regex.Normalize passes them byte-for-byte
+	// to RE2, which treats {…} without valid interval syntax as literal.
+	exprRejectStdAccept := []string{`a{`, `a{}`, `a{x}`, `a{2,3,4}`}
+	for _, pat := range exprRejectStdAccept {
+		if !progFails(t, "", "BEGIN { print (\"a\" ~ \""+pat+"\") }") {
+			t.Errorf("expr ~ %q should fail (strict POSIX)", pat)
+		}
+		if !progOK(t, "", "BEGIN { print split(\"a\", a, \""+pat+"\") }") {
+			t.Errorf("split %q should succeed (RE2 literal)", pat)
+		}
+	}
+
+	// Nested repetition (a**): expression rejects; standard wraps.
+	if !progFails(t, "", `BEGIN { print ("aaa" ~ "a**") }`) {
+		t.Errorf("expr ~ a** should fail")
+	}
+	if !progOK(t, "", `BEGIN { print split("aaa", a, "a**") }`) {
+		t.Errorf("split a** should succeed (regex.Normalize wraps)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Unclosed bracket: both paths fail
+// ---------------------------------------------------------------------------
+
+// TestAwkRoutingUnclosedBracket verifies that unclosed bracket expressions
+// fail closed in both paths (though the error message differs).
+func TestAwkRoutingUnclosedBracket(t *testing.T) {
+	for _, pat := range []string{`[a-`, `[abc`, `[[:alpha:`} {
+		if !progFails(t, "", "BEGIN { print (\"a\" ~ \""+pat+"\") }") {
+			t.Errorf("expr ~ %q should fail (unclosed bracket)", pat)
+		}
+		if !progFails(t, "", "BEGIN { print split(\"a\", a, \""+pat+"\") }") {
+			t.Errorf("split %q should fail (unclosed bracket)", pat)
+		}
+	}
+}
