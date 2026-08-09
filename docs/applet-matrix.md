@@ -180,7 +180,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `which` | `cmds/which` | — | Bashy/other extension | no | no | 1 | 9 |
 | `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 2 | 11 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
-| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 25 |
+| `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 27 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 
