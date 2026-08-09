@@ -88,6 +88,79 @@ func TestNormalFormat(t *testing.T) {
 	}
 }
 
+func TestRepeatedAnchorTieBreak(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "old", "old\nR\ntail\n")
+	writeFile(t, dir, "new", "new\nR\ninsert\nR\n")
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "normal",
+			want: "1c1\n< old\n---\n> new\n" +
+				"3c3,4\n< tail\n---\n> insert\n> R\n",
+		},
+		{
+			name: "reverse-ed",
+			args: []string{"-e"},
+			want: "3c\ninsert\nR\n.\n" +
+				"1c\nnew\n.\n",
+		},
+		{
+			name: "forward-ed",
+			args: []string{"-f"},
+			want: "c1\nnew\n.\n" +
+				"c3\ninsert\nR\n.\n",
+		},
+		{
+			name: "unified",
+			args: []string{"-U0"},
+			want: "@@ -1 +1 @@\n-old\n+new\n" +
+				"@@ -3 +3,2 @@\n-tail\n+insert\n+R\n",
+		},
+		{
+			name: "context",
+			args: []string{"-C0"},
+			want: "***************\n" +
+				"*** 1 ****\n! old\n--- 1 ----\n! new\n" +
+				"***************\n" +
+				"*** 3 ****\n! tail\n--- 3,4 ----\n! insert\n! R\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append(append([]string{}, tt.args...), "old", "new")
+			out, errb, code := runIn(t, dir, "", args...)
+			if tt.name == "unified" || tt.name == "context" {
+				parts := strings.SplitN(out, "\n", 3)
+				if len(parts) != 3 {
+					t.Fatalf("short output %q", out)
+				}
+				out = parts[2]
+			}
+			if out != tt.want || errb != "" || code != 1 {
+				t.Fatalf("diff %v = (%q, %q, %d), want (%q, empty stderr, 1)", args, out, errb, code, tt.want)
+			}
+		})
+	}
+}
+
+func TestRepeatedAnchorTieBreakRetainedCoordinates(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "old", "p1\np2\np3\np4\np5\nold\nR\ntail\n")
+	writeFile(t, dir, "new", "p1\np2\np3\np4\np5\nnew\nR\ninsert\nR\nx1\nx2\nx3\nx4\nx5\nx6\n")
+
+	out, errb, code := runIn(t, dir, "", "old", "new")
+	want := "6c6\n< old\n---\n> new\n" +
+		"8c8,15\n< tail\n---\n> insert\n> R\n> x1\n> x2\n> x3\n> x4\n> x5\n> x6\n"
+	if out != want || errb != "" || code != 1 {
+		t.Fatalf("8-vs-15 diff = (%q, %q, %d), want (%q, empty stderr, 1)", out, errb, code, want)
+	}
+}
+
 func TestVirtualWorkingDirectoryWinsOverProcessCWD(t *testing.T) {
 	processDir := t.TempDir()
 	virtualDir := t.TempDir()
@@ -915,6 +988,20 @@ func TestMyersRandomized(t *testing.T) {
 		}
 		if want := len(a) + len(b) - 2*lcsLen(a, b); edits != want {
 			t.Fatalf("non-minimal script for %v %v: %d edits, want %d", a, b, edits, want)
+		}
+	}
+}
+
+func TestMyersRepeatedAnchorPrefersEarlierNewLine(t *testing.T) {
+	a, b := []int{1, 2, 3}, []int{4, 2, 5, 2}
+	got := myersOps(a, b)
+	want := []opKind{opDel, opIns, opEq, opDel, opIns, opIns}
+	if len(got) != len(want) {
+		t.Fatalf("operations = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("operations = %v, want %v", got, want)
 		}
 	}
 }
