@@ -496,6 +496,161 @@ func TestLiveWriterConcurrentProseAndEventsStayFramed(t *testing.T) {
 	}
 }
 
+// --- mirrored-answer ordering (the issue-288 REJECT blocker) --------------
+
+// liveRenderedLines flattens the live channel to the sequence of lines a watcher
+// would actually see: every liveLine's Text split on '\n', in the order recorded.
+// A liveLine Text may be multi-line (a turn.end envelope carries the whole answer
+// as one blob), and writeLive splits it the same way, so this is the honest view.
+func liveRenderedLines(t *testing.T, id string) []string {
+	t.Helper()
+	var out []string
+	for _, text := range liveTexts(t, id) {
+		for ln := range strings.SplitSeq(text, "\n") {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+func sameLines(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func assertNoTransportLeak(t *testing.T, texts []string) {
+	t.Helper()
+	for _, l := range texts {
+		for _, leak := range []string{"turn.end", `"data"`, `"type"`, `"status"`, "session_id"} {
+			if strings.Contains(l, leak) {
+				t.Fatalf("raw transport leaked into the live channel: %q", l)
+			}
+		}
+	}
+}
+
+// THE issue-288 REJECT, reproduced exactly. A production-valid ycode answer
+// "A\nA\nB" is mirrored on BOTH channels, and the transport interleaves it as:
+// stdout prefix "A", then the COMPLETE turn.end event carrying the whole answer,
+// then the remaining stdout "A\nB". The old text-key online dedup emitted A,B,A —
+// it showed the event's not-yet-streamed "B" tail before stdout caught up. The
+// live view must instead read A,A,B: stdout is the order-authoritative stream and
+// the mirrored event is a cross-channel echo that adds nothing.
+func TestLiveWriterMirroredAnswerPreservesOrder(t *testing.T) {
+	st := testState()
+	pinStore(t, st)
+	st.Round = 1
+
+	w := newLiveWriter(st, "ycode", "", "")
+	ev := w.eventStream()
+
+	w.Write([]byte("A\n"))                                                                 // stdout prefix
+	ev.Write([]byte(`{"type":"turn.end","data":{"status":"ok","text":"A\nA\nB"}}` + "\n")) // whole answer mid-stream
+	w.Write([]byte("A\nB\n"))                                                              // stdout remainder
+	w.close(statusOK)
+
+	got := liveRenderedLines(t, st.ID)
+	want := []string{"A", "A", "B"}
+	if !sameLines(got, want) {
+		t.Fatalf("mirrored answer must stay in prose order: got %v want %v", got, want)
+	}
+	assertNoTransportLeak(t, liveTexts(t, st.ID))
+}
+
+// The same mirror, but stdout never streamed the tail — only the turn.end event
+// carries the last two lines. The echoed prefix "A" is dropped (it mirrors the one
+// streamed "A"), and the event-only remainder "A\nB" survives, appended after the
+// prose so the total reads A,A,B. This pins "event-only output still survives"
+// against the ordering fix: deferring the event channel must not eat content that
+// prose never showed.
+func TestLiveWriterPartiallyMirroredAnswerKeepsEventOnlyRemainder(t *testing.T) {
+	st := testState()
+	pinStore(t, st)
+	st.Round = 1
+
+	w := newLiveWriter(st, "ycode", "", "")
+	ev := w.eventStream()
+
+	w.Write([]byte("A\n")) // stdout streamed only the first line
+	ev.Write([]byte(`{"type":"turn.end","data":{"status":"ok","text":"A\nA\nB"}}` + "\n"))
+	w.close(statusOK)
+
+	got := liveRenderedLines(t, st.ID)
+	want := []string{"A", "A", "B"}
+	if !sameLines(got, want) {
+		t.Fatalf("event-only remainder must survive in order: got %v want %v", got, want)
+	}
+	assertNoTransportLeak(t, liveTexts(t, st.ID))
+}
+
+// No stdout mirror at all: the whole answer, repeats and all, arrives only on the
+// turn.end event. Nothing is a cross-channel echo, so every line survives in the
+// event's own order — a purely event-reporting turn is shown whole.
+func TestLiveWriterEventOnlyAnswerSurvivesInOrder(t *testing.T) {
+	st := testState()
+	pinStore(t, st)
+	st.Round = 1
+
+	w := newLiveWriter(st, "ycode", "", "")
+	ev := w.eventStream()
+
+	ev.Write([]byte(`{"type":"turn.end","data":{"status":"ok","text":"A\nA\nB"}}` + "\n"))
+	w.close(statusOK)
+
+	got := liveRenderedLines(t, st.ID)
+	want := []string{"A", "A", "B"}
+	if !sameLines(got, want) {
+		t.Fatalf("event-only answer must survive whole in order: got %v want %v", got, want)
+	}
+	assertNoTransportLeak(t, liveTexts(t, st.ID))
+}
+
+// The mirrored answer under CONCURRENCY: one goroutine streams stdout a byte at a
+// time (worst-case framing, most writes end mid-line) while another delivers the
+// whole turn.end envelope, racing. However they interleave, the deferred event
+// channel is reconciled only at close against the complete prose stream, so the
+// live view is DETERMINISTICALLY A,A,B once — never A,B,A, never a torn or
+// duplicated line, never raw transport. Run under -race it also pins the mutex
+// discipline over proseSeen, eventPending, and the two framing buffers.
+func TestLiveWriterMirroredAnswerConcurrentPreservesOrder(t *testing.T) {
+	st := testState()
+	pinStore(t, st)
+	st.Round = 1
+
+	w := newLiveWriter(st, "ycode", "", "")
+	ev := w.eventStream()
+
+	const answer = "A\nA\nB\n"
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < len(answer); j++ {
+			w.Write([]byte{answer[j]})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		ev.Write([]byte(`{"type":"turn.end","data":{"status":"ok","text":"A\nA\nB"}}` + "\n"))
+	}()
+	wg.Wait()
+	w.close(statusOK)
+
+	got := liveRenderedLines(t, st.ID)
+	want := []string{"A", "A", "B"}
+	if !sameLines(got, want) {
+		t.Fatalf("mirrored answer under concurrency must stay A,A,B: got %v", got)
+	}
+	assertNoTransportLeak(t, liveTexts(t, st.ID))
+}
+
 // --- default observe filtering (record path) ------------------------------
 
 // A meeting recorded by an OLDER build still holds raw Claude transport in its

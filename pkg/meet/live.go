@@ -143,15 +143,33 @@ type liveWriter struct {
 	proseBuf bytes.Buffer // partial-line buffer for the stdout tee (chanProse)
 	eventBuf bytes.Buffer // partial-line buffer for the event side-channel (chanEvent)
 
-	// seen records, per turn, the normalized text of every line already emitted
-	// and the CHANNEL it arrived on. An events-reporting tool (ycode) streams its
-	// answer on BOTH stdout (plain prose) and its turn.end event (extracted text),
-	// so without this the watcher sees — and live.jsonl stores — the same answer
-	// twice. The map is keyed by the line so a line an agent intentionally repeats
-	// on the SAME channel is preserved; only the CROSS-channel echo is dropped. It
-	// is per-liveWriter, hence per-turn, so a line legitimately repeated in a later
-	// turn is never mistaken for the echo. Guarded by mu (emit holds it).
-	seen map[string]liveChannel
+	// proseSeen is the per-turn multiset of lines the STDOUT prose channel has
+	// already shown, keyed by normalized line text with a count. It exists to drop
+	// the CROSS-channel echo: an events-reporting tool (ycode) streams its answer on
+	// BOTH stdout and its turn.end event, and the deferred event reconciliation
+	// (flushEvents) consumes a credit here for each line it recognizes as a mirror
+	// of prose, so the answer reaches the watcher once. Counting (not a set) is what
+	// lets a line an agent legitimately repeats survive: three streamed "A"s credit
+	// three, and an event mirroring three "A"s consumes exactly three — a fourth "A"
+	// present only in the event is genuine event-only content and is kept. Per-
+	// liveWriter, hence per-turn, so a repeat in a later turn is never the echo.
+	// Guarded by mu (emit holds it).
+	proseSeen map[string]int
+
+	// eventPending holds the STRUCTURED-EVENT channel's extracted text blobs until
+	// the turn closes, instead of emitting them the moment they arrive.
+	//
+	// This is the ordering fix. A turn.end event is a COMPLETE snapshot of the whole
+	// answer, and the drain goroutine can deliver it BEFORE the stdout tee has
+	// finished streaming that same answer — production interleave: stdout prefix
+	// "A", then the whole turn.end "A\nA\nB", then the stdout remainder "A\nB". An
+	// online line-by-line dedup that emitted the event's not-yet-streamed tail right
+	// away reordered the live view to A,B,A. Holding the event channel and
+	// reconciling it against the WHOLE prose stream at close (chat.Invoke guarantees
+	// the drain goroutine has stopped before close runs) keeps stdout the single
+	// order-authoritative live stream — prose stays A,A,B — while event-only content
+	// still survives as the reconciled remainder. Guarded by mu.
+	eventPending []string
 
 	// closeOnce makes `spoke` exactly-once. Every path out of a turn now closes
 	// the floor — including a deferred close that fires on a panic or an early
@@ -272,9 +290,10 @@ func (w *liveWriter) emit(line string, ch liveChannel) {
 	// first-party NDJSON on the side-channel) writes one JSON envelope per line.
 	// Show only the assistant text a human would read; drop system/thinking/tool/
 	// tool-result/usage/control lines entirely. Plain output passes through
-	// unchanged. Classification is used to FILTER and to EXTRACT the words — the
-	// channel used for dedup is the SINK (ch), not this classification, because the
-	// sink is the only honest signal of which source a byte came from.
+	// unchanged. Classification FILTERS and EXTRACTS the words; the SINK (ch), not
+	// this classification, decides how the line is reconciled — the sink is the only
+	// honest signal of which source a byte came from. Prose emits live in order;
+	// the event channel is held and reconciled against prose at close.
 	human, class := classifyEventLine(line)
 	if class == lineDrop {
 		return
@@ -283,47 +302,77 @@ func (w *liveWriter) emit(line string, ch liveChannel) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	// Drop the cross-channel echo: a tool that both prints its answer on stdout
-	// and reports it on a turn.end event feeds the same words to this writer on
-	// BOTH sinks. dedup keeps whatever is genuinely new — including prose an agent
-	// intentionally repeats on its OWN channel — and returns "" when the whole
-	// line was already shown on the other channel this turn.
-	text = w.dedup(text, ch)
-	if strings.TrimSpace(text) == "" {
+	if ch == chanEvent {
+		// Hold the structured-event channel. It is a complete-answer snapshot that
+		// can land mid-stdout-stream, so emitting it now would reorder the live view
+		// (A,B,A). flushEvents reconciles it against the whole prose stream at close.
+		w.eventPending = append(w.eventPending, text)
 		return
 	}
+	// chanProse is the order-authoritative LIVE stream: publish every line the
+	// moment it is framed, and credit it so the deferred event reconciliation can
+	// recognize its mirror as a cross-channel echo. Prose is never suppressed —
+	// same-channel repeats survive and ordinary live streaming is unweakened.
+	w.creditProse(text)
+	w.publish(text)
+}
+
+// publish appends one already-classified, already-sanitized text blob to the live
+// channel as a `line` event. Callers hold w.mu.
+func (w *liveWriter) publish(text string) {
 	appendLive(w.id, LiveEvent{
 		Kind: liveLine, Round: w.round, Speaker: w.speaker, Role: w.role,
 		Text: text, TS: nowFn(),
 	})
 }
 
-// dedup removes lines already shown on the OTHER channel this turn and returns
-// the surviving text (possibly empty). It works line-by-line so a multi-line
-// turn.end envelope — one event carrying prose that already streamed as several
-// stdout lines — is recognized as the same content rather than slipping through
-// as a differently-shaped whole. A line repeated on the SAME channel is kept:
-// that is real content an agent chose to say twice, not plumbing echoing itself.
-// Blank lines are structural and never treated as duplicates. Callers hold w.mu.
-func (w *liveWriter) dedup(text string, ch liveChannel) string {
-	if w.seen == nil {
-		w.seen = make(map[string]liveChannel)
+// creditProse records each non-blank line of a prose blob in proseSeen, so the
+// deferred event reconciliation can drop the matching cross-channel echo. Blank
+// lines are structural and never credited. Callers hold w.mu.
+func (w *liveWriter) creditProse(text string) {
+	if w.proseSeen == nil {
+		w.proseSeen = make(map[string]int)
 	}
-	lines := strings.Split(text, "\n")
-	out := lines[:0]
-	for _, l := range lines {
-		key := strings.TrimSpace(l)
-		if key == "" {
-			out = append(out, l) // blank line: structural, never a duplicate
-			continue
+	for l := range strings.SplitSeq(text, "\n") {
+		if key := strings.TrimSpace(l); key != "" {
+			w.proseSeen[key]++
 		}
-		if prev, ok := w.seen[key]; ok && prev != ch {
-			continue // already shown on the other channel this turn — the echo
-		}
-		w.seen[key] = ch
-		out = append(out, l)
 	}
-	return strings.Join(out, "\n")
+}
+
+// flushEvents reconciles the deferred structured-event channel against the WHOLE
+// prose stream and publishes what survives, in event order, after every prose line
+// is already out. It runs once at close, single-threaded, so the reconciliation
+// sees the complete prose credit set no matter how the two channels interleaved.
+//
+// Per event blob it walks lines: a line that mirrors one prose already showed is a
+// cross-channel echo — dropped, consuming one prose credit; anything else is
+// genuine event-only content and is kept. Blank lines are structural, always kept.
+// A blob whose lines were all echoes contributes nothing (the mirrored-answer
+// case); a blob with no prose behind it survives whole (the event-only case).
+// Callers hold w.mu.
+func (w *liveWriter) flushEvents() {
+	for _, blob := range w.eventPending {
+		lines := strings.Split(blob, "\n")
+		out := lines[:0]
+		for _, l := range lines {
+			key := strings.TrimSpace(l)
+			if key == "" {
+				out = append(out, l) // structural blank, never an echo
+				continue
+			}
+			if w.proseSeen[key] > 0 {
+				w.proseSeen[key]-- // cross-channel echo of a line prose already showed
+				continue
+			}
+			out = append(out, l)
+		}
+		survivors := strings.TrimRight(strings.Join(out, "\n"), "\n")
+		if strings.TrimSpace(survivors) != "" {
+			w.publish(survivors)
+		}
+	}
+	w.eventPending = nil
 }
 
 // close flushes a trailing line with no newline and marks the floor free.
@@ -343,7 +392,8 @@ func (w *liveWriter) close(status string) {
 		w.mu.Lock()
 		// Flush each channel's trailing partial line on its OWN channel tag. Both
 		// sinks may hold a mid-sentence remainder when a turn is cut off; each is
-		// emitted through the same classify+dedup path as every other line.
+		// emitted through the same classify path as every other line. Prose flushes
+		// live and is credited; the event partial joins eventPending.
 		if rest := w.proseBuf.String(); rest != "" {
 			w.proseBuf.Reset()
 			w.emit(rest, chanProse)
@@ -352,6 +402,10 @@ func (w *liveWriter) close(status string) {
 			w.eventBuf.Reset()
 			w.emit(rest, chanEvent)
 		}
+		// Now that the whole prose stream is out and its lines are credited,
+		// reconcile the deferred event channel: drop the cross-channel echo, keep
+		// event-only content. This is what keeps the mirrored answer in prose order.
+		w.flushEvents()
 		w.mu.Unlock()
 		appendLive(w.id, LiveEvent{
 			Kind: liveSpoke, Round: w.round, Speaker: w.speaker, Role: w.role,
