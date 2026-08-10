@@ -95,10 +95,4 @@ func TestProcessRunContextNativeCwd(t *testing.T) {
 	if rc.FS == nil {
 		t.Error("FS is nil")
 	}
-	// Default process boundary: SIGPIPE was not inherited as SIG_IGN, so
-	// SIGPIPEIgnored must be false. This also pins non-Linux behavior
-	// (inheritedSIGPIPEWasIgnored is always false there).
-	if rc.SIGPIPEIgnored {
-		t.Error("SIGPIPEIgnored = true, want false for default (non-inherited-ignored) boundary")
-	}
 }

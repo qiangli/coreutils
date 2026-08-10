@@ -72,20 +72,12 @@ func preserveInheritedSignalDispositions() {
 // inheritedSIGPIPEWasIgnored reports whether the parent process ignored
 // SIGPIPE across execve — the fact preserveInheritedSignalDispositions
 // recovers but, until now, discarded before processRunContext built the
-// RunContext. When the runtime.fwdSig snapshot is available (static ET_EXEC
-// executables — the certification and release builds), the answer comes
-// directly from the snapshot. For PIE test binaries where that snapshot is
-// unavailable, it queries the live kernel disposition as a fallback: after
-// preserveInheritedSignalDispositions has run (or was a no-op on PIE), the
-// disposition faithfully reflects the inherited state — SIG_IGN stays
-// SIG_IGN, and SIG_DFL was restored to SIG_DFL (ET_EXEC) or replaced by
-// the Go runtime's own handler (PIE), neither of which is SIG_IGN.
+// RunContext. The answer is available only from the runtime.fwdSig snapshot
+// in ET_EXEC binaries. PIE binaries fail closed: by this point the Go runtime
+// may have replaced the inherited disposition, so querying sigaction cannot
+// distinguish an inherited SIG_IGN from the runtime's installed handler.
 func inheritedSIGPIPEWasIgnored() bool {
-	if originalSignals.ok {
-		return originalSignals.handlers[syscall.SIGPIPE] == 1
-	}
-	handler, err := linuxSignalHandler(syscall.SIGPIPE)
-	return err == nil && handler == 1
+	return originalSignals.ok && originalSignals.handlers[syscall.SIGPIPE] == 1
 }
 
 func loadOriginalSignals() {

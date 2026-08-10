@@ -7,10 +7,12 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	_ "github.com/qiangli/coreutils/cmds/expr"
 	_ "github.com/qiangli/coreutils/cmds/tr"
 )
 
@@ -40,7 +42,12 @@ func runInheritedSignalHelper(mode string) {
 			os.Exit(3)
 		}
 		os.Exit(0)
-	case "pipe_rc":
+	case "pipe_default":
+		if processRunContext().SIGPIPEIgnored {
+			os.Exit(10)
+		}
+		os.Exit(0)
+	case "pipe_rc", "pipe_expr_rc":
 		// Full boundary-seam test: inherited ignored SIGPIPE must reach
 		// processRunContext().SIGPIPEIgnored, then flow into tr's
 		// deterministic EPIPE path. preserveInheritedSignalDispositions
@@ -72,7 +79,11 @@ func runInheritedSignalHelper(mode string) {
 		rc.Stdio.In = pr
 		_, _ = pw.Write([]byte("abc\n"))
 		_ = pw.Close()
-		code := Dispatch(rc, "tr", []string{"a-z", "A-Z"})
+		name, args := "tr", []string{"a-z", "A-Z"}
+		if mode == "pipe_expr_rc" {
+			name, args = "expr", []string{strings.Repeat("x", 8192)}
+		}
+		code := Dispatch(rc, name, args)
 		os.Exit(code)
 	case "ttin":
 		// Put the child in a non-orphaned process group so POSIX permits the
@@ -183,21 +194,34 @@ func TestStandaloneSIGPIPEIgnoredReachesRunContext(t *testing.T) {
 	}
 	// Parent ignores SIGPIPE, then execs the test binary with the pipe_rc marker.
 	script := "trap '' PIPE; exec \"$1\" -test.run=^$"
-	cmd := exec.Command("/bin/sh", "-c", script, "sh", exe)
-	cmd.Env = append(os.Environ(), inheritedSignalMarker+"=pipe_rc")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	ee, ok := err.(*exec.ExitError)
-	if !ok {
-		t.Fatalf("expected exit error, got %v; stderr=%q", err, stderr.String())
+	for _, tc := range []struct{ mode, name string }{{"pipe_rc", "tr"}, {"pipe_expr_rc", "expr"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("/bin/sh", "-c", script, "sh", exe)
+			cmd.Env = append(os.Environ(), inheritedSignalMarker+"="+tc.mode)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			ee, ok := err.(*exec.ExitError)
+			if !ok || ee.ExitCode() != 1 {
+				t.Fatalf("exit error = %v, want code 1; stderr=%q", err, stderr.String())
+			}
+			want := tc.name + ": stdout: Broken pipe\n"
+			if stderr.String() != want {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+			}
+		})
 	}
-	if ee.ExitCode() != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q", ee.ExitCode(), stderr.String())
+}
+
+func TestStandaloneSIGPIPEDefaultReachesRunContext(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
-	want := "tr: stdout: Broken pipe\n"
-	if stderr.String() != want {
-		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+	cmd := exec.Command("/bin/sh", "-c", "trap - PIPE; exec \"$1\" -test.run=^$", "sh", exe)
+	cmd.Env = append(os.Environ(), inheritedSignalMarker+"=pipe_default")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("default SIGPIPE helper: %v; output=%q", err, out)
 	}
 }
 
