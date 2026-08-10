@@ -32,13 +32,16 @@ type oracle struct {
 	loc                                                         uintptr
 }
 
-func newOracle(t *testing.T, localeName string) *oracle {
+func newOracle(t *testing.T, localeName string) (*oracle, error) {
 	t.Helper()
 	h, err := purego.Dlopen("libc.so.6", purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil || h == 0 {
-		t.Fatalf("oracle: glibc not loadable: %v", err)
+		return nil, ErrGlibcUnavailable
 	}
 	t.Cleanup(func() { purego.Dlclose(h) })
+	if sym, err := purego.Dlsym(h, "gnu_get_libc_version"); err != nil || sym == 0 {
+		return nil, ErrGlibcUnavailable
+	}
 
 	bind := func(fptr any, name string) {
 		sym, err := purego.Dlsym(h, name)
@@ -78,21 +81,47 @@ func newOracle(t *testing.T, localeName string) *oracle {
 	newlocaleErrno := *errno
 	runtime.UnlockOSThread()
 	if o.loc == 0 {
-		if errors.Is(classifyNewlocaleErrno(newlocaleErrno), ErrMissingLocale) {
-			t.Skipf("oracle: locale %q not installed (errno %d)", localeName, newlocaleErrno)
-		}
-		t.Fatalf("oracle: newlocale(%q) failed with errno %d", localeName, newlocaleErrno)
+		return nil, classifyNewlocaleErrno(newlocaleErrno)
 	}
 	t.Cleanup(func() { o.freelocale(o.loc) })
+	return o, nil
+}
+
+// requireOracle skips for an unavailable runtime or locale only after the
+// production provider independently reports the same condition. Thus a weak
+// test host cannot hide a production availability-classification defect.
+func requireOracle(t *testing.T, localeName string) *oracle {
+	t.Helper()
+	o, oracleErr := newOracle(t, localeName)
+	if errors.Is(oracleErr, ErrGlibcUnavailable) {
+		p, providerErr := Open("C")
+		if p != nil {
+			_ = p.Close()
+		}
+		if !errors.Is(providerErr, ErrGlibcUnavailable) {
+			t.Fatalf("oracle reports glibc unavailable; Open(\"C\") = (%v, %v), want ErrGlibcUnavailable", p, providerErr)
+		}
+		t.Skip("glibc unavailable to both independent oracle and production provider")
+	}
+	if errors.Is(oracleErr, ErrMissingLocale) {
+		p, providerErr := Open(localeName)
+		if p != nil {
+			_ = p.Close()
+		}
+		if !errors.Is(providerErr, ErrMissingLocale) {
+			t.Fatalf("oracle reports locale %q missing; Open = (%v, %v), want ErrMissingLocale", localeName, p, providerErr)
+		}
+		t.Skipf("locale %q unavailable to both independent oracle and production provider", localeName)
+	}
+	if oracleErr != nil {
+		t.Fatalf("oracle: newlocale(%q): %v", localeName, oracleErr)
+	}
 	return o
 }
 
-// openProvider opens the real provider, skipping when glibc / the locale is
-// unavailable so the suite stays green on a slim box while still failing on
-// real defects when the locale IS present.
 func openProvider(t *testing.T, localeName string) *Provider {
 	t.Helper()
-	_ = newOracle(t, localeName) // If oracle fails, it skips; if it succeeds, glibc/locale must be present.
+	_ = requireOracle(t, localeName)
 	p, err := Open(localeName)
 	if err != nil {
 		t.Fatalf("Open(%q): %v (but oracle succeeded!)", localeName, err)
@@ -100,11 +129,35 @@ func openProvider(t *testing.T, localeName string) *Provider {
 	return p
 }
 
+func TestOpenCPlatformContract(t *testing.T) {
+	o, oracleErr := newOracle(t, "C")
+	p, providerErr := Open("C")
+	if errors.Is(oracleErr, ErrGlibcUnavailable) {
+		if p != nil {
+			_ = p.Close()
+		}
+		if !errors.Is(providerErr, ErrGlibcUnavailable) {
+			t.Fatalf("non-glibc runtime: Open(\"C\") = (%v, %v), want ErrGlibcUnavailable", p, providerErr)
+		}
+		return
+	}
+	if oracleErr != nil {
+		t.Fatalf("glibc C-locale oracle must be available: %v", oracleErr)
+	}
+	if o == nil || providerErr != nil || p == nil {
+		t.Fatalf("glibc runtime: Open(\"C\") = (%v, %v), want provider", p, providerErr)
+	}
+	_ = p.Close()
+}
+
 func TestClassifyAgainstOracle(t *testing.T) {
 	for _, localeName := range []string{"C", "de_DE.ISO-8859-1"} {
 		t.Run(localeName, func(t *testing.T) {
-			o := newOracle(t, localeName)
-			p := openProvider(t, localeName)
+			o := requireOracle(t, localeName)
+			p, err := Open(localeName)
+			if err != nil {
+				t.Fatalf("Open(%q): %v (but oracle succeeded!)", localeName, err)
+			}
 			t.Cleanup(func() { _ = p.Close() })
 
 			checks := []struct {
@@ -181,7 +234,7 @@ func TestOpenAcceptsAllLocales(t *testing.T) {
 		"de_DE.ISO-8859-1", "de_DE.iso88591", "DE_DE.iso-8859-1", "de_de.ISO88591",
 	} {
 		canonical, _, _ := normalizeLocale(name)
-		_ = newOracle(t, canonical) // Only genuine locale absence may skip this test.
+		_ = requireOracle(t, canonical) // Only independently confirmed absence may skip.
 		p, err := Open(name)
 		if err != nil {
 			t.Errorf("Open(%q): unexpected error %v", name, err)
