@@ -433,6 +433,9 @@ func TestCTypeProviderBacked(t *testing.T) {
 		if stdoutWriteBeforeClose.Load() {
 			t.Error("stdout was written before provider was closed")
 		}
+		if pw.calls != 1 || string(pw.data) != "test" {
+			t.Errorf("stdout writes=%d data=%q, want 1 and %q", pw.calls, pw.data, "test")
+		}
 		if closeCount.Load() != 1 {
 			t.Errorf("closeCount=%d, want 1", closeCount.Load())
 		}
@@ -478,6 +481,10 @@ func TestCTypeProviderBacked(t *testing.T) {
 			if !bytes.Equal(got[name], []byte{b}) {
 				t.Errorf("class %s table=%v, want [%d]", name, got[name], b)
 			}
+			members, known := tables.classFromTable(name)
+			if !known || !bytes.Equal(members, []byte{b}) {
+				t.Errorf("classFromTable(%q)=(%v,%v), want ([%d],true)", name, members, known, b)
+			}
 			if fp.isCalls[name] != 256 {
 				t.Errorf("Is%s probed %d times, want 256", name, fp.isCalls[name])
 			}
@@ -517,8 +524,9 @@ type closeTracker struct {
 }
 
 func (ct *closeTracker) Close() error {
+	err := ct.fakeProvider.Close()
 	ct.closed.Store(true)
-	return ct.fakeProvider.Close()
+	return err
 }
 
 // trackingReader records whether Read was called before the provider closed.
@@ -543,12 +551,16 @@ func (r *trackingReader) Read(p []byte) (int, error) {
 type trackingWriter struct {
 	closed           *atomic.Bool
 	writeBeforeClose *atomic.Bool
+	calls            int
+	data             []byte
 }
 
 func (w *trackingWriter) Write(p []byte) (int, error) {
 	if !w.closed.Load() {
 		w.writeBeforeClose.Store(true)
 	}
+	w.calls++
+	w.data = append(w.data, p...)
 	return len(p), nil
 }
 
@@ -826,7 +838,7 @@ func TestCTypeCaseTranslation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestCTypeComplementFlags — -c with provider class; -C checks LC_COLLATE
+// TestCTypeComplementFlags — -c/-C remain complement aliases with provider classes
 // ---------------------------------------------------------------------------
 
 func TestCTypeComplementFlags(t *testing.T) {
@@ -918,6 +930,24 @@ func TestCTypeComplementFlags(t *testing.T) {
 			t.Errorf("out=%q, want %q", out, "a")
 		}
 	})
+
+	for _, args := range [][]string{{"-C", "-d", "[:digit:]"}, {"-Cd", "[:digit:]"}} {
+		args := args
+		t.Run("provider-backed "+strings.Join(args, " "), func(t *testing.T) {
+			var openCount, closeCount atomic.Int32
+			opener := func(name string) (ctypeProvider, error) {
+				openCount.Add(1)
+				return newFakeProvider(&closeCount), nil
+			}
+			out, errb, code := runWithOpener(t, []string{"LC_CTYPE=fake_locale"}, "0\x90x", opener, args...)
+			if code != 0 || errb != "" || out != "0\x90" {
+				t.Fatalf("out=%q err=%q code=%d, want %q, empty stderr, 0", out, errb, code, "0\x90")
+			}
+			if openCount.Load() != 1 || closeCount.Load() != 1 {
+				t.Fatalf("open=%d close=%d, want 1 and 1", openCount.Load(), closeCount.Load())
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -967,6 +997,16 @@ func TestCTypeClassFromTable(t *testing.T) {
 		}
 		if len(members) != 0 {
 			t.Errorf("classFromTable(\"punct\"): len=%d, want 0", len(members))
+		}
+	})
+
+	t.Run("all known empty provider classes are recognized", func(t *testing.T) {
+		tables := &ctypeTables{}
+		for _, name := range []string{"alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"} {
+			members, known := tables.classFromTable(name)
+			if !known || len(members) != 0 {
+				t.Errorf("classFromTable(%q)=(%v,%v), want empty,true", name, members, known)
+			}
 		}
 	})
 
