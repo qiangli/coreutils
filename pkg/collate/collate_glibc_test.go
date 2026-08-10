@@ -7,6 +7,7 @@ package collate
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -24,6 +25,7 @@ type oracle struct {
 	strcollL   func(a, b string, loc uintptr) int32
 	newlocale  func(mask int32, locale string, base uintptr) uintptr
 	freelocale func(loc uintptr)
+	errno      func() *int32
 	collate    uintptr
 }
 
@@ -31,7 +33,7 @@ func newOracle(t *testing.T) *oracle {
 	t.Helper()
 	h, err := purego.Dlopen("libc.so.6", purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil || h == 0 {
-		t.Skipf("oracle: glibc not loadable: %v", err)
+		t.Fatalf("oracle: glibc not loadable: %v", err)
 	}
 
 	// Oracle must Dlclose on success/skip/failure
@@ -40,7 +42,7 @@ func newOracle(t *testing.T) *oracle {
 	bind := func(fptr any, name string) {
 		sym, err := purego.Dlsym(h, name)
 		if err != nil || sym == 0 {
-			t.Skipf("oracle: symbol %s not found", name)
+			t.Fatalf("oracle: symbol %s not found: %v", name, err)
 		}
 		purego.RegisterFunc(fptr, sym)
 	}
@@ -49,10 +51,23 @@ func newOracle(t *testing.T) *oracle {
 	bind(&o.strcollL, "strcoll_l")
 	bind(&o.newlocale, "newlocale")
 	bind(&o.freelocale, "freelocale")
+	bind(&o.errno, "__errno_location")
 
+	runtime.LockOSThread()
+	errno := o.errno()
+	if errno == nil {
+		runtime.UnlockOSThread()
+		t.Fatal("oracle: __errno_location returned nil")
+	}
+	*errno = 0
 	o.collate = o.newlocale(1<<3, "de_DE.ISO-8859-1", 0)
+	newlocaleErrno := *errno
+	runtime.UnlockOSThread()
 	if o.collate == 0 {
-		t.Skip("oracle: de_DE.ISO-8859-1 locale not installed")
+		if errors.Is(classifyNewlocaleErrno(newlocaleErrno), ErrMissingLocale) {
+			t.Skipf("oracle: de_DE.ISO-8859-1 locale not installed (errno %d)", newlocaleErrno)
+		}
+		t.Fatalf("oracle: newlocale failed with errno %d", newlocaleErrno)
 	}
 	t.Cleanup(func() { o.freelocale(o.collate) })
 	return o
@@ -186,15 +201,13 @@ func TestOpenRejectsLocalesBeforeLibc(t *testing.T) {
 }
 
 func TestOpenAcceptsBothAliasesCaseInsensitive(t *testing.T) {
+	_ = newOracle(t) // Only genuine locale absence may skip this test.
 	for _, name := range []string{
 		"de_DE.ISO-8859-1", "de_DE.iso88591",
 		"DE_DE.iso-8859-1", "de_de.ISO88591",
 	} {
 		p, err := Open(name)
 		if err != nil {
-			if errors.Is(err, ErrGlibcUnavailable) || errors.Is(err, ErrMissingLocale) {
-				t.Skipf("%q: provider unavailable: %v", name, err)
-			}
 			t.Errorf("Open(%q): unexpected error %v", name, err)
 			continue
 		}

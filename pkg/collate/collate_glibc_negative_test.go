@@ -7,24 +7,66 @@ package collate
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
 func TestLoadLibcNegative(t *testing.T) {
-	// missing libc
-	if _, err := loadLibc("lib_does_not_exist.so"); !errors.Is(err, ErrGlibcUnavailable) {
-		t.Errorf("loadLibc(missing_libc) = %v, want ErrGlibcUnavailable", err)
-	}
-	// missing symbol (libm is a valid library but lacks gnu_get_libc_version)
-	// If libm.so.6 is missing, it will still return ErrGlibcUnavailable from dlopen,
-	// which is acceptable for the test, but typically it resolves and fails on dlsym.
-	if _, err := loadLibc("libm.so.6"); !errors.Is(err, ErrGlibcUnavailable) {
-		t.Errorf("loadLibc(missing_symbol) = %v, want ErrGlibcUnavailable", err)
-	}
+	const fakeHandle = uintptr(47)
+
+	t.Run("missing_libc", func(t *testing.T) {
+		closed := 0
+		ops := libcLoaderOps{
+			open: func(string, int) (uintptr, error) { return 0, errors.New("missing") },
+			sym:  func(uintptr, string) (uintptr, error) { t.Fatal("Dlsym called after Dlopen failure"); return 0, nil },
+			close: func(uintptr) error {
+				closed++
+				return nil
+			},
+			register: func(any, uintptr) { t.Fatal("RegisterFunc called after Dlopen failure") },
+		}
+		if _, err := loadLibcWith("missing", ops); !errors.Is(err, ErrGlibcUnavailable) {
+			t.Errorf("loadLibcWith(missing) = %v, want ErrGlibcUnavailable", err)
+		}
+		if closed != 0 {
+			t.Errorf("close calls = %d, want 0 when no handle opened", closed)
+		}
+	})
+
+	t.Run("missing_symbol_closes_handle", func(t *testing.T) {
+		closed := 0
+		ops := libcLoaderOps{
+			open: func(string, int) (uintptr, error) { return fakeHandle, nil },
+			sym: func(_ uintptr, name string) (uintptr, error) {
+				if name == "strcoll_l" {
+					return 0, fmt.Errorf("missing %s", name)
+				}
+				return 1, nil
+			},
+			close: func(handle uintptr) error {
+				if handle != fakeHandle {
+					t.Errorf("closed handle = %d, want %d", handle, fakeHandle)
+				}
+				closed++
+				return nil
+			},
+			register: func(any, uintptr) {},
+		}
+		if _, err := loadLibcWith("fake", ops); !errors.Is(err, ErrGlibcUnavailable) {
+			t.Errorf("loadLibcWith(missing symbol) = %v, want ErrGlibcUnavailable", err)
+		}
+		if closed != 1 {
+			t.Errorf("close calls = %d, want exactly 1", closed)
+		}
+	})
 }
 
 func TestVerifyCodesetNegative(t *testing.T) {
-	overlong := make([]byte, 65)
+	unterminated := make([]byte, codesetLimit)
+	for i := range unterminated {
+		unterminated[i] = 'A'
+	}
+	overlong := make([]byte, codesetLimit+1)
 	for i := range overlong {
 		overlong[i] = 'A'
 	}
@@ -34,7 +76,7 @@ func TestVerifyCodesetNegative(t *testing.T) {
 		data []byte
 	}{
 		{"wrong_codeset", []byte("UTF-8\x00")},
-		{"unterminated", []byte("ISO-8859-1")},
+		{"unterminated", unterminated},
 		{"overlong", overlong},
 	}
 

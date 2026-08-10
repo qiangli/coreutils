@@ -72,17 +72,37 @@ func libc() (*libcBinding, error) {
 	return nil, libcErr
 }
 
-// loadLibc opens the specified libc library, confirms it is glibc, resolves every required
-// symbol, and returns a complete binding. Every failure path Dlcloses the
-// handle before returning so a rejected load leaks nothing.
+type libcLoaderOps struct {
+	open     func(path string, mode int) (uintptr, error)
+	sym      func(handle uintptr, name string) (uintptr, error)
+	close    func(handle uintptr) error
+	register func(fptr any, cfn uintptr)
+}
+
+var puregoLibcLoaderOps = libcLoaderOps{
+	open:     purego.Dlopen,
+	sym:      purego.Dlsym,
+	close:    purego.Dlclose,
+	register: purego.RegisterFunc,
+}
+
+// loadLibc opens the specified libc library, confirms it is glibc, resolves
+// every required symbol, and returns a complete binding. Every failure path
+// Dlcloses the handle before returning so a rejected load leaks nothing.
 func loadLibc(libName string) (*libcBinding, error) {
-	handle, err := purego.Dlopen(libName, purego.RTLD_NOW|purego.RTLD_LOCAL)
+	return loadLibcWith(libName, puregoLibcLoaderOps)
+}
+
+// loadLibcWith is the injectable loader seam used by failure-path tests. The
+// production path always supplies puregoLibcLoaderOps.
+func loadLibcWith(libName string, ops libcLoaderOps) (*libcBinding, error) {
+	handle, err := ops.open(libName, purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil || handle == 0 {
 		return nil, ErrGlibcUnavailable
 	}
 
 	fail := func() (*libcBinding, error) {
-		_ = purego.Dlclose(handle)
+		_ = ops.close(handle)
 		return nil, ErrGlibcUnavailable
 	}
 
@@ -90,38 +110,37 @@ func loadLibc(libName string) (*libcBinding, error) {
 	// and other C libraries do not export it, so its presence is proof of glibc
 	// before we trust any of the locale ABI below.
 	var gnuGetLibcVersion func() *byte
-	if err := bindFunc(&gnuGetLibcVersion, handle, "gnu_get_libc_version"); err != nil {
+	if err := bindFuncWith(&gnuGetLibcVersion, handle, "gnu_get_libc_version", ops); err != nil {
 		return fail()
 	}
 
 	b := &libcBinding{handle: handle}
-	if err := bindFunc(&b.newlocale, handle, "newlocale"); err != nil {
+	if err := bindFuncWith(&b.newlocale, handle, "newlocale", ops); err != nil {
 		return fail()
 	}
-	if err := bindFunc(&b.freelocale, handle, "freelocale"); err != nil {
+	if err := bindFuncWith(&b.freelocale, handle, "freelocale", ops); err != nil {
 		return fail()
 	}
-	if err := bindFunc(&b.strcollL, handle, "strcoll_l"); err != nil {
+	if err := bindFuncWith(&b.strcollL, handle, "strcoll_l", ops); err != nil {
 		return fail()
 	}
-	if err := bindFunc(&b.nlLanginfoL, handle, "nl_langinfo_l"); err != nil {
+	if err := bindFuncWith(&b.nlLanginfoL, handle, "nl_langinfo_l", ops); err != nil {
 		return fail()
 	}
-	if err := bindFunc(&b.errnoLocation, handle, "__errno_location"); err != nil {
+	if err := bindFuncWith(&b.errnoLocation, handle, "__errno_location", ops); err != nil {
 		return fail()
 	}
 	return b, nil
 }
 
-// bindFunc resolves one symbol and installs it into fptr. purego.RegisterFunc
-// panics on a bad function type, so a missing symbol is caught here as an error
-// (Dlsym returns a nil address) and never reaches RegisterFunc.
-func bindFunc(fptr any, handle uintptr, name string) error {
-	sym, err := purego.Dlsym(handle, name)
+// bindFuncWith resolves one symbol and installs it into fptr. A missing symbol
+// is caught before RegisterFunc, and the caller closes the owning handle.
+func bindFuncWith(fptr any, handle uintptr, name string, ops libcLoaderOps) error {
+	sym, err := ops.sym(handle, name)
 	if err != nil || sym == 0 {
 		return ErrGlibcUnavailable
 	}
-	purego.RegisterFunc(fptr, sym)
+	ops.register(fptr, sym)
 	return nil
 }
 
