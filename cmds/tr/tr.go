@@ -69,24 +69,24 @@ func (sp *setSpec) appendOrdinary(b byte) {
 	sp.tokens = append(sp.tokens, setToken{bytes: []byte{b}})
 }
 
-func (sp *setSpec) applyLogicalFill(need int) {
+func (sp *setSpec) applyLogicalFill(tokenNeed, rawNeed int) {
 	if sp.fillTokenPos < 0 {
 		return
 	}
-	if need < 0 {
-		need = 0
+	if tokenNeed < 0 {
+		tokenNeed = 0
 	}
-	insert := make([]setToken, need)
+	insert := make([]setToken, tokenNeed)
 	for i := range insert {
 		insert[i] = setToken{bytes: []byte{sp.fillByte}}
 	}
-	tokens := make([]setToken, 0, len(sp.tokens)+need)
+	tokens := make([]setToken, 0, len(sp.tokens)+tokenNeed)
 	tokens = append(tokens, sp.tokens[:sp.fillTokenPos]...)
 	tokens = append(tokens, insert...)
 	tokens = append(tokens, sp.tokens[sp.fillTokenPos:]...)
 	sp.tokens = tokens
 	sp.fillTokenPos = -1
-	sp.applyFill(need)
+	sp.applyFill(rawNeed)
 }
 
 // applyFill expands a [c*] / [c*0] construct to `need` copies of the
@@ -241,17 +241,6 @@ func sourceAfterTargetPrefix(source, prefix []setToken) (sourceCursor, bool) {
 	return cur, true
 }
 
-func remainingSourceBytes(source []setToken, cur sourceCursor) int {
-	n := 0
-	if cur.token < len(source) {
-		n += len(source[cur.token].bytes) - cur.off
-		for i := cur.token + 1; i < len(source); i++ {
-			n += len(source[i].bytes)
-		}
-	}
-	return n
-}
-
 func tokensWithFill(tokens []setToken, pos, count int, b byte) []setToken {
 	out := make([]setToken, 0, len(tokens)+count)
 	out = append(out, tokens[:pos]...)
@@ -261,7 +250,7 @@ func tokensWithFill(tokens []setToken, pos, count int, b byte) []setToken {
 	return append(out, tokens[pos:]...)
 }
 
-func planCaseTranslation(set1, set2 *setSpec, tables *ctypeTables, truncate bool, xlate *[256]byte) string {
+func planCaseTranslation(set1, set2 *setSpec, tables *ctypeTables, truncate bool, rawFillCount int, xlate *[256]byte) string {
 	if set2.fillTokenPos < 0 {
 		return planCaseTokens(set1, set2.tokens, set2.lastIsClass, tables, truncate, xlate)
 	}
@@ -280,11 +269,7 @@ func planCaseTranslation(set1, set2 *setSpec, tables *ctypeTables, truncate bool
 		}
 	}
 	if firstCase < 0 {
-		need := remainingSourceBytes(set1.tokens, cur) - (len(set2.tokens) - fillPos)
-		if need < 0 {
-			need = 0
-		}
-		set2.applyLogicalFill(need)
+		set2.applyLogicalFill(rawFillCount, rawFillCount)
 		return planCaseTokens(set1, set2.tokens, set2.lastIsClass, tables, truncate, xlate)
 	}
 
@@ -294,7 +279,7 @@ func planCaseTranslation(set1, set2 *setSpec, tables *ctypeTables, truncate bool
 	distance := 0
 	for i, off := cur.token, cur.off; i < len(set1.tokens); i, off = i+1, 0 {
 		if off == 0 && set1.tokens[i].tag != tagNone {
-			if k := distance - ordinaryDistance; k >= 0 && !seen[k] {
+			if k := distance - ordinaryDistance; k >= 0 && k <= rawFillCount && !seen[k] {
 				seen[k] = true
 				candidates = append(candidates, k)
 			}
@@ -327,7 +312,7 @@ func planCaseTranslation(set1, set2 *setSpec, tables *ctypeTables, truncate bool
 		return "misaligned [:upper:] and/or [:lower:] construct"
 	}
 	*xlate = *accepted
-	set2.applyLogicalFill(acceptedK)
+	set2.applyLogicalFill(acceptedK, rawFillCount)
 	return ""
 }
 
@@ -461,6 +446,10 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		xlate[c] = byte(c)
 	}
 	if translating {
+		rawFillCount := len(set1.bytes) - len(set2.bytes)
+		if rawFillCount < 0 {
+			rawFillCount = 0
+		}
 		if set2.hasOtherClass {
 			return fail("when translating, the only character classes that may appear in string2 are 'upper' and 'lower'")
 		}
@@ -468,12 +457,12 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 			return fail("when translating with complemented character classes,\nstring2 must map all characters in the domain to one")
 		}
 		if !comp && set2.hasCaseClass {
-			if errMsg := planCaseTranslation(set1, set2, tables, *truncateSet1, &xlate); errMsg != "" {
+			if errMsg := planCaseTranslation(set1, set2, tables, *truncateSet1, rawFillCount, &xlate); errMsg != "" {
 				return fail(errMsg)
 			}
 		} else {
 			// Keep complement and all-ordinary translation on the existing flat path.
-			set2.applyFill(len(set1.bytes) - len(set2.bytes))
+			set2.applyFill(rawFillCount)
 			if !validateCaseClasses(set1, set2) {
 				return fail("misaligned [:upper:] and/or [:lower:] construct")
 			}
