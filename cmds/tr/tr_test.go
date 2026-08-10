@@ -262,7 +262,7 @@ func TestTrOccurrenceSemantics(t *testing.T) {
 		{
 			name:       "lower->x xAx",
 			args:       []string{"[:lower:]", "x"},
-			stdin:      "xAx",
+			stdin:      "aAz",
 			wantStdout: "xAx",
 			wantCode:   0,
 		},
@@ -290,7 +290,7 @@ func TestTrOccurrenceSemantics(t *testing.T) {
 		{
 			name:       "a+lower+b -> A+upper+[y*] ACZy",
 			args:       []string{"a[:lower:]b", "A[:upper:][y*]"},
-			stdin:      "aCZb",
+			stdin:      "aczb",
 			wantStdout: "ACZy",
 			wantCode:   0,
 		},
