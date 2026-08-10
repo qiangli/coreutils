@@ -3,6 +3,8 @@ package trcmd
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -206,5 +208,43 @@ func TestTrHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, "", "--version")
 	if code != 0 || !strings.Contains(out, "tr") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+type epipeWriter struct{}
+
+func (w epipeWriter) Write(p []byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestTrEPIPE(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{name: "small buffered Flush", input: "abc\n"},
+		// bufio.Writer buffers 4096 bytes. The next WriteByte forces an
+		// automatic flush, exercising the loop's write-error branch rather
+		// than the final explicit Flush branch.
+		{name: "WriteByte automatic flush", input: strings.Repeat("a", 4097)},
+	}
+	for _, tc := range cases {
+		for _, ignored := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/ignored=%v", tc.name, ignored), func(t *testing.T) {
+				var errb bytes.Buffer
+				rc := &tool.RunContext{
+					Ctx:            context.Background(),
+					Dir:            t.TempDir(),
+					Stdio:          tool.Stdio{In: strings.NewReader(tc.input), Out: epipeWriter{}, Err: &errb},
+					SIGPIPEIgnored: ignored,
+				}
+				code := cmd.Run(rc, []string{"a", "x"})
+				wantCode, wantErr := 0, ""
+				if ignored {
+					wantCode, wantErr = 1, "tr: stdout: Broken pipe\n"
+				}
+				if code != wantCode || errb.String() != wantErr {
+					t.Errorf("code=%d stderr=%q, want code=%d stderr=%q", code, errb.String(), wantCode, wantErr)
+				}
+			})
+		}
 	}
 }

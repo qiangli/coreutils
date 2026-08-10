@@ -77,7 +77,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `echo` | `cmds/echo` | — | GNU Coreutils | yes | yes | 1 | 3 |
 | `env` | `cmds/env` | — | GNU Coreutils | yes | yes | 4 | 27 |
 | `expand` | `cmds/expand` | — | GNU Coreutils | yes | yes | 1 | 15 |
-| `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 1 | 7 |
+| `expr` | `cmds/expr` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |
@@ -159,7 +159,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 3 | 26 |
-| `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 1 | 8 |
+| `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 1 | 9 |
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
 | `true` | `cmds/true` | — | GNU Coreutils | yes | yes | 1 | 1 |
 | `truncate` | `cmds/truncate` | — | GNU Coreutils | yes | no | 1 | 6 |

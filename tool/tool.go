@@ -46,6 +46,9 @@ type RunContext struct {
 	Umask    fs.FileMode
 	UmaskSet bool
 
+	// SIGPIPEIgnored is true if the calling shell ignores SIGPIPE (e.g. trap '' PIPE).
+	SIGPIPEIgnored bool
+
 	// DirIsProcessCwd is the host's guarantee that Dir IS this process's
 	// working directory for the whole invocation (true for the standalone
 	// multicall binary, which inherits its cwd exactly as a GNU tool

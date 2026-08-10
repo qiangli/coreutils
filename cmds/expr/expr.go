@@ -32,11 +32,19 @@ func (e *evalError) Error() string { return e.msg }
 
 func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n", cmd.Usage, cmd.Synopsis)
+		_, err := fmt.Fprintf(rc.Out, "Usage: %s\n%s\n\nOptions:\n      --help     display this help and exit\n      --version  output version information and exit\n", cmd.Usage, cmd.Synopsis)
+		if err != nil && rc.SIGPIPEIgnored && tool.IsClosedPipeError(err) {
+			fmt.Fprintln(rc.Err, "expr: stdout: Broken pipe")
+			return 1
+		}
 		return 0
 	}
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-V") {
-		fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
+		_, err := fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
+		if err != nil && rc.SIGPIPEIgnored && tool.IsClosedPipeError(err) {
+			fmt.Fprintln(rc.Err, "expr: stdout: Broken pipe")
+			return 1
+		}
 		return 0
 	}
 	if len(args) > 0 && args[0] == "--" {
@@ -58,7 +66,11 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return 2
 	}
-	fmt.Fprintln(rc.Out, string(v))
+	_, errOut := fmt.Fprintln(rc.Out, string(v))
+	if errOut != nil && rc.SIGPIPEIgnored && tool.IsClosedPipeError(errOut) {
+		fmt.Fprintln(rc.Err, "expr: stdout: Broken pipe")
+		return 1
+	}
 	if truthy(v) {
 		return 0
 	}

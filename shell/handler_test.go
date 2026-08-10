@@ -32,6 +32,7 @@ func init() {
 			in := new(bytes.Buffer)
 			in.ReadFrom(rc.In)
 			fmt.Fprintf(rc.Out, "stdin=%s\n", strings.TrimSpace(in.String()))
+			fmt.Fprintf(rc.Out, "sigpipe_ignored=%v\n", rc.SIGPIPEIgnored)
 			if len(args) > 0 && args[0] == "fail" {
 				fmt.Fprintln(rc.Err, "probe: deliberate failure")
 				return 7
@@ -131,5 +132,34 @@ func TestHandlerCoreutilsPipelineEarlyHeadClose(t *testing.T) {
 	}
 	if errb != "" {
 		t.Fatalf("stderr=%q, want empty", errb)
+	}
+}
+
+func TestHandlerSIGPIPEIgnored(t *testing.T) {
+	const script = `
+probe
+trap '' PIPE
+probe
+trap 'echo caught' PIPE
+probe
+trap - PIPE
+probe
+`
+	out, errb, err := runScript(t, script, t.TempDir(), Handler())
+	if err != nil {
+		t.Fatalf("sequential signal disposition script: %v\nstderr:\n%s", err, errb)
+	}
+	if errb != "" {
+		t.Fatalf("sequential signal disposition stderr=%q, want empty", errb)
+	}
+	var got []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "sigpipe_ignored=") {
+			got = append(got, strings.TrimPrefix(line, "sigpipe_ignored="))
+		}
+	}
+	want := []string{"false", "true", "false", "false"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("sequential SIGPIPE dispositions=%v, want %v\nfull output:\n%s", got, want, out)
 	}
 }

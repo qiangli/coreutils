@@ -3,6 +3,8 @@ package exprcmd
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -97,4 +99,43 @@ func TestExprPOSIXMatchAndStringFunctions(t *testing.T) {
 	checkExpr(t, "\n", 1, "substr", "abc", "0", "2")
 	checkExpr(t, "2\n", 0, "index", "abc", "xcb")
 	checkExpr(t, "b\n", 0, "match", "abc", `a\(b\)`)
+}
+
+type epipeWriter struct{}
+
+func (w epipeWriter) Write(p []byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestExprEPIPE(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "result", args: []string{"1", "+", "1"}},
+		{name: "help", args: []string{"--help"}},
+		{name: "version", args: []string{"--version"}},
+	}
+	for _, tc := range cases {
+		for _, ignored := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/ignored=%v", tc.name, ignored), func(t *testing.T) {
+				var errb bytes.Buffer
+				rc := &tool.RunContext{
+					Ctx: context.Background(),
+					Stdio: tool.Stdio{
+						In:  strings.NewReader(""),
+						Out: epipeWriter{},
+						Err: &errb,
+					},
+					SIGPIPEIgnored: ignored,
+				}
+				code := run(rc, tc.args)
+				wantCode, wantErr := 0, ""
+				if ignored {
+					wantCode, wantErr = 1, "expr: stdout: Broken pipe\n"
+				}
+				if code != wantCode || errb.String() != wantErr {
+					t.Errorf("code=%d stderr=%q, want code=%d stderr=%q", code, errb.String(), wantCode, wantErr)
+				}
+			})
+		}
+	}
 }

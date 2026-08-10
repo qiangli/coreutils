@@ -273,6 +273,10 @@ func run(rc *tool.RunContext, args []string) int {
 		lastOut = int(b)
 		if err := out.WriteByte(b); err != nil {
 			if tool.IsClosedPipeError(err) {
+				if rc.SIGPIPEIgnored {
+					fmt.Fprintln(rc.Err, "tr: stdout: Broken pipe")
+					return 1
+				}
 				return 0
 			}
 			return fail(fmt.Sprintf("write error: %v", err))
@@ -280,6 +284,10 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if err := out.Flush(); err != nil {
 		if tool.IsClosedPipeError(err) {
+			if rc.SIGPIPEIgnored {
+				fmt.Fprintln(rc.Err, "tr: stdout: Broken pipe")
+				return 1
+			}
 			return 0
 		}
 		return fail(fmt.Sprintf("write error: %v", err))

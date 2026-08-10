@@ -51,12 +51,13 @@ func HandlerFunc(intercept func(name string) bool) func(interp.ExecHandlerFunc) 
 			hc := interp.HandlerCtx(ctx)
 			umask := hc.Umask()
 			rc := &tool.RunContext{
-				Ctx:      ctx,
-				Dir:      hc.Dir,
-				Env:      envSlice(hc.Env),
-				FS:       tool.NewLocalFS(),
-				Umask:    umask,
-				UmaskSet: true,
+				Ctx:            ctx,
+				Dir:            hc.Dir,
+				Env:            envSlice(hc.Env),
+				FS:             tool.NewLocalFS(),
+				Umask:          umask,
+				UmaskSet:       true,
+				SIGPIPEIgnored: hc.SignalIgnored("PIPE"),
 				Stdio: tool.Stdio{
 					In:  hc.Stdin,
 					Out: hc.Stdout,
