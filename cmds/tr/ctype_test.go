@@ -813,6 +813,13 @@ func TestCTypeCaseTranslation(t *testing.T) {
 		}
 	})
 
+	t.Run("C locale fill candidate at raw capacity boundary", func(t *testing.T) {
+		out, errb, code := runTool(t, "12az", "12[:lower:]", "[x*][:upper:]")
+		if code != 0 || errb != "" || out != "xxAZ" {
+			t.Errorf("code=%d stdout=%q stderr=%q, want 0, %q, empty", code, out, errb, "xxAZ")
+		}
+	})
+
 	t.Run("non-C ordinary class in delete is OK", func(t *testing.T) {
 		// Ordinary classes (non-case) should work under non-C.
 		env := []string{"LC_CTYPE=fake_locale"}
@@ -950,6 +957,13 @@ func TestCTypeCaseTranslation(t *testing.T) {
 				args:       []string{"1[:lower:]3", "2[:upper:]"},
 				stdin:      "",
 				wantStderr: "when translating with string1 longer than string2,\nthe latter string must not end with a character class",
+				reject:     true,
+			},
+			{
+				name:       "fill cannot exceed zero raw capacity to reach case class",
+				args:       []string{"12[:upper:]", "[x*][:lower:]"},
+				stdin:      "",
+				wantStderr: "misaligned [:upper:] and/or [:lower:] construct",
 				reject:     true,
 			},
 		}
