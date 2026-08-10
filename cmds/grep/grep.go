@@ -610,7 +610,37 @@ func breNeedsPackageMatcher(p string) bool {
 			if (n >= '1' && n <= '9') || n == '<' || n == '>' {
 				return true
 			}
+			// Large intervals are valid POSIX (within RE_DUP_MAX) but exceed
+			// Go RE2's 1000-repeat limit, so they must route through pkg/bre's
+			// bounded backtracking matcher — the same dispatch the ERE path
+			// makes via bre.ERERequiresBacktracking/intervalNeedsBacktrack.
+			if n == '{' {
+				end := strings.Index(p[i+2:], `\}`)
+				if end >= 0 && intervalExceedsRE2(p[i+2:i+2+end]) {
+					return true
+				}
+			}
 			i++
+		}
+	}
+	return false
+}
+
+// re2MaxRepeat is Go RE2's repeat-count limit. Intervals with a bound exceeding
+// this are valid POSIX (within RE_DUP_MAX) but cannot be compiled by RE2.
+const re2MaxRepeat = 1000
+
+// intervalExceedsRE2 reports whether any numeric bound in a BRE \{...\}
+// interval exceeds Go RE2's repeat-count limit. Mirrors
+// pkg/bre.intervalNeedsBacktrack without duplicating that package's
+// normalizeInterval/parseInterval internals.
+func intervalExceedsRE2(inner string) bool {
+	for _, part := range strings.SplitN(inner, ",", 2) {
+		if part == "" {
+			continue // GNU {,n} → lo defaults to 0; open-ended {m,} → only lo matters
+		}
+		if v, err := strconv.Atoi(part); err == nil && v > re2MaxRepeat {
+			return true
 		}
 	}
 	return false

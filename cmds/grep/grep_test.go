@@ -768,3 +768,62 @@ func TestGrepOnlyMatchingUsesLeftmostLongest(t *testing.T) {
 		}
 	}
 }
+
+// TestGrepREDUPMAX2047Intervals exercises the RE_DUP_MAX-scale interval boundary
+// at exactly 2047 in both BRE (\{…\}) and ERE ({…}) modes. Go RE2 rejects repeat
+// counts > 1000, so these intervals route through pkg/bre's bounded backtracking
+// matcher. Each pattern is run against synthetic single-line inputs at lengths
+// 0, 1, 2046, 2047, and 2048 to assert both matching and nonmatching behavior.
+func TestGrepREDUPMAX2047Intervals(t *testing.T) {
+	lengths := []int{0, 1, 2046, 2047, 2048}
+	lines := make(map[int]string, len(lengths))
+	for _, n := range lengths {
+		lines[n] = strings.Repeat("a", n)
+	}
+	cases := []struct {
+		name string
+		args []string
+		want map[int]bool // line length → should match
+	}{
+		{
+			"BRE exact 2047",
+			[]string{`^a\{2047\}$`},
+			map[int]bool{0: false, 1: false, 2046: false, 2047: true, 2048: false},
+		},
+		{
+			"BRE range 1-2047",
+			[]string{`^a\{1,2047\}$`},
+			map[int]bool{0: false, 1: true, 2046: true, 2047: true, 2048: false},
+		},
+		{
+			"ERE exact 2047",
+			[]string{"-E", `^a{2047}$`},
+			map[int]bool{0: false, 1: false, 2046: false, 2047: true, 2048: false},
+		},
+		{
+			"ERE range 1-2047",
+			[]string{"-E", `^a{1,2047}$`},
+			map[int]bool{0: false, 1: true, 2046: true, 2047: true, 2048: false},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, n := range lengths {
+				input := lines[n] + "\n"
+				out, errb, code := runGrep(t, "", input, tc.args...)
+				wantMatch := tc.want[n]
+				if wantMatch {
+					if code != 0 || out != input || errb != "" {
+						t.Errorf("len=%d: grep %v = (%q, %q, %d), want match (%q, empty, 0)",
+							n, tc.args, out, errb, code, input)
+					}
+				} else {
+					if code != 1 || out != "" || errb != "" {
+						t.Errorf("len=%d: grep %v = (%q, %q, %d), want no match (\"\", empty, 1)",
+							n, tc.args, out, errb, code)
+					}
+				}
+			}
+		})
+	}
+}
