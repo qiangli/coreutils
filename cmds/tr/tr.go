@@ -78,10 +78,21 @@ func run(rc *tool.RunContext, args []string) int {
 	// (GNU getopt short option): pre-parse it out of short-flag clusters.
 	complementC := false
 	pre := make([]string, 0, len(args))
-	for k, a := range args {
+	operandsStart := false
+	for _, a := range args {
+		if operandsStart {
+			pre = append(pre, a)
+			continue
+		}
 		if a == "--" {
-			pre = append(pre, args[k:]...)
-			break
+			operandsStart = true
+			pre = append(pre, a)
+			continue
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			operandsStart = true
+			pre = append(pre, "--", a)
+			continue
 		}
 		if len(a) >= 2 && a[0] == '-' && a[1] != '-' && strings.Contains(a, "C") {
 			complementC = true
