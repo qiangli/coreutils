@@ -62,6 +62,9 @@ func TestLoadLibcNegative(t *testing.T) {
 }
 
 func TestVerifyCodesetNegative(t *testing.T) {
+	wrongCodeset := make([]byte, codesetLimit)
+	copy(wrongCodeset, "UTF-8") // zero-filled suffix supplies the early C NUL
+
 	unterminated := make([]byte, codesetLimit)
 	for i := range unterminated {
 		unterminated[i] = 'A'
@@ -75,13 +78,16 @@ func TestVerifyCodesetNegative(t *testing.T) {
 		name string
 		data []byte
 	}{
-		{"wrong_codeset", []byte("UTF-8\x00")},
+		{"wrong_codeset", wrongCodeset},
 		{"unterminated", unterminated},
 		{"overlong", overlong},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			if len(tc.data) < codesetLimit {
+				t.Fatalf("fixture storage is %d bytes, need at least %d", len(tc.data), codesetLimit)
+			}
 			b := &libcBinding{
 				nlLanginfoL: func(item int32, loc uintptr) *byte {
 					return &tc.data[0]
