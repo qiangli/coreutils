@@ -20,19 +20,31 @@ import (
 // fakeProvider implements ctypeProvider with configurable class membership
 // and case mapping.  It tracks Open/Close counts atomically.
 type fakeProvider struct {
-	classes map[string]map[byte]bool // class name → byte membership
-	lower   [256]byte
-	upper   [256]byte
-	closed  atomic.Bool
-	closeN  *atomic.Int32 // shared counter
-	isErr   error         // if non-nil, every Is* returns this
-	caseErr error         // if non-nil, ToLower/ToUpper return this
-	closErr error         // if non-nil, Close returns this
-	shortLo bool          // ToLower returns short slice
-	shortUp bool          // ToUpper returns short slice
+	classes  map[string]map[byte]bool // class name → byte membership
+	lower    [256]byte
+	upper    [256]byte
+	closed   atomic.Bool
+	closeN   *atomic.Int32 // shared counter
+	isErr    error         // if non-nil, every Is* returns this
+	lowerErr error         // if non-nil, ToLower returns this
+	upperErr error         // if non-nil, ToUpper returns this
+	closErr  error         // if non-nil, Close returns this
+	loLen    *int          // if non-nil, ToLower returns exactly this many bytes
+	upLen    *int          // if non-nil, ToUpper returns exactly this many bytes
+
+	// probe instrumentation (buildProviderTables is single-goroutine, so
+	// plain ints/slices are race-free here).
+	isCalls map[string]int // per-class Is* invocation count (nil = untracked)
+	loCalls int            // ToLower invocation count
+	upCalls int            // ToUpper invocation count
+	loRecv  []byte         // exact bytes handed to the last ToLower call
+	upRecv  []byte         // exact bytes handed to the last ToUpper call
 }
 
 func (f *fakeProvider) check(class string, b byte) (bool, error) {
+	if f.isCalls != nil {
+		f.isCalls[class]++
+	}
 	if f.isErr != nil {
 		return false, f.isErr
 	}
@@ -56,31 +68,45 @@ func (f *fakeProvider) IsUpper(b byte) (bool, error)  { return f.check("upper", 
 func (f *fakeProvider) IsXDigit(b byte) (bool, error) { return f.check("xdigit", b) }
 
 func (f *fakeProvider) ToLower(in []byte) ([]byte, error) {
-	if f.caseErr != nil {
-		return nil, f.caseErr
+	f.loCalls++
+	f.loRecv = append([]byte(nil), in...)
+	if f.lowerErr != nil {
+		return nil, f.lowerErr
 	}
 	out := make([]byte, len(in))
 	for i, b := range in {
 		out[i] = f.lower[b]
 	}
-	if f.shortLo {
-		return out[:len(out)/2], nil
+	if f.loLen != nil {
+		return resizeBytes(out, *f.loLen), nil
 	}
 	return out, nil
 }
 
 func (f *fakeProvider) ToUpper(in []byte) ([]byte, error) {
-	if f.caseErr != nil {
-		return nil, f.caseErr
+	f.upCalls++
+	f.upRecv = append([]byte(nil), in...)
+	if f.upperErr != nil {
+		return nil, f.upperErr
 	}
 	out := make([]byte, len(in))
 	for i, b := range in {
 		out[i] = f.upper[b]
 	}
-	if f.shortUp {
-		return out[:len(out)/2], nil
+	if f.upLen != nil {
+		return resizeBytes(out, *f.upLen), nil
 	}
 	return out, nil
+}
+
+// resizeBytes returns b at exactly length n: truncated when n<=len(b),
+// zero-padded when longer.  Used to simulate a provider that returns the
+// wrong number of case-mapped bytes.
+func resizeBytes(b []byte, n int) []byte {
+	if n <= len(b) {
+		return b[:n]
+	}
+	return append(b, make([]byte, n-len(b))...)
 }
 
 func (f *fakeProvider) Close() error {
@@ -268,6 +294,36 @@ func TestCTypeLifecycle(t *testing.T) {
 			t.Errorf("stderr %q should mention locale", errb)
 		}
 	})
+
+	t.Run("pre-open exits bypass opener", func(t *testing.T) {
+		// help/version, an unknown flag, and operand-count errors are all
+		// resolved before LC_CTYPE is opened.  Under a non-C locale (which
+		// WOULD open a provider) the opener must still never be called.
+		env := []string{"LC_CTYPE=fake_LOCALE"}
+		panicOpener := func(name string) (ctypeProvider, error) {
+			t.Fatalf("opener called for %q; pre-open exit must bypass it", name)
+			return nil, nil
+		}
+		cases := []struct {
+			name     string
+			args     []string
+			wantCode int
+		}{
+			{"help", []string{"--help"}, 0},
+			{"version", []string{"--version"}, 0},
+			{"unknown flag", []string{"-Z", "a"}, 2},
+			{"missing operand", nil, 2},
+			{"extra operand", []string{"a", "b", "c"}, 2},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				_, errb, code := runWithOpener(t, env, "", panicOpener, c.args...)
+				if code != c.wantCode {
+					t.Errorf("code=%d, want %d (err=%q)", code, c.wantCode, errb)
+				}
+			})
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -343,10 +399,13 @@ func TestCTypeProviderBacked(t *testing.T) {
 		}
 	})
 
-	t.Run("provider closed before stream read on success", func(t *testing.T) {
-		// Verify that the provider is closed before any stdin read.
+	t.Run("provider closed exactly once before stream read and write on success", func(t *testing.T) {
+		// Both the input reader and the output writer must observe the
+		// provider as already closed, and Close must fire exactly once.
+		closeCount.Store(0)
 		var providerClosed atomic.Bool
 		var stdinReadBeforeClose atomic.Bool
+		var stdoutWriteBeforeClose atomic.Bool
 		trackOpener := func(name string) (ctypeProvider, error) {
 			fp := newFakeProvider(&closeCount)
 			// wrap close to set flag
@@ -354,19 +413,99 @@ func TestCTypeProviderBacked(t *testing.T) {
 		}
 
 		pr := &trackingReader{closed: &providerClosed, readBeforeClose: &stdinReadBeforeClose}
-		var out, errb bytes.Buffer
+		pw := &trackingWriter{closed: &providerClosed, writeBeforeClose: &stdoutWriteBeforeClose}
+		var errb bytes.Buffer
 		rc := &tool.RunContext{
 			Ctx:   context.Background(),
 			Dir:   t.TempDir(),
 			Env:   env,
-			Stdio: tool.Stdio{In: pr, Out: &out, Err: &errb},
+			Stdio: tool.Stdio{In: pr, Out: pw, Err: &errb},
 		}
+		// "test" contains no digits, so all four bytes pass through and
+		// reach the writer — proving the write path also runs post-close.
 		code := runWithCType(rc, []string{"-d", "[:digit:]"}, trackOpener)
 		if code != 0 {
 			t.Fatalf("code=%d err=%q", code, errb.String())
 		}
 		if stdinReadBeforeClose.Load() {
 			t.Error("stdin was read before provider was closed")
+		}
+		if stdoutWriteBeforeClose.Load() {
+			t.Error("stdout was written before provider was closed")
+		}
+		if closeCount.Load() != 1 {
+			t.Errorf("closeCount=%d, want 1", closeCount.Load())
+		}
+	})
+
+	t.Run("buildProviderTables probes every predicate over 00..FF exactly", func(t *testing.T) {
+		var closeCount atomic.Int32
+		// One unique sentinel byte per class proves each Is* predicate
+		// populates its own table slot with no cross-wiring.
+		sentinel := map[string]byte{
+			"alnum": 0x01, "alpha": 0x02, "blank": 0x03, "cntrl": 0x04,
+			"digit": 0x05, "graph": 0x06, "lower": 0x07, "print": 0x08,
+			"punct": 0x09, "space": 0x0A, "upper": 0x0B, "xdigit": 0x0C,
+		}
+		classes := map[string]map[byte]bool{}
+		for name, b := range sentinel {
+			classes[name] = map[byte]bool{b: true}
+		}
+		fp := &fakeProvider{
+			classes: classes,
+			closeN:  &closeCount,
+			isCalls: map[string]int{},
+		}
+		// Distinct, non-identity case maps so the copied tables can be
+		// asserted byte-for-byte.
+		for i := 0; i < 256; i++ {
+			fp.lower[i] = byte(255 - i)
+			fp.upper[i] = byte((i + 7) & 0xFF)
+		}
+
+		tables, err := buildProviderTables(fp)
+		if err != nil {
+			t.Fatalf("buildProviderTables: %v", err)
+		}
+
+		got := map[string][]byte{
+			"alnum": tables.alnum, "alpha": tables.alpha, "blank": tables.blank,
+			"cntrl": tables.cntrl, "digit": tables.digit, "graph": tables.graph,
+			"lower": tables.lower, "print": tables.print, "punct": tables.punct,
+			"space": tables.space, "upper": tables.upper, "xdigit": tables.xdigit,
+		}
+		for name, b := range sentinel {
+			if !bytes.Equal(got[name], []byte{b}) {
+				t.Errorf("class %s table=%v, want [%d]", name, got[name], b)
+			}
+			if fp.isCalls[name] != 256 {
+				t.Errorf("Is%s probed %d times, want 256", name, fp.isCalls[name])
+			}
+		}
+
+		want := make([]byte, 256)
+		for i := range want {
+			want[i] = byte(i)
+		}
+		if fp.loCalls != 1 || fp.upCalls != 1 {
+			t.Errorf("case calls lo=%d up=%d, want 1 and 1", fp.loCalls, fp.upCalls)
+		}
+		if !bytes.Equal(fp.loRecv, want) {
+			t.Errorf("ToLower received %v, want 00..FF", fp.loRecv)
+		}
+		if !bytes.Equal(fp.upRecv, want) {
+			t.Errorf("ToUpper received %v, want 00..FF", fp.upRecv)
+		}
+		for i := 0; i < 256; i++ {
+			if tables.toLower[i] != fp.lower[i] {
+				t.Fatalf("toLower[%d]=%d, want %d", i, tables.toLower[i], fp.lower[i])
+			}
+			if tables.toUpper[i] != fp.upper[i] {
+				t.Fatalf("toUpper[%d]=%d, want %d", i, tables.toUpper[i], fp.upper[i])
+			}
+		}
+		if closeCount.Load() != 1 {
+			t.Errorf("closeCount=%d, want 1", closeCount.Load())
 		}
 	})
 }
@@ -398,6 +537,19 @@ func (r *trackingReader) Read(p []byte) (int, error) {
 	}
 	r.done = true
 	return copy(p, "test"), nil
+}
+
+// trackingWriter records whether Write was called before the provider closed.
+type trackingWriter struct {
+	closed           *atomic.Bool
+	writeBeforeClose *atomic.Bool
+}
+
+func (w *trackingWriter) Write(p []byte) (int, error) {
+	if !w.closed.Load() {
+		w.writeBeforeClose.Store(true)
+	}
+	return len(p), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -519,54 +671,55 @@ func TestCTypeFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("short ToLower map fails", func(t *testing.T) {
-		var closeCount atomic.Int32
-		opener := func(name string) (ctypeProvider, error) {
-			fp := newFakeProvider(&closeCount)
-			fp.shortLo = true
-			return fp, nil
+	t.Run("case-map build failures close once with no stream I/O", func(t *testing.T) {
+		// Method-specific ToLower/ToUpper errors and wrong-length returns
+		// (255 short, 257 long) must each fail pre-I/O, close the provider
+		// exactly once, and surface the stable diagnostic.
+		l255, l257 := 255, 257
+		loErr := errors.New("tolower broke")
+		upErr := errors.New("toupper broke")
+		cases := []struct {
+			name    string
+			mutate  func(*fakeProvider)
+			wantErr string
+		}{
+			{"ToLower error", func(fp *fakeProvider) { fp.lowerErr = loErr }, "ToLower: tolower broke"},
+			{"ToUpper error", func(fp *fakeProvider) { fp.upperErr = upErr }, "ToUpper: toupper broke"},
+			{"ToLower short 255", func(fp *fakeProvider) { fp.loLen = &l255 }, "ToLower returned 255 bytes, want 256"},
+			{"ToLower long 257", func(fp *fakeProvider) { fp.loLen = &l257 }, "ToLower returned 257 bytes, want 256"},
+			{"ToUpper short 255", func(fp *fakeProvider) { fp.upLen = &l255 }, "ToUpper returned 255 bytes, want 256"},
+			{"ToUpper long 257", func(fp *fakeProvider) { fp.upLen = &l257 }, "ToUpper returned 257 bytes, want 256"},
 		}
-
-		var errb bytes.Buffer
-		rc := &tool.RunContext{
-			Ctx:   context.Background(),
-			Dir:   t.TempDir(),
-			Env:   env,
-			Stdio: tool.Stdio{In: panicReader{}, Out: &spyWriter{}, Err: &errb},
-		}
-		code := runWithCType(rc, []string{"-d", "a"}, opener)
-		if code != 2 {
-			t.Errorf("code=%d, want 2", code)
-		}
-		if !strings.Contains(errb.String(), "128 bytes, want 256") {
-			t.Errorf("stderr %q should mention short map", errb.String())
-		}
-		if closeCount.Load() != 1 {
-			t.Errorf("closeCount=%d, want 1", closeCount.Load())
-		}
-	})
-
-	t.Run("short ToUpper map fails", func(t *testing.T) {
-		var closeCount atomic.Int32
-		opener := func(name string) (ctypeProvider, error) {
-			fp := newFakeProvider(&closeCount)
-			fp.shortUp = true
-			return fp, nil
-		}
-
-		var errb bytes.Buffer
-		rc := &tool.RunContext{
-			Ctx:   context.Background(),
-			Dir:   t.TempDir(),
-			Env:   env,
-			Stdio: tool.Stdio{In: panicReader{}, Out: &spyWriter{}, Err: &errb},
-		}
-		code := runWithCType(rc, []string{"-d", "a"}, opener)
-		if code != 2 {
-			t.Errorf("code=%d, want 2", code)
-		}
-		if !strings.Contains(errb.String(), "128 bytes, want 256") {
-			t.Errorf("stderr %q should mention short map", errb.String())
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				var closeCount atomic.Int32
+				opener := func(name string) (ctypeProvider, error) {
+					fp := newFakeProvider(&closeCount)
+					c.mutate(fp)
+					return fp, nil
+				}
+				spy := &spyWriter{}
+				var errb bytes.Buffer
+				rc := &tool.RunContext{
+					Ctx:   context.Background(),
+					Dir:   t.TempDir(),
+					Env:   env,
+					Stdio: tool.Stdio{In: panicReader{}, Out: spy, Err: &errb},
+				}
+				code := runWithCType(rc, []string{"-d", "a"}, opener)
+				if code != 2 {
+					t.Errorf("code=%d, want 2", code)
+				}
+				if spy.written {
+					t.Error("stdout written despite build failure")
+				}
+				if !strings.Contains(errb.String(), c.wantErr) {
+					t.Errorf("stderr %q should contain %q", errb.String(), c.wantErr)
+				}
+				if closeCount.Load() != 1 {
+					t.Errorf("closeCount=%d, want 1", closeCount.Load())
+				}
+			})
 		}
 	})
 
@@ -601,8 +754,8 @@ func TestCTypeFailures(t *testing.T) {
 func TestCTypeCaseTranslation(t *testing.T) {
 	t.Run("non-C paired-case translation fails pre-IO", func(t *testing.T) {
 		env := []string{"LC_CTYPE=de_DE.ISO-8859-1"}
+		var closeCount atomic.Int32
 		fakeOpener := func(name string) (ctypeProvider, error) {
-			var closeCount atomic.Int32
 			return newFakeProvider(&closeCount), nil
 		}
 
@@ -626,6 +779,11 @@ func TestCTypeCaseTranslation(t *testing.T) {
 		}
 		if !strings.Contains(errb.String(), "de_DE.ISO-8859-1") {
 			t.Errorf("stderr %q should mention locale", errb.String())
+		}
+		// The provider was built (and thus closed once) before the
+		// paired-case rejection; rejection must not leak or double-close it.
+		if closeCount.Load() != 1 {
+			t.Errorf("closeCount=%d, want 1", closeCount.Load())
 		}
 	})
 
@@ -689,6 +847,30 @@ func TestCTypeComplementFlags(t *testing.T) {
 		want := "0\x90"
 		if out != want {
 			t.Errorf("out=%q, want %q", out, want)
+		}
+	})
+
+	t.Run("lowercase -c is independent of non-C LC_COLLATE", func(t *testing.T) {
+		// The removed blanket gate must not resurrect: -c works regardless
+		// of LC_COLLATE. -c -d a keeps only the complement's complement {a}.
+		env := []string{"LC_COLLATE=de_DE"}
+		out, errb, code := runWithOpener(t, env, "abc", neverOpener(), "-c", "-d", "a")
+		if code != 0 {
+			t.Errorf("code=%d err=%q", code, errb)
+		}
+		if out != "a" {
+			t.Errorf("out=%q, want %q", out, "a")
+		}
+	})
+
+	t.Run("--complement long form is independent of non-C LC_COLLATE", func(t *testing.T) {
+		env := []string{"LC_COLLATE=fr_FR.UTF-8"}
+		out, errb, code := runWithOpener(t, env, "abc", neverOpener(), "--complement", "-d", "a")
+		if code != 0 {
+			t.Errorf("code=%d err=%q", code, errb)
+		}
+		if out != "a" {
+			t.Errorf("out=%q, want %q", out, "a")
 		}
 	})
 
