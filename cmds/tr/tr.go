@@ -6,8 +6,7 @@
 // LC_CTYPE (resolved from rc.Env via pkg/locale). Under C/POSIX the
 // pure-Go ASCII tables are used directly; under other locales an
 // injectable ctypeOpener provides class membership and case maps.
-// Paired lower/upper translation under non-C locales is explicitly
-// unsupported until Stage B; C/POSIX behaviour remains byte-identical.
+// Paired lower/upper translation uses the selected locale's case tables.
 package trcmd
 
 import (
@@ -42,6 +41,11 @@ type caseClassSpan struct {
 	tag   byte
 }
 
+type setToken struct {
+	bytes []byte
+	tag   byte
+}
+
 type setSpec struct {
 	bytes         []byte
 	tags          []byte
@@ -50,12 +54,39 @@ type setSpec struct {
 	hasCaseClass  bool // contains [:upper:] or [:lower:]
 	hasOtherClass bool // contains any other [:class:]
 	fillPos       int  // insertion point of a [c*] fill construct; -1 = none
+	fillTokenPos  int  // logical-token insertion point for [c*]; -1 = none
 	fillByte      byte
+	tokens        []setToken
 }
 
 func (sp *setSpec) append(b, tag byte) {
 	sp.bytes = append(sp.bytes, b)
 	sp.tags = append(sp.tags, tag)
+}
+
+func (sp *setSpec) appendOrdinary(b byte) {
+	sp.append(b, tagNone)
+	sp.tokens = append(sp.tokens, setToken{bytes: []byte{b}})
+}
+
+func (sp *setSpec) applyLogicalFill(need int) {
+	if sp.fillTokenPos < 0 {
+		return
+	}
+	if need < 0 {
+		need = 0
+	}
+	insert := make([]setToken, need)
+	for i := range insert {
+		insert[i] = setToken{bytes: []byte{sp.fillByte}}
+	}
+	tokens := make([]setToken, 0, len(sp.tokens)+need)
+	tokens = append(tokens, sp.tokens[:sp.fillTokenPos]...)
+	tokens = append(tokens, insert...)
+	tokens = append(tokens, sp.tokens[sp.fillTokenPos:]...)
+	sp.tokens = tokens
+	sp.fillTokenPos = -1
+	sp.applyFill(need)
 }
 
 // applyFill expands a [c*] / [c*0] construct to `need` copies of the
@@ -102,6 +133,202 @@ func validateCaseClasses(set1, set2 *setSpec) bool {
 		}
 	}
 	return true
+}
+
+func planCaseTokens(set1 *setSpec, target []setToken, lastIsClass bool, tables *ctypeTables, truncate bool, xlate *[256]byte) string {
+	if len(target) == 0 && !truncate {
+		return "when not truncating set1, string2 must be non-empty"
+	}
+
+	ti := 0
+	var last byte
+	haveLast := false
+	nextTarget := func() (byte, bool, string) {
+		if ti < len(target) {
+			t := target[ti]
+			if t.tag != tagNone {
+				return 0, false, "misaligned [:upper:] and/or [:lower:] construct"
+			}
+			ti++
+			last, haveLast = t.bytes[0], true
+			return last, true, ""
+		}
+		if truncate {
+			return 0, false, ""
+		}
+		if lastIsClass {
+			return 0, false, "when translating with string1 longer than string2,\nthe latter string must not end with a character class"
+		}
+		if !haveLast {
+			return 0, false, "when not truncating set1, string2 must be non-empty"
+		}
+		return last, true, ""
+	}
+
+	for _, source := range set1.tokens {
+		if source.tag != tagNone && ti < len(target) && target[ti].tag != tagNone {
+			targetToken := target[ti]
+			ti++
+			switch {
+			case source.tag == targetToken.tag:
+				for _, b := range source.bytes {
+					xlate[b] = b
+				}
+			case source.tag == tagLower && targetToken.tag == tagUpper:
+				for _, b := range source.bytes {
+					xlate[b] = tables.toUpper[b]
+				}
+			case source.tag == tagUpper && targetToken.tag == tagLower:
+				for _, b := range source.bytes {
+					xlate[b] = tables.toLower[b]
+				}
+			}
+			continue
+		}
+
+		// An unpaired source case expands to its ordered ordinary members.
+		for _, b := range source.bytes {
+			target, ok, errMsg := nextTarget()
+			if errMsg != "" {
+				return errMsg
+			}
+			if ok {
+				xlate[b] = target
+			}
+		}
+	}
+	for ; ti < len(target); ti++ {
+		if target[ti].tag != tagNone {
+			return "misaligned [:upper:] and/or [:lower:] construct"
+		}
+	}
+	return ""
+}
+
+type sourceCursor struct {
+	token int
+	off   int
+}
+
+func consumeSourceByte(tokens []setToken, cur *sourceCursor) bool {
+	for cur.token < len(tokens) {
+		if cur.off < len(tokens[cur.token].bytes) {
+			cur.off++
+			if cur.off == len(tokens[cur.token].bytes) {
+				cur.token++
+				cur.off = 0
+			}
+			return true
+		}
+		cur.token++
+		cur.off = 0
+	}
+	return false
+}
+
+func sourceAfterTargetPrefix(source, prefix []setToken) (sourceCursor, bool) {
+	cur := sourceCursor{}
+	for _, target := range prefix {
+		if target.tag == tagNone {
+			consumeSourceByte(source, &cur) // Extra SET2 bytes are harmless.
+			continue
+		}
+		if cur.token >= len(source) || cur.off != 0 || source[cur.token].tag == tagNone {
+			return cur, false
+		}
+		cur.token++
+	}
+	return cur, true
+}
+
+func remainingSourceBytes(source []setToken, cur sourceCursor) int {
+	n := 0
+	if cur.token < len(source) {
+		n += len(source[cur.token].bytes) - cur.off
+		for i := cur.token + 1; i < len(source); i++ {
+			n += len(source[i].bytes)
+		}
+	}
+	return n
+}
+
+func tokensWithFill(tokens []setToken, pos, count int, b byte) []setToken {
+	out := make([]setToken, 0, len(tokens)+count)
+	out = append(out, tokens[:pos]...)
+	for i := 0; i < count; i++ {
+		out = append(out, setToken{bytes: []byte{b}})
+	}
+	return append(out, tokens[pos:]...)
+}
+
+func planCaseTranslation(set1, set2 *setSpec, tables *ctypeTables, truncate bool, xlate *[256]byte) string {
+	if set2.fillTokenPos < 0 {
+		return planCaseTokens(set1, set2.tokens, set2.lastIsClass, tables, truncate, xlate)
+	}
+
+	fillPos := set2.fillTokenPos
+	cur, ok := sourceAfterTargetPrefix(set1.tokens, set2.tokens[:fillPos])
+	if !ok {
+		return "misaligned [:upper:] and/or [:lower:] construct"
+	}
+
+	firstCase := -1
+	for i := fillPos; i < len(set2.tokens); i++ {
+		if set2.tokens[i].tag != tagNone {
+			firstCase = i
+			break
+		}
+	}
+	if firstCase < 0 {
+		need := remainingSourceBytes(set1.tokens, cur) - (len(set2.tokens) - fillPos)
+		if need < 0 {
+			need = 0
+		}
+		set2.applyLogicalFill(need)
+		return planCaseTokens(set1, set2.tokens, set2.lastIsClass, tables, truncate, xlate)
+	}
+
+	ordinaryDistance := firstCase - fillPos
+	candidates := make([]int, 0)
+	seen := make(map[int]bool)
+	distance := 0
+	for i, off := cur.token, cur.off; i < len(set1.tokens); i, off = i+1, 0 {
+		if off == 0 && set1.tokens[i].tag != tagNone {
+			if k := distance - ordinaryDistance; k >= 0 && !seen[k] {
+				seen[k] = true
+				candidates = append(candidates, k)
+			}
+		}
+		distance += len(set1.tokens[i].bytes) - off
+	}
+
+	var accepted *[256]byte
+	acceptedK := -1
+	for _, k := range candidates {
+		target := tokensWithFill(set2.tokens, fillPos, k, set2.fillByte)
+		var candidate [256]byte
+		for i := range candidate {
+			candidate[i] = byte(i)
+		}
+		if planCaseTokens(set1, target, set2.lastIsClass, tables, truncate, &candidate) != "" {
+			continue
+		}
+		if accepted == nil {
+			copyMap := candidate
+			accepted = &copyMap
+			acceptedK = k
+			continue
+		}
+		if *accepted != candidate {
+			return "misaligned [:upper:] and/or [:lower:] construct"
+		}
+	}
+	if accepted == nil {
+		return "misaligned [:upper:] and/or [:lower:] construct"
+	}
+	*xlate = *accepted
+	set2.applyLogicalFill(acceptedK)
+	return ""
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -240,49 +467,50 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 		if comp && set2.hasCaseClass {
 			return fail("when translating with complemented character classes,\nstring2 must map all characters in the domain to one")
 		}
-		// Stage A: reject paired-case translation under non-C LC_CTYPE.
-		if set2.hasCaseClass && !isCPOSIX(lcCType) {
-			fmt.Fprintf(rc.Err, "tr: case conversion via [:lower:]/[:upper:] is not yet supported under LC_CTYPE=%q\n", lcCType)
-			return 2
-		}
-		// Expand a [c*] fill construct to make SET2 as long as literal SET1.
-		set2.applyFill(len(set1.bytes) - len(set2.bytes))
-		if !validateCaseClasses(set1, set2) {
-			return fail("misaligned [:upper:] and/or [:lower:] construct")
-		}
-		if *truncateSet1 {
-			if len(set2.bytes) == 0 {
-				eff1.bytes = eff1.bytes[:0]
-				eff1.tags = eff1.tags[:0]
-			} else if len(eff1.bytes) > len(set2.bytes) {
-				eff1.bytes = eff1.bytes[:len(set2.bytes)]
-				eff1.tags = eff1.tags[:len(set2.bytes)]
+		if !comp && set2.hasCaseClass {
+			if errMsg := planCaseTranslation(set1, set2, tables, *truncateSet1, &xlate); errMsg != "" {
+				return fail(errMsg)
 			}
 		} else {
-			if len(set2.bytes) == 0 {
-				return fail("when not truncating set1, string2 must be non-empty")
-			}
-			if len(set2.bytes) < len(eff1.bytes) {
-				if set2.lastIsClass {
-					return fail("when translating with string1 longer than string2,\nthe latter string must not end with a character class")
-				}
-				last := set2.bytes[len(set2.bytes)-1]
-				for len(set2.bytes) < len(eff1.bytes) {
-					set2.append(last, tagNone)
-				}
-			}
-		}
-		for i, c1 := range eff1.bytes {
-			t1, t2 := eff1.tags[i], set2.tags[i]
-			switch {
-			case t1 == tagNone && t2 != tagNone:
+			// Keep complement and all-ordinary translation on the existing flat path.
+			set2.applyFill(len(set1.bytes) - len(set2.bytes))
+			if !validateCaseClasses(set1, set2) {
 				return fail("misaligned [:upper:] and/or [:lower:] construct")
-			case t1 == tagLower && t2 == tagUpper:
-				xlate[c1] = tables.toUpper[c1]
-			case t1 == tagUpper && t2 == tagLower:
-				xlate[c1] = tables.toLower[c1]
-			default:
-				xlate[c1] = set2.bytes[i]
+			}
+			if *truncateSet1 {
+				if len(set2.bytes) == 0 {
+					eff1.bytes = eff1.bytes[:0]
+					eff1.tags = eff1.tags[:0]
+				} else if len(eff1.bytes) > len(set2.bytes) {
+					eff1.bytes = eff1.bytes[:len(set2.bytes)]
+					eff1.tags = eff1.tags[:len(set2.bytes)]
+				}
+			} else {
+				if len(set2.bytes) == 0 {
+					return fail("when not truncating set1, string2 must be non-empty")
+				}
+				if len(set2.bytes) < len(eff1.bytes) {
+					if set2.lastIsClass {
+						return fail("when translating with string1 longer than string2,\nthe latter string must not end with a character class")
+					}
+					last := set2.bytes[len(set2.bytes)-1]
+					for len(set2.bytes) < len(eff1.bytes) {
+						set2.append(last, tagNone)
+					}
+				}
+			}
+			for i, c1 := range eff1.bytes {
+				t1, t2 := eff1.tags[i], set2.tags[i]
+				switch {
+				case t1 == tagNone && t2 != tagNone:
+					return fail("misaligned [:upper:] and/or [:lower:] construct")
+				case t1 == tagLower && t2 == tagUpper:
+					xlate[c1] = tables.toUpper[c1]
+				case t1 == tagUpper && t2 == tagLower:
+					xlate[c1] = tables.toLower[c1]
+				default:
+					xlate[c1] = set2.bytes[i]
+				}
 			}
 		}
 	}
@@ -411,7 +639,7 @@ func parseSet(s string, isSet2 bool) (*setSpec, string) {
 // expansion when non-nil.  When tables is nil the hardcoded C-locale
 // classBytes function is used instead.
 func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, string) {
-	sp := &setSpec{fillPos: -1}
+	sp := &setSpec{fillPos: -1, fillTokenPos: -1}
 	i := 0
 	for i < len(s) {
 		if s[i] == '[' {
@@ -442,8 +670,15 @@ func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, s
 				default:
 					sp.hasOtherClass = true
 				}
-				for _, b := range expanded {
-					sp.append(b, tag)
+				if tag == tagNone {
+					for _, b := range expanded {
+						sp.appendOrdinary(b)
+					}
+				} else {
+					for _, b := range expanded {
+						sp.append(b, tag)
+					}
+					sp.tokens = append(sp.tokens, setToken{bytes: expanded, tag: tag})
 				}
 				sp.lastIsClass = true
 				i += adv
@@ -452,7 +687,7 @@ func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, s
 			if eqc, adv, ok, errMsg := matchEquiv(s[i:]); errMsg != "" {
 				return nil, errMsg
 			} else if ok {
-				sp.append(eqc, tagNone)
+				sp.appendOrdinary(eqc)
 				sp.lastIsClass = false
 				i += adv
 				continue
@@ -468,10 +703,11 @@ func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, s
 						return nil, "only one [c*] repeat construct may appear in string2"
 					}
 					sp.fillPos = len(sp.bytes)
+					sp.fillTokenPos = len(sp.tokens)
 					sp.fillByte = rb
 				} else {
 					for k := 0; k < count; k++ {
-						sp.append(rb, tagNone)
+						sp.appendOrdinary(rb)
 					}
 				}
 				sp.lastIsClass = false
@@ -487,13 +723,13 @@ func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, s
 				return nil, fmt.Sprintf("range-endpoints of '%c-%c' are in reverse collating sequence order", lo, hi)
 			}
 			for b := int(lo); b <= int(hi); b++ {
-				sp.append(byte(b), tagNone)
+				sp.appendOrdinary(byte(b))
 			}
 			i = j
 			sp.lastIsClass = false
 			continue
 		}
-		sp.append(lo, tagNone)
+		sp.appendOrdinary(lo)
 		sp.lastIsClass = false
 	}
 	return sp, ""
