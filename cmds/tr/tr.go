@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -188,15 +187,6 @@ func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 	fail := func(msg string) int {
 		fmt.Fprintf(rc.Err, "tr: %s\n", msg)
 		return 1
-	}
-
-	// -C (uppercase): require C/POSIX LC_COLLATE.
-	if complementC || *complementUpper {
-		lcCollate := locale.Resolve(rc.Env, locale.Collate)
-		if !isCPOSIX(lcCollate) {
-			fmt.Fprintf(rc.Err, "tr: -C requires C/POSIX LC_COLLATE, got %q\n", lcCollate)
-			return 2
-		}
 	}
 
 	// Resolve LC_CTYPE and build class/case tables.
@@ -428,12 +418,16 @@ func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, s
 			if cls, adv, ok := matchClass(s[i:]); ok {
 				var expanded []byte
 				if tables != nil {
-					expanded = tables.classFromTable(cls)
+					var known bool
+					expanded, known = tables.classFromTable(cls)
+					if !known {
+						return nil, fmt.Sprintf("invalid character class '%s'", cls)
+					}
 				} else {
 					expanded = classBytes(cls)
-				}
-				if expanded == nil {
-					return nil, fmt.Sprintf("invalid character class '%s'", cls)
+					if expanded == nil {
+						return nil, fmt.Sprintf("invalid character class '%s'", cls)
+					}
 				}
 				tag := tagNone
 				switch cls {

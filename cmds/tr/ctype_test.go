@@ -707,45 +707,159 @@ func TestCTypeComplementFlags(t *testing.T) {
 		}
 	})
 
-	t.Run("-C rejects non-C LC_COLLATE pre-IO", func(t *testing.T) {
+	t.Run("-C works with non-C LC_COLLATE", func(t *testing.T) {
+		// -C must not fail merely because LC_COLLATE is non-C.
+		// -C -d a = delete complement of {a} = keep only a.
 		env := []string{"LC_COLLATE=de_DE"}
-		spy := &spyWriter{}
-		var errb bytes.Buffer
-		rc := &tool.RunContext{
-			Ctx:   context.Background(),
-			Dir:   t.TempDir(),
-			Env:   env,
-			Stdio: tool.Stdio{In: panicReader{}, Out: spy, Err: &errb},
+		out, errb, code := runWithOpener(t, env, "abc", neverOpener(), "-C", "-d", "a")
+		if code != 0 {
+			t.Errorf("code=%d err=%q", code, errb)
 		}
-		code := runWithCType(rc, []string{"-C", "-d", "a"}, neverOpener())
-		if code != 2 {
-			t.Errorf("code=%d, want 2", code)
-		}
-		if spy.written {
-			t.Error("stdout written despite -C rejection")
-		}
-		if !strings.Contains(errb.String(), "LC_COLLATE") {
-			t.Errorf("stderr %q should mention LC_COLLATE", errb.String())
+		if out != "a" {
+			t.Errorf("out=%q, want %q", out, "a")
 		}
 	})
 
-	t.Run("-C rejects non-C LC_COLLATE via LC_ALL", func(t *testing.T) {
-		// LC_ALL overrides LC_COLLATE; if LC_ALL is non-C, -C should fail.
+	t.Run("-C works with non-C LC_COLLATE via LC_ALL", func(t *testing.T) {
+		// LC_ALL overrides LC_COLLATE and LC_CTYPE. Supply a working
+		// opener so LC_CTYPE resolution doesn't panic.
+		fakeOpener := func(name string) (ctypeProvider, error) {
+			var closeCount atomic.Int32
+			return newFakeProvider(&closeCount), nil
+		}
 		env := []string{"LC_COLLATE=C", "LC_ALL=de_DE"}
-		spy := &spyWriter{}
-		var errb bytes.Buffer
-		rc := &tool.RunContext{
-			Ctx:   context.Background(),
-			Dir:   t.TempDir(),
-			Env:   env,
-			Stdio: tool.Stdio{In: panicReader{}, Out: spy, Err: &errb},
+		out, errb, code := runWithOpener(t, env, "abc", fakeOpener, "-C", "-d", "a")
+		if code != 0 {
+			t.Errorf("code=%d err=%q", code, errb)
 		}
-		code := runWithCType(rc, []string{"-C", "-d", "a"}, neverOpener())
-		if code != 2 {
-			t.Errorf("code=%d, want 2", code)
+		if out != "a" {
+			t.Errorf("out=%q, want %q", out, "a")
 		}
-		if spy.written {
-			t.Error("stdout written despite -C rejection")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestCTypeClassFromTable — regression: recognised empty classes vs bogus
+// ---------------------------------------------------------------------------
+
+func TestCTypeClassFromTable(t *testing.T) {
+	// Regression: classFromTable must return true for every recognised
+	// class even when its membership is empty, and false only for an
+	// unrecognised name.  This proves that a provider whose class has
+	// zero members is accepted (no "invalid character class" error),
+	// while a genuinely bogus name is still rejected.
+
+	t.Run("known empty provider class is accepted", func(t *testing.T) {
+		// Build a fake provider where "punct" has zero members.
+		fp := &fakeProvider{
+			classes: map[string]map[byte]bool{
+				"alnum":  {},
+				"alpha":  {},
+				"blank":  {},
+				"cntrl":  {},
+				"digit":  {},
+				"graph":  {},
+				"lower":  {},
+				"print":  {},
+				"punct":  {}, // empty — no bytes
+				"space":  {},
+				"upper":  {},
+				"xdigit": {},
+			},
+		}
+		for i := 0; i < 256; i++ {
+			fp.lower[i] = byte(i)
+			fp.upper[i] = byte(i)
+		}
+
+		tables, err := buildProviderTables(fp)
+		if err != nil {
+			t.Fatalf("buildProviderTables: %v", err)
+		}
+
+		// classFromTable should recognise "punct" (return true) and
+		// return a zero-length members slice (nil or empty).
+		members, ok := tables.classFromTable("punct")
+		if !ok {
+			t.Error("classFromTable(\"punct\"): ok=false, want true")
+		}
+		if len(members) != 0 {
+			t.Errorf("classFromTable(\"punct\"): len=%d, want 0", len(members))
+		}
+	})
+
+	t.Run("bogus class is rejected", func(t *testing.T) {
+		// A class name not known to the tables must return (nil, false).
+		fp := &fakeProvider{
+			classes: map[string]map[byte]bool{},
+		}
+		for i := 0; i < 256; i++ {
+			fp.lower[i] = byte(i)
+			fp.upper[i] = byte(i)
+		}
+		tables, err := buildProviderTables(fp)
+		if err != nil {
+			t.Fatalf("buildProviderTables: %v", err)
+		}
+
+		members, ok := tables.classFromTable("bogus")
+		if ok {
+			t.Error("classFromTable(\"bogus\"): ok=true, want false")
+		}
+		if members != nil {
+			t.Errorf("classFromTable(\"bogus\"): members=%v, want nil", members)
+		}
+	})
+
+	t.Run("end-to-end: empty class accepted in -d mode", func(t *testing.T) {
+		// Full end-to-end: a provider with an empty "punct" class should
+		// delete nothing (empty class), not fail with "invalid character
+		// class".
+		fakeOpener := func(name string) (ctypeProvider, error) {
+			fp := &fakeProvider{
+				classes: map[string]map[byte]bool{
+					"alpha":  {},
+					"upper":  {},
+					"lower":  {},
+					"digit":  {},
+					"alnum":  {},
+					"blank":  {},
+					"space":  {},
+					"cntrl":  {},
+					"graph":  {},
+					"print":  {},
+					"punct":  {}, // empty
+					"xdigit": {},
+				},
+			}
+			for i := 0; i < 256; i++ {
+				fp.lower[i] = byte(i)
+				fp.upper[i] = byte(i)
+			}
+			return fp, nil
+		}
+		env := []string{"LC_CTYPE=empty_punct_locale"}
+		// An empty class deletes nothing, so input should pass through.
+		out, errb, code := runWithOpener(t, env, "hello!", fakeOpener, "-d", "[:punct:]")
+		if code != 0 {
+			t.Fatalf("code=%d err=%q", code, errb)
+		}
+		if out != "hello!" {
+			t.Errorf("out=%q, want %q", out, "hello!")
+		}
+	})
+
+	t.Run("end-to-end: bogus class rejected", func(t *testing.T) {
+		fakeOpener := func(name string) (ctypeProvider, error) {
+			return newFakeProvider(nil), nil
+		}
+		env := []string{"LC_CTYPE=fake_locale"}
+		_, errb, code := runWithOpener(t, env, "test", fakeOpener, "-d", "[:bogus:]")
+		if code == 0 {
+			t.Error("bogus class should fail")
+		}
+		if !strings.Contains(errb, "invalid character class") {
+			t.Errorf("stderr %q should mention 'invalid character class'", errb)
 		}
 	})
 }

@@ -159,7 +159,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 3 | 26 |
-| `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 15 |
+| `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
 | `true` | `cmds/true` | — | GNU Coreutils | yes | yes | 1 | 1 |
 | `truncate` | `cmds/truncate` | — | GNU Coreutils | yes | no | 1 | 6 |

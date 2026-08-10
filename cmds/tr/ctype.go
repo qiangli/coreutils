@@ -58,36 +58,38 @@ type ctypeTables struct {
 	toUpper [256]byte
 }
 
-// classFromTable returns the members of the named class from the tables,
-// or nil for an unknown class name.
-func (ct *ctypeTables) classFromTable(name string) []byte {
+// classFromTable returns the members of the named class from the tables
+// together with a boolean indicating whether the class was recognised.
+// A known class returns true even when its membership is empty; an
+// unrecognised name returns (nil, false).
+func (ct *ctypeTables) classFromTable(name string) ([]byte, bool) {
 	switch name {
 	case "alnum":
-		return ct.alnum
+		return ct.alnum, true
 	case "alpha":
-		return ct.alpha
+		return ct.alpha, true
 	case "blank":
-		return ct.blank
+		return ct.blank, true
 	case "cntrl":
-		return ct.cntrl
+		return ct.cntrl, true
 	case "digit":
-		return ct.digit
+		return ct.digit, true
 	case "graph":
-		return ct.graph
+		return ct.graph, true
 	case "lower":
-		return ct.lower
+		return ct.lower, true
 	case "print":
-		return ct.print
+		return ct.print, true
 	case "punct":
-		return ct.punct
+		return ct.punct, true
 	case "space":
-		return ct.space
+		return ct.space, true
 	case "upper":
-		return ct.upper
+		return ct.upper, true
 	case "xdigit":
-		return ct.xdigit
+		return ct.xdigit, true
 	default:
-		return nil
+		return nil, false
 	}
 }
 
