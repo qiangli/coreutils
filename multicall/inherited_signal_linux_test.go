@@ -49,7 +49,7 @@ func runInheritedSignalHelper(mode string) {
 		os.Exit(0)
 	case "pipe_rc", "pipe_expr_rc":
 		// Full boundary-seam test: inherited ignored SIGPIPE must reach
-		// processRunContext().SIGPIPEIgnored, then flow into tr's
+		// processRunContext().SIGPIPEIgnored, then flow into each tool's
 		// deterministic EPIPE path. preserveInheritedSignalDispositions
 		// has already run at the top of this helper.
 		rc := processRunContext()
@@ -183,9 +183,9 @@ func TestPreserveInheritedIgnoredSignals(t *testing.T) {
 // TestStandaloneSIGPIPEIgnoredReachesRunContext proves the boundary seam:
 // when the parent process ignores SIGPIPE (via the shell trap builtin),
 // that fact flows through preserveInheritedSignalDispositions into
-// processRunContext().SIGPIPEIgnored=true, and tr's deterministic EPIPE
-// path emits "tr: stdout: Broken pipe" with exit code 1, the behavior
-// the GNU tool exhibits when SIGPIPE is ignored. Derived from
+// processRunContext().SIGPIPEIgnored=true, and the tr and expr EPIPE paths
+// emit exact broken-pipe diagnostics with exit code 1, the behavior the GNU
+// tools exhibit when SIGPIPE is ignored. Derived from
 // TestPreserveInheritedIgnoredSignals.
 func TestStandaloneSIGPIPEIgnoredReachesRunContext(t *testing.T) {
 	exe, err := os.Executable()
