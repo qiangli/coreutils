@@ -22,6 +22,7 @@ const (
 )
 
 type parseState struct {
+	opts             Options                // options controlling regexp compilation
 	toks             <-chan *token          // our input
 	ins              []instruction          // the compiled instructions
 	branches         []waitingBranch        // references to fix up
@@ -46,8 +47,8 @@ func (ps *parseState) rememberRE(re string) {
 	}
 }
 
-func parse(input <-chan *token, quiet bool, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc) ([]instruction, error) {
-	ps := &parseState{toks: input, b_labels: make(map[string]instruction), t_labels: make(map[string]instruction), readFile: readFile, prepareWriteFile: prepareWriteFile, writeFile: writeFile, quiet: quiet}
+func parse(input <-chan *token, quiet bool, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc, opts Options) ([]instruction, error) {
+	ps := &parseState{opts: opts, toks: input, b_labels: make(map[string]instruction), t_labels: make(map[string]instruction), readFile: readFile, prepareWriteFile: prepareWriteFile, writeFile: writeFile, quiet: quiet}
 
 	ps.ins = append(ps.ins, cmd_fillNext)
 	parse_toplevel(ps)
@@ -129,7 +130,7 @@ func parse_toplevel(ps *parseState) {
 			compile_cond(ps, eofcond{})
 		case tok_RX:
 			var rx condition
-			rx, ps.err = newRECondition(tok.args[0], ps.lastRE, &tok.location)
+			rx, ps.err = newRECondition(ps.opts, tok.args[0], ps.lastRE, &tok.location)
 			if ps.err != nil {
 				break
 			}
@@ -219,7 +220,7 @@ func compile_twocond(ps *parseState, c1 condition) {
 	case tok_DOLLAR:
 		c2 = eofcond{}
 	case tok_RX:
-		c2, ps.err = newRECondition(tok.args[0], ps.lastRE, &tok.location)
+		c2, ps.err = newRECondition(ps.opts, tok.args[0], ps.lastRE, &tok.location)
 		if ps.err != nil {
 			break
 		}
@@ -327,7 +328,7 @@ func compile_cmd(ps *parseState, cmd *token) {
 	case 'r':
 		ps.ins = append(ps.ins, cmd_newReader(cmd.args[0], ps.readFile))
 	case 's':
-		subst, err := newSubstitution(cmd.args[0], cmd.args[1], cmd.args[2], cmd.args[3], ps.lastRE, ps.writeFile)
+		subst, err := newSubstitution(ps.opts, cmd.args[0], cmd.args[1], cmd.args[2], cmd.args[3], ps.lastRE, ps.writeFile)
 		if err != nil {
 			ps.err = fmt.Errorf("Substitution parse: %s %v", err.Error(), &cmd.location)
 			break

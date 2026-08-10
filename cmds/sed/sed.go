@@ -117,8 +117,7 @@ func runCommand(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "no script specified")
 	}
 
-	gosed.ExtendedRegex = *ereE || *ereR
-
+	opts := gosed.Options{ExtendedRegex: *ereE || *ereR}
 	files := operands
 
 	// In-place editing requires real files; rewrite each independently.
@@ -132,7 +131,7 @@ func runCommand(rc *tool.RunContext, args []string) int {
 		}
 		rc2 := 0
 		for _, f := range files {
-			if err := editInPlace(rc, program, *quiet, f, suffix); err != nil {
+			if err := editInPlace(rc, program, *quiet, opts, f, suffix); err != nil {
 				fmt.Fprintf(rc.Err, "sed: %s: %v\n", f, err)
 				rc2 = 2
 			}
@@ -142,7 +141,7 @@ func runCommand(rc *tool.RunContext, args []string) int {
 
 	// Stream mode: stdin, or files concatenated (one stream) / separate (-s).
 	if len(files) == 0 {
-		if err := apply(rc, program, *quiet, rc.In, rc.Out); err != nil {
+		if err := apply(rc, program, *quiet, opts, rc.In, rc.Out); err != nil {
 			fmt.Fprintf(rc.Err, "sed: %v\n", err)
 			return 2
 		}
@@ -158,7 +157,7 @@ func runCommand(rc *tool.RunContext, args []string) int {
 				status = 2
 				continue
 			}
-			err = apply(rc, program, *quiet, r, rc.Out)
+			err = apply(rc, program, *quiet, opts, r, rc.Out)
 			closeIf(r)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "sed: %v\n", err)
@@ -183,7 +182,7 @@ func runCommand(rc *tool.RunContext, args []string) int {
 			closers = append(closers, c)
 		}
 	}
-	if err := apply(rc, program, *quiet, io.MultiReader(readers...), rc.Out); err != nil {
+	if err := apply(rc, program, *quiet, opts, io.MultiReader(readers...), rc.Out); err != nil {
 		fmt.Fprintf(rc.Err, "sed: %v\n", err)
 		status = 2
 	}
@@ -295,9 +294,9 @@ func extractInPlace(args []string) (filtered []string, changed bool, suffix stri
 }
 
 // apply compiles the program and streams input→output through the engine.
-func apply(rc *tool.RunContext, program string, quiet bool, in io.Reader, out io.Writer) error {
+func apply(rc *tool.RunContext, program string, quiet bool, opts gosed.Options, in io.Reader, out io.Writer) error {
 	if !quiet {
-		if subst, ok, err := parseSimpleSubstitution(program); ok || err != nil {
+		if subst, ok, err := parseSimpleSubstitution(program, opts); ok || err != nil {
 			if err != nil {
 				return err
 			}
@@ -305,7 +304,7 @@ func apply(rc *tool.RunContext, program string, quiet bool, in io.Reader, out io
 		}
 	}
 
-	eng, err := newEngine(rc, program, quiet)
+	eng, err := newEngine(rc, program, quiet, opts)
 	if err != nil {
 		return err
 	}
@@ -324,7 +323,7 @@ type simplePattern interface {
 	Expand([]byte, []byte, []byte, []int) []byte
 }
 
-func parseSimpleSubstitution(program string) (*simpleSubstitution, bool, error) {
+func parseSimpleSubstitution(program string, opts gosed.Options) (*simpleSubstitution, bool, error) {
 	i := skipProgramSpace(program, 0)
 	if i >= len(program) || program[i] != 's' {
 		return nil, false, nil
@@ -374,7 +373,7 @@ func parseSimpleSubstitution(program string) (*simpleSubstitution, bool, error) 
 		return nil, false, nil
 	}
 
-	rx, repl, err := gosed.CompileSimpleSubstitution(pattern, replacement)
+	rx, repl, err := gosed.CompileSimpleSubstitution(pattern, replacement, opts)
 	if err != nil {
 		return nil, true, err
 	}
@@ -481,7 +480,7 @@ func applySimpleSubstitutionLine(dst []byte, subst *simpleSubstitution, line []b
 	return append(dst, line[end:]...)
 }
 
-func editInPlace(rc *tool.RunContext, program string, quiet bool, file, suffix string) error {
+func editInPlace(rc *tool.RunContext, program string, quiet bool, opts gosed.Options, file, suffix string) error {
 	path := rc.Path(file)
 	src, err := os.Open(path)
 	if err != nil {
@@ -492,7 +491,7 @@ func editInPlace(rc *tool.RunContext, program string, quiet bool, file, suffix s
 	if err != nil {
 		return err
 	}
-	eng, err := newEngine(rc, program, quiet)
+	eng, err := newEngine(rc, program, quiet, opts)
 	if err != nil {
 		return err
 	}
@@ -583,7 +582,7 @@ func replaceExisting(src, dst string) error {
 	return os.Remove(old)
 }
 
-func newEngine(rc *tool.RunContext, program string, quiet bool) (*gosed.Engine, error) {
+func newEngine(rc *tool.RunContext, program string, quiet bool, opts gosed.Options) (*gosed.Engine, error) {
 	readFile := func(name string) ([]byte, error) {
 		return os.ReadFile(rc.Path(name))
 	}
@@ -607,9 +606,9 @@ func newEngine(rc *tool.RunContext, program string, quiet bool) (*gosed.Engine, 
 		return err
 	}
 	if quiet {
-		return gosed.NewQuietWithReadWriteFile(strings.NewReader(program), readFile, prepareWriteFile, writeFile)
+		return gosed.NewQuietWithReadWriteFileOptions(strings.NewReader(program), readFile, prepareWriteFile, writeFile, opts)
 	}
-	return gosed.NewWithReadWriteFile(strings.NewReader(program), readFile, prepareWriteFile, writeFile)
+	return gosed.NewWithReadWriteFileOptions(strings.NewReader(program), readFile, prepareWriteFile, writeFile, opts)
 }
 
 func openInput(rc *tool.RunContext, f string) (io.Reader, error) {

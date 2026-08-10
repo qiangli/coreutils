@@ -2,7 +2,7 @@
 //
 // Vendored from github.com/rwtodd/Go.Sed (MIT — see ./LICENSE), package renamed
 // to gosed and adapted for GNU compatibility: see gnu.go — patterns go through
-// coreutils/pkg/bre (BRE by default, ERE under the package var ExtendedRegex)
+// coreutils/pkg/bre (BRE by default, ERE under Options.ExtendedRegex)
 // and s/// replacements use GNU `\1`/`&` form, so the upstream "use $1, not \1"
 // note below no longer applies to callers via cmds/sed.
 //
@@ -65,15 +65,15 @@ type instruction func(*vm) error
 
 // makeEngine is the logic behine the New and NewQuiet public functions.
 // It lexes and parses the program, and makes a new Engine out of it.
-func makeEngine(program io.Reader, isQuiet bool) (*Engine, error) {
-	return makeEngineWithReadFile(program, isQuiet, os.ReadFile)
+func makeEngine(program io.Reader, isQuiet bool, opts Options) (*Engine, error) {
+	return makeEngineWithReadFile(program, isQuiet, os.ReadFile, opts)
 }
 
-func makeEngineWithReadFile(program io.Reader, isQuiet bool, readFile ReadFileFunc) (*Engine, error) {
-	return makeEngineWithReadWriteFile(program, isQuiet, readFile, defaultPrepareWriteFile, defaultWriteFile)
+func makeEngineWithReadFile(program io.Reader, isQuiet bool, readFile ReadFileFunc, opts Options) (*Engine, error) {
+	return makeEngineWithReadWriteFile(program, isQuiet, readFile, defaultPrepareWriteFile, defaultWriteFile, opts)
 }
 
-func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc) (*Engine, error) {
+func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc, opts Options) (*Engine, error) {
 	if readFile == nil {
 		readFile = os.ReadFile
 	}
@@ -94,7 +94,7 @@ func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadF
 	errch := make(chan error, 1)
 	go lex(bufprog, ch, errch)
 
-	instructions, parseErr := parse(ch, isQuiet, readFile, prepareWriteFile, writeFile)
+	instructions, parseErr := parse(ch, isQuiet, readFile, prepareWriteFile, writeFile, opts)
 	var err = <-errch // look for lexing errors first...
 	if err == nil {
 		// if there were no lex errors, look for a parsing error
@@ -109,33 +109,51 @@ func makeEngineWithReadWriteFile(program io.Reader, isQuiet bool, readFile ReadF
 // engine will be 'nil' and the error will be returned.  Otherwise, the returned
 // error will be nil.
 func New(program io.Reader) (*Engine, error) {
-	return makeEngine(program, false)
+	return makeEngine(program, false, Options{})
 }
 
 // NewQuiet creates a new sed engine from a program.  It behaves exactly as
 // New(), except it produces an engine that doesn't print lines by defualt. This
 // is the classic '-n' sed behaviour.
 func NewQuiet(program io.Reader) (*Engine, error) {
-	return makeEngine(program, true)
+	return makeEngine(program, true, Options{})
+}
+
+// NewWithOptions creates a new sed engine with the given options.
+func NewWithOptions(program io.Reader, opts Options) (*Engine, error) {
+	return makeEngine(program, false, opts)
+}
+
+// NewQuietWithOptions creates a new quiet sed engine with the given options.
+func NewQuietWithOptions(program io.Reader, opts Options) (*Engine, error) {
+	return makeEngine(program, true, opts)
 }
 
 // NewWithReadFile creates a sed engine using readFile for files named by the
 // r command.
 func NewWithReadFile(program io.Reader, readFile ReadFileFunc) (*Engine, error) {
-	return makeEngineWithReadFile(program, false, readFile)
+	return makeEngineWithReadFile(program, false, readFile, Options{})
 }
 
 // NewQuietWithReadFile is NewWithReadFile with automatic printing disabled.
 func NewQuietWithReadFile(program io.Reader, readFile ReadFileFunc) (*Engine, error) {
-	return makeEngineWithReadFile(program, true, readFile)
+	return makeEngineWithReadFile(program, true, readFile, Options{})
 }
 
 func NewWithReadWriteFile(program io.Reader, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc) (*Engine, error) {
-	return makeEngineWithReadWriteFile(program, false, readFile, prepareWriteFile, writeFile)
+	return makeEngineWithReadWriteFile(program, false, readFile, prepareWriteFile, writeFile, Options{})
 }
 
 func NewQuietWithReadWriteFile(program io.Reader, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc) (*Engine, error) {
-	return makeEngineWithReadWriteFile(program, true, readFile, prepareWriteFile, writeFile)
+	return makeEngineWithReadWriteFile(program, true, readFile, prepareWriteFile, writeFile, Options{})
+}
+
+func NewWithReadWriteFileOptions(program io.Reader, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc, opts Options) (*Engine, error) {
+	return makeEngineWithReadWriteFile(program, false, readFile, prepareWriteFile, writeFile, opts)
+}
+
+func NewQuietWithReadWriteFileOptions(program io.Reader, readFile ReadFileFunc, prepareWriteFile PrepareWriteFileFunc, writeFile WriteFileFunc, opts Options) (*Engine, error) {
+	return makeEngineWithReadWriteFile(program, true, readFile, prepareWriteFile, writeFile, opts)
 }
 
 // Wrap supplies an io.Reader that applies the sed Engine to the given

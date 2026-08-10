@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/qiangli/coreutils/tool"
@@ -866,6 +867,121 @@ func TestSedTextCommandLeadingBlanks(t *testing.T) {
 			}
 			if out != tc.want {
 				t.Errorf("%q = %q, want %q", tc.program, out, tc.want)
+			}
+		})
+	}
+}
+
+func TestSedConcurrentBREAndERE(t *testing.T) {
+	const iters = 50
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Worker 1: BRE mode
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			// Fast path
+			out, errOut, code := runSed(t, "a+ aa\n", "s/a+/X/g")
+			if code != 0 || errOut != "" || out != "X aa\n" {
+				t.Errorf("BRE s/a+/X/g iter %d = (%q, %q, %d), want %q", i, out, errOut, code, "X aa\n")
+			}
+			// Full engine address
+			out, errOut, code = runSed(t, "a+\naa\n", "/a+/d")
+			if code != 0 || errOut != "" || out != "aa\n" {
+				t.Errorf("BRE /a+/d iter %d = (%q, %q, %d), want %q", i, out, errOut, code, "aa\n")
+			}
+			// Null RE reuse
+			out, errOut, code = runSed(t, "a+\naa\n", "/a+/ { s//X/ }")
+			if code != 0 || errOut != "" || out != "X\naa\n" {
+				t.Errorf("BRE null-RE iter %d = (%q, %q, %d), want %q", i, out, errOut, code, "X\naa\n")
+			}
+		}
+	}()
+
+	// Worker 2: ERE mode (-E)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			// Fast path
+			out, errOut, code := runSed(t, "a+ aa\n", "-E", "s/a+/X/g")
+			if code != 0 || errOut != "" || out != "X+ X\n" {
+				t.Errorf("ERE s/a+/X/g iter %d = (%q, %q, %d), want %q", i, out, errOut, code, "X+ X\n")
+			}
+			// Full engine address
+			out, errOut, code = runSed(t, "a+\naa\n", "-E", "/a+/d")
+			if code != 0 || errOut != "" || out != "" {
+				t.Errorf("ERE /a+/d iter %d = (%q, %q, %d), want empty", i, out, errOut, code)
+			}
+			// Null RE reuse
+			out, errOut, code = runSed(t, "a+\naa\n", "-E", "/a+/ { s//X/ }")
+			if code != 0 || errOut != "" || out != "X+\nX\n" {
+				t.Errorf("ERE null-RE iter %d = (%q, %q, %d), want %q", i, out, errOut, code, "X+\nX\n")
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestSedFastPathRegressions(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		in   string
+		want string
+	}{
+		{"BRE literal plus", []string{"s/a+/X/g"}, "a+ aa\n", "X aa\n"},
+		{"BRE escaped plus", []string{"s/a\\+/X/g"}, "a+ aa\n", "X+ X\n"},
+		{"ERE flag -E plus", []string{"-E", "s/a+/X/g"}, "a+ aa\n", "X+ X\n"},
+		{"ERE flag -r plus", []string{"-r", "s/a+/X/g"}, "a+ aa\n", "X+ X\n"},
+		{"ERE escaped plus is literal", []string{"-E", "s/a\\+/X/g"}, "a+ aa\n", "X aa\n"},
+		{"BRE literal parens", []string{"s/(ab)/X/g"}, "(ab) ab\n", "X ab\n"},
+		{"BRE capture group", []string{"s/\\(ab\\)/[\\1]/g"}, "(ab) ab\n", "([ab]) [ab]\n"},
+		{"ERE capture group", []string{"-E", "s/(ab)/[\\1]/g"}, "(ab) ab\n", "([ab]) [ab]\n"},
+		{"Fast path custom delimiter", []string{"-E", "s|a+|X|g"}, "a+ aa\n", "X+ X\n"},
+		{"Fast path leading/trailing spaces", []string{"-E", "  s/a+/X/g  "}, "a+ aa\n", "X+ X\n"},
+		{"Fast path single replacement", []string{"-E", "s/a+/X/"}, "aa aa\n", "X aa\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, tc.in, tc.args...)
+			if code != 0 || errOut != "" {
+				t.Fatalf("%v = (%q, %q, %d), want success", tc.args, out, errOut, code)
+			}
+			if out != tc.want {
+				t.Errorf("%v = %q, want %q", tc.args, out, tc.want)
+			}
+		})
+	}
+}
+
+func TestSedAddressRegressions(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		in   string
+		want string
+	}{
+		{"BRE single address literal", []string{"/a+/d"}, "a+\naa\nb\n", "aa\nb\n"},
+		{"BRE single address escaped", []string{"/a\\+/d"}, "a+\naa\nb\n", "b\n"},
+		{"ERE single address", []string{"-E", "/a+/d"}, "a+\naa\nb\n", "b\n"},
+		{"ERE single address escaped literal", []string{"-E", "/a\\+/d"}, "a+\naa\nb\n", "aa\nb\n"},
+		{"BRE range address", []string{"/a+/,/b+/d"}, "top\na+\naa\nb+\nend\n", "top\nend\n"},
+		{"ERE range address", []string{"-E", "/a+/,/b+/d"}, "top\na\nx\nb\nend\n", "top\nend\n"},
+		{"BRE null-RE after address", []string{"/a+/ { s//X/; }"}, "a+\naa\n", "X\naa\n"},
+		{"ERE null-RE after address", []string{"-E", "/a+/ { s//X/; }"}, "a+\naa\n", "X+\nX\n"},
+		{"BRE null-RE after substitution", []string{"s/a+/X/; s//Y/"}, "a+ a+\n", "X Y\n"},
+		{"ERE null-RE after substitution", []string{"-E", "s/a+/X/; s//Y/"}, "aa aa\n", "X Y\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runSed(t, tc.in, tc.args...)
+			if code != 0 || errOut != "" {
+				t.Fatalf("%v = (%q, %q, %d), want success", tc.args, out, errOut, code)
+			}
+			if out != tc.want {
+				t.Errorf("%v = %q, want %q", tc.args, out, tc.want)
 			}
 		})
 	}

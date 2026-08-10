@@ -16,10 +16,10 @@ import (
 	"github.com/qiangli/coreutils/pkg/bre"
 )
 
-// ExtendedRegex selects ERE (true; sed -E/-r) vs BRE (false; the default) for
-// every pattern this engine compiles. Set it before calling New(); a sed CLI
-// invocation drives a single engine per process.
-var ExtendedRegex bool
+// Options configures sed engine compilation and execution.
+type Options struct {
+	ExtendedRegex bool
+}
 
 // sedRegexp is the small regexp surface the engine needs.
 type sedRegexp interface {
@@ -30,7 +30,7 @@ type sedRegexp interface {
 	Expand([]byte, []byte, []byte, []int) []byte
 }
 
-// compileRE compiles a GNU sed regex (BRE by default, ERE under ExtendedRegex).
+// compileRE compiles a GNU sed regex (BRE by default, ERE under opts.ExtendedRegex).
 // BREs without back-references use RE2 through pkg/bre; BREs with \1..\9 use
 // pkg/bre's bounded backtracking matcher.
 //
@@ -39,10 +39,10 @@ type sedRegexp interface {
 // newlines: the sed character escapes (\n, \t, …) are expanded to the
 // characters they name, and '.' is compiled dot-all (see sedFlags). Matching is
 // POSIX leftmost-longest, the extent GNU sed substitutes and reports.
-func compileRE(pattern, flags string) (sedRegexp, error) {
+func (opts Options) compileRE(pattern, flags string) (sedRegexp, error) {
 	pattern = bre.SedEscapes(pattern)
 	flags = sedFlags(flags)
-	if ExtendedRegex {
+	if opts.ExtendedRegex {
 		re, err := bre.CompileEREWithFlags(pattern, flags)
 		if err != nil {
 			return nil, err

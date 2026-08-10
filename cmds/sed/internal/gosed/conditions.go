@@ -56,7 +56,7 @@ func (r *regexpcond) isMet(svm *vm) (answer bool) {
 // it stands for the last RE used, so it compiles against last — the most
 // recent RE lexically before it — while remembering to prefer whatever RE the
 // program has most recently APPLIED once it is running (see resolveNullRE).
-func newRECondition(s string, last string, loc *location) (*regexpcond, error) {
+func newRECondition(opts Options, s string, last string, loc *location) (*regexpcond, error) {
 	null := s == ""
 	if null {
 		if last == "" {
@@ -65,7 +65,7 @@ func newRECondition(s string, last string, loc *location) (*regexpcond, error) {
 		s = last
 	}
 
-	re, err := compileRE(s, "") // GNU BRE/ERE → RE2 (was regexp.Compile)
+	re, err := opts.compileRE(s, "") // GNU BRE/ERE → RE2 (was regexp.Compile)
 	if err != nil {
 		err = fmt.Errorf("Regexp Error: %s %v", err.Error(), loc)
 	}

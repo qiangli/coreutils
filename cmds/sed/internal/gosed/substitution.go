@@ -73,7 +73,7 @@ func subst_replaceAll(src string, pattern sedRegexp, replacement string, indexes
 	return strings.Join(substrings, "")
 }
 
-func newSubstitution(pattern string, replacement string, mods string, wfile string, last string, writeFile WriteFileFunc) (instruction, error) {
+func newSubstitution(opts Options, pattern string, replacement string, mods string, wfile string, last string, writeFile WriteFileFunc) (instruction, error) {
 	command := &substitute{wfile: wfile, writeFile: writeFile}
 	var numbers []rune
 	var flags string // RE2 flag prefix accumulated from i/m modifiers
@@ -119,7 +119,7 @@ func newSubstitution(pattern string, replacement string, mods string, wfile stri
 	if flags != "" {
 		prefix = "(?" + flags + ")"
 	}
-	rx, err := compileRE(pattern, prefix) // GNU BRE/ERE → RE2 (was regexp.Compile)
+	rx, err := opts.compileRE(pattern, prefix) // GNU BRE/ERE → RE2 (was regexp.Compile)
 	if err != nil {
 		return nil, err
 	}
