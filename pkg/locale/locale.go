@@ -38,8 +38,9 @@ const (
 )
 
 // Default is the effective locale name when LC_ALL, the category variable,
-// and LANG are all unset or empty. POSIX mandates the POSIX locale (also
-// known as "C").
+// and LANG are all unset or empty. POSIX leaves that default
+// implementation-defined; this coreutils implementation deliberately chooses
+// the POSIX locale for deterministic behavior on every host.
 const Default = "POSIX"
 
 // Categories holds the effective locale name for every supported category,
@@ -65,12 +66,12 @@ type Categories struct {
 // given environment ([]string in os.Environ() shape; last duplicate key
 // wins, matching [tool.RunContext.Getenv] semantics).
 //
-// Precedence — the first nonempty value wins, per POSIX §8.2:
+// Environment precedence — the first nonempty value wins, per POSIX §8.2:
 //
 //  1. LC_ALL
 //  2. the specific category variable (cat, e.g. LC_COLLATE)
 //  3. LANG
-//  4. [Default] ("POSIX")
+//  4. [Default] ("POSIX"), this implementation's deterministic fallback
 //
 // Empty values fall through: an assignment such as LC_COLLATE= (empty) does
 // not shadow LANG, and LC_ALL= (empty) does not shadow the per-category
