@@ -181,35 +181,6 @@ func TestResolveAll(t *testing.T) {
 	})
 }
 
-func TestIsC(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{"C", "C", true},
-		{"POSIX", "POSIX", true},
-		{"c lowercase", "c", true},
-		{"posix lowercase", "posix", true},
-		{"C.UTF-8", "C.UTF-8", true},
-		{"POSIX.UTF-8", "POSIX.UTF-8", true},
-		{"c.utf-8 lowercase", "c.utf-8", true},
-		{"en_US.UTF-8", "en_US.UTF-8", false},
-		{"de_DE", "de_DE", false},
-		{"de_DE@euro", "de_DE@euro", false},
-		{"empty", "", false},
-		{"just dot", ".", false},             // base before '.' is empty
-		{"C with modifier", "C@euro", false}, // base has no '.', so full name is base; not "c" or "posix"
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := IsC(tc.in); got != tc.want {
-				t.Errorf("IsC(%q) = %v; want %v", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestResolveNoMutation(t *testing.T) {
 	// Resolve must not mutate its env argument.
 	env := []string{"LANG=en_US.UTF-8", "LC_COLLATE=de_DE"}

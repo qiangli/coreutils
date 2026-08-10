@@ -12,7 +12,7 @@
 // The consumers that need locale resolution are pure-Go reimplementations
 // of sort, sed, tr, and awk; each currently hard-codes "LC_ALL=C semantics"
 // and will gradually consult this resolver to honour user locale settings.
-// The helper in cmds/grep/internal/locale.go that duplicates this logic is
+// The helper in cmds/grep/locale.go that duplicates this logic is
 // expected to migrate here once grep is refactored onto the shared package.
 package locale
 
@@ -110,30 +110,6 @@ func ResolveAll(env []string) Categories {
 		Messages: Resolve(env, Messages),
 		Time:     Resolve(env, Time),
 	}
-}
-
-// IsC reports whether name designates the POSIX/C locale.
-//
-// POSIX §2.3 defines "C" and "POSIX" as synonyms for the default locale.
-// A locale name whose base (the part before the first '.') is "C" or
-// "POSIX" — for example "C.UTF-8" or "POSIX" — uses C/POSIX collation and
-// character-class definitions. IsC reports true for those so callers can
-// select byte-oriented behavior, while the raw name returned by [Resolve]
-// still preserves the codeset for callers that need it (e.g. LC_CTYPE
-// consumers that must distinguish ASCII from UTF-8).
-//
-// The base-name check is case-insensitive, matching glibc. Case folding
-// applies only to this predicate, never to the value returned by Resolve.
-func IsC(name string) bool {
-	if name == "" {
-		return false
-	}
-	base := name
-	if i := strings.IndexByte(name, '.'); i >= 0 {
-		base = name[:i]
-	}
-	low := strings.ToLower(base)
-	return low == "c" || low == "posix"
 }
 
 // resolveAllVar returns the raw LC_ALL value, or Default when unset or empty.

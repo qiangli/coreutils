@@ -265,6 +265,7 @@ var packages = map[string]Package{
 		"provider-only engine like bre, wired to no verb — locale-aware ordering a tool asks for, not a command"),
 	"ignore": supPkg("the opt-in agentic path filter shared by grep and find"),
 	"jobs":   supPkg("job control for the embedding shell's builtins, which the shell owns"),
+	"locale": supPkg("invocation-local POSIX locale-category precedence shared by locale-aware tools"),
 	"lockfile": supPkg("the ONE process file-lock primitive — Acquire/TryAcquire/AcquireWithin, " +
 		"one platform pair for the whole tree. Five packages hand-rolled their own and " +
 		"three of five had been ported to Windows while two were no-ops"),
