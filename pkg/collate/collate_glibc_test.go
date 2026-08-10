@@ -33,10 +33,23 @@ func newOracle(t *testing.T) *oracle {
 	if err != nil || h == 0 {
 		t.Skipf("oracle: glibc not loadable: %v", err)
 	}
+
+	// Oracle must Dlclose on success/skip/failure
+	t.Cleanup(func() { purego.Dlclose(h) })
+
+	bind := func(fptr any, name string) {
+		sym, err := purego.Dlsym(h, name)
+		if err != nil || sym == 0 {
+			t.Skipf("oracle: symbol %s not found", name)
+		}
+		purego.RegisterFunc(fptr, sym)
+	}
+
 	o := &oracle{}
-	purego.RegisterLibFunc(&o.strcollL, h, "strcoll_l")
-	purego.RegisterLibFunc(&o.newlocale, h, "newlocale")
-	purego.RegisterLibFunc(&o.freelocale, h, "freelocale")
+	bind(&o.strcollL, "strcoll_l")
+	bind(&o.newlocale, "newlocale")
+	bind(&o.freelocale, "freelocale")
+
 	o.collate = o.newlocale(1<<3, "de_DE.ISO-8859-1", 0)
 	if o.collate == 0 {
 		t.Skip("oracle: de_DE.ISO-8859-1 locale not installed")
@@ -61,12 +74,10 @@ func (o *oracle) sign(a, b string) int {
 // defects when the locale IS present.
 func openProvider(t *testing.T) *Provider {
 	t.Helper()
+	_ = newOracle(t) // If oracle fails, it skips; if it succeeds, glibc/locale must be present.
 	p, err := Open("de_DE.ISO-8859-1")
 	if err != nil {
-		if errors.Is(err, ErrGlibcUnavailable) || errors.Is(err, ErrMissingLocale) {
-			t.Skipf("de_DE.ISO-8859-1 provider unavailable: %v", err)
-		}
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("Open: %v (but oracle succeeded!)", err)
 	}
 	return p
 }

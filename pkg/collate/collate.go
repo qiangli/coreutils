@@ -54,6 +54,9 @@ var (
 	// data is not installed (newlocale failed).
 	ErrMissingLocale = errors.New("collate: locale data is not installed")
 
+	// ErrInitFailure is returned when glibc newlocale fails due to ENOMEM or other initialization failure.
+	ErrInitFailure = errors.New("collate: initialization failure")
+
 	// ErrCodeset is returned when the opened locale's CODESET is not ISO-8859-1,
 	// which would mean the byte-oriented Compare contract does not hold.
 	ErrCodeset = errors.New("collate: locale codeset is not ISO-8859-1")

@@ -59,7 +59,7 @@ var (
 // completed binding is published via libcPtr and returned on every later call.
 func libc() (*libcBinding, error) {
 	libcOnce.Do(func() {
-		b, err := loadLibc()
+		b, err := loadLibc("libc.so.6")
 		if err != nil {
 			libcErr = err
 			return
@@ -72,11 +72,11 @@ func libc() (*libcBinding, error) {
 	return nil, libcErr
 }
 
-// loadLibc opens libc.so.6, confirms it is glibc, resolves every required
+// loadLibc opens the specified libc library, confirms it is glibc, resolves every required
 // symbol, and returns a complete binding. Every failure path Dlcloses the
 // handle before returning so a rejected load leaks nothing.
-func loadLibc() (*libcBinding, error) {
-	handle, err := purego.Dlopen("libc.so.6", purego.RTLD_NOW|purego.RTLD_LOCAL)
+func loadLibc(libName string) (*libcBinding, error) {
+	handle, err := purego.Dlopen(libName, purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil || handle == 0 {
 		return nil, ErrGlibcUnavailable
 	}
@@ -197,13 +197,13 @@ func (b *libcBinding) newLocales(name string) (collate, ctype uintptr, err error
 
 // classifyNewlocaleErrno maps a newlocale errno to a sentinel. ENOENT/EINVAL are
 // the "locale not installed / unusable" cases; anything else is still treated as
-// a missing locale (the only failure mode that matters to a caller here).
+// an initialization failure.
 func classifyNewlocaleErrno(errno int32) error {
 	switch errno {
 	case errENOENT, errEINVAL:
 		return ErrMissingLocale
 	default:
-		return ErrMissingLocale
+		return ErrInitFailure
 	}
 }
 
