@@ -68,6 +68,19 @@ func TestAwkPOSIXFloatFormats(t *testing.T) {
 	}
 }
 
+func TestAwkPOSIXOctalAlternateFormZeroPrecision(t *testing.T) {
+	program := `BEGIN {
+		printf "<%#.o><%#.0o><%#.00o><%#.*o><%.0o>\n", 0, 0, 0, 0, 0, 0
+		print sprintf("<%#5.0o><%-#5.0o><%#.1o><%#.0o>", 0, 0, 0, 7)
+	}`
+	want := "<0><0><0><0><>\n<    0><0    ><0><07>\n"
+
+	out, errb, code := runTool(t, "", program)
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("awk POSIX octal alternate form = (%q, %q, %d), want (%q, %q, 0)", out, errb, code, want, "")
+	}
+}
+
 func TestAwkPOSIXEREBackendExpressions(t *testing.T) {
 	input := strings.Repeat("a", 1001) + "\n" +
 		strings.Repeat("b", 1002) + "\n" +
