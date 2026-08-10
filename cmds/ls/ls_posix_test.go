@@ -273,3 +273,186 @@ func TestDereferenceDirectoryEntries(t *testing.T) {
 		t.Errorf("ls -l = %q, want a symlink target", out)
 	}
 }
+
+// Table-driven tests for format option ordering between -l and -1 (last-one-wins).
+func TestOrderLongAndOneFormat(t *testing.T) {
+	dir := mkNames(t, "a.txt")
+	for _, tc := range []struct {
+		args     []string
+		wantLong bool
+	}{
+		{[]string{"-l", "-1"}, false},
+		{[]string{"-1", "-l"}, true},
+		{[]string{"-l1"}, false},
+		{[]string{"-1l"}, true},
+		{[]string{"--long", "-1"}, false},
+		{[]string{"-1", "--long"}, true},
+		{[]string{"--format=single-column", "-l"}, true},
+		{[]string{"-l", "--format=single-column"}, false},
+		{[]string{"--format=long", "-1"}, false},
+		{[]string{"-1", "--format=long"}, true},
+		{[]string{"--full-time", "-1"}, false},
+		{[]string{"-1", "--full-time"}, true},
+		{[]string{"-l", "--form=single-column"}, false},
+		{[]string{"--form=single-column", "-l"}, true},
+	} {
+		out, _, code := runToolAt(t, dir, tc.args...)
+		if code != 0 {
+			t.Fatalf("ls %v exit = %d, out = %q", tc.args, code, out)
+		}
+		isLong := strings.HasPrefix(out, "total ")
+		if isLong != tc.wantLong {
+			t.Errorf("ls %v: isLong = %v, want %v (out = %q)", tc.args, isLong, tc.wantLong, out)
+		}
+		if !tc.wantLong && out != "a.txt\n" {
+			t.Errorf("ls %v = %q, want \"a.txt\\n\"", tc.args, out)
+		}
+	}
+}
+
+func TestFormatScannerDoesNotReadOptionValuesAsOptions(t *testing.T) {
+	dir := mkNames(t, "-1", "a.txt")
+	out, errb, code := runToolAt(t, dir, "-l", "--ignore", "-1")
+	if code != 0 || errb != "" || !strings.HasPrefix(out, "total ") || strings.Contains(out, " -1\n") {
+		t.Fatalf("ls -l --ignore -1 = (%q, %q, %d), want long output without -1", out, errb, code)
+	}
+}
+
+// Table-driven tests for format option ordering between -n and -1 (last-one-wins).
+func TestOrderNumericAndOneFormat(t *testing.T) {
+	dir := mkNames(t, "a.txt")
+	for _, tc := range []struct {
+		args     []string
+		wantLong bool
+	}{
+		{[]string{"-n", "-1"}, false},
+		{[]string{"-1", "-n"}, true},
+		{[]string{"-n1"}, false},
+		{[]string{"-1n"}, true},
+		{[]string{"--numeric-uid-gid", "-1"}, false},
+		{[]string{"-1", "--numeric-uid-gid"}, true},
+		{[]string{"--format=single-column", "-n"}, true},
+		{[]string{"-n", "--format=single-column"}, false},
+		{[]string{"--format=long", "-n"}, true},
+		{[]string{"-n", "--format=long"}, true},
+	} {
+		out, _, code := runToolAt(t, dir, tc.args...)
+		if code != 0 {
+			t.Fatalf("ls %v exit = %d, out = %q", tc.args, code, out)
+		}
+		isLong := strings.HasPrefix(out, "total ")
+		if isLong != tc.wantLong {
+			t.Errorf("ls %v: isLong = %v, want %v (out = %q)", tc.args, isLong, tc.wantLong, out)
+		}
+		if !tc.wantLong && out != "a.txt\n" {
+			t.Errorf("ls %v = %q, want \"a.txt\\n\"", tc.args, out)
+		}
+	}
+}
+
+// Table-driven tests for indicator option ordering between -F, -p, --file-type,
+// --indicator-style, and --classify (last-one-wins).
+func TestOrderIndicatorClassifyAndSlash(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "file.txt", "content")
+	runSh := filepath.Join(dir, "run.sh")
+	if err := os.WriteFile(runSh, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hasSymlink := true
+	if err := os.Symlink("file.txt", filepath.Join(dir, "link")); err != nil {
+		hasSymlink = false
+	}
+
+	for _, tc := range []struct {
+		args    []string
+		wantDir string
+		wantRun string
+		wantLnk string
+	}{
+		// -F vs -p separate and clustered
+		{[]string{"-F", "-p"}, "subdir/", "run.sh", "link"},
+		{[]string{"-p", "-F"}, "subdir/", "run.sh*", "link@"},
+		{[]string{"-Fp"}, "subdir/", "run.sh", "link"},
+		{[]string{"-pF"}, "subdir/", "run.sh*", "link@"},
+		// --file-type vs -F / -p
+		{[]string{"--file-type", "-F"}, "subdir/", "run.sh*", "link@"},
+		{[]string{"-F", "--file-type"}, "subdir/", "run.sh", "link@"},
+		{[]string{"-p", "--file-type"}, "subdir/", "run.sh", "link@"},
+		{[]string{"--file-type", "-p"}, "subdir/", "run.sh", "link"},
+		// --indicator-style
+		{[]string{"--indicator-style=slash", "-F"}, "subdir/", "run.sh*", "link@"},
+		{[]string{"-F", "--indicator-style=slash"}, "subdir/", "run.sh", "link"},
+		{[]string{"--indicator-style=file-type", "-F"}, "subdir/", "run.sh*", "link@"},
+		{[]string{"-F", "--indicator-style=file-type"}, "subdir/", "run.sh", "link@"},
+		{[]string{"--indicator-style=none", "-F"}, "subdir/", "run.sh*", "link@"},
+		{[]string{"-F", "--indicator-style=none"}, "subdir", "run.sh", "link"},
+		{[]string{"-p", "--indicator-style=none"}, "subdir", "run.sh", "link"},
+		// --classify
+		{[]string{"--classify=never", "-F"}, "subdir/", "run.sh*", "link@"},
+		{[]string{"-F", "--classify=never"}, "subdir", "run.sh", "link"},
+		{[]string{"-p", "--classify"}, "subdir/", "run.sh*", "link@"},
+		{[]string{"--classify", "-p"}, "subdir/", "run.sh", "link"},
+	} {
+		out, _, code := runToolAt(t, dir, tc.args...)
+		if code != 0 {
+			t.Fatalf("ls %v exit = %d, out = %q", tc.args, code, out)
+		}
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		// Verify directory indicator
+		if !containsLine(lines, tc.wantDir) {
+			t.Errorf("ls %v: missing dir entry %q in %v", tc.args, tc.wantDir, lines)
+		}
+		// Verify executable indicator (on Unix; Windows doesn't have 0111 exec permission bits)
+		if runtime.GOOS != "windows" {
+			if !containsLine(lines, tc.wantRun) {
+				t.Errorf("ls %v: missing exec entry %q in %v", tc.args, tc.wantRun, lines)
+			}
+		}
+		// Verify symlink indicator
+		if hasSymlink {
+			if !containsLine(lines, tc.wantLnk) {
+				t.Errorf("ls %v: missing link entry %q in %v", tc.args, tc.wantLnk, lines)
+			}
+		}
+		// Verify regular file indicator is always without suffix
+		if !containsLine(lines, "file.txt") {
+			t.Errorf("ls %v: missing regular file entry %q in %v", tc.args, "file.txt", lines)
+		}
+	}
+}
+
+func TestOrderIndicatorLongAbbreviationsAndOptionValues(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "-Fp", "ignored")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-F", "--indicator=none", "-I-Fp"}, "subdir\n"},
+		{[]string{"--indicator=none", "-F", "-I-Fp"}, "subdir/\n"},
+		{[]string{"-F", "--class=never", "-I-Fp"}, "subdir\n"},
+		// An attached -I value is data even when it contains an F or p.
+		{[]string{"-F", "-I-Fp"}, "subdir/\n"},
+	} {
+		out, errb, code := runToolAt(t, dir, tc.args...)
+		if code != 0 || errb != "" || out != tc.want {
+			t.Errorf("ls %v = (%q, %q, %d), want (%q, empty, 0)", tc.args, out, errb, code, tc.want)
+		}
+	}
+}
+
+func containsLine(lines []string, target string) bool {
+	for _, l := range lines {
+		if l == target {
+			return true
+		}
+	}
+	return false
+}

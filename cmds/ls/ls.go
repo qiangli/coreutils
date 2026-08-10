@@ -49,7 +49,7 @@ type options struct {
 	noOwner, noGroup, numeric                bool
 	author                                   bool
 	sizeBlocks                               bool
-	classify, fileType, slashDirs            bool
+	indicator                                indicatorStyle
 	zero, comma                              bool
 	unsorted, sortExtension, sortVersion     bool
 	groupDirsFirst                           bool
@@ -213,8 +213,8 @@ func GetFlagSet(name string) *pflag.FlagSet {
 func run(rc *tool.RunContext, args []string) int {
 	// -l, -t, -S, -1 have no GNU long form: pre-parse them out of the
 	// short-flag clusters before pflag sees the args.
-	rest, short := ExtractShort(args, "ltS1gGnoCpfUXQNbqsvCxZHLV")
 	fs := GetFlagSet(cmd.Name)
+	rest, short := ExtractShort(args, "ltS1gGnoCpfUXQNbqsvCxZHLVF", fs)
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
@@ -225,7 +225,6 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	ignoreBackups, _ := fs.GetBool("ignore-backups")
 	zero, _ := fs.GetBool("zero")
-	fileType, _ := fs.GetBool("file-type")
 	classify, _ := fs.GetString("classify")
 	indicator, _ := fs.GetString("indicator-style")
 	literal, _ := fs.GetBool("literal")
@@ -275,9 +274,7 @@ func run(rc *tool.RunContext, args []string) int {
 		sortTime:       short['t'] > 0,
 		sortSize:       short['S'] > 0,
 		sizeBlocks:     short['s'] > 0 || sizeFlag,
-		classify:       short['F'] > 0 || classify == "always" || classify == "auto",
-		fileType:       fileType,
-		slashDirs:      short['p'] > 0,
+		indicator:      lastIndicatorStyle(args, fs),
 		zero:           zero,
 		comma:          short['m'] > 0,
 		unsorted:       short['U'] > 0,
@@ -317,11 +314,8 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	// The format is whichever format option came last (GNU/POSIX).
-	if kind, ok := lastFormat(args, format); ok {
+	if kind, ok := lastFormat(args, format, fs); ok {
 		opt.format = kind
-	}
-	if fullTime {
-		opt.format = fmtLong
 	}
 	if opt.zero {
 		// GNU: --zero implies one name per line.
@@ -345,13 +339,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "unsupported --sort=%s", sortMode)
 	}
 	switch indicator {
-	case "", "none":
-	case "slash":
-		opt.slashDirs = true
-	case "file-type":
-		opt.fileType = true
-	case "classify":
-		opt.classify = true
+	case "", "none", "slash", "file-type", "classify":
 	default:
 		return tool.UsageError(rc, cmd, "unsupported --indicator-style=%s", indicator)
 	}
@@ -885,18 +873,21 @@ func displayName(e entry, opt options) string {
 		}
 	}
 	name = quoteControl(name, opt)
-	if opt.classify || opt.fileType || opt.slashDirs {
-		name += indicator(e, opt.classify, opt.fileType, opt.slashDirs)
+	if opt.indicator != indicatorNone {
+		name += indicator(e, opt.indicator)
 	}
 	return name
 }
 
-func indicator(e entry, classify, fileType, slashDirs bool) string {
+func indicator(e entry, style indicatorStyle) string {
+	if style == indicatorNone {
+		return ""
+	}
 	m := e.info.Mode()
 	switch {
 	case m.IsDir():
 		return "/"
-	case slashDirs:
+	case style == indicatorSlash:
 		return ""
 	case m&os.ModeSymlink != 0:
 		return "@"
@@ -906,7 +897,7 @@ func indicator(e entry, classify, fileType, slashDirs bool) string {
 		return "="
 	case m&os.ModeDevice != 0:
 		return ""
-	case classify && !fileType && m&0111 != 0:
+	case style == indicatorClassify && m&0111 != 0:
 		return "*"
 	default:
 		return ""
@@ -1178,7 +1169,11 @@ func matchesAny(name string, patterns []string) bool {
 // GNU long form) from short-flag clusters, returning the remaining
 // args and a map of flag letter to the sequence number of its last
 // occurrence (0 = absent). Scanning stops at the "--" terminator.
-func ExtractShort(args []string, chars string) ([]string, map[byte]int) {
+func ExtractShort(args []string, chars string, flagSets ...*pflag.FlagSet) ([]string, map[byte]int) {
+	fs := GetFlagSet(cmd.Name)
+	if len(flagSets) > 0 && flagSets[0] != nil {
+		fs = flagSets[0]
+	}
 	found := map[byte]int{}
 	seq := 0
 	var rest []string
@@ -1188,6 +1183,21 @@ func ExtractShort(args []string, chars string) ([]string, map[byte]int) {
 			rest = append(rest, args[i:]...)
 			break
 		}
+		if strings.HasPrefix(a, "--") {
+			rest = append(rest, a)
+			name := a[2:]
+			hasValue := false
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				name = name[:eq]
+				hasValue = true
+			}
+			name = canonicalLongName(fs, name)
+			if flag := fs.Lookup(name); !hasValue && flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
+				i++
+				rest = append(rest, args[i])
+			}
+			continue
+		}
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
 			kept := []byte{'-'}
 			for j := 1; j < len(a); j++ {
@@ -1196,6 +1206,12 @@ func ExtractShort(args []string, chars string) ([]string, map[byte]int) {
 					found[a[j]] = seq
 				} else {
 					kept = append(kept, a[j])
+				}
+				// The rest of a cluster after an argument-taking option is its
+				// value, not more options. Preserve it byte-for-byte for pflag.
+				if strings.IndexByte(argTakingShorts, a[j]) >= 0 {
+					kept = append(kept, a[j+1:]...)
+					break
 				}
 			}
 			if len(kept) > 1 {
@@ -1252,7 +1268,7 @@ const argTakingShorts = "IwT"
 // args, and whether args contained one at all. formatVal is the parsed
 // --format value (already validated), used when --format is the last
 // format option. Scanning stops at "--".
-func lastFormat(args []string, formatVal string) (fmtKind, bool) {
+func lastFormat(args []string, formatVal string, fs *pflag.FlagSet) (fmtKind, bool) {
 	kind, found := fmtOnePerLine, false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -1261,10 +1277,14 @@ func lastFormat(args []string, formatVal string) (fmtKind, bool) {
 		}
 		if strings.HasPrefix(a, "--") {
 			name := a[2:]
+			hasValue := false
 			if eq := strings.IndexByte(name, '='); eq >= 0 {
 				name = name[:eq]
-			} else if name == "format" {
-				i++ // the value is the next argument
+				hasValue = true
+			}
+			name = canonicalLongName(fs, name)
+			if flag := fs.Lookup(name); !hasValue && flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
+				i++ // the next argument is this option's value, never an option
 			}
 			switch name {
 			case "format":
@@ -1274,6 +1294,8 @@ func lastFormat(args []string, formatVal string) (fmtKind, bool) {
 			case "long":
 				kind, found = fmtLong, true
 			case "full-time":
+				kind, found = fmtLong, true
+			case "numeric-uid-gid":
 				kind, found = fmtLong, true
 			}
 			continue
@@ -1290,6 +1312,102 @@ func lastFormat(args []string, formatVal string) (fmtKind, bool) {
 		}
 	}
 	return kind, found
+}
+
+// indicatorStyle is the indicator style selected by the last of
+// -F/-p/--file-type/--classify/--indicator-style on the command line.
+type indicatorStyle int
+
+const (
+	indicatorNone indicatorStyle = iota
+	indicatorSlash
+	indicatorFileType
+	indicatorClassify
+)
+
+// lastIndicatorStyle scans args for the last occurrence of any indicator
+// option (-F, -p, --file-type, --classify, --indicator-style) and returns
+// the resulting style. Scanning stops at the "--" terminator.
+func lastIndicatorStyle(args []string, fs *pflag.FlagSet) indicatorStyle {
+	style := indicatorNone
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		if strings.HasPrefix(a, "--") {
+			name := a[2:]
+			val := ""
+			hasValue := false
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				val = name[eq+1:]
+				name = name[:eq]
+				hasValue = true
+			}
+			name = canonicalLongName(fs, name)
+			if flag := fs.Lookup(name); !hasValue && flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
+				i++
+				val = args[i]
+			}
+			switch name {
+			case "indicator-style":
+				switch val {
+				case "none":
+					style = indicatorNone
+				case "slash":
+					style = indicatorSlash
+				case "file-type":
+					style = indicatorFileType
+				case "classify":
+					style = indicatorClassify
+				}
+			case "classify":
+				if val == "" || val == "always" || val == "auto" {
+					style = indicatorClassify
+				} else if val == "never" {
+					style = indicatorNone
+				}
+			case "file-type":
+				style = indicatorFileType
+			}
+			continue
+		}
+		if len(a) > 1 && a[0] == '-' {
+			for j := 1; j < len(a); j++ {
+				if strings.IndexByte(argTakingShorts, a[j]) >= 0 {
+					break
+				}
+				switch a[j] {
+				case 'p':
+					style = indicatorSlash
+				case 'F':
+					style = indicatorClassify
+				}
+			}
+		}
+	}
+	return style
+}
+
+// canonicalLongName mirrors tool.Parse's unique long-option abbreviation
+// lookup for the order-preserving pre-scans. An ambiguous or unknown spelling
+// is returned unchanged; tool.Parse remains the authority that rejects it.
+func canonicalLongName(fs *pflag.FlagSet, name string) string {
+	if fs.Lookup(name) != nil {
+		return name
+	}
+	match := ""
+	count := 0
+	fs.VisitAll(func(flag *pflag.Flag) {
+		if strings.HasPrefix(flag.Name, name) {
+			match = flag.Name
+			count++
+		}
+	})
+	if count == 1 {
+		return match
+	}
+	return name
 }
 
 // lineWidth resolves the output line width for the column and comma
