@@ -35,9 +35,15 @@ const (
 	tagUpper
 )
 
+type caseClassSpan struct {
+	start int
+	tag   byte
+}
+
 type setSpec struct {
 	bytes         []byte
 	tags          []byte
+	caseClasses   []caseClassSpan
 	lastIsClass   bool // last construct parsed was a [:class:]
 	hasCaseClass  bool // contains [:upper:] or [:lower:]
 	hasOtherClass bool // contains any other [:class:]
@@ -70,7 +76,30 @@ func (sp *setSpec) applyFill(need int) {
 	nb = append(nb, sp.bytes[sp.fillPos:]...)
 	nt = append(nt, sp.tags[sp.fillPos:]...)
 	sp.bytes, sp.tags = nb, nt
+	if need > 0 {
+		for i := range sp.caseClasses {
+			if sp.caseClasses[i].start >= sp.fillPos {
+				sp.caseClasses[i].start += need
+			}
+		}
+	}
 	sp.fillPos = -1
+}
+
+func validateCaseClasses(set1, set2 *setSpec) bool {
+	for _, c2 := range set2.caseClasses {
+		matched := false
+		for _, c1 := range set1.caseClasses {
+			if c1.start == c2.start {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -200,6 +229,9 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		// Expand a [c*] fill construct to make SET2 as long as literal SET1.
 		set2.applyFill(len(set1.bytes) - len(set2.bytes))
+		if !validateCaseClasses(set1, set2) {
+			return fail("misaligned [:upper:] and/or [:lower:] construct")
+		}
 		if *truncateSet1 {
 			if len(set2.bytes) == 0 {
 				eff1.bytes = eff1.bytes[:0]
@@ -368,9 +400,11 @@ func parseSet(s string, isSet2 bool) (*setSpec, string) {
 				case "lower":
 					tag = tagLower
 					sp.hasCaseClass = true
+					sp.caseClasses = append(sp.caseClasses, caseClassSpan{start: len(sp.bytes), tag: tagLower})
 				case "upper":
 					tag = tagUpper
 					sp.hasCaseClass = true
+					sp.caseClasses = append(sp.caseClasses, caseClassSpan{start: len(sp.bytes), tag: tagUpper})
 				default:
 					sp.hasOtherClass = true
 				}
