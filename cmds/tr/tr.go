@@ -2,10 +2,12 @@
 // translate, squeeze, and/or delete characters from standard input,
 // writing to standard output.
 //
-// The implementation is byte-oriented (LC_ALL=C semantics, the agent
-// contract): SETs expand to byte sequences; character classes are the
-// C-locale ASCII definitions in ascending byte order, exactly as GNU
-// tr expands them in the POSIX locale.
+// Character class expansion and case mapping honour the invocation's
+// LC_CTYPE (resolved from rc.Env via pkg/locale). Under C/POSIX the
+// pure-Go ASCII tables are used directly; under other locales an
+// injectable ctypeOpener provides class membership and case maps.
+// Paired lower/upper translation under non-C locales is explicitly
+// unsupported until Stage B; C/POSIX behaviour remains byte-identical.
 package trcmd
 
 import (
@@ -14,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -103,6 +106,10 @@ func validateCaseClasses(set1, set2 *setSpec) bool {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithCType(rc, args, prodOpener)
+}
+
+func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 	// -C is a synonym for -c/--complement with no long form of its own
 	// (GNU getopt short option): pre-parse it out of short-flag clusters.
 	complementC := false
@@ -183,13 +190,29 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 
-	set1, errMsg := parseSet(operands[0], false)
+	// -C (uppercase): require C/POSIX LC_COLLATE.
+	if complementC || *complementUpper {
+		lcCollate := locale.Resolve(rc.Env, locale.Collate)
+		if !isCPOSIX(lcCollate) {
+			fmt.Fprintf(rc.Err, "tr: -C requires C/POSIX LC_COLLATE, got %q\n", lcCollate)
+			return 2
+		}
+	}
+
+	// Resolve LC_CTYPE and build class/case tables.
+	tables, lcCType, ctypeErr := openCType(rc.Env, opener)
+	if ctypeErr != nil {
+		fmt.Fprintf(rc.Err, "tr: failed to open LC_CTYPE %q: %v\n", lcCType, ctypeErr)
+		return 2
+	}
+
+	set1, errMsg := parseSetWithTables(operands[0], false, tables)
 	if errMsg != "" {
 		return fail(errMsg)
 	}
 	var set2 *setSpec
 	if nset == 2 {
-		set2, errMsg = parseSet(operands[1], true)
+		set2, errMsg = parseSetWithTables(operands[1], true, tables)
 		if errMsg != "" {
 			return fail(errMsg)
 		}
@@ -227,6 +250,11 @@ func run(rc *tool.RunContext, args []string) int {
 		if comp && set2.hasCaseClass {
 			return fail("when translating with complemented character classes,\nstring2 must map all characters in the domain to one")
 		}
+		// Stage A: reject paired-case translation under non-C LC_CTYPE.
+		if set2.hasCaseClass && !isCPOSIX(lcCType) {
+			fmt.Fprintf(rc.Err, "tr: case conversion via [:lower:]/[:upper:] is not yet supported under LC_CTYPE=%q\n", lcCType)
+			return 2
+		}
 		// Expand a [c*] fill construct to make SET2 as long as literal SET1.
 		set2.applyFill(len(set1.bytes) - len(set2.bytes))
 		if !validateCaseClasses(set1, set2) {
@@ -260,9 +288,9 @@ func run(rc *tool.RunContext, args []string) int {
 			case t1 == tagNone && t2 != tagNone:
 				return fail("misaligned [:upper:] and/or [:lower:] construct")
 			case t1 == tagLower && t2 == tagUpper:
-				xlate[c1] = asciiUpper(c1)
+				xlate[c1] = tables.toUpper[c1]
 			case t1 == tagUpper && t2 == tagLower:
-				xlate[c1] = asciiLower(c1)
+				xlate[c1] = tables.toLower[c1]
 			default:
 				xlate[c1] = set2.bytes[i]
 			}
@@ -386,12 +414,24 @@ func parseChar(s string, i *int) byte {
 // equivalence classes (single member in the C locale), and — in SET2
 // only — [c*n] / [c*] repeat constructs.
 func parseSet(s string, isSet2 bool) (*setSpec, string) {
+	return parseSetWithTables(s, isSet2, nil)
+}
+
+// parseSetWithTables is like parseSet but uses tables for class
+// expansion when non-nil.  When tables is nil the hardcoded C-locale
+// classBytes function is used instead.
+func parseSetWithTables(s string, isSet2 bool, tables *ctypeTables) (*setSpec, string) {
 	sp := &setSpec{fillPos: -1}
 	i := 0
 	for i < len(s) {
 		if s[i] == '[' {
 			if cls, adv, ok := matchClass(s[i:]); ok {
-				expanded := classBytes(cls)
+				var expanded []byte
+				if tables != nil {
+					expanded = tables.classFromTable(cls)
+				} else {
+					expanded = classBytes(cls)
+				}
 				if expanded == nil {
 					return nil, fmt.Sprintf("invalid character class '%s'", cls)
 				}
