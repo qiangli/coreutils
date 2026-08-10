@@ -92,6 +92,27 @@ func TestTrDeleteSqueeze(t *testing.T) {
 	}
 }
 
+func TestTrOperandOptionParsing(t *testing.T) {
+	cases := []struct {
+		name  string
+		args  []string
+		stdin string
+		want  string
+	}{
+		{"option after operand is operand", []string{"a", "-c"}, "abc\n", "-bc\n"},
+		{"literal -C after SET1", []string{"a", "-C"}, "abc\n", "-bc\n"},
+		{"literal -d after SET1", []string{"a", "-d"}, "abc\n", "-bc\n"},
+		{"first SET then SET2 beginning -", []string{"a", "-x"}, "abc\n", "-bc\n"},
+		{"clustered leading options with later option-looking operand", []string{"-t", "a", "-c"}, "abc-c\n", "-bc-c\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runTool(t, c.stdin, c.args...)
+		if out != c.want || code != 0 {
+			t.Errorf("%s: tr %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
+		}
+	}
+}
+
 func TestTrOperandErrors(t *testing.T) {
 	cases := []struct {
 		args []string
