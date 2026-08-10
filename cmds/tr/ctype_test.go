@@ -168,6 +168,29 @@ func newFakeProvider(closeN *atomic.Int32) *fakeProvider {
 	return fp
 }
 
+// newCaseTestProvider builds a fresh deterministic provider for paired case tests:
+// lower={a,b,DF,FF}, upper={A,B}, punct={!,'\xB0'}; all 256 maps identity
+// except upper a->A,b->B and lower A->a,B->b.
+func newCaseTestProvider(closeN *atomic.Int32) *fakeProvider {
+	fp := &fakeProvider{
+		closeN: closeN,
+		classes: map[string]map[byte]bool{
+			"lower": {0x61: true, 0x62: true, 0xDF: true, 0xFF: true},
+			"upper": {0x41: true, 0x42: true},
+			"punct": {0x21: true, 0xB0: true},
+		},
+	}
+	for i := 0; i < 256; i++ {
+		fp.lower[i] = byte(i)
+		fp.upper[i] = byte(i)
+	}
+	fp.upper[0x61] = 0x41
+	fp.upper[0x62] = 0x42
+	fp.lower[0x41] = 0x61
+	fp.lower[0x42] = 0x62
+	return fp
+}
+
 // ---------------------------------------------------------------------------
 // helper: run with a specific opener/env
 // ---------------------------------------------------------------------------
@@ -759,46 +782,10 @@ func TestCTypeFailures(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestCTypeCaseTranslation — non-C paired-case rejects pre-I/O;
-// existing C occurrence tests unchanged/green.
+// TestCTypeCaseTranslation — provider-backed and C-locale case occurrences.
 // ---------------------------------------------------------------------------
 
 func TestCTypeCaseTranslation(t *testing.T) {
-	t.Run("non-C paired-case translation fails pre-IO", func(t *testing.T) {
-		env := []string{"LC_CTYPE=de_DE.ISO-8859-1"}
-		var closeCount atomic.Int32
-		fakeOpener := func(name string) (ctypeProvider, error) {
-			return newFakeProvider(&closeCount), nil
-		}
-
-		spy := &spyWriter{}
-		var errb bytes.Buffer
-		rc := &tool.RunContext{
-			Ctx:   context.Background(),
-			Dir:   t.TempDir(),
-			Env:   env,
-			Stdio: tool.Stdio{In: panicReader{}, Out: spy, Err: &errb},
-		}
-		code := runWithCType(rc, []string{"[:lower:]", "[:upper:]"}, fakeOpener)
-		if code != 2 {
-			t.Errorf("code=%d, want 2", code)
-		}
-		if spy.written {
-			t.Error("stdout written despite rejection")
-		}
-		if !strings.Contains(errb.String(), "not yet supported") {
-			t.Errorf("stderr %q should contain unsupported message", errb.String())
-		}
-		if !strings.Contains(errb.String(), "de_DE.ISO-8859-1") {
-			t.Errorf("stderr %q should mention locale", errb.String())
-		}
-		// The provider was built (and thus closed once) before the
-		// paired-case rejection; rejection must not leak or double-close it.
-		if closeCount.Load() != 1 {
-			t.Errorf("closeCount=%d, want 1", closeCount.Load())
-		}
-	})
-
 	t.Run("C locale paired-case still works", func(t *testing.T) {
 		out, errb, code := runTool(t, "Hello World", "[:lower:]", "[:upper:]")
 		if code != 0 {
@@ -819,6 +806,13 @@ func TestCTypeCaseTranslation(t *testing.T) {
 		}
 	})
 
+	t.Run("C locale mixed paired and unpaired class fill", func(t *testing.T) {
+		out, errb, code := runTool(t, "abAB12", "[:lower:][:upper:]12", "[:upper:][x*]yz")
+		if code != 0 || errb != "" || out != "ABxxyz" {
+			t.Errorf("code=%d stdout=%q stderr=%q, want 0, %q, empty", code, out, errb, "ABxxyz")
+		}
+	})
+
 	t.Run("non-C ordinary class in delete is OK", func(t *testing.T) {
 		// Ordinary classes (non-case) should work under non-C.
 		env := []string{"LC_CTYPE=fake_locale"}
@@ -833,6 +827,169 @@ func TestCTypeCaseTranslation(t *testing.T) {
 		}
 		if out != "abc" {
 			t.Errorf("out=%q, want %q", out, "abc")
+		}
+	})
+
+	t.Run("provider paired-case translation rows", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			args       []string
+			stdin      string
+			wantStdout string
+			wantStderr string
+			wantCode   int
+			reject     bool
+		}{
+			{
+				name:       "whole lower->upper",
+				args:       []string{"[:lower:]", "[:upper:]"},
+				stdin:      "ab\xdf\xffAB",
+				wantStdout: "AB\xdf\xffAB",
+				wantCode:   0,
+			},
+			{
+				name:       "prefix and suffix preserve logical case position",
+				args:       []string{"1[:lower:]3", "2[:upper:]4"},
+				stdin:      "1ab\xdf\xff3",
+				wantStdout: "2AB\xdf\xff4",
+				wantCode:   0,
+			},
+			{
+				name:       "adjacent lower+upper -> upper+lower",
+				args:       []string{"[:lower:][:upper:]", "[:upper:][:lower:]"},
+				stdin:      "ab\xdf\xffAB",
+				wantStdout: "AB\xdf\xffab",
+				wantCode:   0,
+			},
+			{
+				name:       "repeated lower+lower -> upper+lower unchanged (later identity)",
+				args:       []string{"[:lower:][:lower:]", "[:upper:][:lower:]"},
+				stdin:      "ab\xdf\xff",
+				wantStdout: "ab\xdf\xff",
+				wantCode:   0,
+			},
+			{
+				name:       "A+upper -> x+lower gives a",
+				args:       []string{"A[:upper:]", "x[:lower:]"},
+				stdin:      "A",
+				wantStdout: "a",
+				wantCode:   0,
+			},
+			{
+				name:       "upper+A -> lower+x gives x",
+				args:       []string{"[:upper:]A", "[:lower:]x"},
+				stdin:      "A",
+				wantStdout: "x",
+				wantCode:   0,
+			},
+			{
+				name:       "fill-after lower12 -> upper[x*] gives mapped class plus exactly xx",
+				args:       []string{"[:lower:]12", "[:upper:][x*]"},
+				stdin:      "ab\xdf\xff12",
+				wantStdout: "AB\xdf\xffxx",
+				wantCode:   0,
+			},
+			{
+				name:       "fill-before 12lower -> [x*]upper gives exactly xx then mapped class",
+				args:       []string{"12[:lower:]", "[x*][:upper:]"},
+				stdin:      "12ab\xdf\xff",
+				wantStdout: "xxAB\xdf\xff",
+				wantCode:   0,
+			},
+			{
+				name:       "ordinary provider class before paired fill keeps raw cardinality",
+				args:       []string{"[:punct:][:lower:]", "[x*][:upper:]"},
+				stdin:      "!\xb0ab\xdf\xff",
+				wantStdout: "xxAB\xdf\xff",
+				wantCode:   0,
+			},
+			{
+				name:       "unpaired lower fill keeps raw cardinality",
+				args:       []string{"[:lower:]12", "[x*]yz"},
+				stdin:      "ab\xdf\xff12",
+				wantStdout: "xxxxyz",
+				wantCode:   0,
+			},
+			{
+				name:       "default padding after paired class repeats final literal",
+				args:       []string{"[:lower:]12", "[:upper:]x"},
+				stdin:      "ab\xdf\xff12",
+				wantStdout: "AB\xdf\xffxx",
+				wantCode:   0,
+			},
+			{
+				name:       "truncate after paired class leaves unmatched source unchanged",
+				args:       []string{"-t", "[:lower:]12", "[:upper:]x"},
+				stdin:      "ab\xdf\xff12",
+				wantStdout: "AB\xdf\xffx2",
+				wantCode:   0,
+			},
+			{
+				name:       "unpaired lower->x gives xxxx",
+				args:       []string{"[:lower:]", "x"},
+				stdin:      "ab\xdf\xff",
+				wantStdout: "xxxx",
+				wantCode:   0,
+			},
+			{
+				name:       "target inside source reject",
+				args:       []string{"[:lower:]", "x[:upper:]"},
+				stdin:      "",
+				wantStderr: "misaligned [:upper:] and/or [:lower:] construct",
+				reject:     true,
+			},
+			{
+				name:       "target at EOF reject",
+				args:       []string{"a", "x[:upper:]"},
+				stdin:      "",
+				wantStderr: "misaligned [:upper:] and/or [:lower:] construct",
+				reject:     true,
+			},
+			{
+				name:       "target class tail before source suffix rejects exactly",
+				args:       []string{"1[:lower:]3", "2[:upper:]"},
+				stdin:      "",
+				wantStderr: "when translating with string1 longer than string2,\nthe latter string must not end with a character class",
+				reject:     true,
+			},
+		}
+
+		for _, tt := range tests {
+			tt := tt
+			t.Run(tt.name, func(t *testing.T) {
+				var openCount, closeCount atomic.Int32
+				opener := func(name string) (ctypeProvider, error) {
+					openCount.Add(1)
+					return newCaseTestProvider(&closeCount), nil
+				}
+
+				env := []string{"LC_CTYPE=fake_locale"}
+				out, errb, code := runWithOpener(t, env, tt.stdin, opener, tt.args...)
+
+				if openCount.Load() != 1 || closeCount.Load() != 1 {
+					t.Errorf("open=%d close=%d, want 1 and 1", openCount.Load(), closeCount.Load())
+				}
+
+				if tt.reject {
+					if code != 1 {
+						t.Errorf("code=%d, want 1", code)
+					}
+					wantErr := "tr: " + tt.wantStderr + "\n"
+					if errb != wantErr {
+						t.Errorf("stderr=%q, want %q", errb, wantErr)
+					}
+				} else {
+					if code != tt.wantCode {
+						t.Errorf("code=%d, want %d (stderr=%q)", code, tt.wantCode, errb)
+					}
+					if out != tt.wantStdout {
+						t.Errorf("out=%q, want %q", out, tt.wantStdout)
+					}
+					if errb != "" {
+						t.Errorf("stderr=%q, want empty", errb)
+					}
+				}
+			})
 		}
 	})
 }
