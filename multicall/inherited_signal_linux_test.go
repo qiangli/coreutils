@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	_ "github.com/qiangli/coreutils/cmds/tr"
 )
 
 func runInheritedSignalHelper(mode string) {
@@ -38,6 +40,40 @@ func runInheritedSignalHelper(mode string) {
 			os.Exit(3)
 		}
 		os.Exit(0)
+	case "pipe_rc":
+		// Full boundary-seam test: inherited ignored SIGPIPE must reach
+		// processRunContext().SIGPIPEIgnored, then flow into tr's
+		// deterministic EPIPE path. preserveInheritedSignalDispositions
+		// has already run at the top of this helper.
+		rc := processRunContext()
+		if !rc.SIGPIPEIgnored {
+			os.Stderr.WriteString("pipe_rc: SIGPIPEIgnored=false, want true\n")
+			os.Exit(10)
+		}
+		// Redirect stdout to a write-only pipe with no reader (EPIPE on write).
+		r, w, err := os.Pipe()
+		if err != nil {
+			os.Exit(2)
+		}
+		_ = r.Close()
+		_ = syscall.Close(1)
+		fd, err := syscall.Dup(int(w.Fd()))
+		if err != nil || fd != 1 {
+			os.Exit(2)
+		}
+		_ = w.Close()
+		// Rebuild RunContext so rc.Out is the now-broken fd 1.
+		rc = processRunContext()
+		// Feed tr a few bytes so its flush path hits EPIPE.
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			os.Exit(2)
+		}
+		rc.Stdio.In = pr
+		_, _ = pw.Write([]byte("abc\n"))
+		_ = pw.Close()
+		code := Dispatch(rc, "tr", []string{"a-z", "A-Z"})
+		os.Exit(code)
 	case "ttin":
 		// Put the child in a non-orphaned process group so POSIX permits the
 		// terminal-input signal's default stop action.
@@ -130,6 +166,38 @@ func TestPreserveInheritedIgnoredSignals(t *testing.T) {
 				t.Fatalf("ignored SIG%s helper: %v; output=%q", tc.sig, err, out)
 			}
 		})
+	}
+}
+
+// TestStandaloneSIGPIPEIgnoredReachesRunContext proves the boundary seam:
+// when the parent process ignores SIGPIPE (via the shell trap builtin),
+// that fact flows through preserveInheritedSignalDispositions into
+// processRunContext().SIGPIPEIgnored=true, and tr's deterministic EPIPE
+// path emits "tr: stdout: Broken pipe" with exit code 1, the behavior
+// the GNU tool exhibits when SIGPIPE is ignored. Derived from
+// TestPreserveInheritedIgnoredSignals.
+func TestStandaloneSIGPIPEIgnoredReachesRunContext(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Parent ignores SIGPIPE, then execs the test binary with the pipe_rc marker.
+	script := "trap '' PIPE; exec \"$1\" -test.run=^$"
+	cmd := exec.Command("/bin/sh", "-c", script, "sh", exe)
+	cmd.Env = append(os.Environ(), inheritedSignalMarker+"=pipe_rc")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	ee, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected exit error, got %v; stderr=%q", err, stderr.String())
+	}
+	if ee.ExitCode() != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q", ee.ExitCode(), stderr.String())
+	}
+	want := "tr: stdout: Broken pipe\n"
+	if stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 	}
 }
 
