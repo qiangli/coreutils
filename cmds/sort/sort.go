@@ -2,7 +2,8 @@
 // sort lines of text files.
 //
 // Comparisons use byte order in the C/POSIX locale and the narrowly supported
-// LC_COLLATE provider for its accepted non-C locale aliases.
+// LC_COLLATE provider for its accepted non-C locale aliases. Numeric -n keys
+// also honor the narrowly supported LC_NUMERIC radix and thousands bytes.
 // Implemented flags: -b -c -C -d -f -g -h -i -k -m -M -n -o -r
 // -R --random-source -s -t -T -u -V -z --files0-from.
 // GNU's last-resort whole-line comparison applies unless -s/-u, and the
@@ -52,6 +53,8 @@ type sorter struct {
 	zeroTerm    bool
 	merge       bool
 	collator    *collatorAdapter
+	decPt       byte
+	thousSep    byte
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -148,30 +151,8 @@ func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOp
 		}
 	}
 
-	// Open a non-C collator before any operation that can read an input, consume
-	// random bytes, inspect --files0-from, or create an output file.
-	if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != "POSIX" {
-		provider, err := openCollator(name)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "sort: LC_COLLATE=%s: %v\n", name, err)
-			return 2
-		}
-		s.collator = newCollatorAdapter(provider)
-		defer s.collator.Close()
-	}
-
-	if *randSource != "" {
-		f, err := os.Open(rc.Path(*randSource))
-		if err != nil {
-			fmt.Fprintf(rc.Err, "sort: %s: cannot open\n", *randSource)
-			return 2
-		}
-		defer f.Close()
-		s.randSrc = f
-	}
-
-	_ = *tmpDir
-
+	// Validate and parse every key before locale initialization so malformed
+	// keys win over locale/provider errors and no partial key state escapes.
 	for _, def := range *keyDefs {
 		k, errMsg, badType := parseKeySpec(def)
 		if badType != 0 {
@@ -201,6 +182,46 @@ func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOp
 	if len(s.keys) == 0 && gOpts.hasMods() {
 		s.keys = append(s.keys, keySpec{sword: 0, schar: 0, eword: -1, echar: 0, opts: gOpts})
 	}
+
+	// Initialize locale providers only after all keys have been validated and
+	// effective key modes are known. This keeps invalid-key diagnostics first
+	// and avoids LC_NUMERIC for a global -n overridden by key-local -f.
+	if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != "POSIX" {
+		provider, err := openCollator(name)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "sort: LC_COLLATE=%s: %v\n", name, err)
+			return 2
+		}
+		s.collator = newCollatorAdapter(provider)
+		defer s.collator.Close()
+	}
+	usesNumeric := false
+	for _, k := range s.keys {
+		usesNumeric = usesNumeric || k.opts.numeric
+	}
+	if usesNumeric {
+		if name := locale.Resolve(rc.Env, locale.Numeric); name != "C" && name != "POSIX" {
+			switch strings.ToLower(name) {
+			case "de_de.iso-8859-1", "de_de.iso88591":
+				s.decPt, s.thousSep = ',', '.'
+			default:
+				fmt.Fprintf(rc.Err, "sort: LC_NUMERIC=%s: not supported\n", name)
+				return 2
+			}
+		}
+	}
+
+	if *randSource != "" {
+		f, err := os.Open(rc.Path(*randSource))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "sort: %s: cannot open\n", *randSource)
+			return 2
+		}
+		defer f.Close()
+		s.randSrc = f
+	}
+
+	_ = *tmpDir
 
 	if *files0 != "" {
 		files, err := readFiles0From(rc, *files0)
@@ -330,8 +351,14 @@ func writeStringLines(rc *tool.RunContext, output string, lines []string, zeroTe
 		delim = 0
 	}
 	for _, l := range lines {
-		bw.WriteString(l)
-		bw.WriteByte(delim)
+		if _, err := bw.WriteString(l); err != nil {
+			fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
+			return 2
+		}
+		if err := bw.WriteByte(delim); err != nil {
+			fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
+			return 2
+		}
 	}
 	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
@@ -357,8 +384,14 @@ func writeNumericLines(rc *tool.RunContext, output string, lines []numericLine, 
 		delim = 0
 	}
 	for _, l := range lines {
-		bw.WriteString(l.text)
-		bw.WriteByte(delim)
+		if _, err := bw.WriteString(l.text); err != nil {
+			fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
+			return 2
+		}
+		if err := bw.WriteByte(delim); err != nil {
+			fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
+			return 2
+		}
 	}
 	if err := bw.Flush(); err != nil {
 		fmt.Fprintf(rc.Err, "sort: write failed: %v\n", err)
@@ -368,7 +401,7 @@ func writeNumericLines(rc *tool.RunContext, output string, lines []numericLine, 
 }
 
 func (s *sorter) canUsePreparedNumeric() bool {
-	if s.collator != nil {
+	if s.collator != nil || s.decPt != 0 || s.thousSep != 0 {
 		return false
 	}
 	if len(s.keys) != 1 {
@@ -422,7 +455,7 @@ func (s *sorter) compareKeys(a, b string) int {
 		case k.opts.generalNum:
 			d = generalNumCompare(ka, kb)
 		case k.opts.numeric:
-			d = numCompare(ka, kb)
+			d = s.numCompare(ka, kb)
 		case k.opts.human:
 			d = humanCompare(ka, kb)
 		case k.opts.month:

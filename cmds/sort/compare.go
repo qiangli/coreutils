@@ -1,8 +1,9 @@
 package sortcmd
 
-// Ordering comparators. Numeric, month, and version modes retain their
-// byte-defined parsing; textual keys and whole-line fallbacks are routed by
-// sorter through its invocation-local LC_COLLATE adapter.
+// Ordering comparators. Numeric -n parsing uses the invocation's supported
+// LC_NUMERIC convention; month, version, -g, and -h remain byte-defined.
+// Textual keys and whole-line fallbacks are routed by sorter through its
+// invocation-local LC_COLLATE adapter.
 //
 //   - numCompare implements GNU strnumcmp semantics for -n.
 //   - generalNumCompare implements GNU general-numeric -g (float-compatible).
@@ -79,6 +80,61 @@ func magCompare(ia, fa, ib, fb string) int {
 func numCompare(a, b string) int {
 	sa, ia, fa := parseNumParts(a)
 	sb, ib, fb := parseNumParts(b)
+	if sa != sb {
+		return cmpInt(sa, sb)
+	}
+	m := magCompare(ia, fa, ib, fb)
+	if sa < 0 {
+		return -m
+	}
+	return m
+}
+
+func parseNumPartsLocale(s string, decPt, thousSep byte) (sign int, ip, fp string) {
+	i := 0
+	for i < len(s) && isBlank(s[i]) {
+		i++
+	}
+	neg := false
+	if i < len(s) && s[i] == '-' {
+		neg = true
+		i++
+	}
+	var ipBytes []byte
+	j := i
+	for j < len(s) {
+		if isDigit(s[j]) {
+			ipBytes = append(ipBytes, s[j])
+			j++
+		} else if thousSep != 0 && s[j] == thousSep {
+			j++
+		} else {
+			break
+		}
+	}
+	ip = strings.TrimLeft(string(ipBytes), "0")
+	if j < len(s) && s[j] == decPt {
+		k := j + 1
+		for k < len(s) && isDigit(s[k]) {
+			k++
+		}
+		fp = strings.TrimRight(s[j+1:k], "0")
+	}
+	if ip == "" && fp == "" {
+		return 0, "", ""
+	}
+	if neg {
+		return -1, ip, fp
+	}
+	return 1, ip, fp
+}
+
+func (s *sorter) numCompare(a, b string) int {
+	if s.decPt == 0 && s.thousSep == 0 {
+		return numCompare(a, b)
+	}
+	sa, ia, fa := parseNumPartsLocale(a, s.decPt, s.thousSep)
+	sb, ib, fb := parseNumPartsLocale(b, s.decPt, s.thousSep)
 	if sa != sb {
 		return cmpInt(sa, sb)
 	}

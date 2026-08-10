@@ -82,7 +82,7 @@ Text — transform and combine:
 
 | Command | Sources | Notes |
 |---|---|---|
-| sort | aict, guonaihong, u-root | -r, -n, -u, -f, -b, -k, -t, -o, -s, -c, -h; byte order |
+| sort | aict, guonaihong, u-root | -r, -n, -u, -f, -b, -k, -t, -o, -s, -c, -h; C/POSIX byte order, narrow LC_COLLATE text ordering, and narrow LC_NUMERIC `-n` radix/thousands support; `-g`/`-h` remain byte-defined |
 | uniq | aict, guonaihong, u-root | -c, -d, -u, -i, -f, -s, -w; uutils-parity additions: -z, -D/--all-repeated[=METHOD], --group[=METHOD] |
 | cut | aict, guonaihong | -b, -c, -f, -d, -s, --complement |
 | tr | aict, guonaihong, u-root | SET1/SET2, -d, -s, -c, classes |

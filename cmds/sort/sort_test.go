@@ -37,10 +37,16 @@ func runTool(t *testing.T, stdin string, args ...string) (stdout, stderr string,
 
 func runToolDir(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolEnv(t, dir, nil, stdin, args...)
+}
+
+func runToolEnv(t *testing.T, dir string, env []string, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -576,5 +582,88 @@ func TestSortIgnoreNonprintingTab(t *testing.T) {
 		if out != c.want || code != 0 {
 			t.Errorf("%s: sort %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
 		}
+	}
+}
+
+func TestSortLCNumeric(t *testing.T) {
+	cases := []struct {
+		name  string
+		env   []string
+		stdin string
+		args  []string
+		want  string
+	}{
+		// POSIX locale retains '.' decimal. '1,3' parses as 1, so order is -1.20, 1,3, 1.2
+		{"POSIX unchanged", []string{"LC_NUMERIC=POSIX"}, "1.2\n-1.20\n1,3\n", []string{"-n"}, "-1.20\n1,3\n1.2\n"},
+		// de_DE.iso88591 uses ',' decimal and '.' thousands.
+		// '1.3' parses as 13 because '.' is thousSep.
+		// '1,20' parses as 1.20
+		// '-1,2' parses as -1.2
+		// Sorted: -1,2, 1,20, 1.3
+		{"de_DE comma decimal", []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "1,20\n-1,2\n1.3\n", []string{"-n"}, "-1,2\n1,20\n1.3\n"},
+		{"de_DE thousands", []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "1.000,5\n900\n", []string{"-n"}, "900\n1.000,5\n"},
+		{"de_DE thousands mixed", []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "1.0.0.0,5\n9.0.0,0\n", []string{"-n"}, "9.0.0,0\n1.0.0.0,5\n"},
+		// Environment precedence: LC_ALL > LC_NUMERIC > LANG
+		// Here '1,3' parses as 1 in C, and 1.3 in de_DE.
+		{"LC_ALL shadows LC_NUMERIC", []string{"LC_ALL=C", "LC_NUMERIC=de_DE.iso88591"}, "1.2\n1,3\n", []string{"-n"}, "1,3\n1.2\n"},
+		{"LC_NUMERIC shadows LANG", []string{"LC_NUMERIC=de_DE.iso88591", "LANG=C", "LC_COLLATE=C"}, "1,2\n1.3\n", []string{"-n"}, "1,2\n1.3\n"},
+		{"LANG fallback", []string{"LANG=de_DE.iso88591", "LC_COLLATE=C"}, "1,2\n1.3\n", []string{"-n"}, "1,2\n1.3\n"},
+		// Empty fallthrough
+		{"empty LC_ALL falls through", []string{"LC_ALL=", "LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "1,2\n1.3\n", []string{"-n"}, "1,2\n1.3\n"},
+		// Keys and modes
+		{"key -k2n with locale", []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "a 1,2\nb -1,20\n", []string{"-k2,2n"}, "b -1,20\na 1,2\n"},
+		{"check mode", []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "-1,20\n1,2\n", []string{"-c", "-n"}, ""},
+		{"unique mode", []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "1,20\n1,2\n", []string{"-u", "-n"}, "1,20\n"},
+		{"reverse mode", []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "1,2\n-1,20\n", []string{"-r", "-n"}, "1,2\n-1,20\n"},
+		{"stable mode", []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "1,20 a\n1,2 b\n", []string{"-n", "-s"}, "1,20 a\n1,2 b\n"},
+		{"key-local fold overrides global numeric", []string{"LC_NUMERIC=definitely.invalid", "LC_COLLATE=C"}, "a\nB\n", []string{"-n", "-k1f", "-s"}, "a\nB\n"},
+		{"uppercase reviewed alias", []string{"LC_NUMERIC=DE_DE.ISO88591"}, "1,2\n1.3\n", []string{"-n"}, "1,2\n1.3\n"},
+		// Numeric equality still receives GNU's default whole-line last resort.
+		{"negative zero", []string{"LC_NUMERIC=de_DE.iso88591"}, "0\n-0\n", []string{"-n"}, "-0\n0\n"},
+		{"leading radix", []string{"LC_NUMERIC=de_DE.iso88591"}, ",5\n0,4\n", []string{"-n"}, "0,4\n,5\n"},
+	}
+	for _, c := range cases {
+		out, errb, code := runToolEnv(t, t.TempDir(), c.env, c.stdin, c.args...)
+		if out != c.want || errb != "" || code != 0 {
+			t.Errorf("%s: sort %v = (%q, %q, %d), want (%q, _, 0)", c.name, c.args, out, errb, code, c.want)
+		}
+	}
+
+	// Check merge specifically
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f1"), []byte("-1,2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("1,2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runToolEnv(t, dir, []string{"LC_NUMERIC=de_DE.iso88591", "LC_COLLATE=C"}, "", "-m", "-n", "f1", "f2")
+	if code != 0 || out != "-1,2\n1,2\n" || errb != "" {
+		t.Errorf("merge with locale: code=%d err=%q out=%q", code, errb, out)
+	}
+
+	// Fail before input or output I/O. In particular, -o must not truncate an
+	// existing destination when the requested numeric locale is unsupported.
+	outputPath := filepath.Join(dir, "sentinel")
+	if err := os.WriteFile(outputPath, []byte("keep\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runToolEnv(t, dir, []string{"LC_NUMERIC=fr_FR"}, "", "-n", "-o", "sentinel", "missing_file")
+	if code != 2 || !strings.Contains(errb, "not supported") || strings.Contains(errb, "missing_file") {
+		t.Errorf("unsupported locale should fail early: code=%d err=%q", code, errb)
+	}
+	if got, err := os.ReadFile(outputPath); err != nil || string(got) != "keep\n" {
+		t.Fatalf("unsupported locale touched output: got=%q err=%v", got, err)
+	}
+
+	for _, name := range []string{"de_DE", "de_DE.ISO-8859-2", "de_DE.ISO-8859-15", "de_DE.UTF-8", "de_DE.iso88591x"} {
+		_, errb, code := runToolEnv(t, dir, []string{"LC_NUMERIC=" + name}, "unread\n", "-n", "missing_file")
+		if code != 2 || !strings.Contains(errb, "not supported") || strings.Contains(errb, "missing_file") {
+			t.Errorf("invalid alias %q: code=%d stderr=%q", name, code, errb)
+		}
+	}
+	_, errb, code = runToolEnv(t, dir, []string{"LC_NUMERIC=fr_FR", "LC_COLLATE=C"}, "", "-k1z", "missing_file")
+	if code == 0 || !strings.Contains(errb, "invalid field") || strings.Contains(errb, "not supported") || strings.Contains(errb, "missing_file") {
+		t.Errorf("invalid key must precede locale and I/O: code=%d stderr=%q", code, errb)
 	}
 }
