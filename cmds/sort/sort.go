@@ -1,7 +1,8 @@
 // Package sortcmd implements sort(1) per the GNU coreutils manual:
 // sort lines of text files.
 //
-// Comparisons are C-locale byte comparisons (LC_ALL=C semantics).
+// Comparisons use byte order in the C/POSIX locale and the narrowly supported
+// LC_COLLATE provider for its accepted non-C locale aliases.
 // Implemented flags: -b -c -C -d -f -g -h -i -k -m -M -n -o -r
 // -R --random-source -s -t -T -u -V -z --files0-from.
 // GNU's last-resort whole-line comparison applies unless -s/-u, and the
@@ -21,6 +22,8 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/qiangli/coreutils/pkg/collate"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -48,9 +51,19 @@ type sorter struct {
 	checkSilent bool
 	zeroTerm    bool
 	merge       bool
+	collator    *collatorAdapter
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithCollator(rc, args, func(name string) (stringCollator, error) {
+		return collate.Open(name)
+	})
+}
+
+// runWithCollator keeps collation setup invocation-local. Tests supply a fake
+// opener; production supplies collate.Open above. No provider state is shared
+// between sort invocations.
+func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOpener) int {
 	fs := tool.NewFlags(cmd.Name)
 	blanks := fs.BoolP("ignore-leading-blanks", "b", false, "ignore leading blanks")
 	check := fs.BoolP("check", "c", false, "check for sorted input; do not sort")
@@ -133,6 +146,18 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Err, "sort: multi-character tab '%s'\n", *sep)
 			return 2
 		}
+	}
+
+	// Open a non-C collator before any operation that can read an input, consume
+	// random bytes, inspect --files0-from, or create an output file.
+	if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != "POSIX" {
+		provider, err := openCollator(name)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "sort: LC_COLLATE=%s: %v\n", name, err)
+			return 2
+		}
+		s.collator = newCollatorAdapter(provider)
+		defer s.collator.Close()
 	}
 
 	if *randSource != "" {
@@ -239,6 +264,9 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 		}
 		s.sortNumericLines(nlines.lines, nlines.allInt)
+		if err := s.collationErr(); err != nil {
+			return s.collationFailure(rc, err)
+		}
 		if s.unique {
 			out := nlines.lines[:0]
 			for i, l := range nlines.lines {
@@ -265,6 +293,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	s.sortLines(lines.lines)
+	if err := s.collationErr(); err != nil {
+		return s.collationFailure(rc, err)
+	}
 
 	if s.unique {
 		out := lines.lines[:0]
@@ -274,6 +305,9 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 		}
 		lines.lines = out
+		if err := s.collationErr(); err != nil {
+			return s.collationFailure(rc, err)
+		}
 	}
 
 	return writeStringLines(rc, *output, lines.lines, s.zeroTerm)
@@ -334,6 +368,9 @@ func writeNumericLines(rc *tool.RunContext, output string, lines []numericLine, 
 }
 
 func (s *sorter) canUsePreparedNumeric() bool {
+	if s.collator != nil {
+		return false
+	}
 	if len(s.keys) != 1 {
 		return false
 	}
@@ -359,7 +396,7 @@ func (s *sorter) compare(a, b string) int {
 			return d
 		}
 	}
-	d := strings.Compare(a, b)
+	d := s.textCompare(a, b)
 	if s.reverse {
 		return -d
 	}
@@ -370,7 +407,7 @@ func (s *sorter) compareEqual(a, b string) int {
 	if len(s.keys) > 0 {
 		return s.compareKeys(a, b)
 	}
-	return strings.Compare(a, b)
+	return s.textCompare(a, b)
 }
 
 func (s *sorter) compareKeys(a, b string) int {
@@ -393,7 +430,7 @@ func (s *sorter) compareKeys(a, b string) int {
 		case k.opts.version:
 			d = versionCompare(ka, kb)
 		default:
-			d = textKeyCompare(ka, kb, k.opts)
+			d = s.textKeyCompare(ka, kb, k.opts)
 		}
 		if d != 0 {
 			if k.opts.reverse {
@@ -403,6 +440,32 @@ func (s *sorter) compareKeys(a, b string) int {
 		}
 	}
 	return 0
+}
+
+func (s *sorter) textCompare(a, b string) int {
+	if s.collator != nil {
+		return s.collator.Compare(a, b)
+	}
+	return strings.Compare(a, b)
+}
+
+func (s *sorter) textKeyCompare(a, b string, o keyOpts) int {
+	if o.dict || o.ignoreNP || o.fold {
+		a, b = normalizeTextKey(a, o), normalizeTextKey(b, o)
+	}
+	return s.textCompare(a, b)
+}
+
+func (s *sorter) collationErr() error {
+	if s.collator == nil {
+		return nil
+	}
+	return s.collator.Err()
+}
+
+func (s *sorter) collationFailure(rc *tool.RunContext, err error) int {
+	fmt.Fprintf(rc.Err, "sort: LC_COLLATE comparison failed: %v\n", err)
+	return 2
 }
 
 type numericKey struct {
@@ -505,7 +568,7 @@ func (s *sorter) compareNumericLines(a, b numericLine) int {
 		}
 		return d
 	}
-	d := strings.Compare(a.text, b.text)
+	d := s.textCompare(a.text, b.text)
 	if s.reverse {
 		return -d
 	}
@@ -520,6 +583,9 @@ func (s *sorter) checkSorted(rc *tool.RunContext, input inputOperand) int {
 	}
 	for i := 1; i < len(lines.lines); i++ {
 		d := s.compare(lines.lines[i-1], lines.lines[i])
+		if err := s.collationErr(); err != nil {
+			return s.collationFailure(rc, err)
+		}
 		if d > 0 || (s.unique && d == 0) {
 			if !s.checkSilent {
 				fmt.Fprintf(rc.Err, "sort: %s:%d: disorder: %s\n", input.name, i+1, lines.lines[i])
@@ -562,6 +628,9 @@ func (s *sorter) mergeFiles(rc *tool.RunContext, inputs []inputOperand, output s
 		}
 		runs = next
 	}
+	if err := s.collationErr(); err != nil {
+		return s.collationFailure(rc, err)
+	}
 	merged := runs[0]
 	if s.unique {
 		out := merged[:0]
@@ -571,6 +640,9 @@ func (s *sorter) mergeFiles(rc *tool.RunContext, inputs []inputOperand, output s
 			}
 		}
 		merged = out
+		if err := s.collationErr(); err != nil {
+			return s.collationFailure(rc, err)
+		}
 	}
 	return writeStringLines(rc, output, merged, s.zeroTerm)
 }
@@ -607,6 +679,9 @@ func (s *sorter) randomShuffle(rc *tool.RunContext, inputs []inputOperand, outpu
 			}
 		}
 		lines.lines = out
+		if err := s.collationErr(); err != nil {
+			return s.collationFailure(rc, err)
+		}
 	}
 	return writeStringLines(rc, output, lines.lines, s.zeroTerm)
 }

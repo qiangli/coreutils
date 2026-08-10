@@ -39,6 +39,15 @@ func (s *sorter) sortLines(lines []string) {
 		slices.SortStableFunc(lines, s.compare)
 		return
 	}
+	// Locale collation can make byte-distinct strings compare equal, and can
+	// fail while comparing. Keep it on the ordinary stable comparator path;
+	// neither byte-only whole-line sorting nor its reverse shortcut is valid.
+	if s.collator != nil {
+		parallelSort(lines, s.compare, func(x []string) {
+			slices.SortStableFunc(x, s.compare)
+		})
+		return
+	}
 	if len(s.keys) == 0 {
 		parallelSort(lines, strings.Compare, slices.Sort)
 		if s.reverse {

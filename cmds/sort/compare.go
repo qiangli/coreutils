@@ -1,6 +1,8 @@
 package sortcmd
 
-// Ordering comparators, all C-locale / byte-oriented:
+// Ordering comparators. Numeric, month, and version modes retain their
+// byte-defined parsing; textual keys and whole-line fallbacks are routed by
+// sorter through its invocation-local LC_COLLATE adapter.
 //
 //   - numCompare implements GNU strnumcmp semantics for -n.
 //   - generalNumCompare implements GNU general-numeric -g (float-compatible).
