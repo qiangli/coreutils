@@ -17,7 +17,7 @@ GPL code is ever copied into this repository.
 | [lukechampine/blake3](https://lukechampine.com/blake3) | MIT | cmds/cksum (`--algorithm=blake3`) |
 | [tklauser/ps](https://github.com/tklauser/ps) | BSD-3-Clause | cmds/ps process discovery |
 | [pranshuparmar/witr](https://github.com/pranshuparmar/witr) | Apache-2.0 | cmds/why (managed external v0.3.3) |
-| [ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 | pkg/collate (linked dependency v0.10.0; dlopen/dlsym FFI to glibc strcoll_l, no cgo — not copied source) |
+| [ebitengine/purego](https://github.com/ebitengine/purego) | Apache-2.0 | pkg/collate, pkg/ctype (linked dependency v0.10.0; dlopen/dlsym FFI to glibc strcoll_l / \*_l ctype functions, no cgo — not copied source) |
 
 Tools without a row above are fresh implementations written from the
 GNU / POSIX documentation (the per-file package comments say which).

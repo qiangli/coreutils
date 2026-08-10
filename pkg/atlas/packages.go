@@ -263,6 +263,9 @@ var packages = map[string]Package{
 	"bre":         supPkg("POSIX BRE → Go regexp, shared by grep and sed"),
 	"collate": supPkg("glibc ISO-8859-1 collation via dlopen'd strcoll_l (purego, no cgo); a " +
 		"provider-only engine like bre, wired to no verb — locale-aware ordering a tool asks for, not a command"),
+	"ctype": supPkg("glibc C/POSIX and ISO-8859-1 character classification and case mapping via " +
+		"dlopen'd *_l functions (purego, no cgo); collate's sibling provider, wired to no verb — " +
+		"POSIX classes and case mapping a tool asks for, not a command"),
 	"ignore": supPkg("the opt-in agentic path filter shared by grep and find"),
 	"jobs":   supPkg("job control for the embedding shell's builtins, which the shell owns"),
 	"locale": supPkg("invocation-local POSIX locale-category precedence shared by locale-aware tools"),
