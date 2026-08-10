@@ -261,8 +261,10 @@ var packages = map[string]Package{
 	"autoretry":   supPkg("transient-failure recognition and retry policy"),
 	"binmgr":      supPkg("download → verify → cache → supervise, under every managed external"),
 	"bre":         supPkg("POSIX BRE → Go regexp, shared by grep and sed"),
-	"ignore":      supPkg("the opt-in agentic path filter shared by grep and find"),
-	"jobs":        supPkg("job control for the embedding shell's builtins, which the shell owns"),
+	"collate": supPkg("glibc ISO-8859-1 collation via dlopen'd strcoll_l (purego, no cgo); a " +
+		"provider-only engine like bre, wired to no verb — locale-aware ordering a tool asks for, not a command"),
+	"ignore": supPkg("the opt-in agentic path filter shared by grep and find"),
+	"jobs":   supPkg("job control for the embedding shell's builtins, which the shell owns"),
 	"lockfile": supPkg("the ONE process file-lock primitive — Acquire/TryAcquire/AcquireWithin, " +
 		"one platform pair for the whole tree. Five packages hand-rolled their own and " +
 		"three of five had been ported to Windows while two were no-ops"),
