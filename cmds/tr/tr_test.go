@@ -248,3 +248,116 @@ func TestTrEPIPE(t *testing.T) {
 		}
 	}
 }
+
+func TestTrOccurrenceSemantics(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		stdin      string
+		wantStdout string
+		wantStderr string
+		wantCode   int // if negative, means non-zero is expected
+	}{
+		// Green-on-main preservation cases
+		{
+			name:       "lower->x xAx",
+			args:       []string{"[:lower:]", "x"},
+			stdin:      "xAx",
+			wantStdout: "xAx",
+			wantCode:   0,
+		},
+		{
+			name:       "lower+A+upper -> [x*26]b+lower xaz",
+			args:       []string{"[:lower:]A[:upper:]", "[x*26]b[:lower:]"},
+			stdin:      "xAZ",
+			wantStdout: "xaz",
+			wantCode:   0,
+		},
+		{
+			name:       "ab+lower -> A[B*1]+upper ABCZ",
+			args:       []string{"ab[:lower:]", "A[B*1][:upper:]"},
+			stdin:      "abcz",
+			wantStdout: "ABCZ",
+			wantCode:   0,
+		},
+		{
+			name:       "ab+lower -> [A*]B+upper ABCZ",
+			args:       []string{"ab[:lower:]", "[A*]B[:upper:]"},
+			stdin:      "abcz",
+			wantStdout: "ABCZ",
+			wantCode:   0,
+		},
+		{
+			name:       "a+lower+b -> A+upper+[y*] ACZy",
+			args:       []string{"a[:lower:]b", "A[:upper:][y*]"},
+			stdin:      "aCZb",
+			wantStdout: "ACZy",
+			wantCode:   0,
+		},
+		{
+			name:       "aaa->xyz maps a->z",
+			args:       []string{"aaa", "xyz"},
+			stdin:      "a",
+			wantStdout: "z",
+			wantCode:   0,
+		},
+
+		// Red adversaries
+		{
+			name:       "trailing target class",
+			args:       []string{"a", "x[:upper:]"},
+			stdin:      "",
+			wantStderr: "misaligned [:upper:] and/or [:lower:] construct",
+			wantCode:   -1, // nonzero
+		},
+		{
+			name:       "target class starts inside source class",
+			args:       []string{"[:lower:]", "x[:upper:]"},
+			stdin:      "",
+			wantStderr: "misaligned [:upper:] and/or [:lower:] construct",
+			wantCode:   -1, // nonzero
+		},
+		{
+			name:       "same-class identity later wins",
+			args:       []string{"a[:lower:]", "x[:lower:]"},
+			stdin:      "a",
+			wantStdout: "a",
+			wantCode:   0,
+		},
+		{
+			name:       "adjacent occurrence identity",
+			args:       []string{"[:lower:][:lower:]", "[:upper:][:lower:]"},
+			stdin:      "az",
+			wantStdout: "az",
+			wantCode:   0,
+		},
+		{
+			name:       "reverse order",
+			args:       []string{"[:upper:]A", "[:upper:]b"},
+			stdin:      "A",
+			wantStdout: "b",
+			wantCode:   0,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, errb, code := runTool(t, c.stdin, c.args...)
+			if c.wantCode == 0 {
+				if code != 0 {
+					t.Errorf("expected exit code 0, got %d. stderr: %q", code, errb)
+				}
+				if out != c.wantStdout {
+					t.Errorf("stdout got %q, want %q", out, c.wantStdout)
+				}
+			} else {
+				if code == 0 {
+					t.Errorf("expected nonzero exit code, got 0. stdout: %q", out)
+				}
+				if c.wantStderr != "" && !strings.Contains(errb, c.wantStderr) {
+					t.Errorf("stderr %q does not contain %q", errb, c.wantStderr)
+				}
+			}
+		})
+	}
+}
