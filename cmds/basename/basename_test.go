@@ -40,6 +40,8 @@ func TestBasename(t *testing.T) {
 		{[]string{"--suffix=", "any/str1", "any/str2"}, "str1\nstr2\n", 0},
 		{[]string{"/usr/lib/"}, "lib\n", 0},
 		{[]string{"/"}, "/\n", 0},
+		// GNU basename treats three or more operands as multiple NAMEs.
+		{[]string{"a", "b", "c"}, "a\nb\nc\n", 0},
 		{[]string{"-z", "a/b"}, "b\x00", 0},
 		// Options must precede operands; after NAME, --zero is the suffix.
 		{[]string{"a", "--zero"}, "a\n", 0},
@@ -58,10 +60,6 @@ func TestBasenameErrors(t *testing.T) {
 	_, errb, code := runTool(t)
 	if code != 2 || !strings.Contains(errb, "missing operand") {
 		t.Errorf("no args: code=%d err=%q", code, errb)
-	}
-	_, errb, code = runTool(t, "a", "b", "c")
-	if code != 2 || !strings.Contains(errb, "extra operand") {
-		t.Errorf("3 args: code=%d err=%q", code, errb)
 	}
 	// Unknown flag: contract error, exit 2, names the flag.
 	_, errb, code = runTool(t, "--frobnicate", "x")
