@@ -117,6 +117,27 @@ func TestSedCTypeResolverLifecycleAndBypass(t *testing.T) {
 	if code != 0 || errOut != "" || out.String() != "Z\n" {
 		t.Fatalf("high-byte ERE=(%q,%q,%d)", out.String(), errOut, code)
 	}
+	provider = &fakeSedCType{}
+	out.Reset()
+	rawFoldScript := string([]byte{'s', '/', 0xc9, '/', 'X', '/', 'I', 'g'})
+	errOut, code = runSedWithCType([]string{"LC_ALL=de_DE.iso88591"}, strings.NewReader(string([]byte{0xc9, 0xe9, '\n'})), &out, []string{rawFoldScript}, func(string) (ctypeProvider, error) { return provider, nil })
+	if code != 0 || errOut != "" || out.String() != "XX\n" || provider.closeCalls != 1 {
+		t.Fatalf("raw high-byte fold=(%x,%q,%d) close=%d", out.Bytes(), errOut, code, provider.closeCalls)
+	}
+	provider = &fakeSedCType{}
+	out.Reset()
+	rawFastScript := string([]byte{'s', '/', 0xc9, '/', 0xe9, '/', 'g'})
+	errOut, code = runSedWithCType([]string{"LC_ALL=de_DE.iso88591"}, strings.NewReader(string([]byte{0xc9, 0xc9, '\n'})), &out, []string{rawFastScript}, func(string) (ctypeProvider, error) { return provider, nil })
+	if code != 0 || errOut != "" || !bytes.Equal(out.Bytes(), []byte{0xe9, 0xe9, '\n'}) || provider.closeCalls != 1 {
+		t.Fatalf("raw fast pattern/replacement=(%x,%q,%d) close=%d", out.Bytes(), errOut, code, provider.closeCalls)
+	}
+	provider = &fakeSedCType{}
+	out.Reset()
+	rawFastDelimiterScript := string([]byte{'s', 0xc9, 'A', 0xc9, 'Q', 0xc9, 'g'})
+	errOut, code = runSedWithCType([]string{"LC_ALL=de_DE.iso88591"}, strings.NewReader("AA\n"), &out, []string{rawFastDelimiterScript}, func(string) (ctypeProvider, error) { return provider, nil })
+	if code != 0 || errOut != "" || out.String() != "QQ\n" || provider.closeCalls != 1 {
+		t.Fatalf("raw fast delimiter=(%x,%q,%d) close=%d", out.Bytes(), errOut, code, provider.closeCalls)
+	}
 }
 
 func TestSedCTypeBypassesOnEarlyExit(t *testing.T) {

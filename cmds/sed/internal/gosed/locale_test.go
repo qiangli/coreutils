@@ -1,6 +1,7 @@
 package gosed
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"sync"
@@ -143,6 +144,37 @@ func TestLocaleEverySedCompileSeam(t *testing.T) {
 	}
 	if got := runLocaleSed(t, "s/A/X/I", []byte("a\n"), opts); string(got) != "X\n" {
 		t.Fatalf("uppercase I=%q", got)
+	}
+	rawFoldProgram := string([]byte{'s', '/', 0xc9, '/', 'X', '/', 'I', 'g'})
+	if got := runLocaleSed(t, rawFoldProgram, []byte{0xc9, 0xe9, '\n'}, opts); string(got) != "XX\n" {
+		t.Fatalf("raw single-byte pattern and fold=%x", got)
+	}
+	rawBracketProgram := string([]byte{'s', '/', '[', 0xc9, ']', '/', 'Y', '/'})
+	if got := runLocaleSed(t, rawBracketProgram, []byte{0xc9, '\n'}, opts); string(got) != "Y\n" {
+		t.Fatalf("raw single-byte bracket=%x", got)
+	}
+	rawAddressProgram := string([]byte{'/', 0xc9, '/', 's', '/', '.', '/', 'Z', '/'})
+	if got := runLocaleSed(t, rawAddressProgram, []byte{0xc9, '\n'}, opts); string(got) != "Z\n" {
+		t.Fatalf("raw single-byte address=%x", got)
+	}
+	rawReplacementProgram := string([]byte{'s', '/', 'A', '/', 0xe9, '/'})
+	if got := runLocaleSed(t, rawReplacementProgram, []byte("A\n"), opts); !bytes.Equal(got, []byte{0xe9, '\n'}) {
+		t.Fatalf("raw single-byte replacement=%x", got)
+	}
+	rawDelimiterProgram := string([]byte{'s', 0xc9, '\\', 0xc9, 0xc9, 'D', 0xc9})
+	if got := runLocaleSed(t, rawDelimiterProgram, []byte{0xc9, '\n'}, opts); string(got) != "D\n" {
+		t.Fatalf("raw single-byte escaped delimiter=%x", got)
+	}
+	rawAddressDelimiterProgram := string([]byte{'\\', 0xc9, 'A', 0xc9, 's', '/', 'A', '/', 'Z', '/'})
+	if got := runLocaleSed(t, rawAddressDelimiterProgram, []byte("A\n"), opts); string(got) != "Z\n" {
+		t.Fatalf("raw single-byte address delimiter=%x", got)
+	}
+	rawTranslationDelimiterProgram := string([]byte{'y', 0xc9, 'A', 0xc9, 'B', 0xc9})
+	if got := runLocaleSed(t, rawTranslationDelimiterProgram, []byte("A\n"), opts); string(got) != "B\n" {
+		t.Fatalf("raw single-byte translation delimiter=%x", got)
+	}
+	if got := runLocaleSed(t, "séAéBé", []byte("A\n"), opts); string(got) != "B\n" {
+		t.Fatalf("valid UTF-8 delimiter=%x", got)
 	}
 	if got := runLocaleSed(t, "N;s/./X/g", []byte("a\nb\n"), opts); string(got) != "XXX\n" {
 		t.Fatalf("default dot N=%q", got)

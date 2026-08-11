@@ -16,6 +16,7 @@ import (
 	"io"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 type location struct {
@@ -86,6 +87,22 @@ func (lr *locReader) UnreadRune() error {
 		lr.eol = true
 	}
 	return lr.r.UnreadRune()
+}
+
+// readRawRune returns the decoded rune together with the exact bytes consumed.
+// bufio.Reader.ReadRune reports an invalid single input byte as RuneError,
+// size 1; writing that rune back would silently replace the byte with UTF-8
+// EF BF BD. POSIX single-byte locale regexps must retain the original byte.
+func (lr *locReader) readRawRune() (rune, []byte, error) {
+	first, _ := lr.r.Peek(1)
+	character, size, err := lr.ReadRune()
+	if err != nil {
+		return character, nil, err
+	}
+	if character == utf8.RuneError && size == 1 && len(first) == 1 {
+		return rune(first[0]), []byte{first[0]}, nil
+	}
+	return character, []byte(string(character)), nil
 }
 
 func (lr *locReader) ReadLine() (nxtl string, err error) {
@@ -169,7 +186,7 @@ func readDelimited(r *locReader, delimiter rune) (string, error) {
 	var buffer bytes.Buffer
 
 	for {
-		character, _, err := r.ReadRune()
+		character, raw, err := r.readRawRune()
 		if err != nil {
 			if err == io.EOF {
 				err = fmt.Errorf("end-of-file while looking for %c", delimiter)
@@ -184,11 +201,11 @@ func readDelimited(r *locReader, delimiter rune) (string, error) {
 			return buffer.String(), nil
 		}
 		if character != '\\' {
-			buffer.WriteRune(character)
+			buffer.Write(raw)
 			continue
 		}
 
-		next, _, err := r.ReadRune()
+		next, nextRaw, err := r.readRawRune()
 		if err != nil {
 			return buffer.String(), err
 		}
@@ -196,10 +213,10 @@ func readDelimited(r *locReader, delimiter rune) (string, error) {
 			return buffer.String(), fmt.Errorf("end-of-line while looking for %c", delimiter)
 		}
 		if next == delimiter {
-			buffer.WriteRune(delimiter)
+			buffer.Write(nextRaw)
 		} else {
-			buffer.WriteRune('\\')
-			buffer.WriteRune(next)
+			buffer.WriteByte('\\')
+			buffer.Write(nextRaw)
 		}
 	}
 }
@@ -213,7 +230,7 @@ func readDelimited(r *locReader, delimiter rune) (string, error) {
 func readReplacement(r *locReader, delimiter rune) (string, error) {
 	var buffer bytes.Buffer
 	for {
-		character, _, err := r.ReadRune()
+		character, raw, err := r.readRawRune()
 		if err != nil {
 			if err == io.EOF {
 				err = fmt.Errorf("end-of-file while looking for %c", delimiter)
@@ -228,7 +245,7 @@ func readReplacement(r *locReader, delimiter rune) (string, error) {
 		case delimiter:
 			return buffer.String(), nil
 		case '\\':
-			next, _, err := r.ReadRune()
+			next, nextRaw, err := r.readRawRune()
 			if err != nil {
 				if err == io.EOF {
 					err = fmt.Errorf("end-of-file while looking for %c", delimiter)
@@ -236,13 +253,13 @@ func readReplacement(r *locReader, delimiter rune) (string, error) {
 				return buffer.String(), err
 			}
 			if next == delimiter {
-				buffer.WriteRune(delimiter) // \<delim> → literal delimiter
+				buffer.Write(nextRaw) // \<delim> → literal delimiter
 			} else {
-				buffer.WriteRune('\\') // keep the escape for translateReplacement
-				buffer.WriteRune(next)
+				buffer.WriteByte('\\') // keep the escape for translateReplacement
+				buffer.Write(nextRaw)
 			}
 		default:
-			buffer.WriteRune(character)
+			buffer.Write(raw)
 		}
 	}
 }
@@ -376,7 +393,7 @@ func readSubstitution(r *locReader) ([]string, error) {
 
 	// step 1.: get the delimiter character for substitutions
 	var delimiter rune
-	delimiter, _, err = r.ReadRune()
+	delimiter, _, err = r.readRawRune()
 	if err != nil {
 		return ans, err
 	}
@@ -471,7 +488,7 @@ func readTranslation(r *locReader) ([]string, error) {
 
 	// step 1.: get the delimiter character for substitutions
 	var delimiter rune
-	delimiter, _, err = r.ReadRune()
+	delimiter, _, err = r.readRawRune()
 	if err != nil {
 		return ans, err
 	}
@@ -551,7 +568,7 @@ func lex(r *bufio.Reader, ch chan<- *token, errch chan<- error) {
 			// the delimiter is reported as the token letter so error
 			// messages name the address the way it was written.
 			var delimiter rune
-			delimiter, _, err = rdr.ReadRune()
+			delimiter, _, err = rdr.readRawRune()
 			if err != nil {
 				break
 			}

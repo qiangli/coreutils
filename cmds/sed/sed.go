@@ -394,7 +394,7 @@ func parseSimpleSubstitution(program string, opts gosed.Options) (*simpleSubstit
 	}
 	delimiter, size := utf8.DecodeRuneInString(program[i:])
 	if delimiter == utf8.RuneError && size == 1 {
-		return nil, false, nil
+		delimiter = rune(program[i])
 	}
 	i += size
 	if delimiter == '\n' {
@@ -455,8 +455,13 @@ func readFastDelimited(s string, i int, delimiter rune, replacement bool) (strin
 	var b strings.Builder
 	var previous rune
 	for i < len(s) {
+		start := i
 		r, sz := utf8.DecodeRuneInString(s[i:])
 		i += sz
+		raw := s[start:i]
+		if r == utf8.RuneError && sz == 1 {
+			r = rune(raw[0])
+		}
 		if r == '\n' {
 			return "", 0, false
 		}
@@ -471,19 +476,24 @@ func readFastDelimited(s string, i int, delimiter rune, replacement bool) (strin
 				if i >= len(s) {
 					return "", 0, false
 				}
+				nextStart := i
 				next, nextSize := utf8.DecodeRuneInString(s[i:])
 				i += nextSize
+				nextRaw := s[nextStart:i]
+				if next == utf8.RuneError && nextSize == 1 {
+					next = rune(nextRaw[0])
+				}
 				if next == delimiter {
-					b.WriteRune(delimiter)
+					b.WriteString(nextRaw)
 				} else {
-					b.WriteRune('\\')
-					b.WriteRune(next)
+					b.WriteByte('\\')
+					b.WriteString(nextRaw)
 				}
 				previous = next
 				continue
 			}
 		}
-		b.WriteRune(r)
+		b.WriteString(raw)
 		previous = r
 	}
 	return "", 0, false
