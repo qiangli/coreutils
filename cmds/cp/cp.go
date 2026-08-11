@@ -43,8 +43,7 @@ type copier struct {
 	suffix       string
 	link         bool
 	symlink      bool
-	deref        bool
-	derefArgs    bool
+	derefMode    dereferenceMode
 	attrsOnly    bool
 	copyContents bool
 	debug        bool
@@ -81,9 +80,9 @@ func run(rc *tool.RunContext, args []string) int {
 	suffix := fs.StringP("suffix", "S", "~", "override the usual backup suffix")
 	link := fs.BoolP("link", "l", false, "hard link files instead of copying")
 	symlink := fs.BoolP("symbolic-link", "s", false, "make symbolic links instead of copying")
-	deref := fs.BoolP("dereference", "L", false, "always follow symbolic links in SOURCE")
-	derefArgs := fs.BoolP("dereference-command-line", "H", false, "follow command-line symbolic links")
-	noDeref := fs.BoolP("no-dereference", "P", false, "never follow symbolic links in SOURCE")
+	fs.BoolP("dereference", "L", false, "always follow symbolic links in SOURCE")
+	fs.BoolP("dereference-command-line", "H", false, "follow command-line symbolic links")
+	fs.BoolP("no-dereference", "P", false, "never follow symbolic links in SOURCE")
 	fs.BoolP("no-dereference-preserve-links", "d", false, "same as --no-dereference --preserve=links")
 	attrsOnly := fs.Bool("attributes-only", false, "copy only attributes, not file data")
 	debug := fs.Bool("debug", false, "explain copy decisions on stderr")
@@ -149,8 +148,7 @@ func run(rc *tool.RunContext, args []string) int {
 		suffix:       *suffix,
 		link:         *link,
 		symlink:      *symlink,
-		deref:        *deref && !*archive,
-		derefArgs:    *derefArgs,
+		derefMode:    resolveDereferenceMode(args, *recursive || *recursiveUpper || *archive),
 		attrsOnly:    *attrsOnly,
 		copyContents: *copyContents,
 		debug:        *debug,
@@ -162,9 +160,6 @@ func run(rc *tool.RunContext, args []string) int {
 		in:           inputReader(rc.In),
 	}
 	defer c.paths.close()
-	if *noDeref || *archive || fs.Changed("no-dereference-preserve-links") {
-		c.deref = false
-	}
 	// GNU rule: of -f and -n, the one given last takes effect.
 	switch lastOverride(args) {
 	case 'f':
@@ -224,7 +219,7 @@ func (c *copier) copyEntry(src, dst string) {
 		return
 	}
 	stat := os.Stat
-	if c.recursive && !c.deref && !c.derefArgs {
+	if c.derefMode == dereferenceNone {
 		stat = os.Lstat
 	}
 	fi, err := stat(c.path(src))
@@ -320,7 +315,7 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 				c.errf("cannot stat '%s': %s", csrc, reason(err))
 				continue
 			}
-			if c.deref && ci.Mode()&os.ModeSymlink != 0 {
+			if c.derefMode == dereferenceAll && ci.Mode()&os.ModeSymlink != 0 {
 				ci, err = os.Stat(c.path(csrc))
 				if err != nil {
 					c.errf("cannot stat '%s': %s", csrc, reason(err))
@@ -347,6 +342,60 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 			c.errf("setting permissions for '%s': %s", dst, reason(err))
 		}
 	}
+}
+
+type dereferenceMode uint8
+
+const (
+	dereferenceNone dereferenceMode = iota
+	dereferenceCommandLine
+	dereferenceAll
+)
+
+// resolveDereferenceMode applies the POSIX last-option rule for -H, -L, and
+// -P. GNU -a/-d are physical-copy aliases and participate in the same ordering.
+// Without an explicit mode, recursive copies are physical while non-recursive
+// copies follow their command-line source.
+func resolveDereferenceMode(args []string, recursive bool) dereferenceMode {
+	mode := dereferenceAll
+	if recursive {
+		mode = dereferenceNone
+	}
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		switch arg {
+		case "--dereference":
+			mode = dereferenceAll
+			continue
+		case "--dereference-command-line":
+			mode = dereferenceCommandLine
+			continue
+		case "--no-dereference", "--no-dereference-preserve-links", "--archive":
+			mode = dereferenceNone
+			continue
+		}
+		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+			continue
+		}
+		for _, option := range arg[1:] {
+			switch option {
+			case 'H':
+				mode = dereferenceCommandLine
+			case 'L':
+				mode = dereferenceAll
+			case 'P', 'a', 'd':
+				mode = dereferenceNone
+			}
+			// The rest of a short cluster is the value of these options,
+			// not more option letters that can alter dereference mode.
+			if option == 'S' || option == 't' || option == 'Z' {
+				break
+			}
+		}
+	}
+	return mode
 }
 
 func (c *copier) copyFile(src, dst string, fi os.FileInfo) {

@@ -531,7 +531,7 @@ func TestCpRecursiveDereferenceAllSymlinks(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("cp -R -L: code=%d err=%q", code, errb)
 	}
-	for _, name := range []string{"file-link", filepath.Join("dir-link", "file")} {
+	for _, name := range []string{"file-link", filepath.Join("dir-link", "file"), filepath.Join("real", "file")} {
 		path := filepath.Join(dir, "dst", name)
 		if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink != 0 {
 			t.Fatalf("%s was not dereferenced: mode=%v err=%v", name, fiMode(fi), err)
@@ -539,6 +539,21 @@ func TestCpRecursiveDereferenceAllSymlinks(t *testing.T) {
 		if got := read(t, path); got != "payload" {
 			t.Fatalf("%s content=%q", name, got)
 		}
+	}
+	wantTime := time.Date(2020, 2, 3, 4, 5, 6, 0, time.UTC)
+	if err := os.Chmod(filepath.Join(dir, "src", "real", "file"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "src", "real", "file"), wantTime, wantTime); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir, "-RpL", "src", "preserved")
+	if code != 0 || errb != "" {
+		t.Fatalf("cp -RpL: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "preserved", "file-link"))
+	if err != nil || fi.Mode().Perm() != 0o640 || !fi.ModTime().Equal(wantTime) {
+		t.Fatalf("dereferenced metadata: mode=%v time=%v err=%v", fiMode(fi), fileModTime(fi), err)
 	}
 	if err := os.Mkdir(filepath.Join(dir, "dangling-src"), 0o755); err != nil {
 		t.Fatal(err)
@@ -571,11 +586,90 @@ func TestCpRecursiveDereferenceRejectsCycle(t *testing.T) {
 	}
 }
 
+func TestCpDereferenceOptionOrdering(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privilege on windows")
+	}
+	tests := []struct {
+		name       string
+		options    []string
+		topLink    bool
+		nestedLink bool
+	}{
+		{"H", []string{"-RH"}, false, true},
+		{"H_then_L", []string{"-RHL"}, false, false},
+		{"L_then_H", []string{"-RLH"}, false, true},
+		{"H_L_P", []string{"-RHLP"}, true, false},
+		{"P_then_L", []string{"-RPL"}, false, false},
+		{"L_then_P", []string{"-RLP"}, true, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "real", "file"), "payload")
+			if err := os.Symlink("file", filepath.Join(dir, "real", "nested")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("real", filepath.Join(dir, "source")); err != nil {
+				t.Fatal(err)
+			}
+			args := append(append([]string(nil), tc.options...), "source", "dest")
+			_, errb, code := runTool(t, dir, args...)
+			if code != 0 || errb != "" {
+				t.Fatalf("args=%v code=%d err=%q", args, code, errb)
+			}
+			fi, err := os.Lstat(filepath.Join(dir, "dest"))
+			if err != nil || (fi.Mode()&os.ModeSymlink != 0) != tc.topLink {
+				t.Fatalf("top mode=%v err=%v wantLink=%v", fiMode(fi), err, tc.topLink)
+			}
+			if tc.topLink {
+				return
+			}
+			fi, err = os.Lstat(filepath.Join(dir, "dest", "nested"))
+			if err != nil || (fi.Mode()&os.ModeSymlink != 0) != tc.nestedLink {
+				t.Fatalf("nested mode=%v err=%v wantLink=%v", fiMode(fi), err, tc.nestedLink)
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "real"), "payload")
+	if err := os.Symlink("real", filepath.Join(dir, "source")); err != nil {
+		t.Fatal(err)
+	}
+	if _, errb, code := runTool(t, dir, "source", "followed"); code != 0 || errb != "" {
+		t.Fatalf("default non-recursive: code=%d err=%q", code, errb)
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "followed")); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("default did not follow: mode=%v err=%v", fiMode(fi), err)
+	}
+	if _, errb, code := runTool(t, dir, "-P", "source", "physical"); code != 0 || errb != "" {
+		t.Fatalf("non-recursive -P: code=%d err=%q", code, errb)
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "physical")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("-P did not preserve: mode=%v err=%v", fiMode(fi), err)
+	}
+
+	if got := resolveDereferenceMode([]string{"-RL", "-SHELP"}, true); got != dereferenceAll {
+		t.Fatalf("suffix value changed mode: got=%v", got)
+	}
+	if got := resolveDereferenceMode([]string{"-RPbL"}, true); got != dereferenceAll {
+		t.Fatalf("boolean backup cluster hid -L: got=%v", got)
+	}
+}
+
 func fiMode(fi os.FileInfo) os.FileMode {
 	if fi == nil {
 		return 0
 	}
 	return fi.Mode()
+}
+
+func fileModTime(fi os.FileInfo) time.Time {
+	if fi == nil {
+		return time.Time{}
+	}
+	return fi.ModTime()
 }
 
 func TestCpMissingSource(t *testing.T) {
