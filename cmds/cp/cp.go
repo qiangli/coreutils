@@ -57,6 +57,7 @@ type copier struct {
 	in           *bufio.Reader
 	rootDev      devID
 	haveRootDev  bool
+	dirStack     []os.FileInfo
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -272,6 +273,14 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 			return
 		}
 	}
+	for _, ancestor := range c.dirStack {
+		if os.SameFile(ancestor, fi) {
+			c.errf("cannot copy cyclic symbolic link '%s'", src)
+			return
+		}
+	}
+	c.dirStack = append(c.dirStack, fi)
+	defer func() { c.dirStack = c.dirStack[:len(c.dirStack)-1] }()
 	created := false
 	if di, err := os.Lstat(c.path(dst)); err == nil {
 		if !di.IsDir() {
@@ -310,6 +319,13 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 			if err != nil {
 				c.errf("cannot stat '%s': %s", csrc, reason(err))
 				continue
+			}
+			if c.deref && ci.Mode()&os.ModeSymlink != 0 {
+				ci, err = os.Stat(c.path(csrc))
+				if err != nil {
+					c.errf("cannot stat '%s': %s", csrc, reason(err))
+					continue
+				}
 			}
 			switch {
 			case ci.IsDir():

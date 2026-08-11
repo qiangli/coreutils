@@ -514,6 +514,70 @@ func TestCpSymlinkInTree(t *testing.T) {
 	}
 }
 
+func TestCpRecursiveDereferenceAllSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privilege on windows")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src", "real", "file"), "payload")
+	if err := os.Symlink(filepath.Join("real", "file"), filepath.Join(dir, "src", "file-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(dir, "src", "dir-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, dir, "-R", "-L", "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("cp -R -L: code=%d err=%q", code, errb)
+	}
+	for _, name := range []string{"file-link", filepath.Join("dir-link", "file")} {
+		path := filepath.Join(dir, "dst", name)
+		if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("%s was not dereferenced: mode=%v err=%v", name, fiMode(fi), err)
+		}
+		if got := read(t, path); got != "payload" {
+			t.Fatalf("%s content=%q", name, got)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "dangling-src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing", filepath.Join(dir, "dangling-src", "link")); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir, "-RL", "dangling-src", "dangling-dst")
+	if code != 1 || !strings.Contains(errb, "cannot stat 'dangling-src/link'") {
+		t.Fatalf("cp -RL dangling: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "dangling-dst", "link")); !os.IsNotExist(err) {
+		t.Fatalf("dangling link was copied under -L: err=%v", err)
+	}
+}
+
+func TestCpRecursiveDereferenceRejectsCycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privilege on windows")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src", "file"), "payload")
+	if err := os.Symlink(".", filepath.Join(dir, "src", "loop")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, dir, "-RL", "src", "dst")
+	if code != 1 || !strings.Contains(errb, "cyclic symbolic link 'src/loop'") {
+		t.Fatalf("cp -RL cycle: code=%d err=%q", code, errb)
+	}
+}
+
+func fiMode(fi os.FileInfo) os.FileMode {
+	if fi == nil {
+		return 0
+	}
+	return fi.Mode()
+}
+
 func TestCpMissingSource(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir, "nope", "b")
