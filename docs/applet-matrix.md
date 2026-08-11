@@ -52,7 +52,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `batch` | `cmds/batch` | — | POSIX/Unix utility | no | yes | 1 | 6 |
 | `browser` | `cmds/browser` | — | Bashy/other extension | no | no | 1 | 9 |
 | `cal` | `cmds/cal` | — | Bashy/other extension | no | no | 1 | 6 |
-| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 2 | 7 |
+| `cat` | `cmds/cat` | — | GNU Coreutils | yes | yes | 2 | 9 |
 | `chcon` | `cmds/chcon` | — | GNU Coreutils | yes | no | 2 | 7 |
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 2 | 15 |
 | `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 2 | 20 |
