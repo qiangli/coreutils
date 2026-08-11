@@ -12,6 +12,8 @@ import (
 type bytePatternTables struct {
 	classes map[string][256]bool
 	fold    [256]byte
+	dotAll  bool
+	multi   bool
 }
 
 type localeBytePattern struct {
@@ -23,7 +25,7 @@ type localeBytePattern struct {
 // locale-classified bytes. It is an unrouted substrate: public Regexp and all
 // command consumers continue to use their existing engines.
 func compileLocaleBytePattern(pattern []byte, input bytePatternTables, foldCase bool) (*localeBytePattern, error) {
-	tables := bytePatternTables{classes: make(map[string][256]bool, len(input.classes)), fold: input.fold}
+	tables := bytePatternTables{classes: make(map[string][256]bool, len(input.classes)), fold: input.fold, dotAll: input.dotAll, multi: input.multi}
 	for name, class := range input.classes {
 		tables.classes[name] = class
 	}
@@ -42,7 +44,11 @@ func compileLocaleBytePattern(pattern []byte, input bytePatternTables, foldCase 
 	if err != nil {
 		return nil, err
 	}
-	re, err := regexp.Compile(translated)
+	prefix := ""
+	if tables.multi {
+		prefix = "(?m)"
+	}
+	re, err := regexp.Compile(prefix + translated)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +169,7 @@ func translateLocaleByteBRE(pattern []byte, codec byteTokenCodec, tables bytePat
 		case '.':
 			var class [256]bool
 			for b := 0; b < 256; b++ {
-				class[b] = byte(b) != '\n'
+				class[b] = tables.dotAll || byte(b) != '\n'
 			}
 			out.WriteString(byteClassAtom(codec, class))
 			state = posAtom

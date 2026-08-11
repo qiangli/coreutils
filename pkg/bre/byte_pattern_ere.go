@@ -9,7 +9,7 @@ import (
 // compileLocaleByteERE compiles the consuming subset of POSIX ERE over
 // locale-classified bytes. Like the BRE variant, it is unexported and unrouted.
 func compileLocaleByteERE(pattern []byte, input bytePatternTables, foldCase bool) (*localeBytePattern, error) {
-	tables := bytePatternTables{classes: make(map[string][256]bool, len(input.classes)), fold: input.fold}
+	tables := bytePatternTables{classes: make(map[string][256]bool, len(input.classes)), fold: input.fold, dotAll: input.dotAll, multi: input.multi}
 	for name, class := range input.classes {
 		tables.classes[name] = class
 	}
@@ -28,7 +28,11 @@ func compileLocaleByteERE(pattern []byte, input bytePatternTables, foldCase bool
 	if err != nil {
 		return nil, err
 	}
-	re, err := regexp.Compile(translated)
+	prefix := ""
+	if tables.multi {
+		prefix = "(?m)"
+	}
+	re, err := regexp.Compile(prefix + translated)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +92,7 @@ func translateLocaleByteERE(pattern []byte, codec byteTokenCodec, tables bytePat
 		case '.':
 			var class [256]bool
 			for b := 0; b < 256; b++ {
-				class[b] = byte(b) != '\n'
+				class[b] = tables.dotAll || byte(b) != '\n'
 			}
 			out.WriteString(byteClassAtom(codec, class))
 			state = posAtom

@@ -144,6 +144,156 @@ func TestLocaleByteRegexpZeroLengthSingleMatch(t *testing.T) {
 	}
 }
 
+func TestLocaleByteRegexpFindAllRawDifferential(t *testing.T) {
+	type oracle func([]byte) [][]int
+	cases := []struct {
+		name    string
+		pattern []byte
+		want    oracle
+	}{
+		{"empty", nil, oracleEmptyMatches},
+		{"optional", []byte(`(a)?`), oracleOptionalA},
+		{"star", []byte(`(a)*`), oracleStarA},
+		{"repeat", []byte(`(a)+`), oracleRunA},
+		{"alternation-high", []byte{'(', 'a', '|', 0xe9, ')', '+'}, oracleRunAOrHigh},
+	}
+	for _, tc := range cases {
+		re, err := CompileLocaleByteRegexp(tc.pattern, newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpERE})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, src := range generatedByteSubjects([]byte{'a', 'b', '\n', 0xe9}, 3) {
+			all := tc.want(src)
+			for _, n := range []int{0, 1, 2, -1} {
+				want := limitOracleMatches(all, n)
+				got, err := re.FindAllSubmatchIndex(src, n)
+				if err != nil {
+					t.Fatalf("%s n=%d src=%v: %v", tc.name, n, src, err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("%s n=%d src=%v: got %v, want %v", tc.name, n, src, got, want)
+				}
+				stringGot, err := re.FindAllStringSubmatchIndex(string(src), n)
+				if err != nil || !reflect.DeepEqual(stringGot, want) {
+					t.Fatalf("%s string n=%d src=%v: got %v, want %v err=%v", tc.name, n, src, stringGot, want, err)
+				}
+			}
+		}
+	}
+}
+
+func limitOracleMatches(all [][]int, n int) [][]int {
+	if n == 0 || len(all) == 0 {
+		return nil
+	}
+	if n < 0 || n >= len(all) {
+		return all
+	}
+	return all[:n]
+}
+
+func generatedByteSubjects(alphabet []byte, maxLen int) [][]byte {
+	result := [][]byte{nil}
+	var extend func([]byte, int)
+	extend = func(prefix []byte, remaining int) {
+		if remaining == 0 {
+			return
+		}
+		for _, b := range alphabet {
+			next := append(append([]byte(nil), prefix...), b)
+			result = append(result, next)
+			extend(next, remaining-1)
+		}
+	}
+	extend(nil, maxLen)
+	return result
+}
+
+func oracleEmptyMatches(src []byte) [][]int {
+	result := make([][]int, len(src)+1)
+	for i := range result {
+		result[i] = []int{i, i}
+	}
+	return result
+}
+
+func oracleOptionalA(src []byte) [][]int {
+	var result [][]int
+	previousNonEmptyEnd := -1
+	for i := 0; i <= len(src); {
+		if i < len(src) && src[i] == 'a' {
+			result = append(result, []int{i, i + 1, i, i + 1})
+			i++
+			previousNonEmptyEnd = i
+		} else {
+			if i != previousNonEmptyEnd {
+				result = append(result, []int{i, i, -1, -1})
+			}
+			i++
+		}
+	}
+	return result
+}
+
+func oracleStarA(src []byte) [][]int {
+	var result [][]int
+	previousNonEmptyEnd := -1
+	for i := 0; i <= len(src); {
+		if i < len(src) && src[i] == 'a' {
+			start := i
+			for i < len(src) && src[i] == 'a' {
+				i++
+			}
+			result = append(result, []int{start, i, i - 1, i})
+			previousNonEmptyEnd = i
+		} else {
+			if i != previousNonEmptyEnd {
+				result = append(result, []int{i, i, -1, -1})
+			}
+			i++
+		}
+	}
+	return result
+}
+
+func oracleRunA(src []byte) [][]int { return oracleRuns(src, func(b byte) bool { return b == 'a' }) }
+func oracleRunAOrHigh(src []byte) [][]int {
+	return oracleRuns(src, func(b byte) bool { return b == 'a' || b == 0xe9 })
+}
+
+func oracleRuns(src []byte, member func(byte) bool) [][]int {
+	var result [][]int
+	for i := 0; i < len(src); {
+		if !member(src[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(src) && member(src[i]) {
+			i++
+		}
+		result = append(result, []int{start, i, i - 1, i})
+	}
+	return result
+}
+
+func TestLocaleByteRegexpDotAllAndMultiLine(t *testing.T) {
+	dot, err := CompileLocaleByteRegexp([]byte(`.`), newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpERE, DotAll: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := dot.FindSubmatchIndex([]byte{'\n'}); err != nil || !reflect.DeepEqual(got, []int{0, 1}) {
+		t.Fatalf("DotAll newline indices=%v err=%v", got, err)
+	}
+	multiline, err := CompileLocaleByteRegexp([]byte(`^a$`), newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpERE, MultiLine: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := multiline.FindSubmatchIndex([]byte("x\na\ny")); err != nil || !reflect.DeepEqual(got, []int{2, 3}) {
+		t.Fatalf("MultiLine indices=%v err=%v", got, err)
+	}
+}
+
 func TestLocaleByteRegexpExpandRawBytes(t *testing.T) {
 	re, err := CompileLocaleByteRegexp([]byte(`^(.)$`), newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpERE})
 	if err != nil {
@@ -212,5 +362,12 @@ func TestLocaleByteRegexpNeverSwallowsInvariantError(t *testing.T) {
 	}
 	if _, err := re.MatchString("a"); err == nil {
 		t.Fatal("MatchString swallowed invariant error")
+	}
+	if _, err := re.FindAllSubmatchIndex([]byte{'a'}, -1); err == nil {
+		t.Fatal("FindAllSubmatchIndex swallowed whole-match boundary error")
+	}
+	re.pattern.re = regexp.MustCompile(`(.).`)
+	if _, err := re.FindAllSubmatchIndex([]byte{'a'}, -1); err == nil {
+		t.Fatal("FindAllSubmatchIndex swallowed capture-boundary error")
 	}
 }

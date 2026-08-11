@@ -33,11 +33,13 @@ const (
 
 // ByteRegexpOptions controls compilation. Locale folding is expanded into
 // explicit byte-token alternatives; it never relies on RE2's Unicode (?i).
-// Dot-newline and multiline modes are deliberately deferred until their
-// complete POSIX utility contracts can be wired without approximation.
+// DotAll lets dot consume raw newline, and MultiLine makes ^ and $ operate at
+// the preserved raw-newline boundaries.
 type ByteRegexpOptions struct {
-	Syntax   ByteRegexpSyntax
-	FoldCase bool
+	Syntax    ByteRegexpSyntax
+	FoldCase  bool
+	DotAll    bool
+	MultiLine bool
 }
 
 // LocaleByteRegexp is a POSIX leftmost-longest regexp over locale-classified
@@ -56,6 +58,8 @@ func CompileLocaleByteRegexp(pattern []byte, provider ByteCtype, options ByteReg
 	if err != nil {
 		return nil, err
 	}
+	tables.dotAll = options.DotAll
+	tables.multi = options.MultiLine
 	var compiled *localeBytePattern
 	switch options.Syntax {
 	case ByteRegexpBRE:
@@ -119,6 +123,55 @@ func buildBytePatternTables(provider ByteCtype) (bytePatternTables, error) {
 // byte offsets. Invariant failures are returned, never converted to no-match.
 func (r *LocaleByteRegexp) FindSubmatchIndex(src []byte) ([]int, error) {
 	return r.pattern.findSubmatchIndex(src)
+}
+
+// FindAllSubmatchIndex returns successive non-overlapping raw-byte matches.
+// n < 0 means all and n == 0 means none. RE2 can observe empty matches between
+// the two runes of one encoded byte; only those zero-length encoding artifacts
+// are filtered. Every non-empty match and every retained capture must map to a
+// raw boundary or the method returns an invariant error.
+func (r *LocaleByteRegexp) FindAllSubmatchIndex(src []byte, n int) ([][]int, error) {
+	if n == 0 {
+		return nil, nil
+	}
+	encoded := r.pattern.codec.encodeSubject(src)
+	matches := r.pattern.re.FindAllStringSubmatchIndex(encoded.text, -1)
+	var decoded [][]int
+	for _, match := range matches {
+		if len(match) < 2 {
+			return nil, fmt.Errorf("locale byte regexp: malformed RE2 match vector")
+		}
+		_, startErr := encoded.rawOffset(match[0])
+		_, endErr := encoded.rawOffset(match[1])
+		if match[0] == match[1] && startErr != nil {
+			continue
+		}
+		if startErr != nil || endErr != nil {
+			return nil, fmt.Errorf("locale byte regexp: non-boundary whole match invariant")
+		}
+		rawMatch := make([]int, len(match))
+		for i, offset := range match {
+			if offset < 0 {
+				rawMatch[i] = -1
+				continue
+			}
+			rawOffset, err := encoded.rawOffset(offset)
+			if err != nil {
+				return nil, fmt.Errorf("locale byte regexp: non-boundary capture invariant: %w", err)
+			}
+			rawMatch[i] = rawOffset
+		}
+		decoded = append(decoded, rawMatch)
+		if n > 0 && len(decoded) == n {
+			break
+		}
+	}
+	return decoded, nil
+}
+
+// FindAllStringSubmatchIndex is the string form of FindAllSubmatchIndex.
+func (r *LocaleByteRegexp) FindAllStringSubmatchIndex(src string, n int) ([][]int, error) {
+	return r.FindAllSubmatchIndex([]byte(src), n)
 }
 
 // MatchString reports whether src matches and preserves invariant errors.
