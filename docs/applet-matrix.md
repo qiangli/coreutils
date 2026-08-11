@@ -61,7 +61,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `clip` | `cmds/clip` | — | Bashy/other extension | no | no | 1 | 1 |
 | `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 1 | 12 |
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 14 |
-| `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 3 | 30 |
+| `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 3 | 33 |
 | `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 1 | 13 |
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 15 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 2 | 10 |
