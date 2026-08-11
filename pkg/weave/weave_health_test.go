@@ -122,6 +122,35 @@ func TestWeaveHealthJSONAndHumanUseSameVerdict(t *testing.T) {
 	}
 }
 
+func TestWeaveHealthSnapshotJSONOmitsAbsentTimestamps(t *testing.T) {
+	zero, err := json.Marshal(weaveHealthSnapshot{Issue: 1, State: "working"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"started_at", "last_progress_at", "deadline_at", "finished_at"} {
+		if strings.Contains(string(zero), `"`+field+`"`) {
+			t.Fatalf("zero snapshot serialized absent %s: %s", field, zero)
+		}
+	}
+	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	populated, err := json.Marshal(weaveHealthSnapshot{
+		Issue:          1,
+		State:          "working",
+		StartedAt:      now,
+		LastProgressAt: now.Add(time.Minute),
+		DeadlineAt:     now.Add(time.Hour),
+		FinishedAt:     now.Add(2 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"started_at", "last_progress_at", "deadline_at", "finished_at"} {
+		if !strings.Contains(string(populated), `"`+field+`"`) {
+			t.Fatalf("populated snapshot omitted %s: %s", field, populated)
+		}
+	}
+}
+
 func TestWeaveHealthReadDoesNotMutateQueue(t *testing.T) {
 	now := time.Unix(200, 0).UTC()
 	it := healthTestItem()

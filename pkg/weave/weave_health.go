@@ -1,6 +1,7 @@
 package weave
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -78,6 +79,68 @@ type weaveHealthSnapshot struct {
 	Completion        string    `json:"completion,omitempty"`
 	KilledBy          string    `json:"killed_by,omitempty"`
 	MaxRuntimeSeconds int64     `json:"max_runtime_seconds,omitempty"`
+}
+
+// time.Time is a struct, so encoding/json's omitempty does not omit a zero
+// timestamp. Keep the internal representation convenient for comparisons, but
+// use pointers at the wire boundary so a missing observation is absent rather
+// than misleadingly rendered as year 1.
+func (s weaveHealthSnapshot) MarshalJSON() ([]byte, error) {
+	optionalTime := func(t time.Time) *time.Time {
+		if t.IsZero() {
+			return nil
+		}
+		t = t.UTC()
+		return &t
+	}
+	type snapshotJSON struct {
+		Issue             int64      `json:"issue"`
+		State             string     `json:"state"`
+		Owner             string     `json:"owner,omitempty"`
+		Tool              string     `json:"tool,omitempty"`
+		WrapperPID        int        `json:"wrapper_pid,omitempty"`
+		WrapperAlive      bool       `json:"wrapper_alive"`
+		StartedAt         *time.Time `json:"started_at,omitempty"`
+		LastProgressAt    *time.Time `json:"last_progress_at,omitempty"`
+		DeadlineAt        *time.Time `json:"deadline_at,omitempty"`
+		Workspace         string     `json:"workspace,omitempty"`
+		WorkspaceExists   bool       `json:"workspace_exists"`
+		CommitsAhead      int        `json:"commits_ahead"`
+		Head              string     `json:"head,omitempty"`
+		VerifyConfigured  bool       `json:"verify_configured"`
+		VerifyRecorded    bool       `json:"verify_recorded"`
+		VerifyPassed      bool       `json:"verify_passed"`
+		Dirty             bool       `json:"dirty"`
+		FinishedAt        *time.Time `json:"finished_at,omitempty"`
+		ExitRecorded      bool       `json:"exit_recorded"`
+		Completion        string     `json:"completion,omitempty"`
+		KilledBy          string     `json:"killed_by,omitempty"`
+		MaxRuntimeSeconds int64      `json:"max_runtime_seconds,omitempty"`
+	}
+	return json.Marshal(snapshotJSON{
+		Issue:             s.Issue,
+		State:             s.State,
+		Owner:             s.Owner,
+		Tool:              s.Tool,
+		WrapperPID:        s.WrapperPID,
+		WrapperAlive:      s.WrapperAlive,
+		StartedAt:         optionalTime(s.StartedAt),
+		LastProgressAt:    optionalTime(s.LastProgressAt),
+		DeadlineAt:        optionalTime(s.DeadlineAt),
+		Workspace:         s.Workspace,
+		WorkspaceExists:   s.WorkspaceExists,
+		CommitsAhead:      s.CommitsAhead,
+		Head:              s.Head,
+		VerifyConfigured:  s.VerifyConfigured,
+		VerifyRecorded:    s.VerifyRecorded,
+		VerifyPassed:      s.VerifyPassed,
+		Dirty:             s.Dirty,
+		FinishedAt:        optionalTime(s.FinishedAt),
+		ExitRecorded:      s.ExitRecorded,
+		Completion:        s.Completion,
+		KilledBy:          s.KilledBy,
+		MaxRuntimeSeconds: s.MaxRuntimeSeconds,
+	})
 }
 
 type weaveHealthReport struct {
