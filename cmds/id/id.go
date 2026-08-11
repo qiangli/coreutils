@@ -54,7 +54,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if chosen > 1 {
 		return tool.UsageError(rc, cmd, "cannot print \"only\" of more than one choice")
 	}
-	if *rFlag && !*uFlag && !*gFlag {
+	if *rFlag && chosen == 0 {
 		return tool.UsageError(rc, cmd, "cannot print only names or real IDs in default format")
 	}
 	if *nFlag && chosen == 0 {

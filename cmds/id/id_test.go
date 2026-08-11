@@ -187,10 +187,33 @@ func TestIDZFlag(t *testing.T) {
 }
 
 func TestIDRealFlag(t *testing.T) {
-	for _, args := range [][]string{{"-r"}, {"--real"}, {"-r", "-G"}} {
+	// -r alone is a usage error; GNU and BSD both reject it.
+	for _, args := range [][]string{{"-r"}, {"--real"}} {
 		_, errb, code := runTool(t, args...)
 		if code != 2 || !strings.Contains(errb, "cannot print only names or real IDs") {
 			t.Errorf("id %v: code=%d err=%q", args, code, errb)
+		}
+	}
+}
+
+func TestIDRealGroupFlag(t *testing.T) {
+	// GNU and BSD both accept -r with -G (and -n); only -r alone is rejected.
+	u := current(t)
+	for _, args := range [][]string{{"-r", "-G"}, {"-rG"}, {"--real", "--groups"}, {"-r", "-G", "-n"}} {
+		out, errb, code := runTool(t, args...)
+		if code != 0 || errb != "" {
+			t.Errorf("id %v: code=%d err=%q out=%q", args, code, errb, out)
+			continue
+		}
+		if strings.TrimSpace(out) == "" {
+			t.Errorf("id %v: expected group list, got empty output", args)
+		}
+	}
+	// -rG should still lead with the real (primary) gid.
+	out, _, code := runTool(t, "-r", "-G")
+	if code == 0 {
+		if first := strings.SplitN(strings.TrimSpace(out), " ", 2)[0]; first != u.Gid {
+			t.Errorf("id -rG = %q, want to lead with real gid %s", out, u.Gid)
 		}
 	}
 }
