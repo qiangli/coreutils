@@ -62,8 +62,8 @@ require (
 // convention as ycode/outpost/bashy.
 replace mvdan.cc/sh/v3 => ../sh
 
-// Fork pin adds POSIX awk float formats, injectable EREs, and interval normalization.
-replace github.com/benhoyt/goawk => github.com/qiangli/goawk v1.31.1-0.20260811022020-cc5727a4a95f
+// Fork pin adds POSIX awk float formats and one error-bearing regex backend across all surfaces.
+replace github.com/benhoyt/goawk => github.com/qiangli/goawk v1.31.1-0.20260811024949-9948781e3cd4
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
