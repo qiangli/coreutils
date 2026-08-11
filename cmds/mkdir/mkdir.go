@@ -50,6 +50,10 @@ func run(rc *tool.RunContext, args []string) int {
 	modeStr := fs.StringP("mode", "m", "", "set file mode (octal, as in chmod), not a=rwx - umask")
 	verbose := fs.BoolP("verbose", "v", false, "print a message for each created directory")
 	contextStr := fs.StringP("context", "Z", "", "set SELinux security context (no-op without SELinux)")
+	// GNU mkdir accepts -Z without an argument (equivalent to the default
+	// SELinux context), as well as --context[=CTX].  Keep the value-bearing
+	// form for --context=CTX while allowing the short option by itself.
+	fs.Lookup("context").NoOptDefVal = "default"
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code

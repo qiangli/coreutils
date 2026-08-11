@@ -260,6 +260,17 @@ func TestMkdirUsageErrors(t *testing.T) {
 	}
 }
 
+func TestMkdirContextMayBeUsedWithoutArgument(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "-Z", "d")
+	if code != 0 || errb != "" {
+		t.Fatalf("mkdir -Z: code=%d err=%q", code, errb)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "d")); err != nil || !fi.IsDir() {
+		t.Fatalf("mkdir -Z did not create directory: %v", err)
+	}
+}
+
 func TestMkdirHelpAndVersion(t *testing.T) {
 	dir := t.TempDir()
 	out, _, code := runTool(t, dir, "--help")
