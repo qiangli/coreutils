@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSprintLinkRequiresValidPointsBeforeStoryMutation(t *testing.T) {
@@ -79,5 +80,92 @@ func TestSprintLinkRequiresValidPointsBeforeStoryMutation(t *testing.T) {
 	s := findWeaveStory(q, 1)
 	if s == nil || len(s.Runs) != 1 || s.Runs[0] != (sprintRun{Repo: repo, ID: 1}) {
 		t.Fatalf("valid link missing: %+v", s)
+	}
+}
+
+func TestSprintLinkRejectsClaimedRunWithoutCompliantBudget(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if out, code := runSprint(t, "add", "bounded sprint", "--json"); code != 0 {
+		t.Fatalf("sprint add failed (exit %d): %s", code, out)
+	}
+	if out, code := runWeave(t, "add", "candidate", "--points", "2", "--json"); code != 0 {
+		t.Fatalf("weave add failed (exit %d): %s", code, out)
+	}
+	repo := filepath.Base(root)
+	dir, _ := weaveQueueDir(root)
+	setClaimed := func(spec *weaveLaunchSpec) {
+		t.Helper()
+		if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+			it := findWeaveItem(q, 1)
+			it.State = "working"
+			it.LaunchSpec = spec
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertUnlinked := func(stage string) {
+		t.Helper()
+		storyDir, _ := sprintStoreDir()
+		q, err := loadWeaveQueue(storyDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s := findWeaveStory(q, 1); s == nil || len(s.Runs) != 0 {
+			t.Fatalf("%s mutated sprint links: %+v", stage, s)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		spec *weaveLaunchSpec
+		want string
+	}{
+		{name: "missing", want: "no bounded launch runtime"},
+		{name: "zero", spec: &weaveLaunchSpec{}, want: "no bounded launch runtime"},
+		{name: "over", spec: &weaveLaunchSpec{MaxRuntime: 8 * time.Minute}, want: "exceeds the 2-point cap 7m30s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setClaimed(tc.spec)
+			out, code := runSprint(t, "link", "1", "--repo", repo, "--task", "1")
+			if code == 0 || !strings.Contains(out, tc.want) {
+				t.Fatalf("link exit=%d output=%q, want %q", code, out, tc.want)
+			}
+			assertUnlinked(tc.name)
+		})
+	}
+
+	setClaimed(&weaveLaunchSpec{MaxRuntime: 7 * time.Minute})
+	if out, code := runSprint(t, "link", "1", "--repo", repo, "--task", "1"); code != 0 {
+		t.Fatalf("compliant claimed link failed (exit %d): %s", code, out)
+	}
+}
+
+func TestWeavePointRejectsChangesAfterClaimWithoutMutation(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if out, code := runWeave(t, "add", "claimed", "--points", "2", "--json"); code != 0 {
+		t.Fatalf("weave add failed (exit %d): %s", code, out)
+	}
+	dir, _ := weaveQueueDir(root)
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		it := findWeaveItem(q, 1)
+		it.State = "working"
+		it.LaunchSpec = &weaveLaunchSpec{MaxRuntime: 7 * time.Minute}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runWeave(t, "point", "1", "3")
+	if code == 0 || !strings.Contains(out, "points may only change while state is todo") {
+		t.Fatalf("point exit=%d output=%q", code, out)
+	}
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findWeaveItem(q, 1).Points; got != 2 {
+		t.Fatalf("rejected point change mutated points to %d", got)
 	}
 }

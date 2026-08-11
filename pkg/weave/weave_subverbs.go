@@ -135,8 +135,9 @@ runs are parallel because they are separate. Those workers are hidden from
 
 Anything else is passed through untouched. A bare tool name (-- claude)
 still launches raw. A multi-token raw executable argv is honored exactly as
-written; extra tokens after a registered agent are rejected because they would
-silently disable agent expansion. Put weave flags before '--'.
+written. A registered agent followed by a weave flag is rejected because that
+is the flags-after-'--' mistake that silently disables agent expansion; put
+weave flags before '--'.
 
 POINTS ARE A HARD EXECUTION BUDGET. A pointed run gets a max-runtime even when
 the flag is omitted: 1=3m45s, 2=7m30s, 3=11m15s, 5=18m45s, 8=30m. An explicit

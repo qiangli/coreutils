@@ -747,11 +747,24 @@ func validateSprintRunLink(repo string, task int64) error {
 	if run == nil {
 		return fmt.Errorf("repo %q has no weave run #%d", repo, task)
 	}
-	if _, valid := weavePointRuntimeCap(run.Points); !valid {
+	cap, valid := weavePointRuntimeCap(run.Points)
+	if !valid {
 		if run.Points == 0 {
 			return fmt.Errorf("cannot link %s#%d: run has no story points; set one of 1,2,3,5,8 first", repo, task)
 		}
 		return fmt.Errorf("cannot link %s#%d: invalid story points %d (want 1,2,3,5,8)", repo, task, run.Points)
+	}
+	// A run that has left planning may already have a wrapper or preserved
+	// execution record. Linking it promises that its point estimate actually
+	// bounded that execution, so fail closed on legacy/unbounded or stale
+	// over-cap launch specs. A running watchdog cannot be retrofitted safely.
+	if run.State != "todo" {
+		if run.LaunchSpec == nil || run.LaunchSpec.MaxRuntime <= 0 {
+			return fmt.Errorf("cannot link %s#%d: state %q has no bounded launch runtime; stop and restart it under its point cap first", repo, task, run.State)
+		}
+		if run.LaunchSpec.MaxRuntime > cap {
+			return fmt.Errorf("cannot link %s#%d: launch runtime %s exceeds the %d-point cap %s; stop and restart it under its point cap first", repo, task, run.LaunchSpec.MaxRuntime, run.Points, cap)
+		}
 	}
 	return nil
 }

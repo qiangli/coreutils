@@ -309,6 +309,20 @@ func TestMultiTokenArgvIsVerbatim(t *testing.T) {
 	}
 }
 
+func TestRegisteredAgentRejectsMisplacedWeaveFlags(t *testing.T) {
+	pinAgentFleet(t)
+	for _, argv := range [][]string{
+		{"007", "--json"},
+		{"007", "--quiet", "--plain"},
+		{"007", "--max-runtime=5m"},
+	} {
+		l, _, err := weaveExpandAgent(argv, "body", "title")
+		if err == nil || l != nil || !strings.Contains(err.Error(), "before `--`") {
+			t.Fatalf("%q: launch=%+v err=%v", argv, l, err)
+		}
+	}
+}
+
 // An unknown single token is not an agent, so it is passed through and fails
 // (or succeeds) exactly as it does today.
 func TestUnknownTokenIsNotExpanded(t *testing.T) {

@@ -27,11 +27,11 @@ import (
 //	weave start --issue 3 -- 007
 //	  → claude --dangerously-skip-permissions --model fable "<issue body>"
 //
-// A multi-token argv beginning with a raw executable is the conductor speaking
-// deliberately and is left alone. A multi-token argv beginning with a
-// REGISTERED AGENT is rejected: silently changing the same name from an agent
-// into a binary is both surprising and guaranteed to fail for ordinary human
-// nicknames. Weave flags belong before `--`.
+// A multi-token argv is the conductor speaking deliberately and is left alone,
+// even when its executable happens to share a registered agent name. The one
+// fail-closed exception is a registered agent followed by a flag belonging to
+// `weave start`: that shape is the common flags-after-`--` mistake and would
+// otherwise silently change the agent name into an executable.
 
 // weaveAgentLaunch is the shared agent launch resolved from the fleet registry.
 type weaveAgentLaunch = agentlaunch.Launch
@@ -157,9 +157,9 @@ func weaveExpandAgent(toolArgs []string, body, title string) (*weaveAgentLaunch,
 		if err != nil {
 			return nil, nil, err
 		}
-		if l != nil {
+		if l != nil && weaveHasMisplacedStartFlag(toolArgs[1:]) {
 			return nil, nil, fmt.Errorf(
-				"%q is a registered agent, but extra arguments after it disable agent expansion; put weave flags before `--` (for example `weave start --json --quiet -- %s`), or name a raw executable after `--`",
+				"%q is a registered agent followed by a weave flag after `--`; put weave flags before `--` (for example `weave start --json --quiet -- %s`), or use a raw executable argv that does not contain weave flags",
 				toolArgs[0], toolArgs[0])
 		}
 		return nil, nil, nil // the conductor wrote a raw executable argv; honor it
@@ -177,6 +177,22 @@ func weaveExpandAgent(toolArgs []string, body, title string) (*weaveAgentLaunch,
 	}
 	argv := l.Argv(prompt + weaveWorkerContract)
 	return l, weaveAgentEventsStdoutArgv(l, argv), nil
+}
+
+func weaveHasMisplacedStartFlag(args []string) bool {
+	for _, arg := range args {
+		name := arg
+		if i := strings.IndexByte(name, '='); i >= 0 {
+			name = name[:i]
+		}
+		switch name {
+		case "--json", "--plain", "--quiet", "--issue", "--run", "--tool",
+			"--resume", "--no-spawn", "--clone", "--auto-commit", "--pty",
+			"--idle-timeout", "--max-runtime", "--mem-limit":
+			return true
+		}
+	}
+	return false
 }
 
 // weaveAgentEventsStdoutArgv connects the fleet's event-stream declaration to

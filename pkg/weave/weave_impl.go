@@ -5859,6 +5859,12 @@ func runWeavePoint(cmd *cobra.Command, id int64, points int, flags *weaveOutputF
 		if it == nil {
 			return fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))
 		}
+		// Points define the watchdog budget. Once a run is claimed, changing
+		// them would change the record without changing the already-running
+		// guard. Re-point only while the item is still in planning.
+		if it.State != "todo" {
+			return fmt.Errorf("run #%d state is %q; points may only change while state is todo", id, it.State)
+		}
 		it.Points = points
 		return nil
 	})
@@ -5866,6 +5872,8 @@ func runWeavePoint(cmd *cobra.Command, id int64, points int, flags *weaveOutputF
 		code := weavecli.ExitGenericFail
 		if strings.Contains(lockErr.Error(), "not found") {
 			code = weavecli.ExitInvalidArg
+		} else if strings.Contains(lockErr.Error(), "points may only change") {
+			code = weavecli.ExitStateConflict
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave point", code, lockErr))
 	}
