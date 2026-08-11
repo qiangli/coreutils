@@ -102,7 +102,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 21 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 7 |
-| `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 43 |
+| `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 45 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
 | `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 1 | 9 |
