@@ -246,8 +246,10 @@ used, timebox the whole phase to a few minutes.
        bashy weave prio  <issue> <p0..p3>
    (or file with `weave add --points N` directly). PTS shows in
    `weave list`.
-4. Assign per the report card and the points: budget --max-runtime
-   from points (8 → 30m + small margin), biggest issues to the
+4. Assign per the report card and the points. `weave start` derives the hard
+   `--max-runtime` from points (1→3m45s, 2→7m30s, 3→11m15s,
+   5→18m45s, 8→30m); an explicit value may tighten but never extend it. Send the
+   biggest issues to the
    strongest tool first.
 
 ## Phase 2 — Allocate and prepare workspaces
@@ -541,9 +543,9 @@ WHAT THE SCREEN ASKS:
   If dirty with real changes: resume the agent with "commit your
   work", or commit it yourself in the workspace, and re-verify.
 
-- **Enforce the cap — split, don't extend.** 8 points ≈ 30 min. When
-  a run hits ~1.5× its cap with the core deliverable already
-  committed, wrap it (`say` a commit-and-exit order, then graceful
+- **Enforce the cap — split, don't extend.** 8 points = 30 min, enforced by
+  `weave start`. Near the cap with the core deliverable already committed,
+  wrap it (`say` a commit-and-exit order, then graceful
   `weave kill`) and file the residue as FRESH, smaller issues — an
   agent polishing past its cap delivers less than a new scoped run.
   Better: don't file open-ended 8-pointers at all; scope each issue

@@ -102,6 +102,97 @@ func TestWeaveStartRejectsFlagsAfterAgentBeforeProvisioning(t *testing.T) {
 	}
 }
 
+func TestPointRuntimeBudgetScaleAndExplicitCap(t *testing.T) {
+	wants := map[int]time.Duration{
+		1: 3*time.Minute + 45*time.Second,
+		2: 7*time.Minute + 30*time.Second,
+		3: 11*time.Minute + 15*time.Second,
+		5: 18*time.Minute + 45*time.Second,
+		8: 30 * time.Minute,
+	}
+	for points, want := range wants {
+		got, err := weaveBoundRuntime(points, 0)
+		if err != nil || got != want {
+			t.Errorf("points %d: runtime=%s err=%v, want %s", points, got, err, want)
+		}
+		if got, err := weaveBoundRuntime(points, want-time.Second); err != nil || got != want-time.Second {
+			t.Errorf("points %d tighter explicit runtime=%s err=%v", points, got, err)
+		}
+		if _, err := weaveBoundRuntime(points, want+time.Second); err == nil {
+			t.Errorf("points %d accepted runtime above cap", points)
+		}
+	}
+	for _, points := range []int{-1, 4, 13} {
+		if _, err := weaveBoundRuntime(points, 0); err == nil {
+			t.Errorf("invalid points %d accepted", points)
+		}
+	}
+	if _, err := weaveBoundRuntime(2, -time.Second); err == nil {
+		t.Fatal("negative explicit runtime accepted")
+	}
+	if got, err := weaveBoundRuntime(0, 0); err != nil || got != 0 {
+		t.Fatalf("legacy unpointed runtime=%s err=%v", got, err)
+	}
+}
+
+func TestPointedStartAndResumePersistBoundedRuntime(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if _, code := runWeave(t, "add", "bounded", "--points", "2", "--json"); code != 0 {
+		t.Fatal("weave add failed")
+	}
+	if out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh", "--json"); code != 0 {
+		t.Fatalf("bounded start failed (exit %d): %s", code, out)
+	}
+	dir, _ := weaveQueueDir(root)
+	q, _ := loadWeaveQueue(dir)
+	it := findWeaveItem(q, 1)
+	if it.LaunchSpec == nil || it.LaunchSpec.MaxRuntime != 7*time.Minute+30*time.Second {
+		t.Fatalf("derived launch spec = %+v", it.LaunchSpec)
+	}
+	if out, code := runWeave(t, "start", "--run", "1", "--resume", "--no-spawn", "--tool", "sh", "--max-runtime", "6m", "--json"); code != 0 {
+		t.Fatalf("bounded resume failed (exit %d): %s", code, out)
+	}
+	q, _ = loadWeaveQueue(dir)
+	it = findWeaveItem(q, 1)
+	if it.LaunchSpec == nil || it.LaunchSpec.MaxRuntime != 6*time.Minute {
+		t.Fatalf("resumed launch spec = %+v", it.LaunchSpec)
+	}
+}
+
+func TestPointedStartRejectsRuntimeAboveCapBeforeProvisioning(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	if _, code := runWeave(t, "add", "too long", "--points", "1", "--json"); code != 0 {
+		t.Fatal("weave add failed")
+	}
+	out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh", "--max-runtime", "4m")
+	if code == 0 || !strings.Contains(out, "exceeds the 1-point cap 3m45s") {
+		t.Fatalf("over-cap start exit=%d output=%q", code, out)
+	}
+	dir, _ := weaveQueueDir(root)
+	q, _ := loadWeaveQueue(dir)
+	it := findWeaveItem(q, 1)
+	if it.State != "todo" || it.Workspace != "" || it.LaunchSpec != nil {
+		t.Fatalf("over-cap launch mutated item: %+v", it)
+	}
+	if err := withWeaveQueueLock(dir, func(q *weaveQueue) error {
+		findWeaveItem(q, 1).Points = 4 // corrupt legacy state must fail closed
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "sh")
+	if code == 0 || !strings.Contains(out, "invalid points 4") {
+		t.Fatalf("invalid-point start exit=%d output=%q", code, out)
+	}
+	q, _ = loadWeaveQueue(dir)
+	it = findWeaveItem(q, 1)
+	if it.State != "todo" || it.Workspace != "" || it.LaunchSpec != nil {
+		t.Fatalf("invalid-point launch mutated item: %+v", it)
+	}
+}
+
 // Provisioning happens before an agent exists to report trouble. Its failure
 // must therefore become durable queue state rather than returning to a silent
 // todo item that looks like no worker was ever launched.

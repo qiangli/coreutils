@@ -2953,7 +2953,6 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitInvalidArg, fmt.Errorf("provide trailing '-- <tool> [args...]' or --tool <name> (or pass --no-spawn to allocate only)")))
 	}
-	launchSpec := weaveLaunchSpecFromArgs(toolArgs, opts)
 	cwd, _ := os.Getwd()
 	root, err := weaveRepoRoot(cwd)
 	if err != nil {
@@ -2988,6 +2987,13 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
 			weavecli.ExitStateConflict, fmt.Errorf("run #%d state is %q", it.ID, it.State)))
 	}
+	boundedRuntime, budgetErr := weaveBoundRuntime(it.Points, opts.maxRuntime)
+	if budgetErr != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave start",
+			weavecli.ExitInvalidArg, fmt.Errorf("run #%d: %w", it.ID, budgetErr)))
+	}
+	opts.maxRuntime = boundedRuntime
+	launchSpec := weaveLaunchSpecFromArgs(toolArgs, opts)
 	// `-- 007` / `-- claude:opus` name an AGENT, so the launch argv comes from
 	// the registry with the issue body as the prompt. This is resolved here,
 	// after the issue is known, because the body IS the prompt.
@@ -5802,6 +5808,37 @@ func weaveValidPoints(n int) bool {
 		return true
 	}
 	return false
+}
+
+// weavePointRuntimeCap makes the estimate an execution ceiling. The scale is
+// linear and exact: one point is 3m45s, so the largest accepted item (8) gets
+// 30m and every smaller Fibonacci estimate gets proportionally less. A caller
+// must reject an invalid point value rather than treating it as unbounded.
+func weavePointRuntimeCap(points int) (time.Duration, bool) {
+	if !weaveValidPoints(points) {
+		return 0, false
+	}
+	return time.Duration(points) * (15 * time.Minute / 4), true
+}
+
+func weaveBoundRuntime(points int, requested time.Duration) (time.Duration, error) {
+	if requested < 0 {
+		return 0, fmt.Errorf("--max-runtime must not be negative")
+	}
+	if points == 0 { // legacy standalone work remains supported
+		return requested, nil
+	}
+	cap, ok := weavePointRuntimeCap(points)
+	if !ok {
+		return 0, fmt.Errorf("invalid points %d (want 1,2,3,5,8); correct it before launch", points)
+	}
+	if requested == 0 {
+		return cap, nil
+	}
+	if requested > cap {
+		return 0, fmt.Errorf("--max-runtime %s exceeds the %d-point cap %s; split or re-point the work instead", requested, points, cap)
+	}
+	return requested, nil
 }
 
 func runWeavePoint(cmd *cobra.Command, id int64, points int, flags *weaveOutputFlags) error {

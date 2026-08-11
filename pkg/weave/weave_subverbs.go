@@ -134,7 +134,15 @@ runs are parallel because they are separate. Those workers are hidden from
 "bashy agents list" (see --all) and are reclaimed when their run finishes.
 
 Anything else is passed through untouched. A bare tool name (-- claude)
-still launches raw, and a multi-token argv is honored exactly as written.
+still launches raw. A multi-token raw executable argv is honored exactly as
+written; extra tokens after a registered agent are rejected because they would
+silently disable agent expansion. Put weave flags before '--'.
+
+POINTS ARE A HARD EXECUTION BUDGET. A pointed run gets a max-runtime even when
+the flag is omitted: 1=3m45s, 2=7m30s, 3=11m15s, 5=18m45s, 8=30m. An explicit
+--max-runtime may tighten that ceiling but cannot exceed it. Resume and
+reassignment use the same cap. Legacy unpointed standalone runs remain
+launchable, but a sprint refuses to link them.
 
 PTY: by default the subagent runs inside a freshly-allocated PTY
 (claude-code, codex, opencode and similar TUIs need one to render).
@@ -170,7 +178,7 @@ blocks until N reaches a terminal state.`,
 	cmd.Flags().BoolVar(&autoCommit, "auto-commit", false, "After a clean run and passing verify, commit dirty workspace changes before recording terminal state")
 	cmd.Flags().StringVar(&ptyMode, "pty", "auto", "PTY allocation: auto (default) | always | never")
 	cmd.Flags().DurationVar(&idleTimeout, "idle-timeout", 0, "Kill the subagent tree if no PTY output for this long (e.g. 5m); default off — caught the claude-TUI stuck case in the dogfood")
-	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling for the subagent (e.g. 30m); unlike --idle-timeout it cannot be reset by spinner output; default off")
+	cmd.Flags().DurationVar(&maxRuntime, "max-runtime", 0, "Hard wall-clock ceiling; pointed runs derive 1=3m45s,2=7m30s,3=11m15s,5=18m45s,8=30m and reject a larger explicit value; unpointed default off")
 	cmd.Flags().StringVar(&memLimit, "mem-limit", "16g", "Kill the subagent tree when its total RSS exceeds this (e.g. 16g, 512m); 0 disables — the OOM backstop")
 	return cmd
 }

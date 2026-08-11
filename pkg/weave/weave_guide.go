@@ -94,6 +94,9 @@ GOAL · FILES likely touched · VERIFY cmd (--verify) · MERGE criteria · KNOWN
 Always list repo-specific traps (e.g. "submodule: bump the umbrella pin separately
 after pushing"; "native access gate must stay fail-closed"). Review the DIFF before
 merging, not just the exit code. Keep issues ≤3 points; split bigger work.
+Points enforce the hard runtime ceiling: 1=3m45s, 2=7m30s, 3=11m15s,
+5=18m45s, 8=30m. Omitted --max-runtime derives that cap; an explicit value
+may only tighten it. Sprint links reject unpointed work.
 
 ## The kb loop (host knowledge base — check before, write back after)
 ` + "`bashy kb`" + ` is the collective memory of ALL agents on this host across ALL
@@ -122,7 +125,8 @@ repos (~/.bashy/kb). The discipline that stops the fleet repeating errors:
      codex     -- codex exec --skip-git-repo-check --sandbox workspace-write "<body>"
      agy       -- agy --dangerously-skip-permissions --print-timeout 40m -p "<body>"
      opencode  -- opencode run "<body>"
-   Rails: --idle-timeout 15m --max-runtime 40m --mem-limit 8g --auto-commit.
+   Rails: --idle-timeout 15m --mem-limit 8g --auto-commit. Points derive the
+   hard --max-runtime; omit it unless tightening the point cap.
    Background each (` + "`&`" + `) and ` + "`bashy weave wait --all`" + `.
 4. MONITOR — ` + "`bashy weave list`" + `, ` + "`bashy weave log <N> -f`" + `. Steer with
    ` + "`bashy weave say <N> \"<line>\"`" + ` (only steerable/TUI modes; headless

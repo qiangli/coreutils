@@ -700,7 +700,7 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 	var repo string
 	cmd := &cobra.Command{
 		Use:   "link <sprint> --repo <name> --task <issue>",
-		Short: "Link a weave run (repo + issue) to a sprint — runs are cross-repo",
+		Short: "Link a pointed weave run (repo + issue) to a sprint — runs are cross-repo",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
@@ -709,6 +709,13 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 			}
 			if task <= 0 || strings.TrimSpace(repo) == "" {
 				return fmt.Errorf("--repo <name> and --task <issue> required (a run lives in a specific repo)")
+			}
+			// Validate the referenced run BEFORE taking the sprint mutation lock.
+			// A sprint link promises that the estimate governs execution; linking
+			// missing, unpointed, or corrupt work would make that promise false.
+			if err := validateSprintRunLink(repo, task); err != nil {
+				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint link",
+					weavecli.ExitInvalidArg, err))
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint link", &flags, func(s *weaveStory) (string, error) {
 				for _, r := range s.Runs {
@@ -722,9 +729,31 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "repo the run lives in")
-	cmd.Flags().Int64Var(&task, "task", 0, "weave run/issue id in that repo")
+	cmd.Flags().Int64Var(&task, "task", 0, "pointed weave run/issue id in that repo (points must be 1,2,3,5,8)")
 	flags.attach(cmd)
 	return cmd
+}
+
+func validateSprintRunLink(repo string, task int64) error {
+	queueDir, ok := queueDirForRepoName(repo)
+	if !ok {
+		return fmt.Errorf("cannot uniquely resolve weave queue for repo %q", repo)
+	}
+	q, err := loadWeaveQueue(queueDir)
+	if err != nil {
+		return fmt.Errorf("load weave queue for repo %q: %w", repo, err)
+	}
+	run := findWeaveItem(q, task)
+	if run == nil {
+		return fmt.Errorf("repo %q has no weave run #%d", repo, task)
+	}
+	if _, valid := weavePointRuntimeCap(run.Points); !valid {
+		if run.Points == 0 {
+			return fmt.Errorf("cannot link %s#%d: run has no story points; set one of 1,2,3,5,8 first", repo, task)
+		}
+		return fmt.Errorf("cannot link %s#%d: invalid story points %d (want 1,2,3,5,8)", repo, task, run.Points)
+	}
+	return nil
 }
 
 // newWeaveCheckpointCmd is the conductor's durability heartbeat: update
