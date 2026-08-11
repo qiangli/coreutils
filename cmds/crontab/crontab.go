@@ -268,7 +268,10 @@ func cronLines() ([]string, error) {
 
 // parseCronTab parses crontab content into a slice of Job objects.
 // Blank lines and lines starting with # are skipped. Each active line
-// must have at least 6 fields: 5 cron fields + command.
+// must have 5 cron fields followed by a command; the command is taken
+// verbatim from the rest of the line so its internal whitespace (e.g.
+// inside a quoted argument) survives the round trip documented at the
+// top of this file.
 func parseCronTab(content string) ([]*schedule.Job, []error) {
 	var jobs []*schedule.Job
 	var errs []error
@@ -282,20 +285,18 @@ func parseCronTab(content string) ([]*schedule.Job, []error) {
 		if line == "" || line[0] == '#' {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 6 {
+		spec, command, ok := splitCronLine(line)
+		if !ok {
 			errs = append(errs, fmt.Errorf("line %d: not enough fields (need 5 cron fields + command)", lineNo))
 			continue
 		}
-		spec := strings.Join(fields[:5], " ")
-		cmdParts := fields[5:]
 		id := strconv.FormatInt(time.Now().UnixNano()+int64(lineNo), 36)
 
 		jobs = append(jobs, &schedule.Job{
 			ID:      id,
 			Kind:    "cron",
 			Spec:    spec,
-			Command: cmdParts,
+			Command: []string{command},
 			Dir:     cwd,
 			Enabled: true,
 		})
@@ -304,4 +305,30 @@ func parseCronTab(content string) ([]*schedule.Job, []error) {
 		errs = append(errs, err)
 	}
 	return jobs, errs
+}
+
+// splitCronLine splits a trimmed crontab line into its 5 whitespace-
+// delimited cron fields and the command that follows. The command is
+// returned verbatim (not re-tokenized), so any internal whitespace runs
+// it contains are preserved exactly as written.
+func splitCronLine(line string) (spec, command string, ok bool) {
+	var fields [5]string
+	rest := line
+	for i := range fields {
+		rest = strings.TrimLeft(rest, " \t")
+		if rest == "" {
+			return "", "", false
+		}
+		idx := strings.IndexAny(rest, " \t")
+		if idx < 0 {
+			return "", "", false
+		}
+		fields[i] = rest[:idx]
+		rest = rest[idx:]
+	}
+	rest = strings.TrimLeft(rest, " \t")
+	if rest == "" {
+		return "", "", false
+	}
+	return strings.Join(fields[:], " "), rest, true
 }

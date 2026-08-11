@@ -273,6 +273,29 @@ func TestCrontabUserOptionFailsClosed(t *testing.T) {
 	}
 }
 
+// TestCrontabPreservesCommandInternalWhitespace proves the round-trip
+// invariant documented at the top of crontab.go: what -l prints must be
+// reinstallable byte-for-byte. A command field's internal whitespace runs
+// (e.g. inside a quoted argument) are significant to the shell that later
+// runs the command and must not be collapsed during parsing.
+func TestCrontabPreservesCommandInternalWhitespace(t *testing.T) {
+	setupCronState(t)
+	cronContent := "0 9 * * * echo \"a   b\"\n"
+
+	_, _, code := runCron(t, context.Background(), cronContent, "-")
+	if code != 0 {
+		t.Fatalf("install: code=%d", code)
+	}
+
+	out, _, code := runCronNoStdin(t, context.Background(), "-l")
+	if code != 0 {
+		t.Fatalf("list: code=%d", code)
+	}
+	if out != cronContent {
+		t.Errorf("command internal whitespace not preserved:\ninstalled: %q\nlisted:    %q", cronContent, out)
+	}
+}
+
 func TestCrontabStdinReplace(t *testing.T) {
 	setupCronState(t)
 	cronContent := "0 9 * * * echo from stdin\n"
