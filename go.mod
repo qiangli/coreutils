@@ -63,7 +63,7 @@ require (
 replace mvdan.cc/sh/v3 => ../sh
 
 // Fork pin adds POSIX awk float formats, injectable EREs, and interval normalization.
-replace github.com/benhoyt/goawk => github.com/qiangli/goawk v1.31.1-0.20260810160114-80b9e120d762
+replace github.com/benhoyt/goawk => github.com/qiangli/goawk v1.31.1-0.20260810235709-63c4971fd522
 
 replace github.com/ollama/ollama => ./external/ollama/src
 
