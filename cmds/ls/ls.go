@@ -66,9 +66,9 @@ type options struct {
 	hide, ignore                             []string
 }
 
-// fmtKind is the output format, selected by the last of -l/-1/-C/-x/-m/
-// -g/-o/-n/--format on the command line (POSIX: format options are
-// mutually exclusive and the last one wins).
+// fmtKind is the output format selected by -l/-1/-C/-x/-m/-g/-o/-n or
+// --format. Format options ordinarily replace the preceding format; GNU's
+// documented exception is that -1 cannot replace an active long format.
 type fmtKind int
 
 const (
@@ -176,7 +176,7 @@ func GetFlagSet(name string) *pflag.FlagSet {
 	fs.Bool("si", false, "print human-readable sizes in powers of 1000")
 	fs.BoolP("size", "s", false, "print allocated size of each file, in blocks")
 	fs.BoolP("kibibytes", "k", false, "use 1024-byte blocks for allocated sizes")
-	fs.BoolP("dired", "D", false, "accepted for compatibility")
+	fs.BoolP("dired", "D", false, "produce Emacs dired offsets (not supported)")
 
 	// Short-only options that do not have canonical long options in GNU ls,
 	// but are fully supported via the short flag clusters.
@@ -237,6 +237,7 @@ func run(rc *tool.RunContext, args []string) int {
 	derefCLDir, _ := fs.GetBool("dereference-command-line-symlink-to-dir")
 	timeField, _ := fs.GetString("time")
 	fullTime, _ := fs.GetBool("full-time")
+	dired, _ := fs.GetBool("dired")
 	sizeFlag, _ := fs.GetBool("size")
 	format, _ := fs.GetString("format")
 	sortMode, _ := fs.GetString("sort")
@@ -305,6 +306,18 @@ func run(rc *tool.RunContext, args []string) int {
 	if classify != "" && classify != "always" && classify != "auto" && classify != "never" {
 		return tool.UsageError(rc, cmd, "unsupported --classify=%s", classify)
 	}
+	if dired {
+		if zero {
+			return tool.UsageError(rc, cmd, "options --dired and --zero are incompatible")
+		}
+		return tool.NotSupported(rc, cmd, "--dired (-D)")
+	}
+	if opt.indicator == indicatorAuto {
+		// RunContext intentionally has no process-global terminal probe. Until
+		// embedders can provide an invocation-owned stdout capability, auto
+		// classification cannot be implemented without approximation.
+		return tool.NotSupported(rc, cmd, "--classify=auto")
+	}
 	if ignoreBackups {
 		opt.ignore = append(opt.ignore, "*~")
 	}
@@ -313,13 +326,18 @@ func run(rc *tool.RunContext, args []string) int {
 			return tool.UsageError(rc, cmd, "unsupported --format=%s", format)
 		}
 	}
-	// The format is whichever format option came last (GNU/POSIX).
-	if kind, ok := lastFormat(args, format, fs); ok {
+	// Resolve format options in argument order, including GNU's documented
+	// exception that -1 does not cancel an active long format.
+	if kind, ok := lastFormat(args, fs); ok {
 		opt.format = kind
 	}
 	if opt.zero {
-		// GNU: --zero implies one name per line.
-		opt.format = fmtOnePerLine
+		// GNU: --zero implies -1, but -1 has no effect while long format is
+		// active. An explicit --format=single-column is different: it remains
+		// an ordinary format transition and can disable long format.
+		if opt.format != fmtLong {
+			opt.format = fmtOnePerLine
+		}
 	}
 	opt.long = opt.format == fmtLong
 	opt.comma = opt.format == fmtCommas
@@ -640,9 +658,13 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 			blocksW = max(blocksW, len(blkStrs[i]))
 		}
 	}
+	recordEnd := "\n"
+	if opt.zero {
+		recordEnd = "\x00"
+	}
 	printTotal := func() {
 		if withTotal {
-			fmt.Fprintf(out, "total %s\n", scaledSize(blocks*512, opt.blockUnit, opt))
+			fmt.Fprintf(out, "total %s%s", scaledSize(blocks*512, opt.blockUnit, opt), recordEnd)
 		}
 	}
 
@@ -737,7 +759,7 @@ func (l *lister) printBlock(ents []entry, withTotal bool) {
 		if !opt.noGroup {
 			fmt.Fprintf(out, " %-*s", groupW, r.group)
 		}
-		fmt.Fprintf(out, " %*s %s %s\n", sizeW, r.size, r.mtime, r.name)
+		fmt.Fprintf(out, " %*s %s %s%s", sizeW, r.size, r.mtime, r.name, recordEnd)
 	}
 }
 
@@ -1264,11 +1286,11 @@ func shortFormat(ch byte) (fmtKind, bool) {
 // the value's characters as further options.
 const argTakingShorts = "IwT"
 
-// lastFormat returns the format selected by the last format option in
-// args, and whether args contained one at all. formatVal is the parsed
-// --format value (already validated), used when --format is the last
-// format option. Scanning stops at "--".
-func lastFormat(args []string, formatVal string, fs *pflag.FlagSet) (fmtKind, bool) {
+// lastFormat returns the effective format after applying format options in
+// argument order, and whether args contained one at all. All format options
+// replace the active format except -1, which GNU documents as having no effect
+// if long format is active. Scanning stops at "--".
+func lastFormat(args []string, fs *pflag.FlagSet) (fmtKind, bool) {
 	kind, found := fmtOnePerLine, false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -1277,18 +1299,21 @@ func lastFormat(args []string, formatVal string, fs *pflag.FlagSet) (fmtKind, bo
 		}
 		if strings.HasPrefix(a, "--") {
 			name := a[2:]
+			val := ""
 			hasValue := false
 			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				val = name[eq+1:]
 				name = name[:eq]
 				hasValue = true
 			}
 			name = canonicalLongName(fs, name)
 			if flag := fs.Lookup(name); !hasValue && flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
-				i++ // the next argument is this option's value, never an option
+				i++
+				val = args[i] // this option's value, never another option
 			}
 			switch name {
 			case "format":
-				if k, ok := formatWord(formatVal); ok {
+				if k, ok := formatWord(val); ok {
 					kind, found = k, true
 				}
 			case "long":
@@ -1306,7 +1331,11 @@ func lastFormat(args []string, formatVal string, fs *pflag.FlagSet) (fmtKind, bo
 					break
 				}
 				if k, ok := shortFormat(a[j]); ok {
-					kind, found = k, true
+					// Unlike --format=single-column, the -1 shorthand does
+					// not cancel an already-active long format.
+					if a[j] != '1' || kind != fmtLong {
+						kind, found = k, true
+					}
 				}
 			}
 		}
@@ -1323,6 +1352,7 @@ const (
 	indicatorSlash
 	indicatorFileType
 	indicatorClassify
+	indicatorAuto
 )
 
 // lastIndicatorStyle scans args for the last occurrence of any indicator
@@ -1362,8 +1392,10 @@ func lastIndicatorStyle(args []string, fs *pflag.FlagSet) indicatorStyle {
 					style = indicatorClassify
 				}
 			case "classify":
-				if val == "" || val == "always" || val == "auto" {
+				if val == "" || val == "always" {
 					style = indicatorClassify
+				} else if val == "auto" {
+					style = indicatorAuto
 				} else if val == "never" {
 					style = indicatorNone
 				}

@@ -98,13 +98,12 @@ func TestColumnsHonorsColumnsEnv(t *testing.T) {
 	}
 }
 
-// POSIX: the format is chosen by the last format option on the command
-// line, so -1 after -l selects one-entry-per-line.
-func TestFormatLastOneWins(t *testing.T) {
+// GNU documents -1 as ineffective when long format is already active.
+func TestFormatLongTakesPrecedenceOverOne(t *testing.T) {
 	dir := mkNames(t, "a.txt")
 	out, _, code := runToolAt(t, dir, "-l", "-1")
-	if want := "a.txt\n"; code != 0 || out != want {
-		t.Errorf("ls -l -1 = (%q, %d), want (%q, 0)", out, code, want)
+	if code != 0 || !strings.HasPrefix(out, "total ") {
+		t.Errorf("ls -l -1 = (%q, %d), want a long listing", out, code)
 	}
 	out, _, code = runToolAt(t, dir, "-1", "-l")
 	if code != 0 || !strings.HasPrefix(out, "total ") {
@@ -274,27 +273,35 @@ func TestDereferenceDirectoryEntries(t *testing.T) {
 	}
 }
 
-// Table-driven tests for format option ordering between -l and -1 (last-one-wins).
+// GNU documents -1 as the exception to ordinary format-option ordering: it
+// has no effect while long format is active. --format=single-column remains
+// an explicit format transition and does replace long format.
 func TestOrderLongAndOneFormat(t *testing.T) {
 	dir := mkNames(t, "a.txt")
 	for _, tc := range []struct {
 		args     []string
 		wantLong bool
 	}{
-		{[]string{"-l", "-1"}, false},
+		{[]string{"-l", "-1"}, true},
 		{[]string{"-1", "-l"}, true},
-		{[]string{"-l1"}, false},
+		{[]string{"-l1"}, true},
 		{[]string{"-1l"}, true},
-		{[]string{"--long", "-1"}, false},
+		{[]string{"--long", "-1"}, true},
 		{[]string{"-1", "--long"}, true},
 		{[]string{"--format=single-column", "-l"}, true},
 		{[]string{"-l", "--format=single-column"}, false},
-		{[]string{"--format=long", "-1"}, false},
+		{[]string{"--format=long", "-1"}, true},
 		{[]string{"-1", "--format=long"}, true},
-		{[]string{"--full-time", "-1"}, false},
+		{[]string{"--full-time", "-1"}, true},
 		{[]string{"-1", "--full-time"}, true},
 		{[]string{"-l", "--form=single-column"}, false},
 		{[]string{"--form=single-column", "-l"}, true},
+		{[]string{"-l", "-C", "-1"}, false},
+		{[]string{"-C", "-1", "-l"}, true},
+		{[]string{"--format=long", "-1", "--format=single-column"}, false},
+		{[]string{"--format", "single-column", "-1", "--format", "long", "-1"}, true},
+		{[]string{"-l", "--zero"}, true},
+		{[]string{"--zero", "-l"}, true},
 	} {
 		out, _, code := runToolAt(t, dir, tc.args...)
 		if code != 0 {
@@ -318,18 +325,18 @@ func TestFormatScannerDoesNotReadOptionValuesAsOptions(t *testing.T) {
 	}
 }
 
-// Table-driven tests for format option ordering between -n and -1 (last-one-wins).
+// Numeric IDs imply long format too, so the same -1 exception applies.
 func TestOrderNumericAndOneFormat(t *testing.T) {
 	dir := mkNames(t, "a.txt")
 	for _, tc := range []struct {
 		args     []string
 		wantLong bool
 	}{
-		{[]string{"-n", "-1"}, false},
+		{[]string{"-n", "-1"}, true},
 		{[]string{"-1", "-n"}, true},
-		{[]string{"-n1"}, false},
+		{[]string{"-n1"}, true},
 		{[]string{"-1n"}, true},
-		{[]string{"--numeric-uid-gid", "-1"}, false},
+		{[]string{"--numeric-uid-gid", "-1"}, true},
 		{[]string{"-1", "--numeric-uid-gid"}, true},
 		{[]string{"--format=single-column", "-n"}, true},
 		{[]string{"-n", "--format=single-column"}, false},
@@ -347,6 +354,42 @@ func TestOrderNumericAndOneFormat(t *testing.T) {
 		if !tc.wantLong && out != "a.txt\n" {
 			t.Errorf("ls %v = %q, want \"a.txt\\n\"", tc.args, out)
 		}
+	}
+}
+
+func TestUnsupportedDiredAndAutomaticClassifyFailClosed(t *testing.T) {
+	dir := mkNames(t, "a.txt")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--dired"}, "--dired (-D) is not supported"},
+		{[]string{"-D"}, "--dired (-D) is not supported"},
+		{[]string{"--dired", "--zero"}, "options --dired and --zero are incompatible"},
+		{[]string{"--classify=auto"}, "--classify=auto is not supported"},
+	} {
+		out, errb, code := runToolAt(t, dir, tc.args...)
+		if code != 2 || out != "" || !strings.Contains(errb, tc.want) {
+			t.Errorf("ls %v = (%q, %q, %d), want (empty, diagnostic containing %q, 2)", tc.args, out, errb, code, tc.want)
+		}
+	}
+
+	// A later implemented indicator mode supersedes auto, so no terminal
+	// capability is needed and the invocation remains supported.
+	out, errb, code := runToolAt(t, dir, "--classify=auto", "--indicator-style=none")
+	if code != 0 || errb != "" || out != "a.txt\n" {
+		t.Errorf("ls --classify=auto --indicator-style=none = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestZeroPreservesLongFormatAndTerminatesLongRecords(t *testing.T) {
+	dir := mkNames(t, "a.txt")
+	out, errb, code := runToolAt(t, dir, "-l", "--zero")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls -l --zero = (%q, %q, %d)", out, errb, code)
+	}
+	if !strings.HasPrefix(out, "total ") || strings.Contains(out, "\n") || strings.Count(out, "\x00") != 2 {
+		t.Errorf("ls -l --zero = %q, want long total and entry records terminated by NUL", out)
 	}
 }
 
