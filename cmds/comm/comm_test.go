@@ -267,12 +267,13 @@ func TestCommHelpAndVersion(t *testing.T) {
 }
 
 type fakeCollator struct {
-	compare func(string, string) (int, error)
-	closed  bool
+	compare  func(string, string) (int, error)
+	closed   bool
+	closeErr error
 }
 
 func (f *fakeCollator) Compare(a, b string) (int, error) { return f.compare(a, b) }
-func (f *fakeCollator) Close() error                     { f.closed = true; return nil }
+func (f *fakeCollator) Close() error                     { f.closed = true; return f.closeErr }
 
 func TestCommUsesInvocationCollatorForMergeAndOrderChecks(t *testing.T) {
 	dir := t.TempDir()
@@ -333,6 +334,26 @@ func TestCommComparisonFailureIsDiagnosedAndCloses(t *testing.T) {
 	code := runWithCollator(rc, []string{"f1", "f2"}, func(string) (stringCollator, error) { return f, nil })
 	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "compare broke") || !f.closed {
 		t.Fatalf("compare failure = (%q, %q, %d, closed=%v)", out.String(), errb.String(), code, f.closed)
+	}
+}
+
+func TestCommCloseFailureChangesSuccessfulStatus(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"f1", "f2"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("a\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, errb bytes.Buffer
+	closeErr := errors.New("close broke")
+	f := &fakeCollator{
+		compare:  func(a, b string) (int, error) { return strings.Compare(a, b), nil },
+		closeErr: closeErr,
+	}
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_COLLATE=de_DE.iso88591"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	code := runWithCollator(rc, []string{"f1", "f2"}, func(string) (stringCollator, error) { return f, nil })
+	if code != 1 || out.String() != "\t\ta\n" || !strings.Contains(errb.String(), closeErr.Error()) || !f.closed {
+		t.Fatalf("close failure = (%q, %q, %d, closed=%v)", out.String(), errb.String(), code, f.closed)
 	}
 }
 

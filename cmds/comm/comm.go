@@ -56,7 +56,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 // runWithCollator keeps locale state invocation-owned and gives tests a
 // deterministic provider seam. C and POSIX retain their bytewise fast path.
-func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOpener) int {
+func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOpener) (status int) {
 	// GNU comm's -1 -2 -3 have no long forms; pre-parse them manually
 	// (clusters like -12 included) and hand everything else to the
 	// framework parser.
@@ -124,7 +124,14 @@ func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOp
 			fmt.Fprintf(rc.Err, "comm: LC_COLLATE=%s: %v\n", name, err)
 			return 2
 		}
-		defer provider.Close()
+		defer func() {
+			if err := provider.Close(); err != nil {
+				fmt.Fprintf(rc.Err, "comm: LC_COLLATE=%s: %v\n", name, err)
+				if status == 0 {
+					status = 1
+				}
+			}
+		}()
 		compare = provider.Compare
 	}
 
