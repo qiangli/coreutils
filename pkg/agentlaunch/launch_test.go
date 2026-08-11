@@ -52,6 +52,7 @@ func TestResolveAgGeminiVariantsUsesRegistryIDsWithoutEffortFlag(t *testing.T) {
 	}{
 		{"agy-gemini3.5-flash-low", "gemini-3.5-flash-low"},
 		{"agy-gemini3.5-flash", "gemini-3.5-flash-high"},
+		{"agy-gemini3.1", "gemini-3.1-pro-high"},
 	} {
 		l, err := ResolveWithCatalog(tc.name, Options{}, NewCatalog)
 		if err != nil {

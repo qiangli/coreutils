@@ -41,7 +41,11 @@ cli:
     exec: agy --dangerously-skip-permissions --print-timeout 40m --model {model} -p {prompt}
     # AGY otherwise may retain/select a different project despite the process
     # cwd. Bind the allocated clone explicitly, before model/prompt argv.
-    workspace_arg: --add-dir {workspace}
+    # --add-dir makes the allocated clone visible, but does not select it:
+    # agy can otherwise resume its remembered Antigravity project (often the
+    # user's scratch checkout). --new-project is deliberately paired with it
+    # so every governed worker starts a fresh project rooted at this workspace.
+    workspace_arg: --new-project --add-dir {workspace}
     # Plan mode is the read-only, fail-closed check run before the worker prompt.
     # The generic launcher supplies a prompt requiring exactly PWD=<path> and
     # weave compares that reported path to the allocated clone.

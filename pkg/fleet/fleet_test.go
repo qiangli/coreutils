@@ -162,8 +162,12 @@ func TestBaselineAGYDeclaresWorkspaceBinding(t *testing.T) {
 	}
 	argv := agy.ArgvWithWorkspace("/tmp/weave-work", "Gemini", "task")
 	got := strings.Join(argv, " ")
-	if !strings.Contains(got, "agy --add-dir /tmp/weave-work --dangerously-skip-permissions") {
-		t.Fatalf("agy workspace binding missing or misplaced: %q", got)
+	want := "agy --new-project --add-dir /tmp/weave-work --dangerously-skip-permissions --print-timeout 40m --model Gemini -p task"
+	if got != want {
+		t.Fatalf("agy workspace argv = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "--project") {
+		t.Fatalf("agy launch must not reuse a remembered project: %q", got)
 	}
 	if _, ok := agy.WorkspacePreflightArgv("/tmp/weave-work", "Gemini", "report"); !ok {
 		t.Fatal("agy must declare a fail-closed workspace preflight")
