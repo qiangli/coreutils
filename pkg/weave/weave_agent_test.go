@@ -117,6 +117,33 @@ func TestExpandAgentByAlias(t *testing.T) {
 	}
 }
 
+// A registered nickname never silently changes meaning from "agent" to
+// "executable" just because weave flags were placed after `--`. This exact
+// typo used to hydrate a full workspace and then fail with exec status 127.
+func TestExpandAgentRejectsArgumentsAfterNickname(t *testing.T) {
+	root := t.TempDir()
+	cat := fleet.New(fleet.WithRoot(root))
+	if err := cat.SaveAgent(fleet.Agent{
+		Name: "worker", Nick: "Zephyr", Tool: "opencode", Model: "kimi-k2.7-code",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prev := fleetCatalog
+	fleetCatalog = func() *fleet.Catalog { return fleet.New(fleet.WithRoot(root)) }
+	t.Cleanup(func() { fleetCatalog = prev })
+
+	l, argv, err := weaveExpandAgent([]string{"Zephyr", "--json", "--quiet"}, "body", "title")
+	if err == nil || !strings.Contains(err.Error(), "registered agent") || !strings.Contains(err.Error(), "before `--`") {
+		t.Fatalf("launch=%+v argv=%q err=%v", l, argv, err)
+	}
+	if l != nil || argv != nil {
+		t.Fatalf("rejected launch leaked executable state: launch=%+v argv=%q", l, argv)
+	}
+	if l, argv, err := weaveExpandAgent([]string{"sh", "-c", "true"}, "body", "title"); err != nil || l != nil || argv != nil {
+		t.Fatalf("raw executable argv changed: launch=%+v argv=%q err=%v", l, argv, err)
+	}
+}
+
 func TestExpandAGYCarriesGenericWorkspacePlaceholder(t *testing.T) {
 	pinAgentFleet(t)
 	l, argv, err := weaveExpandAgent([]string{"agy:gemini3.1"}, "body", "title")

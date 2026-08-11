@@ -27,10 +27,11 @@ import (
 //	weave start --issue 3 -- 007
 //	  → claude --dangerously-skip-permissions --model fable "<issue body>"
 //
-// Everything else is left alone. A multi-token argv is the conductor speaking
-// deliberately, and a bare tool name (`-- claude`) keeps its current meaning —
-// a raw launch, interactive under a PTY — because changing what that spawns
-// would silently rewrite every conductor script that relies on it.
+// A multi-token argv beginning with a raw executable is the conductor speaking
+// deliberately and is left alone. A multi-token argv beginning with a
+// REGISTERED AGENT is rejected: silently changing the same name from an agent
+// into a binary is both surprising and guaranteed to fail for ordinary human
+// nicknames. Weave flags belong before `--`.
 
 // weaveAgentLaunch is the shared agent launch resolved from the fleet registry.
 type weaveAgentLaunch = agentlaunch.Launch
@@ -148,8 +149,20 @@ func weaveVerifyReportedWorkspace(report, workspace string) error {
 // issue with no body falls back to its title rather than handing the tool an
 // empty argument, which most agent CLIs read as "no task" and stall on.
 func weaveExpandAgent(toolArgs []string, body, title string) (*weaveAgentLaunch, []string, error) {
+	if len(toolArgs) == 0 {
+		return nil, nil, nil
+	}
 	if len(toolArgs) != 1 {
-		return nil, nil, nil // the conductor wrote the argv; honor it
+		l, err := weaveResolveAgent(toolArgs[0])
+		if err != nil {
+			return nil, nil, err
+		}
+		if l != nil {
+			return nil, nil, fmt.Errorf(
+				"%q is a registered agent, but extra arguments after it disable agent expansion; put weave flags before `--` (for example `weave start --json --quiet -- %s`), or name a raw executable after `--`",
+				toolArgs[0], toolArgs[0])
+		}
+		return nil, nil, nil // the conductor wrote a raw executable argv; honor it
 	}
 	l, err := weaveResolveAgent(toolArgs[0])
 	if err != nil || l == nil {

@@ -47,6 +47,61 @@ func TestWeaveStartPinsDetachedSourceHEAD(t *testing.T) {
 	}
 }
 
+func TestWeaveResumeReassignsOwnerAndLaunchTogether(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	pinAgentFleet(t)
+	if _, code := runWeave(t, "add", "reassignment", "--body", "body", "--json"); code != 0 {
+		t.Fatal("weave add failed")
+	}
+	if out, code := runWeave(t, "start", "--run", "1", "--no-spawn", "--tool", "smarty", "--json"); code != 0 {
+		t.Fatalf("initial start failed (exit %d): %s", code, out)
+	}
+	if out, code := runWeave(t, "start", "--run", "1", "--resume", "--no-spawn", "--tool", "agy:gemini3.1", "--json"); code != 0 {
+		t.Fatalf("resume failed (exit %d): %s", code, out)
+	}
+	dir, _ := weaveQueueDir(root)
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := findWeaveItem(q, 1)
+	if it.Owner != "agy-gemini3.1-a" || it.Tool != "" {
+		// --no-spawn deliberately clears Tool after allocation; ownership and
+		// the durable launch spec still describe who the resume selected.
+		t.Fatalf("resumed item owner/tool = %q/%q", it.Owner, it.Tool)
+	}
+	if it.LaunchSpec == nil || it.LaunchSpec.Agent != "agy-gemini3.1" || it.LaunchSpec.Tool != "agy" {
+		t.Fatalf("resumed launch spec = %+v", it.LaunchSpec)
+	}
+	last := it.Comments[len(it.Comments)-1].Body
+	if last != "reassigned 007-a → agy-gemini3.1-a" {
+		t.Fatalf("last assignment comment = %q", last)
+	}
+}
+
+func TestWeaveStartRejectsFlagsAfterAgentBeforeProvisioning(t *testing.T) {
+	root := setupIsolationFixture(t)
+	t.Chdir(root)
+	pinAgentFleet(t)
+	if _, code := runWeave(t, "add", "bad flag placement", "--body", "body", "--json"); code != 0 {
+		t.Fatal("weave add failed")
+	}
+	out, code := runWeave(t, "start", "--run", "1", "--", "smarty", "--json", "--quiet")
+	if code == 0 || !strings.Contains(out, "registered agent") || !strings.Contains(out, "before `--`") {
+		t.Fatalf("misplaced agent flags exit=%d output=%q", code, out)
+	}
+	dir, _ := weaveQueueDir(root)
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := findWeaveItem(q, 1)
+	if it.State != "todo" || it.Workspace != "" || it.Owner != "" || it.LaunchSpec != nil {
+		t.Fatalf("rejected launch provisioned or attributed work: %+v", it)
+	}
+}
+
 // Provisioning happens before an agent exists to report trouble. Its failure
 // must therefore become durable queue state rather than returning to a silent
 // todo item that looks like no worker was ever launched.

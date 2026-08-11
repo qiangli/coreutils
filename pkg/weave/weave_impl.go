@@ -3127,6 +3127,7 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 				return fmt.Errorf("run #%d already has a live wrapper (pid %d); run `bashy weave kill --issue %d` first: %w",
 					it.ID, freshIt.WrapperPid, it.ID, errWeaveWrapperLive)
 			}
+			prevOwner := freshIt.Owner
 			freshIt.WrapperPid = os.Getpid()
 			// Flip back to working and clear the stale terminal
 			// record — otherwise `weave list` shows failed while an
@@ -3145,7 +3146,19 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 			freshIt.CtlSock = ctlSock
 			if len(toolArgs) > 0 {
 				freshIt.Tool = displayTool
+				// A resume may deliberately reassign the preserved workspace to a
+				// different agent. The live owner and launch spec must change
+				// atomically or list/status attribute the new process to the dead
+				// worker's seat.
+				freshIt.Owner = weaveAgentName(ownerBase, freshIt.ID)
 				freshIt.LaunchSpec = launchSpec
+			}
+			if prevOwner == "" && freshIt.Owner != "" {
+				weaveAppendComment(freshIt, "conductor", "system",
+					fmt.Sprintf("assigned to %s", freshIt.Owner))
+			} else if prevOwner != "" && prevOwner != freshIt.Owner {
+				weaveAppendComment(freshIt, "conductor", "system",
+					fmt.Sprintf("reassigned %s → %s", prevOwner, freshIt.Owner))
 			}
 			it = freshIt
 			return nil
