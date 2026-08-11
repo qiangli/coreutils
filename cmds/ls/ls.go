@@ -290,8 +290,8 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	// -q / --hide-control-chars vs --show-control-chars: last one wins.
 	if short['q'] > 0 || hideControlFlag || showControl {
-		opt.hideControl = lastFlag(args, 'q', "hide-control-chars") >
-			lastFlag(args, 0, "show-control-chars")
+		opt.hideControl = lastFlag(args, fs, 'q', "hide-control-chars") >
+			lastFlag(args, fs, 0, "show-control-chars")
 	}
 	if short['o'] > 0 {
 		opt.noGroup = true
@@ -428,7 +428,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	// -c, -u, and --time=WORD all set the same timestamp selector; the
 	// last occurrence wins (GNU).
-	switch lastTimeSelector(args) {
+	switch lastTimeSelector(args, fs) {
 	case 'c':
 		opt.timeSel = selCtime
 	case 'u':
@@ -453,7 +453,7 @@ func run(rc *tool.RunContext, args []string) int {
 	// GNU last-one-wins pairs: -a vs -A and -t vs -S each set a single
 	// internal mode, so the later occurrence wins.
 	if opt.all && opt.almostAll {
-		if lastFlag(args, 'a', "all") >= lastFlag(args, 'A', "almost-all") {
+		if lastFlag(args, fs, 'a', "all") >= lastFlag(args, fs, 'A', "almost-all") {
 			opt.almostAll = false
 		} else {
 			opt.all = false
@@ -1485,18 +1485,37 @@ func lineWidth(rc *tool.RunContext, fs *pflag.FlagSet) int {
 // returning 'c', 'u', 'T' (--time), or 0 when none is present;
 // scanning stops at the "--" terminator. Only which selector came last
 // matters: multiple --time values already resolve last-wins in pflag.
-func lastTimeSelector(args []string) byte {
+// Option arguments are data, never selectors: a long option's separate
+// value is skipped, and a short-cluster scan stops at an
+// argument-taking option, whose attached text is its value.
+func lastTimeSelector(args []string, fs *pflag.FlagSet) byte {
 	var kind byte
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if a == "--" {
 			break
 		}
-		if a == "--time" || strings.HasPrefix(a, "--time=") {
-			kind = 'T'
+		if strings.HasPrefix(a, "--") {
+			name := a[2:]
+			hasValue := false
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				name = name[:eq]
+				hasValue = true
+			}
+			name = canonicalLongName(fs, name)
+			if name == "time" {
+				kind = 'T'
+			}
+			if flag := fs.Lookup(name); !hasValue && flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
+				i++ // this option's value, never another option
+			}
 			continue
 		}
-		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
+		if len(a) > 1 && a[0] == '-' {
 			for j := 1; j < len(a); j++ {
+				if strings.IndexByte(argTakingShorts, a[j]) >= 0 {
+					break
+				}
 				if a[j] == 'c' || a[j] == 'u' {
 					kind = a[j]
 				}
@@ -1508,17 +1527,31 @@ func lastTimeSelector(args []string) byte {
 
 // lastFlag returns the position (1-based, 0 = absent) of the last
 // occurrence of short flag ch or --long among args, scanning GNU-style
-// clusters; parsing stops at "--".
-func lastFlag(args []string, ch byte, long string) int {
+// clusters; parsing stops at "--". Option arguments are data, never
+// flags: a long option's separate value is skipped, and a short-cluster
+// scan stops at an argument-taking option, whose attached text is its
+// value.
+func lastFlag(args []string, fs *pflag.FlagSet, ch byte, long string) int {
 	pos, n := 0, 0
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if a == "--" {
 			break
 		}
 		if strings.HasPrefix(a, "--") {
 			n++
+			name := a[2:]
+			hasValue := false
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				name = name[:eq]
+				hasValue = true
+			}
 			if a[2:] == long {
 				pos = n
+			}
+			if flag := fs.Lookup(canonicalLongName(fs, name)); !hasValue && flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
+				i++
+				n++ // the skipped value keeps positions comparable
 			}
 			continue
 		}
@@ -1527,6 +1560,9 @@ func lastFlag(args []string, ch byte, long string) int {
 				n++
 				if a[j] == ch {
 					pos = n
+				}
+				if strings.IndexByte(argTakingShorts, a[j]) >= 0 {
+					break
 				}
 			}
 			continue

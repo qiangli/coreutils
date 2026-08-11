@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiangli/coreutils/tool"
 )
@@ -469,6 +470,55 @@ func TestOrderIndicatorClassifyAndSlash(t *testing.T) {
 		// Verify regular file indicator is always without suffix
 		if !containsLine(lines, "file.txt") {
 			t.Errorf("ls %v: missing regular file entry %q in %v", tc.args, "file.txt", lines)
+		}
+	}
+}
+
+// The -c/-u/--time pre-scan must not read option arguments as selectors:
+// an attached -I value or a separate --ignore value is data, never flags
+// (GNU getopt: -I and --ignore take a required argument).
+func TestTimeSelectorIgnoresOptionValues(t *testing.T) {
+	dir := t.TempDir()
+	p := write(t, dir, "a.txt", "")
+	atime := time.Date(2002, 3, 4, 5, 6, 7, 0, time.Local)
+	mtime := time.Date(2001, 2, 3, 4, 5, 6, 0, time.Local)
+	if err := os.Chtimes(p, atime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	mtimeOut, _, code := runToolAt(t, dir, "-l", "--time-style=long-iso")
+	if code != 0 || !strings.Contains(mtimeOut, "2001-02-03 04:05") {
+		t.Fatalf("ls -l --time-style=long-iso = (%q, %d), want the mtime", mtimeOut, code)
+	}
+	for _, args := range [][]string{
+		{"-l", "--time-style=long-iso", "-Ic"},            // attached value "c"
+		{"-l", "--time-style=long-iso", "-Iu"},            // attached value "u"
+		{"-l", "--time-style=long-iso", "--ignore", "-c"}, // separate value
+		{"-l", "--time-style=long-iso", "--ignore", "-u"},
+	} {
+		out, errb, code := runToolAt(t, dir, args...)
+		if code != 0 || errb != "" || out != mtimeOut {
+			t.Errorf("ls %v = (%q, %q, %d), want the mtime listing %q", args, out, errb, code, mtimeOut)
+		}
+	}
+	// Control: a real -u after the pattern still selects the access time.
+	if out, _, _ := runToolAt(t, dir, "-l", "--time-style=long-iso", "-Ic", "-u"); !strings.Contains(out, "2002-03-04 05:06") {
+		t.Errorf("ls -l -Ic -u = %q, want the 2002-03-04 access time", out)
+	}
+}
+
+// The -a/-A last-one-wins pre-scan must not read an -I value as a flag.
+func TestAllAlmostAllIgnoresIgnorePatternValues(t *testing.T) {
+	dir := mkNames(t, "a.txt")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-a", "-A", "-Ia"}, "a.txt\n"},        // -A is the last real flag
+		{[]string{"-A", "-a", "-IA"}, ".\n..\na.txt\n"}, // -a is the last real flag
+	} {
+		out, errb, code := runToolAt(t, dir, tc.args...)
+		if code != 0 || errb != "" || out != tc.want {
+			t.Errorf("ls %v = (%q, %q, %d), want (%q, empty, 0)", tc.args, out, errb, code, tc.want)
 		}
 	}
 }
