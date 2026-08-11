@@ -32,9 +32,6 @@ func (s *substitute) run(svm *vm) (err error) {
 	if err != nil {
 		return err
 	}
-	svm.lastRE = pattern
-	svm.ip++
-
 	// filter to the matches we want to replace
 	var end int = len(matches)
 	if s.which < end {
@@ -43,12 +40,20 @@ func (s *substitute) run(svm *vm) (err error) {
 		}
 	} else {
 		// the matches we want weren't found
+		svm.lastRE = pattern
+		svm.ip++
 		return
 	}
 	matches = matches[s.which:end]
 
 	// perform the replacement
-	svm.pat = subst_replaceAll(svm.pat, pattern, s.replacement, matches)
+	replaced, err := subst_replaceAll(svm.pat, pattern, s.replacement, matches)
+	if err != nil {
+		return err
+	}
+	svm.lastRE = pattern
+	svm.ip++
+	svm.pat = replaced
 	svm.modified = true
 
 	// print if requested
@@ -63,17 +68,21 @@ func (s *substitute) run(svm *vm) (err error) {
 	return
 }
 
-func subst_replaceAll(src string, pattern sedRegexp, replacement string, indexes [][]int) string {
+func subst_replaceAll(src string, pattern sedRegexp, replacement string, indexes [][]int) (string, error) {
 	var substrings []string
 	endpt := 0 // where we left off in the src string
 	for _, idx := range indexes {
-		exp := string(pattern.ExpandString(nil, replacement, src, idx))
+		expanded, err := pattern.ExpandString(nil, replacement, src, idx)
+		if err != nil {
+			return "", err
+		}
+		exp := string(expanded)
 		substrings = append(substrings, src[endpt:idx[0]], exp)
 		endpt = idx[1]
 	}
 	substrings = append(substrings, src[endpt:])
 
-	return strings.Join(substrings, "")
+	return strings.Join(substrings, ""), nil
 }
 
 func newSubstitution(opts Options, pattern string, replacement string, mods string, wfile string, last string, writeFile WriteFileFunc) (instruction, error) {

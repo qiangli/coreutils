@@ -25,9 +25,9 @@ type Options struct {
 type sedRegexp interface {
 	MatchString(string) (bool, error)
 	FindAllStringSubmatchIndex(string, int) ([][]int, error)
-	ExpandString([]byte, string, string, []int) []byte
+	ExpandString([]byte, string, string, []int) ([]byte, error)
 	FindAllSubmatchIndex([]byte, int) ([][]int, error)
-	Expand([]byte, []byte, []byte, []int) []byte
+	Expand([]byte, []byte, []byte, []int) ([]byte, error)
 }
 
 // legacyRegexp adapts pkg/bre's current infallible matching API to sed's
@@ -47,6 +47,14 @@ func (r legacyRegexp) FindAllStringSubmatchIndex(s string, n int) ([][]int, erro
 
 func (r legacyRegexp) FindAllSubmatchIndex(s []byte, n int) ([][]int, error) {
 	return r.Regexp.FindAllSubmatchIndex(s, n), nil
+}
+
+func (r legacyRegexp) ExpandString(dst []byte, template, src string, match []int) ([]byte, error) {
+	return r.Regexp.ExpandString(dst, template, src, match), nil
+}
+
+func (r legacyRegexp) Expand(dst, template, src []byte, match []int) ([]byte, error) {
+	return r.Regexp.Expand(dst, template, src, match), nil
 }
 
 // compileRE compiles a GNU sed regex (BRE by default, ERE under opts.ExtendedRegex).

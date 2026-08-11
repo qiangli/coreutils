@@ -320,7 +320,7 @@ type simpleSubstitution struct {
 
 type simplePattern interface {
 	FindAllSubmatchIndex([]byte, int) ([][]int, error)
-	Expand([]byte, []byte, []byte, []int) []byte
+	Expand([]byte, []byte, []byte, []int) ([]byte, error)
 }
 
 func parseSimpleSubstitution(program string, opts gosed.Options) (*simpleSubstitution, bool, error) {
@@ -477,13 +477,20 @@ func applySimpleSubstitutionLine(dst []byte, subst *simpleSubstitution, line []b
 		return append(dst, line...), nil
 	}
 
+	// Build separately from dst so an expansion failure cannot mutate even the
+	// caller's backing array before the error is returned.
+	replaced := make([]byte, 0, len(line))
 	end := 0
 	for _, match := range matches {
-		dst = append(dst, line[end:match[0]]...)
-		dst = subst.pattern.Expand(dst, subst.replacement, line, match)
+		replaced = append(replaced, line[end:match[0]]...)
+		replaced, err = subst.pattern.Expand(replaced, subst.replacement, line, match)
+		if err != nil {
+			return dst, err
+		}
 		end = match[1]
 	}
-	return append(dst, line[end:]...), nil
+	replaced = append(replaced, line[end:]...)
+	return append(dst, replaced...), nil
 }
 
 func editInPlace(rc *tool.RunContext, program string, quiet bool, opts gosed.Options, file, suffix string) error {

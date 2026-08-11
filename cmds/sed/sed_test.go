@@ -19,8 +19,17 @@ type errorSimplePattern struct{ err error }
 func (p errorSimplePattern) FindAllSubmatchIndex([]byte, int) ([][]int, error) {
 	return nil, p.err
 }
-func (errorSimplePattern) Expand([]byte, []byte, []byte, []int) []byte {
+func (errorSimplePattern) Expand([]byte, []byte, []byte, []int) ([]byte, error) {
 	panic("Expand called after matcher error")
+}
+
+type expansionErrorSimplePattern struct{ err error }
+
+func (expansionErrorSimplePattern) FindAllSubmatchIndex(s []byte, _ int) ([][]int, error) {
+	return [][]int{{0, len(s)}}, nil
+}
+func (p expansionErrorSimplePattern) Expand(dst, _ []byte, _ []byte, _ []int) ([]byte, error) {
+	return append(dst, "partial"...), p.err
 }
 
 func runSed(t *testing.T, in string, args ...string) (out, errOut string, code int) {
@@ -63,6 +72,28 @@ func TestSedBasicSubstitution(t *testing.T) {
 		}
 		if out.Len() != 0 {
 			t.Fatalf("stream wrote %q after matcher error", out.String())
+		}
+	})
+
+	t.Run("fast expansion error", func(t *testing.T) {
+		wantErr := errors.New("expansion failed")
+		subst := &simpleSubstitution{pattern: expansionErrorSimplePattern{err: wantErr}, replacement: []byte("x")}
+		backing := make([]byte, len("guard"), 64)
+		copy(backing, "guard")
+		got, err := applySimpleSubstitutionLine(backing, subst, []byte("subject"))
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("error = %v, want %v", err, wantErr)
+		}
+		if string(got) != "guard" || string(backing) != "guard" {
+			t.Fatalf("destination changed on expansion error: got=%q backing=%q", got, backing)
+		}
+
+		var out bytes.Buffer
+		if err := applySimpleSubstitution(subst, strings.NewReader("subject\n"), &out); !errors.Is(err, wantErr) {
+			t.Fatalf("stream error = %v, want %v", err, wantErr)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("stream wrote %q after expansion error", out.String())
 		}
 	})
 }
