@@ -4989,13 +4989,6 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			weavecli.ExitPrecondFail, err))
 	}
 	dir, _ := weaveQueueDir(root)
-	// Same contract as `weave list`: asking about a run reaps it. A status
-	// that reported "working" for a run whose wrapper died hours ago was the
-	// most convincing version of the limbo.
-	if _, err := weaveReapQueue(dir, root, weaveBaseBranch(root)); err != nil {
-		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
-			weavecli.ExitGenericFail, err))
-	}
 	q, err := readWeaveQueue(dir)
 	if err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
@@ -5005,6 +4998,26 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	if it == nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
 			weavecli.ExitInvalidArg, fmt.Errorf("run #%d not found%s", id, weaveOtherActiveQueuesHintSuffix(dir))))
+	}
+	// Classify the original evidence first. The established status contract then
+	// runs the opportunistic reaper so dead workers stop consuming capacity, but
+	// the first response still tells the operator that the cause was stale /
+	// wedged rather than presenting the repaired terminal state as healthy.
+	healthNow := time.Now().UTC()
+	rawHealth := weaveClassifyHealth(weaveHealthSnapshotFor(it, defaultWeaveHealthProbe(healthNow)), it, healthNow)
+	if _, err := weaveReapQueue(dir, root, weaveBaseBranch(root)); err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
+			weavecli.ExitGenericFail, err))
+	}
+	q, err = readWeaveQueue(dir)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
+			weavecli.ExitGenericFail, err))
+	}
+	it = findWeaveItem(q, id)
+	if it == nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave status",
+			weavecli.ExitInvalidArg, fmt.Errorf("run #%d disappeared from status view", id)))
 	}
 	base := weaveBaseBranch(root)
 	merged := weaveItemMerged(root, base, it)
@@ -5019,6 +5032,14 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		reconciledFrom = "submitted"
 	}
 	stale := it.State == "working" && it.WrapperPid > 0 && !pidAlive(it.WrapperPid)
+	healthSnapshot := weaveHealthSnapshotFor(it, defaultWeaveHealthProbe(healthNow))
+	health := weaveClassifyHealth(healthSnapshot, it, healthNow)
+	// Keep the original stale/wedged evidence as the health verdict so status
+	// tells the operator what actually happened, not merely what the reaper
+	// repaired it to.
+	if rawHealth.Health == weaveHealthStale || rawHealth.Health == weaveHealthWedged {
+		health = rawHealth
+	}
 	// Read-time isolation check, like stale/blocked: nothing is persisted
 	// here (status loads without the lock), but a run that escaped WHILE
 	// still running should say so now, not only once it terminates.
@@ -5050,6 +5071,10 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 			"stale":              stale,
 			"dirty":              it.Dirty,
 			"isolation_violated": it.IsolationViolated,
+			"health":             health.Health,
+			"health_reason":      health.Reason,
+			"health_next_action": health.Next,
+			"health_snapshot":    health.Snapshot,
 		}
 		if len(it.OutsideWorkspacePaths) > 0 {
 			res["outside_workspace_paths"] = it.OutsideWorkspacePaths
@@ -5105,6 +5130,8 @@ func runWeaveStatus(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 		stateLine += " (stale — wrapper pid dead)"
 	}
 	fmt.Fprintf(w, "  state:    %s\n", stateLine)
+	fmt.Fprintf(w, "  health:   %s — %s\n", health.Health, health.Reason)
+	fmt.Fprintf(w, "  action:   %s\n", health.Next)
 	if !weaveIsClosedState(it.State) {
 		fmt.Fprintf(w, "  next:     %s\n", weaveNextSteps(it))
 	}
