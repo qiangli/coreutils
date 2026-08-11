@@ -48,9 +48,17 @@ type LocaleByteRegexp struct {
 	pattern *localeBytePattern
 }
 
-// CompileLocaleByteRegexp snapshots all twelve CType classes and the complete
-// 256-byte lowercase table before compiling. It does not retain provider.
-func CompileLocaleByteRegexp(pattern []byte, provider ByteCtype, options ByteRegexpOptions) (*LocaleByteRegexp, error) {
+// LocaleByteTables is an immutable, opaque snapshot of all locale byte
+// classifications and lowercase mappings needed by LocaleByteRegexp.
+// A snapshot may be reused concurrently after its provider has been closed.
+type LocaleByteTables struct {
+	tables bytePatternTables
+}
+
+// SnapshotLocaleByteTables reads each of the twelve CType classifications for
+// all 256 bytes and one exact 256-byte lowercase mapping. It retains no
+// reference to provider.
+func SnapshotLocaleByteTables(provider ByteCtype) (*LocaleByteTables, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("locale byte regexp: nil CType provider")
 	}
@@ -58,8 +66,29 @@ func CompileLocaleByteRegexp(pattern []byte, provider ByteCtype, options ByteReg
 	if err != nil {
 		return nil, err
 	}
+	return &LocaleByteTables{tables: tables}, nil
+}
+
+// CompileLocaleByteRegexp snapshots all twelve CType classes and the complete
+// 256-byte lowercase table before compiling. It does not retain provider.
+func CompileLocaleByteRegexp(pattern []byte, provider ByteCtype, options ByteRegexpOptions) (*LocaleByteRegexp, error) {
+	tables, err := SnapshotLocaleByteTables(provider)
+	if err != nil {
+		return nil, err
+	}
+	return CompileLocaleByteRegexpTables(pattern, tables, options)
+}
+
+// CompileLocaleByteRegexpTables compiles against an immutable reusable
+// snapshot. It never calls or retains the CType provider used to create it.
+func CompileLocaleByteRegexpTables(pattern []byte, snapshot *LocaleByteTables, options ByteRegexpOptions) (*LocaleByteRegexp, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("locale byte regexp: nil locale byte tables")
+	}
+	tables := snapshot.tables
 	tables.dotAll = options.DotAll
 	tables.multi = options.MultiLine
+	var err error
 	var compiled *localeBytePattern
 	switch options.Syntax {
 	case ByteRegexpBRE:

@@ -3,8 +3,10 @@ package bre
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"reflect"
 	"regexp"
+	"sync"
 	"testing"
 )
 
@@ -15,6 +17,7 @@ type fakeByteCtype struct {
 	failClass  string
 	failErr    error
 	lower      []byte
+	closed     bool
 }
 
 func newFakeByteCtype() *fakeByteCtype {
@@ -32,6 +35,9 @@ func newFakeByteCtype() *fakeByteCtype {
 
 func (p *fakeByteCtype) classify(name string, value byte) (bool, error) {
 	p.calls[name]++
+	if p.closed {
+		return false, errors.New("provider is closed")
+	}
 	if p.failClass == name {
 		return false, p.failErr
 	}
@@ -52,6 +58,9 @@ func (p *fakeByteCtype) IsUpper(b byte) (bool, error)  { return p.classify("uppe
 func (p *fakeByteCtype) IsXDigit(b byte) (bool, error) { return p.classify("xdigit", b) }
 func (p *fakeByteCtype) ToLower(in []byte) ([]byte, error) {
 	p.lowerCalls++
+	if p.closed {
+		return nil, errors.New("provider is closed")
+	}
 	if p.failClass == "lowercase" {
 		return nil, p.failErr
 	}
@@ -91,21 +100,101 @@ func TestCompileLocaleByteRegexpProviderErrors(t *testing.T) {
 	sentinel := errors.New("provider failed")
 	provider := newFakeByteCtype()
 	provider.failClass, provider.failErr = "graph", sentinel
-	if _, err := CompileLocaleByteRegexp([]byte("a"), provider, ByteRegexpOptions{}); !errors.Is(err, sentinel) {
+	if _, err := SnapshotLocaleByteTables(provider); !errors.Is(err, sentinel) {
 		t.Fatalf("classification error=%v, want sentinel", err)
 	}
 	provider = newFakeByteCtype()
 	provider.failClass, provider.failErr = "lowercase", sentinel
-	if _, err := CompileLocaleByteRegexp([]byte("a"), provider, ByteRegexpOptions{}); !errors.Is(err, sentinel) {
+	if _, err := SnapshotLocaleByteTables(provider); !errors.Is(err, sentinel) {
 		t.Fatalf("ToLower error=%v, want sentinel", err)
 	}
 	provider = newFakeByteCtype()
 	provider.lower = provider.lower[:255]
-	if _, err := CompileLocaleByteRegexp([]byte("a"), provider, ByteRegexpOptions{}); err == nil {
+	if _, err := SnapshotLocaleByteTables(provider); err == nil {
 		t.Fatal("short lowercase table accepted")
 	}
-	if _, err := CompileLocaleByteRegexp([]byte("a"), nil, ByteRegexpOptions{}); err == nil {
+	if _, err := SnapshotLocaleByteTables(nil); err == nil {
 		t.Fatal("nil provider accepted")
+	}
+	if _, err := CompileLocaleByteRegexpTables([]byte("a"), nil, ByteRegexpOptions{}); err == nil {
+		t.Fatal("nil tables accepted")
+	}
+}
+
+func TestLocaleByteTablesReusableAfterProviderClose(t *testing.T) {
+	provider := newFakeByteCtype()
+	tables, err := SnapshotLocaleByteTables(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alpha", "alnum", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"} {
+		if provider.calls[name] != 256 {
+			t.Fatalf("%s calls=%d, want 256", name, provider.calls[name])
+		}
+	}
+	if provider.lowerCalls != 1 {
+		t.Fatalf("ToLower calls=%d, want 1", provider.lowerCalls)
+	}
+	provider.closed = true
+	for i := 0; i < 8; i++ {
+		options := ByteRegexpOptions{Syntax: ByteRegexpBRE, FoldCase: i%2 == 0}
+		pattern := []byte(`^\(A\|b\)\+$`)
+		if i%2 != 0 {
+			options.Syntax = ByteRegexpERE
+			pattern = []byte(`^(a|b)+$`)
+		}
+		re, err := CompileLocaleByteRegexpTables(pattern, tables, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if matched, err := re.MatchString("ab"); err != nil || !matched {
+			t.Fatalf("compile %d matched=%v err=%v", i, matched, err)
+		}
+	}
+	for _, calls := range provider.calls {
+		if calls != 256 {
+			t.Fatal("compile called closed provider classification")
+		}
+	}
+	if provider.lowerCalls != 1 {
+		t.Fatal("compile called closed provider ToLower")
+	}
+}
+
+func TestLocaleByteTablesConcurrentCompileAndMatch(t *testing.T) {
+	tables, err := SnapshotLocaleByteTables(newFakeByteCtype())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for worker := 0; worker < 16; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			options := ByteRegexpOptions{Syntax: ByteRegexpSyntax(worker % 2), FoldCase: true, DotAll: worker%3 == 0, MultiLine: worker%5 == 0}
+			pattern := []byte(`^\(A\|b\)\+$`)
+			if options.Syntax == ByteRegexpERE {
+				pattern = []byte(`^(A|b)+$`)
+			}
+			for iteration := 0; iteration < 10; iteration++ {
+				re, err := CompileLocaleByteRegexpTables(pattern, tables, options)
+				if err != nil {
+					errs <- err
+					return
+				}
+				matched, err := re.MatchString("ab")
+				if err != nil || !matched {
+					errs <- fmt.Errorf("matched=%v: %w", matched, err)
+					return
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
 
