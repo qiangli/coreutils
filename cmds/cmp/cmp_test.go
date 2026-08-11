@@ -199,8 +199,8 @@ func TestCmpBytesLimit(t *testing.T) {
 	}
 	writeFile(t, dir, "short", "same")
 	writeFile(t, dir, "long", "same-long")
-	if _, errb, code := runTool(t, dir, "", "-n", "4", "short", "long"); code != 0 || errb != "" {
-		t.Errorf("limit suppresses EOF: err=%q code=%d", errb, code)
+	if _, errb, code := runTool(t, dir, "", "-n", "4", "short", "long"); code != 1 || !strings.Contains(errb, "EOF on short") {
+		t.Errorf("limit reports EOF: err=%q code=%d", errb, code)
 	}
 	// GNU cmp probes for EOF at the limit; a shorter file is still
 	// reported even when all requested bytes matched.
