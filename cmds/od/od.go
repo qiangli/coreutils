@@ -677,14 +677,23 @@ var multipliers = map[string]int64{
 }
 
 func parseBytes(s string) (int64, error) {
-	i := 0
-	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+	base := 10
+	digitsStart := 0
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		base = 16
+		digitsStart = 2
+	} else if len(s) > 0 && s[0] == '0' {
+		base = 8
+	}
+
+	i := digitsStart
+	for i < len(s) && digitInBase(s[i], base) {
 		i++
 	}
-	if i == 0 {
+	if i == digitsStart {
 		return 0, strconv.ErrSyntax
 	}
-	n, err := strconv.ParseInt(s[:i], 10, 64)
+	n, err := strconv.ParseInt(s[digitsStart:i], base, 64)
 	if err != nil {
 		return 0, err
 	}
@@ -696,4 +705,14 @@ func parseBytes(s string) (int64, error) {
 		return 0, strconv.ErrRange
 	}
 	return n * m, nil
+}
+
+func digitInBase(c byte, base int) bool {
+	if c >= '0' && c <= '9' {
+		return int(c-'0') < base
+	}
+	if base == 16 {
+		return c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+	}
+	return false
 }

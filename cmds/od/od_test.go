@@ -261,6 +261,9 @@ func TestODByteCountLowercaseSuffixes(t *testing.T) {
 		want int64
 	}{
 		{"1", 1},
+		{"010", 8},
+		{"0x10", 16},
+		{"0Xff", 255},
 		{"1b", 512},
 		{"2b", 1024},
 		{"1k", 1024},
@@ -306,6 +309,34 @@ func TestODJSkipWithLowercaseSuffix(t *testing.T) {
 	want := "   b   c\n"
 	if out != want || errb != "" || code != 0 {
 		t.Fatalf("od -j 1k = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestODByteCountRadixPrefixes(t *testing.T) {
+	data := "0123456789abcdefXYZ"
+	for _, tc := range []struct {
+		name string
+		arg  string
+		want string
+	}{
+		{name: "decimal", arg: "10", want: "   a   b   c\n"},
+		{name: "octal", arg: "010", want: "   8   9   a\n"},
+		{name: "hex-lower", arg: "0xa", want: "   a   b   c\n"},
+		{name: "hex-upper", arg: "0X10", want: "   X   Y   Z\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := runOD(t, t.TempDir(), data, "-A", "n", "-t", "c", "-j", tc.arg, "-N", "3")
+			if out != tc.want || errb != "" || code != 0 {
+				t.Fatalf("od -j %s = (%q, %q, %d), want (%q, empty, 0)", tc.arg, out, errb, code, tc.want)
+			}
+		})
+	}
+
+	for _, arg := range []string{"0x", "018", "0xg", "0X-1"} {
+		_, errb, code := runOD(t, t.TempDir(), data, "-j", arg)
+		if code != 2 || !strings.Contains(errb, "invalid skip count") {
+			t.Errorf("od -j %s = (stderr %q, code %d), want invalid skip count/code 2", arg, errb, code)
+		}
 	}
 }
 
