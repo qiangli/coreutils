@@ -42,13 +42,13 @@ func run(rc *tool.RunContext, args []string) int {
 	listFlag := fs.BoolP("list", "l", false, "list the current crontab")
 	editFlag := fs.BoolP("edit", "e", false, "edit the current crontab")
 	removeFlag := fs.BoolP("remove", "r", false, "remove the current crontab")
-	userFlag := fs.StringP("user", "u", "", "user whose crontab to operate on")
+	fs.StringP("user", "u", "", "user whose crontab to operate on")
 
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
-	if *userFlag != "" {
+	if fs.Changed("user") {
 		return tool.NotSupported(rc, cmd, "operating on another user's crontab with -u")
 	}
 	modes := 0

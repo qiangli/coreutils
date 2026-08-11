@@ -262,9 +262,14 @@ func TestCrontabRejectsConflictingModesAndExtraOperands(t *testing.T) {
 
 func TestCrontabUserOptionFailsClosed(t *testing.T) {
 	setupCronState(t)
-	_, errb, code := runCronNoStdin(t, context.Background(), "-u", "someone-else", "-l")
-	if code != 2 || !strings.Contains(errb, "not supported") || !strings.Contains(errb, "-u") {
-		t.Fatalf("crontab -u = (stderr %q, code %d), want fail-closed contract error", errb, code)
+	for _, args := range [][]string{
+		{"-u", "someone-else", "-l"},
+		{"--user=", "-l"},
+	} {
+		_, errb, code := runCronNoStdin(t, context.Background(), args...)
+		if code != 2 || !strings.Contains(errb, "not supported") || !strings.Contains(errb, "-u") {
+			t.Errorf("crontab %q = (stderr %q, code %d), want fail-closed contract error", args, errb, code)
+		}
 	}
 }
 
