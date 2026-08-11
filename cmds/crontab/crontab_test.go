@@ -200,11 +200,15 @@ func TestCrontabReinstallReplaces(t *testing.T) {
 
 func TestCrontabBadLine(t *testing.T) {
 	setupCronState(t)
-	cronContent := "0 9 * * * echo ok\njust three fields\n* * * * * cmd\n"
+	_, _, code := runCron(t, context.Background(), "0 9 * * * echo original\n", "-")
+	if code != 0 {
+		t.Fatalf("seed install: code=%d", code)
+	}
+	cronContent := "0 9 * * * echo replacement\njust three fields\n"
 
 	_, errb, code := runCron(t, context.Background(), cronContent, "-")
-	if code != 0 {
-		t.Fatalf("install with bad line: code=%d", code)
+	if code != 1 {
+		t.Fatalf("install with bad line: code=%d, want 1", code)
 	}
 	if !strings.Contains(errb, "not enough fields") {
 		t.Errorf("expected error about not enough fields, got %q", errb)
@@ -214,8 +218,53 @@ func TestCrontabBadLine(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("list: code=%d", code)
 	}
-	if !strings.Contains(out, "echo ok") {
-		t.Errorf("valid line should be installed, got %q", out)
+	if out != "0 9 * * * echo original\n" {
+		t.Errorf("invalid replacement changed existing table: %q", out)
+	}
+}
+
+func TestCrontabInvalidScheduleIsAtomic(t *testing.T) {
+	setupCronState(t)
+	if _, _, code := runCron(t, context.Background(), "0 9 * * * echo original\n", "-"); code != 0 {
+		t.Fatalf("seed install: code=%d", code)
+	}
+	_, errb, code := runCron(t, context.Background(), "not-a-minute * * * * echo bad\n", "-")
+	if code != 1 || !strings.Contains(errb, "cannot compute next run") {
+		t.Fatalf("invalid schedule = (stderr %q, code %d), want diagnostic and 1", errb, code)
+	}
+	out, _, code := runCronNoStdin(t, context.Background(), "-l")
+	if code != 0 || out != "0 9 * * * echo original\n" {
+		t.Fatalf("invalid schedule changed table: out=%q code=%d", out, code)
+	}
+}
+
+func TestCrontabRejectsConflictingModesAndExtraOperands(t *testing.T) {
+	setupCronState(t)
+	for _, tc := range []struct {
+		stdin string
+		args  []string
+	}{
+		{args: []string{"-l", "-r"}},
+		{args: []string{"-l", "file"}},
+		{args: []string{"-r", "file"}},
+		{stdin: "0 9 * * * echo must-not-install\n", args: []string{"-", "extra"}},
+	} {
+		_, errb, code := runCron(t, context.Background(), tc.stdin, tc.args...)
+		if code != 2 || errb == "" {
+			t.Errorf("crontab %q = (stderr %q, code %d), want usage error", tc.args, errb, code)
+		}
+	}
+	out, _, code := runCronNoStdin(t, context.Background(), "-l")
+	if code != 0 || out != "" {
+		t.Fatalf("invalid invocation changed table: out=%q code=%d", out, code)
+	}
+}
+
+func TestCrontabUserOptionFailsClosed(t *testing.T) {
+	setupCronState(t)
+	_, errb, code := runCronNoStdin(t, context.Background(), "-u", "someone-else", "-l")
+	if code != 2 || !strings.Contains(errb, "not supported") || !strings.Contains(errb, "-u") {
+		t.Fatalf("crontab -u = (stderr %q, code %d), want fail-closed contract error", errb, code)
 	}
 }
 

@@ -48,7 +48,24 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	_ = userFlag
+	if *userFlag != "" {
+		return tool.NotSupported(rc, cmd, "operating on another user's crontab with -u")
+	}
+	modes := 0
+	for _, set := range []bool{*listFlag, *editFlag, *removeFlag} {
+		if set {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return tool.UsageError(rc, cmd, "options -e, -l, and -r are mutually exclusive")
+	}
+	if modes == 1 && len(operands) != 0 {
+		return tool.UsageError(rc, cmd, "options -e, -l, and -r do not accept an operand")
+	}
+	if modes == 0 && len(operands) > 1 {
+		return tool.UsageError(rc, cmd, "extra operand %q", operands[1])
+	}
 
 	switch {
 	case *listFlag:
@@ -180,6 +197,7 @@ func installCronLines(rc *tool.RunContext, content string) int {
 		for _, e := range errs {
 			fmt.Fprintf(rc.Err, "%s: %v\n", cmd.Name, e)
 		}
+		return 1
 	}
 
 	now := time.Now()
@@ -204,7 +222,7 @@ func installCronLines(rc *tool.RunContext, content string) int {
 		next, nerr := schedule.ComputeNext(j, now)
 		if nerr != nil {
 			fmt.Fprintf(rc.Err, "%s: cannot compute next run for %q: %v\n", cmd.Name, j.Spec, nerr)
-			continue
+			return 1
 		}
 		j.NextRun = next
 	}
