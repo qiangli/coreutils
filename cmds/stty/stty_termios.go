@@ -170,3 +170,20 @@ func setControlChar(t *unix.Termios, index int, value uint8) {
 		t.Cc[index] = value
 	}
 }
+
+// applyWindowSize sets the terminal's row/column count via TIOCSWINSZ.
+// A negative rows or cols leaves that dimension unchanged, matching GNU
+// stty's "rows N" / "cols N" independence.
+func applyWindowSize(fd int, rows, cols int) error {
+	win, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
+	if err != nil {
+		win = &unix.Winsize{}
+	}
+	if rows >= 0 {
+		win.Row = uint16(rows)
+	}
+	if cols >= 0 {
+		win.Col = uint16(cols)
+	}
+	return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, win)
+}

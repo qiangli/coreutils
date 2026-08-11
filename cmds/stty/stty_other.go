@@ -11,3 +11,7 @@ func applyMode(fd int, mode string) error {
 func applyValue(fd int, name string, value uint8) error {
 	return fmt.Errorf("%s is not supported on this platform", name)
 }
+
+func applyWindowSize(fd int, rows, cols int) error {
+	return fmt.Errorf("window size is not supported on this platform")
+}

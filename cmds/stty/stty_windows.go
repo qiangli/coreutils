@@ -5,3 +5,5 @@ package sttycmd
 func applyMode(fd int, mode string) error { return nil }
 
 func applyValue(fd int, name string, value uint8) error { return nil }
+
+func applyWindowSize(fd int, rows, cols int) error { return nil }

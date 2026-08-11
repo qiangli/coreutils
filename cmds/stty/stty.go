@@ -166,8 +166,19 @@ func applySettings(rc *tool.RunContext, fd int, ops []string) int {
 			if i+1 >= len(ops) {
 				return tool.UsageError(rc, cmd, "missing argument to %q", ops[i])
 			}
-			if _, err := parseRowsCols(ops[i+1]); err != nil {
+			n, err := parseRowsCols(ops[i+1])
+			if err != nil {
 				return tool.UsageError(rc, cmd, "invalid integer %q", ops[i+1])
+			}
+			rows, cols := -1, -1
+			if ops[i] == "rows" {
+				rows = int(n)
+			} else {
+				cols = int(n)
+			}
+			if err := applyWindowSize(fd, rows, cols); err != nil {
+				fmt.Fprintf(rc.Err, "stty: %v\n", err)
+				return 1
 			}
 			i++
 		default:
@@ -189,6 +200,9 @@ func parseRowsCols(s string) (uint16, error) {
 	n, err := strconv.ParseUint(s, 0, 32)
 	if err != nil {
 		return 0, err
+	}
+	if n > math.MaxInt32 {
+		return 0, fmt.Errorf("invalid integer argument %q: value too large", s)
 	}
 	return uint16(n % (math.MaxUint16 + 1)), nil
 }
