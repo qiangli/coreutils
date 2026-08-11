@@ -42,6 +42,7 @@ func TestStrings(t *testing.T) {
 		{"offsets hex", strings.Repeat("\x00", 16) + "cool", []string{"-t", "x"}, "     10 cool\n"},
 		{"offsets octal", strings.Repeat("\x00", 8) + "cool", []string{"-t", "o"}, "     10 cool\n"},
 		{"tab is not printable", "\x00ab\tcd\x00", []string{"-n", "5"}, ""},
+		{"all flag", "\x00abc\x01hello\x02hi\x00", []string{"-a"}, "hello\n"},
 	}
 	for _, c := range cases {
 		out, errb, code := runTool(t, "", c.stdin, c.args...)
