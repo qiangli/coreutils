@@ -210,6 +210,12 @@ func TestCmpBytesLimit(t *testing.T) {
 	if code != 1 || !strings.Contains(errb, "EOF on tiny") {
 		t.Errorf("EOF at limit: err=%q code=%d", errb, code)
 	}
+	for _, opts := range [][]string{{"-n", "0"}, {"-s", "-n", "0"}, {"-l", "-n", "0"}} {
+		_, errb, code = runTool(t, dir, "", append(opts, "tiny", "tiny-long")...)
+		if code != 1 {
+			t.Errorf("zero limit %v: code=%d err=%q", opts, code, errb)
+		}
+	}
 	// A multiplier suffix is accepted, as on the SKIP operands.
 	if _, _, code := runTool(t, dir, "", "--bytes=1K", "a", "b"); code != 1 {
 		t.Errorf("suffixed limit: code=%d", code)

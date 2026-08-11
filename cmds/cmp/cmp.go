@@ -222,25 +222,21 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 		}
 		// GNU cmp still probes both inputs at the byte limit so that a
 		// truncated file is reported as EOF (including for -n 0).
-		if limit == 0 {
-			return 0
-		}
-		if limit > 0 && matched >= limit {
-			return 0
-		}
-		if b1 != b2 {
-			if printBytes {
-				fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n",
-					name1, name2, matched+1, newlines+1, b1, sprintc(b1), b2, sprintc(b2))
-			} else {
-				fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d\n", name1, name2, matched+1, newlines+1)
+		if limit < 0 || matched < limit {
+			if b1 != b2 {
+				if printBytes {
+					fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n",
+						name1, name2, matched+1, newlines+1, b1, sprintc(b1), b2, sprintc(b2))
+				} else {
+					fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d\n", name1, name2, matched+1, newlines+1)
+				}
+				return 1
 			}
-			return 1
-		}
-		matched++
-		lastWasNL = b1 == '\n'
-		if lastWasNL {
-			newlines++
+			matched++
+			lastWasNL = b1 == '\n'
+			if lastWasNL {
+				newlines++
+			}
 		}
 	}
 }
@@ -288,25 +284,15 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 			fmt.Fprintf(rc.Err, "cmp: %s: %v\n", name2, err2)
 			return 2
 		}
-		if limit == 0 {
-			if differed {
-				return 1
-			}
-			return 0
-		}
-		if limit > 0 && pos >= limit {
-			if differed {
-				return 1
-			}
-			return 0
-		}
 		pos++
-		if b1 != b2 {
-			differed = true
-			if printBytes {
-				fmt.Fprintf(rc.Out, "%*d %3o %s %3o %s\n", width, pos, b1, sprintc(b1), b2, sprintc(b2))
-			} else {
-				fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2)
+		if limit < 0 || pos <= limit {
+			if b1 != b2 {
+				differed = true
+				if printBytes {
+					fmt.Fprintf(rc.Out, "%*d %3o %s %3o %s\n", width, pos, b1, sprintc(b1), b2, sprintc(b2))
+				} else {
+					fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2)
+				}
 			}
 		}
 	}
@@ -326,16 +312,12 @@ func cmpSilent(rc *tool.RunContext, s1, s2 *src, limit int64) int {
 		if err1 != nil || err2 != nil {
 			return 2
 		}
-		if limit == 0 {
-			return 0
+		if limit < 0 || compared < limit {
+			if b1 != b2 {
+				return 1
+			}
+			compared++
 		}
-		if limit > 0 && compared >= limit {
-			return 0
-		}
-		if b1 != b2 {
-			return 1
-		}
-		compared++
 	}
 }
 
