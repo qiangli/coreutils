@@ -19,6 +19,7 @@ import (
 // Options configures sed engine compilation and execution.
 type Options struct {
 	ExtendedRegex bool
+	LocaleTables  *bre.LocaleByteTables
 }
 
 // sedRegexp is the small regexp surface the engine needs.
@@ -35,6 +36,31 @@ type sedRegexp interface {
 // report run-time failures without changing the C/POSIX path.
 type legacyRegexp struct {
 	*bre.Regexp
+}
+
+// localeRegexp preserves the engine's fully error-bearing matcher seam.
+type localeRegexp struct {
+	*bre.LocaleByteRegexp
+}
+
+func (r localeRegexp) MatchString(s string) (bool, error) {
+	return r.LocaleByteRegexp.MatchString(s)
+}
+
+func (r localeRegexp) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) {
+	return r.LocaleByteRegexp.FindAllStringSubmatchIndex(s, n)
+}
+
+func (r localeRegexp) FindAllSubmatchIndex(s []byte, n int) ([][]int, error) {
+	return r.LocaleByteRegexp.FindAllSubmatchIndex(s, n)
+}
+
+func (r localeRegexp) ExpandString(dst []byte, template, src string, match []int) ([]byte, error) {
+	return r.LocaleByteRegexp.ExpandString(dst, template, src, match)
+}
+
+func (r localeRegexp) Expand(dst, template, src []byte, match []int) ([]byte, error) {
+	return r.LocaleByteRegexp.Expand(dst, template, src, match)
 }
 
 func (r legacyRegexp) MatchString(s string) (bool, error) {
@@ -69,6 +95,20 @@ func (r legacyRegexp) Expand(dst, template, src []byte, match []int) ([]byte, er
 func (opts Options) compileRE(pattern, flags string) (sedRegexp, error) {
 	pattern = bre.SedEscapes(pattern)
 	flags = sedFlags(flags)
+	if opts.LocaleTables != nil {
+		syntax := bre.ByteRegexpBRE
+		if opts.ExtendedRegex {
+			syntax = bre.ByteRegexpERE
+		}
+		re, err := bre.CompileLocaleByteRegexpTables([]byte(pattern), opts.LocaleTables, bre.ByteRegexpOptions{
+			Syntax: syntax, FoldCase: strings.Contains(flags, "i"),
+			DotAll: strings.Contains(flags, "s"), MultiLine: strings.Contains(flags, "m"),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return localeRegexp{re}, nil
+	}
 	if opts.ExtendedRegex {
 		re, err := bre.CompileEREWithFlags(pattern, flags)
 		if err != nil {
