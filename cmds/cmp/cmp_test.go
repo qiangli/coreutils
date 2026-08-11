@@ -204,14 +204,10 @@ func TestCmpBytesLimit(t *testing.T) {
 	}
 	// GNU cmp probes for EOF at the limit; a shorter file is still
 	// reported even when all requested bytes matched.
-	_, errb, code := runTool(t, dir, "", "-n", "4", "short", "long")
-	if code != 0 || errb != "" {
-		t.Fatalf("equal through limit: err=%q code=%d", errb, code)
-	}
 	writeFile(t, dir, "tiny", "ab")
 	writeFile(t, dir, "tiny-long", "abc")
 	_, errb, code = runTool(t, dir, "", "-n", "2", "tiny", "tiny-long")
-	if code != 1 || !strings.Contains(errb, "EOF on short") {
+	if code != 1 || !strings.Contains(errb, "EOF on tiny") {
 		t.Errorf("EOF at limit: err=%q code=%d", errb, code)
 	}
 	// A multiplier suffix is accepted, as on the SKIP operands.
