@@ -21,7 +21,22 @@ import (
 func TestNohupMissing(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run(&tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")}}, nil)
-	if code != 2 {
+	if code != 125 {
+		t.Fatalf("code=%d", code)
+	}
+}
+
+// With POSIXLY_CORRECT set, the same missing-operand case reports the
+// stricter POSIX status instead of nohup's default.
+func TestNohupMissingPOSIXLYCorrect(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Env:   []string{"POSIXLY_CORRECT=1"},
+		Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+	}
+	if code := run(rc, nil); code != 127 {
 		t.Fatalf("code=%d", code)
 	}
 }
@@ -412,5 +427,25 @@ func TestNohupDevNullOpenFailure(t *testing.T) {
 	// it can start, leaving the sentinel absent.
 	t.Run("found_command", func(t *testing.T) {
 		runCase(t, []string{"PATH=/bin:/usr/bin"}, "touch")
+	})
+
+	// The same redirect failure reports the stricter POSIX status once
+	// POSIXLY_CORRECT asks for it.
+	t.Run("posixly_correct", func(t *testing.T) {
+		tempDir := t.TempDir()
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   tempDir,
+			Env:   []string{"PATH=/bin:/usr/bin", "POSIXLY_CORRECT=1"},
+			Stdio: tool.Stdio{In: pts, Out: &out, Err: &errb},
+		}
+		sentinel := filepath.Join(tempDir, "should_not_exist")
+		if code := run(rc, []string{"touch", sentinel}); code != 127 {
+			t.Fatalf("expected exit code 127 (POSIXLY_CORRECT redirect failure), got %d err=%q", code, errb.String())
+		}
+		if _, err := os.Stat(sentinel); err == nil {
+			t.Errorf("sentinel %s was created; child executed despite redirect failure", sentinel)
+		}
 	})
 }

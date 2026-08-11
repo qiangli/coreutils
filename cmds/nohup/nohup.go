@@ -24,9 +24,36 @@ func run(rc *tool.RunContext, args []string) int {
 		return 0
 	}
 	if len(args) == 0 {
-		return tool.UsageError(rc, cmd, "missing operand")
+		fmt.Fprintf(rc.Err, "%s: missing operand\n", cmd.Name)
+		fmt.Fprintf(rc.Err, "Try '%s --help' for more information.\n", cmd.Name)
+		return internalFailureCode(rc)
 	}
 	return runNohup(rc, args)
+}
+
+// internalFailureCode is the status nohup returns when it cannot even
+// attempt the requested command — no operand was given, or a needed
+// redirect could not be set up. That is distinct from failing to find or
+// run the command itself, so it is kept off the 126/127 range those cases
+// use. Strict POSIX conformance instead calls for 127 here too, so a
+// caller that opts into POSIXLY_CORRECT gets that value.
+func internalFailureCode(rc *tool.RunContext) int {
+	if hasEnv(rc.Env, "POSIXLY_CORRECT") {
+		return 127
+	}
+	return 125
+}
+
+// hasEnv reports whether key is set (to any value, including empty) among
+// the RunContext's environment entries, which follow the KEY=VALUE shape.
+func hasEnv(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 var devNullOpener = func() (*os.File, error) {
@@ -52,7 +79,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		f, err := devNullOpener()
 		if err != nil {
 			fmt.Fprintf(errOut, "nohup: failed to render standard input unusable: %v\n", err)
-			return 125
+			return internalFailureCode(rc)
 		}
 		defer f.Close()
 		stdin = f
@@ -74,7 +101,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		f, disp, err := openNohupOutput(rc)
 		if err != nil {
 			fmt.Fprintf(errOut, "nohup: failed to open 'nohup.out': %v\n", err)
-			return 125
+			return internalFailureCode(rc)
 		}
 		defer f.Close()
 		stdout = f
