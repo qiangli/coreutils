@@ -41,6 +41,8 @@ func TestBasename(t *testing.T) {
 		{[]string{"/usr/lib/"}, "lib\n", 0},
 		{[]string{"/"}, "/\n", 0},
 		{[]string{"-z", "a/b"}, "b\x00", 0},
+		// Options must precede operands; after NAME, --zero is the suffix.
+		{[]string{"a", "--zero"}, "a\n", 0},
 		// suffix equal to the whole name is NOT removed (GNU rule)
 		{[]string{".h", ".h"}, ".h\n", 0},
 	}

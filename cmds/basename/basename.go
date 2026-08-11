@@ -28,6 +28,10 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
+	// basename's documented syntax requires options before operands. Keep
+	// option-looking strings after NAME as the optional suffix/extra operand,
+	// matching GNU getopt's POSIX-style ordering for this command.
+	fs.SetInterspersed(false)
 	multiple := fs.BoolP("multiple", "a", false, "support multiple arguments and treat each as a NAME")
 	suffix := fs.StringP("suffix", "s", "", "remove a trailing SUFFIX; implies -a")
 	zero := fs.BoolP("zero", "z", false, "end each output line with NUL, not newline")
