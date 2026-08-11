@@ -111,8 +111,8 @@ func (r *remover) remove(op string) {
 	// POSIX and GNU require rejection based on the operand's final pathname
 	// component, before any filesystem operation or prompt. filepath.Clean
 	// erases a trailing "/." (and resolves "/.."), so inspecting its Base
-	// could recurse into the named directory and remove children before the
-	// eventual rmdir failure.
+	// could recurse into and remove a directory that the raw operand requires
+	// us to reject without touching.
 	base := finalOperandComponent(op)
 	if base == "." || base == ".." {
 		r.errf("refusing to remove '%s'", op)
