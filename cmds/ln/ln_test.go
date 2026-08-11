@@ -377,6 +377,25 @@ func TestLnSameFile(t *testing.T) {
 	}
 }
 
+func TestLnSameFileThroughHardLinkAlias(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "keep")
+	if err := os.Link(filepath.Join(dir, "a"), filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "a", "alias")
+	if code != 1 || !strings.Contains(errb, "are the same file") {
+		t.Errorf("ln a alias: code=%d err=%q", code, errb)
+	}
+	_, errb, code = runTool(t, dir, "-f", "a", "alias")
+	if code != 1 || !strings.Contains(errb, "are the same file") {
+		t.Errorf("ln -f a alias: code=%d err=%q", code, errb)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "alias")); string(got) != "keep" {
+		t.Errorf("alias modified: %q", got)
+	}
+}
+
 func TestLnSymbolicSameFile(t *testing.T) {
 	requireSymlinks(t)
 	dir := t.TempDir()

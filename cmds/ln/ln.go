@@ -386,11 +386,17 @@ func isDestDir(rc *tool.RunContext, operand string, noDeref bool) bool {
 	return err == nil && fi.IsDir()
 }
 
-// sameEntry reports whether a and b name the same directory entry after
-// path normalization. Both operands have already been resolved through
-// tool.RunContext.Path, so filepath.Clean is sufficient.
+// sameEntry reports whether a and b name the same directory entry.  Comparing
+// path strings is insufficient here: a and b may be aliases (for example,
+// two hard-link names, or paths containing symlinked directories).  GNU ln
+// diagnoses that case before -f can unlink the existing name.
 func sameEntry(a, b string) bool {
-	return filepath.Clean(a) == filepath.Clean(b)
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ai, errA := os.Lstat(a)
+	bi, errB := os.Lstat(b)
+	return errA == nil && errB == nil && os.SameFile(ai, bi)
 }
 
 func relativeTarget(rc *tool.RunContext, target, dest string) (string, error) {

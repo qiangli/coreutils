@@ -100,11 +100,11 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `jq` | `cmds/jq` | — | Bashy/other extension | no | no | 1 | 7 |
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 3 | 4 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
-| `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 20 |
+| `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 21 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 43 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
-| `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 2 | 16 |
+| `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 1 | 9 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
