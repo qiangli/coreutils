@@ -45,6 +45,28 @@ func TestResolveWithCatalogUsesProviderSideModelID(t *testing.T) {
 	}
 }
 
+func TestResolveAgGeminiVariantsUsesRegistryIDsWithoutEffortFlag(t *testing.T) {
+	t.Setenv(UnsafeLaunchEnv, "1")
+	for _, tc := range []struct {
+		name, model string
+	}{
+		{"agy-gemini3.5-flash-low", "gemini-3.5-flash-low"},
+		{"agy-gemini3.5-flash", "gemini-3.5-flash-high"},
+	} {
+		l, err := ResolveWithCatalog(tc.name, Options{}, NewCatalog)
+		if err != nil {
+			t.Fatalf("ResolveWithCatalog(%q): %v", tc.name, err)
+		}
+		want := []string{"agy", "--dangerously-skip-permissions", "--print-timeout", "40m", "--model", tc.model, "-p", "prompt"}
+		if got := l.Argv("prompt"); !slices.Equal(got, want) {
+			t.Errorf("argv for %s = %q, want %q", tc.name, got, want)
+		}
+		if slices.Contains(l.Args, "--effort") {
+			t.Errorf("argv for %s unexpectedly carries --effort: %q", tc.name, l.Args)
+		}
+	}
+}
+
 func TestResolveCarriesSelectedCredentialNames(t *testing.T) {
 	t.Setenv(UnsafeLaunchEnv, "1")
 	l, err := ResolveWithCatalog("ycode:glm-5.2", Options{}, testCatalog(t.TempDir()))
