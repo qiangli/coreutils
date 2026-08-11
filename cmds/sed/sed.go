@@ -24,6 +24,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/cmds/sed/internal/gosed"
+	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/pkg/nudge"
 	"github.com/qiangli/coreutils/tool"
 )
@@ -39,7 +42,7 @@ func init() { cmd.Run = run; tool.Register(cmd) }
 func run(rc *tool.RunContext, args []string) int {
 	// A failed sed is where a BSD idiom shows up (`sed -i ''` leaves the
 	// real script read as a filename). Hint on the ERROR PATH only.
-	code := runCommand(rc, args)
+	code := runCommandWithCType(rc, args, openCType)
 	if code != 0 {
 		nudge.OnFailure(rc.Err, append([]string{cmd.Name}, args...), rc.Env)
 	}
@@ -47,6 +50,19 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func runCommand(rc *tool.RunContext, args []string) int {
+	return runCommandWithCType(rc, args, openCType)
+}
+
+type ctypeProvider interface {
+	bre.ByteCtype
+	Close() error
+}
+
+type ctypeOpener func(string) (ctypeProvider, error)
+
+func openCType(name string) (ctypeProvider, error) { return ctype.Open(name) }
+
+func runCommandWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 	// GNU's -i takes an optional attached suffix (`-i.bak`), which pflag
 	// cannot model without displaying an internal sentinel in --help.
 	// Extract every supported spelling before ordinary flag parsing.
@@ -117,18 +133,47 @@ func runCommand(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "no script specified")
 	}
 
-	opts := gosed.Options{ExtendedRegex: *ereE || *ereR}
 	files := operands
+	var suffix string
 
-	// In-place editing requires real files; rewrite each independently.
 	if inPlaceFlag {
 		if len(files) == 0 {
 			return tool.UsageError(rc, cmd, "-i may not be used with stdin")
 		}
-		suffix := inPlaceSuffix
+		suffix = inPlaceSuffix
 		if fs.Lookup("in-place").Changed {
 			suffix = *inPlace
 		}
+	}
+
+	opts := gosed.Options{ExtendedRegex: *ereE || *ereR}
+	lcCType := locale.Resolve(rc.Env, locale.CType)
+	if lcCType != "C" && lcCType != "POSIX" {
+		provider, err := opener(lcCType)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "sed: LC_CTYPE %q: %v\n", lcCType, err)
+			return 2
+		}
+		tables, snapshotErr := bre.SnapshotLocaleByteTables(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "sed: LC_CTYPE %q: %v\n", lcCType, snapshotErr)
+			return 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "sed: LC_CTYPE %q: %v\n", lcCType, closeErr)
+			return 2
+		}
+		opts.LocaleTables = tables
+	}
+
+	if err := validateProgram(program, *quiet, opts); err != nil {
+		fmt.Fprintf(rc.Err, "sed: %v\n", err)
+		return 2
+	}
+
+	// In-place editing requires real files; rewrite each independently.
+	if inPlaceFlag {
 		rc2 := 0
 		for _, f := range files {
 			if err := editInPlace(rc, program, *quiet, opts, f, suffix); err != nil {
@@ -190,6 +235,21 @@ func runCommand(rc *tool.RunContext, args []string) int {
 		c.Close()
 	}
 	return status
+}
+
+func validateProgram(program string, quiet bool, opts gosed.Options) error {
+	if _, _, err := parseSimpleSubstitution(program, opts); err != nil {
+		return err
+	}
+	readFile := func(string) ([]byte, error) { return nil, nil }
+	prepareWrite := func(string) error { return nil }
+	writeFile := func(string, string) error { return nil }
+	if quiet {
+		_, err := gosed.NewQuietWithReadWriteFileOptions(strings.NewReader(program), readFile, prepareWrite, writeFile, opts)
+		return err
+	}
+	_, err := gosed.NewWithReadWriteFileOptions(strings.NewReader(program), readFile, prepareWrite, writeFile, opts)
+	return err
 }
 
 type scriptSource struct {
