@@ -265,3 +265,96 @@ func TestCommHelpAndVersion(t *testing.T) {
 		t.Errorf("--version: code=%d out=%q", code, out)
 	}
 }
+
+type fakeCollator struct {
+	compare func(string, string) (int, error)
+	closed  bool
+}
+
+func (f *fakeCollator) Compare(a, b string) (int, error) { return f.compare(a, b) }
+func (f *fakeCollator) Close() error                     { f.closed = true; return nil }
+
+func TestCommUsesInvocationCollatorForMergeAndOrderChecks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f1"), []byte("b\na\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("b\na\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	f := &fakeCollator{compare: func(a, b string) (int, error) {
+		return -strings.Compare(a, b), nil
+	}}
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: dir,
+		Env:   []string{"LC_COLLATE=de_DE.iso88591"},
+		Stdio: tool.Stdio{Out: &out, Err: &errb},
+	}
+	code := runWithCollator(rc, []string{"--check-order", "f1", "f2"}, func(name string) (stringCollator, error) {
+		if name != "de_DE.iso88591" {
+			t.Fatalf("opened locale %q", name)
+		}
+		return f, nil
+	})
+	if code != 0 || out.String() != "\t\tb\n\t\ta\n" || errb.Len() != 0 || !f.closed {
+		t.Fatalf("locale comm = (%q, %q, %d, closed=%v)", out.String(), errb.String(), code, f.closed)
+	}
+}
+
+func TestCommLocaleInitFailsBeforeInputOpen(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Env:   []string{"LC_COLLATE=unsupported"},
+		Stdio: tool.Stdio{Out: &out, Err: &errb},
+	}
+	wantErr := errors.New("provider unavailable")
+	code := runWithCollator(rc, []string{"missing-one", "missing-two"}, func(string) (stringCollator, error) {
+		return nil, wantErr
+	})
+	if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), wantErr.Error()) || strings.Contains(errb.String(), "missing-one") {
+		t.Fatalf("init failure = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+}
+
+func TestCommComparisonFailureIsDiagnosedAndCloses(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"f1", "f2"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("a\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, errb bytes.Buffer
+	f := &fakeCollator{compare: func(string, string) (int, error) {
+		return 0, errors.New("compare broke")
+	}}
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LANG=de_DE.ISO-8859-1"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+	code := runWithCollator(rc, []string{"f1", "f2"}, func(string) (stringCollator, error) { return f, nil })
+	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "compare broke") || !f.closed {
+		t.Fatalf("compare failure = (%q, %q, %d, closed=%v)", out.String(), errb.String(), code, f.closed)
+	}
+}
+
+func TestCommCAndPOSIXBypassCollator(t *testing.T) {
+	for _, name := range []string{"C", "POSIX"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, file := range []string{"f1", "f2"} {
+				if err := os.WriteFile(filepath.Join(dir, file), []byte("a\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out, errb bytes.Buffer
+			opened := false
+			rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: []string{"LC_ALL=" + name}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
+			code := runWithCollator(rc, []string{"f1", "f2"}, func(string) (stringCollator, error) {
+				opened = true
+				return nil, errors.New("must not open")
+			})
+			if code != 0 || out.String() != "\t\ta\n" || errb.Len() != 0 || opened {
+				t.Fatalf("C path = (%q, %q, %d, opened=%v)", out.String(), errb.String(), code, opened)
+			}
+		})
+	}
+}

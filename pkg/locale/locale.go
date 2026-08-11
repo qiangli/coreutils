@@ -10,8 +10,9 @@
 // (e.g. ".UTF-8@euro") are preserved exactly as they appeared.
 //
 // The consumers that need locale resolution are pure-Go reimplementations
-// of sort, sed, tr, and awk; each currently hard-codes "LC_ALL=C semantics"
-// and will gradually consult this resolver to honour user locale settings.
+// of comm, sort, sed, tr, and awk. They use it to replace process-global
+// locale state with invocation-owned category selection while retaining
+// deterministic C/POSIX behavior.
 // The helper in cmds/grep/locale.go that duplicates this logic is
 // expected to migrate here once grep is refactored onto the shared package.
 package locale

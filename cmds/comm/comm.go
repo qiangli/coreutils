@@ -5,7 +5,8 @@
 // column printed before it.
 //
 // Implemented flags: -1 -2 -3 (GNU defines no long forms for these, so
-// they are pre-parsed manually). Comparison is C-locale byte order.
+// they are pre-parsed manually). Comparison is byte order in C/POSIX and
+// uses the narrowly supported LC_COLLATE provider for its accepted locale.
 // GNU's default order checking is preserved: wrongly sorted inputs are
 // diagnosed only when an input file contains unpairable lines, and the
 // run then fails with "input is not in sorted order".
@@ -18,6 +19,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/qiangli/coreutils/pkg/collate"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -38,7 +41,22 @@ var cmd = &tool.Tool{
 // cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+type stringCollator interface {
+	Compare(a, b string) (int, error)
+	Close() error
+}
+
+type collatorOpener func(string) (stringCollator, error)
+
 func run(rc *tool.RunContext, args []string) int {
+	return runWithCollator(rc, args, func(name string) (stringCollator, error) {
+		return collate.Open(name)
+	})
+}
+
+// runWithCollator keeps locale state invocation-owned and gives tests a
+// deterministic provider seam. C and POSIX retain their bytewise fast path.
+func runWithCollator(rc *tool.RunContext, args []string, openCollator collatorOpener) int {
 	// GNU comm's -1 -2 -3 have no long forms; pre-parse them manually
 	// (clusters like -12 included) and hand everything else to the
 	// framework parser.
@@ -99,6 +117,17 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "both files cannot be standard input")
 	}
 
+	compare := func(a, b string) (int, error) { return strings.Compare(a, b), nil }
+	if name := locale.Resolve(rc.Env, locale.Collate); name != "C" && name != "POSIX" {
+		provider, err := openCollator(name)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "comm: LC_COLLATE=%s: %v\n", name, err)
+			return 2
+		}
+		defer provider.Close()
+		compare = provider.Compare
+	}
+
 	var inputs [2]*recordReader
 	for i, op := range operands {
 		input, err := openRecordReader(rc, op, *zeroTerminated)
@@ -157,7 +186,15 @@ func run(rc *tool.RunContext, args []string) int {
 			return false
 		}
 		current[idx], have[idx] = next, ok
-		if hadPrevious && ok && previous > next {
+		order, compareErr := 0, error(nil)
+		if hadPrevious && ok {
+			order, compareErr = compare(previous, next)
+			if compareErr != nil {
+				fmt.Fprintf(rc.Err, "comm: comparison failed: %v\n", compareErr)
+				return false
+			}
+		}
+		if hadPrevious && ok && order > 0 {
 			if !*nocheckOrder {
 				if *checkOrder {
 					fmt.Fprintf(rc.Err, "comm: file %d is not in sorted order\n", file)
@@ -182,7 +219,12 @@ func run(rc *tool.RunContext, args []string) int {
 		case !have[1]:
 			d = -1
 		default:
-			d = strings.Compare(current[0], current[1])
+			var err error
+			d, err = compare(current[0], current[1])
+			if err != nil {
+				fmt.Fprintf(rc.Err, "comm: comparison failed: %v\n", err)
+				return 1
+			}
 		}
 		switch {
 		case d < 0:
