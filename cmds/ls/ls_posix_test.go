@@ -300,6 +300,8 @@ func TestOrderLongAndOneFormat(t *testing.T) {
 		{[]string{"-C", "-1", "-l"}, true},
 		{[]string{"--format=long", "-1", "--format=single-column"}, false},
 		{[]string{"--format", "single-column", "-1", "--format", "long", "-1"}, true},
+		{[]string{"-l", "--format=single-column", "--long=false"}, false},
+		{[]string{"-l", "--format=single-column", "--full-time=false"}, false},
 		{[]string{"-l", "--zero"}, true},
 		{[]string{"--zero", "-l"}, true},
 	} {
@@ -342,6 +344,7 @@ func TestOrderNumericAndOneFormat(t *testing.T) {
 		{[]string{"-n", "--format=single-column"}, false},
 		{[]string{"--format=long", "-n"}, true},
 		{[]string{"-n", "--format=long"}, true},
+		{[]string{"-n", "--format=single-column", "--numeric-uid-gid=false"}, false},
 	} {
 		out, _, code := runToolAt(t, dir, tc.args...)
 		if code != 0 {
@@ -367,6 +370,7 @@ func TestUnsupportedDiredAndAutomaticClassifyFailClosed(t *testing.T) {
 		{[]string{"-D"}, "--dired (-D) is not supported"},
 		{[]string{"--dired", "--zero"}, "options --dired and --zero are incompatible"},
 		{[]string{"--classify=auto"}, "--classify=auto is not supported"},
+		{[]string{"--classify=auto", "--file-type=false"}, "--classify=auto is not supported"},
 	} {
 		out, errb, code := runToolAt(t, dir, tc.args...)
 		if code != 2 || out != "" || !strings.Contains(errb, tc.want) {
@@ -433,6 +437,7 @@ func TestOrderIndicatorClassifyAndSlash(t *testing.T) {
 		{[]string{"-F", "--indicator-style=file-type"}, "subdir/", "run.sh", "link@"},
 		{[]string{"--indicator-style=none", "-F"}, "subdir/", "run.sh*", "link@"},
 		{[]string{"-F", "--indicator-style=none"}, "subdir", "run.sh", "link"},
+		{[]string{"-F", "--indicator-style=none", "--file-type=false"}, "subdir", "run.sh", "link"},
 		{[]string{"-p", "--indicator-style=none"}, "subdir", "run.sh", "link"},
 		// --classify
 		{[]string{"--classify=never", "-F"}, "subdir/", "run.sh*", "link@"},

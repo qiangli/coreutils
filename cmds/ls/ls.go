@@ -1317,11 +1317,17 @@ func lastFormat(args []string, fs *pflag.FlagSet) (fmtKind, bool) {
 					kind, found = k, true
 				}
 			case "long":
-				kind, found = fmtLong, true
+				if boolOptionEnabled(val, hasValue) {
+					kind, found = fmtLong, true
+				}
 			case "full-time":
-				kind, found = fmtLong, true
+				if boolOptionEnabled(val, hasValue) {
+					kind, found = fmtLong, true
+				}
 			case "numeric-uid-gid":
-				kind, found = fmtLong, true
+				if boolOptionEnabled(val, hasValue) {
+					kind, found = fmtLong, true
+				}
 			}
 			continue
 		}
@@ -1400,7 +1406,9 @@ func lastIndicatorStyle(args []string, fs *pflag.FlagSet) indicatorStyle {
 					style = indicatorNone
 				}
 			case "file-type":
-				style = indicatorFileType
+				if boolOptionEnabled(val, hasValue) {
+					style = indicatorFileType
+				}
 			}
 			continue
 		}
@@ -1419,6 +1427,18 @@ func lastIndicatorStyle(args []string, fs *pflag.FlagSet) indicatorStyle {
 		}
 	}
 	return style
+}
+
+// boolOptionEnabled mirrors pflag's explicit boolean-value handling for the
+// order-preserving pre-scans. A false value is a no-op, not an enabled format
+// or indicator transition; tool.Parse remains responsible for rejecting an
+// invalid value before these results are used.
+func boolOptionEnabled(val string, hasValue bool) bool {
+	if !hasValue {
+		return true
+	}
+	enabled, err := strconv.ParseBool(val)
+	return err == nil && enabled
 }
 
 // canonicalLongName mirrors tool.Parse's unique long-option abbreviation
