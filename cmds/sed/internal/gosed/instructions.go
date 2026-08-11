@@ -275,7 +275,11 @@ type cmd_simplecond struct {
 }
 
 func (c *cmd_simplecond) run(svm *vm) error {
-	if c.cond.isMet(svm) {
+	met, err := c.cond.isMet(svm)
+	if err != nil {
+		return err
+	}
+	if met {
 		svm.ip = c.metloc
 	} else {
 		svm.ip = c.unmetloc
@@ -305,33 +309,45 @@ func (c *cmd_twocond) isLastLine(svm *vm) bool {
 }
 
 func (c *cmd_twocond) run(svm *vm) error {
-	if c.isOn && (c.offFrom > 0) && (c.offFrom < svm.lineno) {
-		c.isOn = false
-		c.offFrom = 0
+	// Work on a snapshot until every matcher used by this instruction has
+	// succeeded. A run-time matcher error must leave range and VM state intact.
+	isOn, offFrom := c.isOn, c.offFrom
+	if isOn && (offFrom > 0) && (offFrom < svm.lineno) {
+		isOn = false
+		offFrom = 0
 	}
 
-	if !c.isOn {
-		if c.start.isMet(svm) {
-			svm.ip = c.metloc
-			c.isOn = true
+	nextIP := c.metloc
+	if !isOn {
+		met, err := c.start.isMet(svm)
+		if err != nil {
+			return err
+		}
+		if met {
+			isOn = true
 			if relative, ok := c.end.(*relativecond); ok && relative.startRange(svm) {
-				c.offFrom = svm.lineno
+				offFrom = svm.lineno
 			} else if end, ok := c.end.(numbercond); ok && svm.lineno >= int(end) {
 				// A numeric second address at or before the line that starts
 				// the range ends the range on that same line. Unlike a
 				// regular-expression second address, it is not deferred until
 				// the following input line.
-				c.offFrom = svm.lineno
+				offFrom = svm.lineno
 			}
 		} else {
-			svm.ip = c.unmetloc
+			nextIP = c.unmetloc
 		}
 	} else {
-		if c.end.isMet(svm) {
-			c.offFrom = svm.lineno
+		met, err := c.end.isMet(svm)
+		if err != nil {
+			return err
 		}
-		svm.ip = c.metloc
+		if met {
+			offFrom = svm.lineno
+		}
 	}
+	c.isOn, c.offFrom = isOn, offFrom
+	svm.ip = nextIP
 	return nil
 }
 

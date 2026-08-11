@@ -3,6 +3,7 @@ package sedcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,15 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type errorSimplePattern struct{ err error }
+
+func (p errorSimplePattern) FindAllSubmatchIndex([]byte, int) ([][]int, error) {
+	return nil, p.err
+}
+func (errorSimplePattern) Expand([]byte, []byte, []byte, []int) []byte {
+	panic("Expand called after matcher error")
+}
 
 func runSed(t *testing.T, in string, args ...string) (out, errOut string, code int) {
 	t.Helper()
@@ -34,6 +44,27 @@ func TestSedBasicSubstitution(t *testing.T) {
 	if out, _, _ := runSed(t, "hello\n", "s/l/L/g"); out != "heLLo\n" {
 		t.Errorf("s/l/L/g = %q, want heLLo", out)
 	}
+
+	t.Run("fast matcher error", func(t *testing.T) {
+		wantErr := errors.New("matcher failed")
+		subst := &simpleSubstitution{pattern: errorSimplePattern{err: wantErr}, replacement: []byte("x")}
+		dst := []byte("guard")
+		got, err := applySimpleSubstitutionLine(dst, subst, []byte("subject"))
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("error = %v, want %v", err, wantErr)
+		}
+		if string(got) != "guard" {
+			t.Fatalf("destination changed on matcher error: %q", got)
+		}
+
+		var out bytes.Buffer
+		if err := applySimpleSubstitution(subst, strings.NewReader("subject\n"), &out); !errors.Is(err, wantErr) {
+			t.Fatalf("stream error = %v, want %v", err, wantErr)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("stream wrote %q after matcher error", out.String())
+		}
+	})
 }
 
 func TestSedPreservesMixedExpressionFileOrder(t *testing.T) {

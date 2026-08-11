@@ -319,7 +319,7 @@ type simpleSubstitution struct {
 }
 
 type simplePattern interface {
-	FindAllSubmatchIndex([]byte, int) [][]int
+	FindAllSubmatchIndex([]byte, int) ([][]int, error)
 	Expand([]byte, []byte, []byte, []int) []byte
 }
 
@@ -448,7 +448,10 @@ func applySimpleSubstitution(subst *simpleSubstitution, in io.Reader, out io.Wri
 			src = nil
 		}
 
-		dst = applySimpleSubstitutionLine(dst[:0], subst, line)
+		dst, err = applySimpleSubstitutionLine(dst[:0], subst, line)
+		if err != nil {
+			return err
+		}
 		if _, err := w.Write(dst); err != nil {
 			return err
 		}
@@ -461,14 +464,17 @@ func applySimpleSubstitution(subst *simpleSubstitution, in io.Reader, out io.Wri
 	return w.Flush()
 }
 
-func applySimpleSubstitutionLine(dst []byte, subst *simpleSubstitution, line []byte) []byte {
+func applySimpleSubstitutionLine(dst []byte, subst *simpleSubstitution, line []byte) ([]byte, error) {
 	limit := 1
 	if subst.global {
 		limit = -1
 	}
-	matches := subst.pattern.FindAllSubmatchIndex(line, limit)
+	matches, err := subst.pattern.FindAllSubmatchIndex(line, limit)
+	if err != nil {
+		return dst, err
+	}
 	if len(matches) == 0 {
-		return append(dst, line...)
+		return append(dst, line...), nil
 	}
 
 	end := 0
@@ -477,7 +483,7 @@ func applySimpleSubstitutionLine(dst []byte, subst *simpleSubstitution, line []b
 		dst = subst.pattern.Expand(dst, subst.replacement, line, match)
 		end = match[1]
 	}
-	return append(dst, line[end:]...)
+	return append(dst, line[end:]...), nil
 }
 
 func editInPlace(rc *tool.RunContext, program string, quiet bool, opts gosed.Options, file, suffix string) error {

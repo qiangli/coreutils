@@ -23,11 +23,30 @@ type Options struct {
 
 // sedRegexp is the small regexp surface the engine needs.
 type sedRegexp interface {
-	MatchString(string) bool
-	FindAllStringSubmatchIndex(string, int) [][]int
+	MatchString(string) (bool, error)
+	FindAllStringSubmatchIndex(string, int) ([][]int, error)
 	ExpandString([]byte, string, string, []int) []byte
-	FindAllSubmatchIndex([]byte, int) [][]int
+	FindAllSubmatchIndex([]byte, int) ([][]int, error)
 	Expand([]byte, []byte, []byte, []int) []byte
+}
+
+// legacyRegexp adapts pkg/bre's current infallible matching API to sed's
+// error-bearing matcher seam. Locale-aware matchers can use the same seam to
+// report run-time failures without changing the C/POSIX path.
+type legacyRegexp struct {
+	*bre.Regexp
+}
+
+func (r legacyRegexp) MatchString(s string) (bool, error) {
+	return r.Regexp.MatchString(s), nil
+}
+
+func (r legacyRegexp) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) {
+	return r.Regexp.FindAllStringSubmatchIndex(s, n), nil
+}
+
+func (r legacyRegexp) FindAllSubmatchIndex(s []byte, n int) ([][]int, error) {
+	return r.Regexp.FindAllSubmatchIndex(s, n), nil
 }
 
 // compileRE compiles a GNU sed regex (BRE by default, ERE under opts.ExtendedRegex).
@@ -48,14 +67,14 @@ func (opts Options) compileRE(pattern, flags string) (sedRegexp, error) {
 			return nil, err
 		}
 		re.Longest()
-		return re, nil
+		return legacyRegexp{re}, nil
 	}
 	re, err := bre.CompileWithFlags(pattern, flags)
 	if err != nil {
 		return nil, err
 	}
 	re.Longest()
-	return re, nil
+	return legacyRegexp{re}, nil
 }
 
 // sedFlags finalizes the RE2 flag prefix for one sed pattern. POSIX has '.'

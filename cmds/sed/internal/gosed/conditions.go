@@ -8,14 +8,14 @@ import "fmt"
 // commands execute.
 
 type condition interface {
-	isMet(svm *vm) bool
+	isMet(svm *vm) (bool, error)
 }
 
 // -----------------------------------------------------
 type numbercond int // for matching line number conditions
 
-func (n numbercond) isMet(svm *vm) bool {
-	return svm.lineno == int(n)
+func (n numbercond) isMet(svm *vm) (bool, error) {
+	return svm.lineno == int(n), nil
 }
 
 // relativecond implements GNU's second-address form addr,+N. Its target is
@@ -30,15 +30,15 @@ func (r *relativecond) startRange(svm *vm) bool {
 	return r.lines == 0
 }
 
-func (r *relativecond) isMet(svm *vm) bool {
-	return svm.lineno >= r.target
+func (r *relativecond) isMet(svm *vm) (bool, error) {
+	return svm.lineno >= r.target, nil
 }
 
 // -----------------------------------------------------
 type eofcond struct{} // for matching the condition '$'
 
-func (_ eofcond) isMet(svm *vm) bool {
-	return svm.lastl
+func (_ eofcond) isMet(svm *vm) (bool, error) {
+	return svm.lastl, nil
 }
 
 // -----------------------------------------------------
@@ -47,9 +47,13 @@ type regexpcond struct {
 	null bool      // written as //: resolve against the last RE at run time
 }
 
-func (r *regexpcond) isMet(svm *vm) (answer bool) {
+func (r *regexpcond) isMet(svm *vm) (bool, error) {
 	re := resolveNullRE(svm, r.re, r.null)
-	return re.MatchString(svm.pat)
+	answer, err := re.MatchString(svm.pat)
+	if err == nil {
+		svm.lastRE = re
+	}
+	return answer, err
 }
 
 // newRECondition compiles a context address. An empty RE is POSIX's null RE:
@@ -78,11 +82,11 @@ func newRECondition(opts Options, s string, last string, loc *location) (*regexp
 // compiled fallback covers the case where nothing has been applied yet — a
 // null RE reachable before its predecessor ever runs, e.g. behind a branch.
 //
-// Every non-null use records itself, which is what makes the rule dynamic.
+// Callers record a resolved RE only after its match operation succeeds. This
+// keeps a run-time matcher error from changing later null-RE resolution.
 func resolveNullRE(svm *vm, re sedRegexp, null bool) sedRegexp {
 	if null && svm.lastRE != nil {
 		re = svm.lastRE
 	}
-	svm.lastRE = re
 	return re
 }

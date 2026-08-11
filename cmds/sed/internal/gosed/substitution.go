@@ -26,11 +26,14 @@ type substitute struct {
 }
 
 func (s *substitute) run(svm *vm) (err error) {
-	svm.ip++
-
 	// perform the search
 	pattern := resolveNullRE(svm, s.pattern, s.null)
-	matches := pattern.FindAllStringSubmatchIndex(svm.pat, -1)
+	matches, err := pattern.FindAllStringSubmatchIndex(svm.pat, -1)
+	if err != nil {
+		return err
+	}
+	svm.lastRE = pattern
+	svm.ip++
 
 	// filter to the matches we want to replace
 	var end int = len(matches)
