@@ -199,9 +199,6 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 	var matched, newlines int64
 	lastWasNL := false
 	for {
-		if limit >= 0 && matched >= limit {
-			return 0
-		}
 		b1, err1 := s1.r.ReadByte()
 		b2, err2 := s2.r.ReadByte()
 		if err1 == io.EOF && err2 == io.EOF {
@@ -223,6 +220,11 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 			fmt.Fprintf(rc.Err, "cmp: %s: %v\n", name2, err2)
 			return 2
 		}
+		// GNU cmp still probes both inputs at the byte limit so that a
+		// truncated file is reported as EOF (including for -n 0).
+		if limit == 0 {
+			return 0
+		}
 		if b1 != b2 {
 			if printBytes {
 				fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n",
@@ -236,6 +238,9 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 		lastWasNL = b1 == '\n'
 		if lastWasNL {
 			newlines++
+		}
+		if limit >= 0 && matched >= limit {
+			return 0
 		}
 	}
 }
@@ -259,12 +264,6 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 	var pos int64
 	differed := false
 	for {
-		if limit >= 0 && pos >= limit {
-			if differed {
-				return 1
-			}
-			return 0
-		}
 		b1, err1 := s1.r.ReadByte()
 		b2, err2 := s2.r.ReadByte()
 		if err1 == io.EOF && err2 == io.EOF {
@@ -289,6 +288,12 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 			fmt.Fprintf(rc.Err, "cmp: %s: %v\n", name2, err2)
 			return 2
 		}
+		if limit == 0 {
+			if differed {
+				return 1
+			}
+			return 0
+		}
 		pos++
 		if b1 != b2 {
 			differed = true
@@ -298,15 +303,18 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 				fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2)
 			}
 		}
+		if limit >= 0 && pos >= limit {
+			if differed {
+				return 1
+			}
+			return 0
+		}
 	}
 }
 
 func cmpSilent(rc *tool.RunContext, s1, s2 *src, limit int64) int {
 	var compared int64
 	for {
-		if limit >= 0 && compared >= limit {
-			return 0
-		}
 		b1, err1 := s1.r.ReadByte()
 		b2, err2 := s2.r.ReadByte()
 		if err1 == io.EOF && err2 == io.EOF {
@@ -318,10 +326,16 @@ func cmpSilent(rc *tool.RunContext, s1, s2 *src, limit int64) int {
 		if err1 != nil || err2 != nil {
 			return 2
 		}
+		if limit == 0 {
+			return 0
+		}
 		if b1 != b2 {
 			return 1
 		}
 		compared++
+		if limit >= 0 && compared >= limit {
+			return 0
+		}
 	}
 }
 

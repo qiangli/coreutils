@@ -202,6 +202,18 @@ func TestCmpBytesLimit(t *testing.T) {
 	if _, errb, code := runTool(t, dir, "", "-n", "4", "short", "long"); code != 0 || errb != "" {
 		t.Errorf("limit suppresses EOF: err=%q code=%d", errb, code)
 	}
+	// GNU cmp probes for EOF at the limit; a shorter file is still
+	// reported even when all requested bytes matched.
+	_, errb, code := runTool(t, dir, "", "-n", "4", "short", "long")
+	if code != 0 || errb != "" {
+		t.Fatalf("equal through limit: err=%q code=%d", errb, code)
+	}
+	writeFile(t, dir, "tiny", "ab")
+	writeFile(t, dir, "tiny-long", "abc")
+	_, errb, code = runTool(t, dir, "", "-n", "2", "tiny", "tiny-long")
+	if code != 1 || !strings.Contains(errb, "EOF on short") {
+		t.Errorf("EOF at limit: err=%q code=%d", errb, code)
+	}
 	// A multiplier suffix is accepted, as on the SKIP operands.
 	if _, _, code := runTool(t, dir, "", "--bytes=1K", "a", "b"); code != 1 {
 		t.Errorf("suffixed limit: code=%d", code)
