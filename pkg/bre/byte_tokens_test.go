@@ -101,6 +101,28 @@ func TestByteTokenCodecAdjacencyHasNoInternalWordBoundary(t *testing.T) {
 	}
 }
 
+func TestByteTokenCodecEverySeamIsSelfSynchronizing(t *testing.T) {
+	words := alternatingWordBytes()
+	codec, err := newByteTokenCodec(words)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := make(map[string]byte, 256)
+	for value, token := range codec.tokens {
+		canonical[token] = byte(value)
+	}
+	for left := 0; left < 256; left++ {
+		leftRunes := []rune(codec.tokens[left])
+		for right := 0; right < 256; right++ {
+			rightRunes := []rune(codec.tokens[right])
+			seam := string([]rune{leftRunes[len(leftRunes)-1], rightRunes[0]})
+			if value, ok := canonical[seam]; ok {
+				t.Fatalf("byte pair {%02x,%02x} seam %q is canonical token for %02x", left, right, seam, value)
+			}
+		}
+	}
+}
+
 func TestEncodedByteSubjectBoundaryMapAndNewlines(t *testing.T) {
 	codec, err := newByteTokenCodec(alternatingWordBytes())
 	if err != nil {

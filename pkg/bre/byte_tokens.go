@@ -19,14 +19,22 @@ type byteTokenCodec struct {
 	reverse map[string]byte
 }
 
-const byteTokenWordAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+const (
+	// Keeping the position alphabets disjoint makes word tokens
+	// self-synchronizing: a suffix followed by the next token's prefix can
+	// never itself be a canonical prefix+suffix token. Both alphabets contain
+	// only runes RE2 classifies as ASCII word characters.
+	byteTokenWordPrefixes = "ABCDEFGHIJKLMNOP"
+	byteTokenWordSuffixes = "QRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+)
 
 func newByteTokenCodec(wordBytes [256]bool) (byteTokenCodec, error) {
 	if wordBytes['\n'] {
 		return byteTokenCodec{}, fmt.Errorf("newline cannot be classified as a word byte")
 	}
 	c := byteTokenCodec{reverse: make(map[string]byte, 256)}
-	wordRunes := []rune(byteTokenWordAlphabet)
+	wordPrefixes := []rune(byteTokenWordPrefixes)
+	wordSuffixes := []rune(byteTokenWordSuffixes)
 	for i := 0; i < 256; i++ {
 		if byte(i) == '\n' {
 			// Newline has one canonical encoding. Keeping it literal is what lets
@@ -37,8 +45,8 @@ func newByteTokenCodec(wordBytes [256]bool) (byteTokenCodec, error) {
 		var token string
 		if wordBytes[byte(i)] {
 			token = string([]rune{
-				wordRunes[i/len(wordRunes)],
-				wordRunes[i%len(wordRunes)],
+				wordPrefixes[i/len(wordSuffixes)],
+				wordSuffixes[i%len(wordSuffixes)],
 			})
 		} else {
 			// Private-use runes are non-word under RE2's ASCII definition.

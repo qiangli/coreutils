@@ -104,6 +104,23 @@ func TestLocaleBytePatternLiteralHighByteAndFold(t *testing.T) {
 	}
 }
 
+func TestLocaleBytePatternDoesNotMatchAcrossTokenSeam(t *testing.T) {
+	tables := syntheticBytePatternTables()
+	word := tables.classes["word"]
+	word[0xfd], word[0xc4], word['B'] = true, true, true
+	tables.classes["word"] = word
+	p, err := compileLocaleBytePattern([]byte{'B'}, tables, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.findSubmatchIndex([]byte{0xfd, 0xc4}); err != nil || got != nil {
+		t.Fatalf("false seam probe indices=%v err=%v, want no match", got, err)
+	}
+	if got, err := p.findSubmatchIndex([]byte{0xfd, 0xc4, 'B'}); err != nil || !reflect.DeepEqual(got, []int{2, 3}) {
+		t.Fatalf("later literal probe indices=%v err=%v, want [2 3]", got, err)
+	}
+}
+
 func TestLocaleBytePatternDotAndLiteralNewline(t *testing.T) {
 	dot := compileSyntheticBytePattern(t, []byte{'.'}, false)
 	for _, tc := range []struct {
