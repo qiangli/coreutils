@@ -129,7 +129,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `pwd` | `cmds/pwd` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `readlink` | `cmds/readlink` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `realpath` | `cmds/realpath` | — | GNU Coreutils | yes | no | 1 | 10 |
-| `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 20 |
+| `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 22 |
 | `rmdir` | `cmds/rmdir` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 3 | 59 |
 | `seq` | `cmds/seq` | — | GNU Coreutils | yes | no | 1 | 3 |

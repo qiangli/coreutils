@@ -108,12 +108,17 @@ func (r *remover) remove(op string) {
 		r.errf("cannot remove '': No such file or directory")
 		return
 	}
-	rp := r.rc.Path(op)
-	base := filepath.Base(filepath.Clean(op))
+	// POSIX and GNU require rejection based on the operand's final pathname
+	// component, before any filesystem operation or prompt. filepath.Clean
+	// erases a trailing "/." (and resolves "/.."), so inspecting its Base
+	// could recurse into the named directory and remove children before the
+	// eventual rmdir failure.
+	base := finalOperandComponent(op)
 	if base == "." || base == ".." {
 		r.errf("refusing to remove '%s'", op)
 		return
 	}
+	rp := r.rc.Path(op)
 	fi, err := os.Lstat(rp)
 	if err != nil {
 		if r.force && (errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)) {
@@ -151,6 +156,24 @@ func (r *remover) remove(op string) {
 		return
 	}
 	r.removeFile(op)
+}
+
+// finalOperandComponent returns the last non-empty pathname component without
+// normalizing dot components. os.IsPathSeparator keeps this check correct for
+// both accepted separator spellings on Windows and the POSIX separator.
+func finalOperandComponent(op string) string {
+	if volume := filepath.VolumeName(op); volume != "" {
+		op = op[len(volume):]
+	}
+	end := len(op)
+	for end > 0 && os.IsPathSeparator(op[end-1]) {
+		end--
+	}
+	start := end
+	for start > 0 && !os.IsPathSeparator(op[start-1]) {
+		start--
+	}
+	return op[start:end]
 }
 
 func (r *remover) removeFile(op string) {

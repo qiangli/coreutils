@@ -176,9 +176,12 @@ func TestRmCompatibilityNoOps(t *testing.T) {
 
 func TestRmRootRefused(t *testing.T) {
 	dir := t.TempDir()
-	guarded := filepath.Join(dir, "guarded")
-	deep := filepath.Join(guarded, "child", "deep")
-	write(t, filepath.Join(deep, "sentinel"), "keep")
+	guarded := filepath.Join(dir, "guarded", "child", "target")
+	deep := filepath.Join(dir, "guarded", "child", "deep")
+	write(t, filepath.Join(guarded, "sentinel"), "keep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	old := isFilesystemRoot
 	isFilesystemRoot = func(path string, followFinal bool) bool {
@@ -186,7 +189,7 @@ func TestRmRootRefused(t *testing.T) {
 	}
 	t.Cleanup(func() { isFilesystemRoot = old })
 
-	alias := filepath.Join("guarded", "child", "deep") + string(filepath.Separator) + ".." + string(filepath.Separator) + ".."
+	alias := filepath.Join("guarded", "child", "deep", "..", "target")
 	_, errb, code := runTool(t, dir, "-rf", alias)
 	if code != 1 || !strings.Contains(errb, "it is dangerous to operate recursively on") {
 		t.Fatalf("rm identity guard: code=%d err=%q", code, errb)
@@ -194,7 +197,7 @@ func TestRmRootRefused(t *testing.T) {
 	if want := "(same as '" + rootguard.RootPath(guarded) + "')"; !strings.Contains(errb, want) {
 		t.Fatalf("identity guard diagnostic=%q, want %q", errb, want)
 	}
-	if _, err := os.Stat(filepath.Join(deep, "sentinel")); err != nil {
+	if _, err := os.Stat(filepath.Join(guarded, "sentinel")); err != nil {
 		t.Fatalf("guarded tree was modified: %v", err)
 	}
 }
@@ -344,6 +347,55 @@ func TestRmRejectsDotAndDotDotOperands(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "keep")); err != nil {
 		t.Fatalf("dot operand removed contents: %v", err)
+	}
+}
+
+func TestRmRejectsDotComponentsBeforeTraversal(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		operand   string
+		protected string
+	}{
+		{name: "dot", operand: "d/.", protected: "d/keep"},
+		{name: "dot trailing separator", operand: "d/./", protected: "d/keep"},
+		{name: "dot dot", operand: "d/..", protected: "keep"},
+		{name: "dot dot trailing separator", operand: "d/../", protected: "keep"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(dir, "d", "keep"), "inside")
+			write(t, filepath.Join(dir, "keep"), "outside")
+
+			out, errb, code := runTool(t, dir, "y\n", "-ri", tc.operand)
+			if code != 1 || out != "" || !strings.Contains(errb, "refusing to remove") {
+				t.Fatalf("rm -ri %q = (%q, %q, %d), want refusal and exit 1", tc.operand, out, errb, code)
+			}
+			if strings.Contains(errb, "? ") {
+				t.Errorf("rm -ri %q prompted before mandatory refusal: %q", tc.operand, errb)
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, tc.protected)); err != nil || string(got) == "" {
+				t.Errorf("protected file after rm -ri %q = (%q, %v), want preserved", tc.operand, got, err)
+			}
+		})
+	}
+}
+
+func TestRmAllowsDotComponentsBeforeFinalName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "victim"), "outside")
+	write(t, filepath.Join(dir, "d", "victim"), "inside")
+
+	for _, operand := range []string{"d/./victim", "d/../victim"} {
+		_, errb, code := runTool(t, dir, "", "-f", operand)
+		if code != 0 || errb != "" {
+			t.Fatalf("rm -f %q = (_, %q, %d), want success", operand, errb, code)
+		}
 	}
 }
 
