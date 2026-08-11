@@ -102,10 +102,7 @@ func run(rc *tool.RunContext, args []string) int {
 	if *release || *all {
 		parts = append(parts, info.release)
 	}
-	if *all && info.version != "" {
-		parts = append(parts, info.version)
-	}
-	if *kernelVersion {
+	if *kernelVersion || (*all && info.version != "") {
 		parts = append(parts, info.version)
 	}
 	if *machine || *all {

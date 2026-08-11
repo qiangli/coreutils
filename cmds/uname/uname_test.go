@@ -120,6 +120,14 @@ func TestUnameCombinedAndAll(t *testing.T) {
 			}
 		}
 	}
+
+	av, _, code := runTool(t, "-a", "-v")
+	if code != 0 {
+		t.Fatalf("-a -v: code=%d", code)
+	}
+	if av != all {
+		t.Errorf("uname -a -v output %q differs from uname -a output %q", av, all)
+	}
 }
 
 func TestUnameErrors(t *testing.T) {
