@@ -225,6 +225,9 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 		if limit == 0 {
 			return 0
 		}
+		if limit > 0 && matched >= limit {
+			return 0
+		}
 		if b1 != b2 {
 			if printBytes {
 				fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n",
@@ -238,9 +241,6 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 		lastWasNL = b1 == '\n'
 		if lastWasNL {
 			newlines++
-		}
-		if limit >= 0 && matched >= limit {
-			return 0
 		}
 	}
 }
@@ -294,6 +294,12 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 			}
 			return 0
 		}
+		if limit > 0 && pos >= limit {
+			if differed {
+				return 1
+			}
+			return 0
+		}
 		pos++
 		if b1 != b2 {
 			differed = true
@@ -302,12 +308,6 @@ func cmpVerbose(rc *tool.RunContext, name1, name2 string, s1, s2 *src, size1, si
 			} else {
 				fmt.Fprintf(rc.Out, "%*d %3o %3o\n", width, pos, b1, b2)
 			}
-		}
-		if limit >= 0 && pos >= limit {
-			if differed {
-				return 1
-			}
-			return 0
 		}
 	}
 }
@@ -329,13 +329,13 @@ func cmpSilent(rc *tool.RunContext, s1, s2 *src, limit int64) int {
 		if limit == 0 {
 			return 0
 		}
+		if limit > 0 && compared >= limit {
+			return 0
+		}
 		if b1 != b2 {
 			return 1
 		}
 		compared++
-		if limit >= 0 && compared >= limit {
-			return 0
-		}
 	}
 }
 
