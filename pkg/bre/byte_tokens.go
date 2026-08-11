@@ -21,10 +21,19 @@ type byteTokenCodec struct {
 
 const byteTokenWordAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
 
-func newByteTokenCodec(wordBytes [256]bool) byteTokenCodec {
+func newByteTokenCodec(wordBytes [256]bool) (byteTokenCodec, error) {
+	if wordBytes['\n'] {
+		return byteTokenCodec{}, fmt.Errorf("newline cannot be classified as a word byte")
+	}
 	c := byteTokenCodec{reverse: make(map[string]byte, 256)}
 	wordRunes := []rune(byteTokenWordAlphabet)
 	for i := 0; i < 256; i++ {
+		if byte(i) == '\n' {
+			// Newline has one canonical encoding. Keeping it literal is what lets
+			// RE2 retain its native dot and multiline-anchor semantics.
+			c.tokens[i] = "\n"
+			continue
+		}
 		var token string
 		if wordBytes[byte(i)] {
 			token = string([]rune{
@@ -40,7 +49,7 @@ func newByteTokenCodec(wordBytes [256]bool) byteTokenCodec {
 		c.tokens[i] = token
 		c.reverse[token] = byte(i)
 	}
-	return c
+	return c, nil
 }
 
 // encodedByteSubject records both directions of the boundary mapping. All

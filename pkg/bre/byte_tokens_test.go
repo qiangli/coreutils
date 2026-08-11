@@ -2,6 +2,7 @@ package bre
 
 import (
 	"bytes"
+	"regexp"
 	"regexp/syntax"
 	"testing"
 	"unicode/utf8"
@@ -12,12 +13,16 @@ func alternatingWordBytes() [256]bool {
 	for i := range words {
 		words[i] = i%2 == 0
 	}
+	words['\n'] = false
 	return words
 }
 
 func TestByteTokenCodecExhaustiveRoundTripAndHomogeneity(t *testing.T) {
 	words := alternatingWordBytes()
-	codec := newByteTokenCodec(words)
+	codec, err := newByteTokenCodec(words)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := make([]byte, 256)
 	for i := range raw {
 		raw[i] = byte(i)
@@ -36,6 +41,12 @@ func TestByteTokenCodecExhaustiveRoundTripAndHomogeneity(t *testing.T) {
 
 	seen := make(map[string]byte, 256)
 	for i, token := range codec.tokens {
+		if byte(i) == '\n' {
+			if token != "\n" {
+				t.Fatalf("newline token=%q, want canonical newline", token)
+			}
+			continue
+		}
 		if prior, ok := seen[token]; ok {
 			t.Fatalf("bytes %d and %d share token %q", prior, i, token)
 		}
@@ -57,7 +68,10 @@ func TestByteTokenCodecAdjacencyHasNoInternalWordBoundary(t *testing.T) {
 	var words [256]bool
 	words[0x10] = true
 	words[0x12] = true
-	codec := newByteTokenCodec(words)
+	codec, err := newByteTokenCodec(words)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name  string
@@ -88,7 +102,10 @@ func TestByteTokenCodecAdjacencyHasNoInternalWordBoundary(t *testing.T) {
 }
 
 func TestEncodedByteSubjectBoundaryMapAndNewlines(t *testing.T) {
-	codec := newByteTokenCodec(alternatingWordBytes())
+	codec, err := newByteTokenCodec(alternatingWordBytes())
+	if err != nil {
+		t.Fatal(err)
+	}
 	empty := codec.encodeSubject(nil)
 	if empty.text != "" {
 		t.Fatalf("empty encoded text=%q, want empty", empty.text)
@@ -150,7 +167,10 @@ func TestEncodedByteSubjectBoundaryMapAndNewlines(t *testing.T) {
 }
 
 func TestByteTokenCodecRejectsMalformedEncoding(t *testing.T) {
-	codec := newByteTokenCodec(alternatingWordBytes())
+	codec, err := newByteTokenCodec(alternatingWordBytes())
+	if err != nil {
+		t.Fatal(err)
+	}
 	token := codec.tokens[0]
 	_, firstSize := utf8.DecodeRuneInString(token)
 	for name, encoded := range map[string]string{
@@ -163,5 +183,57 @@ func TestByteTokenCodecRejectsMalformedEncoding(t *testing.T) {
 				t.Fatalf("decodeSubject(%q) succeeded", encoded)
 			}
 		})
+	}
+}
+
+func TestByteTokenCodecRejectsWordNewline(t *testing.T) {
+	words := alternatingWordBytes()
+	words['\n'] = true
+	if _, err := newByteTokenCodec(words); err == nil {
+		t.Fatal("word-classified newline accepted")
+	}
+}
+
+func TestByteTokenCodecNewlineIsCanonical(t *testing.T) {
+	codec, err := newByteTokenCodec(alternatingWordBytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codec.tokens['\n'] != "\n" {
+		t.Fatalf("newline token=%q, want literal newline", codec.tokens['\n'])
+	}
+	// The pair the old implementation generated for byte 0x0a is no longer a
+	// second accepted spelling of newline.
+	alternate := string([]rune{rune(0xE000), rune(0xE100 + '\n')})
+	if _, err := codec.decodeSubject(alternate); err == nil {
+		t.Fatal("alternate two-rune newline token accepted")
+	}
+}
+
+func TestByteTokenCodecRegexpWordBoundariesAcrossNewline(t *testing.T) {
+	var words [256]bool
+	words['a'] = true
+	codec, err := newByteTokenCodec(words)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := codec.encodeSubject([]byte{'a', '\n', '!'})
+	re := regexp.MustCompile(`\b`)
+	got := re.FindAllStringIndex(encoded.text, -1)
+	if len(got) != 2 {
+		t.Fatalf("word-boundary count=%d (%v), want 2", len(got), got)
+	}
+	wantRaw := []int{0, 1}
+	for i, match := range got {
+		if match[0] != match[1] {
+			t.Fatalf("boundary %d is not empty: %v", i, match)
+		}
+		raw, err := encoded.rawOffset(match[0])
+		if err != nil {
+			t.Fatalf("boundary %d is not a raw boundary: %v", i, err)
+		}
+		if raw != wantRaw[i] {
+			t.Errorf("boundary %d raw offset=%d, want %d", i, raw, wantRaw[i])
+		}
 	}
 }
