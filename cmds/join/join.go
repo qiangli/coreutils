@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 
@@ -419,16 +420,37 @@ func buildOutput(flds1, flds2 []string, field1, field2 int, opt *options, specs 
 	return res
 }
 
+// parsePositive parses a 1-based field-number operand (-1/-2/-j/-o). GNU
+// join silently clamps a field number too large for its integer type to
+// PTRDIFF_MAX rather than rejecting it (reference/gnu-coreutils/src/
+// join.c, string_to_join_field): the field is simply never found, so the
+// join field for that side is always empty. Naive n*10+digit accumulation
+// instead wraps around the machine word, which can land back in-range and
+// silently select an unrelated real field, or go negative and panic on
+// slice indexing downstream (fieldAt) — so overflow is clamped to
+// math.MaxInt here instead of left to wrap.
 func parsePositive(s string) (int, bool) {
 	if s == "" {
 		return 0, false
 	}
 	n := 0
+	overflowed := false
 	for i := 0; i < len(s); i++ {
 		if s[i] < '0' || s[i] > '9' {
 			return 0, false
 		}
-		n = n*10 + int(s[i]-'0')
+		if overflowed {
+			continue
+		}
+		d := int(s[i] - '0')
+		if n > (math.MaxInt-d)/10 {
+			overflowed = true
+			continue
+		}
+		n = n*10 + d
+	}
+	if overflowed {
+		return math.MaxInt, true
 	}
 	return n, n > 0
 }

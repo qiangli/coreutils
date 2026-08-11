@@ -96,7 +96,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 1 | 8 |
 | `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `install` | `cmds/install` | — | GNU Coreutils | yes | no | 1 | 21 |
-| `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 1 | 6 |
+| `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `jq` | `cmds/jq` | — | Bashy/other extension | no | no | 1 | 7 |
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 3 | 4 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |

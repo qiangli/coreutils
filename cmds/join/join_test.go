@@ -3,6 +3,7 @@ package joincmd
 import (
 	"bytes"
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,5 +247,40 @@ func TestJoinHelpAndVersion(t *testing.T) {
 	out, _, code = runRaw(t, dir, "", "-V")
 	if code != 0 || !strings.Contains(out, "join") {
 		t.Errorf("-V: code=%d out=%q", code, out)
+	}
+}
+
+// TestParsePositiveOverflow guards against the naive n*10+digit
+// accumulation wrapping the machine word on a field number too large to
+// fit an int. GNU join instead silently clamps such values to
+// PTRDIFF_MAX and never finds a matching field (reference/gnu-coreutils/
+// src/join.c, string_to_join_field) — the field number here is 2^64+3,
+// chosen because a wrapping parser lands back at the small, in-range
+// value 3.
+func TestParsePositiveOverflow(t *testing.T) {
+	n, ok := parsePositive("18446744073709551619")
+	if !ok {
+		t.Fatalf(`parsePositive("18446744073709551619") ok=false, want true (GNU clamps, does not reject)`)
+	}
+	if n != math.MaxInt {
+		t.Fatalf(`parsePositive("18446744073709551619") = %d, want math.MaxInt (clamped, not wrapped)`, n)
+	}
+}
+
+// TestJoinFieldNumberOverflowDoesNotWrap is the end-to-end regression: an
+// overflowing -1 field number must never wrap into a real, in-range
+// field. Field 3 ("AAA") agrees between the files on the first line, so
+// a parser that wraps 2^64+3 down to 3 would (wrongly and silently) join
+// on it; the fix must leave file 1's join field permanently unmatchable
+// instead, producing no output.
+func TestJoinFieldNumberOverflowDoesNotWrap(t *testing.T) {
+	f1 := "k1 x AAA\nk2 y BBB\n"
+	f2 := "k1 p AAA\nk2 q CCC\n"
+	out, errb, code := runTool(t, f1, f2, "-1", "18446744073709551619", "-2", "3")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q, want 0", code, errb)
+	}
+	if out != "" {
+		t.Fatalf("out=%q, want empty: an overflowing field number must never match a real field", out)
 	}
 }
