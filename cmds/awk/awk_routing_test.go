@@ -5,22 +5,8 @@ import (
 	"testing"
 )
 
-// These tests prove the AWK backend routing: expression regexes (/pat/,
-// ~, !~, match()) compile through coreutils' custom ERE backend
-// (awkERECompiler → bre.CompileEREWithFlags), while FS, RS, split(), sub(),
-// and gsub() compile through GoAWK's standard Go-RE2 path
-// (compileRegexStd → regex.Normalize, RE_DUP_MAX=255).
-//
-// The most visible behavioral consequences are:
-//
-//   - Interval bound ceiling: the custom ERE backend honors the POSIX
-//     certification target's RE_DUP_MAX=32767; the standard path caps at 255.
-//   - Adjacent quantifiers: the custom backend rejects nested repetition
-//     (strict POSIX ERE — a quantified atom cannot itself be quantified);
-//     the standard path wraps them in non-capturing groups (regex.Normalize).
-//   - Malformed intervals: the custom backend rejects them as syntax errors;
-//     the standard path defers to RE2, which treats non-interval {…} as
-//     literal text.
+// These tests prove every AWK regexp endpoint uses coreutils' single custom
+// ERE backend: literals, ~, !~, match, FS, RS, split, sub, and gsub.
 
 // progOK runs prog and reports whether it exited 0 with no stderr.
 func progOK(t *testing.T, input, prog string) bool {
@@ -55,9 +41,8 @@ func progFails(t *testing.T, input, prog string) bool {
 // ---------------------------------------------------------------------------
 
 // TestAwkRoutingIntervalCeiling proves the routing split with a pattern whose
-// bound exceeds 255 (the standard path's RE_DUP_MAX) but not 32767 (the
-// custom ERE backend's ceiling). Expression endpoints accept it; standard
-// endpoints reject it.
+// bound exceeds 255 but not the custom ERE backend's ceiling. Every endpoint
+// accepts it through the unified backend.
 func TestAwkRoutingIntervalCeiling(t *testing.T) {
 	long256 := strings.Repeat("a", 256)
 
@@ -74,17 +59,16 @@ func TestAwkRoutingIntervalCeiling(t *testing.T) {
 		}
 	}
 
-	// Standard path endpoints: a{256} is rejected (ceiling 255).
-	stdFail := []struct{ name, prog string }{
+	stdOK := []struct{ name, prog string }{
 		{"split", `BEGIN { n = split("` + long256 + `", a, "a{256}"); print n }`},
 		{"sub", `BEGIN { s = "` + long256 + `"; sub("a{256}", "x", s); print s }`},
 		{"gsub", `BEGIN { s = "` + long256 + `"; gsub("a{256}", "x", s); print s }`},
 		{"FS", `BEGIN { FS = "a{256}" } { print NF }`},
 		{"RS", `BEGIN { RS = "a{256}" } { print }`},
 	}
-	for _, c := range stdFail {
-		if !progFails(t, "aaa\n", c.prog) {
-			t.Errorf("%s: standard path a{256} should fail (RE_DUP_MAX=255)", c.name)
+	for _, c := range stdOK {
+		if !progOK(t, "aaa\n", c.prog) {
+			t.Errorf("%s: unified backend a{256} should succeed", c.name)
 		}
 	}
 
@@ -151,14 +135,12 @@ func TestAwkRoutingLeadingZerosBothPaths(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Adjacent quantifiers: expression rejects, standard accepts
+// Adjacent quantifiers fail closed on every endpoint
 // ---------------------------------------------------------------------------
 
 // TestAwkRoutingAdjacentQuantifiers verifies that adjacent quantifier
 // compositions — including some whose effective repetition exceeds 255 — are
-// handled differently by the two backends: the custom ERE path rejects them
-// (POSIX forbids repeating a quantified atom); the standard path wraps them
-// in non-capturing groups via regex.Normalize.
+// are rejected everywhere (POSIX forbids repeating a quantified atom).
 func TestAwkRoutingAdjacentQuantifiers(t *testing.T) {
 	// Each individual bound is ≤ 255; some products exceed 255.
 	patterns := []string{
@@ -173,10 +155,10 @@ func TestAwkRoutingAdjacentQuantifiers(t *testing.T) {
 			t.Errorf("expression ~ %q should fail (nested repetition)", pat)
 		}
 
-		// Standard path (split): accepted (regex.Normalize wraps in (?:...)).
+		// Standard endpoints use the same strict backend.
 		splitProg := "BEGIN { print split(\"aaaaaa\", a, \"" + pat + "\") }"
-		if !progOK(t, "", splitProg) {
-			t.Errorf("split %q should succeed (regex.Normalize wraps)", pat)
+		if !progFails(t, "", splitProg) {
+			t.Errorf("split %q should fail (nested repetition)", pat)
 		}
 	}
 }
@@ -237,9 +219,7 @@ func TestAwkRoutingUTF8Atoms(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestAwkRoutingMalformedQuantifiers verifies that genuinely invalid quantifier
-// usage fails closed in both paths, and documents the divergence for malformed
-// interval syntax (where the custom backend rejects but the standard path
-// defers to RE2, which treats non-interval braces as literal text).
+// usage fails closed on every endpoint.
 func TestAwkRoutingMalformedQuantifiers(t *testing.T) {
 	// Both paths reject: inverted bounds and dangling quantifiers.
 	bothReject := []string{`a{3,2}`, `{2}`}
@@ -252,26 +232,22 @@ func TestAwkRoutingMalformedQuantifiers(t *testing.T) {
 		}
 	}
 
-	// Expression rejects, standard path accepts as literal: these are
-	// non-interval brace spellings. The custom ERE backend treats them as
-	// syntax errors (strict POSIX); regex.Normalize passes them byte-for-byte
-	// to RE2, which treats {…} without valid interval syntax as literal.
-	exprRejectStdAccept := []string{`a{`, `a{}`, `a{x}`, `a{2,3,4}`}
-	for _, pat := range exprRejectStdAccept {
+	malformed := []string{`a{`, `a{}`, `a{x}`, `a{2,3,4}`}
+	for _, pat := range malformed {
 		if !progFails(t, "", "BEGIN { print (\"a\" ~ \""+pat+"\") }") {
 			t.Errorf("expr ~ %q should fail (strict POSIX)", pat)
 		}
-		if !progOK(t, "", "BEGIN { print split(\"a\", a, \""+pat+"\") }") {
-			t.Errorf("split %q should succeed (RE2 literal)", pat)
+		if !progFails(t, "", "BEGIN { print split(\"a\", a, \""+pat+"\") }") {
+			t.Errorf("split %q should fail (strict POSIX)", pat)
 		}
 	}
 
-	// Nested repetition (a**): expression rejects; standard wraps.
+	// Nested repetition (a**) is rejected everywhere.
 	if !progFails(t, "", `BEGIN { print ("aaa" ~ "a**") }`) {
 		t.Errorf("expr ~ a** should fail")
 	}
-	if !progOK(t, "", `BEGIN { print split("aaa", a, "a**") }`) {
-		t.Errorf("split a** should succeed (regex.Normalize wraps)")
+	if !progFails(t, "", `BEGIN { print split("aaa", a, "a**") }`) {
+		t.Errorf("split a** should fail")
 	}
 }
 

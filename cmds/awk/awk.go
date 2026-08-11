@@ -15,6 +15,8 @@ import (
 	"github.com/benhoyt/goawk/parser"
 	awkregex "github.com/benhoyt/goawk/regex"
 	"github.com/qiangli/coreutils/pkg/bre"
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -31,6 +33,17 @@ var cmd = &tool.Tool{
 func init() { cmd.Run = run; tool.Register(cmd) }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithCType(rc, args, func(name string) (ctypeProvider, error) { return ctype.Open(name) })
+}
+
+type ctypeProvider interface {
+	bre.ByteCtype
+	Close() error
+}
+
+type ctypeOpener func(string) (ctypeProvider, error)
+
+func runWithCType(rc *tool.RunContext, args []string, opener ctypeOpener) int {
 	fs := tool.NewFlags(cmd.Name)
 	// Option processing ends at the first operand (the program text or,
 	// with -f, the first input file) — anything after it is a file operand
@@ -49,11 +62,6 @@ func run(rc *tool.RunContext, args []string) int {
 	var source string
 	var files []string
 	if len(progFiles) > 0 {
-		src, ok := readProgramFiles(rc, progFiles)
-		if !ok {
-			return 2
-		}
-		source = src
 		files = operands
 	} else {
 		if len(operands) == 0 {
@@ -78,8 +86,36 @@ func run(rc *tool.RunContext, args []string) int {
 		vars = append(vars, name, unescape(value))
 	}
 
+	compiler := awkERECompiler{}
+	lcCType := locale.Resolve(rc.Env, locale.CType)
+	if lcCType != "C" && lcCType != "POSIX" {
+		provider, err := opener(lcCType)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "awk: LC_CTYPE %q: %v\n", lcCType, err)
+			return 2
+		}
+		tables, snapshotErr := bre.SnapshotLocaleByteTables(provider)
+		closeErr := provider.Close()
+		if snapshotErr != nil {
+			fmt.Fprintf(rc.Err, "awk: LC_CTYPE %q: %v\n", lcCType, snapshotErr)
+			return 2
+		}
+		if closeErr != nil {
+			fmt.Fprintf(rc.Err, "awk: LC_CTYPE %q: %v\n", lcCType, closeErr)
+			return 2
+		}
+		compiler.tables = tables
+	}
+	if len(progFiles) > 0 {
+		src, ok := readProgramFiles(rc, progFiles)
+		if !ok {
+			return 2
+		}
+		source = src
+	}
+
 	prog, err := parser.ParseProgram([]byte(source), &parser.ParserConfig{
-		RegexCompiler: awkERECompiler{},
+		RegexCompiler: compiler,
 	})
 	if err != nil {
 		fmt.Fprintf(rc.Err, "awk: %v\n", err)
@@ -111,9 +147,20 @@ func run(rc *tool.RunContext, args []string) int {
 // longest of the leftmost matches. Keep the unmodified AWK source separately:
 // pkg/bre translates some ERE constructs before compiling them, but GoAWK uses
 // String for stable diagnostics and disassembly.
-type awkERECompiler struct{}
+type awkERECompiler struct {
+	tables *bre.LocaleByteTables
+}
 
-func (awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
+func (c awkERECompiler) Compile(source string) (awkregex.Regexp, error) {
+	if c.tables != nil {
+		re, err := bre.CompileLocaleByteRegexpTables([]byte(source), c.tables, bre.ByteRegexpOptions{
+			Syntax: bre.ByteRegexpERE, DotAll: true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &awkLocaleERERegexp{source: source, re: re}, nil
+	}
 	re, err := bre.CompileEREWithFlags(source, "(?s)")
 	if err != nil {
 		return nil, err
@@ -127,9 +174,112 @@ type awkERERegexp struct {
 	re     *bre.Regexp
 }
 
-func (r *awkERERegexp) String() string                 { return r.source }
-func (r *awkERERegexp) MatchString(s string) bool      { return r.re.MatchString(s) }
-func (r *awkERERegexp) FindStringIndex(s string) []int { return r.re.FindStringIndex(s) }
+func (r *awkERERegexp) String() string                          { return r.source }
+func (r *awkERERegexp) MatchString(s string) (bool, error)      { return r.re.MatchString(s), nil }
+func (r *awkERERegexp) FindStringIndex(s string) ([]int, error) { return r.re.FindStringIndex(s), nil }
+func (r *awkERERegexp) FindAllStringIndex(s string, n int) ([][]int, error) {
+	matches := r.re.FindAllStringSubmatchIndex(s, n)
+	indices := make([][]int, len(matches))
+	for i, match := range matches {
+		indices[i] = match[:2]
+	}
+	return indices, nil
+}
+func (r *awkERERegexp) FindIndex(b []byte) ([]int, error) {
+	return r.re.FindStringIndex(string(b)), nil
+}
+func (r *awkERERegexp) Split(s string, n int) ([]string, error) {
+	return splitRegexp(s, n, r.FindAllStringIndex)
+}
+func (r *awkERERegexp) ReplaceAllStringFunc(s string, repl func(string) string) (string, error) {
+	return replaceRegexp(s, repl, r.FindAllStringIndex)
+}
+
+type awkLocaleERERegexp struct {
+	source string
+	re     *bre.LocaleByteRegexp
+}
+
+func (r *awkLocaleERERegexp) String() string                     { return r.source }
+func (r *awkLocaleERERegexp) MatchString(s string) (bool, error) { return r.re.MatchString(s) }
+func (r *awkLocaleERERegexp) FindStringIndex(s string) ([]int, error) {
+	match, err := r.re.FindSubmatchIndex([]byte(s))
+	if err != nil || match == nil {
+		return match, err
+	}
+	return match[:2], nil
+}
+func (r *awkLocaleERERegexp) FindAllStringIndex(s string, n int) ([][]int, error) {
+	matches, err := r.re.FindAllStringSubmatchIndex(s, n)
+	if err != nil {
+		return nil, err
+	}
+	indices := make([][]int, len(matches))
+	for i, match := range matches {
+		indices[i] = match[:2]
+	}
+	return indices, nil
+}
+func (r *awkLocaleERERegexp) FindIndex(b []byte) ([]int, error) {
+	match, err := r.re.FindSubmatchIndex(b)
+	if err != nil || match == nil {
+		return match, err
+	}
+	return match[:2], nil
+}
+func (r *awkLocaleERERegexp) Split(s string, n int) ([]string, error) {
+	return splitRegexp(s, n, r.FindAllStringIndex)
+}
+
+type findAllFunc func(string, int) ([][]int, error)
+
+func splitRegexp(s string, n int, findAll findAllFunc) ([]string, error) {
+	if n == 0 {
+		return nil, nil
+	}
+	if s == "" {
+		return []string{""}, nil
+	}
+	matches, err := findAll(s, n)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]string, 0, len(matches)+1)
+	begin, end := 0, 0
+	for _, match := range matches {
+		if n > 0 && len(parts) >= n-1 {
+			break
+		}
+		end = match[0]
+		if match[1] != 0 {
+			parts = append(parts, s[begin:end])
+		}
+		begin = match[1]
+	}
+	if end != len(s) {
+		parts = append(parts, s[begin:])
+	}
+	return parts, nil
+}
+func (r *awkLocaleERERegexp) ReplaceAllStringFunc(s string, repl func(string) string) (string, error) {
+	return replaceRegexp(s, repl, r.FindAllStringIndex)
+}
+
+func replaceRegexp(s string, repl func(string) string, findAll findAllFunc) (string, error) {
+	matches, err := findAll(s, -1)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	last := 0
+	for _, match := range matches {
+		b.WriteString(s[last:match[0]])
+		b.WriteString(repl(s[match[0]:match[1]]))
+		last = match[1]
+	}
+	b.WriteString(s[last:])
+	return b.String(), nil
+}
 
 func readProgramFiles(rc *tool.RunContext, names []string) (string, bool) {
 	var b strings.Builder
