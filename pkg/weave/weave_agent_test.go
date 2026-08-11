@@ -151,7 +151,7 @@ func TestExpandAGYCarriesGenericWorkspacePlaceholder(t *testing.T) {
 		t.Fatalf("launch=%+v err=%v", l, err)
 	}
 	got := strings.Join(argv, " ")
-	if !strings.Contains(got, "agy --add-dir {workspace} --dangerously-skip-permissions") {
+	if !strings.Contains(got, "agy --new-project --add-dir {workspace} --dangerously-skip-permissions") {
 		t.Fatalf("agy expansion did not carry workspace binding before writer args: %q", got)
 	}
 	if len(l.WorkspacePreflight) == 0 {
@@ -161,7 +161,7 @@ func TestExpandAGYCarriesGenericWorkspacePlaceholder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(bound, " "); strings.Contains(got, fleet.WorkspaceToken) || !strings.Contains(got, "--add-dir /tmp/allocated-work") {
+	if got := strings.Join(bound, " "); strings.Contains(got, fleet.WorkspaceToken) || !strings.Contains(got, "--new-project --add-dir /tmp/allocated-work") {
 		t.Fatalf("bound argv = %q", got)
 	}
 }
