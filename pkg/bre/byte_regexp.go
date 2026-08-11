@@ -129,7 +129,7 @@ func (r *LocaleByteRegexp) MatchString(src string) (bool, error) {
 
 // Expand appends template expansion using raw source offsets.
 func (r *LocaleByteRegexp) Expand(dst, template, src []byte, match []int) ([]byte, error) {
-	if err := validateRawMatch(len(src), match); err != nil {
+	if err := validateRawMatch(len(src), r.pattern.re.NumSubexp(), match); err != nil {
 		return nil, err
 	}
 	return expandTemplate(dst, string(template), string(src), match), nil
@@ -137,23 +137,28 @@ func (r *LocaleByteRegexp) Expand(dst, template, src []byte, match []int) ([]byt
 
 // ExpandString appends template expansion using raw source offsets.
 func (r *LocaleByteRegexp) ExpandString(dst []byte, template, src string, match []int) ([]byte, error) {
-	if err := validateRawMatch(len(src), match); err != nil {
+	if err := validateRawMatch(len(src), r.pattern.re.NumSubexp(), match); err != nil {
 		return nil, err
 	}
 	return expandTemplate(dst, template, src, match), nil
 }
 
-func validateRawMatch(srcLen int, match []int) error {
-	if len(match) == 0 || len(match)%2 != 0 {
-		return fmt.Errorf("locale byte regexp: malformed match index vector")
+func validateRawMatch(srcLen, numSubexp int, match []int) error {
+	wantLen := 2 * (numSubexp + 1)
+	if len(match) != wantLen {
+		return fmt.Errorf("locale byte regexp: match index vector has %d entries, want %d", len(match), wantLen)
 	}
-	for i := 0; i < len(match); i += 2 {
+	wholeStart, wholeEnd := match[0], match[1]
+	if wholeStart < 0 || wholeEnd < wholeStart || wholeEnd > srcLen {
+		return fmt.Errorf("locale byte regexp: invalid whole-match offsets [%d,%d]", wholeStart, wholeEnd)
+	}
+	for i := 2; i < len(match); i += 2 {
 		start, end := match[i], match[i+1]
 		if start == -1 && end == -1 {
 			continue
 		}
-		if start < 0 || end < start || end > srcLen {
-			return fmt.Errorf("locale byte regexp: invalid raw match offsets [%d,%d]", start, end)
+		if start < wholeStart || end < start || end > wholeEnd {
+			return fmt.Errorf("locale byte regexp: invalid capture offsets [%d,%d] outside whole match [%d,%d]", start, end, wholeStart, wholeEnd)
 		}
 	}
 	return nil

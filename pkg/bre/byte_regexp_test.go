@@ -165,8 +165,37 @@ func TestLocaleByteRegexpExpandRawBytes(t *testing.T) {
 	if err != nil || !bytes.Equal(got, []byte{'<', 0xe9, '>'}) {
 		t.Fatalf("ExpandString=%v err=%v", got, err)
 	}
-	if _, err := re.Expand(nil, nil, src, []int{0, 2}); err == nil {
-		t.Fatal("invalid expansion offsets accepted")
+	invalid := map[string][]int{
+		"missing capture":   {0, 1},
+		"extra capture":     {0, 1, 0, 1, -1, -1},
+		"absent whole":      {-1, -1, -1, -1},
+		"reversed whole":    {1, 0, -1, -1},
+		"whole past source": {0, 2, 0, 1},
+		"half absent start": {0, 1, -1, 1},
+		"half absent end":   {0, 1, 0, -1},
+		"capture before":    {1, 1, 0, 1},
+		"capture after":     {0, 0, 0, 1},
+	}
+	for name, indices := range invalid {
+		t.Run(name, func(t *testing.T) {
+			if _, err := re.Expand(nil, nil, src, indices); err == nil {
+				t.Error("Expand accepted invalid vector")
+			}
+			if _, err := re.ExpandString(nil, "", string(src), indices); err == nil {
+				t.Error("ExpandString accepted invalid vector")
+			}
+		})
+	}
+	absent, err := CompileLocaleByteRegexp([]byte(`^(a)?b$`), newFakeByteCtype(), ByteRegexpOptions{Syntax: ByteRegexpERE})
+	if err != nil {
+		t.Fatal(err)
+	}
+	absentMatch, err := absent.FindSubmatchIndex([]byte("b"))
+	if err != nil || !reflect.DeepEqual(absentMatch, []int{0, 1, -1, -1}) {
+		t.Fatalf("absent capture indices=%v err=%v", absentMatch, err)
+	}
+	if got, err := absent.ExpandString(nil, `x${1}y`, "b", absentMatch); err != nil || string(got) != "xy" {
+		t.Fatalf("absent capture expansion=%q err=%v", got, err)
 	}
 }
 
