@@ -10,6 +10,7 @@ package catcmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,6 +43,54 @@ type catState struct {
 	lineNo      int64
 	blankRun    int
 	atLineStart bool
+}
+
+type writeErr struct {
+	err error
+}
+
+func (e *writeErr) Error() string {
+	return e.err.Error()
+}
+
+func (e *writeErr) Unwrap() error {
+	return e.err
+}
+
+type trackingWriter struct {
+	w *bufio.Writer
+}
+
+func (t *trackingWriter) Write(p []byte) (int, error) {
+	n, err := t.w.Write(p)
+	if err != nil {
+		return n, &writeErr{err: err}
+	}
+	return n, nil
+}
+
+func (t *trackingWriter) WriteString(s string) (int, error) {
+	n, err := t.w.WriteString(s)
+	if err != nil {
+		return n, &writeErr{err: err}
+	}
+	return n, nil
+}
+
+func (t *trackingWriter) WriteByte(c byte) error {
+	err := t.w.WriteByte(c)
+	if err != nil {
+		return &writeErr{err: err}
+	}
+	return nil
+}
+
+func (t *trackingWriter) Flush() error {
+	err := t.w.Flush()
+	if err != nil {
+		return &writeErr{err: err}
+	}
+	return nil
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -89,7 +138,13 @@ func run(rc *tool.RunContext, args []string) int {
 		files = []string{"-"}
 	}
 
-	w := bufio.NewWriter(rc.Out)
+	var outFi os.FileInfo
+	if f, ok := rc.Out.(*os.File); ok {
+		outFi, _ = f.Stat()
+	}
+
+	bw := bufio.NewWriter(rc.Out)
+	tw := &trackingWriter{w: bw}
 	st := &catState{atLineStart: true}
 	exit := 0
 	for _, name := range files {
@@ -100,6 +155,15 @@ func run(rc *tool.RunContext, args []string) int {
 			if r == nil {
 				r = strings.NewReader("")
 			}
+			if outFi != nil {
+				if f, ok := rc.In.(*os.File); ok {
+					if inFi, err := f.Stat(); err == nil && os.SameFile(inFi, outFi) {
+						fmt.Fprintf(rc.Err, "cat: -: input file is also the output file\n")
+						exit = 1
+						continue
+					}
+				}
+			}
 		} else {
 			f, err := os.Open(rc.Path(name))
 			if err != nil {
@@ -109,8 +173,30 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 			r = f
 			closer = f
+			if outFi != nil {
+				if inFi, err := f.Stat(); err == nil && os.SameFile(inFi, outFi) {
+					fmt.Fprintf(rc.Err, "cat: %s: input file is also the output file\n", name)
+					exit = 1
+					closer.Close()
+					continue
+				}
+			}
 		}
-		if err := catStream(r, w, o, st); err != nil {
+		if err := catStream(r, tw, o, st); err != nil {
+			var we *writeErr
+			if errors.As(err, &we) {
+				if tool.IsClosedPipeError(we.err) {
+					if closer != nil {
+						closer.Close()
+					}
+					return 0
+				}
+				fmt.Fprintf(rc.Err, "cat: write error: %v\n", sysErr(we.err))
+				if closer != nil {
+					closer.Close()
+				}
+				return 1
+			}
 			if tool.IsClosedPipeError(err) {
 				if closer != nil {
 					closer.Close()
@@ -124,11 +210,11 @@ func run(rc *tool.RunContext, args []string) int {
 			closer.Close()
 		}
 	}
-	if err := w.Flush(); err != nil {
+	if err := bw.Flush(); err != nil {
 		if tool.IsClosedPipeError(err) {
 			return 0
 		}
-		fmt.Fprintf(rc.Err, "cat: write error: %v\n", err)
+		fmt.Fprintf(rc.Err, "cat: write error: %v\n", sysErr(err))
 		return 1
 	}
 	return exit
@@ -169,10 +255,10 @@ func extractShortOnly(args []string) (out []string, e, t, u bool) {
 	return out, e, t, u
 }
 
-func catStream(r io.Reader, w *bufio.Writer, o catOpts, st *catState) error {
+func catStream(r io.Reader, tw *trackingWriter, o catOpts, st *catState) error {
 	br := bufio.NewReader(r)
 	if o == (catOpts{}) {
-		_, err := io.Copy(w, br)
+		_, err := io.Copy(tw, br)
 		return err
 	}
 	if o == (catOpts{unbuffered: true}) {
@@ -180,10 +266,10 @@ func catStream(r io.Reader, w *bufio.Writer, o catOpts, st *catState) error {
 		for {
 			n, err := br.Read(buf)
 			if n > 0 {
-				if _, werr := w.Write(buf[:n]); werr != nil {
+				if _, werr := tw.Write(buf[:n]); werr != nil {
 					return werr
 				}
-				if ferr := w.Flush(); ferr != nil {
+				if ferr := tw.Flush(); ferr != nil {
 					return ferr
 				}
 			}
@@ -198,9 +284,9 @@ func catStream(r io.Reader, w *bufio.Writer, o catOpts, st *catState) error {
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
-			emitLine(w, line, o, st)
+			emitLine(tw, line, o, st)
 			if o.unbuffered {
-				if ferr := w.Flush(); ferr != nil {
+				if ferr := tw.Flush(); ferr != nil {
 					return ferr
 				}
 			}
@@ -214,7 +300,7 @@ func catStream(r io.Reader, w *bufio.Writer, o catOpts, st *catState) error {
 	}
 }
 
-func emitLine(w *bufio.Writer, line []byte, o catOpts, st *catState) {
+func emitLine(tw *trackingWriter, line []byte, o catOpts, st *catState) {
 	hasNL := line[len(line)-1] == '\n'
 	content := line
 	if hasNL {
@@ -237,11 +323,11 @@ func emitLine(w *bufio.Writer, line []byte, o catOpts, st *catState) {
 		if o.numberNonblank {
 			if !blank {
 				st.lineNo++
-				fmt.Fprintf(w, "%6d\t", st.lineNo)
+				fmt.Fprintf(tw, "%6d\t", st.lineNo)
 			}
 		} else if o.numberAll {
 			st.lineNo++
-			fmt.Fprintf(w, "%6d\t", st.lineNo)
+			fmt.Fprintf(tw, "%6d\t", st.lineNo)
 		}
 	}
 
@@ -254,16 +340,16 @@ func emitLine(w *bufio.Writer, line []byte, o catOpts, st *catState) {
 		end--
 	}
 	for i := 0; i < end; i++ {
-		writeTransformed(w, content[i], o)
+		writeTransformed(tw, content[i], o)
 	}
 	if trailCR {
-		w.WriteString("^M")
+		tw.WriteString("^M")
 	}
 	if hasNL {
 		if o.showEnds {
-			w.WriteByte('$')
+			tw.WriteByte('$')
 		}
-		w.WriteByte('\n')
+		tw.WriteByte('\n')
 		st.atLineStart = true
 	} else if len(content) > 0 {
 		st.atLineStart = false
@@ -272,35 +358,35 @@ func emitLine(w *bufio.Writer, line []byte, o catOpts, st *catState) {
 
 // writeTransformed renders one byte with GNU cat's ^ / M- notation.
 // Mapping adapted from guonaihong/coreutils cat (writeNonblank).
-func writeTransformed(w *bufio.Writer, c byte, o catOpts) {
+func writeTransformed(tw *trackingWriter, c byte, o catOpts) {
 	if c == '\t' {
 		if o.showTabs {
-			w.WriteString("^I")
+			tw.WriteString("^I")
 		} else {
-			w.WriteByte(c)
+			tw.WriteByte(c)
 		}
 		return
 	}
 	if !o.showNP {
-		w.WriteByte(c)
+		tw.WriteByte(c)
 		return
 	}
 	switch {
 	case c < 32:
-		w.WriteByte('^')
-		w.WriteByte(c + 64)
+		tw.WriteByte('^')
+		tw.WriteByte(c + 64)
 	case c < 127:
-		w.WriteByte(c)
+		tw.WriteByte(c)
 	case c == 127:
-		w.WriteString("^?")
+		tw.WriteString("^?")
 	case c < 160:
-		w.WriteString("M-^")
-		w.WriteByte(c - 64)
+		tw.WriteString("M-^")
+		tw.WriteByte(c - 64)
 	case c < 255:
-		w.WriteString("M-")
-		w.WriteByte(c - 128)
+		tw.WriteString("M-")
+		tw.WriteByte(c - 128)
 	default:
-		w.WriteString("M-^?")
+		tw.WriteString("M-^?")
 	}
 }
 
