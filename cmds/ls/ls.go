@@ -258,6 +258,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 	showControl, _ := fs.GetBool("show-control-chars")
 	hideControlFlag, _ := fs.GetBool("hide-control-chars")
+	literal, quoteName, escape = lastQuotingStyle(args, fs)
 
 	opt := options{
 		long:           short['l'] > 0 || longFlag,
@@ -282,9 +283,9 @@ func run(rc *tool.RunContext, args []string) int {
 		sortExtension:  short['X'] > 0,
 		sortVersion:    short['v'] > 0,
 		groupDirsFirst: groupDirsFirst,
-		literal:        short['N'] > 0 || literal,
-		quoteName:      short['Q'] > 0 || quoteName,
-		escape:         short['b'] > 0 || escape,
+		literal:        literal,
+		quoteName:      quoteName,
+		escape:         escape,
 		hide:           hide,
 		ignore:         ignore,
 	}
@@ -362,14 +363,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "unsupported --indicator-style=%s", indicator)
 	}
 	switch quoting {
-	case "", "literal":
-		if quoting == "literal" {
-			opt.literal = true
-		}
-	case "c":
-		opt.quoteName = true
-	case "escape":
-		opt.escape = true
+	case "", "literal", "c", "escape":
 	default:
 		return tool.UsageError(rc, cmd, "unsupported --quoting-style=%s", quoting)
 	}
@@ -1427,6 +1421,70 @@ func lastIndicatorStyle(args []string, fs *pflag.FlagSet) indicatorStyle {
 		}
 	}
 	return style
+}
+
+// lastQuotingStyle resolves the mutually exclusive name-quoting options in
+// command-line order. This matters for dir and vdir too: their implicit -b
+// precedes every user-supplied option.
+func lastQuotingStyle(args []string, fs *pflag.FlagSet) (literal, quoteName, escape bool) {
+	set := func(style string) {
+		literal, quoteName, escape = false, false, false
+		switch style {
+		case "literal":
+			literal = true
+		case "c":
+			quoteName = true
+		case "escape":
+			escape = true
+		}
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		if strings.HasPrefix(a, "--") {
+			name := a[2:]
+			value := ""
+			hasValue := false
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				value, name, hasValue = name[eq+1:], name[:eq], true
+			}
+			name = canonicalLongName(fs, name)
+			if flag := fs.Lookup(name); !hasValue && flag != nil && flag.NoOptDefVal == "" && i+1 < len(args) {
+				i++
+				value = args[i]
+			}
+			switch name {
+			case "literal", "quote-name", "escape":
+				if boolOptionEnabled(value, hasValue) {
+					set(map[string]string{"literal": "literal", "quote-name": "c", "escape": "escape"}[name])
+				}
+			case "quoting-style":
+				switch value {
+				case "literal", "c", "escape":
+					set(value)
+				}
+			}
+			continue
+		}
+		if len(a) > 1 && a[0] == '-' {
+			for j := 1; j < len(a); j++ {
+				if strings.IndexByte(argTakingShorts, a[j]) >= 0 {
+					break
+				}
+				switch a[j] {
+				case 'N':
+					set("literal")
+				case 'Q':
+					set("c")
+				case 'b':
+					set("escape")
+				}
+			}
+		}
+	}
+	return literal, quoteName, escape
 }
 
 // boolOptionEnabled mirrors pflag's explicit boolean-value handling for the

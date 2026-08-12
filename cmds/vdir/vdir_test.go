@@ -31,9 +31,11 @@ func write(t *testing.T, dir, name, content string) {
 	}
 }
 
-func TestVdirDefaultsToLongListing(t *testing.T) {
+// GNU documents vdir as equivalent to "ls -l -b": it has long format and
+// escapes nongraphic bytes unless an option later overrides either default.
+func TestVdirDefaultLongAndEscapeModes(t *testing.T) {
 	dir := t.TempDir()
-	write(t, dir, "f", "hello")
+	write(t, dir, "a\tb", "hello")
 
 	out, errb, code := runToolAt(t, dir)
 	if code != 0 || errb != "" {
@@ -46,8 +48,15 @@ func TestVdirDefaultsToLongListing(t *testing.T) {
 	if !regexp.MustCompile(`^total \d+$`).MatchString(lines[0]) {
 		t.Fatalf("vdir total line = %q", lines[0])
 	}
-	if !regexp.MustCompile(`^[-dl][rwxsStT-]{9} +\d+ .* 5 [A-Z][a-z]{2} [ \d]\d [ \d\d:]{5} f$`).MatchString(lines[1]) {
+	if !regexp.MustCompile(`^[-dl][rwxsStT-]{9} +\d+ .* 5 [A-Z][a-z]{2} [ \d]\d [ \d\d:]{5} a\\tb$`).MatchString(lines[1]) {
 		t.Fatalf("vdir entry line = %q", lines[1])
+	}
+
+	// --format is later than vdir's implicit -l, and -N is later than its
+	// implicit -b, so both defaults are overridden.
+	out, errb, code = runToolAt(t, dir, "--format=single-column", "-N")
+	if code != 0 || errb != "" || out != "a\tb\n" {
+		t.Fatalf("vdir --format=single-column -N = (%q, %q, %d), want explicit overrides", out, errb, code)
 	}
 }
 

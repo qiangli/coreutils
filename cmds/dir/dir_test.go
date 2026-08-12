@@ -30,14 +30,23 @@ func write(t *testing.T, dir, name string) {
 	}
 }
 
-func TestDirDefaultsToCompactListing(t *testing.T) {
+// GNU documents dir as equivalent to "ls -C -b": its default is a
+// vertical column listing with nongraphic bytes escaped.
+func TestDirDefaultColumnAndEscapeModes(t *testing.T) {
 	dir := t.TempDir()
-	write(t, dir, "b")
-	write(t, dir, "a")
+	write(t, dir, "a\tb")
+	write(t, dir, "plain")
 
-	out, errb, code := runToolAt(t, dir)
-	if code != 0 || errb != "" || out != "a\nb\n" {
-		t.Fatalf("dir = (%q, %q, %d), want compact sorted listing", out, errb, code)
+	out, errb, code := runToolAt(t, dir, "-w", "20")
+	if code != 0 || errb != "" || out != "a\\tb  plain\n" {
+		t.Fatalf("dir -w 20 = (%q, %q, %d), want default -C -b output", out, errb, code)
+	}
+
+	// Command-line format and quoting options follow the implicit defaults,
+	// so they override those defaults just as with "ls -C -b ...".
+	out, errb, code = runToolAt(t, dir, "-1", "-N")
+	if code != 0 || errb != "" || out != "a\tb\nplain\n" {
+		t.Fatalf("dir -1 -N = (%q, %q, %d), want explicit options to override defaults", out, errb, code)
 	}
 }
 
@@ -47,11 +56,11 @@ func TestDirDelegatesLsFlags(t *testing.T) {
 	write(t, dir, ".hidden")
 
 	out, errb, code := runToolAt(t, dir, "-A")
-	if code != 0 || errb != "" || out != ".hidden\na\n" {
+	if code != 0 || errb != "" || out != ".hidden  a\n" {
 		t.Fatalf("dir -A = (%q, %q, %d), want ls -A behavior", out, errb, code)
 	}
 
-	out, errb, code = runToolAt(t, dir, "-aU")
+	out, errb, code = runToolAt(t, dir, "-aU", "-1")
 	if code != 0 || errb != "" {
 		t.Fatalf("dir -aU = (%q, %q, %d)", out, errb, code)
 	}
