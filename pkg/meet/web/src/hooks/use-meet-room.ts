@@ -138,6 +138,16 @@ export function useMeetRoom() {
       setQueued(null)
       try {
         await runAction(selectedRef, action, body)
+        // The roster lives on State, and State reaches the browser exactly once
+        // — in the info frame sent when /observe connects. A verb that changes
+        // membership therefore leaves the member list stale until a reload, so
+        // re-read the room after one. The turn verbs need no such thing: their
+        // output arrives as transcript events, which the socket does stream.
+        if (action === "invite" || action === "kick") {
+          const refreshed = await getRoom(selectedRef)
+          setDetail(refreshed)
+          setState(refreshed.state)
+        }
       } catch (reason) {
         if (reason instanceof ApiError && reason.status === 409) {
           setQueued(`${label} is queued while the current turn finishes.`)

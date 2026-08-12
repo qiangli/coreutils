@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# A deterministic stand-in for an agent CLI.
+#
+# Addressing an agent in a room execs a real agent binary (chat.Invoke), which a
+# hermetic suite must never do: it needs a network, a key, and it answers
+# differently every time. This prints a reply derived from the model it was told
+# to use and the prompt it was handed, then exits 0 — so a test can assert on an
+# agent's turn without any of that.
+set -euo pipefail
+model=""
+while [ $# -gt 1 ]; do
+  case "$1" in
+    --model) model="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf 'ECHO[%s] %s\n' "$model" "${1:-}"
