@@ -217,8 +217,9 @@ backlog. Use these decision classes when prioritizing product work:
 | class | current names | direction |
 |---|---|---|
 | portable candidates | `bc`, `ed`, `file`, `iconv`, `patch`, `pax`, `uudecode`, `uuencode` | consider pure Go when cross-platform user value and complete tests justify it |
-| specialist toolchain | `ar`, `ctags`, `m4`, `make`, `nm`, `strip` | prefer pinned toolchain providers or modern agent-oriented workflows unless an embedded implementation is compelling |
-| interactive/editor/documentation | `ex`, `mailx`, `man`, `vi` | normally external; do not add merely to reduce a certification-provider count |
+| specialist toolchain | `ar`, `ctags`, `m4`, `nm`, `strip` | prefer pinned toolchain providers or modern agent-oriented workflows unless an embedded implementation is compelling |
+| approved pure-Go/agentic investigations | `mailx`, `pax`, `make` | implement as compatibility-first libraries with separately named agentic surfaces; see `mailx-pax-make-agentic-plan.md` |
+| interactive/editor/documentation | `ex`, `man`, `vi` | normally external; do not add merely to reduce a certification-provider count |
 | platform or legacy facilities | `getconf`, `locale`, `localedef`, `logger`, `lp`, `mesg`, `newgrp`, `renice`, `tabs`, `talk`, `tput`, `write` | use declared Linux providers for certification; add a capability-gated Bashy implementation only when portable semantics are honest and useful |
 
 The 31-name table records the 2026-08-05 staged certification snapshot. Since
@@ -263,11 +264,15 @@ ability to provide honest semantics without delegating to a host executable.
   `uuencode`. Their useful documented subsets fail loudly for unsupported
   formats, encodings, and variants; continue hardening them with VSC deltas and
   cross-platform behavioral cases rather than silently broadening semantics.
-- **P1 — investigate permissive Go prior art, then scope:** `ed`, `patch`, and
-  `pax`. Record source, license, maintenance status, semantic coverage, and
+- **P1 — investigate permissive Go prior art, then scope:** `ed` and `patch`.
+  Record source, license, maintenance status, semantic coverage, and
   adaptation cost before choosing implementation work. `ed` may instead become
   a separately named modern scriptable editing primitive if that better serves
   agents; such a primitive does not satisfy or masquerade as POSIX `ed`.
+- **P1 — approved staged implementation:** `mailx`, `pax`, and `make`, following
+  `docs/mailx-pax-make-agentic-plan.md`. This approval does not waive the
+  release gates and does not allow a new `make` provider to hide the existing
+  GNU-make/Bashy-shell differential.
 - **Release rule:** an implementation leaves this TODO only when its command
   package is tested, registered in `cmds/all`, classified in `pkg/atlas`,
   present in the generated applet matrix, and passes `scripts/crossvet.sh`.
