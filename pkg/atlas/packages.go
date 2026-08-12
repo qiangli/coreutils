@@ -275,6 +275,7 @@ var packages = map[string]Package{
 	"nudge":     supPkg("the proactive half of the agent-hint subsystem; emitted, never invoked"),
 	"oci":       supPkg("separate module wrapping podman's OCI bindings for external/podman"),
 	"ollm":      supPkg("Ollama API client wrapper, isolating the SDK from the rest of the tree"),
+	"pax":       supPkg("safe portable archive manifest and extraction-preflight kernel; deliberately has no command front door until the POSIX pax surface is complete"),
 	"pricing":   supPkg("local token price catalog consumed by pkg/llmbudget"),
 	"recommend": supPkg("the shell's did-you-mean; reached on command-not-found, never typed"),
 	"scope":     supPkg("the git-repo-aware store resolver shared by every store"),
