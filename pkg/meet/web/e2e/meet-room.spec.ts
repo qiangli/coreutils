@@ -164,9 +164,31 @@ test("posts a human message through the composer and reloads it from the transcr
   await expect(page.getByText(message)).toBeVisible();
 });
 
-test.skip("addressed agent replies render in the browser", async () => {
-  // TODO: enable when the deterministic scripted-agent runner lands, so this
-  // path never invokes chat.Invoke or a real agent CLI in the browser suite.
+// The one that needed a deterministic agent: addressing runs a real turn through
+// chat.Invoke, so the fixture in e2e/fleet stands in for an agent CLI and echoes
+// the prompt back. What is asserted is the browser, not the API — the reply has
+// to arrive over /observe and be painted, which is the half no Go test can see.
+// SKIPPED, and not for the original reason. The deterministic agent now exists
+// (e2e/fleet) and is PROVEN at the API level: POST .../address with
+// echoback-fixed records a turn with status ok and the ECHO[fixed] text. What
+// is unproven is the last hop — the reply painting in the browser within 60s.
+// The composer's @name path is correct (composer.tsx:86-94 splits "@agent text"
+// and calls onSend(text, agent)), so the next step is to watch the /observe
+// frames in the page rather than to change the UI. Do not delete this test to
+// make the suite green; it is the one assertion that would prove the room
+// works end to end for a human.
+test.skip("addressed agent replies render in the browser", async ({ page }) => {
+  const topic = unique("Browser reply room");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await page.getByLabel("Message the room").fill(`@${primaryAgent} say hello`);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  // ECHO[<model>] is the fixture's signature; the agent's turn is what renders.
+  await expect(page.getByText(/ECHO\[fixed\]/).first()).toBeVisible({
+    timeout: 60_000,
+  });
 });
 
 async function openMeet(page: Page) {
