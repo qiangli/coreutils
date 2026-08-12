@@ -59,13 +59,21 @@ export const eventSchema = z
   })
   .passthrough()
 
+// LiveEvent (live.go) marks role/text/status `omitempty`, so a `speaking` frame
+// carries none of them — only `spoke` sets status, and role is empty for a
+// plain agent turn. Requiring them made the SPA drop EVERY live frame as
+// invalid: the room painted its history and then never moved, so an addressed
+// agent's reply was received and silently discarded.
+//
+// kind/round/speaker/ts have no omitempty and are always sent, so they stay
+// required — that is what makes this a contract rather than a shrug.
 export const liveEventSchema = z.object({
   kind: z.enum(["speaking", "line", "spoke"]),
   round: z.number(),
   speaker: z.string(),
-  role: z.string(),
+  role: z.string().default(""),
   text: z.string().default(""),
-  status: z.string(),
+  status: z.string().default(""),
   ts: z.union([z.string(), z.number()]).optional(),
   ctl_sock: z.string().optional(),
 })

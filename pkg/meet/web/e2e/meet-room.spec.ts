@@ -168,16 +168,19 @@ test("posts a human message through the composer and reloads it from the transcr
 // chat.Invoke, so the fixture in e2e/fleet stands in for an agent CLI and echoes
 // the prompt back. What is asserted is the browser, not the API — the reply has
 // to arrive over /observe and be painted, which is the half no Go test can see.
-// SKIPPED, and not for the original reason. The deterministic agent now exists
-// (e2e/fleet) and is PROVEN at the API level: POST .../address with
-// echoback-fixed records a turn with status ok and the ECHO[fixed] text. What
-// is unproven is the last hop — the reply painting in the browser within 60s.
-// The composer's @name path is correct (composer.tsx:86-94 splits "@agent text"
-// and calls onSend(text, agent)), so the next step is to watch the /observe
-// frames in the page rather than to change the UI. Do not delete this test to
-// make the suite green; it is the one assertion that would prove the room
-// works end to end for a human.
-test.skip("addressed agent replies render in the browser", async ({ page }) => {
+// This is the assertion the other four cannot make: they prove the room can be
+// listed, opened, staffed and posted to, but only this one proves an AGENT
+// ANSWERS and a human sees it. Two defects hid behind it, both silent, and both
+// found only by running the whole chain in a browser:
+//
+//   1. liveEventSchema required role/status, which LiveEvent marks omitempty —
+//      so the SPA received every live frame and discarded all of them.
+//   2. the fixture's `#!/usr/bin/env bash` shebang was intercepted by the agent
+//      shell shim (see e2e/fleet/echoback), so the turn re-executed the harness
+//      server instead of the fixture and never returned.
+//
+// Neither showed up as an error anywhere. Keep this test running.
+test("addressed agent replies render in the browser", async ({ page }) => {
   const topic = unique("Browser reply room");
   await openMeet(page);
   await createRoomFromUI(page, topic, primaryAgent);
