@@ -60,7 +60,7 @@ id	cmds/id		GNU Coreutils	yes	yes	2	18
 install	cmds/install		GNU Coreutils	yes	no	1	21
 join	cmds/join		GNU Coreutils	yes	yes	1	8
 jq	cmds/jq		Bashy/other extension	no	no	1	7
-kill	cmds/kill		GNU Coreutils	yes	yes	3	4
+kill	cmds/kill		GNU Coreutils	yes	yes	4	5
 link	cmds/link		GNU Coreutils	yes	no	1	3
 ln	cmds/ln		GNU Coreutils	yes	yes	1	21
 logname	cmds/logname		GNU Coreutils	yes	yes	1	7
