@@ -11,7 +11,11 @@ export const memberSchema = z.union([
 
 export const roomSummarySchema = z.object({
   id: z.string(),
-  room: z.string().optional(),
+  // The server sends the room NUMBER as an int (RoomSummary.Room is a Go int),
+  // so a bare z.string() rejects every real response and the list silently
+  // renders empty — which is what it did until a browser test looked. The mock
+  // fixtures used strings, so the mismatch was invisible in dev.
+  room: z.union([z.string(), z.number()]).optional(),
   topic: z.string(),
   status: z.string(),
   members: z.array(memberSchema),
@@ -66,25 +70,34 @@ export const liveEventSchema = z.object({
   ctl_sock: z.string().optional(),
 })
 
+// The server's State marshals most fields with `omitempty`, so a room that has
+// no chair, no agenda and no rounds yet simply does not send those keys — and a
+// zero round is a MISSING key, not 0. Requiring them rejected every real
+// response, which is why the room header sat on "Opening room…" forever while
+// the mock fixtures (which spell every field) looked fine.
+//
+// Rule for this file: model what the SERVER sends, not what the mock does. Give
+// every omitempty field a default, and accept both spellings where Go's type and
+// the mock's disagree (room is an int; turn_timeout marshals as "20m").
 export const stateSchema = z
   .object({
-    schema: z.union([z.string(), z.number()]),
+    schema: z.union([z.string(), z.number()]).optional(),
     id: z.string(),
-    room: z.string(),
-    topic: z.string(),
-    agenda: z.array(z.string()),
-    participants: z.array(memberSchema),
-    secretary: z.string(),
-    chair: z.string(),
-    human: z.string(),
-    status: z.string(),
-    cwd: z.string(),
-    out: z.string(),
-    turn_timeout: z.number(),
-    created: z.union([z.string(), z.number()]),
-    round: z.number(),
-    initiator: z.string(),
-    decision_mode: z.string(),
+    room: z.union([z.string(), z.number()]).optional(),
+    topic: z.string().default(""),
+    agenda: z.array(z.string()).default([]),
+    participants: z.array(memberSchema).default([]),
+    secretary: z.string().default(""),
+    chair: z.string().default(""),
+    human: z.string().default(""),
+    status: z.string().default("open"),
+    cwd: z.string().default(""),
+    out: z.string().default(""),
+    turn_timeout: z.union([z.string(), z.number()]).optional(),
+    created: z.union([z.string(), z.number()]).optional(),
+    round: z.number().default(0),
+    initiator: z.string().default(""),
+    decision_mode: z.string().default(""),
   })
   .passthrough()
 
