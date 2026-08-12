@@ -71,6 +71,17 @@ func TestTailFollowFIFOAcrossWriters(t *testing.T) {
 	}
 
 	write("first\n")
+	// The writer closing does not guarantee the reader has observed the FIFO's
+	// writer-less EOF yet. If the second writer connects first, both writes are
+	// one 13-byte stream and `-c 10` correctly retains only "st\nsecond\n".
+	// Wait for tail to finish and flush the first stream before reconnecting.
+	firstDeadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(out.String(), "first\n") && time.Now().Before(firstDeadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := out.String(); !strings.Contains(got, "first\n") {
+		t.Fatalf("tail did not flush first FIFO writer: stdout=%q stderr=%q", got, errb.String())
+	}
 	write("second\n")
 	deadline := time.Now().Add(2 * time.Second)
 	for !strings.Contains(out.String(), "second\n") && time.Now().Before(deadline) {
