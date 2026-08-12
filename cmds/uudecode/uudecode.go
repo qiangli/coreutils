@@ -1,10 +1,11 @@
-// Package uudecodecmd implements decoding of the portable, historical
-// uuencode(1) representation.  Header output names are restricted to safe
-// relative basenames; use -o to select an explicit path.
+// Package uudecodecmd implements decoding of the portable uuencode formats.
+// Header output names are restricted to safe relative basenames; use -o to
+// select an explicit path.
 package uudecodecmd
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -18,13 +19,19 @@ import (
 var cmd = &tool.Tool{
 	Name:     "uudecode",
 	Synopsis: "Decode a uuencoded file.",
-	Usage: "uudecode [OPTION]... [FILE]\n\n" +
-		"Decode traditional uuencoded data from FILE, or standard input.\n\n" +
+	Usage: "uudecode [OPTION]... [FILE]...\n\n" +
+		"Decode traditional or begin-base64 data from FILEs, or standard input.\n\n" +
 		"  -o, --output-file=FILE  write to FILE instead of the header name; - means stdout\n\n" +
-		"The begin-base64 extension is rejected; use base64 --decode instead.",
+		"Header output names are limited to safe relative basenames.",
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
+
+type header struct {
+	name   string
+	mode   os.FileMode
+	base64 bool
+}
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
@@ -33,98 +40,171 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	if len(operands) > 1 {
-		return tool.UsageError(rc, cmd, "extra operand '%s'", operands[1])
+	if *output != "" && len(operands) > 1 {
+		return tool.UsageError(rc, cmd, "--output-file cannot be used with multiple input files")
+	}
+	if len(operands) == 0 {
+		if decodeInput(rc, "standard input", rc.In, *output) {
+			return 0
+		}
+		return 1
 	}
 
-	input := rc.In
-	var file *os.File
-	if len(operands) == 1 && operands[0] != "-" {
-		var err error
-		file, err = os.Open(rc.Path(operands[0]))
-		if err != nil {
-			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operands[0], err)
-			return 1
-		}
-		defer file.Close()
-		input = file
-	}
-	r := bufio.NewReader(input)
-	var header string
-	for {
-		line, err := r.ReadString('\n')
-		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-		if strings.HasPrefix(line, "begin-base64 ") {
-			fmt.Fprintln(rc.Err, "uudecode: begin-base64 data is not supported; use base64 --decode")
-			return 2
-		}
-		if strings.HasPrefix(line, "begin ") {
-			header = line
-			break
-		}
-		if err != nil {
-			if err == io.EOF {
-				fmt.Fprintln(rc.Err, "uudecode: no 'begin' line")
-				return 1
+	failed := false
+	for _, operand := range operands {
+		if operand == "-" {
+			if !decodeInput(rc, "standard input", rc.In, *output) {
+				failed = true
 			}
-			fmt.Fprintf(rc.Err, "uudecode: read error: %v\n", err)
-			return 1
+			continue
 		}
-	}
-	parts := strings.SplitN(header, " ", 3)
-	if len(parts) != 3 {
-		fmt.Fprintln(rc.Err, "uudecode: malformed 'begin' line")
-		return 1
-	}
-	mode64, err := strconv.ParseUint(parts[1], 8, 12)
-	if err != nil || parts[2] == "" {
-		fmt.Fprintln(rc.Err, "uudecode: malformed 'begin' line")
-		return 1
-	}
-	name := parts[2]
-	if *output == "" && !safeHeaderName(name) {
-		fmt.Fprintf(rc.Err, "uudecode: unsafe output name in header: %q; use --output-file\n", name)
-		return 1
-	}
-	if *output != "" {
-		name = *output
-	}
-
-	var out io.Writer = rc.Out
-	var outf *os.File
-	if name != "-" {
-		outf, err = os.OpenFile(rc.Path(name), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(mode64))
+		f, err := os.Open(rc.Path(operand))
 		if err != nil {
-			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", name, err)
-			return 1
+			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
+			failed = true
+			continue
 		}
-		defer outf.Close()
-		out = outf
+		ok := decodeInput(rc, operand, f, *output)
+		if err := f.Close(); err != nil {
+			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", operand, err)
+			ok = false
+		}
+		if !ok {
+			failed = true
+		}
 	}
-	if err := decode(r, out); err != nil {
-		fmt.Fprintf(rc.Err, "uudecode: %v\n", err)
+	if failed {
 		return 1
-	}
-	if outf != nil {
-		if err := outf.Chmod(os.FileMode(mode64)); err != nil {
-			fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", name, err)
-			return 1
-		}
 	}
 	return 0
 }
+
+// decodeInput scans the entire input because mailboxes commonly contain more
+// than one encoded part, separated by arbitrary leading or trailing text.
+func decodeInput(rc *tool.RunContext, source string, input io.Reader, override string) bool {
+	r := bufio.NewReader(input)
+	found := false
+	for {
+		line, err := readLine(r)
+		if err != nil && err != io.EOF {
+			fmt.Fprintf(rc.Err, "uudecode: %s: read error: %v\n", source, err)
+			return false
+		}
+		if h, ok, parseErr := parseHeader(line); ok || parseErr != nil {
+			if parseErr != nil {
+				fmt.Fprintf(rc.Err, "uudecode: %s\n", parseErr)
+				return false
+			}
+			found = true
+			if !decodePart(rc, r, h, override) {
+				return false
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+	if !found {
+		fmt.Fprintf(rc.Err, "uudecode: %s: no 'begin' line\n", source)
+	}
+	return found
+}
+
+func parseHeader(line string) (header, bool, error) {
+	base64Header := strings.HasPrefix(line, "begin-base64 ")
+	classicHeader := strings.HasPrefix(line, "begin ")
+	if !base64Header && !classicHeader {
+		if strings.HasPrefix(line, "begin-") {
+			return header{}, false, fmt.Errorf("unsupported begin header")
+		}
+		return header{}, false, nil
+	}
+	prefix := "begin "
+	if base64Header {
+		prefix = "begin-base64 "
+	}
+	parts := strings.SplitN(strings.TrimPrefix(line, prefix), " ", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return header{}, false, fmt.Errorf("malformed 'begin' line")
+	}
+	mode, err := strconv.ParseUint(parts[0], 8, 12)
+	if err != nil || mode > 0o7777 {
+		return header{}, false, fmt.Errorf("malformed 'begin' line")
+	}
+	return header{name: parts[1], mode: os.FileMode(mode) & 0o666, base64: base64Header}, true, nil
+}
+
+func decodePart(rc *tool.RunContext, r *bufio.Reader, h header, override string) bool {
+	name := h.name
+	if override != "" {
+		name = override
+	} else if !stdoutName(name) && !safeHeaderName(name) {
+		fmt.Fprintf(rc.Err, "uudecode: unsafe output name in header: %q; use --output-file\n", name)
+		return false
+	}
+
+	decode := func(w io.Writer) error {
+		if h.base64 {
+			return decodeBase64(r, w)
+		}
+		return decodeClassic(r, w)
+	}
+	if stdoutName(name) {
+		if err := decode(rc.Out); err != nil {
+			fmt.Fprintf(rc.Err, "uudecode: %v\n", err)
+			return false
+		}
+		return true
+	}
+	if err := decodeAtomically(rc.Path(name), h.mode, decode); err != nil {
+		fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", name, err)
+		return false
+	}
+	return true
+}
+
+func decodeAtomically(path string, mode os.FileMode, decode func(io.Writer) error) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".uudecode-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if tmp != nil {
+			_ = tmp.Close()
+		}
+		_ = os.Remove(tmpName)
+	}()
+	if err := decode(tmp); err != nil {
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	tmp = nil
+	return os.Rename(tmpName, path)
+}
+
+func stdoutName(name string) bool { return name == "-" || name == "/dev/stdout" }
 
 func safeHeaderName(name string) bool {
 	return name != "" && name != "." && name != ".." && filepath.Base(name) == name && !filepath.IsAbs(name) && !strings.ContainsAny(name, `/\\`)
 }
 
-func decode(r *bufio.Reader, out io.Writer) error {
+func readLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), err
+}
+
+func decodeClassic(r *bufio.Reader, out io.Writer) error {
 	for {
-		line, err := r.ReadString('\n')
+		line, err := readLine(r)
 		if err != nil && err != io.EOF {
 			return fmt.Errorf("read error: %w", err)
 		}
-		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		if line == "end" {
 			return fmt.Errorf("malformed data: missing zero-length line before 'end'")
 		}
@@ -136,13 +216,12 @@ func decode(r *bufio.Reader, out io.Writer) error {
 		}
 		n := int(dec(line[0]))
 		if n == 0 {
-			next, nextErr := r.ReadString('\n')
-			next = strings.TrimSuffix(strings.TrimSuffix(next, "\n"), "\r")
-			if next != "end" {
-				return fmt.Errorf("malformed data: expected 'end'")
-			}
+			next, nextErr := readLine(r)
 			if nextErr != nil && nextErr != io.EOF {
 				return fmt.Errorf("read error: %w", nextErr)
+			}
+			if next != "end" {
+				return fmt.Errorf("malformed data: expected 'end'")
 			}
 			return nil
 		}
@@ -171,6 +250,55 @@ func decode(r *bufio.Reader, out io.Writer) error {
 			return fmt.Errorf("short file")
 		}
 	}
+}
+
+func decodeBase64(r *bufio.Reader, out io.Writer) error {
+	var quantum [4]byte
+	n := 0
+	padded := false
+	for {
+		line, err := readLine(r)
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("read error: %w", err)
+		}
+		if line == "====" {
+			if n != 0 {
+				return fmt.Errorf("malformed base64 data")
+			}
+			return nil
+		}
+		for i := 0; i < len(line); i++ {
+			c := line[i]
+			if !base64Char(c) {
+				continue // POSIX requires non-base64 characters to be ignored.
+			}
+			if padded {
+				return fmt.Errorf("malformed base64 data")
+			}
+			quantum[n] = c
+			n++
+			if n != len(quantum) {
+				continue
+			}
+			var decoded [3]byte
+			count, decErr := base64.StdEncoding.Decode(decoded[:], quantum[:])
+			if decErr != nil {
+				return fmt.Errorf("malformed base64 data")
+			}
+			if _, writeErr := out.Write(decoded[:count]); writeErr != nil {
+				return fmt.Errorf("write error: %w", writeErr)
+			}
+			padded = quantum[2] == '=' || quantum[3] == '='
+			n = 0
+		}
+		if err == io.EOF {
+			return fmt.Errorf("short base64 data")
+		}
+	}
+}
+
+func base64Char(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/' || c == '='
 }
 
 func dec(b byte) byte { return (b - 0x20) & 0x3f }

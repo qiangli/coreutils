@@ -70,10 +70,105 @@ func TestUnsafeHeaderNamesRejectedUnlessOverridden(t *testing.T) {
 }
 
 func TestMalformedAndUnsupportedInputs(t *testing.T) {
-	for _, in := range []string{"", "begin-base64 600 x\nQ2F0====\n====\n", "begin nope x\n`\nend\n", "begin 600 x\n#0V\n`\nend\n", "begin 600 x\n#0~%T\n`\nend\n", "begin 600 x\n#0V%T\n"} {
+	for _, in := range []string{"", "begin nope x\n`\nend\n", "begin 600 x\n#0V\n`\nend\n", "begin 600 x\n#0~%T\n`\nend\n", "begin 600 x\n#0V%T\n"} {
 		_, errb, code := runTool(t, t.TempDir(), in, "-o", "-")
 		if code == 0 || errb == "" {
 			t.Errorf("input=%q err=%q code=%d", in, errb, code)
+		}
+	}
+}
+
+func TestDecodeBase64AndHeaderScanning(t *testing.T) {
+	dir := t.TempDir()
+	input := "preamble\nbegin 640 first\n#0V%T\n`\nend\ntrailer\nbegin-base64 600 second\nRG9uZQ==\n====\n"
+	_, errb, code := runTool(t, dir, input)
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	for name, want := range map[string]string{"first": "Cat", "second": "Done"} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+}
+
+func TestDecodeMultipleInputFilesAndOutputConflict(t *testing.T) {
+	dir := t.TempDir()
+	for name, data := range map[string]string{
+		"one.uue": "begin 600 one\n#0V%T\n`\nend\n",
+		"two.uue": "begin-base64 600 two\nRG9uZQ==\n====\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, errb, code := runTool(t, dir, "", "one.uue", "two.uue")
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	_, errb, code = runTool(t, dir, "", "-o", "result", "one.uue", "two.uue")
+	if code != 2 || !strings.Contains(errb, "output-file") {
+		t.Fatalf("-o with multiple inputs: err=%q code=%d", errb, code)
+	}
+}
+
+func TestDecodeOutputLifecycleAndMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out")
+	if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "begin-base64 777 out\nRG9uZ\n====\n")
+	if code == 0 || errb == "" {
+		t.Fatalf("malformed input: err=%q code=%d", errb, code)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
+		t.Fatalf("malformed decode changed target: %q, %v", got, err)
+	}
+
+	_, errb, code = runTool(t, dir, "begin-base64 777 out\nRG9uZQ==\n====\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o666 {
+		t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
+	}
+}
+
+func TestDecodeBase64MalformedDataRules(t *testing.T) {
+	dir := t.TempDir()
+	// POSIX requires characters outside the base64 alphabet to be ignored.
+	_, errb, code := runTool(t, dir, "begin-base64 600 filtered\nQ2?F0\n====\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("filtered base64: err=%q code=%d", errb, code)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "filtered")); err != nil || string(got) != "Cat" {
+		t.Fatalf("filtered = %q, %v", got, err)
+	}
+	for _, input := range []string{
+		"begin-base64 600 bad\nQ2F0====\n====\n", // padding is only valid in the final quantum
+		"begin-base64 600 bad\nQ2F0\n",           // the framing terminator is required
+	} {
+		path := filepath.Join(dir, "bad")
+		if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, errb, code := runTool(t, dir, input)
+		if code == 0 || errb == "" {
+			t.Errorf("input=%q err=%q code=%d", input, errb, code)
+		}
+		if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
+			t.Errorf("bad target changed to %q, %v", got, err)
+		}
+	}
+}
+
+func TestHeaderStdoutNames(t *testing.T) {
+	for _, name := range []string{"-", "/dev/stdout"} {
+		out, errb, code := runTool(t, t.TempDir(), "begin-base64 600 "+name+"\nQ2F0\n====\n")
+		if code != 0 || errb != "" || out != "Cat" {
+			t.Errorf("name=%q got (%q,%q,%d)", name, out, errb, code)
 		}
 	}
 }
