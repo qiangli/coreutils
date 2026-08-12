@@ -280,3 +280,58 @@ func TestRunWritesOnlyIntoDist(t *testing.T) {
 		}
 	}
 }
+
+// Ldflags carry the version stamp, so they must be rendered like any other
+// template. Leaving them literal has two failure modes and only one is loud:
+// `-X main.version={{ .Version }}` (spaced) makes the linker split on the
+// spaces and reject `.Version` as a flag, while `-X main.version={{.Version}}`
+// is accepted verbatim and the shipped binary REPORTS "{{.Version}}" as its
+// version. The second is a green release that lies about what it is.
+func TestPlanRendersLdflagsAgainstTheTargetsFields(t *testing.T) {
+	cfg := mustConfig(t, `
+project_name: ycode
+builds:
+  - id: ycode
+    targets: [linux_amd64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }} -X main.os={{ .Os }}
+archives:
+  - name_template: '{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}'
+`)
+	plan, err := BuildPlan(cfg, Fields{ProjectName: "ycode", Version: "1.2.3", Commit: "deadbeef"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(plan.Targets[0].Ldflags, " ")
+	for _, want := range []string{"main.version=1.2.3", "main.commit=deadbeef", "main.os=linux"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ldflags = %q, want it to contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "{{") {
+		t.Errorf("an unrendered template reached the builder: %q", got)
+	}
+}
+
+// Build tags are their own field rather than something smuggled through flags,
+// because a project whose binary is only correct under a tag set would
+// otherwise depend on the caller splitting a string the same way the go tool
+// does. One -tags argument, comma-joined, is what the go tool accepts.
+func TestPlanCarriesBuildTagsToTheTarget(t *testing.T) {
+	cfg := mustConfig(t, `
+project_name: ycode
+builds:
+  - id: ycode
+    targets: [linux_amd64]
+    tags: [sqlite, embed_spawn]
+archives:
+  - name_template: '{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}'
+`)
+	plan, err := BuildPlan(cfg, Fields{ProjectName: "ycode", Version: "1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(plan.Targets[0].Tags, ","); got != "sqlite,embed_spawn" {
+		t.Errorf("tags = %q, want sqlite,embed_spawn", got)
+	}
+}

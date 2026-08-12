@@ -25,7 +25,9 @@ type Target struct {
 	Dir  string
 	Env  []string
 	// Flags and Ldflags are passed through to the builder verbatim.
-	Flags   []string
+	Flags []string
+	// Tags become a single -tags argument, comma-joined.
+	Tags    []string
 	Ldflags []string
 }
 
@@ -79,6 +81,28 @@ func BuildPlan(cfg *Config, fields Fields) (*Plan, error) {
 			if err := checkMemberName(bin); err != nil {
 				return nil, fmt.Errorf("builds[%s].binary: %w", b.ID, err)
 			}
+			// Ldflags carry the version stamp, so they are rendered against the
+			// SAME fields the names are — with this target's Os/Arch bound.
+			//
+			// Leaving them literal is not a cosmetic miss. `-X main.version={{.Version}}`
+			// (no spaces) is accepted by the linker verbatim, and the released binary
+			// then REPORTS "{{.Version}}" as its version — a green release that lies
+			// about what it is. The spaced spelling fails loudly instead, which is how
+			// this was found; both are the same defect.
+			tf := fields
+			tf.Os, tf.Arch, tf.Binary = t.Goos, t.Goarch, bin
+			ldflags, err := renderAll(b.Ldflags, tf)
+			if err != nil {
+				return nil, fmt.Errorf("builds[%s].ldflags: %w", b.ID, err)
+			}
+			flags, err := renderAll(b.Flags, tf)
+			if err != nil {
+				return nil, fmt.Errorf("builds[%s].flags: %w", b.ID, err)
+			}
+			env, err := renderAll(b.Env, tf)
+			if err != nil {
+				return nil, fmt.Errorf("builds[%s].env: %w", b.ID, err)
+			}
 			tgt := Target{
 				BuildID: b.ID,
 				Goos:    t.Goos,
@@ -87,9 +111,10 @@ func BuildPlan(cfg *Config, fields Fields) (*Plan, error) {
 				Path:    filepath.Join(cfg.Dist, fmt.Sprintf("%s_%s_%s", b.ID, t.Goos, t.Goarch), bin),
 				Main:    b.Main,
 				Dir:     b.Dir,
-				Env:     b.Env,
-				Flags:   b.Flags,
-				Ldflags: b.Ldflags,
+				Env:     env,
+				Flags:   flags,
+				Tags:    b.Tags,
+				Ldflags: ldflags,
 			}
 			p.Targets = append(p.Targets, tgt)
 		}
@@ -293,4 +318,21 @@ func checkDuplicateNames(archives []ArchivePlan, checksumName string) error {
 		return fmt.Errorf("release: archive name collision: %s — the name_template must distinguish os/arch", strings.Join(dups, ", "))
 	}
 	return nil
+}
+
+// renderAll renders each entry of a config list against fields. A nil list
+// stays nil so a caller cannot tell a rendered empty list from an absent one.
+func renderAll(in []string, f Fields) ([]string, error) {
+	if in == nil {
+		return nil, nil
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		v, err := Render(s, f)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
 }

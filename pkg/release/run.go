@@ -74,6 +74,9 @@ func (g GoBuilder) Build(ctx context.Context, t Target) error {
 	}
 	args := []string{"build", "-o", abs}
 	args = append(args, t.Flags...)
+	if tags := strings.TrimSpace(strings.Join(t.Tags, ",")); tags != "" {
+		args = append(args, "-tags", tags)
+	}
 	if ld := strings.TrimSpace(strings.Join(t.Ldflags, " ")); ld != "" {
 		args = append(args, "-ldflags", ld)
 	}

@@ -73,12 +73,18 @@ type Config struct {
 
 // Build is one build matrix entry.
 type Build struct {
-	ID      string   `yaml:"id"`
-	Main    string   `yaml:"main"`
-	Binary  string   `yaml:"binary"`
-	Dir     string   `yaml:"dir"`
-	Env     []string `yaml:"env"`
-	Flags   []string `yaml:"flags"`
+	ID     string   `yaml:"id"`
+	Main   string   `yaml:"main"`
+	Binary string   `yaml:"binary"`
+	Dir    string   `yaml:"dir"`
+	Env    []string `yaml:"env"`
+	Flags  []string `yaml:"flags"`
+	// Tags are Go build tags, joined with commas into one -tags argument.
+	// Kept separate from Flags because a project whose binary is only correct
+	// under a tag set (ycode: sqlite,sqlite_unlock_notify,bindata) would
+	// otherwise have to smuggle them through Flags, where a stray split would
+	// silently produce a binary that builds and does not work.
+	Tags    []string `yaml:"tags"`
 	Ldflags []string `yaml:"ldflags"`
 	Goos    []string `yaml:"goos"`
 	Goarch  []string `yaml:"goarch"`
