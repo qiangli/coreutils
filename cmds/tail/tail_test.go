@@ -604,3 +604,97 @@ func TestTailFollowMultiFile(t *testing.T) {
 		t.Errorf("header for b.log missing: %q", outStr)
 	}
 }
+
+func TestTailFollowStdinPipeIgnoresFollow(t *testing.T) {
+	dir := t.TempDir()
+
+	followPipe := func(args ...string) (string, string, int) {
+		t.Helper()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrote := make(chan struct{})
+		go func() {
+			defer close(wrote)
+			_, _ = w.Write([]byte("line1\nline2\nline3\n"))
+			_ = w.Close()
+		}()
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Stdio: tool.Stdio{In: r, Out: &out, Err: &errb},
+		}
+		code := cmd.Run(rc, args)
+		_ = r.Close()
+		<-wrote
+		return out.String(), errb.String(), code
+	}
+
+	out, errb, code := followPipe("-f")
+	if code != 0 || out != "line1\nline2\nline3\n" {
+		t.Fatalf("tail -f on pipe stdin: got (%q, %q, %d), want 3 lines, exit 0", out, errb, code)
+	}
+
+	out, errb, code = followPipe("-f", "-")
+	if code != 0 || out != "line1\nline2\nline3\n" {
+		t.Fatalf("tail -f - on pipe stdin: got (%q, %q, %d), want 3 lines, exit 0", out, errb, code)
+	}
+}
+
+func TestTailFollowStdinRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reg")
+	if err := os.WriteFile(path, []byte("line1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	var out, errb bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	rc := &tool.RunContext{
+		Ctx:   ctx,
+		Dir:   dir,
+		Stdio: tool.Stdio{In: f, Out: &out, Err: &errb},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var code int
+	go func() {
+		defer wg.Done()
+		code = cmd.Run(rc, []string{"-f", "-s", "0.05"})
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+
+	af, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		cancel()
+		wg.Wait()
+		t.Fatal(err)
+	}
+	if _, err := af.WriteString("line2\n"); err != nil {
+		af.Close()
+		cancel()
+		wg.Wait()
+		t.Fatal(err)
+	}
+	af.Close()
+
+	time.Sleep(700 * time.Millisecond)
+	cancel()
+	wg.Wait()
+
+	if code != 0 {
+		t.Fatalf("tail -f regular file on stdin: exit %d, stderr %q", code, errb.String())
+	}
+	if out.String() != "line1\nline2\n" {
+		t.Fatalf("tail -f regular file on stdin: got %q, want %q", out.String(), "line1\nline2\n")
+	}
+}

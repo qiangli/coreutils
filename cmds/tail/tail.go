@@ -127,8 +127,47 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 		} else {
 			if name == "-" {
-				fmt.Fprintf(rc.Err, "tail: cannot follow standard input by %s\n", followMode)
-				exit = 1
+				if followMode != "descriptor" {
+					fmt.Fprintf(rc.Err, "tail: cannot follow standard input by %s\n", followMode)
+					exit = 1
+					continue
+				}
+				// POSIX: -f is ignored when standard input is a pipe or FIFO.
+				// A regular file redirected onto stdin is retained and followed
+				// by descriptor until the context is cancelled.
+				if f, ok := rc.In.(*os.File); ok {
+					if fi, err := f.Stat(); err == nil && fi.Mode().IsRegular() {
+						fo := followOpts{
+							path:          "-",
+							name:          name,
+							file:          f,
+							followByName:  false,
+							retry:         *retryV,
+							sleepInterval: time.Duration(*sleepV * float64(time.Second)),
+							pid:           *pidV,
+							maxUnchanged:  *maxUnchanged,
+							usePolling:    *usePolling,
+							debug:         *debugV,
+							bytesMode:     bytesMode,
+							count:         count,
+							fromStart:     fromStart,
+							lineEnd:       lineEnd,
+						}
+						if err := tailFollow(rc, w, fo); err != nil {
+							fmt.Fprintf(rc.Err, "tail: %v\n", tool.SysErr(err))
+							exit = 1
+						}
+						continue
+					}
+				}
+				r := rc.In
+				if r == nil {
+					r = strings.NewReader("")
+				}
+				if err := tailStream(r, w, bytesMode, count, fromStart, lineEnd); err != nil {
+					fmt.Fprintf(rc.Err, "tail: error reading '%s': %v\n", name, sysErr(err))
+					exit = 1
+				}
 				continue
 			}
 			path := rc.Path(name)
@@ -163,6 +202,7 @@ func run(rc *tool.RunContext, args []string) int {
 type followOpts struct {
 	path          string
 	name          string
+	file          *os.File
 	followByName  bool
 	retry         bool
 	sleepInterval time.Duration
@@ -191,16 +231,23 @@ func tailFollow(rc *tool.RunContext, w *bufio.Writer, fo followOpts) error {
 			fo.name, fmode, fo.retry, fo.sleepInterval, fo.pid, fo.maxUnchanged)
 	}
 
-	f, err := openOrRetry(rc, fo.path, fo.name, fo.retry, fo.sleepInterval)
-	if err != nil {
-		return err
+	var f *os.File
+	var err error
+	if fo.file != nil {
+		f = fo.file
+	} else {
+		f, err = openOrRetry(rc, fo.path, fo.name, fo.retry, fo.sleepInterval)
+		if err != nil {
+			return err
+		}
 	}
 	// Closure, not `defer f.Close()`: the follow loop reopens the file on
 	// rotation/max-unchanged-stats, and a plain defer would close only the
 	// ORIGINAL handle — leaking the current one on ctx cancel (Windows then
-	// can't delete the still-open file).
+	// can't delete the still-open file). A caller-owned descriptor (stdin)
+	// is never closed here.
 	defer func() {
-		if f != nil {
+		if f != nil && fo.file == nil {
 			f.Close()
 		}
 	}()

@@ -151,7 +151,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `sum` | `cmds/sum` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `sync` | `cmds/sync` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tac` | `cmds/tac` | — | GNU Coreutils | yes | no | 1 | 6 |
-| `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 2 | 19 |
+| `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 2 | 21 |
 | `tar` | `cmds/tar` | — | Bashy/other extension | no | no | 1 | 14 |
 | `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `test` | `cmds/test` | — | GNU Coreutils | yes | yes | 3 | 32 |
