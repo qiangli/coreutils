@@ -364,3 +364,20 @@ func TestParseAtTouchTime(t *testing.T) {
 		}
 	}
 }
+
+// POSIX defines the at -t time_arg format as exactly touch -t's, which
+// accepts a seconds field of 60 for a leap second and carries it into the
+// following minute (this repo's touch -t already implements that carry —
+// cmds/touch/touch.go's parseISODate). at -t must accept the same input.
+func TestParseAtTouchTimeLeapSecond(t *testing.T) {
+	now := time.Date(2026, 8, 3, 1, 2, 3, 0, time.UTC)
+	for input, want := range map[string]time.Time{
+		"202901051015.60": time.Date(2029, 1, 5, 10, 16, 0, 0, time.UTC),
+		"202901052359.60": time.Date(2029, 1, 6, 0, 0, 0, 0, time.UTC),
+	} {
+		got, err := schedule.ParseAtTouchTime(input, now, time.UTC)
+		if err != nil || !got.Equal(want) {
+			t.Errorf("-t %q = %v, %v; want %v", input, got, err, want)
+		}
+	}
+}
