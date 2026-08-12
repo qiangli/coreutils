@@ -215,8 +215,9 @@ func waitExit(t *testing.T, cmd *exec.Cmd, d time.Duration) syscall.Signal {
 func TestStopServiceTerminatesLiveDaemon(t *testing.T) {
 	serviceTestDir(t)
 	cmd := stopHelper(t, false)
+	port := freeServicePort(t)
 
-	if _, err := StopService(ServiceOptions{Grace: 5 * time.Second}); err != nil {
+	if _, err := StopService(ServiceOptions{Port: port, Grace: 5 * time.Second}); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 	if sig := waitExit(t, cmd, 5*time.Second); sig != syscall.SIGTERM {
@@ -232,9 +233,10 @@ func TestStopServiceTerminatesLiveDaemon(t *testing.T) {
 func TestStopServiceEscalatesToKill(t *testing.T) {
 	serviceTestDir(t)
 	cmd := stopHelper(t, true)
+	port := freeServicePort(t)
 
 	start := time.Now()
-	if _, err := StopService(ServiceOptions{Grace: 300 * time.Millisecond}); err != nil {
+	if _, err := StopService(ServiceOptions{Port: port, Grace: 300 * time.Millisecond}); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 	elapsed := time.Since(start)
