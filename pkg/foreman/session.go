@@ -13,13 +13,14 @@ import (
 )
 
 type Options struct {
-	ID     string
-	Goal   string
-	Agent  string
-	Role   string
-	Cwd    string
-	Root   string
-	Runner chat.Runner
+	ID         string
+	Goal       string
+	Agent      string
+	Role       string
+	Cwd        string
+	Root       string
+	MaxRuntime time.Duration
+	Runner     chat.Runner
 }
 
 type Session struct {
@@ -41,6 +42,13 @@ type Session struct {
 	live    *chat.Session
 	steers  []string // mid-turn corrections, appended under liveMu
 	logFile *os.File // the live agent's output, tee'd for `foreman log`
+
+	// stopCh is independent of s.mu on purpose. A turn holds s.mu until the
+	// agent returns, so routing stop through Apply would queue the stop behind
+	// the very process it must terminate. The control server owns this channel
+	// and cancels the turn context before recording the terminal state.
+	stopCh   chan string
+	stopOnce sync.Once
 }
 
 func Start(ctx context.Context, opt Options) (*Session, error) {
@@ -65,10 +73,14 @@ func Start(ctx context.Context, opt Options) (*Session, error) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	if opt.MaxRuntime > 0 {
+		st.MaxRuntime = opt.MaxRuntime.String()
+		st.Deadline = now.Add(opt.MaxRuntime)
+	}
 	if err := store.SaveState(st); err != nil {
 		return nil, err
 	}
-	s := &Session{store: store, state: st, runner: opt.Runner}
+	s := &Session{store: store, state: st, runner: opt.Runner, stopCh: make(chan string, 1)}
 	return s, nil
 }
 
@@ -78,7 +90,11 @@ func Open(root, id string, runner chat.Runner) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Session{store: store, state: st, runner: runner}, nil
+	return &Session{store: store, state: st, runner: runner, stopCh: make(chan string, 1)}, nil
+}
+
+func (s *Session) requestStop(reason string) {
+	s.stopOnce.Do(func() { s.stopCh <- reason })
 }
 
 func (s *Session) State() State {
@@ -125,6 +141,16 @@ func (s *Session) ProcessPending(ctx context.Context) error {
 // operator cannot supervise a run whose status only becomes true once there is
 // nothing left to supervise.
 func (s *Session) persistLocked() { _ = s.store.SaveState(s.state) }
+
+// saveState snapshots and writes state while holding the same lock used by
+// lifecycle transitions. State()+SaveState() is not equivalent: a stop can
+// land between those calls and the stale snapshot can overwrite the terminal
+// record even though each individual file replacement is atomic.
+func (s *Session) saveState() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.store.SaveState(s.state)
+}
 
 func (s *Session) Apply(ctx context.Context, cmd Command) error {
 	s.mu.Lock()
@@ -213,9 +239,7 @@ func (s *Session) Apply(ctx context.Context, cmd Command) error {
 	case CommandStop:
 		s.state.Stopped = true
 		s.state.Status = StatusDone
-		// Ask the live agent to leave. Stopping a foreman while its agent sits at a
-		// prompt would strand a process holding an API session open indefinitely.
-		s.closeLive()
+		s.state.StopReason = "stopped by operator"
 	default:
 		return fmt.Errorf("foreman: unknown command %q", cmd.Verb)
 	}

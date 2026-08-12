@@ -47,6 +47,9 @@ type State struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Stopped     bool      `json:"stopped,omitempty"`
 	Paused      bool      `json:"paused,omitempty"`
+	MaxRuntime  string    `json:"max_runtime,omitempty"`
+	Deadline    time.Time `json:"deadline,omitempty"`
+	StopReason  string    `json:"stop_reason,omitempty"`
 
 	// Binding is the canonical tool:model this session is actually talking to.
 	// Agent may be an alias or a nickname; a record must never store one of those.
@@ -155,8 +158,21 @@ func (s Store) SaveState(st State) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.StatePath() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.CreateTemp(s.Dir(), ".state-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.StatePath())

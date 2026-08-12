@@ -30,6 +30,7 @@ func runREPLWithFlags(rc *tool.RunContext, flags map[string]string, args []strin
 	if err != nil {
 		return fail(rc, flags["json"] == "true", err)
 	}
+	defer s.Close()
 	fmt.Fprintf(rc.Out, "foreman %s\n", s.State().ID)
 	if err := driveLines(rc.Ctx, rc.In, rc.Out, s); err != nil {
 		return fail(rc, flags["json"] == "true", err)

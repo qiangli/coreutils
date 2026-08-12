@@ -82,3 +82,178 @@ func TestTellReachesSessionOverUnixSocket(t *testing.T) {
 		t.Fatal("control server did not stop")
 	}
 }
+
+func TestServeControlHardRuntimeStopsSession(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Start(context.Background(), Options{
+		ID: "deadline", Goal: "bounded", Root: dir, MaxRuntime: 80 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	ready := make(chan string, 1)
+	errC := make(chan error, 1)
+	go func() { errC <- s.ServeControl(context.Background(), ready) }()
+	select {
+	case <-ready:
+	case err := <-errC:
+		t.Fatalf("ServeControl before ready: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("control socket did not become ready")
+	}
+	select {
+	case err := <-errC:
+		if err != nil {
+			t.Fatalf("ServeControl: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("max runtime did not stop control server")
+	}
+	st, err := NewStore(dir, "deadline").LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !st.Stopped || st.Status != StatusBlocked || !strings.Contains(st.StopReason, "max runtime 80ms exceeded") {
+		t.Fatalf("expired state = %+v", st)
+	}
+}
+
+func TestServeControlStopCommandReturns(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Start(context.Background(), Options{
+		ID: "stop", Goal: "stoppable", Root: dir, MaxRuntime: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	ready := make(chan string, 1)
+	errC := make(chan error, 1)
+	go func() { errC <- s.ServeControl(context.Background(), ready) }()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("control socket did not become ready")
+	}
+	if _, err := SendCommand(dir, "stop", Command{Verb: CommandStop}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	select {
+	case err := <-errC:
+		if err != nil {
+			t.Fatalf("ServeControl: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop command left control server running")
+	}
+}
+
+type cancelRunner struct {
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func (r *cancelRunner) Run(ctx context.Context, _ string, _ []string, _ string) (string, int, error) {
+	close(r.started)
+	<-ctx.Done()
+	close(r.stopped)
+	return "", 1, ctx.Err()
+}
+
+func TestServeControlStopCancelsActiveTurn(t *testing.T) {
+	dir := t.TempDir()
+	r := &cancelRunner{started: make(chan struct{}), stopped: make(chan struct{})}
+	s, err := Start(context.Background(), Options{
+		ID: "active-stop", Goal: "stoppable", Agent: "stub", Root: dir,
+		MaxRuntime: time.Minute, Runner: r,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	ready := make(chan string, 1)
+	errC := make(chan error, 1)
+	go func() { errC <- s.ServeControl(context.Background(), ready) }()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("control socket did not become ready")
+	}
+	if _, err := SendCommand(dir, "active-stop", Command{Verb: CommandTell, Message: "work"}); err != nil {
+		t.Fatalf("tell: %v", err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("turn did not start")
+	}
+	if _, err := SendCommand(dir, "active-stop", Command{Verb: CommandStop}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	select {
+	case <-r.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not cancel active turn")
+	}
+	select {
+	case err := <-errC:
+		if err != nil {
+			t.Fatalf("ServeControl: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("control server did not stop")
+	}
+	st, err := NewStore(dir, "active-stop").LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !st.Stopped || st.Status != StatusDone || st.StopReason != "stopped by operator" {
+		t.Fatalf("stopped state = %+v", st)
+	}
+}
+
+func TestServeControlDeadlineCancelsActiveTurn(t *testing.T) {
+	dir := t.TempDir()
+	r := &cancelRunner{started: make(chan struct{}), stopped: make(chan struct{})}
+	s, err := Start(context.Background(), Options{
+		ID: "active-deadline", Goal: "bounded", Agent: "stub", Root: dir,
+		MaxRuntime: 80 * time.Millisecond, Runner: r,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	ready := make(chan string, 1)
+	errC := make(chan error, 1)
+	go func() { errC <- s.ServeControl(context.Background(), ready) }()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("control socket did not become ready")
+	}
+	if _, err := SendCommand(dir, "active-deadline", Command{Verb: CommandTell, Message: "work"}); err != nil {
+		t.Fatalf("tell: %v", err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("turn did not start")
+	}
+	select {
+	case <-r.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("deadline did not cancel active turn")
+	}
+	select {
+	case err := <-errC:
+		if err != nil {
+			t.Fatalf("ServeControl: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("control server did not stop")
+	}
+	st, err := NewStore(dir, "active-deadline").LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if !st.Stopped || st.Status != StatusBlocked || st.StopReason != "max runtime 80ms exceeded" {
+		t.Fatalf("expired state = %+v", st)
+	}
+}

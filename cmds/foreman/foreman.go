@@ -19,8 +19,10 @@ import (
 var cmd = &tool.Tool{
 	Name:     "foreman",
 	Synopsis: "Drive a persistent, steerable agent session.",
-	Usage:    "foreman start [--detach] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
+	Usage:    "foreman start [--detach] [--max-runtime 30m] --goal TEXT [--agent AGENT]\n   or: foreman tell <id> TEXT\n   or: foreman status <id>\n   or: foreman log <id> [-f]\n   or: foreman interrupt <id>   (ESC — breaks a tool loop)\n   or: foreman list\n   or: foreman --once --agent AGENT --instruction TEXT",
 }
+
+const defaultForemanMaxRuntime = 30 * time.Minute
 
 var runner chat.Runner
 
@@ -116,13 +118,18 @@ func runStart(rc *tool.RunContext, flags map[string]string, args []string, jsonO
 	if goal == "" && len(args) > 0 {
 		goal = strings.Join(args, " ")
 	}
+	maxRuntime, err := parseForemanMaxRuntime(flags)
+	if err != nil {
+		return fail(rc, jsonOut, err)
+	}
 	s, err := foreman.Start(rc.Ctx, foreman.Options{
-		ID:     flags["id"],
-		Goal:   goal,
-		Agent:  flags["agent"],
-		Role:   flags["role"],
-		Cwd:    rc.Dir,
-		Runner: runner,
+		ID:         flags["id"],
+		Goal:       goal,
+		Agent:      flags["agent"],
+		Role:       flags["role"],
+		Cwd:        rc.Dir,
+		MaxRuntime: maxRuntime,
+		Runner:     runner,
 	})
 	if err != nil {
 		return fail(rc, jsonOut, err)
@@ -137,6 +144,7 @@ func runStart(rc *tool.RunContext, flags map[string]string, args []string, jsonO
 	}
 	fmt.Fprintln(rc.Out, s.State().ID)
 	if flags["detach"] != "true" {
+		defer s.Close()
 		ready := make(chan string, 1)
 		go func() { <-ready }()
 		if err := s.ServeControl(rc.Ctx, ready); err != nil {
@@ -154,10 +162,23 @@ func runServe(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return fail(rc, false, err)
 	}
+	defer s.Close()
 	if err := s.ServeControl(rc.Ctx, nil); err != nil {
 		return fail(rc, false, err)
 	}
 	return 0
+}
+
+func parseForemanMaxRuntime(flags map[string]string) (time.Duration, error) {
+	raw, ok := flags["max-runtime"]
+	if !ok {
+		return defaultForemanMaxRuntime, nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("foreman: --max-runtime must be a positive duration (for example 15m)")
+	}
+	return d, nil
 }
 
 func runTell(rc *tool.RunContext, args []string, jsonOut bool) int {

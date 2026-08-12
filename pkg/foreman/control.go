@@ -14,6 +14,8 @@ import (
 )
 
 func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	path := s.store.CtlSockPath()
 	if err := s.store.Ensure(); err != nil {
 		return err
@@ -30,14 +32,13 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 	if ready != nil {
 		ready <- path
 	}
-	go func() {
-		<-ctx.Done()
-		_ = ln.Close()
-	}()
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go s.watchControlLifetime(serveCtx, cancel, ln, watchDone)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if serveCtx.Err() != nil || s.stopped() {
 				return nil
 			}
 			return err
@@ -46,11 +47,59 @@ func (s *Session) ServeControl(ctx context.Context, ready chan<- string) error {
 		// for all of it. Handling connections inline meant the listener stopped
 		// accepting the moment an agent started working — so the one time you most
 		// need to say "stop, wrong file", the socket would not even take the call.
-		go s.handleControlConn(ctx, conn)
+		go s.handleControlConn(serveCtx, conn)
 		if s.stopped() {
 			return nil
 		}
 	}
+}
+
+func (s *Session) watchControlLifetime(ctx context.Context, cancel context.CancelFunc, ln net.Listener, done <-chan struct{}) {
+	deadline := s.State().Deadline
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			_ = ln.Close()
+			return
+		case reason := <-s.stopCh:
+			cancel() // terminate the active turn before waiting for its state lock
+			s.markStopped(StatusDone, reason)
+			_ = ln.Close()
+			return
+		case <-ticker.C:
+			// Compare wall time, not a monotonic timer. Laptop suspend pauses Go
+			// timers; a hard runtime must expire immediately after wake rather than
+			// granting the worker the whole pre-suspend duration again.
+			if !deadline.IsZero() && !time.Now().Before(deadline) {
+				cancel() // CommandContext -> agentpty's process-tree kill path.
+				s.markStopped(StatusBlocked, "max runtime "+s.State().MaxRuntime+" exceeded")
+				_ = ln.Close()
+				return
+			}
+			if s.stopped() {
+				cancel()
+				_ = ln.Close()
+				return
+			}
+		}
+	}
+}
+
+func (s *Session) markStopped(status, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Stopped {
+		return
+	}
+	s.state.Stopped = true
+	s.state.Status = status
+	s.state.StopReason = reason
+	s.state.Steering = false
+	s.persistLocked()
 }
 
 func (s *Session) stopped() bool {
@@ -104,6 +153,16 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
+		// Stop is a cancellation signal, not a queued turn. Apply holds s.mu for
+		// the entire active turn; sending stop through Apply would therefore wait
+		// until the agent had already finished. Wake the lifetime watcher through
+		// its independent channel so it cancels the process tree immediately.
+		if strings.EqualFold(strings.TrimSpace(cmd.Verb), CommandStop) {
+			s.requestStop("stopped by operator")
+			fmt.Fprintln(conn, `{"ok":true,"accepted":true}`)
+			continue
+		}
+
 		// No live agent: this command STARTS a turn, which can take many minutes.
 		// Ack that it was accepted and run it in the background — the caller asked us
 		// to do a thing, not to hold its connection open while an LLM thinks.
@@ -113,10 +172,10 @@ func (s *Session) handleControlConn(ctx context.Context, conn net.Conn) {
 		// 3-second ack could never have carried the result of a ten-minute turn.
 		go func(cmd Command) {
 			if err := s.Apply(ctx, cmd); err != nil {
-				_ = s.store.SaveState(s.State())
+				_ = s.saveState()
 				return
 			}
-			_ = s.store.SaveState(s.State())
+			_ = s.saveState()
 		}(cmd)
 		fmt.Fprintln(conn, `{"ok":true,"accepted":true}`)
 		continue

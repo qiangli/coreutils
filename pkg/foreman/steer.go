@@ -155,24 +155,36 @@ func (s *Session) attach(ctx context.Context, msg string) error {
 	// redirect: what gets RECORDED in the history is byte-for-byte what it would
 	// have been with nobody watching. Observing must not change the record.
 	var sink io.Writer
+	var openedLog *os.File
 	if err := s.store.Ensure(); err == nil {
 		if f, err := os.OpenFile(s.store.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-			s.logFile = f
+			openedLog = f
 			sink = f
 		}
 	}
 
+	timeout, err := s.remainingRuntime()
+	if err != nil {
+		return err
+	}
 	live, err := chat.Start(ctx, s.state.Agent, chat.SessionOptions{
 		Prompt:   s.composePrompt(msg),
 		Cwd:      s.state.Cwd,
 		Stream:   sink,
+		Timeout:  timeout,
 		ReadOnly: false, // a foreman's agent is here to DO the work
 		Mode:     "foreman",
 	})
 	if err != nil {
+		if openedLog != nil {
+			_ = openedLog.Close()
+		}
 		return err
 	}
-	s.setLive(live)
+	s.liveMu.Lock()
+	s.live = live
+	s.logFile = openedLog
+	s.liveMu.Unlock()
 	s.state.Steering = true
 	s.state.SteerWhyNot = ""
 	s.state.Binding = live.Agent
@@ -181,6 +193,17 @@ func (s *Session) attach(ctx context.Context, msg string) error {
 	// turn is still running, which is the only time steering it would do any good.
 	s.persistLocked()
 	return nil
+}
+
+func (s *Session) remainingRuntime() (time.Duration, error) {
+	if s.state.Deadline.IsZero() {
+		return 0, nil
+	}
+	remaining := time.Until(s.state.Deadline)
+	if remaining <= 0 {
+		return 0, fmt.Errorf("foreman: max runtime %s already expired", s.state.MaxRuntime)
+	}
+	return remaining, nil
 }
 
 // steer sends one message to the live agent and records what it said back.
@@ -199,8 +222,6 @@ func (s *Session) steer(ctx context.Context, msg string) error {
 	} else if err := live.Say(msg); err != nil {
 		return err
 	}
-	s.live = live
-
 	// Silence means the agent has stopped talking. It does NOT mean the agent has
 	// finished thinking, and it certainly does not mean the agent did what it was
 	// asked — for THAT, read the artifacts, not the terminal.
@@ -231,13 +252,20 @@ func (s *Session) Close() { s.closeLive() }
 
 // closeLive ends the live agent.
 func (s *Session) closeLive() {
-	if live := s.getLive(); live != nil {
+	s.liveMu.Lock()
+	live := s.live
+	logFile := s.logFile
+	s.live = nil
+	s.logFile = nil
+	s.liveMu.Unlock()
+	if live != nil {
 		live.Close()
-		s.setLive(nil)
 	}
-	if s.logFile != nil {
-		_ = s.logFile.Close()
-		s.logFile = nil
+	if logFile != nil {
+		_ = logFile.Close()
 	}
+	s.mu.Lock()
 	s.state.Steering = false
+	s.persistLocked()
+	s.mu.Unlock()
 }

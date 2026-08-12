@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/pkg/foreman"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -67,6 +68,29 @@ func TestStartDetachStatusRoundTrip(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "cli\tidle\tround trip") {
 		t.Fatalf("status = %q", got)
+	}
+	st, err := foreman.NewStore("", "cli").LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if st.MaxRuntime != "30m0s" || st.Deadline.IsZero() {
+		t.Fatalf("runtime state = %+v", st)
+	}
+}
+
+func TestStartRejectsInvalidMaxRuntime(t *testing.T) {
+	for _, value := range []string{"0", "-1m", "forever"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("BASHY_FOREMAN_DIR", t.TempDir())
+			var out, errb bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{Out: &out, Err: &errb}}
+			if code := run(rc, []string{"start", "--detach", "--goal", "bounded", "--max-runtime", value}); code != 1 {
+				t.Fatalf("code = %d, err = %q", code, errb.String())
+			}
+			if !strings.Contains(errb.String(), "positive duration") {
+				t.Fatalf("err = %q", errb.String())
+			}
+		})
 	}
 }
 
