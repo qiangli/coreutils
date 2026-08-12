@@ -549,13 +549,11 @@ func init() {
 	addVerb("sprint", Entry{Stage: StagePlan, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("dag", Entry{Stage: StageCross, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
 	addVerb("sdlc", Entry{Stage: StageDeploy, Group: GroupOrch, Tier: TierWorkspace, Caps: []string{CapJSON}})
-	// invoke: ONE agent, ONCE, on one instruction — the primitive that unifies the
-	// heterogeneous agent CLIs. Renamed from `chat` 2026-07-12: chat does not chat.
-	// Its own synopsis always read "invoke an agent with a single unattended
-	// instruction" — no conversation, no session. The name misled agents into
-	// thinking it was a session, which is what `foreman` is.
-	addVerb("invoke", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
-	addVerb("chat", Entry{Stage: StageCode, Group: GroupOrch, AliasOf: "invoke", Caps: []string{CapJSON, CapSpawnsProcesses}})
+	// Chat began as a one-shot launcher and was temporarily renamed `invoke`.
+	// It now owns real governed interactive sessions and their control surface,
+	// so chat is canonical again; invoke remains a compatibility spelling.
+	addVerb("chat", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
+	addVerb("invoke", Entry{Stage: StageCode, Group: GroupOrch, AliasOf: "chat", Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("delegate", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("coach", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
