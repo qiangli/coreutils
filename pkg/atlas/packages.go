@@ -303,6 +303,10 @@ var packages = map[string]Package{
 		"local-mbox delivery transport (lock, append, From-line escaping). No importer and no " +
 		"applet yet — a foundation laid ahead of any mailx command; reclassify to command/library " +
 		"once something (a `mailx`/`mail` applet, or another package) actually reaches it."},
+	"release": {Role: RoleUnwired, Note: "release pipeline T0 core: .goreleaser.yaml subset, " +
+		"build matrix, deterministic archives, sha256 ledger (`bashy-release-v1`). No importer and " +
+		"no front-door verb yet — the `bashy release` cobra tree is the wiring that lands in bashy, " +
+		"not here; reclassify to command/library when it does."},
 }
 
 func init() {
