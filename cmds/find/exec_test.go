@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("FIND_TEST_HELPER") == "1" {
 		// Helper mode: print each argv element on its own line — one
 		// line per element proves argv boundaries survived intact.
+		if os.Getenv("FIND_HELPER_ARGV0") == "1" {
+			fmt.Println(os.Args[0])
+		}
 		if os.Getenv("FIND_HELPER_QUIET") != "1" {
 			for _, a := range os.Args[1:] {
 				fmt.Println(a)
@@ -188,6 +192,79 @@ func TestFindOk(t *testing.T) {
 		".", "-maxdepth", "1", "-type", "f", "-ok", bin, "{}", ";")
 	if out != "./a.txt\n" || code != 0 {
 		t.Errorf("-ok y,n,EOF: out=%q code=%d", out, code)
+	}
+}
+
+// TestFindOkAffirmationAnchoredAtLineStart pins that the -ok reply is
+// matched anchored at the start of the line, per the POSIX locale's
+// yesexpr "^[yY]" (GNU rpmatch and BSD find agree): a reply whose FIRST
+// character is not affirmative — including leading whitespace before a
+// 'y' — declines, the utility is not invoked, and the primary is false.
+// Trailing text after the leading 'y' is irrelevant ("yes", "y "), and a
+// declined -ok leaves find's own exit status 0.
+func TestFindOkAffirmationAnchoredAtLineStart(t *testing.T) {
+	dir := setupTree(t)
+	bin := helperBin(t)
+
+	decline := []string{" y\n", "\ty\n", " yes\n", " j\n"}
+	for _, reply := range decline {
+		out, _, code := runFindExec(t, dir, reply, helperEnv(),
+			".", "-name", "a.txt", "-ok", bin, "{}", ";", "-print")
+		if out != "" || code != 0 {
+			t.Errorf("-ok reply %q: out=%q code=%d, want declined (no output, exit 0)", reply, out, code)
+		}
+	}
+
+	affirm := []string{"y\n", "Y\n", "yes\n", "y \n"}
+	for _, reply := range affirm {
+		out, _, code := runFindExec(t, dir, reply, helperEnv(),
+			".", "-name", "a.txt", "-ok", bin, "{}", ";")
+		if out != "./a.txt\n" || code != 0 {
+			t.Errorf("-ok reply %q: out=%q code=%d, want utility run", reply, out, code)
+		}
+	}
+
+	// The German affirmative is anchored the same way.
+	german := append(helperEnv(), "LC_ALL=de_DE.iso88591")
+	out, _, code := runFindExec(t, dir, " j\n", german,
+		".", "-name", "a.txt", "-ok", bin, "{}", ";", "-print")
+	if out != "" || code != 0 {
+		t.Errorf("de_DE -ok reply \" j\": out=%q code=%d, want declined", out, code)
+	}
+	out, _, code = runFindExec(t, dir, "ja\n", german,
+		".", "-name", "a.txt", "-ok", bin, "{}", ";")
+	if out != "./a.txt\n" || code != 0 {
+		t.Errorf("de_DE -ok reply \"ja\": out=%q code=%d, want utility run", out, code)
+	}
+}
+
+// TestFindExecChildArgvZeroIsNameAsGiven pins the execvp convention GNU
+// and BSD find follow: the invoked utility's argv[0] is the utility name
+// exactly as written on the find command line, while the file executed is
+// the PATH-resolved binary. Rewriting argv[0] to the resolved path breaks
+// command composition with argv[0]-dispatched children (busybox-style
+// multicall binaries, shells reporting $0).
+func TestFindExecChildArgvZeroIsNameAsGiven(t *testing.T) {
+	dir := setupTree(t)
+	bin := helperBin(t)
+	name := filepath.Base(bin)
+
+	// Resolve the bare helper name through PATH so the typed name and the
+	// resolved path genuinely differ.
+	env := append(helperEnv("FIND_HELPER_ARGV0=1", "FIND_HELPER_QUIET=1"),
+		"PATH="+filepath.Dir(bin))
+	out, errb, code := runFindExec(t, dir, "", env,
+		".", "-name", "a.txt", "-exec", name, "{}", ";")
+	if out != name+"\n" || code != 0 {
+		t.Errorf("PATH-resolved utility argv[0]: out=%q code=%d err=%q, want %q",
+			out, code, errb, name+"\n")
+	}
+
+	// A name given as a path keeps that exact spelling as argv[0] too.
+	out, _, code = runFindExec(t, dir, "", env,
+		".", "-name", "a.txt", "-exec", bin, "{}", ";")
+	if out != bin+"\n" || code != 0 {
+		t.Errorf("absolute utility argv[0]: out=%q code=%d, want %q", out, code, bin+"\n")
 	}
 }
 

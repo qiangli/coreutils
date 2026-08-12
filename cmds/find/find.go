@@ -27,10 +27,12 @@
 // -exec/-ok spawn the named utility directly — that is find's
 // upstream-documented purpose (the command-wrapper exception to the
 // no-shell-out rule), argv is built verbatim with {} substitution and
-// never concatenated through a shell. The one exception mirrors POSIX
-// execvp exactly: if the utility exists and is executable but is not a
-// recognized binary (ENOEXEC — e.g. a shebang-less script), it is retried
-// once as `sh <file> [args...]`, just as GNU find does via execvp.
+// never concatenated through a shell; per the execvp convention the
+// child's argv[0] is the utility name as given, not the resolved path.
+// The one exception mirrors POSIX execvp exactly: if the utility exists
+// and is executable but is not a recognized binary (ENOEXEC — e.g. a
+// shebang-less script), it is retried once as `sh <file> [args...]`,
+// just as GNU find does via execvp.
 // -execdir, -okdir and -delete remain unsupported and fail with the
 // standard contract error.
 //
@@ -1159,13 +1161,17 @@ func (e *execExpr) flush(w *walker) {
 
 // confirm writes the -ok prompt to stderr and reads one reply line
 // from the invocation's standard input; only a leading y/Y affirms.
+// The affirmative match is anchored at the start of the line, exactly
+// as the POSIX locale's yesexpr "^[yY]" (and GNU rpmatch) anchor it:
+// only the line terminator is stripped, never leading whitespace, so
+// " y" declines.
 func (w *walker) confirm(util, path string) bool {
 	fmt.Fprintf(w.rc.Err, "< %s ... %s > ? ", util, path)
 	line, err := w.stdin.ReadString('\n')
 	if err != nil && line == "" {
 		return false // EOF: not affirmative
 	}
-	line = strings.TrimSpace(line)
+	line = strings.TrimRight(line, "\r\n")
 	if line == "" {
 		return false
 	}
@@ -1184,7 +1190,7 @@ func (w *walker) runArgv(argv []string, isOK bool) (int, error) {
 	if path == "" {
 		return 0, errors.New("command not found")
 	}
-	code, err := w.spawn(path, argv[1:], isOK)
+	code, err := w.spawn(path, argv, isOK)
 	// POSIX execvp semantics: a file that exists and is executable but is
 	// not a recognized binary (ENOEXEC — e.g. a shebang-less shell script)
 	// is retried through the shell as `sh <file> [args...]`. GNU find gets
@@ -1194,24 +1200,28 @@ func (w *walker) runArgv(argv []string, isOK bool) (int, error) {
 	// retry and shellPath is "".
 	if err != nil && isExecFormatError(err) {
 		if sh := shellPath(); sh != "" {
-			shArgv := append([]string{path}, argv[1:]...)
+			shArgv := append([]string{sh, path}, argv[1:]...)
 			return w.spawn(sh, shArgv, isOK)
 		}
 	}
 	return code, err
 }
 
-// spawn runs an already-resolved executable path with the given arguments
-// and maps its termination onto find's (exit-code, error) contract: a
-// clean or non-zero exit yields (code, nil), a signal death yields
-// (128+signal, nil), and a failure to start the process yields (0, err)
-// with err carrying the raw exec error (so runArgv can detect ENOEXEC).
-func (w *walker) spawn(path string, args []string, isOK bool) (int, error) {
+// spawn runs the already-resolved executable at path, handing the child
+// argv verbatim — argv[0] stays the utility name as given, per the
+// execvp convention (a resolved path there would break argv[0]-dispatched
+// children, e.g. multicall binaries). It maps the child's termination
+// onto find's (exit-code, error) contract: a clean or non-zero exit
+// yields (code, nil), a signal death yields (128+signal, nil), and a
+// failure to start the process yields (0, err) with err carrying the raw
+// exec error (so runArgv can detect ENOEXEC).
+func (w *walker) spawn(path string, argv []string, isOK bool) (int, error) {
 	ctx := w.rc.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	c := exec.CommandContext(ctx, path, args...)
+	c := exec.CommandContext(ctx, path)
+	c.Args = argv
 	c.Dir = w.rc.Dir
 	c.Env = w.rc.Env
 	if !isOK {
