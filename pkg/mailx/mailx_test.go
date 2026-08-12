@@ -225,3 +225,134 @@ func TestLocalMboxTransportUsesInjectedClock(t *testing.T) {
 		t.Fatalf("mailbox prefix = %q", bytes.SplitN(got, []byte{'\n'}, 2)[0])
 	}
 }
+
+func TestAppendMboxRejectsEnvelopeSenderInjection(t *testing.T) {
+	dir := t.TempDir()
+	msg, err := ParseMessage([]byte("Subject: hi\n\nbody\n"))
+	if err != nil {
+		t.Fatalf("ParseMessage: %v", err)
+	}
+	badSenders := []string{
+		"sender@example.com\r\nFrom evil@example.com",
+		"sender@example.com\nFrom evil@example.com",
+		"sender@example.com\r",
+		"sender@example.com\x00",
+		"sender\x07@example.com",
+		"sender\x1b@example.com",
+		"sender\x7f@example.com",
+	}
+	for i, s := range badSenders {
+		path := filepath.Join(dir, fmt.Sprintf("sub_%d", i), "spool.mbox")
+		err := AppendMbox(path, s, time.Unix(0, 0), msg)
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("sender %q: err = %v, want ErrMalformed", s, err)
+		}
+		if _, statErr := os.Stat(filepath.Dir(path)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("sender %q left directory behind", s)
+		}
+		if _, statErr := os.Stat(path + ".lock"); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("sender %q left lock file behind", s)
+		}
+		if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("sender %q left mailbox file behind", s)
+		}
+	}
+}
+
+func TestAppendMboxRejectsHeaderNameInjection(t *testing.T) {
+	badNames := []string{
+		"",
+		"Sub ject",
+		"Sub:ject",
+		"Sub\r\nject",
+		"Sub\nject",
+		"Sub\x00ject",
+		"Sub\x07ject",
+		"Header\x80",
+	}
+	for _, name := range badNames {
+		msg := &Message{
+			Headers: []Header{{Name: name, Value: "hello"}},
+			Body:    []byte("body\n"),
+		}
+		dir := t.TempDir()
+		path := filepath.Join(dir, "sub", "spool.mbox")
+		err := AppendMbox(path, "agent@example.com", time.Unix(0, 0), msg)
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("header name %q: err = %v, want ErrMalformed", name, err)
+		}
+		if _, statErr := os.Stat(filepath.Dir(path)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("header name %q left directory behind", name)
+		}
+	}
+}
+
+func TestAppendMboxRejectsHeaderValueInjection(t *testing.T) {
+	badValues := []string{
+		"hello\r\nTo: evil@example.com",
+		"hello\rworld",
+		"hello\x00world",
+		"hello\x07world",
+		"hello\x1bworld",
+		"hello\n\nBody injection",
+		"hello\n",
+		"\nhello",
+	}
+	for _, val := range badValues {
+		msg := &Message{
+			Headers: []Header{{Name: "Subject", Value: val}},
+			Body:    []byte("body\n"),
+		}
+		dir := t.TempDir()
+		path := filepath.Join(dir, "sub", "spool.mbox")
+		err := AppendMbox(path, "agent@example.com", time.Unix(0, 0), msg)
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("header value %q: err = %v, want ErrMalformed", val, err)
+		}
+		if _, statErr := os.Stat(filepath.Dir(path)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("header value %q left directory behind", val)
+		}
+	}
+}
+
+func TestParseMessageRejectsInjections(t *testing.T) {
+	badRaw := [][]byte{
+		[]byte("Sub ject: hello\n\nbody\n"),
+		[]byte(": hello\n\nbody\n"),
+		[]byte("Subject\x07: hello\n\nbody\n"),
+		[]byte("Subject: hello\x00world\n\nbody\n"),
+		[]byte("Subject: hello\x07world\n\nbody\n"),
+	}
+	for i, raw := range badRaw {
+		_, err := ParseMessage(raw)
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("badRaw[%d] %q: err = %v, want ErrMalformed", i, raw, err)
+		}
+	}
+}
+
+func TestAppendMboxNoArtifactOnNilOrInvalidMessage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a", "b", "c", "spool.mbox")
+
+	// Nil message
+	err := AppendMbox(path, "agent@example.com", time.Unix(0, 0), nil)
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("nil msg err = %v, want ErrMalformed", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "a")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("nil message created directory 'a'")
+	}
+
+	// Invalid message
+	invalidMsg := &Message{
+		Headers: []Header{{Name: "Bad Header Name", Value: "val"}},
+	}
+	err = AppendMbox(path, "agent@example.com", time.Unix(0, 0), invalidMsg)
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("invalid msg err = %v, want ErrMalformed", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "a")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid message created directory 'a'")
+	}
+}

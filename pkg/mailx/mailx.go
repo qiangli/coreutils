@@ -30,6 +30,110 @@ type Message struct {
 	Separator  []byte
 }
 
+// Validate checks that the message structure and headers conform to RFC rules
+// and contain no header injection or malformed data.
+func (m *Message) Validate() error {
+	if m == nil {
+		return fmt.Errorf("%w: nil message", ErrMalformed)
+	}
+	if len(m.RawHeaders) > 0 {
+		if _, _, err := parseHeaders(m.RawHeaders); err != nil {
+			return fmt.Errorf("%w: invalid RawHeaders: %v", ErrMalformed, err)
+		}
+	}
+	if len(m.Headers) == 0 && len(m.RawHeaders) == 0 {
+		return fmt.Errorf("%w: message has no headers", ErrMalformed)
+	}
+	for _, h := range m.Headers {
+		if !isValidHeaderName(h.Name) {
+			return fmt.Errorf("%w: invalid header name %q", ErrMalformed, h.Name)
+		}
+		if !isValidHeaderValue(h.Value) {
+			return fmt.Errorf("%w: invalid header value for %q", ErrMalformed, h.Name)
+		}
+		if len(h.Raw) > 0 {
+			if !isValidRawHeaderLine(h.Raw) {
+				return fmt.Errorf("%w: invalid raw header for %q", ErrMalformed, h.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func isValidHeaderName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c < 0x21 || c > 0x7e || c == ':' {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidHeaderValue(val string) bool {
+	for i := 0; i < len(val); i++ {
+		c := val[i]
+		if c == '\r' {
+			return false
+		}
+		if (c < 0x20 && c != '\n' && c != '\t') || c == 0x7f {
+			return false
+		}
+	}
+	if strings.HasPrefix(val, "\n") || strings.HasSuffix(val, "\n") || strings.Contains(val, "\n\n") {
+		return false
+	}
+	return true
+}
+
+func isValidHeaderValueText(val string) bool {
+	for i := 0; i < len(val); i++ {
+		c := val[i]
+		if (c < 0x20 && c != '\t') || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidRawHeaderLine(raw []byte) bool {
+	lines := splitLines(raw)
+	if len(lines) == 0 {
+		return false
+	}
+	for i, line := range lines {
+		for _, c := range line {
+			if (c < 0x20 && c != '\r' && c != '\n' && c != '\t') || c == 0x7f {
+				return false
+			}
+		}
+		if i == 0 {
+			colon := bytes.IndexByte(line, ':')
+			if colon <= 0 || !isValidHeaderName(string(line[:colon])) {
+				return false
+			}
+		} else {
+			if len(line) > 0 && line[0] != ' ' && line[0] != '\t' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validateSender(sender string) error {
+	for i := 0; i < len(sender); i++ {
+		c := sender[i]
+		if c < 0x20 || c == 0x7f {
+			return fmt.Errorf("%w: invalid envelope sender: control character %U", ErrMalformed, rune(c))
+		}
+	}
+	return nil
+}
+
 func ParseMessage(data []byte) (*Message, error) {
 	split, delimLen, err := splitMessage(data)
 	if err != nil {
@@ -40,12 +144,16 @@ func ParseMessage(data []byte) (*Message, error) {
 		return nil, err
 	}
 	body := append([]byte(nil), data[split+delimLen:]...)
-	return &Message{
+	msg := &Message{
 		Headers:    headers,
 		Body:       body,
 		RawHeaders: raw,
 		Separator:  append([]byte(nil), data[split:split+delimLen]...),
-	}, nil
+	}
+	if err := msg.Validate(); err != nil {
+		return nil, err
+	}
+	return msg, nil
 }
 
 func splitMessage(data []byte) (int, int, error) {
@@ -74,16 +182,28 @@ func parseHeaders(data []byte) ([]Header, []byte, error) {
 			}
 			prev := &headers[len(headers)-1]
 			prev.Raw = append(prev.Raw, line...)
-			prev.Value += "\n" + strings.TrimRight(string(bytes.TrimLeft(line, " \t")), "\r\n")
+			trimmed := strings.TrimRight(string(bytes.TrimLeft(line, " \t")), "\r\n")
+			if !isValidHeaderValueText(trimmed) {
+				return nil, nil, fmt.Errorf("%w: invalid header continuation value", ErrMalformed)
+			}
+			prev.Value += "\n" + trimmed
 			continue
 		}
 		colon := bytes.IndexByte(line, ':')
 		if colon <= 0 {
 			return nil, nil, fmt.Errorf("%w: invalid header line %q", ErrMalformed, strings.TrimRight(string(line), "\r\n"))
 		}
+		name := string(line[:colon])
+		if !isValidHeaderName(name) {
+			return nil, nil, fmt.Errorf("%w: invalid header name %q", ErrMalformed, name)
+		}
+		val := strings.TrimRight(strings.TrimLeft(string(line[colon+1:]), " \t"), "\r\n")
+		if !isValidHeaderValueText(val) {
+			return nil, nil, fmt.Errorf("%w: invalid header value", ErrMalformed)
+		}
 		headers = append(headers, Header{
-			Name:  string(line[:colon]),
-			Value: strings.TrimRight(strings.TrimLeft(string(line[colon+1:]), " \t"), "\r\n"),
+			Name:  name,
+			Value: val,
 			Raw:   append([]byte(nil), line...),
 		})
 	}
@@ -170,6 +290,14 @@ func (t LocalMboxTransport) Deliver(_ context.Context, msg *Message, _ []string)
 	return AppendMbox(t.MailboxPath, t.Sender, when, msg)
 }
 
+// AppendMbox appends a message to the specified mailbox file.
+// All pre-I/O validations (envelope sender, message structure, header names/values)
+// are performed strictly before creating any directory, lock file, or mailbox file,
+// ensuring nil or invalid messages leave no filesystem artifacts.
+//
+// Single-write assembly and truncate on write/close failure provide best-effort
+// in-process rollback, not crash-atomic transaction guarantees (e.g. system crashes
+// or power loss mid-write cannot be rolled back by process-level truncate).
 func AppendMbox(path, sender string, when time.Time, msg *Message) error {
 	if path == "" {
 		return ErrMissingMailbox
@@ -177,10 +305,14 @@ func AppendMbox(path, sender string, when time.Time, msg *Message) error {
 	if msg == nil {
 		return fmt.Errorf("%w: nil message", ErrMalformed)
 	}
+	if err := validateSender(sender); err != nil {
+		return err
+	}
+	if err := msg.Validate(); err != nil {
+		return err
+	}
 
-	// Directory creation must happen before the lock: the lock file lives
-	// alongside the mailbox, so acquiring it first would fail with ENOENT
-	// whenever the mailbox directory doesn't exist yet.
+	// Directory creation happens after validation, so invalid arguments leave no directory artifact.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mailx: create mailbox directory: %w", err)
 	}
@@ -215,6 +347,8 @@ func AppendMbox(path, sender string, when time.Time, msg *Message) error {
 	// The envelope, escaped message, and trailing separator are assembled
 	// into one buffer and issued as a single Write so a mid-message failure
 	// can never leave a half-written entry split across separate syscalls.
+	// Note: single-write assembly and truncate rollback are best-effort
+	// in-process rollback mechanisms, not crash-atomic system guarantees.
 	var buf bytes.Buffer
 	buf.WriteString(fromLine(sender, when))
 	escaped := escapeFromLines(msg.Bytes())
@@ -226,12 +360,18 @@ func AppendMbox(path, sender string, when time.Time, msg *Message) error {
 
 	if _, err := f.Write(buf.Bytes()); err != nil {
 		_ = f.Truncate(origSize)
+		if origSize == 0 {
+			_ = os.Remove(path)
+		}
 		return fmt.Errorf("mailx: write mailbox message: %w", err)
 	}
 
 	closed = true
 	if err := f.Close(); err != nil {
 		_ = os.Truncate(path, origSize)
+		if origSize == 0 {
+			_ = os.Remove(path)
+		}
 		return fmt.Errorf("mailx: close mailbox: %w", err)
 	}
 	return nil
