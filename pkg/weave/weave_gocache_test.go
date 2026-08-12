@@ -191,13 +191,15 @@ func TestRunWeavePruneRemovesCrashLeftoverManagedGOCache(t *testing.T) {
 	}
 	var doc struct {
 		Result struct {
-			Removed int `json:"removed"`
+			Removed      int `json:"removed"`
+			CacheRemoved int `json:"cache_removed"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("decode prune json: %v\n%s", err, out)
 	}
-	if doc.Result.Removed == 0 {
-		t.Fatalf("prune reported removed=0 after deleting orphaned managed GOCACHE: %s", out)
+	if doc.Result.Removed != 0 || doc.Result.CacheRemoved != 1 {
+		t.Fatalf("prune counts = workspaces:%d caches:%d, want 0/1: %s",
+			doc.Result.Removed, doc.Result.CacheRemoved, out)
 	}
 }

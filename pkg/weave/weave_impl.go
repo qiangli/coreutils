@@ -6501,8 +6501,9 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	if pendingCount == 0 && len(cacheTargets) == 0 {
 		if mode == weavecli.OutputJSON {
 			return ec(emitOK(cmd.OutOrStdout(), mode, "weave prune", map[string]any{
-				"removed": 0,
-				"results": []any{},
+				"removed":       0,
+				"cache_removed": 0,
+				"results":       []any{},
 			}))
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "weave prune: no terminal items or managed GOCACHE directories to clean up")
@@ -6633,11 +6634,13 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	// describe work that was kept or a branch-only cleanup; neither is a
 	// removed workspace. Keep the structured and human summaries on the same
 	// definition so automation cannot overstate a destructive action.
-	removed, kept := 0, 0
+	removed, cachesRemoved, kept := 0, 0, 0
 	for _, r := range results {
 		switch {
 		case r.Action == "removed":
 			removed++
+		case r.Action == "cache_removed":
+			cachesRemoved++
 		case strings.HasPrefix(r.Action, "skipped:"):
 			kept++
 		}
@@ -6645,8 +6648,9 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave prune", map[string]any{
-			"removed": removed,
-			"results": results,
+			"removed":       removed,
+			"cache_removed": cachesRemoved,
+			"results":       results,
 		}))
 	}
 
@@ -6682,6 +6686,10 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	// unmerged work. A summary that overstates a destructive action is worse than
 	// no summary: it is the number people check instead of the list.
 	fmt.Fprintf(cmd.OutOrStdout(), "weave prune: cleaned up %d item(s)", removed)
+	if cachesRemoved > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "; removed %d managed GOCACHE director%s",
+			cachesRemoved, map[bool]string{true: "y", false: "ies"}[cachesRemoved == 1])
+	}
 	if kept > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "; KEPT %d holding unmerged work (see above; --force to delete anyway)", kept)
 	}
