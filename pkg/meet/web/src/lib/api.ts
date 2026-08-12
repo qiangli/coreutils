@@ -5,14 +5,17 @@ import {
   observeFrameSchema,
   roomDetailSchema,
   roomSummarySchema,
+  stateSchema,
   type MeetEvent,
   type ObserveFrame,
   type RoomDetail,
   type RoomSummary,
+  type State,
 } from "./contracts"
 import {
   MockHttpError,
   mockAction,
+  mockCreateRoom,
   mockGetRoom,
   mockListRooms,
   mockPost,
@@ -77,6 +80,32 @@ export async function getRoom(ref: string): Promise<RoomDetail> {
   }
   return roomDetailSchema.parse(
     await request(`api/rooms/${encodeURIComponent(ref)}`),
+  )
+}
+
+/** NewRoom is the smallest room a browser can open. One participant is the 1:1
+ * assistant case; several make it a meeting. Everything else on CreateOptions
+ * (chair, secretary, agenda, bands) has a working default, and a room can grow
+ * into those from the inside — the model has one room type, so the create form
+ * does not need to ask which kind you want. */
+export interface NewRoom {
+  topic: string
+  participants: string[]
+}
+
+export async function createRoom(input: NewRoom): Promise<State> {
+  if (usingMock) {
+    try {
+      return stateSchema.parse(await mockCreateRoom(input.topic, input.participants))
+    } catch (error) {
+      normalizeError(error)
+    }
+  }
+  return stateSchema.parse(
+    await request("api/rooms", {
+      method: "POST",
+      body: JSON.stringify({ topic: input.topic, participants: input.participants }),
+    }),
   )
 }
 

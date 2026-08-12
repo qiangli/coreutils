@@ -8,6 +8,7 @@ import {
   UserRound,
 } from "lucide-react"
 
+import { NewRoomDialog } from "@/components/new-room-dialog"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -23,6 +24,8 @@ import {
 import { cn } from "@/lib/utils"
 
 interface RoomSidebarProps {
+  creating: boolean
+  onCreate: (topic: string, participants: string[]) => Promise<boolean>
   rooms: RoomSummary[]
   selectedRef: string
   state: State | null
@@ -33,6 +36,8 @@ interface RoomSidebarProps {
 }
 
 export function RoomSidebar({
+  creating,
+  onCreate,
   rooms,
   selectedRef,
   state,
@@ -73,7 +78,10 @@ export function RoomSidebar({
         <div className="px-3 py-5">
           <div className="mb-2 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
             <span>Rooms</span>
-            <MessageSquareText className="size-3.5" />
+            <div className="flex items-center gap-1">
+              <MessageSquareText className="size-3.5" />
+              <NewRoomDialog creating={creating} onCreate={onCreate} />
+            </div>
           </div>
           <div className="space-y-1">
             {rooms.map((room) => {

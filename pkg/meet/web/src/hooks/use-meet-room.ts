@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 
 import {
   ApiError,
+  createRoom as createRoomRequest,
   getRoom,
   listRooms,
   observeRoom,
@@ -31,6 +32,7 @@ export function useMeetRoom() {
   const [queued, setQueued] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -151,6 +153,30 @@ export function useMeetRoom() {
     [selectedRef],
   )
 
+  /** createRoom opens a room and switches to it. The room list is re-fetched
+   * rather than patched: the server assigns the room number and the seat the
+   * caller took, and guessing either would put a number on screen that a reload
+   * corrects. Returns whether it worked, so the dialog knows to close. */
+  const createRoom = useCallback(
+    async (topic: string, participants: string[]) => {
+      setCreating(true)
+      setError(null)
+      try {
+        const created = await createRoomRequest({ topic, participants })
+        const nextRooms = await listRooms()
+        setRooms(nextRooms)
+        setSelectedRef(created.id)
+        return true
+      } catch (reason) {
+        setError(messageFor(reason))
+        return false
+      } finally {
+        setCreating(false)
+      }
+    },
+    [],
+  )
+
   const isOrganizer = useMemo(
     () => Boolean(state && state.initiator === state.human),
     [state],
@@ -171,6 +197,8 @@ export function useMeetRoom() {
     sending,
     send,
     act,
+    createRoom,
+    creating,
     isOrganizer,
     usingMock,
   }

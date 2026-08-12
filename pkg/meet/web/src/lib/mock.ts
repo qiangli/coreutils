@@ -194,6 +194,30 @@ export async function mockGetRoom(ref: string): Promise<RoomDetail> {
       }
 }
 
+export async function mockCreateRoom(
+  topic: string,
+  participants: string[],
+): Promise<State> {
+  await pause(140)
+  if (!topic.trim()) {
+    throw new MockHttpError(400, "A room needs a topic.")
+  }
+  if (participants.length === 0) {
+    throw new MockHttpError(400, "Invite at least one agent.")
+  }
+  const id = `demo-${mockRooms.length + 1}`
+  const room = String(mockRooms.length + 1)
+  mockRooms.unshift({
+    id,
+    room,
+    topic,
+    status: "open",
+    members: participants,
+    updated: new Date().toISOString(),
+  })
+  return { ...mockState, id, room, topic, participants, round: 0 }
+}
+
 export async function mockPost(
   _ref: string,
   author: string,

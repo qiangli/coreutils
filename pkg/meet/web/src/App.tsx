@@ -33,6 +33,8 @@ export function App() {
         <RoomSidebar
           className="hidden lg:flex"
           connection={meet.connection}
+          creating={meet.creating}
+          onCreate={meet.createRoom}
           onSelect={meet.selectRoom}
           rooms={meet.rooms}
           selectedRef={meet.selectedRef}
@@ -62,6 +64,8 @@ export function App() {
                 <RoomSidebar
                   className="w-full"
                   connection={meet.connection}
+                  creating={meet.creating}
+                  onCreate={meet.createRoom}
                   onSelect={meet.selectRoom}
                   rooms={meet.rooms}
                   selectedRef={meet.selectedRef}

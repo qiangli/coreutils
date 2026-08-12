@@ -1,3 +1,5 @@
+import { useState } from "react"
+
 import {
   Check,
   ClipboardList,
@@ -9,6 +11,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -34,6 +37,8 @@ export function RoomDetails({
   onAction,
   className,
 }: RoomDetailsProps) {
+  const [invitee, setInvitee] = useState("")
+
   return (
     <aside
       className={cn(
@@ -132,12 +137,36 @@ export function RoomDetails({
                 ? "You can manage membership and close this room."
                 : `${state?.initiator || "The organizer"} manages membership and room closure.`}
             </p>
+            {isOrganizer && (
+              <form
+                className="mb-2 flex gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const name = invitee.trim()
+                  if (!name) return
+                  onAction("invite", "Invite", { agent: name })
+                  setInvitee("")
+                }}
+              >
+                <Input
+                  aria-label="Agent to invite"
+                  className="h-8 text-[12px]"
+                  onChange={(event) => setInvitee(event.target.value)}
+                  placeholder="Invite an agent…"
+                  value={invitee}
+                />
+                <Button
+                  className="h-8 shrink-0 text-[12px]"
+                  disabled={!invitee.trim()}
+                  size="sm"
+                  type="submit"
+                  variant="outline"
+                >
+                  Invite
+                </Button>
+              </form>
+            )}
             <div className="flex gap-2">
-              <OrganizerButton
-                disabled={!isOrganizer}
-                label="Invite"
-                onClick={() => onAction("invite", "Invite", { agent: "" })}
-              />
               <OrganizerButton
                 disabled={!isOrganizer}
                 label="Close room"
