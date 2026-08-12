@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/chat"
 )
 
 // The exported API — one truth, three callers.
@@ -298,8 +300,25 @@ func Address(ctx context.Context, ref, agent, text string) (Event, error) {
 		return Event{}, err
 	}
 	defer lease.Release()
-	return runTurn(ctx, st, canonAgent(name), text, nil)
+	return runTurn(ctx, st, canonAgent(name), text, apiRunner())
 }
+
+// apiRunner supplies the chat.Runner the exported verbs run turns with. In
+// production it returns nil, which is what makes chat.Invoke build the real
+// exec runner — behaviour is unchanged.
+//
+// It exists because the HTTP surface had no way to be driven end to end.
+// serve_test.go's header records the constraint that forced that:
+// "the routes that run agents … are exercised only as far as their 202/409
+// contract: actually running one would spawn a real CLI, which is the one thing
+// a hermetic suite must never do." The seam removes the dilemma instead of
+// living with it — a test substitutes a canned runner and the SAME transport,
+// lease, transcript and live-tee code runs, so what the suite proves is the
+// path the browser actually takes.
+//
+// Same shape as operableFn (roster.go) and nowFn (session.go): one package-level
+// var, overridden and restored by the test that needs it.
+var apiRunner = func() chat.Runner { return nil }
 
 // Round runs one moderated round across the participants, on the agenda item the
 // room is currently on. runRound takes the lease itself.
@@ -308,7 +327,7 @@ func Round(ctx context.Context, ref string) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	return runRound(ctx, st, currentAgenda(st), nil)
+	return runRound(ctx, st, currentAgenda(st), apiRunner())
 }
 
 // Poll puts a fixed-choice question to every participant and tallies the answers.
@@ -325,7 +344,7 @@ func Poll(ctx context.Context, ref, q string, choices []string) (*PollResult, er
 	if err != nil {
 		return nil, err
 	}
-	return runPoll(ctx, st, q, choices, nil, nil)
+	return runPoll(ctx, st, q, choices, nil, apiRunner())
 }
 
 // Ask puts an open question to every participant. Answering is optional here, as
@@ -335,7 +354,7 @@ func Ask(ctx context.Context, ref, q string) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	return runAsk(ctx, st, q, true, nil, nil)
+	return runAsk(ctx, st, q, true, nil, apiRunner())
 }
 
 // Converge runs the secretary pass. A room with no secretary is refused by
@@ -345,7 +364,7 @@ func Converge(ctx context.Context, ref string) (*Synthesis, error) {
 	if err != nil {
 		return nil, err
 	}
-	return converge(ctx, st, nil)
+	return converge(ctx, st, apiRunner())
 }
 
 // Close converges, files the minutes, and marks the room closed. Organizer only —
@@ -383,7 +402,7 @@ func closeRoom(ctx context.Context, ref, actor string, opt closeOptions) (string
 			return "", err
 		}
 	}
-	return closeMeeting(ctx, st, opt, nil)
+	return closeMeeting(ctx, st, opt, apiRunner())
 }
 
 // markKinds are the human markers a caller may write into the transcript. The set
