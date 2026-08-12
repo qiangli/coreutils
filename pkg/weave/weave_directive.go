@@ -187,6 +187,7 @@ func applyDirectiveKill(queueDir string, id int64, reason string) error {
 	var wrapperPid int
 	var workspace string
 	var verifyCommand string
+	var verifyItem *weaveItem
 	if err := withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
 		if it == nil {
@@ -198,6 +199,8 @@ func applyDirectiveKill(queueDir string, id int64, reason string) error {
 		wrapperPid = it.WrapperPid
 		workspace = it.Workspace
 		verifyCommand = it.VerifyCommand
+		copy := *it
+		verifyItem = &copy
 		return nil
 	}); err != nil {
 		return err
@@ -213,10 +216,10 @@ func applyDirectiveKill(queueDir string, id int64, reason string) error {
 	var verifyOutput string
 	var verifyTree string
 	if verifyCommand != "" && (ahead > 0 || dirty) {
-		verifyExit, verifyOutput, verifyTree = weaveCollectVerifyEvidence(workspace, verifyCommand, dirty, dirtyFiles)
+		verifyExit, verifyOutput, verifyTree = weaveCollectVerifyEvidence(workspace, queueDir, verifyCommand, verifyItem, dirty, dirtyFiles)
 	}
 
-	return withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
+	err := withWeaveQueueLock(queueDir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
 		if it == nil {
 			return fmt.Errorf("run #%d not found", id)
@@ -254,6 +257,12 @@ func applyDirectiveKill(queueDir string, id int64, reason string) error {
 		}
 		return nil
 	})
+	if err == nil && verifyExit != nil {
+		if cleanErr := weaveCleanupManagedGOCache(queueDir, verifyItem); cleanErr != nil {
+			return cleanErr
+		}
+	}
+	return err
 }
 
 func readDirectiveCursor(queueDir string) (string, error) {

@@ -305,6 +305,7 @@ func weaveChildEnv(environ []string, workspace, branch, base, queueDir string, i
 		resolvedLaunch = agentlaunch.Launch(*l)
 	}
 	env = agentlaunch.ApplyYcodeDataDir(env, environ, resolvedLaunch, queueDir, strconv.FormatInt(it.ID, 10))
+	env = weaveApplyManagedGOCache(env, environ, queueDir, it)
 	// Credential firewall: a weave subagent is a third-party CLI processing
 	// untrusted repo content with its own network egress, so it must not inherit
 	// the operator's vault secrets by default (the lethal trifecta). Removes only

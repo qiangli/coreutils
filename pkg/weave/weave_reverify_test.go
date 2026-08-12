@@ -59,7 +59,7 @@ func TestMaybeAutoCommitCommitsDirtyTrackedAndUntrackedChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ev := weaveCollectTerminalEvidence(workspace, "main", "", false)
+	ev := weaveCollectTerminalEvidence(workspace, "main", "", "", nil, false)
 	if !ev.Dirty || ev.UntrackedFiles != 1 || ev.CommitsAhead != 0 {
 		t.Fatalf("pre auto-commit evidence = %+v, want dirty tracked changes, 1 untracked, 0 ahead", ev)
 	}
@@ -71,7 +71,7 @@ func TestMaybeAutoCommitCommitsDirtyTrackedAndUntrackedChanges(t *testing.T) {
 	if !committed {
 		t.Fatal("maybeAutoCommit reported no commit")
 	}
-	ev = weaveCollectTerminalEvidence(workspace, "main", "", false)
+	ev = weaveCollectTerminalEvidence(workspace, "main", "", "", nil, false)
 	if ev.Dirty || ev.UntrackedFiles != 0 || ev.CommitsAhead != 1 {
 		t.Fatalf("post auto-commit evidence = %+v, want clean with 1 commit ahead", ev)
 	}
@@ -87,7 +87,7 @@ func TestAutoCommitOffLeavesDirtyWorkspaceUncommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ev := weaveCollectTerminalEvidence(workspace, "main", "", false)
+	ev := weaveCollectTerminalEvidence(workspace, "main", "", "", nil, false)
 	if !ev.Dirty || ev.UntrackedFiles != 1 || ev.CommitsAhead != 0 {
 		t.Fatalf("auto-commit off evidence = %+v, want dirty tracked changes, 1 untracked, 0 ahead", ev)
 	}

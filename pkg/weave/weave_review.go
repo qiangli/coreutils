@@ -93,7 +93,7 @@ func runWeaveReview(cmd *cobra.Command, id int64, flags *weaveOutputFlags) error
 	files, insertions := weaveReviewDiffStat(reviewDir, baseRef)
 	verifyExit := 0
 	if it.VerifyCommand != "" {
-		verifyExit, _ = weaveRunVerify(reviewDir, it.VerifyCommand)
+		verifyExit, _ = weaveRunVerify(reviewDir, dir, it.VerifyCommand, it)
 	}
 	real := commits > 0
 	blocking := !real || (it.VerifyCommand != "" && verifyExit != 0)

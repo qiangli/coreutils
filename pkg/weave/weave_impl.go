@@ -1131,7 +1131,7 @@ func weaveAllocatedLaunchOrphaned(it *weaveItem, now time.Time) bool {
 	}
 }
 
-func weaveRunVerify(workspace, command string) (int, string) {
+func weaveRunVerify(workspace, queueDir, command string, it *weaveItem) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	// Hermetic shell: --noprofile --norc keeps the measurement
@@ -1140,14 +1140,7 @@ func weaveRunVerify(workspace, command string) (int, string) {
 	// subagent's own environment.
 	vc := exec.CommandContext(ctx, "bash", "--noprofile", "--norc", "-c", command)
 	vc.Dir = workspace
-	env := make([]string, 0, len(os.Environ())+1)
-	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "PWD=") || strings.HasPrefix(kv, "OLDPWD=") {
-			continue
-		}
-		env = append(env, kv)
-	}
-	vc.Env = append(env, "PWD="+workspace)
+	vc.Env = weaveVerifyEnv(os.Environ(), workspace, queueDir, it)
 	out, err := vc.CombinedOutput()
 	exit := 0
 	if err != nil {
@@ -1220,11 +1213,11 @@ func weaveTrimVerifyOutput(s string, max int) string {
 	return head + "\n[weave: ...output trimmed, failures above...]\n" + tail
 }
 
-func weaveCollectVerifyEvidence(workspace, command string, dirty bool, dirtyFiles int) (verifyExit *int, verifyOutput, verifyTree string) {
+func weaveCollectVerifyEvidence(workspace, queueDir, command string, it *weaveItem, dirty bool, dirtyFiles int) (verifyExit *int, verifyOutput, verifyTree string) {
 	if command == "" {
 		return nil, "", ""
 	}
-	ve, vo := weaveRunVerify(workspace, command)
+	ve, vo := weaveRunVerify(workspace, queueDir, command, it)
 	if dirty {
 		verifyTree = "working-tree-dirty"
 		vo += fmt.Sprintf("\n[weave: VERIFY ATTESTED A DIRTY WORKING TREE: working tree had tracked uncommitted changes in %d file(s); HEAD alone is not the verified tree]", dirtyFiles)
@@ -1249,7 +1242,7 @@ type weaveTerminalEvidence struct {
 	VerifyTree     string
 }
 
-func weaveCollectTerminalEvidence(workspace, base, verifyCommand string, runVerify bool) weaveTerminalEvidence {
+func weaveCollectTerminalEvidence(workspace, base, queueDir, verifyCommand string, it *weaveItem, runVerify bool) weaveTerminalEvidence {
 	ahead, head := weaveMeasureBranch(workspace, base)
 	dirty, dirtyFiles, untrackedFiles := weaveMeasureDirtiness(workspace)
 	ev := weaveTerminalEvidence{
@@ -1261,7 +1254,7 @@ func weaveCollectTerminalEvidence(workspace, base, verifyCommand string, runVeri
 		UntrackedFiles: untrackedFiles,
 	}
 	if runVerify && verifyCommand != "" {
-		ev.VerifyExit, ev.VerifyOutput, ev.VerifyTree = weaveCollectVerifyEvidence(workspace, verifyCommand, dirty, dirtyFiles)
+		ev.VerifyExit, ev.VerifyOutput, ev.VerifyTree = weaveCollectVerifyEvidence(workspace, queueDir, verifyCommand, it, dirty, dirtyFiles)
 	}
 	return ev
 }
@@ -1663,7 +1656,7 @@ func weaveRunSuiteGate(root, command string) (int, string) {
 	if command == "" {
 		return 0, ""
 	}
-	return weaveRunVerify(root, command)
+	return weaveRunVerify(root, "", command, nil)
 }
 
 // weaveRunCandidateSuiteGate proves the candidate against one exact base SHA
@@ -3620,9 +3613,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	// EVIDENCE recorded alongside the terminal state; it never changes
 	// the submitted/killed/failed decision below — `weave pull` is the
 	// consumer that acts on a non-zero verify_exit.
-	ev := weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), "", false)
+	ev := weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), dir, "", it, false)
 	if it.VerifyCommand != "" && (exitCode == 0 || ev.CommitsAhead > 0) {
-		ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), it.VerifyCommand, true)
+		ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), dir, it.VerifyCommand, it, true)
 	}
 	var outsideWorkspacePaths []string
 	if ev.CommitsAhead == 0 && logPath != "" {
@@ -3666,9 +3659,9 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		autoCommitted = committed
 		if err != nil {
 			autoCommitErr = err.Error()
-			ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), it.VerifyCommand, it.VerifyCommand != "")
+			ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), dir, it.VerifyCommand, it, it.VerifyCommand != "")
 		} else if committed {
-			ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), it.VerifyCommand, true)
+			ev = weaveCollectTerminalEvidence(workspace, weaveCountRef(it, base), dir, it.VerifyCommand, it, true)
 		}
 	}
 	finalizationClaimed := false
@@ -3745,6 +3738,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 	if lockErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "weave start: queue write failed after tool exit: %v\n", lockErr)
 	} else {
+		if ev.VerifyExit != nil {
+			if err := weaveCleanupManagedGOCache(dir, it); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "weave start: managed GOCACHE cleanup failed (continuing): %v\n", err)
+			}
+		}
 		// Say it out loud at the moment it is found. A flag only `weave
 		// status` would show is a flag nobody reads until after the merge.
 		if w := weaveIsolationWarning(it); w != "" {
@@ -4567,7 +4565,7 @@ func runWeavePull(cmd *cobra.Command, flags *weaveOutputFlags, issueID int64, is
 					results = append(results, pairResult)
 					continue
 				}
-				ev := weaveCollectTerminalEvidence(it.Workspace, weaveCountRef(it, base), it.VerifyCommand, it.VerifyCommand != "")
+				ev := weaveCollectTerminalEvidence(it.Workspace, weaveCountRef(it, base), dir, it.VerifyCommand, it, it.VerifyCommand != "")
 				weaveApplyTerminalEvidence(it, ev)
 				if ev.VerifyExit != nil && *ev.VerifyExit != 0 {
 					it.State = "failed"
@@ -5236,7 +5234,7 @@ func runWeaveReverify(cmd *cobra.Command, id int64, flags *weaveOutputFlags) err
 
 	base := weaveBaseBranch(root)
 	verifyCommand := it.VerifyCommand
-	ev := weaveCollectTerminalEvidence(it.Workspace, weaveCountRef(it, base), verifyCommand, verifyCommand != "")
+	ev := weaveCollectTerminalEvidence(it.Workspace, weaveCountRef(it, base), dir, verifyCommand, it, verifyCommand != "")
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		freshIt := findWeaveItem(q, id)
 		if freshIt == nil {
@@ -5254,6 +5252,11 @@ func runWeaveReverify(cmd *cobra.Command, id int64, flags *weaveOutputFlags) err
 	if lockErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave reverify",
 			weavecli.ExitGenericFail, lockErr))
+	}
+	if ev.VerifyExit != nil {
+		if err := weaveCleanupManagedGOCache(dir, it); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave reverify: managed GOCACHE cleanup failed (continuing): %v\n", err)
+		}
 	}
 	if mode == weavecli.OutputJSON {
 		res := map[string]any{
@@ -6056,6 +6059,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	var finalState string
 	var workspace string
 	var verifyCommand string
+	var verifyItem *weaveItem
 	notFoundHint := weaveOtherActiveQueuesHintSuffix(dir)
 	lockErr := withWeaveQueueLock(dir, func(q *weaveQueue) error {
 		it := findWeaveItem(q, id)
@@ -6068,6 +6072,8 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 		wrapperPid = it.WrapperPid
 		workspace = it.Workspace
 		verifyCommand = it.VerifyCommand
+		copy := *it
+		verifyItem = &copy
 		return nil
 	})
 	if lockErr == nil && wrapperPid > 0 {
@@ -6087,7 +6093,7 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 	var verifyOutput string
 	var verifyTree string
 	if lockErr == nil && verifyCommand != "" && (ahead > 0 || dirty) {
-		verifyExit, verifyOutput, verifyTree = weaveCollectVerifyEvidence(workspace, verifyCommand, dirty, dirtyFiles)
+		verifyExit, verifyOutput, verifyTree = weaveCollectVerifyEvidence(workspace, dir, verifyCommand, verifyItem, dirty, dirtyFiles)
 	}
 
 	if lockErr == nil {
@@ -6148,6 +6154,11 @@ func runWeaveKill(cmd *cobra.Command, id int64, reason string, yes bool, flags *
 		}
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave kill",
 			weavecli.ExitGenericFail, lockErr))
+	}
+	if verifyExit != nil {
+		if err := weaveCleanupManagedGOCache(dir, verifyItem); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave kill: managed GOCACHE cleanup failed (continuing): %v\n", err)
+		}
 	}
 	if mode == weavecli.OutputJSON {
 		result := map[string]any{
@@ -6223,9 +6234,9 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	if wrapperPID > 0 && pidAlive(wrapperPID) {
 		weaveStopWrapper(wrapperPID)
 	}
-	ev := weaveCollectTerminalEvidence(workspace, countRef, "", false)
+	ev := weaveCollectTerminalEvidence(workspace, countRef, dir, "", &weaveItem{ID: id}, false)
 	if verifyCommand != "" && (ev.CommitsAhead > 0 || ev.Dirty || ev.UntrackedFiles > 0) {
-		ev = weaveCollectTerminalEvidence(workspace, countRef, verifyCommand, true)
+		ev = weaveCollectTerminalEvidence(workspace, countRef, dir, verifyCommand, &weaveItem{ID: id}, true)
 	}
 	state := weaveTerminalState(0, nil, "", ev)
 	if state == "submitted" && (ev.Dirty || ev.UntrackedFiles > 0 || (ev.VerifyExit != nil && *ev.VerifyExit != 0)) {
@@ -6255,6 +6266,11 @@ func runWeaveFinalize(cmd *cobra.Command, id int64, observedIdle bool, flags *we
 	})
 	if lockErr != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave finalize", weavecli.ExitGenericFail, lockErr))
+	}
+	if ev.VerifyExit != nil {
+		if err := weaveCleanupManagedGOCache(dir, finalized); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "weave finalize: managed GOCACHE cleanup failed (continuing): %v\n", err)
+		}
 	}
 	// Fold the terminal gate evidence into the capability matrix (best-effort).
 	weaveRecordCapability(finalized)
@@ -6477,19 +6493,29 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			pendingCount++
 		}
 	}
-	if pendingCount == 0 {
+	cacheTargets, err := weaveManagedGOCacheSweepTargets(dir, q, stale)
+	if err != nil {
+		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prune",
+			weavecli.ExitGenericFail, err))
+	}
+	if pendingCount == 0 && len(cacheTargets) == 0 {
 		if mode == weavecli.OutputJSON {
 			return ec(emitOK(cmd.OutOrStdout(), mode, "weave prune", map[string]any{
 				"removed": 0,
 				"results": []any{},
 			}))
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "weave prune: no terminal items to clean up")
+		fmt.Fprintln(cmd.OutOrStdout(), "weave prune: no terminal items or managed GOCACHE directories to clean up")
 		return nil
 	}
 
+	prompt := fmt.Sprintf("weave prune: will clean up %d terminal item(s) (workspace + merged branches).", pendingCount)
+	if len(cacheTargets) > 0 {
+		prompt = fmt.Sprintf("weave prune: will clean up %d terminal item(s) and %d managed GOCACHE director%s.",
+			pendingCount, len(cacheTargets), map[bool]string{true: "y", false: "ies"}[len(cacheTargets) == 1])
+	}
 	if err := weaveConfirmBatch(cmd, mode, "prune",
-		fmt.Sprintf("weave prune: will clean up %d terminal item(s) (workspace + merged branches).", pendingCount), yes); err != nil {
+		prompt, yes); err != nil {
 		return ec(weavecli.EmitError(cmd.ErrOrStderr(), mode, "weave prune",
 			weavecli.ExitInvalidArg, err))
 	}
@@ -6498,6 +6524,7 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 		Issue     int64  `json:"issue"`
 		State     string `json:"state"`
 		Workspace string `json:"workspace,omitempty"`
+		Cache     string `json:"cache,omitempty"`
 		Branch    string `json:"branch,omitempty"`
 		Merged    bool   `json:"merged"`
 		Action    string `json:"action"` // "removed", "skipped", "branch_deleted", "failed: ..."
@@ -6580,6 +6607,21 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 				}
 			}
 		}
+		cacheTargets, err := weaveManagedGOCacheSweepTargets(dir, q, stale)
+		if err != nil {
+			return err
+		}
+		for _, target := range cacheTargets {
+			state := "orphaned-cache"
+			if it := findWeaveItem(q, target.Issue); it != nil {
+				state = it.State
+			}
+			if err := safeRemoveManagedGOCache(dir, target.Path); err != nil {
+				results = append(results, pruneResult{Issue: target.Issue, State: state, Cache: target.Path, Action: "failed: " + err.Error()})
+				continue
+			}
+			results = append(results, pruneResult{Issue: target.Issue, State: state, Cache: target.Path, Action: "cache_removed"})
+		}
 		return nil
 	})
 	if lockErr != nil {
@@ -6617,6 +6659,12 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 				merged = " (NOT merged into " + base + ")"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): removed workspace%s\n", r.Issue, r.State, merged)
+		case r.Action == "cache_removed":
+			if r.Issue > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): removed managed GOCACHE %s\n", r.Issue, r.State, r.Cache)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s: removed managed GOCACHE %s\n", r.State, r.Cache)
+			}
 		case r.Action == "branch_deleted":
 			fmt.Fprintf(cmd.OutOrStdout(), "  run #%d (%s): deleted merged branch %s\n", r.Issue, r.State, r.Branch)
 		case strings.HasPrefix(r.Action, "skipped:"):
