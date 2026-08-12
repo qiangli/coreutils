@@ -40,7 +40,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `[` | `cmds/test` | test | GNU Coreutils | yes | no | 3 | 32 |
 | `arch` | `cmds/arch` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `ast` | `cmds/ast` | — | Bashy/other extension | no | no | 1 | 6 |
-| `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 5 | 21 |
+| `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 5 | 22 |
 | `atq` | `cmds/atq` | — | Bashy/other extension | no | no | 1 | 2 |
 | `atrm` | `cmds/atrm` | — | Bashy/other extension | no | no | 1 | 2 |
 | `awk` | `cmds/awk` | — | POSIX/Unix utility | no | yes | 3 | 20 |

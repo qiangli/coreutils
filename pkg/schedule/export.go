@@ -289,7 +289,7 @@ func ParseAtTouchTime(s string, now time.Time, loc *time.Location) (time.Time, e
 	var err error
 	if len(parts) == 2 {
 		second, err = strconv.Atoi(parts[1])
-		if err != nil || second > 59 {
+		if err != nil || second > 60 {
 			return time.Time{}, fmt.Errorf("invalid -t time %q", s)
 		}
 	}
@@ -312,9 +312,21 @@ func ParseAtTouchTime(s string, now time.Time, loc *time.Location) (time.Time, e
 	day, _ := strconv.Atoi(digits[offset+2 : offset+4])
 	hour, _ := strconv.Atoi(digits[offset+4 : offset+6])
 	minute, _ := strconv.Atoi(digits[offset+6 : offset+8])
-	when := time.Date(year, time.Month(monthNumber), day, hour, minute, second, 0, loc)
-	if when.Year() != year || int(when.Month()) != monthNumber || when.Day() != day || when.Hour() != hour || when.Minute() != minute || when.Second() != second {
+	// POSIX defines -t's format as touch -t's, which accepts a seconds field
+	// of 60 for a leap second and carries it into the following minute.
+	// time.Date would silently normalize a raw 60 instead of rejecting a bad
+	// input, so validate against a clamped base second (as cmds/touch's
+	// parseISODate does) and apply the carry only after validation passes.
+	baseSecond := second
+	if second == 60 {
+		baseSecond = 59
+	}
+	when := time.Date(year, time.Month(monthNumber), day, hour, minute, baseSecond, 0, loc)
+	if when.Year() != year || int(when.Month()) != monthNumber || when.Day() != day || when.Hour() != hour || when.Minute() != minute || when.Second() != baseSecond {
 		return time.Time{}, fmt.Errorf("invalid -t time %q", s)
+	}
+	if second == 60 {
+		when = when.Add(time.Second)
 	}
 	return when, nil
 }
