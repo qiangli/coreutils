@@ -114,7 +114,7 @@ export function RoomDetails({
               <Meta
                 icon={Timer}
                 label="Turn limit"
-                value={`${state?.turn_timeout ?? 0}s`}
+                value={formatTurnTimeout(state?.turn_timeout)}
               />
               <Meta
                 label="Decisions"
@@ -193,6 +193,21 @@ function SectionTitle({
       {children}
     </h2>
   )
+}
+
+/**
+ * State.turn_timeout is a Go duration marshalled as a STRING — "20m", "1h30m",
+ * "45s" — not a count of seconds. Appending "s" to it rendered the default 20
+ * MINUTE turn limit as "20ms", which is not a rounding error but three orders
+ * of magnitude and the wrong unit, on the one field that tells a human how long
+ * an agent may hold the floor.
+ *
+ * A number is still accepted (contracts.ts allows either) and read as seconds.
+ */
+function formatTurnTimeout(value: string | number | undefined): string {
+  if (value === undefined || value === "") return "Default"
+  if (typeof value === "number") return `${value}s`
+  return value
 }
 
 function Meta({
