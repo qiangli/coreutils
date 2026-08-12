@@ -26,5 +26,10 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Out, "%s (qiangli/coreutils) %s\n", cmd.Name, tool.Version)
 		return 0
 	}
-	return tool.Lookup("ls").Run(rc, args)
+	// GNU dir is an ls alias with these defaults placed before all explicit
+	// arguments, so later user options retain their normal precedence.
+	lsArgs := make([]string, 0, len(args)+2)
+	lsArgs = append(lsArgs, "-C", "-b")
+	lsArgs = append(lsArgs, args...)
+	return tool.Lookup("ls").Run(rc, lsArgs)
 }
