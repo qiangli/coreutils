@@ -105,3 +105,118 @@ func TestMissingEncodingIsUsageError(t *testing.T) {
 		t.Fatalf("code=%d err=%q", code, errout)
 	}
 }
+
+func TestListEncodings(t *testing.T) {
+	for _, flag := range []string{"-l", "--list"} {
+		code, out, errout := invoke(t, "", flag)
+		if code != 0 || errout != "" {
+			t.Fatalf("flag=%s: code=%d err=%q", flag, code, errout)
+		}
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if len(lines) == 0 {
+			t.Fatalf("flag=%s: empty list", flag)
+		}
+		foundUTF8 := false
+		for _, l := range lines {
+			if l == "UTF-8" {
+				foundUTF8 = true
+				break
+			}
+		}
+		if !foundUTF8 {
+			t.Fatalf("flag=%s: UTF-8 not found in output: %q", flag, string(out))
+		}
+	}
+}
+
+func TestEncodingAliases(t *testing.T) {
+	tests := []struct {
+		input string
+		from  string
+		to    string
+		want  string
+	}{
+		{"abc", "utf8", "ISO-8859-1", "abc"},
+		{"abc", "UTF8", "ISO-8859-1", "abc"},
+		{"abc", "ASCII", "UTF-8", "abc"},
+		{"abc", "CP1252", "UTF-8", "abc"},
+		{"abc", "LATIN1", "UTF-8", "abc"},
+		{"\xff\xfea\x00b\x00c\x00", "UTF16", "UTF-8", "abc"},
+		{"\x00a\x00b\x00c", "UTF16BE", "UTF-8", "abc"},
+		{"a\x00b\x00c\x00", "UTF16LE", "UTF-8", "abc"},
+	}
+
+	for _, tc := range tests {
+		code, out, errout := invoke(t, tc.input, "-f", tc.from, "-t", tc.to)
+		if code != 0 || errout != "" || string(out) != tc.want {
+			t.Fatalf("from=%q to=%q code=%d out=%q err=%q", tc.from, tc.to, code, string(out), errout)
+		}
+	}
+}
+
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) {
+	panic("reader accessed before encoding validation")
+}
+
+type panicWriter struct{}
+
+func (panicWriter) Write([]byte) (int, error) {
+	panic("writer accessed before encoding validation")
+}
+
+func TestSuffixRejectionPreIO(t *testing.T) {
+	tests := []struct {
+		from string
+		to   string
+		bad  string
+	}{
+		// Standard uppercase suffixes
+		{"UTF-8//IGNORE", "ISO-8859-1", "UTF-8//IGNORE"},
+		{"UTF-8//TRANSLIT", "ISO-8859-1", "UTF-8//TRANSLIT"},
+		{"UTF-8", "ISO-8859-1//IGNORE", "ISO-8859-1//IGNORE"},
+		{"UTF-8", "ISO-8859-1//TRANSLIT", "ISO-8859-1//TRANSLIT"},
+		// Lowercase suffixes
+		{"utf-8//ignore", "ISO-8859-1", "utf-8//ignore"},
+		{"iso-8859-1//translit", "UTF-8", "iso-8859-1//translit"},
+		{"UTF-8", "iso-8859-1//ignore", "iso-8859-1//ignore"},
+		// Multiple suffixes
+		{"UTF-8//IGNORE//TRANSLIT", "ISO-8859-1", "UTF-8//IGNORE//TRANSLIT"},
+		{"UTF-8", "ISO-8859-1//TRANSLIT//IGNORE", "ISO-8859-1//TRANSLIT//IGNORE"},
+		// Unknown suffixes
+		{"UTF-8//UNKNOWN", "ISO-8859-1", "UTF-8//UNKNOWN"},
+		{"UTF-8", "ISO-8859-1//FOO", "ISO-8859-1//FOO"},
+	}
+
+	for _, tc := range tests {
+		var errout bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx: context.Background(),
+			Dir: t.TempDir(),
+			Stdio: tool.Stdio{
+				In:  panicReader{},
+				Out: panicWriter{},
+				Err: &errout,
+			},
+		}
+		code := run(rc, []string{"-f", tc.from, "-t", tc.to})
+		if code != 1 {
+			t.Fatalf("from=%q to=%q: expected code 1, got %d", tc.from, tc.to, code)
+		}
+		expectedErr := "iconv: unsupported encoding \"" + tc.bad + "\"\n"
+		if errout.String() != expectedErr {
+			t.Fatalf("from=%q to=%q: expected err %q, got %q", tc.from, tc.to, expectedErr, errout.String())
+		}
+	}
+}
+
+func TestAllSupportedEncodingsAreResolvable(t *testing.T) {
+	for _, encName := range supportedEncodings {
+		enc, err := lookupEncoding(encName)
+		if err != nil || enc == nil {
+			t.Fatalf("encoding %q failed to resolve: %v", encName, err)
+		}
+	}
+}
+
