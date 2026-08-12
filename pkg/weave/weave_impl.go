@@ -6587,9 +6587,23 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 			weavecli.ExitGenericFail, lockErr))
 	}
 
+	// COUNT WHAT HAPPENED, NOT WHAT WAS CONSIDERED. A result row can also
+	// describe work that was kept or a branch-only cleanup; neither is a
+	// removed workspace. Keep the structured and human summaries on the same
+	// definition so automation cannot overstate a destructive action.
+	removed, kept := 0, 0
+	for _, r := range results {
+		switch {
+		case r.Action == "removed":
+			removed++
+		case strings.HasPrefix(r.Action, "skipped:"):
+			kept++
+		}
+	}
+
 	if mode == weavecli.OutputJSON {
 		return ec(emitOK(cmd.OutOrStdout(), mode, "weave prune", map[string]any{
-			"removed": len(results),
+			"removed": removed,
 			"results": results,
 		}))
 	}
@@ -6619,15 +6633,6 @@ func runWeavePrune(cmd *cobra.Command, yes, stale, force bool, flags *weaveOutpu
 	// workspaces were gone while two of them were quietly still there holding
 	// unmerged work. A summary that overstates a destructive action is worse than
 	// no summary: it is the number people check instead of the list.
-	removed, kept := 0, 0
-	for _, r := range results {
-		switch {
-		case r.Action == "removed":
-			removed++
-		case strings.HasPrefix(r.Action, "skipped:"):
-			kept++
-		}
-	}
 	fmt.Fprintf(cmd.OutOrStdout(), "weave prune: cleaned up %d item(s)", removed)
 	if kept > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "; KEPT %d holding unmerged work (see above; --force to delete anyway)", kept)

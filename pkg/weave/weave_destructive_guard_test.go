@@ -1,7 +1,9 @@
 package weave
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -93,5 +95,55 @@ func TestPruneStillSweepsCleanRun(t *testing.T) {
 	}
 	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
 		t.Fatalf("a run with nothing at risk must still be cleaned up: %v\n%s", err, out)
+	}
+}
+
+func TestPruneJSONCountsOnlyRemovedWorkspaces(t *testing.T) {
+	root, heldWorkspace, dir := setupPullRefusalFixture(t, 1, "failed", 1)
+	cleanWorkspace := filepath.Join(dir, "workspaces", "issue-2")
+	if err := os.MkdirAll(cleanWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, cleanWorkspace, "clone", "-q", root, ".")
+	baseSHA := gitT(t, cleanWorkspace, "rev-parse", "HEAD")
+	branch := "agent/weave-issue-2"
+	gitT(t, cleanWorkspace, "checkout", "-q", "-b", branch)
+
+	q, err := loadWeaveQueue(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Items = append(q.Items, &weaveItem{
+		ID: 2, State: "failed", Workspace: cleanWorkspace, Branch: branch,
+		BaseSHA: baseSHA, Title: "clean terminal run",
+	})
+	if err := saveWeaveQueue(dir, q); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWeave(t, "prune", "--yes", "--json")
+	if code != 0 {
+		t.Fatalf("prune exit=%d: %s", code, out)
+	}
+	var envelope struct {
+		Result struct {
+			Removed int `json:"removed"`
+			Results []struct {
+				Action string `json:"action"`
+			} `json:"results"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("decode prune JSON: %v\n%s", err, out)
+	}
+	if envelope.Result.Removed != 1 {
+		t.Fatalf("removed=%d, want exactly the one deleted workspace; results=%+v",
+			envelope.Result.Removed, envelope.Result.Results)
+	}
+	if _, err := os.Stat(heldWorkspace); err != nil {
+		t.Fatalf("held workspace was not preserved: %v", err)
+	}
+	if _, err := os.Stat(cleanWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("clean workspace was not removed: %v", err)
 	}
 }
