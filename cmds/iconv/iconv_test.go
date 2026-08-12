@@ -219,4 +219,3 @@ func TestAllSupportedEncodingsAreResolvable(t *testing.T) {
 		}
 	}
 }
-
