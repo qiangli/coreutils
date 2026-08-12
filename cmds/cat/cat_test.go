@@ -28,7 +28,6 @@ func runTool(t *testing.T, dir, stdin string, args ...string) (stdout, stderr st
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
 }
-
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -271,4 +270,3 @@ func TestCatWriteError(t *testing.T) {
 		t.Errorf("cat write error = code %d, err %q; want code 1 and write error prefix", code, errb.String())
 	}
 }
-
