@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -76,7 +77,7 @@ func TestObserveStreamsNewTurnsAndStopsWhenClosed(t *testing.T) {
 	pinStore(t, st)
 	turn(t, st.ID, Event{Round: 1, Speaker: "claude-fable5", Kind: "turn", Text: "first", TS: time.Now()})
 
-	var out, errW bytes.Buffer
+	var out, errW syncBuffer
 	done := make(chan error, 1)
 	go func() {
 		done <- observeMeeting(context.Background(), &out, &errW, st, observeOpts{follow: true})
@@ -125,7 +126,7 @@ func TestObserveDetachSaysSo(t *testing.T) {
 	pinStore(t, st)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	var out, errW bytes.Buffer
+	var out, errW syncBuffer
 	done := make(chan error, 1)
 	go func() { done <- observeMeeting(ctx, &out, &errW, st, observeOpts{follow: true}) }()
 	time.Sleep(2 * observePoll)
@@ -291,7 +292,7 @@ func TestObserveStreamsLinesAsTheyAreWritten(t *testing.T) {
 	pinStore(t, st)
 	st.Round = 1
 
-	var out, errW bytes.Buffer
+	var out, errW syncBuffer
 	done := make(chan error, 1)
 	go func() {
 		done <- observeMeeting(context.Background(), &out, &errW, st, observeOpts{follow: true})
@@ -361,7 +362,7 @@ func TestObserveJoiningMidTurnTakesTheWholeTurnFromTheRecord(t *testing.T) {
 	w := newLiveWriter(st, "claude-fable5", "", "")
 	w.Write([]byte("first point\n"))
 
-	var out, errW bytes.Buffer
+	var out, errW syncBuffer
 	done := make(chan error, 1)
 	go func() {
 		done <- observeMeeting(context.Background(), &out, &errW, st, observeOpts{follow: true})
@@ -459,4 +460,29 @@ func TestLiveLinesAreSanitizedLikeTheRecord(t *testing.T) {
 	if !saw {
 		t.Error("no line reached the live channel")
 	}
+}
+
+// syncBuffer is a bytes.Buffer safe to read while another goroutine writes it.
+//
+// The follow-mode tests run observeMeeting in a goroutine and then assert on
+// what it has printed so far — that is the whole point of a streaming test. A
+// plain bytes.Buffer makes every out.String() a data race against the streamer,
+// which -race reports (observe_test.go read vs observe.go write) and which, race
+// detector aside, can return a half-appended string and fail an assertion for
+// reasons that have nothing to do with the behaviour under test.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
 }
