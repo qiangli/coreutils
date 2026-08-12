@@ -44,7 +44,7 @@ factor	cmds/factor		GNU Coreutils	yes	no	1	3
 false	cmds/false		GNU Coreutils	yes	yes	1	2
 fetch	cmds/fetch		Bashy/other extension	no	no	1	6
 file	cmds/file		POSIX/Unix utility	no	yes	1	4
-find	cmds/find		POSIX/Unix utility	no	yes	6	48
+find	cmds/find		POSIX/Unix utility	no	yes	6	50
 fmt	cmds/fmt		GNU Coreutils	yes	no	1	18
 fold	cmds/fold		GNU Coreutils	yes	yes	1	19
 grep	cmds/grep		POSIX/Unix utility	no	yes	3	36
