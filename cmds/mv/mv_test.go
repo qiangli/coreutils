@@ -354,6 +354,72 @@ func TestMvUsageErrors(t *testing.T) {
 	}
 }
 
+func TestMvTrailingSlashOnRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "NEWCONTENT")
+	write(t, filepath.Join(dir, "targetfile"), "ORIGINAL")
+
+	_, errb, code := runTool(t, dir, "src", "targetfile/")
+	if code != 1 {
+		t.Fatalf("mv src targetfile/ must fail: code=%d", code)
+	}
+	if !strings.Contains(errb, "Not a directory") {
+		t.Errorf("expected 'Not a directory' in stderr, got %q", errb)
+	}
+	if read(t, filepath.Join(dir, "targetfile")) != "ORIGINAL" {
+		t.Error("destination file was overwritten")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src")); err != nil {
+		t.Error("source file was destroyed")
+	}
+}
+
+func TestMvNoTargetDirectoryTrailingSlashOnExistingDir(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "NEWCONTENT")
+	if err := os.Mkdir(filepath.Join(dir, "somedir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// -T disables target-directory treatment, but "somedir/" DOES resolve
+	// to an existing directory, so this must not be misdiagnosed as
+	// "Not a directory". The move itself still fails (a regular file
+	// cannot be renamed onto an existing directory), but the source must
+	// survive and the directory must be untouched.
+	_, errb, code := runTool(t, dir, "-T", "src", "somedir/")
+	if code != 1 {
+		t.Fatalf("mv -T src somedir/ must fail: code=%d", code)
+	}
+	if strings.Contains(errb, "Not a directory") {
+		t.Errorf("existing directory misdiagnosed as not-a-directory: %q", errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src")); err != nil {
+		t.Error("source file was destroyed")
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "somedir")); err != nil || !fi.IsDir() {
+		t.Error("destination directory was disturbed")
+	}
+}
+
+func TestMvTrailingSlashOnNonexistentDestination(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "NEWCONTENT")
+
+	_, errb, code := runTool(t, dir, "src", "nosuchdir/")
+	if code != 1 {
+		t.Fatalf("mv src nosuchdir/ must fail: code=%d", code)
+	}
+	if !strings.Contains(errb, "No such file or directory") {
+		t.Errorf("expected 'No such file or directory' in stderr, got %q", errb)
+	}
+	if strings.Contains(errb, "Not a directory") {
+		t.Errorf("nonexistent destination misdiagnosed as not-a-directory: %q", errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "src")); err != nil {
+		t.Error("source file was destroyed")
+	}
+}
+
 func TestMvHelpAndVersion(t *testing.T) {
 	dir := t.TempDir()
 	out, _, code := runTool(t, dir, "--help")

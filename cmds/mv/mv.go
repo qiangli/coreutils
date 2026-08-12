@@ -123,6 +123,23 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "mv: target '%s' is not a directory\n", dest)
 		return 1
 	}
+	// A trailing slash on dest requires its final component to resolve
+	// to an existing directory (POSIX Base Definitions 4.13). This holds
+	// regardless of -T: -T only controls whether an existing directory is
+	// treated as a container for srcs, not whether the raw pathname
+	// resolved. An existing directory falls through to the normal move,
+	// which fails naturally under -T (e.g. EEXIST/EISDIR); only a failed
+	// resolution (missing path, or an existing non-directory) is rejected
+	// here, and a missing path reports its own errno rather than a
+	// hardcoded "Not a directory".
+	if len(dest) > 0 && os.IsPathSeparator(dest[len(dest)-1]) && !(err == nil && di.IsDir()) {
+		if err != nil {
+			fmt.Fprintf(rc.Err, "mv: cannot move '%s' to '%s': %s\n", srcs[0], dest, reason(err))
+			return 1
+		}
+		fmt.Fprintf(rc.Err, "mv: cannot move '%s' to '%s': Not a directory\n", srcs[0], dest)
+		return 1
+	}
 	for _, src := range srcs {
 		dst := dest
 		if todir {
