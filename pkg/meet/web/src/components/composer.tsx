@@ -64,11 +64,18 @@ export function Composer({
   const [text, setText] = useState("")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const agents = useMemo(
-    () =>
-      (state?.participants ?? []).filter(
+    () => {
+      const participants = (state?.participants ?? []).filter(
         (member) =>
           memberName(member) !== state?.human && memberRole(member) !== "human",
-      ),
+      )
+      const aliases = Object.keys(state?.role_holders ?? {}).map((name) => ({
+        name,
+        role: "role",
+        live: true,
+      }))
+      return [...participants, ...aliases]
+    },
     [state],
   )
   const mentionQuery = text.startsWith("@")

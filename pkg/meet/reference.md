@@ -115,6 +115,14 @@ The file merges with the built-in list by name, so the first entry overrides
 the default steward label and the second adds a room. Permanent names are
 identities; changing a topic does not create a new transcript.
 
+When the steward seat is held, `@steward` resolves to its current concrete
+agent. The human can therefore write `@steward invite <agent> to this meeting`
+from the web composer. The steward receives that as an addressed turn and may
+run `bashy meet invite steward <agent> --as <holder>`. Both the human organizer
+and the verified current steward holder may invite or remove agents. Releasing
+the seat clears the alias without closing the room; a late predecessor cannot
+clear a successor's alias.
+
 **What you see.** The whole history first, in full — you are joining a
 conversation already in progress and need to know what was said. After that you
 are watching it live: each agent's answer streams in **line by line as it writes

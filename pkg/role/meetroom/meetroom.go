@@ -31,7 +31,7 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	kind := "meet"
 	if a.Kind == role.Steward {
 		create = func(opts meet.CreateOptions) (*meet.State, error) {
-			return meet.EnsurePermanentRoom("steward", opts)
+			return meet.EnsurePermanentRoleRoom("steward", "steward", holder, opts)
 		}
 		kind = "meet-permanent"
 		subject = "Steward"
@@ -61,7 +61,9 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	return &role.Contact{Kind: kind, Ref: st.ID, Room: st.Room, Topic: a.Topic(), Holder: contactHolder}, nil
 }
 
-// Release closes a role's room on a graceful handoff.
+// Release closes a bounded role room on a graceful handoff. A permanent
+// steward room stays open; release clears only its current @steward routing
+// alias, so the host address and transcript survive the handoff.
 //
 // A room that is already gone is NOT an error: the point of releasing is that
 // the room ends up closed, and a successor sweeping a dead holder's room may
@@ -72,7 +74,11 @@ func Release(c *role.Contact, holder string) error {
 		return nil
 	}
 	if c.Kind == "meet-permanent" {
-		return nil
+		err := meet.ClearPermanentRoleHolder(c.Ref, "steward", holder)
+		if err != nil && isGone(err) {
+			return nil
+		}
+		return err
 	}
 	err := meet.Close(c.Ref, holder)
 	if err != nil && isGone(err) {

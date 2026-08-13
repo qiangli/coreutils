@@ -294,9 +294,14 @@ func Address(ctx context.Context, ref, agent, text string) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
-	name := strings.TrimSpace(agent)
+	name := strings.TrimSpace(strings.TrimPrefix(agent, "@"))
 	if name == "" {
 		return Event{}, fmt.Errorf("meet: no agent addressed")
+	}
+	if holder := strings.TrimSpace(st.RoleHolders[strings.ToLower(name)]); holder != "" {
+		name = holder
+	} else if st.Permanent && strings.EqualFold(name, st.Name) {
+		return Event{}, fmt.Errorf("meet: @%s has no current holder — start the %s before addressing it", st.Name, st.Name)
 	}
 	lease, err := acquireRunLease(st.ID)
 	if err != nil {

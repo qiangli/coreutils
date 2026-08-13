@@ -1,11 +1,14 @@
 package meet
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/qiangli/coreutils/pkg/chat"
 )
 
 func permanentTestStore(t *testing.T) string {
@@ -104,6 +107,51 @@ func TestEnsureConfiguredPermanentRoomsMaterializesAllOnce(t *testing.T) {
 	}
 	if len(sessions) != 2 {
 		t.Fatalf("sessions = %d, want one identity per configured room", len(sessions))
+	}
+}
+
+func TestPermanentStewardAliasRoutesAndAuthorizesCurrentHolder(t *testing.T) {
+	permanentTestStore(t)
+	seatEverything(t)
+	st, err := EnsurePermanentRoleRoom("steward", "steward", "codex", CreateOptions{
+		Topic: "Steward", Participants: []string{"codex"}, Initiator: "codex", Out: OutStore,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.RoleHolders["steward"] != "codex" {
+		t.Fatalf("role holders = %v", st.RoleHolders)
+	}
+
+	oldRunner := apiRunner
+	apiRunner = func() chat.Runner { return fakeRunner{reply: "done"} }
+	t.Cleanup(func() { apiRunner = oldRunner })
+	event, err := Address(context.Background(), "steward", "steward", "invite the release agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Speaker != "codex" {
+		t.Fatalf("@steward routed to %q, want codex", event.Speaker)
+	}
+	if err := Invite("steward", "codex", "release-agent"); err != nil {
+		t.Fatalf("current steward could not invite: %v", err)
+	}
+	if err := Invite("steward", "intruder", "other-agent"); !errors.Is(err, ErrNotOrganizer) {
+		t.Fatalf("intruder invite = %v, want ErrNotOrganizer", err)
+	}
+
+	if err := ClearPermanentRoleHolder("steward", "steward", "predecessor"); err != nil {
+		t.Fatal(err)
+	}
+	still, _, _ := Room("steward")
+	if still.RoleHolders["steward"] != "codex" {
+		t.Fatal("a stale predecessor cleared the current holder")
+	}
+	if err := ClearPermanentRoleHolder("steward", "steward", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Address(context.Background(), "steward", "steward", "hello"); err == nil {
+		t.Fatal("@steward remained routable after its holder released the seat")
 	}
 }
 

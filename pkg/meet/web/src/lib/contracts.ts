@@ -96,6 +96,7 @@ export const stateSchema = z
     room: z.union([z.string(), z.number()]).optional(),
     name: z.string().optional(),
     permanent: z.boolean().optional(),
+    role_holders: z.record(z.string(), z.string()).optional(),
     topic: z.string().default(""),
     agenda: z.array(z.string()).default([]),
     participants: z.array(memberSchema).default([]),

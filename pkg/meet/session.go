@@ -198,6 +198,11 @@ type State struct {
 	// addressed as either "steward" or "@steward" across restarts.
 	Name      string `json:"name,omitempty"`
 	Permanent bool   `json:"permanent,omitempty"`
+	// RoleHolders maps stable room aliases (for example "steward") to the
+	// current concrete agent identity. It is lifecycle-owned metadata, not a
+	// second authority record: pkg/steward remains the truth about who holds the
+	// seat. Meet uses the snapshot only to route @role and roster privileges.
+	RoleHolders map[string]string `json:"role_holders,omitempty"`
 
 	// Room is the short number a human types to attach — see room.go. It is a
 	// POINTER, held for the life of the meeting and released (and reused) when
@@ -354,6 +359,14 @@ func (s *State) Validate() error {
 		}
 	} else if strings.TrimSpace(s.Name) != "" {
 		return fmt.Errorf("meet: ordinary meeting cannot claim permanent name %q", s.Name)
+	} else if len(s.RoleHolders) != 0 {
+		return fmt.Errorf("meet: ordinary meeting cannot claim permanent role aliases")
+	}
+	for roleName, holder := range s.RoleHolders {
+		name, err := permanentRoomName(roleName)
+		if err != nil || name != roleName || strings.TrimSpace(holder) == "" {
+			return fmt.Errorf("meet: invalid permanent role holder %q=%q", roleName, holder)
+		}
 	}
 	// No secretary check: an empty secretary is a room that keeps no minutes,
 	// not an invalid one. Every invariant below that mentions the secretary is

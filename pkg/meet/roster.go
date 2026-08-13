@@ -280,11 +280,19 @@ func requireOrganizer(st *State, actor string) error {
 	if strings.EqualFold(who, org) || (who != "" && strings.EqualFold(canonAgent(who), canonAgent(org))) {
 		return nil
 	}
+	// Permanent role rooms have a second, deliberately narrow organizer: the
+	// verified current role holder recorded by the role lifecycle. This grants
+	// roster management, not closure (permanent rooms cannot be closed at all).
+	for _, holder := range st.RoleHolders {
+		if strings.EqualFold(who, holder) || (who != "" && strings.EqualFold(canonAgent(who), canonAgent(holder))) {
+			return nil
+		}
+	}
 	if who == "" {
 		who = "an unnamed caller"
 	}
 	return fmt.Errorf("meet: %s cannot change the roster of %s — %s convened it. "+
-		"Any member may post; only the organizer invites, removes, or closes: %w",
+		"Any member may post; only the organizer or current permanent-role holder invites or removes: %w",
 		who, st.ID, org, ErrNotOrganizer)
 }
 

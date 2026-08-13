@@ -144,6 +144,64 @@ func EnsureConfiguredPermanentRooms() ([]*State, error) {
 // reopening it when needed. A kernel-held store lock makes simultaneous service
 // and steward starts converge on one identity rather than create twins.
 func EnsurePermanentRoom(name string, opts CreateOptions) (*State, error) {
+	return ensurePermanentRoom(name, opts, nil)
+}
+
+// EnsurePermanentRoleRoom is EnsurePermanentRoom plus the current holder of a
+// stable role alias. It is the role-lifecycle seam used by the steward: the
+// authoritative seat record remains in pkg/steward, while Meet gets the one
+// routing fact it needs for @steward and roster authorization.
+func EnsurePermanentRoleRoom(name, roleName, holder string, opts CreateOptions) (*State, error) {
+	roleName, err := permanentRoomName(roleName)
+	if err != nil {
+		return nil, err
+	}
+	holder = canonAgent(holder)
+	if holder == "" {
+		return nil, fmt.Errorf("meet: permanent role %q has no holder", roleName)
+	}
+	return ensurePermanentRoom(name, opts, map[string]string{roleName: holder})
+}
+
+// ClearPermanentRoleHolder removes a role alias only when holder still owns
+// it. The compare prevents a late predecessor shutdown from erasing the
+// successor that already took over the permanent room.
+func ClearPermanentRoleHolder(ref, roleName, holder string) error {
+	roleName, err := permanentRoomName(roleName)
+	if err != nil {
+		return err
+	}
+	base, err := baseDir()
+	if err != nil {
+		return err
+	}
+	l, err := lockfile.AcquireWithin(filepath.Join(base, "rooms.lock"), 5*time.Second,
+		lockfile.Holder{Intent: "release permanent meet role"})
+	if err != nil {
+		return fmt.Errorf("meet: lock permanent rooms: %w", err)
+	}
+	defer l.Release()
+
+	id, err := resolveMeeting(ref)
+	if err != nil {
+		return err
+	}
+	st, err := loadState(id)
+	if err != nil {
+		return err
+	}
+	if !st.Permanent {
+		return fmt.Errorf("meet: %s is not a permanent room", ref)
+	}
+	current := st.RoleHolders[roleName]
+	if current == "" || !strings.EqualFold(canonAgent(current), canonAgent(holder)) {
+		return nil
+	}
+	delete(st.RoleHolders, roleName)
+	return st.save()
+}
+
+func ensurePermanentRoom(name string, opts CreateOptions, roles map[string]string) (*State, error) {
 	name, err := permanentRoomName(name)
 	if err != nil {
 		return nil, err
@@ -185,6 +243,12 @@ func EnsurePermanentRoom(name string, opts CreateOptions) (*State, error) {
 				found.Participants = append(found.Participants, participant)
 			}
 		}
+		if found.RoleHolders == nil && len(roles) > 0 {
+			found.RoleHolders = map[string]string{}
+		}
+		for roleName, holder := range roles {
+			found.RoleHolders[roleName] = holder
+		}
 		if found.Status != "open" || found.Room < 1 || roomHeldByAnother(sessions, found) {
 			found.Status = "open"
 			found.Room = 0
@@ -207,6 +271,15 @@ func EnsurePermanentRoom(name string, opts CreateOptions) (*State, error) {
 		return nil, err
 	}
 	st.Name, st.Permanent = name, true
+	if len(roles) > 0 {
+		st.RoleHolders = make(map[string]string, len(roles))
+		for roleName, holder := range roles {
+			st.RoleHolders[roleName] = holder
+		}
+	}
+	if err := st.Validate(); err != nil {
+		return nil, err
+	}
 	if err := st.save(); err != nil {
 		return nil, err
 	}
