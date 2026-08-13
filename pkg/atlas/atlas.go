@@ -557,6 +557,7 @@ func init() {
 	addVerb("delegate", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("coach", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("meet", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
+	addVerb("relay", Entry{Stage: StagePlan, Group: GroupOrch, Caps: []string{CapJSON, CapSpawnsProcesses}})
 	addVerb("supervise", Entry{Stage: StageCode, Group: GroupOrch, Caps: []string{CapSpawnsProcesses}})
 	addVerb("capability", Entry{Stage: StageCross, Group: GroupOrch, Caps: []string{CapJSON}})
 	// leaderboard: the account of what the fleet actually did, where capability
@@ -860,7 +861,7 @@ func init() {
 	// net — opens a network connection (the egress / exfiltration surface).
 	eff(EffNet,
 		"ntp", "sntp", "browser", "fetch", "search",
-		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "pair", "judge", "tools", "models", "agents", "act", "sota",
+		"delegate", "coach", "sdlc", "chat", "invoke", "meet", "relay", "pair", "judge", "tools", "models", "agents", "act", "sota",
 		"herald",
 		"act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks", "sphere", "git",
 		"git-scm", "gh", "loom", "web", "curl", "rclone", "zot", "seaweedfs",
@@ -873,7 +874,7 @@ func init() {
 	eff(EffExec,
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
-		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "schedule", "act", "sota",
+		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "relay", "pair", "judge", "supervise", "schedule", "act", "sota",
 		"act-runner", "skills", "podman", "docker", "sandbox", "ollama", "dks", "sphere",
 		"git-scm", "loom", "curl", "zot", "seaweedfs", "kopia", "kubectl",
 		"verify", "conform", "gate", "run", "tessaro", "login", "why",
@@ -909,7 +910,7 @@ func init() {
 	// compute, or cloud resources.
 	// judge SPENDS: every reviewer is a metered inference call, and a --panel 3
 	// costs three of them. An agent must be able to see that before it fans out.
-	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "pair", "judge", "supervise", "sdlc", "weave", "sphere", "ollama", "sota", "herald")
+	eff(EffSpend, "delegate", "coach", "chat", "invoke", "meet", "relay", "pair", "judge", "supervise", "sdlc", "weave", "sphere", "ollama", "sota", "herald")
 
 	// The toolchain provisioners each download over the network and then run
 	// arbitrary code (a compiler / package manager / interpreter — npm and pip
