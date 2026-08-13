@@ -158,7 +158,11 @@ export const dmEventSchema = z.object({
 
 export const dmDetailSchema = z.object({
   state: dmSummarySchema,
-  events: z.array(dmEventSchema),
+  // Empty Go slices should marshal as [], but older Relay builds emitted null
+  // before the first message. Both mean the same thing: no transcript yet.
+  // Normalizing at the wire boundary keeps transport representation out of the
+  // UI and prevents a Zod diagnostic blob from becoming the conversation.
+  events: z.array(dmEventSchema).nullish().transform((events) => events ?? []),
 })
 
 export const dmObserveFrameSchema = z.object({

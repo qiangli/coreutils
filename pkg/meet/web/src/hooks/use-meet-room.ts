@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { ZodError } from "zod"
 
 import {
   ApiError,
@@ -333,6 +334,9 @@ function addUnique(current: MeetEvent[], event: MeetEvent) {
 }
 
 function messageFor(reason: unknown) {
+  if (reason instanceof ZodError) {
+    return "Relay received an incompatible response. Refresh the page; if it persists, restart `bashy relay serve`."
+  }
   if (reason instanceof Error) return reason.message
   return "Something went wrong. Please try again."
 }

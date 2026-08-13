@@ -306,6 +306,29 @@ test("Relay menu navigates to Meet channels and Chat direct messages", async ({ 
   await expect(page.getByLabel("Message the room")).toBeEnabled();
 });
 
+test("an empty legacy DM transcript never renders raw schema JSON", async ({ page }) => {
+  await openMeet(page);
+  await page.route("**/api/dms/echoback-fixed", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        state: {
+          agent: primaryAgent,
+          human: "e2e-human",
+          created: new Date().toISOString(),
+          updated: new Date().toISOString(),
+        },
+        events: null,
+      }),
+    });
+  }, { times: 1 });
+  await page.getByRole("button", { name: "Start a direct message" }).click();
+  await page.getByRole("menuitem", { name: new RegExp(primaryAgent) }).click();
+  await expect(page.locator("textarea")).toBeEnabled();
+  await expect(page.getByText(/expected.*array|invalid_type/i)).toHaveCount(0);
+});
+
 test("routes an unoccupied permanent role instead of silently posting it", async ({ page }) => {
   const topic = unique("Browser lazy role room");
   await openMeet(page);
