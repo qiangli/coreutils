@@ -9,6 +9,17 @@ export const memberSchema = z.union([
   }),
 ])
 
+export const agentOptionSchema = z.object({
+  name: z.string(),
+  nick: z.string().optional(),
+  binding: z.string().optional(),
+  band: z.number().optional(),
+  ephemeral: z.boolean().optional(),
+  task: z.string().optional(),
+  available: z.boolean(),
+  reason: z.string().optional(),
+})
+
 export const roomSummarySchema = z.object({
   id: z.string(),
   // The server sends the room NUMBER as an int (RoomSummary.Room is a Go int),
@@ -145,6 +156,7 @@ export const observeFrameSchema = z.discriminatedUnion("kind", [
 ])
 
 export type Member = z.infer<typeof memberSchema>
+export type AgentOption = z.infer<typeof agentOptionSchema>
 export type RoomSummary = z.infer<typeof roomSummarySchema>
 export type MeetEvent = z.infer<typeof eventSchema>
 export type LiveEvent = z.infer<typeof liveEventSchema>

@@ -100,7 +100,7 @@ type JobRef struct {
 }
 
 // CreateOptions is the room a caller wants. It is the sessionFlags set minus the
-// flag plumbing, so `meet start` and a browser build the same State through the
+// flag plumbing, so `meet open` and a browser build the same State through the
 // same validation.
 //
 // The zero value is meaningful and is the chat-room case: no secretary (the room
@@ -205,7 +205,7 @@ func Room(ref string) (*State, *Synthesis, error) {
 // Create opens a room and returns its saved header.
 //
 // It builds through sessionFlags.newState so a room created from a browser is
-// held to exactly the invariants `meet start` enforces: band seating, roster
+// held to exactly the invariants `meet open` enforces: band seating, roster
 // canonicalization, and Validate's separation of powers, in that order.
 //
 // It does NOT call guardDepth. That guard refuses to convene a meeting from
@@ -411,6 +411,65 @@ func Close(ref, actor string) error {
 	return err
 }
 
+// Open reopens a closed room with a fresh session artifact set. The prior
+// transcript, synthesis, live stream, and full turn files move under
+// archive/<timestamp>; a permanent room additionally retains its stable name.
+func Open(ref, actor string) (*State, error) {
+	id, err := resolveMeeting(ref)
+	if err != nil {
+		return nil, err
+	}
+	lease, err := acquireRunLease(id)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+	st, err := loadState(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireOrganizer(st, actor); err != nil {
+		return nil, err
+	}
+	if st.Status == "open" {
+		return st, nil
+	}
+	if err := archiveSessionArtifacts(st); err != nil {
+		return nil, err
+	}
+	st.Round = 0
+	st.Created = nowFn()
+	st.Status = "open"
+	st.Room = assignRoom()
+	if err := st.save(); err != nil {
+		return nil, err
+	}
+	return st, nil
+}
+
+func archiveSessionArtifacts(st *State) error {
+	dir, err := storeDir(st.ID)
+	if err != nil {
+		return err
+	}
+	archive := filepath.Join(dir, "archive", nowFn().UTC().Format("20060102T150405.000000000Z"))
+	for _, name := range []string{"transcript.jsonl", "synthesis.json", "live.jsonl", "turns"} {
+		source := filepath.Join(dir, name)
+		if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(archive, 0o700); err != nil {
+			return err
+		}
+		if err := os.Rename(source, filepath.Join(archive, name)); err != nil {
+			return fmt.Errorf("meet: archive %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // closeRoom is the body `meet close` and Close share.
 //
 // An EMPTY actor skips the organizer check, and that is not a hole — it is the
@@ -429,6 +488,11 @@ func closeRoom(ctx context.Context, ref, actor string, opt closeOptions) (string
 			return "", err
 		}
 	}
+	probe, err := acquireRunLease(st.ID)
+	if err != nil {
+		return "", err
+	}
+	probe.Release()
 	return closeMeeting(ctx, st, opt, apiRunner())
 }
 

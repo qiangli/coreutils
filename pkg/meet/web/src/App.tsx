@@ -32,6 +32,7 @@ export function App() {
     <TooltipProvider>
       <div className="flex h-dvh min-h-[540px] overflow-hidden bg-background text-foreground">
         <RoomSidebar
+          agents={meet.agents}
           className="hidden lg:flex"
           connection={meet.connection}
           creating={meet.creating}
@@ -63,6 +64,7 @@ export function App() {
               >
                 <SheetTitle className="sr-only">Rooms and members</SheetTitle>
                 <RoomSidebar
+                  agents={meet.agents}
                   className="w-full"
                   connection={meet.connection}
                   creating={meet.creating}
@@ -127,6 +129,7 @@ export function App() {
               >
                 <SheetTitle className="sr-only">Room details</SheetTitle>
                 <RoomDetails
+                  agents={meet.agents}
                   className="w-full border-0"
                   detail={meet.detail}
                   isOrganizer={meet.isOrganizer}
@@ -164,6 +167,7 @@ export function App() {
 
         {detailsOpen && (
           <RoomDetails
+            agents={meet.agents}
             className="hidden xl:flex"
             detail={meet.detail}
             isOrganizer={meet.isOrganizer}

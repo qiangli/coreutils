@@ -34,7 +34,8 @@ it* (see `close`).
 ## CLI
 
 ```
-bashy meet start   --topic TEXT [--participant AGENT ...] [--chair AGENT] [flags]
+bashy meet open    --topic TEXT [--participant AGENT ...] [--chair AGENT] [flags]
+bashy meet open    <room|id>    # reopen a closed room
 bashy meet consult --topic TEXT --question TEXT [--choice yes --choice no] [--json]
 
 bashy meet tell          <id> "<text>"          # append a human contribution
@@ -237,7 +238,7 @@ The chair is a **distinct seat from the secretary**, and `meet` will not let one
 agent hold both — see Roles above.
 
 ```bash
-bashy meet start --topic "…" \
+bashy meet open --topic "…" \
   --participant codex --participant opencode \
   --chair claude --secretary gemini \
   --max-turns 12 --max-stalls 3 --non-interactive

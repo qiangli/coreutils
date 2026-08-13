@@ -999,8 +999,8 @@ type closeOptions struct {
 
 // closeMeeting converges, asks the initiator to confirm, then writes the minutes.
 func closeMeeting(ctx context.Context, st *State, opt closeOptions, runner chat.Runner) (string, error) {
-	if st.Permanent {
-		return "", fmt.Errorf("%w: %s is a host address and stays open across handoffs", ErrPermanentRoom, st.Name)
+	if st.Status == "closed" {
+		return minutesPath(st), nil
 	}
 	if opt.Out == nil {
 		opt.Out = io.Discard
@@ -1038,6 +1038,7 @@ func fileMinutes(st *State) (string, error) {
 		return "", err
 	}
 	st.Status = "closed"
+	st.Room = 0
 	_ = st.save()
 	return path, nil
 }

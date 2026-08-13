@@ -18,11 +18,6 @@ import (
 
 const permanentRoomsSchema = "bashy-meet-permanent-rooms-v1"
 
-// ErrPermanentRoom marks an attempt to close a configured room through the
-// ordinary meeting lifecycle. Permanent rooms are host addresses: they stay
-// open across steward handoffs and service restarts.
-var ErrPermanentRoom = errors.New("meet: permanent rooms cannot be closed")
-
 // PermanentRoomConfig is one desired host-local room. The built-in steward
 // room is always present unless a config entry explicitly disables it.
 type PermanentRoomConfig struct {
@@ -268,6 +263,9 @@ func EnsurePermanentRoleRoom(name, roleName, holder string, opts CreateOptions) 
 	if holder == "" {
 		return nil, fmt.Errorf("meet: permanent role %q has no holder", roleName)
 	}
+	if err := routableSeat(holder); err != nil {
+		return nil, fmt.Errorf("meet: permanent role %q: %w", roleName, err)
+	}
 	return ensurePermanentRoom(name, opts, map[string]string{roleName: holder})
 }
 
@@ -359,6 +357,9 @@ func ensurePermanentRoom(name string, opts CreateOptions, roles map[string]strin
 			}
 		}
 		for _, participant := range opts.Participants {
+			if err := routableSeat(participant); err != nil {
+				return nil, err
+			}
 			participant = canonAgent(participant)
 			if participant != "" && !containsFold(found.Participants, participant) {
 				found.Participants = append(found.Participants, participant)
@@ -370,9 +371,7 @@ func ensurePermanentRoom(name string, opts CreateOptions, roles map[string]strin
 		for roleName, holder := range roles {
 			found.RoleHolders[roleName] = holder
 		}
-		if found.Status != "open" || found.Room < 1 || roomHeldByAnother(sessions, found) {
-			found.Status = "open"
-			found.Room = 0
+		if found.Status == "open" && (found.Room < 1 || roomHeldByAnother(sessions, found)) {
 			found.Room = lowestFreeRoom(sessions)
 		}
 		if err := found.Validate(); err != nil {

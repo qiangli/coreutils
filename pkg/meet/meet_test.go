@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/chat"
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // fakeRunner returns a canned reply without spawning a real agent, so the whole
@@ -148,7 +149,7 @@ func TestCommandTreeWiring(t *testing.T) {
 		names[c.Name()] = true
 	}
 	for _, v := range []string{
-		"start", "consult", "tell", "round", "poll", "ask",
+		"open", "consult", "tell", "round", "poll", "ask",
 		"converge", "close", "amend", "apply", "show", "contributions", "list", "resume",
 	} {
 		if !names[v] {
@@ -165,5 +166,17 @@ func TestCommandTreeWiring(t *testing.T) {
 // guard and is tested in pkg/chat; here it is a precondition, not the subject.
 func TestMain(m *testing.M) {
 	os.Setenv(chat.UnsafeLaunchEnv, "1")
+	productionLookup := registeredAgentFn
+	registeredAgentFn = func(name string) (fleet.Agent, bool) {
+		if agent, ok := productionLookup(name); ok {
+			return agent, true
+		}
+		for _, fixture := range []string{"codex", "claude", "gemini", "opencode", "configured-agent", "release-agent"} {
+			if name == fixture {
+				return fleet.Agent{Name: name, Tool: name}, true
+			}
+		}
+		return fleet.Agent{}, false
+	}
 	os.Exit(m.Run())
 }

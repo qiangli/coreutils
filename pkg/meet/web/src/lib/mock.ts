@@ -1,10 +1,21 @@
 import type {
+  AgentOption,
   MeetEvent,
   ObserveFrame,
   RoomDetail,
   RoomSummary,
   State,
 } from "./contracts"
+
+export const mockAgents: AgentOption[] = [
+  { name: "codex", nick: "Patch", binding: "codex:gpt5.6", band: 3, available: true },
+  { name: "claude", nick: "Sage", binding: "claude:opus", band: 4, available: true },
+  { name: "agy", nick: "Atlas", binding: "agy:opus", band: 3, available: false, reason: "tool unavailable" },
+]
+
+export async function mockListAgents(): Promise<AgentOption[]> {
+  return structuredClone(mockAgents)
+}
 
 const now = Date.now()
 

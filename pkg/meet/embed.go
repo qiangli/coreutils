@@ -157,6 +157,7 @@ func spaMissing(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "meet: this binary was built without the web room.\n\n"+
 		"The API and the live stream are running:\n"+
 		"  GET  /api/rooms\n"+
+		"  GET  /api/agents\n"+
 		"  GET  /observe?room=<ROOM|id>   (WebSocket)\n\n"+
 		"To include the UI, build the SPA into pkg/meet/web/dist and compile with\n"+
 		"  go build -tags meetspa ./...\n")

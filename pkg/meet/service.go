@@ -24,7 +24,7 @@ import (
 // outpost supervises local services through one convention — `bashy <Command...>
 // {start|status|stop}` (conf.BashyService) — and it polls status on a timer,
 // restarting anything that reads "stopped". The obvious spelling for this side
-// would be `bashy meet start`, and that name is TAKEN: it convenes a
+// is `bashy meet service start`; `bashy meet open` convenes a
 // deliberation session and enters the REPL, which is a foreground human verb and
 // nothing a supervisor should ever call. Renaming it to free the word would
 // break every documented workflow.
@@ -32,7 +32,7 @@ import (
 // `sdlc` hit the identical collision and answered it with a subcommand
 // (`bashy sdlc service start`), and outpost issue #6 already declares this
 // service as Command: ["meet","service"]. So the daemon lifecycle lives one
-// level down, and `meet start` keeps meaning what it has always meant.
+// level down so service lifecycle and room lifecycle remain distinct.
 //
 // There is no shared pidfile helper in the repo to reuse: pkg/sdlc and
 // pkg/schedule each carry their own private copy of this (writePid/readPid +
@@ -399,7 +399,7 @@ Run the meet web server as a background daemon under a supervisor.
 
 This is the lifecycle wrapper outpost drives: register it with a BashyService
 whose Command is ["meet","service"] and it will call start / status / stop.
-It is NOT ` + "`meet start`" + `, which convenes a deliberation session.`),
+It is NOT ` + "`meet open`" + `, which convenes a deliberation session.`),
 	}
 	pf := cmd.PersistentFlags()
 	pf.IntVar(&opt.Port, "port", defaultServePort, "listen port")

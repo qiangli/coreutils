@@ -4,6 +4,7 @@ import {
   ApiError,
   createRoom as createRoomRequest,
   getRoom,
+  listAgents,
   listRooms,
   observeRoom,
   postMessage,
@@ -11,6 +12,7 @@ import {
   usingMock,
 } from "@/lib/api"
 import type {
+  AgentOption,
   LiveEvent,
   MeetEvent,
   RoomDetail,
@@ -22,6 +24,7 @@ export type ConnectionStatus = "connecting" | "open" | "closed"
 
 export function useMeetRoom() {
   const [rooms, setRooms] = useState<RoomSummary[]>([])
+  const [agents, setAgents] = useState<AgentOption[]>([])
   const [selectedRef, setSelectedRef] = useState("")
   const [detail, setDetail] = useState<RoomDetail | null>(null)
   const [state, setState] = useState<State | null>(null)
@@ -36,10 +39,11 @@ export function useMeetRoom() {
 
   useEffect(() => {
     let active = true
-    listRooms()
-      .then((nextRooms) => {
+    Promise.all([listRooms(), listAgents()])
+      .then(([nextRooms, nextAgents]) => {
         if (!active) return
         setRooms(nextRooms)
+        setAgents(nextAgents)
         setSelectedRef((current) => current || nextRooms[0]?.id || "")
       })
       .catch((reason: unknown) => {
@@ -143,10 +147,14 @@ export function useMeetRoom() {
         // membership therefore leaves the member list stale until a reload, so
         // re-read the room after one. The turn verbs need no such thing: their
         // output arrives as transcript events, which the socket does stream.
-        if (["invite", "kick", "mark", "close"].includes(action)) {
+        if (["invite", "kick", "mark", "open", "close"].includes(action)) {
           const refreshed = await getRoom(selectedRef)
           setDetail(refreshed)
           setState(refreshed.state)
+          if (action === "open") {
+            setEvents([])
+            setLive(null)
+          }
           setRooms(await listRooms())
         }
         return true
@@ -196,6 +204,7 @@ export function useMeetRoom() {
   )
 
   return {
+    agents,
     rooms,
     selectedRef,
     selectRoom: setSelectedRef,

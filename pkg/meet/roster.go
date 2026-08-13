@@ -19,6 +19,10 @@ import (
 // same gate the router and the attendee warnings share.
 var operableFn = capability.Operable
 
+// registeredAgentFn is indirected for hermetic engine tests that use tiny
+// synthetic seat names. Production always resolves the actual fleet catalog.
+var registeredAgentFn = func(name string) (fleet.Agent, bool) { return fleet.New().Agent(name) }
+
 // Seating a meeting used to mean naming everyone: --participant this,
 // --participant that, and you had to already know which of the fleet were
 // worth the tokens. A band makes that one decision instead of N — "everyone
@@ -38,6 +42,45 @@ type Skip struct {
 	Agent  string
 	Band   int
 	Reason string
+}
+
+// AgentOption is the browser-safe projection of one registered fleet agent.
+// It intentionally exposes identity and scheduling metadata, never credentials
+// or launch arguments. Available is advisory: an unavailable registered agent
+// remains selectable because a remote host may be the eventual executor.
+type AgentOption struct {
+	Name      string `json:"name"`
+	Nick      string `json:"nick,omitempty"`
+	Binding   string `json:"binding,omitempty"`
+	Band      int    `json:"band,omitempty"`
+	Ephemeral bool   `json:"ephemeral,omitempty"`
+	Task      string `json:"task,omitempty"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+func registeredAgentOptions() ([]AgentOption, []error) {
+	cat := fleet.New()
+	agents, errs := cat.Agents()
+	out := make([]AgentOption, 0, len(agents))
+	for _, a := range agents {
+		option := AgentOption{
+			Name: a.Name, Nick: a.NickName(), Binding: a.MatrixKey(), Band: a.Band,
+			Ephemeral: a.Ephemeral, Task: a.Task,
+		}
+		if _, _, model, err := cat.Binding(a.Name); err == nil {
+			option.Band = model.Band
+		}
+		tool := strings.TrimSpace(a.Tool)
+		if tool == "" && a.Base != "" {
+			if base, ok := cat.Agent(a.Base); ok {
+				tool = base.Tool
+			}
+		}
+		option.Available, option.Reason = operableFn(capability.ResolveTool(tool))
+		out = append(out, option)
+	}
+	return out, errs
 }
 
 // SeatByBand picks every agent pegged at or above minBand, dropping the ones
@@ -184,7 +227,7 @@ func (sf *sessionFlags) canonicalizeRoster() {
 // routableRoster refuses a roster containing a seat this host cannot drive.
 //
 // routableSeat existed and was reachable from exactly ONE caller — inviteTo. So
-// `meet invite` was gated and `meet start --participant` was not, and anything
+// `meet invite` was gated and `meet open --participant` was not, and anything
 // at all could be seated at creation time. That is not hypothetical: a live
 // conductor room on this host was created with `root-supervisor` as its sole
 // participant, a name the fleet does not know and nothing can drive. The room
@@ -276,7 +319,7 @@ var ErrNotOrganizer = errors.New("meet: only the organizer may change the roster
 // nobody to check the actor against, and refusing everybody would freeze that
 // room's roster permanently with no way to recover it. So the check does not
 // apply rather than failing closed; a room that wants the privilege names its
-// organizer, which `meet start` always does.
+// organizer, which `meet open` always does.
 func requireOrganizer(st *State, actor string) error {
 	org := st.initiatorName()
 	if org == "" {
@@ -304,29 +347,22 @@ func requireOrganizer(st *State, actor string) error {
 		who, st.ID, org, ErrNotOrganizer)
 }
 
-// routableSeat refuses a name nothing on this host can be addressed as.
-//
-// The gate is deliberately the WEAKER of two questions, because they fail in
-// opposite directions. A name the fleet knows is routable by definition, whether
-// or not its binary is installed today — that is an operability warning
-// (attendeeWarnings), not a reason to refuse a seat, and a laptop with codex
-// uninstalled must still be able to build a roster for a host that has it. A name
-// the fleet does NOT know is only meaningful if it is a tool that exists here.
-// Everything else — a typo, a human's name, a channel — is not an agent at all,
-// and seating it would mean every round from then on records a failed turn for a
-// participant that was never real.
+// routableSeat refuses every non-human identity that is not a durable fleet
+// agent. An executable is a transport, not an identity: accepting a bare PATH
+// name made minutes impossible to attribute, bypassed model/band policy, and
+// left no catalog record for a web roster to display. Persistent agents and
+// ephemeral task agents are both valid because fleet.Agents includes both.
+// Installation remains a warning evaluated when the seat is invoked; it is not
+// registration and cannot substitute for it.
 func routableSeat(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("meet: no agent named")
 	}
-	if _, ok := fleet.New().Agent(name); ok {
+	if _, ok := registeredAgentFn(name); ok {
 		return nil
 	}
-	if ok, _ := operableFn(capability.ResolveTool(name)); ok {
-		return nil
-	}
-	return fmt.Errorf("meet: %q is not an agent this host can drive — "+
-		"it is not in the fleet (`bashy agents list`) and there is no such tool on PATH", name)
+	return fmt.Errorf("meet: %q is not a registered agent — choose one from "+
+		"`bashy agents list --all` or register an ephemeral agent first", name)
 }
 
 // Invite seats an agent in a running room. Organizer-only.

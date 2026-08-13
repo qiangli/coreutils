@@ -470,26 +470,26 @@ func TestServiceStatusFindsPidfileInvisibleDaemon(t *testing.T) {
 	}
 }
 
-// `meet service` must be a SUBCOMMAND, not a rename of anything. `meet start`
+// `meet service` must be a SUBCOMMAND, not a rename of anything. `meet open`
 // convenes a deliberation session and is load-bearing; the daemon verbs sit one
 // level down precisely so that name stays free.
-func TestMeetStartIsUnchangedByService(t *testing.T) {
+func TestMeetOpenIsSeparateFromService(t *testing.T) {
 	serviceTestDir(t)
 	root := NewMeetCmd()
 
-	start, _, err := root.Find([]string{"start"})
-	if err != nil || start.Name() != "start" {
-		t.Fatalf("`meet start` must still exist: %v", err)
+	open, _, err := root.Find([]string{"open"})
+	if err != nil || open.Name() != "open" {
+		t.Fatalf("`meet open` must exist: %v", err)
 	}
-	if !strings.Contains(start.Short, "start a meeting") {
-		t.Fatalf("`meet start` must still convene a meeting, got Short = %q", start.Short)
+	if !strings.Contains(open.Short, "open a meeting") {
+		t.Fatalf("`meet open` must convene a meeting, got Short = %q", open.Short)
 	}
 	svc, _, err := root.Find([]string{"service", "start"})
 	if err != nil || svc.Parent() == nil || svc.Parent().Name() != "service" {
 		t.Fatalf("`meet service start` must be its own subcommand: %v", err)
 	}
-	if svc == start {
-		t.Fatal("`meet service start` and `meet start` resolved to the SAME command")
+	if svc == open {
+		t.Fatal("`meet service start` and `meet open` resolved to the SAME command")
 	}
 
 	// And it still runs. --dry-run resolves the session and exits without
@@ -499,15 +499,15 @@ func TestMeetStartIsUnchangedByService(t *testing.T) {
 	// environment (every meet server and session does), so a test that ran earlier
 	// in the binary leaves `start` refusing to convene from inside a meeting.
 	t.Setenv(meetDepthEnv, "")
-	out, err := runMeet(t, "start", "--topic", "ship the thing",
+	out, err := runMeet(t, "open", "--topic", "ship the thing",
 		"--participant", "codex", "--dry-run")
 	if err != nil {
-		t.Fatalf("`meet start --dry-run` must still work: %v", err)
+		t.Fatalf("`meet open --dry-run` must work: %v", err)
 	}
 	if !strings.Contains(out, "resolved session") ||
 		!strings.Contains(out, "ship-the-thing") ||
 		!strings.Contains(out, "(dry-run: no agents launched)") {
-		t.Fatalf("`meet start --dry-run` output changed shape: %q", out)
+		t.Fatalf("`meet open --dry-run` output changed shape: %q", out)
 	}
 }
 

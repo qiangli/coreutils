@@ -192,8 +192,8 @@ func TestRosterIsCanonicalizedBeforeItIsRecorded(t *testing.T) {
 	}
 }
 
-// A bare tool is not an alias for anything, so there is nothing to
-// canonicalize — and nothing that can rot. Leave it exactly as typed.
+// Canonicalization does not itself validate. A bare tool remains untouched so
+// the catalog-only roster gate can reject it with a useful registration error.
 func TestCanonicalizeLeavesUnboundNamesAlone(t *testing.T) {
 	pinFleet(t)
 	sf := &sessionFlags{participants: []string{"claude"}, secretary: "claude"}
@@ -306,9 +306,21 @@ func TestStart_RefusesAnUnroutableSeat(t *testing.T) {
 			t.Errorf("%s: an unroutable seat must be refused at creation, not seated to fail every round", c.name)
 			continue
 		}
-		if !strings.Contains(err.Error(), "not an agent this host can drive") {
+		if !strings.Contains(err.Error(), "not a registered agent") {
 			t.Errorf("%s: the refusal should say why: %v", c.name, err)
 		}
+	}
+}
+
+func TestStart_RefusesBareInstalledToolWithoutAgentRegistration(t *testing.T) {
+	pinFleet(t)
+	old := operableFn
+	operableFn = func(string) (bool, string) { return true, "installed" }
+	t.Cleanup(func() { operableFn = old })
+
+	_, err := (&sessionFlags{topic: "t", participants: []string{"some-installed-tool"}}).newState()
+	if err == nil || !strings.Contains(err.Error(), "agents list --all") {
+		t.Fatalf("installed but unregistered tool must be rejected with registration guidance: %v", err)
 	}
 }
 

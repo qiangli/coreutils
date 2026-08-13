@@ -127,7 +127,7 @@ test("creates a room from the sidebar and selects it with one agent seated", asy
 
   await page.getByRole("button", { name: "New room" }).click();
   await page.getByLabel("Topic").fill(topic);
-  await page.getByLabel("Agents").fill(primaryAgent);
+  await page.getByLabel("Agents").selectOption(primaryAgent);
   await page.getByRole("button", { name: "Open room" }).click();
 
   const roomButton = page.getByRole("button", { name: new RegExp(topic) });
@@ -143,11 +143,10 @@ test("invites an agent from room details and shows it in the roster", async ({ p
   await createRoomFromUI(page, topic, primaryAgent);
 
   // RoomDetails is mounted twice — the desktop panel and the mobile sheet — so
-  // "Invite" matches two buttons. Submitting the form with Enter targets the one
-  // field we filled instead of disambiguating a duplicated control.
+  // "Invite" matches two buttons, so target the visible desktop details copy.
   const inviteField = page.getByLabel("Agent to invite").first();
-  await inviteField.fill(invitedAgent);
-  await inviteField.press("Enter");
+  await inviteField.selectOption(invitedAgent);
+  await page.getByRole("button", { name: "Invite", exact: true }).first().click();
 
   const sidebar = page.locator("aside").filter({ hasText: "bashy meet" }).first();
   await expect(sidebar.getByText(invitedAgent)).toBeVisible();
@@ -210,7 +209,10 @@ test("records outcomes and reflects room closure without a reload", async ({ pag
   await page.getByRole("button", { name: "Close room" }).first().click();
   await page.getByRole("dialog").getByRole("button", { name: "Close room" }).click();
   await expect(page.getByLabel("Message the room")).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Room closed" }).first()).toBeDisabled();
+  const reopen = page.getByRole("button", { name: "Open room" }).first();
+  await expect(reopen).toBeEnabled();
+  await reopen.click();
+  await expect(page.getByLabel("Message the room")).toBeEnabled();
 });
 
 test("manage participants opens the hidden room details panel", async ({ page }) => {
@@ -277,7 +279,7 @@ async function openMeet(page: Page) {
 async function createRoomFromUI(page: Page, topic: string, agents: string) {
   await page.getByRole("button", { name: "New room" }).click();
   await page.getByLabel("Topic").fill(topic);
-  await page.getByLabel("Agents").fill(agents);
+  await page.getByLabel("Agents").selectOption(agents.split(/[,\s]+/).filter(Boolean));
   await page.getByRole("button", { name: "Open room" }).click();
   await expect(
     page.getByRole("button", { name: new RegExp(topic) }),

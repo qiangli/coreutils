@@ -62,7 +62,7 @@ func NewMeetCmd() *cobra.Command {
 	}
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.AddCommand(
-		newStartCmd(), newConsultCmd(), newTellCmd(), newRoundCmd(),
+		newOpenCmd(), newConsultCmd(), newTellCmd(), newRoundCmd(),
 		newPollCmd(), newAskCmd(), newInviteCmd(), newKickCmd(),
 		newConvergeCmd(), newCloseCmd(), newAmendCmd(), newApplyCmd(),
 		newShowCmd(), newContributionsCmd(), newListCmd(), newResumeCmd(), newReferenceCmd(),
@@ -331,14 +331,26 @@ func deliberate(ctx context.Context, st *State, w io.Writer, rounds int, questio
 	return nil
 }
 
-func newStartCmd() *cobra.Command {
+func newOpenCmd() *cobra.Command {
 	var sf sessionFlags
 	var rounds int
 	var dry, nonInteractive, yes bool
 	cmd := &cobra.Command{
-		Use:   "start --topic TEXT [--participant AGENT ...]",
-		Short: "start a meeting (enters the REPL unless --non-interactive)",
+		Use:   "open [<room>|<id>] [--topic TEXT --participant AGENT ...]",
+		Short: "open a meeting (enters the REPL unless --non-interactive)",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				if strings.TrimSpace(sf.topic) != "" || len(sf.participants) > 0 {
+					return fmt.Errorf("meet: reopen a room by reference or create one with --topic/--participant, not both")
+				}
+				st, err := Open(args[0], humanName())
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "opened %s in room %d\n", st.ID, st.Room)
+				return nil
+			}
 			if err := guardDepth(); err != nil {
 				return err
 			}

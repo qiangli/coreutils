@@ -12,9 +12,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import type { AgentOption } from "@/lib/contracts"
 
 interface NewRoomDialogProps {
   creating: boolean
+  agents: AgentOption[]
   onCreate: (topic: string, participants: string[]) => Promise<boolean>
 }
 
@@ -28,15 +30,10 @@ interface NewRoomDialogProps {
  * meeting, and the roster stays mutable afterwards — so asking up front would
  * invent a distinction the server does not have.
  */
-export function NewRoomDialog({ creating, onCreate }: NewRoomDialogProps) {
+export function NewRoomDialog({ agents, creating, onCreate }: NewRoomDialogProps) {
   const [open, setOpen] = useState(false)
   const [topic, setTopic] = useState("")
-  const [agents, setAgents] = useState("")
-
-  const participants = agents
-    .split(/[,\s]+/)
-    .map((name) => name.trim())
-    .filter(Boolean)
+  const [participants, setParticipants] = useState<string[]>([])
   const ready = topic.trim().length > 0 && participants.length > 0
 
   async function submit(event: FormEvent) {
@@ -44,7 +41,7 @@ export function NewRoomDialog({ creating, onCreate }: NewRoomDialogProps) {
     if (!ready || creating) return
     if (await onCreate(topic.trim(), participants)) {
       setTopic("")
-      setAgents("")
+      setParticipants([])
       setOpen(false)
     }
     // On failure the dialog stays open with the input intact — the error is
@@ -91,14 +88,21 @@ export function NewRoomDialog({ creating, onCreate }: NewRoomDialogProps) {
               <label className="text-[13px] font-medium" htmlFor="room-agents">
                 Agents
               </label>
-              <Input
+              <select
+                className="min-h-32 rounded-md border border-input bg-transparent px-3 py-2 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 id="room-agents"
-                onChange={(event) => setAgents(event.target.value)}
-                placeholder="codex, claude"
-                value={agents}
-              />
+                multiple
+                onChange={(event) => setParticipants(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}
+                value={participants}
+              >
+                {agents.map((agent) => (
+                  <option key={agent.name} value={agent.name}>
+                    {agent.nick ? `${agent.nick} · ` : ""}{agent.name}{agent.band ? ` · L${agent.band}` : ""}{agent.ephemeral ? " · temporary" : ""}{agent.available ? "" : " · unavailable here"}
+                  </option>
+                ))}
+              </select>
               <p className="text-[11px] text-muted-foreground">
-                Separate names with commas or spaces.
+                Choose registered agents. Use Ctrl/⌘ to select several.
               </p>
             </div>
           </div>

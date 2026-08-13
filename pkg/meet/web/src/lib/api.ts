@@ -1,4 +1,5 @@
 import {
+  agentOptionSchema,
   errorSchema,
   eventSchema,
   jobRefSchema,
@@ -7,6 +8,7 @@ import {
   roomSummarySchema,
   stateSchema,
   type MeetEvent,
+  type AgentOption,
   type ObserveFrame,
   type RoomDetail,
   type RoomSummary,
@@ -15,6 +17,7 @@ import {
 import {
   MockHttpError,
   mockAction,
+  mockListAgents,
   mockCreateRoom,
   mockGetRoom,
   mockListRooms,
@@ -68,6 +71,11 @@ function normalizeError(error: unknown): never {
 export async function listRooms(): Promise<RoomSummary[]> {
   if (usingMock) return roomSummarySchema.array().parse(await mockListRooms())
   return roomSummarySchema.array().parse(await request("api/rooms"))
+}
+
+export async function listAgents(): Promise<AgentOption[]> {
+  if (usingMock) return agentOptionSchema.array().parse(await mockListAgents())
+  return agentOptionSchema.array().parse(await request("api/agents"))
 }
 
 export async function getRoom(ref: string): Promise<RoomDetail> {
@@ -146,6 +154,7 @@ export async function runAction(
   )
   if (result !== undefined) {
     if (action === "mark") eventSchema.parse(result)
+    else if (action === "open") stateSchema.parse(result)
     else jobRefSchema.parse(result)
   }
 }

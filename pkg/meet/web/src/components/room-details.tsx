@@ -20,7 +20,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -31,6 +30,7 @@ import {
 import {
   memberName,
   memberRole,
+  type AgentOption,
   type RoomDetail,
   type State,
 } from "@/lib/contracts"
@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils"
 
 interface RoomDetailsProps {
   state: State | null
+  agents: AgentOption[]
   detail: RoomDetail | null
   isOrganizer: boolean
   sending: boolean
@@ -46,6 +47,7 @@ interface RoomDetailsProps {
 }
 
 export function RoomDetails({
+  agents,
   state,
   detail,
   isOrganizer,
@@ -156,9 +158,7 @@ export function RoomDetails({
             </div>
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">
               {isOrganizer
-                ? state?.permanent
-                  ? "You can manage membership. Permanent rooms stay open across handoffs."
-                  : "You can manage membership and close this room."
+                ? "You can manage membership and open or close this room. Closed permanent rooms retain their address and archived sessions."
                 : `${state?.initiator || "The organizer"} manages membership and room closure.`}
             </p>
             {isOrganizer && (
@@ -174,14 +174,22 @@ export function RoomDetails({
                     }
                   }}
                 >
-                  <Input
+                  <select
                     aria-label="Agent to invite"
-                    className="h-8 text-[12px]"
+                    className="h-8 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 text-[12px]"
                     disabled={sending || state?.status === "closed"}
                     onChange={(event) => setInvitee(event.target.value)}
-                    placeholder="Invite an agent…"
                     value={invitee}
-                  />
+                  >
+                    <option value="">Invite an agent…</option>
+                    {agents
+                      .filter((agent) => !state?.participants.some((member) => memberName(member) === agent.name))
+                      .map((agent) => (
+                        <option key={agent.name} value={agent.name}>
+                          {agent.nick ? `${agent.nick} · ` : ""}{agent.name}{agent.ephemeral ? " · temporary" : ""}
+                        </option>
+                      ))}
+                  </select>
                   <Button
                     className="h-8 shrink-0 text-[12px]"
                     disabled={
@@ -233,26 +241,22 @@ export function RoomDetails({
               <OrganizerButton
                 disabled={
                   sending ||
-                  !isOrganizer ||
-                  state?.status === "closed" ||
-                  Boolean(state?.permanent)
+                  !isOrganizer
                 }
                 label={
-                  state?.permanent
-                    ? "Permanent room"
-                    : state?.status === "closed"
-                      ? "Room closed"
-                      : "Close room"
+                  state?.status === "closed" ? "Open room" : "Close room"
                 }
-                onClick={() => setCloseOpen(true)}
+                onClick={() => {
+                  if (state?.status === "closed") {
+                    void onAction("open", "Open room")
+                  } else {
+                    setCloseOpen(true)
+                  }
+                }}
                 unavailableReason={
                   sending
                     ? "Another room action is in progress."
-                    : state?.permanent
-                    ? "Permanent rooms stay open across handoffs."
-                    : state?.status === "closed"
-                      ? "This room is already closed."
-                      : "Only the organizer can use this control."
+                    : "Only the organizer can use this control."
                 }
               />
             </div>

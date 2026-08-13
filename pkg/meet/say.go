@@ -72,7 +72,7 @@ func newSayCmd() *cobra.Command {
 				return fmt.Errorf("meet: this meeting's turns are headless one-shots — the agent runs its "+
 					"prompt and exits, so there is nobody to interrupt.\n"+
 					"Start a meeting with --steerable to hold each speaker open for its turn:\n"+
-					"  bashy meet start --steerable --topic %q …", st.Topic)
+					"  bashy meet open --steerable --topic %q …", st.Topic)
 			}
 
 			floor, err := currentSpeaker(id)

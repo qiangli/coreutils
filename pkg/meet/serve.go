@@ -82,6 +82,7 @@ func newServeCmd() *cobra.Command {
 			"  GET  /                                      the embedded web room (SPA)\n" +
 			"  ws://<host>:<port>/observe?room=<ROOM|id>   read-only live stream\n" +
 			"  GET  /api/rooms                             the room list\n" +
+			"  GET  /api/agents                            registered roster choices\n" +
 			"  POST /api/rooms/<ref>/post                  say something\n" +
 			"  GET  /healthz                               liveness\n\n" +
 			"Reached directly on loopback it is ungated — that is the local development path.\n" +
@@ -160,6 +161,7 @@ func newServeHandler(ctx context.Context) http.Handler {
 	}
 	route("/observe", handleObserveWS)
 	route("GET /api/rooms", handleRoomList)
+	route("GET /api/agents", handleAgentList)
 	route("GET /api/rooms/{ref}", handleRoomGet)
 	route("POST /api/rooms", handleRoomCreate)
 	route("POST /api/rooms/{ref}/post", handlePost)
@@ -171,6 +173,7 @@ func newServeHandler(ctx context.Context) http.Handler {
 	route("POST /api/rooms/{ref}/poll", handleAsync(ctx, "poll"))
 	route("POST /api/rooms/{ref}/ask", handleAsync(ctx, "ask"))
 	route("POST /api/rooms/{ref}/converge", handleAsync(ctx, "converge"))
+	route("POST /api/rooms/{ref}/open", handleOpen)
 	route("POST /api/rooms/{ref}/close", handleClose)
 
 	// Everything else is the SPA, including its client-side routes.
@@ -317,6 +320,15 @@ func handleRoomList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rooms)
 }
 
+func handleAgentList(w http.ResponseWriter, r *http.Request) {
+	agents, errs := registeredAgentOptions()
+	if len(errs) > 0 {
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("meet: read agent catalog: %w", errors.Join(errs...)))
+		return
+	}
+	writeJSON(w, http.StatusOK, agents)
+}
+
 func handleRoomGet(w http.ResponseWriter, r *http.Request) {
 	st, syn, err := Room(r.PathValue("ref"))
 	if err != nil {
@@ -447,6 +459,20 @@ func handleClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleOpen(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Actor string }
+	if err := decodeBody(r, &body); err != nil {
+		apiErr(w, err)
+		return
+	}
+	st, err := Open(r.PathValue("ref"), actorOf(r, body.Actor))
+	if err != nil {
+		apiErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 // --- The long verbs ----------------------------------------------------------

@@ -162,7 +162,7 @@ func TestConfiguredPermanentRoomsMergeHostConfig(t *testing.T) {
 	}
 }
 
-func TestEnsurePermanentRoomIsStableNamedAndCannotClose(t *testing.T) {
+func TestEnsurePermanentRoomIsStableNamedAndCanCloseAndReopen(t *testing.T) {
 	permanentTestStore(t)
 	first, err := EnsurePermanentRoom("steward", CreateOptions{Topic: "Steward", Out: OutStore})
 	if err != nil {
@@ -184,15 +184,30 @@ func TestEnsurePermanentRoomIsStableNamedAndCannotClose(t *testing.T) {
 			t.Fatalf("Room(%q) = %+v, %v", ref, got, err)
 		}
 	}
-	if err := Close("steward", "tester"); !errors.Is(err, ErrPermanentRoom) {
-		t.Fatalf("Close(steward) = %v, want ErrPermanentRoom", err)
+	if _, err := record(second, "note", "tester", "human", "first session evidence"); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := closeMeeting(t.Context(), second, closeOptions{}, nil); !errors.Is(err, ErrPermanentRoom) {
-		t.Fatalf("direct closeMeeting = %v, want ErrPermanentRoom", err)
+	if err := Close("steward", "tester"); err != nil {
+		t.Fatalf("Close(steward) = %v", err)
 	}
-	still, _, err := Room("steward")
-	if err != nil || still.Status != "open" {
-		t.Fatalf("permanent room did not remain open: %+v, %v", still, err)
+	closed, _, err := Room("steward")
+	if err != nil || closed.Status != "closed" || closed.Room != 0 {
+		t.Fatalf("permanent room did not close and release its number: %+v, %v", closed, err)
+	}
+	reopened, err := Open("steward", "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.ID != first.ID || reopened.Status != "open" || reopened.Room < 1 {
+		t.Fatalf("reopened permanent room = %+v", reopened)
+	}
+	if events, err := readTranscript(reopened.ID); err != nil || len(events) != 0 {
+		t.Fatalf("reopened permanent room reused its prior transcript: %+v, %v", events, err)
+	}
+	dir, _ := storeDir(reopened.ID)
+	archives, err := filepath.Glob(filepath.Join(dir, "archive", "*", "transcript.jsonl"))
+	if err != nil || len(archives) != 1 {
+		t.Fatalf("archived transcript = %v, %v", archives, err)
 	}
 }
 

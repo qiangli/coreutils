@@ -19,12 +19,14 @@ import {
   memberName,
   memberRole,
   type RoomSummary,
+  type AgentOption,
   type State,
 } from "@/lib/contracts"
 import { cn } from "@/lib/utils"
 
 interface RoomSidebarProps {
   creating: boolean
+  agents: AgentOption[]
   onCreate: (topic: string, participants: string[]) => Promise<boolean>
   rooms: RoomSummary[]
   selectedRef: string
@@ -36,6 +38,7 @@ interface RoomSidebarProps {
 }
 
 export function RoomSidebar({
+  agents,
   creating,
   onCreate,
   rooms,
@@ -80,7 +83,7 @@ export function RoomSidebar({
             <span>Rooms</span>
             <div className="flex items-center gap-1">
               <MessageSquareText className="size-3.5" />
-              <NewRoomDialog creating={creating} onCreate={onCreate} />
+              <NewRoomDialog agents={agents} creating={creating} onCreate={onCreate} />
             </div>
           </div>
           <div className="space-y-1">

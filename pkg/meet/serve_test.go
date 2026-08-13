@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/qiangli/coreutils/pkg/coopauth"
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 // The HTTP + WebSocket surface. Every test here drives the real mux through
@@ -129,6 +130,31 @@ func TestAPIRoomList(t *testing.T) {
 		}
 		if got.Synthesis != nil {
 			t.Errorf("a room with no secretary has no synthesis: %+v", got.Synthesis)
+		}
+	}
+}
+
+func TestAPIAgentListIsTheRegisteredFleet(t *testing.T) {
+	pinFleet(t)
+	old := operableFn
+	operableFn = func(tool string) (bool, string) { return tool != "", "test availability" }
+	t.Cleanup(func() { operableFn = old })
+	srv := serveTest(t)
+
+	resp, body := doJSON(t, srv, "GET", "/api/agents", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, body)
+	}
+	var agents []AgentOption
+	if err := json.Unmarshal(body, &agents); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+	if len(agents) == 0 {
+		t.Fatal("the shipped registered fleet must be visible to the room picker")
+	}
+	for _, agent := range agents {
+		if _, ok := fleet.New().Agent(agent.Name); !ok {
+			t.Fatalf("API leaked an unregistered identity: %+v", agent)
 		}
 	}
 }
