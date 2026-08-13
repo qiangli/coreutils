@@ -17,11 +17,16 @@ import (
 // output is captured after Run returns.
 func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runToolWithInput(t, dir, "", args...)
+}
+
+func runToolWithInput(t *testing.T, dir string, input string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
@@ -242,8 +247,8 @@ func TestCpBackupSuffixUpdateAndInteractive(t *testing.T) {
 	write(t, src, "prompted")
 	write(t, dst, "keep")
 	_, errb, code = runTool(t, dir, "-i", "a", "b")
-	if code != 0 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
-		t.Fatalf("cp -i without yes should skip: code=%d err=%q", code, errb)
+	if code != 1 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
+		t.Fatalf("cp -i without yes should skip with exit 1: code=%d err=%q", code, errb)
 	}
 }
 
@@ -705,5 +710,33 @@ func TestCpHelpAndVersion(t *testing.T) {
 	out, _, code = runTool(t, dir, "--version")
 	if code != 0 || !strings.Contains(out, "cp") {
 		t.Errorf("--version: code=%d out=%q", code, out)
+	}
+}
+
+func TestCpInteractiveDecline(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a content")
+	write(t, filepath.Join(dir, "b"), "b content")
+
+	_, _, code := runToolWithInput(t, dir, "n\n", "-i", "a", "b")
+	if code != 1 {
+		t.Errorf("cp -i with declined prompt: code=%d, want 1", code)
+	}
+	if got := read(t, filepath.Join(dir, "b")); got != "b content" {
+		t.Errorf("destination modified after declined prompt: got %q, want %q", got, "b content")
+	}
+}
+
+func TestCpInteractiveAccept(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "a content")
+	write(t, filepath.Join(dir, "b"), "b content")
+
+	_, _, code := runToolWithInput(t, dir, "y\n", "-i", "a", "b")
+	if code != 0 {
+		t.Errorf("cp -i with accepted prompt: code=%d, want 0", code)
+	}
+	if got := read(t, filepath.Join(dir, "b")); got != "a content" {
+		t.Errorf("destination not updated after accepted prompt: got %q, want %q", got, "a content")
 	}
 }

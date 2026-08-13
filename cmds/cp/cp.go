@@ -408,6 +408,7 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 			return
 		}
 		if c.interactive && !c.confirm(dst) {
+			c.failed = true
 			return
 		}
 		if ds, err := os.Stat(dp); err == nil {
@@ -514,6 +515,7 @@ func (c *copier) copySymlink(src, dst string) {
 			return
 		}
 		if c.interactive && !c.confirm(dst) {
+			c.failed = true
 			return
 		}
 		if c.backup && !c.backupDest(dst) {
