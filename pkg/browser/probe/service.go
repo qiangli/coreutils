@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
 	"github.com/qiangli/coreutils/pkg/browser/internal/cdpactions"
@@ -61,7 +63,11 @@ func (c *Client) EnsureReady(ctx context.Context) error {
 		return fmt.Errorf("probe: no Chrome at %s", c.url)
 	}
 	allocCtx, allocStop := chromedp.NewRemoteAllocator(context.Background(), c.url)
-	cdpCtx, cdpStop := chromedp.NewContext(allocCtx)
+	options := []chromedp.ContextOption{}
+	if id := c.existingPageTarget(ctx); id != "" {
+		options = append(options, chromedp.WithTargetID(target.ID(id)))
+	}
+	cdpCtx, cdpStop := chromedp.NewContext(allocCtx, options...)
 	if err := chromedp.Run(cdpCtx); err != nil {
 		cdpStop()
 		allocStop()
@@ -70,6 +76,50 @@ func (c *Client) EnsureReady(ctx context.Context) error {
 	c.allocCtx, c.allocStop = allocCtx, allocStop
 	c.ctx, c.ctxStop = cdpCtx, cdpStop
 	return nil
+}
+
+type pageTarget struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+}
+
+// existingPageTarget keeps probe mode attached to the browser's page instead
+// of creating a disposable about:blank target for every one-shot CLI command.
+// Prefer real pages, then an existing blank page that navigate can reuse.
+func (c *Client) existingPageTarget(ctx context.Context) string {
+	hctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(hctx, http.MethodGet, c.url+"/json/list", nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var targets []pageTarget
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&targets) != nil {
+		return ""
+	}
+	return selectPageTarget(targets)
+}
+
+func selectPageTarget(targets []pageTarget) string {
+	blank := ""
+	for _, candidate := range targets {
+		if candidate.Type != "page" {
+			continue
+		}
+		if candidate.URL != "" && candidate.URL != "about:blank" && !strings.HasPrefix(candidate.URL, "chrome://") {
+			return candidate.ID
+		}
+		if blank == "" {
+			blank = candidate.ID
+		}
+	}
+	return blank
 }
 
 func (c *Client) Execute(ctx context.Context, action wire.Action) (*wire.Result, error) {
@@ -95,6 +145,16 @@ func (c *Client) Execute(ctx context.Context, action wire.Action) (*wire.Result,
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// A remote probe attaches to an operator-owned tab. chromedp normally
+	// closes every non-root target when its context is cancelled, which made a
+	// sequence of one-shot `bashy browser` commands destroy the page after each
+	// action. Clear only chromedp's cleanup handle before cancelling; closing the
+	// remote allocator still detaches the websocket while Chrome retains the tab.
+	if c.ctx != nil {
+		if state := chromedp.FromContext(c.ctx); state != nil {
+			state.Target = nil
+		}
+	}
 	if c.ctxStop != nil {
 		c.ctxStop()
 		c.ctxStop = nil

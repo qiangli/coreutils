@@ -68,3 +68,18 @@ func TestLiveProbeSkippedWhenUnavailable(t *testing.T) {
 		t.Fatalf("unexpected live result: %#v", res)
 	}
 }
+
+func TestSelectPageTargetPrefersReusableRealPage(t *testing.T) {
+	targets := []pageTarget{
+		{ID: "worker", Type: "service_worker", URL: "https://example.test/sw.js"},
+		{ID: "blank", Type: "page", URL: "about:blank"},
+		{ID: "meet", Type: "page", URL: "http://127.0.0.1:8637/"},
+		{ID: "other", Type: "page", URL: "https://example.test/"},
+	}
+	if got := selectPageTarget(targets); got != "meet" {
+		t.Fatalf("selected %q, want the first real page", got)
+	}
+	if got := selectPageTarget(targets[:2]); got != "blank" {
+		t.Fatalf("selected %q, want existing blank page", got)
+	}
+}
