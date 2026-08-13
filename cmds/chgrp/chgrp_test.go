@@ -280,18 +280,33 @@ func TestChgrpNoDereference(t *testing.T) {
 	if err != nil {
 		t.Skipf("user.Current: %v", err)
 	}
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, option := range []string{"--no-dereference", "-h"} {
+		t.Run(option, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "target"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+				t.Skipf("symlinks not supported: %v", err)
+			}
+			out, errb, code := runTool(t, dir, option, u.Gid, "link")
+			if code != 0 || errb != "" {
+				t.Fatalf("chgrp %s: code=%d err=%q", option, code, errb)
+			}
+			// -h must be the --no-dereference shorthand, not intercepted as
+			// --help: no usage text on stdout, and the link stays a symlink.
+			if strings.Contains(out, "Usage:") {
+				t.Errorf("chgrp %s emitted help text: %q", option, out)
+			}
+			fi, err := os.Lstat(filepath.Join(dir, "link"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fi.Mode()&os.ModeSymlink == 0 {
+				t.Errorf("chgrp %s: link is no longer a symlink", option)
+			}
+		})
 	}
-	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
-		t.Skipf("symlinks not supported: %v", err)
-	}
-	out, errb, code := runTool(t, dir, "--no-dereference", u.Gid, "link")
-	if code != 0 || errb != "" {
-		t.Fatalf("chgrp --no-dereference: code=%d err=%q", code, errb)
-	}
-	_ = out
 }
 
 func TestChgrpQuietFlag(t *testing.T) {
