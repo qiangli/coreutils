@@ -36,10 +36,14 @@ export function App() {
           className="hidden lg:flex"
           connection={meet.connection}
           creating={meet.creating}
+          dms={meet.dms}
+          onCreateDM={meet.createDM}
           onCreate={meet.createRoom}
           onSelect={meet.selectRoom}
+          onSelectDM={meet.selectDM}
           rooms={meet.rooms}
           selectedRef={meet.selectedRef}
+          selectedKind={meet.selectedKind}
           state={meet.state}
           usingMock={meet.usingMock}
         />
@@ -68,10 +72,14 @@ export function App() {
                   className="w-full"
                   connection={meet.connection}
                   creating={meet.creating}
+                  dms={meet.dms}
+                  onCreateDM={meet.createDM}
                   onCreate={meet.createRoom}
                   onSelect={meet.selectRoom}
+                  onSelectDM={meet.selectDM}
                   rooms={meet.rooms}
                   selectedRef={meet.selectedRef}
+                  selectedKind={meet.selectedKind}
                   state={meet.state}
                   usingMock={meet.usingMock}
                 />
@@ -81,7 +89,7 @@ export function App() {
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
                 <h1 className="font-display truncate text-[15px] font-semibold tracking-tight sm:text-[17px]">
-                  {meet.state?.room || "Opening room…"}
+                  {meet.state?.name || meet.state?.room || "Opening conversation…"}
                 </h1>
                 {meet.usingMock && (
                   <Badge
@@ -102,7 +110,7 @@ export function App() {
               </div>
             </div>
 
-            <Button
+            {meet.selectedKind === "room" && <Button
               aria-label={detailsOpen ? "Hide room details" : "Show room details"}
               className="hidden xl:inline-flex"
               onClick={() => setDetailsOpen((open) => !open)}
@@ -110,9 +118,9 @@ export function App() {
               variant="ghost"
             >
               {detailsOpen ? <PanelRightClose /> : <PanelRightOpen />}
-            </Button>
+            </Button>}
 
-            <Sheet onOpenChange={setMobileDetailsOpen} open={mobileDetailsOpen}>
+            {meet.selectedKind === "room" && <Sheet onOpenChange={setMobileDetailsOpen} open={mobileDetailsOpen}>
               <SheetTrigger asChild>
                 <Button
                   aria-label="Open room details"
@@ -138,12 +146,13 @@ export function App() {
                   state={meet.state}
                 />
               </SheetContent>
-            </Sheet>
+            </Sheet>}
           </header>
 
           <MessageList
             events={meet.events}
             human={meet.state?.human ?? ""}
+            kind={meet.selectedKind}
             live={meet.live}
           />
           <Composer
@@ -162,10 +171,11 @@ export function App() {
             queued={meet.queued}
             sending={meet.sending}
             state={meet.state}
+            kind={meet.selectedKind}
           />
         </main>
 
-        {detailsOpen && (
+        {detailsOpen && meet.selectedKind === "room" && (
           <RoomDetails
             agents={meet.agents}
             className="hidden xl:flex"

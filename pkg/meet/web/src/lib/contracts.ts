@@ -140,6 +140,32 @@ export const roomDetailSchema = z.object({
   synthesis: synthesisSchema.nullable(),
 })
 
+export const dmSummarySchema = z.object({
+  agent: z.string(),
+  human: z.string().default("you"),
+  created: z.union([z.string(), z.number()]),
+  updated: z.union([z.string(), z.number()]),
+})
+
+export const dmEventSchema = z.object({
+  id: z.string(),
+  speaker: z.string(),
+  role: z.string(),
+  text: z.string(),
+  ts: z.union([z.string(), z.number()]),
+  status: z.string().optional(),
+})
+
+export const dmDetailSchema = z.object({
+  state: dmSummarySchema,
+  events: z.array(dmEventSchema),
+})
+
+export const dmObserveFrameSchema = z.object({
+  kind: z.literal("dm-event"),
+  data: dmEventSchema,
+})
+
 export const jobRefSchema = z.object({
   id: z.string().optional(),
   job: z.string().optional(),
@@ -164,6 +190,9 @@ export type State = z.infer<typeof stateSchema>
 export type Synthesis = z.infer<typeof synthesisSchema>
 export type RoomDetail = z.infer<typeof roomDetailSchema>
 export type ObserveFrame = z.infer<typeof observeFrameSchema>
+export type DMSummary = z.infer<typeof dmSummarySchema>
+export type DMEvent = z.infer<typeof dmEventSchema>
+export type DMDetail = z.infer<typeof dmDetailSchema>
 
 export function memberName(member: Member): string {
   return typeof member === "string" ? member : member.name

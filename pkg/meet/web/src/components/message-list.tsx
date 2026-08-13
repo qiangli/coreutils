@@ -22,6 +22,7 @@ interface MessageListProps {
   events: MeetEvent[]
   live: LiveEvent | null
   human: string
+  kind?: "room" | "dm"
 }
 
 const systemKinds = new Set([
@@ -39,7 +40,7 @@ const systemKinds = new Set([
   "question",
 ])
 
-export function MessageList({ events, live, human }: MessageListProps) {
+export function MessageList({ events, live, human, kind = "room" }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -51,11 +52,12 @@ export function MessageList({ events, live, human }: MessageListProps) {
         <div className="mb-8 rounded-2xl border border-border/70 bg-card/60 px-5 py-4 shadow-sm shadow-slate-900/[0.025]">
           <div className="mb-1 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-primary">
             <Megaphone className="size-3.5" />
-            Room opened
+            {kind === "dm" ? "Direct message" : "Room opened"}
           </div>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            This is a shared conversation. Messages, decisions, and actions stay
-            together as the room works.
+            {kind === "dm"
+              ? "A private, governed Chat conversation with one registered agent."
+              : "This is a shared conversation. Messages, decisions, and actions stay together as the room works."}
           </p>
         </div>
 

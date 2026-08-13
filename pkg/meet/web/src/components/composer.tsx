@@ -53,6 +53,7 @@ interface ComposerProps {
   onSend: (text: string, agent?: string) => Promise<void>
   onAction: (action: string, label: string, body?: unknown) => Promise<boolean>
   onManageParticipants: () => void
+  kind?: "room" | "dm"
 }
 
 export function Composer({
@@ -65,6 +66,7 @@ export function Composer({
   onSend,
   onAction,
   onManageParticipants,
+  kind = "room",
 }: ComposerProps) {
   const [text, setText] = useState("")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -108,7 +110,7 @@ export function Composer({
     // a lazy permanent role.  An unknown/typoed name must produce a visible
     // error; silently storing it as ordinary human prose looks exactly like an
     // agent ignored the user.
-    const addressed = value.match(/^@([^\s]+)\s+([\s\S]+)$/)
+    const addressed = kind === "room" ? value.match(/^@([^\s]+)\s+([\s\S]+)$/) : null
     setText("")
     if (addressed) {
       await onSend(addressed[2].trim(), addressed[1])
@@ -173,7 +175,7 @@ export function Composer({
             </div>
           )}
           <Textarea
-            aria-label="Message the room"
+            aria-label={kind === "dm" ? `Message ${state?.name || "agent"}` : "Message the room"}
             className="max-h-40 min-h-[56px] resize-none border-0 bg-transparent px-4 pb-2 pt-3.5 text-[14px] leading-6 shadow-none focus-visible:ring-0"
             disabled={!state || state.status === "closed"}
             onChange={(event) => setText(event.target.value)}
@@ -186,13 +188,13 @@ export function Composer({
             placeholder={
               state?.status === "closed"
                 ? "This room is closed"
-                : "Message the room…"
+                : kind === "dm" ? `Message ${state?.name || "agent"}…` : "Message the room…"
             }
             ref={textareaRef}
             value={text}
           />
           <div className="flex items-center gap-1.5 px-2.5 pb-2.5">
-            <DropdownMenu>
+            {kind === "room" && <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   className="h-8 rounded-lg px-2.5 text-[11px] text-muted-foreground"
@@ -317,7 +319,7 @@ export function Composer({
                   </div>
                 </DropdownMenuItem>
               </DropdownMenuContent>
-            </DropdownMenu>
+            </DropdownMenu>}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

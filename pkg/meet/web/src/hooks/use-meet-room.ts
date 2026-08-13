@@ -3,16 +3,23 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   ApiError,
   createRoom as createRoomRequest,
+  createDM as createDMRequest,
+  getDM,
   getRoom,
   listAgents,
+  listDMs,
   listRooms,
   observeRoom,
+  observeDM,
   postMessage,
+  postDM,
   runAction,
   usingMock,
 } from "@/lib/api"
 import type {
   AgentOption,
+  DMEvent,
+  DMSummary,
   LiveEvent,
   MeetEvent,
   RoomDetail,
@@ -24,8 +31,10 @@ export type ConnectionStatus = "connecting" | "open" | "closed"
 
 export function useMeetRoom() {
   const [rooms, setRooms] = useState<RoomSummary[]>([])
+  const [dms, setDMs] = useState<DMSummary[]>([])
   const [agents, setAgents] = useState<AgentOption[]>([])
   const [selectedRef, setSelectedRef] = useState("")
+  const [selectedKind, setSelectedKind] = useState<"room" | "dm">("room")
   const [detail, setDetail] = useState<RoomDetail | null>(null)
   const [state, setState] = useState<State | null>(null)
   const [events, setEvents] = useState<MeetEvent[]>([])
@@ -40,11 +49,12 @@ export function useMeetRoom() {
 
   useEffect(() => {
     let active = true
-    Promise.all([listRooms(), listAgents()])
-      .then(([nextRooms, nextAgents]) => {
+    Promise.all([listRooms(), listAgents(), listDMs()])
+      .then(([nextRooms, nextAgents, nextDMs]) => {
         if (!active) return
         setRooms(nextRooms)
         setAgents(nextAgents)
+        setDMs(nextDMs)
         setSelectedRef((current) => current || nextRooms[0]?.id || "")
       })
       .catch((reason: unknown) => {
@@ -61,6 +71,29 @@ export function useMeetRoom() {
     setEvents([])
     setLive(null)
     setError(null)
+    if (selectedKind === "dm") {
+      getDM(selectedRef)
+        .then((nextDetail) => {
+          if (!active) return
+          setDetail(null)
+          setState(dmState(nextDetail.state))
+          setEvents(nextDetail.events.map(dmMeetEvent))
+        })
+        .catch((reason: unknown) => {
+          if (active) setError(messageFor(reason))
+        })
+      const stop = observeDM(
+        selectedRef,
+        (event) => {
+          if (active) setEvents((current) => addUnique(current, dmMeetEvent(event)))
+        },
+        setConnection,
+      )
+      return () => {
+        active = false
+        stop()
+      }
+    }
     getRoom(selectedRef)
       .then((nextDetail) => {
         if (!active) return
@@ -103,7 +136,7 @@ export function useMeetRoom() {
       active = false
       stop()
     }
-  }, [selectedRef, observeRevision])
+  }, [selectedRef, selectedKind, observeRevision])
 
   const send = useCallback(
     async (text: string, agent?: string) => {
@@ -112,7 +145,10 @@ export function useMeetRoom() {
       setError(null)
       setQueued(null)
       try {
-        if (agent) {
+        if (selectedKind === "dm") {
+          await postDM(selectedRef, text)
+          setQueued(`Your message to ${selectedRef} was accepted; the reply will appear here.`)
+        } else if (agent) {
           await runAction(selectedRef, "address", { agent, text })
           setQueued(`Your message to ${agent} was accepted; the reply will appear here.`)
         } else {
@@ -133,7 +169,7 @@ export function useMeetRoom() {
         setSending(false)
       }
     },
-    [selectedRef, state],
+    [selectedRef, selectedKind, state],
   )
 
   const act = useCallback(
@@ -189,6 +225,7 @@ export function useMeetRoom() {
         const created = await createRoomRequest({ topic, participants })
         const nextRooms = await listRooms()
         setRooms(nextRooms)
+        setSelectedKind("room")
         setSelectedRef(created.id)
         return true
       } catch (reason) {
@@ -201,6 +238,23 @@ export function useMeetRoom() {
     [],
   )
 
+  const createDM = useCallback(async (agent: string) => {
+    setCreating(true)
+    setError(null)
+    try {
+      await createDMRequest(agent)
+      setDMs(await listDMs())
+      setSelectedKind("dm")
+      setSelectedRef(agent)
+      return true
+    } catch (reason) {
+      setError(messageFor(reason))
+      return false
+    } finally {
+      setCreating(false)
+    }
+  }, [])
+
   const isOrganizer = useMemo(
     () => Boolean(state && state.initiator === state.human),
     [state],
@@ -209,8 +263,11 @@ export function useMeetRoom() {
   return {
     agents,
     rooms,
+    dms,
     selectedRef,
-    selectRoom: setSelectedRef,
+    selectedKind,
+    selectRoom: (ref: string) => { setSelectedKind("room"); setSelectedRef(ref) },
+    selectDM: (agent: string) => { setSelectedKind("dm"); setSelectedRef(agent) },
     detail,
     state,
     events,
@@ -223,9 +280,44 @@ export function useMeetRoom() {
     send,
     act,
     createRoom,
+    createDM,
     creating,
     isOrganizer,
     usingMock,
+  }
+}
+
+function dmState(dm: DMSummary): State {
+  return {
+    id: `dm:${dm.agent}`,
+    room: dm.agent,
+    name: dm.agent,
+    topic: "Direct message",
+    agenda: [],
+    participants: [
+      { name: dm.human, role: "human", live: true },
+      { name: dm.agent, role: "agent", live: true },
+    ],
+    secretary: "",
+    chair: "",
+    human: dm.human,
+    status: "open",
+    cwd: "",
+    out: "",
+    round: 0,
+    initiator: dm.human,
+    decision_mode: "",
+  }
+}
+
+function dmMeetEvent(event: DMEvent): MeetEvent {
+  return {
+    kind: event.role === "human" ? "human" : "turn",
+    speaker: event.speaker,
+    role: event.role,
+    text: event.text,
+    ts: event.ts,
+    status: event.status,
   }
 }
 

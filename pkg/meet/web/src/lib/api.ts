@@ -1,5 +1,9 @@
 import {
   agentOptionSchema,
+  dmDetailSchema,
+  dmEventSchema,
+  dmObserveFrameSchema,
+  dmSummarySchema,
   errorSchema,
   eventSchema,
   jobRefSchema,
@@ -13,6 +17,9 @@ import {
   type RoomDetail,
   type RoomSummary,
   type State,
+  type DMDetail,
+  type DMEvent,
+  type DMSummary,
 } from "./contracts"
 import {
   MockHttpError,
@@ -36,6 +43,66 @@ export class ApiError extends Error {
     message: string,
   ) {
     super(message)
+  }
+}
+
+export async function listDMs(): Promise<DMSummary[]> {
+  if (usingMock) return []
+  return dmSummarySchema.array().parse(await request("api/dms"))
+}
+
+export async function createDM(agent: string): Promise<DMSummary> {
+  return dmSummarySchema.parse(await request("api/dms", {
+    method: "POST",
+    body: JSON.stringify({ agent }),
+  }))
+}
+
+export async function getDM(agent: string): Promise<DMDetail> {
+  return dmDetailSchema.parse(await request(`api/dms/${encodeURIComponent(agent)}`))
+}
+
+export async function postDM(agent: string, text: string): Promise<void> {
+  await request(`api/dms/${encodeURIComponent(agent)}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  })
+}
+
+export function observeDM(
+  agent: string,
+  onEvent: (event: DMEvent) => void,
+  onStatus: (status: "connecting" | "open" | "closed") => void,
+): () => void {
+  const url = new URL("observe-dm", document.baseURI)
+  url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+  url.searchParams.set("agent", agent)
+  let stopped = false
+  let socket: WebSocket | null = null
+  let retry: number | null = null
+  const connect = () => {
+    if (stopped) return
+    onStatus("connecting")
+    const next = new WebSocket(url)
+    socket = next
+    next.addEventListener("open", () => onStatus("open"))
+    next.addEventListener("close", () => {
+      if (stopped) return
+      onStatus("closed")
+      retry = window.setTimeout(connect, 500)
+    })
+    next.addEventListener("error", () => next.close())
+    next.addEventListener("message", (message) => {
+      const result = dmObserveFrameSchema.safeParse(JSON.parse(String(message.data)))
+      if (result.success) onEvent(dmEventSchema.parse(result.data.data))
+    })
+  }
+  connect()
+  return () => {
+    stopped = true
+    if (retry !== null) window.clearTimeout(retry)
+    socket?.close()
+    onStatus("closed")
   }
 }
 

@@ -3,6 +3,7 @@ import {
   ChevronRight,
   Hash,
   MessageSquareText,
+  Plus,
   Radio,
   Sparkles,
   UserRound,
@@ -13,6 +14,13 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import type { ConnectionStatus } from "@/hooks/use-meet-room"
 import {
   memberIsLive,
@@ -20,6 +28,7 @@ import {
   memberRole,
   type RoomSummary,
   type AgentOption,
+  type DMSummary,
   type State,
 } from "@/lib/contracts"
 import { cn } from "@/lib/utils"
@@ -29,11 +38,15 @@ interface RoomSidebarProps {
   agents: AgentOption[]
   onCreate: (topic: string, participants: string[]) => Promise<boolean>
   rooms: RoomSummary[]
+  dms: DMSummary[]
   selectedRef: string
+  selectedKind: "room" | "dm"
   state: State | null
   connection: ConnectionStatus
   usingMock: boolean
   onSelect: (ref: string) => void
+  onSelectDM: (agent: string) => void
+  onCreateDM: (agent: string) => Promise<boolean>
   className?: string
 }
 
@@ -42,11 +55,15 @@ export function RoomSidebar({
   creating,
   onCreate,
   rooms,
+  dms,
   selectedRef,
+  selectedKind,
   state,
   connection,
   usingMock,
   onSelect,
+  onSelectDM,
+  onCreateDM,
   className,
 }: RoomSidebarProps) {
   return (
@@ -57,12 +74,20 @@ export function RoomSidebar({
       )}
     >
       <div className="flex h-[68px] items-center gap-3 px-5">
-        <div className="grid size-9 place-items-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground shadow-[0_8px_30px_rgb(13_148_136_/_0.24)]">
-          <Sparkles className="size-[18px]" />
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button aria-label="Open Bashy Relay menu" className="size-9 rounded-full bg-sidebar-primary text-sidebar-primary-foreground shadow-[0_8px_30px_rgb(13_148_136_/_0.24)] hover:bg-sidebar-primary/90" size="icon">
+              <Sparkles className="size-[18px]" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem disabled>Channels use Meet</DropdownMenuItem>
+            <DropdownMenuItem disabled>Direct messages use Chat</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="min-w-0">
           <div className="font-display text-[17px] font-semibold tracking-tight">
-            bashy meet
+            Bashy Relay
           </div>
           <div className="flex items-center gap-1.5 text-[11px] text-sidebar-foreground/55">
             <span
@@ -80,7 +105,7 @@ export function RoomSidebar({
       <ScrollArea className="min-h-0 flex-1">
         <div className="px-3 py-5">
           <div className="mb-2 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
-            <span>Rooms</span>
+            <span>Channels</span>
             <div className="flex items-center gap-1">
               <MessageSquareText className="size-3.5" />
               <NewRoomDialog agents={agents} creating={creating} onCreate={onCreate} />
@@ -88,7 +113,7 @@ export function RoomSidebar({
           </div>
           <div className="space-y-1">
             {rooms.map((room) => {
-              const selected = room.id === selectedRef
+              const selected = selectedKind === "room" && room.id === selectedRef
               return (
                 <button
                   className={cn(
@@ -126,6 +151,36 @@ export function RoomSidebar({
           </div>
 
           <div className="mb-2 mt-7 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
+            <span>Direct messages</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button aria-label="Start a direct message" className="size-6 text-sidebar-foreground/55" size="icon" variant="ghost">
+                  <Plus className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="max-h-72 w-64 overflow-y-auto">
+                {agents.map((agent) => (
+                  <DropdownMenuItem key={agent.name} onSelect={() => void onCreateDM(agent.name)}>
+                    <Bot className="size-3.5" /> {agent.nick || agent.name}
+                    {agent.nick && <span className="ml-auto text-[10px] text-muted-foreground">{agent.name}</span>}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="space-y-1">
+            {dms.map((dm) => {
+              const selected = selectedKind === "dm" && dm.agent === selectedRef
+              return (
+                <button className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left", selected ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground/70 hover:bg-sidebar-accent/55")} key={dm.agent} onClick={() => onSelectDM(dm.agent)} type="button">
+                  <Bot className="size-4 text-teal-300" />
+                  <span className="truncate text-[13px] font-medium">{dm.agent}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          {selectedKind === "room" && <><div className="mb-2 mt-7 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
             <span>In this room</span>
             <Radio className="size-3.5" />
           </div>
@@ -177,11 +232,11 @@ export function RoomSidebar({
                 </div>
               )
             })}
-          </div>
+          </div></>}
         </div>
       </ScrollArea>
       <div className="border-t border-sidebar-border px-5 py-3.5 text-[10px] leading-relaxed text-sidebar-foreground/38">
-        One room, one shared outcome.
+        Channels for groups. DMs for one-to-one work.
       </div>
     </aside>
   )
