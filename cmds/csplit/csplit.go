@@ -140,9 +140,6 @@ func resolvePatterns(rc *tool.RunContext, lines []string, patterns []string, sup
 				for i := 0; repeatToEOF || i < repeats; i++ {
 					next := lastLine + lastNum
 					if next > len(lines) {
-						if repeatToEOF {
-							break
-						}
 						return nil, tool.UsageError(rc, cmd, "'%d': line number out of range", next)
 					}
 					idx := next - 1
@@ -284,11 +281,13 @@ func parsePattern(rc *tool.RunContext, pattern string) (patternSpec, int) {
 	spec.skip = delim == '%'
 	spec.expr = pattern[1:end]
 	if tail := pattern[end+1:]; tail != "" {
-		sign := tail[0]
-		if sign != '+' && sign != '-' {
-			return spec, tool.UsageError(rc, cmd, "invalid offset in pattern '%s'", pattern)
+		offset := tail
+		sign := byte('+')
+		if tail[0] == '+' || tail[0] == '-' {
+			sign = tail[0]
+			offset = tail[1:]
 		}
-		n, err := strconv.Atoi(tail[1:])
+		n, err := strconv.Atoi(offset)
 		if err != nil {
 			return spec, tool.UsageError(rc, cmd, "invalid offset in pattern '%s'", pattern)
 		}

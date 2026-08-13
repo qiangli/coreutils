@@ -91,6 +91,17 @@ func TestCsplitRegexOffsets(t *testing.T) {
 	assertFile(t, dir, "q0", "b\nc\n")
 }
 
+// GNU csplit accepts an unsigned offset; it is equivalent to +N.
+func TestCsplitRegexUnsignedOffset(t *testing.T) {
+	dir := t.TempDir()
+	stdout, errb, code := runTool(t, dir, "a\nmatch\nb\n", "-s", "-", "/match/0")
+	if code != 0 || stdout != "" || errb != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout, errb)
+	}
+	assertFile(t, dir, "xx00", "a\n")
+	assertFile(t, dir, "xx01", "match\nb\n")
+}
+
 func TestCsplitSuffixSuppressRepeatAndElideEmpty(t *testing.T) {
 	dir := t.TempDir()
 	stdout, errb, code := runTool(t, dir, "a\nmatch\nb\nmatch\nc\n", "-q", "-z", "--suppress-matched", "-b", "%03d.out", "-", "/match/", "{1}")
@@ -183,21 +194,20 @@ func TestCsplitLineNumberRepeatAdvances(t *testing.T) {
 	assertFile(t, dir, "xx02", "l6\nl7\nl8\n")
 }
 
-// A line-number pattern with {*} repeats until the input is exhausted
-// (this used to loop forever).
-func TestCsplitLineNumberRepeatToEOF(t *testing.T) {
+// GNU csplit treats a line-number {*} that would run past EOF as an error
+// and removes all output files (unless --keep-files was requested).
+func TestCsplitLineNumberRepeatToEOFCleansUp(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "in"), []byte("l1\nl2\nl3\nl4\nl5\nl6\nl7\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, errb, code := runTool(t, dir, "", "in", "2", "{*}")
-	if code != 0 {
+	if code == 0 || !strings.Contains(errb, "line number out of range") {
 		t.Fatalf("code=%d err=%q", code, errb)
 	}
-	assertFile(t, dir, "xx00", "l1\n")
-	assertFile(t, dir, "xx01", "l2\nl3\n")
-	assertFile(t, dir, "xx02", "l4\nl5\n")
-	assertFile(t, dir, "xx03", "l6\nl7\n")
+	if _, err := os.Stat(filepath.Join(dir, "xx00")); !os.IsNotExist(err) {
+		t.Fatalf("xx00 exists or stat failed unexpectedly: %v", err)
+	}
 }
 
 // An explicit repeat count that runs past EOF is an error.
