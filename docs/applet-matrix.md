@@ -121,7 +121,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 2 | 10 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
-| `pr` | `cmds/pr` | — | GNU Coreutils | yes | yes | 1 | 21 |
+| `pr` | `cmds/pr` | — | GNU Coreutils | yes | yes | 1 | 23 |
 | `printenv` | `cmds/printenv` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `printf` | `cmds/printf` | — | GNU Coreutils | yes | yes | 3 | 23 |
 | `ps` | `cmds/ps` | — | POSIX/Unix utility | no | yes | 1 | 3 |

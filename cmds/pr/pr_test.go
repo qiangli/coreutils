@@ -205,6 +205,18 @@ func TestPRVerticalColumnsUnevenFinalPage(t *testing.T) {
 	}
 }
 
+func TestPRAcrossColumns(t *testing.T) {
+	input := "a\nbb\nc\ndd\ne\n"
+	out, errb, code := runPR(t, t.TempDir(), input, "-t", "-w", "10", "-2", "-a")
+	if want := "a    bb\nc    dd\ne\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr -a = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+	_, errb, code = runPR(t, t.TempDir(), "a\n", "-a", "-m")
+	if code != 1 || !strings.Contains(errb, "cannot specify both printing across and printing in parallel") {
+		t.Fatalf("pr -am code=%d err=%q", code, errb)
+	}
+}
+
 func TestPRVerticalColumnsInteractions(t *testing.T) {
 	out, errb, code := runPR(t, t.TempDir(), "a\nb\n", "-t", "-w", "10", "-o", "2", "-s:", "-2")
 	if want := "  a:b\n"; out != want || errb != "" || code != 0 {
@@ -217,14 +229,32 @@ func TestPRVerticalColumnsInteractions(t *testing.T) {
 	}
 }
 
-func TestPRColumnsAndMergeNotSupported(t *testing.T) {
-	_, errb, code := runPR(t, t.TempDir(), "a\n", "-a")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Fatalf("pr -a code=%d err=%q", code, errb)
+func TestPRMerge(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "left", "a\nbb\nc\n")
+	writeFixed(t, dir, "right", "1\n")
+	out, errb, code := runPR(t, dir, "", "-m", "-t", "-w", "20", "-s:", "left", "right")
+	if want := "a\t :1\nbb\t :\nc\t :\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr -m = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
 	}
-	_, errb, code = runPR(t, t.TempDir(), "a\n", "-m")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Fatalf("pr -m code=%d err=%q", code, errb)
+	_, errb, code = runPR(t, dir, "", "-m", "-2", "left", "right")
+	if code != 1 || !strings.Contains(errb, "cannot specify number of columns") {
+		t.Fatalf("pr -m -2 code=%d err=%q", code, errb)
+	}
+}
+
+func TestPRMergeThreeFilesAndPagination(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "one", "a\nb\nc\nd\n")
+	writeFixed(t, dir, "two", "1\n2\n")
+	writeFixed(t, dir, "three", "x\ny\nz\n")
+	out, errb, code := runPR(t, dir, "", "-m", "-t", "-w", "18", "one", "two", "three")
+	if want := "a     1\t    x\nb     2\t    y\nc     \t    z\nd     \t    \n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr -m three files = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+	out, errb, code = runPR(t, dir, "", "-m", "-l", "13", "-D", "%Y", "one", "two")
+	if errb != "" || code != 0 || !strings.Contains(out, "Page 1") || !strings.Contains(out, "Page 2") || strings.Count(out, "\n") != 26 {
+		t.Fatalf("paginated pr -m = (%q, %q, %d)", out, errb, code)
 	}
 }
 

@@ -4,8 +4,7 @@
 // ranges (--pages and the +FIRST[:LAST] operand), line numbering,
 // margins, and -t/-T.
 //
-// Across-column output (-a) and merging (-m) are not implemented and
-// fail loudly.
+// Across-column output (-a) and parallel merging (-m) are supported.
 //
 // Documented deviation: like GNU pr, the header timestamp for standard
 // input (or when stat fails) is the current wall-clock time, so that
@@ -57,7 +56,9 @@ type options struct {
 	pageEnd        int
 	firstLineNum   int
 	columns        int
+	across         bool
 	separator      string
+	merge          bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -75,12 +76,12 @@ func run(rc *tool.RunContext, args []string) int {
 	noFileWarnings := fs.BoolP("no-file-warnings", "r", false, "omit file open warnings")
 	pages := fs.String("pages", "", "print only pages in FIRST[:LAST] range")
 	expandTabs := fs.BoolP("expand-tabs", "e", false, "expand input tabs to spaces")
-	across := fs.BoolP("across", "a", false, "(not supported) fill columns across rather than down")
+	across := fs.BoolP("across", "a", false, "fill columns across rather than down")
 	columns := fs.Int("columns", 1, "produce COLUMN columns, filled down")
 	fs.IntP("column", "", 1, "alias for --columns")
 	separator := fs.StringP("separator", "s", "", "separate columns by CHAR")
 	sepString := fs.StringP("sep-string", "S", "", "separate columns by STRING")
-	merge := fs.BoolP("merge", "m", false, "(not supported) print files in parallel, one per column")
+	merge := fs.BoolP("merge", "m", false, "print files in parallel, one per column")
 	formFeed := fs.BoolP("form-feed", "F", false, "use form feed instead of blank lines to end pages")
 	formFeedLower := fs.BoolP("f", "f", false, "use form feed instead of blank lines to end pages")
 	pageWidth := fs.IntP("page-width", "W", 72, "set page width and truncate lines")
@@ -91,15 +92,17 @@ func run(rc *tool.RunContext, args []string) int {
 	if code >= 0 {
 		return code
 	}
-	if *merge {
-		return tool.NotSupported(rc, cmd, "-m/--merge (parallel file merging)")
-	}
 	if fs.Changed("column") {
 		cv, _ := fs.GetInt("column")
 		*columns = cv
 	}
-	if *across {
-		return tool.NotSupported(rc, cmd, "-a/--across (multi-column output)")
+	if *merge && *across {
+		fmt.Fprintln(rc.Err, "pr: cannot specify both printing across and printing in parallel")
+		return 1
+	}
+	if *merge && (fs.Changed("columns") || fs.Changed("column")) {
+		fmt.Fprintln(rc.Err, "pr: cannot specify number of columns when printing in parallel")
+		return 1
 	}
 	if *columns <= 0 {
 		return tool.UsageError(rc, cmd, "invalid column count: %d", *columns)
@@ -134,7 +137,7 @@ func run(rc *tool.RunContext, args []string) int {
 		ffBreaks:  !*omitPagination,
 		pageStart: pageStart, pageEnd: pageEnd,
 		firstLineNum: *firstLineNum,
-		columns:      *columns, separator: *separator,
+		columns:      *columns, across: *across, separator: *separator, merge: *merge,
 	}
 	if *sepString != "" {
 		o.separator = *sepString
@@ -180,6 +183,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	w := bufio.NewWriter(rc.Out)
+	if o.merge {
+		return runMerge(rc, files, w, o)
+	}
 	exit := 0
 	for _, name := range files {
 		r, closer, label, stamp, err := open(rc, name)
@@ -203,6 +209,43 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	return exit
+}
+
+// runMerge opens every input before emitting rows, since -m consumes one
+// corresponding line from each file at a time.
+func runMerge(rc *tool.RunContext, files []string, w *bufio.Writer, o options) int {
+	readers := make([]io.Reader, 0, len(files))
+	closers := make([]io.Closer, 0, len(files))
+	for _, name := range files {
+		r, closer, _, _, err := open(rc, name)
+		if err != nil {
+			if !o.noFileWarnings {
+				fmt.Fprintf(rc.Err, "pr: %s: %v\\n", name, tool.SysErr(err))
+			}
+			for _, c := range closers {
+				c.Close()
+			}
+			return 1
+		}
+		readers = append(readers, r)
+		if closer != nil {
+			closers = append(closers, closer)
+		}
+	}
+	defer func() {
+		for _, c := range closers {
+			c.Close()
+		}
+	}()
+	if err := printMerge(readers, w, o); err != nil {
+		fmt.Fprintf(rc.Err, "pr: merge: %v\\n", tool.SysErr(err))
+		return 1
+	}
+	if err := w.Flush(); err != nil {
+		fmt.Fprintf(rc.Err, "pr: write error: %v\\n", err)
+		return 1
+	}
+	return 0
 }
 
 // scanColumnOption recognizes pr's standalone -N column shorthand. It is
@@ -285,7 +328,7 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 	}
 	physBudget := o.bodyLines * physPerLine
 	if o.columns > 1 {
-		return printVertical(segments, w, headerLabel, stamp, o, physPerLine)
+		return printColumns(segments, w, headerLabel, stamp, o, physPerLine)
 	}
 
 	page := 1
@@ -338,7 +381,143 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 	return nil
 }
 
-func printVertical(segments [][]string, w *bufio.Writer, headerLabel string, stamp time.Time, o options, physPerLine int) error {
+func printMerge(readers []io.Reader, w *bufio.Writer, o options) error {
+	pages := make([][][]string, len(readers))
+	pageCount := 0
+	for i, r := range readers {
+		segments, err := readSegments(r, o)
+		if err != nil {
+			return err
+		}
+		pages[i] = mergePages(segments, o)
+		if len(pages[i]) > pageCount {
+			pageCount = len(pages[i])
+		}
+	}
+	if pageCount == 0 {
+		return nil
+	}
+	stamp, label := time.Now(), ""
+	if o.headerSet {
+		label = o.header
+	}
+	physPerLine := 1
+	if o.doubleSpace {
+		physPerLine = 2
+	}
+	physBudget := o.bodyLines * physPerLine
+	for page := 1; page <= pageCount; page++ {
+		emit := inPageRange(page, o)
+		if emit && !o.omitHeader {
+			if _, err := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(label, stamp, page, o)); err != nil {
+				return err
+			}
+		}
+		rows := 0
+		for _, inputPages := range pages {
+			if page <= len(inputPages) && len(inputPages[page-1]) > rows {
+				rows = len(inputPages[page-1])
+			}
+		}
+		for row := 0; row < rows; row++ {
+			if emit {
+				if _, err := w.WriteString(mergeLine(pages, page-1, row, o)); err != nil {
+					return err
+				}
+				if o.doubleSpace {
+					if _, err := w.WriteString("\n"); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if emit && !o.omitHeader {
+			if o.formFeed {
+				if _, err := w.WriteString("\f"); err != nil {
+					return err
+				}
+			} else if _, err := w.WriteString(strings.Repeat("\n", physBudget-rows*physPerLine+linesPerTrailer)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func mergePages(segments [][]string, o options) [][]string {
+	if !o.ffBreaks {
+		var all []string
+		for _, segment := range segments {
+			all = append(all, segment...)
+		}
+		segments = [][]string{all}
+	}
+	for len(segments) > 1 && len(segments[len(segments)-1]) == 0 {
+		segments = segments[:len(segments)-1]
+	}
+	if len(segments) == 1 && len(segments[0]) == 0 {
+		return nil
+	}
+	var pages [][]string
+	for _, segment := range segments {
+		pages = append(pages, chunkLines(segment, o.bodyLines)...)
+	}
+	return pages
+}
+
+func mergeLine(pages [][][]string, page, row int, o options) string {
+	columns, columnWidth := len(pages), o.width/len(pages)
+	if columnWidth < 1 {
+		columnWidth = 1
+	}
+	var b strings.Builder
+	for col, inputPages := range pages {
+		line := ""
+		if page < len(inputPages) && row < len(inputPages[page]) {
+			line = strings.TrimSuffix(inputPages[page][row], "\n")
+		}
+		limit := columnWidth
+		if col < columns-1 && o.separator != "" {
+			limit--
+		}
+		if limit < 0 {
+			limit = 0
+		}
+		if len(line) > limit {
+			line = line[:limit]
+		}
+		b.WriteString(line)
+		if col < columns-1 {
+			// GNU emits tabs for padding where a tab stop fits before the next
+			// column boundary; retaining that detail matters for byte-for-byte
+			// merge output, including when -s is present.
+			padTo := (col + 1) * columnWidth
+			if o.separator != "" {
+				padTo--
+			}
+			writeMergePadding(&b, col*columnWidth+len(line), padTo)
+			if o.separator != "" {
+				b.WriteString(o.separator)
+			}
+		}
+	}
+	return b.String() + "\n"
+}
+
+func writeMergePadding(b *strings.Builder, pos, target int) {
+	for pos < target {
+		nextTab := pos + 8 - pos%8
+		if nextTab <= target {
+			b.WriteByte('\t')
+			pos = nextTab
+		} else {
+			b.WriteByte(' ')
+			pos++
+		}
+	}
+}
+
+func printColumns(segments [][]string, w *bufio.Writer, headerLabel string, stamp time.Time, o options, physPerLine int) error {
 	page := 1
 	lineNo := o.firstLineNum
 	pageSize := o.bodyLines * o.columns
@@ -376,6 +555,9 @@ func printVertical(segments [][]string, w *bufio.Writer, headerLabel string, sta
 				}
 				for col := 0; col < o.columns; col++ {
 					index := row + col*rows
+					if o.across {
+						index = row*o.columns + col
+					}
 					if index >= len(formatted) {
 						continue
 					}
@@ -385,7 +567,11 @@ func printVertical(segments [][]string, w *bufio.Writer, headerLabel string, sta
 							return err
 						}
 					}
-					if o.separator == "" && col < o.columns-1 && index+rows < len(formatted) {
+					nextIndex := index + rows
+					if o.across {
+						nextIndex = index + 1
+					}
+					if o.separator == "" && col < o.columns-1 && nextIndex < len(formatted) {
 						line += strings.Repeat(" ", columnWidth-len(line))
 					}
 					if _, err := w.WriteString(line); err != nil {
