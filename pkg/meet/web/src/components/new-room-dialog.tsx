@@ -18,6 +18,8 @@ interface NewRoomDialogProps {
   creating: boolean
   agents: AgentOption[]
   onCreate: (topic: string, participants: string[]) => Promise<boolean>
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
 /**
@@ -30,8 +32,10 @@ interface NewRoomDialogProps {
  * meeting, and the roster stays mutable afterwards — so asking up front would
  * invent a distinction the server does not have.
  */
-export function NewRoomDialog({ agents, creating, onCreate }: NewRoomDialogProps) {
-  const [open, setOpen] = useState(false)
+export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen, onOpenChange }: NewRoomDialogProps) {
+  const [internalOpen, setInternalOpen] = useState(false)
+  const open = controlledOpen ?? internalOpen
+  const setOpen = onOpenChange ?? setInternalOpen
   const [topic, setTopic] = useState("")
   const [participants, setParticipants] = useState<string[]>([])
   const ready = topic.trim().length > 0 && participants.length > 0

@@ -291,6 +291,21 @@ test("opens a Chat-backed direct message and streams its reply", async ({ page }
   await expect(page.getByText(/ECHO\[fixed\]/).first()).toBeVisible({ timeout: 60_000 });
 });
 
+test("Relay menu navigates to Meet channels and Chat direct messages", async ({ page }) => {
+  const topic = unique("Relay menu channel");
+  await createRoom(topic, [primaryAgent]);
+  await openMeet(page);
+
+  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
+  await page.getByRole("menuitem", { name: "Direct messages · Chat" }).click();
+  await expect(page.getByRole("heading", { name: primaryAgent })).toBeVisible();
+  await expect(page.locator("textarea")).toBeEnabled();
+
+  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
+  await page.getByRole("menuitem", { name: "Channels · Meet" }).click();
+  await expect(page.getByLabel("Message the room")).toBeEnabled();
+});
+
 test("routes an unoccupied permanent role instead of silently posting it", async ({ page }) => {
   const topic = unique("Browser lazy role room");
   await openMeet(page);

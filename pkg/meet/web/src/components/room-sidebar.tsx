@@ -1,3 +1,4 @@
+import { useState } from "react"
 import {
   Bot,
   ChevronRight,
@@ -66,6 +67,19 @@ export function RoomSidebar({
   onCreateDM,
   className,
 }: RoomSidebarProps) {
+  const [newRoomOpen, setNewRoomOpen] = useState(false)
+  const [dmMenuOpen, setDMMenuOpen] = useState(false)
+
+  function openChannels() {
+    if (rooms[0]) onSelect(rooms[0].id)
+    else window.setTimeout(() => setNewRoomOpen(true), 0)
+  }
+
+  function openDirectMessages() {
+    if (dms[0]) onSelectDM(dms[0].agent)
+    else window.setTimeout(() => setDMMenuOpen(true), 0)
+  }
+
   return (
     <aside
       className={cn(
@@ -81,8 +95,12 @@ export function RoomSidebar({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
-            <DropdownMenuItem disabled>Channels use Meet</DropdownMenuItem>
-            <DropdownMenuItem disabled>Direct messages use Chat</DropdownMenuItem>
+            <DropdownMenuItem onSelect={openChannels}>
+              <Hash className="size-3.5" /> Channels · Meet
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={openDirectMessages}>
+              <Bot className="size-3.5" /> Direct messages · Chat
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <div className="min-w-0">
@@ -108,7 +126,7 @@ export function RoomSidebar({
             <span>Channels</span>
             <div className="flex items-center gap-1">
               <MessageSquareText className="size-3.5" />
-              <NewRoomDialog agents={agents} creating={creating} onCreate={onCreate} />
+              <NewRoomDialog agents={agents} creating={creating} onCreate={onCreate} open={newRoomOpen} onOpenChange={setNewRoomOpen} />
             </div>
           </div>
           <div className="space-y-1">
@@ -152,7 +170,7 @@ export function RoomSidebar({
 
           <div className="mb-2 mt-7 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
             <span>Direct messages</span>
-            <DropdownMenu>
+            <DropdownMenu onOpenChange={setDMMenuOpen} open={dmMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <Button aria-label="Start a direct message" className="size-6 text-sidebar-foreground/55" size="icon" variant="ghost">
                   <Plus className="size-3.5" />
