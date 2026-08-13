@@ -101,6 +101,8 @@ export const stateSchema = z
     agenda: z.array(z.string()).default([]),
     participants: z.array(memberSchema).default([]),
     secretary: z.string().default(""),
+    secretary_pending: z.boolean().optional(),
+    secretary_band: z.number().optional(),
     chair: z.string().default(""),
     human: z.string().default(""),
     status: z.string().default("open"),

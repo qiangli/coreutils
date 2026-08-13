@@ -1,6 +1,7 @@
 package meet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -342,6 +343,9 @@ func inviteTo(st *State, actor, agent string) error {
 		return err
 	}
 	if err := routableSeat(agent); err != nil {
+		return err
+	}
+	if err := ensureRoomSecretary(context.Background(), st); err != nil {
 		return err
 	}
 	// Canonicalized before it is stored, for the reason canonicalizeRoster gives:

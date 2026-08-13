@@ -105,7 +105,7 @@ Additional rooms, or host-specific topics/agendas, are declared in
 {
   "schema": "bashy-meet-permanent-rooms-v1",
   "rooms": [
-    {"name": "steward", "topic": "Dragon steward"},
+    {"name": "steward", "topic": "Dragon steward", "agent": "Rufus", "secretary": "Elif"},
     {"name": "release", "topic": "Release room", "agenda": ["release gate"]}
   ]
 }
@@ -122,6 +122,28 @@ run `bashy meet invite steward <agent> --as <holder>`. Both the human organizer
 and the verified current steward holder may invite or remove agents. Releasing
 the seat clears the alias without closing the room; a late predecessor cannot
 clear a successor's alias.
+
+If no agent currently holds `@steward`, the first addressed message lazily
+starts one instead of bouncing the human. `agent` pins a configured fleet name;
+`band` selects from that band or stronger. The built-in default is band 4 and,
+when several operable budget-eligible L4 agents exist, chooses uniformly among
+them. Set `"auto_start": false` to require an explicit `bashy steward start`.
+The lazy room steward is deliberately started without the stronger host steward
+seat: it may manage this room, but cannot author the host authority journal until
+a human performs the attended grant/claim flow.
+To reassign a running room steward, update `agent` (or `band`), run
+`bashy steward stop`, and address `@steward` again; the next lazy start applies
+the new selector. Configuration never force-replaces a live agent mid-turn.
+
+Every room opened through the Bashy API also gets a notes-only secretary. When
+none was explicitly named, the first successful join/message selects a concrete
+agent from `bashy agents list` at `secretary_band` (default L2+) and records that
+assignment before the contribution. A secretary is not kept as an idle billable
+process: Meet records the transcript synchronously, then invokes the assigned
+agent when convergence/minutes need secretary work. An explicitly configured
+`secretary` must likewise resolve to a named fleet agent and may not also be a
+participant or chair. CLI callers that deliberately pass `--secretary ""` retain
+the secretary-less conversation mode.
 
 **What you see.** The whole history first, in full — you are joining a
 conversation already in progress and need to know what was said. After that you

@@ -223,8 +223,13 @@ type State struct {
 	// the room is open (roster.go). Every reader takes it as it is at call time.
 	Participants []string `json:"participants"`
 	Secretary    string   `json:"secretary"`
-	Chair        string   `json:"chair,omitempty"`
-	Human        string   `json:"human"`
+	// SecretaryPending means bashy will choose a concrete fleet agent on the
+	// room's first real activity. Transcript capture is synchronous; the model
+	// itself runs only when synthesis work exists.
+	SecretaryPending bool   `json:"secretary_pending,omitempty"`
+	SecretaryBand    int    `json:"secretary_band,omitempty"`
+	Chair            string `json:"chair,omitempty"`
+	Human            string `json:"human"`
 
 	Status      string    `json:"status"`
 	Cwd         string    `json:"cwd"`
@@ -371,6 +376,12 @@ func (s *State) Validate() error {
 	// No secretary check: an empty secretary is a room that keeps no minutes,
 	// not an invalid one. Every invariant below that mentions the secretary is
 	// therefore conditional on there being one.
+	if s.SecretaryPending && s.recorded() {
+		return fmt.Errorf("meet: secretary cannot be both pending and assigned")
+	}
+	if s.SecretaryBand < 0 || s.SecretaryBand > 4 {
+		return fmt.Errorf("meet: secretary band must be 1-4")
+	}
 
 	seen := map[string]bool{}
 	for _, p := range s.Participants {

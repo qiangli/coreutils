@@ -109,7 +109,12 @@ export function RoomDetails({
               <Meta label="Chair" value={state?.chair || "Not assigned"} />
               <Meta
                 label="Secretary"
-                value={state?.secretary || "Not assigned"}
+                value={
+                  state?.secretary ||
+                  (state?.secretary_pending
+                    ? `Auto-select on first activity (L${state?.secretary_band || 2}+)`
+                    : "Not assigned")
+                }
               />
               <Meta
                 icon={Timer}

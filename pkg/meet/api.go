@@ -125,13 +125,15 @@ type JobRef struct {
 const OutStore = "store"
 
 type CreateOptions struct {
-	Topic        string
-	Participants []string
-	Secretary    string
-	Chair        string
-	Agenda       []string
-	Context      []string
-	Initiator    string
+	Topic         string
+	Participants  []string
+	Secretary     string
+	SecretaryBand int
+	NoSecretary   bool
+	Chair         string
+	Agenda        []string
+	Context       []string
+	Initiator     string
 	// Human is the identity that takes the room's human seat — and, unless
 	// Initiator names somebody else at the table, convenes it.
 	//
@@ -252,6 +254,13 @@ func Create(opts CreateOptions) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(st.Secretary) == "" && !opts.NoSecretary && StartRoomSecretary != nil {
+		st.SecretaryPending = true
+		st.SecretaryBand = opts.SecretaryBand
+		if st.SecretaryBand == 0 {
+			st.SecretaryBand = 2
+		}
+	}
 	if err := st.save(); err != nil {
 		return nil, err
 	}
@@ -275,6 +284,9 @@ func Post(ref, author, text string) (Event, error) {
 	}
 	if strings.TrimSpace(text) == "" {
 		return Event{}, fmt.Errorf("meet: an empty message is not a contribution")
+	}
+	if err := ensureRoomSecretary(context.Background(), st); err != nil {
+		return Event{}, err
 	}
 	who := strings.TrimSpace(author)
 	if who == "" {
@@ -301,7 +313,14 @@ func Address(ctx context.Context, ref, agent, text string) (Event, error) {
 	if holder := strings.TrimSpace(st.RoleHolders[strings.ToLower(name)]); holder != "" {
 		name = holder
 	} else if st.Permanent && strings.EqualFold(name, st.Name) {
-		return Event{}, fmt.Errorf("meet: @%s has no current holder — start the %s before addressing it", st.Name, st.Name)
+		holder, err := ensurePermanentRoleStarted(ctx, st, strings.ToLower(name))
+		if err != nil {
+			return Event{}, err
+		}
+		name = holder
+	}
+	if err := ensureRoomSecretary(ctx, st); err != nil {
+		return Event{}, err
 	}
 	lease, err := acquireRunLease(st.ID)
 	if err != nil {

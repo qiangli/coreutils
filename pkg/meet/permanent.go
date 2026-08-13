@@ -2,6 +2,7 @@ package meet
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,10 +26,30 @@ var ErrPermanentRoom = errors.New("meet: permanent rooms cannot be closed")
 // PermanentRoomConfig is one desired host-local room. The built-in steward
 // room is always present unless a config entry explicitly disables it.
 type PermanentRoomConfig struct {
-	Name   string   `json:"name"`
-	Topic  string   `json:"topic,omitempty"`
-	Agenda []string `json:"agenda,omitempty"`
+	Name          string   `json:"name"`
+	Topic         string   `json:"topic,omitempty"`
+	Agenda        []string `json:"agenda,omitempty"`
+	Agent         string   `json:"agent,omitempty"`
+	Band          int      `json:"band,omitempty"`
+	AutoStart     *bool    `json:"auto_start,omitempty"`
+	Secretary     string   `json:"secretary,omitempty"`
+	SecretaryBand int      `json:"secretary_band,omitempty"`
 }
+
+// PermanentRoleStartRequest is the host-neutral request Meet emits when a
+// human addresses an unoccupied permanent role. The embedding host owns agent
+// process lifecycle; Meet owns only the durable room and routing alias.
+type PermanentRoleStartRequest struct {
+	Room  string
+	Role  string
+	Agent string
+	Band  int
+}
+
+// StartPermanentRole is supplied by bashy, the host that can select and launch
+// an agent. A bare coreutils embedding leaves it nil and fails clearly instead
+// of pretending a role was started.
+var StartPermanentRole func(context.Context, PermanentRoleStartRequest) error
 
 type permanentRoomsFile struct {
 	Schema string                `json:"schema"`
@@ -36,9 +57,11 @@ type permanentRoomsFile struct {
 }
 
 func defaultPermanentRooms() []PermanentRoomConfig {
+	auto := true
 	return []PermanentRoomConfig{{
 		Name: "steward", Topic: "Steward",
 		Agenda: []string{"what is running on this host", "contention", "handoff"},
+		Band:   4, AutoStart: &auto, SecretaryBand: 2,
 	}}
 }
 
@@ -98,9 +121,93 @@ func ConfiguredPermanentRooms() ([]PermanentRoomConfig, error) {
 		if strings.TrimSpace(raw.Topic) == "" {
 			raw.Topic = permanentRoomTitle(name)
 		}
+		if raw.Band < 0 || raw.Band > 4 {
+			return nil, fmt.Errorf("meet: %s: permanent room %q band must be 1-4", p, name)
+		}
+		if raw.SecretaryBand < 0 || raw.SecretaryBand > 4 {
+			return nil, fmt.Errorf("meet: %s: permanent room %q secretary_band must be 1-4", p, name)
+		}
+		// An override may change only the heading or agenda. Preserve the
+		// built-in steward's lazy-start policy unless explicitly disabled.
+		if prior, ok := byName[name]; ok {
+			if raw.AutoStart == nil {
+				raw.AutoStart = prior.AutoStart
+			}
+			if raw.Band == 0 {
+				raw.Band = prior.Band
+			}
+			if raw.SecretaryBand == 0 {
+				raw.SecretaryBand = prior.SecretaryBand
+			}
+		}
 		byName[name] = raw
 	}
 	return sortedRoomConfigs(byName), nil
+}
+
+func configuredPermanentRoom(name string) (PermanentRoomConfig, bool, error) {
+	configs, err := ConfiguredPermanentRooms()
+	if err != nil {
+		return PermanentRoomConfig{}, false, err
+	}
+	for _, config := range configs {
+		if config.Name == name {
+			return config, true, nil
+		}
+	}
+	return PermanentRoomConfig{}, false, nil
+}
+
+// ensurePermanentRoleStarted serializes lazy starts across browser requests,
+// invokes the embedding host, then verifies positive evidence: the durable
+// alias must name the agent that actually took the role.
+func ensurePermanentRoleStarted(ctx context.Context, st *State, roleName string) (string, error) {
+	base, err := baseDir()
+	if err != nil {
+		return "", err
+	}
+	l, err := lockfile.AcquireWithin(filepath.Join(base, "role-start.lock"), 30*time.Second,
+		lockfile.Holder{Intent: "start permanent meet role"})
+	if err != nil {
+		return "", fmt.Errorf("meet: lock permanent role start: %w", err)
+	}
+	defer l.Release()
+
+	fresh, err := loadState(st.ID)
+	if err != nil {
+		return "", err
+	}
+	if holder := strings.TrimSpace(fresh.RoleHolders[roleName]); holder != "" {
+		return holder, nil
+	}
+	config, ok, err := configuredPermanentRoom(fresh.Name)
+	if err != nil {
+		return "", err
+	}
+	if !ok || config.AutoStart == nil || !*config.AutoStart {
+		return "", fmt.Errorf("meet: @%s has no current holder and automatic start is disabled", roleName)
+	}
+	if StartPermanentRole == nil {
+		return "", fmt.Errorf("meet: @%s has no current holder and this host cannot start agents", roleName)
+	}
+	band := config.Band
+	if band == 0 {
+		band = 4
+	}
+	if err := StartPermanentRole(ctx, PermanentRoleStartRequest{
+		Room: fresh.Name, Role: roleName, Agent: strings.TrimSpace(config.Agent), Band: band,
+	}); err != nil {
+		return "", fmt.Errorf("meet: start @%s: %w", roleName, err)
+	}
+	fresh, err = loadState(st.ID)
+	if err != nil {
+		return "", err
+	}
+	holder := strings.TrimSpace(fresh.RoleHolders[roleName])
+	if holder == "" {
+		return "", fmt.Errorf("meet: start @%s returned without assigning the role", roleName)
+	}
+	return holder, nil
 }
 
 func sortedRoomConfigs(m map[string]PermanentRoomConfig) []PermanentRoomConfig {
@@ -131,6 +238,7 @@ func EnsureConfiguredPermanentRooms() ([]*State, error) {
 	for _, c := range configs {
 		st, err := EnsurePermanentRoom(c.Name, CreateOptions{
 			Topic: c.Topic, Agenda: c.Agenda, Out: OutStore,
+			Secretary: c.Secretary, SecretaryBand: c.SecretaryBand,
 		})
 		if err != nil {
 			return nil, err
@@ -236,6 +344,19 @@ func ensurePermanentRoom(name string, opts CreateOptions, roles map[string]strin
 		}
 		if opts.Agenda != nil {
 			found.Agenda = append([]string(nil), opts.Agenda...)
+		}
+		if secretary := strings.TrimSpace(opts.Secretary); secretary != "" {
+			if err := routableSeat(secretary); err != nil {
+				return nil, err
+			}
+			found.Secretary = canonAgent(secretary)
+			found.SecretaryPending = false
+		} else if found.Secretary == "" && StartRoomSecretary != nil {
+			found.SecretaryPending = true
+			found.SecretaryBand = opts.SecretaryBand
+			if found.SecretaryBand == 0 {
+				found.SecretaryBand = 2
+			}
 		}
 		for _, participant := range opts.Participants {
 			participant = canonAgent(participant)

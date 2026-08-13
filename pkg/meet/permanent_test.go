@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/qiangli/coreutils/pkg/chat"
+	"github.com/qiangli/coreutils/pkg/fleet"
 )
 
 func permanentTestStore(t *testing.T) string {
@@ -28,6 +29,114 @@ func TestConfiguredPermanentRoomsIncludeStewardByDefault(t *testing.T) {
 	}
 	if len(rooms) != 1 || rooms[0].Name != "steward" || rooms[0].Topic != "Steward" {
 		t.Fatalf("default rooms = %+v, want steward", rooms)
+	}
+	if rooms[0].Band != 4 || rooms[0].AutoStart == nil || !*rooms[0].AutoStart {
+		t.Fatalf("default steward activation = %+v, want automatic L4", rooms[0])
+	}
+}
+
+func TestAddressLazyStartsConfiguredPermanentSteward(t *testing.T) {
+	dir := permanentTestStore(t)
+	seatEverything(t)
+	auto := true
+	b, _ := json.Marshal(permanentRoomsFile{
+		Schema: permanentRoomsSchema,
+		Rooms: []PermanentRoomConfig{{
+			Name: "steward", Topic: "Steward", Agent: "configured-agent", Band: 3, AutoStart: &auto,
+		}},
+	})
+	if err := os.WriteFile(filepath.Join(dir, "rooms.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureConfiguredPermanentRooms(); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStarter, oldRunner := StartPermanentRole, apiRunner
+	var got PermanentRoleStartRequest
+	StartPermanentRole = func(_ context.Context, req PermanentRoleStartRequest) error {
+		got = req
+		_, err := EnsurePermanentRoleRoom(req.Room, req.Role, "configured-agent", CreateOptions{
+			Participants: []string{"configured-agent"}, Out: OutStore,
+		})
+		return err
+	}
+	apiRunner = func() chat.Runner { return fakeRunner{reply: "invited"} }
+	t.Cleanup(func() { StartPermanentRole, apiRunner = oldStarter, oldRunner })
+
+	event, err := Address(context.Background(), "steward", "@steward", "invite Rufus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Room != "steward" || got.Role != "steward" || got.Agent != "configured-agent" || got.Band != 3 {
+		t.Fatalf("start request = %+v", got)
+	}
+	if event.Speaker != "configured-agent" {
+		t.Fatalf("reply speaker = %q", event.Speaker)
+	}
+}
+
+func TestAddressDoesNotAutoStartDisabledPermanentSteward(t *testing.T) {
+	dir := permanentTestStore(t)
+	auto := false
+	b, _ := json.Marshal(permanentRoomsFile{
+		Schema: permanentRoomsSchema,
+		Rooms:  []PermanentRoomConfig{{Name: "steward", AutoStart: &auto}},
+	})
+	if err := os.WriteFile(filepath.Join(dir, "rooms.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureConfiguredPermanentRooms(); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	old := StartPermanentRole
+	StartPermanentRole = func(context.Context, PermanentRoleStartRequest) error { called = true; return nil }
+	t.Cleanup(func() { StartPermanentRole = old })
+	if _, err := Address(context.Background(), "steward", "steward", "hello"); err == nil {
+		t.Fatal("disabled steward auto-start succeeded")
+	}
+	if called {
+		t.Fatal("disabled auto-start invoked host starter")
+	}
+}
+
+func TestFirstRoomContributionActivatesOneFleetSecretary(t *testing.T) {
+	permanentTestStore(t)
+	agents, _ := fleet.New().Agents()
+	if len(agents) == 0 {
+		t.Fatal("embedded fleet has no agent for secretary test")
+	}
+	want := agents[0].Name
+	old := StartRoomSecretary
+	calls := 0
+	StartRoomSecretary = func(_ context.Context, req RoomSecretaryStartRequest) (string, error) {
+		calls++
+		if req.Band != 2 || req.Room == "" {
+			t.Fatalf("secretary request = %+v", req)
+		}
+		return want, nil
+	}
+	t.Cleanup(func() { StartRoomSecretary = old })
+	st, err := Create(CreateOptions{Topic: "lazy secretary", Human: "tester", Out: OutStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.SecretaryPending || st.Secretary != "" {
+		t.Fatalf("new room secretary state = %+v", st)
+	}
+	if _, err := Post(st.ID, "tester", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Post(st.ID, "tester", "again"); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _, err := Room(st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Secretary != want || fresh.SecretaryPending || calls != 1 {
+		t.Fatalf("activated secretary = %q pending=%v calls=%d", fresh.Secretary, fresh.SecretaryPending, calls)
 	}
 }
 
