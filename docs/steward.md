@@ -941,6 +941,21 @@ cannot read is not a seat you may quietly take.
 
 ## Relationship to the rest of the AgentOS hub
 
+### The steward room is a permanent role address
+
+The steward's Meet room is named `steward` and belongs to the role, not to the
+process or agent currently holding it. A handoff therefore reuses the same
+room identity and transcript; `steward stop` releases the authoritative seat
+but does not destroy its address. It is reachable as `bashy meet observe
+steward` (or `@steward`) and is one of Meet's configured permanent rooms.
+
+This changes the old cleanup rule intentionally. An ordinary conductor room is
+bounded work and still closes on release. The steward room is the host's front
+desk: closing it during every shift change created a series of dead addresses
+and discarded exactly the continuity the steward role exists to preserve.
+Current ownership and liveness still come from the steward record, never from
+the Meet roster.
+
 - **`pkg/handoff`** stays exactly as it is: task/artifact-scoped, repository-touching. The
   steward seat does not replace it, does not restore working trees, and does not capture
   diffs. They compose — a steward may well hand a task off with `bashy handoff`.

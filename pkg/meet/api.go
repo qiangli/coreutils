@@ -77,12 +77,14 @@ func roomOf(ref string) (*State, error) {
 // RoomSummary is a room as a list shows it — enough to render a channel list
 // without loading every transcript.
 type RoomSummary struct {
-	ID      string    `json:"id"`
-	Room    int       `json:"room,omitempty"`
-	Topic   string    `json:"topic"`
-	Status  string    `json:"status"`
-	Members []string  `json:"members"`
-	Updated time.Time `json:"updated"`
+	ID        string    `json:"id"`
+	Room      int       `json:"room,omitempty"`
+	Name      string    `json:"name,omitempty"`
+	Permanent bool      `json:"permanent,omitempty"`
+	Topic     string    `json:"topic"`
+	Status    string    `json:"status"`
+	Members   []string  `json:"members"`
+	Updated   time.Time `json:"updated"`
 }
 
 // JobRef identifies work a caller started but is not waiting for. The long verbs
@@ -164,7 +166,8 @@ func Rooms() ([]RoomSummary, error) {
 	out := make([]RoomSummary, 0, len(sessions))
 	for _, s := range sessions {
 		out = append(out, RoomSummary{
-			ID: s.ID, Room: s.Room, Topic: s.Topic, Status: s.Status,
+			ID: s.ID, Room: s.Room, Name: s.Name, Permanent: s.Permanent,
+			Topic: s.Topic, Status: s.Status,
 			Members: s.attendees(), Updated: lastActivity(s),
 		})
 	}

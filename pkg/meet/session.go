@@ -192,6 +192,13 @@ type State struct {
 	Schema string `json:"schema"`
 	ID     string `json:"id"`
 
+	// Name is the stable, host-local address of a configured permanent room.
+	// Ordinary meetings have no name: their durable identity is ID and their
+	// short Room number is only a reusable pointer. A permanent room may be
+	// addressed as either "steward" or "@steward" across restarts.
+	Name      string `json:"name,omitempty"`
+	Permanent bool   `json:"permanent,omitempty"`
+
 	// Room is the short number a human types to attach — see room.go. It is a
 	// POINTER, held for the life of the meeting and released (and reused) when
 	// it closes. Nothing may ever be recorded against it; the id is the identity.
@@ -339,6 +346,14 @@ func (s *State) maxStalls() int {
 func (s *State) Validate() error {
 	if strings.TrimSpace(s.Topic) == "" {
 		return fmt.Errorf("meet: a meeting needs a --topic")
+	}
+	if s.Permanent {
+		name, err := permanentRoomName(s.Name)
+		if err != nil || name != s.Name {
+			return fmt.Errorf("meet: permanent room has invalid name %q", s.Name)
+		}
+	} else if strings.TrimSpace(s.Name) != "" {
+		return fmt.Errorf("meet: ordinary meeting cannot claim permanent name %q", s.Name)
 	}
 	// No secretary check: an empty secretary is a room that keeps no minutes,
 	// not an invalid one. Every invariant below that mentions the secretary is

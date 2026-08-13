@@ -27,7 +27,16 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	if t := strings.TrimSpace(a.Title); t != "" {
 		subject += ": " + t
 	}
-	st, err := meet.Create(meet.CreateOptions{
+	create := meet.Create
+	kind := "meet"
+	if a.Kind == role.Steward {
+		create = func(opts meet.CreateOptions) (*meet.State, error) {
+			return meet.EnsurePermanentRoom("steward", opts)
+		}
+		kind = "meet-permanent"
+		subject = "Steward"
+	}
+	st, err := create(meet.CreateOptions{
 		Topic:        subject,
 		Participants: []string{holder},
 		Initiator:    holder,
@@ -45,7 +54,11 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 	}
 	// Record the convener: only the organizer may close a meet room, so a
 	// successor has to be able to tell whether this one is closable by it.
-	return &role.Contact{Kind: "meet", Ref: st.ID, Room: st.Room, Topic: a.Topic(), Holder: holder}, nil
+	contactHolder := holder
+	if kind == "meet-permanent" {
+		contactHolder = ""
+	}
+	return &role.Contact{Kind: kind, Ref: st.ID, Room: st.Room, Topic: a.Topic(), Holder: contactHolder}, nil
 }
 
 // Release closes a role's room on a graceful handoff.
@@ -56,6 +69,9 @@ func Assume(a role.Assignment, holder string) (*role.Contact, error) {
 // look broken.
 func Release(c *role.Contact, holder string) error {
 	if c == nil || c.Ref == "" {
+		return nil
+	}
+	if c.Kind == "meet-permanent" {
 		return nil
 	}
 	err := meet.Close(c.Ref, holder)

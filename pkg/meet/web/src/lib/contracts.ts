@@ -16,6 +16,8 @@ export const roomSummarySchema = z.object({
   // renders empty — which is what it did until a browser test looked. The mock
   // fixtures used strings, so the mismatch was invisible in dev.
   room: z.union([z.string(), z.number()]).optional(),
+  name: z.string().optional(),
+  permanent: z.boolean().optional(),
   topic: z.string(),
   status: z.string(),
   members: z.array(memberSchema),
@@ -92,6 +94,8 @@ export const stateSchema = z
     schema: z.union([z.string(), z.number()]).optional(),
     id: z.string(),
     room: z.union([z.string(), z.number()]).optional(),
+    name: z.string().optional(),
+    permanent: z.boolean().optional(),
     topic: z.string().default(""),
     agenda: z.array(z.string()).default([]),
     participants: z.array(memberSchema).default([]),

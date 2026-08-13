@@ -42,8 +42,8 @@ bashy meet round         <id>                   # one moderated round across par
 bashy meet poll          <id> --question TEXT   # fixed-choice ballot; every seat must answer
 bashy meet ask           <id> --question TEXT   # open question; silence = "no comment"
 
-bashy meet list                                 # every meeting; ROOM is the short handle
-bashy meet observe       [<room>|<id>]          # attach and WATCH it happen, live (read-only)
+bashy meet list                                 # every meeting; ROOM/NAME are handles
+bashy meet observe       [<room>|<name>|<id>]   # attach and WATCH it happen, live (read-only)
 
 bashy meet show          <id>                   # roster, per-participant coverage, artifacts
 bashy meet contributions <id> [participant]     # every contribution, in full
@@ -91,6 +91,29 @@ work like a shell's job numbers — assigned from the lowest free number among t
 when you type it and **never written into a record**: a transcript claiming
 "room 2 decided X" would rot the moment room 2 was reused. `observe` also takes
 the full id, or any unambiguous prefix of it.
+
+**Permanent named rooms.** A configured room is a durable host address rather
+than one bounded meeting. It has a stable lowercase name, may be addressed with
+or without `@` (`steward` / `@steward`), preserves its transcript across service
+restarts and steward handoffs, and cannot be ended with ordinary `meet close`.
+The built-in room is `steward`. `meet serve` ensures it before listening.
+
+Additional rooms, or host-specific topics/agendas, are declared in
+`$BASHY_MEET_ROOMS_FILE` or, by default, `~/.bashy/meet/rooms.json`:
+
+```json
+{
+  "schema": "bashy-meet-permanent-rooms-v1",
+  "rooms": [
+    {"name": "steward", "topic": "Dragon steward"},
+    {"name": "release", "topic": "Release room", "agenda": ["release gate"]}
+  ]
+}
+```
+
+The file merges with the built-in list by name, so the first entry overrides
+the default steward label and the second adds a room. Permanent names are
+identities; changing a topic does not create a new transcript.
 
 **What you see.** The whole history first, in full — you are joining a
 conversation already in progress and need to know what was said. After that you

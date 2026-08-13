@@ -104,6 +104,9 @@ func runMeetServe(ctx context.Context, out io.Writer, bind string, port int) err
 	// INCREMENTS, so calling it per request would climb without bound and stamp a
 	// nonsense depth onto every child.
 	markDepth()
+	if _, err := EnsureConfiguredPermanentRooms(); err != nil {
+		return err
+	}
 
 	addr := fmt.Sprintf("%s:%d", bind, port)
 	srv := &http.Server{

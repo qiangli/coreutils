@@ -80,6 +80,11 @@ func EnsureRoom(holder string) string {
 	if err != nil || c == nil {
 		return assumeSeatRoom(holder)
 	}
+	// A permanent room belongs to the ROLE, not to one holder. Re-ensuring it
+	// lets meet refresh the configured header and returns the same durable room.
+	if c.Kind == "meet-permanent" && OpenRoom != nil {
+		return assumeSeatRoom(holder)
+	}
 	// REUSE ONLY A ROOM THIS HOLDER CAN ALSO CLOSE.
 	//
 	// meet lets any member post but only the ORGANIZER change the roster, so a

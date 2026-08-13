@@ -1197,7 +1197,8 @@ func newListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "list saved meetings",
 		Long: "List saved meetings.\n\n" +
-			"ROOM is the short number you attach by: `bashy meet observe 2`. It is\n" +
+			"ROOM is the short number you attach by: `bashy meet observe 2`. NAME is\n" +
+			"a stable configured address such as `bashy meet observe steward`. ROOM is\n" +
 			"assigned from the lowest free number among the OPEN meetings and reused\n" +
 			"once a meeting closes, exactly like a shell's job numbers.",
 		Args: cobra.NoArgs,
@@ -1207,10 +1208,14 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ROOM\tID\tSTATUS\tPARTICIPANTS\tTOPIC")
+			fmt.Fprintln(w, "ROOM\tNAME\tID\tSTATUS\tPARTICIPANTS\tTOPIC")
 			for _, s := range sessions {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					roomLabel(s), s.ID, s.Status, strings.Join(s.Participants, ","), s.Topic)
+				name := s.Name
+				if name == "" {
+					name = "-"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					roomLabel(s), name, s.ID, s.Status, strings.Join(s.Participants, ","), s.Topic)
 			}
 			if err := w.Flush(); err != nil {
 				return err

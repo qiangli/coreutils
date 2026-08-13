@@ -79,9 +79,9 @@ func openRooms() ([]*State, error) {
 
 // resolveMeeting turns whatever a human typed into a meeting id.
 //
-// It accepts, in order: a room number ("2"), a full id, or an unambiguous
-// PREFIX of an id — because even when you do reach for the id, you should not
-// have to type all forty characters of it.
+// It accepts, in order: a room number ("2"), a permanent name ("steward" or
+// "@steward"), a full id, or an unambiguous PREFIX of an id — because even
+// when you do reach for the id, you should not have to type all forty chars.
 //
 // An ambiguous prefix is an error, never a guess. Attaching to the wrong
 // meeting is worse than being told to be more specific: you would sit and watch
@@ -118,6 +118,21 @@ func resolveMeeting(ref string) (string, error) {
 			return closed.ID, nil
 		}
 		return "", fmt.Errorf("meet: nobody is in room %d — `bashy meet list`", n)
+	}
+
+	name := strings.ToLower(strings.TrimPrefix(ref, "@"))
+	var named *State
+	for _, s := range sessions {
+		if !s.Permanent || s.Name != name {
+			continue
+		}
+		if named != nil {
+			return "", fmt.Errorf("meet: permanent room %q has duplicate identities", name)
+		}
+		named = s
+	}
+	if named != nil {
+		return named.ID, nil
 	}
 
 	for _, s := range sessions {

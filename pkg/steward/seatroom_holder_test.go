@@ -79,3 +79,26 @@ func TestEnsureRoom_ReusesAPreFieldContact(t *testing.T) {
 		t.Errorf("a holder-less contact was not reused: %d rooms opened", opens)
 	}
 }
+
+func TestEnsureRoom_ReensuresPermanentSeatForNewHolder(t *testing.T) {
+	t.Setenv("BASHY_STEWARD_DIR", t.TempDir())
+
+	old, oldClose := OpenRoom, CloseRoom
+	t.Cleanup(func() { OpenRoom, CloseRoom = old, oldClose })
+	var opened []string
+	OpenRoom = func(a role.Assignment, holder string) (*role.Contact, error) {
+		opened = append(opened, holder)
+		return &role.Contact{Kind: "meet-permanent", Ref: "steward-room", Room: 1, Topic: a.Topic()}, nil
+	}
+	CloseRoom = func(*role.Contact, string) error { return nil }
+
+	EnsureRoom("alice")
+	EnsureRoom("bob")
+	if len(opened) != 2 || opened[0] != "alice" || opened[1] != "bob" {
+		t.Fatalf("permanent room was not re-ensured across handoff: %v", opened)
+	}
+	c, err := SeatContact()
+	if err != nil || c == nil || c.Ref != "steward-room" {
+		t.Fatalf("saved permanent contact = %+v, %v", c, err)
+	}
+}

@@ -108,10 +108,10 @@ export function RoomSidebar({
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-medium">
-                      {room.room || room.topic}
+                      {room.name || room.room || room.topic}
                     </span>
                     <span className="block truncate text-[11px] text-sidebar-foreground/45">
-                      {room.topic}
+                      {room.permanent ? `Permanent · ${room.topic}` : room.topic}
                     </span>
                   </span>
                   {selected && (
