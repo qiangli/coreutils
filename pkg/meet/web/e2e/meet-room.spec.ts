@@ -292,6 +292,23 @@ test("opens a Chat-backed direct message and streams its reply", async ({ page }
   await expect(page.getByText(/ECHO\[fixed\]/).first()).toBeVisible({ timeout: 60_000 });
 });
 
+test("a long Chat turn visibly shows the agent working", async ({ page }) => {
+  await openMeet(page);
+  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
+  await page.getByRole("menuitem", { name: /Chat/ }).click();
+  await page.route("**/api/dms/*/messages", async (route) => {
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ agent: primaryAgent, status: "working" }),
+    });
+  }, { times: 1 });
+  await page.locator("textarea").fill("take your time");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByLabel(`${primaryAgent} is typing`)).toBeVisible();
+  await expect(page.getByText(/reply will appear here/i)).toBeVisible();
+});
+
 test("Relay menu navigates to Meet channels and Chat direct messages", async ({ page }) => {
   const topic = unique("Relay menu channel");
   await createRoom(topic, [primaryAgent]);

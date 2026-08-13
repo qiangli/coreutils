@@ -87,7 +87,10 @@ export function useMeetRoom() {
       const stop = observeDM(
         selectedRef,
         (event) => {
-          if (active) setEvents((current) => addUnique(current, dmMeetEvent(event)))
+          if (active) {
+            setEvents((current) => addUnique(current, dmMeetEvent(event)))
+            if (event.role === "assistant") setLive(null)
+          }
         },
         setConnection,
       )
@@ -148,6 +151,14 @@ export function useMeetRoom() {
       setQueued(null)
       try {
         if (selectedKind === "dm") {
+          setLive({
+            kind: "speaking",
+            round: 0,
+            speaker: selectedRef,
+            role: "assistant",
+            text: "",
+            status: "working",
+          })
           await postDM(selectedRef, text)
           setQueued(`Your message to ${selectedRef} was accepted; the reply will appear here.`)
         } else if (agent) {
@@ -158,6 +169,7 @@ export function useMeetRoom() {
           setEvents((current) => addUnique(current, event))
         }
       } catch (reason) {
+        if (selectedKind === "dm") setLive(null)
         if (reason instanceof ApiError && reason.status === 409) {
           setQueued(
             agent
