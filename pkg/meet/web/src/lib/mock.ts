@@ -249,6 +249,7 @@ export async function mockAction(
     busyOnce = false
     throw new MockHttpError(409, "The room is finishing another turn.")
   }
+  if (action === "mark") return undefined
   return { id: `mock-${Date.now()}` }
 }
 

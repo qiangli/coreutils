@@ -144,7 +144,10 @@ export async function runAction(
       body: body === undefined ? undefined : JSON.stringify(body),
     },
   )
-  if (result !== undefined) jobRefSchema.parse(result)
+  if (result !== undefined) {
+    if (action === "mark") eventSchema.parse(result)
+    else jobRefSchema.parse(result)
+  }
 }
 
 export function observeRoom(

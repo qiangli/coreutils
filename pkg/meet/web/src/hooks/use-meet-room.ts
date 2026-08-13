@@ -132,7 +132,7 @@ export function useMeetRoom() {
 
   const act = useCallback(
     async (action: string, label: string, body?: unknown) => {
-      if (!selectedRef) return
+      if (!selectedRef) return false
       setSending(true)
       setError(null)
       setQueued(null)
@@ -143,11 +143,13 @@ export function useMeetRoom() {
         // membership therefore leaves the member list stale until a reload, so
         // re-read the room after one. The turn verbs need no such thing: their
         // output arrives as transcript events, which the socket does stream.
-        if (action === "invite" || action === "kick") {
+        if (["invite", "kick", "mark", "close"].includes(action)) {
           const refreshed = await getRoom(selectedRef)
           setDetail(refreshed)
           setState(refreshed.state)
+          setRooms(await listRooms())
         }
+        return true
       } catch (reason) {
         if (reason instanceof ApiError && reason.status === 409) {
           setQueued(`${label} is queued while the current turn finishes.`)
@@ -156,6 +158,7 @@ export function useMeetRoom() {
         } else {
           setError(messageFor(reason))
         }
+        return false
       } finally {
         setSending(false)
       }

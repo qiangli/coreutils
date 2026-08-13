@@ -1,13 +1,16 @@
 import { useMemo, useRef, useState } from "react"
 import {
   AtSign,
+  BookmarkCheck,
   Check,
   ChevronDown,
   CircleDot,
   ListChecks,
+  ListTodo,
   LoaderCircle,
   MessageCircleQuestion,
   MessagesSquare,
+  NotebookPen,
   Send,
   Sparkles,
   UsersRound,
@@ -48,7 +51,8 @@ interface ComposerProps {
   isOrganizer: boolean
   onDismissQueued: () => void
   onSend: (text: string, agent?: string) => Promise<void>
-  onAction: (action: string, label: string, body?: unknown) => Promise<void>
+  onAction: (action: string, label: string, body?: unknown) => Promise<boolean>
+  onManageParticipants: () => void
 }
 
 export function Composer({
@@ -60,6 +64,7 @@ export function Composer({
   onDismissQueued,
   onSend,
   onAction,
+  onManageParticipants,
 }: ComposerProps) {
   const [text, setText] = useState("")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -86,6 +91,7 @@ export function Composer({
   const matchingAgents = agents.filter((agent) =>
     memberName(agent).toLocaleLowerCase().startsWith(mentionQuery ?? ""),
   )
+  const roomOpen = state?.status === "open"
 
   async function submit() {
     const value = text.trim()
@@ -185,6 +191,7 @@ export function Composer({
                   className="h-8 rounded-lg px-2.5 text-[11px] text-muted-foreground"
                   size="sm"
                   variant="ghost"
+                  disabled={!roomOpen || sending}
                 >
                   <Sparkles className="size-3.5 text-primary" />
                   Room actions
@@ -235,6 +242,46 @@ export function Composer({
                   onSelect={() => onAction("converge", "Convergence")}
                 />
                 <DropdownMenuSeparator />
+                <DropdownMenuLabel className="px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Record the current draft
+                </DropdownMenuLabel>
+                <ActionItem
+                  description="Save the draft as an agreed outcome"
+                  disabled={!text.trim()}
+                  icon={BookmarkCheck}
+                  label="Record decision"
+                  onSelect={() =>
+                    onAction("mark", "Record decision", {
+                      kind: "decision",
+                      text: text.trim(),
+                    })
+                  }
+                />
+                <ActionItem
+                  description="Save the draft as follow-up work"
+                  disabled={!text.trim()}
+                  icon={ListTodo}
+                  label="Record action item"
+                  onSelect={() =>
+                    onAction("mark", "Record action item", {
+                      kind: "action",
+                      text: text.trim(),
+                    })
+                  }
+                />
+                <ActionItem
+                  description="Add the draft to the agenda"
+                  disabled={!text.trim()}
+                  icon={NotebookPen}
+                  label="Add agenda item"
+                  onSelect={() =>
+                    onAction("mark", "Add agenda item", {
+                      kind: "agenda",
+                      text: text.trim(),
+                    })
+                  }
+                />
+                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-3 rounded-lg px-2 py-2"
                   onSelect={() => setText("@")}
@@ -250,6 +297,7 @@ export function Composer({
                 <DropdownMenuItem
                   className="gap-3 rounded-lg px-2 py-2"
                   disabled={!isOrganizer}
+                  onSelect={onManageParticipants}
                 >
                   <ListChecks className="size-4 text-slate-500" />
                   <div>
@@ -331,15 +379,18 @@ function ActionItem({
   label,
   description,
   onSelect,
+  disabled = false,
 }: {
   icon: typeof UsersRound
   label: string
   description: string
   onSelect: () => void
+  disabled?: boolean
 }) {
   return (
     <DropdownMenuItem
       className="gap-3 rounded-lg px-2 py-2.5"
+      disabled={disabled}
       onSelect={onSelect}
     >
       <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/8 text-primary">

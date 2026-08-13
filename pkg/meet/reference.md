@@ -71,6 +71,28 @@ In the REPL: plain text = a human turn · `@name <text>` = a targeted turn · `/
 `/chair` · `/poll <q>` · `/ask <q>` · `/decision <t>` · `/action owner: task` ·
 `/agenda <t>` · `/show` · `/converge` · `/close`.
 
+## Browser room controls
+
+`bashy meet serve` exposes the same room model in the web UI; it is not a
+read-only transcript viewer. The composer posts to the room, and `@agent text`
+addresses one seated agent. **Room actions** runs a round, poll, open question,
+or convergence pass. A non-empty draft can instead be recorded as a decision,
+action item, or agenda item without also posting it as ordinary chat.
+
+The room-details panel is the roster control: the organizer may invite a named
+fleet agent or remove a participant. The **Manage participants** menu item opens
+that panel on both desktop and mobile. Closing is confirmed, refreshes the room
+and sidebar state, and disables further messages and turns. Permanent named
+rooms cannot be closed; their control says so rather than offering an action the
+server must reject. While any mutation is in flight, the controls are disabled
+to prevent duplicate requests. A failed invite keeps its typed agent name so it
+can be corrected and retried.
+
+Every control uses the HTTP routes in `serve.go`; long agent verbs return a job
+reference and deliver their observable output through the existing room event
+stream. Roster, marker, and close actions re-read room state after success so
+the browser never depends on guessing a server-assigned seat or lifecycle state.
+
 ## Watching a meeting: `meet observe`
 
 A meeting runs unattended for a long time. `observe` lets you look in on one

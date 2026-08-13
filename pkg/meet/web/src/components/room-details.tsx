@@ -8,9 +8,18 @@ import {
   Gavel,
   LockKeyhole,
   Timer,
+  UserRoundMinus,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
@@ -19,14 +28,20 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import type { RoomDetail, State } from "@/lib/contracts"
+import {
+  memberName,
+  memberRole,
+  type RoomDetail,
+  type State,
+} from "@/lib/contracts"
 import { cn } from "@/lib/utils"
 
 interface RoomDetailsProps {
   state: State | null
   detail: RoomDetail | null
   isOrganizer: boolean
-  onAction: (action: string, label: string, body?: unknown) => void
+  sending: boolean
+  onAction: (action: string, label: string, body?: unknown) => Promise<boolean>
   className?: string
 }
 
@@ -34,10 +49,12 @@ export function RoomDetails({
   state,
   detail,
   isOrganizer,
+  sending,
   onAction,
   className,
 }: RoomDetailsProps) {
   const [invitee, setInvitee] = useState("")
+  const [closeOpen, setCloseOpen] = useState(false)
 
   return (
     <aside
@@ -139,45 +156,140 @@ export function RoomDetails({
             </div>
             <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">
               {isOrganizer
-                ? "You can manage membership and close this room."
+                ? state?.permanent
+                  ? "You can manage membership. Permanent rooms stay open across handoffs."
+                  : "You can manage membership and close this room."
                 : `${state?.initiator || "The organizer"} manages membership and room closure.`}
             </p>
             {isOrganizer && (
-              <form
-                className="mb-2 flex gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  const name = invitee.trim()
-                  if (!name) return
-                  onAction("invite", "Invite", { agent: name })
-                  setInvitee("")
-                }}
-              >
-                <Input
-                  aria-label="Agent to invite"
-                  className="h-8 text-[12px]"
-                  onChange={(event) => setInvitee(event.target.value)}
-                  placeholder="Invite an agent…"
-                  value={invitee}
-                />
-                <Button
-                  className="h-8 shrink-0 text-[12px]"
-                  disabled={!invitee.trim()}
-                  size="sm"
-                  type="submit"
-                  variant="outline"
+              <>
+                <form
+                  className="mb-2 flex gap-2"
+                  onSubmit={async (event) => {
+                    event.preventDefault()
+                    const name = invitee.trim()
+                    if (!name) return
+                    if (await onAction("invite", "Invite", { agent: name })) {
+                      setInvitee("")
+                    }
+                  }}
                 >
-                  Invite
-                </Button>
-              </form>
+                  <Input
+                    aria-label="Agent to invite"
+                    className="h-8 text-[12px]"
+                    disabled={sending || state?.status === "closed"}
+                    onChange={(event) => setInvitee(event.target.value)}
+                    placeholder="Invite an agent…"
+                    value={invitee}
+                  />
+                  <Button
+                    className="h-8 shrink-0 text-[12px]"
+                    disabled={
+                      sending || !invitee.trim() || state?.status === "closed"
+                    }
+                    size="sm"
+                    type="submit"
+                    variant="outline"
+                  >
+                    Invite
+                  </Button>
+                </form>
+                <div className="mb-3 space-y-1" data-room-participants>
+                  {state?.participants.map((member) => {
+                    const name = memberName(member)
+                    return (
+                      <div
+                        className="flex items-center gap-2 rounded-lg bg-secondary/50 px-2.5 py-1.5"
+                        key={name}
+                      >
+                        <span className="min-w-0 flex-1 truncate text-[11px]">
+                          {name}
+                          {memberRole(member) && (
+                            <span className="ml-1 text-muted-foreground">
+                              · {memberRole(member)}
+                            </span>
+                          )}
+                        </span>
+                        <Button
+                          aria-label={`Remove ${name}`}
+                          className="size-6 text-muted-foreground hover:text-destructive"
+                          disabled={sending || state?.status === "closed"}
+                          onClick={() =>
+                            onAction("kick", `Remove ${name}`, { agent: name })
+                          }
+                          size="icon-sm"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <UserRoundMinus className="size-3.5" />
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
             )}
             <div className="flex gap-2">
               <OrganizerButton
-                disabled={!isOrganizer}
-                label="Close room"
-                onClick={() => onAction("close", "Close room")}
+                disabled={
+                  sending ||
+                  !isOrganizer ||
+                  state?.status === "closed" ||
+                  Boolean(state?.permanent)
+                }
+                label={
+                  state?.permanent
+                    ? "Permanent room"
+                    : state?.status === "closed"
+                      ? "Room closed"
+                      : "Close room"
+                }
+                onClick={() => setCloseOpen(true)}
+                unavailableReason={
+                  sending
+                    ? "Another room action is in progress."
+                    : state?.permanent
+                    ? "Permanent rooms stay open across handoffs."
+                    : state?.status === "closed"
+                      ? "This room is already closed."
+                      : "Only the organizer can use this control."
+                }
               />
             </div>
+            <Dialog onOpenChange={setCloseOpen} open={closeOpen}>
+              <DialogContent className="sm:max-w-[420px]">
+                <DialogHeader>
+                  <DialogTitle>Close this room?</DialogTitle>
+                  <DialogDescription>
+                    This files the minutes and ends the conversation. The
+                    transcript remains available, but the room cannot accept
+                    more messages or turns.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    disabled={sending}
+                    onClick={() => setCloseOpen(false)}
+                    type="button"
+                    variant="ghost"
+                  >
+                    Keep open
+                  </Button>
+                  <Button
+                    disabled={sending}
+                    onClick={async () => {
+                      if (await onAction("close", "Close room")) {
+                        setCloseOpen(false)
+                      }
+                    }}
+                    type="button"
+                    variant="destructive"
+                  >
+                    {sending ? "Closing…" : "Close room"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </section>
         </div>
       </ScrollArea>
@@ -239,10 +351,12 @@ function OrganizerButton({
   disabled,
   label,
   onClick,
+  unavailableReason,
 }: {
   disabled: boolean
   label: string
   onClick: () => void
+  unavailableReason: string
 }) {
   const button = (
     <span className="inline-flex">
@@ -261,7 +375,7 @@ function OrganizerButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent>Only the organizer can use this control.</TooltipContent>
+      <TooltipContent>{unavailableReason}</TooltipContent>
     </Tooltip>
   )
 }

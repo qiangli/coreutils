@@ -25,6 +25,7 @@ import { useMeetRoom } from "@/hooks/use-meet-room"
 export function App() {
   const meet = useMeetRoom()
   const [detailsOpen, setDetailsOpen] = useState(true)
+  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false)
   const memberCount = meet.state?.participants.length ?? 0
 
   return (
@@ -109,7 +110,7 @@ export function App() {
               {detailsOpen ? <PanelRightClose /> : <PanelRightOpen />}
             </Button>
 
-            <Sheet>
+            <Sheet onOpenChange={setMobileDetailsOpen} open={mobileDetailsOpen}>
               <SheetTrigger asChild>
                 <Button
                   aria-label="Open room details"
@@ -130,6 +131,7 @@ export function App() {
                   detail={meet.detail}
                   isOrganizer={meet.isOrganizer}
                   onAction={meet.act}
+                  sending={meet.sending}
                   state={meet.state}
                 />
               </SheetContent>
@@ -146,6 +148,13 @@ export function App() {
             isOrganizer={meet.isOrganizer}
             onAction={meet.act}
             onDismissQueued={meet.dismissQueued}
+            onManageParticipants={() => {
+              if (window.matchMedia("(min-width: 1280px)").matches) {
+                setDetailsOpen(true)
+              } else {
+                setMobileDetailsOpen(true)
+              }
+            }}
             onSend={meet.send}
             queued={meet.queued}
             sending={meet.sending}
@@ -159,6 +168,7 @@ export function App() {
             detail={meet.detail}
             isOrganizer={meet.isOrganizer}
             onAction={meet.act}
+            sending={meet.sending}
             state={meet.state}
           />
         )}

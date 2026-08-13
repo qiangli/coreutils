@@ -71,7 +71,10 @@ test.beforeAll(async () => {
     binary,
     ["-addr", `127.0.0.1:${port}`],
     {
-      cwd: repoRoot,
+      // A browser-created room defaults its minutes to ./docs/meetings. Keep
+      // that real behavior inside the disposable test root: closing a room in
+      // an end-to-end test must never dirty the source checkout.
+      cwd: meetDir,
       env: {
         ...process.env,
         BASHY_MEET_DIR: meetDir,
@@ -148,6 +151,78 @@ test("invites an agent from room details and shows it in the roster", async ({ p
 
   const sidebar = page.locator("aside").filter({ hasText: "bashy meet" }).first();
   await expect(sidebar.getByText(invitedAgent)).toBeVisible();
+
+  await page.getByRole("button", { name: `Remove ${invitedAgent}` }).first().click();
+  await expect(sidebar.getByText(invitedAgent)).toHaveCount(0);
+});
+
+test("room actions call their exact API routes and carry the draft", async ({ page }) => {
+  const topic = unique("Browser actions room");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  const cases = [
+    { label: "Hear from everyone", action: "round", body: undefined },
+    {
+      label: "Take a quick pulse",
+      action: "poll",
+      body: { question: "Ship today?", choices: ["Yes", "Needs more discussion"] },
+    },
+    {
+      label: "Ask the room",
+      action: "ask",
+      body: { question: "Ship today?" },
+    },
+    { label: "Find common ground", action: "converge", body: undefined },
+  ];
+
+  await page.getByLabel("Message the room").fill("Ship today?");
+  for (const item of cases) {
+    await page.route(`**/api/rooms/*/${item.action}`, async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ job: `test-${item.action}`, room: "test" }),
+      });
+    }, { times: 1 });
+    const requestPromise = page.waitForRequest((request) =>
+      request.url().endsWith(`/${item.action}`),
+    );
+    await page.getByRole("button", { name: "Room actions" }).click();
+    await page.getByRole("menuitem", { name: new RegExp(item.label) }).click();
+    const request = await requestPromise;
+    expect(request.method()).toBe("POST");
+    expect(request.postDataJSON()).toEqual(item.body ?? null);
+  }
+});
+
+test("records outcomes and reflects room closure without a reload", async ({ page }) => {
+  const topic = unique("Browser lifecycle room");
+  const decision = unique("Ship the browser actions");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await page.getByLabel("Message the room").fill(decision);
+  await page.getByRole("button", { name: "Room actions" }).click();
+  await page.getByRole("menuitem", { name: /Record decision/ }).click();
+  await expect(page.getByText(decision).last()).toBeVisible();
+
+  await page.getByRole("button", { name: "Close room" }).first().click();
+  await page.getByRole("dialog").getByRole("button", { name: "Close room" }).click();
+  await expect(page.getByLabel("Message the room")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Room closed" }).first()).toBeDisabled();
+});
+
+test("manage participants opens the hidden room details panel", async ({ page }) => {
+  const topic = unique("Browser manage room");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await page.getByRole("button", { name: "Hide room details" }).click();
+  await expect(page.getByLabel("Agent to invite").first()).not.toBeVisible();
+  await page.getByRole("button", { name: "Room actions" }).click();
+  await page.getByRole("menuitem", { name: /Manage participants/ }).click();
+  await expect(page.getByLabel("Agent to invite").first()).toBeVisible();
 });
 
 test("posts a human message through the composer and reloads it from the transcript", async ({ page }) => {
