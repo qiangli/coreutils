@@ -31,9 +31,13 @@ func runInEnv(t *testing.T, dir string, env []string, args ...string) (stdout, s
 
 func TestPwdDefaultPrintsDir(t *testing.T) {
 	dir := t.TempDir()
+	physical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, errb, code := runIn(t, dir)
-	if code != 0 || out != dir+"\n" || errb != "" {
-		t.Errorf("pwd = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, dir+"\n")
+	if code != 0 || out != physical+"\n" || errb != "" {
+		t.Errorf("pwd = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, physical+"\n")
 	}
 	out, _, code = runIn(t, dir, "-L")
 	if code != 0 || out != dir+"\n" {
@@ -55,10 +59,10 @@ func TestPwdPhysicalResolvesSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// default (-L): the logical name, symlink intact
+	// default (-P): the fully resolved name
 	out, _, code := runIn(t, link)
-	if code != 0 || out != link+"\n" {
-		t.Errorf("pwd = (%q, %d), want (%q, 0)", out, code, link+"\n")
+	if code != 0 || out != want+"\n" {
+		t.Errorf("pwd = (%q, %d), want (%q, 0)", out, code, want+"\n")
 	}
 	// -P: fully resolved
 	out, _, code = runIn(t, link, "-P")
@@ -77,6 +81,14 @@ func TestPwdPhysicalResolvesSymlinks(t *testing.T) {
 	out, _, _ = runIn(t, link, "-LP")
 	if out != want+"\n" {
 		t.Errorf("pwd -LP = %q, want physical %q", out, want+"\n")
+	}
+	out, _, _ = runInEnv(t, link, []string{"PWD=" + link, "POSIXLY_CORRECT=1"})
+	if out != link+"\n" {
+		t.Errorf("pwd POSIXLY_CORRECT=1 = %q, want logical %q", out, link+"\n")
+	}
+	out, _, _ = runInEnv(t, link, []string{"PWD=" + link, "POSIXLY_CORRECT="})
+	if out != link+"\n" {
+		t.Errorf("pwd POSIXLY_CORRECT= = %q, want logical %q", out, link+"\n")
 	}
 }
 
@@ -124,14 +136,27 @@ func TestPwdLogicalUsesValidatedPWD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, args := range [][]string{nil, {"-L"}} {
-		out, errb, code := runInEnv(t, physical, []string{"PWD=" + link}, args...)
-		if code != 0 || out != link+"\n" || errb != "" {
-			t.Errorf("pwd %v = (%q, %q, %d), want logical path", args, out, errb, code)
-		}
+	var out, errb string
+	var code int
+	out, errb, code = runInEnv(t, physical, []string{"PWD=" + link}, "-L")
+	if code != 0 || out != link+"\n" || errb != "" {
+		t.Errorf("pwd -L = (%q, %q, %d), want logical path", out, errb, code)
 	}
 
-	out, errb, code := runInEnv(t, physical, []string{"PWD=" + link}, "-P")
+	out, errb, code = runInEnv(t, physical, []string{"PWD=" + link})
+	if code != 0 || out != physical+"\n" || errb != "" {
+		t.Errorf("pwd = (%q, %q, %d), want physical path", out, errb, code)
+	}
+	out, errb, code = runInEnv(t, physical, []string{"PWD=" + link, "POSIXLY_CORRECT=1"})
+	if code != 0 || out != link+"\n" || errb != "" {
+		t.Errorf("pwd POSIXLY_CORRECT=1 = (%q, %q, %d), want logical path", out, errb, code)
+	}
+	out, errb, code = runInEnv(t, physical, []string{"PWD=" + link, "POSIXLY_CORRECT="})
+	if code != 0 || out != link+"\n" || errb != "" {
+		t.Errorf("pwd POSIXLY_CORRECT= = (%q, %q, %d), want logical path", out, errb, code)
+	}
+
+	out, errb, code = runInEnv(t, physical, []string{"PWD=" + link}, "-P")
 	if code != 0 || out != physical+"\n" || errb != "" {
 		t.Errorf("pwd -P = (%q, %q, %d), want %q", out, errb, code, physical+"\n")
 	}
@@ -171,9 +196,13 @@ func TestPwdLogicalRejectsInvalidPWD(t *testing.T) {
 
 func TestPwdIgnoresOperands(t *testing.T) {
 	dir := t.TempDir()
+	physical, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, errb, code := runIn(t, dir, "ignored")
-	if code != 0 || out != dir+"\n" || !strings.Contains(errb, "ignoring non-option arguments") {
-		t.Errorf("pwd ignored = (%q, %q, %d)", out, errb, code)
+	if code != 0 || out != physical+"\n" || !strings.Contains(errb, "ignoring non-option arguments") {
+		t.Errorf("pwd ignored = (%q, %q, %d), want %q", out, errb, code, physical+"\n")
 	}
 }
 

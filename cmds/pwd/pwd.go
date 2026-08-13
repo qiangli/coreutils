@@ -45,7 +45,14 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintln(rc.Err, "pwd: cannot determine current directory")
 		return 1
 	}
-	if lastLP(args) == 'L' {
+	defaultMode := byte('P')
+	for _, env := range rc.Env {
+		if strings.HasPrefix(env, "POSIXLY_CORRECT=") {
+			defaultMode = 'L'
+			break
+		}
+	}
+	if lastLP(args, defaultMode) == 'L' {
 		if logical := logicalDir(rc); logical != "" {
 			fmt.Fprintln(rc.Out, logical)
 			return 0
@@ -101,9 +108,9 @@ func physicalDir(dir string) (string, error) {
 
 // lastLP scans args for the last occurrence of -L/-P (or their long
 // forms) — pflag reports values but not order, and GNU specifies that
-// the last of the two wins. Default is 'L'.
-func lastLP(args []string) byte {
-	mode := byte('L')
+// the last of the two wins.
+func lastLP(args []string, defaultMode byte) byte {
+	mode := defaultMode
 	for _, a := range args {
 		switch {
 		case a == "--":
