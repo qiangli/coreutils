@@ -53,12 +53,12 @@ func TestResolvesMarkedAndNamespaced(t *testing.T) {
 // not caught up yet.
 func TestAliasesResolveToTheirConcept(t *testing.T) {
 	s := store(t)
-	c, ok := s.Resolve("chat") // renamed to `invoke` 2026-07-12
+	c, ok := s.Resolve("invoke") // compatibility alias for the canonical `chat`
 	if !ok {
-		t.Fatal(`the old name "chat" did not resolve — a rename must not orphan the word people still say`)
+		t.Fatal(`the compatibility name "invoke" did not resolve`)
 	}
-	if c.PrefLabel != "bashy invoke" {
-		t.Fatalf(`"chat" resolved to %q, want the concept it is now an alias of`, c.PrefLabel)
+	if c.PrefLabel != "bashy chat" {
+		t.Fatalf(`"invoke" resolved to %q, want the canonical chat concept`, c.PrefLabel)
 	}
 	if _, ok := s.Resolve("verify"); !ok {
 		t.Error(`the old name "verify" did not resolve to conform`)

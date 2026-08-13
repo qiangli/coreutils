@@ -183,7 +183,7 @@ func Build(cat *fleet.Catalog, synopses map[string]string, host string, ov Overl
 		}
 		s.add(c, ov)
 	}
-	// Atlas aliases (chat → invoke, verify → conform, docker → podman) are extra
+	// Atlas aliases (invoke → chat, verify → conform, docker → podman) are extra
 	// TERMS for an existing concept, not concepts of their own. Recording them this
 	// way is what lets an agent hear the OLD word and resolve the NEW thing.
 	for _, name := range atlas.VerbNames() {
