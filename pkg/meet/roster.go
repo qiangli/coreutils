@@ -212,6 +212,13 @@ func (sf *sessionFlags) routableRoster() error {
 	// Secretary and chair are agent seats too when set — Validate already
 	// forbids either from doubling as a participant — and a secretary that
 	// cannot be driven keeps no minutes.
+	if strings.TrimSpace(sf.secretary) != "" {
+		if ValidateRoomSecretary != nil {
+			if err := ValidateRoomSecretary(sf.secretary); err != nil {
+				return err
+			}
+		}
+	}
 	for _, seat := range []string{sf.secretary, sf.chair} {
 		if strings.TrimSpace(seat) == "" {
 			continue

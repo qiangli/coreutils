@@ -26,6 +26,10 @@ type RoomSecretaryStartRequest struct {
 // when synthesis work exists, so an idle room does not consume an LLM session.
 var StartRoomSecretary func(context.Context, RoomSecretaryStartRequest) (string, error)
 
+// ValidateRoomSecretary lets an embedding host tighten the generic routability
+// rule. Bashy uses it to require a named fleet agent rather than a bare tool.
+var ValidateRoomSecretary func(string) error
+
 func ensureRoomSecretary(ctx context.Context, st *State) error {
 	if st == nil || !st.SecretaryPending {
 		return nil
