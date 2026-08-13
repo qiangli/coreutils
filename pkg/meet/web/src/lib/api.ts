@@ -176,20 +176,55 @@ export function observeRoom(
   const url = new URL("observe", document.baseURI)
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
   url.searchParams.set("room", ref)
-  const socket = new WebSocket(url)
-  onStatus("connecting")
-  socket.addEventListener("open", () => onStatus("open"))
-  socket.addEventListener("close", () => onStatus("closed"))
-  socket.addEventListener("message", (message) => {
-    try {
-      const result = observeFrameSchema.safeParse(
-        JSON.parse(String(message.data)),
-      )
-      if (result.success) onFrame(result.data)
-      else console.warn("Ignored invalid meet frame", result.error)
-    } catch (error) {
-      console.warn("Ignored unreadable meet frame", error)
-    }
-  })
-  return () => socket.close()
+
+  let stopped = false
+  let socket: WebSocket | null = null
+  let retry: number | null = null
+  let retryDelay = 250
+
+  const connect = () => {
+    if (stopped) return
+    onStatus("connecting")
+    const next = new WebSocket(url)
+    socket = next
+    next.addEventListener("open", () => {
+      if (stopped || socket !== next) return
+      retryDelay = 250
+      onStatus("open")
+    })
+    next.addEventListener("close", (event) => {
+      if (socket === next) socket = null
+      if (stopped) return
+      onStatus("closed")
+      // A normal close is how the server says this room ended. Reopening the
+      // room changes the hook's observe revision and creates a fresh socket.
+      // Every other close (service restart, network loss, tunnel flap) retries
+      // automatically, so a browser tab never needs a manual refresh merely
+      // because its backend restarted.
+      if (event.code === 1000) return
+      retry = window.setTimeout(connect, retryDelay)
+      retryDelay = Math.min(retryDelay * 2, 5_000)
+    })
+    next.addEventListener("error", () => next.close())
+    next.addEventListener("message", (message) => {
+      try {
+        const result = observeFrameSchema.safeParse(
+          JSON.parse(String(message.data)),
+        )
+        if (result.success) onFrame(result.data)
+        else console.warn("Ignored invalid meet frame", result.error)
+      } catch (error) {
+        console.warn("Ignored unreadable meet frame", error)
+      }
+    })
+  }
+
+  connect()
+  return () => {
+    stopped = true
+    if (retry !== null) window.clearTimeout(retry)
+    socket?.close()
+    socket = null
+    onStatus("closed")
+  }
 }

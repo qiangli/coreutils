@@ -213,6 +213,14 @@ test("records outcomes and reflects room closure without a reload", async ({ pag
   await expect(reopen).toBeEnabled();
   await reopen.click();
   await expect(page.getByLabel("Message the room")).toBeEnabled();
+
+  // Closing ends the room's WebSocket normally. Reopening must establish a
+  // fresh observe stream; otherwise this reply exists only after a page reload.
+  await page.getByLabel("Message the room").fill(`@${primaryAgent} after reopen`);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText(/Current question: after reopen/).first()).toBeVisible({
+    timeout: 60_000,
+  });
 });
 
 test("manage participants opens the hidden room details panel", async ({ page }) => {

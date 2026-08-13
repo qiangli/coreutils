@@ -32,6 +32,7 @@ export function useMeetRoom() {
   const [live, setLive] = useState<LiveEvent | null>(null)
   const [connection, setConnection] =
     useState<ConnectionStatus>("connecting")
+  const [observeRevision, setObserveRevision] = useState(0)
   const [queued, setQueued] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -102,7 +103,7 @@ export function useMeetRoom() {
       active = false
       stop()
     }
-  }, [selectedRef])
+  }, [selectedRef, observeRevision])
 
   const send = useCallback(
     async (text: string, agent?: string) => {
@@ -155,6 +156,7 @@ export function useMeetRoom() {
           if (action === "open") {
             setEvents([])
             setLive(null)
+            setObserveRevision((current) => current + 1)
           }
           setRooms(await listRooms())
         }
