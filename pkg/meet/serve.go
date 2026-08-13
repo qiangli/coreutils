@@ -88,7 +88,11 @@ func newServeCmd() *cobra.Command {
 			"Reached directly on loopback it is ungated — that is the local development path.\n" +
 			"Reached through outpost it requires a vouched identity (coopauth).",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMeetServe(cmd.Context(), cmd.OutOrStdout(), bind, port)
+			surface := cmd.Root().Name()
+			if surface != "relay" {
+				surface = "meet"
+			}
+			return runMeetServe(cmd.Context(), cmd.OutOrStdout(), surface, bind, port)
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", defaultServePort, "listen port")
@@ -96,7 +100,7 @@ func newServeCmd() *cobra.Command {
 	return cmd
 }
 
-func runMeetServe(ctx context.Context, out io.Writer, bind string, port int) error {
+func runMeetServe(ctx context.Context, out io.Writer, surface, bind string, port int) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -115,9 +119,9 @@ func runMeetServe(ctx context.Context, out io.Writer, bind string, port int) err
 		Handler:           newServeHandler(ctx),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	fmt.Fprintf(out, "meet serve → http://%s/  (the room in a browser; ws://%s/observe?room=<ROOM> for the raw stream)\n", addr, addr)
+	fmt.Fprintf(out, "%s serve → http://%s/  (Bashy Relay; channels + direct messages)\n", surface, addr)
 	if spaFS == nil {
-		fmt.Fprintf(out, "meet serve → ⚠ built without the web UI; the API and /observe work, `/` explains how to get the SPA\n")
+		fmt.Fprintf(out, "%s serve → ⚠ built without the web UI; the API and live streams work, `/` explains how to get the SPA\n", surface)
 	}
 
 	errc := make(chan error, 1)
