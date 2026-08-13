@@ -113,6 +113,7 @@ export function useMeetRoom() {
       try {
         if (agent) {
           await runAction(selectedRef, "address", { agent, text })
+          setQueued(`Your message to ${agent} was accepted; the reply will appear here.`)
         } else {
           const event = await postMessage(selectedRef, state.human, text)
           setEvents((current) => addUnique(current, event))

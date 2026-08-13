@@ -271,6 +271,36 @@ test("addressed agent replies render in the browser", async ({ page }) => {
   });
 });
 
+test("routes an unoccupied permanent role instead of silently posting it", async ({ page }) => {
+  const topic = unique("Browser lazy role room");
+  await openMeet(page);
+  await createRoomFromUI(page, topic, primaryAgent);
+
+  await page.route("**/api/rooms/*/address", async (route) => {
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ job: "lazy-steward", room: "steward" }),
+    });
+  }, { times: 1 });
+  const requestPromise = page.waitForRequest((request) =>
+    request.url().endsWith("/address"),
+  );
+
+  await page.getByLabel("Message the room").fill("@steward what is the hostname?");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const request = await requestPromise;
+  expect(request.postDataJSON()).toEqual({
+    agent: "steward",
+    text: "what is the hostname?",
+  });
+  // Addressing is asynchronous, so the composer reports the accepted turn. The
+  // original @steward text must never be recorded as a plain human message.
+  await expect(page.getByText(/message to steward was accepted/i)).toBeVisible();
+  await expect(page.getByText("@steward what is the hostname?", { exact: true })).toHaveCount(0);
+});
+
 async function openMeet(page: Page) {
   await page.goto(`${baseURL}/?mock=0`);
   await expect(page.getByText("bashy meet")).toBeVisible();

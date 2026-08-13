@@ -147,11 +147,13 @@ the seat clears the alias without closing the room; a late predecessor cannot
 clear a successor's alias.
 
 If no agent currently holds `@steward`, the first addressed message lazily
-starts one instead of bouncing the human. `agent` pins a configured fleet name;
+selects and assigns one instead of bouncing the human. The addressed turn then
+invokes that concrete agent normally; no idle background process is kept merely
+to hold a room alias. `agent` pins a configured fleet name;
 `band` selects from that band or stronger. The built-in default is band 4 and,
 when several operable budget-eligible L4 agents exist, chooses uniformly among
 them. Set `"auto_start": false` to require an explicit `bashy steward start`.
-The lazy room steward is deliberately started without the stronger host steward
+The lazy room steward is deliberately assigned without the stronger host steward
 seat: it may manage this room, but cannot author the host authority journal until
 a human performs the attended grant/claim flow.
 To reassign a running room steward, update `agent` (or `band`), run

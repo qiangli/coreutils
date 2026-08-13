@@ -79,7 +79,14 @@ export function Composer({
         role: "role",
         live: true,
       }))
-      return [...participants, ...aliases]
+      // A permanent role name is routable before it has a holder: addressing
+      // it is the operation that lazily assigns the holder.  Keeping it out of
+      // this list made @steward impossible to start from the browser.
+      const lazyAliases =
+        state?.permanent && state.name && !(state.name in (state.role_holders ?? {}))
+          ? [{ name: state.name, role: "role", live: false }]
+          : []
+      return [...participants, ...aliases, ...lazyAliases]
     },
     [state],
   )
@@ -96,15 +103,15 @@ export function Composer({
   async function submit() {
     const value = text.trim()
     if (!value || sending) return
-    const addressed = agents.find((agent) =>
-      value
-        .toLocaleLowerCase()
-        .startsWith(`@${memberName(agent).toLocaleLowerCase()} `),
-    )
+    // Route every syntactically complete @name message to the address API.
+    // The server is authoritative about whether the name is a seated agent or
+    // a lazy permanent role.  An unknown/typoed name must produce a visible
+    // error; silently storing it as ordinary human prose looks exactly like an
+    // agent ignored the user.
+    const addressed = value.match(/^@([^\s]+)\s+([\s\S]+)$/)
     setText("")
     if (addressed) {
-      const name = memberName(addressed)
-      await onSend(value.slice(name.length + 2).trim(), name)
+      await onSend(addressed[2].trim(), addressed[1])
     } else {
       await onSend(value)
     }
@@ -122,7 +129,7 @@ export function Composer({
           <div className="mb-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
             <CircleDot className="size-3.5 shrink-0 animate-pulse" />
             <span className="flex-1">
-              <strong className="font-semibold">Queued.</strong> {queued}
+              <strong className="font-semibold">Working.</strong> {queued}
             </span>
             <button
               aria-label="Dismiss queued notice"
