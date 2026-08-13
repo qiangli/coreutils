@@ -33,7 +33,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	_ = contextStr // deterministic no-op on non-SELinux platforms
 	if len(operands) == 0 {
-		return tool.UsageError(rc, cmd, "missing operand")
+		fmt.Fprintln(rc.Err, "mkfifo: missing operand")
+		fmt.Fprintln(rc.Err, "Try 'mkfifo --help' for more information.")
+		return 1
 	}
 
 	mode := uint32(0o666)
@@ -69,11 +71,13 @@ func parseMode(rc *tool.RunContext, s string) (uint32, int) {
 		return uint32(n), -1
 	}
 	if s == "" || allDigits(s) {
-		return 0, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
+		fmt.Fprintln(rc.Err, "mkfifo: invalid mode")
+		return 0, 1
 	}
 	change, ok := parseSymbolicMode(s)
 	if !ok {
-		return 0, tool.UsageError(rc, cmd, "invalid mode '%s'", s)
+		fmt.Fprintln(rc.Err, "mkfifo: invalid mode")
+		return 0, 1
 	}
 	// POSIX specifies a symbolic mkfifo mode relative to an assumed a=rw
 	// initial mode. Unlike chmod clauses with an omitted who, -m ignores the

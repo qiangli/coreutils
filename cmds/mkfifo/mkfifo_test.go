@@ -236,15 +236,15 @@ func TestMkfifoOctalSpecialBits(t *testing.T) {
 func TestMkfifoErrors(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir)
-	if code != 2 || !strings.Contains(errb, "missing operand") {
+	if code != 1 || errb != "mkfifo: missing operand\nTry 'mkfifo --help' for more information.\n" {
 		t.Errorf("no args: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, dir, "-m", "999", "pipe")
-	if code != 2 || !strings.Contains(errb, "invalid mode '999'") {
+	if code != 1 || errb != "mkfifo: invalid mode\n" {
 		t.Errorf("invalid mode: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, dir, "-m", "u+q", "pipe")
-	if code != 2 || !strings.Contains(errb, "invalid mode 'u+q'") {
+	if code != 1 || errb != "mkfifo: invalid mode\n" {
 		t.Errorf("invalid symbolic mode: code=%d err=%q", code, errb)
 	}
 	_, errb, code = runTool(t, dir, "--frobnicate", "pipe")
