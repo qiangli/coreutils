@@ -184,17 +184,30 @@ func defaultHeader(s string) string {
 
 func printTable(rc *tool.RunContext, ps []process, cols []column) {
 	w := tabwriter.NewWriter(rc.Out, 0, 1, 1, ' ', tabwriter.AlignRight)
-	for i, c := range cols {
-		if i > 0 {
-			fmt.Fprint(w, "\t")
+	showHeader := false
+	for _, c := range cols {
+		if c.header != "" {
+			showHeader = true
+			break
 		}
-		fmt.Fprint(w, c.header)
 	}
-	fmt.Fprintln(w)
-	for _, p := range ps {
+	if showHeader {
 		for i, c := range cols {
 			if i > 0 {
 				fmt.Fprint(w, "\t")
+			}
+			fmt.Fprint(w, c.header)
+		}
+		fmt.Fprintln(w)
+	}
+	for _, p := range ps {
+		for i, c := range cols {
+			if i > 0 {
+				if showHeader {
+					fmt.Fprint(w, "\t")
+				} else {
+					fmt.Fprint(w, " ")
+				}
 			}
 			fmt.Fprint(w, value(p, c.name))
 		}
