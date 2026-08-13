@@ -125,10 +125,10 @@ test("creates a room from the sidebar and selects it with one agent seated", asy
   const topic = unique("Browser created room");
   await openMeet(page);
 
-  await page.getByRole("button", { name: "New room" }).click();
+  await page.getByRole("button", { name: "New meeting" }).click();
   await page.getByLabel("Topic").fill(topic);
   await page.getByLabel("Agents").selectOption(primaryAgent);
-  await page.getByRole("button", { name: "Open room" }).click();
+  await page.getByRole("button", { name: "Open meeting" }).click();
 
   const roomButton = page.getByRole("button", { name: new RegExp(topic) });
   const sidebar = page.locator("aside").filter({ hasText: "Bashy Relay" }).first();
@@ -282,7 +282,8 @@ test("addressed agent replies render in the browser", async ({ page }) => {
 test("opens a Chat-backed direct message and streams its reply", async ({ page }) => {
   await openMeet(page);
 
-  await page.getByRole("button", { name: "Start a direct message" }).click();
+  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
+  await page.getByRole("menuitem", { name: /Chat/ }).click();
   await page.getByRole("menuitem", { name: new RegExp(primaryAgent) }).click();
   await expect(page.getByText("Direct message", { exact: true }).first()).toBeVisible();
 
@@ -297,12 +298,16 @@ test("Relay menu navigates to Meet channels and Chat direct messages", async ({ 
   await openMeet(page);
 
   await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
-  await page.getByRole("menuitem", { name: "Direct messages · Chat" }).click();
+  await page.getByRole("menuitem", { name: /Chat/ }).click();
+  await expect(page.getByText("Past conversations", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Meetings", { exact: true }).first()).toHaveCount(0);
   await expect(page.getByRole("heading", { name: primaryAgent })).toBeVisible();
   await expect(page.locator("textarea")).toBeEnabled();
 
   await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
-  await page.getByRole("menuitem", { name: "Channels · Meet" }).click();
+  await page.getByRole("menuitem", { name: /Meet/ }).click();
+  await expect(page.getByText("Meetings", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Past conversations", { exact: true }).first()).toHaveCount(0);
   await expect(page.getByLabel("Message the room")).toBeEnabled();
 });
 
@@ -323,8 +328,8 @@ test("an empty legacy DM transcript never renders raw schema JSON", async ({ pag
       }),
     });
   }, { times: 1 });
-  await page.getByRole("button", { name: "Start a direct message" }).click();
-  await page.getByRole("menuitem", { name: new RegExp(primaryAgent) }).click();
+  await page.getByRole("button", { name: "Open Bashy Relay menu" }).click();
+  await page.getByRole("menuitem", { name: /Chat/ }).click();
   await expect(page.locator("textarea")).toBeEnabled();
   await expect(page.getByText(/expected.*array|invalid_type/i)).toHaveCount(0);
 });
@@ -365,10 +370,10 @@ async function openMeet(page: Page) {
 }
 
 async function createRoomFromUI(page: Page, topic: string, agents: string) {
-  await page.getByRole("button", { name: "New room" }).click();
+  await page.getByRole("button", { name: "New meeting" }).click();
   await page.getByLabel("Topic").fill(topic);
   await page.getByLabel("Agents").selectOption(agents.split(/[,\s]+/).filter(Boolean));
-  await page.getByRole("button", { name: "Open room" }).click();
+  await page.getByRole("button", { name: "Open meeting" }).click();
   await expect(
     page.getByRole("button", { name: new RegExp(topic) }),
   ).toBeVisible();

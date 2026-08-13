@@ -42,12 +42,14 @@ interface RoomSidebarProps {
   dms: DMSummary[]
   selectedRef: string
   selectedKind: "room" | "dm"
+  viewKind: "room" | "dm"
   state: State | null
   connection: ConnectionStatus
   usingMock: boolean
   onSelect: (ref: string) => void
   onSelectDM: (agent: string) => void
   onCreateDM: (agent: string) => Promise<boolean>
+  onModeChange: (kind: "room" | "dm") => void
   className?: string
 }
 
@@ -59,23 +61,27 @@ export function RoomSidebar({
   dms,
   selectedRef,
   selectedKind,
+  viewKind,
   state,
   connection,
   usingMock,
   onSelect,
   onSelectDM,
   onCreateDM,
+  onModeChange,
   className,
 }: RoomSidebarProps) {
   const [newRoomOpen, setNewRoomOpen] = useState(false)
   const [dmMenuOpen, setDMMenuOpen] = useState(false)
 
   function openChannels() {
+    onModeChange("room")
     if (rooms[0]) onSelect(rooms[0].id)
     else window.setTimeout(() => setNewRoomOpen(true), 0)
   }
 
   function openDirectMessages() {
+    onModeChange("dm")
     if (dms[0]) onSelectDM(dms[0].agent)
     else window.setTimeout(() => setDMMenuOpen(true), 0)
   }
@@ -95,11 +101,13 @@ export function RoomSidebar({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
-            <DropdownMenuItem onSelect={openChannels}>
-              <Hash className="size-3.5" /> Channels · Meet
+            <DropdownMenuItem className={cn(viewKind === "room" && "bg-accent")} onSelect={openChannels}>
+              <Hash className="size-3.5" /> Meet
+              {viewKind === "room" && <span className="ml-auto text-[10px]">selected</span>}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={openDirectMessages}>
-              <Bot className="size-3.5" /> Direct messages · Chat
+            <DropdownMenuItem className={cn(viewKind === "dm" && "bg-accent")} onSelect={openDirectMessages}>
+              <Bot className="size-3.5" /> Chat
+              {viewKind === "dm" && <span className="ml-auto text-[10px]">selected</span>}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -122,8 +130,8 @@ export function RoomSidebar({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="px-3 py-5">
-          <div className="mb-2 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
-            <span>Channels</span>
+          {viewKind === "room" ? <><div className="mb-2 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
+            <span>Meetings</span>
             <div className="flex items-center gap-1">
               <MessageSquareText className="size-3.5" />
               <NewRoomDialog agents={agents} creating={creating} onCreate={onCreate} open={newRoomOpen} onOpenChange={setNewRoomOpen} />
@@ -166,10 +174,8 @@ export function RoomSidebar({
                 </button>
               )
             })}
-          </div>
-
-          <div className="mb-2 mt-7 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
-            <span>Direct messages</span>
+          </div></> : <><div className="mb-2 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
+            <span>Past conversations</span>
             <DropdownMenu onOpenChange={setDMMenuOpen} open={dmMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <Button aria-label="Start a direct message" className="size-6 text-sidebar-foreground/55" size="icon" variant="ghost">
@@ -197,8 +203,10 @@ export function RoomSidebar({
               )
             })}
           </div>
+          {dms.length === 0 && <p className="px-2 py-3 text-[11px] leading-5 text-sidebar-foreground/45">No chats yet. Start one with a registered agent.</p>}
+          </>}
 
-          {selectedKind === "room" && <><div className="mb-2 mt-7 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
+          {viewKind === "room" && selectedKind === "room" && <><div className="mb-2 mt-7 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">
             <span>In this room</span>
             <Radio className="size-3.5" />
           </div>
@@ -254,7 +262,7 @@ export function RoomSidebar({
         </div>
       </ScrollArea>
       <div className="border-t border-sidebar-border px-5 py-3.5 text-[10px] leading-relaxed text-sidebar-foreground/38">
-        Channels for groups. DMs for one-to-one work.
+        {viewKind === "room" ? "Meet · shared rooms and outcomes." : "Chat · private one-to-one conversations."}
       </div>
     </aside>
   )

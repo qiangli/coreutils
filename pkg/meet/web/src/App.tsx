@@ -41,9 +41,11 @@ export function App() {
           onCreate={meet.createRoom}
           onSelect={meet.selectRoom}
           onSelectDM={meet.selectDM}
+          onModeChange={meet.selectMode}
           rooms={meet.rooms}
           selectedRef={meet.selectedRef}
           selectedKind={meet.selectedKind}
+          viewKind={meet.viewKind}
           state={meet.state}
           usingMock={meet.usingMock}
         />
@@ -77,9 +79,11 @@ export function App() {
                   onCreate={meet.createRoom}
                   onSelect={meet.selectRoom}
                   onSelectDM={meet.selectDM}
+                  onModeChange={meet.selectMode}
                   rooms={meet.rooms}
                   selectedRef={meet.selectedRef}
                   selectedKind={meet.selectedKind}
+                  viewKind={meet.viewKind}
                   state={meet.state}
                   usingMock={meet.usingMock}
                 />

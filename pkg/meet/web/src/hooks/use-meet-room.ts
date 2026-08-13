@@ -36,6 +36,7 @@ export function useMeetRoom() {
   const [agents, setAgents] = useState<AgentOption[]>([])
   const [selectedRef, setSelectedRef] = useState("")
   const [selectedKind, setSelectedKind] = useState<"room" | "dm">("room")
+  const [viewKind, setViewKind] = useState<"room" | "dm">("room")
   const [detail, setDetail] = useState<RoomDetail | null>(null)
   const [state, setState] = useState<State | null>(null)
   const [events, setEvents] = useState<MeetEvent[]>([])
@@ -227,6 +228,7 @@ export function useMeetRoom() {
         const nextRooms = await listRooms()
         setRooms(nextRooms)
         setSelectedKind("room")
+        setViewKind("room")
         setSelectedRef(created.id)
         return true
       } catch (reason) {
@@ -246,6 +248,7 @@ export function useMeetRoom() {
       await createDMRequest(agent)
       setDMs(await listDMs())
       setSelectedKind("dm")
+      setViewKind("dm")
       setSelectedRef(agent)
       return true
     } catch (reason) {
@@ -267,8 +270,10 @@ export function useMeetRoom() {
     dms,
     selectedRef,
     selectedKind,
-    selectRoom: (ref: string) => { setSelectedKind("room"); setSelectedRef(ref) },
-    selectDM: (agent: string) => { setSelectedKind("dm"); setSelectedRef(agent) },
+    viewKind,
+    selectMode: setViewKind,
+    selectRoom: (ref: string) => { setViewKind("room"); setSelectedKind("room"); setSelectedRef(ref) },
+    selectDM: (agent: string) => { setViewKind("dm"); setSelectedKind("dm"); setSelectedRef(agent) },
     detail,
     state,
     events,

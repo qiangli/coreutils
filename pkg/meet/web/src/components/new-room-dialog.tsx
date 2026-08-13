@@ -27,10 +27,9 @@ interface NewRoomDialogProps {
  * be started from the CLI, which left the web surface able to join a
  * conversation but never to begin one.
  *
- * There is deliberately no room-type chooser. The model has ONE room type — a
- * room with a single agent is the 1:1 assistant, the same room with three is a
- * meeting, and the roster stays mutable afterwards — so asking up front would
- * invent a distinction the server does not have.
+ * Relay distinguishes a governed one-agent Chat from a Meet room. A meeting
+ * may begin with one agent and grow, but it owns shared roster/outcome/minutes
+ * semantics from creation; it is never stored as a Chat conversation.
  */
 export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen, onOpenChange }: NewRoomDialogProps) {
   const [internalOpen, setInternalOpen] = useState(false)
@@ -57,7 +56,7 @@ export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen
     <Dialog onOpenChange={setOpen} open={open}>
       <DialogTrigger asChild>
         <Button
-          aria-label="New room"
+          aria-label="New meeting"
           className="size-7 text-sidebar-foreground/55 hover:text-sidebar-foreground"
           size="icon-sm"
           variant="ghost"
@@ -68,10 +67,10 @@ export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen
       <DialogContent className="sm:max-w-[440px]">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>New room</DialogTitle>
+            <DialogTitle>New meeting</DialogTitle>
             <DialogDescription>
-              One agent is a 1:1 conversation; add more for a meeting. You can
-              invite others once it is running.
+              Meet is for a shared room with membership, roles, outcomes, and
+              optional minutes. For a plain one-to-one conversation, use Chat.
             </DialogDescription>
           </DialogHeader>
 
@@ -120,7 +119,7 @@ export function NewRoomDialog({ agents, creating, onCreate, open: controlledOpen
               Cancel
             </Button>
             <Button disabled={!ready || creating} type="submit">
-              {creating ? "Opening…" : "Open room"}
+              {creating ? "Opening…" : "Open meeting"}
             </Button>
           </DialogFooter>
         </form>
