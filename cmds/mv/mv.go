@@ -192,6 +192,7 @@ func (m *mover) move(src, dst string) {
 			}
 		}
 		if m.interactive && !m.confirm(dst) {
+			m.failed = true
 			return
 		}
 		if m.backup && !m.backupDest(dst) {

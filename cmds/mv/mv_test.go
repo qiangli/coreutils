@@ -16,12 +16,16 @@ import (
 // runTool is the canonical test harness shape for cmds packages:
 // output is captured after Run returns.
 func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
+	return runToolInput(t, dir, "", args...)
+}
+
+func runToolInput(t *testing.T, dir, input string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
@@ -178,8 +182,33 @@ func TestMvBackupSuffixUpdateAndInteractive(t *testing.T) {
 	write(t, src, "prompted")
 	write(t, dst, "keep")
 	_, errb, code = runTool(t, dir, "-i", "a", "b")
-	if code != 0 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
+	if code != 1 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
 		t.Fatalf("mv -i without yes should skip: code=%d err=%q", code, errb)
+	}
+}
+
+func TestMvInteractiveRefusalContinuesAndFails(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "new-a")
+	write(t, filepath.Join(dir, "b"), "new-b")
+	write(t, filepath.Join(dir, "d", "a"), "old-a")
+	write(t, filepath.Join(dir, "d", "b"), "old-b")
+
+	_, errb, code := runToolInput(t, dir, "n\ny\n", "-i", "a", "b", "d")
+	if code != 1 {
+		t.Fatalf("mv -i with one refusal: code=%d err=%q", code, errb)
+	}
+	if strings.Count(errb, "overwrite '") != 2 {
+		t.Fatalf("mv -i should prompt for both destinations: %q", errb)
+	}
+	if read(t, filepath.Join(dir, "a")) != "new-a" || read(t, filepath.Join(dir, "d", "a")) != "old-a" {
+		t.Fatal("refused source should remain and destination should be unchanged")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "b")); !os.IsNotExist(err) {
+		t.Fatal("accepted source should be removed")
+	}
+	if read(t, filepath.Join(dir, "d", "b")) != "new-b" {
+		t.Fatal("accepted destination should be replaced")
 	}
 }
 

@@ -109,7 +109,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
 | `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 1 | 8 |
-| `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 1 | 22 |
+| `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 1 | 23 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 16 |
 | `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 12 |
