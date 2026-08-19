@@ -52,8 +52,8 @@ func TestPathchkEmptyPathnameOptions(t *testing.T) {
 		args []string
 		code int
 	}{
-		{name: "default", args: []string{""}, code: 0},
-		{name: "posix portability", args: []string{"-p", ""}, code: 0},
+		{name: "default", args: []string{""}, code: 1},
+		{name: "posix portability", args: []string{"-p", ""}, code: 1},
 		{name: "special portability", args: []string{"-P", ""}, code: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

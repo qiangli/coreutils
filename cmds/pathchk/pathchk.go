@@ -59,9 +59,8 @@ func run(rc *tool.RunContext, args []string) int {
 
 func checkDefault(rc *tool.RunContext, p string) bool {
 	if p == "" {
-		// POSIX reserves the empty-pathname check for -P. Historically,
-		// neither the default checks nor -p diagnose an empty operand.
-		return true
+		fmt.Fprintf(rc.Err, "pathchk: %q: No such file or directory\n", p)
+		return false
 	}
 	limit := defaultPathMax()
 	nameLimit := 255
@@ -133,7 +132,8 @@ func invalidDirectoryPrefix(dir string) (path, reason string) {
 
 func checkPOSIX(rc *tool.RunContext, p string) bool {
 	if p == "" {
-		return true
+		fmt.Fprintln(rc.Err, "pathchk: empty file name")
+		return false
 	}
 	// _POSIX_PATH_MAX counts the terminating NUL byte, so a pathname of
 	// exactly posixPathMax characters needs posixPathMax+1 bytes of storage

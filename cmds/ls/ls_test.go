@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -97,6 +98,41 @@ func TestAllUnsortedCluster(t *testing.T) {
 		if !strings.Contains(out, name+"\n") {
 			t.Fatalf("ls -aU output missing %q:\n%s", name, out)
 		}
+	}
+}
+
+func TestSortNonePreservesDirectoryOrder(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"b~", "a", "link", "dir"} {
+		path := filepath.Join(dir, name)
+		if name == "dir" {
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.WriteFile(path, []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	f, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := f.Readdirnames(-1)
+	if closeErr := f.Close(); err != nil {
+		t.Fatal(err)
+	} else if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	out, errb, code := runToolAt(t, dir, "--sort=none")
+	if code != 0 || errb != "" {
+		t.Fatalf("ls --sort=none: code=%d err=%q", code, errb)
+	}
+	got := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ls --sort=none = %q, want directory order %q", got, want)
 	}
 }
 

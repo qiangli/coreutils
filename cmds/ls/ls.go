@@ -558,9 +558,22 @@ func (l *lister) listDir(display, full string, header bool) {
 	if header {
 		fmt.Fprintf(l.rc.Out, "%s:\n", display)
 	}
-	des, err := os.ReadDir(full)
+	// os.ReadDir sorts by filename. GNU's unsorted modes (-U, -f, and
+	// --sort=none) preserve the directory enumeration order instead, so use
+	// Readdirnames and only sort when sortEntries is asked to do so.
+	dir, err := os.Open(full)
 	if err != nil {
 		l.fail(1, "cannot open directory '%s': %s", display, errMsg(err))
+		return
+	}
+	names, err := dir.Readdirnames(-1)
+	closeErr := dir.Close()
+	if err != nil {
+		l.fail(1, "cannot read directory '%s': %s", display, errMsg(err))
+		return
+	}
+	if closeErr != nil {
+		l.fail(1, "cannot close directory '%s': %s", display, errMsg(closeErr))
 		return
 	}
 	var ents []entry
@@ -578,8 +591,7 @@ func (l *lister) listDir(display, full string, header bool) {
 			}
 		}
 	}
-	for _, de := range des {
-		name := de.Name()
+	for _, name := range names {
 		if !l.opt.all && !l.opt.almostAll && strings.HasPrefix(name, ".") {
 			continue
 		}
