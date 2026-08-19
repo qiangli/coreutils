@@ -3,6 +3,7 @@ package prcmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,16 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type firstWriteSignal struct{ ch chan struct{} }
+
+func (w firstWriteSignal) Write(p []byte) (int, error) {
+	select {
+	case w.ch <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
 
 func runPR(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
 	t.Helper()
@@ -60,6 +71,42 @@ func TestPRDefaultPageStructure(t *testing.T) {
 	}
 	if n := strings.Count(out, "\n"); n != 66 {
 		t.Fatalf("pr default page has %d lines, want 66", n)
+	}
+}
+
+func TestPRStreamsCompletePageBeforeEOF(t *testing.T) {
+	// A pipe or FIFO producer may remain open while consuming pr's output.
+	// GNU pr emits each completed page without waiting for input EOF.
+	reader, writer := io.Pipe()
+	wrote := make(chan struct{}, 1)
+	done := make(chan int, 1)
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{In: reader, Out: firstWriteSignal{ch: wrote}, Err: io.Discard},
+	}
+	go func() { done <- cmd.Run(rc, nil) }()
+
+	// Default pages contain 56 body lines. Keep the input open after one page
+	// to prove output does not depend on EOF.
+	if _, err := io.WriteString(writer, strings.Repeat("x\n", 56)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-wrote:
+	case <-time.After(time.Second):
+		writer.Close()
+		t.Fatal("pr produced no complete page while pipe remained open")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("pr exited %d", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pr did not finish after pipe EOF")
 	}
 }
 
@@ -183,6 +230,11 @@ func TestPRInputFormFeedsBreakPages(t *testing.T) {
 	}
 	if n := strings.Count(out, "\n"); n != 60 {
 		t.Fatalf("pr double form feed has %d lines, want 60", n)
+	}
+	// A leading form feed represents an empty first page once data follows.
+	out, _, code = runPR(t, t.TempDir(), "\fb\n", "-l", "20")
+	if code != 0 || !strings.Contains(out, "Page 2") || strings.Count(out, "\n") != 40 {
+		t.Fatalf("pr leading form feed = (%q, %d), want empty page then data page", out, code)
 	}
 }
 

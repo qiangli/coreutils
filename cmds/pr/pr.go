@@ -298,6 +298,14 @@ func open(rc *tool.RunContext, name string) (io.Reader, io.Closer, string, time.
 }
 
 func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o options) error {
+	// Single-column pr is a page stream: it must not wait for EOF before
+	// producing the first complete page. Besides bounding memory, this is
+	// required for pipes and FIFOs whose producer remains open while consuming
+	// pr's output. Multi-column layouts need page-wide lookahead and retain the
+	// buffered path below.
+	if o.columns == 1 {
+		return printSingleColumn(r, w, label, stamp, o)
+	}
 	segments, err := readSegments(r, o)
 	if err != nil {
 		return err
@@ -326,59 +334,145 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 	if o.doubleSpace {
 		physPerLine = 2
 	}
+	return printColumns(segments, w, headerLabel, stamp, o, physPerLine)
+}
+
+func printSingleColumn(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o options) error {
+	headerLabel := label
+	if o.headerSet {
+		headerLabel = o.header
+	}
+	physPerLine := 1
+	if o.doubleSpace {
+		physPerLine = 2
+	}
 	physBudget := o.bodyLines * physPerLine
-	if o.columns > 1 {
-		return printColumns(segments, w, headerLabel, stamp, o, physPerLine)
+	page, lineNo := 1, o.firstLineNum
+	lines := make([]string, 0, o.bodyLines)
+	segmentHadData := false
+	pendingBreaks, pendingEmptySegments := 0, 0
+
+	emitPage := func(chunk []string) error {
+		emit := inPageRange(page, o)
+		if emit && !o.omitHeader {
+			if _, err := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(headerLabel, stamp, page, o)); err != nil {
+				return err
+			}
+		}
+		for _, line := range chunk {
+			if emit {
+				if _, err := w.WriteString(formatLine(line, lineNo, o)); err != nil {
+					return err
+				}
+				if o.doubleSpace {
+					if _, err := w.WriteString("\n"); err != nil {
+						return err
+					}
+				}
+			}
+			lineNo++
+		}
+		if emit && !o.omitHeader {
+			if o.formFeed {
+				if _, err := w.WriteString("\f"); err != nil {
+					return err
+				}
+			} else {
+				pad := physBudget - len(chunk)*physPerLine + linesPerTrailer
+				if _, err := w.WriteString(strings.Repeat("\n", pad)); err != nil {
+					return err
+				}
+			}
+		}
+		page++
+		// Expose each completed page to a downstream pipe immediately.
+		return w.Flush()
+	}
+	resolveBreaks := func() error {
+		if pendingBreaks == 0 {
+			return nil
+		}
+		if o.omitHeader {
+			if inPageRange(page-1+pendingEmptySegments, o) {
+				if _, err := w.WriteString(strings.Repeat("\f", pendingBreaks)); err != nil {
+					return err
+				}
+			}
+		} else {
+			for i := 0; i < pendingEmptySegments; i++ {
+				if err := emitPage(nil); err != nil {
+					return err
+				}
+			}
+		}
+		pendingBreaks, pendingEmptySegments = 0, 0
+		return w.Flush()
+	}
+	addLine := func(line string) error {
+		if err := resolveBreaks(); err != nil {
+			return err
+		}
+		segmentHadData = true
+		lines = append(lines, line)
+		if len(lines) == o.bodyLines {
+			if err := emitPage(lines); err != nil {
+				return err
+			}
+			lines = lines[:0]
+		}
+		return nil
+	}
+	endSegment := func() error {
+		if len(lines) > 0 {
+			if err := emitPage(lines); err != nil {
+				return err
+			}
+			lines = lines[:0]
+		} else if !segmentHadData {
+			pendingEmptySegments++
+		}
+		segmentHadData = false
+		pendingBreaks++
+		return nil
 	}
 
-	page := 1
-	lineNo := o.firstLineNum
-	for si, seg := range segments {
-		for _, chunk := range chunkLines(seg, o.bodyLines) {
-			emit := inPageRange(page, o)
-			if emit && !o.omitHeader {
-				if _, werr := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(headerLabel, stamp, page, o)); werr != nil {
-					return werr
-				}
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadString('\n')
+		if len(line) > 0 {
+			if o.expandTabs {
+				line = expandTabs(line, 8)
 			}
-			for _, line := range chunk {
-				if emit {
-					if _, werr := w.WriteString(formatLine(line, lineNo, o)); werr != nil {
-						return werr
-					}
-					if o.doubleSpace {
-						if _, werr := w.WriteString("\n"); werr != nil {
-							return werr
+			frags := strings.Split(line, "\f")
+			for i, frag := range frags {
+				if i < len(frags)-1 {
+					if frag != "" {
+						if err := addLine(frag + "\n"); err != nil {
+							return err
 						}
 					}
-				}
-				lineNo++
-			}
-			if emit && !o.omitHeader {
-				// Trailer: pad every page (including the last) to full
-				// page length, or emit one form feed with -F.
-				if o.formFeed {
-					if _, werr := w.WriteString("\f"); werr != nil {
-						return werr
+					if o.ffBreaks {
+						if err := endSegment(); err != nil {
+							return err
+						}
 					}
-				} else {
-					pad := physBudget - len(chunk)*physPerLine + linesPerTrailer
-					if _, werr := w.WriteString(strings.Repeat("\n", pad)); werr != nil {
-						return werr
+				} else if frag != "" {
+					if err := addLine(frag); err != nil {
+						return err
 					}
 				}
 			}
-			page++
 		}
-		if o.omitHeader && o.ffBreaks && si < len(segments)-1 {
-			if inPageRange(page-1, o) {
-				if _, werr := w.WriteString("\f"); werr != nil {
-					return werr
-				}
+		if err == io.EOF {
+			if len(lines) > 0 {
+				return emitPage(lines)
 			}
+			return nil
+		}
+		if err != nil {
+			return err
 		}
 	}
-	return nil
 }
 
 func printMerge(readers []io.Reader, w *bufio.Writer, o options) error {
