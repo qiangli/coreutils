@@ -4,7 +4,7 @@ agents:
     model: glm-5.3
     display: "ycode · glm-5.3"
     ledger:
-      reliability: unmeasured
+      reliability: medium
       notes: |
         Successor to ycode-glm-5.2 (Xavier), added as a SECOND agent rather than by
         re-pointing the first. Same lane, same reasoning: GLM is an API-key model and
@@ -31,7 +31,8 @@ agents:
         alias `ycode-glm` moves here on its own, so callers who address the FAMILY
         follow the upgrade while callers who pinned a VERSION stay pinned.
 
-        Live-verified 2026-08-19: the binding resolves and the model answers (200,
-        finish_reason=stop). That is reachability, NOT capability — nothing has run a
-        gate on 5.3 yet, so reliability stays `unmeasured` and the band stays `L2~`.
-        Measure CONVERGENCE first: 5.2's ceiling was that it never stopped.
+        Measured 2026-08-19: bounded coder and integration-lead trials converged
+        without exact tool-call repetition. The deciding lead trial finished in
+        121.648s/480s with zero intervention, rejected unsafe test tampering, preserved
+        immutable inputs, and passed the external objective gate. Route at L3 for
+        coding and conductor work; this evidence does not establish L4 stewardship.

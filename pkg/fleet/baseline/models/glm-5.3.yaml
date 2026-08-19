@@ -1,26 +1,19 @@
 name: glm-5.3
 family: glm
 version: "5.3"
-band: 2
-band_source: declared
-# DECLARED, not measured — and the distinction is the whole point of adding this as a
-# NEW model file rather than editing glm-5.2's.
+band: 3
+band_source: measured
+# L3 MEASURED 2026-08-19. GLM-5.3 fixed the convergence failure that kept 5.2
+# at L2: the deciding integration-lead exam finished in 121.648s under a 480s
+# cap, made 10 tool calls with 10 exact-distinct signatures (1.00x repeat
+# ratio), needed zero intervention, rejected a test-tampering lane, preserved
+# immutable inputs, and passed the external objective gate. Earlier bounded
+# coder/lead trials also converged at 1.00x exact-repeat ratio; fixture defects,
+# not model behavior, invalidated two of those lead wrapper results.
 #
-# The band carries over from glm-5.2 as a PRIOR, because a successor in the same family
-# is the best guess available and a missing band routes nothing. It is not evidence.
-# glm-5.2's L2 was earned over three exams (see glm-5.2.yaml, which stays exactly as it
-# is — that file is the record of what 5.2 did, and a version bump must not overwrite
-# a measurement it did not repeat).
-#
-# TO PROMOTE OR DEMOTE THIS: run the ladder, then set band_source: measured with the
-# evidence inline. Until then every surface renders it `L2~` — the tilde IS the claim
-# that nobody has checked.
-#
-# The open question inherited from 5.2, and the one worth measuring FIRST: 5.2 could
-# not converge. It hit the iteration cap in 3/3 exams and delivered no report, which is
-# why it is L2 and why it is never seated as conductor or steward. Whether 5.3 fixed
-# that is the difference between a coder and a lead, so measure convergence before
-# quality.
+# Route as a coder or conductor. Do not infer L4/steward judgment from this
+# evidence: the measured ladder proves bounded decomposition, review, and
+# synthesis, not autonomous portfolio ownership over a long horizon.
 
 display: GLM-5.3 (z.ai)
 provider: openai-compat
