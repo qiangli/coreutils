@@ -374,9 +374,9 @@ func newSprintCloseCmd(ending bool) *cobra.Command {
 				// CLOSING CONDITIONS: committed, pushed, pinned. A green gate
 				// says the code works; it says nothing about whether the work
 				// was PUT anywhere the next sprint will find it.
-				var repoPath = func(name string) (string, bool) {
-					dir, ok := queueDirForRepoName(name)
-					if !ok {
+				var repoPath = func(run sprintRun) (string, bool) {
+					dir, err := weaveQueueDirForSprintRun(run)
+					if err != nil {
 						return "", false
 					}
 					return weaveRepoRootForQueue(dir)

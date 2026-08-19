@@ -50,10 +50,12 @@ type weaveStory struct {
 
 // sprintRun links a sprint to a weave run (issue) in a SPECIFIC repo.
 // A sprint spans multiple repos; each repo keeps its own per-repo weave
-// queue, so a link is (repo, id) — e.g. {repo-name, 11}.
+// queue, so a durable link is (opaque queue tag, id). Repo remains the human
+// label; Queue prevents an old same-named checkout from changing its meaning.
 type sprintRun struct {
-	Repo string `json:"repo"`
-	ID   int64  `json:"id"`
+	Repo  string `json:"repo"`
+	ID    int64  `json:"id"`
+	Queue string `json:"queue,omitempty"` // stable opaque <repo>-<path-hash> queue identity
 }
 
 // weaveStoryLease is the conductor lease on a sprint. Liveness is a
@@ -610,7 +612,7 @@ at the OS level if it is still polling.`,
 			return runWeaveStoryMutate(cmd, id, "sprint abort", &flags, func(s *weaveStory) (string, error) {
 				var killed, failed []string
 				for _, r := range s.Runs {
-					qd, derr := weaveQueueDirForRepo(r.Repo)
+					qd, derr := weaveQueueDirForSprintRun(r)
 					if derr != nil {
 						failed = append(failed, fmt.Sprintf("%s#%d (%v)", r.Repo, r.ID, derr))
 						continue
@@ -637,25 +639,6 @@ at the OS level if it is still polling.`,
 	}
 	flags.attach(cmd)
 	return cmd
-}
-
-// weaveQueueDirForRepo resolves a repo NAME (e.g. "outpost") to its weave queue
-// dir by matching <name>-<hash> under the weave state root. A sprintRun carries
-// only the repo name (sprints are cross-repo + user-global), so abort needs this
-// to reach the right per-repo queue. Returns the first match that has a queue.
-func weaveQueueDirForRepo(repo string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	root := weaveStateRoot(home)
-	matches, _ := filepath.Glob(filepath.Join(root, repo+"-*"))
-	for _, m := range matches {
-		if fi, statErr := os.Stat(filepath.Join(m, "queue.json")); statErr == nil && !fi.IsDir() {
-			return m, nil
-		}
-	}
-	return "", fmt.Errorf("no weave queue for repo %q under %s", repo, root)
 }
 
 func newWeaveStoryCommentCmd() *cobra.Command {
@@ -697,7 +680,7 @@ func newWeaveStoryCommentCmd() *cobra.Command {
 func newWeaveStoryLinkCmd() *cobra.Command {
 	var flags weaveOutputFlags
 	var task int64
-	var repo string
+	var repo, queue string
 	cmd := &cobra.Command{
 		Use:   "link <sprint> --repo <name> --task <issue>",
 		Short: "Link a pointed weave run (repo + issue) to a sprint — runs are cross-repo",
@@ -713,46 +696,63 @@ func newWeaveStoryLinkCmd() *cobra.Command {
 			// Validate the referenced run BEFORE taking the sprint mutation lock.
 			// A sprint link promises that the estimate governs execution; linking
 			// missing, unpointed, or corrupt work would make that promise false.
-			if err := validateSprintRunLink(repo, task); err != nil {
+			linked, err := resolveAndValidateSprintRunLink(repo, task, queue)
+			if err != nil {
 				return ec(weavecli.EmitError(cmd.ErrOrStderr(), flags.mode(), "sprint link",
 					weavecli.ExitInvalidArg, err))
 			}
 			return runWeaveStoryMutate(cmd, id, "sprint link", &flags, func(s *weaveStory) (string, error) {
-				for _, r := range s.Runs {
-					if r.Repo == repo && r.ID == task {
-						return fmt.Sprintf("sprint #%d already links %s#%d", id, repo, task), nil
+				for _, story := range currentBoard {
+					for _, r := range story.Runs {
+						same, serr := sameSprintRun(r, linked)
+						if serr != nil {
+							return "", fmt.Errorf("cannot prove %s#%d is not already linked: %w", repo, task, serr)
+						}
+						if !same {
+							continue
+						}
+						if story.ID == id {
+							return fmt.Sprintf("sprint #%d already links %s#%d", id, repo, task), nil
+						}
+						return "", fmt.Errorf("%s#%d is already linked to sprint #%d", repo, task, story.ID)
 					}
 				}
-				s.Runs = append(s.Runs, sprintRun{Repo: repo, ID: task})
+				s.Runs = append(s.Runs, linked)
 				return fmt.Sprintf("sprint #%d linked %s#%d", id, repo, task), nil
 			})
 		},
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "repo the run lives in")
+	cmd.Flags().StringVar(&queue, "queue", "", "exact opaque queue tag when multiple same-named checkouts contain the run")
 	cmd.Flags().Int64Var(&task, "task", 0, "pointed weave run/issue id in that repo (points must be 1,2,3,5,8)")
 	flags.attach(cmd)
 	return cmd
 }
 
 func validateSprintRunLink(repo string, task int64) error {
-	queueDir, ok := queueDirForRepoName(repo)
-	if !ok {
-		return fmt.Errorf("cannot uniquely resolve weave queue for repo %q", repo)
+	_, err := resolveAndValidateSprintRunLink(repo, task, "")
+	return err
+}
+
+func resolveAndValidateSprintRunLink(repo string, task int64, queue string) (sprintRun, error) {
+	queueDir, err := resolveSprintRunQueue(repo, task, queue)
+	if err != nil {
+		return sprintRun{}, err
 	}
 	q, err := loadWeaveQueue(queueDir)
 	if err != nil {
-		return fmt.Errorf("load weave queue for repo %q: %w", repo, err)
+		return sprintRun{}, fmt.Errorf("load weave queue for repo %q: %w", repo, err)
 	}
 	run := findWeaveItem(q, task)
 	if run == nil {
-		return fmt.Errorf("repo %q has no weave run #%d", repo, task)
+		return sprintRun{}, fmt.Errorf("repo %q has no weave run #%d", repo, task)
 	}
 	cap, valid := weavePointRuntimeCap(run.Points)
 	if !valid {
 		if run.Points == 0 {
-			return fmt.Errorf("cannot link %s#%d: run has no story points; set one of 1,2,3,5,8 first", repo, task)
+			return sprintRun{}, fmt.Errorf("cannot link %s#%d: run has no story points; set one of 1,2,3,5,8 first", repo, task)
 		}
-		return fmt.Errorf("cannot link %s#%d: invalid story points %d (want 1,2,3,5,8)", repo, task, run.Points)
+		return sprintRun{}, fmt.Errorf("cannot link %s#%d: invalid story points %d (want 1,2,3,5,8)", repo, task, run.Points)
 	}
 	// A run that has left planning may already have a wrapper or preserved
 	// execution record. Linking it promises that its point estimate actually
@@ -760,13 +760,13 @@ func validateSprintRunLink(repo string, task int64) error {
 	// over-cap launch specs. A running watchdog cannot be retrofitted safely.
 	if run.State != "todo" {
 		if run.LaunchSpec == nil || run.LaunchSpec.MaxRuntime <= 0 {
-			return fmt.Errorf("cannot link %s#%d: state %q has no bounded launch runtime; stop and restart it under its point cap first", repo, task, run.State)
+			return sprintRun{}, fmt.Errorf("cannot link %s#%d: state %q has no bounded launch runtime; stop and restart it under its point cap first", repo, task, run.State)
 		}
 		if run.LaunchSpec.MaxRuntime > cap {
-			return fmt.Errorf("cannot link %s#%d: launch runtime %s exceeds the %d-point cap %s; stop and restart it under its point cap first", repo, task, run.LaunchSpec.MaxRuntime, run.Points, cap)
+			return sprintRun{}, fmt.Errorf("cannot link %s#%d: launch runtime %s exceeds the %d-point cap %s; stop and restart it under its point cap first", repo, task, run.LaunchSpec.MaxRuntime, run.Points, cap)
 		}
 	}
-	return nil
+	return sprintRun{Repo: strings.TrimSpace(repo), ID: task, Queue: filepath.Base(queueDir)}, nil
 }
 
 // newWeaveCheckpointCmd is the conductor's durability heartbeat: update

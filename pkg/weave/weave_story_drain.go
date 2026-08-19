@@ -102,66 +102,46 @@ func (r *drainReport) Clean() bool { return r.GateRan && r.GatePassed }
 // that admits it, because the unparked worker keeps writing to a tree the next
 // sprint believes is quiet.
 func pauseLinkedRepos(s *weaveStory) (paused []string, problems []string) {
-	seen := map[string]bool{}
+	type linkedQueue struct {
+		repo string
+		dir  string
+		ids  map[int64]bool
+	}
+	queues := map[string]*linkedQueue{}
+	var order []string
 	for _, r := range s.Runs {
-		if r.Repo == "" || seen[r.Repo] {
+		if r.Repo == "" {
 			continue
 		}
-		seen[r.Repo] = true
-		dir, ok := queueDirForRepoName(r.Repo)
-		if !ok {
-			problems = append(problems, fmt.Sprintf("%s: no unique queue on this host", r.Repo))
+		dir, err := weaveQueueDirForSprintRun(r)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s#%d: %v", r.Repo, r.ID, err))
 			continue
 		}
+		key := filepath.Clean(dir)
+		group := queues[key]
+		if group == nil {
+			group = &linkedQueue{repo: r.Repo, dir: dir, ids: map[int64]bool{}}
+			queues[key] = group
+			order = append(order, key)
+		}
+		group.ids[r.ID] = true
+	}
+	for _, key := range order {
+		group := queues[key]
 		// ONLY THIS SPRINT'S RUNS. Parking is per-queue at the weave layer, so
 		// pausing a whole repo would stop ANOTHER running sprint's workers —
 		// the exact cross-sprint damage the shared-repo exemption exists to
 		// avoid one check later. A sprint may stop its own work and nobody
 		// else's.
-		mine := map[int64]bool{}
-		for _, rr := range s.Runs {
-			if rr.Repo == r.Repo {
-				mine[rr.ID] = true
-			}
-		}
-		n, err := pauseWorkersIn(dir, mine)
+		n, err := pauseWorkersIn(group.dir, group.ids)
 		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s: %v", r.Repo, err))
+			problems = append(problems, fmt.Sprintf("%s: %v", group.repo, err))
 			continue
 		}
-		paused = append(paused, fmt.Sprintf("%s (%d worker(s))", r.Repo, n))
+		paused = append(paused, fmt.Sprintf("%s (%d worker(s))", group.repo, n))
 	}
 	return paused, problems
-}
-
-// queueDirForRepoName finds a repo's weave queue by its basename.
-//
-// The queue tag is "<basename>-<hash of the repo path>", and the hash exists so
-// the directory name never spells out where the repo lives. That means a name
-// alone cannot be turned back into a path — it has to be matched against the
-// queues that exist. Two checkouts of the same-named repo are ambiguous, and
-// this reports no match rather than guessing at one.
-func queueDirForRepoName(repo string) (string, bool) {
-	want := strings.TrimSpace(repo)
-	if want == "" {
-		return "", false
-	}
-	var hits []string
-	for _, dir := range weaveAllQueueDirs() {
-		tag := filepath.Base(dir)
-		// tag is "<basename>-<8 hex>"; split off the hash suffix.
-		if i := strings.LastIndex(tag, "-"); i > 0 && tag[:i] == want {
-			hits = append(hits, dir)
-		}
-	}
-	// Exactly one match, or none. Two checkouts of the same-named repo are
-	// genuinely ambiguous, and pausing the wrong one would stop work nobody
-	// asked to stop while leaving the intended worker running — the worst of
-	// both outcomes.
-	if len(hits) != 1 {
-		return "", false
-	}
-	return hits[0], true
 }
 
 // pauseWorkersIn stops the running wrappers for the GIVEN runs in one queue,

@@ -78,7 +78,7 @@ func TestSprintLinkRequiresValidPointsBeforeStoryMutation(t *testing.T) {
 	storyDir, _ := sprintStoreDir()
 	q, _ := loadWeaveQueue(storyDir)
 	s := findWeaveStory(q, 1)
-	if s == nil || len(s.Runs) != 1 || s.Runs[0] != (sprintRun{Repo: repo, ID: 1}) {
+	if s == nil || len(s.Runs) != 1 || s.Runs[0] != (sprintRun{Repo: repo, ID: 1, Queue: filepath.Base(dir)}) {
 		t.Fatalf("valid link missing: %+v", s)
 	}
 }

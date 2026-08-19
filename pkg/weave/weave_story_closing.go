@@ -111,25 +111,26 @@ func (r *repoState) Describe() string {
 
 // checkClosingConditions inspects every repo this sprint links.
 //
-// repoPath resolves a linked repo name to a working tree; it is injected so the
-// caller owns how a name becomes a path and this stays testable without a
+// repoPath resolves a linked run to a working tree; it is injected so the
+// caller owns how a queue becomes a path and this stays testable without a
 // filesystem full of repos.
-func checkClosingConditions(s *weaveStory, others []*weaveStory, repoPath func(string) (string, bool)) []repoState {
+func checkClosingConditions(s *weaveStory, others []*weaveStory, repoPath func(sprintRun) (string, bool)) []repoState {
 	shared := sharedRepos(s, others)
 	seen := map[string]bool{}
 	var out []repoState
 	for _, run := range s.Runs {
-		if run.Repo == "" || seen[run.Repo] {
+		key := sprintRunKey(run)
+		if run.Repo == "" || seen[key] {
 			continue
 		}
-		seen[run.Repo] = true
-		st := repoState{Repo: run.Repo, Shared: shared[run.Repo]}
+		seen[key] = true
+		st := repoState{Repo: run.Repo, Shared: shared[key]}
 		if len(st.Shared) > 0 {
 			st.Exempt = true
 			out = append(out, st)
 			continue
 		}
-		path, ok := repoPath(run.Repo)
+		path, ok := repoPath(run)
 		if !ok {
 			st.Unknown = "no unique checkout on this host"
 			out = append(out, st)
@@ -150,7 +151,7 @@ func checkClosingConditions(s *weaveStory, others []*weaveStory, repoPath func(s
 func sharedRepos(s *weaveStory, others []*weaveStory) map[string][]int64 {
 	mine := map[string]bool{}
 	for _, r := range s.Runs {
-		mine[r.Repo] = true
+		mine[sprintRunKey(r)] = true
 	}
 	out := map[string][]int64{}
 	for _, o := range others {
@@ -158,8 +159,18 @@ func sharedRepos(s *weaveStory, others []*weaveStory) map[string][]int64 {
 			continue
 		}
 		for _, r := range o.Runs {
-			if mine[r.Repo] {
-				out[r.Repo] = append(out[r.Repo], o.ID)
+			key := sprintRunKey(r)
+			if mine[key] {
+				out[key] = append(out[key], o.ID)
+				continue
+			}
+			// A legacy link has no checkout identity. Treat it as sharing any
+			// stable link with the same basename rather than wrongly certifying
+			// that either sprint has exclusive ownership.
+			for _, own := range s.Runs {
+				if own.Repo == r.Repo && (own.Queue == "" || r.Queue == "") {
+					out[sprintRunKey(own)] = append(out[sprintRunKey(own)], o.ID)
+				}
 			}
 		}
 	}
@@ -292,8 +303,7 @@ func repoAssignments(stories []*weaveStory) []repoAssignment {
 		}
 		for _, run := range s.Runs {
 			a := repoAssignment{Repo: run.Repo, Run: run.ID, Sprint: s.ID}
-			dir, ok := queueDirForRepoName(run.Repo)
-			if ok {
+			if dir, err := weaveQueueDirForSprintRun(run); err == nil {
 				q, cached := byQueue[dir]
 				if !cached {
 					if loaded, err := loadWeaveQueue(dir); err == nil {
