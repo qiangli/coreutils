@@ -26,6 +26,8 @@ func TestEcho(t *testing.T) {
 		args []string
 		want string
 	}{
+		{[]string{"-h"}, "-h\n"},
+		{[]string{"-V"}, "-V\n"},
 		{[]string{"hello", "world"}, "hello world\n"},
 		{[]string{}, "\n"},
 		{[]string{"-n", "hello"}, "hello"},

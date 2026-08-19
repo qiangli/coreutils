@@ -29,8 +29,8 @@ func run(rc *tool.RunContext, args []string) int {
 	// GNU echo recognizes --help / --version only as the sole argument;
 	// otherwise they are operands and printed literally.
 	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
-	if !posix && len(args) == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "--version" || args[0] == "-V") {
-		if args[0] == "--help" || args[0] == "-h" {
+	if !posix && len(args) == 1 && (args[0] == "--help" || args[0] == "--version") {
+		if args[0] == "--help" {
 			printHelp(rc)
 			return 0
 		}
@@ -133,8 +133,8 @@ Options:
   -n          do not output the trailing newline
   -e          enable interpretation of backslash escapes
   -E          disable interpretation of backslash escapes (default)
-  -h, --help     display this help and exit
-  -V, --version  output version information and exit
+  --help     display this help and exit
+  --version  output version information and exit
 `)
 }
 
