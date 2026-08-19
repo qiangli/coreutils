@@ -3,9 +3,12 @@ id: 0a3965db9013
 kind: task
 title: Family alias must not land on a cascade agent
 seq: 4
-status: todo
+status: done
 priority: p1
 created: 2026-08-19T16:54:01.659778Z
+weave: 649
+assignee: qiangli
+closed: 2026-08-19T17:25:24.232457Z
 ---
 
 pkg/fleet/decorate.go: decorateAgents assigns the floating family alias <tool>-<family> to the first agent (canonical-name order) whose Model is the family's newest. Cascade agents carry their BASE's model, so they compete for it.
