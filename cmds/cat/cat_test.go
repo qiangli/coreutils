@@ -230,26 +230,52 @@ func TestCatHelpVersion(t *testing.T) {
 
 func TestCatSameFile(t *testing.T) {
 	dir := t.TempDir()
-	filePath := filepath.Join(dir, "same.txt")
-	f, err := os.Create(filePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString("hello\n"); err != nil {
-		t.Fatal(err)
-	}
 
-	var errb bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Dir:   dir,
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: f, Err: &errb},
-	}
-	code := cmd.Run(rc, []string{"same.txt"})
-	if code != 1 || !strings.Contains(errb.String(), "input file is also the output file") {
-		t.Errorf("cat same file = code %d, err %q; want code 1 and same file error", code, errb.String())
-	}
+	t.Run("named operand", func(t *testing.T) {
+		f, err := os.Create(filepath.Join(dir, "named.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if _, err := f.WriteString("hello\n"); err != nil {
+			t.Fatal(err)
+		}
+
+		var errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Stdio: tool.Stdio{In: strings.NewReader(""), Out: f, Err: &errb},
+		}
+		code := cmd.Run(rc, []string{"named.txt"})
+		want := "cat: named.txt: input file is output file\n"
+		if code != 1 || errb.String() != want {
+			t.Errorf("cat same file = code %d, err %q; want code 1, err %q", code, errb.String(), want)
+		}
+	})
+
+	t.Run("standard input", func(t *testing.T) {
+		f, err := os.Create(filepath.Join(dir, "stdin.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if _, err := f.WriteString("hello\n"); err != nil {
+			t.Fatal(err)
+		}
+
+		var errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Stdio: tool.Stdio{In: f, Out: f, Err: &errb},
+		}
+		code := cmd.Run(rc, []string{"-"})
+		want := "cat: -: input file is output file\n"
+		if code != 1 || errb.String() != want {
+			t.Errorf("cat same stdin = code %d, err %q; want code 1, err %q", code, errb.String(), want)
+		}
+	})
 }
 
 type failWriter struct{}

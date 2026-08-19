@@ -158,7 +158,7 @@ func run(rc *tool.RunContext, args []string) int {
 			if outFi != nil {
 				if f, ok := rc.In.(*os.File); ok {
 					if inFi, err := f.Stat(); err == nil && os.SameFile(inFi, outFi) {
-						fmt.Fprintf(rc.Err, "cat: -: input file is also the output file\n")
+						fmt.Fprintf(rc.Err, "cat: -: input file is output file\n")
 						exit = 1
 						continue
 					}
@@ -175,7 +175,7 @@ func run(rc *tool.RunContext, args []string) int {
 			closer = f
 			if outFi != nil {
 				if inFi, err := f.Stat(); err == nil && os.SameFile(inFi, outFi) {
-					fmt.Fprintf(rc.Err, "cat: %s: input file is also the output file\n", name)
+					fmt.Fprintf(rc.Err, "cat: %s: input file is output file\n", name)
 					exit = 1
 					closer.Close()
 					continue
