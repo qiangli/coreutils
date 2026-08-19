@@ -77,9 +77,9 @@ func identify(rc *tool.RunContext, name string, follow bool) (string, error) {
 	case info.Mode()&os.ModeSocket != 0:
 		return "socket", nil
 	case info.Mode()&os.ModeDevice != 0 && info.Mode()&os.ModeCharDevice != 0:
-		return "character special", nil
+		return specialDeviceType(info), nil
 	case info.Mode()&os.ModeDevice != 0:
-		return "block special", nil
+		return specialDeviceType(info), nil
 	case !info.Mode().IsRegular():
 		return "special file", nil
 	}
