@@ -306,32 +306,13 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 	if o.columns == 1 {
 		return printSingleColumn(r, w, label, stamp, o)
 	}
-	// Headerless multi-column output can be produced a page at a time.  Keep
-	// the paginated path below unchanged, but do not require EOF for the common
-	// -t/-T pipe case.
-	if o.omitHeader {
-		return printColumnsOmitHeader(r, w, o)
-	}
-	segments, err := readSegments(r, o)
-	if err != nil {
-		return err
-	}
-	if !o.ffBreaks {
-		// -T: eliminate form-feed pagination; treat input as one segment.
-		var all []string
-		for _, seg := range segments {
-			all = append(all, seg...)
-		}
-		segments = [][]string{all}
-	}
-	// A trailing form feed ends the last page; it does not open a new one.
-	for len(segments) > 1 && len(segments[len(segments)-1]) == 0 {
-		segments = segments[:len(segments)-1]
-	}
-	if len(segments) == 1 && len(segments[0]) == 0 {
-		return nil // empty input produces no output
-	}
+	// A multi-column layout needs one page of lookahead, not the entire input.
+	// Stream complete pages so a FIFO producer can remain open while consuming
+	// pr's paginated output.
+	return printColumnsStream(r, w, label, stamp, o)
+}
 
+func printColumnsStream(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o options) error {
 	headerLabel := label
 	if o.headerSet {
 		headerLabel = o.header
@@ -340,32 +321,41 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 	if o.doubleSpace {
 		physPerLine = 2
 	}
-	return printColumns(segments, w, headerLabel, stamp, o, physPerLine)
-}
-
-func printColumnsOmitHeader(r io.Reader, w *bufio.Writer, o options) error {
 	page, lineNo := 1, o.firstLineNum
 	pageSize := o.bodyLines * o.columns
 	lines := make([]string, 0, pageSize)
 	segmentHadData := false
 	var pendingBreaks []bool
+	pendingEmptySegments := 0
 
 	emit := func(chunk []string) error {
-		if err := printColumnChunk(w, chunk, page, &lineNo, "", time.Time{}, o, 1); err != nil {
+		if err := printColumnChunk(w, chunk, page, &lineNo, headerLabel, stamp, o, physPerLine); err != nil {
 			return err
 		}
 		page++
 		return w.Flush()
 	}
 	resolveBreaks := func() error {
-		for _, visible := range pendingBreaks {
-			if visible {
-				if _, err := w.WriteString("\f"); err != nil {
+		if len(pendingBreaks) == 0 {
+			return nil
+		}
+		if o.omitHeader {
+			for _, visible := range pendingBreaks {
+				if visible {
+					if _, err := w.WriteString("\f"); err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			for i := 0; i < pendingEmptySegments; i++ {
+				if err := emit(nil); err != nil {
 					return err
 				}
 			}
 		}
 		pendingBreaks = pendingBreaks[:0]
+		pendingEmptySegments = 0
 		return w.Flush()
 	}
 	addLine := func(line string) error {
@@ -389,7 +379,11 @@ func printColumnsOmitHeader(r io.Reader, w *bufio.Writer, o options) error {
 			}
 			lines = lines[:0]
 		} else if !segmentHadData {
-			page++ // an interior empty segment is one empty page
+			if o.omitHeader {
+				page++ // an interior empty segment is one empty page
+			} else {
+				pendingEmptySegments++
+			}
 		}
 		segmentHadData = false
 		pendingBreaks = append(pendingBreaks, inPageRange(page-1, o))

@@ -112,11 +112,14 @@ func TestPRStreamsCompletePageBeforeEOF(t *testing.T) {
 
 func TestPRMultiColumnStreamsCompletePageBeforeEOF(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		args []string
+		name  string
+		args  []string
+		lines int
 	}{
-		{name: "vertical", args: []string{"-t", "-l", "3", "-2"}},
-		{name: "across", args: []string{"-t", "-l", "3", "-a", "-2"}},
+		{name: "headerless-vertical", args: []string{"-t", "-l", "3", "-2"}, lines: 6},
+		{name: "headerless-across", args: []string{"-t", "-l", "3", "-a", "-2"}, lines: 6},
+		{name: "paginated-vertical", args: []string{"-l", "12", "-2"}, lines: 4},
+		{name: "paginated-across", args: []string{"-l", "12", "-a", "-2"}, lines: 4},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			reader, writer := io.Pipe()
@@ -128,9 +131,9 @@ func TestPRMultiColumnStreamsCompletePageBeforeEOF(t *testing.T) {
 			}
 			go func() { done <- cmd.Run(rc, tt.args) }()
 
-			// Three rows by two columns complete one page.  Keep the producer
-			// open: output must depend on a full page, not on EOF.
-			if _, err := io.WriteString(writer, strings.Repeat("x\n", 6)); err != nil {
+			// Keep the producer open after one full page: output must depend on
+			// a page of lookahead, not on EOF.
+			if _, err := io.WriteString(writer, strings.Repeat("x\n", tt.lines)); err != nil {
 				t.Fatal(err)
 			}
 			select {
