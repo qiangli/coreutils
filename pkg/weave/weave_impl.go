@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qiangli/coreutils/pkg/agentlaunch"
@@ -3553,8 +3554,11 @@ func runWeaveStart(cmd *cobra.Command, issueID int64, toolFlag string, toolArgs 
 		coachMode  string
 	)
 	if ptyMode == "never" {
-		stdoutCapture := captureRedaction.Writer(io.MultiWriter(cmd.OutOrStdout(), &toolStdout))
-		stderrCapture := captureRedaction.Writer(cmd.ErrOrStderr())
+		var outputMu sync.Mutex
+		stdout := weaveSynchronizedWriter{mu: &outputMu, dst: cmd.OutOrStdout()}
+		stderr := weaveSynchronizedWriter{mu: &outputMu, dst: cmd.ErrOrStderr()}
+		stdoutCapture := captureRedaction.Writer(io.MultiWriter(stdout, &toolStdout))
+		stderrCapture := captureRedaction.Writer(stderr)
 		tool.Stdin = os.Stdin
 		tool.Stdout = stdoutCapture
 		tool.Stderr = stderrCapture

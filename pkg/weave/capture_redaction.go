@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/qiangli/coreutils/pkg/secrets"
 )
@@ -72,3 +73,18 @@ type weaveCapturePassthrough struct {
 }
 
 func (weaveCapturePassthrough) Close() error { return nil }
+
+// weaveSynchronizedWriter serializes writes to command output streams. Cobra
+// callers commonly point stdout and stderr at the same bytes.Buffer, while
+// os/exec copies the child's two pipes concurrently. Separate redactors protect
+// their own state, but they cannot protect a shared downstream writer.
+type weaveSynchronizedWriter struct {
+	mu  *sync.Mutex
+	dst io.Writer
+}
+
+func (w weaveSynchronizedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.dst.Write(p)
+}
