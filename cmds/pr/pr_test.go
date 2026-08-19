@@ -110,6 +110,50 @@ func TestPRStreamsCompletePageBeforeEOF(t *testing.T) {
 	}
 }
 
+func TestPRMultiColumnStreamsCompletePageBeforeEOF(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "vertical", args: []string{"-t", "-l", "3", "-2"}},
+		{name: "across", args: []string{"-t", "-l", "3", "-a", "-2"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reader, writer := io.Pipe()
+			wrote := make(chan struct{}, 1)
+			done := make(chan int, 1)
+			rc := &tool.RunContext{
+				Ctx: context.Background(), Dir: t.TempDir(),
+				Stdio: tool.Stdio{In: reader, Out: firstWriteSignal{ch: wrote}, Err: io.Discard},
+			}
+			go func() { done <- cmd.Run(rc, tt.args) }()
+
+			// Three rows by two columns complete one page.  Keep the producer
+			// open: output must depend on a full page, not on EOF.
+			if _, err := io.WriteString(writer, strings.Repeat("x\n", 6)); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-wrote:
+			case <-time.After(time.Second):
+				writer.Close()
+				t.Fatal("pr produced no multi-column page while pipe remained open")
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case code := <-done:
+				if code != 0 {
+					t.Fatalf("pr exited %d", code)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("pr did not finish after pipe EOF")
+			}
+		})
+	}
+}
+
 func TestPRSingleColumnNeverTruncatedByDefault(t *testing.T) {
 	dir := t.TempDir()
 	writeFixed(t, dir, "in", "abcdef\n")

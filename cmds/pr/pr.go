@@ -306,6 +306,12 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 	if o.columns == 1 {
 		return printSingleColumn(r, w, label, stamp, o)
 	}
+	// Headerless multi-column output can be produced a page at a time.  Keep
+	// the paginated path below unchanged, but do not require EOF for the common
+	// -t/-T pipe case.
+	if o.omitHeader {
+		return printColumnsOmitHeader(r, w, o)
+	}
 	segments, err := readSegments(r, o)
 	if err != nil {
 		return err
@@ -335,6 +341,98 @@ func printFile(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o op
 		physPerLine = 2
 	}
 	return printColumns(segments, w, headerLabel, stamp, o, physPerLine)
+}
+
+func printColumnsOmitHeader(r io.Reader, w *bufio.Writer, o options) error {
+	page, lineNo := 1, o.firstLineNum
+	pageSize := o.bodyLines * o.columns
+	lines := make([]string, 0, pageSize)
+	segmentHadData := false
+	var pendingBreaks []bool
+
+	emit := func(chunk []string) error {
+		if err := printColumnChunk(w, chunk, page, &lineNo, "", time.Time{}, o, 1); err != nil {
+			return err
+		}
+		page++
+		return w.Flush()
+	}
+	resolveBreaks := func() error {
+		for _, visible := range pendingBreaks {
+			if visible {
+				if _, err := w.WriteString("\f"); err != nil {
+					return err
+				}
+			}
+		}
+		pendingBreaks = pendingBreaks[:0]
+		return w.Flush()
+	}
+	addLine := func(line string) error {
+		if err := resolveBreaks(); err != nil {
+			return err
+		}
+		segmentHadData = true
+		lines = append(lines, line)
+		if len(lines) == pageSize {
+			if err := emit(lines); err != nil {
+				return err
+			}
+			lines = lines[:0]
+		}
+		return nil
+	}
+	endSegment := func() error {
+		if len(lines) > 0 {
+			if err := emit(lines); err != nil {
+				return err
+			}
+			lines = lines[:0]
+		} else if !segmentHadData {
+			page++ // an interior empty segment is one empty page
+		}
+		segmentHadData = false
+		pendingBreaks = append(pendingBreaks, inPageRange(page-1, o))
+		return nil
+	}
+
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadString('\n')
+		if len(line) > 0 {
+			if o.expandTabs {
+				line = expandTabs(line, 8)
+			}
+			frags := strings.Split(line, "\f")
+			for i, frag := range frags {
+				if i < len(frags)-1 {
+					if frag != "" {
+						if err := addLine(frag + "\n"); err != nil {
+							return err
+						}
+					}
+					if o.ffBreaks {
+						if err := endSegment(); err != nil {
+							return err
+						}
+					}
+				} else if frag != "" {
+					if err := addLine(frag); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if err == io.EOF {
+			if len(lines) > 0 {
+				return emit(lines)
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func printSingleColumn(r io.Reader, w *bufio.Writer, label string, stamp time.Time, o options) error {
@@ -615,80 +713,10 @@ func printColumns(segments [][]string, w *bufio.Writer, headerLabel string, stam
 	page := 1
 	lineNo := o.firstLineNum
 	pageSize := o.bodyLines * o.columns
-	columnWidth := o.width / o.columns
-	if columnWidth < 1 {
-		columnWidth = 1
-	}
 	for si, seg := range segments {
 		for _, chunk := range chunkLines(seg, pageSize) {
-			emit := inPageRange(page, o)
-			if emit && !o.omitHeader {
-				if _, err := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(headerLabel, stamp, page, o)); err != nil {
-					return err
-				}
-			}
-			rows := (len(chunk) + o.columns - 1) / o.columns
-			formatted := make([]string, len(chunk))
-			cellOptions := o
-			cellOptions.indent = 0
-			for i, inputLine := range chunk {
-				line := formatLine(inputLine, lineNo+i, cellOptions)
-				line = strings.TrimSuffix(line, "\n")
-				if len(line) > columnWidth {
-					line = line[:columnWidth]
-				}
-				formatted[i] = line
-			}
-			lineNo += len(chunk)
-			for row := 0; row < rows; row++ {
-				if !emit {
-					continue
-				}
-				if _, err := w.WriteString(strings.Repeat(" ", o.indent)); err != nil {
-					return err
-				}
-				for col := 0; col < o.columns; col++ {
-					index := row + col*rows
-					if o.across {
-						index = row*o.columns + col
-					}
-					if index >= len(formatted) {
-						continue
-					}
-					line := formatted[index]
-					if col > 0 {
-						if _, err := w.WriteString(o.separator); err != nil {
-							return err
-						}
-					}
-					nextIndex := index + rows
-					if o.across {
-						nextIndex = index + 1
-					}
-					if o.separator == "" && col < o.columns-1 && nextIndex < len(formatted) {
-						line += strings.Repeat(" ", columnWidth-len(line))
-					}
-					if _, err := w.WriteString(line); err != nil {
-						return err
-					}
-				}
-				if _, err := w.WriteString("\n"); err != nil {
-					return err
-				}
-				if o.doubleSpace {
-					if _, err := w.WriteString("\n"); err != nil {
-						return err
-					}
-				}
-			}
-			if emit && !o.omitHeader {
-				if o.formFeed {
-					if _, err := w.WriteString("\f"); err != nil {
-						return err
-					}
-				} else if _, err := w.WriteString(strings.Repeat("\n", (o.bodyLines-rows)*physPerLine+linesPerTrailer)); err != nil {
-					return err
-				}
+			if err := printColumnChunk(w, chunk, page, &lineNo, headerLabel, stamp, o, physPerLine); err != nil {
+				return err
 			}
 			page++
 		}
@@ -697,6 +725,82 @@ func printColumns(segments [][]string, w *bufio.Writer, headerLabel string, stam
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, headerLabel string, stamp time.Time, o options, physPerLine int) error {
+	emit := inPageRange(page, o)
+	if emit && !o.omitHeader {
+		if _, err := fmt.Fprintf(w, "\n\n%s\n\n\n", headerLine(headerLabel, stamp, page, o)); err != nil {
+			return err
+		}
+	}
+	rows := (len(chunk) + o.columns - 1) / o.columns
+	columnWidth := o.width / o.columns
+	if columnWidth < 1 {
+		columnWidth = 1
+	}
+	formatted := make([]string, len(chunk))
+	cellOptions := o
+	cellOptions.indent = 0
+	for i, inputLine := range chunk {
+		line := formatLine(inputLine, *lineNo+i, cellOptions)
+		line = strings.TrimSuffix(line, "\n")
+		if len(line) > columnWidth {
+			line = line[:columnWidth]
+		}
+		formatted[i] = line
+	}
+	*lineNo += len(chunk)
+	for row := 0; row < rows; row++ {
+		if !emit {
+			continue
+		}
+		if _, err := w.WriteString(strings.Repeat(" ", o.indent)); err != nil {
+			return err
+		}
+		for col := 0; col < o.columns; col++ {
+			index := row + col*rows
+			if o.across {
+				index = row*o.columns + col
+			}
+			if index >= len(formatted) {
+				continue
+			}
+			line := formatted[index]
+			if col > 0 {
+				if _, err := w.WriteString(o.separator); err != nil {
+					return err
+				}
+			}
+			nextIndex := index + rows
+			if o.across {
+				nextIndex = index + 1
+			}
+			if o.separator == "" && col < o.columns-1 && nextIndex < len(formatted) {
+				line += strings.Repeat(" ", columnWidth-len(line))
+			}
+			if _, err := w.WriteString(line); err != nil {
+				return err
+			}
+		}
+		if _, err := w.WriteString("\n"); err != nil {
+			return err
+		}
+		if o.doubleSpace {
+			if _, err := w.WriteString("\n"); err != nil {
+				return err
+			}
+		}
+	}
+	if emit && !o.omitHeader {
+		if o.formFeed {
+			_, err := w.WriteString("\f")
+			return err
+		}
+		_, err := w.WriteString(strings.Repeat("\n", (o.bodyLines-rows)*physPerLine+linesPerTrailer))
+		return err
 	}
 	return nil
 }
