@@ -111,12 +111,13 @@ func decorateAgents(agents []Agent, models []Model) {
 		if !ok {
 			continue // this agent binds an older version; the alias belongs to the newest
 		}
-		// Cascade agents carry their BASE's model, so they compete for the
-		// family alias on a model they don't actually run: `ycode-glm` must
-		// not resolve to a cascade that escalates to a different family. The
-		// alias can only land on a plain tool:model binding; a plain agent
-		// later in name order still takes it.
-		if agents[i].IsCascade() {
+		// Cascade agents carry their BASE's model, while clones carry their
+		// parent's binding. Neither is the durable plain binding denoted by a
+		// floating family alias: `ycode-glm` must not resolve to an escalation
+		// cascade or a temporary evaluation clone. A plain agent later in name
+		// order still takes it. Check Ephemeral separately so a malformed or
+		// partially-written clone cannot steal the alias either.
+		if agents[i].IsCascade() || agents[i].ClonedFrom != "" || agents[i].Ephemeral {
 			continue
 		}
 		alias := agents[i].Tool + "-" + fam

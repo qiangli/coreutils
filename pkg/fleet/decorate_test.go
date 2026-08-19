@@ -16,7 +16,7 @@ import (
 // opus) instead of the plain ycode-glm binding, because the cascade sorted
 // ahead of it in canonical-name order and the family-alias pass had no
 // cascade exclusion.
-func TestFamilyAliasSkipsCascades(t *testing.T) {
+func TestFamilyAliasSkipsCascadesAndClones(t *testing.T) {
 	root := t.TempDir()
 	cat := fleet.New(fleet.WithRoot(root))
 
@@ -39,6 +39,14 @@ func TestFamilyAliasSkipsCascades(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// An ephemeral evaluation clone also sorts ahead of the plain binding.
+	// It must not make the floating family alias point at a temporary seat.
+	if err := cat.SaveAgent(fleet.Agent{
+		Name: "glm53-lead-judge", Tool: "ycode", Model: "glm-5.3",
+		ClonedFrom: "ycode-glm-5.3", Ephemeral: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Plain binding on the newest glm — where the alias belongs.
 	if err := cat.SaveAgent(fleet.Agent{
 		Name: "ycode-glm-5.3", Tool: "ycode", Model: "glm-5.3",
@@ -51,8 +59,8 @@ func TestFamilyAliasSkipsCascades(t *testing.T) {
 		t.Fatal(errs)
 	}
 	for _, a := range agents {
-		if a.IsCascade() && len(a.Derived) != 0 {
-			t.Errorf("cascade %s derived %v; want none", a.Name, a.Derived)
+		if (a.IsCascade() || a.ClonedFrom != "" || a.Ephemeral) && len(a.Derived) != 0 {
+			t.Errorf("non-plain agent %s derived %v; want none", a.Name, a.Derived)
 		}
 		if a.Name == "ycode-glm-5.3" &&
 			(len(a.Derived) != 1 || a.Derived[0] != "ycode-glm") {
