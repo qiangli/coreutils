@@ -121,7 +121,10 @@ func runCommandWithCType(rc *tool.RunContext, args []string, opener ctypeOpener)
 			b, err := os.ReadFile(rc.Path(source.value))
 			if err != nil {
 				fmt.Fprintf(rc.Err, "sed: %s: %v\n", source.value, err)
-				return 2
+				// GNU reserves exit 2 for input DATA files that can't be
+				// opened; a script FILE (-f) that can't be opened is a
+				// serious processing error and exits 4.
+				return 4
 			}
 			parts = append(parts, string(b))
 		}
@@ -188,7 +191,9 @@ func runCommandWithCType(rc *tool.RunContext, args []string, opener ctypeOpener)
 	if len(files) == 0 {
 		if err := apply(rc, program, *quiet, opts, rc.In, rc.Out); err != nil {
 			fmt.Fprintf(rc.Err, "sed: %v\n", err)
-			return 2
+			// A failure here happens mid-stream (after stdin was already
+			// open), matching GNU's "serious processing error" tier: 4.
+			return 4
 		}
 		return 0
 	}
@@ -199,41 +204,38 @@ func runCommandWithCType(rc *tool.RunContext, args []string, opener ctypeOpener)
 			r, err := openInput(rc, f)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "sed: %s: %v\n", f, err)
-				status = 2
+				if status < 2 {
+					status = 2
+				}
 				continue
 			}
 			err = apply(rc, program, *quiet, opts, r, rc.Out)
 			closeIf(r)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "sed: %v\n", err)
-				status = 2
+				// The file opened fine; this is a read/processing failure
+				// mid-stream (e.g. a directory operand), GNU's exit 4 tier.
+				status = 4
+				return status
 			}
 		}
 		return status
 	}
 
 	// One continuous stream across all files.
-	var readers []io.Reader
-	var closers []io.Closer
-	for _, f := range files {
-		r, err := openInput(rc, f)
-		if err != nil {
-			fmt.Fprintf(rc.Err, "sed: %s: %v\n", f, err)
-			status = 2
-			continue
-		}
-		readers = append(readers, r)
-		if c, ok := r.(io.Closer); ok && f != "-" {
-			closers = append(closers, c)
-		}
+	inputs := &operandReader{
+		rc: rc, files: files,
+		stopAfterFirstRecord: strings.TrimSpace(program) == "q",
 	}
-	if err := apply(rc, program, *quiet, opts, io.MultiReader(readers...), rc.Out); err != nil {
+	if err := apply(rc, program, *quiet, opts, inputs, rc.Out); err != nil {
 		fmt.Fprintf(rc.Err, "sed: %v\n", err)
+		// Every reader here opened successfully; a failure is a read/
+		// processing error mid-stream, GNU's exit 4 tier.
+		status = 4
+	} else if inputs.openFailed && status < 2 {
 		status = 2
 	}
-	for _, c := range closers {
-		c.Close()
-	}
+	inputs.Close()
 	return status
 }
 
@@ -704,5 +706,62 @@ func openInput(rc *tool.RunContext, f string) (io.Reader, error) {
 func closeIf(r io.Reader) {
 	if c, ok := r.(io.Closer); ok {
 		c.Close()
+	}
+}
+
+type operandReader struct {
+	rc                   *tool.RunContext
+	files                []string
+	index                int
+	current              io.Reader
+	closer               io.Closer
+	openFailed           bool
+	stopAfterFirstRecord bool
+	readAny              bool
+}
+
+func (r *operandReader) Read(p []byte) (int, error) {
+	for {
+		if r.current == nil {
+			if r.stopAfterFirstRecord && r.readAny {
+				return 0, io.EOF
+			}
+			if r.index == len(r.files) {
+				return 0, io.EOF
+			}
+			file := r.files[r.index]
+			r.index++
+			input, err := openInput(r.rc, file)
+			if err != nil {
+				fmt.Fprintf(r.rc.Err, "sed: %s: %v\n", file, err)
+				r.openFailed = true
+				continue
+			}
+			r.current = input
+			if c, ok := input.(io.Closer); ok && file != "-" {
+				r.closer = c
+			}
+		}
+		n, err := r.current.Read(p)
+		if n > 0 {
+			r.readAny = true
+		}
+		if err == io.EOF {
+			if r.closer != nil {
+				_ = r.closer.Close()
+			}
+			r.current, r.closer = nil, nil
+			if n != 0 {
+				return n, nil
+			}
+			continue
+		}
+		return n, err
+	}
+}
+
+func (r *operandReader) Close() {
+	if r.closer != nil {
+		_ = r.closer.Close()
 	}
 }

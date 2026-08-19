@@ -1018,6 +1018,109 @@ func TestSedFastPathRegressions(t *testing.T) {
 	}
 }
 
+// TestSedExitCodeSeverityTiers pins the three GNU sed exit-status tiers
+// observed against GNU sed 4.10 (public oracle): 0 success, 2 an input DATA
+// file could not be opened, 4 a serious processing error once execution was
+// under way (a script FILE that can't be opened, or a read failure on an
+// already-opened operand such as a directory).
+func TestSedExitCodeSeverityTiers(t *testing.T) {
+	t.Run("q does not open later operands", func(t *testing.T) {
+		dir := t.TempDir()
+		first := filepath.Join(dir, "first.txt")
+		if err := os.WriteFile(first, []byte("first\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, errOut, code := runSedInDir(t, dir, "", "q", filepath.Base(first), "missing.txt")
+		if code != 0 || out != "first\n" || errOut != "" {
+			t.Fatalf("q later operand = (%q, %q, %d)", out, errOut, code)
+		}
+	})
+
+	t.Run("missing -f script file exits 4", func(t *testing.T) {
+		dir := t.TempDir()
+		missing := filepath.Join(dir, "does-not-exist.sed")
+		out, errOut, code := runSedInDir(t, dir, "hello\n", "-f", missing)
+		if code != 4 || out != "" || errOut == "" {
+			t.Fatalf("-f %s = (%q, %q, %d), want (\"\", non-empty, 4)", missing, out, errOut, code)
+		}
+	})
+
+	t.Run("missing input data file exits 2", func(t *testing.T) {
+		dir := t.TempDir()
+		missing := filepath.Join(dir, "does-not-exist.txt")
+		out, errOut, code := runSedInDir(t, dir, "", "s/x/y/", missing)
+		if code != 2 || out != "" || errOut == "" {
+			t.Fatalf("s/x/y/ %s = (%q, %q, %d), want (\"\", non-empty, 2)", missing, out, errOut, code)
+		}
+	})
+
+	t.Run("directory operand exits 4 (continuous stream)", func(t *testing.T) {
+		dir := t.TempDir()
+		out, errOut, code := runSedInDir(t, dir, "", "s/x/y/", dir)
+		if code != 4 || out != "" || errOut == "" {
+			t.Fatalf("s/x/y/ %s = (%q, %q, %d), want (\"\", non-empty, 4)", dir, out, errOut, code)
+		}
+	})
+
+	t.Run("directory operand exits 4 (-s separate)", func(t *testing.T) {
+		dir := t.TempDir()
+		out, errOut, code := runSedInDir(t, dir, "", "-s", "s/x/y/", dir)
+		if code != 4 || out != "" || errOut == "" {
+			t.Fatalf("-s s/x/y/ %s = (%q, %q, %d), want (\"\", non-empty, 4)", dir, out, errOut, code)
+		}
+	})
+
+	t.Run("separate files preserve highest error severity", func(t *testing.T) {
+		dir := t.TempDir()
+		missing := filepath.Join(dir, "does-not-exist.txt")
+		for _, operands := range [][]string{{dir, missing}, {missing, dir}} {
+			args := append([]string{"-s", "s/x/y/"}, operands...)
+			out, errOut, code := runSedInDir(t, dir, "", args...)
+			if code != 4 || out != "" || errOut == "" {
+				t.Fatalf("%v = (%q, %q, %d), want (\"\", non-empty, 4)", args, out, errOut, code)
+			}
+		}
+	})
+
+	t.Run("missing operand does not suppress later input", func(t *testing.T) {
+		dir := t.TempDir()
+		missing := filepath.Join(dir, "missing")
+		later := filepath.Join(dir, "later")
+		if err := os.WriteFile(later, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, errOut, code := runSedInDir(t, dir, "", "s/x/y/", missing, later)
+		if code != 2 || out != "y\n" || errOut == "" {
+			t.Fatalf("missing then later = (%q, %q, %d), want (\"y\\n\", non-empty, 2)", out, errOut, code)
+		}
+	})
+
+	t.Run("q advances past an empty operand", func(t *testing.T) {
+		dir := t.TempDir()
+		empty := filepath.Join(dir, "empty")
+		later := filepath.Join(dir, "later")
+		if err := os.WriteFile(empty, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(later, []byte("later\nsecond\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, errOut, code := runSedInDir(t, dir, "", "q", empty, later)
+		if code != 0 || out != "later\n" || errOut != "" {
+			t.Fatalf("q empty later = (%q, %q, %d), want (\"later\\n\", \"\", 0)", out, errOut, code)
+		}
+	})
+
+	t.Run("separate stream stops after serious read failure", func(t *testing.T) {
+		dir := t.TempDir()
+		missing := filepath.Join(dir, "missing")
+		out, errOut, code := runSedInDir(t, dir, "", "-s", "s/x/y/", dir, missing)
+		if code != 4 || out != "" || errOut == "" || strings.Contains(errOut, missing) {
+			t.Fatalf("-s dir missing = (%q, %q, %d), want serious-error only and status 4", out, errOut, code)
+		}
+	})
+}
+
 func TestSedAddressRegressions(t *testing.T) {
 	cases := []struct {
 		name string
