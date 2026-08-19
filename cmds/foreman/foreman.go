@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -384,16 +385,18 @@ func spawnServe(id string) error {
 		args = append(args, "foreman")
 	}
 	args = append(args, "serve", id)
-	p, err := os.StartProcess(exe, args, &os.ProcAttr{
-		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
-		Env:   os.Environ(),
-	})
-	if err != nil {
+	serve := exec.Command(exe, args[1:]...)
+	serve.Env = os.Environ()
+	serve.SysProcAttr = foremanDetachedSysProcAttr()
+	// Nil stdio maps to the null device. Inheriting the launcher's terminal
+	// made the detached daemon die from SIGHUP as soon as a noninteractive
+	// `bashy foreman start --detach` returned.
+	if err := serve.Start(); err != nil {
 		return err
 	}
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		_, _ = p.Wait()
+		_ = serve.Wait()
 	}()
 	return nil
 }
