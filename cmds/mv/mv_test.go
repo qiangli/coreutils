@@ -420,6 +420,46 @@ func TestMvTrailingSlashOnNonexistentDestination(t *testing.T) {
 	}
 }
 
+func TestMvTrailingSlashChecksMissingSourceFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(string)
+		dest  string
+	}{
+		{name: "missing destination", dest: "missing/"},
+		{name: "non-directory destination", dest: "dst/", setup: func(dir string) {
+			write(t, filepath.Join(dir, "dst"), "keep")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.setup != nil {
+				tc.setup(dir)
+			}
+			_, errb, code := runTool(t, dir, "nosrc", tc.dest)
+			if code != 1 || !strings.Contains(errb, "cannot stat 'nosrc': No such file or directory") {
+				t.Fatalf("code=%d err=%q", code, errb)
+			}
+		})
+	}
+}
+
+func TestMvDirectoryToMissingTrailingSlash(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src", "file"), "content")
+
+	_, errb, code := runTool(t, dir, "src", "newdir/")
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "newdir", "file")); got != "content" {
+		t.Fatalf("moved content=%q", got)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "src")); !os.IsNotExist(err) {
+		t.Fatalf("source still exists: %v", err)
+	}
+}
+
 func TestMvHelpAndVersion(t *testing.T) {
 	dir := t.TempDir()
 	out, _, code := runTool(t, dir, "--help")

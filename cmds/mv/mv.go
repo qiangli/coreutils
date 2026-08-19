@@ -123,22 +123,35 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "mv: target '%s' is not a directory\n", dest)
 		return 1
 	}
-	// A trailing slash on dest requires its final component to resolve
-	// to an existing directory (POSIX Base Definitions 4.13). This holds
-	// regardless of -T: -T only controls whether an existing directory is
-	// treated as a container for srcs, not whether the raw pathname
-	// resolved. An existing directory falls through to the normal move,
-	// which fails naturally under -T (e.g. EEXIST/EISDIR); only a failed
-	// resolution (missing path, or an existing non-directory) is rejected
-	// here, and a missing path reports its own errno rather than a
-	// hardcoded "Not a directory".
+	// Validate the source before rejecting a slash-suffixed destination.
+	// GNU mv diagnoses a missing source first. It also accepts a trailing
+	// slash on a missing destination when the source is a directory, naming
+	// the newly created directory without the slash.
 	if len(dest) > 0 && os.IsPathSeparator(dest[len(dest)-1]) && !(err == nil && di.IsDir()) {
-		if err != nil {
-			fmt.Fprintf(rc.Err, "mv: cannot move '%s' to '%s': %s\n", srcs[0], dest, reason(err))
+		normalizedDirDestination := false
+		if len(srcs) == 1 {
+			si, serr := os.Lstat(rc.Path(srcs[0]))
+			if serr != nil {
+				fmt.Fprintf(rc.Err, "mv: cannot stat '%s': %s\n", srcs[0], reason(serr))
+				return 1
+			}
+			trimmed := dest
+			for len(trimmed) > 1 && os.IsPathSeparator(trimmed[len(trimmed)-1]) {
+				trimmed = trimmed[:len(trimmed)-1]
+			}
+			if _, trimmedErr := os.Lstat(rc.Path(trimmed)); os.IsNotExist(trimmedErr) && si.IsDir() {
+				dest = trimmed
+				normalizedDirDestination = true
+			}
+		}
+		if !normalizedDirDestination {
+			if err != nil {
+				fmt.Fprintf(rc.Err, "mv: cannot move '%s' to '%s': %s\n", srcs[0], dest, reason(err))
+				return 1
+			}
+			fmt.Fprintf(rc.Err, "mv: cannot move '%s' to '%s': Not a directory\n", srcs[0], dest)
 			return 1
 		}
-		fmt.Fprintf(rc.Err, "mv: cannot move '%s' to '%s': Not a directory\n", srcs[0], dest)
-		return 1
 	}
 	for _, src := range srcs {
 		dst := dest
