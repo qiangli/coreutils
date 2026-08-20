@@ -33,10 +33,20 @@ func init() {
 			in.ReadFrom(rc.In)
 			fmt.Fprintf(rc.Out, "stdin=%s\n", strings.TrimSpace(in.String()))
 			fmt.Fprintf(rc.Out, "sigpipe_ignored=%v\n", rc.SIGPIPEIgnored)
+			fmt.Fprintf(rc.Out, "dir_is_process_cwd=%v\n", rc.DirIsProcessCwd)
 			if len(args) > 0 && args[0] == "fail" {
 				fmt.Fprintln(rc.Err, "probe: deliberate failure")
 				return 7
 			}
+			return 0
+		},
+	})
+	tool.Register(&tool.Tool{
+		Name:     "pathprobe",
+		Synopsis: "test path mapping",
+		Usage:    "pathprobe OPERAND",
+		Run: func(rc *tool.RunContext, args []string) int {
+			fmt.Fprintln(rc.Out, rc.Path(args[0]))
 			return 0
 		},
 	})
@@ -60,6 +70,45 @@ func runScript(t *testing.T, src, dir string, mw func(interp.ExecHandlerFunc) in
 	}
 	runErr := runner.Run(context.Background(), file)
 	return out.String(), errb.String(), runErr
+}
+
+func TestHandlerDeclaresMatchingProcessCwd(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, errb, err := runScript(t, "probe", cwd, Handler())
+	if err != nil {
+		t.Fatalf("probe: %v; stderr=%q", err, errb)
+	}
+	if !strings.Contains(out, "dir_is_process_cwd=true\n") {
+		t.Fatalf("matching process cwd was not declared native:\n%s", out)
+	}
+}
+
+func TestHandlerPreservesLongRelativeOperandAtMatchingProcessCwd(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operand := strings.Repeat("x", 40000)
+	out, errb, err := runScript(t, "pathprobe "+operand, cwd, Handler())
+	if err != nil {
+		t.Fatalf("pathprobe: %v; stderr=%q", err, errb)
+	}
+	if out != operand+"\n" {
+		t.Fatalf("long relative operand was materialized against cwd: got length %d, want %d", len(strings.TrimSuffix(out, "\n")), len(operand))
+	}
+}
+
+func TestHandlerDoesNotDeclareVirtualCwdNative(t *testing.T) {
+	out, errb, err := runScript(t, "probe", t.TempDir(), Handler())
+	if err != nil {
+		t.Fatalf("probe: %v; stderr=%q", err, errb)
+	}
+	if !strings.Contains(out, "dir_is_process_cwd=false\n") {
+		t.Fatalf("virtual cwd was declared native:\n%s", out)
+	}
 }
 
 func TestHandlerDispatchesRegisteredTool(t *testing.T) {

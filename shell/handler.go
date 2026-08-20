@@ -14,6 +14,8 @@ package shell
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
@@ -51,13 +53,14 @@ func HandlerFunc(intercept func(name string) bool) func(interp.ExecHandlerFunc) 
 			hc := interp.HandlerCtx(ctx)
 			umask := hc.Umask()
 			rc := &tool.RunContext{
-				Ctx:            ctx,
-				Dir:            hc.Dir,
-				Env:            envSlice(hc.Env),
-				FS:             tool.NewLocalFS(),
-				Umask:          umask,
-				UmaskSet:       true,
-				SIGPIPEIgnored: hc.SignalIgnored("PIPE"),
+				Ctx:             ctx,
+				Dir:             hc.Dir,
+				Env:             envSlice(hc.Env),
+				FS:              tool.NewLocalFS(),
+				Umask:           umask,
+				UmaskSet:        true,
+				SIGPIPEIgnored:  hc.SignalIgnored("PIPE"),
+				DirIsProcessCwd: processCwdMatches(hc.Dir),
 				Stdio: tool.Stdio{
 					In:  hc.Stdin,
 					Out: hc.Stdout,
@@ -71,6 +74,25 @@ func HandlerFunc(intercept func(name string) bool) func(interp.ExecHandlerFunc) 
 			return nil
 		}
 	}
+}
+
+func processCwdMatches(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	if filepath.Clean(dir) == filepath.Clean(cwd) {
+		return true
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	cwdInfo, err := os.Stat(cwd)
+	return err == nil && os.SameFile(dirInfo, cwdInfo)
 }
 
 // envSlice flattens the interpreter environment into the os.Environ()
