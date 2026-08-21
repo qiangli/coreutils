@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
+	"unicode"
 
 	"golang.org/x/term"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/qiangli/coreutils/pkg/fleet"
 	"github.com/qiangli/coreutils/pkg/llmbudget"
 	"github.com/qiangli/coreutils/pkg/recall"
+	"github.com/qiangli/coreutils/pkg/room"
 	"github.com/qiangli/coreutils/pkg/secrets"
 	"github.com/qiangli/coreutils/pkg/telemetry"
 	"github.com/spf13/cobra"
@@ -980,6 +983,34 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		return res, err
 	}
 
+	// PUBLISH A LIVE TASK CARD for the duration of the turn, so an operator running
+	// `bashy chat sessions` sees the work in flight — the same board as interactive
+	// sessions and weave/foreman workers. A one-shot is a UNIT OF WORK, not an
+	// identity, so its card is WORK-KEYED (oneShotCardID: name + pid + a per-process
+	// sequence), NOT the agent's singleton session id. That distinction is load-
+	// bearing twice over: it keeps a fired turn from taking (and on exit evicting)
+	// the identity seat a live interactive session of the same agent holds, and it
+	// lets concurrent one-shots of one binding coexist instead of clobbering each
+	// other. Best-effort by construction — a board write must never keep the agent
+	// from starting — and removed on the deferred Leave whether the turn returns,
+	// errors, or the process is cancelled.
+	taskCard := room.Card{
+		ID:        oneShotCardID(lnch),
+		Principal: principalName(),
+		Tool:      lnch.ToolName,
+		Model:     lnch.ModelName,
+		Binding:   lnch.Binding(),
+		Nick:      lnch.Nick,
+		Band:      bindingBand(name),
+		Mode:      "oneshot",
+		Role:      opt.Role,
+		Task:      taskLabel(opt),
+		PID:       os.Getpid(),
+		Cwd:       cwd,
+	}
+	_ = room.Join(taskCard)
+	defer room.Leave(taskCard.ID)
+
 	if opt.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, opt.Timeout)
@@ -1014,6 +1045,44 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	res.Output, res.ExitCode = out, code
 	recordLaunchUsage(ctx, lnch, prompt, out)
 	return res, err
+}
+
+// oneShotSeq disambiguates concurrent one-shot task cards launched from THIS
+// process. Two Invoke calls for the same binding share a pid, so pid alone would
+// collide; the per-process sequence makes each turn's card id unique without
+// leaking into the agent's singleton identity id.
+var oneShotSeq atomic.Uint64
+
+// oneShotCardID is the WORK key for a one-shot turn's room card: agent name, pid,
+// and a per-process sequence. Deliberately NOT agentID(l) — that is the singleton
+// SESSION key, and a turn must never sit in (or evict) it. The shape mirrors the
+// task-card convention (`weave-<issue>-<pid>`) so `chat sessions` reads it as work,
+// not identity.
+func oneShotCardID(l Launch) string {
+	return fmt.Sprintf("oneshot-%s-%d-%d", agentID(l), os.Getpid(), oneShotSeq.Add(1))
+}
+
+// taskLabel is a SAFE, CONCISE one-line summary of the instruction for the shared
+// board. Safe: only the first line survives, control characters are dropped, and
+// the whole prompt is never splashed onto a host-wide registry. Concise: collapsed
+// whitespace, truncated on a rune boundary. Empty instruction yields no label.
+func taskLabel(opt Options) string {
+	s := opt.Instruction
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.Map(func(r rune) rune {
+		if r != '\t' && unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	const max = 80
+	if rs := []rune(s); len(rs) > max {
+		s = strings.TrimSpace(string(rs[:max])) + "…"
+	}
+	return s
 }
 
 func governLaunch(ctx context.Context, originalName string, l Launch, prompt string, opt Options) (Launch, llmbudget.Decision, error) {

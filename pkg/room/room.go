@@ -43,7 +43,8 @@ type Card struct {
 	Binding   string   `json:"binding"` // tool:model
 	Nick      string   `json:"nick,omitempty"`
 	Band      int      `json:"band,omitempty"`
-	Mode      string   `json:"mode,omitempty"` // interactive | weave | foreman | meet
+	Mode      string   `json:"mode,omitempty"` // interactive | weave | foreman | meet | oneshot
+	Role      string   `json:"role,omitempty"` // role alias a launch was routed under (conductor, reviewer, …), when given
 	Task      string   `json:"task,omitempty"` // what it is working on, if known
 	Caps      []string `json:"caps,omitempty"`
 	CtlSock   string   `json:"ctl_sock,omitempty"` // same-host reach
