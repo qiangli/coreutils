@@ -4,37 +4,48 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/qiangli/coreutils/pkg/agentlaunch"
 	"github.com/qiangli/coreutils/pkg/room"
 )
 
-// isolatedRoom points the room at a temp dir and clears the uncontained-host
-// launch guard, so a headless Invoke reaches the injected runner (the guard is
-// about the real fleet, not a fake) without depending on ambient env.
 func isolatedRoom(t *testing.T) {
 	t.Helper()
 	t.Setenv("BASHY_ROOM_DIR", t.TempDir())
-	t.Setenv(agentlaunch.UnsafeLaunchEnv, "1")
 }
 
-// blockingRunner signals when the agent process would have started and then holds
-// the turn open until released, so a test can observe the room while the "process"
-// is live. It optionally fails, to prove the card is removed on error too.
 type blockingRunner struct {
 	started chan struct{}
 	release chan struct{}
 	err     error
 }
 
-func (b *blockingRunner) Run(ctx context.Context, agent string, args []string, cwd string) (string, int, error) {
+func (b *blockingRunner) Run(context.Context, string, []string, string) (string, int, error) {
 	close(b.started)
 	<-b.release
 	if b.err != nil {
 		return "", 1, b.err
 	}
 	return "done\n", 0, nil
+}
+
+type invokeOutcome struct {
+	res Result
+	err error
+}
+
+func waitFor[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case got := <-ch:
+		return got
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
+	}
 }
 
 func oneShotMembers(t *testing.T) []room.Card {
@@ -54,47 +65,37 @@ func oneShotMembers(t *testing.T) []room.Card {
 
 func TestInvokePublishesTaskCardWhileRunningAndRemovesOnCompletion(t *testing.T) {
 	isolatedRoom(t)
-
 	r := &blockingRunner{started: make(chan struct{}), release: make(chan struct{})}
-	done := make(chan struct{})
+	done := make(chan invokeOutcome, 1)
+	cwd := t.TempDir()
 	go func() {
-		defer close(done)
-		_, _ = Invoke(context.Background(), Options{
-			Agent: "codex", Role: "reviewer", Instruction: "fix the login\nbug in detail", Cwd: t.TempDir(),
+		res, err := Invoke(context.Background(), Options{
+			Agent: "codex", Role: "reviewer", Task: "review login visibility",
+			Instruction: "fix the login\nbug in detail", Cwd: cwd, ReadOnly: true,
 		}, r)
+		done <- invokeOutcome{res, err}
 	}()
 
-	<-r.started // the process is now "running" — its card must be observable
-
+	waitFor(t, r.started, "runner start")
 	live := oneShotMembers(t)
 	if len(live) != 1 {
 		t.Fatalf("live one-shot cards = %d, want 1", len(live))
 	}
 	c := live[0]
-	if c.Mode != "oneshot" {
-		t.Errorf("Mode = %q, want oneshot", c.Mode)
+	if c.Mode != "oneshot" || c.Role != "reviewer" || c.PID != os.Getpid() {
+		t.Errorf("card attribution = %+v", c)
 	}
-	if c.Role != "reviewer" {
-		t.Errorf("Role = %q, want reviewer", c.Role)
+	if c.Tool == "" || c.Cwd != cwd || c.Task != "review login visibility" {
+		t.Errorf("card details = %+v", c)
 	}
-	if c.PID != os.Getpid() {
-		t.Errorf("PID = %d, want this process %d", c.PID, os.Getpid())
-	}
-	if c.Tool == "" || c.Cwd == "" {
-		t.Errorf("card missing tool/cwd: %+v", c)
-	}
-	// A safe, concise label: first line only, collapsed whitespace, no newline.
-	if c.Task != "fix the login" {
-		t.Errorf("Task = %q, want the first line only", c.Task)
-	}
-	// It is WORK-keyed, not the agent's identity id.
 	if !strings.HasPrefix(c.ID, "oneshot-") {
 		t.Errorf("card id %q is not work-keyed", c.ID)
 	}
 
 	close(r.release)
-	<-done
-
+	if outcome := waitFor(t, done, "Invoke completion"); outcome.err != nil {
+		t.Fatalf("Invoke: %v", outcome.err)
+	}
 	if got := oneShotMembers(t); len(got) != 0 {
 		t.Fatalf("one-shot cards after completion = %d, want 0", len(got))
 	}
@@ -102,65 +103,68 @@ func TestInvokePublishesTaskCardWhileRunningAndRemovesOnCompletion(t *testing.T)
 
 func TestInvokeRemovesTaskCardOnError(t *testing.T) {
 	isolatedRoom(t)
-
 	r := &blockingRunner{started: make(chan struct{}), release: make(chan struct{}), err: context.Canceled}
-	done := make(chan struct{})
+	done := make(chan invokeOutcome, 1)
+	cwd := t.TempDir()
 	go func() {
-		defer close(done)
-		_, _ = Invoke(context.Background(), Options{
-			Agent: "codex", Instruction: "run the failing task", Cwd: t.TempDir(),
+		res, err := Invoke(context.Background(), Options{
+			Agent: "codex", Instruction: "run the failing task", Cwd: cwd, ReadOnly: true,
 		}, r)
+		done <- invokeOutcome{res, err}
 	}()
-
-	<-r.started
+	waitFor(t, r.started, "runner start")
 	if len(oneShotMembers(t)) != 1 {
-		t.Fatalf("expected one live one-shot card while running")
+		t.Fatal("expected one live one-shot card while running")
 	}
 	close(r.release)
-	<-done
-
+	if outcome := waitFor(t, done, "Invoke error completion"); outcome.err == nil {
+		t.Fatal("Invoke error = nil, want runner error")
+	}
 	if got := oneShotMembers(t); len(got) != 0 {
-		t.Fatalf("one-shot cards after error = %d, want 0 (must be removed on error too)", len(got))
+		t.Fatalf("one-shot cards after error = %d, want 0", len(got))
 	}
 }
 
 func TestConcurrentOneShotsDoNotCollide(t *testing.T) {
 	isolatedRoom(t)
-
 	const n = 3
 	runners := make([]*blockingRunner, n)
-	done := make(chan struct{}, n)
+	done := make(chan invokeOutcome, n)
+	cwds := make([]string, n)
+	for i := range cwds {
+		cwds[i] = t.TempDir()
+	}
 	for i := range runners {
 		runners[i] = &blockingRunner{started: make(chan struct{}), release: make(chan struct{})}
-		r := runners[i]
+		r, cwd := runners[i], cwds[i]
 		go func() {
-			defer func() { done <- struct{}{} }()
-			_, _ = Invoke(context.Background(), Options{
-				Agent: "codex", Instruction: "concurrent work", Cwd: t.TempDir(),
+			res, err := Invoke(context.Background(), Options{
+				Agent: "codex", Instruction: "concurrent work", Cwd: cwd, ReadOnly: true,
 			}, r)
+			done <- invokeOutcome{res, err}
 		}()
 	}
 	for _, r := range runners {
-		<-r.started
+		waitFor(t, r.started, "concurrent runner start")
 	}
-
 	live := oneShotMembers(t)
 	if len(live) != n {
-		t.Fatalf("concurrent one-shot cards = %d, want %d (they collided)", len(live), n)
+		t.Fatalf("concurrent one-shot cards = %d, want %d", len(live), n)
 	}
 	ids := map[string]bool{}
 	for _, c := range live {
 		if ids[c.ID] {
-			t.Fatalf("duplicate card id %q — concurrent one-shots collided", c.ID)
+			t.Fatalf("duplicate card id %q", c.ID)
 		}
 		ids[c.ID] = true
 	}
-
 	for _, r := range runners {
 		close(r.release)
 	}
 	for range runners {
-		<-done
+		if outcome := waitFor(t, done, "concurrent Invoke completion"); outcome.err != nil {
+			t.Fatalf("Invoke: %v", outcome.err)
+		}
 	}
 	if got := oneShotMembers(t); len(got) != 0 {
 		t.Fatalf("one-shot cards after all complete = %d, want 0", len(got))
@@ -169,7 +173,6 @@ func TestConcurrentOneShotsDoNotCollide(t *testing.T) {
 
 func TestDryRunPublishesNoTaskCard(t *testing.T) {
 	isolatedRoom(t)
-
 	if _, err := Invoke(context.Background(), Options{
 		Agent: "codex", Instruction: "would run", Cwd: t.TempDir(), DryRun: true,
 	}, &fakeRunner{}); err != nil {
@@ -186,14 +189,48 @@ func TestDryRunPublishesNoTaskCard(t *testing.T) {
 
 func TestTaskLabelIsSafeAndConcise(t *testing.T) {
 	long := strings.Repeat("a", 200)
-	got := taskLabel(Options{Instruction: "  first\tline  \x00 with\r\nsecond"})
-	if got != "first line with" {
-		t.Errorf("taskLabel sanitize = %q, want %q", got, "first line with")
+	if got := taskLabel(Options{Instruction: "  first\tline  \x00 with\r\nsecond"}); got != "first line with" {
+		t.Errorf("taskLabel sanitize = %q", got)
 	}
-	if l := taskLabel(Options{Instruction: long}); len([]rune(l)) != 81 || !strings.HasSuffix(l, "…") {
-		t.Errorf("taskLabel truncation = %q (len %d), want 80 runes + ellipsis", l, len([]rune(l)))
+	if got := taskLabel(Options{Instruction: long}); len([]rune(got)) != 81 || !strings.HasSuffix(got, "…") {
+		t.Errorf("taskLabel truncation = %q", got)
 	}
-	if l := taskLabel(Options{Instruction: ""}); l != "" {
-		t.Errorf("empty instruction label = %q, want empty", l)
+	if got := taskLabel(Options{Task: " safe explicit label ", Instruction: "secret prompt"}); got != "safe explicit label" {
+		t.Errorf("explicit task label = %q", got)
+	}
+	if got := taskLabel(Options{}); got != "one-shot agent task" {
+		t.Errorf("empty task label = %q", got)
+	}
+}
+
+type countingRunner struct{ calls atomic.Int32 }
+
+func (r *countingRunner) Run(context.Context, string, []string, string) (string, int, error) {
+	r.calls.Add(1)
+	return "", 0, nil
+}
+
+func TestInvokeFailsClosedWhenAssignmentCannotBePublished(t *testing.T) {
+	badRoom := t.TempDir() + "/not-a-directory"
+	if err := os.WriteFile(badRoom, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_ROOM_DIR", badRoom)
+	r := &countingRunner{}
+	res, err := Invoke(context.Background(), Options{
+		Agent: "codex", Instruction: "must remain visible", Cwd: t.TempDir(), ReadOnly: true,
+	}, r)
+	if err == nil || !strings.Contains(err.Error(), "publish live assignment") {
+		t.Fatalf("Invoke error = %v", err)
+	}
+	if res.ExitCode != 2 || r.calls.Load() != 0 {
+		t.Fatalf("ExitCode=%d runner calls=%d; invisible work must not start", res.ExitCode, r.calls.Load())
+	}
+}
+
+func TestOneShotCardIDIsBounded(t *testing.T) {
+	id := oneShotCardID(Launch{Nick: strings.Repeat("very-long-name", 100)})
+	if len(id) > 64 {
+		t.Fatalf("one-shot card ID length = %d, want <=64: %q", len(id), id)
 	}
 }

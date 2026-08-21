@@ -38,6 +38,7 @@ const schemaVersion = "bashy-chat-v1"
 type Options struct {
 	Agent       string
 	Role        string
+	Task        string
 	Instruction string
 	Files       []string
 	Context     []string
@@ -837,6 +838,7 @@ func NewChatCmd() *cobra.Command {
 			"sits at the agent's terminal to answer an approval prompt. The steer loop is the oversight")
 	cmd.Flags().BoolVar(&opt.AllowPremium, "allow-premium", false, "explicitly bypass LLM budget/subscription gates for urgent human-authorized work")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when --agent is omitted: conductor, reviewer, qa, release")
+	cmd.Flags().StringVar(&opt.Task, "task", "", "safe one-line assignment label shown by `bashy agents`")
 	cmd.Flags().StringVar(&capStr, "capability", "", "route to the best-fit routable agent for this capability (e.g. deep-research, coding)")
 	cmd.Flags().StringVarP(&opt.Instruction, "instruction", "m", "", "instruction to send to the agent (one-shot; omit for an interactive session)")
 	cmd.Flags().StringArrayVar(&opt.Files, "file", nil, "append file contents to the instruction")
@@ -991,9 +993,9 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 	// bearing twice over: it keeps a fired turn from taking (and on exit evicting)
 	// the identity seat a live interactive session of the same agent holds, and it
 	// lets concurrent one-shots of one binding coexist instead of clobbering each
-	// other. Best-effort by construction — a board write must never keep the agent
-	// from starting — and removed on the deferred Leave whether the turn returns,
-	// errors, or the process is cancelled.
+	// other. Registration is fail-closed: invisible work defeats workload routing,
+	// so a failed room write prevents the child from starting. A successful card is
+	// removed on the deferred Leave whether the turn returns, errors, or is cancelled.
 	taskCard := room.Card{
 		ID:        oneShotCardID(lnch),
 		Principal: principalName(),
@@ -1008,7 +1010,10 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 	}
-	_ = room.Join(taskCard)
+	if err := room.Join(taskCard); err != nil {
+		res.ExitCode = 2
+		return res, fmt.Errorf("chat: publish live assignment: %w", err)
+	}
 	defer room.Leave(taskCard.ID)
 
 	if opt.Timeout > 0 {
@@ -1059,7 +1064,7 @@ var oneShotSeq atomic.Uint64
 // task-card convention (`weave-<issue>-<pid>`) so `chat sessions` reads it as work,
 // not identity.
 func oneShotCardID(l Launch) string {
-	return fmt.Sprintf("oneshot-%s-%d-%d", agentID(l), os.Getpid(), oneShotSeq.Add(1))
+	return fmt.Sprintf("oneshot-%s-%d-%d", shortHash(agentID(l)), os.Getpid(), oneShotSeq.Add(1))
 }
 
 // taskLabel is a SAFE, CONCISE one-line summary of the instruction for the shared
@@ -1067,7 +1072,10 @@ func oneShotCardID(l Launch) string {
 // the whole prompt is never splashed onto a host-wide registry. Concise: collapsed
 // whitespace, truncated on a rune boundary. Empty instruction yields no label.
 func taskLabel(opt Options) string {
-	s := opt.Instruction
+	s := strings.TrimSpace(opt.Task)
+	if s == "" {
+		s = opt.Instruction
+	}
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = s[:i]
 	}
@@ -1081,6 +1089,9 @@ func taskLabel(opt Options) string {
 	const max = 80
 	if rs := []rune(s); len(rs) > max {
 		s = strings.TrimSpace(string(rs[:max])) + "…"
+	}
+	if s == "" {
+		return "one-shot agent task"
 	}
 	return s
 }

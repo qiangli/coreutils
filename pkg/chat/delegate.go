@@ -112,6 +112,7 @@ merge), route to 'bashy weave' / the conductor; delegating a tracked todo with
 	cmd.Flags().BoolVar(&self, "self", false, "delegate to YOURSELF — the same tool driving this shell, run detached (forks your live context when the tool can)")
 	cmd.Flags().StringVar(&model, "model", "", "with --self: transplant your inherited context onto a DIFFERENT model (e.g. opus) — best-effort")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when no agent is named: conductor, reviewer, qa, release")
+	cmd.Flags().StringVar(&opt.Task, "task", "", "safe one-line assignment label shown by `bashy agents`")
 	cmd.Flags().StringVar(&opt.Instruction, "instruction", "", "the instruction (or pass it as positional words)")
 	cmd.Flags().StringArrayVar(&opt.Files, "file", nil, "append file contents to the instruction")
 	cmd.Flags().StringArrayVar(&opt.Context, "context", nil, "append context text to the instruction")
