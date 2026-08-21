@@ -838,7 +838,7 @@ func NewChatCmd() *cobra.Command {
 			"sits at the agent's terminal to answer an approval prompt. The steer loop is the oversight")
 	cmd.Flags().BoolVar(&opt.AllowPremium, "allow-premium", false, "explicitly bypass LLM budget/subscription gates for urgent human-authorized work")
 	cmd.Flags().StringVar(&opt.Role, "role", "", "role alias when --agent is omitted: conductor, reviewer, qa, release")
-	cmd.Flags().StringVar(&opt.Task, "task", "", "safe one-line assignment label shown by `bashy agents`")
+	cmd.Flags().StringVar(&opt.Task, "task", "", "safe one-line assignment label shown in the live agent roster")
 	cmd.Flags().StringVar(&capStr, "capability", "", "route to the best-fit routable agent for this capability (e.g. deep-research, coding)")
 	cmd.Flags().StringVarP(&opt.Instruction, "instruction", "m", "", "instruction to send to the agent (one-shot; omit for an interactive session)")
 	cmd.Flags().StringArrayVar(&opt.Files, "file", nil, "append file contents to the instruction")
