@@ -1011,6 +1011,10 @@ func Invoke(ctx context.Context, opt Options, runner Runner) (Result, error) {
 		Cwd:       cwd,
 	}
 	if err := room.Join(taskCard); err != nil {
+		// Join writes the membership before appending its timeline event. If the
+		// append fails, remove this invocation's unique card before refusing the
+		// launch so publication failure cannot itself create phantom live work.
+		room.Leave(taskCard.ID)
 		res.ExitCode = 2
 		return res, fmt.Errorf("chat: publish live assignment: %w", err)
 	}

@@ -228,6 +228,28 @@ func TestInvokeFailsClosedWhenAssignmentCannotBePublished(t *testing.T) {
 	}
 }
 
+func TestInvokeRollsBackCardWhenTimelinePublishFails(t *testing.T) {
+	roomDir := t.TempDir()
+	if err := os.Mkdir(roomDir+"/timeline.jsonl", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BASHY_ROOM_DIR", roomDir)
+	r := &countingRunner{}
+	_, err := Invoke(context.Background(), Options{
+		Agent: "codex", Instruction: "must not leave phantom work", Cwd: t.TempDir(), ReadOnly: true,
+	}, r)
+	if err == nil || r.calls.Load() != 0 {
+		t.Fatalf("Invoke error=%v runner calls=%d", err, r.calls.Load())
+	}
+	entries, readErr := os.ReadDir(roomDir + "/members")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("publication failure left %d phantom membership cards", len(entries))
+	}
+}
+
 func TestOneShotCardIDIsBounded(t *testing.T) {
 	id := oneShotCardID(Launch{Nick: strings.Repeat("very-long-name", 100)})
 	if len(id) > 64 {
