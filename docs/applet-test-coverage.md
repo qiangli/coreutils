@@ -23,8 +23,8 @@ coverage:
 | `chroot` | missing-operand path only | withheld from `cmds/all` pending bounded privileged integration tests |
 | `runcon` | help output only | withheld from `cmds/all` pending bounded SELinux integration tests |
 
-After withholding those commands, the shipped inventory contains 136 command
-packages and 141 applet names. Every shipped package has a package-local test.
+The current generated inventory contains 142 command packages and 147 applet
+names. Every shipped package has a package-local test.
 This is a structural floor, not a claim of option-complete conformance: VSC,
 differential, platform, and package tests remain separate coverage dimensions.
 
@@ -33,5 +33,7 @@ tested packages: `[` (`test`), `gunzip` and `zcat` (`gzip`), `ncal` (`cal`), and
 `sntp` (`ntp`). Alias behavior must be invoked under its own name in tests when
 name-dependent parsing or diagnostics exist.
 
-See `applet-matrix.md` for the complete applet-by-applet GNU, VSC, alias, and
-package-test matrix; `applet-matrix.tsv` is its machine-readable counterpart.
+See `applet-matrix.md` for the complete applet-by-applet GNU, POSIX-cert, alias,
+and package-test matrix; `applet-matrix.tsv` is its machine-readable counterpart.
+The separate generated `posix-required-commands.md` covers all 116 configured
+required names, including names absent from this repository.

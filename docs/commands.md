@@ -197,35 +197,32 @@ every historical POSIX utility in Go. A command belongs in the advertised
 multicall inventory only when its supported behavior is valuable on those
 platforms and its package and platform coverage satisfy the release gate.
 
-The formal POSIX Shell and Utilities profile is a separate concern. It may
-combine the Bashy shell and Bashy Go applets with explicitly declared, pinned
-Linux providers. Certification evidence and claims apply to that assembled
-configuration, not to a fictional all-Go Bashy userland. Host fallback must be
-measured and recorded and never credited as a Bashy implementation.
+The formal POSIX Shell and Utilities profiles are a separate concern:
 
-The 2026-08-05 staged certification arm still required external providers for
-these 31 command names:
+- **Profile B** is the Bashy shell with frozen GNU/system utility providers.
+  It excludes this repository's Go applets so that it isolates shell behavior.
+- **Profiles C/D** place the Bashy Go multicall provider first, with GNU Bash
+  or Bashy respectively, and therefore measure this repository's applets.
 
-`ar`, `bc`, `ctags`, `ed`, `ex`, `file`, `getconf`, `iconv`, `locale`,
-`localedef`, `logger`, `lp`, `m4`, `mailx`, `make`, `man`, `mesg`, `newgrp`,
-`nm`, `patch`, `pax`, `renice`, `strip`, `tabs`, `talk`, `tput`,
-`uudecode`, `uuencode`, `vi`, `write`.
+Certification evidence applies only to the exact staged profile manifest.
+Host fallback must be measured and recorded and never credited as a Bashy Go
+implementation.
 
-These names are a certification-provider inventory, not an implementation
-backlog. Use these decision classes when prioritizing product work:
+The generated current inventory is
+[`posix-required-commands.md`](posix-required-commands.md): 116 configured
+required names, 76 registered Go applets, 14 names supplied by the shell, and
+26 remaining external-provider gaps in the assembled C/D environment.
+Coreutils alone is absent for 40 of the 116 names; calling that a 26-name
+coreutils gap incorrectly credits the shell's 14 names to this repository.
 
-| class | current names | direction |
-|---|---|---|
-| portable candidates | `bc`, `ed`, `file`, `iconv`, `patch`, `pax`, `uudecode`, `uuencode` | consider pure Go when cross-platform user value and complete tests justify it |
-| specialist toolchain | `ar`, `ctags`, `m4`, `nm`, `strip` | prefer pinned toolchain providers or modern agent-oriented workflows unless an embedded implementation is compelling |
-| approved pure-Go/agentic investigations | `mailx`, `pax`, `make` | implement as compatibility-first libraries with separately named agentic surfaces; see `mailx-pax-make-agentic-plan.md` |
-| interactive/editor/documentation | `ex`, `man`, `vi` | normally external; do not add merely to reduce a certification-provider count |
-| platform or legacy facilities | `getconf`, `locale`, `localedef`, `logger`, `lp`, `mesg`, `newgrp`, `renice`, `tabs`, `talk`, `tput`, `write` | use declared Linux providers for certification; add a capability-gated Bashy implementation only when portable semantics are honest and useful |
+The product/provider allocation for the 26 assembled gaps is maintained once,
+in the umbrella
+[`posix-utility-provider-strategy.md`](../../docs/posix-utility-provider-strategy.md).
+They are provider decisions, not automatically an implementation backlog.
 
-The 31-name table records the 2026-08-05 staged certification snapshot. Since
-that snapshot, initial pure-Go implementations of `file`, `iconv`, `ps`,
-`uudecode`, and `uuencode` have landed in this repository; they count as Bashy providers
-only after a newly built certification stage proves their resolution.
+Historical note: the 2026-08-05 staged snapshot contained 30 external-provider
+names. `file`, `iconv`, `uudecode`, and `uuencode` subsequently became
+registered Go applets. `ps` also landed but was not one of those 30 names.
 
 The classes are prioritization guidance, not permanent prohibitions. Bashy may
 also ship modern agent-oriented tools that solve current workflows better than
@@ -298,7 +295,8 @@ shipped) spawn that command directly, exactly as the GNU binary does —
 that is the upstream semantics, not an implementation shortcut. Still
 NO (↻ = revisit):
 
-- kill — already a builtin in the qiangli/sh fork; a standalone would race it
+- none currently; `kill` is both a shipped standalone Go applet and a shell
+  builtin, with builtin resolution taking precedence inside the shell
 
 **Unix machinery with no cross-platform meaning:**
 
@@ -327,17 +325,12 @@ NO (↻ = revisit):
   Invoking any of the four emits a hint naming the replacement
   (`pkg/nudge`, `SuggestFailure`).
 
-  **POSIX status, recorded because it is the question that will be asked
-  again:** `write`, `mesg` and `talk` *are* POSIX XCU utilities, but under
-  the optional **User Portability Utilities (UP)** group — required only of
-  an implementation that claims that option. `wall` is not POSIX at all.
-  Neither affects bashy's certification: `bashy/docs/conformance-statement.md`
-  scopes bashy's claim to the **`sh` utility and its builtins**, and places
-  the ~160 standalone utilities on coreutils' own track. So these become
-  required only if coreutils elects to claim UP — a scope decision, not an
-  obligation. Verify against the VSC-PCTS utility list before acting on this
-  paragraph; it is an accurate reading of the standard, not a run of the
-  suite.
+  **POSIX/campaign status:** `write`, `mesg` and `talk` belong to the optional
+  POSIX User Portability Utilities group, while `wall` is not POSIX. The
+  configured VSC-PCTS2016 POSIX08 campaign nevertheless contains named test
+  sets for `write`, `mesg`, and `talk`, so all three are required provider
+  entries for this campaign. Standard optionality does not permit silently
+  omitting a configured test set.
 
 **System administration (in u-root's tree, out of scope for an agent
 userland — outpost/ycode own these concerns):**

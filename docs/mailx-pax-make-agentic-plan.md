@@ -4,6 +4,20 @@ Status: implementation roadmap. No command is considered shipped or a Bashy
 certification provider until it satisfies the repository release and native
 evidence gates.
 
+## Current code checkpoint
+
+This roadmap is no longer entirely design-only, but none of the three command
+providers has shipped:
+
+| command | landed foundation | still required before provider credit |
+| --- | --- | --- |
+| `mailx` | `pkg/mailx`: strict message parse/serialize, validation, locked local-mbox delivery, tests | interactive/send compatibility surface, command adapter, registration, full gates |
+| `pax` | `pkg/pax`: tar/ustar/pax manifest reader and mutation-free safe-extraction planner, tests | extraction, create/list/copy semantics and formats, command adapter, registration, full gates |
+| `make` | roadmap only; Bashy's existing `pkg/dag` is reusable agentic machinery, not POSIX make | POSIX parser/engine and recipe semantics, command adapter, registration, full gates |
+
+`ed` is tracked separately in `ed-agentic-feasibility.md`: its feasibility and
+clean-room design are approved, but there is no `cmds/ed` implementation yet.
+
 ## Why these three
 
 The 2026-08-12 Bashy-plus-system diagnostic exposed three unusually large

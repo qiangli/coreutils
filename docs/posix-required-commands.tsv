@@ -1,0 +1,117 @@
+command	coreutils_go_applet	go_package	shell_provided	profile_cd_disposition
+alias	no		yes	shell
+ar	no		no	external_gap
+at	yes	cmds/at	no	go_applet
+awk	yes	cmds/awk	no	go_applet
+basename	yes	cmds/basename	no	go_applet
+batch	yes	cmds/batch	no	go_applet
+bc	no		no	external_gap
+bg	no		yes	shell
+cat	yes	cmds/cat	no	go_applet
+cd	no		yes	shell
+chgrp	yes	cmds/chgrp	no	go_applet
+chmod	yes	cmds/chmod	no	go_applet
+chown	yes	cmds/chown	no	go_applet
+cksum	yes	cmds/cksum	no	go_applet
+cmp	yes	cmds/cmp	no	go_applet
+comm	yes	cmds/comm	no	go_applet
+command	no		yes	shell
+cp	yes	cmds/cp	no	go_applet
+crontab	yes	cmds/crontab	no	go_applet
+csplit	yes	cmds/csplit	no	go_applet
+ctags	no		no	external_gap
+cut	yes	cmds/cut	no	go_applet
+date	yes	cmds/date	no	go_applet
+dd	yes	cmds/dd	no	go_applet
+df	yes	cmds/df	no	go_applet
+diff	yes	cmds/diff	no	go_applet
+dirname	yes	cmds/dirname	no	go_applet
+du	yes	cmds/du	no	go_applet
+echo	yes	cmds/echo	no	go_applet
+ed	no		no	external_gap
+env	yes	cmds/env	no	go_applet
+ex	no		no	external_gap
+expand	yes	cmds/expand	no	go_applet
+expr	yes	cmds/expr	no	go_applet
+false	yes	cmds/false	no	go_applet
+fc	no		yes	shell
+fg	no		yes	shell
+file	yes	cmds/file	no	go_applet
+find	yes	cmds/find	no	go_applet
+fold	yes	cmds/fold	no	go_applet
+getconf	no		no	external_gap
+getopts	no		yes	shell
+grep	yes	cmds/grep	no	go_applet
+hash	no		yes	shell
+head	yes	cmds/head	no	go_applet
+iconv	yes	cmds/iconv	no	go_applet
+id	yes	cmds/id	no	go_applet
+jobs	no		yes	shell
+join	yes	cmds/join	no	go_applet
+kill	yes	cmds/kill	no	go_applet
+ln	yes	cmds/ln	no	go_applet
+locale	no		no	external_gap
+localedef	no		no	external_gap
+logger	no		no	external_gap
+logname	yes	cmds/logname	no	go_applet
+lp	no		no	external_gap
+ls	yes	cmds/ls	no	go_applet
+m4	no		no	external_gap
+mailx	no		no	external_gap
+make	no		no	external_gap
+man	no		no	external_gap
+mesg	no		no	external_gap
+mkdir	yes	cmds/mkdir	no	go_applet
+mkfifo	yes	cmds/mkfifo	no	go_applet
+more	yes	cmds/more	no	go_applet
+mv	yes	cmds/mv	no	go_applet
+newgrp	no		no	external_gap
+nice	yes	cmds/nice	no	go_applet
+nm	no		no	external_gap
+nohup	yes	cmds/nohup	no	go_applet
+od	yes	cmds/od	no	go_applet
+paste	yes	cmds/paste	no	go_applet
+patch	no		no	external_gap
+pathchk	yes	cmds/pathchk	no	go_applet
+pax	no		no	external_gap
+pr	yes	cmds/pr	no	go_applet
+printf	yes	cmds/printf	no	go_applet
+ps	yes	cmds/ps	no	go_applet
+pwd	yes	cmds/pwd	no	go_applet
+read	no		yes	shell
+renice	no		no	external_gap
+rm	yes	cmds/rm	no	go_applet
+rmdir	yes	cmds/rmdir	no	go_applet
+sed	yes	cmds/sed	no	go_applet
+sh	no		yes	shell
+sleep	yes	cmds/sleep	no	go_applet
+sort	yes	cmds/sort	no	go_applet
+split	yes	cmds/split	no	go_applet
+strings	yes	cmds/strings	no	go_applet
+strip	no		no	external_gap
+stty	yes	cmds/stty	no	go_applet
+tabs	no		no	external_gap
+tail	yes	cmds/tail	no	go_applet
+talk	no		no	external_gap
+tee	yes	cmds/tee	no	go_applet
+test	yes	cmds/test	no	go_applet
+time	yes	cmds/time	no	go_applet
+touch	yes	cmds/touch	no	go_applet
+tput	no		no	external_gap
+tr	yes	cmds/tr	no	go_applet
+true	yes	cmds/true	no	go_applet
+tsort	yes	cmds/tsort	no	go_applet
+tty	yes	cmds/tty	no	go_applet
+umask	no		yes	shell
+unalias	no		yes	shell
+uname	yes	cmds/uname	no	go_applet
+unexpand	yes	cmds/unexpand	no	go_applet
+uniq	yes	cmds/uniq	no	go_applet
+uudecode	yes	cmds/uudecode	no	go_applet
+uuencode	yes	cmds/uuencode	no	go_applet
+vi	no		no	external_gap
+wait	no		yes	shell
+wc	yes	cmds/wc	no	go_applet
+who	yes	cmds/who	no	go_applet
+write	no		no	external_gap
+xargs	yes	cmds/xargs	no	go_applet

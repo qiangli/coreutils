@@ -10,4 +10,10 @@ weave: 251
 assignee: qiangli
 ---
 
+Scope note (2026-08-22): this task is the GNU/uutils differential harness
+track, not the Profile B provider definition and not an implementation task for
+the 26 assembled gaps. Current inventory authority is
+`docs/posix-required-commands.md`; Profile B uses frozen GNU/system providers,
+while Profiles C/D place Bashy Go coreutils first.
+
 Create a durable coreutils + vsc-pcts-harness-kit testing plan and executable first slice. Inventory registered Bashy applets and map each to POSIX, GNU Coreutils 9.11, and pinned uutils reference coverage. Design a safe container/VM-only foreign-suite runner with hard memory/PID/time limits and no host-root/home mounts. Run GNU GPL tests externally without copying GPL test source; use uutils only as semantic reference per CLAUDE.md and preserve attribution for any permitted test adaptation. Define machine-readable three-way results covering argv/env/stdin/stdout/stderr/status/filesystem effects. Keep GNU extensions distinct from POSIX. Include AgentOS verbs as a separate Bashy contract/schema test track. Implement a minimal differential slice for test, printf, env, expr, basename, and dirname; add documentation and CI-safe local tests. Coordinate the formal 116-set VSC utility arm in the harness without licensed-source disclosure. Required gates: focused tests, go test -short ./..., scripts/crossvet.sh. Commit locally for conductor review; do not push.

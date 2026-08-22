@@ -1,8 +1,7 @@
 # coreutils
 
-A pure-Go agent userland: one set of Unix-style tools with identical
-behavior on every major platform (Linux, macOS, Windows), no system
-binaries required.
+A pure-Go agent userland: one canonical set of Unix-style Go applets with
+identical behavior on every major platform (Linux, macOS, Windows).
 
 This repo exists for **agents**, not humans. Agentic tools (shells,
 tool executors, automation harnesses) need a predictable command
@@ -21,19 +20,17 @@ environment in a single Go process.
 ## POSIX certification boundary
 
 This repository is **not a complete POSIX Commands & Utilities
-implementation**. The configured VSC-PCTS2016 POSIX08 certification scenario
-requires command providers that Bashy's pure-Go userland does not currently
-ship. As of 2026-08-06, after adding `file`, `iconv`, `ps`, `uudecode`, and
-`uuencode`, the remaining **26 command names** are:
+implementation**. In the configured 116-name VSC-PCTS2016 POSIX08 scenario,
+the canonical Go inventory supplies 76 names and is absent for 40. The shell
+supplies 14 of those 40, leaving 26 external-provider gaps in the assembled
+Bashy Profiles C/D surface. See the generated
+[complete required-command matrix](docs/posix-required-commands.md); do not
+infer the coreutils gap from the smaller assembled-Bashy number.
 
-`ar`, `bc`, `ctags`, `ed`, `ex`, `getconf`, `locale`, `localedef`, `logger`,
-`lp`, `m4`, `mailx`, `make`, `man`, `mesg`, `newgrp`, `nm`, `patch`, `pax`,
-`renice`, `strip`, `tabs`, `talk`, `tput`, `vi`, `write`.
-
-The formal Linux certification profile supplies those commands through
-explicitly declared and pinned external providers. Any resulting certification
-evidence applies to that assembled Bashy-plus-provider configuration, not to
-this repository alone. An applet appearing in the command list means that its
+Profile B deliberately uses Bashy with pinned GNU/system utilities and excludes
+these Go applets. Profiles C/D place the Go multicall provider first. Any
+resulting evidence applies to the exact staged profile and provider manifest,
+not to this repository alone. An applet appearing in the command list means its
 documented supported subset is implemented and tested; it does not by itself
 claim full POSIX or GNU option coverage. See
 [the portable-userland and provider policy](docs/commands.md#portable-userland-and-certification-provider-policy)
@@ -56,9 +53,11 @@ Every tool in this repo follows the same rules:
 - **Clear errors for the rest.** Not every flag is supported. An
   unsupported flag or mode fails loudly, naming the flag, with exit
   code 2 — never silently ignored, never silently approximated.
-- **Pure Go.** No tool ever shells out to a system binary. If the
-  pure-Go implementation can't do something, you get an error that
-  says so.
+- **Pure Go implementation.** An applet never delegates its own behavior to a
+  similarly named system binary. Command wrappers such as `env`, `time`,
+  `timeout`, `watch`, `xargs`, and `find -exec` execute their command operand
+  because execution is their documented behavior. Separately managed external
+  tools are external providers, not coreutils implementations.
 
 ## Packages
 
@@ -71,7 +70,7 @@ Every tool in this repo follows the same rules:
   design. Even local-path remotes use go-git's in-process server
   transport — `git-upload-pack` is never spawned.
 
-- `cmds/` — the userland: 141 shipped Go command packages advertising 146
+- `cmds/` — the userland: 142 shipped Go command packages advertising 147
   applet names (see the generated [applet matrix](docs/applet-matrix.md)),
   covering file operations
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),
