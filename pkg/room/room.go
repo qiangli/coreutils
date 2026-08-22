@@ -63,6 +63,14 @@ type Card struct {
 	Native bool   `json:"native,omitempty"` // self-governing harness (ycode)
 	Events bool   `json:"events,omitempty"` // speaks a structured event channel
 	Joined string `json:"joined"`
+	// Updated is the last publisher heartbeat. Joined is the assignment start
+	// and must not be rewritten by a heartbeat; consumers need both elapsed
+	// work time and liveness freshness.
+	Updated string `json:"updated,omitempty"`
+	// LeaseUntil bounds externally reported work whose worker is not a distinct
+	// local process. The managing orchestrator renews it; expiry makes the card
+	// stale even while the manager process remains alive.
+	LeaseUntil string `json:"lease_until,omitempty"`
 }
 
 // Event is one timeline entry — a join/leave/steer/status/note the room records.
@@ -157,12 +165,18 @@ func Join(c Card) error {
 		return err
 	}
 	path := filepath.Join(dir, c.ID+".json")
-	if prior, ok := readCard(path); ok && prior.PID != c.PID && PidAlive(prior.PID) {
-		return &ErrLive{ID: c.ID, PID: prior.PID}
+	if prior, ok := readCard(path); ok {
+		if prior.PID != c.PID && PidAlive(prior.PID) {
+			return &ErrLive{ID: c.ID, PID: prior.PID}
+		}
+		if prior.PID == c.PID && c.Joined == "" {
+			c.Joined = prior.Joined
+		}
 	}
 	if c.Joined == "" {
 		c.Joined = now()
 	}
+	c.Updated = now()
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
@@ -195,12 +209,23 @@ func readCard(path string) (Card, bool) {
 // evict the winner's card on its way out and hand the id back to nobody.
 // Leaving an id you do not hold is a no-op, not an error.
 func Leave(id string) {
+	LeavePID(id, os.Getpid())
+}
+
+// LeavePID removes a membership card owned by pid.
+//
+// Most members own their card directly and use Leave, which supplies the
+// caller's pid. External orchestrators are different: a short-lived `bashy`
+// command publishes work on behalf of its long-lived parent and a later
+// command retires that same card. LeavePID lets that launcher prove the same
+// parent still owns the card without weakening the incumbent protection.
+func LeavePID(id string, pid int) {
 	dir, err := membersDir()
 	if err != nil {
 		return
 	}
 	path := filepath.Join(dir, id+".json")
-	if prior, ok := readCard(path); ok && prior.PID != os.Getpid() && PidAlive(prior.PID) {
+	if prior, ok := readCard(path); ok && prior.PID != pid && PidAlive(prior.PID) {
 		return
 	}
 	_ = os.Remove(path)

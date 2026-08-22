@@ -173,6 +173,24 @@ func TestLeaveDoesNotEvictAnotherHolder(t *testing.T) {
 	}
 }
 
+func TestLeavePIDRetiresParentOwnedWorkWithoutEvictingAnotherOwner(t *testing.T) {
+	isolate(t)
+	parent := os.Getppid()
+	if err := Join(Card{ID: "external-review", Binding: "codex:gpt", PID: parent}); err != nil {
+		t.Fatalf("join parent-owned work: %v", err)
+	}
+
+	Leave("external-review")
+	if _, ok, _ := Find("external-review"); !ok {
+		t.Fatal("ordinary child Leave evicted its live parent-owned card")
+	}
+
+	LeavePID("external-review", parent)
+	if _, ok, _ := Find("external-review"); ok {
+		t.Fatal("LeavePID did not retire the card owned by the supplied parent")
+	}
+}
+
 // TestTaskCardsCoexistWithAgentCard — the singleton is on the IDENTITY, not on
 // the board. Many tasks of one agent may be live at once; they are keyed by work
 // and must not be refused.
@@ -190,5 +208,26 @@ func TestTaskCardsCoexistWithAgentCard(t *testing.T) {
 	members, _ := Members()
 	if len(members) != 3 {
 		t.Fatalf("want 3 live members (1 agent + 2 tasks), got %d: %+v", len(members), members)
+	}
+}
+
+func TestJoinHeartbeatPreservesStartAndRefreshesUpdate(t *testing.T) {
+	isolate(t)
+	first := Card{ID: "external-review", Binding: "codex:gpt", PID: os.Getpid(), Joined: "2026-01-01T00:00:00Z"}
+	if err := Join(first); err != nil {
+		t.Fatalf("first join: %v", err)
+	}
+	if err := Join(Card{ID: first.ID, Binding: first.Binding, PID: first.PID}); err != nil {
+		t.Fatalf("heartbeat join: %v", err)
+	}
+	got, ok, err := Find(first.ID)
+	if err != nil || !ok {
+		t.Fatalf("find heartbeat card: ok=%v err=%v", ok, err)
+	}
+	if got.Joined != first.Joined {
+		t.Fatalf("heartbeat rewrote assignment start: got %q want %q", got.Joined, first.Joined)
+	}
+	if got.Updated == "" {
+		t.Fatal("heartbeat did not record Updated")
 	}
 }
