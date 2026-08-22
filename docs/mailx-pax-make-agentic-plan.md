@@ -214,8 +214,8 @@ explicit feature.
 7. Make graph projection and AgentOS execution extensions.
 8. Parallel/remote make only after serial conformance and recovery are stable.
 
-Each phase lands in bounded commits. Registration in `cmds/all`, `cmds/lean`,
-the atlas and generated applet matrix occurs only when that command's honest
+Each phase lands in bounded commits. Registration in `cmds/all`, the atlas and
+generated applet matrix occurs only when that command's honest
 supported surface and tests are ready. Native diagnostic evidence may guide
 development, but only a complete denominator-checked replay can change the
 campaign scoreboard.

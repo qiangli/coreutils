@@ -216,7 +216,8 @@ pflag sees them — exact match wins, ambiguity is a GNU-format exit-2
 error; `tool/abbrev_test.go`), and the contract error
 helpers (UsageError, NotSupported). `cmds/<name>/` is one package per
 command (`package <name>cmd`), init-registered; `cmds/all` blank-
-imports the full set (135 commands — `cmds/all/all.go` is the shipped
+imports the canonical set (142 command packages / 147 advertised names —
+`cmds/all/all.go` is the shipped
 inventory, `docs/commands.md` the plan, and `pkg/atlas` the Command
 Atlas metadata table (group/tier/caps per command; its coverage test
 fails by name if a registered tool lacks an entry); keep all three in
@@ -483,8 +484,8 @@ identical cross-platform behavior:
   (gvproxy + win-sshproxy from containers/gvisor-tap-vsock, binmgr-fetched
   and digest-pinned), deliberately kept OUT of `engine` so it imports only
   `pkg/binmgr` + stdlib. It has to be reachable from the build that does
-  NOT link the engine: bashy's shipped Windows binary is the lean worker,
-  so `bashy podman` *execs* a podman rather than linking libpod, and that
+  NOT link the engine: bashy's shipped Windows binary does not link libpod,
+  so `bashy podman` *execs* a podman instead, and that
   exec path needs the same provisioning. `Apply(cacheDir)` stages the
   helpers and exports `$CONTAINERS_HELPER_BINARY_DIR` (+ PATH).
   **Why it is load-bearing:** on Windows podman does not serve its API

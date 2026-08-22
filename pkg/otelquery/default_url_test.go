@@ -31,8 +31,8 @@ func TestDefaultBaseURLPointsAtTheProxyNotAStore(t *testing.T) {
 
 // Keep the constant honest against the stack it must match.
 func TestDefaultProxyPortMatchesTheStack(t *testing.T) {
-	// external/otel/stack.DefaultProxyPort. It cannot be imported here (separate module, and
-	// this client must stay linkable into the lean build), so the coupling is asserted by hand.
+	// external/otel/stack.DefaultProxyPort. It cannot be imported here because it
+	// lives in a separate module, so the coupling is asserted by hand.
 	const stackDefaultProxyPort = 31415
 	if defaultProxyPort != stackDefaultProxyPort {
 		t.Fatalf("defaultProxyPort = %d, but external/otel/stack.DefaultProxyPort = %d — "+

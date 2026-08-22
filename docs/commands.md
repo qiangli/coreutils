@@ -234,26 +234,13 @@ implemented POSIX/GNU name still must be registered, behaviorally and
 cross-platform tested, listed in the generated applet matrix, and proven as the
 actual staged provider before reports attribute it to Bashy.
 
-#### Lean helper build (`cmd/coreutils-lean`)
+#### Canonical multicall build (`cmd/coreutils`)
 
-The full multicall binary (`cmd/coreutils` → `cmds/all`) links every applet,
-including agent extensions whose dependency trees dominate the page footprint:
-browser (chromedp/cdproto), fetch (HTTP + markdown), jq (gojq), and the
-code-intelligence/orchestration verbs (ast, graph, tokens). When a shell or
-certification-provider path resolves every helper through one multicall binary,
-that binary is mmap'd and demand-paged on each invocation — including the no-op
-`true` — so the full ~64 MB binary costs ~9 ms per cheap call. Across hundreds
-of helper invocations that is minutes of wall time.
-
-`cmd/coreutils-lean` (→ `cmds/lean`) is the lean drop-in: the same
-busybox-style dispatch and fail-closed behavior, but linking only the standard
-Unix utilities and excluding the eight agent extensions named above. It is ~5×
-smaller and starts ~2.5× faster on cheap commands (measured by
-`scripts/lean-bench.sh`). Anything it does not ship fails closed with exit 2
-and the standard "not a supported command" diagnostic — never a silent
-approximation. The full binary is unchanged and still ships the excluded
-applets; the lean inventory is explicit and drift-guarded by
-`cmds/lean/lean_test.go`.
+`cmd/coreutils` → `cmds/all` is the one shipped multicall inventory. There is
+no reduced build with a different command set: consumers, documentation and
+certification tooling all resolve the same registered Go implementations.
+Whether a command is required by the POSIX certification tests is documentation
+metadata in the generated applet matrix, not a build-time inclusion switch.
 
 #### Portable-command implementation TODO
 

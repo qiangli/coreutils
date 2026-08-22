@@ -8,8 +8,8 @@ privileged integration coverage.
 
 - **GNU Coreutils** means the name belongs to GNU Coreutils' all-known
   command inventory. It does not claim complete GNU option parity.
-- **VSC named tset** means the configured VSC-PCTS2016 POSIX08 Commands
-  & Utilities scenario contains a test set with the same name. It does
+- **POSIX cert required** means the configured VSC-PCTS2016 POSIX08
+  Commands & Utilities scenario contains a test set with the same name. It does
   not prove that every applet option is covered or that an applet with
   `no` is never invoked indirectly.
 - **Test files/functions** count package-local Go test files and top-level
@@ -26,8 +26,8 @@ privileged integration coverage.
 | Advertised applet names | 147 |
 | Alias applet names | 5 |
 | GNU Coreutils names | 106 |
-| Names with a configured VSC test set | 76 |
-| Names without a configured VSC test set | 71 |
+| POSIX-cert-required names | 76 |
+| Names not required by the POSIX certification tests | 71 |
 | Shipped names lacking package-local tests | 0 |
 | Release-withheld implementations | 2 (`chroot`, `runcon`) |
 
@@ -35,7 +35,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 
 ## Complete matrix
 
-| Applet | Go package | Alias of | Family | GNU | VSC named tset | Test files | Test functions |
+| Applet | Go package | Alias of | Family | GNU | POSIX cert required | Test files | Test functions |
 |---|---|---|---|:---:|:---:|---:|---:|
 | `[` | `cmds/test` | test | GNU Coreutils | yes | no | 3 | 32 |
 | `arch` | `cmds/arch` | — | GNU Coreutils | yes | no | 1 | 2 |

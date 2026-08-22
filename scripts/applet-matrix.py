@@ -24,14 +24,19 @@ stat stdbuf stty sum sync tac tail tee test timeout touch tr true truncate tsort
 tty uname unexpand uniq unlink uptime users vdir wc who whoami yes
 """.split())
 
-# Exact name intersection measured from the configured VSC-PCTS2016 POSIX08
-# runscen and the staged 2026-08-05 Bashy multicall inventory.
-VSC_NAMED = set("""
-at awk basename batch cat chgrp chmod chown cksum cmp comm cp crontab csplit cut
-date dd df diff dirname du echo env expand expr false file find fold grep head iconv id join
-kill ln logname ls mkdir mkfifo more mv nice nohup od paste pathchk pr printf ps pwd
-rm rmdir sed sleep sort split strings stty tail tee test time touch tr true tsort
-tty uname unexpand uniq uudecode uuencode wc who xargs
+# Required utility names from the configured VSC-PCTS2016 POSIX08 Commands &
+# Utilities scenario. The rendered matrix intersects this set with the canonical
+# shipped inventory; keeping the complete set here makes a newly shipped required
+# command acquire the documentation label automatically.
+POSIX_CERT_REQUIRED = set("""
+awk basename bc cat cd chgrp chmod chown cksum cmp comm command cp cut date dd
+diff dirname echo ed env expr false find fold getconf getopts grep head id join
+kill ln locale localedef logger logname lp ls mailx mkdir mkfifo mv nohup od paste
+pathchk pax pr printf pwd read rm rmdir sed sh sleep sort stty tail tee test touch
+tr true tty umask uname uniq wait wc xargs alias at batch bg crontab csplit ctags
+df du ex expand fc fg file jobs man mesg more newgrp nm nice patch ps renice split
+strings tabs talk time tput unalias unexpand uudecode uuencode vi who write ar make
+strip hash iconv m4 tsort
 """.split())
 
 ALIASES = {
@@ -58,6 +63,11 @@ def package_tests(package: str) -> tuple[int, int]:
 
 
 def rows() -> list[dict[str, str | int]]:
+    if len(POSIX_CERT_REQUIRED) != 116:
+        raise SystemExit(
+            f"POSIX certification inventory changed: {len(POSIX_CERT_REQUIRED)} names; "
+            "reconcile it with the configured scenario before regenerating"
+        )
     packages = shipped_packages()
     applet_package = {package: package for package in packages}
     for applet, package in ALIASES.items():
@@ -71,7 +81,7 @@ def rows() -> list[dict[str, str | int]]:
         files, funcs = package_tests(package)
         if applet in GNU:
             family = "GNU Coreutils"
-        elif applet in VSC_NAMED:
+        elif applet in POSIX_CERT_REQUIRED:
             family = "POSIX/Unix utility"
         else:
             family = "Bashy/other extension"
@@ -81,7 +91,7 @@ def rows() -> list[dict[str, str | int]]:
             "alias_of": package if applet in ALIASES else "",
             "family": family,
             "gnu_coreutils": "yes" if applet in GNU else "no",
-            "vsc_named_tset": "yes" if applet in VSC_NAMED else "no",
+            "posix_cert_required": "yes" if applet in POSIX_CERT_REQUIRED else "no",
             "test_files": files,
             "test_functions": funcs,
         })
@@ -109,7 +119,7 @@ def render_tsv(data: list[dict[str, str | int]]) -> str:
 def render_markdown(data: list[dict[str, str | int]]) -> str:
     packages = len(shipped_packages())
     gnu = sum(row["gnu_coreutils"] == "yes" for row in data)
-    vsc = sum(row["vsc_named_tset"] == "yes" for row in data)
+    posix_cert = sum(row["posix_cert_required"] == "yes" for row in data)
     aliases = sum(bool(row["alias_of"]) for row in data)
     lines = [
         "# Bashy shipped applet matrix",
@@ -122,8 +132,8 @@ def render_markdown(data: list[dict[str, str | int]]) -> str:
         "",
         "- **GNU Coreutils** means the name belongs to GNU Coreutils' all-known",
         "  command inventory. It does not claim complete GNU option parity.",
-        "- **VSC named tset** means the configured VSC-PCTS2016 POSIX08 Commands",
-        "  & Utilities scenario contains a test set with the same name. It does",
+        "- **POSIX cert required** means the configured VSC-PCTS2016 POSIX08",
+        "  Commands & Utilities scenario contains a test set with the same name. It does",
         "  not prove that every applet option is covered or that an applet with",
         "  `no` is never invoked indirectly.",
         "- **Test files/functions** count package-local Go test files and top-level",
@@ -140,8 +150,8 @@ def render_markdown(data: list[dict[str, str | int]]) -> str:
         f"| Advertised applet names | {len(data)} |",
         f"| Alias applet names | {aliases} |",
         f"| GNU Coreutils names | {gnu} |",
-        f"| Names with a configured VSC test set | {vsc} |",
-        f"| Names without a configured VSC test set | {len(data) - vsc} |",
+        f"| POSIX-cert-required names | {posix_cert} |",
+        f"| Names not required by the POSIX certification tests | {len(data) - posix_cert} |",
         "| Shipped names lacking package-local tests | 0 |",
         "| Release-withheld implementations | 2 (`chroot`, `runcon`) |",
         "",
@@ -149,7 +159,7 @@ def render_markdown(data: list[dict[str, str | int]]) -> str:
         "",
         "## Complete matrix",
         "",
-        "| Applet | Go package | Alias of | Family | GNU | VSC named tset | Test files | Test functions |",
+        "| Applet | Go package | Alias of | Family | GNU | POSIX cert required | Test files | Test functions |",
         "|---|---|---|---|:---:|:---:|---:|---:|",
     ]
     for row in data:
@@ -157,7 +167,7 @@ def render_markdown(data: list[dict[str, str | int]]) -> str:
         applet = f"`{row['applet']}`"
         lines.append(
             f"| {applet} | `{row['go_package']}` | {alias} | {row['family']} | "
-            f"{row['gnu_coreutils']} | {row['vsc_named_tset']} | "
+            f"{row['gnu_coreutils']} | {row['posix_cert_required']} | "
             f"{row['test_files']} | {row['test_functions']} |"
         )
     lines.extend([
