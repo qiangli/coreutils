@@ -97,7 +97,12 @@ func weaveQueueDirForSprintRun(run sprintRun) (string, error) {
 }
 
 func sameSprintRun(a, b sprintRun) (bool, error) {
-	if a.ID != b.ID {
+	// Issue numbers are queue-local. Historical sprint records commonly use
+	// the same small numbers in unrelated repositories, so repository identity
+	// must be rejected before attempting legacy queue resolution. Otherwise a
+	// missing old queue for repo A can block linking a new repo B run merely
+	// because both happened to be issue #3.
+	if a.Repo != b.Repo || a.ID != b.ID {
 		return false, nil
 	}
 	if a.Queue != "" && b.Queue != "" {
