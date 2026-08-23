@@ -61,6 +61,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/find"
 	_ "github.com/qiangli/coreutils/cmds/fmt"
 	_ "github.com/qiangli/coreutils/cmds/fold"
+	_ "github.com/qiangli/coreutils/cmds/getconf"
 	_ "github.com/qiangli/coreutils/cmds/grep"
 	_ "github.com/qiangli/coreutils/cmds/groups"
 	_ "github.com/qiangli/coreutils/cmds/gzip"
