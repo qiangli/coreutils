@@ -9,8 +9,24 @@
 set -euo pipefail
 
 here=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
-manifest=${POSIX_PROVIDER_MANIFEST:-$here/manifest.tsv}
-cache=${BASHY_BIN_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/bashy/bin}
+# The manifest is CANONICAL at pkg/posixprovider/manifest.tsv, because the Go
+# library embeds it (//go:embed cannot reach outside its own package directory)
+# and exactly one copy of the pins may exist. This script reads that same file so
+# the recipe and the resolver can never disagree about what is pinned.
+manifest=${POSIX_PROVIDER_MANIFEST:-$here/../../pkg/posixprovider/manifest.tsv}
+# The cache root MUST agree with pkg/binmgr.CacheDir(), which is what
+# pkg/posixprovider.Resolve reads. A provider built into a directory the
+# resolver does not look in is invisible, and the symptom is a "not
+# provisioned" error nobody can explain. binmgr uses Go's os.UserCacheDir(),
+# and that is ~/Library/Caches on darwin -- NOT the XDG path.
+default_cache() {
+  case "$(uname -s)" in
+    Darwin) printf '%s' "$HOME/Library/Caches/bashy/bin" ;;
+    MINGW*|MSYS*|CYGWIN*) printf '%s' "${LOCALAPPDATA:-$HOME/AppData/Local}/bashy/bin" ;;
+    *) printf '%s' "${XDG_CACHE_HOME:-$HOME/.cache}/bashy/bin" ;;
+  esac
+}
+cache=${BASHY_BIN_CACHE:-$(default_cache)}
 work=${POSIX_PROVIDER_WORK:-${TMPDIR:-/tmp}/posix-providers}
 
 fail() { printf 'posix-provider: %s\n' "$*" >&2; exit 2; }
