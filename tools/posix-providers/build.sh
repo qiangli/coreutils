@@ -297,12 +297,42 @@ PATCHES
          CFLAGS='-O2 -fgnu89-inline -std=gnu99 -DIS_IN\(x\)=0' >/dev/null)
     found=$_h/localedef
     ;;
+  ctags)
+    # The pin is a git-tag archive (archive/refs/tags/), which ships no
+    # generated configure -- Universal Ctags produces it with autogen.sh, so the
+    # default branch's "$src/configure" simply does not exist and the build died
+    # with exit 127 "No such file or directory".
+    #
+    # The optional format backends are disabled deliberately: each would pull an
+    # unpinned system library (libxml2, jansson, libyaml) into a provider whose
+    # whole point is being built from pinned bytes, and none of them affects the
+    # POSIX ctags(1) behaviour under test.
+    (cd "$src" && ./autogen.sh >"$build_dir/ctags-autogen.log" 2>&1 ||
+       { sed -n '1,40p' "$build_dir/ctags-autogen.log" >&2
+         fail 'ctags autogen.sh failed (needs autoconf, automake, pkg-config)'; })
+    (cd "$src" && ./configure --disable-nls --disable-xml --disable-json \
+       --disable-yaml --disable-seccomp >"$build_dir/ctags-configure.log" 2>&1 ||
+       { sed -n '1,40p' "$build_dir/ctags-configure.log" >&2
+         fail 'ctags configure failed'; })
+    (cd "$src" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >/dev/null)
+    found=$src/ctags
+    ;;
   talk)
     # netkit predates autotools portability: ./configure is a hand-written script
     # and the tree has no VPATH, so build in-tree like vim and CUPS. Only the
     # client is built -- talkd is a daemon, and the POSIX utility under test is
-    # talk(1). Needs ncurses headers; configure says so plainly if they are absent.
-    (cd "$src" && ./configure >/dev/null && make -C talk >/dev/null)
+    # talk(1). Needs ncurses headers.
+    #
+    # configure WRITES MCONFIG, so when it fails the build previously died in
+    # make with "../MCONFIG: No such file or directory" -- a confusing symptom
+    # for a plain missing-ncurses diagnosis that ./configure had already printed
+    # onto /dev/null. Keep its output and check for the file it must produce.
+    (cd "$src" && ./configure >"$build_dir/talk-configure.log" 2>&1 ||
+       { sed -n '1,40p' "$build_dir/talk-configure.log" >&2
+         fail 'talk configure failed (needs a terminal library, e.g. libncurses-dev)'; })
+    [ -f "$src/MCONFIG" ] ||
+      fail 'talk configure completed but produced no MCONFIG'
+    (cd "$src" && make -C talk >/dev/null)
     found=$src/talk/talk
     ;;
   ex|vi)
