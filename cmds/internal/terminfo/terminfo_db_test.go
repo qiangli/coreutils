@@ -1,4 +1,4 @@
-package tputcmd
+package terminfo
 
 import (
 	"os"
@@ -48,7 +48,7 @@ func TestAgreesWithSystemTput(t *testing.T) {
 
 	compared := 0
 	for _, term := range []string{"xterm", "xterm-256color", "vt100", "ansi", "linux", "screen"} {
-		e, err := loadEntry(getenv, term)
+		e, err := Load(getenv, term)
 		if err != nil || e.source == "(built-in)" {
 			continue // not installed here; the fallback is not the reference
 		}
@@ -57,7 +57,7 @@ func TestAgreesWithSystemTput(t *testing.T) {
 			if !ok {
 				continue
 			}
-			got, err := instantiate(s, c.args)
+			got, err := Instantiate(s, c.args)
 			if err != nil {
 				t.Errorf("%s %s %v: %v", term, c.capName, c.args, err)
 				continue

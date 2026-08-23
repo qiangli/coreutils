@@ -1,4 +1,4 @@
-package tputcmd
+package terminfo
 
 import "strings"
 
@@ -11,7 +11,7 @@ import "strings"
 // passes or fails according to which ncurses the developer happens to have
 // installed, which is not a test.
 //
-// The on-disk database always wins (see loadEntry). These entries are a
+// The on-disk database always wins (see Load). These entries are a
 // fallback, never an override, so an administrator's customised entry is never
 // silently shadowed by a value compiled into this binary.
 //
@@ -213,7 +213,7 @@ func mergeCaps(base, extra map[string]string) map[string]string {
 // builtinEntry returns the compiled-in description for term, or nil.
 // Every alias in an entry's names list matches, exactly as it would in a
 // compiled file.
-func builtinEntry(term string) *entry {
+func builtinEntry(term string) *Entry {
 	for _, def := range builtins {
 		// The last name is the long description, not an alias.
 		aliases := def.names
@@ -242,9 +242,9 @@ func builtinEntry(term string) *entry {
 	return nil
 }
 
-// builtinNames lists the terminal types the compiled-in table answers for,
+// BuiltinNames lists the terminal types the compiled-in table answers for,
 // for the --help text.
-func builtinNames() string {
+func BuiltinNames() string {
 	var names []string
 	for _, def := range builtins {
 		aliases := def.names

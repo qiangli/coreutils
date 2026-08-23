@@ -1,4 +1,26 @@
-package tputcmd
+// Package terminfo is the pure-Go reader for the compiled terminfo database
+// and the `%`-directive language a parameterized capability is written in.
+//
+// It is shared by every command that has to speak to the terminal itself
+// rather than to a file — tput reports and emits capabilities, tabs renders a
+// tab-stop list with them — and it exists as one package for a blunt reason:
+// the three capability NAME TABLES in caps.go ARE the binary format. A
+// compiled entry stores three unnamed arrays, so a capability's name is purely
+// its index, and a second transcription of those tables would not fail
+// loudly — it would report a plausible value under the wrong name.
+//
+// Two invariants run through the whole package.
+//
+// ABSENCE LIVES IN THE KEY SET, never in a zero value. terminfo writes -1 for
+// "absent" and -2 for "cancelled", and a numeric capability may legitimately
+// hold 0, so `Num` returns the comma-ok form and callers must use it. POSIX
+// hangs tput's exit status on exactly that distinction.
+//
+// THE DATABASE IS READ DIRECTLY. Nothing here shells out to tput, tabs or
+// infocmp, and nothing links ncurses; the compiled format is parsed in
+// terminfo.go and the parameter engine is interpreted in tparm.go, both
+// implemented from the published format and the POSIX/terminfo documentation.
+package terminfo
 
 import (
 	"encoding/binary"
@@ -10,13 +32,13 @@ import (
 	"strings"
 )
 
-// entry is one decoded terminal description.
+// Entry is one decoded terminal description.
 //
 // Absent is modelled by absence from the map, never by a zero value: terminfo
 // stores -1 for "absent" and -2 for "cancelled", and a numeric capability
 // legitimately holds 0, so a present-but-zero number must not read as missing.
 // POSIX hangs exit status 1 on exactly that distinction.
-type entry struct {
+type Entry struct {
 	names []string // aliases, in file order; the last element is the long name
 	bools map[string]bool
 	nums  map[string]int
@@ -27,21 +49,61 @@ type entry struct {
 	source string
 }
 
-func newEntry() *entry {
-	return &entry{
+func newEntry() *Entry {
+	return &Entry{
 		bools: map[string]bool{},
 		nums:  map[string]int{},
 		strs:  map[string]string{},
 	}
 }
 
-// longName is the human-readable description: the last |-separated field of
+// LongName is the human-readable description: the last |-separated field of
 // the names section, as `tput longname` reports it.
-func (e *entry) longName() string {
+func (e *Entry) LongName() string {
 	if len(e.names) == 0 {
 		return ""
 	}
 	return e.names[len(e.names)-1]
+}
+
+// Str, Num and Bool are the read surface every consumer of a decoded entry
+// uses. They return the comma-ok form deliberately: the map's KEY SET is where
+// presence lives, because "absent" and a legitimate 0 are different answers
+// and a zero value cannot tell them apart.
+func (e *Entry) Str(name string) (string, bool) {
+	s, ok := e.strs[name]
+	return s, ok
+}
+
+func (e *Entry) Num(name string) (int, bool) {
+	v, ok := e.nums[name]
+	return v, ok
+}
+
+func (e *Entry) Bool(name string) bool { return e.bools[name] }
+
+// Source reports where the entry came from: a database file path, or
+// "(built-in)" for the compiled-in fallback table.
+func (e *Entry) Source() string { return e.source }
+
+// ExtendedKind classifies a name that no standard array reserves but this
+// entry defines as an ncurses user-defined capability. Such a name is a real
+// capability of this terminal even though no standard slot names it.
+func (e *Entry) ExtendedKind(name string) Kind {
+	switch {
+	case containsKey(e.bools, name):
+		return KindBool
+	case containsKey(e.nums, name):
+		return KindNum
+	case containsKey(e.strs, name):
+		return KindStr
+	}
+	return KindUnknown
+}
+
+func containsKey[V any](m map[string]V, k string) bool {
+	_, ok := m[k]
+	return ok
 }
 
 // The two magic numbers of the compiled format. The only difference between
@@ -109,7 +171,7 @@ func (r *reader) align() {
 // table), then the names blob, the boolean bytes, an alignment pad, the
 // numbers, the string offsets, and the string table. An optional extended
 // section (ncurses user-defined capabilities) may follow.
-func parseTerminfo(data []byte) (*entry, error) {
+func parseTerminfo(data []byte) (*Entry, error) {
 	r := &reader{b: data}
 	magic, ok := r.int16()
 	if !ok {
@@ -217,7 +279,7 @@ func parseTerminfo(data []byte) (*entry, error) {
 // strings, the total number of string offsets, and the extended table size),
 // then the values, then — at the tail of the same string table — the NAMES of
 // every extended capability, booleans first, then numbers, then strings.
-func parseExtended(r *reader, e *entry, numWidth int) {
+func parseExtended(r *reader, e *Entry, numWidth int) {
 	nBools, ok1 := r.int16()
 	nNums, ok2 := r.int16()
 	nStrs, ok3 := r.int16()
@@ -435,23 +497,23 @@ func candidatePaths(dir, term string) []string {
 	}
 }
 
-// errUnknownTerm is the "no information about this terminal" condition, which
+// ErrUnknownTerm is the "no information about this terminal" condition, which
 // POSIX maps to exit status 3.
-var errUnknownTerm = errors.New("unknown terminal type")
+var ErrUnknownTerm = errors.New("unknown terminal type")
 
-// loadEntry finds and decodes the description for term.
+// Load finds and decodes the description for term.
 //
 // The on-disk database always wins over the compiled-in table: the built-ins
 // exist so the tool still works where no database is installed (a scratch
 // container, Windows), not to override an administrator's entry.
-func loadEntry(getenv func(string) string, term string) (*entry, error) {
+func Load(getenv func(string) string, term string) (*Entry, error) {
 	if term == "" {
-		return nil, errUnknownTerm
+		return nil, ErrUnknownTerm
 	}
 	// A terminal name is used to build a path, so refuse anything that could
 	// escape the database directory.
 	if strings.ContainsAny(term, "/\\") || term == "." || term == ".." {
-		return nil, errUnknownTerm
+		return nil, ErrUnknownTerm
 	}
 	var firstErr error
 	for _, dir := range terminfoDirs(getenv) {
@@ -479,5 +541,5 @@ func loadEntry(getenv func(string) string, term string) (*entry, error) {
 	if firstErr != nil {
 		return nil, firstErr
 	}
-	return nil, errUnknownTerm
+	return nil, ErrUnknownTerm
 }

@@ -1,4 +1,4 @@
-package tputcmd
+package terminfo
 
 // The three capability-name tables below ARE the binary terminfo format: a
 // compiled entry stores three unnamed arrays (booleans, numbers, strings) and
@@ -103,31 +103,31 @@ const (
 	strArrayLen  = 414
 )
 
-// capKind says which of the three arrays a name belongs to. "Unknown" is a
+// Kind says which of the three arrays a name belongs to. "Unknown" is a
 // distinct answer from "absent": POSIX gives them different exit statuses
 // (4 versus 1), so the caller must be able to tell them apart.
-type capKind int
+type Kind int
 
 const (
-	capUnknown capKind = iota
-	capBool
-	capNum
-	capStr
+	KindUnknown Kind = iota
+	KindBool
+	KindNum
+	KindStr
 )
 
-var capKinds = map[string]capKind{}
+var capKinds = map[string]Kind{}
 
 func init() {
 	for _, n := range boolNames {
-		capKinds[n] = capBool
+		capKinds[n] = KindBool
 	}
 	for _, n := range numNames {
-		capKinds[n] = capNum
+		capKinds[n] = KindNum
 	}
 	for _, n := range strNames {
-		capKinds[n] = capStr
+		capKinds[n] = KindStr
 	}
 }
 
-// kindOf reports which array name lives in, or capUnknown.
-func kindOf(name string) capKind { return capKinds[name] }
+// KindOf reports which array name lives in, or KindUnknown.
+func KindOf(name string) Kind { return capKinds[name] }

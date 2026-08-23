@@ -487,6 +487,9 @@ func init() {
 		// locale reports the environment's locale settings; logger writes to the
 		// system log; newgrp changes the caller's group credential for a new shell.
 		"locale", "logger", "newgrp",
+		// tabs emits the terminal's clear-tab and set-tab capabilities; like tput
+		// it reads terminfo and writes only to stdout.
+		"tabs",
 		"seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
@@ -532,9 +535,10 @@ func init() {
 		"test", "[", "tokens", "tree", "wc", "which",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
 		"ast",
-		// tput only queries the terminfo database and writes the capability to
-		// stdout; it changes nothing.
-		"tput",
+		// tput and tabs only query the terminfo database and write the resulting
+		// capability to stdout. tabs addresses the TERMINAL rather than the
+		// filesystem, which still mutates nothing outliving the invocation.
+		"tput", "tabs",
 	)
 	// The `graph` umbrella has write subcommands (note/link/observe/forget), so
 	// it is not read-only; its structural reads keep a disk cache, so CapCached.
@@ -860,9 +864,9 @@ func init() {
 		"pathchk", "pinky", "ps", "pwd", "renice", "tty", "tz", "uname", "uptime", "users",
 		// pax READS an archive or the tree it is packing; it also writes (below).
 		"pax",
-		// tput reads the terminfo database; write reads the utmp/utmpx login
-		// database to find the recipient's terminal (it also writes, below).
-		"tput", "write",
+		// tput and tabs read the terminfo database; write reads the utmp/utmpx
+		// login database to find the recipient's terminal (it also writes, below).
+		"tput", "tabs", "write",
 		// locale reports settings resolved from the environment and the locale
 		// database. It answers questions; it changes nothing.
 		"locale",

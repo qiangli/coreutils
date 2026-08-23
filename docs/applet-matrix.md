@@ -22,11 +22,11 @@ Generated from the current `cmds/all` registration tree; `chroot` and
 
 | Measure | Count |
 |---|---:|
-| Shipped Go command packages | 152 |
-| Advertised applet names | 173 |
+| Shipped Go command packages | 153 |
+| Advertised applet names | 174 |
 | Alias applet names | 5 |
 | GNU Coreutils names | 106 |
-| POSIX-cert-required names | 101 |
+| POSIX-cert-required names | 102 |
 | Shipped names without a same-name required test set | 72 |
 | Shipped names lacking package-local tests | 0 |
 | Release-withheld implementations | 2 (`chroot`, `runcon`) |
@@ -172,6 +172,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `stty` | `cmds/stty` | — | GNU Coreutils | yes | yes | 3 | 12 |
 | `sum` | `cmds/sum` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `sync` | `cmds/sync` | — | GNU Coreutils | yes | no | 1 | 5 |
+| `tabs` | `cmds/tabs` | — | POSIX/Unix utility | no | yes | 2 | 20 |
 | `tac` | `cmds/tac` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 2 | 21 |
 | `talk` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
@@ -182,7 +183,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 3 | 26 |
-| `tput` | `cmds/tput` | — | POSIX/Unix utility | no | yes | 5 | 39 |
+| `tput` | `cmds/tput` | — | POSIX/Unix utility | no | yes | 1 | 16 |
 | `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
 | `true` | `cmds/true` | — | GNU Coreutils | yes | yes | 1 | 1 |

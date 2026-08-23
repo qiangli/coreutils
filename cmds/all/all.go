@@ -136,6 +136,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/stty"
 	_ "github.com/qiangli/coreutils/cmds/sum"
 	_ "github.com/qiangli/coreutils/cmds/sync"
+	_ "github.com/qiangli/coreutils/cmds/tabs"
 	_ "github.com/qiangli/coreutils/cmds/tac"
 	_ "github.com/qiangli/coreutils/cmds/tail"
 	_ "github.com/qiangli/coreutils/cmds/tar"

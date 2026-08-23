@@ -90,7 +90,7 @@ split	yes	cmds/split	no	go_applet
 strings	yes	cmds/strings	no	go_applet
 strip	no	cmds/posixproviders	no	external_provider
 stty	yes	cmds/stty	no	go_applet
-tabs	no		no	external_gap
+tabs	yes	cmds/tabs	no	go_applet
 tail	yes	cmds/tail	no	go_applet
 talk	no	cmds/posixproviders	no	external_provider
 tee	yes	cmds/tee	no	go_applet

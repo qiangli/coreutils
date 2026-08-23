@@ -8,8 +8,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qiangli/coreutils/cmds/internal/terminfo"
 	"github.com/qiangli/coreutils/tool"
 )
+
+// writeEntry files a compiled fixture in a private database directory.
+func writeEntry(t *testing.T, dir, name string, f terminfo.Fixture, hexBucket bool) {
+	t.Helper()
+	if err := terminfo.WriteEntry(dir, name, f, hexBucket); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // runIn drives the command against a private terminfo directory, so no test
 // depends on which ncurses the host happens to ship.
@@ -26,12 +35,12 @@ func runIn(t *testing.T, dir string, env []string, args ...string) (string, stri
 }
 
 // fixtureDir writes the demo entry (plus any extras) into a fresh database.
-func fixtureDir(t *testing.T, extra ...fixture) string {
+func fixtureDir(t *testing.T, extra ...terminfo.Fixture) string {
 	t.Helper()
 	dir := t.TempDir()
-	writeEntry(t, dir, "demo", demoFixture(), false)
+	writeEntry(t, dir, "demo", terminfo.DemoFixture(), false)
 	for _, f := range extra {
-		writeEntry(t, dir, f.names[0], f, false)
+		writeEntry(t, dir, f.Names[0], f, false)
 	}
 	return dir
 }
@@ -192,9 +201,9 @@ func TestPaddingIsNotEmitted(t *testing.T) {
 
 // $TERM supplies the type when -T does not; -T wins when both are present.
 func TestTerminalTypeResolution(t *testing.T) {
-	other := demoFixture()
-	other.names = []string{"other", "the other terminal"}
-	other.strs["clear"] = "<other>"
+	other := terminfo.DemoFixture()
+	other.Names = []string{"other", "the other terminal"}
+	other.Strs["clear"] = "<other>"
 	dir := fixtureDir(t, other)
 
 	out, _, code := runIn(t, dir, []string{"TERM=other"}, "clear")
@@ -264,8 +273,8 @@ func TestInitFile(t *testing.T) {
 	if err := os.WriteFile(payload, []byte("<file>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f := demoFixture()
-	f.strs["if"] = payload
+	f := terminfo.DemoFixture()
+	f.Strs["if"] = payload
 	writeEntry(t, dir, "demo", f, false)
 
 	out, _, code := runIn(t, dir, nil, "-T", "demo", "init")
@@ -275,7 +284,7 @@ func TestInitFile(t *testing.T) {
 
 	// An unreadable file is skipped: the rest of the sequence is still worth
 	// sending, and failing would break a terminal for a missing extra.
-	f.strs["if"] = filepath.Join(t.TempDir(), "gone")
+	f.Strs["if"] = filepath.Join(t.TempDir(), "gone")
 	dir2 := t.TempDir()
 	writeEntry(t, dir2, "demo", f, false)
 	out, _, code = runIn(t, dir2, nil, "-T", "demo", "init")
@@ -287,7 +296,7 @@ func TestInitFile(t *testing.T) {
 // An entry with no init strings at all emits nothing and still succeeds.
 func TestInitWithNoInitStrings(t *testing.T) {
 	dir := t.TempDir()
-	f := fixture{names: []string{"bare", "a bare terminal"}, strs: map[string]string{"bel": "\a"}}
+	f := terminfo.Fixture{Names: []string{"bare", "a bare terminal"}, Strs: map[string]string{"bel": "\a"}}
 	writeEntry(t, dir, "bare", f, false)
 	out, _, code := runIn(t, dir, nil, "-T", "bare", "init")
 	if code != exitOK || out != "" {
@@ -307,10 +316,10 @@ func TestLongname(t *testing.T) {
 // resolves rather than being reported as a nonexistent name.
 func TestUserDefinedCapability(t *testing.T) {
 	dir := t.TempDir()
-	f := demoFixture()
-	f.extStrs = map[string]string{"E3": "\x1b[3J"}
-	f.extBools = map[string]bool{"AX": true}
-	f.extNums = map[string]int{"U8": 1}
+	f := terminfo.DemoFixture()
+	f.ExtStrs = map[string]string{"E3": "\x1b[3J"}
+	f.ExtBools = map[string]bool{"AX": true}
+	f.ExtNums = map[string]int{"U8": 1}
 	writeEntry(t, dir, "demo", f, false)
 
 	if out, _, code := runIn(t, dir, nil, "-T", "demo", "E3"); code != exitOK || out != "\x1b[3J" {
@@ -333,8 +342,8 @@ func TestUserDefinedCapability(t *testing.T) {
 // half-instantiated garbage.
 func TestMalformedCapabilityStringIsReported(t *testing.T) {
 	dir := t.TempDir()
-	f := demoFixture()
-	f.strs["cup"] = "\x1b[%p1%Zm"
+	f := terminfo.DemoFixture()
+	f.Strs["cup"] = "\x1b[%p1%Zm"
 	writeEntry(t, dir, "demo", f, false)
 
 	out, errb, code := runIn(t, dir, nil, "-T", "demo", "cup", "1", "2")

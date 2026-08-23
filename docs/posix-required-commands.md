@@ -12,17 +12,17 @@ providers. Profiles C/D place Bashy Go coreutils first.
 
 | Disposition | Count |
 | --- | ---: |
-| Registered Bashy Go applet | 85 |
+| Registered Bashy Go applet | 86 |
 | Shell entry point or builtin | 14 |
 | Pinned POSIX external provider | 16 |
-| External provider gap in assembled C/D | 1 |
+| External provider gap in assembled C/D | 0 |
 | Required names | 116 |
 
-Coreutils alone therefore covers 85 of 116 same-name required sets and
-is absent for 31 names. 14 of those 31 are supplied by the shell and
+Coreutils alone therefore covers 86 of 116 same-name required sets and
+is absent for 30 names. 14 of those 30 are supplied by the shell and
 16 by a pinned POSIX external provider that the multicall itself registers
 and resolves from the provider cache (`pkg/posixprovider`), leaving
-1 true external-provider gaps in the assembled C/D environment.
+0 true external-provider gaps in the assembled C/D environment.
 
 A provider row is NOT a Go applet: the name belongs to the multicall, the
 implementation is upstream's, built locally from a pinned source tarball
@@ -129,7 +129,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `strings` | yes | `cmds/strings` | no | internal Go applet |
 | `strip` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `stty` | yes | `cmds/stty` | no | internal Go applet |
-| `tabs` | no | — | no | external provider required |
+| `tabs` | yes | `cmds/tabs` | no | internal Go applet |
 | `tail` | yes | `cmds/tail` | no | internal Go applet |
 | `talk` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `tee` | yes | `cmds/tee` | no | internal Go applet |
@@ -155,7 +155,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `write` | yes | `cmds/write` | no | internal Go applet |
 | `xargs` | yes | `cmds/xargs` | no | internal Go applet |
 
-The product/provider allocation for the 1 remaining external gaps lives in
+The product/provider allocation for the 0 remaining external gaps lives in
 `../../docs/posix-utility-provider-strategy.md`. The pins, licences and
 build recipe for the registered providers live in
 `pkg/posixprovider/manifest.tsv` + `tools/posix-providers/build.sh`.

@@ -1,4 +1,4 @@
-package tputcmd
+package terminfo
 
 import (
 	"encoding/binary"
@@ -9,6 +9,26 @@ import (
 	"strings"
 	"testing"
 )
+
+// build and indexOf are the t.Fatal-shaped wrappers over the fixture writer's
+// error-returning API, so a test reads as one expression.
+func (f Fixture) build(t *testing.T) []byte {
+	t.Helper()
+	data, err := f.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func indexOf(t *testing.T, list []string, name string) int {
+	t.Helper()
+	i, err := indexOfCap(list, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return i
+}
 
 // The three name tables are the format. A capability inserted or dropped
 // anywhere shifts every index after it, and the result is a wrong value under
@@ -76,30 +96,30 @@ func TestCapabilityIndexes(t *testing.T) {
 }
 
 func TestKindOf(t *testing.T) {
-	for name, want := range map[string]capKind{
-		"am":        capBool,
-		"cols":      capNum,
-		"cup":       capStr,
-		"clear":     capStr,
-		"nosuchcap": capUnknown,
-		"":          capUnknown,
+	for name, want := range map[string]Kind{
+		"am":        KindBool,
+		"cols":      KindNum,
+		"cup":       KindStr,
+		"clear":     KindStr,
+		"nosuchcap": KindUnknown,
+		"":          KindUnknown,
 	} {
-		if got := kindOf(name); got != want {
-			t.Errorf("kindOf(%q) = %v, want %v", name, got, want)
+		if got := KindOf(name); got != want {
+			t.Errorf("KindOf(%q) = %v, want %v", name, got, want)
 		}
 	}
 }
 
 func TestParseLegacyEntry(t *testing.T) {
-	e, err := parseTerminfo(demoFixture().build(t))
+	e, err := parseTerminfo(DemoFixture().build(t))
 	if err != nil {
 		t.Fatalf("parseTerminfo: %v", err)
 	}
 	if want := []string{"demo", "demo-alias", "a demo terminal"}; strings.Join(e.names, "|") != strings.Join(want, "|") {
 		t.Errorf("names = %v, want %v", e.names, want)
 	}
-	if e.longName() != "a demo terminal" {
-		t.Errorf("longName = %q", e.longName())
+	if e.LongName() != "a demo terminal" {
+		t.Errorf("LongName = %q", e.LongName())
 	}
 	if !e.bools["am"] {
 		t.Error("am should be true")
@@ -119,7 +139,7 @@ func TestParseLegacyEntry(t *testing.T) {
 // in the map's key set, not in the value — otherwise `tput xmc` reports
 // "no such capability" for a terminal whose entry says 0.
 func TestPresentZeroIsNotAbsent(t *testing.T) {
-	e, err := parseTerminfo(demoFixture().build(t))
+	e, err := parseTerminfo(DemoFixture().build(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,10 +158,10 @@ func TestPresentZeroIsNotAbsent(t *testing.T) {
 // The 32-bit layout differs from the legacy one ONLY in the width of a numeric
 // capability; string offsets stay 16-bit in both.
 func TestParseExtendedNumberEntry(t *testing.T) {
-	f := demoFixture()
-	f.wide = true
-	f.nums["pairs"] = 32767
-	f.nums["colors"] = 256
+	f := DemoFixture()
+	f.Wide = true
+	f.Nums["pairs"] = 32767
+	f.Nums["colors"] = 256
 	data := f.build(t)
 	if magic := int16(binary.LittleEndian.Uint16(data)); magic != magicExtended {
 		t.Fatalf("fixture wrote magic %o, want %o", magic, magicExtended)
@@ -166,11 +186,11 @@ func TestParseExtendedNumberEntry(t *testing.T) {
 func TestAlignmentPadding(t *testing.T) {
 	for _, name := range []string{"demo", "demoX"} { // even and odd names length
 		for _, nBools := range []string{"am", "bw"} {
-			f := fixture{
-				names: []string{name},
-				bools: map[string]bool{nBools: true},
-				nums:  map[string]int{"cols": 80},
-				strs:  map[string]string{"bel": "\a"},
+			f := Fixture{
+				Names: []string{name},
+				Bools: map[string]bool{nBools: true},
+				Nums:  map[string]int{"cols": 80},
+				Strs:  map[string]string{"bel": "\a"},
 			}
 			e, err := parseTerminfo(f.build(t))
 			if err != nil {
@@ -188,10 +208,10 @@ func TestAlignmentPadding(t *testing.T) {
 // area. Reading names from the table base decodes each one as whatever value
 // happens to sit there, which parses cleanly and reports nonsense.
 func TestParseUserDefinedCapabilities(t *testing.T) {
-	f := demoFixture()
-	f.extBools = map[string]bool{"AX": true, "XT": false}
-	f.extNums = map[string]int{"U8": 1}
-	f.extStrs = map[string]string{"E3": "\x1b[3J", "Smulx": "\x1b[4:%p1%dm"}
+	f := DemoFixture()
+	f.ExtBools = map[string]bool{"AX": true, "XT": false}
+	f.ExtNums = map[string]int{"U8": 1}
+	f.ExtStrs = map[string]string{"E3": "\x1b[3J", "Smulx": "\x1b[4:%p1%dm"}
 	e, err := parseTerminfo(f.build(t))
 	if err != nil {
 		t.Fatalf("parseTerminfo: %v", err)
@@ -221,7 +241,7 @@ func TestParseUserDefinedCapabilities(t *testing.T) {
 }
 
 func TestParseRejectsBadInput(t *testing.T) {
-	good := demoFixture().build(t)
+	good := DemoFixture().build(t)
 	for _, c := range []struct {
 		name string
 		data []byte
@@ -245,8 +265,8 @@ func TestParseRejectsBadInput(t *testing.T) {
 // capabilities that already parsed: the extension is ncurses' own addition and
 // an entry that stops before it is complete and valid.
 func TestMalformedExtensionIsIgnored(t *testing.T) {
-	f := demoFixture()
-	f.extStrs = map[string]string{"E3": "\x1b[3J"}
+	f := DemoFixture()
+	f.ExtStrs = map[string]string{"E3": "\x1b[3J"}
 	data := f.build(t)
 	e, err := parseTerminfo(data[:len(data)-4])
 	if err != nil {
@@ -259,24 +279,11 @@ func TestMalformedExtensionIsIgnored(t *testing.T) {
 
 // --- database search -------------------------------------------------------
 
-func writeEntry(t *testing.T, dir, name string, f fixture, hexBucket bool) {
+func writeEntry(t *testing.T, dir, name string, f Fixture, hexBucket bool) {
 	t.Helper()
-	bucket := string(name[0])
-	if hexBucket {
-		bucket = strings.ToLower(strings.TrimPrefix(strings.ToUpper(hexOf(name[0])), "0X"))
-	}
-	full := filepath.Join(dir, bucket)
-	if err := os.MkdirAll(full, 0o755); err != nil {
+	if err := WriteEntry(dir, name, f, hexBucket); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(full, name), f.build(t), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func hexOf(c byte) string {
-	const digits = "0123456789abcdef"
-	return string([]byte{digits[c>>4], digits[c&0xf]})
 }
 
 func envFunc(kv map[string]string) func(string) string {
@@ -286,31 +293,31 @@ func envFunc(kv map[string]string) func(string) string {
 func TestLookupHonoursSearchOrder(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 
-	early := demoFixture()
-	early.names = []string{"demo", "from TERMINFO"}
+	early := DemoFixture()
+	early.Names = []string{"demo", "from TERMINFO"}
 	writeEntry(t, first, "demo", early, false)
 
-	late := demoFixture()
-	late.names = []string{"demo", "from TERMINFO_DIRS"}
+	late := DemoFixture()
+	late.Names = []string{"demo", "from TERMINFO_DIRS"}
 	writeEntry(t, second, "demo", late, false)
 
-	e, err := loadEntry(envFunc(map[string]string{
+	e, err := Load(envFunc(map[string]string{
 		"TERMINFO":      first,
 		"TERMINFO_DIRS": second,
 	}), "demo")
 	if err != nil {
-		t.Fatalf("loadEntry: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if e.longName() != "from TERMINFO" {
-		t.Errorf("resolved %q; $TERMINFO must be searched before $TERMINFO_DIRS", e.longName())
+	if e.LongName() != "from TERMINFO" {
+		t.Errorf("resolved %q; $TERMINFO must be searched before $TERMINFO_DIRS", e.LongName())
 	}
 
-	e, err = loadEntry(envFunc(map[string]string{"TERMINFO_DIRS": second}), "demo")
+	e, err = Load(envFunc(map[string]string{"TERMINFO_DIRS": second}), "demo")
 	if err != nil {
-		t.Fatalf("loadEntry: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if e.longName() != "from TERMINFO_DIRS" {
-		t.Errorf("resolved %q, want the TERMINFO_DIRS entry", e.longName())
+	if e.LongName() != "from TERMINFO_DIRS" {
+		t.Errorf("resolved %q, want the TERMINFO_DIRS entry", e.LongName())
 	}
 }
 
@@ -319,38 +326,38 @@ func TestLookupHonoursSearchOrder(t *testing.T) {
 // that spelling means silently ignoring the whole system database on macOS.
 func TestLookupFindsHexBucketDirectory(t *testing.T) {
 	dir := t.TempDir()
-	f := demoFixture()
-	f.names = []string{"xdemo", "hex bucket"}
+	f := DemoFixture()
+	f.Names = []string{"xdemo", "hex bucket"}
 	writeEntry(t, dir, "xdemo", f, true)
 
 	if _, err := os.Stat(filepath.Join(dir, "78", "xdemo")); err != nil {
 		t.Fatalf("fixture did not write the hex bucket: %v", err)
 	}
-	e, err := loadEntry(envFunc(map[string]string{"TERMINFO": dir}), "xdemo")
+	e, err := Load(envFunc(map[string]string{"TERMINFO": dir}), "xdemo")
 	if err != nil {
-		t.Fatalf("loadEntry: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if e.longName() != "hex bucket" {
-		t.Errorf("longName = %q", e.longName())
+	if e.LongName() != "hex bucket" {
+		t.Errorf("LongName = %q", e.LongName())
 	}
 }
 
 func TestLookupSearchesHomeTerminfo(t *testing.T) {
 	home := t.TempDir()
-	f := demoFixture()
-	f.names = []string{"hdemo", "from home"}
+	f := DemoFixture()
+	f.Names = []string{"hdemo", "from home"}
 	writeEntry(t, filepath.Join(home, ".terminfo"), "hdemo", f, false)
 
 	env := map[string]string{"HOME": home}
 	if runtime.GOOS == "windows" {
 		env["USERPROFILE"] = home
 	}
-	e, err := loadEntry(envFunc(env), "hdemo")
+	e, err := Load(envFunc(env), "hdemo")
 	if err != nil {
-		t.Fatalf("loadEntry: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if e.longName() != "from home" {
-		t.Errorf("longName = %q", e.longName())
+	if e.LongName() != "from home" {
+		t.Errorf("LongName = %q", e.LongName())
 	}
 }
 
@@ -376,12 +383,12 @@ func TestTerminfoDirsEmptyElementMeansTheDefaults(t *testing.T) {
 // database directory is refused rather than opened.
 func TestLookupRefusesPathTraversal(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "secret"), demoFixture().build(t), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "secret"), DemoFixture().build(t), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"../secret", "..", ".", "a/b", `a\b`} {
-		if _, err := loadEntry(envFunc(map[string]string{"TERMINFO": dir}), name); !errors.Is(err, errUnknownTerm) {
-			t.Errorf("loadEntry(%q) error = %v, want errUnknownTerm", name, err)
+		if _, err := Load(envFunc(map[string]string{"TERMINFO": dir}), name); !errors.Is(err, ErrUnknownTerm) {
+			t.Errorf("Load(%q) error = %v, want ErrUnknownTerm", name, err)
 		}
 	}
 }
@@ -389,8 +396,8 @@ func TestLookupRefusesPathTraversal(t *testing.T) {
 func TestLookupUnknownTerminal(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"", "definitely-not-a-terminal"} {
-		if _, err := loadEntry(envFunc(map[string]string{"TERMINFO": dir}), name); !errors.Is(err, errUnknownTerm) {
-			t.Errorf("loadEntry(%q) error = %v, want errUnknownTerm", name, err)
+		if _, err := Load(envFunc(map[string]string{"TERMINFO": dir}), name); !errors.Is(err, ErrUnknownTerm) {
+			t.Errorf("Load(%q) error = %v, want ErrUnknownTerm", name, err)
 		}
 	}
 }
@@ -399,14 +406,14 @@ func TestLookupUnknownTerminal(t *testing.T) {
 // override of one that exists.
 func TestOnDiskEntryBeatsTheBuiltIn(t *testing.T) {
 	dir := t.TempDir()
-	f := demoFixture()
-	f.names = []string{"vt100", "the administrator's vt100"}
-	f.strs["clear"] = "<local>"
+	f := DemoFixture()
+	f.Names = []string{"vt100", "the administrator's vt100"}
+	f.Strs["clear"] = "<local>"
 	writeEntry(t, dir, "vt100", f, false)
 
-	e, err := loadEntry(envFunc(map[string]string{"TERMINFO": dir}), "vt100")
+	e, err := Load(envFunc(map[string]string{"TERMINFO": dir}), "vt100")
 	if err != nil {
-		t.Fatalf("loadEntry: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
 	if e.strs["clear"] != "<local>" {
 		t.Errorf("clear = %q, want the on-disk entry to win", e.strs["clear"])
@@ -417,9 +424,9 @@ func TestOnDiskEntryBeatsTheBuiltIn(t *testing.T) {
 	// is the situation the fallback exists for (Windows, a scratch container);
 	// where a system database does have one, finding it IS the correct result.
 	env := envFunc(map[string]string{"TERMINFO": t.TempDir()})
-	e, err = loadEntry(env, "vt100")
+	e, err = Load(env, "vt100")
 	if err != nil {
-		t.Fatalf("loadEntry: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
 	if onDisk := entryIsOnDisk(env, "vt100"); onDisk != (e.source != "(built-in)") {
 		t.Errorf("source = %q with on-disk=%v", e.source, onDisk)
@@ -444,7 +451,7 @@ func TestBuiltinEntries(t *testing.T) {
 			t.Errorf("%s: no built-in entry", name)
 			continue
 		}
-		if e.longName() == "" {
+		if e.LongName() == "" {
 			t.Errorf("%s: no description", name)
 		}
 		if _, ok := e.strs["bel"]; !ok {
@@ -458,11 +465,11 @@ func TestBuiltinEntries(t *testing.T) {
 	if builtinEntry("80-column dumb tty") != nil {
 		t.Error("the long description must not match as an alias")
 	}
-	if !strings.Contains(builtinNames(), "xterm-256color") {
-		t.Errorf("builtinNames() = %q", builtinNames())
+	if !strings.Contains(BuiltinNames(), "xterm-256color") {
+		t.Errorf("BuiltinNames() = %q", BuiltinNames())
 	}
-	if strings.Contains(builtinNames(), "dumb tty") {
-		t.Errorf("builtinNames() should list aliases, not descriptions: %q", builtinNames())
+	if strings.Contains(BuiltinNames(), "dumb tty") {
+		t.Errorf("BuiltinNames() should list aliases, not descriptions: %q", BuiltinNames())
 	}
 	// Every parameterized built-in string must be a valid capability string.
 	for _, def := range builtins {
