@@ -463,6 +463,7 @@ func init() {
 		"basename", "chcon", "chgrp", "chmod", "chown", "clip", "cp", "dd",
 		"df", "dir", "dircolors", "dirname", "du", "file", "find", "install", "link",
 		"ln", "ls", "mkdir", "mkfifo", "mknod", "mktemp", "mv", "readlink",
+		"pax",
 		"realpath", "rm", "rmdir", "shred", "stat", "sync", "tar", "touch",
 		"tree", "truncate", "unlink", "vdir",
 	)
@@ -477,9 +478,9 @@ func init() {
 	)
 	addTools(GroupShellutils,
 		"arch", "at", "atq", "atrm", "batch", "cal", "crontab",
-		"date", "duration", "echo", "env", "expr", "factor", "false",
-		"groups", "hostid", "hostname", "id", "kill", "logname", "ncal", "nice",
-		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "ps", "pwd",
+		"date", "duration", "echo", "env", "expr", "factor", "false", "getconf",
+		"groups", "hostid", "hostname", "id", "kill", "logname", "mesg", "ncal", "nice",
+		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "ps", "pwd", "renice",
 		"seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
@@ -493,6 +494,20 @@ func init() {
 	// foreman was here (GroupOrch) but is now a suppressed internal (Bashy #40);
 	// sprint + weave are the public orchestration surface. See packages.go.
 	addTools(GroupDiagnostics, "resources", "why")
+
+	// The pinned POSIX external providers (pkg/posixprovider, cmds/posixproviders).
+	// These are NOT Go applets: the multicall owns the NAME and executes a
+	// locally built, provenance-checked copy of the upstream program. They are
+	// listed here because they are registered tools — the ratchet is about the
+	// registry, not about who wrote the implementation — and their Subclass says
+	// which kind they are.
+	addTools(GroupToolchains, "make", "ar", "nm", "strip")
+	addTools(GroupTextutils, "patch", "m4", "ed", "ex", "vi")
+	addTools(GroupShellutils, "bc", "man")
+	addTools(GroupCodeIntel, "ctags")
+	// `posix-providers` is the provisioner in front of them: it is the ONLY
+	// command that downloads and compiles one.
+	addTools(GroupToolchains, "posix-providers")
 
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
@@ -527,6 +542,32 @@ func init() {
 	if e, ok := tools["why"]; ok {
 		e.Subclass = SubclassManagedExternal
 		tools["why"] = e
+	}
+
+	// POSIX external providers: cached (the binmgr cache IS how they resolve) and
+	// process-spawning (the whole tool is an argv passthrough). They are
+	// deliberately NOT CapSelfProvisioning and NOT CapNeedsNetwork — a provider
+	// invocation is a cache lookup that can never download or compile, and that
+	// separation is the point (a build inside a certification arm would inject
+	// network and toolchain variance into measured evidence).
+	posixProviders := []string{
+		"make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+	}
+	capTools(CapCached, posixProviders...)
+	capTools(CapSpawnsProcesses, posixProviders...)
+	for _, n := range posixProviders {
+		e := tools[n]
+		e.Subclass = SubclassManagedExternal
+		tools[n] = e
+	}
+	// The provisioner is the one that reaches the network and runs a compiler.
+	capTools(CapCached, "posix-providers")
+	capTools(CapSelfProvisioning, "posix-providers")
+	capTools(CapNeedsNetwork, "posix-providers")
+	capTools(CapSpawnsProcesses, "posix-providers")
+	if e, ok := tools["posix-providers"]; ok {
+		e.Subclass = SubclassProvisioner
+		tools["posix-providers"] = e
 	}
 	// foreman was a CapDaemon + StageCode tool entry here, but has been
 	// suppressed from the public atlas (Bashy #40). Its implementation
@@ -802,8 +843,10 @@ func init() {
 		// carries real source, so treat it like the working tree it came from.
 		"handoff", "resume",
 		// host info
-		"arch", "groups", "hostid", "hostname", "id", "logname", "nproc",
-		"pathchk", "pinky", "ps", "pwd", "tty", "tz", "uname", "uptime", "users",
+		"arch", "getconf", "groups", "hostid", "hostname", "id", "logname", "mesg", "nproc",
+		"pathchk", "pinky", "ps", "pwd", "renice", "tty", "tz", "uname", "uptime", "users",
+		// pax READS an archive or the tree it is packing; it also writes (below).
+		"pax",
 		"which", "who", "whoami", "atq", "date", "env", "printenv", "ntp",
 		"sntp",
 		// code-intel / net
@@ -831,7 +874,10 @@ func init() {
 		// in the repo's history) or the per-host personal list (~/.bashy/todo/<owner>/).
 		"todo", "why",
 		"clip", "cp", "install", "kill", "link", "ln", "mkdir", "mkfifo", "mknod",
-		"mktemp", "mv", "rmdir", "tar", "touch",
+		"mktemp", "mv", "pax", "rmdir", "tar", "touch",
+		// mesg flips the terminal's group-write bit; renice changes a running
+		// process's scheduling priority. Both mutate host state, neither loses data.
+		"mesg", "renice",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "uudecode", "graph",
 		"stty", "atrm", "crontab",
 		// handoff WRITES a portable record; resume WRITES the captured working
@@ -923,6 +969,21 @@ func init() {
 		eff(EffExec, n)
 		eff(EffWrite, n)
 	}
+
+	// The POSIX external providers. EVERY one is exec: the tool's whole body is
+	// "resolve the cached binary and hand it argv", so what runs afterwards is a
+	// process bashy no longer governs. The read/write split below is the upstream
+	// program's own documented behaviour, not ours.
+	eff(EffExec, "make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi")
+	eff(EffRead, "make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi")
+	eff(EffWrite, "make", "patch", "ed", "ctags", "ar", "strip", "ex", "vi")
+	// The provisioner downloads pinned upstream source, runs a compiler over it,
+	// and installs a binary that outlives the session.
+	eff(EffNet, "posix-providers")
+	eff(EffExec, "posix-providers")
+	eff(EffWrite, "posix-providers")
+	eff(EffPersist, "posix-providers")
+	eff(EffRead, "posix-providers")
 
 	// Deterministic ordering for every consumer.
 	for n, e := range tools {
