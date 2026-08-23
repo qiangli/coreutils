@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -23,20 +24,25 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	brief := fs.BoolP("brief", "b", false, "do not prepend file names to output lines")
 	follow := fs.BoolP("dereference", "L", false, "follow symbolic links")
-	operands, code := tool.Parse(rc, cmd, fs, tool.AliasHelpVersion(args))
+	fs.BoolP("no-dereference", "h", false, "do not follow symbolic links (default)")
+	var magicFiles []string
+	fs.StringArrayVarP(&magicFiles, "magic-file", "m", nil, "use FILE as an additional magic file")
+	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
 	}
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing file operand")
 	}
-	exit := 0
+	magic, err := loadMagic(rc, magicFiles)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "file: %v\n", err)
+		return 1
+	}
 	for _, name := range operands {
-		typ, err := identify(rc, name, *follow)
+		typ, err := identify(rc, name, *follow || strings.HasSuffix(name, "/"), magic)
 		if err != nil {
-			fmt.Fprintf(rc.Err, "file: %s: %v\n", name, err)
-			exit = 1
-			continue
+			typ = fmt.Sprintf("cannot open %q (%v)", name, tool.SysErr(err))
 		}
 		if *brief {
 			fmt.Fprintln(rc.Out, typ)
@@ -44,12 +50,16 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Out, "%s: %s\n", name, typ)
 		}
 	}
-	return exit
+	return 0
 }
 
-func identify(rc *tool.RunContext, name string, follow bool) (string, error) {
+func identify(rc *tool.RunContext, name string, follow bool, magic []magicTest) (string, error) {
 	if name == "-" {
-		return classify(readPrefix(rc.In))
+		data, err := readPrefix(rc.In)
+		if err != nil {
+			return "", err
+		}
+		return classifyWithMagic(data, magic)
 	}
 	path := rc.Path(name)
 	info, err := os.Lstat(path)
@@ -88,7 +98,53 @@ func identify(rc *tool.RunContext, name string, follow bool) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	return classify(readPrefix(f))
+	data, err := readPrefix(f)
+	if err != nil {
+		return "", err
+	}
+	return classifyWithMagic(data, magic)
+}
+
+type magicTest struct {
+	offset int
+	value  []byte
+	desc   string
+}
+
+func loadMagic(rc *tool.RunContext, names []string) ([]magicTest, error) {
+	var tests []magicTest
+	for _, name := range names {
+		data, err := os.ReadFile(rc.Path(name))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %v", name, tool.SysErr(err))
+		}
+		for lineNo, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 4 || (fields[1] != "s" && fields[1] != "string") {
+				return nil, fmt.Errorf("%s:%d: unsupported magic test", name, lineNo+1)
+			}
+			offset, err := strconv.Atoi(fields[0])
+			if err != nil || offset < 0 {
+				return nil, fmt.Errorf("%s:%d: invalid magic offset", name, lineNo+1)
+			}
+			tests = append(tests, magicTest{offset: offset, value: []byte(fields[2]), desc: strings.Join(fields[3:], " ")})
+		}
+	}
+	return tests, nil
+}
+
+func classifyWithMagic(data []byte, magic []magicTest) (string, error) {
+	for _, test := range magic {
+		end := test.offset + len(test.value)
+		if end <= len(data) && bytes.Equal(data[test.offset:end], test.value) {
+			return test.desc, nil
+		}
+	}
+	return classify(data, nil)
 }
 
 func readPrefix(r io.Reader) ([]byte, error) {
@@ -114,7 +170,19 @@ func classify(data []byte, readErr error) (string, error) {
 		if endian == "" {
 			endian = "unknown endian"
 		}
-		return fmt.Sprintf("ELF %s %s", bits, endian), nil
+		description := fmt.Sprintf("ELF %s %s", bits, endian)
+		if len(data) >= 18 {
+			var typ uint16
+			if data[5] == 2 {
+				typ = binary.BigEndian.Uint16(data[16:18])
+			} else {
+				typ = binary.LittleEndian.Uint16(data[16:18])
+			}
+			if typ == 2 || typ == 3 {
+				description += " executable"
+			}
+		}
+		return description, nil
 	}
 	if len(data) >= 0x40 && data[0] == 'M' && data[1] == 'Z' {
 		off := int(binary.LittleEndian.Uint32(data[0x3c:0x40]))
@@ -141,6 +209,9 @@ func classify(data []byte, readErr error) (string, error) {
 		{[]byte("GIF87a"), "GIF image data, version 87a"}, {[]byte("GIF89a"), "GIF image data, version 89a"},
 		{[]byte("PK\x03\x04"), "Zip archive data"}, {[]byte("PK\x05\x06"), "Zip archive data (empty)"},
 		{[]byte("\x1f\x8b"), "gzip compressed data"},
+		{[]byte("!<arch>\n"), "current ar archive"},
+		{[]byte("070701"), "ASCII cpio archive"}, {[]byte("070702"), "ASCII cpio archive"},
+		{[]byte("070707"), "ASCII cpio archive"},
 	} {
 		if bytes.HasPrefix(data, sig.prefix) {
 			return sig.typ, nil

@@ -191,10 +191,24 @@ func TestPatternSelectionAndComplement(t *testing.T) {
 	}
 }
 
-func TestUnsupportedFormatIsRefused(t *testing.T) {
+func TestCPIOFormatWritesNewcArchive(t *testing.T) {
 	d := t.TempDir()
-	if _, _, code := exec(t, d, "", "-w", "-x", "cpio", "-f", filepath.Join(d, "o"), "."); code == 0 {
-		t.Error("an unimplemented format must be refused, not silently written as tar")
+	if err := os.WriteFile(filepath.Join(d, "example"), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(d, "o.cpio")
+	if _, errs, code := exec(t, d, "", "-w", "-x", "cpio", "-f", archive, "example"); code != 0 {
+		t.Fatalf("cpio write failed: %d %s", code, errs)
+	}
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(data, []byte("070701")) || !bytes.Contains(data, []byte("example\x00")) || !bytes.Contains(data, []byte("TRAILER!!!\x00")) {
+		t.Fatalf("invalid newc archive: prefix=%q size=%d", data[:6], len(data))
+	}
+	if len(data)%512 != 0 {
+		t.Fatalf("newc archive size=%d, want 512-byte padding", len(data))
 	}
 }
 

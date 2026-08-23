@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/qiangli/coreutils/pkg/pax"
 	"github.com/qiangli/coreutils/tool"
@@ -178,6 +179,16 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		}
 		out, closer = f, f
 	}
+	if o.format == "cpio" {
+		status := writeCPIOMode(rc, o, out, files)
+		if closer != nil {
+			if err := closer.Close(); err != nil && status == 0 {
+				fmt.Fprintf(rc.Err, "pax: %v\n", err)
+				status = 1
+			}
+		}
+		return status
+	}
 	tw := tar.NewWriter(out)
 	status := 0
 	for _, name := range files {
@@ -194,6 +205,144 @@ func writeMode(rc *tool.RunContext, o *options, files []string) int {
 		_ = closer.Close()
 	}
 	return status
+}
+
+// cpioWriter emits the SVR4 "newc" interchange format. POSIX pax requires a
+// cpio output format but does not require the historical binary encoding;
+// newc is byte-order independent and is recognized by standard cpio readers.
+type cpioWriter struct {
+	w      io.Writer
+	offset int64
+}
+
+func (w *cpioWriter) write(p []byte) error {
+	n, err := w.w.Write(p)
+	w.offset += int64(n)
+	if err == nil && n != len(p) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+func (w *cpioWriter) pad(alignment int64) error {
+	need := (alignment - w.offset%alignment) % alignment
+	if need == 0 {
+		return nil
+	}
+	return w.write(make([]byte, need))
+}
+
+func (w *cpioWriter) add(name string, fi os.FileInfo, data []byte) error {
+	mode := uint32(fi.Mode().Perm())
+	switch {
+	case fi.Mode().IsRegular():
+		mode |= 0o100000
+	case fi.IsDir():
+		mode |= 0o040000
+	case fi.Mode()&os.ModeSymlink != 0:
+		mode |= 0o120000
+	default:
+		return fmt.Errorf("unsupported cpio member type %s", fi.Mode())
+	}
+	name = filepath.ToSlash(name)
+	header := fmt.Sprintf("070701%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x",
+		0, mode, 0, 0, 1, fi.ModTime().Unix(), len(data), 0, 0, 0, 0, len([]byte(name))+1, 0)
+	if len(header) != 110 {
+		return fmt.Errorf("internal cpio header length %d", len(header))
+	}
+	if err := w.write(append([]byte(header), append([]byte(name), 0)...)); err != nil {
+		return err
+	}
+	if err := w.pad(4); err != nil {
+		return err
+	}
+	if err := w.write(data); err != nil {
+		return err
+	}
+	return w.pad(4)
+}
+
+func (w *cpioWriter) close() error {
+	info := syntheticFileInfo{name: "TRAILER!!!"}
+	if err := w.add("TRAILER!!!", info, nil); err != nil {
+		return err
+	}
+	return w.pad(512)
+}
+
+type syntheticFileInfo struct{ name string }
+
+func (f syntheticFileInfo) Name() string       { return f.name }
+func (f syntheticFileInfo) Size() int64        { return 0 }
+func (f syntheticFileInfo) Mode() os.FileMode  { return 0 }
+func (f syntheticFileInfo) ModTime() time.Time { return time.Unix(0, 0) }
+func (f syntheticFileInfo) IsDir() bool        { return false }
+func (f syntheticFileInfo) Sys() any           { return nil }
+
+func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []string) int {
+	if o.appendMode {
+		fmt.Fprintln(rc.Err, "pax: appending to cpio archives is not supported")
+		return 1
+	}
+	w := &cpioWriter{w: out}
+	status := 0
+	for _, name := range files {
+		if err := addCPIOPath(rc, o, w, name); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
+			status = 1
+		}
+	}
+	if err := w.close(); err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		status = 1
+	}
+	return status
+}
+
+func addCPIOPath(rc *tool.RunContext, o *options, w *cpioWriter, name string) error {
+	full := resolve(rc, name)
+	fi, err := os.Lstat(full)
+	if err != nil {
+		return err
+	}
+	write := func(rel, abs string, fi os.FileInfo) error {
+		out := applySubstitutions(o.subst, filepath.ToSlash(rel))
+		if out == "" {
+			return nil
+		}
+		var data []byte
+		switch {
+		case fi.Mode().IsRegular():
+			data, err = os.ReadFile(abs)
+		case fi.Mode()&os.ModeSymlink != 0:
+			var target string
+			target, err = os.Readlink(abs)
+			data = []byte(target)
+		}
+		if err != nil {
+			return err
+		}
+		if err := w.add(out, fi, data); err != nil {
+			return err
+		}
+		if o.verbose {
+			fmt.Fprintln(rc.Err, out)
+		}
+		return nil
+	}
+	if !fi.IsDir() || o.dirsNoDescend {
+		return write(name, full, fi)
+	}
+	return filepath.Walk(full, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, relErr := filepath.Rel(filepath.Dir(full), path)
+		if relErr != nil {
+			return relErr
+		}
+		return write(rel, path, info)
+	})
 }
 
 func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error {

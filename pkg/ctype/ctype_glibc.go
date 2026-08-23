@@ -336,6 +336,38 @@ func (p *Provider) ToLower(b []byte) ([]byte, error) { return p.caseMap(p.lib.to
 // closed, ToUpper returns (nil, ErrClosed) and leaves b untouched.
 func (p *Provider) ToUpper(b []byte) ([]byte, error) { return p.caseMap(p.lib.toupperL, b) }
 
+// Equivalents returns the single-byte members of c's primary collating
+// equivalence class. The only non-C locale admitted by Open is German
+// ISO-8859-1, so its reviewed Latin-1 base-letter groups are finite and
+// deterministic. Multi-character collating elements remain out of scope.
+func (p *Provider) Equivalents(c byte) ([]byte, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.closed {
+		return nil, ErrClosed
+	}
+	if p.locale == "C" {
+		return []byte{c}, nil
+	}
+	for _, group := range [][]byte{
+		{'A', 'a', 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5},
+		{'C', 'c', 0xc7, 0xe7},
+		{'E', 'e', 0xc8, 0xc9, 0xca, 0xcb, 0xe8, 0xe9, 0xea, 0xeb},
+		{'I', 'i', 0xcc, 0xcd, 0xce, 0xcf, 0xec, 0xed, 0xee, 0xef},
+		{'N', 'n', 0xd1, 0xf1},
+		{'O', 'o', 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd8, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf8},
+		{'U', 'u', 0xd9, 0xda, 0xdb, 0xdc, 0xf9, 0xfa, 0xfb, 0xfc},
+		{'Y', 'y', 0xdd, 0xfd, 0xff},
+	} {
+		for _, member := range group {
+			if member == c {
+				return append([]byte(nil), group...), nil
+			}
+		}
+	}
+	return []byte{c}, nil
+}
+
 // caseMap applies a single *_l case-mapping function byte-by-byte, fenced
 // against Close.
 func (p *Provider) caseMap(fn func(c int32, loc uintptr) int32, b []byte) ([]byte, error) {

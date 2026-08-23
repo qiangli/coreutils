@@ -10,10 +10,11 @@ import (
 // classification and folding data. The compiler copies the class map; callers
 // cannot change a compiled pattern by mutating their tables afterwards.
 type bytePatternTables struct {
-	classes map[string][256]bool
-	fold    [256]byte
-	dotAll  bool
-	multi   bool
+	classes    map[string][256]bool
+	equivalent [256][256]bool
+	fold       [256]byte
+	dotAll     bool
+	multi      bool
 }
 
 type localeBytePattern struct {
@@ -25,7 +26,7 @@ type localeBytePattern struct {
 // locale-classified bytes. It is an unrouted substrate: public Regexp and all
 // command consumers continue to use their existing engines.
 func compileLocaleBytePattern(pattern []byte, input bytePatternTables, foldCase bool) (*localeBytePattern, error) {
-	tables := bytePatternTables{classes: make(map[string][256]bool, len(input.classes)), fold: input.fold, dotAll: input.dotAll, multi: input.multi}
+	tables := bytePatternTables{classes: make(map[string][256]bool, len(input.classes)), equivalent: input.equivalent, fold: input.fold, dotAll: input.dotAll, multi: input.multi}
 	for name, class := range input.classes {
 		tables.classes[name] = class
 	}
@@ -286,7 +287,25 @@ func parseLocaleByteBracket(pattern []byte, tables bytePatternTables) ([256]bool
 				first = false
 				continue
 			case '.', '=':
-				return class, false, 0, fmt.Errorf("collating and equivalence elements are not supported by the locale byte substrate")
+				delim := pattern[i+1]
+				end := bytesIndex(pattern[i+2:], []byte{delim, ']'})
+				if end < 0 {
+					return class, false, 0, fmt.Errorf("malformed collating element")
+				}
+				content := pattern[i+2 : i+2+end]
+				if len(content) != 1 {
+					return class, false, 0, fmt.Errorf("multi-byte collating elements are not supported by the locale byte substrate")
+				}
+				if delim == '=' {
+					for b, member := range tables.equivalent[content[0]] {
+						class[b] = class[b] || member
+					}
+				} else {
+					class[content[0]] = true
+				}
+				i += end + 4
+				first = false
+				continue
 			}
 		}
 		if pattern[i] == '-' && !first && !(i+1 < len(pattern) && pattern[i+1] == ']') {

@@ -21,6 +21,13 @@ type ByteCtype interface {
 	ToLower([]byte) ([]byte, error)
 }
 
+// ByteEquivalence is the optional locale collation surface used for POSIX
+// [=x=] bracket expressions. Providers that do not implement it retain the
+// C-locale behavior where every single byte is equivalent only to itself.
+type ByteEquivalence interface {
+	Equivalents(byte) ([]byte, error)
+}
+
 // ByteRegexpSyntax selects the POSIX expression grammar.
 type ByteRegexpSyntax uint8
 
@@ -145,6 +152,20 @@ func buildBytePatternTables(provider ByteCtype) (bytePatternTables, error) {
 		return bytePatternTables{}, fmt.Errorf("locale byte regexp: lowercase table has %d bytes, want 256", len(lower))
 	}
 	copy(tables.fold[:], lower)
+	for value := 0; value < 256; value++ {
+		tables.equivalent[value][value] = true
+	}
+	if provider, ok := provider.(ByteEquivalence); ok {
+		for value := 0; value < 256; value++ {
+			members, err := provider.Equivalents(byte(value))
+			if err != nil {
+				return bytePatternTables{}, fmt.Errorf("locale byte regexp: equivalence class for byte %#02x: %w", value, err)
+			}
+			for _, member := range members {
+				tables.equivalent[value][member] = true
+			}
+		}
+	}
 	return tables, nil
 }
 

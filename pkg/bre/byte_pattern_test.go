@@ -38,7 +38,12 @@ func syntheticBytePatternTables() bytePatternTables {
 		fold[b] = b + ('a' - 'A')
 	}
 	fold[0xc9] = 0xe9
-	return bytePatternTables{classes: classes, fold: fold}
+	var equivalent [256][256]bool
+	for i := range equivalent {
+		equivalent[i][i] = true
+	}
+	equivalent['a'][0xe9] = true
+	return bytePatternTables{classes: classes, equivalent: equivalent, fold: fold}
 }
 
 func compileSyntheticBytePattern(t *testing.T, pattern []byte, fold bool) *localeBytePattern {
@@ -160,6 +165,8 @@ func TestLocaleBytePatternClasses(t *testing.T) {
 		{`\S`, '\n', false, false},
 		{`[A]`, 'a', true, true},
 		{`[^A]`, 'a', true, false},
+		{`[[=a=]]`, 0xe9, false, true},
+		{`[[.a.]]`, 'a', false, true},
 	} {
 		p := compileSyntheticBytePattern(t, []byte(tc.pattern), tc.fold)
 		got, err := p.findSubmatchIndex([]byte{tc.input})
@@ -211,7 +218,7 @@ func TestLocaleBytePatternTablesAreSnapshot(t *testing.T) {
 func TestLocaleBytePatternFailsClosed(t *testing.T) {
 	patterns := []string{
 		`\1`, `\b`, `\B`, `\<`, `\>`,
-		`[a-z]`, `[[=a=]]`, `[[.a.]]`, `[[:bogus:]]`, `[[:alpha:]`,
+		`[a-z]`, `[[=ab=]]`, `[[.ab.]]`, `[[:bogus:]]`, `[[:alpha:]`,
 		`\{2\}`, `\}`, `a**`, `\q`, `\`,
 	}
 	for _, pattern := range patterns {

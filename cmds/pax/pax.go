@@ -69,7 +69,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolVarP(&o.write, "write", "w", false, "write (create) an archive")
 	fs.StringVarP(&o.archive, "file", "f", "", "archive pathname (default stdin/stdout)")
 	fs.BoolVarP(&o.verbose, "verbose", "v", false, "verbose output")
-	fs.StringVarP(&o.format, "format", "x", "pax", "archive format: pax or ustar")
+	fs.StringVarP(&o.format, "format", "x", "pax", "archive format: pax, ustar, or cpio")
 	fs.StringVarP(&o.preserve, "preserve", "p", "", "preserve file attributes")
 	subst := fs.StringArrayP("subst", "s", nil, "rewrite member names with an ed-style substitution")
 	fs.BoolVarP(&o.interactive, "interactive", "i", false, "rename members interactively")
@@ -92,9 +92,9 @@ func run(rc *tool.RunContext, args []string) int {
 		o.subst = append(o.subst, sub)
 	}
 	switch o.format {
-	case "pax", "ustar":
+	case "pax", "ustar", "cpio":
 	default:
-		return tool.UsageError(rc, cmd, "unsupported format %q; pax and ustar are supported", o.format)
+		return tool.UsageError(rc, cmd, "unsupported format %q; pax, ustar, and cpio are supported", o.format)
 	}
 
 	switch {

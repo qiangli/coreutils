@@ -64,5 +64,8 @@ func (p *Provider) ToLower(b []byte) ([]byte, error) { return nil, ErrUnsupporte
 // ToUpper always fails on the stub.
 func (p *Provider) ToUpper(b []byte) ([]byte, error) { return nil, ErrUnsupportedPlatform }
 
+// Equivalents always fails on the stub.
+func (p *Provider) Equivalents(c byte) ([]byte, error) { return nil, ErrUnsupportedPlatform }
+
 // Close is a no-op on the stub.
 func (p *Provider) Close() error { return nil }

@@ -94,7 +94,7 @@ func TestLocaleByteEREAndBREDistinguishOperators(t *testing.T) {
 func TestLocaleByteEREFailsClosed(t *testing.T) {
 	patterns := []string{
 		`\1`, `\b`, `\B`, `\<`, `\>`, `\q`, `\`,
-		`[a-z]`, `[[=a=]]`, `[[.a.]]`, `[[:bogus:]]`, `[[:alpha:]`,
+		`[a-z]`, `[[=ab=]]`, `[[.ab.]]`, `[[:bogus:]]`, `[[:alpha:]`,
 		`*a`, `a**`, `a+?`, `{2}`, `a{2`, `a{2,1}`, `a{1001}`, `a}`,
 		`(a`, `a)`, `()`, `a|`, `|a`, `(a|)`,
 	}

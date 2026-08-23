@@ -3,6 +3,7 @@ package filecmd
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,10 +94,61 @@ func TestDirectorySymlinkAndFollow(t *testing.T) {
 	}
 }
 
+func TestNoDereferenceShortOptionAndTrailingSlash(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on some Windows hosts")
+	}
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := invoke(t, dir, "", "-h", "link")
+	if out != "link: symbolic link to target\n" || errb != "" || code != 0 {
+		t.Fatalf("file -h = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = invoke(t, dir, "", "link/")
+	if out != "link/: directory\n" || errb != "" || code != 0 {
+		t.Fatalf("file link/ = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestAdditionalMagicFileFallsBackToBuiltins(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "magic", []byte("0 s /* custom-c-source\n"))
+	put(t, dir, "source", []byte("/* hello */\n"))
+	put(t, dir, "text", []byte("hello\n"))
+	out, errb, code := invoke(t, dir, "", "-m", "magic", "source", "text")
+	if want := "source: custom-c-source\ntext: ASCII text\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("file -m = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+}
+
+func TestArchiveAndExecutableSignatures(t *testing.T) {
+	elf := make([]byte, 18)
+	copy(elf, []byte{0x7f, 'E', 'L', 'F', 2, 1})
+	binary.LittleEndian.PutUint16(elf[16:], 2)
+	for _, tc := range []struct {
+		data []byte
+		want string
+	}{
+		{elf, "executable"},
+		{[]byte("!<arch>\n"), "archive"},
+		{[]byte("070701"), "cpio archive"},
+	} {
+		got, err := classify(tc.data, nil)
+		if err != nil || !strings.Contains(got, tc.want) {
+			t.Fatalf("classify(%q) = (%q, %v), want %q", tc.data, got, err, tc.want)
+		}
+	}
+}
+
 func TestErrorsAndStrictFlags(t *testing.T) {
 	dir := t.TempDir()
 	out, errb, code := invoke(t, dir, "", "missing")
-	if out != "" || code != 1 || !strings.Contains(errb, "file: missing:") {
+	if !strings.Contains(out, "missing: cannot open") || code != 0 || errb != "" {
 		t.Fatalf("out=%q err=%q code=%d", out, errb, code)
 	}
 	_, errb, code = invoke(t, dir, "", "--mime", "missing")

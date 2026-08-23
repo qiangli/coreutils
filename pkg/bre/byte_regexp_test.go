@@ -20,6 +20,15 @@ type fakeByteCtype struct {
 	closed     bool
 }
 
+type fakeByteEquivalence struct{ *fakeByteCtype }
+
+func (p fakeByteEquivalence) Equivalents(value byte) ([]byte, error) {
+	if value == 'a' {
+		return []byte{'a', 0xe4}, nil
+	}
+	return []byte{value}, nil
+}
+
 func newFakeByteCtype() *fakeByteCtype {
 	tables := syntheticBytePatternTables()
 	// Supply every named CType class, including empty synthetic classes.
@@ -93,6 +102,22 @@ func TestCompileLocaleByteRegexpSnapshotsAllCtypeTables(t *testing.T) {
 	provider.tables.classes["alpha"] = alpha
 	if matched, err := re.MatchString("a"); err != nil || !matched {
 		t.Fatalf("compiled snapshot changed: matched=%v err=%v", matched, err)
+	}
+}
+
+func TestCompileLocaleByteRegexpSnapshotsEquivalenceClasses(t *testing.T) {
+	provider := fakeByteEquivalence{newFakeByteCtype()}
+	tables, err := SnapshotLocaleByteTables(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.closed = true
+	re, err := CompileLocaleByteRegexpTables([]byte(`[[=a=]]`), tables, ByteRegexpOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := re.MatchString(string([]byte{0xe4})); err != nil || !matched {
+		t.Fatalf("equivalence class matched=%v err=%v", matched, err)
 	}
 }
 

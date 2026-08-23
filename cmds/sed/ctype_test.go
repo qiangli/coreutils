@@ -199,7 +199,7 @@ func TestSedCTypeConcurrentInvocationEnvironments(t *testing.T) {
 }
 
 func TestSedLocaleCompileFailsBeforeOperandIO(t *testing.T) {
-	unsupported := []string{`s/\b/x/`, `s/\1/x/`, `s/[a-z]/x/`, `s/[[=a=]]/x/`, `s/[[.a.]]/x/`, `s/a\{1001\}/x/`}
+	unsupported := []string{`s/\b/x/`, `s/\1/x/`, `s/[a-z]/x/`, `s/[[=ab=]]/x/`, `s/[[.ab.]]/x/`, `s/a\{1001\}/x/`}
 	for _, script := range unsupported {
 		provider := &fakeSedCType{}
 		errOut, code := runSedWithCType([]string{"LC_ALL=de_DE.iso88591"}, panicReader{}, panicWriter{}, []string{script, "definitely-missing"}, func(string) (ctypeProvider, error) { return provider, nil })

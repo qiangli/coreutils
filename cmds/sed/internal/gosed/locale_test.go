@@ -189,7 +189,7 @@ func TestLocaleEverySedCompileSeam(t *testing.T) {
 
 func TestLocaleCompileSeamsRejectUnsupported(t *testing.T) {
 	opts := Options{LocaleTables: sedLocaleTables(t)}
-	for _, pattern := range []string{`\b`, `\1`, `[a-z]`, `[[=a=]]`, `[[.a.]]`, `a\{1001\}`} {
+	for _, pattern := range []string{`\b`, `\1`, `[a-z]`, `[[=ab=]]`, `[[.ab.]]`, `a\{1001\}`} {
 		if _, err := opts.compileRE(pattern, ""); err == nil {
 			t.Errorf("compileRE(%q) succeeded", pattern)
 		}
