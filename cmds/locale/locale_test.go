@@ -310,6 +310,24 @@ func TestUnavailableLocaleIsRefusedByName(t *testing.T) {
 	}
 }
 
+func TestGermanISO88591TimeData(t *testing.T) {
+	env := []string{"LC_ALL=de_DE.iso88591"}
+	out, errOut, code := runCmd(t, env, "-k", "mon", "day")
+	if code != 0 || errOut != "" {
+		t.Fatalf("German LC_TIME query = (%q, %d)", errOut, code)
+	}
+	want := "mon=\"Januar\";\"Februar\";\"M\xe4rz\";\"April\";\"Mai\";\"Juni\";\"Juli\";\"August\";\"September\";\"Oktober\";\"November\";\"Dezember\"\n" +
+		"day=\"Sonntag\";\"Montag\";\"Dienstag\";\"Mittwoch\";\"Donnerstag\";\"Freitag\";\"Samstag\"\n"
+	if out != want {
+		t.Fatalf("German LC_TIME bytes = %q, want %q", out, want)
+	}
+
+	_, errOut, code = runCmd(t, env, "decimal_point")
+	if code == 0 || !strings.Contains(errOut, "LC_NUMERIC") {
+		t.Fatalf("uncarried German LC_NUMERIC was not refused: (%q, %d)", errOut, code)
+	}
+}
+
 // The refusal is per CATEGORY, because each category resolves its own locale.
 // A German LC_MONETARY must not poison an LC_TIME query that is still POSIX.
 func TestRefusalIsPerCategory(t *testing.T) {

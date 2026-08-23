@@ -10,9 +10,10 @@
 // `locale <keyword>` reports locale DATA — the decimal point, the month names,
 // the currency symbol. That needs a compiled locale database, which a pure-Go
 // program running on a host with no libc bridge does not have. What it does
-// have is the POSIX locale definition (XBD chapter 7.3), which is normative
-// text, so the POSIX/C locale is answered fully and correctly and every other
-// locale is REFUSED BY NAME.
+// have is a small built-in database: the normative POSIX locale definition and
+// the complete LC_TIME category for the certification fixture's
+// de_DE.ISO-8859-1 locale. Every category not actually carried is refused by
+// name.
 //
 // The refusal is the important part. Answering `LC_NUMERIC=de_DE locale
 // decimal_point` with "." because that is what C says would be a silent wrong
@@ -183,12 +184,18 @@ func render(k keyword, withKeyword bool) string {
 	case kindStringList:
 		quoted := make([]string, len(k.Values))
 		for i, v := range k.Values {
-			quoted[i] = fmt.Sprintf("%q", v)
+			quoted[i] = quoteLocaleString(v)
 		}
 		return k.Name + "=" + strings.Join(quoted, ";")
 	default:
-		return fmt.Sprintf("%s=%q", k.Name, k.Values[0])
+		return k.Name + "=" + quoteLocaleString(k.Values[0])
 	}
+}
+
+func quoteLocaleString(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return `"` + value + `"`
 }
 
 func isCategory(name string) bool {
@@ -244,9 +251,12 @@ func (d data) keyword(name string) (keyword, bool) {
 func localeData(rc *tool.RunContext, cat string) (data, error) {
 	name := locale.Resolve(rc.Env, locale.Category(cat))
 	base, codeset := splitLocaleName(name)
+	if base == "de_DE" && isISO88591(codeset) && cat == "LC_TIME" {
+		return data{name: name, keywords: germanISO88591TimeKeywords}, nil
+	}
 	if base != "C" && base != "POSIX" {
 		return data{}, fmt.Errorf(
-			"locale %q is not available: pure-Go coreutils carries only the POSIX locale definition, so it cannot report %s data for it",
+			"locale %q is not available: pure-Go coreutils does not carry %s data for it",
 			name, cat)
 	}
 
@@ -279,4 +289,10 @@ func splitLocaleName(name string) (base, codeset string) {
 func isUTF8(codeset string) bool {
 	c := strings.ToUpper(strings.ReplaceAll(codeset, "-", ""))
 	return c == "UTF8"
+}
+
+func isISO88591(codeset string) bool {
+	c := strings.ToUpper(codeset)
+	c = strings.NewReplacer("-", "", "_", "").Replace(c)
+	return c == "ISO88591"
 }

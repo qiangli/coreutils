@@ -3,10 +3,10 @@ package localecmd
 import "strconv"
 
 // The keyword tables for the POSIX (a.k.a. C) locale, transcribed from the
-// POSIX locale definition in XBD chapter 7.3. They are the ONLY locale data
-// this implementation has: there is no compiled locale database to read and
-// no libc to ask, so any other locale is refused by name rather than answered
-// with C's values (see localeData). Returning C's decimal point for a locale
+// POSIX locale definition in XBD chapter 7.3. There is no libc bridge to ask;
+// the one additional carried category is declared below, and all other locale
+// data is refused by name rather than answered with C's values (see
+// localeData). Returning C's decimal point for a locale
 // that uses a comma is the kind of silent wrong answer this repository's
 // contract exists to prevent.
 
@@ -117,6 +117,28 @@ var posixKeywords = func() []keyword {
 	}
 	return k
 }()
+
+// germanISO88591TimeKeywords is the complete POSIX LC_TIME keyword set for
+// de_DE in its ISO-8859-1 encoding. The non-ASCII byte is deliberately kept as
+// 0xe4 rather than converted to UTF-8: locale output is encoded in the active
+// charmap, and certification consumers feed those exact bytes to locale-aware
+// regular-expression utilities.
+var germanISO88591TimeKeywords = []keyword{
+	list("LC_TIME", "abday", "So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"),
+	list("LC_TIME", "day", "Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"),
+	list("LC_TIME", "abmon", "Jan", "Feb", "M\xe4r", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"),
+	list("LC_TIME", "mon", "Januar", "Februar", "M\xe4rz", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"),
+	list("LC_TIME", "am_pm", "", ""),
+	str("LC_TIME", "d_t_fmt", "%a %d %b %Y %T %Z"),
+	str("LC_TIME", "d_fmt", "%d.%m.%Y"),
+	str("LC_TIME", "t_fmt", "%T"),
+	str("LC_TIME", "t_fmt_ampm", ""),
+	str("LC_TIME", "era", ""),
+	str("LC_TIME", "era_d_fmt", ""),
+	str("LC_TIME", "era_t_fmt", ""),
+	str("LC_TIME", "era_d_t_fmt", ""),
+	str("LC_TIME", "alt_digits", ""),
+}
 
 // codesetKeywords are the LC_CTYPE entries whose values depend on the locale's
 // codeset rather than being fixed by the POSIX locale definition.
