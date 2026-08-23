@@ -48,9 +48,13 @@ type options struct {
 	dateFormat     string
 	doubleSpace    bool
 	numberLines    bool
+	numberSep      string
+	numberWidth    int
 	indent         int
 	noFileWarnings bool
 	expandTabs     bool
+	expandChar     rune
+	expandWidth    int
 	formFeed       bool
 	pageStart      int
 	pageEnd        int
@@ -71,11 +75,15 @@ func run(rc *tool.RunContext, args []string) int {
 	headerText := fs.StringP("header", "h", "", "use centered HEADER instead of file name in page header")
 	dateFormat := fs.StringP("date-format", "D", "", "use FORMAT for the header date")
 	doubleSpace := fs.BoolP("double-space", "d", false, "double space the output")
-	numberLines := fs.BoolP("number-lines", "n", false, "precede each line with its line number")
+	numberLines := fs.StringP("number-lines", "n", "", "precede each line with its line number")
+	// POSIX defines both operands as optional and attached.  A bare option
+	// selects the historical TAB/5 defaults and must not consume a file name.
+	fs.Lookup("number-lines").NoOptDefVal = "\t5"
 	indent := fs.IntP("indent", "o", 0, "offset each line with MARGIN spaces")
 	noFileWarnings := fs.BoolP("no-file-warnings", "r", false, "omit file open warnings")
 	pages := fs.String("pages", "", "print only pages in FIRST[:LAST] range")
-	expandTabs := fs.BoolP("expand-tabs", "e", false, "expand input tabs to spaces")
+	expandTabs := fs.StringP("expand-tabs", "e", "", "expand input tabs to spaces")
+	fs.Lookup("expand-tabs").NoOptDefVal = "\t8"
 	across := fs.BoolP("across", "a", false, "fill columns across rather than down")
 	columns := fs.Int("columns", 1, "produce COLUMN columns, filled down")
 	fs.IntP("column", "", 1, "alias for --columns")
@@ -129,13 +137,23 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
+	numberSep, numberWidth, err := parseOptionalCharNumber(*numberLines, '\t', 5)
+	if err != nil {
+		return tool.UsageError(rc, cmd, "invalid number-lines value: %q", *numberLines)
+	}
+	expandChar, expandWidth, err := parseOptionalCharNumber(*expandTabs, '\t', 8)
+	if err != nil {
+		return tool.UsageError(rc, cmd, "invalid expand-tabs value: %q", *expandTabs)
+	}
 
 	o := options{
 		pageLength: *pageLength,
 		width:      *width,
 		header:     *headerText, headerSet: fs.Changed("header"),
-		dateFormat: *dateFormat, doubleSpace: *doubleSpace, numberLines: *numberLines,
-		indent: *indent, noFileWarnings: *noFileWarnings, expandTabs: *expandTabs,
+		dateFormat: *dateFormat, doubleSpace: *doubleSpace,
+		numberLines: fs.Changed("number-lines"), numberSep: string(numberSep), numberWidth: numberWidth,
+		indent: *indent, noFileWarnings: *noFileWarnings,
+		expandTabs: fs.Changed("expand-tabs"), expandChar: expandChar, expandWidth: expandWidth,
 		formFeed:  *formFeed || *formFeedLower,
 		ffBreaks:  !*omitPagination,
 		pageStart: pageStart, pageEnd: pageEnd,
@@ -269,9 +287,10 @@ func scanColumnOption(args []string) []string {
 			break
 		}
 		// pflag treats a string option with NoOptDefVal as a completed short
-		// flag, so preserve pr's attached -sCHAR spelling explicitly.
-		if strings.HasPrefix(arg, "-s") && len(arg) > 2 {
-			out = append(out, "--separator="+arg[2:])
+		// flag, so preserve pr's attached optional-argument spellings.
+		if len(arg) > 2 && (strings.HasPrefix(arg, "-s") || strings.HasPrefix(arg, "-e") || strings.HasPrefix(arg, "-n")) {
+			longName := map[byte]string{'s': "separator", 'e': "expand-tabs", 'n': "number-lines"}[arg[1]]
+			out = append(out, "--"+longName+"="+arg[2:])
 			continue
 		}
 		if i > 0 && needValue[args[i-1]] {
@@ -404,7 +423,7 @@ func printColumnsStream(r io.Reader, w *bufio.Writer, label string, stamp time.T
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
 			if o.expandTabs {
-				line = expandTabs(line, 8)
+				line = expandChars(line, o.expandChar, o.expandWidth)
 			}
 			frags := strings.Split(line, "\f")
 			for i, frag := range frags {
@@ -542,7 +561,7 @@ func printSingleColumn(r io.Reader, w *bufio.Writer, label string, stamp time.Ti
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
 			if o.expandTabs {
-				line = expandTabs(line, 8)
+				line = expandChars(line, o.expandChar, o.expandWidth)
 			}
 			frags := strings.Split(line, "\f")
 			for i, frag := range frags {
@@ -672,7 +691,7 @@ func mergeLine(pages [][][]string, page, row int, o options) string {
 			line = strings.TrimSuffix(inputPages[page][row], "\n")
 		}
 		limit := columnWidth
-		if col < columns-1 && o.separator != "" {
+		if col < columns-1 {
 			limit--
 		}
 		if limit < 0 {
@@ -772,14 +791,17 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 				continue
 			}
 			line := formatted[index]
+			nextIndex := index + rows
+			if o.across {
+				nextIndex = index + 1
+			}
+			if col < o.columns-1 && nextIndex < len(formatted) && len(line) >= columnWidth {
+				line = line[:columnWidth-1]
+			}
 			if col > 0 {
 				if _, err := w.WriteString(o.separator); err != nil {
 					return err
 				}
-			}
-			nextIndex := index + rows
-			if o.across {
-				nextIndex = index + 1
 			}
 			if o.separator == "" && col < o.columns-1 && nextIndex < len(formatted) {
 				line += strings.Repeat(" ", columnWidth-len(line))
@@ -837,7 +859,7 @@ func formatLine(line string, lineNo int, o options) string {
 	hasNL := strings.HasSuffix(line, "\n")
 	line = strings.TrimSuffix(line, "\n")
 	if o.numberLines {
-		line = fmt.Sprintf("%5d\t%s", lineNo, line)
+		line = fmt.Sprintf("%*d%s%s", o.numberWidth, lineNo, o.numberSep, line)
 	}
 	if o.truncate && len(line) > o.width {
 		line = line[:o.width]
@@ -861,7 +883,7 @@ func readSegments(r io.Reader, o options) ([][]string, error) {
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
 			if o.expandTabs {
-				line = expandTabs(line, 8)
+				line = expandChars(line, o.expandChar, o.expandWidth)
 			}
 			if strings.ContainsRune(line, '\f') {
 				frags := strings.Split(line, "\f")
@@ -929,12 +951,38 @@ func inPageRange(page int, o options) bool {
 	return page >= o.pageStart && (o.pageEnd == 0 || page <= o.pageEnd)
 }
 
-func expandTabs(s string, tabWidth int) string {
+func parseOptionalCharNumber(spec string, defaultChar rune, defaultNumber int) (rune, int, error) {
+	if spec == "" {
+		return defaultChar, defaultNumber, nil
+	}
+	runes := []rune(spec)
+	char := defaultChar
+	digits := spec
+	if runes[0] < '0' || runes[0] > '9' {
+		char = runes[0]
+		digits = string(runes[1:])
+	}
+	if digits == "" {
+		return char, defaultNumber, nil
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return 0, 0, fmt.Errorf("not decimal")
+		}
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n <= 0 {
+		return 0, 0, fmt.Errorf("not positive")
+	}
+	return char, n, nil
+}
+
+func expandChars(s string, expandChar rune, width int) string {
 	var b strings.Builder
 	col := 0
 	for _, r := range s {
-		if r == '\t' {
-			spaces := tabWidth - col%tabWidth
+		if r == expandChar {
+			spaces := width - col%width
 			b.WriteString(strings.Repeat(" ", spaces))
 			col += spaces
 			continue

@@ -304,6 +304,26 @@ func TestPRVerticalColumnsUnevenFinalPage(t *testing.T) {
 	}
 }
 
+func TestPRColumnsReserveBlankBetweenFullWidthCells(t *testing.T) {
+	input := strings.Repeat("1", 40) + "\n" + strings.Repeat("2", 40) + "\n"
+	for _, args := range [][]string{
+		{"-t", "-w", "10", "-2"},
+		{"-t", "-w", "10", "-2", "-a"},
+	} {
+		out, errb, code := runPR(t, t.TempDir(), input, args...)
+		if code != 0 || errb != "" || !strings.Contains(out, "1111 ") {
+			t.Fatalf("pr %v did not reserve a blank column separator: (%q, %q, %d)", args, out, errb, code)
+		}
+	}
+	dir := t.TempDir()
+	writeFixed(t, dir, "one", strings.Repeat("1", 40)+"\n")
+	writeFixed(t, dir, "two", strings.Repeat("2", 40)+"\n")
+	out, errb, code := runPR(t, dir, "", "-m", "-t", "-w", "10", "one", "two")
+	if out != "1111 22222\n" || errb != "" || code != 0 {
+		t.Fatalf("pr -m did not reserve a blank column separator: (%q, %q, %d)", out, errb, code)
+	}
+}
+
 func TestPRAcrossColumns(t *testing.T) {
 	input := "a\nbb\nc\ndd\ne\n"
 	out, errb, code := runPR(t, t.TempDir(), input, "-t", "-w", "10", "-2", "-a")
@@ -372,6 +392,46 @@ func TestPRExpandTabs(t *testing.T) {
 	out, _, code := runPR(t, t.TempDir(), "a\tb\n", "-t", "-e")
 	if want := "a       b\n"; out != want || code != 0 {
 		t.Fatalf("pr expand tabs = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
+func TestPROptionalExpandArgument(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "in", "a\tbXc\n")
+	for _, tt := range []struct {
+		name string
+		arg  string
+		want string
+	}{
+		{name: "gap", arg: "-e4", want: "a   bXc\n"},
+		{name: "char-gap", arg: "-eX4", want: "a\tb c\n"},
+		{name: "char-default-gap", arg: "-eX", want: "a\tb     c\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errb, code := runPR(t, dir, "from-stdin\n", "-t", tt.arg, "in")
+			if out != tt.want || errb != "" || code != 0 {
+				t.Fatalf("pr %s = (%q, %q, %d), want (%q, \"\", 0)", tt.arg, out, errb, code, tt.want)
+			}
+		})
+	}
+}
+
+func TestPROptionalNumberArgument(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		arg  string
+		want string
+	}{
+		{name: "width", arg: "-n4", want: "   1\ta\n"},
+		{name: "char-width", arg: "-nX4", want: "   1Xa\n"},
+		{name: "char-default-width", arg: "-nX", want: "    1Xa\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			out, errb, code := runPR(t, t.TempDir(), "a\n", "-t", tt.arg)
+			if out != tt.want || errb != "" || code != 0 {
+				t.Fatalf("pr %s = (%q, %q, %d), want (%q, \"\", 0)", tt.arg, out, errb, code, tt.want)
+			}
+		})
 	}
 }
 
