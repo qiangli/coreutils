@@ -367,6 +367,17 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 			return err
 		}
 		h.Format = tarFormat(o.format)
+		if h.Format == tar.FormatUSTAR {
+			// USTAR carries mtime but has no fields for atime, ctime, xattrs,
+			// or PAX records. FileInfoHeader may populate the extra timestamps
+			// from platform stat data; clear them explicitly so asking for
+			// -x ustar does not fail merely because the source filesystem
+			// exposes richer metadata.
+			h.AccessTime = time.Time{}
+			h.ChangeTime = time.Time{}
+			h.Xattrs = nil
+			h.PAXRecords = nil
+		}
 		if err := tw.WriteHeader(h); err != nil {
 			return err
 		}

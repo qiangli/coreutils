@@ -212,6 +212,29 @@ func TestCPIOFormatWritesNewcArchive(t *testing.T) {
 	}
 }
 
+func TestUstarFormatDropsUnrepresentableMetadata(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "example"), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(d, "o.tar")
+	if _, errs, code := exec(t, d, "", "-w", "-x", "ustar", "-f", archive, "example"); code != 0 {
+		t.Fatalf("ustar write failed: %d %s", code, errs)
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	header, err := tar.NewReader(f).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Name != "example" || header.Format != tar.FormatUSTAR {
+		t.Fatalf("ustar header name=%q format=%v", header.Name, header.Format)
+	}
+}
+
 // Overwriting an existing destination is pax's DEFAULT. The planner refuses it
 // as a policy matter; the command must override that, while still treating an
 // escaping member as fatal. Both halves are asserted here because getting
