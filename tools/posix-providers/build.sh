@@ -139,6 +139,10 @@ fetch_verified() { # url sha256 dest
   _a=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$_d" | awk '{print $1}';
        else shasum -a 256 "$_d" | awk '{print $1}'; fi)
   [ "$_a" = "$_s" ] || { rm -f "$_d"; fail "digest mismatch for $_u: got $_a want $_s"; }
+  # A provider assembled from several inputs is only attributable if ALL of them
+  # are named. The manifest row can hold one url and one digest, so the rest are
+  # recorded here and folded into provenance.tsv beside the primary source.
+  printf 'extra_source\t%s\t%s\n' "$_u" "$_s" >> "$work/extra-$cmd.tsv"
 }
 
 src=$work/src-$cmd-$version
@@ -153,6 +157,7 @@ esac
 
 build_dir=$work/build-$cmd-$version
 rm -rf "$build_dir"; mkdir -p "$build_dir"
+rm -f "$work/extra-$cmd.tsv"
 say "building $cmd $version"
 case "$cmd" in
   ar|nm|strip)
@@ -176,6 +181,24 @@ case "$cmd" in
     # zig cc dies with "duplicate linked dylib"; with it, the same toolchain
     # produces a working lp. When zlib is absent LIBZ is empty anyway, so the
     # override is a no-op rather than a lost dependency.
+    #
+    # TLS IS NOT OPTIONAL HERE, though POSIX lp(1) has nothing to do with it.
+    # CUPS 2.4.7 defaults --with-tls=yes and hard-fails configure when no TLS
+    # library is present; and --with-tls=no does not save you either, because the
+    # no-TLS path is broken upstream -- cups/hash.c includes <gnutls/crypto.h>
+    # unconditionally and the compile dies there. Both measured on a minimal
+    # ubuntu:24.04. darwin is unaffected: configure finds the Security framework.
+    # So the dependency is real, and the only useful thing this recipe can do is
+    # say so BEFORE spending three minutes in configure.
+    if [ "$host_os" = linux ]; then
+      _tp=$work/tls-probe.c
+      printf '#include <openssl/ssl.h>\nint main(void){return 0;}\n' > "$_tp"
+      $CC -fsyntax-only "$_tp" 2>/dev/null || {
+        printf '#include <gnutls/crypto.h>\nint main(void){return 0;}\n' > "$_tp"
+        $CC -fsyntax-only "$_tp" 2>/dev/null ||
+          fail "lp needs a TLS library's headers (CUPS 2.4.7 cannot build without one, even with --with-tls=no): install libssl-dev or libgnutls28-dev"
+      }
+    fi
     (cd "$src" && ./configure --disable-shared --disable-dbus --disable-pam \
        --disable-libusb --without-rcdir --without-systemd >/dev/null &&
        make -C cups libcups.a >/dev/null &&
@@ -274,6 +297,14 @@ PATCHES
          CFLAGS='-O2 -fgnu89-inline -std=gnu99 -DIS_IN\(x\)=0' >/dev/null)
     found=$_h/localedef
     ;;
+  talk)
+    # netkit predates autotools portability: ./configure is a hand-written script
+    # and the tree has no VPATH, so build in-tree like vim and CUPS. Only the
+    # client is built -- talkd is a daemon, and the POSIX utility under test is
+    # talk(1). Needs ncurses headers; configure says so plainly if they are absent.
+    (cd "$src" && ./configure >/dev/null && make -C talk >/dev/null)
+    found=$src/talk/talk
+    ;;
   ex|vi)
     (cd "$src" && ./configure --with-features=normal --disable-gui --without-x \
        --disable-nls --disable-netbeans >/dev/null && make -j2 >/dev/null)
@@ -297,6 +328,7 @@ install -m 0755 "$found" "$target"
   printf 'license\t%s\n' "$license"
   printf 'source_url\t%s\n' "$url"
   printf 'source_sha256\t%s\n' "$sha"
+  [ -f "$work/extra-$cmd.tsv" ] && cat "$work/extra-$cmd.tsv"
   printf 'compiler\t%s\n' "$CC_LABEL"
   printf 'built_sha256\t%s\n' "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$target" | awk '{print $1}'; else shasum -a 256 "$target" | awk '{print $1}'; fi)"
   printf 'distributed\tno (built locally; provider binaries are never republished)\n'

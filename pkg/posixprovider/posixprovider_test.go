@@ -69,7 +69,8 @@ func mustLookup(t *testing.T, name string) Entry {
 
 func TestManifestShape(t *testing.T) {
 	names := Names()
-	want := []string{"ar", "bc", "ctags", "ed", "ex", "m4", "make", "man", "nm", "patch", "strip", "vi"}
+	want := []string{"ar", "bc", "ctags", "ed", "ex", "localedef", "lp", "m4", "mailx",
+		"make", "man", "nm", "patch", "strip", "talk", "vi"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("Names() = %v, want %v", names, want)
 	}
@@ -82,15 +83,28 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("%s: incomplete entry %+v", n, e)
 		}
 	}
-	// ed and man are the two the manifest declares unix-only. If that ever
-	// changes the platform-gating tests below need to move with it.
-	for _, n := range []string{"ed", "man"} {
+	// Unix-only, no windows. CUPS and s-nail are POSIX-only upstream, and
+	// neither ships a native windows build path.
+	for _, n := range []string{"ed", "man", "lp", "mailx"} {
 		e := mustLookup(t, n)
 		if e.SupportsGOOS("windows") {
 			t.Errorf("%s: manifest now declares windows; update the gating tests", n)
 		}
 		if !e.SupportsGOOS("linux") || !e.SupportsGOOS("darwin") {
 			t.Errorf("%s: manifest no longer declares linux+darwin: %v", n, e.Platforms)
+		}
+	}
+	// linux ONLY, and both are measured rather than assumed: localedef compiles
+	// glibc's own sources against glibc, and netkit's configure emits a
+	// malformed MCONFIG on darwin. A darwin claim here would be a lie the build
+	// only discovers three minutes in.
+	for _, n := range []string{"localedef", "talk"} {
+		e := mustLookup(t, n)
+		if !e.SupportsGOOS("linux") {
+			t.Errorf("%s: manifest no longer declares linux: %v", n, e.Platforms)
+		}
+		if e.SupportsGOOS("darwin") || e.SupportsGOOS("windows") {
+			t.Errorf("%s: declared beyond linux (%v) without a build to back it", n, e.Platforms)
 		}
 	}
 	if !mustLookup(t, "make").SupportsGOOS("windows") {

@@ -62,6 +62,7 @@ vi	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737
 lp	2.4.7	Apache-2.0	linux,darwin	dd54228dd903526428ce7e37961afaed230ad310788141da75cebaa08362cf6c	https://github.com/OpenPrinting/cups/releases/download/v2.4.7/cups-2.4.7-source.tar.gz
 mailx	14.9.25	ISC AND BSD-4-Clause	linux,darwin	20ff055be9829b69d46ebc400dfe516a40d287d7ce810c74355d6bdc1a28d8a9	https://ftp.sdaoden.eu/s-nail-14.9.25.tar.xz
 localedef	2.39	GPL-2.0-or-later	linux	f77bd47cf8170c57365ae7bf86696c118adb3b120d3259c64c502d3dc1e2d926	https://ftp.gnu.org/gnu/glibc/glibc-2.39.tar.xz
+talk	0.17	BSD-4-Clause	linux	d8f614e8d4d7981a0adf0f84d2d3954018d5fe0e57a8e5731256d66cbcf45e90	https://deb.debian.org/debian/pool/main/n/netkit-ntalk/netkit-ntalk_0.17.orig.tar.gz
 #
 # lp: CUPS 2.4.7 is exactly what Ubuntu 24.04 ships (cups-client 2.4.7-1.2ubuntu7.14),
 # so the C arm and the GNU A arm run the same upstream release. Apache-2.0 read from
@@ -125,14 +126,26 @@ localedef	2.39	GPL-2.0-or-later	linux	f77bd47cf8170c57365ae7bf86696c118adb3b120d
 # linux only: this compiles glibc's own sources against glibc. There is no
 # darwin or windows build and there will not be one.
 #
-# talk: OUT OF SCOPE, deliberately no row. It is a POSIX.upe test set (User
-# Portability Utilities), and the configured campaign targets posix_shell +
-# posix_cmd only. Two things to know if that scope ever widens: talk resolves to
-# nothing on the reference certification host either, so it can only be
-# UNINITIATED in the A arm; and a provider added to C alone would make the arms
-# asymmetric and break the C - A subtraction that currently cancels it. The A
-# host would need the same provider in the same change. For the record the
-# candidate is netkit-ntalk 0.17 (BSD-4-Clause, what Ubuntu 24.04 ships as
-# talk 0.17-18) -- but its upstream, ftp.uk.linux.org, is long dead, so the only
-# durable source of the pristine tarball is a distro pool, which the
-# upstream-only download rule above does not allow without an explicit exception.
+# talk: netkit-ntalk 0.17, the same release Ubuntu 24.04 ships as talk 0.17-18.
+# BSD-4-Clause (the 1983 UCB advertising clause) read from
+# netkit-ntalk-0.17/talk/talk.c -- there is no COPYING file in the tarball, the
+# licence lives in the per-file headers, and README confirms no separate one.
+# linux only, and that is measured, not assumed: on darwin ./configure exits 0
+# but its `echo -n` writes a malformed MCONFIG and make stops at "missing
+# separator" on the first line.
+#
+# THE URL IS AN EXCEPTION AND IT IS THE ONLY ONE IN THIS FILE. netkit's upstream
+# was ftp.uk.linux.org (= ftp.linux.org.uk); that host now 404s the whole
+# pub/linux/Networking/ tree, and no maintained fork exists -- the two on GitHub
+# were last touched in 2015 and 2017. So the pristine upstream tarball survives
+# only inside distro pools, and the row points at Debian's, which carries the
+# unmodified .orig for a non-native package. This is a DEAD-UPSTREAM exception,
+# not a licence to prefer mirrors: every other row must still resolve to a live
+# upstream. Revisit if anyone revives netkit.
+#
+# ARM SYMMETRY, and this one bites hardest: talk resolves to nothing on the
+# reference certification host either. Provisioning it in C alone makes the arms
+# asymmetric and turns a clean both-sides cancel into a C-attributed failure --
+# and it would fail, because talk needs a talkd peer and a logged-on terminal
+# that a headless arm does not have. Land this row together with the A-host
+# provisioning AND a talkd + tty fixture, or land neither.

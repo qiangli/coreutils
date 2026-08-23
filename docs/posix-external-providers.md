@@ -13,7 +13,7 @@ tarball and checked against its recorded provenance before it runs.
 ## Why the multicall has to own the name
 
 Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-coreutils". Until this mechanism existed those twelve names were not in
+coreutils". Until this mechanism existed those sixteen names were not in
 `tool.Names()`, so the shell adapter fell through to `$PATH` and the arm
 measured **Ubuntu's** binaries while reporting itself as bashy-only.
 
@@ -95,7 +95,7 @@ ratchet — the same shape on every platform.
 BASHY_POSIX_PROVIDERS=off
 ```
 
-unregisters all twelve provider names, so plain bashy stays standalone-graceful
+unregisters all sixteen provider names, so plain bashy stays standalone-graceful
 on a machine with no provider cache and normal `$PATH` resolution applies again.
 Only the exact word `off` (case-insensitive) opts out; the default is to own the
 names and fail loudly. The `posix-providers` applet itself is always registered
@@ -122,6 +122,6 @@ of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 | --- | --- |
 | `pkg/posixprovider/manifest.tsv` | the ONE canonical pin table (embedded; the recipe reads this same file) |
 | `pkg/posixprovider/posixprovider.go` | manifest parsing, platform gating, cache resolution, provenance verification |
-| `cmds/posixproviders/` | the twelve registered provider tools + the `posix-providers` applet |
+| `cmds/posixproviders/` | the sixteen registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `external/zigcc/` | the pinned portable C toolchain the recipe prefers |
