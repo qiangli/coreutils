@@ -335,6 +335,28 @@ PATCHES
     (cd "$src" && make -C talk >/dev/null)
     found=$src/talk/talk
     ;;
+  man)
+    # man-db's top-level SUBDIRS includes docs, whose man_db.ps target wants a
+    # full TeX toolchain (texi2dvi/dvips) to typeset a manual the provider never
+    # ships. It only activates at all because texinfo is installed for the
+    # binutils providers, so the docs failure is a side effect of an unrelated
+    # dependency. Build the program's own directories instead.
+    #
+    # A SUBDIRS= override on the top-level make is NOT equivalent: make passes it
+    # down to every recursive invocation, so gl/lib then tries to enter
+    # gl/lib/gl/lib and dies with "cd: gl/lib: No such file or directory".
+    #
+    # found is src/.libs/man, the real ELF binary -- src/man is libtool's shell
+    # wrapper, which is useless once copied out of the build tree.
+    (cd "$build_dir" && "$src/configure" --disable-nls >/dev/null 2>&1 ||
+       "$src/configure" >/dev/null)
+    for _d in gl/lib lib libdb src; do
+      (cd "$build_dir/$_d" &&
+         make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >/dev/null) ||
+        fail "man build failed in $_d"
+    done
+    found=$build_dir/src/.libs/man
+    ;;
   ex|vi)
     (cd "$src" && ./configure --with-features=normal --disable-gui --without-x \
        --disable-nls --disable-netbeans >/dev/null && make -j2 >/dev/null)
