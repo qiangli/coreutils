@@ -29,3 +29,6 @@ func ngroupsMaxStr() (string, bool) {
 	}
 	return "16", true
 }
+
+func reDupMaxStr() (string, bool)   { return "255", true }
+func symloopMaxStr() (string, bool) { return "32", true }

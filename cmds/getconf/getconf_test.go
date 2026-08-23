@@ -28,7 +28,11 @@ func TestAgreesWithSystemGetconf(t *testing.T) {
 	if err != nil {
 		t.Skip("no system getconf to compare against")
 	}
-	for _, name := range []string{"PAGESIZE", "OPEN_MAX", "NGROUPS_MAX", "ARG_MAX", "CLK_TCK", "_POSIX_VERSION"} {
+	for _, name := range []string{
+		"PAGESIZE", "OPEN_MAX", "NGROUPS_MAX", "ARG_MAX", "CLK_TCK",
+		"BC_BASE_MAX", "BC_STRING_MAX", "INT_MAX", "LINE_MAX", "RE_DUP_MAX",
+		"SYMLOOP_MAX", "_POSIX_VERSION",
+	} {
 		want, err := exec.Command(sys, name).Output()
 		if err != nil {
 			continue

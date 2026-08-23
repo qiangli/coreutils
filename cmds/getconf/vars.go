@@ -28,12 +28,18 @@ func knownSpecification(s string) bool {
 var sysVars = map[string]func() (string, bool){
 	// Runtime invariant values obtainable from the OS.
 	"ARG_MAX":           func() (string, bool) { return sysconfStr(scArgMax) },
+	"BC_BASE_MAX":       constVal(99),
+	"BC_STRING_MAX":     constVal(1000),
 	"CHILD_MAX":         func() (string, bool) { return sysconfStr(scChildMax) },
 	"CLK_TCK":           func() (string, bool) { return sysconfStr(scClkTck) },
+	"INT_MAX":           constVal(2147483647),
+	"LINE_MAX":          constVal(2048),
 	"NGROUPS_MAX":       func() (string, bool) { return sysconfStr(scNgroupsMax) },
 	"OPEN_MAX":          func() (string, bool) { return sysconfStr(scOpenMax) },
 	"PAGESIZE":          func() (string, bool) { return sysconfStr(scPagesize) },
 	"PAGE_SIZE":         func() (string, bool) { return sysconfStr(scPagesize) },
+	"RE_DUP_MAX":        reDupMaxStr,
+	"SYMLOOP_MAX":       symloopMaxStr,
 	"_NPROCESSORS_CONF": func() (string, bool) { return sysconfStr(scNprocessorsConf) },
 	"_NPROCESSORS_ONLN": func() (string, bool) { return sysconfStr(scNprocessorsOnln) },
 

@@ -31,6 +31,9 @@ const (
 
 func sysconfStr(int) (string, bool) { return undefined, true }
 
+func reDupMaxStr() (string, bool)   { return "255", true }
+func symloopMaxStr() (string, bool) { return undefined, true }
+
 func pathconfStr(*tool.RunContext, int, string) (string, bool) { return undefined, true }
 
 func confstrValue(name string) (string, bool) {
