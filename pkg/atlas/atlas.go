@@ -484,6 +484,9 @@ func init() {
 		// tput answers terminal-capability questions from the terminfo database;
 		// write sends a message to another logged-in user's terminal.
 		"tput", "write",
+		// locale reports the environment's locale settings; logger writes to the
+		// system log; newgrp changes the caller's group credential for a new shell.
+		"locale", "logger", "newgrp",
 		"seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
@@ -856,6 +859,9 @@ func init() {
 		// tput reads the terminfo database; write reads the utmp/utmpx login
 		// database to find the recipient's terminal (it also writes, below).
 		"tput", "write",
+		// locale reports settings resolved from the environment and the locale
+		// database. It answers questions; it changes nothing.
+		"locale",
 		"which", "who", "whoami", "atq", "date", "env", "printenv", "ntp",
 		"sntp",
 		// code-intel / net
@@ -890,6 +896,8 @@ func init() {
 		// write writes to ANOTHER user's terminal device - host state outside
 		// this process, so it is a write even though nothing on disk changes.
 		"write",
+		// logger appends a record to the system log - host state, off-process.
+		"logger",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "uudecode", "graph",
 		"stty", "atrm", "crontab",
 		// handoff WRITES a portable record; resume WRITES the captured working
@@ -930,6 +938,9 @@ func init() {
 	// exec — spawns a process bashy no longer governs (the coreutils userland,
 	// the advisor, and the audit hook do not reach across an execve).
 	eff(EffExec,
+		// newgrp REPLACES itself with a new shell carrying a changed group
+		// credential; the shell is beyond anything bashy governs.
+		"newgrp",
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
 		"weave", "dag", "sdlc", "delegate", "coach", "chat", "invoke", "meet", "relay", "pair", "judge", "supervise", "schedule", "act", "sota",
@@ -947,7 +958,9 @@ func init() {
 	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secrets", "ask", "tessaro", "login")
 
 	// priv — changes privilege, ownership, or a security label.
-	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod")
+	// newgrp changes the caller's GROUP CREDENTIAL before spawning the shell -
+	// a privilege change, and the reason it is classified beyond a plain exec.
+	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod", "newgrp")
 
 	// remote — executes on ANOTHER host (crosses the machine boundary). `dag`
 	// pipes a Host:-tagged target body to a remote `bash -s`; sphere runs pooled

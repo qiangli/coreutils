@@ -12,17 +12,17 @@ providers. Profiles C/D place Bashy Go coreutils first.
 
 | Disposition | Count |
 | --- | ---: |
-| Registered Bashy Go applet | 80 |
+| Registered Bashy Go applet | 85 |
 | Shell entry point or builtin | 14 |
 | Pinned POSIX external provider | 12 |
-| External provider gap in assembled C/D | 10 |
+| External provider gap in assembled C/D | 5 |
 | Required names | 116 |
 
-Coreutils alone therefore covers 80 of 116 same-name required sets and
-is absent for 36 names. 14 of those 36 are supplied by the shell and
+Coreutils alone therefore covers 85 of 116 same-name required sets and
+is absent for 31 names. 14 of those 31 are supplied by the shell and
 12 by a pinned POSIX external provider that the multicall itself registers
 and resolves from the provider cache (`pkg/posixprovider`), leaving
-10 true external-provider gaps in the assembled C/D environment.
+5 true external-provider gaps in the assembled C/D environment.
 
 A provider row is NOT a Go applet: the name belongs to the multicall, the
 implementation is upstream's, built locally from a pinned source tarball
@@ -89,9 +89,9 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `join` | yes | `cmds/join` | no | internal Go applet |
 | `kill` | yes | `cmds/kill` | no | internal Go applet |
 | `ln` | yes | `cmds/ln` | no | internal Go applet |
-| `locale` | no | — | no | external provider required |
+| `locale` | yes | `cmds/locale` | no | internal Go applet |
 | `localedef` | no | — | no | external provider required |
-| `logger` | no | — | no | external provider required |
+| `logger` | yes | `cmds/logger` | no | internal Go applet |
 | `logname` | yes | `cmds/logname` | no | internal Go applet |
 | `lp` | no | — | no | external provider required |
 | `ls` | yes | `cmds/ls` | no | internal Go applet |
@@ -104,7 +104,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `mkfifo` | yes | `cmds/mkfifo` | no | internal Go applet |
 | `more` | yes | `cmds/more` | no | internal Go applet |
 | `mv` | yes | `cmds/mv` | no | internal Go applet |
-| `newgrp` | no | — | no | external provider required |
+| `newgrp` | yes | `cmds/newgrp` | no | internal Go applet |
 | `nice` | yes | `cmds/nice` | no | internal Go applet |
 | `nm` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `nohup` | yes | `cmds/nohup` | no | internal Go applet |
@@ -136,7 +136,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `test` | yes | `cmds/test` | no | internal Go applet |
 | `time` | yes | `cmds/time` | no | internal Go applet |
 | `touch` | yes | `cmds/touch` | no | internal Go applet |
-| `tput` | no | — | no | external provider required |
+| `tput` | yes | `cmds/tput` | no | internal Go applet |
 | `tr` | yes | `cmds/tr` | no | internal Go applet |
 | `true` | yes | `cmds/true` | no | internal Go applet |
 | `tsort` | yes | `cmds/tsort` | no | internal Go applet |
@@ -152,10 +152,10 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `wait` | no | — | yes | shell entry/builtin |
 | `wc` | yes | `cmds/wc` | no | internal Go applet |
 | `who` | yes | `cmds/who` | no | internal Go applet |
-| `write` | no | — | no | external provider required |
+| `write` | yes | `cmds/write` | no | internal Go applet |
 | `xargs` | yes | `cmds/xargs` | no | internal Go applet |
 
-The product/provider allocation for the 10 remaining external gaps lives in
+The product/provider allocation for the 5 remaining external gaps lives in
 `../../docs/posix-utility-provider-strategy.md`. The pins, licences and
 build recipe for the registered providers live in
 `pkg/posixprovider/manifest.tsv` + `tools/posix-providers/build.sh`.

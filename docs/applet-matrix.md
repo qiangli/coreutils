@@ -22,11 +22,11 @@ Generated from the current `cmds/all` registration tree; `chroot` and
 
 | Measure | Count |
 |---|---:|
-| Shipped Go command packages | 147 |
-| Advertised applet names | 164 |
+| Shipped Go command packages | 152 |
+| Advertised applet names | 169 |
 | Alias applet names | 5 |
 | GNU Coreutils names | 106 |
-| POSIX-cert-required names | 92 |
+| POSIX-cert-required names | 97 |
 | Shipped names without a same-name required test set | 72 |
 | Shipped names lacking package-local tests | 0 |
 | Release-withheld implementations | 2 (`chroot`, `runcon`) |
@@ -107,6 +107,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 5 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 21 |
+| `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 19 |
+| `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 1 | 20 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 46 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
@@ -121,6 +123,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 1 | 8 |
 | `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 1 | 23 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
+| `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 4 | 35 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 16 |
 | `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `nm` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
@@ -175,6 +178,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `timeout` | `cmds/timeout` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tokens` | `cmds/tokens` | — | Bashy/other extension | no | no | 1 | 4 |
 | `touch` | `cmds/touch` | — | GNU Coreutils | yes | yes | 3 | 26 |
+| `tput` | `cmds/tput` | — | POSIX/Unix utility | no | yes | 5 | 39 |
 | `tr` | `cmds/tr` | — | GNU Coreutils | yes | yes | 2 | 16 |
 | `tree` | `cmds/tree` | — | Bashy/other extension | no | no | 1 | 5 |
 | `true` | `cmds/true` | — | GNU Coreutils | yes | yes | 1 | 1 |
@@ -198,6 +202,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `who` | `cmds/who` | — | GNU Coreutils | yes | yes | 2 | 11 |
 | `whoami` | `cmds/whoami` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `why` | `cmds/why` | — | Bashy/other extension | no | no | 1 | 17 |
+| `write` | `cmds/write` | — | POSIX/Unix utility | no | yes | 2 | 29 |
 | `xargs` | `cmds/xargs` | — | POSIX/Unix utility | no | yes | 3 | 27 |
 | `yes` | `cmds/yes` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `zcat` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |

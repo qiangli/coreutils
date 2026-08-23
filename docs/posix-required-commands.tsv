@@ -50,9 +50,9 @@ jobs	no		yes	shell
 join	yes	cmds/join	no	go_applet
 kill	yes	cmds/kill	no	go_applet
 ln	yes	cmds/ln	no	go_applet
-locale	no		no	external_gap
+locale	yes	cmds/locale	no	go_applet
 localedef	no		no	external_gap
-logger	no		no	external_gap
+logger	yes	cmds/logger	no	go_applet
 logname	yes	cmds/logname	no	go_applet
 lp	no		no	external_gap
 ls	yes	cmds/ls	no	go_applet
@@ -65,7 +65,7 @@ mkdir	yes	cmds/mkdir	no	go_applet
 mkfifo	yes	cmds/mkfifo	no	go_applet
 more	yes	cmds/more	no	go_applet
 mv	yes	cmds/mv	no	go_applet
-newgrp	no		no	external_gap
+newgrp	yes	cmds/newgrp	no	go_applet
 nice	yes	cmds/nice	no	go_applet
 nm	no	cmds/posixproviders	no	external_provider
 nohup	yes	cmds/nohup	no	go_applet
@@ -97,7 +97,7 @@ tee	yes	cmds/tee	no	go_applet
 test	yes	cmds/test	no	go_applet
 time	yes	cmds/time	no	go_applet
 touch	yes	cmds/touch	no	go_applet
-tput	no		no	external_gap
+tput	yes	cmds/tput	no	go_applet
 tr	yes	cmds/tr	no	go_applet
 true	yes	cmds/true	no	go_applet
 tsort	yes	cmds/tsort	no	go_applet
@@ -113,5 +113,5 @@ vi	no	cmds/posixproviders	no	external_provider
 wait	no		yes	shell
 wc	yes	cmds/wc	no	go_applet
 who	yes	cmds/who	no	go_applet
-write	no		no	external_gap
+write	yes	cmds/write	no	go_applet
 xargs	yes	cmds/xargs	no	go_applet
