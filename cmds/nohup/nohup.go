@@ -141,6 +141,10 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		}
 	}
 
+	// Immunity must cover the wait, not just the child: see ignoreHangup.
+	restoreHangup := ignoreHangup()
+	defer restoreHangup()
+
 	err := c.Run()
 	if err == nil {
 		return 0
