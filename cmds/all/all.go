@@ -137,6 +137,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/timeout"
 	_ "github.com/qiangli/coreutils/cmds/tokens"
 	_ "github.com/qiangli/coreutils/cmds/touch"
+	_ "github.com/qiangli/coreutils/cmds/tput"
 	_ "github.com/qiangli/coreutils/cmds/tr"
 	_ "github.com/qiangli/coreutils/cmds/tree"
 	_ "github.com/qiangli/coreutils/cmds/true"
