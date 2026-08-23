@@ -342,6 +342,17 @@ func TestPRMerge(t *testing.T) {
 	}
 }
 
+func TestPRBareSeparatorDoesNotConsumeFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "in", "from-file\n")
+	for _, separator := range []string{"-s", "--separator"} {
+		out, errb, code := runPR(t, dir, "from-stdin\n", "-m", "-t", separator, "in")
+		if out != "from-file\n" || errb != "" || code != 0 {
+			t.Fatalf("pr %s consumed the file operand = (%q, %q, %d)", separator, out, errb, code)
+		}
+	}
+}
+
 func TestPRMergeThreeFilesAndPagination(t *testing.T) {
 	dir := t.TempDir()
 	writeFixed(t, dir, "one", "a\nb\nc\nd\n")

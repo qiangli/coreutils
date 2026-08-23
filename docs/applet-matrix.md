@@ -141,7 +141,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 1 | 10 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `posix-providers` | `cmds/posixproviders` | — | Bashy/other extension | no | no | 2 | 18 |
-| `pr` | `cmds/pr` | — | GNU Coreutils | yes | yes | 1 | 25 |
+| `pr` | `cmds/pr` | — | GNU Coreutils | yes | yes | 1 | 26 |
 | `printenv` | `cmds/printenv` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `printf` | `cmds/printf` | — | GNU Coreutils | yes | yes | 3 | 23 |
 | `ps` | `cmds/ps` | — | POSIX/Unix utility | no | yes | 1 | 3 |

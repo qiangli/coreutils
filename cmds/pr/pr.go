@@ -80,6 +80,9 @@ func run(rc *tool.RunContext, args []string) int {
 	columns := fs.Int("columns", 1, "produce COLUMN columns, filled down")
 	fs.IntP("column", "", 1, "alias for --columns")
 	separator := fs.StringP("separator", "s", "", "separate columns by CHAR")
+	// GNU/POSIX pr accepts -s with an optional attached character.  A bare -s
+	// selects TAB and must not consume the following file operand.
+	fs.Lookup("separator").NoOptDefVal = "\t"
 	sepString := fs.StringP("sep-string", "S", "", "separate columns by STRING")
 	merge := fs.BoolP("merge", "m", false, "print files in parallel, one per column")
 	formFeed := fs.BoolP("form-feed", "F", false, "use form feed instead of blank lines to end pages")
@@ -253,7 +256,7 @@ func runMerge(rc *tool.RunContext, files []string, w *bufio.Writer, o options) i
 // left alone, so a negative numeric value is still reported by that option's
 // normal validation.
 func scanColumnOption(args []string) []string {
-	const requiresValue = "-D -N -S -W -h -l -o -s -w --date-format --first-line-number --header --indent --length --page-width --separator --sep-string --width --pages --columns --column"
+	const requiresValue = "-D -N -S -W -h -l -o -w --date-format --first-line-number --header --indent --length --page-width --sep-string --width --pages --columns --column"
 	needValue := map[string]bool{}
 	for _, name := range strings.Fields(requiresValue) {
 		needValue[name] = true
@@ -264,6 +267,12 @@ func scanColumnOption(args []string) []string {
 		if arg == "--" {
 			out = append(out, args[i:]...)
 			break
+		}
+		// pflag treats a string option with NoOptDefVal as a completed short
+		// flag, so preserve pr's attached -sCHAR spelling explicitly.
+		if strings.HasPrefix(arg, "-s") && len(arg) > 2 {
+			out = append(out, "--separator="+arg[2:])
+			continue
 		}
 		if i > 0 && needValue[args[i-1]] {
 			out = append(out, arg)
