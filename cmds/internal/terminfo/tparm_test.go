@@ -1,4 +1,4 @@
-package tputcmd
+package terminfo
 
 import "testing"
 
@@ -152,8 +152,8 @@ func TestStripPadding(t *testing.T) {
 		{"empty body is literal", "a$<>b", "a$<>b"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := stripPadding(c.in); got != c.want {
-				t.Errorf("stripPadding(%q) = %q, want %q", c.in, got, c.want)
+			if got := StripPadding(c.in); got != c.want {
+				t.Errorf("StripPadding(%q) = %q, want %q", c.in, got, c.want)
 			}
 		})
 	}

@@ -463,7 +463,7 @@ func init() {
 		"basename", "chcon", "chgrp", "chmod", "chown", "clip", "cp", "dd",
 		"df", "dir", "dircolors", "dirname", "du", "file", "find", "install", "link",
 		"ln", "ls", "mkdir", "mkfifo", "mknod", "mktemp", "mv", "readlink",
-		"realpath", "rm", "rmdir", "shred", "stat", "sync", "tar", "touch",
+		"pax", "realpath", "rm", "rmdir", "shred", "stat", "sync", "tar", "touch",
 		"tree", "truncate", "unlink", "vdir",
 	)
 	addTools(GroupTextutils,
@@ -478,10 +478,11 @@ func init() {
 	addTools(GroupShellutils,
 		"arch", "at", "atq", "atrm", "batch", "cal", "crontab",
 		"date", "duration", "echo", "env", "expr", "factor", "false",
-		"groups", "hostid", "hostname", "id", "kill", "logname", "ncal", "nice",
+		"getconf", "groups", "hostid", "hostname", "id", "kill", "logname",
+		"mesg", "ncal", "nice",
 		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "ps", "pwd",
-		"seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
-		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
+		"renice", "seq", "sleep", "sntp", "stdbuf", "stty", "tabs", "test", "time",
+		"timeout", "tput", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
 		// `[` is test under its bracket spelling — one implementation,
 		// both names, exactly as upstream ships them.
@@ -508,6 +509,11 @@ func init() {
 		"test", "[", "tokens", "tree", "wc", "which",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
 		"ast",
+		// getconf/tput/tabs read a system table (confstr/sysconf limits, the
+		// terminfo database) and write only to stdout. `tabs` addresses the
+		// terminal rather than the filesystem, which is still not a mutation of
+		// anything that outlives the invocation.
+		"getconf", "tput", "tabs",
 	)
 	// The `graph` umbrella has write subcommands (note/link/observe/forget), so
 	// it is not read-only; its structural reads keep a disk cache, so CapCached.
@@ -805,7 +811,11 @@ func init() {
 		"arch", "groups", "hostid", "hostname", "id", "logname", "nproc",
 		"pathchk", "pinky", "ps", "pwd", "tty", "tz", "uname", "uptime", "users",
 		"which", "who", "whoami", "atq", "date", "env", "printenv", "ntp",
-		"sntp",
+		"sntp", "getconf",
+		// tput and tabs read the terminfo database; mesg reads the controlling
+		// terminal's mode (and writes it, below). pax reads the archive and the
+		// files it packs.
+		"tput", "tabs", "mesg", "pax",
 		// code-intel / net
 		"ast", "graph", "browser", "fetch",
 		// verbs that read stores / remote state
@@ -832,6 +842,10 @@ func init() {
 		"todo", "why",
 		"clip", "cp", "install", "kill", "link", "ln", "mkdir", "mkfifo", "mknod",
 		"mktemp", "mv", "rmdir", "tar", "touch",
+		// pax extracts into the filesystem and writes archives. mesg chmods the
+		// controlling terminal; renice changes another process's scheduling
+		// priority — host state in both cases, not a privilege or a label.
+		"pax", "mesg", "renice",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "uudecode", "graph",
 		"stty", "atrm", "crontab",
 		// handoff WRITES a portable record; resume WRITES the captured working

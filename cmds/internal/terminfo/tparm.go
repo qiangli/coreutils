@@ -1,4 +1,4 @@
-package tputcmd
+package terminfo
 
 import (
 	"fmt"
@@ -381,4 +381,101 @@ func skipBranch(s string, i int, stopAtElse bool) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("unterminated %%? conditional")
+}
+
+// --- capability instantiation ----------------------------------------------
+
+// Instantiate applies the operands to a capability string and strips padding.
+//
+// With NO operands the string is emitted verbatim rather than run through the
+// parameter engine. That is the reference behaviour and it is deliberate:
+// `tput cup` with no arguments prints the uninstantiated `\E[%i%p1%d;%p2%dH`,
+// which is how a script asks for the raw template. Running the engine on it
+// instead would silently substitute zeros and print `\E[1;1H` — a valid-looking
+// escape sequence that is not what was asked for.
+func Instantiate(s string, parms []string) (string, error) {
+	if len(parms) == 0 {
+		return StripPadding(s), nil
+	}
+	out, err := tparm(s, parseParams(parms))
+	if err != nil {
+		return "", err
+	}
+	return StripPadding(out), nil
+}
+
+// parseParams converts command-line operands to stack values. An operand that
+// reads as a decimal integer is passed as a number, because that is what the
+// arithmetic directives in a capability like `cup` expect; everything else is
+// passed as a string, which is what capabilities like `pfkey` expect.
+func parseParams(parms []string) []value {
+	if len(parms) > 9 {
+		parms = parms[:9]
+	}
+	out := make([]value, len(parms))
+	for i, p := range parms {
+		if n, err := strconv.Atoi(p); err == nil {
+			out[i] = numValue(n)
+			continue
+		}
+		out[i] = strValue(p)
+	}
+	return out
+}
+
+// StripPadding removes `$<...>` delay specifications.
+//
+// A delay is an instruction to the OUTPUT DRIVER — wait this many
+// milliseconds, or send this many pad characters at the current line speed —
+// and it is meaningful only when writing to a real terminal at a known baud
+// rate. tput's output is overwhelmingly captured into a shell variable, where
+// emitting the literal text "$<5>" would corrupt it and where sleeping would
+// just make the script slower. Modern terminals declare no delays at all, so
+// this is invisible for them; for the ones that do, dropping the delay is the
+// behaviour a script sees from the reference implementation writing to a pipe.
+//
+// Text that merely looks like a delay is left alone: the closing '>' and a
+// well-formed body are both required.
+func StripPadding(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '$' || i+1 >= len(s) || s[i+1] != '<' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		end := strings.IndexByte(s[i+2:], '>')
+		if end < 0 || !isDelayBody(s[i+2:i+2+end]) {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		i += 2 + end + 1
+	}
+	return b.String()
+}
+
+// isDelayBody reports whether body is a delay: a decimal number with at most
+// one fractional digit, optionally followed by '*' (per affected line) and/or
+// '/' (mandatory even with xon/xoff), in either order.
+func isDelayBody(body string) bool {
+	i := 0
+	digits := 0
+	for i < len(body) && body[i] >= '0' && body[i] <= '9' {
+		i++
+		digits++
+	}
+	if digits == 0 {
+		return false
+	}
+	if i < len(body) && body[i] == '.' {
+		i++
+		for i < len(body) && body[i] >= '0' && body[i] <= '9' {
+			i++
+		}
+	}
+	for i < len(body) && (body[i] == '*' || body[i] == '/') {
+		i++
+	}
+	return i == len(body)
 }

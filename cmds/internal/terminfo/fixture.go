@@ -1,79 +1,93 @@
-package tputcmd
+package terminfo
 
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
-	"testing"
 )
 
-// fixture builds a compiled terminfo file in memory.
+// Fixture builds a compiled terminfo file in memory — the WRITER that mirrors
+// the reader in terminfo.go.
 //
-// Every terminfo test in this package drives one of these rather than the
-// host's database. The database a developer happens to have installed is not
-// a fixture: it varies by OS and ncurses version, it cannot express the
-// corrupt and edge-case inputs the parser has to survive, and a test that
-// reads it passes or fails for reasons that have nothing to do with the code.
-type fixture struct {
-	names []string
-	bools map[string]bool
-	nums  map[string]int
-	strs  map[string]string
+// Every terminfo test drives one of these rather than the host's database, and
+// so do the tests of the commands built on this package (tput, tabs). The
+// database a developer happens to have installed is not a fixture: it varies
+// by OS and ncurses version, it cannot express the corrupt and edge-case
+// inputs the parser has to survive, and a test that reads it passes or fails
+// for reasons that have nothing to do with the code.
+//
+// It lives in a normal source file rather than a _test.go so that the command
+// packages can reach it without a second copy of the compiled format; nothing
+// in the shipped code path references it, so the linker drops it.
+type Fixture struct {
+	Names []string
+	Bools map[string]bool
+	Nums  map[string]int
+	Strs  map[string]string
 
-	// wide selects the extended-number layout (32-bit numeric capabilities).
-	wide bool
+	// Wide selects the extended-number layout (32-bit numeric capabilities).
+	Wide bool
 
 	// The ncurses user-defined capability section. It is emitted only when at
 	// least one of these is non-empty.
-	extBools map[string]bool
-	extNums  map[string]int
-	extStrs  map[string]string
+	ExtBools map[string]bool
+	ExtNums  map[string]int
+	ExtStrs  map[string]string
 }
 
-func indexOf(t *testing.T, list []string, name string) int {
-	t.Helper()
+func indexOfCap(list []string, name string) (int, error) {
 	for i, n := range list {
 		if n == name {
-			return i
+			return i, nil
 		}
 	}
-	t.Fatalf("no such capability %q", name)
-	return -1
+	return -1, fmt.Errorf("no such capability %q", name)
 }
 
-func (f fixture) build(t *testing.T) []byte {
-	t.Helper()
-
+// Build renders the fixture as the bytes of a compiled terminfo file.
+func (f Fixture) Build() ([]byte, error) {
 	// Array lengths are "highest used index + 1": that is what a real compiler
 	// emits, and it is what exercises the reader's reliance on the header
 	// counts rather than on the length of its own name tables.
 	nBools, nNums, nStrs := 0, 0, 0
 	boolIdx := map[int]bool{}
-	for name, v := range f.bools {
-		i := indexOf(t, boolNames, name)
+	for name, v := range f.Bools {
+		i, err := indexOfCap(boolNames, name)
+		if err != nil {
+			return nil, err
+		}
 		boolIdx[i] = v
 		if i+1 > nBools {
 			nBools = i + 1
 		}
 	}
 	numIdx := map[int]int{}
-	for name, v := range f.nums {
-		i := indexOf(t, numNames, name)
+	for name, v := range f.Nums {
+		i, err := indexOfCap(numNames, name)
+		if err != nil {
+			return nil, err
+		}
 		numIdx[i] = v
 		if i+1 > nNums {
 			nNums = i + 1
 		}
 	}
 	strIdx := map[int]string{}
-	for name, v := range f.strs {
-		i := indexOf(t, strNames, name)
+	for name, v := range f.Strs {
+		i, err := indexOfCap(strNames, name)
+		if err != nil {
+			return nil, err
+		}
 		strIdx[i] = v
 		if i+1 > nStrs {
 			nStrs = i + 1
 		}
 	}
 
-	nameBlob := []byte(joinNames(f.names))
+	nameBlob := []byte(joinNames(f.Names))
 	var table bytes.Buffer
 	offsets := make([]int16, nStrs)
 	for i := range offsets {
@@ -90,7 +104,7 @@ func (f fixture) build(t *testing.T) []byte {
 	}
 
 	magic := int16(magicLegacy)
-	if f.wide {
+	if f.Wide {
 		magic = magicExtended
 	}
 	var out bytes.Buffer
@@ -101,7 +115,7 @@ func (f fixture) build(t *testing.T) []byte {
 		_ = binary.Write(b, binary.LittleEndian, int32(v))
 	}
 	putNum := func(b *bytes.Buffer, v int) {
-		if f.wide {
+		if f.Wide {
 			put32(b, v)
 		} else {
 			put16(b, v)
@@ -137,22 +151,22 @@ func (f fixture) build(t *testing.T) []byte {
 	}
 	out.Write(table.Bytes())
 
-	if len(f.extBools)+len(f.extNums)+len(f.extStrs) == 0 {
-		return out.Bytes()
+	if len(f.ExtBools)+len(f.ExtNums)+len(f.ExtStrs) == 0 {
+		return out.Bytes(), nil
 	}
 
 	if out.Len()%2 == 1 {
 		out.WriteByte(0)
 	}
-	extBoolNames := sortedKeys(f.extBools)
-	extNumNames := sortedKeys(f.extNums)
-	extStrNames := sortedKeys(f.extStrs)
+	extBoolNames := sortedKeys(f.ExtBools)
+	extNumNames := sortedKeys(f.ExtNums)
+	extStrNames := sortedKeys(f.ExtStrs)
 
 	var extTable bytes.Buffer
 	valOffsets := make([]int16, 0, len(extStrNames))
 	for _, n := range extStrNames {
 		valOffsets = append(valOffsets, int16(extTable.Len()))
-		extTable.WriteString(f.extStrs[n])
+		extTable.WriteString(f.ExtStrs[n])
 		extTable.WriteByte(0)
 	}
 	// Name offsets are relative to the START OF THE NAME AREA, not to the
@@ -172,7 +186,7 @@ func (f fixture) build(t *testing.T) []byte {
 	put16(&out, len(valOffsets)+len(nameOffsets))
 	put16(&out, extTable.Len())
 	for _, n := range extBoolNames {
-		if f.extBools[n] {
+		if f.ExtBools[n] {
 			out.WriteByte(1)
 		} else {
 			out.WriteByte(0)
@@ -182,7 +196,7 @@ func (f fixture) build(t *testing.T) []byte {
 		out.WriteByte(0)
 	}
 	for _, n := range extNumNames {
-		putNum(&out, f.extNums[n])
+		putNum(&out, f.ExtNums[n])
 	}
 	for _, off := range valOffsets {
 		put16(&out, int(off))
@@ -191,7 +205,7 @@ func (f fixture) build(t *testing.T) []byte {
 		put16(&out, int(off))
 	}
 	out.Write(extTable.Bytes())
-	return out.Bytes()
+	return out.Bytes(), nil
 }
 
 func joinNames(names []string) string {
@@ -214,13 +228,44 @@ func sortedKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// demoFixture is a small but realistic entry used by several tests.
-func demoFixture() fixture {
-	return fixture{
-		names: []string{"demo", "demo-alias", "a demo terminal"},
-		bools: map[string]bool{"am": true, "bce": true, "hc": false},
-		nums:  map[string]int{"cols": 132, "lines": 50, "xmc": 0},
-		strs: map[string]string{
+// WriteEntry compiles f and files it in dir under the bucket a database
+// lookup will look in.
+//
+// hexBucket selects the spelling case-insensitive filesystems use — the
+// character's hexadecimal value ("78/xterm") instead of the character itself
+// ("x/xterm") — so a test can exercise both halves of candidatePaths.
+func WriteEntry(dir, name string, f Fixture, hexBucket bool) error {
+	if name == "" {
+		return fmt.Errorf("terminfo: empty entry name")
+	}
+	data, err := f.Build()
+	if err != nil {
+		return err
+	}
+	bucket := string(name[0])
+	if hexBucket {
+		const digits = "0123456789abcdef"
+		bucket = string([]byte{digits[name[0]>>4], digits[name[0]&0xf]})
+	}
+	full := filepath.Join(dir, bucket)
+	if err := os.MkdirAll(full, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(full, name), data, 0o644)
+}
+
+// DemoFixture is a small but realistic entry used by several tests.
+//
+// Its oddities are all deliberate: `hc` is written FALSE (so a false boolean
+// must not read as true), `xmc` is written ZERO (so a present zero must not
+// read as absent), and `el` carries a padding delay (so the delay must not
+// reach stdout).
+func DemoFixture() Fixture {
+	return Fixture{
+		Names: []string{"demo", "demo-alias", "a demo terminal"},
+		Bools: map[string]bool{"am": true, "bce": true, "hc": false},
+		Nums:  map[string]int{"cols": 132, "lines": 50, "xmc": 0},
+		Strs: map[string]string{
 			"bel":   "\a",
 			"clear": "\x1b[H\x1b[2J",
 			"cup":   "\x1b[%i%p1%d;%p2%dH",
