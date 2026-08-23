@@ -23,8 +23,18 @@ row=$(awk -F'\t' -v c="$cmd" '!/^#/ && $1 == c {print; exit}' "$manifest")
 [ -n "$row" ] || fail "no manifest entry for $cmd"
 version=$(printf '%s' "$row" | cut -f2)
 license=$(printf '%s' "$row" | cut -f3)
-sha=$(printf '%s' "$row" | cut -f4)
-url=$(printf '%s' "$row" | cut -f5)
+platforms=$(printf '%s' "$row" | cut -f4)
+sha=$(printf '%s' "$row" | cut -f5)
+url=$(printf '%s' "$row" | cut -f6)
+
+# Refuse an undeclared platform rather than attempting it: a clear refusal beats
+# an obscure configure failure three minutes in.
+host_os=$(uname -s | tr 'A-Z' 'a-z')
+case "$host_os" in darwin) host_os=darwin ;; linux) host_os=linux ;; mingw*|msys*|cygwin*) host_os=windows ;; esac
+case ",$platforms," in
+  *",$host_os,"*) ;;
+  *) fail "$cmd is not declared for $host_os (declared: $platforms)" ;;
+esac
 [ -n "$sha" ] && [ ${#sha} -eq 64 ] || fail "$cmd has no full sha256 pin; refusing to build"
 
 dest=$cache/$cmd/$version
@@ -33,7 +43,33 @@ if [ -x "$target" ]; then say "cached: $target ($license)"; printf '%s\n' "$targ
 [ "$check_only" != "--check" ] || fail "$cmd $version is not provisioned (cache miss)"
 
 need() { command -v "$1" >/dev/null 2>&1 || fail "required build tool not found: $1"; }
-for t in curl tar make cc; do need "$t"; done
+for t in curl tar make; do need "$t"; done
+
+# Compiler selection, most explicit first. Whichever is chosen is RECORDED next
+# to the binary: a provider built by an unrecorded compiler cannot be attributed
+# to a known input, and certification evidence turns on exactly that.
+#
+#   POSIX_PROVIDER_CC   explicit override, e.g. "gcc-14"
+#   zig cc              bashy's own pinned toolchain (external/zigcc) - the
+#                       portable path, present on hosts with no compiler
+#   host cc             correct for a certification host, which already pins
+#                       gcc-14 and source-builds GNU Bash 5.3 / Coreutils 9.11
+#
+# zig cc IS clang - Zig bundles the real LLVM frontend and backend rather than
+# reimplementing them - so codegen is upstream clang's. The residual risk is
+# driver-flag compatibility with autotools, which is why the choice is recorded
+# per provider rather than assumed uniform. Measured: GNU make 4.3 configures
+# and builds cleanly under zig cc; binutils and vim are not yet verified.
+select_cc() {
+  if [ -n "${POSIX_PROVIDER_CC:-}" ]; then printf '%s' "$POSIX_PROVIDER_CC"; return; fi
+  if [ -n "${ZIG:-}" ] && [ -x "${ZIG}" ]; then printf '%s cc' "$ZIG"; return; fi
+  if command -v zig >/dev/null 2>&1; then printf '%s cc' "$(command -v zig)"; return; fi
+  command -v cc >/dev/null 2>&1 || fail "no C compiler: set POSIX_PROVIDER_CC, provide zig, or install cc"
+  printf '%s' "$(command -v cc)"
+}
+CC=$(select_cc)
+export CC
+say "compiler: $CC"
 
 mkdir -p "$work" "$dest"
 archive=$work/$(basename "$url")
@@ -82,5 +118,19 @@ esac
 [ -n "${found:-}" ] && [ -f "$found" ] || fail "$cmd build produced no executable"
 
 install -m 0755 "$found" "$target"
+
+# Provenance sidecar: what was built, from which pinned bytes, by which
+# compiler. Without the compiler line a provider is unattributable.
+{
+  printf 'command\t%s\n' "$cmd"
+  printf 'version\t%s\n' "$version"
+  printf 'license\t%s\n' "$license"
+  printf 'source_url\t%s\n' "$url"
+  printf 'source_sha256\t%s\n' "$sha"
+  printf 'compiler\t%s\n' "$CC"
+  printf 'built_sha256\t%s\n' "$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$target" | awk '{print $1}'; else shasum -a 256 "$target" | awk '{print $1}'; fi)"
+  printf 'distributed\tno (built locally; copyleft binaries are never republished)\n'
+} > "$dest/provenance.tsv"
+
 say "PASS $cmd $version -> $target ($license, built locally from pinned upstream source)"
 printf '%s\n' "$target"
