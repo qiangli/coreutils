@@ -159,6 +159,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/who"
 	_ "github.com/qiangli/coreutils/cmds/whoami"
 	_ "github.com/qiangli/coreutils/cmds/why"
+	_ "github.com/qiangli/coreutils/cmds/write"
 	_ "github.com/qiangli/coreutils/cmds/xargs"
 	_ "github.com/qiangli/coreutils/cmds/yes"
 )
