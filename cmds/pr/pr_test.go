@@ -348,6 +348,14 @@ func TestPRVerticalColumnsInteractions(t *testing.T) {
 	}
 }
 
+func TestPRCustomSeparatorDoesNotTruncateColumns(t *testing.T) {
+	line := strings.Repeat("x", 20)
+	out, errb, code := runPR(t, t.TempDir(), line+"\n"+line+"\n", "-t", "-w", "10", "-sX", "-2", "-a")
+	if want := line + "X" + line + "\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("pr -sX = (%q, %q, %d), want untruncated columns %q", out, errb, code, want)
+	}
+}
+
 func TestPRMerge(t *testing.T) {
 	dir := t.TempDir()
 	writeFixed(t, dir, "left", "a\nbb\nc\n")

@@ -300,6 +300,16 @@ func scanColumnOption(args []string) []string {
 			if !ok {
 				continue
 			}
+			validPrefix := true
+			for _, prefixFlag := range arg[1:pos] {
+				if !strings.ContainsRune("adFfJmrtT", prefixFlag) {
+					validPrefix = false
+					break
+				}
+			}
+			if !validPrefix {
+				continue
+			}
 			if pos > 1 {
 				out = append(out, arg[:pos])
 			}
@@ -801,7 +811,7 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 	for i, inputLine := range chunk {
 		line := formatLine(inputLine, *lineNo+i, cellOptions)
 		line = strings.TrimSuffix(line, "\n")
-		if len(line) > columnWidth {
+		if o.separator == "" && len(line) > columnWidth {
 			line = line[:columnWidth]
 		}
 		formatted[i] = line
@@ -827,7 +837,7 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 			if o.across {
 				nextIndex = index + 1
 			}
-			if col < o.columns-1 && nextIndex < len(formatted) && len(line) >= columnWidth {
+			if o.separator == "" && col < o.columns-1 && nextIndex < len(formatted) && len(line) >= columnWidth {
 				line = line[:columnWidth-1]
 			}
 			if col > 0 {
