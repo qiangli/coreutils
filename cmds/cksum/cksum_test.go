@@ -3,6 +3,7 @@ package cksumcmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type cksumFailWriter struct{ err error }
+
+func (w cksumFailWriter) Write([]byte) (int, error) { return 0, w.err }
 
 func runTool(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -44,6 +49,24 @@ func TestCKSumStdinAndFiles(t *testing.T) {
 	out, _, code = runTool(t, dir, "", "a.txt")
 	if out != "1219131554 3 a.txt\n" || code != 0 {
 		t.Fatalf("file = (%q, %d)", out, code)
+	}
+}
+
+func TestCKSumReportsStandardOutputWriteError(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(),
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("abc"),
+			Out: cksumFailWriter{err: errors.New("broken pipe")},
+			Err: &errb,
+		},
+	}
+	if code := cmd.Run(rc, nil); code != 1 {
+		t.Fatalf("write error exit = %d, want 1", code)
+	}
+	if got := errb.String(); !strings.Contains(got, "broken pipe") {
+		t.Fatalf("write error diagnostic = %q, want underlying error", got)
 	}
 }
 

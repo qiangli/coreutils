@@ -59,7 +59,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `chgrp` | `cmds/chgrp` | — | GNU Coreutils | yes | yes | 2 | 15 |
 | `chmod` | `cmds/chmod` | — | GNU Coreutils | yes | yes | 2 | 20 |
 | `chown` | `cmds/chown` | — | GNU Coreutils | yes | yes | 2 | 14 |
-| `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 9 |
+| `cksum` | `cmds/cksum` | — | GNU Coreutils | yes | yes | 1 | 10 |
 | `clip` | `cmds/clip` | — | Bashy/other extension | no | no | 1 | 1 |
 | `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 1 | 12 |
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 14 |
