@@ -370,8 +370,12 @@ func apply(rc *tool.RunContext, program string, quiet bool, opts gosed.Options, 
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(out, eng.Wrap(in))
-	return err
+	_, runErr := io.Copy(out, eng.Wrap(in))
+	closeErr := eng.Close()
+	if runErr != nil {
+		return runErr
+	}
+	return closeErr
 }
 
 type simpleSubstitution struct {
@@ -580,6 +584,7 @@ func editInPlace(rc *tool.RunContext, program string, quiet bool, opts gosed.Opt
 	if err != nil {
 		return err
 	}
+	defer eng.Close()
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".sed-*")
 	if err != nil {
 		return err
@@ -667,33 +672,59 @@ func replaceExisting(src, dst string) error {
 	return os.Remove(old)
 }
 
-func newEngine(rc *tool.RunContext, program string, quiet bool, opts gosed.Options) (*gosed.Engine, error) {
+type sedEngine struct {
+	*gosed.Engine
+	writes map[string]*os.File
+}
+
+func (e *sedEngine) Close() error {
+	var first error
+	for name, file := range e.writes {
+		if err := file.Close(); err != nil && first == nil {
+			first = fmt.Errorf("%s: %w", name, err)
+		}
+		delete(e.writes, name)
+	}
+	return first
+}
+
+func newEngine(rc *tool.RunContext, program string, quiet bool, opts gosed.Options) (*sedEngine, error) {
 	readFile := func(name string) ([]byte, error) {
 		return os.ReadFile(rc.Path(name))
 	}
+	writes := make(map[string]*os.File)
 	prepareWriteFile := func(name string) error {
 		f, err := os.OpenFile(rc.Path(name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o666)
 		if err != nil {
 			return err
 		}
-		return f.Close()
+		writes[name] = f
+		return nil
 	}
 	writeFile := func(name, pattern string) error {
-		f, err := os.OpenFile(rc.Path(name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o666)
-		if err != nil {
-			return err
+		f, ok := writes[name]
+		if !ok {
+			return fmt.Errorf("write file %q was not prepared", name)
 		}
-		defer f.Close()
 		if _, err := f.WriteString(pattern); err != nil {
 			return err
 		}
-		_, err = f.WriteString("\n")
+		_, err := f.WriteString("\n")
 		return err
 	}
+	var engine *gosed.Engine
+	var err error
 	if quiet {
-		return gosed.NewQuietWithReadWriteFileOptions(strings.NewReader(program), readFile, prepareWriteFile, writeFile, opts)
+		engine, err = gosed.NewQuietWithReadWriteFileOptions(strings.NewReader(program), readFile, prepareWriteFile, writeFile, opts)
+	} else {
+		engine, err = gosed.NewWithReadWriteFileOptions(strings.NewReader(program), readFile, prepareWriteFile, writeFile, opts)
 	}
-	return gosed.NewWithReadWriteFileOptions(strings.NewReader(program), readFile, prepareWriteFile, writeFile, opts)
+	result := &sedEngine{Engine: engine, writes: writes}
+	if err != nil {
+		_ = result.Close()
+		return nil, err
+	}
+	return result, nil
 }
 
 func openInput(rc *tool.RunContext, f string) (io.Reader, error) {

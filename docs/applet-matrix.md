@@ -152,7 +152,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `renice` | `cmds/renice` | — | POSIX/Unix utility | no | yes | 3 | 6 |
 | `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 22 |
 | `rmdir` | `cmds/rmdir` | — | GNU Coreutils | yes | yes | 1 | 20 |
-| `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 3 | 60 |
+| `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 4 | 61 |
 | `seq` | `cmds/seq` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `sha1sum` | `cmds/sha1sum` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `sha224sum` | `cmds/sha224sum` | — | GNU Coreutils | yes | no | 1 | 4 |
