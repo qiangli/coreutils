@@ -103,7 +103,7 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 142 or len(result) != 147:
+    if len(packages) != 149 or len(result) != 154:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -285,7 +285,7 @@ def main() -> None:
         raise SystemExit("shell-provided POSIX inventory changed; reconcile before regenerating")
     dispositions = {row["profile_cd_disposition"] for row in required}
     counts = {kind: sum(row["profile_cd_disposition"] == kind for row in required) for kind in dispositions}
-    if counts != {"go_applet": 76, "shell": 14, "external_gap": 26}:
+    if counts != {"go_applet": 83, "shell": 14, "external_gap": 19}:
         raise SystemExit(f"required coverage changed: {counts}; reconcile before regenerating")
     tsv = ROOT / "docs/applet-matrix.tsv"
     markdown = ROOT / "docs/applet-matrix.md"

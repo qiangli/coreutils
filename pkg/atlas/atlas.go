@@ -463,7 +463,7 @@ func init() {
 		"basename", "chcon", "chgrp", "chmod", "chown", "clip", "cp", "dd",
 		"df", "dir", "dircolors", "dirname", "du", "file", "find", "install", "link",
 		"ln", "ls", "mkdir", "mkfifo", "mknod", "mktemp", "mv", "readlink",
-		"realpath", "rm", "rmdir", "shred", "stat", "sync", "tar", "touch",
+		"pax", "realpath", "rm", "rmdir", "shred", "stat", "sync", "tar", "touch",
 		"tree", "truncate", "unlink", "vdir",
 	)
 	addTools(GroupTextutils,
@@ -478,9 +478,10 @@ func init() {
 	addTools(GroupShellutils,
 		"arch", "at", "atq", "atrm", "batch", "cal", "crontab",
 		"date", "duration", "echo", "env", "expr", "factor", "false",
-		"groups", "hostid", "hostname", "id", "kill", "logname", "ncal", "nice",
+		"getconf", "groups", "hostid", "hostname", "id", "kill", "locale", "logger",
+		"logname", "mesg", "ncal", "newgrp", "nice",
 		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "ps", "pwd",
-		"seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
+		"renice", "seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
 		// `[` is test under its bracket spelling — one implementation,
@@ -503,6 +504,9 @@ func init() {
 	capTools(CapDryRun, "rm")
 	capTools(CapDestructive, "rm", "dd", "shred", "truncate")
 	capTools(CapReadOnly,
+		// locale only reports the environment and the installed locale list;
+		// getconf only reports configuration limits.
+		"locale", "getconf",
 		"cat", "cmp", "comm", "df", "diff", "du", "file", "grep", "head", "hexdump",
 		"ls", "od", "ps", "readlink", "realpath", "resources", "stat", "strings", "tac", "tail",
 		"test", "[", "tokens", "tree", "wc", "which",
@@ -517,6 +521,8 @@ func init() {
 	capTools(CapNeedsNetwork, "fetch", "browser", "ntp", "sntp")
 	capTools(CapSpawnsProcesses,
 		"xargs", "timeout", "time", "watch", "nice", "nohup", "stdbuf", "at", "batch", "why",
+		// newgrp's whole purpose is to REPLACE the caller with a new shell.
+		"newgrp",
 		// find spawns the -exec/-ok utility (its specified behavior).
 		"find",
 	)
@@ -796,13 +802,14 @@ func init() {
 		"split", "strings", "tac", "tail", "tee", "tokens", "tr", "tsort",
 		"unexpand", "uniq", "uudecode", "uuencode", "wc", "xargs", "zcat",
 		"b2sum", "cksum", "md5sum", "sha1sum", "sha224sum", "sha256sum",
-		"sha384sum", "sha512sum", "sum", "base32", "base64", "basenc",
+		"sha384sum", "sha512sum", "sum", "base32", "base64", "basenc", "pax",
 		// handoff READS the working tree (the diff + untracked files it captures);
 		// resume READS the record. Both are a privacy surface: a handoff record
 		// carries real source, so treat it like the working tree it came from.
 		"handoff", "resume",
 		// host info
-		"arch", "groups", "hostid", "hostname", "id", "logname", "nproc",
+		"arch", "getconf", "groups", "hostid", "hostname", "id", "locale", "logname",
+		"mesg", "nproc",
 		"pathchk", "pinky", "ps", "pwd", "tty", "tz", "uname", "uptime", "users",
 		"which", "who", "whoami", "atq", "date", "env", "printenv", "ntp",
 		"sntp",
@@ -827,6 +834,10 @@ func init() {
 
 	// write — mutates the filesystem or host state (short of irreversible loss).
 	eff(EffWrite,
+		// logger's write target is the system log rather than a file, but it
+		// is host state all the same. mesg chmods the terminal; renice changes
+		// another process's scheduling priority; pax creates archives.
+		"logger", "mesg", "renice", "pax",
 		// todo writes the task list: a repo's COMMITTED docs/todo/ (a write here lands
 		// in the repo's history) or the per-host personal list (~/.bashy/todo/<owner>/).
 		"todo", "why",
@@ -871,6 +882,7 @@ func init() {
 
 	// exec — spawns a process bashy no longer governs (the coreutils userland,
 	// the advisor, and the audit hook do not reach across an execve).
+	eff(EffExec, "newgrp")
 	eff(EffExec,
 		"find", "awk", "xargs", "at", "batch", "nice", "nohup",
 		"stdbuf", "time", "timeout", "watch", "env",
@@ -886,10 +898,11 @@ func init() {
 	// cred — reads or writes credentials / secrets. `env`/`printenv` are here
 	// because they emit the whole environment, secrets included — the reason the
 	// context-redaction allowlist must also cover them.
-	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secrets", "ask", "tessaro", "login")
+	// newgrp reads a group password and changes the process credential.
+	eff(EffCred, "env", "printenv", "git", "git-scm", "gh", "secrets", "ask", "tessaro", "login", "newgrp")
 
 	// priv — changes privilege, ownership, or a security label.
-	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod")
+	eff(EffPriv, "chcon", "chgrp", "chmod", "chown", "install", "mknod", "newgrp")
 
 	// remote — executes on ANOTHER host (crosses the machine boundary). `dag`
 	// pipes a Host:-tagged target body to a remote `bash -s`; sphere runs pooled
@@ -900,7 +913,9 @@ func init() {
 
 	// persist — leaves something that OUTLIVES the session: a cron entry, a
 	// daemon, an installed/upgraded binary.
+	// logger writes a record into the system log, which outlives the session.
 	eff(EffPersist,
+		"logger",
 		"at", "batch", "crontab", "nohup",
 		"schedule", "act-runner", "mirror", "podman", "docker", "sandbox", "ollama", "dks",
 		"loom", "zot", "seaweedfs", "kopia", "self", "bootstrap", "upgrade",

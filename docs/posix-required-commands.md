@@ -12,9 +12,9 @@ providers. Profiles C/D place Bashy Go coreutils first.
 
 | Disposition | Count |
 | --- | ---: |
-| Registered Bashy Go applet | 76 |
+| Registered Bashy Go applet | 83 |
 | Shell entry point or builtin | 14 |
-| External provider gap in assembled C/D | 26 |
+| External provider gap in assembled C/D | 19 |
 | Required names | 116 |
 
 Coreutils alone therefore covers 76 of 116 same-name required sets and
@@ -69,7 +69,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `file` | yes | `cmds/file` | no | internal Go applet |
 | `find` | yes | `cmds/find` | no | internal Go applet |
 | `fold` | yes | `cmds/fold` | no | internal Go applet |
-| `getconf` | no | — | no | external provider required |
+| `getconf` | yes | `cmds/getconf` | no | internal Go applet |
 | `getopts` | no | — | yes | shell entry/builtin |
 | `grep` | yes | `cmds/grep` | no | internal Go applet |
 | `hash` | no | — | yes | shell entry/builtin |
@@ -80,9 +80,9 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `join` | yes | `cmds/join` | no | internal Go applet |
 | `kill` | yes | `cmds/kill` | no | internal Go applet |
 | `ln` | yes | `cmds/ln` | no | internal Go applet |
-| `locale` | no | — | no | external provider required |
+| `locale` | yes | `cmds/locale` | no | internal Go applet |
 | `localedef` | no | — | no | external provider required |
-| `logger` | no | — | no | external provider required |
+| `logger` | yes | `cmds/logger` | no | internal Go applet |
 | `logname` | yes | `cmds/logname` | no | internal Go applet |
 | `lp` | no | — | no | external provider required |
 | `ls` | yes | `cmds/ls` | no | internal Go applet |
@@ -90,12 +90,12 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `mailx` | no | — | no | external provider required |
 | `make` | no | — | no | external provider required |
 | `man` | no | — | no | external provider required |
-| `mesg` | no | — | no | external provider required |
+| `mesg` | yes | `cmds/mesg` | no | internal Go applet |
 | `mkdir` | yes | `cmds/mkdir` | no | internal Go applet |
 | `mkfifo` | yes | `cmds/mkfifo` | no | internal Go applet |
 | `more` | yes | `cmds/more` | no | internal Go applet |
 | `mv` | yes | `cmds/mv` | no | internal Go applet |
-| `newgrp` | no | — | no | external provider required |
+| `newgrp` | yes | `cmds/newgrp` | no | internal Go applet |
 | `nice` | yes | `cmds/nice` | no | internal Go applet |
 | `nm` | no | — | no | external provider required |
 | `nohup` | yes | `cmds/nohup` | no | internal Go applet |
@@ -103,13 +103,13 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `paste` | yes | `cmds/paste` | no | internal Go applet |
 | `patch` | no | — | no | external provider required |
 | `pathchk` | yes | `cmds/pathchk` | no | internal Go applet |
-| `pax` | no | — | no | external provider required |
+| `pax` | yes | `cmds/pax` | no | internal Go applet |
 | `pr` | yes | `cmds/pr` | no | internal Go applet |
 | `printf` | yes | `cmds/printf` | no | internal Go applet |
 | `ps` | yes | `cmds/ps` | no | internal Go applet |
 | `pwd` | yes | `cmds/pwd` | no | internal Go applet |
 | `read` | no | — | yes | shell entry/builtin |
-| `renice` | no | — | no | external provider required |
+| `renice` | yes | `cmds/renice` | no | internal Go applet |
 | `rm` | yes | `cmds/rm` | no | internal Go applet |
 | `rmdir` | yes | `cmds/rmdir` | no | internal Go applet |
 | `sed` | yes | `cmds/sed` | no | internal Go applet |

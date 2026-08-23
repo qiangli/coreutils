@@ -22,11 +22,11 @@ Generated from the current `cmds/all` registration tree; `chroot` and
 
 | Measure | Count |
 |---|---:|
-| Shipped Go command packages | 142 |
-| Advertised applet names | 147 |
+| Shipped Go command packages | 149 |
+| Advertised applet names | 154 |
 | Alias applet names | 5 |
 | GNU Coreutils names | 106 |
-| POSIX-cert-required names | 76 |
+| POSIX-cert-required names | 83 |
 | Shipped names without a same-name required test set | 71 |
 | Shipped names lacking package-local tests | 0 |
 | Release-withheld implementations | 2 (`chroot`, `runcon`) |
@@ -85,6 +85,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 6 | 50 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 1 | 19 |
+| `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 1 | 7 |
 | `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 3 | 36 |
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `gunzip` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
@@ -101,9 +102,12 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 5 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 21 |
+| `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 19 |
+| `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 1 | 20 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 46 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
+| `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 1 | 3 |
 | `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 1 | 9 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
@@ -111,6 +115,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 1 | 8 |
 | `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 1 | 23 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
+| `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 4 | 35 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 16 |
 | `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `nohup` | `cmds/nohup` | — | GNU Coreutils | yes | yes | 3 | 21 |
@@ -120,6 +125,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `od` | `cmds/od` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `paste` | `cmds/paste` | — | GNU Coreutils | yes | yes | 1 | 7 |
 | `pathchk` | `cmds/pathchk` | — | GNU Coreutils | yes | yes | 2 | 10 |
+| `pax` | `cmds/pax` | — | POSIX/Unix utility | no | yes | 1 | 10 |
 | `pinky` | `cmds/pinky` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `pr` | `cmds/pr` | — | GNU Coreutils | yes | yes | 1 | 25 |
 | `printenv` | `cmds/printenv` | — | GNU Coreutils | yes | no | 1 | 4 |
@@ -129,6 +135,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `pwd` | `cmds/pwd` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `readlink` | `cmds/readlink` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `realpath` | `cmds/realpath` | — | GNU Coreutils | yes | no | 1 | 10 |
+| `renice` | `cmds/renice` | — | POSIX/Unix utility | no | yes | 3 | 6 |
 | `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 22 |
 | `rmdir` | `cmds/rmdir` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 3 | 60 |
