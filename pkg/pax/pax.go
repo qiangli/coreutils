@@ -62,6 +62,28 @@ type Plan struct {
 	FormatsBy map[tar.Format]int
 }
 
+// ErrDestinationExists marks the one rejection that is a POLICY decision rather
+// than a safety verdict: the destination is already present.
+//
+// The distinction matters because the two cannot be treated alike. Every other
+// rejection - an escaping path, an unsafe parent, a duplicate destination, an
+// unreadable hardlink target - means the archive must not be extracted at all,
+// and no caller may override it. An existing destination merely means someone
+// has to decide whether to overwrite, and POSIX pax says the default IS to
+// overwrite, with -k as the opt-out.
+//
+// Without this sentinel a caller can only match on the message text, so a
+// reworded string would silently turn "overwrite as the user asked" into
+// "refuse the archive", or worse the reverse. Callers should use errors.Is on
+// a RejectedMember's reason via IsDestinationExists.
+var ErrDestinationExists = errors.New("destination exists")
+
+// IsDestinationExists reports whether a rejection reason is the overridable
+// destination-exists policy rather than a safety verdict.
+func IsDestinationExists(reason string) bool {
+	return strings.Contains(reason, ErrDestinationExists.Error())
+}
+
 // FS is the minimal filesystem boundary the planner needs to inspect existing
 // path state without mutating it.
 type FS interface {
@@ -259,7 +281,7 @@ func validateExistingTarget(filesystem FS, target string, kind Kind) error {
 	if kind == KindDir && fi.IsDir() && fi.Mode()&fs.ModeSymlink == 0 {
 		return nil
 	}
-	return fmt.Errorf("destination %q already exists", target)
+	return fmt.Errorf("%w: destination %q already exists", ErrDestinationExists, target)
 }
 
 func validateExistingParents(filesystem FS, root, target string) error {

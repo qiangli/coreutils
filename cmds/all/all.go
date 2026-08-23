@@ -95,6 +95,7 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/od"
 	_ "github.com/qiangli/coreutils/cmds/paste"
 	_ "github.com/qiangli/coreutils/cmds/pathchk"
+	_ "github.com/qiangli/coreutils/cmds/pax"
 	_ "github.com/qiangli/coreutils/cmds/pinky"
 	_ "github.com/qiangli/coreutils/cmds/pr"
 	_ "github.com/qiangli/coreutils/cmds/printenv"
