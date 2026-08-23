@@ -1,10 +1,19 @@
 # POSIX external provider manifest — the commands the Go multicall does not implement.
 #
 # LICENSE POSTURE (this is why the file is shaped this way):
-# Every provider below is COPYLEFT — GPL-2.0, GPL-3.0, or the Vim license. None
-# is permissive. Building these and hosting the BINARIES would make this project
-# a distributor and trigger GPLv3 s6 / GPLv2 s3: convey corresponding source,
-# build scripts and installation information, for every artifact, indefinitely.
+# MOST providers below are COPYLEFT — GPL-2.0, GPL-3.0, or the Vim license.
+# Building those and hosting the BINARIES would make this project a distributor
+# and trigger GPLv3 s6 / GPLv2 s3: convey corresponding source, build scripts
+# and installation information, for every artifact, indefinitely.
+#
+# TWO rows are PERMISSIVE and the difference is recorded rather than hidden:
+# lp (CUPS, Apache-2.0) and mailx (s-nail, ISC AND BSD-4-Clause). Hosting THOSE
+# binaries would trigger no source-conveyance duty. They are nevertheless
+# fetched-as-source and built locally exactly like every other row. One policy
+# for the whole table is auditable; two policies are a footgun that eventually
+# mirrors the wrong row. The uniform recipe is also what makes any provider
+# attributable to pinned input bytes, which is the certification property.
+# "Permissive" is therefore not permission to mirror a build here.
 #
 # So build and download are deliberately SEPARATED:
 #   download -> UPSTREAM source only, pinned by sha256. Upstream is the
@@ -50,3 +59,93 @@ strip	2.42	GPL-3.0	linux,darwin,windows	f6e4d41fd5fc778b06b7891457b3620da5ecea10
 ex	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737e9e8bfa4cc298dee061df	https://github.com/vim/vim/archive/refs/tags/v9.1.0016.tar.gz
 vi	9.1.0016	Vim	linux,darwin,windows	abe876bb18554bb1eb69d23eaabe89caabeef182737e9e8bfa4cc298dee061df	https://github.com/vim/vim/archive/refs/tags/v9.1.0016.tar.gz
 # pax: Debian sources 1:20201030 from a non-GNU upstream; pin pending source identification.
+lp	2.4.7	Apache-2.0	linux,darwin	dd54228dd903526428ce7e37961afaed230ad310788141da75cebaa08362cf6c	https://github.com/OpenPrinting/cups/releases/download/v2.4.7/cups-2.4.7-source.tar.gz
+mailx	14.9.25	ISC AND BSD-4-Clause	linux,darwin	20ff055be9829b69d46ebc400dfe516a40d287d7ce810c74355d6bdc1a28d8a9	https://ftp.sdaoden.eu/s-nail-14.9.25.tar.xz
+localedef	2.39	GPL-2.0-or-later	linux	f77bd47cf8170c57365ae7bf86696c118adb3b120d3259c64c502d3dc1e2d926	https://ftp.gnu.org/gnu/glibc/glibc-2.39.tar.xz
+talk	0.17	BSD-4-Clause	linux	d8f614e8d4d7981a0adf0f84d2d3954018d5fe0e57a8e5731256d66cbcf45e90	https://deb.debian.org/debian/pool/main/n/netkit-ntalk/netkit-ntalk_0.17.orig.tar.gz
+#
+# lp: CUPS 2.4.7 is exactly what Ubuntu 24.04 ships (cups-client 2.4.7-1.2ubuntu7.14),
+# so the C arm and the GNU A arm run the same upstream release. Apache-2.0 read from
+# cups-2.4.7/LICENSE in the pinned tarball (verbatim Apache License 2.0); cups-2.4.7/
+# NOTICE adds CUPS-specific exceptions (Sections 4a/4b/4d waiver for embedded object
+# code, and a GPLv2-combination waiver) which only widen the grant. Not windows: the
+# client is POSIX-only (fork/exec, unix sockets) and upstream ships no Windows build.
+#
+# mailx: s-nail, the maintained SysV/BSD mailx lineage, chosen over the alternatives
+# on licence and on pinnability. mailutils 3.17 (the package the strategy doc named)
+# is GPL-3.0 and builds a whole mail framework to obtain one binary; bsd-mailx has no
+# upstream tarball at all, only a Debian CVS snapshot, so it cannot be pinned to an
+# upstream artifact; Heirloom mailx 12.5 is unmaintained since 2011 and carries the
+# known shell-escape defects. Licence read from s-nail-14.9.25/COPYING: ISC for
+# Nurpmeso's own code, BSD-4-Clause (advertising clause) for the Gunnar Ritter
+# heritage, BSD-3-Clause for the UCB/Zoulas heritage — the widest term governs, so
+# the row records ISC AND BSD-4-Clause.
+# DEVIATION, deliberate: Ubuntu 24.04 ships 14.9.24 but upstream no longer publishes
+# it (ftp.sdaoden.eu carries 14.9.25 and -latest only). Pinning 14.9.24 would mean
+# fetching from a distro mirror, which the download rule above forbids. 14.9.25 is
+# the upstream bugfix successor. Re-pin if upstream ever restores 14.9.24.
+# ARM SYMMETRY, same trap as talk below: mailx is absent from the reference host
+# too — the retained A and B summaries each carry exactly 432 mailx_* code-6
+# UNINITIATED outcomes, which cancel under C - A today. Provisioning this row in
+# the C arm ALONE would un-cancel all 432 and attribute them to bashy. The
+# difference from talk is that mailx is worth un-cancelling: it is a POSIX utility
+# the project intends to certify, and it CAN pass once a local MTA and mailbox
+# exist, so the right move is to install it in BOTH arms (SCOPE.md: build the
+# environment to enable scope, do not declare it away). Land this row and the A-arm
+# provisioning together, never separately.
+#
+# localedef: BUILDS, but it is the least ordinary row here and the reasons matter.
+# Upstream has NO standalone build: localedef lives in glibc's locale/programs,
+# and glibc/locale carries no configure of its own (verified against the
+# glibc-2.39 tree) -- only a subdir Makefile the top-level build includes -- so
+# upstream's only answer is "build all of glibc". The single-binary build used
+# here is Yocto's cross-localedef-native path and needs THREE pinned inputs:
+#   1. glibc 2.39 sources        the row above; ftp.gnu.org, digest verified by
+#                                download-and-hash. GPL-2.0-or-later read from
+#                                glibc-2.39/locale/programs/localedef.c, whose
+#                                header says GPL version 2 or later -- note the
+#                                locale PROGRAMS are GPL, not the library's LGPL.
+#   2. github.com/kraj/localedef a ~14-file autotools harness compiling those
+#                                sources against the host libc. No releases and
+#                                no tags, so build.sh pins it by COMMIT.
+#   3. four OpenEmbedded patches pinned by oe-core commit + per-file sha256.
+# 0013 is load-bearing: it forward-ports eglibc's cross-locale support, and
+# without it locale/localeinfo.h includes glibc-internal <tls.h> and the build
+# stops dead. All four are Upstream-Status: Pending and have been carried out of
+# tree since 2015 -- that staleness, not the build, is the standing risk.
+# Re-pin the three together or not at all: the patches carry file-level context,
+# so a glibc bump without a matching harness commit will fail to apply.
+#
+# WHY 2.39 EXACTLY, and why this is not pedantry: localedef writes binary locale
+# data in a layout coupled to the libc that will read it, so a localedef from a
+# different glibc can emit an archive the host mis-reads. 2.39 is what Ubuntu
+# 24.04's libc-bin 2.39-0ubuntu8.8 is built from. Measured on ubuntu:24.04: the
+# binary built by this recipe emits LC_CTYPE, LC_COLLATE, LC_TIME, LC_NUMERIC and
+# LC_MONETARY BYTE-IDENTICAL to the host localedef's output for the same source,
+# and the host libc loads them (locale charmap -> UTF-8, LC_TIME -> March).
+# linux only: this compiles glibc's own sources against glibc. There is no
+# darwin or windows build and there will not be one.
+#
+# talk: netkit-ntalk 0.17, the same release Ubuntu 24.04 ships as talk 0.17-18.
+# BSD-4-Clause (the 1983 UCB advertising clause) read from
+# netkit-ntalk-0.17/talk/talk.c -- there is no COPYING file in the tarball, the
+# licence lives in the per-file headers, and README confirms no separate one.
+# linux only, and that is measured, not assumed: on darwin ./configure exits 0
+# but its `echo -n` writes a malformed MCONFIG and make stops at "missing
+# separator" on the first line.
+#
+# THE URL IS AN EXCEPTION AND IT IS THE ONLY ONE IN THIS FILE. netkit's upstream
+# was ftp.uk.linux.org (= ftp.linux.org.uk); that host now 404s the whole
+# pub/linux/Networking/ tree, and no maintained fork exists -- the two on GitHub
+# were last touched in 2015 and 2017. So the pristine upstream tarball survives
+# only inside distro pools, and the row points at Debian's, which carries the
+# unmodified .orig for a non-native package. This is a DEAD-UPSTREAM exception,
+# not a licence to prefer mirrors: every other row must still resolve to a live
+# upstream. Revisit if anyone revives netkit.
+#
+# ARM SYMMETRY, and this one bites hardest: talk resolves to nothing on the
+# reference certification host either. Provisioning it in C alone makes the arms
+# asymmetric and turns a clean both-sides cancel into a C-attributed failure --
+# and it would fail, because talk needs a talkd peer and a logged-on terminal
+# that a headless arm does not have. Land this row together with the A-host
+# provisioning AND a talkd + tty fixture, or land neither.

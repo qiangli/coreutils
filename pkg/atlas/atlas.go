@@ -509,8 +509,11 @@ func init() {
 	// which kind they are.
 	addTools(GroupToolchains, "make", "ar", "nm", "strip")
 	addTools(GroupTextutils, "patch", "m4", "ed", "ex", "vi")
-	addTools(GroupShellutils, "bc", "man")
+	addTools(GroupShellutils, "bc", "man", "localedef", "talk")
 	addTools(GroupCodeIntel, "ctags")
+	// lp submits a print job; mailx sends/reads mail. Both talk to a local
+	// service (cupsd, an MTA) rather than to the network directly.
+	addTools(GroupNet, "lp", "mailx")
 	// `posix-providers` is the provisioner in front of them: it is the ONLY
 	// command that downloads and compiles one.
 	addTools(GroupToolchains, "posix-providers")
@@ -561,6 +564,7 @@ func init() {
 	// network and toolchain variance into measured evidence).
 	posixProviders := []string{
 		"make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+		"lp", "mailx", "localedef", "talk",
 	}
 	capTools(CapCached, posixProviders...)
 	capTools(CapSpawnsProcesses, posixProviders...)
@@ -999,9 +1003,20 @@ func init() {
 	// "resolve the cached binary and hand it argv", so what runs afterwards is a
 	// process bashy no longer governs. The read/write split below is the upstream
 	// program's own documented behaviour, not ours.
-	eff(EffExec, "make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi")
-	eff(EffRead, "make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi")
-	eff(EffWrite, "make", "patch", "ed", "ctags", "ar", "strip", "ex", "vi")
+	eff(EffExec, "make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+		"lp", "mailx", "localedef", "talk")
+	eff(EffRead, "make", "bc", "patch", "m4", "ed", "man", "ctags", "ar", "nm", "strip", "ex", "vi",
+		// lp reads the file it submits; mailx reads the mailbox; localedef reads
+		// the charmap and locale definition; talk reads the utmp login database.
+		"lp", "mailx", "localedef", "talk")
+	eff(EffWrite, "make", "patch", "ed", "ctags", "ar", "strip", "ex", "vi",
+		// mailx writes the mailbox and queues outbound mail; localedef writes the
+		// compiled locale into the locale path.
+		"mailx", "localedef")
+	// lp hands a job to the print scheduler, mailx hands mail to an MTA, and talk
+	// opens a connection to a peer's talkd. All three reach a service beyond this
+	// process, which is the egress surface EffNet exists to mark.
+	eff(EffNet, "lp", "mailx", "talk")
 	// The provisioner downloads pinned upstream source, runs a compiler over it,
 	// and installs a binary that outlives the session.
 	eff(EffNet, "posix-providers")

@@ -51,13 +51,13 @@ join	yes	cmds/join	no	go_applet
 kill	yes	cmds/kill	no	go_applet
 ln	yes	cmds/ln	no	go_applet
 locale	yes	cmds/locale	no	go_applet
-localedef	no		no	external_gap
+localedef	no	cmds/posixproviders	no	external_provider
 logger	yes	cmds/logger	no	go_applet
 logname	yes	cmds/logname	no	go_applet
-lp	no		no	external_gap
+lp	no	cmds/posixproviders	no	external_provider
 ls	yes	cmds/ls	no	go_applet
 m4	no	cmds/posixproviders	no	external_provider
-mailx	no		no	external_gap
+mailx	no	cmds/posixproviders	no	external_provider
 make	no	cmds/posixproviders	no	external_provider
 man	no	cmds/posixproviders	no	external_provider
 mesg	yes	cmds/mesg	no	go_applet
@@ -92,7 +92,7 @@ strip	no	cmds/posixproviders	no	external_provider
 stty	yes	cmds/stty	no	go_applet
 tabs	no		no	external_gap
 tail	yes	cmds/tail	no	go_applet
-talk	no		no	external_gap
+talk	no	cmds/posixproviders	no	external_provider
 tee	yes	cmds/tee	no	go_applet
 test	yes	cmds/test	no	go_applet
 time	yes	cmds/time	no	go_applet

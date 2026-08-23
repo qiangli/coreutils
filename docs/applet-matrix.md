@@ -23,10 +23,10 @@ Generated from the current `cmds/all` registration tree; `chroot` and
 | Measure | Count |
 |---|---:|
 | Shipped Go command packages | 152 |
-| Advertised applet names | 169 |
+| Advertised applet names | 173 |
 | Alias applet names | 5 |
 | GNU Coreutils names | 106 |
-| POSIX-cert-required names | 97 |
+| POSIX-cert-required names | 101 |
 | Shipped names without a same-name required test set | 72 |
 | Shipped names lacking package-local tests | 0 |
 | Release-withheld implementations | 2 (`chroot`, `runcon`) |
@@ -108,10 +108,13 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 21 |
 | `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 19 |
+| `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
 | `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 1 | 20 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 7 |
+| `lp` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
 | `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 46 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
+| `mailx` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
 | `make` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
@@ -171,6 +174,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `sync` | `cmds/sync` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `tac` | `cmds/tac` | — | GNU Coreutils | yes | no | 1 | 6 |
 | `tail` | `cmds/tail` | — | GNU Coreutils | yes | yes | 2 | 21 |
+| `talk` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 2 | 18 |
 | `tar` | `cmds/tar` | — | Bashy/other extension | no | no | 1 | 14 |
 | `tee` | `cmds/tee` | — | GNU Coreutils | yes | yes | 2 | 17 |
 | `test` | `cmds/test` | — | GNU Coreutils | yes | yes | 3 | 32 |
