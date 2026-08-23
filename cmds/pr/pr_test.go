@@ -319,7 +319,7 @@ func TestPRColumnsReserveBlankBetweenFullWidthCells(t *testing.T) {
 	writeFixed(t, dir, "one", strings.Repeat("1", 40)+"\n")
 	writeFixed(t, dir, "two", strings.Repeat("2", 40)+"\n")
 	out, errb, code := runPR(t, dir, "", "-m", "-t", "-w", "10", "one", "two")
-	if out != "1111 22222\n" || errb != "" || code != 0 {
+	if out != "1111 2222\n" || errb != "" || code != 0 {
 		t.Fatalf("pr -m did not reserve a blank column separator: (%q, %q, %d)", out, errb, code)
 	}
 }
@@ -385,6 +385,30 @@ func TestPRMergeThreeFilesAndPagination(t *testing.T) {
 	out, errb, code = runPR(t, dir, "", "-m", "-l", "13", "-D", "%Y", "one", "two")
 	if errb != "" || code != 0 || !strings.Contains(out, "Page 1") || !strings.Contains(out, "Page 2") || strings.Count(out, "\n") != 26 {
 		t.Fatalf("paginated pr -m = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestPRMergeLineNumbering(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "one", "alpha\nbeta\n")
+	writeFixed(t, dir, "two", "gamma\n")
+	out, errb, code := runPR(t, dir, "", "-m", "-t", "-w", "30", "-nX", "one", "two")
+	if code != 0 || errb != "" || !strings.HasPrefix(out, "    1X") || !strings.Contains(out, "\n    2X") {
+		t.Fatalf("pr -m -nX = (%q, %q, %d), want one numbered prefix per merged row", out, errb, code)
+	}
+}
+
+func TestPRClusteredOptionalOutputTabs(t *testing.T) {
+	out, errb, code := runPR(t, t.TempDir(), "a\n", "-adFrtiX", "-2")
+	if code != 0 || errb != "" || out == "" {
+		t.Fatalf("pr clustered -iX = (%q, %q, %d)", out, errb, code)
+	}
+}
+
+func TestPRRejectsMoreColumnsThanPageWidth(t *testing.T) {
+	_, errb, code := runPR(t, t.TempDir(), "a\n", "-500", "-w", "40")
+	if code != 2 || !strings.Contains(errb, "page width too narrow") {
+		t.Fatalf("pr -500 -w40 = (%q, %d), want width error", errb, code)
 	}
 }
 

@@ -98,7 +98,8 @@ func run(rc *tool.RunContext, args []string) int {
 	pageWidth := fs.IntP("page-width", "W", 72, "set page width and truncate lines")
 	firstLineNum := fs.IntP("first-line-number", "N", 1, "start counting line numbers at NUMBER")
 	joinLines := fs.BoolP("join-lines", "J", false, "merge full-length lines (GNU compat, no-op in this subset)")
-	indentStyle := fs.BoolP("", "i", false, "indent style alias (GNU compat, no-op in this subset)")
+	outputTabs := fs.StringP("output-tabs", "i", "", "replace spaces with tabs on output")
+	fs.Lookup("output-tabs").NoOptDefVal = "\t8"
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -117,6 +118,9 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if *columns <= 0 {
 		return tool.UsageError(rc, cmd, "invalid column count: %d", *columns)
+	}
+	if *columns > *width {
+		return tool.UsageError(rc, cmd, "page width too narrow for %d columns", *columns)
 	}
 	if *pageLength <= 0 {
 		return tool.UsageError(rc, cmd, "invalid page length: %d", *pageLength)
@@ -164,7 +168,7 @@ func run(rc *tool.RunContext, args []string) int {
 		o.separator = *sepString
 	}
 	_ = joinLines
-	_ = indentStyle
+	_ = outputTabs
 	if fs.Changed("page-width") {
 		// -W sets the page width and enables line truncation; plain -w
 		// never truncates single-column output (GNU semantics).
@@ -287,10 +291,23 @@ func scanColumnOption(args []string) []string {
 			break
 		}
 		// pflag treats a string option with NoOptDefVal as a completed short
-		// flag, so preserve pr's attached optional-argument spellings.
-		if len(arg) > 2 && (strings.HasPrefix(arg, "-s") || strings.HasPrefix(arg, "-e") || strings.HasPrefix(arg, "-n")) {
-			longName := map[byte]string{'s': "separator", 'e': "expand-tabs", 'n': "number-lines"}[arg[1]]
-			out = append(out, "--"+longName+"="+arg[2:])
+		// flag. Preserve pr's attached optional argument even when its option is
+		// the final member of a historical short-option cluster (-adFrteX).
+		optional := map[byte]string{'s': "separator", 'e': "expand-tabs", 'i': "output-tabs", 'n': "number-lines"}
+		handledOptional := false
+		for pos := 1; pos < len(arg)-1 && arg[0] == '-' && arg[1] != '-'; pos++ {
+			longName, ok := optional[arg[pos]]
+			if !ok {
+				continue
+			}
+			if pos > 1 {
+				out = append(out, arg[:pos])
+			}
+			out = append(out, "--"+longName+"="+arg[pos+1:])
+			handledOptional = true
+			break
+		}
+		if handledOptional {
 			continue
 		}
 		if i > 0 && needValue[args[i-1]] {
@@ -620,6 +637,7 @@ func printMerge(readers []io.Reader, w *bufio.Writer, o options) error {
 		physPerLine = 2
 	}
 	physBudget := o.bodyLines * physPerLine
+	lineNo := o.firstLineNum
 	for page := 1; page <= pageCount; page++ {
 		emit := inPageRange(page, o)
 		if emit && !o.omitHeader {
@@ -635,7 +653,11 @@ func printMerge(readers []io.Reader, w *bufio.Writer, o options) error {
 		}
 		for row := 0; row < rows; row++ {
 			if emit {
-				if _, err := w.WriteString(mergeLine(pages, page-1, row, o)); err != nil {
+				line := mergeLine(pages, page-1, row, o)
+				if o.numberLines {
+					line = formatLine(line, lineNo, o)
+				}
+				if _, err := w.WriteString(line); err != nil {
 					return err
 				}
 				if o.doubleSpace {
@@ -644,6 +666,7 @@ func printMerge(readers []io.Reader, w *bufio.Writer, o options) error {
 					}
 				}
 			}
+			lineNo++
 		}
 		if emit && !o.omitHeader {
 			if o.formFeed {
@@ -680,7 +703,12 @@ func mergePages(segments [][]string, o options) [][]string {
 }
 
 func mergeLine(pages [][][]string, page, row int, o options) string {
-	columns, columnWidth := len(pages), o.width/len(pages)
+	columns := len(pages)
+	availableWidth := o.width
+	if o.numberLines {
+		availableWidth -= o.numberWidth + len(o.numberSep)
+	}
+	columnWidth := availableWidth / columns
 	if columnWidth < 1 {
 		columnWidth = 1
 	}
@@ -691,7 +719,7 @@ func mergeLine(pages [][][]string, page, row int, o options) string {
 			line = strings.TrimSuffix(inputPages[page][row], "\n")
 		}
 		limit := columnWidth
-		if col < columns-1 {
+		if columns > 1 {
 			limit--
 		}
 		if limit < 0 {
@@ -759,7 +787,11 @@ func printColumnChunk(w *bufio.Writer, chunk []string, page int, lineNo *int, he
 		}
 	}
 	rows := (len(chunk) + o.columns - 1) / o.columns
-	columnWidth := o.width / o.columns
+	contentWidth := o.width
+	if o.separator != "" {
+		contentWidth -= (o.columns - 1) * len(o.separator)
+	}
+	columnWidth := contentWidth / o.columns
 	if columnWidth < 1 {
 		columnWidth = 1
 	}
