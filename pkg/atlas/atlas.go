@@ -481,6 +481,9 @@ func init() {
 		"date", "duration", "echo", "env", "expr", "factor", "false", "getconf",
 		"groups", "hostid", "hostname", "id", "kill", "logname", "mesg", "ncal", "nice",
 		"nohup", "nproc", "ntp", "pathchk", "pinky", "printenv", "printf", "ps", "pwd", "renice",
+		// tput answers terminal-capability questions from the terminfo database;
+		// write sends a message to another logged-in user's terminal.
+		"tput", "write",
 		"seq", "sleep", "sntp", "stdbuf", "stty", "test", "time",
 		"timeout", "true", "tty", "tz", "uname", "uptime", "users", "watch",
 		"which", "who", "whoami", "yes",
@@ -523,6 +526,9 @@ func init() {
 		"test", "[", "tokens", "tree", "wc", "which",
 		// `ast` (symbols/search/refs/map/query) is pure structural reads.
 		"ast",
+		// tput only queries the terminfo database and writes the capability to
+		// stdout; it changes nothing.
+		"tput",
 	)
 	// The `graph` umbrella has write subcommands (note/link/observe/forget), so
 	// it is not read-only; its structural reads keep a disk cache, so CapCached.
@@ -847,6 +853,9 @@ func init() {
 		"pathchk", "pinky", "ps", "pwd", "renice", "tty", "tz", "uname", "uptime", "users",
 		// pax READS an archive or the tree it is packing; it also writes (below).
 		"pax",
+		// tput reads the terminfo database; write reads the utmp/utmpx login
+		// database to find the recipient's terminal (it also writes, below).
+		"tput", "write",
 		"which", "who", "whoami", "atq", "date", "env", "printenv", "ntp",
 		"sntp",
 		// code-intel / net
@@ -878,6 +887,9 @@ func init() {
 		// mesg flips the terminal's group-write bit; renice changes a running
 		// process's scheduling priority. Both mutate host state, neither loses data.
 		"mesg", "renice",
+		// write writes to ANOTHER user's terminal device - host state outside
+		// this process, so it is a write even though nothing on disk changes.
+		"write",
 		"awk", "csplit", "gzip", "gunzip", "sed", "split", "tee", "uudecode", "graph",
 		"stty", "atrm", "crontab",
 		// handoff WRITES a portable record; resume WRITES the captured working
