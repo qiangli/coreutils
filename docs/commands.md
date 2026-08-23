@@ -210,13 +210,24 @@ implementation.
 
 The generated current inventory is
 [`posix-required-commands.md`](posix-required-commands.md): 116 configured
-required names, 76 registered Go applets, 14 names supplied by the shell, and
-26 remaining external-provider gaps in the assembled C/D environment.
-Coreutils alone is absent for 40 of the 116 names; calling that a 26-name
-coreutils gap incorrectly credits the shell's 14 names to this repository.
+required names, 80 registered Go applets, 14 names supplied by the shell,
+12 supplied by a pinned POSIX external provider the multicall itself registers
+and resolves, and 10 remaining external-provider gaps in the assembled C/D
+environment. Coreutils alone is absent for 36 of the 116 names; calling that a
+10-name coreutils gap incorrectly credits the shell's 14 names and the 12
+providers to this repository.
 
-The product/provider allocation for the 26 assembled gaps is maintained once,
-in the umbrella
+**A provider is not a Go applet, and the matrix counts it separately so it can
+never be read as Go coverage.** The multicall owns the name (`make`, `bc`,
+`patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`) and
+dispatches to a copy of the upstream program built locally from a sha256-pinned
+source tarball. Owning the name is precisely what stops a "Bashy-only" arm from
+silently measuring the host's `$PATH`, which is what happened while these names
+were unregistered. There is no fallback: an unprovisioned provider exits 127.
+See [POSIX external providers](posix-external-providers.md).
+
+The product/provider allocation for the 10 remaining assembled gaps is
+maintained once, in the umbrella
 [`posix-utility-provider-strategy.md`](../../docs/posix-utility-provider-strategy.md).
 They are provider decisions, not automatically an implementation backlog.
 

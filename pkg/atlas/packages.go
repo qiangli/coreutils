@@ -148,18 +148,19 @@ var packages = map[string]Package{
 		"capabilities, one envelope, per-ring caps, never composing. It owned the top-level verb `bashy recall` "+
 		"until 2026-08-05; it is now `bashy kb recall`, because four days of telemetry caught the only agent that "+
 		"ever reached for it unprompted typing exactly that, and being told the verb did not exist"),
-	"lexicon":   cmdPkg("lexicon"),
-	"meet":      cmdPkg("meet"),
-	"mirror":    cmdPkg("mirror"),
-	"pair":      cmdPkg("pair"),
-	"repomap":   cmdPkg("ast"),
-	"resources": cmdPkg("resources"),
-	"schedule":  cmdPkg("schedule"),
-	"sdlc":      cmdPkg("sdlc"),
-	"search":    cmdPkg("search"),
-	"secrets":   cmdPkg("secrets"),
-	"skills":    cmdPkg("skills"),
-	"craft":     cmdPkg("craft"),
+	"lexicon":       cmdPkg("lexicon"),
+	"meet":          cmdPkg("meet"),
+	"mirror":        cmdPkg("mirror"),
+	"pair":          cmdPkg("pair"),
+	"posixprovider": cmdPkg("posix-providers"),
+	"repomap":       cmdPkg("ast"),
+	"resources":     cmdPkg("resources"),
+	"schedule":      cmdPkg("schedule"),
+	"sdlc":          cmdPkg("sdlc"),
+	"search":        cmdPkg("search"),
+	"secrets":       cmdPkg("secrets"),
+	"skills":        cmdPkg("skills"),
+	"craft":         cmdPkg("craft"),
 	"role": libPkg("sprint", "how to REACH whoever holds a role — the bus topic and room behind the "+
 		"contact `bashy sprint` shows and `bashy steward` leads with. role is vocabulary only "+
 		"(pkg/steward imports it and sits in the cross-OS canary that meet cannot satisfy); "+

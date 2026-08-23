@@ -1,11 +1,11 @@
 command	coreutils_go_applet	go_package	shell_provided	profile_cd_disposition
 alias	no		yes	shell
-ar	no		no	external_gap
+ar	no	cmds/posixproviders	no	external_provider
 at	yes	cmds/at	no	go_applet
 awk	yes	cmds/awk	no	go_applet
 basename	yes	cmds/basename	no	go_applet
 batch	yes	cmds/batch	no	go_applet
-bc	no		no	external_gap
+bc	no	cmds/posixproviders	no	external_provider
 bg	no		yes	shell
 cat	yes	cmds/cat	no	go_applet
 cd	no		yes	shell
@@ -19,7 +19,7 @@ command	no		yes	shell
 cp	yes	cmds/cp	no	go_applet
 crontab	yes	cmds/crontab	no	go_applet
 csplit	yes	cmds/csplit	no	go_applet
-ctags	no		no	external_gap
+ctags	no	cmds/posixproviders	no	external_provider
 cut	yes	cmds/cut	no	go_applet
 date	yes	cmds/date	no	go_applet
 dd	yes	cmds/dd	no	go_applet
@@ -28,9 +28,9 @@ diff	yes	cmds/diff	no	go_applet
 dirname	yes	cmds/dirname	no	go_applet
 du	yes	cmds/du	no	go_applet
 echo	yes	cmds/echo	no	go_applet
-ed	no		no	external_gap
+ed	no	cmds/posixproviders	no	external_provider
 env	yes	cmds/env	no	go_applet
-ex	no		no	external_gap
+ex	no	cmds/posixproviders	no	external_provider
 expand	yes	cmds/expand	no	go_applet
 expr	yes	cmds/expr	no	go_applet
 false	yes	cmds/false	no	go_applet
@@ -39,7 +39,7 @@ fg	no		yes	shell
 file	yes	cmds/file	no	go_applet
 find	yes	cmds/find	no	go_applet
 fold	yes	cmds/fold	no	go_applet
-getconf	no		no	external_gap
+getconf	yes	cmds/getconf	no	go_applet
 getopts	no		yes	shell
 grep	yes	cmds/grep	no	go_applet
 hash	no		yes	shell
@@ -56,30 +56,30 @@ logger	no		no	external_gap
 logname	yes	cmds/logname	no	go_applet
 lp	no		no	external_gap
 ls	yes	cmds/ls	no	go_applet
-m4	no		no	external_gap
+m4	no	cmds/posixproviders	no	external_provider
 mailx	no		no	external_gap
-make	no		no	external_gap
-man	no		no	external_gap
-mesg	no		no	external_gap
+make	no	cmds/posixproviders	no	external_provider
+man	no	cmds/posixproviders	no	external_provider
+mesg	yes	cmds/mesg	no	go_applet
 mkdir	yes	cmds/mkdir	no	go_applet
 mkfifo	yes	cmds/mkfifo	no	go_applet
 more	yes	cmds/more	no	go_applet
 mv	yes	cmds/mv	no	go_applet
 newgrp	no		no	external_gap
 nice	yes	cmds/nice	no	go_applet
-nm	no		no	external_gap
+nm	no	cmds/posixproviders	no	external_provider
 nohup	yes	cmds/nohup	no	go_applet
 od	yes	cmds/od	no	go_applet
 paste	yes	cmds/paste	no	go_applet
-patch	no		no	external_gap
+patch	no	cmds/posixproviders	no	external_provider
 pathchk	yes	cmds/pathchk	no	go_applet
-pax	no		no	external_gap
+pax	yes	cmds/pax	no	go_applet
 pr	yes	cmds/pr	no	go_applet
 printf	yes	cmds/printf	no	go_applet
 ps	yes	cmds/ps	no	go_applet
 pwd	yes	cmds/pwd	no	go_applet
 read	no		yes	shell
-renice	no		no	external_gap
+renice	yes	cmds/renice	no	go_applet
 rm	yes	cmds/rm	no	go_applet
 rmdir	yes	cmds/rmdir	no	go_applet
 sed	yes	cmds/sed	no	go_applet
@@ -88,7 +88,7 @@ sleep	yes	cmds/sleep	no	go_applet
 sort	yes	cmds/sort	no	go_applet
 split	yes	cmds/split	no	go_applet
 strings	yes	cmds/strings	no	go_applet
-strip	no		no	external_gap
+strip	no	cmds/posixproviders	no	external_provider
 stty	yes	cmds/stty	no	go_applet
 tabs	no		no	external_gap
 tail	yes	cmds/tail	no	go_applet
@@ -109,7 +109,7 @@ unexpand	yes	cmds/unexpand	no	go_applet
 uniq	yes	cmds/uniq	no	go_applet
 uudecode	yes	cmds/uudecode	no	go_applet
 uuencode	yes	cmds/uuencode	no	go_applet
-vi	no		no	external_gap
+vi	no	cmds/posixproviders	no	external_provider
 wait	no		yes	shell
 wc	yes	cmds/wc	no	go_applet
 who	yes	cmds/who	no	go_applet

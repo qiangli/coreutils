@@ -24,7 +24,13 @@ This repo is OSS (MIT) and is consumed by other OSS repos. Two hard rules:
    command wrappers whose upstream-documented purpose IS running the
    COMMAND operand (env, timeout, time, watch, xargs) spawn that command
    directly, exactly as the GNU binary does — see docs/commands.md's
-   NO-list preamble.
+   NO-list preamble. The **POSIX external providers** are the second,
+   narrower exception and are explicitly not Go implementations: the
+   multicall owns twelve POSIX-required names (make, bc, patch, m4, ed,
+   man, ctags, ar, nm, strip, ex, vi) and dispatches to a locally built,
+   provenance-checked copy of the upstream program. They exist so a
+   "bashy-only" certification arm stops silently measuring the host's
+   `$PATH` — see docs/posix-external-providers.md.
 3. **Upstream semantics are immutable.** Every flag, option, and argument
    a tool accepts means exactly what the original command's official
    documentation says it means — same spelling, same default, same
@@ -216,7 +222,7 @@ pflag sees them — exact match wins, ambiguity is a GNU-format exit-2
 error; `tool/abbrev_test.go`), and the contract error
 helpers (UsageError, NotSupported). `cmds/<name>/` is one package per
 command (`package <name>cmd`), init-registered; `cmds/all` blank-
-imports the canonical set (142 command packages / 147 advertised names —
+imports the canonical set (147 command packages / 164 advertised names —
 `cmds/all/all.go` is the shipped
 inventory, `docs/commands.md` the plan, and `pkg/atlas` the Command
 Atlas metadata table (group/tier/caps per command; its coverage test

@@ -12,14 +12,23 @@ providers. Profiles C/D place Bashy Go coreutils first.
 
 | Disposition | Count |
 | --- | ---: |
-| Registered Bashy Go applet | 76 |
+| Registered Bashy Go applet | 80 |
 | Shell entry point or builtin | 14 |
-| External provider gap in assembled C/D | 26 |
+| Pinned POSIX external provider | 12 |
+| External provider gap in assembled C/D | 10 |
 | Required names | 116 |
 
-Coreutils alone therefore covers 76 of 116 same-name required sets and
-is absent for 40 names. Fourteen of those 40 are supplied by the shell,
-leaving 26 true external-provider gaps in the assembled C/D environment.
+Coreutils alone therefore covers 80 of 116 same-name required sets and
+is absent for 36 names. 14 of those 36 are supplied by the shell and
+12 by a pinned POSIX external provider that the multicall itself registers
+and resolves from the provider cache (`pkg/posixprovider`), leaving
+10 true external-provider gaps in the assembled C/D environment.
+
+A provider row is NOT a Go applet: the name belongs to the multicall, the
+implementation is upstream's, built locally from a pinned source tarball
+and checked against its recorded provenance before it runs. It is listed
+separately precisely so it can never be counted as Go coverage.
+
 Presence is not behavioral conformance; test results must still be
 attributed to the executable or builtin actually selected.
 
@@ -30,12 +39,12 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | Command | Bashy Go applet | Go package | Shell supplied | C/D disposition |
 | --- | :---: | --- | :---: | --- |
 | `alias` | no | — | yes | shell entry/builtin |
-| `ar` | no | — | no | external provider required |
+| `ar` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `at` | yes | `cmds/at` | no | internal Go applet |
 | `awk` | yes | `cmds/awk` | no | internal Go applet |
 | `basename` | yes | `cmds/basename` | no | internal Go applet |
 | `batch` | yes | `cmds/batch` | no | internal Go applet |
-| `bc` | no | — | no | external provider required |
+| `bc` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `bg` | no | — | yes | shell entry/builtin |
 | `cat` | yes | `cmds/cat` | no | internal Go applet |
 | `cd` | no | — | yes | shell entry/builtin |
@@ -49,7 +58,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `cp` | yes | `cmds/cp` | no | internal Go applet |
 | `crontab` | yes | `cmds/crontab` | no | internal Go applet |
 | `csplit` | yes | `cmds/csplit` | no | internal Go applet |
-| `ctags` | no | — | no | external provider required |
+| `ctags` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `cut` | yes | `cmds/cut` | no | internal Go applet |
 | `date` | yes | `cmds/date` | no | internal Go applet |
 | `dd` | yes | `cmds/dd` | no | internal Go applet |
@@ -58,9 +67,9 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `dirname` | yes | `cmds/dirname` | no | internal Go applet |
 | `du` | yes | `cmds/du` | no | internal Go applet |
 | `echo` | yes | `cmds/echo` | no | internal Go applet |
-| `ed` | no | — | no | external provider required |
+| `ed` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `env` | yes | `cmds/env` | no | internal Go applet |
-| `ex` | no | — | no | external provider required |
+| `ex` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `expand` | yes | `cmds/expand` | no | internal Go applet |
 | `expr` | yes | `cmds/expr` | no | internal Go applet |
 | `false` | yes | `cmds/false` | no | internal Go applet |
@@ -69,7 +78,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `file` | yes | `cmds/file` | no | internal Go applet |
 | `find` | yes | `cmds/find` | no | internal Go applet |
 | `fold` | yes | `cmds/fold` | no | internal Go applet |
-| `getconf` | no | — | no | external provider required |
+| `getconf` | yes | `cmds/getconf` | no | internal Go applet |
 | `getopts` | no | — | yes | shell entry/builtin |
 | `grep` | yes | `cmds/grep` | no | internal Go applet |
 | `hash` | no | — | yes | shell entry/builtin |
@@ -86,30 +95,30 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `logname` | yes | `cmds/logname` | no | internal Go applet |
 | `lp` | no | — | no | external provider required |
 | `ls` | yes | `cmds/ls` | no | internal Go applet |
-| `m4` | no | — | no | external provider required |
+| `m4` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `mailx` | no | — | no | external provider required |
-| `make` | no | — | no | external provider required |
-| `man` | no | — | no | external provider required |
-| `mesg` | no | — | no | external provider required |
+| `make` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
+| `man` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
+| `mesg` | yes | `cmds/mesg` | no | internal Go applet |
 | `mkdir` | yes | `cmds/mkdir` | no | internal Go applet |
 | `mkfifo` | yes | `cmds/mkfifo` | no | internal Go applet |
 | `more` | yes | `cmds/more` | no | internal Go applet |
 | `mv` | yes | `cmds/mv` | no | internal Go applet |
 | `newgrp` | no | — | no | external provider required |
 | `nice` | yes | `cmds/nice` | no | internal Go applet |
-| `nm` | no | — | no | external provider required |
+| `nm` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `nohup` | yes | `cmds/nohup` | no | internal Go applet |
 | `od` | yes | `cmds/od` | no | internal Go applet |
 | `paste` | yes | `cmds/paste` | no | internal Go applet |
-| `patch` | no | — | no | external provider required |
+| `patch` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `pathchk` | yes | `cmds/pathchk` | no | internal Go applet |
-| `pax` | no | — | no | external provider required |
+| `pax` | yes | `cmds/pax` | no | internal Go applet |
 | `pr` | yes | `cmds/pr` | no | internal Go applet |
 | `printf` | yes | `cmds/printf` | no | internal Go applet |
 | `ps` | yes | `cmds/ps` | no | internal Go applet |
 | `pwd` | yes | `cmds/pwd` | no | internal Go applet |
 | `read` | no | — | yes | shell entry/builtin |
-| `renice` | no | — | no | external provider required |
+| `renice` | yes | `cmds/renice` | no | internal Go applet |
 | `rm` | yes | `cmds/rm` | no | internal Go applet |
 | `rmdir` | yes | `cmds/rmdir` | no | internal Go applet |
 | `sed` | yes | `cmds/sed` | no | internal Go applet |
@@ -118,7 +127,7 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `sort` | yes | `cmds/sort` | no | internal Go applet |
 | `split` | yes | `cmds/split` | no | internal Go applet |
 | `strings` | yes | `cmds/strings` | no | internal Go applet |
-| `strip` | no | — | no | external provider required |
+| `strip` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `stty` | yes | `cmds/stty` | no | internal Go applet |
 | `tabs` | no | — | no | external provider required |
 | `tail` | yes | `cmds/tail` | no | internal Go applet |
@@ -139,12 +148,14 @@ Machine-readable source: `docs/posix-required-commands.tsv`.
 | `uniq` | yes | `cmds/uniq` | no | internal Go applet |
 | `uudecode` | yes | `cmds/uudecode` | no | internal Go applet |
 | `uuencode` | yes | `cmds/uuencode` | no | internal Go applet |
-| `vi` | no | — | no | external provider required |
+| `vi` | no | `cmds/posixproviders` | no | pinned external provider (registered) |
 | `wait` | no | — | yes | shell entry/builtin |
 | `wc` | yes | `cmds/wc` | no | internal Go applet |
 | `who` | yes | `cmds/who` | no | internal Go applet |
 | `write` | no | — | no | external provider required |
 | `xargs` | yes | `cmds/xargs` | no | internal Go applet |
 
-The product/provider allocation for the 26 external gaps lives in
-`../../docs/posix-utility-provider-strategy.md`.
+The product/provider allocation for the 10 remaining external gaps lives in
+`../../docs/posix-utility-provider-strategy.md`. The pins, licences and
+build recipe for the registered providers live in
+`pkg/posixprovider/manifest.tsv` + `tools/posix-providers/build.sh`.

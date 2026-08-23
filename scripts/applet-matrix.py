@@ -57,6 +57,31 @@ ALIASES = {
 TEST_FUNC = re.compile(r"^func (?:Test|Fuzz|Benchmark)\w+", re.MULTILINE)
 IMPORT = re.compile(r'github\.com/qiangli/coreutils/cmds/([^"/]+)"')
 
+# One package registers MANY names: cmds/posixproviders registers the pinned
+# POSIX external providers plus the `posix-providers` provisioning applet. The
+# provider names come from the canonical manifest so this file can never drift
+# from what is actually pinned.
+#
+# These are deliberately NOT reported as Go applets. The multicall owns the name
+# and executes a locally built, provenance-checked copy of the upstream program;
+# calling that a Go applet would overstate the Go userland by twelve commands and
+# corrupt the very denominator this matrix exists to state honestly.
+PROVIDER_PACKAGE = "posixproviders"
+PROVIDER_ADMIN = "posix-providers"
+PROVIDER_MANIFEST = ROOT / "pkg/posixprovider/manifest.tsv"
+PROVIDER_FAMILY = "POSIX external provider"
+
+
+def provider_names() -> list[str]:
+    names = []
+    for line in PROVIDER_MANIFEST.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        names.append(line.split("\t")[0].strip())
+    if not names:
+        raise SystemExit(f"no provider entries in {PROVIDER_MANIFEST}")
+    return names
+
 
 def shipped_packages() -> list[str]:
     text = (ROOT / "cmds/all/all.go").read_text()
@@ -76,7 +101,15 @@ def rows() -> list[dict[str, str | int]]:
             "reconcile it with the configured scenario before regenerating"
         )
     packages = shipped_packages()
+    providers = set(provider_names())
     applet_package = {package: package for package in packages}
+    # cmds/posixproviders is not itself an advertised name; the names it
+    # registers are.
+    applet_package.pop(PROVIDER_PACKAGE, None)
+    if PROVIDER_PACKAGE not in packages:
+        raise SystemExit(f"cmds/{PROVIDER_PACKAGE} is no longer in cmds/all; reconcile the provider axis")
+    for applet in sorted(providers) + [PROVIDER_ADMIN]:
+        applet_package[applet] = PROVIDER_PACKAGE
     for applet, package in ALIASES.items():
         if package not in applet_package:
             raise SystemExit(f"alias {applet!r} refers to unshipped package {package!r}")
@@ -86,7 +119,9 @@ def rows() -> list[dict[str, str | int]]:
     for applet in sorted(applet_package):
         package = applet_package[applet]
         files, funcs = package_tests(package)
-        if applet in GNU:
+        if applet in providers:
+            family = PROVIDER_FAMILY
+        elif applet in GNU:
             family = "GNU Coreutils"
         elif applet in POSIX_CERT_REQUIRED:
             family = "POSIX/Unix utility"
@@ -103,7 +138,7 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 142 or len(result) != 147:
+    if len(packages) != 147 or len(result) != 164:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -124,19 +159,34 @@ def render_tsv(data: list[dict[str, str | int]]) -> str:
 
 
 def required_rows(data: list[dict[str, str | int]]) -> list[dict[str, str]]:
-    internal = {str(row["applet"]): str(row["go_package"]) for row in data}
+    providers = set(provider_names())
+    # A provider is registered in the multicall but is NOT a Go applet: the name
+    # is ours, the implementation is upstream's, built locally from a pinned
+    # source tarball. It is therefore neither `go_applet` (which would overstate
+    # the Go userland) nor `external_gap` (which it no longer is, since Profile C
+    # now resolves it from the provider cache instead of the host's PATH).
+    internal = {
+        str(row["applet"]): str(row["go_package"])
+        for row in data
+        if row["applet"] not in providers
+    }
     result = []
     for command in sorted(POSIX_CERT_REQUIRED):
-        if command in internal:
+        if command in providers:
+            disposition = "external_provider"
+        elif command in internal:
             disposition = "go_applet"
         elif command in SHELL_PROVIDED:
             disposition = "shell"
         else:
             disposition = "external_gap"
+        package = internal.get(command, "")
+        if command in providers:
+            package = f"cmds/{PROVIDER_PACKAGE}"
         result.append({
             "command": command,
             "coreutils_go_applet": "yes" if command in internal else "no",
-            "go_package": internal.get(command, ""),
+            "go_package": package,
             "shell_provided": "yes" if command in SHELL_PROVIDED else "no",
             "profile_cd_disposition": disposition,
         })
@@ -155,6 +205,8 @@ def render_required_markdown(data: list[dict[str, str]]) -> str:
     go_count = sum(row["profile_cd_disposition"] == "go_applet" for row in data)
     shell_count = sum(row["profile_cd_disposition"] == "shell" for row in data)
     gap_count = sum(row["profile_cd_disposition"] == "external_gap" for row in data)
+    provider_count = sum(row["profile_cd_disposition"] == "external_provider" for row in data)
+    absent = len(data) - go_count
     lines = [
         "# POSIX-required command coverage for Profiles C/D",
         "",
@@ -172,12 +224,21 @@ def render_required_markdown(data: list[dict[str, str]]) -> str:
         "| --- | ---: |",
         f"| Registered Bashy Go applet | {go_count} |",
         f"| Shell entry point or builtin | {shell_count} |",
+        f"| Pinned POSIX external provider | {provider_count} |",
         f"| External provider gap in assembled C/D | {gap_count} |",
         f"| Required names | {len(data)} |",
         "",
-        "Coreutils alone therefore covers 76 of 116 same-name required sets and",
-        "is absent for 40 names. Fourteen of those 40 are supplied by the shell,",
-        "leaving 26 true external-provider gaps in the assembled C/D environment.",
+        f"Coreutils alone therefore covers {go_count} of {len(data)} same-name required sets and",
+        f"is absent for {absent} names. {shell_count} of those {absent} are supplied by the shell and",
+        f"{provider_count} by a pinned POSIX external provider that the multicall itself registers",
+        "and resolves from the provider cache (`pkg/posixprovider`), leaving",
+        f"{gap_count} true external-provider gaps in the assembled C/D environment.",
+        "",
+        "A provider row is NOT a Go applet: the name belongs to the multicall, the",
+        "implementation is upstream's, built locally from a pinned source tarball",
+        "and checked against its recorded provenance before it runs. It is listed",
+        "separately precisely so it can never be counted as Go coverage.",
+        "",
         "Presence is not behavioral conformance; test results must still be",
         "attributed to the executable or builtin actually selected.",
         "",
@@ -191,6 +252,7 @@ def render_required_markdown(data: list[dict[str, str]]) -> str:
     labels = {
         "go_applet": "internal Go applet",
         "shell": "shell entry/builtin",
+        "external_provider": "pinned external provider (registered)",
         "external_gap": "external provider required",
     }
     for row in data:
@@ -201,8 +263,10 @@ def render_required_markdown(data: list[dict[str, str]]) -> str:
         )
     lines.extend([
         "",
-        "The product/provider allocation for the 26 external gaps lives in",
-        "`../../docs/posix-utility-provider-strategy.md`.",
+        f"The product/provider allocation for the {gap_count} remaining external gaps lives in",
+        "`../../docs/posix-utility-provider-strategy.md`. The pins, licences and",
+        "build recipe for the registered providers live in",
+        "`pkg/posixprovider/manifest.tsv` + `tools/posix-providers/build.sh`.",
         "",
     ])
     return "\n".join(lines)
@@ -285,7 +349,7 @@ def main() -> None:
         raise SystemExit("shell-provided POSIX inventory changed; reconcile before regenerating")
     dispositions = {row["profile_cd_disposition"] for row in required}
     counts = {kind: sum(row["profile_cd_disposition"] == kind for row in required) for kind in dispositions}
-    if counts != {"go_applet": 76, "shell": 14, "external_gap": 26}:
+    if counts != {"go_applet": 80, "shell": 14, "external_provider": 12, "external_gap": 10}:
         raise SystemExit(f"required coverage changed: {counts}; reconcile before regenerating")
     tsv = ROOT / "docs/applet-matrix.tsv"
     markdown = ROOT / "docs/applet-matrix.md"
