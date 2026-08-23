@@ -12,8 +12,8 @@ import (
 // prompt was for. A frame nobody reads protects nobody.
 func TestFramePutsPurposeAndDestinationFirst(t *testing.T) {
 	r := Request{
-		ID: "abc123", Name: "NOVI_PWD",
-		Prompt:    sanitizePrompt("password for 'noviadmin' on novicortex"),
+		ID: "abc123", Name: "SVC_PWD",
+		Prompt:    sanitizePrompt("password for 'svc-account' on host-a"),
 		Sink:      Sink{Kind: SinkFile, Detail: "/tmp/x/value"},
 		Requester: Requester{PID: 1, PPID: 2, Principal: "you", Cwd: "/w", Tool: "claude", Argv: []string{"bashy", "ask"}},
 	}
@@ -33,7 +33,7 @@ func TestFramePutsPurposeAndDestinationFirst(t *testing.T) {
 	}
 	// The caller's own text must still sit UNDER the untrusted banner, never above
 	// it — that is what stops caller text masquerading as chrome.
-	if idx("noviadmin") < purpose {
+	if idx("svc-account") < purpose {
 		t.Errorf("caller text appears above the untrusted banner:\n%s", frame)
 	}
 }
