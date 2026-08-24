@@ -214,26 +214,26 @@ implementation.
 
 The generated current inventory is
 [`posix-required-commands.md`](posix-required-commands.md): 116 configured
-required names, 80 registered Go applets, 14 names supplied by the shell,
-12 supplied by a pinned POSIX external provider the multicall itself registers
-and resolves, and 10 remaining external-provider gaps in the assembled C/D
-environment. Coreutils alone is absent for 36 of the 116 names; calling that a
-10-name coreutils gap incorrectly credits the shell's 14 names and the 12
-providers to this repository.
+required names, 86 registered Go applets, 14 names supplied by the shell, and
+16 supplied by a pinned POSIX external provider the multicall itself registers
+and resolves, leaving no external-provider gaps in the assembled C/D
+environment. Coreutils alone is absent for 30 of the 116 names; counting the
+assembled surface as pure-Go coverage would incorrectly credit the shell's 14
+names and the 16 providers to this repository.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
 never be read as Go coverage.** The multicall owns the name (`make`, `bc`,
-`patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`) and
+`patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`,
+`mailx`, `localedef`, `talk`) and
 dispatches to a copy of the upstream program built locally from a sha256-pinned
 source tarball. Owning the name is precisely what stops a "Bashy-only" arm from
 silently measuring the host's `$PATH`, which is what happened while these names
 were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
-The product/provider allocation for the 10 remaining assembled gaps is
-maintained once, in the umbrella
+The provider allocation is maintained once, in the umbrella
 [`posix-utility-provider-strategy.md`](../../docs/posix-utility-provider-strategy.md).
-They are provider decisions, not automatically an implementation backlog.
+Provider commands are not automatically an implementation backlog.
 
 Historical note: the 2026-08-05 staged snapshot contained 30 external-provider
 names. `file`, `iconv`, `uudecode`, and `uuencode` subsequently became

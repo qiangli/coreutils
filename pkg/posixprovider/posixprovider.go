@@ -2,15 +2,16 @@
 // See LICENSE for licensing information
 
 // Package posixprovider is the READ half of the POSIX external provider
-// mechanism: the twelve POSIX-required commands this repository deliberately
+// mechanism: the sixteen POSIX-required commands this repository deliberately
 // does not implement in Go (make, bc, patch, m4, ed, man, ctags, ar, nm, strip,
-// ex, vi), pinned by manifest, built locally from upstream source, and resolved
-// out of the binmgr cache so the multicall OWNS the name.
+// ex, vi, lp, mailx, localedef, talk), pinned by manifest, built locally from
+// upstream source, and resolved out of the binmgr cache so the multicall OWNS
+// the name.
 //
 // # Why the name must be owned
 //
 // Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-// coreutils". Until this package existed, those twelve names were not in
+// coreutils". Until this package existed, those sixteen names were not in
 // tool.Names(), so the shell adapter fell through to $PATH and the arm silently
 // measured Ubuntu's binaries while claiming to measure ours. There is therefore
 // NO fallback here of any kind: an unavailable provider is a loud failure, never
@@ -60,7 +61,7 @@ var manifestFS embed.FS
 
 // OptOutEnv unregisters the providers from the tool registry when set to "off".
 // It exists so plain bashy stays standalone-graceful on a machine with no
-// provider cache: with it set, the twelve names are simply not ours and normal
+// provider cache: with it set, the sixteen names are simply not ours and normal
 // PATH resolution applies again. It is an EXPLICIT opt-out — the default is to
 // own the names and fail loudly.
 const OptOutEnv = "BASHY_POSIX_PROVIDERS"

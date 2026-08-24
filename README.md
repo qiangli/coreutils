@@ -21,9 +21,10 @@ environment in a single Go process.
 
 This repository is **not a complete POSIX Commands & Utilities
 implementation**. In the configured 116-name VSC-PCTS2016 POSIX08 scenario,
-the canonical Go inventory supplies 80 names and is absent for 36. The shell
-supplies 14 of those 36 and a **pinned POSIX external provider** supplies 12,
-leaving 10 external-provider gaps in the assembled Bashy Profiles C/D surface.
+the canonical Go inventory supplies 86 names and is absent for 30. The shell
+supplies 14 of those 30 and a **pinned POSIX external provider** supplies the
+remaining 16, leaving no external-provider gaps in the assembled Bashy
+Profiles C/D surface.
 See the generated
 [complete required-command matrix](docs/posix-required-commands.md); do not
 infer the coreutils gap from the smaller assembled-Bashy number.
@@ -31,7 +32,7 @@ infer the coreutils gap from the smaller assembled-Bashy number.
 A provider is **not** a Go applet, and the matrix counts them separately so
 they can never be read as Go coverage: the multicall owns the NAME
 (`make`, `bc`, `patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`,
-`vi`) and dispatches to a copy of the upstream program built locally from a
+`vi`, `lp`, `mailx`, `localedef`, `talk`) and dispatches to a copy of the upstream program built locally from a
 sha256-pinned source tarball. Owning the name is the point — before it, those
 names fell through to the host's `$PATH`, so a "Bashy-only" arm silently
 measured the distro's binaries. There is no fallback: an unprovisioned provider
@@ -91,13 +92,13 @@ Every tool in this repo follows the same rules:
   providers: the manifest (`pkg/posixprovider/manifest.tsv`, the one canonical
   copy, embedded), a cache-lookup resolver that verifies the cached binary
   against its recorded provenance and **never** downloads or compiles, the
-  twelve registered provider tools, and `posix-providers build|list|check` —
+  sixteen registered provider tools, and `posix-providers build|list|check` —
   the only command allowed to fetch and build. `BASHY_POSIX_PROVIDERS=off`
   unregisters the provider names. See
   [POSIX external providers](docs/posix-external-providers.md).
 
-- `cmds/` — the userland: 147 shipped Go command packages advertising 164
-  applet names, twelve of which are external providers rather than Go
+- `cmds/` — the userland: 153 shipped Go command packages advertising 174
+  applet names, sixteen of which are external providers rather than Go
   implementations (see the generated [applet matrix](docs/applet-matrix.md)),
   covering file operations
   (cp, mv, rm, mkdir, ln, chmod, …), listing (ls, stat, du, df, …),

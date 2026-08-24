@@ -38,7 +38,7 @@ Use these authorities in order:
 | Commands shipped by GNU Coreutils | POSIX.1 Issue 7, 2016 Edition when standardized | [GNU Coreutils 9.11 manual](https://www.gnu.org/software/coreutils/manual/html_node/index.html) and GNU Coreutils 9.11 runtime |
 | `ps` | [POSIX `ps`](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/ps.html) | [procps-ng 4.0.4](https://gitlab.com/procps-ng/procps) documentation and runtime, matching Ubuntu 24.04; `ps` is not a GNU Coreutils command |
 | Other standardized Go applets, including `awk`, `diff`, `grep`, and `sed` | POSIX.1 Issue 7, 2016 Edition | The official documentation and explicitly recorded version of the command's actual upstream family (for example GNU Awk, GNU Diffutils, GNU Grep, or GNU Sed) only for extensions the applet claims to support |
-| Pinned external providers such as `make`, `bc`, `patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, and `vi` | POSIX.1 Issue 7, 2016 Edition | The exact upstream project, version, artifact, and digest in [`pkg/posixprovider/manifest.tsv`](../pkg/posixprovider/manifest.tsv) |
+| Pinned external providers: `make`, `bc`, `patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`, `mailx`, `localedef`, and `talk` | POSIX.1 Issue 7, 2016 Edition | The exact upstream project, version, artifact, and digest in [`pkg/posixprovider/manifest.tsv`](../pkg/posixprovider/manifest.tsv) |
 | Bashy/AgentOS-only commands | Not applicable unless explicitly documented | The command's repository-owned contract and tests; no POSIX or GNU compatibility is implied |
 
 ## GNU Coreutils 9.11 compatibility target

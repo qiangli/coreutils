@@ -101,8 +101,9 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/pathchk"
 	_ "github.com/qiangli/coreutils/cmds/pax"
 	_ "github.com/qiangli/coreutils/cmds/pinky"
-	// posixproviders registers the twelve pinned POSIX external providers
-	// (make, bc, patch, m4, ed, man, ctags, ar, nm, strip, ex, vi) plus the
+	// posixproviders registers the sixteen pinned POSIX external providers
+	// (make, bc, patch, m4, ed, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
+	// localedef, talk) plus the
 	// `posix-providers` provisioning applet. It must be in this list: the
 	// certification harness rebuilds its measured PATH from tool.Names(), so a
 	// name that is not registered is a name the arm silently takes from the host.

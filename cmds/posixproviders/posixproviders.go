@@ -7,11 +7,12 @@
 // # What this fixes
 //
 // Profile C of the POSIX certification campaign is "GNU Bash + the Bashy Go
-// coreutils". Twelve POSIX-required commands are not implemented in Go
-// (make, bc, patch, m4, ed, man, ctags, ar, nm, strip, ex, vi), and until this
-// package existed they were absent from tool.Names() — so the shell adapter
-// fell through to $PATH and the arm measured Ubuntu's binaries while reporting
-// itself as bashy-only. Registering them here is what makes the harness's
+// coreutils". Sixteen POSIX-required commands are not implemented in Go
+// (make, bc, patch, m4, ed, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
+// localedef, talk), and until this package existed they were absent from
+// tool.Names() — so the shell adapter fell through to $PATH and the arm measured
+// Ubuntu's binaries while reporting itself as bashy-only. Registering them here
+// is what makes the harness's
 // sut-wire.sh, which rebuilds /vsc/cushim from the multicall's OWN inventory,
 // wire the provider rather than the host binary.
 //
@@ -39,7 +40,7 @@
 //
 // # Opt-out
 //
-// BASHY_POSIX_PROVIDERS=off unregisters all twelve, so plain bashy stays
+// BASHY_POSIX_PROVIDERS=off unregisters all sixteen, so plain bashy stays
 // standalone-graceful on a machine with no provider cache. The `posix-providers`
 // applet itself is always registered: it is how you get out of that state.
 package posixproviderscmd
@@ -78,7 +79,7 @@ func init() {
 }
 
 // ---------------------------------------------------------------------------
-// the twelve provider tools
+// the sixteen provider tools
 // ---------------------------------------------------------------------------
 
 func providerTool(e posixprovider.Entry) *tool.Tool {

@@ -1,9 +1,10 @@
 # POSIX external providers
 
-Twelve POSIX-required commands are deliberately not implemented in Go:
+Sixteen POSIX-required commands are deliberately not implemented in Go:
 
 ```
 make  bc  patch  m4  ed  man  ctags  ar  nm  strip  ex  vi
+lp    mailx  localedef  talk
 ```
 
 They are **external providers**: the multicall owns the name and dispatches to
