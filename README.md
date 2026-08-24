@@ -97,8 +97,14 @@ Every tool in this repo follows the same rules:
   the only command allowed to fetch and build. `BASHY_POSIX_PROVIDERS=off`
   unregisters the provider names. See
   [POSIX external providers](docs/posix-external-providers.md).
+  `cmds/posixgate` ships `posix-gate`, the fail-closed effective-owner gate
+  over the 116 POSIX-required names: it proves the assembled runtime selects
+  each name's intended owner (Go applet, shell builtin/keyword/entry, or
+  pinned provider) and rejects count drift, ambiguous ownership, missing
+  provider pins/provenance, and host PATH fallback. See
+  [the POSIX owner gate](docs/posix-owner-gate.md).
 
-- `cmds/` — the userland: 153 shipped Go command packages advertising 174
+- `cmds/` — the userland: 154 shipped Go command packages advertising 175
   applet names, sixteen of which are external providers rather than Go
   implementations (see the generated [applet matrix](docs/applet-matrix.md)),
   covering file operations

@@ -138,7 +138,7 @@ def rows() -> list[dict[str, str | int]]:
             "test_functions": funcs,
         })
 
-    if len(packages) != 153 or len(result) != 174:
+    if len(packages) != 154 or len(result) != 175:
         raise SystemExit(
             f"inventory changed: packages={len(packages)} applets={len(result)}; "
             "update the documented snapshot and generator assertions"
@@ -268,6 +268,12 @@ def render_required_markdown(data: list[dict[str, str]]) -> str:
         "build recipe for the registered providers live in",
         "`pkg/posixprovider/manifest.tsv` + `tools/posix-providers/build.sh`.",
         "",
+        "`posix-gate` (`cmds/posixgate`) is the fail-closed gate over this",
+        "inventory: it proves the assembled runtime selects each name's intended",
+        "owner and rejects count drift, ambiguous ownership, missing provider",
+        "pins/provenance, and host PATH fallback — see",
+        "[`posix-owner-gate.md`](posix-owner-gate.md).",
+        "",
     ])
     return "\n".join(lines)
 
@@ -357,6 +363,10 @@ def main() -> None:
     markdown = ROOT / "docs/applet-matrix.md"
     required_tsv = ROOT / "docs/posix-required-commands.tsv"
     required_markdown = ROOT / "docs/posix-required-commands.md"
+    # cmds/posixgate embeds the same inventory (its gate is compared against it
+    # at run time), so the generator owns that copy too — a hand edit to either
+    # file fails --check here and the byte-equality test in cmds/posixgate.
+    gate_tsv = ROOT / "cmds/posixgate/posix-required-commands.tsv"
     rendered_tsv = render_tsv(data)
     rendered_markdown = render_markdown(data)
     rendered_required_tsv = render_required_tsv(required)
@@ -364,9 +374,11 @@ def main() -> None:
     if args.check:
         if (not tsv.exists() or not markdown.exists() or
                 not required_tsv.exists() or not required_markdown.exists() or
+                not gate_tsv.exists() or
                 tsv.read_text() != rendered_tsv or markdown.read_text() != rendered_markdown or
                 required_tsv.read_text() != rendered_required_tsv or
-                required_markdown.read_text() != rendered_required_markdown):
+                required_markdown.read_text() != rendered_required_markdown or
+                gate_tsv.read_text() != rendered_required_tsv):
             raise SystemExit("applet matrix was stale; regenerate with scripts/applet-matrix.py")
         print("applet-matrix: PASS")
         return
@@ -374,6 +386,7 @@ def main() -> None:
     markdown.write_text(rendered_markdown)
     required_tsv.write_text(rendered_required_tsv)
     required_markdown.write_text(rendered_required_markdown)
+    gate_tsv.write_text(rendered_required_tsv)
     print(f"applet-matrix: wrote {len(data)} applets")
 
 

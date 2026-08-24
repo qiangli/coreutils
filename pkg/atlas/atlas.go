@@ -520,6 +520,10 @@ func init() {
 	// `posix-providers` is the provisioner in front of them: it is the ONLY
 	// command that downloads and compiles one.
 	addTools(GroupToolchains, "posix-providers")
+	// `posix-gate` is the fail-closed effective-owner gate over the 116
+	// POSIX-required names: registry ownership, provider pins/provenance, and
+	// the staged runtime's PATH/shell/POSIXLY_CORRECT selection.
+	addTools(GroupDiagnostics, "posix-gate")
 
 	// Tool capabilities (evidence per flag: docs/command-atlas.md §2.3).
 	capTools(CapJSON,
@@ -582,6 +586,9 @@ func init() {
 	capTools(CapSelfProvisioning, "posix-providers")
 	capTools(CapNeedsNetwork, "posix-providers")
 	capTools(CapSpawnsProcesses, "posix-providers")
+	// The gate's runtime subcommand spawns the staged shell it interrogates;
+	// it mutates nothing and never downloads or compiles.
+	capTools(CapSpawnsProcesses, "posix-gate")
 	if e, ok := tools["posix-providers"]; ok {
 		e.Subclass = SubclassProvisioner
 		tools["posix-providers"] = e
@@ -1028,6 +1035,10 @@ func init() {
 	eff(EffWrite, "posix-providers")
 	eff(EffPersist, "posix-providers")
 	eff(EffRead, "posix-providers")
+	// posix-gate reads the provider cache/provenance and staged PATH entries,
+	// and execs the staged shell for its runtime probes.
+	eff(EffRead, "posix-gate")
+	eff(EffExec, "posix-gate")
 
 	// Deterministic ordering for every consumer.
 	for n, e := range tools {

@@ -232,6 +232,14 @@ silently measuring the host's `$PATH`, which is what happened while these names
 were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
+`posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
+116-name inventory: it proves the assembled runtime selects each name's
+intended owner — Go applet, shell builtin/keyword/entry, or pinned provider —
+and rejects count drift, ambiguous ownership, missing provider
+pins/provenance, host PATH fallback, a shell not in POSIX mode, and
+POSIXLY_CORRECT failing to reach child processes. See
+[the POSIX owner gate](posix-owner-gate.md).
+
 The provider allocation is maintained once, in the umbrella
 [`posix-utility-provider-strategy.md`](../../docs/posix-utility-provider-strategy.md).
 Provider commands are not automatically an implementation backlog.

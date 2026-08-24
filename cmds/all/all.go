@@ -101,6 +101,12 @@ import (
 	_ "github.com/qiangli/coreutils/cmds/pathchk"
 	_ "github.com/qiangli/coreutils/cmds/pax"
 	_ "github.com/qiangli/coreutils/cmds/pinky"
+	// posixgate registers `posix-gate`, the fail-closed effective-owner gate
+	// over the 116 POSIX-required names: it proves the assembled runtime
+	// selects the intended owner (Go applet, shell, or pinned provider) for
+	// every name, and rejects count drift, ambiguous ownership, missing
+	// provider pins/provenance, and host PATH fallback.
+	_ "github.com/qiangli/coreutils/cmds/posixgate"
 	// posixproviders registers the sixteen pinned POSIX external providers
 	// (make, bc, patch, m4, ed, man, ctags, ar, nm, strip, ex, vi, lp, mailx,
 	// localedef, talk) plus the

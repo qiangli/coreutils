@@ -126,3 +126,4 @@ of `pkg/posixprovider/manifest.tsv` and in the umbrella's
 | `cmds/posixproviders/` | the sixteen registered provider tools + the `posix-providers` applet |
 | `tools/posix-providers/build.sh` | the build recipe (fetch → verify → build → install → provenance) |
 | `external/zigcc/` | the pinned portable C toolchain the recipe prefers |
+| `cmds/posixgate/` | `posix-gate`, the fail-closed effective-owner gate over the full 116-name inventory (see [posix-owner-gate.md](posix-owner-gate.md)) |

@@ -159,3 +159,9 @@ The product/provider allocation for the 0 remaining external gaps lives in
 `../../docs/posix-utility-provider-strategy.md`. The pins, licences and
 build recipe for the registered providers live in
 `pkg/posixprovider/manifest.tsv` + `tools/posix-providers/build.sh`.
+
+`posix-gate` (`cmds/posixgate`) is the fail-closed gate over this
+inventory: it proves the assembled runtime selects each name's intended
+owner and rejects count drift, ambiguous ownership, missing provider
+pins/provenance, and host PATH fallback — see
+[`posix-owner-gate.md`](posix-owner-gate.md).
