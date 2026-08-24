@@ -214,12 +214,12 @@ implementation.
 
 The generated current inventory is
 [`posix-required-commands.md`](posix-required-commands.md): 116 configured
-required names, 86 registered Go applets, 14 names supplied by the shell, and
-16 supplied by a pinned POSIX external provider the multicall itself registers
-and resolves, leaving no external-provider gaps in the assembled C/D
-environment. Coreutils alone is absent for 30 of the 116 names; counting the
-assembled surface as pure-Go coverage would incorrectly credit the shell's 14
-names and the 16 providers to this repository.
+required names, with effective Profile C/D ownership pinned to 78 Go-selected,
+22 shell-selected, and 16 external-provider names. There are 86 same-name Go
+implementations available, but the shell wins selection for `echo`, `false`,
+`kill`, `printf`, `pwd`, `test`, `true`, and its `time` keyword as well as the
+14 shell-only names. Availability and effective ownership are separate fields
+in the machine-readable manifest.
 
 **A provider is not a Go applet, and the matrix counts it separately so it can
 never be read as Go coverage.** The multicall owns the name (`make`, `bc`,
