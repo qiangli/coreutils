@@ -115,7 +115,7 @@ mkdir -p "$work" "$dest"
 archive=$work/$(basename "$url")
 if [ ! -f "$archive" ]; then
   say "fetching upstream $cmd $version ($license)"
-  curl -sfL "$url" -o "$archive.part" || fail "download failed: $url"
+  curl -sfL -o "$archive.part" "$url" || fail "download failed: $url"
   mv "$archive.part" "$archive"
 fi
 
@@ -133,7 +133,7 @@ fetch_verified() { # url sha256 dest
   _u=$1; _s=$2; _d=$3
   [ ${#_s} -eq 64 ] || fail "secondary input $_u has no full sha256 pin"
   if [ ! -f "$_d" ]; then
-    curl -sfL "$_u" -o "$_d.part" || fail "download failed: $_u"
+    curl -sfL -o "$_d.part" "$_u" || fail "download failed: $_u"
     mv "$_d.part" "$_d"
   fi
   _a=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$_d" | awk '{print $1}';
@@ -148,10 +148,10 @@ fetch_verified() { # url sha256 dest
 src=$work/src-$cmd-$version
 rm -rf "$src"; mkdir -p "$src"
 case "$archive" in
-  *.tar.gz|*.tgz) tar xzf "$archive" -C "$src" --strip-components=1 ;;
-  *.tar.xz)       tar xJf "$archive" -C "$src" --strip-components=1 ;;
+  *.tar.gz|*.tgz) tar --extract --gzip --directory="$src" --strip-components=1 --file="$archive" ;;
+  *.tar.xz)       tar --extract --xz --directory="$src" --strip-components=1 --file="$archive" ;;
   *.tar.lz)       command -v lzip >/dev/null 2>&1 || fail "lzip is required for $cmd"
-                  lzip -dc "$archive" | tar xf - -C "$src" --strip-components=1 ;;
+                  lzip -dc "$archive" | tar --extract --directory="$src" --strip-components=1 --file=- ;;
   *) fail "unsupported archive form: $archive" ;;
 esac
 
@@ -266,7 +266,8 @@ case "$cmd" in
       https://codeload.github.com/kraj/localedef/tar.gz/cba02c503d7c853a38ccfb83c57e343ca5ecd7e5 \
       358b131aceb9c4b7914598242bfa34120ad547acfca4799e5392a62a905db901 \
       "$_pd/localedef-harness.tar.gz"
-    tar xzf "$_pd/localedef-harness.tar.gz" -C "$_h" --strip-components=1
+    tar --extract --gzip --directory="$_h" --strip-components=1 \
+      --file="$_pd/localedef-harness.tar.gz"
 
     _oe=543550522f831479f07d332a40ba343c53ae1065
     _oebase=https://raw.githubusercontent.com/openembedded/openembedded-core/$_oe/meta/recipes-core/glibc/glibc
