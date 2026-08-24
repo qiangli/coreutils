@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the canonical POSIX08 interface manifest and render its guide.
-
-The TSV is curated normative data. In particular, this program never mines
-command help, Synopsis strings, or other prose for option spellings.
-"""
+"""Validate and render the canonical POSIX08 command-interface manifest."""
 
 from __future__ import annotations
 
@@ -15,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs/posix-required-commands.tsv"
-GUIDE = ROOT / "docs/posix-required-commands.md"
+GUIDE = ROOT / "docs/posix-required-command-interfaces.md"
 PROVIDER_MANIFEST = ROOT / "pkg/posixprovider/manifest.tsv"
 
 REQUIRED_NAMES = frozenset("""
@@ -29,20 +25,33 @@ strings tabs talk time tput unalias unexpand uudecode uuencode vi who write ar m
 strip hash iconv m4 tsort
 """.split())
 
-SHELL_ONLY = frozenset("alias bg cd command fc fg getopts hash jobs read sh umask unalias wait".split())
-SHELL_SELECTED_OVER_GO = frozenset("echo false kill printf pwd test true time".split())
+SHELL_ONLY = frozenset(
+    "alias bg cd command fc fg getopts hash jobs read sh umask unalias wait".split()
+)
+SHELL_SELECTED_OVER_GO = frozenset(
+    "echo false kill printf pwd test true time".split()
+)
 SHELL_SELECTED = SHELL_ONLY | SHELL_SELECTED_OVER_GO
-
-# These implementations parse POSIX command grammars directly. They are
-# explicit because a flag-registration scan cannot discover their options.
 CUSTOM_PARSERS = frozenset("awk dd expr find sed stty".split())
 
 FIELDS = (
-    "command", "coreutils_go_applet", "go_package", "shell_provided",
-    "profile_cd_disposition", "implementation_available", "parser_model",
-    "syntax_forms", "required_options", "option_arguments", "operands",
-    "environment", "required_effects", "clause_ids", "evidence_ids",
-    "evidence_state",
+    "command", "availability", "go_package", "effective_owner",
+    "implementation_source", "parser_model", "base_synopsis",
+    "conditional_synopsis", "applicability", "required_options",
+    "conditional_options", "gnu_only_options", "option_arguments",
+    "operands", "operand_rules", "special_tokens", "stdin", "environment",
+    "output", "effects", "diagnostics", "exit_status", "clause_ids",
+    "evidence_ids", "tests", "evidence_state",
+)
+
+RENDER_LABELS = (
+    "Requirement / applicability", "Normative POSIX synopsis",
+    "Mandatory base options", "Conditional / optional options",
+    "GNU-only material", "Option arguments", "Operands / arity / order",
+    "Special `-` / `--` / standard input", "Environment", "Output / effects",
+    "Diagnostics / status", "Availability", "Effective Profile C/D owner",
+    "Implementation source", "Tests / evidence / state",
+    "Official Open Group Issue 7/2016 link",
 )
 
 OPTION_TOKEN = re.compile(r"^[+-](?:[A-Za-z0-9]+|<[a-z][a-z0-9_]*>)$")
@@ -51,8 +60,13 @@ OPTION_ARGUMENT = re.compile(
     r"(?P<argument><[a-z][a-z0-9_]*(?:\[=[a-z][a-z0-9_]*\])?>|"
     r"<[a-z][a-z0-9_]*>\[\.\.\.\])$"
 )
-DISPOSITIONS = {"go_applet", "shell", "external_provider"}
-PARSER_MODELS = {"flagset", "manual", "custom", "none", "shell_builtin", "shell_keyword", "external"}
+AVAILABILITY = {"go", "shell_only", "external_provider"}
+OWNERS = {"go", "shell", "external_provider"}
+PARSER_MODELS = {
+    "flagset", "manual", "custom", "none", "shell_builtin",
+    "shell_keyword", "external",
+}
+APPLICABILITY = {"base", "xsi", "development", "optional"}
 EVIDENCE_STATES = {"specified", "verified", "partial", "unverified"}
 REQUIRED_CLAUSES = {
     "SYNOPSIS", "OPTIONS", "OPERANDS", "ENVIRONMENT_VARIABLES", "STDIN",
@@ -70,11 +84,11 @@ class ManifestError(ValueError):
 
 
 def _provider_names(path: Path = PROVIDER_MANIFEST) -> set[str]:
-    names: set[str] = set()
-    for line in path.read_text().splitlines():
-        if line and not line.startswith("#"):
-            names.add(line.split("\t", 1)[0])
-    return names
+    return {
+        line.split("\t", 1)[0]
+        for line in path.read_text().splitlines()
+        if line and not line.startswith("#")
+    }
 
 
 def _go_packages(root: Path = ROOT) -> set[str]:
@@ -85,9 +99,9 @@ def _go_packages(root: Path = ROOT) -> set[str]:
 def _flagset_packages(root: Path = ROOT) -> set[str]:
     result: set[str] = set()
     for package in (root / "cmds").iterdir():
-        if not package.is_dir():
-            continue
-        if any("tool.NewFlags(" in source.read_text() for source in package.glob("*.go")):
+        if package.is_dir() and any(
+            "tool.NewFlags(" in source.read_text() for source in package.glob("*.go")
+        ):
             result.add(package.name)
     return result
 
@@ -96,22 +110,66 @@ def read_manifest(path: Path = MANIFEST) -> list[dict[str, str]]:
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         if tuple(reader.fieldnames or ()) != FIELDS:
-            raise ManifestError(f"unexpected fields: {reader.fieldnames!r}; want {FIELDS!r}")
+            raise ManifestError(
+                f"unexpected fields: {reader.fieldnames!r}; want {FIELDS!r}"
+            )
         return list(reader)
 
 
-def _tokens(row: dict[str, str]) -> list[str]:
-    raw = row["required_options"]
+def _option_tokens(command: str, field: str, raw: str) -> list[str]:
     if raw == "-":
         return []
     tokens = raw.split(";")
     malformed = [token for token in tokens if not OPTION_TOKEN.fullmatch(token)]
     if malformed:
-        raise ManifestError(f"{row['command']}: malformed option token(s): {', '.join(malformed)}")
+        raise ManifestError(
+            f"{command}: malformed {field} option token(s): {', '.join(malformed)}"
+        )
     duplicates = sorted(token for token, count in Counter(tokens).items() if count > 1)
     if duplicates:
-        raise ManifestError(f"{row['command']}: duplicate option token(s): {', '.join(duplicates)}")
+        raise ManifestError(
+            f"{command}: duplicate {field} option token(s): {', '.join(duplicates)}"
+        )
     return tokens
+
+
+def _conditional_options(row: dict[str, str]) -> dict[str, list[str]]:
+    raw = row["conditional_options"]
+    if raw == "-":
+        return {}
+    result: dict[str, list[str]] = {}
+    for group in raw.split(";"):
+        if ":" not in group:
+            raise ManifestError(f"{row['command']}: malformed conditional option group")
+        tag, values = group.split(":", 1)
+        if tag not in APPLICABILITY - {"base"}:
+            raise ManifestError(f"{row['command']}: invalid option applicability {tag}")
+        if tag in result:
+            raise ManifestError(f"{row['command']}: duplicate conditional option group {tag}")
+        tokens = values.split(",")
+        malformed = [token for token in tokens if not OPTION_TOKEN.fullmatch(token)]
+        if malformed:
+            raise ManifestError(
+                f"{row['command']}: malformed conditional option token(s): "
+                + ", ".join(malformed)
+            )
+        result[tag] = tokens
+    return result
+
+
+def _conditional_synopses(row: dict[str, str]) -> list[tuple[str, str]]:
+    raw = row["conditional_synopsis"]
+    if raw == "-":
+        return []
+    result = []
+    for item in raw.split(" ; "):
+        if "::" not in item:
+            raise ManifestError(f"{row['command']}: malformed conditional synopsis")
+        tag, form = item.split("::", 1)
+        if tag not in APPLICABILITY - {"base"} or not form:
+            raise ManifestError(f"{row['command']}: invalid conditional synopsis applicability")
+        result.append((tag, form))
+    return result
 
 
 def _validate_option_arguments(row: dict[str, str], options: set[str]) -> None:
@@ -125,41 +183,41 @@ def _validate_option_arguments(row: dict[str, str], options: set[str]) -> None:
             raise ManifestError(f"{row['command']}: malformed option argument: {item}")
         option = match.group("option")
         if option not in options:
-            raise ManifestError(f"{row['command']}: option argument names undeclared option {option}")
+            raise ManifestError(
+                f"{row['command']}: option argument names undeclared option {option}"
+            )
         if option in seen:
             raise ManifestError(f"{row['command']}: duplicate option argument for {option}")
         seen.add(option)
 
 
-def _validate_interface_facts(row: dict[str, str]) -> None:
+def _validate_synopsis(row: dict[str, str]) -> None:
     command = row["command"]
-    forms = row["syntax_forms"].split(" ; ")
-    if any(not form.strip() for form in forms):
-        raise ManifestError(f"{command}: empty syntax form")
-    # Each semicolon denotes a distinct POSIX synopsis, not a visual line wrap.
-    # The alternate `test` invocation uses `[` as its command token.
+    forms = [] if row["base_synopsis"] == "-" else row["base_synopsis"].split(" ; ")
+    forms.extend(form for _, form in _conditional_synopses(row))
+    if not forms or any(not form.strip() for form in forms):
+        raise ManifestError(f"{command}: missing normative synopsis")
     for form in forms:
-        if command not in form.split() and not (command == "test" and form.startswith("[ [")):
-            raise ManifestError(f"{command}: syntax continuation recorded as a form: {form}")
-
-    for field in ("operands", "environment", "required_effects"):
-        if any(item.endswith(":") for item in row[field].split(";")):
-            raise ManifestError(f"{command}: prose label in {field}")
+        words = form.split()
+        if command not in words and not (command == "test" and form.startswith("[ [")):
+            raise ManifestError(f"{command}: synopsis does not name its command: {form}")
 
 
 def validate(
-    rows: list[dict[str, str]],
-    providers: set[str],
-    go_packages: set[str],
+    rows: list[dict[str, str]], providers: set[str], go_packages: set[str],
     flagset_packages: set[str],
 ) -> None:
-    if len(REQUIRED_NAMES) != 116:
-        raise ManifestError(f"configured denominator drifted to {len(REQUIRED_NAMES)}")
+    if len(REQUIRED_NAMES) != 116 or len(rows) != 116:
+        raise ManifestError(f"manifest denominator drifted to {len(rows)}")
     if len(providers) != 16:
         raise ManifestError(f"pinned-provider denominator drifted to {len(providers)}")
-    if len(rows) != 116:
-        raise ManifestError(f"manifest denominator drifted to {len(rows)}")
-
+    for index, row in enumerate(rows, start=1):
+        missing = [field for field in FIELDS if not row.get(field)]
+        if missing:
+            raise ManifestError(
+                f"{row.get('command') or f'row {index}'}: missing field(s): "
+                + ", ".join(missing)
+            )
     commands = [row.get("command", "") for row in rows]
     duplicates = sorted(name for name, count in Counter(commands).items() if count > 1)
     if duplicates:
@@ -173,49 +231,81 @@ def validate(
 
     for row in rows:
         command = row["command"]
-        missing = [field for field in FIELDS if not row.get(field)]
-        if missing:
-            raise ManifestError(f"{command or '<unnamed>'}: missing field(s): {', '.join(missing)}")
-        if row["profile_cd_disposition"] not in DISPOSITIONS:
-            raise ManifestError(f"{command}: invalid disposition {row['profile_cd_disposition']}")
+        if row["availability"] not in AVAILABILITY:
+            raise ManifestError(f"{command}: invalid availability {row['availability']}")
+        if row["effective_owner"] not in OWNERS:
+            raise ManifestError(f"{command}: invalid owner {row['effective_owner']}")
         if row["parser_model"] not in PARSER_MODELS:
             raise ManifestError(f"{command}: invalid parser model {row['parser_model']}")
         if row["evidence_state"] not in EVIDENCE_STATES:
             raise ManifestError(f"{command}: invalid evidence state {row['evidence_state']}")
-        if row["implementation_available"] != "yes":
-            raise ManifestError(f"{command}: selected implementation is not available")
+
+        applicability = row["applicability"].split(";")
+        if len(applicability) != len(set(applicability)) or any(
+            item not in APPLICABILITY for item in applicability
+        ):
+            raise ManifestError(f"{command}: absent/invalid applicability")
+        if (row["base_synopsis"] != "-") != ("base" in applicability):
+            raise ManifestError(f"{command}: base synopsis/applicability mismatch")
+        conditional_synopses = _conditional_synopses(row)
+        conditional_options = _conditional_options(row)
+        conditional_tags = {tag for tag, _ in conditional_synopses} | set(conditional_options)
+        if not conditional_tags <= set(applicability):
+            raise ManifestError(f"{command}: conditional applicability is undeclared")
+
+        _validate_synopsis(row)
+        required = set(_option_tokens(command, "mandatory", row["required_options"]))
+        conditional = {token for tokens in conditional_options.values() for token in tokens}
+        gnu = set(_option_tokens(command, "GNU-only", row["gnu_only_options"]))
+        if required & conditional:
+            raise ManifestError(f"{command}: conditional option mixed into mandatory set")
+        if (conditional | gnu) & required or conditional & gnu:
+            raise ManifestError(f"{command}: option applicability sets overlap")
+        _validate_option_arguments(row, required | conditional | gnu)
+
         if not row["clause_ids"].startswith(f"XCU:{command}:"):
             raise ManifestError(f"{command}: clause_ids do not identify its XCU clauses")
         clauses = set(row["clause_ids"].split(":", 2)[2].split(","))
         if clauses != REQUIRED_CLAUSES:
-            missing_clauses = sorted(REQUIRED_CLAUSES - clauses)
-            raise ManifestError(f"{command}: missing clause ID(s): {', '.join(missing_clauses)}")
+            raise ManifestError(
+                f"{command}: missing clause ID(s): "
+                + ", ".join(sorted(REQUIRED_CLAUSES - clauses))
+            )
         evidence = row["evidence_ids"].split(";")
-        expected_posix_evidence = f"{POSIX_EVIDENCE_PREFIX}{command}.html"
-        if (len(evidence) != 2 or evidence[0] != expected_posix_evidence
-                or not evidence[1].startswith("REPO:") or evidence[1] == "REPO:"):
-            raise ManifestError(f"{command}: missing POSIX08-2016 or repository evidence ID")
+        expected_link = f"{POSIX_EVIDENCE_PREFIX}{command}.html"
+        if (
+            len(evidence) != 2 or evidence[0] != expected_link
+            or not evidence[1].startswith("REPO:") or evidence[1] == "REPO:"
+        ):
+            raise ManifestError(
+                f"{command}: missing exact POSIX08-2016 or repository evidence ID"
+            )
 
-        _validate_interface_facts(row)
-        options = set(_tokens(row))
-        _validate_option_arguments(row, options)
-        if not options and row["option_arguments"] != "-":
-            raise ManifestError(f"{command}: option arguments present without options")
-
+        expected_availability = (
+            "external_provider" if command in providers else
+            "shell_only" if command in SHELL_ONLY else "go"
+        )
+        if row["availability"] != expected_availability:
+            raise ManifestError(f"{command}: availability drift")
         expected_owner = (
             "external_provider" if command in providers else
-            "shell" if command in SHELL_SELECTED else "go_applet"
+            "shell" if command in SHELL_SELECTED else "go"
         )
-        if row["profile_cd_disposition"] != expected_owner:
-            raise ManifestError(f"{command}: owner drift: {row['profile_cd_disposition']}; want {expected_owner}")
-        has_go = command in go_packages and command not in providers
-        if row["coreutils_go_applet"] != ("yes" if has_go else "no"):
-            raise ManifestError(f"{command}: Go availability drift")
-        expected_package = f"cmds/{command}" if has_go else ("cmds/posixproviders" if command in providers else "-")
+        if row["effective_owner"] != expected_owner:
+            raise ManifestError(f"{command}: owner drift")
+        expected_package = (
+            f"cmds/{command}" if expected_availability == "go" else
+            "cmds/posixproviders" if command in providers else "-"
+        )
         if row["go_package"] != expected_package:
-            raise ManifestError(f"{command}: package drift: {row['go_package']}; want {expected_package}")
-        if row["shell_provided"] != ("yes" if command in SHELL_SELECTED else "no"):
-            raise ManifestError(f"{command}: shell availability/selection drift")
+            raise ManifestError(f"{command}: package drift; want {expected_package}")
+        expected_source = (
+            f"cmds/{command}" if expected_owner == "go" else
+            f"shell:{command}" if expected_owner == "shell" else
+            f"pkg/posixprovider/manifest.tsv#{command}"
+        )
+        if row["implementation_source"] != expected_source:
+            raise ManifestError(f"{command}: implementation source drift")
 
         model = row["parser_model"]
         if expected_owner == "external_provider" and model != "external":
@@ -223,88 +313,137 @@ def validate(
         if expected_owner == "shell":
             wanted = "shell_keyword" if command == "time" else "shell_builtin"
             if model != wanted:
-                raise ManifestError(f"{command}: shell parser model drift: {model}; want {wanted}")
-        if expected_owner == "go_applet" and model not in {"flagset", "manual", "custom", "none"}:
-            raise ManifestError(f"{command}: Go owner has non-Go parser model {model}")
-        if expected_owner == "go_applet" and options and model == "none":
-            raise ManifestError(f"{command}: required options need an explicit parser model")
-        if expected_owner == "go_applet":
+                raise ManifestError(f"{command}: shell parser model drift; want {wanted}")
+        if expected_owner == "go":
             expected_model = (
                 "custom" if command in CUSTOM_PARSERS else
                 "flagset" if command in flagset_packages else
-                "manual" if options else "none"
+                "manual" if required or conditional else "none"
             )
             if model != expected_model:
-                raise ManifestError(f"{command}: parser model drift: {model}; want {expected_model}")
+                raise ManifestError(f"{command}: parser model drift; want {expected_model}")
 
-    counts = Counter(row["profile_cd_disposition"] for row in rows)
-    expected_counts = Counter({"go_applet": 78, "shell": 22, "external_provider": 16})
-    if counts != expected_counts:
-        raise ManifestError(f"owner denominator drift: {dict(counts)}; want {dict(expected_counts)}")
+    availability_counts = Counter(row["availability"] for row in rows)
+    wanted_availability = Counter({"go": 86, "shell_only": 14, "external_provider": 16})
+    if availability_counts != wanted_availability:
+        raise ManifestError(
+            f"availability axis drift: {dict(availability_counts)}; "
+            f"want {dict(wanted_availability)}"
+        )
+    owner_counts = Counter(row["effective_owner"] for row in rows)
+    wanted_owners = Counter({"go": 78, "shell": 22, "external_provider": 16})
+    if owner_counts != wanted_owners:
+        raise ManifestError(
+            f"effective-selection axis drift: {dict(owner_counts)}; want {dict(wanted_owners)}"
+        )
+
+
+def _display(raw: str) -> str:
+    return "none" if raw == "-" else raw.replace(";", "; ")
+
+
+def _synopsis(row: dict[str, str]) -> str:
+    lines = []
+    if row["base_synopsis"] != "-":
+        lines.extend(row["base_synopsis"].split(" ; "))
+    lines.extend(f"[{tag}] {form}" for tag, form in _conditional_synopses(row))
+    return "\n".join(lines)
 
 
 def render(rows: list[dict[str, str]]) -> str:
-    counts = Counter(row["profile_cd_disposition"] for row in rows)
-    go_available = sum(row["coreutils_go_applet"] == "yes" for row in rows)
+    availability = Counter(row["availability"] for row in rows)
+    owners = Counter(row["effective_owner"] for row in rows)
     lines = [
         "# POSIX-required command interfaces for Profiles C/D", "",
-        "Generated from the canonical machine-readable manifest",
-        "`docs/posix-required-commands.tsv` by `scripts/posix_manifest.py`.", "",
-        "The manifest is limited to the 116 required names configured by the",
-        "VSC-PCTS2016 POSIX08 Commands & Utilities scenario. Its syntax and",
-        "interface fields are curated from POSIX.1 Issue 7, 2016 Edition; the",
-        "generator deliberately never extracts options from help or prose.", "",
-        "## Ownership baseline", "",
-        "| Effective Profile C/D owner | Count |", "| --- | ---: |",
-        f"| Go-selected | {counts['go_applet']} |",
-        f"| Shell-selected | {counts['shell']} |",
-        f"| Pinned external provider | {counts['external_provider']} |",
-        f"| Required names | {len(rows)} |", "",
-        f"There are {go_available} same-name Go implementations available. Eight are",
-        "intentionally shadowed by the shell (`echo`, `false`, `kill`, `printf`,",
-        "`pwd`, `test`, `true`, and the `time` keyword), so availability must not",
-        "be confused with effective ownership.", "",
-        "## TSV contract", "",
-        "`syntax_forms`, `operands`, `environment`, and `required_effects` are",
-        "semicolon-separated normalized interface facts. `required_options` contains",
-        "only explicit option tokens; `option_arguments` maps those tokens to required",
-        "arguments. A single `-` means none. `parser_model` records flag-set, manual,",
-        "custom, shell, keyword, and external parsing explicitly.", "",
-        "`clause_ids` identify applicable XCU sections. `evidence_ids` bind each row",
-        "to the 2016 POSIX page and selected implementation source. `specified` means",
-        "the interface has been recorded, not that behavioral conformance is proved.", "",
-        "Run `python3 scripts/posix_manifest.py --check` to fail on stale generated",
-        "documentation, denominator/owner drift, duplicate or malformed option tokens,",
-        "wrapped synopsis fragments, prose labels in interface facts, and missing or",
-        "command-mismatched clauses or evidence.", "",
-        "## Effective owner index", "",
-        "| Command | Go available | Shell selected | Effective owner | Parser | Evidence state |",
-        "| --- | :---: | :---: | --- | --- | --- |",
+        "Generated from the canonical machine-readable data in",
+        "`docs/posix-required-commands.tsv` by `scripts/posix_manifest.py`.",
+        "The 116 sections below preserve requirement applicability and keep",
+        "mandatory base interfaces separate from XSI, software-development,",
+        "other optional, and GNU-only material.", "",
+        "### Availability axis", "", "| Implementation available | Count |",
+        "| --- | ---: |", f"| Go same-name applet | {availability['go']} |",
+        f"| Shell-only name | {availability['shell_only']} |",
+        f"| Pinned external provider | {availability['external_provider']} |", "",
+        "### Effective Profile C/D selection axis", "",
+        "| Selected implementation | Count |", "| --- | ---: |",
+        f"| Go | {owners['go']} |", f"| Shell | {owners['shell']} |",
+        f"| Pinned external provider | {owners['external_provider']} |", "",
+        "Availability and effective selection are independent: eight available Go",
+        "applets are intentionally shadowed by shell interfaces.", "",
     ]
-    labels = {"go_applet": "Go", "shell": "shell", "external_provider": "pinned provider"}
+    availability_labels = {
+        "go": "Go same-name applet", "shell_only": "shell-only interface",
+        "external_provider": "pinned external provider",
+    }
+    owner_labels = {
+        "go": "Go", "shell": "shell", "external_provider": "pinned external provider"
+    }
     for row in rows:
-        lines.append(
-            f"| `{row['command']}` | {row['coreutils_go_applet']} | {row['shell_provided']} | "
-            f"{labels[row['profile_cd_disposition']]} | `{row['parser_model']}` | "
-            f"`{row['evidence_state']}` |"
+        link = row["evidence_ids"].split(";", 1)[0].split(":", 1)[1]
+        repo_evidence = row["evidence_ids"].split(";", 1)[1]
+        lines.extend([
+            f"## `{row['command']}`", "",
+            f"**Requirement / applicability:** {_display(row['applicability'])}.", "",
+            "**Normative POSIX synopsis:**", "", "```text", _synopsis(row), "```", "",
+            f"**Mandatory base options:** `{_display(row['required_options'])}`.", "",
+            f"**Conditional / optional options:** `{_display(row['conditional_options'])}`.", "",
+            f"**GNU-only material:** `{_display(row['gnu_only_options'])}`.", "",
+            f"**Option arguments:** `{_display(row['option_arguments'])}`.", "",
+            f"**Operands / arity / order:** {_display(row['operands'])}. {row['operand_rules']}", "",
+            f"**Special `-` / `--` / standard input:** {_display(row['special_tokens'])}. {row['stdin']}", "",
+            f"**Environment:** `{_display(row['environment'])}`.", "",
+            f"**Output / effects:** {row['output']} Effects classification: `{row['effects']}`.", "",
+            f"**Diagnostics / status:** {row['diagnostics']} Exit status: {row['exit_status']}", "",
+            f"**Availability:** {availability_labels[row['availability']]}.", "",
+            f"**Effective Profile C/D owner:** {owner_labels[row['effective_owner']]} "
+            f"(`{row['parser_model']}`).", "",
+            f"**Implementation source:** `{row['implementation_source']}`.", "",
+            f"**Tests / evidence / state:** `{row['tests']}`; `{repo_evidence}`; "
+            f"clauses `{row['clause_ids']}`; state `{row['evidence_state']}`.", "",
+            f"**Official Open Group Issue 7/2016 link:** "
+            f"[{row['command']}]({link}).", "",
+        ])
+    return "\n".join(lines)
+
+
+def validate_rendered(rendered: str, rows: list[dict[str, str]]) -> None:
+    headings = re.findall(r"^## `([^`]+)`$", rendered, re.MULTILINE)
+    if len(headings) != 116 or headings != [row["command"] for row in rows]:
+        raise ManifestError(
+            f"per-command heading count/order drifted: {len(headings)}; want 116"
         )
-    return "\n".join(lines) + "\n"
+    sections = re.split(r"^## `[^`]+`$", rendered, flags=re.MULTILINE)[1:]
+    for row, section in zip(rows, sections, strict=True):
+        missing = [label for label in RENDER_LABELS if f"**{label}:**" not in section]
+        if missing:
+            raise ManifestError(
+                f"{row['command']}: generated section missing field(s): {', '.join(missing)}"
+            )
+        expected_link = f"{POSIX_EVIDENCE_PREFIX}{row['command']}.html".split(":", 1)[1]
+        if expected_link not in section:
+            raise ManifestError(f"{row['command']}: generated section missing exact official link")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true", help="validate and fail if the guide is stale")
+    parser.add_argument("--check", action="store_true", help="validate and fail if output is stale")
     args = parser.parse_args()
     rows = read_manifest()
     validate(rows, _provider_names(), _go_packages(), _flagset_packages())
     rendered = render(rows)
+    validate_rendered(rendered, rows)
     if args.check:
-        if not GUIDE.exists() or GUIDE.read_text() != rendered:
-            raise SystemExit("POSIX interface guide is stale; run scripts/posix_manifest.py")
-        print("posix-manifest: PASS (116 names; owners 78 Go / 22 shell / 16 pinned)")
+        if not GUIDE.exists():
+            raise SystemExit(f"required generated document is absent: {GUIDE.name}")
+        if GUIDE.read_text() != rendered:
+            raise SystemExit("POSIX interface document is stale; run scripts/posix_manifest.py")
+        print(
+            "posix-manifest: PASS (116 headings; availability 86 Go / 14 shell-only / "
+            "16 providers; selection 78 Go / 22 shell / 16 providers)"
+        )
         return
     GUIDE.write_text(rendered)
-    print("posix-manifest: wrote docs/posix-required-commands.md")
+    print(f"posix-manifest: wrote {GUIDE.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

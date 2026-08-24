@@ -212,10 +212,10 @@ Certification evidence applies only to the exact staged profile manifest.
 Host fallback must be measured and recorded and never credited as a Bashy Go
 implementation.
 
-The generated current inventory is
-[`posix-required-commands.md`](posix-required-commands.md): 116 configured
-required names, with effective Profile C/D ownership pinned to 78 Go-selected,
-22 shell-selected, and 16 external-provider names. There are 86 same-name Go
+The generated [POSIX required-command interface
+reference](posix-required-command-interfaces.md) covers 116 configured required
+names, with effective Profile C/D ownership pinned to 78 Go-selected, 22
+shell-selected, and 16 external-provider names. There are 86 same-name Go
 implementations available, but the shell wins selection for `echo`, `false`,
 `kill`, `printf`, `pwd`, `test`, `true`, and its `time` keyword as well as the
 14 shell-only names. Availability and effective ownership are separate fields
