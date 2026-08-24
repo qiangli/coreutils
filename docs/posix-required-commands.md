@@ -36,7 +36,8 @@ the interface has been recorded, not that behavioral conformance is proved.
 
 Run `python3 scripts/posix_manifest.py --check` to fail on stale generated
 documentation, denominator/owner drift, duplicate or malformed option tokens,
-and missing clauses or evidence.
+wrapped synopsis fragments, prose labels in interface facts, and missing or
+command-mismatched clauses or evidence.
 
 ## Effective owner index
 

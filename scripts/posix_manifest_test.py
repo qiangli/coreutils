@@ -61,6 +61,22 @@ class ManifestValidationTest(unittest.TestCase):
             "missing POSIX08-2016 or repository evidence ID",
         )
 
+    def test_wrong_command_evidence_fails(self) -> None:
+        row = next(item for item in self.rows if item["command"] == "true")
+        self.assertRejected(
+            self.changed("true", evidence_ids=row["evidence_ids"].replace("true.html", "false.html")),
+            "missing POSIX08-2016 or repository evidence ID",
+        )
+
+    def test_wrapped_synopsis_is_not_a_syntax_form(self) -> None:
+        self.assertRejected(
+            self.changed("awk", syntax_forms="awk program ; [argument...]"),
+            "syntax continuation recorded as a form",
+        )
+
+    def test_prose_label_is_not_an_interface_fact(self) -> None:
+        self.assertRejected(self.changed("wait", operands="pid;Note:"), "prose label in operands")
+
     def test_manual_parser_is_explicit(self) -> None:
         manual = {row["command"] for row in self.rows if row["parser_model"] in {"manual", "custom"}}
         self.assertTrue({"awk", "dd", "find", "sed", "stty"} <= manual)

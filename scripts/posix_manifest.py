@@ -59,6 +59,10 @@ REQUIRED_CLAUSES = {
     "INPUT_FILES", "STDOUT", "STDERR", "OUTPUT_FILES", "EXIT_STATUS",
     "CONSEQUENCES_OF_ERRORS",
 }
+POSIX_EVIDENCE_PREFIX = (
+    "POSIX08-2016:https://pubs.opengroup.org/onlinepubs/"
+    "9699919799.2016edition/utilities/"
+)
 
 
 class ManifestError(ValueError):
@@ -127,6 +131,22 @@ def _validate_option_arguments(row: dict[str, str], options: set[str]) -> None:
         seen.add(option)
 
 
+def _validate_interface_facts(row: dict[str, str]) -> None:
+    command = row["command"]
+    forms = row["syntax_forms"].split(" ; ")
+    if any(not form.strip() for form in forms):
+        raise ManifestError(f"{command}: empty syntax form")
+    # Each semicolon denotes a distinct POSIX synopsis, not a visual line wrap.
+    # The alternate `test` invocation uses `[` as its command token.
+    for form in forms:
+        if command not in form.split() and not (command == "test" and form.startswith("[ [")):
+            raise ManifestError(f"{command}: syntax continuation recorded as a form: {form}")
+
+    for field in ("operands", "environment", "required_effects"):
+        if any(item.endswith(":") for item in row[field].split(";")):
+            raise ManifestError(f"{command}: prose label in {field}")
+
+
 def validate(
     rows: list[dict[str, str]],
     providers: set[str],
@@ -171,10 +191,12 @@ def validate(
             missing_clauses = sorted(REQUIRED_CLAUSES - clauses)
             raise ManifestError(f"{command}: missing clause ID(s): {', '.join(missing_clauses)}")
         evidence = row["evidence_ids"].split(";")
-        if (len(evidence) != 2 or not evidence[0].startswith("POSIX08-2016:https://")
+        expected_posix_evidence = f"{POSIX_EVIDENCE_PREFIX}{command}.html"
+        if (len(evidence) != 2 or evidence[0] != expected_posix_evidence
                 or not evidence[1].startswith("REPO:") or evidence[1] == "REPO:"):
             raise ManifestError(f"{command}: missing POSIX08-2016 or repository evidence ID")
 
+        _validate_interface_facts(row)
         options = set(_tokens(row))
         _validate_option_arguments(row, options)
         if not options and row["option_arguments"] != "-":
@@ -253,7 +275,8 @@ def render(rows: list[dict[str, str]]) -> str:
         "the interface has been recorded, not that behavioral conformance is proved.", "",
         "Run `python3 scripts/posix_manifest.py --check` to fail on stale generated",
         "documentation, denominator/owner drift, duplicate or malformed option tokens,",
-        "and missing clauses or evidence.", "",
+        "wrapped synopsis fragments, prose labels in interface facts, and missing or",
+        "command-mismatched clauses or evidence.", "",
         "## Effective owner index", "",
         "| Command | Go available | Shell selected | Effective owner | Parser | Evidence state |",
         "| --- | :---: | :---: | --- | --- | --- |",
