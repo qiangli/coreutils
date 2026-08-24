@@ -258,7 +258,7 @@ case "$cmd" in
     # LC_COLLATE, LC_TIME, LC_NUMERIC and LC_MONETARY that are BYTE-IDENTICAL to
     # the host localedef's output for the same source, and the host libc loads
     # them. That equality is the whole reason to pin 2.39 rather than "latest".
-    need patch
+    need git
     _h=$work/ldef-$version
     _pd=$work/ldef-patches-$version
     rm -rf "$_h"; mkdir -p "$_h" "$_pd"
@@ -274,7 +274,11 @@ case "$cmd" in
     while read -r _pf _psha; do
       [ -n "$_pf" ] || continue
       fetch_verified "$_oebase/$_pf" "$_psha" "$_pd/$_pf"
-      (cd "$src" && patch -p1 --forward --silent < "$_pd/$_pf") ||
+      # POSIX patch(1) selects the old /dev/null name for git-format file
+      # creation hunks. GNU patch's friendlier second-name heuristic is
+      # intentionally disabled by POSIXLY_CORRECT, so use git's native patch
+      # reader while retaining the global POSIX environment for the process.
+      (cd "$src" && git apply --check "$_pd/$_pf" && git apply "$_pd/$_pf") ||
         fail "localedef: patch $_pf did not apply to glibc $version"
     done <<'PATCHES'
 0001-localedef-Add-hardlink-resolver-from-util-linux.patch e77e2e527674ab7cadecbe503388e718dc6e4e95c925627b5214c9f5ce6aeb92
