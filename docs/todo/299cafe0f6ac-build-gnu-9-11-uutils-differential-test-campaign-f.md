@@ -1,14 +1,20 @@
 ---
 id: 299cafe0f6ac
 kind: task
-title: Build GNU 9.11/uutils differential test campaign for Bashy utilities
+title: DEFERRED — GNU 9.11/uutils differential campaign
 seq: 1
-status: assigned
+status: todo
 priority: p1
 created: 2026-08-07T04:46:05.852041Z
 weave: 251
 assignee: qiangli
 ---
+
+Deferred by the 2026-08-24 Sprint 79 scope decision. Complete GNU Coreutils
+9.11 compatibility is no longer an active sprint gate; Sprint 79 now closes
+the configured 116-command POSIX interface. Do not restart or assign this task
+until a future GNU-extension campaign is explicitly authorized. Historical
+Weave run #251 and the original scope below are retained for provenance.
 
 Scope note (2026-08-22): this task is the GNU/uutils differential harness
 track, not the Profile B provider definition and not an implementation task for

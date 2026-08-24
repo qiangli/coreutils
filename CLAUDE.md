@@ -32,8 +32,9 @@ non-Coreutils commands such as `ps` use their own official upstream reference.
    directly, exactly as the GNU binary does — see docs/commands.md's
    NO-list preamble. The **POSIX external providers** are the second,
    narrower exception and are explicitly not Go implementations: the
-   multicall owns twelve POSIX-required names (make, bc, patch, m4, ed,
-   man, ctags, ar, nm, strip, ex, vi) and dispatches to a locally built,
+   multicall owns sixteen POSIX-required names (make, bc, patch, m4, ed,
+   man, ctags, ar, nm, strip, ex, vi, lp, mailx, localedef, talk) and
+   dispatches to a locally built,
    provenance-checked copy of the upstream program. They exist so a
    "bashy-only" certification arm stops silently measuring the host's
    `$PATH` — see docs/posix-external-providers.md.

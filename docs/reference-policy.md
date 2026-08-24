@@ -41,15 +41,13 @@ Use these authorities in order:
 | Pinned external providers: `make`, `bc`, `patch`, `m4`, `ed`, `man`, `ctags`, `ar`, `nm`, `strip`, `ex`, `vi`, `lp`, `mailx`, `localedef`, and `talk` | POSIX.1 Issue 7, 2016 Edition | The exact upstream project, version, artifact, and digest in [`pkg/posixprovider/manifest.tsv`](../pkg/posixprovider/manifest.tsv) |
 | Bashy/AgentOS-only commands | Not applicable unless explicitly documented | The command's repository-owned contract and tests; no POSIX or GNU compatibility is implied |
 
-## GNU Coreutils 9.11 compatibility target
+## Deferred GNU Coreutils 9.11 compatibility objective
 
-For every advertised command that GNU Coreutils ships, the project target is
-behavioral compatibility with **GNU Coreutils 9.11**. This is the userland
-counterpart to Bashy's GNU Bash 5.3 compatibility target. It includes the
-documented option and operand surface, defaults, option interactions, output,
-diagnostics, exit status, environment handling, and filesystem effects. In
-POSIX mode, the POSIX rules described above remain the higher-priority branch
-of that behavior.
+Complete behavioral compatibility with **GNU Coreutils 9.11** is deferred to a
+future campaign. It is not an active Sprint 79 requirement and is not a
+prerequisite for POSIX certification. Existing supported GNU extensions still
+use the GNU 9.11 manual/runtime as their authority and must not regress or be
+silently approximated.
 
 This target is not a present-tense blanket conformance claim. Documentation
 must distinguish among:
@@ -60,12 +58,12 @@ must distinguish among:
 - **verified compatible** — the complete applicable 9.11 interface has passed
   the repository's focused, differential, and cross-platform gates.
 
-Until the final level has evidence, describe the repository as “pursuing GNU
-Coreutils 9.11 compatibility” or “GNU Coreutils 9.11-compatible where
-implemented,” not as a complete GNU Coreutils 9.11 replacement. VSC-PCTS proves
-the POSIX certification surface; by itself it cannot establish GNU extension
-compatibility. The target does not apply to commands GNU Coreutils does not
-ship.
+Until a future campaign supplies complete evidence, describe the repository as
+“GNU Coreutils 9.11-compatible where implemented,” not as pursuing or providing
+a complete GNU Coreutils 9.11 replacement. VSC-PCTS proves the POSIX
+certification surface; by itself it cannot establish GNU extension
+compatibility. This deferred objective does not apply to commands GNU
+Coreutils does not ship.
 
 The [generated applet matrix](applet-matrix.md) identifies the family of each
 advertised name. “GNU Coreutils” in that matrix means that the command belongs
