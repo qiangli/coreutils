@@ -44,6 +44,7 @@ resulting evidence applies to the exact staged profile and provider manifest,
 not to this repository alone. An applet appearing in the command list means its
 documented supported subset is implemented and tested; it does not by itself
 claim full POSIX or GNU option coverage. See
+[the command behavior reference policy](docs/reference-policy.md),
 [the portable-userland and provider policy](docs/commands.md#portable-userland-and-certification-provider-policy)
 and the generated [applet matrix](docs/applet-matrix.md).
 
@@ -53,9 +54,14 @@ Every tool in this repo follows the same rules:
 
 - **Deterministic output.** `LC_ALL=C` semantics always; no locale,
   color, or terminal-width variance by default.
-- **GNU-compatible where implemented.** Behavior follows the
-  [GNU coreutils manual](https://www.gnu.org/software/coreutils/manual/)
-  and POSIX — implemented from the documentation (or adapted from
+- **Reference-compatible where implemented.** POSIX certification behavior
+  follows POSIX. Commands that belong to GNU Coreutils use the GNU Coreutils
+  9.11 manual and runtime: full behavioral compatibility with 9.11 is the
+  project target, while the current claim remains compatibility for the
+  documented and tested subset. Other commands use their own documented
+  upstream family. See the
+  [reference policy](docs/reference-policy.md). Behavior is implemented from
+  documentation (or adapted from
   permissively-licensed reimplementations, see
   `THIRD_PARTY_LICENSES.md`), never from GPL sources. A supported flag
   means exactly what the upstream documentation says — same spelling,

@@ -12,7 +12,13 @@ load-bearing case is Windows hosts with nothing installed. It is a library
 first: consumers embed packages directly (bashy, outpost, ycode); the
 busybox-style multicall binary (`cmd/coreutils`) is secondary.
 
-This repo is OSS (MIT) and is consumed by other OSS repos. Two hard rules:
+This repo is OSS (MIT) and is consumed by other OSS repos. Three hard rules:
+
+The authoritative hierarchy for deciding command behavior is
+[`docs/reference-policy.md`](docs/reference-policy.md). In particular, POSIX.1
+Issue 7 (2016 Edition) controls certification behavior, GNU Coreutils 9.11
+controls extensions only for commands that GNU Coreutils actually ships, and
+non-Coreutils commands such as `ps` use their own official upstream reference.
 
 1. **Never port GNU source.** GNU coreutils is GPLv3. Implement behavior
    from the GNU manual / POSIX documentation, or adapt code from the

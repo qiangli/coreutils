@@ -6,6 +6,8 @@ Generated from the current `cmds/all` registration tree; `chroot` and
 
 ## Interpretation
 
+- Command-family labels select the authorities defined by the
+  [command behavior reference policy](reference-policy.md).
 - **GNU Coreutils** means the name belongs to GNU Coreutils' all-known
   command inventory. It does not claim complete GNU option parity.
 - **POSIX cert required** means the configured VSC-PCTS2016 POSIX08

@@ -1,8 +1,11 @@
 # Command plan
 
-The canonical supported / not-supported inventory, derived from the
-[GNU coreutils manual](https://www.gnu.org/software/coreutils/manual/coreutils.txt)
-command list plus the agent-critical extensions. Three rules frame
+The canonical supported / not-supported inventory, derived from the GNU
+Coreutils command list plus POSIX, Unix, and agent-critical extensions. The
+[command behavior reference policy](reference-policy.md) is authoritative:
+GNU Coreutils 9.11 applies only to commands that GNU Coreutils ships; POSIX
+certification behavior and non-Coreutils command families use their specified
+references. Three rules frame
 every entry (see CLAUDE.md): implemented commands follow the official
 documentation exactly (flags/options/arguments keep their upstream
 meaning — the only other state is a clear "not supported" error),
