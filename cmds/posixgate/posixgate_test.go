@@ -7,6 +7,7 @@
 package posixgatecmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -26,32 +27,105 @@ import (
 // the spec: the yardstick itself
 // ---------------------------------------------------------------------------
 
-// TestSpecMatchesDocsInventory pins the embedded copy to the generated
-// canonical inventory byte for byte. scripts/applet-matrix.py writes both;
-// this is the in-Go tripwire for a hand edit to either.
-func TestSpecMatchesDocsInventory(t *testing.T) {
-	canonical, err := os.ReadFile(filepath.Join("..", "..", "docs", "posix-required-commands.tsv"))
+// TestSpecMatchesCanonicalManifest re-derives the projection from the
+// canonical expanded POSIX manifest and compares it against the generated
+// specRows. scripts/applet-matrix.py owns both; this is the in-Go tripwire
+// for a hand edit to either. The overlap sets restated here are the test's
+// independent expectation of the availability→effective projection.
+func TestSpecMatchesCanonicalManifest(t *testing.T) {
+	f, err := os.Open(filepath.Join("..", "..", "docs", "posix-required-commands.tsv"))
 	if err != nil {
-		t.Fatalf("cannot read the canonical inventory: %v", err)
+		t.Fatalf("cannot read the canonical manifest: %v", err)
 	}
-	if string(canonical) != specTSV {
-		t.Error("embedded posix-required-commands.tsv differs from docs/posix-required-commands.tsv; regenerate with scripts/applet-matrix.py")
+	defer f.Close()
+
+	overlapBuiltin := map[string]bool{
+		"echo": true, "false": true, "kill": true, "printf": true,
+		"pwd": true, "test": true, "true": true,
+	}
+	var want []specRow
+	sc := bufio.NewScanner(f)
+	line := 0
+	for sc.Scan() {
+		line++
+		if line == 1 {
+			if got := sc.Text(); got != "command\tcoreutils_go_applet\tgo_package\tshell_provided\tprofile_cd_disposition" {
+				t.Fatalf("canonical manifest header changed: %q", got)
+			}
+			continue
+		}
+		fields := strings.Split(strings.TrimRight(sc.Text(), "\r"), "\t")
+		if len(fields) != 5 {
+			t.Fatalf("canonical manifest line %d: %d columns", line, len(fields))
+		}
+		r := specRow{Command: fields[0], GoPackage: fields[2]}
+		switch fields[4] {
+		case "go_applet":
+			r.Owner = OwnerGoApplet
+			switch {
+			case overlapBuiltin[r.Command]:
+				r.Effective = SelShellBuiltin
+			case r.Command == "time":
+				r.Effective = SelShellKeyword
+			default:
+				r.Effective = SelGoApplet
+			}
+		case "shell":
+			r.Owner = OwnerShell
+			if r.Command == "sh" {
+				r.Effective = SelShellEntry
+			} else {
+				r.Effective = SelShellBuiltin
+			}
+		case "external_provider":
+			r.Owner, r.Effective = OwnerProvider, SelProvider
+		default:
+			t.Fatalf("canonical manifest line %d: unknown disposition %q", line, fields[4])
+		}
+		want = append(want, r)
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(want) != len(specRows) {
+		t.Fatalf("generated projection has %d rows, canonical manifest %d", len(specRows), len(want))
+	}
+	for i, w := range want {
+		if specRows[i] != w {
+			t.Errorf("row %d: generated %+v, canonical projects %+v; regenerate with scripts/applet-matrix.py", i, specRows[i], w)
+		}
 	}
 }
 
+// TestSpecPinnedCounts pins BOTH axes: availability 86/14/16 and effective
+// selection 78/22/16.
 func TestSpecPinnedCounts(t *testing.T) {
 	spec, err := loadSpec()
 	if err != nil {
 		t.Fatal(err)
 	}
-	counts := map[Owner]int{}
+	avail := map[Owner]int{}
+	effGo, effShell, effProv := 0, 0, 0
 	for _, r := range spec {
-		counts[r.Owner]++
+		avail[r.Owner]++
+		switch r.Effective {
+		case SelGoApplet:
+			effGo++
+		case SelShellEntry, SelShellBuiltin, SelShellKeyword:
+			effShell++
+		case SelProvider:
+			effProv++
+		}
 	}
-	if len(spec) != pinTotal || counts[OwnerGoApplet] != pinGoApplets ||
-		counts[OwnerShell] != pinShell || counts[OwnerProvider] != pinProviders {
-		t.Errorf("spec shape = %d total %v, pinned %d/%d/%d/%d",
-			len(spec), counts, pinTotal, pinGoApplets, pinShell, pinProviders)
+	if len(spec) != 116 || avail[OwnerGoApplet] != 86 || avail[OwnerShell] != 14 || avail[OwnerProvider] != 16 {
+		t.Errorf("availability = %d total %v, want 116 split 86/14/16", len(spec), avail)
+	}
+	if effGo != 78 || effShell != 22 || effProv != 16 {
+		t.Errorf("effective selection = %d/%d/%d, want 78/22/16", effGo, effShell, effProv)
+	}
+	if pinTotal != 116 || pinAvailGoApplets != 86 || pinAvailShell != 14 || pinProviders != 16 ||
+		pinEffectiveGoApplets != 78 || pinEffectiveShell != 22 {
+		t.Error("pin constants drifted from the documented 116 = 86/14/16 availability, 78/22/16 effective")
 	}
 }
 
@@ -69,25 +143,33 @@ func TestSpecProvidersMatchManifest(t *testing.T) {
 	}
 }
 
-func TestParseSpecRejectsMalformedInventories(t *testing.T) {
-	header := "command\tcoreutils_go_applet\tgo_package\tshell_provided\tprofile_cd_disposition\n"
+func TestValidateSpecRejectsCorruptProjections(t *testing.T) {
+	row := func(cmd string, o Owner, e Selector) specRow {
+		return specRow{Command: cmd, GoPackage: "cmds/" + cmd, Owner: o, Effective: e}
+	}
 	cases := []struct {
-		name, text, want string
+		name string
+		rows []specRow
+		want string
 	}{
-		{"duplicate", header + "cat\tyes\tcmds/cat\tno\tgo_applet\ncat\tyes\tcmds/cat\tno\tgo_applet\n", "duplicate"},
-		{"unknown disposition", header + "cat\tyes\tcmds/cat\tno\thost_binary\n", "unknown disposition"},
-		{"wrong columns", header + "cat\tyes\tgo_applet\n", "5 tab-separated columns"},
-		{"bad header", "name\tb\tc\td\te\ncat\tyes\tcmds/cat\tno\tgo_applet\n", "unrecognized header"},
-		{"empty", header, "empty"},
+		{"empty", nil, "empty"},
+		{"empty command", []specRow{row("", OwnerGoApplet, SelGoApplet)}, "empty command"},
+		{"duplicate", []specRow{row("cat", OwnerGoApplet, SelGoApplet), row("cat", OwnerGoApplet, SelGoApplet)}, "twice"},
+		{"unknown owner", []specRow{row("cat", Owner("host_binary"), SelGoApplet)}, "unknown availability owner"},
+		{"unknown selector", []specRow{row("cat", OwnerGoApplet, Selector("magic"))}, "unknown effective selector"},
+		{"provider selecting applet", []specRow{row("make", OwnerProvider, SelGoApplet)}, "cannot exist"},
+		{"shell name as entry", []specRow{row("cd", OwnerShell, SelShellEntry)}, "cannot exist"},
+		{"sh as builtin", []specRow{row("sh", OwnerShell, SelShellBuiltin)}, "cannot exist"},
+		{"shell owner selecting applet", []specRow{row("cd", OwnerShell, SelGoApplet)}, "cannot exist"},
 	}
 	for _, c := range cases {
-		if _, err := parseSpec(c.text); err == nil || !strings.Contains(err.Error(), c.want) {
+		if err := validateSpec(c.rows); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want mention of %q", c.name, err, c.want)
 		}
 	}
 }
 
-// TestExpectedShellClasses pins the effective-owner classification the runtime
+// TestExpectedShellClasses pins the effective classification the runtime
 // gate demands, including every builtin overlap and the time keyword.
 func TestExpectedShellClasses(t *testing.T) {
 	want := map[string]string{
@@ -124,7 +206,8 @@ func TestExpectedShellClasses(t *testing.T) {
 		}
 	}
 	// 7 builtin overlaps + the time keyword, and not one more: an eighth would
-	// mean a shell builtin silently took over an applet-owned name.
+	// mean a shell builtin silently took over an applet-owned name. This is
+	// the entire 86→78 availability→effective difference.
 	if overlapSeen != 8 {
 		t.Errorf("go_applet names with a non-file effective class = %d, want 8", overlapSeen)
 	}
@@ -152,6 +235,22 @@ func TestVerifyInventoryRejectsDrift(t *testing.T) {
 	fs := verifyInventory(spec[:len(spec)-1], posixprovider.Names())
 	if !findingsHave(fs, "count-drift", "", "pinned") {
 		t.Errorf("dropped name produced no count-drift finding: %v", fs)
+	}
+	// Effective drift with availability intact: an applet-owned name whose
+	// selector flips to shell_builtin (an eighth overlap) keeps 86/14/16 but
+	// breaks 78/22 — the effective pins must catch it on their own.
+	shifted := make([]specRow, len(spec))
+	copy(shifted, spec)
+	for i, r := range shifted {
+		if r.Owner == OwnerGoApplet && r.Effective == SelGoApplet {
+			shifted[i].Effective = SelShellBuiltin
+			break
+		}
+	}
+	fs = verifyInventory(shifted, posixprovider.Names())
+	if !findingsHave(fs, "count-drift", "", "effective go-applet count is 77") ||
+		!findingsHave(fs, "count-drift", "", "effective shell count is 23") {
+		t.Errorf("effective-selection drift not rejected: %v", fs)
 	}
 	// Manifest pins a name the inventory does not list, and vice versa.
 	fs = verifyInventory(spec, append(posixprovider.Names(), "cpio"))
@@ -265,6 +364,14 @@ func TestVerifyRegistryFailsClosedOnPartialUserland(t *testing.T) {
 	}
 }
 
+// TestVerifyRegistryRejectsOptOut: the opt-out value observed in the
+// environment is a rejection in itself — never a skip, never a downgrade.
+func TestVerifyRegistryRejectsOptOut(t *testing.T) {
+	if fs := VerifyRegistry("off"); !findingsHave(fs, "opt-out", "", "BASHY_POSIX_PROVIDERS") {
+		t.Errorf("opt-out value did not produce the opt-out rejection: %v", fs)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // provider gate
 // ---------------------------------------------------------------------------
@@ -348,20 +455,45 @@ func TestVerifyProviders(t *testing.T) {
 // runtime gate
 // ---------------------------------------------------------------------------
 
-// stageBindir builds a staged tool directory holding an executable entry for
-// every PATH-owned name.
-func stageBindir(t *testing.T, spec []specRow) string {
+// Distinct staged contents: every multicall-owned entry carries the approved
+// multicall's bytes (identity is digest equality, so copies and symlinks are
+// equally valid staging); the shell is its own executable; the host tool is
+// what a bypass would smuggle in.
+const (
+	multicallBody = "#!/bin/sh\n# staged approved multicall\nexit 0\n"
+	shellBody     = "#!/bin/sh\n# staged profile shell\nexit 0\n"
+	hostToolBody  = "#!/bin/sh\n# arbitrary host /bin tool\nexit 0\n"
+)
+
+const approvedBashLine = "GNU bash, version 5.2.32(1)-release (x86_64-pc-linux-gnu)"
+
+// stageRuntime builds a staged tool directory: the approved multicall, a copy
+// of it under every multicall-owned name, and the shell as its own file.
+// Returns the bindir and the approved multicall's path.
+func stageRuntime(t *testing.T, spec []specRow) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
+	multicall := filepath.Join(dir, "coreutils")
+	if err := os.WriteFile(multicall, []byte(multicallBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, r := range spec {
 		if !pathOwned(r) {
 			continue
 		}
-		if err := os.WriteFile(filepath.Join(dir, r.Command), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		body := multicallBody
+		if r.Command == "sh" {
+			body = shellBody
+		}
+		if err := os.WriteFile(filepath.Join(dir, r.Command), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return dir
+	return dir, multicall
+}
+
+func runtimeCfg(bindir, multicall string) runtimeConfig {
+	return runtimeConfig{shellName: "sh", binDir: bindir, multicall: multicall}
 }
 
 func runtimeRC(t *testing.T, env ...string) *tool.RunContext {
@@ -379,36 +511,57 @@ func runtimeRC(t *testing.T, env ...string) *tool.RunContext {
 	}
 }
 
-// fakeShell answers the gate's four probes the way a healthy staged POSIX-mode
-// shell would, with per-test overrides for the classification table.
-func fakeShell(t *testing.T, spec []specRow, classOverride map[string]string, posixOn bool, childHasVar bool) func(*tool.RunContext, string, ...string) (string, error) {
+// shellSim configures the fake staged shell: what it reports for --version,
+// how it classifies names, whether posix mode is on, and whether the exec'd
+// grandchild sees POSIXLY_CORRECT. transcriptEdit lets adversarial tests
+// mutate the raw classification transcript.
+type shellSim struct {
+	versionLine    string
+	classOverride  map[string]string
+	posixOn        bool
+	childHasVar    bool
+	transcriptEdit func([]string) []string
+}
+
+func healthySim() shellSim {
+	return shellSim{versionLine: approvedBashLine, posixOn: true, childHasVar: true}
+}
+
+// fakeShell answers the gate's probes the way the simulated shell would.
+func fakeShell(t *testing.T, spec []specRow, sim shellSim) func(*tool.RunContext, string, ...string) (string, error) {
 	t.Helper()
 	return func(rc *tool.RunContext, shell string, args ...string) (string, error) {
+		if len(args) == 1 && args[0] == "--version" {
+			return sim.versionLine + "\n", nil
+		}
 		if len(args) < 2 || args[0] != "-c" {
 			t.Fatalf("unexpected shell invocation: %v", args)
 		}
 		switch script := args[1]; {
 		case script == classifyScript:
-			var b strings.Builder
 			classes := map[string]string{}
 			for _, r := range spec {
 				classes[r.Command] = expectedShellClass(r)
 			}
-			maps.Copy(classes, classOverride)
+			maps.Copy(classes, sim.classOverride)
+			var lines []string
 			for _, n := range args[3:] { // args[2] is $0
-				fmt.Fprintf(&b, "%s %s\n", n, classes[n])
+				lines = append(lines, n+" "+classes[n])
 			}
-			return b.String(), nil
+			if sim.transcriptEdit != nil {
+				lines = sim.transcriptEdit(lines)
+			}
+			return strings.Join(lines, "\n") + "\n", nil
 		case script == "set -o":
 			state := "on"
-			if !posixOn {
+			if !sim.posixOn {
 				state = "off"
 			}
 			return "noexec         off\nposix          " + state + "\nverbose        off\n", nil
 		case strings.Contains(script, "$POSIXLY_CORRECT"):
 			return rc.Getenv("POSIXLY_CORRECT") + "\n", nil
 		case script == "exec env":
-			if childHasVar {
+			if sim.childHasVar {
 				// Real bash rewrites the exported value to "y" on entering
 				// posix mode; the gate must accept any non-empty value.
 				return "PATH=" + rc.Getenv("PATH") + "\nPOSIXLY_CORRECT=y\n", nil
@@ -433,12 +586,20 @@ func TestRuntimeGatePasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindir := stageBindir(t, spec)
+	bindir, multicall := stageRuntime(t, spec)
 	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
-	withFakeShell(t, fakeShell(t, spec, nil, true, true))
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
 
-	if fs := verifyRuntime(rc, spec, runtimeConfig{shell: filepath.Join(bindir, "sh"), binDir: bindir}); len(fs) != 0 {
+	if fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall)); len(fs) != 0 {
 		t.Errorf("healthy staged runtime rejected: %v", fs)
+	}
+
+	// The externally pinned digest, when given, must accept the real one.
+	sum := sha256.Sum256([]byte(multicallBody))
+	cfg := runtimeCfg(bindir, multicall)
+	cfg.multicallSHA = strings.ToUpper(hex.EncodeToString(sum[:])) // case-insensitive
+	if fs := verifyRuntime(rc, spec, cfg); len(fs) != 0 {
+		t.Errorf("healthy runtime with matching pinned digest rejected: %v", fs)
 	}
 }
 
@@ -447,15 +608,15 @@ func TestRuntimeGateRejectsHostPathFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindir := stageBindir(t, spec)
+	bindir, multicall := stageRuntime(t, spec)
 	hostdir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(hostdir, "sed"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(hostdir, "sed"), []byte(hostToolBody), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rc := runtimeRC(t, "PATH="+hostdir+string(os.PathListSeparator)+bindir, "POSIXLY_CORRECT=1")
-	withFakeShell(t, fakeShell(t, spec, nil, true, true))
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
 
-	fs := verifyRuntime(rc, spec, runtimeConfig{shell: filepath.Join(bindir, "sh"), binDir: bindir})
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
 	if !findingsHave(fs, "path-owner", "sed", "host PATH fallback") {
 		t.Errorf("host-shadowed sed not rejected: %v", fs)
 	}
@@ -466,16 +627,158 @@ func TestRuntimeGateRejectsUnresolvableName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindir := stageBindir(t, spec)
+	bindir, multicall := stageRuntime(t, spec)
 	if err := os.Remove(filepath.Join(bindir, "make")); err != nil {
 		t.Fatal(err)
 	}
 	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
-	withFakeShell(t, fakeShell(t, spec, nil, true, true))
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
 
-	fs := verifyRuntime(rc, spec, runtimeConfig{shell: filepath.Join(bindir, "sh"), binDir: bindir})
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
 	if !findingsHave(fs, "path-owner", "make", "not resolvable") {
 		t.Errorf("missing staged make not rejected: %v", fs)
+	}
+}
+
+// TestRuntimeGateRejectsStagedSymlinkToHostTool: the central identity bypass —
+// an entry INSIDE the staged directory that is a symlink to an arbitrary host
+// tool. Directory membership passes; digest identity must not.
+func TestRuntimeGateRejectsStagedSymlinkToHostTool(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindir, multicall := stageRuntime(t, spec)
+	hostTool := filepath.Join(t.TempDir(), "ls")
+	if err := os.WriteFile(hostTool, []byte(hostToolBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(bindir, "ls")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(hostTool, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
+
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+	if !findingsHave(fs, "exec-identity", "ls", "not the approved multicall") {
+		t.Errorf("staged symlink to a host tool not rejected: %v", fs)
+	}
+}
+
+// TestRuntimeGateRejectsForeignExecutableInBindir: same bypass without the
+// symlink — a foreign binary copied over a staged name (runs on every
+// platform, symlinks or not).
+func TestRuntimeGateRejectsForeignExecutableInBindir(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindir, multicall := stageRuntime(t, spec)
+	if err := os.WriteFile(filepath.Join(bindir, "awk"), []byte(hostToolBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
+
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+	if !findingsHave(fs, "exec-identity", "awk", "not the approved multicall") {
+		t.Errorf("foreign executable under a staged name not rejected: %v", fs)
+	}
+}
+
+func TestRuntimeGateRejectsUnapprovedMulticall(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindir, multicall := stageRuntime(t, spec)
+	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
+
+	// The named multicall does not exist: identity cannot be established.
+	cfg := runtimeCfg(bindir, filepath.Join(bindir, "no-such-multicall"))
+	if fs := verifyRuntime(rc, spec, cfg); !findingsHave(fs, "approved-multicall", "", "not a file") {
+		t.Errorf("missing approved multicall not rejected: %v", fs)
+	}
+
+	// The externally pinned digest disagrees with the staged binary.
+	cfg = runtimeCfg(bindir, multicall)
+	cfg.multicallSHA = strings.Repeat("0", 64)
+	if fs := verifyRuntime(rc, spec, cfg); !findingsHave(fs, "approved-multicall", "", "not the approved digest") {
+		t.Errorf("digest-mismatched multicall not rejected: %v", fs)
+	}
+}
+
+func TestRuntimeGateRejectsHostPathShell(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindir, multicall := stageRuntime(t, spec)
+	hostdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hostdir, "sh"), []byte(hostToolBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rc := runtimeRC(t, "PATH="+hostdir+string(os.PathListSeparator)+bindir, "POSIXLY_CORRECT=1")
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
+
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+	if !findingsHave(fs, "shell-path", "sh", "host PATH shell") {
+		t.Errorf("shell resolved from the host PATH not rejected: %v", fs)
+	}
+
+	// No shell anywhere on the staged PATH: also a rejection, never a probe of
+	// some implicit fallback.
+	if err := os.Remove(filepath.Join(bindir, "sh")); err != nil {
+		t.Fatal(err)
+	}
+	rc = runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+	fs = verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+	if !findingsHave(fs, "shell-path", "sh", "not resolvable") {
+		t.Errorf("unresolvable shell not rejected: %v", fs)
+	}
+}
+
+func TestRuntimeGateRejectsUnapprovedShellIdentity(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, line, want string
+	}{
+		{"foreign shell", "zsh 5.9 (x86_64-apple-darwin24.0)", "does not identify an approved"},
+		{"garbage", "hello world", "does not identify an approved"},
+		{"empty", "", "does not identify an approved"},
+		{"bash 4", "GNU bash, version 4.4.20(1)-release (x86_64-pc-linux-gnu)", "require a bash-5-family shell"},
+		{"blank build", "GNU bash, version 5.2.32(1)-release ( )", "no build identifier"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bindir, multicall := stageRuntime(t, spec)
+			rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+			sim := healthySim()
+			sim.versionLine = c.line
+			withFakeShell(t, fakeShell(t, spec, sim))
+			fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+			if !findingsHave(fs, "shell-identity", "", c.want) {
+				t.Errorf("version line %q not rejected with %q: %v", c.line, c.want, fs)
+			}
+		})
+	}
+
+	// The approved bashy line must pass (Profile D).
+	bindir, multicall := stageRuntime(t, spec)
+	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+	sim := healthySim()
+	sim.versionLine = "bashy, GNU Bash 5.3 compatible, version 5.3.0(1)-bashy-dev (a0a0315)"
+	withFakeShell(t, fakeShell(t, spec, sim))
+	if fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall)); len(fs) != 0 {
+		t.Errorf("approved bashy identity rejected: %v", fs)
 	}
 }
 
@@ -484,13 +787,15 @@ func TestRuntimeGateRejectsWrongEffectiveOwnerInShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindir := stageBindir(t, spec)
+	bindir, multicall := stageRuntime(t, spec)
 	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
 	// time coming back as a file means the keyword is not the effective owner;
 	// cd coming back as a file means the shell lost a builtin to the PATH.
-	withFakeShell(t, fakeShell(t, spec, map[string]string{"time": "file", "cd": "file"}, true, true))
+	sim := healthySim()
+	sim.classOverride = map[string]string{"time": "file", "cd": "file"}
+	withFakeShell(t, fakeShell(t, spec, sim))
 
-	fs := verifyRuntime(rc, spec, runtimeConfig{shell: filepath.Join(bindir, "sh"), binDir: bindir})
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
 	if !findingsHave(fs, "shell-owner", "time", `requires "keyword"`) {
 		t.Errorf("time misclassification not rejected: %v", fs)
 	}
@@ -499,16 +804,66 @@ func TestRuntimeGateRejectsWrongEffectiveOwnerInShell(t *testing.T) {
 	}
 }
 
+// TestRuntimeGateStrictTranscript: the classification transcript must account
+// for exactly the 116 expected names — duplicate rows, extra names, missing
+// rows, and malformed rows are each their own rejection.
+func TestRuntimeGateStrictTranscript(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		edit  func([]string) []string
+		fname string
+		want  string
+	}{
+		{"duplicate row", func(l []string) []string { return append(l, l[0]) }, "alias", "duplicate classification row"},
+		{"extra name", func(l []string) []string { return append(l, "cpio file") }, "cpio", "outside the 116-name inventory"},
+		{"missing row", func(l []string) []string { return l[1:] }, "alias", "no classification row"},
+		{"malformed row", func(l []string) []string { l[0] = "alias"; return l }, "", "malformed classification row"},
+		{"unknown class", func(l []string) []string { l[0] = "alias wizard"; return l }, "", "malformed classification row"},
+		{"trailing junk", func(l []string) []string { l[0] = "alias builtin extra"; return l }, "", "malformed classification row"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bindir, multicall := stageRuntime(t, spec)
+			rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+			sim := healthySim()
+			sim.transcriptEdit = c.edit
+			withFakeShell(t, fakeShell(t, spec, sim))
+			fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+			if !findingsHave(fs, "transcript", c.fname, c.want) {
+				t.Errorf("%s not rejected with %q: %v", c.name, c.want, fs)
+			}
+		})
+	}
+
+	// A transcript short of 116 unique expected names also carries the
+	// explicit count rejection.
+	bindir, multicall := stageRuntime(t, spec)
+	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+	sim := healthySim()
+	sim.transcriptEdit = func(l []string) []string { return l[2:] }
+	withFakeShell(t, fakeShell(t, spec, sim))
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+	if !findingsHave(fs, "transcript", "", "114 unique expected names, want exactly 116") {
+		t.Errorf("short transcript did not carry the count rejection: %v", fs)
+	}
+}
+
 func TestRuntimeGateRejectsNonPosixModeShell(t *testing.T) {
 	spec, err := loadSpec()
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindir := stageBindir(t, spec)
+	bindir, multicall := stageRuntime(t, spec)
 	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
-	withFakeShell(t, fakeShell(t, spec, nil, false, true))
+	sim := healthySim()
+	sim.posixOn = false
+	withFakeShell(t, fakeShell(t, spec, sim))
 
-	fs := verifyRuntime(rc, spec, runtimeConfig{shell: filepath.Join(bindir, "sh"), binDir: bindir})
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
 	if !findingsHave(fs, "posix-mode", "", "posix on") {
 		t.Errorf("non-POSIX-mode shell not rejected: %v", fs)
 	}
@@ -519,11 +874,13 @@ func TestRuntimeGateRejectsMissingPosixlyCorrect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindir := stageBindir(t, spec)
+	bindir, multicall := stageRuntime(t, spec)
 	rc := runtimeRC(t, "PATH="+bindir) // no POSIXLY_CORRECT anywhere
-	withFakeShell(t, fakeShell(t, spec, nil, true, false))
+	sim := healthySim()
+	sim.childHasVar = false
+	withFakeShell(t, fakeShell(t, spec, sim))
 
-	fs := verifyRuntime(rc, spec, runtimeConfig{shell: filepath.Join(bindir, "sh"), binDir: bindir})
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
 	if !findingsHave(fs, "posixly-correct", "", "gate's own environment") {
 		t.Errorf("unset POSIXLY_CORRECT in own env not rejected: %v", fs)
 	}
@@ -532,53 +889,6 @@ func TestRuntimeGateRejectsMissingPosixlyCorrect(t *testing.T) {
 	}
 	if !findingsHave(fs, "posixly-correct-child", "", "exec'd by the shell") {
 		t.Errorf("missing POSIXLY_CORRECT in exec'd grandchild not rejected: %v", fs)
-	}
-}
-
-func TestRuntimeGateSameTarget(t *testing.T) {
-	spec, err := loadSpec()
-	if err != nil {
-		t.Fatal(err)
-	}
-	bindir := t.TempDir()
-	multicall := filepath.Join(t.TempDir(), "coreutils")
-	if err := os.WriteFile(multicall, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	other := filepath.Join(t.TempDir(), "impostor")
-	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range spec {
-		if !pathOwned(r) {
-			continue
-		}
-		target := multicall
-		if r.Command == "sh" {
-			target = other // sh is the shell binary, exempt from same-target
-		}
-		if err := os.Symlink(target, filepath.Join(bindir, r.Command)); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
-	}
-	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
-	withFakeShell(t, fakeShell(t, spec, nil, true, true))
-	cfg := runtimeConfig{shell: filepath.Join(bindir, "sh"), binDir: bindir, sameTarget: true}
-
-	if fs := verifyRuntime(rc, spec, cfg); len(fs) != 0 {
-		t.Errorf("single-target staging rejected: %v", fs)
-	}
-
-	// Re-point one applet at a second executable: two targets, one rejection.
-	link := filepath.Join(bindir, "sed")
-	if err := os.Remove(link); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(other, link); err != nil {
-		t.Fatal(err)
-	}
-	if fs := verifyRuntime(rc, spec, cfg); !findingsHave(fs, "path-target", "", "more than one executable") {
-		t.Errorf("split targets not rejected: %v", fs)
 	}
 }
 
@@ -606,10 +916,12 @@ func TestGateUsageErrors(t *testing.T) {
 		{"registry", "extra"},
 		{"providers", "extra"},
 		{"runtime"},
-		{"runtime", "--shell", "/bin/sh"},
-		{"runtime", "--bindir", "/x"},
-		{"runtime", "--shell", "/bin/sh", "--bindir", "/x", "--wat"},
-		{"runtime", "--shell", "/bin/sh", "--bindir", "/x", "--same-target=yes"},
+		{"runtime", "--bindir", "/x"},                             // no --multicall
+		{"runtime", "--multicall", "/x/coreutils"},                // no --bindir
+		{"runtime", "--bindir", "/x", "--multicall", "/x/c", "--wat"},
+		{"runtime", "--bindir", "/x", "--multicall", "/x/c", "--shell", "/bin/sh"},        // a PATH, not a name
+		{"runtime", "--bindir", "/x", "--multicall", "/x/c", "--multicall-sha256", "abc"}, // not 64 hex
+		{"runtime", "--bindir", "/x", "--multicall", "/x/c", "--same-target"},             // removed option
 	} {
 		rc := runtimeRC(t)
 		code, _, stderr := runGateCmd(t, rc, args...)
@@ -626,11 +938,14 @@ func TestGateSpecSubcommand(t *testing.T) {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr)
 	}
 	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
-	if len(lines) != pinTotal+1 {
-		t.Errorf("spec printed %d lines, want %d names + 1 summary", len(lines), pinTotal)
+	if len(lines) != pinTotal+2 {
+		t.Errorf("spec printed %d lines, want %d names + 2 summary lines", len(lines), pinTotal)
 	}
-	if !strings.Contains(lines[len(lines)-1], "total 116: 86 go_applet, 14 shell, 16 external_provider") {
-		t.Errorf("summary line = %q", lines[len(lines)-1])
+	if !strings.Contains(stdout, "availability 86 go_applet, 14 shell, 16 external_provider") {
+		t.Errorf("availability summary missing from %q", stdout)
+	}
+	if !strings.Contains(stdout, "effective selection: 78 go_applet, 22 shell, 16 external_provider") {
+		t.Errorf("effective-selection summary missing from %q", stdout)
 	}
 }
 
@@ -667,7 +982,7 @@ func TestGateProvidersSubcommand(t *testing.T) {
 
 // TestGateRuntimeSubcommandEndToEnd drives the full staged verdict through the
 // applet: seamed full registry, provisioned temp cache, staged bindir, healthy
-// fake shell — then breaks one leg and watches the verdict flip.
+// fake shell — then breaks one leg at a time and watches the verdict flip.
 func TestGateRuntimeSubcommandEndToEnd(t *testing.T) {
 	withLinuxGate(t)
 	spec, err := loadSpec()
@@ -681,19 +996,27 @@ func TestGateRuntimeSubcommandEndToEnd(t *testing.T) {
 
 	root := t.TempDir()
 	provisionAll(t, root)
-	bindir := stageBindir(t, spec)
-	withFakeShell(t, fakeShell(t, spec, nil, true, true))
-	shell := filepath.Join(bindir, "sh")
+	bindir, multicall := stageRuntime(t, spec)
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
 
 	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1", "BASHY_BIN_CACHE="+root)
-	code, stdout, stderr := runGateCmd(t, rc, "runtime", "--shell", shell, "--bindir", bindir)
+	code, stdout, stderr := runGateCmd(t, rc, "runtime", "--bindir", bindir, "--multicall", multicall)
 	if code != 0 || !strings.Contains(stdout, "posix-gate runtime: PASS") {
 		t.Fatalf("healthy runtime: exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
 
+	// Provider provenance must be bound to the STAGED wrapper's dispatch
+	// cache: an environment that does not name it is a rejection, never a
+	// fall-back to the gate process's own default cache.
+	rc = runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+	code, _, stderr = runGateCmd(t, rc, "runtime", "--bindir", bindir, "--multicall", multicall)
+	if code != 1 || !strings.Contains(stderr, "[provider-cache]") {
+		t.Errorf("unbound provider cache: exit = %d, stderr = %q", code, stderr)
+	}
+
 	// Same staging, but the gate's own environment lost POSIXLY_CORRECT.
 	rc = runtimeRC(t, "PATH="+bindir, "BASHY_BIN_CACHE="+root)
-	code, _, stderr = runGateCmd(t, rc, "runtime", "--shell", shell, "--bindir", bindir)
+	code, _, stderr = runGateCmd(t, rc, "runtime", "--bindir", bindir, "--multicall", multicall)
 	if code != 1 || !strings.Contains(stderr, "posix-gate runtime: FAIL") {
 		t.Errorf("degraded runtime: exit = %d, stderr = %q", code, stderr)
 	}

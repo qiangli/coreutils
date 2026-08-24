@@ -29,6 +29,23 @@ implementation is upstream's, built locally from a pinned source tarball
 and checked against its recorded provenance before it runs. It is listed
 separately precisely so it can never be counted as Go coverage.
 
+## Effective selection
+
+The table above is AVAILABILITY: who supplies each name. What a
+POSIX-mode shell actually SELECTS differs for exactly eight names — the
+seven builtin overlaps (`echo`, `false`, `kill`, `printf`, `pwd`,
+`test`, `true`) and the `time` reserved word — where the shell's
+builtin/keyword wins at shell level while the Go applet still backs the
+name on PATH for exec-style callers (`env`, `xargs`, `find -exec`).
+
+| Axis | Go applet | Shell | Pinned provider |
+| --- | ---: | ---: | ---: |
+| Availability | 86 | 14 | 16 |
+| Effective selection | 78 | 22 | 16 |
+
+`posix-gate` pins both splits and verifies the effective selection
+against the staged shell's own `type -t` classification.
+
 Presence is not behavioral conformance; test results must still be
 attributed to the executable or builtin actually selected.
 

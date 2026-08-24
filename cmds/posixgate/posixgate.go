@@ -22,24 +22,30 @@ func gateTool() *tool.Tool {
 		Synopsis: "Fail-closed effective-owner gate for the 116 POSIX-required utility names (Profiles C/D).",
 		Usage: `posix-gate <subcommand>
 
-  spec                    print the canonical owner inventory and its pinned counts
+  spec                    print the canonical owner projection with its pinned
+                          availability (86/14/16) and effective (78/22/16) splits
   registry                verify the live tool registry owns every name as intended
                           (hermetic: no cache, no network, nothing spawned)
   providers               verify every pinned external provider resolves from the
                           cache with its provenance intact
-  runtime --shell PATH --bindir DIR [--same-target]
+  runtime --bindir DIR --multicall PATH [--shell NAME] [--multicall-sha256 HEX]
                           verify the staged runtime end to end: registry + providers
-                          + PATH ownership of every multicall-owned name + the
-                          shell's effective classification of all 116 names + POSIX
-                          mode + POSIXLY_CORRECT reaching children and grandchildren
+                          (bound to the staged wrapper's dispatch cache) + approved
+                          executable identity behind every multicall-owned name +
+                          the staged shell's identity/version/build + its effective
+                          classification of all 116 names + POSIX mode +
+                          POSIXLY_CORRECT reaching children and grandchildren
 
 Every check is fail-closed: the gate proves the INTENDED owner — Go applet,
 shell builtin/keyword/entry, or pinned provider — is selected for every name,
-or it rejects, naming each name and cause. Count drift, duplicate or ambiguous
-ownership, a missing provider pin or provenance record, and host PATH fallback
-are all rejections. Run the runtime subcommand from INSIDE the staged
-environment, so the PATH and POSIXLY_CORRECT it validates are the ones the
-runtime actually has.
+or it rejects, naming each name and cause. Count drift on either axis,
+duplicate or ambiguous ownership, a missing provider pin or provenance record,
+host PATH fallback, and a staged entry that is not the approved multicall are
+all rejections. --shell takes a command NAME (default sh) resolved through the
+staged PATH — a host shell path is a usage error, not an input. Run the
+runtime subcommand from INSIDE the staged environment, so the PATH,
+BASHY_BIN_CACHE, and POSIXLY_CORRECT it validates are the ones the runtime
+actually has.
 
 Exit status: 0 every gate passed, 1 any rejection, 2 usage.`,
 	}
@@ -81,18 +87,26 @@ func runSpec(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "posix-gate: %v\n", err)
 		return 1
 	}
-	counts := map[Owner]int{}
+	avail := map[Owner]int{}
+	effShell := 0
 	for _, r := range spec {
-		counts[r.Owner]++
+		avail[r.Owner]++
+		switch r.Effective {
+		case SelShellEntry, SelShellBuiltin, SelShellKeyword:
+			effShell++
+		}
 		pkg := r.GoPackage
 		if pkg == "" {
 			pkg = "-"
 		}
-		fmt.Fprintf(rc.Out, "%-10s %-17s %s\n", r.Command, r.Owner, pkg)
+		fmt.Fprintf(rc.Out, "%-10s %-17s %-14s %s\n", r.Command, r.Owner, r.Effective, pkg)
 	}
-	fmt.Fprintf(rc.Out, "total %d: %d go_applet, %d shell, %d external_provider (pinned %d/%d/%d/%d)\n",
-		len(spec), counts[OwnerGoApplet], counts[OwnerShell], counts[OwnerProvider],
-		pinTotal, pinGoApplets, pinShell, pinProviders)
+	fmt.Fprintf(rc.Out, "total %d: availability %d go_applet, %d shell, %d external_provider (pinned %d/%d/%d)\n",
+		len(spec), avail[OwnerGoApplet], avail[OwnerShell], avail[OwnerProvider],
+		pinAvailGoApplets, pinAvailShell, pinProviders)
+	fmt.Fprintf(rc.Out, "effective selection: %d go_applet, %d shell, %d external_provider (pinned %d/%d/%d)\n",
+		len(spec)-effShell-avail[OwnerProvider], effShell, avail[OwnerProvider],
+		pinEffectiveGoApplets, pinEffectiveShell, pinProviders)
 	return 0
 }
 
@@ -103,7 +117,7 @@ func runRegistry(rc *tool.RunContext, args []string) int {
 	}
 	return report(rc, "registry", VerifyRegistry(rc.Getenv(posixprovider.OptOutEnv)),
 		fmt.Sprintf("%d names owned as intended: %d go applets, %d shell, %d pinned providers",
-			pinTotal, pinGoApplets, pinShell, pinProviders))
+			pinTotal, pinAvailGoApplets, pinAvailShell, pinProviders))
 }
 
 func runProviders(rc *tool.RunContext, args []string) int {
@@ -135,20 +149,33 @@ func runRuntime(rc *tool.RunContext, args []string) int {
 	// environment whose PATH is right but whose registry is wrong (or whose
 	// providers are unattributable) has not selected the intended owners.
 	findings := VerifyRegistry(rc.Getenv(posixprovider.OptOutEnv))
-	if r, err := resolverFor(rc); err != nil {
-		findings = append(findings, Finding{Check: "provider", Detail: err.Error()})
-	} else {
-		findings = append(findings, VerifyProviders(r)...)
-	}
+	findings = append(findings, verifyStagedProviders(rc)...)
 	findings = append(findings, verifyRuntime(rc, spec, cfg)...)
 
 	return report(rc, "runtime", findings,
-		fmt.Sprintf("staged runtime selects the intended owner for all %d names (shell %s, bindir %s)",
-			pinTotal, cfg.shell, cfg.binDir))
+		fmt.Sprintf("staged runtime selects the intended owner for all %d names (shell %s, bindir %s, multicall %s)",
+			pinTotal, cfg.shellName, cfg.binDir, cfg.multicall))
+}
+
+// verifyStagedProviders binds provider provenance to the STAGED wrapper's
+// dispatch target. The staged wrapper (the approved multicall, proven by the
+// exec-identity gate) resolves its cache from the environment the shell hands
+// it — so the certification claim is only checkable when that environment
+// names the cache explicitly. BASHY_BIN_CACHE absent from the staged
+// environment is therefore a rejection, not a fall-back to the gate process's
+// own default cache: verifying a cache the wrapper may never consult would
+// attribute provenance to the wrong binaries.
+func verifyStagedProviders(rc *tool.RunContext) []Finding {
+	root := strings.TrimSpace(rc.Getenv("BASHY_BIN_CACHE"))
+	if root == "" {
+		return []Finding{{Check: "provider-cache",
+			Detail: "BASHY_BIN_CACHE is not set in the staged environment, so provider provenance cannot be bound to the staged wrapper's dispatch target"}}
+	}
+	return VerifyProviders(posixprovider.Resolver{CacheRoot: root, GOOS: gateGOOS})
 }
 
 func parseRuntimeFlags(rc *tool.RunContext, args []string) (runtimeConfig, int) {
-	var cfg runtimeConfig
+	cfg := runtimeConfig{shellName: "sh"}
 	usage := func(msg string) (runtimeConfig, int) {
 		fmt.Fprintf(rc.Err, "posix-gate runtime: %s\n", msg)
 		return cfg, 2
@@ -170,26 +197,36 @@ func parseRuntimeFlags(rc *tool.RunContext, args []string) (runtimeConfig, int) 
 		case "--shell":
 			v, ok := take()
 			if !ok || v == "" {
-				return usage("--shell requires the staged shell's path")
+				return usage("--shell requires the staged shell's command name")
 			}
-			cfg.shell = v
+			if strings.ContainsAny(v, `/\`) {
+				return usage(fmt.Sprintf("--shell takes a command NAME resolved through the staged PATH, not a path (%q)", v))
+			}
+			cfg.shellName = v
 		case "--bindir":
 			v, ok := take()
 			if !ok || v == "" {
 				return usage("--bindir requires the staged tool directory")
 			}
 			cfg.binDir = rc.Path(v)
-		case "--same-target":
-			if eq {
-				return usage("--same-target takes no value")
+		case "--multicall":
+			v, ok := take()
+			if !ok || v == "" {
+				return usage("--multicall requires the approved multicall executable's path")
 			}
-			cfg.sameTarget = true
+			cfg.multicall = rc.Path(v)
+		case "--multicall-sha256":
+			v, ok := take()
+			if !ok || len(v) != 64 {
+				return usage("--multicall-sha256 requires a full 64-hex-digit digest")
+			}
+			cfg.multicallSHA = v
 		default:
 			return usage(fmt.Sprintf("unknown option %q", arg))
 		}
 	}
-	if cfg.shell == "" || cfg.binDir == "" {
-		return usage("both --shell and --bindir are required")
+	if cfg.binDir == "" || cfg.multicall == "" {
+		return usage("both --bindir and --multicall are required (identity of the staged executables is mandatory, not optional)")
 	}
 	return cfg, 0
 }
@@ -201,6 +238,8 @@ var gateGOOS = runtime.GOOS
 
 // resolverFor mirrors cmds/posixproviders: $BASHY_BIN_CACHE is read from the
 // RunContext, never the process — the embedding shell owns the environment.
+// Only the standalone `providers` subcommand takes the per-host default cache;
+// the runtime gate demands an explicit staged cache (verifyStagedProviders).
 func resolverFor(rc *tool.RunContext) (posixprovider.Resolver, error) {
 	if root := strings.TrimSpace(rc.Getenv("BASHY_BIN_CACHE")); root != "" {
 		return posixprovider.Resolver{CacheRoot: root, GOOS: gateGOOS}, nil

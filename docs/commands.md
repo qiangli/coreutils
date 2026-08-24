@@ -233,11 +233,13 @@ were unregistered. There is no fallback: an unprovisioned provider exits 127.
 See [POSIX external providers](posix-external-providers.md).
 
 `posix-gate` (`cmds/posixgate`) is the fail-closed gate over the whole
-116-name inventory: it proves the assembled runtime selects each name's
-intended owner — Go applet, shell builtin/keyword/entry, or pinned provider —
-and rejects count drift, ambiguous ownership, missing provider
-pins/provenance, host PATH fallback, a shell not in POSIX mode, and
-POSIXLY_CORRECT failing to reach child processes. See
+116-name inventory (availability 86/14/16, effective selection 78/22/16): it
+proves the assembled runtime selects each name's intended owner — Go applet,
+shell builtin/keyword/entry, or pinned provider — and rejects count drift on
+either axis, ambiguous ownership, missing provider pins/provenance, host PATH
+fallback, a staged executable or shell that is not the approved one (digest
+identity is mandatory), a shell not in POSIX mode, and POSIXLY_CORRECT
+failing to reach child processes. See
 [the POSIX owner gate](posix-owner-gate.md).
 
 The provider allocation is maintained once, in the umbrella

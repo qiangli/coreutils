@@ -10,6 +10,7 @@
 package all_test
 
 import (
+	"os"
 	"testing"
 
 	_ "github.com/qiangli/coreutils/cmds/all"
@@ -18,10 +19,13 @@ import (
 )
 
 func TestProfileCDRegistrySelectsIntendedOwners(t *testing.T) {
-	if !posixprovider.Enabled() {
-		t.Skip("BASHY_POSIX_PROVIDERS=off in this process: provider names are deliberately unregistered")
-	}
-	for _, f := range posixgatecmd.VerifyRegistry("") {
+	// The provider opt-out (BASHY_POSIX_PROVIDERS=off) unregisters the sixteen
+	// provider names, so the assembled registry cannot own them. That is a
+	// FAILURE of this certification gate, never a skip: a skipped gate reads
+	// as green in a test log, and green while unmeasured is exactly the silent
+	// substitution the gate exists to reject. VerifyRegistry is handed the
+	// observed value and produces the opt-out rejection itself.
+	for _, f := range posixgatecmd.VerifyRegistry(os.Getenv(posixprovider.OptOutEnv)) {
 		t.Errorf("%s", f)
 	}
 }

@@ -98,10 +98,12 @@ Every tool in this repo follows the same rules:
   unregisters the provider names. See
   [POSIX external providers](docs/posix-external-providers.md).
   `cmds/posixgate` ships `posix-gate`, the fail-closed effective-owner gate
-  over the 116 POSIX-required names: it proves the assembled runtime selects
-  each name's intended owner (Go applet, shell builtin/keyword/entry, or
-  pinned provider) and rejects count drift, ambiguous ownership, missing
-  provider pins/provenance, and host PATH fallback. See
+  over the 116 POSIX-required names (availability 86/14/16, effective
+  selection 78/22/16): it proves the assembled runtime selects each name's
+  intended owner (Go applet, shell builtin/keyword/entry, or pinned provider)
+  and rejects count drift on either axis, ambiguous ownership, missing
+  provider pins/provenance, host PATH fallback, and any staged executable —
+  tool or shell — whose identity is not the approved one. See
   [the POSIX owner gate](docs/posix-owner-gate.md).
 
 - `cmds/` — the userland: 154 shipped Go command packages advertising 175
