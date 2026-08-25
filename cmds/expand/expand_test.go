@@ -15,7 +15,12 @@ import (
 func runExpand(t *testing.T, input string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, err bytes.Buffer
-	rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &err}}
+	// Pin a UTF-8 locale so display-column expectations do not depend on
+	// the runner's environment; the C/POSIX byte model has its own tests.
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Dir: t.TempDir(), Env: []string{"LC_ALL=C.UTF-8"},
+		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &err},
+	}
 	code := run(rc, args)
 	return out.String(), err.String(), code
 }

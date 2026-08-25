@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mattn/go-runewidth"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -19,6 +21,47 @@ var cmd = &tool.Tool{
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
+
+type encodingMode int
+
+const (
+	encodingSingleByte encodingMode = iota
+	encodingLatin1
+	encodingUTF8
+)
+
+type characterModel struct {
+	encoding encodingMode
+	width    *runewidth.Condition
+}
+
+func resolveCharacterModel(env []string) (*characterModel, error) {
+	name := locale.Resolve(env, locale.CType)
+	base, codeset := splitLocaleName(name)
+	switch {
+	case (base == "C" || base == "POSIX") && codeset == "":
+		return &characterModel{encoding: encodingSingleByte}, nil
+	case (base == "C" || base == "POSIX") && normalizeCodeset(codeset) == "UTF8":
+		return &characterModel{encoding: encodingUTF8, width: runewidth.NewCondition()}, nil
+	case strings.EqualFold(base, "de_DE") && normalizeCodeset(codeset) == "ISO88591":
+		return &characterModel{encoding: encodingLatin1}, nil
+	default:
+		return nil, fmt.Errorf(
+			"LC_CTYPE %q is unavailable; supported locales are C/POSIX, their UTF-8 aliases, and de_DE.ISO-8859-1",
+			name,
+		)
+	}
+}
+
+func splitLocaleName(name string) (base, codeset string) {
+	name, _, _ = strings.Cut(name, "@")
+	base, codeset, _ = strings.Cut(name, ".")
+	return base, codeset
+}
+
+func normalizeCodeset(name string) string {
+	return strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(name))
+}
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
@@ -32,6 +75,19 @@ func run(rc *tool.RunContext, args []string) int {
 	tabs, err := parseTabStops(*tabsValue)
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
+	}
+	// Resolve the character model before any operand is opened or read: an
+	// unsupported LC_CTYPE must fail before input or output is touched.
+	model, err := resolveCharacterModel(rc.Env)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "expand: %v\n", err)
+		return 1
+	}
+	if *noUTF8 {
+		// -U is the uutils-parity extension: count raw bytes as columns
+		// even in a UTF-8 locale. It overrides counting, not the locale
+		// validation above.
+		model = &characterModel{encoding: encodingSingleByte}
 	}
 	if len(operands) == 0 {
 		operands = []string{"-"}
@@ -50,7 +106,7 @@ func run(rc *tool.RunContext, args []string) int {
 			}
 			continue
 		}
-		err = expandStream(r, out, tabs, *initial, *noUTF8)
+		err = expandStreamModel(r, out, tabs, *initial, model)
 		if closer != nil {
 			closer.Close()
 		}
@@ -81,15 +137,54 @@ func envPresent(env []string, key string) bool {
 	return false
 }
 
-func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool, noUTF8 bool) error {
-	if noUTF8 {
-		return expandStreamBytes(r, w, tabs, initial)
+type inputCharacter struct {
+	raw   []byte
+	rune  rune
+	valid bool
+}
+
+type characterReader struct {
+	r     *bufio.Reader
+	model *characterModel
+}
+
+func (r *characterReader) next() (inputCharacter, error) {
+	if r.model.encoding != encodingUTF8 {
+		b, err := r.r.ReadByte()
+		if err != nil {
+			return inputCharacter{}, err
+		}
+		return inputCharacter{raw: []byte{b}, rune: rune(b), valid: true}, nil
 	}
-	br := bufio.NewReader(r)
+	ch, size, err := r.r.ReadRune()
+	if err != nil {
+		return inputCharacter{}, err
+	}
+	if err := r.r.UnreadRune(); err != nil {
+		return inputCharacter{}, err
+	}
+	raw := make([]byte, size)
+	if _, err := io.ReadFull(r.r, raw); err != nil {
+		return inputCharacter{}, err
+	}
+	valid := ch != utf8.RuneError || size > 1
+	return inputCharacter{raw: raw, rune: ch, valid: valid}, nil
+}
+
+// expandStreamModel retains the exact input bytes for every character. The
+// locale controls character boundaries and display widths, never output
+// transcoding. This is load-bearing for single-byte locales and malformed
+// UTF-8: neither may turn into the UTF-8 encoding of U+FFFD.
+func expandStreamModel(
+	r io.Reader, w io.Writer, tabs *tabStops, initial bool,
+	model *characterModel,
+) error {
+	reader := &characterReader{r: bufio.NewReader(r), model: model}
 	col := 0
 	convert := true
+	scratch := make([]byte, 0, 64)
 	for {
-		ch, _, err := br.ReadRune()
+		ch, err := reader.next()
 		if err == io.EOF {
 			return nil
 		}
@@ -97,93 +192,67 @@ func expandStream(r io.Reader, w io.Writer, tabs *tabStops, initial bool, noUTF8
 			return err
 		}
 		switch {
-		case ch == '\t' && convert:
+		case len(ch.raw) == 1 && ch.raw[0] == '\t' && convert:
 			next, _ := tabs.next(col)
-			if _, err := io.WriteString(w, strings.Repeat(" ", next-col)); err != nil {
+			scratch = scratch[:0]
+			for i := col; i < next; i++ {
+				scratch = append(scratch, ' ')
+			}
+			if err := writeFull(w, scratch); err != nil {
 				return err
 			}
 			col = next
-		case ch == '\n':
-			if _, err := io.WriteString(w, "\n"); err != nil {
+		case len(ch.raw) == 1 && ch.raw[0] == '\n':
+			if err := writeFull(w, []byte{'\n'}); err != nil {
 				return err
 			}
 			col = 0
 			convert = true
 		default:
-			if _, err := io.WriteString(w, string(ch)); err != nil {
+			if err := writeFull(w, ch.raw); err != nil {
 				return err
 			}
-			if convert {
-				if ch == '\b' {
-					if col > 0 {
-						col--
-					}
-				} else {
-					col += runeWidth(ch)
+			if !convert {
+				continue
+			}
+			if len(ch.raw) == 1 && ch.raw[0] == '\b' {
+				if col > 0 {
+					col--
 				}
-				// Under -i, only tabs preceding all non-blank
-				// characters are converted; a backspace also ends
-				// the initial region (GNU treats any non-blank,
-				// including \b, as ending it).
-				if initial && ch != ' ' && ch != '\t' {
-					convert = false
-				}
+			} else {
+				col += charWidth(model, ch)
+			}
+			// Under -i, only tabs preceding all non-blank characters
+			// are converted; a backspace also ends the initial region
+			// (GNU treats any non-blank, including \b, as ending it).
+			if initial && !isBlank(ch) {
+				convert = false
 			}
 		}
 	}
 }
 
-func runeWidth(ch rune) int {
-	w := runewidth.RuneWidth(ch)
+func isBlank(ch inputCharacter) bool {
+	return len(ch.raw) == 1 && (ch.raw[0] == ' ' || ch.raw[0] == '\t')
+}
+
+func charWidth(model *characterModel, ch inputCharacter) int {
+	if model.encoding != encodingUTF8 || !ch.valid {
+		return 1
+	}
+	w := model.width.RuneWidth(ch.rune)
 	if w < 0 {
 		return 1
 	}
 	return w
 }
 
-func expandStreamBytes(r io.Reader, w io.Writer, tabs *tabStops, initial bool) error {
-	br := bufio.NewReader(r)
-	col := 0
-	convert := true
-	for {
-		ch, err := br.ReadByte()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		switch {
-		case ch == '\t' && convert:
-			next, _ := tabs.next(col)
-			if _, err := io.WriteString(w, strings.Repeat(" ", next-col)); err != nil {
-				return err
-			}
-			col = next
-		case ch == '\n':
-			if _, err := w.Write([]byte{'\n'}); err != nil {
-				return err
-			}
-			col = 0
-			convert = true
-		default:
-			if _, err := w.Write([]byte{ch}); err != nil {
-				return err
-			}
-			if convert {
-				if ch == '\b' {
-					if col > 0 {
-						col--
-					}
-				} else {
-					col++
-				}
-				if initial && ch != ' ' && ch != '\t' {
-					convert = false
-				}
-			}
-		}
+func writeFull(w io.Writer, p []byte) error {
+	n, err := w.Write(p)
+	if err == nil && n != len(p) {
+		return io.ErrShortWrite
 	}
+	return err
 }
 
 // tabStops is a parsed --tabs specification, following the GNU manual:
