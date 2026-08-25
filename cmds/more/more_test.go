@@ -101,7 +101,7 @@ func TestMoreAcceptsSupportedDisplayFlags(t *testing.T) {
 
 func TestMoreRejectsInteractiveFlags(t *testing.T) {
 	for _, args := range [][]string{
-		{"-d"}, {"-l"}, {"-f"}, {"-i"}, {"-t", "tag"}, {"--tag="},
+		{"-d"}, {"-l"}, {"-f"},
 	} {
 		_, errb, code := runMore(t, t.TempDir(), "a\n", args...)
 		if code == 0 || !strings.Contains(errb, "not supported") {
@@ -116,7 +116,7 @@ func TestMoreRejectsInteractiveFlags(t *testing.T) {
 	}
 }
 
-func TestMoreCommandOptionSupportsOnlySpaceAndLowercaseQ(t *testing.T) {
+func TestMoreCommandOptionSupportsPOSIXMovementAndQuit(t *testing.T) {
 	out, errb, code := runMore(t, t.TempDir(), "a\n", "-p", " ")
 	if code != 0 || out != "a\n" || errb != "" {
 		t.Fatalf("-p space = (%q, %q, %d)", out, errb, code)
@@ -125,9 +125,9 @@ func TestMoreCommandOptionSupportsOnlySpaceAndLowercaseQ(t *testing.T) {
 	if code != 0 || out != "" || errb != "" {
 		t.Fatalf("-p q = (%q, %q, %d)", out, errb, code)
 	}
-	for _, unsupported := range []string{"b", "Q", "\n"} {
+	for _, unsupported := range []string{"Q"} {
 		_, errb, code = runMore(t, t.TempDir(), "a\n", "-p", unsupported)
-		if code == 0 || !strings.Contains(errb, "not supported") {
+		if code != 0 || !strings.Contains(errb, "unknown command") {
 			t.Fatalf("-p %q = code %d err %q", unsupported, code, errb)
 		}
 	}
@@ -233,11 +233,32 @@ func TestMorePOSIXLineCountMustBePositive(t *testing.T) {
 }
 
 func TestMoreSqueezeCRLF(t *testing.T) {
-	// -s squeezes only repeated empty text lines (\n)
-	// CR-containing lines (\r\n) are non-empty.
+	// Without -u, the POSIX terminal processing rules replace CR+NL with NL;
+	// -s then recognizes and squeezes the resulting empty lines.
 	out, errb, code := runMore(t, t.TempDir(), "one\n\n\ntwo\n\r\n\r\nthree\n\n\n", "-s")
-	if want := "one\n\ntwo\n\r\n\r\nthree\n\n"; out != want || errb != "" || code != 0 {
+	if want := "one\n\ntwo\n\nthree\n\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("more squeeze CRLF = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
+	}
+}
+
+func TestNormalizeTerminalLinePOSIXOverstrikesAndPlainMode(t *testing.T) {
+	input := []byte("a\b_ _\bb c\bc x\by\r\n")
+	if got, want := string(normalizeTerminalLine(input, false)), "a b c y\n"; got != want {
+		t.Fatalf("normalizeTerminalLine = %q, want %q", got, want)
+	}
+	if got := normalizeTerminalLine(input, true); !bytes.Equal(got, input) {
+		t.Fatalf("-u normalization = %q, want byte-for-byte %q", got, input)
+	}
+}
+
+func TestFoldLinePreservesUTF8GlyphBoundariesAndDisplayWidth(t *testing.T) {
+	rows := foldLine([]byte("éé\n"), 1, false)
+	if len(rows) != 2 || string(rows[0]) != "é" || string(rows[1]) != "é\n" {
+		t.Fatalf("single-column UTF-8 rows=%q", rows)
+	}
+	rows = foldLine([]byte("界界\n"), 2, false)
+	if len(rows) != 2 || string(rows[0]) != "界" || string(rows[1]) != "界\n" {
+		t.Fatalf("double-column UTF-8 rows=%q", rows)
 	}
 }
 

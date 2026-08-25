@@ -353,12 +353,12 @@ func TestPagerOpenTTYFailureIsNotCopyFallback(t *testing.T) {
 	}
 }
 
-func TestPagerUnsupportedCommandFails(t *testing.T) {
-	for _, command := range []string{"b", "z", "Q", "\n"} {
+func TestPagerUnknownCommandIsInformationalAndContinues(t *testing.T) {
+	for _, command := range []string{"z", "Q"} {
 		var out, errOut bytes.Buffer
 		rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("x\ny\n"), Out: &out, Err: &errOut}}
-		withPagerTTY(t, rc.Out, commandTTY(command), 2, 80)
-		if code := run(rc, nil); code == 0 || !strings.Contains(errOut.String(), "command") {
+		withPagerTTY(t, rc.Out, commandTTY(command+"q"), 2, 80)
+		if code := run(rc, nil); code != 0 || !strings.Contains(errOut.String(), "unknown command") {
 			t.Fatalf("command %q: code=%d err=%q", command, code, errOut.String())
 		}
 	}

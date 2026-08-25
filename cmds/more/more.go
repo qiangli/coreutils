@@ -1,8 +1,8 @@
 // Package morecmd implements more(1). When standard output is a terminal
 // and a controlling-terminal command channel is available, it pages the
-// input a screenful at a time with an interactive prompt (this slice
-// supports advancing with <space> and quitting with `q`; every other
-// recognized command fails loudly). When output is not a terminal it uses a
+// input a screenful at a time with the POSIX Issue 7 interactive command
+// language, file navigation, BRE searching, marks, tags, and editor handoff.
+// When output is not a terminal it uses a
 // non-interactive pass-through: files/stdin are copied to stdout
 // unmodified except for `-s` (squeeze), matching POSIX's requirement that
 // no option other than `-s` take effect when stdout is not a terminal.
@@ -42,6 +42,8 @@ type options struct {
 	exitOnEof  bool   // -e: exit after the last line of the last file
 	cleanPrint bool   // -c: redraw not scroll (may be ignored per POSIX)
 	command    string // -p: more-command run at each new file's first screen
+	ignoreCase bool   // -i: case-insensitive interactive BRE searches
+	tag        string // -t: initial ctags entry
 
 	// Terminal-mode geometry (unused in the non-interactive path).
 	rows      int
@@ -103,11 +105,11 @@ func run(rc *tool.RunContext, args []string) int {
 	pattern := fs.StringP("pattern", "P", "", "start displaying at the first line containing PATTERN")
 	_ = fs.BoolP("silent", "d", false, "show help instead of ringing (not supported)")
 	_ = fs.BoolP("logical", "l", false, "do not pause after form feed (not supported)")
-	_ = fs.BoolP("ignore-case", "i", false, "ignore case in interactive searches (deferred)")
+	ignoreCase := fs.BoolP("ignore-case", "i", false, "ignore case in interactive searches")
 	exitOnEof := fs.BoolP("exit-on-eof", "e", false, "exit after the last line of the last file")
 	_ = fs.BoolP("no-pause", "f", false, "count logical rather than screen lines (not supported)")
 	command := fs.StringP("command", "p", "", "run COMMAND at each new file's first screen")
-	_ = fs.StringP("tag", "t", "", "start at TAG (deferred)")
+	tag := fs.StringP("tag", "t", "", "start at TAG")
 	plain := fs.BoolP("plain", "u", false, "treat backspace as printable, keep trailing carriage return")
 	cleanPrint := fs.BoolP("clean-print", "c", false, "redraw the screen rather than scrolling")
 
@@ -140,7 +142,6 @@ func run(rc *tool.RunContext, args []string) int {
 	if terminal {
 		for _, unsupported := range []struct{ name, flag string }{
 			{"silent", "-d"}, {"logical", "-l"}, {"no-pause", "-f"},
-			{"ignore-case", "-i"}, {"tag", "-t"},
 		} {
 			if fs.Changed(unsupported.name) {
 				return tool.NotSupported(rc, cmd, unsupported.flag)
@@ -168,9 +169,11 @@ func run(rc *tool.RunContext, args []string) int {
 		exitOnEof:  *exitOnEof,
 		cleanPrint: *cleanPrint,
 		command:    *command,
+		ignoreCase: *ignoreCase,
+		tag:        *tag,
 	}
 	files := operands
-	if len(files) == 0 {
+	if len(files) == 0 && (!terminal || *tag == "") {
 		files = []string{"-"}
 	}
 

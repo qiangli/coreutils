@@ -3,28 +3,35 @@ package morecmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/mattn/go-runewidth"
+	"github.com/qiangli/coreutils/pkg/bre"
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/term"
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 )
 
-// ttyChannel is deliberately synchronous. Platform implementations make
-// readCommand cancellable before constructing one; the pager never starts a
-// helper goroutine which could outlive an in-process invocation.
 type ttyChannel struct {
 	readCommand func(context.Context) (byte, error)
+	editorIO    *os.File
 	fd          int
 	hasFd       bool
 	close       func() error
 }
 
-var getTerminalSize = func(fd int) (width, height int, err error) {
-	return term.GetSize(fd)
-}
+var getTerminalSize = func(fd int) (width, height int, err error) { return term.GetSize(fd) }
 
 func terminalSize(rc *tool.RunContext, ch *ttyChannel, nLines int) (rows, width int) {
 	if nLines > 0 {
@@ -54,9 +61,974 @@ func terminalSize(rc *tool.RunContext, ch *ttyChannel, nLines int) (rows, width 
 	return rows, width
 }
 
-const recognizedCommands = "0123456789 hfbjkdusgGnNmrRvqQZ=.:?/'\n\r" +
-	"\x02\x04\x05\x06\x07\x0c\x0e\x10\x15\x19\x7f"
+type displayRow struct {
+	data          []byte
+	line, byteEnd int
+}
 
+// document caches input incrementally. Backwards commands can revisit cached
+// rows while the first page of a pipe is still displayed before EOF is read.
+type document struct {
+	name      string
+	r         *bufio.Reader
+	closer    io.Closer
+	rows      []displayRow
+	lines     []string
+	eof       bool
+	readErr   error
+	total     int
+	lastBlank bool
+	seekable  bool
+	width     int
+	o         options
+}
+
+func newDocument(name string, r io.Reader, c io.Closer, width int, o options) *document {
+	_, seekable := r.(io.Seeker)
+	return &document{name: name, r: bufio.NewReader(r), closer: c, seekable: seekable, width: width, o: o}
+}
+func (d *document) close() error {
+	if d.closer == nil {
+		return nil
+	}
+	e := d.closer.Close()
+	d.closer = nil
+	return e
+}
+func (d *document) loadLine() {
+	if d.eof {
+		return
+	}
+	b, err := d.r.ReadBytes('\n')
+	if len(b) > 0 {
+		d.total += len(b)
+		line := len(d.lines) + 1
+		d.lines = append(d.lines, string(b))
+		normalized := normalizeTerminalLine(b, d.o.plain)
+		blank := string(normalized) == "\n"
+		if !(d.o.squeeze && blank && d.lastBlank) {
+			for _, part := range foldLine(normalized, d.width, d.o.plain) {
+				d.rows = append(d.rows, displayRow{part, line, d.total})
+			}
+		}
+		d.lastBlank = blank
+	}
+	if err != nil {
+		d.eof = true
+		if !errors.Is(err, io.EOF) {
+			d.readErr = err
+		}
+	}
+}
+
+func normalizeTerminalLine(line []byte, plain bool) []byte {
+	if plain {
+		return append([]byte(nil), line...)
+	}
+	line = append([]byte(nil), line...)
+	if len(line) >= 2 && line[len(line)-2] == '\r' && line[len(line)-1] == '\n' {
+		line = append(line[:len(line)-2], '\n')
+	}
+	var out []byte
+	for i := 0; i < len(line); i++ {
+		if i+2 < len(line) && line[i+1] == '\b' &&
+			(line[i+2] == '_' || line[i] == '_' || line[i] == line[i+2]) {
+			if line[i] == '_' {
+				out = append(out, line[i+2])
+			} else {
+				out = append(out, line[i])
+			}
+			i += 2
+			continue
+		}
+		if line[i] == '\b' {
+			if len(out) > 0 {
+				_, size := utf8.DecodeLastRune(out)
+				if size < 1 {
+					size = 1
+				}
+				out = out[:len(out)-size]
+			}
+			continue
+		}
+		out = append(out, line[i])
+	}
+	return out
+}
+func (d *document) ensure(n int) {
+	for len(d.rows) < n && !d.eof {
+		d.loadLine()
+	}
+}
+func (d *document) all() {
+	for !d.eof {
+		d.loadLine()
+	}
+}
+
+func foldLine(line []byte, width int, plain bool) [][]byte {
+	if width < 1 {
+		width = 80
+	}
+	var rows [][]byte
+	start, col := 0, 0
+	for i := 0; i < len(line); {
+		r, size := utf8.DecodeRune(line[i:])
+		if r == utf8.RuneError && size == 0 {
+			size = 1
+		}
+		advance := runewidth.RuneWidth(r)
+		if advance < 0 || plain && advance == 0 && r != '\n' {
+			advance = 1
+		}
+		switch r {
+		case '\n':
+			advance = 0
+		case '\t':
+			advance = 8 - col%8
+		case '\b':
+			if !plain {
+				advance = 0
+				if col > 0 {
+					col--
+				}
+			}
+		case '\r':
+			if !plain {
+				advance = 0
+				col = 0
+			}
+		}
+		if col+advance > width && i > start {
+			rows = append(rows, append([]byte(nil), line[start:i]...))
+			start, col = i, 0
+			if r == '\t' {
+				advance = 8
+			}
+		}
+		col += advance
+		if r == '\n' {
+			rows = append(rows, append([]byte(nil), line[start:i+size]...))
+			start, col = i+size, 0
+		}
+		i += size
+	}
+	if start < len(line) {
+		rows = append(rows, append([]byte(nil), line[start:]...))
+	}
+	return rows
+}
+
+func flushWriter(w io.Writer) error {
+	if f, ok := w.(interface{ Flush() error }); ok {
+		return f.Flush()
+	}
+	return nil
+}
+
+type searchState struct {
+	pattern         string
+	forward, invert bool
+}
+type displayPosition struct{ row, offset int }
+type pager struct {
+	rc                                   *tool.RunContext
+	out                                  *bufio.Writer
+	tty                                  *ttyChannel
+	o                                    options
+	files                                []string
+	doc                                  *document
+	fileIndex, top, next, half, exitCode int
+	previous                             displayPosition
+	marks                                map[byte]displayPosition
+	suppressCommands                     map[int]bool
+	search                               searchState
+	previousExamined                     string
+	quit, commandFailed                  bool
+}
+
+func (p *pager) canceled() bool              { return p.rc.Ctx != nil && p.rc.Ctx.Err() != nil }
+func (p *pager) diagnose(f string, a ...any) { _, _ = fmt.Fprintf(p.rc.Err, "more: "+f+"\n", a...) }
+func (p *pager) commandError(f string, a ...any) {
+	p.commandFailed = true
+	p.diagnose(f, a...)
+}
+func (p *pager) fail(f string, a ...any) bool { p.diagnose(f, a...); p.exitCode = 1; return false }
+func (p *pager) writeUI(s string) bool {
+	n, e := io.WriteString(p.rc.Err, s)
+	if e != nil {
+		return p.fail("terminal write error: %v", e)
+	}
+	if n != len(s) {
+		return p.fail("terminal write error: %v", io.ErrShortWrite)
+	}
+	if e = flushWriter(p.rc.Err); e != nil {
+		return p.fail("terminal flush error: %v", e)
+	}
+	return true
+}
+
+func (p *pager) openFile(i int) bool { return p.openFileMode(i, false) }
+
+func (p *pager) openFileMode(i int, requireSeekable bool) bool {
+	if i < 0 || i >= len(p.files) {
+		return false
+	}
+	name := p.files[i]
+	r, c, e := openInput(p.rc, name)
+	if e != nil {
+		p.fail("%s: %v", name, tool.SysErr(e))
+		return false
+	}
+	if requireSeekable {
+		_, seekable := r.(io.Seeker)
+		if name == "-" || !seekable {
+			if c != nil {
+				_ = c.Close()
+			}
+			p.fail("%s: file is not seekable", name)
+			return false
+		}
+	}
+	if p.doc != nil && p.doc.name != name {
+		p.previousExamined = p.doc.name
+	}
+	if p.doc != nil {
+		if e := p.doc.close(); e != nil {
+			p.fail("%s: close: %v", p.doc.name, tool.SysErr(e))
+		}
+	}
+	p.doc = newDocument(name, r, c, p.o.width, p.o)
+	p.fileIndex, p.top, p.next = i, 0, 0
+	p.previous = displayPosition{}
+	p.marks = make(map[byte]displayPosition)
+	return true
+}
+func (p *pager) openReachable(start, step int, affect bool) bool {
+	old := p.exitCode
+	for i := start; i >= 0 && i < len(p.files); i += step {
+		if p.openFile(i) {
+			p.runFileCommands()
+			return true
+		}
+	}
+	if !affect {
+		p.exitCode = old
+	}
+	return false
+}
+
+func (p *pager) openFirstReachable(start int) bool {
+	for i := start; i < len(p.files); i++ {
+		if p.openFile(i) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *pager) runFileCommands() {
+	p.commandFailed = false
+	if p.o.command != "" && !p.suppressCommands[p.fileIndex] {
+		// -p commands act after the ordinary first screen has logically been
+		// established, even though that intermediate screen is not written.
+		p.doc.ensure(p.top + p.o.screenful)
+		p.next = min(len(p.doc.rows), p.top+p.o.screenful)
+		p.initialCommands(p.o.command)
+	}
+}
+
+func (p *pager) run() int {
+	p.half = max(1, p.o.screenful/2)
+	p.suppressCommands = make(map[int]bool)
+	if p.o.tag != "" {
+		target, line, pattern, e := resolveTag(p.rc, p.o.tag)
+		if e != nil {
+			return p.failCode("tag %s: %v", p.o.tag, e)
+		}
+		p.files = append([]string{target}, p.files...)
+		if !p.openFile(0) {
+			return p.exitCode
+		}
+		if line > 0 {
+			p.top = p.rowForLine(line)
+		} else if pattern != "" && !p.searchFor(pattern, true, false, 1, -1) {
+			p.diagnose("tag %s: pattern not found", p.o.tag)
+			p.suppressCommands[p.fileIndex] = true
+		}
+	} else if !p.openFirstReachable(0) {
+		return p.exitCode
+	}
+	if p.o.fromLine > 1 {
+		p.top = p.rowForLine(p.o.fromLine)
+	}
+	if p.o.pattern != "" {
+		p.literalSearch(p.o.pattern)
+	}
+	p.runFileCommands()
+	if p.quit {
+		return p.exitCode
+	}
+	for !p.quit && !p.canceled() {
+		// POSIX permits -c to be silently ignored when the terminal cannot
+		// support clearing without scrolling. TERM=dumb is such a terminal.
+		if p.o.cleanPrint && p.rc.Getenv("TERM") != "dumb" && !p.writeUI("\x1b[H\x1b[2J") {
+			break
+		}
+		if !p.render() {
+			break
+		}
+		atEOF := p.doc.eof && p.next >= len(p.doc.rows)
+		if atEOF && p.fileIndex == len(p.files)-1 && p.o.exitOnEof {
+			break
+		}
+		if !p.prompt(atEOF) {
+			break
+		}
+	}
+	if p.doc != nil {
+		if e := p.doc.close(); e != nil {
+			p.fail("%s: close: %v", p.doc.name, tool.SysErr(e))
+		}
+	}
+	return p.exitCode
+}
+func (p *pager) failCode(f string, a ...any) int { p.fail(f, a...); return p.exitCode }
+func (p *pager) render() bool {
+	p.doc.ensure(p.top + p.o.screenful)
+	if p.doc.readErr != nil {
+		return p.fail("%s: %v", p.doc.name, tool.SysErr(p.doc.readErr))
+	}
+	end := min(len(p.doc.rows), p.top+p.o.screenful)
+	for _, r := range p.doc.rows[p.top:end] {
+		if _, e := p.out.Write(r.data); e != nil {
+			return p.fail("write error: %v", e)
+		}
+	}
+	p.next = end
+	if p.doc.readErr != nil {
+		return p.fail("%s: %v", p.doc.name, tool.SysErr(p.doc.readErr))
+	}
+	return true
+}
+func (p *pager) promptText(eof bool) string {
+	if eof {
+		if p.fileIndex+1 < len(p.files) {
+			return fmt.Sprintf("--More--(%s: END; Next file: %s)", p.doc.name, p.files[p.fileIndex+1])
+		}
+		return fmt.Sprintf("--More--(%s: END)", p.doc.name)
+	}
+	if p.doc.name == "-" {
+		return "--More--"
+	}
+	return fmt.Sprintf("--More--(%s)", p.doc.name)
+}
+func (p *pager) prompt(eof bool) bool {
+	c, ok := p.readPrompt(eof)
+	if !ok {
+		return false
+	}
+	return p.execute(c, eof)
+}
+
+func (p *pager) readPrompt(eof bool) (moreCommand, bool) {
+	if e := p.out.Flush(); e != nil {
+		p.fail("write error: %v", e)
+		return moreCommand{}, false
+	}
+	dumb := p.rc.Getenv("TERM") == "dumb"
+	prompt := "\x1b[7m" + p.promptText(eof) + "\x1b[m"
+	if dumb {
+		prompt = p.promptText(eof)
+	}
+	if !p.writeUI(prompt) {
+		return moreCommand{}, false
+	}
+	in := ttyInput{p}
+	c, e := readCommand(&in)
+	if e != nil {
+		if p.canceled() {
+			return moreCommand{}, false
+		}
+		p.fail("terminal read error: %v", e)
+		return moreCommand{}, false
+	}
+	clear := "\r\x1b[K"
+	if dumb {
+		clear = "\r"
+	}
+	if !p.writeUI(clear) {
+		return moreCommand{}, false
+	}
+	return c, true
+}
+
+type moreCommand struct {
+	count    int
+	counted  bool
+	key, sub byte
+	arg      string
+}
+type byteInput interface{ readByte() (byte, error) }
+type ttyInput struct{ p *pager }
+
+func (i *ttyInput) readByte() (byte, error) { return i.p.tty.readCommand(i.p.rc.Ctx) }
+
+type stringInput struct{ *strings.Reader }
+
+func (i *stringInput) readByte() (byte, error) { return i.ReadByte() }
+func readLine(in byteInput) (string, error) {
+	var b strings.Builder
+	for {
+		c, e := in.readByte()
+		if e != nil {
+			if errors.Is(e, io.EOF) {
+				return b.String(), nil
+			}
+			return "", e
+		}
+		if c == '\n' || c == '\r' {
+			return b.String(), nil
+		}
+		b.WriteByte(c)
+	}
+}
+func readCommand(in byteInput) (moreCommand, error) {
+	var c moreCommand
+	b, e := in.readByte()
+	if e != nil {
+		return c, e
+	}
+	for b >= '0' && b <= '9' {
+		c.counted = true
+		c.count = c.count*10 + int(b-'0')
+		b, e = in.readByte()
+		if e != nil {
+			return c, e
+		}
+	}
+	c.key = b
+	switch b {
+	case '/', '?':
+		c.arg, e = readLine(in)
+	case 'm', '\'':
+		c.sub, e = in.readByte()
+	case ':':
+		c.sub, e = in.readByte()
+		if e == nil && (c.sub == 'e' || c.sub == 't') {
+			c.arg, e = readLine(in)
+		}
+	case 'Z':
+		c.sub, e = in.readByte()
+	}
+	return c, e
+}
+func (p *pager) initialCommands(s string) {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n > 0 {
+		// The decimal -p shorthand places the requested file line at the
+		// standard current position, normally the third display line.
+		p.moveLarge(max(0, p.rowForLine(n)-2))
+		return
+	}
+	in := &stringInput{strings.NewReader(s)}
+	for in.Len() > 0 && !p.quit {
+		c, e := readCommand(in)
+		if e != nil {
+			p.diagnose("-p command: %v", e)
+			return
+		}
+		if !p.execute(c, false) {
+			return
+		}
+		if p.commandFailed {
+			return
+		}
+	}
+}
+func count(c moreCommand, d int) int {
+	if c.counted {
+		return max(1, c.count)
+	}
+	return d
+}
+func (p *pager) moveLarge(n int) { p.top = max(0, n) }
+
+func (p *pager) currentPosition() displayPosition {
+	p.doc.ensure(p.top + p.o.screenful)
+	end := min(len(p.doc.rows), p.top+p.o.screenful)
+	if end <= p.top {
+		return displayPosition{row: p.top}
+	}
+	offset := min(2, end-p.top-1)
+	if p.top == 0 {
+		offset = 0
+	} else if p.doc.eof && end == len(p.doc.rows) {
+		offset = end - p.top - 1
+	}
+	return displayPosition{row: p.top + offset, offset: offset}
+}
+
+func (p *pager) restorePosition(pos displayPosition) { p.top = max(0, pos.row-pos.offset) }
+
+func (p *pager) moveForward(n int) {
+	target := p.top + max(0, n)
+	p.doc.ensure(target + p.o.screenful)
+	if p.doc.eof {
+		target = min(target, max(0, len(p.doc.rows)-1))
+	}
+	p.top = target
+}
+
+func (p *pager) execute(c moreCommand, eof bool) bool {
+	oldDoc, oldTop := p.doc, p.top
+	oldPosition := p.currentPosition()
+	ok := p.executeCommand(c, eof)
+	if p.doc == oldDoc && abs(p.top-oldTop) > p.o.screenful {
+		p.previous = oldPosition
+	}
+	return ok
+}
+
+func (p *pager) executeCommand(c moreCommand, eof bool) bool {
+	if eof {
+		advance := advancesAtEOF(c)
+		if p.fileIndex == len(p.files)-1 {
+			p.quit = true
+			return false
+		}
+		if advance {
+			return p.openReachable(p.fileIndex+1, 1, true)
+		}
+	}
+	n := count(c, 1)
+	switch c.key {
+	case 'q':
+		p.quit = true
+		return false
+	case ':':
+		if c.sub == 'q' {
+			p.quit = true
+			return false
+		}
+		return p.colon(c)
+	case 'Z':
+		if c.sub == 'Z' {
+			p.quit = true
+			return false
+		}
+	case ' ', 'j', '\n', '\r':
+		step := n
+		if !c.counted && c.key == ' ' {
+			step = p.o.screenful
+		}
+		p.moveForward(step)
+		return true
+	case 'f', 0x06:
+		step := n
+		if !c.counted {
+			step = p.o.screenful
+		}
+		p.moveForward(step)
+		return true
+	case 'b', 0x02:
+		step := n
+		if !c.counted {
+			step = p.o.screenful
+		}
+		p.top = max(0, p.top-step)
+		return true
+	case 'k':
+		p.top = max(0, p.top-n)
+		return true
+	case 'd', 0x04:
+		if c.counted {
+			p.half = n
+		}
+		p.moveForward(p.half)
+		return true
+	case 'u', 0x15:
+		if c.counted {
+			p.half = n
+		}
+		p.top = max(0, p.top-p.half)
+		return true
+	case 's':
+		p.doc.all()
+		p.top = min(max(0, len(p.doc.rows)-p.o.screenful), p.next+n-1)
+		return true
+	case 'g':
+		p.moveLarge(p.rowForLine(n))
+		return true
+	case 'G':
+		if c.counted {
+			p.moveLarge(p.rowForLine(n))
+		} else {
+			p.doc.all()
+			p.moveLarge(max(0, len(p.doc.rows)-p.o.screenful))
+		}
+		return true
+	case 'r', 0x0c:
+		return true
+	case 'R':
+		if !p.doc.seekable {
+			return true
+		}
+		line := 1
+		if p.top < len(p.doc.rows) {
+			line = p.doc.rows[p.top].line
+		}
+		index := p.fileIndex
+		if p.openFile(index) {
+			p.top = p.rowForLine(line)
+			p.runFileCommands()
+		}
+		return true
+	case 'm':
+		if c.sub < 'a' || c.sub > 'z' {
+			p.commandError("invalid mark")
+		} else {
+			p.marks[c.sub] = p.currentPosition()
+		}
+		return true
+	case '\'':
+		if c.sub == '\'' {
+			p.restorePosition(p.previous)
+		} else if x, ok := p.marks[c.sub]; ok {
+			p.restorePosition(x)
+		} else {
+			p.commandError("mark %c is not set", c.sub)
+		}
+		return true
+	case '/', '?':
+		forward := c.key == '/'
+		invert := strings.HasPrefix(c.arg, "!")
+		pat := strings.TrimPrefix(c.arg, "!")
+		if pat == "" {
+			pat = p.search.pattern
+			invert = p.search.invert
+		}
+		if pat == "" || !p.searchFor(pat, forward, invert, n, p.top) {
+			p.commandError("pattern not found")
+		}
+		return true
+	case 'n', 'N':
+		if p.search.pattern == "" {
+			p.commandError("no previous search")
+			return true
+		}
+		forward := p.search.forward
+		if c.key == 'N' {
+			forward = !forward
+		}
+		if !p.searchFor(p.search.pattern, forward, p.search.invert, n, p.top) {
+			p.commandError("pattern not found")
+		}
+		return true
+	case 'h':
+		return p.help()
+	case 'v':
+		return p.editor()
+	case '=', 0x07:
+		return p.position()
+	}
+	p.commandError("unknown command: %s", commandName(rune(c.key)))
+	return true
+}
+
+func advancesAtEOF(c moreCommand) bool {
+	return c.key == 'f' || c.key == 0x06 || c.key == ' ' || c.key == 'j' ||
+		c.key == '\n' || c.key == '\r' || c.key == 'd' || c.key == 0x04 || c.key == 's'
+}
+
+func (p *pager) colon(c moreCommand) bool {
+	switch c.sub {
+	case 'n':
+		return p.openReachable(p.fileIndex+count(c, 1), 1, true)
+	case 'p':
+		return p.openReachable(p.fileIndex-count(c, 1), -1, true)
+	case 'e':
+		name := strings.TrimSpace(c.arg)
+		if name == "" {
+			name = p.doc.name
+		} else if name == "#" && p.previousExamined != "" {
+			name = p.previousExamined
+		} else {
+			x, e := expandFilename(p.rc, name)
+			if e != nil {
+				p.commandError("%v", e)
+				return true
+			}
+			name = x
+		}
+		old := p.exitCode
+		p.files = append(p.files, name)
+		if !p.openFileMode(len(p.files)-1, true) {
+			p.files = p.files[:len(p.files)-1]
+			p.exitCode = old
+			p.commandFailed = true
+		} else {
+			p.runFileCommands()
+		}
+		return true
+	case 't':
+		target, line, pat, e := resolveTag(p.rc, strings.TrimSpace(c.arg))
+		if e != nil {
+			p.commandError("tag: %v", e)
+			return true
+		}
+		opened := true
+		if p.doc.name != target && p.rc.Path(p.doc.name) != p.rc.Path(target) {
+			p.files = append(p.files, target)
+			opened = p.openFileMode(len(p.files)-1, true)
+			if !opened {
+				p.files = p.files[:len(p.files)-1]
+			}
+		}
+		if opened {
+			if line > 0 {
+				p.top = p.rowForLine(line)
+			} else if pat != "" && !p.searchFor(pat, true, false, 1, -1) {
+				p.commandError("tag pattern not found")
+			}
+			p.runFileCommands()
+		}
+		return true
+	}
+	p.commandError("unknown command: :%c", c.sub)
+	return true
+}
+func (p *pager) rowForLine(n int) int {
+	p.doc.all()
+	previous := 0
+	for i, r := range p.doc.rows {
+		if r.line >= n {
+			if r.line > n {
+				return previous
+			}
+			return i
+		}
+		previous = i
+	}
+	return max(0, len(p.doc.rows)-p.o.screenful)
+}
+func (p *pager) literalSearch(s string) bool {
+	p.doc.all()
+	for i, r := range p.doc.rows {
+		if strings.Contains(string(r.data), s) {
+			p.top = i
+			return true
+		}
+	}
+	p.diagnose("Pattern not found")
+	return false
+}
+func (p *pager) searchFor(pattern string, forward, invert bool, n, from int) bool {
+	p.doc.all()
+	flags := ""
+	if p.o.ignoreCase {
+		flags = "(?i)"
+	}
+	re, e := bre.CompileWithFlags(pattern, flags)
+	if e != nil {
+		p.diagnose("invalid pattern: %v", e)
+		return false
+	}
+	start := 0
+	if from >= 0 && from < len(p.doc.rows) {
+		start = p.doc.rows[from].line
+	}
+	seen := 0
+	if forward {
+		for i, line := range p.doc.lines {
+			if i+1 <= start || re.MatchString(strings.TrimRight(line, "\r\n")) == invert {
+				continue
+			}
+			seen++
+			if seen == n {
+				p.top = p.rowForLine(i + 1)
+				p.search = searchState{pattern, true, invert}
+				return true
+			}
+		}
+	} else {
+		if start == 0 {
+			start = len(p.doc.lines) + 1
+		}
+		for i := min(len(p.doc.lines), start-1) - 1; i >= 0; i-- {
+			if re.MatchString(strings.TrimRight(p.doc.lines[i], "\r\n")) == invert {
+				continue
+			}
+			seen++
+			if seen == n {
+				p.top = p.rowForLine(i + 1)
+				p.search = searchState{pattern, false, invert}
+				return true
+			}
+		}
+	}
+	return false
+}
+func (p *pager) help() bool {
+	const summary = "more commands\n" +
+		"h                     display this help\n" +
+		"f ^F b ^B space j k   move by screens or lines\n" +
+		"d ^D u ^U s           half-screen movement and skip\n" +
+		"g G r ^L R            go to line/end and refresh\n" +
+		"mletter 'letter ''    mark and restore positions\n" +
+		"/BRE ?BRE n N         search and repeat\n" +
+		":e :n :p :t           examine files and tags\n" +
+		"v = ^G                editor and position\n" +
+		"q :q ZZ               quit\n"
+	hp := *p
+	hp.files = []string{"help"}
+	hp.fileIndex, hp.top, hp.next = 0, 0, 0
+	hp.doc = newDocument("help", strings.NewReader(summary), nil, p.o.width, p.o)
+	hp.marks = make(map[byte]displayPosition)
+	hp.suppressCommands = make(map[int]bool)
+	hp.o.command = ""
+	for !hp.quit {
+		if !hp.render() {
+			p.exitCode = max(p.exitCode, hp.exitCode)
+			return false
+		}
+		eof := hp.doc.eof && hp.next >= len(hp.doc.rows)
+		c, ok := hp.readPrompt(eof)
+		if !ok {
+			p.exitCode = max(p.exitCode, hp.exitCode)
+			return false
+		}
+		if eof && advancesAtEOF(c) {
+			return true
+		}
+		if !hp.execute(c, false) {
+			p.quit = hp.quit
+			return !p.quit
+		}
+	}
+	return false
+}
+func (p *pager) position() bool {
+	p.doc.all()
+	line, b := 0, 0
+	if p.next > 0 && p.next <= len(p.doc.rows) {
+		line, b = p.doc.rows[p.next-1].line, p.doc.rows[p.next-1].byteEnd
+	}
+	pct := 100
+	if p.doc.total > 0 {
+		pct = b * 100 / p.doc.total
+	}
+	return p.writeUI(fmt.Sprintf("%s %d/%d line %d byte %d/%d %d%%\n", p.doc.name, p.fileIndex+1, len(p.files), line, b, p.doc.total, pct))
+}
+
+var runEditor = func(ctx context.Context, rc *tool.RunContext, tty *ttyChannel, editor string, line int, name string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	args := []string{name}
+	base := filepath.Base(editor)
+	if base == "vi" || base == "ex" {
+		args = []string{"-c", strconv.Itoa(line), name}
+	}
+	c := exec.CommandContext(ctx, editor, args...)
+	c.Dir, c.Env = rc.Dir, rc.Env
+	c.Stdin, c.Stdout, c.Stderr = rc.In, rc.Out, rc.Err
+	if tty != nil && tty.editorIO != nil {
+		c.Stdin, c.Stdout, c.Stderr = tty.editorIO, tty.editorIO, tty.editorIO
+	}
+	return c.Run()
+}
+
+func (p *pager) editor() bool {
+	if p.doc.name == "-" {
+		p.commandError("cannot edit standard input")
+		return true
+	}
+	ed := p.rc.Getenv("EDITOR")
+	if ed == "" {
+		ed = "vi"
+	}
+	resolved := p.rc.ResolveCommand(ed)
+	if resolved == "" {
+		p.commandError("editor: %s: not found", ed)
+		return true
+	}
+	line := 1
+	if p.top < len(p.doc.rows) {
+		line = p.doc.rows[p.top].line
+	}
+	if e := runEditor(p.rc.Ctx, p.rc, p.tty, resolved, line, p.rc.Path(p.doc.name)); e != nil {
+		p.commandError("editor: %v", e)
+	}
+	return true
+}
+
+func expandFilename(rc *tool.RunContext, raw string) (string, error) {
+	var words []*syntax.Word
+	parser := syntax.NewParser(syntax.Variant(syntax.LangPOSIX))
+	if err := parser.Words(strings.NewReader(raw), func(word *syntax.Word) bool {
+		words = append(words, word)
+		return true
+	}); err != nil {
+		return "", fmt.Errorf(":e expansion: %w", err)
+	}
+	env := append(append([]string(nil), rc.Env...), "PWD="+rc.Dir)
+	fields, err := expand.Fields(&expand.Config{
+		Env:      expand.ListEnviron(env...),
+		ReadDir2: os.ReadDir,
+		Lang:     syntax.LangPOSIX,
+		CmdSubst: func(w io.Writer, cs *syntax.CmdSubst) error {
+			ctx := rc.Ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			runner, err := interp.New(
+				interp.Dir(rc.Dir),
+				interp.Env(expand.ListEnviron(env...)),
+				interp.StdIO(strings.NewReader(""), w, rc.Err),
+				interp.ExecHandler(func(context.Context, []string) error {
+					return fmt.Errorf("external utilities are not permitted in :e expansion")
+				}),
+			)
+			if err != nil {
+				return err
+			}
+			return runner.Run(ctx, &syntax.File{Stmts: cs.Stmts})
+		},
+	}, words...)
+	if err != nil {
+		return "", fmt.Errorf(":e expansion: %w", err)
+	}
+	if len(fields) != 1 {
+		return "", fmt.Errorf(":e expansion produced multiple pathnames")
+	}
+	return fields[0], nil
+}
+func resolveTag(rc *tool.RunContext, tag string) (string, int, string, error) {
+	data, e := os.ReadFile(rc.Path("tags"))
+	if e != nil {
+		return "", 0, "", e
+	}
+	for _, raw := range strings.Split(string(data), "\n") {
+		if raw == "" || strings.HasPrefix(raw, "!_TAG_") {
+			continue
+		}
+		f := strings.SplitN(raw, "\t", 3)
+		if len(f) < 3 || f[0] != tag {
+			continue
+		}
+		ex := strings.TrimSuffix(f[2], `;"`)
+		if n, e := strconv.Atoi(ex); e == nil && n > 0 {
+			return f[1], n, "", nil
+		}
+		if len(ex) >= 2 && (ex[0] == '/' || ex[0] == '?') && ex[len(ex)-1] == ex[0] {
+			pat := strings.TrimSuffix(strings.TrimPrefix(ex[1:len(ex)-1], "^"), "$")
+			pat = strings.ReplaceAll(pat, `\/`, `/`)
+			return f[1], 0, pat, nil
+		}
+		return "", 0, "", fmt.Errorf("unsupported tag address %q", ex)
+	}
+	return "", 0, "", fmt.Errorf("not found")
+}
 func commandName(r rune) string {
 	switch r {
 	case ' ':
@@ -71,297 +1043,14 @@ func commandName(r rune) string {
 	if r < 0x20 {
 		return fmt.Sprintf("^%c", r+'@')
 	}
-	return string(r)
+	if unicode.IsPrint(r) {
+		return string(r)
+	}
+	return fmt.Sprintf("U+%04X", r)
 }
-
-type pager struct {
-	rc    *tool.RunContext
-	out   *bufio.Writer
-	tty   *ttyChannel
-	o     options
-	files []string
-
-	linesPrinted int
-	col          int
-	exitCode     int
-	quit         bool
-}
-
-func (p *pager) canceled() bool {
-	return p.rc.Ctx != nil && p.rc.Ctx.Err() != nil
-}
-
-func (p *pager) diagnose(format string, args ...any) {
-	fmt.Fprintf(p.rc.Err, "more: "+format+"\n", args...)
-}
-
-func (p *pager) fail(format string, args ...any) bool {
-	p.diagnose(format, args...)
-	p.exitCode = 1
-	return false
-}
-
-func (p *pager) run() int {
-	for i, name := range p.files {
-		if p.canceled() || p.quit {
-			break
-		}
-		r, closer, err := openInput(p.rc, name)
-		if err != nil {
-			p.fail("%s: %v", name, tool.SysErr(err))
-			continue
-		}
-
-		p.linesPrinted, p.col = 0, 0
-		if p.o.cleanPrint && !p.writeUI("\x1b[H\x1b[2J") {
-			p.closeSource(name, closer)
-			break
-		}
-		if p.o.command != "" && !p.processCommand(p.o.command) {
-			p.closeSource(name, closer)
-			break
-		}
-		if !p.stream(name, r) {
-			p.closeSource(name, closer)
-			break
-		}
-		if !p.closeSource(name, closer) {
-			break
-		}
-		if p.quit || p.canceled() {
-			break
-		}
-
-		if i < len(p.files)-1 {
-			if !p.prompt(fmt.Sprintf("--More--(Next file: %s)", p.files[i+1])) {
-				break
-			}
-		} else if !p.o.exitOnEof && !p.prompt("--More--(END)") {
-			break
-		}
+func abs(n int) int {
+	if n < 0 {
+		return -n
 	}
-	return p.exitCode
-}
-
-func (p *pager) closeSource(name string, closer io.Closer) bool {
-	if closer == nil {
-		return true
-	}
-	if err := closer.Close(); err != nil {
-		return p.fail("%s: close: %v", name, tool.SysErr(err))
-	}
-	return true
-}
-
-// stream consumes the source only as display space becomes available. In the
-// normal case it reads one byte at a time, so a full first screen is flushed
-// before an open pipe (or an infinite stdin) is asked for another byte.
-func (p *pager) stream(name string, r io.Reader) bool {
-	br := bufio.NewReader(r)
-	line := 1
-	active := p.o.pattern == "" && line >= p.o.fromLine
-	var pending []byte // only used by the optional literal-pattern extension
-	searchStart := 0
-	wroteBlank := false
-	atLineStart := true
-
-	for {
-		b, err := br.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				if p.o.pattern != "" && !active {
-					last := strings.TrimRight(string(pending[searchStart:]), "\r\n")
-					if strings.Contains(last, p.o.pattern) && line >= p.o.fromLine {
-						pending = pending[searchStart:]
-					} else {
-						fmt.Fprintln(p.rc.Err, "Pattern not found")
-					}
-				}
-				if len(pending) != 0 && !p.emitBytes(pending, &wroteBlank, &atLineStart) {
-					return false
-				}
-				return true
-			}
-			return p.fail("%s: %v", name, tool.SysErr(err))
-		}
-
-		if p.o.pattern != "" && !active {
-			pending = append(pending, b)
-			if b != '\n' {
-				continue
-			}
-			text := strings.TrimRight(string(pending[searchStart:]), "\r\n")
-			if strings.Contains(text, p.o.pattern) && line >= p.o.fromLine {
-				active = true
-				if !p.emitBytes(pending[searchStart:], &wroteBlank, &atLineStart) {
-					return false
-				}
-				pending = pending[:0]
-				searchStart = 0
-			} else {
-				searchStart = len(pending)
-			}
-			line++
-			continue
-		}
-
-		if !active {
-			if b == '\n' {
-				line++
-				active = line >= p.o.fromLine
-			}
-			continue
-		}
-		if !p.emitBytes([]byte{b}, &wroteBlank, &atLineStart) {
-			return false
-		}
-	}
-}
-
-func (p *pager) emitBytes(bs []byte, wroteBlank, atLineStart *bool) bool {
-	for _, b := range bs {
-		blank := b == '\n' && *atLineStart
-		if !(p.o.squeeze && blank && *wroteBlank) {
-			if !p.emitByte(b) {
-				return false
-			}
-		}
-		if b == '\n' {
-			*wroteBlank = blank
-			*atLineStart = true
-		} else {
-			*atLineStart = false
-		}
-	}
-	return true
-}
-
-func (p *pager) emitByte(b byte) bool {
-	if p.canceled() {
-		return false
-	}
-
-	nextCol := p.col
-	wraps := 0
-	switch {
-	case b == '\t':
-		nextCol += 8 - nextCol%8
-	case b == '\n', b == '\b' && !p.o.plain, b == '\r' && !p.o.plain:
-		// These bytes do not advance into another display row.
-	default:
-		nextCol++
-	}
-	for nextCol > p.o.width {
-		wraps++
-		nextCol -= p.o.width
-	}
-	if wraps != 0 {
-		p.linesPrinted += wraps
-		if p.linesPrinted >= p.o.screenful && !p.prompt("--More--") {
-			return false
-		}
-	}
-
-	if err := p.out.WriteByte(b); err != nil {
-		return p.fail("write error: %v", err)
-	}
-
-	switch {
-	case b == '\b' && !p.o.plain:
-		if p.col > 0 {
-			p.col--
-		}
-	case b == '\r' && !p.o.plain:
-		p.col = 0
-	case b == '\t':
-		p.col = nextCol
-	case b == '\n':
-		p.linesPrinted++
-		p.col = 0
-	default:
-		p.col = nextCol
-	}
-	if p.linesPrinted >= p.o.screenful && !p.prompt("--More--") {
-		return false
-	}
-	return true
-}
-
-func flushWriter(w io.Writer) error {
-	if f, ok := w.(interface{ Flush() error }); ok {
-		return f.Flush()
-	}
-	return nil
-}
-
-func (p *pager) writeUI(s string) bool {
-	n, err := io.WriteString(p.rc.Err, s)
-	if err != nil {
-		return p.fail("terminal write error: %v", err)
-	}
-	if n != len(s) {
-		return p.fail("terminal write error: %v", io.ErrShortWrite)
-	}
-	if err := flushWriter(p.rc.Err); err != nil {
-		return p.fail("terminal flush error: %v", err)
-	}
-	return true
-}
-
-func (p *pager) prompt(msg string) bool {
-	// Content must be visible before the prompt, and the prompt must be visible
-	// before the first controlling-terminal read.
-	if err := p.out.Flush(); err != nil {
-		return p.fail("write error: %v", err)
-	}
-	if !p.writeUI("\x1b[7m" + msg + "\x1b[m") {
-		return false
-	}
-
-	r, err := p.tty.readCommand(p.rc.Ctx)
-	if err != nil {
-		if p.canceled() {
-			return false
-		}
-		return p.fail("terminal read error: %v", err)
-	}
-	switch r {
-	case ' ':
-		if !p.writeUI("\r\x1b[K") {
-			return false
-		}
-		p.linesPrinted = 0
-		return true
-	case 'q':
-		if !p.writeUI("\r\x1b[K") {
-			return false
-		}
-		p.quit = true
-		return false
-	default:
-		if strings.ContainsRune(recognizedCommands, rune(r)) {
-			p.diagnose("%s: command not supported", commandName(rune(r)))
-		} else {
-			p.diagnose("unknown command: %s", commandName(rune(r)))
-		}
-		p.exitCode = 1
-		return false
-	}
-}
-
-func (p *pager) processCommand(command string) bool {
-	for _, r := range command {
-		switch r {
-		case ' ':
-			p.linesPrinted = 0
-		case 'q':
-			p.quit = true
-			return false
-		default:
-			p.diagnose("%s: command not supported", commandName(r))
-			p.exitCode = 1
-			return false
-		}
-	}
-	return true
+	return n
 }
