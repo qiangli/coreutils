@@ -185,6 +185,7 @@ func run(rc *tool.RunContext, args []string) int {
 			o.screenful = 1
 		}
 		p := &pager{rc: rc, w: w, cmds: newCmdReader(ch.cmds), o: o, files: files}
+		defer p.cmds.stop()
 		exit := p.run()
 		if err := w.Flush(); err != nil {
 			fmt.Fprintf(rc.Err, "more: write error: %v\n", err)

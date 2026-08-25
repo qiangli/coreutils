@@ -79,7 +79,7 @@ Text — reading and slicing:
 | nl | fresh | -b/-h/-f a/t/n/pBRE (pkg/bre), GNU section delimiters (replaced by empty lines), one document across files, unnumbered lines padded width+len(sep), -d, -v/-i (negatives ok), -l, -p, -n ln/rn/rz, -s, -w |
 | od | fresh | default octal words + GNU * duplicate elision (-v disables); -A d/o/x/n, -t a/c/[doux][1248]/f[48], -a/-b/-c/-d/-o/-x, -N, -j (errors past EOF), -S (NUL-terminated), -w, --endian, traditional +offset (octal, ./0x/b) |
 | pr | fresh | GNU page model (66-line pages, 5-line header/trailer, bottom fill, -l≤10 implies -t, FF page breaks, +FIRST[:LAST]); -l, -w/-W, -t/-T, -h, -o, -d, -n; single-column never truncated; multi-column/-m refused loudly; stdin header uses wall clock (documented deviation) |
-| more | fresh | non-interactive pager fallback; stdin/files passthrough; -P literal pattern ("Pattern not found" fallback); util-linux flag spellings (-p/--print-over, -u/--plain) |
+| more | fresh | terminal pager over an injectable controlling-terminal channel: geometry -n/$LINES/tty/24 by $COLUMNS/tty/80, screenful rows-1, backspace/CR/tab column folding, --More--/(Next file)/(END) prompts, -e, -c, -u, -s, POSIX -p COMMAND at each new file's first screen; this slice implements <space>/q only and refuses every other more(1) command as deferred; -i/-t refused; fails closed to the non-interactive passthrough (stdin/files, only -s in effect per POSIX) when stdout is not a terminal or the channel cannot be opened; -P literal pattern ("Pattern not found" fallback) |
 
 Text — transform and combine:
 

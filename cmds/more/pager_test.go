@@ -557,3 +557,27 @@ func TestPagerCancelWhileAwaitingCommand(t *testing.T) {
 		t.Fatalf("cancel while awaiting command: got %q", got)
 	}
 }
+
+// TestCmdReaderStopReleasesGoroutine pins the no-leak guarantee. After a
+// quit the reader goroutine has usually already consumed the next rune and
+// is parked handing it off, so nothing about closing the terminal can reach
+// it; stop must. These tools run in-process in a long-lived host shell,
+// where one stranded goroutine per `more` accumulates.
+func TestCmdReaderStopReleasesGoroutine(t *testing.T) {
+	c := newCmdReader(strings.NewReader("q abc"))
+
+	if r, err := c.read(context.Background()); err != nil || r != 'q' {
+		t.Fatalf("read = %q, %v; want 'q', nil", r, err)
+	}
+	// The goroutine is now blocked handing off the rune after 'q', which
+	// the pager will never take because it quit.
+	c.stop()
+	c.stop() // idempotent: a second stop must not panic on a closed channel
+
+	select {
+	case <-c.runes:
+		// Closed by the goroutine's deferred close on its way out.
+	case <-time.After(2 * time.Second):
+		t.Fatal("reader goroutine still parked after stop")
+	}
+}

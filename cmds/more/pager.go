@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/qiangli/coreutils/tool"
 	"golang.org/x/term"
@@ -82,6 +83,8 @@ func terminalSize(rc *tool.RunContext, ch *ttyChannel, nLines int) (rows, width 
 // the pager must be able to give up without one.
 type cmdReader struct {
 	runes <-chan cmdRune
+	done  chan struct{}
+	once  sync.Once
 }
 
 type cmdRune struct {
@@ -92,18 +95,31 @@ type cmdRune struct {
 func newCmdReader(r io.Reader) *cmdReader {
 	br := bufio.NewReader(r)
 	ch := make(chan cmdRune)
+	done := make(chan struct{})
 	go func() {
 		defer close(ch)
 		for {
 			c, _, err := br.ReadRune()
-			ch <- cmdRune{r: c, err: err}
+			select {
+			case ch <- cmdRune{r: c, err: err}:
+			case <-done:
+				return
+			}
 			if err != nil {
 				return
 			}
 		}
 	}()
-	return &cmdReader{runes: ch}
+	return &cmdReader{runes: ch, done: done}
 }
+
+// stop releases the reader goroutine. Closing the terminal is not enough on
+// its own: after a quit or a cancellation the goroutine is typically parked
+// handing off the rune it already read, not waiting on the device, so no fd
+// close can reach it. These tools run in-process inside a long-lived host
+// shell, which makes one goroutine stranded per `more` that ends early a
+// real leak rather than a process-exit detail.
+func (c *cmdReader) stop() { c.once.Do(func() { close(c.done) }) }
 
 func (c *cmdReader) read(ctx context.Context) (rune, error) {
 	if ctx == nil {
