@@ -37,11 +37,16 @@ func (w orderedWriter) Write(p []byte) (int, error) {
 }
 
 func runPR(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
+	return runPREnv(t, dir, stdin, nil, args...)
+}
+
+func runPREnv(t *testing.T, dir, stdin string, env []string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
+		Env:   env,
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code := cmd.Run(rc, args)
@@ -84,6 +89,31 @@ func TestPRDefaultPageStructure(t *testing.T) {
 	}
 	if n := strings.Count(out, "\n"); n != 66 {
 		t.Fatalf("pr default page has %d lines, want 66", n)
+	}
+}
+
+func TestPRHeaderHonorsInvocationTZAndLCTime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "in")
+	if err := os.WriteFile(path, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Date(2020, time.March, 2, 8, 4, 0, 0, time.UTC)
+	if err := os.Chtimes(path, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errb, code := runPREnv(t, dir, "", []string{"TZ=EST5", "LC_TIME=de_DE.UTF-8"}, "in")
+	if code != 0 || errb != "" || !strings.Contains(out, "Mär  2 03:04 2020 in Page 1") {
+		t.Fatalf("localized header = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runPREnv(t, dir, "", []string{"TZ=UTC0", "LC_TIME=de_DE.UTF-8", "LC_ALL=C"}, "in")
+	if code != 0 || errb != "" || !strings.Contains(out, "Mar  2 08:04 2020 in Page 1") {
+		t.Fatalf("LC_ALL/TZ header = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runPREnv(t, dir, "", []string{"LC_TIME=fr_FR.UTF-8"}, "in")
+	if code != 1 || out != "" || !strings.Contains(errb, "LC_TIME") {
+		t.Fatalf("unsupported LC_TIME = (%q, %q, %d), want fail-closed", out, errb, code)
 	}
 }
 
@@ -316,6 +346,79 @@ func (f failingReader) Read([]byte) (int, error) { return 0, f.err }
 type failingWriter struct{ err error }
 
 func (f failingWriter) Write([]byte) (int, error) { return 0, f.err }
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+
+func TestPRMergeAssumesPOSIXTabExpansionAndReplacement(t *testing.T) {
+	dir := t.TempDir()
+	writeFixed(t, dir, "one", "a\tb\n")
+	writeFixed(t, dir, "two", "x\n")
+	out, errb, code := runPR(t, dir, "", "-m", "-t", "-w", "10", "-s|", "one", "two")
+	if code != 0 || errb != "" || out != "a    |x\n" {
+		t.Fatalf("pr -m implicit -e/-i = (%q, %q, %d), want %q", out, errb, code, "a    |x\n")
+	}
+}
+
+func TestPRTerminalDefersFileDiagnosticsUntilOutputCompletes(t *testing.T) {
+	withTerminalStdout(t)
+	dir := t.TempDir()
+	writeFixed(t, dir, "good", "content\n")
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"serial", []string{"missing", "good"}},
+		{"merge", []string{"-m", "missing", "good"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []string
+			rc := &tool.RunContext{
+				Ctx: context.Background(), Dir: dir,
+				Stdio: tool.Stdio{
+					In:  strings.NewReader(""),
+					Out: orderedWriter{events: &events, label: "output"},
+					Err: orderedWriter{events: &events, label: "diagnostic"},
+				},
+			}
+			if code := cmd.Run(rc, tc.args); code != 1 {
+				t.Fatalf("pr terminal diagnostic status = %d, want 1", code)
+			}
+			if len(events) < 2 || events[len(events)-1] != "diagnostic" {
+				t.Fatalf("events = %v, want all output before the deferred diagnostic", events)
+			}
+			for _, event := range events[:len(events)-1] {
+				if event != "output" {
+					t.Fatalf("events = %v, diagnostic was not deferred", events)
+				}
+			}
+		})
+	}
+}
+
+func TestPRStreamReadAndShortWriteFailuresAreNonzero(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   io.Reader
+		out  io.Writer
+		want string
+	}{
+		{"read", failingReader{err: errors.New("input failure")}, io.Discard, "input failure"},
+		{"short-write", strings.NewReader("content\n"), shortWriter{}, io.ErrShortWrite.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(), Dir: t.TempDir(),
+				Stdio: tool.Stdio{In: tc.in, Out: tc.out, Err: &errb},
+			}
+			if code := cmd.Run(rc, []string{"-t"}); code == 0 || !strings.Contains(strings.ToLower(errb.String()), strings.ToLower(tc.want)) {
+				t.Fatalf("pr %s failure = code %d, stderr %q; want nonzero and %q", tc.name, code, errb.String(), tc.want)
+			}
+		})
+	}
+}
 
 func TestPRPausePerPageWritesAlertAndReadsDevTTY(t *testing.T) {
 	withTerminalStdout(t)
@@ -557,8 +660,8 @@ func TestPRPauseInterrupted(t *testing.T) {
 	go func() { done <- cmd.Run(rc, []string{"-p"}) }()
 	select {
 	case code := <-done:
-		if code != 0 {
-			t.Fatalf("pr -p interrupted while paused = code %d, want 0 (clean stop): stderr=%q", code, errb.String())
+		if code != interruptExit {
+			t.Fatalf("pr -p interrupted while paused = code %d, want %d: stderr=%q", code, interruptExit, errb.String())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("pr -p did not return after an interrupt while paused; it hung waiting on /dev/tty")
