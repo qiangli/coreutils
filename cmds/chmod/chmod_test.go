@@ -39,8 +39,8 @@ func TestModeApply(t *testing.T) {
 		{"755", 0o644, false, 0, 0o755},
 		{"7777", 0, false, 0, 0o7777},
 		{"0", 0o777, false, 0, 0},
-		// GNU keep-directory-setid rule for short octal modes.
-		{"755", 0o2775, true, 0, 0o2755},
+		// POSIX octal modes are absolute, including on directories.
+		{"755", 0o2775, true, 0, 0o755},
 		{"00755", 0o2775, true, 0, 0o755},
 		{"755", 0o2775, false, 0, 0o755},
 		// Symbolic, explicit who (umask must not interfere).
@@ -61,7 +61,7 @@ func TestModeApply(t *testing.T) {
 		{"a+X", 0o644, false, 0, 0o644},
 		{"a+X", 0o644, true, 0, 0o755},
 		{"a+X", 0o744, false, 0, 0o755},
-		// Empty who: umask-masked, per the GNU manual.
+		// Empty who: filtered through the invocation umask per Issue 7.
 		{"+x", 0o644, false, 0o22, 0o755},
 		{"+w", 0o444, false, 0o22, 0o644},
 		{"-w", 0o666, false, 0o22, 0o466},
@@ -102,6 +102,14 @@ func TestExtractDashMode(t *testing.T) {
 	mode, rest = extractDashMode([]string{"--", "-w"})
 	if mode != "" || len(rest) != 2 {
 		t.Errorf("--: mode=%q rest=%v", mode, rest)
+	}
+	mode, rest = extractDashMode([]string{"644", "-w"})
+	if mode != "" || strings.Join(rest, " ") != "644 -w" {
+		t.Errorf("file named -w after mode: mode=%q rest=%v", mode, rest)
+	}
+	mode, rest = extractDashMode([]string{"--reference", "-w", "target"})
+	if mode != "" || strings.Join(rest, " ") != "--reference -w target" {
+		t.Errorf("--reference value: mode=%q rest=%v", mode, rest)
 	}
 }
 
@@ -243,6 +251,30 @@ func TestChmodNoDereferenceSkipsSymlinkOperand(t *testing.T) {
 	_, errb, code := runTool(t, dir, "--no-dereference", "u+x", "link")
 	if code != 0 || errb != "" {
 		t.Fatalf("chmod --no-dereference: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "target"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("target mode=%#o want 0644", fi.Mode().Perm())
+	}
+}
+
+func TestChmodNoDereferenceAbbreviationSkipsSymlinkOperand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "target"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	_, errb, code := runTool(t, dir, "--no-deref", "u+x", "link")
+	if code != 0 || errb != "" {
+		t.Fatalf("chmod --no-deref: code=%d err=%q", code, errb)
 	}
 	fi, err := os.Stat(filepath.Join(dir, "target"))
 	if err != nil {
@@ -503,6 +535,35 @@ func TestChmodReference(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("expected mode 0600 from reference, got %#o", fi.Mode().Perm())
+	}
+}
+
+func TestChmodReferenceValueThatLooksLikeMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod is unix-only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "-w"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "target"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, option := range []string{"--reference", "--ref"} {
+		if err := os.Chmod(filepath.Join(dir, "target"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, errb, code := runTool(t, dir, option, "-w", "target")
+		if code != 0 || errb != "" {
+			t.Fatalf("chmod %s -w: code=%d err=%q", option, code, errb)
+		}
+		fi, err := os.Stat(filepath.Join(dir, "target"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s target mode=%#o want 0600", option, fi.Mode().Perm())
+		}
 	}
 }
 

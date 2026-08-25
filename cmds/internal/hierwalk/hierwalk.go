@@ -65,8 +65,13 @@ type Walker struct {
 	// Visit is called once for every file in the hierarchy. isLink
 	// reports that lstat(path) is a symbolic link — including a link
 	// that was followed as a directory, since -h still decides whether
-	// the change lands on the link or its referent.
-	Visit func(path, display string, isLink bool)
+	// the change lands on the link or its referent. followed reports
+	// that this entry was a symbolic link the traversal mode resolved,
+	// so the entry stands for its referent: chown and chgrp let -h
+	// override that per file, but chmod has no portable operation that
+	// changes a link's own mode bits, so followed is the only thing
+	// that makes a reached link actionable at all.
+	Visit func(path, display string, isLink, followed bool)
 	// StatError reports that the entry could not be lstat'ed.
 	StatError func(path, display string, err error)
 	// ReadError reports that a directory's entries could not be read.
@@ -113,7 +118,7 @@ func (w *Walker) walk(path, display string, ancestors []os.FileInfo, isOperand b
 	}
 
 	if !w.Recursive || !info.IsDir() {
-		w.visit(path, display, isLink)
+		w.visit(path, display, isLink, followed)
 		return
 	}
 
@@ -126,7 +131,7 @@ func (w *Walker) walk(path, display string, ancestors []os.FileInfo, isOperand b
 		// command still gets the entry. Otherwise the hierarchy itself
 		// is cyclic, which is a defect the command must report.
 		if w.Mode == Logical {
-			w.visit(path, display, isLink)
+			w.visit(path, display, isLink, followed)
 		} else if w.Cycle != nil {
 			w.Cycle(path, display)
 		}
@@ -145,7 +150,7 @@ func (w *Walker) walk(path, display string, ancestors []os.FileInfo, isOperand b
 	for _, entry := range entries {
 		w.walk(filepath.Join(path, entry.Name()), filepath.Join(display, entry.Name()), ancestors, false)
 	}
-	w.visit(path, display, isLink)
+	w.visit(path, display, isLink, followed)
 }
 
 // follows reports whether a symbolic link reached at this position is
@@ -161,9 +166,9 @@ func (w *Walker) follows(isOperand bool) bool {
 	}
 }
 
-func (w *Walker) visit(path, display string, isLink bool) {
+func (w *Walker) visit(path, display string, isLink, followed bool) {
 	if w.Visit != nil {
-		w.Visit(path, display, isLink)
+		w.Visit(path, display, isLink, followed)
 	}
 }
 

@@ -1,20 +1,16 @@
-// Package chmodcmd implements chmod(1) per the GNU coreutils manual:
-// change file mode bits, with octal and symbolic modes and -R.
+// Package chmodcmd implements chmod(1), with POSIX.1-2008 Issue 7 mode
+// semantics and a separately documented set of compatibility extensions.
 //
 // Unix only: Windows has no POSIX mode bits, and mapping modes onto the
 // read-only attribute would change the documented meaning, so the
-// Windows build fails loudly instead (see chmod_windows.go).
+// non-Unix build fails loudly instead (see chmod_other.go).
 //
 // Portions adapted from https://github.com/u-root/u-root cmds/core/chmod (BSD-3-Clause).
 // Changes: rewired to tool framework; symbolic-mode parser extended to
-// full GNU clause grammar (comma-separated clauses, multiple operators
+// full POSIX clause grammar (comma-separated clauses, multiple operators
 // per clause, rwxXst perms, u/g/o permission copying, umask handling
-// for empty who, setuid/setgid/sticky); octal modes up to 7777 with the
-// GNU keep-directory-setid rule for fewer than 5 digits. In POSIX mode
-// (POSIXLY_CORRECT present in the invocation environment) an octal mode
-// is set absolutely, as Issue 7 requires ("the file mode bits shall be
-// set absolutely"); the keep-directory-setid rule is the non-POSIX GNU
-// default only.
+// for empty who, and setuid/setgid/sticky); octal modes up to 7777 are
+// absolute, and X always examines the invocation's unmodified file mode.
 package chmodcmd
 
 import (
@@ -26,6 +22,34 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+// derefMode is the symbolic-link policy selected by the -H/-L/-P and
+// --dereference/--no-dereference extensions. It is declared here rather
+// than beside the Unix walk so the non-Unix build parses the same
+// command line and refuses on the same terms.
+type derefMode int
+
+const (
+	// derefNever is -P: a symbolic link is neither followed nor changed.
+	derefNever derefMode = iota
+	// derefCmdLine is -H: a link named as an operand is followed.
+	derefCmdLine
+	// derefAlways is -L/--dereference: every link is followed.
+	derefAlways
+)
+
+// options is the parsed command line handed to the platform apply. It
+// mirrors the shape cmds/chgrp and cmds/chown use, so the three
+// utilities' recursion and diagnostics stay comparable.
+type options struct {
+	files        []string
+	recursive    bool
+	verbose      bool
+	changes      bool
+	silent       bool
+	preserveRoot bool
+	deref        derefMode
+}
 
 var cmd = &tool.Tool{
 	Name:     "chmod",
@@ -58,8 +82,14 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
-	isSilent := *silent || isBool(fs, "quiet")
-	noDereference, cmdLineH, followAll := derefFlags(rest, *recursive)
+	opts := options{
+		recursive:    *recursive,
+		verbose:      *verbose,
+		changes:      *changes,
+		silent:       *silent || isBool(fs, "quiet"),
+		preserveRoot: *preserveRoot,
+		deref:        derefFlags(rest, *recursive),
+	}
 
 	if *reference != "" {
 		if modeArg != "" {
@@ -73,15 +103,16 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Err, "chmod: cannot stat '%s': %v\n", *reference, err)
 			return 1
 		}
-		// Five digits: --reference means "use RFILE's mode" exactly, so
-		// the short-octal keep-directory-setid rule must not apply.
+		// --reference means "use RFILE's mode" exactly. Reuse the absolute
+		// octal engine rather than reparsing a symbolic expression.
 		refMode := fmt.Sprintf("%05o", fileModeToBits(fi.Mode()))
 		change, err := parseMode(refMode)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "chmod: invalid mode from reference: '%s'\n", refMode)
 			return 1
 		}
-		return apply(rc, change, operands[0:], *recursive, *verbose, *changes, isSilent, *preserveRoot, noDereference, false, cmdLineH, followAll)
+		opts.files = operands
+		return apply(rc, change, opts)
 	}
 	if modeArg != "" {
 		operands = append([]string{modeArg}, operands...)
@@ -97,10 +128,8 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "chmod: invalid mode: '%s'\n", operands[0])
 		return 1
 	}
-	// POSIX mode: Issue 7 requires an octal mode to be set absolutely,
-	// so the GNU keep-directory-setid rule is suppressed.
-	change.posix = envPresent(rc.Env, "POSIXLY_CORRECT")
-	return apply(rc, change, operands[1:], *recursive, *verbose, *changes, isSilent, *preserveRoot, noDereference, false, cmdLineH, followAll)
+	opts.files = operands[1:]
+	return apply(rc, change, opts)
 }
 
 func isBool(fs interface{ GetBool(string) (bool, error) }, name string) bool {
@@ -114,18 +143,40 @@ func isBool(fs interface{ GetBool(string) (bool, error) }, name string) bool {
 // excludes every flag chmod defines (-R, --recursive, --help, ...).
 func extractDashMode(args []string) (mode string, rest []string) {
 	rest = make([]string, 0, len(args))
-	for i, a := range args {
+	sawOperand := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if a == "--" {
 			rest = append(rest, args[i:]...)
 			break
 		}
-		if mode == "" && len(a) > 1 && a[0] == '-' && a[1] != '-' && isModeBody(a[1:]) {
-			mode = a
+		if strings.HasPrefix(a, "--") && len(a) > 2 {
+			name, _, hasValue := strings.Cut(a[2:], "=")
+			rest = append(rest, a)
+			// A separately-spelled --reference value is data even when it
+			// looks exactly like a symbolic mode (for example "-w").
+			// Honor the framework's unambiguous long-option abbreviations.
+			if !hasValue && longOptionPrefix(name, "reference") && i+1 < len(args) {
+				i++
+				rest = append(rest, args[i])
+			}
 			continue
+		}
+		if !sawOperand && mode == "" && len(a) > 1 && a[0] == '-' && a[1] != '-' && isModeBody(a[1:]) {
+			mode = a
+			sawOperand = true
+			continue
+		}
+		if a == "-" || !strings.HasPrefix(a, "-") {
+			sawOperand = true
 		}
 		rest = append(rest, a)
 	}
 	return mode, rest
+}
+
+func longOptionPrefix(name, full string) bool {
+	return name != "" && strings.HasPrefix(full, name)
 }
 
 func isModeBody(s string) bool {
@@ -137,31 +188,52 @@ func isModeBody(s string) bool {
 	return true
 }
 
-// derefFlags returns the effective symlink policy after chmod's
-// order-sensitive dereference options have been applied.
-func derefFlags(args []string, recursive bool) (noDereference, cmdLineH, followAll bool) {
-	mode := byte('L')
+// derefFlags returns the effective symbolic-link policy after chmod's
+// order-sensitive dereference options have been applied. They have no
+// long form that pflag could order, and POSIX gives the same rule to
+// every such group: the last one specified wins. Without -R a link
+// operand names its referent, so the default is to follow; with -R the
+// default is the physical walk, which neither follows a link nor
+// changes one.
+func derefFlags(args []string, recursive bool) derefMode {
+	mode := derefAlways
 	if recursive {
-		mode = 'P'
+		mode = derefNever
 	}
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
 		case a == "--":
-			return mode == 'P', mode == 'H', mode == 'L'
-		case a == "--dereference":
-			mode = 'L'
-		case a == "--no-dereference":
-			mode = 'P'
+			return mode
+		case strings.HasPrefix(a, "--") && len(a) > 2:
+			name, _, hasValue := strings.Cut(a[2:], "=")
+			switch {
+			case longOptionPrefix(name, "dereference"), name == "L":
+				mode = derefAlways
+			case longOptionPrefix(name, "no-dereference"), name == "P":
+				mode = derefNever
+			case name == "H":
+				mode = derefCmdLine
+			}
+			// An option value is never another option. In particular, a
+			// reference file named -L must not select logical traversal.
+			if !hasValue && longOptionPrefix(name, "reference") && i+1 < len(args) {
+				i++
+			}
 		case len(a) > 1 && a[0] == '-' && a[1] != '-':
 			for _, c := range a[1:] {
 				switch c {
-				case 'H', 'L', 'P':
-					mode = byte(c)
+				case 'H':
+					mode = derefCmdLine
+				case 'L':
+					mode = derefAlways
+				case 'P':
+					mode = derefNever
 				}
 			}
 		}
 	}
-	return mode == 'P', mode == 'H', mode == 'L'
+	return mode
 }
 
 const (
@@ -182,24 +254,9 @@ type symOp struct {
 }
 
 type modeChange struct {
-	octal  bool
-	val    uint32
-	digits int
-	posix  bool // POSIXLY_CORRECT selects Issue 7 numeric and symbolic rules
-	ops    []symOp
-}
-
-// envPresent reports whether key is assigned in the invocation
-// environment, even to an empty value; POSIXLY_CORRECT takes effect on
-// presence alone.
-func envPresent(env []string, key string) bool {
-	prefix := key + "="
-	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			return true
-		}
-	}
-	return false
+	octal bool
+	val   uint32
+	ops   []symOp
 }
 
 var errInvalidMode = errors.New("invalid mode")
@@ -220,7 +277,7 @@ func parseMode(s string) (*modeChange, error) {
 		if err != nil || v > 0o7777 {
 			return nil, errInvalidMode
 		}
-		return &modeChange{octal: true, val: uint32(v), digits: len(s)}, nil
+		return &modeChange{octal: true, val: uint32(v)}, nil
 	}
 
 	mc := &modeChange{}
@@ -293,19 +350,14 @@ func parseMode(s string) (*modeChange, error) {
 }
 
 // apply computes the new mode bits (07777 region) from the old ones.
-// um is the process umask (0777 region), consulted only for clauses
-// with no explicit who, exactly as the GNU manual specifies.
+// um is the invoking process's file creation mask (0777 region), consulted
+// only for clauses with no explicit who, as Issue 7 specifies.
 func (mc *modeChange) apply(old uint32, isDir bool, um uint32) uint32 {
 	if mc.octal {
-		v := mc.val
-		// GNU: a numeric mode of 4 or fewer digits leaves a directory's
-		// setuid/setgid bits alone (they can be set, not cleared).
-		// POSIX Issue 7 instead requires octal modes to be set
-		// absolutely; mc.posix suppresses that GNU extension.
-		if isDir && mc.digits < 5 && !mc.posix {
-			v |= old & 0o6000
-		}
-		return v
+		// POSIX Issue 7: an octal mode sets all listed mode bits
+		// absolutely, including set-user-ID and set-group-ID on regular
+		// files. No environment variable selects a different grammar.
+		return mc.val
 	}
 	cur := old
 	for _, so := range mc.ops {
@@ -318,14 +370,9 @@ func (mc *modeChange) apply(old uint32, isDir bool, um uint32) uint32 {
 		case 'o':
 			perm = cur & 7
 		}
-		// POSIX Issue 7 evaluates X against the mode before this chmod;
-		// GNU evaluates it against the in-progress mode after earlier clauses.
-		// Preserve GNU 9.11 behavior outside POSIX mode.
-		xMode := cur
-		if mc.posix {
-			xMode = old
-		}
-		if so.condX && (isDir || xMode&0o111 != 0) {
+		// "Current (unmodified)" is the mode before this invocation, not
+		// the in-progress result of an earlier clause.
+		if so.condX && (isDir || old&0o111 != 0) {
 			perm |= 1
 		}
 		who := so.who
@@ -409,7 +456,7 @@ func bitsToFileMode(b uint32) os.FileMode {
 	return m
 }
 
-// reason unwraps os wrapper errors so diagnostics read like GNU's.
+// reason unwraps os wrapper errors so diagnostics report the filesystem cause.
 func reason(err error) error {
 	return tool.SysErr(err)
 }

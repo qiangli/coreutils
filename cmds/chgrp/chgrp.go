@@ -3,7 +3,7 @@
 // numeric id), with -R and the -H/-L/-P/-h symbolic-link rules.
 //
 // Unix only: Windows has no gid ownership model, so the Windows build
-// fails loudly instead (see chgrp_windows.go).
+// fails loudly instead (see chgrp_other.go).
 //
 // Portions adapted from https://github.com/guonaihong/coreutils chgrp/chgrp.go (Apache-2.0).
 // Changes: rewired to tool framework; group lookup is name-then-numeric

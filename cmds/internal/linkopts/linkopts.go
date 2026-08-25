@@ -39,8 +39,9 @@ const (
 // Resolved is the outcome of the option group.
 type Resolved struct {
 	// Mode is the traversal mode selected by the last of -H/-L/-P.
-	// It is hierwalk.Physical when none was given, which is also what
-	// POSIX specifies as the -R default.
+	// It is hierwalk.Physical when none was given. POSIX leaves that
+	// default unspecified; physical traversal is this implementation's
+	// deliberate fail-closed choice.
 	Mode hierwalk.Mode
 	// ModeSet reports that one of -H/-L/-P was actually given.
 	ModeSet bool

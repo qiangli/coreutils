@@ -3,7 +3,7 @@
 // name or numeric ID), with -R and the -H/-L/-P/-h symbolic-link rules.
 //
 // Unix only: Windows has no uid/gid ownership model, so the Windows
-// build fails loudly instead (see chown_windows.go).
+// build fails loudly instead (see chown_other.go).
 //
 // Portions adapted from https://github.com/guonaihong/coreutils chown/chown.go (Apache-2.0).
 // Changes: rewired to tool framework; OWNER[:GROUP] parsing rewritten

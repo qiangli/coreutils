@@ -392,13 +392,13 @@ func TestChownNameIsPreferredOverNumber(t *testing.T) {
 		if name == "42" {
 			return &user.User{Uid: "7", Gid: "8"}, nil
 		}
-		return nil, errors.New("no such user")
+		return nil, user.UnknownUserError(name)
 	}
 	lookupGroup = func(name string) (*user.Group, error) {
 		if name == "99" {
 			return &user.Group{Gid: "9"}, nil
 		}
-		return nil, errors.New("no such group")
+		return nil, user.UnknownGroupError(name)
 	}
 	t.Cleanup(func() { lookupUser, lookupGroup = restoreUser, restoreGroup })
 

@@ -81,7 +81,7 @@ func chownTree(rc *tool.RunContext, root, display string, opts chownOpts, output
 	walker := &hierwalk.Walker{
 		Mode:      opts.mode,
 		Recursive: opts.recursive,
-		Visit: func(path, name string, isLink bool) {
+		Visit: func(path, name string, isLink, _ bool) {
 			changed, statErr, chownErr := chownOne(path, opts)
 			switch {
 			case statErr != nil:
@@ -134,10 +134,8 @@ func chownTree(rc *tool.RunContext, root, display string, opts chownOpts, output
 // ownership and changing it fail with different diagnostics, so they
 // are returned separately.
 func chownOne(path string, opts chownOpts) (changed bool, statErr, chownErr error) {
-	// If the platform does not expose syscall.Stat_t, conservatively report
-	// that the requested operation changed the file. The syscall is required
-	// either way; changed only controls -c/-v reporting.
-	changed = true
+	// Reporting and --from both require exact native ownership metadata. A
+	// platform that cannot expose it must fail closed.
 	stat := os.Lstat
 	if opts.affectReferent {
 		stat = os.Stat
@@ -146,16 +144,23 @@ func chownOne(path string, opts chownOpts) (changed bool, statErr, chownErr erro
 	if err != nil {
 		return false, err, nil
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		if opts.fromUid >= 0 && int(st.Uid) != opts.fromUid {
-			return false, nil, nil
-		}
-		if opts.fromGid >= 0 && int(st.Gid) != opts.fromGid {
-			return false, nil, nil
-		}
-		changed = (opts.uid >= 0 && int(st.Uid) != opts.uid) ||
-			(opts.gid >= 0 && int(st.Gid) != opts.gid)
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, errors.New("ownership metadata is unavailable on this platform"), nil
 	}
+	currentUID, uidOK := representableNumericID(uint64(st.Uid))
+	currentGID, gidOK := representableNumericID(uint64(st.Gid))
+	if !uidOK || !gidOK {
+		return false, errors.New("ownership metadata is not representable on this platform"), nil
+	}
+	if opts.fromUid >= 0 && currentUID != opts.fromUid {
+		return false, nil, nil
+	}
+	if opts.fromGid >= 0 && currentGID != opts.fromGid {
+		return false, nil, nil
+	}
+	changed = (opts.uid >= 0 && currentUID != opts.uid) ||
+		(opts.gid >= 0 && currentGID != opts.gid)
 	if err := changeOwner(path, opts.uid, opts.gid, opts.affectReferent); err != nil {
 		return false, nil, err
 	}
@@ -239,12 +244,17 @@ func parseSpec(spec string) (uid, gid int, err error) {
 		u, err = lookupUser(ownerStr)
 		switch {
 		case err == nil:
-			if uid, err = strconv.Atoi(u.Uid); err != nil {
+			var ok bool
+			if uid, ok = parseNumericID(u.Uid); !ok {
 				return -1, -1, fmt.Errorf("invalid user: '%s'", spec)
 			}
 		default:
-			id, aerr := strconv.Atoi(ownerStr)
-			if aerr != nil || id < 0 {
+			var unknown user.UnknownUserError
+			if !errors.As(err, &unknown) {
+				return -1, -1, fmt.Errorf("cannot resolve user '%s': %v", ownerStr, err)
+			}
+			id, ok := parseNumericID(ownerStr)
+			if !ok {
 				return -1, -1, fmt.Errorf("invalid user: '%s'", spec)
 			}
 			uid = id
@@ -262,23 +272,57 @@ func parseSpec(spec string) (uid, gid int, err error) {
 		if u == nil {
 			return -1, -1, fmt.Errorf("invalid spec: '%s'", spec)
 		}
-		if gid, err = strconv.Atoi(u.Gid); err != nil {
+		var ok bool
+		if gid, ok = parseNumericID(u.Gid); !ok {
 			return -1, -1, fmt.Errorf("invalid spec: '%s'", spec)
 		}
 		return uid, gid, nil
 	}
 	g, gerr := lookupGroup(groupStr)
 	if gerr == nil {
-		if gid, err = strconv.Atoi(g.Gid); err != nil {
+		var ok bool
+		if gid, ok = parseNumericID(g.Gid); !ok {
 			return -1, -1, fmt.Errorf("invalid group: '%s'", spec)
 		}
 		return uid, gid, nil
 	}
-	id, aerr := strconv.Atoi(groupStr)
-	if aerr != nil || id < 0 {
+	var unknown user.UnknownGroupError
+	if !errors.As(gerr, &unknown) {
+		return -1, -1, fmt.Errorf("cannot resolve group '%s': %v", groupStr, gerr)
+	}
+	id, ok := parseNumericID(groupStr)
+	if !ok {
 		return -1, -1, fmt.Errorf("invalid group: '%s'", spec)
 	}
 	return uid, id, nil
+}
+
+// parseNumericID accepts the POSIX numeric-ID spelling: one or more decimal
+// digits in the usable 32-bit uid_t/gid_t range that the host Go int can
+// represent. The all-ones value is the chown(2) "leave unchanged" sentinel
+// and therefore cannot name an ID to set.
+func parseNumericID(s string) (int, bool) {
+	if s == "" {
+		return -1, false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return -1, false
+		}
+	}
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return -1, false
+	}
+	return representableNumericID(v)
+}
+
+func representableNumericID(v uint64) (int, bool) {
+	maxInt := uint64(^uint(0) >> 1)
+	if v == 1<<32-1 || v > maxInt {
+		return -1, false
+	}
+	return int(v), true
 }
 
 // statFile reads the --reference file's ids.
@@ -295,7 +339,12 @@ func statFile(rc *tool.RunContext, path string) (*refFileInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("cannot stat %s", path)
 	}
-	return &refFileInfo{uid: int(st.Uid), gid: int(st.Gid)}, nil
+	uid, uidOK := representableNumericID(uint64(st.Uid))
+	gid, gidOK := representableNumericID(uint64(st.Gid))
+	if !uidOK || !gidOK {
+		return nil, fmt.Errorf("cannot represent ownership ids for %s", path)
+	}
+	return &refFileInfo{uid: uid, gid: gid}, nil
 }
 
 type refFileInfo struct {

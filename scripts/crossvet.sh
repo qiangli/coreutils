@@ -13,11 +13,14 @@
 # the class of break the CI windows leg keeps catching after darwin-only local
 # work (unix-only types like syscall.Stat_t in an untagged _test.go).
 #
-# The js/wasip1 ownership checks pin the non-Unix fallback for chown/chgrp.
-# Those targets cannot use the Unix ownership implementation, while a fallback
+# The js/wasip1 checks pin the non-Unix fallback for chmod/chgrp/chown. Those
+# targets cannot use the Unix mode/ownership implementations, while a fallback
 # named *_windows.go is implicitly restricted to Windows even when its explicit
-# build constraint says !unix. Vet compiles package tests without trying
-# to execute the resulting WebAssembly binary.
+# build constraint says !unix — so such a target ends up with NO apply at all
+# and the "fail closed with a clear diagnostic" contract silently disappears.
+# chmod is in this list because its fallback used to be spelled chmod_windows.go
+# for exactly that reason. Vet compiles package tests without trying to execute
+# the resulting WebAssembly binary.
 #
 # The aix build is a DELIBERATE canary, not a shipping target. A build tag that
 # says `!windows` is a claim that every other OS is a unix with flock — and aix
@@ -57,10 +60,10 @@ done
 # The canaries ride with the full run only, not with an explicit subset.
 if [ $# -eq 0 ]; then
   for os in js wasip1; do
-    if GOOS=$os GOARCH=wasm go vet ./cmds/chown/ ./cmds/chgrp/; then
-      echo "crossvet: GOOS=$os GOARCH=wasm PASS (ownership fallback canary)"
+    if GOOS=$os GOARCH=wasm go vet ./cmds/chown/ ./cmds/chgrp/ ./cmds/chmod/; then
+      echo "crossvet: GOOS=$os GOARCH=wasm PASS (mode/ownership fallback canary)"
     else
-      echo "crossvet: GOOS=$os GOARCH=wasm FAIL (ownership fallback canary)"
+      echo "crossvet: GOOS=$os GOARCH=wasm FAIL (mode/ownership fallback canary)"
       failed="$failed $os/wasm"
     fi
   done
