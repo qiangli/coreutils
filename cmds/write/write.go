@@ -500,14 +500,14 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 			missing++
 			continue
 		}
-		activeLogins++
-		if wantTTY == "" && myTTY != "" && normalizeTTY(r.Line) == myTTY {
-			skippedSelf = true
-			continue
-		}
 		if r.PID <= 0 || !sessionActiveFn(r.PID) || !terminalDeviceFn(ttyDevice(r.Line)) ||
 			!sessionOwnsTerminalFn(r.PID, ttyDevice(r.Line)) {
 			missing++
+			continue
+		}
+		activeLogins++
+		if wantTTY == "" && myTTY != "" && normalizeTTY(r.Line) == myTTY {
+			skippedSelf = true
 			continue
 		}
 		// The same bit mesg(1) reads and writes. See cmds/mesg: the terminal's

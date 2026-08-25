@@ -949,6 +949,30 @@ func TestInactiveRecipientSessionIsRejected(t *testing.T) {
 	}
 }
 
+func TestStaleExistingTTYDoesNotTriggerMultiLoginNotice(t *testing.T) {
+	w := install(t, fixture{uid: 1000, myTTY: "pts/1",
+		logins: []login{
+			{user: "bob", line: "pts/2", mode: writable, when: epoch},
+			{user: "bob", line: "pts/4", mode: writable, when: epoch.Add(time.Hour)},
+		}})
+	sessionOwnsTerminalFn = func(_ int, path string) bool {
+		return !strings.HasSuffix(path, "/pts/4")
+	}
+	out, errOut, code := exec(t, "body\n", "bob")
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+	if out != "" {
+		t.Fatalf("stale existing tty triggered multi-login notice: %q", out)
+	}
+	if got := w.read(t, "pts/2"); !strings.Contains(got, "body\n") {
+		t.Fatalf("authenticated terminal did not receive body: %q", got)
+	}
+	if got := w.read(t, "pts/4"); got != "" {
+		t.Fatalf("stale terminal received data: %q", got)
+	}
+}
+
 // An unreadable accounting database is not "nobody is logged in": the two
 // facts want different fixes, so they must not share a diagnostic.
 func TestMissingDatabaseIsDistinctFromNotLoggedIn(t *testing.T) {
