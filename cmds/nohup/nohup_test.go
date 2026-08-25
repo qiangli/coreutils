@@ -18,26 +18,32 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
+// TestNohupMissing pins Issue 7's nohup EXIT STATUS: "127  An error occurred
+// in the nohup utility or the utility could not be found." A missing operand
+// is an error in nohup itself, so the status is 127 — not GNU's 125.
 func TestNohupMissing(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run(&tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(), Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")}}, nil)
-	if code != 125 {
-		t.Fatalf("code=%d", code)
+	if code != 127 {
+		t.Fatalf("code=%d, want 127", code)
 	}
 }
 
-// With POSIXLY_CORRECT set, the same missing-operand case reports the
-// stricter POSIX status instead of nohup's default.
-func TestNohupMissingPOSIXLYCorrect(t *testing.T) {
-	var out, errb bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Dir:   t.TempDir(),
-		Env:   []string{"POSIXLY_CORRECT=1"},
-		Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
-	}
-	if code := run(rc, nil); code != 127 {
-		t.Fatalf("code=%d", code)
+// TestNohupInternalErrorStatusIsUnconditional pins that the required 127 does
+// not depend on POSIXLY_CORRECT: Issue 7 lists 126, 127, and the utility's own
+// status as the only nohup exit values, with no environment condition on them.
+func TestNohupInternalErrorStatusIsUnconditional(t *testing.T) {
+	for _, env := range [][]string{nil, {}, {"POSIXLY_CORRECT=1"}, {"POSIXLY_CORRECT="}} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   t.TempDir(),
+			Env:   env,
+			Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
+		}
+		if code := run(rc, nil); code != 127 {
+			t.Errorf("env=%v: code=%d, want 127", env, code)
+		}
 	}
 }
 
@@ -380,8 +386,10 @@ func TestNohupDevNullOpenFailure(t *testing.T) {
 	}
 
 	// runNohup must redirect terminal stdin before resolving the command, so a
-	// failing opener reports wrapper status 125 with the redirect diagnostic
-	// and never reaches the lookup outcome 127 or a started child.
+	// failing opener reports the Issue 7 internal-error status 127 with the
+	// redirect diagnostic and never starts a child. Ordering is proven by the
+	// diagnostic (and the absent sentinel), since a lookup failure would
+	// report "command not found" at the same status.
 	const expectedDiag = "nohup: failed to render standard input unusable: permission denied\n"
 	runCase := func(t *testing.T, env []string, command string, args ...string) {
 		tempDir := t.TempDir()
@@ -400,13 +408,13 @@ func TestNohupDevNullOpenFailure(t *testing.T) {
 
 		code := run(rc, full)
 
-		if code != 125 {
-			t.Fatalf("expected exit code 125 (wrapper redirect failure), got %d err=%q", code, errb.String())
+		if code != 127 {
+			t.Fatalf("expected exit code 127 (nohup-internal redirect failure), got %d err=%q", code, errb.String())
 		}
 		if got := errb.String(); got != expectedDiag {
 			t.Errorf("expected diagnostic %q, got %q", expectedDiag, got)
 		}
-		// The lookup outcome 127 ("command not found") must not be reached:
+		// The lookup outcome ("command not found") must not be reached:
 		// the redirect runs first and wins.
 		if strings.Contains(errb.String(), "command not found") {
 			t.Errorf("command lookup ran before redirect: %q", errb.String())
@@ -418,8 +426,8 @@ func TestNohupDevNullOpenFailure(t *testing.T) {
 	}
 
 	// The missing-command case is the adversarial ordering proof: if lookup ran
-	// first it would return 127 and never reach the opener. With the redirect
-	// running first, the failure is reported as 125.
+	// first the diagnostic would name the missing command instead of the
+	// redirect failure.
 	t.Run("missing_command", func(t *testing.T) {
 		runCase(t, []string{"PATH=" + filepath.Join(t.TempDir(), "nowhere")}, "definitely-missing-command")
 	})
@@ -429,8 +437,8 @@ func TestNohupDevNullOpenFailure(t *testing.T) {
 		runCase(t, []string{"PATH=/bin:/usr/bin"}, "touch")
 	})
 
-	// The same redirect failure reports the stricter POSIX status once
-	// POSIXLY_CORRECT asks for it.
+	// The same redirect failure reports the required 127 with POSIXLY_CORRECT
+	// set as well: the status is unconditional.
 	t.Run("posixly_correct", func(t *testing.T) {
 		tempDir := t.TempDir()
 		var out, errb bytes.Buffer
@@ -442,7 +450,7 @@ func TestNohupDevNullOpenFailure(t *testing.T) {
 		}
 		sentinel := filepath.Join(tempDir, "should_not_exist")
 		if code := run(rc, []string{"touch", sentinel}); code != 127 {
-			t.Fatalf("expected exit code 127 (POSIXLY_CORRECT redirect failure), got %d err=%q", code, errb.String())
+			t.Fatalf("expected exit code 127 (redirect failure, POSIXLY_CORRECT set), got %d err=%q", code, errb.String())
 		}
 		if _, err := os.Stat(sentinel); err == nil {
 			t.Errorf("sentinel %s was created; child executed despite redirect failure", sentinel)

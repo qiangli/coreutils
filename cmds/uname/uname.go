@@ -1,5 +1,6 @@
-// Package unamecmd implements uname(1) per the GNU coreutils manual:
-// print system information. Supported flags: -a -s -n -r -m -o.
+// Package unamecmd implements uname(1) per POSIX.1-2016 (Issue 7):
+// print system information. Required flags: -a -m -n -r -s -v.
+// -o/-p/-i are GNU extensions carried as explicitly requested options.
 //
 // On unix the values come from uname(2) (golang.org/x/sys/unix), so
 // -s/-r/-m report what the platform's own uname reports (e.g. "Darwin
@@ -7,10 +8,12 @@
 // "Windows_NT", the release is "major.minor.build" from RtlGetVersion,
 // and the machine maps GOARCH to the GNU spelling (x86_64, aarch64).
 //
-// -a prints kernel name, nodename, release, kernel version, machine,
-// and operating system; the kernel-version field is omitted on
-// platforms that do not provide one (Windows), the same way GNU -a
-// omits unknown -p/-i fields.
+// -a is exactly -mnrsv, as Issue 7 requires ("Behave as though all of
+// the options -mnrsv were specified"), and prints the selected symbols
+// in the required s n r v m order. The non-POSIX -o/-p/-i fields are
+// printed only when explicitly requested, never implied by -a. The
+// kernel-version field is omitted on platforms that do not provide one
+// (Windows), where that implementation-defined symbol does not exist.
 //
 // Portions adapted from https://github.com/u-root/u-root cmds/core/uname/uname.go (BSD-3-Clause)
 // and https://github.com/guonaihong/coreutils uname/uname.go (Apache-2.0).
@@ -47,7 +50,7 @@ type sysinfo struct {
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
-	all := fs.BoolP("all", "a", false, "print all information, in the following order, except omit unknown fields")
+	all := fs.BoolP("all", "a", false, "behave as though -mnrsv were specified")
 	kernelName := fs.BoolP("kernel-name", "s", false, "print the kernel name")
 	nodename := fs.BoolP("nodename", "n", false, "print the network node hostname")
 	release := fs.BoolP("kernel-release", "r", false, "print the kernel release")
@@ -92,6 +95,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 
+	// Issue 7: -a behaves as though -mnrsv were specified. It selects
+	// nothing else: -o, -p, and -i are extensions and stay opt-in.
 	var parts []string
 	if *kernelName || *all {
 		parts = append(parts, info.sysname)
@@ -108,13 +113,13 @@ func run(rc *tool.RunContext, args []string) int {
 	if *machine || *all {
 		parts = append(parts, info.machine)
 	}
-	if *processor || (*all && info.processor != "unknown") {
+	if *processor {
 		parts = append(parts, info.processor)
 	}
-	if *hardwarePlatform || (*all && info.hardwarePlatform != "unknown") {
+	if *hardwarePlatform {
 		parts = append(parts, info.hardwarePlatform)
 	}
-	if *osFlag || *all {
+	if *osFlag {
 		parts = append(parts, operatingSystem())
 	}
 	fmt.Fprintf(rc.Out, "%s\n", strings.Join(parts, " "))

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -109,24 +110,55 @@ func TestUnameCombinedAndAll(t *testing.T) {
 	if strings.Count(all, "\n") != 1 {
 		t.Errorf("-a output is not a single line: %q", all)
 	}
-	if runtime.GOOS == "darwin" {
-		info, err := probe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, part := range []string{info.processor, info.hardwarePlatform} {
-			if !strings.Contains(all, part) {
-				t.Errorf("-a output %q missing %q", all, part)
-			}
-		}
-	}
-
 	av, _, code := runTool(t, "-a", "-v")
 	if code != 0 {
 		t.Fatalf("-a -v: code=%d", code)
 	}
 	if av != all {
 		t.Errorf("uname -a -v output %q differs from uname -a output %q", av, all)
+	}
+}
+
+// TestUnameAllIsExactlyMNRSV pins Issue 7's uname -a: "Behave as though all
+// of the options -mnrsv were specified." GNU's -o operating-system field (and
+// the equally non-POSIX -p/-i) must not be implied by -a; they are printed
+// only when explicitly requested.
+func TestUnameAllIsExactlyMNRSV(t *testing.T) {
+	all, _, code := runTool(t, "-a")
+	if code != 0 {
+		t.Fatalf("-a: code=%d", code)
+	}
+	mnrsv, _, code := runTool(t, "-m", "-n", "-r", "-s", "-v")
+	if code != 0 {
+		t.Fatalf("-mnrsv: code=%d", code)
+	}
+	if all != mnrsv {
+		t.Errorf("uname -a = %q, want the -mnrsv output %q", all, mnrsv)
+	}
+
+	// The required field order is s n r v m.
+	info, err := probe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{info.sysname, info.nodename, info.release}
+	if info.version != "" {
+		want = append(want, info.version)
+	}
+	want = append(want, info.machine)
+	if got := strings.TrimSuffix(all, "\n"); got != strings.Join(want, " ") {
+		t.Errorf("uname -a = %q, want %q", got, strings.Join(want, " "))
+	}
+
+	// -o is a GNU extension and must not appear in -a unless asked for.
+	os, _, _ := runTool(t, "-o")
+	osField := strings.TrimSuffix(os, "\n")
+	if !slices.Contains(want, osField) && strings.Contains(all, osField) {
+		t.Errorf("uname -a = %q must not include the non-POSIX -o field %q", all, osField)
+	}
+	ao, _, code := runTool(t, "-a", "-o")
+	if code != 0 || ao != strings.TrimSuffix(all, "\n")+" "+os {
+		t.Errorf("uname -a -o = (%q, %d), want %q", ao, code, strings.TrimSuffix(all, "\n")+" "+os)
 	}
 }
 
@@ -210,8 +242,13 @@ func TestNewFlagsAndAliases(t *testing.T) {
 			args:     []string{"-a"},
 			wantCode: 0,
 			checkOut: func(t *testing.T, out string) {
+				// -a is -mnrsv only, so the non-POSIX -p/-i fields
+				// (and their "unknown" placeholders) never appear.
 				if strings.Contains(out, "unknown") {
 					t.Errorf("-a output %q should not contain 'unknown'", out)
+				}
+				if strings.Contains(out, operatingSystem()) && operatingSystem() != wantSysname() {
+					t.Errorf("-a output %q should not contain the -o field", out)
 				}
 			},
 		},
@@ -220,19 +257,13 @@ func TestNewFlagsAndAliases(t *testing.T) {
 			args:     []string{"-a", "-p"},
 			wantCode: 0,
 			checkOut: func(t *testing.T, out string) {
-				if runtime.GOOS == "darwin" {
-					info, err := probe()
-					if err != nil {
-						t.Fatal(err)
-					}
-					if !strings.Contains(out, info.processor) {
-						t.Errorf("-a -p output %q should contain %q", out, info.processor)
-					}
-					return
+				info, err := probe()
+				if err != nil {
+					t.Fatal(err)
 				}
-				// Since -p is explicitly requested, "unknown" should be printed.
-				if !strings.Contains(out, "unknown") {
-					t.Errorf("-a -p output %q should contain 'unknown'", out)
+				// -p is explicitly requested, so it is appended to -mnrsv.
+				if !strings.HasSuffix(out, " "+info.processor+"\n") {
+					t.Errorf("-a -p output %q should end with the processor field %q", out, info.processor)
 				}
 			},
 		},

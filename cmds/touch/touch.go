@@ -205,9 +205,9 @@ func run(rc *tool.RunContext, args []string) int {
 
 	exit := 0
 	for _, name := range operands {
-		if name == "-" {
-			return tool.NotSupported(rc, cmd, "the '-' operand (the file open on standard output)")
-		}
+		// Issue 7 defines the touch operand as "A pathname of a file
+		// whose times are to be modified" and gives "-" no special
+		// meaning, so it names the file "-" like any other pathname.
 		path := rc.Path(name)
 
 		statFn := os.Stat

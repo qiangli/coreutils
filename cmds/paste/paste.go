@@ -237,24 +237,29 @@ func pasteSerial(rc *tool.RunContext, names []string, open opener, dc *delimCycl
 		}
 		buf = buf[:0]
 		dc.reset()
-		wrote := false
+		failed := false
 		for {
 			chunk, rerr := r.ReadBytes(lineEnd)
 			if len(chunk) == 0 {
 				if rerr != nil && !errors.Is(rerr, io.EOF) {
 					fmt.Fprintf(rc.Err, "paste: %s: %v\n", name, rerr)
 					status = 1
+					failed = true
 				}
 				break
 			}
-			wrote = true
 			if chunk[len(chunk)-1] == lineEnd {
 				chunk = chunk[:len(chunk)-1]
 			}
 			buf = append(buf, chunk...)
 			dc.write(&buf)
 		}
-		if !wrote {
+		// Issue 7 paste -s: "If an input file is empty, the output line
+		// corresponding to that file shall consist of only a <newline>."
+		// buf is already empty here, so falling through writes exactly
+		// that. A file that could not be read is not an empty file: its
+		// diagnostic has been issued and it contributes no output line.
+		if failed {
 			if closer != nil {
 				closer.Close()
 			}

@@ -43,19 +43,22 @@ func TestCmpIdentical(t *testing.T) {
 	}
 }
 
+// TestCmpDiffer pins the POSIX.1-2016 (Issue 7) cmp default STDOUT format
+// "%s %s differ: char %d, line %d\n". Issue 7 spells the position token
+// "char"; GNU's "byte" is not the required output.
 func TestCmpDiffer(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a", "abc\n")
 	writeFile(t, dir, "b", "abd\n")
 	out, _, code := runTool(t, dir, "", "a", "b")
-	if out != "a b differ: byte 3, line 1\n" || code != 1 {
+	if out != "a b differ: char 3, line 1\n" || code != 1 {
 		t.Errorf("differ: out=%q code=%d", out, code)
 	}
 
 	writeFile(t, dir, "c", "one\ntwo\n")
 	writeFile(t, dir, "d", "one\ntwX\n")
 	out, _, code = runTool(t, dir, "", "c", "d")
-	if out != "c d differ: byte 7, line 2\n" || code != 1 {
+	if out != "c d differ: char 7, line 2\n" || code != 1 {
 		t.Errorf("differ line 2: out=%q code=%d", out, code)
 	}
 }
@@ -157,6 +160,9 @@ func TestCmpIgnoreInitial(t *testing.T) {
 	}
 }
 
+// TestCmpPrintBytes covers -b, which is not an Issue 7 option: it is a GNU
+// extension, so its decorated rendering keeps GNU's "byte" token while the
+// POSIX-controlled default output uses "char" (see TestCmpDiffer).
 func TestCmpPrintBytes(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a", "abc\n")

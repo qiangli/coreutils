@@ -352,10 +352,6 @@ func TestTouchErrors(t *testing.T) {
 	if code != 2 || !strings.Contains(errb, "more than one source") {
 		t.Errorf("-t with -d: code=%d err=%q", code, errb)
 	}
-	_, errb, code = runTool(t, dir, "-")
-	if code != 2 || !strings.Contains(errb, "not supported") {
-		t.Errorf("'-' operand: code=%d err=%q", code, errb)
-	}
 	_, errb, code = runTool(t, dir, "--frobnicate", "f")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
@@ -500,5 +496,40 @@ func TestTouchStampPOSIXTZ(t *testing.T) {
 	}
 	if got := mtime(t, filepath.Join(dir, "f")); got.Unix() != want.Unix() {
 		t.Errorf("mtime=%v (%d), want %v (%d)", got, got.Unix(), want, want.Unix())
+	}
+}
+
+// TestTouchDashIsAnOrdinaryPathname pins Issue 7's touch OPERANDS clause:
+// "file  A pathname of a file whose times are to be modified." The
+// specification gives "-" no special meaning for touch (unlike, e.g., the
+// STDIN-reading utilities), so a "-" operand must create and stamp the file
+// literally named "-" rather than being rejected or routed to a stream.
+func TestTouchDashIsAnOrdinaryPathname(t *testing.T) {
+	dir := t.TempDir()
+	out, errb, code := runTool(t, dir, "-")
+	if code != 0 || out != "" || errb != "" {
+		t.Fatalf(`touch -: code=%d out=%q err=%q, want the file named "-" created`, code, out, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "-")); err != nil {
+		t.Fatalf(`touch - did not create the file named "-": %v`, err)
+	}
+
+	// A "-" operand also accepts the required timestamp options, and is
+	// stamped exactly like any other pathname.
+	if _, errb, code := runTool(t, dir, "-t", "202001020304.05", "-"); code != 0 || errb != "" {
+		t.Fatalf("touch -t ... -: code=%d err=%q", code, errb)
+	}
+	want := time.Date(2020, 1, 2, 3, 4, 5, 0, time.Local)
+	if got := mtime(t, filepath.Join(dir, "-")); !got.Equal(want) {
+		t.Errorf(`mtime of "-" = %v, want %v`, got, want)
+	}
+
+	// -c on a missing "-" must not create it, and must not fail.
+	dir2 := t.TempDir()
+	if _, errb, code := runTool(t, dir2, "-c", "-"); code != 0 || errb != "" {
+		t.Fatalf("touch -c -: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir2, "-")); !os.IsNotExist(err) {
+		t.Errorf("touch -c - created the file: err=%v", err)
 	}
 }

@@ -26,35 +26,22 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintf(rc.Err, "%s: missing operand\n", cmd.Name)
 		fmt.Fprintf(rc.Err, "Try '%s --help' for more information.\n", cmd.Name)
-		return internalFailureCode(rc)
+		return internalFailureCode
 	}
 	return runNohup(rc, args)
 }
 
 // internalFailureCode is the status nohup returns when it cannot even
 // attempt the requested command — no operand was given, or a needed
-// redirect could not be set up. That is distinct from failing to find or
-// run the command itself, so it is kept off the 126/127 range those cases
-// use. Strict POSIX conformance instead calls for 127 here too, so a
-// caller that opts into POSIXLY_CORRECT gets that value.
-func internalFailureCode(rc *tool.RunContext) int {
-	if hasEnv(rc.Env, "POSIXLY_CORRECT") {
-		return 127
-	}
-	return 125
-}
-
-// hasEnv reports whether key is set (to any value, including empty) among
-// the RunContext's environment entries, which follow the KEY=VALUE shape.
-func hasEnv(env []string, key string) bool {
-	prefix := key + "="
-	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			return true
-		}
-	}
-	return false
-}
+// redirect could not be set up.
+//
+// Issue 7 nohup EXIT STATUS lists exactly three values: 126 (utility was
+// found but could not be invoked), 127 ("An error occurred in the nohup
+// utility or the utility could not be found"), and otherwise the
+// utility's own status. An internal nohup error is therefore 127
+// unconditionally; it is not conditioned on POSIXLY_CORRECT and does not
+// use GNU's 125.
+const internalFailureCode = 127
 
 var devNullOpener = func() (*os.File, error) {
 	return os.OpenFile(os.DevNull, os.O_WRONLY, 0)
@@ -66,10 +53,11 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		errOut = io.Discard
 	}
 
-	// Redirect terminal stdin before resolving the command, matching GNU
-	// nohup, which renders stdin unusable before execvp. This ordering makes a
-	// failing redirect report wrapper status 125 even when the command is also
-	// missing, so the lookup outcome 127 is never reached for that case.
+	// Redirect terminal stdin before resolving the command: Issue 7 allows
+	// nohup to redirect a terminal standard input from an unspecified file,
+	// and does so as part of setting the utility up, before it is invoked. A
+	// failing redirect is therefore a nohup-internal error (127) reported with
+	// the redirect diagnostic, even when the command is also missing.
 	inTerminal := rc.In != nil && isTerminal(rc.In)
 	outTerminal := rc.Out == nil || isTerminal(rc.Out)
 	errTerminal := rc.Err == nil || isTerminal(rc.Err)
@@ -79,7 +67,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		f, err := devNullOpener()
 		if err != nil {
 			fmt.Fprintf(errOut, "nohup: failed to render standard input unusable: %v\n", err)
-			return internalFailureCode(rc)
+			return internalFailureCode
 		}
 		defer f.Close()
 		stdin = f
@@ -101,7 +89,7 @@ func runNohup(rc *tool.RunContext, argv []string) int {
 		f, disp, err := openNohupOutput(rc)
 		if err != nil {
 			fmt.Fprintf(errOut, "nohup: failed to open 'nohup.out': %v\n", err)
-			return internalFailureCode(rc)
+			return internalFailureCode
 		}
 		defer f.Close()
 		stdout = f

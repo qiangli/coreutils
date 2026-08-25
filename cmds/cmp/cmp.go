@@ -192,9 +192,14 @@ func openSrc(rc *tool.RunContext, name string, skip int64) (*src, int64, int) {
 }
 
 // cmpFirstDiff is the default mode: report the first difference as
-// "FILE1 FILE2 differ: byte N, line L" (stdout, exit 1), or the GNU
+// "FILE1 FILE2 differ: char N, line L" (stdout, exit 1), or the
 // EOF diagnostic (stderr, exit 1) when one file is a prefix of the
 // other.
+//
+// POSIX.1-2016 (Issue 7) cmp STDOUT fixes the default format as
+// "%s %s differ: char %d, line %d\n" — the token is "char", not GNU's
+// "byte". -b is not an Issue 7 option; it is a GNU extension whose
+// decorated rendering keeps GNU's "byte" token as documented upstream.
 func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit int64, printBytes bool) int {
 	var matched, newlines int64
 	lastWasNL := false
@@ -228,7 +233,7 @@ func cmpFirstDiff(rc *tool.RunContext, name1, name2 string, s1, s2 *src, limit i
 					fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d is %3o %s %3o %s\n",
 						name1, name2, matched+1, newlines+1, b1, sprintc(b1), b2, sprintc(b2))
 				} else {
-					fmt.Fprintf(rc.Out, "%s %s differ: byte %d, line %d\n", name1, name2, matched+1, newlines+1)
+					fmt.Fprintf(rc.Out, "%s %s differ: char %d, line %d\n", name1, name2, matched+1, newlines+1)
 				}
 				return 1
 			}

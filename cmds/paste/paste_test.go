@@ -132,14 +132,33 @@ func TestPasteSerial(t *testing.T) {
 	if out != "a,b;c\n1,2\n" || code != 0 {
 		t.Errorf("serial cycle: out=%q code=%d", out, code)
 	}
-	// an empty serial input file produces no output
+	// Issue 7 paste -s: "If an input file is empty, the output line
+	// corresponding to that file shall consist of only a <newline>."
 	out, _, code = runToolDir(t, dir, "", "-s", "empty")
-	if out != "" || code != 0 {
-		t.Errorf("serial empty: out=%q code=%d", out, code)
+	if out != "\n" || code != 0 {
+		t.Errorf("serial empty: out=%q code=%d, want %q", out, code, "\n")
 	}
+	// The newline-only line keeps its command-line position among the
+	// other files' lines ("one line per input file, in command-line order").
 	out, _, code = runToolDir(t, dir, "", "-s", "empty", "f1")
-	if out != "a\tb\tc\n" || code != 0 {
-		t.Errorf("serial empty + file: out=%q code=%d", out, code)
+	if out != "\na\tb\tc\n" || code != 0 {
+		t.Errorf("serial empty + file: out=%q code=%d, want %q", out, code, "\na\tb\tc\n")
+	}
+	out, _, code = runToolDir(t, dir, "", "-s", "f1", "empty", "f2")
+	if want := "a\tb\tc\n\n1\t2\n"; out != want || code != 0 {
+		t.Errorf("serial file + empty + file: out=%q code=%d, want %q", out, code, want)
+	}
+	// The empty-file line is a bare newline regardless of -d, because no
+	// delimiter is ever written for a file with no lines.
+	out, _, code = runToolDir(t, dir, "", "-s", "-d", ",;", "empty")
+	if out != "\n" || code != 0 {
+		t.Errorf("serial empty with -d: out=%q code=%d, want %q", out, code, "\n")
+	}
+	// An unreadable operand is not an empty file: it is diagnosed and
+	// contributes no output line at all.
+	out, errb, code := runToolDir(t, dir, "", "-s", "missing", "f2")
+	if out != "1\t2\n" || code == 0 || errb == "" {
+		t.Errorf("serial unreadable: out=%q err=%q code=%d", out, errb, code)
 	}
 }
 
