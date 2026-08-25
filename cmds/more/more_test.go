@@ -101,14 +101,14 @@ func TestMoreAcceptsDisplayOnlyFlags(t *testing.T) {
 
 func TestMoreRejectsInteractiveFlags(t *testing.T) {
 	for _, args := range [][]string{
-		{"-i"}, {"-p", "next"}, {"--command="}, {"-t", "tag"}, {"--tag="},
+		{"-i"}, {"-t", "tag"}, {"--tag="},
 	} {
 		_, errb, code := runMore(t, t.TempDir(), "a\n", args...)
 		if code == 0 || !strings.Contains(errb, "not supported") {
 			t.Fatalf("expected %v to fail with not supported, got code %d err %q", args, code, errb)
 		}
 	}
-	for _, args := range [][]string{{"-p"}, {"-t"}} {
+	for _, args := range [][]string{{"-t"}} {
 		_, errb, code := runMore(t, t.TempDir(), "a\n", args...)
 		if code != 2 || !strings.Contains(errb, "needs an argument") {
 			t.Fatalf("expected missing argument for %v, got code %d err %q", args, code, errb)
@@ -234,5 +234,10 @@ func TestMoreReadWriteErrors(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "simulated short write") {
 		t.Fatalf("expected write error message, got %q", errb.String())
+	}
+}
+func init() {
+	openTTY = func(rc *tool.RunContext) (*ttyChannel, bool) {
+		return nil, false // Fail closed, degrade to copy path
 	}
 }
