@@ -3,6 +3,7 @@ package filecmd
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -50,6 +51,21 @@ type magicType struct {
 	size        int
 	mask        uint64
 	hasMask     bool
+}
+
+type magicEvaluationError struct{ err error }
+
+func (e *magicEvaluationError) Error() string { return e.err.Error() }
+func (e *magicEvaluationError) Unwrap() error { return e.err }
+
+type magicNumericError struct {
+	conv   byte
+	value  string
+	reason string
+}
+
+func (e *magicNumericError) Error() string {
+	return fmt.Sprintf("magic message %%%c argument %q %s", e.conv, e.value, e.reason)
 }
 
 func loadTestPlan(rc *tool.RunContext, sources []testSource) (testPlan, error) {
@@ -137,7 +153,7 @@ func (p testPlan) classifyInspected(data inspectedData, utf8Locale bool) (string
 		}
 		message, ok, err := applyMagicInspected(data, tests.magic)
 		if err != nil {
-			return "", err
+			return message, &magicEvaluationError{err: err}
 		}
 		if ok {
 			return message, nil
@@ -225,7 +241,10 @@ func parseMagicLine(line string) (magicTest, error) {
 		}
 	}
 	if _, err := renderMagicMessage(test.message, test.messageArg(0)); err != nil {
-		return magicTest{}, err
+		var numericErr *magicNumericError
+		if !errors.As(err, &numericErr) {
+			return magicTest{}, err
+		}
 	}
 	return test, nil
 }
@@ -443,7 +462,7 @@ func applyMagicInspected(data inspectedData, tests []magicTest) (string, bool, e
 		}
 		message, err := renderMagicMessage(primary.message, primary.messageArg(value))
 		if err != nil {
-			return "", false, err
+			return message, true, err
 		}
 		for i < len(tests) && tests[i].continuation {
 			child := tests[i]
@@ -451,7 +470,7 @@ func applyMagicInspected(data inspectedData, tests []magicTest) (string, bool, e
 			if childValue, ok := child.match(data); ok {
 				part, err := renderMagicMessage(child.message, child.messageArg(childValue))
 				if err != nil {
-					return "", false, err
+					return message + part, true, err
 				}
 				message += part
 			}
@@ -538,6 +557,7 @@ func (t magicTest) messageArg(value uint64) any {
 func renderMagicMessage(message string, arg any) (string, error) {
 	var out strings.Builder
 	usedArgument := false
+	var conversionErr error
 	for i := 0; i < len(message); {
 		if message[i] == '\\' {
 			value, consumed, err := magicFormatEscape(message[i:])
@@ -632,14 +652,14 @@ func renderMagicMessage(message string, arg any) (string, error) {
 			continue
 		}
 		formatArg, err := magicNumericConversion(formatArg, conv)
-		if err != nil {
-			return "", err
+		if err != nil && conversionErr == nil {
+			conversionErr = err
 		}
 		out.WriteString(fmt.Sprintf(spec, formatArg))
 		usedArgument = true
 		i++
 	}
-	return out.String(), nil
+	return out.String(), conversionErr
 }
 
 func magicStringConversion(arg any, conv byte) (string, bool, error) {
@@ -697,8 +717,15 @@ func formatMagicBytes(value string, width int, left bool) string {
 func magicNumericConversion(arg any, conv byte) (any, error) {
 	switch value := arg.(type) {
 	case magicNumberArg:
-		if (conv == 'd' || conv == 'i') && value.signed {
-			return signExtend(value.value, value.size), nil
+		if conv == 'd' || conv == 'i' {
+			if value.signed {
+				return signExtend(value.value, value.size), nil
+			}
+			if value.value > uint64(1<<63-1) {
+				text := strconv.FormatUint(value.value, 10)
+				return int64(1<<63 - 1), &magicNumericError{conv: conv, value: text, reason: "is outside the signed integer range"}
+			}
+			return int64(value.value), nil
 		}
 		return value.value, nil
 	case string:
@@ -712,25 +739,82 @@ func parseMagicPrintfInteger(value string, conv byte) (any, error) {
 	if len(value) >= 2 && (value[0] == '\'' || value[0] == '"') {
 		return uint64(value[1]), nil
 	}
-	if value == "" {
-		return uint64(0), nil
-	}
-	if strings.HasPrefix(value, "-") || strings.HasPrefix(value, "+") {
-		n, err := strconv.ParseInt(value, 0, 64)
-		if err != nil {
-			return nil, fmt.Errorf("magic message %%%c argument %q is not a valid integer", conv, value)
-		}
-		if conv == 'd' || conv == 'i' {
-			return n, nil
-		}
-		return uint64(n), nil
-	}
-	n, err := strconv.ParseUint(value, 0, 64)
-	if err != nil {
-		return nil, fmt.Errorf("magic message %%%c argument %q is not a valid integer", conv, value)
-	}
 	if conv == 'd' || conv == 'i' {
-		return int64(n), nil
+		return parseMagicSignedInteger(value, conv)
+	}
+	return parseMagicUnsignedInteger(value, conv)
+}
+
+func magicIntegerPrefix(value string) (prefix string, negative bool, complete bool) {
+	i := 0
+	if i < len(value) && (value[i] == '+' || value[i] == '-') {
+		negative = value[i] == '-'
+		i++
+	}
+	digitsStart := i
+	base := byte(10)
+	if i < len(value) && value[i] == '0' {
+		base = 8
+		i++
+		if i < len(value) && (value[i] == 'x' || value[i] == 'X') {
+			base = 16
+			i++
+			digitsStart = i
+		}
+	}
+	for i < len(value) && magicDigitInBase(value[i], base) {
+		i++
+	}
+	if digitsStart == i && !(base == 8 && digitsStart > 0 && value[digitsStart-1] == '0') {
+		return "", negative, false
+	}
+	return value[:i], negative, i == len(value)
+}
+
+func magicDigitInBase(c, base byte) bool {
+	if c >= '0' && c <= '7' {
+		return true
+	}
+	if base == 10 {
+		return c == '8' || c == '9'
+	}
+	return base == 16 && ((c >= '8' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
+}
+
+func parseMagicSignedInteger(value string, conv byte) (int64, error) {
+	prefix, _, complete := magicIntegerPrefix(value)
+	if prefix == "" || prefix == "+" || prefix == "-" {
+		return 0, &magicNumericError{conv: conv, value: value, reason: "is not a valid integer"}
+	}
+	n, err := strconv.ParseInt(prefix, 0, 64)
+	if err != nil || !complete {
+		reason := "was not completely converted"
+		if err != nil {
+			reason = "is outside the signed integer range"
+		}
+		return n, &magicNumericError{conv: conv, value: value, reason: reason}
+	}
+	return n, nil
+}
+
+func parseMagicUnsignedInteger(value string, conv byte) (uint64, error) {
+	prefix, negative, complete := magicIntegerPrefix(value)
+	if prefix == "" || prefix == "+" || prefix == "-" {
+		return 0, &magicNumericError{conv: conv, value: value, reason: "is not a valid integer"}
+	}
+	digits := prefix
+	if digits[0] == '+' || digits[0] == '-' {
+		digits = digits[1:]
+	}
+	n, err := strconv.ParseUint(digits, 0, 64)
+	if err != nil {
+		return n, &magicNumericError{conv: conv, value: value, reason: "is outside the unsigned integer range"}
+	}
+	if negative {
+		n = 0 - n
+	}
+	if !complete {
+		return n, &magicNumericError{conv: conv, value: value, reason: "was not completely converted"}
 	}
 	return n, nil
 }

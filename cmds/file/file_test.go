@@ -700,6 +700,49 @@ func TestMagicMessageAllPortableCrossTypeConversions(t *testing.T) {
 	}
 }
 
+func TestMagicNumericConversionErrorsPreserveAccumulatedValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, format string
+		arg          any
+		want         string
+	}{
+		{"uint-max-as-signed", "%d", "18446744073709551615", "9223372036854775807"},
+		{"signed-underflow", "%i", "-9223372036854775809", "-9223372036854775808"},
+		{"unsigned-overflow", "%u", "18446744073709551616", "18446744073709551615"},
+		{"hex-overflow", "%x", "18446744073709551616", "ffffffffffffffff"},
+		{"partial-number", "%d", "12x", "12"},
+		{"unsigned-magic-as-signed", "%d", magicNumberArg{value: ^uint64(0), size: 8}, "9223372036854775807"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := renderMagicMessage("prefix="+tc.format+";suffix", tc.arg)
+			if got != "prefix="+tc.want+";suffix" || err == nil || strings.Contains(got, "%!") {
+				t.Fatalf("render %q as %q = (%q, %v), want accumulated value %q and error", tc.arg, tc.format, got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMagicNumericConversionErrorsSetStatusWithoutBecomingOpenErrors(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "huge", []byte("18446744073709551615"))
+	put(t, dir, "partial", []byte("12x"))
+	put(t, dir, "magic", []byte(strings.Join([]string{
+		"0\tstring\t18446744073709551615\tvalue=%d;done",
+		"0\tstring\t12x\tvalue=%u;done",
+	}, "\n")+"\n"))
+
+	out, errb, code := invoke(t, dir, "", "-M", "magic", "huge", "missing", "partial")
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 3 || lines[0] != "huge: value=9223372036854775807;done" ||
+		!strings.Contains(lines[1], "missing: cannot open") || lines[2] != "partial: value=12;done" ||
+		code != 1 || strings.Count(errb, "file: magic message") != 2 ||
+		!strings.Contains(errb, "outside the signed integer range") ||
+		!strings.Contains(errb, "was not completely converted") ||
+		strings.Contains(out, "%!") || strings.Contains(out, "huge: cannot open") || strings.Contains(out, "partial: cannot open") {
+		t.Fatalf("runtime conversion errors = (%q, %q, %d), want saturated/partial output and two diagnostics", out, errb, code)
+	}
+}
+
 func TestArchiveAndExecutableSignatures(t *testing.T) {
 	elf := make([]byte, 18)
 	copy(elf, []byte{0x7f, 'E', 'L', 'F', 2, 1})

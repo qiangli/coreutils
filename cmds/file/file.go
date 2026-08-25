@@ -6,6 +6,7 @@ package filecmd
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -104,10 +105,17 @@ func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) i
 		_, _ = fmt.Fprintf(rc.Err, "file: %v\n", err)
 		return 1
 	}
+	status := 0
 	for _, name := range operands {
 		typ, err := identify(rc, name, *noFollow && !*follow, *minimal, plan, open)
 		if err != nil {
-			typ = fmt.Sprintf("cannot open %q (%v)", name, tool.SysErr(err))
+			var formatErr *magicEvaluationError
+			if errors.As(err, &formatErr) {
+				_, _ = fmt.Fprintf(rc.Err, "file: %v\n", formatErr)
+				status = 1
+			} else {
+				typ = fmt.Sprintf("cannot open %q (%v)", name, tool.SysErr(err))
+			}
 		}
 		var line string
 		if *brief {
@@ -120,7 +128,7 @@ func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) i
 			return 1
 		}
 	}
-	return 0
+	return status
 }
 
 func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan testPlan, open regularFileOpener) (string, error) {
