@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !windows
+//go:build !linux && !darwin && !windows && !freebsd && !netbsd && !aix && !dragonfly && !openbsd && !solaris
 
 package cpcmd
 
@@ -7,9 +7,8 @@ import (
 	"time"
 )
 
-// atime falls back to the modification time on platforms where the
-// stat access-time field is not wired up here. Access-time fidelity
-// is inherently weak (noatime/relatime mounts); this only affects -p.
-func atime(fi os.FileInfo) time.Time {
-	return fi.ModTime()
+// atime fails closed where no supported access-time field is wired up. POSIX
+// -p requires the real atime; silently substituting mtime is a false success.
+func atime(os.FileInfo) (time.Time, bool) {
+	return time.Time{}, false
 }

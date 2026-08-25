@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build aix || dragonfly || openbsd || solaris
 
 package cpcmd
 
@@ -10,7 +10,7 @@ import (
 
 func atime(fi os.FileInfo) (time.Time, bool) {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return time.Unix(st.Atimespec.Sec, st.Atimespec.Nsec), true
+		return time.Unix(int64(st.Atim.Sec), int64(st.Atim.Nsec)), true
 	}
 	return time.Time{}, false
 }

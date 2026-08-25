@@ -32,6 +32,8 @@ var cmd = &tool.Tool{
 // cycle (run's flag-error paths reference cmd).
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+var fileAtime = atime
+
 type copier struct {
 	rc           *tool.RunContext
 	paths        *pathResolver
@@ -250,6 +252,15 @@ func (c *copier) copyEntry(src, dst string) {
 				return
 			}
 		}
+		// Lexical containment is not sufficient: target or one of its
+		// ancestors can be a symbolic link back into source. Walk the existing
+		// destination ancestors with Stat so aliases are resolved before any
+		// directory is created. Otherwise the new destination becomes an entry
+		// in the source traversal and cp recursively copies its own output.
+		if destinationWithinSource(fi, c.rc.Path(dst)) {
+			c.errf("cannot copy a directory, '%s', into itself, '%s'", src, dst)
+			return
+		}
 		if c.oneFS {
 			if dev, ok := fileDev(fi); ok {
 				c.rootDev = dev
@@ -292,6 +303,9 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 			return
 		}
 	} else {
+		if !c.prepareParent(dst) {
+			return
+		}
 		// POSIX: the directory is created with the source mode modified
 		// by the umask, then OR'd with
 		// S_IRWXU so children can land regardless of the source mode (the
@@ -421,12 +435,10 @@ func resolveDereferenceMode(args []string, recursive bool) dereferenceMode {
 func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 	sp, dp := c.path(src), c.path(dst)
 	if _, err := os.Lstat(dp); err == nil {
-		if c.noClobber {
-			return // -n: silently skip; exit status unaffected
-		}
 		// POSIX step 1 precedes step 3's prompt: a source that is the
 		// same file as the destination (or a destination directory that
-		// a non-directory cannot replace) is diagnosed without asking.
+		// a non-directory cannot replace) is diagnosed before overwrite
+		// controls such as GNU -n are considered.
 		if ds, err := os.Stat(dp); err == nil {
 			if ss, err := os.Stat(sp); err == nil && os.SameFile(ss, ds) {
 				c.errf("'%s' and '%s' are the same file", src, dst)
@@ -436,6 +448,9 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 				c.errf("cannot overwrite directory '%s' with non-directory", dst)
 				return
 			}
+		}
+		if c.noClobber {
+			return // -n: silently skip an otherwise valid overwrite
 		}
 		// GNU -u is an extension, but it must not suppress the required
 		// same-file or type diagnostics above.
@@ -460,11 +475,8 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 	} else if c.symlink {
 		// Nothing to do before creating a new symbolic link.
 	}
-	if parent := filepath.Dir(dst); parent != "." && parent != dst {
-		if err := os.MkdirAll(c.path(parent), 0o777); err != nil {
-			c.errf("cannot create directory '%s': %s", filepath.Dir(dst), reason(err))
-			return
-		}
+	if !c.prepareParent(dst) {
+		return
 	}
 	if c.link {
 		if err := os.Link(sp, dp); err != nil {
@@ -534,7 +546,21 @@ func (c *copier) copySymlink(src, dst string) {
 		c.errf("cannot read symbolic link '%s': %s", src, reason(err))
 		return
 	}
-	if _, err := os.Lstat(dp); err == nil {
+	if di, err := os.Lstat(dp); err == nil {
+		// Under -P the symlink itself is the source file. Step 1 therefore
+		// compares lstat identities, not the files referenced by the links.
+		// This also covers two pathnames that are hard links to one symlink.
+		if si, statErr := os.Lstat(sp); statErr == nil && os.SameFile(si, di) {
+			c.errf("'%s' and '%s' are the same file", src, dst)
+			return
+		}
+		// os.Remove removes empty directories, unlike the unlink operation
+		// specified by cp. Classify this case before overwrite controls so a
+		// physical symlink can never replace an existing destination directory.
+		if di.IsDir() {
+			c.errf("cannot overwrite directory '%s' with non-directory", dst)
+			return
+		}
 		if c.noClobber {
 			return
 		}
@@ -552,12 +578,54 @@ func (c *copier) copySymlink(src, dst string) {
 			return
 		}
 	}
+	if !c.prepareParent(dst) {
+		return
+	}
 	if err := os.Symlink(target, dp); err != nil {
 		c.errf("cannot create symbolic link '%s': %s", dst, reason(err))
 		return
 	}
 	c.debugf("copied symbolic link '%s' -> '%s'", src, dst)
 	c.verbosef("'%s' -> '%s'", src, dst)
+}
+
+// prepareParent creates destination ancestors only for the explicit GNU
+// --parents extension. Plain POSIX cp must let the destination open/mkdir fail
+// when its parent does not exist; silently inventing that hierarchy changes a
+// failed copy into a successful one.
+func (c *copier) prepareParent(dst string) bool {
+	if !c.parents {
+		return true
+	}
+	parent := filepath.Dir(dst)
+	if parent == "." || parent == dst {
+		return true
+	}
+	if err := os.MkdirAll(c.path(parent), 0o777); err != nil {
+		c.errf("cannot create directory '%s': %s", parent, reason(err))
+		return false
+	}
+	return true
+}
+
+// destinationWithinSource reports whether an existing directory at or above
+// dst identifies source. os.Stat intentionally follows directory symlinks,
+// closing the alias case that a filepath-prefix comparison cannot see.
+func destinationWithinSource(source os.FileInfo, dst string) bool {
+	path, err := filepath.Abs(dst)
+	if err != nil {
+		return false
+	}
+	for {
+		if fi, err := os.Stat(path); err == nil && fi.IsDir() && os.SameFile(source, fi) {
+			return true
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		path = parent
+	}
 }
 
 // confirm writes the -i prompt to stderr and reads one reply line from
@@ -631,7 +699,10 @@ func (c *copier) preserveAttrs(src, dst string, fi os.FileInfo) {
 		}
 	}
 	if c.preserve.timestamps {
-		if err := os.Chtimes(dp, atime(fi), fi.ModTime()); err != nil {
+		access, ok := fileAtime(fi)
+		if !ok {
+			c.errf("preserving times for '%s': access time unsupported on this platform", dst)
+		} else if err := os.Chtimes(dp, access, fi.ModTime()); err != nil {
 			c.errf("preserving times for '%s': %s", dst, reason(err))
 		}
 	}

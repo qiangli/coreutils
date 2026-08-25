@@ -7,8 +7,10 @@ package cpcmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestCpInteractiveSameFileDiagnosesWithoutPrompt pins Issue 7 step 1
@@ -112,5 +114,123 @@ func TestCpDashOperandsAreOrdinaryPathnames(t *testing.T) {
 	}
 	if got := read(t, filepath.Join(dir, "-")); got != "second-payload" {
 		t.Errorf("target '-' did not name the file -: %q", got)
+	}
+}
+
+// POSIX obtains the destination descriptor with open(O_CREAT); it does not
+// create missing path components. Parent synthesis belongs only to GNU
+// --parents and must not turn this failure into a successful copy.
+func TestCpDoesNotCreateMissingDestinationParents(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "source"), "payload")
+	_, errb, code := runTool(t, dir, "source", filepath.Join("missing", "target"))
+	if code != 1 || !strings.Contains(errb, "cannot create regular file") {
+		t.Fatalf("cp source missing/target: code=%d err=%q, want destination-open failure", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("cp invented a missing destination hierarchy: %v", err)
+	}
+}
+
+func TestCpPreserveFailsLoudlyWhenAccessTimeIsUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "source"), "payload")
+	old := fileAtime
+	fileAtime = func(os.FileInfo) (time.Time, bool) { return time.Time{}, false }
+	t.Cleanup(func() { fileAtime = old })
+
+	_, errb, code := runTool(t, dir, "-p", "source", "target")
+	if code != 1 || !strings.Contains(errb, "access time unsupported") {
+		t.Fatalf("cp -p without atime support: code=%d err=%q, want explicit preservation failure", code, errb)
+	}
+	if got := read(t, filepath.Join(dir, "target")); got != "payload" {
+		t.Fatalf("file data was not copied before metadata failure: %q", got)
+	}
+}
+
+// POSIX step 1 classifies identical files before step 3's overwrite controls.
+// GNU -n is an extension, but it cannot turn `cp -n a a` into a silent
+// successful skip: the same-file diagnostic still wins.
+func TestCpNoClobberDoesNotHideSameFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a"), "payload")
+	_, errb, code := runTool(t, dir, "-n", "a", "a")
+	if code != 1 || !strings.Contains(errb, "'a' and 'a' are the same file") {
+		t.Fatalf("cp -n a a: code=%d err=%q, want same-file diagnostic", code, errb)
+	}
+}
+
+// With -P, source_file is the symlink itself. Copying it to the same pathname
+// must stop at step 1 without unlinking and recreating it (which changes the
+// inode and can lose the link entirely if recreation fails).
+func TestCpPhysicalSymlinkSameFileIsNotReplaced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation normally requires elevated privilege on Windows")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "target"), "payload")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink("target", link); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, dir, "-P", "link", "link")
+	if code != 1 || !strings.Contains(errb, "'link' and 'link' are the same file") {
+		t.Fatalf("cp -P link link: code=%d err=%q, want same-file diagnostic", code, errb)
+	}
+	after, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("source symlink disappeared: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("same-file copy replaced the source symlink instead of leaving it unchanged")
+	}
+}
+
+func TestCpPhysicalSymlinkDoesNotReplaceDestinationDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation normally requires elevated privilege on Windows")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "target"), "payload")
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "out", "link"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, dir, "-P", "link", "out")
+	if code != 1 || !strings.Contains(errb, "cannot overwrite directory 'out/link' with non-directory") {
+		t.Fatalf("cp -P link out: code=%d err=%q, want destination-directory diagnostic", code, errb)
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "out", "link")); err != nil || !fi.IsDir() {
+		t.Fatalf("destination directory was replaced: mode=%v err=%v", fiMode(fi), err)
+	}
+}
+
+// A destination pathname can be inside source without having a lexical source
+// prefix. Stat each existing destination ancestor so a directory symlink back
+// to source is rejected before the destination is created and enters traversal.
+func TestCpRecursiveRejectsSymlinkAliasedDestinationInsideSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory symlink creation normally requires elevated privilege on Windows")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src", "file"), "payload")
+	if err := os.Symlink("src", filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, dir, "-R", "src", "alias")
+	if code != 1 || !strings.Contains(errb, "into itself") {
+		t.Fatalf("cp -R src alias: code=%d err=%q, want into-itself diagnostic", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "src", "src")); !os.IsNotExist(err) {
+		t.Fatalf("destination was created inside source before rejection: %v", err)
 	}
 }

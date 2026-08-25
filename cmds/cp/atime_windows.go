@@ -8,11 +8,9 @@ import (
 	"time"
 )
 
-// atime returns the access time recorded in fi, falling back to the
-// modification time when the platform data is unavailable.
-func atime(fi os.FileInfo) time.Time {
+func atime(fi os.FileInfo) (time.Time, bool) {
 	if st, ok := fi.Sys().(*syscall.Win32FileAttributeData); ok {
-		return time.Unix(0, st.LastAccessTime.Nanoseconds())
+		return time.Unix(0, st.LastAccessTime.Nanoseconds()), true
 	}
-	return fi.ModTime()
+	return time.Time{}, false
 }

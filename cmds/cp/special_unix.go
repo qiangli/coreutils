@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 
 	"golang.org/x/sys/unix"
 )
@@ -52,11 +51,8 @@ func (c *copier) copySpecial(src, dst string, fi os.FileInfo) {
 			}
 		}
 	}
-	if parent := filepath.Dir(dst); parent != "." && parent != dst {
-		if err := os.MkdirAll(c.path(parent), 0o777); err != nil {
-			c.errf("cannot create directory '%s': %s", filepath.Dir(dst), reason(err))
-			return
-		}
+	if !c.prepareParent(dst) {
+		return
 	}
 
 	finalMode := fi.Mode().Perm()
