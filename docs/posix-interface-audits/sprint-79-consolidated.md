@@ -49,7 +49,6 @@ findings are independent.
 | Priority | Commands | Confirmed required-interface gap |
 | --- | --- | --- |
 | Critical | `pr` | Header identity and a broad option/layout cluster diverge from Issue 7. |
-| Critical | `crontab` | Missing `%` command/stdin splitting, mandated job defaults, mail delivery, and XSI access control. |
 | Critical | `getconf` | Much of the mandatory sysconf, pathconf, confstr, and minimum-name surface is absent. |
 | Critical | `pax` | Broad required archive interface is absent or silently ignored. |
 | Critical | `more` | Required options, `$MORE`, terminal paging, and the interactive command set are absent. |

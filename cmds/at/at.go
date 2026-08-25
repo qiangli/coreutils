@@ -87,6 +87,11 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "time %q is in the past", timespec)
 	}
 
+	cwd := rc.Dir
+	if cwd == "" {
+		return tool.UsageError(rc, cmd, "invocation working directory is required")
+	}
+
 	var cmdText string
 	if *filename != "" {
 		data, err := os.ReadFile(rc.Path(*filename))
@@ -108,10 +113,6 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	id := strconv.FormatInt(now.UnixNano(), 36)
-	cwd := rc.Dir
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
 	shell := rc.Getenv("SHELL")
 	if shell == "" {
 		shell = "sh"
@@ -140,7 +141,7 @@ func run(rc *tool.RunContext, args []string) int {
 		j.Umask, j.UmaskSet = mask, true
 	}
 
-	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
 		return append(jobs, j), nil
 	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
@@ -151,7 +152,7 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func listJobs(rc *tool.RunContext, ids []string, queue string) int {
-	jobs, err := schedule.LoadJobs()
+	jobs, err := schedule.StoreFor(rc.Dir, rc.Env).LoadJobs()
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
 		return 1
@@ -199,7 +200,7 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 	if len(ids) == 0 {
 		return tool.UsageError(rc, cmd, "missing job ID for -r")
 	}
-	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
 		for _, id := range ids {
 			found := false
 			for i := len(jobs) - 1; i >= 0; i-- {

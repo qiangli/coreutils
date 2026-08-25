@@ -29,7 +29,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "extra operand %q", operands[0])
 	}
 
-	jobs, err := schedule.LoadJobs()
+	jobs, err := schedule.StoreFor(rc.Dir, rc.Env).LoadJobs()
 	if err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot load schedule: %v\n", cmd.Name, err)
 		return 1

@@ -34,6 +34,10 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	_ = operands
+	cwd := rc.Dir
+	if cwd == "" {
+		return tool.UsageError(rc, cmd, "invocation working directory is required")
+	}
 
 	var cmdText string
 	if *filename != "" {
@@ -62,11 +66,6 @@ func run(rc *tool.RunContext, args []string) int {
 	if shell == "" {
 		shell = "sh"
 	}
-	cwd := rc.Dir
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
-
 	j := &schedule.Job{
 		ID:        id,
 		Kind:      "at",
@@ -85,7 +84,7 @@ func run(rc *tool.RunContext, args []string) int {
 		j.Umask, j.UmaskSet = mask, true
 	}
 
-	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
 		return append(jobs, j), nil
 	}); err != nil {
 		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)

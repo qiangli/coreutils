@@ -14,8 +14,11 @@
 package schedule
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,31 +33,44 @@ import (
 
 // Job is one scheduled command.
 type Job struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name,omitempty"`
-	Kind    string   `json:"kind"` // cron | every | at
-	Spec    string   `json:"spec"`
-	Command []string `json:"command"`
-	Dir     string   `json:"dir,omitempty"`
-	Queue   string   `json:"queue,omitempty"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name,omitempty"`
+	Kind     string   `json:"kind"` // cron | every | at
+	Spec     string   `json:"spec"`
+	Command  []string `json:"command"`
+	Dir      string   `json:"dir,omitempty"`
+	Queue    string   `json:"queue,omitempty"`
+	Stdin    string   `json:"stdin,omitempty"`
+	StdinSet bool     `json:"stdin_set,omitempty"`
+	// POSIXCron marks jobs whose shell and umask semantics must be enforced.
+	// It makes a moved store fail closed on platforms that cannot provide them.
+	POSIXCron bool `json:"posix_cron,omitempty"`
 	// Env and Umask preserve the submission context for POSIX at jobs.  The
 	// corresponding Set bits distinguish an intentionally empty value from a
 	// legacy/general scheduler job, which continues to inherit daemon state.
 	// The state file is private (0600), and list output must never expose Env.
-	Env       []string  `json:"env,omitempty"`
-	EnvSet    bool      `json:"env_set,omitempty"`
-	Umask     uint32    `json:"umask,omitempty"`
-	UmaskSet  bool      `json:"umask_set,omitempty"`
-	Prompt    string    `json:"prompt,omitempty"`
-	Context   string    `json:"context,omitempty"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-	LastRun   time.Time `json:"last_run,omitempty"`
-	NextRun   time.Time `json:"next_run,omitempty"`
+	Env        []string  `json:"env,omitempty"`
+	EnvSet     bool      `json:"env_set,omitempty"`
+	Umask      uint32    `json:"umask,omitempty"`
+	UmaskSet   bool      `json:"umask_set,omitempty"`
+	MailOutput bool      `json:"mail_output,omitempty"`
+	MailTo     string    `json:"mail_to,omitempty"`
+	Prompt     string    `json:"prompt,omitempty"`
+	Context    string    `json:"context,omitempty"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastRun    time.Time `json:"last_run,omitempty"`
+	NextRun    time.Time `json:"next_run,omitempty"`
 }
 
+var ErrMailDeliveryUnsupported = errors.New("scheduled output mail delivery is not supported by this host")
+
+type MailDelivery func(recipient string, content []byte) error
+
 type store struct {
-	Jobs []*Job `json:"jobs"`
+	Jobs          []*Job `json:"jobs"`
+	CronSource    []byte `json:"cron_source,omitempty"`
+	CronSourceSet bool   `json:"cron_source_set,omitempty"`
 }
 
 func statePath() string {
@@ -68,9 +84,11 @@ func statePath() string {
 	return filepath.Join(dir, "bashy", "schedule.json")
 }
 
-func load() (*store, error) {
+func load() (*store, error) { return loadPath(statePath()) }
+
+func loadPath(path string) (*store, error) {
 	s := &store{}
-	b, err := os.ReadFile(statePath())
+	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return s, nil
@@ -83,8 +101,9 @@ func load() (*store, error) {
 	return s, nil
 }
 
-func (s *store) save() error {
-	p := statePath()
+func (s *store) save() error { return s.savePath(statePath()) }
+
+func (s *store) savePath(p string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
@@ -173,10 +192,23 @@ func parseAt(s string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid time %q (want RFC3339, \"2006-01-02 15:04\", or \"15:04\")", s)
 }
 
-// fire runs a job's command with the agentic env injected, writing output to w.
-func (j *Job) fire(w *os.File) error {
+// fire runs a job without a mail provider. Mail-requiring jobs fail closed.
+func (j *Job) fire(w io.Writer) error { return j.fireWithMail(w, nil) }
+
+// FireJob executes a job with an explicit output-mail provider.
+func FireJob(j *Job, w io.Writer, deliver MailDelivery) error {
+	return j.fireWithMail(w, deliver)
+}
+
+func (j *Job) fireWithMail(w io.Writer, deliver MailDelivery) error {
 	if len(j.Command) == 0 {
 		return fmt.Errorf("job %s has no command", j.ID)
+	}
+	if err := validateJobPlatform(j); err != nil {
+		return fmt.Errorf("job %s: %w", j.ID, err)
+	}
+	if j.MailOutput && deliver == nil {
+		return fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported)
 	}
 	c := commandWithUmask(j.Command, j.Umask, j.UmaskSet)
 	c.Dir = j.Dir
@@ -194,8 +226,22 @@ func (j *Job) fire(w *os.File) error {
 			"BASHY_SCHEDULE_CONTEXT="+j.Context,
 		)
 	}
-	c.Stdout, c.Stderr = w, w
-	return c.Run()
+	if j.StdinSet {
+		c.Stdin = strings.NewReader(j.Stdin)
+	}
+	if !j.MailOutput {
+		c.Stdout, c.Stderr = w, w
+		return c.Run()
+	}
+	var output bytes.Buffer
+	c.Stdout, c.Stderr = &output, &output
+	runErr := c.Run()
+	if output.Len() > 0 {
+		if err := deliver(j.MailTo, append([]byte(nil), output.Bytes()...)); err != nil {
+			return fmt.Errorf("job %s: cannot deliver output mail: %w", j.ID, err)
+		}
+	}
+	return runErr
 }
 
 // scheduleOutputJSON resolves whether to emit the JSON envelope, honoring
@@ -321,6 +367,8 @@ func publicJobs(jobs []*Job) []*Job {
 	for _, job := range jobs {
 		clone := *job
 		clone.Env = nil
+		clone.Stdin = ""
+		clone.StdinSet = false
 		out = append(out, &clone)
 	}
 	return out
@@ -372,10 +420,11 @@ func runCmd() *cobra.Command {
 			if j == nil {
 				return fmt.Errorf("no such job %q", args[0])
 			}
-			err = j.fire(os.Stdout)
+			if err = j.fire(os.Stdout); err != nil {
+				return err
+			}
 			j.LastRun = time.Now()
-			_ = s.save()
-			return err
+			return s.save()
 		},
 	}
 }
@@ -405,12 +454,22 @@ func tickCmd() *cobra.Command {
 
 // tickOnce is the testable core: fire due jobs as of now, return their ids.
 func tickOnce(now time.Time, w *os.File) ([]string, error) {
+	return tickOnceWithMail(now, w, nil)
+}
+
+func tickOnceWithMail(now time.Time, w io.Writer, deliver MailDelivery) ([]string, error) {
 	var fired []string
 	var due []*Job
 	err := UpdateJobs(func(jobs []*Job) ([]*Job, error) {
 		for _, j := range jobs {
 			if !j.Enabled || j.NextRun.IsZero() || j.NextRun.After(now) {
 				continue
+			}
+			if err := validateJobPlatform(j); err != nil {
+				return nil, fmt.Errorf("job %s: %w", j.ID, err)
+			}
+			if j.MailOutput && deliver == nil {
+				return nil, fmt.Errorf("job %s: %w", j.ID, ErrMailDeliveryUnsupported)
 			}
 			j.LastRun = now
 			fired = append(fired, j.ID)
@@ -434,10 +493,19 @@ func tickOnce(now time.Time, w *os.File) ([]string, error) {
 	// The transaction claims each due job by disabling/rescheduling it before
 	// execution. Run commands after releasing the store lock so a scheduled
 	// command may submit another job without deadlocking the daemon.
+	var fireErrs []error
 	for _, j := range due {
-		_ = j.fire(w) // a failing job is logged via w; schedule continues
+		if err := j.fireWithMail(w, deliver); err != nil {
+			fmt.Fprintln(w, err)
+			fireErrs = append(fireErrs, err)
+		}
 	}
-	return fired, nil
+	return fired, errors.Join(fireErrs...)
+}
+
+// TickOnceWithMail fires due jobs using an explicit mail provider.
+func TickOnceWithMail(now time.Time, w io.Writer, deliver MailDelivery) ([]string, error) {
+	return tickOnceWithMail(now, w, deliver)
 }
 
 func daemonCmd() *cobra.Command {

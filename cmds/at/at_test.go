@@ -53,6 +53,25 @@ func TestAtInvalidTimespec(t *testing.T) {
 	}
 }
 
+func TestAtRelativeFileFailsBeforeProcessCWDLookup(t *testing.T) {
+	allowAtForTest(t)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Env: []string{"BASHY_SCHEDULE_STATE=" + filepath.Join(t.TempDir(), "schedule.json")},
+		Stdio: tool.Stdio{
+			In: strings.NewReader(""), Out: &out, Err: &errb,
+		},
+	}
+	code := cmd.Run(rc, []string{"-f", "relative-job", "now", "+", "1", "hour"})
+	if code != 2 || !strings.Contains(errb.String(), "invocation working directory") {
+		t.Fatalf("code=%d stderr=%q", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "cannot read") {
+		t.Fatalf("relative operand consulted process cwd: %q", errb.String())
+	}
+}
+
 func TestAtCreateAndListAndRemove(t *testing.T) {
 	setupATState(t)
 	stdin := "echo hello world\n"
@@ -208,14 +227,14 @@ func TestAtFromFile(t *testing.T) {
 }
 
 func TestAtJobRetainsShellProgramAndWorkingDirectory(t *testing.T) {
-	setupATState(t)
+	state := setupATState(t)
 	dir := t.TempDir()
 	program := "printf '%s\\n' 'hello world' > marker\n"
 	var stdout, stderr bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
-		Env:   []string{"PATH=/usr/bin:/bin", "SHELL=sh", "MBI_ENV=garp"},
+		Env:   []string{"PATH=/usr/bin:/bin", "SHELL=sh", "MBI_ENV=garp", "BASHY_SCHEDULE_STATE=" + state},
 		Umask: 0o027, UmaskSet: true,
 		Stdio: tool.Stdio{
 			In: strings.NewReader(program), Out: &stdout, Err: &stderr,

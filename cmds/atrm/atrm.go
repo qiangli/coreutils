@@ -27,7 +27,7 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "missing job ID")
 	}
 
-	if err := schedule.UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
 		for _, id := range operands {
 			found := false
 			for i := len(jobs) - 1; i >= 0; i-- {

@@ -18,7 +18,7 @@ import (
 )
 
 func TestAtSubmissionContextSurvivesDaemonExecution(t *testing.T) {
-	setupATState(t)
+	state := setupATState(t)
 	t.Setenv("DAEMON_ONLY", "must-not-leak")
 	dir := t.TempDir()
 	program := `printf '%s\n' 'hello world' |
@@ -34,6 +34,7 @@ env | sort > environment
 		"SHELL=sh",
 		"MBI_ENV=garp",
 		"PWD=" + dir,
+		"BASHY_SCHEDULE_STATE=" + state,
 	}
 	var stdout, stderr bytes.Buffer
 	rc := &tool.RunContext{

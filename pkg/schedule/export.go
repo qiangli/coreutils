@@ -11,6 +11,63 @@ import (
 	"github.com/qiangli/coreutils/pkg/lockfile"
 )
 
+// Store is a schedule store at an explicit path. Command adapters use it so
+// an embedding RunContext, rather than process-global cwd/environment, selects
+// the schedule namespace.
+type Store struct{ path string }
+
+// NewStore returns a path-scoped schedule store.
+func NewStore(path string) *Store { return &Store{path: path} }
+
+// StatePathFor resolves the schedule store from an invocation directory and
+// environment. Relative values are resolved against dir. It returns an empty
+// path when that would require consulting the process working directory.
+func StatePathFor(dir string, env []string) string {
+	lookup := func(name string) (string, bool) {
+		prefix := name + "="
+		for i := len(env) - 1; i >= 0; i-- {
+			if strings.HasPrefix(env[i], prefix) {
+				return env[i][len(prefix):], true
+			}
+		}
+		return "", false
+	}
+	if value, ok := lookup("BASHY_SCHEDULE_STATE"); ok && value != "" {
+		if filepath.IsAbs(value) {
+			return filepath.Clean(value)
+		}
+		if dir == "" {
+			return ""
+		}
+		return filepath.Join(dir, value)
+	}
+	if value, ok := lookup("XDG_CONFIG_HOME"); ok && value != "" {
+		if !filepath.IsAbs(value) {
+			if dir == "" {
+				return ""
+			}
+			value = filepath.Join(dir, value)
+		}
+		return filepath.Join(value, "bashy", "schedule.json")
+	}
+	if value, ok := lookup("HOME"); ok && value != "" {
+		if !filepath.IsAbs(value) {
+			if dir == "" {
+				return ""
+			}
+			value = filepath.Join(dir, value)
+		}
+		return filepath.Join(value, ".config", "bashy", "schedule.json")
+	}
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, ".bashy", "schedule.json")
+}
+
+// StoreFor returns the isolated store selected by an invocation context.
+func StoreFor(dir string, env []string) *Store { return NewStore(StatePathFor(dir, env)) }
+
 // ParseAtTimespec is the public timespec parser used by the `at` and
 // `batch` compatibility commands. It extends the internal parseAt with
 // support for relative times ("now + N minutes/hours/days/weeks"),
@@ -374,9 +431,21 @@ func LoadJobs() ([]*Job, error) {
 	return s.Jobs, nil
 }
 
+func (s *Store) LoadJobs() ([]*Job, error) {
+	state, err := loadPath(s.path)
+	if err != nil {
+		return nil, err
+	}
+	return state.Jobs, nil
+}
+
 // SaveJobs atomically persists a job list.
 func SaveJobs(jobs []*Job) error {
 	return UpdateJobs(func([]*Job) ([]*Job, error) { return jobs, nil })
+}
+
+func (s *Store) SaveJobs(jobs []*Job) error {
+	return s.UpdateJobs(func([]*Job) ([]*Job, error) { return jobs, nil })
 }
 
 // UpdateJobs applies one read-modify-write transaction while holding the
@@ -402,6 +471,101 @@ func UpdateJobs(update func([]*Job) ([]*Job, error)) error {
 	s.Jobs = jobs
 	return s.save()
 }
+
+func (s *Store) update(update func(*store) error) error {
+	if s == nil || s.path == "" {
+		return fmt.Errorf("schedule store path is empty")
+	}
+	lock, err := lockfile.Acquire(filepath.Join(filepath.Dir(s.path), "schedule.lock"), lockfile.Holder{
+		Name: "bashy-schedule", Intent: "update schedule store",
+	})
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	state, err := loadPath(s.path)
+	if err != nil {
+		return err
+	}
+	if err := update(state); err != nil {
+		return err
+	}
+	return state.savePath(s.path)
+}
+
+func (s *Store) UpdateJobs(update func([]*Job) ([]*Job, error)) error {
+	return s.update(func(state *store) error {
+		jobs, err := update(state.Jobs)
+		if err != nil {
+			return err
+		}
+		state.Jobs = jobs
+		return nil
+	})
+}
+
+// CronTable returns the original submitted table. Legacy stores without raw
+// source metadata are reconstructed from their executable cron jobs.
+func (s *Store) CronTable() ([]byte, bool, error) {
+	state, err := loadPath(s.path)
+	if err != nil {
+		return nil, false, err
+	}
+	if state.CronSourceSet {
+		return append([]byte(nil), state.CronSource...), true, nil
+	}
+	var lines []string
+	for _, job := range state.Jobs {
+		if job.Kind != "cron" {
+			continue
+		}
+		command := job.Command
+		if len(command) == 3 && command[1] == "-c" {
+			command = command[2:]
+		}
+		lines = append(lines, job.Spec+" "+strings.Join(command, " "))
+	}
+	if len(lines) == 0 {
+		return nil, false, nil
+	}
+	return []byte(strings.Join(lines, "\n") + "\n"), true, nil
+}
+
+// ReplaceCron atomically replaces cron jobs and their byte-exact submitted
+// source while leaving at/batch/general scheduler jobs untouched.
+func (s *Store) ReplaceCron(source []byte, cronJobs []*Job) error {
+	return s.update(func(state *store) error {
+		kept := state.Jobs[:0]
+		for _, job := range state.Jobs {
+			if job.Kind != "cron" {
+				kept = append(kept, job)
+			}
+		}
+		state.Jobs = append(kept, cronJobs...)
+		state.CronSource = append([]byte(nil), source...)
+		state.CronSourceSet = true
+		return nil
+	})
+}
+
+// RemoveCron atomically removes only cron jobs and their source table.
+func (s *Store) RemoveCron() error {
+	return s.update(func(state *store) error {
+		kept := state.Jobs[:0]
+		for _, job := range state.Jobs {
+			if job.Kind != "cron" {
+				kept = append(kept, job)
+			}
+		}
+		state.Jobs = kept
+		state.CronSource = nil
+		state.CronSourceSet = false
+		return nil
+	})
+}
+
+// Path returns the explicit backing path, primarily for diagnostics/tests.
+func (s *Store) Path() string { return s.path }
 
 // FindJob returns the job with the given id or name, or nil.
 func FindJob(jobs []*Job, id string) *Job {

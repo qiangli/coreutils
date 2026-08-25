@@ -306,13 +306,19 @@ exactly as system `atd`/`crond` fire jobs submitted by system
 `at`/`crontab`. In a standalone coreutils invocation the daemon is not
 auto-started, so persisted jobs remain pending until the daemon runs.
 
-TODO (execution semantics): full POSIX `at`/`batch`/`crontab` execution
+`crontab` stores the submitted table byte-for-byte for `-l` and `-e`, while
+the scheduler separately retains compiled commands and `%`-derived standard
+input. Cron jobs use an absolute `/bin/sh` default, an invocation-independent
+`HOME`/`LOGNAME`/`PATH`/`SHELL` environment, and umask 0022. A scheduler host
+must supply output-mail delivery; without one, cron execution fails before the
+job is claimed or run. POSIX cron installation and execution fail closed on
+Windows because shell and umask semantics cannot be guaranteed there.
+
+TODO (execution semantics): unattended `at`/`batch`/`crontab` execution
 requires either (a) auto-starting `schedule daemon` from the submit path
 or (b) host cron-service integration. Additionally, `batch` currently
-stores its command as a whitespace-split argv rather than a shell program
-(`sh -c …`) as `at` does; that must be aligned before batch jobs fire
-correctly under the daemon. These are deliberate follow-ups, not
-approximated here.
+does not yet implement the complete POSIX `at -q b -m now` contract. These
+are deliberate follow-ups, not approximated here.
 
 ## NO — not supported (clear error, by reason)
 

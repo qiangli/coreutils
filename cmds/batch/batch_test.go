@@ -3,6 +3,8 @@ package batchcmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -18,6 +20,7 @@ func runBatch(t *testing.T, ctx context.Context, stdin string, args ...string) (
 	rc := &tool.RunContext{
 		Ctx:   ctx,
 		Dir:   t.TempDir(),
+		Env:   []string{"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE")},
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	code = cmd.Run(rc, args)
@@ -35,6 +38,24 @@ func TestBatchHelp(t *testing.T) {
 	out, _, code := runBatch(t, context.Background(), "", "--help")
 	if code != 0 || !strings.Contains(out, "Usage: batch") {
 		t.Errorf("--help: code=%d out=%q", code, out)
+	}
+}
+
+func TestBatchRelativeFileFailsBeforeProcessCWDLookup(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Env: []string{"BASHY_SCHEDULE_STATE=" + filepath.Join(t.TempDir(), "schedule.json")},
+		Stdio: tool.Stdio{
+			In: strings.NewReader(""), Out: &out, Err: &errb,
+		},
+	}
+	code := cmd.Run(rc, []string{"-f", "relative-job"})
+	if code != 2 || !strings.Contains(errb.String(), "invocation working directory") {
+		t.Fatalf("code=%d stderr=%q", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "cannot read") {
+		t.Fatalf("relative operand consulted process cwd: %q", errb.String())
 	}
 }
 

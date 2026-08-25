@@ -16,5 +16,7 @@ func commandWithUmask(command []string, mask uint32, set bool) *exec.Cmd {
 	}
 	args := []string{"-c", `umask "$1"; shift; exec "$@"`, "bashy-schedule", fmt.Sprintf("%04o", mask&0o777)}
 	args = append(args, command...)
-	return exec.Command("sh", args...)
+	// Use an absolute wrapper shell. Resolving "sh" here would consult the
+	// scheduler process PATH before the job's deliberately isolated Env applies.
+	return exec.Command("/bin/sh", args...)
 }

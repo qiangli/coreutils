@@ -600,7 +600,7 @@ new recursive destination directory without `-p`.
 
 Normative source: [Open Group Issue 7/2016 `crontab`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/crontab.html).
 
-Classification: `implementation_gap`.
+Classification: `evidence_gap`.
 
 Required and conditional interface:
 
@@ -632,62 +632,59 @@ Required and conditional interface:
 Source comparison:
 
 - `cmds/crontab/crontab.go` parses zero/one file plus mutually exclusive
-  `-e/-l/-r`; installation is atomic after parse/schedule validation and
-  successful install is silent. It treats a `-` file operand as stdin, so a
-  POSIX file operand whose pathname is `-` cannot be installed, even after an
-  option terminator.
-- `parseCronTab` and `splitCronLine` preserve the entire sixth field but never
-  interpret unescaped `%` or backslash escapes and never create command stdin.
-- `installCronLines` stores the invocation's whole environment and selects
-  `SHELL` from it, plus invocation cwd/umask. POSIX does not require an
-  otherwise-clean environment, but it does require default `HOME`, `LOGNAME`,
-  `PATH`, and `SHELL=sh` values that are independent of their values when
-  `crontab` is invoked; the stored invocation values contradict that mandate.
-- No `cron.allow`/`cron.deny` access check or output-mail delivery exists.
-  `editCron` reads process-global `os.Getenv("EDITOR")` rather than
-  `rc.Getenv`, so embedded Bashy invocations can ignore their invocation
-  environment; it also wires the editor to process-global stdio.
+  `-e/-l/-r`; a `-` operand is a literal pathname. Parse, schedule, platform,
+  and shell validation complete before the path-scoped schedule transaction.
+- The store retains the submitted table as raw bytes for exact `-l` and editor
+  input, independently of executable jobs. Compilation applies the required
+  percent/backslash transform and records command standard input separately.
+- Cron jobs use a validated absolute `/bin/sh` by default, honor an explicit
+  table `SHELL` only when it is an executable absolute pathname, and receive
+  independent `HOME`, `LOGNAME`, `/usr/bin:/bin` `PATH`, `SHELL`, and 0022
+  umask defaults. The umask wrapper also invokes `/bin/sh` absolutely, so the
+  scheduler process PATH cannot select the job shell.
+- Strict `cron.allow`/`cron.deny` parsing accepts one unmodified username per
+  line; malformed or unreadable policies deny access. Editor environment,
+  stdio, cwd, and schedule-store selection come from `RunContext`.
+- Cron execution requires an explicit mail provider and rejects before claim
+  or execution without one. Windows rejects installation and execution because
+  the required shell and umask semantics cannot be guaranteed.
 
-Behavioral evidence: `cmds/crontab/crontab_test.go` covers install/list/remove,
-stdin and file replacement, comments, round-trip text, conflicting modes,
-atomic rejection, schedule validation, whitespace, silence, and persistence.
-`TestCrontabPersistsShellProgramAndContext` affirmatively expects captured
-invocation environment/umask, exposing the environment contradiction. There
-is no `%`/backslash stdin split, invocation-independent mandated-default
-environment, mail, access, or `EDITOR` RunContext test.
+Behavioral evidence: `cmds/crontab/crontab_test.go` covers byte-exact source
+listing/editor input, comments and whitespace, literal `-`, percent stdin,
+explicit/default shells and job defaults, invalid host PATH execution, strict
+access policy, isolated RunContext stores, at-job preservation, and atomic
+failure. `pkg/schedule/schedule_test.go` covers mail delivery, explicit stdin,
+and pre-execution/pre-claim mail failure; Windows-tagged tests cover both
+installation and execution refusal.
 
-Missing features: command `%`/backslash translation and command stdin;
-required independent default job environment and `sh`; output/error mail;
-XSI access control; literal pathname semantics for file operand `-`; and
-invocation-scoped `EDITOR`/stdio for `-e`.
+No source contradiction was found in the required interface. Remaining
+certification evidence concerns locale-specific diagnostics and execution with
+a production mail provider rather than the injected test provider.
 
 ## Confirmed-gap ranking by likely VSC-PCTS TP impact
 
 This ranking counts only source- or behavior-confirmed gaps. It does not turn
 an `evidence_gap` into a predicted failure.
 
-1. **`crontab` command parsing and execution context** — `%` command/stdin
-   splitting and the mandated independent `HOME`/`LOGNAME`/`PATH`/`SHELL`
-   environment are central functional cases and can affect many execution TPs.
-2. **`awk` locale semantics** — absent `LC_COLLATE` and `LC_NUMERIC` wiring can
+1. **`awk` locale semantics** — absent `LC_COLLATE` and `LC_NUMERIC` wiring can
    fan out across comparisons, regex ranges, numeric parsing, conversions, and
    formatted output.
-3. **`at` required `-m`, status, and `timespec` grammar** — a required parser
+2. **`at` required `-m`, status, and `timespec` grammar** — a required parser
    flag fails immediately; unsuccessful removal returns success; and `next`
    plus locale time tokens affect multiple scheduling cases.
-4. **`chgrp` and `chown` recursive symlink policies** — both commands lose
+3. **`chgrp` and `chown` recursive symlink policies** — both commands lose
    required `-H`/`-L` descent and last-option-wins behavior, likely multiplying
    failures across traversal matrices.
-5. **`cp` interactive and recursive-directory semantics** — declined `-i`
+4. **`cp` interactive and recursive-directory semantics** — declined `-i`
    status, locale affirmative matching, and umask loss are independent likely
    TP failures.
-6. **`comm` locale coverage** — nearly every non-C/POSIX `LC_COLLATE` is
+5. **`comm` locale coverage** — nearly every non-C/POSIX `LC_COLLATE` is
    rejected rather than used for comparison, which can affect every
    locale-sensitive merge and ordering case.
-7. **`batch` equivalence contract** — queue `b`, forced mail, access control,
+6. **`batch` equivalence contract** — queue `b`, forced mail, access control,
    and load scheduling are missing, though batch coverage is likely narrower
    than `at`/`crontab`.
-8. **`cmp` exact default output token** — highly deterministic and likely one
+7. **`cmp` exact default output token** — highly deterministic and likely one
    direct output-format failure (`byte` versus `char`), but with limited fanout.
 
 `basename`, `cat`, and `chmod` are not ranked because their open items are

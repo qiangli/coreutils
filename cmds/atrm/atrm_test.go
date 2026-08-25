@@ -3,6 +3,7 @@ package atrmcmd
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ func runATRM(t *testing.T, args ...string) (string, string, int) {
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   t.TempDir(),
+		Env:   []string{"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE")},
 		Stdio: tool.Stdio{Out: &out, Err: &errb, In: strings.NewReader("")},
 	}
 	code := cmd.Run(rc, args)

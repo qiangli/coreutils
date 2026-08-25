@@ -2,6 +2,8 @@ package schedule
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -206,5 +208,77 @@ func TestTickOneShotAtDisables(t *testing.T) {
 	s2, _ := load()
 	if j := s2.find("once"); j == nil || j.Enabled {
 		t.Errorf("one-shot at job should be disabled after firing: %+v", j)
+	}
+}
+
+func TestCronFireDeliversOutputAndExplicitStdin(t *testing.T) {
+	j := &Job{ID: "cron-mail", Kind: "cron", POSIXCron: true,
+		Command: []string{"/bin/sh", "-c", `read first; read second; printf 'out:%s/%s\n' "$first" "$second"; printf 'err\n' >&2`},
+		Stdin:   "alpha\nbeta\n", StdinSet: true, Env: []string{"PATH=/usr/bin:/bin"}, EnvSet: true,
+		Umask: 0o022, UmaskSet: true, MailOutput: true, MailTo: "recipient"}
+	var recipient string
+	var delivered []byte
+	err := FireJob(j, io.Discard, func(to string, body []byte) error {
+		recipient, delivered = to, append([]byte(nil), body...)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recipient != "recipient" || string(delivered) != "out:alpha/beta\nerr\n" {
+		t.Fatalf("mail=(%q,%q)", recipient, delivered)
+	}
+}
+
+func TestCronFireWithoutMailProviderFailsClosedBeforeExecution(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "must-not-exist")
+	j := &Job{ID: "cron-no-mail", Kind: "cron", POSIXCron: true, Command: []string{"/bin/sh", "-c", "touch " + marker}, MailOutput: true, MailTo: "recipient"}
+	err := j.fire(io.Discard)
+	if !errors.Is(err, ErrMailDeliveryUnsupported) {
+		t.Fatalf("error=%v", err)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("job executed: %v", statErr)
+	}
+}
+
+func TestTickWithoutMailProviderDoesNotClaimCronJob(t *testing.T) {
+	withState(t)
+	now := time.Now()
+	j := &Job{ID: "due-cron", Kind: "cron", POSIXCron: true, Spec: "* * * * *", Command: []string{"/bin/sh", "-c", "true"}, Enabled: true, NextRun: now.Add(-time.Minute), MailOutput: true, MailTo: "recipient"}
+	if err := SaveJobs([]*Job{j}); err != nil {
+		t.Fatal(err)
+	}
+	fired, err := tickOnce(now, os.Stdout)
+	if !errors.Is(err, ErrMailDeliveryUnsupported) || len(fired) != 0 {
+		t.Fatalf("tick=(%v,%v)", fired, err)
+	}
+	jobs, loadErr := LoadJobs()
+	if loadErr != nil || len(jobs) != 1 || !jobs[0].LastRun.IsZero() || !jobs[0].NextRun.Equal(j.NextRun) {
+		t.Fatalf("job mutated: %+v err=%v", jobs, loadErr)
+	}
+}
+
+func TestStatePathForUsesOnlyInvocationContext(t *testing.T) {
+	dir := t.TempDir()
+	if got, want := StatePathFor(dir, []string{"BASHY_SCHEDULE_STATE=relative/state.json"}), filepath.Join(dir, "relative", "state.json"); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if got, want := StatePathFor(dir, []string{"HOME=invocation-home"}), filepath.Join(dir, "invocation-home", ".config", "bashy", "schedule.json"); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	abs := filepath.Join(t.TempDir(), "absolute.json")
+	if got := StatePathFor("", []string{"BASHY_SCHEDULE_STATE=" + abs}); got != abs {
+		t.Fatalf("absolute invocation state path = %q, want %q", got, abs)
+	}
+	for _, env := range [][]string{
+		nil,
+		{"BASHY_SCHEDULE_STATE=relative.json"},
+		{"XDG_CONFIG_HOME=relative-config"},
+		{"HOME=relative-home"},
+	} {
+		if got := StatePathFor("", env); got != "" {
+			t.Errorf("StatePathFor without an invocation base = %q for env %q, want empty fail-closed path", got, env)
+		}
 	}
 }
