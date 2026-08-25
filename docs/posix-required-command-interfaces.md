@@ -5377,7 +5377,7 @@ uuencode [-m] [file] decode_pathname
 
 **Implementation:** `cmds/uuencode`.
 
-**Conservative source-token audit:** token gaps: options=-m; argument-form gaps=none; source `cmds/uuencode`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uuencode`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:uuencode:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 

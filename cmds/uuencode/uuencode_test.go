@@ -3,6 +3,7 @@ package uuencodecmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,14 +22,14 @@ func runTool(t *testing.T, dir, stdin string, args ...string) (string, string, i
 
 func TestEncodeKnownVectorFromStdin(t *testing.T) {
 	out, err, code := runTool(t, t.TempDir(), "Cat", "cat.txt")
-	if code != 0 || err != "" || out != "begin 644 cat.txt\n#0V%T\n \nend\n" {
+	if code != 0 || err != "" || out != "begin 666 cat.txt\n#0V%T\n \nend\n" {
 		t.Fatalf("got (%q, %q, %d)", out, err, code)
 	}
 }
 
 func TestClassicUsesSpacesForZeroSextets(t *testing.T) {
 	out, errb, code := runTool(t, t.TempDir(), "\x00\x00\x00", "zeros")
-	if code != 0 || errb != "" || out != "begin 644 zeros\n#    \n \nend\n" {
+	if code != 0 || errb != "" || out != "begin 666 zeros\n#    \n \nend\n" {
 		t.Fatalf("got (%q, %q, %d)", out, errb, code)
 	}
 }
@@ -52,7 +53,7 @@ func TestEncodeBase64AndModes(t *testing.T) {
 	data := strings.Repeat("x", 58)
 	out, errb, code := runTool(t, t.TempDir(), data, "-m", "remote")
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if code != 0 || errb != "" || lines[0] != "begin-base64 644 remote" || len(lines[1]) != 76 || lines[3] != "====" {
+	if code != 0 || errb != "" || lines[0] != "begin-base64 666 remote" || len(lines[1]) != 76 || lines[3] != "====" {
 		t.Fatalf("got (%q, %q, %d)", out, errb, code)
 	}
 	dir := t.TempDir()
@@ -62,6 +63,33 @@ func TestEncodeBase64AndModes(t *testing.T) {
 	out, errb, code = runTool(t, dir, "ignored", "-", "remote")
 	if code != 0 || errb != "" || !strings.HasPrefix(out, "begin 600 remote\n") {
 		t.Fatalf("dash input got (%q,%q,%d)", out, errb, code)
+	}
+}
+
+func TestStandardInputFileModeComesFromFstat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stdin")
+	if err := os.WriteFile(path, []byte("Cat"), 0o751); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o751); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	info, err := input.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{In: input, Out: &out, Err: &errb}}
+	code := cmd.Run(rc, []string{"remote"})
+	wantHeader := "begin " + fmt.Sprintf("%03o", info.Mode().Perm()) + " remote\n"
+	if code != 0 || errb.String() != "" || !strings.HasPrefix(out.String(), wantHeader) {
+		t.Fatalf("got (%q, %q, %d), want header %q", out.String(), errb.String(), code, wantHeader)
 	}
 }
 

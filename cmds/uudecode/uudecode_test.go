@@ -3,6 +3,7 @@ package uudecodecmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,7 @@ func TestDecodeToStdoutAndFileOperand(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "in.uue"), []byte(catFixture), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, errb, code := runTool(t, dir, "ignored", "-o", "-", "in.uue")
+	out, errb, code := runTool(t, dir, "ignored", "-o", "/dev/stdout", "in.uue")
 	if out != "Cat" || errb != "" || code != 0 {
 		t.Fatalf("got (%q,%q,%d)", out, errb, code)
 	}
@@ -79,7 +80,7 @@ func TestHeaderPathnamesAndSymbolicModes(t *testing.T) {
 
 func TestMalformedAndUnsupportedInputs(t *testing.T) {
 	for _, in := range []string{"", "begin nope x\n \nend\n", "begin 600 x\n#0V\n \nend\n", "begin 600 x\n#0~%T\n \nend\n", "begin 600 x\n#0V%T\n"} {
-		_, errb, code := runTool(t, t.TempDir(), in, "-o", "-")
+		_, errb, code := runTool(t, t.TempDir(), in, "-o", "/dev/stdout")
 		if code == 0 || errb == "" {
 			t.Errorf("input=%q err=%q code=%d", in, errb, code)
 		}
@@ -87,7 +88,7 @@ func TestMalformedAndUnsupportedInputs(t *testing.T) {
 }
 
 func TestClassicBacktickExtensionIsAccepted(t *testing.T) {
-	out, errb, code := runTool(t, t.TempDir(), "begin 600 ignored\n#0V%T\n`\nend\n", "-o", "-")
+	out, errb, code := runTool(t, t.TempDir(), "begin 600 ignored\n#0V%T\n`\nend\n", "-o", "/dev/stdout")
 	if code != 0 || errb != "" || out != "Cat" {
 		t.Fatalf("got (%q,%q,%d)", out, errb, code)
 	}
@@ -179,11 +180,64 @@ func TestDecodeBase64MalformedDataRules(t *testing.T) {
 	}
 }
 
-func TestHeaderStdoutNames(t *testing.T) {
-	for _, name := range []string{"-", "/dev/stdout"} {
-		out, errb, code := runTool(t, t.TempDir(), "begin-base64 600 "+name+"\nQ2F0\n====\n")
-		if code != 0 || errb != "" || out != "Cat" {
-			t.Errorf("name=%q got (%q,%q,%d)", name, out, errb, code)
+func TestOnlyDevStdoutIsSpecial(t *testing.T) {
+	dir := t.TempDir()
+	out, errb, code := runTool(t, dir, "begin-base64 600 /dev/stdout\nQ2F0\n====\n")
+	if code != 0 || errb != "" || out != "Cat" {
+		t.Fatalf("/dev/stdout got (%q,%q,%d)", out, errb, code)
+	}
+
+	out, errb, code = runTool(t, dir, "begin-base64 600 -\nQ2F0\n====\n")
+	if code != 0 || errb != "" || out != "" {
+		t.Fatalf("dash header got (%q,%q,%d)", out, errb, code)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "-")); err != nil || string(got) != "Cat" {
+		t.Fatalf("dash header file = %q, %v", got, err)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "-")); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code = runTool(t, dir, "begin-base64 600 ignored\nQ2F0\n====\n", "-o", "-")
+	if code != 0 || errb != "" || out != "" {
+		t.Fatalf("dash override got (%q,%q,%d)", out, errb, code)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "-")); err != nil || string(got) != "Cat" {
+		t.Fatalf("dash override file = %q, %v", got, err)
+	}
+}
+
+func TestDecodedModeUsesOnlyAccessBits(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "begin 07777 out\n \nend\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("got (%q,%d)", errb, code)
+	}
+	info, err := os.Stat(filepath.Join(dir, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o777 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		t.Fatalf("mode = %v", info.Mode())
+	}
+	for _, mode := range []string{"u=rwxs", "a=rwt"} {
+		_, errb, code = runTool(t, dir, "begin "+mode+" bad\n \nend\n")
+		if code == 0 || !strings.Contains(errb, "malformed 'begin' line") {
+			t.Errorf("mode %q: err=%q code=%d", mode, errb, code)
 		}
+	}
+}
+
+func TestChmodFailureIsWarningAndNonfatal(t *testing.T) {
+	old := chmodDecodedFile
+	chmodDecodedFile = func(*os.File, os.FileMode) error { return errors.New("injected chmod failure") }
+	t.Cleanup(func() { chmodDecodedFile = old })
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "begin 777 out\n#0V%T\n \nend\n")
+	if code != 0 || !strings.Contains(errb, "warning: cannot set permissions: injected chmod failure") {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "out")); err != nil || string(got) != "Cat" {
+		t.Fatalf("decoded output = %q, %v", got, err)
 	}
 }

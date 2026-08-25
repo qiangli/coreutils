@@ -19,7 +19,7 @@ var cmd = &tool.Tool{
 	Synopsis: "Decode a uuencoded file.",
 	Usage: "uudecode [OPTION]... [FILE]...\n\n" +
 		"Decode traditional or begin-base64 data from FILEs, or standard input.\n\n" +
-		"  -o, --output-file=FILE  write to FILE instead of the header name; - means stdout\n\n" +
+		"  -o, --output-file=FILE  write to FILE instead of the header name\n\n" +
 		"Header output names use ordinary pathname semantics.",
 }
 
@@ -145,20 +145,32 @@ func decodePart(rc *tool.RunContext, r *bufio.Reader, h header, override string)
 		}
 		return true
 	}
-	if err := decodeAtomically(rc.Path(name), h.mode, decode); err != nil {
+	chmodErr, err := decodeAtomically(rc.Path(name), h.mode, decode)
+	if err != nil {
 		fmt.Fprintf(rc.Err, "uudecode: %s: %v\n", name, err)
 		return false
+	}
+	if chmodErr != nil {
+		// POSIX explicitly makes inability to set the requested access bits
+		// non-fatal: the decoded content remains the useful primary result.
+		fmt.Fprintf(rc.Err, "uudecode: %s: warning: cannot set permissions: %v\n", name, chmodErr)
 	}
 	return true
 }
 
-func decodeAtomically(path string, mode os.FileMode, decode func(io.Writer) error) (err error) {
+var chmodDecodedFile = func(file *os.File, mode os.FileMode) error { return file.Chmod(mode) }
+
+func decodeAtomically(path string, mode os.FileMode, decode func(io.Writer) error) (chmodErr, err error) {
+	path, err = resolveOutputPath(path)
+	if err != nil {
+		return nil, err
+	}
 	if err := checkOverwrite(path); err != nil {
-		return err
+		return nil, err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".uudecode-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -168,19 +180,51 @@ func decodeAtomically(path string, mode os.FileMode, decode func(io.Writer) erro
 		_ = os.Remove(tmpName)
 	}()
 	if err := decode(tmp); err != nil {
-		return err
+		return nil, err
 	}
-	if err := tmp.Chmod(mode); err != nil {
-		return err
-	}
+	chmodErr = chmodDecodedFile(tmp, mode.Perm())
 	if err := tmp.Close(); err != nil {
-		return err
+		return chmodErr, err
 	}
 	tmp = nil
-	return os.Rename(tmpName, path)
+	return chmodErr, os.Rename(tmpName, path)
 }
 
-func stdoutName(name string) bool { return name == "-" || name == "/dev/stdout" }
+func stdoutName(name string) bool { return name == "/dev/stdout" }
+
+// resolveOutputPath follows a final symlink because POSIX describes overwrite
+// behavior in terms of the file to which the pathname resolves. It also
+// resolves a dangling final link to its intended creation pathname. No target
+// is opened, so FIFOs and devices cannot block or trigger open side effects.
+func resolveOutputPath(path string) (string, error) {
+	current := filepath.Clean(path)
+	for links := 0; links < 255; links++ {
+		info, err := os.Lstat(current)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return "", err
+			}
+			// Resolve existing symlinks in the parent even when the leaf does
+			// not exist, so rename creates the file reached by the pathname.
+			if parent, parentErr := filepath.EvalSymlinks(filepath.Dir(current)); parentErr == nil {
+				current = filepath.Join(parent, filepath.Base(current))
+			}
+			return current, nil
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return current, nil
+		}
+		target, err := os.Readlink(current)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(current), target)
+		}
+		current = filepath.Clean(target)
+	}
+	return "", fmt.Errorf("too many symbolic links in output pathname %q", path)
+}
 
 func readLine(r *bufio.Reader) (string, error) {
 	line, err := r.ReadString('\n')

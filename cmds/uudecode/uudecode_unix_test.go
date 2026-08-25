@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build darwin || linux || freebsd || netbsd || openbsd
 
 package uudecodecmd
 
@@ -44,7 +44,84 @@ func TestOverwriteFIFODoesNotBlock(t *testing.T) {
 		t.Fatal("uudecode blocked while checking FIFO overwrite")
 	}
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeNamedPipe != 0 {
-		t.Fatalf("FIFO was not atomically replaced: mode=%v err=%v", info.Mode(), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeNamedPipe != 0 {
+		t.Fatalf("FIFO was not atomically replaced: mode=%v", info.Mode())
+	}
+}
+
+func TestDecodeFollowsFinalSymlinkWithoutReplacingIt(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "link")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", link); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "begin 640 link\n#0V%T\n \nend\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link mode=%v", info.Mode())
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "Cat" {
+		t.Fatalf("target = %q, %v", got, err)
+	}
+}
+
+func TestDecodeCreatesDanglingFinalSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "missing")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink("missing", link); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "begin 640 link\n#0V%T\n \nend\n")
+	if code != 0 || errb != "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link mode=%v", info.Mode())
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "Cat" {
+		t.Fatalf("target = %q, %v", got, err)
+	}
+}
+
+func TestDecodeRefusesResolvedTargetWithoutEffectiveWriteAccess(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "link")
+	if err := os.WriteFile(target, []byte("keep"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Faccessat(unix.AT_FDCWD, target, unix.W_OK, unix.AT_EACCESS); err == nil {
+		t.Skip("effective credentials can write a mode-0400 file")
+	}
+	if err := os.Symlink("target", link); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "begin 600 link\n#0V%T\n \nend\n")
+	if code == 0 || errb == "" {
+		t.Fatalf("err=%q code=%d", errb, code)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "keep" {
+		t.Fatalf("target = %q, %v", got, err)
 	}
 }

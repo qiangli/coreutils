@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build darwin || linux || freebsd || netbsd || openbsd
 
 package uudecodecmd
 
@@ -14,7 +14,7 @@ import (
 // device side effects. AT_EACCESS asks for the effective credentials where the
 // platform supports them.
 func checkOverwrite(path string) error {
-	if _, err := os.Lstat(path); err != nil {
+	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}

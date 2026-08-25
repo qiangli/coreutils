@@ -12,7 +12,9 @@ import (
 // decoder's process mode or umask.
 func parseHeaderMode(s string) (os.FileMode, error) {
 	if n, err := strconv.ParseUint(s, 8, 32); err == nil && n <= 0o7777 {
-		return fileMode(uint32(n)), nil
+		// Only rwxrwxrwx are file access permission bits. Ignore encoded
+		// set-ID/sticky attributes rather than applying them from untrusted data.
+		return os.FileMode(n).Perm(), nil
 	}
 	if s == "" {
 		return 0, errBadMode
@@ -48,7 +50,7 @@ func parseHeaderMode(s string) (os.FileMode, error) {
 				return 0, errBadMode
 			}
 			i++
-			perm, setid, sticky := uint32(0), false, false
+			perm := uint32(0)
 			if i < len(clause) && strings.ContainsRune("ugo", rune(clause[i])) &&
 				(i+1 == len(clause) || strings.ContainsRune("+-=", rune(clause[i+1]))) {
 				switch clause[i] {
@@ -73,17 +75,17 @@ func parseHeaderMode(s string) (os.FileMode, error) {
 						if bits&0o111 != 0 {
 							perm |= 1
 						}
-					case 's':
-						setid = true
-					case 't':
-						sticky = true
+					case 's', 't':
+						// These are chmod attributes, not file access permissions,
+						// and are not valid in a POSIX uuencode mode description.
+						return 0, errBadMode
 					default:
 						return 0, errBadMode
 					}
 					i++
 				}
 			}
-			set, clear := modeBits(who, perm, setid, sticky)
+			set, clear := modeBits(who, perm)
 			switch op {
 			case '+':
 				bits |= set
@@ -94,46 +96,23 @@ func parseHeaderMode(s string) (os.FileMode, error) {
 			}
 		}
 	}
-	return fileMode(bits), nil
+	return os.FileMode(bits & 0o777), nil
 }
 
 var errBadMode = strconv.ErrSyntax
 
-func modeBits(who, perm uint32, setid, sticky bool) (set, clear uint32) {
+func modeBits(who, perm uint32) (set, clear uint32) {
 	if who&1 != 0 {
 		set |= perm << 6
-		clear |= 0o4700
-		if setid {
-			set |= 0o4000
-		}
+		clear |= 0o700
 	}
 	if who&2 != 0 {
 		set |= perm << 3
-		clear |= 0o2070
-		if setid {
-			set |= 0o2000
-		}
+		clear |= 0o070
 	}
 	if who&4 != 0 {
 		set |= perm
-		clear |= 0o1007
-		if sticky {
-			set |= 0o1000
-		}
+		clear |= 0o007
 	}
 	return
-}
-
-func fileMode(bits uint32) os.FileMode {
-	m := os.FileMode(bits & 0o777)
-	if bits&0o4000 != 0 {
-		m |= os.ModeSetuid
-	}
-	if bits&0o2000 != 0 {
-		m |= os.ModeSetgid
-	}
-	if bits&0o1000 != 0 {
-		m |= os.ModeSticky
-	}
-	return m
 }

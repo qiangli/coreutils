@@ -36,14 +36,22 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	input := rc.In
-	// POSIX specifies 0644 when the input is standard input.  In particular,
-	// '-' is an ordinary pathname, as in the reference utility.
-	mode := os.FileMode(0o644)
+	// POSIX requires the header to carry the input file's access bits. Standard
+	// input is still a file descriptor in a process invocation, so inspect it
+	// when the embedding exposes *os.File. A library embedding may instead
+	// supply an abstract Reader with no file metadata; 0666 is the explicit
+	// maximum-access fallback for that extension case.
+	mode, err := inputMode(input)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "uuencode: standard input: %v\n", err)
+		return 1
+	}
 	remote := operands[0]
 	var file *os.File
 	if len(operands) == 2 {
 		remote = operands[1]
-		var err error
+		// POSIX does not designate "-" as standard input for this operand; it
+		// is an ordinary pathname.
 		file, err = os.Open(rc.Path(operands[0]))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "uuencode: %s: %v\n", operands[0], err)
@@ -51,8 +59,10 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		defer file.Close()
 		input = file
-		if info, err := file.Stat(); err == nil {
-			mode = info.Mode().Perm()
+		mode, err = inputMode(file)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "uuencode: %s: %v\n", operands[0], err)
+			return 1
 		}
 	}
 
@@ -68,6 +78,17 @@ func run(rc *tool.RunContext, args []string) int {
 		return encodeBase64(rc, input)
 	}
 	return encodeClassic(rc, input)
+}
+
+func inputMode(input io.Reader) (os.FileMode, error) {
+	if file, ok := input.(*os.File); ok {
+		info, err := file.Stat()
+		if err != nil {
+			return 0, err
+		}
+		return info.Mode().Perm(), nil
+	}
+	return 0o666, nil
 }
 
 func encodeClassic(rc *tool.RunContext, input io.Reader) int {
