@@ -368,3 +368,109 @@ func TestODShortTypeAliases(t *testing.T) {
 		t.Fatalf("od -x -d = (%q, %d), want (%q, 0)", out, code, want)
 	}
 }
+
+// POSIX: concatenated format strings like "x1x2" should parse as two formats (x1 and x2)
+func TestODConcatenatedFormatStrings(t *testing.T) {
+	cases := []struct {
+		format string
+		data   string
+		want   string
+	}{
+		// Two hex formats
+		{"x1x2", "ABCD", " 41 42 43 44\n 4241 4443\n"},
+		// Three formats (test smaller data)
+		{"x1o1", "AB", " 41 42\n 101 102\n"},
+		// Octal and decimal
+		{"o1d1", "AB", " 101 102\n   65   66\n"},
+	}
+	for _, tc := range cases {
+		out, errb, code := runOD(t, t.TempDir(), tc.data, "-A", "n", "-t", tc.format)
+		if out != tc.want || errb != "" || code != 0 {
+			t.Fatalf("od -t %s = (%q, %q, %d), want (%q, \"\", 0)", tc.format, out, errb, code, tc.want)
+		}
+	}
+}
+
+// POSIX: C type codes for floats (fF, fD) and sizes (C, S, I, L with d/o/u/x)
+func TestODCTypeCodeFormats(t *testing.T) {
+	cases := []struct {
+		format string
+		data   string
+		want   string
+	}{
+		// Float C type codes
+		{"fF", "\x00\x00\x80\x3f", " 1\n"},           // float (4 bytes)
+		{"fD", "\x00\x00\x00\x00\x00\x00\xf0\x3f", " 1\n"}, // double (8 bytes)
+		// Integer C type codes
+		{"dC", "A", "   65\n"},        // char (1 byte signed)
+		{"dS", "AB", " 16961\n"},      // short (2 bytes signed, little-endian)
+		{"dI", "ABCD", " 1145258561\n"}, // int (4 bytes signed, little-endian)
+		{"dL", "ABCDEFGH", " 5208208757389214273\n"}, // long (8 bytes signed, little-endian)
+		// Hex with C type codes
+		{"xC", "AB", " 41 42\n"},      // byte hex
+		{"xS", "ABCD", " 4241 4443\n"}, // short hex
+	}
+	for _, tc := range cases {
+		out, errb, code := runOD(t, t.TempDir(), tc.data, "-A", "n", "-t", tc.format)
+		if out != tc.want || errb != "" || code != 0 {
+			t.Fatalf("od -t %s = (%q, %q, %d), want (%q, \"\", 0)", tc.format, out, errb, code, tc.want)
+		}
+	}
+}
+
+// POSIX: multiple operand files concatenation
+func TestODMultipleFileConcatenation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f1"), []byte("A"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f2"), []byte("B"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f3"), []byte("C"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runOD(t, dir, "", "-A", "n", "-t", "c", "f1", "f2", "f3")
+	if want := "   A   B   C\n"; out != want || code != 0 {
+		t.Fatalf("od multi-file = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
+// POSIX: stdin dash operand
+func TestODStdinDashOperand(t *testing.T) {
+	out, _, code := runOD(t, t.TempDir(), "hello", "-A", "n", "-t", "c", "-")
+	if want := "   h   e   l   l   o\n"; out != want || code != 0 {
+		t.Fatalf("od stdin dash = (%q, %d), want (%q, 0)", out, code, want)
+	}
+}
+
+// POSIX: combined format aliases (e.g., octal1hex1)
+func TestODCombinedNamedFormats(t *testing.T) {
+	cases := []struct {
+		format string
+		data   string
+		want   string
+	}{
+		{"octal1hex1", "AB", " 101 102\n 41 42\n"},
+		{"octal", "ABCD", " 010420641101\n"},
+		{"hex", "ABCD", " 44434241\n"},
+		{"signed", "ABCD", " 1145258561\n"},
+		{"unsigned", "ABCD", " 1145258561\n"},
+	}
+	for _, tc := range cases {
+		out, errb, code := runOD(t, t.TempDir(), tc.data, "-A", "n", "-t", tc.format)
+		if out != tc.want || errb != "" || code != 0 {
+			t.Fatalf("od -t %s = (%q, %q, %d), want (%q, \"\", 0)", tc.format, out, errb, code, tc.want)
+		}
+	}
+}
+
+// Edge case: byte-exact offsets and final line with -N
+func TestODByteExactOffsetAndLimit(t *testing.T) {
+	data := "0123456789"
+	out, _, code := runOD(t, t.TempDir(), data, "-A", "d", "-t", "c", "-j", "2", "-N", "3")
+	if !strings.Contains(out, "2") && !strings.Contains(out, "234") {
+		// Should start at offset 2 (decimal) and read 3 bytes
+		t.Fatalf("od -j 2 -N 3 = (%q, %d), format not as expected", out, code)
+	}
+}

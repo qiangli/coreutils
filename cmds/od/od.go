@@ -378,6 +378,12 @@ func writeFormat(w *bufio.Writer, b []byte, format dumpFormat, order binary.Byte
 		writeInts(w, b, 2, true, 10, order)
 	case "d4":
 		writeInts(w, b, 4, true, 10, order)
+	case "d8":
+		writeInts(w, b, 8, true, 10, order)
+	case "o8":
+		writeInts(w, b, 8, false, 8, order)
+	case "u8":
+		writeInts(w, b, 8, false, 10, order)
 	case "f4":
 		for _, v := range words(b, 4, order) {
 			fmt.Fprintf(w, " %.7g", math.Float32frombits(uint32(v)))
@@ -484,63 +490,223 @@ func isStringByte(c byte) bool {
 func parseFormats(values []string) ([]dumpFormat, error) {
 	var formats []dumpFormat
 	for _, value := range values {
+		// First split by spaces/commas/tabs (explicit separators)
 		for _, token := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
-			f, err := parseFormat(token)
+			// Check if the entire token is a format alias first
+			if alias, ok := formatAliases[token]; ok {
+				// It's a format alias like "char" -> "c"
+				fmts, err := parseConcatenatedFormats(alias)
+				if err != nil {
+					return nil, err
+				}
+				formats = append(formats, fmts...)
+				continue
+			}
+			// Then parse concatenated format strings within each token
+			fmts, err := parseConcatenatedFormats(token)
 			if err != nil {
 				return nil, err
 			}
-			formats = append(formats, f)
+			formats = append(formats, fmts...)
 		}
 	}
 	return formats, nil
 }
 
-func parseFormat(s string) (dumpFormat, error) {
-	if alias, ok := formatAliases[s]; ok {
-		s = alias
-	}
-	if s == "c" || s == "a" {
-		return dumpFormat{kind: s, size: 1}, nil
-	}
-	if len(s) < 1 {
-		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
-	}
-	prefix := s[:1]
-	sizeText := s[1:]
-	if _, err := strconv.Atoi(sizeText); err != nil {
-		for pfx := len(s); pfx > 0; pfx-- {
-			cand := s[:pfx]
-			if alias, ok := prefixAliases[cand]; ok {
-				sizeText = s[pfx:]
-				prefix = alias
+// parseConcatenatedFormats handles multiple format specs concatenated together,
+// e.g., "x1x2" → [x1, x2], or "x1o1c" → [x1, o1, c], or "octal1hex1" → [o1, x1]
+func parseConcatenatedFormats(s string) ([]dumpFormat, error) {
+	var formats []dumpFormat
+	i := 0
+	for i < len(s) {
+		// Check for named format aliases first (e.g., "octal", "hex", "signed", "unsigned")
+		matched := false
+		for name, alias := range formatAliases {
+			if len(name) > 1 && strings.HasPrefix(s[i:], name) {
+				// Found a multi-character named alias
+				typeChar := alias[0] // Get the first char of the alias (e.g., 'o' from "octal")
+				i += len(name)
+
+				// Now collect the size specifier that follows
+				start := i
+				// Consume leading digits
+				for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+					i++
+				}
+				// Then optionally one uppercase letter for C type codes
+				if i < len(s) && s[i] >= 'A' && s[i] <= 'Z' {
+					i++
+				}
+
+				sizeModifiers := s[start:i]
+				sizeText := sizeModifiers
+
+				if sizeText == "" {
+					formats = append(formats, parseFormatWithDefault(string(typeChar)))
+				} else {
+					// Handle C type codes (F, D, L, etc.)
+					cTypeSize := cTypeCodeToSize(sizeText)
+					if cTypeSize > 0 {
+						sizeText = fmt.Sprintf("%d", cTypeSize)
+					} else if alias, ok := sizeAliases[sizeText]; ok {
+						sizeText = alias
+					}
+
+					// Parse numeric size
+					size, err := strconv.Atoi(sizeText)
+					if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
+						return nil, fmt.Errorf("unsupported output format: %q", s)
+					}
+
+					if (string(typeChar) == "f" && size != 4 && size != 8) || (string(typeChar) != "x" && string(typeChar) != "o" && string(typeChar) != "u" && string(typeChar) != "d" && string(typeChar) != "f") {
+						return nil, fmt.Errorf("unsupported output format: %q", s)
+					}
+
+					formats = append(formats, dumpFormat{kind: string(typeChar) + fmt.Sprintf("%d", size), size: size})
+				}
+				matched = true
 				break
 			}
 		}
-	}
-	if alias, ok := sizeAliases[sizeText]; ok {
-		sizeText = alias
-	}
-	if sizeText == "" {
-		// POSIX: a type letter with no explicit size takes the type's
-		// natural C size — "int" (4 bytes) for d/o/u/x, "double" (8
-		// bytes) for f — never a 2-byte default.
-		switch prefix {
-		case "f":
-			sizeText = "8"
-		case "x", "o", "u", "d":
-			sizeText = "4"
-		default:
-			return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
+
+		if matched {
+			continue
 		}
+
+		// Handle single-character type letters
+		if i >= len(s) || !isFormatTypeChar(s[i]) {
+			return nil, fmt.Errorf("unsupported output format: %q", s)
+		}
+
+		typeChar := s[i]
+		i++
+
+		// Special handling for single-char formats
+		if typeChar == 'a' || typeChar == 'c' {
+			formats = append(formats, dumpFormat{kind: string(typeChar), size: 1})
+			continue
+		}
+
+		// Collect size specifier: digits and single uppercase letter (C type codes)
+		// OR named sizes (char, short, int, long)
+		start := i
+
+		// Try to match named sizes first (char, short, int, long)
+		sizeMatched := false
+		for name, alias := range sizeAliases {
+			if len(name) > 1 && strings.HasPrefix(s[i:], name) {
+				// Named size found
+				i += len(name)
+				sizeText := alias
+
+				size, err := strconv.Atoi(sizeText)
+				if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
+					return nil, fmt.Errorf("unsupported output format: %q", s)
+				}
+
+				if (string(typeChar) == "f" && size != 4 && size != 8) || (string(typeChar) != "x" && string(typeChar) != "o" && string(typeChar) != "u" && string(typeChar) != "d" && string(typeChar) != "f") {
+					return nil, fmt.Errorf("unsupported output format: %q", s)
+				}
+
+				formats = append(formats, dumpFormat{kind: string(typeChar) + sizeText, size: size})
+				sizeMatched = true
+				break
+			}
+		}
+
+		if sizeMatched {
+			continue
+		}
+
+		// Collect numeric and uppercase letter modifiers
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		// Then optionally one uppercase letter for C type codes (F, D, L, etc.)
+		if i < len(s) && s[i] >= 'A' && s[i] <= 'Z' {
+			i++
+		}
+
+		sizeModifiers := s[start:i]
+		if sizeModifiers == "" {
+			// No explicit size given, use default
+			formats = append(formats, parseFormatWithDefault(string(typeChar)))
+			continue
+		}
+
+		prefix := string(typeChar)
+		sizeText := sizeModifiers
+
+		// Handle C type codes (F, D, L, etc.)
+		cTypeSize := cTypeCodeToSize(sizeText)
+		if cTypeSize > 0 {
+			sizeText = fmt.Sprintf("%d", cTypeSize)
+		} else if alias, ok := sizeAliases[sizeText]; ok {
+			sizeText = alias
+		}
+
+		// Parse numeric size
+		size, err := strconv.Atoi(sizeText)
+		if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
+			return nil, fmt.Errorf("unsupported output format: %q", s)
+		}
+
+		if (prefix == "f" && size != 4 && size != 8) || (prefix != "x" && prefix != "o" && prefix != "u" && prefix != "d" && prefix != "f") {
+			return nil, fmt.Errorf("unsupported output format: %q", s)
+		}
+
+		formats = append(formats, dumpFormat{kind: prefix + fmt.Sprintf("%d", size), size: size})
 	}
-	size, err := strconv.Atoi(sizeText)
-	if err != nil || (size != 1 && size != 2 && size != 4 && size != 8) {
-		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
+
+	return formats, nil
+}
+
+func parseFormatWithDefault(prefix string) dumpFormat {
+	switch prefix {
+	case "f":
+		return dumpFormat{kind: "f8", size: 8} // double
+	case "x", "o", "u", "d":
+		return dumpFormat{kind: prefix + "4", size: 4} // int
+	default:
+		return dumpFormat{kind: prefix + "1", size: 1} // fallback
 	}
-	if (prefix == "f" && size != 4 && size != 8) || (prefix != "x" && prefix != "o" && prefix != "u" && prefix != "d" && prefix != "f") {
-		return dumpFormat{}, fmt.Errorf("unsupported output format: %q", s)
+}
+
+func isFormatTypeChar(c byte) bool {
+	return c == 'a' || c == 'c' || c == 'd' || c == 'f' || c == 'o' || c == 'u' || c == 'x'
+}
+
+// cTypeCodeToSize maps C type codes to byte sizes
+func cTypeCodeToSize(code string) int {
+	switch code {
+	// Float types
+	case "F":
+		return 4 // float
+	case "D":
+		return 8 // double
+	case "LD", "Ld":
+		return 16 // long double (or 8 on some platforms, but POSIX allows this)
+	// Integer size codes (used with d/o/u/x)
+	case "C":
+		return 1 // char
+	case "S":
+		return 2 // short
+	case "I":
+		return 4 // int
+	case "L":
+		return 8 // long
+	// Named sizes (in case someone uses them)
+	case "char":
+		return 1
+	case "short":
+		return 2
+	case "int":
+		return 4
+	case "long":
+		return 8
+	default:
+		return 0
 	}
-	return dumpFormat{kind: prefix + strconv.Itoa(size), size: size}, nil
 }
 
 var formatAliases = map[string]string{
@@ -564,14 +730,6 @@ var sizeAliases = map[string]string{
 	"short": "2",
 	"int":   "4",
 	"long":  "8",
-}
-
-var prefixAliases = map[string]string{
-	"octal":    "o",
-	"hex":      "x",
-	"signed":   "d",
-	"unsigned": "u",
-	"decimal":  "d",
 }
 
 func formatOffset(n int64, radix string) string {
