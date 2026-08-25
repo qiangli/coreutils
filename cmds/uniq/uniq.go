@@ -51,10 +51,11 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
-	if *skipFields < 0 {
+	posix := envPresent(rc.Env, "POSIXLY_CORRECT")
+	if *skipFields < 0 || posix && fs.Changed("skip-fields") && *skipFields == 0 {
 		return tool.UsageError(rc, cmd, "invalid number of fields to skip: '%d'", *skipFields)
 	}
-	if *skipChars < 0 {
+	if *skipChars < 0 || posix && fs.Changed("skip-chars") && *skipChars == 0 {
 		return tool.UsageError(rc, cmd, "invalid number of bytes to skip: '%d'", *skipChars)
 	}
 	if *checkChars < 0 {
@@ -329,6 +330,16 @@ func skipKey(line string, fields, chars int) string {
 }
 
 func isBlank(c byte) bool { return c == ' ' || c == '\t' }
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if entry == key || strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // asciiEqualFold is C-locale case-insensitive equality (bytewise ASCII
 // upcasing — deliberately not Unicode folding).

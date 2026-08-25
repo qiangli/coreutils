@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 2 |
-| Evidence | Partial | 35 |
-| Evidence | Unverified | 79 |
+| Evidence | Partial | 40 |
+| Evidence | Unverified | 74 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -1654,7 +1654,7 @@ expand [-t tablist] [file...]
 
 ## `expr`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1670,19 +1670,19 @@ expr operand...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `operand`. UNVERIFIED
+**Operands:** `operand`. Evaluate the expression formed by all operands after an optional -- delimiter; operands are separate tokens and no stdin data is consumed.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Operators are |, &, =, >, >=, <, <=, !=, +, -, *, /, %, :, and parentheses; leading + forces the following token to be a string operand; GNU string-function keywords remain extensions outside the POSIX base grammar.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH. C/POSIX-locale expression semantics are evidenced;  locale collation, character classes beyond the implemented BRE subset, translated diagnostics, and catalog lookup remain residual.`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write the expression result followed by a newline on successful evaluation.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics, including missing operands, syntax errors, invalid regular expressions, arithmetic conversion failures, division by zero, and output errors.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `No filesystem effects; stdin is not consumed.`.
 
 **Exit status:** 0 non-null/non-zero result; 1 null/zero result; greater than 1 on error.
 
@@ -1696,7 +1696,7 @@ expr operand...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/expr`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/expr/expr_test.go#TestExprPOSIXArithmeticAndComparison;cmds/expr/expr_test.go#TestExprPOSIXBooleanAndExitStatus;cmds/expr/expr_test.go#TestExprPOSIXMatchAndStringFunctions;cmds/expr/expr_test.go#TestExprPOSIXOperandsStdinAndDiagnostics`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expr:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [expr](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expr.html).
 
@@ -1945,7 +1945,7 @@ find [-H|-L] path... [operand_expression...]
 
 ## `fold`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1961,21 +1961,21 @@ fold [-bs] [-w width] [file...]
 
 **Issue 7 option-argument candidate:** `-w=<width>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. With no file operands, or a file operand of -, read standard input; otherwise process file operands in order and continue after an unreadable-file error.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Tabs advance to the next column position that is a multiple of 8; backspace decrements the column count without deleting data; carriage return resets the column count; -s breaks after the last blank that fits and preserves all bytes.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read when no file operands are given or when an operand is -.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH. Fixed UTF-8 behavior is evidenced;  C/POSIX byte interpretation, other public-locale charmap decoding and translated diagnostics/catalog lookup remain residual.`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write folded input in operand order, inserting newlines as needed; no metadata is written.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics, including invalid widths, unreadable file operands, and output errors.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `No filesystem effects other than reading named input files.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 if all input was processed successfully; greater than 0 if an error occurred; usage errors return 2 in this implementation.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -1987,7 +1987,7 @@ fold [-bs] [-w width] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/fold`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:fold:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/fold/fold_test.go#TestFoldDefaultUsesDisplayColumns;cmds/fold/fold_test.go#TestFoldCharactersKeepsUTF8RunesWhole;cmds/fold/fold_test.go#TestFoldBytesPreservesUtf8UnitsAtSmallWidth;cmds/fold/fold_test.go#TestFoldPOSIXOperandsAndErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:fold:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [fold](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/fold.html).
 
@@ -2387,7 +2387,7 @@ id -u [-nr] [user]
 
 ## `join`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2403,21 +2403,21 @@ join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] 
 
 **Issue 7 option-argument candidate:** `-a=<file_number>; -e=<string>; -o=<list>; -t=<char>; -v=<file_number>; -1=<field>; -2=<field>`.
 
-**Operands:** `file1, file2`. UNVERIFIED
+**Operands:** `file1, file2`. Exactly two file operands are required; either file may be -, but not both; inputs are expected to be sorted on their join fields under the active collation sequence.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Default field separation is runs of blanks with leading blanks ignored; -t char uses that character as both input and output separator; -o list accepts 0 for the join field and file.field entries for selected output fields.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read only for one file operand spelled -; using - for both operands is rejected.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH. C/POSIX byte-collation behavior is evidenced;  locale collation/blank handling and translated diagnostics/catalog lookup remain residual.`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write joined and requested unpairable lines according to -a, -v, -e, -o, -t, and the selected join fields.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics, including operand arity errors, invalid option arguments, unreadable files, and sorted-order diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `No filesystem effects other than reading the two input streams/files.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on successful completion; greater than 0 on input or sorting errors; usage errors return 2 in this implementation.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2429,7 +2429,7 @@ join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] 
 
 **Conservative source-token audit:** token gaps: options=none; argument-form gaps=-1=<field>, -2=<field>, -a=<file_number>, -e=<string>, -o=<list>, -t=<char>, -v=<file_number>; source `cmds/join`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:join:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/join/join_test.go#TestJoin;cmds/join/join_test.go#TestJoinStdin;cmds/join/join_test.go#TestJoinOrderCheck;cmds/join/join_test.go#TestJoinPOSIXOutputListAndUnpairableAggregation;cmds/join/join_test.go#TestJoinPOSIXFieldSeparators;cmds/join/join_test.go#TestJoinPOSIXOperandArityAndStderr`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:join:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [join](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/join.html).
 
@@ -3598,7 +3598,7 @@ patch [-blNR] [-c|-e|-n|-u] [-d dir] [-D define] [-i patchfile] [-o outfile] [-p
 
 ## `pathchk`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3614,21 +3614,21 @@ pathchk [-p] [-P] pathname...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `pathname`. UNVERIFIED
+**Operands:** `pathname`. One or more pathname operands are checked independently; the exit status aggregates all operand failures; missing future path components are not errors when they could be created without violating the selected checks.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -p replaces filesystem checks with POSIX portable limits and portable filename character-set checks; -P adds empty-name and leading-hyphen checks to the default filesystem checks; -- terminates option parsing.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH. Translated diagnostics/catalog lookup remain residual.`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics; diagnostics identify the failing operand or component and the violated check.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `No filesystem effects; existing directory prefixes may be inspected for directory and searchability checks.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when every operand passes all selected checks; greater than 0 when any operand fails; usage errors return 2 in this implementation.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3640,7 +3640,7 @@ pathchk [-p] [-P] pathname...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/pathchk`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pathchk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/pathchk/pathchk_test.go#TestPathchkPosixPathLimitIncludesTerminator;cmds/pathchk/pathchk_test.go#TestPathchkPosixNameLimitAndPortableCharacters;cmds/pathchk/pathchk_test.go#TestPathchkPosixDoesNotRejectLeadingHyphen;cmds/pathchk/pathchk_test.go#TestPathchkMultipleOperandsAggregateStatus;cmds/pathchk/pathchk_test.go#TestPathchkMissingOperandUsage;cmds/pathchk/pathchk_test.go#TestPathchkAllowsMissingDirectoryPrefix;cmds/pathchk/pathchk_test.go#TestPathchkRejectsNonDirectoryPrefix;cmds/pathchk/pathchk_unix_test.go#TestPathchkRejectsUnsearchableDirectoryPrefix;cmds/pathchk/pathchk_unix_test.go#TestPathchkRejectsDanglingSymlinkPrefix`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:pathchk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [pathchk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pathchk.html).
 
@@ -5247,7 +5247,7 @@ unexpand [-a|-t tablist] [file...]
 
 ## `uniq`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -5263,21 +5263,21 @@ uniq [-c|-d|-u] [-f fields] [-s char] [input_file [output_file]]
 
 **Issue 7 option-argument candidate:** `-f=<fields>; -s=<chars>`.
 
-**Operands:** `input_file; output_file`. UNVERIFIED
+**Operands:** `input_file; output_file`. With no input_file, or input_file -, read standard input; an optional output_file names the destination, with - meaning standard output; only adjacent matching lines are grouped.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Fields are runs of non-blank characters after leading blanks; -f skips fields before -s skips characters; in POSIX mode their option-arguments must be positive decimal integers, while zero remains an accepted GNU extension outside POSIX mode; -c, -d, and -u select count, duplicate, and unique output modes; unsupported GNU extensions remain outside POSIX evidence.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read when no input_file is given or input_file is -.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH. C/POSIX byte-unit behavior is evidenced with LC_ALL=C and POSIXLY_CORRECT;  interpretation under any non-C LC_CTYPE, locale-specific blank classes, translated diagnostics, and catalog lookup remain residual.`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write the selected first line of each adjacent group by default, or counted/duplicate/unique output according to options, unless an output_file operand redirects output.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics, including invalid counts, operand errors, unreadable input, unwritable output, and output errors.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `May create or truncate the output_file operand when one is supplied; otherwise no filesystem effects beyond reading input.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 on successful completion; greater than 0 if an error occurred; usage errors return 2 in this implementation.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -5289,7 +5289,7 @@ uniq [-c|-d|-u] [-f fields] [-s char] [input_file [output_file]]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/uniq`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uniq:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/uniq/uniq_test.go#TestUniq;cmds/uniq/uniq_test.go#TestUniqPOSIXCCharacterUnits;cmds/uniq/uniq_test.go#TestUniqPOSIXRequiresPositiveSkipArguments;cmds/uniq/uniq_test.go#TestUniqOperands;cmds/uniq/uniq_test.go#TestUniqErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:uniq:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [uniq](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/uniq.html).
 

@@ -44,14 +44,14 @@ ed	cmds/posixproviders		POSIX external provider	no	yes	3	20
 env	cmds/env		GNU Coreutils	yes	yes	4	27
 ex	cmds/posixproviders		POSIX external provider	no	yes	3	20
 expand	cmds/expand		GNU Coreutils	yes	yes	1	15
-expr	cmds/expr		GNU Coreutils	yes	yes	1	8
+expr	cmds/expr		GNU Coreutils	yes	yes	1	9
 factor	cmds/factor		GNU Coreutils	yes	no	1	3
 false	cmds/false		GNU Coreutils	yes	yes	1	2
 fetch	cmds/fetch		Bashy/other extension	no	no	1	6
 file	cmds/file		POSIX/Unix utility	no	yes	2	31
 find	cmds/find		POSIX/Unix utility	no	yes	6	50
 fmt	cmds/fmt		GNU Coreutils	yes	no	1	18
-fold	cmds/fold		GNU Coreutils	yes	yes	1	19
+fold	cmds/fold		GNU Coreutils	yes	yes	1	20
 getconf	cmds/getconf		POSIX/Unix utility	no	yes	1	13
 grep	cmds/grep		POSIX/Unix utility	no	yes	3	36
 groups	cmds/groups		GNU Coreutils	yes	no	1	1
@@ -64,7 +64,7 @@ hostname	cmds/hostname		GNU Coreutils	yes	no	1	4
 iconv	cmds/iconv		POSIX/Unix utility	no	yes	2	18
 id	cmds/id		GNU Coreutils	yes	yes	2	21
 install	cmds/install		GNU Coreutils	yes	no	1	21
-join	cmds/join		GNU Coreutils	yes	yes	1	8
+join	cmds/join		GNU Coreutils	yes	yes	1	11
 jq	cmds/jq		Bashy/other extension	no	no	1	7
 kill	cmds/kill		GNU Coreutils	yes	yes	4	5
 link	cmds/link		GNU Coreutils	yes	no	1	3
@@ -99,7 +99,7 @@ numfmt	cmds/numfmt		GNU Coreutils	yes	no	1	14
 od	cmds/od		GNU Coreutils	yes	yes	1	46
 paste	cmds/paste		GNU Coreutils	yes	yes	1	7
 patch	cmds/posixproviders		POSIX external provider	no	yes	3	20
-pathchk	cmds/pathchk		GNU Coreutils	yes	yes	2	10
+pathchk	cmds/pathchk		GNU Coreutils	yes	yes	2	14
 pax	cmds/pax		POSIX/Unix utility	no	yes	5	83
 pinky	cmds/pinky		GNU Coreutils	yes	no	1	6
 posix-providers	cmds/posixproviders		Bashy/other extension	no	no	3	20
@@ -156,7 +156,7 @@ tty	cmds/tty		GNU Coreutils	yes	yes	3	13
 tz	cmds/tz		Bashy/other extension	no	no	1	2
 uname	cmds/uname		GNU Coreutils	yes	yes	3	10
 unexpand	cmds/unexpand		GNU Coreutils	yes	yes	1	15
-uniq	cmds/uniq		GNU Coreutils	yes	yes	1	4
+uniq	cmds/uniq		GNU Coreutils	yes	yes	1	6
 unlink	cmds/unlink		GNU Coreutils	yes	no	1	3
 uptime	cmds/uptime		GNU Coreutils	yes	no	1	5
 users	cmds/users		GNU Coreutils	yes	no	1	1

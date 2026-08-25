@@ -80,6 +80,25 @@ func TestExprPOSIXBooleanAndExitStatus(t *testing.T) {
 	checkExpr(t, "value\n", 0, "value")
 }
 
+func TestExprPOSIXOperandsStdinAndDiagnostics(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Stdio: tool.Stdio{In: strings.NewReader("999"), Out: &out, Err: &errb},
+	}
+	code := run(rc, []string{"--", "-1", "+", "2"})
+	if code != 0 || out.String() != "1\n" || errb.String() != "" {
+		t.Fatalf("expr -- -1 + 2: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	code = run(rc, nil)
+	if code != 2 || out.String() != "" || !strings.Contains(errb.String(), "missing operand") {
+		t.Fatalf("expr with no operands: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
+
 func TestExprLeadingPlusQuotesKeyword(t *testing.T) {
 	checkExpr(t, "length\n", 0, "+", "length")
 	checkExpr(t, "match\n", 0, "+", "match")

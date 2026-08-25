@@ -97,8 +97,8 @@ class ManifestValidationTest(unittest.TestCase):
             manifest.validate_rendered(damaged, self.rows)
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
         self.assertIn("| Evidence | Verified | 2 |", rendered)
-        self.assertIn("| Evidence | Partial | 35 |", rendered)
-        self.assertIn("| Evidence | Unverified | 79 |", rendered)
+        self.assertIn("| Evidence | Partial | 40 |", rendered)
+        self.assertIn("| Evidence | Unverified | 74 |", rendered)
 
     def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
         errors = manifest.completion_errors(self.rows)

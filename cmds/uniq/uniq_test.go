@@ -69,6 +69,60 @@ func TestUniq(t *testing.T) {
 	}
 }
 
+func TestUniqPOSIXCCharacterUnits(t *testing.T) {
+	run := func(stdin string, args ...string) (stdout, stderr string, code int) {
+		t.Helper()
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Env:   []string{"LC_ALL=C", "POSIXLY_CORRECT=1"},
+			Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
+		}
+		code = cmd.Run(rc, args)
+		return out.String(), errb.String(), code
+	}
+
+	// In the C/POSIX locale, each byte is a character. These inputs
+	// distinguish that contract from unconditional UTF-8 rune decoding.
+	out, errb, code := run("éX\nêX\nZX\n", "-s", "1")
+	if code != 0 || errb != "" || out != "éX\nêX\nZX\n" {
+		t.Fatalf("-s C-locale byte units: code=%d out=%q err=%q", code, out, errb)
+	}
+
+	out, errb, code = run("éa\nêb\nXa\n", "-w", "1")
+	if code != 0 || errb != "" || out != "éa\nXa\n" {
+		t.Fatalf("-w C-locale byte units: code=%d out=%q err=%q", code, out, errb)
+	}
+
+	out, errb, code = run("f1 éX\nf2 êX\nf3 ZX\n", "-f", "1", "-s", "2")
+	if code != 0 || errb != "" || out != "f1 éX\nf2 êX\nf3 ZX\n" {
+		t.Fatalf("-f before -s C-locale units: code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestUniqPOSIXRequiresPositiveSkipArguments(t *testing.T) {
+	for _, args := range [][]string{{"-f", "0"}, {"-s", "0"}} {
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Env:   []string{"POSIXLY_CORRECT=1"},
+			Stdio: tool.Stdio{In: strings.NewReader("a\na\n"), Out: &out, Err: &errb},
+		}
+		if code := cmd.Run(rc, args); code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "invalid number") {
+			t.Fatalf("POSIX uniq %v: code=%d out=%q err=%q", args, code, out.String(), errb.String())
+		}
+	}
+
+	// GNU Coreutils 9.11 accepts zero for both extensions outside POSIX
+	// mode. Keep that existing behavior when the global switch is absent.
+	for _, args := range [][]string{{"-f", "0"}, {"-s", "0"}} {
+		out, errb, code := runTool(t, "a\na\n", args...)
+		if code != 0 || out != "a\n" || errb != "" {
+			t.Fatalf("GNU-compatible uniq %v: code=%d out=%q err=%q", args, code, out, errb)
+		}
+	}
+}
+
 func TestUniqOperands(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "in.txt"), []byte("a\na\nb\n"), 0o644); err != nil {

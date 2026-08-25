@@ -225,6 +225,42 @@ func TestJoinNewOptions(t *testing.T) {
 	}
 }
 
+func TestJoinPOSIXOutputListAndUnpairableAggregation(t *testing.T) {
+	out, errb, code := runTool(
+		t,
+		"1 A1 B1\n2 A2 B2\n",
+		"1 C1 D1\n3 C3 D3\n",
+		"-a", "1", "-a", "2", "-e", "EMPTY", "-o", "0,1.2,2.2,1.4,2.4",
+	)
+	if code != 0 || errb != "" {
+		t.Fatalf("code=%d err=%q", code, errb)
+	}
+	want := "1 A1 C1 EMPTY EMPTY\n2 A2 EMPTY EMPTY EMPTY\n3 EMPTY C3 EMPTY EMPTY\n"
+	if out != want {
+		t.Fatalf("out=%q want %q", out, want)
+	}
+}
+
+func TestJoinPOSIXFieldSeparators(t *testing.T) {
+	out, errb, code := runTool(t, "1\tleft\n", "1\tright\n", "-t", "\t")
+	if code != 0 || errb != "" || out != "1\tleft\tright\n" {
+		t.Fatalf("-t tab: code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
+func TestJoinPOSIXOperandArityAndStderr(t *testing.T) {
+	dir := t.TempDir()
+	out, errb, code := runRaw(t, dir, "1 a\n", "-", "-")
+	if code != 2 || out != "" || !strings.Contains(errb, "both files cannot be standard input") {
+		t.Fatalf("join - -: code=%d out=%q err=%q", code, out, errb)
+	}
+
+	out, errb, code = runRaw(t, dir, "", "missing1", "missing2")
+	if code != 1 || out != "" || !strings.Contains(errb, "missing1") {
+		t.Fatalf("join missing files: code=%d out=%q err=%q", code, out, errb)
+	}
+}
+
 func TestJoinHelpAndVersion(t *testing.T) {
 	dir := t.TempDir()
 	out, _, code := runRaw(t, dir, "", "--help")

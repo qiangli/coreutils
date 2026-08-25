@@ -134,3 +134,51 @@ func TestPathchkDefaultPathLimitIncludesTerminator(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, errText)
 	}
 }
+
+func TestPathchkPosixNameLimitAndPortableCharacters(t *testing.T) {
+	code, errText := runPathchk(t, t.TempDir(), "-p", strings.Repeat("a", posixNameMax))
+	if code != 0 || errText != "" {
+		t.Fatalf("at POSIX name limit: code=%d stderr=%q", code, errText)
+	}
+
+	code, errText = runPathchk(t, t.TempDir(), "-p", strings.Repeat("a", posixNameMax+1))
+	if code != 1 || !strings.Contains(errText, "exceeds POSIX limit") {
+		t.Fatalf("over POSIX name limit: code=%d stderr=%q", code, errText)
+	}
+
+	for _, name := range []string{"aü", "x:y", "bad*name"} {
+		code, errText = runPathchk(t, t.TempDir(), "-p", name)
+		if code != 1 || !strings.Contains(errText, "nonportable") {
+			t.Fatalf("nonportable %q: code=%d stderr=%q", name, code, errText)
+		}
+	}
+}
+
+func TestPathchkPosixDoesNotRejectLeadingHyphen(t *testing.T) {
+	code, errText := runPathchk(t, t.TempDir(), "-p", "--", "-foo")
+	if code != 0 || errText != "" {
+		t.Fatalf("code=%d stderr=%q", code, errText)
+	}
+}
+
+func TestPathchkMultipleOperandsAggregateStatus(t *testing.T) {
+	code, errText := runPathchk(t, t.TempDir(), "-p", "ok", "bad*name", "also_ok")
+	if code != 1 || !strings.Contains(errText, "bad*name") {
+		t.Fatalf("code=%d stderr=%q", code, errText)
+	}
+	if strings.Contains(errText, "ok") || strings.Contains(errText, "also_ok") {
+		t.Fatalf("unexpected diagnostics for passing operands: %q", errText)
+	}
+
+	code, errText = runPathchk(t, t.TempDir(), "-p", "ok", "also_ok")
+	if code != 0 || errText != "" {
+		t.Fatalf("all-pass aggregate: code=%d stderr=%q", code, errText)
+	}
+}
+
+func TestPathchkMissingOperandUsage(t *testing.T) {
+	code, errText := runPathchk(t, t.TempDir())
+	if code != 2 || !strings.Contains(errText, "missing operand") {
+		t.Fatalf("code=%d stderr=%q", code, errText)
+	}
+}

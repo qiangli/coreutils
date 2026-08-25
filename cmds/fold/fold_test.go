@@ -232,3 +232,37 @@ func TestFoldRejectsBadWidth(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }
+
+func TestFoldPOSIXOperandsAndErrors(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first")
+	second := filepath.Join(dir, "second")
+	if err := os.WriteFile(first, []byte("abcd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("wxyz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(),
+		Dir: dir,
+		Stdio: tool.Stdio{
+			In:  strings.NewReader("stdin\n"),
+			Out: &out,
+			Err: &errb,
+		},
+	}
+	code := run(rc, []string{"-w", "2", "first", "-", "second"})
+	if code != 0 || errb.String() != "" || out.String() != "ab\ncd\nst\ndi\nn\nwx\nyz\n" {
+		t.Fatalf("fold files/stdin: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	code = run(rc, []string{"missing", "first"})
+	if code != 1 || !strings.Contains(errb.String(), "missing") || out.String() != "abcd\n" {
+		t.Fatalf("fold missing then file: code=%d out=%q err=%q", code, out.String(), errb.String())
+	}
+}
