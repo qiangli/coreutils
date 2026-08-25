@@ -3,9 +3,8 @@ package morecmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,570 +13,296 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
-// A fake TTY replacement for tests
-func mockTerminal(out io.Writer, mockTTYChannel *ttyChannel, size func() (int, int, error)) func() {
-	origIsTerm := isTerminal
-	origOpenTTY := openTTY
-	origGetSize := getTerminalSize
-
-	isTerminal = func(w io.Writer) bool { return out == w }
-	openTTY = func(rc *tool.RunContext) (*ttyChannel, bool) {
-		if mockTTYChannel == nil {
-			return nil, false
-		}
-		return mockTTYChannel, true
-	}
-	getTerminalSize = func(fd int) (int, int, error) {
-		if size != nil {
-			return size()
-		}
-		return 80, 24, nil
-	}
-
-	return func() {
-		isTerminal = origIsTerm
-		openTTY = origOpenTTY
-		getTerminalSize = origGetSize
-	}
+func withPagerTTY(t *testing.T, out io.Writer, tty *ttyChannel, rows, cols int) {
+	t.Helper()
+	origTerm, origOpen, origSize := isTerminal, openTTY, getTerminalSize
+	isTerminal = func(w io.Writer) bool { return w == out }
+	openTTY = func(*tool.RunContext) (*ttyChannel, error) { return tty, nil }
+	getTerminalSize = func(int) (int, int, error) { return cols, rows, nil }
+	t.Cleanup(func() { isTerminal, openTTY, getTerminalSize = origTerm, origOpen, origSize })
 }
 
-func TestPagerSizing(t *testing.T) {
-	rc := &tool.RunContext{
-		Env: []string{},
-		Stdio: tool.Stdio{
-			Out: new(bytes.Buffer),
-			Err: new(bytes.Buffer),
+func commandTTY(commands string) *ttyChannel {
+	var mu sync.Mutex
+	i := 0
+	return &ttyChannel{
+		hasFd: true,
+		readCommand: func(context.Context) (byte, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if i == len(commands) {
+				return 0, io.EOF
+			}
+			b := commands[i]
+			i++
+			return b, nil
 		},
-	}
-
-	// Default size
-	cleanup := mockTerminal(rc.Out, &ttyChannel{cmds: strings.NewReader("q"), hasFd: true, close: func() error { return nil }}, nil)
-	defer cleanup()
-
-	// -n
-	r, w := terminalSize(rc, nil, 10)
-	if r != 10 || w != 80 {
-		t.Errorf("expected 10,80 got %d,%d", r, w)
-	}
-
-	// LINES / COLUMNS
-	rc.Env = []string{"LINES=15", "COLUMNS=40"}
-	r, w = terminalSize(rc, nil, 0)
-	if r != 15 || w != 40 {
-		t.Errorf("expected 15,40 got %d,%d", r, w)
+		close: func() error { return nil },
 	}
 }
 
-func TestPagerFirstNextPages(t *testing.T) {
-	out := new(bytes.Buffer)
-	errOut := new(bytes.Buffer)
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Stdio: tool.Stdio{Out: out, Err: errOut},
+func TestPagerSeparatesContentAndTerminalUI(t *testing.T) {
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("a\nb\n"), Out: &out, Err: &errOut}}
+	withPagerTTY(t, rc.Out, commandTTY("q"), 2, 80)
+	if code := run(rc, nil); code != 0 {
+		t.Fatalf("code=%d err=%q", code, errOut.String())
 	}
-
-	// 3 lines per screenful
-	cleanup := mockTerminal(rc.Out, &ttyChannel{cmds: strings.NewReader(" q"), hasFd: true, close: func() error { return nil }}, func() (int, int, error) {
-		return 80, 4, nil
-	})
-	defer cleanup()
-
-	dir := t.TempDir()
-	rc.Dir = dir
-	f := filepath.Join(dir, "f1")
-	os.WriteFile(f, []byte("1\n2\n3\n4\n5\n"), 0644)
-
-	code := run(rc, []string{f})
-	if code != 0 {
-		t.Errorf("expected 0, got %d", code)
+	if out.String() != "a\n" {
+		t.Fatalf("content channel = %q", out.String())
 	}
-
-	expected := "1\n2\n3\n\x1b[7m--More--\x1b[m\r\x1b[K4\n5\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"
-	if out.String() != expected {
-		t.Errorf("got %q, expected %q", out.String(), expected)
+	if got := errOut.String(); got != "\x1b[7m--More--\x1b[m\r\x1b[K" {
+		t.Fatalf("terminal channel = %q", got)
 	}
 }
 
-// runPager is a test helper: wires a fake tty channel (working unless
-// openOK is false), a fixed rows/cols tty-size seam, and runs more.
-func runPager(t *testing.T, rows, cols int, openOK bool, cmds string, args []string, setup func(rc *tool.RunContext)) (string, string, int) {
-	t.Helper()
-	out := new(bytes.Buffer)
-	errOut := new(bytes.Buffer)
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Stdio: tool.Stdio{Out: out, Err: errOut},
-	}
-	if setup != nil {
-		setup(rc)
-	}
-
-	var ch *ttyChannel
-	if openOK {
-		ch = &ttyChannel{cmds: strings.NewReader(cmds), hasFd: true, close: func() error { return nil }}
-	}
-	cleanup := mockTerminal(rc.Out, ch, func() (int, int, error) { return cols, rows, nil })
-	defer cleanup()
-
-	code := run(rc, args)
-	return out.String(), errOut.String(), code
+type gatedSource struct {
+	first []byte
+	gate  <-chan struct{}
+	done  bool
 }
 
-func writeFile(t *testing.T, dir, name, content string) string {
-	t.Helper()
-	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+func (r *gatedSource) Read(p []byte) (int, error) {
+	if len(r.first) != 0 {
+		n := copy(p, r.first)
+		r.first = r.first[n:]
+		return n, nil
 	}
-	return p
+	<-r.gate
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, []byte("later\n")), nil
 }
 
-func TestPagerPromptNextFile(t *testing.T) {
-	dir := t.TempDir()
-	f1 := writeFile(t, dir, "f1", "a\n")
-	f2 := writeFile(t, dir, "f2", "b\n")
-
-	out, errb, code := runPager(t, 24, 80, true, " q", []string{f1, f2}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("next-file prompt: code=%d err=%q", code, errb)
+func TestPagerStreamsFirstScreenBeforeSourceEOF(t *testing.T) {
+	var out, errOut bytes.Buffer
+	gate := make(chan struct{})
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: &gatedSource{first: []byte("one\n"), gate: gate}, Out: &out, Err: &errOut}}
+	read := make(chan struct{})
+	release := make(chan struct{})
+	tty := commandTTY("q")
+	origRead := tty.readCommand
+	tty.readCommand = func(ctx context.Context) (byte, error) {
+		close(read)
+		<-release
+		return origRead(ctx)
 	}
-	want := "a\n\x1b[7m--More--(Next file: " + f2 + ")\x1b[m\r\x1b[Kb\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"
-	if out != want {
-		t.Fatalf("next-file prompt:\n got %q\nwant %q", out, want)
-	}
-}
-
-func TestPagerQuitMidScreen(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\nb\nc\n")
-
-	// rows=2 -> screenful=1: a mid-screen prompt fires after the first line.
-	out, errb, code := runPager(t, 2, 80, true, "q", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("quit mid-screen: code=%d err=%q", code, errb)
-	}
-	want := "a\n\x1b[7m--More--\x1b[m\r\x1b[K"
-	if out != want {
-		t.Fatalf("quit mid-screen:\n got %q\nwant %q", out, want)
-	}
-}
-
-func TestPagerUnavailableTTY(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\nb\nc\n")
-
-	// isTerminal true, openTTY fails -> fail closed to the non-interactive
-	// copy path rather than hanging on a command channel that isn't there.
-	out, errb, code := runPager(t, 2, 80, false, "", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("unavailable tty: code=%d err=%q", code, errb)
-	}
-	if out != "a\nb\nc\n" {
-		t.Fatalf("unavailable tty: got %q, want byte-exact passthrough", out)
-	}
-}
-
-func TestPagerChannelEOF(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\nb\n")
-
-	// rows=2 -> screenful=1: prompt fires after "a\n"; the command channel
-	// is empty, so the very first read hits EOF.
-	out, errb, code := runPager(t, 2, 80, true, "", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("channel EOF: code=%d err=%q", code, errb)
-	}
-	// EOF on the command channel returns without clearing the prompt
-	// (unlike an explicit quit, which erases it first).
-	want := "a\n\x1b[7m--More--\x1b[m"
-	if out != want {
-		t.Fatalf("channel EOF:\n got %q\nwant %q", out, want)
-	}
-}
-
-func TestPagerExitOnEOF(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\nb\n")
-
-	out, errb, code := runPager(t, 24, 80, true, "", []string{"-e", f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("-e exit-on-eof: code=%d err=%q", code, errb)
-	}
-	if out != "a\nb\n" {
-		t.Fatalf("-e exit-on-eof: got %q, want plain content with no final prompt", out)
-	}
-}
-
-func TestPagerPlainBackspaceCR(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\bb\rc\n")
-
-	out, errb, code := runPager(t, 24, 80, true, "q", []string{"-u", f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("-u plain: code=%d err=%q", code, errb)
-	}
-	// -u: backspace/CR are printable, not column-control -> content passes
-	// through unmodified, same as the non-terminal path would render it.
-	want := "a\bb\rc\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"
-	if out != want {
-		t.Fatalf("-u plain: got %q, want %q", out, want)
-	}
-}
-
-func TestPagerSqueezeInteractive(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "one\n\n\ntwo\n")
-
-	out, errb, code := runPager(t, 24, 80, true, "q", []string{"-s", f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("-s squeeze: code=%d err=%q", code, errb)
-	}
-	want := "one\n\ntwo\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"
-	if out != want {
-		t.Fatalf("-s squeeze:\n got %q\nwant %q", out, want)
-	}
-}
-
-func TestPagerCommandOptionQuit(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\nb\n")
-
-	// -p is executed at the file's first screen before any content is
-	// printed; a quit command there means the file is never shown.
-	out, errb, code := runPager(t, 24, 80, true, "", []string{"-p", "q", f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("-p q: code=%d err=%q", code, errb)
-	}
-	if out != "" {
-		t.Fatalf("-p q: got %q, want no content printed", out)
-	}
-}
-
-func TestPagerCommandOptionDeferredPerFile(t *testing.T) {
-	dir := t.TempDir()
-	f1 := writeFile(t, dir, "f1", "a\n")
-	f2 := writeFile(t, dir, "f2", "b\n")
-
-	// -p runs at every new file's first screen, not just the first file's.
-	out, errb, code := runPager(t, 24, 80, true, " q", []string{"-p", "z", f1, f2}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 {
-		t.Fatalf("-p z: code=%d", code)
-	}
-	if n := strings.Count(errb, "more: unknown command: z (deferred)"); n != 2 {
-		t.Fatalf("-p z: expected 2 deferred warnings (one per file), got %d in %q", n, errb)
-	}
-	want := "a\n\x1b[7m--More--(Next file: " + f2 + ")\x1b[m\r\x1b[Kb\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"
-	if out != want {
-		t.Fatalf("-p z:\n got %q\nwant %q", out, want)
-	}
-}
-
-func TestPagerOutputError(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\n")
-
-	out := new(bytes.Buffer)
-	errOut := new(bytes.Buffer)
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Dir:   dir,
-		Stdio: tool.Stdio{Out: shortWriter{}, Err: errOut},
-	}
-	ch := &ttyChannel{cmds: strings.NewReader("q"), hasFd: true, close: func() error { return nil }}
-	cleanup := mockTerminal(rc.Out, ch, func() (int, int, error) { return 80, 24, nil })
-	defer cleanup()
-
-	code := run(rc, []string{f})
-	if code == 0 {
-		t.Fatalf("expected non-zero exit on output error, got 0")
-	}
-	if !strings.Contains(errOut.String(), "simulated short write") {
-		t.Fatalf("expected write error message, got %q", errOut.String())
-	}
-	_ = out
-}
-
-func TestPagerReadError(t *testing.T) {
-	out := new(bytes.Buffer)
-	errOut := new(bytes.Buffer)
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Dir:   t.TempDir(),
-		Stdio: tool.Stdio{In: errorReader{}, Out: out, Err: errOut},
-	}
-	ch := &ttyChannel{cmds: strings.NewReader("q"), hasFd: true, close: func() error { return nil }}
-	cleanup := mockTerminal(rc.Out, ch, func() (int, int, error) { return 80, 24, nil })
-	defer cleanup()
-
-	code := run(rc, []string{})
-	if code == 0 {
-		t.Fatalf("expected non-zero exit on read error, got 0")
-	}
-	if !strings.Contains(strings.ToLower(errOut.String()), "simulated read error") {
-		t.Fatalf("expected read error message, got %q", errOut.String())
-	}
-}
-
-func TestPagerContextCancellation(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\n")
-
-	out := new(bytes.Buffer)
-	errOut := new(bytes.Buffer)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	rc := &tool.RunContext{
-		Ctx:   ctx,
-		Dir:   dir,
-		Stdio: tool.Stdio{Out: out, Err: errOut},
-	}
-	// The command channel would hang forever if read; a canceled context
-	// must short-circuit before it is ever touched.
-	ch := &ttyChannel{cmds: blockingReader{}, hasFd: true, close: func() error { return nil }}
-	cleanup := mockTerminal(rc.Out, ch, func() (int, int, error) { return 80, 24, nil })
-	defer cleanup()
-
-	code := run(rc, []string{f})
-	if code != 0 {
-		t.Fatalf("canceled context: expected exit 0, got %d", code)
-	}
-	if out.String() != "" {
-		t.Fatalf("canceled context: expected no output, got %q", out.String())
-	}
-}
-
-func TestPagerCleanPrintRedraw(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\n")
-
-	out, errb, code := runPager(t, 24, 80, true, "q", []string{"-c", f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("-c clean-print: code=%d err=%q", code, errb)
-	}
-	if !strings.HasPrefix(out, "\x1b[H\x1b[2J") {
-		t.Fatalf("-c clean-print: expected leading redraw escape, got %q", out)
-	}
-}
-
-// blockingReader never returns, standing in for a command channel that a
-// real terminal would leave open indefinitely; used only to prove context
-// cancellation is checked before any read is attempted.
-type blockingReader struct{}
-
-func (blockingReader) Read(p []byte) (n int, err error) {
-	select {}
-}
-
-// TestPagerNewlineDeferred pins that <newline> — a more(1) command that
-// scrolls ONE line, not a screenful — is refused as deferred rather than
-// quietly aliased to <space>. Answering a different command than the one
-// typed is the silent-approximation failure the contract forbids.
-func TestPagerNewlineDeferred(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\nb\n")
-
-	// rows=2 -> screenful=1: the prompt fires after "a\n".
-	out, errb, code := runPager(t, 2, 80, true, "\nq", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 {
-		t.Fatalf("newline deferred: code=%d", code)
-	}
-	if !strings.Contains(errb, "more: newline: command not supported yet (deferred)") {
-		t.Fatalf("newline deferred: want deferred diagnostic, got %q", errb)
-	}
-	// The prompt is cleared and reissued; "b" is never reached, because
-	// newline did not advance the screen.
-	p := "\x1b[7m--More--\x1b[m"
-	want := "a\n" + p + "\r\x1b[K" + p + "\r\x1b[K"
-	if out != want {
-		t.Fatalf("newline deferred:\n got %q\nwant %q", out, want)
-	}
-}
-
-// TestPagerDeferredVsUnknown separates the two refusals: a POSIX more
-// command this slice has not implemented is named as deferred, while a key
-// that is no more(1) command at all is named as unknown. Both are loud.
-func TestPagerDeferredVsUnknown(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\n")
-
-	_, errb, code := runPager(t, 24, 80, true, "b\x06zq", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 {
-		t.Fatalf("deferred vs unknown: code=%d", code)
-	}
-	for _, want := range []string{
-		"more: b: command not supported yet (deferred)",
-		"more: ^F: command not supported yet (deferred)",
-		"more: unknown command: z (deferred)",
-	} {
-		if !strings.Contains(errb, want) {
-			t.Fatalf("deferred vs unknown: missing %q in %q", want, errb)
-		}
-	}
-}
-
-// TestPagerFoldsLongLine checks plain-character column accounting: a line
-// longer than the screen width folds at the margin and the folded segment
-// costs the screenful a line.
-func TestPagerFoldsLongLine(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "abcdefgh\n")
-
-	out, errb, code := runPager(t, 24, 4, true, "q", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("fold: code=%d err=%q", code, errb)
-	}
-	want := "abcd\nefgh\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"
-	if out != want {
-		t.Fatalf("fold:\n got %q\nwant %q", out, want)
-	}
-}
-
-// TestPagerTabColumnAccounting checks that a tab advances to the next
-// 8-column stop and that overflowing the margin folds AND counts a line.
-func TestPagerTabColumnAccounting(t *testing.T) {
-	dir := t.TempDir()
-
-	// The fold costs the screenful a line: with screenful=1 it is the
-	// wrapped tab, not a newline, that makes the next character prompt.
-	f := writeFile(t, dir, "f", strings.Repeat("a", 17)+"\tX\n")
-	out, errb, code := runPager(t, 2, 20, true, " q", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("tab accounting: code=%d err=%q", code, errb)
-	}
-	want := strings.Repeat("a", 17) + "\n\t" +
-		"\x1b[7m--More--\x1b[m\r\x1b[K" + "X\n" +
-		"\x1b[7m--More--(END)\x1b[m\r\x1b[K"
-	if out != want {
-		t.Fatalf("tab accounting:\n got %q\nwant %q", out, want)
-	}
-
-	// And the column the fold lands on is exact: 17 columns + a tab stops
-	// at 24, which is 4 columns past a 20-column margin, so exactly 16
-	// more characters fit on the folded line before the next fold.
-	f2 := writeFile(t, dir, "f2", strings.Repeat("a", 17)+"\t"+strings.Repeat("b", 17)+"\n")
-	out, errb, code = runPager(t, 24, 20, true, "q", []string{f2}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("tab fold column: code=%d err=%q", code, errb)
-	}
-	want = strings.Repeat("a", 17) + "\n\t" + strings.Repeat("b", 16) + "\nb\n" +
-		"\x1b[7m--More--(END)\x1b[m\r\x1b[K"
-	if out != want {
-		t.Fatalf("tab fold column:\n got %q\nwant %q", out, want)
-	}
-}
-
-// TestPagerBackspaceColumnAccounting contrasts the default rendering —
-// backspace moves the cursor back a column — with -u, where it is just
-// another printable character and so pushes the line over the margin.
-func TestPagerBackspaceColumnAccounting(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "ab\bcde\n")
-
-	out, errb, code := runPager(t, 24, 4, true, "q", []string{f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("backspace accounting: code=%d err=%q", code, errb)
-	}
-	if want := "ab\bcde\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"; out != want {
-		t.Fatalf("backspace accounting:\n got %q\nwant %q", out, want)
-	}
-
-	out, errb, code = runPager(t, 24, 4, true, "q", []string{"-u", f}, func(rc *tool.RunContext) { rc.Dir = dir })
-	if code != 0 || errb != "" {
-		t.Fatalf("-u backspace accounting: code=%d err=%q", code, errb)
-	}
-	if want := "ab\bc\nde\n\x1b[7m--More--(END)\x1b[m\r\x1b[K"; out != want {
-		t.Fatalf("-u backspace accounting:\n got %q\nwant %q", out, want)
-	}
-}
-
-// promptWatcher is an out sink that closes seen once the prompt has been
-// flushed to it, so a test can act at the exact moment the pager is parked
-// on the command channel.
-type promptWatcher struct {
-	mu   sync.Mutex
-	buf  bytes.Buffer
-	seen chan struct{}
-	once sync.Once
-}
-
-func (w *promptWatcher) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	n, err := w.buf.Write(p)
-	if strings.Contains(w.buf.String(), "--More--") {
-		w.once.Do(func() { close(w.seen) })
-	}
-	return n, err
-}
-
-func (w *promptWatcher) String() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buf.String()
-}
-
-// TestPagerCancelWhileAwaitingCommand is the no-hang guarantee: the pager
-// is parked on a command channel that will never produce a keystroke (what
-// a real terminal looks like while nobody types), and cancellation alone
-// must unblock it.
-func TestPagerCancelWhileAwaitingCommand(t *testing.T) {
-	dir := t.TempDir()
-	f := writeFile(t, dir, "f", "a\nb\n")
-
-	out := &promptWatcher{seen: make(chan struct{})}
-	errOut := new(bytes.Buffer)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	rc := &tool.RunContext{
-		Ctx:   ctx,
-		Dir:   dir,
-		Stdio: tool.Stdio{Out: out, Err: errOut},
-	}
-	ch := &ttyChannel{cmds: blockingReader{}, hasFd: true, close: func() error { return nil }}
-	cleanup := mockTerminal(rc.Out, ch, func() (int, int, error) { return 80, 2, nil })
-	defer cleanup()
-
-	go func() {
-		<-out.seen
-		cancel()
-	}()
-
+	withPagerTTY(t, rc.Out, tty, 2, 80)
 	done := make(chan int, 1)
-	go func() { done <- run(rc, []string{f}) }()
-
+	go func() { done <- run(rc, nil) }()
+	select {
+	case <-read:
+		gotOut, gotErr := out.String(), errOut.String()
+		close(release)
+		if gotOut != "one\n" || !strings.Contains(gotErr, "--More--") {
+			t.Fatalf("before EOF out=%q err=%q", gotOut, gotErr)
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
+		close(gate)
+		t.Fatal("first screen was not emitted before source requested more input")
+	}
 	select {
 	case code := <-done:
 		if code != 0 {
-			t.Fatalf("cancel while awaiting command: code=%d err=%q", code, errOut.String())
+			t.Fatalf("code=%d", code)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("cancel while awaiting command: more did not return — the command channel read ignored cancellation")
+	case <-time.After(2 * time.Second):
+		close(gate)
+		t.Fatal("q attempted another source read")
 	}
-	if got := out.String(); !strings.HasPrefix(got, "a\n\x1b[7m--More--\x1b[m") {
-		t.Fatalf("cancel while awaiting command: got %q", got)
+	close(gate)
+}
+
+type orderedTerminal struct {
+	mu      sync.Mutex
+	visible bool
+}
+
+func (w *orderedTerminal) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.visible = w.visible || bytes.Contains(p, []byte("--More--"))
+	return len(p), nil
+}
+func (w *orderedTerminal) Flush() error { return nil }
+
+func TestPagerPromptVisibleBeforeRead(t *testing.T) {
+	var out bytes.Buffer
+	errOut := &orderedTerminal{}
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("x\ny\n"), Out: &out, Err: errOut}}
+	tty := commandTTY("q")
+	tty.readCommand = func(context.Context) (byte, error) {
+		errOut.mu.Lock()
+		defer errOut.mu.Unlock()
+		if !errOut.visible {
+			return 0, errors.New("read before prompt")
+		}
+		return 'q', nil
+	}
+	withPagerTTY(t, rc.Out, tty, 2, 80)
+	if code := run(rc, nil); code != 0 {
+		t.Fatalf("code=%d", code)
 	}
 }
 
-// TestCmdReaderStopReleasesGoroutine pins the no-leak guarantee. After a
-// quit the reader goroutine has usually already consumed the next rune and
-// is parked handing it off, so nothing about closing the terminal can reach
-// it; stop must. These tools run in-process in a long-lived host shell,
-// where one stranded goroutine per `more` accumulates.
-func TestCmdReaderStopReleasesGoroutine(t *testing.T) {
-	c := newCmdReader(strings.NewReader("q abc"))
+type failPromptWriter struct {
+	bytes.Buffer
+	fail bool
+}
 
-	if r, err := c.read(context.Background()); err != nil || r != 'q' {
-		t.Fatalf("read = %q, %v; want 'q', nil", r, err)
+func (w *failPromptWriter) Write(p []byte) (int, error) {
+	if w.fail && bytes.Contains(p, []byte("--More--")) {
+		w.fail = false
+		return 0, errors.New("prompt write failed")
 	}
-	// The goroutine is now blocked handing off the rune after 'q', which
-	// the pager will never take because it quit.
-	c.stop()
-	c.stop() // idempotent: a second stop must not panic on a closed channel
+	return w.Buffer.Write(p)
+}
 
-	select {
-	case <-c.runes:
-		// Closed by the goroutine's deferred close on its way out.
-	case <-time.After(2 * time.Second):
-		t.Fatal("reader goroutine still parked after stop")
+func (w *failPromptWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+func TestPagerPromptFailureReturnsBeforeRead(t *testing.T) {
+	var out bytes.Buffer
+	errOut := &failPromptWriter{fail: true}
+	reads := 0
+	tty := commandTTY("q")
+	tty.readCommand = func(context.Context) (byte, error) { reads++; return 'q', nil }
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("x\ny\n"), Out: &out, Err: errOut}}
+	withPagerTTY(t, rc.Out, tty, 2, 80)
+	if code := run(rc, nil); code == 0 || reads != 0 || !strings.Contains(errOut.String(), "prompt write failed") {
+		t.Fatalf("code=%d reads=%d err=%q", code, reads, errOut.String())
+	}
+}
+
+type failFlushWriter struct {
+	bytes.Buffer
+	fail bool
+}
+
+func (w *failFlushWriter) Flush() error {
+	if w.fail {
+		w.fail = false
+		return errors.New("prompt flush failed")
+	}
+	return nil
+}
+
+func TestPagerPromptFlushFailureReturnsBeforeRead(t *testing.T) {
+	var out bytes.Buffer
+	errOut := &failFlushWriter{fail: true}
+	reads := 0
+	tty := commandTTY("q")
+	tty.readCommand = func(context.Context) (byte, error) { reads++; return 'q', nil }
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("x\ny\n"), Out: &out, Err: errOut}}
+	withPagerTTY(t, rc.Out, tty, 2, 80)
+	if code := run(rc, nil); code == 0 || reads != 0 || !strings.Contains(errOut.String(), "prompt flush failed") {
+		t.Fatalf("code=%d reads=%d err=%q", code, reads, errOut.String())
+	}
+}
+
+func TestPagerCancellationNeedsNoReaderGoroutine(t *testing.T) {
+	var out, errOut bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	tty := commandTTY("")
+	tty.readCommand = func(ctx context.Context) (byte, error) { cancel(); <-ctx.Done(); return 0, ctx.Err() }
+	rc := &tool.RunContext{Ctx: ctx, Stdio: tool.Stdio{In: strings.NewReader("x\ny\n"), Out: &out, Err: &errOut}}
+	withPagerTTY(t, rc.Out, tty, 2, 80)
+	if code := run(rc, nil); code != 0 {
+		t.Fatalf("code=%d err=%q", code, errOut.String())
+	}
+}
+
+func TestPagerPreservesBytesLongLinesAndSqueeze(t *testing.T) {
+	input := append([]byte("a\r\x00"), bytes.Repeat([]byte{'z'}, 10000)...)
+	input = append(input, '\n', '\n', '\n', 'b')
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: bytes.NewReader(input), Out: &out, Err: &errOut}}
+	withPagerTTY(t, rc.Out, commandTTY(strings.Repeat(" ", 3000)+"q"), 1000, 5)
+	if code := run(rc, []string{"-s"}); code != 0 {
+		t.Fatalf("code=%d err=%q", code, errOut.String())
+	}
+	want := bytes.Replace(input, []byte("\n\n\n"), []byte("\n\n"), 1)
+	if !bytes.Equal(out.Bytes(), want) {
+		t.Fatalf("byte preservation: got %d bytes want %d", out.Len(), len(want))
+	}
+}
+
+func TestPagerTerminalAndSourceErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		in   io.Reader
+		tty  *ttyChannel
+		want string
+	}{
+		{"tty eof", strings.NewReader("x\n"), commandTTY(""), "terminal read error"},
+		{"tty read", strings.NewReader("x\n"), &ttyChannel{readCommand: func(context.Context) (byte, error) { return 0, errors.New("tty bad") }, close: func() error { return nil }}, "tty bad"},
+		{"source read", errorReader{}, commandTTY("q"), "Simulated read error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: tt.in, Out: &out, Err: &errOut}}
+			withPagerTTY(t, rc.Out, tt.tty, 24, 80)
+			if code := run(rc, nil); code == 0 || !strings.Contains(errOut.String(), tt.want) {
+				t.Fatalf("code=%d err=%q", code, errOut.String())
+			}
+		})
+	}
+}
+
+func TestPagerTTYCloseError(t *testing.T) {
+	var out, errOut bytes.Buffer
+	tty := commandTTY("q")
+	tty.close = func() error { return errors.New("close bad") }
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("x\n"), Out: &out, Err: &errOut}}
+	withPagerTTY(t, rc.Out, tty, 24, 80)
+	if code := run(rc, nil); code == 0 || !strings.Contains(errOut.String(), "Close bad") {
+		t.Fatalf("code=%d err=%q", code, errOut.String())
+	}
+}
+
+type closeErrorReader struct{ io.Reader }
+
+func (closeErrorReader) Close() error { return errors.New("source close bad") }
+
+func TestPagerSourceCloseError(t *testing.T) {
+	orig := openInput
+	openInput = func(*tool.RunContext, string) (io.Reader, io.Closer, error) {
+		r := closeErrorReader{Reader: strings.NewReader("x\n")}
+		return r, r, nil
+	}
+	t.Cleanup(func() { openInput = orig })
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+	withPagerTTY(t, rc.Out, commandTTY(" "), 24, 80)
+	if code := run(rc, []string{"-e"}); code == 0 || !strings.Contains(errOut.String(), "Source close bad") {
+		t.Fatalf("code=%d err=%q", code, errOut.String())
+	}
+}
+
+func TestPagerOpenTTYFailureIsNotCopyFallback(t *testing.T) {
+	origTerm, origOpen := isTerminal, openTTY
+	var out, errOut bytes.Buffer
+	isTerminal = func(io.Writer) bool { return true }
+	openTTY = func(*tool.RunContext) (*ttyChannel, error) { return nil, errors.New("no controlling tty") }
+	t.Cleanup(func() { isTerminal, openTTY = origTerm, origOpen })
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("secret\n"), Out: &out, Err: &errOut}}
+	if code := run(rc, nil); code == 0 || out.Len() != 0 || !strings.Contains(errOut.String(), "No controlling tty") {
+		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestPagerUnsupportedCommandFails(t *testing.T) {
+	for _, command := range []string{"b", "z", "Q", "\n"} {
+		var out, errOut bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("x\ny\n"), Out: &out, Err: &errOut}}
+		withPagerTTY(t, rc.Out, commandTTY(command), 2, 80)
+		if code := run(rc, nil); code == 0 || !strings.Contains(errOut.String(), "command") {
+			t.Fatalf("command %q: code=%d err=%q", command, code, errOut.String())
+		}
 	}
 }

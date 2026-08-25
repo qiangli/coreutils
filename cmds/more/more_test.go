@@ -37,7 +37,7 @@ func runMoreEnv(t *testing.T, dir, stdin string, env []string, args ...string) (
 		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
 	}
 	testIsTerminal = true
-	code := cmd.Run(rc, args)
+	code := cmd.Run(rc, append([]string{"-e"}, args...))
 	return out.String(), errb.String(), code
 }
 
@@ -82,13 +82,13 @@ func TestMoreSqueezeAndFromLine(t *testing.T) {
 	}
 }
 
-func TestMoreAcceptsDisplayOnlyFlags(t *testing.T) {
-	out, errb, code := runMore(t, t.TempDir(), "a\nb\n", "-d", "-f", "-c", "-n", "5")
-	if out != "a\nb\n" || errb != "" || code != 0 {
+func TestMoreAcceptsSupportedDisplayFlags(t *testing.T) {
+	out, errb, code := runMore(t, t.TempDir(), "a\nb\n", "-c", "-n", "5")
+	if out != "a\nb\n" || !strings.HasPrefix(errb, "\x1b[H\x1b[2J") || code != 0 {
 		t.Fatalf("more display flags = (%q, %q, %d)", out, errb, code)
 	}
 
-	out, errb, code = runMore(t, t.TempDir(), "a\nb\n", "-l", "-e", "-u", "--number", "5")
+	out, errb, code = runMore(t, t.TempDir(), "a\nb\n", "-e", "-u", "--number", "5")
 	if out != "a\nb\n" || errb != "" || code != 0 {
 		t.Fatalf("more alias flags = (%q, %q, %d)", out, errb, code)
 	}
@@ -101,7 +101,7 @@ func TestMoreAcceptsDisplayOnlyFlags(t *testing.T) {
 
 func TestMoreRejectsInteractiveFlags(t *testing.T) {
 	for _, args := range [][]string{
-		{"-i"}, {"-t", "tag"}, {"--tag="},
+		{"-d"}, {"-l"}, {"-f"}, {"-i"}, {"-t", "tag"}, {"--tag="},
 	} {
 		_, errb, code := runMore(t, t.TempDir(), "a\n", args...)
 		if code == 0 || !strings.Contains(errb, "not supported") {
@@ -116,11 +116,29 @@ func TestMoreRejectsInteractiveFlags(t *testing.T) {
 	}
 }
 
-func TestMoreNonTerminalParsesAndIgnoresInteractiveFlags(t *testing.T) {
-	input := "one\r\n\x00two\n"
-	out, errb, code := runMoreNonTerminal(t, t.TempDir(), input, "-i", "-p", "next", "-t", "tag")
-	if out != input || errb != "" || code != 0 {
-		t.Fatalf("more non-terminal interactive flags = (%q, %q, %d), want exact input", out, errb, code)
+func TestMoreCommandOptionSupportsOnlySpaceAndLowercaseQ(t *testing.T) {
+	out, errb, code := runMore(t, t.TempDir(), "a\n", "-p", " ")
+	if code != 0 || out != "a\n" || errb != "" {
+		t.Fatalf("-p space = (%q, %q, %d)", out, errb, code)
+	}
+	out, errb, code = runMore(t, t.TempDir(), "a\n", "-p", "q")
+	if code != 0 || out != "" || errb != "" {
+		t.Fatalf("-p q = (%q, %q, %d)", out, errb, code)
+	}
+	for _, unsupported := range []string{"b", "Q", "\n"} {
+		_, errb, code = runMore(t, t.TempDir(), "a\n", "-p", unsupported)
+		if code == 0 || !strings.Contains(errb, "not supported") {
+			t.Fatalf("-p %q = code %d err %q", unsupported, code, errb)
+		}
+	}
+}
+
+func TestMoreNonTerminalRejectsUnsupportedFlags(t *testing.T) {
+	for _, args := range [][]string{{"-d"}, {"-l"}, {"-f"}, {"-i"}, {"-t", "tag"}} {
+		_, errb, code := runMoreNonTerminal(t, t.TempDir(), "one\r\n\x00two\n", args...)
+		if code == 0 || !strings.Contains(errb, "not supported") {
+			t.Fatalf("more %v = code %d, err %q", args, code, errb)
+		}
 	}
 }
 
@@ -237,7 +255,10 @@ func TestMoreReadWriteErrors(t *testing.T) {
 	}
 }
 func init() {
-	openTTY = func(rc *tool.RunContext) (*ttyChannel, bool) {
-		return nil, false // Fail closed, degrade to copy path
+	openTTY = func(rc *tool.RunContext) (*ttyChannel, error) {
+		return &ttyChannel{
+			readCommand: func(context.Context) (byte, error) { return ' ', nil },
+			close:       func() error { return nil },
+		}, nil
 	}
 }

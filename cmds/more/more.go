@@ -2,8 +2,7 @@
 // and a controlling-terminal command channel is available, it pages the
 // input a screenful at a time with an interactive prompt (this slice
 // supports advancing with <space> and quitting with `q`; every other
-// recognized command fails loudly as deferred). Otherwise — no terminal,
-// or the terminal channel cannot be opened — it degrades to a
+// recognized command fails loudly). When output is not a terminal it uses a
 // non-interactive pass-through: files/stdin are copied to stdout
 // unmodified except for `-s` (squeeze), matching POSIX's requirement that
 // no option other than `-s` take effect when stdout is not a terminal.
@@ -58,12 +57,13 @@ var isTerminal = func(w io.Writer) bool {
 }
 
 // openTTY is the injectable controlling-terminal command channel seam.
-// It returns a channel and true when interactive paging is possible; it
-// returns false (fail closed — degrade to the copy path, never hang) when
-// no controlling terminal can be opened. Tests replace it with a fake.
-var openTTY = func(rc *tool.RunContext) (*ttyChannel, bool) {
+// Terminal output requires this channel; failure is diagnosed instead of
+// silently changing an interactive invocation into a copy operation.
+var openTTY = func(rc *tool.RunContext) (*ttyChannel, error) {
 	return openControllingTTY(rc)
 }
+
+var openInput = open
 
 func parseMORE(env []string) []string {
 	var moreEnv string
@@ -101,11 +101,11 @@ func run(rc *tool.RunContext, args []string) int {
 	number := fs.Int("number", 0, "same as --lines")
 	fromLine := fs.IntP("from-line", "F", 1, "start displaying at line NUM")
 	pattern := fs.StringP("pattern", "P", "", "start displaying at the first line containing PATTERN")
-	_ = fs.BoolP("silent", "d", false, "accepted for non-interactive compatibility")
-	_ = fs.BoolP("logical", "l", false, "accepted for non-interactive compatibility")
+	_ = fs.BoolP("silent", "d", false, "show help instead of ringing (not supported)")
+	_ = fs.BoolP("logical", "l", false, "do not pause after form feed (not supported)")
 	_ = fs.BoolP("ignore-case", "i", false, "ignore case in interactive searches (deferred)")
 	exitOnEof := fs.BoolP("exit-on-eof", "e", false, "exit after the last line of the last file")
-	_ = fs.BoolP("no-pause", "f", false, "accepted for non-interactive compatibility")
+	_ = fs.BoolP("no-pause", "f", false, "count logical rather than screen lines (not supported)")
 	command := fs.StringP("command", "p", "", "run COMMAND at each new file's first screen")
 	_ = fs.StringP("tag", "t", "", "start at TAG (deferred)")
 	plain := fs.BoolP("plain", "u", false, "treat backspace as printable, keep trailing carriage return")
@@ -122,26 +122,13 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
-	terminal := isTerminal(rc.Out)
-	var ch *ttyChannel
-	interactive := false
-	if terminal {
-		// Search (-i) and tag navigation (-t) are not part of this slice;
-		// refuse them loudly rather than accept them as silent no-ops.
-		for _, r := range []struct{ name, flag string }{
-			{"ignore-case", "-i"}, {"tag", "-t"},
-		} {
-			if fs.Changed(r.name) {
-				return tool.NotSupported(rc, cmd, r.flag)
-			}
+	for _, unsupported := range []struct{ name, flag string }{
+		{"silent", "-d"}, {"logical", "-l"}, {"no-pause", "-f"},
+		{"ignore-case", "-i"}, {"tag", "-t"},
+	} {
+		if fs.Changed(unsupported.name) {
+			return tool.NotSupported(rc, cmd, unsupported.flag)
 		}
-		if c, ok := openTTY(rc); ok {
-			ch = c
-			defer ch.close()
-			interactive = true
-		}
-		// Fail closed: if the terminal channel could not be opened we fall
-		// through to the non-interactive copy path below — never hang.
 	}
 
 	if *lines < 0 {
@@ -155,6 +142,17 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	if *number > 0 {
 		*lines = *number
+	}
+
+	terminal := isTerminal(rc.Out)
+	var ch *ttyChannel
+	if terminal {
+		var err error
+		ch, err = openTTY(rc)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "more: controlling terminal: %v\n", tool.SysErr(err))
+			return 1
+		}
 	}
 	if !terminal {
 		// POSIX: when stdout is not a terminal only -s takes effect.
@@ -178,25 +176,28 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	w := bufio.NewWriter(rc.Out)
-	if interactive {
+	if terminal {
 		o.rows, o.width = terminalSize(rc, ch, o.lines)
 		o.screenful = o.rows - 1
 		if o.screenful < 1 {
 			o.screenful = 1
 		}
-		p := &pager{rc: rc, w: w, cmds: newCmdReader(ch.cmds), o: o, files: files}
-		defer p.cmds.stop()
+		p := &pager{rc: rc, out: w, tty: ch, o: o, files: files}
 		exit := p.run()
 		if err := w.Flush(); err != nil {
 			fmt.Fprintf(rc.Err, "more: write error: %v\n", err)
-			return 1
+			exit = 1
+		}
+		if err := ch.close(); err != nil {
+			fmt.Fprintf(rc.Err, "more: controlling terminal: close: %v\n", tool.SysErr(err))
+			exit = 1
 		}
 		return exit
 	}
 
 	exit := 0
 	for _, name := range files {
-		r, closer, err := open(rc, name)
+		r, closer, err := openInput(rc, name)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "more: %s: %v\n", name, tool.SysErr(err))
 			exit = 1
@@ -207,7 +208,10 @@ func run(rc *tool.RunContext, args []string) int {
 			exit = 1
 		}
 		if closer != nil {
-			closer.Close()
+			if err := closer.Close(); err != nil {
+				fmt.Fprintf(rc.Err, "more: %s: close: %v\n", name, tool.SysErr(err))
+				exit = 1
+			}
 		}
 	}
 	if err := w.Flush(); err != nil {
