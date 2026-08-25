@@ -11,6 +11,7 @@ import (
 // without root is otherwise impossible, because chown to one's own
 // uid/gid succeeds.
 var chownFn = os.Chown
+var lchownFn = os.Lchown
 
 // preserveOwner applies the source uid/gid to dst and reports whether
 // the duplication succeeded. Per POSIX -p (and the GNU manual), the
@@ -22,4 +23,12 @@ func preserveOwner(dst string, fi os.FileInfo) bool {
 		return false
 	}
 	return chownFn(dst, int(st.Uid), int(st.Gid)) == nil
+}
+
+func preserveLinkOwner(dst string, fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	return lchownFn(dst, int(st.Uid), int(st.Gid)) == nil
 }

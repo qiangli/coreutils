@@ -234,3 +234,22 @@ func TestCpRecursiveRejectsSymlinkAliasedDestinationInsideSource(t *testing.T) {
 		t.Fatalf("destination was created inside source before rejection: %v", err)
 	}
 }
+
+func TestCpRecursiveRejectsDestinationAliasedToSourceSubdirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory symlink creation normally requires elevated privilege on Windows")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src", "sub", "file"), "payload")
+	if err := os.Symlink(filepath.Join("src", "sub"), filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errb, code := runTool(t, dir, "-R", "src", filepath.Join("alias", "new"))
+	if code != 1 || !strings.Contains(errb, "into itself") {
+		t.Fatalf("cp -R src alias/new: code=%d err=%q, want into-itself diagnostic", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "src", "sub", "new")); !os.IsNotExist(err) {
+		t.Fatalf("destination was created inside a source subdirectory: %v", err)
+	}
+}

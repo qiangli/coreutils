@@ -8,4 +8,5 @@ import "os"
 // duplicated (windows has no uid/gid). -p still preserves mode and
 // timestamps; the caller clears S_ISUID/S_ISGID, which are no-op
 // bits on these platforms.
-func preserveOwner(dst string, fi os.FileInfo) bool { return false }
+func preserveOwner(dst string, fi os.FileInfo) bool     { return false }
+func preserveLinkOwner(dst string, fi os.FileInfo) bool { return false }

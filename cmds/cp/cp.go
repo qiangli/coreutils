@@ -257,7 +257,7 @@ func (c *copier) copyEntry(src, dst string) {
 		// destination ancestors with Stat so aliases are resolved before any
 		// directory is created. Otherwise the new destination becomes an entry
 		// in the source traversal and cp recursively copies its own output.
-		if destinationWithinSource(fi, c.rc.Path(dst)) {
+		if destinationWithinSource(c.rc.Path(src), c.rc.Path(dst)) {
 			c.errf("cannot copy a directory, '%s', into itself, '%s'", src, dst)
 			return
 		}
@@ -269,7 +269,7 @@ func (c *copier) copyEntry(src, dst string) {
 		}
 		c.copyDir(src, dst, fi)
 	case fi.Mode()&os.ModeSymlink != 0:
-		c.copySymlink(src, dst)
+		c.copySymlink(src, dst, fi)
 	case c.recursive && isSpecial(fi.Mode()) && !c.copyContents:
 		c.copySpecial(src, dst, fi)
 	default:
@@ -360,7 +360,7 @@ func (c *copier) copyDir(src, dst string, fi os.FileInfo) {
 			case ci.IsDir():
 				c.copyDir(csrc, cdst, ci)
 			case ci.Mode()&os.ModeSymlink != 0:
-				c.copySymlink(csrc, cdst)
+				c.copySymlink(csrc, cdst, ci)
 			case isSpecial(ci.Mode()) && !c.copyContents:
 				c.copySpecial(csrc, cdst, ci)
 			default:
@@ -539,7 +539,7 @@ func (c *copier) copyFile(src, dst string, fi os.FileInfo) {
 	c.verbosef("'%s' -> '%s'", src, dst)
 }
 
-func (c *copier) copySymlink(src, dst string) {
+func (c *copier) copySymlink(src, dst string, fi os.FileInfo) {
 	sp, dp := c.path(src), c.path(dst)
 	target, err := os.Readlink(sp)
 	if err != nil {
@@ -585,6 +585,9 @@ func (c *copier) copySymlink(src, dst string) {
 		c.errf("cannot create symbolic link '%s': %s", dst, reason(err))
 		return
 	}
+	if c.preserve.any() {
+		c.preserveSymlinkAttrs(dst, fi)
+	}
 	c.debugf("copied symbolic link '%s' -> '%s'", src, dst)
 	c.verbosef("'%s' -> '%s'", src, dst)
 }
@@ -608,22 +611,55 @@ func (c *copier) prepareParent(dst string) bool {
 	return true
 }
 
-// destinationWithinSource reports whether an existing directory at or above
-// dst identifies source. os.Stat intentionally follows directory symlinks,
-// closing the alias case that a filepath-prefix comparison cannot see.
-func destinationWithinSource(source os.FileInfo, dst string) bool {
-	path, err := filepath.Abs(dst)
+// destinationWithinSource physically resolves source and the closest existing
+// prefix of dst. Resolving only the source root's inode misses aliases to a
+// subdirectory (alias -> source/sub), which are equally capable of feeding the
+// newly created destination back into source traversal.
+func destinationWithinSource(source, dst string) bool {
+	sourcePath, err := filepath.EvalSymlinks(source)
 	if err != nil {
 		return false
 	}
+	sourcePath, err = filepath.Abs(sourcePath)
+	if err != nil {
+		return false
+	}
+	dstPath, err := resolveExistingPrefix(dst)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(sourcePath, dstPath)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// resolveExistingPrefix evaluates symlinks through the longest existing prefix
+// and then reattaches missing trailing components. EvalSymlinks on the complete
+// destination cannot do this because the destination normally does not exist.
+func resolveExistingPrefix(path string) (string, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	var missing []string
 	for {
-		if fi, err := os.Stat(path); err == nil && fi.IsDir() && os.SameFile(source, fi) {
-			return true
+		resolved, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Abs(resolved)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
 		}
 		parent := filepath.Dir(path)
 		if parent == path {
-			return false
+			return "", err
 		}
+		missing = append(missing, filepath.Base(path))
 		path = parent
 	}
 }
@@ -707,6 +743,41 @@ func (c *copier) preserveAttrs(src, dst string, fi os.FileInfo) {
 		}
 	}
 	_ = src
+}
+
+// preserveSymlinkAttrs is deliberately separate from preserveAttrs: chmod,
+// chown, and Chtimes follow symbolic links on common platforms and would
+// mutate the referent. Every operation here is either no-follow or a read-only
+// comparison of the link inode.
+func (c *copier) preserveSymlinkAttrs(dst string, fi os.FileInfo) {
+	dp := c.path(dst)
+	ownershipDuplicated := true
+	if c.preserve.ownership {
+		ownershipDuplicated = preserveLinkOwner(dp, fi)
+	}
+	if c.preserve.mode {
+		want := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+		if !ownershipDuplicated {
+			want &^= os.ModeSetuid | os.ModeSetgid
+		}
+		di, err := os.Lstat(dp)
+		if err != nil {
+			c.errf("preserving permissions for '%s': %s", dst, reason(err))
+		} else if got := di.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky); got != want {
+			// There is no portable no-follow chmod. Newly created symlinks have
+			// the platform's fixed link mode; matching is success, differing
+			// modes are an honest unsupported boundary.
+			c.errf("preserving permissions for '%s': symbolic link mode unsupported on this platform", dst)
+		}
+	}
+	if c.preserve.timestamps {
+		access, ok := fileAtime(fi)
+		if !ok {
+			c.errf("preserving times for '%s': access time unsupported on this platform", dst)
+		} else if err := preserveLinkTimes(dp, access, fi.ModTime()); err != nil {
+			c.errf("preserving times for '%s': %s", dst, reason(err))
+		}
+	}
 }
 
 func (c *copier) errf(format string, a ...any) {
