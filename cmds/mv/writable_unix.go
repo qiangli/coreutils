@@ -5,5 +5,14 @@ package mvcmd
 import "golang.org/x/sys/unix"
 
 func isWritable(path string) bool {
-	return unix.Access(path, unix.W_OK) == nil
+	if unix.Access(path, unix.W_OK) != nil {
+		return false
+	}
+	var stat unix.Stat_t
+	if unix.Stat(path, &stat) == nil {
+		if stat.Mode&0222 == 0 {
+			return false
+		}
+	}
+	return true
 }

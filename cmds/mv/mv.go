@@ -539,6 +539,8 @@ func lastOverride(args []string) byte {
 					last = 'n'
 				} else if ch == 'i' {
 					last = 'i'
+				} else if ch == '=' {
+					break
 				} else if ch == 't' || ch == 'S' || ch == 'Z' {
 					if i == len(a[1:])-1 {
 						skipNext = true
