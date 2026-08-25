@@ -53,8 +53,17 @@ type groupInfo struct {
 // can be tested unprivileged against synthetic fixtures.
 type database interface {
 	Current() (userInfo, error)
+	GroupsForUser(name string) ([]string, error)
 	GroupByName(name string) (groupInfo, error)
 	GroupByID(gid string) (groupInfo, error)
+}
+
+func (s systemDB) GroupsForUser(name string) ([]string, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return nil, err
+	}
+	return u.GroupIds()
 }
 
 // db is the seam. The default reads the real system databases.

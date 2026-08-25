@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,9 +23,18 @@ const (
 // fakeDB is a synthetic password/group database. Nothing here needs privilege,
 // a real account, or a real group.
 type fakeDB struct {
-	user   userInfo
-	groups []groupInfo
-	err    error
+	user           userInfo
+	groups         []groupInfo
+	databaseGroups []string
+	err            error
+	groupsErr      error
+}
+
+func (f *fakeDB) GroupsForUser(string) ([]string, error) {
+	if f.groupsErr != nil {
+		return nil, f.groupsErr
+	}
+	return slices.Clone(f.databaseGroups), nil
 }
 
 func (f *fakeDB) Current() (userInfo, error) {
@@ -100,18 +110,30 @@ func (s *spawned) run(_ *tool.RunContext, spec shellSpec) (int, error) {
 }
 
 type harness struct {
-	db       *fakeDB
-	spawn    *spawned
-	asked    []string // the prompts issued
-	answer   string
-	promptE  error
-	currGids []string // stub for currentGroups
+	db      *fakeDB
+	spawn   *spawned
+	asked   []string // the prompts issued
+	answer  string
+	promptE error
+	current credentialState
 }
 
 func install(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{db: &fakeDB{user: fixtureUser(), groups: fixtureGroups()}, spawn: &spawned{}, currGids: []string{"1000", "12", "50"}}
-	oldDB, oldSpawn, oldPrompt, oldCurrentGroups := db, spawnShell, promptPassword, currentGroups
+	h := &harness{
+		db: &fakeDB{
+			user:           fixtureUser(),
+			groups:         fixtureGroups(),
+			databaseGroups: []string{"1000", "50"},
+		},
+		spawn: &spawned{},
+		current: credentialState{
+			RealGID:       "1000",
+			EffectiveGID:  "1000",
+			Supplementary: []string{"1000", "12", "50"},
+		},
+	}
+	oldDB, oldSpawn, oldPrompt, oldCurrentCredentials := db, spawnShell, promptPassword, currentCredentials
 	db = h.db
 	spawnShell = h.spawn.run
 	promptPassword = func(_ *tool.RunContext, prompt string) (string, error) {
@@ -121,11 +143,27 @@ func install(t *testing.T) *harness {
 		}
 		return h.answer, nil
 	}
-	currentGroups = func() ([]string, error) {
-		return h.currGids, nil
+	currentCredentials = func() (credentialState, error) {
+		return h.current, nil
 	}
-	t.Cleanup(func() { db, spawnShell, promptPassword, currentGroups = oldDB, oldSpawn, oldPrompt, oldCurrentGroups })
+	t.Cleanup(func() {
+		db, spawnShell, promptPassword, currentCredentials = oldDB, oldSpawn, oldPrompt, oldCurrentCredentials
+	})
 	return h
+}
+
+func plannedGID(spec shellSpec) string {
+	if spec.Credential == nil {
+		return ""
+	}
+	return spec.Credential.EffectiveGID
+}
+
+func plannedGroups(spec shellSpec) []string {
+	if spec.Credential == nil {
+		return nil
+	}
+	return spec.Credential.Supplementary
 }
 
 // exec runs the command and only THEN reads the buffers. Reading them in the
@@ -206,6 +244,10 @@ func TestUsableGroupPassword(t *testing.T) {
 
 func TestNoOperandRevertsToThePrimaryGroup(t *testing.T) {
 	h := install(t)
+	// Prove this comes from a fresh database query, not the membership snapshot
+	// retained on userInfo for authorization decisions.
+	h.db.user.Supplementary = []string{"999"}
+	h.db.databaseGroups = []string{"1000", "50", "50"}
 	_, errOut, code := runCmd(t, testEnv)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -213,13 +255,28 @@ func TestNoOperandRevertsToThePrimaryGroup(t *testing.T) {
 	if errOut != "" {
 		t.Errorf("reverting to the primary group is not a diagnostic case: %q", errOut)
 	}
-	if len(h.spawn.calls) != 1 || h.spawn.calls[0].GID != "1000" {
+	if len(h.spawn.calls) != 1 || plannedGID(h.spawn.calls[0]) != "1000" {
 		t.Errorf("spawned %+v, want one call at the primary gid 1000", h.spawn.calls)
 	}
-	// Assert supplementary groups match DB
-	groups := strings.Join(h.spawn.calls[0].Groups, ",")
+	groups := strings.Join(plannedGroups(h.spawn.calls[0]), ",")
 	if groups != "1000,50" { // from fixtureUser()
 		t.Errorf("groups = %q, want \"1000,50\"", groups)
+	}
+}
+
+func TestNoOperandDatabaseGroupFailureStillLaunchesUnchanged(t *testing.T) {
+	h := install(t)
+	h.db.groupsErr = errors.New("directory service unavailable")
+	h.spawn.status = 9
+	_, errOut, code := runCmd(t, testEnv)
+	if !strings.Contains(errOut, "cannot derive supplementary groups") {
+		t.Errorf("stderr = %q, want database-group diagnostic", errOut)
+	}
+	if len(h.spawn.calls) != 1 || h.spawn.calls[0].Credential != nil {
+		t.Errorf("spawns = %+v, want one unchanged-credential shell", h.spawn.calls)
+	}
+	if code != 9 {
+		t.Errorf("exit %d, want shell status 9", code)
 	}
 }
 
@@ -228,30 +285,63 @@ func TestGroupOperandByName(t *testing.T) {
 	if _, errOut, code := runCmd(t, testEnv, "staff"); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
-	if h.spawn.calls[0].GID != "20" {
-		t.Errorf("gid = %q, want 20", h.spawn.calls[0].GID)
+	if plannedGID(h.spawn.calls[0]) != "20" {
+		t.Errorf("gid = %q, want 20", plannedGID(h.spawn.calls[0]))
 	}
-	// The current supplementary groups were "1000", "12", "50".
-	// The rule is to add old primary "1000", and remove new primary "20".
-	// Since 20 wasn't in there, it just adds 1000 and deduplicates (wait, does it deduplicate? append(..., cg) where cg != 20 and cg != 1000).
-	// "1000" (newGroups), then cg=12 -> "1000,12", cg=50 -> "1000,12,50".
-	groups := strings.Join(h.spawn.calls[0].Groups, ",")
-	if groups != "1000,12,50" {
-		t.Errorf("groups = %q, want \"1000,12,50\"", groups)
+	// The old effective gid is present and the new one is absent, so POSIX
+	// requires adding the new gid when there is room.
+	groups := strings.Join(plannedGroups(h.spawn.calls[0]), ",")
+	if groups != "1000,12,50,20" {
+		t.Errorf("groups = %q, want \"1000,12,50,20\"", groups)
 	}
 }
 
-func TestGroupChangeRemovesNewPrimaryFromSupplementary(t *testing.T) {
-	h := install(t)
-	h.currGids = []string{"1000", "20", "50"}
-	if _, errOut, code := runCmd(t, testEnv, "staff"); code != 0 {
-		t.Fatalf("exit %d, stderr %q", code, errOut)
-	}
-	// new primary is 20. old primary is 1000.
-	// newGroups should start with 1000, then cg=50 -> "1000,50".
-	groups := strings.Join(h.spawn.calls[0].Groups, ",")
-	if groups != "1000,50" {
-		t.Errorf("groups = %q, want \"1000,50\"", groups)
+func TestSupplementaryGroupChangeRules(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		current credentialState
+		want    []string
+	}{
+		{
+			name: "old and new present retains list",
+			current: credentialState{EffectiveGID: "1000",
+				Supplementary: []string{"1000", "20", "50"}},
+			want: []string{"1000", "20", "50"},
+		},
+		{
+			name: "old present and new absent adds new",
+			current: credentialState{EffectiveGID: "1000",
+				Supplementary: []string{"1000", "50"}},
+			want: []string{"1000", "50", "20"},
+		},
+		{
+			name: "old absent and new present replaces new with old",
+			current: credentialState{EffectiveGID: "1000",
+				Supplementary: []string{"20", "50"}},
+			want: []string{"50", "1000"},
+		},
+		{
+			name: "old and new absent adds old",
+			current: credentialState{EffectiveGID: "1000",
+				Supplementary: []string{"12", "50"}},
+			want: []string{"12", "50", "1000"},
+		},
+		{
+			name: "full list does not add",
+			current: credentialState{EffectiveGID: "1000", MaxSupplementary: 2,
+				Supplementary: []string{"1000", "50"}},
+			want: []string{"1000", "50"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := planGroupChange(tc.current, "20")
+			if plan.RealGID != "20" || plan.EffectiveGID != "20" {
+				t.Errorf("ids = real %q effective %q, want both 20", plan.RealGID, plan.EffectiveGID)
+			}
+			if !slices.Equal(plan.Supplementary, tc.want) {
+				t.Errorf("groups = %v, want %v", plan.Supplementary, tc.want)
+			}
+		})
 	}
 }
 
@@ -262,8 +352,8 @@ func TestNumericOperandPrefersTheGroupName(t *testing.T) {
 	if _, errOut, code := runCmd(t, testEnv, "100"); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
-	if h.spawn.calls[0].GID != "999" {
-		t.Errorf("gid = %q, want 999 (the group NAMED \"100\", not gid 100)", h.spawn.calls[0].GID)
+	if plannedGID(h.spawn.calls[0]) != "999" {
+		t.Errorf("gid = %q, want 999 (the group NAMED \"100\", not gid 100)", plannedGID(h.spawn.calls[0]))
 	}
 
 	// With no such name, the same operand resolves as a gid.
@@ -272,8 +362,8 @@ func TestNumericOperandPrefersTheGroupName(t *testing.T) {
 	if _, errOut, code := runCmd(t, testEnv, "50"); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
-	if h2.spawn.calls[0].GID != "50" {
-		t.Errorf("gid = %q, want 50 resolved numerically", h2.spawn.calls[0].GID)
+	if plannedGID(h2.spawn.calls[0]) != "50" {
+		t.Errorf("gid = %q, want 50 resolved numerically", plannedGID(h2.spawn.calls[0]))
 	}
 }
 
@@ -304,8 +394,8 @@ func TestRefusedChangeStillStartsTheShellWithTheGroupUnchanged(t *testing.T) {
 			if len(h.spawn.calls) != 1 {
 				t.Fatalf("the shell must still be started: %d spawns", len(h.spawn.calls))
 			}
-			if h.spawn.calls[0].GID != "" {
-				t.Errorf("gid = %q, want the group left UNCHANGED after a refusal", h.spawn.calls[0].GID)
+			if h.spawn.calls[0].Credential != nil {
+				t.Errorf("credential = %+v, want the group left unchanged after a refusal", h.spawn.calls[0].Credential)
 			}
 			if code != 7 {
 				t.Errorf("exit %d, want the shell's status 7", code)
@@ -327,11 +417,29 @@ func TestKernelRefusalRetriesWithoutTheCredential(t *testing.T) {
 	if len(h.spawn.calls) != 2 {
 		t.Fatalf("want two spawns (attempt then retry), got %d", len(h.spawn.calls))
 	}
-	if h.spawn.calls[0].GID != "20" || h.spawn.calls[1].GID != "" {
+	if plannedGID(h.spawn.calls[0]) != "20" || h.spawn.calls[1].Credential != nil {
 		t.Errorf("spawns = %+v, want the first to carry gid 20 and the retry none", h.spawn.calls)
 	}
 	if code != 3 {
 		t.Errorf("exit %d, want the shell's status 3", code)
+	}
+}
+
+func TestCurrentCredentialReadFailureStillLaunchesUnchanged(t *testing.T) {
+	h := install(t)
+	currentCredentials = func() (credentialState, error) {
+		return credentialState{}, errors.New("getgroups failed")
+	}
+	h.spawn.status = 6
+	_, errOut, code := runCmd(t, testEnv, "staff")
+	if !strings.Contains(errOut, "cannot read current group credentials") {
+		t.Errorf("stderr = %q, want current-credential diagnostic", errOut)
+	}
+	if len(h.spawn.calls) != 1 || h.spawn.calls[0].Credential != nil {
+		t.Errorf("spawns = %+v, want unchanged-credential shell", h.spawn.calls)
+	}
+	if code != 6 {
+		t.Errorf("exit %d, want shell status 6", code)
 	}
 }
 
@@ -384,8 +492,8 @@ func TestCorrectGroupPasswordPermitsTheChange(t *testing.T) {
 	if len(h.asked) != 1 {
 		t.Errorf("want exactly one password prompt, got %v", h.asked)
 	}
-	if h.spawn.calls[0].GID != "80" {
-		t.Errorf("gid = %q, want 80 after a correct password", h.spawn.calls[0].GID)
+	if plannedGID(h.spawn.calls[0]) != "80" {
+		t.Errorf("gid = %q, want 80 after a correct password", plannedGID(h.spawn.calls[0]))
 	}
 }
 
@@ -396,7 +504,7 @@ func TestWrongGroupPasswordIsDeniedButStillStartsTheShell(t *testing.T) {
 	if !strings.Contains(errOut, "permission denied") {
 		t.Errorf("stderr = %q, want permission denied", errOut)
 	}
-	if len(h.spawn.calls) != 1 || h.spawn.calls[0].GID != "" {
+	if len(h.spawn.calls) != 1 || h.spawn.calls[0].Credential != nil {
 		t.Errorf("spawns = %+v, want one shell with the group unchanged", h.spawn.calls)
 	}
 	if code != 0 {
@@ -423,7 +531,7 @@ func TestPromptFailureIsDeniedNotAssumed(t *testing.T) {
 	if !strings.Contains(errOut, "no terminal") {
 		t.Errorf("stderr = %q, want the prompt failure reported", errOut)
 	}
-	if h.spawn.calls[0].GID != "" {
+	if h.spawn.calls[0].Credential != nil {
 		t.Error("an unanswerable prompt must not grant the group")
 	}
 	if code != 0 {
@@ -441,7 +549,7 @@ func TestUnsupportedHashSchemeIsRefusedExplicitly(t *testing.T) {
 	if !strings.Contains(errOut, "cannot verify") {
 		t.Errorf("stderr = %q, want a cannot-verify diagnostic", errOut)
 	}
-	if h.spawn.calls[0].GID != "" {
+	if h.spawn.calls[0].Credential != nil {
 		t.Error("an unevaluable hash must not grant the group")
 	}
 	if code != 0 {
@@ -494,8 +602,8 @@ func TestLoginShellArgv0AndDirectory(t *testing.T) {
 
 func TestLoginEnvironment(t *testing.T) {
 	h := install(t)
-	// Provide TERM in testEnv to ensure it is propagated
-	env := append(testEnv, "TERM=xterm-256color")
+	// Channel/locale settings survive, while arbitrary session state does not.
+	env := append(testEnv, "SECRET=must-not-survive", "TERM=xterm-256color", "LANG=en_US.UTF-8")
 	if _, errOut, code := runCmd(t, env, "-l"); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -507,6 +615,7 @@ func TestLoginEnvironment(t *testing.T) {
 		"LOGNAME=alice",
 		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
 		"TERM=xterm-256color",
+		"LANG=en_US.UTF-8",
 	}
 	if len(got.Env) != len(wantEnv) {
 		t.Fatalf("env len = %d, want %d", len(got.Env), len(wantEnv))
@@ -544,8 +653,32 @@ func TestLoginFlagSurvivesARefusedChange(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	got := h.spawn.calls[0]
-	if got.Argv0 != "-testsh" || got.GID != "" {
+	if got.Argv0 != "-testsh" || got.Credential != nil {
 		t.Errorf("spec = %+v, want a login shell with no group change", got)
+	}
+}
+
+func TestLoginEnvironmentAndStatusSurviveKernelAssignmentFailure(t *testing.T) {
+	h := install(t)
+	h.spawn.errOnce = &errGroupChange{errors.New("operation not permitted")}
+	h.spawn.status = 17
+	env := append(testEnv, "SECRET=drop-me", "TERM=xterm")
+	_, errOut, code := runCmd(t, env, "-l", "staff")
+	if !strings.Contains(errOut, "cannot change group") {
+		t.Errorf("stderr = %q, want assignment diagnostic", errOut)
+	}
+	if len(h.spawn.calls) != 2 {
+		t.Fatalf("spawns = %d, want credential attempt plus unchanged retry", len(h.spawn.calls))
+	}
+	retry := h.spawn.calls[1]
+	if retry.Credential != nil || retry.Argv0 != "-testsh" || retry.Dir != "/home/alice" {
+		t.Errorf("retry = %+v, want unchanged credentials in login shell", retry)
+	}
+	if slices.Contains(retry.Env, "SECRET=drop-me") || !slices.Contains(retry.Env, "TERM=xterm") {
+		t.Errorf("retry environment = %v", retry.Env)
+	}
+	if code != 17 {
+		t.Errorf("exit = %d, want shell status 17", code)
 	}
 }
 

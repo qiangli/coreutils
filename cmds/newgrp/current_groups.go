@@ -5,16 +5,20 @@ import (
 	"strconv"
 )
 
-var currentGroups = defaultCurrentGroups
+var currentCredentials = defaultCurrentCredentials
 
-func defaultCurrentGroups() ([]string, error) {
+func defaultCurrentCredentials() (credentialState, error) {
 	groups, err := os.Getgroups()
 	if err != nil {
-		return nil, err
+		return credentialState{}, err
 	}
-	var res []string
+	state := credentialState{
+		RealGID:          strconv.Itoa(os.Getgid()),
+		EffectiveGID:     strconv.Itoa(os.Getegid()),
+		MaxSupplementary: maximumSupplementaryGroups(),
+	}
 	for _, g := range groups {
-		res = append(res, strconv.Itoa(g))
+		state.Supplementary = append(state.Supplementary, strconv.Itoa(g))
 	}
-	return res, nil
+	return state, nil
 }

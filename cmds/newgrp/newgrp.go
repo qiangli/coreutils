@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/qiangli/coreutils/tool"
@@ -112,17 +113,33 @@ var promptPassword = readPassword
 // credential.
 var spawnShell = defaultSpawnShell
 
-// shellSpec is everything the spawn needs. Gid is "" when the group is NOT to
-// be changed — the POSIX "diagnostic written, environment unchanged, shell
-// still started" path.
+// shellSpec is everything the spawn needs. Credential is nil when the group is
+// not to be changed: the POSIX diagnostic-and-launch-the-shell path.
 type shellSpec struct {
-	Path   string // the executable
-	Argv0  string // argv[0]: "-sh" under -l, "sh" otherwise
-	Dir    string // working directory
-	GID    string // "" = leave the group alone
-	UID    string
-	Groups []string // the supplementary groups to set; nil means do not change
-	Env    []string // the environment to run the shell in; nil means use rc.Env
+	Path       string // the executable
+	Argv0      string // argv[0]: "-sh" under -l, "sh" otherwise
+	Dir        string // working directory
+	UID        string
+	Credential *credentialPlan
+	Env        []string // nil means use rc.Env
+}
+
+// credentialState is obtained through a platform seam, allowing the POSIX
+// supplementary-list rules to be tested without changing process credentials.
+type credentialState struct {
+	RealGID          string
+	EffectiveGID     string
+	Supplementary    []string
+	MaxSupplementary int // <= 0 means the platform did not report a limit
+}
+
+// credentialPlan states the privileged operation explicitly. POSIX requires
+// both the real and effective group IDs to change; separate fields prevent an
+// adapter from silently implementing only half of that contract.
+type credentialPlan struct {
+	RealGID       string
+	EffectiveGID  string
+	Supplementary []string
 }
 
 // errGroupChange marks a spawn failure caused by the credential change rather
@@ -156,45 +173,31 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 
-	gid, groups, changeErr := resolveTargetGroup(rc, u, operands)
+	credential, changeErr := resolveTargetGroup(rc, u, operands)
 	if changeErr != nil {
-		// POSIX: diagnostic, environment unchanged, shell still started.
+		// POSIX: diagnose the failed assignment, keep the inherited group
+		// credentials, and still create the requested shell environment.
 		fmt.Fprintf(rc.Err, "newgrp: %v\n", changeErr)
-		gid = ""
-		groups = nil
+		credential = nil
 	}
 
+	shell := shellPath(rc, u)
 	spec := shellSpec{
-		Path:   shellPath(rc, u),
-		Dir:    rc.Dir,
-		GID:    gid,
-		UID:    u.UID,
-		Groups: groups,
-		Argv0:  filepath.Base(shellPath(rc, u)),
+		Path:       shell,
+		Dir:        rc.Dir,
+		UID:        u.UID,
+		Credential: credential,
+		Argv0:      filepath.Base(shell),
 	}
 	if *login {
-		// A login shell is signalled by a leading dash on argv[0] — the
-		// convention every shell checks to decide whether to read its
-		// login-profile files. Starting from the home directory is the other
-		// half of "as if the user logged in again"; the profile the shell then
-		// reads rebuilds the rest of the environment, which is why newgrp does
-		// not scrub it here (unlike su, there is no target USER to switch to).
-		// Wait, POSIX says -l changes the environment to what would be expected
-		// if the user actually logged in again. We set login-expected environment.
+		// The leading dash makes the shell read login profiles. The clean base
+		// environment matters independently because profiles need not erase
+		// exported variables inherited from the old session.
 		spec.Argv0 = "-" + spec.Argv0
 		if u.Dir != "" {
 			spec.Dir = u.Dir
 		}
-		spec.Env = []string{
-			"HOME=" + u.Dir,
-			"SHELL=" + shellPath(rc, u),
-			"USER=" + u.Name,
-			"LOGNAME=" + u.Name,
-			"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
-		}
-		if term := rc.Getenv("TERM"); term != "" {
-			spec.Env = append(spec.Env, "TERM="+term)
-		}
+		spec.Env = loginEnvironment(rc, u, shell)
 	}
 
 	status, err := spawnShell(rc, spec)
@@ -204,8 +207,7 @@ func run(rc *tool.RunContext, args []string) int {
 		// is not setuid-root). Same rule as a policy denial — say so, then give
 		// the user their shell with the group unchanged.
 		fmt.Fprintf(rc.Err, "newgrp: cannot change group: %v\n", groupErr)
-		spec.GID = ""
-		spec.Groups = nil
+		spec.Credential = nil
 		status, err = spawnShell(rc, spec)
 	}
 	if err != nil {
@@ -216,13 +218,20 @@ func run(rc *tool.RunContext, args []string) int {
 	return status
 }
 
-func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (string, []string, error) {
+func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (*credentialPlan, error) {
 	if len(operands) == 0 {
 		// No operand: revert to the primary group from the password database.
 		// There is nothing to authorize — it is the group the user already has
 		// by definition of "primary".
-		// Revert supplementary groups as well.
-		return u.GID, u.Supplementary, nil
+		groups, err := db.GroupsForUser(u.Name)
+		if err != nil {
+			return nil, fmt.Errorf("cannot derive supplementary groups from the group database: %w", err)
+		}
+		return &credentialPlan{
+			RealGID:       u.GID,
+			EffectiveGID:  u.GID,
+			Supplementary: dedupeGroups(groups),
+		}, nil
 	}
 
 	name := operands[0]
@@ -235,10 +244,10 @@ func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (str
 		}
 	}
 	if errors.Is(err, errNoSuchGroup) {
-		return "", nil, fmt.Errorf("no such group: %s", name)
+		return nil, fmt.Errorf("no such group: %s", name)
 	}
 	if err != nil {
-		return "", nil, fmt.Errorf("cannot read the group database: %w", err)
+		return nil, fmt.Errorf("cannot read the group database: %w", err)
 	}
 
 	var authErr error
@@ -264,27 +273,87 @@ func resolveTargetGroup(rc *tool.RunContext, u userInfo, operands []string) (str
 	}
 
 	if authErr != nil {
-		return "", nil, authErr
+		return nil, authErr
 	}
 
-	curr, err := currentGroups()
+	current, err := currentCredentials()
 	if err != nil {
-		curr = u.Supplementary
+		return nil, fmt.Errorf("cannot read current group credentials: %w", err)
 	}
+	return planGroupChange(current, g.GID), nil
+}
 
-	var newGroups []string
-	// The user remains a member of all supplementary groups that the user was a member
-	// of at the time of the execution of newgrp, except that if the new group is already
-	// a supplementary group, the supplementary group list may be changed.
-	// Rule: Add old primary to supplementary, remove new primary from supplementary.
-	newGroups = append(newGroups, u.GID)
-	for _, cg := range curr {
-		if cg != g.GID && cg != u.GID {
-			newGroups = append(newGroups, cg)
+func planGroupChange(current credentialState, target string) *credentialPlan {
+	groups := dedupeGroups(current.Supplementary)
+	oldInList := slices.Contains(groups, current.EffectiveGID)
+	newInList := slices.Contains(groups, target)
+
+	if oldInList {
+		// On systems that normally include the effective gid, retain the old
+		// list and add the new effective gid when there is room.
+		if !newInList && groupListHasRoom(groups, current.MaxSupplementary) {
+			groups = append(groups, target)
+		}
+	} else {
+		// On systems that normally exclude it, remove the new effective gid and
+		// add the old effective gid when there is room.
+		if newInList {
+			groups = deleteGroup(groups, target)
+		}
+		if !slices.Contains(groups, current.EffectiveGID) && groupListHasRoom(groups, current.MaxSupplementary) {
+			groups = append(groups, current.EffectiveGID)
 		}
 	}
 
-	return g.GID, newGroups, nil
+	return &credentialPlan{
+		RealGID:       target,
+		EffectiveGID:  target,
+		Supplementary: groups,
+	}
+}
+
+func groupListHasRoom(groups []string, max int) bool { return max <= 0 || len(groups) < max }
+
+func deleteGroup(groups []string, target string) []string {
+	out := groups[:0]
+	for _, group := range groups {
+		if group != target {
+			out = append(out, group)
+		}
+	}
+	return out
+}
+
+func dedupeGroups(groups []string) []string {
+	out := make([]string, 0, len(groups))
+	for _, group := range groups {
+		if !slices.Contains(out, group) {
+			out = append(out, group)
+		}
+	}
+	return out
+}
+
+func loginEnvironment(rc *tool.RunContext, u userInfo, shell string) []string {
+	env := []string{
+		"HOME=" + u.Dir,
+		"SHELL=" + shell,
+		"USER=" + u.Name,
+		"LOGNAME=" + u.Name,
+		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+	}
+	// Terminal type and locale/time-zone settings describe the login channel,
+	// not mutable session state. Login implementations conventionally retain or
+	// reconstruct them, and retaining them avoids reverting diagnostics to C.
+	for _, name := range []string{
+		"TERM", "TZ", "LANG", "LC_ALL", "LC_COLLATE", "LC_CTYPE",
+		"LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME", "NLSPATH",
+	} {
+		if value := rc.Getenv(name); value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
 }
 
 // shellPath chooses the replacement shell: $SHELL, then the password-database
