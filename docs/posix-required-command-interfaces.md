@@ -21,8 +21,11 @@ GNU compatibility is explicitly out of scope and deferred.
 | Evidence | Unverified | 114 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
---require-complete` fails until all 116 rows have focused behavioral evidence
-and complete normative semantics. The parser scan below is only a conservative
+--require-complete` covers all 116 rows, while `--require-owned-complete`
+covers Sprint 79's 100 owned rows (78 Go plus 22 shell) without treating the
+16 external-provider rows as owned implementation evidence. Both require focused
+behavioral evidence and complete normative semantics for every row in scope.
+The parser scan below is only a conservative
 source-token audit; finding a token is never proof of runtime behavior.
 
 Evidence is lane-specific. Go references stay in `cmds/<command>`; provider

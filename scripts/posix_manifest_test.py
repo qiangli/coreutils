@@ -109,6 +109,43 @@ class ManifestValidationTest(unittest.TestCase):
         ):
             manifest.main()
 
+    def test_owned_completion_gate_has_exact_78_plus_22_scope(self) -> None:
+        owned_errors = manifest.completion_errors(
+            self.rows, owners=manifest.OWNED_IMPLEMENTATION_OWNERS,
+        )
+        provider_names = {
+            row["command"] for row in self.rows
+            if row["effective_owner"] == "external_provider"
+        }
+        self.assertEqual(
+            sum(
+                row["effective_owner"] in manifest.OWNED_IMPLEMENTATION_OWNERS
+                for row in self.rows
+            ),
+            100,
+        )
+        self.assertFalse(
+            any(error.split(":", 1)[0] in provider_names for error in owned_errors)
+        )
+        self.assertTrue(any(error == "alias: state=unverified" for error in owned_errors))
+        self.assertTrue(any(error == "xargs: state=partial" for error in owned_errors))
+        with (
+            mock.patch.object(
+                sys, "argv", [str(SCRIPT), "--require-owned-complete"],
+            ),
+            self.assertRaisesRegex(SystemExit, "owned POSIX interface completion blocked"),
+        ):
+            manifest.main()
+
+    def test_full_completion_gate_still_includes_external_providers(self) -> None:
+        full_errors = manifest.completion_errors(self.rows)
+        owned_errors = manifest.completion_errors(
+            self.rows, owners=manifest.OWNED_IMPLEMENTATION_OWNERS,
+        )
+        self.assertGreater(len(full_errors), len(owned_errors))
+        self.assertIn("ar: state=unverified", full_errors)
+        self.assertNotIn("ar: state=unverified", owned_errors)
+
     def test_every_interface_field_is_required(self) -> None:
         for field in manifest.FIELDS:
             with self.subTest(field=field):

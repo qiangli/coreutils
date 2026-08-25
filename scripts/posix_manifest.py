@@ -67,6 +67,7 @@ OPTION_ARGUMENT_OPTION = re.compile(
 )
 AVAILABILITY = {"go", "shell_only", "external_provider"}
 OWNERS = {"go", "shell", "external_provider"}
+OWNED_IMPLEMENTATION_OWNERS = frozenset({"go", "shell"})
 PARSER_MODELS = {
     "flagset", "manual", "custom", "none", "shell_builtin",
     "shell_entrypoint", "shell_keyword", "external",
@@ -610,9 +611,14 @@ def validate(
         raise ManifestError(f"effective-selection axis drift: {dict(owners)}")
 
 
-def completion_errors(rows: list[dict[str, str]], root: Path = ROOT) -> list[str]:
+def completion_errors(
+    rows: list[dict[str, str]], root: Path = ROOT,
+    owners: frozenset[str] | None = None,
+) -> list[str]:
     errors = []
     for row in rows:
+        if owners is not None and row["effective_owner"] not in owners:
+            continue
         if row["evidence_state"] != "verified":
             errors.append(f"{row['command']}: state={row['evidence_state']}")
         gaps = sorted(parser_gaps(row, root))
@@ -659,8 +665,11 @@ def render(rows: list[dict[str, str]]) -> str:
         f"| Evidence | Partial | {states['partial']} |",
         f"| Evidence | Unverified | {states['unverified']} |", "",
         "Completion is deliberately fail-closed: `scripts/posix_manifest.py",
-        "--require-complete` fails until all 116 rows have focused behavioral evidence",
-        "and complete normative semantics. The parser scan below is only a conservative",
+        "--require-complete` covers all 116 rows, while `--require-owned-complete`",
+        "covers Sprint 79's 100 owned rows (78 Go plus 22 shell) without treating the",
+        "16 external-provider rows as owned implementation evidence. Both require focused",
+        "behavioral evidence and complete normative semantics for every row in scope.",
+        "The parser scan below is only a conservative",
         "source-token audit; finding a token is never proof of runtime behavior.", "",
         "Evidence is lane-specific. Go references stay in `cmds/<command>`; provider",
         "references name a command-specific test in `cmds/posixproviders`; shell semantic",
@@ -734,16 +743,25 @@ def main() -> None:
         "--require-complete", action="store_true",
         help="also fail unless all interfaces have complete semantics and behavioral evidence",
     )
+    parser.add_argument(
+        "--require-owned-complete", action="store_true",
+        help=(
+            "also fail unless all 78 Go-owned and 22 shell-owned interfaces "
+            "have complete semantics and behavioral evidence"
+        ),
+    )
     args = parser.parse_args()
     rows = read_manifest()
     validate(rows, _provider_names(), _go_packages(), _flagset_packages())
     rendered = render(rows)
     validate_rendered(rendered, rows)
-    if args.require_complete:
-        errors = completion_errors(rows)
+    if args.require_complete or args.require_owned_complete:
+        owners = None if args.require_complete else OWNED_IMPLEMENTATION_OWNERS
+        errors = completion_errors(rows, owners=owners)
         if errors:
+            scope = "POSIX interface" if owners is None else "owned POSIX interface"
             raise SystemExit(
-                f"POSIX interface completion blocked by {len(errors)} item(s):\n"
+                f"{scope} completion blocked by {len(errors)} item(s):\n"
                 + "\n".join(errors)
             )
     if args.check:
