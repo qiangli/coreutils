@@ -115,23 +115,31 @@ func (r *rm) remove1(op, displayOp string) bool {
 		r.errf("failed to remove '': No such file or directory")
 		return false
 	}
-	// POSIX rmdir must reject a path whose final component is "." or ".."
+	// POSIX rmdir must reject a path whose final component is "."
 	// with EINVAL ("Invalid argument") on every platform — it is a portable
 	// semantic guarantee, not an OS accident. This must happen BEFORE the
 	// filesystem call: RunContext.Path normalizes a relative operand, so a
 	// bare "." would otherwise resolve to the working directory itself and
-	// (on some platforms, notably Windows) let os.Remove succeed against it.
+	// (on some platforms, notably Windows, which silently strips a trailing
+	// single dot during path canonicalization) let os.Remove succeed against
+	// an otherwise-empty directory instead of failing as POSIX requires.
+	//
+	// A final component of ".." is deliberately NOT special-cased here.
+	// POSIX requires the removal to fail but does not prescribe its errno.
+	// Preserve the component for the host's pathname walk so an invalid prefix
+	// still fails with its native error (for example ENOENT for missing/.. or
+	// ENOTDIR for file/..) and a valid child/.. gets the host's native result.
 	//
 	// The base is taken from the uncleaned native path, NOT from
-	// filepath.Clean(op): Clean collapses "a/." to "a" and "a/b/.." to "a",
-	// silently swallowing the trailing dot/dotdot that POSIX mandates the
-	// kernel reject. Separator normalization preserves path components, so
-	// "a/.", "a/./", "a/b/..", etc. are all caught here.
-	if base := filepath.Base(op); base == "." || base == ".." {
+	// filepath.Clean(op): Clean collapses "a/." to "a", silently swallowing
+	// the trailing dot that POSIX mandates the kernel reject. Separator
+	// normalization preserves path components, so "a/." and "a/./" are both
+	// caught here.
+	if base := filepath.Base(op); base == "." {
 		r.errf("failed to remove '%s': Invalid argument", displayOp)
 		return false
 	}
-	rp := r.rc.Path(op)
+	rp := rawOperandPath(r.rc, op)
 	fi, err := os.Lstat(rp)
 	if err != nil {
 		r.errf("failed to remove '%s': %s", displayOp, reason(err))
@@ -149,6 +157,21 @@ func (r *rm) remove1(op, displayOp string) bool {
 		return false
 	}
 	return true
+}
+
+// rawOperandPath resolves a relative operand under the invocation directory
+// without filepath.Join's lexical Clean. The kernel must see every pathname
+// component: cleaning f/.. or missing/.. would incorrectly turn either into
+// the working directory and could remove that directory instead of reporting
+// the invalid prefix. Absolute operands already carry their own base.
+func rawOperandPath(rc *tool.RunContext, operand string) string {
+	if filepath.IsAbs(operand) || rc.Dir == "" {
+		return operand
+	}
+	if strings.HasSuffix(rc.Dir, string(filepath.Separator)) {
+		return rc.Dir + operand
+	}
+	return rc.Dir + string(filepath.Separator) + operand
 }
 
 func isNonEmpty(err error) bool {

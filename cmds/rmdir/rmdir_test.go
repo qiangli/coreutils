@@ -197,16 +197,53 @@ func TestRmdirHelpAndVersion(t *testing.T) {
 	}
 }
 
-// TestRmdirDotDotBare covers the POSIX requirement that rmdir reject a
-// final component of "." or ".." with EINVAL, for the bare forms.
-func TestRmdirDotDotBare(t *testing.T) {
+// TestRmdirDotBare covers the POSIX requirement that rmdir reject a bare
+// "." operand with EINVAL.
+func TestRmdirDotBare(t *testing.T) {
 	dir := t.TempDir()
-	for _, op := range []string{".", ".."} {
-		_, errb, code := runTool(t, dir, op)
-		if code != 1 || !strings.Contains(errb, "failed to remove '"+op+"'") ||
-			!strings.Contains(errb, "Invalid argument") {
-			t.Errorf("rmdir %s: code=%d err=%q", op, code, errb)
+	_, errb, code := runTool(t, dir, ".")
+	if code != 1 || !strings.Contains(errb, "failed to remove '.'") ||
+		!strings.Contains(errb, "Invalid argument") {
+		t.Errorf("rmdir .: code=%d err=%q", code, errb)
+	}
+}
+
+// TestRmdirDotDotBareFailsNaturally covers the POSIX distinction between a
+// final component of "." (mandatory EINVAL) and ".." (the operation must
+// fail, but POSIX leaves the errno to the host).
+func TestRmdirDotDotBareFailsNaturally(t *testing.T) {
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "..")
+	if code != 1 || !strings.Contains(errb, "failed to remove '..'") {
+		t.Errorf("rmdir ..: code=%d err=%q, want the host's native failure", code, errb)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("rmdir .. removed the working directory's parent chain: %v", err)
+	}
+}
+
+// TestRmdirRealDirectoryDotDotMayBeIgnored proves that a valid child/..
+// pathname reaches the host removal call. Hosts which report ENOTEMPTY or
+// EEXIST are covered by --ignore-fail-on-non-empty.
+func TestRmdirRealDirectoryDotDotMayBeIgnored(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nativeErr := os.Remove(rawOperandPath(&tool.RunContext{Dir: dir}, "a/.."))
+	if nativeErr == nil {
+		t.Fatal("host unexpectedly removed a directory through final dot-dot")
+	}
+	_, errb, code := runTool(t, dir, "--ignore-fail-on-non-empty", "a/..")
+	if isNonEmpty(nativeErr) {
+		if code != 0 || errb != "" {
+			t.Errorf("native non-empty a/.. was not ignored: code=%d err=%q", code, errb)
 		}
+	} else if code != 1 || errb == "" {
+		t.Errorf("native %v a/.. was wrongly ignored: code=%d err=%q", nativeErr, code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a", "b")); err != nil {
+		t.Errorf("ancestors removed despite ignore flag: %v", err)
 	}
 }
 
@@ -231,10 +268,9 @@ func TestRmdirTrailingDotComponent(t *testing.T) {
 	}
 }
 
-// TestRmdirTrailingDotDotComponent covers the POSIX EINVAL guarantee for
-// a path whose final component is ".." — including non-bare forms like
-// "a/.." and "a/b/.." where filepath.Clean would otherwise resolve away
-// the dotdot.
+// TestRmdirTrailingDotDotComponent covers non-bare forms of a final ".."
+// component. POSIX requires failure but leaves the errno unspecified, so the
+// test checks the outcome and preservation rather than pinning an errno.
 func TestRmdirTrailingDotDotComponent(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
@@ -242,9 +278,8 @@ func TestRmdirTrailingDotDotComponent(t *testing.T) {
 	}
 	for _, op := range []string{"a/..", "a/b/.."} {
 		_, errb, code := runTool(t, dir, op)
-		if code != 1 || !strings.Contains(errb, "failed to remove '"+op+"'") ||
-			!strings.Contains(errb, "Invalid argument") {
-			t.Errorf("rmdir %s: code=%d err=%q", op, code, errb)
+		if code != 1 || !strings.Contains(errb, "failed to remove '"+op+"'") {
+			t.Errorf("rmdir %s: code=%d err=%q, want the host's native failure", op, code, errb)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "a")); err != nil {
@@ -315,6 +350,99 @@ func TestRmdirIgnoreNonEmptyDoesNotIgnoreOtherErrors(t *testing.T) {
 	}
 }
 
+// TestRmdirMissingPrefixDotDotIsNotCleaned guards against resolving a
+// relative operand with filepath.Join. The lexical clean would collapse
+// missing/.. to the invocation directory and, when that directory is empty,
+// remove it. Native pathname resolution must instead fail at missing.
+func TestRmdirMissingPrefixDotDotIsNotCleaned(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "work")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "--ignore-fail-on-non-empty", "missing/..")
+	if code != 1 || !strings.Contains(errb, "failed to remove 'missing/..'") ||
+		!strings.Contains(strings.ToLower(errb), "no such file or directory") {
+		t.Errorf("missing/..: code=%d err=%q, want ENOENT-like failure", code, errb)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("missing/.. removed the invocation directory: %v", err)
+	}
+}
+
+// TestRmdirNonDirectoryPrefixDotDotIsNotIgnored ensures an ENOTDIR-like
+// failure from an intermediate component is not reclassified as a removable
+// non-empty directory merely because filepath.Clean would erase that prefix.
+func TestRmdirNonDirectoryPrefixDotDotIsNotIgnored(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "--ignore-fail-on-non-empty", "f/..")
+	if code != 1 || !strings.Contains(errb, "failed to remove 'f/..'") ||
+		!strings.Contains(strings.ToLower(errb), "not a directory") {
+		t.Errorf("f/..: code=%d err=%q, want ENOTDIR-like failure", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "f")); err != nil {
+		t.Fatalf("f/.. changed its non-directory prefix: %v", err)
+	}
+}
+
+// TestRmdirOperandOrderMatters covers the POSIX requirement that dir
+// operands are processed "in the order specified": given a directory and
+// its own child as two separate operands, each operand is attempted exactly
+// once at the point it is reached, so the two orderings leave the tree in
+// different states. Parent-then-child: the parent fails (still non-empty at
+// that point) but is never retried once the child empties it afterward, so
+// the parent survives, now empty, and only the child is removed.
+// Child-then-parent: the child empties the parent in time for the parent's
+// own turn, so both are removed.
+func TestRmdirOperandOrderMatters(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "a", filepath.Join("a", "b"))
+	if code != 1 || !strings.Contains(errb, "failed to remove 'a'") {
+		t.Errorf("parent-then-child: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a")); err != nil {
+		t.Errorf("parent-then-child: parent operand not left in place after its own failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a", "b")); !os.IsNotExist(err) {
+		t.Errorf("parent-then-child: child operand not removed on its own turn: %v", err)
+	}
+
+	dir2 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir2, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code = runTool(t, dir2, filepath.Join("a", "b"), "a")
+	if code != 0 || errb != "" {
+		t.Errorf("child-then-parent: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir2, "a")); !os.IsNotExist(err) {
+		t.Errorf("child-then-parent: parent not removed: %v", err)
+	}
+}
+
+// TestRmdirParentsWithTrailingSlash covers the interaction between -p and a
+// trailing slash on the operand: the ancestor walk must still compute the
+// same ancestor chain as the non-trailing-slash form.
+func TestRmdirParentsWithTrailingSlash(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runTool(t, dir, "-p", filepath.Join("a", "b")+"/")
+	if code != 0 || errb != "" {
+		t.Errorf("rmdir -p a/b/: code=%d err=%q", code, errb)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
+		t.Error("ancestor not removed when leaf operand had a trailing slash")
+	}
+}
+
 // TestRmdirDoubleDashOperand verifies that -- terminates option parsing
 // so operands beginning with - are treated as directory names.
 func TestRmdirDoubleDashOperand(t *testing.T) {
@@ -346,5 +474,73 @@ func TestRmdirDashOperand(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "-")); !os.IsNotExist(err) {
 		t.Error("rmdir - did not remove the directory")
+	}
+}
+
+// rmdirPanicReader proves a code path never reads standard input: POSIX
+// documents rmdir's STDIN as "Not used", and rmdir has no interactive
+// prompt of its own to justify ever touching it.
+type rmdirPanicReader struct{}
+
+func (rmdirPanicReader) Read([]byte) (int, error) {
+	panic("rmdir read standard input")
+}
+
+// TestRmdirDoesNotConsumeStdin covers the POSIX STDIN requirement across a
+// representative mix of successful, failing, and -p invocations.
+func TestRmdirDoesNotConsumeStdin(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "nonempty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nonempty", "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (stdout, stderr string, code int) {
+		t.Helper()
+		var out, errb bytes.Buffer
+		rc := &tool.RunContext{
+			Ctx:   context.Background(),
+			Dir:   dir,
+			Stdio: tool.Stdio{In: rmdirPanicReader{}, Out: &out, Err: &errb},
+		}
+		code = cmd.Run(rc, args)
+		return out.String(), errb.String(), code
+	}
+	if _, _, code := run("-p", filepath.Join("a", "b")); code != 0 {
+		t.Errorf("rmdir -p a/b: code=%d", code)
+	}
+	if _, errb, code := run("nonempty"); code != 1 || !strings.Contains(errb, "not empty") {
+		t.Errorf("rmdir nonempty: code=%d err=%q", code, errb)
+	}
+	if _, errb, code := run("does-not-exist"); code != 1 || errb == "" {
+		t.Errorf("rmdir does-not-exist: code=%d err=%q", code, errb)
+	}
+}
+
+// rmdirErrWriter simulates a broken standard error stream.
+type rmdirErrWriter struct{}
+
+func (rmdirErrWriter) Write([]byte) (int, error) {
+	return 0, os.ErrClosed
+}
+
+// TestRmdirDiagnosticWriteFailureStillFails verifies that a broken standard
+// error stream does not mask an operand failure: exit status must still
+// reflect the failed removal even though the diagnostic itself could not be
+// written.
+func TestRmdirDiagnosticWriteFailureStillFails(t *testing.T) {
+	dir := t.TempDir()
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: rmdirErrWriter{}},
+	}
+	code := cmd.Run(rc, []string{"does-not-exist"})
+	if code != 1 {
+		t.Errorf("rmdir with broken stderr: code=%d, want 1", code)
 	}
 }
