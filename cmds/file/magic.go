@@ -1,0 +1,494 @@
+package filecmd
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"github.com/qiangli/coreutils/tool"
+)
+
+type testPlan struct {
+	position []positionTests
+	context  bool
+}
+
+type positionTests struct {
+	defaults bool
+	magic    []magicTest
+}
+
+type magicTest struct {
+	offset       uint64
+	continuation bool
+	typeSpec     magicType
+	comparison   byte
+	want         uint64
+	stringValue  []byte
+	message      string
+}
+
+type magicType struct {
+	stringValue bool
+	signed      bool
+	size        int
+	mask        uint64
+	hasMask     bool
+}
+
+func loadTestPlan(rc *tool.RunContext, sources []testSource) (testPlan, error) {
+	hasMagic, hasReplacement, hasDefault := false, false, false
+	for _, source := range sources {
+		switch source.kind {
+		case additionalMagic:
+			hasMagic = true
+		case replacementMagic:
+			hasReplacement = true
+		case defaultTests:
+			hasDefault = true
+		}
+	}
+	if !hasMagic && !hasReplacement && !hasDefault {
+		sources = append(sources, testSource{kind: defaultTests})
+	} else if hasMagic && !hasReplacement && !hasDefault {
+		sources = append(sources, testSource{kind: defaultTests})
+	}
+
+	var plan testPlan
+	for _, source := range sources {
+		if source.kind == defaultTests {
+			plan.position = append(plan.position, positionTests{defaults: true})
+			plan.context = true
+			continue
+		}
+		tests, err := loadMagicFile(rc, source.name)
+		if err != nil {
+			return testPlan{}, err
+		}
+		plan.position = append(plan.position, positionTests{magic: tests})
+	}
+	return plan, nil
+}
+
+func (p testPlan) classify(data []byte, utf8Locale bool) (string, error) {
+	if len(data) == 0 {
+		return "empty", nil
+	}
+	for _, tests := range p.position {
+		if tests.defaults {
+			if typ, ok := classifyPosition(data); ok {
+				return typ, nil
+			}
+			continue
+		}
+		message, ok, err := applyMagic(data, tests.magic)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return message, nil
+		}
+	}
+	if p.context {
+		return classifyContext(data, utf8Locale), nil
+	}
+	return "data", nil
+}
+
+func loadMagicFile(rc *tool.RunContext, name string) ([]magicTest, error) {
+	data, err := os.ReadFile(rc.Path(name))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %v", name, tool.SysErr(err))
+	}
+	var tests []magicTest
+	for lineNo, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		test, err := parseMagicLine(line)
+		if err != nil {
+			return nil, fmt.Errorf("%s:%d: %v", name, lineNo+1, err)
+		}
+		if test.continuation && !hasPrimary(tests) {
+			return nil, fmt.Errorf("%s:%d: continuation has no preceding primary test", name, lineNo+1)
+		}
+		tests = append(tests, test)
+	}
+	return tests, nil
+}
+
+func hasPrimary(tests []magicTest) bool {
+	for i := len(tests) - 1; i >= 0; i-- {
+		if !tests[i].continuation {
+			return true
+		}
+	}
+	return false
+}
+
+func parseMagicLine(line string) (magicTest, error) {
+	offsetField, typeField, valueField, message, ok := splitMagicFields(line)
+	if !ok {
+		return magicTest{}, fmt.Errorf("expected four fields")
+	}
+
+	test := magicTest{message: message, comparison: '='}
+	if strings.HasPrefix(offsetField, ">") {
+		test.continuation = true
+		offsetField = offsetField[1:]
+	}
+	if offsetField == "" || strings.HasPrefix(offsetField, ">") {
+		return magicTest{}, fmt.Errorf("invalid magic offset %q", offsetField)
+	}
+	offset, err := strconv.ParseUint(offsetField, 0, 64)
+	if err != nil {
+		return magicTest{}, fmt.Errorf("invalid magic offset %q", offsetField)
+	}
+	test.offset = offset
+	test.typeSpec, err = parseMagicType(typeField)
+	if err != nil {
+		return magicTest{}, err
+	}
+	if test.typeSpec.stringValue {
+		test.stringValue, err = unescapeMagicString(valueField)
+		if err != nil {
+			return magicTest{}, err
+		}
+	} else if valueField == "x" {
+		test.comparison = 'x'
+	} else {
+		if len(valueField) > 0 && strings.ContainsRune("=<>&^", rune(valueField[0])) {
+			test.comparison = valueField[0]
+			valueField = valueField[1:]
+		}
+		test.want, err = parseMagicNumber(valueField)
+		if err != nil {
+			return magicTest{}, fmt.Errorf("invalid magic value %q", valueField)
+		}
+	}
+	if _, err := renderMagicMessage(test.message, test.messageArg(0)); err != nil {
+		return magicTest{}, err
+	}
+	return test, nil
+}
+
+func splitMagicFields(line string) (offset, typ, value, message string, ok bool) {
+	// Tabs are the normative separators. Split exactly three so leading
+	// whitespace and additional tabs in the message remain message data.
+	if strings.Count(line, "\t") >= 3 {
+		fields := strings.SplitN(line, "\t", 4)
+		return strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1]), strings.TrimSpace(fields[2]), fields[3], true
+	}
+	offset, rest, ok := magicField(line)
+	if !ok {
+		return "", "", "", "", false
+	}
+	typ, rest, ok = magicField(rest)
+	if !ok {
+		return "", "", "", "", false
+	}
+	value, message, ok = magicField(rest)
+	if !ok {
+		return "", "", "", "", false
+	}
+	return offset, typ, value, strings.TrimLeftFunc(message, unicode.IsSpace), true
+}
+
+// magicField consumes one whitespace-delimited field. A backslash quotes the
+// following byte for field-splitting purposes; unescaping happens later.
+func magicField(input string) (field, rest string, ok bool) {
+	input = strings.TrimLeftFunc(input, unicode.IsSpace)
+	if input == "" {
+		return "", "", false
+	}
+	escaped := false
+	for i, r := range input {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if unicode.IsSpace(r) {
+			return input[:i], input[i:], true
+		}
+	}
+	return input, "", false
+}
+
+func parseMagicType(field string) (magicType, error) {
+	switch {
+	case field == "s" || field == "string":
+		return magicType{stringValue: true}, nil
+	case field == "byte" || strings.HasPrefix(field, "byte&"):
+		field = "dC" + field[len("byte"):]
+	case field == "short" || strings.HasPrefix(field, "short&"):
+		field = "dS" + field[len("short"):]
+	case field == "long" || strings.HasPrefix(field, "long&"):
+		field = "dL" + field[len("long"):]
+	}
+	if field == "" || (field[0] != 'd' && field[0] != 'u') {
+		return magicType{}, fmt.Errorf("unsupported magic type %q", field)
+	}
+	t := magicType{signed: field[0] == 'd', mask: ^uint64(0)}
+	rest := field[1:]
+	if before, after, found := strings.Cut(rest, "&"); found {
+		rest = before
+		mask, err := strconv.ParseUint(after, 0, 64)
+		if err != nil {
+			return magicType{}, fmt.Errorf("invalid magic mask %q", after)
+		}
+		t.mask, t.hasMask = mask, true
+	}
+	switch rest {
+	case "":
+		t.size = strconv.IntSize / 8
+	case "C":
+		t.size = 1
+	case "S":
+		t.size = 2
+	case "I":
+		t.size = 4
+	case "L":
+		t.size = cLongSize()
+	default:
+		size, err := strconv.Atoi(rest)
+		if err != nil || size < 1 || size > 8 {
+			return magicType{}, fmt.Errorf("unsupported magic type width %q", rest)
+		}
+		t.size = size
+	}
+	return t, nil
+}
+
+func cLongSize() int {
+	if runtime.GOOS == "windows" {
+		return 4
+	}
+	return strconv.IntSize / 8
+}
+
+func parseMagicNumber(value string) (uint64, error) {
+	if strings.HasPrefix(value, "-") || strings.HasPrefix(value, "+") {
+		n, err := strconv.ParseInt(value, 10, 64)
+		return uint64(n), err
+	}
+	if strings.HasPrefix(value, "0x") || strings.HasPrefix(value, "0X") || (len(value) > 1 && value[0] == '0') {
+		return strconv.ParseUint(value, 0, 64)
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
+	return uint64(n), err
+}
+
+func unescapeMagicString(value string) ([]byte, error) {
+	out := make([]byte, 0, len(value))
+	for i := 0; i < len(value); i++ {
+		if value[i] != '\\' {
+			out = append(out, value[i])
+			continue
+		}
+		i++
+		if i == len(value) {
+			return nil, fmt.Errorf("trailing backslash in magic string")
+		}
+		if value[i] >= '0' && value[i] <= '7' {
+			end := i + 1
+			for end < len(value) && end < i+3 && value[end] >= '0' && value[end] <= '7' {
+				end++
+			}
+			n, _ := strconv.ParseUint(value[i:end], 8, 8)
+			out = append(out, byte(n))
+			i = end - 1
+			continue
+		}
+		escapes := map[byte]byte{'\\': '\\', 'a': '\a', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v', ' ': ' '}
+		b, ok := escapes[value[i]]
+		if !ok {
+			return nil, fmt.Errorf("unsupported magic escape \\%c", value[i])
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+func applyMagic(data []byte, tests []magicTest) (string, bool, error) {
+	for i := 0; i < len(tests); {
+		primary := tests[i]
+		i++
+		if primary.continuation {
+			continue
+		}
+		value, matched := primary.match(data)
+		if !matched {
+			for i < len(tests) && tests[i].continuation {
+				i++
+			}
+			continue
+		}
+		message, err := renderMagicMessage(primary.message, primary.messageArg(value))
+		if err != nil {
+			return "", false, err
+		}
+		for i < len(tests) && tests[i].continuation {
+			child := tests[i]
+			i++
+			if childValue, ok := child.match(data); ok {
+				part, err := renderMagicMessage(child.message, child.messageArg(childValue))
+				if err != nil {
+					return "", false, err
+				}
+				message += part
+			}
+		}
+		return message, true, nil
+	}
+	return "", false, nil
+}
+
+func (t magicTest) match(data []byte) (uint64, bool) {
+	if t.offset > uint64(len(data)) {
+		return 0, false
+	}
+	start := int(t.offset)
+	if t.typeSpec.stringValue {
+		end := start + len(t.stringValue)
+		return 0, end <= len(data) && bytes.Equal(data[start:end], t.stringValue)
+	}
+	end := start + t.typeSpec.size
+	if end > len(data) {
+		return 0, false
+	}
+	value := nativeUint(data[start:end])
+	if t.typeSpec.hasMask {
+		value &= t.typeSpec.mask
+	}
+	if t.comparison == 'x' {
+		return value, true
+	}
+	want := t.want & widthMask(t.typeSpec.size)
+	switch t.comparison {
+	case '=':
+		return value, value == want
+	case '<':
+		if t.typeSpec.signed {
+			return value, signExtend(value, t.typeSpec.size) < signExtend(want, t.typeSpec.size)
+		}
+		return value, value < want
+	case '>':
+		if t.typeSpec.signed {
+			return value, signExtend(value, t.typeSpec.size) > signExtend(want, t.typeSpec.size)
+		}
+		return value, value > want
+	case '&':
+		return value, value&want == want
+	case '^':
+		return value, value&want != want
+	default:
+		return value, false
+	}
+}
+
+func nativeUint(data []byte) uint64 {
+	var padded [8]byte
+	if binary.NativeEndian.Uint16([]byte{1, 0}) == 1 {
+		copy(padded[:], data)
+	} else {
+		copy(padded[8-len(data):], data)
+	}
+	return binary.NativeEndian.Uint64(padded[:])
+}
+
+func widthMask(size int) uint64 {
+	if size == 8 {
+		return ^uint64(0)
+	}
+	return uint64(1)<<(size*8) - 1
+}
+
+func signExtend(value uint64, size int) int64 {
+	shift := 64 - size*8
+	return int64(value<<shift) >> shift
+}
+
+type magicNumberArg struct {
+	value  uint64
+	size   int
+	signed bool
+}
+
+func (t magicTest) messageArg(value uint64) any {
+	if t.typeSpec.stringValue {
+		return string(t.stringValue)
+	}
+	return magicNumberArg{value: value, size: t.typeSpec.size, signed: t.typeSpec.signed}
+}
+
+func renderMagicMessage(message string, arg any) (string, error) {
+	var out strings.Builder
+	for i := 0; i < len(message); {
+		if message[i] != '%' {
+			out.WriteByte(message[i])
+			i++
+			continue
+		}
+		if i+1 < len(message) && message[i+1] == '%' {
+			out.WriteByte('%')
+			i += 2
+			continue
+		}
+		start := i
+		i++
+		for i < len(message) && strings.ContainsRune("#0- +", rune(message[i])) {
+			i++
+		}
+		for i < len(message) && message[i] >= '0' && message[i] <= '9' {
+			i++
+		}
+		if i < len(message) && message[i] == '.' {
+			i++
+			for i < len(message) && message[i] >= '0' && message[i] <= '9' {
+				i++
+			}
+		}
+		for i < len(message) && strings.ContainsRune("hljztL", rune(message[i])) {
+			i++
+		}
+		if i >= len(message) || !strings.ContainsRune("cdiouxXs", rune(message[i])) {
+			return "", fmt.Errorf("unsupported magic message format near %q", message[start:])
+		}
+		conv := message[i]
+		spec := message[start : i+1]
+		for _, modifier := range []string{"h", "l", "j", "z", "t", "L"} {
+			spec = strings.ReplaceAll(spec, modifier, "")
+		}
+		if conv == 'i' || conv == 'u' {
+			spec = spec[:len(spec)-1] + "d"
+		}
+		formatArg := arg
+		if number, ok := arg.(magicNumberArg); ok {
+			switch conv {
+			case 'd', 'i':
+				if number.signed {
+					formatArg = signExtend(number.value, number.size)
+				} else {
+					formatArg = number.value
+				}
+			case 'c':
+				formatArg = rune(number.value)
+			default:
+				formatArg = number.value
+			}
+		}
+		out.WriteString(fmt.Sprintf(spec, formatArg))
+		i++
+	}
+	return out.String(), nil
+}

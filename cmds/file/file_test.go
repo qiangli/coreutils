@@ -14,9 +14,13 @@ import (
 )
 
 func invoke(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
+	return invokeEnv(t, dir, stdin, []string{"LANG=C.UTF-8"}, args...)
+}
+
+func invokeEnv(t *testing.T, dir, stdin string, env []string, args ...string) (string, string, int) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb}}
+	rc := &tool.RunContext{Ctx: context.Background(), Dir: dir, Env: env, Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb}}
 	code := cmd.Run(rc, args)
 	return out.String(), errb.String(), code
 }
@@ -54,7 +58,7 @@ func TestPortableSignatures(t *testing.T) {
 		{"png", []byte("\x89PNG\r\n\x1a\nrest"), "PNG image data"}, {"jpeg", []byte("\xff\xd8\xff\xe0"), "JPEG image data"},
 		{"gif", []byte("GIF89a"), "GIF image data, version 89a"}, {"zip", []byte("PK\x03\x04"), "Zip archive data"},
 		{"gzip", []byte("\x1f\x8b\x08"), "gzip compressed data"}, {"pdf", []byte("%PDF-1.7\n"), "PDF document, version 1.7"},
-		{"elf", []byte{0x7f, 'E', 'L', 'F', 2, 1}, "ELF 64-bit LSB"}, {"script", []byte("#!/bin/sh\necho ok\n"), "/bin/sh script, text executable"},
+		{"elf", []byte{0x7f, 'E', 'L', 'F', 2, 1}, "ELF 64-bit LSB"}, {"script", []byte("#!/bin/sh\necho ok\n"), "/bin/sh commands text"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,13 +84,27 @@ func TestDirectorySymlinkAndFollow(t *testing.T) {
 	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink("absent", filepath.Join(dir, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("loop", filepath.Join(dir, "loop")); err != nil {
+		t.Fatal(err)
+	}
 	out, _, code := invoke(t, dir, "", "link")
-	if code != 0 || out != "link: symbolic link to target\n" {
+	if code != 0 || out != "link: ASCII text\n" {
 		t.Fatalf("link: %q code=%d", out, code)
 	}
-	out, _, code = invoke(t, dir, "", "-L", "link")
-	if code != 0 || out != "link: ASCII text\n" {
-		t.Fatalf("follow: %q code=%d", out, code)
+	out, _, code = invoke(t, dir, "", "-h", "link")
+	if code != 0 || out != "link: symbolic link to target\n" {
+		t.Fatalf("no-follow: %q code=%d", out, code)
+	}
+	out, _, code = invoke(t, dir, "", "dangling")
+	if code != 0 || out != "dangling: symbolic link to absent\n" {
+		t.Fatalf("dangling: %q code=%d", out, code)
+	}
+	out, errb, code := invoke(t, dir, "", "loop")
+	if code != 0 || errb != "" || !strings.Contains(out, "loop: cannot open") {
+		t.Fatalf("loop: out=%q err=%q code=%d", out, errb, code)
 	}
 	out, _, code = invoke(t, dir, "", "-b", ".")
 	if code != 0 || out != "directory\n" {
@@ -123,6 +141,119 @@ func TestAdditionalMagicFileFallsBackToBuiltins(t *testing.T) {
 	out, errb, code := invoke(t, dir, "", "-m", "magic", "source", "text")
 	if want := "source: custom-c-source\ntext: ASCII text\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("file -m = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+}
+
+func TestDefaultTestsAndMagicOptionOrder(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "png", []byte("\x89PNG\r\n\x1a\nrest"))
+	put(t, dir, "text", []byte("ordinary text\n"))
+	put(t, dir, "match", []byte("0 string \\211PNG custom png\n"))
+	put(t, dir, "miss", []byte("0 string NOPE custom\n"))
+	put(t, dir, "textmatch", []byte("0 string ordinary custom text\n"))
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"default-before-additional", []string{"-d", "-m", "match", "png"}, "png: PNG image data\n"},
+		{"context-default-is-deferred", []string{"-d", "-m", "textmatch", "text"}, "text: custom text\n"},
+		{"combined-default-before-additional", []string{"-dm", "match", "png"}, "png: PNG image data\n"},
+		{"additional-before-default", []string{"-m", "match", "-d", "png"}, "png: custom png\n"},
+		{"lone-additional-falls-through", []string{"-m", "miss", "png"}, "png: PNG image data\n"},
+		{"replacement-omits-all-defaults", []string{"-M", "miss", "text"}, "text: data\n"},
+		{"replacement-before-default", []string{"-M", "match", "-d", "png"}, "png: custom png\n"},
+		{"default-before-replacement", []string{"-d", "-M", "match", "png"}, "png: PNG image data\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errb, code := invoke(t, dir, "", tc.args...)
+			if out != tc.want || errb != "" || code != 0 {
+				t.Fatalf("file %v = (%q, %q, %d), want %q", tc.args, out, errb, code, tc.want)
+			}
+		})
+	}
+}
+
+func TestMinimalIdentification(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "empty", nil)
+	put(t, dir, "png", []byte("\x89PNG\r\n\x1a\n"))
+	out, errb, code := invoke(t, dir, "", "-i", "empty", "png", ".")
+	if want := "empty: regular file\npng: regular file\n.: directory\n"; out != want || errb != "" || code != 0 {
+		t.Fatalf("file -i = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	_, errb, code = invoke(t, dir, "", "-i", "-d", "empty")
+	if code != 2 || !strings.Contains(errb, "cannot be combined") {
+		t.Fatalf("file -i -d = (_, %q, %d)", errb, code)
+	}
+}
+
+func TestMagicGrammarComparisonsContinuationsAndFormatting(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "strings", []byte("hi there!"))
+	put(t, dir, "numeric", []byte{0xab, 201, 0xff, 7})
+	put(t, dir, "high", []byte{1, 201})
+	put(t, dir, "signed", []byte{1, 0, 0xff})
+	put(t, dir, "low", []byte{1, 9})
+	put(t, dir, "allbits", []byte{1, 20, 0, 7})
+	put(t, dir, "missingbit", []byte{1, 20, 0, 1})
+	put(t, dir, "continued", []byte("AB\x07"))
+	put(t, dir, "tabbed", []byte("ZZ"))
+	put(t, dir, "magic", []byte(strings.Join([]string{
+		"0x0 string hi\\ there string=%s",
+		"0 byte&0xf0 0xa0 masked=%u",
+		"1 u1 >200 high=%u",
+		"2 byte =-1 signed=%d",
+		"1 uC <10 low=%u",
+		"3 uC &0x05 allbits=%u",
+		"3 uC ^0x08 missingbit=%u",
+		"0\tstring\tZZ\t leading message",
+		"0 string AB root",
+		">02 byte x ; byte=%u",
+	}, "\n")+"\n"))
+
+	out, errb, code := invoke(t, dir, "", "-M", "magic", "strings", "numeric", "high", "signed", "low", "allbits", "missingbit", "continued", "tabbed")
+	want := "strings: string=hi there\nnumeric: masked=160\nhigh: high=201\nsigned: signed=-1\nlow: low=9\nallbits: allbits=7\nmissingbit: missingbit=1\ncontinued: root; byte=7\ntabbed:  leading message\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("portable magic = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+}
+
+func TestMagicFileErrorsAreDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "data", []byte("x"))
+	for _, tc := range []struct {
+		name, contents, diagnostic string
+	}{
+		{"bad-type", "0 float 1 nope\n", "unsupported magic type"},
+		{"orphan", ">0 byte 1 nope\n", "continuation has no preceding"},
+		{"bad-escape", "0 string \\q nope\n", "unsupported magic escape"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			put(t, dir, "magic", []byte(tc.contents))
+			out, errb, code := invoke(t, dir, "", "-M", "magic", "data")
+			if out != "" || code != 1 || !strings.Contains(errb, tc.diagnostic) || !strings.Contains(errb, "magic:1") {
+				t.Fatalf("file malformed magic = (%q, %q, %d)", out, errb, code)
+			}
+		})
+	}
+}
+
+func TestRequiredProgramTextAndRunContextLocale(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "shell", []byte("#!/bin/sh\necho ok\n"))
+	put(t, dir, "source.c", []byte("#include <stdio.h>\nint main(void) { return 0; }\n"))
+	put(t, dir, "utf8", []byte("héllo\n"))
+	out, errb, code := invokeEnv(t, dir, "", []string{"LANG=C.UTF-8", "LC_CTYPE=C", "LC_ALL=C.UTF-8"}, "shell", "source.c", "utf8")
+	want := "shell: /bin/sh commands text\nsource.c: c program text\nutf8: Unicode text, UTF-8 text\n"
+	if out != want || errb != "" || code != 0 {
+		t.Fatalf("UTF-8 locale = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	out, errb, code = invokeEnv(t, dir, "", []string{"LANG=C.UTF-8", "LC_CTYPE=C"}, "utf8")
+	if out != "utf8: data\n" || errb != "" || code != 0 {
+		t.Fatalf("LC_CTYPE override = (%q, %q, %d)", out, errb, code)
 	}
 }
 

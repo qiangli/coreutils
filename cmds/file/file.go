@@ -1,6 +1,6 @@
-// Package filecmd implements a small, deterministic, pure-Go subset of file(1).
-// It is a fresh implementation from public format specifications and command
-// documentation. Unknown binary formats are reported honestly as "data".
+// Package filecmd implements the POSIX file(1) core interface with a small,
+// deterministic built-in signature set. Unknown binary formats are reported
+// honestly as "data".
 package filecmd
 
 import (
@@ -9,24 +9,70 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
+	"github.com/spf13/pflag"
 )
 
-var cmd = &tool.Tool{Name: "file", Synopsis: "Determine the type of each FILE using a portable built-in signature set.", Usage: "file [OPTION]... FILE..."}
+var cmd = &tool.Tool{Name: "file", Synopsis: "Determine the type of each FILE.", Usage: "file [-dh] [-M FILE] [-m FILE] FILE...\n  or:  file -i [-h] FILE..."}
 
 func init() { cmd.Run = run; tool.Register(cmd) }
+
+type testSourceKind byte
+
+const (
+	defaultTests testSourceKind = iota
+	additionalMagic
+	replacementMagic
+)
+
+type testSource struct {
+	kind testSourceKind
+	name string
+}
+
+type orderedSourceValue struct {
+	sources    *[]testSource
+	kind       testSourceKind
+	noArgument bool
+}
+
+func (v orderedSourceValue) String() string {
+	if v.noArgument {
+		return "false"
+	}
+	return ""
+}
+func (v orderedSourceValue) Type() string {
+	if v.noArgument {
+		return "bool"
+	}
+	return "file"
+}
+func (v orderedSourceValue) Set(value string) error {
+	*v.sources = append(*v.sources, testSource{kind: v.kind, name: value})
+	return nil
+}
+
+func addSourceFlag(fs *pflag.FlagSet, sources *[]testSource, kind testSourceKind, name, shorthand, usage string, noArgument bool) {
+	fs.VarP(orderedSourceValue{sources: sources, kind: kind, noArgument: noArgument}, name, shorthand, usage)
+	if noArgument {
+		fs.Lookup(name).NoOptDefVal = "true"
+	}
+}
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	brief := fs.BoolP("brief", "b", false, "do not prepend file names to output lines")
-	follow := fs.BoolP("dereference", "L", false, "follow symbolic links")
-	fs.BoolP("no-dereference", "h", false, "do not follow symbolic links (default)")
-	var magicFiles []string
-	fs.StringArrayVarP(&magicFiles, "magic-file", "m", nil, "use FILE as an additional magic file")
+	follow := fs.BoolP("dereference", "L", false, "follow symbolic links (the POSIX default)")
+	noFollow := fs.BoolP("no-dereference", "h", false, "identify symbolic links instead of following them")
+	minimal := fs.BoolP("regular-file", "i", false, "identify regular files without classifying their contents")
+	var sources []testSource
+	addSourceFlag(fs, &sources, defaultTests, "default-tests", "d", "apply the default system tests at this position", true)
+	addSourceFlag(fs, &sources, replacementMagic, "replace-magic", "M", "apply position-sensitive tests from FILE without implicit defaults", false)
+	addSourceFlag(fs, &sources, additionalMagic, "magic-file", "m", "apply position-sensitive tests from FILE", false)
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -34,13 +80,17 @@ func run(rc *tool.RunContext, args []string) int {
 	if len(operands) == 0 {
 		return tool.UsageError(rc, cmd, "missing file operand")
 	}
-	magic, err := loadMagic(rc, magicFiles)
+	if *minimal && len(sources) != 0 {
+		return tool.UsageError(rc, cmd, "-i cannot be combined with -d, -M, or -m")
+	}
+
+	plan, err := loadTestPlan(rc, sources)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "file: %v\n", err)
 		return 1
 	}
 	for _, name := range operands {
-		typ, err := identify(rc, name, *follow || strings.HasSuffix(name, "/"), magic)
+		typ, err := identify(rc, name, *noFollow && !*follow, *minimal, plan)
 		if err != nil {
 			typ = fmt.Sprintf("cannot open %q (%v)", name, tool.SysErr(err))
 		}
@@ -53,29 +103,32 @@ func run(rc *tool.RunContext, args []string) int {
 	return 0
 }
 
-func identify(rc *tool.RunContext, name string, follow bool, magic []magicTest) (string, error) {
+func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan testPlan) (string, error) {
 	if name == "-" {
-		data, err := readPrefix(rc.In)
+		data, err := readContents(rc.In)
 		if err != nil {
 			return "", err
 		}
-		return classifyWithMagic(data, magic)
+		if minimal {
+			return "regular file", nil
+		}
+		return plan.classify(data, localeAllowsUTF8(rc))
 	}
+
 	path := rc.Path(name)
 	info, err := os.Lstat(path)
 	if err != nil {
 		return "", err
 	}
-	if info.Mode()&os.ModeSymlink != 0 && !follow {
-		target, err := os.Readlink(path)
-		if err != nil {
-			return "", err
+	if info.Mode()&os.ModeSymlink != 0 {
+		if noFollow {
+			return describeSymlink(path)
 		}
-		return fmt.Sprintf("symbolic link to %s", target), nil
-	}
-	if follow {
 		info, err = os.Stat(path)
 		if err != nil {
+			if os.IsNotExist(err) {
+				return describeSymlink(path)
+			}
 			return "", err
 		}
 	}
@@ -86,81 +139,42 @@ func identify(rc *tool.RunContext, name string, follow bool, magic []magicTest) 
 		return "fifo (named pipe)", nil
 	case info.Mode()&os.ModeSocket != 0:
 		return "socket", nil
-	case info.Mode()&os.ModeDevice != 0 && info.Mode()&os.ModeCharDevice != 0:
-		return specialDeviceType(info), nil
 	case info.Mode()&os.ModeDevice != 0:
 		return specialDeviceType(info), nil
 	case !info.Mode().IsRegular():
 		return "special file", nil
+	}
+	if minimal {
+		return "regular file", nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	data, err := readPrefix(f)
+	data, err := readContents(f)
 	if err != nil {
 		return "", err
 	}
-	return classifyWithMagic(data, magic)
+	return plan.classify(data, localeAllowsUTF8(rc))
 }
 
-type magicTest struct {
-	offset int
-	value  []byte
-	desc   string
-}
-
-func loadMagic(rc *tool.RunContext, names []string) ([]magicTest, error) {
-	var tests []magicTest
-	for _, name := range names {
-		data, err := os.ReadFile(rc.Path(name))
-		if err != nil {
-			return nil, fmt.Errorf("%s: %v", name, tool.SysErr(err))
-		}
-		for lineNo, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) < 4 || (fields[1] != "s" && fields[1] != "string") {
-				return nil, fmt.Errorf("%s:%d: unsupported magic test", name, lineNo+1)
-			}
-			offset, err := strconv.Atoi(fields[0])
-			if err != nil || offset < 0 {
-				return nil, fmt.Errorf("%s:%d: invalid magic offset", name, lineNo+1)
-			}
-			tests = append(tests, magicTest{offset: offset, value: []byte(fields[2]), desc: strings.Join(fields[3:], " ")})
-		}
+func describeSymlink(path string) (string, error) {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return "", err
 	}
-	return tests, nil
+	return "symbolic link to " + target, nil
 }
 
-func classifyWithMagic(data []byte, magic []magicTest) (string, error) {
-	for _, test := range magic {
-		end := test.offset + len(test.value)
-		if end <= len(data) && bytes.Equal(data[test.offset:end], test.value) {
-			return test.desc, nil
-		}
-	}
-	return classify(data, nil)
-}
-
-func readPrefix(r io.Reader) ([]byte, error) {
+func readContents(r io.Reader) ([]byte, error) {
 	if r == nil {
 		return nil, nil
 	}
-	return io.ReadAll(io.LimitReader(r, 64*1024))
+	return io.ReadAll(r)
 }
 
-func classify(data []byte, readErr error) (string, error) {
-	if readErr != nil {
-		return "", readErr
-	}
-	if len(data) == 0 {
-		return "empty", nil
-	}
+func classifyPosition(data []byte) (string, bool) {
 	if bytes.HasPrefix(data, []byte{0x7f, 'E', 'L', 'F'}) && len(data) >= 6 {
 		bits := map[byte]string{1: "32-bit", 2: "64-bit"}[data[4]]
 		if bits == "" {
@@ -182,23 +196,23 @@ func classify(data []byte, readErr error) (string, error) {
 				description += " executable"
 			}
 		}
-		return description, nil
+		return description, true
 	}
 	if len(data) >= 0x40 && data[0] == 'M' && data[1] == 'Z' {
 		off := int(binary.LittleEndian.Uint32(data[0x3c:0x40]))
 		if off >= 0 && off+4 <= len(data) && bytes.Equal(data[off:off+4], []byte("PE\x00\x00")) {
-			return "PE executable", nil
+			return "PE executable", true
 		}
-		return "DOS executable", nil
+		return "DOS executable", true
 	}
 	if len(data) >= 4 {
 		switch binary.BigEndian.Uint32(data[:4]) {
 		case 0xfeedface, 0xcefaedfe:
-			return "Mach-O 32-bit", nil
+			return "Mach-O 32-bit", true
 		case 0xfeedfacf, 0xcffaedfe:
-			return "Mach-O 64-bit", nil
+			return "Mach-O 64-bit", true
 		case 0xcafebabe, 0xbebafeca:
-			return "Mach-O universal binary", nil
+			return "Mach-O universal binary", true
 		}
 	}
 	for _, sig := range []struct {
@@ -214,16 +228,20 @@ func classify(data []byte, readErr error) (string, error) {
 		{[]byte("070707"), "ASCII cpio archive"},
 	} {
 		if bytes.HasPrefix(data, sig.prefix) {
-			return sig.typ, nil
+			return sig.typ, true
 		}
 	}
 	if bytes.HasPrefix(data, []byte("%PDF-")) {
 		version := strings.TrimSpace(string(data[5:min(len(data), 8)]))
-		return "PDF document, version " + version, nil
+		return "PDF document, version " + version, true
 	}
 	if len(data) >= 262 && bytes.Equal(data[257:262], []byte("ustar")) {
-		return "POSIX tar archive", nil
+		return "POSIX tar archive", true
 	}
+	return "", false
+}
+
+func classifyContext(data []byte, utf8Locale bool) string {
 	if bytes.HasPrefix(data, []byte("#!")) {
 		line := data[2:]
 		if i := bytes.IndexByte(line, '\n'); i >= 0 {
@@ -231,17 +249,55 @@ func classify(data []byte, readErr error) (string, error) {
 		}
 		interp := strings.TrimSpace(string(line))
 		if interp != "" && utf8.ValidString(interp) {
-			return interp + " script, text executable", nil
+			return interp + " commands text"
 		}
-		return "script, text executable", nil
+		return "commands text"
 	}
 	if isASCIIText(data) {
-		return "ASCII text", nil
+		text := string(data)
+		if looksLikeC(text) {
+			return "c program text"
+		}
+		return "ASCII text"
 	}
-	if utf8.Valid(data) && isText(data) {
-		return "Unicode text, UTF-8 text", nil
+	if utf8Locale && utf8.Valid(data) && isText(data) {
+		return "Unicode text, UTF-8 text"
 	}
-	return "data", nil
+	return "data"
+}
+
+func looksLikeC(text string) bool {
+	compact := strings.ReplaceAll(text, "\t", " ")
+	return strings.Contains(compact, "#include") ||
+		strings.Contains(compact, "int main(") || strings.Contains(compact, "int main (") ||
+		(strings.Contains(compact, "#define") && strings.Contains(compact, "{"))
+}
+
+func localeAllowsUTF8(rc *tool.RunContext) bool {
+	locale := rc.Getenv("LC_ALL")
+	if locale == "" {
+		locale = rc.Getenv("LC_CTYPE")
+	}
+	if locale == "" {
+		locale = rc.Getenv("LANG")
+	}
+	locale = strings.ToLower(locale)
+	return strings.Contains(locale, "utf-8") || strings.Contains(locale, "utf8")
+}
+
+// classify remains the direct built-in classifier used by focused signature
+// tests. An invocation uses testPlan.classify so option ordering is preserved.
+func classify(data []byte, readErr error) (string, error) {
+	if readErr != nil {
+		return "", readErr
+	}
+	if len(data) == 0 {
+		return "empty", nil
+	}
+	if typ, ok := classifyPosition(data); ok {
+		return typ, nil
+	}
+	return classifyContext(data, true), nil
 }
 
 func isASCIIText(data []byte) bool {
