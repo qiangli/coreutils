@@ -63,6 +63,7 @@ type config struct {
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	rc.ExitSignal = 0
 	fs := tool.NewFlags(cmd.Name)
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
@@ -222,25 +223,49 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func copyDD(rc *tool.RunContext, cfg config) int {
+	sigctx := newInterruptContext()
+	defer sigctx.Stop()
+	status := ddStatus{cfg: cfg}
 	var in io.Reader = rc.In
 	var inf *os.File
 	inputFIFO := false
 	if cfg.ifile != "" {
-		f, err := os.Open(rc.Path(cfg.ifile))
+		f, fifo, err := interruptibleOpenRead(rc.Path(cfg.ifile), sigctx)
 		if err != nil {
+			if errors.Is(err, errInterrupted) {
+				return finishInterrupted(rc, sigctx, &status)
+			}
 			fmt.Fprintf(rc.Err, "dd: failed to open '%s': %v\n", cfg.ifile, reason(err))
 			return 1
 		}
 		defer f.Close()
 		inf = f
+		inputFIFO = fifo
 		in = f
-		if fi, err := f.Stat(); err == nil {
-			inputFIFO = fi.Mode()&os.ModeNamedPipe != 0
+		if r, ok := newInterruptReader(f, sigctx, fifo); ok {
+			in = r
+			defer r.Close()
 		}
+	} else if r, ok := interruptibleReader(rc.In, sigctx); ok {
+		// rc.In belongs to the host: the wrapper only borrows it, and its Close
+		// restores the descriptor flags without closing the stream.
+		in = r
+		defer r.Close()
 	}
 	var out io.Writer = rc.Out
 	stdoutSeeker, stdoutSeekable := rc.Out.(io.Seeker)
 	var outf *os.File
+	var outw *interruptWriter
+	// An output file opened below is dd's own; close it on every exit path so
+	// an early return cannot leak the descriptor.
+	defer func() {
+		if outw != nil {
+			_ = outw.Close()
+		}
+		if outf != nil {
+			_ = outf.Close()
+		}
+	}()
 	outputFIFO := false
 	var seekBytes int64
 	if cfg.seek > 0 {
@@ -261,13 +286,29 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		// which supplies those blocks. For count=0 no write-side open is
 		// needed after the simulated seek.
 		if outputFIFO && cfg.seek > 0 {
-			f, err := os.Open(path)
+			f, _, err := interruptibleOpenRead(path, sigctx)
 			if err != nil {
+				if errors.Is(err, errInterrupted) {
+					return finishInterrupted(rc, sigctx, &status)
+				}
 				fmt.Fprintf(rc.Err, "dd: failed to open '%s': %v\n", cfg.ofile, reason(err))
 				return 1
 			}
-			_, err = io.CopyN(io.Discard, f, seekBytes)
+			var seekIn io.Reader = f
+			ir, wrapped := newInterruptReader(f, sigctx, true)
+			if wrapped {
+				seekIn = ir
+			}
+			_, err = io.CopyN(io.Discard, seekIn, seekBytes)
+			// Restore the descriptor flags before closing: a restore issued
+			// after the close could land on a reused descriptor number.
+			if wrapped {
+				_ = ir.Close()
+			}
 			closeErr := f.Close()
+			if errors.Is(err, errInterrupted) {
+				return finishInterrupted(rc, sigctx, &status)
+			}
 			if err != nil && !errors.Is(err, io.EOF) {
 				fmt.Fprintf(rc.Err, "dd: failed to seek '%s': %v\n", cfg.ofile, reason(err))
 				return 1
@@ -280,13 +321,20 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		if outputFIFO && cfg.count == 0 {
 			out = io.Discard
 		} else {
-			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
+			f, err := interruptibleOpenWrite(path, outputFIFO, sigctx)
 			if err != nil {
+				if errors.Is(err, errInterrupted) {
+					return finishInterrupted(rc, sigctx, &status)
+				}
 				fmt.Fprintf(rc.Err, "dd: failed to open '%s': %v\n", cfg.ofile, reason(err))
 				return 1
 			}
 			outf = f
 			out = f
+			if w, ok := newInterruptWriter(f, sigctx); ok {
+				outw = w
+				out = w
+			}
 		}
 		if outf != nil && !outputFIFO && !cfg.notrunc {
 			// POSIX: truncate at the seek offset, preserving the blocks
@@ -300,6 +348,12 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 				}
 			}
 		}
+	} else if w, ok := interruptibleWriter(rc.Out, sigctx); ok {
+		// rc.Out belongs to the host. Borrowing it makes a write that blocks —
+		// a pipe whose reader has stopped draining — cancellable by SIGINT;
+		// the wrapper hands the descriptor flags back exactly as it found them.
+		outw = w
+		out = w
 	}
 	if cfg.skip > 0 {
 		n, ok := multiplyBlocks(cfg.skip, cfg.ibs)
@@ -313,6 +367,9 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 				return 1
 			}
 		} else if _, err := io.CopyN(io.Discard, in, n); err != nil && !errors.Is(err, io.EOF) {
+			if errors.Is(err, errInterrupted) {
+				return finishInterrupted(rc, sigctx, &status)
+			}
 			fmt.Fprintf(rc.Err, "dd: error skipping input: %v\n", reason(err))
 			return 1
 		}
@@ -337,10 +394,12 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 	}
 
 	counter := &countWriter{w: out}
+	status.counter = counter
 	out = counter
 	var blocker *obsWriter
 	if cfg.reblock {
 		blocker = &obsWriter{w: out, obs: cfg.obs}
+		status.blocker = blocker
 		out = blocker
 	}
 	var blockConv *blockWriter
@@ -360,6 +419,7 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 				translate = &a2ibmPOSIX
 			}
 			blockConv = &blockWriter{w: out, record: conversionBuf[:0], width: len(conversionBuf), translate: translate}
+			status.blockConv = blockConv
 			out = blockConv
 		} else {
 			unblockConv = &unblockWriter{w: out, record: conversionBuf[:0], width: len(conversionBuf)}
@@ -371,16 +431,20 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 		fmt.Fprintf(rc.Err, "dd: input buffer: %v\n", err)
 		return 1
 	}
-	var full, partial int64
-	var outFull, outPartial int64
 	var hadReadError bool
-	for cfg.count < 0 || full+partial < cfg.count {
+	for cfg.count < 0 || status.full+status.partial < cfg.count {
+		if sigctx.Interrupted() {
+			return finishInterrupted(rc, sigctx, &status)
+		}
 		n, rerr := readInputBlock(in, buf, cfg.fullblock)
+		if errors.Is(rerr, errInterrupted) {
+			return finishInterrupted(rc, sigctx, &status)
+		}
 		if n > 0 {
 			if int64(n) == cfg.ibs {
-				full++
+				status.full++
 			} else {
-				partial++
+				status.partial++
 			}
 			if cfg.sync && int64(n) < cfg.ibs {
 				// POSIX conv=sync pads each input record before any output
@@ -392,14 +456,17 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 			data := buf[:n]
 			convertBytes(data, cfg)
 			if err := writeAll(out, data); err != nil {
+				if errors.Is(err, errInterrupted) {
+					return finishInterrupted(rc, sigctx, &status)
+				}
 				fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
 				return 1
 			}
 			if blocker == nil {
 				if int64(n) == cfg.obs {
-					outFull++
+					status.outFull++
 				} else {
-					outPartial++
+					status.outPartial++
 				}
 			}
 		}
@@ -417,11 +484,14 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 					padInputBlock(buf, 0, cfg)
 					convertBytes(buf, cfg)
 					if err := writeAll(out, buf); err != nil {
+						if errors.Is(err, errInterrupted) {
+							return finishInterrupted(rc, sigctx, &status)
+						}
 						fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
 						return 1
 					}
 					if blocker == nil {
-						outFull++
+						status.outFull++
 					}
 				}
 				// A Reader that reports an error without data has made no
@@ -434,7 +504,7 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 						return 1
 					}
 					if cfg.sync {
-						full++
+						status.full++
 					}
 					continue
 				}
@@ -450,52 +520,130 @@ func copyDD(rc *tool.RunContext, cfg config) int {
 	}
 	if blockConv != nil {
 		if err := blockConv.Flush(); err != nil {
+			if errors.Is(err, errInterrupted) {
+				return finishInterrupted(rc, sigctx, &status)
+			}
 			fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
 			return 1
 		}
 	}
 	if unblockConv != nil {
 		if err := unblockConv.Flush(); err != nil {
+			if errors.Is(err, errInterrupted) {
+				return finishInterrupted(rc, sigctx, &status)
+			}
 			fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
 			return 1
 		}
 	}
 	if blocker != nil {
 		if err := blocker.Flush(); err != nil {
+			if errors.Is(err, errInterrupted) {
+				return finishInterrupted(rc, sigctx, &status)
+			}
 			fmt.Fprintf(rc.Err, "dd: error writing output: %v\n", reason(err))
 			return 1
 		}
-		outFull, outPartial = blocker.full, blocker.partial
+		status.outFull, status.outPartial = blocker.full, blocker.partial
 	}
 	if outf != nil {
+		// Restore descriptor flags first: a restore issued after the close
+		// could land on a descriptor number the process has already reused.
+		if outw != nil {
+			_ = outw.Close()
+			outw = nil
+		}
 		if err := outf.Close(); err != nil {
 			fmt.Fprintf(rc.Err, "dd: error closing '%s': %v\n", cfg.ofile, reason(err))
 			return 1
 		}
 		outf = nil
 	}
-	if cfg.status == "none" {
-		if hadReadError {
-			return 1
-		}
-		return 0
+	if blockConv != nil {
+		status.truncated = blockConv.truncated
 	}
-	fmt.Fprintf(rc.Err, "%d+%d records in\n", full, partial)
-	fmt.Fprintf(rc.Err, "%d+%d records out\n", outFull, outPartial)
-	if blockConv != nil && blockConv.truncated > 0 {
-		suffix := "s"
-		if blockConv.truncated == 1 {
-			suffix = ""
-		}
-		fmt.Fprintf(rc.Err, "%d truncated record%s\n", blockConv.truncated, suffix)
+	if sigctx.Interrupted() {
+		return finishInterrupted(rc, sigctx, &status)
 	}
-	if cfg.status != "noxfer" {
-		fmt.Fprintf(rc.Err, "%d bytes copied\n", counter.n)
+	if err := emitStatus(rc.Err, &status); err != nil {
+		fmt.Fprintf(rc.Err, "dd: error writing status: %v\n", reason(err))
+		return 1
+	}
+	// Stop is the normal-completion boundary. It drains a SIGINT already sent
+	// to dd before returning, so a signal/EOF race cannot silently report 0;
+	// status was already emitted once, so only set the exit result here.
+	sigctx.Stop()
+	if sigctx.Interrupted() {
+		return interruptedExitCode(rc, sigctx)
 	}
 	if hadReadError {
 		return 1
 	}
 	return 0
+}
+
+type ddStatus struct {
+	cfg                 config
+	counter             *countWriter
+	full, partial       int64
+	outFull, outPartial int64
+	truncated           int64
+	blockConv           *blockWriter
+	blocker             *obsWriter
+}
+
+func finishInterrupted(rc *tool.RunContext, sigctx *interruptContext, status *ddStatus) int {
+	code := interruptedExitCode(rc, sigctx)
+	if status.blockConv != nil {
+		status.truncated = status.blockConv.truncated
+	}
+	if status.blocker != nil {
+		// conv-reblocked output records are counted by the re-blocker, not by
+		// the copy loop, so the interrupted report has to read them from it
+		// exactly as the normal completion path does.
+		status.outFull, status.outPartial = status.blocker.full, status.blocker.partial
+	}
+	_ = emitStatus(rc.Err, status)
+	return code
+}
+
+func interruptedExitCode(rc *tool.RunContext, sigctx *interruptContext) int {
+	rc.ExitSignal = sigctx.Signal()
+	if rc.ExitSignal == 0 {
+		rc.ExitSignal = interruptSignalNumber()
+	}
+	return 128 + rc.ExitSignal
+}
+
+func emitStatus(w io.Writer, status *ddStatus) error {
+	if status.cfg.status == "none" {
+		return nil
+	}
+	if _, err := fmt.Fprintf(w, "%d+%d records in\n", status.full, status.partial); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%d+%d records out\n", status.outFull, status.outPartial); err != nil {
+		return err
+	}
+	if status.truncated > 0 {
+		suffix := "s"
+		if status.truncated == 1 {
+			suffix = ""
+		}
+		if _, err := fmt.Fprintf(w, "%d truncated record%s\n", status.truncated, suffix); err != nil {
+			return err
+		}
+	}
+	if status.cfg.status != "noxfer" {
+		var n int64
+		if status.counter != nil {
+			n = status.counter.n
+		}
+		if _, err := fmt.Fprintf(w, "%d bytes copied\n", n); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func padInputBlock(buf []byte, n int, cfg config) {

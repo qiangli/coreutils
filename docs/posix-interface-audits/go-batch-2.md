@@ -128,10 +128,14 @@ Uppercase `K`, `M`, `m`, `w`, IEC/SI suffixes, `iflag=fullblock`, and
 `status=none|noxfer` are GNU extensions, not POSIX evidence.
 
 Exit 0/>0 and the required records-in/records-out lines are implemented and
-tested. Three implementation gaps remain: XSI `conv=ascii|ebcdic|ibm` is
-rejected loudly; SIGINT receives no required special handling (POSIX requires
-current status followed by termination as SIGINT); and default stderr appends
-a non-POSIX `N bytes copied` transfer line after the required status lines.
+tested. XSI `conv=ascii|ebcdic|ibm` is implemented. SIGINT emits current status
+once and preserves signal termination at the standalone boundary; descriptor
+waits remain cancellable under input and output backpressure. The remaining
+status-format gap is that default stderr appends a non-POSIX `N bytes copied`
+transfer line after the required status lines. Interruptible pathname-based
+FIFO input is exact on Linux; Darwin refuses it immediately with an explicit
+unsupported diagnostic because XNU cannot reveal a writer transition lost
+before the first read.
 Environment: `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, and XSI `NLSPATH`.
 Locale-directed `lcase`/`ucase` and translated messages/catalog lookup are
 unimplemented — implementation_gap. Evidence: `cmds/dd/dd.go`;
@@ -142,9 +146,10 @@ unimplemented — implementation_gap. Evidence: `cmds/dd/dd.go`;
 `#TestDdBlockAndUnblockConversions`,
 `#TestDdSyncPadsEachShortInputRecordBeforeReblocking`,
 `#TestDdCopiesFileWithStatusNone`, `#TestDdErrors`,
-`#TestDdSyncWithBsCountsPaddedOutputRecord`. Status: **partial**; the cited
-operand/copy/status machinery is verified, while EBCDIC, SIGINT, default
-stderr, and locale gaps remain.
+`#TestDdSyncWithBsCountsPaddedOutputRecord`, and the signal/FIFO tests in
+`cmds/dd/dd_signal_unix_test.go`. Status: **partial**; the cited
+operand/copy/status/SIGINT machinery is verified, while the default transfer
+line, Darwin pathname-FIFO boundary, and locale gaps remain.
 
 ## df
 

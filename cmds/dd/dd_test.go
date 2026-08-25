@@ -613,3 +613,17 @@ func TestDdDetectsShortWrites(t *testing.T) {
 		t.Fatalf("writeAll error=%v want %v", err, io.ErrShortWrite)
 	}
 }
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+
+func TestDdReportsStatusWriteErrors(t *testing.T) {
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: io.Discard, Err: failingWriter{}},
+	}
+	if code := cmd.Run(rc, []string{"count=0"}); code != 1 {
+		t.Fatalf("code=%d want 1", code)
+	}
+}

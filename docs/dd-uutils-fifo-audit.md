@@ -18,3 +18,30 @@ No other FIFO or named-pipe construction occurs in the pinned file. Only the
 observed `conv=sync` case is quarantined. Every regression uses a subprocess
 deadline, nonblocking writer-open/write loops, and kill/wait cleanup so a
 future early parser exit cannot strand the test process.
+
+## SIGINT and platform boundary
+
+`dd` makes descriptor reads and writes nonblocking only while it owns the copy,
+waits for readiness together with a SIGINT self-pipe, and restores the original
+flags of stdin/stdout descriptors borrowed from `RunContext`. On SIGINT it emits
+the current record status once, returns 130 to embedded callers, and asks the
+standalone multicall boundary to terminate with SIGINT so the process wait
+status is `WIFSIGNALED` rather than a normal exit code.
+
+Linux named-FIFO input uses an `O_NONBLOCK` read descriptor and a poll state
+machine. Linux retains `POLLHUP` when a writer opens and closes before the first
+read; `TestDdLinuxFIFOImmediateWriterOpenCloseBeforeFirstReadStress` exercises
+that exact transition 500 times without sleeps. The unlink/rename plus SIGINT
+regression also checks that no descriptor or goroutine survives the command.
+
+Darwin/XNU does not expose that already-finished writer transition after a
+nonblocking read open. A cancellable blocking `open(2)` cannot be released
+safely after the FIFO pathname is unlinked or renamed, so pathname-based FIFO
+input is deliberately refused rather than approximated. It exits 1 immediately
+with the deterministic diagnostic:
+
+```text
+dd: failed to open 'NAME': interruptible named FIFO input is not supported on darwin
+```
+
+Regular files, anonymous streams, and FIFO output remain supported on Darwin.
