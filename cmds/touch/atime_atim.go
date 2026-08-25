@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build aix || dragonfly || openbsd || solaris
 
 package touchcmd
 
@@ -8,10 +8,9 @@ import (
 	"time"
 )
 
-// statAtime extracts the access time for -r on darwin.
 func statAtime(fi os.FileInfo) (time.Time, bool) {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return time.Unix(st.Atimespec.Sec, st.Atimespec.Nsec), true
+		return time.Unix(int64(st.Atim.Sec), int64(st.Atim.Nsec)), true
 	}
 	return time.Time{}, false
 }

@@ -30,7 +30,11 @@ func latime(t *testing.T, path string) time.Time {
 	if err != nil {
 		t.Fatalf("lstat %s: %v", path, err)
 	}
-	return statAtime(fi)
+	got, ok := statAtime(fi)
+	if !ok {
+		t.Skip("access timestamps are not exposed on this platform")
+	}
+	return got
 }
 
 // symlinkDir builds dir/target (timed at targetTime) plus dir/link -> target.

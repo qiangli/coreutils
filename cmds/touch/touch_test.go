@@ -45,7 +45,48 @@ func atime(t *testing.T, path string) time.Time {
 	if err != nil {
 		t.Fatalf("stat %s: %v", path, err)
 	}
-	return statAtime(fi)
+	got, ok := statAtime(fi)
+	if !ok {
+		t.Skip("access timestamps are not exposed on this platform")
+	}
+	return got
+}
+
+func TestTouchReferenceAtimeUnavailableFailsOnlyWhenNeeded(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref")
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(ref, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2011, 2, 3, 4, 5, 6, 0, time.Local)
+	if err := os.Chtimes(ref, want.Add(-time.Hour), want); err != nil {
+		t.Fatal(err)
+	}
+
+	old := referenceAtime
+	referenceAtime = func(os.FileInfo) (time.Time, bool) { return time.Time{}, false }
+	t.Cleanup(func() { referenceAtime = old })
+
+	// -m needs only the reference mtime and therefore remains supported.
+	if _, errb, code := runTool(t, dir, "-m", "-r", "ref", "target"); code != 0 || errb != "" {
+		t.Fatalf("touch -m -r without atime support: code=%d err=%q", code, errb)
+	}
+	if got := mtime(t, target); got.Unix() != want.Unix() {
+		t.Fatalf("target mtime=%v, want reference mtime %v", got, want)
+	}
+
+	// The default and -a forms need the real reference atime. Approximating it
+	// with mtime used to report a false success on unsupported targets.
+	for _, args := range [][]string{{"-r", "ref", "target"}, {"-a", "-r", "ref", "target"}} {
+		_, errb, code := runTool(t, dir, args...)
+		if code != 1 || !strings.Contains(errb, "access time") || !strings.Contains(errb, "unsupported") {
+			t.Errorf("touch %v: code=%d err=%q, want explicit unsupported-atime failure", args, code, errb)
+		}
+	}
 }
 
 func TestTouchCreates(t *testing.T) {

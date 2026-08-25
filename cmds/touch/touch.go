@@ -30,6 +30,11 @@ var cmd = &tool.Tool{
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
+// referenceAtime is a platform seam for the access timestamp used by -r. Some
+// Go targets do not expose a supported stat field; false means the access-only
+// reference form must fail loudly instead of substituting mtime.
+var referenceAtime = statAtime
+
 type prescanned struct {
 	atime bool
 	mtime bool
@@ -161,6 +166,8 @@ func run(rc *tool.RunContext, args []string) int {
 	loc := touchLocation(rc)
 	now := time.Now().In(loc)
 	atime, mtime := now, now
+	changeA := pre.atime || !pre.mtime
+	changeM := pre.mtime || !pre.atime
 	// useNow records that no explicit time source (-r/-t/-d) was given, so the
 	// changed timestamps must be set to the current time. POSIX requires this
 	// form to work for anyone with write permission (like utime(path, NULL));
@@ -180,7 +187,15 @@ func run(rc *tool.RunContext, args []string) int {
 			fmt.Fprintf(rc.Err, "touch: failed to get attributes of '%s': %v\n", *ref, reason(err))
 			return 1
 		}
-		atime, mtime = statAtime(fi), fi.ModTime()
+		mtime = fi.ModTime()
+		if changeA {
+			var ok bool
+			atime, ok = referenceAtime(fi)
+			if !ok {
+				fmt.Fprintf(rc.Err, "touch: cannot use access time of '%s': unsupported on this platform\n", *ref)
+				return 1
+			}
+		}
 		useNow = false
 	case pre.tSeen:
 		t, err := parseStamp(pre.stamp, now)
@@ -199,9 +214,6 @@ func run(rc *tool.RunContext, args []string) int {
 		atime, mtime = t, t
 		useNow = false
 	}
-
-	changeA := pre.atime || !pre.mtime
-	changeM := pre.mtime || !pre.atime
 
 	exit := 0
 	for _, name := range operands {

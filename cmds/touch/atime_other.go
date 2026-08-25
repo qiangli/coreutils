@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !windows
+//go:build !linux && !darwin && !windows && !freebsd && !netbsd && !aix && !dragonfly && !openbsd && !solaris
 
 package touchcmd
 
@@ -7,8 +7,9 @@ import (
 	"time"
 )
 
-// statAtime falls back to the modification time on platforms where the
-// raw stat shape is not wired up.
-func statAtime(fi os.FileInfo) time.Time {
-	return fi.ModTime()
+// statAtime fails closed on platforms whose raw stat shape is not wired up.
+// Returning mtime here would make `touch -a -r` report success while installing
+// the wrong timestamp, which violates the command's upstream meaning.
+func statAtime(os.FileInfo) (time.Time, bool) {
+	return time.Time{}, false
 }
