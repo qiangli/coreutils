@@ -2,20 +2,21 @@
 
 This is the consolidated Sprint 79 status for the command interfaces selected
 by Profiles C and D.  The normative target is POSIX.1-2016 (Issue 7), not GNU
-Coreutils compatibility.  The source snapshot is coreutils `c048634` and the
-inputs are the six accepted Go batch audits
+Coreutils compatibility.  The report was initially synthesized at coreutils
+`c048634` and is now a living status view reconciled with accepted evidence
+closures.  Its inputs are the six accepted Go batch audits
 ([1](go-batch-1.md), [2](go-batch-2.md), [3](go-batch-3.md),
 [4](go-batch-4.md), [5](go-batch-5.md), [6](go-batch-6.md)), the accepted
 [shell-selected audit](shell-selected.md),
 [`posix-required-commands.tsv`](../posix-required-commands.tsv), and the
 generated [interface ledger](../posix-required-command-interfaces.tsv).
 
-This report is a status view, not an evidence promotion.  It does not modify
-the ledger: at this snapshot its 116 rows remain 78 Go-owned, 22 shell-owned,
-and 16 external-provider-owned; 114 are `unverified` and only `pr` and `xargs`
-are `partial`.  An audit's “supportable pass” or “verified” finding therefore
-does not become certification evidence until a separate stable test reference
-and ledger promotion are accepted.
+The canonical ledger remains the authority: its 116 rows are 78 Go-owned, 22
+shell-owned, and 16 external-provider-owned.  After the first two Go closure
+batches and the five-command shell semantic batch, its evidence states are
+**2 verified, 25 partial, and 89 unverified**.  An audit's “supportable pass”
+finding does not become certification evidence until a stable command-specific
+test reference and a separate ledger promotion are accepted.
 
 ## Exact in-scope inventory
 
@@ -170,16 +171,20 @@ same-name Go applets remain relevant only to exec-style callers such as `env`,
 The accepted Profile B authority is the complete 9,337/9,337 GNU Bash
 5.3/Bashy remote pair; the targeted ARM `fc` pair also completed 53/53.  These
 are differential and routing evidence, not clause-complete POSIX evidence.
-Accordingly every shell-selected row remains `evidence_gap`:
+The five-command semantic closure batch added stable tests for `alias`, `echo`,
+`false`, `true`, and `unalias`, and fixed strict-POSIX `echo` option parsing.
+`false` and `true` are verified; the other three are conservatively partial:
 
 | Commands | Selected route | Profile B evidence and remaining scope |
 | --- | --- | --- |
 | `sh` (245 TPs), `test` (207), `printf` (67) | entrypoint; builtin; builtin-over-Go | Critical-yield surfaces; aggregate parity does not prove their grammar, expression, formatting, locale, diagnostic, and status matrices. |
 | `cd` (45), `command` (37), `fc` (28), `umask` (27) | shell builtins | Targeted fixes/pairs exist (`fc` 53/53), but no command has clause-complete stable shell evidence. |
 | `kill` (18) | builtin-over-Go | `kill:TP9` and `kill_NE:TP8` fail identically in A/B and are shared suite/environment results, not Bashy defects; the shell timing fix is already integrated in the shell repository as `031d47e2`. |
-| `bg` (17), `pwd` (17), `read` (13), `alias` (13), `wait` (13), `fg` (12), `hash` (12), `getopts` (10), `unalias` (8), `jobs` (0) | shell builtins (`pwd` overlaps Go) | Source and targeted tests exist, but interactive/job, state, lookup, assignment, and diagnostic clauses are not closed.  `jobs` has zero likely testable TPs, not a waived interface. |
+| `bg` (17), `pwd` (17), `read` (13), `wait` (13), `fg` (12), `hash` (12), `getopts` (10), `jobs` (0) | shell builtins (`pwd` overlaps Go) | Source and targeted tests exist, but interactive/job, state, lookup, assignment, and diagnostic clauses are not closed.  `jobs` has zero likely testable TPs, not a waived interface. |
+| `alias` (13), `unalias` (8) | shell builtins | Focused definition/query/removal, scope, status, error, and stream evidence exists; locale-sensitive diagnostics and all parser-timing consequences remain open, so both are partial. |
 | `time` (16) | shell keyword-over-Go | Keyword routing is established; output, signal, status, ambiguity, and locale evidence is incomplete. |
-| `echo` (12), `false` (7), `true` (6) | builtins-over-Go | `_NE` capability dispositions are not positive interface evidence, including for the otherwise trivial `false`/`true` surfaces. |
+| `echo` (12) | builtin-over-Go | Focused base/XSI, stream, status, and output-error evidence exists and a strict-POSIX option bug is fixed; the Profile D XSI feature-selection and locale branches remain open, so it is partial. |
+| `false` (7), `true` (6) | builtins-over-Go | Complete status-only interfaces have independent semantic and routing evidence and are verified. |
 
 This table accounts for all 22 names exactly once.  The detailed per-command
 synopsis, route, sources, and evidence limits remain authoritative in the

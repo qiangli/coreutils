@@ -18,8 +18,8 @@ that ledger or its generator.
   promotion in the canonical ledger.  Routing can prove that the shell wins
   over a same-name Go applet, but it cannot substitute for command behavior;
   source presence, focused Go-applet tests, and an aggregate differential
-  result are not sufficient.  No command in this 22-name batch currently meets
-  that bar.
+  result are not sufficient.  `false` and `true` now meet that bar; the other
+  20 commands remain partial or unverified.
 - **implementation_gap** means source or retained Profile B results identify a
   Bashy-only behavior that still needs a code correction in the Bashy shell/job
   runtime (not a same-name Go applet).  A defect that fails **identically** in
@@ -152,16 +152,16 @@ executes.  `time` remains correctly classified as `shell_keyword`.
 | 16 | `fg` | evidence_gap | 12 (medium) | Conditional interactive/job-control surface lacks complete PTY evidence. |
 | 17 | `hash` | evidence_gap | 12 (medium) | Prior three-identity closure plus unit tests do not cover every Issue 7 effect. |
 | 18 | `getopts` | evidence_gap | 10 (medium) | TP6 was fixed; OPTIND/OPTARG/error-mode matrix remains incomplete. |
-| 19 | `unalias` | evidence_gap | 8 (low) | Prior TP4 retired without a clause-complete evidence record. |
-| 20 | `false` | evidence_gap | 7 (low) | Interface is trivial and source/tests cover it, but no stable `sh:` evidence ID is cited and the ledger is not promoted. |
-| 21 | `true` | evidence_gap | 6 (low) | Interface is trivial and source/tests cover it, but no stable `sh:` evidence ID is cited and the ledger is not promoted. |
+| 19 | `unalias` | evidence_gap | 8 (low) | Focused semantic and routing evidence now exists, but locale and full parse-timing coverage remain open; ledger state is partial. |
+| 20 | `false` | verified | 7 (low) | Complete no-option/no-operand/status-only interface has focused semantic and routing evidence. |
+| 21 | `true` | verified | 6 (low) | Complete no-option/no-operand/status-only interface has focused semantic and routing evidence. |
 | 22 | `jobs` | evidence_gap | 0 (low) | Suite yield is zero, but the conditional standard interface still exists. |
 
 ## Command audits
 
 ### `alias` — evidence_gap, medium (13)
 
-Normative interface: [`alias [alias-name[=string]...]`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/alias.html), no options; operands query or define aliases, and no operands lists all aliases in reusable form.  Bash 5.3 uses `builtins/alias.def`; Bashy uses `builtin.go`'s `alias` case and its parser-time alias table.  Profile B previously exposed listing write failure (`alias:TP20`); shell commit `d4fe7f7e` and `interp` broken-pipe tests address that point.  The public ledger still has no `sh:` evidence ID for the full substitution, quoting, listing, diagnostics, and status contract.
+Normative interface: [`alias [alias-name[=string]...]`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/alias.html), no options; operands query or define aliases, and no operands lists all aliases in reusable form.  Bash 5.3 uses `builtins/alias.def`; Bashy uses `builtin.go`'s `alias` case and its parser-time alias table.  Profile B previously exposed listing write failure (`alias:TP20`); shell commit `d4fe7f7e` and `interp` broken-pipe tests address that point.  `TestAliasIssue7Interface` now covers definition, replacement, query/list quoting and order, trailing-blank substitution, subshell/invocation scope, missing-name continuation, write failure, and stdin preservation.  The ledger is conservatively partial until locale-sensitive diagnostics and every parser-timing boundary are closed.
 
 ### `bg` — evidence_gap, medium (17)
 
@@ -177,11 +177,11 @@ Normative interface: [`command [-p] command_name [argument...]` and `command [-p
 
 ### `echo` — evidence_gap, medium (12)
 
-Normative base interface: [`echo [string...]`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/echo.html), no options, and `--` is an operand.  If the first operand is `-n` or any operand contains `\\`, base POSIX makes results implementation-defined; XSI additionally defines `\\a \\b \\c \\f \\n \\r \\t \\v \\\\ \\0num`.  Bash 5.3 uses `builtins/echo.def`; Bashy uses `builtin.go`'s `echo` case.  The `_NE` capability results do not establish either the base-defined region or the conditional XSI escapes, and no command-complete shell evidence is recorded.
+Normative base interface: [`echo [string...]`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/echo.html), no options, and `--` is an operand.  If the first operand is `-n` or any operand contains `\\`, base POSIX makes results implementation-defined; XSI additionally defines `\\a \\b \\c \\f \\n \\r \\t \\v \\\\ \\0num`.  Bash 5.3 uses `builtins/echo.def`; Bashy uses `builtin.go`'s `echo` case.  `TestEchoIssue7Interface` exposed and fixed a strict-POSIX defect where `-e`, `-E`, and combined option-like operands were incorrectly consumed as Bash options.  It now covers the defined base region, the documented `-n` choice, conditional XSI escapes, output errors, and stdin preservation.  The ledger remains partial because the Profile D XSI feature-selection contract and locale-sensitive branch still need independent closure.
 
-### `false` — evidence_gap, low (7)
+### `false` — verified, low (7)
 
-Normative interface: [`false`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/false.html), no options or operands, no output, exit status greater than zero.  Bash 5.3 uses `builtins/colon.def`; Bashy dispatches `false` directly to status 1 in `builtin.go`.  Focused interpreter cases cover bare and extra-argument extension behavior and status propagation.  The staged Go `false` remains necessary for exec-style use, but direct Profile C/D shell calls select the builtin.  The interface is trivial and the source/tests are convincing, yet no stable `sh:<path>#<TestID>` reference is cited for the selected shell path and the canonical ledger is not promoted; per the verdict rules this stays an evidence gap, not `verified`, until both a shell evidence ID is recorded and a separate ledger promotion is made.
+Normative interface: [`false`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/false.html), no options or operands, no output, exit status greater than zero.  Bash 5.3 uses `builtins/colon.def`; Bashy dispatches `false` directly to status 1 in `builtin.go`.  `TestFalseIssue7Interface` proves silent non-zero status and that stdin and environment are unused; `TestProfileBRouteFalse` independently proves the selected Profile B/D route.  The staged Go `false` remains necessary for exec-style use, but direct shell calls select the builtin.  The canonical ledger is therefore promoted to verified.
 
 ### `fc` — evidence_gap, high (28)
 
@@ -231,9 +231,9 @@ Normative interfaces: [`test [expression]` and `[ [expression] ]`](https://pubs.
 
 Normative interface: [`time [-p] utility [argument...]`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/time.html); `-p` is required, PATH selects the utility, timing output goes to standard error in the required portable format, and the result normally follows the utility status.  Bash 5.3 owns this in `parse.y`/`execute_cmd.c` (`CMD_TIME_POSIX`); Bashy owns it in `syntax.TimeClause` and runner timing code.  The parser and formatting tests prove selected cases, but no full shell evidence covers keyword ambiguity, utility-not-found/status, signal, locale, and output requirements.
 
-### `true` — evidence_gap, low (6)
+### `true` — verified, low (6)
 
-Normative interface: [`true`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/true.html), no options or operands, no output, exit status zero.  Bash 5.3 uses `builtins/colon.def`; Bashy dispatches `true` as a no-op success in `builtin.go`.  Focused interpreter cases cover bare and extra-argument extension behavior and status propagation.  As with `false`, the staged Go applet backs exec-style calls only.  The interface is trivial and the source/tests are convincing, yet no stable `sh:<path>#<TestID>` reference is cited for the selected shell path and the canonical ledger is not promoted; per the verdict rules this stays an evidence gap, not `verified`, until both a shell evidence ID is recorded and a separate ledger promotion is made.
+Normative interface: [`true`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/true.html), no options or operands, no output, exit status zero.  Bash 5.3 uses `builtins/colon.def`; Bashy dispatches `true` as a no-op success in `builtin.go`.  `TestTrueIssue7Interface` proves silent zero status and that stdin and environment are unused; `TestProfileBRouteTrue` independently proves the selected Profile B/D route.  The staged Go applet backs exec-style calls only.  The canonical ledger is therefore promoted to verified.
 
 ### `umask` — evidence_gap, high (27)
 
@@ -241,7 +241,7 @@ Normative interface: [`umask [-S] [mask]`](https://pubs.opengroup.org/onlinepubs
 
 ### `unalias` — evidence_gap, low (8)
 
-Normative interfaces: [`unalias alias-name...` and `unalias -a`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unalias.html); `-a` is required, and removal affects the current shell's subsequent parsing.  Bash 5.3 shares `builtins/alias.def`; Bashy uses `builtin.go`'s alias table.  Historical `TP4` is retired in matched current controls without a code change, but the full missing-name, `-a`, parse-timing, diagnostics, and status surface has no focused shell evidence ID.
+Normative interfaces: [`unalias alias-name...` and `unalias -a`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unalias.html); `-a` is required, and removal affects the current shell's subsequent parsing.  Bash 5.3 shares `builtins/alias.def`; Bashy uses `builtin.go`'s alias table.  `TestUnaliasIssue7Interface` now covers multiple operands, `-a`, `--`, missing-name continuation, missing operands, invalid options, status, and stdin preservation.  The ledger is partial until locale-sensitive diagnostics and all parse-timing consequences are independently closed.
 
 ### `wait` — evidence_gap, medium (13)
 
@@ -252,15 +252,13 @@ Normative interface: [`wait [pid...]`](https://pubs.opengroup.org/onlinepubs/969
 The highest-value next batch is shell-owned, not Go-applet work: add stable
 semantic `sh:<path>#<TestID>` references and independent command-specific
 `bashy:<approved-path>#<TestID>` routing references for `sh`, `test`, `printf`,
-`cd`, and `command` (and, to enable their promotion out of evidence_gap, for
-the trivial `true`/`false` interfaces).  The `kill` job-carrier correction is
+`cd`, and `command`.  The trivial `true`/`false` interfaces are now verified,
+and `alias`/`echo`/`unalias` have focused partial evidence.  The `kill` job-carrier correction is
 already integrated (`54c05236` is patch-equivalent to the shipped `031d47e2`), so **no
 reintegration or re-measurement is requested**; the residual `kill:TP9`/`TP8`
 are shared A/B results to attribute in the suite/environment, not code to
 change.  The targeted ARM `fc` control/candidate pair is already complete at
 53/53, so **no duplicate rerun is requested** either.  The ledger's `sh`
 parser-model reconciliation is already complete in `fe6f45d`.  Only after
-those focused results cover stdout, stderr,
-status, environment and shell effects should the canonical evidence ledger be
-updated by its owner.  This audit intentionally
-does not edit that TSV or generator.
+those focused results cover stdout, stderr, status, environment and shell
+effects should the canonical evidence ledger be promoted further.

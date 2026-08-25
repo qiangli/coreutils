@@ -16,9 +16,9 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Go | 78 |
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
-| Evidence | Verified | 0 |
-| Evidence | Partial | 22 |
-| Evidence | Unverified | 94 |
+| Evidence | Verified | 2 |
+| Evidence | Partial | 25 |
+| Evidence | Unverified | 89 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -42,7 +42,7 @@ operand set; `-` in those normative slots means missing data. Likewise, paired
 
 ## `alias`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -58,21 +58,21 @@ alias [alias-name[=string]...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `alias-name; alias-name=string`. UNVERIFIED
+**Operands:** `alias-name; alias-name=string`. With no operands, write every alias definition in a form suitable for re-entry; alias-name=string defines or replaces an alias and alias-name alone queries it; process operands in order and retain successful definitions or output when another query fails.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** A trailing blank in an alias replacement causes the next command word to be checked for alias substitution; -- ends option parsing in this implementation.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write requested or all alias definitions in reusable quoted form, one per line; no output is required when only definitions are made.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages, including an undefined queried name or standard-output failure.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Defines or replaces aliases in the current shell execution environment; definitions are inherited by a subshell but changes made in a subshell do not alter the parent, and definitions do not cross separate shell invocations.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when every requested operation succeeds; greater than 0 when a queried name is undefined or output fails.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -84,7 +84,7 @@ alias [alias-name[=string]...]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteAlias`; provider=`-`; clauses=`XCU:alias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestAliasIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteAlias`; provider=`-`; clauses=`XCU:alias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [alias](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/alias.html).
 
@@ -1414,7 +1414,7 @@ du [-a|-s] [-kx] [-H|-L] [file...]
 
 ## `echo`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -1430,7 +1430,7 @@ echo [string...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `string; \a; \b; \c; \f; \n; \r; \t; \v; \\; \0num`. Zero or more string operands are separated by one space in output; XSI escape sequences in operands are interpreted.
+**Operands:** `string; \a; \b; \c; \f; \n; \r; \t; \v; \\; \0num`. Zero or more string operands are separated by one space in output; base behavior is implementation-defined when the first operand is -n or any operand contains a backslash, while the XSI option defines the listed escape sequences.
 
 **Special tokens:** The operand -- is data: echo does not recognize it as the Guideline 10 end-of-options delimiter. A lone - is also a string operand.
 
@@ -1440,9 +1440,9 @@ echo [string...]
 
 **Standard output:** Write the string operands separated by single spaces and followed by a newline; with no operands, write only a newline. XSI escape processing can suppress that newline with \c.
 
-**Standard error:** Used only for diagnostic messages.
+**Standard error:** Used only for diagnostic messages, including a standard-output failure.
 
-**Effects:** `stdout_only`.
+**Effects:** `Writes only to standard output and does not consume standard input or modify files.`.
 
 **Exit status:** 0 for successful completion; greater than 0 if an error occurs.
 
@@ -1456,7 +1456,7 @@ echo [string...]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteEcho`; provider=`-`; clauses=`XCU:echo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestEchoIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteEcho`; provider=`-`; clauses=`XCU:echo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [echo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/echo.html).
 
@@ -1702,7 +1702,7 @@ expr operand...
 
 ## `false`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `verified`.
 
 **Applicability:** `base`.
 
@@ -1720,7 +1720,7 @@ false
 
 **Operands:** `none`. No operands are specified.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** NONE
 
 **Standard input:** Not used.
 
@@ -1730,7 +1730,7 @@ false
 
 **Standard error:** Not used.
 
-**Effects:** `status_only`.
+**Effects:** `Changes no state, consumes no input, and produces no output; only the exit status is observable.`.
 
 **Exit status:** Always greater than 0.
 
@@ -1744,7 +1744,7 @@ false
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteFalse`; provider=`-`; clauses=`XCU:false:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestFalseIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteFalse`; provider=`-`; clauses=`XCU:false:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [false](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/false.html).
 
@@ -4910,7 +4910,7 @@ tr -ds [-c|-C] string1 string2
 
 ## `true`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `verified`.
 
 **Applicability:** `base`.
 
@@ -4928,7 +4928,7 @@ true
 
 **Operands:** `none`. No operands are specified.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** NONE
 
 **Standard input:** Not used.
 
@@ -4938,7 +4938,7 @@ true
 
 **Standard error:** Not used.
 
-**Effects:** `status_only`.
+**Effects:** `Changes no state, consumes no input, and produces no output; only the exit status is observable.`.
 
 **Exit status:** Always 0.
 
@@ -4952,7 +4952,7 @@ true
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTrue`; provider=`-`; clauses=`XCU:true:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestTrueIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTrue`; provider=`-`; clauses=`XCU:true:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [true](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/true.html).
 
@@ -5102,7 +5102,7 @@ umask [-S] [mask]
 
 ## `unalias`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -5119,21 +5119,21 @@ unalias -a
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `alias-name`. UNVERIFIED
+**Operands:** `alias-name`. With alias-name operands, remove each named alias in order; -a removes every alias in the current shell execution environment; an undefined name is diagnosed and does not restore aliases already removed.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing in this implementation, allowing an alias name beginning with - to be selected as an operand.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages, including an undefined alias name or invalid invocation.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Removes selected aliases or all aliases from the current shell execution environment; a removal in a subshell does not alter the parent.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all requested aliases are removed; greater than 0 for an undefined name, missing operand, invalid option, or other error.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -5145,7 +5145,7 @@ unalias -a
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteUnalias`; provider=`-`; clauses=`XCU:unalias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestUnaliasIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteUnalias`; provider=`-`; clauses=`XCU:unalias:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [unalias](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/unalias.html).
 

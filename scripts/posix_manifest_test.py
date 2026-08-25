@@ -96,13 +96,13 @@ class ManifestValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(manifest.ManifestError, "heading count/order"):
             manifest.validate_rendered(damaged, self.rows)
         self.assertEqual(len(re.findall(r"^## `[^`]+`$", rendered, re.MULTILINE)), 116)
-        self.assertIn("| Evidence | Verified | 0 |", rendered)
-        self.assertIn("| Evidence | Partial | 22 |", rendered)
-        self.assertIn("| Evidence | Unverified | 94 |", rendered)
+        self.assertIn("| Evidence | Verified | 2 |", rendered)
+        self.assertIn("| Evidence | Partial | 25 |", rendered)
+        self.assertIn("| Evidence | Unverified | 89 |", rendered)
 
     def test_completion_fails_closed_while_any_row_is_unverified(self) -> None:
         errors = manifest.completion_errors(self.rows)
-        self.assertTrue(any(error == "alias: state=unverified" for error in errors))
+        self.assertTrue(any(error == "bg: state=unverified" for error in errors))
         with (
             mock.patch.object(sys, "argv", [str(SCRIPT), "--require-complete"]),
             self.assertRaisesRegex(SystemExit, "completion blocked"),
@@ -127,7 +127,7 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertFalse(
             any(error.split(":", 1)[0] in provider_names for error in owned_errors)
         )
-        self.assertTrue(any(error == "alias: state=unverified" for error in owned_errors))
+        self.assertTrue(any(error == "bg: state=unverified" for error in owned_errors))
         self.assertTrue(any(error == "xargs: state=partial" for error in owned_errors))
         with (
             mock.patch.object(
@@ -297,10 +297,11 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_routing_evidence_cannot_substitute_for_shell_semantics(self) -> None:
         rows = self.changed(
-            "true",
+            "bg",
             evidence_state="partial",
+            shell_evidence="-",
             shell_routing_evidence=(
-                "bashy:internal/cli/posix_routing_test.go#TestTrueShellRouting"
+                "bashy:internal/cli/posix_routing_test.go#TestBgShellRouting"
             ),
         )
         with mock.patch.object(
@@ -309,22 +310,22 @@ class ManifestValidationTest(unittest.TestCase):
             self.assertRejected(rows, "partial state requires focused semantic evidence")
 
     def test_verified_shell_row_requires_both_semantic_and_routing_lanes(self) -> None:
-        semantic = "sh:interp/posix_true_test.go#TestTrueIssue7Interface"
+        semantic = "sh:interp/posix_bg_test.go#TestBgIssue7Interface"
         routing = (
-            "bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTrue"
+            "bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteBg"
         )
-        changes = self.completed_semantics("true")
+        changes = self.completed_semantics("bg")
         changes.update(
             evidence_state="verified", shell_evidence=semantic,
             shell_routing_evidence="-",
         )
         with mock.patch.object(manifest, "_shell_evidence_ref", return_value=True):
             self.assertRejected(
-                self.changed("true", **changes),
+                self.changed("bg", **changes),
                 "focused shell routing evidence",
             )
 
-        changes = self.completed_semantics("true")
+        changes = self.completed_semantics("bg")
         changes.update(
             evidence_state="verified",
             shell_routing_evidence=routing,
@@ -333,7 +334,7 @@ class ManifestValidationTest(unittest.TestCase):
             manifest, "_shell_routing_evidence_ref", return_value=True,
         ):
             self.assertRejected(
-                self.changed("true", **changes),
+                self.changed("bg", **changes),
                 "focused behavioral evidence",
             )
 
@@ -345,7 +346,7 @@ class ManifestValidationTest(unittest.TestCase):
             ),
         ):
             manifest.validate(
-                self.changed("true", **changes),
+                self.changed("bg", **changes),
                 self.providers,
                 self.packages,
                 self.flagsets,
@@ -354,9 +355,9 @@ class ManifestValidationTest(unittest.TestCase):
     def test_unavailable_shell_routing_reference_is_rejected_even_unverified(self) -> None:
         self.assertRejected(
             self.changed(
-                "true",
+                "bg",
                 shell_routing_evidence=(
-                    "bashy:internal/cli/not_present_test.go#TestTrueShellRouting"
+                    "bashy:internal/cli/not_present_test.go#TestBgShellRouting"
                 ),
             ),
             "shell routing evidence is unavailable or unfocused",
@@ -446,7 +447,7 @@ class ManifestValidationTest(unittest.TestCase):
 
     def test_state_laundering_is_rejected(self) -> None:
         self.assertRejected(
-            self.changed("true", evidence_state="verified"),
+            self.changed("bg", evidence_state="verified"),
             "verified state launders",
         )
 
