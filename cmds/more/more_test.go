@@ -178,6 +178,29 @@ func TestMoreRejectsBadLineCounts(t *testing.T) {
 	}
 }
 
+func TestMoreValidatesLineCountsBeforeOpeningTTY(t *testing.T) {
+	origOpen := openTTY
+	opens, closes := 0, 0
+	openTTY = func(*tool.RunContext) (*ttyChannel, error) {
+		opens++
+		return &ttyChannel{
+			readCommand: func(context.Context) (byte, error) { return 'q', nil },
+			close:       func() error { closes++; return nil },
+		}, nil
+	}
+	t.Cleanup(func() { openTTY = origOpen })
+
+	for _, args := range [][]string{{"-n=-1"}, {"--number=-1"}, {"-F", "0"}} {
+		_, errb, code := runMore(t, t.TempDir(), "", args...)
+		if code != 2 || !strings.Contains(errb, "invalid") {
+			t.Fatalf("more %v: code=%d err=%q", args, code, errb)
+		}
+	}
+	if opens != 0 || closes != 0 {
+		t.Fatalf("invalid values opened/closed controlling terminal %d/%d times; want 0/0", opens, closes)
+	}
+}
+
 func TestMoreNonTerminalIgnoresFAndP(t *testing.T) {
 	// -F and -P should be ignored when output is non-terminal.
 	out, errb, code := runMoreNonTerminal(t, t.TempDir(), "alpha\nbeta\ngamma\n", "-F", "2", "-P", "bet")

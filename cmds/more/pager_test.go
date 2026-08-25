@@ -153,6 +153,36 @@ type failPromptWriter struct {
 	fail bool
 }
 
+type shortPromptWriter struct {
+	bytes.Buffer
+	short bool
+}
+
+func (w *shortPromptWriter) Write(p []byte) (int, error) {
+	if w.short && bytes.Contains(p, []byte("--More--")) {
+		w.short = false
+		return w.Buffer.Write(p[:len(p)-1])
+	}
+	return w.Buffer.Write(p)
+}
+
+func (w *shortPromptWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+func TestPagerShortPromptWriteReturnsBeforeRead(t *testing.T) {
+	var out bytes.Buffer
+	errOut := &shortPromptWriter{short: true}
+	reads := 0
+	tty := commandTTY("q")
+	tty.readCommand = func(context.Context) (byte, error) { reads++; return 'q', nil }
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader("x\ny\n"), Out: &out, Err: errOut}}
+	withPagerTTY(t, rc.Out, tty, 2, 80)
+	if code := run(rc, nil); code == 0 || reads != 0 || !strings.Contains(errOut.String(), io.ErrShortWrite.Error()) {
+		t.Fatalf("code=%d reads=%d err=%q", code, reads, errOut.String())
+	}
+}
+
 func (w *failPromptWriter) Write(p []byte) (int, error) {
 	if w.fail && bytes.Contains(p, []byte("--More--")) {
 		w.fail = false
@@ -228,6 +258,33 @@ func TestPagerPreservesBytesLongLinesAndSqueeze(t *testing.T) {
 	want := bytes.Replace(input, []byte("\n\n\n"), []byte("\n\n"), 1)
 	if !bytes.Equal(out.Bytes(), want) {
 		t.Fatalf("byte preservation: got %d bytes want %d", out.Len(), len(want))
+	}
+}
+
+func TestPagerPromptsBeforeLongLineEntersNextDisplayRow(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input string
+	}{
+		{name: "byte", input: "abcdef\n"},
+		{name: "tab", input: "abcde\tz\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			reads := 0
+			contentAtRead := ""
+			tty := commandTTY("q")
+			tty.readCommand = func(context.Context) (byte, error) {
+				reads++
+				contentAtRead = out.String()
+				return 'q', nil
+			}
+			rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: strings.NewReader(tt.input), Out: &out, Err: &errOut}}
+			withPagerTTY(t, rc.Out, tty, 2, 5)
+			if code := run(rc, []string{"-e"}); code != 0 || reads != 1 || contentAtRead != "abcde" || out.String() != "abcde" {
+				t.Fatalf("code=%d reads=%d contentAtRead=%q out=%q err=%q", code, reads, contentAtRead, out.String(), errOut.String())
+			}
+		})
 	}
 }
 

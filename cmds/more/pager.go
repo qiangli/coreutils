@@ -240,6 +240,28 @@ func (p *pager) emitByte(b byte) bool {
 	if p.canceled() {
 		return false
 	}
+
+	nextCol := p.col
+	wraps := 0
+	switch {
+	case b == '\t':
+		nextCol += 8 - nextCol%8
+	case b == '\n', b == '\b' && !p.o.plain, b == '\r' && !p.o.plain:
+		// These bytes do not advance into another display row.
+	default:
+		nextCol++
+	}
+	for nextCol > p.o.width {
+		wraps++
+		nextCol -= p.o.width
+	}
+	if wraps != 0 {
+		p.linesPrinted += wraps
+		if p.linesPrinted >= p.o.screenful && !p.prompt("--More--") {
+			return false
+		}
+	}
+
 	if err := p.out.WriteByte(b); err != nil {
 		return p.fail("write error: %v", err)
 	}
@@ -252,26 +274,17 @@ func (p *pager) emitByte(b byte) bool {
 	case b == '\r' && !p.o.plain:
 		p.col = 0
 	case b == '\t':
-		p.col += 8 - p.col%8
-		p.accountWrap()
+		p.col = nextCol
 	case b == '\n':
 		p.linesPrinted++
 		p.col = 0
 	default:
-		p.col++
-		p.accountWrap()
+		p.col = nextCol
 	}
 	if p.linesPrinted >= p.o.screenful && !p.prompt("--More--") {
 		return false
 	}
 	return true
-}
-
-func (p *pager) accountWrap() {
-	for p.col > p.o.width {
-		p.linesPrinted++
-		p.col -= p.o.width
-	}
 }
 
 func flushWriter(w io.Writer) error {
@@ -282,8 +295,12 @@ func flushWriter(w io.Writer) error {
 }
 
 func (p *pager) writeUI(s string) bool {
-	if _, err := io.WriteString(p.rc.Err, s); err != nil {
+	n, err := io.WriteString(p.rc.Err, s)
+	if err != nil {
 		return p.fail("terminal write error: %v", err)
+	}
+	if n != len(s) {
+		return p.fail("terminal write error: %v", io.ErrShortWrite)
 	}
 	if err := flushWriter(p.rc.Err); err != nil {
 		return p.fail("terminal flush error: %v", err)
