@@ -30,6 +30,8 @@ func (f *fakeRunner) Run(ctx context.Context, agent string, args []string, cwd s
 }
 
 func TestInvokeEmitsNestedTier1SpansWithoutContent(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
 	const promptSecret = "PROMPT_SECRET_sk-live-callsite"
 	const completionSecret = "COMPLETION_SECRET_ghp_callsite"
 
@@ -89,6 +91,8 @@ func TestBuildPromptIncludesContext(t *testing.T) {
 }
 
 func TestInvokeUsesSeededHeadlessContract(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
 	r := &fakeRunner{}
 	res, err := Invoke(context.Background(), Options{
 		Agent:       "codex",
@@ -110,6 +114,8 @@ func TestInvokeUsesSeededHeadlessContract(t *testing.T) {
 }
 
 func TestInvokeCanOverrideCodexSandbox(t *testing.T) {
+	permitUnsafeLaunch(t)
+	pinCatalog(t)
 	// A non-danger sandbox override sets --sandbox <value>.
 	r := &fakeRunner{}
 	_, err := Invoke(context.Background(), Options{
