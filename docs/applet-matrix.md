@@ -200,7 +200,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `unlink` | `cmds/unlink` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `uptime` | `cmds/uptime` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `users` | `cmds/users` | — | GNU Coreutils | yes | no | 1 | 1 |
-| `uudecode` | `cmds/uudecode` | — | POSIX/Unix utility | no | yes | 2 | 19 |
+| `uudecode` | `cmds/uudecode` | — | POSIX/Unix utility | no | yes | 2 | 20 |
 | `uuencode` | `cmds/uuencode` | — | POSIX/Unix utility | no | yes | 1 | 7 |
 | `vdir` | `cmds/vdir` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `vi` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
