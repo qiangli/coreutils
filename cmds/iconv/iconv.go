@@ -7,7 +7,8 @@
 // EUC-JP, Big5, GBK, and GB18030. A registered charset for which x/text has no
 // implementation is rejected rather than approximated. POSIX -c omits input
 // characters that cannot be converted (invalid in the input codeset or with no
-// representation in the output codeset) instead of failing. When -f or -t is
+// representation in the output codeset), while preserving the conversion's
+// non-zero status as POSIX requires. When -f or -t is
 // omitted the codeset of the current locale (LC_CTYPE, defaulting to the
 // POSIX-locale US-ASCII) is used, per the Issue 7 synopsis. Suffixes such as
 // //IGNORE or //TRANSLIT are explicitly rejected.
@@ -107,9 +108,8 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 		return 0
 	}
-	// POSIX leaves the result undefined when both -f and -t are omitted. This
-	// implementation fails closed instead of guessing that an accidental bare
-	// invocation meant a locale-to-itself copy.
+	// No POSIX synopsis permits both -f and -t to be omitted. Fail as a usage
+	// error instead of guessing that a bare invocation meant a locale copy.
 	if !fs.Changed("from-code") && !fs.Changed("to-code") {
 		return tool.UsageError(rc, cmd, "at least one of -f FROMCODE or -t TOCODE is required")
 	}
@@ -155,9 +155,10 @@ func run(rc *tool.RunContext, args []string) int {
 	// (bytes invalid in the input codeset), and on the encode side dropInvalid
 	// omits runes with no representation in the output codeset, which is the
 	// path that actually errors.
+	discarded := &discardState{}
 	newEncoder := func() transform.Transformer {
 		if *discardInvalid {
-			return dropInvalid{to.NewEncoder()}
+			return dropInvalid{t: to.NewEncoder(), discarded: discarded}
 		}
 		return to.NewEncoder()
 	}
@@ -165,20 +166,20 @@ func run(rc *tool.RunContext, args []string) int {
 		if *discardInvalid {
 			switch encodingClass(fromCode) {
 			case "utf8":
-				return transform.Chain(discardInvalidUTF8{}, from.NewDecoder())
+				return transform.Chain(discardInvalidUTF8{discarded}, from.NewDecoder())
 			case "utf16":
-				return transform.Chain(&discardInvalidUTF16{}, from.NewDecoder())
+				return transform.Chain(&discardInvalidUTF16{discarded: discarded}, from.NewDecoder())
 			case "utf16be":
-				return transform.Chain(&discardInvalidUTF16{order: byteOrderBE, fixed: true}, from.NewDecoder())
+				return transform.Chain(&discardInvalidUTF16{order: byteOrderBE, fixed: true, discarded: discarded}, from.NewDecoder())
 			case "utf16le":
-				return transform.Chain(&discardInvalidUTF16{order: byteOrderLE, fixed: true}, from.NewDecoder())
+				return transform.Chain(&discardInvalidUTF16{order: byteOrderLE, fixed: true, discarded: discarded}, from.NewDecoder())
 			case "gb18030":
-				return &discardInvalidGB18030Decoder{enc: from}
+				return &discardInvalidGB18030Decoder{enc: from, discarded: discarded}
 			default:
 				// These carried encodings cannot represent U+FFFD. Therefore any
 				// replacement rune emitted by their lenient decoder necessarily
 				// denotes malformed source input, not a literal character.
-				return transform.Chain(from.NewDecoder(), dropReplacement{})
+				return transform.Chain(from.NewDecoder(), dropReplacement{discarded})
 			}
 		}
 		return from.NewDecoder()
@@ -220,6 +221,13 @@ func run(rc *tool.RunContext, args []string) int {
 		if trackedOut.err != nil || !*silent {
 			fmt.Fprintf(rc.Err, "iconv: write error: %v\n", err)
 		}
+		status = 1
+	}
+	// POSIX says that the presence or absence of -c shall not affect iconv's
+	// exit status. Omitted characters therefore still make the conversion
+	// unsuccessful even though -c permits conversion to continue and controls
+	// which bytes reach stdout.
+	if discarded.any {
 		status = 1
 	}
 	return status
@@ -279,7 +287,8 @@ func encodingClass(name string) string {
 // decoder's UTF-8 output) and by one byte otherwise (the decode side, whose
 // input is arbitrary bytes), so progress is always guaranteed.
 type dropInvalid struct {
-	t transform.Transformer
+	t         transform.Transformer
+	discarded *discardState
 }
 
 func (d dropInvalid) Reset() { d.t.Reset() }
@@ -307,29 +316,34 @@ func (d dropInvalid) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err
 				size = 1
 			}
 			nSrc += size
+			d.discarded.any = true
 		}
 	}
 }
 
+type discardState struct{ any bool }
+
 // discardInvalidUTF8 omits only malformed UTF-8 encodings. In particular, a
 // valid literal U+FFFD (EF BF BD) passes through unchanged; filtering decoded
 // replacement runes cannot make that distinction.
-type discardInvalidUTF8 struct{}
+type discardInvalidUTF8 struct{ discarded *discardState }
 
 func (discardInvalidUTF8) Reset() {}
 
-func (discardInvalidUTF8) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
+func (d discardInvalidUTF8) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
 	for nSrc < len(src) {
 		if !utf8.FullRune(src[nSrc:]) {
 			if !atEOF {
 				return nDst, nSrc, transform.ErrShortSrc
 			}
 			nSrc++ // incomplete trailing encoding
+			d.discarded.any = true
 			continue
 		}
 		_, size := utf8.DecodeRune(src[nSrc:])
 		if size == 1 && src[nSrc] >= utf8.RuneSelf {
 			nSrc++ // malformed encoding, not a literal RuneError
+			d.discarded.any = true
 			continue
 		}
 		if nDst+size > len(dst) {
@@ -355,8 +369,9 @@ const (
 // UTF-16BE/LE. Invalid or incomplete surrogate units are omitted while valid
 // U+FFFD units are preserved.
 type discardInvalidUTF16 struct {
-	order byteOrder
-	fixed bool
+	order     byteOrder
+	fixed     bool
+	discarded *discardState
 }
 
 func (d *discardInvalidUTF16) Reset() {
@@ -372,6 +387,7 @@ func (d *discardInvalidUTF16) Transform(dst, src []byte, atEOF bool) (nDst, nSrc
 			if !atEOF {
 				return 0, 0, transform.ErrShortSrc
 			}
+			d.discarded.any = len(src) != 0
 			return 0, len(src), nil
 		}
 		switch {
@@ -405,6 +421,7 @@ func (d *discardInvalidUTF16) Transform(dst, src []byte, atEOF bool) (nDst, nSrc
 			if !atEOF {
 				return nDst, nSrc, transform.ErrShortSrc
 			}
+			d.discarded.any = true
 			return nDst, len(src), nil
 		}
 		u := unit(src[nSrc:])
@@ -415,16 +432,19 @@ func (d *discardInvalidUTF16) Transform(dst, src []byte, atEOF bool) (nDst, nSrc
 					return nDst, nSrc, transform.ErrShortSrc
 				}
 				nSrc += 2
+				d.discarded.any = true
 				continue
 			}
 			lo := unit(src[nSrc+2:])
 			if lo < 0xdc00 || lo > 0xdfff {
 				nSrc += 2
+				d.discarded.any = true
 				continue
 			}
 			size = 4
 		} else if u >= 0xdc00 && u <= 0xdfff {
 			nSrc += 2
+			d.discarded.any = true
 			continue
 		}
 		if nDst+size > len(dst) {
@@ -440,7 +460,10 @@ func (d *discardInvalidUTF16) Transform(dst, src []byte, atEOF bool) (nDst, nSrc
 // discardInvalidGB18030Decoder decodes one stateless GB18030 character at a
 // time. That lets it distinguish a genuine encoded U+FFFD from an undefined
 // code point that x/text's lenient decoder also renders as U+FFFD.
-type discardInvalidGB18030Decoder struct{ enc encoding.Encoding }
+type discardInvalidGB18030Decoder struct {
+	enc       encoding.Encoding
+	discarded *discardState
+}
 
 func (d *discardInvalidGB18030Decoder) Reset() {}
 
@@ -457,6 +480,7 @@ func (d *discardInvalidGB18030Decoder) Transform(dst, src []byte, atEOF bool) (n
 					return nDst, nSrc, transform.ErrShortSrc
 				}
 				nSrc++
+				d.discarded.any = true
 				continue
 			}
 			b2 := src[nSrc+1]
@@ -478,6 +502,7 @@ func (d *discardInvalidGB18030Decoder) Transform(dst, src []byte, atEOF bool) (n
 		}
 		if size == 0 {
 			nSrc++
+			d.discarded.any = true
 			continue
 		}
 		var decoded [utf8.UTFMax]byte
@@ -487,6 +512,7 @@ func (d *discardInvalidGB18030Decoder) Transform(dst, src []byte, atEOF bool) (n
 				consumed = 1
 			}
 			nSrc += consumed
+			d.discarded.any = true
 			continue
 		}
 		if nDst+n > len(dst) {
@@ -503,11 +529,11 @@ func (d *discardInvalidGB18030Decoder) Transform(dst, src []byte, atEOF bool) (n
 // omits the replacement characters the (lenient) decoder emitted for bytes that
 // were invalid in the input codeset, so those bytes are omitted from the output
 // rather than surviving as U+FFFD when the output codeset can represent it.
-type dropReplacement struct{}
+type dropReplacement struct{ discarded *discardState }
 
 func (dropReplacement) Reset() {}
 
-func (dropReplacement) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
+func (d dropReplacement) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
 	for nSrc < len(src) {
 		if !atEOF && !utf8.FullRune(src[nSrc:]) {
 			return nDst, nSrc, transform.ErrShortSrc
@@ -515,6 +541,7 @@ func (dropReplacement) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, e
 		r, size := utf8.DecodeRune(src[nSrc:])
 		if r == utf8.RuneError { // both real U+FFFD and stray invalid bytes
 			nSrc += size
+			d.discarded.any = true
 			continue
 		}
 		if nDst+size > len(dst) {

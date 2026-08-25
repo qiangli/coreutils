@@ -96,19 +96,26 @@ func TestUnsupportedEncodingFailsLoudly(t *testing.T) {
 	}
 }
 
-// POSIX -c: omit input characters that cannot be converted instead of failing.
+// POSIX -c omits invalid input characters while preserving the conversion's
+// non-zero status; -s controls only the corresponding diagnostic.
 func TestDiscardInvalidOmitsUntranslatableCharacters(t *testing.T) {
 	// A byte invalid in the input codeset (0xff is not valid UTF-8) is dropped;
-	// the surrounding valid text still converts and the exit status is success.
+	// the surrounding valid text still converts. POSIX explicitly says -c must
+	// not alter the exit status, so conversion loss remains non-zero.
 	code, out, errout := invoke(t, "a"+string([]byte{0xff})+"b", "-c", "-f", "UTF-8", "-t", "UTF-8")
-	if code != 0 || errout != "" || string(out) != "ab" {
+	if code != 1 || errout != "" || string(out) != "ab" {
 		t.Fatalf("invalid input: code=%d out=%q err=%q", code, string(out), errout)
 	}
 	// A character with no representation in the output codeset (€ is not in
-	// ISO-8859-1) is likewise omitted, not an error.
+	// ISO-8859-1) is likewise omitted while retaining non-zero status.
 	code, out, errout = invoke(t, "a€b", "-c", "-f", "UTF-8", "-t", "ISO-8859-1")
-	if code != 0 || errout != "" || string(out) != "ab" {
+	if code != 1 || errout != "" || string(out) != "ab" {
 		t.Fatalf("unrepresentable output: code=%d out=%q err=%q", code, string(out), errout)
+	}
+	// -s cannot launder that status either.
+	code, out, errout = invoke(t, "a"+string([]byte{0xff})+"b", "-c", "-s", "-f", "UTF-8", "-t", "UTF-8")
+	if code != 1 || errout != "" || string(out) != "ab" {
+		t.Fatalf("-c -s status: code=%d out=%q err=%q", code, string(out), errout)
 	}
 	// Without -c the same unrepresentable input is a loud failure.
 	code, _, errout = invoke(t, "a€b", "-f", "UTF-8", "-t", "ISO-8859-1")
@@ -131,7 +138,7 @@ func TestOmittedEncodingUsesLocaleCodeset(t *testing.T) {
 	if code != 0 || errout != "" || string(out) != "abc" {
 		t.Fatalf("omitted -t: code=%d out=%q err=%q", code, string(out), errout)
 	}
-	// POSIX leaves both omitted undefined; this implementation fails closed.
+	// Both omitted matches no POSIX synopsis and fails as a usage error.
 	code, out, errout = invoke(t, "abc")
 	if code != 2 || len(out) != 0 || !strings.Contains(errout, "at least one") {
 		t.Fatalf("both omitted must fail closed: code=%d out=%q err=%q", code, string(out), errout)
@@ -211,14 +218,14 @@ func TestDiscardInvalidPreservesLiteralReplacementAndStreamingState(t *testing.T
 			var out, errout bytes.Buffer
 			rc := &tool.RunContext{Ctx: context.Background(), Dir: t.TempDir(),
 				Stdio: tool.Stdio{In: oneByteReader{bytes.NewReader(tc.input)}, Out: &out, Err: &errout}}
-			if code := run(rc, []string{"-c", "-f", tc.from, "-t", "UTF-8"}); code != 0 || out.String() != "x�y" || errout.Len() != 0 {
+			if code := run(rc, []string{"-c", "-f", tc.from, "-t", "UTF-8"}); code != 1 || out.String() != "x�y" || errout.Len() != 0 {
 				t.Fatalf("code=%d out=%q err=%q", code, out.String(), errout.String())
 			}
 		})
 	}
 
 	code, encoded, errout := invoke(t, "日本€日本", "-c", "-f", "UTF-8", "-t", "ISO-2022-JP")
-	if code != 0 || errout != "" {
+	if code != 1 || errout != "" {
 		t.Fatalf("stateful encode: code=%d err=%q", code, errout)
 	}
 	code, decoded, errout := invoke(t, string(encoded), "-f", "ISO-2022-JP", "-t", "UTF-8")
