@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 2 |
-| Evidence | Partial | 63 |
-| Evidence | Unverified | 51 |
+| Evidence | Partial | 75 |
+| Evidence | Unverified | 39 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -202,7 +202,7 @@ at -l [at_job_id...]
 
 ## `awk`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -219,21 +219,21 @@ awk [-F sepstring] -f progfile [-f progfile]... [-v assignment]... [argument...]
 
 **Issue 7 option-argument candidate:** `-F=<sepstring>; -f=<progfile>; -v=<assignment>`.
 
-**Operands:** `program; argument; file; assignment`. UNVERIFIED
+**Operands:** `program; argument; file; assignment`. Without -f, the first operand is program text; with one or more -f operands, the program is the concatenation of those progfiles and all non-option operands are input file names or name=value assignments processed in ARGV order by the interpreter. -F is translated to FS before execution and -v assignments are validated and unescaped before program execution.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** - as a progfile reads program text from standard input; - as an input file operand is passed to GoAWK as standard input; name=value operands are assignments rather than file names; an empty program is valid.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Used as program source for -f -; otherwise used as input when no file operand is supplied or when an input file operand is -.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH; PATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH; PATH. ENVIRON receives invocation variables;  LC_CTYPE and LC_COLLATE are wired for regex character classes/equivalence in the evidenced public locale path. LC_NUMERIC language semantics remain residual.`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Program-defined standard output with deterministic LF output.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for parser, interpreter, invalid assignment, locale, and file diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Executes the POSIX awk program through the embedded GoAWK interpreter; reads named inputs and may create program-directed output files through interpreter semantics.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** Interpreter status is returned; parser, bad option/operand, inaccessible program/input, and locale setup errors return greater than zero.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -245,7 +245,7 @@ awk [-F sepstring] -f progfile [-f progfile]... [-v assignment]... [argument...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/awk`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:awk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/awk/awk_test.go#TestAwk;cmds/awk/awk_test.go#TestAwkPOSIXFloatFormats;cmds/awk/awk_test.go#TestAwkPOSIXOctalAlternateFormZeroPrecision;cmds/awk/awk_test.go#TestAwkPOSIXEREBackendExpressions;cmds/awk/awk_test.go#TestAwkPOSIXEREDotNewlineAndLeftmostLongest;cmds/awk/awk_test.go#TestAwkProgramFile;cmds/awk/awk_test.go#TestAwkPOSIXInterfaceProgramFileAndAssignments;cmds/awk/awk_test.go#TestAwkPOSIXProgramFromStdinAndEmptyProgram;cmds/awk/awk_test.go#TestAwkInvalidAssignmentAndPOSIXMissingInput;cmds/awk/awk_locale_test.go#TestAwkLocaleRegexEveryEndpoint;cmds/awk/awk_locale_test.go#TestAwkResolvesCTypeAndCollateIndependently;cmds/awk/awk_locale_test.go#TestAwkLocaleLifecycle;cmds/awk/awk_locale_test.go#TestAwkLocaleEquivalenceClassMatches;cmds/awk/awk_routing_test.go#TestAwkRoutingIntervalCeiling;cmds/awk/awk_routing_test.go#TestAwkRoutingLeadingZerosBothPaths;cmds/awk/awk_routing_test.go#TestAwkRoutingMalformedQuantifiers`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:awk:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [awk](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/awk.html).
 
@@ -1993,7 +1993,7 @@ fold [-bs] [-w width] [file...]
 
 ## `getconf`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2010,21 +2010,21 @@ getconf [-v specification] path_var pathname
 
 **Issue 7 option-argument candidate:** `-v=<specification>`.
 
-**Operands:** `path_var; pathname; system_var`. UNVERIFIED
+**Operands:** `path_var; pathname; system_var`. Exactly one system_var operand queries a known system/confstr name; exactly path_var pathname queries a known pathconf name against pathname; unknown variables and wrong arity are usage errors. -v accepts only the programming environment this build/platform adapter can honestly report, with an empty specification rejected as unsupported.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** No special operand token; -a is an extension outside the POSIX synopsis.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write the variable value followed by a newline, or undefined for a known variable with no determinate value or no limit.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics, including unknown variables, unsupported -v specifications, and option/arity errors.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read-only query of platform configuration adapters and pathname configuration; no files are modified.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the requested known variable is reported; greater than 0 for unknown names, unsupported specification, option errors, or arity errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2036,7 +2036,7 @@ getconf [-v specification] path_var pathname
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/getconf`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:getconf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/getconf/getconf_test.go#TestAgreesWithSystemGetconf;cmds/getconf/getconf_test.go#TestPathconfAgreesWithSystem;cmds/getconf/getconf_test.go#TestDarwinConfstrAdapterMatchesEveryQueryableValue;cmds/getconf/getconf_test.go#TestUnknownVariableIsAnErrorNotUndefined;cmds/getconf/getconf_test.go#TestCompileTimeMinimumsComeFromTheStandard;cmds/getconf/getconf_test.go#TestEveryInventoryNameHasAValueClass;cmds/getconf/getconf_test.go#TestDarwinRegressionValues;cmds/getconf/getconf_test.go#TestWindowsFailsClosed;cmds/getconf/getconf_test.go#TestLinuxDoesNotInventLibcValues;cmds/getconf/getconf_test.go#TestAllListsAndDoesNotTakeOperands;cmds/getconf/getconf_test.go#TestUnsupportedSpecificationIsRefused;cmds/getconf/getconf_test.go#TestPOSIXArityAndOptionForms;cmds/getconf/getconf_test.go#TestMissingOperand`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:getconf:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [getconf](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getconf.html).
 
@@ -2090,7 +2090,7 @@ getopts optstring name [arg...]
 
 ## `grep`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2108,19 +2108,19 @@ grep [-E|-F] [-c|-l|-q] [-insvx] pattern_list [file...]
 
 **Issue 7 option-argument candidate:** `-e=<pattern_list>; -f=<pattern_file>`.
 
-**Operands:** `pattern_list; file`. UNVERIFIED
+**Operands:** `pattern_list; file`. Pattern lists come from -e operands, -f files, or the first non-option operand; newline-separated and empty patterns are honored. File operands are searched in order, with no file operand selecting standard input. POSIXLY_CORRECT disables GNU option permutation after the first operand.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** - as a pattern file reads stdin only when no file named - exists in the invocation directory; - as a file operand reads standard input; -- ends option parsing.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read as input when no file operands are supplied, for file operand -, and for -f - when no file named - exists.
 
-**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH. LC_ALL/category/LANG precedence is evidenced for C/POSIX and the built-in de_DE ISO-8859-1 certification locale;  broader public-locale regex behavior remains residual.`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write selected lines, counts, file names, or no normal output under -q according to the selected options; multiple files prefix names unless suppressed by extension flags.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for diagnostics; -s suppresses file-open/read diagnostics as implemented.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read-only search of input files/streams; no files are modified.`.
 
 **Exit status:** 0 selected lines found; 1 none found; greater than 1 on error.
 
@@ -2134,7 +2134,7 @@ grep [-E|-F] [-c|-l|-q] [-insvx] pattern_list [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/grep`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:grep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/grep/grep_test.go#TestGrepStdin;cmds/grep/grep_test.go#TestGrepFlagsOnFile;cmds/grep/grep_test.go#TestGrepQuiet;cmds/grep/grep_test.go#TestGrepBRE;cmds/grep/grep_test.go#TestGrepEREAndFixed;cmds/grep/grep_test.go#TestGrepMultiplePatterns;cmds/grep/grep_test.go#TestGrepPOSIXPatternListAndOptionArgument;cmds/grep/grep_test.go#TestGrepPatternFileNamedDashAndCombinedLists;cmds/grep/grep_test.go#TestGrepPOSIXOperandsStopOptionParsing;cmds/grep/grep_test.go#TestGrepVSCLocalePrecedence;cmds/grep/grep_test.go#TestGrepPOSIXDiagnosticsAndPatternFiles;cmds/grep/grep_test.go#TestGrepPOSIXRegexConformance;cmds/grep/grep_test.go#TestGrepOnlyMatchingUsesLeftmostLongest;cmds/grep/grep_test.go#TestGrepREDUPMAX2047Intervals;cmds/grep/literal_test.go#TestLiteralFastPathDifferential`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:grep:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [grep](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/grep.html).
 
@@ -2435,7 +2435,7 @@ join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] 
 
 ## `kill`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base; xsi`.
 
@@ -2454,21 +2454,21 @@ kill [-signal_number] pid...
 
 **Issue 7 option-argument candidate:** `-s=<signal_name>`.
 
-**Operands:** `pid; exit_status`. UNVERIFIED
+**Operands:** `pid; exit_status`. A pid operand names a process ID or a job-control job ID known to the current shell execution environment; -s accepts a case-insensitive signal name without the SIG prefix, the bare numeric form selects a signal number, and -l either lists supported signal names or maps an exit-status operand to its signal name; signal 0 performs existence and permission checking without delivery; every operand is attempted and any failure makes the invocation fail.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option recognition so a negative process-group operand is not parsed as a signal selector; the XSI bare -signal_name spelling is accepted; Bash's -n spelling is retained only as an extension.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Used by -l for signal names; otherwise not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for diagnostics when a signal, process, process group, or job operand is invalid or cannot be signaled.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Requests delivery of the selected signal to each named process, process group, or current-shell job; signal 0 changes no process state.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when at least one matching process exists for every operand and the requested signal was sent or successfully checked; greater than 0 for an invalid signal or any unsatisfied operand. A job terminated by a signal yields a distinct wait status greater than 128; Bash compatibility chooses 128 plus the signal number.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2480,7 +2480,7 @@ kill [-signal_number] pid...
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteKill`; provider=`-`; clauses=`XCU:kill:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestKillIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteKill`; provider=`-`; clauses=`XCU:kill:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [kill](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/kill.html).
 
@@ -2535,7 +2535,7 @@ ln [-fs] [-L|-P] source_file... target_dir
 
 ## `locale`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2552,21 +2552,21 @@ locale [-ck] name...
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `name`. UNVERIFIED
+**Operands:** `name`. With -a or -m no operands are accepted; with -c or -k at least one name operand is required; with no options and no operands write current locale environment variables; with name operands write information about each named locale category, keyword, or charmap, in order, continuing past unknown names with exit status >0.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing so following arguments are treated as name operands.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_MONETARY; LC_NUMERIC; LC_TIME; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write requested locale environment variables (bare if set, double-quoted if derived/overridden), available locale names (-a), charmap names (-m), or keyword values (preceded by category name if -c, formatted as name="value" if -k).
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for diagnostic messages, including unknown keyword/category names, invalid option combinations, and standard-output write failures.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read-only; no filesystem or execution environment modifications.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all requested information was written successfully; greater than 0 if an error occurred (unknown name, usage error, or stdout write failure).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2578,7 +2578,7 @@ locale [-ck] name...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/locale`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:locale:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/locale/locale_test.go#TestEnvironmentListing;cmds/locale/locale_test.go#TestEnvironmentListingOrder;cmds/locale/locale_test.go#TestKeywordValues;cmds/locale/locale_test.go#TestCharmapOperand;cmds/locale/locale_test.go#TestCategoryOperandWritesEveryKeyword;cmds/locale/locale_test.go#TestCategoryHeaderFlag;cmds/locale/locale_test.go#TestCollateHasNoKeywordsButIsNotAnError;cmds/locale/locale_test.go#TestMultipleOperands;cmds/locale/locale_test.go#TestUnknownNameIsAnErrorButLaterOperandsStillRun;cmds/locale/locale_test.go#TestUnavailableLocaleIsRefusedByName;cmds/locale/locale_test.go#TestAllLocales;cmds/locale/locale_test.go#TestCharmaps;cmds/locale/locale_test.go#TestMutuallyExclusiveOptions;cmds/locale/locale_test.go#TestLocaleDoubleDashTerminatesOptions;cmds/locale/locale_test.go#TestLocaleOutputWriteErrorsFail`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:locale:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [locale](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/locale.html).
 
@@ -2776,14 +2776,14 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 ## `ls`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `xsi`.
 
 **Issue 7 synopsis candidate:**
 
 ```text
-[xsi] ls [-ikqrs] [-glno] [-A|-a] [-C|-m|-x|-1]  [-F|-p] [-H|-L] [-R|-d] [-S|-f|-t] [-c|-u] [file...]
+[xsi] ls [-ikqrs] [-glno] [-A|-a] [-C|-m|-x|-1] [-F|-p] [-H|-L] [-R|-d] [-S|-f|-t] [-c|-u] [file...]
 ```
 
 **Issue 7 required-option candidate:** `none`.
@@ -2792,21 +2792,21 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. With no operands default to current directory; for each non-directory file write its entry; for each directory operand (unless -d) list its contents; -R recurses subdirectories; non-accessible operands draw diagnostics to stderr and continue processing remaining operands at exit status >0.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing so following arguments are treated as file operands.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
-**Environment:** `COLUMNS; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; TZ`.
+**Environment:** `COLUMNS; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; LC_TIME; NLSPATH; POSIXLY_CORRECT; TZ`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write entry names or long-format records (-l/-g/-n/-o), multi-column (-C/-x), stream (-m), or single-column (-1); include block counts (-s) using 512-byte blocks in POSIX mode (POSIXLY_CORRECT) or 1024-byte blocks with -k.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages (unaccessible file/directory operands, unopenable directories, invalid option usage, or unsupported capabilities).
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Read-only; directory traversal reads filesystem metadata without modifying files.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all specified files were listed successfully; greater than 0 if an error occurred (inaccessible operand, directory open/read failure, usage error).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2818,7 +2818,7 @@ lp [-c] [-d dest] [-n copies] [-msw] [-o option]... [-t title] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/ls`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ls:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/ls/ls_test.go#TestDefaultSortAndOnePerLine;cmds/ls/ls_test.go#TestMixedOperandsHeaders;cmds/ls/ls_test.go#TestLongFormat;cmds/ls/ls_test.go#TestAllAndAlmostAll;cmds/ls/ls_test.go#TestDirectoryFlag;cmds/ls/ls_test.go#TestRecursive;cmds/ls/ls_test.go#TestReverse;cmds/ls/ls_test.go#TestSortTime;cmds/ls/ls_test.go#TestSortSize;cmds/ls/ls_test.go#TestInode;cmds/ls/ls_test.go#TestNonexistentOperand;cmds/ls/ls_posix_test.go#TestCommaFormatNoTrailingSeparator;cmds/ls/ls_posix_test.go#TestCommaFormatWrapsAtWidth;cmds/ls/ls_posix_test.go#TestColumnsDown;cmds/ls/ls_posix_test.go#TestColumnsAcross;cmds/ls/ls_posix_test.go#TestColumnsHonorsColumnsEnv;cmds/ls/ls_posix_test.go#TestHideControlChars;cmds/ls/ls_posix_test.go#TestSizeBlocksShortFormat;cmds/ls/ls_posix_test.go#TestDereferenceDirectoryEntries;cmds/ls/ls_posix_test.go#TestOrderIndicatorClassifyAndSlash;cmds/ls/ls_posix_test.go#TestSizeBlocksPOSIX512ByteDefault;cmds/ls/ls_posix_test.go#TestLsDoubleDashTerminatesOptions`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:ls:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [ls](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/ls.html).
 
@@ -3019,7 +3019,7 @@ man [-k] name...
 
 ## `mesg`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3035,21 +3035,21 @@ mesg [y|n]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `y; n`. UNVERIFIED
+**Operands:** `y; n`. With no operand query message permission status of the first terminal associated with standard input, standard output, or standard error, in that order; with y grant write permission (chmod g+w); with n deny write permission (chmod g-w); extra or invalid operands are usage errors.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing so following argument is treated as y or n operand.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Examined first to identify an associated terminal; standard output and standard error are checked in that order if standard input is not a terminal.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** With no operand write terminal permission status ("is y\n" or "is n\n"); with y or n operand write nothing.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostic messages (not a terminal, stat/chmod failure, usage error, or stdout write error).
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Modifies the group-write permission bit of the selected standard-stream terminal device.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 if messages are allowed (query or set y); 1 if messages are denied (query or set n); greater than 1 if an error occurred (2 for non-terminal, permission failure, usage, or stdout write error).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3061,7 +3061,7 @@ mesg [y|n]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mesg`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mesg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/mesg/mesg_test.go#TestQueryReportsStateThroughExitStatus;cmds/mesg/mesg_test.go#TestSetTogglesOnlyTheGroupWriteBit;cmds/mesg/mesg_test.go#TestBadOperandAndExtraOperand;cmds/mesg/mesg_test.go#TestMesgDoubleDashTerminatesOptions;cmds/mesg/mesg_test.go#TestMesgOutputWriteError;cmds/mesg/tty_unix_test.go#TestDefaultTTYNameUsesRunContextStreamsInOrder;cmds/mesg/tty_unix_test.go#TestDefaultTTYNameRejectsCharacterDeviceThatIsNotTerminal`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mesg:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [mesg](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mesg.html).
 
@@ -3163,7 +3163,7 @@ mkfifo [-m mode] file...
 
 ## `more`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `optional`.
 
@@ -3179,21 +3179,21 @@ mkfifo [-m mode] file...
 
 **Issue 7 option-argument candidate:** `-n=<number>; -p=<command>; -t=<tagstring>`.
 
-**Operands:** `file`. UNVERIFIED
+**Operands:** `file`. With no file operands reads standard input; otherwise processes file operands in order, continuing after open/read/close errors and returning failure if any source failed; -n requires a positive decimal number; when stdout is not a terminal, only -s affects output and the input is copied without pagination; when stdout is a terminal, a controlling-terminal command channel is required and missing terminal access is a diagnosed failure rather than silent pass-through.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; - is standard input; -number is accepted as a screen-size extension; on terminal output the required -i behavior and most required -p commands remain unsupported and fail loudly; -t is conditionally required with ctags and remains unsupported; the non-POSIX -d, -l, and -f extensions also fail loudly.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Read when no file operand is supplied or an operand is -.
 
 **Environment:** `COLUMNS; EDITOR; LANG; LC_ALL; LC_COLLATE; LC_CTYPE; LC_MESSAGES; NLSPATH; LINES; MORE; TERM`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Copied input content, paginated only when stdout is a terminal; prompts and terminal UI are kept off stdout.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for diagnostics and terminal prompts/UI; no diagnostics are emitted for successful nonterminal copying.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `No filesystem changes; terminal mode is made raw only through the controlling-terminal seam while awaiting a command.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when all selected input was displayed or copied successfully; greater than 0 for input, output, terminal, unsupported-feature, or usage errors (usage follows the repository status-2 convention).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3205,7 +3205,7 @@ mkfifo [-m mode] file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/more`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:more:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/more/more_test.go#TestMoreReadsStdin;cmds/more/more_test.go#TestMoreConcatenatesFiles;cmds/more/more_test.go#TestMoreSqueezeAndFromLine;cmds/more/more_test.go#TestMoreNonTerminalIgnoresFAndP;cmds/more/more_test.go#TestMorePOSIXNonTerminalOnlySqueezeTakesEffect;cmds/more/more_test.go#TestMorePOSIXLineCountMustBePositive;cmds/more/pager_test.go#TestPagerSeparatesContentAndTerminalUI;cmds/more/pager_test.go#TestPagerStreamsFirstScreenBeforeSourceEOF;cmds/more/pager_test.go#TestPagerPromptVisibleBeforeRead;cmds/more/pager_test.go#TestPagerOpenTTYFailureIsNotCopyFallback;cmds/more/tty_windows_test.go#TestWindowsControllingTerminalIsExplicitlyUnsupported`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:more:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [more](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/more.html).
 
@@ -3260,7 +3260,7 @@ mv [-if] source_file... target_dir
 
 ## `newgrp`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3276,21 +3276,21 @@ newgrp [-l] [group]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `group`. UNVERIFIED
+**Operands:** `group`. No operand targets the user's primary group from the password database and rebuilds supplementary groups from the user/group databases; a group operand resolves by name before numeric gid; membership in the primary, supplementary, or group member list permits the change; non-members with a usable group password are challenged; refused or failed group changes diagnose and still start the shell unchanged; usage errors and an unreadable current user record start no shell.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; -l requests a login shell with argv0 prefixed by - and a login-style environment; any other option is a usage error.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used; password input is read from the terminal device, not standard input.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for diagnostics and for the terminal password prompt.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Starts a child shell rather than replacing the embedding process; on Unix the child receives the requested real/effective gid and adjusted supplementary list when privilege permits, otherwise a retry starts it unchanged; on Windows the command fails loudly because POSIX group identity has no equivalent.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** If a shell is created, exits with that shell's status whether or not the group changed; otherwise exits greater than 0 for usage, database, platform, or shell-start errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3302,13 +3302,13 @@ newgrp [-l] [group]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/newgrp`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:newgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/newgrp/newgrp_test.go#TestNoOperandRevertsToThePrimaryGroup;cmds/newgrp/newgrp_test.go#TestNumericOperandPrefersTheGroupName;cmds/newgrp/newgrp_test.go#TestRefusedChangeStillStartsTheShellWithTheGroupUnchanged;cmds/newgrp/newgrp_test.go#TestKernelRefusalRetriesWithoutTheCredential;cmds/newgrp/newgrp_test.go#TestSuccessfulGroupChangePropagatesShellStatusThroughSpawnSeam;cmds/newgrp/newgrp_test.go#TestLoginShellArgv0AndDirectory;cmds/newgrp/newgrp_test.go#TestLoginEnvironment;cmds/newgrp/newgrp_test.go#TestUsageErrorsStartNoShell;cmds/newgrp/spawn_unix_test.go#TestSyscallCredentialImplementsThePlan;cmds/newgrp/spawn_windows_test.go#TestWindowsSpawnFailsLoudly`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:newgrp:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [newgrp](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/newgrp.html).
 
 ## `nice`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3324,21 +3324,21 @@ nice [-n increment] utility [argument...]
 
 **Issue 7 option-argument candidate:** `-n=<increment>`.
 
-**Operands:** `utility; argument`. UNVERIFIED
+**Operands:** `utility; argument`. The first non-option operand is the utility and all following arguments are passed through unchanged; -n requires a decimal integer increment and defaults to +10 when absent; when POSIXLY_CORRECT is present a utility operand is mandatory; GNU-compatible long and obsolete adjustment spellings remain available because POSIX does not require extensions to be rejected.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -- ends option parsing; a lone - is a utility operand; -n may be separate or attached; obsolete -NUM/--NUM/-+NUM and --adjustment are GNU-compatible extensions retained in every mode.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Passed through unchanged to the invoked utility.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used by nice itself; inherited by the invoked utility.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Diagnostics only, including non-fatal niceness-adjustment warnings.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Invokes the utility as the documented command-operand exception; attempts to apply the requested priority to the child immediately after start so an embedded host's own priority is not changed; a pre-exec race for very short-lived children remains explicitly residual.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** If the utility is invoked, exits with the utility's status, including 128+signal for signaled children while recording the raw signal in RunContext.ExitSignal for a standalone boundary; otherwise 125 for nice utility errors, 126 when found but not invokable, and 127 when the utility cannot be found.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3350,7 +3350,7 @@ nice [-n increment] utility [argument...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/nice`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/nice/nice_posix_test.go#TestParseNiceOptions;cmds/nice/nice_posix_test.go#TestNicePOSIXModeRequiresUtilityOperand;cmds/nice/nice_posix_test.go#TestNiceCommandExitStatuses;cmds/nice/nice_resolve_test.go#TestNicePathUnsetFindsCommand;cmds/nice/nice_resolve_test.go#TestNiceChildExitPropagates;cmds/nice/nice_resolve_test.go#TestNiceDoubleDashStopsOptionParsing;cmds/nice/nice_priority_test.go#TestNiceDoesNotAlterOwnPriority;cmds/nice/nice_priority_test.go#TestNiceReportsSignalExitCode;cmds/nice/nice_exec_unix_test.go#TestNiceRunsExecutableTextWithoutShebang`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:nice:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [nice](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/nice.html).
 
@@ -4715,7 +4715,7 @@ test [expression]
 
 ## `time`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -4731,21 +4731,21 @@ time [-p] utility [argument...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `utility; argument`. UNVERIFIED
+**Operands:** `utility; argument`. The first operand selects the utility and remaining operands are its arguments; the shell keyword times that command or pipeline and -p selects the portable real, user, and sys report format; command lookup uses PATH and preserves the invoked utility's status.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** No command-specific special operand is defined; Bash grammar and extensions remain available while the parser and runner are both in POSIX mode.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Passed unchanged to the invoked utility; time itself does not read it.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; LC_NUMERIC; NLSPATH; PATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Used only by the invoked utility; the timing report is not written here.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Receives the portable timing report with real, user, and sys values and any utility or lookup diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Invokes and waits for the selected utility or pipeline and accounts for elapsed, shell, and child user/system CPU time without otherwise changing files or shell state.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** The utility or pipeline status when invocation succeeds; 127 when the utility cannot be found; greater than 0 for other timing or invocation errors.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -4757,7 +4757,7 @@ time [-p] utility [argument...]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTime`; provider=`-`; clauses=`XCU:time:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/time_issue7_test.go#TestTimeIssue7CommandInterface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteTime`; provider=`-`; clauses=`XCU:time:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [time](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/time.html).
 
@@ -5439,7 +5439,7 @@ uuencode [-m] [file] decode_pathname
 
 ## `wait`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -5455,21 +5455,21 @@ wait [pid...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `pid`. UNVERIFIED
+**Operands:** `pid`. With no operands, waits for all active background jobs known to the current shell; each pid operand names a known background process ID or job-control job ID, completed statuses remain available until requested, multiple operands are processed in order, and the final operand determines the result.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** No POSIX option or special token is defined; Bash's -n, -p, and -f forms are retained and tested separately as extensions.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used only for diagnostics such as an unknown PID or job ID.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Blocks until the selected background jobs terminate, consumes explicitly requested retained statuses, and with no operands waits for all active known jobs.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 after a successful no-operand wait; otherwise the status of the last requested job, 127 for an unknown final PID/job, or a value greater than 128 when interrupted by a signal.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -5481,7 +5481,7 @@ wait [pid...]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteWait`; provider=`-`; clauses=`XCU:wait:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestWaitIssue7Interface;sh:interp/issue7_command_interface_test.go#TestWaitIssue7CompletedStatusIsRetainedUntilRequested;sh:interp/issue7_command_interface_test.go#TestWaitIssue7ZeroOperandsBlocksUntilAllJobsComplete`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteWait`; provider=`-`; clauses=`XCU:wait:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [wait](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/wait.html).
 

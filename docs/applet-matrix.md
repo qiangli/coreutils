@@ -46,7 +46,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 5 | 31 |
 | `atq` | `cmds/atq` | — | Bashy/other extension | no | no | 1 | 2 |
 | `atrm` | `cmds/atrm` | — | Bashy/other extension | no | no | 1 | 3 |
-| `awk` | `cmds/awk` | — | POSIX/Unix utility | no | yes | 3 | 22 |
+| `awk` | `cmds/awk` | — | POSIX/Unix utility | no | yes | 3 | 25 |
 | `b2sum` | `cmds/b2sum` | — | GNU Coreutils | yes | no | 1 | 5 |
 | `base32` | `cmds/base32` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `base64` | `cmds/base64` | — | GNU Coreutils | yes | no | 2 | 9 |
@@ -92,8 +92,8 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 8 | 56 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 1 | 20 |
-| `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 1 | 13 |
-| `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 3 | 36 |
+| `getconf` | `cmds/getconf` | — | POSIX/Unix utility | no | yes | 1 | 14 |
+| `grep` | `cmds/grep` | — | POSIX/Unix utility | no | yes | 3 | 37 |
 | `groups` | `cmds/groups` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `gunzip` | `cmds/gzip` | gzip | Bashy/other extension | no | no | 1 | 10 |
 | `gzip` | `cmds/gzip` | — | Bashy/other extension | no | no | 1 | 10 |
@@ -109,27 +109,27 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `kill` | `cmds/kill` | — | GNU Coreutils | yes | yes | 4 | 5 |
 | `link` | `cmds/link` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `ln` | `cmds/ln` | — | GNU Coreutils | yes | yes | 1 | 26 |
-| `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 21 |
+| `locale` | `cmds/locale` | — | POSIX/Unix utility | no | yes | 1 | 22 |
 | `localedef` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `logger` | `cmds/logger` | — | POSIX/Unix utility | no | yes | 1 | 22 |
 | `logname` | `cmds/logname` | — | GNU Coreutils | yes | yes | 1 | 8 |
 | `lp` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
-| `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 46 |
+| `ls` | `cmds/ls` | — | GNU Coreutils | yes | yes | 2 | 48 |
 | `m4` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `mailx` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `make` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `man` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `md5sum` | `cmds/md5sum` | — | GNU Coreutils | yes | no | 1 | 15 |
-| `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 1 | 3 |
+| `mesg` | `cmds/mesg` | — | POSIX/Unix utility | no | yes | 2 | 7 |
 | `mkdir` | `cmds/mkdir` | — | GNU Coreutils | yes | yes | 2 | 20 |
 | `mkfifo` | `cmds/mkfifo` | — | GNU Coreutils | yes | yes | 2 | 14 |
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
-| `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 3 | 31 |
+| `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 3 | 32 |
 | `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 2 | 44 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
-| `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 6 | 50 |
-| `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 16 |
+| `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 6 | 51 |
+| `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 17 |
 | `nl` | `cmds/nl` | — | GNU Coreutils | yes | no | 1 | 12 |
 | `nm` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `nohup` | `cmds/nohup` | — | GNU Coreutils | yes | yes | 3 | 23 |
