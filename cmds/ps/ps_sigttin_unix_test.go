@@ -13,10 +13,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/creack/pty/v2"
 	"github.com/qiangli/coreutils/tool"
 )
 
 const psSIGTTINHelperEnv = "BASHY_PS_SIGTTIN_HELPER"
+
+func TestPSUsesLiveOutputTerminalWidthWhenColumnsUnset(t *testing.T) {
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Skipf("pty unavailable: %v", err)
+	}
+	defer master.Close()
+	defer slave.Close()
+	if err := pty.Setsize(slave, &pty.Winsize{Cols: 37, Rows: 12}); err != nil {
+		t.Skipf("set pty size: %v", err)
+	}
+	rc := &tool.RunContext{Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Out: slave}}
+	if got := displayColumns(rc); got != 37 {
+		t.Fatalf("live terminal columns=%d, want 37", got)
+	}
+	rc.Env = []string{"LC_ALL=C", "COLUMNS=19"}
+	if got := displayColumns(rc); got != 19 {
+		t.Fatalf("COLUMNS override=%d, want 19", got)
+	}
+}
 
 // firstWriteGate tells the parent that ps reached its first output write and
 // then blocks until the parent continues the process. This makes the signal

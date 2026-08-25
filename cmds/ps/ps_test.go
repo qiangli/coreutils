@@ -3,6 +3,7 @@ package pscmd
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -18,10 +19,11 @@ import (
 	"github.com/qiangli/coreutils/tool"
 )
 
-func TestPSOwnPIDAndFormat(t *testing.T) {
+func TestPSPIDAndFormat(t *testing.T) {
 	var out, errOut bytes.Buffer
-	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errOut}}
-	code := run(rc, []string{"-p", "1", "-o", "pid="})
+	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+	source := fakeProcessSource{ps: []process{{pid: 1, command: "init"}}, uid: 1, tty: "?"}
+	code := runWithSource(rc, []string{"-p", "1", "-o", "pid="}, source, time.Now)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, errOut.String())
 	}
@@ -31,7 +33,7 @@ func TestPSOwnPIDAndFormat(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	code = run(rc, []string{"-A", "-o", "pid=Process ID"})
+	code = runWithSource(rc, []string{"-A", "-o", "pid=Process ID"}, source, time.Now)
 	if code != 0 || !strings.HasPrefix(out.String(), "Process ID\n") {
 		t.Fatalf("spaced header = (code %d, stdout %q, stderr %q)", code, out.String(), errOut.String())
 	}
@@ -108,6 +110,69 @@ func TestPSPOSIXSelectionUnionAndDefaults(t *testing.T) {
 	}
 }
 
+func TestPSAllPOSIXSelectionOptionsEndToEnd(t *testing.T) {
+	ps := []process{
+		{pid: 10, sid: 10, ruid: 1, euid: 1, rgid: 1, tty: "tty1"},
+		{pid: 20, sid: 10, ruid: 3, euid: 2, rgid: 4, tty: "tty1"},
+		{pid: 30, sid: 30, ruid: 5, euid: 5, rgid: 5},
+	}
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"A", []string{"-A"}, "10\n20\n30"},
+		{"a", []string{"-a"}, "20"},
+		{"d", []string{"-d"}, "20"},
+		{"e", []string{"-e"}, "10\n20\n30"},
+		{"g session", []string{"-g", "10"}, "10\n20"},
+		{"G real group", []string{"-G", "4"}, "20"},
+		{"p pid", []string{"-p", "30"}, "30"},
+		{"t filename", []string{"-t", "tty1"}, "10\n20"},
+		{"t identifier", []string{"-t", "1"}, "10\n20"},
+		{"u effective user", []string{"-u", "2"}, "20"},
+		{"U real user", []string{"-U", "3"}, "20"},
+		{"inclusive OR", []string{"-p", "30", "-u", "2"}, "20\n30"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append(append([]string(nil), tt.args...), "-o", "pid=")
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+			if code := runWithSource(rc, args, fakeProcessSource{ps: ps, uid: 2, tty: "/dev/tty1"}, time.Now); code != 0 {
+				t.Fatalf("code=%d stderr=%q", code, errOut.String())
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			for i := range lines {
+				lines[i] = strings.TrimSpace(lines[i])
+			}
+			if got := strings.Join(lines, "\n"); got != tt.want {
+				t.Fatalf("pids=%q, want %q (output %q)", got, tt.want, out.String())
+			}
+		})
+	}
+
+	for _, args := range [][]string{
+		{"-f", "-o", "pid="}, {"-l", "-o", "pid="},
+		{"-n", "kernel.names", "-o", "pid="}, {"-o", "pid="},
+	} {
+		var out, errOut bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+		if code := runWithSource(rc, args, fakeProcessSource{ps: ps, uid: 2, tty: "/dev/tty1"}, time.Now); code != 0 || strings.TrimSpace(out.String()) != "20" {
+			t.Errorf("non-selection args=%q => code=%d stdout=%q stderr=%q", args, code, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestPSXIsNotAnIssue7Option(t *testing.T) {
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+	called := false
+	if code := runWithSource(rc, []string{"-x"}, fakeProcessSource{called: &called}, time.Now); code != 2 || called || !strings.Contains(errOut.String(), "unknown shorthand flag") {
+		t.Fatalf("-x=(code %d, called %v, stdout %q, stderr %q)", code, called, out.String(), errOut.String())
+	}
+}
+
 func TestPSPOSIXListSeparatorsAndFormatHeaders(t *testing.T) {
 	numbers, err := numberSet([]string{"1 2", "3,4\t5"}, nil)
 	if err != nil {
@@ -118,7 +183,10 @@ func TestPSPOSIXListSeparatorsAndFormatHeaders(t *testing.T) {
 			t.Errorf("blank/comma-separated numeric list omitted %d: %v", i, numbers)
 		}
 	}
-	ttys := stringSet([]string{"tty1 tty2", "pts/3,pts/4\ttty5"})
+	ttys, err := stringSet([]string{"tty1 tty2", "pts/3,pts/4\ttty5"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"1", "2", "pts/3", "pts/4", "5"} {
 		if !ttys[name] {
 			t.Errorf("blank/comma-separated terminal list omitted %q: %v", name, ttys)
@@ -153,7 +221,8 @@ func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 func TestPSPOSIXNameListAcceptedAndOutputErrorsFail(t *testing.T) {
 	var out, errOut bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errOut}}
-	if code := run(rc, []string{"-n", "kernel.names", "-p", "1", "-o", "pid="}); code != 0 {
+	source := fakeProcessSource{ps: []process{{pid: 1}}}
+	if code := runWithSource(rc, []string{"-n", "kernel.names", "-p", "1", "-o", "pid="}, source, time.Now); code != 0 {
 		t.Fatalf("-n must be accepted with a proc-backed enumerator: code=%d stderr=%q", code, errOut.String())
 	}
 
@@ -163,7 +232,7 @@ func TestPSPOSIXNameListAcceptedAndOutputErrorsFail(t *testing.T) {
 		t.Fatalf("printTable error=%v, want context.Canceled", err)
 	}
 	errOut.Reset()
-	if code := run(rc, []string{"-p", "1", "-o", "pid"}); code != 1 || !strings.Contains(errOut.String(), "write error") {
+	if code := runWithSource(rc, []string{"-p", "1", "-o", "pid"}, source, time.Now); code != 1 || !strings.Contains(errOut.String(), "write error") {
 		t.Fatalf("run output failure=(code %d, stderr %q), want (1, write error)", code, errOut.String())
 	}
 }
@@ -173,6 +242,23 @@ func TestPSRejectsUnknownFormat(t *testing.T) {
 	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{Out: &out, Err: &errOut}}
 	if code := run(rc, []string{"-o", "not-a-field"}); code != 2 {
 		t.Fatalf("code=%d stderr=%s", code, errOut.String())
+	}
+}
+
+func TestPSRejectsEmptyMandatoryOptionArgumentsAndOperands(t *testing.T) {
+	tests := [][]string{
+		{"-g", ""}, {"-G", ""}, {"-n", ""}, {"-o", ""},
+		{"-p", ""}, {"-t", ""}, {"-u", ""}, {"-U", ""}, {"operand"},
+		{"-g"}, {"-G"}, {"-n"}, {"-o"}, {"-p"}, {"-t"}, {"-u"}, {"-U"},
+	}
+	for _, args := range tests {
+		var out, errOut bytes.Buffer
+		rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+		called := false
+		code := runWithSource(rc, args, fakeProcessSource{called: &called}, time.Now)
+		if code != 2 || called || errOut.Len() == 0 || out.Len() != 0 {
+			t.Errorf("args=%q => code=%d called=%v stdout=%q stderr=%q", args, code, called, out.String(), errOut.String())
+		}
 	}
 }
 
@@ -281,6 +367,65 @@ func TestPSFullUIDIsLoginNameAndExplicitUIDStaysNumeric(t *testing.T) {
 	}
 }
 
+func TestPSIdentityLookupAndNumericFallback(t *testing.T) {
+	origUserName, origGroupName := lookupUserName, lookupGroupName
+	origUserID, origGroupID := lookupUserID, lookupGroupID
+	t.Cleanup(func() {
+		lookupUserName, lookupGroupName = origUserName, origGroupName
+		lookupUserID, lookupGroupID = origUserID, origGroupID
+	})
+	lookupUserName = func(name string) (*osuser.User, error) {
+		if name == "alice" {
+			return &osuser.User{Uid: "42", Username: name}, nil
+		}
+		return nil, osuser.UnknownUserError(name)
+	}
+	lookupGroupName = func(name string) (*osuser.Group, error) {
+		if name == "staff" {
+			return &osuser.Group{Gid: "7", Name: name}, nil
+		}
+		return nil, errors.New("unknown group")
+	}
+	lookupUserID = func(id string) (*osuser.User, error) {
+		switch id {
+		case "42":
+			return &osuser.User{Uid: id, Username: "alice"}, nil
+		case "43":
+			return &osuser.User{Uid: id}, nil
+		}
+		return nil, osuser.UnknownUserError(id)
+	}
+	lookupGroupID = func(id string) (*osuser.Group, error) {
+		if id == "7" {
+			return &osuser.Group{Gid: id, Name: "staff"}, nil
+		}
+		return nil, errors.New("identity service unavailable")
+	}
+	users, err := numberSet([]string{"alice", "99"}, lookupUser)
+	if err != nil || !users[42] || !users[99] {
+		t.Fatalf("user list=%v, err=%v", users, err)
+	}
+	groups, err := numberSet([]string{"staff", "8"}, lookupGroup)
+	if err != nil || !groups[7] || !groups[8] {
+		t.Fatalf("group list=%v, err=%v", groups, err)
+	}
+	if got := userName(42); got != "alice" {
+		t.Fatalf("resolved user=%q", got)
+	}
+	if got := userName(43); got != "43" {
+		t.Fatalf("empty textual user fallback=%q", got)
+	}
+	if got := userName(44); got != "44" {
+		t.Fatalf("failed user lookup fallback=%q", got)
+	}
+	if got := groupName(7); got != "staff" {
+		t.Fatalf("resolved group=%q", got)
+	}
+	if got := groupName(8); got != "8" {
+		t.Fatalf("failed group lookup fallback=%q", got)
+	}
+}
+
 func TestPSCombinedFullLongFlagsAreAdditive(t *testing.T) {
 	var out, errOut bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C", "TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
@@ -381,6 +526,33 @@ func TestPSPOSIXRequiredFormatNamesAndHeaders(t *testing.T) {
 			t.Errorf("unavailable %s=%q, want permitted hyphen", name, got)
 		}
 	}
+	p.ruid, p.euid, p.rgid, p.egid = -1, -1, -1, -1
+	for _, name := range []string{"uid", "gid", "user", "ruser", "group", "rgroup"} {
+		if got := valueAt(p, name, render); got != "-" {
+			t.Errorf("unavailable %s=%q, want hyphen", name, got)
+		}
+	}
+}
+
+func TestPSTerminalFormatMatchesWhoAndWchanDistinguishesRunning(t *testing.T) {
+	p := process{tty: "/dev/tty04", wchan: "0", wchanKnown: true}
+	if got := value(p, "tty"); got != "tty04" {
+		t.Fatalf("tty value=%q, want who-compatible tty04", got)
+	}
+	if got := value(p, "wchan"); got != "" {
+		t.Fatalf("known running wchan=%q, want blank", got)
+	}
+	p.wchanKnown = false
+	p.wchan = ""
+	if got := value(p, "wchan"); got != "-" {
+		t.Fatalf("unavailable wchan=%q, want hyphen", got)
+	}
+	for _, name := range []string{"tty04", "04", "/dev/tty04"} {
+		set, err := stringSet([]string{name})
+		if err != nil || !set[terminalKey(p.tty)] {
+			t.Errorf("terminal selector %q => %v, %v", name, set, err)
+		}
+	}
 }
 
 func TestPSEnvironmentIsInvocationLocal(t *testing.T) {
@@ -432,7 +604,8 @@ func TestPSDisplayColumnsPresenceAndValidation(t *testing.T) {
 		env  []string
 		want int
 	}{{nil, 0}, {[]string{"COLUMNS="}, 0}, {[]string{"COLUMNS=no"}, 0}, {[]string{"COLUMNS=-2"}, 0}, {[]string{"COLUMNS=3", "COLUMNS=12"}, 12}} {
-		if got := displayColumns(tt.env); got != tt.want {
+		rc := &tool.RunContext{Env: tt.env, Stdio: tool.Stdio{Out: &bytes.Buffer{}}}
+		if got := displayColumns(rc); got != tt.want {
 			t.Errorf("displayColumns(%q)=%s, want %d", tt.env, strconv.Itoa(got), tt.want)
 		}
 	}
@@ -471,10 +644,12 @@ func TestPSEnrichLinuxProcFixture(t *testing.T) {
 	const pid = 4242
 	files := map[string]string{
 		"/proc/4242/stat":   "4242 (name with ) char) Z 1 2 3 34817 0 4194560 0 0 0 0 120 30 0 0 20 5 1 0 100 8192 2 0 4096",
+		"/proc/stat":        "cpu  1 2 3 4\nbtime 1700000000\n",
 		"/proc/4242/status": "Name:\tfixture\nUid:\t101\t102\t103\t104\nGid:\t201\t202\t203\t204\n",
 		"/proc/4242/wchan":  "futex_wait_queue\n",
 		"/proc/4242/statm":  "2 1 0 1 0 0 0\n",
 	}
+	files["/proc/self/auxv"] = string(auxvClockTicks(128))
 	readFile := func(name string) ([]byte, error) {
 		if value, ok := files[name]; ok {
 			return []byte(value), nil
@@ -486,8 +661,8 @@ func TestPSEnrichLinuxProcFixture(t *testing.T) {
 	if p.state != "Z" || p.ppid != 1 || p.pgid != 2 || p.sid != 3 || !p.pgidKnown {
 		t.Fatalf("identity/state not parsed: %#v", p)
 	}
-	if got := standardCommand(p, false); got != "<defunct>" {
-		t.Fatalf("procfs zombie standard command=%q, want <defunct>", got)
+	if got := standardCommand(p, false); got != "name with ) char <defunct>" {
+		t.Fatalf("procfs zombie standard command=%q", got)
 	}
 	if p.tty != "pts/1" {
 		t.Fatalf("tty=%q, want pts/1", p.tty)
@@ -498,8 +673,48 @@ func TestPSEnrichLinuxProcFixture(t *testing.T) {
 	if !p.flagsKnown || p.flags != 4194560 || !p.priorityKnown || p.priority != 20 || !p.niceKnown || p.nice != 5 {
 		t.Fatalf("flags/priority/nice not parsed: %#v", p)
 	}
-	if !p.cpuKnown || p.cpu.Seconds() != 1.5 || !p.vszKnown || p.vsz != 8192 || !p.szKnown || p.sz != 2 || !p.addrKnown || p.addr != 4096 || p.wchan != "futex_wait_queue" {
+	wantCPU := 150 * time.Second / 128
+	if !p.cpuKnown || p.cpu != wantCPU || !p.vszKnown || p.vsz != 8192 || !p.szKnown || p.sz != 2 || !p.addrKnown || p.addr != 4096 || p.wchan != "futex_wait_queue" {
 		t.Fatalf("resource fields not parsed: %#v", p)
+	}
+	wantStart := time.Unix(1700000000, 0).Add(100 * time.Second / 128)
+	if !p.start.Equal(wantStart) {
+		t.Fatalf("start=%s, want stat field 22 plus btime = %s", p.start, wantStart)
+	}
+}
+
+func auxvClockTicks(ticks uint64) []byte {
+	word := strconv.IntSize / 8
+	b := make([]byte, 4*word)
+	if word == 8 {
+		binary.NativeEndian.PutUint64(b, 17)
+		binary.NativeEndian.PutUint64(b[word:], ticks)
+	} else {
+		binary.NativeEndian.PutUint32(b, 17)
+		binary.NativeEndian.PutUint32(b[word:], uint32(ticks))
+	}
+	return b
+}
+
+func TestPSLinuxTimingUnavailableDoesNotInventValues(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux procfs evidence")
+	}
+	readFile := func(name string) ([]byte, error) {
+		if name == "/proc/9/stat" {
+			return []byte("9 (p) S 1 2 3 0 0 0 0 0 0 0 100 50 0 0 20 0 1 0 12345 4096 1 0 0"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	p := process{pid: 9}
+	if !enrichWithReader(&p, readFile) {
+		t.Fatal("valid stat row was discarded")
+	}
+	if p.cpuKnown || !p.start.IsZero() {
+		t.Fatalf("missing AT_CLKTCK/btime invented timing: %#v", p)
+	}
+	if enrichWithReader(&process{pid: 10}, readFile) {
+		t.Fatal("missing per-process stat row was retained")
 	}
 }
 
