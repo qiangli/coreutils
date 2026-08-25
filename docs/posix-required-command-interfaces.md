@@ -3136,9 +3136,9 @@ mkfifo [-m mode] file...
 
 **Operands:** `file`. Each file operand is a pathname at which a FIFO is created and each operand is processed independently: a failure (including an existing entry) draws a cannot-create diagnostic and processing continues with the remaining operands at exit >0; without -m the FIFO is created with a=rw (0666) modified by the file mode creation mask (the embedding shell's virtual umask when supplied, otherwise the process umask applied by mkfifo(2)); zero operands is a missing-operand diagnostic at exit 1.
 
-**Special tokens:** -- ends option parsing; a file operand of - is an ordinary pathname naming a FIFO called -; no other token is special.
+**Special tokens:** -- ends option parsing so a following dash-prefixed token (including one spelled like the -m option) is an ordinary pathname; a file operand of - is likewise an ordinary pathname naming a FIFO called -; no other token is special.
 
-**Standard input:** Not used.
+**Standard input:** Not used; standard input is never read.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
 
@@ -3146,7 +3146,7 @@ mkfifo [-m mode] file...
 
 **Standard error:** Used only for diagnostic messages.
 
-**Effects:** `Creates a FIFO special file at each operand pathname; with -m the file permission bits are set to exactly the chmod-grammar mode value (octal up to 7777 or symbolic clauses, applied via a follow-up chmod so the creation mask cannot leak in), with + and - in symbolic strings interpreted relative to an assumed initial mode of a=rw and clauses that omit who leaving umask-selected bits unchanged; on Windows every invocation fails loudly per operand rather than approximating.`.
+**Effects:** `Creates a FIFO special file at each operand pathname; with -m the file permission bits are set to exactly the chmod-grammar mode value (octal up to 7777 or symbolic clauses); the FIFO is first created with the requested mode reduced by the creation mask and a follow-up chmod widens it up to the exact -m value, so the entry is never momentarily less restrictive (more permissive) than -m and the creation mask cannot leak into the final bits, with + and - in symbolic strings interpreted relative to an assumed initial mode of a=rw and clauses that omit who leaving umask-selected bits unchanged; on Windows every invocation fails loudly per operand rather than approximating.`.
 
 **Exit status:** 0 when all the specified FIFO special files were created successfully; greater than 0 if an error occurred (invalid -m and missing operand exit 1; unknown options exit 2 per the documented repo deviation).
 
@@ -3160,7 +3160,7 @@ mkfifo [-m mode] file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/mkfifo`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/mkfifo/mkfifo_test.go#TestMkfifoCreatesFIFO;cmds/mkfifo/mkfifo_test.go#TestMkfifoDefaultModeHonorsVirtualUmask;cmds/mkfifo/mkfifo_umask_unix_test.go#TestMkfifoDefaultModeHonorsProcessUmask;cmds/mkfifo/mkfifo_test.go#TestMkfifoMode;cmds/mkfifo/mkfifo_test.go#TestMkfifoSymbolicMode;cmds/mkfifo/mkfifo_test.go#TestMkfifoSymbolicModeHonorsOmittedWhoUmask;cmds/mkfifo/mkfifo_umask_unix_test.go#TestMkfifoSymbolicModeHonorsProcessUmask;cmds/mkfifo/mkfifo_test.go#TestMkfifoOctalSpecialBits;cmds/mkfifo/mkfifo_test.go#TestMkfifoMultipleOperands;cmds/mkfifo/mkfifo_test.go#TestMkfifoPartialFailureContinues;cmds/mkfifo/mkfifo_test.go#TestMkfifoDashOperandIsPathname;cmds/mkfifo/mkfifo_test.go#TestMkfifoErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mkfifo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/mkfifo/mkfifo_test.go#TestMkfifoCreatesFIFO;cmds/mkfifo/mkfifo_test.go#TestMkfifoDefaultModeHonorsVirtualUmask;cmds/mkfifo/mkfifo_umask_unix_test.go#TestMkfifoDefaultModeHonorsProcessUmask;cmds/mkfifo/mkfifo_test.go#TestMkfifoMode;cmds/mkfifo/mkfifo_test.go#TestMkfifoSymbolicMode;cmds/mkfifo/mkfifo_test.go#TestMkfifoSymbolicModeHonorsOmittedWhoUmask;cmds/mkfifo/mkfifo_umask_unix_test.go#TestMkfifoSymbolicModeHonorsProcessUmask;cmds/mkfifo/mkfifo_test.go#TestMkfifoOctalSpecialBits;cmds/mkfifo/mkfifo_test.go#TestMkfifoMultipleOperands;cmds/mkfifo/mkfifo_test.go#TestMkfifoPartialFailureContinues;cmds/mkfifo/mkfifo_test.go#TestMkfifoDashOperandIsPathname;cmds/mkfifo/mkfifo_test.go#TestMkfifoDoubleDashEndsOptions;cmds/mkfifo/mkfifo_test.go#TestMkfifoDoesNotConsumeStdin;cmds/mkfifo/mkfifo_test.go#TestMkfifoErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:mkfifo:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [mkfifo](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/mkfifo.html).
 

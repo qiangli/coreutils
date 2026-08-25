@@ -309,6 +309,56 @@ func TestMkfifoDashOperandIsPathname(t *testing.T) {
 	}
 }
 
+// POSIX Issue 7: "--" ends option parsing, after which a dash-prefixed token
+// is an ordinary pathname rather than an option. "-m" would otherwise be the
+// mode option (and demand an argument), so its acceptance as a FIFO name is
+// positive proof that "--" delimits the option list.
+func TestMkfifoDoubleDashEndsOptions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native FIFO creation is unsupported on windows")
+	}
+	dir := t.TempDir()
+	_, errb, code := runTool(t, dir, "--", "-m")
+	if code != 0 || errb != "" {
+		t.Fatalf("mkfifo -- -m: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Lstat(filepath.Join(dir, "-m"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("mode=%v, want named pipe", fi.Mode())
+	}
+}
+
+// POSIX Issue 7 STDIN: "The standard input shall not be used." mkfifo must
+// create its FIFOs without reading a single byte of standard input.
+func TestMkfifoDoesNotConsumeStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native FIFO creation is unsupported on windows")
+	}
+	dir := t.TempDir()
+	const payload = "mkfifo must not read standard input\n"
+	in := strings.NewReader(payload)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Stdio: tool.Stdio{In: in, Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, []string{"pipe"})
+	if code != 0 {
+		t.Fatalf("mkfifo pipe: code=%d err=%q", code, errb.String())
+	}
+	if in.Len() != len(payload) {
+		t.Fatalf("mkfifo consumed %d of %d stdin bytes; POSIX STDIN: not used",
+			len(payload)-in.Len(), len(payload))
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "pipe")); err != nil {
+		t.Fatalf("fifo not created: %v", err)
+	}
+}
+
 func TestMkfifoErrors(t *testing.T) {
 	dir := t.TempDir()
 	_, errb, code := runTool(t, dir)
