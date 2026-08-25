@@ -1,6 +1,6 @@
 # Sprint 79: POSIX required-command interface status
 
-This report reconciles the Sprint 79 interface ledger through coreutils `e288c58`
+This report reconciles the Sprint 79 interface ledger through coreutils `94a4a7b`
 against POSIX.1-2016 Issue 7, current source, command-package tests, and the
 sibling `sh` and `bashy` evidence repositories. The canonical machine-readable
 source is [`posix-required-command-interfaces.tsv`](../posix-required-command-interfaces.tsv).
@@ -98,7 +98,9 @@ lower-ranked edges.
 | 1 | `fc` | `OPERANDS`, `STDOUT`, `EFFECTS`, `EXIT_STATUS` | Accepted tests prove form validation, first-only substitution, and multiline listing. Still add real editor invocation, forward/reverse/clamped ranges, history persistence limits, command re-execution state and status, `FCEDIT`/`HISTFILE`/`HISTSIZE`, and I/O/locale failures. |
 | 1 | `sh` | shell-language clauses beyond entrypoint selection | The process-level Bashy test proves the selected `sh` utility route, `-c`, script-file and stdin forms, `$0`/positional arguments, empty command, missing-file status, and argv0 strict-POSIX engagement. It does not prove the complete shell grammar, expansions, redirections, traps, environments, interactive/job-control behavior, and every 1-127 status consequence; retain partial. |
 | 2 | `at`, `batch`, `crontab` | `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Add scheduler integration tests for access policy, delivery/mail behavior, load gating, all locale time grammars, daemon handoff, and persisted execution environment. |
-| 2 | `awk`, `comm`, `csplit`, `cut`, `expand`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `tr`, `unexpand`, `uniq`, `wc` | `ENVIRONMENT_VARIABLES`, algorithmic `STDOUT` | Add non-C multibyte `LC_CTYPE`/`LC_COLLATE`/`LC_NUMERIC` fixtures that discriminate character boundaries, classes, equivalence, ranges, ordering, blanks, widths, and numeric rendering for each named command. |
+| 2 | `awk`, `comm`, `csplit`, `expr`, `fold`, `grep`, `join`, `sed`, `sort`, `tr`, `unexpand`, `uniq`, `wc` | `ENVIRONMENT_VARIABLES`, algorithmic `STDOUT` | Add non-C multibyte `LC_CTYPE`/`LC_COLLATE`/`LC_NUMERIC` fixtures that discriminate character boundaries, classes, equivalence, ranges, ordering, blanks, widths, and numeric rendering for each named command. |
+| 2 | `cut` | locale-provider integration | Accepted source now applies invocation `LC_CTYPE` to `-c`, `-b -n`, and multibyte `-d` boundaries while preserving exact input bytes; focused tests cover C/POSIX, UTF-8, ISO-8859-1, malformed input, precedence, long lines, and fail-before-I/O behavior. Remaining: the carried locale corpus is bounded and installed locales outside it fail closed. |
+| 2 | `expand` | locale-provider integration | Accepted source now retains exact byte spans and uses invocation `LC_CTYPE` for display-column accounting; focused tests cover C/POSIX, UTF-8 widths, ISO-8859-1, malformed input, precedence, `-i`, read errors, and short writes. Remaining: the carried locale corpus and Unicode width policy are bounded. |
 | 2 | `date` | XSI `OPERANDS`, `ENVIRONMENT_VARIABLES`, `EFFECTS` | Add privileged clock-set integration coverage, leap-second rendering, additional platform setters, and a complete installed-locale `LC_TIME` matrix with mutation-after-validation checks. |
 | 2 | `getconf` | platform integration | Accepted source now inventories every mandatory sysconf/pathconf/confstr/minimum name, routes pathname and system queries, distinguishes undefined results, validates programming environments, and propagates path/output errors. Remaining: privileged/kernel-limit products, a non-Linux/Darwin runtime provider, and broader native platform certification fixtures. |
 | 2 | `file` | `OPTIONS`, `STDOUT` | Add complete magic-file grammar and required type-string tests, including `-d`, `-i`, `-M`, symlink policy, stdin, inaccessible operands, and locale effects. |
@@ -147,14 +149,14 @@ references are
 command-specific sibling-sh tests from `c354d6fc`; the `sh` row additionally
 uses Bashy's process-level entrypoint contract alongside its two independent
 route/strict-mode tests. Validator evidence is pinned to canonical sibling
-`sh` at `7a1dfac` and `bashy` at `cef3ba4`; retained workspace copies are not
+`sh` at `6330c050` and `bashy` at `d9e1622`; retained workspace copies are not
 authoritative evidence roots. No shell repository is modified by this
 reconciliation. These path-and-test references do not prove complete clause
 coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
-This report is reconciled through canonical `e288c58`. It credits the accepted command
+This report is reconciled through canonical `94a4a7b`. It credits the accepted command
 waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `27031a7`, and `bf800b4`; `touch` through `0b4950b` and `b1da07b`; `cp` through
 `014684e`, `f523c76`, and `266f353`; `nice` through `afee303` and `4b6beb8`;
@@ -163,14 +165,16 @@ waves and their current test declarations: `more` through `b899308`, `4e78606`,
 `7fff4b6`, `4741bf9`, `dd63476`, `3aefbac`, `9ef3a43`, and matrix refresh
 `dc79ecd`; `iconv` through `70bc09b` and matrix refresh `056e48a`; `fold`
 through `e461654` and matrix refresh `c354351`; `getconf` through
-`ceae89d`, `2fbc91c`, and matrix refresh `07e9f17`; and `paste` through
-`7c519b3` and matrix refresh `e288c58`.
+`ceae89d`, `2fbc91c`, and matrix refresh `07e9f17`; `expand` through
+`e038148` and matrix refresh `befd0dc`; `cut` through `185851f` and matrix
+refresh `110c1f4`; and `paste` through `7a93e44` and matrix refresh `94a4a7b`.
 
 The machine-readable evidence lanes name the exact current test IDs, including
 the nice pre-exec barrier/failure path, newgrp credential/login/umask helper,
 pax interactive/preservation/extended-header families, iconv
 charmap/stream/status matrix, fold locale/byte/error matrix, getconf
-inventory/platform/error matrix, and paste locale-delimiter/error matrix.
+inventory/platform/error matrix, cut and expand locale/byte/error matrices,
+and paste locale-delimiter/error matrix.
 These recently accepted locale/platform waves remain partial because their
 locale-provider and platform residuals are stated explicitly above.
 

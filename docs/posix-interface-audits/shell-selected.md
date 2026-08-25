@@ -197,7 +197,7 @@ Normative interface: [`getopts optstring name [arg...]`](https://pubs.opengroup.
 
 ### `hash` — evidence_gap, medium (12)
 
-Normative interface: [`hash [utility...]` and `hash -r`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/hash.html); `-r` is required, operands update/report remembered utility locations, and no operands may report the table.  Bash 5.3 uses `builtins/hash.def`; Bashy uses `builtin.go` and `cmdHashTable`, with dedicated `hash_builtin_test.go`.  Sprint 68 retired three targeted Profile B identities in repeated complete pairs, but the generated ledger correctly remains unverified because no clause-complete shell evidence reference was recorded.
+Normative interface: [`hash [utility...]` and `hash -r`](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/hash.html); `-r` is required, operands update/report remembered utility locations, and no operands may report the table.  Bash 5.3 uses `builtins/hash.def`; Bashy uses `builtin.go` and `cmdHashTable`, with dedicated `hash_builtin_test.go`.  Sprint 68 retired three targeted Profile B identities in repeated complete pairs, and the generated ledger correctly remains partial because its focused semantic and routing references do not close the remaining PATH-mutation, invalidation, locale, and error products.
 
 ### `jobs` — evidence_gap, low (0)
 
