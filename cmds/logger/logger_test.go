@@ -90,6 +90,52 @@ func TestOperandsJoinWithSingleSpaces(t *testing.T) {
 	}
 }
 
+// A single empty-string operand is still ONE operand: len(operands) > 0 must
+// hold and the (empty) message must be logged, not silently rerouted to the
+// zero-operand stdin extension. An invocation with one empty argument and an
+// invocation with no arguments are different under POSIX, which requires at
+// least one string operand.
+func TestSingleEmptyStringOperandLogsAnEmptyMessage(t *testing.T) {
+	f := install(t, nil)
+	_, errOut, code := exec(t, testEnv, "unread stdin\n", "")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if len(f.got) != 1 {
+		t.Fatalf("want exactly one record, got %d: %+v", len(f.got), f.got)
+	}
+	if f.got[0].Message != "" {
+		t.Errorf("message = %q, want empty", f.got[0].Message)
+	}
+}
+
+// Every empty operand still contributes its own separator: N empty operands
+// join into a message of exactly N-1 spaces, matching the non-empty-operand
+// join rule in TestOperandsJoinWithSingleSpaces.
+func TestAllEmptyStringOperandsStillJoinWithSpaces(t *testing.T) {
+	f := install(t, nil)
+	_, errOut, code := exec(t, testEnv, "", "", "", "")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if len(f.got) != 1 || f.got[0].Message != "  " {
+		t.Errorf("got %+v, want one record with message %q", f.got, "  ")
+	}
+}
+
+// A leading or trailing empty operand still costs a separator, so the join is
+// visible at both ends of the message, not only in the middle.
+func TestLeadingAndTrailingEmptyOperandsJoinWithSpaces(t *testing.T) {
+	f := install(t, nil)
+	_, errOut, code := exec(t, testEnv, "", "", "middle", "")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if len(f.got) != 1 || f.got[0].Message != " middle " {
+		t.Errorf("got %+v, want one record with message %q", f.got, " middle ")
+	}
+}
+
 func TestNoOperandsReadsStdinOneRecordPerLine(t *testing.T) {
 	f := install(t, nil)
 	_, errOut, code := exec(t, testEnv, "first line\nsecond line\nthird\n")
