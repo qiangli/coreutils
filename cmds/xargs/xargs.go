@@ -98,9 +98,17 @@ func run(rc *tool.RunContext, args []string) int {
 			if !ok {
 				return tool.UsageError(rc, cmd, "option %s requires an argument", a)
 			}
-			o.maxLines, o.maxArgs, o.replace = atoiOr(v), -1, ""
+			n := atoiOr(v)
+			if n < 1 {
+				return tool.UsageError(rc, cmd, "-L requires a positive number")
+			}
+			o.maxLines, o.maxArgs, o.replace = n, -1, ""
 		case strings.HasPrefix(a, "-L") && len(a) > 2:
-			o.maxLines, o.maxArgs, o.replace = atoiOr(a[2:]), -1, ""
+			n := atoiOr(a[2:])
+			if n < 1 {
+				return tool.UsageError(rc, cmd, "-L requires a positive number")
+			}
+			o.maxLines, o.maxArgs, o.replace = n, -1, ""
 		case a == "-s":
 			v, ok := val()
 			if !ok {
@@ -562,7 +570,7 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 	// Replace mode: one invocation per item, substituting the replace-str.
 	if o.replace != "" {
 		replacementArgs := 0
-		for _, a := range command {
+		for _, a := range command[1:] {
 			if strings.Contains(a, o.replace) {
 				replacementArgs++
 			}
@@ -572,8 +580,9 @@ func plan(command []string, items []inputItem, o options) ([][]string, error) {
 		}
 		var batches [][]string
 		for _, it := range items {
-			argv := make([]string, len(command))
-			for k, a := range command {
+			argv := append([]string(nil), command...)
+			for k, a := range command[1:] {
+				k++
 				argv[k] = strings.ReplaceAll(a, o.replace, it.value)
 				if strings.Contains(a, o.replace) && len(argv[k]) > 255 {
 					return nil, fmt.Errorf("constructed argument exceeds 255 bytes")

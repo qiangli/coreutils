@@ -164,6 +164,13 @@ func TestXargsLogicalLines(t *testing.T) {
 	}
 }
 
+func TestXargsRejectsZeroLogicalLineLimit(t *testing.T) {
+	_, errOut, code := runXargs(t, "a\n", "-L0", "echo")
+	if code == 0 || !strings.Contains(errOut, "-L requires a positive number") {
+		t.Fatalf("-L0: code=%d stderr=%q", code, errOut)
+	}
+}
+
 func TestXargsLogicalLinesContinueAfterTrailingBlank(t *testing.T) {
 	input := "one \n\n two\nthree\nfour \t\n\nfive\nsix\n"
 	out, errOut, code := runXargs(t, input, "-L2", "echo")
@@ -203,6 +210,18 @@ func TestXargsReplaceIssue7Limits(t *testing.T) {
 	_, errOut, code = runXargs(t, long+"\n", "-I{}", "echo", "{}")
 	if code == 0 || !strings.Contains(errOut, "255 bytes") {
 		t.Fatalf("-I constructed argument limit: code=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestXargsReplaceAppliesOnlyToArgumentOperands(t *testing.T) {
+	command := []string{"utility{}", "{}", "pre{}", "{}post", "x{}y", "{}"}
+	batches, err := plan(command, []inputItem{{value: "item", line: 1}}, options{replace: "{}", maxChars: 1024})
+	if err != nil {
+		t.Fatalf("plan with five replacement arguments: %v", err)
+	}
+	want := []string{"utility{}", "item", "preitem", "itempost", "xitemy", "item"}
+	if len(batches) != 1 || strings.Join(batches[0], "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("-I planned argv=%v, want %v", batches, want)
 	}
 }
 
