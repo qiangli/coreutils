@@ -13,7 +13,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -44,6 +48,12 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "invalid radix: %q (must be o, d or x)", *radix)
 	}
 
+	isPrint, isUTF8, err := getPrintableFunc(rc)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "strings: %v\n", err)
+		return 1
+	}
+
 	w := bufio.NewWriter(rc.Out)
 	exit := 0
 	if len(operands) == 0 {
@@ -51,30 +61,19 @@ func run(rc *tool.RunContext, args []string) int {
 		if in == nil {
 			in = strings.NewReader("")
 		}
-		if err := scan(in, w, *minLen, *radix); err != nil {
+		if err := scan(in, w, *minLen, *radix, isPrint, isUTF8); err != nil {
 			fmt.Fprintf(rc.Err, "strings: %v\n", err)
 			exit = 1
 		}
 	}
 	for _, name := range operands {
-		if name == "-" {
-			in := rc.In
-			if in == nil {
-				in = strings.NewReader("")
-			}
-			if err := scan(in, w, *minLen, *radix); err != nil {
-				fmt.Fprintf(rc.Err, "strings: -: %v\n", sysErr(err))
-				exit = 1
-			}
-			continue
-		}
 		f, err := os.Open(rc.Path(name))
 		if err != nil {
 			fmt.Fprintf(rc.Err, "strings: %s: %v\n", name, sysErr(err))
 			exit = 1
 			continue
 		}
-		err = scan(f, w, *minLen, *radix)
+		err = scan(f, w, *minLen, *radix, isPrint, isUTF8)
 		f.Close()
 		if err != nil {
 			fmt.Fprintf(rc.Err, "strings: %s: %v\n", name, sysErr(err))
@@ -88,17 +87,52 @@ func run(rc *tool.RunContext, args []string) int {
 	return exit
 }
 
-// printable matches GNU strings' default character set: isprint(3) ASCII set.
-func printable(c byte) bool {
-	return c >= 32 && c <= 126
+func getPrintableFunc(rc *tool.RunContext) (func(rune) bool, bool, error) {
+	loc := locale.Resolve(rc.Env, locale.CType)
+	locLower := strings.ToLower(loc)
+
+	if locLower == "c" || locLower == "posix" || loc == "" {
+		return func(r rune) bool {
+			return r >= 32 && r <= 126
+		}, false, nil
+	}
+
+	if strings.Contains(locLower, "utf-8") || strings.Contains(locLower, "utf8") {
+		return func(r rune) bool {
+			return unicode.IsPrint(r)
+		}, true, nil
+	}
+
+	p, err := ctype.Open(loc)
+	if err != nil {
+		return nil, false, err
+	}
+	defer p.Close()
+
+	var isPrint [256]bool
+	for i := 0; i < 256; i++ {
+		ok, err := p.IsPrint(byte(i))
+		if err != nil {
+			return nil, false, err
+		}
+		isPrint[i] = ok
+	}
+
+	return func(r rune) bool {
+		if r > 255 {
+			return false
+		}
+		return isPrint[r]
+	}, false, nil
 }
 
-func scan(r io.Reader, w *bufio.Writer, minLen int, radix string) error {
+func scan(r io.Reader, w *bufio.Writer, minLen int, radix string, isPrint func(rune) bool, isUTF8 bool) error {
 	br := bufio.NewReaderSize(r, 64*1024)
-	var run []byte
+	var runBytes []byte
+	var runCharLen int
 	var offset, start int64
 	flush := func() error {
-		if len(run) >= minLen {
+		if runCharLen >= minLen {
 			switch radix {
 			case "o":
 				fmt.Fprintf(w, "%7o ", start)
@@ -107,35 +141,63 @@ func scan(r io.Reader, w *bufio.Writer, minLen int, radix string) error {
 			case "x":
 				fmt.Fprintf(w, "%7x ", start)
 			}
-			if _, err := w.Write(run); err != nil {
+			if _, err := w.Write(runBytes); err != nil {
 				return err
 			}
 			if err := w.WriteByte('\n'); err != nil {
 				return err
 			}
 		}
-		run = run[:0]
+		runBytes = runBytes[:0]
+		runCharLen = 0
 		return nil
 	}
 	for {
-		b, err := br.ReadByte()
-		if err == io.EOF {
-			return flush()
-		}
-		if err != nil {
-			return err
-		}
-		if printable(b) {
-			if len(run) == 0 {
-				start = offset
+		if isUTF8 {
+			rn, size, err := br.ReadRune()
+			if err == io.EOF {
+				return flush()
 			}
-			run = append(run, b)
+			if err != nil {
+				return err
+			}
+			if rn != utf8.RuneError && isPrint(rn) {
+				if runCharLen == 0 {
+					start = offset
+				}
+				runBytes = utf8.AppendRune(runBytes, rn)
+				runCharLen++
+			} else {
+				if rn == utf8.RuneError {
+					// Invalid sequence counts as non-printable.
+					// Actually, ReadRune consumed 1 byte.
+				}
+				if ferr := flush(); ferr != nil {
+					return ferr
+				}
+			}
+			offset += int64(size)
 		} else {
-			if ferr := flush(); ferr != nil {
-				return ferr
+			b, err := br.ReadByte()
+			if err == io.EOF {
+				return flush()
 			}
+			if err != nil {
+				return err
+			}
+			if isPrint(rune(b)) {
+				if runCharLen == 0 {
+					start = offset
+				}
+				runBytes = append(runBytes, b)
+				runCharLen++
+			} else {
+				if ferr := flush(); ferr != nil {
+					return ferr
+				}
+			}
+			offset++
 		}
-		offset++
 	}
 }
 

@@ -453,13 +453,10 @@ func TestTerminalTypeResolution(t *testing.T) {
 		}
 	})
 
-	t.Run("no terminal at all is a usage error", func(t *testing.T) {
-		_, errb, code := runIn(t, dir, nil, "-8")
-		if code != 2 {
+	t.Run("no terminal at all defaults to ansi", func(t *testing.T) {
+		_, _, code := runIn(t, dir, nil, "-8")
+		if code != exitOK {
 			t.Errorf("exit %d, want 2", code)
-		}
-		if !strings.Contains(errb, "TERM") {
-			t.Errorf("stderr = %q", errb)
 		}
 	})
 }

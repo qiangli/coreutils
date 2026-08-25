@@ -26,6 +26,22 @@ func runTool(t *testing.T, dir, stdin string, args ...string) (stdout, stderr st
 	return out.String(), errb.String(), code
 }
 
+func runToolEnv(t *testing.T, dir string, env []string, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	if dir == "" {
+		dir = t.TempDir()
+	}
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   dir,
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
+	}
+	code = cmd.Run(rc, args)
+	return out.String(), errb.String(), code
+}
+
 func TestStrings(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -70,10 +86,45 @@ func TestStringsFiles(t *testing.T) {
 	}
 }
 
-func TestStringsDashStdin(t *testing.T) {
-	out, errb, code := runTool(t, "", "abc\x00def", "-n", "3", "-")
-	if errb != "" || code != 0 || out != "abc\ndef\n" {
-		t.Errorf("dash stdin: (%q, %q, %d), want (%q, _, 0)", out, errb, code, "abc\ndef\n")
+func TestStringsDashPathname(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "-"), []byte("\x00dashfile\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := runTool(t, dir, "stdin-ignored", "-")
+	if errb != "" || code != 0 || out != "dashfile\n" {
+		t.Errorf("dash pathname: (%q, %q, %d), want (%q, _, 0)", out, errb, code, "dashfile\n")
+	}
+}
+
+func TestStringsUTF8(t *testing.T) {
+	stdin := "\x00\x00こんにちは\xffhi\x00"
+
+	// Test UTF-8 mode
+	out, errb, code := runToolEnv(t, "", []string{"LC_ALL=en_US.UTF-8"}, stdin, "-n", "2")
+	if errb != "" || code != 0 {
+		t.Errorf("utf8 error: %q %d", errb, code)
+	}
+	want := "こんにちは\nhi\n"
+	if out != want {
+		t.Errorf("utf8 out: got %q, want %q", out, want)
+	}
+
+	out, errb, code = runToolEnv(t, "", []string{"LC_ALL=en_US.UTF-8"}, stdin, "-n", "3")
+	want = "こんにちは\n"
+	if out != want {
+		t.Errorf("utf8 min 3 out: got %q, want %q", out, want)
+	}
+
+	out, errb, code = runToolEnv(t, "", []string{"LC_ALL=C"}, stdin, "-n", "2")
+	wantC := "hi\n"
+	if out != wantC {
+		t.Errorf("C locale out: got %q, want %q", out, wantC)
+	}
+
+	out, errb, code = runToolEnv(t, "", []string{"LC_ALL=invalid.locale"}, stdin, "-n", "2")
+	if code == 0 || !strings.Contains(errb, "unsupported locale") {
+		t.Errorf("unsupported locale: got (%q, %d)", errb, code)
 	}
 }
 

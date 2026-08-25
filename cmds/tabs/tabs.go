@@ -116,7 +116,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	fs := tool.NewFlags(cmd.Name)
-	termType := fs.StringP("terminal", "T", "", "terminal `type` (default: $TERM)")
+	termType := fs.StringP("terminal", "T", "", "terminal `type` (default: $TERM, then ansi)")
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
@@ -139,7 +139,7 @@ func run(rc *tool.RunContext, args []string) int {
 		name = rc.Getenv("TERM")
 	}
 	if name == "" {
-		return tool.UsageError(rc, cmd, "no value for $TERM and no -T specified")
+		name = "ansi"
 	}
 	e, err := terminfo.Load(rc.Getenv, name)
 	if err != nil {
