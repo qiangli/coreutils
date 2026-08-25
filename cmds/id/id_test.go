@@ -431,7 +431,7 @@ func TestIDNamedUserOperand(t *testing.T) {
 	if strings.Contains(out, "euid=") || strings.Contains(out, "egid=") {
 		t.Errorf("named user output %q should not contain euid/egid", out)
 	}
-	if !strings.HasPrefix(out, "uid="+u.Uid) || !strings.Contains(out, "groups=") {
+	if !strings.HasPrefix(out, "uid="+u.Uid) || !strings.Contains(out, " gid="+u.Gid) {
 		t.Errorf("named user output %q malformed", out)
 	}
 
@@ -458,8 +458,9 @@ func TestIDNamedUserOperand(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("-G USER: code=%d err=%q", code, errb)
 	}
-	if !strings.HasPrefix(out, u.Gid) {
-		t.Errorf("-G USER = %q, want to start with primary GID %q", out, u.Gid)
+	fields := strings.Fields(out)
+	if len(fields) == 0 || fields[0] != u.Gid {
+		t.Errorf("-G USER = %q, want first field to be primary GID %q", out, u.Gid)
 	}
 }
 
@@ -479,9 +480,8 @@ func TestIDNamedUserOperandCombinations(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("-g -n USER: code=%d err=%q", code, errb)
 	}
-	// Note: u.Gid name might differ from u.Username, but we want it to be not empty
-	if strings.TrimSpace(out) == "" {
-		t.Errorf("-g -n USER output empty")
+	if got, want := strings.TrimSpace(out), groupName(u.Gid); got != want {
+		t.Errorf("-g -n USER = %q, want resolved-name-or-ID fallback %q", got, want)
 	}
 
 	// -Gn USER
@@ -489,8 +489,16 @@ func TestIDNamedUserOperandCombinations(t *testing.T) {
 	if code != 0 || errb != "" {
 		t.Fatalf("-G -n USER: code=%d err=%q", code, errb)
 	}
-	if strings.TrimSpace(out) == "" {
-		t.Errorf("-G -n USER output empty")
+	gids, err := u.GroupIds()
+	if err != nil {
+		t.Fatalf("GroupIds: %v", err)
+	}
+	wantGroups := uniqueNonempty(append([]string{u.Gid}, gids...))
+	for i := range wantGroups {
+		wantGroups[i] = groupName(wantGroups[i])
+	}
+	if got, want := strings.TrimSpace(out), strings.Join(wantGroups, " "); got != want {
+		t.Errorf("-G -n USER = %q, want resolved-name-or-ID fallbacks %q", got, want)
 	}
 
 	// -run USER (POSIX: -r is ignored if no difference, but it's valid)
