@@ -146,12 +146,11 @@ process, filesystem, or grammar residuals. The new `bg`, `fc`, `fg`, and `jobs`
 references are
 command-specific sibling-sh tests from `c354d6fc`; the `sh` row additionally
 uses Bashy's process-level entrypoint contract alongside its two independent
-route/strict-mode tests. Validator evidence is pinned to the current canonical
-trees `/Users/qiangli/projects/poc/dhnt/sh` at `7a1dfac` and
-`/Users/qiangli/projects/poc/dhnt/bashy` at `cef3ba4`; the retained weave
-siblings are not authoritative evidence roots. No shell repository is modified
-by this reconciliation. These path-and-test references do not prove complete
-clause coverage: that is why twenty rows remain partial.
+route/strict-mode tests. Validator evidence is pinned to canonical sibling
+`sh` at `7a1dfac` and `bashy` at `cef3ba4`; retained workspace copies are not
+authoritative evidence roots. No shell repository is modified by this
+reconciliation. These path-and-test references do not prove complete clause
+coverage: that is why twenty rows remain partial.
 
 ## Accepted source-wave reconciliation
 
