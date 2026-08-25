@@ -37,7 +37,10 @@ import (
 var cmd = &tool.Tool{
 	Name:     "iconv",
 	Synopsis: "Convert text from one character encoding to another.",
-	Usage:    "iconv [-l] [-s] -f FROMCODE -t TOCODE [FILE]...",
+	Usage: "iconv [-cs] -f frommap -t tomap [file...]\n" +
+		"       iconv -f fromcode [-cs] [-t tocode] [file...]\n" +
+		"       iconv -t tocode [-cs] [-f fromcode] [file...]\n" +
+		"       iconv -l",
 }
 
 var supportedEncodings = []string{
@@ -629,6 +632,9 @@ func (r *errorTrackingReader) Read(p []byte) (int, error) {
 
 func (w *errorTrackingWriter) Write(p []byte) (int, error) {
 	n, err := w.w.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
 	if err != nil {
 		w.err = err
 	}

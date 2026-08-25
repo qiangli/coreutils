@@ -55,9 +55,18 @@ func runCharmapConversion(rc *tool.RunContext, fromPath, toPath string, files []
 		invalid := false
 		for pos := 0; pos < len(data); {
 			consumed, replacement := charmapMatch(from, to, data[pos:])
-			if consumed == 0 || replacement == nil {
+			if consumed == 0 {
 				invalid = true
 				pos++
+				continue
+			}
+			if replacement == nil {
+				// A source character with no symbolic match in the target is one
+				// invalid character, even when its encoding spans several bytes.
+				// Consume the whole source character so a suffix byte cannot be
+				// reinterpreted as a separate valid character.
+				invalid = true
+				pos += consumed
 				continue
 			}
 			n, err := rc.Out.Write(replacement)
