@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -32,12 +33,16 @@ type utmpLayout struct {
 	HostOff, HostLen int
 	TypeOff          int // int16 ut_type
 	PIDOff           int // int32 ut_pid; -1 when the layout has no pid
-	TimeOff          int // int32 seconds since the epoch (ut_tv.tv_sec)
+	TimeOff          int // seconds since the epoch (ut_tv.tv_sec)
+	TimeLen          int // width of tv_sec: 4 for compat layouts, 8 for native 64-bit time_t
 
 	UserProcess int16 // the ut_type value meaning "a user is logged in here"
 }
 
-// layoutLinuxUtmp is glibc's `struct utmp` (utmp(5)), 384 bytes:
+// layoutLinuxUtmpCompat32 is glibc's compatibility `struct utmp` layout used
+// by amd64 and the supported 32-bit Linux targets. glibc deliberately keeps
+// the timeval fields 32-bit on those ABIs so 32-bit and 64-bit processes can
+// share the same accounting files.
 //
 //	off   size  field
 //	  0      2  short ut_type
@@ -56,8 +61,8 @@ type utmpLayout struct {
 //
 // ut_tv is a 32-bit pair even on 64-bit Linux, which is why TimeOff is read as
 // an int32 and not as the platform's time_t.
-var layoutLinuxUtmp = utmpLayout{
-	Name: "linux utmp",
+var layoutLinuxUtmpCompat32 = utmpLayout{
+	Name: "linux utmp compat32",
 	Size: 384,
 
 	UserOff: 44, UserLen: 32,
@@ -66,8 +71,27 @@ var layoutLinuxUtmp = utmpLayout{
 	TypeOff: 0,
 	PIDOff:  4,
 	TimeOff: 340,
+	TimeLen: 4,
 
 	UserProcess: 7, // USER_PROCESS
+}
+
+// layoutLinuxUtmpTime64 is the native-time glibc layout used by Linux arm64:
+// struct timeval is 16 bytes, moving ut_tv to offset 344 and
+// making the complete struct 400 bytes. This is the ABI in Ubuntu 24.04 arm64.
+var layoutLinuxUtmpTime64 = utmpLayout{
+	Name: "linux utmp time64",
+	Size: 400,
+
+	UserOff: 44, UserLen: 32,
+	LineOff: 8, LineLen: 32,
+	HostOff: 76, HostLen: 256,
+	TypeOff: 0,
+	PIDOff:  4,
+	TimeOff: 344,
+	TimeLen: 8,
+
+	UserProcess: 7,
 }
 
 // layoutDarwinUtmpx is Darwin's `struct utmpx` (<utmpx.h>), 628 bytes:
@@ -99,6 +123,7 @@ var layoutDarwinUtmpx = utmpLayout{
 	TypeOff: 296,
 	PIDOff:  292,
 	TimeOff: 300,
+	TimeLen: 4,
 
 	UserProcess: 7, // USER_PROCESS
 }
@@ -149,12 +174,21 @@ func decodeUtmp(r io.Reader, layout utmpLayout) ([]utmpRecord, error) {
 		if layout.PIDOff >= 0 {
 			pid = int(int32(order.Uint32(rec[layout.PIDOff : layout.PIDOff+4])))
 		}
+		var seconds int64
+		switch layout.TimeLen {
+		case 4:
+			seconds = int64(int32(order.Uint32(rec[layout.TimeOff : layout.TimeOff+4])))
+		case 8:
+			seconds = int64(order.Uint64(rec[layout.TimeOff : layout.TimeOff+8]))
+		default:
+			return nil, fmt.Errorf("%s: unsupported tv_sec width %d", layout.Name, layout.TimeLen)
+		}
 		out = append(out, utmpRecord{
 			User: user,
 			Line: line,
 			Host: cString(rec[layout.HostOff : layout.HostOff+layout.HostLen]),
 			PID:  pid,
-			Time: time.Unix(int64(int32(order.Uint32(rec[layout.TimeOff:layout.TimeOff+4]))), 0),
+			Time: time.Unix(seconds, 0),
 		})
 	}
 	return out, nil
@@ -194,7 +228,12 @@ func encodeUtmp(recs []utmpRecord, layout utmpLayout, typ int16) []byte {
 		if layout.PIDOff >= 0 {
 			order.PutUint32(rec[layout.PIDOff:layout.PIDOff+4], uint32(int32(r.PID)))
 		}
-		order.PutUint32(rec[layout.TimeOff:layout.TimeOff+4], uint32(int32(r.Time.Unix())))
+		switch layout.TimeLen {
+		case 4:
+			order.PutUint32(rec[layout.TimeOff:layout.TimeOff+4], uint32(int32(r.Time.Unix())))
+		case 8:
+			order.PutUint64(rec[layout.TimeOff:layout.TimeOff+8], uint64(r.Time.Unix()))
+		}
 		buf = append(buf, rec...)
 	}
 	return buf

@@ -57,7 +57,7 @@ var epoch = time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC)
 func install(t *testing.T, f fixture) *world {
 	t.Helper()
 	if f.layout.Size == 0 {
-		f.layout = layoutLinuxUtmp
+		f.layout = layoutLinuxUtmpCompat32
 	}
 	if f.sender == "" {
 		f.sender = "alice"
@@ -107,6 +107,7 @@ func install(t *testing.T, f fixture) *world {
 	oldStat, oldOpen := statFn, openTTYFn
 	oldControlTTY, oldGetVEOL, oldCType := openSenderControlTTYFn, getVEOL, openCTypeFn
 	oldSessionActive, oldSessionOwns, oldTerminalDevice := sessionActiveFn, sessionOwnsTerminalFn, terminalDeviceFn
+	oldWatchInterrupt := watchInterruptFn
 
 	dbPath, dbLayout, devDir = db, f.layout, dev
 	supported = !f.noPlat
@@ -145,6 +146,7 @@ func install(t *testing.T, f fixture) *world {
 		statFn, openTTYFn = oldStat, oldOpen
 		sessionActiveFn, sessionOwnsTerminalFn, terminalDeviceFn = oldSessionActive, oldSessionOwns, oldTerminalDevice
 		openSenderControlTTYFn, getVEOL, openCTypeFn = oldControlTTY, oldGetVEOL, oldCType
+		watchInterruptFn = oldWatchInterrupt
 	})
 	return w
 }
@@ -717,6 +719,27 @@ type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
+type interruptingWriteCloser struct {
+	bytes.Buffer
+	once func()
+}
+
+func (w *interruptingWriteCloser) Write(p []byte) (int, error) {
+	n, err := w.Buffer.Write(p)
+	if w.once != nil {
+		fn := w.once
+		w.once = nil
+		fn()
+	}
+	return n, err
+}
+
+func (w *interruptingWriteCloser) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+func (*interruptingWriteCloser) Close() error { return nil }
+
 func TestWriteErrorToTerminalIsReported(t *testing.T) {
 	install(t, fixture{
 		uid: 1000, myTTY: "pts/1",
@@ -810,6 +833,68 @@ func TestBannerCompletesBeforeSenderAlerts(t *testing.T) {
 	}
 	if len(events) < 2 || events[0] != "banner" || events[1] != "alerts" {
 		t.Fatalf("cross-sink order = %v", events)
+	}
+}
+
+func TestInterruptAfterBannerWritesEOTWithoutAlertOrBody(t *testing.T) {
+	var alerts bytes.Buffer
+	install(t, fixture{uid: 1000, myTTY: "pts/1", controlW: &alerts,
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	sigCh := make(chan os.Signal, 1)
+	watchInterruptFn = func() (chan os.Signal, func()) { return sigCh, func() {} }
+	recipient := &interruptingWriteCloser{once: func() { sigCh <- os.Interrupt }}
+	openTTYFn = func(string) (io.WriteCloser, error) { return recipient, nil }
+	_, errOut, code := exec(t, "body\n", "bob")
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+	if !strings.Contains(recipient.String(), "Message from") || !strings.HasSuffix(recipient.String(), "EOT\n") ||
+		strings.Contains(recipient.String(), "body\n") || alerts.Len() != 0 {
+		t.Fatalf("recipient=%q alerts=%q pending-signal=%d", recipient.String(), alerts.String(), len(sigCh))
+	}
+}
+
+func TestInterruptAfterMultiLoginNoticeWritesEOTWithoutAlertOrBody(t *testing.T) {
+	var alerts bytes.Buffer
+	install(t, fixture{uid: 1000, myTTY: "pts/1", controlW: &alerts,
+		logins: []login{
+			{user: "bob", line: "pts/2", mode: writable, when: epoch},
+			{user: "bob", line: "pts/4", mode: writable, when: epoch.Add(time.Hour)},
+		}})
+	sigCh := make(chan os.Signal, 1)
+	watchInterruptFn = func() (chan os.Signal, func()) { return sigCh, func() {} }
+	var recipient bytes.Buffer
+	openTTYFn = func(string) (io.WriteCloser, error) { return nopWriteCloser{&recipient}, nil }
+	out := &interruptingWriteCloser{once: func() { sigCh <- os.Interrupt }}
+	var errOut bytes.Buffer
+	rc := &tool.RunContext{Dir: t.TempDir(), Stdio: tool.Stdio{
+		In: strings.NewReader("body\n"), Out: out, Err: &errOut,
+	}}
+	if code := run(rc, []string{"bob"}); code != 0 || errOut.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "using pts/4") || !strings.HasSuffix(recipient.String(), "EOT\n") ||
+		strings.Contains(recipient.String(), "body\n") || alerts.Len() != 0 {
+		t.Fatalf("stdout=%q recipient=%q alerts=%q pending-signal=%d", out.String(), recipient.String(), alerts.String(), len(sigCh))
+	}
+}
+
+func TestInterruptAfterAlertsWritesEOTWithoutBody(t *testing.T) {
+	install(t, fixture{uid: 1000, myTTY: "pts/1",
+		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
+	sigCh := make(chan os.Signal, 1)
+	watchInterruptFn = func() (chan os.Signal, func()) { return sigCh, func() {} }
+	alerts := &interruptingWriteCloser{once: func() { sigCh <- os.Interrupt }}
+	openSenderControlTTYFn = func(*tool.RunContext, string) (io.WriteCloser, error) { return alerts, nil }
+	var recipient bytes.Buffer
+	openTTYFn = func(string) (io.WriteCloser, error) { return nopWriteCloser{&recipient}, nil }
+	_, errOut, code := exec(t, "body\n", "bob")
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit=%d stderr=%q", code, errOut)
+	}
+	if alerts.String() != "\a\a" || !strings.HasSuffix(recipient.String(), "EOT\n") ||
+		strings.Contains(recipient.String(), "body\n") {
+		t.Fatalf("recipient=%q alerts=%q pending-signal=%d", recipient.String(), alerts.String(), len(sigCh))
 	}
 }
 
@@ -1075,10 +1160,9 @@ func TestSenderControlTerminalIsClosed(t *testing.T) {
 	}
 }
 
-// slowReader is neither an *os.File nor a bytes/strings reader: the shape an
-// embedding host (bashy's ExecHandler, mvdan.cc/sh) routinely hands a tool.
-// It must be delivered, not refused - an earlier revision failed closed here,
-// which turned `printf ... | write bob` inside the shell into a hard error.
+// slowReader deliberately advertises Len while retaining an unconstrained Read
+// implementation. Len is not a non-blocking contract and must not be used as
+// evidence that an arbitrary caller-owned reader is safe to enter.
 type slowReader struct {
 	chunks []string
 	n      int
@@ -1101,19 +1185,22 @@ func (r *slowReader) Read(p []byte) (int, error) {
 	return copy(p, c), nil
 }
 
-func TestGenericReaderIsDeliveredNotRefused(t *testing.T) {
-	w := install(t, fixture{uid: 1000, myTTY: "pts/1",
+func TestArbitraryLenReaderIsRejectedBeforeVisibleSideEffects(t *testing.T) {
+	var alerts bytes.Buffer
+	w := install(t, fixture{uid: 1000, myTTY: "pts/1", controlW: &alerts,
 		logins: []login{{user: "bob", line: "pts/9", mode: writable, when: epoch}}})
 	var out, errb bytes.Buffer
+	r := &slowReader{chunks: []string{"one\n", "two\n", "tail"}}
 	rc := &tool.RunContext{
 		Dir:   t.TempDir(),
-		Stdio: tool.Stdio{In: &slowReader{chunks: []string{"one\n", "two\n", "tail"}}, Out: &out, Err: &errb},
+		Stdio: tool.Stdio{In: r, Out: &out, Err: &errb},
 	}
-	if code := run(rc, []string{"bob"}); code != 0 {
-		t.Fatalf("exit = %d: %s", code, errb.String())
+	if code := run(rc, []string{"bob"}); code != 1 || !strings.Contains(errb.String(), "cannot be interrupted safely") {
+		t.Fatalf("exit = %d stderr=%q", code, errb.String())
 	}
-	if got := w.read(t, "pts/9"); !strings.Contains(got, "one\ntwo\ntail\nEOT\n") {
-		t.Errorf("recipient terminal = %q", got)
+	if r.n != 0 || w.read(t, "pts/9") != "" || alerts.Len() != 0 || out.Len() != 0 {
+		t.Fatalf("preflight had side effects: reads=%d recipient=%q alerts=%q stdout=%q",
+			r.n, w.read(t, "pts/9"), alerts.String(), out.String())
 	}
 }
 
@@ -1127,7 +1214,7 @@ func (r *opaqueBlockingReader) Read([]byte) (int, error) {
 func TestOpaqueBlockingReaderIsRejectedWithoutReadOrLeak(t *testing.T) {
 	r := new(opaqueBlockingReader)
 	before := goroutineCount()
-	err := deliverStream(io.Discard, r, 0, loadCharClasses([]string{"LC_ALL=C"}), make(chan os.Signal))
+	_, err := prepareInput(r)
 	if err == nil || !strings.Contains(err.Error(), "cannot be interrupted safely") {
 		t.Fatalf("error = %v", err)
 	}
@@ -1161,24 +1248,16 @@ func (r *deadlineBlockingReader) Read([]byte) (int, error) {
 	return 0, os.ErrDeadlineExceeded
 }
 
-func TestDeadlineGenericReaderInterruptsWithoutCloseOrGoroutine(t *testing.T) {
+func TestDeadlineGenericReaderIsRejectedWithoutMutatingCaller(t *testing.T) {
 	r := new(deadlineBlockingReader)
-	sigCh := make(chan os.Signal, 1)
-	var out bytes.Buffer
-	done := make(chan error, 1)
-	go func() { done <- deliverStream(&out, r, 0, loadCharClasses([]string{"LC_ALL=C"}), sigCh) }()
-	time.Sleep(20 * time.Millisecond)
-	sigCh <- os.Interrupt
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("deadline-capable generic reader did not interrupt")
+	if _, err := prepareInput(r); err == nil || !strings.Contains(err.Error(), "cannot be interrupted safely") {
+		t.Fatalf("error=%v", err)
 	}
-	if out.String() != "EOT\n" {
-		t.Fatalf("output=%q", out.String())
+	r.mu.Lock()
+	deadline := r.deadline
+	r.mu.Unlock()
+	if !deadline.IsZero() {
+		t.Fatalf("caller-owned deadline was mutated to %v", deadline)
 	}
 }
 

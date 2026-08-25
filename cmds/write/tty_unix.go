@@ -39,8 +39,9 @@ func defaultSenderTTY(rc *tool.RunContext) string {
 				candidates = append(candidates, f)
 			}
 		}
+	} else {
+		candidates = append(candidates, os.Stdin, os.Stdout, os.Stderr)
 	}
-	candidates = append(candidates, os.Stdin, os.Stdout, os.Stderr)
 
 	for _, f := range candidates {
 		if f == nil {
@@ -127,8 +128,9 @@ func senderStreamMatches(rc *tool.RunContext, expected string, opened fs.FileInf
 				candidates = append(candidates, f)
 			}
 		}
+	} else {
+		candidates = append(candidates, os.Stdin, os.Stdout, os.Stderr)
 	}
-	candidates = append(candidates, os.Stdin, os.Stdout, os.Stderr)
 	for _, candidate := range candidates {
 		if candidate == nil || !term.IsTerminal(int(candidate.Fd())) {
 			continue
@@ -169,7 +171,7 @@ func defaultSessionOwnsTerminal(pid int, path string) bool {
 		return false
 	}
 	if runtime.GOOS != "linux" {
-		return true
+		return false
 	}
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {

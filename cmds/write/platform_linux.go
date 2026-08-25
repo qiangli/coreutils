@@ -10,10 +10,4 @@ import "errors"
 // records sessions that have ended.
 const defaultUtmpPath = "/var/run/utmp"
 
-var activeUtmpLayout = layoutLinuxUtmp
-
-const platformSupported = true
-
-// Unused in production on Linux (platformSupported is a true constant), but
-// defined so the refusal path has one spelling on every target.
-var errPlatform = errors.New("terminal messaging is unavailable on this system")
+var errPlatform = errors.New("terminal messaging is unavailable for this Linux architecture")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -12,7 +13,9 @@ import (
 // to be building. A layout is a set of byte offsets: if it only ever runs on
 // the machine that wrote it, an offset error in the other one ships silently
 // and surfaces as write addressing the wrong terminal on someone else's host.
-func layouts() []utmpLayout { return []utmpLayout{layoutLinuxUtmp, layoutDarwinUtmpx} }
+func layouts() []utmpLayout {
+	return []utmpLayout{layoutLinuxUtmpCompat32, layoutLinuxUtmpTime64, layoutDarwinUtmpx}
+}
 
 func TestLayoutFieldsStayInsideTheStruct(t *testing.T) {
 	for _, l := range layouts() {
@@ -25,7 +28,7 @@ func TestLayoutFieldsStayInsideTheStruct(t *testing.T) {
 			{"ut_host", l.HostOff, l.HostLen},
 			{"ut_type", l.TypeOff, 2},
 			{"ut_pid", l.PIDOff, 4},
-			{"ut_tv.tv_sec", l.TimeOff, 4},
+			{"ut_tv.tv_sec", l.TimeOff, l.TimeLen},
 		}
 		for _, s := range spans {
 			if s.off < 0 || s.off+s.width > l.Size {
@@ -108,7 +111,7 @@ func TestDecodeIgnoresATruncatedTrailingRecord(t *testing.T) {
 // ut_user and ut_line are NUL-padded fixed arrays, and some login programs pad
 // with spaces instead. A tty named "pts/0   " resolves to no device at all.
 func TestDecodeTrimsPaddingAndSkipsEmptyFields(t *testing.T) {
-	l := layoutLinuxUtmp
+	l := layoutLinuxUtmpCompat32
 	rec := make([]byte, l.Size)
 	rec[l.TypeOff] = byte(l.UserProcess)
 	copy(rec[l.UserOff:], "alice\x00   ")
@@ -132,10 +135,10 @@ func TestDecodeTrimsPaddingAndSkipsEmptyFields(t *testing.T) {
 }
 
 func TestReadUtmpFileReportsAMissingDatabase(t *testing.T) {
-	if _, err := readUtmpFile(filepath.Join(t.TempDir(), "nope"), layoutLinuxUtmp); !os.IsNotExist(err) {
+	if _, err := readUtmpFile(filepath.Join(t.TempDir(), "nope"), layoutLinuxUtmpCompat32); !os.IsNotExist(err) {
 		t.Errorf("missing database: err = %v, want a not-exist error", err)
 	}
-	if _, err := readUtmpFile("", layoutLinuxUtmp); err != errNoLayout {
+	if _, err := readUtmpFile("", layoutLinuxUtmpCompat32); err != errNoLayout {
 		t.Errorf("no path: err = %v, want errNoLayout", err)
 	}
 	if _, err := decodeUtmp(bytes.NewReader(nil), utmpLayout{}); err != errNoLayout {
@@ -149,12 +152,12 @@ func TestReadUtmpFileReportsAMissingDatabase(t *testing.T) {
 func TestActiveLayoutMatchesThePlatform(t *testing.T) {
 	switch {
 	case platformSupported && defaultUtmpPath == "/var/run/utmp":
-		if activeUtmpLayout.Name != layoutLinuxUtmp.Name {
-			t.Errorf("linux selected %q", activeUtmpLayout.Name)
+		want := layoutLinuxUtmpCompat32.Name
+		if runtime.GOARCH == "arm64" {
+			want = layoutLinuxUtmpTime64.Name
 		}
-	case platformSupported && defaultUtmpPath == "/var/run/utmpx":
-		if activeUtmpLayout.Name != layoutDarwinUtmpx.Name {
-			t.Errorf("darwin selected %q", activeUtmpLayout.Name)
+		if activeUtmpLayout.Name != want {
+			t.Errorf("linux/%s selected %q, want %q", runtime.GOARCH, activeUtmpLayout.Name, want)
 		}
 	default:
 		if platformSupported {

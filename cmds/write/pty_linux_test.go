@@ -116,6 +116,34 @@ func TestDefaultSenderTTYRejectsCharacterDeviceThatIsNotTerminalLinux(t *testing
 	}
 }
 
+func TestRunContextNeverFallsBackToProcessGlobalTTYLinux(t *testing.T) {
+	master, slave, slavePath, err := openPTYLinux()
+	if err != nil {
+		t.Skipf("PTY creation skipped: %v", err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	oldIn, oldOut, oldErr := os.Stdin, os.Stdout, os.Stderr
+	os.Stdin, os.Stdout, os.Stderr = slave, slave, slave
+	defer func() { os.Stdin, os.Stdout, os.Stderr = oldIn, oldOut, oldErr }()
+	oldDev := devDir
+	devDir = "/dev"
+	defer func() { devDir = oldDev }()
+
+	rc := &tool.RunContext{Stdio: tool.Stdio{
+		In: strings.NewReader("body\n"), Out: io.Discard, Err: io.Discard,
+	}}
+	if got := defaultSenderTTY(rc); got != "" {
+		t.Fatalf("embedded RunContext inherited process-global tty %q", got)
+	}
+	expected := strings.TrimPrefix(slavePath, "/dev/")
+	if control, err := defaultOpenSenderControlTTY(rc, expected); err == nil {
+		_ = control.Close()
+		t.Fatal("process-global tty authenticated an unrelated RunContext")
+	}
+}
+
 func TestDefaultRecipientOpenAuthenticatesTerminalLinux(t *testing.T) {
 	master, slave, slavePath, err := openPTYLinux()
 	if err != nil {

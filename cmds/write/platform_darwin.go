@@ -9,10 +9,13 @@ import "errors"
 // not ut_type). See layoutDarwinUtmpx for the byte-level layout.
 const defaultUtmpPath = "/var/run/utmpx"
 
-var activeUtmpLayout = layoutDarwinUtmpx
+var activeUtmpLayout = utmpLayout{}
 
-const platformSupported = true
+// Darwin exposes no procfs-style, race-resistant PID-to-controlling-terminal
+// association and this pure-Go implementation has no sysctl provider for it.
+// Accepting any live PID would authenticate stale or unrelated utmpx records,
+// so fail closed until that association can be proved.
+const platformSupported = false
 
-// Unused in production on Darwin (platformSupported is a true constant), but
-// defined so the refusal path has one spelling on every target.
-var errPlatform = errors.New("terminal messaging is unavailable on this system")
+// The refusal path names the missing authentication capability explicitly.
+var errPlatform = errors.New("terminal messaging requires PID-to-terminal authentication unavailable on Darwin")

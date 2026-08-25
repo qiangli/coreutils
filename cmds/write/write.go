@@ -40,6 +40,7 @@ package writecmd
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -87,7 +88,14 @@ var (
 	sessionActiveFn        = defaultSessionActive
 	sessionOwnsTerminalFn  = defaultSessionOwnsTerminal
 	terminalDeviceFn       = defaultTerminalDevice
+	watchInterruptFn       = watchInterrupt
 )
+
+func watchInterrupt() (chan os.Signal, func()) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt)
+	return ch, func() { signal.Stop(ch) }
+}
 
 type nopWriteCloser struct{ io.Writer }
 
@@ -263,6 +271,18 @@ func run(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 	classes := loadCharClasses(rc.Env)
+	prepared, err := prepareInput(rc.In)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "write: standard input: %v\n", err)
+		return 1
+	}
+	defer prepared.close()
+
+	// Install the handler before opening either terminal or producing any
+	// banner, notice, or alert. A signal received during setup is retained in
+	// this buffered channel and observed at the next bounded stage boundary.
+	sigCh, stopInterrupt := watchInterruptFn()
+	defer stopInterrupt()
 
 	if err := lookupUser(target); err != nil {
 		fmt.Fprintf(rc.Err, "write: %s: no such user\n", target)
@@ -290,6 +310,9 @@ func run(rc *tool.RunContext, args []string) int {
 	if myTTY != "" {
 		senderControl, err = openSenderControlTTYFn(rc, myTTY)
 		if err != nil {
+			if takeInterrupt(sigCh) {
+				return 0
+			}
 			fmt.Fprintf(rc.Err, "write: sender terminal %s: %v\n", myTTY, err)
 			return 1
 		}
@@ -300,6 +323,9 @@ func run(rc *tool.RunContext, args []string) int {
 				_ = senderControl.Close()
 			}
 		}()
+	}
+	if takeInterrupt(sigCh) {
+		return 0
 	}
 	// Prefer the login identity attached to the authenticated sending terminal.
 	// user.Current remains the fallback for non-interactive callers and systems
@@ -319,24 +345,57 @@ func run(rc *tool.RunContext, args []string) int {
 	path := ttyDevice(line)
 	term, err := openTTYFn(path)
 	if err != nil {
+		if takeInterrupt(sigCh) {
+			return 0
+		}
 		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
 		return 1
 	}
+	if takeInterrupt(sigCh) {
+		_ = finish(term, nil, classes)
+		_ = term.Close()
+		return 0
+	}
 	if err := writeBanner(term, sender, myTTY); err != nil {
+		if takeInterrupt(sigCh) {
+			_ = finish(term, nil, classes)
+			_ = term.Close()
+			return 0
+		}
 		err = errors.Join(err, term.Close())
 		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
 		return 1
 	}
+	if takeInterrupt(sigCh) {
+		_ = finish(term, nil, classes)
+		_ = term.Close()
+		return 0
+	}
 	if isMulti {
 		notice := fmt.Sprintf("write: %s is logged in on more than one line; using %s\n", target, line)
 		if err := writeString(rc.Out, notice); err != nil {
+			if takeInterrupt(sigCh) {
+				_ = finish(term, nil, classes)
+				_ = term.Close()
+				return 0
+			}
 			err = errors.Join(err, term.Close())
 			fmt.Fprintf(rc.Err, "write: standard output: %v\n", err)
 			return 1
 		}
 	}
+	if takeInterrupt(sigCh) {
+		_ = finish(term, nil, classes)
+		_ = term.Close()
+		return 0
+	}
 	if senderControl != nil {
 		if err := writeString(senderControl, "\a\a"); err != nil {
+			if takeInterrupt(sigCh) {
+				_ = finish(term, nil, classes)
+				_ = term.Close()
+				return 0
+			}
 			err = errors.Join(err, term.Close())
 			fmt.Fprintf(rc.Err, "write: sender terminal %s: %v\n", myTTY, err)
 			return 1
@@ -344,14 +403,27 @@ func run(rc *tool.RunContext, args []string) int {
 		control := senderControl
 		senderControl = nil
 		if err := control.Close(); err != nil {
+			if takeInterrupt(sigCh) {
+				_ = finish(term, nil, classes)
+				_ = term.Close()
+				return 0
+			}
 			err = errors.Join(err, term.Close())
 			fmt.Fprintf(rc.Err, "write: sender terminal %s: %v\n", myTTY, err)
 			return 1
 		}
 	}
+	if takeInterrupt(sigCh) {
+		_ = finish(term, nil, classes)
+		_ = term.Close()
+		return 0
+	}
 
-	deliveryErr := deliverBody(term, rc.In, classes)
+	deliveryErr := deliverBody(term, prepared, classes, sigCh)
 	closeErr := term.Close()
+	if errors.Is(deliveryErr, errInterrupted) || takeInterrupt(sigCh) {
+		return 0
+	}
 	if err := errors.Join(deliveryErr, closeErr); err != nil {
 		fmt.Fprintf(rc.Err, "write: %s: %v\n", path, err)
 		return 1
@@ -412,8 +484,6 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 		return "", fmt.Sprintf("%s is not logged in", target), false
 	}
 
-	isMulti = wantTTY == "" && len(candidates) > 1
-
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if !candidates[i].Time.Equal(candidates[j].Time) {
 			return candidates[i].Time.After(candidates[j].Time)
@@ -421,16 +491,18 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 		return candidates[i].Line < candidates[j].Line
 	})
 
-	var denied []string
+	var denied, selectable []string
+	activeLogins := 0
 	skippedSelf, missing := false, 0
 	for _, r := range candidates {
-		if wantTTY == "" && myTTY != "" && normalizeTTY(r.Line) == myTTY {
-			skippedSelf = true
-			continue
-		}
 		fi, err := statFn(ttyDevice(r.Line))
 		if err != nil {
 			missing++
+			continue
+		}
+		activeLogins++
+		if wantTTY == "" && myTTY != "" && normalizeTTY(r.Line) == myTTY {
+			skippedSelf = true
 			continue
 		}
 		if r.PID <= 0 || !sessionActiveFn(r.PID) || !terminalDeviceFn(ttyDevice(r.Line)) ||
@@ -445,7 +517,10 @@ func selectTerminal(records []utmpRecord, target, wantTTY, myTTY string, isRoot 
 			denied = append(denied, r.Line)
 			continue
 		}
-		return r.Line, "", isMulti
+		selectable = append(selectable, r.Line)
+	}
+	if len(selectable) > 0 {
+		return selectable[0], "", wantTTY == "" && activeLogins > 1
 	}
 
 	switch {
@@ -515,35 +590,27 @@ func writeBanner(w io.Writer, sender, senderTTY string) error {
 
 // deliverBody writes message records and the closing EOT marker. The caller
 // writes and verifies the banner before alerting the sender.
-func deliverBody(w io.Writer, in io.Reader, classes *charClasses) error {
-	// An *os.File input can be waited on with poll(2). Other readers either
-	// provide deadlines, identify themselves as finite in-memory input, or are
-	// rejected explicitly; no path abandons a blocked reader goroutine.
-	var owned *os.File
-	if f, ok := in.(*os.File); ok {
-		if dup, err := duplicateInputFile(f); err == nil {
-			owned = dup
-			defer owned.Close()
-		}
+func deliverBody(w io.Writer, in preparedInput, classes *charClasses, sigCh <-chan os.Signal) error {
+	if in.polled != nil {
+		return deliverPolled(w, in.polled, in.veol, classes, sigCh)
 	}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	defer signal.Stop(sigCh)
-
-	if owned != nil {
-		return deliverPolled(w, owned, getVEOL(in), classes, sigCh)
-	}
-	return deliverStream(w, in, getVEOL(in), classes, sigCh)
+	return deliverFinite(w, in.reader, in.veol, classes, sigCh)
 }
 
 // deliver is retained as a focused test seam. Production uses writeBanner and
 // deliverBody separately so alerts can occur strictly between them.
 func deliver(w io.Writer, in io.Reader, sender, senderTTY, _ string, classes *charClasses) error {
+	prepared, err := prepareInput(in)
+	if err != nil {
+		return err
+	}
+	defer prepared.close()
+	sigCh, stopInterrupt := watchInterruptFn()
+	defer stopInterrupt()
 	if err := writeBanner(w, sender, senderTTY); err != nil {
 		return err
 	}
-	return deliverBody(w, in, classes)
+	return deliverBody(w, prepared, classes, sigCh)
 }
 
 // finish closes the message. POSIX: the interrupt and end-of-file characters
@@ -563,35 +630,66 @@ func finish(w io.Writer, pending []byte, classes *charClasses) error {
 	return writeString(w, "EOT\n")
 }
 
-type readDeadliner interface {
-	SetReadDeadline(time.Time) error
+var errInterrupted = errors.New("write interrupted")
+
+func finishOnInterrupt(w io.Writer, pending []byte, classes *charClasses) error {
+	return errors.Join(errInterrupted, finish(w, pending, classes))
 }
 
-type finiteReader interface {
-	Len() int
+type preparedInput struct {
+	reader io.Reader
+	polled *os.File
+	owned  io.Closer
+	veol   byte
 }
 
-// deliverStream handles non-file readers without adopting or closing them.
-// Deadline-capable streams are polled with read deadlines. In-memory readers
-// advertise a finite remaining length and cannot remain blocked. An opaque
-// reader with neither property cannot be made interruptible through io.Reader
-// without abandoning a blocked goroutine or closing a caller-owned object, so
-// it is rejected explicitly rather than hanging the embedding process.
-func deliverStream(w io.Writer, in io.Reader, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
+func (p preparedInput) close() {
+	if p.owned != nil {
+		_ = p.owned.Close()
+	}
+}
+
+// prepareInput proves interruptibility before any recipient or sender-visible
+// side effect. Files are duplicated and polled, so an interrupt closes only the
+// owned duplicate. The three concrete stdlib memory readers are synchronously
+// finite. An arbitrary Len method is deliberately not trusted: interfaces do
+// not guarantee that Read will return, and abandoning a blocked goroutine or
+// closing a caller-owned reader would violate the embedding contract.
+func prepareInput(in io.Reader) (preparedInput, error) {
 	if in == nil {
-		return finish(w, nil, classes)
+		return preparedInput{reader: strings.NewReader("")}, nil
 	}
-	if deadline, ok := in.(readDeadliner); ok {
-		return deliverDeadline(w, in, deadline, veol, classes, sigCh)
+	if f, ok := in.(*os.File); ok {
+		dup, err := duplicateInputFile(f)
+		if err != nil {
+			return preparedInput{}, fmt.Errorf("cannot duplicate input descriptor: %w", err)
+		}
+		return preparedInput{reader: dup, polled: dup, owned: dup, veol: getVEOL(in)}, nil
 	}
-	if _, ok := in.(finiteReader); !ok {
-		return errors.New("input reader cannot be interrupted safely")
+	switch in.(type) {
+	case *bytes.Buffer, *bytes.Reader, *strings.Reader:
+		return preparedInput{reader: in, veol: getVEOL(in)}, nil
+	default:
+		return preparedInput{}, errors.New("input reader cannot be interrupted safely")
 	}
+}
+
+func takeInterrupt(sigCh <-chan os.Signal) bool {
+	select {
+	case <-sigCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// deliverFinite handles only concrete, preflighted in-memory readers.
+func deliverFinite(w io.Writer, in io.Reader, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
 	br := bufio.NewReader(in)
 	for {
 		select {
 		case <-sigCh:
-			return finish(w, nil, classes)
+			return finishOnInterrupt(w, nil, classes)
 		default:
 		}
 		line, err := readLine(br, veol)
@@ -609,40 +707,6 @@ func deliverStream(w io.Writer, in io.Reader, veol byte, classes *charClasses, s
 	}
 }
 
-func deliverDeadline(w io.Writer, in io.Reader, deadline readDeadliner, veol byte, classes *charClasses, sigCh <-chan os.Signal) error {
-	defer deadline.SetReadDeadline(time.Time{})
-	var line []byte
-	for {
-		select {
-		case <-sigCh:
-			return finish(w, line, classes)
-		default:
-		}
-		if err := deadline.SetReadDeadline(time.Now().Add(pollInterval)); err != nil {
-			return err
-		}
-		var one [1]byte
-		n, err := in.Read(one[:])
-		if n == 1 {
-			if one[0] == '\n' || (veol != 0 && one[0] == veol) {
-				line = append(line, '\n')
-				if werr := writeString(w, sanitize(string(line), classes)); werr != nil {
-					return werr
-				}
-				line = line[:0]
-			} else {
-				line = append(line, one[0])
-			}
-		}
-		if errors.Is(err, io.EOF) {
-			return finish(w, line, classes)
-		}
-		if err != nil && !os.IsTimeout(err) {
-			return err
-		}
-	}
-}
-
 // deliverPolled copies a file-backed input, waiting on poll(2) so an interrupt
 // is honoured immediately — including while the sender is part-way through a
 // line. The descriptor is a DUPLICATE (see deliver): returning early closes
@@ -652,7 +716,7 @@ func deliverPolled(w io.Writer, in *os.File, veol byte, classes *charClasses, si
 	for {
 		select {
 		case <-sigCh:
-			return finish(w, line, classes)
+			return finishOnInterrupt(w, line, classes)
 		default:
 		}
 		ready, err := waitInputReadable(in, pollInterval)
