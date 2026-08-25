@@ -70,7 +70,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 18 |
 | `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 2 | 11 |
-| `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 13 |
+| `date` | `cmds/date` | — | GNU Coreutils | yes | yes | 1 | 16 |
 | `dd` | `cmds/dd` | — | GNU Coreutils | yes | yes | 6 | 79 |
 | `df` | `cmds/df` | — | GNU Coreutils | yes | yes | 2 | 30 |
 | `diff` | `cmds/diff` | — | POSIX/Unix utility | no | yes | 4 | 42 |
