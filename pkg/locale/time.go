@@ -123,6 +123,191 @@ func (f TimeFormatter) FormatAtJobTime(t time.Time) string {
 		weekday, month, t.Day(), t.Hour(), t.Minute(), t.Second(), t.Year())
 }
 
+// Format renders the complete POSIX Issue 7 date operand conversion set with
+// this formatter's invocation-selected names and output encoding. Unsupported
+// conversions fail closed so callers cannot silently emit a non-conforming
+// timestamp.
+func (f TimeFormatter) Format(t time.Time, format string) (string, error) {
+	var out strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			out.WriteByte(format[i])
+			continue
+		}
+		i++
+		if i >= len(format) {
+			return "", fmt.Errorf("incomplete date conversion")
+		}
+		if format[i] == 'E' || format[i] == 'O' {
+			modifier := format[i]
+			if i+1 >= len(format) {
+				return "", fmt.Errorf("incomplete date conversion")
+			}
+			i++
+			valid := modifier == 'E' && strings.ContainsRune("cCxXyY", rune(format[i])) ||
+				modifier == 'O' && strings.ContainsRune("deHImMSuUVwWy", rune(format[i]))
+			if !valid {
+				return "", fmt.Errorf("unsupported date conversion %%%c%c", modifier, format[i])
+			}
+			// Carried locales have no alternative eras or digits, so valid
+			// modifiers render through the corresponding base conversion.
+		}
+		switch format[i] {
+		case '%':
+			out.WriteByte('%')
+		case 'Y':
+			fmt.Fprintf(&out, "%04d", t.Year())
+		case 'y':
+			fmt.Fprintf(&out, "%02d", t.Year()%100)
+		case 'C':
+			fmt.Fprintf(&out, "%02d", t.Year()/100)
+		case 'm':
+			fmt.Fprintf(&out, "%02d", t.Month())
+		case 'd':
+			fmt.Fprintf(&out, "%02d", t.Day())
+		case 'e':
+			fmt.Fprintf(&out, "%2d", t.Day())
+		case 'j':
+			fmt.Fprintf(&out, "%03d", t.YearDay())
+		case 'H':
+			fmt.Fprintf(&out, "%02d", t.Hour())
+		case 'I':
+			hour := t.Hour() % 12
+			if hour == 0 {
+				hour = 12
+			}
+			fmt.Fprintf(&out, "%02d", hour)
+		case 'M':
+			fmt.Fprintf(&out, "%02d", t.Minute())
+		case 'S':
+			fmt.Fprintf(&out, "%02d", t.Second())
+		case 'a':
+			out.WriteString(f.weekdayName(t.Weekday(), false))
+		case 'A':
+			out.WriteString(f.weekdayName(t.Weekday(), true))
+		case 'b', 'h':
+			out.WriteString(f.monthName(t.Month(), false))
+		case 'B':
+			out.WriteString(f.monthName(t.Month(), true))
+		case 'c':
+			if f.locale == "de_DE" {
+				text, _ := f.Format(t, "%a %d %b %Y %T %Z")
+				out.WriteString(text)
+			} else {
+				text, _ := f.Format(t, "%a %b %e %H:%M:%S %Y")
+				out.WriteString(text)
+			}
+		case 'D':
+			fmt.Fprintf(&out, "%02d/%02d/%02d", t.Month(), t.Day(), t.Year()%100)
+		case 'F':
+			fmt.Fprintf(&out, "%04d-%02d-%02d", t.Year(), t.Month(), t.Day())
+		case 'g':
+			year, _ := t.ISOWeek()
+			fmt.Fprintf(&out, "%02d", year%100)
+		case 'G':
+			year, _ := t.ISOWeek()
+			fmt.Fprintf(&out, "%04d", year)
+		case 'p':
+			if f.locale != "de_DE" {
+				if t.Hour() < 12 {
+					out.WriteString("AM")
+				} else {
+					out.WriteString("PM")
+				}
+			}
+		case 'r':
+			hour := t.Hour() % 12
+			if hour == 0 {
+				hour = 12
+			}
+			fmt.Fprintf(&out, "%02d:%02d:%02d ", hour, t.Minute(), t.Second())
+			if f.locale != "de_DE" {
+				if t.Hour() < 12 {
+					out.WriteString("AM")
+				} else {
+					out.WriteString("PM")
+				}
+			}
+		case 'R':
+			fmt.Fprintf(&out, "%02d:%02d", t.Hour(), t.Minute())
+		case 'T', 'X':
+			fmt.Fprintf(&out, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Second())
+		case 'u':
+			weekday := int(t.Weekday())
+			if weekday == 0 {
+				weekday = 7
+			}
+			fmt.Fprintf(&out, "%d", weekday)
+		case 'U':
+			fmt.Fprintf(&out, "%02d", timeWeekNumber(t, time.Sunday))
+		case 'V':
+			_, week := t.ISOWeek()
+			fmt.Fprintf(&out, "%02d", week)
+		case 'w':
+			fmt.Fprintf(&out, "%d", t.Weekday())
+		case 'W':
+			fmt.Fprintf(&out, "%02d", timeWeekNumber(t, time.Monday))
+		case 'x':
+			if f.locale == "de_DE" {
+				fmt.Fprintf(&out, "%02d.%02d.%04d", t.Day(), t.Month(), t.Year())
+			} else {
+				fmt.Fprintf(&out, "%02d/%02d/%02d", t.Month(), t.Day(), t.Year()%100)
+			}
+		case 'z':
+			out.WriteString(t.Format("-0700"))
+		case 'Z':
+			out.WriteString(t.Format("MST"))
+		case 'n':
+			out.WriteByte('\n')
+		case 't':
+			out.WriteByte('\t')
+		default:
+			return "", fmt.Errorf("unsupported date conversion %%%c", format[i])
+		}
+	}
+	return out.String(), nil
+}
+
+func (f TimeFormatter) monthName(month time.Month, full bool) string {
+	name := f.months[int(month)-1]
+	if full {
+		if f.locale == "de_DE" {
+			name = germanMonthNames[int(month)-1]
+		} else {
+			name = englishMonthNames[int(month)-1]
+		}
+	}
+	if f.latin1 {
+		name = toLatin1(name)
+	}
+	return name
+}
+
+func (f TimeFormatter) weekdayName(day time.Weekday, full bool) string {
+	name := f.weekdays[int(day)]
+	if full {
+		if f.locale == "de_DE" {
+			name = germanWeekdayNames[int(day)]
+		} else {
+			name = englishWeekdayNames[int(day)]
+		}
+	}
+	if f.latin1 {
+		name = toLatin1(name)
+	}
+	return name
+}
+
+func timeWeekNumber(t time.Time, firstDay time.Weekday) int {
+	yearDay := t.YearDay() - 1
+	jan1 := time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location()).Weekday()
+	offset := (int(firstDay) - int(jan1) + 7) % 7
+	if yearDay < offset {
+		return 0
+	}
+	return 1 + (yearDay-offset)/7
+}
+
 func splitName(name string) (base, codeset string) {
 	name, _, _ = strings.Cut(name, "@")
 	base, codeset, _ = strings.Cut(name, ".")

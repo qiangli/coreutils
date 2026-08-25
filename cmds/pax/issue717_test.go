@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -371,7 +372,8 @@ func TestPAXListFormatConversionsAndConcatenation(t *testing.T) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	h := &tar.Header{ModTime: time.Unix(0, 0)}
-	got, err := formatPAXList(h, `%(mtime=%H%z)T`, time.FixedZone("minus-eight", -8*60*60))
+	timeFormat := mustPAXTimeFormatter(t, nil)
+	got, err := formatPAXList(h, `%(mtime=%H%z)T`, time.FixedZone("minus-eight", -8*60*60), &timeFormat)
 	if err != nil || got != "16-0800" {
 		t.Fatalf("timezone list format=%q err=%v", got, err)
 	}
@@ -379,14 +381,24 @@ func TestPAXListFormatConversionsAndConcatenation(t *testing.T) {
 
 func TestPAXListFormatKeywordDeviceConversionAndPublishedShape(t *testing.T) {
 	h := &tar.Header{Name: "/usr/foo/bar", Mode: 0o660, Size: 1492, ModTime: time.Date(2003, 1, 12, 15, 53, 0, 0, time.UTC)}
-	got, err := formatPAXList(h, `%M %(mtime=%b %e %H:%M %Y)T %(size)8.6D %(name)s`, time.UTC)
+	timeFormat := mustPAXTimeFormatter(t, nil)
+	got, err := formatPAXList(h, `%M %(mtime=%b %e %H:%M %Y)T %(size)8.6D %(name)s`, time.UTC, &timeFormat)
 	if err != nil || got != "-rw-rw---- Jan 12 15:53 2003   001492 /usr/foo/bar" {
 		t.Fatalf("published shape=%q err=%v", got, err)
 	}
-	got, err = formatPAXList(h, `%.7(name)s`, time.UTC)
+	got, err = formatPAXList(h, `%.7(name)s`, time.UTC, nil)
 	if err != nil || got != "/usr/fo" {
 		t.Fatalf("post-precision keyword=%q err=%v", got, err)
 	}
+}
+
+func mustPAXTimeFormatter(t *testing.T, env []string) locale.TimeFormatter {
+	t.Helper()
+	formatter, err := locale.ResolveTime(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return formatter
 }
 
 func TestPAXInvalidTextUsesRunContextLocaleEncodability(t *testing.T) {
@@ -425,6 +437,90 @@ func TestPAXListFormatCPIOFieldNames(t *testing.T) {
 	if code != 0 || errOut != "" || out != "070707:file:5:3\n" {
 		t.Fatalf("list code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
+}
+
+func TestPAXListFormatCPIOFiledataBinaryEmptyAndSymlink(t *testing.T) {
+	d := t.TempDir()
+	payload := []byte{'a', 0, 0xff, 'z'}
+	if err := os.WriteFile(filepath.Join(d, "file"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "empty"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("file", filepath.Join(d, "link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	arc := filepath.Join(d, "archive.cpio")
+	_, errOut, code := exec(t, d, "", "-w", "-x", "cpio", "-f", arc, "file", "empty", "link")
+	if code != 0 || errOut != "" {
+		t.Fatalf("write code=%d stderr=%q", code, errOut)
+	}
+	out, errOut, code := exec(t, d, "", "-f", arc, "-o", `listopt=%(c_filedata)s`)
+	want := string(payload) + "\n\nfile\n"
+	if code != 0 || errOut != "" || out != want {
+		t.Fatalf("list code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestPAXListTimeLocaleNamesEncodingsAndPrecedence(t *testing.T) {
+	raw := makeAttributeArchive(t, archiveFixture{
+		name: "file", body: "x", mode: 0o600,
+		mtime: time.Date(2024, time.March, 1, 2, 3, 4, 0, time.UTC),
+	})
+	d := t.TempDir()
+	arc := filepath.Join(d, "archive.pax")
+	if err := os.WriteFile(arc, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	format := `listopt=%(mtime=%a|%A|%b|%B)T`
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"German UTF-8", []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}, "Fr|Freitag|Mär|März\n"},
+		{"German Latin-1", []string{"TZ=UTC", "LC_TIME=de_DE.ISO-8859-1"}, "Fr|Freitag|M\xe4r|M\xe4rz\n"},
+		{"LC_ALL precedence", []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8", "LC_ALL=C"}, "Fri|Friday|Mar|March\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := execPaxEnv(t, d, tc.env, "-f", arc, "-o", format)
+			if code != 0 || errOut != "" || out != tc.want {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, out, errOut)
+			}
+		})
+	}
+	out, errOut, code := execPaxEnv(t, d, []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}, "-f", arc, "-o", `listopt=%(mtime)T`)
+	if code != 0 || errOut != "" || out != "Mär  1 02:03 2024\n" {
+		t.Fatalf("default %%T code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = execPaxEnv(t, d, []string{"TZ=UTC", "LC_TIME=fr_FR.UTF-8"}, "-f", arc, "-o", `listopt=%(mtime)T`)
+	if code != 1 || out != "" || !strings.Contains(errOut, "LC_TIME") {
+		t.Fatalf("unsupported code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	out, errOut, code = execPaxEnv(t, d, []string{"TZ=UTC", "LC_TIME=de_DE.UTF-8"}, "-v", "-f", arc)
+	if code != 0 || errOut != "" || !strings.Contains(out, "Mär  1 02:03") {
+		t.Fatalf("verbose code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
+func TestPAXListTimeCompleteIssue7DateConversions(t *testing.T) {
+	h := &tar.Header{ModTime: time.Date(2024, time.March, 1, 14, 5, 6, 0, time.UTC)}
+	timeFormat := mustPAXTimeFormatter(t, []string{"LC_TIME=C"})
+	format := `%(mtime=%c|%C|%D|%h|%I|%n|%p|%r|%t|%U|%V|%w|%W|%x|%X|%a|%A|%b|%B|%d|%e|%F|%g|%G|%H|%j|%m|%M|%R|%S|%T|%u|%y|%Y|%z|%Z|%%|%Ec|%Od)T`
+	got, err := formatPAXList(h, format, time.UTC, &timeFormat)
+	want := "Fri Mar  1 14:05:06 2024|20|03/01/24|Mar|02|\n|PM|02:05:06 PM|\t|08|09|5|09|03/01/24|14:05:06|Fri|Friday|Mar|March|01| 1|2024-03-01|24|2024|14|061|03|05|14:05|06|14:05:06|5|24|2024|+0000|UTC|%|Fri Mar  1 14:05:06 2024|01"
+	if err != nil || got != want {
+		t.Fatalf("all conversions=%q err=%v", got, err)
+	}
+}
+
+func execPaxEnv(t *testing.T, dir string, env []string, args ...string) (string, string, int) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{Dir: dir, Env: env, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut}}
+	code := run(rc, args)
+	return out.String(), errOut.String(), code
 }
 
 func TestPAXMalformedListFormatFailsClosed(t *testing.T) {

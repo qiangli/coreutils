@@ -31,9 +31,11 @@ page:
 - List formatting implements standard printf string/integer/float
   conversions, portable escapes, and POSIX `T`, `M`, `D`, `F`, and `L`.
   USTAR field names, the required `c_*` cpio field names, extended-header
-  keywords, repeated-format concatenation, `TZ`, and malformed conversions
-  are covered. `listopt` supplies the table format in list mode, with or
-  without `-v`, as required by the normative STDOUT section.
+  keywords (including binary `c_filedata`), repeated-format concatenation,
+  `TZ`, and malformed conversions are covered. `%T` supports the complete
+  Issue 7 `date` operand conversion set and uses the carried invocation-local
+  `LC_TIME` names/encoding. `listopt` supplies the table format in list mode,
+  with or without `-v`, as required by the normative STDOUT section.
 - Input format enforcement distinguishes cpio from tar. A minimal pax stream
   is physically indistinguishable from ustar when no extended record is
   needed, so compatible tar input is accepted rather than falsely rejected.
@@ -42,10 +44,12 @@ page:
 
 The invalid-value implementation provides exact `C`/`POSIX`, UTF-8,
 ISO-8859-1, and ISO-8859-15 encodability decisions through `RunContext.Env`;
-unknown locale names fail closed for non-ASCII values. It does not claim
-conversion support for other unadvertised legacy host charmaps. Raw cpio
-file data (`c_filedata`) is not duplicated into normalized tar metadata; it is
-not a header field conversion used by the focused certification evidence.
+unknown locale names fail closed for non-ASCII values. Time formatting uses
+the same bounded provider and fails before list output for unsupported
+`LC_TIME`. It does not claim conversion support for other unadvertised legacy
+host charmaps. Raw cpio file data is losslessly base64-carried only through the
+private normalization lane and decoded for the normative `c_filedata` field;
+it is not advertised as a pax extended-header interface.
 
 All production archive parsing, rewriting, formatting, and copying is pure Go
 and performs no shell-outs.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qiangli/coreutils/cmds/internal/tzenv"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -50,6 +51,7 @@ type options struct {
 	// so later names for the same inode become hardlink members.
 	links      map[devIno]string
 	paxOptions paxOptions
+	timeFormat *locale.TimeFormatter
 	t, X       bool
 	follow     followMode // -H/-L; the last one given wins
 	renamer    *interactiveRenamer
@@ -151,6 +153,23 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
 	o.paxOptions = parsedOptions
+	if mode == paxList {
+		usesTime := false
+		if o.paxOptions.listSet {
+			usesTime, err = listFormatUsesTime(o.paxOptions.listFormat)
+			if err != nil {
+				return tool.UsageError(rc, cmd, "listopt: %v", err)
+			}
+		}
+		if usesTime || o.verbose && !o.paxOptions.listSet {
+			formatter, resolveErr := locale.ResolveTime(rc.Env)
+			if resolveErr != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", resolveErr)
+				return 1
+			}
+			o.timeFormat = &formatter
+		}
+	}
 	if fs.Changed("t") {
 		if isList || isRead {
 			return tool.UsageError(rc, cmd, "-t is valid only in write or copy mode")
@@ -331,6 +350,25 @@ func listMode(rc *tool.RunContext, o *options, patterns []string) int {
 type archiveOpener func(*tool.RunContext, *options) (io.ReadCloser, error)
 
 func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open archiveOpener) int {
+	if o.timeFormat == nil {
+		usesTime := false
+		if o.paxOptions.listSet {
+			var formatErr error
+			usesTime, formatErr = listFormatUsesTime(o.paxOptions.listFormat)
+			if formatErr != nil {
+				fmt.Fprintf(rc.Err, "pax: listopt: %v\n", formatErr)
+				return 1
+			}
+		}
+		if usesTime || o.verbose && !o.paxOptions.listSet {
+			formatter, resolveErr := locale.ResolveTime(rc.Env)
+			if resolveErr != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", resolveErr)
+				return 1
+			}
+			o.timeFormat = &formatter
+		}
+	}
 	r, err := open(rc, o)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
@@ -414,7 +452,7 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 		}
 		if o.paxOptions.listSet {
 			h.Name = name
-			line, err := formatPAXList(h, o.paxOptions.listFormat, tzenv.Location(rc.Env))
+			line, err := formatPAXList(h, o.paxOptions.listFormat, tzenv.Location(rc.Env), o.timeFormat)
 			if err != nil {
 				fmt.Fprintf(rc.Err, "pax: listopt: %v\n", err)
 				return 1
@@ -424,8 +462,13 @@ func listModeWithOpener(rc *tool.RunContext, o *options, patterns []string, open
 				return 1
 			}
 		} else if o.verbose {
+			stamp, err := o.timeFormat.Format(h.ModTime.In(tzenv.Location(rc.Env)), "%b %e %H:%M")
+			if err != nil {
+				fmt.Fprintf(rc.Err, "pax: time format: %v\n", err)
+				return 1
+			}
 			if _, err := fmt.Fprintf(rc.Out, "%s %2d %-8s %-8s %8d %s %s\n",
-				headerModeString(h), 1, h.Uname, h.Gname, h.Size, h.ModTime.Format("Jan _2 15:04"), name); err != nil {
+				headerModeString(h), 1, h.Uname, h.Gname, h.Size, stamp, name); err != nil {
 				fmt.Fprintf(rc.Err, "pax: write error: %v\n", err)
 				return 1
 			}

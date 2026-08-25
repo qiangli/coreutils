@@ -3,6 +3,7 @@ package paxcmd
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"strconv"
@@ -235,18 +236,19 @@ func cpioToTar(data []byte) ([]byte, error) {
 			ModTime: time.Unix(int64(entry.mtime), 0),
 			Format:  tar.FormatPAX,
 			PAXRecords: map[string]string{
-				"COREUTILS.cpio.c_magic":    entry.magic,
-				"COREUTILS.cpio.c_dev":      strconv.FormatUint(entry.dev, 10),
-				"COREUTILS.cpio.c_ino":      strconv.FormatUint(entry.ino, 10),
-				"COREUTILS.cpio.c_mode":     strconv.FormatUint(entry.mode, 10),
-				"COREUTILS.cpio.c_uid":      strconv.FormatUint(entry.uid, 10),
-				"COREUTILS.cpio.c_gid":      strconv.FormatUint(entry.gid, 10),
-				"COREUTILS.cpio.c_nlink":    strconv.FormatUint(entry.nlink, 10),
-				"COREUTILS.cpio.c_rdev":     strconv.FormatUint(entry.rdev, 10),
-				"COREUTILS.cpio.c_mtime":    strconv.FormatUint(entry.mtime, 10),
-				"COREUTILS.cpio.c_namesize": strconv.FormatUint(entry.namesize, 10),
-				"COREUTILS.cpio.c_filesize": strconv.FormatUint(entry.filesize, 10),
-				"COREUTILS.cpio.c_name":     entry.name,
+				"COREUTILS.cpio.c_magic":           entry.magic,
+				"COREUTILS.cpio.c_dev":             strconv.FormatUint(entry.dev, 10),
+				"COREUTILS.cpio.c_ino":             strconv.FormatUint(entry.ino, 10),
+				"COREUTILS.cpio.c_mode":            strconv.FormatUint(entry.mode, 10),
+				"COREUTILS.cpio.c_uid":             strconv.FormatUint(entry.uid, 10),
+				"COREUTILS.cpio.c_gid":             strconv.FormatUint(entry.gid, 10),
+				"COREUTILS.cpio.c_nlink":           strconv.FormatUint(entry.nlink, 10),
+				"COREUTILS.cpio.c_rdev":            strconv.FormatUint(entry.rdev, 10),
+				"COREUTILS.cpio.c_mtime":           strconv.FormatUint(entry.mtime, 10),
+				"COREUTILS.cpio.c_namesize":        strconv.FormatUint(entry.namesize, 10),
+				"COREUTILS.cpio.c_filesize":        strconv.FormatUint(entry.filesize, 10),
+				"COREUTILS.cpio.c_name":            entry.name,
+				"COREUTILS.internal.cpio.filedata": "b64:" + base64.StdEncoding.EncodeToString(entry.data),
 			},
 		}
 		body := entry.data

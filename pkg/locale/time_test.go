@@ -37,3 +37,31 @@ func TestResolveTimeUnsupportedFailsClosed(t *testing.T) {
 		t.Fatal("unsupported LC_TIME unexpectedly accepted")
 	}
 }
+
+func TestTimeFormatterFormatLocalizedNamesAndIssue7Conversions(t *testing.T) {
+	at := time.Date(2024, time.March, 1, 14, 5, 6, 0, time.UTC)
+	for _, tc := range []struct {
+		env  []string
+		want string
+	}{
+		{[]string{"LC_TIME=de_DE.UTF-8"}, "Fr|Freitag|Mär|März|Fr 01 Mär 2024 14:05:06 UTC"},
+		{[]string{"LC_TIME=de_DE.ISO-8859-1"}, "Fr|Freitag|M\xe4r|M\xe4rz|Fr 01 M\xe4r 2024 14:05:06 UTC"},
+		{[]string{"LC_TIME=de_DE.UTF-8", "LC_ALL=C"}, "Fri|Friday|Mar|March|Fri Mar  1 14:05:06 2024"},
+	} {
+		formatter, err := ResolveTime(tc.env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := formatter.Format(at, "%a|%A|%b|%B|%c")
+		if err != nil || got != tc.want {
+			t.Fatalf("env=%v format=%q err=%v, want %q", tc.env, got, err, tc.want)
+		}
+	}
+	formatter, _ := ResolveTime(nil)
+	if _, err := formatter.Format(at, "%Q"); err == nil {
+		t.Fatal("unsupported conversion unexpectedly accepted")
+	}
+	if _, err := formatter.Format(at, "%Ot"); err == nil {
+		t.Fatal("invalid alternative modifier unexpectedly accepted")
+	}
+}

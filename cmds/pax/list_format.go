@@ -3,13 +3,16 @@ package paxcmd
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/qiangli/coreutils/pkg/locale"
 )
 
-func formatPAXList(h *tar.Header, format string, loc *time.Location) (string, error) {
+func formatPAXList(h *tar.Header, format string, loc *time.Location, timeFormat *locale.TimeFormatter) (string, error) {
 	var out strings.Builder
 	for i := 0; i < len(format); {
 		if format[i] == '\\' {
@@ -71,7 +74,7 @@ func formatPAXList(h *tar.Header, format string, loc *time.Location) (string, er
 		conv := format[i]
 		spec := "%" + format[formatStart:formatEnd] + string(conv)
 		i++
-		value, err := listConversion(h, keyword, conv, spec, loc)
+		value, err := listConversion(h, keyword, conv, spec, loc, timeFormat)
 		if err != nil {
 			return "", err
 		}
@@ -80,7 +83,63 @@ func formatPAXList(h *tar.Header, format string, loc *time.Location) (string, er
 	return out.String(), nil
 }
 
-func listConversion(h *tar.Header, keyword string, conv byte, spec string, loc *time.Location) (string, error) {
+func listFormatUsesTime(format string) (bool, error) {
+	for i := 0; i < len(format); {
+		if format[i] == '\\' {
+			_, next, err := listEscape(format, i)
+			if err != nil {
+				return false, err
+			}
+			i = next
+			continue
+		}
+		if format[i] != '%' {
+			i++
+			continue
+		}
+		i++
+		if i < len(format) && format[i] == '%' {
+			i++
+			continue
+		}
+		if i < len(format) && format[i] == '(' {
+			end := strings.IndexByte(format[i+1:], ')')
+			if end < 0 {
+				return false, fmt.Errorf("unterminated listopt keyword")
+			}
+			i += end + 2
+		}
+		for i < len(format) && strings.ContainsRune("-+ #0", rune(format[i])) {
+			i++
+		}
+		for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+			i++
+		}
+		if i < len(format) && format[i] == '.' {
+			i++
+			for i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				i++
+			}
+		}
+		if i < len(format) && format[i] == '(' {
+			end := strings.IndexByte(format[i+1:], ')')
+			if end < 0 {
+				return false, fmt.Errorf("unterminated listopt keyword")
+			}
+			i += end + 2
+		}
+		if i >= len(format) {
+			return false, fmt.Errorf("incomplete listopt conversion")
+		}
+		if format[i] == 'T' {
+			return true, nil
+		}
+		i++
+	}
+	return false, nil
+}
+
+func listConversion(h *tar.Header, keyword string, conv byte, spec string, loc *time.Location, timeFormat *locale.TimeFormatter) (string, error) {
 	switch conv {
 	case 'T':
 		key, subformat := keyword, "%b %e %H:%M %Y"
@@ -98,7 +157,10 @@ func listConversion(h *tar.Header, keyword string, conv byte, spec string, loc *
 		if !ok {
 			return "", fmt.Errorf("listopt keyword %q is not a time", key)
 		}
-		return formatPOSIXDate(t.In(loc), subformat)
+		if timeFormat == nil {
+			return "", fmt.Errorf("listopt %%T requires LC_TIME data")
+		}
+		return timeFormat.Format(t.In(loc), subformat)
 	case 'M':
 		if keyword != "" && keyword != "mode" {
 			return "", fmt.Errorf("listopt %%M requires the mode keyword")
@@ -205,6 +267,17 @@ func numericListFormat(spec string, value any) (string, error) {
 
 func listKeyword(h *tar.Header, key string) (any, bool) {
 	if strings.HasPrefix(key, "c_") {
+		if key == "c_filedata" {
+			encoded, ok := h.PAXRecords["COREUTILS.internal.cpio.filedata"]
+			if !ok || !strings.HasPrefix(encoded, "b64:") {
+				return nil, false
+			}
+			data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(encoded, "b64:"))
+			if err != nil {
+				return nil, false
+			}
+			return string(data), true
+		}
 		if v, ok := h.PAXRecords["COREUTILS.cpio."+key]; ok {
 			return v, true
 		}
@@ -332,29 +405,4 @@ func listEscape(format string, i int) (string, int, error) {
 		return string([]byte{byte(n)}), end, nil
 	}
 	return string(format[i+1]), i + 2, nil
-}
-
-func formatPOSIXDate(t time.Time, format string) (string, error) {
-	replacements := map[byte]string{
-		'%': "%", 'Y': "2006", 'y': "06", 'm': "01", 'd': "02", 'e': "_2",
-		'H': "15", 'M': "04", 'S': "05", 'b': "Jan", 'B': "January",
-		'a': "Mon", 'A': "Monday", 'j': "002", 'z': "-0700", 'Z': "MST",
-	}
-	var layout strings.Builder
-	for i := 0; i < len(format); i++ {
-		if format[i] != '%' {
-			layout.WriteByte(format[i])
-			continue
-		}
-		i++
-		if i >= len(format) {
-			return "", fmt.Errorf("incomplete time subformat")
-		}
-		r, ok := replacements[format[i]]
-		if !ok {
-			return "", fmt.Errorf("unsupported time conversion %%%c", format[i])
-		}
-		layout.WriteString(r)
-	}
-	return t.Format(layout.String()), nil
 }
