@@ -63,12 +63,13 @@ func Dispatch(rc *tool.RunContext, name string, args []string) int {
 func processRunContext() *tool.RunContext {
 	dir, _ := os.Getwd()
 	return &tool.RunContext{
-		Ctx:             context.Background(),
-		Dir:             dir,
-		DirIsProcessCwd: true,
-		Env:             os.Environ(),
-		FS:              tool.NewLocalFS(),
-		SIGPIPEIgnored:  inheritedSIGPIPEWasIgnored(),
+		Ctx:              context.Background(),
+		Dir:              dir,
+		DirIsProcessCwd:  true,
+		DedicatedProcess: true,
+		Env:              os.Environ(),
+		FS:               tool.NewLocalFS(),
+		SIGPIPEIgnored:   inheritedSIGPIPEWasIgnored(),
 		Stdio: tool.Stdio{
 			In:  os.Stdin,
 			Out: os.Stdout,

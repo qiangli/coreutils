@@ -92,6 +92,9 @@ func TestProcessRunContextNativeCwd(t *testing.T) {
 	if !rc.DirIsProcessCwd {
 		t.Error("DirIsProcessCwd = false, want true for the standalone process boundary")
 	}
+	if !rc.DedicatedProcess {
+		t.Error("DedicatedProcess = false, want true for the standalone process boundary")
+	}
 	if rc.FS == nil {
 		t.Error("FS is nil")
 	}

@@ -10,9 +10,23 @@ const (
 	whichUser    = unix.PRIO_USER
 )
 
-// getPriority reads the current nice value. Getpriority legitimately returns
-// -1 for a process at nice -1, so the error must be inspected rather than the
-// value compared against -1.
-func getPriority(which, id int) (int, error) { return unix.Getpriority(which, id) }
+// hostScheduler is the real kernel seam.
+//
+// Getpriority legitimately reports negative nice values, so the error must
+// be inspected rather than the value compared against -1 (x/sys does this
+// correctly on every unix target).
+type hostScheduler struct{}
 
-func setPriority(which, id, prio int) error { return unix.Setpriority(which, id, prio) }
+func (hostScheduler) get(which, id int) (int, error) {
+	raw, err := unix.Getpriority(which, id)
+	if err != nil {
+		return 0, err
+	}
+	return niceFromGetpriority(raw), nil
+}
+
+func (hostScheduler) set(which, id, prio int) error {
+	return unix.Setpriority(which, id, prio)
+}
+
+func newHostScheduler() (scheduler, error) { return hostScheduler{}, nil }
