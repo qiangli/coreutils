@@ -11,6 +11,7 @@ package idcmd
 
 import (
 	"fmt"
+	"io"
 	"os/user"
 	"strings"
 
@@ -103,7 +104,15 @@ func run(rc *tool.RunContext, args []string) int {
 			continue
 		}
 		for _, line := range results {
-			fmt.Fprintf(rc.Out, "%s%s", line, term)
+			str := line + term
+			n, err := io.WriteString(rc.Out, str)
+			if err == nil && n != len(str) {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				fmt.Fprintf(rc.Err, "id: write error: %v\n", err)
+				return 1
+			}
 		}
 	}
 	return status

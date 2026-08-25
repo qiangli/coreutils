@@ -3,6 +3,8 @@ package idcmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os/user"
 	"strings"
 	"testing"
@@ -383,5 +385,120 @@ func TestIDRealFlagWithOptions(t *testing.T) {
 	}
 	if strings.TrimSpace(out) != u.Username {
 		t.Errorf("-r -u -n = %q, want username %s", out, u.Username)
+	}
+}
+
+type idFailWriter struct {
+	short bool
+}
+
+func (w idFailWriter) Write(p []byte) (int, error) {
+	if w.short {
+		return len(p) - 1, nil
+	}
+	return 0, errors.New("injected output failure")
+}
+
+func TestIDOutputErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+		want string
+	}{
+		{"error", idFailWriter{}, "injected output failure"},
+		{"short", idFailWriter{short: true}, io.ErrShortWrite.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errOut bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx:   context.Background(),
+				Stdio: tool.Stdio{Out: tc.out, Err: &errOut},
+			}
+			if code := run(rc, []string{"-u"}); code != 1 || !strings.Contains(errOut.String(), tc.want) {
+				t.Fatalf("code=%d err=%q", code, errOut.String())
+			}
+		})
+	}
+}
+
+func TestIDNamedUserOperand(t *testing.T) {
+	u := current(t)
+	// Output should just report uid=/gid= and groups= without euid=/egid=
+	out, errb, code := runTool(t, u.Username)
+	if code != 0 || errb != "" {
+		t.Fatalf("id USER: code=%d err=%q", code, errb)
+	}
+	if strings.Contains(out, "euid=") || strings.Contains(out, "egid=") {
+		t.Errorf("named user output %q should not contain euid/egid", out)
+	}
+	if !strings.HasPrefix(out, "uid="+u.Uid) || !strings.Contains(out, "groups=") {
+		t.Errorf("named user output %q malformed", out)
+	}
+
+	// -u USER
+	out, errb, code = runTool(t, "-u", u.Username)
+	if code != 0 || errb != "" {
+		t.Fatalf("-u USER: code=%d err=%q", code, errb)
+	}
+	if strings.TrimSpace(out) != u.Uid {
+		t.Errorf("-u USER = %q, want %q", out, u.Uid)
+	}
+
+	// -g USER
+	out, errb, code = runTool(t, "-g", u.Username)
+	if code != 0 || errb != "" {
+		t.Fatalf("-g USER: code=%d err=%q", code, errb)
+	}
+	if strings.TrimSpace(out) != u.Gid {
+		t.Errorf("-g USER = %q, want %q", out, u.Gid)
+	}
+
+	// -G USER
+	out, errb, code = runTool(t, "-G", u.Username)
+	if code != 0 || errb != "" {
+		t.Fatalf("-G USER: code=%d err=%q", code, errb)
+	}
+	if !strings.HasPrefix(out, u.Gid) {
+		t.Errorf("-G USER = %q, want to start with primary GID %q", out, u.Gid)
+	}
+}
+
+func TestIDNamedUserOperandCombinations(t *testing.T) {
+	u := current(t)
+	// -un USER
+	out, errb, code := runTool(t, "-u", "-n", u.Username)
+	if code != 0 || errb != "" {
+		t.Fatalf("-u -n USER: code=%d err=%q", code, errb)
+	}
+	if strings.TrimSpace(out) != u.Username {
+		t.Errorf("-u -n USER = %q, want %q", out, u.Username)
+	}
+
+	// -gn USER
+	out, errb, code = runTool(t, "-g", "-n", u.Username)
+	if code != 0 || errb != "" {
+		t.Fatalf("-g -n USER: code=%d err=%q", code, errb)
+	}
+	// Note: u.Gid name might differ from u.Username, but we want it to be not empty
+	if strings.TrimSpace(out) == "" {
+		t.Errorf("-g -n USER output empty")
+	}
+
+	// -Gn USER
+	out, errb, code = runTool(t, "-G", "-n", u.Username)
+	if code != 0 || errb != "" {
+		t.Fatalf("-G -n USER: code=%d err=%q", code, errb)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Errorf("-G -n USER output empty")
+	}
+
+	// -run USER (POSIX: -r is ignored if no difference, but it's valid)
+	out, errb, code = runTool(t, "-r", "-u", "-n", u.Username)
+	if code != 0 || errb != "" {
+		t.Fatalf("-r -u -n USER: code=%d err=%q", code, errb)
+	}
+	if strings.TrimSpace(out) != u.Username {
+		t.Errorf("-r -u -n USER = %q, want %q", out, u.Username)
 	}
 }
