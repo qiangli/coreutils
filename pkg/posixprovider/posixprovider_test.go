@@ -343,3 +343,42 @@ func TestEnabledIn(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifiedIdentity: the full verified identity — resolved path, pinned
+// version, and the built digest re-verified against the file — that a
+// dispatch-plan disclosure is compared against. Every Resolve failure mode is
+// a VerifiedIdentity failure mode; a tampered binary yields no identity.
+func TestVerifiedIdentity(t *testing.T) {
+	root := t.TempDir()
+	e := mustLookup(t, "m4")
+	body := []byte("#!/bin/sh\n# fake m4\nexit 0\n")
+	bin := provision(t, root, e, body)
+	r := Resolver{CacheRoot: root, GOOS: "linux"}
+
+	id, err := r.VerifiedIdentity("m4")
+	if err != nil {
+		t.Fatalf("VerifiedIdentity(m4) = %v", err)
+	}
+	sum := sha256.Sum256(body)
+	if id.Command != "m4" || id.Version != e.Version || id.Path != bin ||
+		id.BuiltSHA256 != hex.EncodeToString(sum[:]) {
+		t.Errorf("identity = %+v, want %s %s at %s with built sha %s",
+			id, e.Command, e.Version, bin, hex.EncodeToString(sum[:]))
+	}
+
+	// A tampered binary is unattributable: no identity, an ErrProvenance.
+	if err := os.WriteFile(bin, []byte("tampered"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.VerifiedIdentity("m4"); !errors.Is(err, ErrProvenance) {
+		t.Errorf("tampered binary: err = %v, want ErrProvenance", err)
+	}
+
+	// Unknown and unprovisioned names fail exactly like Resolve.
+	if _, err := r.VerifiedIdentity("gcc"); !errors.Is(err, ErrUnknown) {
+		t.Errorf("unknown name: err = %v, want ErrUnknown", err)
+	}
+	if _, err := r.VerifiedIdentity("bc"); !errors.Is(err, ErrNotProvisioned) {
+		t.Errorf("unprovisioned: err = %v, want ErrNotProvisioned", err)
+	}
+}

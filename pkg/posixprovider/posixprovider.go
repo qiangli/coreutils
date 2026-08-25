@@ -278,16 +278,35 @@ func (r Resolver) binaryCandidates(e Entry) []string {
 
 // Resolve is the Resolver-scoped form of the package-level Resolve.
 func (r Resolver) Resolve(name string) (string, error) {
+	id, err := r.VerifiedIdentity(name)
+	return id.Path, err
+}
+
+// Identity is the verified identity of one provisioned provider: the resolved
+// executable, the pinned version it was built from, and the built binary's
+// sha256 as recorded — and re-verified against the file — by its provenance
+// record. It is what a dispatch-plan probe compares against: two parties that
+// agree on an Identity are provably talking about the same binary.
+type Identity struct {
+	Command     string
+	Version     string
+	Path        string
+	BuiltSHA256 string // lower-case hex, verified equal to the file's digest
+}
+
+// VerifiedIdentity resolves name and returns its full verified identity. It
+// NEVER downloads and NEVER compiles; the failure modes are exactly Resolve's.
+func (r Resolver) VerifiedIdentity(name string) (Identity, error) {
 	e, ok := Lookup(name)
 	if !ok {
-		return "", fmt.Errorf("%s: %w", name, ErrUnknown)
+		return Identity{}, fmt.Errorf("%s: %w", name, ErrUnknown)
 	}
 	if !e.SupportsGOOS(r.GOOS) {
-		return "", fmt.Errorf("%s %s is %w %s (manifest declares: %s)",
+		return Identity{}, fmt.Errorf("%s %s is %w %s (manifest declares: %s)",
 			e.Command, e.Version, ErrUnsupportedPlatform, r.GOOS, strings.Join(e.Platforms, ","))
 	}
 	if r.CacheRoot == "" {
-		return "", fmt.Errorf("%s: no provider cache root configured", e.Command)
+		return Identity{}, fmt.Errorf("%s: no provider cache root configured", e.Command)
 	}
 
 	var path string
@@ -298,16 +317,17 @@ func (r Resolver) Resolve(name string) (string, error) {
 		}
 	}
 	if path == "" {
-		return "", fmt.Errorf("%s %s is %w: no cached binary under %s\n"+
+		return Identity{}, fmt.Errorf("%s %s is %w: no cached binary under %s\n"+
 			"  provision it BEFORE the run:  bashy posix-providers build %s\n"+
 			"  (providers are built from pinned upstream source at prepare time; "+
 			"resolving one never downloads or compiles)",
 			e.Command, e.Version, ErrNotProvisioned, r.Dir(e), e.Command)
 	}
-	if err := r.verifyProvenance(e, path); err != nil {
-		return "", err
+	built, err := r.verifyProvenance(e, path)
+	if err != nil {
+		return Identity{}, err
 	}
-	return path, nil
+	return Identity{Command: e.Command, Version: e.Version, Path: path, BuiltSHA256: built}, nil
 }
 
 // ProvenancePath is the sidecar build.sh writes next to the binary.
@@ -315,15 +335,15 @@ func (r Resolver) ProvenancePath(e Entry) string {
 	return filepath.Join(r.Dir(e), "provenance.tsv")
 }
 
-// verifyProvenance checks the cached binary against the record build.sh wrote.
-// A cache entry that does not match its provenance is an ERROR: it is a binary
-// nobody can attribute to a known input, and certification evidence turns on
-// exactly that attribution.
-func (r Resolver) verifyProvenance(e Entry, path string) error {
+// verifyProvenance checks the cached binary against the record build.sh wrote
+// and returns the verified built sha256. A cache entry that does not match its
+// provenance is an ERROR: it is a binary nobody can attribute to a known
+// input, and certification evidence turns on exactly that attribution.
+func (r Resolver) verifyProvenance(e Entry, path string) (string, error) {
 	provPath := r.ProvenancePath(e)
 	rec, err := readProvenance(provPath)
 	if err != nil {
-		return fmt.Errorf("%s %s has a %w: %v\n"+
+		return "", fmt.Errorf("%s %s has a %w: %v\n"+
 			"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, err, e.Command)
 	}
 	mismatch := func(field, got, want string) error {
@@ -332,29 +352,29 @@ func (r Resolver) verifyProvenance(e Entry, path string) error {
 			e.Command, e.Version, ErrProvenance, field, got, want, provPath, e.Command)
 	}
 	if rec["command"] != e.Command {
-		return mismatch("command", rec["command"], e.Command)
+		return "", mismatch("command", rec["command"], e.Command)
 	}
 	if rec["version"] != e.Version {
-		return mismatch("version", rec["version"], e.Version)
+		return "", mismatch("version", rec["version"], e.Version)
 	}
 	if !strings.EqualFold(rec["source_sha256"], e.SHA256) {
-		return mismatch("source_sha256", rec["source_sha256"], e.SHA256)
+		return "", mismatch("source_sha256", rec["source_sha256"], e.SHA256)
 	}
 	want := strings.ToLower(strings.TrimSpace(rec["built_sha256"]))
 	if len(want) != 64 {
-		return fmt.Errorf("%s %s has a %w: provenance records no built_sha256 (%s)\n"+
+		return "", fmt.Errorf("%s %s has a %w: provenance records no built_sha256 (%s)\n"+
 			"  rebuild it:  bashy posix-providers build %s", e.Command, e.Version, ErrProvenance, provPath, e.Command)
 	}
 	got, err := fileSHA256(path)
 	if err != nil {
-		return fmt.Errorf("%s %s has a %w: %v", e.Command, e.Version, ErrProvenance, err)
+		return "", fmt.Errorf("%s %s has a %w: %v", e.Command, e.Version, ErrProvenance, err)
 	}
 	if got != want {
-		return fmt.Errorf("%s %s has a %w: %s hashes to %s, provenance records %s\n"+
+		return "", fmt.Errorf("%s %s has a %w: %s hashes to %s, provenance records %s\n"+
 			"  the cached binary is not the one that was built; rebuild it:  bashy posix-providers build %s",
 			e.Command, e.Version, ErrProvenance, path, got, want, e.Command)
 	}
-	return nil
+	return want, nil
 }
 
 // readProvenance parses build.sh's two-column key<TAB>value sidecar.

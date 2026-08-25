@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -401,5 +402,81 @@ func TestOptOutUnregistersProviders(t *testing.T) {
 	}
 	if strings.Contains(got, "ADMIN-MISSING") {
 		t.Error("the opt-out also removed posix-providers; it must stay reachable")
+	}
+}
+
+// TestAdminDispatchPlan: the introspection surface posix-gate trusts. One
+// strict TSV row per provider this host can dispatch — command, version,
+// resolved path, verified built sha256 — and a loud FAIL (exit 1) for any
+// provider whose dispatch target cannot be verified. A plan with holes must
+// never read as a plan.
+func TestAdminDispatchPlan(t *testing.T) {
+	root := t.TempDir()
+	bodies := map[string]string{}
+	for _, e := range posixprovider.Entries() {
+		body := "#!/bin/sh\n# " + e.Command + "\nexit 0\n"
+		bodies[e.Command] = body
+		provision(t, root, e.Command, body)
+	}
+
+	rc, out, errb := newRC(t, root)
+	code, stdout, stderr := run(t, "posix-providers", rc, out, errb, "dispatch-plan")
+
+	rows := map[string][]string{}
+	for _, line := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 4 {
+			t.Fatalf("malformed dispatch-plan row: %q", line)
+		}
+		rows[f[0]] = f
+	}
+	unsupported := 0
+	for _, e := range posixprovider.Entries() {
+		if !e.SupportsGOOS(runtime.GOOS) {
+			// The honest answer for a platform the manifest does not declare
+			// is FAIL, not silence: this host's wrapper cannot dispatch it.
+			unsupported++
+			if _, ok := rows[e.Command]; ok {
+				t.Errorf("%s is not declared for %s but got a dispatch row", e.Command, runtime.GOOS)
+			}
+			if !strings.Contains(stderr, "FAIL "+e.Command) {
+				t.Errorf("undeclared %s not FAILed on stderr: %q", e.Command, stderr)
+			}
+			continue
+		}
+		f, ok := rows[e.Command]
+		if !ok {
+			t.Errorf("no dispatch row for %s: %q", e.Command, stdout)
+			continue
+		}
+		sum := sha256.Sum256([]byte(bodies[e.Command]))
+		if f[1] != e.Version || f[2] != filepath.Join(root, e.Command, e.Version, e.Command) ||
+			f[3] != hex.EncodeToString(sum[:]) {
+			t.Errorf("dispatch row for %s = %v, want version %s under the cache with the built digest", e.Command, f, e.Version)
+		}
+	}
+	if unsupported == 0 && code != 0 {
+		t.Errorf("fully dispatchable plan: exit = %d, stderr = %q", code, stderr)
+	}
+	if unsupported > 0 && code != 1 {
+		t.Errorf("plan with undeclared providers: exit = %d, want 1", code)
+	}
+
+	// A tampered provider has no verifiable dispatch target: FAIL, exit 1.
+	e, _ := posixprovider.Lookup("make")
+	if err := os.WriteFile(filepath.Join(root, "make", e.Version, "make"), []byte("tampered"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rc, out, errb = newRC(t, root)
+	code, _, stderr = run(t, "posix-providers", rc, out, errb, "dispatch-plan")
+	if code != 1 || !strings.Contains(stderr, "FAIL make") || !strings.Contains(stderr, "no verifiable dispatch target") {
+		t.Errorf("tampered make: exit = %d, stderr = %q", code, stderr)
+	}
+
+	// Operands are a usage error: the plan is always the whole pinned set.
+	rc, out, errb = newRC(t, root)
+	code, _, _ = run(t, "posix-providers", rc, out, errb, "dispatch-plan", "make")
+	if code != 2 {
+		t.Errorf("dispatch-plan with an operand: exit = %d, want 2", code)
 	}
 }

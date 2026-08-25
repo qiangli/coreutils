@@ -28,11 +28,12 @@ func gateTool() *tool.Tool {
                           (hermetic: no cache, no network, nothing spawned)
   providers               verify every pinned external provider resolves from the
                           cache with its provenance intact
-  runtime --bindir DIR --multicall PATH [--shell NAME] [--multicall-sha256 HEX]
+  runtime --profile C|D --manifest FILE --bindir DIR --multicall PATH [--shell NAME]
                           verify the staged runtime end to end: registry + providers
-                          (bound to the staged wrapper's dispatch cache) + approved
-                          executable identity behind every multicall-owned name +
-                          the staged shell's identity/version/build + its effective
+                          (bound to the staged wrapper's actual dispatch plan) +
+                          approved executable identity — against the externally
+                          supplied build manifest — behind every multicall-owned
+                          name and the staged shell + the shell's effective
                           classification of all 116 names + POSIX mode +
                           POSIXLY_CORRECT reaching children and grandchildren
 
@@ -41,11 +42,16 @@ shell builtin/keyword/entry, or pinned provider — is selected for every name,
 or it rejects, naming each name and cause. Count drift on either axis,
 duplicate or ambiguous ownership, a missing provider pin or provenance record,
 host PATH fallback, and a staged entry that is not the approved multicall are
-all rejections. --shell takes a command NAME (default sh) resolved through the
-staged PATH — a host shell path is a usage error, not an input. Run the
-runtime subcommand from INSIDE the staged environment, so the PATH,
-BASHY_BIN_CACHE, and POSIXLY_CORRECT it validates are the ones the runtime
-actually has.
+all rejections. Identity is rooted in --manifest, the approved build/run
+manifest (key<TAB>value rows: profile, shell_sha256, multicall_sha256) written
+when the approved builds were produced — never in the staged binaries
+themselves. Profile C certifies approved stock GNU Bash 5.3; Profile D
+certifies approved Bashy 5.3; 5.2, 5.4, a wrong implementation, or a manifest
+for the other profile all reject. --shell takes a command NAME (default sh)
+resolved through the staged PATH — a host shell path is a usage error, not an
+input. Run the runtime subcommand from INSIDE the staged environment, so the
+PATH, BASHY_BIN_CACHE, and POSIXLY_CORRECT it validates are the ones the
+runtime actually has.
 
 Exit status: 0 every gate passed, 1 any rejection, 2 usage.`,
 	}
@@ -145,33 +151,25 @@ func runRuntime(rc *tool.RunContext, args []string) int {
 		return 1
 	}
 
+	// The externally supplied build manifest is the root of trust for every
+	// identity check below. Without a valid one there is nothing meaningful
+	// left to verify — running the later gates against unpinned binaries would
+	// dress an unrooted measurement up as a partial verdict.
+	man, mfs := loadBuildManifest(cfg.manifestPath, cfg.profile)
+	if len(mfs) != 0 {
+		return report(rc, "runtime", mfs, "")
+	}
+	cfg.shellSHA, cfg.multicallSHA = man.shellSHA, man.multicallSHA
+
 	// The runtime verdict INCLUDES the registry and provider gates: a staged
 	// environment whose PATH is right but whose registry is wrong (or whose
 	// providers are unattributable) has not selected the intended owners.
 	findings := VerifyRegistry(rc.Getenv(posixprovider.OptOutEnv))
-	findings = append(findings, verifyStagedProviders(rc)...)
 	findings = append(findings, verifyRuntime(rc, spec, cfg)...)
 
 	return report(rc, "runtime", findings,
-		fmt.Sprintf("staged runtime selects the intended owner for all %d names (shell %s, bindir %s, multicall %s)",
-			pinTotal, cfg.shellName, cfg.binDir, cfg.multicall))
-}
-
-// verifyStagedProviders binds provider provenance to the STAGED wrapper's
-// dispatch target. The staged wrapper (the approved multicall, proven by the
-// exec-identity gate) resolves its cache from the environment the shell hands
-// it — so the certification claim is only checkable when that environment
-// names the cache explicitly. BASHY_BIN_CACHE absent from the staged
-// environment is therefore a rejection, not a fall-back to the gate process's
-// own default cache: verifying a cache the wrapper may never consult would
-// attribute provenance to the wrong binaries.
-func verifyStagedProviders(rc *tool.RunContext) []Finding {
-	root := strings.TrimSpace(rc.Getenv("BASHY_BIN_CACHE"))
-	if root == "" {
-		return []Finding{{Check: "provider-cache",
-			Detail: "BASHY_BIN_CACHE is not set in the staged environment, so provider provenance cannot be bound to the staged wrapper's dispatch target"}}
-	}
-	return VerifyProviders(posixprovider.Resolver{CacheRoot: root, GOOS: gateGOOS})
+		fmt.Sprintf("staged profile %s runtime selects the intended owner for all %d names (shell %s, bindir %s, multicall %s)",
+			cfg.profile, pinTotal, cfg.shellName, cfg.binDir, cfg.multicall))
 }
 
 func parseRuntimeFlags(rc *tool.RunContext, args []string) (runtimeConfig, int) {
@@ -194,6 +192,18 @@ func parseRuntimeFlags(rc *tool.RunContext, args []string) (runtimeConfig, int) 
 			return "", false
 		}
 		switch name {
+		case "--profile":
+			v, ok := take()
+			if !ok || profiles[v].impl == "" {
+				return usage("--profile requires the profile being certified: C (stock GNU Bash 5.3) or D (Bashy 5.3)")
+			}
+			cfg.profile = v
+		case "--manifest":
+			v, ok := take()
+			if !ok || v == "" {
+				return usage("--manifest requires the approved build/run manifest's path")
+			}
+			cfg.manifestPath = rc.Path(v)
 		case "--shell":
 			v, ok := take()
 			if !ok || v == "" {
@@ -215,18 +225,12 @@ func parseRuntimeFlags(rc *tool.RunContext, args []string) (runtimeConfig, int) 
 				return usage("--multicall requires the approved multicall executable's path")
 			}
 			cfg.multicall = rc.Path(v)
-		case "--multicall-sha256":
-			v, ok := take()
-			if !ok || len(v) != 64 {
-				return usage("--multicall-sha256 requires a full 64-hex-digit digest")
-			}
-			cfg.multicallSHA = v
 		default:
 			return usage(fmt.Sprintf("unknown option %q", arg))
 		}
 	}
-	if cfg.binDir == "" || cfg.multicall == "" {
-		return usage("both --bindir and --multicall are required (identity of the staged executables is mandatory, not optional)")
+	if cfg.profile == "" || cfg.manifestPath == "" || cfg.binDir == "" || cfg.multicall == "" {
+		return usage("--profile, --manifest, --bindir, and --multicall are all required (identity of the staged executables is rooted in the approved build manifest, never optional)")
 	}
 	return cfg, 0
 }

@@ -23,12 +23,22 @@
 //     pinned provider
 //   - missing provider pin or provenance — a provider without a full sha256
 //     pin, or a cached binary that does not match its provenance record
+//   - a broken root of trust — the externally supplied build/run manifest
+//     missing, unreadable, missing a digest, carrying a digest that is not
+//     exactly 64 hexadecimal characters, or approved for the OTHER profile
 //   - host PATH fallback or an unapproved executable — a staged runtime in
 //     which a required name resolves outside the staged tool directory, or
-//     resolves to an executable whose digest is not the approved multicall's
-//     (a staged symlink to an arbitrary host /bin tool fails here)
-//   - a shell resolved from the host PATH, or one that does not carry an
-//     approved Profile C/D identity/version/build
+//     resolves to an executable whose digest is not the manifest's approved
+//     multicall digest (a staged symlink to an arbitrary host /bin tool
+//     fails here)
+//   - unbound provider dispatch — the approved multicall's own disclosed
+//     dispatch plan disagreeing with the verified provider cache: a valid
+//     cache the staged wrapper does not actually dispatch from
+//   - a shell resolved from the host PATH, one whose bytes do not hash to
+//     the manifest's approved shell build (a --version line is forgeable and
+//     is never a build identity), or one whose reported identity is not the
+//     profile's — stock GNU Bash exactly 5.3 for Profile C, Bashy exactly
+//     5.3 for Profile D
 //   - a shell that is not in POSIX mode, or an environment in which
 //     POSIXLY_CORRECT=1 does not reach child processes
 //

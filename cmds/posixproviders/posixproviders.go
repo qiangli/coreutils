@@ -191,6 +191,10 @@ func adminTool() *tool.Tool {
 
   list                 show every pinned provider and whether it is provisioned
   check [all|<cmd>]    verify provisioning + provenance; non-zero if any is unusable
+  dispatch-plan        print, one TSV row per pinned provider, the exact binary
+                       THIS invocation would dispatch to: command, version,
+                       resolved path, verified built sha256 — the introspection
+                       surface posix-gate compares against its own resolution
   build [all|<cmd>]    fetch pinned upstream SOURCE, verify sha256, build locally
 
 build is the ONLY path that downloads or compiles. Running a provider never
@@ -207,7 +211,7 @@ the provider names entirely.`,
 
 func runAdmin(rc *tool.RunContext, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(rc.Err, "posix-providers: a subcommand is required (list, check, build)")
+		fmt.Fprintln(rc.Err, "posix-providers: a subcommand is required (list, check, dispatch-plan, build)")
 		return 2
 	}
 	sub, rest := args[0], args[1:]
@@ -219,12 +223,53 @@ func runAdmin(rc *tool.RunContext, args []string) int {
 		return runList(rc, rest)
 	case "check":
 		return runCheck(rc, rest)
+	case "dispatch-plan":
+		return runDispatchPlan(rc, rest)
 	case "build":
 		return runBuild(rc, rest)
 	default:
-		fmt.Fprintf(rc.Err, "posix-providers: unknown subcommand %q (list, check, build)\n", sub)
+		fmt.Fprintf(rc.Err, "posix-providers: unknown subcommand %q (list, check, dispatch-plan, build)\n", sub)
 		return 2
 	}
+}
+
+// runDispatchPlan is the trusted-introspection surface: for every pinned
+// provider it prints the binary THIS invocation — this executable, this
+// environment, this cache — would dispatch to, as one strict TSV row:
+//
+//	command<TAB>version<TAB>resolved path<TAB>verified built sha256
+//
+// posix-gate runs it through the digest-verified approved multicall and
+// compares each row against its own independent resolution, which binds
+// provider provenance to the staged wrapper's ACTUAL dispatch target rather
+// than to a cache the wrapper might never consult. Any provider that cannot
+// produce a verified identity is a loud FAIL and a non-zero exit — a plan
+// with holes must not read as a plan.
+func runDispatchPlan(rc *tool.RunContext, args []string) int {
+	if len(args) != 0 {
+		fmt.Fprintln(rc.Err, "posix-providers dispatch-plan: takes no arguments")
+		return 2
+	}
+	r, err := resolverFor(rc)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "posix-providers: %v\n", err)
+		return 1
+	}
+	bad := 0
+	for _, e := range posixprovider.Entries() {
+		id, err := r.VerifiedIdentity(e.Command)
+		if err != nil {
+			fmt.Fprintf(rc.Err, "FAIL %s: %v\n", e.Command, err)
+			bad++
+			continue
+		}
+		fmt.Fprintf(rc.Out, "%s\t%s\t%s\t%s\n", id.Command, id.Version, id.Path, id.BuiltSHA256)
+	}
+	if bad > 0 {
+		fmt.Fprintf(rc.Err, "posix-providers: %d provider(s) have no verifiable dispatch target\n", bad)
+		return 1
+	}
+	return 0
 }
 
 func runList(rc *tool.RunContext, args []string) int {

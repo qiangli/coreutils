@@ -39,10 +39,14 @@ compares row by row.
 | duplicate / ambiguous ownership | a name claimed twice: a shell-owned name that also has a registered tool, an applet that is also pinned as a provider, inventory/manifest provider sets that disagree |
 | missing provider pin | a provider row without a full sha256 source pin, version, platform list, or upstream URL |
 | missing / broken provenance | a provider whose cached binary is absent, or does not hash to what its `provenance.tsv` records — an unattributable binary is worse than a missing one, because it still produces numbers |
+| broken build manifest | the externally supplied build/run manifest (`--manifest`) unreadable, missing a required pin (`profile`, `shell_sha256`, `multicall_sha256`), carrying a malformed digest (a digest is exactly 64 hexadecimal characters), a duplicate pin, or an unknown profile — with no root of trust, nothing else is verified |
+| profile mismatch | the gate invoked for one profile with a manifest approved for the other: approved builds do not transfer between profiles |
 | unbound provider cache | the staged environment does not name `BASHY_BIN_CACHE`, so provenance cannot be bound to the cache the staged wrapper will actually dispatch from |
+| unbound provider dispatch | the approved multicall's own dispatch plan (`posix-providers dispatch-plan`, run with the staged environment) failing, not accounting for exactly the sixteen pinned providers, or disclosing a resolved executable/version/built digest that differs from the gate's independently verified cache identity — a valid cache the wrapper does not actually dispatch from fails here |
 | host PATH fallback | a staged runtime in which a multicall-owned name resolves outside the staged tool directory (or not at all) |
-| unapproved executable identity | a staged entry — even one inside the tool directory — whose resolved target does not hash to the approved multicall: a staged symlink to an arbitrary host `/bin` tool fails here |
-| host PATH shell / unapproved shell | the interrogated shell resolving outside the staged directory, or not identifying as an approved Profile C/D shell (GNU bash or bashy, bash-5 family, with a build identifier) |
+| unapproved executable identity | a staged entry — even one inside the tool directory — whose resolved target does not hash to the manifest's approved multicall digest: a staged symlink to an arbitrary host `/bin` tool fails here |
+| host PATH shell / unapproved shell build | the interrogated shell resolving outside the staged directory, or its bytes not hashing to the manifest's approved `shell_sha256` — a forgeable `--version` line or target triplet is never accepted as a build identity |
+| wrong shell identity for the profile | a digest-proven shell whose reported identity still disagrees with the profile: Profile C requires stock GNU Bash exactly 5.3, Profile D requires Bashy exactly 5.3 — 5.2, 5.4, a wrong implementation, or a missing build identifier all reject |
 | broken classification transcript | the shell's classification transcript not accounting for exactly the 116 expected names: duplicates, extras, missing and malformed rows each reject |
 | wrong effective owner in the shell | `type -t` classifying a name differently from what its effective selector requires (see overlaps below) |
 | shell not in POSIX mode | `set -o` does not report `posix on` |
@@ -55,7 +59,7 @@ compares row by row.
 posix-gate spec        # print the projection + both pinned splits
 posix-gate registry    # hermetic: projection vs live tool registry vs provider manifest
 posix-gate providers   # every pinned provider resolves from cache, provenance intact
-posix-gate runtime --bindir DIR --multicall PATH [--shell NAME] [--multicall-sha256 HEX]
+posix-gate runtime --profile C|D --manifest FILE --bindir DIR --multicall PATH [--shell NAME]
                        # the full staged verdict (includes registry + providers)
 ```
 
@@ -81,20 +85,37 @@ and POSIXLY_CORRECT it validates are the ones the runtime actually has:
 
 ```sh
 POSIXLY_CORRECT=1 PATH=/staged/bin BASHY_BIN_CACHE=/staged/cache \
-  coreutils posix-gate runtime --bindir /staged/bin \
-    --multicall /staged/bin/coreutils \
-    --multicall-sha256 <release digest>   # optional external pin
+  coreutils posix-gate runtime --profile C \
+    --manifest /release/approved-builds.tsv \
+    --bindir /staged/bin \
+    --multicall /staged/bin/coreutils
 ```
+
+`--manifest` names the **approved build/run manifest** — `key<TAB>value`
+rows, `#` comments allowed, written by whoever produced the approved builds
+and supplied to the gate externally:
+
+```
+profile	C
+shell_sha256	<sha256 of the approved shell build>
+multicall_sha256	<sha256 of the approved multicall build>
+```
+
+The manifest is the runtime gate's **root of trust**: every digest must be
+exactly 64 hexadecimal characters, both digests and the profile are
+mandatory, extra rows (builder, date, revisions) are tolerated, and a digest
+is never derived from a staged binary — a binary hashing to itself proves
+only that it equals itself. A defective manifest, or a manifest approved for
+the other profile, rejects before anything else is verified.
 
 It verifies, in order:
 
 1. **Its own environment** — `POSIXLY_CORRECT` must already be set (the
    harness stages `POSIXLY_CORRECT=1`; the gate checks presence, see above).
-2. **Approved executable identity** — `--multicall` names the approved
-   multicall executable; the gate digests it (and, when `--multicall-sha256`
-   pins a digest externally, requires the two to agree). Identity is
-   **mandatory**: the flag is required, and there is no
-   membership-in-a-directory shortcut.
+2. **Approved executable identity** — `--multicall` names the staged
+   multicall executable, which must hash to exactly the manifest's
+   `multicall_sha256`. Identity is **mandatory**: there is no
+   membership-in-a-directory shortcut and no self-derived digest.
 3. **PATH ownership + identity of every multicall-owned name** — every
    multicall-owned name (86 applets + 16 providers) and `sh` itself must
    resolve, through the environment's own PATH, to an entry inside
@@ -103,34 +124,51 @@ It verifies, in order:
    to the multicall elsewhere — that layout passes precisely because the
    digest matches; a staged symlink (or copy) pointing at an arbitrary host
    tool fails, no matter where it sits.
-4. **Shell resolution + identity** — the interrogated shell is a command
-   NAME (`--shell`, default `sh`), resolved through the RunContext's staged
-   PATH; a host path operand is a usage error and a resolution outside
-   `--bindir` is a rejection. The resolved shell's `--version` must identify
-   an approved Profile C/D shell — `GNU bash` (Profile C) or `bashy`
-   (Profile D) — at a bash-5-family version with a non-empty build
-   identifier. No probe runs against an unvalidated shell.
-5. **Shell-effective ownership** — one spawn of the staged shell classifies
+4. **Provider dispatch binding** — see below: the verified provider cache,
+   plus the approved multicall's own disclosed dispatch plan, row for row.
+5. **Shell resolution + build identity** — the interrogated shell is a
+   command NAME (`--shell`, default `sh`), resolved through the RunContext's
+   staged PATH; a host path operand is a usage error and a resolution outside
+   `--bindir` is a rejection. The resolved shell's bytes must hash to the
+   manifest's `shell_sha256` — the build identity is the digest, because a
+   `--version` line or target triplet is forgeable. Only a digest-proven
+   shell is then cross-checked against what it reports: the profile's
+   approved implementation (stock GNU Bash for Profile C, Bashy for
+   Profile D), **exactly** version 5.3 (5.2 and 5.4 both reject), and a
+   non-empty build identifier. No probe runs against an unvalidated shell.
+6. **Shell-effective ownership** — one spawn of the staged shell classifies
    all 116 names with `type -t`. The transcript is parsed strictly: exactly
    one well-formed row per expected name (116 unique names); duplicate,
    extra, missing and malformed rows are each rejections. The expected class
    comes from the effective selector, including the deliberate overlaps
    below.
-6. **POSIX mode** — the shell's `set -o` must report `posix on`. Being a
+7. **POSIX mode** — the shell's `set -o` must report `posix on`. Being a
    POSIX-capable shell is not the same as being in POSIX mode.
-7. **POSIXLY_CORRECT propagation** — the variable must survive, non-empty,
+8. **POSIXLY_CORRECT propagation** — the variable must survive, non-empty,
    into a shell child (`"$POSIXLY_CORRECT"` expansion) and across a real
    process boundary (`exec env` — where `env` is whatever the staged PATH
    supplies, already verified to be the approved multicall — must show the
    variable set).
 
 The runtime verdict also re-runs the **registry** gate and the **provider**
-gate. For providers it binds provenance to the staged wrapper's actual
-dispatch target: the wrapper (the approved multicall, proven in step 3)
-resolves its cache from the environment the shell hands it, so the staged
-environment must name `BASHY_BIN_CACHE` explicitly — an absent cache root is
-a rejection, never a fall-back to the gate process's own default cache, which
-the wrapper might never consult.
+gate. For providers (step 4) it binds provenance to the staged wrapper's
+ACTUAL dispatch, in two mutually checking halves. First the cache: the
+wrapper resolves its cache from the environment the shell hands it, so the
+staged environment must name `BASHY_BIN_CACHE` explicitly — an absent cache
+root is a rejection, never a fall-back to the gate process's own default
+cache, which the wrapper might never consult — and every pinned provider must
+resolve from it with provenance intact. Second the dispatch: a verified cache
+sitting there proves nothing about what the wrapper runs, so the gate makes
+the approved multicall (digest-proven in step 2 — an unproven binary's
+answers about itself are worthless) disclose its own plan with
+`posix-providers dispatch-plan`, run with the staged environment. The
+observed resolved executable, version, and built digest for every provider
+must equal the gate's independently verified identity
+(`posixprovider.Resolver.VerifiedIdentity`) for the same name; the plan is
+parsed as strictly as the classification transcript (exactly sixteen rows,
+no duplicates, extras, or malformed rows). A valid-but-unused cache
+alongside a wrapper that would dispatch an arbitrary staged executable fails
+here.
 
 ### Availability vs effective selection: the overlaps
 
@@ -152,12 +190,13 @@ The 14 shell-owned names split the same way: `sh` must classify as `file`
 
 ### On spawning
 
-The runtime probes spawn the staged shell resolved from `--shell`. That is
-not a breach of the repo's no-shell-out rule: like `env`/`xargs`/`watch`,
-this tool's documented purpose *is* running the operand it is given — the
-gate interrogates the staged shell, and there is nothing else it could
-interrogate. Everything else (`spec`, `registry`, `providers`) spawns
-nothing.
+The runtime probes spawn the staged shell resolved from `--shell` and the
+approved multicall named by `--multicall` (for the dispatch-plan
+disclosure). That is not a breach of the repo's no-shell-out rule: like
+`env`/`xargs`/`watch`, this tool's documented purpose *is* running the
+operands it is given — the gate interrogates the staged runtime, and there
+is nothing else it could interrogate. Everything else (`spec`, `registry`,
+`providers`) spawns nothing.
 
 ## Relation to the certification harness
 
@@ -176,5 +215,6 @@ repository by design.
 | `cmds/posixgate/spec_gen.go` | generated projection of the canonical manifest (availability owner + effective selector per name; `scripts/applet-matrix.py` owns it) |
 | `cmds/posixgate/spec.go` | projection vocabulary, validation, pinned counts (both axes), expected classifications |
 | `cmds/posixgate/verify.go` | the registry / provider / runtime gates |
+| `cmds/posixgate/manifest.go` | the approved build/run manifest: format, validation, profile pins |
 | `cmds/posixgate/posixgate.go` | the `posix-gate` applet |
 | `cmds/all/posixgate_test.go` | the registry gate run against the real assembled registry in CI (fails, never skips, under the provider opt-out) |

@@ -202,15 +202,21 @@ func VerifyProviders(r posixprovider.Resolver) []Finding {
 // runtime gate — the staged Profile C/D environment
 // ---------------------------------------------------------------------------
 
-// runtimeConfig is the staged environment under test: the shell NAME the
-// profile runs (resolved through the staged PATH, never taken as a host
-// path), the staged tool directory its PATH is wired through, and the
-// approved multicall executable every multicall-owned name must dispatch to.
+// runtimeConfig is the staged environment under test: the profile being
+// certified, the shell NAME it runs (resolved through the staged PATH, never
+// taken as a host path), the staged tool directory its PATH is wired through,
+// the approved multicall executable every multicall-owned name must dispatch
+// to, and the approved digests from the externally supplied build manifest.
+// The digests are MANDATORY and never derived from the staged binaries: the
+// staged binary hashing to itself proves nothing.
 type runtimeConfig struct {
+	profile      string // "C" or "D"
+	manifestPath string // the approved build/run manifest (--manifest)
 	shellName    string // resolved via the RunContext's staged PATH
 	binDir       string
 	multicall    string // path to the approved multicall executable
-	multicallSHA string // optional externally pinned sha256 of that executable
+	shellSHA     string // approved staged-shell sha256, from the build manifest
+	multicallSHA string // approved multicall sha256, from the build manifest
 }
 
 // runShellFn is the probe seam. The default spawns the shell; hermetic tests
@@ -248,16 +254,16 @@ func runShellExec(rc *tool.RunContext, shell string, args ...string) (string, er
 const classifyScript = `for n in "$@"; do t=$(type -t -- "$n" 2>/dev/null) || t=none; [ -n "$t" ] || t=none; printf '%s %s\n' "$n" "$t"; done`
 
 // shellVersionRe recognizes the version line of the two approved Profile C/D
-// shells. Group 1 is the identity, groups 2/3 the major/minor version, group 4
-// the build identifier. Observed forms:
+// shells. Group 1 is the implementation, groups 2/3 the major/minor version,
+// group 4 the build identifier. Observed forms:
 //
-//	GNU bash, version 5.2.32(1)-release (x86_64-pc-linux-gnu)   (Profile C)
+//	GNU bash, version 5.3.8(1)-release (x86_64-pc-linux-gnu)   (Profile C)
 //	bashy, GNU Bash 5.3 compatible, version 5.3.0(1)-bashy-dev (a0a0315)   (Profile D)
+//
+// The line is a CROSS-CHECK only: it is trivially forgeable, so the build
+// identity is the manifest digest (verifyShellIdentity checks that first), and
+// this parse merely requires the proven binary to also SAY the right thing.
 var shellVersionRe = regexp.MustCompile(`^(GNU bash|bashy)\b.* version (\d+)\.(\d+)\S* \(([^()]+)\)\s*$`)
-
-// minShellMajor: both approved profiles run a bash-5-family shell; anything
-// older is not the certified configuration.
-const minShellMajor = 5
 
 // verifyRuntime checks the staged environment: POSIXLY_CORRECT in this very
 // process and in shell children and grandchildren, the approved multicall's
@@ -329,17 +335,24 @@ func verifyRuntime(rc *tool.RunContext, spec []specRow, cfg runtimeConfig) []Fin
 		}
 	}
 
+	// Provider provenance, bound to the staged wrapper's ACTUAL dispatch: the
+	// cache the staged environment names is verified, and the (digest-proven)
+	// approved multicall is then made to disclose, per provider, the exact
+	// binary it would dispatch to — the two views must agree identically.
+	out = append(out, verifyStagedProviders(rc, cfg, approved)...)
+
 	// The interrogated shell is resolved through the staged PATH — never taken
 	// as a host path — and must itself live in the staged directory and carry
-	// an approved Profile C/D identity/version/build. Probing an unvalidated
-	// shell would attribute every later answer to the wrong program, so the
-	// shell probes only run once the shell's identity is proven.
+	// the approved profile build (digest against the build manifest) plus the
+	// matching identity/version/build line. Probing an unvalidated shell would
+	// attribute every later answer to the wrong program, so the shell probes
+	// only run once the shell's identity is proven.
 	shellPath, fs := resolveShell(rc, cfg)
 	out = append(out, fs...)
 	if shellPath == "" {
 		return out
 	}
-	if fs := verifyShellIdentity(rc, shellPath); len(fs) != 0 {
+	if fs := verifyShellIdentity(rc, shellPath, cfg); len(fs) != 0 {
 		return append(out, fs...)
 	}
 
@@ -398,13 +411,21 @@ func verifyRuntime(rc *tool.RunContext, spec []specRow, cfg runtimeConfig) []Fin
 }
 
 // approvedMulticallDigest establishes the identity every multicall-owned name
-// is checked against: the sha256 of the approved multicall executable, which
-// must exist, be a regular executable file, and — when the caller pinned a
-// digest externally — hash to exactly that pin. An empty return means no
-// identity could be established, which the caller reports as findings and
-// which leaves every per-name identity check unproven (fail-closed: the
-// findings are the failure).
+// is checked against: the staged --multicall executable must exist, be a
+// regular file, and hash to EXACTLY the digest the approved build manifest
+// records. The manifest pin is mandatory — a digest derived from the staged
+// binary itself would only prove the binary equals itself, which is no root of
+// trust at all. An empty return means no identity could be established, which
+// the caller reports as findings and which leaves every per-name identity
+// check unproven (fail-closed: the findings are the failure).
 func approvedMulticallDigest(cfg runtimeConfig) (string, []Finding) {
+	if !sha256Re.MatchString(cfg.multicallSHA) {
+		// Unreachable through runRuntime (the manifest gate rejects first);
+		// kept so a direct caller cannot run identity checks with no pin.
+		return "", []Finding{{Check: "approved-multicall",
+			Detail: "no approved multicall sha256 from the build manifest; identity cannot be established"}}
+	}
+	want := strings.ToLower(cfg.multicallSHA)
 	target := resolvePath(cfg.multicall)
 	fi, err := os.Stat(target)
 	if err != nil || fi.IsDir() {
@@ -416,12 +437,127 @@ func approvedMulticallDigest(cfg runtimeConfig) (string, []Finding) {
 		return "", []Finding{{Check: "approved-multicall",
 			Detail: fmt.Sprintf("cannot digest approved multicall %s: %v", cfg.multicall, err)}}
 	}
-	if cfg.multicallSHA != "" && !strings.EqualFold(cfg.multicallSHA, sum) {
+	if sum != want {
 		return "", []Finding{{Check: "approved-multicall",
-			Detail: fmt.Sprintf("%s hashes to sha256 %s, not the approved digest %s",
-				cfg.multicall, sum, strings.ToLower(cfg.multicallSHA))}}
+			Detail: fmt.Sprintf("%s hashes to sha256 %s, not the approved build manifest's %s",
+				cfg.multicall, sum, want)}}
 	}
 	return sum, nil
+}
+
+// runMulticallFn is the trusted-introspection seam: it runs the APPROVED
+// multicall (already digest-proven against the build manifest) with the staged
+// environment. Hermetic tests substitute canned dispatch plans; production
+// execs the binary. A separate seam from runShellFn on purpose — the shell
+// probe and the multicall probe interrogate different programs, and a test
+// must be able to model them independently.
+var runMulticallFn = runShellExec
+
+// verifyStagedProviders binds provider provenance to the STAGED wrapper's
+// dispatch target, in two mutually checking halves.
+//
+// First, the cache: the staged wrapper resolves its cache from the environment
+// the shell hands it, so the certification claim is only checkable when that
+// environment names the cache explicitly. BASHY_BIN_CACHE absent from the
+// staged environment is a rejection, not a fall-back to the gate process's own
+// default cache — verifying a cache the wrapper may never consult would
+// attribute provenance to the wrong binaries. Every pinned provider must then
+// resolve from that cache with provenance intact.
+//
+// Second, the dispatch: a verified cache SITTING THERE proves nothing about
+// what the wrapper actually runs. The gate makes the approved multicall
+// disclose its own dispatch plan (`posix-providers dispatch-plan`, run with
+// the staged environment) and requires the observed resolved executable,
+// version, and built digest for every provider to equal the gate's
+// independently verified identity for the same name. A valid-but-unused cache
+// alongside a wrapper that would dispatch anything else fails here. The probe
+// only runs once the multicall's own identity is digest-proven (approved !=
+// ""): an unproven binary's answers about itself are worthless, and the
+// missing identity is already a rejection.
+func verifyStagedProviders(rc *tool.RunContext, cfg runtimeConfig, approved string) []Finding {
+	root := strings.TrimSpace(rc.Getenv("BASHY_BIN_CACHE"))
+	if root == "" {
+		return []Finding{{Check: "provider-cache",
+			Detail: "BASHY_BIN_CACHE is not set in the staged environment, so provider provenance cannot be bound to the staged wrapper's dispatch target"}}
+	}
+	r := posixprovider.Resolver{CacheRoot: root, GOOS: gateGOOS}
+	out := VerifyProviders(r)
+	if approved == "" {
+		return out
+	}
+
+	plan, err := runMulticallFn(rc, cfg.multicall, "posix-providers", "dispatch-plan")
+	if err != nil {
+		return append(out, Finding{Check: "provider-dispatch",
+			Detail: "the approved multicall could not disclose its dispatch plan: " + err.Error()})
+	}
+	rows, fs := parseDispatchPlan(plan)
+	out = append(out, fs...)
+	for _, e := range posixprovider.Entries() {
+		row, ok := rows[e.Command]
+		if !ok {
+			continue // already rejected as missing by parseDispatchPlan
+		}
+		id, err := r.VerifiedIdentity(e.Command)
+		if err != nil {
+			continue // this provider already rejected by VerifyProviders above
+		}
+		if row.version != id.Version || resolvePath(row.path) != resolvePath(id.Path) ||
+			!strings.EqualFold(row.builtSHA, id.BuiltSHA256) {
+			out = append(out, Finding{Check: "provider-dispatch", Name: e.Command,
+				Detail: fmt.Sprintf("staged wrapper would dispatch %s at %s (built sha256 %s), but the verified cache identity is %s at %s (built sha256 %s)",
+					row.version, row.path, row.builtSHA, id.Version, id.Path, id.BuiltSHA256)})
+		}
+	}
+	return out
+}
+
+// planRow is one observed dispatch-plan disclosure.
+type planRow struct {
+	version  string
+	path     string
+	builtSHA string
+}
+
+// parseDispatchPlan strictly parses the wrapper's dispatch-plan transcript:
+// exactly one well-formed `command version path built_sha256` TSV row per
+// pinned provider, sixteen in total. Duplicates, extras, missing names,
+// malformed rows, and digests that are not 64 hex characters are each a
+// Finding — a plan the gate cannot fully account for must not certify
+// anything.
+func parseDispatchPlan(plan string) (map[string]planRow, []Finding) {
+	rows := map[string]planRow{}
+	var out []Finding
+	for i, line := range strings.Split(strings.TrimSuffix(plan, "\n"), "\n") {
+		line = strings.TrimRight(line, "\r")
+		f := strings.Split(line, "\t")
+		switch {
+		case len(f) != 4 || f[0] == "" || f[1] == "" || f[2] == "" || !sha256Re.MatchString(f[3]):
+			out = append(out, Finding{Check: "provider-dispatch",
+				Detail: fmt.Sprintf("malformed dispatch-plan row %d: %q", i+1, line)})
+		case !posixprovider.Has(f[0]):
+			out = append(out, Finding{Check: "provider-dispatch", Name: f[0],
+				Detail: "dispatch-plan row for a name outside the sixteen pinned providers"})
+		default:
+			if _, dup := rows[f[0]]; dup {
+				out = append(out, Finding{Check: "provider-dispatch", Name: f[0],
+					Detail: "duplicate dispatch-plan row"})
+				continue
+			}
+			rows[f[0]] = planRow{version: f[1], path: f[2], builtSHA: strings.ToLower(f[3])}
+		}
+	}
+	for _, e := range posixprovider.Entries() {
+		if _, ok := rows[e.Command]; !ok {
+			out = append(out, Finding{Check: "provider-dispatch", Name: e.Command,
+				Detail: "no dispatch-plan row for this provider"})
+		}
+	}
+	if len(rows) != pinProviders {
+		out = append(out, Finding{Check: "provider-dispatch",
+			Detail: fmt.Sprintf("dispatch plan accounts for %d pinned providers, want exactly %d", len(rows), pinProviders)})
+	}
+	return rows, out
 }
 
 // resolveShell resolves the interrogated shell BY NAME through the
@@ -442,12 +578,35 @@ func resolveShell(rc *tool.RunContext, cfg runtimeConfig) (string, []Finding) {
 	return p, nil
 }
 
-// verifyShellIdentity proves the resolved shell is an approved Profile C/D
-// shell: its --version line must identify GNU bash (Profile C) or bashy
-// (Profile D), at a bash-5-family version, with a non-empty build identifier.
-// An unrecognizable answer is a rejection — an unidentified shell must not be
-// allowed to answer the classification and POSIX-mode probes.
-func verifyShellIdentity(rc *tool.RunContext, shellPath string) []Finding {
+// verifyShellIdentity proves the resolved shell is THE approved build for the
+// profile being certified. The build identity comes first and is a digest, not
+// a string: the staged shell's resolved target must hash to exactly the
+// shell_sha256 the externally supplied build manifest records — a --version
+// line or target triplet is forgeable and is never accepted as identity on its
+// own. Only a digest-proven shell is then cross-checked against what it
+// reports: the profile's approved implementation (stock GNU Bash for Profile
+// C, Bashy for Profile D), exactly version 5.3 (5.2 and 5.4 both reject), and
+// a non-empty build identifier. An unidentified or mismatched shell must not
+// be allowed to answer the classification and POSIX-mode probes.
+func verifyShellIdentity(rc *tool.RunContext, shellPath string, cfg runtimeConfig) []Finding {
+	prof, ok := profiles[cfg.profile]
+	if !ok || !sha256Re.MatchString(cfg.shellSHA) {
+		// Unreachable through runRuntime (the manifest gate rejects first);
+		// kept so a direct caller cannot probe a shell with no root of trust.
+		return []Finding{{Check: "shell-build",
+			Detail: "no approved profile/shell sha256 from the build manifest; shell identity cannot be established"}}
+	}
+	sum, err := fileSHA256(resolvePath(shellPath))
+	if err != nil {
+		return []Finding{{Check: "shell-build",
+			Detail: fmt.Sprintf("cannot digest staged shell %s: %v", shellPath, err)}}
+	}
+	if want := strings.ToLower(cfg.shellSHA); sum != want {
+		return []Finding{{Check: "shell-build",
+			Detail: fmt.Sprintf("%s hashes to sha256 %s, not the approved profile %s shell build %s from the build manifest",
+				shellPath, sum, cfg.profile, want)}}
+	}
+
 	v, err := runShellFn(rc, shellPath, "--version")
 	if err != nil {
 		return []Finding{{Check: "shell-identity",
@@ -460,11 +619,17 @@ func verifyShellIdentity(rc *tool.RunContext, shellPath string) []Finding {
 		return []Finding{{Check: "shell-identity",
 			Detail: fmt.Sprintf("%s reports %q, which does not identify an approved Profile C/D shell (GNU bash or bashy, with version and build)", shellPath, first)}}
 	}
-	major, err := strconv.Atoi(m[2])
-	if err != nil || major < minShellMajor {
+	if m[1] != prof.impl {
 		return []Finding{{Check: "shell-identity",
-			Detail: fmt.Sprintf("%s is %s %s.%s (build %s); approved profiles require a bash-%d-family shell",
-				shellPath, m[1], m[2], m[3], m[4], minShellMajor)}}
+			Detail: fmt.Sprintf("%s identifies as %s %s.%s; profile %s requires %s",
+				shellPath, m[1], m[2], m[3], cfg.profile, prof.human)}}
+	}
+	major, errMaj := strconv.Atoi(m[2])
+	minor, errMin := strconv.Atoi(m[3])
+	if errMaj != nil || errMin != nil || major != approvedShellMajor || minor != approvedShellMinor {
+		return []Finding{{Check: "shell-identity",
+			Detail: fmt.Sprintf("%s is %s %s.%s (build %s); profile %s requires %s — exactly version %d.%d",
+				shellPath, m[1], m[2], m[3], m[4], cfg.profile, prof.human, approvedShellMajor, approvedShellMinor)}}
 	}
 	if strings.TrimSpace(m[4]) == "" {
 		return []Finding{{Check: "shell-identity",

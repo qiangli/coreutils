@@ -237,10 +237,12 @@ See [POSIX external providers](posix-external-providers.md).
 proves the assembled runtime selects each name's intended owner — Go applet,
 shell builtin/keyword/entry, or pinned provider — and rejects count drift on
 either axis, ambiguous ownership, missing provider pins/provenance, host PATH
-fallback, a staged executable or shell that is not the approved one (digest
-identity is mandatory), a shell not in POSIX mode, and POSIXLY_CORRECT
-failing to reach child processes. See
-[the POSIX owner gate](posix-owner-gate.md).
+fallback, a staged executable or shell whose digest is not the approved build
+recorded in the externally supplied build manifest (identity is mandatory and
+profile-exact: stock GNU Bash 5.3 for Profile C, Bashy 5.3 for Profile D), a
+provider cache the staged wrapper's own dispatch plan does not actually use, a
+shell not in POSIX mode, and POSIXLY_CORRECT failing to reach child processes.
+See [the POSIX owner gate](posix-owner-gate.md).
 
 The provider allocation is maintained once, in the umbrella
 [`posix-utility-provider-strategy.md`](../../docs/posix-utility-provider-strategy.md).

@@ -465,7 +465,17 @@ const (
 	hostToolBody  = "#!/bin/sh\n# arbitrary host /bin tool\nexit 0\n"
 )
 
-const approvedBashLine = "GNU bash, version 5.2.32(1)-release (x86_64-pc-linux-gnu)"
+// The approved Profile C/D version lines: both exactly bash-5.3-family, as the
+// profiles require.
+const (
+	approvedBashLine  = "GNU bash, version 5.3.8(1)-release (x86_64-pc-linux-gnu)"
+	approvedBashyLine = "bashy, GNU Bash 5.3 compatible, version 5.3.0(1)-bashy-dev (a0a0315)"
+)
+
+func sha256Hex(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:])
+}
 
 // stageRuntime builds a staged tool directory: the approved multicall, a copy
 // of it under every multicall-owned name, and the shell as its own file.
@@ -492,8 +502,65 @@ func stageRuntime(t *testing.T, spec []specRow) (string, string) {
 	return dir, multicall
 }
 
+// runtimeCfg models the config runRuntime would assemble from a correct
+// external build manifest: profile C, with the manifest recording exactly the
+// staged bodies' digests. Adversarial tests then bend one field at a time.
 func runtimeCfg(bindir, multicall string) runtimeConfig {
-	return runtimeConfig{shellName: "sh", binDir: bindir, multicall: multicall}
+	return runtimeConfig{
+		profile:      "C",
+		shellName:    "sh",
+		binDir:       bindir,
+		multicall:    multicall,
+		shellSHA:     sha256Hex(shellBody),
+		multicallSHA: sha256Hex(multicallBody),
+	}
+}
+
+// dispatchPlanFor renders the healthy dispatch plan the approved multicall
+// would disclose for a provisioned cache root: one strict TSV row per pinned
+// provider, matching the gate's own verified identities exactly.
+func dispatchPlanFor(t *testing.T, root string) string {
+	t.Helper()
+	r := posixprovider.Resolver{CacheRoot: root, GOOS: "linux"}
+	var b strings.Builder
+	for _, e := range posixprovider.Entries() {
+		id, err := r.VerifiedIdentity(e.Command)
+		if err != nil {
+			t.Fatalf("healthy plan for %s: %v", e.Command, err)
+		}
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", id.Command, id.Version, id.Path, id.BuiltSHA256)
+	}
+	return b.String()
+}
+
+// withFakePlan seams the trusted multicall introspection probe with a canned
+// dispatch plan (or a probe failure).
+func withFakePlan(t *testing.T, plan string, err error) {
+	t.Helper()
+	prev := runMulticallFn
+	runMulticallFn = func(rc *tool.RunContext, exe string, args ...string) (string, error) {
+		if len(args) != 2 || args[0] != "posix-providers" || args[1] != "dispatch-plan" {
+			t.Fatalf("unexpected multicall probe: %v", args)
+		}
+		return plan, err
+	}
+	t.Cleanup(func() { runMulticallFn = prev })
+}
+
+// stageCertified assembles the complete healthy staged runtime — bindir,
+// provisioned provider cache, linux gate view, healthy shell and dispatch-plan
+// probes — and returns the RunContext, config, and cache root. The base for
+// the full-pass tests and for adversarial tests that break exactly one leg.
+func stageCertified(t *testing.T, spec []specRow, sim shellSim) (*tool.RunContext, runtimeConfig, string) {
+	t.Helper()
+	withLinuxGate(t)
+	bindir, multicall := stageRuntime(t, spec)
+	root := t.TempDir()
+	provisionAll(t, root)
+	withFakeShell(t, fakeShell(t, spec, sim))
+	withFakePlan(t, dispatchPlanFor(t, root), nil)
+	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1", "BASHY_BIN_CACHE="+root)
+	return rc, runtimeCfg(bindir, multicall), root
 }
 
 func runtimeRC(t *testing.T, env ...string) *tool.RunContext {
@@ -586,20 +653,34 @@ func TestRuntimeGatePasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindir, multicall := stageRuntime(t, spec)
-	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
-	withFakeShell(t, fakeShell(t, spec, healthySim()))
-
-	if fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall)); len(fs) != 0 {
-		t.Errorf("healthy staged runtime rejected: %v", fs)
+	// Profile C: approved stock GNU Bash 5.3.
+	rc, cfg, _ := stageCertified(t, spec, healthySim())
+	if fs := verifyRuntime(rc, spec, cfg); len(fs) != 0 {
+		t.Errorf("healthy staged Profile C runtime rejected: %v", fs)
 	}
 
-	// The externally pinned digest, when given, must accept the real one.
-	sum := sha256.Sum256([]byte(multicallBody))
-	cfg := runtimeCfg(bindir, multicall)
-	cfg.multicallSHA = strings.ToUpper(hex.EncodeToString(sum[:])) // case-insensitive
+	// Manifest digests are compared case-insensitively (hex is hex).
+	upper := cfg
+	upper.shellSHA = strings.ToUpper(upper.shellSHA)
+	upper.multicallSHA = strings.ToUpper(upper.multicallSHA)
+	if fs := verifyRuntime(rc, spec, upper); len(fs) != 0 {
+		t.Errorf("healthy runtime with upper-case manifest digests rejected: %v", fs)
+	}
+}
+
+// TestRuntimeGatePassesProfileD: the same staging certified as Profile D must
+// pass with the approved Bashy 5.3 identity — and ONLY with it.
+func TestRuntimeGatePassesProfileD(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sim := healthySim()
+	sim.versionLine = approvedBashyLine
+	rc, cfg, _ := stageCertified(t, spec, sim)
+	cfg.profile = "D"
 	if fs := verifyRuntime(rc, spec, cfg); len(fs) != 0 {
-		t.Errorf("healthy runtime with matching pinned digest rejected: %v", fs)
+		t.Errorf("healthy staged Profile D runtime rejected: %v", fs)
 	}
 }
 
@@ -705,11 +786,21 @@ func TestRuntimeGateRejectsUnapprovedMulticall(t *testing.T) {
 		t.Errorf("missing approved multicall not rejected: %v", fs)
 	}
 
-	// The externally pinned digest disagrees with the staged binary.
+	// The manifest's approved digest disagrees with the staged binary: the
+	// staged binary is not the approved build, no matter where it sits.
 	cfg = runtimeCfg(bindir, multicall)
 	cfg.multicallSHA = strings.Repeat("0", 64)
-	if fs := verifyRuntime(rc, spec, cfg); !findingsHave(fs, "approved-multicall", "", "not the approved digest") {
+	if fs := verifyRuntime(rc, spec, cfg); !findingsHave(fs, "approved-multicall", "", "not the approved build manifest's") {
 		t.Errorf("digest-mismatched multicall not rejected: %v", fs)
+	}
+
+	// No manifest digest at all: identity is never derivable from the staged
+	// binary itself, so a direct caller with no pin gets a rejection, not a
+	// self-certifying digest.
+	cfg = runtimeCfg(bindir, multicall)
+	cfg.multicallSHA = ""
+	if fs := verifyRuntime(rc, spec, cfg); !findingsHave(fs, "approved-multicall", "", "identity cannot be established") {
+		t.Errorf("missing manifest digest not rejected: %v", fs)
 	}
 }
 
@@ -743,19 +834,30 @@ func TestRuntimeGateRejectsHostPathShell(t *testing.T) {
 	}
 }
 
+// TestRuntimeGateRejectsUnapprovedShellIdentity: even a shell whose BUILD
+// digest matches the manifest must also SAY the right thing for the profile —
+// exactly the approved implementation, exactly version 5.3, with a build
+// identifier. 5.2 and 5.4 are neighboring releases, not the certified one, and
+// an implementation approved for one profile is not approved for the other.
 func TestRuntimeGateRejectsUnapprovedShellIdentity(t *testing.T) {
 	spec, err := loadSpec()
 	if err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
-		name, line, want string
+		name, profile, line, want string
 	}{
-		{"foreign shell", "zsh 5.9 (x86_64-apple-darwin24.0)", "does not identify an approved"},
-		{"garbage", "hello world", "does not identify an approved"},
-		{"empty", "", "does not identify an approved"},
-		{"bash 4", "GNU bash, version 4.4.20(1)-release (x86_64-pc-linux-gnu)", "require a bash-5-family shell"},
-		{"blank build", "GNU bash, version 5.2.32(1)-release ( )", "no build identifier"},
+		{"foreign shell", "C", "zsh 5.9 (x86_64-apple-darwin24.0)", "does not identify an approved"},
+		{"garbage", "C", "hello world", "does not identify an approved"},
+		{"empty", "C", "", "does not identify an approved"},
+		{"bash 4", "C", "GNU bash, version 4.4.20(1)-release (x86_64-pc-linux-gnu)", "exactly version 5.3"},
+		{"bash 5.2", "C", "GNU bash, version 5.2.32(1)-release (x86_64-pc-linux-gnu)", "exactly version 5.3"},
+		{"bash 5.4", "C", "GNU bash, version 5.4.0(1)-release (x86_64-pc-linux-gnu)", "exactly version 5.3"},
+		{"bashy 5.2", "D", "bashy, GNU Bash 5.2 compatible, version 5.2.1(1)-bashy-dev (a0a0315)", "exactly version 5.3"},
+		{"bashy 5.4", "D", "bashy, GNU Bash 5.4 compatible, version 5.4.0(1)-bashy-dev (a0a0315)", "exactly version 5.3"},
+		{"bashy under profile C", "C", approvedBashyLine, "profile C requires stock GNU Bash 5.3"},
+		{"GNU bash under profile D", "D", approvedBashLine, "profile D requires Bashy 5.3"},
+		{"blank build", "C", "GNU bash, version 5.3.8(1)-release ( )", "no build identifier"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -764,21 +866,50 @@ func TestRuntimeGateRejectsUnapprovedShellIdentity(t *testing.T) {
 			sim := healthySim()
 			sim.versionLine = c.line
 			withFakeShell(t, fakeShell(t, spec, sim))
-			fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+			cfg := runtimeCfg(bindir, multicall)
+			cfg.profile = c.profile
+			fs := verifyRuntime(rc, spec, cfg)
 			if !findingsHave(fs, "shell-identity", "", c.want) {
 				t.Errorf("version line %q not rejected with %q: %v", c.line, c.want, fs)
 			}
 		})
 	}
+}
 
-	// The approved bashy line must pass (Profile D).
+// TestRuntimeGateRejectsWrongShellBuild: a --version line is forgeable, so a
+// staged shell whose reported identity is perfect but whose bytes do not hash
+// to the manifest's approved shell build is rejected BEFORE any of its answers
+// are trusted — no classification, POSIX-mode, or propagation probes run.
+func TestRuntimeGateRejectsWrongShellBuild(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
 	bindir, multicall := stageRuntime(t, spec)
+	// A perfectly claiming shell that is not the approved build.
+	if err := os.WriteFile(filepath.Join(bindir, "sh"), []byte("#!/bin/sh\n# forged shell\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
-	sim := healthySim()
-	sim.versionLine = "bashy, GNU Bash 5.3 compatible, version 5.3.0(1)-bashy-dev (a0a0315)"
-	withFakeShell(t, fakeShell(t, spec, sim))
-	if fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall)); len(fs) != 0 {
-		t.Errorf("approved bashy identity rejected: %v", fs)
+	withFakeShell(t, fakeShell(t, spec, healthySim()))
+
+	fs := verifyRuntime(rc, spec, runtimeCfg(bindir, multicall))
+	if !findingsHave(fs, "shell-build", "", "not the approved profile C shell build") {
+		t.Errorf("digest-mismatched shell not rejected: %v", fs)
+	}
+	for _, f := range fs {
+		if f.Check == "shell-owner" || f.Check == "posix-mode" {
+			t.Errorf("probe ran against an unproven shell: %v", f)
+		}
+	}
+
+	// And a config with no shell digest at all cannot certify: the staged
+	// shell must never become its own root of trust.
+	cfg := runtimeCfg(bindir, multicall)
+	cfg.shellSHA = ""
+	fs = verifyRuntime(rc, spec, cfg)
+	if !findingsHave(fs, "shell-build", "", "shell identity cannot be established") {
+		t.Errorf("missing shell digest not rejected: %v", fs)
 	}
 }
 
@@ -893,6 +1024,160 @@ func TestRuntimeGateRejectsMissingPosixlyCorrect(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// provider dispatch binding
+// ---------------------------------------------------------------------------
+
+// editPlan applies a per-line edit to the healthy dispatch plan.
+func editPlan(plan string, edit func([]string) []string) string {
+	lines := strings.Split(strings.TrimSuffix(plan, "\n"), "\n")
+	return strings.Join(edit(lines), "\n") + "\n"
+}
+
+// TestRuntimeGateBindsProviderDispatch: a verified cache is necessary but not
+// sufficient — the staged wrapper must PROVE it dispatches to exactly the
+// verified binaries. The central bypass: a valid, fully provisioned cache
+// sitting unused while the wrapper would dispatch an arbitrary staged
+// executable. The plan disclosing that executable (or failing to account for
+// every provider) is a rejection.
+func TestRuntimeGateBindsProviderDispatch(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("unused valid cache, arbitrary staged executable", func(t *testing.T) {
+		rc, cfg, root := stageCertified(t, spec, healthySim())
+		// The wrapper would dispatch `make` to an arbitrary executable while
+		// the valid cache sits unused.
+		rogue := filepath.Join(t.TempDir(), "make")
+		if err := os.WriteFile(rogue, []byte(hostToolBody), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
+			for i, line := range l {
+				if strings.HasPrefix(line, "make\t") {
+					f := strings.Split(line, "\t")
+					l[i] = strings.Join([]string{f[0], f[1], rogue, sha256Hex(hostToolBody)}, "\t")
+				}
+			}
+			return l
+		}), nil)
+		fs := verifyRuntime(rc, spec, cfg)
+		if !findingsHave(fs, "provider-dispatch", "make", "verified cache identity") {
+			t.Errorf("unused-cache bypass not rejected: %v", fs)
+		}
+	})
+
+	t.Run("built digest mismatch", func(t *testing.T) {
+		rc, cfg, root := stageCertified(t, spec, healthySim())
+		withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
+			f := strings.Split(l[0], "\t")
+			f[3] = strings.Repeat("0", 64)
+			l[0] = strings.Join(f, "\t")
+			return l
+		}), nil)
+		fs := verifyRuntime(rc, spec, cfg)
+		if !findingsHave(fs, "provider-dispatch", "make", "verified cache identity") {
+			t.Errorf("digest-mismatched dispatch row not rejected: %v", fs)
+		}
+	})
+
+	t.Run("version mismatch", func(t *testing.T) {
+		rc, cfg, root := stageCertified(t, spec, healthySim())
+		withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
+			f := strings.Split(l[0], "\t")
+			f[1] = "0.0.1"
+			l[0] = strings.Join(f, "\t")
+			return l
+		}), nil)
+		fs := verifyRuntime(rc, spec, cfg)
+		if !findingsHave(fs, "provider-dispatch", "make", "verified cache identity") {
+			t.Errorf("version-mismatched dispatch row not rejected: %v", fs)
+		}
+	})
+
+	t.Run("missing row", func(t *testing.T) {
+		rc, cfg, root := stageCertified(t, spec, healthySim())
+		var dropped string
+		withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
+			dropped = strings.SplitN(l[0], "\t", 2)[0]
+			return l[1:]
+		}), nil)
+		fs := verifyRuntime(rc, spec, cfg)
+		if !findingsHave(fs, "provider-dispatch", dropped, "no dispatch-plan row") ||
+			!findingsHave(fs, "provider-dispatch", "", "accounts for 15 pinned providers, want exactly 16") {
+			t.Errorf("missing dispatch row not rejected: %v", fs)
+		}
+	})
+
+	t.Run("duplicate row", func(t *testing.T) {
+		rc, cfg, root := stageCertified(t, spec, healthySim())
+		withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
+			return append(l, l[0])
+		}), nil)
+		fs := verifyRuntime(rc, spec, cfg)
+		if !findingsHave(fs, "provider-dispatch", "make", "duplicate dispatch-plan row") {
+			t.Errorf("duplicate dispatch row not rejected: %v", fs)
+		}
+	})
+
+	t.Run("extra name", func(t *testing.T) {
+		rc, cfg, root := stageCertified(t, spec, healthySim())
+		withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
+			return append(l, "cpio\t2.15\t/x/cpio\t"+strings.Repeat("a", 64))
+		}), nil)
+		fs := verifyRuntime(rc, spec, cfg)
+		if !findingsHave(fs, "provider-dispatch", "cpio", "outside the sixteen pinned providers") {
+			t.Errorf("extra dispatch row not rejected: %v", fs)
+		}
+	})
+
+	t.Run("malformed rows", func(t *testing.T) {
+		for _, bad := range []string{
+			"make\t4.4.1\t/x/make",                             // three columns
+			"make\t4.4.1\t/x/make\tnot-a-digest",               // non-hex digest
+			"make\t4.4.1\t/x/make\t" + strings.Repeat("a", 63), // truncated digest
+			"make\t4.4.1\t/x/make\t" + strings.Repeat("a", 65), // padded digest
+		} {
+			rc, cfg, root := stageCertified(t, spec, healthySim())
+			withFakePlan(t, editPlan(dispatchPlanFor(t, root), func(l []string) []string {
+				return append(l, bad)
+			}), nil)
+			fs := verifyRuntime(rc, spec, cfg)
+			if !findingsHave(fs, "provider-dispatch", "", "malformed dispatch-plan row") {
+				t.Errorf("row %q not rejected as malformed: %v", bad, fs)
+			}
+		}
+	})
+
+	t.Run("probe failure", func(t *testing.T) {
+		rc, cfg, _ := stageCertified(t, spec, healthySim())
+		withFakePlan(t, "", fmt.Errorf("exec format error"))
+		fs := verifyRuntime(rc, spec, cfg)
+		if !findingsHave(fs, "provider-dispatch", "", "could not disclose its dispatch plan") {
+			t.Errorf("failed dispatch probe not rejected: %v", fs)
+		}
+	})
+
+	t.Run("no probe against an unproven multicall", func(t *testing.T) {
+		// When the multicall's own identity is not established, its answers
+		// about itself are worthless: the probe must not run (the seam would
+		// t.Fatal on any call), and the identity finding is the failure.
+		rc, cfg, _ := stageCertified(t, spec, healthySim())
+		withFakePlan(t, "", nil) // will fail the test if consulted
+		runMulticallFn = func(rc *tool.RunContext, exe string, args ...string) (string, error) {
+			t.Fatal("dispatch probe ran against an unproven multicall")
+			return "", nil
+		}
+		cfg.multicallSHA = strings.Repeat("1", 64)
+		fs := verifyRuntime(rc, spec, cfg)
+		if !findingsHave(fs, "approved-multicall", "", "not the approved build manifest's") {
+			t.Errorf("unproven multicall not rejected: %v", fs)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
 // the applet surface
 // ---------------------------------------------------------------------------
 
@@ -909,6 +1194,8 @@ func runGateCmd(t *testing.T, rc *tool.RunContext, args ...string) (int, string,
 }
 
 func TestGateUsageErrors(t *testing.T) {
+	// A complete runtime invocation minus the flag under test.
+	base := []string{"runtime", "--profile", "C", "--manifest", "/x/m.tsv", "--bindir", "/x", "--multicall", "/x/c"}
 	for _, args := range [][]string{
 		{},
 		{"bogus"},
@@ -916,12 +1203,16 @@ func TestGateUsageErrors(t *testing.T) {
 		{"registry", "extra"},
 		{"providers", "extra"},
 		{"runtime"},
-		{"runtime", "--bindir", "/x"},                             // no --multicall
-		{"runtime", "--multicall", "/x/coreutils"},                // no --bindir
-		{"runtime", "--bindir", "/x", "--multicall", "/x/c", "--wat"},
-		{"runtime", "--bindir", "/x", "--multicall", "/x/c", "--shell", "/bin/sh"},        // a PATH, not a name
-		{"runtime", "--bindir", "/x", "--multicall", "/x/c", "--multicall-sha256", "abc"}, // not 64 hex
-		{"runtime", "--bindir", "/x", "--multicall", "/x/c", "--same-target"},             // removed option
+		{"runtime", "--profile", "C", "--manifest", "/x/m.tsv", "--bindir", "/x"},      // no --multicall
+		{"runtime", "--profile", "C", "--manifest", "/x/m.tsv", "--multicall", "/x/c"}, // no --bindir
+		{"runtime", "--profile", "C", "--bindir", "/x", "--multicall", "/x/c"},         // no --manifest
+		{"runtime", "--manifest", "/x/m.tsv", "--bindir", "/x", "--multicall", "/x/c"}, // no --profile
+		append(append([]string{}, base...), "--wat"),
+		append(append([]string{}, base...), "--shell", "/bin/sh"),                                        // a PATH, not a name
+		append(append([]string{}, base...), "--multicall-sha256", strings.Repeat("a", 64)),               // removed option: the digest comes from the manifest
+		append(append([]string{}, base...), "--same-target"),                                             // removed option
+		{"runtime", "--profile", "E", "--manifest", "/x/m.tsv", "--bindir", "/x", "--multicall", "/x/c"}, // no such profile
+		{"runtime", "--profile", "c", "--manifest", "/x/m.tsv", "--bindir", "/x", "--multicall", "/x/c"}, // profiles are exact
 	} {
 		rc := runtimeRC(t)
 		code, _, stderr := runGateCmd(t, rc, args...)
@@ -980,11 +1271,34 @@ func TestGateProvidersSubcommand(t *testing.T) {
 	}
 }
 
+// writeManifest writes an approved build/run manifest with the given rows.
+func writeManifest(t *testing.T, rows ...string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "approved-builds.tsv")
+	body := "# approved build/run manifest (test)\n" + strings.Join(rows, "\n") + "\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// healthyManifestRows are the rows an honest release process would have
+// written for the staged test bodies, plus extra build metadata the gate must
+// tolerate (a build manifest legitimately records more than the pins).
+func healthyManifestRows() []string {
+	return []string{
+		"profile\tC",
+		"shell_sha256\t" + sha256Hex(shellBody),
+		"multicall_sha256\t" + sha256Hex(multicallBody),
+		"builder\ttest-harness",
+	}
+}
+
 // TestGateRuntimeSubcommandEndToEnd drives the full staged verdict through the
 // applet: seamed full registry, provisioned temp cache, staged bindir, healthy
-// fake shell — then breaks one leg at a time and watches the verdict flip.
+// fake shell and dispatch plan, a real manifest file — then breaks one leg at
+// a time and watches the verdict flip.
 func TestGateRuntimeSubcommandEndToEnd(t *testing.T) {
-	withLinuxGate(t)
 	spec, err := loadSpec()
 	if err != nil {
 		t.Fatal(err)
@@ -994,13 +1308,15 @@ func TestGateRuntimeSubcommandEndToEnd(t *testing.T) {
 	registeredFn = func(n string) bool { return reg[n] }
 	t.Cleanup(func() { registeredFn = prevReg })
 
-	root := t.TempDir()
-	provisionAll(t, root)
-	bindir, multicall := stageRuntime(t, spec)
-	withFakeShell(t, fakeShell(t, spec, healthySim()))
+	rc, cfg, root := stageCertified(t, spec, healthySim())
+	bindir, multicall := cfg.binDir, cfg.multicall
+	manifest := writeManifest(t, healthyManifestRows()...)
+	args := func(extra ...string) []string {
+		return append([]string{"runtime", "--profile", "C", "--manifest", manifest,
+			"--bindir", bindir, "--multicall", multicall}, extra...)
+	}
 
-	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1", "BASHY_BIN_CACHE="+root)
-	code, stdout, stderr := runGateCmd(t, rc, "runtime", "--bindir", bindir, "--multicall", multicall)
+	code, stdout, stderr := runGateCmd(t, rc, args()...)
 	if code != 0 || !strings.Contains(stdout, "posix-gate runtime: PASS") {
 		t.Fatalf("healthy runtime: exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
@@ -1009,15 +1325,75 @@ func TestGateRuntimeSubcommandEndToEnd(t *testing.T) {
 	// cache: an environment that does not name it is a rejection, never a
 	// fall-back to the gate process's own default cache.
 	rc = runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
-	code, _, stderr = runGateCmd(t, rc, "runtime", "--bindir", bindir, "--multicall", multicall)
+	code, _, stderr = runGateCmd(t, rc, args()...)
 	if code != 1 || !strings.Contains(stderr, "[provider-cache]") {
 		t.Errorf("unbound provider cache: exit = %d, stderr = %q", code, stderr)
 	}
 
 	// Same staging, but the gate's own environment lost POSIXLY_CORRECT.
 	rc = runtimeRC(t, "PATH="+bindir, "BASHY_BIN_CACHE="+root)
-	code, _, stderr = runGateCmd(t, rc, "runtime", "--bindir", bindir, "--multicall", multicall)
+	code, _, stderr = runGateCmd(t, rc, args()...)
 	if code != 1 || !strings.Contains(stderr, "posix-gate runtime: FAIL") {
 		t.Errorf("degraded runtime: exit = %d, stderr = %q", code, stderr)
+	}
+}
+
+// TestGateRuntimeManifestRejections: the externally supplied manifest is the
+// root of trust, so every defect in it — unreadable, missing digest, malformed
+// digest, missing/unknown profile, duplicate pins, or a manifest for the OTHER
+// profile — rejects before anything else is verified.
+func TestGateRuntimeManifestRejections(t *testing.T) {
+	spec, err := loadSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellSHA := "shell_sha256\t" + sha256Hex(shellBody)
+	multicallSHA := "multicall_sha256\t" + sha256Hex(multicallBody)
+	cases := []struct {
+		name    string
+		rows    []string
+		profile string
+		check   string
+		want    string
+	}{
+		{"profile mismatch", []string{"profile\tD", shellSHA, multicallSHA}, "C",
+			"profile", "do not transfer between profiles"},
+		{"missing shell digest", []string{"profile\tC", multicallSHA}, "C",
+			"manifest", "does not record shell_sha256"},
+		{"missing multicall digest", []string{"profile\tC", shellSHA}, "C",
+			"manifest", "does not record multicall_sha256"},
+		{"truncated digest", []string{"profile\tC", "shell_sha256\t" + strings.Repeat("a", 63), multicallSHA}, "C",
+			"manifest", "malformed shell_sha256"},
+		{"non-hex digest", []string{"profile\tC", shellSHA, "multicall_sha256\t" + strings.Repeat("g", 64)}, "C",
+			"manifest", "malformed multicall_sha256"},
+		{"missing profile", []string{shellSHA, multicallSHA}, "C",
+			"manifest", "does not record a profile"},
+		{"unknown profile", []string{"profile\tX", shellSHA, multicallSHA}, "C",
+			"manifest", "unknown profile"},
+		{"duplicate pin", []string{"profile\tC", shellSHA, shellSHA, multicallSHA}, "C",
+			"manifest", "duplicate shell_sha256"},
+		{"row without a tab", []string{"profile\tC", "shell_sha256 " + sha256Hex(shellBody), multicallSHA}, "C",
+			"manifest", "not a key<TAB>value row"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bindir, multicall := stageRuntime(t, spec)
+			manifest := writeManifest(t, c.rows...)
+			rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+			code, _, stderr := runGateCmd(t, rc, "runtime", "--profile", c.profile,
+				"--manifest", manifest, "--bindir", bindir, "--multicall", multicall)
+			if code != 1 || !strings.Contains(stderr, "["+c.check+"]") || !strings.Contains(stderr, c.want) {
+				t.Errorf("exit = %d, stderr = %q; want exit 1 with [%s] %q", code, stderr, c.check, c.want)
+			}
+		})
+	}
+
+	// An unreadable manifest is the same class of failure.
+	bindir, multicall := stageRuntime(t, spec)
+	rc := runtimeRC(t, "PATH="+bindir, "POSIXLY_CORRECT=1")
+	code, _, stderr := runGateCmd(t, rc, "runtime", "--profile", "C",
+		"--manifest", filepath.Join(t.TempDir(), "absent.tsv"), "--bindir", bindir, "--multicall", multicall)
+	if code != 1 || !strings.Contains(stderr, "cannot read the approved build manifest") {
+		t.Errorf("unreadable manifest: exit = %d, stderr = %q", code, stderr)
 	}
 }

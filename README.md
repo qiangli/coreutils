@@ -93,8 +93,11 @@ Every tool in this repo follows the same rules:
   providers: the manifest (`pkg/posixprovider/manifest.tsv`, the one canonical
   copy, embedded), a cache-lookup resolver that verifies the cached binary
   against its recorded provenance and **never** downloads or compiles, the
-  sixteen registered provider tools, and `posix-providers build|list|check` —
-  the only command allowed to fetch and build. `BASHY_POSIX_PROVIDERS=off`
+  sixteen registered provider tools, and
+  `posix-providers build|list|check|dispatch-plan` —
+  `build` is the only path allowed to fetch and compile, and `dispatch-plan`
+  is the introspection surface disclosing the exact verified binary each
+  provider name would dispatch to. `BASHY_POSIX_PROVIDERS=off`
   unregisters the provider names. See
   [POSIX external providers](docs/posix-external-providers.md).
   `cmds/posixgate` ships `posix-gate`, the fail-closed effective-owner gate
@@ -102,8 +105,11 @@ Every tool in this repo follows the same rules:
   selection 78/22/16): it proves the assembled runtime selects each name's
   intended owner (Go applet, shell builtin/keyword/entry, or pinned provider)
   and rejects count drift on either axis, ambiguous ownership, missing
-  provider pins/provenance, host PATH fallback, and any staged executable —
-  tool or shell — whose identity is not the approved one. See
+  provider pins/provenance, host PATH fallback, a provider cache the staged
+  wrapper does not actually dispatch from, and any staged executable — tool
+  or shell — whose digest is not the approved build recorded in the
+  externally supplied build manifest (Profile C: stock GNU Bash 5.3;
+  Profile D: Bashy 5.3). See
   [the POSIX owner gate](docs/posix-owner-gate.md).
 
 - `cmds/` — the userland: 154 shipped Go command packages advertising 175
