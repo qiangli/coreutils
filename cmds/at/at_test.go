@@ -160,6 +160,24 @@ func TestAtRemoveNonexistent(t *testing.T) {
 	}
 }
 
+func TestAtRemoveMixedIDsIsAtomic(t *testing.T) {
+	state := setupATState(t)
+	now := time.Now()
+	if err := schedule.SaveJobs([]*schedule.Job{
+		{ID: "keep", Kind: "at", Queue: "a", Enabled: true, NextRun: now.Add(time.Hour)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runATNoStdin(t, context.Background(), "-r", "keep", "missing")
+	if code == 0 || !strings.Contains(stderr, `no job "missing"`) {
+		t.Fatalf("mixed removal: code=%d stderr=%q", code, stderr)
+	}
+	jobs, err := schedule.NewStore(state).LoadJobs()
+	if err != nil || len(jobs) != 1 || jobs[0].ID != "keep" {
+		t.Fatalf("mixed removal changed store: jobs=%v err=%v", jobs, err)
+	}
+}
+
 func TestAtAcceptsEmptyAndBlankStdin(t *testing.T) {
 	setupATState(t)
 	for _, stdin := range []string{"", "   \n\t"} {
@@ -426,6 +444,7 @@ func TestParseLicensedAtGrammar(t *testing.T) {
 		{"17 utc Jan 24", time.Date(2027, 1, 24, 17, 0, 0, 0, time.UTC)},
 		{"8:15amjan24", time.Date(2027, 1, 24, 8, 15, 0, 0, time.UTC)},
 		{"now next hour", time.Date(2026, 6, 1, 13, 30, 45, 0, time.UTC)},
+		{"8 :15amjan24", time.Date(2027, 1, 24, 8, 15, 0, 0, time.UTC)},
 		{"1:00 Tuesday", time.Date(2026, 6, 2, 1, 0, 0, 0, time.UTC)},
 		{"23:59 today", time.Date(2026, 6, 1, 23, 59, 0, 0, time.UTC)},
 		{"1:00 tomorrow", time.Date(2026, 6, 2, 1, 0, 0, 0, time.UTC)},

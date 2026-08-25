@@ -251,17 +251,30 @@ func removeJobs(rc *tool.RunContext, ids []string) int {
 	}
 	missing := false
 	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
+		// Validate all operands before mutating the store. An unsuccessful
+		// removal is an error, and must not leave a partially removed set whose
+		// result depends on operand order.
 		for _, id := range ids {
 			found := false
-			for i := len(jobs) - 1; i >= 0; i-- {
-				if jobs[i].ID == id || jobs[i].Name == id {
-					jobs = append(jobs[:i], jobs[i+1:]...)
+			for _, job := range jobs {
+				if job.Kind == "at" && (job.ID == id || job.Name == id) {
 					found = true
+					break
 				}
 			}
 			if !found {
 				fmt.Fprintf(rc.Err, "%s: no job %q\n", cmd.Name, id)
 				missing = true
+			}
+		}
+		if missing {
+			return jobs, nil
+		}
+		for _, id := range ids {
+			for i := len(jobs) - 1; i >= 0; i-- {
+				if jobs[i].Kind == "at" && (jobs[i].ID == id || jobs[i].Name == id) {
+					jobs = append(jobs[:i], jobs[i+1:]...)
+				}
 			}
 		}
 		return jobs, nil

@@ -145,10 +145,17 @@ var (
 	nextIncrementRe = regexp.MustCompile(`(?i)^(.*)\bnext\s+(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s*$`)
 	adjacentAMPMRe  = regexp.MustCompile(`(?i)^([0-9]{1,2}(?::[0-9]{1,2})?)(am|pm)([[:alpha:]].*)$`)
 	adjacentMonthRe = regexp.MustCompile(`(?i)\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)([0-9]{1,2})(,?)\b`)
+	looseColonRe    = regexp.MustCompile(`(?i)^([0-9]{1,2})\s+:\s*([0-9]{1,2}.*)$`)
 )
 
 func normalizeAtTimespec(s string) string {
 	s = strings.TrimSpace(s)
+	// POSIX permits an unambiguous clock separator to be adjacent to either
+	// component (for example, "8 :15amjan24"). Join that spelling before
+	// tokenization while leaving whitespace between the other time parts alone.
+	if m := looseColonRe.FindStringSubmatch(s); m != nil {
+		s = m[1] + ":" + m[2]
+	}
 	if m := adjacentAMPMRe.FindStringSubmatch(s); m != nil {
 		s = m[1] + " " + m[2] + " " + m[3]
 	}

@@ -156,6 +156,31 @@ func TestBatchPersistsJob(t *testing.T) {
 	}
 }
 
+func TestBatchIsAtQueueBWithCompletionMailAndLoadMarker(t *testing.T) {
+	setupBatchState(t)
+	before := time.Now()
+	_, stderr, code := runBatch(t, context.Background(), "")
+	if code != 0 {
+		t.Fatalf("batch: code=%d stderr=%q", code, stderr)
+	}
+	j := mustOneBatchJob(t)
+	if j.Kind != "at" || j.Queue != "b" || !j.MailOutput || !j.MailCompletion || !j.BatchLoad {
+		t.Fatalf("batch not represented as at -q b -m with load policy: %+v", j)
+	}
+	if j.NextRun.Before(before) || j.NextRun.After(time.Now().Add(time.Second)) {
+		t.Fatalf("batch next run=%v does not represent now", j.NextRun)
+	}
+}
+
+func mustOneBatchJob(t *testing.T) *schedule.Job {
+	t.Helper()
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	return jobs[0]
+}
+
 func TestBatchUnknownFlag(t *testing.T) {
 	setupBatchState(t)
 	_, errb, code := runBatch(t, context.Background(), "", "--bogus")
