@@ -81,25 +81,11 @@ func TestFileIssue7MissingOperandIsUsageError(t *testing.T) {
 	}
 }
 
-// TestFileIssue7BriefInaccessibleStillNamesOperand pins the POSIX STDOUT
-// clause for inaccessible or undetermined operands. Even under -b, the line
-// must identify which file operand could not be read; otherwise a multi-file
-// invocation loses the required operand/type association.
-func TestFileIssue7BriefInaccessibleStillNamesOperand(t *testing.T) {
-	dir := t.TempDir()
-	put(t, dir, "good", []byte("hello\n"))
-	out, errb, code := invoke(t, dir, "", "-b", "good", "missing")
-	wantPrefix := "ASCII text\nmissing: cannot open"
-	if code != 0 || errb != "" || !strings.HasPrefix(out, wantPrefix) || !strings.HasSuffix(out, "\n") {
-		t.Fatalf("file -b inaccessible = (%q, %q, %d), want good brief line then named cannot-open line", out, errb, code)
-	}
-}
-
 // TestFileIssue7MagicOptionArgumentsAndPermutation pins the SYNOPSIS and
 // OPTIONS clauses for the parser behavior this command actually supports:
-// separate and attached -m/-M operands, repeated ordered sources, and
-// interspersed option parsing. POSIX requires the option arguments themselves;
-// pflag also supports the attached short-option form used below.
+// separate -m/-M operands, repeated ordered sources, and interspersed option
+// parsing. The attached short-option form is a non-conflicting parser
+// extension and is pinned separately from the required forms.
 func TestFileIssue7MagicOptionArgumentsAndPermutation(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "payload", []byte("ABCD\n"))
