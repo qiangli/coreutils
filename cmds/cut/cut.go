@@ -6,7 +6,9 @@
 // Changes: rewired to the tool framework; replaced the list parser with a
 // port of GNU set-fields semantics (exact diagnostics, decreasing-range and
 // numbered-from-1 errors); --complement applied at selection time; -d/-s
-// mode validation; multi-file and "-" stdin handling through RunContext.
+// mode validation; multi-file and "-" stdin handling through RunContext;
+// -c, -b -n, and -d character boundaries follow the invocation LC_CTYPE
+// (bounded model in ctype.go) instead of assuming UTF-8.
 package cutcmd
 
 import (
@@ -41,7 +43,7 @@ type cutter struct {
 	charMode            bool
 	noSplit             bool
 	fieldMode           bool
-	delim               byte
+	delim               []byte
 	onlyDelimited       bool
 	scratch             []byte
 	buf                 []byte
@@ -55,7 +57,7 @@ func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
 	bytesList := fs.StringP("bytes", "b", "", "select only these bytes")
 	charsList := fs.StringP("characters", "c", "", "select only these characters")
-	delim := fs.StringP("delimiter", "d", "", "use DELIM instead of TAB for field delimiter")
+	delimFlag := fs.StringP("delimiter", "d", "", "use DELIM instead of TAB for field delimiter")
 	fieldsList := fs.StringP("fields", "f", "", "select only these fields; also print any line that contains no delimiter character, unless the -s option is specified")
 	complement := fs.Bool("complement", false, "complement the set of selected bytes, characters or fields")
 	onlyDelimited := fs.BoolP("only-delimited", "s", false, "do not print lines not containing delimiters")
@@ -100,20 +102,8 @@ func run(rc *tool.RunContext, args []string) int {
 		return tool.UsageError(rc, cmd, "only one delimiter may be specified")
 	}
 
-	delimByte := byte('\t')
-	if fs.Changed("delimiter") {
-		if !fieldMode {
-			return tool.UsageError(rc, cmd, "an input delimiter may be specified only when operating on fields")
-		}
-		if len(*delim) > 1 {
-			return tool.UsageError(rc, cmd, "the delimiter must be a single character")
-		}
-		// GNU: -d '' means "use the NUL byte as the delimiter".
-		if len(*delim) == 1 {
-			delimByte = (*delim)[0]
-		} else {
-			delimByte = 0
-		}
+	if fs.Changed("delimiter") && !fieldMode {
+		return tool.UsageError(rc, cmd, "an input delimiter may be specified only when operating on fields")
 	}
 	if *onlyDelimited && !fieldMode {
 		return tool.UsageError(rc, cmd, "suppressing non-delimited lines makes sense\n\tonly when operating on fields")
@@ -132,6 +122,29 @@ func run(rc *tool.RunContext, args []string) int {
 		pairs = complementRanges(pairs)
 	}
 
+	// The invocation LC_CTYPE is resolved before the delimiter is
+	// validated (its character count depends on the locale) and before
+	// any operand or stdin I/O: an unsupported locale fails without
+	// reading input or writing output.
+	enc, err := resolveEncoding(rc.Env)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "cut: %v\n", err)
+		return 1
+	}
+
+	delim := []byte{'\t'}
+	if fs.Changed("delimiter") {
+		switch {
+		case len(*delimFlag) == 0:
+			// GNU: -d '' means "use the NUL byte as the delimiter".
+			delim = []byte{0}
+		case isSingleCharacter(*delimFlag, enc):
+			delim = []byte(*delimFlag)
+		default:
+			return tool.UsageError(rc, cmd, "the delimiter must be a single character")
+		}
+	}
+
 	lineTerm := byte('\n')
 	if *zeroTerminated {
 		lineTerm = 0
@@ -142,16 +155,21 @@ func run(rc *tool.RunContext, args []string) int {
 	} else if *whitespaceDelimited {
 		outDelim = []byte(" ")
 	} else {
-		outDelim = []byte{delimByte}
+		outDelim = delim
 	}
 
+	// Under a single-byte LC_CTYPE every byte is one character: -c
+	// selects the same original-byte spans as -b, and -b -n never has a
+	// character to keep whole. Only the UTF-8 locales need rune-aware
+	// spans, and both paths emit exact source bytes either way.
+	utf8Chars := enc == encodingUTF8
 	c := &cutter{
 		pairs:               pairs,
 		complement:          *complement,
-		charMode:            charMode,
-		noSplit:             byteMode && *noSplit,
+		charMode:            charMode && utf8Chars,
+		noSplit:             byteMode && *noSplit && utf8Chars,
 		fieldMode:           fieldMode,
-		delim:               delimByte,
+		delim:               delim,
 		onlyDelimited:       *onlyDelimited,
 		scratch:             make([]byte, 0, 1024),
 		buf:                 make([]byte, 4*1024),
@@ -427,7 +445,7 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 			return
 		}
 
-		if bytes.IndexByte(line, c.delim) < 0 {
+		if !bytes.Contains(line, c.delim) {
 			if !c.onlyDelimited {
 				c.scratch = c.scratch[:0]
 				c.scratch = append(c.scratch, line...)
@@ -457,16 +475,16 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 
 			if field < c.pairs[pairIdx].lo {
 				for field < c.pairs[pairIdx].lo {
-					rel := bytes.IndexByte(line[start:], c.delim)
+					rel := bytes.Index(line[start:], c.delim)
 					if rel < 0 {
 						goto done
 					}
-					start = start + rel + 1
+					start = start + rel + len(c.delim)
 					field++
 				}
 			}
 
-			rel := bytes.IndexByte(line[start:], c.delim)
+			rel := bytes.Index(line[start:], c.delim)
 			end := len(line)
 			if rel >= 0 {
 				end = start + rel
@@ -482,7 +500,7 @@ func (c *cutter) emitLine(line []byte, hadNL bool, out *bufio.Writer) {
 				break
 			}
 			field++
-			start = end + 1
+			start = end + len(c.delim)
 		}
 	done:
 		if hadNL {

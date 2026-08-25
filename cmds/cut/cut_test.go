@@ -29,6 +29,19 @@ func runTool(t *testing.T, stdin string, args ...string) (string, string, int) {
 	return runToolDir(t, t.TempDir(), stdin, args...)
 }
 
+func runToolEnv(t *testing.T, env []string, stdin string, args ...string) (string, string, int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx:   context.Background(),
+		Dir:   t.TempDir(),
+		Env:   env,
+		Stdio: tool.Stdio{In: strings.NewReader(stdin), Out: &out, Err: &errb},
+	}
+	code := cmd.Run(rc, args)
+	return out.String(), errb.String(), code
+}
+
 func TestCutFields(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -74,9 +87,13 @@ func TestCutBytesAndChars(t *testing.T) {
 		{[]string{"-b", "-2"}, "abcdef\n", "ab\n"},
 		{[]string{"-b", "1,3,5"}, "abcdef\n", "ace\n"},
 		{[]string{"-c", "1-3"}, "abcdef\n", "abc\n"},
-		{[]string{"-c", "1"}, "éx\n", "é\n"},
-		{[]string{"-c", "2"}, "éx\n", "x\n"},
-		{[]string{"-c", "1,3"}, "éx日\n", "é日\n"},
+		// With no locale environment the effective LC_CTYPE is POSIX:
+		// every byte is one character, so -c selects byte positions
+		// (issue 736). UTF-8 character selection needs LC_ALL=C.UTF-8
+		// and is covered in issue736_posix_test.go.
+		{[]string{"-c", "1"}, "éx\n", "\xc3\n"},
+		{[]string{"-c", "2"}, "éx\n", "\xa9\n"},
+		{[]string{"-c", "1,3"}, "éx日\n", "\xc3x\n"},
 		{[]string{"-b", "10-"}, "abc\n", "\n"},
 		{[]string{"--complement", "-b", "2-4"}, "abcdef\n", "aef\n"},
 		{[]string{"-b", "1-2"}, "abc\ndefgh\n", "ab\nde\n"},
@@ -104,8 +121,10 @@ func TestCutBytesNoSplit(t *testing.T) {
 		{"trims end inside later character", []string{"-b", "1-3", "-n"}, "x日\n", "x\n"},
 		{"open range", []string{"-b", "2-", "-n"}, "éx\n", "éx\n"},
 	}
+	// -n only has characters to keep whole under a multi-byte LC_CTYPE;
+	// under the default POSIX locale it is a no-op (issue736_posix_test.go).
 	for _, c := range cases {
-		out, _, code := runTool(t, c.stdin, c.args...)
+		out, _, code := runToolEnv(t, []string{"LC_ALL=C.UTF-8"}, c.stdin, c.args...)
 		if out != c.want || code != 0 {
 			t.Errorf("%s: cut %v = (%q, %d), want (%q, 0)", c.name, c.args, out, code, c.want)
 		}

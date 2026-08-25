@@ -25,8 +25,11 @@ func runBench(b *testing.B, args ...string) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		rc := &tool.RunContext{
-			Ctx:   context.Background(),
-			FS:    tool.NewLocalFS(),
+			Ctx: context.Background(),
+			FS:  tool.NewLocalFS(),
+			// UTF-8 keeps BenchmarkCutChars on the rune-span path;
+			// the POSIX default would collapse -c to plain bytes.
+			Env:   []string{"LC_ALL=C.UTF-8"},
 			Stdio: tool.Stdio{In: bytes.NewReader(data), Out: io.Discard, Err: io.Discard},
 		}
 		if code := cmd.Run(rc, args); code != 0 {
