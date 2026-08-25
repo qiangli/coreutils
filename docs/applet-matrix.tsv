@@ -85,7 +85,7 @@ mkdir	cmds/mkdir		GNU Coreutils	yes	yes	2	20
 mkfifo	cmds/mkfifo		GNU Coreutils	yes	yes	2	14
 mknod	cmds/mknod		GNU Coreutils	yes	no	1	4
 mktemp	cmds/mktemp		GNU Coreutils	yes	no	1	9
-more	cmds/more		POSIX/Unix utility	no	yes	3	32
+more	cmds/more		POSIX/Unix utility	no	yes	4	66
 mv	cmds/mv		GNU Coreutils	yes	yes	2	44
 ncal	cmds/cal	cal	Bashy/other extension	no	no	1	6
 newgrp	cmds/newgrp		POSIX/Unix utility	no	yes	6	51
