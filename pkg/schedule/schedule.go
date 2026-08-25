@@ -588,14 +588,16 @@ func daemonCmd() *cobra.Command {
 			// Own the service pidfile so `schedule status` is accurate even when the
 			// daemon is launched directly (not via `schedule start`), and so a clean
 			// exit removes it. StartService also writes it for race-free readiness.
-			p, err := claimDaemonPID()
+			lease, identity, err := claimDaemonLease()
 			if err != nil {
 				return err
 			}
 			defer func() {
-				if pid, _ := readPid(p); pid == os.Getpid() {
-					_ = os.Remove(p)
+				if current, readErr := readIdentity(servicePidPath()); readErr == nil && current == identity {
+					_ = os.Remove(servicePidPath())
 				}
+				_ = lease.Release()
+				_ = os.Remove(leasePath(identity))
 			}()
 			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "schedule daemon: ticking every %s (state %s)\n", interval, statePath()); err != nil {
 				return err

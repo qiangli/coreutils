@@ -45,6 +45,50 @@ func TestUpdateJobsConcurrentWritersDoNotLoseEntries(t *testing.T) {
 	}
 }
 
+func TestFailedSubmissionConfirmationCannotRaceImmediateExecution(t *testing.T) {
+	state := withState(t)
+	result := filepath.Join(t.TempDir(), "executed")
+	job := &Job{
+		ID: "unconfirmed", Kind: "at", Enabled: true, NextRun: time.Now().Add(-time.Second),
+		Command: []string{"/bin/sh", "-c", "printf ran > " + result},
+	}
+	confirmEntered := make(chan struct{})
+	releaseConfirm := make(chan struct{})
+	submitDone := make(chan error, 1)
+	go func() {
+		submitDone <- NewStore(state).SubmitJobWithConfirmation(job, func() error {
+			close(confirmEntered)
+			<-releaseConfirm
+			return errors.New("confirmation failed")
+		})
+	}()
+	<-confirmEntered
+	tickDone := make(chan error, 1)
+	go func() {
+		_, err := TickOnceWithProviders(time.Now(), io.Discard, nil, func() (float64, error) { return 0, nil })
+		tickDone <- err
+	}()
+	select {
+	case err := <-tickDone:
+		t.Fatalf("tick bypassed in-flight submission transaction: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseConfirm)
+	if err := <-submitDone; err == nil || !strings.Contains(err.Error(), "confirmation failed") {
+		t.Fatalf("submission error=%v", err)
+	}
+	if err := <-tickDone; err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := LoadJobs()
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("failed submission remained stored: jobs=%v err=%v", jobs, err)
+	}
+	if _, err := os.Stat(result); !os.IsNotExist(err) {
+		t.Fatalf("failed submission executed: stat err=%v", err)
+	}
+}
+
 func TestScheduleOutputModeEscape(t *testing.T) {
 	withState(t)
 	t.Setenv("BASHY_AGENTIC", "1")

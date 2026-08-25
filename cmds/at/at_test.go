@@ -418,6 +418,10 @@ func TestAtOwnerIsolation(t *testing.T) {
 
 func TestAtOutputWriteErrorsFail(t *testing.T) {
 	setupATState(t)
+	identity := testIdentity(t)
+	if err := schedule.SaveJobs([]*schedule.Job{{ID: "preexisting", Kind: "at", OwnerUID: identity.UID}}); err != nil {
+		t.Fatal(err)
+	}
 	rc := &tool.RunContext{
 		Ctx: context.Background(), Dir: t.TempDir(),
 		Env:   []string{"BASHY_SCHEDULE_STATE=" + os.Getenv("BASHY_SCHEDULE_STATE")},
@@ -426,7 +430,10 @@ func TestAtOutputWriteErrorsFail(t *testing.T) {
 	if code := cmd.Run(rc, []string{"now", "+", "1", "hour"}); code == 0 {
 		t.Fatal("submission succeeded despite failed confirmation write")
 	}
-	identity := testIdentity(t)
+	jobs, err := schedule.LoadJobs()
+	if err != nil || len(jobs) != 1 || jobs[0].ID != "preexisting" {
+		t.Fatalf("failed confirmation changed store: jobs=%+v err=%v", jobs, err)
+	}
 	if err := schedule.SaveJobs([]*schedule.Job{{ID: "listed", Kind: "at", OwnerUID: identity.UID, Enabled: true, NextRun: time.Now().Add(time.Hour)}}); err != nil {
 		t.Fatal(err)
 	}

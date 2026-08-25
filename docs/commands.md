@@ -316,9 +316,8 @@ Windows because shell and umask semantics cannot be guaranteed there.
 
 TODO (execution semantics): unattended `at`/`batch`/`crontab` execution
 requires either (a) auto-starting `schedule daemon` from the submit path
-or (b) host cron-service integration. Additionally, `batch` currently
-does not yet implement the complete POSIX `at -q b -m now` contract. These
-are deliberate follow-ups, not approximated here.
+or (b) host cron-service integration. `batch` is represented as the POSIX
+equivalent of `at -q b -m now`, including load gating and completion mail.
 
 ## NO — not supported (clear error, by reason)
 

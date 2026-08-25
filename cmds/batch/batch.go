@@ -91,13 +91,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if err != nil {
 		return tool.UsageError(rc, cmd, "%v", err)
 	}
-	if err := schedule.StoreFor(rc.Dir, rc.Env).UpdateJobs(func(jobs []*schedule.Job) ([]*schedule.Job, error) {
-		return append(jobs, j), nil
+	if err := schedule.StoreFor(rc.Dir, rc.Env).SubmitJobWithConfirmation(j, func() error {
+		_, err := fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatted)
+		return err
 	}); err != nil {
-		fmt.Fprintf(rc.Err, "%s: cannot save schedule: %v\n", cmd.Name, err)
-		return 1
-	}
-	if _, err := fmt.Fprintf(rc.Err, "job %s at %s\n", id, formatted); err != nil {
+		fmt.Fprintf(rc.Err, "%s: cannot submit job: %v\n", cmd.Name, err)
 		return 1
 	}
 	return 0

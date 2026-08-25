@@ -1,6 +1,8 @@
 package schedule
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,27 +17,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The scheduler as a supervised background service, so the outpost bashy-service
-// supervisor can keep `schedule daemon` alive across reboots (the same shape loom
-// and `sdlc service` use). The supervisor drives `bashy schedule {start,status,
-// stop}`; the foreground loop those launch is `schedule daemon`. status prints
-// "running" / "stopped" — the exact token outpost's bashyServiceRunning greps for.
-
-// ServiceStatus is the daemon's lifecycle state.
+// The pid publication is metadata only. A daemon is authoritative exclusively
+// while it holds the unique kernel-backed lease named by that publication.
 type ServiceStatus struct {
 	Running bool   `json:"running"`
 	PID     int    `json:"pid,omitempty"`
 	PidFile string `json:"pid_file"`
 }
 
-// servicePidPath is the daemon pidfile, kept next to the schedule JSON store so
-// it follows the same $BASHY_SCHEDULE_STATE / UserConfigDir resolution.
-func servicePidPath() string {
-	return filepath.Join(filepath.Dir(statePath()), "schedule-daemon.pid")
+type daemonIdentity struct {
+	PID   int    `json:"pid"`
+	Lease string `json:"lease"`
 }
 
-func writePid(path string, pid int) error {
+func servicePidPath() string { return filepath.Join(filepath.Dir(statePath()), "schedule-daemon.pid") }
+func serviceStartLockPath() string {
+	return filepath.Join(filepath.Dir(statePath()), "schedule-daemon-start.lock")
+}
+
+func serviceElectionLockPath() string {
+	return filepath.Join(filepath.Dir(statePath()), "schedule-daemon-lease.lock")
+}
+
+func writeIdentity(path string, identity daemonIdentity) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := json.Marshal(identity)
+	if err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".schedule-daemon-pid-*")
@@ -45,11 +53,11 @@ func writePid(path string, pid int) error {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if _, err := tmp.WriteString(strconv.Itoa(pid)); err != nil {
+	if _, err := tmp.Write(append(b, '\n')); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -59,64 +67,122 @@ func writePid(path string, pid int) error {
 	return os.Rename(tmpPath, path)
 }
 
-func readPid(path string) (int, error) {
+func readIdentity(path string) (daemonIdentity, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return 0, err
+		return daemonIdentity{}, err
 	}
-	return strconv.Atoi(strings.TrimSpace(string(b)))
+	var identity daemonIdentity
+	if err := json.Unmarshal(b, &identity); err != nil {
+		return daemonIdentity{}, err
+	}
+	if identity.PID <= 0 || !validLeaseName(identity.Lease) {
+		return daemonIdentity{}, errors.New("invalid schedule daemon identity")
+	}
+	return identity, nil
 }
 
-// ServiceStatusOf reports whether the daemon is running (pidfile + live process).
-func ServiceStatusOf() ServiceStatus {
+func validLeaseName(name string) bool {
+	return strings.HasPrefix(name, "schedule-daemon-lease-") &&
+		strings.HasSuffix(name, ".lock") && filepath.Base(name) == name
+}
+
+func leasePath(identity daemonIdentity) string {
+	return filepath.Join(filepath.Dir(statePath()), identity.Lease)
+}
+
+// identityIsLive proves identity using the kernel lease. PID liveness alone is
+// deliberately irrelevant: a stale pidfile may name a reused, unrelated PID.
+func identityIsLive(identity daemonIdentity) bool {
+	if identity.PID <= 0 || !validLeaseName(identity.Lease) {
+		return false
+	}
+	_, elected := lockfile.Owner(serviceElectionLockPath())
+	_, held := lockfile.Owner(leasePath(identity))
+	return elected && held
+}
+
+func serviceStatusLocked() (ServiceStatus, daemonIdentity) {
 	p := servicePidPath()
 	st := ServiceStatus{PidFile: p}
-	pid, err := readPid(p)
-	if err != nil || pid <= 0 {
-		return st
+	identity, err := readIdentity(p)
+	if err == nil && identityIsLive(identity) {
+		st.Running, st.PID = true, identity.PID
+		return st, identity
 	}
-	if processAlive(pid) {
-		st.Running, st.PID = true, pid
-	}
+	return st, identity
+}
+
+func ServiceStatusOf() ServiceStatus {
+	st, _ := serviceStatusLocked()
 	return st
 }
 
-var (
-	serviceExecutable = os.Executable
-	serviceCommand    = exec.Command
-)
-
-func serviceStartLockPath() string {
-	return filepath.Join(filepath.Dir(statePath()), "schedule-daemon-start.lock")
+func newLeaseName() (string, error) {
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		return "", err
+	}
+	return "schedule-daemon-lease-" + hex.EncodeToString(token[:]) + ".lock", nil
 }
 
-// claimDaemonPID publishes the foreground daemon under the same lifecycle
-// lock used by StartService. A child launched by StartService sees its own PID
-// already published; an independently launched second daemon is refused.
-func claimDaemonPID() (pidPath string, retErr error) {
-	startLock, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
-		Name: "bashy-schedule", Intent: "publish schedule daemon pid",
+// claimDaemonLease acquires the authority held for the daemon's full lifetime,
+// then atomically publishes the unique lease name and PID.
+type daemonLease struct {
+	election *lockfile.Lock
+	identity *lockfile.Lock
+}
+
+func (l *daemonLease) Release() error {
+	if l == nil {
+		return nil
+	}
+	return errors.Join(l.identity.Release(), l.election.Release())
+}
+
+func claimDaemonLease() (*daemonLease, daemonIdentity, error) {
+	election, err := lockfile.TryAcquire(serviceElectionLockPath(), lockfile.Holder{
+		Name: "bashy-schedule-daemon", Intent: "daemon lifetime election",
 	})
 	if err != nil {
-		return "", err
+		return nil, daemonIdentity{}, fmt.Errorf("schedule daemon already running: %w", err)
 	}
-	defer func() { retErr = errors.Join(retErr, startLock.Release()) }()
-
-	p := servicePidPath()
-	if pid, err := readPid(p); err == nil && pid > 0 && pid != os.Getpid() && processAlive(pid) {
-		return "", fmt.Errorf("schedule daemon already running as pid %d", pid)
+	name, err := newLeaseName()
+	if err != nil {
+		_ = election.Release()
+		return nil, daemonIdentity{}, err
 	}
-	if err := writePid(p, os.Getpid()); err != nil {
-		return "", err
+	identity := daemonIdentity{PID: os.Getpid(), Lease: name}
+	identityLease, err := lockfile.TryAcquire(leasePath(identity), lockfile.Holder{
+		Name: "bashy-schedule-daemon", PID: identity.PID, Intent: name,
+	})
+	if err != nil {
+		_ = election.Release()
+		return nil, daemonIdentity{}, err
 	}
-	return p, nil
+	lease := &daemonLease{election: election, identity: identityLease}
+	if err := writeIdentity(servicePidPath(), identity); err != nil {
+		_ = lease.Release()
+		_ = os.Remove(leasePath(identity))
+		return nil, daemonIdentity{}, err
+	}
+	return lease, identity, nil
 }
 
-// StartService launches `schedule daemon` detached in the background. The
-// start lock covers status inspection, stale-pid cleanup, spawn, and atomic
-// pidfile publication, so concurrent processes cannot both become the managed
-// daemon.
-func StartService(interval time.Duration) (status ServiceStatus, retErr error) {
+type serviceCommandFactory func(executable string, args ...string) *exec.Cmd
+
+const (
+	serviceReadyTimeout = 5 * time.Second
+	serviceStopTimeout  = 2 * time.Second
+)
+
+func StartService(interval time.Duration) (ServiceStatus, error) {
+	return startService(interval, exec.Command)
+}
+
+// startService does not report readiness until the child owns and publishes
+// its kernel lease. The injected command factory is immutable and test-local.
+func startService(interval time.Duration, command serviceCommandFactory) (status ServiceStatus, retErr error) {
 	startLock, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
 		Name: "bashy-schedule", Intent: "start schedule daemon",
 	})
@@ -125,17 +191,17 @@ func StartService(interval time.Duration) (status ServiceStatus, retErr error) {
 	}
 	defer func() { retErr = errors.Join(retErr, startLock.Release()) }()
 
-	if st := ServiceStatusOf(); st.Running {
+	if st, stale := serviceStatusLocked(); st.Running {
 		return st, nil
+	} else if validLeaseName(stale.Lease) {
+		_ = os.Remove(leasePath(stale))
 	}
-	// A dead, malformed, or partially published pidfile carries no authority.
-	// Remove it while holding the start lock before publishing a replacement.
 	p := servicePidPath()
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return ServiceStatus{}, err
 	}
 
-	exe, err := serviceExecutable()
+	exe, err := os.Executable()
 	if err != nil {
 		return ServiceStatus{}, err
 	}
@@ -143,22 +209,45 @@ func StartService(interval time.Duration) (status ServiceStatus, retErr error) {
 	if interval > 0 {
 		args = append(args, "--interval", interval.String())
 	}
-	cmd := serviceCommand(exe, args...)
+	cmd := command(exe, args...)
 	applyBackgroundProcAttrs(cmd)
 	if err := cmd.Start(); err != nil {
 		return ServiceStatus{}, err
 	}
 	pid := cmd.Process.Pid
-	if err := writePid(p, pid); err != nil {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-		return ServiceStatus{}, err
+	deadline := time.Now().Add(serviceReadyTimeout)
+	for time.Now().Before(deadline) {
+		identity, readErr := readIdentity(p)
+		if readErr == nil && identity.PID == pid && identityIsLive(identity) {
+			_ = cmd.Process.Release()
+			return ServiceStatus{Running: true, PID: pid, PidFile: p}, nil
+		}
+		if readErr == nil && identity.PID != pid && identityIsLive(identity) {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+			return ServiceStatus{Running: true, PID: identity.PID, PidFile: p}, nil
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	_ = cmd.Process.Release()
-	return ServiceStatus{Running: true, PID: pid, PidFile: p}, nil
+	_ = cmd.Process.Kill()
+	_, _ = cmd.Process.Wait()
+	if identity, err := readIdentity(p); err == nil && identity.PID == pid && !identityIsLive(identity) {
+		_ = os.Remove(p)
+		_ = os.Remove(leasePath(identity))
+	}
+	return ServiceStatus{}, fmt.Errorf("schedule daemon pid %d did not publish its lifetime lease", pid)
 }
 
-// StopService signals the daemon's process group to stop and clears the pidfile.
+func waitLeaseRelease(identity daemonIdentity, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for identityIsLive(identity) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return !identityIsLive(identity)
+}
+
+// StopService does not clear identity or allow a replacement until the
+// verified old daemon has released its lifetime lease.
 func StopService() ServiceStatus {
 	p := servicePidPath()
 	startLock, err := lockfile.Acquire(serviceStartLockPath(), lockfile.Holder{
@@ -168,15 +257,31 @@ func StopService() ServiceStatus {
 		return ServiceStatus{PidFile: p}
 	}
 	defer startLock.Release()
-	if pid, err := readPid(p); err == nil && pid > 0 && processAlive(pid) {
-		_ = signalStop(pid)
+
+	st, identity := serviceStatusLocked()
+	if !st.Running {
+		_ = os.Remove(p)
+		if validLeaseName(identity.Lease) {
+			_ = os.Remove(leasePath(identity))
+		}
+		return ServiceStatus{PidFile: p}
 	}
-	_ = os.Remove(p)
+	if identityIsLive(identity) {
+		_ = signalStop(identity.PID)
+	}
+	if !waitLeaseRelease(identity, serviceStopTimeout) && identityIsLive(identity) {
+		_ = signalKill(identity.PID)
+	}
+	if !waitLeaseRelease(identity, serviceStopTimeout) {
+		return ServiceStatus{Running: true, PID: identity.PID, PidFile: p}
+	}
+	if current, err := readIdentity(p); err == nil && current == identity {
+		_ = os.Remove(p)
+	}
+	_ = os.Remove(leasePath(identity))
 	return ServiceStatus{PidFile: p}
 }
 
-// printServiceStatus prints a line containing "running" or "stopped" — the token
-// outpost's bashyServiceRunning parses.
 func printServiceStatus(w io.Writer, st ServiceStatus, asJSON bool, action string) {
 	if asJSON {
 		b, _ := json.Marshal(st)
@@ -197,18 +302,14 @@ func printServiceStatus(w io.Writer, st ServiceStatus, asJSON bool, action strin
 func startCmd() *cobra.Command {
 	var interval time.Duration
 	var asJSON bool
-	c := &cobra.Command{
-		Use:   "start",
-		Short: "Start the scheduler daemon in the background (supervised service)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			st, err := StartService(interval)
-			if err != nil {
-				return err
-			}
-			printServiceStatus(cmd.OutOrStdout(), st, asJSON, "started")
-			return nil
-		},
-	}
+	c := &cobra.Command{Use: "start", Short: "Start the scheduler daemon in the background (supervised service)", RunE: func(cmd *cobra.Command, _ []string) error {
+		st, err := StartService(interval)
+		if err != nil {
+			return err
+		}
+		printServiceStatus(cmd.OutOrStdout(), st, asJSON, "started")
+		return nil
+	}}
 	c.Flags().DurationVar(&interval, "interval", time.Minute, "daemon tick interval")
 	c.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return c
@@ -216,28 +317,20 @@ func startCmd() *cobra.Command {
 
 func statusCmd() *cobra.Command {
 	var asJSON bool
-	c := &cobra.Command{
-		Use:   "status",
-		Short: "Report scheduler daemon status",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			printServiceStatus(cmd.OutOrStdout(), ServiceStatusOf(), asJSON, "")
-			return nil
-		},
-	}
+	c := &cobra.Command{Use: "status", Short: "Report scheduler daemon status", RunE: func(cmd *cobra.Command, _ []string) error {
+		printServiceStatus(cmd.OutOrStdout(), ServiceStatusOf(), asJSON, "")
+		return nil
+	}}
 	c.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return c
 }
 
 func stopServiceCmd() *cobra.Command {
 	var asJSON bool
-	c := &cobra.Command{
-		Use:   "stop",
-		Short: "Stop the scheduler daemon",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			printServiceStatus(cmd.OutOrStdout(), StopService(), asJSON, "stopped")
-			return nil
-		},
-	}
+	c := &cobra.Command{Use: "stop", Short: "Stop the scheduler daemon", RunE: func(cmd *cobra.Command, _ []string) error {
+		printServiceStatus(cmd.OutOrStdout(), StopService(), asJSON, "stopped")
+		return nil
+	}}
 	c.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return c
 }

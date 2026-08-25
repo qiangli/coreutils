@@ -94,6 +94,14 @@ func TestBatchAuthenticatedRecipientAndWriteError(t *testing.T) {
 		t.Fatal("batch succeeded despite failed confirmation write")
 	}
 	jobs, loadErr := schedule.LoadJobs()
+	if loadErr != nil || len(jobs) != 0 {
+		t.Fatalf("failed confirmation scheduled jobs=%v err=%v", jobs, loadErr)
+	}
+	rc.Stdio.Err = &bytes.Buffer{}
+	if code := cmd.Run(rc, nil); code != 0 {
+		t.Fatalf("successful batch submission code=%d", code)
+	}
+	jobs, loadErr = schedule.LoadJobs()
 	if loadErr != nil || len(jobs) != 1 || jobs[0].OwnerUID != identity.UID || jobs[0].MailTo != identity.Name || jobs[0].MailTo == "attacker" {
 		t.Fatalf("trusted identity: jobs=%v err=%v", jobs, loadErr)
 	}

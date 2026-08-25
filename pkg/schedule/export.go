@@ -1,6 +1,7 @@
 package schedule
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -556,6 +557,37 @@ func (s *Store) UpdateJobs(update func([]*Job) ([]*Job, error)) error {
 		state.Jobs = jobs
 		return nil
 	})
+}
+
+// SubmitJobWithConfirmation persists job and emits its required confirmation
+// while retaining the store lock. If confirmation fails, the exact prior store
+// is restored before the lock is released, so a daemon tick can neither claim
+// nor execute the unsuccessfully submitted job.
+func (s *Store) SubmitJobWithConfirmation(job *Job, confirm func() error) error {
+	if s == nil || s.path == "" {
+		return fmt.Errorf("schedule store path is empty")
+	}
+	lock, err := lockfile.Acquire(filepath.Join(filepath.Dir(s.path), "schedule.lock"), lockfile.Holder{
+		Name: "bashy-schedule", Intent: "submit scheduled job",
+	})
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	state, err := loadPath(s.path)
+	if err != nil {
+		return err
+	}
+	prior := append([]*Job(nil), state.Jobs...)
+	state.Jobs = append(state.Jobs, job)
+	if err := state.savePath(s.path); err != nil {
+		return err
+	}
+	if err := confirm(); err != nil {
+		state.Jobs = prior
+		return errors.Join(err, state.savePath(s.path))
+	}
+	return nil
 }
 
 // CronTable returns the original submitted table. Legacy stores without raw

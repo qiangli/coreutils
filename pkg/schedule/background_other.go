@@ -22,13 +22,4 @@ func signalStop(pid int) error {
 	return proc.Kill()
 }
 
-// processAlive reports whether pid is a live process. os.FindProcess on Windows
-// fails for a dead pid, so a successful lookup is a good-enough liveness signal.
-func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	_ = proc.Release()
-	return true
-}
+func signalKill(pid int) error { return signalStop(pid) }
