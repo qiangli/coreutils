@@ -1883,7 +1883,7 @@ file -i [-h] file...
 
 **Implementation:** `cmds/file`.
 
-**Conservative source-token audit:** token gaps: options=-M, -d, -i; argument-form gaps=-M=<file>; source `cmds/file`. This audit is not proof of behavior.
+**Conservative source-token audit:** token gaps: options=-M, -m; argument-form gaps=-M=<file>, -m=<file>; source `cmds/file`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 

@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +15,69 @@ import (
 
 	"github.com/qiangli/coreutils/tool"
 )
+
+type fileFailWriter struct {
+	n   int
+	err error
+}
+
+func (w fileFailWriter) Write(p []byte) (int, error) {
+	if w.n > len(p) {
+		return len(p), w.err
+	}
+	return w.n, w.err
+}
+
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("stdin was read") }
+
+type endlessReader struct {
+	read       int
+	maxRequest int
+}
+
+func (r *endlessReader) Read(p []byte) (int, error) {
+	if len(p) > r.maxRequest {
+		r.maxRequest = len(p)
+	}
+	for i := range p {
+		p[i] = 'x'
+	}
+	r.read += len(p)
+	return len(p), nil
+}
+
+type trackingRegularFile struct {
+	*os.File
+	maxRequest int
+}
+
+func (f *trackingRegularFile) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) > f.maxRequest {
+		f.maxRequest = len(p)
+	}
+	return f.File.ReadAt(p, off)
+}
+
+type readCloseStub struct {
+	readerAt io.ReaderAt
+	readErr  error
+	closeErr error
+	closed   bool
+}
+
+func (r *readCloseStub) ReadAt(p []byte, off int64) (int, error) {
+	if r.readErr != nil {
+		return 0, r.readErr
+	}
+	return r.readerAt.ReadAt(p, off)
+}
+
+func (r *readCloseStub) Close() error {
+	r.closed = true
+	return r.closeErr
+}
 
 func invoke(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
 	return invokeEnv(t, dir, stdin, []string{"LANG=C.UTF-8"}, args...)
@@ -221,6 +287,206 @@ func TestMinimalIdentificationSymlinkAndStandardInput(t *testing.T) {
 	}
 }
 
+func TestMinimalStandardInputDoesNotRead(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Stdio: tool.Stdio{In: panicReader{}, Out: &out, Err: &errb}}
+	if code := cmd.Run(rc, []string{"-i", "-"}); code != 0 || out.String() != "-: regular file\n" || errb.Len() != 0 {
+		t.Fatalf("file -i - = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+}
+
+func TestInspectionReadsOnlyTheDerivedBound(t *testing.T) {
+	reader := new(endlessReader)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{
+		Ctx: context.Background(), Env: []string{"LC_ALL=C"},
+		Stdio: tool.Stdio{In: reader, Out: &out, Err: &errb},
+	}
+	if code := cmd.Run(rc, []string{"-"}); code != 0 || out.String() != "-: ASCII text\n" || errb.Len() != 0 {
+		t.Fatalf("bounded stdin = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+	if reader.read != contextPrefixBytes {
+		t.Fatalf("stdin bytes read = %d, want exact derived bound %d", reader.read, contextPrefixBytes)
+	}
+}
+
+func TestLoadedMagicExtendsTheDerivedBoundWithoutUnboundedReading(t *testing.T) {
+	dir := t.TempDir()
+	offset := uint64(20*1024*1024 + 7)
+	put(t, dir, "magic", []byte(fmt.Sprintf("%d\tstring\tx\thigh-offset\n", offset)))
+	reader := new(endlessReader)
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Dir: dir, Stdio: tool.Stdio{In: reader, Out: &out, Err: &errb}}
+	if code := cmd.Run(rc, []string{"-M", "magic", "-"}); code != 0 || out.String() != "-: high-offset\n" || errb.Len() != 0 {
+		t.Fatalf("high-offset magic = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+	if uint64(reader.read) != offset+1 {
+		t.Fatalf("stdin bytes read = %d, want magic offset plus width %d", reader.read, offset+1)
+	}
+	if reader.maxRequest > readChunkSize {
+		t.Fatalf("largest hostile-reader request = %d, want <= %d", reader.maxRequest, readChunkSize)
+	}
+}
+
+func TestHugeSparseRegularFileUsesBoundedPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sparse")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(1 << 40); err != nil {
+		_ = f.Close()
+		t.Skipf("sparse files unavailable: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, errb, code := invoke(t, dir, "", "sparse")
+	if out != "sparse: data\n" || errb != "" || code != 0 {
+		t.Fatalf("sparse file = (%q, %q, %d)", out, errb, code)
+	}
+	const farOffset = 32*1024*1024 + 3
+	f, err = os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte{'Q'}, farOffset); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	put(t, dir, "magic", []byte(fmt.Sprintf("%d\tstring\tQ\tsparse-high-offset\n", farOffset)))
+	var sparseOut, sparseErr bytes.Buffer
+	var tracked *trackingRegularFile
+	rc := &tool.RunContext{Dir: dir, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &sparseOut, Err: &sparseErr}}
+	open := func(name string) (regularFile, error) {
+		file, err := os.Open(name)
+		if err != nil {
+			return nil, err
+		}
+		tracked = &trackingRegularFile{File: file}
+		return tracked, nil
+	}
+	code = runWithOpener(rc, []string{"-M", "magic", "sparse"}, open)
+	if sparseOut.String() != "sparse: sparse-high-offset\n" || sparseErr.Len() != 0 || code != 0 {
+		t.Fatalf("sparse high-offset magic = (%q, %q, %d)", sparseOut.String(), sparseErr.String(), code)
+	}
+	if tracked == nil || tracked.maxRequest != 1 {
+		t.Fatalf("largest sparse-file ReadAt request = %v, want 1", tracked)
+	}
+}
+
+func TestSparsePEOffsetUsesADynamicBuiltInRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "far.exe")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(1 << 40); err != nil {
+		_ = file.Close()
+		t.Skipf("sparse files unavailable: %v", err)
+	}
+	const signatureOffset = 24*1024*1024 + 5
+	header := make([]byte, 0x40)
+	copy(header, "MZ")
+	binary.LittleEndian.PutUint32(header[0x3c:], signatureOffset)
+	if _, err := file.WriteAt(header, 0); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("PE\x00\x00"), signatureOffset); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	var tracked *trackingRegularFile
+	rc := &tool.RunContext{Dir: dir, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb}}
+	open := func(name string) (regularFile, error) {
+		opened, err := os.Open(name)
+		if err != nil {
+			return nil, err
+		}
+		tracked = &trackingRegularFile{File: opened}
+		return tracked, nil
+	}
+	if code := runWithOpener(rc, []string{"far.exe"}, open); code != 0 || out.String() != "far.exe: PE executable\n" || errb.Len() != 0 {
+		t.Fatalf("sparse PE = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+	if tracked == nil || tracked.maxRequest > contextPrefixBytes {
+		t.Fatalf("largest sparse PE ReadAt request = %v, want <= %d", tracked, contextPrefixBytes)
+	}
+}
+
+func TestReadAndCloseErrorsRemainSuccessfulClassifications(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "data", []byte("placeholder"))
+	for _, tc := range []struct {
+		name string
+		file *readCloseStub
+		want string
+	}{
+		{"read", &readCloseStub{readErr: errors.New("input failed")}, "input failed"},
+		{"close", &readCloseStub{readerAt: bytes.NewReader([]byte("text\n")), closeErr: errors.New("close failed")}, "close failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			rc := &tool.RunContext{Dir: dir, Env: []string{"LANG=C.UTF-8"}, Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb}}
+			open := func(string) (regularFile, error) { return tc.file, nil }
+			code := runWithOpener(rc, []string{"data"}, open)
+			if code != 0 || errb.Len() != 0 || !strings.Contains(out.String(), "data: cannot open") || !strings.Contains(strings.ToLower(out.String()), tc.want) {
+				t.Fatalf("%s error = (%q, %q, %d)", tc.name, out.String(), errb.String(), code)
+			}
+			if !tc.file.closed {
+				t.Fatalf("%s path did not close the regular file", tc.name)
+			}
+		})
+	}
+}
+
+func TestOutputAndDiagnosticWriteFailuresAreFailures(t *testing.T) {
+	dir := t.TempDir()
+	put(t, dir, "data", []byte("text\n"))
+	for _, out := range []io.Writer{
+		fileFailWriter{err: errors.New("output failed")},
+		fileFailWriter{n: 1},
+	} {
+		var errb bytes.Buffer
+		rc := &tool.RunContext{Dir: dir, Stdio: tool.Stdio{In: strings.NewReader(""), Out: out, Err: &errb}}
+		if code := cmd.Run(rc, []string{"data"}); code != 1 || !strings.Contains(errb.String(), "file: write error:") {
+			t.Fatalf("stdout failure = (%q, %d)", errb.String(), code)
+		}
+	}
+
+	put(t, dir, "bad.magic", []byte("invalid\n"))
+	rc := &tool.RunContext{Dir: dir, Stdio: tool.Stdio{
+		In: strings.NewReader(""), Out: io.Discard,
+		Err: fileFailWriter{err: errors.New("diagnostic failed")},
+	}}
+	if code := cmd.Run(rc, []string{"-M", "bad.magic", "data"}); code != 1 {
+		t.Fatalf("stderr failure exit = %d, want 1", code)
+	}
+}
+
+func TestHostileZeroProgressReaderIsReported(t *testing.T) {
+	var out, errb bytes.Buffer
+	rc := &tool.RunContext{Stdio: tool.Stdio{In: zeroProgressReader{}, Out: &out, Err: &errb}}
+	if code := cmd.Run(rc, []string{"-"}); code != 0 || errb.Len() != 0 || !strings.Contains(strings.ToLower(out.String()), strings.ToLower(io.ErrNoProgress.Error())) {
+		t.Fatalf("zero-progress reader = (%q, %q, %d)", out.String(), errb.String(), code)
+	}
+}
+
+type zeroProgressReader struct{}
+
+func (zeroProgressReader) Read([]byte) (int, error) { return 0, nil }
+
 func TestMagicGrammarComparisonsContinuationsAndFormatting(t *testing.T) {
 	dir := t.TempDir()
 	put(t, dir, "strings", []byte("hi there!"))
@@ -348,6 +614,12 @@ func TestMagicMessageUsesPrintfFormatSemantics(t *testing.T) {
 	out, errb, code = invoke(t, dir, "", "-M", "magic", "escaped")
 	if want := "escaped: decoded=A\nB\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("file magic %%b message = (%q, %q, %d), want %q", out, errb, code, want)
+	}
+	put(t, dir, "letters", []byte("hello"))
+	put(t, dir, "magic", []byte("0\tstring\thello\tfirst=%c\n"))
+	out, errb, code = invoke(t, dir, "", "-M", "magic", "letters")
+	if want := "letters: first=h\n"; out != want || errb != "" || code != 0 || strings.Contains(out, "%!") {
+		t.Fatalf("file string %%c message = (%q, %q, %d), want %q", out, errb, code, want)
 	}
 }
 

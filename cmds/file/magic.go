@@ -9,14 +9,26 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/qiangli/coreutils/tool"
 )
 
 type testPlan struct {
-	position []positionTests
-	context  bool
+	position    []positionTests
+	context     bool
+	prefixBytes uint64
+	ranges      []byteRange
 }
+
+const (
+	// Context tests deliberately inspect a prefix, as historical file(1)
+	// implementations do. Fixed position tests need at most byte 261, while
+	// source-language and text tests benefit from a larger sample. The dynamic
+	// PE signature offset is captured as its own sparse range.
+	defaultPositionBytes = 262
+	contextPrefixBytes   = 64 * 1024
+)
 
 type positionTests struct {
 	defaults bool
@@ -72,21 +84,59 @@ func loadTestPlan(rc *tool.RunContext, sources []testSource) (testPlan, error) {
 		}
 		plan.position = append(plan.position, positionTests{magic: tests})
 	}
+	prefix, ranges, err := plan.inspectionRanges()
+	if err != nil {
+		return testPlan{}, err
+	}
+	plan.prefixBytes, plan.ranges = prefix, ranges
 	return plan, nil
 }
 
+func (p testPlan) inspectionRanges() (uint64, []byteRange, error) {
+	// One byte is needed even for an empty replacement plan so empty input can
+	// be distinguished from non-empty data.
+	prefix := uint64(1)
+	if p.context {
+		prefix = contextPrefixBytes
+	}
+	ranges := []byteRange{{end: prefix}}
+	for _, group := range p.position {
+		if group.defaults && prefix < defaultPositionBytes {
+			prefix = defaultPositionBytes
+			ranges[0].end = prefix
+		}
+		for _, test := range group.magic {
+			width := test.typeSpec.size
+			if test.typeSpec.stringValue {
+				width = len(test.stringValue)
+			}
+			if test.offset > ^uint64(0)-uint64(width) {
+				return 0, nil, fmt.Errorf("magic test offset overflows its value width")
+			}
+			end := test.offset + uint64(width)
+			ranges = append(ranges, byteRange{start: test.offset, end: end})
+		}
+	}
+	return prefix, mergeRanges(ranges), nil
+}
+
 func (p testPlan) classify(data []byte, utf8Locale bool) (string, error) {
-	if len(data) == 0 {
+	return p.classifyInspected(inspectedData{chunks: []dataChunk{{data: data}}}, utf8Locale)
+}
+
+func (p testPlan) classifyInspected(data inspectedData, utf8Locale bool) (string, error) {
+	prefix := data.prefix()
+	if len(prefix) == 0 {
 		return "empty", nil
 	}
 	for _, tests := range p.position {
 		if tests.defaults {
-			if typ, ok := classifyPosition(data); ok {
+			if typ, ok := classifyPositionInspected(data); ok {
 				return typ, nil
 			}
 			continue
 		}
-		message, ok, err := applyMagic(data, tests.magic)
+		message, ok, err := applyMagicInspected(data, tests.magic)
 		if err != nil {
 			return "", err
 		}
@@ -95,7 +145,7 @@ func (p testPlan) classify(data []byte, utf8Locale bool) (string, error) {
 		}
 	}
 	if p.context {
-		return classifyContext(data, utf8Locale), nil
+		return classifyContext(prefix, utf8Locale), nil
 	}
 	return "data", nil
 }
@@ -375,6 +425,10 @@ func unescapeMagicString(value string) ([]byte, error) {
 }
 
 func applyMagic(data []byte, tests []magicTest) (string, bool, error) {
+	return applyMagicInspected(inspectedData{chunks: []dataChunk{{data: data}}}, tests)
+}
+
+func applyMagicInspected(data inspectedData, tests []magicTest) (string, bool, error) {
 	for i := 0; i < len(tests); {
 		primary := tests[i]
 		i++
@@ -408,20 +462,16 @@ func applyMagic(data []byte, tests []magicTest) (string, bool, error) {
 	return "", false, nil
 }
 
-func (t magicTest) match(data []byte) (uint64, bool) {
-	if t.offset > uint64(len(data)) {
-		return 0, false
-	}
-	start := int(t.offset)
+func (t magicTest) match(data inspectedData) (uint64, bool) {
 	if t.typeSpec.stringValue {
-		end := start + len(t.stringValue)
-		return 0, end <= len(data) && bytes.Equal(data[start:end], t.stringValue)
+		value, ok := data.bytesAt(t.offset, len(t.stringValue))
+		return 0, ok && bytes.Equal(value, t.stringValue)
 	}
-	end := start + t.typeSpec.size
-	if end > len(data) {
+	valueBytes, ok := data.bytesAt(t.offset, t.typeSpec.size)
+	if !ok {
 		return 0, false
 	}
-	value := nativeUint(data[start:end])
+	value := nativeUint(valueBytes)
 	if t.typeSpec.hasMask {
 		value &= t.typeSpec.mask
 	}
@@ -539,7 +589,9 @@ func renderMagicMessage(message string, arg any) (string, error) {
 		}
 		formatArg := arg
 		if usedArgument {
-			if strings.ContainsRune("bcs", rune(conv)) {
+			if conv == 'c' {
+				formatArg = rune(0)
+			} else if strings.ContainsRune("bs", rune(conv)) {
 				formatArg = ""
 			} else {
 				formatArg = uint64(0)
@@ -556,6 +608,11 @@ func renderMagicMessage(message string, arg any) (string, error) {
 				formatArg = rune(number.value)
 			default:
 				formatArg = number.value
+			}
+		} else if text, ok := arg.(string); ok && conv == 'c' {
+			formatArg = rune(0)
+			if first, _ := utf8.DecodeRuneInString(text); len(text) != 0 {
+				formatArg = first
 			}
 		}
 		if conv == 'b' {

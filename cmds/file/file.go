@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -16,6 +17,17 @@ import (
 	"github.com/qiangli/coreutils/tool"
 	"github.com/spf13/pflag"
 )
+
+const readChunkSize = 32 * 1024
+
+type regularFile interface {
+	io.ReaderAt
+	io.Closer
+}
+
+type regularFileOpener func(string) (regularFile, error)
+
+func openOSRegularFile(path string) (regularFile, error) { return os.Open(path) }
 
 var cmd = &tool.Tool{Name: "file", Synopsis: "Determine the type of each FILE.", Usage: "file [-dh] [-M FILE] [-m FILE] FILE...\n  or:  file -i [-h] FILE..."}
 
@@ -64,7 +76,9 @@ func addSourceFlag(fs *pflag.FlagSet, sources *[]testSource, kind testSourceKind
 	}
 }
 
-func run(rc *tool.RunContext, args []string) int {
+func run(rc *tool.RunContext, args []string) int { return runWithOpener(rc, args, openOSRegularFile) }
+
+func runWithOpener(rc *tool.RunContext, args []string, open regularFileOpener) int {
 	fs := tool.NewFlags(cmd.Name)
 	brief := fs.BoolP("brief", "b", false, "do not prepend file names to output lines")
 	follow := fs.BoolP("dereference", "L", false, "follow symbolic links (the POSIX default)")
@@ -87,33 +101,38 @@ func run(rc *tool.RunContext, args []string) int {
 
 	plan, err := loadTestPlan(rc, sources)
 	if err != nil {
-		fmt.Fprintf(rc.Err, "file: %v\n", err)
+		_, _ = fmt.Fprintf(rc.Err, "file: %v\n", err)
 		return 1
 	}
 	for _, name := range operands {
-		typ, err := identify(rc, name, *noFollow && !*follow, *minimal, plan)
+		typ, err := identify(rc, name, *noFollow && !*follow, *minimal, plan, open)
 		if err != nil {
 			typ = fmt.Sprintf("cannot open %q (%v)", name, tool.SysErr(err))
 		}
+		var line string
 		if *brief {
-			fmt.Fprintln(rc.Out, typ)
+			line = typ + "\n"
 		} else {
-			fmt.Fprintf(rc.Out, "%s: %s\n", name, typ)
+			line = fmt.Sprintf("%s: %s\n", name, typ)
+		}
+		if err := writeAll(rc.Out, line); err != nil {
+			_, _ = fmt.Fprintf(rc.Err, "file: write error: %v\n", err)
+			return 1
 		}
 	}
 	return 0
 }
 
-func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan testPlan) (string, error) {
+func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan testPlan, open regularFileOpener) (string, error) {
 	if name == "-" {
-		data, err := readContents(rc.In)
-		if err != nil {
-			return "", err
-		}
 		if minimal {
 			return "regular file", nil
 		}
-		return plan.classify(data, localeAllowsUTF8(rc))
+		data, err := inspectStream(rc.In, plan)
+		if err != nil {
+			return "", err
+		}
+		return plan.classifyInspected(data, localeAllowsUTF8(rc))
 	}
 
 	path := rc.Path(name)
@@ -148,16 +167,22 @@ func identify(rc *tool.RunContext, name string, noFollow, minimal bool, plan tes
 	if minimal {
 		return "regular file", nil
 	}
-	f, err := os.Open(path)
+	f, err := open(path)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-	data, err := readContents(f)
-	if err != nil {
-		return "", err
+	data, readErr := inspectReaderAt(f, plan.ranges)
+	if readErr == nil {
+		data, readErr = inspectDynamicPEReaderAt(f, data)
 	}
-	return plan.classify(data, localeAllowsUTF8(rc))
+	closeErr := f.Close()
+	if readErr != nil {
+		return "", readErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	return plan.classifyInspected(data, localeAllowsUTF8(rc))
 }
 
 func describeSymlink(path string) (string, error) {
@@ -168,14 +193,193 @@ func describeSymlink(path string) (string, error) {
 	return "symbolic link to " + target, nil
 }
 
-func readContents(r io.Reader) ([]byte, error) {
-	if r == nil {
-		return nil, nil
+type byteRange struct{ start, end uint64 }
+type dataChunk struct {
+	start uint64
+	data  []byte
+}
+type inspectedData struct{ chunks []dataChunk }
+
+func mergeRanges(ranges []byteRange) []byteRange {
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
+	out := make([]byteRange, 0, len(ranges))
+	for _, current := range ranges {
+		if current.end <= current.start {
+			continue
+		}
+		if len(out) == 0 || current.start > out[len(out)-1].end {
+			out = append(out, current)
+			continue
+		}
+		if current.end > out[len(out)-1].end {
+			out[len(out)-1].end = current.end
+		}
 	}
-	return io.ReadAll(r)
+	return out
+}
+
+func (d inspectedData) prefix() []byte {
+	if len(d.chunks) != 0 && d.chunks[0].start == 0 {
+		return d.chunks[0].data
+	}
+	return nil
+}
+
+func (d inspectedData) bytesAt(offset uint64, width int) ([]byte, bool) {
+	if width == 0 {
+		return []byte{}, true
+	}
+	end := offset + uint64(width)
+	if end < offset {
+		return nil, false
+	}
+	result := make([]byte, width)
+	pos := offset
+	for _, chunk := range d.chunks {
+		chunkEnd := chunk.start + uint64(len(chunk.data))
+		if chunkEnd <= pos {
+			continue
+		}
+		if chunk.start > pos {
+			return nil, false
+		}
+		copyEnd := min(chunkEnd, end)
+		copy(result[pos-offset:copyEnd-offset], chunk.data[pos-chunk.start:copyEnd-chunk.start])
+		pos = copyEnd
+		if pos == end {
+			return result, true
+		}
+	}
+	return nil, false
+}
+
+func inspectReaderAt(r io.ReaderAt, ranges []byteRange) (inspectedData, error) {
+	var out inspectedData
+	for _, span := range mergeRanges(append([]byteRange(nil), ranges...)) {
+		if span.start > uint64(^uint64(0)>>1) {
+			continue // no regular file can address beyond the signed file-offset range
+		}
+		width := span.end - span.start
+		if width > uint64(^uint(0)>>1) {
+			return inspectedData{}, fmt.Errorf("magic range is too wide to inspect")
+		}
+		buf := make([]byte, int(width))
+		n, err := r.ReadAt(buf, int64(span.start))
+		if n > 0 {
+			out.chunks = append(out.chunks, dataChunk{start: span.start, data: buf[:n]})
+		}
+		if err != nil && err != io.EOF {
+			return inspectedData{}, err
+		}
+	}
+	return out, nil
+}
+
+func inspectDynamicPEReaderAt(r io.ReaderAt, data inspectedData) (inspectedData, error) {
+	span, ok := peSignatureRange(data.prefix())
+	if !ok {
+		return data, nil
+	}
+	extra, err := inspectReaderAt(r, []byteRange{span})
+	if err != nil {
+		return inspectedData{}, err
+	}
+	data.chunks = append(data.chunks, extra.chunks...)
+	sort.Slice(data.chunks, func(i, j int) bool { return data.chunks[i].start < data.chunks[j].start })
+	return data, nil
+}
+
+func inspectStream(r io.Reader, plan testPlan) (inspectedData, error) {
+	if r == nil {
+		return inspectedData{}, nil
+	}
+	// Read the fixed context prefix first. It reveals the one dynamic built-in
+	// range (the PE signature offset) before any gaps are discarded.
+	data, pos, eof, err := inspectStreamRanges(r, []byteRange{{end: plan.prefixBytes}}, 0, inspectedData{})
+	if err != nil || eof {
+		return data, err
+	}
+	ranges := append([]byteRange(nil), plan.ranges...)
+	if pe, ok := peSignatureRange(data.prefix()); ok {
+		ranges = append(ranges, pe)
+	}
+	data, _, _, err = inspectStreamRanges(r, mergeRanges(ranges), pos, data)
+	return data, err
+}
+
+func inspectStreamRanges(r io.Reader, ranges []byteRange, pos uint64, out inspectedData) (inspectedData, uint64, bool, error) {
+	buffer := make([]byte, readChunkSize)
+	for _, span := range ranges {
+		if span.end <= pos {
+			continue
+		}
+		if span.start > pos {
+			n, eof, err := transferReader(r, buffer, span.start-pos, nil)
+			pos += n
+			if err != nil || eof {
+				return out, pos, eof, err
+			}
+		}
+		start := max(span.start, pos)
+		if span.end <= start {
+			continue
+		}
+		width := span.end - start
+		if width > uint64(^uint(0)>>1) {
+			return inspectedData{}, pos, false, fmt.Errorf("magic range is too wide to inspect")
+		}
+		captured := make([]byte, 0, int(width))
+		n, eof, err := transferReader(r, buffer, width, &captured)
+		if len(captured) != 0 {
+			out.chunks = append(out.chunks, dataChunk{start: start, data: captured})
+		}
+		pos += n
+		if err != nil || eof {
+			return out, pos, eof, err
+		}
+	}
+	return out, pos, false, nil
+}
+
+func transferReader(r io.Reader, buffer []byte, count uint64, captured *[]byte) (uint64, bool, error) {
+	var total uint64
+	for total < count {
+		want := min(uint64(len(buffer)), count-total)
+		n, err := r.Read(buffer[:int(want)])
+		if n < 0 || n > int(want) {
+			return total, false, fmt.Errorf("invalid read count %d", n)
+		}
+		if captured != nil {
+			*captured = append(*captured, buffer[:n]...)
+		}
+		total += uint64(n)
+		if err != nil {
+			if err == io.EOF {
+				return total, true, nil
+			}
+			return total, false, err
+		}
+		if n == 0 {
+			return total, false, io.ErrNoProgress
+		}
+	}
+	return total, false, nil
+}
+
+func writeAll(w io.Writer, value string) error {
+	n, err := io.WriteString(w, value)
+	if err == nil && n != len(value) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func classifyPosition(data []byte) (string, bool) {
+	return classifyPositionInspected(inspectedData{chunks: []dataChunk{{data: data}}})
+}
+
+func classifyPositionInspected(inspected inspectedData) (string, bool) {
+	data := inspected.prefix()
 	if bytes.HasPrefix(data, []byte{0x7f, 'E', 'L', 'F'}) && len(data) >= 6 {
 		bits := map[byte]string{1: "32-bit", 2: "64-bit"}[data[4]]
 		if bits == "" {
@@ -200,8 +404,8 @@ func classifyPosition(data []byte) (string, bool) {
 		return description, true
 	}
 	if len(data) >= 0x40 && data[0] == 'M' && data[1] == 'Z' {
-		off := int(binary.LittleEndian.Uint32(data[0x3c:0x40]))
-		if off >= 0 && off+4 <= len(data) && bytes.Equal(data[off:off+4], []byte("PE\x00\x00")) {
+		off := uint64(binary.LittleEndian.Uint32(data[0x3c:0x40]))
+		if signature, ok := inspected.bytesAt(off, 4); ok && bytes.Equal(signature, []byte("PE\x00\x00")) {
 			return "PE executable", true
 		}
 		return "DOS executable", true
@@ -240,6 +444,14 @@ func classifyPosition(data []byte) (string, bool) {
 		return "POSIX tar archive", true
 	}
 	return "", false
+}
+
+func peSignatureRange(prefix []byte) (byteRange, bool) {
+	if len(prefix) < 0x40 || prefix[0] != 'M' || prefix[1] != 'Z' {
+		return byteRange{}, false
+	}
+	start := uint64(binary.LittleEndian.Uint32(prefix[0x3c:0x40]))
+	return byteRange{start: start, end: start + 4}, true
 }
 
 func classifyContext(data []byte, utf8Locale bool) string {
