@@ -194,6 +194,27 @@ type tableOptions struct {
 }
 
 func printTable(w io.Writer, rows []mountEntry, opt tableOptions) {
+	if opt.portable && !opt.inodes && !opt.printType && !opt.scale.human {
+		sizeHdr := opt.scale.header
+		switch opt.scale.blockSize {
+		case 512:
+			sizeHdr = "512-blocks"
+		case 1024:
+			sizeHdr = "1024-blocks"
+		}
+		fmt.Fprintf(w, "Filesystem %s Used Available Capacity Mounted on\n", sizeHdr)
+		for _, m := range rows {
+			fmt.Fprintf(w, "%s %s %s %s %s %s\n",
+				m.device,
+				fmtValue(m.total, opt.scale),
+				fmtValue(m.used, opt.scale),
+				fmtValue(m.avail, opt.scale),
+				usePct(m.used, m.avail),
+				m.point)
+		}
+		return
+	}
+
 	sizeHdr, availHdr := opt.scale.header, "Available"
 	if opt.scale.human {
 		availHdr = "Avail"

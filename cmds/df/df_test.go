@@ -181,7 +181,7 @@ func TestPortableExactOutput(t *testing.T) {
 		portable: true,
 	})
 	want := "Filesystem 512-blocks Used Available Capacity Mounted on\n" +
-		"/dev/x           2048 1024      1024      50% /\n"
+		"/dev/x 2048 1024 1024 50% /\n"
 	if got := buf.String(); got != want {
 		t.Errorf("df -P output:\n%q\nwant:\n%q", got, want)
 	}
@@ -192,7 +192,7 @@ func TestPortableExactOutput(t *testing.T) {
 		portable: true,
 	})
 	want = "Filesystem 1024-blocks Used Available Capacity Mounted on\n" +
-		"/dev/x            1024  512       512      50% /\n"
+		"/dev/x 1024 512 512 50% /\n"
 	if got := buf.String(); got != want {
 		t.Errorf("df -P -k output:\n%q\nwant:\n%q", got, want)
 	}
