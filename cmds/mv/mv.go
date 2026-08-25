@@ -18,10 +18,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
+	"golang.org/x/term"
 )
 
 var cmd = &tool.Tool{
@@ -39,6 +40,7 @@ type mover struct {
 	noClobber   bool
 	update      bool
 	interactive bool
+	force       bool
 	backup      bool
 	backupMode  string
 	suffix      string
@@ -51,7 +53,7 @@ type mover struct {
 func run(rc *tool.RunContext, args []string) int {
 	args = normalizeOptionalArgs(args)
 	fs := tool.NewFlags(cmd.Name)
-	fs.BoolP("force", "f", false, "do not prompt before overwriting (this implementation never prompts)")
+	force := fs.BoolP("force", "f", false, "do not prompt before overwriting")
 	noClobber := fs.BoolP("no-clobber", "n", false, "do not overwrite an existing file; silently skip it")
 	interactive := fs.BoolP("interactive", "i", false, "prompt before overwrite")
 	update := fs.BoolP("update", "u", false, "move only when SOURCE is newer than the destination or destination is missing")
@@ -89,7 +91,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	m := &mover{
-		rc: rc, noClobber: *noClobber, update: *update, interactive: *interactive,
+		rc: rc, noClobber: *noClobber, update: *update, interactive: *interactive, force: *force,
 		backup: backupMode != "" && backupMode != "nil", backupMode: backupMode, suffix: *suffix,
 		debug: *debug, verbose: *verbose,
 		in: inputReader(rc.In),
@@ -99,10 +101,13 @@ func run(rc *tool.RunContext, args []string) int {
 	case 'f':
 		m.noClobber = false
 		m.interactive = false
+		m.force = true
 	case 'n':
 		m.interactive = false
+		m.force = false
 	case 'i':
 		m.noClobber = false
+		m.force = false
 	}
 
 	dest := ""
@@ -191,15 +196,24 @@ func (m *mover) move(src, dst string) {
 				return
 			}
 		}
-		if m.interactive && !m.confirm(dst) {
-			m.failed = true
-			return
+		if !m.force {
+			if m.interactive {
+				if !m.confirm(dst, false) {
+					return
+				}
+			} else if isTerminal(m.in) {
+				if !writableForPrompt(dp) {
+					if !m.confirm(dst, true) {
+						return
+					}
+				}
+			}
 		}
 		if m.backup && !m.backupDest(dst) {
 			return
 		}
 	}
-	err := os.Rename(sp, dp)
+	err := osRename(sp, dp)
 	if err == nil {
 		m.debugf("renamed '%s' -> '%s'", src, dst)
 		m.verbosef("renamed '%s' -> '%s'", src, dst)
@@ -215,14 +229,39 @@ func (m *mover) move(src, dst string) {
 	m.errf("cannot move '%s' to '%s': %s", src, dst, reason(err))
 }
 
-func (m *mover) confirm(dst string) bool {
-	fmt.Fprintf(m.rc.Err, "mv: overwrite '%s'? ", dst)
+func (m *mover) confirm(dst string, unwritable bool) bool {
+	if unwritable {
+		fmt.Fprintf(m.rc.Err, "mv: replace '%s', overriding mode? ", dst)
+	} else {
+		fmt.Fprintf(m.rc.Err, "mv: overwrite '%s'? ", dst)
+	}
 	line, err := m.in.ReadString('\n')
 	if err != nil && line == "" {
 		return false
 	}
 	line = strings.TrimSpace(line)
-	return line == "y" || line == "Y" || strings.EqualFold(line, "yes")
+	if line == "" {
+		return false
+	}
+	messages := strings.ToLower(locale.Resolve(m.rc.Env, locale.Messages))
+	if strings.HasPrefix(messages, "de_de") {
+		return line[0] == 'j' || line[0] == 'J' || line[0] == 'y' || line[0] == 'Y'
+	}
+	return line[0] == 'y' || line[0] == 'Y'
+}
+
+// Indirection keeps permission-sensitive prompt tests hermetic when the test
+// process has privileges (notably root) that make access(2) succeed despite
+// write bits being clear.
+var writableForPrompt = isWritable
+
+var osRename = os.Rename
+
+var isTerminal = func(r io.Reader) bool {
+	if f, ok := r.(interface{ Fd() uintptr }); ok {
+		return term.IsTerminal(int(f.Fd()))
+	}
+	return false
 }
 
 func inputReader(r io.Reader) *bufio.Reader {
@@ -262,7 +301,7 @@ func (m *mover) backupDest(dst string) bool {
 			return false
 		}
 	}
-	if err := os.Rename(dp, bp); err != nil {
+	if err := osRename(dp, bp); err != nil {
 		m.errf("cannot backup '%s': %s", dst, reason(err))
 		return false
 	}
@@ -347,8 +386,7 @@ func (m *mover) copyNode(src, dst string) bool {
 				ok = false
 			}
 		}
-		_ = os.Chmod(dp, fi.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky))
-		_ = os.Chtimes(dp, time.Time{}, fi.ModTime())
+		m.preserveAttrs(dp, fi)
 		return ok
 	case fi.Mode()&os.ModeSymlink != 0:
 		target, err := os.Readlink(sp)
@@ -366,6 +404,20 @@ func (m *mover) copyNode(src, dst string) bool {
 			m.errf("cannot create symbolic link '%s': %s", dst, reason(err))
 			return false
 		}
+		return true
+	case fi.Mode()&(os.ModeNamedPipe|os.ModeSocket|os.ModeDevice|os.ModeCharDevice) != 0:
+		if _, err := os.Lstat(dp); err == nil {
+			if err := os.Remove(dp); err != nil {
+				m.errf("cannot remove '%s': %s", dst, reason(err))
+				return false
+			}
+		}
+		err = copySpecialNode(dp, fi)
+		if err != nil {
+			m.errf("cannot create special file '%s': %s", dst, reason(err))
+			return false
+		}
+		m.preserveAttrs(dp, fi)
 		return true
 	default:
 		in, err := os.Open(sp)
@@ -388,10 +440,19 @@ func (m *mover) copyNode(src, dst string) bool {
 			m.errf("error writing '%s': %s", dst, reason(werr))
 			return false
 		}
-		_ = os.Chmod(dp, fi.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky))
-		_ = os.Chtimes(dp, time.Time{}, fi.ModTime())
+		m.preserveAttrs(dp, fi)
 		return true
 	}
+}
+
+func (m *mover) preserveAttrs(dp string, fi os.FileInfo) {
+	err := preserveOwner(dp, fi)
+	mode := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+	if err != nil {
+		mode &^= (os.ModeSetuid | os.ModeSetgid)
+	}
+	_ = os.Chmod(dp, mode)
+	_ = os.Chtimes(dp, atime(fi), fi.ModTime())
 }
 
 func (m *mover) errf(format string, a ...any) {
@@ -472,6 +533,9 @@ func lastOverride(args []string) byte {
 				}
 				if ch == 'i' {
 					last = 'i'
+				}
+				if ch == 't' || ch == 'S' || ch == 'b' || ch == 'Z' {
+					break
 				}
 			}
 		}

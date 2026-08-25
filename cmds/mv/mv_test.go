@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -182,7 +183,7 @@ func TestMvBackupSuffixUpdateAndInteractive(t *testing.T) {
 	write(t, src, "prompted")
 	write(t, dst, "keep")
 	_, errb, code = runTool(t, dir, "-i", "a", "b")
-	if code != 1 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
+	if code != 0 || !strings.Contains(errb, "overwrite 'b'?") || read(t, dst) != "keep" {
 		t.Fatalf("mv -i without yes should skip: code=%d err=%q", code, errb)
 	}
 }
@@ -195,7 +196,7 @@ func TestMvInteractiveRefusalContinuesAndFails(t *testing.T) {
 	write(t, filepath.Join(dir, "d", "b"), "old-b")
 
 	_, errb, code := runToolInput(t, dir, "n\ny\n", "-i", "a", "b", "d")
-	if code != 1 {
+	if code != 0 {
 		t.Fatalf("mv -i with one refusal: code=%d err=%q", code, errb)
 	}
 	if strings.Count(errb, "overwrite '") != 2 {
@@ -333,8 +334,7 @@ func TestMvSameFile(t *testing.T) {
 }
 
 // TestMvCopyFallback exercises the cross-device copy+remove path
-// directly (a real EXDEV needs two filesystems, which is not
-// hermetic). Same logic, same code path.
+// using an injected EXDEV failure rather than directly calling internal methods.
 func TestMvCopyFallback(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src", "f1"), "one")
@@ -344,16 +344,18 @@ func TestMvCopyFallback(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var out, errb bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx:   context.Background(),
-		Dir:   dir,
-		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+	
+	oldOsRename := osRename
+	defer func() { osRename = oldOsRename }()
+	osRename = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
 	}
-	m := &mover{rc: rc}
-	if !m.copyMove("src", "dst") || m.failed {
-		t.Fatalf("copyMove failed: %s", errb.String())
+
+	_, errb, code := runTool(t, dir, "src", "dst")
+	if code != 0 {
+		t.Fatalf("EXDEV fallback failed: code=%d err=%q", code, errb)
 	}
+
 	if read(t, filepath.Join(dir, "dst", "f1")) != "one" || read(t, filepath.Join(dir, "dst", "sub", "f2")) != "two" {
 		t.Error("tree not copied")
 	}
