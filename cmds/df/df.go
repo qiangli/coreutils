@@ -1,7 +1,19 @@
-// Package dfcmd implements df(1) per the GNU coreutils manual for the
-// commonly used reporting flags. The default (and -k) output is in
-// 1024-byte blocks, rounded up; -h/-H print human-readable sizes. With
-// FILE arguments, only the file system containing each file is shown.
+// Package dfcmd implements df per POSIX.1 Issue 7 (2016 Edition, XSI)
+// with GNU coreutils extensions where they do not conflict:
+//
+//   - Space is reported in units of 512-byte blocks by default; -k
+//     selects 1024-byte units (POSIX XSI defaults, unconditional — not
+//     gated on POSIXLY_CORRECT).
+//   - -P produces the POSIX portable format: header "Filesystem
+//     512-blocks Used Available Capacity Mounted on" (1024-blocks with
+//     -k), one line per file system, percentage rounded up.
+//   - -t is the XSI no-argument totals option (include total
+//     allocated-space figures), equivalent to GNU --total. GNU's
+//     type filtering is available only under its long spelling
+//     --type=TYPE; -t never consumes an argument.
+//
+// -h/-H print human-readable sizes (GNU extension). With FILE
+// arguments, only the file system containing each file is shown.
 //
 // Mounted file systems are discovered by platform probes behind build
 // tags: /proc/mounts + statfs on Linux, getfsstat on macOS, and
@@ -54,7 +66,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	fs := tool.NewFlags(cmd.Name)
 	versionAlias := fs.BoolP("version-alias", "V", false, "output version information and exit")
-	fs.BoolP("kibibytes", "k", false, "like --block-size=1K")
+	kibi := fs.BoolP("kibibytes", "k", false, "use 1024-byte units instead of the default 512-byte units (POSIX -k)")
 	human := fs.BoolP("human-readable", "h", false, "print sizes in powers of 1024 (e.g., 1023M)")
 	blockSize := fs.StringP("block-size", "B", "", "scale sizes by SIZE before printing")
 	fs.BoolP("megabytes", "M", false, "like --block-size=1M")
@@ -67,11 +79,13 @@ func run(rc *tool.RunContext, args []string) int {
 	noSync := fs.Bool("no-sync", false, "do not invoke sync before getting usage info (default)")
 	doSync := fs.Bool("sync", false, "invoke sync before getting usage info")
 	var includeTypes, excludeTypes []string
-	fs.StringArrayVarP(&includeTypes, "type", "t", nil, "limit listing to file systems of type TYPE")
+	// POSIX XSI -t is the no-argument totals option; GNU's -t TYPE
+	// filter therefore keeps only its long spelling --type.
+	fs.StringArrayVar(&includeTypes, "type", nil, "limit listing to file systems of type TYPE")
 	fs.StringArrayVarP(&excludeTypes, "exclude-type", "x", nil, "limit listing to file systems not of type TYPE")
 	output := fs.String("output", "", "use the output format defined by FIELD_LIST, or all fields if FIELD_LIST is omitted")
 	fs.Lookup("output").NoOptDefVal = defaultOutputFields
-	total := fs.Bool("total", false, "produce a grand total")
+	total := fs.BoolP("total", "t", false, "include total allocated-space figures (POSIX XSI -t)")
 	operands, code := tool.Parse(rc, cmd, fs, rest)
 	if code >= 0 {
 		return code
@@ -84,7 +98,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if *doSync {
 		syncFilesystems()
 	}
-	scale := scaleMode{blockSize: 1024, header: "1K-blocks"}
+	// POSIX XSI default: 512-byte units; -k selects 1024-byte units.
+	scale := scaleMode{blockSize: 512, header: "512-blocks"}
+	if *kibi || seenShort['k'] {
+		scale = scaleMode{blockSize: 1024, header: "1024-blocks"}
+	}
 	if *si {
 		scale = scaleMode{human: true, base: 1000, header: "Size"}
 	}
@@ -181,15 +199,28 @@ func printTable(w io.Writer, rows []mountEntry, opt tableOptions) {
 	if opt.scale.human {
 		availHdr = "Avail"
 	}
-	if opt.portable && !opt.inodes && !opt.scale.human && opt.scale.blockSize == 1024 {
-		sizeHdr = "1024-blocks"
+	if opt.portable && !opt.inodes && !opt.scale.human {
+		// POSIX -P headers: "512-blocks" without -k, "1024-blocks"
+		// with -k (also normalizes an explicit -B512 / -B1K).
+		switch opt.scale.blockSize {
+		case 512:
+			sizeHdr = "512-blocks"
+		case 1024:
+			sizeHdr = "1024-blocks"
+		}
 	}
 	if opt.inodes {
 		sizeHdr, availHdr = "Inodes", "IFree"
 	}
+	pctHdr := "Use%"
+	if opt.inodes {
+		pctHdr = "IUse%"
+	} else if opt.portable {
+		pctHdr = "Capacity" // POSIX -P header field
+	}
 	type line struct{ fsys, typ, size, used, avail, pct, mnt string }
 	lines := make([]line, len(rows))
-	wf, ws, wu, wa, wp := len("Filesystem"), len(sizeHdr), len("Used"), len(availHdr), len("Use%")
+	wf, ws, wu, wa, wp := len("Filesystem"), len(sizeHdr), len("Used"), len(availHdr), len(pctHdr)
 	wt := len("Type")
 	for i, m := range rows {
 		l := line{
@@ -212,10 +243,6 @@ func printTable(w io.Writer, rows []mountEntry, opt tableOptions) {
 		wa, wp = max(wa, len(l.avail)), max(wp, len(l.pct))
 		wt = max(wt, len(l.typ))
 		lines[i] = l
-	}
-	pctHdr := "Use%"
-	if opt.inodes {
-		pctHdr = "IUse%"
 	}
 	fmt.Fprintf(w, "%-*s", wf, "Filesystem")
 	if opt.printType {
@@ -296,13 +323,30 @@ func normalizeBlockSizeArgs(args []string) []string {
 			out = append(out, "--block-size=1M")
 			continue
 		}
-		if len(a) > 2 && a[0] == '-' && a[1] != '-' && strings.Contains(a, "M") {
-			out = append(out, "--block-size=1M")
-			kept := strings.ReplaceAll(a, "M", "")
-			if kept != "-" {
-				out = append(out, kept)
+		if len(a) > 2 && a[0] == '-' && a[1] != '-' {
+			// Scan the cluster, but stop at an argument-taking
+			// shorthand (-B, -x): the rest of the word is that
+			// flag's argument, not more flags.
+			kept := []byte{'-'}
+			sawM := false
+			for j := 1; j < len(a); j++ {
+				if a[j] == 'B' || a[j] == 'x' {
+					kept = append(kept, a[j:]...)
+					break
+				}
+				if a[j] == 'M' {
+					sawM = true
+					continue
+				}
+				kept = append(kept, a[j])
 			}
-			continue
+			if sawM {
+				out = append(out, "--block-size=1M")
+				if len(kept) > 1 {
+					out = append(out, string(kept))
+				}
+				continue
+			}
 		}
 		out = append(out, a)
 	}
@@ -311,7 +355,9 @@ func normalizeBlockSizeArgs(args []string) []string {
 
 // extractShort removes the given single-letter flags (which have no
 // GNU long form) from short-flag clusters, returning the remaining
-// args and the set of letters seen. Scanning stops at "--".
+// args and the set of letters seen. Scanning stops at "--", and within
+// a cluster at an argument-taking shorthand (-B, -x), whose in-word
+// argument must not be mistaken for more flags.
 func extractShort(args []string, chars string) ([]string, map[byte]bool) {
 	found := map[byte]bool{}
 	var rest []string
@@ -324,6 +370,10 @@ func extractShort(args []string, chars string) ([]string, map[byte]bool) {
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
 			kept := []byte{'-'}
 			for j := 1; j < len(a); j++ {
+				if a[j] == 'B' || a[j] == 'x' {
+					kept = append(kept, a[j:]...)
+					break
+				}
 				if strings.IndexByte(chars, a[j]) >= 0 {
 					found[a[j]] = true
 				} else {
@@ -526,7 +576,7 @@ var outputHeaders = map[string]string{
 	"iused":  "IUsed",
 	"iavail": "IFree",
 	"ipcent": "IUse%",
-	"size":   "1K-blocks",
+	"size":   "512-blocks",
 	"used":   "Used",
 	"avail":  "Avail",
 	"pcent":  "Use%",

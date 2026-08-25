@@ -53,7 +53,7 @@ Listing and filesystem info:
 | dircolors | fresh | Bourne/C-shell LS_COLORS output in database order; GNU TERM/COLORTERM gating (pre-TERM entries global); unrecognized keywords and malformed lines are errors; built-in database emitted independent of $TERM (deterministic deviation) |
 | stat | aict | default + -c format subset |
 | du | aict, u-root | -s, -h, -a, -c, -d |
-| df | aict, u-root | -h, -k; platform probes behind build tags |
+| df | aict, u-root | POSIX Issue 7 XSI semantics unconditionally: 512-byte units by default, -k for 1024, -P portable format (512-/1024-blocks + Capacity), -t as the no-argument XSI totals option (= --total); GNU type filtering only via long --type (no -t collision); -h and other GNU reporting flags; platform probes behind build tags |
 | pwd | aict, guonaihong, u-root | -L, -P |
 | realpath | aict, guonaihong, u-root | -e, -m, -s, --relative-to; uutils-parity additions: -E/--canonicalize, -L/--logical, -P/--physical, -q/--quiet, -z/--zero, --relative-base |
 | readlink | u-root | -f, -e, -m, -n; uutils-parity additions: -q/--quiet, -s/--silent, -v/--verbose, -z/--zero |
