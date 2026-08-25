@@ -137,15 +137,14 @@ func TestResolveLoginUID(t *testing.T) {
 // to os/user.Current() when no login uid was recorded, which reports whoever
 // the process runs as (wrong after su/sudo) and defeated the required failure.
 func TestLoginNameHasNoEffectiveUserFallback(t *testing.T) {
-	// loginName must be exactly the getlogin()-equivalent — the audit login
-	// uid on Linux, empty elsewhere — with no substitute drawn from the
-	// effective account.
-	if got, want := loginName(), loginNameFromLoginUID(); got != want {
+	// loginName must be exactly the getlogin()-equivalent with no substitute
+	// drawn from the effective account.
+	if got, want := loginName(), platformLoginName(); got != want {
 		t.Fatalf("loginName()=%q, want %q (no effective-user fallback)", got, want)
 	}
 	// Where the getlogin()-equivalent yields nothing, logname must fail with an
 	// empty stdout rather than leak the effective user's name.
-	if loginNameFromLoginUID() != "" {
+	if platformLoginName() != "" {
 		return
 	}
 	var out, err bytes.Buffer

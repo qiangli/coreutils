@@ -62,12 +62,12 @@ func runWith(rc *tool.RunContext, args []string, resolve func() string) int {
 // pointer). There is deliberately NO fallback to the effective account:
 // os/user.Current() reports whoever the process is running as, which after
 // su/sudo is exactly the wrong answer, and reporting it would defeat the
-// failure contract. On Linux the kernel audit login uid is a faithful,
-// cgo-free getlogin() equivalent; off Linux, libc getlogin() cannot be called
-// without cgo, so no login name is available and logname reports the required
-// failure. That is a platform limitation, not a silent approximation.
+// failure contract. Linux uses the kernel audit login uid as a cgo-free
+// getlogin() equivalent. Darwin, DragonFly BSD, and FreeBSD use their native
+// getlogin system call without cgo. Other platforms fail explicitly instead
+// of substituting the effective account.
 func loginName() string {
-	return loginNameFromLoginUID()
+	return platformLoginName()
 }
 
 // loginNameFromLoginUID resolves the session login user on Linux from
