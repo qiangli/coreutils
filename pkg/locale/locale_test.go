@@ -261,6 +261,34 @@ func TestResolveConsistency(t *testing.T) {
 	}
 }
 
+func TestMessageMatcherUsesAnchoredYesExpression(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		env      []string
+		response string
+		want     bool
+	}{
+		{"C yes", nil, "yes\n", true},
+		{"C uppercase", []string{"LC_MESSAGES=C"}, "Y\n", true},
+		{"leading space stays negative", nil, " yes\n", false},
+		{"leading tab stays negative", nil, "\tyes\n", false},
+		{"empty line", nil, "\n", false},
+		{"German ja", []string{"LC_MESSAGES=de_DE.UTF-8"}, "ja\n", true},
+		{"German leading space", []string{"LC_MESSAGES=de_DE.UTF-8"}, " ja\n", false},
+		{"LC_ALL precedence", []string{"LC_MESSAGES=de_DE", "LC_ALL=C"}, "ja\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			matcher := MessagesMatcher(tc.env)
+			if got := matcher.MatchAffirmative(tc.response); got != tc.want {
+				t.Fatalf("MatchAffirmative(%q) = %v, want %v", tc.response, got, tc.want)
+			}
+			if got := MatchAffirmative(tc.env, tc.response); got != tc.want {
+				t.Fatalf("shared MatchAffirmative(%q) = %v, want %v", tc.response, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGetEnvPrefixSafety(t *testing.T) {
 	// Verify that getEnv's KEY= prefix matching doesn't match substrings.
 	// E.g. looking up "LANG" must not match "LANGUAGE=en".

@@ -15,3 +15,10 @@ func preserveOwner(dst string, fi os.FileInfo) error {
 	}
 	return nil
 }
+
+func preserveLinkOwner(dst string, fi os.FileInfo) error {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return os.Lchown(dst, int(st.Uid), int(st.Gid))
+	}
+	return nil
+}

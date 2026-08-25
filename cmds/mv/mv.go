@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/qiangli/coreutils/pkg/locale"
@@ -49,14 +50,78 @@ type mover struct {
 	failed      bool
 	in          *bufio.Reader
 	rawIn       io.Reader
+	deps        moverDeps
+}
+
+type overwriteMode byte
+
+const (
+	overwriteDefault overwriteMode = iota
+	overwriteForce
+	overwriteNoClobber
+	overwriteInteractive
+	forceOption       = "-f"
+	interactiveOption = "-i"
+)
+
+type overwriteValue struct {
+	mode *overwriteMode
+	set  overwriteMode
+}
+
+func (v overwriteValue) String() string { return "false" }
+func (v overwriteValue) Type() string   { return "bool" }
+func (v overwriteValue) Set(value string) error {
+	if value != "true" {
+		return fmt.Errorf("option does not take a value")
+	}
+	*v.mode = v.set
+	return nil
+}
+
+type moverDeps struct {
+	rename            func(string, string) error
+	remove            func(string) error
+	removeAll         func(string) error
+	chmod             func(string, os.FileMode) error
+	chtimes           func(string, time.Time, time.Time) error
+	preserveOwner     func(string, os.FileInfo) error
+	preserveLinkOwner func(string, os.FileInfo) error
+	preserveLinkTimes func(string, os.FileInfo) error
+	writable          func(string) bool
+	terminal          func(io.Reader) bool
+}
+
+func defaultMoverDeps() moverDeps {
+	return moverDeps{
+		rename: os.Rename, remove: os.Remove, removeAll: os.RemoveAll,
+		chmod: os.Chmod, chtimes: os.Chtimes, preserveOwner: preserveOwner,
+		preserveLinkOwner: preserveLinkOwner, preserveLinkTimes: preserveLinkTimes,
+		writable: isWritable,
+		terminal: func(r io.Reader) bool {
+			f, ok := r.(interface{ Fd() uintptr })
+			return ok && term.IsTerminal(int(f.Fd()))
+		},
+	}
 }
 
 func run(rc *tool.RunContext, args []string) int {
+	return runWithDeps(rc, args, defaultMoverDeps())
+}
+
+func runWithDeps(rc *tool.RunContext, args []string, deps moverDeps) int {
 	args = normalizeOptionalArgs(args)
 	fs := tool.NewFlags(cmd.Name)
-	force := fs.BoolP("force", "f", false, "do not prompt before overwriting")
-	noClobber := fs.BoolP("no-clobber", "n", false, "do not overwrite an existing file; silently skip it")
-	interactive := fs.BoolP("interactive", "i", false, "prompt before overwrite")
+	overwrite := overwriteDefault
+	forceValue := overwriteValue{mode: &overwrite, set: overwriteForce}
+	noClobberValue := overwriteValue{mode: &overwrite, set: overwriteNoClobber}
+	interactiveValue := overwriteValue{mode: &overwrite, set: overwriteInteractive}
+	fs.VarP(forceValue, "force", forceOption[1:], "do not prompt before overwriting")
+	fs.Lookup("force").NoOptDefVal = "true"
+	fs.VarP(noClobberValue, "no-clobber", "n", "do not overwrite an existing file; silently skip it")
+	fs.Lookup("no-clobber").NoOptDefVal = "true"
+	fs.VarP(interactiveValue, "interactive", interactiveOption[1:], "prompt before overwrite")
+	fs.Lookup("interactive").NoOptDefVal = "true"
 	update := fs.BoolP("update", "u", false, "move only when SOURCE is newer than the destination or destination is missing")
 	targetDir := fs.StringP("target-directory", "t", "", "move all SOURCE arguments into DIRECTORY")
 	noTargetDir := fs.BoolP("no-target-directory", "T", false, "treat DEST as a normal file")
@@ -92,26 +157,14 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 
 	m := &mover{
-		rc: rc, noClobber: *noClobber, update: *update, interactive: *interactive, force: *force,
+		rc: rc, noClobber: overwrite == overwriteNoClobber, update: *update,
+		interactive: overwrite == overwriteInteractive, force: overwrite == overwriteForce,
 		backup: backupMode != "" && backupMode != "nil", backupMode: backupMode, suffix: *suffix,
 		debug: *debug, verbose: *verbose,
-		in: inputReader(rc.In),
+		in:    inputReader(rc.In),
 		rawIn: rc.In,
+		deps:  deps,
 	}
-	// GNU rule: of -f and -n, the one given last takes effect.
-	switch lastOverride(args) {
-	case 'f':
-		m.noClobber = false
-		m.interactive = false
-		m.force = true
-	case 'n':
-		m.interactive = false
-		m.force = false
-	case 'i':
-		m.noClobber = false
-		m.force = false
-	}
-
 	dest := ""
 	srcs := operands
 	if *targetDir != "" {
@@ -203,8 +256,8 @@ func (m *mover) move(src, dst string) {
 				if !m.confirm(dst, false) {
 					return
 				}
-			} else if isTerminal(m.rawIn) {
-				if !writableForPrompt(dp) {
+			} else if m.deps.terminal(m.rawIn) {
+				if !m.deps.writable(dp) {
 					if !m.confirm(dst, true) {
 						return
 					}
@@ -215,7 +268,7 @@ func (m *mover) move(src, dst string) {
 			return
 		}
 	}
-	err := osRename(sp, dp)
+	err := m.deps.rename(sp, dp)
 	if err == nil {
 		m.debugf("renamed '%s' -> '%s'", src, dst)
 		m.verbosef("renamed '%s' -> '%s'", src, dst)
@@ -241,27 +294,7 @@ func (m *mover) confirm(dst string, unwritable bool) bool {
 	if err != nil && line == "" {
 		return false
 	}
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return false
-	}
 	return locale.MatchAffirmative(m.rc.Env, line)
-}
-
-// Indirection keeps permission-sensitive prompt tests hermetic when the test
-// process has privileges (notably root) that make access(2) succeed despite
-// write bits being clear.
-var writableForPrompt = isWritable
-
-var osRename = os.Rename
-var osRemoveAll = os.RemoveAll
-var osRemove = os.Remove
-
-var isTerminal = func(r io.Reader) bool {
-	if f, ok := r.(interface{ Fd() uintptr }); ok {
-		return term.IsTerminal(int(f.Fd()))
-	}
-	return false
 }
 
 func inputReader(r io.Reader) *bufio.Reader {
@@ -296,12 +329,12 @@ func (m *mover) backupDest(dst string) bool {
 		}
 		bp = fmt.Sprintf("%s.~%d~", dp, n)
 	} else {
-		if err := osRemove(bp); err != nil && !os.IsNotExist(err) {
+		if err := m.deps.remove(bp); err != nil && !os.IsNotExist(err) {
 			m.errf("cannot backup '%s': %s", dst, reason(err))
 			return false
 		}
 	}
-	if err := osRename(dp, bp); err != nil {
+	if err := m.deps.rename(dp, bp); err != nil {
 		m.errf("cannot backup '%s': %s", dst, reason(err))
 		return false
 	}
@@ -350,7 +383,7 @@ func (m *mover) copyMove(src, dst string) bool {
 	if !m.copyNode(src, dst) {
 		return false
 	}
-	if err := osRemoveAll(m.rc.Path(src)); err != nil {
+	if err := m.deps.removeAll(m.rc.Path(src)); err != nil {
 		m.errf("cannot remove '%s': %s", src, reason(err))
 		return false
 	}
@@ -386,8 +419,7 @@ func (m *mover) copyNode(src, dst string) bool {
 				ok = false
 			}
 		}
-		m.preserveAttrs(dp, fi)
-		return ok
+		return m.preserveAttrs(dst, dp, fi) && ok
 	case fi.Mode()&os.ModeSymlink != 0:
 		target, err := os.Readlink(sp)
 		if err != nil {
@@ -395,7 +427,7 @@ func (m *mover) copyNode(src, dst string) bool {
 			return false
 		}
 		if _, err := os.Lstat(dp); err == nil {
-			if err := osRemove(dp); err != nil {
+			if err := m.deps.remove(dp); err != nil {
 				m.errf("cannot remove '%s': %s", dst, reason(err))
 				return false
 			}
@@ -404,10 +436,10 @@ func (m *mover) copyNode(src, dst string) bool {
 			m.errf("cannot create symbolic link '%s': %s", dst, reason(err))
 			return false
 		}
-		return true
+		return m.preserveSymlinkAttrs(dst, dp, fi)
 	case fi.Mode()&(os.ModeNamedPipe|os.ModeSocket|os.ModeDevice|os.ModeCharDevice) != 0:
 		if _, err := os.Lstat(dp); err == nil {
-			if err := osRemove(dp); err != nil {
+			if err := m.deps.remove(dp); err != nil {
 				m.errf("cannot remove '%s': %s", dst, reason(err))
 				return false
 			}
@@ -417,8 +449,7 @@ func (m *mover) copyNode(src, dst string) bool {
 			m.errf("cannot create special file '%s': %s", dst, reason(err))
 			return false
 		}
-		m.preserveAttrs(dp, fi)
-		return true
+		return m.preserveAttrs(dst, dp, fi)
 	default:
 		in, err := os.Open(sp)
 		if err != nil {
@@ -426,7 +457,22 @@ func (m *mover) copyNode(src, dst string) bool {
 			return false
 		}
 		defer in.Close()
-		out, err := os.OpenFile(dp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fi.Mode().Perm())
+		if di, err := os.Lstat(dp); err == nil {
+			if di.IsDir() {
+				m.errf("cannot overwrite directory '%s' with non-directory '%s'", dst, src)
+				return false
+			}
+			if err := m.deps.remove(dp); err != nil {
+				m.errf("cannot remove '%s': %s", dst, reason(err))
+				return false
+			}
+		} else if !os.IsNotExist(err) {
+			m.errf("cannot access '%s': %s", dst, reason(err))
+			return false
+		}
+		// O_EXCL prevents a destination symlink introduced after Lstat/remove
+		// from being followed and truncating its referent.
+		out, err := os.OpenFile(dp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fi.Mode().Perm())
 		if err != nil {
 			m.errf("cannot create regular file '%s': %s", dst, reason(err))
 			return false
@@ -440,19 +486,41 @@ func (m *mover) copyNode(src, dst string) bool {
 			m.errf("error writing '%s': %s", dst, reason(werr))
 			return false
 		}
-		m.preserveAttrs(dp, fi)
-		return true
+		return m.preserveAttrs(dst, dp, fi)
 	}
 }
 
-func (m *mover) preserveAttrs(dp string, fi os.FileInfo) {
-	err := preserveOwner(dp, fi)
+func (m *mover) preserveAttrs(dst, dp string, fi os.FileInfo) bool {
+	ok := true
+	err := m.deps.preserveOwner(dp, fi)
 	mode := fi.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
 	if err != nil {
 		mode &^= (os.ModeSetuid | os.ModeSetgid)
+		m.errf("preserving ownership for '%s': %s", dst, reason(err))
+		ok = false
 	}
-	_ = os.Chmod(dp, mode)
-	_ = os.Chtimes(dp, atime(fi), fi.ModTime())
+	if err := m.deps.chmod(dp, mode); err != nil {
+		m.errf("preserving permissions for '%s': %s", dst, reason(err))
+		ok = false
+	}
+	if err := m.deps.chtimes(dp, atime(fi), fi.ModTime()); err != nil {
+		m.errf("preserving times for '%s': %s", dst, reason(err))
+		ok = false
+	}
+	return ok
+}
+
+func (m *mover) preserveSymlinkAttrs(dst, dp string, fi os.FileInfo) bool {
+	ok := true
+	if err := m.deps.preserveLinkOwner(dp, fi); err != nil {
+		m.errf("preserving symbolic link ownership for '%s': %s", dst, reason(err))
+		ok = false
+	}
+	if err := m.deps.preserveLinkTimes(dp, fi); err != nil {
+		m.errf("preserving symbolic link times for '%s': %s", dst, reason(err))
+		ok = false
+	}
+	return ok
 }
 
 func (m *mover) errf(format string, a ...any) {
@@ -484,10 +552,6 @@ func normalizeOptionalArgs(args []string) []string {
 			out[i] = "--context="
 		case a == "--backup":
 			out[i] = "--backup=existing"
-		case a == "--interactive=always" || a == "--interactive=yes":
-			out[i] = "--interactive"
-		case a == "--interactive=never" || a == "--interactive=no" || a == "--interactive=none":
-			out[i] = "--force"
 		}
 	}
 	return out
@@ -505,52 +569,6 @@ func maybeStripTrailingSlashes(args []string, enabled bool) []string {
 		}
 	}
 	return out
-}
-
-// lastOverride reports which of -f / -n appeared last on the command
-// line (GNU: "If you specify more than one of -i, -f, -n, only the
-// final one takes effect"). Returns 'f', 'n', 'i', or 0.
-func lastOverride(args []string) byte {
-	var last byte
-	skipNext := false
-	for _, a := range args {
-		if skipNext {
-			skipNext = false
-			continue
-		}
-		if a == "--" {
-			break
-		}
-		if a == "--force" {
-			last = 'f'
-		} else if a == "--no-clobber" {
-			last = 'n'
-		} else if a == "--interactive" || strings.HasPrefix(a, "--interactive=") {
-			last = 'i'
-		} else if strings.HasPrefix(a, "--target-directory=") || strings.HasPrefix(a, "--context=") || strings.HasPrefix(a, "--suffix=") || strings.HasPrefix(a, "--backup=") {
-			continue
-		} else if a == "--target-directory" || a == "--context" || a == "--suffix" {
-			skipNext = true
-		} else if len(a) > 1 && a[0] == '-' && a[1] != '-' {
-			for i, ch := range a[1:] {
-				if ch == 'f' {
-					last = 'f'
-				} else if ch == 'n' {
-					last = 'n'
-				} else if ch == 'i' {
-					last = 'i'
-				} else if ch == '=' {
-					break
-				} else if ch == 't' || ch == 'S' || ch == 'Z' {
-					if i == len(a[1:])-1 {
-						skipNext = true
-					}
-					break
-				}
-			}
-		}
-	}
-	return last
 }
 
 // reason unwraps err to its root cause and capitalizes the first

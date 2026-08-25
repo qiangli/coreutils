@@ -126,7 +126,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `mknod` | `cmds/mknod` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `mktemp` | `cmds/mktemp` | — | GNU Coreutils | yes | no | 1 | 9 |
 | `more` | `cmds/more` | — | POSIX/Unix utility | no | yes | 3 | 31 |
-| `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 1 | 23 |
+| `mv` | `cmds/mv` | — | GNU Coreutils | yes | yes | 2 | 32 |
 | `ncal` | `cmds/cal` | cal | Bashy/other extension | no | no | 1 | 6 |
 | `newgrp` | `cmds/newgrp` | — | POSIX/Unix utility | no | yes | 6 | 50 |
 | `nice` | `cmds/nice` | — | GNU Coreutils | yes | yes | 5 | 16 |
@@ -153,7 +153,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `readlink` | `cmds/readlink` | — | GNU Coreutils | yes | no | 1 | 7 |
 | `realpath` | `cmds/realpath` | — | GNU Coreutils | yes | no | 1 | 10 |
 | `renice` | `cmds/renice` | — | POSIX/Unix utility | no | yes | 3 | 7 |
-| `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 24 |
+| `rm` | `cmds/rm` | — | GNU Coreutils | yes | yes | 1 | 25 |
 | `rmdir` | `cmds/rmdir` | — | GNU Coreutils | yes | yes | 1 | 20 |
 | `sed` | `cmds/sed` | — | POSIX/Unix utility | no | yes | 4 | 63 |
 | `seq` | `cmds/seq` | — | GNU Coreutils | yes | no | 1 | 3 |

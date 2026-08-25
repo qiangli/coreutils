@@ -426,6 +426,18 @@ func TestRmLastPromptOptionWins(t *testing.T) {
 	}
 }
 
+func TestRmInteractiveLeadingWhitespaceIsNotAffirmative(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "victim"), "keep")
+	_, errb, code := runToolIn(t, dir, " yes\n", "-i", "victim")
+	if code != 0 || !strings.Contains(errb, "remove 'victim'?") {
+		t.Fatalf("leading-space reply = (_, %q, %d)", errb, code)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "victim")); err != nil {
+		t.Fatalf("leading-space reply removed victim: %v", err)
+	}
+}
+
 func TestRmImplicitPromptForUnwritable(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "unwritable")

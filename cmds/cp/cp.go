@@ -573,7 +573,6 @@ func (c *copier) confirm(dst string) bool {
 	if err != nil && line == "" {
 		return false
 	}
-	line = strings.TrimSpace(line)
 	return locale.MatchAffirmative(c.rc.Env, line)
 }
 

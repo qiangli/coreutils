@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !windows
+//go:build !aix && !linux && !darwin && !freebsd && !openbsd && !netbsd && !dragonfly && !solaris && !windows
 
 package mvcmd
 

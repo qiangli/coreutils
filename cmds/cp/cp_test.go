@@ -873,3 +873,13 @@ func TestCpInteractiveAccept(t *testing.T) {
 		t.Errorf("destination not updated after accepted prompt: got %q, want %q", got, "a content")
 	}
 }
+
+func TestCpInteractiveLeadingWhitespaceIsNotAffirmative(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	_, errb, code := runToolWithInput(t, dir, " yes\n", "-i", "src", "dst")
+	if code != 1 || !strings.Contains(errb, "overwrite 'dst'?") || read(t, filepath.Join(dir, "dst")) != "old" {
+		t.Fatalf("leading-space reply = (_, %q, %d), destination was not preserved", errb, code)
+	}
+}

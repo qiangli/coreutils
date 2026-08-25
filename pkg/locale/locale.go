@@ -137,15 +137,29 @@ func getEnv(env []string, key string) (string, bool) {
 	return "", false
 }
 
-// MatchAffirmative reports whether the response matches the LC_MESSAGES
-// yesexpr for the given environment.
+// MessageMatcher is an invocation-owned projection of the LC_MESSAGES
+// affirmative expression. Its match is anchored at the first response byte,
+// as POSIX yesexpr is; callers must not trim leading white space first.
+type MessageMatcher struct{ affirmativeInitials string }
+
+// MessagesMatcher resolves the affirmative matcher for an invocation. The
+// deterministic C/POSIX expression is the fallback for locales whose catalog
+// is not embedded. German locales additionally accept their customary j/J.
+func MessagesMatcher(env []string) MessageMatcher {
+	name := strings.ToLower(Resolve(env, Messages))
+	if strings.HasPrefix(name, "de_de") {
+		return MessageMatcher{affirmativeInitials: "jJyY"}
+	}
+	return MessageMatcher{affirmativeInitials: "yY"}
+}
+
+// MatchAffirmative reports whether response matches the invocation's anchored
+// LC_MESSAGES affirmative expression.
 func MatchAffirmative(env []string, response string) bool {
-	if response == "" {
-		return false
-	}
-	messages := strings.ToLower(Resolve(env, Messages))
-	if strings.HasPrefix(messages, "de_de") {
-		return response[0] == 'j' || response[0] == 'J' || response[0] == 'y' || response[0] == 'Y'
-	}
-	return response[0] == 'y' || response[0] == 'Y'
+	return MessagesMatcher(env).MatchAffirmative(response)
+}
+
+// MatchAffirmative applies the matcher's anchored affirmative expression.
+func (m MessageMatcher) MatchAffirmative(response string) bool {
+	return response != "" && strings.ContainsRune(m.affirmativeInitials, rune(response[0]))
 }

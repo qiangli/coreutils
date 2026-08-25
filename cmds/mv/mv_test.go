@@ -1,10 +1,10 @@
 package mvcmd
 
 import (
-	"io"
-
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +23,10 @@ func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, c
 }
 
 func runToolInput(t *testing.T, dir, input string, args ...string) (stdout, stderr string, code int) {
+	return runToolInputDeps(t, dir, input, defaultMoverDeps(), args...)
+}
+
+func runToolInputDeps(t *testing.T, dir, input string, deps moverDeps, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
@@ -30,7 +34,7 @@ func runToolInput(t *testing.T, dir, input string, args ...string) (stdout, stde
 		Dir:   dir,
 		Stdio: tool.Stdio{In: strings.NewReader(input), Out: &out, Err: &errb},
 	}
-	code = cmd.Run(rc, args)
+	code = runWithDeps(rc, args, deps)
 	return out.String(), errb.String(), code
 }
 
@@ -346,14 +350,13 @@ func TestMvCopyFallback(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	
-	oldOsRename := osRename
-	defer func() { osRename = oldOsRename }()
-	osRename = func(oldpath, newpath string) error {
+
+	deps := defaultMoverDeps()
+	deps.rename = func(oldpath, newpath string) error {
 		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
 	}
 
-	_, errb, code := runTool(t, dir, "src", "dst")
+	_, errb, code := runToolInputDeps(t, dir, "", deps, "src", "dst")
 	if code != 0 {
 		t.Fatalf("EXDEV fallback failed: code=%d err=%q", code, errb)
 	}
@@ -510,24 +513,21 @@ func TestMvCopyFallbackFailures(t *testing.T) {
 	write(t, filepath.Join(dir, "src_fail_copy"), "one")
 	write(t, filepath.Join(dir, "src_fail_remove"), "two")
 
-	oldOsRename := osRename
-	defer func() { osRename = oldOsRename }()
-	osRename = func(oldpath, newpath string) error {
+	deps := defaultMoverDeps()
+	deps.rename = func(oldpath, newpath string) error {
 		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
 	}
 
-	oldOsRemoveAll := osRemoveAll
-	defer func() { osRemoveAll = oldOsRemoveAll }()
-	osRemoveAll = func(path string) error {
+	deps.removeAll = func(path string) error {
 		if filepath.Base(path) == "src_fail_remove" {
 			return os.ErrPermission
 		}
-		return oldOsRemoveAll(path)
+		return os.RemoveAll(path)
 	}
 
 	// 1. Fail during copy (source is unreadable)
 	os.Chmod(filepath.Join(dir, "src_fail_copy"), 0o000)
-	_, _, code := runTool(t, dir, "src_fail_copy", "dst1")
+	_, _, code := runToolInputDeps(t, dir, "", deps, "src_fail_copy", "dst1")
 	if code == 0 {
 		t.Errorf("expected failure when copy fails")
 	}
@@ -537,7 +537,7 @@ func TestMvCopyFallbackFailures(t *testing.T) {
 	os.Chmod(filepath.Join(dir, "src_fail_copy"), 0o644) // restore for cleanup
 
 	// 2. Fail during remove
-	_, _, code2 := runTool(t, dir, "src_fail_remove", "dst2")
+	_, _, code2 := runToolInputDeps(t, dir, "", deps, "src_fail_remove", "dst2")
 	if code2 == 0 {
 		t.Errorf("expected failure when remove fails")
 	}
@@ -553,7 +553,7 @@ func TestMvInteractiveRefusal(t *testing.T) {
 
 	// Provide an explicit negative response
 	out, errb, code := runToolInput(t, dir, "n\n", "-i", "src", "dst")
-	
+
 	if code != 0 {
 		t.Errorf("expected 0 exit code on refusal, got %d. stderr=%q", code, errb)
 	}
@@ -568,22 +568,163 @@ func TestMvInteractiveRefusal(t *testing.T) {
 	}
 }
 
+func TestMvInteractiveLeadingWhitespaceIsNotAffirmative(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	_, errb, code := runToolInput(t, dir, " yes\n", "-i", "src", "dst")
+	if code != 0 || !strings.Contains(errb, "overwrite 'dst'?") || read(t, filepath.Join(dir, "dst")) != "old" {
+		t.Fatalf("leading-space reply = (_, %q, %d), destination was not preserved", errb, code)
+	}
+}
+
+func TestMvLastOverwriteOptionWins(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		options     []string
+		wantMoved   bool
+	}{
+		{"short force last", "", []string{"-if"}, true},
+		{"short interactive last", "n\n", []string{"-fi"}, false},
+		{"long force last", "", []string{"--interactive", "--force"}, true},
+		{"long interactive last", "n\n", []string{"--force", "--interactive"}, false},
+		{"long no-clobber last", "", []string{"--force", "--no-clobber"}, false},
+		{"abbreviated force last", "", []string{"--inter", "--for"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "src"), "new")
+			write(t, filepath.Join(dir, "dst"), "old")
+			args := append(append([]string(nil), tc.options...), "src", "dst")
+			_, errb, code := runToolInput(t, dir, tc.input, args...)
+			if code != 0 {
+				t.Fatalf("options %v = (_, %q, %d)", tc.options, errb, code)
+			}
+			got := read(t, filepath.Join(dir, "dst")) == "new"
+			if got != tc.wantMoved {
+				t.Fatalf("moved=%v, want %v; stderr=%q", got, tc.wantMoved, errb)
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "dst"), "old")
+	_, errb, code := runTool(t, dir, "--interactive=always", "src", "dst")
+	if code != 2 || !strings.Contains(errb, "option does not take a value") {
+		t.Fatalf("unsupported mv --interactive=always = (_, %q, %d), want usage error", errb, code)
+	}
+}
+
 func TestMvPromptUnwritable(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "src"), "one")
 	write(t, filepath.Join(dir, "dst"), "two")
 	os.Chmod(filepath.Join(dir, "dst"), 0o444)
 
-	oldIsTerminal := isTerminal
-	defer func() { isTerminal = oldIsTerminal }()
-	isTerminal = func(r io.Reader) bool { return true }
+	deps := defaultMoverDeps()
+	deps.terminal = func(r io.Reader) bool { return true }
+	deps.writable = func(string) bool { return false }
 
-	_, errb, code := runToolInput(t, dir, "y\n", "src", "dst")
-	
+	_, errb, code := runToolInputDeps(t, dir, "y\n", deps, "src", "dst")
+
 	if code != 0 {
 		t.Errorf("expected 0, got %d. err=%q", code, errb)
 	}
 	if !strings.Contains(errb, "override mode?") && !strings.Contains(errb, "replace") {
 		t.Errorf("expected prompt for unwritable destination, got %q", errb)
 	}
+}
+
+func TestMvEXDEVMetadataFailuresReportAndRetainSource(t *testing.T) {
+	tests := []struct {
+		name, diagnostic string
+		fail             func(*moverDeps)
+	}{
+		{"ownership", "preserving ownership", func(d *moverDeps) {
+			d.preserveOwner = func(string, os.FileInfo) error { return errors.New("owner failed") }
+		}},
+		{"permissions", "preserving permissions", func(d *moverDeps) { d.chmod = func(string, os.FileMode) error { return errors.New("mode failed") } }},
+		{"times", "preserving times", func(d *moverDeps) {
+			d.chtimes = func(string, time.Time, time.Time) error { return errors.New("time failed") }
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "src"), "payload")
+			deps := exdevDeps()
+			tc.fail(&deps)
+			_, errb, code := runToolInputDeps(t, dir, "", deps, "src", "dst")
+			if code != 1 || !strings.Contains(errb, tc.diagnostic) || !strings.Contains(errb, "failed") {
+				t.Fatalf("metadata failure = (_, %q, %d), want %q diagnostic", errb, code, tc.diagnostic)
+			}
+			if got := read(t, filepath.Join(dir, "src")); got != "payload" {
+				t.Fatalf("source content = %q, want retained", got)
+			}
+		})
+	}
+}
+
+func TestMvEXDEVSymlinkMetadataFailuresRetainSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on some Windows hosts")
+	}
+	for _, tc := range []struct {
+		name, diagnostic string
+		fail             func(*moverDeps)
+	}{
+		{"ownership", "preserving symbolic link ownership", func(d *moverDeps) {
+			d.preserveLinkOwner = func(string, os.FileInfo) error { return errors.New("link owner failed") }
+		}},
+		{"times", "preserving symbolic link times", func(d *moverDeps) {
+			d.preserveLinkTimes = func(string, os.FileInfo) error { return errors.New("link time failed") }
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Symlink("target", filepath.Join(dir, "src")); err != nil {
+				t.Fatal(err)
+			}
+			deps := exdevDeps()
+			tc.fail(&deps)
+			_, errb, code := runToolInputDeps(t, dir, "", deps, "src", "dst")
+			if code != 1 || !strings.Contains(errb, tc.diagnostic) {
+				t.Fatalf("symlink metadata failure = (_, %q, %d)", errb, code)
+			}
+			if target, err := os.Readlink(filepath.Join(dir, "src")); err != nil || target != "target" {
+				t.Fatalf("source symlink = (%q, %v), want retained", target, err)
+			}
+		})
+	}
+}
+
+func TestMvEXDEVRegularReplacementDoesNotFollowDestinationSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on some Windows hosts")
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "src"), "new")
+	write(t, filepath.Join(dir, "referent"), "must stay")
+	if err := os.Symlink("referent", filepath.Join(dir, "dst")); err != nil {
+		t.Fatal(err)
+	}
+	_, errb, code := runToolInputDeps(t, dir, "", exdevDeps(), "src", "dst")
+	if code != 0 || errb != "" {
+		t.Fatalf("EXDEV symlink replacement = (_, %q, %d)", errb, code)
+	}
+	if got := read(t, filepath.Join(dir, "referent")); got != "must stay" {
+		t.Fatalf("symlink referent was truncated: %q", got)
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "dst")); err != nil || fi.Mode()&os.ModeSymlink != 0 || read(t, filepath.Join(dir, "dst")) != "new" {
+		t.Fatalf("destination was not replaced by regular file: info=%v err=%v", fi, err)
+	}
+}
+
+func exdevDeps() moverDeps {
+	deps := defaultMoverDeps()
+	deps.rename = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+	return deps
 }

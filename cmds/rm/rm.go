@@ -240,7 +240,6 @@ func (r *remover) confirm(op string) bool {
 	if err != nil && line == "" {
 		return false
 	}
-	line = strings.TrimSpace(line)
 	return locale.MatchAffirmative(r.rc.Env, line)
 }
 

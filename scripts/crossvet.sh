@@ -71,10 +71,19 @@ if [ $# -eq 0 ]; then
     echo "crossvet: GOOS=aix FAIL (fail-closed-lock and dd ABI canaries)"
     failed="$failed aix"
   fi
+
+  # mv's writable check must fail closed on WebAssembly targets instead of
+  # disappearing behind unix/windows-only build tags.
+  if GOOS=js GOARCH=wasm go build ./cmds/mv/ && GOOS=wasip1 GOARCH=wasm go build ./cmds/mv/; then
+    echo "crossvet: GOOS=js/wasip1 PASS (mv writable canary)"
+  else
+    echo "crossvet: GOOS=js/wasip1 FAIL (mv writable canary)"
+    failed="$failed js/wasip1"
+  fi
 fi
 
 if [ -n "$failed" ]; then
   echo "crossvet: FAIL —$failed"
   exit 1
 fi
-echo "crossvet: PASS ($targets$([ $# -eq 0 ] && echo ' js/wasm wasip1/wasm aix'))"
+echo "crossvet: PASS ($targets$([ $# -eq 0 ] && echo ' js/wasm wasip1/wasm aix mv-js/wasip1'))"
