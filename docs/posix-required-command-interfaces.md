@@ -1631,7 +1631,7 @@ expand [-t tablist] [file...]
 
 **Standard input:** Read when no file operand is given or for each - operand.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. Exact-byte C/POSIX behavior plus carried UTF-8 and ISO-8859-1 locale decoding are evidenced;   arbitrary installed locale providers remain residual.`.
 
 **Standard output:** Each input line with every <tab> replaced by the number of <space> characters needed to reach the next tab stop; all other bytes are copied unchanged.
 
@@ -1651,7 +1651,7 @@ expand [-t tablist] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/expand`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/expand/expand_test.go#TestExpandDefaultTabsFromStdin;cmds/expand/expand_test.go#TestExpandCustomTabsAndFile;cmds/expand/expand_test.go#TestExpandTabListIncrement;cmds/expand/expand_test.go#TestExpandTabListExtend;cmds/expand/expand_test.go#TestExpandBlankSeparatedTabList;cmds/expand/expand_test.go#TestExpandTabsBeyondLastStopBecomeSingleSpaces;cmds/expand/expand_test.go#TestExpandBackspaceDecrementsColumn;cmds/expand/expand_test.go#TestExpandRejectsBadTabs;cmds/expand/expand_test.go#TestExpandOperandAccessFailureModes;cmds/expand/expand_test.go#TestExpandStandardOutputWriteError;cmds/expand/expand_test.go#TestExpandParseTabStops`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/expand/expand_test.go#TestExpandDefaultTabsFromStdin;cmds/expand/expand_test.go#TestExpandCustomTabsAndFile;cmds/expand/expand_test.go#TestExpandTabListIncrement;cmds/expand/expand_test.go#TestExpandTabListExtend;cmds/expand/expand_test.go#TestExpandBlankSeparatedTabList;cmds/expand/expand_test.go#TestExpandTabsBeyondLastStopBecomeSingleSpaces;cmds/expand/expand_test.go#TestExpandBackspaceDecrementsColumn;cmds/expand/expand_test.go#TestExpandRejectsBadTabs;cmds/expand/expand_test.go#TestExpandOperandAccessFailureModes;cmds/expand/expand_test.go#TestExpandStandardOutputWriteError;cmds/expand/expand_test.go#TestExpandParseTabStops;cmds/expand/issue737_posix_test.go#TestIssue737LocaleCharacterBoundariesPreserveOriginalBytes;cmds/expand/issue737_posix_test.go#TestIssue737MalformedAndCLocaleBytesAreNeverReencoded;cmds/expand/issue737_posix_test.go#TestIssue737InitialRegionAndBackspaceAcrossLocales;cmds/expand/issue737_posix_test.go#TestIssue737LCCTypePrecedence;cmds/expand/issue737_posix_test.go#TestIssue737UnsupportedLocaleFailsBeforeInput;cmds/expand/issue737_posix_test.go#TestIssue737UnsupportedLocaleFailsBeforeOpeningOperand;cmds/expand/issue737_posix_test.go#TestIssue737UsageErrorPrecedesLocaleValidation;cmds/expand/issue737_posix_test.go#TestIssue737ExitStatusMatrix;cmds/expand/issue737_posix_test.go#TestIssue737ReadAndShortWriteErrors;cmds/expand/issue737_posix_test.go#TestIssue737RunReportsReadAndShortWriteErrors`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:expand:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [expand](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/expand.html).
 
