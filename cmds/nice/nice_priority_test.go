@@ -46,9 +46,18 @@ func TestNiceReportsSignalExitCode(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"PATH=/usr/bin:/bin"}, Stdio: tool.Stdio{Out: &out, Err: &errb}}
-	code := runCommand(rc, "nice", []string{"sh", "-c", "kill -TERM $$"}, currentPriority())
+	code := run(rc, []string{"sh", "-c", "kill -TERM $$"})
 	const sigterm = 15
 	if want := 128 + sigterm; code != want {
 		t.Fatalf("code=%d want %d (stderr=%q)", code, want, errb.String())
+	}
+	if rc.ExitSignal != sigterm {
+		t.Fatalf("ExitSignal=%d want %d", rc.ExitSignal, sigterm)
+	}
+	if code := run(rc, []string{"true"}); code != 0 {
+		t.Fatalf("reused context normal command code=%d stderr=%q", code, errb.String())
+	}
+	if rc.ExitSignal != 0 {
+		t.Fatalf("reused context retained ExitSignal=%d", rc.ExitSignal)
 	}
 }

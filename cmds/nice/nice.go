@@ -28,8 +28,10 @@ const (
 var longOptions = []string{"--adjustment", "--help", "--version"}
 
 func run(rc *tool.RunContext, args []string) int {
-	posixMode := rc.Getenv("POSIXLY_CORRECT") != ""
-	adjust, given, command, code := parseNice(rc, args, posixMode)
+	// Embedders may reuse a RunContext; never retain a prior child's signal.
+	rc.ExitSignal = 0
+	posixMode := envPresent(rc.Env, "POSIXLY_CORRECT")
+	adjust, given, command, code := parseNice(rc, args)
 	if code >= 0 {
 		return code
 	}
@@ -50,7 +52,7 @@ func run(rc *tool.RunContext, args []string) int {
 
 // parseNice returns the adjustment, whether one was given, the COMMAND operand
 // and its arguments, and an exit code (negative when parsing succeeded).
-func parseNice(rc *tool.RunContext, args []string, posixMode bool) (int, bool, []string, int) {
+func parseNice(rc *tool.RunContext, args []string) (int, bool, []string, int) {
 	adjust := defaultAdjustment
 	given := false
 	setAdjust := func(s string) bool {
@@ -72,10 +74,6 @@ func parseNice(rc *tool.RunContext, args []string, posixMode bool) (int, bool, [
 		// The obsolete "-NUM", "--NUM" and "-+NUM" forms; the adjustment is
 		// everything after the leading dash, so "--5" means -5.
 		case isObsoleteAdjustment(a):
-			if posixMode {
-				fmt.Fprintf(rc.Err, "nice: invalid option -- '%s'\n", strings.TrimPrefix(a, "-"))
-				return 0, false, nil, 125
-			}
 			if !setAdjust(a[1:]) {
 				return 0, false, nil, 125
 			}
@@ -96,10 +94,6 @@ func parseNice(rc *tool.RunContext, args []string, posixMode bool) (int, bool, [
 			}
 
 		case strings.HasPrefix(a, "--"):
-			if posixMode {
-				fmt.Fprintf(rc.Err, "nice: invalid option -- '%s'\n", strings.TrimPrefix(a, "-"))
-				return 0, false, nil, 125
-			}
 			name, value, hasValue := strings.Cut(a, "=")
 			long, err := matchLongOption(name)
 			if err != nil {
@@ -134,6 +128,16 @@ func parseNice(rc *tool.RunContext, args []string, posixMode bool) (int, bool, [
 		}
 	}
 	return adjust, given, nil, -1
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func operands(rest []string) []string {
@@ -209,7 +213,8 @@ func runCommand(rc *tool.RunContext, name string, argv []string, niceness int) i
 		if code := ee.ExitCode(); code >= 0 {
 			return code
 		}
-		if code, ok := signaledExitCode(ee); ok {
+		if sig, code, ok := signaledExitCode(ee); ok {
+			rc.ExitSignal = sig
 			return code
 		}
 		return 1

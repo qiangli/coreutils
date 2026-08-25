@@ -122,19 +122,10 @@ func run(rc *tool.RunContext, args []string) int {
 		return code
 	}
 
-	for _, unsupported := range []struct{ name, flag string }{
-		{"silent", "-d"}, {"logical", "-l"}, {"no-pause", "-f"},
-		{"ignore-case", "-i"}, {"tag", "-t"},
-	} {
-		if fs.Changed(unsupported.name) {
-			return tool.NotSupported(rc, cmd, unsupported.flag)
-		}
-	}
-
-	if *lines < 0 {
+	if *lines < 0 || fs.Changed("lines") && *lines == 0 {
 		return tool.UsageError(rc, cmd, "invalid line count: %d", *lines)
 	}
-	if *number < 0 {
+	if *number < 0 || fs.Changed("number") && *number == 0 {
 		return tool.UsageError(rc, cmd, "invalid line count: %d", *number)
 	}
 	if *fromLine <= 0 {
@@ -147,6 +138,14 @@ func run(rc *tool.RunContext, args []string) int {
 	terminal := isTerminal(rc.Out)
 	var ch *ttyChannel
 	if terminal {
+		for _, unsupported := range []struct{ name, flag string }{
+			{"silent", "-d"}, {"logical", "-l"}, {"no-pause", "-f"},
+			{"ignore-case", "-i"}, {"tag", "-t"},
+		} {
+			if fs.Changed(unsupported.name) {
+				return tool.NotSupported(rc, cmd, unsupported.flag)
+			}
+		}
 		var err error
 		ch, err = openTTY(rc)
 		if err != nil {

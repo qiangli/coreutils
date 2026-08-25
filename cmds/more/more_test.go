@@ -133,15 +133,6 @@ func TestMoreCommandOptionSupportsOnlySpaceAndLowercaseQ(t *testing.T) {
 	}
 }
 
-func TestMoreNonTerminalRejectsUnsupportedFlags(t *testing.T) {
-	for _, args := range [][]string{{"-d"}, {"-l"}, {"-f"}, {"-i"}, {"-t", "tag"}} {
-		_, errb, code := runMoreNonTerminal(t, t.TempDir(), "one\r\n\x00two\n", args...)
-		if code == 0 || !strings.Contains(errb, "not supported") {
-			t.Fatalf("more %v = code %d, err %q", args, code, errb)
-		}
-	}
-}
-
 func TestMorePatternStartsAtMatch(t *testing.T) {
 	out, errb, code := runMore(t, t.TempDir(), "alpha\nbeta\ngamma\n", "-P", "bet")
 	if want := "beta\ngamma\n"; out != want || errb != "" || code != 0 {
@@ -211,7 +202,8 @@ func TestMoreNonTerminalIgnoresFAndP(t *testing.T) {
 
 func TestMorePOSIXNonTerminalOnlySqueezeTakesEffect(t *testing.T) {
 	input := "one\n\n\ntwo\nthree\n"
-	out, errb, code := runMoreNonTerminal(t, t.TempDir(), input, "-s", "-n", "1", "-p", "q")
+	out, errb, code := runMoreNonTerminal(t, t.TempDir(), input,
+		"-s", "-n", "1", "-p", "q", "-d", "-l", "-f", "-i", "-t", "tag")
 	if want := "one\n\ntwo\nthree\n"; out != want || errb != "" || code != 0 {
 		t.Fatalf("more non-terminal POSIX option effects = (%q, %q, %d), want (%q, \"\", 0)", out, errb, code, want)
 	}
@@ -228,6 +220,15 @@ func TestMorePOSIXNonTerminalOnlySqueezeTakesEffect(t *testing.T) {
 	}
 	if terminalOut.String() != "" {
 		t.Fatalf("terminal -p q should quit before content, got %q", terminalOut.String())
+	}
+}
+
+func TestMorePOSIXLineCountMustBePositive(t *testing.T) {
+	for _, args := range [][]string{{"-n", "0"}, {"-n0"}, {"-0"}} {
+		_, errb, code := runMoreNonTerminal(t, t.TempDir(), "input\n", args...)
+		if code == 0 || !strings.Contains(errb, "invalid line count") {
+			t.Errorf("more %q = stderr %q code %d, want positive-number error", args, errb, code)
+		}
 	}
 }
 
