@@ -288,7 +288,11 @@ func parseFromSpec(spec string) (uid, gid int, err error) {
 // be looked up as a name, or a host with a group literally named "20"
 // would silently redirect the change.
 func statFile(rc *tool.RunContext, path string) (*refFileInfo, error) {
-	fi, err := os.Stat(rc.Path(path))
+	resolved := path
+	if path != "" {
+		resolved = rc.Path(path)
+	}
+	fi, err := os.Stat(resolved)
 	if err != nil {
 		return nil, err
 	}

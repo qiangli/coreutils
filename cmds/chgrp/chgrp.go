@@ -118,7 +118,7 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 	opts.fromUid, opts.fromGid = fromUid, fromGid
 
-	if *reference != "" {
+	if fs.Changed("reference") {
 		if len(operands) == 0 {
 			return tool.UsageError(rc, cmd, "missing operand")
 		}

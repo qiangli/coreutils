@@ -460,6 +460,21 @@ func TestChownReferenceIdsAreNotLookedUpAsNames(t *testing.T) {
 	}
 }
 
+func TestChownEmptyReferenceIsStillAnExplicitReference(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := recordChanges(t)
+	_, errb, code := runTool(t, dir, "--reference=", "f")
+	if code != 1 || !strings.Contains(errb, "chown: cannot stat reference file '':") {
+		t.Fatalf("chown --reference=: code=%d err=%q", code, errb)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("an invalid empty reference still changed %v", *calls)
+	}
+}
+
 // The corrupt-hierarchy diagnostic. Detection lives in the shared
 // walker, which tests it against a substituted identity predicate; this
 // pins the wording and the status the command reports for it.

@@ -407,6 +407,21 @@ func TestChgrpReferenceIdIsNotLookedUpAsAName(t *testing.T) {
 	}
 }
 
+func TestChgrpEmptyReferenceIsStillAnExplicitReference(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := recordChanges(t)
+	_, errb, code := runTool(t, dir, "--reference=", "f")
+	if code != 1 || !strings.Contains(errb, "chgrp: cannot stat reference file '':") {
+		t.Fatalf("chgrp --reference=: code=%d err=%q", code, errb)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("an invalid empty reference still changed %v", *calls)
+	}
+}
+
 // The corrupt-hierarchy diagnostic. Detection lives in the shared
 // walker, which tests it against a substituted identity predicate; this
 // pins the wording and the status the command reports for it.
