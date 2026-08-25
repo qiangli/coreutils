@@ -1102,7 +1102,7 @@ cut -f list [-d delim] [-s] [file...]
 
 **Standard input:** Read when no file operand is given or for each - operand.
 
-**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH`.
+**Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; xsi:NLSPATH. LC_CTYPE drives -c/-n character boundaries and the -d delimiter character count over exact-byte C/POSIX plus carried UTF-8 and ISO-8859-1 decoding;  arbitrary installed locale providers remain residual and fail before input.`.
 
 **Standard output:** For each input line, the selected bytes, characters, or fields in input order with overlapping and adjacent ranges merged; in field mode a line containing no delimiter is written unchanged unless -s.
 
@@ -1122,7 +1122,7 @@ cut -f list [-d delim] [-s] [file...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/cut`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/cut/cut_test.go#TestCutFields;cmds/cut/cut_test.go#TestCutBytesAndChars;cmds/cut/cut_test.go#TestCutBytesNoSplit;cmds/cut/cut_test.go#TestCutFiles;cmds/cut/cut_test.go#TestCutUsageErrors;cmds/cut/cut_test.go#TestCutUnknownFlag;cmds/cut/cut_test.go#TestCutStandardOutputWriteError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cut:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/cut/cut_test.go#TestCutFields;cmds/cut/cut_test.go#TestCutBytesAndChars;cmds/cut/cut_test.go#TestCutBytesNoSplit;cmds/cut/cut_test.go#TestCutFiles;cmds/cut/cut_test.go#TestCutUsageErrors;cmds/cut/cut_test.go#TestCutUnknownFlag;cmds/cut/cut_test.go#TestCutStandardOutputWriteError;cmds/cut/issue736_posix_test.go#TestIssue736CharacterSpansFollowLCCType;cmds/cut/issue736_posix_test.go#TestIssue736MalformedBytesAreNeverReencoded;cmds/cut/issue736_posix_test.go#TestIssue736ByteNoSplitFollowsLCCType;cmds/cut/issue736_posix_test.go#TestIssue736MultibyteDelimiter;cmds/cut/issue736_posix_test.go#TestIssue736DelimiterMustBeOneCharacterInLocale;cmds/cut/issue736_posix_test.go#TestIssue736LCCTypePrecedence;cmds/cut/issue736_posix_test.go#TestIssue736UnsupportedLocaleFailsBeforeInput;cmds/cut/issue736_posix_test.go#TestIssue736UnsupportedLocaleFailsBeforeOpeningOperand;cmds/cut/issue736_posix_test.go#TestIssue736TextFileBoundaries`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:cut:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cut](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cut.html).
 
