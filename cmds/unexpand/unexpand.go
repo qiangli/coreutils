@@ -7,8 +7,12 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
+	"github.com/mattn/go-runewidth"
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -19,6 +23,93 @@ var cmd = &tool.Tool{
 }
 
 func init() { cmd.Run = run; tool.Register(cmd) }
+
+type ctypeProvider interface {
+	IsBlank(byte) (bool, error)
+	Close() error
+}
+
+var openCTypeFn = func(name string) (ctypeProvider, error) { return ctype.Open(name) }
+
+type columnModel struct {
+	byteMode bool
+	utf8     bool
+	blank    [256]bool
+	width    *runewidth.Condition
+}
+
+func legacyColumnModel(noUTF8 bool) *columnModel {
+	m := &columnModel{byteMode: noUTF8}
+	m.blank[' '], m.blank['\t'] = true, true
+	return m
+}
+
+func loadColumnModel(env []string, posix, noUTF8 bool) (*columnModel, error) {
+	if !posix || noUTF8 {
+		return legacyColumnModel(noUTF8), nil
+	}
+	name := locale.Resolve(env, locale.CType)
+	if name == "C" || name == "POSIX" {
+		return legacyColumnModel(true), nil
+	}
+	if isUTF8Locale(name) {
+		m := legacyColumnModel(false)
+		m.utf8 = true
+		m.width = runewidth.NewCondition()
+		m.width.EastAsianWidth = isEastAsianLocale(name)
+		return m, nil
+	}
+	p, err := openCTypeFn(name)
+	if err != nil {
+		return nil, fmt.Errorf("LC_CTYPE %q: %w", name, err)
+	}
+	m := &columnModel{byteMode: true}
+	for i := 0; i < 256; i++ {
+		ok, classifyErr := p.IsBlank(byte(i))
+		if classifyErr != nil {
+			err = classifyErr
+			break
+		}
+		m.blank[i] = ok
+	}
+	if closeErr := p.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("LC_CTYPE %q: %w", name, err)
+	}
+	return m, nil
+}
+
+func isEastAsianLocale(name string) bool {
+	lower := strings.ToLower(name)
+	if strings.HasSuffix(lower, "@cjk_narrow") {
+		return false
+	}
+	if len(lower) < 2 || (lower[:2] != "ja" && lower[:2] != "ko" && lower[:2] != "zh") {
+		return false
+	}
+	return len(lower) == 2 || strings.ContainsRune("_.-@", rune(lower[2]))
+}
+
+func isUTF8Locale(name string) bool {
+	name, _, _ = strings.Cut(name, "@")
+	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+		name = name[dot+1:]
+	}
+	name = strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(name, "-", ""), "_", ""))
+	return name == "UTF8"
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 func run(rc *tool.RunContext, args []string) int {
 	fs := tool.NewFlags(cmd.Name)
@@ -41,6 +132,11 @@ func run(rc *tool.RunContext, args []string) int {
 	if *firstOnly {
 		convertAll = false
 	}
+	model, err := loadColumnModel(rc.Env, envPresent(rc.Env, "POSIXLY_CORRECT"), *noUTF8)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "unexpand: %v\n", err)
+		return 1
+	}
 
 	out := bufio.NewWriter(rc.Out)
 	status := 0
@@ -51,7 +147,7 @@ func run(rc *tool.RunContext, args []string) int {
 			status = 1
 			continue
 		}
-		if err := unexpandStream(r, out, tabs, convertAll, *noUTF8); err != nil {
+		if err := unexpandStreamModel(r, out, tabs, convertAll, model); err != nil {
 			fmt.Fprintf(rc.Err, "unexpand: %s: %v\n", name, err)
 			status = 1
 		}
@@ -67,13 +163,19 @@ func run(rc *tool.RunContext, args []string) int {
 }
 
 func unexpandStream(r io.Reader, w io.Writer, tabs *tabStops, all bool, noUTF8 bool) error {
+	return unexpandStreamModel(r, w, tabs, all, legacyColumnModel(noUTF8))
+}
+
+func unexpandStreamModel(r io.Reader, w io.Writer, tabs *tabStops, all bool, model *columnModel) error {
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadString('\n')
 		if len(line) > 0 {
-			out := unexpandLine(line, tabs, all)
-			if noUTF8 {
-				out = unexpandLineBytes(line, tabs, all)
+			var out string
+			if model.byteMode {
+				out = unexpandLineBytesModel(line, tabs, all, model)
+			} else {
+				out = unexpandLineModel(line, tabs, all, model)
 			}
 			if _, werr := io.WriteString(w, out); werr != nil {
 				return werr
@@ -88,86 +190,15 @@ func unexpandStream(r io.Reader, w io.Writer, tabs *tabStops, all bool, noUTF8 b
 	}
 }
 
+func unexpandLineBytesModel(line string, tabs *tabStops, all bool, model *columnModel) string {
+	return unexpandLineCore(line, tabs, all, func(i int) (string, int, bool, int) {
+		b := line[i]
+		return line[i : i+1], 1, model.blank[b], 1
+	})
+}
+
 func unexpandLineBytes(line string, tabs *tabStops, all bool) string {
-	var b strings.Builder
-	var pending []byte
-	col := 0
-	convert := true
-	oneBlankBeforeStop := false
-	prevBlank := true
-	flush := func() {
-		if len(pending) == 0 {
-			return
-		}
-		if len(pending) > 1 && oneBlankBeforeStop {
-			pending[0] = '\t'
-		}
-		for _, p := range pending {
-			b.WriteByte(p)
-		}
-		pending = pending[:0]
-		oneBlankBeforeStop = false
-	}
-	for i := 0; i < len(line); i++ {
-		ch := line[i]
-		if !convert {
-			b.WriteByte(ch)
-			continue
-		}
-		blank := ch == ' ' || ch == '\t'
-		writeCh := true
-		if blank {
-			next, last := tabs.next(col)
-			switch {
-			case last:
-				convert = false
-			case ch == '\t':
-				col = next
-				if len(pending) > 0 {
-					pending[0] = '\t'
-				}
-				if oneBlankBeforeStop {
-					pending = pending[:1]
-				} else {
-					pending = pending[:0]
-				}
-			default:
-				col++
-				if !(prevBlank && col >= next) {
-					if col == next {
-						oneBlankBeforeStop = true
-					}
-					pending = append(pending, ch)
-					prevBlank = true
-					continue
-				}
-				b.WriteByte('\t')
-				if oneBlankBeforeStop {
-					pending = pending[:1]
-					pending[0] = '\t'
-				} else {
-					pending = pending[:0]
-				}
-				writeCh = false
-			}
-		} else if ch == '\b' {
-			if col > 0 {
-				col--
-			}
-		} else {
-			col++
-		}
-		flush()
-		prevBlank = blank
-		if !all && !blank {
-			convert = false
-		}
-		if writeCh {
-			b.WriteByte(ch)
-		}
-	}
-	flush()
-	return b.String()
+	return unexpandLineBytesModel(line, tabs, all, legacyColumnModel(true))
 }
 
 // unexpandLine converts blanks in one line (with or without a trailing
@@ -182,6 +213,26 @@ func unexpandLineBytes(line string, tabs *tabStops, all bool) string {
 //   - In default (first-only) mode conversion stops at the first
 //     non-blank character.
 func unexpandLine(line string, tabs *tabStops, all bool) string {
+	return unexpandLineModel(line, tabs, all, legacyColumnModel(false))
+}
+
+func unexpandLineModel(line string, tabs *tabStops, all bool, model *columnModel) string {
+	return unexpandLineCore(line, tabs, all, func(i int) (string, int, bool, int) {
+		ch, size := utf8.DecodeRuneInString(line[i:])
+		blank := ch == ' ' || ch == '\t'
+		width := 1
+		if model.utf8 {
+			blank = ch == '\t' || unicode.Is(unicode.Zs, ch)
+			width = model.width.RuneWidth(ch)
+			if width < 0 {
+				width = 0
+			}
+		}
+		return line[i : i+size], size, blank, width
+	})
+}
+
+func unexpandLineCore(line string, tabs *tabStops, all bool, nextChar func(int) (string, int, bool, int)) string {
 	var b strings.Builder
 	var pending []string // buffered blanks not yet decided
 	col := 0
@@ -204,14 +255,13 @@ func unexpandLine(line string, tabs *tabStops, all bool) string {
 		oneBlankBeforeStop = false
 	}
 	for i := 0; i < len(line); {
-		ch, width := utf8.DecodeRuneInString(line[i:])
-		text := line[i : i+width]
-		i += width
+		text, size, blank, charWidth := nextChar(i)
+		i += size
+		ch, _ := utf8.DecodeRuneInString(text)
 		if !convert {
 			b.WriteString(text)
 			continue
 		}
-		blank := ch == ' ' || ch == '\t'
 		writeCh := true
 		if blank {
 			next, last := tabs.next(col)
@@ -233,8 +283,8 @@ func unexpandLine(line string, tabs *tabStops, all bool) string {
 				} else {
 					pending = pending[:0]
 				}
-			default: // space
-				col++
+			default:
+				col += charWidth
 				if !(prevBlank && col >= next) {
 					if col == next {
 						oneBlankBeforeStop = true
@@ -259,7 +309,7 @@ func unexpandLine(line string, tabs *tabStops, all bool) string {
 				col--
 			}
 		} else {
-			col++
+			col += charWidth
 		}
 		flush()
 		prevBlank = blank

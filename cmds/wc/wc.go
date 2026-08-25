@@ -16,7 +16,12 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/mattn/go-runewidth"
+	"github.com/qiangli/coreutils/pkg/ctype"
+	"github.com/qiangli/coreutils/pkg/locale"
 	"github.com/qiangli/coreutils/tool"
 )
 
@@ -44,6 +49,94 @@ func (s selection) enabled() int {
 
 type counts struct {
 	lines, words, chars, bytes, maxLine int64
+}
+
+type ctypeProvider interface {
+	IsSpace(byte) (bool, error)
+	Close() error
+}
+
+var openCTypeFn = func(name string) (ctypeProvider, error) { return ctype.Open(name) }
+
+type countModel struct {
+	utf8  bool
+	space [256]bool
+	width *runewidth.Condition
+}
+
+func cCountModel() *countModel {
+	m := new(countModel)
+	for _, b := range []byte{' ', '\t', '\n', '\v', '\f', '\r'} {
+		m.space[b] = true
+	}
+	return m
+}
+
+func loadCountModel(env []string, posix bool) (*countModel, error) {
+	if !posix {
+		return cCountModel(), nil
+	}
+	name := locale.Resolve(env, locale.CType)
+	if name == "C" || name == "POSIX" {
+		return cCountModel(), nil
+	}
+	if isUTF8Locale(name) {
+		m := cCountModel()
+		m.utf8 = true
+		m.width = runewidth.NewCondition()
+		m.width.EastAsianWidth = isEastAsianLocale(name)
+		return m, nil
+	}
+	p, err := openCTypeFn(name)
+	if err != nil {
+		return nil, fmt.Errorf("LC_CTYPE %q: %w", name, err)
+	}
+	m := new(countModel)
+	for i := 0; i < 256; i++ {
+		ok, classifyErr := p.IsSpace(byte(i))
+		if classifyErr != nil {
+			err = classifyErr
+			break
+		}
+		m.space[i] = ok
+	}
+	if closeErr := p.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("LC_CTYPE %q: %w", name, err)
+	}
+	return m, nil
+}
+
+func isEastAsianLocale(name string) bool {
+	lower := strings.ToLower(name)
+	if strings.HasSuffix(lower, "@cjk_narrow") {
+		return false
+	}
+	if len(lower) < 2 || (lower[:2] != "ja" && lower[:2] != "ko" && lower[:2] != "zh") {
+		return false
+	}
+	return len(lower) == 2 || strings.ContainsRune("_.-@", rune(lower[2]))
+}
+
+func isUTF8Locale(name string) bool {
+	name, _, _ = strings.Cut(name, "@")
+	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+		name = name[dot+1:]
+	}
+	name = strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(name, "-", ""), "_", ""))
+	return name == "UTF8"
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -99,6 +192,15 @@ func run(rc *tool.RunContext, args []string) int {
 	if sel.enabled() == 0 {
 		sel = selection{lines: true, words: true, bytes: true}
 	}
+	model := cCountModel()
+	if sel.words || sel.chars || sel.maxLine {
+		var err error
+		model, err = loadCountModel(rc.Env, envPresent(rc.Env, "POSIXLY_CORRECT"))
+		if err != nil {
+			fmt.Fprintf(rc.Err, "wc: %v\n", err)
+			return 1
+		}
+	}
 
 	width := numberWidth(rc, operands, sel.enabled())
 	w := bufio.NewWriter(rc.Out)
@@ -136,7 +238,7 @@ func run(rc *tool.RunContext, args []string) int {
 			r = f
 			closer = f
 		}
-		c, err := countReader(r, sel)
+		c, err := countReader(r, sel, model)
 		if closer != nil {
 			closer.Close()
 		}
@@ -233,19 +335,14 @@ func quote(s string) string { return "'" + s + "'" }
 // wc produces is a byte property in the C locale — lines, words, bytes,
 // characters, and (since display width is one column per byte here) the
 // maximum line length — so a single block-wise byte scan serves them all.
-func countReader(r io.Reader, sel selection) (counts, error) {
-	return countBytes(r, sel.words, sel.maxLine)
+func countReader(r io.Reader, sel selection, model *countModel) (counts, error) {
+	if model.utf8 {
+		return countUTF8(r, sel.words, sel.maxLine, model.width)
+	}
+	return countBytes(r, sel.words, sel.maxLine, &model.space)
 }
 
 // isSpaceByte marks the C-locale whitespace bytes (word separators).
-var isSpaceByte [256]bool
-
-func init() {
-	for _, b := range []byte{' ', '\t', '\n', '\v', '\f', '\r'} {
-		isSpaceByte[b] = true
-	}
-}
-
 // countBytes computes every count with a block byte scan. Newlines are
 // counted with bytes.Count (vectorized); word boundaries and line widths
 // with byte-indexed rules. inWord and linepos carry across block
@@ -257,7 +354,7 @@ func init() {
 // every other byte occupies one column — including non-printable bytes
 // and each byte of a multi-byte sequence, since a character IS a byte in
 // the C locale (see countReader).
-func countBytes(r io.Reader, words, maxLine bool) (counts, error) {
+func countBytes(r io.Reader, words, maxLine bool, spaces *[256]bool) (counts, error) {
 	var c counts
 	buf := make([]byte, 64*1024)
 	inWord := false
@@ -291,7 +388,7 @@ func countBytes(r io.Reader, words, maxLine bool) (counts, error) {
 							linepos++
 						}
 					}
-					if isSpaceByte[ch] {
+					if spaces[ch] {
 						inWord = false
 					} else if !inWord {
 						c.words++
@@ -307,6 +404,63 @@ func countBytes(r io.Reader, words, maxLine bool) (counts, error) {
 		if err != nil {
 			finishLine()
 			return c, err
+		}
+	}
+}
+
+func countUTF8(r io.Reader, words, maxLine bool, widthModel *runewidth.Condition) (counts, error) {
+	var c counts
+	br := bufio.NewReader(r)
+	inWord := false
+	var linepos int64
+	finishLine := func() {
+		if linepos > c.maxLine {
+			c.maxLine = linepos
+		}
+		linepos = 0
+	}
+	for {
+		rn, size, err := br.ReadRune()
+		if err == io.EOF {
+			finishLine()
+			return c, nil
+		}
+		if err != nil {
+			finishLine()
+			return c, err
+		}
+		c.bytes += int64(size)
+		valid := rn != utf8.RuneError || size > 1
+		if valid {
+			c.chars++
+		}
+		if rn == '\n' && valid {
+			c.lines++
+		}
+		if maxLine {
+			switch rn {
+			case '\n', '\r', '\f':
+				finishLine()
+			case '\t':
+				linepos += 8 - linepos%8
+			case '\v':
+			default:
+				if valid {
+					width := widthModel.RuneWidth(rn)
+					if width > 0 {
+						linepos += int64(width)
+					}
+				}
+			}
+		}
+		if words {
+			space := valid && unicode.IsSpace(rn)
+			if space {
+				inWord = false
+			} else if !inWord {
+				c.words++
+				inWord = true
+			}
 		}
 	}
 }

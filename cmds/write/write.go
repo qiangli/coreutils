@@ -102,6 +102,7 @@ type nopWriteCloser struct{ io.Writer }
 func (nopWriteCloser) Close() error { return nil }
 
 type ctypeProvider interface {
+	IsCntrl(byte) (bool, error)
 	IsPrint(byte) (bool, error)
 	IsSpace(byte) (bool, error)
 	Close() error
@@ -125,6 +126,7 @@ var openCTypeFn = func(name string) (ctypeProvider, error) { return ctype.Open(n
 //     which is exactly the mangling this mode exists to prevent.
 type charClasses struct {
 	pass      [256]bool
+	control   [256]bool
 	multibyte bool
 }
 
@@ -150,40 +152,72 @@ func (c *charClasses) cPass() {
 // is byte-oriented; unsupported non-UTF-8 locales retain the documented C
 // fallback. Diagnostics are not yet localized through LC_MESSAGES/NLSPATH.
 func loadCharClasses(env []string) *charClasses {
+	c, _ := loadCharClassesMode(env, false)
+	return c
+}
+
+func loadCharClassesMode(env []string, strict bool) (*charClasses, error) {
 	name := locale.Resolve(env, locale.CType)
 	c := new(charClasses)
 	switch {
 	case name == "C" || name == "POSIX":
 		c.cPass()
-		return c
+		return c, nil
 	case isUTF8Locale(name):
 		// The codeset is UTF-8: classify decoded runes, not bytes.
 		c.cPass()
 		c.multibyte = true
-		return c
+		return c, nil
 	}
 	p, err := openCTypeFn(name)
 	if err != nil {
+		if strict {
+			return nil, fmt.Errorf("LC_CTYPE %q: %w", name, err)
+		}
 		c.cPass()
-		return c
+		return c, nil
 	}
-	defer func() { _ = p.Close() }()
 	for i := 0; i < 256; i++ {
 		printable, perr := p.IsPrint(byte(i))
 		if perr != nil {
-			var fallback charClasses
-			fallback.cPass()
-			return &fallback
+			err = perr
+			break
 		}
 		space, serr := p.IsSpace(byte(i))
 		if serr != nil {
-			var fallback charClasses
-			fallback.cPass()
-			return &fallback
+			err = serr
+			break
+		}
+		control, cerr := p.IsCntrl(byte(i))
+		if cerr != nil {
+			err = cerr
+			break
 		}
 		c.pass[i] = printable || space
+		c.control[i] = control
 	}
-	return c
+	if closeErr := p.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		if strict {
+			return nil, fmt.Errorf("LC_CTYPE %q: %w", name, err)
+		}
+		fallback := new(charClasses)
+		fallback.cPass()
+		return fallback, nil
+	}
+	return c, nil
+}
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isUTF8Locale reports whether a POSIX locale name names the UTF-8 codeset.
@@ -270,7 +304,11 @@ func run(rc *tool.RunContext, args []string) int {
 		fmt.Fprintf(rc.Err, "write: %v\n", errPlatform)
 		return 1
 	}
-	classes := loadCharClasses(rc.Env)
+	classes, err := loadCharClassesMode(rc.Env, envPresent(rc.Env, "POSIXLY_CORRECT"))
+	if err != nil {
+		fmt.Fprintf(rc.Err, "write: %v\n", err)
+		return 1
+	}
 	prepared, err := prepareInput(rc.In)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "write: standard input: %v\n", err)
@@ -807,7 +845,13 @@ func sanitize(s string, classes *charClasses) string {
 			// LC_CTYPE calls it print or space: POSIX sends it through.
 			b.WriteByte(c)
 			i++
-		case c < 0x20 || c == 0x7f:
+		case classes.control[c] && c >= utf8.RuneSelf:
+			// A control byte in a single-byte 8-bit locale still needs an
+			// entirely printable representation. Plain caret notation is only
+			// valid for C0 and DEL; use the historical meta form for C1 bytes.
+			writeMeta(&b, c)
+			i++
+		case classes.control[c] || c < 0x20 || c == 0x7f:
 			writeCaret(&b, c)
 			i++
 		case c >= utf8.RuneSelf:

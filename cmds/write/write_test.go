@@ -644,6 +644,7 @@ func TestSanitizeRendersControlCharactersSafely(t *testing.T) {
 
 type fakeCType struct{ print, space map[byte]bool }
 
+func (f *fakeCType) IsCntrl(b byte) (bool, error) { return !f.print[b] && !f.space[b], nil }
 func (f *fakeCType) IsPrint(b byte) (bool, error) { return f.print[b], nil }
 func (f *fakeCType) IsSpace(b byte) (bool, error) { return f.space[b], nil }
 func (*fakeCType) Close() error                   { return nil }

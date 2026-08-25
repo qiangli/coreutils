@@ -3,64 +3,54 @@
 Batch 7C audits the Go-owned `unexpand`, `uudecode`, `uuencode`, `wc`,
 `who`, and `write` interfaces against POSIX.1-2016 Issue 7. The authoritative
 sources are the six Open Group pages linked from the corresponding rows in
-`docs/posix-required-command-interfaces.tsv`. All six rows are proposed to
-move from `unverified` to `partial` during the coordinated shared-TSV
-reconciliation; this audit does not claim complete conformance from package-test
-success alone.
+`docs/posix-required-command-interfaces.tsv`. The audit does not promote a row
+from package-test success alone; the shared ledger is reconciled separately.
 
 ## Disposition
 
 | Command | Evidence closed | Remaining boundary |
 | --- | --- | --- |
-| `unexpand` | Required `-a` and `-t` parsing, repeating and explicit tab lists, `-t` implying all-run conversion, file/stdin routing, maximum-tab/minimum-space conversion at tab stops, explicit-list termination, backspace column handling, malformed-list rejection, and output/error status paths. | `LC_CTYPE` is not yet connected to the implementation. Only ASCII space and tab are classified as blanks, the default path treats every decoded rune as one display column, and the byte path is selected by a GNU extension rather than by the effective C/POSIX locale. Locale-defined blanks and wide or zero-width characters therefore remain Bashy-owned gaps. |
-| `uudecode` | Exactly zero or one input file when `POSIXLY_CORRECT` is present, retention of the GNU multi-file extension otherwise, historical and Base64 payloads, leading-text scanning, octal and symbolic header modes, pathname and `-o` routing (including the asymmetric `-`/`/dev/stdout` rules), umask-independent access bits, resolved-target overwrite rules, non-writable target refusal, and non-fatal permission-setting failure. | The fixed implementation has hermetic coverage for its required interface. Real filesystem credential, symlink, and permission behavior remains platform-dependent integration evidence; diagnostics are not localized. No additional Issue 7 functional gap was confirmed in this batch. |
-| `uuencode` | Required operand grammar, historical and `-m` Base64 framing, 45-byte historical and 76-character Base64 line limits, padding/terminators, ordinary-pathname treatment of input `-`, explicit-file access bits, and stdin descriptor access bits. | An embedding that supplies stdin as an abstract `io.Reader` has no descriptor access bits and uses the documented `0666` extension fallback; the standalone file-descriptor path is covered. Diagnostics are not localized. No additional Issue 7 functional gap was confirmed. |
-| `wc` | Default and selected count ordering, stdin and repeated `-` routing, named-file rows, multi-file totals, C/POSIX newline/word/byte/character counts, read/write failures, and nonzero aggregate status. | `LC_CTYPE` is not connected: `-m` is assigned the byte count and `-w` uses a fixed six-byte C-locale whitespace table. Multibyte character counts and locale-defined whitespace remain Bashy-owned gaps. The GNU `-L`, `--files0-from`, and `--total` extensions are outside this audit. |
-| `who` | Corrected base/XSI split (`-mTu` are base; `-q`, `am i`, and `am I` are XSI), exact operand grammar, `-q` ignoring every other selector, exact `-a` expansion, mandatory dead-process exit data, `-T` field shape, short mode, invocation-local `LC_TIME`/`TZ`, native Linux ABI checks, and stdout/error status paths. | Live login-accounting records, terminal activity/message state, and platform ABI behavior cannot be established solely by hermetic fixtures. The bounded `LC_TIME` provider deliberately fails closed outside its carried locales, and diagnostics are not localized. No additional Issue 7 algorithmic gap was confirmed. |
-| `write` | Exact no-option operand grammar, active-session and terminal ownership checks, message permission, deterministic multiple-login choice and stdout notice, recipient banner/body/`EOT` separation, two sender-terminal alerts, canonical NL/EOF/EOL framing, alert pass-through, control rendering, real Linux PTYs, short writes/close failures, and SIGINT success with `EOT`. | Unsupported non-UTF-8 `LC_CTYPE` providers fall back to C classification, so every valid locale's print/space classes are not covered. Live system login databases, credentials, controlling-terminal ownership, and non-Linux terminal implementations remain platform integration boundaries. |
+| `unexpand` | Required `-a` and `-t` parsing, repeating and explicit tab lists, `-t` implying all-run conversion, file/stdin routing, maximum-tab/minimum-space conversion, explicit-list termination, backspace handling, malformed-list rejection, output/error paths, and effective `LC_CTYPE` blank and display-column behavior. C/POSIX is byte-classified; UTF-8 covers wide, zero-width, and East Asian Ambiguous characters; supported single-byte locales use `pkg/ctype`. | Runtime lookup of arbitrary non-UTF-8 named locales is bounded by `pkg/ctype`; unavailable providers fail explicitly in POSIX mode. Translated diagnostics remain absent. |
+| `uudecode` | Exactly zero or one input file when `POSIXLY_CORRECT` is present, retention of the GNU multi-file extension otherwise, historical and Base64 payloads, leading-text scanning, octal and symbolic header modes, pathname and `-o` routing, umask-independent access bits, resolved-target overwrite rules, non-writable target refusal, and non-fatal permission-setting failure. | Real filesystem credential, symlink, and permission behavior remains platform-dependent integration evidence; diagnostics are not localized. No additional Issue 7 functional gap was confirmed. |
+| `uuencode` | Required operand grammar, historical and `-m` Base64 framing, line limits, padding/terminators, ordinary-pathname treatment of input `-`, explicit-file access bits, and stdin descriptor access bits. | An embedding that supplies stdin as an abstract `io.Reader` has no descriptor access bits and uses the documented `0666` extension fallback; the standalone descriptor path is covered. Diagnostics are not localized. No additional Issue 7 functional gap was confirmed. |
+| `wc` | Default and selected count ordering, stdin and repeated `-` routing, named-file rows, totals, read/write failures, and nonzero aggregate status. C/POSIX counts bytes as characters; UTF-8 `-m` counts decoded characters and `-w` uses Unicode whitespace; supported single-byte locales use provider-backed `isspace`. | Runtime lookup of arbitrary non-UTF-8 named locales is bounded by `pkg/ctype`; unavailable providers fail explicitly when a selected count depends on `LC_CTYPE`. Translated diagnostics remain absent. GNU `-L`, `--files0-from`, and `--total` are outside this audit. |
+| `who` | Corrected base/XSI split (`-mTu` are base; `-q`, `am i`, and `am I` are XSI), exact operand grammar, `-q` selector behavior, `-a`, dead-process exit data, `-T`, short mode, invocation-local `LC_TIME`/`TZ`, native Linux ABI checks, and stdout/error paths. | Live login-accounting records, terminal activity/message state, and platform ABI behavior remain integration boundaries. The bounded `LC_TIME` provider fails closed outside carried locales; diagnostics are not localized. No additional Issue 7 algorithmic gap was confirmed. |
+| `write` | Exact operand grammar, session/terminal ownership and permission checks, multiple-login choice, routing/framing, alerts, canonical input framing, SIGINT handling, real Linux PTYs, write/close failures, and effective `LC_CTYPE` print/space/control classification. High-bit controls receive printable meta rendering and provider failures occur before delivery. | Runtime lookup of arbitrary non-UTF-8 named locales is bounded by `pkg/ctype`; unavailable providers fail explicitly in POSIX mode. Live login databases, credentials, controlling-terminal ownership, and non-Linux terminal implementations remain integration boundaries; diagnostics are not localized. |
 
-## Confirmed fix
+## Confirmed fixes
 
 Issue 7 specifies `uudecode [-o outfile] [file]`, while GNU mode supports a
-list of input files. When `POSIXLY_CORRECT` is present (empty or non-empty),
-the implementation now rejects a second input operand before opening any
-source or creating decoded output. With the switch absent, the existing
-multi-file extension remains available. The focused regressions are
-`cmds/uudecode/uudecode_test.go#TestPOSIXRejectsMultipleInputFiles` and
-`cmds/uudecode/uudecode_test.go#TestNonPOSIXDecodesMultipleInputFiles`.
+list of input files. With `POSIXLY_CORRECT` present, including an empty value,
+the implementation rejects a second operand before opening a source or
+creating output. With the switch absent, the multi-file extension remains.
 
-The proposed shared-TSV reconciliation also corrects `who`'s applicability
-split. Issue 7 defines `-m`, `-T`, and `-u` in the base interface; `-q`, the
-additional selectors, and the special `am i`/`am I` forms are XSI-shaded.
+The locale correction resolves `LC_ALL` over the category variable over
+`LANG`, without mutating process-global locale state. `unexpand`, `wc`, and
+`write` now select their POSIX locale paths by presence of `POSIXLY_CORRECT`.
+No implementation shells out.
 
-## Proposed shared TSV reconciliation
+The shared ledger also needs the corrected `who` applicability split: `-m`,
+`-T`, and `-u` are base; `-q`, the additional selectors, and `am i`/`am I`
+are XSI-shaded.
 
-The coordinator should move all six rows to `partial`, replace their
-`UNVERIFIED` behavioral fields with the interface definitions summarized
-above, and add these focused `go_evidence` references:
+## Focused evidence for reconciliation
 
-| Command | Proposed focused evidence |
+| Command | Focused evidence |
 | --- | --- |
-| `unexpand` | `TestUnexpandLeadingBlanks`; `TestUnexpandAllAndFile`; `TestUnexpandTabsImpliesAll`; `TestUnexpandBlanksBeyondLastStopUnchanged`; `TestUnexpandBackspaceDecrementsColumn`; `TestUnexpandRejectsBadTabs` |
+| `unexpand` | `TestUnexpandLeadingBlanks`; `TestUnexpandAllAndFile`; `TestUnexpandTabsImpliesAll`; `TestUnexpandBlanksBeyondLastStopUnchanged`; `TestUnexpandBackspaceDecrementsColumn`; `TestUnexpandRejectsBadTabs`; locale tests in `cmds/unexpand/locale_test.go` |
 | `uudecode` | `TestPOSIXRejectsMultipleInputFiles`; `TestNonPOSIXDecodesMultipleInputFiles`; `TestHeaderPathnamesAndSymbolicModes`; `TestHeaderAndOutputOverrideStdoutDistinctions`; `TestChmodFailureIsWarningAndNonfatal`; `TestHeaderModeIgnoresUmask`; `TestDecodeRefusesResolvedTargetWithoutEffectiveWriteAccess` |
 | `uuencode` | `TestEncodeKnownVectorFromStdin`; `TestEncodeFileAndMode`; `TestEncodeBase64AndModes`; `TestStandardInputFileModeComesFromFstat`; `TestErrors` |
-| `wc` | `TestWcStdin`; `TestWcFile`; `TestWcMultipleAndTotal`; `TestWcCharsAndMaxLine`; `TestWcWordRules`; `TestWcErrors` |
+| `wc` | `TestWcStdin`; `TestWcFile`; `TestWcMultipleAndTotal`; `TestWcCharsAndMaxLine`; `TestWcWordRules`; `TestWcErrors`; locale tests in `cmds/wc/locale_test.go` |
 | `who` | `TestWhoOperands`; `TestWhoQuietIgnoresOtherOptions`; `TestWhoTExactNoOptionalComment`; `TestWhoAllIsExactAndTruthful`; `TestWhoLCtimeProviderAndFailClosedResidual`; `TestWhoBinaryABIBehavior` |
-| `write` | `TestDeliversBannerBodyAndEOF`; `TestMultiLoginNoticeGoesToStdoutAndAlertsGoToControllingTerminal`; `TestTypedBELReachesTheRecipientAsAByte`; `TestCanonicalEOLAndNewlineBothDelimit`; `TestSIGINTWritesEOTReturnsSuccessAndLeaksNothing`; `TestPTYBackedWriteLinux` |
+| `write` | `TestDeliversBannerBodyAndEOF`; `TestMultiLoginNoticeGoesToStdoutAndAlertsGoToControllingTerminal`; `TestTypedBELReachesTheRecipientAsAByte`; `TestCanonicalEOLAndNewlineBothDelimit`; `TestSIGINTWritesEOTReturnsSuccessAndLeaksNothing`; `TestPTYBackedWriteLinux`; locale tests in `cmds/write/locale_test.go` |
 
-For `who`, the shared row specifically needs base synopsis
-`who [-mTu] [file]`, required options `-m;-T;-u`, and XSI conditional forms
-for `[-abdHlprt]`, `-s`, `-q`, `am i`, and `am I`. The current row incorrectly
-labels `-q` as base and `-mTu` as XSI. Test identifiers above are relative to
-each command package except `TestHeaderModeIgnoresUmask` and
-`TestDecodeRefusesResolvedTargetWithoutEffectiveWriteAccess` in
-`cmds/uudecode/uudecode_unix_test.go`, `TestWhoBinaryABIBehavior` in
-`cmds/who/who_binary_posix_test.go`, and `TestPTYBackedWriteLinux` in
-`cmds/write/pty_linux_test.go`.
+For `who`, the ledger base synopsis is `who [-mTu] [file]`, with required
+options `-m;-T;-u` and XSI conditional forms for `[-abdHlprt]`, `-s`, `-q`,
+`am i`, and `am I`. Platform-specific evidence files remain identified by
+their exact test IDs during aggregate reconciliation.
 
 ## Scope controls
 
-No implementation shells out. No external provider or GNU compatibility
-behavior is used as POSIX evidence. Shared generated manifest Markdown,
-aggregate counts, and the applet matrix are intentionally not regenerated by
-this batch; their reconciliation belongs to the coordinated aggregate wave.
+No external provider or GNU compatibility behavior is used as POSIX evidence.
+Shared TSV/generated manifests and aggregate counts remain the responsibility
+of the coordinated reconciliation wave.
