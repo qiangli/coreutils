@@ -43,7 +43,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `ar` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `arch` | `cmds/arch` | — | GNU Coreutils | yes | no | 1 | 2 |
 | `ast` | `cmds/ast` | — | Bashy/other extension | no | no | 1 | 6 |
-| `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 5 | 31 |
+| `at` | `cmds/at` | — | POSIX/Unix utility | no | yes | 7 | 36 |
 | `atq` | `cmds/atq` | — | Bashy/other extension | no | no | 1 | 2 |
 | `atrm` | `cmds/atrm` | — | Bashy/other extension | no | no | 1 | 3 |
 | `awk` | `cmds/awk` | — | POSIX/Unix utility | no | yes | 3 | 25 |
@@ -52,7 +52,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `base64` | `cmds/base64` | — | GNU Coreutils | yes | no | 2 | 9 |
 | `basename` | `cmds/basename` | — | GNU Coreutils | yes | yes | 1 | 5 |
 | `basenc` | `cmds/basenc` | — | GNU Coreutils | yes | no | 1 | 7 |
-| `batch` | `cmds/batch` | — | POSIX/Unix utility | no | yes | 3 | 12 |
+| `batch` | `cmds/batch` | — | POSIX/Unix utility | no | yes | 4 | 14 |
 | `bc` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `browser` | `cmds/browser` | — | Bashy/other extension | no | no | 1 | 9 |
 | `cal` | `cmds/cal` | — | Bashy/other extension | no | no | 1 | 6 |
@@ -66,7 +66,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `cmp` | `cmds/cmp` | — | POSIX/Unix utility | no | yes | 2 | 14 |
 | `comm` | `cmds/comm` | — | GNU Coreutils | yes | yes | 1 | 16 |
 | `cp` | `cmds/cp` | — | GNU Coreutils | yes | yes | 7 | 62 |
-| `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 2 | 23 |
+| `crontab` | `cmds/crontab` | — | POSIX/Unix utility | no | yes | 3 | 25 |
 | `csplit` | `cmds/csplit` | — | GNU Coreutils | yes | yes | 1 | 18 |
 | `ctags` | `cmds/posixproviders` | — | POSIX external provider | no | yes | 3 | 20 |
 | `cut` | `cmds/cut` | — | GNU Coreutils | yes | yes | 3 | 21 |
@@ -88,7 +88,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `factor` | `cmds/factor` | — | GNU Coreutils | yes | no | 1 | 3 |
 | `false` | `cmds/false` | — | GNU Coreutils | yes | yes | 1 | 2 |
 | `fetch` | `cmds/fetch` | — | Bashy/other extension | no | no | 1 | 6 |
-| `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 3 | 34 |
+| `file` | `cmds/file` | — | POSIX/Unix utility | no | yes | 3 | 36 |
 | `find` | `cmds/find` | — | POSIX/Unix utility | no | yes | 10 | 68 |
 | `fmt` | `cmds/fmt` | — | GNU Coreutils | yes | no | 1 | 18 |
 | `fold` | `cmds/fold` | — | GNU Coreutils | yes | yes | 2 | 28 |
@@ -102,7 +102,7 @@ The machine-readable source is `docs/applet-matrix.tsv`.
 | `hostid` | `cmds/hostid` | — | GNU Coreutils | yes | no | 1 | 1 |
 | `hostname` | `cmds/hostname` | — | GNU Coreutils | yes | no | 1 | 4 |
 | `iconv` | `cmds/iconv` | — | POSIX/Unix utility | no | yes | 4 | 38 |
-| `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 21 |
+| `id` | `cmds/id` | — | GNU Coreutils | yes | yes | 2 | 24 |
 | `install` | `cmds/install` | — | GNU Coreutils | yes | no | 1 | 21 |
 | `join` | `cmds/join` | — | GNU Coreutils | yes | yes | 1 | 11 |
 | `jq` | `cmds/jq` | — | Bashy/other extension | no | no | 1 | 7 |

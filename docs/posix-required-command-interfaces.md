@@ -199,7 +199,7 @@ at -l [at_job_id...]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/at`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/at/at_test.go#TestAtCreateAndListAndRemove;cmds/at/at_test.go#TestAtQueueSubmissionAndListFiltering;cmds/at/at_test.go#TestAtAcceptsEmptyAndBlankStdin;cmds/at/at_test.go#TestAtMailCompletionState;cmds/at/at_test.go#TestAtLCTimeParsingAndUnsupportedLocale;cmds/at/at_test.go#TestAtOutputWriteErrorsFail`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:at:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/at/at_test.go#TestAtCreateAndListAndRemove;cmds/at/at_test.go#TestAtQueueSubmissionAndListFiltering;cmds/at/at_test.go#TestAtAcceptsEmptyAndBlankStdin;cmds/at/at_test.go#TestAtMailCompletionState;cmds/at/at_test.go#TestAtLCTimeParsingAndUnsupportedLocale;cmds/at/at_test.go#TestAtOutputWriteErrorsFail;cmds/at/issue743_test.go#TestIssue743TouchTimePastDiagnosticNamesArgument;cmds/at/issue743_test.go#TestIssue743ListUnknownJobIDFails;cmds/at/issue743_access_unix_test.go#TestIssue743AtAccessMalformedPolicyFailsClosed;cmds/at/issue743_access_unix_test.go#TestIssue743AtAccessStatErrorFailsClosed;cmds/at/issue743_access_unix_test.go#TestIssue743AtAccessEmptyDenyPermits`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:at:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [at](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/at.html).
 
@@ -344,7 +344,7 @@ batch
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/batch`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/batch/batch_test.go#TestBatchSubmissionStdoutEmpty;cmds/batch/batch_test.go#TestBatchPersistsJob;cmds/batch/batch_test.go#TestBatchIsAtQueueBWithCompletionMailAndLoadMarker;cmds/batch/batch_test.go#TestBatchRejectsOperands;cmds/batch/batch_test.go#TestBatchAuthenticatedRecipientAndWriteError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:batch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/batch/batch_test.go#TestBatchSubmissionStdoutEmpty;cmds/batch/batch_test.go#TestBatchPersistsJob;cmds/batch/batch_test.go#TestBatchIsAtQueueBWithCompletionMailAndLoadMarker;cmds/batch/batch_test.go#TestBatchRejectsOperands;cmds/batch/batch_test.go#TestBatchAuthenticatedRecipientAndWriteError;cmds/batch/issue743_access_unix_test.go#TestIssue743BatchAccessMalformedDenyFailsClosed;cmds/batch/issue743_access_unix_test.go#TestIssue743BatchAccessEmptyDenyPermits`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:batch:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [batch](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/batch.html).
 
@@ -975,7 +975,7 @@ crontab [file]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/crontab`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/crontab/crontab_test.go#TestCrontabInstallListRemove;cmds/crontab/crontab_test.go#TestCrontabInvalidScheduleIsAtomic;cmds/crontab/crontab_test.go#TestCrontabPreservesWholeSourceAndEditorInputByteForByte;cmds/crontab/crontab_test.go#TestCrontabInstallSilent;cmds/crontab/crontab_test.go#TestCrontabRejectsConflictingModesAndExtraOperands`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:crontab:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/crontab/crontab_test.go#TestCrontabInstallListRemove;cmds/crontab/crontab_test.go#TestCrontabInvalidScheduleIsAtomic;cmds/crontab/crontab_test.go#TestCrontabPreservesWholeSourceAndEditorInputByteForByte;cmds/crontab/crontab_test.go#TestCrontabInstallSilent;cmds/crontab/crontab_test.go#TestCrontabRejectsConflictingModesAndExtraOperands;cmds/crontab/issue743_test.go#TestIssue743BackslashOnlyEscapesPercent;cmds/crontab/issue743_test.go#TestIssue743TrailingBackslashIsLiteral`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:crontab:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [crontab](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/crontab.html).
 
@@ -1894,7 +1894,7 @@ file -i [-h] file...
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/file`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/file/issue7_test.go#TestFileIssue7OperandOrderPreserved;cmds/file/issue7_test.go#TestFileIssue7StdinOperandUsedByName;cmds/file/issue7_test.go#TestFileIssue7MissingOperandIsUsageError`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/file/issue7_test.go#TestFileIssue7OperandOrderPreserved;cmds/file/issue7_test.go#TestFileIssue7StdinOperandUsedByName;cmds/file/issue7_test.go#TestFileIssue7MissingOperandIsUsageError;cmds/file/issue7_test.go#TestFileIssue7MagicOptionArgumentsAndPermutation;cmds/file/issue7_test.go#TestFileIssue7DoubleDashParsing`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:file:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [file](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/file.html).
 
@@ -2336,7 +2336,7 @@ id -u [-nr] [user]
 
 **Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/id`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`cmds/id/id_test.go#TestIDDefault;cmds/id/id_test.go#TestIDDefaultIncludesNames;cmds/id/id_test.go#TestIDDefaultReportsRealAndEffectiveWhenDifferent;cmds/id/id_test.go#TestIDDefaultOmitsEffectiveWhenEqual;cmds/id/id_test.go#TestIDCurrentGroupsUseLiveProcessVector;cmds/id/id_test.go#TestIDOnlyFlags;cmds/id/id_unix_test.go#TestIDRealAndEffectiveSelectors;cmds/id/id_test.go#TestIDRealFlagWithOptions;cmds/id/id_test.go#TestIDRealFlag;cmds/id/id_test.go#TestIDNamedUser;cmds/id/id_test.go#TestIDErrors;cmds/id/id_test.go#TestIDRejectsExtraUserOperand`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:id:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`cmds/id/id_test.go#TestIDDefault;cmds/id/id_test.go#TestIDDefaultIncludesNames;cmds/id/id_test.go#TestIDDefaultReportsRealAndEffectiveWhenDifferent;cmds/id/id_test.go#TestIDDefaultOmitsEffectiveWhenEqual;cmds/id/id_test.go#TestIDCurrentGroupsUseLiveProcessVector;cmds/id/id_test.go#TestIDOnlyFlags;cmds/id/id_unix_test.go#TestIDRealAndEffectiveSelectors;cmds/id/id_test.go#TestIDRealFlagWithOptions;cmds/id/id_test.go#TestIDRealFlag;cmds/id/id_test.go#TestIDNamedUser;cmds/id/id_test.go#TestIDNamedUserOperand;cmds/id/id_test.go#TestIDNamedUserOperandCombinations;cmds/id/id_test.go#TestIDOutputErrors;cmds/id/id_test.go#TestIDErrors;cmds/id/id_test.go#TestIDRejectsExtraUserOperand`; shell semantic=`-`; shell routing=`-`; provider=`-`; clauses=`XCU:id:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [id](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/id.html).
 
