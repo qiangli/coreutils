@@ -507,6 +507,56 @@ func TestHelpAndVersion(t *testing.T) {
 	}
 }
 
+func TestLocaleDoubleDashTerminatesOptions(t *testing.T) {
+	out, errOut, code := runCmd(t, posixEnv, "--", "decimal_point")
+	if code != 0 || errOut != "" || out != ".\n" {
+		t.Fatalf("locale -- decimal_point = (%q, %q, %d), want (\".\\n\", \"\", 0)", out, errOut, code)
+	}
+	// -- with an option-like word forces it to be treated as an operand
+	_, errOut, code = runCmd(t, posixEnv, "--", "-a")
+	if code == 0 || !strings.Contains(errOut, "unknown name") {
+		t.Fatalf("locale -- -a = stderr %q code %d, want unknown name error", errOut, code)
+	}
+}
+
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) {
+	return 0, os.ErrClosed
+}
+
+func TestLocaleOutputWriteErrorsFail(t *testing.T) {
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Dir:   t.TempDir(),
+		Env:   posixEnv,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: errWriter{}, Err: &errb},
+	}
+	if code := run(rc, nil); code != 1 || !strings.Contains(errb.String(), "locale:") {
+		t.Fatalf("locale no-op write error = (%q, %d), want status 1", errb.String(), code)
+	}
+
+	errb.Reset()
+	rc = &tool.RunContext{
+		Dir:   t.TempDir(),
+		Env:   posixEnv,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: errWriter{}, Err: &errb},
+	}
+	if code := run(rc, []string{"-a"}); code != 1 || !strings.Contains(errb.String(), "locale:") {
+		t.Fatalf("locale -a write error = (%q, %d), want status 1", errb.String(), code)
+	}
+
+	errb.Reset()
+	rc = &tool.RunContext{
+		Dir:   t.TempDir(),
+		Env:   posixEnv,
+		Stdio: tool.Stdio{In: strings.NewReader(""), Out: errWriter{}, Err: &errb},
+	}
+	if code := run(rc, []string{"decimal_point"}); code != 1 || !strings.Contains(errb.String(), "locale:") {
+		t.Fatalf("locale operand write error = (%q, %d), want status 1", errb.String(), code)
+	}
+}
+
 // --- helpers ------------------------------------------------------------------------
 
 func lines(s string) []string {
@@ -525,3 +575,4 @@ func containsLine(out, want string) bool {
 	}
 	return false
 }
+

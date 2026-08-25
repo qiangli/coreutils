@@ -80,8 +80,7 @@ func run(rc *tool.RunContext, args []string) int {
 		if *withCategory || *withKeyword {
 			return tool.UsageError(rc, cmd, "-c and -k require a name operand")
 		}
-		writeEnvironment(rc)
-		return 0
+		return writeEnvironment(rc)
 	default:
 		return writeNames(rc, operands, *withCategory, *withKeyword)
 	}
@@ -89,37 +88,52 @@ func run(rc *tool.RunContext, args []string) int {
 
 func writeLines(rc *tool.RunContext, lines []string) int {
 	for _, l := range lines {
-		fmt.Fprintln(rc.Out, l)
+		if _, err := fmt.Fprintln(rc.Out, l); err != nil {
+			fmt.Fprintf(rc.Err, "locale: %v\n", err)
+			return 1
+		}
 	}
 	return 0
 }
 
 // writeEnvironment implements the no-operand form.
-func writeEnvironment(rc *tool.RunContext) {
+func writeEnvironment(rc *tool.RunContext) int {
 	lcAll := rc.Getenv("LC_ALL")
 	lang := rc.Getenv("LANG")
 
-	fmt.Fprintf(rc.Out, "LANG=%s\n", lang)
+	if _, err := fmt.Fprintf(rc.Out, "LANG=%s\n", lang); err != nil {
+		fmt.Fprintf(rc.Err, "locale: %v\n", err)
+		return 1
+	}
 	for _, cat := range categories {
+		var err error
 		if v := rc.Getenv(cat); v != "" && lcAll == "" {
 			// The category's own variable supplied it: written bare.
-			fmt.Fprintf(rc.Out, "%s=%s\n", cat, v)
-			continue
+			_, err = fmt.Fprintf(rc.Out, "%s=%s\n", cat, v)
+		} else {
+			// Derived — from LC_ALL, else LANG, else the default. LC_ALL wins even
+			// over a category variable that is also set, so a set LC_ALL makes
+			// EVERY line quoted; that is the visible signal that the per-category
+			// settings are being overridden and are not in effect.
+			derived := lcAll
+			if derived == "" {
+				derived = lang
+			}
+			if derived == "" {
+				derived = locale.Default
+			}
+			_, err = fmt.Fprintf(rc.Out, "%s=%q\n", cat, derived)
 		}
-		// Derived — from LC_ALL, else LANG, else the default. LC_ALL wins even
-		// over a category variable that is also set, so a set LC_ALL makes
-		// EVERY line quoted; that is the visible signal that the per-category
-		// settings are being overridden and are not in effect.
-		derived := lcAll
-		if derived == "" {
-			derived = lang
+		if err != nil {
+			fmt.Fprintf(rc.Err, "locale: %v\n", err)
+			return 1
 		}
-		if derived == "" {
-			derived = locale.Default
-		}
-		fmt.Fprintf(rc.Out, "%s=%q\n", cat, derived)
 	}
-	fmt.Fprintf(rc.Out, "LC_ALL=%s\n", lcAll)
+	if _, err := fmt.Fprintf(rc.Out, "LC_ALL=%s\n", lcAll); err != nil {
+		fmt.Fprintf(rc.Err, "locale: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // writeNames implements the operand form: a category name, a keyword name, or
@@ -142,10 +156,14 @@ func writeName(rc *tool.RunContext, name string, withCategory, withKeyword bool)
 			return err
 		}
 		if withCategory {
-			fmt.Fprintln(rc.Out, name)
+			if _, err := fmt.Fprintln(rc.Out, name); err != nil {
+				return err
+			}
 		}
 		for _, k := range data.keywordsIn(name) {
-			fmt.Fprintln(rc.Out, render(k, withKeyword))
+			if _, err := fmt.Fprintln(rc.Out, render(k, withKeyword)); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -165,9 +183,13 @@ func writeName(rc *tool.RunContext, name string, withCategory, withKeyword bool)
 		return fmt.Errorf("unknown name %q", name)
 	}
 	if withCategory {
-		fmt.Fprintln(rc.Out, cat)
+		if _, err := fmt.Fprintln(rc.Out, cat); err != nil {
+			return err
+		}
 	}
-	fmt.Fprintln(rc.Out, render(k, withKeyword))
+	if _, err := fmt.Fprintln(rc.Out, render(k, withKeyword)); err != nil {
+		return err
+	}
 	return nil
 }
 

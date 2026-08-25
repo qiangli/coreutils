@@ -388,6 +388,9 @@ func run(rc *tool.RunContext, args []string) int {
 	// --block-size scales both the -l size column and the -s block
 	// counts; -k pins the block counts to 1 KiB units.
 	opt.sizeUnit, opt.blockUnit = 1, defaultBlockUnit
+	if envPresent(rc.Env, "POSIXLY_CORRECT") {
+		opt.blockUnit = 512
+	}
 	if blockSize != "" {
 		n, err := parseBlockSize(blockSize)
 		if err != nil {
@@ -1686,3 +1689,14 @@ func humanSizeBase(n, base uint64, units string) string {
 	}
 	return fmt.Sprintf("%d%c", v, units[idx])
 }
+
+func envPresent(env []string, key string) bool {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+

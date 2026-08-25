@@ -87,3 +87,42 @@ func TestBadOperandAndExtraOperand(t *testing.T) {
 		t.Errorf("an extra operand must be a usage error, got %d", code)
 	}
 }
+
+func TestMesgDoubleDashTerminatesOptions(t *testing.T) {
+	p, restore := withFakeTTY(t, 0o640)
+	defer restore()
+	if _, _, code := exec(t, "--", "y"); code != 0 {
+		t.Fatalf("mesg -- y exit = %d, want 0", code)
+	}
+	fi, _ := os.Stat(p)
+	if fi.Mode().Perm() != 0o660 {
+		t.Errorf("mesg -- y should set g+w: got %o want %o", fi.Mode().Perm(), 0o660)
+	}
+
+	out, _, code := exec(t, "--")
+	if code != 0 || !strings.Contains(out, "is y") {
+		t.Errorf("mesg -- got %q exit %d, want \"is y\" exit 0", out, code)
+	}
+}
+
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) {
+	return 0, os.ErrClosed
+}
+
+func TestMesgOutputWriteError(t *testing.T) {
+	_, restore := withFakeTTY(t, 0o620)
+	defer restore()
+
+	var errb bytes.Buffer
+	rc := &tool.RunContext{
+		Dir:   t.TempDir(),
+		Stdio: tool.Stdio{Out: errWriter{}, Err: &errb},
+	}
+	code := run(rc, nil)
+	if code != 2 || !strings.Contains(errb.String(), "mesg:") {
+		t.Fatalf("mesg query stdout write error = (%q, %d), want status 2", errb.String(), code)
+	}
+}
+

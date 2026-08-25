@@ -546,6 +546,60 @@ func TestOrderIndicatorLongAbbreviationsAndOptionValues(t *testing.T) {
 	}
 }
 
+func TestSizeBlocksPOSIX512ByteDefault(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", strings.Repeat("x", 1200))
+
+	// Without POSIXLY_CORRECT, default block size is 1024 bytes (2 KiB -> 2 blocks)
+	outDefault, _, code := runToolEnv(t, dir, nil, "-s")
+	if code != 0 {
+		t.Fatalf("ls -s default exit = %d, out = %q", code, outDefault)
+	}
+
+	// With POSIXLY_CORRECT, default block size is 512 bytes (2 KiB -> 4 blocks)
+	outPOSIX, _, code := runToolEnv(t, dir, []string{"POSIXLY_CORRECT=1"}, "-s")
+	if code != 0 {
+		t.Fatalf("ls -s POSIXLY_CORRECT exit = %d, out = %q", code, outPOSIX)
+	}
+
+	mDefault := regexp.MustCompile(`^total (\d+)\n *(\d+) f\n$`).FindStringSubmatch(outDefault)
+	mPOSIX := regexp.MustCompile(`^total (\d+)\n *(\d+) f\n$`).FindStringSubmatch(outPOSIX)
+
+	if mDefault == nil || mPOSIX == nil {
+		t.Fatalf("regex match failed: default=%q posix=%q", outDefault, outPOSIX)
+	}
+
+	cDefault, _ := strconv.Atoi(mDefault[2])
+	cPOSIX, _ := strconv.Atoi(mPOSIX[2])
+
+	if cPOSIX <= cDefault {
+		t.Errorf("POSIXLY_CORRECT 512-byte block count (%d) should be double default 1024-byte block count (%d)", cPOSIX, cDefault)
+	}
+
+	// -k overrides POSIXLY_CORRECT to use 1024-byte blocks
+	outK, _, code := runToolEnv(t, dir, []string{"POSIXLY_CORRECT=1"}, "-s", "-k")
+	if code != 0 {
+		t.Fatalf("ls -s -k POSIXLY_CORRECT exit = %d, out = %q", code, outK)
+	}
+	mK := regexp.MustCompile(`^total (\d+)\n *(\d+) f\n$`).FindStringSubmatch(outK)
+	if mK == nil || mK[2] != mDefault[2] {
+		t.Errorf("ls -s -k POSIXLY_CORRECT = %q, want block count %s", outK, mDefault[2])
+	}
+}
+
+func TestLsDoubleDashTerminatesOptions(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.txt", "")
+	out, errb, code := runToolAt(t, dir, "--", "a.txt")
+	if code != 0 || errb != "" || out != "a.txt\n" {
+		t.Fatalf("ls -- a.txt = (%q, %q, %d), want (\"a.txt\\n\", \"\", 0)", out, errb, code)
+	}
+	out, errb, code = runToolAt(t, dir, "--", "-s")
+	if code == 0 || !strings.Contains(errb, "cannot access '-s'") {
+		t.Fatalf("ls -- -s = (%q, %q, %d), want cannot access -s error", out, errb, code)
+	}
+}
+
 func containsLine(lines []string, target string) bool {
 	for _, l := range lines {
 		if l == target {
@@ -554,3 +608,4 @@ func containsLine(lines []string, target string) bool {
 	}
 	return false
 }
+

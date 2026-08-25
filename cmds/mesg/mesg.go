@@ -57,10 +57,16 @@ func run(rc *tool.RunContext, args []string) int {
 
 	if len(operands) == 0 {
 		if allowed {
-			fmt.Fprintln(rc.Out, "is y")
+			if _, err := fmt.Fprintln(rc.Out, "is y"); err != nil {
+				fmt.Fprintf(rc.Err, "mesg: %v\n", err)
+				return 2
+			}
 			return 0
 		}
-		fmt.Fprintln(rc.Out, "is n")
+		if _, err := fmt.Fprintln(rc.Out, "is n"); err != nil {
+			fmt.Fprintf(rc.Err, "mesg: %v\n", err)
+			return 2
+		}
 		return 1
 	}
 
