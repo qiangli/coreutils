@@ -557,3 +557,43 @@ func TestChgrpVerboseNamesTheGroupTheFileKept(t *testing.T) {
 		t.Errorf("verbose report = %q, want %q", out, want)
 	}
 }
+
+type failingOutputWriter struct{ err error }
+
+func (w failingOutputWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestChgrpOutputFailureSetsStatusAndContinues(t *testing.T) {
+	gid := currentGroup(t)
+	other := strconv.Itoa(atoi(t, gid) + 1)
+	for _, flag := range []string{"-v", "-c"} {
+		t.Run(flag, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range []string{"first", "second"} {
+				if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := recordChanges(t)
+			var errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(),
+				Dir: dir,
+				Stdio: tool.Stdio{
+					In:  strings.NewReader(""),
+					Out: failingOutputWriter{err: errors.New("broken output")},
+					Err: &errb,
+				},
+			}
+
+			if code := cmd.Run(rc, []string{flag, other, "first", "second"}); code != 1 {
+				t.Errorf("code=%d, want 1", code)
+			}
+			if got, want := errb.String(), "chgrp: write error: broken output\n"; got != want {
+				t.Errorf("stderr=%q, want %q", got, want)
+			}
+			if len(*calls) != 2 {
+				t.Errorf("ownership work stopped after output failure: calls=%v", *calls)
+			}
+		})
+	}
+}

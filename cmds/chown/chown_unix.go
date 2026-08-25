@@ -56,6 +56,7 @@ func apply(rc *tool.RunContext, spec string, opts options) int {
 	state.verbose = opts.verbose || opts.changes
 
 	exit := 0
+	outputFailed := false
 	for _, name := range opts.files {
 		path := rc.Path(name)
 		// An operand that is a symbolic link is only resolved for the
@@ -65,7 +66,7 @@ func apply(rc *tool.RunContext, spec string, opts options) int {
 			exit = 1
 			continue
 		}
-		if !chownTree(rc, path, name, state) {
+		if !chownTree(rc, path, name, state, &outputFailed) {
 			exit = 1
 		}
 	}
@@ -75,7 +76,7 @@ func apply(rc *tool.RunContext, spec string, opts options) int {
 // chownTree walks one operand hierarchy. Every file is attempted: a
 // failure anywhere sets the exit status without stopping the walk, as
 // POSIX requires.
-func chownTree(rc *tool.RunContext, root, display string, opts chownOpts) bool {
+func chownTree(rc *tool.RunContext, root, display string, opts chownOpts, outputFailed *bool) bool {
 	ok := true
 	walker := &hierwalk.Walker{
 		Mode:      opts.mode,
@@ -90,7 +91,16 @@ func chownTree(rc *tool.RunContext, root, display string, opts chownOpts) bool {
 				reportChange(rc, name, opts, chownErr)
 				ok = false
 			default:
-				chownVerbose(rc.Out, name, changed, opts)
+				// An output failure must affect the status, but ownership work
+				// continues for the rest of the hierarchy. Avoid retrying a
+				// writer that has already failed and report the error once.
+				if !*outputFailed {
+					if err := chownVerbose(rc.Out, name, changed, opts); err != nil {
+						fmt.Fprintf(rc.Err, "chown: write error: %v\n", err)
+						*outputFailed = true
+						ok = false
+					}
+				}
 			}
 		},
 		StatError: func(_, name string, err error) {
@@ -152,18 +162,21 @@ func chownOne(path string, opts chownOpts) (changed bool, statErr, chownErr erro
 	return changed, nil, nil
 }
 
-func chownVerbose(out io.Writer, name string, changed bool, opts chownOpts) {
+func chownVerbose(out io.Writer, name string, changed bool, opts chownOpts) error {
 	if !opts.verbose {
-		return
+		return nil
 	}
 	if opts.changes && !changed {
-		return
+		return nil
 	}
 	if changed {
-		fmt.Fprintf(out, "changed ownership of '%s'\n", name)
+		_, err := fmt.Fprintf(out, "changed ownership of '%s'\n", name)
+		return err
 	} else if !opts.changes {
-		fmt.Fprintf(out, "ownership of '%s' retained\n", name)
+		_, err := fmt.Fprintf(out, "ownership of '%s' retained\n", name)
+		return err
 	}
+	return nil
 }
 
 // reportUnreachable diagnoses a file whose current ownership could not

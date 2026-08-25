@@ -56,6 +56,7 @@ func apply(rc *tool.RunContext, spec string, opts options) int {
 	state.verbose = opts.verbose || opts.changes
 
 	exit := 0
+	outputFailed := false
 	for _, name := range opts.files {
 		path := rc.Path(name)
 		// An operand that is a symbolic link is only resolved for the
@@ -65,7 +66,7 @@ func apply(rc *tool.RunContext, spec string, opts options) int {
 			exit = 1
 			continue
 		}
-		if !chgrpTree(rc, path, name, state) {
+		if !chgrpTree(rc, path, name, state, &outputFailed) {
 			exit = 1
 		}
 	}
@@ -75,7 +76,7 @@ func apply(rc *tool.RunContext, spec string, opts options) int {
 // chgrpTree walks one operand hierarchy. Every file is attempted: a
 // failure anywhere sets the exit status without stopping the walk, as
 // POSIX requires.
-func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
+func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts, outputFailed *bool) bool {
 	ok := true
 	walker := &hierwalk.Walker{
 		Mode:      opts.mode,
@@ -90,7 +91,16 @@ func chgrpTree(rc *tool.RunContext, root, display string, opts chgrpOpts) bool {
 				reportChange(rc, name, opts, chgrpErr)
 				ok = false
 			default:
-				chgrpVerbose(rc.Out, name, changed, held, opts)
+				// An output failure must affect the status, but ownership work
+				// continues for the rest of the hierarchy. Avoid retrying a
+				// writer that has already failed and report the error once.
+				if !*outputFailed {
+					if err := chgrpVerbose(rc.Out, name, changed, held, opts); err != nil {
+						fmt.Fprintf(rc.Err, "chgrp: write error: %v\n", err)
+						*outputFailed = true
+						ok = false
+					}
+				}
 			}
 		},
 		StatError: func(_, name string, err error) {
@@ -158,18 +168,21 @@ func chgrpOne(path string, opts chgrpOpts) (changed bool, held int, statErr, chg
 // the group that was asked for: a file --from skipped keeps a group the
 // command line never named, and reporting the requested id there would
 // state something untrue about the file.
-func chgrpVerbose(out io.Writer, name string, changed bool, held int, opts chgrpOpts) {
+func chgrpVerbose(out io.Writer, name string, changed bool, held int, opts chgrpOpts) error {
 	if !opts.verbose {
-		return
+		return nil
 	}
 	if opts.changes && !changed {
-		return
+		return nil
 	}
 	if changed {
-		fmt.Fprintf(out, "changed group of '%s'\n", name)
+		_, err := fmt.Fprintf(out, "changed group of '%s'\n", name)
+		return err
 	} else if !opts.changes {
-		fmt.Fprintf(out, "group of '%s' retained as %d\n", name, held)
+		_, err := fmt.Fprintf(out, "group of '%s' retained as %d\n", name, held)
+		return err
 	}
+	return nil
 }
 
 // reportUnreachable diagnoses a file whose current ownership could not

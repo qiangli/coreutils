@@ -13,6 +13,12 @@
 # the class of break the CI windows leg keeps catching after darwin-only local
 # work (unix-only types like syscall.Stat_t in an untagged _test.go).
 #
+# The js/wasip1 ownership checks pin the non-Unix fallback for chown/chgrp.
+# Those targets cannot use the Unix ownership implementation, while a fallback
+# named *_windows.go is implicitly restricted to Windows even when its explicit
+# build constraint says !unix. Vet compiles package tests without trying
+# to execute the resulting WebAssembly binary.
+#
 # The aix build is a DELIBERATE canary, not a shipping target. A build tag that
 # says `!windows` is a claim that every other OS is a unix with flock — and aix
 # and solaris lock through fcntl, so such a tag does not merely mislabel them,
@@ -25,7 +31,7 @@
 # Scope EXCLUDES the vendored external/ forks (ollama, podman): they pull cgo +
 # platform backends and are upstream's to test. That is the CI scope.
 #
-# Usage: scripts/crossvet.sh            # windows linux darwin + aix canary
+# Usage: scripts/crossvet.sh            # windows linux darwin + wasm/aix canaries
 #        scripts/crossvet.sh windows    # a subset, for a fast inner loop
 set -e
 cd "$(git rev-parse --show-toplevel)"
@@ -48,8 +54,17 @@ for os in $targets; do
   fi
 done
 
-# The canary rides with the full run only, not with an explicit subset.
+# The canaries ride with the full run only, not with an explicit subset.
 if [ $# -eq 0 ]; then
+  for os in js wasip1; do
+    if GOOS=$os GOARCH=wasm go vet ./cmds/chown/ ./cmds/chgrp/; then
+      echo "crossvet: GOOS=$os GOARCH=wasm PASS (ownership fallback canary)"
+    else
+      echo "crossvet: GOOS=$os GOARCH=wasm FAIL (ownership fallback canary)"
+      failed="$failed $os/wasm"
+    fi
+  done
+
   if GOOS=aix GOARCH=ppc64 go build ./pkg/steward/ ./pkg/policy/coord/ ./cmds/dd/; then
     echo "crossvet: GOOS=aix PASS (fail-closed-lock and dd ABI canaries)"
   else
@@ -62,4 +77,4 @@ if [ -n "$failed" ]; then
   echo "crossvet: FAIL —$failed"
   exit 1
 fi
-echo "crossvet: PASS ($targets$([ $# -eq 0 ] && echo ' aix'))"
+echo "crossvet: PASS ($targets$([ $# -eq 0 ] && echo ' js/wasm wasip1/wasm aix'))"

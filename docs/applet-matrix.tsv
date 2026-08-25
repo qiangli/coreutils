@@ -18,9 +18,9 @@ browser	cmds/browser		Bashy/other extension	no	no	1	9
 cal	cmds/cal		Bashy/other extension	no	no	1	6
 cat	cmds/cat		GNU Coreutils	yes	yes	2	9
 chcon	cmds/chcon		GNU Coreutils	yes	no	2	7
-chgrp	cmds/chgrp		GNU Coreutils	yes	yes	3	28
+chgrp	cmds/chgrp		GNU Coreutils	yes	yes	3	29
 chmod	cmds/chmod		GNU Coreutils	yes	yes	2	20
-chown	cmds/chown		GNU Coreutils	yes	yes	3	27
+chown	cmds/chown		GNU Coreutils	yes	yes	3	28
 cksum	cmds/cksum		GNU Coreutils	yes	yes	1	10
 clip	cmds/clip		Bashy/other extension	no	no	1	1
 cmp	cmds/cmp		POSIX/Unix utility	no	yes	1	12
