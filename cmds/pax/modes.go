@@ -2,6 +2,7 @@ package paxcmd
 
 import (
 	"archive/tar"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -29,25 +30,92 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 	if root == "" {
 		root, _ = os.Getwd()
 	}
-	// Plan first. The planner needs the whole stream, so the archive is read
-	// once into the plan and once for payloads; a non-seekable stdin therefore
-	// needs buffering, which is why the bytes are captured up front.
-	data, err := io.ReadAll(r)
+
+	raw, err := io.ReadAll(r)
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
-	plan, err := pax.PlanExtraction(strings.NewReader(string(data)), root, pax.OSFS{})
+	sel := newSelector(o, patterns)
+	var catalog []selectorMember
+	scan := tar.NewReader(bytes.NewReader(raw))
+	for {
+		h, err := scan.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			return 1
+		}
+		catalog = append(catalog, selectorMember{
+			name:  h.Name,
+			isDir: h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/"),
+		})
+	}
+	sel.prime(catalog)
+
+	var rewritten bytes.Buffer
+	tr := tar.NewReader(bytes.NewReader(raw))
+	tw := tar.NewWriter(&rewritten)
+
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			return 1
+		}
+
+		isDir := h.Typeflag == tar.TypeDir || strings.HasSuffix(h.Name, "/")
+		if !sel.keep(h.Name, isDir) {
+			continue
+		}
+
+		newName := applySubstitutions(o.subst, h.Name, rc.Err)
+		if newName == "" {
+			continue
+		}
+
+		h.Name = newName
+		if h.Typeflag == tar.TypeLink {
+			h.Linkname = applySubstitutions(o.subst, h.Linkname, nil)
+			if h.Linkname == "" {
+				continue
+			}
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			return 1
+		}
+		if _, err := io.Copy(tw, tr); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			return 1
+		}
+	}
+	if err := tw.Close(); err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		return 1
+	}
+
+	unmatched := sel.unmatched()
+	status := 0
+	if len(unmatched) > 0 {
+		for _, p := range unmatched {
+			fmt.Fprintf(rc.Err, "pax: pattern %q not matched\n", p)
+		}
+		status = 1
+	}
+
+	data := rewritten.Bytes()
+	plan, err := pax.PlanExtraction(bytes.NewReader(data), root, pax.OSFS{})
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
-	// Two kinds of rejection, and conflating them would be a bug in either
-	// direction. An existing destination is a POLICY question that POSIX
-	// answers with "overwrite unless -k"; everything else - an escaping path,
-	// an unsafe parent, a duplicate destination - is a safety verdict that no
-	// flag may override, and it condemns the WHOLE archive rather than one
-	// member, so nothing is written at all.
+
 	fatal := false
 	overwrite := map[string]string{}
 	for _, rej := range plan.Rejected {
@@ -68,24 +136,15 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 
 	allow := map[string]string{}
 	for p, t := range overwrite {
-		name := applySubstitutions(o.subst, p)
-		if name == "" || !selected(o, patterns, name) {
-			continue
-		}
 		allow[p] = t
 	}
 	for _, m := range plan.Members {
-		name := applySubstitutions(o.subst, m.Path)
-		if name == "" || !selected(o, patterns, name) {
-			continue
-		}
 		allow[m.Path] = m.Target
 	}
 
-	tr := tar.NewReader(strings.NewReader(string(data)))
-	status := 0
+	tr2 := tar.NewReader(bytes.NewReader(data))
 	for {
-		h, err := tr.Next()
+		h, err := tr2.Next()
 		if err == io.EOF {
 			break
 		}
@@ -97,7 +156,7 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		if !ok {
 			continue
 		}
-		if err := extractOne(rc, o, h, tr, target); err != nil {
+		if err := extractOne(rc, o, h, tr2, target); err != nil {
 			fmt.Fprintf(rc.Err, "pax: %s: %v\n", h.Name, err)
 			status = 1
 			continue
@@ -306,7 +365,7 @@ func addCPIOPath(rc *tool.RunContext, o *options, w *cpioWriter, name string) er
 		return err
 	}
 	write := func(rel, abs string, fi os.FileInfo) error {
-		out := applySubstitutions(o.subst, filepath.ToSlash(rel))
+		out := applySubstitutions(o.subst, filepath.ToSlash(rel), rc.Err)
 		if out == "" {
 			return nil
 		}
@@ -358,7 +417,7 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 				return err
 			}
 		}
-		out := applySubstitutions(o.subst, filepath.ToSlash(rel))
+		out := applySubstitutions(o.subst, filepath.ToSlash(rel), rc.Err)
 		if out == "" {
 			return nil
 		}

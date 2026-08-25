@@ -3683,7 +3683,7 @@ pax -r -w [-diklntuvX] [-H|-L] [-o options]... [-p string]... [-s replstr]... [f
 
 **Implementation:** `cmds/pax`.
 
-**Conservative source-token audit:** token gaps: options=-H, -L, -X, -b, -o, -t; argument-form gaps=-b=<blocksize>, -o=<options>; source `cmds/pax`. This audit is not proof of behavior.
+**Conservative source-token audit:** tokens found for all declared options and argument forms; behavioral evidence still required; source `cmds/pax`. This audit is not proof of behavior.
 
 **Evidence lanes:** Go=`-`; shell=`-`; provider=`-`; clauses=`XCU:pax:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 

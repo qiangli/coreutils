@@ -2,14 +2,18 @@ package paxcmd
 
 import (
 	"fmt"
+	"io"
 	"path"
-	"regexp"
 	"strings"
+
+	"github.com/qiangli/coreutils/pkg/bre"
 )
 
-// substitution is one -s ed-style rewrite: /old/new/[gp].
+// substitution is one -s ed-style rewrite: /old/new/[gp]. POSIX defines the
+// pattern as a basic regular expression, so it is compiled with the shared
+// pkg/bre provider rather than Go's regexp (whose \(...\) are literal parens).
 type substitution struct {
-	re     *regexp.Regexp
+	re     *bre.Regexp
 	repl   string
 	global bool
 	print  bool
@@ -43,15 +47,19 @@ func parseSubstitution(spec string) (substitution, error) {
 		cur.WriteByte(rest[i])
 	}
 	parts = append(parts, cur.String())
-	if len(parts) < 2 {
+	if len(parts) != 3 {
 		return s, fmt.Errorf("invalid -s expression %q: expected %csoldpattern%cnew%c[gp]", spec, sep, sep, sep)
 	}
-	re, err := regexp.Compile(parts[0])
+	// The old part is a POSIX BRE. Longest() gives the leftmost-longest match
+	// POSIX specifies (the same setting sed's s/// uses).
+	re, err := bre.Compile(parts[0])
 	if err != nil {
 		return s, fmt.Errorf("invalid -s pattern %q: %v", parts[0], err)
 	}
+	re.Longest()
 	s.re = re
-	// POSIX uses & for the whole match and \1..\9 for groups; Go uses $.
+	// POSIX uses & for the whole match and \1..\9 for groups; the bre matcher's
+	// ExpandString reads ${0}..${9} the way Go's regexp does.
 	s.repl = translateReplacement(parts[1])
 	if len(parts) > 2 {
 		for _, f := range parts[2] {
@@ -68,9 +76,9 @@ func parseSubstitution(spec string) (substitution, error) {
 	return s, nil
 }
 
-// translateReplacement converts an ed-style replacement to Go's syntax. A
-// literal $ must be escaped, or Go would read it as a group reference that the
-// author never wrote.
+// translateReplacement converts an ed-style replacement to the ${n} template
+// syntax pkg/bre.ExpandString understands. A literal $ must be escaped, or it
+// would be read as a group reference that the author never wrote.
 func translateReplacement(r string) string {
 	var b strings.Builder
 	for i := 0; i < len(r); i++ {
@@ -94,49 +102,159 @@ func translateReplacement(r string) string {
 	return b.String()
 }
 
-// applySubstitutions rewrites a member name. POSIX stops at the FIRST
-// expression that matches; an empty result means the member is skipped
-// entirely, which is how -s is used to drop members.
-func applySubstitutions(subs []substitution, name string) string {
+// applySubstitutions rewrites a member name. POSIX stops at the FIRST expression
+// that matches; an empty result means the member is skipped entirely, which is
+// how -s is used to drop members. When the matching substitution carries the
+// 'p' flag and report is non-nil, the "old >> new" rename is written to it.
+func applySubstitutions(subs []substitution, name string, report io.Writer) string {
 	for _, s := range subs {
-		if !s.re.MatchString(name) {
+		locs := s.re.FindAllStringSubmatchIndex(name, -1)
+		if len(locs) == 0 {
 			continue
 		}
-		if s.global {
-			return s.re.ReplaceAllString(name, s.repl)
+		var b strings.Builder
+		last := 0
+		for i, loc := range locs {
+			// Without the g flag only the first occurrence is rewritten.
+			if !s.global && i > 0 {
+				break
+			}
+			b.WriteString(name[last:loc[0]])
+			b.Write(s.re.ExpandString(nil, s.repl, name, loc))
+			last = loc[1]
 		}
-		// Replace the first occurrence only.
-		loc := s.re.FindStringSubmatchIndex(name)
-		if loc == nil {
-			continue
+		b.WriteString(name[last:])
+		out := b.String()
+		if s.print && report != nil {
+			fmt.Fprintf(report, "%s >> %s\n", name, out)
 		}
-		out := s.re.ExpandString(nil, s.repl, name, loc)
-		return name[:loc[0]] + string(out) + name[loc[1]:]
+		return out
 	}
 	return name
 }
 
-// selected reports whether a member name is chosen by the operand patterns.
-// With no patterns every member is selected; -c inverts the sense.
-func selected(o *options, patterns []string, name string) bool {
-	if len(patterns) == 0 {
+// selector applies the operand patterns to member names and records which
+// patterns matched, so an unmatched pattern can be diagnosed as POSIX requires.
+// It also carries the -c (complement), -n (first match only) and -d (do not
+// descend) modifiers that shape hierarchy selection.
+type selector struct {
+	patterns  []string
+	matched   []bool // per-pattern: did this pattern ever match a member
+	consumed  []bool // per-pattern: has -n already taken its first match
+	invert    bool   // -c
+	firstOnly bool   // -n
+	dirsOnly  bool   // -d
+
+	activeDirs []string // paths of explicitly matched directories (with trailing slash)
+}
+
+type selectorMember struct {
+	name  string
+	isDir bool
+}
+
+func newSelector(o *options, patterns []string) *selector {
+	return &selector{
+		patterns:  patterns,
+		matched:   make([]bool, len(patterns)),
+		consumed:  make([]bool, len(patterns)),
+		invert:    o.invertMatch,
+		firstOnly: o.selectNoPattern,
+		dirsOnly:  o.dirsNoDescend,
+	}
+}
+
+// prime records every directory member directly selected by an operand before
+// output begins. Archive formats do not require directory headers to precede
+// their children, so hierarchy selection cannot depend on encounter order.
+// With -n, only the first direct member match for each operand can establish a
+// selected hierarchy.
+func (s *selector) prime(members []selectorMember) {
+	for i, p := range s.patterns {
+		patternNamesDir := strings.HasSuffix(p, "/")
+		matchPattern := strings.TrimSuffix(p, "/")
+		for _, m := range members {
+			name := strings.TrimSuffix(m.name, "/")
+			if patternNamesDir && !m.isDir {
+				continue
+			}
+			match, _ := path.Match(matchPattern, name)
+			if !match {
+				continue
+			}
+			s.matched[i] = true
+			if m.isDir && !s.dirsOnly {
+				s.activeDirs = append(s.activeDirs, name+"/")
+			}
+			if s.firstOnly {
+				break
+			}
+		}
+	}
+}
+
+// keep reports whether a member name is selected, updating match bookkeeping.
+// With no patterns every member is selected. Members are expected in archive
+// order so that -n reliably takes the first match of each pattern.
+func (s *selector) keep(name string, isDir bool) bool {
+	name = strings.TrimSuffix(name, "/")
+	if len(s.patterns) == 0 {
 		return true
 	}
-	match := false
-	for _, p := range patterns {
-		if ok, _ := path.Match(p, name); ok {
-			match = true
-			break
-		}
-		// A directory operand selects everything beneath it, which is how
-		// callers name a subtree rather than each file in it.
-		if strings.HasPrefix(name, strings.TrimSuffix(p, "/")+"/") {
-			match = true
-			break
+
+	underDir := false
+	if !s.dirsOnly {
+		for _, d := range s.activeDirs {
+			if name != strings.TrimSuffix(d, "/") && strings.HasPrefix(name+"/", d) {
+				underDir = true
+				break
+			}
 		}
 	}
-	if o.invertMatch {
-		return !match
+
+	patternMatched := false
+	for i, p := range s.patterns {
+		if s.firstOnly && s.consumed[i] {
+			continue
+		}
+
+		patternNamesDir := strings.HasSuffix(p, "/")
+		matchPattern := strings.TrimSuffix(p, "/")
+		match := false
+		if !patternNamesDir || isDir {
+			match, _ = path.Match(matchPattern, name)
+		}
+		if match {
+			s.matched[i] = true
+			if s.firstOnly {
+				s.consumed[i] = true
+			}
+			patternMatched = true
+		}
 	}
-	return match
+
+	matchedHierarchy := patternMatched || underDir
+	if patternMatched && isDir && !s.dirsOnly {
+		s.activeDirs = append(s.activeDirs, name+"/")
+	}
+
+	keep := matchedHierarchy
+
+	if s.invert {
+		keep = !keep
+	}
+
+	return keep
+}
+
+// unmatched returns the operand patterns that matched no member, in operand
+// order, for the required diagnostic.
+func (s *selector) unmatched() []string {
+	var out []string
+	for i, ok := range s.matched {
+		if !ok {
+			out = append(out, s.patterns[i])
+		}
+	}
+	return out
 }

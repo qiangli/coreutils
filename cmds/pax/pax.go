@@ -1,22 +1,3 @@
-// Package paxcmd implements pax(1), the POSIX portable archive interchange
-// utility.
-//
-// Why this one first among the external-provider gaps: measured against the
-// retained GNU reference arm, pax accounts for 199 blocking outcomes - about
-// 14% of that arm's entire blocker total from a single command - and none of
-// them are UNINITIATED, so they are real failures of the system provider rather
-// than a missing tool. It is the largest genuine target on the list.
-//
-// It builds on pkg/pax, which already reads a manifest and PLANS an extraction:
-// the planner validates every destination and refuses unsafe members BEFORE any
-// mutation, so a hostile archive cannot escape the extraction root part-way
-// through. This command supplies the execution and the POSIX CLI on top; it
-// deliberately does not re-derive the safety rules.
-//
-//	pax                       list the archive on stdin
-//	pax -r [patterns]         extract
-//	pax -w [files]            create
-//	pax -r -w [files] dir     copy a file hierarchy
 package paxcmd
 
 import (
@@ -59,6 +40,10 @@ type options struct {
 	appendMode      bool // -a
 	invertMatch     bool // -c
 	selectNoPattern bool // -n
+
+	blocksize  string // -b
+	optionsStr string // -o
+	t, X, H, L bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -80,9 +65,52 @@ func run(rc *tool.RunContext, args []string) int {
 	fs.BoolVarP(&o.appendMode, "append", "a", false, "append to the archive")
 	fs.BoolVarP(&o.invertMatch, "complement", "c", false, "select members NOT matching the patterns")
 	fs.BoolVarP(&o.selectNoPattern, "first", "n", false, "select only the first match per pattern")
+
+	fs.StringVarP(&o.blocksize, "blocksize", "b", "", "block size")
+	fs.StringVarP(&o.optionsStr, "options", "o", "", "format-specific options")
+	fs.BoolVarP(&o.t, "t", "t", false, "reset access times")
+	fs.BoolVarP(&o.X, "X", "X", false, "device boundary")
+	fs.BoolVarP(&o.H, "H", "H", false, "follow command-line symlinks")
+	fs.BoolVarP(&o.L, "L", "L", false, "follow all symlinks")
+
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
+	}
+
+	if o.invertMatch && o.selectNoPattern {
+		return tool.UsageError(rc, cmd, "-c and -n cannot be used together")
+	}
+	isList := !o.read && !o.write
+	isRead := o.read && !o.write
+	isWrite := !o.read && o.write
+
+	if fs.Changed("blocksize") {
+		if !isWrite {
+			return tool.UsageError(rc, cmd, "-b is valid only in write mode")
+		}
+		return tool.NotSupported(rc, cmd, "-b")
+	}
+	if fs.Changed("options") {
+		return tool.NotSupported(rc, cmd, "-o")
+	}
+	if fs.Changed("t") {
+		if isList || isRead {
+			return tool.UsageError(rc, cmd, "-t is valid only in write or copy mode")
+		}
+		return tool.NotSupported(rc, cmd, "-t")
+	}
+	if fs.Changed("X") {
+		if isList || isRead {
+			return tool.UsageError(rc, cmd, "-X is valid only in write or copy mode")
+		}
+		return tool.NotSupported(rc, cmd, "-X")
+	}
+	if fs.Changed("H") {
+		return tool.NotSupported(rc, cmd, "-H")
+	}
+	if fs.Changed("L") {
+		return tool.NotSupported(rc, cmd, "-L")
 	}
 	for _, s := range *subst {
 		sub, err := parseSubstitution(s)
@@ -141,9 +169,24 @@ func listMode(rc *tool.RunContext, o *options, patterns []string) int {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
+
+	sel := newSelector(o, patterns)
+	catalog := make([]selectorMember, 0, len(members))
 	for _, m := range members {
-		name := applySubstitutions(o.subst, m.Path)
-		if name == "" || !selected(o, patterns, name) {
+		catalog = append(catalog, selectorMember{
+			name:  m.Path,
+			isDir: m.Kind == pax.KindDir || strings.HasSuffix(m.Path, "/"),
+		})
+	}
+	sel.prime(catalog)
+
+	for _, m := range members {
+		isDir := m.Kind == pax.KindDir || strings.HasSuffix(m.Path, "/")
+		if !sel.keep(m.Path, isDir) {
+			continue
+		}
+		name := applySubstitutions(o.subst, m.Path, rc.Err)
+		if name == "" {
 			continue
 		}
 		if o.verbose {
@@ -153,6 +196,15 @@ func listMode(rc *tool.RunContext, o *options, patterns []string) int {
 			fmt.Fprintln(rc.Out, name)
 		}
 	}
+
+	unmatched := sel.unmatched()
+	if len(unmatched) > 0 {
+		for _, p := range unmatched {
+			fmt.Fprintf(rc.Err, "pax: pattern %q not matched\n", p)
+		}
+		return 1
+	}
+
 	return 0
 }
 

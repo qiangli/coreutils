@@ -118,7 +118,7 @@ func TestSubstitutionAcceptsAlternateDelimiters(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", spec, err)
 		}
-		if got := applySubstitutions([]substitution{s}, "src/a.txt"); got != "dst/a.txt" {
+		if got := applySubstitutions([]substitution{s}, "src/a.txt", nil); got != "dst/a.txt" {
 			t.Errorf("%s: got %q", spec, got)
 		}
 	}
@@ -131,10 +131,10 @@ func TestSubstitutionToEmptyDropsTheMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := applySubstitutions([]substitution{s}, "src/sub/b.txt"); got != "" {
+	if got := applySubstitutions([]substitution{s}, "src/sub/b.txt", nil); got != "" {
 		t.Errorf("expected the member to be dropped, got %q", got)
 	}
-	if got := applySubstitutions([]substitution{s}, "src/a.txt"); got != "src/a.txt" {
+	if got := applySubstitutions([]substitution{s}, "src/a.txt", nil); got != "src/a.txt" {
 		t.Errorf("unrelated member must be untouched, got %q", got)
 	}
 }
@@ -142,18 +142,18 @@ func TestSubstitutionToEmptyDropsTheMember(t *testing.T) {
 func TestSubstitutionAmpersandAndGroups(t *testing.T) {
 	s, _ := parseSubstitution("/a\\(.*\\)z/[&]/")
 	_ = s
-	g, err := parseSubstitution("/(x+)/<\\1>/")
+	g, err := parseSubstitution(`/\(xx*\)/<\1>/`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := applySubstitutions([]substitution{g}, "axxb"); got != "a<xx>b" {
+	if got := applySubstitutions([]substitution{g}, "axxb", nil); got != "a<xx>b" {
 		t.Errorf("group backreference: got %q", got)
 	}
-	amp, err := parseSubstitution("/x+/[&]/")
+	amp, err := parseSubstitution(`/xx*/[&]/`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := applySubstitutions([]substitution{amp}, "axxb"); got != "a[xx]b" {
+	if got := applySubstitutions([]substitution{amp}, "axxb", nil); got != "a[xx]b" {
 		t.Errorf("ampersand whole-match: got %q", got)
 	}
 }
