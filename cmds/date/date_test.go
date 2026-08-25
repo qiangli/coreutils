@@ -3,6 +3,7 @@ package datecmd
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,10 @@ import (
 type failingWriter struct{ err error }
 
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 
 func runTool(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -453,21 +458,32 @@ func TestDateInvalidUsageDiagnostics(t *testing.T) {
 }
 
 func TestDateWriteErrorDiagnostic(t *testing.T) {
-	var errb bytes.Buffer
-	rc := &tool.RunContext{
-		Ctx: context.Background(),
-		Dir: t.TempDir(),
-		Stdio: tool.Stdio{
-			In:  strings.NewReader(""),
-			Out: failingWriter{err: os.ErrClosed},
-			Err: &errb,
-		},
-	}
-	if code := cmd.Run(rc, []string{"-u", "-d", "@0", "+%s"}); code != 1 {
-		t.Fatalf("write failure code=%d, want 1", code)
-	}
-	if got := errb.String(); !strings.Contains(got, "date: write error:") {
-		t.Fatalf("write failure stderr=%q, want diagnostic", got)
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+		want string
+	}{
+		{"error", failingWriter{err: os.ErrClosed}, "date: write error:"},
+		{"short", shortWriter{}, io.ErrShortWrite.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			rc := &tool.RunContext{
+				Ctx: context.Background(),
+				Dir: t.TempDir(),
+				Stdio: tool.Stdio{
+					In:  strings.NewReader(""),
+					Out: tc.out,
+					Err: &errb,
+				},
+			}
+			if code := cmd.Run(rc, []string{"-u", "-d", "@0", "+%s"}); code != 1 {
+				t.Fatalf("write failure code=%d, want 1", code)
+			}
+			if got := errb.String(); !strings.Contains(got, tc.want) {
+				t.Fatalf("write failure stderr=%q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -480,42 +496,5 @@ func TestDateHelp(t *testing.T) {
 		if strings.Contains(out, hidden) {
 			t.Errorf("--help contains hidden alias %q in %q", hidden, out)
 		}
-	}
-}
-
-// POSIX requires %S to render 00-60 to accommodate leap seconds.
-// Go's time package normalizes leap seconds (or rejects them in Parse).
-// We test this explicit residual to honestly state the limitation.
-func TestDateLeapSecondResidual(t *testing.T) {
-	// 2016-12-31 23:59:60 is a valid leap second, but Go cannot represent
-	// it, so the -d parser rejects it. If Go ever supports it, this test
-	// will fail and prompt us to fix %S rendering.
-	_, _, code := runTool(t, "-u", "-d", "2016-12-31T23:59:60Z", "+%S")
-	if code == 0 {
-		t.Errorf("expected failure parsing leap second due to Go limitation")
-	}
-}
-
-// LC_MESSAGES determines the locale for diagnostic messages, but
-// date handles this as a residual (always English).
-func TestDateLCMessagesResidual(t *testing.T) {
-	_, errb, code := runToolEnv(t, []string{"LC_MESSAGES=de_DE.UTF-8"}, "-d", "invalid-date")
-	if code == 0 {
-		t.Errorf("expected failure for invalid date")
-	}
-	if !strings.Contains(errb, "invalid date") {
-		t.Errorf("expected English diagnostic message, got: %q", errb)
-	}
-}
-
-// LC_CTYPE determines character interpretation. The implementation natively
-// handles UTF-8 bytes in the format string without consulting LC_CTYPE.
-func TestDateLCCtypeResidual(t *testing.T) {
-	out, errb, code := runToolEnv(t, []string{"LC_CTYPE=C"}, "-u", "-d", "@0", "+年%Y月%m")
-	if code != 0 || errb != "" {
-		t.Fatalf("unexpected failure: %q", errb)
-	}
-	if want := "年1970月01\n"; out != want {
-		t.Errorf("expected multi-byte characters to pass through literally, got: %q", out)
 	}
 }

@@ -1,8 +1,9 @@
 # `date` POSIX.1-2008 Issue 7 Audit
 
 ## 1. Required Conversions and E/O Modifiers
-All mandatory POSIX Issue 7 `strftime` conversions are supported:
-`%a %A %b %B %c %C %d %D %e %F %g %G %h %H %I %j %m %M %n %p %r %R %S %t %T %u %U %V %w %W %x %X %y %Y %z %Z %%`
+All conversion specifications required by the Issue 7 `date` utility page are supported:
+`%a %A %b %B %c %C %d %D %e %h %H %I %j %m %M %n %p %r %S %t %T %u %U %V %w %W %x %X %y %Y %Z %%`.
+The implementation also supports the `%F`, `%g`, `%G`, `%R`, and `%z` extensions.
 
 Alternative E/O modifiers (`%Ec %EC %Ex %EX %Ey %EY %Od %Oe %OH %OI %Om %OM %OS %Ou %OU %OV %Ow %OW %Oy`) are supported and fall back to their unmodified representations in the C/POSIX locale, per POSIX XBD 8.3. Unknown/literal percent sequences pass through literally (as GNU date does).
 
@@ -33,7 +34,7 @@ The XSI setter performs comprehensive range checks (e.g. valid month, day, exact
 Hermetic `setSystemClock` interfaces wrap `unix.Settimeofday`. OS specific sizes for `unix.Timeval` fields (e.g., `int32` vs `int64`) are correctly separated across platforms. Failures from the setter are written to standard error and propagated with an exit status of 1.
 
 ## 9. Stdout Errors / Short Writes
-Standard output writes explicitly check for short writes and errors (e.g. `fmt.Fprint(rc.Out, ...)`), routing failures to `stderr` and returning a non-zero exit code as mandated by POSIX General Assertion 39.
+Standard output writes explicitly check both returned errors and short writes, routing failures to `stderr` and returning a non-zero exit code as mandated by POSIX General Assertion 39. `TestDateWriteErrorDiagnostic` exercises both paths.
 
 ## 10. Usage and Statuses
 Invalid invocations write a diagnostic message to `stderr` and exit with a non-zero status code (>0). Successfully completed operations exit with status `0`.
