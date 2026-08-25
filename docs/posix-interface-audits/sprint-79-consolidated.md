@@ -13,8 +13,8 @@ generated [interface ledger](../posix-required-command-interfaces.tsv).
 
 The canonical ledger remains the authority: its 116 rows are 78 Go-owned, 22
 shell-owned, and 16 external-provider-owned. After five accepted Go closure
-batches and the five-command shell semantic batch, its evidence states are
-**2 verified, 45 partial, and 69 unverified**. An audit's “supportable pass”
+batches and two five-command shell semantic batches, its evidence states are
+**2 verified, 50 partial, and 64 unverified**. An audit's “supportable pass”
 finding does not become certification evidence until a stable command-specific
 test reference and a separate ledger promotion are accepted.
 
@@ -171,16 +171,20 @@ same-name Go applets remain relevant only to exec-style callers such as `env`,
 The accepted Profile B authority is the complete 9,337/9,337 GNU Bash
 5.3/Bashy remote pair; the targeted ARM `fc` pair also completed 53/53.  These
 are differential and routing evidence, not clause-complete POSIX evidence.
-The five-command semantic closure batch added stable tests for `alias`, `echo`,
-`false`, `true`, and `unalias`, and fixed strict-POSIX `echo` option parsing.
-`false` and `true` are verified; the other three are conservatively partial:
+Two five-command semantic closure batches added stable tests for `alias`,
+`echo`, `false`, `true`, `unalias`, `cd`, `command`, `getopts`, `hash`, and
+`pwd`. They fixed strict-POSIX `echo` option parsing plus the reviewed shell
+semantics recorded in [`shell-evidence-closure-batch-2.md`](shell-evidence-closure-batch-2.md).
+`false` and `true` are verified; the other eight are conservatively partial:
 
 | Commands | Selected route | Profile B evidence and remaining scope |
 | --- | --- | --- |
 | `sh` (245 TPs), `test` (207), `printf` (67) | entrypoint; builtin; builtin-over-Go | Critical-yield surfaces; aggregate parity does not prove their grammar, expression, formatting, locale, diagnostic, and status matrices. |
-| `cd` (45), `command` (37), `fc` (28), `umask` (27) | shell builtins | Targeted fixes/pairs exist (`fc` 53/53), but no command has clause-complete stable shell evidence. |
+| `cd` (45), `command` (37) | shell builtins | Stable focused tests cover required directory/search, state, output, execution/lookup, and status paths; locale catalogs and exceptional filesystem/process paths remain residual. |
+| `fc` (28), `umask` (27) | shell builtins | Targeted fixes/pairs exist (`fc` 53/53), but neither command has clause-complete stable shell evidence. |
 | `kill` (18) | builtin-over-Go | `kill:TP9` and `kill_NE:TP8` fail identically in A/B and are shared suite/environment results, not Bashy defects; the shell timing fix is already integrated in the shell repository as `031d47e2`. |
-| `bg` (17), `pwd` (17), `read` (13), `wait` (13), `fg` (12), `hash` (12), `getopts` (10), `jobs` (0) | shell builtins (`pwd` overlaps Go) | Source and targeted tests exist, but interactive/job, state, lookup, assignment, and diagnostic clauses are not closed.  `jobs` has zero likely testable TPs, not a waived interface. |
+| `pwd` (17), `hash` (12), `getopts` (10) | shell builtins (`pwd` overlaps Go) | Stable focused tests now cover their principal logical/physical path, cache, option scan, state, stream, and status paths; locale catalogs and the exact residuals in the batch-2 audit remain. |
+| `bg` (17), `read` (13), `wait` (13), `fg` (12), `jobs` (0) | shell builtins | Source and targeted tests exist, but interactive/job, state, assignment, and diagnostic clauses are not closed. `jobs` has zero likely testable TPs, not a waived interface. |
 | `alias` (13), `unalias` (8) | shell builtins | Focused definition/query/removal, scope, status, error, and stream evidence exists; locale-sensitive diagnostics and all parser-timing consequences remain open, so both are partial. |
 | `time` (16) | shell keyword-over-Go | Keyword routing is established; output, signal, status, ambiguity, and locale evidence is incomplete. |
 | `echo` (12) | builtin-over-Go | Focused base/XSI, stream, status, and output-error evidence exists and a strict-POSIX option bug is fixed; the Profile D XSI feature-selection and locale branches remain open, so it is partial. |

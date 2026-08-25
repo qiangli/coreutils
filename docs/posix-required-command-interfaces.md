@@ -17,8 +17,8 @@ GNU compatibility is explicitly out of scope and deferred.
 | Effective owner | Shell | 22 |
 | Effective owner | Provider | 16 |
 | Evidence | Verified | 2 |
-| Evidence | Partial | 45 |
-| Evidence | Unverified | 69 |
+| Evidence | Partial | 50 |
+| Evidence | Unverified | 64 |
 
 Completion is deliberately fail-closed: `scripts/posix_manifest.py
 --require-complete` covers all 116 rows, while `--require-owned-complete`
@@ -491,7 +491,7 @@ cat [-u] [file...]
 
 ## `cd`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -508,21 +508,21 @@ cd -
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `directory; -`. UNVERIFIED
+**Operands:** `directory; -`. With no directory operand, use HOME; with one directory operand, resolve it directly or through CDPATH as specified. -L processes dot-dot components logically before symbolic-link resolution; -P resolves the physical pathname, with the last -L/-P option winning. More than one operand is a usage error.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** The directory operand - selects OLDPWD and writes the resulting directory. A non-empty CDPATH selection also writes the selected pathname. An empty directory is a diagnostic failure; Bash's empty-HOME behavior is a documented extension.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `CDPATH; HOME; LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; OLDPWD; PWD`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write the new directory followed by a newline for cd - and for a successful non-empty CDPATH search; otherwise no output. A write failure makes the command fail after the directory change has occurred.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for usage, missing HOME/OLDPWD, inaccessible directory, and standard-output failure diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Changes the shell execution environment's current working directory; updates PWD and OLDPWD on success and leaves them and the working directory unchanged on lookup/change failure.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the directory is changed successfully and required output is written; greater than 0 on failure (usage errors use the repository's status 2 convention).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -534,7 +534,7 @@ cd -
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteCd`; provider=`-`; clauses=`XCU:cd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestCdIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteCd`; provider=`-`; clauses=`XCU:cd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [cd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/cd.html).
 
@@ -830,7 +830,7 @@ comm [-123] file1 file2
 
 ## `command`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -847,21 +847,21 @@ command [-p][-v|-V] command_name
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `argument; command_name`. UNVERIFIED
+**Operands:** `argument; command_name`. Without -v/-V, invoke command_name with argument operands while suppressing shell-function lookup; a special built-in invoked through command loses the special declaration-error and assignment-persistence properties. -p uses a guaranteed standard-utilities PATH. -v and -V describe command_name instead of invoking it.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** -v writes a reusable pathname or command word; -V writes an implementation-defined description. Bash accepts multiple names as an extension and succeeds when any resolves; no operands is a silent-success extension.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not read by command itself; an invoked command inherits standard input.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** An invoked command inherits standard output. -v writes one reusable resolution per found name and -V writes a descriptive resolution; an unresolved -v name is silent.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for usage, command-not-found, descriptive -V lookup, and invoked-command diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Invokes the selected utility or built-in directly with the supplied arguments and environment; -v/-V only query resolution. Shell functions are bypassed.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** Without -v/-V, the invoked command's status, 127 when command_name cannot be found, and greater than 0 on command errors. With -v/-V, 0 when a name is found and greater than 0 when none is found.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -873,7 +873,7 @@ command [-p][-v|-V] command_name
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteCommand`; provider=`-`; clauses=`XCU:command:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestCommandIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteCommand`; provider=`-`; clauses=`XCU:command:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [command](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/command.html).
 
@@ -2042,7 +2042,7 @@ getconf [-v specification] path_var pathname
 
 ## `getopts`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2058,21 +2058,21 @@ getopts optstring name [arg...]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `optstring; name`. UNVERIFIED
+**Operands:** `optstring; name`. Parse options from arg operands when supplied, otherwise from the shell positional parameters. optstring lists recognized option characters; a following colon requires an option-argument. name must be a valid shell variable name and receives the current option character.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** OPTIND starts at 1 and advances through option arguments, including clusters and attached option-arguments; resetting OPTIND to 1 restarts scanning. -- ends option scanning. A leading colon in optstring selects silent error reporting. OPTARG receives an option-argument or the offending option in silent error mode and is unset where Issue 7 requires.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; OPTIND`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Not used.
 
-**Standard error:** UNVERIFIED
+**Standard error:** In normal mode, diagnose an unknown option or missing option-argument; leading-colon mode suppresses those diagnostics. Usage and invalid-name errors are diagnosed.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Updates name, OPTIND, and OPTARG in the current shell execution environment; repeated calls continue the same scan.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when an option, including an option error represented by ? or :, is processed; greater than 0 at end of options or on a getopts usage/name error.
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2084,7 +2084,7 @@ getopts optstring name [arg...]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteGetopts`; provider=`-`; clauses=`XCU:getopts:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestGetoptsIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteGetopts`; provider=`-`; clauses=`XCU:getopts:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [getopts](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/getopts.html).
 
@@ -2140,7 +2140,7 @@ grep [-E|-F] [-c|-l|-q] [-insvx] pattern_list [file...]
 
 ## `hash`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -2157,21 +2157,21 @@ hash -r
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `utility`. UNVERIFIED
+**Operands:** `utility`. Each utility operand asks the shell to locate and remember a PATH-searched external utility. Shell built-ins, functions, and names containing a slash are not added. With no operands, report remembered locations; -r forgets all remembered locations.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** The Bash extensions -p pathname name, -t name, and -d name explicitly install, query, or delete entries and are outside the Issue 7 hash [utility...] / hash -r surface.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_CTYPE; LC_MESSAGES; NLSPATH; PATH`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** With no operands, write the remembered utility table; POSIX leaves its format unspecified. POSIX operand and -r forms otherwise write no output.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for usage, unresolved-utility, and extension query diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Updates or clears the current shell execution environment's remembered utility-location table; subshell changes do not escape.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the requested table operation succeeds; greater than 0 when a utility cannot be found or another error occurs (usage errors use status 2).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -2183,7 +2183,7 @@ hash -r
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteHash`; provider=`-`; clauses=`XCU:hash:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestHashIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRouteHash`; provider=`-`; clauses=`XCU:hash:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [hash](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/hash.html).
 
@@ -3841,7 +3841,7 @@ printf format [argument...]
 
 ## `pwd`
 
-**Evidence state:** `unverified`.
+**Evidence state:** `partial`.
 
 **Applicability:** `base`.
 
@@ -3857,21 +3857,21 @@ pwd [-L|-P]
 
 **Issue 7 option-argument candidate:** `none`.
 
-**Operands:** `none`. UNVERIFIED
+**Operands:** `none`. No operands are specified. -L writes the logical pathname from PWD when it is an absolute pathname without dot or dot-dot components naming the current directory; otherwise it falls back to the physical pathname. -P resolves symbolic links physically, with the last -L/-P option winning.
 
-**Special tokens:** UNVERIFIED
+**Special tokens:** Bash accepts and ignores extra operands as an extension outside the Issue 7 synopsis.
 
-**Standard input:** UNVERIFIED
+**Standard input:** Not used.
 
 **Environment:** `LANG; LC_ALL; LC_MESSAGES; NLSPATH; PWD`.
 
-**Standard output:** UNVERIFIED
+**Standard output:** Write one absolute pathname of the current working directory followed by a newline; a standard-output failure is diagnosed and returns failure.
 
-**Standard error:** UNVERIFIED
+**Standard error:** Used for invalid-option, pathname-resolution, and standard-output failure diagnostics.
 
-**Effects:** `UNVERIFIED`.
+**Effects:** `Does not change the current working directory. Bash updates PWD to the physical pathname after a successful -P query; this is an implementation extension.`.
 
-**Exit status:** UNVERIFIED
+**Exit status:** 0 when the pathname is determined and written; greater than 0 on error (usage errors use status 2).
 
 **Compatibility scope:** POSIX Issue 7 only; GNU compatibility is out of scope.
 
@@ -3883,7 +3883,7 @@ pwd [-L|-P]
 
 **Conservative source-token audit:** not applicable to a Go-selected parser; source `-`. This audit is not proof of behavior.
 
-**Evidence lanes:** Go=`-`; shell semantic=`-`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRoutePwd`; provider=`-`; clauses=`XCU:pwd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
+**Evidence lanes:** Go=`-`; shell semantic=`sh:interp/issue7_command_interface_test.go#TestPwdIssue7Interface`; shell routing=`bashy:internal/cli/profile_b_routing_test.go#TestProfileBRoutePwd`; provider=`-`; clauses=`XCU:pwd:SYNOPSIS,OPTIONS,OPERANDS,ENVIRONMENT_VARIABLES,STDIN,INPUT_FILES,STDOUT,STDERR,OUTPUT_FILES,EXIT_STATUS,CONSEQUENCES_OF_ERRORS`.
 
 **Issue 7 source:** [pwd](https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/utilities/pwd.html).
 
