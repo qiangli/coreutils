@@ -118,6 +118,16 @@ class ManifestValidationTest(unittest.TestCase):
         self.assertRejected(self.changed("echo", availability="shell_only"), "availability drift")
         self.assertRejected(self.changed("echo", effective_owner="go"), "owner drift")
 
+    def test_sh_is_a_staged_shell_entrypoint(self) -> None:
+        row = self.row("sh")
+        self.assertEqual(row["availability"], "shell_only")
+        self.assertEqual(row["effective_owner"], "shell")
+        self.assertEqual(row["parser_model"], "shell_entrypoint")
+        self.assertRejected(
+            self.changed("sh", parser_model="shell_builtin"),
+            "parser/owner model drift",
+        )
+
     def test_gnu_claims_are_out_of_scope(self) -> None:
         self.assertNotIn("gnu_only_options", manifest.FIELDS)
         self.assertRejected(

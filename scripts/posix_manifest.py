@@ -32,6 +32,7 @@ SHELL_SELECTED_OVER_GO = frozenset(
     "echo false kill printf pwd test true time".split()
 )
 SHELL_SELECTED = SHELL_ONLY | SHELL_SELECTED_OVER_GO
+SHELL_ENTRYPOINTS = frozenset({"sh"})
 CUSTOM_PARSERS = frozenset("awk dd expr find sed stty".split())
 
 FIELDS = (
@@ -68,7 +69,7 @@ AVAILABILITY = {"go", "shell_only", "external_provider"}
 OWNERS = {"go", "shell", "external_provider"}
 PARSER_MODELS = {
     "flagset", "manual", "custom", "none", "shell_builtin",
-    "shell_keyword", "external",
+    "shell_entrypoint", "shell_keyword", "external",
 }
 APPLICABILITY = {"base", "xsi", "development", "optional"}
 EVIDENCE_STATES = {"verified", "partial", "unverified"}
@@ -476,6 +477,13 @@ def validate(
             )
             if row["parser_model"] != expected_model:
                 raise ManifestError(f"{command}: parser model drift")
+        elif expected_owner == "shell":
+            expected_model = (
+                "shell_entrypoint" if command in SHELL_ENTRYPOINTS else
+                "shell_keyword" if command == "time" else "shell_builtin"
+            )
+            if row["parser_model"] != expected_model:
+                raise ManifestError(f"{command}: parser/owner model drift")
         elif row["parser_source"] != "-":
             raise ManifestError(f"{command}: shell/provider parser evidence crossed lanes")
 

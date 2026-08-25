@@ -4164,7 +4164,7 @@ sh -s [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [argument...
 
 **Availability:** `shell_only`.
 
-**Effective owner:** `shell` (`shell_builtin`).
+**Effective owner:** `shell` (`shell_entrypoint`).
 
 **Implementation:** `shell:sh`.
 
