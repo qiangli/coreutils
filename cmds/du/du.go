@@ -9,6 +9,8 @@
 // -b switches to exact apparent sizes in bytes; -h prints
 // human-readable sizes. Hard-linked files are counted once per
 // invocation. Traversal does not follow symlinks.
+// Locale-sensitive diagnostic catalogs (LC_MESSAGES/NLSPATH) remain an
+// explicit conformance residual; diagnostics currently use the C locale.
 //
 // Platform note: disk usage comes from st_blocks on unix; Windows has
 // no block count, so usage falls back to the apparent size there.
@@ -61,6 +63,7 @@ type duRun struct {
 	seen          map[devIno]bool
 	excludes      []string
 	term          string
+	outputFailed  bool
 }
 
 type derefMode int
@@ -107,15 +110,28 @@ func run(rc *tool.RunContext, args []string) int {
 		}
 	}
 	fs := tool.NewFlags(cmd.Name)
+	deref := derefNone
+	setDeref := func(mode derefMode) func(string) error {
+		return func(value string) error {
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return err
+			}
+			if enabled {
+				deref = mode
+			}
+			return nil
+		}
+	}
 	all := fs.BoolP("all", "a", false, "write counts for all files, not just directories")
 	apparentSize := fs.BoolP("apparent-size", "A", false, "print apparent sizes, rather than disk usage")
 	bytesMode := fs.BoolP("bytes", "b", false, "equivalent to '--apparent-size --block-size=1'")
 	blockSize := fs.StringP("block-size", "B", "", "scale sizes by SIZE before printing them")
-	derefArgsLong := fs.Bool("dereference-args", false, "dereference only symlinks that are listed on the command line")
-	derefArgsShort := fs.BoolP("dereference-args-short", "D", false, "dereference only symlinks that are listed on the command line")
-	hFlag := fs.BoolP("dereference-args-H", "H", false, "equivalent to --dereference-args")
-	derefAllFlag := fs.BoolP("dereference", "L", false, "dereference all symbolic links")
-	noDeref := fs.BoolP("no-dereference", "P", false, "do not follow any symbolic links")
+	fs.BoolFunc("dereference-args", "dereference only symlinks that are listed on the command line", setDeref(derefArgs))
+	fs.BoolFuncP("dereference-args-short", "D", "dereference only symlinks that are listed on the command line", setDeref(derefArgs))
+	fs.BoolFuncP("dereference-args-H", "H", "equivalent to --dereference-args", setDeref(derefArgs))
+	fs.BoolFuncP("dereference", "L", "dereference all symbolic links", setDeref(derefAll))
+	fs.BoolFuncP("no-dereference", "P", "do not follow any symbolic links", setDeref(derefNone))
 	kib := fs.BoolP("kilobytes", "k", false, "like --block-size=1K")
 	mib := fs.BoolP("megabytes", "m", false, "like --block-size=1M")
 	fs.BoolP("megabytes-short", "M", false, "like --block-size=1M")
@@ -234,17 +250,6 @@ func run(rc *tool.RunContext, args []string) int {
 	if *null {
 		term = "\x00"
 	}
-	deref := derefNone
-	if *derefArgsLong || *derefArgsShort || *hFlag {
-		deref = derefArgs
-	}
-	if *derefAllFlag {
-		deref = derefAll
-	}
-	if *noDeref {
-		deref = derefNone
-	}
-
 	d := &duRun{
 		rc:            rc,
 		all:           *all,
@@ -347,7 +352,7 @@ func (d *duRun) walk(display, full string, depth int, rootDev *uint64) (duEntry,
 		if dev, ok := fileDev(fi); ok {
 			if rootDev == nil {
 				rootDev = &dev
-			} else if depth > 0 && dev != *rootDev && fi.IsDir() {
+			} else if depth > 0 && dev != *rootDev {
 				return duEntry{}, true
 			}
 		}
@@ -419,6 +424,9 @@ func (d *duRun) amount(fi os.FileInfo) int64 {
 }
 
 func (d *duRun) print(n int64, path string, mod time.Time) {
+	if d.outputFailed {
+		return
+	}
 	if d.haveThreshold {
 		if d.threshold >= 0 && n < d.threshold {
 			return
@@ -428,11 +436,24 @@ func (d *duRun) print(n int64, path string, mod time.Time) {
 		}
 	}
 	if d.showTime {
-		fmt.Fprintf(d.rc.Out, "%s\t%s\t%s%s", d.fmtSize(n), d.fmtTime(mod), path, d.term)
+		d.writeOutput(fmt.Sprintf("%s\t%s\t%s%s", d.fmtSize(n), d.fmtTime(mod), path, d.term))
 		return
 	}
 	// POSIX specifies exactly one <space> between size and pathname.
-	fmt.Fprintf(d.rc.Out, "%s %s%s", d.fmtSize(n), path, d.term)
+	d.writeOutput(fmt.Sprintf("%s %s%s", d.fmtSize(n), path, d.term))
+}
+
+func (d *duRun) writeOutput(s string) {
+	n, err := io.WriteString(d.rc.Out, s)
+	if err == nil && n != len(s) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		return
+	}
+	d.outputFailed = true
+	d.exit = 1
+	fmt.Fprintf(d.rc.Err, "du: write error: %s\n", errMsg(err))
 }
 
 func (d *duRun) fmtSize(n int64) string {

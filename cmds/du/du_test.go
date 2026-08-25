@@ -3,6 +3,8 @@ package ducmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -220,6 +222,36 @@ func TestSymlinkDereferenceModes(t *testing.T) {
 	_, paths = parseDu(t, dir, "-abP", "root")
 	if strings.Join(paths, " ") != "root/alias root" {
 		t.Errorf("du -abP root paths = %v, want symlink itself only", paths)
+	}
+
+	// POSIX requires the last of -H and -L to determine behavior.
+	_, paths = parseDu(t, dir, "-abLH", "root")
+	if strings.Join(paths, " ") != "root/alias root" {
+		t.Errorf("du -abLH root paths = %v, want final -H to avoid nested dereference", paths)
+	}
+	_, paths = parseDu(t, dir, "-abHL", "root")
+	if strings.Join(paths, " ") != "root/alias/f root/alias root" {
+		t.Errorf("du -abHL root paths = %v, want final -L to dereference nested link", paths)
+	}
+	for _, flags := range []string{"-abLP", "-abLD"} {
+		_, paths = parseDu(t, dir, flags, "root")
+		if strings.Join(paths, " ") != "root/alias root" {
+			t.Errorf("du %s root paths = %v, want final no/all-args mode to avoid nested dereference", flags, paths)
+		}
+	}
+	for _, flags := range []string{"-abPL", "-abDL"} {
+		_, paths = parseDu(t, dir, flags, "root")
+		if strings.Join(paths, " ") != "root/alias/f root/alias root" {
+			t.Errorf("du %s root paths = %v, want final -L to dereference nested link", flags, paths)
+		}
+	}
+	_, paths = parseDu(t, dir, "-ab", "--dereference", "--dereference-args-s", "root")
+	if strings.Join(paths, " ") != "root/alias root" {
+		t.Errorf("long dereference order paths = %v, want final abbreviated args-only option", paths)
+	}
+	_, paths = parseDu(t, dir, "-ab", "--dereference-args-s", "--dereference", "root")
+	if strings.Join(paths, " ") != "root/alias/f root/alias root" {
+		t.Errorf("reverse long dereference order paths = %v, want final all-links option", paths)
 	}
 }
 
@@ -468,6 +500,42 @@ func TestErrors(t *testing.T) {
 	_, errb, code = runTool(t, "--frobnicate")
 	if code != 2 || !strings.Contains(errb, "frobnicate") || !strings.Contains(errb, "pure-Go") {
 		t.Errorf("unknown flag: code=%d err=%q", code, errb)
+	}
+}
+
+type duErrorWriter struct{}
+
+func (duErrorWriter) Write([]byte) (int, error) { return 0, errors.New("output failed") }
+
+type duShortWriter struct{}
+
+func (duShortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return len(p) - 1, nil
+}
+
+func TestOutputFailuresAffectExitStatus(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", "hello")
+	for _, tc := range []struct {
+		name string
+		out  io.Writer
+		want string
+	}{{"error", duErrorWriter{}, "output failed"}, {"short", duShortWriter{}, io.ErrShortWrite.Error()}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Dir: dir,
+				Stdio: tool.Stdio{In: strings.NewReader(""), Out: tc.out, Err: &errb}}
+			if code := cmd.Run(rc, []string{"-b", "f"}); code != 1 {
+				t.Fatalf("exit=%d stderr=%q, want 1", code, errb.String())
+			}
+			diagnostic := strings.ToLower(errb.String())
+			if !strings.Contains(diagnostic, "write error") || !strings.Contains(diagnostic, tc.want) {
+				t.Fatalf("stderr=%q, want write diagnostic containing %q", errb.String(), tc.want)
+			}
+		})
 	}
 }
 
