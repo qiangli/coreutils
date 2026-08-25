@@ -117,13 +117,12 @@ func TestExitStatuses(t *testing.T) {
 		}
 	})
 
-	t.Run("2 — no terminal type at all", func(t *testing.T) {
-		_, errb, code := runIn(t, dir, nil, "clear")
-		if code != exitUsage {
-			t.Errorf("exit %d, want 2", code)
-		}
-		if !strings.Contains(errb, "TERM") {
-			t.Errorf("stderr %q should name $TERM", errb)
+	t.Run("0 — no terminal type selects the conservative default", func(t *testing.T) {
+		for _, env := range [][]string{nil, {"TERM="}} {
+			out, errb, code := runIn(t, dir, env, "longname")
+			if code != exitOK || out != "80-column dumb tty\n" || errb != "" {
+				t.Errorf("env=%v: got (out=%q, err=%q, code=%d)", env, out, errb, code)
+			}
 		}
 	})
 
@@ -277,21 +276,37 @@ func TestPOSIXOperationSequence(t *testing.T) {
 	// Once the first operand selects POSIX operation mode, every following
 	// operand must also be an operation; it is not a parameter to clear.
 	out, errb, code = runIn(t, dir, nil, "-T", "demo", "clear", "5")
-	if code != exitUsage || out != "\x1b[H\x1b[2J" || !strings.Contains(errb, "5") {
+	if code != exitBadCap || out != "\x1b[H\x1b[2J" || !strings.Contains(errb, "5") {
 		t.Errorf("non-operation: got (out=%q, err=%q, code=%d)", out, errb, code)
 	}
 }
 
-func TestPOSIXOperationSequenceStopsOnFailure(t *testing.T) {
-	t.Run("missing capability", func(t *testing.T) {
+func TestPOSIXOperationSequenceAvailabilityAndErrors(t *testing.T) {
+	t.Run("missing operation continues", func(t *testing.T) {
 		dir := t.TempDir()
 		f := terminfo.DemoFixture()
 		delete(f.Strs, "clear")
 		writeEntry(t, dir, "demo", f, false)
 
 		out, errb, code := runIn(t, dir, nil, "-T", "demo", "clear", "init")
-		if code != exitAbsent || out != "" || errb != "" {
+		if code != exitOK || out != "<is1><is2><is3>" || errb != "" {
 			t.Errorf("got (out=%q, err=%q, code=%d)", out, errb, code)
+		}
+	})
+
+	t.Run("all unsupported operations are successful no-ops", func(t *testing.T) {
+		var errb bytes.Buffer
+		out := &countingFailingWriter{}
+		rc := &tool.RunContext{
+			Dir:   t.TempDir(),
+			Env:   []string{"TERM=dumb"},
+			Stdio: tool.Stdio{Out: out, Err: &errb},
+		}
+		if code := run(rc, []string{"clear", "init", "reset"}); code != exitOK {
+			t.Errorf("exit %d, want %d", code, exitOK)
+		}
+		if out.writes != 0 || errb.String() != "" {
+			t.Errorf("writes=%d, stderr=%q", out.writes, errb.String())
 		}
 	})
 
@@ -304,8 +319,8 @@ func TestPOSIXOperationSequenceStopsOnFailure(t *testing.T) {
 			Env:   []string{"TERMINFO=" + dir},
 			Stdio: tool.Stdio{Out: out, Err: &errb},
 		}
-		if code := run(rc, []string{"-T", "demo", "clear", "init"}); code != exitUsage {
-			t.Errorf("exit %d, want %d", code, exitUsage)
+		if code := run(rc, []string{"-T", "demo", "clear", "init"}); code != exitError {
+			t.Errorf("exit %d, want %d", code, exitError)
 		}
 		if out.writes != 1 || !strings.Contains(errb.String(), "write") {
 			t.Errorf("writes=%d, stderr=%q", out.writes, errb.String())
@@ -394,8 +409,8 @@ func TestMalformedCapabilityStringIsReported(t *testing.T) {
 	writeEntry(t, dir, "demo", f, false)
 
 	out, errb, code := runIn(t, dir, nil, "-T", "demo", "cup", "1", "2")
-	if code == exitOK {
-		t.Errorf("exit %d, want a failure", code)
+	if code != exitError {
+		t.Errorf("exit %d, want %d", code, exitError)
 	}
 	if out != "" {
 		t.Errorf("output %q, want nothing", out)
@@ -425,15 +440,15 @@ func TestHelpAndVersion(t *testing.T) {
 // received.
 func TestWriteErrorIsReported(t *testing.T) {
 	dir := fixtureDir(t)
-	for _, capName := range []string{"clear", "init"} {
+	for _, capName := range []string{"clear", "init", "longname", "xmc"} {
 		var errb bytes.Buffer
 		rc := &tool.RunContext{
 			Dir:   t.TempDir(),
 			Env:   []string{"TERMINFO=" + dir},
 			Stdio: tool.Stdio{Out: failingWriter{}, Err: &errb},
 		}
-		if code := run(rc, []string{"-T", "demo", capName}); code == exitOK {
-			t.Errorf("%s: exit 0 despite a failed write", capName)
+		if code := run(rc, []string{"-T", "demo", capName}); code != exitError {
+			t.Errorf("%s: exit %d, want %d", capName, code, exitError)
 		}
 		if !strings.Contains(errb.String(), "write") {
 			t.Errorf("%s: stderr %q", capName, errb.String())

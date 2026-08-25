@@ -43,6 +43,11 @@ var cmd = &tool.Tool{
   tput [-T type] longname`,
 }
 
+// POSIX permits an implementation-defined terminal type when neither -T nor
+// TERM supplies one.  "dumb" is deliberately conservative and is always
+// available from this package's compiled-in terminfo table.
+const defaultTerminalType = "dumb"
+
 func init() {
 	cmd.Usage += "\n\nWhere no terminfo database is installed, these types are answered from a\ncompiled-in fallback table: " + terminfo.BuiltinNames()
 	cmd.Run = run
@@ -57,12 +62,13 @@ const (
 	exitUsage     = 2 // usage error
 	exitUnknownTT = 3 // no information about the terminal type
 	exitBadCap    = 4 // the operand is not a terminfo capability name
+	exitError     = 5 // an output or capability-processing error occurred
 )
 
 func run(rc *tool.RunContext, args []string) int {
 	args = tool.AliasHelpVersion(args)
 	fs := tool.NewFlags(cmd.Name)
-	termType := fs.StringP("terminal", "T", "", "terminal `type` (default: $TERM)")
+	termType := fs.StringP("terminal", "T", "", "terminal `type` (default: $TERM, then dumb)")
 	operands, code := tool.Parse(rc, cmd, fs, args)
 	if code >= 0 {
 		return code
@@ -76,7 +82,7 @@ func run(rc *tool.RunContext, args []string) int {
 		name = rc.Getenv("TERM")
 	}
 	if name == "" {
-		return tool.UsageError(rc, cmd, "no value for $TERM and no -T specified")
+		name = defaultTerminalType
 	}
 
 	e, err := terminfo.Load(rc.Getenv, name)
@@ -92,7 +98,7 @@ func run(rc *tool.RunContext, args []string) int {
 		for _, operation := range operands {
 			if !isPOSIXOperation(operation) {
 				fmt.Fprintf(rc.Err, "tput: %q is not a POSIX operation\n", operation)
-				return exitUsage
+				return exitBadCap
 			}
 			if code := emitPOSIXOperation(rc, e, operation); code != exitOK {
 				return code
@@ -106,7 +112,10 @@ func run(rc *tool.RunContext, args []string) int {
 	case "longname":
 		// An SVr4 tput operand rather than a capability: it reports the
 		// entry's description field.
-		fmt.Fprintln(rc.Out, e.LongName())
+		if _, err := fmt.Fprintln(rc.Out, e.LongName()); err != nil {
+			fmt.Fprintf(rc.Err, "tput: write error: %v\n", err)
+			return exitError
+		}
 		return exitOK
 	}
 
@@ -120,7 +129,14 @@ func isPOSIXOperation(operand string) bool {
 func emitPOSIXOperation(rc *tool.RunContext, e *terminfo.Entry, operation string) int {
 	switch operation {
 	case "clear":
-		return emitCapability(rc, e, operation, nil)
+		code := emitCapability(rc, e, operation, nil)
+		// POSIX operations unsupported by the selected terminal are not an
+		// error and do not prevent processing later operands.  Keep exit 1
+		// for absent capabilities requested through the capname extension.
+		if code == exitAbsent {
+			return exitOK
+		}
+		return code
 	case "init":
 		return emitStartup(rc, e, false)
 	case "reset":
@@ -157,7 +173,10 @@ func emitCapability(rc *tool.RunContext, e *terminfo.Entry, capName string, parm
 		if !ok {
 			return exitAbsent
 		}
-		fmt.Fprintln(rc.Out, v)
+		if _, err := fmt.Fprintln(rc.Out, v); err != nil {
+			fmt.Fprintf(rc.Err, "tput: write error: %v\n", err)
+			return exitError
+		}
 		return exitOK
 
 	default: // terminfo.KindStr
@@ -168,11 +187,11 @@ func emitCapability(rc *tool.RunContext, e *terminfo.Entry, capName string, parm
 		out, err := terminfo.Instantiate(s, parms)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "tput: %s: %v\n", capName, err)
-			return exitUsage
+			return exitError
 		}
 		if _, err := rc.Out.Write([]byte(out)); err != nil {
 			fmt.Fprintf(rc.Err, "tput: write error: %v\n", err)
-			return exitUsage
+			return exitError
 		}
 		return exitOK
 	}
@@ -273,9 +292,14 @@ func emitStartup(rc *tool.RunContext, e *terminfo.Entry, isReset bool) int {
 
 	b.WriteString(terminfo.StripPadding(pick("rs3", "is3")))
 
+	// An unsupported init/reset operation is a successful no-op.  In
+	// particular, do not manufacture a write error by writing an empty slice.
+	if b.Len() == 0 {
+		return exitOK
+	}
 	if _, err := rc.Out.Write([]byte(b.String())); err != nil {
 		fmt.Fprintf(rc.Err, "tput: write error: %v\n", err)
-		return exitUsage
+		return exitError
 	}
 	return exitOK
 }
