@@ -51,6 +51,7 @@ type process struct {
 	priority                                           int
 	flagsKnown, addrKnown, priorityKnown               bool
 	pgidKnown, niceKnown, cpuKnown, vszKnown, szKnown  bool
+	argvKnown                                          bool
 }
 
 type processSource interface {
@@ -74,6 +75,7 @@ func (liveProcessSource) processes() ([]process, error) {
 		if len(argv) != 0 {
 			q.command = argv[0] // POSIX comm is argv[0], not the executable basename.
 			q.args = strings.Join(argv, " ")
+			q.argvKnown = true
 		}
 		if q.args == "" {
 			q.args = q.command
@@ -94,7 +96,16 @@ type renderContext struct {
 type column struct {
 	name, header string
 	minWidth     int
+	commandMode  commandMode
 }
+
+type commandMode uint8
+
+const (
+	commandExplicit commandMode = iota
+	commandDefault
+	commandFull
+)
 
 func init() { cmd.Run = run; tool.Register(cmd) }
 
@@ -206,7 +217,8 @@ func selected(p process, o options) bool {
 }
 
 func parseFormat(specs []string, o options) ([]column, error) {
-	if len(specs) == 0 {
+	standardLayout := len(specs) == 0
+	if standardLayout {
 		if o.long && o.full {
 			specs = []string{"f,s,user=UID,pid,ppid,c,pri,nice,addr,sz,wchan,start,tty=TTY,time,args=CMD"}
 		} else if o.long {
@@ -255,6 +267,17 @@ func parseFormat(specs []string, o options) ([]column, error) {
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("empty output format")
+	}
+	if standardLayout {
+		mode := commandDefault
+		if o.full {
+			mode = commandFull
+		}
+		for i := range out {
+			if out[i].name == "comm" || out[i].name == "args" {
+				out[i].commandMode = mode
+			}
+		}
 	}
 	return out, nil
 }
@@ -307,7 +330,7 @@ func printTableWithContext(rc *tool.RunContext, ps []process, cols []column, ren
 					fmt.Fprint(w, " ")
 				}
 			}
-			v := valueAt(p, c.name, render)
+			v := columnValue(p, c, render)
 			if c.minWidth > len(v) {
 				v = strings.Repeat(" ", c.minWidth-len(v)) + v
 			}
@@ -324,6 +347,34 @@ func printTableWithContext(rc *tool.RunContext, ps []process, cols []column, ren
 func value(p process, name string) string {
 	tf, _ := locale.ResolveTime([]string{"LC_ALL=C"})
 	return valueAt(p, name, renderContext{now: time.Now(), tf: tf, loc: time.Local})
+}
+
+func columnValue(p process, col column, render renderContext) string {
+	if col.commandMode != commandExplicit {
+		return standardCommand(p, col.commandMode == commandFull)
+	}
+	return valueAt(p, col.name, render)
+}
+
+func standardCommand(p process, full bool) string {
+	text := p.command
+	if full {
+		if p.argvKnown {
+			text = p.args
+		} else if text != "" {
+			text = "[" + text + "]"
+		}
+	}
+	if p.state == "Z" {
+		if text == "" {
+			return "<defunct>"
+		}
+		return text + " <defunct>"
+	}
+	if text == "" {
+		return "-"
+	}
+	return text
 }
 
 func valueAt(p process, name string, render renderContext) string {
@@ -432,9 +483,6 @@ func valueAt(p process, name string, render renderContext) string {
 	case "comm":
 		return p.command
 	case "args":
-		if p.state == "Z" {
-			return "<defunct>"
-		}
 		return p.args
 	}
 	return ""

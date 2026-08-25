@@ -284,7 +284,7 @@ func TestPSFullUIDIsLoginNameAndExplicitUIDStaysNumeric(t *testing.T) {
 func TestPSCombinedFullLongFlagsAreAdditive(t *testing.T) {
 	var out, errOut bytes.Buffer
 	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C", "TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
-	p := process{pid: 1, state: "S", start: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), args: "init --full"}
+	p := process{pid: 1, state: "S", start: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), command: "init", args: "init --full", argvKnown: true}
 	if code := runWithSource(rc, []string{"-A", "-fl"}, fakeProcessSource{ps: []process{p}}, func() time.Time { return time.Date(2026, 1, 2, 1, 0, 0, 0, time.UTC) }); code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, errOut.String())
 	}
@@ -300,11 +300,61 @@ func TestPSCombinedFullLongFlagsAreAdditive(t *testing.T) {
 
 func TestPSZombieArgumentsAreDefunct(t *testing.T) {
 	p := process{state: "Z", command: "child", args: "child --still-present-in-proc"}
-	if got := value(p, "args"); got != "<defunct>" {
-		t.Fatalf("zombie args=%q, want <defunct>", got)
+	if got := value(p, "args"); got != p.args {
+		t.Fatalf("explicit zombie args=%q, want unchanged %q", got, p.args)
 	}
-	if got := value(p, "comm"); got != "child" {
-		t.Fatalf("zombie comm=%q, want argv[0]", got)
+	if got := value(p, "comm"); got != p.command {
+		t.Fatalf("explicit zombie comm=%q, want unchanged %q", got, p.command)
+	}
+}
+
+func TestPSStandardLayoutsMissingArgvAndZombie(t *testing.T) {
+	now := time.Date(2026, 1, 2, 1, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name       string
+		flag       string
+		p          process
+		wantSuffix string
+	}{
+		{"default missing argv keeps command", "", process{command: "child", args: "child"}, "child"},
+		{"full missing argv brackets command", "-f", process{command: "child", args: "child"}, "[child]"},
+		{"long missing argv keeps command", "-l", process{command: "child", args: "child"}, "child"},
+		{"full long missing argv brackets command", "-fl", process{command: "child", args: "child"}, "[child]"},
+		{"default zombie marked", "", process{state: "Z", command: "child", args: "child --arg", argvKnown: true}, "child <defunct>"},
+		{"full zombie marked", "-f", process{state: "Z", command: "child", args: "child --arg", argvKnown: true}, "child --arg <defunct>"},
+		{"long zombie marked", "-l", process{state: "Z", command: "child", args: "child --arg", argvKnown: true}, "child <defunct>"},
+		{"full long zombie marked", "-fl", process{state: "Z", command: "child", args: "child --arg", argvKnown: true}, "child --arg <defunct>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.p
+			p.pid, p.start = 1, now.Add(-time.Hour)
+			args := []string{"-A"}
+			if tt.flag != "" {
+				args = append(args, tt.flag)
+			}
+			var out, errOut bytes.Buffer
+			rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C", "TZ=UTC"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+			if code := runWithSource(rc, args, fakeProcessSource{ps: []process{p}}, func() time.Time { return now }); code != 0 {
+				t.Fatalf("code=%d stderr=%q", code, errOut.String())
+			}
+			lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+			if got := lines[len(lines)-1]; !strings.HasSuffix(got, tt.wantSuffix) {
+				t.Fatalf("data line=%q, want suffix %q (all output %q)", got, tt.wantSuffix, out.String())
+			}
+		})
+	}
+
+	// Explicit -o fields remain their specified argv[0]/argument strings and
+	// do not inherit the standard-layout annotations above.
+	zombie := process{pid: 1, state: "Z", command: "child", args: "child --arg", argvKnown: true}
+	var out, errOut bytes.Buffer
+	rc := &tool.RunContext{Ctx: context.Background(), Env: []string{"LC_ALL=C"}, Stdio: tool.Stdio{Out: &out, Err: &errOut}}
+	if code := runWithSource(rc, []string{"-A", "-o", "comm=,args="}, fakeProcessSource{ps: []process{zombie}}, time.Now); code != 0 {
+		t.Fatalf("explicit -o code=%d stderr=%q", code, errOut.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "child child --arg" {
+		t.Fatalf("explicit -o output=%q", got)
 	}
 }
 
@@ -436,8 +486,8 @@ func TestPSEnrichLinuxProcFixture(t *testing.T) {
 	if p.state != "Z" || p.ppid != 1 || p.pgid != 2 || p.sid != 3 || !p.pgidKnown {
 		t.Fatalf("identity/state not parsed: %#v", p)
 	}
-	if got := value(p, "args"); got != "<defunct>" {
-		t.Fatalf("procfs zombie args=%q, want <defunct>", got)
+	if got := standardCommand(p, false); got != "<defunct>" {
+		t.Fatalf("procfs zombie standard command=%q, want <defunct>", got)
 	}
 	if p.tty != "pts/1" {
 		t.Fatalf("tty=%q, want pts/1", p.tty)
