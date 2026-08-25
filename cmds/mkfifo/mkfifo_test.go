@@ -14,15 +14,70 @@ import (
 )
 
 func runTool(t *testing.T, dir string, args ...string) (stdout, stderr string, code int) {
+	return runToolContext(t, dir, 0, false, args...)
+}
+
+func runToolContext(t *testing.T, dir string, mask os.FileMode, maskSet bool, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	rc := &tool.RunContext{
 		Ctx:   context.Background(),
 		Dir:   dir,
 		Stdio: tool.Stdio{In: strings.NewReader(""), Out: &out, Err: &errb},
+		Umask: mask, UmaskSet: maskSet,
 	}
 	code = cmd.Run(rc, args)
 	return out.String(), errb.String(), code
+}
+
+func TestMkfifoSymbolicModeHonorsOmittedWhoUmask(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native FIFO creation is unsupported on windows")
+	}
+	tests := []struct {
+		name, mode string
+		mask, want os.FileMode
+	}{
+		{name: "equals omitted", mode: "=rw", mask: 0o077, want: 0o600},
+		{name: "plus omitted", mode: "+x", mask: 0o077, want: 0o766},
+		{name: "explicit all exempt", mode: "a=rw", mask: 0o077, want: 0o666},
+		{name: "explicit group exempt", mode: "g+w", mask: 0o027, want: 0o666},
+		{name: "mixed clauses", mode: "=rw,o+x", mask: 0o027, want: 0o641},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			_, errb, code := runToolContext(t, dir, tc.mask, true, "-m", tc.mode, "pipe")
+			if code != 0 {
+				t.Fatalf("mkfifo -m %q: code=%d err=%q", tc.mode, code, errb)
+			}
+			fi, err := os.Lstat(filepath.Join(dir, "pipe"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fi.Mode().Perm(); got != tc.want {
+				t.Fatalf("mkfifo -m %q under umask %03o: mode=%03o, want %03o", tc.mode, tc.mask, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMkfifoDefaultModeHonorsVirtualUmask(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native FIFO creation is unsupported on windows")
+	}
+	dir := t.TempDir()
+	_, errb, code := runToolContext(t, dir, 0o027, true, "pipe")
+	if code != 0 {
+		t.Fatalf("mkfifo: code=%d err=%q", code, errb)
+	}
+	fi, err := os.Lstat(filepath.Join(dir, "pipe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o640 {
+		t.Fatalf("default mode=%03o, want 640", got)
+	}
 }
 
 func TestMkfifoCreatesFIFO(t *testing.T) {
@@ -89,7 +144,7 @@ func TestMkfifoSymbolicMode(t *testing.T) {
 	for i, tc := range tests {
 		name := fmt.Sprintf("pipe%d", i)
 		dir := t.TempDir()
-		_, errb, code := runTool(t, dir, "-m", tc.mode, name)
+		_, errb, code := runToolContext(t, dir, 0, true, "-m", tc.mode, name)
 		if code != 0 {
 			t.Fatalf("mkfifo -m %q: code=%d err=%q", tc.mode, code, errb)
 		}
