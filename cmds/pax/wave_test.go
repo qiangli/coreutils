@@ -371,8 +371,8 @@ func TestSubstitutionWithExtraDelimiterIsRejected(t *testing.T) {
 	}
 }
 
-// -b/-o/-t/-X/-H/-L are recognized so their mode legality is enforced, and a
-// legal-but-unimplemented use is refused loudly rather than silently accepted.
+// -b/-o/-t/-X/-H/-L are recognized so their mode legality is enforced, and
+// unsupported options are refused loudly rather than silently accepted.
 func TestModeOptionLegality(t *testing.T) {
 	d := makeTree(t)
 	arc := writeArchive(t, d, "src")
@@ -383,7 +383,7 @@ func TestModeOptionLegality(t *testing.T) {
 		wantSub string // substring expected on stderr
 	}{
 		{"b-in-list-illegal", []string{"-f", arc, "-b", "10k"}, "-b is valid only in write mode"},
-		{"b-in-write-unimpl", []string{"-w", "-b", "10k", "-f", arc, "src"}, "-b is not supported"},
+		{"b-in-write-invalid", []string{"-w", "-b", "10k", "-f", arc, "src"}, "positive decimal integer"},
 		{"b-in-copy-illegal", []string{"-r", "-w", "-b", "10k", "src", d}, "-b is valid only in write mode"},
 		{"o-in-list-unimpl", []string{"-f", arc, "-o", "listopt=x"}, "-o is not supported"},
 		{"t-in-list-illegal", []string{"-t", "-f", arc}, "-t is valid only in write or copy mode"},

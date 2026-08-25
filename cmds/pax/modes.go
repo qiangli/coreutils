@@ -2,6 +2,7 @@ package paxcmd
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -36,6 +37,12 @@ func readMode(rc *tool.RunContext, o *options, patterns []string) int {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
 	}
+	archive, err := decodeArchive(raw)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		return 1
+	}
+	raw = archive.tarData
 	sel := newSelector(o, patterns)
 	var catalog []selectorMember
 	scan := tar.NewReader(bytes.NewReader(raw))
@@ -224,54 +231,186 @@ func rootOf(target, name string) string {
 
 // writeMode creates an archive from the named files.
 func writeMode(rc *tool.RunContext, o *options, files []string) int {
-	var out io.Writer = rc.Out
-	var closer io.Closer
+	status := 0
+	if len(files) == 0 {
+		var inputStatus int
+		files, inputStatus = readPathnames(rc)
+		status = inputStatus
+	}
+	if o.appendMode && o.format == "cpio" {
+		fmt.Fprintln(rc.Err, "pax: appending to cpio archives is not supported")
+		return 1
+	}
+
+	archivePath := ""
 	if o.archive != "" && o.archive != "-" {
-		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-		if o.appendMode {
-			flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		archivePath = resolve(rc, o.archive)
+	}
+	appendExisting := o.appendMode
+	var existing []byte
+	if archivePath != "" && (o.appendMode || o.newerOnly) {
+		data, err := os.ReadFile(archivePath)
+		if err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			return 1
 		}
-		f, err := os.OpenFile(resolve(rc, o.archive), flags, 0o644)
+		if err == nil && len(data) != 0 {
+			existing = data
+			archive, decodeErr := decodeArchive(data)
+			if decodeErr != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", decodeErr)
+				return 1
+			}
+			if archive.kind == archiveCPIO {
+				fmt.Fprintln(rc.Err, "pax: updating or appending to cpio archives is not supported")
+				return 1
+			}
+			existingFormat := "ustar"
+			if archive.pax {
+				existingFormat = "pax"
+			}
+			if o.format != existingFormat {
+				fmt.Fprintf(rc.Err, "pax: cannot append %s data to an existing %s archive\n", o.format, existingFormat)
+				return 1
+			}
+			if o.newerOnly {
+				o.archiveTimes, decodeErr = archiveMemberTimes(archive.tarData)
+				if decodeErr != nil {
+					fmt.Fprintf(rc.Err, "pax: %v\n", decodeErr)
+					return 1
+				}
+				appendExisting = true
+			}
+		}
+	}
+	if appendExisting && archivePath == "" {
+		fmt.Fprintln(rc.Err, "pax: appending requires a seekable archive file")
+		return 1
+	}
+
+	var out io.Writer = rc.Out
+	var file *os.File
+	if archivePath != "" {
+		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		if appendExisting && len(existing) != 0 {
+			flags = os.O_RDWR
+		}
+		var err error
+		file, err = os.OpenFile(archivePath, flags, 0o644)
 		if err != nil {
 			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			return 1
 		}
-		out, closer = f, f
+		if appendExisting && len(existing) != 0 {
+			end, _, scanErr := scanTar(existing)
+			if scanErr != nil {
+				_ = file.Close()
+				fmt.Fprintf(rc.Err, "pax: %v\n", scanErr)
+				return 1
+			}
+			if _, err = file.Seek(end, io.SeekStart); err != nil {
+				_ = file.Close()
+				fmt.Fprintf(rc.Err, "pax: %v\n", err)
+				return 1
+			}
+		}
+		out = file
+	}
+
+	var blocker *blockWriter
+	if o.blockBytes > 0 {
+		blocker = newBlockWriter(out, o.blockBytes)
+		out = blocker
 	}
 	if o.format == "cpio" {
-		status := writeCPIOMode(rc, o, out, files)
-		if closer != nil {
-			if err := closer.Close(); err != nil && status == 0 {
+		if writeStatus := writeCPIOMode(rc, o, out, files); writeStatus != 0 {
+			status = 1
+		}
+	} else {
+		tw := tar.NewWriter(out)
+		for _, name := range files {
+			if err := addPath(rc, o, tw, name); err != nil {
+				fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
+				status = 1
+			}
+		}
+		if err := tw.Close(); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			status = 1
+		}
+	}
+	if blocker != nil {
+		if err := blocker.Close(); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
+			status = 1
+		}
+	}
+	if file != nil {
+		if appendExisting && len(existing) != 0 {
+			if pos, err := file.Seek(0, io.SeekCurrent); err != nil {
+				fmt.Fprintf(rc.Err, "pax: %v\n", err)
+				status = 1
+			} else if err := file.Truncate(pos); err != nil {
 				fmt.Fprintf(rc.Err, "pax: %v\n", err)
 				status = 1
 			}
 		}
-		return status
-	}
-	tw := tar.NewWriter(out)
-	status := 0
-	for _, name := range files {
-		if err := addPath(rc, o, tw, name); err != nil {
-			fmt.Fprintf(rc.Err, "pax: %s: %v\n", name, err)
+		if err := file.Close(); err != nil {
+			fmt.Fprintf(rc.Err, "pax: %v\n", err)
 			status = 1
 		}
-	}
-	if err := tw.Close(); err != nil {
-		fmt.Fprintf(rc.Err, "pax: %v\n", err)
-		status = 1
-	}
-	if closer != nil {
-		_ = closer.Close()
 	}
 	return status
 }
 
-// cpioWriter emits the SVR4 "newc" interchange format. POSIX pax requires a
-// cpio output format but does not require the historical binary encoding;
-// newc is byte-order independent and is recognized by standard cpio readers.
+func readPathnames(rc *tool.RunContext) ([]string, int) {
+	reader := bufio.NewReader(rc.In)
+	var paths []string
+	status := 0
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			if line[len(line)-1] == '\n' {
+				line = line[:len(line)-1]
+			} else {
+				fmt.Fprintln(rc.Err, "pax: unterminated pathname on standard input")
+				status = 1
+			}
+			paths = append(paths, line)
+		}
+		if err != nil {
+			if err != io.EOF {
+				fmt.Fprintf(rc.Err, "pax: read standard input: %v\n", err)
+				status = 1
+			}
+			break
+		}
+	}
+	return paths, status
+}
+
+func archiveMemberTimes(data []byte) (map[string]time.Time, error) {
+	times := make(map[string]time.Time)
+	tr := tar.NewReader(bytes.NewReader(data))
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return times, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if old, ok := times[h.Name]; !ok || h.ModTime.After(old) {
+			times[h.Name] = h.ModTime
+		}
+	}
+}
+
+// cpioWriter emits the POSIX Issue 7 octet-oriented cpio interchange format.
 type cpioWriter struct {
-	w      io.Writer
-	offset int64
+	w       io.Writer
+	offset  int64
+	nextIno uint64
 }
 
 func (w *cpioWriter) write(p []byte) error {
@@ -292,7 +431,7 @@ func (w *cpioWriter) pad(alignment int64) error {
 }
 
 func (w *cpioWriter) add(name string, fi os.FileInfo, data []byte) error {
-	mode := uint32(fi.Mode().Perm())
+	mode := uint64(fi.Mode().Perm())
 	switch {
 	case fi.Mode().IsRegular():
 		mode |= 0o100000
@@ -304,21 +443,27 @@ func (w *cpioWriter) add(name string, fi os.FileInfo, data []byte) error {
 		return fmt.Errorf("unsupported cpio member type %s", fi.Mode())
 	}
 	name = filepath.ToSlash(name)
-	header := fmt.Sprintf("070701%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x",
-		0, mode, 0, 0, 1, fi.ModTime().Unix(), len(data), 0, 0, 0, 0, len([]byte(name))+1, 0)
-	if len(header) != 110 {
+	w.nextIno++
+	namesize := uint64(len([]byte(name)) + 1)
+	mtime := uint64(0)
+	if fi.ModTime().Unix() > 0 {
+		mtime = uint64(fi.ModTime().Unix())
+	}
+	if w.nextIno > 0o777777 || mode > 0o777777 || namesize > 0o777777 || mtime > 0o77777777777 || uint64(len(data)) > 0o77777777777 {
+		return fmt.Errorf("cpio member %q exceeds POSIX header limits", name)
+	}
+	header := fmt.Sprintf("070707%06o%06o%06o%06o%06o%06o%06o%011o%06o%011o",
+		0, w.nextIno, mode, 0, 0, 1, 0, mtime, namesize, len(data))
+	if len(header) != 76 {
 		return fmt.Errorf("internal cpio header length %d", len(header))
 	}
 	if err := w.write(append([]byte(header), append([]byte(name), 0)...)); err != nil {
 		return err
 	}
-	if err := w.pad(4); err != nil {
-		return err
-	}
 	if err := w.write(data); err != nil {
 		return err
 	}
-	return w.pad(4)
+	return nil
 }
 
 func (w *cpioWriter) close() error {
@@ -339,10 +484,6 @@ func (f syntheticFileInfo) IsDir() bool        { return false }
 func (f syntheticFileInfo) Sys() any           { return nil }
 
 func writeCPIOMode(rc *tool.RunContext, o *options, out io.Writer, files []string) int {
-	if o.appendMode {
-		fmt.Fprintln(rc.Err, "pax: appending to cpio archives is not supported")
-		return 1
-	}
 	w := &cpioWriter{w: out}
 	status := 0
 	for _, name := range files {
@@ -367,6 +508,9 @@ func addCPIOPath(rc *tool.RunContext, o *options, w *cpioWriter, name string) er
 	write := func(rel, abs string, fi os.FileInfo) error {
 		out := applySubstitutions(o.subst, filepath.ToSlash(rel), rc.Err)
 		if out == "" {
+			return nil
+		}
+		if !newerThanArchive(o, out, fi.ModTime()) {
 			return nil
 		}
 		var data []byte
@@ -421,11 +565,23 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 		if out == "" {
 			return nil
 		}
+		if !newerThanArchive(o, out, fi.ModTime()) {
+			return nil
+		}
 		h, err := headerFor(out, fi, link)
 		if err != nil {
 			return err
 		}
 		h.Format = tarFormat(o.format)
+		if h.Format == tar.FormatPAX {
+			if h.PAXRecords == nil {
+				h.PAXRecords = make(map[string]string)
+			}
+			// A basic pax header is otherwise indistinguishable from ustar on
+			// disk. This implementation keyword makes the selected format
+			// detectable so a later -a can reject a mismatched -x format.
+			h.PAXRecords["COREUTILS.format"] = "pax"
+		}
 		if h.Format == tar.FormatUSTAR {
 			// USTAR carries mtime but has no fields for atime, ctime, xattrs,
 			// or PAX records. FileInfoHeader may populate the extra timestamps
@@ -468,6 +624,14 @@ func addPath(rc *tool.RunContext, o *options, tw *tar.Writer, name string) error
 		}
 		return write(rel, p, info)
 	})
+}
+
+func newerThanArchive(o *options, name string, mtime time.Time) bool {
+	if !o.newerOnly || o.archiveTimes == nil {
+		return true
+	}
+	old, exists := o.archiveTimes[name]
+	return !exists || mtime.After(old)
 }
 
 // copyMode is -r -w: copy a file hierarchy to a directory. It is implemented as

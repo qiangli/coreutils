@@ -2,11 +2,12 @@ package paxcmd
 
 import (
 	"archive/tar"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,9 +42,11 @@ type options struct {
 	invertMatch     bool // -c
 	selectNoPattern bool // -n
 
-	blocksize  string // -b
-	optionsStr string // -o
-	t, X, H, L bool
+	blocksize    string // -b, parsed into blockBytes after option validation
+	blockBytes   int
+	archiveTimes map[string]time.Time
+	optionsStr   string // -o
+	t, X, H, L   bool
 }
 
 func run(rc *tool.RunContext, args []string) int {
@@ -89,7 +92,11 @@ func run(rc *tool.RunContext, args []string) int {
 		if !isWrite {
 			return tool.UsageError(rc, cmd, "-b is valid only in write mode")
 		}
-		return tool.NotSupported(rc, cmd, "-b")
+		blockBytes, err := parseBlockSize(o.blocksize)
+		if err != nil {
+			return tool.UsageError(rc, cmd, "%v", err)
+		}
+		o.blockBytes = blockBytes
 	}
 	if fs.Changed("options") {
 		return tool.NotSupported(rc, cmd, "-o")
@@ -137,6 +144,25 @@ func run(rc *tool.RunContext, args []string) int {
 	}
 }
 
+func parseBlockSize(value string) (int, error) {
+	if value == "" {
+		return 0, fmt.Errorf("invalid block size %q: expected a positive decimal integer", value)
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("invalid block size %q: expected a positive decimal integer", value)
+		}
+	}
+	n, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || n == 0 {
+		return 0, fmt.Errorf("invalid block size %q: expected a positive decimal integer", value)
+	}
+	if n > 32256 {
+		return 0, fmt.Errorf("invalid block size %q: maximum supported size is 32256 bytes", value)
+	}
+	return int(n), nil
+}
+
 // resolve makes a relative operand absolute against the caller's directory
 // rather than the process's, which is what an embedded shell requires.
 func resolve(rc *tool.RunContext, p string) string {
@@ -164,7 +190,17 @@ func listMode(rc *tool.RunContext, o *options, patterns []string) int {
 		return 1
 	}
 	defer r.Close()
-	members, err := pax.ReadManifest(r)
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		return 1
+	}
+	archive, err := decodeArchive(raw)
+	if err != nil {
+		fmt.Fprintf(rc.Err, "pax: %v\n", err)
+		return 1
+	}
+	members, err := pax.ReadManifest(bytes.NewReader(archive.tarData))
 	if err != nil {
 		fmt.Fprintf(rc.Err, "pax: %v\n", err)
 		return 1
@@ -241,6 +277,3 @@ func tarFormat(name string) tar.Format {
 	}
 	return tar.FormatPAX
 }
-
-var _ = sort.Strings
-var _ = time.Now

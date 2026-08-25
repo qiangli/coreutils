@@ -191,7 +191,7 @@ func TestPatternSelectionAndComplement(t *testing.T) {
 	}
 }
 
-func TestCPIOFormatWritesNewcArchive(t *testing.T) {
+func TestCPIOFormatWritesPOSIXArchive(t *testing.T) {
 	d := t.TempDir()
 	if err := os.WriteFile(filepath.Join(d, "example"), []byte("payload"), 0o644); err != nil {
 		t.Fatal(err)
@@ -204,11 +204,11 @@ func TestCPIOFormatWritesNewcArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(data, []byte("070701")) || !bytes.Contains(data, []byte("example\x00")) || !bytes.Contains(data, []byte("TRAILER!!!\x00")) {
-		t.Fatalf("invalid newc archive: prefix=%q size=%d", data[:6], len(data))
+	if !bytes.HasPrefix(data, []byte("070707")) || !bytes.Contains(data, []byte("example\x00")) || !bytes.Contains(data, []byte("TRAILER!!!\x00")) {
+		t.Fatalf("invalid POSIX cpio archive: prefix=%q size=%d", data[:6], len(data))
 	}
 	if len(data)%512 != 0 {
-		t.Fatalf("newc archive size=%d, want 512-byte padding", len(data))
+		t.Fatalf("cpio archive size=%d, want 512-byte padding", len(data))
 	}
 }
 
